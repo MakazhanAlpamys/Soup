@@ -71,9 +71,7 @@ def _report_unknown_keys(raw: dict) -> "str | None":
     return None
 
 
-def _report_staged_fields(
-    raw: dict, *, config: SoupConfig
-) -> "str | None":
+def _report_staged_fields(raw: dict, *, config: SoupConfig) -> "str | None":
     """Return an error string when staged fields must stop the load (#808).
 
     Silence is the thing being fixed: under ``"warn"`` it is printed and
@@ -189,9 +187,7 @@ def load_config_from_string(yaml_str: str) -> SoupConfig:
         # A non-mapping document (e.g. a bare list "- a") would make
         # SoupConfig(**raw) raise TypeError, breaking this function's
         # ValueError-only contract (API/UI callers only catch ValueError).
-        raise ValueError(
-            f"Config must be a YAML mapping, got {type(raw).__name__}"
-        )
+        raise ValueError(f"Config must be a YAML mapping, got {type(raw).__name__}")
 
     unknown_error = _report_unknown_keys(raw)
     if unknown_error is not None:

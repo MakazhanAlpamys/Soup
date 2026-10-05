@@ -104,17 +104,27 @@ def _loaded_rows(path: str, data_format: str) -> list[dict]:
 
 
 _ENDPOINTS = [
-    Endpoint(tool="listPets", method="get", path="/pets", description="List pets",
-             parameters=(), spec_kind="openapi"),
-    Endpoint(tool="getPet", method="get", path="/pets/{id}", description="Get a pet",
-             parameters=("id", "fields"), spec_kind="openapi"),
+    Endpoint(
+        tool="listPets",
+        method="get",
+        path="/pets",
+        description="List pets",
+        parameters=(),
+        spec_kind="openapi",
+    ),
+    Endpoint(
+        tool="getPet",
+        method="get",
+        path="/pets/{id}",
+        description="Get a pet",
+        parameters=("id", "fields"),
+        spec_kind="openapi",
+    ),
 ]
 
 
 @pytest.mark.parametrize("data_format", ["tool-calling", "auto"])
-def test_every_synthesised_row_loads_with_its_tool_call(
-    tmp_path, monkeypatch, data_format
-):
+def test_every_synthesised_row_loads_with_its_tool_call(tmp_path, monkeypatch, data_format):
     monkeypatch.chdir(tmp_path)
     rows = synthesise_dataset(_ENDPOINTS, examples_per_endpoint=3)
     write_dataset(rows, "agent_dataset.jsonl")
@@ -161,14 +171,16 @@ def test_the_printed_recipe_dry_runs_with_the_synthesised_rows(tmp_path, monkeyp
 def test_a_synth_row_carries_the_schema_of_its_endpoint():
     row = endpoint_to_rows(_ENDPOINTS[1], 1)[0].to_dict()
 
-    assert row["tools"] == [{
-        "type": "function",
-        "function": {
-            "name": "getPet",
-            "description": "Get a pet",
-            "parameters": {"type": "object", "properties": {"id": {}, "fields": {}}},
-        },
-    }]
+    assert row["tools"] == [
+        {
+            "type": "function",
+            "function": {
+                "name": "getPet",
+                "description": "Get a pet",
+                "parameters": {"type": "object", "properties": {"id": {}, "fields": {}}},
+            },
+        }
+    ]
     assert detect_format([row]) == "tool-calling"
 
 
@@ -176,15 +188,23 @@ def test_a_synth_row_carries_the_schema_of_its_endpoint():
 
 
 def test_call_nested_in_the_assistant_turn_without_top_level_keys():
-    row = {"messages": [
-        {"role": "user", "content": "Weather in Paris?"},
-        {"role": "assistant", "tool_calls": [_call("call_0", "Paris")]},
-    ]}
+    row = {
+        "messages": [
+            {"role": "user", "content": "Weather in Paris?"},
+            {"role": "assistant", "tool_calls": [_call("call_0", "Paris")]},
+        ]
+    }
 
-    assert format_to_messages(row, "tool-calling") == {"messages": [
-        {"role": "user", "content": "Weather in Paris?"},
-        {"role": "assistant", "content": "", "tool_calls": [_normalized_call("call_0", "Paris")]},
-    ]}
+    assert format_to_messages(row, "tool-calling") == {
+        "messages": [
+            {"role": "user", "content": "Weather in Paris?"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [_normalized_call("call_0", "Paris")],
+            },
+        ]
+    }
 
 
 def test_the_openai_fine_tuning_shape():
@@ -198,13 +218,19 @@ def test_the_openai_fine_tuning_shape():
         "tools": [_WEATHER_TOOL],
     }
 
-    assert format_to_messages(row, "tool-calling") == {"messages": [
-        _SCHEMA_TURN,
-        {"role": "user", "content": "Weather in Paris?"},
-        {"role": "assistant", "content": "", "tool_calls": [_normalized_call("call_0", "Paris")]},
-        {"role": "tool", "content": '{"temp": 21}', "tool_call_id": "call_0"},
-        {"role": "assistant", "content": "It is 21 C in Paris."},
-    ]}
+    assert format_to_messages(row, "tool-calling") == {
+        "messages": [
+            _SCHEMA_TURN,
+            {"role": "user", "content": "Weather in Paris?"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [_normalized_call("call_0", "Paris")],
+            },
+            {"role": "tool", "content": '{"temp": 21}', "tool_call_id": "call_0"},
+            {"role": "assistant", "content": "It is 21 C in Paris."},
+        ]
+    }
 
 
 def test_the_documented_top_level_shape_still_converts():
@@ -214,13 +240,19 @@ def test_the_documented_top_level_shape_still_converts():
         "tool_calls": [{"function": {"name": "get_weather", "arguments": '{"city": "Paris"}'}}],
     }
 
-    assert format_to_messages(row, "tool-calling") == {"messages": [
-        _SCHEMA_TURN,
-        {"role": "user", "content": "Weather in Paris?"},
-        {"role": "assistant", "content": "", "tool_calls": [
-            {"function": {"name": "get_weather", "arguments": '{"city": "Paris"}'}},
-        ]},
-    ]}
+    assert format_to_messages(row, "tool-calling") == {
+        "messages": [
+            _SCHEMA_TURN,
+            {"role": "user", "content": "Weather in Paris?"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {"function": {"name": "get_weather", "arguments": '{"city": "Paris"}'}},
+                ],
+            },
+        ]
+    }
 
 
 def test_two_tool_rounds_keep_source_order_and_their_ids():
@@ -243,7 +275,13 @@ def test_two_tool_rounds_keep_source_order_and_their_ids():
     converted = format_to_messages(row, "tool-calling")["messages"]
 
     assert [m["role"] for m in converted] == [
-        "system", "user", "assistant", "tool", "assistant", "tool", "assistant",
+        "system",
+        "user",
+        "assistant",
+        "tool",
+        "assistant",
+        "tool",
+        "assistant",
     ]
     assert converted[2]["tool_calls"] == [_normalized_call("call_0", "Paris")]
     assert converted[3]["tool_call_id"] == "call_0"
@@ -256,8 +294,11 @@ def test_two_parallel_calls_in_one_assistant_turn():
     row = {
         "messages": [
             {"role": "user", "content": "Paris and Rome?"},
-            {"role": "assistant", "content": "",
-             "tool_calls": [_call("call_0", "Paris"), _call("call_1", "Rome")]},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [_call("call_0", "Paris"), _call("call_1", "Rome")],
+            },
             {"role": "tool", "tool_call_id": "call_0", "content": "21"},
             {"role": "tool", "tool_call_id": "call_1", "content": "25"},
             {"role": "assistant", "content": "21 and 25."},
@@ -268,7 +309,8 @@ def test_two_parallel_calls_in_one_assistant_turn():
     converted = format_to_messages(row, "tool-calling")["messages"]
 
     assert converted[2]["tool_calls"] == [
-        _normalized_call("call_0", "Paris"), _normalized_call("call_1", "Rome"),
+        _normalized_call("call_0", "Paris"),
+        _normalized_call("call_1", "Rome"),
     ]
     assert [m.get("tool_call_id") for m in converted[3:5]] == ["call_0", "call_1"]
     assert converted[-1] == {"role": "assistant", "content": "21 and 25."}
@@ -276,10 +318,16 @@ def test_two_parallel_calls_in_one_assistant_turn():
 
 @pytest.mark.parametrize("as_dict", [False, True], ids=["json-string", "dict"])
 def test_arguments_as_a_json_string_or_a_dict(as_dict):
-    row = {"messages": [
-        {"role": "user", "content": "Weather in Paris?"},
-        {"role": "assistant", "content": "", "tool_calls": [_call("c", "Paris", as_dict=as_dict)]},
-    ]}
+    row = {
+        "messages": [
+            {"role": "user", "content": "Weather in Paris?"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [_call("c", "Paris", as_dict=as_dict)],
+            },
+        ]
+    }
 
     converted = format_to_messages(row, "tool-calling")["messages"]
 
@@ -288,11 +336,13 @@ def test_arguments_as_a_json_string_or_a_dict(as_dict):
 
 @pytest.mark.parametrize("tools", [None, []], ids=["absent", "empty"])
 def test_without_tools_there_is_no_schema_turn(tools):
-    row = {"messages": [
-        {"role": "system", "content": "Be brief."},
-        {"role": "user", "content": "Weather in Paris?"},
-        {"role": "assistant", "content": "", "tool_calls": [_call("c", "Paris")]},
-    ]}
+    row = {
+        "messages": [
+            {"role": "system", "content": "Be brief."},
+            {"role": "user", "content": "Weather in Paris?"},
+            {"role": "assistant", "content": "", "tool_calls": [_call("c", "Paris")]},
+        ]
+    }
     if tools is not None:
         row["tools"] = tools
 
@@ -314,7 +364,8 @@ def test_with_tools_the_rows_system_prompt_is_merged_into_the_schema_turn():
     converted = format_to_messages(row, "tool-calling")["messages"]
 
     assert converted[0] == {
-        "role": "system", "content": "Be brief.\n\n" + _SCHEMA_TURN["content"],
+        "role": "system",
+        "content": "Be brief.\n\n" + _SCHEMA_TURN["content"],
     }
     assert [m["role"] for m in converted] == ["system", "user"]
 
@@ -407,16 +458,28 @@ def test_null_content_outside_a_call_turn_drops_the_row(turn):
 @pytest.mark.parametrize(
     ("assistant", "reason"),
     [
-        ({"role": "assistant", "tool_calls": [
-            {"function": {"name": "get_weather", "arguments": "{bad"}}]},
-         "must be JSON-parseable"),
-        ({"role": "assistant", "tool_calls": {"function": {"name": "f"}}},
-         "'messages.tool_calls' must be a list"),
-        ({"role": "assistant", "tool_calls": [{"function": {"name": ""}}]},
-         "'function.name' must be a non-empty string"),
-        ({"role": "assistant", "tool_calls": [
-            {"id": 7, "function": {"name": "f", "arguments": "{}"}}]},
-         "'id' must be a string"),
+        (
+            {
+                "role": "assistant",
+                "tool_calls": [{"function": {"name": "get_weather", "arguments": "{bad"}}],
+            },
+            "must be JSON-parseable",
+        ),
+        (
+            {"role": "assistant", "tool_calls": {"function": {"name": "f"}}},
+            "'messages.tool_calls' must be a list",
+        ),
+        (
+            {"role": "assistant", "tool_calls": [{"function": {"name": ""}}]},
+            "'function.name' must be a non-empty string",
+        ),
+        (
+            {
+                "role": "assistant",
+                "tool_calls": [{"id": 7, "function": {"name": "f", "arguments": "{}"}}],
+            },
+            "'id' must be a string",
+        ),
     ],
     ids=["bad-json", "not-a-list", "empty-name", "non-string-id"],
 )
@@ -430,10 +493,12 @@ def test_a_malformed_nested_call_drops_the_row(assistant, reason):
 
 
 def test_a_non_string_tool_call_id_drops_the_row():
-    row = {"messages": [
-        {"role": "user", "content": "q"},
-        {"role": "tool", "tool_call_id": 3, "content": "21"},
-    ]}
+    row = {
+        "messages": [
+            {"role": "user", "content": "q"},
+            {"role": "tool", "tool_call_id": 3, "content": "21"},
+        ]
+    }
 
     converted, why = format_to_messages_with_reason(row, "tool-calling")
 
@@ -484,12 +549,14 @@ def test_the_trajectory_renders_in_source_order_through_arrow():
     arrow_rows = Dataset.from_list([row])
     assert arrow_rows[0]["messages"][0]["tool_calls"] is None
 
-    formatted = arrow_rows.map(
-        build_format_row(tokenizer, data_cfg), remove_columns=["messages"]
-    )
+    formatted = arrow_rows.map(build_format_row(tokenizer, data_cfg), remove_columns=["messages"])
 
     text = tokenizer.decode(formatted[0]["input_ids"], skip_special_tokens=True)
-    assert re.sub(r"\s+", "", text) == re.sub(r"\s+", "", (
-        '<user>Weather in Paris?</user><call>get_weather({"city": "Paris"})</call>'
-        "<tool id=call_0>21</tool><a>21 C.</a>"
-    ))
+    assert re.sub(r"\s+", "", text) == re.sub(
+        r"\s+",
+        "",
+        (
+            '<user>Weather in Paris?</user><call>get_weather({"city": "Paris"})</call>'
+            "<tool id=call_0>21</tool><a>21 C.</a>"
+        ),
+    )

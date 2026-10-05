@@ -35,15 +35,34 @@ _MAX_BATCH = 1024
 _MAX_PARAMS_B = 1000.0
 
 # Closed allowlists — schema-shape rejection, no surprises.
-_VALID_QUANT = frozenset({
-    "none", "4bit", "8bit", "fp8", "gptq", "awq", "aqlm", "eetq", "mxfp4",
-})
+_VALID_QUANT = frozenset(
+    {
+        "none",
+        "4bit",
+        "8bit",
+        "fp8",
+        "gptq",
+        "awq",
+        "aqlm",
+        "eetq",
+        "mxfp4",
+    }
+)
 _VALID_PEFT = frozenset({"full", "lora", "dora", "qlora"})
-_VALID_OPTIMIZERS = frozenset({
-    "adamw_torch", "adamw_torch_fused", "adafactor", "sgd",
-    "adamw_bnb_8bit", "paged_adamw_8bit", "lion_8bit",
-    "lomo", "adalomo", "schedule_free_adamw",
-})
+_VALID_OPTIMIZERS = frozenset(
+    {
+        "adamw_torch",
+        "adamw_torch_fused",
+        "adafactor",
+        "sgd",
+        "adamw_bnb_8bit",
+        "paged_adamw_8bit",
+        "lion_8bit",
+        "lomo",
+        "adalomo",
+        "schedule_free_adamw",
+    }
+)
 
 
 def validate_seq_len(value: object) -> int:
@@ -52,9 +71,7 @@ def validate_seq_len(value: object) -> int:
     if not isinstance(value, int):
         raise TypeError(f"seq_len must be int, got {type(value).__name__}")
     if not (_MIN_SEQ_LEN <= value <= _MAX_SEQ_LEN):
-        raise ValueError(
-            f"seq_len must be in [{_MIN_SEQ_LEN}, {_MAX_SEQ_LEN}], got {value}"
-        )
+        raise ValueError(f"seq_len must be in [{_MIN_SEQ_LEN}, {_MAX_SEQ_LEN}], got {value}")
     return value
 
 
@@ -64,9 +81,7 @@ def validate_batch_size(value: object) -> int:
     if not isinstance(value, int):
         raise TypeError(f"batch_size must be int, got {type(value).__name__}")
     if not (_MIN_BATCH <= value <= _MAX_BATCH):
-        raise ValueError(
-            f"batch_size must be in [{_MIN_BATCH}, {_MAX_BATCH}], got {value}"
-        )
+        raise ValueError(f"batch_size must be in [{_MIN_BATCH}, {_MAX_BATCH}], got {value}")
     return value
 
 
@@ -86,15 +101,11 @@ class HardwareFitInput:
         if isinstance(self.params_b, bool):
             raise TypeError("params_b must be a number, not bool")
         if not isinstance(self.params_b, (int, float)):
-            raise TypeError(
-                f"params_b must be a number, got {type(self.params_b).__name__}"
-            )
+            raise TypeError(f"params_b must be a number, got {type(self.params_b).__name__}")
         if not math.isfinite(float(self.params_b)):
             raise ValueError("params_b must be finite")
         if self.params_b <= 0 or self.params_b > _MAX_PARAMS_B:
-            raise ValueError(
-                f"params_b must be in (0, {_MAX_PARAMS_B}], got {self.params_b}"
-            )
+            raise ValueError(f"params_b must be in (0, {_MAX_PARAMS_B}], got {self.params_b}")
         validate_seq_len(self.seq_len)
         validate_batch_size(self.batch_size)
         if not isinstance(self.optimizer, str):
@@ -108,16 +119,12 @@ class HardwareFitInput:
             raise TypeError("quant must be str")
         if self.quant not in _VALID_QUANT:
             raise ValueError(
-                f"unknown quant {self.quant!r}; "
-                f"known: {', '.join(sorted(_VALID_QUANT))}"
+                f"unknown quant {self.quant!r}; known: {', '.join(sorted(_VALID_QUANT))}"
             )
         if not isinstance(self.peft, str):
             raise TypeError("peft must be str")
         if self.peft not in _VALID_PEFT:
-            raise ValueError(
-                f"unknown peft {self.peft!r}; "
-                f"known: {', '.join(sorted(_VALID_PEFT))}"
-            )
+            raise ValueError(f"unknown peft {self.peft!r}; known: {', '.join(sorted(_VALID_PEFT))}")
         if not isinstance(self.gradient_checkpointing, bool):
             raise TypeError("gradient_checkpointing must be bool")
 
@@ -134,8 +141,11 @@ class VRAMBreakdown:
 
     def __post_init__(self) -> None:
         for fld in (
-            "weights_gb", "optimizer_gb", "gradients_gb",
-            "activations_gb", "overhead_gb",
+            "weights_gb",
+            "optimizer_gb",
+            "gradients_gb",
+            "activations_gb",
+            "overhead_gb",
         ):
             val = getattr(self, fld)
             if isinstance(val, bool):
@@ -191,7 +201,7 @@ class HardwareFitReport:
 # Bytes-per-param multiplier by quant scheme. Approximate; the deep
 # truth lives in upstream BNB / GPTQ / AWQ docs.
 _BYTES_PER_PARAM_BY_QUANT = {
-    "none": 2.0,    # bf16/fp16
+    "none": 2.0,  # bf16/fp16
     "4bit": 0.5,
     "8bit": 1.0,
     "fp8": 1.0,
@@ -252,9 +262,7 @@ _MAX_ACTIVATIONS_BYTES = 1e18  # 1 EB sanity cap; far above any real GPU
 def estimate_peak_vram_gb(inp: HardwareFitInput) -> VRAMBreakdown:
     """Static analytical VRAM predictor. Returns a per-class breakdown."""
     if not isinstance(inp, HardwareFitInput):
-        raise TypeError(
-            f"inp must be HardwareFitInput, got {type(inp).__name__}"
-        )
+        raise TypeError(f"inp must be HardwareFitInput, got {type(inp).__name__}")
 
     params = float(inp.params_b) * 1e9  # absolute count
     bytes_per = _BYTES_PER_PARAM_BY_QUANT.get(inp.quant, 2.0)
@@ -310,9 +318,7 @@ def decide_hardware_fit(
     if not math.isfinite(float(available_vram_gb)):
         raise ValueError("available_vram_gb must be finite")
     if available_vram_gb < 0:
-        raise ValueError(
-            f"available_vram_gb must be >= 0, got {available_vram_gb}"
-        )
+        raise ValueError(f"available_vram_gb must be >= 0, got {available_vram_gb}")
 
     breakdown = estimate_peak_vram_gb(inp)
     peak = breakdown.total_gb

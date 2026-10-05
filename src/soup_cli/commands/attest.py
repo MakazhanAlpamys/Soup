@@ -37,39 +37,49 @@ app = typer.Typer(
 @app.command("emit")
 def emit_cmd(
     stage: str = typer.Option(
-        ..., "--stage",
+        ...,
+        "--stage",
         help="Stage: extract / train / eval / export / publish.",
     ),
     subject_name: str = typer.Option(..., "--subject", help="Artefact name."),
     subject_sha: str = typer.Option(..., "--sha", help="64-hex SHA-256 of the artefact."),
     builder_id: str = typer.Option(
-        "soup-cli", "--builder",
+        "soup-cli",
+        "--builder",
         help="Builder identity (default: soup-cli).",
     ),
     invocation: Optional[str] = typer.Option(
-        None, "--invocation",
+        None,
+        "--invocation",
         help="Free-form invocation marker (e.g. command line).",
     ),
     sign_backend: str = typer.Option(
-        "unsigned", "--sign",
+        "unsigned",
+        "--sign",
         help="Signature backend: unsigned (default) | ed25519 | sigstore "
-             "(keyless OIDC + Fulcio/Rekor).",
+        "(keyless OIDC + Fulcio/Rekor).",
     ),
     key: Optional[str] = typer.Option(
-        None, "--key",
+        None,
+        "--key",
         help="ed25519 private-key PEM path (or set SOUP_SIGNING_KEY).",
     ),
     output: Optional[str] = typer.Option(
-        None, "--output", "-o", help="Output file path (cwd-contained).",
+        None,
+        "--output",
+        "-o",
+        help="Output file path (cwd-contained).",
     ),
     attach_to_registry: Optional[str] = typer.Option(
-        None, "--attach-to-registry",
+        None,
+        "--attach-to-registry",
         help="Attach the emitted attestation statement to a registry entry id (needs --output).",
     ),
     interactive_oidc: bool = typer.Option(
-        False, "--interactive-oidc",
+        False,
+        "--interactive-oidc",
         help="Allow Sigstore browser OIDC when no ambient credential exists. "
-             "Off by default so headless runners fail instead of hanging.",
+        "Off by default so headless runners fail instead of hanging.",
     ),
 ) -> None:
     """Emit a per-stage in-toto/SLSA-3 attestation.
@@ -98,10 +108,7 @@ def emit_cmd(
     # a permanent Rekor entry carrying the signer's identity.
     normalized_backend = sign_backend.lower() if isinstance(sign_backend, str) else ""
     if attach_to_registry is not None and output is None:
-        console.print(
-            "[red]--attach-to-registry needs --output "
-            "(nothing written to attach).[/]"
-        )
+        console.print("[red]--attach-to-registry needs --output (nothing written to attach).[/]")
         raise typer.Exit(_EXIT_USAGE)
     if normalized_backend == "sigstore" and output is None:
         console.print(
@@ -120,9 +127,7 @@ def emit_cmd(
                 sidecar_path = output + _SIGNATURE_SUFFIX
                 enforce_under_cwd_and_no_symlink(sidecar_path, "signature sidecar")
                 if os.path.isdir(sidecar_path):
-                    raise ValueError(
-                        "signature sidecar path must name a file, not a directory"
-                    )
+                    raise ValueError("signature sidecar path must name a file, not a directory")
         except (TypeError, ValueError) as exc:
             console.print(f"[red]Invalid output: {for_terminal(exc)}[/]")
             raise typer.Exit(_EXIT_USAGE) from exc
@@ -178,9 +183,7 @@ def _attach_attestation(registry_id: str, paths: list[str]) -> None:
     try:
         from soup_cli.registry.attach import attach_artifact
     except ImportError as exc:
-        console.print(
-            f"[red]Error:[/] could not import registry attach helper: {escape(str(exc))}"
-        )
+        console.print(f"[red]Error:[/] could not import registry attach helper: {escape(str(exc))}")
         raise typer.Exit(_EXIT_ATTACH_FAILED) from exc
     for path in paths:
         try:
@@ -190,8 +193,7 @@ def _attach_attestation(registry_id: str, paths: list[str]) -> None:
             raise typer.Exit(_EXIT_ATTACH_FAILED) from exc
         else:
             console.print(
-                f"[green]Attached[/] attestation to registry entry "
-                f"[bold]{escape(registry_id)}[/]"
+                f"[green]Attached[/] attestation to registry entry [bold]{escape(registry_id)}[/]"
             )
 
 
@@ -226,21 +228,26 @@ def _write_sig_sidecar(output: str, sig: dict) -> str:
 def verify_cmd(
     statement: str = typer.Argument(..., help="Path to the in-toto Statement JSON."),
     signature: str = typer.Option(
-        ..., "--signature", "-s",
+        ...,
+        "--signature",
+        "-s",
         help="Path to the .sig JSON sidecar written by `attest emit --sign`.",
     ),
     public_key: Optional[str] = typer.Option(
-        None, "--public-key",
+        None,
+        "--public-key",
         help="Trusted ed25519 public-key PEM. When set, the embedded key must "
-             "match it (genuine authentication).",
+        "match it (genuine authentication).",
     ),
     cert_identity: Optional[str] = typer.Option(
-        None, "--cert-identity",
+        None,
+        "--cert-identity",
         help="Trusted Sigstore certificate identity (SAN). Requires "
-             "--cert-oidc-issuer and is required for sigstore-signed attestations.",
+        "--cert-oidc-issuer and is required for sigstore-signed attestations.",
     ),
     cert_oidc_issuer: Optional[str] = typer.Option(
-        None, "--cert-oidc-issuer",
+        None,
+        "--cert-oidc-issuer",
         help="Trusted OIDC issuer. Required together with --cert-identity.",
     ),
 ) -> None:
@@ -255,9 +262,7 @@ def verify_cmd(
         enforce_under_cwd_and_no_symlink(statement, "statement")
         enforce_under_cwd_and_no_symlink(signature, "signature")
         if os.lstat(signature).st_size > _MAX_SIGNATURE_SIDECAR_BYTES:
-            raise ValueError(
-                f"signature exceeds {_MAX_SIGNATURE_SIDECAR_BYTES} bytes"
-            )
+            raise ValueError(f"signature exceeds {_MAX_SIGNATURE_SIDECAR_BYTES} bytes")
     except (OSError, ValueError, FileNotFoundError) as exc:
         console.print(f"[red]{escape(str(exc))}[/]")
         raise typer.Exit(2)
@@ -275,9 +280,7 @@ def verify_cmd(
     # Re-canonicalise the on-disk statement so verification is independent of
     # platform newline translation (Windows CRLF) and incidental whitespace.
     try:
-        payload = json.dumps(
-            json.loads(raw_text), indent=2, sort_keys=True
-        ).encode("utf-8")
+        payload = json.dumps(json.loads(raw_text), indent=2, sort_keys=True).encode("utf-8")
     except (ValueError, TypeError):
         console.print("[red]Statement is not valid JSON[/]")
         raise typer.Exit(3)
@@ -318,14 +321,10 @@ def verify_cmd(
                 issuer=cert_oidc_issuer,
             )
         except RuntimeError as exc:
-            console.print(
-                f"[red]Sigstore verification unavailable: {for_terminal(exc)}[/]"
-            )
+            console.print(f"[red]Sigstore verification unavailable: {for_terminal(exc)}[/]")
             raise typer.Exit(1)
         except ValueError as exc:
-            console.print(
-                f"[red]Sigstore attestation INVALID: {for_terminal(exc)}[/]"
-            )
+            console.print(f"[red]Sigstore attestation INVALID: {for_terminal(exc)}[/]")
             raise typer.Exit(3)
         console.print(
             f"[green]Attestation Sigstore signature valid[/] "
@@ -367,16 +366,14 @@ def verify_cmd(
             raise typer.Exit(2)
         if "".join(trusted.split()) != "".join(pub.split()):
             console.print(
-                "[red]Signed by an untrusted key (embedded key does not match "
-                "--public-key).[/]"
+                "[red]Signed by an untrusted key (embedded key does not match --public-key).[/]"
             )
             raise typer.Exit(3)
         pub = trusted
 
     if verify_attestation(payload, sig_hex, pub):
         console.print(
-            f"[green]Attestation signature valid[/] "
-            f"[dim]({escape(os.path.basename(statement))})[/]"
+            f"[green]Attestation signature valid[/] [dim]({escape(os.path.basename(statement))})[/]"
         )
         # Make the trust boundary explicit: a valid signature proves the
         # signer asserted this statement — it does NOT re-verify the subject

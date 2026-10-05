@@ -55,9 +55,7 @@ class TestLoopbackBind:
         assert check_local_request(bind, host, None) is None
 
     def test_loopback_origin_ok(self):
-        assert (
-            check_local_request("127.0.0.1", "127.0.0.1:8000", "http://localhost:5173") is None
-        )
+        assert check_local_request("127.0.0.1", "127.0.0.1:8000", "http://localhost:5173") is None
 
     @pytest.mark.parametrize(
         "host", ["evil.example:8000", "evil.example", "127.0.0.1.evil.example", "", None]

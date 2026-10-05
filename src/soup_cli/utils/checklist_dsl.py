@@ -27,6 +27,7 @@ Operator-supplied responses are passed in via the ``evidence`` mapping:
 ``evidence`` is None or a test has no entry, the test renders a neutral
 ``OK`` verdict (matches v0.56 / v0.61 evidence-loader policy).
 """
+
 from __future__ import annotations
 
 import os
@@ -66,9 +67,7 @@ def validate_test_kind(kind: object) -> str:
         raise ValueError("kind must not be empty")
     canonical = kind.strip().lower()
     if canonical not in CHECKLIST_KINDS:
-        raise ValueError(
-            f"unknown kind {canonical!r}; valid: {sorted(CHECKLIST_KINDS)}"
-        )
+        raise ValueError(f"unknown kind {canonical!r}; valid: {sorted(CHECKLIST_KINDS)}")
     return canonical
 
 
@@ -120,15 +119,19 @@ class CheckListTest:
         object.__setattr__(self, "name", _validate_name(self.name, field="name"))
         object.__setattr__(self, "kind", validate_test_kind(self.kind))
         prompts = _validate_string_tuple(
-            self.prompts, field="prompts",
-            cap=_MAX_PROMPTS_PER_TEST, per_item_cap=_MAX_PROMPT_LEN,
+            self.prompts,
+            field="prompts",
+            cap=_MAX_PROMPTS_PER_TEST,
+            per_item_cap=_MAX_PROMPT_LEN,
         )
         if not prompts:
             raise ValueError("prompts must not be empty")
         object.__setattr__(self, "prompts", prompts)
         expected = _validate_string_tuple(
-            self.expected, field="expected",
-            cap=_MAX_EXPECTED_PER_TEST, per_item_cap=_MAX_EXPECTED_LEN,
+            self.expected,
+            field="expected",
+            cap=_MAX_EXPECTED_PER_TEST,
+            per_item_cap=_MAX_EXPECTED_LEN,
         )
         # MFT + DIR require at least one expected keyword; INV does not.
         if self.kind in ("mft", "dir") and not expected:
@@ -206,8 +209,11 @@ class CheckListReport:
             "overall": self.overall,
             "results": [
                 {
-                    "name": r.name, "kind": r.kind,
-                    "passed": r.passed, "total": r.total, "verdict": r.verdict,
+                    "name": r.name,
+                    "kind": r.kind,
+                    "passed": r.passed,
+                    "total": r.total,
+                    "verdict": r.verdict,
                 }
                 for r in self.results
             ],
@@ -241,12 +247,14 @@ def parse_checklist_spec(raw: object) -> CheckListSpec:
         expected = entry.get("expected") or []
         if not isinstance(expected, (list, tuple)):
             raise ValueError(f"tests[{idx}].expected must be a list/tuple")
-        tests.append(CheckListTest(
-            name=entry["name"],
-            kind=entry["kind"],
-            prompts=tuple(prompts),
-            expected=tuple(expected),
-        ))
+        tests.append(
+            CheckListTest(
+                name=entry["name"],
+                kind=entry["kind"],
+                prompts=tuple(prompts),
+                expected=tuple(expected),
+            )
+        )
     return CheckListSpec(tests=tuple(tests))
 
 
@@ -282,9 +290,7 @@ def load_checklist_spec(path: str) -> CheckListSpec:
         if stat.S_ISLNK(st.st_mode):  # impossible under O_NOFOLLOW, defence-in-depth
             raise ValueError("path must not be a symlink")
         if st.st_size > _MAX_FILE_BYTES:
-            raise ValueError(
-                f"spec file too large ({st.st_size} > {_MAX_FILE_BYTES})"
-            )
+            raise ValueError(f"spec file too large ({st.st_size} > {_MAX_FILE_BYTES})")
         with os.fdopen(fd, "r", encoding="utf-8", closefd=True) as fh:
             text = fh.read()
             fd = -1  # ownership transferred to fdopen / closefd=True
@@ -373,24 +379,29 @@ def run_checklist_spec(
         if evidence is None or t.name not in evidence:
             # Neutral OK for missing evidence (matches v0.56 / v0.61 policy).
             result = CheckListTestResult(
-                name=t.name, kind=t.kind, passed=0, total=0, verdict="OK",
+                name=t.name,
+                kind=t.kind,
+                passed=0,
+                total=0,
+                verdict="OK",
             )
             results.append(result)
             continue
         responses = evidence[t.name]
         if not isinstance(responses, (list, tuple)):
             result = CheckListTestResult(
-                name=t.name, kind=t.kind, passed=0, total=1, verdict="MAJOR",
+                name=t.name,
+                kind=t.kind,
+                passed=0,
+                total=1,
+                verdict="MAJOR",
             )
             results.append(result)
             if overall != "MAJOR":
                 overall = "MAJOR"
             continue
         # Reject obviously-bad rows (non-str entries) up front.
-        responses = [
-            r for r in responses
-            if isinstance(r, str) and not isinstance(r, bool)
-        ]
+        responses = [r for r in responses if isinstance(r, str) and not isinstance(r, bool)]
 
         if t.kind == "mft":
             passed = sum(1 for r in responses if _mft_pass(r, t.expected))
@@ -410,8 +421,11 @@ def run_checklist_spec(
             verdict = _classify_pass_rate(passed / total if total else 1.0)
 
         result = CheckListTestResult(
-            name=t.name, kind=t.kind,
-            passed=passed, total=total, verdict=verdict,
+            name=t.name,
+            kind=t.kind,
+            passed=passed,
+            total=total,
+            verdict=verdict,
         )
         results.append(result)
         if verdict == "MAJOR":

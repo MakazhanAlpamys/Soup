@@ -42,12 +42,14 @@ def test_registry_diff_uses_newest_rows_on_both_sides():
 
     result = eval_delta(left, right)
 
-    assert result == [{
-        "benchmark": "mmlu",
-        "left": 0.45,
-        "right": 0.40,
-        "delta": pytest.approx(-0.05),
-    }]
+    assert result == [
+        {
+            "benchmark": "mmlu",
+            "left": 0.45,
+            "right": 0.40,
+            "delta": pytest.approx(-0.05),
+        }
+    ]
 
 
 def test_eval_compare_uses_newest_rows_on_both_sides():
@@ -65,12 +67,14 @@ def test_eval_compare_uses_newest_rows_on_both_sides():
 
     result = compare_runs(tracker, "run-a", "run-b")
 
-    assert result["comparisons"] == [{
-        "benchmark": "mmlu",
-        "run_1_score": 0.45,
-        "run_2_score": 0.40,
-        "delta": pytest.approx(-0.05),
-    }]
+    assert result["comparisons"] == [
+        {
+            "benchmark": "mmlu",
+            "run_1_score": 0.45,
+            "run_2_score": 0.40,
+            "delta": pytest.approx(-0.05),
+        }
+    ]
     assert result["regressions"] == ["mmlu"]
 
 

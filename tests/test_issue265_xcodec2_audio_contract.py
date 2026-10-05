@@ -79,12 +79,7 @@ def test_every_source_data_format_literal_is_schema_valid():
             found[str(path.relative_to(ROOT))] = values
 
     assert found, "ratchet scanned no data.format literals"
-    invalid = {
-        value
-        for values in found.values()
-        for value in values
-        if value not in allowed
-    }
+    invalid = {value for values in found.values() for value in values if value not in allowed}
     assert not invalid, f"source names refused data.format values: {sorted(invalid)}"
 
 
@@ -115,9 +110,7 @@ def test_llasa_setup_clears_exact_encode_device_before_base_setup(monkeypatch):
     wrapper.device = "cuda"
     wrapper._tts_family = None
 
-    monkeypatch.setattr(
-        TTSTrainerWrapper, "_require_tts_codec", lambda self, family: None
-    )
+    monkeypatch.setattr(TTSTrainerWrapper, "_require_tts_codec", lambda self, family: None)
 
     def fake_encode(dataset, family, *, device=None, console=None):
         assert family == "llasa"
@@ -153,9 +146,7 @@ def test_llasa_setup_clears_exact_encode_device_when_encoding_fails(monkeypatch)
     wrapper.device = "cuda"
     wrapper._tts_family = None
 
-    monkeypatch.setattr(
-        TTSTrainerWrapper, "_require_tts_codec", lambda self, family: None
-    )
+    monkeypatch.setattr(TTSTrainerWrapper, "_require_tts_codec", lambda self, family: None)
 
     def fake_encode(dataset, family, *, device=None, console=None):
         assert family == "llasa"
@@ -173,12 +164,10 @@ def test_llasa_setup_clears_exact_encode_device_when_encoding_fails(monkeypatch)
 
 
 def test_floor_ci_pins_matching_torch_and_torchaudio():
-    constraints = (
-        ROOT / ".github" / "constraints" / "transformers-floor.txt"
-    ).read_text(encoding="utf-8")
-    workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
+    constraints = (ROOT / ".github" / "constraints" / "transformers-floor.txt").read_text(
         encoding="utf-8"
     )
+    workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
 
     assert "torch==2.6.0" in constraints
     assert "torchaudio==2.6.0" in constraints

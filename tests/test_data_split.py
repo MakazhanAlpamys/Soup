@@ -228,8 +228,13 @@ class TestDataSplitEdgeCases:
         result = runner.invoke(
             app,
             [
-                "data", "split", str(data_file),
-                "--val", "30", "--stratify", "category",
+                "data",
+                "split",
+                str(data_file),
+                "--val",
+                "30",
+                "--stratify",
+                "category",
             ],
         )
         assert result.exit_code == 0

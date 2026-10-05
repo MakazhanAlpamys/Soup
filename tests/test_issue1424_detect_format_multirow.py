@@ -79,9 +79,7 @@ def _load(path: Path, data_format: str = "auto") -> dict:
 
 
 def _write(path: Path, rows: list[dict]) -> None:
-    path.write_text(
-        "".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8"
-    )
+    path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------
@@ -233,9 +231,7 @@ def test_mixed_llava_file_refuses_or_keeps_every_image(tmp_path):
     # The issue's repro: a 4-row LLaVA file whose first row is text-only used
     # to load with 0 of 4 images kept. Now it refuses.
     path = tmp_path / "mixed_llava.jsonl"
-    rows = [_SHAREGPT_ROW] + [
-        {"image": f"i{i}.png", "conversations": _SHAREGPT} for i in range(3)
-    ]
+    rows = [_SHAREGPT_ROW] + [{"image": f"i{i}.png", "conversations": _SHAREGPT} for i in range(3)]
     _write(path, rows)
     with pytest.raises(ValueError, match="llava"):
         _load(path)
@@ -310,9 +306,7 @@ def test_inspect_endpoint_reports_a_mixed_file_instead_of_a_500(tmp_path):
     from soup_cli.ui.app import create_app, get_auth_token
 
     path = tmp_path / "mixed.jsonl"
-    rows = [{"conversations": _SHAREGPT}] + [
-        {"image": "i.png", "conversations": _SHAREGPT}
-    ] * 3
+    rows = [{"conversations": _SHAREGPT}] + [{"image": "i.png", "conversations": _SHAREGPT}] * 3
     path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
 
     client = TestClient(create_app(), raise_server_exceptions=False)

@@ -44,7 +44,12 @@ torch = pytest.importorskip("torch")
 
 
 def _cfg(
-    base="org/m", task="sft", r=8, dropout=0.0, backend=None, targets="auto",
+    base="org/m",
+    task="sft",
+    r=8,
+    dropout=0.0,
+    backend=None,
+    targets="auto",
     modality="text",
 ):
     """A stand-in for the loaded SoupConfig, carrying only what the check reads."""
@@ -77,7 +82,8 @@ def _real_cfg(r=8, dropout=0.0, targets="auto", moe_lora=False, target_parameter
         f"    target_modules: {json.dumps(targets)}\n"
         + (
             f"    target_parameters: {json.dumps(target_parameters)}\n"
-            if target_parameters is not None else ""
+            if target_parameters is not None
+            else ""
         )
     )
 
@@ -119,9 +125,7 @@ class TestLoadFailuresAreNotAttachFailures:
         def _raise(_base):
             raise OSError(message)
 
-        check = check_attach(
-            "r", _cfg(), load_hf_config=_raise, build_model=lambda *_: None
-        )
+        check = check_attach("r", _cfg(), load_hf_config=_raise, build_model=lambda *_: None)
 
         assert check.verdict is Verdict.UNVERIFIED, check
         assert PreflightReport([check]).exit_code == 0, (
@@ -132,12 +136,11 @@ class TestLoadFailuresAreNotAttachFailures:
     def test_an_unknown_loader_failure_still_does_not_claim_it_cannot_attach(self):
         """The conservative direction: we did not reach the attach, so we do not
         get to say it fails. The message carries the exception verbatim."""
+
         def _raise(_base):
             raise RuntimeError("hub had a bad minute")
 
-        check = check_attach(
-            "r", _cfg(), load_hf_config=_raise, build_model=lambda *_: None
-        )
+        check = check_attach("r", _cfg(), load_hf_config=_raise, build_model=lambda *_: None)
 
         assert check.verdict is Verdict.UNVERIFIED
         assert "hub had a bad minute" in check.detail
@@ -147,11 +150,14 @@ class TestLoadFailuresAreNotAttachFailures:
         tests missed entirely: ``from_config`` raises "Unrecognized model" for a
         config this transformers cannot build (MiniMax-M3 does exactly this).
         Filing that as CANNOT_ATTACH blames the recipe for the library's age."""
+
         def _boom(_config, _task):
             raise ValueError("Unrecognized model in org/x. Should have a `model_type`")
 
         check = check_attach(
-            "r", _cfg(), load_hf_config=lambda _b: SimpleNamespace(model_type="x"),
+            "r",
+            _cfg(),
+            load_hf_config=lambda _b: SimpleNamespace(model_type="x"),
             build_model=_boom,
         )
 
@@ -162,11 +168,14 @@ class TestLoadFailuresAreNotAttachFailures:
     def test_an_unrecognised_build_failure_is_an_attach_failure(self):
         """The other side, so the rule is not "never fail". The config loaded and
         the architecture is known; if it will not instantiate, that is real."""
+
         def _boom(_config, _task):
             raise TypeError("__init__() missing 1 required argument")
 
         check = check_attach(
-            "r", _cfg(), load_hf_config=lambda _b: SimpleNamespace(model_type="x"),
+            "r",
+            _cfg(),
+            load_hf_config=lambda _b: SimpleNamespace(model_type="x"),
             build_model=_boom,
         )
 
@@ -179,17 +188,17 @@ class TestNothingToAttach:
     red rows in a report meant to go green."""
 
     def test_full_fine_tuning_has_no_adapter(self):
-        check = check_attach(
-            "r", _cfg(r=0), load_hf_config=_unreachable, build_model=_unreachable
-        )
+        check = check_attach("r", _cfg(r=0), load_hf_config=_unreachable, build_model=_unreachable)
 
         assert check.verdict is Verdict.NO_ADAPTER
         assert "lora.r" in check.detail
 
     def test_the_mlx_backend_is_out_of_scope(self):
         check = check_attach(
-            "r", _cfg(backend="mlx"),
-            load_hf_config=_unreachable, build_model=_unreachable,
+            "r",
+            _cfg(backend="mlx"),
+            load_hf_config=_unreachable,
+            build_model=_unreachable,
         )
 
         assert check.verdict is Verdict.NO_ADAPTER
@@ -239,9 +248,7 @@ class TestTheLoaderMatchesTheTrainer:
         from soup_cli.utils.attach_preflight import loader_for
 
         assert loader_for(_cfg(task="embedding")) == ("AutoModel",)
-        assert loader_for(_cfg(task="reward_model")) == (
-            "AutoModelForSequenceClassification",
-        )
+        assert loader_for(_cfg(task="reward_model")) == ("AutoModelForSequenceClassification",)
 
 
 class TestRemoteCodeIsNeverOffered:
@@ -277,7 +284,8 @@ class TestRemoteCodeIsNeverOffered:
     def test_the_config_load_refuses_remote_code_too(self, monkeypatch):
         seen = []
         monkeypatch.setattr(
-            transformers.AutoConfig, "from_pretrained",
+            transformers.AutoConfig,
+            "from_pretrained",
             lambda base, **kwargs: seen.append(kwargs) or SimpleNamespace(),
         )
         from soup_cli.utils.attach_preflight import load_hf_config
@@ -392,8 +400,12 @@ class TestTheRealAttach:
         from transformers import LlamaConfig
 
         config = LlamaConfig(
-            vocab_size=64, hidden_size=16, intermediate_size=32,
-            num_hidden_layers=2, num_attention_heads=2, num_key_value_heads=1,
+            vocab_size=64,
+            hidden_size=16,
+            intermediate_size=32,
+            num_hidden_layers=2,
+            num_attention_heads=2,
+            num_key_value_heads=1,
         )
         check = check_attach(
             "llama", _real_cfg(), load_hf_config=self._local(config), build_model=self._meta
@@ -412,8 +424,12 @@ class TestTheRealAttach:
         from transformers import Phi3Config
 
         config = Phi3Config(
-            vocab_size=64, hidden_size=16, intermediate_size=32,
-            num_hidden_layers=2, num_attention_heads=2, num_key_value_heads=2,
+            vocab_size=64,
+            hidden_size=16,
+            intermediate_size=32,
+            num_hidden_layers=2,
+            num_attention_heads=2,
+            num_key_value_heads=2,
         )
         check = check_attach(
             "phi", _real_cfg(), load_hf_config=self._local(config), build_model=self._meta
@@ -437,8 +453,12 @@ class TestTheRealAttach:
         from transformers import LlamaConfig
 
         config = LlamaConfig(
-            vocab_size=64, hidden_size=16, intermediate_size=32,
-            num_hidden_layers=2, num_attention_heads=2, num_key_value_heads=1,
+            vocab_size=64,
+            hidden_size=16,
+            intermediate_size=32,
+            num_hidden_layers=2,
+            num_attention_heads=2,
+            num_key_value_heads=1,
         )
         seen = {}
 
@@ -447,8 +467,10 @@ class TestTheRealAttach:
             return SimpleNamespace(named_modules=lambda: [("a.lora_A", None)])
 
         check_attach(
-            "llama", _real_cfg(r=64, dropout=0.05),
-            load_hf_config=self._local(config), build_model=self._meta,
+            "llama",
+            _real_cfg(r=64, dropout=0.05),
+            load_hf_config=self._local(config),
+            build_model=self._meta,
             attach=_record,
         )
 
@@ -464,12 +486,18 @@ class TestTheRealAttach:
         from transformers import LlamaConfig
 
         config = LlamaConfig(
-            vocab_size=64, hidden_size=16, intermediate_size=32,
-            num_hidden_layers=2, num_attention_heads=2, num_key_value_heads=1,
+            vocab_size=64,
+            hidden_size=16,
+            intermediate_size=32,
+            num_hidden_layers=2,
+            num_attention_heads=2,
+            num_key_value_heads=1,
         )
         check = check_attach(
-            "llama", _real_cfg(),
-            load_hf_config=self._local(config), build_model=self._meta,
+            "llama",
+            _real_cfg(),
+            load_hf_config=self._local(config),
+            build_model=self._meta,
             attach=lambda _m, _k: SimpleNamespace(named_modules=lambda: []),
         )
 
@@ -482,12 +510,18 @@ class TestTheRealAttach:
         from transformers import LlamaConfig
 
         config = LlamaConfig(
-            vocab_size=64, hidden_size=16, intermediate_size=32,
-            num_hidden_layers=2, num_attention_heads=2, num_key_value_heads=1,
+            vocab_size=64,
+            hidden_size=16,
+            intermediate_size=32,
+            num_hidden_layers=2,
+            num_attention_heads=2,
+            num_key_value_heads=1,
         )
         check = check_attach(
-            "llama", _real_cfg(targets=["not_a_module_here"]),
-            load_hf_config=self._local(config), build_model=self._meta,
+            "llama",
+            _real_cfg(targets=["not_a_module_here"]),
+            load_hf_config=self._local(config),
+            build_model=self._meta,
         )
 
         assert check.verdict is Verdict.CANNOT_ATTACH
@@ -517,8 +551,10 @@ class TestTheBreakdowns:
         by a fake."""
         model = SimpleNamespace(
             named_modules=lambda: [
-                ("a.lora_A", None), ("a.lora_A.default", None),
-                ("a.lora_B", None), ("a.lora_B.default", None),
+                ("a.lora_A", None),
+                ("a.lora_A.default", None),
+                ("a.lora_B", None),
+                ("a.lora_B.default", None),
             ]
         )
 
@@ -621,6 +657,7 @@ class TestTheCommand:
 
     def test_a_crash_exits_1(self, tmp_path, monkeypatch):
         """The fourth code: an unexpected error stays a runtime error."""
+
         def _boom(*_a, **_k):
             raise RuntimeError("boom")
 
@@ -651,17 +688,25 @@ class TestTheVerdictIsTheTrainers:
         from transformers import Qwen2MoeConfig
 
         return Qwen2MoeConfig(
-            vocab_size=64, hidden_size=16, intermediate_size=32,
-            moe_intermediate_size=16, shared_expert_intermediate_size=16,
-            num_hidden_layers=2, num_attention_heads=2, num_key_value_heads=1,
-            num_experts=4, num_experts_per_tok=2,
+            vocab_size=64,
+            hidden_size=16,
+            intermediate_size=32,
+            moe_intermediate_size=16,
+            shared_expert_intermediate_size=16,
+            num_hidden_layers=2,
+            num_attention_heads=2,
+            num_key_value_heads=1,
+            num_experts=4,
+            num_experts_per_tok=2,
         )
 
     def _check(self, cfg, hf_config, classes=None):
         from soup_cli.utils.attach_preflight import build_on_meta
 
         return check_attach(
-            "r", cfg, load_hf_config=lambda _b: hf_config,
+            "r",
+            cfg,
+            load_hf_config=lambda _b: hf_config,
             build_model=lambda c, _cls: build_on_meta(c, classes or _cls),
         )
 
@@ -688,9 +733,15 @@ class TestTheVerdictIsTheTrainers:
         from transformers import Qwen3MoeConfig
 
         return Qwen3MoeConfig(
-            vocab_size=64, hidden_size=16, intermediate_size=32,
-            moe_intermediate_size=16, num_hidden_layers=2, num_attention_heads=2,
-            num_key_value_heads=1, num_experts=4, num_experts_per_tok=2,
+            vocab_size=64,
+            hidden_size=16,
+            intermediate_size=32,
+            moe_intermediate_size=16,
+            num_hidden_layers=2,
+            num_attention_heads=2,
+            num_key_value_heads=1,
+            num_experts=4,
+            num_experts_per_tok=2,
         )
 
     def test_explicit_target_parameters_reach_the_attach(self):
@@ -719,13 +770,21 @@ class TestTheVerdictIsTheTrainers:
 
         vl = LlavaConfig(
             text_config=LlamaConfig(
-                vocab_size=64, hidden_size=16, intermediate_size=32,
-                num_hidden_layers=2, num_attention_heads=2, num_key_value_heads=2,
+                vocab_size=64,
+                hidden_size=16,
+                intermediate_size=32,
+                num_hidden_layers=2,
+                num_attention_heads=2,
+                num_key_value_heads=2,
                 pad_token_id=0,
             ),
             vision_config=CLIPVisionConfig(
-                hidden_size=16, intermediate_size=32, num_hidden_layers=2,
-                num_attention_heads=2, image_size=32, patch_size=16,
+                hidden_size=16,
+                intermediate_size=32,
+                num_hidden_layers=2,
+                num_attention_heads=2,
+                image_size=32,
+                patch_size=16,
             ),
             image_token_index=63,
         )
@@ -742,7 +801,6 @@ class TestTheVerdictIsTheTrainers:
         assert working.verdict is Verdict.ATTACHES, working.detail
         assert working.vision_modules == 0, "and it stayed out of the vision tower"
 
-
     def test_a_text_config_the_causal_lm_class_refuses_is_not_attached(self):
         """No trainer falls back from ``AutoModelForCausalLM`` to ``AutoModel``;
         SFT's text path loads exactly one class. My first version did fall back,
@@ -756,20 +814,30 @@ class TestTheVerdictIsTheTrainers:
 
         vl = LlavaConfig(
             text_config=LlamaConfig(
-                vocab_size=64, hidden_size=16, intermediate_size=32,
-                num_hidden_layers=2, num_attention_heads=2, num_key_value_heads=2,
+                vocab_size=64,
+                hidden_size=16,
+                intermediate_size=32,
+                num_hidden_layers=2,
+                num_attention_heads=2,
+                num_key_value_heads=2,
                 pad_token_id=0,
             ),
             vision_config=CLIPVisionConfig(
-                hidden_size=16, intermediate_size=32, num_hidden_layers=2,
-                num_attention_heads=2, image_size=32, patch_size=16,
+                hidden_size=16,
+                intermediate_size=32,
+                num_hidden_layers=2,
+                num_attention_heads=2,
+                image_size=32,
+                patch_size=16,
             ),
             image_token_index=63,
         )
-        text_cfg = _real_cfg()                       # no modality -> the text path
+        text_cfg = _real_cfg()  # no modality -> the text path
 
         check = check_attach(
-            "vl-as-text", text_cfg, load_hf_config=lambda _b: vl,
+            "vl-as-text",
+            text_cfg,
+            load_hf_config=lambda _b: vl,
             build_model=lambda c, _cls: build_on_meta(c, loader_for(text_cfg)),
         )
 
@@ -870,10 +938,13 @@ class TestOnlySftReadsModality:
         from soup_cli.config.loader import load_config_from_string
 
         fmt = {"text": "alpaca", "vision": "llava", "audio": "audio"}[modality]
-        fmt = {"asr": "asr", "classifier": "auto", "reranker": "auto",
-               "cross_encoder": "auto"}.get(task, fmt)
+        fmt = {"asr": "asr", "classifier": "auto", "reranker": "auto", "cross_encoder": "auto"}.get(
+            task, fmt
+        )
         raw = {
-            "base": "org/m", "task": task, "modality": modality,
+            "base": "org/m",
+            "task": task,
+            "modality": modality,
             "data": {"train": "./x.jsonl", "format": fmt},
             "training": {"lora": {"r": 8, "dropout": 0.0}, **training},
         }
@@ -961,13 +1032,20 @@ class TestTasksThatBuildNoAdapter:
         assert not wanted and why
 
     def test_the_classifier_family_needs_classifier_lora(self):
-        off = SimpleNamespace(task="reranker", backend="transformers", training=SimpleNamespace(
-            lora=SimpleNamespace(r=8), classifier_lora=False))
-        on = SimpleNamespace(task="reranker", backend="transformers", training=SimpleNamespace(
-            lora=SimpleNamespace(r=8), classifier_lora=True))
+        off = SimpleNamespace(
+            task="reranker",
+            backend="transformers",
+            training=SimpleNamespace(lora=SimpleNamespace(r=8), classifier_lora=False),
+        )
+        on = SimpleNamespace(
+            task="reranker",
+            backend="transformers",
+            training=SimpleNamespace(lora=SimpleNamespace(r=8), classifier_lora=True),
+        )
 
         assert plan_adapter(off) == (
-            False, "classifier_lora is off --- that trainer full-fine-tunes"
+            False,
+            "classifier_lora is off --- that trainer full-fine-tunes",
         )
         assert plan_adapter(on) == (True, "")
 
@@ -982,11 +1060,21 @@ class TestConcreteClassesBuild:
         from soup_cli.utils.attach_preflight import build_on_meta
 
         cfg = WhisperConfig(
-            vocab_size=64, d_model=16, encoder_layers=1, decoder_layers=1,
-            encoder_attention_heads=2, decoder_attention_heads=2,
-            encoder_ffn_dim=32, decoder_ffn_dim=32, max_source_positions=16,
-            max_target_positions=16, num_mel_bins=8,
-            pad_token_id=0, bos_token_id=1, eos_token_id=2, decoder_start_token_id=1,
+            vocab_size=64,
+            d_model=16,
+            encoder_layers=1,
+            decoder_layers=1,
+            encoder_attention_heads=2,
+            decoder_attention_heads=2,
+            encoder_ffn_dim=32,
+            decoder_ffn_dim=32,
+            max_source_positions=16,
+            max_target_positions=16,
+            num_mel_bins=8,
+            pad_token_id=0,
+            bos_token_id=1,
+            eos_token_id=2,
+            decoder_start_token_id=1,
         )
         model = build_on_meta(cfg, ("WhisperForConditionalGeneration",))
 
@@ -998,10 +1086,16 @@ class TestAsrNeedsItsAdapter:
     def test_asr_without_asr_lora_is_no_adapter(self):
         """trainer/asr.py attaches only with asr_lora on (#1117 review, round 3):
         without it that run full-fine-tunes, so the check has nothing to attach."""
-        off = SimpleNamespace(task="asr", backend="transformers", training=SimpleNamespace(
-            lora=SimpleNamespace(r=8), asr_lora=False))
-        on = SimpleNamespace(task="asr", backend="transformers", training=SimpleNamespace(
-            lora=SimpleNamespace(r=8), asr_lora=True))
+        off = SimpleNamespace(
+            task="asr",
+            backend="transformers",
+            training=SimpleNamespace(lora=SimpleNamespace(r=8), asr_lora=False),
+        )
+        on = SimpleNamespace(
+            task="asr",
+            backend="transformers",
+            training=SimpleNamespace(lora=SimpleNamespace(r=8), asr_lora=True),
+        )
 
         assert plan_adapter(off) == (False, "asr_lora is off --- that trainer full-fine-tunes")
         assert plan_adapter(on) == (True, "")
@@ -1011,8 +1105,13 @@ def _tiny_llama():
     from transformers import LlamaConfig
 
     return LlamaConfig(
-        vocab_size=64, hidden_size=16, intermediate_size=32, num_hidden_layers=2,
-        num_attention_heads=2, num_key_value_heads=2, pad_token_id=0,
+        vocab_size=64,
+        hidden_size=16,
+        intermediate_size=32,
+        num_hidden_layers=2,
+        num_attention_heads=2,
+        num_key_value_heads=2,
+        pad_token_id=0,
     )
 
 
@@ -1086,9 +1185,7 @@ class TestConfigNamesAreSafeToo:
 
         # Bare, not joined onto tmp_path: Windows pathlib splits at the "/" and
         # the literal "[/]x" never reaches the output (#1117 review).
-        result = CliRunner().invoke(
-            app, ["recipes", "verify", "--config", "[/]x\x1b[2J.yaml"]
-        )
+        result = CliRunner().invoke(app, ["recipes", "verify", "--config", "[/]x\x1b[2J.yaml"])
 
         assert result.exit_code == 3
         assert "[/]x" in result.output and "\x1b" not in result.output
@@ -1103,13 +1200,21 @@ class TestConfigNamesAreSafeToo:
 
         vl = LlavaConfig(
             text_config=LlamaConfig(
-                vocab_size=64, hidden_size=16, intermediate_size=32,
-                num_hidden_layers=2, num_attention_heads=2, num_key_value_heads=2,
+                vocab_size=64,
+                hidden_size=16,
+                intermediate_size=32,
+                num_hidden_layers=2,
+                num_attention_heads=2,
+                num_key_value_heads=2,
                 pad_token_id=0,
             ),
             vision_config=CLIPVisionConfig(
-                hidden_size=16, intermediate_size=32, num_hidden_layers=2,
-                num_attention_heads=2, image_size=32, patch_size=16,
+                hidden_size=16,
+                intermediate_size=32,
+                num_hidden_layers=2,
+                num_attention_heads=2,
+                image_size=32,
+                patch_size=16,
             ),
             image_token_index=63,
         )
@@ -1281,14 +1386,30 @@ class TestTheSkeletonKeepsAnExpertLayer:
         from soup_cli.utils.attach_preflight import build_on_meta
 
         hf = DeepseekV3Config(
-            vocab_size=64, hidden_size=32, intermediate_size=32, moe_intermediate_size=16,
-            num_hidden_layers=61, num_attention_heads=2, num_key_value_heads=2,
-            n_routed_experts=4, num_experts_per_tok=2, n_group=1, topk_group=1,
-            first_k_dense_replace=3, moe_layer_freq=1, q_lora_rank=16, kv_lora_rank=16,
-            qk_rope_head_dim=8, qk_nope_head_dim=8, v_head_dim=8, pad_token_id=0,
+            vocab_size=64,
+            hidden_size=32,
+            intermediate_size=32,
+            moe_intermediate_size=16,
+            num_hidden_layers=61,
+            num_attention_heads=2,
+            num_key_value_heads=2,
+            n_routed_experts=4,
+            num_experts_per_tok=2,
+            n_group=1,
+            topk_group=1,
+            first_k_dense_replace=3,
+            moe_layer_freq=1,
+            q_lora_rank=16,
+            kv_lora_rank=16,
+            qk_rope_head_dim=8,
+            qk_nope_head_dim=8,
+            v_head_dim=8,
+            pad_token_id=0,
         )
         check = check_attach(
-            "r", _real_cfg(moe_lora=True), load_hf_config=lambda _b: hf,
+            "r",
+            _real_cfg(moe_lora=True),
+            load_hf_config=lambda _b: hf,
             build_model=lambda c, cls: build_on_meta(c, cls),
         )
 
@@ -1340,8 +1461,12 @@ class TestTheLoadersWarningsLeaveJsonStdoutAlone:
         from tests.conftest import strip_ansi
 
         tiny = LlamaConfig(
-            vocab_size=64, hidden_size=16, intermediate_size=32, num_hidden_layers=2,
-            num_attention_heads=2, num_key_value_heads=2,
+            vocab_size=64,
+            hidden_size=16,
+            intermediate_size=32,
+            num_hidden_layers=2,
+            num_attention_heads=2,
+            num_key_value_heads=2,
         )
         monkeypatch.setattr("soup_cli.utils.attach_preflight.load_hf_config", lambda _b: tiny)
         path = tmp_path / "soup.yaml"

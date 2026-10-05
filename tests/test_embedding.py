@@ -354,7 +354,10 @@ class TestEmbeddingTrainRouting:
             data={"train": "./data.jsonl"},
         )
         wrapper = EmbeddingTrainerWrapper(
-            cfg, device="cuda", report_to="wandb", deepspeed_config="ds.json",
+            cfg,
+            device="cuda",
+            report_to="wandb",
+            deepspeed_config="ds.json",
         )
         assert wrapper.report_to == "wandb"
         assert wrapper.deepspeed_config == "ds.json"
@@ -404,9 +407,7 @@ class TestEmbeddingSweepParams:
             data={"train": "./data.jsonl"},
         )
 
-        fake_dataset = {
-            "train": [{"anchor": "query", "positive": "relevant"}]
-        }
+        fake_dataset = {"train": [{"anchor": "query", "positive": "relevant"}]}
         fake_result = {
             "initial_loss": 3.0,
             "final_loss": 2.5,
@@ -417,16 +418,18 @@ class TestEmbeddingSweepParams:
         }
 
         fake_gpu_info = {"memory_total": "0 MB", "memory_total_bytes": 0}
-        with mock_patch("soup_cli.data.loader.load_dataset", return_value=fake_dataset), \
-             mock_patch("soup_cli.utils.gpu.detect_device", return_value=("cpu", "CPU")), \
-             mock_patch("soup_cli.utils.gpu.get_gpu_info", return_value=fake_gpu_info), \
-             mock_patch("soup_cli.experiment.tracker.ExperimentTracker") as mock_tracker_cls, \
-             mock_patch("soup_cli.monitoring.display.TrainingDisplay"), \
-             mock_patch("soup_cli.trainer.embedding.EmbeddingTrainerWrapper.setup"), \
-             mock_patch(
-                 "soup_cli.trainer.embedding.EmbeddingTrainerWrapper.train",
-                 return_value=fake_result,
-             ) as mock_train:
+        with (
+            mock_patch("soup_cli.data.loader.load_dataset", return_value=fake_dataset),
+            mock_patch("soup_cli.utils.gpu.detect_device", return_value=("cpu", "CPU")),
+            mock_patch("soup_cli.utils.gpu.get_gpu_info", return_value=fake_gpu_info),
+            mock_patch("soup_cli.experiment.tracker.ExperimentTracker") as mock_tracker_cls,
+            mock_patch("soup_cli.monitoring.display.TrainingDisplay"),
+            mock_patch("soup_cli.trainer.embedding.EmbeddingTrainerWrapper.setup"),
+            mock_patch(
+                "soup_cli.trainer.embedding.EmbeddingTrainerWrapper.train",
+                return_value=fake_result,
+            ) as mock_train,
+        ):
             mock_tracker = MagicMock()
             mock_tracker.start_run.return_value = "run-emb-1"
             mock_tracker_cls.return_value = mock_tracker
@@ -563,9 +566,7 @@ class TestEmbeddingTrainResults:
             log_history=[{"loss": 2.0}], global_step=5
         )
         wrapper.train(resume_from_checkpoint="/ckpt/checkpoint-50")
-        mock_trainer.train.assert_called_once_with(
-            resume_from_checkpoint="/ckpt/checkpoint-50"
-        )
+        mock_trainer.train.assert_called_once_with(resume_from_checkpoint="/ckpt/checkpoint-50")
 
     def test_train_result_duration_minutes_format(self):
         """Short durations (<1h) should produce 'Xm' format."""
@@ -620,12 +621,13 @@ class TestEmbeddingSetupTransformers:
         mock_model = MagicMock()
         mock_model.get_nb_trainable_parameters.return_value = (1000, 10000)
 
-        with mock_patch("transformers.AutoModel.from_pretrained",
-                        return_value=mock_model), \
-             mock_patch("transformers.AutoTokenizer.from_pretrained"), \
-             mock_patch("peft.get_peft_model", return_value=mock_model), \
-             mock_patch("peft.LoraConfig") as mock_lora_config, \
-             mock_patch("peft.prepare_model_for_kbit_training"):
+        with (
+            mock_patch("transformers.AutoModel.from_pretrained", return_value=mock_model),
+            mock_patch("transformers.AutoTokenizer.from_pretrained"),
+            mock_patch("peft.get_peft_model", return_value=mock_model),
+            mock_patch("peft.LoraConfig") as mock_lora_config,
+            mock_patch("peft.prepare_model_for_kbit_training"),
+        ):
             from soup_cli.trainer.embedding import EmbeddingTrainerWrapper
 
             wrapper = EmbeddingTrainerWrapper(cfg, device="cpu")
@@ -633,6 +635,7 @@ class TestEmbeddingSetupTransformers:
 
             # Check that FEATURE_EXTRACTION task type was used
             from peft import TaskType
+
             call_kwargs = mock_lora_config.call_args[1]
             assert call_kwargs["task_type"] == TaskType.FEATURE_EXTRACTION
 
@@ -648,12 +651,13 @@ class TestEmbeddingSetupTransformers:
         mock_model = MagicMock()
         mock_model.get_nb_trainable_parameters.return_value = (1000, 10000)
 
-        with mock_patch("transformers.AutoModel.from_pretrained",
-                        return_value=mock_model), \
-             mock_patch("transformers.AutoTokenizer.from_pretrained"), \
-             mock_patch("peft.get_peft_model", return_value=mock_model), \
-             mock_patch("peft.LoraConfig") as mock_lora_config, \
-             mock_patch("peft.prepare_model_for_kbit_training"):
+        with (
+            mock_patch("transformers.AutoModel.from_pretrained", return_value=mock_model),
+            mock_patch("transformers.AutoTokenizer.from_pretrained"),
+            mock_patch("peft.get_peft_model", return_value=mock_model),
+            mock_patch("peft.LoraConfig") as mock_lora_config,
+            mock_patch("peft.prepare_model_for_kbit_training"),
+        ):
             from soup_cli.trainer.embedding import EmbeddingTrainerWrapper
 
             wrapper = EmbeddingTrainerWrapper(cfg, device="cpu")
@@ -677,12 +681,13 @@ class TestEmbeddingSetupTransformers:
         mock_model = MagicMock()
         mock_model.get_nb_trainable_parameters.return_value = (1000, 10000)
 
-        with mock_patch("transformers.AutoModel.from_pretrained",
-                        return_value=mock_model), \
-             mock_patch("transformers.AutoTokenizer.from_pretrained"), \
-             mock_patch("peft.get_peft_model", return_value=mock_model), \
-             mock_patch("peft.LoraConfig") as mock_lora_config, \
-             mock_patch("peft.prepare_model_for_kbit_training"):
+        with (
+            mock_patch("transformers.AutoModel.from_pretrained", return_value=mock_model),
+            mock_patch("transformers.AutoTokenizer.from_pretrained"),
+            mock_patch("peft.get_peft_model", return_value=mock_model),
+            mock_patch("peft.LoraConfig") as mock_lora_config,
+            mock_patch("peft.prepare_model_for_kbit_training"),
+        ):
             from soup_cli.trainer.embedding import EmbeddingTrainerWrapper
 
             wrapper = EmbeddingTrainerWrapper(cfg, device="cpu")
@@ -706,9 +711,7 @@ class TestEmbeddingInitTemplate:
 
         runner = CliRunner()
         output = tmp_path / "soup.yaml"
-        result = runner.invoke(
-            app, ["init", "--template", "embedding", "--output", str(output)]
-        )
+        result = runner.invoke(app, ["init", "--template", "embedding", "--output", str(output)])
         assert result.exit_code == 0
         assert output.exists()
         content = output.read_text()
@@ -727,9 +730,7 @@ class TestEmbeddingInitTemplate:
 
         runner = CliRunner()
         output = tmp_path / "soup.yaml"
-        runner.invoke(
-            app, ["init", "--template", "embedding", "--output", str(output)]
-        )
+        runner.invoke(app, ["init", "--template", "embedding", "--output", str(output)])
         cfg = load_config(Path(output))
         assert cfg.task == "embedding"
         assert cfg.data.format == "embedding"
@@ -745,13 +746,16 @@ class TestEmbeddingWizardPath:
         """When the wizard receives task=embedding, data format should be 'embedding'."""
         from soup_cli.commands.init import _interactive_wizard
 
-        with mock_patch("soup_cli.commands.init.Prompt.ask", side_effect=[
-            "some-model",
-            "embedding",
-            "./data/pairs.jsonl",
-            "3",
-            "no",
-        ]):
+        with mock_patch(
+            "soup_cli.commands.init.Prompt.ask",
+            side_effect=[
+                "some-model",
+                "embedding",
+                "./data/pairs.jsonl",
+                "3",
+                "no",
+            ],
+        ):
             config_text = _interactive_wizard()
 
         assert "task: embedding" in config_text
@@ -840,9 +844,11 @@ class TestPoolingFunction:
 
         from soup_cli.trainer.embedding import _pool_embeddings
 
-        hidden = torch.tensor([
-            [[1.0, 2.0], [3.0, 4.0], [0.0, 0.0]],
-        ])
+        hidden = torch.tensor(
+            [
+                [[1.0, 2.0], [3.0, 4.0], [0.0, 0.0]],
+            ]
+        )
         mask = torch.tensor([[1, 1, 0]])
         result = _pool_embeddings(hidden, mask, "mean")
         expected = torch.tensor([[2.0, 3.0]])
@@ -854,9 +860,11 @@ class TestPoolingFunction:
 
         from soup_cli.trainer.embedding import _pool_embeddings
 
-        hidden = torch.tensor([
-            [[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]],
-        ])
+        hidden = torch.tensor(
+            [
+                [[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]],
+            ]
+        )
         mask = torch.tensor([[1, 1, 1]])
         result = _pool_embeddings(hidden, mask, "cls")
         expected = torch.tensor([[1.0, 2.0]])
@@ -868,9 +876,11 @@ class TestPoolingFunction:
 
         from soup_cli.trainer.embedding import _pool_embeddings
 
-        hidden = torch.tensor([
-            [[1.0, 2.0], [3.0, 4.0], [0.0, 0.0]],
-        ])
+        hidden = torch.tensor(
+            [
+                [[1.0, 2.0], [3.0, 4.0], [0.0, 0.0]],
+            ]
+        )
         mask = torch.tensor([[1, 1, 0]])
         result = _pool_embeddings(hidden, mask, "last")
         expected = torch.tensor([[3.0, 4.0]])

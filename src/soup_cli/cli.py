@@ -107,25 +107,30 @@ app.command()(merge.merge)
 app.command(name="card")(card.card)
 app.add_typer(ci.app, name="ci", help="Fine-tuning CI: init a PR gate workflow.")
 app.add_typer(
-    data.app, name="data",
+    data.app,
+    name="data",
     help="Dataset tools: inspect, convert, merge, dedup, validate, stats.",
 )
 app.add_typer(
-    deploy.app, name="deploy",
+    deploy.app,
+    name="deploy",
     help="Deploy models: Ollama integration (deploy, list, remove).",
 )
 app.add_typer(runs.app, name="runs", help="Experiment tracking: list, show, compare runs.")
 app.add_typer(
-    eval.app, name="eval",
+    eval.app,
+    name="eval",
     help="Evaluate models: benchmarks, custom evals, LLM judge, leaderboard.",
 )
 app.command()(migrate.migrate)
 app.add_typer(
-    adapters.app, name="adapters",
+    adapters.app,
+    name="adapters",
     help="Adapter management: list, info, compare LoRA adapters.",
 )
 app.add_typer(
-    recipes.app, name="recipes",
+    recipes.app,
+    name="recipes",
     help="Ready-made configs: list, show, use, search recipes for popular models.",
 )
 app.command()(serve.serve)
@@ -139,7 +144,8 @@ app.command()(quickstart_cmd.quickstart)
 app.command()(ui.ui)
 app.command(name="autopilot")(autopilot.autopilot_cmd)
 app.add_typer(
-    registry.app, name="registry",
+    registry.app,
+    name="registry",
     help="Model Registry: push, list, show, diff, search, promote, delete.",
 )
 app.command(name="history")(history.history)
@@ -147,11 +153,13 @@ app.command(name="why")(why_cmd.why)
 app.command(name="rewind")(rewind_cmd.rewind)
 app.command(name="tui")(tui_cmd.tui)
 app.add_typer(
-    spectrum_cmd.app, name="spectrum",
+    spectrum_cmd.app,
+    name="spectrum",
     help="Spectrum SNR scan for targeted training (v0.71.23).",
 )
 app.add_typer(
-    can.app, name="can",
+    can.app,
+    name="can",
     help="Soup Cans: pack/inspect/verify/fork shareable .can artifacts.",
 )
 
@@ -274,23 +282,17 @@ from soup_cli.commands import bom as _bom_cmd  # noqa: E402
 app.add_typer(
     _bom_cmd.app,
     name="bom",
-    help=(
-        "CycloneDX ML-BOM + SPDX AI bill-of-materials emitter (v0.59.0)."
-    ),
+    help=("CycloneDX ML-BOM + SPDX AI bill-of-materials emitter (v0.59.0)."),
 )
 app.add_typer(
     _attest_cmd.app,
     name="attest",
-    help=(
-        "In-toto + SLSA-3 attestations per Soup Can stage (v0.59.0)."
-    ),
+    help=("In-toto + SLSA-3 attestations per Soup Can stage (v0.59.0)."),
 )
 app.add_typer(
     _audit_log_cmd.app,
     name="audit-log",
-    help=(
-        "HIPAA/SOC2-shaped JSONL audit log: tail + rotate (v0.59.0)."
-    ),
+    help=("HIPAA/SOC2-shaped JSONL audit log: tail + rotate (v0.59.0)."),
 )
 
 # v0.60.0 — Supply Chain Security: airgap bundle assembler.
@@ -305,8 +307,7 @@ app.add_typer(
     _edit_cmd.app,
     name="edit",
     help=(
-        "Knowledge editing (ROME / MEMIT / AlphaEdit) - patch facts "
-        "without re-training (v0.61.0)."
+        "Knowledge editing (ROME / MEMIT / AlphaEdit) - patch facts without re-training (v0.61.0)."
     ),
 )
 
@@ -414,7 +415,7 @@ app.command(
     name="completions",
     help=(
         "Emit a bash / zsh / fish completion script. Use with "
-        "`eval \"$(soup completions bash)\"` (v0.64.0)."
+        '`eval "$(soup completions bash)"` (v0.64.0).'
     ),
 )(_completions_cmd.completions_cmd)
 
@@ -663,6 +664,7 @@ def version(
     # GPU info
     try:
         import torch
+
         if torch.cuda.is_available():
             parts.append(f"CUDA {torch.version.cuda}")
         elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
@@ -808,7 +810,7 @@ def _split_command_args(argv: list[str]) -> tuple[str, list[str]]:
         if isinstance(tok, str) and tok.startswith("-"):
             i += 1
             continue
-        return tok, tokens[i + 1:]
+        return tok, tokens[i + 1 :]
     return "(root)", tokens
 
 
@@ -886,9 +888,7 @@ def _emit_audit_event(argv: list[str], exit_code: int) -> None:
         # Defensive re-cap, mirroring audit_log._MAX_ARGS (256) /
         # _MAX_ARG_LEN (1024) so AuditEvent.__post_init__ never rejects.
         capped_args = tuple(str(a)[:1024] for a in args[:256])
-        code = exit_code if isinstance(exit_code, int) and not isinstance(
-            exit_code, bool
-        ) else 1
+        code = exit_code if isinstance(exit_code, int) and not isinstance(exit_code, bool) else 1
         ev = AuditEvent(
             timestamp=datetime.now(tz=timezone.utc).isoformat(),
             command=command,

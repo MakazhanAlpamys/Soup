@@ -155,9 +155,7 @@ class TestLiveEvalNumericsHelper:
         from soup_cli.commands.ship import _expected_numerics_family
         from soup_cli.config.schema import SoupConfig
 
-        cfg = SoupConfig(
-            base="m", data={"train": "t.jsonl"}, training={"quantization": "gptq"}
-        )
+        cfg = SoupConfig(base="m", data={"train": "t.jsonl"}, training={"quantization": "gptq"})
         assert _expected_numerics_family(cfg) == NUMERICS_FAMILY_FULL
 
     def test_default_config_family_is_4bit(self):
@@ -183,18 +181,26 @@ class TestEmitEvidenceStampsNumerics:
         with runner.isolated_filesystem():
             Path("soup.yaml").write_text(cfg, encoding="utf-8")
             Path("task.jsonl").write_text(
-                json.dumps(
-                    {"prompt": "say hi", "expected": "hi", "scoring": "contains"}
-                )
-                + "\n",
+                json.dumps({"prompt": "say hi", "expected": "hi", "scoring": "contains"}) + "\n",
                 encoding="utf-8",
             )
             res = runner.invoke(
                 ship_cmd.app,
                 [
-                    "--base", "m", "--adapter", "a", "--task-eval", "task.jsonl",
-                    "--device", "cpu", "--config", "soup.yaml",
-                    "--emit-evidence", "ev.json", "--output", "out.json",
+                    "--base",
+                    "m",
+                    "--adapter",
+                    "a",
+                    "--task-eval",
+                    "task.jsonl",
+                    "--device",
+                    "cpu",
+                    "--config",
+                    "soup.yaml",
+                    "--emit-evidence",
+                    "ev.json",
+                    "--output",
+                    "out.json",
                 ],
             )
             assert res.exit_code in (0, 2), (res.output, repr(res.exception))
@@ -217,17 +223,22 @@ class TestEmitEvidenceStampsNumerics:
         monkeypatch.setattr(ship_cmd, "_resolve_generators", _fake_resolve)
         with runner.isolated_filesystem():
             Path("task.jsonl").write_text(
-                json.dumps(
-                    {"prompt": "say hi", "expected": "hi", "scoring": "contains"}
-                )
-                + "\n",
+                json.dumps({"prompt": "say hi", "expected": "hi", "scoring": "contains"}) + "\n",
                 encoding="utf-8",
             )
             res = runner.invoke(
                 ship_cmd.app,
                 [
-                    "--base", "m", "--adapter", "a", "--task-eval", "task.jsonl",
-                    "--device", "cpu", "--emit-evidence", "ev.json",
+                    "--base",
+                    "m",
+                    "--adapter",
+                    "a",
+                    "--task-eval",
+                    "task.jsonl",
+                    "--device",
+                    "cpu",
+                    "--emit-evidence",
+                    "ev.json",
                 ],
             )
             assert res.exit_code in (0, 2), (res.output, repr(res.exception))
@@ -247,9 +258,7 @@ class TestNumericsStalenessGate:
         with runner.isolated_filesystem():
             Path("soup.yaml").write_text(_CONFIG_MIN, encoding="utf-8")
             _write_json(Path("ev.json"), ev)
-            res = runner.invoke(
-                ship_cmd.app, ["--evidence", "ev.json", "--config", "soup.yaml"]
-            )
+            res = runner.invoke(ship_cmd.app, ["--evidence", "ev.json", "--config", "soup.yaml"])
             assert res.exit_code == 0, (res.output, repr(res.exception))
 
     def test_float32_stamp_against_default_4bit_config_is_stale(self):
@@ -262,9 +271,7 @@ class TestNumericsStalenessGate:
         with runner.isolated_filesystem():
             Path("soup.yaml").write_text(_CONFIG_MIN, encoding="utf-8")
             _write_json(Path("ev.json"), ev)
-            res = runner.invoke(
-                ship_cmd.app, ["--evidence", "ev.json", "--config", "soup.yaml"]
-            )
+            res = runner.invoke(ship_cmd.app, ["--evidence", "ev.json", "--config", "soup.yaml"])
             assert res.exit_code == 3, (res.output, repr(res.exception))
             assert "stale" in res.output.lower()
             assert "numerics" in res.output.lower()
@@ -279,9 +286,7 @@ class TestNumericsStalenessGate:
         with runner.isolated_filesystem():
             Path("soup.yaml").write_text(_CONFIG_MIN, encoding="utf-8")
             _write_json(Path("ev.json"), ev)
-            res = runner.invoke(
-                ship_cmd.app, ["--evidence", "ev.json", "--config", "soup.yaml"]
-            )
+            res = runner.invoke(ship_cmd.app, ["--evidence", "ev.json", "--config", "soup.yaml"])
             assert res.exit_code == 3, (res.output, repr(res.exception))
             assert "stale" in res.output.lower()
 
@@ -295,9 +300,7 @@ class TestNumericsStalenessGate:
         with runner.isolated_filesystem():
             Path("soup.yaml").write_text(_CONFIG_NONE, encoding="utf-8")
             _write_json(Path("ev.json"), ev)
-            res = runner.invoke(
-                ship_cmd.app, ["--evidence", "ev.json", "--config", "soup.yaml"]
-            )
+            res = runner.invoke(ship_cmd.app, ["--evidence", "ev.json", "--config", "soup.yaml"])
             assert res.exit_code == 0, (res.output, repr(res.exception))
 
     def test_missing_stamp_warns_and_does_not_refuse(self):
@@ -309,9 +312,7 @@ class TestNumericsStalenessGate:
         with runner.isolated_filesystem():
             Path("soup.yaml").write_text(_CONFIG_MIN, encoding="utf-8")
             _write_json(Path("ev.json"), ev)
-            res = runner.invoke(
-                ship_cmd.app, ["--evidence", "ev.json", "--config", "soup.yaml"]
-            )
+            res = runner.invoke(ship_cmd.app, ["--evidence", "ev.json", "--config", "soup.yaml"])
             assert res.exit_code == 0, (res.output, repr(res.exception))
             assert "numerics stamp" in res.output.lower()
 
@@ -322,9 +323,7 @@ class TestNumericsStalenessGate:
 
         # Pin tty detection so this asserts the stamp was not echoed, not
         # that the ambient shell happens not to force colour on the panel.
-        monkeypatch.setattr(
-            ship_cmd, "console", Console(force_terminal=False)
-        )
+        monkeypatch.setattr(ship_cmd, "console", Console(force_terminal=False))
 
         sha = _config_sha(_CONFIG_MIN)
         ev = _ship_evidence()
@@ -333,9 +332,7 @@ class TestNumericsStalenessGate:
         with runner.isolated_filesystem():
             Path("soup.yaml").write_text(_CONFIG_MIN, encoding="utf-8")
             _write_json(Path("ev.json"), ev)
-            res = runner.invoke(
-                ship_cmd.app, ["--evidence", "ev.json", "--config", "soup.yaml"]
-            )
+            res = runner.invoke(ship_cmd.app, ["--evidence", "ev.json", "--config", "soup.yaml"])
             assert res.exit_code == 3, (res.output, repr(res.exception))
             assert "\x1b" not in res.output
             assert "PWNED" not in res.output
@@ -352,8 +349,12 @@ class TestNumericsStalenessGate:
             res = runner.invoke(
                 ship_cmd.app,
                 [
-                    "--evidence", "ev.json", "--config", "soup.yaml",
-                    "--emit-evidence", "out.json",
+                    "--evidence",
+                    "ev.json",
+                    "--config",
+                    "soup.yaml",
+                    "--emit-evidence",
+                    "out.json",
                 ],
             )
             assert res.exit_code == 0, (res.output, repr(res.exception))

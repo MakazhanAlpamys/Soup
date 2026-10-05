@@ -33,9 +33,11 @@ _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 def _strip_ansi(text: str) -> str:
     return _ANSI_RE.sub("", text)
 
+
 # --------------------------------------------------------------------------- #
 # Part A — LR range finder                                                    #
 # --------------------------------------------------------------------------- #
+
 
 class TestLRFinderSchedule:
     """compute_lr_schedule produces a logarithmic LR sweep."""
@@ -183,6 +185,7 @@ class TestLRFinderCLI:
 # Part B — Live grad-accum auto-tuning                                        #
 # --------------------------------------------------------------------------- #
 
+
 class TestGradAccumMonitor:
     def test_should_adjust_when_high_pressure(self):
         from soup_cli.utils.grad_accum import GradAccumMonitor
@@ -280,6 +283,7 @@ class TestGradAccumMonitor:
 # Part C — Auto mixed-precision picker                                        #
 # --------------------------------------------------------------------------- #
 
+
 class TestMixedPrecisionPicker:
     def test_llama_ampere_picks_bf16(self):
         from soup_cli.utils.mixed_precision import pick_mixed_precision
@@ -356,6 +360,7 @@ class TestMixedPrecisionPicker:
 # Part D — Warmup auto-schedule                                               #
 # --------------------------------------------------------------------------- #
 
+
 class TestWarmupAutoSchedule:
     def test_basic_formula(self):
         from soup_cli.utils.warmup import compute_warmup_steps
@@ -375,7 +380,11 @@ class TestWarmupAutoSchedule:
         from soup_cli.utils.warmup import compute_warmup_steps
 
         steps = compute_warmup_steps(
-            num_examples=10, batch_size=1, grad_accum=1, epochs=1, ratio=0.03,
+            num_examples=10,
+            batch_size=1,
+            grad_accum=1,
+            epochs=1,
+            ratio=0.03,
         )
         assert steps >= 10  # MIN_WARMUP
 
@@ -397,7 +406,10 @@ class TestWarmupAutoSchedule:
         for bad_ratio in [-0.01, 0.51]:
             with pytest.raises(ValueError, match="ratio"):
                 compute_warmup_steps(
-                    num_examples=1000, batch_size=1, grad_accum=1, epochs=1,
+                    num_examples=1000,
+                    batch_size=1,
+                    grad_accum=1,
+                    epochs=1,
                     ratio=bad_ratio,
                 )
 
@@ -405,7 +417,11 @@ class TestWarmupAutoSchedule:
         from soup_cli.utils.warmup import compute_warmup_steps
 
         steps = compute_warmup_steps(
-            num_examples=1000, batch_size=1, grad_accum=1, epochs=1, ratio=0.0,
+            num_examples=1000,
+            batch_size=1,
+            grad_accum=1,
+            epochs=1,
+            ratio=0.0,
         )
         assert steps == 0
 
@@ -426,7 +442,11 @@ class TestWarmupAutoSchedule:
 
         # ratio == MAX_RATIO (0.5) is the inclusive upper bound.
         steps = compute_warmup_steps(
-            num_examples=100_000, batch_size=1, grad_accum=1, epochs=1, ratio=0.5,
+            num_examples=100_000,
+            batch_size=1,
+            grad_accum=1,
+            epochs=1,
+            ratio=0.5,
         )
         assert steps == MAX_WARMUP
 
@@ -448,6 +468,7 @@ class TestWarmupConfigField:
 # --------------------------------------------------------------------------- #
 # Part E — Loss spike auto-recovery                                           #
 # --------------------------------------------------------------------------- #
+
 
 class TestSpikeRecoveryStrategy:
     def test_should_recover_within_budget(self):
@@ -533,15 +554,15 @@ class TestSpikeRecoveryConfig:
         with pytest.raises(ValidationError) as exc_info:
             TrainingConfig(loss_spike_recovery=True, loss_watchdog=False)
         messages = [err["msg"] for err in exc_info.value.errors()]
-        assert any(
-            "loss_watchdog" in msg and "loss_spike_recovery" in msg
-            for msg in messages
-        ), messages
+        assert any("loss_watchdog" in msg and "loss_spike_recovery" in msg for msg in messages), (
+            messages
+        )
 
 
 # --------------------------------------------------------------------------- #
 # Part F — Convergence detector                                               #
 # --------------------------------------------------------------------------- #
+
 
 class TestConvergenceDetector:
     def test_detects_plateau(self):
@@ -689,12 +710,16 @@ class TestPlateauNonPositiveMean:
 # Part G — Autopilot integration                                              #
 # --------------------------------------------------------------------------- #
 
+
 class TestAutopilotIntegration:
     def test_decide_warmup_returns_int(self):
         from soup_cli.autopilot.decisions import decide_warmup
 
         steps = decide_warmup(
-            num_examples=10000, batch_size=4, grad_accum=2, epochs=3,
+            num_examples=10000,
+            batch_size=4,
+            grad_accum=2,
+            epochs=3,
         )
         assert isinstance(steps, int)
         assert steps > 0
@@ -714,7 +739,9 @@ class TestAutopilotIntegration:
 
 class TestAutopilotConfigEmission:
     def test_generated_config_includes_warmup_auto_when_set(
-        self, tmp_path, monkeypatch,
+        self,
+        tmp_path,
+        monkeypatch,
     ):
         """Generated config has warmup_auto=true so train.py picks it up."""
         from soup_cli.autopilot.generate_config import generate_config
@@ -731,7 +758,8 @@ class TestAutopilotConfigEmission:
             "batch_size": 4,
             "grad_accum": 2,
             "perf": {
-                "use_flash_attn": True, "use_liger": True,
+                "use_flash_attn": True,
+                "use_liger": True,
                 "gradient_checkpointing": False,
             },
             "warmup_auto": True,
@@ -749,7 +777,9 @@ class TestAutopilotConfigEmission:
         assert cfg["training"].get("warmup_auto") is True
 
     def test_generated_config_scopes_perf_flags_to_sft_family(
-        self, tmp_path, monkeypatch,
+        self,
+        tmp_path,
+        monkeypatch,
     ):
         """#806 follow-up: generate_config shares the same use_flash_attn /
         use_liger scoping as build_soup_config. A dpo decisions dict with
@@ -769,7 +799,8 @@ class TestAutopilotConfigEmission:
             "batch_size": 4,
             "grad_accum": 2,
             "perf": {
-                "use_flash_attn": True, "use_liger": True,
+                "use_flash_attn": True,
+                "use_liger": True,
                 "gradient_checkpointing": False,
             },
         }
@@ -789,12 +820,18 @@ class TestAutopilotConfigEmission:
 
         monkeypatch.chdir(tmp_path)
         decisions = {
-            "task": "sft", "format": "alpaca", "max_length": 1024,
+            "task": "sft",
+            "format": "alpaca",
+            "max_length": 1024,
             "quantization": "4bit",
             "lora": {"r": 8, "alpha": 16, "use_dora": False},
-            "lr": 2e-4, "epochs": 1, "batch_size": 1, "grad_accum": 1,
+            "lr": 2e-4,
+            "epochs": 1,
+            "batch_size": 1,
+            "grad_accum": 1,
             "perf": {
-                "use_flash_attn": False, "use_liger": False,
+                "use_flash_attn": False,
+                "use_liger": False,
                 "gradient_checkpointing": False,
             },
             "output": "/tmp/escape",
@@ -811,6 +848,7 @@ class TestAutopilotConfigEmission:
 # --------------------------------------------------------------------------- #
 # Integration: lr-finder CLI smoke (offline-safe)                              #
 # --------------------------------------------------------------------------- #
+
 
 class TestLRFinderRunner:
     """save_lr_finder_report writes a JSON report users can plot."""
@@ -868,6 +906,7 @@ class TestLRFinderRunner:
 # --------------------------------------------------------------------------- #
 # Cross-cutting: SoupConfig top-level still serializes                         #
 # --------------------------------------------------------------------------- #
+
 
 class TestNewFieldsRoundTrip:
     def test_roundtrip_yaml(self):

@@ -22,9 +22,7 @@ def test_question_answer_rows_are_not_detected_globally():
 
 
 @pytest.mark.parametrize("task", ["sft", "grpo"])
-def test_question_answer_rows_are_not_ready_to_train_off_cross_encoder(
-    tmp_path, monkeypatch, task
-):
+def test_question_answer_rows_are_not_ready_to_train_off_cross_encoder(tmp_path, monkeypatch, task):
     monkeypatch.chdir(tmp_path)
     rows = [{"question": f"What is {i}+{i}?", "answer": str(2 * i)} for i in range(4)]
     (tmp_path / "qa.jsonl").write_text("\n".join(json.dumps(r) for r in rows) + "\n")
@@ -67,9 +65,7 @@ def test_validate_names_a_val_row_missing_its_label():
 
 
 @pytest.mark.parametrize("pair", [("text_a", "text_b"), ("question", "answer")])
-def test_cross_encoder_auto_reads_both_pair_shapes_through_soup_train(
-    tmp_path, monkeypatch, pair
-):
+def test_cross_encoder_auto_reads_both_pair_shapes_through_soup_train(tmp_path, monkeypatch, pair):
     monkeypatch.chdir(tmp_path)
     left, right = pair
     rows = [{left: f"q {i}", right: f"doc {i}", "label": i % 2} for i in range(4)]

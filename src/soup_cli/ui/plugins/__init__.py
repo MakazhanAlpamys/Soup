@@ -58,9 +58,7 @@ def register_tab(
     """Register a tab. Idempotent for identical (title, render); rejects
     re-registration with a different title or render fn."""
     if not isinstance(name, str) or not _TAB_NAME_RE.match(name):
-        raise ValueError(
-            "name must be kebab-case ([a-z0-9][a-z0-9-]{0,30})"
-        )
+        raise ValueError("name must be kebab-case ([a-z0-9][a-z0-9-]{0,30})")
     if not isinstance(title, str) or not title or "\x00" in title:
         raise ValueError("title must be a non-empty NUL-free str")
     if len(title) > _MAX_TITLE_LEN:
@@ -72,12 +70,8 @@ def register_tab(
         if len(_TABS) >= _MAX_TABS and name not in _TABS:
             raise RuntimeError(f"too many tabs (max {_MAX_TABS})")
         existing = _TABS.get(name)
-        if existing is not None and (
-            existing.title != title or existing.render is not render
-        ):
-            raise ValueError(
-                f"tab name {name!r} already registered with a different spec"
-            )
+        if existing is not None and (existing.title != title or existing.render is not render):
+            raise ValueError(f"tab name {name!r} already registered with a different spec")
         _TABS[name] = spec
     return spec
 
@@ -112,7 +106,5 @@ def load_plugins() -> int:
             importlib.import_module(f"{__name__}.{module_info.name}")
             count += 1
         except Exception:  # noqa: BLE001 — plugin failure must not crash UI
-            logger.exception(
-                "Failed to load Web UI plugin: %s", module_info.name
-            )
+            logger.exception("Failed to load Web UI plugin: %s", module_info.name)
     return count

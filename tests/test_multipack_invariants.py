@@ -56,8 +56,11 @@ def test_no_duplicates_across_packs(seed):
     rng = random.Random(seed)
     lengths = [rng.randint(1, 50) for _ in range(200)]
     sampler = MultipackBatchSampler(
-        lengths, batch_max_len=128, batch_size=4,
-        real_batches=False, seed=seed,
+        lengths,
+        batch_max_len=128,
+        batch_size=4,
+        real_batches=False,
+        seed=seed,
     )
     seen: set[int] = set()
     for batch in sampler:
@@ -72,8 +75,11 @@ def test_full_coverage(seed):
     n = 200
     lengths = [rng.randint(1, 50) for _ in range(n)]
     sampler = MultipackBatchSampler(
-        lengths, batch_max_len=128, batch_size=4,
-        real_batches=False, seed=seed,
+        lengths,
+        batch_max_len=128,
+        batch_size=4,
+        real_batches=False,
+        seed=seed,
     )
     flat = _flatten_indices(sampler)
     assert sorted(flat) == list(range(n))
@@ -87,8 +93,11 @@ def test_pack_len_bound(real_batches, batch_size, batch_max_len):
     rng = random.Random(2026)
     lengths = [rng.randint(1, batch_max_len) for _ in range(150)]
     sampler = MultipackBatchSampler(
-        lengths, batch_max_len=batch_max_len, batch_size=batch_size,
-        real_batches=real_batches, seed=0,
+        lengths,
+        batch_max_len=batch_max_len,
+        batch_size=batch_size,
+        real_batches=real_batches,
+        seed=0,
     )
     if real_batches:
         for batch in sampler:
@@ -133,8 +142,7 @@ def test_mask_built_from_pack_blocks_cross_doc():
         for j, seg_j in enumerate(seg_ids):
             if seg_i != seg_j:
                 assert plane[i, j] < -1e9, (
-                    f"cross-segment leak at ({i},{j}) "
-                    f"seg_i={seg_i} seg_j={seg_j}"
+                    f"cross-segment leak at ({i},{j}) seg_i={seg_i} seg_j={seg_j}"
                 )
 
 
@@ -145,14 +153,24 @@ def test_determinism_across_processes_simulated():
     # Simulate two ranks building the sampler with the same seed → identical
     # batch order. Critical for DDP correctness.
     lengths = [random.Random(7).randint(1, 40) for _ in range(100)]
-    s1 = list(MultipackBatchSampler(
-        lengths, batch_max_len=64, batch_size=2,
-        real_batches=True, seed=11,
-    ))
-    s2 = list(MultipackBatchSampler(
-        lengths, batch_max_len=64, batch_size=2,
-        real_batches=True, seed=11,
-    ))
+    s1 = list(
+        MultipackBatchSampler(
+            lengths,
+            batch_max_len=64,
+            batch_size=2,
+            real_batches=True,
+            seed=11,
+        )
+    )
+    s2 = list(
+        MultipackBatchSampler(
+            lengths,
+            batch_max_len=64,
+            batch_size=2,
+            real_batches=True,
+            seed=11,
+        )
+    )
     assert s1 == s2
 
 
@@ -164,8 +182,11 @@ def test_stress_5k_samples():
     n = 5_000
     lengths = [rng.randint(1, 200) for _ in range(n)]
     sampler = MultipackBatchSampler(
-        lengths, batch_max_len=512, batch_size=8,
-        real_batches=False, seed=0,
+        lengths,
+        batch_max_len=512,
+        batch_size=8,
+        real_batches=False,
+        seed=0,
     )
     flat = _flatten_indices(sampler)
     # No duplicates, full coverage — both invariants in one pass for speed.

@@ -1,4 +1,5 @@
 """Tests for v0.40.2 Part A — originally scheduled issues (#36, #50, #51)."""
+
 from __future__ import annotations
 
 import re
@@ -52,9 +53,7 @@ class TestHFResumePreferLocal:
 
         assert _find_highest_local_checkpoint(str(tmp_path / "nope")) is None
 
-    def test_prepare_hf_resume_skips_download_when_local_equal(
-        self, tmp_path, monkeypatch
-    ):
+    def test_prepare_hf_resume_skips_download_when_local_equal(self, tmp_path, monkeypatch):
         """If local checkpoint-N == remote checkpoint-N, skip download."""
         from soup_cli.monitoring.hf_push import prepare_hf_resume
 
@@ -73,20 +72,14 @@ class TestHFResumePreferLocal:
             "soup_cli.monitoring.hf_push.resolve_latest_checkpoint_revision",
             lambda repo_id, token=None, endpoint=None: "checkpoint-300",
         )
-        monkeypatch.setattr(
-            "soup_cli.monitoring.hf_push._download_checkpoint", fake_download
-        )
+        monkeypatch.setattr("soup_cli.monitoring.hf_push._download_checkpoint", fake_download)
 
-        result = prepare_hf_resume(
-            repo_id="user/my-model", output_dir=str(out_dir), token="t1"
-        )
+        result = prepare_hf_resume(repo_id="user/my-model", output_dir=str(out_dir), token="t1")
         assert download_called["called"] is False
         assert result is not None
         assert "checkpoint-300" in result
 
-    def test_prepare_hf_resume_skips_download_when_local_newer(
-        self, tmp_path, monkeypatch
-    ):
+    def test_prepare_hf_resume_skips_download_when_local_newer(self, tmp_path, monkeypatch):
         from soup_cli.monitoring.hf_push import prepare_hf_resume
 
         monkeypatch.chdir(tmp_path)
@@ -104,20 +97,14 @@ class TestHFResumePreferLocal:
             "soup_cli.monitoring.hf_push.resolve_latest_checkpoint_revision",
             lambda repo_id, token=None, endpoint=None: "checkpoint-300",
         )
-        monkeypatch.setattr(
-            "soup_cli.monitoring.hf_push._download_checkpoint", fake_download
-        )
+        monkeypatch.setattr("soup_cli.monitoring.hf_push._download_checkpoint", fake_download)
 
-        result = prepare_hf_resume(
-            repo_id="user/my-model", output_dir=str(out_dir), token="t1"
-        )
+        result = prepare_hf_resume(repo_id="user/my-model", output_dir=str(out_dir), token="t1")
         assert download_called["called"] is False
         assert result is not None
         assert "checkpoint-500" in result
 
-    def test_prepare_hf_resume_downloads_when_remote_newer(
-        self, tmp_path, monkeypatch
-    ):
+    def test_prepare_hf_resume_downloads_when_remote_newer(self, tmp_path, monkeypatch):
         from soup_cli.monitoring.hf_push import prepare_hf_resume
 
         monkeypatch.chdir(tmp_path)
@@ -136,13 +123,9 @@ class TestHFResumePreferLocal:
             "soup_cli.monitoring.hf_push.resolve_latest_checkpoint_revision",
             lambda repo_id, token=None, endpoint=None: "checkpoint-500",
         )
-        monkeypatch.setattr(
-            "soup_cli.monitoring.hf_push._download_checkpoint", fake_download
-        )
+        monkeypatch.setattr("soup_cli.monitoring.hf_push._download_checkpoint", fake_download)
 
-        result = prepare_hf_resume(
-            repo_id="user/my-model", output_dir=str(out_dir), token="t1"
-        )
+        result = prepare_hf_resume(repo_id="user/my-model", output_dir=str(out_dir), token="t1")
         assert download_called["called"] is True
         assert download_called["revision"] == "checkpoint-500"
         assert result is not None
@@ -164,9 +147,7 @@ class TestHfSpaceCustomTemplate:
         (tdir / "README.md").write_text("# Space for {MODEL_REPO}\n")
         (tdir / "requirements.txt").write_text("gradio\n")
 
-        rendered = render_custom_template_dir(
-            str(tdir), model_repo="user/my-model"
-        )
+        rendered = render_custom_template_dir(str(tdir), model_repo="user/my-model")
         assert rendered["app.py"] == "MODEL = 'user/my-model'\n"
         assert rendered["README.md"] == "# Space for user/my-model\n"
         assert rendered["requirements.txt"] == "gradio\n"
@@ -185,9 +166,7 @@ class TestHfSpaceCustomTemplate:
         with pytest.raises(ValueError, match="under the current"):
             render_custom_template_dir(str(outside), model_repo="user/my-model")
 
-    def test_render_custom_template_rejects_invalid_repo_id(
-        self, tmp_path, monkeypatch
-    ):
+    def test_render_custom_template_rejects_invalid_repo_id(self, tmp_path, monkeypatch):
         from soup_cli.utils.hf_space import render_custom_template_dir
 
         monkeypatch.chdir(tmp_path)

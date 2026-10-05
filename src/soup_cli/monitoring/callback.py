@@ -46,19 +46,11 @@ def soup_callback_kwargs(
         "loss_watchdog_threshold": getattr(tcfg, "loss_watchdog_threshold", 3.0),
         "loss_watchdog_patience": getattr(tcfg, "loss_watchdog_patience", 5),
         "spike_recovery": getattr(tcfg, "loss_spike_recovery", False),
-        "spike_recovery_max_attempts": getattr(
-            tcfg, "loss_spike_recovery_max_attempts", 3
-        ),
-        "spike_recovery_lr_decay": getattr(
-            tcfg, "loss_spike_recovery_lr_decay", 0.5
-        ),
+        "spike_recovery_max_attempts": getattr(tcfg, "loss_spike_recovery_max_attempts", 3),
+        "spike_recovery_lr_decay": getattr(tcfg, "loss_spike_recovery_lr_decay", 0.5),
         "grad_accum_auto_tune": getattr(tcfg, "grad_accum_auto_tune", False),
-        "grad_accum_pressure_threshold": getattr(
-            tcfg, "grad_accum_pressure_threshold", 0.9
-        ),
-        "grad_accum_current_steps": getattr(
-            tcfg, "gradient_accumulation_steps", 1
-        ),
+        "grad_accum_pressure_threshold": getattr(tcfg, "grad_accum_pressure_threshold", 0.9),
+        "grad_accum_current_steps": getattr(tcfg, "gradient_accumulation_steps", 1),
         "grad_accum_current_batch": resolved_batch,
     }
     if include_eval_gate:
@@ -154,6 +146,7 @@ class _SoupTrainerCallback_body:  # noqa: N801
         self._spike_recovery_enabled = spike_recovery
         self._spike_recovery_attempts = 0
         from soup_cli.utils.spike_recovery import SpikeRecoveryStrategy
+
         if spike_recovery:
             self._spike_strategy = SpikeRecoveryStrategy(
                 max_attempts=spike_recovery_max_attempts,
@@ -168,6 +161,7 @@ class _SoupTrainerCallback_body:  # noqa: N801
         self._grad_accum_advised = False
         if grad_accum_auto_tune:
             from soup_cli.utils.grad_accum import GradAccumMonitor
+
             self._grad_accum_monitor = GradAccumMonitor(
                 total_vram_gb=grad_accum_total_vram_gb,
                 threshold=grad_accum_pressure_threshold,
@@ -184,8 +178,11 @@ class _SoupTrainerCallback_body:  # noqa: N801
         self._gate_run_fn = None
 
     def on_train_begin(
-        self, args: TrainingArguments, state: TrainerState,
-        control: TrainerControl, **kwargs,
+        self,
+        args: TrainingArguments,
+        state: TrainerState,
+        control: TrainerControl,
+        **kwargs,
     ):
         self.display.start(total_steps=state.max_steps)
         # Prod wiring for the eval gate: load the suite + baseline and build a
@@ -197,8 +194,11 @@ class _SoupTrainerCallback_body:  # noqa: N801
         self._setup_eval_gate(model, tokenizer)
 
     def on_step_end(
-        self, args: TrainingArguments, state: TrainerState,
-        control: TrainerControl, **kwargs,
+        self,
+        args: TrainingArguments,
+        state: TrainerState,
+        control: TrainerControl,
+        **kwargs,
     ):
         """v0.53.10 #156 — peek at the active batch for tool-calling rows.
 
@@ -228,9 +228,7 @@ class _SoupTrainerCallback_body:  # noqa: N801
             count = 0
             if isinstance(tool_calls, (list, tuple)):
                 count = len(tool_calls)
-            elif isinstance(tool_calls, (int, float)) and not isinstance(
-                tool_calls, bool
-            ):
+            elif isinstance(tool_calls, (int, float)) and not isinstance(tool_calls, bool):
                 count = int(tool_calls)
             if count <= 0:
                 return
@@ -245,8 +243,12 @@ class _SoupTrainerCallback_body:  # noqa: N801
             return
 
     def on_log(
-        self, args: TrainingArguments, state: TrainerState,
-        control: TrainerControl, logs=None, **kwargs,
+        self,
+        args: TrainingArguments,
+        state: TrainerState,
+        control: TrainerControl,
+        logs=None,
+        **kwargs,
     ):
         if logs is None:
             return
@@ -329,16 +331,10 @@ class _SoupTrainerCallback_body:  # noqa: N801
                     # `is not None`, not truthiness — a real 0.0 loss / lr (e.g.
                     # end of an LR schedule) must not be reported as None.
                     loss=float(loss) if loss is not None else None,
-                    val_loss=(
-                        float(measured_val_loss)
-                        if measured_val_loss is not None
-                        else None
-                    ),
+                    val_loss=(float(measured_val_loss) if measured_val_loss is not None else None),
                     lr=float(lr) if lr is not None else None,
                     grad_norm=(
-                        float(measured_grad_norm)
-                        if measured_grad_norm is not None
-                        else None
+                        float(measured_grad_norm) if measured_grad_norm is not None else None
                     ),
                 )
             )
@@ -355,9 +351,11 @@ class _SoupTrainerCallback_body:  # noqa: N801
                 from soup_cli.utils.tool_outputs import get_global_tool_buffer
 
                 tool_count = logs.get("tool_calls")
-                if isinstance(tool_count, (int, float)) and not isinstance(
-                    tool_count, bool
-                ) and tool_count > 0:
+                if (
+                    isinstance(tool_count, (int, float))
+                    and not isinstance(tool_count, bool)
+                    and tool_count > 0
+                ):
                     get_global_tool_buffer().record_call(
                         name="batch",
                         started_ts=time.time(),
@@ -393,16 +391,18 @@ class _SoupTrainerCallback_body:  # noqa: N801
                     if self._spike_strategy is not None:
                         self._write_spike_recovery_hint(args, loss)
 
-                    wc.print(Panel(
-                        f"[bold red]Loss watchdog triggered![/]\n\n"
-                        f"Loss {loss:.4f} exceeded threshold "
-                        f"{self._watchdog_threshold} for "
-                        f"{self._watchdog_counter} consecutive steps "
-                        f"(patience={self._watchdog_patience}).\n\n"
-                        f"Training will stop.",
-                        title="Loss Watchdog",
-                        border_style="red",
-                    ))
+                    wc.print(
+                        Panel(
+                            f"[bold red]Loss watchdog triggered![/]\n\n"
+                            f"Loss {loss:.4f} exceeded threshold "
+                            f"{self._watchdog_threshold} for "
+                            f"{self._watchdog_counter} consecutive steps "
+                            f"(patience={self._watchdog_patience}).\n\n"
+                            f"Training will stop.",
+                            title="Loss Watchdog",
+                            border_style="red",
+                        )
+                    )
                     control.should_training_stop = True
             else:
                 self._watchdog_counter = 0
@@ -430,8 +430,11 @@ class _SoupTrainerCallback_body:  # noqa: N801
             )
 
     def on_epoch_end(
-        self, args: TrainingArguments, state: TrainerState,
-        control: TrainerControl, **kwargs,
+        self,
+        args: TrainingArguments,
+        state: TrainerState,
+        control: TrainerControl,
+        **kwargs,
     ):
         """Run the eval gate, if configured."""
         self._run_eval_gate(state, control)
@@ -534,7 +537,9 @@ class _SoupTrainerCallback_body:  # noqa: N801
         on_reg = getattr(cfg, "on_regression", "stop")
         try:
             result = run_fn(
-                suite, generate_fn=generate_fn, baseline=baseline,
+                suite,
+                generate_fn=generate_fn,
+                baseline=baseline,
                 regression_threshold=threshold,
             )
         except (ValueError, FileNotFoundError, OSError) as exc:
@@ -565,8 +570,11 @@ class _SoupTrainerCallback_body:  # noqa: N801
             # on_reg == "continue": silent per user policy
 
     def on_train_end(
-        self, args: TrainingArguments, state: TrainerState,
-        control: TrainerControl, **kwargs,
+        self,
+        args: TrainingArguments,
+        state: TrainerState,
+        control: TrainerControl,
+        **kwargs,
     ):
         self.display.stop()
         self._run_auto_eval()
@@ -592,6 +600,7 @@ class _SoupTrainerCallback_body:  # noqa: N801
         if benchmarks:
             try:
                 from soup_cli.commands.eval import benchmark
+
                 benchmark(
                     model=self.output_dir,
                     benchmarks=",".join(benchmarks),
@@ -609,6 +618,7 @@ class _SoupTrainerCallback_body:  # noqa: N801
         if custom_tasks:
             try:
                 from soup_cli.commands.eval import custom
+
                 # #752 — pass every typer parameter; see commands/eval.py.
                 custom(
                     tasks=custom_tasks,
@@ -649,6 +659,7 @@ class _SoupTrainerCallback_body:  # noqa: N801
         # by SoupConfig but args.output_dir from raw HF TrainingArguments is
         # not — defence-in-depth.
         from soup_cli.utils.paths import is_under_cwd
+
         if not is_under_cwd(out_dir):
             logger.warning(
                 "spike_recovery hint skipped: output_dir %s is outside cwd",
@@ -658,14 +669,20 @@ class _SoupTrainerCallback_body:  # noqa: N801
         try:
             out_dir.mkdir(parents=True, exist_ok=True)
             hint_path = out_dir / "spike_recovery.json"
-            hint_path.write_text(json.dumps({
-                "attempts": attempts + 1,
-                "max_attempts": self._spike_strategy.max_attempts,
-                "loss_at_spike": float(loss),
-                "previous_lr": float(args.learning_rate),
-                "recommended_lr": float(new_lr),
-                "should_recover": recover,
-            }, indent=2), encoding="utf-8")
+            hint_path.write_text(
+                json.dumps(
+                    {
+                        "attempts": attempts + 1,
+                        "max_attempts": self._spike_strategy.max_attempts,
+                        "loss_at_spike": float(loss),
+                        "previous_lr": float(args.learning_rate),
+                        "recommended_lr": float(new_lr),
+                        "should_recover": recover,
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
             self._spike_recovery_attempts = attempts + 1
             console.print(
                 f"[yellow]Spike recovery hint written:[/] {hint_path} "
@@ -689,6 +706,7 @@ class _SoupTrainerCallback_body:  # noqa: N801
             return
         try:
             import torch
+
             if not torch.cuda.is_available():
                 return
             used_gb = torch.cuda.max_memory_allocated() / (1024**3)
@@ -701,7 +719,8 @@ class _SoupTrainerCallback_body:  # noqa: N801
         if not self._grad_accum_monitor.should_adjust(used_gb):
             return
         new_batch, new_accum = self._grad_accum_monitor.recommend(
-            self._grad_accum_batch, self._grad_accum_current,
+            self._grad_accum_batch,
+            self._grad_accum_current,
         )
         if new_accum == self._grad_accum_current:
             return

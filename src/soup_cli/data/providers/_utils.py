@@ -26,7 +26,7 @@ def parse_json_array(content: str) -> list[dict]:
     start = content.find("[")
     end = content.rfind("]")
     if start != -1 and end != -1 and end > start:
-        content = content[start:end + 1]
+        content = content[start : end + 1]
 
     try:
         result = json.loads(content)

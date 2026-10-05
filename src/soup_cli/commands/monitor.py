@@ -171,8 +171,6 @@ def monitor(
                         )
                     )
                     continue
-                live.update(
-                    Panel(_build_table(fresh), title="Soup GPU Monitor")
-                )
+                live.update(Panel(_build_table(fresh), title="Soup GPU Monitor"))
         except KeyboardInterrupt:
             console.print("[dim]exit[/]")

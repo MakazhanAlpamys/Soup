@@ -48,13 +48,15 @@ from urllib.parse import urlparse
 # v0.42.0 new format strings on DataConfig.format Literal. Each is matched by
 # an entry in ``soup_cli.data.formats._convert_*`` (Part A live wiring) and
 # documented in the README's Data Formats section.
-NEW_FORMATS_V0_42: FrozenSet[str] = frozenset({
-    "prm",
-    "pre_tokenized",
-    "input_output",
-    "video",
-    "multimodal",
-})
+NEW_FORMATS_V0_42: FrozenSet[str] = frozenset(
+    {
+        "prm",
+        "pre_tokenized",
+        "input_output",
+        "video",
+        "multimodal",
+    }
+)
 
 
 # --- Part B: Remote loading allowlist --------------------------------------
@@ -63,15 +65,17 @@ NEW_FORMATS_V0_42: FrozenSet[str] = frozenset({
 # Each scheme requires a corresponding lazy-imported fsspec backend at load
 # time. Live wiring of ``s3fs`` / ``gcsfs`` / ``adlfs`` / ``ocifs`` deferred to
 # v0.42.1 — schema gate fires now so a misconfigured YAML fails loudly.
-_REMOTE_SCHEMES: Mapping[str, str] = types.MappingProxyType({
-    "s3": "s3fs",
-    "gs": "gcsfs",
-    "gcs": "gcsfs",
-    "az": "adlfs",
-    "abfs": "adlfs",
-    "abfss": "adlfs",
-    "oci": "ocifs",
-})
+_REMOTE_SCHEMES: Mapping[str, str] = types.MappingProxyType(
+    {
+        "s3": "s3fs",
+        "gs": "gcsfs",
+        "gcs": "gcsfs",
+        "az": "adlfs",
+        "abfs": "adlfs",
+        "abfss": "adlfs",
+        "oci": "ocifs",
+    }
+)
 
 # RFC 3986 — bucket / container names cannot contain control chars. We
 # additionally reject characters that would let a crafted URL break out of the
@@ -117,8 +121,7 @@ def validate_remote_uri(value: str) -> str:
     scheme = (parsed.scheme or "").lower()
     if scheme not in _REMOTE_SCHEMES:
         raise ValueError(
-            f"remote URI scheme '{scheme}' not in allowlist: "
-            f"{sorted(_REMOTE_SCHEMES)}"
+            f"remote URI scheme '{scheme}' not in allowlist: {sorted(_REMOTE_SCHEMES)}"
         )
     if parsed.username or parsed.password:
         raise ValueError(
@@ -137,8 +140,7 @@ def validate_remote_uri(value: str) -> str:
         raise ValueError("remote URI must include a bucket / container name")
     if not _BUCKET_RE.match(bucket):
         raise ValueError(
-            f"remote URI bucket '{bucket}' must be alphanumeric + ._- "
-            "(2-63 chars, leading alnum)"
+            f"remote URI bucket '{bucket}' must be alphanumeric + ._- (2-63 chars, leading alnum)"
         )
     return f"{scheme}://{bucket}{parsed.path}"
 
@@ -168,9 +170,7 @@ def validate_buffer_size(value: Optional[int]) -> Optional[int]:
     if not isinstance(value, int):
         raise ValueError("buffer_size must be an integer")
     if value < _MIN_BUFFER_SIZE or value > _MAX_BUFFER_SIZE:
-        raise ValueError(
-            f"buffer_size must be in [{_MIN_BUFFER_SIZE}, {_MAX_BUFFER_SIZE}]"
-        )
+        raise ValueError(f"buffer_size must be in [{_MIN_BUFFER_SIZE}, {_MAX_BUFFER_SIZE}]")
     return value
 
 
@@ -220,74 +220,76 @@ _PREPROCESS_TOKENIZE_SCHEMA = "v7"
 # it can merge. The value names the ``make_preprocess_cache_key`` input that
 # carries the field; ``dataset_path`` fields are folded in by
 # ``preprocess_dataset_key_input``, which reads them from this table.
-PREPROCESS_KEY_FIELDS: Mapping[str, str] = types.MappingProxyType({
-    "train": "dataset_path",
-    "interleave": "dataset_path",
-    # _finalize caches only the train split, so the split decides the row set.
-    "val_split": "dataset_path",
-    # _finalize mixes replay rows into the train split before caching.
-    "replay": "dataset_path",
-    "replay_ratio": "dataset_path",
-    "replay_seed": "dataset_path",
-    # The streaming loaders pick rows, and their order, from these; val_split
-    # then slices that order by position.
-    "streaming": "dataset_path",
-    "buffer_size": "dataset_path",
-    # Vision and audio rows whose file does not resolve under the directory are
-    # dropped by the loader before tokenization.
-    "image_dir": "dataset_path",
-    "audio_dir": "dataset_path",
-    "format": "format_name",
-    "max_length": "max_length",
-    "chat_template": "chat_template",
-    "train_on_responses_only": "mask_mode",
-    "train_on_messages_with_train_field": "mask_mode",
-    "mask_history": "mask_mode",
-})
+PREPROCESS_KEY_FIELDS: Mapping[str, str] = types.MappingProxyType(
+    {
+        "train": "dataset_path",
+        "interleave": "dataset_path",
+        # _finalize caches only the train split, so the split decides the row set.
+        "val_split": "dataset_path",
+        # _finalize mixes replay rows into the train split before caching.
+        "replay": "dataset_path",
+        "replay_ratio": "dataset_path",
+        "replay_seed": "dataset_path",
+        # The streaming loaders pick rows, and their order, from these; val_split
+        # then slices that order by position.
+        "streaming": "dataset_path",
+        "buffer_size": "dataset_path",
+        # Vision and audio rows whose file does not resolve under the directory are
+        # dropped by the loader before tokenization.
+        "image_dir": "dataset_path",
+        "audio_dir": "dataset_path",
+        "format": "format_name",
+        "max_length": "max_length",
+        "chat_template": "chat_template",
+        "train_on_responses_only": "mask_mode",
+        "train_on_messages_with_train_field": "mask_mode",
+        "mask_history": "mask_mode",
+    }
+)
 
-NOT_PREPROCESS_KEY_FIELDS: Mapping[str, str] = types.MappingProxyType({
-    "tokenized_path": "where the cache is read from, not an input to it",
-    "train_on_prompt": (
-        "the schema requires train_on_responses_only: false with it, and that "
-        "field already puts the full-sequence mask in mask_mode"
-    ),
-    "video_dir": "no loader reads it, so it cannot drop or change a row",
-    "shards": "no runtime code reads it",
-    "raft_shuffle_seed": "RAFT rows carry no messages, so preprocess caches none",
-    "raft_epoch_shuffle": "RAFT rows carry no messages, so preprocess caches none",
-    "eval_on_each_dataset": "no runtime code reads it (staged, #808)",
-    "split_thinking": "no runtime code reads it",
-    "image_min_pixels": "no runtime code reads it (staged, #808)",
-    "image_max_pixels": "no runtime code reads it (staged, #808)",
-    "image_resize_algorithm": "no runtime code reads it (staged, #808)",
-    "video_fps": "no runtime code reads it (staged, #808)",
-    "video_maxlen": "no runtime code reads it (staged, #808)",
-    "add_new_tokens": (
-        "pre_tokenized mode rejects this combination: preprocessing tokenizes "
-        "with the base tokenizer and never applies live vocabulary expansion"
-    ),
-    "new_special_tokens": (
-        "pre_tokenized mode rejects this combination for the same reason: cached "
-        "ids cannot include live special-token expansion"
-    ),
-    "resize_vocab": "no runtime code reads it",
-    "extend_conversation": "no runtime code reads it",
-    "skip_prepare_dataset": "no runtime code reads it",
-    "remove_unused_columns": (
-        "no trainer reads it; the trainers that set remove_unused_columns pass "
-        "False (#759)"
-    ),
-    "prompt_strategy": (
-        "pre_tokenized mode rejects this combination because preprocessing "
-        "never applies the live prompt formatter"
-    ),
-    "forget_set": "read by task: unlearn only, which never loads a preprocess cache",
-    "retain_set": "read by task: unlearn only, which never loads a preprocess cache",
-})
+NOT_PREPROCESS_KEY_FIELDS: Mapping[str, str] = types.MappingProxyType(
+    {
+        "tokenized_path": "where the cache is read from, not an input to it",
+        "train_on_prompt": (
+            "the schema requires train_on_responses_only: false with it, and that "
+            "field already puts the full-sequence mask in mask_mode"
+        ),
+        "video_dir": "no loader reads it, so it cannot drop or change a row",
+        "shards": "no runtime code reads it",
+        "raft_shuffle_seed": "RAFT rows carry no messages, so preprocess caches none",
+        "raft_epoch_shuffle": "RAFT rows carry no messages, so preprocess caches none",
+        "eval_on_each_dataset": "no runtime code reads it (staged, #808)",
+        "split_thinking": "no runtime code reads it",
+        "image_min_pixels": "no runtime code reads it (staged, #808)",
+        "image_max_pixels": "no runtime code reads it (staged, #808)",
+        "image_resize_algorithm": "no runtime code reads it (staged, #808)",
+        "video_fps": "no runtime code reads it (staged, #808)",
+        "video_maxlen": "no runtime code reads it (staged, #808)",
+        "add_new_tokens": (
+            "pre_tokenized mode rejects this combination: preprocessing tokenizes "
+            "with the base tokenizer and never applies live vocabulary expansion"
+        ),
+        "new_special_tokens": (
+            "pre_tokenized mode rejects this combination for the same reason: cached "
+            "ids cannot include live special-token expansion"
+        ),
+        "resize_vocab": "no runtime code reads it",
+        "extend_conversation": "no runtime code reads it",
+        "skip_prepare_dataset": "no runtime code reads it",
+        "remove_unused_columns": (
+            "no trainer reads it; the trainers that set remove_unused_columns pass False (#759)"
+        ),
+        "prompt_strategy": (
+            "pre_tokenized mode rejects this combination because preprocessing "
+            "never applies the live prompt formatter"
+        ),
+        "forget_set": "read by task: unlearn only, which never loads a preprocess cache",
+        "retain_set": "read by task: unlearn only, which never loads a preprocess cache",
+    }
+)
 
 _DATASET_KEY_FIELDS: Tuple[str, ...] = tuple(
-    name for name, carrier in PREPROCESS_KEY_FIELDS.items()
-    if carrier == "dataset_path"
+    name for name, carrier in PREPROCESS_KEY_FIELDS.items() if carrier == "dataset_path"
 )
 
 
@@ -424,9 +426,14 @@ def make_preprocess_cache_key(
 
 # --- Part D: Interleave strategies ----------------------------------------
 
-INTERLEAVE_STRATEGIES: FrozenSet[str] = frozenset({
-    "concat", "under", "over", "probs",
-})
+INTERLEAVE_STRATEGIES: FrozenSet[str] = frozenset(
+    {
+        "concat",
+        "under",
+        "over",
+        "probs",
+    }
+)
 
 _MAX_INTERLEAVE_DATASETS = 32
 
@@ -445,7 +452,9 @@ class InterleaveSpec:
 
 
 def parse_interleave(
-    raw: object, *, num_datasets: int,
+    raw: object,
+    *,
+    num_datasets: int,
 ) -> Optional[InterleaveSpec]:
     """Parse an interleave directive from a ``soup.yaml`` value.
 
@@ -463,19 +472,14 @@ def parse_interleave(
     if isinstance(num_datasets, bool):
         raise ValueError("num_datasets must not be bool")
     if not isinstance(num_datasets, int) or num_datasets < 2:
-        raise ValueError(
-            "interleave requires >= 2 datasets — use a single dataset instead"
-        )
+        raise ValueError("interleave requires >= 2 datasets — use a single dataset instead")
     if num_datasets > _MAX_INTERLEAVE_DATASETS:
-        raise ValueError(
-            f"interleave supports at most {_MAX_INTERLEAVE_DATASETS} datasets"
-        )
+        raise ValueError(f"interleave supports at most {_MAX_INTERLEAVE_DATASETS} datasets")
 
     if isinstance(raw, str):
         if raw not in INTERLEAVE_STRATEGIES:
             raise ValueError(
-                f"interleave strategy must be one of "
-                f"{sorted(INTERLEAVE_STRATEGIES)} (got {raw!r})"
+                f"interleave strategy must be one of {sorted(INTERLEAVE_STRATEGIES)} (got {raw!r})"
             )
         if raw == "probs":
             raise ValueError(
@@ -494,9 +498,7 @@ def parse_interleave(
             )
         if strategy != "probs":
             if probs is not None:
-                raise ValueError(
-                    f"interleave strategy={strategy!r} must not set 'probs'"
-                )
+                raise ValueError(f"interleave strategy={strategy!r} must not set 'probs'")
             return InterleaveSpec(strategy=strategy, probs=None)
         if not isinstance(probs, list) or len(probs) != num_datasets:
             raise ValueError(
@@ -506,37 +508,32 @@ def parse_interleave(
         cleaned: List[float] = []
         for index, entry in enumerate(probs):
             if isinstance(entry, bool):
-                raise ValueError(
-                    f"interleave.probs[{index}] must not be bool"
-                )
+                raise ValueError(f"interleave.probs[{index}] must not be bool")
             if not isinstance(entry, (int, float)):
-                raise ValueError(
-                    f"interleave.probs[{index}] must be numeric"
-                )
+                raise ValueError(f"interleave.probs[{index}] must be numeric")
             entry_f = float(entry)
             if not math.isfinite(entry_f):
-                raise ValueError(
-                    f"interleave.probs[{index}] must be finite"
-                )
+                raise ValueError(f"interleave.probs[{index}] must be finite")
             if entry_f <= 0.0 or entry_f > 1.0:
-                raise ValueError(
-                    f"interleave.probs[{index}] must be in (0.0, 1.0]"
-                )
+                raise ValueError(f"interleave.probs[{index}] must be in (0.0, 1.0]")
             cleaned.append(entry_f)
         if abs(sum(cleaned) - 1.0) > 1e-6:
             raise ValueError("interleave.probs must sum to 1.0 (±1e-6)")
         return InterleaveSpec(strategy="probs", probs=tuple(cleaned))
 
-    raise ValueError(
-        f"interleave must be None, a string, or a dict (got {type(raw).__name__})"
-    )
+    raise ValueError(f"interleave must be None, a string, or a dict (got {type(raw).__name__})")
 
 
 # --- Part D: Image min/max pixels + video fps/maxlen + resize algorithm ---
 
-IMAGE_RESIZE_ALGORITHMS: FrozenSet[str] = frozenset({
-    "nearest", "bilinear", "bicubic", "lanczos",
-})
+IMAGE_RESIZE_ALGORITHMS: FrozenSet[str] = frozenset(
+    {
+        "nearest",
+        "bilinear",
+        "bicubic",
+        "lanczos",
+    }
+)
 
 _MAX_IMAGE_PIXELS = 1_073_741_824  # 1 GP — Pillow's default DOS guard.
 _MAX_VIDEO_MAXLEN = 4096
@@ -610,9 +607,7 @@ def validate_new_tokens(value: Optional[List[str]]) -> Optional[List[str]]:
         if "\x00" in token:
             raise ValueError(f"entry [{index}] must not contain null bytes")
         if len(token) > _MAX_TOKEN_LEN:
-            raise ValueError(
-                f"entry [{index}] must be <= {_MAX_TOKEN_LEN} chars"
-            )
+            raise ValueError(f"entry [{index}] must be <= {_MAX_TOKEN_LEN} chars")
         if token in seen:
             raise ValueError(f"duplicate token {token!r}")
         seen.add(token)
@@ -631,9 +626,7 @@ def apply_vocab_expansion(tokenizer: Any, model: Any, data_cfg: Any) -> int:
         Number of tokens added to the tokenizer.
     """
     regular = list(dict.fromkeys(getattr(data_cfg, "add_new_tokens", None) or []))
-    special = list(
-        dict.fromkeys(getattr(data_cfg, "new_special_tokens", None) or [])
-    )
+    special = list(dict.fromkeys(getattr(data_cfg, "new_special_tokens", None) or []))
     if not regular and not special:
         return 0
 
@@ -647,19 +640,14 @@ def apply_vocab_expansion(tokenizer: Any, model: Any, data_cfg: Any) -> int:
     # Special tokens take precedence if the same string appears in both lists.
     special = [token for token in special if token not in existing]
     special_set = set(special)
-    regular = [
-        token for token in regular
-        if token not in existing and token not in special_set
-    ]
+    regular = [token for token in regular if token not in existing and token not in special_set]
 
     added = 0
     if regular and hasattr(tokenizer, "add_tokens"):
         result = tokenizer.add_tokens(regular)
         added += int(result or 0)
     if special and hasattr(tokenizer, "add_special_tokens"):
-        result = tokenizer.add_special_tokens(
-            {"additional_special_tokens": special}
-        )
+        result = tokenizer.add_special_tokens({"additional_special_tokens": special})
         added += int(result or 0)
 
     if added > 0 and hasattr(model, "resize_token_embeddings"):
@@ -672,9 +660,7 @@ def apply_vocab_expansion(tokenizer: Any, model: Any, data_cfg: Any) -> int:
 # Module:fn syntax allowlist — mirrors how Axolotl exposes user transforms.
 # Live runtime invocation deferred to v0.42.1; the schema validates the
 # reference shape now so a typo fails loudly.
-_PROMPT_STRATEGY_RE = re.compile(
-    r"^[A-Za-z_][A-Za-z0-9_.]{0,127}:[A-Za-z_][A-Za-z0-9_]{0,127}$"
-)
+_PROMPT_STRATEGY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]{0,127}:[A-Za-z_][A-Za-z0-9_]{0,127}$")
 
 
 def validate_prompt_strategy(value: Optional[str]) -> Optional[str]:
@@ -705,6 +691,7 @@ def validate_prompt_strategy(value: Optional[str]) -> Optional[str]:
 # short-circuit tokenization when ``data.format='pre_tokenized'`` and
 # ``data.tokenized_path`` is set. Containment + symlink TOCTOU defence
 # enforced before the heavy ``datasets.load_from_disk`` call.
+
 
 def load_pretokenized_dataset(
     tokenized_path: str,
@@ -757,13 +744,8 @@ def load_pretokenized_dataset(
             with open(metadata_path, encoding="utf-8") as f:
                 metadata = _json.load(f)
         except (OSError, ValueError) as exc:
-            raise ValueError(
-                f"metadata.json in tokenized_path is unreadable: {exc}"
-            ) from exc
-        if (
-            expected_cache_key is not None
-            and metadata.get("cache_key") != expected_cache_key
-        ):
+            raise ValueError(f"metadata.json in tokenized_path is unreadable: {exc}") from exc
+        if expected_cache_key is not None and metadata.get("cache_key") != expected_cache_key:
             raise ValueError(
                 f"cache_key mismatch: expected {expected_cache_key!r}, "
                 f"got {metadata.get('cache_key')!r}"
@@ -773,8 +755,7 @@ def load_pretokenized_dataset(
         from datasets import load_from_disk
     except ImportError as exc:
         raise ImportError(
-            "datasets is required for pre_tokenized short-circuit: "
-            "pip install datasets"
+            "datasets is required for pre_tokenized short-circuit: pip install datasets"
         ) from exc
     return load_from_disk(real)
 
@@ -811,9 +792,7 @@ def resolve_prompt_strategy(spec: str) -> Callable[[Mapping[str, Any]], Mapping[
     # v0.53.7 H-G: ``assert`` is stripped under ``python -O``. Replace with
     # an explicit TypeError so the type narrowing survives optimisation.
     if not isinstance(spec, str):
-        raise TypeError(
-            f"prompt_strategy must be a str, got {type(spec).__name__}"
-        )
+        raise TypeError(f"prompt_strategy must be a str, got {type(spec).__name__}")
 
     module_path, _, fn_name = spec.partition(":")
     try:
@@ -826,14 +805,12 @@ def resolve_prompt_strategy(spec: str) -> Callable[[Mapping[str, Any]], Mapping[
         ) from exc
     if not hasattr(module, fn_name):
         raise ValueError(
-            f"prompt_strategy {spec!r}: module {module_path!r} has no attribute "
-            f"{fn_name!r}"
+            f"prompt_strategy {spec!r}: module {module_path!r} has no attribute {fn_name!r}"
         )
     fn = getattr(module, fn_name)
     if not callable(fn):
         raise ValueError(
-            f"prompt_strategy {spec!r}: resolved attribute is not callable "
-            f"({type(fn).__name__})"
+            f"prompt_strategy {spec!r}: resolved attribute is not callable ({type(fn).__name__})"
         )
     # Best-effort signature check — builtins / C-extensions may not expose a
     # signature; in that case we skip the check and rely on the per-row
@@ -866,9 +843,7 @@ def resolve_prompt_strategy(spec: str) -> Callable[[Mapping[str, Any]], Mapping[
     return fn
 
 
-def apply_prompt_strategy(
-    spec: Optional[str], row: Mapping[str, Any]
-) -> Mapping[str, Any]:
+def apply_prompt_strategy(spec: Optional[str], row: Mapping[str, Any]) -> Mapping[str, Any]:
     """Apply the resolved prompt_strategy to ``row`` if ``spec`` is set.
 
     Mirrors the v0.33.0 #47 ``CrossDocCollator`` silent-degrade policy: a
@@ -887,9 +862,7 @@ def apply_prompt_strategy(
     try:
         result = fn(row)
     except Exception as exc:  # noqa: BLE001 — user callable can raise anything
-        _PROMPT_STRATEGY_LOG.debug(
-            "prompt_strategy %r raised on row: %s", spec, exc
-        )
+        _PROMPT_STRATEGY_LOG.debug("prompt_strategy %r raised on row: %s", spec, exc)
         return row
     if not isinstance(result, Mapping):
         _PROMPT_STRATEGY_LOG.debug(
@@ -976,15 +949,14 @@ def detect_ingest_format(path: str) -> str:
         raise ValueError("path must not contain null bytes")
     ext = os.path.splitext(path)[1].lower()
     if ext not in INGEST_EXTENSIONS:
-        raise ValueError(
-            f"ingest only supports {sorted(INGEST_EXTENSIONS)} — got {ext!r}"
-        )
+        raise ValueError(f"ingest only supports {sorted(INGEST_EXTENSIONS)} — got {ext!r}")
     if ext == ".md":
         return "markdown"
     return ext.lstrip(".")
 
 
 # --- Public introspection helpers (for tests + docs) ----------------------
+
 
 def remote_schemes() -> Tuple[str, ...]:
     """Return a sorted, immutable view of recognised remote schemes."""

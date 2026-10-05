@@ -43,6 +43,7 @@ from soup_cli.utils.ui_env import resolve_ui_env
 
 # --- gpu_monitor coverage ---------------------------------------------------
 
+
 def test_query_nvidia_smi_no_smi_returns_false_empty(monkeypatch):
     import shutil as _shutil
 
@@ -53,14 +54,12 @@ def test_query_nvidia_smi_no_smi_returns_false_empty(monkeypatch):
 
 
 def test_detect_apple_silicon_matches_platform_pair():
-    expected = (
-        platform.system() == "Darwin"
-        and platform.machine().lower() in {"arm64", "aarch64"}
-    )
+    expected = platform.system() == "Darwin" and platform.machine().lower() in {"arm64", "aarch64"}
     assert detect_apple_silicon() is expected
 
 
 # --- tail_latency boundary --------------------------------------------------
+
 
 def test_update_ema_rejects_non_finite_prev():
     with pytest.raises(ValueError):
@@ -68,6 +67,7 @@ def test_update_ema_rejects_non_finite_prev():
 
 
 # --- tool_outputs -----------------------------------------------------------
+
 
 def test_tool_call_timer_set_error_is_recorded():
     buffer = ToolOutputsBuffer()
@@ -143,6 +143,7 @@ def test_tool_outputs_ring_drops_oldest_after_overflow():
 
 # --- llama_server_timings --------------------------------------------------
 
+
 def test_format_kv_bar_upper_bound_rejected():
     with pytest.raises(ValueError):
         format_kv_bar(50.0, width=201)
@@ -157,6 +158,7 @@ def test_parse_timings_rejects_negative_kv():
 
 # --- qr_url -----------------------------------------------------------------
 
+
 def test_validate_token_rejects_non_string():
     with pytest.raises(TypeError):
         validate_token(123)  # type: ignore[arg-type]
@@ -169,15 +171,11 @@ def test_build_phone_url_empty_host_rejected():
 
 def test_build_phone_url_null_byte_host_rejected():
     with pytest.raises(ValueError):
-        build_phone_url(
-            scheme="https", host="x\x00y", port=80, token="x" * 32
-        )
+        build_phone_url(scheme="https", host="x\x00y", port=80, token="x" * 32)
 
 
 def test_build_phone_url_token_in_query_string():
-    url = build_phone_url(
-        scheme="https", host="x", port=443, token="x" * 32
-    )
+    url = build_phone_url(scheme="https", host="x", port=443, token="x" * 32)
     # Token MUST be in the query string so the server can read it; not in
     # the fragment (which never reaches the server).
     assert "?token=" in url
@@ -190,6 +188,7 @@ def test_render_qr_ascii_rejects_non_string():
 
 
 # --- ui plugins -------------------------------------------------------------
+
 
 def test_load_plugins_returns_int(monkeypatch):
     clear_tabs()
@@ -210,6 +209,7 @@ def test_register_tab_clear_resets_limit():
 
 # --- ui_env -----------------------------------------------------------------
 
+
 def test_resolve_ui_env_default_reads_environ(monkeypatch):
     monkeypatch.delenv("API_HOST", raising=False)
     monkeypatch.delenv("API_PORT", raising=False)
@@ -223,6 +223,7 @@ def test_resolve_ui_env_default_reads_environ(monkeypatch):
 
 # --- shortcuts --------------------------------------------------------------
 
+
 def test_macos_command_oversize_command_rejected():
     with pytest.raises(ValueError):
         build_macos_command_file(name="x", command="x" * 2000)
@@ -234,6 +235,7 @@ def test_windows_cmd_oversize_command_rejected():
 
 
 # --- onboarding -------------------------------------------------------------
+
 
 def test_onboarding_output_outside_cwd_rejected(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
@@ -252,12 +254,11 @@ def test_onboarding_output_outside_cwd_rejected(tmp_path, monkeypatch):
 
 def test_onboarding_empty_dataset_rejected():
     with pytest.raises(ValueError):
-        render_onboarding_yaml(
-            {"base": "x/y", "dataset": "", "task": "sft", "epochs": 1}
-        )
+        render_onboarding_yaml({"base": "x/y", "dataset": "", "task": "sft", "epochs": 1})
 
 
 # --- sweep_config -----------------------------------------------------------
+
 
 def test_sweep_spec_frozen():
     spec = parse_sweep_yaml("strategy: grid\n")
@@ -266,9 +267,7 @@ def test_sweep_spec_frozen():
 
 
 def test_sweep_spec_params_immutable():
-    spec = parse_sweep_yaml(
-        "strategy: grid\nparams:\n  lr: [0.001, 0.002]\n"
-    )
+    spec = parse_sweep_yaml("strategy: grid\nparams:\n  lr: [0.001, 0.002]\n")
     # The mapping itself is a MappingProxyType — readonly.
     with pytest.raises(TypeError):
         spec.params["lr"] = (0.999,)  # type: ignore[index]
@@ -300,6 +299,7 @@ def test_sweep_yaml_param_value_non_scalar_rejected():
 
 # --- fsdp_consolidate -------------------------------------------------------
 
+
 def test_plan_consolidation_output_outside_cwd_rejected(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     out = tmp_path / "shards"
@@ -323,12 +323,14 @@ def test_discover_shards_non_string_rejected():
 
 # --- delinearize_llama4 -----------------------------------------------------
 
+
 def test_discover_weight_files_non_string_rejected():
     with pytest.raises(TypeError):
         discover_weight_files(123)  # type: ignore[arg-type]
 
 
 # --- llama_proxy ------------------------------------------------------------
+
 
 def test_llama_resolve_rejects_null_byte_arg(monkeypatch):
     import shutil as _shutil
@@ -339,6 +341,7 @@ def test_llama_resolve_rejects_null_byte_arg(monkeypatch):
 
 
 # --- fetch (security review fixes) ------------------------------------------
+
 
 def test_fetch_examples_dir_under_realpath():
     # The bundled dir must exist and be a directory.
@@ -356,14 +359,13 @@ def test_cli_fetch_force_overwrites(tmp_path, monkeypatch):
     runner.invoke(app, ["fetch", "examples", "llama-3.1-8b-lora"])
     target = tmp_path / "llama-3.1-8b-lora.yaml"
     target.write_text("# stomp")
-    result = runner.invoke(
-        app, ["fetch", "examples", "llama-3.1-8b-lora", "--force"]
-    )
+    result = runner.invoke(app, ["fetch", "examples", "llama-3.1-8b-lora", "--force"])
     assert result.exit_code == 0, (result.output, repr(result.exception))
     assert "stomp" not in target.read_text()
 
 
 # --- llama env filter -------------------------------------------------------
+
 
 def test_filtered_env_drops_secrets(monkeypatch):
     monkeypatch.setenv("HF_TOKEN", "hf_secret")
@@ -384,6 +386,7 @@ def test_llama_env_allowlist_immutable():
 
 # --- write_trigger symlink rejection (security review M2) -------------------
 
+
 @pytest.mark.requires_symlink
 def test_write_trigger_rejects_pre_existing_symlink(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
@@ -398,6 +401,7 @@ def test_write_trigger_rejects_pre_existing_symlink(tmp_path, monkeypatch):
 
 
 # --- tail_latency MAX_SAMPLES cap (TDD review C2) ---------------------------
+
 
 def test_percentile_max_samples_cap():
     """A well-formed but too-large iterable must raise ValueError."""
@@ -421,6 +425,7 @@ def test_summarise_latency_max_samples_cap():
 
 
 # --- graceful_save additional coverage (TDD review H3, H4) -----------------
+
 
 def test_graceful_save_restore_idempotent(monkeypatch):
     import signal as _signal

@@ -75,17 +75,13 @@ class MagpieConfig:
 def validate_magpie_provider(provider: object) -> str:
     """Return the canonical lower-case provider id."""
     if isinstance(provider, bool) or not isinstance(provider, str):
-        raise TypeError(
-            f"magpie provider must be str, got {type(provider).__name__}"
-        )
+        raise TypeError(f"magpie provider must be str, got {type(provider).__name__}")
     if not provider:
         raise ValueError("magpie provider must be non-empty")
     if "\x00" in provider:
         raise ValueError("magpie provider must not contain null bytes")
     if len(provider) > _MAX_PROVIDER_LEN:
-        raise ValueError(
-            f"magpie provider must be <= {_MAX_PROVIDER_LEN} chars"
-        )
+        raise ValueError(f"magpie provider must be <= {_MAX_PROVIDER_LEN} chars")
     canonical = provider.strip().lower()
     if canonical not in SUPPORTED_MAGPIE_PROVIDERS:
         raise ValueError(
@@ -111,17 +107,13 @@ def validate_target_rows(target: object) -> int:
 def validate_base_model(name: object) -> str:
     """Validate the base-model identifier."""
     if isinstance(name, bool) or not isinstance(name, str):
-        raise TypeError(
-            f"base_model must be str, got {type(name).__name__}"
-        )
+        raise TypeError(f"base_model must be str, got {type(name).__name__}")
     if not name:
         raise ValueError("base_model must be non-empty")
     if "\x00" in name:
         raise ValueError("base_model must not contain null bytes")
     if len(name) > _MAX_BASE_MODEL_LEN:
-        raise ValueError(
-            f"base_model must be <= {_MAX_BASE_MODEL_LEN} chars"
-        )
+        raise ValueError(f"base_model must be <= {_MAX_BASE_MODEL_LEN} chars")
     return name
 
 
@@ -139,9 +131,7 @@ def build_magpie_config(
 ) -> MagpieConfig:
     """Convenience factory — every input passes through the validators."""
     if not isinstance(quality_filter, bool):
-        raise TypeError(
-            f"quality_filter must be bool, got {type(quality_filter).__name__}"
-        )
+        raise TypeError(f"quality_filter must be bool, got {type(quality_filter).__name__}")
     return MagpieConfig(
         base_model=validate_base_model(base),
         provider=validate_magpie_provider(provider),
@@ -317,9 +307,7 @@ def make_magpie_generate_fn(
         raise TypeError("temperature must be a number")
     if temperature < 0 or temperature > 2:
         raise ValueError("temperature must be in [0, 2]")
-    if isinstance(timeout_seconds, bool) or not isinstance(
-        timeout_seconds, (int, float)
-    ):
+    if isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds, (int, float)):
         raise TypeError("timeout_seconds must be a number")
     if timeout_seconds <= 0 or timeout_seconds > 600:
         raise ValueError("timeout_seconds must be in (0, 600]")
@@ -464,8 +452,7 @@ def _atomic_write_jsonl(path: str, rows: Sequence[Mapping[str, Any]]) -> str:
     from soup_cli.utils.paths import atomic_write_bytes
 
     payload = (
-        "\n".join(json.dumps(r, ensure_ascii=False) for r in rows)
-        + ("\n" if rows else "")
+        "\n".join(json.dumps(r, ensure_ascii=False) for r in rows) + ("\n" if rows else "")
     ).encode("utf-8")
     return atomic_write_bytes(payload, path, prefix=".magpie-", field="output_path")
 

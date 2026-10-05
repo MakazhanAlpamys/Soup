@@ -51,8 +51,12 @@ def _push(*extra):
 class TestHubTokenEnvVar:
     @pytest.mark.parametrize(
         ("hub", "var"),
-        [("hf", "HF_TOKEN"), ("modelscope", "MODELSCOPE_API_TOKEN"),
-         ("modelers", "MODELERS_TOKEN"), ("ModelScope", "MODELSCOPE_API_TOKEN")],
+        [
+            ("hf", "HF_TOKEN"),
+            ("modelscope", "MODELSCOPE_API_TOKEN"),
+            ("modelers", "MODELERS_TOKEN"),
+            ("ModelScope", "MODELSCOPE_API_TOKEN"),
+        ],
     )
     def test_maps_each_hub(self, hub, var):
         from soup_cli.utils.hubs import hub_token_env_var
@@ -80,10 +84,10 @@ class TestHubTokenEnvVar:
 
 
 class TestNonHfPush:
-    @pytest.mark.parametrize(("hub", "var"), [("modelscope", "MODELSCOPE_API_TOKEN"),
-                                              ("modelers", "MODELERS_TOKEN")])
-    def test_hf_env_token_never_reaches_other_hub(self, model_dir, recorded, monkeypatch,
-                                                  hub, var):
+    @pytest.mark.parametrize(
+        ("hub", "var"), [("modelscope", "MODELSCOPE_API_TOKEN"), ("modelers", "MODELERS_TOKEN")]
+    )
+    def test_hf_env_token_never_reaches_other_hub(self, model_dir, recorded, monkeypatch, hub, var):
         monkeypatch.setenv("HF_TOKEN", "hf_SENTINEL")
         monkeypatch.setenv(var, "hub_OWN")
         result = _push("--hub", hub)
@@ -91,10 +95,12 @@ class TestNonHfPush:
         assert recorded and recorded[0]["token"] == "hub_OWN"
         assert "hf_SENTINEL" not in repr(recorded)
 
-    @pytest.mark.parametrize(("hub", "var"), [("modelscope", "MODELSCOPE_API_TOKEN"),
-                                              ("modelers", "MODELERS_TOKEN")])
-    def test_only_hf_credential_is_refused_naming_hub_variable(self, model_dir, recorded,
-                                                               monkeypatch, hub, var):
+    @pytest.mark.parametrize(
+        ("hub", "var"), [("modelscope", "MODELSCOPE_API_TOKEN"), ("modelers", "MODELERS_TOKEN")]
+    )
+    def test_only_hf_credential_is_refused_naming_hub_variable(
+        self, model_dir, recorded, monkeypatch, hub, var
+    ):
         monkeypatch.setenv("HF_TOKEN", "hf_SENTINEL")
         result = _push("--hub", hub)
         assert result.exit_code == 1, (result.output, repr(result.exception))

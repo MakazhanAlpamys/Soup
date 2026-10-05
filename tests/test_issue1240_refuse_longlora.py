@@ -51,22 +51,75 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 #: and any case of them), and the same strings quoted.
 #: ``test_each_spelling_is_read_as_true`` keeps the list honest.
 YAML_SPELLINGS_READ_AS_TRUE = [
-    "true", "True", "TRUE", "yes", "Yes", "YES", "on", "On", "ON",
-    "y", "Y", "t", "T", "tRuE", "1", "+1", "0x1", "1.0",
-    "'true'", '"True"', "'1'", "'yes'", "'y'", "'on'", "'t'",
+    "true",
+    "True",
+    "TRUE",
+    "yes",
+    "Yes",
+    "YES",
+    "on",
+    "On",
+    "ON",
+    "y",
+    "Y",
+    "t",
+    "T",
+    "tRuE",
+    "1",
+    "+1",
+    "0x1",
+    "1.0",
+    "'true'",
+    '"True"',
+    "'1'",
+    "'yes'",
+    "'y'",
+    "'on'",
+    "'t'",
 ]
 
 #: The same property for a caller that builds the model directly (``soup
 #: sweep``, ``soup rewind`` and autopilot construct it).
 PYTHON_VALUES_READ_AS_TRUE = [
-    True, 1, 1.0, Decimal(1), "true", "True", "TRUE", "yes", "y", "on", "t", "1",
-    b"true", b"1",
+    True,
+    1,
+    1.0,
+    Decimal(1),
+    "true",
+    "True",
+    "TRUE",
+    "yes",
+    "y",
+    "on",
+    "t",
+    "1",
+    b"true",
+    b"1",
 ]
 
 #: Spellings that mean "off". They must keep loading, as ``False``.
 YAML_SPELLINGS_READ_AS_FALSE = [
-    "false", "False", "FALSE", "no", "No", "NO", "off", "Off", "OFF",
-    "n", "N", "f", "F", "0", "0.0", "'false'", "'0'", "'no'", "'off'", "'n'", "'f'",
+    "false",
+    "False",
+    "FALSE",
+    "no",
+    "No",
+    "NO",
+    "off",
+    "Off",
+    "OFF",
+    "n",
+    "N",
+    "f",
+    "F",
+    "0",
+    "0.0",
+    "'false'",
+    "'0'",
+    "'no'",
+    "'off'",
+    "'n'",
+    "'f'",
 ]
 
 _LLAMA = "meta-llama/Llama-3.1-8B"
@@ -208,9 +261,7 @@ def test_each_older_gate_config_loads_without_use_longlora(gate):
 
 
 def test_the_refusal_comes_before_the_flash_attention_v3_gate(monkeypatch):
-    monkeypatch.setattr(
-        "soup_cli.utils.flash_attn.is_flash_attn_v3_available", lambda: True
-    )
+    monkeypatch.setattr("soup_cli.utils.flash_attn.is_flash_attn_v3_available", lambda: True)
     with pytest.raises(ValueError) as excinfo:
         load_config_from_string(_yaml("true"))
     _assert_is_the_1240_refusal(str(excinfo.value))
@@ -224,8 +275,7 @@ def test_the_refusal_comes_before_the_flash_attention_v3_gate(monkeypatch):
 def _write_config(tmp_path: Path, value: str, *, backend: str = "transformers") -> Path:
     train = tmp_path / "train.jsonl"
     train.write_text(
-        '{"messages": [{"role": "user", "content": "q"}, '
-        '{"role": "assistant", "content": "a"}]}\n',
+        '{"messages": [{"role": "user", "content": "q"}, {"role": "assistant", "content": "a"}]}\n',
         encoding="utf-8",
     )
     path = tmp_path / "soup.yaml"
@@ -345,9 +395,7 @@ def _shipped_config_texts() -> list[tuple[str, str]]:
     for directory in (REPO_ROOT / "src" / "soup_cli" / "templates", REPO_ROOT / "examples"):
         assert directory.is_dir(), directory
         for path in sorted(directory.rglob("*.yaml")):
-            texts.append(
-                (path.relative_to(REPO_ROOT).as_posix(), path.read_text(encoding="utf-8"))
-            )
+            texts.append((path.relative_to(REPO_ROOT).as_posix(), path.read_text(encoding="utf-8")))
     return texts
 
 
@@ -369,9 +417,7 @@ def test_every_shipped_recipe_template_and_example_still_loads():
 # docs
 # --------------------------------------------------------------------------
 
-_TRUE_SETTING = re.compile(
-    r"^\s*use_longlora:\s*(true|yes|on|1)\b", re.IGNORECASE | re.MULTILINE
-)
+_TRUE_SETTING = re.compile(r"^\s*use_longlora:\s*(true|yes|on|1)\b", re.IGNORECASE | re.MULTILINE)
 
 
 def test_no_doc_still_shows_use_longlora_true_as_a_setting_to_copy():

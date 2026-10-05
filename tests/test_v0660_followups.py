@@ -4,6 +4,7 @@ This file collects the TDD-wave regression guards for every fix landed in
 the 3 review waves (python-review / code+security / tdd-guide). Keeping
 them in one file makes the v0.66.x patches easier to find later.
 """
+
 from __future__ import annotations
 
 import inspect
@@ -24,8 +25,11 @@ def test_sleeper_verdict_bool_raises_type_error():
 
     with pytest.raises(TypeError, match="verdict must be str"):
         SleeperProbeResult(
-            base="b", num_tokens=10, defection_rate=0.0,
-            max_score=0.0, verdict=True,
+            base="b",
+            num_tokens=10,
+            defection_rate=0.0,
+            max_score=0.0,
+            verdict=True,
         )
 
 
@@ -34,8 +38,11 @@ def test_sleeper_verdict_non_string_raises_type_error():
 
     with pytest.raises(TypeError, match="verdict must be str"):
         SleeperProbeResult(
-            base="b", num_tokens=10, defection_rate=0.0,
-            max_score=0.0, verdict=42,
+            base="b",
+            num_tokens=10,
+            defection_rate=0.0,
+            max_score=0.0,
+            verdict=42,
         )
 
 
@@ -64,9 +71,7 @@ def test_sae_feature_change_raises_frozen_instance_error():
 def test_sae_diff_report_raises_frozen_instance_error():
     from soup_cli.utils.sae_diff import SaeFeatureDiffReport
 
-    r = SaeFeatureDiffReport(
-        num_features=0, num_tokens=0, l2_drift=0.0, changes=tuple()
-    )
+    r = SaeFeatureDiffReport(num_features=0, num_tokens=0, l2_drift=0.0, changes=tuple())
     with pytest.raises(FrozenInstanceError):
         r.num_features = 99  # type: ignore[misc]
 
@@ -83,8 +88,12 @@ def test_blame_result_raises_frozen_instance_error():
     from soup_cli.utils.blame import BlameResult
 
     r = BlameResult(
-        adapter_dir="x", dataset_path="y", layer="l",
-        top_influencers=tuple(), num_rows_scored=0, elapsed_seconds=0.0,
+        adapter_dir="x",
+        dataset_path="y",
+        layer="l",
+        top_influencers=tuple(),
+        num_rows_scored=0,
+        elapsed_seconds=0.0,
     )
     with pytest.raises(FrozenInstanceError):
         r.num_rows_scored = 5  # type: ignore[misc]
@@ -101,9 +110,7 @@ def test_sleeper_probe_spec_raises_frozen_instance_error():
 def test_sleeper_probe_result_raises_frozen_instance_error():
     from soup_cli.utils.sleeper_probe import SleeperProbeResult
 
-    r = SleeperProbeResult(
-        base="b", num_tokens=0, defection_rate=0.0, max_score=0.0, verdict="OK"
-    )
+    r = SleeperProbeResult(base="b", num_tokens=0, defection_rate=0.0, max_score=0.0, verdict="OK")
     with pytest.raises(FrozenInstanceError):
         r.verdict = "MAJOR"  # type: ignore[misc]
 
@@ -119,9 +126,7 @@ def test_interference_cell_raises_frozen_instance_error():
 def test_interference_matrix_raises_frozen_instance_error():
     from soup_cli.utils.interference import InterferenceMatrix
 
-    m = InterferenceMatrix(
-        adapters=("a", "b"), cells=tuple(), worst_pair=None, worst_score=0.0
-    )
+    m = InterferenceMatrix(adapters=("a", "b"), cells=tuple(), worst_pair=None, worst_score=0.0)
     with pytest.raises(FrozenInstanceError):
         m.worst_score = 1.0  # type: ignore[misc]
 
@@ -139,9 +144,7 @@ def test_probe_pack_raises_frozen_instance_error():
 
     p = ProbePack(
         base="b",
-        probes=(
-            ProbeEntry(name="x", kind="sleeper", hidden_dim=4, description="d"),
-        ),
+        probes=(ProbeEntry(name="x", kind="sleeper", hidden_dim=4, description="d"),),
         soup_version="0.66.0",
     )
     with pytest.raises(FrozenInstanceError):
@@ -164,9 +167,7 @@ def test_interference_render_markdown_escapes_adapter_name():
     # Adapter names are validated (no null bytes, no oversize) but
     # `[`/`]` characters ARE permitted, so the render must escape them.
     crafted = "[link=evil]X[/]"
-    cell = InterferenceCell(
-        adapter_a=crafted, adapter_b="b", score=0.0, verdict="OK"
-    )
+    cell = InterferenceCell(adapter_a=crafted, adapter_b="b", score=0.0, verdict="OK")
     m = InterferenceMatrix(
         adapters=(crafted, "b"),
         cells=(cell,),
@@ -236,7 +237,7 @@ def test_count_dataset_rows_rejects_symlink_via_o_nofollow(tmp_path, monkeypatch
     # Create a real adapter dir
     adapter = tmp_path / "adp"
     adapter.mkdir()
-    (adapter / "adapter_config.json").write_text('{}', encoding="utf-8")
+    (adapter / "adapter_config.json").write_text("{}", encoding="utf-8")
     # Real dataset
     real = tmp_path / "real.jsonl"
     real.write_text('{"text":"row"}\n', encoding="utf-8")
@@ -246,8 +247,11 @@ def test_count_dataset_rows_rejects_symlink_via_o_nofollow(tmp_path, monkeypatch
 
     with pytest.raises(ValueError, match="symlink"):
         plan_blame(
-            adapter.name, sym.name,
-            layer="x", budget_seconds=600, num_shards=2,
+            adapter.name,
+            sym.name,
+            layer="x",
+            budget_seconds=600,
+            num_shards=2,
         )
 
 
@@ -276,7 +280,7 @@ def test_count_dataset_rows_raises_on_oversize(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     adapter = tmp_path / "adp"
     adapter.mkdir()
-    (adapter / "adapter_config.json").write_text('{}', encoding="utf-8")
+    (adapter / "adapter_config.json").write_text("{}", encoding="utf-8")
     dataset = tmp_path / "huge.jsonl"
     dataset.write_text("a\nb\n", encoding="utf-8")
 
@@ -340,7 +344,9 @@ def test_probe_entry_oversize_description_rejected():
 
     with pytest.raises(ValueError, match="4096"):
         ProbeEntry(
-            name="x", kind="sleeper", hidden_dim=4,
+            name="x",
+            kind="sleeper",
+            hidden_dim=4,
             description="a" * 4097,
         )
 
@@ -350,7 +356,9 @@ def test_probe_entry_at_max_description_accepted():
     from soup_cli.utils.probe_pack import ProbeEntry
 
     e = ProbeEntry(
-        name="x", kind="sleeper", hidden_dim=4,
+        name="x",
+        kind="sleeper",
+        hidden_dim=4,
         description="a" * 4096,
     )
     assert len(e.description) == 4096
@@ -360,9 +368,7 @@ def test_probe_entry_null_byte_description_rejected():
     from soup_cli.utils.probe_pack import ProbeEntry
 
     with pytest.raises(ValueError, match="null"):
-        ProbeEntry(
-            name="x", kind="sleeper", hidden_dim=4, description="a\x00b"
-        )
+        ProbeEntry(name="x", kind="sleeper", hidden_dim=4, description="a\x00b")
 
 
 # ---------------------------------------------------------------------------
@@ -381,13 +387,18 @@ def test_default_synthetic_probe_caps_at_100k(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     # Build a plan with 1M holdout — synthetic probe must cap to 100k
     plan = BlamePlan(
-        adapter_dir="a", dataset_path="d", layer="x",
-        budget_seconds=3600, num_shards=2, per_shard_seconds=1800,
+        adapter_dir="a",
+        dataset_path="d",
+        layer="x",
+        budget_seconds=3600,
+        num_shards=2,
+        per_shard_seconds=1800,
         shards=(
             BlameShardWork(0, 0, 500_000, 1800),
             BlameShardWork(1, 500_000, 500_000, 1800),
         ),
-        feasible=True, reason="ok",
+        feasible=True,
+        reason="ok",
     )
     result = run_blame(plan)  # no probe_fn -> synthetic
     assert result.num_rows_scored <= 100_000
@@ -494,9 +505,7 @@ def test_no_path_resolve_used_in_v0_66_modules():
 
     for mod in (sae_diff, blame, sleeper_probe, interference, probe_pack):
         src = inspect.getsource(mod)
-        assert ".resolve()" not in src, (
-            f"{mod.__name__}: use os.path.realpath, not Path.resolve()"
-        )
+        assert ".resolve()" not in src, f"{mod.__name__}: use os.path.realpath, not Path.resolve()"
 
 
 def test_no_top_level_torch_in_v0_66_modules():
@@ -506,14 +515,13 @@ def test_no_top_level_torch_in_v0_66_modules():
     for mod in (sae_diff, blame, sleeper_probe, interference, probe_pack):
         src = inspect.getsource(mod)
         top_level_imports = [
-            line for line in src.splitlines()
+            line
+            for line in src.splitlines()
             if line.startswith("import ") or line.startswith("from ")
         ]
         for line in top_level_imports:
             for bad in ("torch", "transformers", "peft", "safetensors"):
-                assert bad not in line, (
-                    f"{mod.__name__}: top-level {bad} import: {line!r}"
-                )
+                assert bad not in line, f"{mod.__name__}: top-level {bad} import: {line!r}"
 
 
 # ---------------------------------------------------------------------------

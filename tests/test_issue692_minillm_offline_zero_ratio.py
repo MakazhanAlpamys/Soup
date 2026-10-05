@@ -65,9 +65,7 @@ class TestOfflineMiniLLMZeroMixRejected:
         assert cfg.training.minillm_teacher_mix_ratio == 0.3
 
     def test_on_policy_zero_mix_is_accepted(self) -> None:
-        cfg = load_config_from_string(
-            _distill_yaml(minillm_enabled=True, minillm_on_policy=True)
-        )
+        cfg = load_config_from_string(_distill_yaml(minillm_enabled=True, minillm_on_policy=True))
         assert cfg.training.minillm_on_policy is True
         assert cfg.training.minillm_teacher_mix_ratio == 0.0
 

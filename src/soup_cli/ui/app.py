@@ -110,25 +110,29 @@ class _RequestBodySizeLimitMiddleware:
 
 _CHART_JS_URL = "https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"
 
-CONTENT_SECURITY_POLICY = "; ".join((
-    "default-src 'self'",
-    f"script-src 'self' {_CHART_JS_URL}",
-    # Rendered markup and Chart.js set inline style attributes.
-    "style-src 'self' 'unsafe-inline'",
-    "img-src 'self' data:",
-    "connect-src 'self'",
-    "object-src 'none'",
-    "base-uri 'none'",
-    "frame-ancestors 'none'",
-    "form-action 'self'",
-))
+CONTENT_SECURITY_POLICY = "; ".join(
+    (
+        "default-src 'self'",
+        f"script-src 'self' {_CHART_JS_URL}",
+        # Rendered markup and Chart.js set inline style attributes.
+        "style-src 'self' 'unsafe-inline'",
+        "img-src 'self' data:",
+        "connect-src 'self'",
+        "object-src 'none'",
+        "base-uri 'none'",
+        "frame-ancestors 'none'",
+        "form-action 'self'",
+    )
+)
 
-SECURITY_HEADERS: Mapping[str, str] = MappingProxyType({
-    "Content-Security-Policy": CONTENT_SECURITY_POLICY,
-    "X-Content-Type-Options": "nosniff",
-    "Referrer-Policy": "no-referrer",
-    "X-Frame-Options": "DENY",
-})
+SECURITY_HEADERS: Mapping[str, str] = MappingProxyType(
+    {
+        "Content-Security-Policy": CONTENT_SECURITY_POLICY,
+        "X-Content-Type-Options": "nosniff",
+        "Referrer-Policy": "no-referrer",
+        "X-Frame-Options": "DENY",
+    }
+)
 
 # FastAPI's interactive docs (served on a loopback bind only) bootstrap with an
 # inline script and CDN assets, so the page policy above would leave them blank.
@@ -181,11 +185,13 @@ class _SecurityHeadersMiddleware:
 
 class TrainRequest(PydanticBaseModel):
     """Request body for starting a training run."""
+
     config_yaml: str
 
 
 class TrainStatus(PydanticBaseModel):
     """Current training process status."""
+
     running: bool
     pid: Optional[int] = None
     config_path: Optional[str] = None
@@ -193,6 +199,7 @@ class TrainStatus(PydanticBaseModel):
 
 class DataInspectRequest(PydanticBaseModel):
     """Request body for data inspection."""
+
     path: str
     limit: int = Field(default=50, ge=1, le=_MAX_INSPECT_LIMIT)
 
@@ -410,9 +417,7 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
         # Derived from `swagger_ui_oauth2_redirect_url`, not from `docs_url`:
         # leaving it at its default keeps `/docs/oauth2-redirect` serving even
         # once `/docs` is gone.
-        swagger_ui_oauth2_redirect_url=(
-            "/docs/oauth2-redirect" if _docs_enabled else None
-        ),
+        swagger_ui_oauth2_redirect_url=("/docs/oauth2-redirect" if _docs_enabled else None),
     )
 
     # Install before CORS so a 413 from the size cap still carries the same
@@ -512,9 +517,7 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
 
         run_ids = [rid.strip() for rid in ids.split(",") if rid.strip()]
         if len(run_ids) > 5:
-            raise HTTPException(
-                status_code=400, detail="Maximum 5 runs per comparison"
-            )
+            raise HTTPException(status_code=400, detail="Maximum 5 runs per comparison")
         if not run_ids:
             raise HTTPException(status_code=400, detail="ids parameter required")
 
@@ -530,11 +533,13 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
                         config = json_mod.loads(run_info["config_json"])
                     except (ValueError, TypeError):
                         pass
-                result.append({
-                    "run_id": rid,
-                    "config": config,
-                    "metrics": metrics,
-                })
+                result.append(
+                    {
+                        "run_id": rid,
+                        "config": config,
+                        "metrics": metrics,
+                    }
+                )
             return {"runs": result}
         finally:
             tracker.close()
@@ -638,9 +643,7 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
 
         with _train_lock:
             if _train_process and _train_process.poll() is None:
-                raise HTTPException(
-                    status_code=409, detail="Training already in progress"
-                )
+                raise HTTPException(status_code=409, detail="Training already in progress")
 
             # Validate config before writing to disk
             from soup_cli.config.loader import load_config_from_string
@@ -660,17 +663,13 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
                 )
             except Exception as exc:
                 logger.warning("Invalid training config: %s", strip_control(exc))
-                raise HTTPException(
-                    status_code=400, detail="Invalid training configuration"
-                )
+                raise HTTPException(status_code=400, detail="Invalid training configuration")
 
             # Securely-created temp file. A FIXED name in the shared temp dir
             # let a local attacker pre-place a symlink there and redirect this
             # write; mkstemp creates a fresh O_EXCL file (no symlink following,
             # unpredictable name).
-            fd, config_path = tempfile.mkstemp(
-                prefix="soup_ui_config_", suffix=".yaml"
-            )
+            fd, config_path = tempfile.mkstemp(prefix="soup_ui_config_", suffix=".yaml")
             with os.fdopen(fd, "w", encoding="utf-8") as fh:
                 fh.write(req.config_yaml)
 
@@ -856,16 +855,12 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
                 finally:
                     tracker.close()
 
-                new_metrics = [
-                    m for m in metrics if m.get("step", 0) > last_step
-                ]
+                new_metrics = [m for m in metrics if m.get("step", 0) > last_step]
                 if new_metrics:
                     for m_row in new_metrics:
                         data = json_mod.dumps(m_row, default=str)
                         yield f"data: {data}\n\n"
-                    last_step = max(
-                        m.get("step", 0) for m in new_metrics
-                    )
+                    last_step = max(m.get("step", 0) for m in new_metrics)
                     polls_since_new = 0
                 else:
                     polls_since_new += 1
@@ -972,7 +967,7 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
                             info["options"] = list(non_none)
 
                 # Get constraints from metadata
-                for meta in (field_info.metadata or []):
+                for meta in field_info.metadata or []:
                     if hasattr(meta, "ge"):
                         info["ge"] = meta.ge
                     if hasattr(meta, "le"):
@@ -994,14 +989,16 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
 
         recipes_list = []
         for name, meta in RECIPES.items():
-            recipes_list.append({
-                "name": name,
-                "model": meta.model,
-                "task": meta.task,
-                "description": meta.description,
-                "tags": list(meta.tags) if hasattr(meta, "tags") else [],
-                "yaml": meta.yaml_str,
-            })
+            recipes_list.append(
+                {
+                    "name": name,
+                    "model": meta.model,
+                    "task": meta.task,
+                    "description": meta.description,
+                    "tags": list(meta.tags) if hasattr(meta, "tags") else [],
+                    "yaml": meta.yaml_str,
+                }
+            )
         return {"recipes": recipes_list}
 
     @app.post("/api/config/from-form", dependencies=[Depends(_verify_token)])
@@ -1019,9 +1016,7 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
                 config_dict[key] = val
 
         try:
-            yaml_str = yaml.dump(
-                config_dict, default_flow_style=False, sort_keys=False
-            )
+            yaml_str = yaml.dump(config_dict, default_flow_style=False, sort_keys=False)
             # Validate
             load_config_from_string(yaml_str)
             return {"yaml": yaml_str}
@@ -1036,11 +1031,13 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
 
     class ChatMessage(PydanticBaseModel):
         """A single chat message."""
+
         role: str
         content: str
 
     class ChatRequest(PydanticBaseModel):
         """Request body for chat send."""
+
         messages: list[ChatMessage]
         endpoint: str
         temperature: float = Field(default=0.7, ge=0.0, le=2.0)
@@ -1100,17 +1097,11 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
 
         # Validate bounds
         if req.max_tokens > 16384:
-            raise HTTPException(
-                status_code=400, detail="max_tokens exceeds 16384 cap"
-            )
+            raise HTTPException(status_code=400, detail="max_tokens exceeds 16384 cap")
         if req.temperature < 0.0 or req.temperature > 2.0:
-            raise HTTPException(
-                status_code=400, detail="temperature must be 0.0-2.0"
-            )
+            raise HTTPException(status_code=400, detail="temperature must be 0.0-2.0")
         if req.top_p < 0.0 or req.top_p > 1.0:
-            raise HTTPException(
-                status_code=400, detail="top_p must be 0.0-1.0"
-            )
+            raise HTTPException(status_code=400, detail="top_p must be 0.0-1.0")
 
         def _stream_chat():
             import httpx
@@ -1128,7 +1119,8 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
 
             try:
                 with httpx.stream(
-                    "POST", url,
+                    "POST",
+                    url,
                     json=payload,
                     headers={"Content-Type": "application/json"},
                     timeout=120.0,
@@ -1137,7 +1129,7 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
                         if line.startswith("data: "):
                             data_str = line[6:]
                             if data_str.strip() == "[DONE]":
-                                yield "data: {\"done\": true}\n\n"
+                                yield 'data: {"done": true}\n\n'
                                 return
                             try:
                                 parsed_data = json_mod.loads(data_str)
@@ -1151,12 +1143,10 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
                                     yield f"data: {out}\n\n"
                             except (ValueError, IndexError, KeyError):
                                 pass
-                yield "data: {\"done\": true}\n\n"
+                yield 'data: {"done": true}\n\n'
             except Exception as exc:
                 logger.warning("Chat proxy error: %s", exc)
-                err_msg = json_mod.dumps(
-                    {"error": "Connection failed"}
-                )
+                err_msg = json_mod.dumps({"error": "Connection failed"})
                 yield f"data: {err_msg}\n\n"
 
         return StreamingResponse(

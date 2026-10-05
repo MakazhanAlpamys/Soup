@@ -11,12 +11,7 @@ import torch
 
 from tests.conftest import strip_ansi
 
-MODULE_PATH = (
-    Path(__file__).resolve().parents[1]
-    / "benchmarks"
-    / "harness"
-    / "graddiff.py"
-)
+MODULE_PATH = Path(__file__).resolve().parents[1] / "benchmarks" / "harness" / "graddiff.py"
 HARNESS_DIR = MODULE_PATH.parent
 sys.path.insert(0, str(HARNESS_DIR))
 
@@ -403,6 +398,7 @@ def test_run_measurement_rejects_unpinned_stream(monkeypatch, tmp_path):
     args = make_args(tmp_path)
     (tmp_path / "weights").mkdir()
     import soup_cli.utils.layer_stream_runtime as layer_runtime
+
     monkeypatch.setattr(
         layer_runtime,
         "build_streamed_model",
@@ -431,6 +427,7 @@ def test_run_measurement_rejects_missing_meta_parameters(monkeypatch, tmp_path):
     model = FakeModel()
     model.meta_parameter = SimpleNamespace(is_meta=False)
     import soup_cli.utils.layer_stream_runtime as layer_runtime
+
     monkeypatch.setattr(
         layer_runtime,
         "build_streamed_model",

@@ -133,9 +133,7 @@ class TestLocalRLConfig:
 
 
 class TestInitDb:
-    def test_creates_tables(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_creates_tables(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         import sqlite3
 
         from soup_cli.utils.local_rl import init_local_rl_db
@@ -145,16 +143,12 @@ class TestInitDb:
         init_local_rl_db(db_path)
         assert os.path.exists(db_path)
         with sqlite3.connect(db_path) as conn:
-            rows = conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'"
-            ).fetchall()
+            rows = conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
         names = {r[0] for r in rows}
         assert "interactions" in names
         assert "thumbs" in names
 
-    def test_idempotent(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_idempotent(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from soup_cli.utils.local_rl import init_local_rl_db
 
         monkeypatch.chdir(tmp_path)
@@ -162,9 +156,7 @@ class TestInitDb:
         # Second call must not raise.
         init_local_rl_db("rl.db")
 
-    def test_outside_cwd_rejected(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_outside_cwd_rejected(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from soup_cli.utils.local_rl import init_local_rl_db
 
         outside = tmp_path / "outside"
@@ -177,9 +169,7 @@ class TestInitDb:
 
 
 class TestRecordThumb:
-    def test_happy_up(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_happy_up(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         import sqlite3
 
         from soup_cli.utils.local_rl import init_local_rl_db, record_thumb
@@ -196,32 +186,22 @@ class TestRecordThumb:
             rows = conn.execute("SELECT thumb FROM thumbs").fetchall()
         assert rows == [("up",)]
 
-    def test_happy_down(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_happy_down(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from soup_cli.utils.local_rl import init_local_rl_db, record_thumb
 
         monkeypatch.chdir(tmp_path)
         init_local_rl_db("rl.db")
-        record_thumb(
-            db_path="rl.db", prompt="x", response="y", thumb="down"
-        )
+        record_thumb(db_path="rl.db", prompt="x", response="y", thumb="down")
 
-    def test_invalid_thumb_rejected(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_invalid_thumb_rejected(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from soup_cli.utils.local_rl import init_local_rl_db, record_thumb
 
         monkeypatch.chdir(tmp_path)
         init_local_rl_db("rl.db")
         with pytest.raises(ValueError):
-            record_thumb(
-                db_path="rl.db", prompt="x", response="y", thumb="meh"
-            )
+            record_thumb(db_path="rl.db", prompt="x", response="y", thumb="meh")
 
-    def test_null_byte_rejected(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_null_byte_rejected(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from soup_cli.utils.local_rl import init_local_rl_db, record_thumb
 
         monkeypatch.chdir(tmp_path)
@@ -234,9 +214,7 @@ class TestRecordThumb:
                 thumb="up",
             )
 
-    def test_bool_thumb_rejected(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_bool_thumb_rejected(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from soup_cli.utils.local_rl import init_local_rl_db, record_thumb
 
         monkeypatch.chdir(tmp_path)
@@ -280,9 +258,7 @@ class TestHarvestDpoPairs:
         init_local_rl_db("rl.db")
         assert harvest_dpo_pairs("rl.db") == ()
 
-    def test_pairs_from_thumbs(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_pairs_from_thumbs(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from soup_cli.utils.local_rl import (
             harvest_dpo_pairs,
             init_local_rl_db,
@@ -311,9 +287,7 @@ class TestHarvestDpoPairs:
         assert pair.chosen == "good response"
         assert pair.rejected == "bad response"
 
-    def test_returns_tuple(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_returns_tuple(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from soup_cli.utils.local_rl import (
             harvest_dpo_pairs,
             init_local_rl_db,
@@ -344,9 +318,7 @@ class TestNightlyTrainDeferred:
             db_path="rl.db",
             train_method="dpo",
         )
-        res = run_nightly_train(
-            cfg, min_pairs=1, train_fn=lambda **kw: pytest.fail("no pairs")
-        )
+        res = run_nightly_train(cfg, min_pairs=1, train_fn=lambda **kw: pytest.fail("no pairs"))
         assert res.status == "skipped_insufficient_pairs"
 
     def test_non_config_rejected(self) -> None:
@@ -364,9 +336,7 @@ class TestCli:
         result = runner.invoke(app, ["local-rl", "--help"])
         assert result.exit_code == 0, (result.output, repr(result.exception))
 
-    def test_init_command(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_init_command(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from soup_cli.cli import app
 
         monkeypatch.chdir(tmp_path)
@@ -378,9 +348,7 @@ class TestCli:
         assert result.exit_code == 0, (result.output, repr(result.exception))
         assert (tmp_path / "rl.db").exists()
 
-    def test_record_command(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_record_command(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from soup_cli.cli import app
 
         monkeypatch.chdir(tmp_path)
@@ -403,9 +371,7 @@ class TestCli:
         )
         assert result.exit_code == 0, (result.output, repr(result.exception))
 
-    def test_status_command(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_status_command(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from soup_cli.cli import app
 
         monkeypatch.chdir(tmp_path)
@@ -414,17 +380,13 @@ class TestCli:
         result = runner.invoke(app, ["local-rl", "status", "--db", "rl.db"])
         assert result.exit_code == 0, (result.output, repr(result.exception))
 
-    def test_harvest_command(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_harvest_command(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from soup_cli.cli import app
 
         monkeypatch.chdir(tmp_path)
         runner = CliRunner()
         runner.invoke(app, ["local-rl", "init", "--db", "rl.db"])
-        result = runner.invoke(
-            app, ["local-rl", "harvest", "--db", "rl.db", "--output", "p.jsonl"]
-        )
+        result = runner.invoke(app, ["local-rl", "harvest", "--db", "rl.db", "--output", "p.jsonl"])
         assert result.exit_code == 0, (result.output, repr(result.exception))
 
     def test_train_no_once_renders_scheduler(
@@ -458,12 +420,7 @@ class TestCli:
 
 class TestSourceWiring:
     def test_no_top_level_heavy_imports(self) -> None:
-        path = (
-            Path(__file__).resolve().parent.parent
-            / "src" / "soup_cli"
-            / "utils"
-            / "local_rl.py"
-        )
+        path = Path(__file__).resolve().parent.parent / "src" / "soup_cli" / "utils" / "local_rl.py"
         text = path.read_text(encoding="utf-8")
         for token in (
             "\nimport torch",

@@ -93,9 +93,7 @@ class PretrainTrainerWrapper:
         # for a run that applied no adapter is the docs-contradict-code defect.
         if tcfg.lisa_enabled:
             trainable = sum(
-                param.numel()
-                for param in self.model.parameters()
-                if param.requires_grad
+                param.numel() for param in self.model.parameters() if param.requires_grad
             )
             total = sum(param.numel() for param in self.model.parameters())
             label = "LISA"
@@ -103,10 +101,7 @@ class PretrainTrainerWrapper:
             trainable, total = self.model.get_nb_trainable_parameters()
             label = "LoRA applied"
         pct = 100 * trainable / total
-        console.print(
-            f"[green]{label}:[/] {trainable:,} trainable"
-            f" / {total:,} total ({pct:.2f}%)"
-        )
+        console.print(f"[green]{label}:[/] {trainable:,} trainable / {total:,} total ({pct:.2f}%)")
 
         # --- Batch size ---
         batch_size = tcfg.batch_size
@@ -137,7 +132,10 @@ class PretrainTrainerWrapper:
         # ``+eot`` suffix here but not in ``soup data preprocess``, so the cache
         # was refused by a hash the re-run advised in the error reproduces.
         pretok = _maybe_load_pretokenized(
-            cfg.data, cfg.base, console, getattr(cfg, "training", None),
+            cfg.data,
+            cfg.base,
+            console,
+            getattr(cfg, "training", None),
             task=cfg.task,
         )
         if pretok is not None:
@@ -157,8 +155,7 @@ class PretrainTrainerWrapper:
 
         # --- Calculate warmup steps from ratio ---
         total_steps = (
-            math.ceil(len(train_ds) / batch_size / tcfg.gradient_accumulation_steps)
-            * tcfg.epochs
+            math.ceil(len(train_ds) / batch_size / tcfg.gradient_accumulation_steps) * tcfg.epochs
         )
         warmup_steps = int(total_steps * tcfg.warmup_ratio)
 
@@ -207,8 +204,7 @@ class PretrainTrainerWrapper:
 
             if tcfg.optimizer != "adamw_torch":
                 console.print(
-                    f"[yellow]GaLore overrides optimizer '{tcfg.optimizer}' "
-                    f"with 'galore_adamw'.[/]"
+                    f"[yellow]GaLore overrides optimizer '{tcfg.optimizer}' with 'galore_adamw'.[/]"
                 )
             galore_kwargs = get_galore_optimizer_and_params(
                 galore_rank=tcfg.galore_rank,
@@ -225,7 +221,9 @@ class PretrainTrainerWrapper:
         from soup_cli.trainer.sft import SFTTrainerWrapper
 
         training_args = SFTTrainerWrapper._as_sft_config(
-            training_args, cfg.data.max_length, packing=tcfg.packing,
+            training_args,
+            cfg.data.max_length,
+            packing=tcfg.packing,
         )
 
         # --- Trainer ---
@@ -290,6 +288,7 @@ class PretrainTrainerWrapper:
             attach_plugin_callback,
             attach_relora_callback,
         )
+
         # LoRA+ optimizer (#724) — build and attach now that the trainer exists.
         attach_loraplus_optimizer(self.trainer, tcfg)
         # LoRA-FA optimizer (#725) — build and attach now that the trainer exists.
@@ -323,17 +322,18 @@ class PretrainTrainerWrapper:
         from soup_cli.utils.quant_menu import build_quantization_config_for_loader
 
         quant_config_obj = build_quantization_config_for_loader(
-            tcfg=tcfg, base=cfg.base, console=console,
+            tcfg=tcfg,
+            base=cfg.base,
+            console=console,
         )
 
         console.print(f"[dim]Loading model: {cfg.base}[/]")
         # On CPU, use device_map="cpu" to avoid meta tensors from "auto"
         dev_map = resolve_device_map(self.device)
         model_kwargs = {
-            "trust_remote_code": self._trust_remote_code, "device_map": dev_map,
-            "torch_dtype": resolve_base_load_dtype(
-                self.device, full_finetune=tcfg.lisa_enabled
-            ),
+            "trust_remote_code": self._trust_remote_code,
+            "device_map": dev_map,
+            "torch_dtype": resolve_base_load_dtype(self.device, full_finetune=tcfg.lisa_enabled),
         }
         if quant_config_obj is not None:
             model_kwargs["quantization_config"] = quant_config_obj
@@ -374,9 +374,7 @@ class PretrainTrainerWrapper:
                 self.model.config.router_aux_loss_coef = tcfg.moe_aux_loss_coeff
             if hasattr(self.model.config, "output_router_logits"):
                 self.model.config.output_router_logits = True
-            console.print(
-                f"[green]MoE detected:[/] aux_loss_coeff={tcfg.moe_aux_loss_coeff}"
-            )
+            console.print(f"[green]MoE detected:[/] aux_loss_coeff={tcfg.moe_aux_loss_coeff}")
 
         if tcfg.quantization in ("4bit", "8bit", "mxfp4"):
             from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
@@ -418,9 +416,7 @@ class PretrainTrainerWrapper:
             # #798: the same helper every other trainer uses (see sft.py).
             from soup_cli.utils.moe import resolve_moe_lora_targets
 
-            target_modules = resolve_moe_lora_targets(
-                self.model, tcfg, target_modules, console
-            )
+            target_modules = resolve_moe_lora_targets(self.model, tcfg, target_modules, console)
 
             lora_config = build_lora_config(
                 tcfg.lora,
@@ -433,6 +429,7 @@ class PretrainTrainerWrapper:
                 apply_post_lora_patches,
                 apply_pre_lora_patches,
             )
+
             apply_pre_lora_patches(self.model, cfg.base)
             self.model = get_peft_model(self.model, lora_config)
             apply_post_lora_patches(self.model)
@@ -451,9 +448,14 @@ class PretrainTrainerWrapper:
 
         # v0.33.0 #43 — multi-trainer wiring of v0.28.0 speed/memory features.
         from soup_cli.utils.v028_features import apply_v028_speed_memory
+
         apply_v028_speed_memory(
-            model=self.model, tcfg=tcfg, base_model=cfg.base,
-            console=console, device=self.device, backend=cfg.backend,
+            model=self.model,
+            tcfg=tcfg,
+            base_model=cfg.base,
+            console=console,
+            device=self.device,
+            backend=cfg.backend,
         )
 
     def _setup_unsloth(self, cfg: SoupConfig, tcfg) -> None:
@@ -483,8 +485,7 @@ class PretrainTrainerWrapper:
         """Run continued pre-training and return results summary."""
         if self.trainer is None or self._output_dir is None:
             raise RuntimeError(
-                "PretrainTrainerWrapper.train() called before setup(). "
-                "Call setup(dataset) first."
+                "PretrainTrainerWrapper.train() called before setup(). Call setup(dataset) first."
             )
         start = time.time()
 
@@ -513,7 +514,8 @@ class PretrainTrainerWrapper:
         from soup_cli.utils.v028_features import activation_offloading_context
 
         with activation_offloading_context(
-            self.config.training, self._output_dir,
+            self.config.training,
+            self._output_dir,
         ):
             align_trainable_dtype_for_fp16(
                 self.trainer.model,

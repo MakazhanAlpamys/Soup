@@ -64,10 +64,7 @@ def parse_sweep_yaml(text: str) -> SweepSpec:
         raise ValueError("sweep yaml must be a mapping at the top level")
     strategy = data.get("strategy", "grid")
     if strategy not in _VALID_STRATEGIES:
-        raise ValueError(
-            f"strategy must be one of {sorted(_VALID_STRATEGIES)}; "
-            f"got {strategy!r}"
-        )
+        raise ValueError(f"strategy must be one of {sorted(_VALID_STRATEGIES)}; got {strategy!r}")
     n_runs = data.get("n_runs", 0)
     if isinstance(n_runs, bool) or not isinstance(n_runs, int):
         raise TypeError("n_runs must be int")
@@ -89,9 +86,7 @@ def parse_sweep_yaml(text: str) -> SweepSpec:
         if not isinstance(raw_values, list):
             raise ValueError(f"params[{key}] must be a list")
         if len(raw_values) > _MAX_VALUES_PER_KEY:
-            raise ValueError(
-                f"params[{key}] exceeds {_MAX_VALUES_PER_KEY} values"
-            )
+            raise ValueError(f"params[{key}] exceeds {_MAX_VALUES_PER_KEY} values")
         if not raw_values:
             raise ValueError(f"params[{key}] must be non-empty")
         for value in raw_values:
@@ -116,9 +111,7 @@ def load_sweep_yaml(path: str) -> SweepSpec:
     if "\x00" in path:
         raise ValueError("path contains NUL byte")
     if not is_under_cwd(path):
-        raise ValueError(
-            f"sweep config is outside cwd: {os.path.basename(path)}"
-        )
+        raise ValueError(f"sweep config is outside cwd: {os.path.basename(path)}")
     real = os.path.realpath(path)
     if not os.path.isfile(real):
         raise FileNotFoundError(f"sweep config not found: {os.path.basename(real)}")

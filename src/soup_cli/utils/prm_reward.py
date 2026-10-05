@@ -253,18 +253,18 @@ class PRMScorer:
         rewards: list[float] = []
         completion_list = list(completions) if completions is not None else []
         if not completion_list:
-             return []
-        config = getattr(self._model,"config",None)
-        max_pos = getattr(config,"max_position_embeddings",_MAX_INPUT_TOKENS)
+            return []
+        config = getattr(self._model, "config", None)
+        max_pos = getattr(config, "max_position_embeddings", _MAX_INPUT_TOKENS)
         cap = _MAX_INPUT_TOKENS
-        if isinstance(max_pos,int)and not isinstance(max_pos,bool):
-            cap = min(max_pos,_MAX_INPUT_TOKENS)
-        all_input_ids: list[list[int]]=[]
-        all_step_positions: list[list[int]]=[]
-        skip_indices: set[int]= set()
+        if isinstance(max_pos, int) and not isinstance(max_pos, bool):
+            cap = min(max_pos, _MAX_INPUT_TOKENS)
+        all_input_ids: list[list[int]] = []
+        all_step_positions: list[list[int]] = []
+        skip_indices: set[int] = set()
 
-        for i,completion in enumerate(completion_list):
-            prompt = prompts[i] if isinstance(prompts,(list, tuple)) and i<len(prompts)else None
+        for i, completion in enumerate(completion_list):
+            prompt = prompts[i] if isinstance(prompts, (list, tuple)) and i < len(prompts) else None
             prompt_text = self._render_prompt(prompt)
             steps = split_steps(self._completion_text(completion))
             if not steps:
@@ -272,21 +272,23 @@ class PRMScorer:
                 all_input_ids.append([])
                 all_step_positions.append([])
                 continue
-            prefix_ids =(
-                self._tokenizer(prompt_text,add_special_tokens=False)["input_ids"]
-                if prompt_text else[])
+            prefix_ids = (
+                self._tokenizer(prompt_text, add_special_tokens=False)["input_ids"]
+                if prompt_text
+                else []
+            )
             input_ids = list(prefix_ids)
-            step_positions: list[int]=[]
+            step_positions: list[int] = []
             for step in steps:
-                step_ids = self._tokenizer(step,add_special_tokens=False)["input_ids"]
+                step_ids = self._tokenizer(step, add_special_tokens=False)["input_ids"]
                 if not step_ids:
                     continue
                 input_ids.extend(step_ids)
-                step_positions.append(len(input_ids)-1)
+                step_positions.append(len(input_ids) - 1)
 
-            if len(input_ids)>cap:
-                input_ids=input_ids[:cap]
-                step_positions = [p for p in step_positions if p<cap]
+            if len(input_ids) > cap:
+                input_ids = input_ids[:cap]
+                step_positions = [p for p in step_positions if p < cap]
 
             if not step_positions:
                 skip_indices.add(i)
@@ -297,16 +299,16 @@ class PRMScorer:
             all_step_positions.append(step_positions)
 
         valid_indices = [i for i in range(len(completion_list)) if i not in skip_indices]
-        rewards = [0.0]*len(completion_list)
+        rewards = [0.0] * len(completion_list)
         if valid_indices:
             valid_ids = [all_input_ids[i] for i in valid_indices]
             max_len = max(len(ids) for ids in valid_ids)
             batch_size = len(valid_ids)
-            padded = torch.zeros(batch_size, max_len, dtype=torch.long,device=self.device)
-            attn_mask = torch.zeros(batch_size,max_len, dtype=torch.long,device=self.device)
-            for b,ids in enumerate(valid_ids):
+            padded = torch.zeros(batch_size, max_len, dtype=torch.long, device=self.device)
+            attn_mask = torch.zeros(batch_size, max_len, dtype=torch.long, device=self.device)
+            for b, ids in enumerate(valid_ids):
                 length = len(ids)
-                padded[b, :length] = torch.tensor(ids,dtype=torch.long,device=self.device)
+                padded[b, :length] = torch.tensor(ids, dtype=torch.long, device=self.device)
                 attn_mask[b, :length] = 1
             with torch.no_grad():
                 outputs = self._model(
@@ -326,6 +328,7 @@ class PRMScorer:
                     per_step = scores.detach().float().cpu().tolist()
                     rewards[orig_idx] = aggregate_step_scores(per_step, self.aggregate)
         return rewards
+
 
 def load_reward_head_weights(prm_path: str) -> dict[str, Any]:
     """Load ``reward_head.{weight,bias}`` tensors from a Soup-trained PRM dir.
@@ -393,8 +396,7 @@ def build_prm_reward_fn(
     if os.path.exists(prm_path):
         if not is_under_cwd(prm_path):
             raise ValueError(
-                "prm_reward path must stay under the current working "
-                f"directory; got {prm_path!r}"
+                f"prm_reward path must stay under the current working directory; got {prm_path!r}"
             )
         prm_path = os.path.realpath(prm_path)
 

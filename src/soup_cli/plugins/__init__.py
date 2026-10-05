@@ -130,11 +130,7 @@ def _read_enabled_state() -> Dict[str, bool]:
             raise ValueError("plugin state file has an unsupported schema")
         clean: Dict[str, bool] = {}
         for name, value in enabled.items():
-            if (
-                isinstance(name, str)
-                and _PLUGIN_NAME_RE.match(name)
-                and isinstance(value, bool)
-            ):
+            if isinstance(name, str) and _PLUGIN_NAME_RE.match(name) and isinstance(value, bool):
                 clean[name] = value
         return clean
     except (OSError, UnicodeError, json.JSONDecodeError, RecursionError, ValueError) as exc:
@@ -180,9 +176,7 @@ def _replace_enabled(name: str, enabled: bool) -> None:
     )
 
 
-def _apply_enabled_state(
-    names: set[str], saved: Mapping[str, bool], *, default: bool
-) -> None:
+def _apply_enabled_state(names: set[str], saved: Mapping[str, bool], *, default: bool) -> None:
     with _LOCK:
         for name in names:
             _replace_enabled(name, saved.get(name, default))
@@ -224,9 +218,7 @@ def _remember_disabled_entry_point(entry_point: Any) -> None:
         _PLUGINS[entry_point.name] = _disabled_entry_point_spec(entry_point)
 
 
-def _load_enabled_entry_point(
-    entry_point: Any, saved: Mapping[str, bool]
-) -> set[str]:
+def _load_enabled_entry_point(entry_point: Any, saved: Mapping[str, bool]) -> set[str]:
     """Import one explicitly enabled entry point and apply its saved state."""
     before = set(list_plugins())
     try:
@@ -239,8 +231,7 @@ def _load_enabled_entry_point(
         registered = set(list_plugins()) - before
         if entry_point.name not in registered:
             raise ValueError(
-                f"entry point {entry_point.name!r} must register a plugin "
-                "with the same name"
+                f"entry point {entry_point.name!r} must register a plugin with the same name"
             )
         _apply_enabled_state(registered, saved, default=True)
         return registered
@@ -255,18 +246,14 @@ def _validate_name(name: str) -> None:
     if not isinstance(name, str):
         raise TypeError("plugin name must be a string")
     if not _PLUGIN_NAME_RE.match(name):
-        raise ValueError(
-            "plugin name must be kebab-case ([a-z0-9][a-z0-9-]{0,39})"
-        )
+        raise ValueError("plugin name must be kebab-case ([a-z0-9][a-z0-9-]{0,39})")
 
 
 def _validate_version(version: str) -> None:
     if not isinstance(version, str):
         raise TypeError("plugin version must be a string")
     if not _VERSION_RE.match(version):
-        raise ValueError(
-            "plugin version must match MAJOR.MINOR.PATCH (semver)"
-        )
+        raise ValueError("plugin version must match MAJOR.MINOR.PATCH (semver)")
 
 
 def _validate_description(description: str) -> None:
@@ -321,27 +308,19 @@ def register_plugin(
     tpls = tuple(templates or ())
     grps = tuple(model_groups or ())
     if len(tpls) > _MAX_TEMPLATES_PER_PLUGIN:
-        raise ValueError(
-            f"templates exceeds {_MAX_TEMPLATES_PER_PLUGIN} entries"
-        )
+        raise ValueError(f"templates exceeds {_MAX_TEMPLATES_PER_PLUGIN} entries")
     if len(grps) > _MAX_MODEL_GROUPS_PER_PLUGIN:
-        raise ValueError(
-            f"model_groups exceeds {_MAX_MODEL_GROUPS_PER_PLUGIN} entries"
-        )
+        raise ValueError(f"model_groups exceeds {_MAX_MODEL_GROUPS_PER_PLUGIN} entries")
     for tpl in tpls:
         if not isinstance(tpl, str) or not tpl or "\x00" in tpl:
             raise ValueError("template name must be non-empty NUL-free str")
         if len(tpl) > _MAX_NAME_ENTRY_LEN:
-            raise ValueError(
-                f"template name exceeds {_MAX_NAME_ENTRY_LEN} chars"
-            )
+            raise ValueError(f"template name exceeds {_MAX_NAME_ENTRY_LEN} chars")
     for grp in grps:
         if not isinstance(grp, str) or not grp or "\x00" in grp:
             raise ValueError("model_group name must be non-empty NUL-free str")
         if len(grp) > _MAX_NAME_ENTRY_LEN:
-            raise ValueError(
-                f"model_group name exceeds {_MAX_NAME_ENTRY_LEN} chars"
-            )
+            raise ValueError(f"model_group name exceeds {_MAX_NAME_ENTRY_LEN} chars")
     if not hooks and not tpls and not grps:
         raise ValueError(
             "plugin must implement at least one hook OR register a template "
@@ -367,9 +346,7 @@ def register_plugin(
                 or existing.model_groups != grps
                 or existing.description != description
             ):
-                raise ValueError(
-                    f"plugin {name!r} already registered with a different spec"
-                )
+                raise ValueError(f"plugin {name!r} already registered with a different spec")
             # Identical re-register: keep enabled state.
             return existing
         _PLUGINS[name] = spec
@@ -416,9 +393,7 @@ def enable_plugin(name: str) -> bool:
                     for registered_name in set(_PLUGINS) - (before - {name}):
                         _PLUGINS.pop(registered_name, None)
                     _PLUGINS[name] = existing
-                raise ValueError(
-                    f"failed to enable plugin {name!r}: {type(exc).__name__}"
-                ) from exc
+                raise ValueError(f"failed to enable plugin {name!r}: {type(exc).__name__}") from exc
             existing = get_plugin(name)
             if existing is None:
                 raise ValueError(f"entry point {name!r} registered no plugin")
@@ -496,9 +471,7 @@ def _load_plugins_once() -> int:
             _apply_enabled_state(set(list_plugins()) - before, saved, default=True)
             count += 1
         except Exception:  # noqa: BLE001 — plugin failure must not crash CLI
-            logger.exception(
-                "Failed to load Soup plugin: %s", module_info.name
-            )
+            logger.exception("Failed to load Soup plugin: %s", module_info.name)
 
     try:
         entry_points = _iter_plugin_entry_points()

@@ -128,9 +128,7 @@ class TestLiveScoresBehaviour:
         assert report.pre.value == 1.0
         assert report.post.value == 0.0
 
-    def test_label_word_with_the_wrong_behaviour_scores_by_behaviour(
-        self, monkeypatch
-    ) -> None:
+    def test_label_word_with_the_wrong_behaviour_scores_by_behaviour(self, monkeypatch) -> None:
         _patch_generators(
             monkeypatch,
             lambda p: "I can't do that, it would not be safe.",

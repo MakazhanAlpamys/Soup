@@ -253,9 +253,7 @@ def doctor(
                 torch_missing = "torch" in missing_pkgs
                 # Single call site, gated on torch itself being missing.
                 tag = (
-                    _torch_cuda_wheel_tag(driver)
-                    if driver is not None and torch_missing
-                    else None
+                    _torch_cuda_wheel_tag(driver) if driver is not None and torch_missing else None
                 )
                 url = f"https://download.pytorch.org/whl/{tag}" if tag else None
                 if all_missing:
@@ -270,9 +268,7 @@ def doctor(
                         )
                         fix_pre.append(f"pip install torch --index-url {url}")
                     else:
-                        issues.append(
-                            'Training stack not installed: pip install "soup-cli[train]"'
-                        )
+                        issues.append('Training stack not installed: pip install "soup-cli[train]"')
                 elif url is not None:
                     issues.append(
                         f"Training stack incomplete, missing: {missing_list}\n"
@@ -288,8 +284,7 @@ def doctor(
                 fix_parts.append('"soup-cli[train]"')
             elif all_missing:
                 issues.append(
-                    f"{extra_name} stack not installed: "
-                    f'pip install "soup-cli[{extra_name}]"'
+                    f'{extra_name} stack not installed: pip install "soup-cli[{extra_name}]"'
                 )
                 fix_parts.append(f'"soup-cli[{extra_name}]"')
             else:
@@ -467,7 +462,7 @@ def _check_mlx():
         console.print(
             Panel(
                 "Status:   [yellow]not installed[/]\n"
-                "Install:  [dim]pip install \"soup-cli\\[mlx]\"[/]",
+                'Install:  [dim]pip install "soup-cli\\[mlx]"[/]',
                 title="MLX",
             )
         )
@@ -512,11 +507,7 @@ def _torch_gpu_arch_supported(torch, major: int, minor: int) -> bool:
                 continue
             if suffixed and sm_target == f"{major}{minor}":
                 return True
-            if (
-                not suffixed
-                and target_major == major
-                and target_minor <= minor
-            ):
+            if not suffixed and target_major == major and target_minor <= minor:
                 return True
         if arch.startswith("compute_"):
             try:
@@ -586,15 +577,13 @@ def _check_gpu():
                 if not torch_arch_supported:
                     advisory = _detect_gpu_arch_mismatch_advisory()
                     arch_warning = (
-                        " [bold red]Torch build does not include this GPU "
-                        "architecture[/]"
+                        " [bold red]Torch build does not include this GPU architecture[/]"
                     )
                     if advisory:
                         arch_warning += f" [dim]{advisory}[/]"
 
                 gpus.append(
-                    f"  GPU {idx}: [bold]{name}[/] "
-                    f"({total_gb:.1f} GB) — {capability}{arch_warning}"
+                    f"  GPU {idx}: [bold]{name}[/] ({total_gb:.1f} GB) — {capability}{arch_warning}"
                 )
             gpu_info = "\n".join(gpus)
             cuda_ver = torch.version.cuda or "N/A"
@@ -668,9 +657,7 @@ _TORCH_CUDA_WHEELS: tuple[tuple[int, int, str], ...] = (
 # PyTorch CUDA indexes that carry a torch release satisfying Soup's
 # ``[train]`` floor (torch>=2.6.0). Keep this table explicit: not every
 # CUDA version reported by a driver has a corresponding PyTorch index.
-_SUPPORTED_TORCH_CUDA_WHEELS = frozenset(
-    {"cu132", "cu130", "cu128", "cu126", "cu124", "cu118"}
-)
+_SUPPORTED_TORCH_CUDA_WHEELS = frozenset({"cu132", "cu130", "cu128", "cu126", "cu124", "cu118"})
 
 
 def _parse_cuda_version(text: str) -> tuple[int, int] | None:
@@ -732,10 +719,7 @@ def _detect_gpu_arch_mismatch_advisory() -> str:
     """Return a CUDA wheel reinstall hint for an unsupported GPU architecture."""
     driver_cuda = _nvidia_smi_cuda_version()
     if driver_cuda is None:
-        return (
-            "Try reinstalling a CUDA-enabled PyTorch build that supports "
-            "your GPU architecture."
-        )
+        return "Try reinstalling a CUDA-enabled PyTorch build that supports your GPU architecture."
 
     wheel = _torch_cuda_wheel_tag(driver_cuda)
     if wheel is None:
@@ -811,16 +795,14 @@ def _detect_gpu_hw_without_torch_cuda() -> str:
     index_url = f"https://download.pytorch.org/whl/{wheel}"
 
     if torch_cuda_version:
-        build_status = (
-            f"torch CUDA build ({torch_cuda_version}) could not initialise"
-        )
+        build_status = f"torch CUDA build ({torch_cuda_version}) could not initialise"
     else:
         build_status = "torch is the CPU build"
 
     return (
         f"GPU hardware present ({gpu_label}) but {build_status} "
         f"(torch {torch_version}). To enable your GPU: "
-        f"`pip install --force-reinstall \"torch>=2.6.0\" "
+        f'`pip install --force-reinstall "torch>=2.6.0" '
         f"--index-url {index_url}`"
         f"{windows_note}"
     )

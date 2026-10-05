@@ -29,9 +29,13 @@ def _load(device, *, is_adapter=False, kv_cache_dtype=None):
 
     tokenizer = MagicMock()
     tokenizer.pad_token = "<pad>"
-    with patch("transformers.AutoTokenizer.from_pretrained", return_value=tokenizer), patch(
-        "transformers.AutoModelForCausalLM.from_pretrained", return_value=MagicMock()
-    ) as load, patch("peft.PeftModel.from_pretrained", return_value=MagicMock()):
+    with (
+        patch("transformers.AutoTokenizer.from_pretrained", return_value=tokenizer),
+        patch(
+            "transformers.AutoModelForCausalLM.from_pretrained", return_value=MagicMock()
+        ) as load,
+        patch("peft.PeftModel.from_pretrained", return_value=MagicMock()),
+    ):
         _load_model(
             model_path="some-org/some-model",
             base_model="some-org/base-model" if is_adapter else None,
@@ -137,9 +141,11 @@ def test_vllm_backend_still_reaches_its_server_without_a_device_argument(tmp_pat
     pytest.importorskip("uvicorn")
     from soup_cli.cli import app
 
-    with patch("soup_cli.utils.vllm.is_vllm_available", return_value=True), patch(
-        "soup_cli.commands.serve._serve_vllm", return_value=MagicMock()
-    ) as serve_vllm, patch("uvicorn.run"):
+    with (
+        patch("soup_cli.utils.vllm.is_vllm_available", return_value=True),
+        patch("soup_cli.commands.serve._serve_vllm", return_value=MagicMock()) as serve_vllm,
+        patch("uvicorn.run"),
+    ):
         result = runner.invoke(
             app, ["serve", "--model", str(tmp_path), "--backend", "vllm", "--device", "cuda"]
         )
@@ -159,7 +165,8 @@ def test_the_draft_model_is_placed_like_the_main_model(device):
         _load_draft_model("some-org/draft", device)
     draft = load.call_args.kwargs
     assert (draft["device_map"], draft["torch_dtype"]) == (
-        main["device_map"], main["torch_dtype"],
+        main["device_map"],
+        main["torch_dtype"],
     )
 
 
@@ -174,13 +181,13 @@ def test_cli_refuses_an_unknown_device_on_every_backend(tmp_path, backend):
     pytest.importorskip("uvicorn")
     from soup_cli.cli import app
 
-    with patch("soup_cli.utils.vllm.is_vllm_available", return_value=True), patch(
-        "soup_cli.utils.sglang.check_sglang_available", return_value=True
-    ), patch(
-        "soup_cli.commands.serve._serve_vllm", return_value=MagicMock()
-    ) as serve_vllm, patch(
-        "soup_cli.commands.serve._serve_sglang", return_value=MagicMock()
-    ) as serve_sglang, patch("uvicorn.run") as run:
+    with (
+        patch("soup_cli.utils.vllm.is_vllm_available", return_value=True),
+        patch("soup_cli.utils.sglang.check_sglang_available", return_value=True),
+        patch("soup_cli.commands.serve._serve_vllm", return_value=MagicMock()) as serve_vllm,
+        patch("soup_cli.commands.serve._serve_sglang", return_value=MagicMock()) as serve_sglang,
+        patch("uvicorn.run") as run,
+    ):
         result = runner.invoke(
             app, ["serve", "--model", str(tmp_path), "--backend", backend, "--device", "tpu"]
         )

@@ -126,9 +126,7 @@ class TestTheLoader:
         assert printed.getvalue().count("a.") == 2
 
     def test_other_warnings_pass_through_untouched(self, monkeypatch, printed):
-        monkeypatch.setattr(
-            loader, "SoupConfig", self._fake_config((UserWarning, "not ours"))
-        )
+        monkeypatch.setattr(loader, "SoupConfig", self._fake_config((UserWarning, "not ours")))
         with pytest.warns(UserWarning, match="not ours"):
             loader.load_config_from_string("base: m\n")
         assert "not ours" not in printed.getvalue()

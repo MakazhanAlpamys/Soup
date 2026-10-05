@@ -95,9 +95,7 @@ def write_report(report: FailureReport, path: str) -> str:
     parent = os.path.dirname(os.path.realpath(path)) or "."
     if not os.path.isdir(parent):
         os.makedirs(parent, exist_ok=True)
-    fd, tmp_path = tempfile.mkstemp(
-        prefix=".diagnose-", suffix=".tmp", dir=parent
-    )
+    fd, tmp_path = tempfile.mkstemp(prefix=".diagnose-", suffix=".tmp", dir=parent)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             json.dump(report.to_dict(), handle, allow_nan=False, indent=2)

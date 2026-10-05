@@ -99,9 +99,7 @@ def test_parse_powermetrics_rejects_invalid_idle_ratio(bad_ratio):
 
 @pytest.mark.parametrize("bad_power", [-1, True, math.nan, math.inf, "watts"])
 def test_parse_powermetrics_rejects_invalid_power(bad_power):
-    sample = parse_powermetrics_plist(
-        _plist_sample(gpu_power_mw=bad_power, gpu_energy_mj=None)
-    )[0]
+    sample = parse_powermetrics_plist(_plist_sample(gpu_power_mw=bad_power, gpu_energy_mj=None))[0]
     assert sample.power_w is None
 
 

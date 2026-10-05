@@ -114,12 +114,14 @@ def test_late_failure_resumes_without_replaying_completed_prefix(tmp_path, monke
     assert manifest["schema"] == "soup.best_of_n.manifest.v1"
     assert manifest["sft"]["rows"] == 3
     assert manifest["dpo"]["rows"] == 3
-    assert manifest["sft"]["sha256"] == hashlib.sha256(
-        (tmp_path / "sft.jsonl").read_bytes()
-    ).hexdigest()
-    assert manifest["dpo"]["sha256"] == hashlib.sha256(
-        (tmp_path / "dpo.jsonl").read_bytes()
-    ).hexdigest()
+    assert (
+        manifest["sft"]["sha256"]
+        == hashlib.sha256((tmp_path / "sft.jsonl").read_bytes()).hexdigest()
+    )
+    assert (
+        manifest["dpo"]["sha256"]
+        == hashlib.sha256((tmp_path / "dpo.jsonl").read_bytes()).hexdigest()
+    )
 
     stable_sft = (tmp_path / "sft.jsonl").read_bytes()
     stable_dpo = (tmp_path / "dpo.jsonl").read_bytes()
@@ -134,9 +136,7 @@ def test_late_failure_resumes_without_replaying_completed_prefix(tmp_path, monke
 
 
 @pytest.mark.parametrize("failure_stage", ["sampler", "judge"])
-def test_late_value_error_reports_checkpoint_recovery(
-    tmp_path, monkeypatch, failure_stage
-):
+def test_late_value_error_reports_checkpoint_recovery(tmp_path, monkeypatch, failure_stage):
     from soup_cli.commands.data import app
 
     monkeypatch.chdir(tmp_path)
@@ -192,9 +192,7 @@ def test_resume_rejects_changed_run_before_sampling(tmp_path, monkeypatch):
     monkeypatch.setattr(
         "soup_cli.eval.judge.JudgeEvaluator",
         lambda **_kwargs: SimpleNamespace(
-            evaluate=lambda _prompt, response: SimpleNamespace(
-                weighted_score=float(len(response))
-            )
+            evaluate=lambda _prompt, response: SimpleNamespace(weighted_score=float(len(response)))
         ),
     )
 
@@ -209,9 +207,7 @@ def test_resume_rejects_changed_run_before_sampling(tmp_path, monkeypatch):
     assert generate_calls == []
 
 
-def test_resume_rejects_changed_local_model_revision_before_loading(
-    tmp_path, monkeypatch
-):
+def test_resume_rejects_changed_local_model_revision_before_loading(tmp_path, monkeypatch):
     from soup_cli.commands.data import app
 
     monkeypatch.chdir(tmp_path)
@@ -219,9 +215,7 @@ def test_resume_rejects_changed_local_model_revision_before_loading(
     load_calls = []
     monkeypatch.setattr(
         "soup_cli.commands.data._load_bon_model",
-        lambda *args, **kwargs: (
-            load_calls.append((args, kwargs)) or (object(), object())
-        ),
+        lambda *args, **kwargs: load_calls.append((args, kwargs)) or (object(), object()),
     )
     monkeypatch.setattr(
         "soup_cli.utils.trust_remote.model_requires_trust_remote_code",
@@ -234,9 +228,7 @@ def test_resume_rejects_changed_local_model_revision_before_loading(
     monkeypatch.setattr(
         "soup_cli.eval.judge.JudgeEvaluator",
         lambda **_kwargs: SimpleNamespace(
-            evaluate=lambda _prompt, response: SimpleNamespace(
-                weighted_score=float(len(response))
-            )
+            evaluate=lambda _prompt, response: SimpleNamespace(weighted_score=float(len(response)))
         ),
     )
 
@@ -260,9 +252,7 @@ def test_final_datasets_use_exact_utf8_bytes_for_manifest_hashes(tmp_path, monke
     from soup_cli.utils.paths import atomic_write_text as real_text_write
 
     monkeypatch.chdir(tmp_path)
-    (tmp_path / "prompts.jsonl").write_text(
-        '{"prompt":"one"}\n', encoding="utf-8"
-    )
+    (tmp_path / "prompts.jsonl").write_text('{"prompt":"one"}\n', encoding="utf-8")
     monkeypatch.setattr(
         "soup_cli.utils.magpie.make_magpie_generate_fn",
         lambda *_args, **_kwargs: lambda _prompt: "candidate",
@@ -270,9 +260,7 @@ def test_final_datasets_use_exact_utf8_bytes_for_manifest_hashes(tmp_path, monke
     monkeypatch.setattr(
         "soup_cli.eval.judge.JudgeEvaluator",
         lambda **_kwargs: SimpleNamespace(
-            evaluate=lambda _prompt, response: SimpleNamespace(
-                weighted_score=float(len(response))
-            )
+            evaluate=lambda _prompt, response: SimpleNamespace(weighted_score=float(len(response)))
         ),
     )
 
@@ -281,18 +269,18 @@ def test_final_datasets_use_exact_utf8_bytes_for_manifest_hashes(tmp_path, monke
             raise AssertionError("dataset JSONL must use exact UTF-8 byte writes")
         return real_text_write(text, path, field=field)
 
-    monkeypatch.setattr(
-        "soup_cli.utils.paths.atomic_write_text", reject_dataset_text_writes
-    )
+    monkeypatch.setattr("soup_cli.utils.paths.atomic_write_text", reject_dataset_text_writes)
     result = CliRunner().invoke(app, _args(tmp_path))
     assert result.exit_code == 0, (result.output, repr(result.exception))
     manifest = json.loads((tmp_path / "sft.jsonl.manifest.json").read_text())
-    assert manifest["sft"]["sha256"] == hashlib.sha256(
-        (tmp_path / "sft.jsonl").read_bytes()
-    ).hexdigest()
-    assert manifest["dpo"]["sha256"] == hashlib.sha256(
-        (tmp_path / "dpo.jsonl").read_bytes()
-    ).hexdigest()
+    assert (
+        manifest["sft"]["sha256"]
+        == hashlib.sha256((tmp_path / "sft.jsonl").read_bytes()).hexdigest()
+    )
+    assert (
+        manifest["dpo"]["sha256"]
+        == hashlib.sha256((tmp_path / "dpo.jsonl").read_bytes()).hexdigest()
+    )
 
 
 @pytest.mark.parametrize("pre_existing", [False, True])
@@ -305,9 +293,7 @@ def test_final_publication_rolls_back_as_a_group_on_member_failure(
     from soup_cli.utils.paths import atomic_write_bytes as real_bytes_write
 
     monkeypatch.chdir(tmp_path)
-    (tmp_path / "prompts.jsonl").write_text(
-        '{"prompt":"one"}\n', encoding="utf-8"
-    )
+    (tmp_path / "prompts.jsonl").write_text('{"prompt":"one"}\n', encoding="utf-8")
     monkeypatch.setattr(
         "soup_cli.utils.magpie.make_magpie_generate_fn",
         lambda *_args, **_kwargs: lambda _prompt: "candidate",
@@ -315,9 +301,7 @@ def test_final_publication_rolls_back_as_a_group_on_member_failure(
     monkeypatch.setattr(
         "soup_cli.eval.judge.JudgeEvaluator",
         lambda **_kwargs: SimpleNamespace(
-            evaluate=lambda _prompt, response: SimpleNamespace(
-                weighted_score=float(len(response))
-            )
+            evaluate=lambda _prompt, response: SimpleNamespace(weighted_score=float(len(response)))
         ),
     )
 
@@ -333,17 +317,11 @@ def test_final_publication_rolls_back_as_a_group_on_member_failure(
     def fail_group_write(data, path, *, prefix=".soup.", suffix=".tmp", field):
         if field == failure_field:
             if failure_after_replace:
-                real_bytes_write(
-                    data, path, prefix=prefix, suffix=suffix, field=field
-                )
+                real_bytes_write(data, path, prefix=prefix, suffix=suffix, field=field)
             raise OSError("simulated grouped publication failure")
-        return real_bytes_write(
-            data, path, prefix=prefix, suffix=suffix, field=field
-        )
+        return real_bytes_write(data, path, prefix=prefix, suffix=suffix, field=field)
 
-    monkeypatch.setattr(
-        "soup_cli.utils.paths.atomic_write_bytes", fail_group_write
-    )
+    monkeypatch.setattr("soup_cli.utils.paths.atomic_write_bytes", fail_group_write)
     result = CliRunner().invoke(app, _args(tmp_path))
 
     assert result.exit_code == 1, (result.output, repr(result.exception))
@@ -425,9 +403,7 @@ def test_resume_discards_only_an_uncommitted_final_fragment(tmp_path, monkeypatc
     monkeypatch.chdir(tmp_path)
     checkpoint = tmp_path / "checkpoint.jsonl"
     initialise_checkpoint(str(checkpoint), digest="d", total=2)
-    append_checkpoint(
-        str(checkpoint), index=0, sft={"messages": []}, dpo=None
-    )
+    append_checkpoint(str(checkpoint), index=0, sft={"messages": []}, dpo=None)
     with checkpoint.open("ab") as handle:
         handle.write(b'{"index":1,"sft":')
 
@@ -438,9 +414,7 @@ def test_resume_discards_only_an_uncommitted_final_fragment(tmp_path, monkeypatc
     assert b'"index":1' not in checkpoint.read_bytes()
 
 
-def test_local_sampling_matches_uninterrupted_run_across_prompt_indices(
-    tmp_path, monkeypatch
-):
+def test_local_sampling_matches_uninterrupted_run_across_prompt_indices(tmp_path, monkeypatch):
     import torch
 
     from soup_cli.commands.data import app
@@ -483,12 +457,8 @@ def test_local_sampling_matches_uninterrupted_run_across_prompt_indices(
                 raise RuntimeError("simulated interruption")
             return SimpleNamespace(weighted_score=float(response))
 
-    monkeypatch.setattr(
-        "soup_cli.utils.best_of_n.sample_candidates", sample_candidates
-    )
-    monkeypatch.setattr(
-        "soup_cli.eval.judge.JudgeEvaluator", lambda **_kwargs: Judge()
-    )
+    monkeypatch.setattr("soup_cli.utils.best_of_n.sample_candidates", sample_candidates)
+    monkeypatch.setattr("soup_cli.eval.judge.JudgeEvaluator", lambda **_kwargs: Judge())
 
     uninterrupted_args = _local_args(
         uninterrupted_dir,
@@ -514,17 +484,11 @@ def test_local_sampling_matches_uninterrupted_run_across_prompt_indices(
     resumed = CliRunner().invoke(app, [*resumed_args, "--resume"])
 
     assert resumed.exit_code == 0, (resumed.output, repr(resumed.exception))
-    uninterrupted_final = {
-        prompt: calls[-1] for prompt, calls in sampled["uninterrupted"].items()
-    }
-    resumed_final = {
-        prompt: calls[-1] for prompt, calls in sampled["resumed"].items()
-    }
+    uninterrupted_final = {prompt: calls[-1] for prompt, calls in sampled["uninterrupted"].items()}
+    resumed_final = {prompt: calls[-1] for prompt, calls in sampled["resumed"].items()}
     assert resumed_final == uninterrupted_final
     assert len({tuple(candidates) for candidates in uninterrupted_final.values()}) == 3
     assert [len(sampled["resumed"][prompt]) for prompt in prompts] == [1, 2, 1]
 
     for artifact in ("sft.jsonl", "dpo.jsonl", "sft.jsonl.manifest.json"):
-        assert (resumed_dir / artifact).read_bytes() == (
-            uninterrupted_dir / artifact
-        ).read_bytes()
+        assert (resumed_dir / artifact).read_bytes() == (uninterrupted_dir / artifact).read_bytes()

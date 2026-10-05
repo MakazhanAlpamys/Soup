@@ -22,17 +22,35 @@ from an in-memory vocab, so ``apply_chat_template`` is the genuine Jinja
 renderer and the BOS/EOS come from a genuine ``tokenizers`` post-processor.
 """
 
-
 import pytest
 
 _SPECIALS = [
-    "<unk>", "<s>", "</s>",
-    "<|system|>", "<|user|>", "<|assistant|>", "<|end|>",
-    "<|im_start|>", "<|im_end|>",
+    "<unk>",
+    "<s>",
+    "</s>",
+    "<|system|>",
+    "<|user|>",
+    "<|assistant|>",
+    "<|end|>",
+    "<|im_start|>",
+    "<|im_end|>",
 ]
 _WORDS = [
-    "You", "are", "terse", ".", "What", "is", "the", "capital", "of", "France",
-    "?", "Paris", "system", "user", "assistant",
+    "You",
+    "are",
+    "terse",
+    ".",
+    "What",
+    "is",
+    "the",
+    "capital",
+    "of",
+    "France",
+    "?",
+    "Paris",
+    "system",
+    "user",
+    "assistant",
 ]
 _BOS_ID = _SPECIALS.index("<s>")
 _EOS_ID = _SPECIALS.index("</s>")
@@ -102,9 +120,7 @@ def _trl_main_lm_ids(tok, messages):
     ``add_eos`` and under-counts the trained EOS — the mistake the first #788
     attempt made and the reason these tests are baselined against this instead.
     """
-    text = tok.apply_chat_template(
-        messages, tokenize=False, add_generation_prompt=False
-    )
+    text = tok.apply_chat_template(messages, tokenize=False, add_generation_prompt=False)
     if not text.endswith(tok.eos_token):
         text = text + tok.eos_token
     return tok(text)["input_ids"]
@@ -137,8 +153,11 @@ class TestLegacyTextPathBOS:
         assert ids.count(_EOS_ID) == main_ids.count(_EOS_ID) == 1
 
         inference = tok.apply_chat_template(
-            _MESSAGES, tokenize=True, add_generation_prompt=False,
-            add_special_tokens=False, return_dict=True,
+            _MESSAGES,
+            tokenize=True,
+            add_generation_prompt=False,
+            add_special_tokens=False,
+            return_dict=True,
         )["input_ids"]
         assert ids == list(inference) + [_EOS_ID]
         # Full-sequence training: every token is a target, none masked.
@@ -149,9 +168,7 @@ class TestLegacyTextPathBOS:
         """Document the defect: the pre-fix mechanism (render to text, then let
         the tokenizer add its defaults) yields two BOS on the same tokenizer."""
         tok = _tokenizer(_BOS_TEMPLATE, post_processor="bos")
-        text = tok.apply_chat_template(
-            _MESSAGES, tokenize=False, add_generation_prompt=False
-        )
+        text = tok.apply_chat_template(_MESSAGES, tokenize=False, add_generation_prompt=False)
         pre_fix_ids = tok(text=text)["input_ids"]  # TRL's default add_special_tokens=True
         assert pre_fix_ids.count(_BOS_ID) == 2
 
@@ -223,8 +240,11 @@ class TestTrainingEOSPreserved:
 
         assert ids[-1] == _EOS_ID, "row ends on the template's stop token"
         inference = tok.apply_chat_template(
-            _MESSAGES, tokenize=True, add_generation_prompt=False,
-            add_special_tokens=False, return_dict=True,
+            _MESSAGES,
+            tokenize=True,
+            add_generation_prompt=False,
+            add_special_tokens=False,
+            return_dict=True,
         )["input_ids"]
         assert ids == list(inference), "nothing re-appended; already ends on EOS"
         assert ids.count(_BOS_ID) == 1
@@ -288,14 +308,10 @@ class TestPreprocessCachePathEOS:
             encoding="utf-8",
         )
         (tmp_path / "d.jsonl").write_text("{}\n", encoding="utf-8")
-        monkeypatch.setattr(
-            transformers.AutoTokenizer, "from_pretrained", lambda *a, **k: tok
-        )
+        monkeypatch.setattr(transformers.AutoTokenizer, "from_pretrained", lambda *a, **k: tok)
         # Control the rows directly so the assertion is about tokenization, not
         # format conversion. preprocess_dataset local-imports this name.
-        monkeypatch.setattr(
-            "soup_cli.data.loader.load_dataset", lambda *a, **k: {"train": rows}
-        )
+        monkeypatch.setattr("soup_cli.data.loader.load_dataset", lambda *a, **k: {"train": rows})
         result = CliRunner().invoke(app, ["data", "preprocess", "soup.yaml", "--yes"])
         assert result.exit_code == 0, result.output
         cache_dirs = [p for p in (tmp_path / ".soup-tokenized").iterdir() if p.is_dir()]
@@ -309,12 +325,10 @@ class TestPreprocessCachePathEOS:
         TRL ``add_eos`` on this path). HF truncation reserves room for the
         post-processor's specials, so a truncated ``main`` row still ends on EOS."""
         messages = messages if messages is not None else _MESSAGES
-        text = tok.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=False
-        )
-        return tok(
-            text, max_length=max_length, truncation=True, add_special_tokens=True
-        )["input_ids"]
+        text = tok.apply_chat_template(messages, tokenize=False, add_generation_prompt=False)
+        return tok(text, max_length=max_length, truncation=True, add_special_tokens=True)[
+            "input_ids"
+        ]
 
     def test_cache_eos_matches_main_when_post_processor_appends(self, tmp_path, monkeypatch):
         """bos_eos post-processor: ``main``'s preprocess kept one EOS (from the

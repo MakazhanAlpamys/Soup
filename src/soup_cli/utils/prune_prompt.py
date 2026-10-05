@@ -59,8 +59,7 @@ class PrunePromptReport:
             raise ValueError("rows_pruned must be >= 0")
         if self.rows_pruned > self.rows_total:
             raise ValueError(
-                f"rows_pruned ({self.rows_pruned}) cannot exceed rows_total "
-                f"({self.rows_total})"
+                f"rows_pruned ({self.rows_pruned}) cannot exceed rows_total ({self.rows_total})"
             )
 
 
@@ -73,16 +72,12 @@ def validate_min_frequency(value: object) -> float:
     if isinstance(value, bool):
         raise TypeError("min_frequency must be a number, not bool")
     if not isinstance(value, (int, float)):
-        raise TypeError(
-            f"min_frequency must be a number, got {type(value).__name__}"
-        )
+        raise TypeError(f"min_frequency must be a number, got {type(value).__name__}")
     f_value = float(value)
     if not math.isfinite(f_value):
         raise ValueError("min_frequency must be finite (no NaN / Inf)")
     if not (0.0 <= f_value <= 1.0):
-        raise ValueError(
-            f"min_frequency must be in [0.0, 1.0], got {f_value}"
-        )
+        raise ValueError(f"min_frequency must be in [0.0, 1.0], got {f_value}")
     return f_value
 
 
@@ -102,16 +97,12 @@ def detect_common_prefix(
     # Sequence input check — strings ARE sequences, reject them explicitly
     # otherwise iteration yields characters and not rows.
     if isinstance(rows, str) or not hasattr(rows, "__iter__"):
-        raise TypeError(
-            f"rows must be an iterable of strings, got {type(rows).__name__}"
-        )
+        raise TypeError(f"rows must be an iterable of strings, got {type(rows).__name__}")
 
     materialised: list[str] = []
     for idx, row in enumerate(rows):
         if not isinstance(row, str):
-            raise TypeError(
-                f"rows[{idx}] must be str, got {type(row).__name__}"
-            )
+            raise TypeError(f"rows[{idx}] must be str, got {type(row).__name__}")
         # Per-row length cap (DoS defence).
         if len(row) > _MAX_ROW_CHARS:
             materialised.append(row[:_MAX_ROW_CHARS])
@@ -179,16 +170,14 @@ def detect_common_prefix_tokens(
     threshold = validate_min_frequency(min_frequency)
     if isinstance(token_rows, (str, bytes)) or not hasattr(token_rows, "__iter__"):
         raise TypeError(
-            f"token_rows must be an iterable of int sequences, "
-            f"got {type(token_rows).__name__}"
+            f"token_rows must be an iterable of int sequences, got {type(token_rows).__name__}"
         )
 
     materialised: List[List[int]] = []
     for idx, row in enumerate(token_rows):
         if isinstance(row, (str, bytes)) or not hasattr(row, "__iter__"):
             raise TypeError(
-                f"token_rows[{idx}] must be a sequence of ints, "
-                f"got {type(row).__name__}"
+                f"token_rows[{idx}] must be a sequence of ints, got {type(row).__name__}"
             )
         materialised.append(list(row)[:_MAX_TOKENS_PER_ROW])
         if len(materialised) >= _MAX_SCAN_ROWS:
@@ -234,9 +223,7 @@ def _resolve_tokenizer(tokenizer: Union[str, Any]) -> Any:
     if hasattr(tokenizer, "encode") and hasattr(tokenizer, "decode"):
         return tokenizer
     if not isinstance(tokenizer, str):
-        raise TypeError(
-            "tokenizer must be a model id / path string or a tokenizer object"
-        )
+        raise TypeError("tokenizer must be a model id / path string or a tokenizer object")
     if not tokenizer:
         raise ValueError("tokenizer name must be non-empty")
     try:
@@ -244,7 +231,7 @@ def _resolve_tokenizer(tokenizer: Union[str, Any]) -> Any:
     except ImportError as exc:
         raise ValueError(
             "tokenizer-aware prune-prompt needs transformers — "
-            "install with: pip install \"soup-cli[train]\""
+            'install with: pip install "soup-cli[train]"'
         ) from exc
     try:
         return AutoTokenizer.from_pretrained(tokenizer)
@@ -288,13 +275,9 @@ def prune_traces(
     threshold = validate_min_frequency(min_frequency)
 
     if not isinstance(input_path, str):
-        raise TypeError(
-            f"input_path must be str, got {type(input_path).__name__}"
-        )
+        raise TypeError(f"input_path must be str, got {type(input_path).__name__}")
     if not isinstance(output_path, str):
-        raise TypeError(
-            f"output_path must be str, got {type(output_path).__name__}"
-        )
+        raise TypeError(f"output_path must be str, got {type(output_path).__name__}")
     if not input_path or not output_path:
         raise ValueError("input_path and output_path must be non-empty")
     if "\x00" in input_path or "\x00" in output_path:
@@ -346,12 +329,8 @@ def prune_traces(
         )
 
     if tok is None:
-        return _prune_char_level(
-            input_path, output_path, prompts, rows_total, threshold
-        )
-    return _prune_token_level(
-        tok, input_path, output_path, prompts, rows_total, threshold
-    )
+        return _prune_char_level(input_path, output_path, prompts, rows_total, threshold)
+    return _prune_token_level(tok, input_path, output_path, prompts, rows_total, threshold)
 
 
 def _prune_char_level(
@@ -364,8 +343,10 @@ def _prune_char_level(
     """Character-level prefix strip (the v0.63.0 default behaviour)."""
     prefix = detect_common_prefix(prompts, min_frequency=threshold)
     rows_pruned = 0
-    with open(input_path, encoding="utf-8") as fh_in, \
-            open(output_path, "w", encoding="utf-8") as fh_out:
+    with (
+        open(input_path, encoding="utf-8") as fh_in,
+        open(output_path, "w", encoding="utf-8") as fh_out,
+    ):
         for line in fh_in:
             line = line.strip()
             if not line:
@@ -377,7 +358,7 @@ def _prune_char_level(
             if not isinstance(row, dict):
                 continue
             if prefix and isinstance(row.get("prompt"), str) and row["prompt"].startswith(prefix):
-                row["prompt"] = row["prompt"][len(prefix):]
+                row["prompt"] = row["prompt"][len(prefix) :]
                 rows_pruned += 1
             fh_out.write(json.dumps(row, ensure_ascii=False) + "\n")
     return PrunePromptReport(
@@ -408,8 +389,10 @@ def _prune_token_level(
     plen = len(prefix_ids)
 
     rows_pruned = 0
-    with open(input_path, encoding="utf-8") as fh_in, \
-            open(output_path, "w", encoding="utf-8") as fh_out:
+    with (
+        open(input_path, encoding="utf-8") as fh_in,
+        open(output_path, "w", encoding="utf-8") as fh_out,
+    ):
         for line in fh_in:
             line = line.strip()
             if not line:

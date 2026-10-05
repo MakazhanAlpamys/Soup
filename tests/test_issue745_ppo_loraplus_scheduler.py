@@ -54,8 +54,12 @@ def _tiny_peft_model(seed: int = 0):
 
     torch.manual_seed(seed)
     cfg = AutoConfig.for_model(
-        "llama", hidden_size=32, intermediate_size=64, num_hidden_layers=2,
-        num_attention_heads=4, vocab_size=128,
+        "llama",
+        hidden_size=32,
+        intermediate_size=64,
+        num_hidden_layers=2,
+        num_attention_heads=4,
+        vocab_size=128,
     )
     model = AutoModelForCausalLM.from_config(cfg)
     return get_peft_model(
@@ -67,10 +71,16 @@ def _args(tmp_path):
     from transformers import TrainingArguments
 
     return TrainingArguments(
-        output_dir=str(tmp_path), learning_rate=BASE_LR, optim="adamw_torch",
-        warmup_steps=WARMUP_STEPS, lr_scheduler_type="linear",
-        max_steps=TRAIN_STEPS, per_device_train_batch_size=4,
-        report_to=[], disable_tqdm=True, logging_steps=1000,
+        output_dir=str(tmp_path),
+        learning_rate=BASE_LR,
+        optim="adamw_torch",
+        warmup_steps=WARMUP_STEPS,
+        lr_scheduler_type="linear",
+        max_steps=TRAIN_STEPS,
+        per_device_train_batch_size=4,
+        report_to=[],
+        disable_tqdm=True,
+        logging_steps=1000,
     )
 
 
@@ -122,9 +132,7 @@ def test_injection_binds_the_scheduler_to_the_loraplus_optimizer(tmp_path):
     assert B_GROUP_LR in base_lrs
 
 
-@pytest.mark.filterwarnings(
-    "ignore:Detected call of `lr_scheduler.step\\(\\)`:UserWarning"
-)
+@pytest.mark.filterwarnings("ignore:Detected call of `lr_scheduler.step\\(\\)`:UserWarning")
 def test_warmup_reaches_the_loraplus_b_group(tmp_path):
     """Optimizer identity is not enough — a scheduler bound to the right
     optimizer must actually drive the B group's LR. Linear warmup starts every
@@ -228,9 +236,9 @@ def _fake_ppo_classes(captured, *, accepts_optimizers=True):
                 # its scheduler here, so a later change to the optimizer is
                 # invisible to the schedule.
                 opt = optimizers[0]
-                captured["groups_at_init"] = None if opt is None else [
-                    len(g["params"]) for g in opt.param_groups
-                ]
+                captured["groups_at_init"] = (
+                    None if opt is None else [len(g["params"]) for g in opt.param_groups]
+                )
 
     else:
 
@@ -297,8 +305,14 @@ def _loraplus_shaped_optimizer():
 
 
 def _run_ppo_setup(
-    trainer_cls, config_cls, *, is_experimental, ratio, sentinel,
-    value_model=None, deepspeed_config=None,
+    trainer_cls,
+    config_cls,
+    *,
+    is_experimental,
+    ratio,
+    sentinel,
+    value_model=None,
+    deepspeed_config=None,
 ):
     from unittest.mock import MagicMock
     from unittest.mock import patch as mock_patch
@@ -317,24 +331,26 @@ def _run_ppo_setup(
     # #1391: one rollout batch is batch_size (1 here) x gradient_accumulation_steps (4)
     dataset = {"train": [{"prompt": "What is 2+2?", "answer": "4"}] * 4}
 
-    with mock_patch("soup_cli.trainer.ppo.PPOTrainerWrapper._setup_reward"), \
-         mock_patch("soup_cli.trainer.ppo.PPOTrainerWrapper._setup_transformers"), \
-         mock_patch(
-             "soup_cli.trainer.ppo._import_ppo_classes",
-             return_value=(trainer_cls, config_cls, is_experimental),
-         ), \
-         mock_patch(
-             "soup_cli.trainer.ppo.PPOTrainerWrapper._get_or_create_reward_model",
-             return_value=MagicMock(),
-         ), \
-         mock_patch(
-             "soup_cli.trainer.ppo.PPOTrainerWrapper._create_value_model",
-             return_value=value_model if value_model is not None else _critic(),
-         ), \
-         mock_patch(
-             "soup_cli.utils.peft_wiring.build_loraplus_optimizer",
-             return_value=sentinel,
-         ) as build:
+    with (
+        mock_patch("soup_cli.trainer.ppo.PPOTrainerWrapper._setup_reward"),
+        mock_patch("soup_cli.trainer.ppo.PPOTrainerWrapper._setup_transformers"),
+        mock_patch(
+            "soup_cli.trainer.ppo._import_ppo_classes",
+            return_value=(trainer_cls, config_cls, is_experimental),
+        ),
+        mock_patch(
+            "soup_cli.trainer.ppo.PPOTrainerWrapper._get_or_create_reward_model",
+            return_value=MagicMock(),
+        ),
+        mock_patch(
+            "soup_cli.trainer.ppo.PPOTrainerWrapper._create_value_model",
+            return_value=value_model if value_model is not None else _critic(),
+        ),
+        mock_patch(
+            "soup_cli.utils.peft_wiring.build_loraplus_optimizer",
+            return_value=sentinel,
+        ) as build,
+    ):
         wrapper.model = MagicMock()
         wrapper.model.get_nb_trainable_parameters.return_value = (100, 1000)
         tokenizer = MagicMock()
@@ -362,8 +378,11 @@ def test_ppo_wrapper_hands_the_loraplus_optimizer_to_the_constructor(is_experime
     trainer_cls, config_cls = _fake_ppo_classes(captured)
 
     build = _run_ppo_setup(
-        trainer_cls, config_cls,
-        is_experimental=is_experimental, ratio=RATIO, sentinel=sentinel,
+        trainer_cls,
+        config_cls,
+        is_experimental=is_experimental,
+        ratio=RATIO,
+        sentinel=sentinel,
     )
 
     build.assert_called_once()
@@ -377,8 +396,11 @@ def test_ppo_wrapper_leaves_trl_its_own_optimizer_without_a_ratio(is_experimenta
     trainer_cls, config_cls = _fake_ppo_classes(captured)
 
     build = _run_ppo_setup(
-        trainer_cls, config_cls,
-        is_experimental=is_experimental, ratio=None, sentinel=sentinel,
+        trainer_cls,
+        config_cls,
+        is_experimental=is_experimental,
+        ratio=None,
+        sentinel=sentinel,
     )
 
     build.assert_not_called()
@@ -394,8 +416,11 @@ def test_ppo_wrapper_refuses_a_ratio_when_trl_cannot_take_an_optimizer():
 
     with pytest.raises(RuntimeError, match="optimizers"):
         _run_ppo_setup(
-            trainer_cls, config_cls,
-            is_experimental=True, ratio=RATIO, sentinel=_loraplus_shaped_optimizer(),
+            trainer_cls,
+            config_cls,
+            is_experimental=True,
+            ratio=RATIO,
+            sentinel=_loraplus_shaped_optimizer(),
         )
     assert captured == {}
 
@@ -425,8 +450,11 @@ def test_ppo_wrapper_adds_the_value_model_to_the_loraplus_optimizer(is_experimen
     trainer_cls, config_cls = _fake_ppo_classes(captured)
 
     _run_ppo_setup(
-        trainer_cls, config_cls,
-        is_experimental=is_experimental, ratio=RATIO, sentinel=optimizer,
+        trainer_cls,
+        config_cls,
+        is_experimental=is_experimental,
+        ratio=RATIO,
+        sentinel=optimizer,
         value_model=critic,
     )
 
@@ -456,8 +484,11 @@ def test_the_empty_loraplus_groups_are_pruned_under_deepspeed():
     trainer_cls, config_cls = _fake_ppo_classes(captured)
 
     _run_ppo_setup(
-        trainer_cls, config_cls,
-        is_experimental=True, ratio=RATIO, sentinel=_loraplus_shaped_optimizer(),
+        trainer_cls,
+        config_cls,
+        is_experimental=True,
+        ratio=RATIO,
+        sentinel=_loraplus_shaped_optimizer(),
         deepspeed_config="ds_config.json",
     )
 
@@ -471,8 +502,11 @@ def test_the_loraplus_groups_are_left_alone_without_deepspeed():
     trainer_cls, config_cls = _fake_ppo_classes(captured)
 
     _run_ppo_setup(
-        trainer_cls, config_cls,
-        is_experimental=True, ratio=RATIO, sentinel=_loraplus_shaped_optimizer(),
+        trainer_cls,
+        config_cls,
+        is_experimental=True,
+        ratio=RATIO,
+        sentinel=_loraplus_shaped_optimizer(),
     )
 
     groups = captured["optimizers"][0].param_groups
@@ -498,9 +532,7 @@ def test_a_critic_tensor_the_optimizer_already_holds_is_not_added_twice():
         optimizer, critic, SimpleNamespace(learning_rate=BASE_LR, weight_decay=0.05)
     )
 
-    occurrences = sum(
-        p is shared for group in optimizer.param_groups for p in group["params"]
-    )
+    occurrences = sum(p is shared for group in optimizer.param_groups for p in group["params"])
     assert occurrences == 1
     trainable = sum(1 for p in critic.parameters() if p.requires_grad)
     assert added == trainable - 1

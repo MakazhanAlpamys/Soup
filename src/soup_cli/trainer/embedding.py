@@ -96,10 +96,7 @@ class EmbeddingTrainerWrapper:
             trainable, total = self.model.get_nb_trainable_parameters()
         pct = 100 * trainable / total if total > 0 else 0.0
         label = "Full fine-tuning" if tcfg.lora.r == 0 else "LoRA applied"
-        console.print(
-            f"[green]{label}:[/] {trainable:,} trainable"
-            f" / {total:,} total ({pct:.2f}%)"
-        )
+        console.print(f"[green]{label}:[/] {trainable:,} trainable / {total:,} total ({pct:.2f}%)")
 
         # --- Dataset ---
         train_ds = Dataset.from_list(dataset["train"])
@@ -170,8 +167,7 @@ class EmbeddingTrainerWrapper:
 
         # --- Calculate warmup steps from ratio ---
         total_steps = (
-            math.ceil(len(train_ds) / batch_size / tcfg.gradient_accumulation_steps)
-            * tcfg.epochs
+            math.ceil(len(train_ds) / batch_size / tcfg.gradient_accumulation_steps) * tcfg.epochs
         )
         warmup_steps = int(total_steps * tcfg.warmup_ratio)
 
@@ -247,6 +243,7 @@ class EmbeddingTrainerWrapper:
             attach_plugin_callback,
             attach_relora_callback,
         )
+
         # LoRA+ optimizer (#724) — build and attach now that the trainer exists.
         attach_loraplus_optimizer(self.trainer, tcfg)
         # LoRA-FA optimizer (#725) — build and attach now that the trainer exists.
@@ -276,7 +273,9 @@ class EmbeddingTrainerWrapper:
         from soup_cli.utils.quant_menu import build_quantization_config_for_loader
 
         quant_config_obj = build_quantization_config_for_loader(
-            tcfg=tcfg, base=cfg.base, console=console,
+            tcfg=tcfg,
+            base=cfg.base,
+            console=console,
         )
 
         console.print(f"[dim]Loading model: {cfg.base}[/]")
@@ -284,7 +283,8 @@ class EmbeddingTrainerWrapper:
         from soup_cli.trainer.sft import is_full_finetune
 
         model_kwargs = {
-            "trust_remote_code": self._trust_remote_code, "device_map": dev_map,
+            "trust_remote_code": self._trust_remote_code,
+            "device_map": dev_map,
             "torch_dtype": resolve_base_load_dtype(
                 self.device, full_finetune=is_full_finetune(tcfg)
             ),
@@ -307,9 +307,7 @@ class EmbeddingTrainerWrapper:
 
         if tcfg.lora.r == 0:
             # #700 — Full fine-tuning for embedding models (no PEFT adapter applied).
-            trainable = [
-                param for param in self.model.parameters() if param.requires_grad
-            ]
+            trainable = [param for param in self.model.parameters() if param.requires_grad]
             if not trainable:
                 raise ValueError(
                     "training.lora.r=0 requests full fine-tuning but no "
@@ -333,9 +331,7 @@ class EmbeddingTrainerWrapper:
             # adapter at all, so there is nothing for the flag to select.
             from soup_cli.utils.moe import resolve_moe_lora_targets
 
-            target_modules = resolve_moe_lora_targets(
-                self.model, tcfg, target_modules, console
-            )
+            target_modules = resolve_moe_lora_targets(self.model, tcfg, target_modules, console)
 
             lora_config = build_lora_config(
                 tcfg.lora,
@@ -347,6 +343,7 @@ class EmbeddingTrainerWrapper:
                 apply_post_lora_patches,
                 apply_pre_lora_patches,
             )
+
             apply_pre_lora_patches(self.model, cfg.base)
             self.model = get_peft_model(self.model, lora_config)
             apply_post_lora_patches(self.model)
@@ -354,9 +351,14 @@ class EmbeddingTrainerWrapper:
         # v0.35.0 #60 — multi-trainer wiring of v0.28.0 speed/memory features.
         # Embedding does not run cross-doc-mask paths; that flag no-ops.
         from soup_cli.utils.v028_features import apply_v028_speed_memory
+
         apply_v028_speed_memory(
-            model=self.model, tcfg=tcfg, base_model=cfg.base,
-            console=console, device=self.device, backend=cfg.backend,
+            model=self.model,
+            tcfg=tcfg,
+            base_model=cfg.base,
+            console=console,
+            device=self.device,
+            backend=cfg.backend,
         )
 
     def _setup_unsloth(self, cfg: SoupConfig, tcfg: TrainingConfig) -> None:
@@ -386,8 +388,7 @@ class EmbeddingTrainerWrapper:
         """Run embedding training and return results summary."""
         if self.trainer is None or self._output_dir is None:
             raise RuntimeError(
-                "EmbeddingTrainerWrapper.train() called before setup(). "
-                "Call setup(dataset) first."
+                "EmbeddingTrainerWrapper.train() called before setup(). Call setup(dataset) first."
             )
         start = time.time()
 
@@ -415,7 +416,8 @@ class EmbeddingTrainerWrapper:
         from soup_cli.utils.v028_features import activation_offloading_context
 
         with activation_offloading_context(
-            self.config.training, self._output_dir,
+            self.config.training,
+            self._output_dir,
         ):
             align_trainable_dtype_for_fp16(
                 self.trainer.model,
@@ -507,13 +509,9 @@ class _EmbeddingTrainer:
 
         class _CustomTrainer(Trainer):
             def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
-                return embedding_trainer._compute_embedding_loss(
-                    model, inputs, return_outputs
-                )
+                return embedding_trainer._compute_embedding_loss(model, inputs, return_outputs)
 
-            def prediction_step(
-                self, model, inputs, prediction_loss_only, ignore_keys=None
-            ):
+            def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys=None):
                 # #1223: HF's default runs model(**inputs), and no model
                 # forward accepts the anchor_/positive_/negative_ keys this
                 # collator produces, so the first evaluation crashed. Score the
@@ -544,23 +542,32 @@ class _EmbeddingTrainer:
 
         batch = {}
         anchor_enc = self._tokenizer(
-            anchors, padding=True, truncation=True,
-            max_length=self._max_length, return_tensors="pt",
+            anchors,
+            padding=True,
+            truncation=True,
+            max_length=self._max_length,
+            return_tensors="pt",
         )
         batch["anchor_input_ids"] = anchor_enc["input_ids"]
         batch["anchor_attention_mask"] = anchor_enc["attention_mask"]
 
         pos_enc = self._tokenizer(
-            positives, padding=True, truncation=True,
-            max_length=self._max_length, return_tensors="pt",
+            positives,
+            padding=True,
+            truncation=True,
+            max_length=self._max_length,
+            return_tensors="pt",
         )
         batch["positive_input_ids"] = pos_enc["input_ids"]
         batch["positive_attention_mask"] = pos_enc["attention_mask"]
 
         if negatives:
             neg_enc = self._tokenizer(
-                negatives, padding=True, truncation=True,
-                max_length=self._max_length, return_tensors="pt",
+                negatives,
+                padding=True,
+                truncation=True,
+                max_length=self._max_length,
+                return_tensors="pt",
             )
             batch["negative_input_ids"] = neg_enc["input_ids"]
             batch["negative_attention_mask"] = neg_enc["attention_mask"]
@@ -573,9 +580,8 @@ class _EmbeddingTrainer:
         from torch.nn import functional as nn_func
 
         # Fail fast if contrastive batch is degenerate (< 2) before running model forwards (#1234)
-        if (
-            self._loss_type == "contrastive"
-            or (self._loss_type == "triplet" and "negative_input_ids" not in inputs)
+        if self._loss_type == "contrastive" or (
+            self._loss_type == "triplet" and "negative_input_ids" not in inputs
         ):
             batch_sz = inputs["anchor_input_ids"].size(0)
             if batch_sz < 2:

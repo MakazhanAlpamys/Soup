@@ -140,9 +140,7 @@ class TestRunBisect:
 
         # Eval says: first three checkpoints pass, last three fail.
         # The bisect should find the boundary at index 3 (first failing).
-        plan = BisectPlan(
-            history=("c0", "c1", "c2", "c3", "c4", "c5")
-        )
+        plan = BisectPlan(history=("c0", "c1", "c2", "c3", "c4", "c5"))
 
         def eval_fn(checkpoint: str) -> bool:
             return checkpoint in ("c0", "c1", "c2")
@@ -183,9 +181,7 @@ class TestRunBisect:
     def test_logs_history_of_probes(self) -> None:
         from soup_cli.utils.adapter_bisect import BisectPlan, run_bisect
 
-        plan = BisectPlan(
-            history=("c0", "c1", "c2", "c3", "c4", "c5", "c6", "c7")
-        )
+        plan = BisectPlan(history=("c0", "c1", "c2", "c3", "c4", "c5", "c6", "c7"))
 
         probed: list[str] = []
 

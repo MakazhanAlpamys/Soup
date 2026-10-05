@@ -267,8 +267,7 @@ class TestVectorBank:
         )
 
         too_many = tuple(
-            BankEntry(user_id=f"u{i}", scaling=(0.1,))
-            for i in range(MAX_ENTRIES_PER_BANK + 1)
+            BankEntry(user_id=f"u{i}", scaling=(0.1,)) for i in range(MAX_ENTRIES_PER_BANK + 1)
         )
         with pytest.raises(ValueError):
             VectorBank(
@@ -452,9 +451,7 @@ class TestSourceWiring:
         from pathlib import Path
 
         root = Path(__file__).resolve().parent.parent
-        src = (root / "src" / "soup_cli" / "utils" / "vector_bank.py").read_text(
-            encoding="utf-8"
-        )
+        src = (root / "src" / "soup_cli" / "utils" / "vector_bank.py").read_text(encoding="utf-8")
         head_lines = [
             line
             for line in src.splitlines()[:50]
@@ -468,7 +465,5 @@ class TestSourceWiring:
         from pathlib import Path
 
         root = Path(__file__).resolve().parent.parent
-        src = (root / "src" / "soup_cli" / "utils" / "vector_bank.py").read_text(
-            encoding="utf-8"
-        )
+        src = (root / "src" / "soup_cli" / "utils" / "vector_bank.py").read_text(encoding="utf-8")
         assert "atomic_write_text" in src

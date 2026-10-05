@@ -179,8 +179,17 @@ def _interactive_wizard() -> str:
     task = Prompt.ask(
         "Task",
         choices=[
-            "sft", "dpo", "kto", "orpo", "simpo", "ipo", "grpo", "ppo",
-            "reward_model", "pretrain", "embedding",
+            "sft",
+            "dpo",
+            "kto",
+            "orpo",
+            "simpo",
+            "ipo",
+            "grpo",
+            "ppo",
+            "reward_model",
+            "pretrain",
+            "embedding",
         ],
         default="sft",
     )
@@ -197,7 +206,9 @@ def _interactive_wizard() -> str:
         data_format = "embedding"
     else:
         data_format = Prompt.ask(
-            "Data format", choices=["alpaca", "sharegpt", "chatml"], default="alpaca",
+            "Data format",
+            choices=["alpaca", "sharegpt", "chatml"],
+            default="alpaca",
         )
     epochs = Prompt.ask("Epochs", default="3")
     use_qlora = Prompt.ask("Use QLoRA (4-bit)?", choices=["yes", "no"], default="yes")
@@ -207,7 +218,9 @@ def _interactive_wizard() -> str:
     task_block = ""
     if task == "grpo":
         reward_fn = Prompt.ask(
-            "Reward function", choices=["accuracy", "format", "custom"], default="accuracy",
+            "Reward function",
+            choices=["accuracy", "format", "custom"],
+            default="accuracy",
         )
         if reward_fn == "custom":
             reward_fn = Prompt.ask("Path to reward .py file", default="./reward.py")
@@ -235,7 +248,8 @@ def _interactive_wizard() -> str:
 """
     elif task == "ppo":
         reward_model_path = Prompt.ask(
-            "Reward model path", default="./output_rm",
+            "Reward model path",
+            default="./output_rm",
         )
         task_block = f"""  reward_model: {reward_model_path}
   ppo_epochs: 4

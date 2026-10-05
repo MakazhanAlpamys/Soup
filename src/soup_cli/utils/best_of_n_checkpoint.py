@@ -18,9 +18,9 @@ _CHECKPOINT_VERSION = 1
 def run_digest(prompts: list[str], config: dict[str, Any]) -> str:
     """Bind reusable work to the exact prompt sequence and generation config."""
     payload = {"prompts": prompts, "config": config}
-    encoded = json.dumps(
-        payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
-    ).encode("utf-8")
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode(
+        "utf-8"
+    )
     return hashlib.sha256(encoded).hexdigest()
 
 
@@ -31,9 +31,9 @@ def prompt_seed(seed: int, index: int) -> int:
 
 
 def _record_digest(record: dict[str, Any]) -> str:
-    encoded = json.dumps(
-        record, ensure_ascii=False, sort_keys=True, separators=(",", ":")
-    ).encode("utf-8")
+    encoded = json.dumps(record, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode(
+        "utf-8"
+    )
     return hashlib.sha256(encoded).hexdigest()
 
 
@@ -104,9 +104,7 @@ def _discard_incomplete_tail(path: str) -> None:
         os.close(fd)
 
 
-def load_checkpoint(
-    path: str, *, digest: str, total: int
-) -> list[tuple[dict, dict | None]]:
+def load_checkpoint(path: str, *, digest: str, total: int) -> list[tuple[dict, dict | None]]:
     """Validate a journal and return its exactly-once completed prompt prefix."""
     _discard_incomplete_tail(path)
     entries: list[tuple[dict, dict | None]] = []
@@ -147,16 +145,10 @@ def append_checkpoint(path: str, *, index: int, sft: dict, dpo: dict | None) -> 
     core = {"index": index, "sft": sft, "dpo": dpo}
     record = {**core, "entry_digest": _record_digest(core)}
     payload = (
-        json.dumps(record, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-        + os.linesep
+        json.dumps(record, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + os.linesep
     ).encode("utf-8")
     enforce_under_cwd_and_no_symlink(path, "--checkpoint path")
-    flags = (
-        os.O_WRONLY
-        | os.O_APPEND
-        | getattr(os, "O_NOFOLLOW", 0)
-        | getattr(os, "O_BINARY", 0)
-    )
+    flags = os.O_WRONLY | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
     fd = os.open(path, flags)
     try:
         if not stat.S_ISREG(os.fstat(fd).st_mode):
@@ -256,9 +248,7 @@ def publish_generation(
     artifacts = [(sft_text.encode("utf-8"), sft_path, "output")]
     if pair_path:
         artifacts.append((pair_text.encode("utf-8"), pair_path, "emit-pairs"))
-    artifacts.append(
-        (manifest_text_value.encode("utf-8"), manifest_path, "manifest")
-    )
+    artifacts.append((manifest_text_value.encode("utf-8"), manifest_path, "manifest"))
 
     snapshots: dict[str, str | None] = {}
     try:
@@ -287,9 +277,7 @@ def publish_generation(
                     enforce_under_cwd_and_no_symlink(path, field)
                     os.unlink(path)
             except (OSError, TypeError, ValueError) as rollback_error:
-                rollback_errors.append(
-                    f"{field}: {type(rollback_error).__name__}"
-                )
+                rollback_errors.append(f"{field}: {type(rollback_error).__name__}")
         if rollback_errors:
             cleanup_snapshots = False
             joined = ", ".join(rollback_errors)

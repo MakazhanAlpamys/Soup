@@ -46,13 +46,13 @@ class TestDataDownloadTrust:
         monkeypatch.setattr(datasets, "__version__", "3.6.0")
         seen = []
         monkeypatch.setattr(
-            datasets, "load_dataset",
+            datasets,
+            "load_dataset",
             lambda *a, **k: seen.append(k) or iter([{"text": "x"}]),
         )
         result = runner.invoke(
             app,
-            ["data", "download", "org/ds", "-n", "1", "-o", "out.jsonl",
-             "--trust-remote-code"],
+            ["data", "download", "org/ds", "-n", "1", "-o", "out.jsonl", "--trust-remote-code"],
         )
         assert result.exit_code == 0, result.output
         assert seen, "load_dataset was never called"
@@ -68,17 +68,21 @@ class TestDataDownloadTrust:
         monkeypatch.setattr(datasets, "__version__", "3.6.0")
         seen = []
         monkeypatch.setattr(
-            datasets, "load_dataset",
+            datasets,
+            "load_dataset",
             lambda *a, **k: seen.append(k) or iter([{"text": "x"}]),
         )
         result = runner.invoke(
-            app, ["data", "download", "org/ds", "-n", "1", "-o", "out2.jsonl"],
+            app,
+            ["data", "download", "org/ds", "-n", "1", "-o", "out2.jsonl"],
         )
         assert result.exit_code == 0, result.output
         assert seen[0].get("trust_remote_code") is False, seen[0]
 
     def test_trust_remote_code_is_refused_on_datasets_v4_plus(
-        self, tmp_path, monkeypatch,
+        self,
+        tmp_path,
+        monkeypatch,
     ):
         """On datasets>=4, `load_dataset` pops `trust_remote_code` and only
         logs an error (it no longer supports it at all) — so forwarding the
@@ -92,13 +96,13 @@ class TestDataDownloadTrust:
         monkeypatch.setattr(datasets, "__version__", "5.0.1")
         seen = []
         monkeypatch.setattr(
-            datasets, "load_dataset",
+            datasets,
+            "load_dataset",
             lambda *a, **k: seen.append(k) or iter([{"text": "x"}]),
         )
         result = runner.invoke(
             app,
-            ["data", "download", "org/ds", "-n", "1", "-o", "out3.jsonl",
-             "--trust-remote-code"],
+            ["data", "download", "org/ds", "-n", "1", "-o", "out3.jsonl", "--trust-remote-code"],
         )
         assert result.exit_code != 0, result.output
         assert "refused" in result.output.lower(), result.output
@@ -115,11 +119,13 @@ class TestDataDownloadTrust:
         monkeypatch.setattr(datasets, "__version__", "5.0.1")
         seen = []
         monkeypatch.setattr(
-            datasets, "load_dataset",
+            datasets,
+            "load_dataset",
             lambda *a, **k: seen.append(k) or iter([{"text": "x"}]),
         )
         result = runner.invoke(
-            app, ["data", "download", "org/ds", "-n", "1", "-o", "out4.jsonl"],
+            app,
+            ["data", "download", "org/ds", "-n", "1", "-o", "out4.jsonl"],
         )
         assert result.exit_code == 0, result.output
         assert seen[0].get("trust_remote_code") is False, seen[0]
@@ -154,25 +160,30 @@ class TestEvalAutoTrust:
         seen_model_args = []
         seen_generator_calls = []
         monkeypatch.setattr(
-            eval_cmd, "_run_lm_eval",
+            eval_cmd,
+            "_run_lm_eval",
             lambda model_arg, *a, **k: seen_model_args.append(model_arg) or {"results": {}},
         )
         monkeypatch.setattr(eval_cmd, "_save_benchmark_results", lambda *a, **k: None)
         monkeypatch.setattr(eval_cmd, "_save_custom_results", lambda *a, **k: None)
         monkeypatch.setattr(
-            custom, "_create_default_generator",
+            custom,
+            "_create_default_generator",
             lambda *a, **k: seen_generator_calls.append((a, k)) or (lambda prompt: "4"),
         )
         return seen_model_args, seen_generator_calls
 
     def test_trust_remote_code_reaches_lm_eval_model_args_and_generator(
-        self, tmp_path, monkeypatch,
+        self,
+        tmp_path,
+        monkeypatch,
     ):
         from soup_cli.cli import app
 
         seen_model_args, seen_generator_calls = self._setup(tmp_path, monkeypatch)
         result = runner.invoke(
-            app, ["eval", "auto", "-c", "soup.yaml", "--trust-remote-code"],
+            app,
+            ["eval", "auto", "-c", "soup.yaml", "--trust-remote-code"],
         )
         assert result.exit_code == 0, result.output
         assert seen_model_args, "benchmark() was never reached"
@@ -182,7 +193,9 @@ class TestEvalAutoTrust:
         assert gen_kwargs.get("trust_remote_code") is True, seen_generator_calls[0]
 
     def test_lm_eval_model_args_still_reject_injection_from_adapter_metadata(
-        self, tmp_path, monkeypatch,
+        self,
+        tmp_path,
+        monkeypatch,
     ):
         """The `,`/`=` guard on `base_model_name_or_path` must survive: the only
         source of `trust_remote_code=True` is the resolved CLI flag, never
@@ -200,7 +213,8 @@ class TestEvalAutoTrust:
         )
         monkeypatch.chdir(tmp_path)
         result = runner.invoke(
-            app, ["eval", "auto", "-c", "soup.yaml", "--trust-remote-code"],
+            app,
+            ["eval", "auto", "-c", "soup.yaml", "--trust-remote-code"],
         )
         # benchmark() must refuse the smuggled base model, not silently swallow it.
         assert "Refusing to evaluate" in result.output, result.output
@@ -322,7 +336,9 @@ class TestFindLrTrust:
         return seen, result
 
     def test_trust_remote_code_reaches_both_from_pretrained_calls(
-        self, tmp_path, monkeypatch,
+        self,
+        tmp_path,
+        monkeypatch,
     ):
         seen, result = self._invoke(tmp_path, monkeypatch, requested_flag=True)
         assert len(seen) == 2, (
@@ -358,14 +374,18 @@ class TestChildTrainArgvTrust:
         data_path = tmp_path / "d.jsonl"
         data_path.write_text(
             "".join(
-                json.dumps({"instruction": f"q{i}", "output": f"a{i}"}) + "\n"
-                for i in range(8)
+                json.dumps({"instruction": f"q{i}", "output": f"a{i}"}) + "\n" for i in range(8)
             )
         )
         try:
             draft._run_distill(
-                draft_base="org/draft", target="org/target", data=str(data_path),
-                out_dir="draft_out", steps=8, data_rows=8, trc=True,
+                draft_base="org/draft",
+                target="org/target",
+                data=str(data_path),
+                out_dir="draft_out",
+                steps=8,
+                data_rows=8,
+                trc=True,
             )
         except Exception:
             pass  # the stubbed child "fails" (rc=1); only its argv matters here
@@ -386,14 +406,18 @@ class TestChildTrainArgvTrust:
         data_path = tmp_path / "d.jsonl"
         data_path.write_text(
             "".join(
-                json.dumps({"instruction": f"q{i}", "output": f"a{i}"}) + "\n"
-                for i in range(8)
+                json.dumps({"instruction": f"q{i}", "output": f"a{i}"}) + "\n" for i in range(8)
             )
         )
         try:
             draft._run_distill(
-                draft_base="org/draft", target="org/target", data=str(data_path),
-                out_dir="draft_out2", steps=8, data_rows=8, trc=False,
+                draft_base="org/draft",
+                target="org/target",
+                data=str(data_path),
+                out_dir="draft_out2",
+                steps=8,
+                data_rows=8,
+                trc=False,
             )
         except Exception:
             pass
@@ -414,16 +438,20 @@ class TestChildTrainArgvTrust:
         data_path = tmp_path / "d.jsonl"
         data_path.write_text(
             "".join(
-                json.dumps({"instruction": f"q{i}", "output": f"a{i}"}) + "\n"
-                for i in range(8)
+                json.dumps({"instruction": f"q{i}", "output": f"a{i}"}) + "\n" for i in range(8)
             )
         )
         pruned_dir = tmp_path / "pruned"
         pruned_dir.mkdir()
         try:
             shrink._run_heal(
-                pruned_dir=str(pruned_dir), teacher="org/target", heal_data=str(data_path),
-                steps=8, out_dir="heal_out", heal_rows=8, trc=True,
+                pruned_dir=str(pruned_dir),
+                teacher="org/target",
+                heal_data=str(data_path),
+                steps=8,
+                out_dir="heal_out",
+                heal_rows=8,
+                trc=True,
             )
         except Exception:
             pass
@@ -444,16 +472,20 @@ class TestChildTrainArgvTrust:
         data_path = tmp_path / "d.jsonl"
         data_path.write_text(
             "".join(
-                json.dumps({"instruction": f"q{i}", "output": f"a{i}"}) + "\n"
-                for i in range(8)
+                json.dumps({"instruction": f"q{i}", "output": f"a{i}"}) + "\n" for i in range(8)
             )
         )
         pruned_dir = tmp_path / "pruned"
         pruned_dir.mkdir()
         try:
             shrink._run_heal(
-                pruned_dir=str(pruned_dir), teacher="org/target", heal_data=str(data_path),
-                steps=8, out_dir="heal_out2", heal_rows=8, trc=False,
+                pruned_dir=str(pruned_dir),
+                teacher="org/target",
+                heal_data=str(data_path),
+                steps=8,
+                out_dir="heal_out2",
+                heal_rows=8,
+                trc=False,
             )
         except Exception:
             pass
@@ -501,7 +533,8 @@ class TestDefaultsStayDeny:
         monkeypatch.setattr(ce, "custom", lambda **kw: calls.__setitem__("custom", kw))
         callback = SoupTrainerCallback.__new__(SoupTrainerCallback)
         callback.eval_config = type(
-            "EvalCfg", (),
+            "EvalCfg",
+            (),
             {"auto_eval": True, "benchmarks": ["mmlu"], "custom_tasks": "tasks.jsonl"},
         )()
         callback.output_dir = "out"
@@ -520,7 +553,8 @@ class TestDefaultsStayDeny:
         monkeypatch.setattr(datasets, "__version__", "3.6.0")
         monkeypatch.setattr(datasets, "load_dataset", lambda *a, **k: iter([{"text": "x"}]))
         result = runner.invoke(
-            app, ["data", "download", "org/ds", "-n", "1", "-o", "o.jsonl", *flag],
+            app,
+            ["data", "download", "org/ds", "-n", "1", "-o", "o.jsonl", *flag],
         )
         assert result.exit_code == 0, result.output
         assert ("Remote Code Warning" in _flat(result.output)) is panel, _flat(result.output)
@@ -550,7 +584,8 @@ class TestDefaultsStayDeny:
         monkeypatch.chdir(tmp_path)
         monkeypatch.setitem(sys.modules, "datasets", None)  # `import datasets` raises ImportError
         result = runner.invoke(
-            app, ["data", "download", "org/ds", "-n", "1", "-o", "o.jsonl", "--trust-remote-code"],
+            app,
+            ["data", "download", "org/ds", "-n", "1", "-o", "o.jsonl", "--trust-remote-code"],
         )
         assert result.exit_code == 1, (result.output, repr(result.exception))
         assert "datasets library not available" in _flat(result.output)

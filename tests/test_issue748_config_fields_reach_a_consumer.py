@@ -122,6 +122,7 @@ SRC = pathlib.Path(__file__).resolve().parents[1] / "src" / "soup_cli"
 SCHEMA = "schema.py"
 SCHEMA_PATH = SRC / "config" / SCHEMA
 
+
 # --------------------------------------------------------------------------
 # The detector. Kept here rather than in `src/` because it is test-only
 # tooling; nothing in the shipped CLI should depend on it.
@@ -294,10 +295,12 @@ def _consumer_modules():
 
 # Fields whose name collides with an unrelated read elsewhere in src/, so only
 # a read through a `*.training` receiver counts as consumption.
-_RECEIVER_QUALIFIED = frozenset({
-    "training.forgetting_threshold",  # ship.py has a local of the same name
-    "training.load_in_16bit",  # migrate/unsloth.py reads an Unsloth kwarg of that name
-})
+_RECEIVER_QUALIFIED = frozenset(
+    {
+        "training.forgetting_threshold",  # ship.py has a local of the same name
+        "training.load_in_16bit",  # migrate/unsloth.py reads an Unsloth kwarg of that name
+    }
+)
 
 
 def field_reaches_a_consumer(key: str, attr: str, consumed: set) -> bool:
@@ -335,99 +338,99 @@ def _consumed_in_src() -> set:
 KNOWN_UNCONSUMED = {
     # -- documented with a worked example, applied nowhere. Verified by hand.
     "training.lr_groups": "#761 -- warns at load from v0.76, refused as of v0.77; "
-                          "utils/lr_groups.py exports parse_lr_groups() and nothing "
-                          "outside schema.py imports it",
+    "utils/lr_groups.py exports parse_lr_groups() and nothing "
+    "outside schema.py imports it",
     # data.mask_history was here until #761 wired it into data/loss_mask.py.
     "training.early_stop_patience": "#761 -- warns at load from v0.76, refused as of "
-                                    "v0.77; no early-stop callback reads it",
+    "v0.77; no early-stop callback reads it",
     "training.citation_recall_threshold": "#761 -- warns at load from v0.76, refused as "
-                                          "of v0.77; validated by utils/citation_faithful.py, "
-                                          "never applied",
+    "of v0.77; validated by utils/citation_faithful.py, "
+    "never applied",
     # -- found by the read/write fix, and the reason that fix exists. A user
     #    setting that is OVERRIDDEN rather than merely unread, so the strongest
     #    kind of member this list has.
     "training.grace_codebook": "#808 -- warns at load from v0.76, refused as of v0.77 "
-                               "(the string appears as an artifact-kind name in "
-                               "store.py:52 / edit.py:312, unrelated to this field)",
+    "(the string appears as an artifact-kind name in "
+    "store.py:52 / edit.py:312, unrelated to this field)",
     # -- #807: read ONLY inside a function nothing in src/ references, so the
     #    read is not consumption. Surfaced by the dead-function gate, which
     #    the guard previously applied to @property resolvers only.
     "training.warmup_auto": "#807 -- read only in autopilot.generate_config, "
-                            "which nothing in src/ calls; and that line reads "
-                            "the decisions dict and WRITES the value into a "
-                            "config, so it is not a read of the field either",
+    "which nothing in src/ calls; and that line reads "
+    "the decisions dict and WRITES the value into a "
+    "config, so it is not a read of the field either",
     # -- declared, and an explicit value is IGNORED with a warning naming the
     #    release that refuses it, so having no consumer is correct. Not refused
     #    yet, because Soup's own writers put the old default into saved configs.
     "data.remove_unused_columns": "#759 -- no trainer reads it; the trainers that set the "
-                                  "HF argument pass False so a custom collator still sees "
-                                  "the extra columns. The default is now False, and an "
-                                  "explicit true loads with a warning and is ignored",
+    "HF argument pass False so a custom collator still sees "
+    "the extra columns. The default is now False, and an "
+    "explicit true loads with a warning and is ignored",
     # -- declared and deliberately REFUSED, so having no consumer is correct.
     #    A distinct category from the two below: the user is told, loudly, at
     #    config load. Found by this guard rather than by hand.
     "training.packing_cross_doc_attn_mask": "no issue needed: rejected at config load "
-                                            "(schema.py:3495) because it never "
-                                            "mapped to a valid TRL packing_strategy; "
-                                            "documented at docs/performance-and-"
-                                            "quantization.md:153",
+    "(schema.py:3495) because it never "
+    "mapped to a valid TRL packing_strategy; "
+    "documented at docs/performance-and-"
+    "quantization.md:153",
     # -- staged for features that have not landed; grouped so they can be
     #    retired together rather than one at a time.
     "training.long_context_grpo": "#808 -- warns at load from v0.76, refused as of v0.77 "
-                                  "(documented as wiring Tiled MLP; no Tiled MLP exists)",
+    "(documented as wiring Tiled MLP; no Tiled MLP exists)",
     "training.vision_grpo": "#808 -- warns at load from v0.76, refused as of v0.77 "
-                            "(no vision GRPO path)",
+    "(no vision GRPO path)",
     "training.load_in_16bit": "no issue needed: schema rewrites quantization at validation time",
     "training.unsloth_bnb_4bit": "no issue needed: schema assertion alias",
     "training.llm_int8": "no issue needed: schema assertion alias",
     "training.quantize_ref_model": "#808 -- warns at load from v0.76, refused as of v0.77 "
-                                   "(reference-model quantisation staging)",
+    "(reference-model quantisation staging)",
     "training.convergence_window": "#808 -- warns at load from v0.76, refused as of v0.77 "
-                                   "(convergence-detector staging)",
+    "(convergence-detector staging)",
     "training.convergence_rel_tol": "#808 -- warns at load from v0.76, refused as of v0.77 "
-                                    "(convergence-detector staging)",
+    "(convergence-detector staging)",
     "training.forgetting_eval_steps": "#808 -- warns at load from v0.76, refused as of v0.77 "
-                                      "(catastrophic-forgetting probe staging)",
+    "(catastrophic-forgetting probe staging)",
     "training.forgetting_threshold": "#799 -- staged catastrophic-forgetting threshold; "
-                                     "the same name in ship.py is unrelated",
+    "the same name in ship.py is unrelated",
     "training.forgetting_benchmark": "#808 -- warns at load from v0.76, refused as of v0.77 "
-                                     "(catastrophic-forgetting probe staging)",
+    "(catastrophic-forgetting probe staging)",
     "training.forgetting_stop": "#808 -- warns at load from v0.76, refused as of v0.77 "
-                                "(catastrophic-forgetting probe staging)",
+    "(catastrophic-forgetting probe staging)",
     "training.checkpoint_eval_steps": "#808 -- warns at load from v0.76, refused as of v0.77 "
-                                      "(checkpoint-eval staging)",
+    "(checkpoint-eval staging)",
     "training.checkpoint_eval_metric": "#808 -- warns at load from v0.76, refused as of v0.77 "
-                                       "(checkpoint-eval staging)",
+    "(checkpoint-eval staging)",
     "training.checkpoint_eval_tasks": "#808 -- warns at load from v0.76, refused as of v0.77 "
-                                      "(checkpoint-eval staging)",
+    "(checkpoint-eval staging)",
     "training.checkpoint_keep_top": "#808 -- warns at load from v0.76, refused as of v0.77 "
-                                    "(checkpoint-eval staging)",
+    "(checkpoint-eval staging)",
     "training.grace_codebook_size": "#808 -- warns at load from v0.76, refused as of v0.77 "
-                                    "(GRACE codebook staging)",
+    "(GRACE codebook staging)",
     "training.grace_codebook_dim": "#808 -- warns at load from v0.76, refused as of v0.77 "
-                                   "(GRACE codebook staging)",
+    "(GRACE codebook staging)",
     "data.video_dir": "#808 -- warns at load from v0.76, refused as of v0.77 "
-                      "(video pipeline staging)",
+    "(video pipeline staging)",
     "data.eval_on_each_dataset": "#808 -- warns at load from v0.76, refused as of v0.77 "
-                                 "(per-dataset eval staging)",
+    "(per-dataset eval staging)",
     "data.split_thinking": "#808 -- warns at load from v0.76, refused as of v0.77 "
-                           "(thinking-block masking staging)",
+    "(thinking-block masking staging)",
     "data.image_min_pixels": "#808 -- warns at load from v0.76, refused as of v0.77 "
-                             "(image preprocessing staging)",
+    "(image preprocessing staging)",
     "data.image_max_pixels": "#808 -- warns at load from v0.76, refused as of v0.77 "
-                             "(image preprocessing staging)",
+    "(image preprocessing staging)",
     "data.image_resize_algorithm": "#808 -- warns at load from v0.76, refused as of v0.77 "
-                                   "(image preprocessing staging)",
+    "(image preprocessing staging)",
     "data.video_fps": "#808 -- warns at load from v0.76, refused as of v0.77 "
-                      "(video pipeline staging)",
+    "(video pipeline staging)",
     "data.video_maxlen": "#808 -- warns at load from v0.76, refused as of v0.77 "
-                         "(video pipeline staging)",
+    "(video pipeline staging)",
     "data.resize_vocab": "#808 -- warns at load from v0.76, refused as of v0.77 "
-                         "(vocab-resize staging)",
+    "(vocab-resize staging)",
     "data.extend_conversation": "#808 -- warns at load from v0.76, refused as of v0.77 "
-                                "(conversation-extension staging)",
+    "(conversation-extension staging)",
     "data.skip_prepare_dataset": "#808 -- warns at load from v0.76, refused as of v0.77 "
-                                 "(dataset-prep bypass staging)",
+    "(dataset-prep bypass staging)",
 }
 
 
@@ -552,9 +555,7 @@ class TestTheDetectorItself:
         )
 
     def test_a_class_docstring_does_not_count(self, tmp_path):
-        assert "widget" not in self._consumed(
-            tmp_path, 'class C:\n    """widget"""\n    x = 1\n'
-        )
+        assert "widget" not in self._consumed(tmp_path, 'class C:\n    """widget"""\n    x = 1\n')
 
     def test_prose_mentioning_a_field_is_not_a_read_either(self, tmp_path):
         """The `citation_recall_threshold` shape: named inside a longer
@@ -582,8 +583,7 @@ class TestEveryDeclaredFieldReachesAConsumer:
         orphans = sorted(
             key
             for key, attr in _declared().items()
-            if not field_reaches_a_consumer(key, attr, consumed)
-            and key not in KNOWN_UNCONSUMED
+            if not field_reaches_a_consumer(key, attr, consumed) and key not in KNOWN_UNCONSUMED
         )
         assert not orphans, (
             "These config fields are declared in schema.py and read by no "
@@ -609,7 +609,8 @@ class TestEveryDeclaredFieldReachesAConsumer:
         consumed = _consumed_in_src()
         declared = _declared()
         now_wired = sorted(
-            k for k in KNOWN_UNCONSUMED
+            k
+            for k in KNOWN_UNCONSUMED
             if k in declared and field_reaches_a_consumer(k, declared[k], consumed)
         )
         assert not now_wired, (
@@ -636,9 +637,9 @@ class TestEveryDeclaredFieldReachesAConsumer:
 
         consumed = _consumed_in_src()
         orphans = [
-            key for key, attr in _declared().items()
-            if not field_reaches_a_consumer(key, attr, consumed)
-            and key not in KNOWN_UNCONSUMED
+            key
+            for key, attr in _declared().items()
+            if not field_reaches_a_consumer(key, attr, consumed) and key not in KNOWN_UNCONSUMED
         ]
         assert "training.totally_unwired_probe" in orphans, (
             f"the guard did not flag an unwired field; it reported {orphans}. "
@@ -653,7 +654,8 @@ class TestEveryDeclaredFieldReachesAConsumer:
         consumed_after = _consumed_in_src() | consumed_names([wired])
         assert "totally_unwired_probe" in consumed_after
         assert not [
-            key for key, attr in _declared().items()
+            key
+            for key, attr in _declared().items()
             if not field_reaches_a_consumer(key, attr, consumed_after)
             and key not in KNOWN_UNCONSUMED
         ]
@@ -667,9 +669,7 @@ class TestEveryDeclaredFieldReachesAConsumer:
         only_docstring = tmp_path / "gone.py"
         only_docstring.write_text('"""This module used to apply cfg.lr."""\n')
         consumed = consumed_names([only_docstring])
-        assert "lr" not in consumed, (
-            "a field named only in a docstring must read as unconsumed"
-        )
+        assert "lr" not in consumed, "a field named only in a docstring must read as unconsumed"
 
 
 def test_the_allowlist_size_is_pinned_exactly():
@@ -739,10 +739,7 @@ def test_every_allowlist_entry_states_an_issue_or_says_there_is_none():
     # it, and that loose predicate is what let the bnb_4bit_use_double_quant
     # entry through carrying a wrong story. An entry must cite an issue or say
     # in words that none exists.
-    vague = sorted(
-        k for k, v in KNOWN_UNCONSUMED.items()
-        if not _reason_is_accountable(v)
-    )
+    vague = sorted(k for k, v in KNOWN_UNCONSUMED.items() if not _reason_is_accountable(v))
     assert not vague, (
         "these allowlist entries cite no issue and do not say one is missing:\n  "
         + "\n  ".join(vague)
@@ -850,8 +847,7 @@ class TestSchemaSideResolvers:
         raw = set(_consumed_cached(tuple(sorted(str(p) for p in _consumer_modules()))))
 
         assert "bnb_4bit_use_double_quant" not in raw, (
-            "nothing outside schema.py names the field -- that is why the "
-            "property pass exists"
+            "nothing outside schema.py names the field -- that is why the property pass exists"
         )
         assert "double_quant_on" in raw, "the property itself is called"
         assert "bnb_4bit_use_double_quant" in fold_property_reads(raw, props)
@@ -998,19 +994,13 @@ class TestTheDeadFunctionGate:
         """Module scope runs on import; there is no enclosing function to be
         dead."""
         consumed = {"widget"}
-        assert "widget" in drop_dead_function_reads(
-            consumed, {"widget": {("m.py", None)}}, set()
-        )
+        assert "widget" in drop_dead_function_reads(consumed, {"widget": {("m.py", None)}}, set())
 
     def test_methods_are_attributed_not_skipped(self, tmp_path):
         """The false-positive generator. Walking only top-level defs made a
         read inside a method invisible, so the field looked dead."""
         mod = tmp_path / "m.py"
-        mod.write_text(
-            "class C:\n"
-            "    def a_method(self, cfg):\n"
-            "        return cfg.widget\n"
-        )
+        mod.write_text("class C:\n    def a_method(self, cfg):\n        return cfg.widget\n")
         scoped = function_scoped_reads([mod])
         assert scoped.get("widget") == {("m.py", "a_method")}, (
             "a read inside a method must be attributed to that method, not lost"
@@ -1054,9 +1044,7 @@ class TestTheDeadFunctionGate:
             schema_property_reads(SCHEMA_PATH),
         )
         consumed = _consumed_in_src()
-        assert "warmup_auto" in ungated, (
-            "warmup_auto is not read at all, so this check is vacuous"
-        )
+        assert "warmup_auto" in ungated, "warmup_auto is not read at all, so this check is vacuous"
         assert "warmup_auto" not in consumed, (
             "warmup_auto is read only inside a dead function, yet _consumed_in_src() "
             "counts it: the gate is not composed into the scan"
@@ -1081,9 +1069,7 @@ class TestTheTreeMismatchCheck:
     """
 
     @pytest.mark.requires_symlink
-    def test_the_same_directory_reached_by_a_different_spelling_is_not_a_mismatch(
-        self, tmp_path
-    ):
+    def test_the_same_directory_reached_by_a_different_spelling_is_not_a_mismatch(self, tmp_path):
         """The false alarm, reproduced through a symlink rather than by relying
         on the filesystem being case-insensitive -- so this test means the same
         thing on Linux CI, where `/Users` and `/users` really are different."""

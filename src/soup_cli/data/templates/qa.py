@@ -35,8 +35,7 @@ def build_prompt(
         )
     else:
         context_section = (
-            "\n\nGenerate diverse questions and detailed answers on "
-            "general knowledge topics."
+            "\n\nGenerate diverse questions and detailed answers on general knowledge topics."
         )
 
     return (

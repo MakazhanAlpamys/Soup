@@ -26,6 +26,7 @@ Public surface:
 - ``run_truth_probe(activations, base, *, weights=None)`` orchestrator
 - ``render_truth_json`` / ``render_truth_markdown``
 """
+
 from __future__ import annotations
 
 import json
@@ -57,23 +58,40 @@ _MAJOR_THRESHOLD = 0.20
 # calibrated weights via --weights or compute a contrast probe from the model.
 _BUNDLED = {
     "meta-llama/Llama-3-8B": ProbeSpec(
-        "meta-llama/Llama-3-8B", 4096, 0.0,
+        "meta-llama/Llama-3-8B",
+        4096,
+        0.0,
         "Synthetic honesty probe (deterministic; supply --weights for real).",
     ),
     "meta-llama/Llama-2-7B": ProbeSpec(
-        "meta-llama/Llama-2-7B", 4096, 0.0, "Synthetic honesty probe.",
+        "meta-llama/Llama-2-7B",
+        4096,
+        0.0,
+        "Synthetic honesty probe.",
     ),
     "mistralai/Mistral-7B-v0.1": ProbeSpec(
-        "mistralai/Mistral-7B-v0.1", 4096, 0.0, "Synthetic honesty probe.",
+        "mistralai/Mistral-7B-v0.1",
+        4096,
+        0.0,
+        "Synthetic honesty probe.",
     ),
     "Qwen/Qwen2-7B": ProbeSpec(
-        "Qwen/Qwen2-7B", 3584, 0.0, "Synthetic honesty probe.",
+        "Qwen/Qwen2-7B",
+        3584,
+        0.0,
+        "Synthetic honesty probe.",
     ),
     "google/gemma-2-9b": ProbeSpec(
-        "google/gemma-2-9b", 3584, 0.0, "Synthetic honesty probe.",
+        "google/gemma-2-9b",
+        3584,
+        0.0,
+        "Synthetic honesty probe.",
     ),
     "google/gemma-2-2b": ProbeSpec(
-        "google/gemma-2-2b", 2304, 0.0, "Synthetic honesty probe.",
+        "google/gemma-2-2b",
+        2304,
+        0.0,
+        "Synthetic honesty probe.",
     ),
 }
 BUNDLED_TRUTH_PROBES: Mapping[str, ProbeSpec] = MappingProxyType(_BUNDLED)
@@ -120,8 +138,14 @@ def run_truth_probe(
 ) -> ProbeResult:
     """Apply the honesty probe for ``base`` to ``activations`` (#217)."""
     return run_bundled_probe(
-        activations, base, kind="truth", bundled=BUNDLED_TRUTH_PROBES,
-        salt=_SALT, minor=_MINOR_THRESHOLD, major=_MAJOR_THRESHOLD, weights=weights,
+        activations,
+        base,
+        kind="truth",
+        bundled=BUNDLED_TRUTH_PROBES,
+        salt=_SALT,
+        minor=_MINOR_THRESHOLD,
+        major=_MAJOR_THRESHOLD,
+        weights=weights,
     )
 
 

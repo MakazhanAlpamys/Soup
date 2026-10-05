@@ -62,9 +62,7 @@ class _FakeTokenizer:
             return text
         if return_assistant_tokens_mask and return_dict:
             if not self.supports_assistant_mask:
-                raise TypeError(
-                    "this tokenizer does not support return_assistant_tokens_mask"
-                )
+                raise TypeError("this tokenizer does not support return_assistant_tokens_mask")
             return {"input_ids": ids, "assistant_masks": mask}
         return ids
 
@@ -90,9 +88,7 @@ class _BatchEncodingTokenizer(_FakeTokenizer):
         if kwargs.get("return_assistant_tokens_mask"):
             if self.zero_mask:
                 mask = [0] * len(ids)
-            return BatchEncoding(
-                {"input_ids": ids, "assistant_masks": mask}
-            )
+            return BatchEncoding({"input_ids": ids, "assistant_masks": mask})
         self.fallback_calls += 1
         return BatchEncoding({"input_ids": ids})
 
@@ -239,9 +235,7 @@ class TestPreferredPath:
         from soup_cli.data.loss_mask import IGNORE_INDEX, build_assistant_only_labels
 
         tok = _BatchEncodingTokenizer(zero_mask=True)
-        out = build_assistant_only_labels(
-            [{"role": "user", "content": "Q"}], tok
-        )
+        out = build_assistant_only_labels([{"role": "user", "content": "Q"}], tok)
 
         assert tok.fallback_calls == 0
         assert all(label == IGNORE_INDEX for label in out["labels"])
@@ -329,9 +323,7 @@ class TestTokenIdNormalisation:
         encoded = BatchEncoding({"input_ids": [1, 2, 3]})
         assert not isinstance(encoded, dict)
 
-        ids = _tokenize_only(
-            _StaticTokenizer(encoded), [{"role": "user", "content": "Q"}]
-        )
+        ids = _tokenize_only(_StaticTokenizer(encoded), [{"role": "user", "content": "Q"}])
         assert ids == [1, 2, 3]
         assert all(type(token_id) is int for token_id in ids)
 
@@ -365,9 +357,7 @@ class TestTokenIdNormalisation:
 
         with pytest.raises(ValueError, match="non-integer input_ids"):
             _tokenize_only(
-                _StaticTokenizer(
-                    BatchEncoding({"input_ids": ["input_ids"]})
-                ),
+                _StaticTokenizer(BatchEncoding({"input_ids": ["input_ids"]})),
                 [{"role": "user", "content": "Q"}],
             )
 
@@ -491,9 +481,7 @@ class TestPerMessageTrainField:
         system_end = len("<system>:Follow the format.\n")
         user_end = system_end + len("<user>:Q\n")
         assert all(label != IGNORE_INDEX for label in out["labels"][:system_end])
-        assert all(
-            label == IGNORE_INDEX for label in out["labels"][system_end:user_end]
-        )
+        assert all(label == IGNORE_INDEX for label in out["labels"][system_end:user_end])
 
     def test_trainable_first_user_does_not_absorb_ignored_system_prefix(self):
         from soup_cli.data.loss_mask import (
@@ -564,9 +552,7 @@ class TestEdgeCases:
                 raise ValueError("tokenizer has no chat_template")
 
         with pytest.raises(ValueError, match="chat_template"):
-            build_assistant_only_labels(
-                [{"role": "user", "content": "x"}], _NoTemplate()
-            )
+            build_assistant_only_labels([{"role": "user", "content": "x"}], _NoTemplate())
 
 
 # ---------------------------------------------------------------------------

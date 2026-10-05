@@ -47,11 +47,13 @@ def prune_prompt_cmd(
         ),
     ),
     slack_url: Optional[str] = typer.Option(
-        None, "--slack-url",
+        None,
+        "--slack-url",
         help="Optional Slack webhook URL — POSTed on completion. SSRF-validated.",
     ),
     discord_url: Optional[str] = typer.Option(
-        None, "--discord-url",
+        None,
+        "--discord-url",
         help="Optional Discord webhook URL — POSTed on completion. SSRF-validated.",
     ),
 ) -> None:
@@ -62,9 +64,7 @@ def prune_prompt_cmd(
         console.print(f"[red]{escape(str(exc))}[/]")
         raise typer.Exit(2) from exc
 
-    slack_url, discord_url = validate_webhook_flags(
-        slack_url, discord_url, console=console
-    )
+    slack_url, discord_url = validate_webhook_flags(slack_url, discord_url, console=console)
 
     try:
         report = prune_traces(

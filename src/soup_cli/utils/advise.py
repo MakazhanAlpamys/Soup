@@ -82,6 +82,7 @@ _PROBE_LORA_STEPS_DEFAULT = 100
 # Frozen dataclasses
 # ---------------------------------------------------------------------------
 
+
 @dataclass(frozen=True)
 class DatasetProfile:
     """Summary of a dataset: shape, diversity, proximity to base model."""
@@ -128,6 +129,7 @@ class Verdict:
 # Input validation helpers
 # ---------------------------------------------------------------------------
 
+
 def _normalize_goal(goal: Optional[str]) -> str:
     if goal is None:
         return ""
@@ -143,6 +145,7 @@ def _normalize_goal(goal: Optional[str]) -> str:
 # ---------------------------------------------------------------------------
 # Dataset loader
 # ---------------------------------------------------------------------------
+
 
 def load_advise_dataset(path: str) -> List[Mapping[str, object]]:
     """Load a JSONL dataset for advise, with cwd containment + symlink reject.
@@ -164,9 +167,7 @@ def load_advise_dataset(path: str) -> List[Mapping[str, object]]:
         raise ValueError(f"dataset path '{path}' must stay under cwd")
     size = os.path.getsize(path)
     if size > _MAX_FILE_BYTES:
-        raise ValueError(
-            f"dataset exceeds {_MAX_FILE_BYTES} bytes ({size} found)"
-        )
+        raise ValueError(f"dataset exceeds {_MAX_FILE_BYTES} bytes ({size} found)")
 
     rows: List[Mapping[str, object]] = []
     with open(path, "r", encoding="utf-8-sig") as fh:
@@ -175,15 +176,11 @@ def load_advise_dataset(path: str) -> List[Mapping[str, object]]:
             if not stripped:
                 continue
             if len(rows) >= _MAX_ROWS:
-                raise ValueError(
-                    f"dataset exceeds {_MAX_ROWS} rows (line {line_no})"
-                )
+                raise ValueError(f"dataset exceeds {_MAX_ROWS} rows (line {line_no})")
             try:
                 row = json.loads(stripped)
             except json.JSONDecodeError as exc:
-                raise ValueError(
-                    f"line {line_no} is not valid JSON: {exc.msg}"
-                ) from exc
+                raise ValueError(f"line {line_no} is not valid JSON: {exc.msg}") from exc
             if not isinstance(row, dict):
                 # Allow JSON arrays at the row level only if they wrap a dict
                 # (we are strict: a JSONL row must be an object).
@@ -285,20 +282,33 @@ def _has_reasoning(rows: Sequence[Mapping[str, object]]) -> bool:
 # advisory; the highest-scoring category wins. Ties break in TASK_CATEGORIES
 # declaration order for determinism.
 _TASK_KEYWORDS: Tuple[Tuple[re.Pattern[str], str, float], ...] = (
-    (re.compile(r"\b(classif\w*|label\w*|category|categori\w*)\b", re.IGNORECASE),
-     "classification", 1.0),
-    (re.compile(r"\b(summari[sz]\w*|tl;?dr|abstract)\b", re.IGNORECASE),
-     "summarization", 1.0),
-    (re.compile(r"\b(translate|translation|convert|format|json|yaml|sql)\b",
-                re.IGNORECASE), "format_conversion", 0.8),
-    (re.compile(r"\b(tool|function|api|call|invoke|action)\b", re.IGNORECASE),
-     "tool_use", 0.7),
-    (re.compile(r"\b(reason\w*|think\w*|step[- ]by[- ]step|math|prove)\b",
-                re.IGNORECASE), "reasoning", 1.0),
-    (re.compile(r"\b(style|tone|voice|brand|personali[sz]\w*|rewrite)\b",
-                re.IGNORECASE), "style_shaping", 1.0),
-    (re.compile(r"\b(fact\w*|lookup|retrieve|recall|knowledge|wiki)\b",
-                re.IGNORECASE), "factual_lookup", 1.0),
+    (
+        re.compile(r"\b(classif\w*|label\w*|category|categori\w*)\b", re.IGNORECASE),
+        "classification",
+        1.0,
+    ),
+    (re.compile(r"\b(summari[sz]\w*|tl;?dr|abstract)\b", re.IGNORECASE), "summarization", 1.0),
+    (
+        re.compile(r"\b(translate|translation|convert|format|json|yaml|sql)\b", re.IGNORECASE),
+        "format_conversion",
+        0.8,
+    ),
+    (re.compile(r"\b(tool|function|api|call|invoke|action)\b", re.IGNORECASE), "tool_use", 0.7),
+    (
+        re.compile(r"\b(reason\w*|think\w*|step[- ]by[- ]step|math|prove)\b", re.IGNORECASE),
+        "reasoning",
+        1.0,
+    ),
+    (
+        re.compile(r"\b(style|tone|voice|brand|personali[sz]\w*|rewrite)\b", re.IGNORECASE),
+        "style_shaping",
+        1.0,
+    ),
+    (
+        re.compile(r"\b(fact\w*|lookup|retrieve|recall|knowledge|wiki)\b", re.IGNORECASE),
+        "factual_lookup",
+        1.0,
+    ),
 )
 
 _TOOL_FIELD_KEY = "tool_calls"
@@ -374,6 +384,7 @@ def classify_task(
 # ---------------------------------------------------------------------------
 # Dataset profile
 # ---------------------------------------------------------------------------
+
 
 def _safe_mean(values: Iterable[float]) -> float:
     collected = list(values)
@@ -466,6 +477,7 @@ def compute_dataset_profile(
 # Verdict builder
 # ---------------------------------------------------------------------------
 
+
 def _confidence_from_signals(*, row_count: int, diversity: float) -> float:
     """Roughly: more data + healthy diversity → higher confidence."""
     if row_count <= 0:
@@ -493,9 +505,7 @@ def _base_verdict(
     5. Otherwise → SFT.
     """
     if task_category not in TASK_CATEGORIES:
-        raise ValueError(
-            f"task_category must be one of {TASK_CATEGORIES}, got {task_category!r}"
-        )
+        raise ValueError(f"task_category must be one of {TASK_CATEGORIES}, got {task_category!r}")
     # Validate goal shape (NUL / oversize / non-string rejected) even though
     # the normalised value is unused here — keeps the public surface honest.
     _normalize_goal(goal)
@@ -601,6 +611,7 @@ def _base_verdict(
 # ---------------------------------------------------------------------------
 # History bias (v0.71.5 #163) — tune the rubric from past project outcomes
 # ---------------------------------------------------------------------------
+
 
 def _summarise_history_outcomes(
     history: Optional[Sequence["HistoryEntry"]],
@@ -719,11 +730,7 @@ def _apply_history_bias(
     # Marginal RAG → SFT flip: strong SFT track record, no comparable RAG
     # track record. RAG is the marginal call (it fired on a heuristic
     # variance threshold), so prior SFT success is decisive.
-    if (
-        base.choice == "RAG"
-        and _is_encouraged(bias, "SFT")
-        and not _is_encouraged(bias, "RAG")
-    ):
+    if base.choice == "RAG" and _is_encouraged(bias, "SFT") and not _is_encouraged(bias, "RAG"):
         n_sft = _precedent_count(bias, "SFT")
         return Verdict(
             choice="SFT",
@@ -797,9 +804,7 @@ def _live_probe_baselines(
     except Exception:  # noqa: BLE001 — torch/transformers missing → heuristic
         return None
     pairs = [
-        (_extract_input_text(r), _extract_output_text(r))
-        for r in rows
-        if isinstance(r, Mapping)
+        (_extract_input_text(r), _extract_output_text(r)) for r in rows if isinstance(r, Mapping)
     ]
     pairs = [(p, t) for p, t in pairs if p and t]
     if len(pairs) < 2:
@@ -1011,6 +1016,7 @@ def synth_probe_lora_delta(
 # ---------------------------------------------------------------------------
 # Rubric rendering (`soup advise explain`)
 # ---------------------------------------------------------------------------
+
 
 def format_verdict_rubric(verdict: Verdict) -> str:
     """Plain-text rubric: which rule fired, evidence, what flips it.

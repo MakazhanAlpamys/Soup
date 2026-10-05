@@ -92,9 +92,7 @@ class TestProfileContext:
             return real_import(name, *args, **kwargs)
 
         monkeypatch.setattr(builtins, "__import__", fake_import)
-        with profile_training(
-            output_dir=tmp_path / "out", run_id="run_x"
-        ) as profiler:
+        with profile_training(output_dir=tmp_path / "out", run_id="run_x") as profiler:
             assert profiler is None
 
     def test_invalid_schedule_propagates(self, tmp_path, monkeypatch):

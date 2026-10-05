@@ -20,9 +20,9 @@ _SHA256_VALUE = re.compile(r"^[0-9a-f]{64}$")
 
 
 def _canonical(value: Any) -> bytes:
-    return json.dumps(
-        value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
-    ).encode("utf-8")
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode(
+        "utf-8"
+    )
 
 
 def _sha(value: Any) -> str:
@@ -186,11 +186,7 @@ def build_candidate_group(
 ) -> dict:
     """Build one self-validating, ordered candidate group."""
     sampler = _validate_sampler(sampler)
-    if (
-        isinstance(source_line, bool)
-        or not isinstance(source_line, int)
-        or source_line < 1
-    ):
+    if isinstance(source_line, bool) or not isinstance(source_line, int) or source_line < 1:
         raise ValueError("candidate source line must be a positive integer")
     if len(candidates) != sampler["n"] or not all(
         isinstance(candidate, str) for candidate in candidates
@@ -290,11 +286,7 @@ def validate_candidate_group(
     if group.get("prompt_index") != index or not isinstance(group.get("prompt"), str):
         raise ValueError("candidate groups must be sequential")
     source_line = group.get("source_line")
-    if (
-        isinstance(source_line, bool)
-        or not isinstance(source_line, int)
-        or source_line < 1
-    ):
+    if isinstance(source_line, bool) or not isinstance(source_line, int) or source_line < 1:
         raise ValueError(f"candidate group {index} has an invalid source line")
     if expected_source_line is not None and source_line != expected_source_line:
         raise ValueError(f"candidate group {index} does not match its source line")
@@ -569,9 +561,7 @@ def offline_manifest_from_digests(
     return json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
 
 
-def _validate_manifest_dataset(
-    record: Any, *, label: str, path: str, required: bool
-) -> None:
+def _validate_manifest_dataset(record: Any, *, label: str, path: str, required: bool) -> None:
     if not required:
         if record is not None or path:
             raise ValueError(f"offline manifest unexpectedly records {label}")
@@ -585,9 +575,7 @@ def _validate_manifest_dataset(
     rows = record["rows"]
     if isinstance(rows, bool) or not isinstance(rows, int) or rows < 0:
         raise ValueError(f"offline manifest {label} row count is invalid")
-    if not isinstance(record["sha256"], str) or not _SHA256_VALUE.fullmatch(
-        record["sha256"]
-    ):
+    if not isinstance(record["sha256"], str) or not _SHA256_VALUE.fullmatch(record["sha256"]):
         raise ValueError(f"offline manifest {label} SHA-256 is invalid")
     actual_sha, actual_rows = _regular_sha_and_rows(path, f"{label} path")
     if record["sha256"] != actual_sha or rows != actual_rows:
@@ -646,9 +634,7 @@ def _parse_offline_manifest(data: bytes) -> dict:
     return manifest
 
 
-def verify_offline_manifest(
-    path: str, *, sft_path: str, dpo_path: str = ""
-) -> dict:
+def verify_offline_manifest(path: str, *, sft_path: str, dpo_path: str = "") -> dict:
     """Verify the final marker against exact SFT/DPO file bytes and counts."""
     manifest = _parse_offline_manifest(_read_regular(path, "--manifest path"))
     _validate_manifest_dataset(manifest["sft"], label="SFT", path=sft_path, required=True)
@@ -677,11 +663,7 @@ def find_committed_sibling_dpo(path: str, *, sft_path: str) -> str:
     if not isinstance(record, dict) or set(record) != {"file", "rows", "sha256"}:
         raise ValueError("offline manifest DPO record is invalid")
     filename = record.get("file")
-    if (
-        not isinstance(filename, str)
-        or not filename
-        or os.path.basename(filename) != filename
-    ):
+    if not isinstance(filename, str) or not filename or os.path.basename(filename) != filename:
         raise ValueError("offline manifest DPO filename is invalid")
     sibling = os.path.join(os.path.dirname(os.path.abspath(path)), filename)
     if not os.path.lexists(sibling):

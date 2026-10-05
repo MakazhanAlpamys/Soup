@@ -144,14 +144,11 @@ class TestTheGuardHasTeeth:
         assert len(verdict.violations) == 1
         assert verdict.violations[0][0] == 2
 
-    def test_version_tags_and_python_versions_are_accepted(
-        self, tmp_path: pathlib.Path
-    ) -> None:
+    def test_version_tags_and_python_versions_are_accepted(self, tmp_path: pathlib.Path) -> None:
         """CONTROL: Legitimate version tags (v0.69.0), pytest, and Python ranges must pass."""
         doc = tmp_path / "CONTRIBUTING.md"
         doc.write_text(
-            "tests/  - Test suite (v0.69.0, pytest 8.x, Python 3.10-3.12)\n"
-            "### Test Files\n",
+            "tests/  - Test suite (v0.69.0, pytest 8.x, Python 3.10-3.12)\n### Test Files\n",
             encoding="utf-8",
         )
         verdict = audit_contributing_test_count_shape(doc)

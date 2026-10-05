@@ -111,9 +111,7 @@ def _posix_check_existing(path: str) -> None:
         raise OwnerOnlyError(f"{path} belongs to another user (uid {info.st_uid}, not {uid})")
     mode = stat.S_IMODE(info.st_mode)
     if mode & 0o022:
-        raise OwnerOnlyError(
-            f"{path} can be written by users other than its owner (mode {mode:o})"
-        )
+        raise OwnerOnlyError(f"{path} can be written by users other than its owner (mode {mode:o})")
 
 
 def _posix_restrict(path: str) -> None:
@@ -134,6 +132,7 @@ _TOKEN_QUERY = 0x0008
 _TOKEN_USER = 1
 _TOKEN_OWNER = 4
 _ERROR_ALREADY_EXISTS = 183
+
 
 @functools.lru_cache(maxsize=None)
 def _win() -> Any:
@@ -156,35 +155,62 @@ def _win() -> Any:
     kernel32.CreateDirectoryW.argtypes = [wintypes.LPCWSTR, void_p]
     kernel32.CreateDirectoryW.restype = wintypes.BOOL
     advapi32.OpenProcessToken.argtypes = [
-        wintypes.HANDLE, wintypes.DWORD, ctypes.POINTER(wintypes.HANDLE)
+        wintypes.HANDLE,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.HANDLE),
     ]
     advapi32.OpenProcessToken.restype = wintypes.BOOL
     advapi32.GetTokenInformation.argtypes = [
-        wintypes.HANDLE, ctypes.c_int, void_p, wintypes.DWORD, ctypes.POINTER(wintypes.DWORD)
+        wintypes.HANDLE,
+        ctypes.c_int,
+        void_p,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.DWORD),
     ]
     advapi32.GetTokenInformation.restype = wintypes.BOOL
     advapi32.ConvertSidToStringSidW.argtypes = [void_p, ctypes.POINTER(wintypes.LPWSTR)]
     advapi32.ConvertSidToStringSidW.restype = wintypes.BOOL
     advapi32.ConvertStringSecurityDescriptorToSecurityDescriptorW.argtypes = [
-        wintypes.LPCWSTR, wintypes.DWORD, p_void_p, ctypes.POINTER(wintypes.ULONG)
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        p_void_p,
+        ctypes.POINTER(wintypes.ULONG),
     ]
     advapi32.ConvertStringSecurityDescriptorToSecurityDescriptorW.restype = wintypes.BOOL
     advapi32.ConvertSecurityDescriptorToStringSecurityDescriptorW.argtypes = [
-        void_p, wintypes.DWORD, wintypes.DWORD, ctypes.POINTER(wintypes.LPWSTR),
+        void_p,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.LPWSTR),
         ctypes.POINTER(wintypes.ULONG),
     ]
     advapi32.ConvertSecurityDescriptorToStringSecurityDescriptorW.restype = wintypes.BOOL
     advapi32.GetSecurityDescriptorDacl.argtypes = [
-        void_p, ctypes.POINTER(wintypes.BOOL), p_void_p, ctypes.POINTER(wintypes.BOOL)
+        void_p,
+        ctypes.POINTER(wintypes.BOOL),
+        p_void_p,
+        ctypes.POINTER(wintypes.BOOL),
     ]
     advapi32.GetSecurityDescriptorDacl.restype = wintypes.BOOL
     advapi32.GetNamedSecurityInfoW.argtypes = [
-        wintypes.LPCWSTR, ctypes.c_int, wintypes.DWORD,
-        p_void_p, p_void_p, p_void_p, p_void_p, p_void_p,
+        wintypes.LPCWSTR,
+        ctypes.c_int,
+        wintypes.DWORD,
+        p_void_p,
+        p_void_p,
+        p_void_p,
+        p_void_p,
+        p_void_p,
     ]
     advapi32.GetNamedSecurityInfoW.restype = wintypes.DWORD
     advapi32.SetNamedSecurityInfoW.argtypes = [
-        wintypes.LPWSTR, ctypes.c_int, wintypes.DWORD, void_p, void_p, void_p, void_p
+        wintypes.LPWSTR,
+        ctypes.c_int,
+        wintypes.DWORD,
+        void_p,
+        void_p,
+        void_p,
+        void_p,
     ]
     advapi32.SetNamedSecurityInfoW.restype = wintypes.DWORD
 
@@ -196,7 +222,10 @@ def _win() -> Any:
         ]
 
     return SimpleNamespace(
-        ctypes=ctypes, wintypes=wintypes, advapi32=advapi32, kernel32=kernel32,
+        ctypes=ctypes,
+        wintypes=wintypes,
+        advapi32=advapi32,
+        kernel32=kernel32,
         SecurityAttributes=_SecurityAttributes,
     )
 
@@ -248,9 +277,7 @@ def _win_current_user_sid() -> str:
 def _win_trusted_owner_sids() -> List[str]:
     """This account; its token's default owner (Administrators when elevated); SYSTEM and
     Administrators, who can take ownership of any folder on the box anyway."""
-    return [
-        _win_current_user_sid(), _win_token_sid(_TOKEN_OWNER), _SYSTEM_SID, _ADMINISTRATORS_SID
-    ]
+    return [_win_current_user_sid(), _win_token_sid(_TOKEN_OWNER), _SYSTEM_SID, _ADMINISTRATORS_SID]
 
 
 def _win_owner_only_sddl() -> str:
@@ -300,8 +327,14 @@ def _win_owner_sid(path: str) -> str:
     owner = ctypes.c_void_p()
     descriptor = ctypes.c_void_p()
     code = api.advapi32.GetNamedSecurityInfoW(
-        path, _SE_FILE_OBJECT, _OWNER_SECURITY_INFORMATION,
-        ctypes.byref(owner), None, None, None, ctypes.byref(descriptor),
+        path,
+        _SE_FILE_OBJECT,
+        _OWNER_SECURITY_INFORMATION,
+        ctypes.byref(owner),
+        None,
+        None,
+        None,
+        ctypes.byref(descriptor),
     )
     if code:
         raise OSError(code, f"GetNamedSecurityInfoW({path!r}) failed: {ctypes.FormatError(code)}")
@@ -323,9 +356,13 @@ def _win_protect(path: str) -> None:
         ):
             raise _win_error("GetSecurityDescriptorDacl")
         code = api.advapi32.SetNamedSecurityInfoW(
-            path, _SE_FILE_OBJECT,
+            path,
+            _SE_FILE_OBJECT,
             _DACL_SECURITY_INFORMATION | _PROTECTED_DACL_SECURITY_INFORMATION,
-            None, None, dacl, None,
+            None,
+            None,
+            dacl,
+            None,
         )
     if code:
         raise OSError(code, f"SetNamedSecurityInfoW({path!r}) failed: {ctypes.FormatError(code)}")
@@ -337,8 +374,14 @@ def _win_dacl_sddl(path: str) -> str:
     ctypes, wintypes = api.ctypes, api.wintypes
     descriptor = ctypes.c_void_p()
     code = api.advapi32.GetNamedSecurityInfoW(
-        path, _SE_FILE_OBJECT, _DACL_SECURITY_INFORMATION,
-        None, None, None, None, ctypes.byref(descriptor),
+        path,
+        _SE_FILE_OBJECT,
+        _DACL_SECURITY_INFORMATION,
+        None,
+        None,
+        None,
+        None,
+        ctypes.byref(descriptor),
     )
     if code:
         raise OSError(code, f"GetNamedSecurityInfoW({path!r}) failed: {ctypes.FormatError(code)}")

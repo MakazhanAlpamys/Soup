@@ -46,6 +46,7 @@ def capture_env(out_path: Path) -> Path:
     ]
     try:
         from soup_cli.utils.gpu import detect_device
+
         device, info = detect_device()
         lines.append(f"device={device}")
         lines.append(f"device_info={info}")
@@ -55,7 +56,10 @@ def capture_env(out_path: Path) -> Path:
     try:
         proc = subprocess.run(
             [sys.executable, "-m", "pip", "freeze"],
-            capture_output=True, text=True, timeout=120, check=False,
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
         )
         if proc.returncode == 0:
             lines.append("# pip freeze:")
@@ -91,8 +95,10 @@ def _run_subprocess(argv: list[str], *, cwd: Optional[Path] = None) -> int:
     """
     try:
         proc = subprocess.run(
-            argv, cwd=str(cwd) if cwd else None,
-            timeout=_RUN_TIMEOUT_SECONDS, check=False,
+            argv,
+            cwd=str(cwd) if cwd else None,
+            timeout=_RUN_TIMEOUT_SECONDS,
+            check=False,
         )
     except subprocess.TimeoutExpired:
         return _TIMEOUT_RC
@@ -120,15 +126,20 @@ def _deploy_target(target: DeployTarget, extract_dir: Path) -> int:
             gguf_path = Path(cand_real)
             break
         if gguf_path is None:
-            raise ValueError(
-                "deploy_target kind=ollama requires a *.gguf inside the can"
-            )
-        return _run_subprocess([
-            sys.executable, "-m", "soup_cli.cli",
-            "deploy", "ollama",
-            "--gguf", str(gguf_path),
-            "--name", target.name,
-        ])
+            raise ValueError("deploy_target kind=ollama requires a *.gguf inside the can")
+        return _run_subprocess(
+            [
+                sys.executable,
+                "-m",
+                "soup_cli.cli",
+                "deploy",
+                "ollama",
+                "--gguf",
+                str(gguf_path),
+                "--name",
+                target.name,
+            ]
+        )
     if target.kind == "gguf":
         # Already extracted — just confirm presence, but verify the manifest's
         # path really resolves inside extract_dir first. ``target.path`` comes
@@ -147,8 +158,7 @@ def _deploy_target(target: DeployTarget, extract_dir: Path) -> int:
             common = ""
         if common != extract_real or gguf_real == extract_real:
             raise ValueError(
-                f"deploy gguf path '{target.path}' escapes the can extract "
-                f"dir - refusing"
+                f"deploy gguf path '{target.path}' escapes the can extract dir - refusing"
             )
         gguf_path = Path(gguf_real)
         if not gguf_path.exists():
@@ -162,7 +172,8 @@ def _deploy_target(target: DeployTarget, extract_dir: Path) -> int:
 
 
 def run_can(
-    can_path: str, *,
+    can_path: str,
+    *,
     yes: bool = False,
     deploy: bool = False,
     extract_dir: Optional[str] = None,
@@ -221,9 +232,7 @@ def run_can(
     else:
         candidate = Path(extract_dir)
         if not is_under_cwd(candidate):
-            raise ValueError(
-                f"extract_dir '{extract_dir}' is outside cwd - refusing"
-            )
+            raise ValueError(f"extract_dir '{extract_dir}' is outside cwd - refusing")
         candidate.mkdir(parents=True, exist_ok=True)
         owned_dir = candidate
 
@@ -241,15 +250,17 @@ def run_can(
     if capture_env_to:
         env_target = Path(capture_env_to)
         if not is_under_cwd(env_target):
-            raise ValueError(
-                f"capture_env_to '{capture_env_to}' is outside cwd - refusing"
-            )
+            raise ValueError(f"capture_env_to '{capture_env_to}' is outside cwd - refusing")
         env_path = capture_env(env_target)
 
     # Train via subprocess against the embedded config.
     train_argv = [
-        sys.executable, "-m", "soup_cli.cli", "train",
-        "--config", str(owned_dir / "config.yaml"),
+        sys.executable,
+        "-m",
+        "soup_cli.cli",
+        "train",
+        "--config",
+        str(owned_dir / "config.yaml"),
         "--yes",  # the can-run wrapper already confirmed
     ]
     if train_argv_extra:

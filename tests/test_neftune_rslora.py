@@ -8,6 +8,7 @@ from soup_cli.config.schema import LoraConfig, SoupConfig, TrainingConfig
 # NEFTune config tests
 # ---------------------------------------------------------------------------
 
+
 class TestNEFTuneConfig:
     """NEFTune config validation."""
 
@@ -55,6 +56,7 @@ class TestNEFTuneConfig:
 # NEFTune trainer integration tests
 # ---------------------------------------------------------------------------
 
+
 class TestNEFTuneTrainer:
     """NEFTune trainer argument passing."""
 
@@ -80,8 +82,7 @@ class TestNEFTuneTrainer:
         """DPO trainer config includes neftune_noise_alpha when set."""
         tcfg = TrainingConfig(neftune_alpha=10.0)
         extra = (
-            {"neftune_noise_alpha": tcfg.neftune_alpha}
-            if tcfg.neftune_alpha is not None else {}
+            {"neftune_noise_alpha": tcfg.neftune_alpha} if tcfg.neftune_alpha is not None else {}
         )
         assert extra == {"neftune_noise_alpha": 10.0}
 
@@ -89,8 +90,7 @@ class TestNEFTuneTrainer:
         """KTO trainer config includes neftune_noise_alpha when set."""
         tcfg = TrainingConfig(neftune_alpha=7.5)
         extra = (
-            {"neftune_noise_alpha": tcfg.neftune_alpha}
-            if tcfg.neftune_alpha is not None else {}
+            {"neftune_noise_alpha": tcfg.neftune_alpha} if tcfg.neftune_alpha is not None else {}
         )
         assert extra == {"neftune_noise_alpha": 7.5}
 
@@ -98,8 +98,7 @@ class TestNEFTuneTrainer:
         """ORPO trainer config includes neftune_noise_alpha when set."""
         tcfg = TrainingConfig(neftune_alpha=3.0)
         extra = (
-            {"neftune_noise_alpha": tcfg.neftune_alpha}
-            if tcfg.neftune_alpha is not None else {}
+            {"neftune_noise_alpha": tcfg.neftune_alpha} if tcfg.neftune_alpha is not None else {}
         )
         assert extra == {"neftune_noise_alpha": 3.0}
 
@@ -107,8 +106,7 @@ class TestNEFTuneTrainer:
         """SimPO trainer config includes neftune_noise_alpha when set."""
         tcfg = TrainingConfig(neftune_alpha=15.0)
         extra = (
-            {"neftune_noise_alpha": tcfg.neftune_alpha}
-            if tcfg.neftune_alpha is not None else {}
+            {"neftune_noise_alpha": tcfg.neftune_alpha} if tcfg.neftune_alpha is not None else {}
         )
         assert extra == {"neftune_noise_alpha": 15.0}
 
@@ -116,8 +114,7 @@ class TestNEFTuneTrainer:
         """IPO trainer config includes neftune_noise_alpha when set."""
         tcfg = TrainingConfig(neftune_alpha=2.0)
         extra = (
-            {"neftune_noise_alpha": tcfg.neftune_alpha}
-            if tcfg.neftune_alpha is not None else {}
+            {"neftune_noise_alpha": tcfg.neftune_alpha} if tcfg.neftune_alpha is not None else {}
         )
         assert extra == {"neftune_noise_alpha": 2.0}
 
@@ -125,6 +122,7 @@ class TestNEFTuneTrainer:
 # ---------------------------------------------------------------------------
 # NEFTune sweep integration tests
 # ---------------------------------------------------------------------------
+
 
 class TestNEFTuneSweep:
     """NEFTune sweep parameter support."""
@@ -146,6 +144,7 @@ class TestNEFTuneSweep:
 # ---------------------------------------------------------------------------
 # rsLoRA config tests
 # ---------------------------------------------------------------------------
+
 
 class TestRsLoRAConfig:
     """rsLoRA config validation."""
@@ -180,6 +179,7 @@ class TestRsLoRAConfig:
 # rsLoRA sweep integration tests
 # ---------------------------------------------------------------------------
 
+
 class TestRsLoRATrainer:
     """rsLoRA trainer integration — use_rslora flows to LoraConfig."""
 
@@ -207,8 +207,17 @@ class TestRsLoRATrainer:
     def test_rslora_with_all_tasks(self):
         """use_rslora works in config for every task type."""
         for task in [
-            "sft", "dpo", "grpo", "ppo", "reward_model",
-            "kto", "orpo", "simpo", "ipo", "pretrain", "embedding",
+            "sft",
+            "dpo",
+            "grpo",
+            "ppo",
+            "reward_model",
+            "kto",
+            "orpo",
+            "simpo",
+            "ipo",
+            "pretrain",
+            "embedding",
         ]:
             cfg = SoupConfig(
                 base="test-model",
@@ -222,6 +231,7 @@ class TestRsLoRATrainer:
 # ---------------------------------------------------------------------------
 # rsLoRA sweep integration tests
 # ---------------------------------------------------------------------------
+
 
 class TestRsLoRASweep:
     """rsLoRA sweep parameter support."""

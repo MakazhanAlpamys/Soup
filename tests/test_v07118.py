@@ -179,10 +179,7 @@ class TestMiniLLMRolloutLengthSchema:
     def test_bounds(self, bad):
         with pytest.raises(ValueError):
             load_config_from_string(
-                self._yaml(
-                    "  minillm_on_policy: true\n"
-                    f"  minillm_rollout_length: {bad}\n"
-                )
+                self._yaml(f"  minillm_on_policy: true\n  minillm_rollout_length: {bad}\n")
             )
 
     def test_distill_trainer_threads_explicit_length(self):
@@ -249,10 +246,7 @@ class TestMiniLLMOnPolicyRollout:
             sample_fn=lambda p: p.argmax(dim=-1, keepdim=True),
         )
         loss.backward()
-        assert any(
-            p.grad is not None and p.grad.abs().sum() > 0
-            for p in student.parameters()
-        )
+        assert any(p.grad is not None and p.grad.abs().sum() > 0 for p in student.parameters())
         assert all(p.grad is None for p in teacher.parameters())
 
     def test_length_normalize_divides_by_steps(self):
@@ -270,12 +264,18 @@ class TestMiniLLMOnPolicyRollout:
             sample_fn=lambda p: p.argmax(dim=-1, keepdim=True),
         )
         norm, _ = minillm_on_policy_rollout(
-            student, teacher, ids, None,
+            student,
+            teacher,
+            ids,
+            None,
             config=MiniLLMConfig(teacher_mix_ratio=0.0, length_normalize=True, on_policy=True),
             **kw,
         )
         total, _ = minillm_on_policy_rollout(
-            student, teacher, ids, None,
+            student,
+            teacher,
+            ids,
+            None,
             config=MiniLLMConfig(teacher_mix_ratio=0.0, length_normalize=False, on_policy=True),
             **kw,
         )
@@ -291,8 +291,13 @@ class TestMiniLLMOnPolicyRollout:
         student = _make_fake_lm()
         with pytest.raises(TypeError, match="MiniLLMConfig"):
             minillm_on_policy_rollout(
-                student, student, torch.tensor([[1]]), None,
-                config={"teacher_mix_ratio": 0.5}, max_new_tokens=2, temperature=1.0,
+                student,
+                student,
+                torch.tensor([[1]]),
+                None,
+                config={"teacher_mix_ratio": 0.5},
+                max_new_tokens=2,
+                temperature=1.0,
             )
 
     @pytest.mark.parametrize("bad", [0, -1])
@@ -305,8 +310,13 @@ class TestMiniLLMOnPolicyRollout:
         student = _make_fake_lm()
         with pytest.raises(ValueError, match="max_new_tokens"):
             minillm_on_policy_rollout(
-                student, student, torch.tensor([[1]]), None,
-                config=MiniLLMConfig(on_policy=True), max_new_tokens=bad, temperature=1.0,
+                student,
+                student,
+                torch.tensor([[1]]),
+                None,
+                config=MiniLLMConfig(on_policy=True),
+                max_new_tokens=bad,
+                temperature=1.0,
             )
 
     def test_rollout_rejects_nonpositive_temperature(self):
@@ -318,8 +328,13 @@ class TestMiniLLMOnPolicyRollout:
         student = _make_fake_lm()
         with pytest.raises(ValueError, match="temperature"):
             minillm_on_policy_rollout(
-                student, student, torch.tensor([[1]]), None,
-                config=MiniLLMConfig(on_policy=True), max_new_tokens=2, temperature=0.0,
+                student,
+                student,
+                torch.tensor([[1]]),
+                None,
+                config=MiniLLMConfig(on_policy=True),
+                max_new_tokens=2,
+                temperature=0.0,
             )
 
     def test_rollout_rejects_bool_temperature(self):
@@ -331,8 +346,13 @@ class TestMiniLLMOnPolicyRollout:
         student = _make_fake_lm()
         with pytest.raises(TypeError, match="temperature"):
             minillm_on_policy_rollout(
-                student, student, torch.tensor([[1]]), None,
-                config=MiniLLMConfig(on_policy=True), max_new_tokens=2, temperature=True,
+                student,
+                student,
+                torch.tensor([[1]]),
+                None,
+                config=MiniLLMConfig(on_policy=True),
+                max_new_tokens=2,
+                temperature=True,
             )
 
 
@@ -352,7 +372,10 @@ class TestMiniLLMCallbackOnPolicy:
             p.requires_grad_(False)
         ids = torch.tensor([[1, 2, 3]])
         loss = cb.on_policy_term(
-            student, teacher, ids, torch.ones_like(ids),
+            student,
+            teacher,
+            ids,
+            torch.ones_like(ids),
             sample_fn=lambda p: p.argmax(dim=-1, keepdim=True),
         )
         assert torch.isfinite(loss).item()
@@ -438,9 +461,7 @@ class TestAlignTokenSequences:
     def test_identical_tokenization(self):
         from soup_cli.utils.uld import align_token_sequences
 
-        assert align_token_sequences(["a", "b", "c"], ["a", "b", "c"]) == [
-            [0], [1], [2]
-        ]
+        assert align_token_sequences(["a", "b", "c"], ["a", "b", "c"]) == [[0], [1], [2]]
 
     def test_disjoint_tokenization_same_text(self):
         from soup_cli.utils.uld import align_token_sequences
@@ -478,8 +499,8 @@ class TestAlignTokenSequences:
         # student "ab" -> teacher "ab" (idx 0); student "Xc" -> teacher "c" (1).
         out = align_token_sequences(["ab", "Xc"], ["ab", "c"])
         assert len(out) == 2
-        assert 0 in out[0]   # "ab" student token aligns to teacher "ab"
-        assert 1 in out[1]   # the "c" in "Xc" aligns to teacher "c"
+        assert 0 in out[0]  # "ab" student token aligns to teacher "ab"
+        assert 1 in out[1]  # the "c" in "Xc" aligns to teacher "c"
 
     def test_char_cap_truncates_difflib_branch(self):
         from soup_cli.utils.uld import _MAX_ALIGN_TOKENS, align_token_sequences
@@ -512,9 +533,7 @@ class TestAggregateAlignedLogits:
 
         from soup_cli.utils.uld import aggregate_aligned_logits
 
-        teacher = torch.tensor(
-            [[1.0, 0.0], [3.0, 0.0], [5.0, 0.0]]
-        )  # [Tt=3, Vt=2]
+        teacher = torch.tensor([[1.0, 0.0], [3.0, 0.0], [5.0, 0.0]])  # [Tt=3, Vt=2]
         # student pos 0 → teacher {0,1} (mean=2.0), pos 1 → teacher {2}.
         out = aggregate_aligned_logits(teacher, [[0, 1], [2]])
         assert out.shape == (2, 2)
@@ -561,7 +580,8 @@ class TestUldAlignedLoss:
         s = torch.randn(1, 2, 4, requires_grad=True)
         t = torch.randn(1, 2, 5)
         loss = uld_aligned_loss(
-            s, t,
+            s,
+            t,
             [["he", "llo"]],
             [["hel", "lo"]],
             config=cfg,
@@ -578,8 +598,11 @@ class TestUldAlignedLoss:
 
         with pytest.raises(TypeError, match="ULDConfig"):
             uld_aligned_loss(
-                torch.randn(1, 1, 2), torch.randn(1, 1, 2),
-                [["a"]], [["a"]], config={},
+                torch.randn(1, 1, 2),
+                torch.randn(1, 1, 2),
+                [["a"]],
+                [["a"]],
+                config={},
             )
 
     def test_rejects_short_token_lists(self):
@@ -596,8 +619,11 @@ class TestUldAlignedLoss:
         # Logit batch dim is 2 but only one per-batch token list supplied.
         with pytest.raises(ValueError, match="at least"):
             uld_aligned_loss(
-                torch.randn(2, 1, 4), torch.randn(2, 1, 5),
-                [["a"]], [["a"]], config=cfg,
+                torch.randn(2, 1, 4),
+                torch.randn(2, 1, 5),
+                [["a"]],
+                [["a"]],
+                config=cfg,
             )
 
     def test_empty_student_tokens_zero_loss(self):
@@ -614,8 +640,11 @@ class TestUldAlignedLoss:
         # Empty per-batch student token list → no positions to align → the
         # ts==0 branch returns a finite zero contribution (no grad, no crash).
         loss = uld_aligned_loss(
-            torch.randn(1, 2, 4), torch.randn(1, 2, 5),
-            [[]], [["he", "llo"]], config=cfg,
+            torch.randn(1, 2, 4),
+            torch.randn(1, 2, 5),
+            [[]],
+            [["he", "llo"]],
+            config=cfg,
         )
         assert torch.isfinite(loss).item()
         assert loss.item() == pytest.approx(0.0)
@@ -761,13 +790,8 @@ class TestScoreSandbox:
     def test_score_uses_override(self, monkeypatch):
         import soup_cli.utils.agent_sandbox as m
 
-        monkeypatch.setattr(
-            m, "_AGENT_SANDBOX_RUN_OVERRIDE", lambda stub: (None, "", True)
-        )
-        assert (
-            m.score_sandbox(tool="t", parameters=[], path="/x", arguments={})
-            == "timeout"
-        )
+        monkeypatch.setattr(m, "_AGENT_SANDBOX_RUN_OVERRIDE", lambda stub: (None, "", True))
+        assert m.score_sandbox(tool="t", parameters=[], path="/x", arguments={}) == "timeout"
 
 
 def _write_sandbox_fixture(tmp_path: Path) -> None:
@@ -793,14 +817,12 @@ def _write_sandbox_fixture(tmp_path: Path) -> None:
     }
     (tmp_path / "api.json").write_text(json.dumps(spec), encoding="utf-8")
     preds = [
-        {"tool": "get_user", "arguments": {"user_id": 1}},   # ok
-        {"tool": "get_user", "arguments": {}},               # tool_error
-        {"tool": "list_posts", "arguments": {"bogus": 1}},   # arg_error (param)
-        {"tool": "nope", "arguments": {}},                   # arg_error (tool)
+        {"tool": "get_user", "arguments": {"user_id": 1}},  # ok
+        {"tool": "get_user", "arguments": {}},  # tool_error
+        {"tool": "list_posts", "arguments": {"bogus": 1}},  # arg_error (param)
+        {"tool": "nope", "arguments": {}},  # arg_error (tool)
     ]
-    (tmp_path / "p.jsonl").write_text(
-        "\n".join(json.dumps(p) for p in preds), encoding="utf-8"
-    )
+    (tmp_path / "p.jsonl").write_text("\n".join(json.dumps(p) for p in preds), encoding="utf-8")
 
 
 class TestAgentEvalSandboxCli:
@@ -822,8 +844,13 @@ class TestAgentEvalSandboxCli:
         result = CliRunner().invoke(
             app,
             [
-                "agent", "eval", "--spec", "api.json",
-                "--predictions", "p.jsonl", "--sandbox",
+                "agent",
+                "eval",
+                "--spec",
+                "api.json",
+                "--predictions",
+                "p.jsonl",
+                "--sandbox",
             ],
         )
         assert result.exit_code == 0, (result.output, repr(result.exception))
@@ -840,9 +867,7 @@ class TestAgentEvalSandboxCli:
         _write_sandbox_fixture(tmp_path)
         import soup_cli.utils.agent_sandbox as m
 
-        monkeypatch.setattr(
-            m, "_AGENT_SANDBOX_RUN_OVERRIDE", lambda stub: (None, "", True)
-        )
+        monkeypatch.setattr(m, "_AGENT_SANDBOX_RUN_OVERRIDE", lambda stub: (None, "", True))
         from typer.testing import CliRunner
 
         from soup_cli.cli import app
@@ -850,8 +875,13 @@ class TestAgentEvalSandboxCli:
         result = CliRunner().invoke(
             app,
             [
-                "agent", "eval", "--spec", "api.json",
-                "--predictions", "p.jsonl", "--sandbox",
+                "agent",
+                "eval",
+                "--spec",
+                "api.json",
+                "--predictions",
+                "p.jsonl",
+                "--sandbox",
             ],
         )
         assert result.exit_code == 0, (result.output, repr(result.exception))
@@ -863,9 +893,7 @@ class TestAgentEvalSandboxCli:
 
 class TestAgentSandboxNoTopLevelHeavyImport:
     def test_no_top_level_torch(self):
-        src = (REPO_ROOT / "src/soup_cli/utils/agent_sandbox.py").read_text(
-            encoding="utf-8"
-        )
+        src = (REPO_ROOT / "src/soup_cli/utils/agent_sandbox.py").read_text(encoding="utf-8")
         assert "\nimport torch" not in src
         # rewards.py is imported lazily inside run_eval_in_sandbox (not at top).
         assert "\nfrom soup_cli.trainer.rewards import" not in src
@@ -926,9 +954,7 @@ class TestRenderModalStub:
     def test_structure(self):
         from soup_cli.cloud.modal import render_modal_stub
 
-        stub = render_modal_stub(
-            _SOUP_YAML, gpu="a100", output_dir="./out", soup_version="0.71.18"
-        )
+        stub = render_modal_stub(_SOUP_YAML, gpu="a100", output_dir="./out", soup_version="0.71.18")
         assert "import modal" in stub
         assert "modal.App" in stub
         assert 'gpu="A100"' in stub
@@ -953,23 +979,25 @@ class TestRenderModalStub:
         with pytest.raises(ValueError, match="exceeds"):
             render_modal_stub(
                 "x" * (_MAX_CONFIG_BYTES + 1),
-                gpu="a100", output_dir="./out", soup_version="0.71.18",
+                gpu="a100",
+                output_dir="./out",
+                soup_version="0.71.18",
             )
 
     def test_bad_gpu_rejected(self):
         from soup_cli.cloud.modal import render_modal_stub
 
         with pytest.raises(ValueError):
-            render_modal_stub(
-                _SOUP_YAML, gpu="v100", output_dir="./out", soup_version="0.71.18"
-            )
+            render_modal_stub(_SOUP_YAML, gpu="v100", output_dir="./out", soup_version="0.71.18")
 
     def test_bad_output_dir_rejected(self):
         from soup_cli.cloud.modal import render_modal_stub
 
         with pytest.raises(ValueError):
             render_modal_stub(
-                _SOUP_YAML, gpu="a100", output_dir="out\nINJECT",
+                _SOUP_YAML,
+                gpu="a100",
+                output_dir="out\nINJECT",
                 soup_version="0.71.18",
             )
 
@@ -982,7 +1010,9 @@ class TestRenderModalStub:
 
         with pytest.raises(ValueError, match="soup_version"):
             render_modal_stub(
-                _SOUP_YAML, gpu="a100", output_dir="./out",
+                _SOUP_YAML,
+                gpu="a100",
+                output_dir="./out",
                 soup_version=bad_version,
             )
 
@@ -991,7 +1021,9 @@ class TestRenderModalStub:
 
         with pytest.raises(ValueError, match="soup_version"):
             render_modal_stub(
-                _SOUP_YAML, gpu="a100", output_dir="./out",
+                _SOUP_YAML,
+                gpu="a100",
+                output_dir="./out",
                 soup_version="0." * _MAX_VERSION_LEN,
             )
 
@@ -1000,7 +1032,9 @@ class TestRenderModalStub:
 
         # Real-world version shapes must pass (dev / rc / local-version).
         stub = render_modal_stub(
-            _SOUP_YAML, gpu="a100", output_dir="./out",
+            _SOUP_YAML,
+            gpu="a100",
+            output_dir="./out",
             soup_version="0.71.18.dev0+gabc123",
         )
         assert "soup-cli[train]==0.71.18.dev0+gabc123" in stub
@@ -1012,9 +1046,7 @@ class TestPlanModalRun:
         (tmp_path / "soup.yaml").write_text(_SOUP_YAML, encoding="utf-8")
         from soup_cli.cloud.modal import CloudPlan, plan_modal_run
 
-        plan = plan_modal_run(
-            "soup.yaml", gpu="a100", output_dir="./out", soup_version="0.71.18"
-        )
+        plan = plan_modal_run("soup.yaml", gpu="a100", output_dir="./out", soup_version="0.71.18")
         assert isinstance(plan, CloudPlan)
         assert plan.cloud == "modal"
         assert plan.gpu == "a100"
@@ -1027,7 +1059,9 @@ class TestPlanModalRun:
 
         with pytest.raises(ValueError):
             plan_modal_run(
-                "../escape.yaml", gpu="a100", output_dir="./out",
+                "../escape.yaml",
+                gpu="a100",
+                output_dir="./out",
                 soup_version="0.71.18",
             )
 
@@ -1037,7 +1071,9 @@ class TestPlanModalRun:
 
         with pytest.raises((FileNotFoundError, ValueError, OSError)):
             plan_modal_run(
-                "nope.yaml", gpu="a100", output_dir="./out",
+                "nope.yaml",
+                gpu="a100",
+                output_dir="./out",
                 soup_version="0.71.18",
             )
 
@@ -1048,9 +1084,7 @@ class TestWriteStub:
         (tmp_path / "soup.yaml").write_text(_SOUP_YAML, encoding="utf-8")
         from soup_cli.cloud.modal import plan_modal_run, write_stub
 
-        plan = plan_modal_run(
-            "soup.yaml", gpu="t4", output_dir="./out", soup_version="0.71.18"
-        )
+        plan = plan_modal_run("soup.yaml", gpu="t4", output_dir="./out", soup_version="0.71.18")
         path = write_stub(plan)
         assert (tmp_path / "soup_modal_app.py").exists()
         assert "modal.App" in Path(path).read_text(encoding="utf-8")
@@ -1061,8 +1095,12 @@ class TestSubmitModalRun:
         import soup_cli.cloud.modal as m
 
         plan = m.CloudPlan(
-            cloud="modal", gpu="a100", output_dir="./out",
-            stub_path="x.py", stub_text="", run_command="modal run x.py",
+            cloud="modal",
+            gpu="a100",
+            output_dir="./out",
+            stub_path="x.py",
+            stub_text="",
+            run_command="modal run x.py",
         )
         monkeypatch.setattr(m, "_MODAL_SUBMIT_OVERRIDE", lambda p: 7)
         assert m.submit_modal_run(plan) == 7
@@ -1071,8 +1109,12 @@ class TestSubmitModalRun:
         import soup_cli.cloud.modal as m
 
         plan = m.CloudPlan(
-            cloud="modal", gpu="a100", output_dir="./out",
-            stub_path="x.py", stub_text="", run_command="modal run x.py",
+            cloud="modal",
+            gpu="a100",
+            output_dir="./out",
+            stub_path="x.py",
+            stub_text="",
+            run_command="modal run x.py",
         )
         # No env token AND no ~/.modal.toml.
         monkeypatch.setattr(m.os.path, "exists", lambda p: False)
@@ -1091,15 +1133,17 @@ class TestSubmitModalRun:
         import soup_cli.cloud.modal as m
 
         plan = m.CloudPlan(
-            cloud="modal", gpu="a100", output_dir="./out",
-            stub_path="x.py", stub_text="", run_command="modal run x.py",
+            cloud="modal",
+            gpu="a100",
+            output_dir="./out",
+            stub_path="x.py",
+            stub_text="",
+            run_command="modal run x.py",
         )
         # Token present (passes the auth gate) but the Modal SDK is absent.
         monkeypatch.setitem(sys.modules, "modal", None)  # forces ImportError
         with pytest.raises(RuntimeError, match="not installed"):
-            m.submit_modal_run(
-                plan, env={"MODAL_TOKEN_ID": "a", "MODAL_TOKEN_SECRET": "b"}
-            )
+            m.submit_modal_run(plan, env={"MODAL_TOKEN_ID": "a", "MODAL_TOKEN_SECRET": "b"})
 
 
 class TestTrainCloudCli:
@@ -1137,9 +1181,7 @@ class TestTrainCloudCli:
 
         from soup_cli.cli import app
 
-        result = CliRunner().invoke(
-            app, ["train", "--config", "soup.yaml", "--cloud", "aws"]
-        )
+        result = CliRunner().invoke(app, ["train", "--config", "soup.yaml", "--cloud", "aws"])
         assert result.exit_code == 2
 
     def test_cloud_bad_gpu_rejected(self, tmp_path, monkeypatch):
@@ -1166,8 +1208,16 @@ class TestTrainCloudCli:
 
         result = CliRunner().invoke(
             app,
-            ["train", "--config", "soup.yaml", "--cloud", "modal",
-             "--gpu", "h100", "--cloud-submit"],
+            [
+                "train",
+                "--config",
+                "soup.yaml",
+                "--cloud",
+                "modal",
+                "--gpu",
+                "h100",
+                "--cloud-submit",
+            ],
         )
         assert result.exit_code == 0, (result.output, repr(result.exception))
 

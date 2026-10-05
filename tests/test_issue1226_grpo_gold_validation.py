@@ -282,10 +282,24 @@ class TestUnparseableGoldRefused:
             (reward_fn, domain, gold)
             for reward_fn, domain in (("accuracy", None), ("verifiable", "math"))
             for gold in (
-                "42", 42, 3.5, "1,000", "#### 42", "6*7=42\n#### 42", r"\boxed{42}",
-                "The answer is 42.", "**Answer**: 42", r"\(42\)", "Answer:\n42",
-                "#### Final Answer\n42", "Paris", "The answer is forty-two.", r"\frac{1}{2}",
-                r"\left( 3, \frac{\pi}{2} \right)", "p - q", r"90^\circ",
+                "42",
+                42,
+                3.5,
+                "1,000",
+                "#### 42",
+                "6*7=42\n#### 42",
+                r"\boxed{42}",
+                "The answer is 42.",
+                "**Answer**: 42",
+                r"\(42\)",
+                "Answer:\n42",
+                "#### Final Answer\n42",
+                "Paris",
+                "The answer is forty-two.",
+                r"\frac{1}{2}",
+                r"\left( 3, \frac{\pi}{2} \right)",
+                "p - q",
+                r"90^\circ",
             )
         ]
         + [("verifiable", "code", "multi\nline stdout")],
@@ -410,9 +424,13 @@ class TestAnswerSprayNoLongerPays:
         result = CliRunner().invoke(
             soup_app,
             [
-                "reward", "stress", "accuracy",
-                "--references", str(refs),
-                "--output-report", str(report_path),
+                "reward",
+                "stress",
+                "accuracy",
+                "--references",
+                str(refs),
+                "--output-report",
+                str(report_path),
             ],
         )
         assert result.exit_code == 0, (result.output, repr(result.exception))

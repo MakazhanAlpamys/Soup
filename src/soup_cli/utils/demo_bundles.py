@@ -6,6 +6,7 @@ bundle into the user-supplied output (containment-checked), and prints
 a short summary. No network access. Path containment via shared
 `is_under_cwd` (mirrors v0.42.0 ingest policy).
 """
+
 from __future__ import annotations
 
 import json
@@ -31,42 +32,44 @@ class DemoBundle:
     # data.formats.detect_format() returns for it — pinned by a test, because
     # two of these were wrong and the value is what a user copies into
     # `data.format`.
-    format: str   # alpaca / dpo
+    format: str  # alpaca / dpo
 
 
 # Descriptions carry no row counts on purpose. `alpaca_demo` advertised
 # "20-row" against a 10-row file: a number describing a file, hardcoded in a
 # different file, with nothing checking the two agree. `soup data inspect
 # <file>` reports the real count, and examples/data/README.md tabulates them.
-_BUNDLES: Mapping[str, DemoBundle] = MappingProxyType({
-    "alpaca_demo": DemoBundle(
-        name="alpaca_demo",
-        fixture="alpaca_tiny.jsonl",
-        description="Alpaca-style instruction tuning fixture",
-        format="alpaca",
-    ),
-    "sharegpt_demo": DemoBundle(
-        name="sharegpt_demo",
-        fixture="chat_preferences.jsonl",
-        # The fixture is prompt/chosen/rejected, not ShareGPT conversations.
-        # The bundle name is kept because it is a public CLI argument.
-        description="Preference pairs whose chosen/rejected are chat turns",
-        format="dpo",
-    ),
-    "dpo_demo": DemoBundle(
-        name="dpo_demo",
-        fixture="dpo_sample.jsonl",
-        description="Preference (prompt/chosen/rejected) DPO fixture",
-        format="dpo",
-    ),
-    "grpo_demo": DemoBundle(
-        name="grpo_demo",
-        fixture="reasoning_math.jsonl",
-        # Alpaca-shaped rows; "reasoning" is not a format Soup accepts.
-        description="Math reasoning fixture for GRPO/RLVR",
-        format="alpaca",
-    ),
-})
+_BUNDLES: Mapping[str, DemoBundle] = MappingProxyType(
+    {
+        "alpaca_demo": DemoBundle(
+            name="alpaca_demo",
+            fixture="alpaca_tiny.jsonl",
+            description="Alpaca-style instruction tuning fixture",
+            format="alpaca",
+        ),
+        "sharegpt_demo": DemoBundle(
+            name="sharegpt_demo",
+            fixture="chat_preferences.jsonl",
+            # The fixture is prompt/chosen/rejected, not ShareGPT conversations.
+            # The bundle name is kept because it is a public CLI argument.
+            description="Preference pairs whose chosen/rejected are chat turns",
+            format="dpo",
+        ),
+        "dpo_demo": DemoBundle(
+            name="dpo_demo",
+            fixture="dpo_sample.jsonl",
+            description="Preference (prompt/chosen/rejected) DPO fixture",
+            format="dpo",
+        ),
+        "grpo_demo": DemoBundle(
+            name="grpo_demo",
+            fixture="reasoning_math.jsonl",
+            # Alpaca-shaped rows; "reasoning" is not a format Soup accepts.
+            description="Math reasoning fixture for GRPO/RLVR",
+            format="alpaca",
+        ),
+    }
+)
 
 DEMO_BUNDLE_NAMES = frozenset(_BUNDLES.keys())
 
@@ -110,9 +113,7 @@ def _bundle_source_path(bundle: DemoBundle) -> str:
     # Filenames are baked-in constants (no user input), so direct join
     # is safe; we still defensively reject path separators.
     if "/" in bundle.fixture or "\\" in bundle.fixture:
-        raise ValueError(
-            f"bundle fixture name has separator: {bundle.fixture!r}"
-        )
+        raise ValueError(f"bundle fixture name has separator: {bundle.fixture!r}")
     # 1) Preferred — package data at soup_cli/data/_fixtures/.
     pkg_root = files("soup_cli")
     pkg_candidate = os.path.realpath(
@@ -122,14 +123,10 @@ def _bundle_source_path(bundle: DemoBundle) -> str:
         return pkg_candidate
     # 2) Fallback — legacy examples/data/ at repo root.
     repo_root = os.path.dirname(str(pkg_root))
-    legacy = os.path.realpath(
-        os.path.join(repo_root, "examples", "data", bundle.fixture)
-    )
+    legacy = os.path.realpath(os.path.join(repo_root, "examples", "data", bundle.fixture))
     if os.path.isfile(legacy):
         return legacy
-    raise FileNotFoundError(
-        f"bundle fixture missing: {bundle.fixture}"
-    )
+    raise FileNotFoundError(f"bundle fixture missing: {bundle.fixture}")
 
 
 def copy_bundle_to(name: str, output_path: str) -> str:
@@ -148,9 +145,7 @@ def copy_bundle_to(name: str, output_path: str) -> str:
     if not is_under_cwd(real_out):
         raise ValueError("output_path must stay under cwd")
     if os.path.exists(real_out):
-        raise FileExistsError(
-            f"{output_path} already exists; remove it before re-running"
-        )
+        raise FileExistsError(f"{output_path} already exists; remove it before re-running")
     src = _bundle_source_path(bundle)
     os.makedirs(os.path.dirname(real_out) or ".", exist_ok=True)
     # Stage writes to a sibling temp file so a mid-stream cap rejection
@@ -160,16 +155,12 @@ def copy_bundle_to(name: str, output_path: str) -> str:
     # (mirrors v0.33.0 #22 / v0.40.2 #51 / v0.42.0 ingest policy).
     try:
         if stat.S_ISLNK(os.lstat(tmp_path).st_mode):
-            raise ValueError(
-                "staging temp path is a symlink; aborting"
-            )
+            raise ValueError("staging temp path is a symlink; aborting")
     except FileNotFoundError:
         pass
     total = 0
     try:
-        with open(src, encoding="utf-8") as f_in, open(
-            tmp_path, "w", encoding="utf-8"
-        ) as f_out:
+        with open(src, encoding="utf-8") as f_in, open(tmp_path, "w", encoding="utf-8") as f_out:
             for lineno, raw in enumerate(f_in, start=1):
                 stripped = raw.strip()
                 if not stripped:
@@ -182,9 +173,7 @@ def copy_bundle_to(name: str, output_path: str) -> str:
                     ) from exc
                 total += len(raw.encode("utf-8"))
                 if total > _MAX_OUTPUT_BYTES:
-                    raise ValueError(
-                        f"bundle {name} exceeds {_MAX_OUTPUT_BYTES} byte cap"
-                    )
+                    raise ValueError(f"bundle {name} exceeds {_MAX_OUTPUT_BYTES} byte cap")
                 f_out.write(raw)
                 if not raw.endswith("\n"):
                     f_out.write("\n")

@@ -9,6 +9,7 @@ import pytest
 def _auth_headers():
     """Return auth headers with the current UI token."""
     from soup_cli.ui.app import get_auth_token
+
     return {"Authorization": f"Bearer {get_auth_token()}"}
 
 
@@ -35,15 +36,18 @@ class TestMetricsFullFields:
                 gpu_info={"memory_total": "N/A"},
             )
             tracker.log_metrics(
-                run_id, step=10, loss=2.5, lr=1e-5,
-                grad_norm=1.23, speed=100.5, gpu_mem="4.2GB",
+                run_id,
+                step=10,
+                loss=2.5,
+                lr=1e-5,
+                grad_norm=1.23,
+                speed=100.5,
+                gpu_mem="4.2GB",
             )
             tracker.close()
 
             client = TestClient(create_app())
-            response = client.get(
-                f"/api/runs/{run_id}/metrics", headers=_auth_headers()
-            )
+            response = client.get(f"/api/runs/{run_id}/metrics", headers=_auth_headers())
             assert response.status_code == 200
             metrics = response.json()["metrics"]
             assert len(metrics) == 1
@@ -75,9 +79,7 @@ class TestMetricsFullFields:
             tracker.close()
 
             client = TestClient(create_app())
-            response = client.get(
-                f"/api/runs/{run_id}/metrics", headers=_auth_headers()
-            )
+            response = client.get(f"/api/runs/{run_id}/metrics", headers=_auth_headers())
             metrics = response.json()["metrics"]
             assert metrics[0]["epoch"] == 1.5
 
@@ -113,22 +115,22 @@ class TestRunsCompareEndpoint:
             tracker = ExperimentTracker(db_path=db_path)
             run1 = tracker.start_run(
                 config_dict={"base": "model-a", "task": "sft"},
-                device="cpu", device_name="CPU",
+                device="cpu",
+                device_name="CPU",
                 gpu_info={"memory_total": "N/A"},
             )
             tracker.log_metrics(run1, step=10, loss=2.5, lr=1e-5)
             run2 = tracker.start_run(
                 config_dict={"base": "model-b", "task": "dpo"},
-                device="cpu", device_name="CPU",
+                device="cpu",
+                device_name="CPU",
                 gpu_info={"memory_total": "N/A"},
             )
             tracker.log_metrics(run2, step=10, loss=1.8, lr=5e-6)
             tracker.close()
 
             client = TestClient(create_app())
-            response = client.get(
-                f"/api/runs/compare?ids={run1},{run2}", headers=_auth_headers()
-            )
+            response = client.get(f"/api/runs/compare?ids={run1},{run2}", headers=_auth_headers())
             assert response.status_code == 200
             data = response.json()
             assert "runs" in data
@@ -151,9 +153,7 @@ class TestRunsCompareEndpoint:
 
             client = TestClient(create_app())
             ids = ",".join([f"run_{i}" for i in range(6)])
-            response = client.get(
-                f"/api/runs/compare?ids={ids}", headers=_auth_headers()
-            )
+            response = client.get(f"/api/runs/compare?ids={ids}", headers=_auth_headers())
             assert response.status_code == 400
 
     def test_compare_validates_run_ids(self, tmp_path):
@@ -188,9 +188,7 @@ class TestRunsCompareEndpoint:
             from soup_cli.ui.app import create_app
 
             client = TestClient(create_app())
-            response = client.get(
-                "/api/runs/compare?ids=", headers=_auth_headers()
-            )
+            response = client.get("/api/runs/compare?ids=", headers=_auth_headers())
             assert response.status_code == 400
 
     def test_compare_no_auth_required(self, tmp_path):
@@ -207,9 +205,7 @@ class TestRunsCompareEndpoint:
             client = TestClient(create_app())
             assert client.get("/api/runs/compare?ids=run1,run2").status_code == 401
             assert (
-                client.get(
-                    "/api/runs/compare?ids=run1,run2", headers=_auth_headers()
-                ).status_code
+                client.get("/api/runs/compare?ids=run1,run2", headers=_auth_headers()).status_code
                 == 200
             )
 
@@ -232,7 +228,8 @@ class TestEvalResultsEndpoint:
             tracker = ExperimentTracker(db_path=db_path)
             run_id = tracker.start_run(
                 config_dict={"base": "test"},
-                device="cpu", device_name="CPU",
+                device="cpu",
+                device_name="CPU",
                 gpu_info={"memory_total": "N/A"},
             )
             tracker.save_eval_result(
@@ -245,9 +242,7 @@ class TestEvalResultsEndpoint:
             tracker.close()
 
             client = TestClient(create_app())
-            response = client.get(
-                f"/api/runs/{run_id}/eval", headers=_auth_headers()
-            )
+            response = client.get(f"/api/runs/{run_id}/eval", headers=_auth_headers())
             data = response.json()
             assert len(data["eval_results"]) == 1
             result = data["eval_results"][0]
@@ -271,15 +266,14 @@ class TestEvalResultsEndpoint:
             tracker = ExperimentTracker(db_path=db_path)
             run_id = tracker.start_run(
                 config_dict={"base": "test"},
-                device="cpu", device_name="CPU",
+                device="cpu",
+                device_name="CPU",
                 gpu_info={"memory_total": "N/A"},
             )
             tracker.close()
 
             client = TestClient(create_app())
-            response = client.get(
-                f"/api/runs/{run_id}/eval", headers=_auth_headers()
-            )
+            response = client.get(f"/api/runs/{run_id}/eval", headers=_auth_headers())
             assert response.status_code == 200
             data = response.json()
             assert data["eval_results"] == []
@@ -301,7 +295,8 @@ class TestEvalResultsEndpoint:
             for idx in range(5):
                 rid = tracker.start_run(
                     config_dict={"base": f"model-{idx}"},
-                    device="cpu", device_name="CPU",
+                    device="cpu",
+                    device_name="CPU",
                     gpu_info={"memory_total": "N/A"},
                 )
                 run_ids.append(rid)
@@ -309,9 +304,7 @@ class TestEvalResultsEndpoint:
 
             client = TestClient(create_app())
             ids_str = ",".join(run_ids)
-            response = client.get(
-                f"/api/runs/compare?ids={ids_str}", headers=_auth_headers()
-            )
+            response = client.get(f"/api/runs/compare?ids={ids_str}", headers=_auth_headers())
             assert response.status_code == 200
             assert len(response.json()["runs"]) == 5
 
@@ -334,19 +327,24 @@ class TestCompareMetricsContent:
             tracker = ExperimentTracker(db_path=db_path)
             run_id = tracker.start_run(
                 config_dict={"base": "test", "task": "sft"},
-                device="cpu", device_name="CPU",
+                device="cpu",
+                device_name="CPU",
                 gpu_info={"memory_total": "N/A"},
             )
             tracker.log_metrics(
-                run_id, step=10, epoch=1.0, loss=2.5, lr=1e-5,
-                grad_norm=0.5, speed=200.0, gpu_mem="8GB",
+                run_id,
+                step=10,
+                epoch=1.0,
+                loss=2.5,
+                lr=1e-5,
+                grad_norm=0.5,
+                speed=200.0,
+                gpu_mem="8GB",
             )
             tracker.close()
 
             client = TestClient(create_app())
-            response = client.get(
-                f"/api/runs/compare?ids={run_id}", headers=_auth_headers()
-            )
+            response = client.get(f"/api/runs/compare?ids={run_id}", headers=_auth_headers())
             data = response.json()
             m = data["runs"][0]["metrics"][0]
             assert m["step"] == 10
@@ -369,14 +367,13 @@ class TestCompareMetricsContent:
             tracker = ExperimentTracker(db_path=db_path)
             run_id = tracker.start_run(
                 config_dict={"base": "llama-8b", "task": "sft"},
-                device="cpu", device_name="CPU",
+                device="cpu",
+                device_name="CPU",
                 gpu_info={"memory_total": "N/A"},
             )
             tracker.close()
 
             client = TestClient(create_app())
-            response = client.get(
-                f"/api/runs/compare?ids={run_id}", headers=_auth_headers()
-            )
+            response = client.get(f"/api/runs/compare?ids={run_id}", headers=_auth_headers())
             data = response.json()
             assert "config" in data["runs"][0]

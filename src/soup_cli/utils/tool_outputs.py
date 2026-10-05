@@ -54,9 +54,7 @@ class ToolOutputsBuffer:
     reason.
     """
 
-    records: Deque[ToolCallRecord] = field(
-        default_factory=lambda: deque(maxlen=_MAX_RECORDS)
-    )
+    records: Deque[ToolCallRecord] = field(default_factory=lambda: deque(maxlen=_MAX_RECORDS))
     _lock: Lock = field(default_factory=Lock, repr=False, compare=False)
 
     def record_call(
@@ -74,9 +72,7 @@ class ToolOutputsBuffer:
             raise TypeError("started_ts must be a number")
         if not math.isfinite(float(started_ts)):
             raise ValueError("started_ts must be finite")
-        if isinstance(duration_ms, bool) or not isinstance(
-            duration_ms, (int, float)
-        ):
+        if isinstance(duration_ms, bool) or not isinstance(duration_ms, (int, float)):
             raise TypeError("duration_ms must be a number")
         if not math.isfinite(float(duration_ms)) or float(duration_ms) < 0.0:
             raise ValueError("duration_ms must be finite and >= 0")
@@ -159,9 +155,7 @@ class ToolCallTimer:
     ) -> bool:
         if exc is not None:
             self._success = False
-            self._error = (
-                f"{exc_type.__name__ if exc_type else 'Exception'}: {exc}"
-            )
+            self._error = f"{exc_type.__name__ if exc_type else 'Exception'}: {exc}"
         duration_ms = (time.perf_counter() - self._start_perf) * 1000.0
         self._buffer.record_call(
             name=self._name,

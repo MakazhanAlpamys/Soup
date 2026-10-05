@@ -143,9 +143,7 @@ def test_validate_gguf_path_traversal(tmp_path, monkeypatch):
 
 @patch(f"{_OLLAMA}.subprocess.run")
 def test_detect_ollama_installed(mock_run):
-    mock_run.return_value = MagicMock(
-        returncode=0, stdout="ollama version is 0.6.2", stderr=""
-    )
+    mock_run.return_value = MagicMock(returncode=0, stdout="ollama version is 0.6.2", stderr="")
     version = detect_ollama()
     assert version == "0.6.2"
 
@@ -170,18 +168,14 @@ def test_detect_ollama_nonzero(mock_run):
 
 @patch(f"{_OLLAMA}.subprocess.run")
 def test_detect_ollama_no_version_match(mock_run):
-    mock_run.return_value = MagicMock(
-        returncode=0, stdout="ollama unknown", stderr=""
-    )
+    mock_run.return_value = MagicMock(returncode=0, stdout="ollama unknown", stderr="")
     version = detect_ollama()
     assert version == "ollama unknown"
 
 
 @patch(f"{_OLLAMA}.subprocess.run")
 def test_detect_ollama_version_in_stderr(mock_run):
-    mock_run.return_value = MagicMock(
-        returncode=0, stdout="", stderr="ollama version is 0.7.0"
-    )
+    mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="ollama version is 0.7.0")
     version = detect_ollama()
     assert version == "0.7.0"
 
@@ -245,9 +239,7 @@ def test_create_modelfile_with_system_quotes():
 
 
 def test_create_modelfile_with_params():
-    result = create_modelfile(
-        Path("m.gguf"), parameters={"temperature": "0.7", "top_p": "0.9"}
-    )
+    result = create_modelfile(Path("m.gguf"), parameters={"temperature": "0.7", "top_p": "0.9"})
     assert "PARAMETER temperature 0.7" in result
     assert "PARAMETER top_p 0.9" in result
 
@@ -280,9 +272,7 @@ def test_create_modelfile_rejects_unknown_param():
 
 def test_create_modelfile_rejects_newline_in_param_value():
     with pytest.raises(ValueError, match="illegal characters"):
-        create_modelfile(
-            Path("m.gguf"), parameters={"temperature": "0.7\nSYSTEM injected"}
-        )
+        create_modelfile(Path("m.gguf"), parameters={"temperature": "0.7\nSYSTEM injected"})
 
 
 def test_create_modelfile_allows_valid_params():
@@ -521,9 +511,7 @@ def test_deploy_remove_failure(mock_rm, mock_detect):
 
 
 def test_deploy_remove_invalid_name():
-    result = runner.invoke(
-        app, ["deploy", "ollama", "--remove", "bad/name", "--yes"]
-    )
+    result = runner.invoke(app, ["deploy", "ollama", "--remove", "bad/name", "--yes"])
     assert result.exit_code == 1
     assert "invalid" in result.output.lower()
 
@@ -556,9 +544,7 @@ def test_deploy_invalid_name(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     gguf = tmp_path / "model.gguf"
     gguf.write_bytes(b"fake")
-    result = runner.invoke(
-        app, ["deploy", "ollama", "--model", str(gguf), "--name", "bad/name"]
-    )
+    result = runner.invoke(app, ["deploy", "ollama", "--model", str(gguf), "--name", "bad/name"])
     assert result.exit_code == 1
     assert "invalid" in result.output.lower()
 
@@ -593,10 +579,14 @@ def test_deploy_invalid_template(mock_detect, tmp_path, monkeypatch):
     result = runner.invoke(
         app,
         [
-            "deploy", "ollama",
-            "--model", str(gguf),
-            "--name", "soup-test",
-            "--template", "nonexistent",
+            "deploy",
+            "ollama",
+            "--model",
+            str(gguf),
+            "--name",
+            "soup-test",
+            "--template",
+            "nonexistent",
         ],
     )
     assert result.exit_code == 1
@@ -611,11 +601,16 @@ def test_deploy_bad_parameter_format(mock_detect, tmp_path, monkeypatch):
     result = runner.invoke(
         app,
         [
-            "deploy", "ollama",
-            "--model", str(gguf),
-            "--name", "soup-test",
-            "--template", "chatml",
-            "--parameter", "bad_no_equals",
+            "deploy",
+            "ollama",
+            "--model",
+            str(gguf),
+            "--name",
+            "soup-test",
+            "--template",
+            "chatml",
+            "--parameter",
+            "bad_no_equals",
             "--yes",
         ],
     )
@@ -631,11 +626,16 @@ def test_deploy_unknown_parameter_key(mock_detect, tmp_path, monkeypatch):
     result = runner.invoke(
         app,
         [
-            "deploy", "ollama",
-            "--model", str(gguf),
-            "--name", "soup-test",
-            "--template", "chatml",
-            "--parameter", "evil_key=value",
+            "deploy",
+            "ollama",
+            "--model",
+            str(gguf),
+            "--name",
+            "soup-test",
+            "--template",
+            "chatml",
+            "--parameter",
+            "evil_key=value",
             "--yes",
         ],
     )
@@ -652,12 +652,18 @@ def test_deploy_full_success(mock_detect_fn, mock_deploy_fn, tmp_path, monkeypat
     result = runner.invoke(
         app,
         [
-            "deploy", "ollama",
-            "--model", str(gguf),
-            "--name", "soup-test",
-            "--template", "chatml",
-            "--system", "You are helpful.",
-            "--parameter", "temperature=0.7",
+            "deploy",
+            "ollama",
+            "--model",
+            str(gguf),
+            "--name",
+            "soup-test",
+            "--template",
+            "chatml",
+            "--system",
+            "You are helpful.",
+            "--parameter",
+            "temperature=0.7",
             "--yes",
         ],
     )
@@ -675,10 +681,14 @@ def test_deploy_create_fails(mock_detect_fn, mock_deploy_fn, tmp_path, monkeypat
     result = runner.invoke(
         app,
         [
-            "deploy", "ollama",
-            "--model", str(gguf),
-            "--name", "soup-test",
-            "--template", "chatml",
+            "deploy",
+            "ollama",
+            "--model",
+            str(gguf),
+            "--name",
+            "soup-test",
+            "--template",
+            "chatml",
             "--yes",
         ],
     )

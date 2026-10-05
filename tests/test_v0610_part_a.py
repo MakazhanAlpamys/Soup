@@ -25,6 +25,7 @@ class TestModuleSurface:
             get_unlearn_method_spec,
             validate_unlearn_method,
         )
+
         assert callable(validate_unlearn_method)
         assert callable(get_unlearn_method_spec)
         assert callable(apply_unlearn_loss)
@@ -452,8 +453,7 @@ class TestSourceWiring:
         from pathlib import Path
 
         eval_src = (
-            Path(__file__).resolve().parent.parent
-            / "src" / "soup_cli" / "commands" / "eval.py"
+            Path(__file__).resolve().parent.parent / "src" / "soup_cli" / "commands" / "eval.py"
         )
         text = eval_src.read_text(encoding="utf-8")
         assert "_register_v0610" in text

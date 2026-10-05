@@ -65,12 +65,11 @@ def find_lr(tmp_path, monkeypatch):
             transformers.AutoTokenizer, "from_pretrained", lambda *a, **k: FakeTokenizer()
         )
         if model_error is not None:
+
             def unreachable(*args, **kwargs):
                 raise model_error
 
-            monkeypatch.setattr(
-                transformers.AutoModelForCausalLM, "from_pretrained", unreachable
-            )
+            monkeypatch.setattr(transformers.AutoModelForCausalLM, "from_pretrained", unreachable)
         elif scripted:
             monkeypatch.setattr(
                 transformers.AutoModelForCausalLM,
@@ -92,11 +91,23 @@ def find_lr(tmp_path, monkeypatch):
 
         from soup_cli.cli import app
 
-        result = CliRunner().invoke(app, [
-            "train", "--config", "soup.yaml", "--find-lr",
-            "--find-lr-start", str(START), "--find-lr-end", str(END),
-            "--find-lr-steps", "8", "--find-lr-output", output,
-        ])
+        result = CliRunner().invoke(
+            app,
+            [
+                "train",
+                "--config",
+                "soup.yaml",
+                "--find-lr",
+                "--find-lr-start",
+                str(START),
+                "--find-lr-end",
+                str(END),
+                "--find-lr-steps",
+                "8",
+                "--find-lr-output",
+                output,
+            ],
+        )
         text = " ".join(strip_ansi(result.output).split())
         path = tmp_path / output
         report = json.loads(path.read_text(encoding="utf-8")) if path.exists() else None

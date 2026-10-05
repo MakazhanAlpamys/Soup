@@ -22,10 +22,24 @@ import pytest
 #: The v0.72.3 GATE 2 grid, re-stated here so this file can pin the
 #: counterfactual without importing (or being able to perturb)
 #: ``tests/test_v07203.py``, which is the estimator's standing guard.
-_SMOL = dict(pool=14160384, extras=56624256, adapter=921600, vocab=49152, hidden=576,
-             intermediate=1536, n_layers=30)
-_QWEN = dict(pool=59649536, extras=272271104, adapter=1081344, vocab=151936, hidden=896,
-             intermediate=4864, n_layers=24)
+_SMOL = dict(
+    pool=14160384,
+    extras=56624256,
+    adapter=921600,
+    vocab=49152,
+    hidden=576,
+    intermediate=1536,
+    n_layers=30,
+)
+_QWEN = dict(
+    pool=59649536,
+    extras=272271104,
+    adapter=1081344,
+    vocab=151936,
+    hidden=896,
+    intermediate=4864,
+    n_layers=24,
+)
 
 _GRID = [
     dict(label="SmolLM2-135M B1 S256", batch=1, seq=256, peak=284555264, **_SMOL),
@@ -99,9 +113,7 @@ class TestAdoptingTheH100SlopeWouldUnderPredict:
         assert _predict_at(row, _H100_FITTED_SLOPE) < row["peak"], row["label"]
 
     def test_the_worst_under_prediction_is_over_ten_percent(self):
-        worst = min(
-            (_predict_at(r, _H100_FITTED_SLOPE) - r["peak"]) / r["peak"] for r in _GRID
-        )
+        worst = min((_predict_at(r, _H100_FITTED_SLOPE) - r["peak"]) / r["peak"] for r in _GRID)
         assert worst < -0.10, f"worst under-prediction only {worst:.2%}"
 
     @pytest.mark.parametrize("row", _GRID, ids=lambda r: r["label"])
@@ -117,9 +129,7 @@ class TestAdoptingTheH100SlopeWouldUnderPredict:
         right budget — which is the whole argument for keeping the retention."""
         from soup_cli.utils.layer_stream import LOGITS_LOSS_BYTES_PER_ELEMENT
 
-        assert all(
-            _predict_at(r, LOGITS_LOSS_BYTES_PER_ELEMENT) < r["peak"] for r in _GRID
-        )
+        assert all(_predict_at(r, LOGITS_LOSS_BYTES_PER_ELEMENT) < r["peak"] for r in _GRID)
 
 
 class TestTheOverrideCanOnlyRaiseTheBudget:
@@ -144,9 +154,7 @@ class TestTheOverrideCanOnlyRaiseTheBudget:
         """Rounding down is an under-prediction, however small."""
         from soup_cli.utils.layer_stream import estimate_logits_bytes
 
-        got = estimate_logits_bytes(
-            vocab_size=3, seq_len=1, batch_size=1, bytes_per_element=14.5
-        )
+        got = estimate_logits_bytes(vocab_size=3, seq_len=1, batch_size=1, bytes_per_element=14.5)
         assert got == 44  # ceil(3 * 14.5) == 44, not 43
 
     def test_a_non_finite_reading_is_refused(self):
@@ -161,9 +169,16 @@ class TestTheOverrideCanOnlyRaiseTheBudget:
         from soup_cli.utils.layer_stream import estimate_stream_peak_vram
 
         kw = dict(
-            layer_bytes=1000, buffers=2, extras_bytes=0, adapter_params=0,
-            vocab_size=1024, hidden_size=8, intermediate_size=16, n_layers=2,
-            seq_len=4, batch_size=1,
+            layer_bytes=1000,
+            buffers=2,
+            extras_bytes=0,
+            adapter_params=0,
+            vocab_size=1024,
+            hidden_size=8,
+            intermediate_size=16,
+            n_layers=2,
+            seq_len=4,
+            batch_size=1,
         )
         base = estimate_stream_peak_vram(**kw)
         assert estimate_stream_peak_vram(logits_bytes_per_element=12.311, **kw) == base
@@ -191,9 +206,7 @@ class TestTheOverrideCanOnlyRaiseTheBudget:
     def test_calibration_never_returns_below_the_shipped_constant(self, monkeypatch):
         from soup_cli.utils import layer_stream
 
-        monkeypatch.setattr(
-            layer_stream, "measure_logits_loss_bytes_per_element", lambda **kw: 4.0
-        )
+        monkeypatch.setattr(layer_stream, "measure_logits_loss_bytes_per_element", lambda **kw: 4.0)
         assert layer_stream.calibrated_logits_bytes_per_element() == 14.0
 
     @pytest.mark.parametrize(
@@ -222,10 +235,15 @@ class TestTheModuleStaysOnTheLightCliPath:
         import sys
 
         out = subprocess.run(
-            [sys.executable, "-c",
-             "import sys; import soup_cli.utils.layer_stream as m; "
-             "print('torch' in sys.modules)"],
-            capture_output=True, text=True, check=True,
+            [
+                sys.executable,
+                "-c",
+                "import sys; import soup_cli.utils.layer_stream as m; "
+                "print('torch' in sys.modules)",
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
         )
         assert out.stdout.strip() == "False", out.stdout + out.stderr
 
@@ -284,8 +302,13 @@ class TestTheStackIsRemeasuredWhereverTheSuiteRuns:
 
         vocab, tokens = 32768, 512
         cfg = AutoConfig.for_model(
-            "llama", vocab_size=vocab, hidden_size=128, intermediate_size=256,
-            num_hidden_layers=2, num_attention_heads=4, num_key_value_heads=4,
+            "llama",
+            vocab_size=vocab,
+            hidden_size=128,
+            intermediate_size=256,
+            num_hidden_layers=2,
+            num_attention_heads=4,
+            num_key_value_heads=4,
             tie_word_embeddings=False,
         )
         model = AutoModelForCausalLM.from_config(cfg, dtype=torch.bfloat16).cuda()

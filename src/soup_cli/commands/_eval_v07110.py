@@ -47,9 +47,7 @@ def _load_jsonl_rows(path: str, console: Console) -> List[dict]:
     try:
         fd = os.open(path, os.O_RDONLY | no_follow)
     except FileNotFoundError as exc:
-        raise typer.BadParameter(
-            f"citation data not found: {os.path.basename(path)}"
-        ) from exc
+        raise typer.BadParameter(f"citation data not found: {os.path.basename(path)}") from exc
     except OSError as exc:
         raise typer.BadParameter(
             f"citation data cannot be opened (symlink?): {type(exc).__name__}"
@@ -59,9 +57,7 @@ def _load_jsonl_rows(path: str, console: Console) -> List[dict]:
         if stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode):
             raise typer.BadParameter("citation data must be a regular file")
         if st.st_size > _MAX_FILE_BYTES:
-            raise typer.BadParameter(
-                f"citation data exceeds {_MAX_FILE_BYTES} bytes"
-            )
+            raise typer.BadParameter(f"citation data exceeds {_MAX_FILE_BYTES} bytes")
         rows: List[dict] = []
         skipped = 0
         with os.fdopen(fd, "r", encoding="utf-8-sig") as handle:
@@ -116,9 +112,7 @@ def _row_predicted_expected(
     ):
         from soup_cli.utils.raft import build_raft_prompt
 
-        composed = build_raft_prompt(
-            row, shuffle_seed=shuffle_seed, row_index=row_index
-        )
+        composed = build_raft_prompt(row, shuffle_seed=shuffle_seed, row_index=row_index)
         return composed.answer, (composed.golden_doc_id,)
     return None
 
@@ -136,11 +130,13 @@ def register(app: typer.Typer, console: Console) -> None:
             ),
         ),
         style: str = typer.Option(
-            "bracket", "--style",
+            "bracket",
+            "--style",
             help="Citation style: bracket / inline / footnote.",
         ),
         shuffle_seed: Optional[int] = typer.Option(
-            None, "--shuffle-seed",
+            None,
+            "--shuffle-seed",
             help=(
                 "For RAFT-shaped rows: the data.raft_shuffle_seed used at "
                 "train time, so the golden [doc-N] id matches what the model "
@@ -148,7 +144,9 @@ def register(app: typer.Typer, console: Console) -> None:
             ),
         ),
         output: Optional[str] = typer.Option(
-            None, "--output", "-o",
+            None,
+            "--output",
+            "-o",
             help="Write the per-row + aggregate CitationScore JSON here.",
         ),
     ) -> None:
@@ -178,9 +176,7 @@ def register(app: typer.Typer, console: Console) -> None:
         scored: List[dict] = []
         prec_sum = rec_sum = f1_sum = 0.0
         for index, row in enumerate(rows):
-            resolved = _row_predicted_expected(
-                row, row_index=index, shuffle_seed=shuffle_seed
-            )
+            resolved = _row_predicted_expected(row, row_index=index, shuffle_seed=shuffle_seed)
             if resolved is None:
                 continue
             predicted, expected_ids = resolved
@@ -191,21 +187,21 @@ def register(app: typer.Typer, console: Console) -> None:
                     style=canonical_style,
                 )
             except (TypeError, ValueError) as exc:
-                console.print(
-                    f"[yellow]Row {index} skipped:[/] {escape(str(exc))}"
-                )
+                console.print(f"[yellow]Row {index} skipped:[/] {escape(str(exc))}")
                 continue
             prec_sum += cs.precision
             rec_sum += cs.recall
             f1_sum += cs.f1
-            scored.append({
-                "row": index,
-                "precision": cs.precision,
-                "recall": cs.recall,
-                "f1": cs.f1,
-                "predicted_count": cs.predicted_count,
-                "expected_count": cs.expected_count,
-            })
+            scored.append(
+                {
+                    "row": index,
+                    "precision": cs.precision,
+                    "recall": cs.recall,
+                    "f1": cs.f1,
+                    "predicted_count": cs.predicted_count,
+                    "expected_count": cs.expected_count,
+                }
+            )
             if index < 50:  # keep the table bounded
                 table.add_row(
                     str(index),

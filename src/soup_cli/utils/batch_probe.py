@@ -427,7 +427,10 @@ def make_cuda_probe_fn(
             budget = _probe_budget_bytes(torch, device)
             torch.cuda.reset_peak_memory_stats(device)
             ids = torch.full(
-                (batch_size, max_length), pad_id, dtype=torch.long, device=device,
+                (batch_size, max_length),
+                pad_id,
+                dtype=torch.long,
+                device=device,
             )
             attn = torch.ones_like(ids)
             labels = ids.clone()

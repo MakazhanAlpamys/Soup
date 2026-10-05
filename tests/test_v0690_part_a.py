@@ -25,9 +25,7 @@ def _write(path: Path, text: str) -> Path:
 
 class TestSupportedKinds:
     def test_supported_kinds_exact(self) -> None:
-        assert build_dag.SUPPORTED_MODEL_KINDS == frozenset(
-            {"incremental", "table", "view"}
-        )
+        assert build_dag.SUPPORTED_MODEL_KINDS == frozenset({"incremental", "table", "view"})
 
     def test_supported_kinds_is_frozenset(self) -> None:
         assert isinstance(build_dag.SUPPORTED_MODEL_KINDS, frozenset)
@@ -465,9 +463,7 @@ class TestLoadBuildYaml:
             build_dag.load_build_yaml(42)  # type: ignore[arg-type]
 
     @pytest.mark.requires_symlink
-    def test_symlink_rejected(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_symlink_rejected(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.chdir(tmp_path)
         target = _write(
             tmp_path / "real.yaml",
@@ -502,9 +498,7 @@ class TestValidateBuildSource:
         monkeypatch.chdir(tmp_path)
         assert build_dag.validate_build_source("data/not_yet.jsonl") == "data/not_yet.jsonl"
 
-    def test_outside_cwd_rejected(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_outside_cwd_rejected(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         outside = tmp_path / "outside"
         outside.mkdir()
         _write(outside / "raw.jsonl", "{}\n")
@@ -514,16 +508,12 @@ class TestValidateBuildSource:
         with pytest.raises(ValueError, match="cwd"):
             build_dag.validate_build_source(str(outside / "raw.jsonl"))
 
-    def test_null_byte_rejected(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_null_byte_rejected(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.chdir(tmp_path)
         with pytest.raises(ValueError, match="null"):
             build_dag.validate_build_source("a\x00b.jsonl")
 
-    def test_empty_rejected(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_empty_rejected(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.chdir(tmp_path)
         with pytest.raises(ValueError):
             build_dag.validate_build_source("")
@@ -533,9 +523,7 @@ class TestValidateBuildSource:
             build_dag.validate_build_source(42)  # type: ignore[arg-type]
 
     @pytest.mark.requires_symlink
-    def test_symlink_rejected(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_symlink_rejected(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.chdir(tmp_path)
         target = _write(tmp_path / "real.jsonl", "{}\n")
         link = tmp_path / "link.jsonl"
@@ -680,9 +668,7 @@ class TestRunBuild:
         monkeypatch.chdir(tmp_path)
         data = tmp_path / "data"
         data.mkdir()
-        (data / "raw.jsonl").write_text(
-            '{"id": "1", "text": "x"}\n', encoding="utf-8"
-        )
+        (data / "raw.jsonl").write_text('{"id": "1", "text": "x"}\n', encoding="utf-8")
         raw = {
             "models": [
                 {
@@ -715,9 +701,7 @@ class TestSoupBuildCli:
         assert result.exit_code == 0, result.output
         assert "build" in result.output.lower()
 
-    def test_dry_run_happy(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_dry_run_happy(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.chdir(tmp_path)
         path = _write(
             tmp_path / "build.yaml",
@@ -737,24 +721,18 @@ class TestSoupBuildCli:
         assert "raw" in result.output
         assert "filtered" in result.output
 
-    def test_missing_config(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_missing_config(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.chdir(tmp_path)
         runner = CliRunner()
         result = runner.invoke(app, ["build", "nope.yaml", "--dry-run"])
         assert result.exit_code != 0
 
-    def test_live_run(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_live_run(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         # v0.71.6 #231: live runner materialises (was a deferred exit-3 stub).
         monkeypatch.chdir(tmp_path)
         data = tmp_path / "data"
         data.mkdir()
-        (data / "raw.jsonl").write_text(
-            '{"id": "1", "text": "x"}\n', encoding="utf-8"
-        )
+        (data / "raw.jsonl").write_text('{"id": "1", "text": "x"}\n', encoding="utf-8")
         path = _write(
             tmp_path / "build.yaml",
             "models:\n  - name: raw\n    kind: incremental\n"
@@ -766,9 +744,7 @@ class TestSoupBuildCli:
         assert (tmp_path / "out" / "raw.jsonl").is_file()
         assert "0.69.1" not in result.output
 
-    def test_outside_cwd(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_outside_cwd(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         outside = tmp_path / "outside"
         outside.mkdir()
         _write(

@@ -62,8 +62,7 @@ class TestQATConfig:
             (
                 "sft",
                 {"format": "alpaca", "max_length": 4096},
-                {"epochs": 3, "lr": 2e-5, "quantization": "4bit",
-                 "lora": {"r": 64, "alpha": 16}},
+                {"epochs": 3, "lr": 2e-5, "quantization": "4bit", "lora": {"r": 64, "alpha": 16}},
             ),
         ],
         ids=["default", "4bit", "none", "dpo", "grpo", "full-config"],
@@ -90,7 +89,9 @@ class TestQATValidation:
         from soup_cli.utils.qat import validate_qat_config
 
         errors = validate_qat_config(
-            quantization="4bit", backend="unsloth", modality="text",
+            quantization="4bit",
+            backend="unsloth",
+            modality="text",
         )
         assert any("unsloth" in err for err in errors)
 
@@ -99,7 +100,9 @@ class TestQATValidation:
         from soup_cli.utils.qat import validate_qat_config
 
         errors = validate_qat_config(
-            quantization="4bit", backend="transformers", modality="text",
+            quantization="4bit",
+            backend="transformers",
+            modality="text",
         )
         assert not any("unsloth" in err for err in errors)
 
@@ -108,7 +111,9 @@ class TestQATValidation:
         from soup_cli.utils.qat import validate_qat_config
 
         errors = validate_qat_config(
-            quantization="8bit", backend="transformers", modality="text",
+            quantization="8bit",
+            backend="transformers",
+            modality="text",
         )
         assert any("8bit" in err for err in errors)
 
@@ -117,7 +122,9 @@ class TestQATValidation:
         from soup_cli.utils.qat import validate_qat_config
 
         errors = validate_qat_config(
-            quantization="4bit", backend="transformers", modality="text",
+            quantization="4bit",
+            backend="transformers",
+            modality="text",
         )
         # Only torchao availability error expected, not quantization warning
         assert not any("4bit" in err for err in errors)
@@ -127,7 +134,9 @@ class TestQATValidation:
         from soup_cli.utils.qat import validate_qat_config
 
         errors = validate_qat_config(
-            quantization="none", backend="transformers", modality="text",
+            quantization="none",
+            backend="transformers",
+            modality="text",
         )
         assert not any("none" in err.lower() for err in errors)
 
@@ -136,7 +145,9 @@ class TestQATValidation:
         from soup_cli.utils.qat import validate_qat_config
 
         errors = validate_qat_config(
-            quantization="4bit", backend="transformers", modality="text",
+            quantization="4bit",
+            backend="transformers",
+            modality="text",
         )
         # In test env, torchao is likely not installed
         torchao_errors = [err for err in errors if "torchao" in err]
@@ -148,7 +159,9 @@ class TestQATValidation:
         from soup_cli.utils.qat import validate_qat_config
 
         errors = validate_qat_config(
-            quantization="4bit", backend="transformers", modality="vision",
+            quantization="4bit",
+            backend="transformers",
+            modality="vision",
         )
         # No modality-specific errors
         assert not any("vision" in err for err in errors)
@@ -182,10 +195,13 @@ class TestQATUtils:
         mock_torchao.quantization.quantize_ = mock_quantize
         mock_torchao.quantization.Int8WeightOnlyConfig.return_value = mock_config
 
-        with patch.dict("sys.modules", {
-            "torchao": mock_torchao,
-            "torchao.quantization": mock_torchao.quantization,
-        }):
+        with patch.dict(
+            "sys.modules",
+            {
+                "torchao": mock_torchao,
+                "torchao.quantization": mock_torchao.quantization,
+            },
+        ):
             import importlib
 
             import soup_cli.utils.qat
@@ -201,10 +217,13 @@ class TestQATUtils:
         mock_config = MagicMock()
         mock_config_cls.return_value = mock_config
 
-        with patch.dict("sys.modules", {
-            "torchao": MagicMock(),
-            "torchao.quantization": MagicMock(Int8WeightOnlyConfig=mock_config_cls),
-        }):
+        with patch.dict(
+            "sys.modules",
+            {
+                "torchao": MagicMock(),
+                "torchao.quantization": MagicMock(Int8WeightOnlyConfig=mock_config_cls),
+            },
+        ):
             import importlib
 
             import soup_cli.utils.qat
@@ -221,9 +240,7 @@ class TestTrainerConfigsWithQATTrueAreRefused:
     """The SFT / DPO / GRPO wrappers used to be built from a `true` config and
     then called the int8 helper. Since #1222 that config cannot be built."""
 
-    @pytest.mark.parametrize(
-        ("task", "max_length"), [("sft", 2048), ("dpo", 2048), ("grpo", 4096)]
-    )
+    @pytest.mark.parametrize(("task", "max_length"), [("sft", 2048), ("dpo", 2048), ("grpo", 4096)])
     def test_the_config_cannot_be_built(self, task, max_length):
         with pytest.raises(ValidationError, match="#1222"):
             SoupConfig(
@@ -261,8 +278,9 @@ class TestSFTQATIntegration:
         wrapper = SFTTrainerWrapper(cfg, device="cuda")
         wrapper.model = MagicMock()
 
-        with patch("soup_cli.utils.qat.prepare_model_for_qat") as mock_qat, patch(
-            "soup_cli.utils.v028_features.apply_v028_speed_memory"
+        with (
+            patch("soup_cli.utils.qat.prepare_model_for_qat") as mock_qat,
+            patch("soup_cli.utils.v028_features.apply_v028_speed_memory"),
         ):
             wrapper._apply_quantization_aware(cfg.training)
         mock_qat.assert_not_called()
@@ -319,8 +337,7 @@ def _setup_panel(tmp_path, monkeypatch, quantization_aware: str) -> str:
     monkeypatch.setenv("HF_HUB_OFFLINE", "1")
     monkeypatch.chdir(tmp_path)
     (tmp_path / "train.jsonl").write_text(
-        '{"messages": [{"role": "user", "content": "q"}, '
-        '{"role": "assistant", "content": "a"}]}\n',
+        '{"messages": [{"role": "user", "content": "q"}, {"role": "assistant", "content": "a"}]}\n',
         encoding="utf-8",
     )
     (tmp_path / "soup.yaml").write_text(
@@ -364,7 +381,9 @@ class TestTrainCommandQAT:
         from soup_cli.utils.qat import validate_qat_config
 
         errors = validate_qat_config(
-            quantization="4bit", backend="unsloth", modality="text",
+            quantization="4bit",
+            backend="unsloth",
+            modality="text",
         )
         assert len(errors) >= 1
         assert any("unsloth" in err for err in errors)

@@ -218,9 +218,7 @@ def test_trajectory_capture_refuses_ids_outside_the_vocabulary(bad_id):
         ("prompt_token_ids", (bad_id,), (1,)),
         ("target_token_ids", (1,), (bad_id,)),
     ):
-        with pytest.raises(
-            ValueError, match=rf"^{field} contains an id outside the vocabulary$"
-        ):
+        with pytest.raises(ValueError, match=rf"^{field} contains an id outside the vocabulary$"):
             capture_teacher_expert_trajectory(
                 example=TeacherExpertExample(
                     example_id="example-1",

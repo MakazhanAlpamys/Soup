@@ -20,9 +20,7 @@ import pytest
 
 _SPECIALS = ["<unk>", "<s>", "</s>", "<|user|>", "<|assistant|>", "<|end|>"]
 _WORDS = ["What", "is", "the", "capital", "of", "France", "?", "Paris", "."]
-_TEMPLATE = (
-    "{% for m in messages %}<|{{ m['role'] }}|> {{ m['content'] }} <|end|> {% endfor %}"
-)
+_TEMPLATE = "{% for m in messages %}<|{{ m['role'] }}|> {{ m['content'] }} <|end|> {% endfor %}"
 _ROW = {
     "messages": [
         {"role": "user", "content": "What is the capital of France ?"},
@@ -51,8 +49,7 @@ def _tokenizer():
 def _train_yaml(train, *, max_length=128, base=_BASE, interleave="concat"):
     if isinstance(train, list):
         train_block = (
-            "  train:\n" + "".join(f"    - {p}\n" for p in train)
-            + f"  interleave: {interleave}\n"
+            "  train:\n" + "".join(f"    - {p}\n" for p in train) + f"  interleave: {interleave}\n"
         )
     else:
         train_block = f"  train: {train}\n"

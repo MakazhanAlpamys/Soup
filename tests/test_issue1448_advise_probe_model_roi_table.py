@@ -16,10 +16,7 @@ from typer.testing import CliRunner
 import soup_cli.commands.advise as advise
 from soup_cli.cli import app
 
-ROWS = [
-    {"instruction": f"Summarise item {i}", "output": f"Item {i} short."}
-    for i in range(12)
-]
+ROWS = [{"instruction": f"Summarise item {i}", "output": f"Item {i} short."} for i in range(12)]
 
 
 @pytest.fixture
@@ -53,9 +50,7 @@ def fake_probe(monkeypatch: pytest.MonkeyPatch) -> dict:
 
 
 def test_probe_model_alone_prints_the_roi_table(dataset: Path, fake_probe: dict) -> None:
-    result = CliRunner().invoke(
-        app, ["advise", "run", str(dataset), "--probe-model", "org/tiny"]
-    )
+    result = CliRunner().invoke(app, ["advise", "run", str(dataset), "--probe-model", "org/tiny"])
     assert result.exit_code == 0, result.output
     # The probe ran (and on a real model would have been paid for)...
     assert fake_probe == {"baselines": 1, "lora": 1, "proximity": 1}

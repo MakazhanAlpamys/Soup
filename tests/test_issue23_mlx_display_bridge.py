@@ -66,9 +66,7 @@ class _RecordingDisplay:
         self.started_with = total_steps
 
     def update(self, step, epoch, loss, lr, **kwargs):
-        self.updates.append(
-            {"step": step, "epoch": epoch, "loss": loss, "lr": lr, **kwargs}
-        )
+        self.updates.append({"step": step, "epoch": epoch, "loss": loss, "lr": lr, **kwargs})
 
     def stop(self):
         self.stops += 1
@@ -82,8 +80,9 @@ class _RecordingTracker:
         self.metrics.append(kwargs)
 
 
-def _train_with(monkeypatch, tmp_path, reports, *, display=None, tracker=None,
-                run_id=None, raise_in_train=False):
+def _train_with(
+    monkeypatch, tmp_path, reports, *, display=None, tracker=None, run_id=None, raise_in_train=False
+):
     """Run the real train() body with a fake mlx-lm that emits ``reports``."""
     _install_fake_mlx(monkeypatch)
 
@@ -119,9 +118,7 @@ class TestTheDisplayIsDriven:
     def test_update_maps_every_mlx_field_it_can(self, tmp_path, monkeypatch):
         """The mapping from mlx-lm's dict to the display's arguments."""
         display = _RecordingDisplay()
-        wrapper = _train_with(
-            monkeypatch, tmp_path, [_REPORT_1, _REPORT_2], display=display
-        )
+        wrapper = _train_with(monkeypatch, tmp_path, [_REPORT_1, _REPORT_2], display=display)
         wrapper.train(display=display)
 
         assert len(display.updates) == 2, "one update per mlx-lm loss report"
@@ -136,9 +133,7 @@ class TestTheDisplayIsDriven:
         # 48 iterations over 1 epoch -> iteration 5 is ~10% of the way in.
         assert 0.0 < first["epoch"] <= 1.0
 
-    def test_speed_is_iterations_per_second_not_tokens_per_second(
-        self, tmp_path, monkeypatch
-    ):
+    def test_speed_is_iterations_per_second_not_tokens_per_second(self, tmp_path, monkeypatch):
         """The display hard-labels this field ``it/s`` (``display.py:116``).
 
         Caught by rendering a real run, not by a stub: every other test in this
@@ -151,12 +146,10 @@ class TestTheDisplayIsDriven:
         wrapper = _train_with(monkeypatch, tmp_path, [_REPORT_1], display=display)
         wrapper.train(display=display)
 
-        assert display.updates[0]["speed"] == pytest.approx(
-            _REPORT_1["iterations_per_second"]
+        assert display.updates[0]["speed"] == pytest.approx(_REPORT_1["iterations_per_second"])
+        assert display.updates[0]["speed"] != pytest.approx(_REPORT_1["tokens_per_second"]), (
+            "tokens/s under an it/s label is a ~44x overstatement here"
         )
-        assert display.updates[0]["speed"] != pytest.approx(
-            _REPORT_1["tokens_per_second"]
-        ), "tokens/s under an it/s label is a ~44x overstatement here"
 
     def test_stop_is_called_when_training_finishes(self, tmp_path, monkeypatch):
         display = _RecordingDisplay()
@@ -189,8 +182,12 @@ class TestTheTrackerIsDriven:
         display = _RecordingDisplay()
         tracker = _RecordingTracker()
         wrapper = _train_with(
-            monkeypatch, tmp_path, [_REPORT_1, _REPORT_2],
-            display=display, tracker=tracker, run_id="run-1",
+            monkeypatch,
+            tmp_path,
+            [_REPORT_1, _REPORT_2],
+            display=display,
+            tracker=tracker,
+            run_id="run-1",
         )
         wrapper.train(display=display, tracker=tracker, run_id="run-1")
 
@@ -203,9 +200,7 @@ class TestTheTrackerIsDriven:
         """Mirrors the HF path, which gates on ``self.tracker and self.run_id``."""
         display = _RecordingDisplay()
         tracker = _RecordingTracker()
-        wrapper = _train_with(
-            monkeypatch, tmp_path, [_REPORT_1], display=display, tracker=tracker
-        )
+        wrapper = _train_with(monkeypatch, tmp_path, [_REPORT_1], display=display, tracker=tracker)
         wrapper.train(display=display, tracker=tracker, run_id=None)
 
         assert tracker.metrics == []
@@ -229,9 +224,7 @@ class TestTheWebUiBufferIsFed:
     def test_each_report_pushes_a_metric_event(self, tmp_path, monkeypatch):
         pushed = self._capture(monkeypatch)
         display = _RecordingDisplay()
-        wrapper = _train_with(
-            monkeypatch, tmp_path, [_REPORT_1, _REPORT_2], display=display
-        )
+        wrapper = _train_with(monkeypatch, tmp_path, [_REPORT_1, _REPORT_2], display=display)
         wrapper.train(display=display)
 
         assert len(pushed) == 2, "one SSE event per mlx-lm loss report"
@@ -265,9 +258,7 @@ class TestTheWebUiBufferIsFed:
         assert result["total_steps"] == 48
         assert display.stops == 1, "the Live must still be stopped"
 
-    def test_no_display_means_no_push__matching_the_transformers_path(
-        self, tmp_path, monkeypatch
-    ):
+    def test_no_display_means_no_push__matching_the_transformers_path(self, tmp_path, monkeypatch):
         """Deliberately NOT pushing when no display is attached.
 
         I first wrote this test asserting the opposite — that the Web UI should
@@ -298,9 +289,7 @@ class TestTheControls:
     def test_losses_are_still_captured_in_the_result(self, tmp_path, monkeypatch):
         """The bridge must not displace the existing loss capture."""
         display = _RecordingDisplay()
-        wrapper = _train_with(
-            monkeypatch, tmp_path, [_REPORT_1, _REPORT_2], display=display
-        )
+        wrapper = _train_with(monkeypatch, tmp_path, [_REPORT_1, _REPORT_2], display=display)
         result = wrapper.train(display=display)
 
         assert result["initial_loss"] == pytest.approx(3.639)

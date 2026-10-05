@@ -49,9 +49,7 @@ def quantize(
     """
     canonical = to.lower().strip()
     if canonical not in VALID_FORMATS:
-        console.print(
-            f"[red]--to must be one of {sorted(VALID_FORMATS)}; got {to!r}[/]"
-        )
+        console.print(f"[red]--to must be one of {sorted(VALID_FORMATS)}; got {to!r}[/]")
         raise typer.Exit(code=2)
     if isinstance(bits, bool) or not isinstance(bits, int):
         console.print("[red]--bits must be int[/]")
@@ -69,6 +67,4 @@ def quantize(
     rendered = " ".join(shlex.quote(part) for part in parts)
     console.print("[cyan]Run:[/]")
     console.print(f"  [bold]{escape(rendered)}[/]")
-    console.print(
-        "[dim]Tip: `soup export --help` lists every advanced quantization flag.[/]"
-    )
+    console.print("[dim]Tip: `soup export --help` lists every advanced quantization flag.[/]")

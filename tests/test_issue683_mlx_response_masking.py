@@ -44,11 +44,7 @@ class FakeChatTokenizer:
         self._prefix_stable = prefix_stable
 
     def _turn(self, m):
-        return (
-            [f"<|im_start|>{m['role']}"]
-            + m["content"].split()
-            + ["<|im_end|>"]
-        )
+        return [f"<|im_start|>{m['role']}"] + m["content"].split() + ["<|im_end|>"]
 
     def apply_chat_template(
         self, messages, tools=None, add_generation_prompt=False, return_dict=False
@@ -59,8 +55,7 @@ class FakeChatTokenizer:
         # suite had called green -- so the fake now reproduces the refusal.
         if not messages:
             raise ValueError(
-                "Cannot apply chat template to an empty conversation. "
-                "Provide at least one message."
+                "Cannot apply chat template to an empty conversation. Provide at least one message."
             )
         out = []
         for m in messages:
@@ -151,9 +146,7 @@ class TestUnsupportedShapesAreRefusedNotApproximated:
                 return super().apply_chat_template(messages, **kw)
 
         build_response_mask(MULTI_TURN, Recording())
-        assert [] not in seen, (
-            "an empty conversation was rendered; a real tokenizer raises on that"
-        )
+        assert [] not in seen, "an empty conversation was rendered; a real tokenizer raises on that"
 
     def test_an_empty_conversation_is_refused(self):
         with pytest.raises(ResponseMaskError, match="no messages"):
@@ -200,9 +193,7 @@ class TestMaskedChatDataset:
         pytest.importorskip("mlx_lm")
         from mlx_lm.tuner.datasets import CacheDataset
 
-        ds = CacheDataset(
-            MaskedChatDataset([{"messages": MULTI_TURN}] * 3, FakeChatTokenizer())
-        )
+        ds = CacheDataset(MaskedChatDataset([{"messages": MULTI_TURN}] * 3, FakeChatTokenizer()))
         assert len(ds) == 3
         tokens, mask = ds[0]
         assert len(tokens) == len(mask)
@@ -282,9 +273,7 @@ class TestBatchingPadsTheMaskWithTheTokens:
             def __getitem__(self, i):
                 return rows[i]
 
-        batch, mask = next(
-            iter(masked_iterate_batches(DS(), batch_size=2, max_seq_length=512))
-        )
+        batch, mask = next(iter(masked_iterate_batches(DS(), batch_size=2, max_seq_length=512)))
         assert batch.shape == mask.shape, "a mask padded differently misaligns"
         assert int(mask.sum()) == 3, "padding must contribute no supervision"
 
@@ -302,9 +291,7 @@ class TestBatchingPadsTheMaskWithTheTokens:
             def __getitem__(self, i):
                 return rows[i]
 
-        batch, mask = next(
-            iter(masked_iterate_batches(DS(), batch_size=2, max_seq_length=33))
-        )
+        batch, mask = next(iter(masked_iterate_batches(DS(), batch_size=2, max_seq_length=33)))
         assert batch.shape == mask.shape
         assert batch.shape[1] <= 33
 
@@ -324,8 +311,7 @@ class TestTheDispatchPicksTheRightStrategyPerShape:
         plan = plan_response_masking(True, {"messages": MULTI_TURN})
         assert plan.token_mask is True
         assert plan.mask_prompt is False, (
-            "upstream's flag must not also be set; it would supervise only the "
-            "last assistant turn"
+            "upstream's flag must not also be set; it would supervise only the last assistant turn"
         )
         assert plan.warning == ""
 
@@ -425,9 +411,7 @@ def _install_numpy_mlx(monkeypatch):
         logits = np.asarray(logits, dtype=np.float64)
         shifted = logits - logits.max(axis=-1, keepdims=True)
         logsumexp = np.log(np.exp(shifted).sum(axis=-1)) + logits.max(axis=-1)
-        picked = np.take_along_axis(
-            logits, np.asarray(targets)[..., None], axis=-1
-        )[..., 0]
+        picked = np.take_along_axis(logits, np.asarray(targets)[..., None], axis=-1)[..., 0]
         return logsumexp - picked
 
     losses.cross_entropy = cross_entropy
@@ -441,8 +425,7 @@ def _install_numpy_mlx(monkeypatch):
     root = types.ModuleType("mlx")
     root.core, root.nn = core, nn
     nn.losses = losses
-    for name, mod in (("mlx", root), ("mlx.core", core), ("mlx.nn", nn),
-                      ("mlx.nn.losses", losses)):
+    for name, mod in (("mlx", root), ("mlx.core", core), ("mlx.nn", nn), ("mlx.nn.losses", losses)):
         monkeypatch.setitem(sys.modules, name, mod)
 
 
@@ -554,9 +537,7 @@ def _run_wrapper(tmp_path, monkeypatch, rows, *, responses_only=True, tokenizer=
         if callback is not None:
             callback.on_train_loss_report({"train_loss": 0.5})
 
-    monkeypatch.setattr(
-        sys.modules["mlx_lm.tuner.trainer"], "train", _recording_train
-    )
+    monkeypatch.setattr(sys.modules["mlx_lm.tuner.trainer"], "train", _recording_train)
 
     cfg = SoupConfig(
         base="mlx-community/Llama-3.1-8B-Instruct-4bit",
@@ -582,9 +563,7 @@ CHAT_ROWS = [{"messages": MULTI_TURN}] * 4
 
 
 class TestTheMaskActuallyReachesTraining:
-    def test_train_receives_the_masked_loss_and_batch_iterator(
-        self, tmp_path, monkeypatch
-    ):
+    def test_train_receives_the_masked_loss_and_batch_iterator(self, tmp_path, monkeypatch):
         """The survivor: deleting the train hooks left the suite green while
         the run trained through upstream's unmasked default loss."""
         _install_fake_mlx(monkeypatch)
@@ -616,9 +595,7 @@ class TestTheMaskActuallyReachesTraining:
         _install_fake_mlx(monkeypatch)
         from soup_cli.trainer.mlx_masking import MaskedChatDataset
 
-        meta, seen = _run_wrapper(
-            tmp_path, monkeypatch, CHAT_ROWS, responses_only=False
-        )
+        meta, seen = _run_wrapper(tmp_path, monkeypatch, CHAT_ROWS, responses_only=False)
 
         assert "loss" not in seen and "iterate_batches" not in seen
         assert not isinstance(seen.get("train_dataset"), MaskedChatDataset)
@@ -645,9 +622,7 @@ class TestTheMaskActuallyReachesTraining:
         _install_fake_mlx(monkeypatch)
         from soup_cli.trainer.mlx_masking import MaskedChatDataset
 
-        meta, seen = _run_wrapper(
-            tmp_path, monkeypatch, [{"prompt": "q", "completion": "a"}] * 4
-        )
+        meta, seen = _run_wrapper(tmp_path, monkeypatch, [{"prompt": "q", "completion": "a"}] * 4)
 
         assert meta["mask_prompt"] is True
         assert meta["response_token_mask"] is False

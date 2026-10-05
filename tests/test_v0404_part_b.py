@@ -60,7 +60,10 @@ class TestGetTrainDataloaderOverrideExists:
         instance = sub()
         # State is set, but ``train_dataset`` attr is missing.
         attach_multipack_state(
-            instance, lengths=[3, 4, 5], max_seq_len=64, batch_size=2,
+            instance,
+            lengths=[3, 4, 5],
+            max_seq_len=64,
+            batch_size=2,
         )
         assert instance.get_train_dataloader() == "fallback-no-ds"
 
@@ -92,7 +95,8 @@ class TestGetTrainDataloaderReturnsMultipackDataloader:
                 self.train_dataset = TinyDataset(10)
                 self.data_collator = None
                 self.args = MagicMock(
-                    dataloader_num_workers=0, dataloader_pin_memory=False,
+                    dataloader_num_workers=0,
+                    dataloader_pin_memory=False,
                 )
 
             def get_train_dataloader(self):
@@ -147,7 +151,8 @@ class TestGetTrainDataloaderScalesBinCapByBatchSize:
                 self.train_dataset = TinyDataset(10)
                 self.data_collator = None
                 self.args = MagicMock(
-                    dataloader_num_workers=0, dataloader_pin_memory=False,
+                    dataloader_num_workers=0,
+                    dataloader_pin_memory=False,
                 )
 
             def get_train_dataloader(self):

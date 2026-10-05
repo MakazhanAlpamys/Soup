@@ -90,11 +90,13 @@ class TestTheServerBuildsOnWhicheverMajorIsInstalled:
 
         tree = ast.parse(_SERVER_SRC.read_text(encoding="utf-8"))
         definitions = [
-            node for node in ast.walk(tree)
+            node
+            for node in ast.walk(tree)
             if isinstance(node, ast.FunctionDef) and node.name == "_dispatch_tool"
         ]
         call_sites = [
-            node for node in ast.walk(tree)
+            node
+            for node in ast.walk(tree)
             if isinstance(node, ast.Call)
             and isinstance(node.func, ast.Name)
             and node.func.id == "_dispatch_tool"

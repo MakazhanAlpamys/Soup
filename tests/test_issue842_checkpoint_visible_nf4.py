@@ -115,9 +115,7 @@ def test_plain_ctx_control_is_detectably_wrong_after_pool_recycling():
 
         @staticmethod
         def backward(ctx, grad_output):
-            dense = bnb_functional.dequantize_4bit(ctx.packed, ctx.state).to(
-                grad_output.dtype
-            )
+            dense = bnb_functional.dequantize_4bit(ctx.packed, ctx.state).to(grad_output.dtype)
             return torch.matmul(grad_output, dense), None
 
     calls = {"n": 0}
@@ -260,9 +258,7 @@ def test_cuda_route_flattens_all_leading_dimensions_on_cpu(
 
 def test_backward_refuses_a_recycled_stream_slot():
     torch.manual_seed(31)
-    packed, state = bnb_functional.quantize_4bit(
-        torch.randn(16, 16), quant_type="nf4"
-    )
+    packed, state = bnb_functional.quantize_4bit(torch.randn(16, 16), quant_type="nf4")
     owner = {"current": 0}
 
     def assert_owner():
@@ -294,9 +290,7 @@ def test_the_production_owner_check_refuses_a_recycled_slot(tmp_path):
         layer._assert_nf4_slot_owner()
 
 
-def test_streamed_layer_caches_substitution_views_for_one_pool_mapping(
-    tmp_path, monkeypatch
-):
+def test_streamed_layer_caches_substitution_views_for_one_pool_mapping(tmp_path, monkeypatch):
     from test_v07202 import _nf4_stream
 
     import soup_cli.utils.layer_stream_runtime as runtime_module
@@ -319,9 +313,7 @@ def test_streamed_layer_caches_substitution_views_for_one_pool_mapping(
 
     monkeypatch.setattr(runtime_module, "rebuild_params4bit", counting_rebuild)
 
-    quantized = sum(
-        ckpt in layer.quant_specs for ckpt in layer.name_map.values()
-    )
+    quantized = sum(ckpt in layer.quant_specs for ckpt in layer.name_map.values())
     assert quantized > 0
 
     first = layer._substituted_weights(buffers)
@@ -360,9 +352,7 @@ def test_missing_bnb_private_dispatch_symbols_fail_toward_safe_function_on_cpu(
     assert _can_use_checkpoint_visible_nf4_gemm(x, state) is True
 
 
-def test_forced_function_in_a_recycling_stream_matches_unpatched_resident(
-    tmp_path, monkeypatch
-):
+def test_forced_function_in_a_recycling_stream_matches_unpatched_resident(tmp_path, monkeypatch):
     from test_v07202 import (
         _nf4_stream,
         _randomise_lora_b,
@@ -390,9 +380,7 @@ def test_forced_function_in_a_recycling_stream_matches_unpatched_resident(
         finally:
             packed._soup_stream_owner_check = check
 
-    monkeypatch.setattr(
-        runtime_module, "checkpoint_visible_nf4_linear", counting_function
-    )
+    monkeypatch.setattr(runtime_module, "checkpoint_visible_nf4_linear", counting_function)
     monkeypatch.setattr(
         runtime_module,
         "_can_use_checkpoint_visible_nf4_gemm",
@@ -400,16 +388,12 @@ def test_forced_function_in_a_recycling_stream_matches_unpatched_resident(
     )
 
     # Four layers over two buffers: every slot is refilled by another layer mid-step.
-    streamed, runtime, weights, _index, _shards = _nf4_stream(
-        tmp_path, n_layers=4, buffers=2
-    )
+    streamed, runtime, weights, _index, _shards = _nf4_stream(tmp_path, n_layers=4, buffers=2)
     resident = _resident_nf4(weights)
     _randomise_lora_b(resident)
     assert _sync_adapters(streamed, resident) > 0
 
-    input_ids = torch.randint(
-        0, 64, (1, 16), generator=torch.Generator().manual_seed(5)
-    )
+    input_ids = torch.randint(0, 64, (1, 16), generator=torch.Generator().manual_seed(5))
     batch = {
         "input_ids": input_ids,
         "attention_mask": torch.ones_like(input_ids),
@@ -512,9 +496,7 @@ def test_fused_cuda_recycling_matches_private_buffer_and_plain_ctx_fails():
 
         @staticmethod
         def backward(ctx, grad_output):
-            dense = bnb_functional.dequantize_4bit(ctx.packed, ctx.state).to(
-                grad_output.dtype
-            )
+            dense = bnb_functional.dequantize_4bit(ctx.packed, ctx.state).to(grad_output.dtype)
             return torch.matmul(grad_output, dense), None
 
     def plain_body(value):
@@ -576,18 +558,12 @@ def test_streamed_matches_unpatched_resident_logits_and_all_lora_grads(
         gate_decisions.append(decision)
         return decision
 
-    monkeypatch.setattr(
-        runtime_module, "checkpoint_visible_nf4_linear", counting_function
-    )
-    monkeypatch.setattr(
-        runtime_module, "_can_use_checkpoint_visible_nf4_gemm", recording_gate
-    )
+    monkeypatch.setattr(runtime_module, "checkpoint_visible_nf4_linear", counting_function)
+    monkeypatch.setattr(runtime_module, "_can_use_checkpoint_visible_nf4_gemm", recording_gate)
     monkeypatch.setattr(bnb, "matmul_4bit", counting_matmul)
 
     generator = torch.Generator(device="cuda").manual_seed(41)
-    input_ids = torch.randint(
-        0, 64, (1, seq_len), device="cuda", generator=generator
-    )
+    input_ids = torch.randint(0, 64, (1, seq_len), device="cuda", generator=generator)
     streamed_logits = streamed(input_ids=input_ids, use_cache=False).logits
     streamed_logits.float().square().mean().backward()
     phase["name"] = "resident"

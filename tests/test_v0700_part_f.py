@@ -462,12 +462,7 @@ class TestSourceWiring:
     def test_module_no_top_level_torch(self):
         from pathlib import Path
 
-        src = (
-            Path(__file__).resolve().parent.parent
-            / "src" / "soup_cli"
-            / "utils"
-            / "echo_trap.py"
-        )
+        src = Path(__file__).resolve().parent.parent / "src" / "soup_cli" / "utils" / "echo_trap.py"
         body = src.read_text(encoding="utf-8")
         assert "\nimport torch" not in body
         assert "\nfrom torch" not in body

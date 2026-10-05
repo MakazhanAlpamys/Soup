@@ -25,19 +25,17 @@ console = Console()
 
 
 def profile(
-    config: str = typer.Option(
-        "soup.yaml", "--config", "-c", help="Path to soup.yaml config file"
-    ),
+    config: str = typer.Option("soup.yaml", "--config", "-c", help="Path to soup.yaml config file"),
     gpu: str = typer.Option(
-        None, "--gpu", "-g",
+        None,
+        "--gpu",
+        "-g",
         help=(
             "Target GPU for recommendations "
             "(e.g., rtx3090, rtx4090, a100, h100). Auto-detects if not set."
         ),
     ),
-    json_output: bool = typer.Option(
-        False, "--json", help="Output as JSON for scripting"
-    ),
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON for scripting"),
 ):
     """Estimate memory, speed, and GPU requirements BEFORE training."""
     from soup_cli.config.loader import load_config
@@ -76,9 +74,7 @@ def profile(
     )
 
     # Speed estimates
-    tokens_per_sec = estimate_speed(
-        model_params_b, cfg.training.quantization, batch_size
-    )
+    tokens_per_sec = estimate_speed(model_params_b, cfg.training.quantization, batch_size)
     samples_per_sec = tokens_per_sec / max(cfg.data.max_length, 1)
 
     # Batch size recommendation
@@ -116,10 +112,7 @@ def _resolve_gpu_memory(gpu: str | None) -> tuple[float, str]:
         gpu_key = normalize_gpu_key(gpu)
         if gpu_key not in GPU_MEMORY:
             valid = ", ".join(sorted(GPU_MEMORY.keys()))
-            console.print(
-                f"[red]Unknown GPU:[/] {gpu}\n"
-                f"[dim]Valid options: {valid}[/]"
-            )
+            console.print(f"[red]Unknown GPU:[/] {gpu}\n[dim]Valid options: {valid}[/]")
             raise typer.Exit(1)
         return float(GPU_MEMORY[gpu_key]), "flag"
 
@@ -183,9 +176,7 @@ def _render_profile(result: dict, cfg, gpu_memory_gb: float, gpu_memory_source: 
             "Pass --gpu for a real verdict."
         )
     elif fits:
-        recs.append(
-            f"[green]OK[/] Fits in {gpu_memory_gb:.0f} GB VRAM"
-        )
+        recs.append(f"[green]OK[/] Fits in {gpu_memory_gb:.0f} GB VRAM")
     else:
         recs.append(
             f"[red]X[/] Does NOT fit in {gpu_memory_gb:.0f} GB VRAM "
@@ -198,19 +189,13 @@ def _render_profile(result: dict, cfg, gpu_memory_gb: float, gpu_memory_source: 
             f"{gpu_memory_gb:.0f} GB VRAM"
         )
     else:
-        recs.append(
-            f"[green]OK[/] Recommended batch_size: {result['recommended_batch_size']}"
-        )
+        recs.append(f"[green]OK[/] Recommended batch_size: {result['recommended_batch_size']}")
 
     if result["total_memory_gb"] > 24 and not result["gradient_checkpointing"]:
-        recs.append(
-            "[yellow]![/] Consider gradient_checkpointing: true for memory savings"
-        )
+        recs.append("[yellow]![/] Consider gradient_checkpointing: true for memory savings")
 
     if result["total_memory_gb"] > 40:
-        recs.append(
-            "[yellow]![/] Consider DeepSpeed ZeRO-3 or FSDP for distributed training"
-        )
+        recs.append("[yellow]![/] Consider DeepSpeed ZeRO-3 or FSDP for distributed training")
 
     # Compatible GPUs (show top 5)
     gpu_list = result["compatible_gpus"][:5]

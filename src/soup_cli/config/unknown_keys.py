@@ -192,14 +192,11 @@ def deadline_notice() -> str:
     typed twice.
     """
     return (
-        f"Soup v{UNKNOWN_KEY_REJECTION_VERSION} will reject unknown config keys "
-        "instead of warning."
+        f"Soup v{UNKNOWN_KEY_REJECTION_VERSION} will reject unknown config keys instead of warning."
     )
 
 
-def format_unknown_keys(
-    unknown: list[UnknownKey], *, include_deadline: bool = True
-) -> str:
+def format_unknown_keys(unknown: list[UnknownKey], *, include_deadline: bool = True) -> str:
     """Render findings for an operator, naming the field they likely meant.
 
     One report per call with every finding listed together -- a config copied

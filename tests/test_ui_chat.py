@@ -8,6 +8,7 @@ import pytest
 def _auth_headers():
     """Return auth headers with the current UI token."""
     from soup_cli.ui.app import get_auth_token
+
     return {"Authorization": f"Bearer {get_auth_token()}"}
 
 
@@ -307,10 +308,12 @@ class TestChatValidation:
         # Mock httpx to avoid real connection
         mock_response = MagicMock()
         mock_response.status_code = 200
-        mock_response.iter_lines.return_value = iter([
-            'data: {"choices":[{"delta":{"content":"Hi"}}]}',
-            'data: [DONE]',
-        ])
+        mock_response.iter_lines.return_value = iter(
+            [
+                'data: {"choices":[{"delta":{"content":"Hi"}}]}',
+                "data: [DONE]",
+            ]
+        )
         mock_response.__enter__ = lambda s: s
         mock_response.__exit__ = lambda s, *a: None
 

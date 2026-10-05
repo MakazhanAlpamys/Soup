@@ -75,37 +75,39 @@ _QWEN4_EXP_TEXT_SHAPE: Tuple[str, ...] = (
 # HF config ``model_type`` so a ``base`` model's *actual* linear layers are
 # offered rather than the generic Llama default. Config-only (no torch /
 # no weights) — derived from each architecture's documented module names.
-_ARCH_TARGET_MODULES: Mapping[str, Tuple[str, ...]] = MappingProxyType({
-    # Llama-family (gated MLP).
-    "llama": _LLAMA_SHAPE,
-    "mistral": _LLAMA_SHAPE,
-    "mixtral": _LLAMA_SHAPE + ("w1", "w2", "w3"),
-    "qwen2": _LLAMA_SHAPE,
-    "qwen2_moe": _LLAMA_SHAPE,
-    "qwen3": _LLAMA_SHAPE,
-    "qwen3_moe": _LLAMA_SHAPE,
-    "qwen4_exp_text": _QWEN4_EXP_TEXT_SHAPE,
-    "gemma": _LLAMA_SHAPE,
-    "gemma2": _LLAMA_SHAPE,
-    "gemma3": _LLAMA_SHAPE,
-    "gemma3_text": _LLAMA_SHAPE,
-    "granite": _LLAMA_SHAPE,
-    "granitemoe": _LLAMA_SHAPE + ("w1", "w2", "w3"),
-    "cohere": _LLAMA_SHAPE,
-    "deepseek_v3": _LLAMA_SHAPE,
-    "stablelm": _LLAMA_SHAPE,
-    "starcoder2": ("q_proj", "k_proj", "v_proj", "o_proj", "c_fc", "c_proj"),
-    # Phi-family.
-    "phi": ("q_proj", "k_proj", "v_proj", "dense", "fc1", "fc2"),
-    "phi3": ("qkv_proj", "o_proj", "gate_up_proj", "down_proj"),
-    # GPT-2 / Conv1D style.
-    "gpt2": ("c_attn", "c_proj", "c_fc"),
-    "gptj": ("q_proj", "k_proj", "v_proj", "out_proj", "fc_in", "fc_out"),
-    "gpt_neox": ("query_key_value", "dense", "dense_h_to_4h", "dense_4h_to_h"),
-    "falcon": ("query_key_value", "dense", "dense_h_to_4h", "dense_4h_to_h"),
-    "bloom": ("query_key_value", "dense", "dense_h_to_4h", "dense_4h_to_h"),
-    "mpt": ("Wqkv", "out_proj", "up_proj", "down_proj"),
-})
+_ARCH_TARGET_MODULES: Mapping[str, Tuple[str, ...]] = MappingProxyType(
+    {
+        # Llama-family (gated MLP).
+        "llama": _LLAMA_SHAPE,
+        "mistral": _LLAMA_SHAPE,
+        "mixtral": _LLAMA_SHAPE + ("w1", "w2", "w3"),
+        "qwen2": _LLAMA_SHAPE,
+        "qwen2_moe": _LLAMA_SHAPE,
+        "qwen3": _LLAMA_SHAPE,
+        "qwen3_moe": _LLAMA_SHAPE,
+        "qwen4_exp_text": _QWEN4_EXP_TEXT_SHAPE,
+        "gemma": _LLAMA_SHAPE,
+        "gemma2": _LLAMA_SHAPE,
+        "gemma3": _LLAMA_SHAPE,
+        "gemma3_text": _LLAMA_SHAPE,
+        "granite": _LLAMA_SHAPE,
+        "granitemoe": _LLAMA_SHAPE + ("w1", "w2", "w3"),
+        "cohere": _LLAMA_SHAPE,
+        "deepseek_v3": _LLAMA_SHAPE,
+        "stablelm": _LLAMA_SHAPE,
+        "starcoder2": ("q_proj", "k_proj", "v_proj", "o_proj", "c_fc", "c_proj"),
+        # Phi-family.
+        "phi": ("q_proj", "k_proj", "v_proj", "dense", "fc1", "fc2"),
+        "phi3": ("qkv_proj", "o_proj", "gate_up_proj", "down_proj"),
+        # GPT-2 / Conv1D style.
+        "gpt2": ("c_attn", "c_proj", "c_fc"),
+        "gptj": ("q_proj", "k_proj", "v_proj", "out_proj", "fc_in", "fc_out"),
+        "gpt_neox": ("query_key_value", "dense", "dense_h_to_4h", "dense_4h_to_h"),
+        "falcon": ("query_key_value", "dense", "dense_h_to_4h", "dense_4h_to_h"),
+        "bloom": ("query_key_value", "dense", "dense_h_to_4h", "dense_4h_to_h"),
+        "mpt": ("Wqkv", "out_proj", "up_proj", "down_proj"),
+    }
+)
 
 
 def _introspect_target_modules(base: str) -> Optional[Tuple[str, ...]]:
@@ -165,18 +167,18 @@ def render_bash_script() -> str:
     return (
         "# Soup bash completion (v0.64.0)\n"
         "# Source this file from ~/.bashrc:\n"
-        "#   eval \"$(soup completions bash)\"\n"
+        '#   eval "$(soup completions bash)"\n'
         "_soup_complete() {\n"
         "    local IFS=$'\\n'\n"
         "    local response\n"
-        "    response=$(env COMP_WORDS=\"${COMP_WORDS[*]}\" \\\n"
+        '    response=$(env COMP_WORDS="${COMP_WORDS[*]}" \\\n'
         "        COMP_CWORD=$COMP_CWORD \\\n"
         "        _SOUP_COMPLETE=bash_complete \\\n"
         "        $1 2>/dev/null)\n"
         "    for completion in $response; do\n"
         "        IFS=',' read type value <<< \"$completion\"\n"
         "        if [[ $type == 'plain' ]]; then\n"
-        "            COMPREPLY+=(\"$value\")\n"
+        '            COMPREPLY+=("$value")\n'
         "        fi\n"
         "    done\n"
         "    return 0\n"
@@ -191,17 +193,17 @@ def render_zsh_script() -> str:
         "#compdef soup\n"
         "# Soup zsh completion (v0.64.0)\n"
         "# Source this file from ~/.zshrc:\n"
-        "#   eval \"$(soup completions zsh)\"\n"
+        '#   eval "$(soup completions zsh)"\n'
         "_soup_complete() {\n"
         "    local -a completions\n"
         "    local -a completions_with_descriptions\n"
         "    local -a response\n"
-        "    response=(\"${(@f)$(env COMP_WORDS=\"${words[*]}\" \\\n"
+        '    response=("${(@f)$(env COMP_WORDS="${words[*]}" \\\n'
         "        COMP_CWORD=$((CURRENT-1)) \\\n"
-        "        _SOUP_COMPLETE=zsh_complete soup 2>/dev/null)}\")\n"
-        "    for type_value in \"${response[@]}\"; do\n"
+        '        _SOUP_COMPLETE=zsh_complete soup 2>/dev/null)}")\n'
+        '    for type_value in "${response[@]}"; do\n'
         "        IFS=',' read -r -A parts <<< \"$type_value\"\n"
-        "        completions+=(\"${parts[2]}\")\n"
+        '        completions+=("${parts[2]}")\n'
         "    done\n"
         "    _describe '' completions\n"
         "}\n"
@@ -219,11 +221,11 @@ def render_fish_script() -> str:
         "        COMP_WORDS=(commandline -cp) \\\n"
         "        COMP_CWORD=(commandline -t) soup 2>/dev/null)\n"
         "    for item in $response\n"
-        "        set parts (string split \",\" $item)\n"
+        '        set parts (string split "," $item)\n'
         "        echo $parts[2]\n"
         "    end\n"
         "end\n"
-        "complete -c soup -f -a \"(_soup_complete)\"\n"
+        'complete -c soup -f -a "(_soup_complete)"\n'
     )
 
 

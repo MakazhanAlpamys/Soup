@@ -28,8 +28,11 @@ _PROMPT = "Explain, in a couple of sentences, why the sky looks blue at noon."
 
 def _pairs(n: int = 10):
     return [
-        (f"{_PROMPT} (variant {i})", f"Rayleigh scattering favours short wavelengths {i}",
-         f"It reflects the colour of the ocean below it {i} too")
+        (
+            f"{_PROMPT} (variant {i})",
+            f"Rayleigh scattering favours short wavelengths {i}",
+            f"It reflects the colour of the ocean below it {i} too",
+        )
         for i in range(n)
     ]
 
@@ -95,9 +98,7 @@ def test_a_one_word_gap_with_zero_variance_is_not_major():
 
 
 def test_a_near_identical_length_difference_is_ok():
-    rows = [
-        {"chosen": "w " * (20 + i % 3), "rejected": "w " * (21 + i % 3)} for i in range(10)
-    ]
+    rows = [{"chosen": "w " * (20 + i % 3), "rejected": "w " * (21 + i % 3)} for i in range(10)]
 
     check = check_length_bias(rows, length_fn=lambda text: float(len(text.split())))
 

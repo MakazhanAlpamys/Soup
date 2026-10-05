@@ -20,11 +20,15 @@ def test_chat_missing_model_path():
 def test_detect_base_model_valid(tmp_path: Path):
     """Should read base_model_name_or_path from adapter_config.json."""
     config_path = tmp_path / "adapter_config.json"
-    config_path.write_text(json.dumps({
-        "base_model_name_or_path": "meta-llama/Llama-3.1-8B-Instruct",
-        "r": 64,
-        "lora_alpha": 16,
-    }))
+    config_path.write_text(
+        json.dumps(
+            {
+                "base_model_name_or_path": "meta-llama/Llama-3.1-8B-Instruct",
+                "r": 64,
+                "lora_alpha": 16,
+            }
+        )
+    )
     result = _detect_base_model(config_path)
     assert result == "meta-llama/Llama-3.1-8B-Instruct"
 

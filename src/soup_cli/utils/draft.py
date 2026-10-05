@@ -92,14 +92,10 @@ def count_accepted(draft_argmax: Sequence[int], target_ids: Sequence[int]) -> in
             "draft_argmax and target_ids must be the same length, got "
             f"{len(draft_argmax)} and {len(target_ids)}"
         )
-    return sum(
-        1 for proposed, actual in zip(draft_argmax, target_ids) if proposed == actual
-    )
+    return sum(1 for proposed, actual in zip(draft_argmax, target_ids) if proposed == actual)
 
 
-def count_accepted_spans(
-    draft_pieces: Sequence[str], target_pieces: Sequence[str]
-) -> int:
+def count_accepted_spans(draft_pieces: Sequence[str], target_pieces: Sequence[str]) -> int:
     """Number of target token positions accepted by draft proposals across tokenizers.
 
     Unlike :func:`count_accepted` which requires identical token IDs and identical
@@ -145,9 +141,7 @@ def count_accepted_spans(
     return accepted
 
 
-def compute_acceptance(
-    draft_argmax: Sequence[int], target_ids: Sequence[int]
-) -> float:
+def compute_acceptance(draft_argmax: Sequence[int], target_ids: Sequence[int]) -> float:
     """Acceptance rate for a SINGLE generated sequence.
 
     Public convenience kernel over :func:`count_accepted` (the corpus-level
@@ -161,9 +155,7 @@ def compute_acceptance(
     return matched / len(target_ids)
 
 
-def compute_acceptance_spans(
-    draft_pieces: Sequence[str], target_pieces: Sequence[str]
-) -> float:
+def compute_acceptance_spans(draft_pieces: Sequence[str], target_pieces: Sequence[str]) -> float:
     """Acceptance rate for a single sequence across tokenizers."""
     if not target_pieces:
         return 0.0
@@ -187,9 +179,7 @@ def classify_acceptance(rate: float) -> str:
     if isinstance(rate, bool):
         raise TypeError(f"acceptance rate must not be bool, got {rate!r}")
     if not isinstance(rate, (int, float)):
-        raise TypeError(
-            f"acceptance rate must be a number, got {type(rate).__name__}"
-        )
+        raise TypeError(f"acceptance rate must be a number, got {type(rate).__name__}")
     value = float(rate)
     if not math.isfinite(value):
         raise ValueError(f"acceptance rate must be finite, got {rate!r}")
@@ -314,9 +304,7 @@ def modelled_best_k(a: float, c: float) -> tuple[int, float]:
     return best, modelled_speedup(a, best, c)
 
 
-def same_tokenizer(
-    tok_a: "PreTrainedTokenizerBase", tok_b: "PreTrainedTokenizerBase"
-) -> bool:
+def same_tokenizer(tok_a: "PreTrainedTokenizerBase", tok_b: "PreTrainedTokenizerBase") -> bool:
     """True when two tokenizers are interchangeable for speculative decoding.
 
     Equal ``vocab_size`` AND identical ids over :data:`PROBE_CORPUS`. The probe
@@ -349,9 +337,7 @@ def supports_universal_assisted_decoding() -> bool:
     try:
         from transformers.generation import candidate_generator
 
-        return hasattr(
-            candidate_generator, "AssistedCandidateGeneratorDifferentTokenizers"
-        )
+        return hasattr(candidate_generator, "AssistedCandidateGeneratorDifferentTokenizers")
     except Exception:
         return False
 
@@ -438,9 +424,7 @@ def render_draft_panel(report: AcceptanceReport) -> Panel:
     if report.tok_s_draft is not None:
         table.add_row("Draft alone", f"{_fmt(report.tok_s_draft, ' tok/s')}")
     if report.latency_ratio is not None:
-        table.add_row(
-            "Latency ratio", f"{report.latency_ratio:.3f} (plain / draft-alone tok/s)"
-        )
+        table.add_row("Latency ratio", f"{report.latency_ratio:.3f} (plain / draft-alone tok/s)")
         if report.breakeven_acceptance is None:
             table.add_row(
                 "Break-even",
@@ -524,9 +508,7 @@ def _registry_lock():
         lock_path = draft_registry_path() + ".lock"
         handle = None
         try:
-            os.makedirs(
-                os.path.dirname(os.path.abspath(lock_path)) or ".", exist_ok=True
-            )
+            os.makedirs(os.path.dirname(os.path.abspath(lock_path)) or ".", exist_ok=True)
             # O_NOFOLLOW via open_no_follow so a pre-planted symlink at <registry>.lock
             # can't redirect the lock or create a victim file (#820).
             flags = os.O_RDWR | os.O_CREAT
@@ -627,9 +609,7 @@ def list_drafts() -> list[dict]:
     return list(reversed(_read_registry()))
 
 
-def register_draft(
-    target: str, draft_dir: str, acceptance_rate: Optional[float] = None
-) -> None:
+def register_draft(target: str, draft_dir: str, acceptance_rate: Optional[float] = None) -> None:
     """Record ``target -> draft_dir`` so ``serve --auto-spec`` can find it.
 
     The target key is lower-cased to match ``spec_pairing.pick_draft_model``'s
@@ -646,9 +626,7 @@ def register_draft(
     entry = {
         "target": key,
         "draft": os.path.realpath(draft_dir),
-        "acceptance_rate": (
-            None if acceptance_rate is None else float(acceptance_rate)
-        ),
+        "acceptance_rate": (None if acceptance_rate is None else float(acceptance_rate)),
         "created": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }
     # Read-modify-write under a cross-process lock: two concurrent distill runs
@@ -761,9 +739,7 @@ def measure_acceptance(
             total += len(actual)
         else:
             assert draft_tokenizer is not None
-            target_pieces = [
-                tokenizer.decode([tid], skip_special_tokens=False) for tid in actual
-            ]
+            target_pieces = [tokenizer.decode([tid], skip_special_tokens=False) for tid in actual]
 
             prompt_draft_enc = draft_tokenizer(prompt, return_tensors="pt")
             draft_prompt_len = int(prompt_draft_enc["input_ids"].shape[1])
@@ -787,8 +763,7 @@ def measure_acceptance(
             draft_proposals = draft_proposal_logits.argmax(dim=-1).cpu().tolist()
 
             draft_pieces = [
-                draft_tokenizer.decode([did], skip_special_tokens=False)
-                for did in draft_proposals
+                draft_tokenizer.decode([did], skip_special_tokens=False) for did in draft_proposals
             ]
 
             accepted += count_accepted_spans(draft_pieces, target_pieces)

@@ -12,6 +12,7 @@ emits a single dense smaller model with a before/after perplexity verdict::
 Exit codes: 0 = SHIP, 2 = DON'T SHIP, 1 = runtime error (mirrors soup ship /
 soup diagnose). Heavy imports (torch/transformers) are lazy inside functions.
 """
+
 from __future__ import annotations
 
 import json
@@ -101,9 +102,7 @@ def _load_calib(path: str) -> list[str]:
         raise typer.BadParameter(f"calib path unreadable: {exc}") from exc
     with os.fdopen(fd, "r", encoding="utf-8") as handle:
         if os.fstat(handle.fileno()).st_size > _MAX_INPUT_BYTES:
-            raise typer.BadParameter(
-                f"calib file exceeds {_MAX_INPUT_BYTES} bytes"
-            )
+            raise typer.BadParameter(f"calib file exceeds {_MAX_INPUT_BYTES} bytes")
         prompts: list[str] = []
         for line in handle:
             line = line.strip()
@@ -131,9 +130,7 @@ def _count_params(model: object) -> int:
     return sum(p.numel() for p in model.parameters())  # type: ignore[attr-defined]
 
 
-def _perplexity(
-    model: object, tokenizer: object, prompts: Sequence[str], device: str
-) -> float:
+def _perplexity(model: object, tokenizer: object, prompts: Sequence[str], device: str) -> float:
     """Unweighted mean of per-example perplexities of ``model`` over ``prompts``.
 
     ``exp(mean per-example cross-entropy)`` with ``labels = input_ids`` (the
@@ -182,9 +179,7 @@ def _resolve_trc(model_id: str, requested: bool) -> bool:
     )
 
 
-def _load_for_shrink(
-    model_id: str, device: Optional[str], trc: bool
-) -> tuple[Any, Any, str]:
+def _load_for_shrink(model_id: str, device: Optional[str], trc: bool) -> tuple[Any, Any, str]:
     """Load a model + tokenizer for shrinking, preserving the checkpoint dtype.
 
     ``dtype="auto"`` keeps the model at its native precision so the shipped
@@ -193,9 +188,7 @@ def _load_for_shrink(
     """
     from soup_cli.utils.live_eval import load_model_and_tokenizer
 
-    return load_model_and_tokenizer(
-        model_id, device=device, trust_remote_code=trc, dtype="auto"
-    )
+    return load_model_and_tokenizer(model_id, device=device, trust_remote_code=trc, dtype="auto")
 
 
 def _render_importance_table(
@@ -333,9 +326,7 @@ def _shrink_impl(
     shrink_arch_of(mdl)
 
     console.print(f"[dim]Scoring importance over {len(prompts)} calib prompts ...[/]")
-    importances = compute_layer_importance(
-        mdl, tokenizer, prompts, block_size=count, device=dev
-    )
+    importances = compute_layer_importance(mdl, tokenizer, prompts, block_size=count, device=dev)
     chosen = select_drop_block(importances)
     _render_importance_table(importances, chosen)
 
@@ -375,9 +366,7 @@ def _shrink_impl(
     if heal is not None:
         adapter_dir = out_root / "heal_adapter"
         enforce_under_cwd_and_no_symlink(str(adapter_dir), "heal adapter dir")
-        console.print(
-            f"[dim]Healing (distill original -> pruned, ~{heal_steps} steps) ...[/]"
-        )
+        console.print(f"[dim]Healing (distill original -> pruned, ~{heal_steps} steps) ...[/]")
         _run_heal(
             pruned_dir=str(model_out),
             teacher=model,
@@ -413,9 +402,7 @@ def _shrink_impl(
     report = shrink_verdict_to_dict(verdict)
     report["model"] = model
     report["dropped_block"] = [chosen.start, chosen.start + chosen.block_size - 1]
-    atomic_write_text(
-        json.dumps(report, indent=2), str(report_path), field="shrink report"
-    )
+    atomic_write_text(json.dumps(report, indent=2), str(report_path), field="shrink report")
     console.print(f"[green]Wrote[/] {escape(str(report_path))}")
 
     if attach_to_registry:
@@ -584,9 +571,7 @@ def _run_heal(
             argv, capture_output=True, check=False, timeout=_HEAL_TIMEOUT_SECONDS, env=env
         )
     except subprocess.TimeoutExpired as exc:
-        raise RuntimeError(
-            f"heal distill exceeded {_HEAL_TIMEOUT_SECONDS}s timeout"
-        ) from exc
+        raise RuntimeError(f"heal distill exceeded {_HEAL_TIMEOUT_SECONDS}s timeout") from exc
     if result.returncode != 0:
         # Strip control bytes: the child's output is attacker-influenceable and
         # reaches the terminal via the friendly error handler (escape() does not

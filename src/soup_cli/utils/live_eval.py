@@ -252,9 +252,7 @@ def make_generator(
         quantization=quantization,
     )
     pad_id = (
-        tokenizer.pad_token_id
-        if tokenizer.pad_token_id is not None
-        else tokenizer.eos_token_id
+        tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id
     )
 
     def _gen(prompt: str) -> str:
@@ -319,9 +317,7 @@ def make_multi_generator(
         quantization=quantization,
     )
     pad_id = (
-        tokenizer.pad_token_id
-        if tokenizer.pad_token_id is not None
-        else tokenizer.eos_token_id
+        tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id
     )
 
     def _multi(prompt: str, k: int) -> List[str]:
@@ -414,9 +410,7 @@ def compute_pair_losses(
     model.eval()
     with torch.no_grad():
         for prompt, target in pairs:
-            input_ids, labels = _tokenize_pair(
-                tokenizer, prompt, target, max_length=max_length
-            )
+            input_ids, labels = _tokenize_pair(tokenizer, prompt, target, max_length=max_length)
             if (labels != -100).sum().item() == 0:
                 out.append(float("nan"))
                 continue
@@ -487,9 +481,7 @@ def lora_probe(
     model, tokenizer, dev = load_model_and_tokenizer(
         base, device=device, trust_remote_code=trust_remote_code, quantization=quantization
     )
-    pairs = _build_pairs(
-        rows, input_extractor=input_extractor, output_extractor=output_extractor
-    )
+    pairs = _build_pairs(rows, input_extractor=input_extractor, output_extractor=output_extractor)
     if len(pairs) < _MIN_TRAIN_ROWS + 1:
         raise ValueError("dataset has too few usable (prompt, target) pairs for a probe")
 
@@ -499,9 +491,7 @@ def lora_probe(
         # Not enough rows to both train and hold out — train on the holdout.
         train = pairs[:_MAX_TRAIN_ROWS]
 
-    base_loss = compute_eval_loss(
-        model, tokenizer, holdout, device=dev, max_length=max_length
-    )
+    base_loss = compute_eval_loss(model, tokenizer, holdout, device=dev, max_length=max_length)
 
     lora_cfg = LoraConfig(
         r=_DEFAULT_LORA_R,
@@ -512,9 +502,7 @@ def lora_probe(
     )
     peft_model = get_peft_model(model, lora_cfg)
     peft_model.train()
-    optimizer = torch.optim.AdamW(
-        (p for p in peft_model.parameters() if p.requires_grad), lr=lr
-    )
+    optimizer = torch.optim.AdamW((p for p in peft_model.parameters() if p.requires_grad), lr=lr)
 
     step = 0
     while step < n_steps:
@@ -522,9 +510,7 @@ def lora_probe(
         for prompt, target in train:
             if step >= n_steps:
                 break
-            input_ids, labels = _tokenize_pair(
-                tokenizer, prompt, target, max_length=max_length
-            )
+            input_ids, labels = _tokenize_pair(tokenizer, prompt, target, max_length=max_length)
             if (labels != -100).sum().item() == 0:
                 continue
             input_ids = input_ids.to(dev)
@@ -572,17 +558,15 @@ def measure_logit_agreement(
     model, tokenizer, dev = load_model_and_tokenizer(
         base, device=device, trust_remote_code=trust_remote_code, quantization=quantization
     )
-    pairs = _build_pairs(
-        rows, input_extractor=input_extractor, output_extractor=output_extractor
-    )[:max_pairs]
+    pairs = _build_pairs(rows, input_extractor=input_extractor, output_extractor=output_extractor)[
+        :max_pairs
+    ]
     matched = 0
     total = 0
     model.eval()
     with torch.no_grad():
         for prompt, target in pairs:
-            input_ids, labels = _tokenize_pair(
-                tokenizer, prompt, target, max_length=max_length
-            )
+            input_ids, labels = _tokenize_pair(tokenizer, prompt, target, max_length=max_length)
             target_positions = (labels[0] != -100).nonzero(as_tuple=True)[0]
             if target_positions.numel() == 0:
                 continue
@@ -622,15 +606,11 @@ def resolve_layer_module(model: object, layer_path: str) -> object:
     # the PEFT fallback below cannot bypass the dunder / regex guards.
     for seg in segments:
         if not seg or not _LAYER_SEGMENT_RE.match(seg):
-            raise ValueError(
-                f"invalid layer path segment {seg!r} in {layer_path!r}"
-            )
+            raise ValueError(f"invalid layer path segment {seg!r} in {layer_path!r}")
         # Reject dunder attributes (``__class__`` etc.) — they pass the
         # ``[A-Za-z0-9_]`` regex but must never be reachable via getattr.
         if seg.startswith("__") and seg.endswith("__"):
-            raise ValueError(
-                f"invalid layer path segment {seg!r} (dunder) in {layer_path!r}"
-            )
+            raise ValueError(f"invalid layer path segment {seg!r} (dunder) in {layer_path!r}")
 
     def _walk(root: object) -> object:
         current = root

@@ -334,8 +334,7 @@ _EXPECTED_READONLY = {
 class TestBuildRegistry:
     def test_readonly_tools_present(self):
         names = {
-            spec.name
-            for spec in reg.build_registry(allow_mutating=False, allow_execute=False)
+            spec.name for spec in reg.build_registry(allow_mutating=False, allow_execute=False)
         }
         assert _EXPECTED_READONLY <= names
 
@@ -823,9 +822,7 @@ class TestRunsRegistryHappyPaths:
         from soup_cli.experiment.tracker import ExperimentTracker
 
         monkeypatch.setenv("SOUP_DB_PATH", str(tmp_path / "exp.db"))
-        run_id = ExperimentTracker().start_run(
-            {"base": "m", "task": "sft"}, "cpu", "CPU", {}
-        )
+        run_id = ExperimentTracker().start_run({"base": "m", "task": "sft"}, "cpu", "CPU", {})
         out = reg.tool_runs_show({"run_id": run_id})
         assert out["run_id"] == run_id
 
@@ -835,8 +832,12 @@ class TestRunsRegistryHappyPaths:
         monkeypatch.setenv("SOUP_REGISTRY_DB_PATH", str(tmp_path / "reg.db"))
         with RegistryStore() as store:
             entry_id = store.push(
-                name="mymodel", tag="v1", base_model="b", task="sft",
-                run_id=None, config={"base": "b"},
+                name="mymodel",
+                tag="v1",
+                base_model="b",
+                task="sft",
+                run_id=None,
+                config={"base": "b"},
             )
         out = reg.tool_registry_show({"ref": entry_id})
         assert out["id"] == entry_id
@@ -846,10 +847,17 @@ class TestRunsRegistryHappyPaths:
 
         monkeypatch.setenv("SOUP_REGISTRY_DB_PATH", str(tmp_path / "reg.db"))
         with RegistryStore() as store:
-            store.push(name="alpha", tag="v1", base_model="b", task="sft",
-                       run_id=None, config={"base": "b"})
-            store.push(name="beta", tag="v1", base_model="b", task="dpo",
-                       run_id=None, config={"base": "b"})
+            store.push(
+                name="alpha",
+                tag="v1",
+                base_model="b",
+                task="sft",
+                run_id=None,
+                config={"base": "b"},
+            )
+            store.push(
+                name="beta", tag="v1", base_model="b", task="dpo", run_id=None, config={"base": "b"}
+            )
         assert reg.tool_registry_list({})["count"] == 2
         narrowed = reg.tool_registry_list({"name": "alpha"})
         assert narrowed["count"] == 1
@@ -971,8 +979,8 @@ class TestServePlumbing:
 
         calls = []
         fake_server = ModuleType("soup_cli.mcp_server.server")
-        fake_server.run_stdio_server = (
-            lambda *, allow_mutating, allow_execute: calls.append((allow_mutating, allow_execute))
+        fake_server.run_stdio_server = lambda *, allow_mutating, allow_execute: calls.append(
+            (allow_mutating, allow_execute)
         )
         monkeypatch.setitem(sys.modules, "soup_cli.mcp_server.server", fake_server)
         r1 = CliRunner().invoke(app, ["mcp", "serve"])

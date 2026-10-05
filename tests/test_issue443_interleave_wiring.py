@@ -429,9 +429,7 @@ def _matched_fixture(tmp_path: Path):
     _write_url_jsonl(b_path, 4, "other.org")
 
     single_cfg = _cfg(tmp_path, train=str(single_path))
-    list_cfg = _cfg(
-        tmp_path, train=[str(a_path), str(b_path)], interleave="concat"
-    )
+    list_cfg = _cfg(tmp_path, train=[str(a_path), str(b_path)], interleave="concat")
     return single_cfg, list_cfg, single_path, a_path, b_path
 
 
@@ -497,8 +495,7 @@ def test_every_data_train_consumer_handles_list_non_degenerately(tmp_path, monke
     list_protected = _collect_external_protected_inputs(list_cfg)
     single_hits = [p for p in single_protected if p.path == str(single_path.resolve())]
     list_hits = [
-        p for p in list_protected
-        if p.path in (str(a_path.resolve()), str(b_path.resolve()))
+        p for p in list_protected if p.path in (str(a_path.resolve()), str(b_path.resolve()))
     ]
     assert len(single_hits) == 1, "single path contributes exactly one protected entry"
     assert len(list_hits) == 2, "list must contribute one protected entry PER file, not zero"

@@ -76,9 +76,7 @@ class TestPlanAndApplyChanges:
         )
 
         sites = (
-            DocCountSite(
-                "docs/commands.md", r"List all\s+(\d+)\s+(?:ready[-\s]?made\s+)?recipes"
-            ),
+            DocCountSite("docs/commands.md", r"List all\s+(\d+)\s+(?:ready[-\s]?made\s+)?recipes"),
         )
         changes = apply_changes(tmp_path, 200, sites=sites)
 
@@ -96,9 +94,7 @@ class TestPlanAndApplyChanges:
         doc_file.write_text(original, encoding="utf-8")
 
         sites = (
-            DocCountSite(
-                "docs/commands.md", r"List all\s+(\d+)\s+(?:ready[-\s]?made\s+)?recipes"
-            ),
+            DocCountSite("docs/commands.md", r"List all\s+(\d+)\s+(?:ready[-\s]?made\s+)?recipes"),
         )
         changes = plan_changes(tmp_path, 200, sites=sites)
 
@@ -119,9 +115,7 @@ class TestPlanAndApplyChanges:
         doc_file.write_bytes(original_bytes)
 
         sites = (
-            DocCountSite(
-                "docs/commands.md", r"List all\s+(\d+)\s+(?:ready[-\s]?made\s+)?recipes"
-            ),
+            DocCountSite("docs/commands.md", r"List all\s+(\d+)\s+(?:ready[-\s]?made\s+)?recipes"),
         )
         changes = apply_changes(tmp_path, 200, sites=sites)
 
@@ -146,9 +140,7 @@ class TestPlanAndApplyChanges:
         doc_file.write_bytes(before)
 
         sites = (
-            DocCountSite(
-                "docs/commands.md", r"List all\s+(\d+)\s+(?:ready[-\s]?made\s+)?recipes"
-            ),
+            DocCountSite("docs/commands.md", r"List all\s+(\d+)\s+(?:ready[-\s]?made\s+)?recipes"),
         )
         changes = apply_changes(tmp_path, 200, sites=sites)
 
@@ -167,9 +159,7 @@ class TestPlanAndApplyChanges:
         doc_file.write_bytes(before)
 
         sites = (
-            DocCountSite(
-                "docs/commands.md", r"List all\s+(\d+)\s+(?:ready[-\s]?made\s+)?recipes"
-            ),
+            DocCountSite("docs/commands.md", r"List all\s+(\d+)\s+(?:ready[-\s]?made\s+)?recipes"),
         )
         changes = apply_changes(tmp_path, 200, sites=sites)
 
@@ -223,9 +213,7 @@ class TestMainCli:
             "soup recipes list  List all 3 ready-made recipes\n", encoding="utf-8"
         )
         fixture_sites = (
-            DocCountSite(
-                "docs/commands.md", r"List all\s+(\d+)\s+(?:ready[-\s]?made\s+)?recipes"
-            ),
+            DocCountSite("docs/commands.md", r"List all\s+(\d+)\s+(?:ready[-\s]?made\s+)?recipes"),
         )
         monkeypatch.setattr(
             sync_recipe_count,

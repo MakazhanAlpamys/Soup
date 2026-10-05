@@ -8,6 +8,7 @@ pid afterwards. A server crash in between leaves the row stuck at
 #402's `_live_persisted_run` liveness check can ever inspect it, and a
 restarted server sees free capacity and double-books.
 """
+
 import sys
 from unittest.mock import MagicMock, patch
 

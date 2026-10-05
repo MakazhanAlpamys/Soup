@@ -4,6 +4,7 @@ Subcommand bundle attached to the existing ``soup eval`` Typer app via
 :func:`register`. Mirrors the v0.55.0 / v0.61.0 registration pattern so
 ``commands/eval.py`` stays under length cap.
 """
+
 from __future__ import annotations
 
 import json
@@ -42,9 +43,7 @@ def _validate_run_id(run_id: object) -> str:
     if not run_id:
         raise typer.BadParameter("run_id must not be empty")
     if len(run_id) > _MAX_RUN_ID_LEN:
-        raise typer.BadParameter(
-            f"run_id too long ({len(run_id)} > {_MAX_RUN_ID_LEN})"
-        )
+        raise typer.BadParameter(f"run_id too long ({len(run_id)} > {_MAX_RUN_ID_LEN})")
     return run_id
 
 
@@ -64,17 +63,13 @@ def _read_evidence_json(path: str, *, console: Console) -> dict:
     try:
         fd = os.open(path, flags)
     except OSError as exc:
-        raise typer.BadParameter(
-            f"cannot open --evidence: {type(exc).__name__}"
-        ) from exc
+        raise typer.BadParameter(f"cannot open --evidence: {type(exc).__name__}") from exc
     try:
         st = os.fstat(fd)
         if stat.S_ISLNK(st.st_mode):  # impossible under O_NOFOLLOW, defence-in-depth
             raise typer.BadParameter("--evidence must not be a symlink")
         if st.st_size > _MAX_EVIDENCE_BYTES:
-            raise typer.BadParameter(
-                f"--evidence too large ({st.st_size} > {_MAX_EVIDENCE_BYTES})"
-            )
+            raise typer.BadParameter(f"--evidence too large ({st.st_size} > {_MAX_EVIDENCE_BYTES})")
         with os.fdopen(fd, "r", encoding="utf-8", closefd=True) as fh:
             raw = fh.read()
             fd = -1
@@ -92,7 +87,11 @@ def _read_evidence_json(path: str, *, console: Console) -> dict:
 
 
 def _write_json_output(
-    payload: dict, output: str, *, console: Console, field: str = "--output",
+    payload: dict,
+    output: str,
+    *,
+    console: Console,
+    field: str = "--output",
 ) -> None:
     """Write ``payload`` to ``output`` atomically (review L6 dedup helper)."""
     from soup_cli.utils.paths import (
@@ -116,11 +115,15 @@ def register(app: typer.Typer, console: Console) -> None:
     def behavior_cmd(
         run_id: str = typer.Argument(..., help="Run identifier."),
         battery: str = typer.Option(
-            "xstest", "--battery", "-b",
+            "xstest",
+            "--battery",
+            "-b",
             help="Battery: xstest / harmbench / jailbreakbench / elephant / syceval.",
         ),
         evidence: Optional[str] = typer.Option(
-            None, "--evidence", "-e",
+            None,
+            "--evidence",
+            "-e",
             help=(
                 "Path to a JSON file with "
                 "{pre_responses, post_responses, oracle} arrays. Here each oracle "
@@ -129,19 +132,25 @@ def register(app: typer.Typer, console: Console) -> None:
             ),
         ),
         output: Optional[str] = typer.Option(
-            None, "--output", "-o",
+            None,
+            "--output",
+            "-o",
             help="Where to write the rendered BehaviorDiffReport JSON.",
         ),
         base_model: Optional[str] = typer.Option(
-            None, "--base-model",
+            None,
+            "--base-model",
             help="Base model id for a LIVE diff (generates pre/post responses).",
         ),
         adapter: Optional[str] = typer.Option(
-            None, "--adapter",
+            None,
+            "--adapter",
             help="LoRA adapter path for the 'post' model in a live diff.",
         ),
         device: Optional[str] = typer.Option(
-            None, "--device", help="Device for the live diff (cuda / cpu).",
+            None,
+            "--device",
+            help="Device for the live diff (cuda / cpu).",
         ),
     ) -> None:
         """Score a run on a bundled behaviour battery (pre/post diff).
@@ -170,12 +179,14 @@ def register(app: typer.Typer, console: Console) -> None:
             raise typer.Exit(EXIT_USAGE_ERROR) from exc
 
         spec = get_battery_spec(canonical)
-        console.print(Panel(
-            f"[bold]{escape(spec.name)}[/]\n{escape(spec.description)}\n"
-            f"Axis: {escape(spec.primary_axis)}",
-            title="Behaviour Battery",
-            border_style="cyan",
-        ))
+        console.print(
+            Panel(
+                f"[bold]{escape(spec.name)}[/]\n{escape(spec.description)}\n"
+                f"Axis: {escape(spec.primary_axis)}",
+                title="Behaviour Battery",
+                border_style="cyan",
+            )
+        )
 
         if base_model is not None:
             from soup_cli.utils.behavior_battery import (
@@ -221,9 +232,7 @@ def register(app: typer.Typer, console: Console) -> None:
         try:
             data = _read_evidence_json(evidence, console=console)
         except (typer.BadParameter, OSError, json.JSONDecodeError) as exc:
-            console.print(
-                f"[red]Failed to read evidence:[/] {escape(str(exc))}"
-            )
+            console.print(f"[red]Failed to read evidence:[/] {escape(str(exc))}")
             raise typer.Exit(EXIT_USAGE_ERROR) from exc
 
         try:
@@ -257,31 +266,42 @@ def register(app: typer.Typer, console: Console) -> None:
     def capability_cmd(
         run_id: str = typer.Argument(..., help="Run identifier."),
         suite: str = typer.Option(
-            "fast", "--suite", "-s",
+            "fast",
+            "--suite",
+            "-s",
             help="Profile: full / fast / math / code.",
         ),
         output: Optional[str] = typer.Option(
-            None, "--output", "-o",
+            None,
+            "--output",
+            "-o",
             help="Where to write the rendered CapabilityReport JSON.",
         ),
         live: bool = typer.Option(
-            False, "--live",
+            False,
+            "--live",
             help="Run the suite LIVE via lm-eval-harness against --model.",
         ),
         model: Optional[str] = typer.Option(
-            None, "--model", "-m",
+            None,
+            "--model",
+            "-m",
             help="HF model id for a live run (required with --live).",
         ),
         tasks: Optional[str] = typer.Option(
-            None, "--tasks",
+            None,
+            "--tasks",
             help="Comma-separated lm-eval task override (live; bypasses --suite).",
         ),
         limit: Optional[int] = typer.Option(
-            None, "--limit",
+            None,
+            "--limit",
             help="Cap eval examples per task (live; use 1-5 for a smoke).",
         ),
         device: Optional[str] = typer.Option(
-            None, "--device", help="Device for the live run (cuda / cpu).",
+            None,
+            "--device",
+            help="Device for the live run (cuda / cpu).",
         ),
     ) -> None:
         """Run a bundled capability profile (MMLU-Pro / GPQA / AIME / ...).
@@ -305,8 +325,7 @@ def register(app: typer.Typer, console: Console) -> None:
             canonical = validate_suite_name(suite)
         except (TypeError, ValueError) as exc:
             console.print(
-                f"[red]Invalid --suite:[/] {escape(str(exc))} "
-                f"(valid: {', '.join(list_suites())})"
+                f"[red]Invalid --suite:[/] {escape(str(exc))} (valid: {', '.join(list_suites())})"
             )
             raise typer.Exit(2) from exc
 
@@ -316,9 +335,7 @@ def register(app: typer.Typer, console: Console) -> None:
                 raise typer.Exit(2)
             from soup_cli.utils.capability_suite import run_capability_suite
 
-            task_list = (
-                [t.strip() for t in tasks.split(",") if t.strip()] if tasks else None
-            )
+            task_list = [t.strip() for t in tasks.split(",") if t.strip()] if tasks else None
             try:
                 payload = run_capability_suite(
                     run_id=run_id,
@@ -376,14 +393,19 @@ def register(app: typer.Typer, console: Console) -> None:
     @app.command(name="checklist", cls=GateCommand)
     def checklist_cmd(
         spec_path: str = typer.Argument(
-            ..., help="Path to CheckList DSL YAML.",
+            ...,
+            help="Path to CheckList DSL YAML.",
         ),
         evidence: Optional[str] = typer.Option(
-            None, "--evidence", "-e",
+            None,
+            "--evidence",
+            "-e",
             help="Required JSON with operator-supplied per-test responses.",
         ),
         output: Optional[str] = typer.Option(
-            None, "--output", "-o",
+            None,
+            "--output",
+            "-o",
             help="Where to write the rendered CheckListReport JSON.",
         ),
     ) -> None:
@@ -409,9 +431,7 @@ def register(app: typer.Typer, console: Console) -> None:
         try:
             evidence_map = _read_evidence_json(evidence, console=console)
         except (typer.BadParameter, OSError, json.JSONDecodeError) as exc:
-            console.print(
-                f"[red]Failed to read evidence:[/] {escape(str(exc))}"
-            )
+            console.print(f"[red]Failed to read evidence:[/] {escape(str(exc))}")
             raise typer.Exit(EXIT_USAGE_ERROR) from exc
 
         try:
@@ -435,9 +455,7 @@ def register(app: typer.Typer, console: Console) -> None:
                 result.verdict,
             )
         console.print(table)
-        console.print(
-            f"Overall: [bold]{report.overall}[/]"
-        )
+        console.print(f"Overall: [bold]{report.overall}[/]")
 
         if output:
             _write_json_output(report.to_dict(), output, console=console)
@@ -455,15 +473,21 @@ def register(app: typer.Typer, console: Console) -> None:
             ),
         ),
         size: str = typer.Option(
-            "small", "--size", "-z",
+            "small",
+            "--size",
+            "-z",
             help="Subset profile: full / small / tiny.",
         ),
         model: str = typer.Option(
-            "1pl", "--model", "-m",
+            "1pl",
+            "--model",
+            "-m",
             help="IRT model: 1pl (Rasch) / 2pl (discrimination) / 3pl (+ guessing).",
         ),
         output: Optional[str] = typer.Option(
-            None, "--output", "-o",
+            None,
+            "--output",
+            "-o",
             help="Where to write the rendered IrtSubsetPlan JSON.",
         ),
     ) -> None:
@@ -479,8 +503,7 @@ def register(app: typer.Typer, console: Console) -> None:
 
         if size not in IRT_PROFILES:
             console.print(
-                f"[red]Invalid --size: {escape(size)} "
-                f"(valid: {', '.join(sorted(IRT_PROFILES))})[/]"
+                f"[red]Invalid --size: {escape(size)} (valid: {', '.join(sorted(IRT_PROFILES))})[/]"
             )
             raise typer.Exit(2)
         if model not in SUPPORTED_IRT_MODELS:
@@ -509,14 +532,16 @@ def register(app: typer.Typer, console: Console) -> None:
             console.print(f"[red]IRT fit failed:[/] {escape(str(exc))}")
             raise typer.Exit(2) from exc
 
-        console.print(Panel(
-            f"Model: [bold]{escape(model)}[/]\n"
-            f"Profile: [bold]{escape(plan.size)}[/]\n"
-            f"Selected: {len(plan.item_ids)} / {plan.total_items}\n"
-            f"Approx cost cut: {plan.cost_ratio:.1%}",
-            title="IRT Subset",
-            border_style="green",
-        ))
+        console.print(
+            Panel(
+                f"Model: [bold]{escape(model)}[/]\n"
+                f"Profile: [bold]{escape(plan.size)}[/]\n"
+                f"Selected: {len(plan.item_ids)} / {plan.total_items}\n"
+                f"Approx cost cut: {plan.cost_ratio:.1%}",
+                title="IRT Subset",
+                border_style="green",
+            )
+        )
 
         if output:
             _write_json_output(plan.to_dict(), output, console=console)

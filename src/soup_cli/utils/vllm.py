@@ -83,8 +83,7 @@ def _render_chat_prompt(
             if not fallback_on_error:
                 raise
             logger.warning(
-                "chat template failed to render; falling back to the legacy "
-                "role-prefixed prompt",
+                "chat template failed to render; falling back to the legacy role-prefixed prompt",
                 exc_info=True,
             )
         else:
@@ -140,15 +139,11 @@ def encode_chat_prompt(
     serves the legacy prompt when a template fails to render, while the CLI
     commands surface the template's own error.
     """
-    text, templated = _render_chat_prompt(
-        messages, tokenizer, fallback_on_error=fallback_on_error
-    )
+    text, templated = _render_chat_prompt(messages, tokenizer, fallback_on_error=fallback_on_error)
     return encode_rendered_prompt(tokenizer, text, templated=templated, **tokenizer_kwargs)
 
 
-def build_engine_prompt(
-    messages: Any, tokenizer: Any = None
-) -> tuple[str, Optional[list[int]]]:
+def build_engine_prompt(messages: Any, tokenizer: Any = None) -> tuple[str, Optional[list[int]]]:
     """Render chat messages for a backend that tokenizes the prompt itself (#785).
 
     The vLLM, SGLang and MII backends hand the engine a prompt STRING, and the
@@ -295,19 +290,18 @@ def create_vllm_engine(
     if quantization:
         if quantization not in ("awq", "gptq", "fp8"):
             raise ValueError(
-                f"quantization must be one of awq/gptq/fp8 or None, "
-                f"got {quantization!r}"
+                f"quantization must be one of awq/gptq/fp8 or None, got {quantization!r}"
             )
         engine_args.quantization = quantization
 
     # Speculative decoding — use a smaller draft model for faster inference
     if speculative_model:
         import re
+
         # SSRF protection: block URL-based model paths
-        if re.match(r'^https?://', speculative_model):
+        if re.match(r"^https?://", speculative_model):
             raise ValueError(
-                "speculative_model must be a local path or HuggingFace model ID, "
-                "not a URL"
+                "speculative_model must be a local path or HuggingFace model ID, not a URL"
             )
         engine_args.speculative_model = speculative_model
         engine_args.num_speculative_tokens = num_speculative_tokens
@@ -498,9 +492,7 @@ def create_vllm_app(
                             },
                             # #333 — was hardcoded "stop", so a length
                             # truncation looked like a natural stop.
-                            "finish_reason": resolve_finish_reason(
-                                output, max_tokens
-                            ),
+                            "finish_reason": resolve_finish_reason(output, max_tokens),
                         }
                     ],
                     "usage": {
@@ -544,7 +536,7 @@ def create_vllm_app(
                 async for request_output in results_generator:
                     output = request_output.outputs[0]
                     last_output = output
-                    new_text = output.text[len(previous_text):]
+                    new_text = output.text[len(previous_text) :]
                     previous_text = output.text
 
                     if new_text:
@@ -618,12 +610,8 @@ def create_vllm_app(
                 text = chat_response["choices"][0]["message"]["content"]
             except (KeyError, IndexError, TypeError):
                 text = ""
-        usage = (
-            chat_response.get("usage", {}) if isinstance(chat_response, dict) else {}
-        )
-        msg_id = (
-            chat_response.get("id", "") if isinstance(chat_response, dict) else ""
-        )
+        usage = chat_response.get("usage", {}) if isinstance(chat_response, dict) else {}
+        msg_id = chat_response.get("id", "") if isinstance(chat_response, dict) else ""
         out_model = openai_payload.get("model", model_name)
         in_tokens = int(usage.get("prompt_tokens", 0) or 0)
         out_tokens = int(usage.get("completion_tokens", 0) or 0)

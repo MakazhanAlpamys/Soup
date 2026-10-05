@@ -33,9 +33,7 @@ _OK_THRESHOLD: float = 0.85
 _MINOR_THRESHOLD: float = 0.60
 
 # Exposed read-only for callers that want to render the thresholds.
-THRESHOLDS: Mapping[str, float] = MappingProxyType(
-    {"ok": _OK_THRESHOLD, "minor": _MINOR_THRESHOLD}
-)
+THRESHOLDS: Mapping[str, float] = MappingProxyType({"ok": _OK_THRESHOLD, "minor": _MINOR_THRESHOLD})
 
 
 def classify_score(score: float) -> str:
@@ -141,9 +139,7 @@ class FailureReport:
     scores: Mapping[str, FailureScore]
     overall: str
     soup_version: str = ""
-    extras: Mapping[str, str] = field(
-        default_factory=lambda: MappingProxyType({})
-    )
+    extras: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
 
     def __post_init__(self) -> None:
         for attr in ("run_id", "base", "adapter", "soup_version"):
@@ -162,9 +158,7 @@ class FailureReport:
             if not isinstance(value, FailureScore):
                 raise TypeError(f"scores[{key!r}] must be FailureScore")
             if value.mode != key:
-                raise ValueError(
-                    f"scores[{key!r}].mode={value.mode!r} mismatch"
-                )
+                raise ValueError(f"scores[{key!r}].mode={value.mode!r} mismatch")
         if self.overall not in VERDICTS:
             raise ValueError(f"overall must be one of {VERDICTS}")
         if not isinstance(self.extras, Mapping):

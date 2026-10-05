@@ -89,9 +89,11 @@ def test_cli_bootstrap_calls_force_utf8(monkeypatch):
     import soup_cli.cli as cli_mod
 
     # Module-level guarantee: the symbol is imported.
-    assert hasattr(cli_mod, "_utf8_bootstrap_done") or hasattr(
-        cli_mod, "force_utf8_stdio"
-    ) or "force_utf8_stdio" in dir(enc)
+    assert (
+        hasattr(cli_mod, "_utf8_bootstrap_done")
+        or hasattr(cli_mod, "force_utf8_stdio")
+        or "force_utf8_stdio" in dir(enc)
+    )
 
 
 def test_writers_use_utf8_encoding():
@@ -115,7 +117,7 @@ def test_writers_use_utf8_encoding():
         # also reference encoding="utf-8" in the same call (rough heuristic — full
         # static verification is left to ruff + lint hooks).
         # Just ensure the file at least mentions utf-8 if it contains text writes.
-        if 'open(' in text and (', "w"' in text or ", 'w'" in text):
+        if "open(" in text and (', "w"' in text or ", 'w'" in text):
             assert 'encoding="utf-8"' in text or "encoding='utf-8'" in text, (
                 f"{rel} writes text without explicit utf-8 encoding"
             )

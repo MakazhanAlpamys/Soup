@@ -134,8 +134,10 @@ class TestDisplaySummary:
                 "response_a": "hello",
                 "response_b": "world",
                 "metrics": {
-                    "len_a": 5, "len_b": 5,
-                    "words_a": 1, "words_b": 1,
+                    "len_a": 5,
+                    "len_b": 5,
+                    "words_a": 1,
+                    "words_b": 1,
                     "word_overlap": 0.0,
                 },
             }
@@ -160,12 +162,18 @@ class TestDiffCLI:
         from soup_cli.cli import app
 
         runner = CliRunner()
-        result = runner.invoke(app, [
-            "diff",
-            "--model-a", "/nonexistent/model_a",
-            "--model-b", ".",
-            "--prompt", "test",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "diff",
+                "--model-a",
+                "/nonexistent/model_a",
+                "--model-b",
+                ".",
+                "--prompt",
+                "test",
+            ],
+        )
         assert result.exit_code != 0
 
     def test_model_b_not_found(self, tmp_path):
@@ -175,12 +183,18 @@ class TestDiffCLI:
         from soup_cli.cli import app
 
         runner = CliRunner()
-        result = runner.invoke(app, [
-            "diff",
-            "--model-a", str(tmp_path),
-            "--model-b", "/nonexistent/model_b",
-            "--prompt", "test",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "diff",
+                "--model-a",
+                str(tmp_path),
+                "--model-b",
+                "/nonexistent/model_b",
+                "--prompt",
+                "test",
+            ],
+        )
         assert result.exit_code != 0
 
     def test_no_prompts_error(self, tmp_path):
@@ -190,9 +204,14 @@ class TestDiffCLI:
         from soup_cli.cli import app
 
         runner = CliRunner()
-        result = runner.invoke(app, [
-            "diff",
-            "--model-a", str(tmp_path),
-            "--model-b", str(tmp_path),
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "diff",
+                "--model-a",
+                str(tmp_path),
+                "--model-b",
+                str(tmp_path),
+            ],
+        )
         assert result.exit_code != 0

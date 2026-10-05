@@ -56,10 +56,7 @@ def push(
     collection: Optional[str] = typer.Option(
         None,
         "--collection",
-        help=(
-            "Add the pushed repo to an existing HF Collection "
-            "(slug: 'owner/title-hash')"
-        ),
+        help=("Add the pushed repo to an existing HF Collection (slug: 'owner/title-hash')"),
     ),
     hub: str = typer.Option(
         "hf",
@@ -106,9 +103,7 @@ def push(
         raise typer.Exit(1)
 
     if not is_under_cwd(model_path):
-        console.print(
-            "[red]--model path must stay under the current working directory.[/]"
-        )
+        console.print("[red]--model path must stay under the current working directory.[/]")
         raise typer.Exit(1)
 
     # Deprecated --token flag (HF hub): warn once if explicitly provided.
@@ -255,8 +250,7 @@ def push(
         api = get_hf_api(token=hf_token, endpoint=hf_endpoint)
     except ImportError as exc:
         console.print(
-            "[red]huggingface-hub not installed.[/]\n"
-            "Run: [bold]pip install huggingface-hub[/]"
+            "[red]huggingface-hub not installed.[/]\nRun: [bold]pip install huggingface-hub[/]"
         )
         raise typer.Exit(1) from exc
 
@@ -284,7 +278,9 @@ def push(
             )
         elif not readme_path.exists():
             model_card = generate_model_card_v2(
-                model_path, repo_id=repo, is_adapter=is_adapter,
+                model_path,
+                repo_id=repo,
+                is_adapter=is_adapter,
             )
             api.upload_file(
                 path_or_fileobj=model_card.encode("utf-8"),
@@ -487,9 +483,7 @@ def generate_model_card_v2(
         # HTML-escape to block script / javascript: / img-onerror injection
         # on the HF Hub README viewer. Markdown chars remain visible but
         # inert.
-        lineage_section = (
-            f"## Data Lineage\n\n{html.escape(str(data_lineage))}\n"
-        )
+        lineage_section = f"## Data Lineage\n\n{html.escape(str(data_lineage))}\n"
 
     model_name = repo_id.split("/")[-1] if "/" in repo_id else repo_id
     tags_block = "\n".join(

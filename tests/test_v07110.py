@@ -223,9 +223,7 @@ class TestTokenizeRaftExample:
         tok = _FakeTokenizer()
         # Answer with a [doc-0] citation token → that token's weight boosted.
         composed = self._composed()
-        row = tokenize_raft_example(
-            tok, composed, max_length=512, citation_faithful=True
-        )
+        row = tokenize_raft_example(tok, composed, max_length=512, citation_faithful=True)
         # At least one answer token gets the boost (> 1.0).
         assert any(w > 1.0 for w in row["loss_weights"])
 
@@ -233,18 +231,14 @@ class TestTokenizeRaftExample:
         from soup_cli.utils.raft import tokenize_raft_example
 
         tok = _FakeTokenizer()
-        row = tokenize_raft_example(
-            tok, self._composed(), max_length=512, citation_faithful=False
-        )
+        row = tokenize_raft_example(tok, self._composed(), max_length=512, citation_faithful=False)
         assert all(w in (0.0, 1.0) for w in row["loss_weights"])
 
     def test_slow_tokenizer_degrades_to_flat_mask(self):
         from soup_cli.utils.raft import tokenize_raft_example
 
         tok = _FakeTokenizer(fast=False)  # no offset mapping
-        row = tokenize_raft_example(
-            tok, self._composed(), max_length=512, citation_faithful=True
-        )
+        row = tokenize_raft_example(tok, self._composed(), max_length=512, citation_faithful=True)
         # No offsets → flat answer weights (no boost), never raises.
         assert all(w in (0.0, 1.0) for w in row["loss_weights"])
 
@@ -304,12 +298,22 @@ class TestRaftDataCollator:
         from soup_cli.trainer.raft import RaftDataCollator
 
         collate = RaftDataCollator(_FakeTokenizer())
-        batch = collate([
-            {"input_ids": [1, 2, 3], "attention_mask": [1, 1, 1],
-             "labels": [-100, 2, 3], "loss_weights": [0.0, 1.0, 1.0]},
-            {"input_ids": [4, 5], "attention_mask": [1, 1],
-             "labels": [-100, 5], "loss_weights": [0.0, 1.0]},
-        ])
+        batch = collate(
+            [
+                {
+                    "input_ids": [1, 2, 3],
+                    "attention_mask": [1, 1, 1],
+                    "labels": [-100, 2, 3],
+                    "loss_weights": [0.0, 1.0, 1.0],
+                },
+                {
+                    "input_ids": [4, 5],
+                    "attention_mask": [1, 1],
+                    "labels": [-100, 5],
+                    "loss_weights": [0.0, 1.0],
+                },
+            ]
+        )
         assert batch["input_ids"].shape == (2, 3)
         # Row 2 padded with pad_id=0 in input, -100 in labels, 0.0 in weights.
         assert batch["input_ids"][1].tolist() == [4, 5, 0]
@@ -493,9 +497,7 @@ class TestPerStyleExtractors:
     def test_score_citations_with_style(self):
         from soup_cli.utils.citation_faithful import score_citations
 
-        cs = score_citations(
-            predicted="answer (doc-0)", expected_ids=["doc-0"], style="inline"
-        )
+        cs = score_citations(predicted="answer (doc-0)", expected_ids=["doc-0"], style="inline")
         assert cs.precision == 1.0
         assert cs.recall == 1.0
 
@@ -528,16 +530,12 @@ class TestEvalCitationCli:
         with runner.isolated_filesystem():
             with open("c.jsonl", "w", encoding="utf-8") as fh:
                 fh.write(
-                    json.dumps({"predicted": "Paris [doc-0].", "expected_ids": ["doc-0"]})
-                    + "\n"
+                    json.dumps({"predicted": "Paris [doc-0].", "expected_ids": ["doc-0"]}) + "\n"
                 )
                 fh.write(
-                    json.dumps({"predicted": "Berlin [doc-2].", "expected_ids": ["doc-0"]})
-                    + "\n"
+                    json.dumps({"predicted": "Berlin [doc-2].", "expected_ids": ["doc-0"]}) + "\n"
                 )
-            result = runner.invoke(
-                app, ["eval", "citation", "c.jsonl", "--output", "out.json"]
-            )
+            result = runner.invoke(app, ["eval", "citation", "c.jsonl", "--output", "out.json"])
             assert result.exit_code == 0, (result.output, result.exception)
             with open("out.json", encoding="utf-8") as fh:
                 payload = json.load(fh)
@@ -555,10 +553,17 @@ class TestEvalCitationCli:
             with open("raft.jsonl", "w", encoding="utf-8") as fh:
                 # answer cites doc-0; with no shuffle (default seed 0) golden
                 # id is deterministic — the row scores its own answer.
-                fh.write(json.dumps({
-                    "query": "q", "golden_doc": "g", "distractor_docs": [],
-                    "answer": "see [doc-0]",
-                }) + "\n")
+                fh.write(
+                    json.dumps(
+                        {
+                            "query": "q",
+                            "golden_doc": "g",
+                            "distractor_docs": [],
+                            "answer": "see [doc-0]",
+                        }
+                    )
+                    + "\n"
+                )
             result = runner.invoke(app, ["eval", "citation", "raft.jsonl"])
             assert result.exit_code == 0, (result.output, result.exception)
             assert "Citation aggregate" in result.output
@@ -947,9 +952,7 @@ class TestServeSteerCli:
     def test_steer_bad_name_rejected(self):
         from soup_cli.cli import app
 
-        result = self._runner().invoke(
-            app, ["serve", "-m", "model", "--steer", "bad/name"]
-        )
+        result = self._runner().invoke(app, ["serve", "-m", "model", "--steer", "bad/name"])
         assert result.exit_code == 2
 
 
@@ -972,11 +975,18 @@ class TestSteerCommandPlumbing:
             os.path.join(d, "steering_vector.safetensors"),
         )
         with open(os.path.join(d, "steering_config.json"), "w", encoding="utf-8") as fh:
-            json.dump({
-                "method": "caa", "name": "safety-v1", "layer": 1,
-                "hidden_dim": 2, "intervention_point": "residual",
-                "base": "tiny", "default_strength": 1.0,
-            }, fh)
+            json.dump(
+                {
+                    "method": "caa",
+                    "name": "safety-v1",
+                    "layer": 1,
+                    "hidden_dim": 2,
+                    "intervention_point": "residual",
+                    "base": "tiny",
+                    "default_strength": 1.0,
+                },
+                fh,
+            )
         result = CliRunner().invoke(app, ["apply", "--name", "safety-v1"])
         assert result.exit_code == 0, (result.output, result.exception)
         assert "Vector loaded" in result.output
@@ -1067,8 +1077,11 @@ class TestDiscoverLatestRetriever:
         monkeypatch.setenv("SOUP_REGISTRY_DB_PATH", str(db))
         with RegistryStore() as store:
             store.push(
-                name="plain", tag="v1",
-                base_model="m", task="embedding", run_id=None,
+                name="plain",
+                tag="v1",
+                base_model="m",
+                task="embedding",
+                run_id=None,
                 config={"task": "embedding", "output": "./x"},
             )
         assert discover_latest_retriever() is None
@@ -1144,18 +1157,14 @@ class TestRunRaDit:
         def fake_runner(config_path):
             calls.append(config_path)
 
-        result = run_ra_dit(
-            "retriever.yaml", "generator.yaml", _runner=fake_runner
-        )
+        result = run_ra_dit("retriever.yaml", "generator.yaml", _runner=fake_runner)
         # Two subprocess stages ran, retriever first.
         assert len(calls) == 2
         assert "retriever" in calls[0].replace("\\", "/")
         # Generator stage ran via a rewritten temp yaml carrying the link.
         assert result.retriever_output.replace("\\", "/").endswith("ra-out/retriever")
         # Auto-linked retriever model == retriever output dir.
-        assert result.retriever_model_used.replace("\\", "/").endswith(
-            "ra-out/retriever"
-        )
+        assert result.retriever_model_used.replace("\\", "/").endswith("ra-out/retriever")
         assert result.autolinked is True
 
     def test_manual_override_skips_autolink(self, tmp_path, monkeypatch):
@@ -1188,10 +1197,7 @@ class TestRunRaDit:
 
         run_ra_dit("retriever.yaml", "generator.yaml", _runner=fake_runner)
         # The generator temp yaml must carry the retriever model.
-        gen_cfgs = [
-            c for c in seen_yaml.values()
-            if c.get("task") == "sft"
-        ]
+        gen_cfgs = [c for c in seen_yaml.values() if c.get("task") == "sft"]
         assert gen_cfgs, "generator config not captured"
         training = gen_cfgs[0].get("training", {})
         assert "ra_dit_retriever_model" in training
@@ -1237,8 +1243,7 @@ class TestTrainAutolinkHook:
         db = tmp_path / "reg.db"
         monkeypatch.setenv("SOUP_REGISTRY_DB_PATH", str(db))
         cfg = load_config_from_string(
-            "base: m\ntask: sft\noutput: ./out\n"
-            "data:\n  train: ./x.jsonl\n  format: chatml\n"
+            "base: m\ntask: sft\noutput: ./out\ndata:\n  train: ./x.jsonl\n  format: chatml\n"
         )
         advisory = autolink_generator_retriever(cfg)
         assert advisory is None
@@ -1297,11 +1302,16 @@ class TestRaDitCli:
             "data:\n  train: ./raft.jsonl\n  format: raft\n",
             encoding="utf-8",
         )
-        result = self._runner().invoke(app, [
-            "--retriever-config", "retriever.yaml",
-            "--generator-config", "generator.yaml",
-            "--plan-only",
-        ])
+        result = self._runner().invoke(
+            app,
+            [
+                "--retriever-config",
+                "retriever.yaml",
+                "--generator-config",
+                "generator.yaml",
+                "--plan-only",
+            ],
+        )
         assert result.exit_code == 0, (result.output, result.exception)
         assert "retriever" in result.output.lower()
         assert "generator" in result.output.lower()
@@ -1310,11 +1320,16 @@ class TestRaDitCli:
         from soup_cli.commands.ra_dit import app
 
         monkeypatch.chdir(tmp_path)
-        result = self._runner().invoke(app, [
-            "--retriever-config", "nope.yaml",
-            "--generator-config", "alsonope.yaml",
-            "--plan-only",
-        ])
+        result = self._runner().invoke(
+            app,
+            [
+                "--retriever-config",
+                "nope.yaml",
+                "--generator-config",
+                "alsonope.yaml",
+                "--plan-only",
+            ],
+        )
         assert result.exit_code == 2
 
 
@@ -1429,33 +1444,25 @@ class TestBuildSteeringVectorPreLoadValidation:
         # layer=99999 fails the bounds check before load_contrastive_pairs /
         # the model load (base + pairs_path are never touched).
         with pytest.raises(ValueError, match="layer"):
-            build_steering_vector(
-                method="caa", name="ok", base="m", pairs_path="p", layer=99999
-            )
+            build_steering_vector(method="caa", name="ok", base="m", pairs_path="p", layer=99999)
 
     def test_layer_bool_rejected(self):
         from soup_cli.utils.steering import build_steering_vector
 
         with pytest.raises(TypeError, match="layer"):
-            build_steering_vector(
-                method="caa", name="ok", base="m", pairs_path="p", layer=True
-            )
+            build_steering_vector(method="caa", name="ok", base="m", pairs_path="p", layer=True)
 
     def test_top_k_zero_rejected_pre_load(self):
         from soup_cli.utils.steering import build_steering_vector
 
         with pytest.raises(ValueError, match="top_k"):
-            build_steering_vector(
-                method="caa", name="ok", base="m", pairs_path="p", top_k=0
-            )
+            build_steering_vector(method="caa", name="ok", base="m", pairs_path="p", top_k=0)
 
     def test_top_k_bool_rejected_pre_load(self):
         from soup_cli.utils.steering import build_steering_vector
 
         with pytest.raises(ValueError, match="top_k"):
-            build_steering_vector(
-                method="caa", name="ok", base="m", pairs_path="p", top_k=True
-            )
+            build_steering_vector(method="caa", name="ok", base="m", pairs_path="p", top_k=True)
 
     def test_repe_requires_two_pairs(self, tmp_path, monkeypatch):
         import json
@@ -1469,9 +1476,7 @@ class TestBuildSteeringVectorPreLoadValidation:
         # repe needs >= 2 pairs — fails AFTER load_contrastive_pairs but BEFORE
         # the model load (regression for code-review L5).
         with pytest.raises(ValueError, match=">="):
-            build_steering_vector(
-                method="repe", name="ok", base="m", pairs_path="one.jsonl"
-            )
+            build_steering_vector(method="repe", name="ok", base="m", pairs_path="one.jsonl")
 
 
 class TestCitationBoostCap:
@@ -1480,9 +1485,7 @@ class TestCitationBoostCap:
     def test_boost_100_ok(self):
         from soup_cli.utils.raft import citation_span_token_weights
 
-        weights = citation_span_token_weights(
-            "[doc-0] x", [(0, 7), (8, 9)], boost=100.0
-        )
+        weights = citation_span_token_weights("[doc-0] x", [(0, 7), (8, 9)], boost=100.0)
         assert weights[0] == 100.0
 
     def test_boost_over_100_rejected(self):
@@ -1495,12 +1498,17 @@ class TestCitationBoostCap:
         from soup_cli.utils.raft import RaftComposed, tokenize_raft_example
 
         composed = RaftComposed(
-            prompt="Q", answer="Paris [doc-0]", golden_doc_id="doc-0",
+            prompt="Q",
+            answer="Paris [doc-0]",
+            golden_doc_id="doc-0",
             doc_ids=("doc-0",),
         )
         row = tokenize_raft_example(
-            _FakeTokenizer(fast=True), composed, max_length=64,
-            citation_faithful=True, citation_boost=7.0,
+            _FakeTokenizer(fast=True),
+            composed,
+            max_length=64,
+            citation_faithful=True,
+            citation_boost=7.0,
         )
         # Some answer token carries the boost weight.
         assert 7.0 in row["loss_weights"]
@@ -1509,13 +1517,18 @@ class TestCitationBoostCap:
         from soup_cli.utils.raft import RaftComposed, tokenize_raft_example
 
         composed = RaftComposed(
-            prompt="Q", answer="Paris [doc-0]", golden_doc_id="doc-0",
+            prompt="Q",
+            answer="Paris [doc-0]",
+            golden_doc_id="doc-0",
             doc_ids=("doc-0",),
         )
         with pytest.raises(ValueError, match="boost"):
             tokenize_raft_example(
-                _FakeTokenizer(fast=True), composed, max_length=64,
-                citation_faithful=True, citation_boost=0.5,
+                _FakeTokenizer(fast=True),
+                composed,
+                max_length=64,
+                citation_faithful=True,
+                citation_boost=0.5,
             )
 
 
@@ -1551,9 +1564,7 @@ class TestV07110FrozenDataclasses:
 
         from soup_cli.utils.raft import RaftComposed
 
-        c = RaftComposed(
-            prompt="p", answer="a", golden_doc_id="doc-0", doc_ids=("doc-0",)
-        )
+        c = RaftComposed(prompt="p", answer="a", golden_doc_id="doc-0", doc_ids=("doc-0",))
         with pytest.raises(dataclasses.FrozenInstanceError):
             c.answer = "x"
 
@@ -1563,8 +1574,14 @@ class TestV07110FrozenDataclasses:
         from soup_cli.utils.steering import SteeringArtifact
 
         a = SteeringArtifact(
-            method="caa", name="n", layer=1, hidden_dim=4,
-            intervention_point="residual", output_dir="d", base="b", num_pairs=2,
+            method="caa",
+            name="n",
+            layer=1,
+            hidden_dim=4,
+            intervention_point="residual",
+            output_dir="d",
+            base="b",
+            num_pairs=2,
         )
         with pytest.raises(dataclasses.FrozenInstanceError):
             a.layer = 9
@@ -1577,8 +1594,12 @@ class TestV07110FrozenDataclasses:
         from soup_cli.utils.steering import LoadedSteering
 
         loaded = LoadedSteering(
-            method="caa", name="n", layer=0, intervention_point="residual",
-            vector=np.zeros(4, dtype=np.float32), default_strength=1.0,
+            method="caa",
+            name="n",
+            layer=0,
+            intervention_point="residual",
+            vector=np.zeros(4, dtype=np.float32),
+            default_strength=1.0,
         )
         with pytest.raises(dataclasses.FrozenInstanceError):
             loaded.layer = 1
@@ -1589,8 +1610,10 @@ class TestV07110FrozenDataclasses:
         from soup_cli.utils.ra_dit_run import RaDitRunResult
 
         r = RaDitRunResult(
-            retriever_output="r", generator_output="g",
-            retriever_model_used="r", autolinked=True,
+            retriever_output="r",
+            generator_output="g",
+            retriever_model_used="r",
+            autolinked=True,
         )
         with pytest.raises(dataclasses.FrozenInstanceError):
             r.autolinked = False
@@ -1623,8 +1646,10 @@ class TestRunRaDitValidation:
         self._configs(tmp_path)
         with pytest.raises(ValueError, match="timeout"):
             run_ra_dit(
-                "retriever.yaml", "generator.yaml",
-                timeout_seconds=5, _runner=lambda p: None,
+                "retriever.yaml",
+                "generator.yaml",
+                timeout_seconds=5,
+                _runner=lambda p: None,
             )
 
     def test_timeout_bool_rejected(self, tmp_path, monkeypatch):
@@ -1634,8 +1659,10 @@ class TestRunRaDitValidation:
         self._configs(tmp_path)
         with pytest.raises(ValueError, match="bool"):
             run_ra_dit(
-                "retriever.yaml", "generator.yaml",
-                timeout_seconds=True, _runner=lambda p: None,
+                "retriever.yaml",
+                "generator.yaml",
+                timeout_seconds=True,
+                _runner=lambda p: None,
             )
 
     def test_oversize_yaml_rejected(self, tmp_path, monkeypatch):
@@ -1683,8 +1710,12 @@ class TestInstallSteeringHookExtras:
         from soup_cli.utils.steering import LoadedSteering
 
         return LoadedSteering(
-            method="caa", name="t", layer=layer,
-            intervention_point="residual", vector=vec, default_strength=1.0,
+            method="caa",
+            name="t",
+            layer=layer,
+            intervention_point="residual",
+            vector=vec,
+            default_strength=1.0,
         )
 
     def test_strength_cap_rejected(self):
@@ -1744,16 +1775,10 @@ class TestPrepareRaftDatasetExecution:
 
         stub = types.SimpleNamespace(tokenizer=_FakeTokenizer(fast=True))
         cfg = types.SimpleNamespace(
-            data=types.SimpleNamespace(
-                raft_shuffle_seed=None, max_length=max_length
-            )
+            data=types.SimpleNamespace(raft_shuffle_seed=None, max_length=max_length)
         )
-        tcfg = types.SimpleNamespace(
-            citation_faithful=citation, citation_style="bracket"
-        )
-        return SFTTrainerWrapper._prepare_raft_dataset(
-            stub, {"train": rows}, cfg, tcfg
-        )
+        tcfg = types.SimpleNamespace(citation_faithful=citation, citation_style="bracket")
+        return SFTTrainerWrapper._prepare_raft_dataset(stub, {"train": rows}, cfg, tcfg)
 
     def test_keeps_trainable_rows(self):
         train, eval_ds = self._call([_raft_row(1)], max_length=512)
@@ -1842,10 +1867,7 @@ class TestV07110ReviewFixRegressions:
         assert hasattr(ra_dit_run, "validate_ra_dit_config_path")
         assert "validate_ra_dit_config_path" in ra_dit_run.__all__
         # back-compat private alias still points at the public function (M5).
-        assert (
-            ra_dit_run._validate_config_path
-            is ra_dit_run.validate_ra_dit_config_path
-        )
+        assert ra_dit_run._validate_config_path is ra_dit_run.validate_ra_dit_config_path
 
     def test_render_raft_prompt_public_and_alias(self):
         from soup_cli.utils import raft
@@ -1868,10 +1890,14 @@ class TestV07110ReviewFixRegressions:
             # discovered output is run through validate_ra_dit_retriever_model
             # (M1), so this row is skipped rather than flowing into a config.
             store.push(
-                name="ra-dit-retriever-bad", tag="v1",
-                base_model="st/mini", task="embedding", run_id=None,
+                name="ra-dit-retriever-bad",
+                tag="v1",
+                base_model="st/mini",
+                task="embedding",
+                run_id=None,
                 config={
-                    "task": "embedding", "output": "x" * 600,
+                    "task": "embedding",
+                    "output": "x" * 600,
                     "training": {"ra_dit_stage": "retriever"},
                 },
             )
@@ -1914,8 +1940,6 @@ class TestV07110ReviewFixRegressions:
 
         from soup_cli.cli import app
 
-        result = CliRunner().invoke(
-            app, ["serve", "-m", "model", "--steer", "bad/name"]
-        )
+        result = CliRunner().invoke(app, ["serve", "-m", "model", "--steer", "bad/name"])
         assert result.exit_code == 2
         assert "Invalid --steer" in result.output

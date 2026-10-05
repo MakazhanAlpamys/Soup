@@ -38,13 +38,16 @@ class TestSFTTrainerV028Wiring:
         wrapper = SFTTrainerWrapper(config=cfg, device="cpu")
         wrapper.model = MagicMock()
 
-        with patch(
-            "soup_cli.utils.advanced_precision.apply_fp8_attention",
-            return_value=4,
-        ) as mock_fp8_attn, patch(
-            "soup_cli.utils.fp8.apply_fp8_training",
-            return_value=True,
-        ) as mock_fp8_train:
+        with (
+            patch(
+                "soup_cli.utils.advanced_precision.apply_fp8_attention",
+                return_value=4,
+            ) as mock_fp8_attn,
+            patch(
+                "soup_cli.utils.fp8.apply_fp8_training",
+                return_value=True,
+            ) as mock_fp8_train,
+        ):
             wrapper._apply_quantization_aware(cfg.training)
             mock_fp8_train.assert_called_once_with(wrapper.model, recipe="tensorwise")
             mock_fp8_attn.assert_called_once_with(wrapper.model, recipe="tensorwise")
@@ -79,13 +82,16 @@ class TestSFTTrainerV028Wiring:
         wrapper = SFTTrainerWrapper(config=cfg, device="cpu")
         wrapper.model = MagicMock()
 
-        with patch(
-            "soup_cli.utils.qat.prepare_model_for_qat",
-            return_value=wrapper.model,
-        ) as mock_qat, patch(
-            "soup_cli.utils.v028_features.apply_v028_speed_memory",
-            wraps=apply_v028_speed_memory,
-        ) as mock_v028:
+        with (
+            patch(
+                "soup_cli.utils.qat.prepare_model_for_qat",
+                return_value=wrapper.model,
+            ) as mock_qat,
+            patch(
+                "soup_cli.utils.v028_features.apply_v028_speed_memory",
+                wraps=apply_v028_speed_memory,
+            ) as mock_v028,
+        ):
             wrapper._apply_quantization_aware(cfg.training)
             mock_qat.assert_not_called()
             mock_v028.assert_called_once()
@@ -269,36 +275,44 @@ class TestSFTSetupQuantizationAwareIntegration:
 
         wrapper = SFTTrainerWrapper(config=cfg, device="cpu")
 
-        with patch(
-            "trl.SFTTrainer.__init__",
-            side_effect=StopAfterSetupError,
-        ), patch(
-            "soup_cli.utils.fp8.fp8_training_supported",
-            return_value=(True, ""),
-        ), patch(
-            # This test is about WHERE SFT calls the helper (post-LoRA, on the
-            # PeftModel). A missing torchao now stops an explicit FP8 request
-            # (#835 ruling), so the two converters are stubbed to keep it on that.
-            "soup_cli.utils.fp8.apply_fp8_training",
-            return_value=True,
-        ), patch(
-            "soup_cli.utils.advanced_precision.apply_fp8_attention",
-            return_value=2,
-        ), patch(
-            "soup_cli.utils.v028_features.apply_v028_speed_memory",
-            wraps=apply_v028_speed_memory,
-        ) as mock_v028:
+        with (
+            patch(
+                "trl.SFTTrainer.__init__",
+                side_effect=StopAfterSetupError,
+            ),
+            patch(
+                "soup_cli.utils.fp8.fp8_training_supported",
+                return_value=(True, ""),
+            ),
+            patch(
+                # This test is about WHERE SFT calls the helper (post-LoRA, on the
+                # PeftModel). A missing torchao now stops an explicit FP8 request
+                # (#835 ruling), so the two converters are stubbed to keep it on that.
+                "soup_cli.utils.fp8.apply_fp8_training",
+                return_value=True,
+            ),
+            patch(
+                "soup_cli.utils.advanced_precision.apply_fp8_attention",
+                return_value=2,
+            ),
+            patch(
+                "soup_cli.utils.v028_features.apply_v028_speed_memory",
+                wraps=apply_v028_speed_memory,
+            ) as mock_v028,
+        ):
             with pytest.raises(StopAfterSetupError):
-                wrapper.setup({
-                    "train": [
-                        {
-                            "messages": [
-                                {"role": "user", "content": "hi"},
-                                {"role": "assistant", "content": "hello"},
-                            ]
-                        }
-                    ]
-                })
+                wrapper.setup(
+                    {
+                        "train": [
+                            {
+                                "messages": [
+                                    {"role": "user", "content": "hi"},
+                                    {"role": "assistant", "content": "hello"},
+                                ]
+                            }
+                        ]
+                    }
+                )
 
             mock_v028.assert_called_once()
             assert mock_v028.call_args.kwargs.get("skip_cut_ce") is True

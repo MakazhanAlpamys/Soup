@@ -32,6 +32,7 @@ Public surface:
 - ``build_interference_matrix(adapters, losses)`` orchestrator
 - ``render_matrix_json`` / ``render_matrix_markdown``
 """
+
 from __future__ import annotations
 
 import json
@@ -109,9 +110,7 @@ class InterferenceCell:
         if isinstance(self.verdict, bool) or not isinstance(self.verdict, str):
             raise TypeError("verdict must be str")
         if self.verdict not in INTERFERENCE_VERDICTS:
-            raise ValueError(
-                f"verdict must be in {INTERFERENCE_VERDICTS}, got {self.verdict!r}"
-            )
+            raise ValueError(f"verdict must be in {INTERFERENCE_VERDICTS}, got {self.verdict!r}")
 
 
 @dataclass(frozen=True)
@@ -129,9 +128,7 @@ class InterferenceMatrix:
         if len(self.adapters) < _MIN_ADAPTERS:
             raise ValueError(f"need at least {_MIN_ADAPTERS} adapters")
         if len(self.adapters) > _MAX_ADAPTERS:
-            raise ValueError(
-                f"too many adapters (>{_MAX_ADAPTERS}); split your fleet"
-            )
+            raise ValueError(f"too many adapters (>{_MAX_ADAPTERS}); split your fleet")
         for a in self.adapters:
             _validate_adapter_name(a, "adapter")
         if len(set(self.adapters)) != len(self.adapters):
@@ -214,9 +211,7 @@ def build_interference_matrix(
     if len(adapters) < _MIN_ADAPTERS:
         raise ValueError(f"need at least {_MIN_ADAPTERS} adapters")
     if len(adapters) > _MAX_ADAPTERS:
-        raise ValueError(
-            f"too many adapters (>{_MAX_ADAPTERS}); split your fleet"
-        )
+        raise ValueError(f"too many adapters (>{_MAX_ADAPTERS}); split your fleet")
     for a in adapters:
         _validate_adapter_name(a, "adapter")
     if len(set(adapters)) != len(adapters):
@@ -231,17 +226,9 @@ def build_interference_matrix(
         if not isinstance(key, tuple) or len(key) != 2:
             raise TypeError(f"losses keys must be 2-tuples, got {key!r}")
         target, co = key
-        if (
-            not isinstance(target, str)
-            or isinstance(target, bool)
-            or target not in adapter_set
-        ):
+        if not isinstance(target, str) or isinstance(target, bool) or target not in adapter_set:
             raise ValueError(f"unknown adapter in losses key: {target!r}")
-        if (
-            not isinstance(co, str)
-            or isinstance(co, bool)
-            or co not in adapter_set
-        ):
+        if not isinstance(co, str) or isinstance(co, bool) or co not in adapter_set:
             raise ValueError(f"unknown adapter in losses key: {co!r}")
         _validate_finite_float(value, "loss")
         if value < 0:
@@ -252,9 +239,7 @@ def build_interference_matrix(
         if (a, a) not in losses:
             raise ValueError(f"missing diagonal entry for adapter {a!r}")
         if losses[(a, a)] <= 0:
-            raise ValueError(
-                f"baseline loss for {a!r} must be > 0"
-            )
+            raise ValueError(f"baseline loss for {a!r} must be > 0")
 
     cells: list[InterferenceCell] = []
     worst_pair: Optional[Tuple[str, str]] = None
@@ -315,9 +300,7 @@ def render_matrix_json(matrix: InterferenceMatrix) -> str:
         raise TypeError("matrix must be InterferenceMatrix")
     payload = {
         "adapters": list(matrix.adapters),
-        "worst_pair": (
-            list(matrix.worst_pair) if matrix.worst_pair else None
-        ),
+        "worst_pair": (list(matrix.worst_pair) if matrix.worst_pair else None),
         "worst_score": matrix.worst_score,
         "cells": [asdict(c) for c in matrix.cells],
     }
@@ -329,11 +312,7 @@ def render_matrix_markdown(matrix: InterferenceMatrix) -> str:
     if not isinstance(matrix, InterferenceMatrix):
         raise TypeError("matrix must be InterferenceMatrix")
     if not matrix.cells:
-        return (
-            "# Adapter interference matrix\n"
-            "\n"
-            "_no cells (empty matrix)_\n"
-        )
+        return "# Adapter interference matrix\n\n_no cells (empty matrix)_\n"
     lines = ["# Adapter interference matrix", ""]
     if matrix.worst_pair:
         worst_verdict = classify_interference(matrix.worst_score)
@@ -350,9 +329,7 @@ def render_matrix_markdown(matrix: InterferenceMatrix) -> str:
     header = ["A \\ B"] + [_md_escape(a) for a in matrix.adapters]
     lines.append("| " + " | ".join(header) + " |")
     lines.append("| " + " | ".join(["---"] * len(header)) + " |")
-    by_pair = {
-        (c.adapter_a, c.adapter_b): c for c in matrix.cells
-    }
+    by_pair = {(c.adapter_a, c.adapter_b): c for c in matrix.cells}
     for a in matrix.adapters:
         row = [_md_escape(a)]
         for b in matrix.adapters:
@@ -360,8 +337,6 @@ def render_matrix_markdown(matrix: InterferenceMatrix) -> str:
             if cell is None:
                 row.append("—")
             else:
-                row.append(
-                    f"{cell.score:+.3f} ({_md_escape(cell.verdict)})"
-                )
+                row.append(f"{cell.score:+.3f} ({_md_escape(cell.verdict)})")
         lines.append("| " + " | ".join(row) + " |")
     return "\n".join(lines) + "\n"

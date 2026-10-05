@@ -54,13 +54,9 @@ class BrainRotReport:
         for field_name in ("num_rows", "num_major", "num_minor", "num_ok"):
             value = getattr(self, field_name)
             if isinstance(value, bool) or not isinstance(value, int):
-                raise TypeError(
-                    f"BrainRotReport.{field_name} must be int"
-                )
+                raise TypeError(f"BrainRotReport.{field_name} must be int")
             if value < 0:
-                raise ValueError(
-                    f"BrainRotReport.{field_name} must be non-negative"
-                )
+                raise ValueError(f"BrainRotReport.{field_name} must be non-negative")
         if isinstance(self.mean_score, bool):
             raise TypeError("BrainRotReport.mean_score must be float")
         if not isinstance(self.mean_score, (int, float)):
@@ -68,13 +64,9 @@ class BrainRotReport:
         if not math.isfinite(float(self.mean_score)):
             raise ValueError("BrainRotReport.mean_score must be finite")
         if not (0.0 <= float(self.mean_score) <= 1.0):
-            raise ValueError(
-                "BrainRotReport.mean_score must be in [0.0, 1.0]"
-            )
+            raise ValueError("BrainRotReport.mean_score must be in [0.0, 1.0]")
         if self.overall_verdict not in BRAIN_ROT_VERDICTS:
-            raise ValueError(
-                f"overall_verdict must be one of {BRAIN_ROT_VERDICTS}"
-            )
+            raise ValueError(f"overall_verdict must be one of {BRAIN_ROT_VERDICTS}")
 
 
 # -----------------------------------------------------------------------------
@@ -91,9 +83,7 @@ def classify_brain_rot(score: object) -> str:
     if isinstance(score, bool):
         raise TypeError("score must be float, not bool")
     if not isinstance(score, (int, float)):
-        raise TypeError(
-            f"score must be a number, got {type(score).__name__}"
-        )
+        raise TypeError(f"score must be a number, got {type(score).__name__}")
     fscore = float(score)
     if not math.isfinite(fscore):
         raise ValueError("score must be finite")
@@ -115,9 +105,7 @@ def _require_str(text: object, *, field: str = "text") -> str:
     if isinstance(text, bool):
         raise TypeError(f"{field} must be str, not bool")
     if not isinstance(text, str):
-        raise TypeError(
-            f"{field} must be str, got {type(text).__name__}"
-        )
+        raise TypeError(f"{field} must be str, got {type(text).__name__}")
     if len(text) > _MAX_TEXT_LEN:
         return text[:_MAX_TEXT_LEN]
     return text
@@ -208,9 +196,7 @@ def score_triviality(text: object, *, lang: Optional[str] = None) -> float:
     punct_density = min(1.0, punct_hits / max(1, n / 10))
     # Low-effort token density (per-language bundle).
     low_effort_set = set(bundle.low_effort_tokens)
-    low_effort = sum(
-        1 for tok in tokens if tok.strip("!?.,") in low_effort_set
-    )
+    low_effort = sum(1 for tok in tokens if tok.strip("!?.,") in low_effort_set)
     low_effort_density = min(1.0, low_effort / max(1, n / 5))
     triviality = (
         0.2 * (1.0 - diversity)
@@ -221,9 +207,7 @@ def score_triviality(text: object, *, lang: Optional[str] = None) -> float:
     return max(0.0, min(1.0, triviality))
 
 
-def score_popularity_signal(
-    text: object, *, lang: Optional[str] = None
-) -> float:
+def score_popularity_signal(text: object, *, lang: Optional[str] = None) -> float:
     """Higher = clickbait / engagement-bait / popularity-optimised slop.
 
     Heuristic: substring scan against the per-language clickbait phrase
@@ -275,9 +259,7 @@ def score_row_brain_rot(row: Any, *, lang: Optional[str] = None) -> float:
     (``None``) preserves v0.69.0 English behaviour for backward-compat.
     """
     if not isinstance(row, Mapping):
-        raise TypeError(
-            f"row must be a Mapping, got {type(row).__name__}"
-        )
+        raise TypeError(f"row must be a Mapping, got {type(row).__name__}")
     text = _row_text(row)
     if not text:
         return 0.0
@@ -289,9 +271,7 @@ def score_row_brain_rot(row: Any, *, lang: Optional[str] = None) -> float:
     return max(0.0, min(1.0, score))
 
 
-def score_dataset_brain_rot(
-    rows: Any, *, lang: Optional[str] = None
-) -> BrainRotReport:
+def score_dataset_brain_rot(rows: Any, *, lang: Optional[str] = None) -> BrainRotReport:
     """Score a dataset and return a frozen ``BrainRotReport``.
 
     Empty inputs return ``MAJOR`` (no signal = treat as broken).

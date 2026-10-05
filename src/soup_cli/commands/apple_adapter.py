@@ -82,9 +82,7 @@ def apple_adapter_cmd(
         raise typer.Exit(1) from exc
 
     skipped_note = (
-        f"\nSkipped (non-LoRA): [bold]{len(report.skipped_keys)}[/]"
-        if report.skipped_keys
-        else ""
+        f"\nSkipped (non-LoRA): [bold]{len(report.skipped_keys)}[/]" if report.skipped_keys else ""
     )
     console.print(
         Panel(

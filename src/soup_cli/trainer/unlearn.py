@@ -202,9 +202,7 @@ class UnlearnTrainerWrapper:
         # #1151: moe_lora picks the expert-FFN targets; see sft.py.
         from soup_cli.utils.moe import resolve_moe_lora_targets
 
-        target_modules = resolve_moe_lora_targets(
-            self.model, tcfg, target_modules, console
-        )
+        target_modules = resolve_moe_lora_targets(self.model, tcfg, target_modules, console)
         lora_cfg = build_lora_config(
             tcfg.lora,
             target_modules=target_modules,
@@ -255,10 +253,9 @@ class UnlearnTrainerWrapper:
         # Keep the pre-existing sample budget and reported total_steps scale.
         self._max_examples = min(_MAX_STEPS_CAP, len(self._forget) * int(tcfg.epochs))
         full_epochs, remainder = divmod(self._max_examples, len(self._forget))
-        self._max_updates = (
-            full_epochs * math.ceil(len(self._forget) / effective_batch)
-            + math.ceil(remainder / effective_batch)
-        )
+        self._max_updates = full_epochs * math.ceil(
+            len(self._forget) / effective_batch
+        ) + math.ceil(remainder / effective_batch)
         lr = float(tcfg.lr)
         # Reuse Transformers' optimizer resolution so the hand-rolled loop
         # honors the same optimizer allowlist and optional backends as the
@@ -273,16 +270,12 @@ class UnlearnTrainerWrapper:
             learning_rate=lr,
             weight_decay=float(tcfg.weight_decay),
         )
-        optimizer_cls, optimizer_kwargs = Trainer.get_optimizer_cls_and_kwargs(
-            optimizer_args
-        )
+        optimizer_cls, optimizer_kwargs = Trainer.get_optimizer_cls_and_kwargs(optimizer_args)
         optimizer_kwargs = dict(optimizer_kwargs)
         optimizer_kwargs.setdefault("lr", lr)
         optimizer_params = [
             {
-                "params": [
-                    p for p in self.model.parameters() if p.requires_grad
-                ],
+                "params": [p for p in self.model.parameters() if p.requires_grad],
                 "weight_decay": float(tcfg.weight_decay),
             }
         ]
@@ -308,8 +301,7 @@ class UnlearnTrainerWrapper:
         """Run the unlearn loop, save the adapter, return a result dict."""
         if not self._setup_called:
             raise RuntimeError(
-                "UnlearnTrainerWrapper.train() called before setup(); "
-                "call setup() first."
+                "UnlearnTrainerWrapper.train() called before setup(); call setup() first."
             )
         import torch
 
@@ -335,12 +327,8 @@ class UnlearnTrainerWrapper:
             # every existing unseeded run (same reasoning as the multipack
             # sampler's DEFAULT_MULTIPACK_SEED in #341).
             rmu_seed = getattr(tcfg, "seed", None)
-            gen = torch.Generator(device="cpu").manual_seed(
-                0 if rmu_seed is None else rmu_seed
-            )
-            control_vec = (
-                torch.randn(hidden, generator=gen).to(dev) * _RMU_CONTROL_SCALE
-            )
+            gen = torch.Generator(device="cpu").manual_seed(0 if rmu_seed is None else rmu_seed)
+            control_vec = torch.randn(hidden, generator=gen).to(dev) * _RMU_CONTROL_SCALE
             rmu_layer = self._resolve_rmu_layer()
 
         initial_loss = None
@@ -355,18 +343,23 @@ class UnlearnTrainerWrapper:
                     break
                 if method in ("npo", "simnpo"):
                     loss = self._step_preference(
-                        _tokenize_pair, f_prompt, f_target, method, dev,
+                        _tokenize_pair,
+                        f_prompt,
+                        f_target,
+                        method,
+                        dev,
                     )
                 else:  # rmu
-                    r_pair = (
-                        self._retain[retain_idx % len(self._retain)]
-                        if self._retain
-                        else None
-                    )
+                    r_pair = self._retain[retain_idx % len(self._retain)] if self._retain else None
                     retain_idx += 1
                     loss = self._step_rmu(
-                        _tokenize_pair, f_prompt, f_target, r_pair,
-                        control_vec, rmu_layer, dev,
+                        _tokenize_pair,
+                        f_prompt,
+                        f_target,
+                        r_pair,
+                        control_vec,
+                        rmu_layer,
+                        dev,
                     )
                 if loss is None:
                     continue
@@ -384,9 +377,7 @@ class UnlearnTrainerWrapper:
                 for parameter in self.model.parameters():
                     if parameter.grad is not None:
                         parameter.grad.div_(accumulated)
-                torch.nn.utils.clip_grad_norm_(
-                    self.model.parameters(), float(tcfg.max_grad_norm)
-                )
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), float(tcfg.max_grad_norm))
                 self._optimizer.step()
                 self._scheduler.step()
                 self._optimizer.zero_grad(set_to_none=True)
@@ -395,9 +386,7 @@ class UnlearnTrainerWrapper:
                 for parameter in self.model.parameters():
                     if parameter.grad is not None:
                         parameter.grad.div_(accumulated)
-                torch.nn.utils.clip_grad_norm_(
-                    self.model.parameters(), float(tcfg.max_grad_norm)
-                )
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), float(tcfg.max_grad_norm))
                 self._optimizer.step()
                 self._scheduler.step()
                 self._optimizer.zero_grad(set_to_none=True)
@@ -490,7 +479,14 @@ class UnlearnTrainerWrapper:
         return layers[idx]
 
     def _step_rmu(
-        self, tokenize_pair, f_prompt, f_target, r_pair, control_vec, layer, dev,
+        self,
+        tokenize_pair,
+        f_prompt,
+        f_target,
+        r_pair,
+        control_vec,
+        layer,
+        dev,
     ):
         import torch
 
@@ -550,7 +546,11 @@ class UnlearnTrainerWrapper:
             return torch.mean((forget_acts - control_vec) ** 2)
         alpha = float(self.config.training.unlearn_alpha or 1.0)
         return rmu_loss(
-            forget_acts, control_vec, retain_acts, retain_frozen, alpha=alpha,
+            forget_acts,
+            control_vec,
+            retain_acts,
+            retain_frozen,
+            alpha=alpha,
         )
 
     def _resolve_ref_rmu_layer(self):

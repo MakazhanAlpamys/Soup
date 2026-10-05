@@ -109,12 +109,15 @@ def _write_tiny_tokenizer(weights_dir) -> None:
     }
     with open(os.path.join(weights_dir, "tokenizer.json"), "w", encoding="utf-8") as fh:
         _json.dump(payload, fh)
-    with open(
-        os.path.join(weights_dir, "tokenizer_config.json"), "w", encoding="utf-8"
-    ) as fh:
+    with open(os.path.join(weights_dir, "tokenizer_config.json"), "w", encoding="utf-8") as fh:
         _json.dump(
-            {"tokenizer_class": "PreTrainedTokenizerFast", "unk_token": "<0>",
-             "eos_token": "<0>", "pad_token": "<0>"}, fh
+            {
+                "tokenizer_class": "PreTrainedTokenizerFast",
+                "unk_token": "<0>",
+                "eos_token": "<0>",
+                "pad_token": "<0>",
+            },
+            fh,
         )
 
 
@@ -131,9 +134,13 @@ def _tiny_checkpoint(tmp_path) -> str:
     weights = tmp_path / "model"
     torch.manual_seed(7)
     config = LlamaConfig(
-        vocab_size=64, hidden_size=64, intermediate_size=64,
-        num_hidden_layers=3, num_attention_heads=4,
-        num_key_value_heads=2, tie_word_embeddings=True,
+        vocab_size=64,
+        hidden_size=64,
+        intermediate_size=64,
+        num_hidden_layers=3,
+        num_attention_heads=4,
+        num_key_value_heads=2,
+        tie_word_embeddings=True,
         max_position_embeddings=128,
     )
     model = AutoModelForCausalLM.from_config(config).to(torch.float32).eval()
@@ -195,14 +202,10 @@ def _drive_wiring(
         "soup_cli.utils.spectrum_scan.resolve_model_weights", lambda *_a, **_k: weights
     )
     monkeypatch.setattr(ls, "free_ram_bytes", lambda: _FREE_BYTES)
-    monkeypatch.setattr(
-        ls, "classify_disk_kind", lambda *_a, **_k: ls.DiskClassification("nvme")
-    )
+    monkeypatch.setattr(ls, "classify_disk_kind", lambda *_a, **_k: ls.DiskClassification("nvme"))
     import torch
 
-    monkeypatch.setattr(
-        torch.cuda, "mem_get_info", lambda *_a, **_k: (_FREE_BYTES, _FREE_BYTES)
-    )
+    monkeypatch.setattr(torch.cuda, "mem_get_info", lambda *_a, **_k: (_FREE_BYTES, _FREE_BYTES))
     monkeypatch.setattr(rt, "expandable_segments_status", lambda *_a, **_k: (True, ""))
 
     captured: dict = {}
@@ -258,9 +261,7 @@ def _drive_allocation(tmp_path, monkeypatch, *, stream_pin_yaml: str, cache: str
         "soup_cli.utils.spectrum_scan.resolve_model_weights", lambda *_a, **_k: weights
     )
     monkeypatch.setattr(ls, "free_ram_bytes", lambda: _FREE_BYTES)
-    monkeypatch.setattr(
-        ls, "classify_disk_kind", lambda *_a, **_k: ls.DiskClassification("nvme")
-    )
+    monkeypatch.setattr(ls, "classify_disk_kind", lambda *_a, **_k: ls.DiskClassification("nvme"))
 
     cfg = load_config_from_string(_cfg_yaml(weights, stream_pin_yaml))
     wrapper = SFTTrainerWrapper(cfg)
@@ -309,9 +310,7 @@ class TestBuildSourceCpuOnlyPinFalse:
     needs a CUDA device.
     """
 
-    def test_build_source_pin_false_ram_tier_yields_unpinned_ramsource(
-        self, tmp_path
-    ) -> None:
+    def test_build_source_pin_false_ram_tier_yields_unpinned_ramsource(self, tmp_path) -> None:
         import torch
         from safetensors.torch import save_file
 
@@ -326,9 +325,7 @@ class TestBuildSourceCpuOnlyPinFalse:
         )
         spec = {"weight": ((4, 4), "float32")}
 
-        source, pinned = _build_source(
-            str(shard_dir), 1, spec, pin=False, console=None, tier="ram"
-        )
+        source, pinned = _build_source(str(shard_dir), 1, spec, pin=False, console=None, tier="ram")
 
         assert isinstance(source, RamSource)
         assert pinned is False
@@ -353,7 +350,9 @@ class TestTheAllocationItself:
         assert not torch.empty(1024).is_pinned()
 
         w_false = _drive_allocation(
-            tmp_path, monkeypatch, stream_pin_yaml="  stream_pin: false\n",
+            tmp_path,
+            monkeypatch,
+            stream_pin_yaml="  stream_pin: false\n",
             cache="cache_false",
         )
         try:
@@ -423,9 +422,7 @@ class TestTheReadAheadDepthIsWiredAndVisible:
             f"which depth the run is using: {_ready_line(panel)}"
         )
 
-    def test_the_default_is_what_an_unset_config_gets(
-        self, tmp_path, monkeypatch
-    ) -> None:
+    def test_the_default_is_what_an_unset_config_gets(self, tmp_path, monkeypatch) -> None:
         """The control. Without it a mutant hardcoding 3 at the boundary — or
         printing the literal the case above looks for — would pass."""
         from soup_cli.utils.async_disk_source import DEFAULT_STREAM_READ_AHEAD
@@ -435,9 +432,7 @@ class TestTheReadAheadDepthIsWiredAndVisible:
         assert f"read_ahead={DEFAULT_STREAM_READ_AHEAD}" in _ready_line(panel), _ready_line(panel)
         assert "read_ahead=3" not in _ready_line(panel), _ready_line(panel)
 
-    def test_the_ready_line_reports_its_staging_not_nothing(
-        self, tmp_path, monkeypatch
-    ) -> None:
+    def test_the_ready_line_reports_its_staging_not_nothing(self, tmp_path, monkeypatch) -> None:
         """The ready line used to say "nothing held resident". The async reader
         stages `read_ahead` layers in host memory, so that claim is now false
         and the honest figure has to be there instead.
@@ -495,9 +490,7 @@ class TestTheReadAheadDepthIsWiredAndVisible:
         assert "page-locked where the box allows" in plain, plain
         assert "in pinned host RAM" not in plain, plain
 
-    def test_a_forced_disk_run_still_pins_its_staging(
-        self, tmp_path, monkeypatch
-    ) -> None:
+    def test_a_forced_disk_run_still_pins_its_staging(self, tmp_path, monkeypatch) -> None:
         """`stream_source: disk` used to zero `plan.pinned`, which since #971
         also decides whether the STAGING is page-locked. Left alone, the same
         tier reached by `disk` staged pageable and by `auto` staged pinned —

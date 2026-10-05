@@ -26,42 +26,58 @@ def _default_judge(prompt: str) -> dict:
 
 def forge(
     docs: str = typer.Option(
-        ..., "--docs", "-d",
+        ...,
+        "--docs",
+        "-d",
         help="Directory of documents (txt/md/json/jsonl, under cwd).",
     ),
     task: str = typer.Option(
-        "sft", "--task", "-t",
+        "sft",
+        "--task",
+        "-t",
         help="Forge task: sft | preference | tool.",
     ),
     target_rows: int = typer.Option(
-        100, "--target-rows", "-r",
-        min=1, max=1_000_000,
+        100,
+        "--target-rows",
+        "-r",
+        min=1,
+        max=1_000_000,
         help="Maximum number of synthesised rows.",
     ),
     teacher: str = typer.Option(
-        "local-judge", "--teacher",
+        "local-judge",
+        "--teacher",
         help="Label recorded in provenance for the judge backend.",
     ),
     output: str = typer.Option(
-        "forge_dataset.jsonl", "--output", "-o",
+        "forge_dataset.jsonl",
+        "--output",
+        "-o",
         help="JSONL output path (under cwd).",
     ),
     provenance: str = typer.Option(
-        "forge_provenance.json", "--provenance",
+        "forge_provenance.json",
+        "--provenance",
         help="Provenance manifest output path (under cwd).",
     ),
     uncertainty_threshold: float = typer.Option(
-        0.0, "--uncertainty-threshold",
-        min=0.0, max=1.0,
+        0.0,
+        "--uncertainty-threshold",
+        min=0.0,
+        max=1.0,
         help="Minimum Jaccard-distance score required to keep a synthesised row.",
     ),
     max_chunk_chars: int = typer.Option(
-        1000, "--max-chunk-chars",
-        min=1, max=64_000,
+        1000,
+        "--max-chunk-chars",
+        min=1,
+        max=64_000,
         help="Maximum chars per document chunk before judge call.",
     ),
     judge_provider: Optional[str] = typer.Option(
-        None, "--judge-provider",
+        None,
+        "--judge-provider",
         help=(
             "v0.53.7 #111: live judge backend. One of "
             "ollama / anthropic / vllm. Omit for the deterministic "
@@ -69,18 +85,21 @@ def forge(
         ),
     ),
     judge_model: str = typer.Option(
-        "llama3.1", "--judge-model",
+        "llama3.1",
+        "--judge-model",
         help="Model name for the live judge provider (default llama3.1).",
     ),
     judge_base_url: Optional[str] = typer.Option(
-        None, "--judge-base-url",
+        None,
+        "--judge-base-url",
         help=(
             "Override base URL for Ollama (localhost-only) / vLLM "
             "(scheme allowlist + loopback). Ignored for Anthropic."
         ),
     ),
     hub: str = typer.Option(
-        "hf", "--hub",
+        "hf",
+        "--hub",
         help=(
             "Teacher hub: hf (default) / modelscope / modelers. When non-HF "
             "and --teacher is a repo id (owner/name), the teacher is "
@@ -122,16 +141,12 @@ def forge(
             from soup_cli.utils.hubs import prefetch_model_from_hub
 
             try:
-                effective_teacher = prefetch_model_from_hub(
-                    teacher, hub_canonical, console=console
-                )
+                effective_teacher = prefetch_model_from_hub(teacher, hub_canonical, console=console)
             except ImportError as exc:
                 console.print(f"[red]{escape(str(exc))}[/]")
                 raise typer.Exit(1) from exc
             except (TypeError, ValueError) as exc:
-                console.print(
-                    f"[red]Teacher pre-fetch failed:[/] {escape(str(exc))}"
-                )
+                console.print(f"[red]Teacher pre-fetch failed:[/] {escape(str(exc))}")
                 raise typer.Exit(1) from exc
         else:
             # Non-HF hub requested but the teacher is not a routable repo id
@@ -162,9 +177,7 @@ def forge(
                 raise_on_error=True,
             )
         except (TypeError, ValueError, ImportError) as exc:
-            console.print(
-                f"[red]Failed to build judge backend:[/] {escape(str(exc))}"
-            )
+            console.print(f"[red]Failed to build judge backend:[/] {escape(str(exc))}")
             raise typer.Exit(1) from exc
         # Record the live backend in provenance.
         if teacher == "local-judge":
@@ -213,9 +226,7 @@ def forge(
     if not rows and judge_stats.failures:
         # #1221: a judge that produced nothing usable must fail loudly
         # rather than write a dataset (of empty answers or otherwise).
-        console.print(
-            f"[red]No usable rows produced:[/] {escape(failure_summary)}"
-        )
+        console.print(f"[red]No usable rows produced:[/] {escape(failure_summary)}")
         raise typer.Exit(1)
 
     if not rows:
@@ -235,8 +246,7 @@ def forge(
     judge_line = ""
     if judge_stats.failures:
         judge_line = (
-            f"Judge calls: [bold yellow]{judge_stats.failures} of "
-            f"{judge_stats.calls} failed[/]\n"
+            f"Judge calls: [bold yellow]{judge_stats.failures} of {judge_stats.calls} failed[/]\n"
         )
         title = "[bold yellow]Data Forge — synth complete with judge failures[/]"
     else:

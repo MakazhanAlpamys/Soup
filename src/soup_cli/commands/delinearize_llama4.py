@@ -42,10 +42,7 @@ def delinearize_llama4(
     num_experts: Optional[int] = typer.Option(
         None,
         "--num-experts",
-        help=(
-            "Expert count for the reshape. Defaults to "
-            "config.json's num_local_experts."
-        ),
+        help=("Expert count for the reshape. Defaults to config.json's num_local_experts."),
     ),
     plan_only: bool = typer.Option(
         False,

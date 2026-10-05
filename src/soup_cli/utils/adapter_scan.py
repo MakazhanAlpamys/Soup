@@ -65,13 +65,10 @@ class ScanFinding:
         if "\x00" in self.layer or len(self.layer) > _MAX_LAYER_NAME_LEN:
             raise ValueError("layer name invalid (null byte or > 256 chars)")
         if self.kind not in _VALID_KINDS:
-            raise ValueError(
-                f"kind must be one of {sorted(_VALID_KINDS)}, got {self.kind!r}"
-            )
+            raise ValueError(f"kind must be one of {sorted(_VALID_KINDS)}, got {self.kind!r}")
         if self.severity not in _VALID_SEVERITIES:
             raise ValueError(
-                f"severity must be one of {sorted(_VALID_SEVERITIES)}, "
-                f"got {self.severity!r}"
+                f"severity must be one of {sorted(_VALID_SEVERITIES)}, got {self.severity!r}"
             )
         for fld_value, fld_name in (
             (self.value, "value"),
@@ -103,8 +100,7 @@ class ScanReport:
             raise ValueError("adapter name invalid (null byte or > 256 chars)")
         if self.overall not in _VALID_SEVERITIES:
             raise ValueError(
-                f"overall must be one of {sorted(_VALID_SEVERITIES)}, "
-                f"got {self.overall!r}"
+                f"overall must be one of {sorted(_VALID_SEVERITIES)}, got {self.overall!r}"
             )
         if not isinstance(self.findings, tuple):
             raise ValueError("findings must be tuple")
@@ -281,8 +277,7 @@ def _scan_one_layer(name: str, matrix: Any) -> list[ScanFinding]:
                 value=ratio,
                 threshold=_RANK1_DOMINANCE_WARN,
                 message=(
-                    f"top singular value is {ratio:.1f}x the next "
-                    "(unusual but not definitive)"
+                    f"top singular value is {ratio:.1f}x the next (unusual but not definitive)"
                 ),
             )
         )
@@ -295,9 +290,7 @@ def _scan_one_layer(name: str, matrix: Any) -> list[ScanFinding]:
                 severity="FAIL",
                 value=energy,
                 threshold=_ENERGY_TOP1_FAIL,
-                message=(
-                    f"{energy * 100:.1f}% of energy in top singular vector"
-                ),
+                message=(f"{energy * 100:.1f}% of energy in top singular vector"),
             )
         )
     elif energy >= _ENERGY_TOP1_WARN:
@@ -308,9 +301,7 @@ def _scan_one_layer(name: str, matrix: Any) -> list[ScanFinding]:
                 severity="WARN",
                 value=energy,
                 threshold=_ENERGY_TOP1_WARN,
-                message=(
-                    f"{energy * 100:.1f}% of energy in top singular vector"
-                ),
+                message=(f"{energy * 100:.1f}% of energy in top singular vector"),
             )
         )
     return findings
@@ -356,8 +347,7 @@ def _scan_frobenius_outliers(
                         value=float(z),
                         threshold=_FROB_OUTLIER_FAIL_SIGMA,
                         message=(
-                            f"frobenius norm {z:.1f} robust-sigmas above peers "
-                            f"in bucket {suffix!r}"
+                            f"frobenius norm {z:.1f} robust-sigmas above peers in bucket {suffix!r}"
                         ),
                     )
                 )
@@ -370,8 +360,7 @@ def _scan_frobenius_outliers(
                         value=float(z),
                         threshold=_FROB_OUTLIER_WARN_SIGMA,
                         message=(
-                            f"frobenius norm {z:.1f} robust-sigmas above peers "
-                            f"in bucket {suffix!r}"
+                            f"frobenius norm {z:.1f} robust-sigmas above peers in bucket {suffix!r}"
                         ),
                     )
                 )
@@ -379,7 +368,9 @@ def _scan_frobenius_outliers(
 
 
 def scan_adapter_weights(
-    weights: Mapping[str, Any], *, adapter_name: str,
+    weights: Mapping[str, Any],
+    *,
+    adapter_name: str,
 ) -> ScanReport:
     """Pure-function scan over an in-memory weights map.
 
@@ -408,10 +399,7 @@ def scan_adapter_weights(
     overall = _classify_overall(findings_tuple)
     fail_count = sum(1 for f in findings_tuple if f.severity == "FAIL")
     warn_count = sum(1 for f in findings_tuple if f.severity == "WARN")
-    summary = (
-        f"scanned {len(weights)} tensor(s), "
-        f"{fail_count} FAIL / {warn_count} WARN"
-    )
+    summary = f"scanned {len(weights)} tensor(s), {fail_count} FAIL / {warn_count} WARN"
     return ScanReport(
         adapter=adapter_name,
         findings=findings_tuple,

@@ -9,12 +9,7 @@ from pathlib import Path
 
 import pytest
 
-HARNESS = (
-    Path(__file__).resolve().parents[1]
-    / "benchmarks"
-    / "harness"
-    / "fixture_window_cpu.py"
-)
+HARNESS = Path(__file__).resolve().parents[1] / "benchmarks" / "harness" / "fixture_window_cpu.py"
 
 
 def _load_harness():
@@ -65,9 +60,7 @@ def _result(harness, rows):
         "rows": [row.__dict__ for row in rows],
         "packed_inference_rows": sum(row.inference_packed_for_cpu for row in rows),
         "packed_training_rows": sum(row.training_packed_for_cpu for row in rows),
-        "training_control_exact": all(
-            row.training_vs_variant2_max_abs == 0.0 for row in rows
-        ),
+        "training_control_exact": all(row.training_vs_variant2_max_abs == 0.0 for row in rows),
         **verdict,
     }
 
@@ -310,8 +303,7 @@ def test_json_schema_carries_verdict_and_attribution():
             "rounding-scale envelope while the training control is exact."
         ),
         "attribution": (
-            "bitsandbytes packed CPU inference path; exact lower-level kernel "
-            "reported separately"
+            "bitsandbytes packed CPU inference path; exact lower-level kernel reported separately"
         ),
     }
 
@@ -406,9 +398,7 @@ def test_harness_source_has_no_model_or_dataset_download_calls():
         (1.001, 0),
     ],
 )
-def test_real_measurement_drives_relative_envelope(
-    monkeypatch, scale, expected_code
-):
+def test_real_measurement_drives_relative_envelope(monkeypatch, scale, expected_code):
     pytest.importorskip("torch")
     pytest.importorskip("bitsandbytes")
     harness = _load_harness()
@@ -470,10 +460,7 @@ def test_envelope_boundary_is_pinned_exactly():
         inference_rel=harness.PACKED_EFFECT_REL_ENVELOPE + 1e-6,
     )
     assert harness._evaluate_rows([at_limit])["exit_code"] == harness.EXIT_OK
-    assert (
-        harness._evaluate_rows([over_limit])["exit_code"]
-        == harness.EXIT_EFFECT_OUT_OF_RANGE
-    )
+    assert harness._evaluate_rows([over_limit])["exit_code"] == harness.EXIT_EFFECT_OUT_OF_RANGE
 
 
 def test_run_probe_publishes_emulated_bf16_margin(monkeypatch):
@@ -491,13 +478,8 @@ def test_run_probe_publishes_emulated_bf16_margin(monkeypatch):
     result = harness.run_probe(m_values=(8, 16), shapes=((64, 64),))
     assert result["emulated_bf16_worst_rel"] == pytest.approx(0.0048)
     assert result["packed_effect_rel_envelope"] == 0.02
-    assert result["envelope_over_emulated_worst"] == pytest.approx(
-        0.02 / 0.0048
-    )
-    assert (
-        result["packed_effect_rel_envelope"]
-        > result["emulated_bf16_worst_rel"]
-    )
+    assert result["envelope_over_emulated_worst"] == pytest.approx(0.02 / 0.0048)
+    assert result["packed_effect_rel_envelope"] > result["emulated_bf16_worst_rel"]
 
 
 def test_row_seed_uses_full_tuple_and_breaks_old_collision():
@@ -529,10 +511,7 @@ def test_cpu_kernel_attribution_states(monkeypatch):
     assert harness._cpu_packed_kernel_attribution() == "not-registered"
 
     monkeypatch.setattr(cpu_ops, "gemm_4bit_forward_kernel", None, raising=False)
-    assert (
-        harness._cpu_packed_kernel_attribution()
-        == "native-bitsandbytes-cpu-gemv"
-    )
+    assert harness._cpu_packed_kernel_attribution() == "native-bitsandbytes-cpu-gemv"
 
     monkeypatch.setattr(
         cpu_ops,
@@ -552,9 +531,7 @@ def test_run_probe_reports_kernel_attribution_fields(monkeypatch):
         "measure_row",
         lambda *a, **k: _row(harness),
     )
-    monkeypatch.setattr(
-        harness, "_cpu_packed_kernel_attribution", lambda: "not-registered"
-    )
+    monkeypatch.setattr(harness, "_cpu_packed_kernel_attribution", lambda: "not-registered")
     monkeypatch.setattr(harness, "_cpu_gemv_registered", lambda: False)
 
     result = harness.run_probe(m_values=(8,), shapes=((64, 64),))

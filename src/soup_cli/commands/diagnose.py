@@ -121,9 +121,7 @@ def _load_evidence(path: str) -> dict:
         raise typer.BadParameter(f"evidence path unreadable: {exc}") from exc
     with os.fdopen(fd, "r", encoding="utf-8") as handle:
         if os.fstat(handle.fileno()).st_size > _MAX_EVIDENCE_BYTES:
-            raise typer.BadParameter(
-                f"evidence file exceeds {_MAX_EVIDENCE_BYTES} bytes"
-            )
+            raise typer.BadParameter(f"evidence file exceeds {_MAX_EVIDENCE_BYTES} bytes")
         payload = json.load(handle)
     if not isinstance(payload, dict):
         raise typer.BadParameter("evidence file must contain a JSON object")
@@ -147,9 +145,7 @@ def _scores_from_evidence(payload: dict) -> dict:
         # ValueError that exited 1 with zero output. BadParameter prints a clear
         # message.
         if isinstance(score, bool) or not isinstance(score, (int, float)):
-            raise typer.BadParameter(
-                f"scores.{mode}.score must be a number, got {score!r}"
-            )
+            raise typer.BadParameter(f"scores.{mode}.score must be a number, got {score!r}")
         evidence = entry.get("evidence", "supplied by --evidence")
         verdict = entry.get("verdict") or classify_score(score)
         try:
@@ -179,9 +175,7 @@ def _write_badge(badge_path: str, svg: str) -> None:
     parent = os.path.dirname(os.path.realpath(badge_path)) or "."
     if not os.path.isdir(parent):
         os.makedirs(parent, exist_ok=True)
-    fd, tmp_path = tempfile.mkstemp(
-        prefix=".badge-", suffix=".svg.tmp", dir=parent
-    )
+    fd, tmp_path = tempfile.mkstemp(prefix=".badge-", suffix=".svg.tmp", dir=parent)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             handle.write(svg)
@@ -207,8 +201,7 @@ def _attach_to_registry(report: FailureReport, registry_id: str, output: str) ->
     try:
         attach_artifact(registry_id, "diagnose_report", output)
         console.print(
-            f"[green]Attached[/] diagnose_report to registry entry "
-            f"[bold]{escape(registry_id)}[/]"
+            f"[green]Attached[/] diagnose_report to registry entry [bold]{escape(registry_id)}[/]"
         )
     except Exception as exc:  # noqa: BLE001
         console.print(
@@ -253,9 +246,7 @@ def _emit_report(
     if attach_to_registry and output:
         _attach_to_registry(report, attach_to_registry, output)
     elif attach_to_registry and not output:
-        console.print(
-            "[yellow]Warning:[/] --attach-to-registry needs --output (skipped)."
-        )
+        console.print("[yellow]Warning:[/] --attach-to-registry needs --output (skipped).")
 
 
 def diagnose(
@@ -270,9 +261,7 @@ def diagnose(
     output: Optional[str] = typer.Option(
         None, "--output", "-o", help="Write the report JSON to this path."
     ),
-    badge: Optional[str] = typer.Option(
-        None, "--badge", help="Write an SVG badge to this path."
-    ),
+    badge: Optional[str] = typer.Option(None, "--badge", help="Write an SVG badge to this path."),
     attach_to_registry: Optional[str] = typer.Option(
         None, "--attach-to-registry", help="Attach the report to a registry entry id."
     ),
@@ -343,9 +332,7 @@ def diagnose(
     try:
         resolved_citation_style = validate_citation_style(citation_style)
     except (TypeError, ValueError) as exc:
-        console.print(
-            f"[red]Invalid --citation-style:[/] {escape(str(exc))}"
-        )
+        console.print(f"[red]Invalid --citation-style:[/] {escape(str(exc))}")
         raise typer.Exit(code=2) from exc
 
     if base_model is not None:
@@ -389,10 +376,7 @@ def diagnose(
         try:
             payload = _load_evidence(evidence_path)
         except (OSError, json.JSONDecodeError, ValueError) as exc:
-            console.print(
-                f"[red]Error:[/] cannot read --evidence: "
-                f"{escape(type(exc).__name__)}"
-            )
+            console.print(f"[red]Error:[/] cannot read --evidence: {escape(type(exc).__name__)}")
             raise typer.Exit(code=1) from exc
         scores = _scores_from_evidence(payload)
         # Sanitise extras — null-byte rejection + 256-char cap on both
@@ -402,9 +386,7 @@ def diagnose(
             key_s = str(key)
             value_s = str(value)
             if "\x00" in key_s or "\x00" in value_s:
-                console.print(
-                    "[red]Error:[/] extras key/value must not contain null bytes"
-                )
+                console.print("[red]Error:[/] extras key/value must not contain null bytes")
                 raise typer.Exit(code=1)
             extras[key_s[:256]] = value_s[:256]
 

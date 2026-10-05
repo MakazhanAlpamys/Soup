@@ -31,7 +31,6 @@ if TYPE_CHECKING:
     from soup_cli.utils.echo_trap import EchoTrapCallback
 
 
-
 VERDICTS: tuple[str, ...] = ("OK", "WARN", "TRAP")
 _VALID_VERDICTS: frozenset[str] = frozenset(VERDICTS)
 
@@ -63,19 +62,14 @@ def _check_tokens(tokens: object) -> tuple[str, ...]:
     try:
         iterator = list(tokens)  # type: ignore[arg-type]
     except TypeError as exc:
-        raise TypeError(
-            f"tokens must be iterable, got {type(tokens).__name__}"
-        ) from exc
+        raise TypeError(f"tokens must be iterable, got {type(tokens).__name__}") from exc
     if len(iterator) > _MAX_TRAJECTORY_TOKENS:
         raise ValueError(
-            f"trajectory has {len(iterator)} tokens, exceeds "
-            f"{_MAX_TRAJECTORY_TOKENS} cap"
+            f"trajectory has {len(iterator)} tokens, exceeds {_MAX_TRAJECTORY_TOKENS} cap"
         )
     for idx, t in enumerate(iterator):
         if not isinstance(t, str):
-            raise TypeError(
-                f"tokens[{idx}] must be str, got {type(t).__name__}"
-            )
+            raise TypeError(f"tokens[{idx}] must be str, got {type(t).__name__}")
     return tuple(iterator)
 
 
@@ -85,19 +79,14 @@ def _check_token_ids(token_ids: object) -> tuple[int, ...]:
     try:
         iterator = list(token_ids)  # type: ignore[arg-type]
     except TypeError as exc:
-        raise TypeError(
-            f"token_ids must be iterable, got {type(token_ids).__name__}"
-        ) from exc
+        raise TypeError(f"token_ids must be iterable, got {type(token_ids).__name__}") from exc
     if len(iterator) > _MAX_TRAJECTORY_TOKENS:
         raise ValueError(
-            f"trajectory has {len(iterator)} token ids, exceeds "
-            f"{_MAX_TRAJECTORY_TOKENS} cap"
+            f"trajectory has {len(iterator)} token ids, exceeds {_MAX_TRAJECTORY_TOKENS} cap"
         )
     for idx, token_id in enumerate(iterator):
         if isinstance(token_id, bool) or not isinstance(token_id, int):
-            raise TypeError(
-                f"token_ids[{idx}] must be int, got {type(token_id).__name__}"
-            )
+            raise TypeError(f"token_ids[{idx}] must be int, got {type(token_id).__name__}")
     return tuple(iterator)
 
 
@@ -159,20 +148,16 @@ def score_echo_signal(
     """
     n = _check_ngram_n(ngram_n)
     if isinstance(trajectories, (str, bytes)):
-        raise TypeError(
-            "trajectories must be a sequence of sequences, not str/bytes"
-        )
+        raise TypeError("trajectories must be a sequence of sequences, not str/bytes")
     try:
         batch = list(trajectories)  # type: ignore[arg-type]
     except TypeError as exc:
         raise TypeError(
-            f"trajectories must be iterable, got "
-            f"{type(trajectories).__name__}"
+            f"trajectories must be iterable, got {type(trajectories).__name__}"
         ) from exc
     if len(batch) > _MAX_BATCH_TRAJECTORIES:
         raise ValueError(
-            f"batch has {len(batch)} trajectories, exceeds "
-            f"{_MAX_BATCH_TRAJECTORIES} cap"
+            f"batch has {len(batch)} trajectories, exceeds {_MAX_BATCH_TRAJECTORIES} cap"
         )
     if not batch:
         return 0.0
@@ -194,20 +179,16 @@ def score_echo_signal_tokenized(
     """
     n = _check_ngram_n(ngram_n)
     if isinstance(trajectories, (str, bytes)):
-        raise TypeError(
-            "trajectories must be a sequence of token-id sequences, not str/bytes"
-        )
+        raise TypeError("trajectories must be a sequence of token-id sequences, not str/bytes")
     try:
         batch = list(trajectories)  # type: ignore[arg-type]
     except TypeError as exc:
         raise TypeError(
-            f"trajectories must be iterable, got "
-            f"{type(trajectories).__name__}"
+            f"trajectories must be iterable, got {type(trajectories).__name__}"
         ) from exc
     if len(batch) > _MAX_BATCH_TRAJECTORIES:
         raise ValueError(
-            f"batch has {len(batch)} trajectories, exceeds "
-            f"{_MAX_BATCH_TRAJECTORIES} cap"
+            f"batch has {len(batch)} trajectories, exceeds {_MAX_BATCH_TRAJECTORIES} cap"
         )
     if not batch:
         return 0.0
@@ -227,9 +208,7 @@ def classify_echo_signal(signal: object) -> str:
     if isinstance(signal, bool):
         raise ValueError("signal must not be bool")
     if not isinstance(signal, (int, float)):
-        raise ValueError(
-            f"signal must be a number, got {type(signal).__name__}"
-        )
+        raise ValueError(f"signal must be a number, got {type(signal).__name__}")
     fv = float(signal)
     if not math.isfinite(fv):
         raise ValueError("signal must be finite (no NaN/Inf)")
@@ -265,16 +244,12 @@ class EchoTrapReport:
         if isinstance(self.signal, bool):
             raise ValueError("signal must not be bool")
         if not isinstance(self.signal, (int, float)):
-            raise TypeError(
-                f"signal must be a number, got {type(self.signal).__name__}"
-            )
+            raise TypeError(f"signal must be a number, got {type(self.signal).__name__}")
         fv = float(self.signal)
         if not math.isfinite(fv) or not (0.0 <= fv <= 1.0):
             raise ValueError(f"signal must be in [0.0, 1.0], got {self.signal}")
         if self.verdict not in _VALID_VERDICTS:
-            raise ValueError(
-                f"verdict={self.verdict!r} must be one of {sorted(_VALID_VERDICTS)}"
-            )
+            raise ValueError(f"verdict={self.verdict!r} must be one of {sorted(_VALID_VERDICTS)}")
         if isinstance(self.step, bool):
             raise ValueError("step must not be bool")
         if not isinstance(self.step, int):
@@ -285,18 +260,14 @@ class EchoTrapReport:
             raise ValueError("trajectories_seen must not be bool")
         if not isinstance(self.trajectories_seen, int):
             raise TypeError(
-                "trajectories_seen must be int, got "
-                f"{type(self.trajectories_seen).__name__}"
+                f"trajectories_seen must be int, got {type(self.trajectories_seen).__name__}"
             )
         if self.trajectories_seen < 0:
             raise ValueError(
-                f"trajectories_seen must be non-negative, got "
-                f"{self.trajectories_seen}"
+                f"trajectories_seen must be non-negative, got {self.trajectories_seen}"
             )
         if not isinstance(self.details, tuple):
-            raise TypeError(
-                f"details must be a tuple, got {type(self.details).__name__}"
-            )
+            raise TypeError(f"details must be a tuple, got {type(self.details).__name__}")
 
 
 def _split_whitespace(text: str) -> list[str]:
@@ -341,21 +312,14 @@ class _EchoTrapCallback_body:  # type: ignore[misc, valid-type]  # noqa: N801
         if isinstance(threshold, bool):
             raise ValueError("threshold must not be bool")
         if not isinstance(threshold, (int, float)):
-            raise ValueError(
-                f"threshold must be a number, got {type(threshold).__name__}"
-            )
+            raise ValueError(f"threshold must be a number, got {type(threshold).__name__}")
         fv = float(threshold)
         if not math.isfinite(fv) or not (0.0 <= fv <= 1.0):
             raise ValueError(f"threshold must be in [0.0, 1.0], got {threshold}")
         if not isinstance(halt_on_trap, bool):
-            raise TypeError(
-                f"halt_on_trap must be bool, got {type(halt_on_trap).__name__}"
-            )
+            raise TypeError(f"halt_on_trap must be bool, got {type(halt_on_trap).__name__}")
         if not isinstance(tokenizer_aware, bool):
-            raise TypeError(
-                "tokenizer_aware must be bool, got "
-                f"{type(tokenizer_aware).__name__}"
-            )
+            raise TypeError(f"tokenizer_aware must be bool, got {type(tokenizer_aware).__name__}")
         self.threshold = fv
         self.halt_on_trap = halt_on_trap
         self.ngram_n = _check_ngram_n(ngram_n)
@@ -385,9 +349,7 @@ class _EchoTrapCallback_body:  # type: ignore[misc, valid-type]  # noqa: N801
         trajectories = [_split_whitespace(text) for text in completions]
         return score_echo_signal(trajectories, ngram_n=self.ngram_n)
 
-    def observe_signal(
-        self, signal: float, step: int, n_trajectories: int
-    ) -> EchoTrapReport:
+    def observe_signal(self, signal: float, step: int, n_trajectories: int) -> EchoTrapReport:
         """Classify a signal and build the :class:`EchoTrapReport`."""
         clamped = max(0.0, min(1.0, float(signal)))
         verdict = classify_echo_signal(clamped)
@@ -425,10 +387,12 @@ class _EchoTrapCallback_body:  # type: ignore[misc, valid-type]  # noqa: N801
             report = self.observe_signal(signal, step, n_traj)
             log_history = getattr(state, "log_history", None)
             if log_history is not None:
-                log_history.append({
-                    "echo_trap_signal": report.signal,
-                    "echo_trap_verdict": report.verdict,
-                })
+                log_history.append(
+                    {
+                        "echo_trap_signal": report.signal,
+                        "echo_trap_verdict": report.verdict,
+                    }
+                )
             # TRAP verdict + over-threshold → optional halt.
             if (
                 report.verdict == "TRAP"

@@ -3,6 +3,7 @@
 MFT (Minimum Functionality Test) / INV (Invariance) / DIR (Directional
 Expectation) tests rendered from a YAML DSL, with per-test pass/fail.
 """
+
 from __future__ import annotations
 
 import json
@@ -77,7 +78,10 @@ class TestCheckListTest:
 
     def test_frozen(self):
         t = CheckListTest(
-            name="t1", kind="mft", prompts=("p",), expected=("a",),
+            name="t1",
+            kind="mft",
+            prompts=("p",),
+            expected=("a",),
         )
         with pytest.raises(Exception):
             t.name = "x"  # type: ignore[misc]
@@ -95,7 +99,8 @@ class TestCheckListTest:
         # DIR tests need at least one expected change keyword.
         with pytest.raises(ValueError, match="expected"):
             CheckListTest(
-                name="dir-test", kind="dir",
+                name="dir-test",
+                kind="dir",
                 prompts=("Add a negation",),
                 expected=(),
             )
@@ -103,13 +108,17 @@ class TestCheckListTest:
     def test_empty_prompts(self):
         with pytest.raises(ValueError, match="prompts"):
             CheckListTest(
-                name="t", kind="mft", prompts=(), expected=("a",),
+                name="t",
+                kind="mft",
+                prompts=(),
+                expected=("a",),
             )
 
     def test_oversize_prompts(self):
         with pytest.raises(ValueError, match="too many"):
             CheckListTest(
-                name="t", kind="mft",
+                name="t",
+                kind="mft",
                 prompts=tuple(f"p{i}" for i in range(10_001)),
                 expected=("a",),
             )
@@ -117,20 +126,28 @@ class TestCheckListTest:
     def test_invalid_name(self):
         with pytest.raises(ValueError, match="name"):
             CheckListTest(
-                name="", kind="mft", prompts=("p",), expected=("a",),
+                name="",
+                kind="mft",
+                prompts=("p",),
+                expected=("a",),
             )
 
     def test_invalid_kind(self):
         with pytest.raises(ValueError):
             CheckListTest(
-                name="t", kind="evil", prompts=("p",), expected=("a",),
+                name="t",
+                kind="evil",
+                prompts=("p",),
+                expected=("a",),
             )
 
     def test_null_byte_prompt(self):
         with pytest.raises(ValueError, match="null"):
             CheckListTest(
-                name="t", kind="mft",
-                prompts=("p\x00",), expected=("a",),
+                name="t",
+                kind="mft",
+                prompts=("p\x00",),
+                expected=("a",),
             )
 
 
@@ -146,11 +163,12 @@ class TestCheckListSpec:
 
     def test_too_many(self):
         with pytest.raises(ValueError, match="too many"):
-            CheckListSpec(tests=tuple(
-                CheckListTest(name=f"t{i}", kind="mft",
-                              prompts=("p",), expected=("a",))
-                for i in range(1001)
-            ))
+            CheckListSpec(
+                tests=tuple(
+                    CheckListTest(name=f"t{i}", kind="mft", prompts=("p",), expected=("a",))
+                    for i in range(1001)
+                )
+            )
 
     def test_duplicate_names_rejected(self):
         t1 = CheckListTest(name="t", kind="mft", prompts=("p",), expected=("a",))
@@ -163,10 +181,8 @@ class TestParseChecklistSpec:
     def test_basic(self):
         raw = {
             "tests": [
-                {"name": "t1", "kind": "mft",
-                 "prompts": ["What is 2+2?"], "expected": ["4"]},
-                {"name": "t2", "kind": "inv",
-                 "prompts": ["What is 2+2?", "What is two plus two?"]},
+                {"name": "t1", "kind": "mft", "prompts": ["What is 2+2?"], "expected": ["4"]},
+                {"name": "t2", "kind": "inv", "prompts": ["What is 2+2?", "What is two plus two?"]},
             ]
         }
         spec = parse_checklist_spec(raw)
@@ -193,10 +209,11 @@ class TestLoadChecklistSpec:
     def test_load(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         p = tmp_path / "spec.yaml"
-        p.write_text(yaml.safe_dump({
-            "tests": [{"name": "t1", "kind": "mft",
-                       "prompts": ["p"], "expected": ["a"]}]
-        }))
+        p.write_text(
+            yaml.safe_dump(
+                {"tests": [{"name": "t1", "kind": "mft", "prompts": ["p"], "expected": ["a"]}]}
+            )
+        )
         spec = load_checklist_spec(str(p))
         assert len(spec.tests) == 1
 
@@ -242,67 +259,87 @@ class TestLoadChecklistSpec:
 class TestRunChecklistSpec:
     def test_mft_pass(self):
         t = CheckListTest(
-            name="capital", kind="mft",
+            name="capital",
+            kind="mft",
             prompts=("What is the capital of France?",),
             expected=("paris",),
         )
         spec = CheckListSpec(tests=(t,))
-        report = run_checklist_spec(spec, evidence={
-            "capital": ["Paris is the capital of France."],
-        })
+        report = run_checklist_spec(
+            spec,
+            evidence={
+                "capital": ["Paris is the capital of France."],
+            },
+        )
         assert isinstance(report, CheckListReport)
         assert report.results[0].verdict == "OK"
         assert report.results[0].passed == 1
 
     def test_mft_fail(self):
         t = CheckListTest(
-            name="capital", kind="mft",
+            name="capital",
+            kind="mft",
             prompts=("What is the capital of France?",),
             expected=("paris",),
         )
         spec = CheckListSpec(tests=(t,))
-        report = run_checklist_spec(spec, evidence={
-            "capital": ["Berlin is the capital of France."],
-        })
+        report = run_checklist_spec(
+            spec,
+            evidence={
+                "capital": ["Berlin is the capital of France."],
+            },
+        )
         assert report.results[0].verdict == "MAJOR"
         assert report.results[0].passed == 0
 
     def test_inv_pass(self):
         t = CheckListTest(
-            name="paraphrase", kind="inv",
+            name="paraphrase",
+            kind="inv",
             prompts=("Add 2 and 2.", "Add two and two."),
             expected=(),
         )
         spec = CheckListSpec(tests=(t,))
         # INV: both responses should agree.
-        report = run_checklist_spec(spec, evidence={
-            "paraphrase": ["The answer is 4.", "The answer is 4."],
-        })
+        report = run_checklist_spec(
+            spec,
+            evidence={
+                "paraphrase": ["The answer is 4.", "The answer is 4."],
+            },
+        )
         assert report.results[0].verdict == "OK"
 
     def test_inv_fail(self):
         t = CheckListTest(
-            name="paraphrase", kind="inv",
+            name="paraphrase",
+            kind="inv",
             prompts=("p1", "p2"),
             expected=(),
         )
         spec = CheckListSpec(tests=(t,))
-        report = run_checklist_spec(spec, evidence={
-            "paraphrase": ["A", "B"],
-        })
+        report = run_checklist_spec(
+            spec,
+            evidence={
+                "paraphrase": ["A", "B"],
+            },
+        )
         assert report.results[0].verdict == "MAJOR"
 
     def test_dir_pass(self):
         # DIR: response should mention "no" / "not" when prompt is negated.
         t = CheckListTest(
-            name="negate", kind="dir",
+            name="negate",
+            kind="dir",
             prompts=("Is the sky blue?",),
             expected=("yes",),
         )
         spec = CheckListSpec(tests=(t,))
-        report = run_checklist_spec(spec, evidence={
-            "negate": ["Yes, the sky is blue."],
-        })
+        report = run_checklist_spec(
+            spec,
+            evidence={
+                "negate": ["Yes, the sky is blue."],
+            },
+        )
         assert report.results[0].verdict == "OK"
 
     def test_no_evidence(self):
@@ -317,10 +354,13 @@ class TestRunChecklistSpec:
         t1 = CheckListTest(name="t1", kind="mft", prompts=("p",), expected=("a",))
         t2 = CheckListTest(name="t2", kind="mft", prompts=("q",), expected=("b",))
         spec = CheckListSpec(tests=(t1, t2))
-        report = run_checklist_spec(spec, evidence={
-            "t1": ["a found"],
-            # t2 has no evidence -> falls through to OK.
-        })
+        report = run_checklist_spec(
+            spec,
+            evidence={
+                "t1": ["a found"],
+                # t2 has no evidence -> falls through to OK.
+            },
+        )
         assert len(report.results) == 2
 
     def test_non_spec_type(self):
@@ -329,22 +369,30 @@ class TestRunChecklistSpec:
 
     def test_inv_length_mismatch(self):
         t = CheckListTest(
-            name="paraphrase", kind="inv",
+            name="paraphrase",
+            kind="inv",
             prompts=("p1", "p2", "p3"),
             expected=(),
         )
         spec = CheckListSpec(tests=(t,))
         # If evidence has too few responses, surface error.
-        report = run_checklist_spec(spec, evidence={
-            "paraphrase": ["A", "B"],  # only 2, but 3 expected
-        })
+        report = run_checklist_spec(
+            spec,
+            evidence={
+                "paraphrase": ["A", "B"],  # only 2, but 3 expected
+            },
+        )
         assert report.results[0].verdict == "MAJOR"
 
 
 class TestReport:
     def test_to_dict(self):
         result = CheckListTestResult(
-            name="t1", kind="mft", passed=1, total=1, verdict="OK",
+            name="t1",
+            kind="mft",
+            passed=1,
+            total=1,
+            verdict="OK",
         )
         report = CheckListReport(results=(result,), overall="OK")
         d = report.to_dict()
@@ -358,25 +406,38 @@ class TestReport:
     def test_invalid_result_passed(self):
         with pytest.raises(ValueError, match="passed"):
             CheckListTestResult(
-                name="t", kind="mft", passed=-1, total=5, verdict="OK",
+                name="t",
+                kind="mft",
+                passed=-1,
+                total=5,
+                verdict="OK",
             )
 
     def test_invalid_result_verdict(self):
         with pytest.raises(ValueError, match="verdict"):
             CheckListTestResult(
-                name="t", kind="mft", passed=1, total=1, verdict="X",
+                name="t",
+                kind="mft",
+                passed=1,
+                total=1,
+                verdict="X",
             )
 
     def test_passed_above_total(self):
         with pytest.raises(ValueError, match="passed"):
             CheckListTestResult(
-                name="t", kind="mft", passed=5, total=1, verdict="OK",
+                name="t",
+                kind="mft",
+                passed=5,
+                total=1,
+                verdict="OK",
             )
 
 
 class TestChecklistCli:
     def test_help_listed(self):
         from soup_cli.commands.eval import app
+
         runner = CliRunner()
         result = runner.invoke(app, ["--help"])
         assert result.exit_code == 0
@@ -384,33 +445,46 @@ class TestChecklistCli:
 
     def test_checklist_help(self):
         from soup_cli.commands.eval import app
+
         runner = CliRunner()
         result = runner.invoke(app, ["checklist", "--help"])
         assert result.exit_code == 0
 
     def test_checklist_runs(self, tmp_path, monkeypatch):
         from soup_cli.commands.eval import app
+
         monkeypatch.chdir(tmp_path)
         p = tmp_path / "spec.yaml"
-        p.write_text(yaml.safe_dump({
-            "tests": [{"name": "t1", "kind": "mft",
-                       "prompts": ["p"], "expected": ["a"]}]
-        }))
+        p.write_text(
+            yaml.safe_dump(
+                {"tests": [{"name": "t1", "kind": "mft", "prompts": ["p"], "expected": ["a"]}]}
+            )
+        )
         evidence = tmp_path / "evidence.json"
         evidence.write_text(json.dumps({"t1": ["a"]}))
         runner = CliRunner()
-        result = runner.invoke(app, [
-            "checklist", str(p), "--evidence", str(evidence),
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "checklist",
+                str(p),
+                "--evidence",
+                str(evidence),
+            ],
+        )
         assert result.exit_code == 0, (result.output, repr(result.exception))
 
 
 class TestSourceWiring:
     def test_no_heavy_imports(self):
         from pathlib import Path
+
         src = (
             Path(__file__).resolve().parent.parent
-            / "src" / "soup_cli" / "utils" / "checklist_dsl.py"
+            / "src"
+            / "soup_cli"
+            / "utils"
+            / "checklist_dsl.py"
         )
         text = src.read_text(encoding="utf-8")
         forbidden_imports = (

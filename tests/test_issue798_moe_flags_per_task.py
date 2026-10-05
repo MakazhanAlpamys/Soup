@@ -110,21 +110,45 @@ def _stand_in(arch):
     if arch == "qwen3_moe":
         return _tiny_moe()
     if arch == "mixtral":
-        return tf.MixtralForCausalLM(tf.MixtralConfig(
-            **_SMALL, intermediate_size=32, num_local_experts=4, num_experts_per_tok=2))
+        return tf.MixtralForCausalLM(
+            tf.MixtralConfig(
+                **_SMALL, intermediate_size=32, num_local_experts=4, num_experts_per_tok=2
+            )
+        )
     if arch == "minimax":
-        return tf.MiniMaxForCausalLM(tf.MiniMaxConfig(
-            **_SMALL, intermediate_size=32, num_local_experts=4, num_experts_per_tok=2))
+        return tf.MiniMaxForCausalLM(
+            tf.MiniMaxConfig(
+                **_SMALL, intermediate_size=32, num_local_experts=4, num_experts_per_tok=2
+            )
+        )
     if arch == "deepseek_v3":
-        return tf.DeepseekV3ForCausalLM(tf.DeepseekV3Config(
-            **_SMALL, intermediate_size=32, moe_intermediate_size=16, n_routed_experts=4,
-            num_experts_per_tok=2, n_shared_experts=1, first_k_dense_replace=0,
-            n_group=1, topk_group=1))
+        return tf.DeepseekV3ForCausalLM(
+            tf.DeepseekV3Config(
+                **_SMALL,
+                intermediate_size=32,
+                moe_intermediate_size=16,
+                n_routed_experts=4,
+                num_experts_per_tok=2,
+                n_shared_experts=1,
+                first_k_dense_replace=0,
+                n_group=1,
+                topk_group=1,
+            )
+        )
     if arch == "glm4_moe":
-        return tf.Glm4MoeForCausalLM(tf.Glm4MoeConfig(
-            **_SMALL, intermediate_size=32, moe_intermediate_size=16, n_routed_experts=4,
-            num_experts_per_tok=2, n_shared_experts=1, first_k_dense_replace=0,
-            n_group=1, topk_group=1))
+        return tf.Glm4MoeForCausalLM(
+            tf.Glm4MoeConfig(
+                **_SMALL,
+                intermediate_size=32,
+                moe_intermediate_size=16,
+                n_routed_experts=4,
+                num_experts_per_tok=2,
+                n_shared_experts=1,
+                first_k_dense_replace=0,
+                n_group=1,
+                topk_group=1,
+            )
+        )
     raise KeyError(arch)
 
 
@@ -152,7 +176,12 @@ def _tiny_dense():
 
 
 def _attach_lora(
-    task: str, monkeypatch, *, moe_lora: bool, dense=False, expect_failure=False,
+    task: str,
+    monkeypatch,
+    *,
+    moe_lora: bool,
+    dense=False,
+    expect_failure=False,
     dropout: float = 0.0,
 ):
     """Run the trainer's own ``_setup_transformers`` far enough to attach LoRA.
@@ -166,9 +195,7 @@ def _attach_lora(
     wrapper_cls = getattr(module, _WRAPPERS[task][1])
 
     tokenizer = SimpleNamespace(pad_token=None, eos_token="</s>", pad_token_id=0)
-    monkeypatch.setattr(
-        transformers.AutoTokenizer, "from_pretrained", lambda *_a, **_k: tokenizer
-    )
+    monkeypatch.setattr(transformers.AutoTokenizer, "from_pretrained", lambda *_a, **_k: tokenizer)
     build = _tiny_dense if dense else _tiny_moe
     monkeypatch.setattr(
         transformers.AutoModelForCausalLM, "from_pretrained", lambda *_a, **_k: build()
@@ -198,9 +225,7 @@ def _adapted(model) -> list[str]:
     if not hasattr(model, "named_modules"):
         return []
     return sorted(
-        name.rsplit(".lora_A", 1)[0]
-        for name, _ in model.named_modules()
-        if name.endswith("lora_A")
+        name.rsplit(".lora_A", 1)[0] for name, _ in model.named_modules() if name.endswith("lora_A")
     )
 
 
@@ -262,9 +287,7 @@ _TASK_TRAINING = {
 
 class TestTheFlagsNoTrainerReadsAreRefused:
     @pytest.mark.parametrize("task", ["dpo", "grpo", "kto", "pretrain"])
-    @pytest.mark.parametrize(
-        "knob", ["  moe_expert_quant: nf4\n", "  train_router_only: true\n"]
-    )
+    @pytest.mark.parametrize("knob", ["  moe_expert_quant: nf4\n", "  train_router_only: true\n"])
     def test_sft_only_knobs_are_refused_off_sft(self, task, knob):
         with pytest.raises(ValueError) as excinfo:
             load_config_from_string(
@@ -359,7 +382,6 @@ class TestShippedConfigs:
         assert sorted(tasks) == ["dpo"] * 7 + ["grpo"] * 8, sorted(tasks)
 
 
-
 class TestTheDropoutConstraint:
     """peft's ParamWrapper refuses dropout on FUSED MoE experts.
 
@@ -397,9 +419,7 @@ class TestTheDropoutConstraint:
         refusing it was the bug in the first version of this branch."""
         from soup_cli.utils.moe import resolve_moe_lora_targets
 
-        assert resolve_moe_lora_targets(
-            _tiny_dense(), self._tcfg(0.05), ["q_proj"]
-        ) == ["q_proj"]
+        assert resolve_moe_lora_targets(_tiny_dense(), self._tcfg(0.05), ["q_proj"]) == ["q_proj"]
 
     def test_the_predicate_follows_peft_not_the_parameter_shapes(self):
         """Mixtral and MiniMax have the SAME fused 3-D expert parameters and the
@@ -423,11 +443,13 @@ class TestTheDropoutConstraint:
             model = build()
             targets = get_moe_target_modules(model)
             routed[name] = peft_routes_lora_to_fused_params(model, targets)
-            fused_params[name] = sorted({
-                param_name.rsplit(".", 1)[-1]
-                for param_name, param in model.named_parameters()
-                if "expert" in param_name.lower() and param.ndim == 3
-            })
+            fused_params[name] = sorted(
+                {
+                    param_name.rsplit(".", 1)[-1]
+                    for param_name, param in model.named_parameters()
+                    if "expert" in param_name.lower() and param.ndim == 3
+                }
+            )
 
         assert routed == {
             "qwen3_moe": True,
@@ -459,10 +481,15 @@ class TestTheDropoutConstraint:
         from soup_cli.utils.moe import get_moe_target_modules
 
         model = _MOE_STAND_INS[arch]()
-        get_peft_model(model, LoraConfig(
-            r=4, lora_dropout=0.05, target_modules=get_moe_target_modules(model),
-            task_type=TaskType.CAUSAL_LM,
-        ))
+        get_peft_model(
+            model,
+            LoraConfig(
+                r=4,
+                lora_dropout=0.05,
+                target_modules=get_moe_target_modules(model),
+                task_type=TaskType.CAUSAL_LM,
+            ),
+        )
 
     def test_a_stub_model_with_peft_patched_out_is_never_refused(self, monkeypatch):
         """The shape `tests/test_pretrain.py` actually uses, which caught this.
@@ -490,7 +517,7 @@ class TestTheDropoutConstraint:
         with pytest.raises(ValueError, match="ParamWrapper"):
             resolve_moe_lora_targets(_MOE_STAND_INS[arch](), self._tcfg(0.05), ["q_proj"])
 
-    @pytest.mark.parametrize("task", ["dpo", "sft"] )
+    @pytest.mark.parametrize("task", ["dpo", "sft"])
     def test_the_refusal_reaches_a_real_trainer_setup(self, task, monkeypatch):
         """End to end through the trainer's own setup, not just the helper.
 
@@ -502,8 +529,7 @@ class TestTheDropoutConstraint:
         if task == "sft":
             pytest.importorskip("trl")
         with pytest.raises(ValueError) as excinfo:
-            _attach_lora(task, monkeypatch, moe_lora=True, dropout=0.05,
-                         expect_failure=True)
+            _attach_lora(task, monkeypatch, moe_lora=True, dropout=0.05, expect_failure=True)
         message = str(excinfo.value)
         assert "training.moe_lora=true needs training.lora.dropout: 0.0" in message
         assert "lora.ParamWrapper does not work with lora_dropout != 0" in message
@@ -520,8 +546,7 @@ class TestTheDropoutConstraint:
     def test_dropout_is_untouched_without_moe_lora(self):
         """The rule is about moe_lora, not about dropout."""
         cfg = load_config_from_string(
-            "base: org/m\ntask: sft\ndata: {train: x.jsonl}\n"
-            "training: {lora: {dropout: 0.05}}\n"
+            "base: org/m\ntask: sft\ndata: {train: x.jsonl}\ntraining: {lora: {dropout: 0.05}}\n"
         )
         assert cfg.training.lora.dropout == 0.05
 
@@ -536,13 +561,13 @@ class TestTheDropoutConstraint:
         with pytest.raises(ValueError, match="ParamWrapper"):
             get_peft_model(
                 _tiny_moe(),
-                LoraConfig(r=4, lora_dropout=0.05, target_modules=targets,
-                           task_type=TaskType.CAUSAL_LM),
+                LoraConfig(
+                    r=4, lora_dropout=0.05, target_modules=targets, task_type=TaskType.CAUSAL_LM
+                ),
             )
         model = get_peft_model(
             _tiny_moe(),
-            LoraConfig(r=4, lora_dropout=0.0, target_modules=targets,
-                       task_type=TaskType.CAUSAL_LM),
+            LoraConfig(r=4, lora_dropout=0.0, target_modules=targets, task_type=TaskType.CAUSAL_LM),
         )
         assert [n for n in _adapted(model) if "experts" in n]
 
@@ -571,7 +596,10 @@ class TestTheStreamedPathUsesTheSameHelper:
 
         source = (
             pathlib.Path(__file__).resolve().parents[1]
-            / "src" / "soup_cli" / "trainer" / "stream_setup.py"
+            / "src"
+            / "soup_cli"
+            / "trainer"
+            / "stream_setup.py"
         ).read_text(encoding="utf-8")
 
         assert "resolve_moe_lora_targets" in source
@@ -616,9 +644,11 @@ class TestTheSweepInteraction:
         assert written["training"]["moe_aux_loss_coeff"] == 0.05
 
     def test_a_non_default_point_on_dpo_is_refused_and_the_default_is_not(self):
-        yaml_ = ("base: org/m\ntask: dpo\n"
-                 "data:\n  train: x.jsonl\n  format: dpo\n"
-                 "training:\n  moe_aux_loss_coeff: {}\n")
+        yaml_ = (
+            "base: org/m\ntask: dpo\n"
+            "data:\n  train: x.jsonl\n  format: dpo\n"
+            "training:\n  moe_aux_loss_coeff: {}\n"
+        )
         assert load_config_from_string(yaml_.format("0.01")).training.moe_aux_loss_coeff == 0.01
         with pytest.raises(ValueError, match="moe_aux_loss_coeff"):
             load_config_from_string(yaml_.format("0.05"))
@@ -648,10 +678,15 @@ class TestPerArchitectureCoverage:
         from soup_cli.utils.moe import get_moe_target_modules
 
         model = _MOE_STAND_INS[arch]()
-        attached = get_peft_model(model, LoraConfig(
-            r=4, lora_dropout=0.0, target_modules=get_moe_target_modules(model),
-            task_type=TaskType.CAUSAL_LM,
-        ))
+        attached = get_peft_model(
+            model,
+            LoraConfig(
+                r=4,
+                lora_dropout=0.0,
+                target_modules=get_moe_target_modules(model),
+                task_type=TaskType.CAUSAL_LM,
+            ),
+        )
         experts = [name for name in _adapted(attached) if "expert" in name.lower()]
         assert bool(experts) is self.EXPECTED[arch], (arch, experts)
 
@@ -662,8 +697,9 @@ class TestPerArchitectureCoverage:
         `minimax_m3_vl` wrapper.)"""
         from pathlib import Path
 
-        docs = (Path(__file__).resolve().parents[1]
-                / "docs" / "performance-and-quantization.md").read_text(encoding="utf-8")
+        docs = (
+            Path(__file__).resolve().parents[1] / "docs" / "performance-and-quantization.md"
+        ).read_text(encoding="utf-8")
         lowered = docs.lower()
         assert "minimax-m3-sft" in lowered, (
             "the recipe the wiring does not reach must be named in the docs"
@@ -737,7 +773,8 @@ class TestEveryMoeRecipeCanAttach:
         from soup_cli.recipes.catalog import RECIPES
 
         counted = sum(
-            1 for r in RECIPES.values()
+            1
+            for r in RECIPES.values()
             if (yaml.safe_load(r.yaml_str).get("training") or {}).get("moe_lora")
         )
         # 33 until #1145 removed mistral-large-3-sft/-dpo and minimax-m3-dpo, and took

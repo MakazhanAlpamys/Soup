@@ -317,9 +317,7 @@ def test_ingest_traces_skips_malformed_lines(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     log_file = tmp_path / "mixed.jsonl"
     log_file.write_text(
-        '{"input":"x","output":"y"}\n'
-        "not-json\n"
-        '{"input":"a","output":"b"}\n',
+        '{"input":"x","output":"y"}\nnot-json\n{"input":"a","output":"b"}\n',
         encoding="utf-8",
     )
     rows = list(ingest_traces(source="langfuse", path=str(log_file)))

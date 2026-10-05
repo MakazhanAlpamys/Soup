@@ -39,9 +39,7 @@ class _FakeDataset:
 class _FakeTrainer:
     def __init__(self, train_rows, columns, eval_rows=None):
         self.train_dataset = _FakeDataset(train_rows, columns)
-        self.eval_dataset = (
-            _FakeDataset(eval_rows, columns) if eval_rows is not None else None
-        )
+        self.eval_dataset = _FakeDataset(eval_rows, columns) if eval_rows is not None else None
 
 
 class _Cfg:
@@ -64,7 +62,9 @@ def _guard(wrapper, trainer, split="train"):
     from soup_cli.trainer.simpo import SimPOTrainerWrapper
 
     return SimPOTrainerWrapper._refuse_empty_completion_rows(
-        wrapper, trainer, split=split,
+        wrapper,
+        trainer,
+        split=split,
     )
 
 
@@ -118,9 +118,12 @@ class TestThePredicateMatchesTrl:
         )
 
         rows = [_combined(20, 18)]
-        assert preference_rows_with_empty_completion(
-            _FakeDataset(rows, COMBINED_COLUMNS),
-        ) == []
+        assert (
+            preference_rows_with_empty_completion(
+                _FakeDataset(rows, COMBINED_COLUMNS),
+            )
+            == []
+        )
 
     def test_a_truncated_pair_that_keeps_fourteen_tokens_is_not_flagged(self):
         from soup_cli.trainer._trl_compat import (
@@ -131,9 +134,12 @@ class TestThePredicateMatchesTrl:
         # normally on `main`, and the first version of this guard refused it by
         # re-applying trl's slice to already-truncated rows (#1208 review).
         rows = [_combined(MAX_LENGTH, 14)]
-        assert preference_rows_with_empty_completion(
-            _FakeDataset(rows, COMBINED_COLUMNS),
-        ) == []
+        assert (
+            preference_rows_with_empty_completion(
+                _FakeDataset(rows, COMBINED_COLUMNS),
+            )
+            == []
+        )
 
     def test_two_long_balanced_answers_are_not_flagged(self):
         from soup_cli.trainer._trl_compat import (
@@ -141,9 +147,12 @@ class TestThePredicateMatchesTrl:
         )
 
         rows = [_combined(MAX_LENGTH, MAX_LENGTH - 2)]
-        assert preference_rows_with_empty_completion(
-            _FakeDataset(rows, COMBINED_COLUMNS),
-        ) == []
+        assert (
+            preference_rows_with_empty_completion(
+                _FakeDataset(rows, COMBINED_COLUMNS),
+            )
+            == []
+        )
 
     def test_only_the_affected_row_is_reported(self):
         from soup_cli.trainer._trl_compat import (
@@ -171,9 +180,12 @@ class TestThePredicateMatchesTrl:
         )
 
         rows = [{"chosen_ids": list(range(80)), "rejected_ids": []}]
-        assert preference_rows_with_empty_completion(
-            _FakeDataset(rows, {"chosen_ids", "rejected_ids"}),
-        ) == []
+        assert (
+            preference_rows_with_empty_completion(
+                _FakeDataset(rows, {"chosen_ids", "rejected_ids"}),
+            )
+            == []
+        )
 
     def test_the_installed_trl_still_truncates_the_way_this_assumes(self):
         """The predicate rests on trl's own slice. Pin that slice.
@@ -234,7 +246,9 @@ class TestTheRefusal:
 
     def test_the_eval_split_is_checked_too(self):
         trainer = _FakeTrainer(
-            [_combined(20, 18)], COMBINED_COLUMNS, eval_rows=[_combined(MAX_LENGTH, 0)],
+            [_combined(20, 18)],
+            COMBINED_COLUMNS,
+            eval_rows=[_combined(MAX_LENGTH, 0)],
         )
         with pytest.raises(ValueError) as excinfo:
             _guard(_Wrapper(), trainer, split="eval")
@@ -257,8 +271,23 @@ class TestTheRefusal:
 
 
 WORDS = [
-    "<pad>", "<s>", "</s>", "<unk>", "what", "is", "one", "plus", "?",
-    "two", "three", "hello", "there", "hi", "no", "bad", "world",
+    "<pad>",
+    "<s>",
+    "</s>",
+    "<unk>",
+    "what",
+    "is",
+    "one",
+    "plus",
+    "?",
+    "two",
+    "three",
+    "hello",
+    "there",
+    "hi",
+    "no",
+    "bad",
+    "world",
 ]
 
 
@@ -277,16 +306,28 @@ def _tiny_model_dir(tmp_path):
     )
     raw.pre_tokenizer = pre_tokenizers.Whitespace()
     tok = PreTrainedTokenizerFast(
-        tokenizer_object=raw, bos_token="<s>", eos_token="</s>",
-        pad_token="<pad>", unk_token="<unk>",
+        tokenizer_object=raw,
+        bos_token="<s>",
+        eos_token="</s>",
+        pad_token="<pad>",
+        unk_token="<unk>",
     )
     torch.manual_seed(0)
     path = tmp_path / "tiny"
-    LlamaForCausalLM(LlamaConfig(
-        vocab_size=len(WORDS), hidden_size=32, intermediate_size=64,
-        num_hidden_layers=2, num_attention_heads=2, num_key_value_heads=2,
-        pad_token_id=0, bos_token_id=1, eos_token_id=2, max_position_embeddings=512,
-    )).save_pretrained(path)
+    LlamaForCausalLM(
+        LlamaConfig(
+            vocab_size=len(WORDS),
+            hidden_size=32,
+            intermediate_size=64,
+            num_hidden_layers=2,
+            num_attention_heads=2,
+            num_key_value_heads=2,
+            pad_token_id=0,
+            bos_token_id=1,
+            eos_token_id=2,
+            max_position_embeddings=512,
+        )
+    ).save_pretrained(path)
     tok.save_pretrained(path)
     return path
 
@@ -322,11 +363,13 @@ def _setup_simpo(tmp_path, monkeypatch, rows):
 
 
 def _rows(chosen_words: int, rejected: str):
-    return [{
-        "prompt": "what is one plus one ?",
-        "chosen": " ".join(["hello"] * chosen_words),
-        "rejected": rejected,
-    }] * 4
+    return [
+        {
+            "prompt": "what is one plus one ?",
+            "chosen": " ".join(["hello"] * chosen_words),
+            "rejected": rejected,
+        }
+    ] * 4
 
 
 def _trainable(row, side: str) -> int:
@@ -368,15 +411,19 @@ class TestOnARealCpoTrainer:
 
     def test_the_issues_own_control_still_loads(self, tmp_path, monkeypatch):
         wrapper = _setup_simpo(
-            tmp_path, monkeypatch, _rows(80, " ".join(["bad"] * 30)),
+            tmp_path,
+            monkeypatch,
+            _rows(80, " ".join(["bad"] * 30)),
         )
         assert _trainable(wrapper.trainer.train_dataset[0], "rejected") == 14
 
     def test_two_long_balanced_answers_still_load(self, tmp_path, monkeypatch):
-        rows = [{
-            "prompt": "what is one plus one ?",
-            "chosen": " ".join(["hello"] * 70),
-            "rejected": " ".join(["bad"] * 68),
-        }] * 4
+        rows = [
+            {
+                "prompt": "what is one plus one ?",
+                "chosen": " ".join(["hello"] * 70),
+                "rejected": " ".join(["bad"] * 68),
+            }
+        ] * 4
         wrapper = _setup_simpo(tmp_path, monkeypatch, rows)
         assert _trainable(wrapper.trainer.train_dataset[0], "rejected") > 0

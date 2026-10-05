@@ -49,9 +49,7 @@ class TestVisionAudioQuantMenuSchema:
     # Every quant-menu format the unified loader supports, on BOTH multi-modal
     # modalities — covers the docstring-advertised menu incl. aqlm / mxfp4 / fp8.
     @pytest.mark.parametrize("modality", ["vision", "audio"])
-    @pytest.mark.parametrize(
-        "fmt", ["gptq", "awq", "hqq:4bit", "aqlm", "eetq", "mxfp4", "fp8"]
-    )
+    @pytest.mark.parametrize("fmt", ["gptq", "awq", "hqq:4bit", "aqlm", "eetq", "mxfp4", "fp8"])
     def test_quant_menu_format_accepted(self, modality, fmt):
         data_fmt = "llava" if modality == "vision" else "audio"
         cfg = load_config_from_string(

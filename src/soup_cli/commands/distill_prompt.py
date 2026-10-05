@@ -26,26 +26,19 @@ def distill_prompt_cmd(
     strategy: str = typer.Option(
         "sft",
         "--strategy",
-        help="Distill strategy. Allowed: "
-        + ", ".join(sorted(SUPPORTED_DISTILL_STRATEGIES)),
+        help="Distill strategy. Allowed: " + ", ".join(sorted(SUPPORTED_DISTILL_STRATEGIES)),
     ),
     provider: str = typer.Option(
         "ollama",
         "--provider",
         help="Teacher/student provider: ollama / anthropic / vllm.",
     ),
-    base_url: str = typer.Option(
-        None, "--base-url", help="Provider base URL (ollama / vllm)."
-    ),
+    base_url: str = typer.Option(None, "--base-url", help="Provider base URL (ollama / vllm)."),
     temperature: float = typer.Option(
         0.0, "--temperature", help="Sampling temperature for teacher/student."
     ),
-    max_rows: int = typer.Option(
-        None, "--max-rows", help="Cap the number of distilled rows."
-    ),
-    output: str = typer.Option(
-        "distilled.jsonl", "--output", "-o", help="Output JSONL path"
-    ),
+    max_rows: int = typer.Option(None, "--max-rows", help="Cap the number of distilled rows."),
+    output: str = typer.Option("distilled.jsonl", "--output", "-o", help="Output JSONL path"),
     plan_only: bool = typer.Option(
         False, "--plan-only", help="Render plan + exit 0 (no live preparation)."
     ),
@@ -110,16 +103,11 @@ def distill_prompt_cmd(
     call_line = ""
     title = "soup distill-prompt — done"
     if stats.failures:
-        call_line = (
-            f"Provider calls: [bold yellow]{stats.failures} of "
-            f"{stats.calls} failed[/]\n"
-        )
+        call_line = f"Provider calls: [bold yellow]{stats.failures} of {stats.calls} failed[/]\n"
         title = "soup distill-prompt — done with provider failures"
     console.print(
         Panel(
-            f"{call_line}"
-            f"Rows:   [bold]{n}[/]\n"
-            f"Output: [bold]{escape(plan.output_path)}[/]",
+            f"{call_line}Rows:   [bold]{n}[/]\nOutput: [bold]{escape(plan.output_path)}[/]",
             title=title,
         )
     )

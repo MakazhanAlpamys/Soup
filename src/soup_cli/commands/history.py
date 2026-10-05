@@ -16,7 +16,8 @@ console = Console()
 
 def history(
     name: str = typer.Argument(
-        ..., help="Registry entry name to trace (e.g. 'medical-chat')",
+        ...,
+        help="Registry entry name to trace (e.g. 'medical-chat')",
     ),
 ) -> None:
     """Show the lineage tree for all entries with a given name."""
@@ -29,9 +30,7 @@ def history(
     with RegistryStore() as store:
         entries = store.list_by_name(name)
         if not entries:
-            console.print(
-                f"[red]No registry entries named '{escape(name)}'.[/]"
-            )
+            console.print(f"[red]No registry entries named '{escape(name)}'.[/]")
             # v0.40.1 Part D / N6 — disambiguate model registry vs dataset
             # registry. Look up <name> in dataset registry; if found, point
             # the user at `soup data registry`.
@@ -41,9 +40,7 @@ def history(
                     f"local dataset registry — did you mean "
                     f"`soup data registry` or `soup data inspect {escape(name)}`?[/]"
                 )
-            console.print(
-                "[dim]`soup history` queries the *model* registry only.[/]"
-            )
+            console.print("[dim]`soup history` queries the *model* registry only.[/]")
             raise typer.Exit(1)
 
         tree = Tree(f"[bold cyan]{escape(name)}[/]")
@@ -74,8 +71,7 @@ def history(
             # lineage edge so `soup adapters branch --attach-to-registry`
             # snapshots show up in the DAG view.
             branch_refs = [
-                art for art in store.get_artifacts(entry["id"])
-                if art.get("kind") == "branch_ref"
+                art for art in store.get_artifacts(entry["id"]) if art.get("kind") == "branch_ref"
             ]
             if branch_refs:
                 br_node = node.add("[dim]branches[/]")

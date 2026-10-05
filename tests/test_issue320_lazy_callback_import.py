@@ -110,8 +110,7 @@ def test_lazy_class_is_cached(mod_path, cls_name):
         ),
         (
             "soup_cli.monitoring.hf_push",
-            "m.build_push_callback("
-            "repo_id='user/repo', output_dir='out', explicit_token='tok')",
+            "m.build_push_callback(repo_id='user/repo', output_dir='out', explicit_token='tok')",
         ),
     ],
 )

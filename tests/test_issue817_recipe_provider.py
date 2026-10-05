@@ -352,8 +352,7 @@ def test_recipe_cli_preserves_legitimate_empty_completion(
     output = _terminal_text(result)
     assert result.exit_code == 0, (output, repr(result.exception))
     rows = [
-        json.loads(line)
-        for line in (tmp_path / "out" / "samp1.jsonl").read_text().splitlines()
+        json.loads(line) for line in (tmp_path / "out" / "samp1.jsonl").read_text().splitlines()
     ]
     assert [row["provider1"] for row in rows] == ["", ""]
     assert "2 provider calls, 0 failures" in output
@@ -397,8 +396,7 @@ def test_recipe_cli_reports_partial_failure_and_keeps_successful_empty_row(
     output = _terminal_text(result)
     assert result.exit_code == 0, (output, repr(result.exception))
     rows = [
-        json.loads(line)
-        for line in (tmp_path / "out" / "samp1.jsonl").read_text().splitlines()
+        json.loads(line) for line in (tmp_path / "out" / "samp1.jsonl").read_text().splitlines()
     ]
     assert rows == [{"text": "drop", "provider1": ""}]
     assert "2 provider calls, 1 failure" in output
@@ -565,8 +563,7 @@ def test_provider_failure_endpoint_label_ignores_anthropic_base_url(
     from soup_cli.utils.recipe_run import _provider_endpoint_label
 
     assert (
-        _provider_endpoint_label(provider_name, "http://127.0.0.1:9")
-        == "https://api.anthropic.com"
+        _provider_endpoint_label(provider_name, "http://127.0.0.1:9") == "https://api.anthropic.com"
     )
 
 
@@ -626,10 +623,16 @@ def test_recipe_cli_anthropic_failure_names_the_real_endpoint_not_base_url(
     result = CliRunner().invoke(
         app,
         [
-            "data", "recipe", str(recipe_path),
-            "--execute", "--output", "out",
-            "--provider", "anthropic",
-            "--base-url", given_base_url,
+            "data",
+            "recipe",
+            str(recipe_path),
+            "--execute",
+            "--output",
+            "out",
+            "--provider",
+            "anthropic",
+            "--base-url",
+            given_base_url,
         ],
     )
 

@@ -206,9 +206,7 @@ def test_doctor_config_prints_all_clear_when_no_unread_flags_set(
     assert expected_msg in out
 
 
-def test_mlx_reports_unread_flags_regardless_of_modality(
-    temp_config_file, capsys, monkeypatch
-):
+def test_mlx_reports_unread_flags_regardless_of_modality(temp_config_file, capsys, monkeypatch):
     """MLX has no multimodal vision collator and ignores modality; unread flags must be reported."""
     from rich.console import Console
 
@@ -231,7 +229,4 @@ def test_mlx_reports_unread_flags_regardless_of_modality(
     out = strip_ansi(capsys.readouterr().out)
     assert "Config check - task=sft backend=mlx modality=vision" in out
     assert "training.seed" in out
-    assert (
-        "1 setting(s) switched on here are not read on backend=mlx (modality=vision)"
-        in out
-    )
+    assert "1 setting(s) switched on here are not read on backend=mlx (modality=vision)" in out

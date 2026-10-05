@@ -149,8 +149,13 @@ def _dense_model(auto_class: str):
     small = {
         key: value
         for key, value in _SMALL.items()
-        if key not in ("moe_intermediate_size", "num_experts", "num_experts_per_tok",
-                       "decoder_sparse_step")
+        if key
+        not in (
+            "moe_intermediate_size",
+            "num_experts",
+            "num_experts_per_tok",
+            "decoder_sparse_step",
+        )
     }
     config = Qwen3Config(**small, num_labels=1)
     return {
@@ -185,9 +190,7 @@ def _attach(task: str, monkeypatch, *, moe_lora: bool, dense: bool = False):
     tokenizer = SimpleNamespace(
         pad_token=None, eos_token="</s>", pad_token_id=0, chat_template="{{ x }}"
     )
-    monkeypatch.setattr(
-        transformers.AutoTokenizer, "from_pretrained", lambda *_a, **_k: tokenizer
-    )
+    monkeypatch.setattr(transformers.AutoTokenizer, "from_pretrained", lambda *_a, **_k: tokenizer)
     build = _dense_model if dense else _moe_model
     monkeypatch.setattr(
         getattr(transformers, auto_class),
@@ -225,9 +228,7 @@ def _attach(task: str, monkeypatch, *, moe_lora: bool, dense: bool = False):
         elif isinstance(exc, ValueError):
             raise
         else:
-            raise AssertionError(
-                f"{task}: setup failed before the LoRA attach: {exc!r}"
-            ) from exc
+            raise AssertionError(f"{task}: setup failed before the LoRA attach: {exc!r}") from exc
     if getattr(wrapper, "peft_config", None) is not None and not _adapted(wrapper.model):
         # online_dpo hands its config to TRL, which attaches it; do the same.
         from peft import get_peft_model
@@ -322,12 +323,16 @@ class TestTheClassifierFamilyNeedsItsAdapter:
         training["num_labels"] = 2
         if classifier_lora:
             training["classifier_lora"] = True
-        return load_config_from_string(yaml.safe_dump({
-            "base": "org/tiny-moe",
-            "task": task,
-            "data": {"train": "./x.jsonl", "format": "auto"},
-            "training": training,
-        }))
+        return load_config_from_string(
+            yaml.safe_dump(
+                {
+                    "base": "org/tiny-moe",
+                    "task": task,
+                    "data": {"train": "./x.jsonl", "format": "auto"},
+                    "training": training,
+                }
+            )
+        )
 
     @pytest.mark.parametrize("task", ["classifier", "reranker", "cross_encoder"])
     def test_without_classifier_lora_it_is_refused(self, task):
@@ -425,7 +430,8 @@ class TestEveryAdapterBuildingTrainerReadsTheFlag:
             if "build_lora_config" in self._calls(p)
         }
         missing = sorted(
-            name for name, calls in builders.items()
+            name
+            for name, calls in builders.items()
             if "resolve_moe_lora_targets" not in calls and name not in self.REFUSED_MODULES
         )
 
@@ -451,7 +457,9 @@ class TestThePathsThatNeverReadIt:
             task, "alpaca"
         )
         raw = {
-            "base": "org/m", "task": task, "backend": "unsloth",
+            "base": "org/m",
+            "task": task,
+            "backend": "unsloth",
             "data": {"train": "./x.jsonl", "format": fmt},
             "training": {"moe_lora": True, "lora": {"r": 4, "dropout": 0.0}},
         }
@@ -463,7 +471,9 @@ class TestThePathsThatNeverReadIt:
         import yaml
 
         raw = {
-            "base": "org/m", "task": "sft", "modality": modality,
+            "base": "org/m",
+            "task": "sft",
+            "modality": modality,
             "data": {"train": "./x.jsonl", "format": fmt},
             "training": {"moe_lora": True, "lora": {"r": 4, "dropout": 0.0}},
         }
@@ -479,7 +489,9 @@ class TestThePathsThatNeverReadIt:
         import yaml
 
         raw = {
-            "base": "org/m", "task": task, "modality": "vision",
+            "base": "org/m",
+            "task": task,
+            "modality": "vision",
             "data": {"train": "./x.jsonl", "format": "llava"},
             "training": {"moe_lora": True, "lora": {"r": 4, "dropout": 0.0}},
         }

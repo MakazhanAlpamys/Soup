@@ -131,10 +131,7 @@ def is_documented(path: tuple[str, ...], doc: str) -> bool:
         # cli._rewrite_advise_argv turns documented `soup advise <data>` into
         # `soup advise run <data>`. Anchor on `<` so compare/explain rows cannot
         # satisfy the special case.
-        return any(
-            _command_column(line).startswith("soup advise <")
-            for line in _entry_rows(doc)
-        )
+        return any(_command_column(line).startswith("soup advise <") for line in _entry_rows(doc))
     needle = "soup " + " ".join(path)
     boundary = re.compile(r"^" + re.escape(needle) + r"(?![\w.-])")
     leaf = path[-1]
@@ -148,9 +145,7 @@ def is_documented(path: tuple[str, ...], doc: str) -> bool:
     return False
 
 
-def undocumented_commands(
-    doc: str, leaves: Iterable[tuple[str, ...]] | None = None
-) -> list[str]:
+def undocumented_commands(doc: str, leaves: Iterable[tuple[str, ...]] | None = None) -> list[str]:
     """Return `soup …` paths missing from ``doc``."""
     if leaves is None:
         leaves = iter_leaf_paths()
@@ -193,8 +188,7 @@ class TestCommandsMdCoversRegisteredCommands:
         violations = [
             line
             for line in _entry_rows(doc)
-            if len(re.split(r"\s{2,}", line, maxsplit=1)) == 1
-            and line not in allowlist
+            if len(re.split(r"\s{2,}", line, maxsplit=1)) == 1 and line not in allowlist
         ]
         assert not violations, (
             "Entry rows must separate command column from description with 2+ spaces:\n  - "
@@ -219,10 +213,7 @@ class TestCommandsMdCoverageGuardHasTeeth:
             "Proxy to the llama.cpp binaries\n"
         )
         assert undocumented_commands(stub, leaves=[("llama", "quantize")]) == []
-        stub_old = (
-            "soup llama cli|mtmd-cli|gguf-split|server ... "
-            "Proxy to the llama.cpp binaries\n"
-        )
+        stub_old = "soup llama cli|mtmd-cli|gguf-split|server ... Proxy to the llama.cpp binaries\n"
         assert undocumented_commands(stub_old, leaves=[("llama", "quantize")]) == [
             "soup llama quantize"
         ]
@@ -230,9 +221,7 @@ class TestCommandsMdCoverageGuardHasTeeth:
     def test_stripped_advise_data_row_is_reported(self) -> None:
         doc = COMMANDS_MD.read_text(encoding="utf-8")
         scrubbed = "\n".join(
-            line
-            for line in doc.splitlines()
-            if not line.startswith("soup advise <")
+            line for line in doc.splitlines() if not line.startswith("soup advise <")
         )
         missing = undocumented_commands(scrubbed, leaves=[("advise", "run")])
         assert missing == ["soup advise run"]
@@ -250,9 +239,7 @@ class TestCommandsMdCoverageGuardHasTeeth:
         self, target: str, cmd_path: tuple[str, ...]
     ) -> None:
         doc = COMMANDS_MD.read_text(encoding="utf-8")
-        scrubbed = "\n".join(
-            line for line in doc.splitlines() if not line.startswith(target)
-        )
+        scrubbed = "\n".join(line for line in doc.splitlines() if not line.startswith(target))
         missing = undocumented_commands(scrubbed, leaves=[cmd_path])
         assert missing == [target]
 
@@ -263,9 +250,7 @@ class TestCoverageRequiresARealEntry:
 
     def test_longer_command_does_not_document_its_prefix(self) -> None:
         stub = "soup eval gate-install --baseline X  Install gate\n"
-        assert undocumented_commands(stub, leaves=[("eval", "gate")]) == [
-            "soup eval gate"
-        ]
+        assert undocumented_commands(stub, leaves=[("eval", "gate")]) == ["soup eval gate"]
 
     def test_prose_mention_does_not_count_as_documentation(self) -> None:
         stub = "See `soup ui` in the paragraph below for details.\n"
@@ -276,9 +261,7 @@ class TestCoverageRequiresARealEntry:
             "soup llama cli|mtmd-cli|gguf-split|server|quantize ... "
             "Proxy to the llama.cpp binaries\n"
         )
-        assert undocumented_commands(stub, leaves=[("quantize",)]) == [
-            "soup quantize"
-        ]
+        assert undocumented_commands(stub, leaves=[("quantize",)]) == ["soup quantize"]
         assert undocumented_commands(stub, leaves=[("llama", "quantize")]) == []
 
     def test_mention_in_another_entry_row_description_does_not_credit_command(
@@ -296,16 +279,12 @@ class TestCoverageRequiresARealEntry:
             "soup steer apply --name <id> --strength <s>  "
             "Preview a stored steering vector; soup steer list lists them\n"
         )
-        assert undocumented_commands(stub, leaves=[("steer", "list")]) == [
-            "soup steer list"
-        ]
+        assert undocumented_commands(stub, leaves=[("steer", "list")]) == ["soup steer list"]
         assert undocumented_commands(stub, leaves=[("steer", "apply")]) == []
 
     def test_dot_lookahead_prevents_prefix_credit(self) -> None:
         stub = "soup eval gate.v2 --baseline X  Install gate v2\n"
-        assert undocumented_commands(stub, leaves=[("eval", "gate")]) == [
-            "soup eval gate"
-        ]
+        assert undocumented_commands(stub, leaves=[("eval", "gate")]) == ["soup eval gate"]
 
     def test_single_space_row_does_not_credit_contained_command(self) -> None:
         stub = "soup draft list List drafts that soup serve --auto-spec picks up\n"

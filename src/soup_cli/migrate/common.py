@@ -16,9 +16,7 @@ def validate_input_path(path: Path) -> Path:
     resolved = path.resolve()
     # Check path traversal first (before checking existence)
     if not is_under_cwd(path):
-        raise ValueError(
-            f"Input path is outside the current directory: {path}"
-        )
+        raise ValueError(f"Input path is outside the current directory: {path}")
     if not resolved.exists():
         raise ValueError(f"Input file not found: {path}")
     if resolved.stat().st_size > MAX_CONFIG_FILE_SIZE:
@@ -35,9 +33,7 @@ def validate_output_path(path: Path) -> Path:
 
     resolved = (Path.cwd() / path).resolve()
     if not is_under_cwd(resolved):
-        raise ValueError(
-            f"Output path is outside the current directory: {path}"
-        )
+        raise ValueError(f"Output path is outside the current directory: {path}")
     return resolved
 
 

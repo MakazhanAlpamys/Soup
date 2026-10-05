@@ -166,9 +166,9 @@ class TestRunRecord:
 
         with caplog.at_level(logging.WARNING):
             cb.on_train_end(None, state, control)
-        assert any(
-            r.levelno >= logging.WARNING for r in caplog.records
-        ), "5% fraction must trigger WARNING"
+        assert any(r.levelno >= logging.WARNING for r in caplog.records), (
+            "5% fraction must trigger WARNING"
+        )
 
 
 # ===========================================================================
@@ -229,6 +229,7 @@ class TestMicrobatchPlacement:
 # AttributeError rather than silently auto-generating child mocks.
 # ---------------------------------------------------------------------------
 
+
 class _CallbackHandler:
     """Minimal callback_handler stand-in with a mutable callbacks list."""
 
@@ -280,8 +281,7 @@ class TestEnsureGRPOStabilityCallback:
 
         assert result is True, "Must attach on first call"
         assert any(
-            isinstance(cb, GRPOStabilityCallback)
-            for cb in trainer.callback_handler.callbacks
+            isinstance(cb, GRPOStabilityCallback) for cb in trainer.callback_handler.callbacks
         ), "Callback must be in the handler's list"
 
     def test_skips_duplicate_when_already_attached(self):
@@ -299,9 +299,7 @@ class TestEnsureGRPOStabilityCallback:
 
         assert result is False, "Second call must be no-op"
         count = sum(
-            1
-            for cb in trainer.callback_handler.callbacks
-            if isinstance(cb, GRPOStabilityCallback)
+            1 for cb in trainer.callback_handler.callbacks if isinstance(cb, GRPOStabilityCallback)
         )
         assert count == 1, f"Expected exactly 1 callback, got {count}"
 
@@ -317,13 +315,10 @@ class TestEnsureGRPOStabilityCallback:
         trainer = _TrainerWithoutCallbackHandler()
         result = ensure_grpo_stability_callback(trainer)
 
-        assert result is True, (
-            "Must attach even without callback_handler"
+        assert result is True, "Must attach even without callback_handler"
+        assert any(isinstance(cb, GRPOStabilityCallback) for cb in trainer._attached), (
+            "Callback must be in the trainer's internal list"
         )
-        assert any(
-            isinstance(cb, GRPOStabilityCallback)
-            for cb in trainer._attached
-        ), "Callback must be in the trainer's internal list"
 
     def test_returns_false_for_bare_trainer(self):
         """Bare trainer without add_callback must not crash."""
@@ -334,9 +329,7 @@ class TestEnsureGRPOStabilityCallback:
         trainer = _BareTrainer()
         result = ensure_grpo_stability_callback(trainer)
 
-        assert result is False, (
-            "Must return False for trainers without add_callback"
-        )
+        assert result is False, "Must return False for trainers without add_callback"
 
     def test_returns_false_for_none_and_non_trainer(self):
         """Degenerate inputs (None, string, int) must degrade safely."""

@@ -27,7 +27,8 @@ def _sanitize_commit_message(message: Optional[str]) -> str:
 
 
 def publish_can(
-    can_path: str, *,
+    can_path: str,
+    *,
     repo_id: str,
     token: Optional[str] = None,
     private: bool = False,
@@ -57,16 +58,17 @@ def publish_can(
 
     resolved = token or resolve_token()
     if not resolved:
-        raise ValueError(
-            "no HF token found - set HF_TOKEN env var or `huggingface-cli login`"
-        )
+        raise ValueError("no HF token found - set HF_TOKEN env var or `huggingface-cli login`")
 
     from huggingface_hub import HfApi
 
     api = HfApi()
     api.create_repo(
-        repo_id=repo_id, repo_type="dataset",
-        token=resolved, private=private, exist_ok=True,
+        repo_id=repo_id,
+        repo_type="dataset",
+        token=resolved,
+        private=private,
+        exist_ok=True,
     )
 
     sanitized_msg = _sanitize_commit_message(commit_message)

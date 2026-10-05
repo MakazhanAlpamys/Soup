@@ -26,8 +26,7 @@ class TestDeclaredTable:
         classified = set(dp.PREPROCESS_KEY_FIELDS) | set(dp.NOT_PREPROCESS_KEY_FIELDS)
         missing = set(DataConfig.model_fields) - classified
         assert not missing, (
-            "classify in PREPROCESS_KEY_FIELDS or NOT_PREPROCESS_KEY_FIELDS: "
-            f"{sorted(missing)}"
+            f"classify in PREPROCESS_KEY_FIELDS or NOT_PREPROCESS_KEY_FIELDS: {sorted(missing)}"
         )
 
     def test_classified_fields_exist_on_the_schema(self):

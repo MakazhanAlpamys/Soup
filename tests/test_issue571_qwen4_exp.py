@@ -116,17 +116,13 @@ def test_qwen4_exp_outer_config_builds_text_only_causal_lm_and_lora():
     assert type(model).__name__ == "Qwen4ExpForCausalLM"
     assert model.config.model_type == "qwen4_exp_text"
     assert not [
-        name
-        for name, _ in model.named_parameters()
-        if "vision" in name or "visual" in name
+        name for name, _ in model.named_parameters() if "vision" in name or "visual" in name
     ]
 
     targets = resolve_lora_target_modules(model, "auto")
     torch_int32 = torch.int32
     indexers = [
-        module
-        for module in model.modules()
-        if type(module).__name__ == "Qwen4ExpTextQSAIndexer"
+        module for module in model.modules() if type(module).__name__ == "Qwen4ExpTextQSAIndexer"
     ]
     class_forward = type(indexers[0]).forward
     apply_pre_lora_patches(model, "Qwen/Qwen3.8-Flash-Next")
@@ -166,9 +162,7 @@ def test_qwen4_exp_outer_config_builds_text_only_causal_lm_and_lora():
     assert torch.isfinite(loss).item()
     loss.backward()
     trainable = {
-        name: parameter
-        for name, parameter in model.named_parameters()
-        if parameter.requires_grad
+        name: parameter for name, parameter in model.named_parameters() if parameter.requires_grad
     }
     assert trainable
     for family in (

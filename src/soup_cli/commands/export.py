@@ -18,10 +18,15 @@ from soup_cli.utils.terminal import for_terminal
 console = Console()
 
 SUPPORTED_FORMATS = (
-    "gguf", "onnx", "tensorrt", "awq", "gptq",
+    "gguf",
+    "onnx",
+    "tensorrt",
+    "awq",
+    "gptq",
     # v0.52.0 Part D — BitNet 1.58-bit + TQ1_0 GGUF.
     # Schema-only stubs in v0.52.0; live conversion lands in v0.52.1.
-    "bitnet", "tq1_0",
+    "bitnet",
+    "tq1_0",
     # v0.53.1 #142 — TorchAO PTQ live wiring (Int4WeightOnly / Int8DynActInt4 /
     # Float8DynActFloat8 / NVFP4). Requires --quant-config <yaml>.
     "torchao",
@@ -123,8 +128,7 @@ def export(
         None,
         "--quant-config",
         help=(
-            "Path to YAML for torchao PTQ export (v0.53.1 #142). "
-            "Required when --format=torchao."
+            "Path to YAML for torchao PTQ export (v0.53.1 #142). Required when --format=torchao."
         ),
     ),
     gguf_flavour: Optional[str] = typer.Option(
@@ -168,8 +172,7 @@ def export(
 
     if fmt not in SUPPORTED_FORMATS:
         console.print(
-            f"[red]Unsupported format: {fmt}[/]\n"
-            f"Supported: {', '.join(SUPPORTED_FORMATS)}"
+            f"[red]Unsupported format: {fmt}[/]\nSupported: {', '.join(SUPPORTED_FORMATS)}"
         )
         raise typer.Exit(1)
 
@@ -186,23 +189,38 @@ def export(
     # --- AWQ export path ---
     if fmt == "awq":
         _export_awq(
-            model_path, output, base, bits, group_size,
-            calibration_data, calibration_samples, trust_remote_code,
+            model_path,
+            output,
+            base,
+            bits,
+            group_size,
+            calibration_data,
+            calibration_samples,
+            trust_remote_code,
         )
         return
 
     # --- GPTQ export path ---
     if fmt == "gptq":
         _export_gptq(
-            model_path, output, base, bits, group_size,
-            calibration_data, calibration_samples, trust_remote_code,
+            model_path,
+            output,
+            base,
+            bits,
+            group_size,
+            calibration_data,
+            calibration_samples,
+            trust_remote_code,
         )
         return
 
     # --- TorchAO PTQ export path (v0.53.1 #142) ---
     if fmt == "torchao":
         _export_torchao_cli(
-            model_path, output, quant_config, trust_remote_code,
+            model_path,
+            output,
+            quant_config,
+            trust_remote_code,
         )
         return
 
@@ -236,8 +254,7 @@ def export(
 
     if quant not in GGUF_QUANT_TYPES:
         console.print(
-            f"[red]Unsupported quantization: {quant}[/]\n"
-            f"Supported: {', '.join(GGUF_QUANT_TYPES)}"
+            f"[red]Unsupported quantization: {quant}[/]\nSupported: {', '.join(GGUF_QUANT_TYPES)}"
         )
         raise typer.Exit(1)
 
@@ -270,7 +287,10 @@ def export(
 
         merge_dir = model_path.parent / f".soup_merge_tmp_{model_path.name}"
         _merge_adapter(
-            str(model_path), base_model, str(merge_dir), trust_remote_code,
+            str(model_path),
+            base_model,
+            str(merge_dir),
+            trust_remote_code,
         )
         model_path = merge_dir
 
@@ -318,9 +338,7 @@ def export(
             # unrelated --output. A private temp directory cannot collide with any
             # file the user owns, and removing the whole directory keeps the
             # multi-gigabyte intermediate from being left behind.
-            tmp_dir = Path(
-                tempfile.mkdtemp(prefix=".soup_gguf_", dir=str(output_path.parent))
-            )
+            tmp_dir = Path(tempfile.mkdtemp(prefix=".soup_gguf_", dir=str(output_path.parent)))
             try:
                 f16_path = tmp_dir / f"{model_name}.f16.gguf"
                 console.print("[dim]Converting to GGUF (f16)...[/]")
@@ -344,8 +362,10 @@ def export(
 
     # v0.33.0 #35: optional auto-attach to registry entry
     _maybe_attach_export(
-        artifact_path=str(output_path), kind="gguf",
-        explicit_id=registry_id, source_model=str(Path(model)),
+        artifact_path=str(output_path),
+        kind="gguf",
+        explicit_id=registry_id,
+        source_model=str(Path(model)),
     )
 
     file_size = output_path.stat().st_size
@@ -521,8 +541,16 @@ def _find_llama_cpp(user_path: Optional[str] = None) -> Path:
 
     try:
         subprocess.run(
-            ["git", "clone", "--depth", "1", "--branch", LLAMA_CPP_TAG,
-             "https://github.com/ggerganov/llama.cpp.git", str(soup_llama)],
+            [
+                "git",
+                "clone",
+                "--depth",
+                "1",
+                "--branch",
+                LLAMA_CPP_TAG,
+                "https://github.com/ggerganov/llama.cpp.git",
+                str(soup_llama),
+            ],
             check=True,
             capture_output=True,
             text=True,
@@ -550,10 +578,13 @@ def _run_convert(script: Path, model_dir: Path, output_path: Path, outtype: str)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     cmd = [
-        sys.executable, str(script),
+        sys.executable,
+        str(script),
         str(model_dir),
-        "--outfile", str(output_path),
-        "--outtype", outtype,
+        "--outfile",
+        str(output_path),
+        "--outtype",
+        outtype,
     ]
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
@@ -617,7 +648,9 @@ def _find_quantize_binary(llama_dir: Path) -> Optional[Path]:
 
 
 def _export_onnx(
-    model_path: Path, output: Optional[str], base: Optional[str],
+    model_path: Path,
+    output: Optional[str],
+    base: Optional[str],
     task: str = "text-generation",
     trust_remote_code: bool = False,
 ):
@@ -627,7 +660,7 @@ def _export_onnx(
     except ImportError:
         console.print(
             "[red]optimum not installed.[/]\n"
-            "Install with: [bold]pip install \"soup-cli\\[onnx]\"[/]\n"
+            'Install with: [bold]pip install "soup-cli\\[onnx]"[/]\n'
             "Or directly: [bold]pip install optimum[onnx][/]"
         )
         raise typer.Exit(1)
@@ -712,7 +745,7 @@ def _export_tensorrt(
     if not trtllm_available:
         console.print(
             "[red]tensorrt_llm not installed.[/]\n"
-            "Install with: [bold]pip install \"soup-cli\\[tensorrt]\"[/]\n"
+            'Install with: [bold]pip install "soup-cli\\[tensorrt]"[/]\n'
             "Or follow: https://github.com/NVIDIA/TensorRT-LLM#installation"
         )
         raise typer.Exit(1)
@@ -770,11 +803,15 @@ def _export_tensorrt(
         try:
             result = subprocess.run(
                 [
-                    sys.executable, "-m",
+                    sys.executable,
+                    "-m",
                     "tensorrt_llm.commands.convert_checkpoint",
-                    "--model_dir", str(source_path),
-                    "--output_dir", str(ckpt_dir),
-                    "--dtype", "float16",
+                    "--model_dir",
+                    str(source_path),
+                    "--output_dir",
+                    str(ckpt_dir),
+                    "--dtype",
+                    "float16",
                 ],
                 capture_output=True,
                 text=True,
@@ -783,9 +820,7 @@ def _export_tensorrt(
             console.print("[red]Python executable not found.[/]")
             raise typer.Exit(1)
         if result.returncode != 0:
-            console.print(
-                f"[red]Checkpoint conversion failed:[/]\n{result.stderr}"
-            )
+            console.print(f"[red]Checkpoint conversion failed:[/]\n{result.stderr}")
             raise typer.Exit(1)
 
         # Step 2: Build TensorRT engine
@@ -797,9 +832,12 @@ def _export_tensorrt(
             result = subprocess.run(
                 [
                     "trtllm-build",
-                    "--checkpoint_dir", str(ckpt_dir),
-                    "--output_dir", str(engine_dir),
-                    "--gemm_plugin", "float16",
+                    "--checkpoint_dir",
+                    str(ckpt_dir),
+                    "--output_dir",
+                    str(engine_dir),
+                    "--gemm_plugin",
+                    "float16",
                 ],
                 capture_output=True,
                 text=True,
@@ -812,9 +850,7 @@ def _export_tensorrt(
             )
             raise typer.Exit(1)
         if result.returncode != 0:
-            console.print(
-                f"[red]TensorRT engine build failed:[/]\n{result.stderr}"
-            )
+            console.print(f"[red]TensorRT engine build failed:[/]\n{result.stderr}")
             raise typer.Exit(1)
 
     finally:
@@ -897,9 +933,7 @@ def _load_calibration_texts(cal_path: Optional[Path], max_samples: int = 128) ->
                 if len(texts) >= max_samples:
                     break
     except UnicodeError as exc:
-        raise _CalibrationDataReadError(
-            f"Calibration data is not valid UTF-8: {cal_path}"
-        ) from exc
+        raise _CalibrationDataReadError(f"Calibration data is not valid UTF-8: {cal_path}") from exc
     except OSError as exc:
         raise _CalibrationDataReadError(
             f"Could not read calibration data {cal_path}: {exc}"
@@ -931,9 +965,7 @@ def _export_awq(
     # Validate bits
     valid_bits = {4, 8}
     if bits not in valid_bits:
-        console.print(
-            f"[red]Invalid --bits {bits}. Must be one of: {sorted(valid_bits)}[/]"
-        )
+        console.print(f"[red]Invalid --bits {bits}. Must be one of: {sorted(valid_bits)}[/]")
         raise typer.Exit(1)
 
     # Validate output path (security: path traversal protection)
@@ -965,7 +997,7 @@ def _export_awq(
             raise typer.Exit(1)
         console.print(
             "[red]autoawq not installed.[/]\n"
-            "Install with: [bold]pip install \"soup-cli\\[awq]\"[/]\n"
+            'Install with: [bold]pip install "soup-cli\\[awq]"[/]\n'
             "Or directly: [bold]pip install autoawq[/]"
         )
         raise typer.Exit(1)
@@ -1072,9 +1104,7 @@ def _export_gptq(
     # Validate bits
     valid_bits = {4, 8}
     if bits not in valid_bits:
-        console.print(
-            f"[red]Invalid --bits {bits}. Must be one of: {sorted(valid_bits)}[/]"
-        )
+        console.print(f"[red]Invalid --bits {bits}. Must be one of: {sorted(valid_bits)}[/]")
         raise typer.Exit(1)
 
     # Validate output path (security: path traversal protection)
@@ -1106,7 +1136,7 @@ def _export_gptq(
             raise typer.Exit(1)
         console.print(
             "[red]auto-gptq not installed.[/]\n"
-            "Install with: [bold]pip install \"soup-cli\\[gptq]\"[/]\n"
+            'Install with: [bold]pip install "soup-cli\\[gptq]"[/]\n'
             "Or directly: [bold]pip install auto-gptq[/]"
         )
         raise typer.Exit(1)
@@ -1212,10 +1242,7 @@ def _auto_deploy_ollama(
 ):
     """Auto-deploy a GGUF file to Ollama after export."""
     if deploy_target != "ollama":
-        console.print(
-            f"[red]Unsupported deploy target: {deploy_target}[/]\n"
-            "Supported: ollama"
-        )
+        console.print(f"[red]Unsupported deploy target: {deploy_target}[/]\nSupported: ollama")
         raise typer.Exit(1)
 
     from soup_cli.utils.ollama import (
@@ -1241,12 +1268,10 @@ def _auto_deploy_ollama(
         raise typer.Exit(1)
 
     console.print(
-        f"\n[green]OK[/] Ollama v{version} detected"
-        f" -- deploying as [bold]{ollama_name}[/]"
+        f"\n[green]OK[/] Ollama v{version} detected -- deploying as [bold]{ollama_name}[/]"
     )
     console.print(
-        "[yellow]Warning:[/] This will overwrite any existing Ollama model "
-        f"named '{ollama_name}'."
+        f"[yellow]Warning:[/] This will overwrite any existing Ollama model named '{ollama_name}'."
     )
 
     # Auto-detect template from soup.yaml, fall back to chatml
@@ -1274,8 +1299,11 @@ def _format_size(size_bytes: int) -> str:
 
 
 def _maybe_attach_export(
-    *, artifact_path: str, kind: str,
-    explicit_id: Optional[str], source_model: str,
+    *,
+    artifact_path: str,
+    kind: str,
+    explicit_id: Optional[str],
+    source_model: str,
 ) -> None:
     """Attach an exported artifact to a registry entry.
 
@@ -1296,14 +1324,9 @@ def _maybe_attach_export(
     try:
         attach_artifact(entry_id, path=artifact_path, kind=kind)
     except (ValueError, FileNotFoundError) as exc:
-        console.print(
-            f"[yellow]Could not attach export to registry "
-            f"'{entry_id}':[/] {exc}"
-        )
+        console.print(f"[yellow]Could not attach export to registry '{entry_id}':[/] {exc}")
         return
-    console.print(
-        f"[green]Attached export to registry entry '{entry_id}' as {kind}.[/]"
-    )
+    console.print(f"[green]Attached export to registry entry '{entry_id}' as {kind}.[/]")
 
 
 # --- v0.53.1 #142 — TorchAO PTQ export CLI dispatch -------------------------
@@ -1344,9 +1367,7 @@ def _export_torchao_cli(
 
     scheme_raw = cfg_data.get("scheme")
     if not isinstance(scheme_raw, str):
-        console.print(
-            "[red]quant_config must declare a top-level 'scheme: <name>' field.[/]"
-        )
+        console.print("[red]quant_config must declare a top-level 'scheme: <name>' field.[/]")
         raise typer.Exit(2)
     try:
         scheme = validate_torchao_scheme(scheme_raw)
@@ -1359,12 +1380,14 @@ def _export_torchao_cli(
     else:
         output_path = Path(output)
 
-    console.print(Panel(
-        f"Model:  [bold]{model_path}[/]\n"
-        f"Scheme: [bold]{scheme}[/]\n"
-        f"Output: [bold]{output_path}[/]",
-        title="TorchAO PTQ Export",
-    ))
+    console.print(
+        Panel(
+            f"Model:  [bold]{model_path}[/]\n"
+            f"Scheme: [bold]{scheme}[/]\n"
+            f"Output: [bold]{output_path}[/]",
+            title="TorchAO PTQ Export",
+        )
+    )
 
     try:
         export_torchao(
@@ -1377,19 +1400,19 @@ def _export_torchao_cli(
     except (ImportError, RuntimeError) as exc:
         console.print(f"[red]TorchAO export failed: {exc}[/]")
         console.print(
-            "Try: [bold]pip install torchao[/] "
-            f"(Soup needs torchao>={TORCHAO_MIN_VERSION})"
+            f"Try: [bold]pip install torchao[/] (Soup needs torchao>={TORCHAO_MIN_VERSION})"
         )
         raise typer.Exit(1)
     except (TypeError, ValueError, FileNotFoundError) as exc:
         console.print(f"[red]{exc}[/]")
         raise typer.Exit(2)
 
-    console.print(Panel(
-        f"Output: [bold]{output_path}[/]\n"
-        f"Scheme: [bold]{scheme}[/]",
-        title="[bold green]TorchAO Export Complete[/]",
-    ))
+    console.print(
+        Panel(
+            f"Output: [bold]{output_path}[/]\nScheme: [bold]{scheme}[/]",
+            title="[bold green]TorchAO Export Complete[/]",
+        )
+    )
 
 
 # --- v0.53.1 #139 — Advanced GGUF export CLI dispatch -----------------------
@@ -1433,7 +1456,10 @@ def _export_bitnet_gguf(
             raise typer.Exit(2)
         merge_dir = model_path.parent / f".soup_merge_tmp_{model_path.name}"
         _merge_adapter(
-            str(model_path), base_model, str(merge_dir), trust_remote_code,
+            str(model_path),
+            base_model,
+            str(merge_dir),
+            trust_remote_code,
         )
         source_model_dir = merge_dir
     else:
@@ -1441,12 +1467,14 @@ def _export_bitnet_gguf(
 
     llama_dir = _find_llama_cpp(llama_cpp_path)
 
-    console.print(Panel(
-        f"Model:   [bold]{source_model_dir}[/]\n"
-        f"Format:  [bold]{canonical}[/] (TQ1_0 ternary)\n"
-        f"Output:  [bold]{output_path}[/]",
-        title="BitNet GGUF Export",
-    ))
+    console.print(
+        Panel(
+            f"Model:   [bold]{source_model_dir}[/]\n"
+            f"Format:  [bold]{canonical}[/] (TQ1_0 ternary)\n"
+            f"Output:  [bold]{output_path}[/]",
+            title="BitNet GGUF Export",
+        )
+    )
 
     try:
         export_bitnet_gguf(
@@ -1462,11 +1490,12 @@ def _export_bitnet_gguf(
         if merge_dir and merge_dir.exists():
             shutil.rmtree(merge_dir, ignore_errors=True)
 
-    console.print(Panel(
-        f"Output: [bold]{output_path}[/]\n"
-        f"Format: [bold]{canonical}[/]",
-        title="[bold green]BitNet GGUF Export Complete[/]",
-    ))
+    console.print(
+        Panel(
+            f"Output: [bold]{output_path}[/]\nFormat: [bold]{canonical}[/]",
+            title="[bold green]BitNet GGUF Export Complete[/]",
+        )
+    )
 
 
 def _export_gguf_advanced(
@@ -1486,8 +1515,7 @@ def _export_gguf_advanced(
     """
     if gguf_flavour is None:
         console.print(
-            "[red]--format gguf-ud requires --gguf-flavour <UD-Q4_K_XL | IQ2_M | "
-            "Q4_0_4_4 | ...>[/]"
+            "[red]--format gguf-ud requires --gguf-flavour <UD-Q4_K_XL | IQ2_M | Q4_0_4_4 | ...>[/]"
         )
         raise typer.Exit(2)
 
@@ -1505,24 +1533,22 @@ def _export_gguf_advanced(
 
     # Calibration data path (UD / IQ require it; Apple/ARM Q4_0_4_4 doesn't).
     from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
+
     if calibration_data is not None:
         try:
             enforce_under_cwd_and_no_symlink(
-                calibration_data, "calibration_data",
+                calibration_data,
+                "calibration_data",
             )
         except (TypeError, ValueError) as exc:
             console.print(f"[red]{exc}[/]")
             raise typer.Exit(2)
         if not Path(calibration_data).is_file():
-            console.print(
-                f"[red]Calibration data file not found: {calibration_data}[/]"
-            )
+            console.print(f"[red]Calibration data file not found: {calibration_data}[/]")
             raise typer.Exit(2)
 
     if output is None:
-        output_path = (
-            model_path.parent / f"{model_path.name}.{gguf_flavour}.gguf"
-        )
+        output_path = model_path.parent / f"{model_path.name}.{gguf_flavour}.gguf"
     else:
         output_path = Path(output)
 
@@ -1533,13 +1559,14 @@ def _export_gguf_advanced(
         console.print("[yellow]LoRA adapter detected — merging first...[/]")
         base_model = base or _detect_base_model(adapter_config_path)
         if not base_model:
-            console.print(
-                "[red]Cannot detect base model. Pass --base.[/]"
-            )
+            console.print("[red]Cannot detect base model. Pass --base.[/]")
             raise typer.Exit(2)
         merge_dir = model_path.parent / f".soup_merge_tmp_{model_path.name}"
         _merge_adapter(
-            str(model_path), base_model, str(merge_dir), trust_remote_code,
+            str(model_path),
+            base_model,
+            str(merge_dir),
+            trust_remote_code,
         )
         source_model_dir = merge_dir
     else:
@@ -1547,13 +1574,15 @@ def _export_gguf_advanced(
 
     llama_dir = _find_llama_cpp(llama_cpp_path)
 
-    console.print(Panel(
-        f"Model:    [bold]{source_model_dir}[/]\n"
-        f"Flavour:  [bold]{gguf_flavour}[/]\n"
-        f"Calib:    [bold]{calibration_data or '(none — Apple/ARM)'}[/]\n"
-        f"Output:   [bold]{output_path}[/]",
-        title="Advanced GGUF Export",
-    ))
+    console.print(
+        Panel(
+            f"Model:    [bold]{source_model_dir}[/]\n"
+            f"Flavour:  [bold]{gguf_flavour}[/]\n"
+            f"Calib:    [bold]{calibration_data or '(none — Apple/ARM)'}[/]\n"
+            f"Output:   [bold]{output_path}[/]",
+            title="Advanced GGUF Export",
+        )
+    )
 
     try:
         export_advanced_gguf(
@@ -1570,8 +1599,9 @@ def _export_gguf_advanced(
         if merge_dir and merge_dir.exists():
             shutil.rmtree(merge_dir, ignore_errors=True)
 
-    console.print(Panel(
-        f"Output: [bold]{output_path}[/]\n"
-        f"Flavour: [bold]{gguf_flavour}[/]",
-        title="[bold green]Advanced GGUF Export Complete[/]",
-    ))
+    console.print(
+        Panel(
+            f"Output: [bold]{output_path}[/]\nFlavour: [bold]{gguf_flavour}[/]",
+            title="[bold green]Advanced GGUF Export Complete[/]",
+        )
+    )

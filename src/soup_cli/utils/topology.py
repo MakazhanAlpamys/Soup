@@ -92,9 +92,7 @@ def resolve_num_gpus(spec: int | str | None) -> int | None:
         # Accept optional leading sign; reject anything else (the ``value < 1``
         # guard below catches negatives and zero).
         if not stripped.lstrip("+-").isdigit():
-            raise ValueError(
-                f"Invalid --gpus value: {spec!r}. Use 'auto' or a positive integer."
-            )
+            raise ValueError(f"Invalid --gpus value: {spec!r}. Use 'auto' or a positive integer.")
         value = int(stripped)
     else:
         raise ValueError(f"Invalid --gpus value: {spec!r}")
@@ -102,9 +100,7 @@ def resolve_num_gpus(spec: int | str | None) -> int | None:
     if value < 1:
         raise ValueError(f"--gpus must be >= 1 (got {value}).")
     if value > MAX_GPU_COUNT:
-        raise ValueError(
-            f"--gpus value {value} exceeds cap of {MAX_GPU_COUNT}."
-        )
+        raise ValueError(f"--gpus value {value} exceeds cap of {MAX_GPU_COUNT}.")
     return value
 
 
@@ -131,7 +127,9 @@ def detect_topology() -> TopologyInfo:
 
 
 def suggest_nccl_env(
-    gpu_count: int, interconnect: str, num_machines: int = 1,
+    gpu_count: int,
+    interconnect: str,
+    num_machines: int = 1,
 ) -> dict[str, str]:
     """Suggest NCCL environment variables tuned for the detected topology.
 

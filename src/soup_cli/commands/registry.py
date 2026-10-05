@@ -65,16 +65,22 @@ def push_cmd(
         with RegistryStore() as store:
             try:
                 entry_id = store.register_from_run(
-                    tracker, run_id, name=name, tag=tag,
+                    tracker,
+                    run_id,
+                    name=name,
+                    tag=tag,
                     notes=notes or None,
                 )
             except ValueError as exc:
                 _fail(str(exc))
-        console.print(Panel(
-            f"Registered [cyan]{escape(name)}[/]:[magenta]{escape(tag)}[/]\n"
-            f"Entry ID: [bold]{escape(entry_id)}[/]",
-            title="Registry", border_style="green",
-        ))
+        console.print(
+            Panel(
+                f"Registered [cyan]{escape(name)}[/]:[magenta]{escape(tag)}[/]\n"
+                f"Entry ID: [bold]{escape(entry_id)}[/]",
+                title="Registry",
+                border_style="green",
+            )
+        )
     finally:
         tracker.close()
 
@@ -89,8 +95,9 @@ def list_cmd(
 ) -> None:
     """List registry entries."""
     with RegistryStore() as store:
-        entries = store.list(name=name, tag=tag, base=base, task=task,
-                             limit=max(1, min(limit, 1000)))
+        entries = store.list(
+            name=name, tag=tag, base=base, task=task, limit=max(1, min(limit, 1000))
+        )
         if not entries:
             console.print("[dim]No registry entries found.[/]")
             return
@@ -173,7 +180,8 @@ def show_cmd(
             lin_table.add_column("Relation")
             for anc in ancestors:
                 lin_table.add_row(
-                    escape(anc["id"]), escape(anc["name"]),
+                    escape(anc["id"]),
+                    escape(anc["name"]),
                     escape(anc.get("relation", "")),
                 )
             console.print(lin_table)
@@ -223,10 +231,9 @@ def diff_cmd(
             lcfg, rcfg = {}, {}
 
         changes = config_diff(lcfg, rcfg)
-        table = Table(title=(
-            f"Config diff: {escape(left_entry['id'])} "
-            f"-> {escape(right_entry['id'])}"
-        ))
+        table = Table(
+            title=(f"Config diff: {escape(left_entry['id'])} -> {escape(right_entry['id'])}")
+        )
         table.add_column("Path", style="cyan")
         table.add_column("Kind")
         table.add_column("Left")
@@ -279,8 +286,7 @@ def promote_cmd(
         entry = _require_entry(store, ref)
         store.add_tag(entry["id"], tag)
         console.print(
-            f"[green]Added tag[/] [magenta]{escape(tag)}[/] "
-            f"to [cyan]{escape(entry['id'])}[/]."
+            f"[green]Added tag[/] [magenta]{escape(tag)}[/] to [cyan]{escape(entry['id'])}[/]."
         )
 
 

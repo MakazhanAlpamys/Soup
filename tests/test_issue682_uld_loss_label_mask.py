@@ -75,9 +75,7 @@ class TestUldDistillLossLabelMask:
 
         from soup_cli.utils.uld import ULDConfig, uld_distill_loss
 
-        cfg = ULDConfig(
-            strategy="topk_align", student_vocab_size=6, teacher_vocab_size=6, top_k=3
-        )
+        cfg = ULDConfig(strategy="topk_align", student_vocab_size=6, teacher_vocab_size=6, top_k=3)
         torch.manual_seed(2)
         s = torch.randn(1, 4, 6)
         t = torch.randn(1, 4, 6)
@@ -136,9 +134,7 @@ class TestUldAlignedLossLabelMask:
 
         from soup_cli.utils.uld import ULDConfig, uld_aligned_loss
 
-        cfg = ULDConfig(
-            strategy="wasserstein_aligned", student_vocab_size=5, teacher_vocab_size=5
-        )
+        cfg = ULDConfig(strategy="wasserstein_aligned", student_vocab_size=5, teacher_vocab_size=5)
         torch.manual_seed(4)
         s = torch.randn(1, 3, 5)
         t = torch.randn(1, 3, 5)
@@ -168,9 +164,7 @@ class TestUldAlignedLossLabelMask:
 
         from soup_cli.utils.uld import ULDConfig, uld_aligned_loss
 
-        cfg = ULDConfig(
-            strategy="wasserstein_aligned", student_vocab_size=5, teacher_vocab_size=5
-        )
+        cfg = ULDConfig(strategy="wasserstein_aligned", student_vocab_size=5, teacher_vocab_size=5)
         torch.manual_seed(5)
         s = torch.randn(1, 3, 5)
         t = torch.randn(1, 3, 5)
@@ -189,9 +183,7 @@ class TestUldAlignedLossLabelMask:
 
         from soup_cli.utils.uld import ULDConfig, uld_aligned_loss
 
-        cfg = ULDConfig(
-            strategy="wasserstein_aligned", student_vocab_size=5, teacher_vocab_size=5
-        )
+        cfg = ULDConfig(strategy="wasserstein_aligned", student_vocab_size=5, teacher_vocab_size=5)
         s = torch.randn(1, 3, 5, requires_grad=True)
         t = torch.randn(1, 3, 5)
         tokens = [["a", "b", "c"]]

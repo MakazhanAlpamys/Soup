@@ -272,10 +272,7 @@ class TestSchemaSoupConfigTaskGate:
     """minillm_enabled only meaningful when task='distill'."""
 
     def _yaml(self, task: str = "distill", **extras: object) -> str:
-        teacher_line = (
-            "  teacher_model: meta-llama/Llama-3.1-8B\n"
-            if task == "distill" else ""
-        )
+        teacher_line = "  teacher_model: meta-llama/Llama-3.1-8B\n" if task == "distill" else ""
         extra_lines = "".join(f"  {k}: {v}\n" for k, v in extras.items())
         return f"""
 base: meta-llama/Llama-3.1-8B
@@ -303,9 +300,7 @@ training:
         from soup_cli.config.loader import load_config_from_string
 
         with pytest.raises(ValueError, match="minillm"):
-            load_config_from_string(
-                self._yaml(task="sft", minillm_enabled=True)
-            )
+            load_config_from_string(self._yaml(task="sft", minillm_enabled=True))
 
     def test_mlx_minillm_rejected(self):
         from soup_cli.config.loader import load_config_from_string
@@ -371,12 +366,7 @@ class TestSourceWiring:
     def test_module_no_top_level_torch(self):
         from pathlib import Path
 
-        src = (
-            Path(__file__).resolve().parent.parent
-            / "src" / "soup_cli"
-            / "utils"
-            / "minillm.py"
-        )
+        src = Path(__file__).resolve().parent.parent / "src" / "soup_cli" / "utils" / "minillm.py"
         body = src.read_text(encoding="utf-8")
         assert "\nimport torch" not in body
         assert "\nfrom torch" not in body
@@ -390,11 +380,6 @@ class TestSourceWiring:
         _ = math
         from pathlib import Path
 
-        src = (
-            Path(__file__).resolve().parent.parent
-            / "src" / "soup_cli"
-            / "utils"
-            / "minillm.py"
-        )
+        src = Path(__file__).resolve().parent.parent / "src" / "soup_cli" / "utils" / "minillm.py"
         body = src.read_text(encoding="utf-8")
         assert "math.isfinite" in body

@@ -162,8 +162,15 @@ class TestTheRuntimeMessages:
         decision = _decision(DEFAULT_STREAM_READ_AHEAD, 2)
         with pytest.raises(RuntimeError) as caught:
             rt._build_source(
-                "shards", 3, {}, True, _Console(), "disk", require_pin=True,
-                read_ahead=decision.depth, layer_roots=(0, 1, 0),
+                "shards",
+                3,
+                {},
+                True,
+                _Console(),
+                "disk",
+                require_pin=True,
+                read_ahead=decision.depth,
+                layer_roots=(0, 1, 0),
                 read_ahead_decision=decision,
             )
         message = " ".join(str(caught.value).split())
@@ -176,8 +183,15 @@ class TestTheRuntimeMessages:
         decision = _decision(DEFAULT_STREAM_READ_AHEAD, 2)
         console = _Console()
         source, pinned = rt._build_source(
-            "shards", 3, {}, True, console, "disk",
-            read_ahead=decision.depth, layer_roots=(0, 1, 0), read_ahead_decision=decision,
+            "shards",
+            3,
+            {},
+            True,
+            console,
+            "disk",
+            read_ahead=decision.depth,
+            layer_roots=(0, 1, 0),
+            read_ahead_decision=decision,
         )
         assert pinned is False and source.kwargs["read_ahead"] == 3
         warning = " ".join(" ".join(console.printed).split())

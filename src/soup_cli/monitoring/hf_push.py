@@ -131,7 +131,8 @@ class _HFPushCallback_body:  # type: ignore[misc]  # noqa: N801
             return True
         except Exception as exc:
             logger.warning(
-                "HFPushCallback: create_repo failed (%s); auto-push disabled", exc,
+                "HFPushCallback: create_repo failed (%s); auto-push disabled",
+                exc,
             )
             self._repo_failed = True
             return False

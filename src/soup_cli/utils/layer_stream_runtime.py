@@ -272,9 +272,7 @@ def _checkpoint_visible_nf4_function():
             # dequantisation is replaced by a real transposed kernel.
             grad_x = None
             if ctx.needs_input_grad[0]:
-                weight = bnb_functional.dequantize_4bit(packed, quant_state).to(
-                    grad_output.dtype
-                )
+                weight = bnb_functional.dequantize_4bit(packed, quant_state).to(grad_output.dtype)
                 grad_x = torch.matmul(grad_output, weight)
             grad_bias = None
             if ctx.needs_input_grad[6] and ctx.bias_dtype is not None:
@@ -301,9 +299,7 @@ def _checkpoint_visible_nf4_function():
     return CheckpointVisibleNF4Matmul
 
 
-def checkpoint_visible_nf4_linear(
-    x: Any, packed: Any, quant_state: Any, bias: Any = None
-) -> Any:
+def checkpoint_visible_nf4_linear(x: Any, packed: Any, quant_state: Any, bias: Any = None) -> Any:
     """Fused NF4 forward with checkpoint-visible packed state (#842)."""
     empty = packed.new_empty((0,))
     state2_absmax = empty
@@ -435,9 +431,7 @@ def install_dequant_forward(module: Any) -> int:
         # Soup's Function; on bnb's dequant+linear arm the old path below has
         # identical arithmetic and avoids an extra backward dequantisation.
         if _can_use_checkpoint_visible_nf4_gemm(x, quant_state):
-            return checkpoint_visible_nf4_linear(
-                x, self.weight, quant_state, bias
-            ).to(inp_dtype)
+            return checkpoint_visible_nf4_linear(x, self.weight, quant_state, bias).to(inp_dtype)
 
         # Compatibility path: dequantise inside the checkpointed region and let
         # F.linear save the dense weight properly.
@@ -1698,9 +1692,7 @@ def _build_streamed_large_layer_class():
     class StreamedLargeLayer(nn.Module):
         """Embedding or output projection backed by the shared large slot."""
 
-        def __init__(
-            self, inner: Any, key: str, pool: Any, refill_before_backward: bool = False
-        ):
+        def __init__(self, inner: Any, key: str, pool: Any, refill_before_backward: bool = False):
             super().__init__()
             self.inner = inner
             self.key = str(key)

@@ -50,29 +50,31 @@ _MAX_ROLLOUT_ROWS = 100_000
 _MAX_ROLLOUT_STEPS = 100_000
 
 # ``module.path:function_name`` — mirrors v0.42.0 data.prompt_strategy.
-_ROLLOUT_FUNC_RE = re.compile(
-    r"^[A-Za-z_][A-Za-z0-9_.]{0,127}:[A-Za-z_][A-Za-z0-9_]{0,127}$"
-)
+_ROLLOUT_FUNC_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]{0,127}:[A-Za-z_][A-Za-z0-9_]{0,127}$")
 
 # Import names per external backend (pip name differs — see
 # ``required_package`` on the spec).
-_EXTERNAL_IMPORT_NAMES = types.MappingProxyType({
-    "art": "art",
-    "ruler": "ruler",
-    "nemo_gym": "nemo_gym",
-})
+_EXTERNAL_IMPORT_NAMES = types.MappingProxyType(
+    {
+        "art": "art",
+        "ruler": "ruler",
+        "nemo_gym": "nemo_gym",
+    }
+)
 
 # Injectable runner seam for the external backends — tests and advanced
 # operators may install ``name -> callable(**kwargs) -> rows`` here.
 # NOT a public API (mirrors cloud/modal._MODAL_SUBMIT_OVERRIDE).
 _EXTERNAL_ROLLOUT_RUNNERS: dict[str, Callable[..., Any]] = {}
 
-SUPPORTED_ROLLOUT_BACKENDS: frozenset[str] = frozenset({
-    "art",
-    "ruler",
-    "nemo_gym",
-    "openenv",
-})
+SUPPORTED_ROLLOUT_BACKENDS: frozenset[str] = frozenset(
+    {
+        "art",
+        "ruler",
+        "nemo_gym",
+        "openenv",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -85,32 +87,34 @@ class RolloutBackendSpec:
     live_wired: bool
 
 
-_BACKEND_METADATA = types.MappingProxyType({
-    "art": RolloutBackendSpec(
-        name="art",
-        description="OpenPipe ART — multi-turn agent rollouts",
-        required_package="openpipe-art",
-        live_wired=False,
-    ),
-    "ruler": RolloutBackendSpec(
-        name="ruler",
-        description="RULER agent evaluation framework",
-        required_package="ruler-eval",
-        live_wired=False,
-    ),
-    "nemo_gym": RolloutBackendSpec(
-        name="nemo_gym",
-        description="NVIDIA NeMo Gym single/multi-turn rollout backend",
-        required_package="nemo-gym",
-        live_wired=False,
-    ),
-    "openenv": RolloutBackendSpec(
-        name="openenv",
-        description="Generic OpenEnv rollout_func protocol",
-        required_package=None,
-        live_wired=True,  # v0.71.21 #125 — fully live on CPU.
-    ),
-})
+_BACKEND_METADATA = types.MappingProxyType(
+    {
+        "art": RolloutBackendSpec(
+            name="art",
+            description="OpenPipe ART — multi-turn agent rollouts",
+            required_package="openpipe-art",
+            live_wired=False,
+        ),
+        "ruler": RolloutBackendSpec(
+            name="ruler",
+            description="RULER agent evaluation framework",
+            required_package="ruler-eval",
+            live_wired=False,
+        ),
+        "nemo_gym": RolloutBackendSpec(
+            name="nemo_gym",
+            description="NVIDIA NeMo Gym single/multi-turn rollout backend",
+            required_package="nemo-gym",
+            live_wired=False,
+        ),
+        "openenv": RolloutBackendSpec(
+            name="openenv",
+            description="Generic OpenEnv rollout_func protocol",
+            required_package=None,
+            live_wired=True,  # v0.71.21 #125 — fully live on CPU.
+        ),
+    }
+)
 
 
 def validate_rollout_backend(name: object) -> str:
@@ -118,17 +122,13 @@ def validate_rollout_backend(name: object) -> str:
     if isinstance(name, bool):
         raise ValueError("rollout_backend must be a string, got bool")
     if not isinstance(name, str):
-        raise ValueError(
-            f"rollout_backend must be a string, got {type(name).__name__}"
-        )
+        raise ValueError(f"rollout_backend must be a string, got {type(name).__name__}")
     if not name:
         raise ValueError("rollout_backend must be a non-empty string")
     if "\x00" in name:
         raise ValueError("rollout_backend must not contain null bytes")
     if len(name) > _MAX_BACKEND_NAME_LEN:
-        raise ValueError(
-            f"rollout_backend exceeds {_MAX_BACKEND_NAME_LEN} chars"
-        )
+        raise ValueError(f"rollout_backend exceeds {_MAX_BACKEND_NAME_LEN} chars")
     normalised = name.lower()
     if normalised not in SUPPORTED_ROLLOUT_BACKENDS:
         raise ValueError(
@@ -164,17 +164,13 @@ def validate_rollout_func(value: object) -> Optional[str]:
     if value is None:
         return None
     if not isinstance(value, str):
-        raise ValueError(
-            f"rollout_func must be a string, got {type(value).__name__}"
-        )
+        raise ValueError(f"rollout_func must be a string, got {type(value).__name__}")
     if not value:
         raise ValueError("rollout_func must not be empty")
     if "\x00" in value:
         raise ValueError("rollout_func must not contain null bytes")
     if len(value) > _MAX_ROLLOUT_FUNC_LEN:
-        raise ValueError(
-            f"rollout_func must be <= {_MAX_ROLLOUT_FUNC_LEN} chars"
-        )
+        raise ValueError(f"rollout_func must be <= {_MAX_ROLLOUT_FUNC_LEN} chars")
     if not _ROLLOUT_FUNC_RE.match(value):
         raise ValueError(
             "rollout_func must match 'module.path:function_name' "
@@ -202,14 +198,12 @@ def resolve_rollout_func(spec: str) -> Callable[..., Any]:
         ) from exc
     if not hasattr(module, fn_name):
         raise ValueError(
-            f"rollout_func {validated!r}: module {module_path!r} has no "
-            f"attribute {fn_name!r}"
+            f"rollout_func {validated!r}: module {module_path!r} has no attribute {fn_name!r}"
         )
     fn = getattr(module, fn_name)
     if not callable(fn):
         raise ValueError(
-            f"rollout_func {validated!r}: resolved attribute is not callable "
-            f"({type(fn).__name__})"
+            f"rollout_func {validated!r}: resolved attribute is not callable ({type(fn).__name__})"
         )
     return fn
 
@@ -245,14 +239,10 @@ def _normalise_rollout_rows(raw: object, backend: str) -> tuple[dict, ...]:
     for index, row in enumerate(raw):
         if len(rows) >= _MAX_ROLLOUT_ROWS:
             raise ValueError(
-                f"rollout backend {backend!r} produced more than "
-                f"{_MAX_ROLLOUT_ROWS} rows"
+                f"rollout backend {backend!r} produced more than {_MAX_ROLLOUT_ROWS} rows"
             )
         if not isinstance(row, Mapping):
-            raise ValueError(
-                f"rollout row {index} must be a mapping, "
-                f"got {type(row).__name__}"
-            )
+            raise ValueError(f"rollout row {index} must be a mapping, got {type(row).__name__}")
         prompt = row.get("prompt")
         if isinstance(prompt, str):
             if not prompt:
@@ -262,8 +252,7 @@ def _normalise_rollout_rows(raw: object, backend: str) -> tuple[dict, ...]:
                 raise ValueError(f"rollout row {index} has an empty prompt")
             # Break the alias with the rollout callable's return value.
             prompt = [
-                dict(message) if isinstance(message, Mapping) else message
-                for message in prompt
+                dict(message) if isinstance(message, Mapping) else message for message in prompt
             ]
         else:
             raise ValueError(
@@ -275,8 +264,7 @@ def _normalise_rollout_rows(raw: object, backend: str) -> tuple[dict, ...]:
         if answer is not None:
             if not isinstance(answer, str):
                 raise ValueError(
-                    f"rollout row {index} 'answer' must be a string, "
-                    f"got {type(answer).__name__}"
+                    f"rollout row {index} 'answer' must be a string, got {type(answer).__name__}"
                 )
             if answer:
                 normalised["answer"] = answer
@@ -297,16 +285,12 @@ class RolloutResult:
     rows: tuple[dict, ...]
 
     def __post_init__(self) -> None:
-        object.__setattr__(
-            self, "backend", validate_rollout_backend(self.backend)
-        )
+        object.__setattr__(self, "backend", validate_rollout_backend(self.backend))
         if not isinstance(self.rows, tuple):
             raise TypeError("rows must be a tuple")
         # Re-validate through the shared normaliser so a directly
         # constructed RolloutResult cannot smuggle malformed rows.
-        object.__setattr__(
-            self, "rows", _normalise_rollout_rows(self.rows, self.backend)
-        )
+        object.__setattr__(self, "rows", _normalise_rollout_rows(self.rows, self.backend))
 
 
 def launch_rollout(
@@ -338,19 +322,13 @@ def launch_rollout(
     """
     normalised_name = validate_rollout_backend(name)
     if isinstance(max_steps, bool) or not isinstance(max_steps, int):
-        raise TypeError(
-            f"max_steps must be an int, got {type(max_steps).__name__}"
-        )
+        raise TypeError(f"max_steps must be an int, got {type(max_steps).__name__}")
     if not 1 <= max_steps <= _MAX_ROLLOUT_STEPS:
-        raise ValueError(
-            f"max_steps must be in [1, {_MAX_ROLLOUT_STEPS}], got {max_steps}"
-        )
+        raise ValueError(f"max_steps must be in [1, {_MAX_ROLLOUT_STEPS}], got {max_steps}")
     if prompts is not None and (
         isinstance(prompts, (str, bytes)) or not isinstance(prompts, Sequence)
     ):
-        raise TypeError(
-            f"prompts must be a sequence, got {type(prompts).__name__}"
-        )
+        raise TypeError(f"prompts must be a sequence, got {type(prompts).__name__}")
     seed_prompts = list(prompts or [])
 
     if normalised_name == "openenv":

@@ -65,9 +65,7 @@ class _FakeJudge:
     def evaluate(self, prompt, response, category="default"):
         from soup_cli.eval.judge import JudgeScore
 
-        return JudgeScore(
-            prompt=prompt, response=response, weighted_score=float(len(response))
-        )
+        return JudgeScore(prompt=prompt, response=response, weighted_score=float(len(response)))
 
 
 class _PosBias:
@@ -243,9 +241,7 @@ class TestSoupPairwiseJudge:
             make_soup_pairwise_judge,
         )
 
-        assert isinstance(
-            make_soup_pairwise_judge(_FakeJudge()), _base_pairwise_judge_cls()
-        )
+        assert isinstance(make_soup_pairwise_judge(_FakeJudge()), _base_pairwise_judge_cls())
 
 
 # ---------------------------------------------------------------------------
@@ -315,13 +311,9 @@ class TestShipPairwise:
             "soup_cli.eval.gate._parse_judge_url",
             lambda url: ("ollama", "m", None),
         )
-        monkeypatch.setattr(
-            "soup_cli.eval.judge.JudgeEvaluator", lambda **kw: _FakeJudge()
-        )
+        monkeypatch.setattr("soup_cli.eval.judge.JudgeEvaluator", lambda **kw: _FakeJudge())
         # base_gen short, tuned_gen long; _FakeJudge prefers long -> winrate 1.0
-        tw = ship_cmd._leg1_pairwise(
-            lambda p: "s", lambda p: "longer", "x.jsonl", "ollama://m"
-        )
+        tw = ship_cmd._leg1_pairwise(lambda p: "s", lambda p: "longer", "x.jsonl", "ollama://m")
         assert tw.mode == "pairwise"
         assert tw.base == 0.5
         assert tw.tuned == 1.0
@@ -426,8 +418,7 @@ class TestOnlineDpoSchema:
 
         with pytest.raises(Exception, match="judge|reward_model"):
             load_config_from_string(
-                "base: sshleifer/tiny-gpt2\ntask: online_dpo\n"
-                "data:\n  train: x.jsonl\n"
+                "base: sshleifer/tiny-gpt2\ntask: online_dpo\ndata:\n  train: x.jsonl\n"
             )
 
     def test_reject_mlx_backend(self):
@@ -439,7 +430,7 @@ class TestOnlineDpoSchema:
             load_config_from_string(
                 "base: sshleifer/tiny-gpt2\ntask: online_dpo\nbackend: mlx\n"
                 "data:\n  train: x.jsonl\n"
-                "training:\n  online_dpo_judge: \"ollama://m\"\n"
+                'training:\n  online_dpo_judge: "ollama://m"\n'
             )
 
     def test_footgun_field_without_task(self):
@@ -451,7 +442,7 @@ class TestOnlineDpoSchema:
             load_config_from_string(
                 "base: sshleifer/tiny-gpt2\ntask: sft\n"
                 "data:\n  train: x.jsonl\n"
-                "training:\n  online_dpo_judge: \"ollama://m\"\n"
+                'training:\n  online_dpo_judge: "ollama://m"\n'
             )
 
     def test_reject_empty_judge(self):
@@ -463,7 +454,7 @@ class TestOnlineDpoSchema:
             load_config_from_string(
                 "base: sshleifer/tiny-gpt2\ntask: online_dpo\n"
                 "data:\n  train: x.jsonl\n"
-                "training:\n  online_dpo_judge: \"\"\n"
+                'training:\n  online_dpo_judge: ""\n'
             )
 
     def test_loss_type_and_max_new_tokens(self):
@@ -484,7 +475,7 @@ class TestOnlineDpoSchema:
             load_config_from_string(
                 "base: hf-internal-testing/tiny-random-gpt2\ntask: online_dpo\n"
                 "modality: vision\ndata:\n  train: x.jsonl\n"
-                "training:\n  online_dpo_judge: \"ollama://m\"\n"
+                'training:\n  online_dpo_judge: "ollama://m"\n'
             )
 
     def test_footgun_loss_type_without_task(self):
@@ -561,8 +552,12 @@ class TestOnlineDpoWrapper:
         ]
         out = OnlineDPOTrainerWrapper._to_prompt_rows(rows)
         assert out == [
-            {"prompt": [{"role": "system", "content": "be nice"},
-                        {"role": "user", "content": "hi"}]}
+            {
+                "prompt": [
+                    {"role": "system", "content": "be nice"},
+                    {"role": "user", "content": "hi"},
+                ]
+            }
         ]
 
     def test_prompt_rows_multiturn_keeps_alternation(self):
@@ -620,15 +615,19 @@ class TestOnlineDpoWrapper:
         cfg = load_config_from_string(
             f"base: {Path(_local_base_model_dir()).as_posix()}\ntask: online_dpo\n"
             "data:\n  train: x.jsonl\n  max_length: 64\n"
-            "training:\n  online_dpo_judge: \"ollama://m\"\n"
+            'training:\n  online_dpo_judge: "ollama://m"\n'
             "  epochs: 1\n  batch_size: 2\n  online_dpo_max_new_tokens: 8\n"
         )
         od._ONLINE_DPO_JUDGE_OVERRIDE = _FakeJudge()
         try:
             wrapper = OnlineDPOTrainerWrapper(cfg, device="cpu")
             wrapper.setup(
-                {"train": [{"messages": [{"role": "user", "content": "hi there"}]},
-                           {"messages": [{"role": "user", "content": "hello"}]}]}
+                {
+                    "train": [
+                        {"messages": [{"role": "user", "content": "hi there"}]},
+                        {"messages": [{"role": "user", "content": "hello"}]},
+                    ]
+                }
             )
             assert wrapper.trainer is not None
         finally:
@@ -650,7 +649,7 @@ def _online_dpo_wrapper():
     cfg = load_config_from_string(
         "base: hf-internal-testing/tiny-random-gpt2\ntask: online_dpo\n"
         "data:\n  train: x.jsonl\n"
-        "training:\n  online_dpo_judge: \"ollama://m\"\n"
+        'training:\n  online_dpo_judge: "ollama://m"\n'
     )
     return OnlineDPOTrainerWrapper(cfg, device="cpu")
 
@@ -678,9 +677,7 @@ class TestBuildJudgeOrReward:
             "transformers.AutoModelForSequenceClassification.from_pretrained",
             lambda *a, **k: object(),
         )
-        monkeypatch.setattr(
-            "transformers.AutoTokenizer.from_pretrained", lambda *a, **k: object()
-        )
+        monkeypatch.setattr("transformers.AutoTokenizer.from_pretrained", lambda *a, **k: object())
         result = _online_dpo_wrapper()._build_judge_or_reward(_Tcfg(reward="some/rm"))
         # #300 — this used to branch on `_TRL_HAS_JUDGES`, the SAME predicate the
         # production code branched on, so it asserted that the code returned what
@@ -708,9 +705,7 @@ class TestBuildJudgeOrReward:
         try:
             # A URL that _parse_judge_url would REJECT if the URL branch ran.
             # No exception -> the seam took precedence (URL never parsed).
-            result = _online_dpo_wrapper()._build_judge_or_reward(
-                _Tcfg(judge="not-a-valid-url")
-            )
+            result = _online_dpo_wrapper()._build_judge_or_reward(_Tcfg(judge="not-a-valid-url"))
             assert "judge" in result or "reward_funcs" in result
         finally:
             od._ONLINE_DPO_JUDGE_OVERRIDE = None
@@ -755,9 +750,7 @@ class _ScoreJudge:
     def evaluate(self, prompt, response, category="default"):
         from soup_cli.eval.judge import JudgeScore
 
-        return JudgeScore(
-            prompt=prompt, response=response, weighted_score=float(len(response))
-        )
+        return JudgeScore(prompt=prompt, response=response, weighted_score=float(len(response)))
 
 
 class TestBestOfN:
@@ -851,9 +844,7 @@ class TestBestOfN:
     def test_build_sft_row(self):
         from soup_cli.utils.best_of_n import BestOfNPick, build_sft_row
 
-        row = build_sft_row(
-            "p", BestOfNPick(1, "win", (1.0, 3.0)), judge_model="ollama://m"
-        )
+        row = build_sft_row("p", BestOfNPick(1, "win", (1.0, 3.0)), judge_model="ollama://m")
         assert row["messages"] == [
             {"role": "user", "content": "p"},
             {"role": "assistant", "content": "win"},
@@ -890,9 +881,9 @@ class TestBestOfN:
 
         import soup_cli
 
-        src = (
-            pathlib.Path(soup_cli.__file__).parent / "utils" / "best_of_n.py"
-        ).read_text(encoding="utf-8")
+        src = (pathlib.Path(soup_cli.__file__).parent / "utils" / "best_of_n.py").read_text(
+            encoding="utf-8"
+        )
         tree = ast.parse(src)
         top = {
             n.names[0].name.split(".")[0]
@@ -1152,8 +1143,19 @@ class TestBestOfNCli:
         try:
             result = CliRunner().invoke(
                 app,
-                ["best-of-n", "--base", "m", "--prompts", path, "--n", "1",
-                 "--judge", "ollama://m", "-o", "o.jsonl"],
+                [
+                    "best-of-n",
+                    "--base",
+                    "m",
+                    "--prompts",
+                    path,
+                    "--n",
+                    "1",
+                    "--judge",
+                    "ollama://m",
+                    "-o",
+                    "o.jsonl",
+                ],
             )
             assert result.exit_code == 2, (result.output, repr(result.exception))
             assert "n must be" in _plain(result.output) or "between 2" in _plain(result.output)
@@ -1173,8 +1175,19 @@ class TestBestOfNCli:
         try:
             result = CliRunner().invoke(
                 app,
-                ["best-of-n", "--base", "m", "--prompts", path, "--n", "4",
-                 "--judge", "http://evil.example.com/m", "-o", "o.jsonl"],
+                [
+                    "best-of-n",
+                    "--base",
+                    "m",
+                    "--prompts",
+                    path,
+                    "--n",
+                    "4",
+                    "--judge",
+                    "http://evil.example.com/m",
+                    "-o",
+                    "o.jsonl",
+                ],
             )
             assert result.exit_code == 2, (result.output, repr(result.exception))
         finally:
@@ -1193,8 +1206,19 @@ class TestBestOfNCli:
         try:
             result = CliRunner().invoke(
                 app,
-                ["best-of-n", "--base", "m", "--prompts", path, "--n", "4",
-                 "--judge", "ollama://m", "-o", "../escape.jsonl"],
+                [
+                    "best-of-n",
+                    "--base",
+                    "m",
+                    "--prompts",
+                    path,
+                    "--n",
+                    "4",
+                    "--judge",
+                    "ollama://m",
+                    "-o",
+                    "../escape.jsonl",
+                ],
             )
             assert result.exit_code == 2, (result.output, repr(result.exception))
         finally:
@@ -1212,7 +1236,8 @@ class TestBestOfNCli:
 
         monkeypatch.setattr(data_cmd, "_load_bon_model", lambda base, device, trust: (None, None))
         monkeypatch.setattr(
-            bon, "sample_candidates",
+            bon,
+            "sample_candidates",
             lambda model, tok, prompt, **kw: ["a", "abcd", "xy"],
         )
         monkeypatch.setattr(
@@ -1231,8 +1256,21 @@ class TestBestOfNCli:
         try:
             result = CliRunner().invoke(
                 app,
-                ["best-of-n", "--base", "m", "--prompts", ppath, "--n", "3",
-                 "--judge", "ollama://m", "-o", opath, "--emit-pairs", dpath],
+                [
+                    "best-of-n",
+                    "--base",
+                    "m",
+                    "--prompts",
+                    ppath,
+                    "--n",
+                    "3",
+                    "--judge",
+                    "ollama://m",
+                    "-o",
+                    opath,
+                    "--emit-pairs",
+                    dpath,
+                ],
             )
             assert result.exit_code == 0, (result.output, repr(result.exception))
             rows = [json.loads(x) for x in open(opath, encoding="utf-8") if x.strip()]
@@ -1275,9 +1313,7 @@ class TestBestOfNCli:
                 return SimpleNamespace(weighted_score=score)
 
         monkeypatch.chdir(tmp_path)
-        monkeypatch.setattr(
-            data_cmd, "_load_bon_model", lambda base, device, trust: (None, None)
-        )
+        monkeypatch.setattr(data_cmd, "_load_bon_model", lambda base, device, trust: (None, None))
         monkeypatch.setattr(
             bon,
             "sample_candidates",
@@ -1328,8 +1364,18 @@ class TestBestOfNCli:
         try:
             result = CliRunner().invoke(
                 app,
-                ["best-of-n", "--base", "m", "--prompts", path, "--n", "4",
-                 "--judge", "ollama://m", "--plan-only"],
+                [
+                    "best-of-n",
+                    "--base",
+                    "m",
+                    "--prompts",
+                    path,
+                    "--n",
+                    "4",
+                    "--judge",
+                    "ollama://m",
+                    "--plan-only",
+                ],
             )
             assert result.exit_code == 0, (result.output, repr(result.exception))
         finally:
@@ -1376,9 +1422,7 @@ class TestBestOfNCli:
             assert "line 2" in _plain(result.output)
             assert "private" not in result.output
 
-    def test_blank_lines_are_ignored_but_source_lines_remain_physical(
-        self, monkeypatch, tmp_path
-    ):
+    def test_blank_lines_are_ignored_but_source_lines_remain_physical(self, monkeypatch, tmp_path):
         from soup_cli.commands.data import _bon_load_prompt_records
 
         monkeypatch.chdir(tmp_path)
@@ -1539,8 +1583,19 @@ class TestEvolveCli:
         try:
             result = CliRunner().invoke(
                 app,
-                ["evolve", "--input", path, "--provider", "ollama", "--model", "m",
-                 "--strategy", "sideways", "-o", "o.jsonl"],
+                [
+                    "evolve",
+                    "--input",
+                    path,
+                    "--provider",
+                    "ollama",
+                    "--model",
+                    "m",
+                    "--strategy",
+                    "sideways",
+                    "-o",
+                    "o.jsonl",
+                ],
             )
             assert result.exit_code == 2, (result.output, repr(result.exception))
             assert "strategy" in result.output.lower()
@@ -1558,8 +1613,19 @@ class TestEvolveCli:
         try:
             result = CliRunner().invoke(
                 app,
-                ["evolve", "--input", path, "--provider", "ollama", "--model", "m",
-                 "--rounds", "9", "-o", "o.jsonl"],
+                [
+                    "evolve",
+                    "--input",
+                    path,
+                    "--provider",
+                    "ollama",
+                    "--model",
+                    "m",
+                    "--rounds",
+                    "9",
+                    "-o",
+                    "o.jsonl",
+                ],
             )
             assert result.exit_code == 2, (result.output, repr(result.exception))
             assert "rounds" in result.output.lower()
@@ -1577,8 +1643,17 @@ class TestEvolveCli:
         try:
             result = CliRunner().invoke(
                 app,
-                ["evolve", "--input", path, "--provider", "anthropic", "--model", "m",
-                 "-o", "o.jsonl"],
+                [
+                    "evolve",
+                    "--input",
+                    path,
+                    "--provider",
+                    "anthropic",
+                    "--model",
+                    "m",
+                    "-o",
+                    "o.jsonl",
+                ],
             )
             assert result.exit_code == 2, (result.output, repr(result.exception))
             assert "anthropic" in result.output.lower()
@@ -1596,8 +1671,7 @@ class TestEvolveCli:
         try:
             result = CliRunner().invoke(
                 app,
-                ["evolve", "--input", path, "--provider", "ollama", "--model", "m",
-                 "--plan-only"],
+                ["evolve", "--input", path, "--provider", "ollama", "--model", "m", "--plan-only"],
             )
             assert result.exit_code == 0, (result.output, repr(result.exception))
         finally:
@@ -1614,8 +1688,17 @@ class TestEvolveCli:
         try:
             result = CliRunner().invoke(
                 app,
-                ["evolve", "--input", path, "--provider", "ollama", "--model", "m",
-                 "-o", "../escape.jsonl"],
+                [
+                    "evolve",
+                    "--input",
+                    path,
+                    "--provider",
+                    "ollama",
+                    "--model",
+                    "m",
+                    "-o",
+                    "../escape.jsonl",
+                ],
             )
             assert result.exit_code == 2, (result.output, repr(result.exception))
         finally:
@@ -1645,8 +1728,21 @@ class TestEvolveCli:
         try:
             result = CliRunner().invoke(
                 app,
-                ["evolve", "--input", ipath, "--provider", "ollama", "--model", "m",
-                 "--strategy", "depth", "--rounds", "1", "-o", opath],
+                [
+                    "evolve",
+                    "--input",
+                    ipath,
+                    "--provider",
+                    "ollama",
+                    "--model",
+                    "m",
+                    "--strategy",
+                    "depth",
+                    "--rounds",
+                    "1",
+                    "-o",
+                    opath,
+                ],
             )
             assert result.exit_code == 0, (result.output, repr(result.exception))
             rows = [json.loads(x) for x in open(opath, encoding="utf-8") if x.strip()]

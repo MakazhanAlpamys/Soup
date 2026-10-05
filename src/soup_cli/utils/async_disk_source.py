@@ -127,10 +127,7 @@ def _spec_key(layer_spec: Mapping[str, Tuple[Tuple[int, ...], str]]) -> tuple:
     a decoder layer cannot hold a vocabulary matrix, and a buffer keyed on
     ``self_attn.q_proj.weight`` cannot answer ``model.embed_tokens.weight``.
     """
-    return tuple(
-        (name, tuple(shape), dtype)
-        for name, (shape, dtype) in sorted(layer_spec.items())
-    )
+    return tuple((name, tuple(shape), dtype) for name, (shape, dtype) in sorted(layer_spec.items()))
 
 
 @dataclass(frozen=True)
@@ -399,9 +396,7 @@ class AsyncDiskSource:
             for name, (shape, dtype) in self._layer_specs[idx].items():
                 entry = header.get(name)
                 if entry is None:
-                    raise ValueError(
-                        f"{self._paths[idx]}: layer {idx} is missing tensor {name!r}"
-                    )
+                    raise ValueError(f"{self._paths[idx]}: layer {idx} is missing tensor {name!r}")
                 if entry.shape != tuple(shape) or entry.dtype != dtype:
                     raise ValueError(
                         f"{self._paths[idx]}: tensor {name!r} disagrees with the "
@@ -436,9 +431,7 @@ class AsyncDiskSource:
             lo = min(entry.start for entry in wanted)
             hi = max(entry.end for entry in wanted)
             if hi <= lo:
-                raise ValueError(
-                    f"{self._paths[idx]}: layer {idx}'s wanted tensors hold no bytes"
-                )
+                raise ValueError(f"{self._paths[idx]}: layer {idx}'s wanted tensors hold no bytes")
             start, end = aligned_span(lo, hi)
             # Staging reads the whole span, foreign tensors between the wanted
             # ones included. A small one is the cost of the design; a large one
@@ -510,9 +503,7 @@ class AsyncDiskSource:
         # is no walk to speak of.
         self._group_bounds: List[Tuple[int, int]] = []
         for group in range(len(groups)):
-            indices = [
-                idx for idx in range(self.n_layers) if self._group_of[idx] == group
-            ]
+            indices = [idx for idx in range(self.n_layers) if self._group_of[idx] == group]
             self._group_bounds.append((min(indices), max(indices)))
 
         # Staging is ONE region per slot — the layer's whole data section,
@@ -526,9 +517,7 @@ class AsyncDiskSource:
         first_member: List[int] = []
         self._group_slots: List[List[int]] = []
         for group in range(len(specs_by_group)):
-            members_of_group = [
-                idx for idx in range(self.n_layers) if self._group_of[idx] == group
-            ]
+            members_of_group = [idx for idx in range(self.n_layers) if self._group_of[idx] == group]
             span = max(self._plans[idx].span for idx in members_of_group)
             # Depth beyond the number of layers sharing a spec buys nothing and
             # costs a whole vocabulary matrix of pinned host memory: embed and
@@ -754,9 +743,7 @@ class AsyncDiskSource:
                             f"a base while a run is reading it."
                         )
                     view = region[start - plan.start : end - plan.start]
-                    read_range_into(
-                        handle, start, view, min(end, expected_identity.size) - start
-                    )
+                    read_range_into(handle, start, view, min(end, expected_identity.size) - start)
 
             return work
 
@@ -888,11 +875,7 @@ class AsyncDiskSource:
           alternative is a wrong gradient with no error anywhere.
         """
         keep = self._slot_of.get(idx)
-        borrowed = [
-            slot
-            for slot in range(len(self._slots))
-            if slot != keep and self._live[slot]
-        ]
+        borrowed = [slot for slot in range(len(self._slots)) if slot != keep and self._live[slot]]
         if borrowed and self.pinned:
             layer_in_slot = {held: lay for lay, held in self._slot_of.items()}
             # Sort the layer NUMBERS, then stringify: sorting the strings puts
@@ -1192,9 +1175,7 @@ class AsyncDiskSource:
                 # prevent. Missing rather than hitting changes nothing about
                 # that split — see `_hold`.
                 self._hold(idx)
-                if idx not in self._in_flight_batch and (
-                    not self._queue or self._queue[0] != idx
-                ):
+                if idx not in self._in_flight_batch and (not self._queue or self._queue[0] != idx):
                     # Demand goes to the FRONT: a blocked consumer outranks any
                     # lookahead, including one this same walk planned. The rest
                     # of the queue is dropped — wanting a layer the plan did not

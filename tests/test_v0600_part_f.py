@@ -32,9 +32,7 @@ def _make_model_dir(tmp_path: Path, name: str = "model") -> Path:
 def _make_dataset_dir(tmp_path: Path, name: str = "dataset") -> Path:
     target = tmp_path / name
     target.mkdir()
-    (target / "train.jsonl").write_text(
-        '{"text": "hello"}\n{"text": "world"}\n', encoding="utf-8"
-    )
+    (target / "train.jsonl").write_text('{"text": "hello"}\n{"text": "world"}\n', encoding="utf-8")
     return target
 
 
@@ -46,6 +44,7 @@ class TestPlan:
             build_airgap_bundle,
             inspect_airgap_bundle,
         )
+
         assert callable(build_airgap_bundle)
         assert callable(inspect_airgap_bundle)
         assert dataclasses.is_dataclass(AirgapBundlePlan)
@@ -106,6 +105,7 @@ class TestBuild:
             AirgapBundlePlan,
             build_airgap_bundle,
         )
+
         plan = AirgapBundlePlan(
             output=str(tmp_path / "bundle.tar"),
             model_dir=str(model),
@@ -131,6 +131,7 @@ class TestBuild:
             AirgapBundlePlan,
             build_airgap_bundle,
         )
+
         plan = AirgapBundlePlan(
             output=str(tmp_path / "bundle.tar"),
             model_dir=str(model),
@@ -152,6 +153,7 @@ class TestBuild:
             AirgapBundlePlan,
             build_airgap_bundle,
         )
+
         # Cap = 1 byte; the model has more.
         plan = AirgapBundlePlan(
             output=str(tmp_path / "bundle.tar"),
@@ -171,6 +173,7 @@ class TestBuild:
             AirgapBundlePlan,
             build_airgap_bundle,
         )
+
         outside_out = str(tmp_path.parent / "bundle.tar")
         plan = AirgapBundlePlan(
             output=outside_out,
@@ -189,6 +192,7 @@ class TestBuild:
             AirgapBundlePlan,
             build_airgap_bundle,
         )
+
         plan = AirgapBundlePlan(
             output=str(tmp_path / "bundle.tar"),
             model_dir=str(tmp_path.parent / "outside_model"),
@@ -210,6 +214,7 @@ class TestInspect:
             build_airgap_bundle,
             inspect_airgap_bundle,
         )
+
         plan = AirgapBundlePlan(
             output=str(tmp_path / "bundle.tar"),
             model_dir=str(model),
@@ -261,11 +266,14 @@ class TestAirgapCli:
         model = _make_model_dir(tmp_path)
         runner = CliRunner()
         result = runner.invoke(
-            app, [
+            app,
+            [
                 "airgap-bundle",
-                "--model", str(model.relative_to(tmp_path)),
-                "--output", "bundle.tar",
-            ]
+                "--model",
+                str(model.relative_to(tmp_path)),
+                "--output",
+                "bundle.tar",
+            ],
         )
         assert result.exit_code == 0, (result.output, repr(result.exception))
         assert (tmp_path / "bundle.tar").is_file()
@@ -278,12 +286,16 @@ class TestAirgapCli:
         (model / "weights.safetensors").write_bytes(b"x" * 10_000)
         runner = CliRunner()
         result = runner.invoke(
-            app, [
+            app,
+            [
                 "airgap-bundle",
-                "--model", str(model.relative_to(tmp_path)),
-                "--output", "bundle.tar",
-                "--bundle-size-cap", "0.000001",  # ~1073 bytes < 10 000
-            ]
+                "--model",
+                str(model.relative_to(tmp_path)),
+                "--output",
+                "bundle.tar",
+                "--bundle-size-cap",
+                "0.000001",  # ~1073 bytes < 10 000
+            ],
         )
         assert result.exit_code != 0
 
@@ -299,13 +311,17 @@ class TestSecurityReviewFixes:
         guards future maintainers who add ``tar.extractall``.
         """
         import sys
+
         if sys.version_info < (3, 12):
             pytest.skip("data_filter ships in Python 3.12+")
         # Just confirm the helper is referenced in the source — that's
         # the regression-proof bit.
         src = (
             Path(__file__).resolve().parent.parent
-            / "src" / "soup_cli" / "utils" / "airgap_bundle.py"
+            / "src"
+            / "soup_cli"
+            / "utils"
+            / "airgap_bundle.py"
         )
         text = src.read_text(encoding="utf-8")
         assert "tarfile.data_filter" in text
@@ -323,6 +339,7 @@ class TestSecurityReviewFixes:
             AirgapBundlePlan,
             build_airgap_bundle,
         )
+
         plan = AirgapBundlePlan(
             output=str(link),
             model_dir=str(model),
@@ -344,6 +361,7 @@ class TestSecurityReviewFixes:
             AirgapBundlePlan,
             build_airgap_bundle,
         )
+
         plan1 = AirgapBundlePlan(
             output=str(tmp_path / "b1.tar"),
             model_dir=str(model),
@@ -370,6 +388,7 @@ class TestSecurityReviewFixes:
         """Crafted bundles with multi-GiB manifest.json are rejected."""
         import io as _io
         import tarfile as _tarfile
+
         monkeypatch.chdir(tmp_path)
         bad = tmp_path / "evil_bundle.tar"
         with _tarfile.open(bad, "w") as tar:
@@ -399,6 +418,7 @@ class TestSourceWiring:
             AirgapBundlePlan,
             build_airgap_bundle,
         )
+
         plan = AirgapBundlePlan(
             output=str(tmp_path / "bundle.tar"),
             model_dir=str(model),

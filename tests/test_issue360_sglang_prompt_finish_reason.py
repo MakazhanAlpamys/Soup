@@ -252,9 +252,7 @@ class _TemplatelessTokenizer:
     chat_template = None
 
     def apply_chat_template(self, *args, **kwargs):  # pragma: no cover — must not be called
-        raise AssertionError(
-            "apply_chat_template must not be called on a template-less tokenizer"
-        )
+        raise AssertionError("apply_chat_template must not be called on a template-less tokenizer")
 
 
 @pytest.mark.skipif(not _has_fastapi(), reason="fastapi not installed")
@@ -311,9 +309,7 @@ class TestServeSglangWiring:
             lambda **kwargs: (MagicMock(), "runtime-model"),
             raising=False,
         )
-        monkeypatch.setattr(
-            sglang_mod, "create_sglang_app", lambda **kwargs: kwargs, raising=False
-        )
+        monkeypatch.setattr(sglang_mod, "create_sglang_app", lambda **kwargs: kwargs, raising=False)
 
         def _fake_loader(**kwargs):
             capture["kwargs"] = kwargs

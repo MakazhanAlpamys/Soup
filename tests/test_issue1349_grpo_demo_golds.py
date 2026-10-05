@@ -47,9 +47,7 @@ def test_every_row_parses_to_a_numeric_gold(path):
     assert [p.number for p in parsed] == _GOLDS
 
 
-@pytest.mark.parametrize(
-    ("reward_fn", "domain"), [("accuracy", None), ("verifiable", "math")]
-)
+@pytest.mark.parametrize(("reward_fn", "domain"), [("accuracy", None), ("verifiable", "math")])
 @pytest.mark.parametrize("completion", [r"\boxed{5}", "The answer is 5.", "#### 5"])
 def test_row_one_pays_the_value_however_it_is_written(reward_fn, domain, completion):
     gold = _prepared(_PACKAGE_COPY)[1]["answer"]

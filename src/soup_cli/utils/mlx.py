@@ -67,6 +67,7 @@ def get_chip_info() -> dict[str, str]:
 
     try:
         import subprocess  # noqa: S404 — used with list args only
+
         result = subprocess.run(  # noqa: S603, S607
             ["sysctl", "-n", "machdep.cpu.brand_string"],
             capture_output=True,
@@ -88,6 +89,7 @@ def get_unified_memory_bytes() -> Optional[int]:
         return None
     try:
         import subprocess  # noqa: S404
+
         result = subprocess.run(  # noqa: S603, S607
             ["sysctl", "-n", "hw.memsize"],
             capture_output=True,
@@ -138,7 +140,8 @@ def estimate_mlx_batch_size(
 
 
 def load_mlx_model(
-    model_path: str, quantization: str = "4bit",
+    model_path: str,
+    quantization: str = "4bit",
 ) -> tuple[Any, Any]:
     """Thin wrapper around ``mlx_lm.load`` (lazy import).
 

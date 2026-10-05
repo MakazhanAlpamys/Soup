@@ -25,11 +25,16 @@ class TestTTSUtils:
 
         assert isinstance(SUPPORTED_TTS_FAMILIES, frozenset)
         assert SUPPORTED_TTS_FAMILIES == {
-            "orpheus", "sesame_csm", "llasa", "spark", "oute",
+            "orpheus",
+            "sesame_csm",
+            "llasa",
+            "spark",
+            "oute",
         }
 
     @pytest.mark.parametrize(
-        "name", ["orpheus", "ORPHEUS", "Sesame_CSM", "llasa", "spark", "oute"],
+        "name",
+        ["orpheus", "ORPHEUS", "Sesame_CSM", "llasa", "spark", "oute"],
     )
     def test_validate_family_canonical(self, name):
         from soup_cli.utils.tts import validate_tts_family
@@ -37,7 +42,8 @@ class TestTTSUtils:
         assert validate_tts_family(name) == name.lower()
 
     @pytest.mark.parametrize(
-        "bad,exc", [
+        "bad,exc",
+        [
             (True, TypeError),
             (123, TypeError),
             ("", ValueError),
@@ -96,7 +102,8 @@ class TestTTSUtils:
         validate_tts_compat(task="tts", modality="audio_out", backend="transformers")
 
     @pytest.mark.parametrize(
-        "kwargs,match", [
+        "kwargs,match",
+        [
             ({"task": "sft", "modality": "audio_out", "backend": "transformers"}, "tts"),
             ({"task": "tts", "modality": "text", "backend": "transformers"}, "audio_out"),
             ({"task": "tts", "modality": "audio_out", "backend": "mlx"}, "mlx"),
@@ -219,7 +226,8 @@ class TestClassifierUtils:
             get_classifier_spec("sft")
 
     @pytest.mark.parametrize(
-        "value,exc", [
+        "value,exc",
+        [
             (True, TypeError),
             ("3", TypeError),
             (None, TypeError),
@@ -247,7 +255,8 @@ class TestClassifierUtils:
             validate_label_names(["a", "a", "b"])
 
     @pytest.mark.parametrize(
-        "value,exc", [
+        "value,exc",
+        [
             ("a", TypeError),
             ([True, "a"], TypeError),
             ([""], ValueError),
@@ -273,7 +282,9 @@ class TestClassifierUtils:
 
         with pytest.raises(ValueError, match="mlx"):
             validate_classifier_compat(
-                task="classifier", backend="mlx", modality="text",
+                task="classifier",
+                backend="mlx",
+                modality="text",
             )
 
     def test_validate_classifier_compat_non_text(self):
@@ -281,7 +292,9 @@ class TestClassifierUtils:
 
         with pytest.raises(ValueError, match="text"):
             validate_classifier_compat(
-                task="reranker", backend="transformers", modality="vision",
+                task="reranker",
+                backend="transformers",
+                modality="vision",
             )
 
     def test_build_classifier_trainer_lifted_in_v0532(self):
@@ -306,8 +319,7 @@ class TestClassifierSchema:
     @pytest.mark.parametrize("task", ["reranker", "cross_encoder"])
     def test_reranker_and_cross_encoder_happy(self, task):
         cfg = load_config_from_string(
-            f"base: foo\ntask: {task}\ndata: {{train: ./d.jsonl}}\n"
-            "training: {num_labels: 1}\n"
+            f"base: foo\ntask: {task}\ndata: {{train: ./d.jsonl}}\ntraining: {{num_labels: 1}}\n"
         )
         assert cfg.task == task
 
@@ -320,10 +332,7 @@ class TestClassifierSchema:
             load_config_from_string(yaml)
 
     def test_num_labels_outside_classifier_rejected(self):
-        yaml = (
-            "base: foo\ntask: sft\ndata: {train: ./d.jsonl}\n"
-            "training: {num_labels: 3}\n"
-        )
+        yaml = "base: foo\ntask: sft\ndata: {train: ./d.jsonl}\ntraining: {num_labels: 3}\n"
         with pytest.raises(Exception, match="classifier"):
             load_config_from_string(yaml)
 
@@ -344,7 +353,8 @@ class TestDistillUtils:
         assert validate_divergence("js") == "js"
 
     @pytest.mark.parametrize(
-        "bad,exc", [
+        "bad,exc",
+        [
             (True, TypeError),
             (None, TypeError),
             ("", ValueError),
@@ -366,7 +376,8 @@ class TestDistillUtils:
         assert get_divergence_spec("forward_kl").symmetric is False
 
     @pytest.mark.parametrize(
-        "value,exc", [
+        "value,exc",
+        [
             (True, TypeError),
             ("1.0", TypeError),
             (float("nan"), ValueError),
@@ -389,7 +400,8 @@ class TestDistillUtils:
         assert validate_distill_temperature(0.05) == 0.05
 
     @pytest.mark.parametrize(
-        "bad,exc", [
+        "bad,exc",
+        [
             (True, TypeError),
             (123, TypeError),
             ("", ValueError),
@@ -408,7 +420,9 @@ class TestDistillUtils:
 
         with pytest.raises(ValueError, match="teacher_model"):
             validate_distill_compat(
-                task="distill", backend="transformers", teacher_model=None,
+                task="distill",
+                backend="transformers",
+                teacher_model=None,
             )
 
     def test_validate_distill_compat_mlx(self):
@@ -416,7 +430,9 @@ class TestDistillUtils:
 
         with pytest.raises(ValueError, match="mlx"):
             validate_distill_compat(
-                task="distill", backend="mlx", teacher_model="t/model",
+                task="distill",
+                backend="mlx",
+                teacher_model="t/model",
             )
 
     def test_validate_distill_compat_unsloth(self):
@@ -425,11 +441,11 @@ class TestDistillUtils:
         # Pin the reason and the supported backend, not just the word "unsloth",
         # so a refusal that drops the explanation or the transformers pointer
         # still fails this test.
-        with pytest.raises(
-            ValueError, match=r"backend=unsloth: .*Use backend=transformers"
-        ):
+        with pytest.raises(ValueError, match=r"backend=unsloth: .*Use backend=transformers"):
             validate_distill_compat(
-                task="distill", backend="unsloth", teacher_model="t/model",
+                task="distill",
+                backend="unsloth",
+                teacher_model="t/model",
             )
 
     def test_soup_config_refuses_distill_on_unsloth(self):
@@ -437,9 +453,7 @@ class TestDistillUtils:
 
         from soup_cli.config.schema import SoupConfig
 
-        with pytest.raises(
-            ValidationError, match=r"backend=unsloth: .*Use backend=transformers"
-        ):
+        with pytest.raises(ValidationError, match=r"backend=unsloth: .*Use backend=transformers"):
             SoupConfig(
                 base="s/model",
                 task="distill",
@@ -479,10 +493,7 @@ class TestDistillSchema:
         assert cfg.training.distill_divergence == "forward_kl"
 
     def test_teacher_outside_distill_rejected(self):
-        yaml = (
-            "base: foo\ntask: sft\ndata: {train: ./d.jsonl}\n"
-            "training: {teacher_model: t/m}\n"
-        )
+        yaml = "base: foo\ntask: sft\ndata: {train: ./d.jsonl}\ntraining: {teacher_model: t/m}\n"
         with pytest.raises(Exception, match="distill"):
             load_config_from_string(yaml)
 
@@ -510,7 +521,8 @@ class TestBitNetUtils:
         assert BITNET_EXPORT_FORMATS == {"bitnet", "tq1_0"}
 
     @pytest.mark.parametrize(
-        "value,expected", [
+        "value,expected",
+        [
             ("bitnet_1.58", True),
             ("4bit", False),
             ("", False),
@@ -538,7 +550,8 @@ class TestBitNetUtils:
             get_bitnet_spec("4bit")
 
     @pytest.mark.parametrize(
-        "name,expected", [
+        "name,expected",
+        [
             ("microsoft/bitnet-b1.58-2B", True),
             ("tiiuae/Falcon-E-1B-Instruct", True),
             ("1bitllm/foo", True),
@@ -562,7 +575,8 @@ class TestBitNetUtils:
         assert validate_bitnet_export("TQ1_0") == "tq1_0"
 
     @pytest.mark.parametrize(
-        "bad,exc", [
+        "bad,exc",
+        [
             (True, TypeError),
             (None, TypeError),
             ("", ValueError),
@@ -644,7 +658,8 @@ class TestEbftGdpoUtils:
         assert validate_gdpo_variant("Margin") == "margin"
 
     @pytest.mark.parametrize(
-        "bad,exc", [
+        "bad,exc",
+        [
             (True, TypeError),
             (None, TypeError),
             ("", ValueError),
@@ -709,20 +724,14 @@ class TestEbftGdpoSchema:
             )
 
     def test_ebft_temp_requires_variant(self):
-        yaml = (
-            "base: x\ntask: sft\ndata: {train: ./d.jsonl}\n"
-            "training: {ebft_temperature: 2.0}\n"
-        )
+        yaml = "base: x\ntask: sft\ndata: {train: ./d.jsonl}\ntraining: {ebft_temperature: 2.0}\n"
         with pytest.raises(Exception, match="ebft_variant"):
             load_config_from_string(yaml)
 
     def test_ebft_on_dpo_rejected(self):
         # The #1230 refusal comes before the task gate; the gate itself is
         # tested directly in TestEbftGdpoUtils.test_validate_ebft_compat_dpo_rejected.
-        yaml = (
-            "base: x\ntask: dpo\ndata: {train: ./d.jsonl}\n"
-            "training: {ebft_variant: strided}\n"
-        )
+        yaml = "base: x\ntask: dpo\ndata: {train: ./d.jsonl}\ntraining: {ebft_variant: strided}\n"
         with pytest.raises(Exception, match="#1230"):
             load_config_from_string(yaml)
 
@@ -734,10 +743,7 @@ class TestEbftGdpoSchema:
         assert cfg.training.gdpo_variant == "length_normalized"
 
     def test_gdpo_on_sft_rejected(self):
-        yaml = (
-            "base: x\ntask: sft\ndata: {train: ./d.jsonl}\n"
-            "training: {gdpo_variant: standard}\n"
-        )
+        yaml = "base: x\ntask: sft\ndata: {train: ./d.jsonl}\ntraining: {gdpo_variant: standard}\n"
         with pytest.raises(Exception, match="dpo"):
             load_config_from_string(yaml)
 
@@ -758,7 +764,8 @@ class TestMoeQuantUtils:
         assert validate_moe_expert_quant("NF4") == "nf4"
 
     @pytest.mark.parametrize(
-        "bad,exc", [
+        "bad,exc",
+        [
             (True, TypeError),
             (None, TypeError),
             ("", ValueError),
@@ -783,7 +790,8 @@ class TestMoeQuantUtils:
 
         with pytest.raises(ValueError, match="moe_lora"):
             validate_moe_expert_quant_compat(
-                backend="transformers", moe_lora=False,
+                backend="transformers",
+                moe_lora=False,
             )
 
     def test_train_router_only_requires_moe_lora(self):
@@ -791,7 +799,8 @@ class TestMoeQuantUtils:
 
         with pytest.raises(ValueError, match="moe_lora"):
             validate_train_router_only_compat(
-                backend="transformers", moe_lora=False,
+                backend="transformers",
+                moe_lora=False,
             )
 
     def test_validate_moe_expert_quant_compat_mlx(self):
@@ -818,10 +827,7 @@ class TestMoeQuantSchema:
         assert cfg.training.moe_expert_quant == "nf4"
 
     def test_moe_expert_quant_without_moe_lora_rejected(self):
-        yaml = (
-            "base: x\ntask: sft\ndata: {train: ./d.jsonl}\n"
-            "training: {moe_expert_quant: nf4}\n"
-        )
+        yaml = "base: x\ntask: sft\ndata: {train: ./d.jsonl}\ntraining: {moe_expert_quant: nf4}\n"
         with pytest.raises(Exception, match="moe_lora"):
             load_config_from_string(yaml)
 
@@ -833,10 +839,7 @@ class TestMoeQuantSchema:
         assert cfg.training.train_router_only is True
 
     def test_train_router_only_without_moe_lora_rejected(self):
-        yaml = (
-            "base: x\ntask: sft\ndata: {train: ./d.jsonl}\n"
-            "training: {train_router_only: true}\n"
-        )
+        yaml = "base: x\ntask: sft\ndata: {train: ./d.jsonl}\ntraining: {train_router_only: true}\n"
         with pytest.raises(Exception, match="moe_lora"):
             load_config_from_string(yaml)
 
@@ -858,7 +861,8 @@ class TestReasoningEffortUtils:
         assert validate_reasoning_effort("medium") == "medium"
 
     @pytest.mark.parametrize(
-        "bad,exc", [
+        "bad,exc",
+        [
             (True, TypeError),
             (None, TypeError),
             ("", ValueError),
@@ -883,15 +887,12 @@ class TestReasoningEffortSchema:
         assert cfg.training.reasoning_effort == level
 
     def test_train_on_eot_default_false(self):
-        cfg = load_config_from_string(
-            "base: x\ntask: sft\ndata: {train: ./d.jsonl}\n"
-        )
+        cfg = load_config_from_string("base: x\ntask: sft\ndata: {train: ./d.jsonl}\n")
         assert cfg.training.train_on_eot is False
 
     def test_train_on_eot_true(self):
         cfg = load_config_from_string(
-            "base: x\ntask: sft\ndata: {train: ./d.jsonl}\n"
-            "training: {train_on_eot: true}\n"
+            "base: x\ntask: sft\ndata: {train: ./d.jsonl}\ntraining: {train_on_eot: true}\n"
         )
         assert cfg.training.train_on_eot is True
 
@@ -959,7 +960,8 @@ class TestV0520Recipes:
         assert cfg.base == recipe.model
 
     @pytest.mark.parametrize(
-        "name,expected_family", [
+        "name,expected_family",
+        [
             ("orpheus-tts-sft", "orpheus"),
             ("llasa-tts", "llasa"),
             ("oute-tts", "oute"),
@@ -990,7 +992,8 @@ class TestTddReviewGaps:
     """v0.52.0 TDD-review-pass coverage of gaps surfaced after the first cut."""
 
     @pytest.mark.parametrize(
-        "bad,exc", [
+        "bad,exc",
+        [
             (True, TypeError),
             (None, TypeError),
             ("", ValueError),
@@ -1006,7 +1009,8 @@ class TestTddReviewGaps:
             validate_ebft_variant(bad)
 
     @pytest.mark.parametrize(
-        "bad,exc", [
+        "bad,exc",
+        [
             (True, TypeError),
             (None, TypeError),
             ("", ValueError),
@@ -1022,7 +1026,8 @@ class TestTddReviewGaps:
             validate_gdpo_variant(bad)
 
     @pytest.mark.parametrize(
-        "bad,exc", [
+        "bad,exc",
+        [
             (True, TypeError),
             ("1.0", TypeError),
             (float("nan"), ValueError),
@@ -1038,7 +1043,8 @@ class TestTddReviewGaps:
             validate_ebft_temperature(bad)
 
     @pytest.mark.parametrize(
-        "kwargs,exc", [
+        "kwargs,exc",
+        [
             ({"task": "", "modality": "audio_out", "backend": "transformers"}, ValueError),
             ({"task": "tts\x00", "modality": "audio_out", "backend": "transformers"}, ValueError),
             ({"task": True, "modality": "audio_out", "backend": "transformers"}, TypeError),
@@ -1082,8 +1088,7 @@ class TestTddReviewGaps:
         # This is the documented Pydantic behaviour we accept; the
         # task-gate is what protects against silent no-op.
         cfg = load_config_from_string(
-            "base: x\ntask: sft\ndata: {train: ./d.jsonl}\n"
-            "training: {train_on_eot: 1}\n"
+            "base: x\ntask: sft\ndata: {train: ./d.jsonl}\ntraining: {train_on_eot: 1}\n"
         )
         assert cfg.training.train_on_eot is True
 
@@ -1092,7 +1097,9 @@ class TestTddReviewGaps:
         from soup_cli.recipes.catalog import RECIPES
 
         new = (
-            "orpheus-tts-sft", "llasa-tts", "oute-tts",
+            "orpheus-tts-sft",
+            "llasa-tts",
+            "oute-tts",
         )
         for name in new:
             base = RECIPES[name].model
@@ -1120,33 +1127,23 @@ class TestReviewFixes:
     def test_num_labels_bool_rejected_at_schema(self):
         # Pydantic ge=1 accepts True (subclass of int); the explicit
         # field_validator(mode="before") rejects bool.
-        yaml = (
-            "base: x\ntask: classifier\ndata: {train: ./d.jsonl}\n"
-            "training: {num_labels: true}\n"
-        )
+        yaml = "base: x\ntask: classifier\ndata: {train: ./d.jsonl}\ntraining: {num_labels: true}\n"
         with pytest.raises(Exception, match="num_labels"):
             load_config_from_string(yaml)
 
     def test_reasoning_effort_canonicalised_via_validator(self):
         cfg = load_config_from_string(
-            "base: x\ntask: sft\ndata: {train: ./d.jsonl}\n"
-            "training: {reasoning_effort: HIGH}\n"
+            "base: x\ntask: sft\ndata: {train: ./d.jsonl}\ntraining: {reasoning_effort: HIGH}\n"
         )
         assert cfg.training.reasoning_effort == "high"
 
     def test_reasoning_effort_task_gate(self):
-        yaml = (
-            "base: x\ntask: dpo\ndata: {train: ./d.jsonl}\n"
-            "training: {reasoning_effort: high}\n"
-        )
+        yaml = "base: x\ntask: dpo\ndata: {train: ./d.jsonl}\ntraining: {reasoning_effort: high}\n"
         with pytest.raises(Exception, match="reasoning_effort"):
             load_config_from_string(yaml)
 
     def test_train_on_eot_task_gate(self):
-        yaml = (
-            "base: x\ntask: dpo\ndata: {train: ./d.jsonl}\n"
-            "training: {train_on_eot: true}\n"
-        )
+        yaml = "base: x\ntask: dpo\ndata: {train: ./d.jsonl}\ntraining: {train_on_eot: true}\n"
         with pytest.raises(Exception, match="train_on_eot"):
             load_config_from_string(yaml)
 

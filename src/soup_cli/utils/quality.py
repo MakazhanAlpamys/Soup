@@ -43,7 +43,7 @@ def compute_perplexity_scores(
     scores = []
 
     for start_idx in range(0, len(texts), batch_size):
-        batch_texts = texts[start_idx:start_idx + batch_size]
+        batch_texts = texts[start_idx : start_idx + batch_size]
 
         encodings = tokenizer(
             batch_texts,
@@ -177,7 +177,8 @@ def filter_by_quality(
     perplexity_scores = None
     if perplexity_threshold is not None:
         perplexity_scores = compute_perplexity_scores(
-            texts, model_name=perplexity_model,
+            texts,
+            model_name=perplexity_model,
         )
 
     coherence_scores = None

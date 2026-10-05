@@ -114,9 +114,7 @@ def _validate_author_override(value: object) -> str:
     free-for-all bypass via boolean coercion (security review fix).
     """
     if isinstance(value, bool):
-        raise TypeError(
-            "allow_namespace_shift must be str (new author name), not bool"
-        )
+        raise TypeError("allow_namespace_shift must be str (new author name), not bool")
     if not isinstance(value, str) or not value:
         raise ValueError("allow_namespace_shift must be non-empty str")
     if "\x00" in value:
@@ -140,8 +138,7 @@ class NamespacePinStore:
         # / v0.54.0 / v0.59.0 audit-log policy).
         if _validate_db_path_override(path) is None:
             raise ValueError(
-                f"path {os.path.basename(path)!r} must stay under "
-                "$HOME / $CWD / $TMPDIR"
+                f"path {os.path.basename(path)!r} must stay under $HOME / $CWD / $TMPDIR"
             )
         parent = os.path.dirname(os.path.realpath(path)) or "."
         os.makedirs(parent, exist_ok=True)
@@ -184,8 +181,7 @@ class NamespacePinStore:
     def get(self, repo_id: str) -> Optional[NamespacePin]:
         _validate_repo_id(repo_id)
         cur = self._conn.execute(
-            "SELECT repo_id, author, created_at, first_seen "
-            "FROM namespace_pins WHERE repo_id = ?",
+            "SELECT repo_id, author, created_at, first_seen FROM namespace_pins WHERE repo_id = ?",
             (repo_id,),
         )
         row = cur.fetchone()
@@ -465,7 +461,7 @@ def _validate_db_path_override(override: str) -> Optional[str]:
     if len(override) > 4096:
         return None
     # Control character rejection
-    if any(ord(c) < 0x20 or ord(c) == 0x7f for c in override):
+    if any(ord(c) < 0x20 or ord(c) == 0x7F for c in override):
         return None
     try:
         realpath = os.path.realpath(override)

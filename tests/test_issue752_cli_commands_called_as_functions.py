@@ -43,6 +43,7 @@ SRC = pathlib.Path(__file__).resolve().parents[1] / "src" / "soup_cli"
 # the AST walker the guard is built on
 # --------------------------------------------------------------------------
 
+
 def _is_typer_default(node: ast.expr | None) -> bool:
     """Is this default a ``typer.Option(...)`` / ``typer.Argument(...)`` call?"""
     if not isinstance(node, ast.Call):
@@ -150,6 +151,7 @@ def find_optioninfo_leaks(root: pathlib.Path) -> list[tuple[str, int, str, list[
 # 1. the mechanism
 # --------------------------------------------------------------------------
 
+
 def test_unfilled_typer_parameters_are_truthy_optioninfo():
     """The premise of the whole issue: the default is an object, and it is truthy.
 
@@ -168,19 +170,16 @@ def test_unfilled_typer_parameters_are_truthy_optioninfo():
 # 2. the behaviour — soup eval auto must complete
 # --------------------------------------------------------------------------
 
+
 @pytest.fixture
 def eval_auto_workspace(tmp_path: pathlib.Path) -> pathlib.Path:
     """A config whose eval leg runs custom tasks and nothing else."""
     output = tmp_path / "output"
     output.mkdir()
     tasks = tmp_path / "tasks.jsonl"
-    tasks.write_text(
-        json.dumps({"prompt": "2+2?", "expected": "4"}) + "\n", encoding="utf-8"
-    )
+    tasks.write_text(json.dumps({"prompt": "2+2?", "expected": "4"}) + "\n", encoding="utf-8")
     train = tmp_path / "train.jsonl"
-    train.write_text(
-        json.dumps({"instruction": "hi", "output": "hello"}) + "\n", encoding="utf-8"
-    )
+    train.write_text(json.dumps({"instruction": "hi", "output": "hello"}) + "\n", encoding="utf-8")
     config = tmp_path / "soup.yaml"
     config.write_text(
         textwrap.dedent(
@@ -208,8 +207,9 @@ def _stub_eval_internals(monkeypatch):
     import soup_cli.eval.custom as ec
 
     monkeypatch.setattr(
-        ec, "_create_default_generator",
-        lambda path, trust_remote_code=False: (lambda p: "4"),
+        ec,
+        "_create_default_generator",
+        lambda path, trust_remote_code=False: lambda p: "4",
     )
     monkeypatch.setattr(ce, "_save_custom_results", lambda *a, **k: None)
 
@@ -258,15 +258,15 @@ def test_soup_eval_auto_writes_no_eval_json_when_none_was_requested(
 # 3. the call sites, by what they pass rather than by their source text
 # --------------------------------------------------------------------------
 
+
 def _recording_custom(recorded: dict):
     def _custom(**kwargs):
         recorded.update(kwargs)
+
     return _custom
 
 
-def test_auto_passes_every_typer_parameter_of_custom(
-    eval_auto_workspace, monkeypatch, tmp_path
-):
+def test_auto_passes_every_typer_parameter_of_custom(eval_auto_workspace, monkeypatch, tmp_path):
     import inspect
 
     import soup_cli.commands.eval as ce
@@ -320,11 +320,11 @@ def test_training_callback_passes_every_typer_parameter_of_custom(monkeypatch):
 # 4. the guard
 # --------------------------------------------------------------------------
 
+
 def test_no_typer_command_is_called_with_unfilled_typer_parameters():
     leaks = find_optioninfo_leaks(SRC)
     assert leaks == [], "\n".join(
-        f"{m}:{ln} calls {callee}() leaving {', '.join(missing)} "
-        f"bound to OptionInfo"
+        f"{m}:{ln} calls {callee}() leaving {', '.join(missing)} bound to OptionInfo"
         for m, ln, callee, missing in leaks
     )
 

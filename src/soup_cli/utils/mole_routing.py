@@ -71,9 +71,7 @@ def _check_int(value: object, field_name: str, lo: int, hi: int) -> int:
     return value
 
 
-def _check_finite_positive(
-    value: object, field_name: str, lo: float, hi: float
-) -> float:
+def _check_finite_positive(value: object, field_name: str, lo: float, hi: float) -> float:
     if isinstance(value, bool):
         raise TypeError(f"{field_name} must not be bool")
     if not isinstance(value, (int, float)):
@@ -124,9 +122,7 @@ class MoleGatingConfig:
             MIN_TASK_ADAPTERS,
             MAX_TASK_ADAPTERS,
         )
-        _check_int(
-            self.hidden_dim, "hidden_dim", MIN_HIDDEN_DIM, MAX_HIDDEN_DIM
-        )
+        _check_int(self.hidden_dim, "hidden_dim", MIN_HIDDEN_DIM, MAX_HIDDEN_DIM)
         _check_finite_positive(
             self.temperature,
             "temperature",
@@ -136,10 +132,7 @@ class MoleGatingConfig:
         # top_k must be positive and not exceed num_task_adapters
         _check_int(self.top_k, "top_k", 1, MAX_TASK_ADAPTERS)
         if self.top_k > self.num_task_adapters:
-            raise ValueError(
-                f"top_k {self.top_k} > num_task_adapters "
-                f"{self.num_task_adapters}"
-            )
+            raise ValueError(f"top_k {self.top_k} > num_task_adapters {self.num_task_adapters}")
 
 
 # ---------------------------------------------------------------------------
@@ -161,13 +154,10 @@ def validate_mole_task_adapters(value: object) -> list[str]:
     paths = list(value)
     if len(paths) < MIN_TASK_ADAPTERS:
         raise ValueError(
-            f"mole_task_adapters needs >= {MIN_TASK_ADAPTERS} adapters, "
-            f"got {len(paths)}"
+            f"mole_task_adapters needs >= {MIN_TASK_ADAPTERS} adapters, got {len(paths)}"
         )
     if len(paths) > MAX_TASK_ADAPTERS:
-        raise ValueError(
-            f"mole_task_adapters {len(paths)} > cap {MAX_TASK_ADAPTERS}"
-        )
+        raise ValueError(f"mole_task_adapters {len(paths)} > cap {MAX_TASK_ADAPTERS}")
     seen: set[str] = set()
     for item in paths:
         if isinstance(item, bool) or not isinstance(item, str):
@@ -177,9 +167,7 @@ def validate_mole_task_adapters(value: object) -> list[str]:
         if "\x00" in item:
             raise ValueError("mole_task_adapter path must not contain null bytes")
         if len(item) > _MAX_ADAPTER_PATH_LEN:
-            raise ValueError(
-                f"mole_task_adapter path exceeds {_MAX_ADAPTER_PATH_LEN} chars"
-            )
+            raise ValueError(f"mole_task_adapter path exceeds {_MAX_ADAPTER_PATH_LEN} chars")
         if item in seen:
             raise ValueError(f"duplicate mole_task_adapter path {item!r}")
         seen.add(item)
@@ -203,10 +191,7 @@ def validate_mole_compat(
     _check_str_field(task, "task")
     _check_str_field(backend, "backend")
     if task != "moe_lora_routing":
-        raise ValueError(
-            f"validate_mole_compat: task must be 'moe_lora_routing' "
-            f"(got {task!r})"
-        )
+        raise ValueError(f"validate_mole_compat: task must be 'moe_lora_routing' (got {task!r})")
     if backend == "mlx":
         raise ValueError(
             "MoLE routing is not supported on the mlx backend "
@@ -253,9 +238,7 @@ def _gating_kernel_cls():
             self.temperature = float(config.temperature)
             self.top_k = config.top_k
             # bias=False — a pure linear router over the residual stream.
-            self.gate = nn.Linear(
-                config.hidden_dim, config.num_task_adapters, bias=False
-            )
+            self.gate = nn.Linear(config.hidden_dim, config.num_task_adapters, bias=False)
 
         def forward(self, hidden):  # noqa: D401 — torch forward
             logits = self.gate(hidden) / self.temperature
@@ -326,18 +309,13 @@ class MoleServeManifest:
         )
         if self.num_task_adapters != len(self.adapters):
             raise ValueError(
-                f"num_task_adapters {self.num_task_adapters} != "
-                f"len(adapters) {len(self.adapters)}"
+                f"num_task_adapters {self.num_task_adapters} != len(adapters) {len(self.adapters)}"
             )
         _check_int(self.hidden_dim, "hidden_dim", MIN_HIDDEN_DIM, MAX_HIDDEN_DIM)
         _check_int(self.top_k, "top_k", 1, MAX_TASK_ADAPTERS)
         if self.top_k > self.num_task_adapters:
-            raise ValueError(
-                f"top_k {self.top_k} > num_task_adapters {self.num_task_adapters}"
-            )
-        _check_finite_positive(
-            self.temperature, "temperature", MIN_TEMPERATURE, MAX_TEMPERATURE
-        )
+            raise ValueError(f"top_k {self.top_k} > num_task_adapters {self.num_task_adapters}")
+        _check_finite_positive(self.temperature, "temperature", MIN_TEMPERATURE, MAX_TEMPERATURE)
 
 
 def _manifest_to_dict(manifest: MoleServeManifest) -> dict:
@@ -433,9 +411,7 @@ def load_mole_manifest(directory: str) -> MoleServeManifest:
     if stat.S_ISLNK(st.st_mode):
         raise ValueError("mole manifest must not be a symlink (TOCTOU defence)")
     if st.st_size > _MAX_MANIFEST_BYTES:
-        raise ValueError(
-            f"mole manifest size {st.st_size} > {_MAX_MANIFEST_BYTES}"
-        )
+        raise ValueError(f"mole manifest size {st.st_size} > {_MAX_MANIFEST_BYTES}")
     with open(real, encoding="utf-8") as fh:
         data = json.load(fh)
     return _manifest_from_dict(data)
@@ -574,7 +550,7 @@ class LoadedMole:
 
         model = self.model
         seq_len = int(input_ids.shape[1])
-        base_delta = input_ids[:, state.base_len:]
+        base_delta = input_ids[:, state.base_len :]
         with torch.no_grad(), model.disable_adapter():
             base_out = model(
                 input_ids=base_delta,
@@ -601,7 +577,7 @@ class LoadedMole:
             model.set_adapter(self.adapter_names[i])
             # Catch-up delta: an adapter skipped by top-k on earlier steps is
             # behind the sequence — feed it everything it missed at once.
-            delta_i = input_ids[:, state.lens.get(i, 0):]
+            delta_i = input_ids[:, state.lens.get(i, 0) :]
             with torch.no_grad():
                 out_i = model(
                     input_ids=delta_i,
@@ -654,9 +630,11 @@ class LoadedMole:
             raise ValueError("LoadedMole.generate supports a single sequence (B == 1)")
         seq = input_ids
         attn = attention_mask
-        do_sample = isinstance(temperature, (int, float)) and not isinstance(
-            temperature, bool
-        ) and float(temperature) > 0.0
+        do_sample = (
+            isinstance(temperature, (int, float))
+            and not isinstance(temperature, bool)
+            and float(temperature) > 0.0
+        )
         state = _MoleKvState() if _model_supports_cache(self.model) else None
         for _ in range(int(max_new_tokens)):
             if state is not None and state.enabled:
@@ -706,7 +684,7 @@ class LoadedMole:
             temperature=temperature,
             top_p=top_p,
         )
-        new_tokens = out[0][input_ids.shape[1]:]
+        new_tokens = out[0][input_ids.shape[1] :]
         response = tokenizer.decode(new_tokens, skip_special_tokens=True).strip()
         return response, int(input_ids.shape[1]), int(len(new_tokens))
 
@@ -760,9 +738,7 @@ def load_mole_for_serve(
         raise ValueError("mole gate must not be a symlink (TOCTOU defence)")
 
     resolved_base = base or manifest.base
-    tokenizer = AutoTokenizer.from_pretrained(
-        resolved_base, trust_remote_code=trust_remote_code
-    )
+    tokenizer = AutoTokenizer.from_pretrained(resolved_base, trust_remote_code=trust_remote_code)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 

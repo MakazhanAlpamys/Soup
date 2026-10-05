@@ -60,9 +60,7 @@ _MAX_DIVERSITY_TEXT_LEN = 65_536
 def validate_persona(persona: object) -> str:
     """Validate a persona string."""
     if isinstance(persona, bool) or not isinstance(persona, str):
-        raise TypeError(
-            f"persona must be str, got {type(persona).__name__}"
-        )
+        raise TypeError(f"persona must be str, got {type(persona).__name__}")
     if not persona:
         raise ValueError("persona must be non-empty")
     if "\x00" in persona:
@@ -128,9 +126,7 @@ class PersonaPlan:
             raise TypeError("PersonaPlan.seed must be an integer")
 
 
-def _check_list(
-    name: str, values: Sequence[Any], item_validator: Any
-) -> Tuple[str, ...]:
+def _check_list(name: str, values: Sequence[Any], item_validator: Any) -> Tuple[str, ...]:
     if isinstance(values, (str, bytes)) or not hasattr(values, "__iter__"):
         raise TypeError(f"{name} must be a list of strings")
     materialised = list(values)
@@ -256,9 +252,7 @@ def compute_topic_diversity(rows: Any) -> float:
     unique = len(counter)
     if unique <= 1:
         return 0.0
-    entropy = -sum(
-        (count / total) * math.log2(count / total) for count in counter.values()
-    )
+    entropy = -sum((count / total) * math.log2(count / total) for count in counter.values())
     max_entropy = math.log2(unique)
     if max_entropy <= 0:
         return 0.0

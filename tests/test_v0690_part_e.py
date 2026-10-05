@@ -275,13 +275,9 @@ class TestScoreDatasetBrainRot:
 
     def test_overall_minor_band(self) -> None:
         # Custom mix to land in MINOR band.
-        rows = (
-            [{"text": "lol!!! omg!!!"} for _ in range(3)]
-            + [
-                {"text": "Detailed scientific overview of cellular respiration."}
-                for _ in range(2)
-            ]
-        )
+        rows = [{"text": "lol!!! omg!!!"} for _ in range(3)] + [
+            {"text": "Detailed scientific overview of cellular respiration."} for _ in range(2)
+        ]
         report = brain_rot.score_dataset_brain_rot(rows)
         assert math.isfinite(report.mean_score)
 
@@ -293,10 +289,7 @@ class TestScoreDatasetBrainRot:
 
 class TestRefuseIfRotten:
     def test_clean_passes(self) -> None:
-        rows = [
-            {"text": "Detailed scientific overview of cellular biology."}
-            for _ in range(3)
-        ]
+        rows = [{"text": "Detailed scientific overview of cellular biology."} for _ in range(3)]
         # Should not raise.
         brain_rot.refuse_if_rotten(rows, max_major_fraction=0.5)
 
@@ -340,32 +333,23 @@ class TestBrainRotCli:
         result = runner.invoke(app, ["data", "brain-rot", str(path)])
         assert result.exit_code == 0, result.output
 
-    def test_sloppy_exits_3(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_sloppy_exits_3(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.chdir(tmp_path)
         path = _write(
             tmp_path / "slop.jsonl",
-            "\n".join(json.dumps({"text": "lol!!! omg!!!"}) for _ in range(10))
-            + "\n",
+            "\n".join(json.dumps({"text": "lol!!! omg!!!"}) for _ in range(10)) + "\n",
         )
         runner = CliRunner()
-        result = runner.invoke(
-            app, ["data", "brain-rot", str(path), "--strict"]
-        )
+        result = runner.invoke(app, ["data", "brain-rot", str(path), "--strict"])
         assert result.exit_code == 3
 
-    def test_missing_input(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_missing_input(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.chdir(tmp_path)
         runner = CliRunner()
         result = runner.invoke(app, ["data", "brain-rot", "nope.jsonl"])
         assert result.exit_code != 0
 
-    def test_outside_cwd(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_outside_cwd(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         outside = tmp_path / "outside"
         outside.mkdir()
         _write(outside / "d.jsonl", json.dumps({"text": "x"}) + "\n")
@@ -373,19 +357,13 @@ class TestBrainRotCli:
         sub.mkdir()
         monkeypatch.chdir(sub)
         runner = CliRunner()
-        result = runner.invoke(
-            app, ["data", "brain-rot", str(outside / "d.jsonl")]
-        )
+        result = runner.invoke(app, ["data", "brain-rot", str(outside / "d.jsonl")])
         assert result.exit_code != 0
 
     @pytest.mark.requires_symlink
-    def test_symlink_rejected(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_symlink_rejected(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.chdir(tmp_path)
-        target = _write(
-            tmp_path / "real.jsonl", json.dumps({"text": "x"}) + "\n"
-        )
+        target = _write(tmp_path / "real.jsonl", json.dumps({"text": "x"}) + "\n")
         link = tmp_path / "link.jsonl"
         os.symlink(str(target), str(link))
         runner = CliRunner()
@@ -401,9 +379,7 @@ class TestBrainRotCli:
 class TestSourceWiring:
     def test_no_heavy_imports(self) -> None:
         root = Path(__file__).resolve().parent.parent
-        src = (root / "src" / "soup_cli" / "utils" / "brain_rot.py").read_text(
-            encoding="utf-8"
-        )
+        src = (root / "src" / "soup_cli" / "utils" / "brain_rot.py").read_text(encoding="utf-8")
         for forbidden in (
             "\nimport torch",
             "\nimport transformers",

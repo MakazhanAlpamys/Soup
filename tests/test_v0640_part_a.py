@@ -57,6 +57,7 @@ def test_default_candidates_nonempty():
     assert len(DEFAULT_CANDIDATES) >= 6
     # Each entry must be CandidateBase
     from soup_cli.utils.tunability import CandidateBase
+
     for c in DEFAULT_CANDIDATES:
         assert isinstance(c, CandidateBase)
 
@@ -202,9 +203,7 @@ def test_validate_holdout_size_rejects(bad):
 def test_tunability_result_happy():
     from soup_cli.utils.tunability import CandidateBase, TunabilityResult
 
-    cand = CandidateBase(
-        name="qwen3-0.6b", repo_id="x/y", params_b=0.6, license_id="apache-2.0"
-    )
+    cand = CandidateBase(name="qwen3-0.6b", repo_id="x/y", params_b=0.6, license_id="apache-2.0")
     r = TunabilityResult(
         candidate=cand,
         base_loss=2.5,
@@ -412,8 +411,12 @@ def test_tunability_report_frozen():
 
     cand = CandidateBase(name="x", repo_id="x/y", params_b=1.0, license_id="apache-2.0")
     r = TunabilityResult(
-        candidate=cand, base_loss=2.5, probe_loss=2.0, delta=0.5,
-        wall_clock_seconds=60.0, estimated_cost_usd=0.05,
+        candidate=cand,
+        base_loss=2.5,
+        probe_loss=2.0,
+        delta=0.5,
+        wall_clock_seconds=60.0,
+        estimated_cost_usd=0.05,
     )
     report = TunabilityReport(results=(r,), frontier=(r,), probe_steps=100, holdout_size=64)
     with pytest.raises(dataclasses.FrozenInstanceError):
@@ -425,8 +428,12 @@ def test_tunability_report_results_tuple():
 
     cand = CandidateBase(name="x", repo_id="x/y", params_b=1.0, license_id="apache-2.0")
     r = TunabilityResult(
-        candidate=cand, base_loss=2.5, probe_loss=2.0, delta=0.5,
-        wall_clock_seconds=60.0, estimated_cost_usd=0.05,
+        candidate=cand,
+        base_loss=2.5,
+        probe_loss=2.0,
+        delta=0.5,
+        wall_clock_seconds=60.0,
+        estimated_cost_usd=0.05,
     )
     # Lists rejected — frozen=True doesn't make lists immutable
     with pytest.raises(TypeError, match="tuple"):
@@ -451,8 +458,9 @@ def test_run_tunability_with_mocked_probe(tmp_path):
         CandidateBase(name="cand-b", repo_id="x/z", params_b=1.0, license_id="mit"),
     )
 
-    def fake_probe(cand: CandidateBase, dataset_path: str, *, probe_steps: int,
-                   holdout_size: int) -> TunabilityResult:
+    def fake_probe(
+        cand: CandidateBase, dataset_path: str, *, probe_steps: int, holdout_size: int
+    ) -> TunabilityResult:
         # Synthetic: larger param count → bigger delta, longer wall-clock
         return TunabilityResult(
             candidate=cand,
@@ -524,8 +532,12 @@ def test_write_report_atomic_roundtrip(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     cand = CandidateBase(name="x", repo_id="x/y", params_b=1.0, license_id="apache-2.0")
     r = TunabilityResult(
-        candidate=cand, base_loss=2.5, probe_loss=2.0, delta=0.5,
-        wall_clock_seconds=60.0, estimated_cost_usd=0.05,
+        candidate=cand,
+        base_loss=2.5,
+        probe_loss=2.0,
+        delta=0.5,
+        wall_clock_seconds=60.0,
+        estimated_cost_usd=0.05,
     )
     report = TunabilityReport(results=(r,), frontier=(r,), probe_steps=100, holdout_size=64)
     out = tmp_path / "tunability.json"
@@ -548,8 +560,12 @@ def test_write_report_outside_cwd_rejected(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     cand = CandidateBase(name="x", repo_id="x/y", params_b=1.0, license_id="apache-2.0")
     r = TunabilityResult(
-        candidate=cand, base_loss=2.5, probe_loss=2.0, delta=0.5,
-        wall_clock_seconds=60.0, estimated_cost_usd=0.05,
+        candidate=cand,
+        base_loss=2.5,
+        probe_loss=2.0,
+        delta=0.5,
+        wall_clock_seconds=60.0,
+        estimated_cost_usd=0.05,
     )
     report = TunabilityReport(results=(r,), frontier=(r,), probe_steps=100, holdout_size=64)
     outside = tmp_path.parent / "evil.json"
@@ -569,8 +585,12 @@ def test_write_report_symlink_rejected(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     cand = CandidateBase(name="x", repo_id="x/y", params_b=1.0, license_id="apache-2.0")
     r = TunabilityResult(
-        candidate=cand, base_loss=2.5, probe_loss=2.0, delta=0.5,
-        wall_clock_seconds=60.0, estimated_cost_usd=0.05,
+        candidate=cand,
+        base_loss=2.5,
+        probe_loss=2.0,
+        delta=0.5,
+        wall_clock_seconds=60.0,
+        estimated_cost_usd=0.05,
     )
     report = TunabilityReport(results=(r,), frontier=(r,), probe_steps=100, holdout_size=64)
 
@@ -625,9 +645,13 @@ def test_cli_tunability_list_default_candidates():
     result = runner.invoke(app, ["tunability", "--list"])
     assert result.exit_code == 0, (result.output, repr(result.exception))
     # Should list at least one default candidate name.
-    assert "qwen" in result.output.lower() or "llama" in result.output.lower() or \
-        "phi" in result.output.lower() or "gemma" in result.output.lower() or \
-        "smol" in result.output.lower()
+    assert (
+        "qwen" in result.output.lower()
+        or "llama" in result.output.lower()
+        or "phi" in result.output.lower()
+        or "gemma" in result.output.lower()
+        or "smol" in result.output.lower()
+    )
 
 
 def test_cli_tunability_requires_dataset(tmp_path, monkeypatch):
@@ -695,4 +719,5 @@ def test_no_top_level_heavy_imports():
     for bad in ["^import torch", "^from torch", "^import transformers", "^from transformers"]:
         # Strict line-start match
         import re
+
         assert not re.search(bad, text, re.MULTILINE), f"top-level {bad} found"

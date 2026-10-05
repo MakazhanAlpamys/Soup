@@ -342,9 +342,7 @@ def _link_parent_site_packages(venv_dir: Path) -> None:
     )
 
 
-def test_link_parent_site_packages_exposes_the_parents_packages_to_the_child(
-    monkeypatch, tmp_path
-):
+def test_link_parent_site_packages_exposes_the_parents_packages_to_the_child(monkeypatch, tmp_path):
     """#1408: a package that lives only in the parent's site-packages must become
     importable in a child venv made with system_site_packages=True."""
     parent_site = tmp_path / "parent-site-packages"
@@ -455,9 +453,7 @@ def test_controller_rejects_available_manifest_not_bound_to_worker_receipt(
         manifest_path = publication_root / "shards/shard-0001/manifest.available.json"
         manifest = ShardManifest.model_validate_json(manifest_path.read_bytes())
         tampered = ShardManifest.model_validate(
-            manifest.model_copy(update={"plan_sha256": "f" * 64}).model_dump(
-                by_alias=True
-            )
+            manifest.model_copy(update={"plan_sha256": "f" * 64}).model_dump(by_alias=True)
         )
         manifest_path.write_bytes(canonical_json_bytes(tampered) + b"\n")
         return receipt

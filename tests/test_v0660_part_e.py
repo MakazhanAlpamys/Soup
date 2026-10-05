@@ -22,6 +22,7 @@ Public surface:
 - ``list_probe_bases()`` — sorted list of supported bases
 - ``render_pack_json`` / ``render_pack_markdown``
 """
+
 from __future__ import annotations
 
 import json
@@ -248,9 +249,7 @@ def test_probe_pack_rejects_empty_base():
     with pytest.raises(ValueError):
         ProbePack(
             base="",
-            probes=(
-                ProbeEntry(name="x", kind="sleeper", hidden_dim=4, description="d"),
-            ),
+            probes=(ProbeEntry(name="x", kind="sleeper", hidden_dim=4, description="d"),),
             soup_version="0.66.0",
         )
 
@@ -261,9 +260,7 @@ def test_probe_pack_rejects_null_byte_base():
     with pytest.raises(ValueError):
         ProbePack(
             base="a\x00b",
-            probes=(
-                ProbeEntry(name="x", kind="sleeper", hidden_dim=4, description="d"),
-            ),
+            probes=(ProbeEntry(name="x", kind="sleeper", hidden_dim=4, description="d"),),
             soup_version="0.66.0",
         )
 
@@ -341,8 +338,9 @@ def test_render_pack_markdown_renders_probes():
     pack = ProbePack(
         base="meta-llama/Llama-3-8B",
         probes=(
-            ProbeEntry(name="sleeper-1", kind="sleeper", hidden_dim=4096,
-                       description="Defection probe"),
+            ProbeEntry(
+                name="sleeper-1", kind="sleeper", hidden_dim=4096, description="Defection probe"
+            ),
         ),
         soup_version="0.66.0",
     )
@@ -370,7 +368,8 @@ def test_no_heavy_top_level_imports():
 
     source = inspect.getsource(probe_pack)
     top_level_imports = [
-        line for line in source.splitlines()
+        line
+        for line in source.splitlines()
         if line.startswith("import ") or line.startswith("from ")
     ]
     for line in top_level_imports:

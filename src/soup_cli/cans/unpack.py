@@ -32,7 +32,9 @@ MAX_EXTRACT_BYTES = 8 * 1024 * 1024 * 1024
 
 
 def _read_text_member(
-    tar: tarfile.TarFile, name: str, max_bytes: int,
+    tar: tarfile.TarFile,
+    name: str,
+    max_bytes: int,
 ) -> tuple[str, int]:
     """Return ``(text, byte_length)`` of a regular UTF-8 member, size-capped."""
     try:
@@ -42,19 +44,14 @@ def _read_text_member(
     if not member.isfile():
         raise ValueError(f"member '{name}' in can is not a regular file")
     if member.size > max_bytes:
-        raise ValueError(
-            f"member '{name}' in can is too large "
-            f"({member.size} > {max_bytes} bytes)"
-        )
+        raise ValueError(f"member '{name}' in can is too large ({member.size} > {max_bytes} bytes)")
     extracted = tar.extractfile(member)
     if extracted is None:
         raise ValueError(f"cannot read member '{name}' from can")
     # The header size is not trusted alone: the read itself is bounded.
     raw = extracted.read(max_bytes + 1)
     if len(raw) > max_bytes:
-        raise ValueError(
-            f"member '{name}' in can is too large (> {max_bytes} bytes)"
-        )
+        raise ValueError(f"member '{name}' in can is too large (> {max_bytes} bytes)")
     try:
         return raw.decode("utf-8"), len(raw)
     except UnicodeDecodeError as exc:
@@ -74,7 +71,9 @@ def inspect_can(path: str) -> Manifest:
         raise FileNotFoundError(f"can not found: {path}")
     with tarfile.open(can_path, mode="r:gz") as tar:
         manifest_text, manifest_bytes = _read_text_member(
-            tar, "manifest.yaml", MAX_MANIFEST_BYTES,
+            tar,
+            "manifest.yaml",
+            MAX_MANIFEST_BYTES,
         )
     data = yaml.safe_load(manifest_text) or {}
     check_yaml_expanded_size(data, "manifest.yaml", source_bytes=manifest_bytes)
@@ -119,20 +118,14 @@ def _safe_extract(tar: tarfile.TarFile, dest: Path) -> None:
 
     for member in tar.getmembers():
         if member.issym() or member.islnk():
-            raise ValueError(
-                f"symlinks / hardlinks are not allowed in .can files: {member.name}"
-            )
+            raise ValueError(f"symlinks / hardlinks are not allowed in .can files: {member.name}")
         target_path = os.path.realpath(os.path.join(dest_real, member.name))
         try:
             common = os.path.commonpath([dest_real, target_path])
         except ValueError as exc:
-            raise ValueError(
-                f"tar entry '{member.name}' escapes destination"
-            ) from exc
+            raise ValueError(f"tar entry '{member.name}' escapes destination") from exc
         if common != dest_real:
-            raise ValueError(
-                f"tar entry '{member.name}' escapes destination"
-            )
+            raise ValueError(f"tar entry '{member.name}' escapes destination")
         tar.extract(member, dest)
 
 
@@ -161,13 +154,11 @@ def _check_extract_bounds(tar: tarfile.TarFile) -> None:
         count += 1
         if count > MAX_EXTRACT_MEMBERS:
             raise ValueError(
-                f"can has too many members (> {MAX_EXTRACT_MEMBERS}); "
-                "refusing to extract"
+                f"can has too many members (> {MAX_EXTRACT_MEMBERS}); refusing to extract"
             )
         if member.isfile():
             total += member.size
             if total > MAX_EXTRACT_BYTES:
                 raise ValueError(
-                    f"can expands to more than {MAX_EXTRACT_BYTES} bytes; "
-                    "refusing to extract"
+                    f"can expands to more than {MAX_EXTRACT_BYTES} bytes; refusing to extract"
                 )

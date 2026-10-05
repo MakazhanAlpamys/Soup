@@ -62,10 +62,12 @@ class _FakeOptimizer:
 
 class TestPruneEmptyParamGroups:
     def test_the_empty_group_is_dropped(self):
-        opt = _FakeOptimizer([
-            {"params": ["a", "b"], "weight_decay": 0.01},
-            {"params": [], "weight_decay": 0.0},
-        ])
+        opt = _FakeOptimizer(
+            [
+                {"params": ["a", "b"], "weight_decay": 0.01},
+                {"params": [], "weight_decay": 0.0},
+            ]
+        )
         dropped = prune_empty_param_groups(opt)
         assert dropped == 1
         assert len(opt.param_groups) == 1
@@ -87,10 +89,12 @@ class TestPruneEmptyParamGroups:
     def test_the_surviving_group_keeps_its_hyperparameters(self):
         """Dropping a group must not silently reset weight decay or LR on the
         one that survives — that would train a different model."""
-        opt = _FakeOptimizer([
-            {"params": ["a"], "weight_decay": 0.123, "lr": 5e-5, "betas": (0.9, 0.95)},
-            {"params": [], "weight_decay": 0.0, "lr": 5e-5},
-        ])
+        opt = _FakeOptimizer(
+            [
+                {"params": ["a"], "weight_decay": 0.123, "lr": 5e-5, "betas": (0.9, 0.95)},
+                {"params": [], "weight_decay": 0.0, "lr": 5e-5},
+            ]
+        )
         prune_empty_param_groups(opt)
         kept = opt.param_groups[0]
         assert kept["weight_decay"] == 0.123
@@ -298,7 +302,10 @@ def _lora_wrap(model):
     return peft.get_peft_model(
         model,
         peft.LoraConfig(
-            r=8, lora_alpha=16, lora_dropout=0.0, target_modules=["q_proj", "v_proj"],
+            r=8,
+            lora_alpha=16,
+            lora_dropout=0.0,
+            target_modules=["q_proj", "v_proj"],
             task_type="CAUSAL_LM",
         ),
     )
@@ -307,7 +314,10 @@ def _lora_wrap(model):
 def _hf_trainer(model, tmp_path):
     transformers = pytest.importorskip("transformers")
     args = transformers.TrainingArguments(
-        output_dir=str(tmp_path), report_to=[], weight_decay=0.01, learning_rate=2e-4,
+        output_dir=str(tmp_path),
+        report_to=[],
+        weight_decay=0.01,
+        learning_rate=2e-4,
     )
     return transformers.Trainer(model=model, args=args)
 
@@ -351,9 +361,7 @@ def _scheduler_zip_is_strict() -> bool:
 
     first = torch.nn.Parameter(torch.zeros(1))
     second = torch.nn.Parameter(torch.zeros(1))
-    optimizer = torch.optim.SGD(
-        [{"params": [first]}, {"params": [second]}], lr=0.1
-    )
+    optimizer = torch.optim.SGD([{"params": [first]}, {"params": [second]}], lr=0.1)
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lambda _step: 1.0)
     optimizer.param_groups.pop()  # 1 group against 2 base_lrs
     try:
@@ -477,7 +485,7 @@ class TestTheSftWrapperWiresTheGuard:
     def test_the_call_is_conditional_on_deepspeed(self):
         src = self._sft_source()
         idx = src.index("attach_empty_param_group_guard(")
-        window = src[max(0, idx - 600):idx]
+        window = src[max(0, idx - 600) : idx]
         assert "self.deepspeed_config" in window, (
             "the guard must only fire under DeepSpeed — attaching it "
             "unconditionally would change every LoRA run's optimizer"

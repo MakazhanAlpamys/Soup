@@ -143,10 +143,7 @@ def test_compute_floor_respected():
 
 def test_compute_sums_to_one():
     p = DynamicCurriculumPolicy(num_buckets=5)
-    stats = {
-        i: {"num_samples": 5, "mean_loss": float(i), "mean_grad_norm": 0.1}
-        for i in range(5)
-    }
+    stats = {i: {"num_samples": 5, "mean_loss": float(i), "mean_grad_norm": 0.1} for i in range(5)}
     weights = compute_bucket_weights(stats, p)
     assert abs(sum(weights) - 1.0) < 1e-6
 
@@ -175,8 +172,8 @@ def test_compute_rejects_oversize_num_samples():
     p = DynamicCurriculumPolicy(num_buckets=2)
     with pytest.raises(ValueError, match="num_samples"):
         compute_bucket_weights(
-            {0: {"num_samples": 10_000_001, "mean_loss": 1.0,
-                 "mean_grad_norm": 1.0}}, p,
+            {0: {"num_samples": 10_000_001, "mean_loss": 1.0, "mean_grad_norm": 1.0}},
+            p,
         )
 
 
@@ -184,8 +181,8 @@ def test_compute_rejects_bool_bucket_id():
     p = DynamicCurriculumPolicy(num_buckets=2)
     with pytest.raises(TypeError, match="bucket id must be int"):
         compute_bucket_weights(
-            {True: {"num_samples": 1, "mean_loss": 1.0,
-                    "mean_grad_norm": 1.0}}, p,
+            {True: {"num_samples": 1, "mean_loss": 1.0, "mean_grad_norm": 1.0}},
+            p,
         )
 
 
@@ -193,8 +190,8 @@ def test_compute_rejects_negative_bucket_id():
     p = DynamicCurriculumPolicy(num_buckets=2)
     with pytest.raises(ValueError, match="bucket id must be >= 0"):
         compute_bucket_weights(
-            {-1: {"num_samples": 1, "mean_loss": 1.0,
-                  "mean_grad_norm": 1.0}}, p,
+            {-1: {"num_samples": 1, "mean_loss": 1.0, "mean_grad_norm": 1.0}},
+            p,
         )
 
 
@@ -205,8 +202,7 @@ def test_compute_rejects_non_mapping_payload():
 
 
 def test_bucket_stats_frozen():
-    bs = BucketStats(bucket_id=0, num_samples=1, mean_loss=0.5,
-                     mean_grad_norm=0.1)
+    bs = BucketStats(bucket_id=0, num_samples=1, mean_loss=0.5, mean_grad_norm=0.1)
     with pytest.raises(Exception):
         bs.num_samples = 99  # type: ignore[misc]
 
@@ -220,9 +216,7 @@ def test_distributed_single_rank_ok():
 
 def test_distributed_multi_rank_uncoordinated_rejected():
     with pytest.raises(ValueError, match="all_reduce hook"):
-        validate_distributed_curriculum(
-            True, world_size=4, rank_coordinated=False
-        )
+        validate_distributed_curriculum(True, world_size=4, rank_coordinated=False)
 
 
 def test_distributed_multi_rank_coordinated_ok():
@@ -230,37 +224,39 @@ def test_distributed_multi_rank_coordinated_ok():
 
 
 def test_distributed_disabled_short_circuit():
-    validate_distributed_curriculum(
-        False, world_size=4, rank_coordinated=False
-    )
+    validate_distributed_curriculum(False, world_size=4, rank_coordinated=False)
 
 
 def test_distributed_rejects_bool_world_size():
     with pytest.raises(ValueError, match="world_size must be int"):
         validate_distributed_curriculum(
-            True, world_size=True, rank_coordinated=True  # type: ignore[arg-type]
+            True,
+            world_size=True,
+            rank_coordinated=True,  # type: ignore[arg-type]
         )
 
 
 def test_distributed_rejects_non_bool_enabled():
     with pytest.raises(TypeError, match="enabled must be bool"):
         validate_distributed_curriculum(
-            "yes", world_size=1, rank_coordinated=False  # type: ignore[arg-type]
+            "yes",
+            world_size=1,
+            rank_coordinated=False,  # type: ignore[arg-type]
         )
 
 
 def test_distributed_rejects_non_bool_coordinated():
     with pytest.raises(TypeError, match="rank_coordinated must be bool"):
         validate_distributed_curriculum(
-            True, world_size=2, rank_coordinated="yes"  # type: ignore[arg-type]
+            True,
+            world_size=2,
+            rank_coordinated="yes",  # type: ignore[arg-type]
         )
 
 
 def test_distributed_rejects_zero_world_size():
     with pytest.raises(ValueError, match="world_size must be >= 1"):
-        validate_distributed_curriculum(
-            True, world_size=0, rank_coordinated=True
-        )
+        validate_distributed_curriculum(True, world_size=0, rank_coordinated=True)
 
 
 # ---------- render_curve --------------------------------------------------
@@ -369,9 +365,7 @@ def test_schema_rejects_dynamic_without_static():
             base="meta-llama/Llama-3.2-1B",
             task="sft",
             data=DataConfig(train="data.jsonl"),
-            training=TrainingConfig(
-                curriculum=False, curriculum_dynamic=True
-            ),
+            training=TrainingConfig(curriculum=False, curriculum_dynamic=True),
         )
 
 
@@ -410,9 +404,7 @@ def test_schema_pretrain_accepted():
         base="meta-llama/Llama-3.2-1B",
         task="pretrain",
         data=DataConfig(train="data.txt", format="plaintext"),
-        training=TrainingConfig(
-            curriculum=True, curriculum_dynamic=True, curriculum_buckets=4
-        ),
+        training=TrainingConfig(curriculum=True, curriculum_dynamic=True, curriculum_buckets=4),
     )
     assert cfg.training.curriculum_dynamic is True
 
@@ -464,6 +456,7 @@ def test_curriculum_curve_cli_help():
     from typer.testing import CliRunner
 
     from soup_cli.cli import app
+
     runner = CliRunner()
     result = runner.invoke(app, ["runs", "curriculum-curve", "--help"])
     assert result.exit_code == 0
@@ -474,11 +467,10 @@ def test_curriculum_curve_run_not_found(tmp_path, monkeypatch):
     from typer.testing import CliRunner
 
     from soup_cli.cli import app
+
     monkeypatch.chdir(tmp_path)
     runner = CliRunner()
-    result = runner.invoke(
-        app, ["runs", "curriculum-curve", "nonexistent-run-xyz"]
-    )
+    result = runner.invoke(app, ["runs", "curriculum-curve", "nonexistent-run-xyz"])
     assert result.exit_code == 1
     assert "not found" in result.output.lower()
 
@@ -488,6 +480,7 @@ def test_curriculum_curve_missing_history_file(tmp_path, monkeypatch):
     from typer.testing import CliRunner
 
     from soup_cli.cli import app
+
     monkeypatch.chdir(tmp_path)
     runner = CliRunner()
     # Use --history pointing at non-existent file under cwd; the run lookup
@@ -495,8 +488,11 @@ def test_curriculum_curve_missing_history_file(tmp_path, monkeypatch):
     result = runner.invoke(
         app,
         [
-            "runs", "curriculum-curve", "anything",
-            "--history", str(tmp_path / "missing.jsonl"),
+            "runs",
+            "curriculum-curve",
+            "anything",
+            "--history",
+            str(tmp_path / "missing.jsonl"),
         ],
     )
     # Either run-not-found (1) or invalid args; not crash.
@@ -508,6 +504,7 @@ def test_curriculum_curve_history_outside_cwd(tmp_path, monkeypatch):
     from typer.testing import CliRunner
 
     from soup_cli.cli import app
+
     work = tmp_path / "work"
     work.mkdir()
     elsewhere = tmp_path / "elsewhere.jsonl"
@@ -526,8 +523,11 @@ def test_curriculum_curve_history_outside_cwd(tmp_path, monkeypatch):
     result = runner.invoke(
         app,
         [
-            "runs", "curriculum-curve", "stub",
-            "--history", str(elsewhere),
+            "runs",
+            "curriculum-curve",
+            "stub",
+            "--history",
+            str(elsewhere),
         ],
     )
     assert result.exit_code == 2
@@ -543,8 +543,10 @@ def test_curriculum_curve_render_jsonl(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     history = tmp_path / "history.jsonl"
     history.write_text(
-        json.dumps({"step": 100, "weights": [0.25, 0.25, 0.25, 0.25]}) + "\n"
-        + json.dumps({"step": 200, "weights": [0.1, 0.2, 0.3, 0.4]}) + "\n"
+        json.dumps({"step": 100, "weights": [0.25, 0.25, 0.25, 0.25]})
+        + "\n"
+        + json.dumps({"step": 200, "weights": [0.1, 0.2, 0.3, 0.4]})
+        + "\n"
     )
 
     class FakeTracker:
@@ -556,8 +558,11 @@ def test_curriculum_curve_render_jsonl(tmp_path, monkeypatch):
     result = runner.invoke(
         app,
         [
-            "runs", "curriculum-curve", "stub",
-            "--history", str(history),
+            "runs",
+            "curriculum-curve",
+            "stub",
+            "--history",
+            str(history),
         ],
     )
     assert result.exit_code == 0
@@ -661,9 +666,7 @@ def test_curriculum_curve_render_includes_exception_info(tmp_path, monkeypatch):
 
     monkeypatch.chdir(tmp_path)
     history = tmp_path / "history.jsonl"
-    history.write_text(
-        json.dumps({"step": 100, "weights": [0.5, 0.5]}) + "\n"
-    )
+    history.write_text(json.dumps({"step": 100, "weights": [0.5, 0.5]}) + "\n")
 
     class FakeTracker:
         def get_run(self, run_id):
@@ -671,9 +674,7 @@ def test_curriculum_curve_render_includes_exception_info(tmp_path, monkeypatch):
 
     monkeypatch.setattr(et, "ExperimentTracker", FakeTracker)
     runner = CliRunner()
-    result = runner.invoke(
-        app, ["runs", "curriculum-curve", "stub", "--history", str(history)]
-    )
+    result = runner.invoke(app, ["runs", "curriculum-curve", "stub", "--history", str(history)])
     assert result.exit_code == 0, (result.output, repr(result.exception))
 
 
@@ -695,9 +696,7 @@ def test_curriculum_curve_corrupt_history(tmp_path, monkeypatch):
 
     monkeypatch.setattr(et, "ExperimentTracker", FakeTracker)
     runner = CliRunner()
-    result = runner.invoke(
-        app, ["runs", "curriculum-curve", "stub", "--history", str(history)]
-    )
+    result = runner.invoke(app, ["runs", "curriculum-curve", "stub", "--history", str(history)])
     assert result.exit_code == 2
     assert "malformed" in result.output.lower()
 
@@ -728,8 +727,6 @@ def test_curriculum_curve_rejects_oversize_file(tmp_path, monkeypatch):
 
     monkeypatch.setattr(os.path, "getsize", fake_getsize)
     runner = CliRunner()
-    result = runner.invoke(
-        app, ["runs", "curriculum-curve", "stub", "--history", str(history)]
-    )
+    result = runner.invoke(app, ["runs", "curriculum-curve", "stub", "--history", str(history)])
     assert result.exit_code == 2
     assert "50 mb" in strip_ansi(result.output).lower()

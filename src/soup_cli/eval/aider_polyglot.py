@@ -64,11 +64,7 @@ class AiderEvalError(ValueError):
 
 def _validate_image_name(image: str) -> None:
     """Reject values Docker could parse as options instead of an image."""
-    if (
-        not isinstance(image, str)
-        or not image
-        or _DOCKER_IMAGE_RE.fullmatch(image) is None
-    ):
+    if not isinstance(image, str) or not image or _DOCKER_IMAGE_RE.fullmatch(image) is None:
         raise AiderEvalError(
             "--image must be a valid Docker image reference and cannot begin with '-'"
         )
@@ -90,9 +86,7 @@ def preflight_docker(image: str) -> str:
 
     docker = shutil.which("docker")
     if docker is None:
-        raise AiderEvalError(
-            "Docker CLI was not found. Install Docker, start it, and retry."
-        )
+        raise AiderEvalError("Docker CLI was not found. Install Docker, start it, and retry.")
 
     try:
         daemon = subprocess.run(  # noqa: S603 -- trusted executable, fixed argv
@@ -112,8 +106,7 @@ def preflight_docker(image: str) -> str:
         detail = _process_message(daemon)
         suffix = f" ({detail})" if detail else ""
         raise AiderEvalError(
-            "Docker is installed, but its daemon is unavailable. Start Docker "
-            f"and retry{suffix}"
+            f"Docker is installed, but its daemon is unavailable. Start Docker and retry{suffix}"
         )
 
     try:
@@ -266,9 +259,7 @@ def _read_result(path: Path) -> dict[str, Any]:
         if not stat.S_ISREG(file_stat.st_mode):
             raise AiderEvalError(f"Aider result is not a regular file: {path}")
         if file_stat.st_size > MAX_RESULT_FILE_BYTES:
-            raise AiderEvalError(
-                f"Aider result is too large ({file_stat.st_size} bytes): {path}"
-            )
+            raise AiderEvalError(f"Aider result is too large ({file_stat.st_size} bytes): {path}")
         with os.fdopen(descriptor, encoding="utf-8") as handle:
             descriptor = -1
             raw = handle.read(MAX_RESULT_FILE_BYTES + 1)

@@ -109,7 +109,7 @@ def strip_boilerplate(text: str) -> Tuple[str, bool]:
         for pattern in _BOILERPLATE_PREFIXES:
             match = pattern.match(current)
             if match:
-                current = current[match.end():].lstrip()
+                current = current[match.end() :].lstrip()
                 changed = True
                 break
 
@@ -220,18 +220,14 @@ def _clean_tool_calls(
         if isinstance(func, dict):
             args = func.get("arguments")
             if isinstance(args, str):
-                cleaned_args = _clean_arguments(
-                    args, applied_rules, repair_json, drop_invalid_json
-                )
+                cleaned_args = _clean_arguments(args, applied_rules, repair_json, drop_invalid_json)
                 if cleaned_args is None:
                     return None
                 c["function"] = {**func, "arguments": cleaned_args}
         else:
             args = c.get("arguments", "")
             if isinstance(args, str):
-                cleaned_args = _clean_arguments(
-                    args, applied_rules, repair_json, drop_invalid_json
-                )
+                cleaned_args = _clean_arguments(args, applied_rules, repair_json, drop_invalid_json)
                 if cleaned_args is None:
                     return None
                 c["arguments"] = cleaned_args
@@ -354,10 +350,7 @@ def clean_row(
                     # #1477 - a call-only turn carries its payload in tool_calls,
                     # and "" is what the unified tool-calling format writes there;
                     # keep it as the same turn with content null is kept.
-                    if (
-                        not _has_tool_calls(msg)
-                        and len(sanitized_content.strip()) < min_tokens
-                    ):
+                    if not _has_tool_calls(msg) and len(sanitized_content.strip()) < min_tokens:
                         return None, ["Empty / Whitespace Turns"]
 
                     msg["content"] = sanitized_content
@@ -572,4 +565,3 @@ def clean_dataset(
             cleaned_rows.append(cleaned)
 
     return cleaned_rows, report
-

@@ -122,14 +122,11 @@ def validate_source_name(name: object) -> str:
     if "\x00" in name:
         raise ValueError("source name must not contain null bytes")
     if len(name) > _MAX_SOURCE_NAME_LEN:
-        raise ValueError(
-            f"source name must be <= {_MAX_SOURCE_NAME_LEN} chars, got {len(name)}"
-        )
+        raise ValueError(f"source name must be <= {_MAX_SOURCE_NAME_LEN} chars, got {len(name)}")
     canonical = name.lower().strip()
     if canonical not in SUPPORTED_INGEST_SOURCES:
         raise ValueError(
-            f"unknown ingest source {name!r}; supported: "
-            f"{sorted(SUPPORTED_INGEST_SOURCES)}"
+            f"unknown ingest source {name!r}; supported: {sorted(SUPPORTED_INGEST_SOURCES)}"
         )
     return canonical
 

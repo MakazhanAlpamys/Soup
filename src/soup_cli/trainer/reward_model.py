@@ -89,15 +89,12 @@ class RewardModelTrainerWrapper:
 
         self._setup_transformers(cfg, tcfg)
 
-        apply_chat_template_override(
-            self.tokenizer, cfg.data.chat_template, console=console
-        )
+        apply_chat_template_override(self.tokenizer, cfg.data.chat_template, console=console)
 
         trainable, total = self.model.get_nb_trainable_parameters()
         pct = 100 * trainable / total
         console.print(
-            f"[green]LoRA applied:[/] {trainable:,} trainable"
-            f" / {total:,} total ({pct:.2f}%)"
+            f"[green]LoRA applied:[/] {trainable:,} trainable / {total:,} total ({pct:.2f}%)"
         )
 
         # --- Batch size ---
@@ -137,8 +134,7 @@ class RewardModelTrainerWrapper:
         import math
 
         total_steps = (
-            math.ceil(len(train_ds) / batch_size / tcfg.gradient_accumulation_steps)
-            * tcfg.epochs
+            math.ceil(len(train_ds) / batch_size / tcfg.gradient_accumulation_steps) * tcfg.epochs
         )
         warmup_steps = int(total_steps * tcfg.warmup_ratio)
 
@@ -196,6 +192,7 @@ class RewardModelTrainerWrapper:
             attach_plugin_callback,
             attach_relora_callback,
         )
+
         # LoRA+ optimizer (#724/#745) — build and attach now that the trainer exists.
         attach_loraplus_optimizer(self.trainer, tcfg)
         attach_relora_callback(self.trainer, tcfg)
@@ -233,7 +230,9 @@ class RewardModelTrainerWrapper:
             from soup_cli.utils.quant_menu import build_quantization_config_for_loader
 
             quant_config_obj = build_quantization_config_for_loader(
-                tcfg=tcfg, base=cfg.base, console=console,
+                tcfg=tcfg,
+                base=cfg.base,
+                console=console,
             )
 
         console.print(f"[dim]Loading reward model: {cfg.base}[/]")
@@ -248,7 +247,8 @@ class RewardModelTrainerWrapper:
             model_kwargs["quantization_config"] = quant_config_obj
 
         self.model = AutoModelForSequenceClassification.from_pretrained(
-            cfg.base, **model_kwargs,
+            cfg.base,
+            **model_kwargs,
         )
 
         if tcfg.quantize_reward_model and tcfg.quantization in ("4bit", "8bit", "mxfp4"):
@@ -272,9 +272,7 @@ class RewardModelTrainerWrapper:
         # resolution leaves peft with nothing to attach.
         from soup_cli.utils.moe import resolve_moe_lora_targets
 
-        target_modules = resolve_moe_lora_targets(
-            self.model, tcfg, target_modules, console
-        )
+        target_modules = resolve_moe_lora_targets(self.model, tcfg, target_modules, console)
 
         lora_config = build_lora_config(
             tcfg.lora,
@@ -286,6 +284,7 @@ class RewardModelTrainerWrapper:
             apply_post_lora_patches,
             apply_pre_lora_patches,
         )
+
         apply_pre_lora_patches(self.model, cfg.base)
         self.model = get_peft_model(self.model, lora_config)
         apply_post_lora_patches(self.model)
@@ -296,6 +295,7 @@ class RewardModelTrainerWrapper:
         # would otherwise train in the frozen base's load dtype (e.g. bf16, no
         # fp32 master weights). Already-fp32 adapter params are a no-op here.
         import torch
+
         for param in self.model.parameters():
             if param.requires_grad and param.dtype != torch.float32:
                 param.data = param.data.to(torch.float32)
@@ -303,9 +303,14 @@ class RewardModelTrainerWrapper:
         # v0.35.0 #60 — multi-trainer wiring of v0.28.0 speed/memory features.
         # Reward model is a regression head; cut_ce no-ops gracefully.
         from soup_cli.utils.v028_features import apply_v028_speed_memory
+
         apply_v028_speed_memory(
-            model=self.model, tcfg=tcfg, base_model=cfg.base,
-            console=console, device=self.device, backend=cfg.backend,
+            model=self.model,
+            tcfg=tcfg,
+            base_model=cfg.base,
+            console=console,
+            device=self.device,
+            backend=cfg.backend,
         )
 
     def train(
@@ -343,7 +348,8 @@ class RewardModelTrainerWrapper:
         from soup_cli.utils.v028_features import activation_offloading_context
 
         with activation_offloading_context(
-            self.config.training, self._output_dir,
+            self.config.training,
+            self._output_dir,
         ):
             align_trainable_dtype_for_fp16(
                 self.trainer.model,

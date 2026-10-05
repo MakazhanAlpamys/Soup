@@ -68,13 +68,12 @@ class CanarySet:
 # Validation helpers
 # ---------------------------------------------------------------------------
 
+
 def _require_int(value: object, *, field_name: str, lo: int, hi: int) -> int:
     if isinstance(value, bool):
         raise TypeError(f"{field_name} must be int, got bool")
     if not isinstance(value, int):
-        raise TypeError(
-            f"{field_name} must be int, got {type(value).__name__}"
-        )
+        raise TypeError(f"{field_name} must be int, got {type(value).__name__}")
     if value < lo or value > hi:
         raise ValueError(f"{field_name} must be in [{lo}, {hi}]")
     return value
@@ -97,6 +96,7 @@ def _validate_base(base: object) -> str | None:
 # ---------------------------------------------------------------------------
 # Clustering — tiny k-means-flavoured token-set partitioning
 # ---------------------------------------------------------------------------
+
 
 def _row_signature(row: Mapping[str, object]) -> frozenset:
     """Compact lexical signature for clustering."""
@@ -142,9 +142,7 @@ def _cluster_rows(
         for i in range(n):
             if i in centroid_idx:
                 continue
-            min_dist = min(
-                1.0 - _jaccard(sigs[i], sigs[c]) for c in centroid_idx
-            )
+            min_dist = min(1.0 - _jaccard(sigs[i], sigs[c]) for c in centroid_idx)
             if min_dist > best_min_dist:
                 best_min_dist = min_dist
                 best_i = i
@@ -168,6 +166,7 @@ def _cluster_rows(
 # ---------------------------------------------------------------------------
 # Canary derivation
 # ---------------------------------------------------------------------------
+
 
 def _prompt_text(row: Mapping[str, object]) -> str:
     """Best-effort prompt extraction (input side)."""
@@ -227,16 +226,20 @@ def discover_canaries(
         raise ValueError(f"rows exceed cap of {_MAX_ROWS}")
     base = _validate_base(base)
     num_clusters = _require_int(
-        num_clusters, field_name="num_clusters", lo=1, hi=64,
+        num_clusters,
+        field_name="num_clusters",
+        lo=1,
+        hi=64,
     )
     per_cluster = _require_int(
-        per_cluster, field_name="per_cluster", lo=1, hi=64,
+        per_cluster,
+        field_name="per_cluster",
+        lo=1,
+        hi=64,
     )
     seed = _require_int(seed, field_name="seed", lo=0, hi=2**31 - 1)
     if dimensions is not None:
-        if isinstance(dimensions, (str, bytes)) or not isinstance(
-            dimensions, Sequence
-        ):
+        if isinstance(dimensions, (str, bytes)) or not isinstance(dimensions, Sequence):
             raise TypeError("dimensions must be a sequence of strings")
         for d in dimensions:
             if not isinstance(d, str) or "\x00" in d:
@@ -267,7 +270,7 @@ def discover_canaries(
             break
 
     # Adjacent skills: pull from the smallest buckets (rarest behaviours).
-    small_buckets = sorted(buckets, key=len)[:max(1, len(buckets) // 2)]
+    small_buckets = sorted(buckets, key=len)[: max(1, len(buckets) // 2)]
     for bucket in small_buckets:
         for idx in bucket[-per_cluster:]:  # tail of small bucket = rarer
             text = _prompt_text(rows[idx])
@@ -305,9 +308,7 @@ def canary_set_to_dict(canary: CanarySet) -> dict[str, object]:
 def write_canary_set(canary: CanarySet, output_path: str) -> str:
     """Atomic write of a canary set with cwd containment + symlink reject."""
     enforce_under_cwd_and_no_symlink(output_path, "output_path")
-    payload = json.dumps(
-        canary_set_to_dict(canary), ensure_ascii=False, indent=2
-    )
+    payload = json.dumps(canary_set_to_dict(canary), ensure_ascii=False, indent=2)
     if len(payload.encode("utf-8")) > _MAX_FILE_BYTES:
         raise ValueError("rendered canary set exceeds 16 MiB cap")
     parent = os.path.dirname(os.path.abspath(output_path)) or "."
@@ -339,13 +340,9 @@ def load_canary_set(path: str) -> CanarySet:
     try:
         st = os.lstat(path)
     except FileNotFoundError as exc:
-        raise FileNotFoundError(
-            f"canary set file not found: {os.path.basename(path)}"
-        ) from exc
+        raise FileNotFoundError(f"canary set file not found: {os.path.basename(path)}") from exc
     except OSError as exc:
-        raise ValueError(
-            f"path unreadable: {type(exc).__name__}"
-        ) from exc
+        raise ValueError(f"path unreadable: {type(exc).__name__}") from exc
     if stat.S_ISLNK(st.st_mode):
         raise ValueError("path must not be a symlink (TOCTOU defence)")
     if st.st_size > _MAX_FILE_BYTES:

@@ -79,9 +79,7 @@ def test_win32_never_falls_back_to_os_kill():
         proc.wait()
 
 
-@pytest.mark.parametrize(
-    "bad_pid", ["not-a-pid", 0, -1, True, False, None, 3.5]
-)
+@pytest.mark.parametrize("bad_pid", ["not-a-pid", 0, -1, True, False, None, 3.5])
 def test_invalid_pid_returns_false_not_raise(bad_pid):
     """A non-int, bool, or non-positive pid must not crash a caller."""
     assert process_is_alive(bad_pid) is False

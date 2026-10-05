@@ -82,19 +82,21 @@ _DEEPSEEK_R1 = (
 
 # Phi-4 and Qwen2.5 both use a ChatML variant — re-use the ChatML template.
 # Wrap in MappingProxyType so callers cannot mutate the registry at runtime.
-_REGISTRY: "MappingProxyType[str, str]" = MappingProxyType({
-    "chatml": _CHATML,
-    "qwen2.5": _CHATML,
-    "qwen": _CHATML,
-    "phi4": _CHATML,
-    "phi-4": _CHATML,
-    "llama3": _LLAMA3,
-    "llama-3": _LLAMA3,
-    "mistral": _MISTRAL,
-    "gemma3": _GEMMA3,
-    "gemma-3": _GEMMA3,
-    "deepseek-r1": _DEEPSEEK_R1,
-})
+_REGISTRY: "MappingProxyType[str, str]" = MappingProxyType(
+    {
+        "chatml": _CHATML,
+        "qwen2.5": _CHATML,
+        "qwen": _CHATML,
+        "phi4": _CHATML,
+        "phi-4": _CHATML,
+        "llama3": _LLAMA3,
+        "llama-3": _LLAMA3,
+        "mistral": _MISTRAL,
+        "gemma3": _GEMMA3,
+        "gemma-3": _GEMMA3,
+        "deepseek-r1": _DEEPSEEK_R1,
+    }
+)
 
 # Treat anything containing Jinja control tokens (`{%` / `{{`) as a raw
 # Jinja string instead of a registry key.
@@ -110,8 +112,7 @@ def get_template(name: str) -> str:
     """Look up a registered template by name. Raises KeyError if unknown."""
     if name not in _REGISTRY:
         raise KeyError(
-            f"chat_template '{name}' is not registered. "
-            f"Known: {', '.join(list_template_names())}"
+            f"chat_template '{name}' is not registered. Known: {', '.join(list_template_names())}"
         )
     return _REGISTRY[name]
 

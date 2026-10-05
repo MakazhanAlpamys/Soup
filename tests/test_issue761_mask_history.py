@@ -22,14 +22,25 @@ from soup_cli.data.loss_mask import IGNORE_INDEX
 
 _SPECIALS = ["<unk>", "<s>", "</s>", "<|user|>", "<|assistant|>", "<|end|>"]
 _WORDS = [
-    "Hi", "Hello", "there", "What", "is", "two", "plus", "Four", "Three",
-    "and", "one", "more", "Thanks", "Welcome", "you", "are",
+    "Hi",
+    "Hello",
+    "there",
+    "What",
+    "is",
+    "two",
+    "plus",
+    "Four",
+    "Three",
+    "and",
+    "one",
+    "more",
+    "Thanks",
+    "Welcome",
+    "you",
+    "are",
 ]
 
-_BODY = (
-    "{% for m in messages %}<|{{ m['role'] }}|> "
-    "{{ m['content'] }} <|end|> {% endfor %}"
-)
+_BODY = "{% for m in messages %}<|{{ m['role'] }}|> {{ m['content'] }} <|end|> {% endfor %}"
 # The same rendering, with the markers that let the template report its own
 # assistant mask -- which is the branch ``_apply_template_with_mask`` prefers.
 _BODY_WITH_GENERATION = (
@@ -75,9 +86,9 @@ def _trained(labels):
 def _labels(tok, messages, *, mask_history):
     from soup_cli.data.loss_mask import build_assistant_only_labels
 
-    return build_assistant_only_labels(
-        messages, tok, max_length=2048, mask_history=mask_history
-    )["labels"]
+    return build_assistant_only_labels(messages, tok, max_length=2048, mask_history=mask_history)[
+        "labels"
+    ]
 
 
 def _turn_token_count(tok, content):
@@ -146,9 +157,7 @@ class TestTrainedTokenCounts:
         tok = _tokenizer(_TEMPLATES[template])
         single = _TWO_TURN[:2]
 
-        assert _labels(tok, single, mask_history=True) == _labels(
-            tok, single, mask_history=False
-        )
+        assert _labels(tok, single, mask_history=True) == _labels(tok, single, mask_history=False)
 
     def test_it_never_adds_a_trained_token(self, template):
         """Whatever it does, it is a narrowing: every surviving position was
@@ -201,7 +210,11 @@ class TestTheHelper:
 
         labels = [7, 8, IGNORE_INDEX, 9, 10]
         assert keep_only_the_last_assistant_turn(labels) == [
-            IGNORE_INDEX, IGNORE_INDEX, IGNORE_INDEX, 9, 10
+            IGNORE_INDEX,
+            IGNORE_INDEX,
+            IGNORE_INDEX,
+            9,
+            10,
         ]
 
     def test_a_span_that_starts_at_position_zero_is_kept_whole(self):
@@ -217,7 +230,11 @@ class TestTheHelper:
 
         labels = [7, IGNORE_INDEX, 9, 10, IGNORE_INDEX]
         assert keep_only_the_last_assistant_turn(labels) == [
-            IGNORE_INDEX, IGNORE_INDEX, 9, 10, IGNORE_INDEX
+            IGNORE_INDEX,
+            IGNORE_INDEX,
+            9,
+            10,
+            IGNORE_INDEX,
         ]
 
     def test_a_non_bool_is_refused(self):
@@ -270,9 +287,7 @@ class TestTheConfigRefusals:
     def test_the_supported_combination_loads(self):
         from soup_cli.config.schema import DataConfig
 
-        cfg = DataConfig(
-            train="./d.jsonl", mask_history=True, train_on_responses_only=True
-        )
+        cfg = DataConfig(train="./d.jsonl", mask_history=True, train_on_responses_only=True)
         assert cfg.mask_history is True
 
     def test_mask_history_off_is_unaffected_by_the_refusal(self):
@@ -314,9 +329,9 @@ class TestTheLiveWiring:
             ),
         )(rows)["labels"]
 
-        assert (len(_trained(off)), len(_trained(on))) == _EXPECTED[
-            ("no_markers", "three")
-        ], "data.mask_history reached the label builder through the factory"
+        assert (len(_trained(off)), len(_trained(on))) == _EXPECTED[("no_markers", "three")], (
+            "data.mask_history reached the label builder through the factory"
+        )
 
     def test_a_config_stand_in_without_the_field_still_builds(self):
         """`build_format_row` is handed duck-typed stand-ins by several suites
@@ -406,9 +421,7 @@ class TestMlxDoesNotReadIt:
         So the MLX trainer names it in its "MLX backend ignores:" line, which is
         also what makes the entry's ``trainer_reads=True`` true (the #755 drift
         guard refuses an entry claiming a read the trainer does not make)."""
-        out = self._mlx_warning(
-            monkeypatch, train_on_responses_only=True, mask_history=True
-        )
+        out = self._mlx_warning(monkeypatch, train_on_responses_only=True, mask_history=True)
 
         assert "MLX backend ignores" in out and "data.mask_history" in out, out
 

@@ -112,10 +112,16 @@ class TestMergeConcat:
 
         ak, bk = _lora_keys()
         bias = "base_model.model.layers.0.self_attn.q_proj.bias"
-        w1 = {ak: np.ones((4, 8), np.float32), bk: np.ones((8, 4), np.float32),
-              bias: np.ones((8,), np.float32)}
-        w2 = {ak: np.ones((4, 8), np.float32), bk: np.ones((8, 4), np.float32),
-              bias: np.ones((16,), np.float32)}  # mismatched shape
+        w1 = {
+            ak: np.ones((4, 8), np.float32),
+            bk: np.ones((8, 4), np.float32),
+            bias: np.ones((8,), np.float32),
+        }
+        w2 = {
+            ak: np.ones((4, 8), np.float32),
+            bk: np.ones((8, 4), np.float32),
+            bias: np.ones((16,), np.float32),
+        }  # mismatched shape
         merged, skipped, _ = merge_task_arithmetic_concat([w1, w2], [1.0, 1.0])
         assert bias not in merged
         assert bias in skipped
@@ -129,9 +135,7 @@ class TestMergeConcat:
         ak, bk = _lora_keys()
         a1 = rng.standard_normal((4, 6)).astype(np.float32)
         b1 = rng.standard_normal((5, 4)).astype(np.float32)
-        merged, _, _ = merge_task_arithmetic_concat(
-            [{ak: a1, bk: b1}], [2.0], scalings=[3.0]
-        )
+        merged, _, _ = merge_task_arithmetic_concat([{ak: a1, bk: b1}], [2.0], scalings=[3.0])
         delta_out = merged[bk] @ merged[ak]
         assert np.allclose(delta_out, 2.0 * 3.0 * (b1 @ a1), atol=1e-4)
 
@@ -163,9 +167,7 @@ class TestMergeConcat:
         ak, bk = _lora_keys()
         a1 = rng.standard_normal((2, 6)).astype(np.float32)
         b1 = rng.standard_normal((5, 2)).astype(np.float32)
-        merged, _, new_rank = merge_task_arithmetic_concat(
-            [{ak: a1, bk: b1}], [1.0], rank=999
-        )
+        merged, _, new_rank = merge_task_arithmetic_concat([{ak: a1, bk: b1}], [1.0], rank=999)
         assert new_rank == 2  # capped at the actual concatenated rank
 
     def test_rank_must_be_positive(self):
@@ -182,9 +184,7 @@ class TestMergeConcat:
 
         ak, bk = _lora_keys()
         with pytest.raises(ValueError, match="length"):
-            merge_task_arithmetic_concat(
-                [{ak: np.ones((2, 3)), bk: np.ones((4, 2))}], [1.0, 2.0]
-            )
+            merge_task_arithmetic_concat([{ak: np.ones((2, 3)), bk: np.ones((4, 2))}], [1.0, 2.0])
 
     def test_concat_rank_cap_rejects_ballooning_module(self, monkeypatch):
         # A single abnormally-high-rank module is refused before the concat
@@ -200,9 +200,7 @@ class TestMergeConcat:
         a2 = np.ones((6, 4), dtype=np.float32)
         b2 = np.ones((4, 6), dtype=np.float32)
         with pytest.raises(ValueError, match="concatenated rank|--rank"):
-            merge_task_arithmetic_concat(
-                [{ak: a1, bk: b1}, {ak: a2, bk: b2}], [1.0, 1.0]
-            )
+            merge_task_arithmetic_concat([{ak: a1, bk: b1}, {ak: a2, bk: b2}], [1.0, 1.0])
 
     def test_output_element_cap_rejects_amplified_output(self, monkeypatch):
         # Many modules padded to a uniform rank must be refused when the total
@@ -231,9 +229,7 @@ class TestMergeConcat:
         a2 = np.ones((2, 5), dtype=np.float32)  # in-dim 5 != 3
         b2 = np.ones((4, 2), dtype=np.float32)
         with pytest.raises(ValueError, match="dim|shape"):
-            merge_task_arithmetic_concat(
-                [{ak: a1, bk: b1}, {ak: a2, bk: b2}], [1.0, 1.0]
-            )
+            merge_task_arithmetic_concat([{ak: a1, bk: b1}, {ak: a2, bk: b2}], [1.0, 1.0])
 
     def test_heterogeneous_per_module_rank_padded_to_uniform(self):
         # Two modules with different concat ranks must emit a UNIFORM-rank,
@@ -375,9 +371,7 @@ def _make_adapter(directory, base, tensors, r=8, alpha=16, extra_config=None):
     }
     if extra_config:
         cfg.update(extra_config)
-    (directory / "adapter_config.json").write_text(
-        json.dumps(cfg), encoding="utf-8"
-    )
+    (directory / "adapter_config.json").write_text(json.dumps(cfg), encoding="utf-8")
     return str(directory)
 
 
@@ -389,13 +383,18 @@ class TestWriteMergedAdapterConfigOverrides:
 
         monkeypatch.chdir(tmp_path)
         src = _make_adapter(
-            tmp_path / "src", "meta/x",
+            tmp_path / "src",
+            "meta/x",
             {"base_model.model.layers.0.q.lora_A.weight": np.ones((4, 8), np.float32)},
-            r=4, alpha=8, extra_config={"rank_pattern": {"q": 2}},
+            r=4,
+            alpha=8,
+            extra_config={"rank_pattern": {"q": 2}},
         )
         weights = {"base_model.model.layers.0.q.lora_A.weight": np.zeros((6, 8), np.float32)}
         write_merged_adapter(
-            str(tmp_path / "out"), src, weights,
+            str(tmp_path / "out"),
+            src,
+            weights,
             config_overrides={"r": 6, "lora_alpha": 6, "rank_pattern": {}},
         )
         cfg = json.loads((tmp_path / "out" / "adapter_config.json").read_text())
@@ -410,11 +409,15 @@ class TestWriteMergedAdapterConfigOverrides:
 
         monkeypatch.chdir(tmp_path)
         src = _make_adapter(
-            tmp_path / "src", "meta/x",
-            {"m.lora_A.weight": np.ones((4, 8), np.float32)}, r=4, alpha=8,
+            tmp_path / "src",
+            "meta/x",
+            {"m.lora_A.weight": np.ones((4, 8), np.float32)},
+            r=4,
+            alpha=8,
         )
         write_merged_adapter(
-            str(tmp_path / "out"), src,
+            str(tmp_path / "out"),
+            src,
             {"m.lora_A.weight": np.ones((4, 8), np.float32)},
         )
         cfg = json.loads((tmp_path / "out" / "adapter_config.json").read_text())
@@ -456,8 +459,16 @@ class TestArithmeticMixedRankCli:
             alpha=16,
         )
         res = self._run(
-            ["arithmetic", "coder + math", "--adapter", f"coder={a}",
-             "--adapter", f"math={b}", "-o", "out"],
+            [
+                "arithmetic",
+                "coder + math",
+                "--adapter",
+                f"coder={a}",
+                "--adapter",
+                f"math={b}",
+                "-o",
+                "out",
+            ],
             tmp_path,
         )
         assert res.exit_code == 0, (res.output, repr(res.exception))
@@ -481,8 +492,18 @@ class TestArithmeticMixedRankCli:
             alpha=16,
         )
         res = self._run(
-            ["arithmetic", "coder + math", "--adapter", f"coder={a}",
-             "--adapter", f"math={b}", "--rank", "5", "-o", "out"],
+            [
+                "arithmetic",
+                "coder + math",
+                "--adapter",
+                f"coder={a}",
+                "--adapter",
+                f"math={b}",
+                "--rank",
+                "5",
+                "-o",
+                "out",
+            ],
             tmp_path,
         )
         assert res.exit_code == 0, (res.output, repr(res.exception))
@@ -498,18 +519,31 @@ class TestArithmeticMixedRankCli:
         # into the uniform-rank concat output.
         ak, bk = _lora_keys()
         a = _make_adapter(
-            tmp_path / "coder", "meta/x",
+            tmp_path / "coder",
+            "meta/x",
             {ak: _rng_tensor((4, 16), 21), bk: _rng_tensor((8, 4), 22)},
-            r=4, alpha=8,
+            r=4,
+            alpha=8,
             extra_config={"rank_pattern": {"q_proj": 4}, "alpha_pattern": {"q_proj": 8}},
         )
         b = _make_adapter(
-            tmp_path / "math", "meta/x",
-            {ak: _rng_tensor((8, 16), 23), bk: _rng_tensor((8, 8), 24)}, r=8, alpha=16,
+            tmp_path / "math",
+            "meta/x",
+            {ak: _rng_tensor((8, 16), 23), bk: _rng_tensor((8, 8), 24)},
+            r=8,
+            alpha=16,
         )
         res = self._run(
-            ["arithmetic", "coder + math", "--adapter", f"coder={a}",
-             "--adapter", f"math={b}", "-o", "out"],
+            [
+                "arithmetic",
+                "coder + math",
+                "--adapter",
+                f"coder={a}",
+                "--adapter",
+                f"math={b}",
+                "-o",
+                "out",
+            ],
             tmp_path,
         )
         assert res.exit_code == 0, (res.output, repr(res.exception))
@@ -528,8 +562,16 @@ class TestArithmeticMixedRankCli:
         a = _make_adapter(tmp_path / "coder", "meta/x", {ak: a1, bk: b1}, r=4, alpha=0)
         b = _make_adapter(tmp_path / "math", "meta/x", {ak: a2, bk: b2}, r=8, alpha=8)
         res = self._run(
-            ["arithmetic", "coder + math", "--adapter", f"coder={a}",
-             "--adapter", f"math={b}", "-o", "out"],
+            [
+                "arithmetic",
+                "coder + math",
+                "--adapter",
+                f"coder={a}",
+                "--adapter",
+                f"math={b}",
+                "-o",
+                "out",
+            ],
             tmp_path,
         )
         assert res.exit_code == 0, (res.output, repr(res.exception))
@@ -557,8 +599,16 @@ class TestArithmeticMixedRankCli:
             r=8,
         )
         res = self._run(
-            ["arithmetic", "coder + math", "--adapter", f"coder={a}",
-             "--adapter", f"math={b}", "-o", "out"],
+            [
+                "arithmetic",
+                "coder + math",
+                "--adapter",
+                f"coder={a}",
+                "--adapter",
+                f"math={b}",
+                "-o",
+                "out",
+            ],
             tmp_path,
         )
         assert res.exit_code == 0, (res.output, repr(res.exception))
@@ -582,8 +632,18 @@ class TestArithmeticMixedRankCli:
             r=8,
         )
         res = self._run(
-            ["arithmetic", "coder + math", "--adapter", f"coder={a}",
-             "--adapter", f"math={b}", "--rank", "4", "-o", "out"],
+            [
+                "arithmetic",
+                "coder + math",
+                "--adapter",
+                f"coder={a}",
+                "--adapter",
+                f"math={b}",
+                "--rank",
+                "4",
+                "-o",
+                "out",
+            ],
             tmp_path,
         )
         assert res.exit_code == 0, (res.output, repr(res.exception))

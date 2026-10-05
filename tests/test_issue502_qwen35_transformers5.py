@@ -80,8 +80,7 @@ def _transformers_extras_are_disjoint() -> bool:
         for clause in specifier:
             probes.append(Version(clause.version))
     return not any(
-        train.contains(version, prereleases=True)
-        and mlx.contains(version, prereleases=True)
+        train.contains(version, prereleases=True) and mlx.contains(version, prereleases=True)
         for version in probes
     )
 
@@ -148,11 +147,7 @@ def test_peft_floor_is_the_validated_transformers5_adapter_stack():
 def test_doctor_training_bounds_match_declared_extra():
     from soup_cli.commands.doctor import _MAX_EXCLUSIVE, EXTRA_GROUPS
 
-    doctor_floors = {
-        package: floor
-        for _, members in EXTRA_GROUPS
-        for _, package, floor in members
-    }
+    doctor_floors = {package: floor for _, members in EXTRA_GROUPS for _, package, floor in members}
     for package in _RUNTIME_FLOORS:
         requirement = _extra_requirement("train", package)
         assert doctor_floors[package] == _single_bound(requirement, ">=")
@@ -186,9 +181,7 @@ def test_qwen35_outer_config_selects_text_causal_model_without_vision():
     assert type(model).__name__ == "Qwen3_5ForCausalLM"
     assert model.config.model_type == "qwen3_5_text"
     assert not [
-        name
-        for name, _ in model.named_parameters()
-        if "vision" in name or "visual" in name
+        name for name, _ in model.named_parameters() if "vision" in name or "visual" in name
     ]
 
 

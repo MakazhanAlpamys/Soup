@@ -67,9 +67,7 @@ class ExpectationResult:
             if isinstance(val, bool) or not isinstance(val, int):
                 raise TypeError(f"ExpectationResult.{field_name} must be int")
             if val < 0:
-                raise ValueError(
-                    f"ExpectationResult.{field_name} must be non-negative"
-                )
+                raise ValueError(f"ExpectationResult.{field_name} must be non-negative")
         if not isinstance(self.details, tuple):
             raise TypeError(
                 "ExpectationResult.details must be a tuple (frozen=True does "
@@ -108,22 +106,17 @@ class SuiteReport:
 def validate_expectation_name(name: object) -> str:
     """Return the canonical lower-case expectation name."""
     if isinstance(name, bool) or not isinstance(name, str):
-        raise TypeError(
-            f"expectation name must be str, got {type(name).__name__}"
-        )
+        raise TypeError(f"expectation name must be str, got {type(name).__name__}")
     if not name:
         raise ValueError("expectation name must be non-empty")
     if "\x00" in name:
         raise ValueError("expectation name must not contain null bytes")
     if len(name) > _MAX_NAME_LEN:
-        raise ValueError(
-            f"expectation name must be <= {_MAX_NAME_LEN} chars"
-        )
+        raise ValueError(f"expectation name must be <= {_MAX_NAME_LEN} chars")
     canonical = name.strip().lower()
     if canonical not in SUPPORTED_EXPECTATIONS:
         raise ValueError(
-            f"unknown expectation: {name!r}. "
-            f"supported: {sorted(SUPPORTED_EXPECTATIONS)}"
+            f"unknown expectation: {name!r}. supported: {sorted(SUPPORTED_EXPECTATIONS)}"
         )
     return canonical
 
@@ -147,9 +140,7 @@ def _check_token_bound(value: object, *, field: str) -> int:
     if not isinstance(value, int):
         raise TypeError(f"{field} must be an integer")
     if value < _MIN_TOKEN_BOUND or value > _MAX_TOKEN_BOUND:
-        raise ValueError(
-            f"{field} must be in [{_MIN_TOKEN_BOUND}, {_MAX_TOKEN_BOUND}]"
-        )
+        raise ValueError(f"{field} must be in [{_MIN_TOKEN_BOUND}, {_MAX_TOKEN_BOUND}]")
     return value
 
 
@@ -157,9 +148,7 @@ def _check_token_bounds(min_tokens: object, max_tokens: object) -> Tuple[int, in
     low = _check_token_bound(min_tokens, field="min_tokens")
     high = _check_token_bound(max_tokens, field="max_tokens")
     if low > high:
-        raise ValueError(
-            f"min_tokens ({low}) must be <= max_tokens ({high})"
-        )
+        raise ValueError(f"min_tokens ({low}) must be <= max_tokens ({high})")
     return low, high
 
 
@@ -299,9 +288,7 @@ def _extract_messages_text(messages: Any, *, assistant_only: bool = False) -> Li
     return parts
 
 
-def _extract_conversations_text(
-    conversations: Any, *, assistant_only: bool = False
-) -> List[str]:
+def _extract_conversations_text(conversations: Any, *, assistant_only: bool = False) -> List[str]:
     """Extract text from a conversations list (sharegpt, llava, sharegpt4v)."""
     parts: List[str] = []
     if not isinstance(conversations, list):
@@ -317,9 +304,7 @@ def _extract_conversations_text(
     return parts
 
 
-def _extract_field_text_or_messages(
-    val: Any, *, assistant_only: bool = False
-) -> List[str]:
+def _extract_field_text_or_messages(val: Any, *, assistant_only: bool = False) -> List[str]:
     """Extract text from a field that may be str or list of messages/strings."""
     if isinstance(val, str):
         return [val] if val else []
@@ -539,9 +524,7 @@ def expect_no_pii(rows: Any) -> ExpectationResult:
         if not parts or not any(p.strip() for p in parts):
             num_violations += 1
             if len(details) < _MAX_DETAILS_PER_RESULT:
-                details.append(
-                    _truncate_detail(f"rows[{index}]: no extractable text")
-                )
+                details.append(_truncate_detail(f"rows[{index}]: no extractable text"))
             continue
         all_hits = []
         for part in parts:
@@ -558,9 +541,7 @@ def expect_no_pii(rows: Any) -> ExpectationResult:
             if len(details) < _MAX_DETAILS_PER_RESULT:
                 kinds = sorted({hit.get("kind", "?") for hit in all_hits})
                 details.append(
-                    _truncate_detail(
-                        f"rows[{index}]: PII detected ({', '.join(kinds)})"
-                    )
+                    _truncate_detail(f"rows[{index}]: PII detected ({', '.join(kinds)})")
                 )
     return ExpectationResult(
         name="expect_no_pii",
@@ -592,18 +573,14 @@ def expect_token_length_between(
         if not text or not text.strip():
             num_violations += 1
             if len(details) < _MAX_DETAILS_PER_RESULT:
-                details.append(
-                    _truncate_detail(f"rows[{index}]: no extractable text")
-                )
+                details.append(_truncate_detail(f"rows[{index}]: no extractable text"))
             continue
         token_count = len(text.split())
         if token_count < low or token_count > high:
             num_violations += 1
             if len(details) < _MAX_DETAILS_PER_RESULT:
                 details.append(
-                    _truncate_detail(
-                        f"rows[{index}]: {token_count} tokens (want [{low}, {high}])"
-                    )
+                    _truncate_detail(f"rows[{index}]: {token_count} tokens (want [{low}, {high}])")
                 )
     return ExpectationResult(
         name="expect_token_length_between",
@@ -631,9 +608,7 @@ def expect_no_refusal_pattern(rows: Any) -> ExpectationResult:
         if not full_text or not full_text.strip():
             num_violations += 1
             if len(details) < _MAX_DETAILS_PER_RESULT:
-                details.append(
-                    _truncate_detail(f"rows[{index}]: no extractable text")
-                )
+                details.append(_truncate_detail(f"rows[{index}]: no extractable text"))
             continue
         text = _extract_assistant_text(row)
         if not text or not text.strip():
@@ -641,9 +616,7 @@ def expect_no_refusal_pattern(rows: Any) -> ExpectationResult:
         if looks_like_refusal(text):
             num_violations += 1
             if len(details) < _MAX_DETAILS_PER_RESULT:
-                details.append(
-                    _truncate_detail(f"rows[{index}]: refusal pattern matched")
-                )
+                details.append(_truncate_detail(f"rows[{index}]: refusal pattern matched"))
     return ExpectationResult(
         name="expect_no_refusal_pattern",
         passed=num_violations == 0,
@@ -683,11 +656,7 @@ def expect_chosen_preferred_over_rejected_by_judge(
         if "chosen" not in row or "rejected" not in row:
             num_violations += 1
             if len(details) < _MAX_DETAILS_PER_RESULT:
-                details.append(
-                    _truncate_detail(
-                        f"rows[{index}]: missing chosen/rejected field"
-                    )
-                )
+                details.append(_truncate_detail(f"rows[{index}]: missing chosen/rejected field"))
             continue
         if judge_fn is None:
             # No judge supplied — assume chosen wins (advisory pass).
@@ -698,18 +667,12 @@ def expect_chosen_preferred_over_rejected_by_judge(
             except Exception:  # noqa: BLE001 — one bad row mustn't crash the suite
                 num_violations += 1
                 if len(details) < _MAX_DETAILS_PER_RESULT:
-                    details.append(
-                        _truncate_detail(f"rows[{index}]: judge raised")
-                    )
+                    details.append(_truncate_detail(f"rows[{index}]: judge raised"))
                 continue
             if isinstance(raw, bool) or not isinstance(raw, (int, float)):
                 num_violations += 1
                 if len(details) < _MAX_DETAILS_PER_RESULT:
-                    details.append(
-                        _truncate_detail(
-                            f"rows[{index}]: judge returned non-number"
-                        )
-                    )
+                    details.append(_truncate_detail(f"rows[{index}]: judge returned non-number"))
                 continue
             score = float(raw)
             if not math.isfinite(score):
@@ -719,9 +682,7 @@ def expect_chosen_preferred_over_rejected_by_judge(
             num_violations += 1
             if len(details) < _MAX_DETAILS_PER_RESULT:
                 details.append(
-                    _truncate_detail(
-                        f"rows[{index}]: judge score {score:.3f} < {t:.3f}"
-                    )
+                    _truncate_detail(f"rows[{index}]: judge score {score:.3f} < {t:.3f}")
                 )
     return ExpectationResult(
         name="expect_chosen_preferred_over_rejected_by_judge",
@@ -796,9 +757,7 @@ def parse_suite_spec(raw: Any) -> SuiteSpec:
     if not raw_expectations:
         raise ValueError("suite 'expectations' must be a non-empty list")
     if len(raw_expectations) > _MAX_SUITE_LEN:
-        raise ValueError(
-            f"suite 'expectations' exceeds {_MAX_SUITE_LEN} entries"
-        )
+        raise ValueError(f"suite 'expectations' exceeds {_MAX_SUITE_LEN} entries")
 
     items: List[ExpectationSpec] = []
     for index, entry in enumerate(raw_expectations):
@@ -899,9 +858,7 @@ def run_suite(
     materialised = _check_rows(rows)
     results: List[ExpectationResult] = []
     for expectation in spec.expectations:
-        results.append(
-            _dispatch_expectation(expectation, materialised, judge_fn=judge_fn)
-        )
+        results.append(_dispatch_expectation(expectation, materialised, judge_fn=judge_fn))
     passed = all(r.passed for r in results)
     return SuiteReport(passed=passed, results=tuple(results))
 

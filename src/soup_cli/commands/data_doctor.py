@@ -128,42 +128,59 @@ def _load_tokenizer(model: str, trust_remote_code: bool):
 def doctor(
     path: str = typer.Argument(..., help="Path to dataset file (jsonl/json/csv/parquet)."),
     model: str = typer.Option(
-        ..., "--model", "-m",
+        ...,
+        "--model",
+        "-m",
         help="Tokenizer id or local path to check chat-template compatibility against.",
     ),
     fmt: str = typer.Option(
-        "auto", "--format", "-f", help="Dataset format (auto-detects by default).",
+        "auto",
+        "--format",
+        "-f",
+        help="Dataset format (auto-detects by default).",
     ),
     max_length: int = typer.Option(
-        2048, "--max-length", help="Training max_length — used for the truncation-risk check.",
+        2048,
+        "--max-length",
+        help="Training max_length — used for the truncation-risk check.",
     ),
     sample: int = typer.Option(200, "--sample", help="Number of rows to sample for the checks."),
     show_mask: Optional[int] = typer.Option(
-        None, "--show-mask",
+        None,
+        "--show-mask",
         help="Render N sample rows with per-token trained/masked colouring "
         "(the real collator path).",
     ),
     train_on_responses_only: bool = typer.Option(
-        True, "--train-on-responses-only/--no-train-on-responses-only",
+        True,
+        "--train-on-responses-only/--no-train-on-responses-only",
         help="Mask non-assistant tokens (mirrors data.train_on_responses_only).",
     ),
     train_on_messages_with_train_field: bool = typer.Option(
-        False, "--train-on-messages-with-train-field",
+        False,
+        "--train-on-messages-with-train-field",
         help="Per-message train:bool field masking (mirrors the same soup.yaml flag).",
     ),
     mask_history: bool = typer.Option(
-        False, "--mask-history/--no-mask-history",
+        False,
+        "--mask-history/--no-mask-history",
         help="Train only the LAST assistant turn (mirrors data.mask_history).",
     ),
     train_on_eot: bool = typer.Option(
-        False, "--train-on-eot",
+        False,
+        "--train-on-eot",
         help="Extend the trained span through the trailing EOS/EOT token.",
     ),
     trust_remote_code: bool = typer.Option(
-        False, "--trust-remote-code", help="Allow loading a tokenizer that ships custom code.",
+        False,
+        "--trust-remote-code",
+        help="Allow loading a tokenizer that ships custom code.",
     ),
     output: Optional[str] = typer.Option(
-        None, "--output", "-o", help="Write the report JSON to this path.",
+        None,
+        "--output",
+        "-o",
+        help="Write the report JSON to this path.",
     ),
 ) -> None:
     """Chat-template compatibility report + loss-mask X-ray.
@@ -185,9 +202,7 @@ def doctor(
     # requires data.train_on_responses_only: true", and mask_history is
     # mutually exclusive with train_on_messages_with_train_field — refuse
     # the flag combos up front, before any tokenizer load or dataset work.
-    if mask_history and (
-        train_on_messages_with_train_field or not train_on_responses_only
-    ):
+    if mask_history and (train_on_messages_with_train_field or not train_on_responses_only):
         conflict = (
             "--train-on-messages-with-train-field"
             if train_on_messages_with_train_field
@@ -232,8 +247,12 @@ def doctor(
     if resolved_fmt != "raft":
         try:
             report = engine.run_doctor(
-                data, tokenizer, fmt=resolved_fmt, max_length=max_length,
-                sample_size=sample, include_eot=train_on_eot,
+                data,
+                tokenizer,
+                fmt=resolved_fmt,
+                max_length=max_length,
+                sample_size=sample,
+                include_eot=train_on_eot,
                 train_on_responses_only=train_on_responses_only,
                 train_on_messages_with_train_field=train_on_messages_with_train_field,
                 mask_history=mask_history,
@@ -255,7 +274,11 @@ def doctor(
     if show_mask is not None:
         try:
             previews = engine.render_mask_preview(
-                data, tokenizer, fmt=resolved_fmt, n=show_mask, max_length=max_length,
+                data,
+                tokenizer,
+                fmt=resolved_fmt,
+                n=show_mask,
+                max_length=max_length,
                 train_on_responses_only=train_on_responses_only,
                 train_on_messages_with_train_field=train_on_messages_with_train_field,
                 include_eot=train_on_eot,
@@ -277,15 +300,22 @@ def lint(
     path: str = typer.Argument(..., help="Path to preference dataset file (dpo/kto)."),
     fmt: str = typer.Option("auto", "--format", "-f", help="Dataset format: auto, dpo, kto."),
     model: Optional[str] = typer.Option(
-        None, "--model", "-m",
+        None,
+        "--model",
+        "-m",
         help="Optional tokenizer for exact token-length bias (default: word count).",
     ),
     sample: int = typer.Option(2000, "--sample", help="Number of rows to sample for the checks."),
     trust_remote_code: bool = typer.Option(
-        False, "--trust-remote-code", help="Allow loading a tokenizer that ships custom code.",
+        False,
+        "--trust-remote-code",
+        help="Allow loading a tokenizer that ships custom code.",
     ),
     output: Optional[str] = typer.Option(
-        None, "--output", "-o", help="Write the report JSON to this path.",
+        None,
+        "--output",
+        "-o",
+        help="Write the report JSON to this path.",
     ),
 ) -> None:
     """Preference-data linter (dpo/orpo/simpo/ipo/bco/kto).

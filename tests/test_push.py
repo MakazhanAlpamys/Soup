@@ -13,6 +13,7 @@ runner = CliRunner()
 
 # --- _format_size ---
 
+
 def test_format_size_bytes():
     assert _format_size(512) == "512.0 B"
 
@@ -35,16 +36,21 @@ def test_format_size_tb():
 
 # --- _generate_model_card ---
 
+
 def test_model_card_adapter(tmp_path: Path):
     """Model card for LoRA adapter should include base model info."""
     adapter_dir = tmp_path / "adapter"
     adapter_dir.mkdir()
     config = adapter_dir / "adapter_config.json"
-    config.write_text(json.dumps({
-        "base_model_name_or_path": "meta-llama/Llama-3.1-8B",
-        "r": 64,
-        "lora_alpha": 16,
-    }))
+    config.write_text(
+        json.dumps(
+            {
+                "base_model_name_or_path": "meta-llama/Llama-3.1-8B",
+                "r": 64,
+                "lora_alpha": 16,
+            }
+        )
+    )
 
     card = _generate_model_card(adapter_dir, "user/my-model", is_adapter=True)
     assert "my-model" in card
@@ -78,12 +84,14 @@ def test_model_card_adapter_bad_config(tmp_path: Path):
 def test_model_card_repo_without_slash():
     """Model card should handle repo ID without slash."""
     import tempfile
+
     with tempfile.TemporaryDirectory() as td:
         card = _generate_model_card(Path(td), "my-model", is_adapter=False)
         assert "my-model" in card
 
 
 # --- CLI validation ---
+
 
 def test_push_missing_model():
     result = runner.invoke(app, ["push", "--model", "/nonexistent", "--repo", "user/model"])
@@ -93,9 +101,7 @@ def test_push_missing_model():
 def test_push_not_a_directory(tmp_path: Path):
     fake_file = tmp_path / "model.bin"
     fake_file.write_text("content")
-    result = runner.invoke(
-        app, ["push", "--model", str(fake_file), "--repo", "user/model"]
-    )
+    result = runner.invoke(app, ["push", "--model", str(fake_file), "--repo", "user/model"])
     assert result.exit_code == 1
     assert "directory" in result.output.lower()
 
@@ -104,9 +110,7 @@ def test_push_invalid_model_dir(tmp_path: Path):
     """Empty directory (no adapter_config.json or config.json) should fail."""
     model_dir = tmp_path / "empty"
     model_dir.mkdir()
-    result = runner.invoke(
-        app, ["push", "--model", str(model_dir), "--repo", "user/model"]
-    )
+    result = runner.invoke(app, ["push", "--model", str(model_dir), "--repo", "user/model"])
     assert result.exit_code == 1
 
 
@@ -124,8 +128,6 @@ def test_push_no_token(tmp_path: Path, monkeypatch):
     (model_dir / "adapter_config.json").write_text("{}")
     (model_dir / "adapter_model.safetensors").write_text("fake")
 
-    result = runner.invoke(
-        app, ["push", "--model", str(model_dir), "--repo", "user/model"]
-    )
+    result = runner.invoke(app, ["push", "--model", str(model_dir), "--repo", "user/model"])
     assert result.exit_code == 1
     assert "token" in result.output.lower()

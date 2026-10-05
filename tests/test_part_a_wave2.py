@@ -82,7 +82,9 @@ class TestCanFormatVersionBump:
 
         m = Manifest(
             can_format_version=1,
-            name="x", author="a", created_at="2026-01-01",
+            name="x",
+            author="a",
+            created_at="2026-01-01",
             base_hash="0" * 64,
         )
         assert m.can_format_version == 1
@@ -92,7 +94,9 @@ class TestCanFormatVersionBump:
 
         m = Manifest(
             can_format_version=2,
-            name="x", author="a", created_at="2026-01-01",
+            name="x",
+            author="a",
+            created_at="2026-01-01",
             base_hash="0" * 64,
         )
         assert m.can_format_version == 2
@@ -103,7 +107,9 @@ class TestCanFormatVersionBump:
 
         m = Manifest(
             can_format_version=3,
-            name="x", author="a", created_at="2026-01-01",
+            name="x",
+            author="a",
+            created_at="2026-01-01",
             base_hash="0" * 64,
         )
         assert m.can_format_version == 3
@@ -114,7 +120,9 @@ class TestCanFormatVersionBump:
         with pytest.raises(Exception, match="unknown can_format_version"):
             Manifest(
                 can_format_version=4,
-                name="x", author="a", created_at="2026-01-01",
+                name="x",
+                author="a",
+                created_at="2026-01-01",
                 base_hash="0" * 64,
             )
 
@@ -166,7 +174,9 @@ class TestDeployTargetValidation:
 
         m = Manifest(
             can_format_version=2,
-            name="x", author="a", created_at="2026-01-01",
+            name="x",
+            author="a",
+            created_at="2026-01-01",
             base_hash="0" * 64,
             deploy_targets=[
                 DeployTarget(kind="ollama", name="my-model"),
@@ -279,8 +289,8 @@ class TestRunCan:
         # before subprocess; but to test the validation we need to mock
         # subprocess.
         from soup_cli.cans import run as run_mod
-        monkeypatch.setattr(run_mod.subprocess, "run",
-                            lambda *a, **k: MagicMock(returncode=0))
+
+        monkeypatch.setattr(run_mod.subprocess, "run", lambda *a, **k: MagicMock(returncode=0))
         with pytest.raises(ValueError, match="outside cwd"):
             run_can(str(can), yes=True, capture_env_to=outside)
 
@@ -298,7 +308,8 @@ class TestPublishCan:
         with pytest.raises(ValueError, match="outside cwd"):
             publish_can(
                 str(tmp_path.parent / "x.can"),
-                repo_id="me/repo", token="tok",
+                repo_id="me/repo",
+                token="tok",
             )
 
     def test_missing_file_raises(self, tmp_path, monkeypatch):
@@ -308,7 +319,8 @@ class TestPublishCan:
         with pytest.raises(FileNotFoundError):
             publish_can(
                 str(tmp_path / "missing.can"),
-                repo_id="me/repo", token="tok",
+                repo_id="me/repo",
+                token="tok",
             )
 
     def test_invalid_repo_id_rejected(self, tmp_path, monkeypatch):
@@ -327,7 +339,8 @@ class TestPublishCan:
         monkeypatch.delenv("HF_TOKEN", raising=False)
         monkeypatch.delenv("HUGGINGFACE_HUB_TOKEN", raising=False)
         monkeypatch.setattr(
-            "soup_cli.cans.publish.resolve_token", lambda: "",
+            "soup_cli.cans.publish.resolve_token",
+            lambda: "",
         )
         can = _build_can(tmp_path / "r.can")
         with pytest.raises(ValueError, match="no HF token"):
@@ -363,7 +376,9 @@ class TestPublishCan:
             {"huggingface_hub": MagicMock(HfApi=MagicMock(return_value=fake_api))},
         ):
             url = publish_mod.publish_can(
-                str(can), repo_id="me/test-can", token="tok",
+                str(can),
+                repo_id="me/test-can",
+                token="tok",
             )
         assert "huggingface.co/datasets/me/test-can" in url
         fake_api.create_repo.assert_called_once()
@@ -391,7 +406,6 @@ class TestCanCLIPublishAndRun:
         monkeypatch.chdir(tmp_path)
         result = runner.invoke(
             app,
-            ["can", "publish", str(tmp_path / "no.can"),
-             "--hf-hub", "me/r"],
+            ["can", "publish", str(tmp_path / "no.can"), "--hf-hub", "me/r"],
         )
         assert result.exit_code == 1, (result.output, repr(result.exception))

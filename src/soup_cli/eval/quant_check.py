@@ -81,10 +81,15 @@ def run_quant_check(
     delta = after - before
     verdict = classify_delta(delta)
     return QuantCheckResult(
-        rows=[QuantCheckRow(
-            task=task_name, before=before, after=after,
-            delta=delta, verdict=verdict,
-        )],
+        rows=[
+            QuantCheckRow(
+                task=task_name,
+                before=before,
+                after=after,
+                delta=delta,
+                verdict=verdict,
+            )
+        ],
         stub=stub,
     )
 
@@ -127,13 +132,13 @@ def render_table(result: QuantCheckResult) -> "Table":
 def render_markdown(result: QuantCheckResult) -> str:
     lines = []
     if result.stub:
-        lines.append(
-            "> **Warning**: Deterministic stub scoring — not a live model measurement.\n"
-        )
-    lines.extend([
-        "| Task | Before | After | Delta | Verdict |",
-        "|------|--------|-------|-------|---------|",
-    ])
+        lines.append("> **Warning**: Deterministic stub scoring — not a live model measurement.\n")
+    lines.extend(
+        [
+            "| Task | Before | After | Delta | Verdict |",
+            "|------|--------|-------|-------|---------|",
+        ]
+    )
     for row in result.rows:
         lines.append(
             f"| {row.task} | {row.before:.3f} | {row.after:.3f} | "
@@ -150,7 +155,9 @@ FORMAT_RENDERERS: dict[str, Callable[[QuantCheckResult], Union["Table", str]]] =
 
 
 def render(
-    result: QuantCheckResult, *, fmt: Literal["table", "json", "markdown"],
+    result: QuantCheckResult,
+    *,
+    fmt: Literal["table", "json", "markdown"],
 ) -> Union["Table", str]:
     renderer = FORMAT_RENDERERS.get(fmt)
     if renderer is None:
@@ -185,9 +192,7 @@ def make_model_generator(
     )
 
     tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=False)
-    model = AutoModelForCausalLM.from_pretrained(
-        model_path, trust_remote_code=False
-    )
+    model = AutoModelForCausalLM.from_pretrained(model_path, trust_remote_code=False)
     model.eval()
 
     def _generate(prompt: str) -> str:
@@ -203,7 +208,7 @@ def make_model_generator(
             pad_token_id=tokenizer.eos_token_id,
         )
         # Strip the prompt prefix from the decoded text.
-        new_tokens = outputs[0][inputs["input_ids"].shape[1]:]
+        new_tokens = outputs[0][inputs["input_ids"].shape[1] :]
         return tokenizer.decode(new_tokens, skip_special_tokens=True)
 
     return _generate
@@ -214,8 +219,10 @@ def stub_generator(label: str) -> Callable[[str], str]:
 
     Used when ``--allow-stub`` is passed and live model loading fails.
     """
+
     def _stub(prompt: str) -> str:  # noqa: ARG001
         return f"[stub:{label}]"
+
     return _stub
 
 
@@ -230,7 +237,9 @@ def is_under_cwd(path: Path) -> bool:
 
 
 def resolve_model_ref(
-    ref: str, *, kinds: Optional[tuple[str, ...]] = None,
+    ref: str,
+    *,
+    kinds: Optional[tuple[str, ...]] = None,
 ) -> Optional[str]:
     """Resolve ``registry://<id>`` to an artifact path, or pass through a file.
 

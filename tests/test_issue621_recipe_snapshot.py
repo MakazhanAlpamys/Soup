@@ -62,9 +62,7 @@ import pytest
 from scripts.generate_recipe_snapshot import build_baseline, delta, flatten
 from soup_cli.recipes.catalog import RECIPES
 
-_FIXTURE_PATH = (
-    Path(__file__).resolve().parent / "fixtures" / "recipe_config_snapshots.json"
-)
+_FIXTURE_PATH = Path(__file__).resolve().parent / "fixtures" / "recipe_config_snapshots.json"
 _REGENERATE_HINT = "regenerate with scripts/generate_recipe_snapshot.py"
 _MISSING = object()
 
@@ -168,8 +166,7 @@ class TestEveryRecipeMatchesItsCommittedDelta:
     def test_recipe_delta_matches_its_snapshot(self, name: str):
         fixture = _load_fixture()
         assert name in fixture["recipes"], (
-            f"{name!r} is in the catalog but missing from the snapshot fixture; "
-            f"{_REGENERATE_HINT}"
+            f"{name!r} is in the catalog but missing from the snapshot fixture; {_REGENERATE_HINT}"
         )
         live_delta = delta(_resolve_flat(name), _live_baseline())
         diff = _diff(fixture["recipes"][name], live_delta)

@@ -136,9 +136,7 @@ class TestAttestVerifyBackendName:
         quoted = "'[/]x" + BACKSLASH + "x1b" + BACKSLASH + "x9b'"
         assert f"Signature backend {quoted} is not cryptographically verifiable" in out, out
 
-    def test_an_ordinary_backend_name_is_still_shown_quoted(
-        self, tmp_path, monkeypatch
-    ) -> None:
+    def test_an_ordinary_backend_name_is_still_shown_quoted(self, tmp_path, monkeypatch) -> None:
         from soup_cli.commands import attest as attest_cmd
 
         monkeypatch.chdir(tmp_path)
@@ -223,8 +221,13 @@ class TestAdapterBaseModelName:
         result = runner.invoke(
             app,
             [
-                "serve", "--model", str(adapter), "--device", "cpu",
-                "--structured-output", "unknown-mode",
+                "serve",
+                "--model",
+                str(adapter),
+                "--device",
+                "cpu",
+                "--structured-output",
+                "unknown-mode",
             ],
         )
         out = buffer.getvalue()
@@ -502,8 +505,17 @@ class TestInferAsrAudioName:
         buffer = _swap_console(monkeypatch, infer_cmd)
         result = runner.invoke(
             app,
-            ["infer", "--task", "asr", "--model", "m", "--input", "in.jsonl",
-             "--output", "out.jsonl"],
+            [
+                "infer",
+                "--task",
+                "asr",
+                "--model",
+                "m",
+                "--input",
+                "in.jsonl",
+                "--output",
+                "out.jsonl",
+            ],
         )
         return result, buffer.getvalue()
 

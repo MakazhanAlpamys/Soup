@@ -162,11 +162,7 @@ def test_config_loader_rejects_quest_auto_mixed_precision() -> None:
 
 def test_config_loader_keeps_non_quest_auto_mixed_precision() -> None:
     cfg = load_config_from_string(
-        "base: org/model\n"
-        "data:\n"
-        "  train: data.jsonl\n"
-        "training:\n"
-        "  auto_mixed_precision: true\n"
+        "base: org/model\ndata:\n  train: data.jsonl\ntraining:\n  auto_mixed_precision: true\n"
     )
     assert cfg.training.auto_mixed_precision is True
 
@@ -301,9 +297,7 @@ def test_cli_dry_run_reports_quest_without_qat_or_torchao(tmp_path, monkeypatch)
         "console",
         Console(force_terminal=True, color_system="truecolor", width=200),
     )
-    monkeypatch.setattr(
-        train_mod, "get_gpu_info", lambda backend=None: {"memory_total": "N/A"}
-    )
+    monkeypatch.setattr(train_mod, "get_gpu_info", lambda backend=None: {"memory_total": "N/A"})
     monkeypatch.setattr(
         train_mod,
         "load_dataset",
@@ -376,9 +370,7 @@ def test_route_provenance_is_topology_only_and_bound_to_the_public_record():
             "targets": 25017,
             "gap_nat": 0.0863441881,
             "ci95": [0.0802412531, 0.0931898109],
-            "result_sha256": (
-                "94fee10542da29281f7753cbf221a3421ad5acf67f2b290e52d65acece359cdf"
-            ),
+            "result_sha256": ("94fee10542da29281f7753cbf221a3421ad5acf67f2b290e52d65acece359cdf"),
         },
         "claims": {
             "artifact_training_quality": False,
@@ -386,9 +378,9 @@ def test_route_provenance_is_topology_only_and_bound_to_the_public_record():
         },
     }
     measured = ROUTE_PROVENANCE["measured_on"]
-    record = (
-        Path(__file__).parents[1] / "benchmarks" / "gate-674-quest-mixed-route.md"
-    ).read_text(encoding="utf-8")
+    record = (Path(__file__).parents[1] / "benchmarks" / "gate-674-quest-mixed-route.md").read_text(
+        encoding="utf-8"
+    )
     for binding in (
         measured["result_sha256"],
         "0.086344",
@@ -1145,9 +1137,9 @@ def test_train_validates_resume_and_rewrites_final_metadata(monkeypatch, tmp_pat
     monkeypatch.setattr(
         quest,
         "validate_resume_metadata",
-        lambda checkpoint, value, **kwargs: (
-            _ for _ in ()
-        ).throw(ValueError("resume route mismatch")),
+        lambda checkpoint, value, **kwargs: (_ for _ in ()).throw(
+            ValueError("resume route mismatch")
+        ),
     )
     with pytest.raises(ValueError, match="resume route mismatch"):
         wrapper.train(resume_from_checkpoint="checkpoint-5")

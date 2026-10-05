@@ -48,9 +48,7 @@ def test_load_reward_fn_requires_domain_and_config_carries_it():
 
     cfg = load_config_from_string(_GRPO_YAML)
     # This is exactly what the fixed grpo.setup / ppo._setup_reward now do.
-    fn = load_reward_fn(
-        cfg.training.reward_fn, verifiable_domain=cfg.training.verifiable_domain
-    )
+    fn = load_reward_fn(cfg.training.reward_fn, verifiable_domain=cfg.training.verifiable_domain)
     assert fn is math_verify_reward
     # The old (broken) call site dropped the domain, raising ValueError.
     with pytest.raises(ValueError):
@@ -199,18 +197,14 @@ def test_train_warns_for_unwired_convergence_detection(tmp_path, monkeypatch):
         encoding="utf-8",
     )
     monkeypatch.setattr(train_mod, "detect_device", lambda backend=None: ("cpu", "CPU"))
-    monkeypatch.setattr(
-        train_mod, "get_gpu_info", lambda backend=None: {"memory_total": "N/A"}
-    )
+    monkeypatch.setattr(train_mod, "get_gpu_info", lambda backend=None: {"memory_total": "N/A"})
     monkeypatch.setattr(
         train_mod,
         "load_dataset",
         lambda *args, **kwargs: {"train": [{"text": "hello"}]},
     )
 
-    result = CliRunner().invoke(
-        app, ["train", "--config", str(config_path), "--dry-run", "--yes"]
-    )
+    result = CliRunner().invoke(app, ["train", "--config", str(config_path), "--dry-run", "--yes"])
     assert result.exit_code == 0, (result.output, repr(result.exception))
     assert "convergence_detection are set but not enforced" in result.output
 
@@ -269,9 +263,7 @@ def test_modal_stub_cannot_inject_via_output_dir():
 
     # The payload survives only as inert data inside a repr'd string literal.
     literals = [
-        n.value
-        for n in ast.walk(tree)
-        if isinstance(n, ast.Constant) and isinstance(n.value, str)
+        n.value for n in ast.walk(tree) if isinstance(n, ast.Constant) and isinstance(n.value, str)
     ]
     assert any(payload in s for s in literals)
 
@@ -357,15 +349,25 @@ def test_no_eval_gate_config_never_halts(tmp_path, monkeypatch):
 
 
 _TRAINERS_WITH_CALLBACK = [
-    "sft", "dpo", "grpo", "ppo", "kto", "orpo", "simpo", "ipo",
-    "bco", "pretrain", "reward_model", "distill", "embedding", "classifier",
+    "sft",
+    "dpo",
+    "grpo",
+    "ppo",
+    "kto",
+    "orpo",
+    "simpo",
+    "ipo",
+    "bco",
+    "pretrain",
+    "reward_model",
+    "distill",
+    "embedding",
+    "classifier",
 ]
 
 
 @pytest.mark.parametrize("name", _TRAINERS_WITH_CALLBACK)
 def test_trainer_wires_eval_gate_config(name):
     """Every trainer that builds SoupTrainerCallback must pass eval_gate_config."""
-    src = (Path(soup_cli.__file__).parent / "trainer" / f"{name}.py").read_text(
-        encoding="utf-8"
-    )
+    src = (Path(soup_cli.__file__).parent / "trainer" / f"{name}.py").read_text(encoding="utf-8")
     assert "eval_gate_config=" in src, f"{name}.py does not wire eval_gate_config"

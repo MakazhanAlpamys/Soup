@@ -36,7 +36,7 @@ def _plain(text: str) -> str:
     return " ".join(_ANSI_RE.sub("", text).split())
 
 
-_SUBSTRING_CREDIT_VERIFIER = '''
+_SUBSTRING_CREDIT_VERIFIER = """
 def reward_fn(completions, **kwargs):
     answers = kwargs.get("answer") or []
     out = []
@@ -44,7 +44,7 @@ def reward_fn(completions, **kwargs):
         text = completion[-1]["content"] if completion else ""
         out.append(0.5 if str(gold).strip().lower() in text.lower() else 0.0)
     return out
-'''
+"""
 
 
 def _write_jsonl(path: Path, filename: str, rows: list[dict]) -> Path:
@@ -74,9 +74,7 @@ class TestIssue814AttackVariants:
         attacks = rst.generate_attacks()
         for kind in rst.ATTACKS:
             kind_texts = [text for k, text in attacks if k == kind]
-            assert len(kind_texts) > 1, (
-                f"generate_attacks must yield multiple variants for {kind}"
-            )
+            assert len(kind_texts) > 1, f"generate_attacks must yield multiple variants for {kind}"
             assert len(set(kind_texts)) == len(kind_texts), (
                 f"generate_attacks variants must be distinct for {kind}"
             )
@@ -120,9 +118,7 @@ class TestIssue814ScoringAndCli:
         for a in data["attacks"]:
             assert a["n"] > 1
 
-    def test_substring_crediting_verifier_flags_answer_spray_exit_2(
-        self, tmp_path, monkeypatch
-    ):
+    def test_substring_crediting_verifier_flags_answer_spray_exit_2(self, tmp_path, monkeypatch):
         # The built-in `accuracy` reward paid this 0.5 substring credit until #1226 removed it;
         # the verifier below reproduces it so the stress CLI's answer_spray detection stays
         # pinned. (`accuracy` itself is now robust: tests/test_issue1226_reward_gold_parsing.py.)
@@ -134,9 +130,13 @@ class TestIssue814ScoringAndCli:
         r = runner.invoke(
             soup_app,
             [
-                "reward", "stress", str(verifier),
-                "--references", str(refs),
-                "--output-report", str(rep_file),
+                "reward",
+                "stress",
+                str(verifier),
+                "--references",
+                str(refs),
+                "--output-report",
+                str(rep_file),
             ],
         )
         assert r.exit_code == 2, (r.output, repr(r.exception))
@@ -158,10 +158,15 @@ class TestIssue814ScoringAndCli:
         r = runner.invoke(
             soup_app,
             [
-                "reward", "stress", "verifiable",
-                "--verifiable-domain", "math",
-                "--references", str(refs),
-                "--output-report", str(rep_file),
+                "reward",
+                "stress",
+                "verifiable",
+                "--verifiable-domain",
+                "math",
+                "--references",
+                str(refs),
+                "--output-report",
+                str(rep_file),
             ],
         )
         assert r.exit_code == 0, (r.output, repr(r.exception))
@@ -230,11 +235,17 @@ class TestIssue814ScoringAndCli:
         r = runner.invoke(
             soup_app,
             [
-                "reward", "stress", "verifiable",
-                "--verifiable-domain", "math",
-                "--references", str(refs),
-                "--attacks", "wrapped_junk,answer_spray",
-                "--output-report", str(rep_file),
+                "reward",
+                "stress",
+                "verifiable",
+                "--verifiable-domain",
+                "math",
+                "--references",
+                str(refs),
+                "--attacks",
+                "wrapped_junk,answer_spray",
+                "--output-report",
+                str(rep_file),
             ],
         )
         assert r.exit_code == 0, (r.output, repr(r.exception))

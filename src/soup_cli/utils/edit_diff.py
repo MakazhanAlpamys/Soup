@@ -127,9 +127,7 @@ def load_probes(path: str) -> Tuple[str, ...]:
         raise ValueError("probe path must not be a symlink")
     real = os.path.realpath(path)
     if st.st_size > _MAX_PROBE_BYTES:
-        raise ValueError(
-            f"probe file exceeds {_MAX_PROBE_BYTES} bytes"
-        )
+        raise ValueError(f"probe file exceeds {_MAX_PROBE_BYTES} bytes")
     out: list[str] = []
     total_lines: int = 0
     skipped_missing_prompt: int = 0
@@ -167,7 +165,9 @@ def load_probes(path: str) -> Tuple[str, ...]:
             if len(prompt) > _MAX_PROMPT_LEN:
                 _LOG.warning(
                     "probe row %d truncated to %d chars (was %d)",
-                    i, _MAX_PROMPT_LEN, len(prompt),
+                    i,
+                    _MAX_PROMPT_LEN,
+                    len(prompt),
                 )
                 prompt = prompt[:_MAX_PROMPT_LEN]
             out.append(prompt)
@@ -235,12 +235,8 @@ def build_diff_report(
 
     if (before_model is None) != (after_model is None):
         if before_model is not None:
-            raise ValueError(
-                "--after-model is required when --before-model is specified"
-            )
-        raise ValueError(
-            "--before-model is required when --after-model is specified"
-        )
+            raise ValueError("--after-model is required when --before-model is specified")
+        raise ValueError("--before-model is required when --after-model is specified")
 
     probes: Tuple[str, ...] = ()
     if probe_file is not None:
@@ -382,9 +378,7 @@ def render_diff_table(report: DiffReport, console) -> None:
             )
     console.print(table)
     n_changed = sum(1 for c in report.changes if c.changed)
-    console.print(
-        f"[dim]Total probes: {report.total_probes}; {n_changed} changed.[/]"
-    )
+    console.print(f"[dim]Total probes: {report.total_probes}; {n_changed} changed.[/]")
 
 
 def write_diff_report(report: DiffReport, path: str) -> str:

@@ -102,11 +102,16 @@ def _run_augment(tmp_path: Path, monkeypatch, *extra: str):
     return runner.invoke(
         app,
         [
-            "data", "augment",
-            "--input", "data.jsonl",
-            "--output", "augmented.jsonl",
-            "--strategy", "rephrase",
-            "--count", "1",
+            "data",
+            "augment",
+            "--input",
+            "data.jsonl",
+            "--output",
+            "augmented.jsonl",
+            "--strategy",
+            "rephrase",
+            "--count",
+            "1",
             *extra,
         ],
     )
@@ -121,8 +126,12 @@ def _augment_rows(tmp_path: Path) -> List[dict]:
 
 def test_augment_unreachable_provider_exits_nonzero_no_file(tmp_path, monkeypatch) -> None:
     result = _run_augment(
-        tmp_path, monkeypatch,
-        "--provider", "ollama", "--base-url", "http://127.0.0.1:9",
+        tmp_path,
+        monkeypatch,
+        "--provider",
+        "ollama",
+        "--base-url",
+        "http://127.0.0.1:9",
     )
     output = _terminal_text(result)
 
@@ -146,8 +155,12 @@ def test_augment_failing_provider_exits_nonzero(
     stub, url = stub_judge
     stub.mode = mode
     result = _run_augment(
-        tmp_path, monkeypatch,
-        "--provider", "ollama", "--base-url", url,
+        tmp_path,
+        monkeypatch,
+        "--provider",
+        "ollama",
+        "--base-url",
+        url,
     )
     output = _terminal_text(result)
 
@@ -162,8 +175,12 @@ def test_augment_partial_outage_keeps_only_successful_rows(
     stub, url = stub_judge
     stub.mode = "alternate"
     result = _run_augment(
-        tmp_path, monkeypatch,
-        "--provider", "ollama", "--base-url", url,
+        tmp_path,
+        monkeypatch,
+        "--provider",
+        "ollama",
+        "--base-url",
+        url,
     )
     output = _terminal_text(result)
 
@@ -180,8 +197,12 @@ def test_augment_partial_outage_keeps_only_successful_rows(
 def test_augment_healthy_provider_control(tmp_path, monkeypatch, stub_judge) -> None:
     stub, url = stub_judge
     result = _run_augment(
-        tmp_path, monkeypatch,
-        "--provider", "ollama", "--base-url", url,
+        tmp_path,
+        monkeypatch,
+        "--provider",
+        "ollama",
+        "--base-url",
+        url,
     )
     output = _terminal_text(result)
 
@@ -202,9 +223,15 @@ def test_augment_translate_and_style_fail_loudly_too(
     stub, url = stub_judge
     stub.mode = "500"
     result = _run_augment(
-        tmp_path, monkeypatch,
-        "--strategy", strategy, *strategy_args,
-        "--provider", "ollama", "--base-url", url,
+        tmp_path,
+        monkeypatch,
+        "--strategy",
+        strategy,
+        *strategy_args,
+        "--provider",
+        "ollama",
+        "--base-url",
+        url,
     )
     output = _terminal_text(result)
 
@@ -223,9 +250,15 @@ def test_augment_translate_and_style_partial_outage_keeps_only_good_rows(
     stub, url = stub_judge
     stub.mode = "alternate"
     result = _run_augment(
-        tmp_path, monkeypatch,
-        "--strategy", strategy, *strategy_args,
-        "--provider", "ollama", "--base-url", url,
+        tmp_path,
+        monkeypatch,
+        "--strategy",
+        strategy,
+        *strategy_args,
+        "--provider",
+        "ollama",
+        "--base-url",
+        url,
     )
     output = _terminal_text(result)
 
@@ -300,11 +333,16 @@ def _run_distill(tmp_path: Path, monkeypatch, *extra: str):
         app,
         [
             "distill-prompt",
-            "--traces", "traces.jsonl",
-            "--teacher", "qwen2.5:0.5b",
-            "--student", "smol",
-            "--strategy", "sft",
-            "--output", "distilled.jsonl",
+            "--traces",
+            "traces.jsonl",
+            "--teacher",
+            "qwen2.5:0.5b",
+            "--student",
+            "smol",
+            "--strategy",
+            "sft",
+            "--output",
+            "distilled.jsonl",
             *extra,
         ],
     )
@@ -312,8 +350,12 @@ def _run_distill(tmp_path: Path, monkeypatch, *extra: str):
 
 def test_distill_unreachable_provider_exits_nonzero_no_file(tmp_path, monkeypatch) -> None:
     result = _run_distill(
-        tmp_path, monkeypatch,
-        "--provider", "ollama", "--base-url", "http://127.0.0.1:9",
+        tmp_path,
+        monkeypatch,
+        "--provider",
+        "ollama",
+        "--base-url",
+        "http://127.0.0.1:9",
     )
     output = _terminal_text(result)
 
@@ -327,8 +369,12 @@ def test_distill_failing_provider_exits_nonzero(tmp_path, monkeypatch, stub_judg
     stub, url = stub_judge
     stub.mode = "500"
     result = _run_distill(
-        tmp_path, monkeypatch,
-        "--provider", "ollama", "--base-url", url,
+        tmp_path,
+        monkeypatch,
+        "--provider",
+        "ollama",
+        "--base-url",
+        url,
     )
     output = _terminal_text(result)
 
@@ -343,8 +389,12 @@ def test_distill_partial_outage_keeps_only_successful_rows(
     stub, url = stub_judge
     stub.mode = "alternate"
     result = _run_distill(
-        tmp_path, monkeypatch,
-        "--provider", "ollama", "--base-url", url,
+        tmp_path,
+        monkeypatch,
+        "--provider",
+        "ollama",
+        "--base-url",
+        url,
     )
     output = _terminal_text(result)
 
@@ -359,8 +409,12 @@ def test_distill_partial_outage_keeps_only_successful_rows(
 def test_distill_healthy_provider_control(tmp_path, monkeypatch, stub_judge) -> None:
     stub, url = stub_judge
     result = _run_distill(
-        tmp_path, monkeypatch,
-        "--provider", "ollama", "--base-url", url,
+        tmp_path,
+        monkeypatch,
+        "--provider",
+        "ollama",
+        "--base-url",
+        url,
     )
     output = _terminal_text(result)
 
@@ -377,9 +431,14 @@ def test_distill_preference_strategy_exercises_teacher_and_student(
     stub, url = stub_judge
     stub.mode = "alternate"
     result = _run_distill(
-        tmp_path, monkeypatch,
-        "--provider", "ollama", "--base-url", url,
-        "--strategy", "preference",
+        tmp_path,
+        monkeypatch,
+        "--provider",
+        "ollama",
+        "--base-url",
+        url,
+        "--strategy",
+        "preference",
     )
     output = _terminal_text(result)
 

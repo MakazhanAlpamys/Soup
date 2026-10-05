@@ -33,11 +33,20 @@ console = Console()
 # Optimizers the analytical hardware-fit predictor understands (mirror of
 # hardware_fit._VALID_OPTIMIZERS); an unknown optimizer maps to the
 # highest-state default so the estimate stays conservative.
-_HW_FIT_OPTIMIZERS = frozenset({
-    "adamw_torch", "adamw_torch_fused", "adafactor", "sgd",
-    "adamw_bnb_8bit", "paged_adamw_8bit", "lion_8bit",
-    "lomo", "adalomo", "schedule_free_adamw",
-})
+_HW_FIT_OPTIMIZERS = frozenset(
+    {
+        "adamw_torch",
+        "adamw_torch_fused",
+        "adafactor",
+        "sgd",
+        "adamw_bnb_8bit",
+        "paged_adamw_8bit",
+        "lion_8bit",
+        "lomo",
+        "adalomo",
+        "schedule_free_adamw",
+    }
+)
 
 _UNWIRED_TRAINING_TUNABLES = (
     # Group B tunables (forgetting_eval_steps, forgetting_benchmark, forgetting_stop,
@@ -103,9 +112,7 @@ def _train_sample_count(dcfg, dataset) -> int:
     if dcfg.format != "pre_tokenized" or not dcfg.tokenized_path:
         return rows
     try:
-        with open(
-            os.path.join(dcfg.tokenized_path, "metadata.json"), encoding="utf-8"
-        ) as f:
+        with open(os.path.join(dcfg.tokenized_path, "metadata.json"), encoding="utf-8") as f:
             count = json.load(f).get("row_count")
     except (OSError, ValueError):
         return rows
@@ -123,9 +130,7 @@ def _validate_classification_dataset_if_applicable(cfg: Any, dataset: dict) -> N
         try:
             validate_classification_dataset(cfg, dataset)
         except (ValueError, TypeError) as exc:
-            console.print(
-                f"[red]Error validating {cfg.task} dataset:[/] {escape(str(exc))}"
-            )
+            console.print(f"[red]Error validating {cfg.task} dataset:[/] {escape(str(exc))}")
             raise typer.Exit(1) from exc
 
 
@@ -197,10 +202,11 @@ def _build_hardware_fit_input(cfg):
     task = getattr(cfg, "task", None)
     if quant == "4bit":
         peft = "qlora"
-    elif task == "prm" or (
-        task in CLASSIFICATION_TASKS
-        and not (tcfg.classifier_lora and tcfg.lora.r > 0)
-    ) or (task == "asr" and not (tcfg.asr_lora and tcfg.lora.r > 0)):
+    elif (
+        task == "prm"
+        or (task in CLASSIFICATION_TASKS and not (tcfg.classifier_lora and tcfg.lora.r > 0))
+        or (task == "asr" and not (tcfg.asr_lora and tcfg.lora.r > 0))
+    ):
         # #795: these trainers decide full fine-tuning themselves -- PRM always,
         # the classifier family and ASR unless their own LoRA opt-in is on
         # (classifier.py:262, asr.py::_should_use_lora). Budgeting them as LoRA
@@ -424,25 +430,38 @@ def train(
         "--gpus",
         help="GPUs per node for distributed training ('auto' or integer)",
     ),
-    nodes: Annotated[int, typer.Option(
-        "--nodes", help="Number of machines; each must use the same --gpus count",
-    )] = 1,
-    node_rank: Annotated[int | None, typer.Option(
-        "--node-rank", help="This machine's rank, from 0 to nodes minus 1 (default 0)",
-    )] = None,
-    master_addr: Annotated[str | None, typer.Option(
-        "--master-addr",
-        help="Rank 0 hostname or IP reachable by all nodes; required with --nodes > 1",
-    )] = None,
-    master_port: Annotated[int | None, typer.Option(
-        "--master-port", help="Shared coordinator port for multiple nodes (default 29500)",
-    )] = None,
+    nodes: Annotated[
+        int,
+        typer.Option(
+            "--nodes",
+            help="Number of machines; each must use the same --gpus count",
+        ),
+    ] = 1,
+    node_rank: Annotated[
+        int | None,
+        typer.Option(
+            "--node-rank",
+            help="This machine's rank, from 0 to nodes minus 1 (default 0)",
+        ),
+    ] = None,
+    master_addr: Annotated[
+        str | None,
+        typer.Option(
+            "--master-addr",
+            help="Rank 0 hostname or IP reachable by all nodes; required with --nodes > 1",
+        ),
+    ] = None,
+    master_port: Annotated[
+        int | None,
+        typer.Option(
+            "--master-port",
+            help="Shared coordinator port for multiple nodes (default 29500)",
+        ),
+    ] = None,
     no_reexec: bool = typer.Option(
         False,
         "--no-reexec",
-        help=(
-            "Print the distributed launch command instead of launching it"
-        ),
+        help=("Print the distributed launch command instead of launching it"),
     ),
     gate: str = typer.Option(
         None,
@@ -536,7 +555,8 @@ def train(
         ),
     ),
     replay: str = typer.Option(
-        None, "--replay",
+        None,
+        "--replay",
         help=(
             "Old dataset to interleave as continual-learning rehearsal, so "
             "training on the new task does not erase the previous one. "
@@ -545,18 +565,17 @@ def train(
         ),
     ),
     replay_ratio: float = typer.Option(
-        None, "--replay-ratio",
+        None,
+        "--replay-ratio",
         help=(
             "Fraction of the FINAL mixed train set that is replay rows "
             "(default 0.1). Overrides data.replay_ratio. (v0.71.36)"
         ),
     ),
     replay_seed: int = typer.Option(
-        None, "--replay-seed",
-        help=(
-            "Seed for the replay sample + interleave. Overrides "
-            "data.replay_seed. (v0.71.36)"
-        ),
+        None,
+        "--replay-seed",
+        help=("Seed for the replay sample + interleave. Overrides data.replay_seed. (v0.71.36)"),
     ),
     reward_hack_mitigation: str = typer.Option(
         None,
@@ -701,8 +720,10 @@ def train(
     except ValueError as exc:
         message = str(exc)
         for field, flag in (
-            ("num_machines", "--nodes"), ("machine_rank", "--node-rank"),
-            ("main_process_ip", "--master-addr"), ("main_process_port", "--master-port"),
+            ("num_machines", "--nodes"),
+            ("machine_rank", "--node-rank"),
+            ("main_process_ip", "--master-addr"),
+            ("main_process_port", "--master-port"),
         ):
             message = message.replace(field, flag)
         console.print(f"[red]Invalid distributed launch:[/] {markup_escape(message)}")
@@ -738,7 +759,9 @@ def train(
         # --find-lr-steps (a short dataset, or a loss that went non-finite).
         try:
             lrs, losses_for_report = _run_live_lr_sweep(
-                config_path, schedule, trust_remote_code=trust_remote_code,
+                config_path,
+                schedule,
+                trust_remote_code=trust_remote_code,
             )
         except (SweepTooShortError, LrSweepUnavailableError) as exc:
             console.print(f"[red]{markup_escape(str(exc))}[/]")
@@ -755,9 +778,7 @@ def train(
     console.print(f"[dim]Loading config from {config_path}...[/]")
     cfg = load_config(
         config_path,
-        training_overrides=(
-            {"minillm_on_policy": True} if minillm_on_policy else None
-        ),
+        training_overrides=({"minillm_on_policy": True} if minillm_on_policy else None),
     )
 
     # --- v0.71.36 replay passthrough ---
@@ -814,8 +835,7 @@ def train(
     if echo_trap_tokenizer_aware:
         if not cfg.training.echo_trap_enabled:
             console.print(
-                "[red]--echo-trap-tokenizer-aware requires "
-                "training.echo_trap_enabled=true[/]"
+                "[red]--echo-trap-tokenizer-aware requires training.echo_trap_enabled=true[/]"
             )
             raise typer.Exit(1)
         cfg.training.echo_trap_tokenizer_aware = True
@@ -824,9 +844,7 @@ def train(
     # --- Reward-hack detector / halt shortcut (v0.71.26) ---
     if reward_hack_detector is not None:
         if reward_hack_detector not in ("info_rm", "rm_ensemble"):
-            console.print(
-                "[red]--reward-hack-detector must be info_rm or rm_ensemble[/]"
-            )
+            console.print("[red]--reward-hack-detector must be info_rm or rm_ensemble[/]")
             raise typer.Exit(1)
         cfg.training.reward_hack_detector = reward_hack_detector
         console.print(f"[green]Reward-hack detector:[/] {reward_hack_detector}")
@@ -845,23 +863,17 @@ def train(
         valid_modes = ("off", "log_only", "kl_control", "pid_lagrangian")
         if reward_hack_mitigation not in valid_modes:
             console.print(
-                "[red]--reward-hack-mitigation must be one of "
-                f"{', '.join(valid_modes)}[/]"
+                f"[red]--reward-hack-mitigation must be one of {', '.join(valid_modes)}[/]"
             )
             raise typer.Exit(1)
-        if (
-            reward_hack_mitigation != "off"
-            and cfg.training.reward_hack_detector is None
-        ):
+        if reward_hack_mitigation != "off" and cfg.training.reward_hack_detector is None:
             console.print(
                 "[red]--reward-hack-mitigation requires "
                 "training.reward_hack_detector to be set (the signal source)[/]"
             )
             raise typer.Exit(1)
         cfg.training.reward_hack_mitigation = reward_hack_mitigation
-        console.print(
-            f"[green]Reward-hack mitigation:[/] {reward_hack_mitigation}"
-        )
+        console.print(f"[green]Reward-hack mitigation:[/] {reward_hack_mitigation}")
 
     # --- MiniLLM on-policy rollout shortcut (v0.71.18 #257) ---
     # Applied before SoupConfig validation via load_config(training_overrides=),
@@ -904,9 +916,7 @@ def train(
             cloud_mod.validate_cloud(cloud)
             cloud_mod.validate_gpu(gpu)
         except ValueError as exc:
-            console.print(
-                f"[red]Invalid --cloud / --gpu:[/] {markup_escape(str(exc))}"
-            )
+            console.print(f"[red]Invalid --cloud / --gpu:[/] {markup_escape(str(exc))}")
             raise typer.Exit(2) from exc
         try:
             # We call the generic-shaped plan function dynamically
@@ -942,8 +952,7 @@ def train(
                 rc = submit_func(plan)
             except RuntimeError as exc:
                 console.print(
-                    f"[yellow]{cloud.title()} submit unavailable:[/] "
-                    f"{markup_escape(str(exc))}"
+                    f"[yellow]{cloud.title()} submit unavailable:[/] {markup_escape(str(exc))}"
                 )
                 raise typer.Exit(1) from exc
             raise typer.Exit(rc)
@@ -1012,9 +1021,7 @@ def train(
             raise typer.Exit(1) from exc
         hf_token = resolve_token()
         if hf_token is None:
-            console.print(
-                "[yellow]--hf-resume: no HF token available; skipping auto-resume[/]"
-            )
+            console.print("[yellow]--hf-resume: no HF token available; skipping auto-resume[/]")
         else:
             local_ckpt = prepare_hf_resume(
                 repo_id=push_as,
@@ -1026,15 +1033,11 @@ def train(
                 resume_from = local_ckpt
                 console.print(f"[green]Resumed from HF:[/] {local_ckpt}")
             else:
-                console.print(
-                    "[yellow]--hf-resume: no checkpoint branch found; starting fresh[/]"
-                )
+                console.print("[yellow]--hf-resume: no checkpoint branch found; starting fresh[/]")
 
     # --- Validate logging flags ---
     if wandb and tensorboard:
-        console.print(
-            "[red]Cannot use --wandb and --tensorboard together. Pick one.[/]"
-        )
+        console.print("[red]Cannot use --wandb and --tensorboard together. Pick one.[/]")
         raise typer.Exit(1)
 
     # --- TensorBoard setup ---
@@ -1045,8 +1048,7 @@ def train(
             console.print("[green]TensorBoard logging enabled[/]")
         except ImportError:
             console.print(
-                "[red]TensorBoard not installed.[/]\n"
-                "Run: [bold]pip install tensorboard[/]"
+                "[red]TensorBoard not installed.[/]\nRun: [bold]pip install tensorboard[/]"
             )
             raise typer.Exit(1)
 
@@ -1058,8 +1060,7 @@ def train(
             console.print("[green]W&B logging enabled[/]")
         except ImportError:
             console.print(
-                "[red]wandb not installed.[/]\n"
-                "Run: [bold]pip install \"soup-cli\\[wandb]\"[/]"
+                '[red]wandb not installed.[/]\nRun: [bold]pip install "soup-cli\\[wandb]"[/]'
             )
             raise typer.Exit(1)
         except Exception as wandb_err:
@@ -1083,8 +1084,7 @@ def train(
 
         if fsdp not in FSDP_CONFIGS:
             console.print(
-                f"[red]Invalid FSDP preset: {fsdp}[/]\n"
-                f"Options: {', '.join(FSDP_CONFIGS.keys())}"
+                f"[red]Invalid FSDP preset: {fsdp}[/]\nOptions: {', '.join(FSDP_CONFIGS.keys())}"
             )
             raise typer.Exit(1)
         fsdp_kwargs = get_fsdp_training_args(fsdp)
@@ -1145,8 +1145,7 @@ def train(
                 raise typer.Exit(1)
             # --gpus auto on CPU / no-CUDA box — explicit, not silent.
             console.print(
-                "[yellow]--gpus auto detected 0 GPUs; continuing as a "
-                "single-process CPU run.[/]"
+                "[yellow]--gpus auto detected 0 GPUs; continuing as a single-process CPU run.[/]"
             )
         elif num_gpus is not None and num_gpus * nodes > 1:
             from soup_cli.utils.launcher import (
@@ -1214,11 +1213,16 @@ def train(
                     hint_args = script_args if nodes > 1 else hint_argv_from_reexec(script_args)
                     console.print(
                         Panel(
-                            markup_escape(format_advice(
-                                num_processes, hint_args, num_machines=nodes,
-                                machine_rank=node_rank, main_process_ip=master_addr,
-                                main_process_port=master_port,
-                            )),
+                            markup_escape(
+                                format_advice(
+                                    num_processes,
+                                    hint_args,
+                                    num_machines=nodes,
+                                    machine_rank=node_rank,
+                                    main_process_ip=master_addr,
+                                    main_process_port=master_port,
+                                )
+                            ),
                             title="[yellow]Multi-GPU launch required[/]",
                         )
                     )
@@ -1236,15 +1240,19 @@ def train(
                     )
                 else:
                     argv = build_accelerate_argv(
-                        num_processes=num_processes, script_args=script_args,
-                        num_machines=nodes, machine_rank=node_rank,
-                        main_process_ip=master_addr, main_process_port=master_port,
+                        num_processes=num_processes,
+                        script_args=script_args,
+                        num_machines=nodes,
+                        machine_rank=node_rank,
+                        main_process_ip=master_addr,
+                        main_process_port=master_port,
                     )
                     if nodes > 1:
                         from soup_cli.utils.topology import suggest_nccl_env
 
                         for key, val in suggest_nccl_env(
-                            gpu_count=num_gpus, interconnect=topo["interconnect"],
+                            gpu_count=num_gpus,
+                            interconnect=topo["interconnect"],
                             num_machines=nodes,
                         ).items():
                             os.environ.setdefault(key, val)
@@ -1278,7 +1286,9 @@ def train(
                 from soup_cli.utils.topology import suggest_nccl_env
 
                 for key, val in suggest_nccl_env(
-                    gpu_count=num_gpus, interconnect=topo["interconnect"], num_machines=nodes,
+                    gpu_count=num_gpus,
+                    interconnect=topo["interconnect"],
+                    num_machines=nodes,
                 ).items():
                     os.environ.setdefault(key, val)
 
@@ -1331,10 +1341,7 @@ def train(
         else:
             peft_line = head_line
     else:
-        peft_line = (
-            f"LoRA:    [bold]r={cfg.training.lora.r}, "
-            f"alpha={cfg.training.lora.alpha}[/]"
-        )
+        peft_line = f"LoRA:    [bold]r={cfg.training.lora.r}, alpha={cfg.training.lora.alpha}[/]"
     # #353 review-fix: a wrong seed is invisible, which is how `training.seed`
     # reaching one wrapper out of nineteen survived releases. Report the value
     # the run actually trains at, and say when it is the unset default, so
@@ -1366,7 +1373,9 @@ def train(
         from soup_cli.utils.galore import validate_galore_config
 
         galore_errors = validate_galore_config(
-            cfg.training.use_galore, cfg.training.quantization, cfg.backend,
+            cfg.training.use_galore,
+            cfg.training.quantization,
+            cfg.backend,
         )
         for err in galore_errors:
             console.print(f"[red]GaLore error:[/] {for_terminal(err)}")
@@ -1374,14 +1383,13 @@ def train(
             raise typer.Exit(1)
 
     # Validate QAT configuration
-    if (
-        cfg.training.quantization_aware is True
-        or cfg.training.quantization_aware == "fp8"
-    ):
+    if cfg.training.quantization_aware is True or cfg.training.quantization_aware == "fp8":
         from soup_cli.utils.qat import validate_qat_config
 
         qat_errors = validate_qat_config(
-            cfg.training.quantization, cfg.backend, cfg.modality,
+            cfg.training.quantization,
+            cfg.backend,
+            cfg.modality,
             quantization_aware=cfg.training.quantization_aware,
             fp8_recipe=cfg.training.fp8_recipe,
             check_card=not dry_run,
@@ -1399,8 +1407,7 @@ def train(
             card_ok, card_reason = fp8_training_supported(cfg.training.fp8_recipe)
             if not card_ok:
                 console.print(
-                    "[yellow]Note:[/] this machine could not run it: "
-                    f"{markup_escape(card_reason)}"
+                    f"[yellow]Note:[/] this machine could not run it: {markup_escape(card_reason)}"
                 )
         if qat_errors:
             raise typer.Exit(1)
@@ -1469,7 +1476,9 @@ def train(
         from soup_cli.utils.liger import validate_liger_config
 
         liger_errors = validate_liger_config(
-            cfg.training.use_liger, cfg.backend, device,
+            cfg.training.use_liger,
+            cfg.backend,
+            device,
         )
         for err in liger_errors:
             console.print(f"[red]Liger error:[/] {for_terminal(err)}")
@@ -1481,7 +1490,9 @@ def train(
         from soup_cli.utils.flash_attn import validate_flash_attn_config
 
         fa_errors = validate_flash_attn_config(
-            cfg.training.use_flash_attn, cfg.backend, device,
+            cfg.training.use_flash_attn,
+            cfg.backend,
+            device,
         )
         for err in fa_errors:
             console.print(f"[red]FlashAttention error:[/] {for_terminal(err)}")
@@ -1493,7 +1504,9 @@ def train(
         from soup_cli.utils.ring_attention import validate_ring_attention_config
 
         ring_errors = validate_ring_attention_config(
-            cfg.training.use_ring_attention, device, cfg.data.max_length,
+            cfg.training.use_ring_attention,
+            device,
+            cfg.data.max_length,
         )
         for err in ring_errors:
             console.print(f"[red]Ring Attention error:[/] {for_terminal(err)}")
@@ -1544,9 +1557,7 @@ def train(
         )
         _refuse_empty_train(cfg.data, dataset)
         _validate_classification_dataset_if_applicable(cfg, dataset)
-        console.print(
-            f"[green]Data OK:[/] {_train_sample_count(cfg.data, dataset)} train samples"
-        )
+        console.print(f"[green]Data OK:[/] {_train_sample_count(cfg.data, dataset)} train samples")
         if "val" in dataset:
             console.print(f"[green]Val:[/] {len(dataset['val'])} samples")
         console.print("[green]Config valid. Ready to train![/]")
@@ -1562,9 +1573,7 @@ def train(
     )
     _refuse_empty_train(cfg.data, dataset)
     _validate_classification_dataset_if_applicable(cfg, dataset)
-    console.print(
-        f"[green]Loaded:[/] {_train_sample_count(cfg.data, dataset)} train samples"
-    )
+    console.print(f"[green]Loaded:[/] {_train_sample_count(cfg.data, dataset)} train samples")
 
     # Capture the --tracker CLI value BEFORE the local ExperimentTracker
     # shadows it (v0.43.0 review fix — name-collision regression).
@@ -1634,19 +1643,14 @@ def train(
                 existing_cfg = cache_dir / "config.json"
                 if existing_cfg.is_file():
                     local_path = str(cache_dir)
-                    console.print(
-                        f"[dim]Using cached snapshot at {local_path}[/]"
-                    )
+                    console.print(f"[dim]Using cached snapshot at {local_path}[/]")
                 else:
                     local_path = download_repo(
                         hub_name,
                         cfg.base,
                         local_dir=str(cache_dir),
                     )
-                    console.print(
-                        f"[dim]Fetched {cfg.base} from hub={hub_name} → "
-                        f"{local_path}[/]"
-                    )
+                    console.print(f"[dim]Fetched {cfg.base} from hub={hub_name} → {local_path}[/]")
                 # Use ``model_copy(update=...)`` so the Pydantic field
                 # validators on ``base`` rerun (matches v0.33.0 #47 / v0.40.0
                 # Part B immutability policy).
@@ -1709,16 +1713,13 @@ def train(
                 private=False,
             )
             if push_cb is None:
-                console.print(
-                    "[yellow]--push-as: no HF token available; skipping auto-push[/]"
-                )
+                console.print("[yellow]--push-as: no HF token available; skipping auto-push[/]")
             else:
                 hf_trainer = getattr(trainer_wrapper, "trainer", None)
                 if hf_trainer is not None and hasattr(hf_trainer, "add_callback"):
                     hf_trainer.add_callback(push_cb)
                     console.print(
-                        f"[green]HF auto-push enabled[/] -> {push_as} "
-                        "(one branch per save_steps)"
+                        f"[green]HF auto-push enabled[/] -> {push_as} (one branch per save_steps)"
                     )
                 else:
                     console.print(
@@ -1762,7 +1763,9 @@ def train(
     try:
         with profiler_ctx, energy_ctx:
             result = trainer_wrapper.train(
-                display=display, tracker=tracker, run_id=run_id,
+                display=display,
+                tracker=tracker,
+                run_id=run_id,
                 resume_from_checkpoint=resume_from,
             )
 
@@ -1797,9 +1800,7 @@ def train(
         except Exception as crash_err:
             # Never let the crash reporter mask the original error, but tell
             # the user the bundle is missing so they don't hunt for it.
-            console.print(
-                f"[dim]Could not write crash bundle: {crash_err}[/]"
-            )
+            console.print(f"[dim]Could not write crash bundle: {crash_err}[/]")
         raise
 
     # Report
@@ -1827,21 +1828,15 @@ def train(
     # --- v0.56.0 --diagnose-gate: post-training failure-mode check ---
     if diagnose_gate and _should_run_diagnose_gate_on_rank():
         try:
-            _run_diagnose_gate(
-                diagnose_gate, run_id, cfg.base, result["output_dir"]
-            )
+            _run_diagnose_gate(diagnose_gate, run_id, cfg.base, result["output_dir"])
         except typer.Exit:
             raise
         except (OSError, ValueError) as exc:
-            console.print(
-                f"[red]--diagnose-gate failed:[/] {type(exc).__name__}: {exc}"
-            )
+            console.print(f"[red]--diagnose-gate failed:[/] {type(exc).__name__}: {exc}")
             raise typer.Exit(1) from exc
 
     # --- v0.71.3 #180 --track-energy: print the measured energy/CO2 -------
-    energy_measurement = (
-        energy_tracker.measurement if energy_tracker is not None else None
-    )
+    energy_measurement = energy_tracker.measurement if energy_tracker is not None else None
     if track_energy:
         if energy_measurement is not None:
             console.print(
@@ -1852,8 +1847,7 @@ def train(
             )
         else:
             console.print(
-                "[yellow]--track-energy:[/] no reading "
-                "(install `pip install soup-cli\\[carbon]`)"
+                "[yellow]--track-energy:[/] no reading (install `pip install soup-cli\\[carbon]`)"
             )
 
     # --- v0.71.15 #244 --energy-out: persist for `soup bom emit --energy` -
@@ -1867,9 +1861,7 @@ def train(
                     "(feed to `soup bom emit --energy`)"
                 )
             except (OSError, ValueError) as exc:
-                console.print(
-                    f"[yellow]--energy-out skipped:[/] {type(exc).__name__}: {exc}"
-                )
+                console.print(f"[yellow]--energy-out skipped:[/] {type(exc).__name__}: {exc}")
         else:
             console.print(
                 "[yellow]--energy-out skipped:[/] no energy reading "
@@ -1883,9 +1875,7 @@ def train(
         except typer.Exit:
             raise
         except (OSError, ValueError) as exc:
-            console.print(
-                f"[yellow]--annex-xi skipped:[/] {type(exc).__name__}: {exc}"
-            )
+            console.print(f"[yellow]--annex-xi skipped:[/] {type(exc).__name__}: {exc}")
 
     # --- v0.59.0 --repro-receipt: SR 11-7 receipt ------------------------
     if repro_receipt and _should_run_diagnose_gate_on_rank():
@@ -1894,9 +1884,7 @@ def train(
         except typer.Exit:
             raise
         except (OSError, ValueError) as exc:
-            console.print(
-                f"[yellow]--repro-receipt skipped:[/] {type(exc).__name__}: {exc}"
-            )
+            console.print(f"[yellow]--repro-receipt skipped:[/] {type(exc).__name__}: {exc}")
 
     # --- v0.71.8 #219 --capture-activations: SAE-diff-ready snapshot ------
     if capture_activations and _should_run_diagnose_gate_on_rank():
@@ -1910,10 +1898,7 @@ def train(
             )
             console.print(f"[green]--capture-activations[/] -> {written}")
         except (OSError, ValueError, RuntimeError, ImportError) as exc:
-            console.print(
-                f"[yellow]--capture-activations skipped:[/] "
-                f"{type(exc).__name__}: {exc}"
-            )
+            console.print(f"[yellow]--capture-activations skipped:[/] {type(exc).__name__}: {exc}")
 
 
 def _write_annex_xi(out_path: str, run_id: str, cfg, *, energy=None) -> None:
@@ -2130,9 +2115,7 @@ def _should_run_diagnose_gate_on_rank() -> bool:
         return True
 
 
-def _run_diagnose_gate(
-    evidence_path: str, run_id: str, base: str, adapter: str
-) -> None:
+def _run_diagnose_gate(evidence_path: str, run_id: str, base: str, adapter: str) -> None:
     """Post-training failure-mode gate (v0.56.0).
 
     Loads a JSON ``evidence`` file with optional per-mode scores and
@@ -2154,9 +2137,7 @@ def _run_diagnose_gate(
     # `commands/diagnose._MAX_EVIDENCE_BYTES`; prevents `/dev/zero` /
     # multi-GB symlink-pointed OOM at json.load time).
     if os.path.getsize(evidence_path) > 16 * 1024 * 1024:
-        raise ValueError(
-            "--diagnose-gate evidence exceeds 16 MiB"
-        )
+        raise ValueError("--diagnose-gate evidence exceeds 16 MiB")
     with open(evidence_path, encoding="utf-8") as handle:
         payload = json.load(handle)
     if not isinstance(payload, dict):
@@ -2186,13 +2167,9 @@ def _run_diagnose_gate(
             evidence=str(entry.get("evidence", "supplied by --diagnose-gate")),
         )
 
-    report = build_report(
-        run_id=run_id, base=base, adapter=adapter, scores=scores
-    )
+    report = build_report(run_id=run_id, base=base, adapter=adapter, scores=scores)
     if report.overall == "MAJOR":
-        console.print(
-            "[red]--diagnose-gate: MAJOR regression in one or more modes.[/]"
-        )
+        console.print("[red]--diagnose-gate: MAJOR regression in one or more modes.[/]")
         for mode in FAILURE_MODES:
             sc = report.scores[mode]
             if sc.verdict == "MAJOR":
@@ -2209,10 +2186,7 @@ def _run_diagnose_gate(
             if sc.verdict == "NOT_RUN":
                 console.print(f"  [yellow]NOT_RUN[/] {mode}: {markup_escape(sc.evidence)}")
         raise typer.Exit(EXIT_USAGE_ERROR)
-    console.print(
-        f"[green]--diagnose-gate: {report.overall}[/] across "
-        f"{len(FAILURE_MODES)} modes."
-    )
+    console.print(f"[green]--diagnose-gate: {report.overall}[/] across {len(FAILURE_MODES)} modes.")
 
 
 def _resolve_deepspeed(deepspeed: str) -> str:
@@ -2370,7 +2344,9 @@ def _resolve_resume_or_exit(resume: str, cfg: "SoupConfig") -> str | None:
 
 
 def _run_live_lr_sweep(
-    config_path: str, schedule: list[float], trust_remote_code: bool = False,
+    config_path: str,
+    schedule: list[float],
+    trust_remote_code: bool = False,
 ) -> tuple[list[float], list[float]]:
     """v0.33.0 #56 — run the in-process LR sweep over the config's own model.
 
@@ -2396,7 +2372,9 @@ def _run_live_lr_sweep(
 
     try:
         return _live_lr_sweep_from_config(
-            cfg, schedule, trust_remote_code=trust_remote_code,
+            cfg,
+            schedule,
+            trust_remote_code=trust_remote_code,
         )
     except SweepTooShortError:
         raise
@@ -2418,7 +2396,9 @@ def _lr_finder_dataset_path(train) -> str:
 
 
 def _live_lr_sweep_from_config(
-    cfg, schedule: list[float], trust_remote_code: bool = False,
+    cfg,
+    schedule: list[float],
+    trust_remote_code: bool = False,
 ) -> tuple[list[float], list[float]]:
     """Build a tiny in-process loop: load model + tokenizer + a slice of
     the train dataset, then call :func:`run_lr_sweep`. Returns the
@@ -2460,12 +2440,14 @@ def _live_lr_sweep_from_config(
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     tokenizer = AutoTokenizer.from_pretrained(
-        cfg.base, trust_remote_code=trust_remote_code,
+        cfg.base,
+        trust_remote_code=trust_remote_code,
     )
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     model = AutoModelForCausalLM.from_pretrained(
-        cfg.base, trust_remote_code=trust_remote_code,
+        cfg.base,
+        trust_remote_code=trust_remote_code,
     ).to(device)
     model.train()
 
@@ -2474,7 +2456,9 @@ def _live_lr_sweep_from_config(
         if not text and "messages" in row:
             text = " ".join(m.get("content", "") for m in row["messages"])
         enc = tokenizer(
-            text or " ", return_tensors="pt", truncation=True,
+            text or " ",
+            return_tensors="pt",
+            truncation=True,
             max_length=min(cfg.data.max_length or 256, 256),
             padding="max_length",
         )

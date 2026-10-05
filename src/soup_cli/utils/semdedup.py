@@ -46,9 +46,7 @@ class DedupReport:
 
 def _require_threshold(value: object) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise TypeError(
-            f"threshold must be a float, got {type(value).__name__}"
-        )
+        raise TypeError(f"threshold must be a float, got {type(value).__name__}")
     num = float(value)
     if not math.isfinite(num):
         raise ValueError("threshold must be finite")
@@ -57,9 +55,7 @@ def _require_threshold(value: object) -> float:
     return num
 
 
-def greedy_semdedup(
-    vectors: "Any | NDArray[Any]", *, threshold: float
-) -> DedupReport:
+def greedy_semdedup(vectors: "Any | NDArray[Any]", *, threshold: float) -> DedupReport:
     """Greedy cosine near-duplicate removal over L2-normalized ``vectors``.
 
     Rows are visited in order. The first row of any near-duplicate cluster

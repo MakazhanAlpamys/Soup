@@ -77,7 +77,9 @@ def test_the_marker_describes_this_cache(layout):
     index = shard_checkpoint(src, out, dtype="float32", stripe_roots=(stripe,))
     with open(os.path.join(_folder(out, stripe), "stripe.json"), encoding="utf-8") as handle:
         assert json.load(handle) == {
-            "source_fingerprint": index.source_fingerprint, "position": 1, "n_roots": 2,
+            "source_fingerprint": index.source_fingerprint,
+            "position": 1,
+            "n_roots": 2,
             "primary_cache": primary_cache_identity(out),
         }
 

@@ -121,9 +121,7 @@ def _hash_file(path: str) -> tuple[int, str]:
     if not stat.S_ISREG(st.st_mode):
         raise ValueError(f"{os.path.basename(path)!r}: must be a regular file")
     if st.st_size > _MAX_FILE_BYTES:
-        raise ValueError(
-            f"{os.path.basename(path)!r}: exceeds {_MAX_FILE_BYTES} bytes"
-        )
+        raise ValueError(f"{os.path.basename(path)!r}: exceeds {_MAX_FILE_BYTES} bytes")
     digest = hashlib.sha256()
     with open(path, "rb") as fh:
         while True:
@@ -163,9 +161,7 @@ def _enumerate_files(adapter_dir: str) -> list[str]:
                 dirnames.remove(sub)
                 continue
             if stat.S_ISLNK(sub_st.st_mode):
-                raise ValueError(
-                    f"{sub!r}: symlinked subdir in adapter dir is not allowed"
-                )
+                raise ValueError(f"{sub!r}: symlinked subdir in adapter dir is not allowed")
         for filename in filenames:
             if filename == _SIGNATURE_FILENAME and dirpath == adapter_dir:
                 continue
@@ -175,9 +171,7 @@ def _enumerate_files(adapter_dir: str) -> list[str]:
             except OSError:
                 continue
             if stat.S_ISLNK(st.st_mode):
-                raise ValueError(
-                    f"{filename!r}: symlink in adapter dir is not allowed"
-                )
+                raise ValueError(f"{filename!r}: symlink in adapter dir is not allowed")
             if not stat.S_ISREG(st.st_mode):
                 continue
             real = os.path.realpath(full)
@@ -256,8 +250,7 @@ def _resolve_backend(backend: object) -> SignBackend:
             return SignBackend(backend.lower())
         except ValueError as exc:
             raise ValueError(
-                f"unknown backend: {backend!r} (use one of "
-                f"{[b.value for b in SignBackend]})"
+                f"unknown backend: {backend!r} (use one of {[b.value for b in SignBackend]})"
             ) from exc
     raise TypeError(f"backend must be str or SignBackend, got {type(backend).__name__}")
 
@@ -267,10 +260,7 @@ def _manifest_to_dict(manifest: AdapterManifest) -> dict[str, Any]:
         "adapter": manifest.adapter,
         "version": manifest.version,
         "merkle_root": manifest.merkle_root,
-        "files": [
-            {"name": e.name, "size": e.size, "sha256": e.sha256}
-            for e in manifest.files
-        ],
+        "files": [{"name": e.name, "size": e.size, "sha256": e.sha256} for e in manifest.files],
     }
 
 
@@ -462,9 +452,7 @@ def _load_signature(adapter_dir: str) -> Optional[SignatureRecord]:
     # Cap signature file size — defends against a hostile adapter
     # shipping a multi-GiB JSON to OOM `verify_adapter`.
     if st.st_size > _MAX_SIGNATURE_BYTES:
-        raise ValueError(
-            f"{_SIGNATURE_FILENAME}: exceeds {_MAX_SIGNATURE_BYTES} bytes"
-        )
+        raise ValueError(f"{_SIGNATURE_FILENAME}: exceeds {_MAX_SIGNATURE_BYTES} bytes")
     with open(sig_path, encoding="utf-8") as fh:
         payload = json.load(fh)
     if not isinstance(payload, dict):
@@ -552,7 +540,10 @@ def verify_adapter(
         if strict:
             raise ValueError(reason)
         return VerifyReport(
-            adapter=name, valid=False, backend=None, reason=reason,
+            adapter=name,
+            valid=False,
+            backend=None,
+            reason=reason,
         )
 
     # Recompute manifest from current files
@@ -590,8 +581,7 @@ def verify_adapter(
     # record of any other backend carries nothing that key can check.
     if trusted_public_key is not None and record.backend != SignBackend.ED25519.value:
         findings.append(
-            "--public-key requires an ed25519 signature; "
-            f"record backend is {record.backend!r}"
+            f"--public-key requires an ed25519 signature; record backend is {record.backend!r}"
         )
     if record.backend == SignBackend.ED25519.value:
         from soup_cli.utils import signing as _signing
@@ -625,8 +615,7 @@ def verify_adapter(
 
     if sigstore_identity is not None and record.backend != SignBackend.SIGSTORE.value:
         findings.append(
-            "--cert-identity requires a sigstore signature; "
-            f"record backend is {record.backend!r}"
+            f"--cert-identity requires a sigstore signature; record backend is {record.backend!r}"
         )
     if record.backend == SignBackend.SIGSTORE.value:
         if not record.sigstore_bundle:
@@ -652,9 +641,7 @@ def verify_adapter(
     if findings:
         reason = f"signature mismatch: {findings[0]}"
         if strict:
-            raise ValueError(
-                f"adapter {name!r} signature verification failed: {findings[0]}"
-            )
+            raise ValueError(f"adapter {name!r} signature verification failed: {findings[0]}")
         return VerifyReport(
             adapter=name,
             valid=False,

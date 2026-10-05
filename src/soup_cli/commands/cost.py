@@ -69,6 +69,7 @@ def _get_dataset_size(cfg) -> tuple[int, bool]:
     # Local file
     if path.exists():
         from soup_cli.data.loader import load_raw_data
+
         try:
             data = load_raw_data(path)
             return int(len(data) * split), False
@@ -79,6 +80,7 @@ def _get_dataset_size(cfg) -> tuple[int, bool]:
     if not path.suffix:
         try:
             from datasets import load_dataset_builder
+
             builder = load_dataset_builder(train_path)
             size = builder.info.splits["train"].num_examples
             return int(size * split), False
@@ -89,16 +91,14 @@ def _get_dataset_size(cfg) -> tuple[int, bool]:
 
 
 def cost(
-    config: str = typer.Option(
-        "soup.yaml", "--config", "-c", help="Path to soup.yaml config file"
-    ),
+    config: str = typer.Option("soup.yaml", "--config", "-c", help="Path to soup.yaml config file"),
     gpu: Optional[str] = typer.Option(
-        None, "--gpu", "-g",
+        None,
+        "--gpu",
+        "-g",
         help="Filter by specific GPU (e.g., A100, H100, RTX 4090)",
     ),
-    json_output: bool = typer.Option(
-        False, "--json", help="Output as JSON for scripting"
-    ),
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON for scripting"),
 ) -> None:
     """Estimate training cost in USD across cloud providers."""
     from soup_cli.config.loader import load_config
@@ -127,9 +127,7 @@ def cost(
         )
 
     # Base speed (A100)
-    base_tokens_per_sec = estimate_speed(
-        model_params_b, cfg.training.quantization, batch_size
-    )
+    base_tokens_per_sec = estimate_speed(model_params_b, cfg.training.quantization, batch_size)
     base_samples_per_sec = base_tokens_per_sec / max(cfg.data.max_length, 1)
 
     results = []
@@ -149,13 +147,15 @@ def cost(
 
         total_cost = duration_hrs * provider_info["cost_per_hr"]
 
-        results.append({
-            "provider": provider_info["provider"],
-            "gpu": provider_info["gpu"],
-            "cost_per_hr": provider_info["cost_per_hr"],
-            "duration_hrs": duration_hrs,
-            "total_cost": total_cost,
-        })
+        results.append(
+            {
+                "provider": provider_info["provider"],
+                "gpu": provider_info["gpu"],
+                "cost_per_hr": provider_info["cost_per_hr"],
+                "duration_hrs": duration_hrs,
+                "total_cost": total_cost,
+            }
+        )
 
     if not results:
         console.print(f"[red]No matching GPUs found for:[/] {gpu}")

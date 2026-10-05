@@ -398,9 +398,7 @@ class TestPickBatchSize:
         )
         assert out == 4
 
-    def test_auto_strategy_uses_probe_when_probe_fn_supplied(
-        self, tmp_path, monkeypatch
-    ):
+    def test_auto_strategy_uses_probe_when_probe_fn_supplied(self, tmp_path, monkeypatch):
         from soup_cli.utils.batch_probe import pick_batch_size
 
         cache_path = tmp_path / "batch_cache.json"
@@ -474,9 +472,7 @@ class TestPickBatchSize:
                 oom_exceptions=(_OOMError,),
             )
 
-    def test_explicit_probe_no_probe_fn_emits_warning(
-        self, tmp_path, monkeypatch
-    ):
+    def test_explicit_probe_no_probe_fn_emits_warning(self, tmp_path, monkeypatch):
         """strategy='probe' with probe_fn=None → console warning fires."""
         from io import StringIO
 
@@ -511,9 +507,7 @@ class TestPickBatchSize:
 
 
 class TestCachePathContainment:
-    def test_out_of_bounds_override_falls_back_to_default(
-        self, tmp_path, monkeypatch
-    ):
+    def test_out_of_bounds_override_falls_back_to_default(self, tmp_path, monkeypatch):
         """Env var pointing outside home/cwd/tmp → ignored, default used."""
         import os
 

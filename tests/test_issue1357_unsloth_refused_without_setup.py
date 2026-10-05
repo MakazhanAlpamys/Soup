@@ -20,13 +20,16 @@ from soup_cli.config.schema import UNSLOTH_SETUP_TASKS, SoupConfig
 
 _TOP = {"tts": {"modality": "audio_out"}}
 _DATA = {
-    "dpo": {"format": "dpo"}, "kto": {"format": "kto"}, "pretrain": {"format": "plaintext"},
+    "dpo": {"format": "dpo"},
+    "kto": {"format": "kto"},
+    "pretrain": {"format": "plaintext"},
     "unlearn": {"forget_set": "./f.jsonl"},
 }
 _TRAINING = {
     "preference": {"preference_loss": "dpo"},
     "tts": {"tts_family": "orpheus"},
-    "classifier": {"num_labels": 2}, "reranker": {"num_labels": 2},
+    "classifier": {"num_labels": 2},
+    "reranker": {"num_labels": 2},
     "cross_encoder": {"num_labels": 2},
     "unlearn": {"unlearn_method": "npo"},
     "moe_lora_routing": {"mole_task_adapters": ["./a", "./b"]},
@@ -34,7 +37,12 @@ _TRAINING = {
     "online_dpo": {"online_dpo_judge": "pairrm"},
 }
 _NEWLY_REFUSED = (
-    "reward_model", "prm", "classifier", "reranker", "cross_encoder", "unlearn",
+    "reward_model",
+    "prm",
+    "classifier",
+    "reranker",
+    "cross_encoder",
+    "unlearn",
     "moe_lora_routing",
 )
 # Refused on unsloth before this issue, each with its own reason; kept.
@@ -47,7 +55,10 @@ _ALREADY_REFUSED = {
 
 def _yaml(task, backend, **training):
     raw = {
-        "base": "org/m", "task": task, "backend": backend, **_TOP.get(task, {}),
+        "base": "org/m",
+        "task": task,
+        "backend": backend,
+        **_TOP.get(task, {}),
         "data": {"train": "./x.jsonl", **_DATA.get(task, {})},
         "training": {**_TRAINING.get(task, {}), **training},
     }

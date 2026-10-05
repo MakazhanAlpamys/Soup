@@ -27,7 +27,9 @@ def _plain(text: str) -> str:
     """Strip ANSI escape codes for keyword substring assertions."""
     return _ANSI_RE.sub("", text)
 
+
 # ----------------------------------------------------------------- version
+
 
 def test_version_bump_to_0_53_9():
     # Forward-monotonic: v0.53.9 baseline + later releases (v0.53.10, ...)
@@ -38,6 +40,7 @@ def test_version_bump_to_0_53_9():
 
 
 # ----------------------------------------------------- #94 SSE event buffer
+
 
 def test_train_event_buffer_push_and_drain():
     from soup_cli.utils.sse_train_stream import TrainEvent
@@ -138,6 +141,7 @@ def test_push_train_event_happy():
 
 # ---------------------------------------------------- #94 SSE FastAPI route
 
+
 def _auth_headers():
     from soup_cli.ui.app import get_auth_token
 
@@ -172,6 +176,7 @@ def test_api_train_stream_emits_pending_events():
 
 
 # ------------------------------------------------- #100 tool-outputs API
+
 
 def test_global_tool_buffer_round_trip():
     from soup_cli.utils.tool_outputs import (
@@ -240,21 +245,12 @@ def test_api_tool_outputs_rejects_out_of_bounds_limit():
 
     client = TestClient(create_app())
     # limit must be 1..1000
-    assert (
-        client.get(
-            "/api/tool-outputs?limit=0", headers=_auth_headers()
-        ).status_code
-        == 422
-    )
-    assert (
-        client.get(
-            "/api/tool-outputs?limit=1001", headers=_auth_headers()
-        ).status_code
-        == 422
-    )
+    assert client.get("/api/tool-outputs?limit=0", headers=_auth_headers()).status_code == 422
+    assert client.get("/api/tool-outputs?limit=1001", headers=_auth_headers()).status_code == 422
 
 
 # ---------------------------------------------------- #98 reasoning-parser
+
 
 @pytest.mark.parametrize(
     "parser,raw,expected",
@@ -295,9 +291,7 @@ def test_strip_reasoning_no_op_paths():
     # Empty string parser short-circuits.
     assert strip_reasoning("hello", "") == "hello"
     # Unknown parser is silently no-op.
-    assert strip_reasoning("<think>x</think>y", "unknown-parser") == (
-        "<think>x</think>y"
-    )
+    assert strip_reasoning("<think>x</think>y", "unknown-parser") == ("<think>x</think>y")
     # Non-string input passes through.
     assert strip_reasoning(123, "deepseek-r1") == 123  # type: ignore[arg-type]
 
@@ -336,6 +330,7 @@ def test_serve_help_lists_reasoning_parser_flag():
 
 # --------------------------------------------------- #15 tokenizer train
 
+
 def test_tokenizer_train_help_listed():
     runner = CliRunner()
     result = runner.invoke(app, ["tokenizer", "--help"])
@@ -361,9 +356,12 @@ def test_tokenizer_train_rejects_out_of_cwd_input(tmp_path, monkeypatch):
     result = runner.invoke(
         app,
         [
-            "tokenizer", "train",
-            "--input", str(outside),
-            "--output", "out",
+            "tokenizer",
+            "train",
+            "--input",
+            str(outside),
+            "--output",
+            "out",
         ],
     )
     assert result.exit_code != 0
@@ -379,9 +377,12 @@ def test_tokenizer_train_rejects_vocab_size_bounds(tmp_path, monkeypatch):
     result = runner.invoke(
         app,
         [
-            "tokenizer", "train",
-            "--input", "corpus.jsonl",
-            "--vocab-size", "10",
+            "tokenizer",
+            "train",
+            "--input",
+            "corpus.jsonl",
+            "--vocab-size",
+            "10",
         ],
     )
     assert result.exit_code != 0
@@ -390,9 +391,12 @@ def test_tokenizer_train_rejects_vocab_size_bounds(tmp_path, monkeypatch):
     result = runner.invoke(
         app,
         [
-            "tokenizer", "train",
-            "--input", "corpus.jsonl",
-            "--vocab-size", "999999",
+            "tokenizer",
+            "train",
+            "--input",
+            "corpus.jsonl",
+            "--vocab-size",
+            "999999",
         ],
     )
     assert result.exit_code != 0
@@ -415,24 +419,28 @@ def test_tokenizer_train_happy_path(tmp_path, monkeypatch):
     result = runner.invoke(
         app,
         [
-            "tokenizer", "train",
-            "--input", "corpus.jsonl",
-            "--vocab-size", "300",
-            "--output", "bpe_out",
-            "--min-frequency", "1",
+            "tokenizer",
+            "train",
+            "--input",
+            "corpus.jsonl",
+            "--vocab-size",
+            "300",
+            "--output",
+            "bpe_out",
+            "--min-frequency",
+            "1",
         ],
     )
     assert result.exit_code == 0, (result.output, repr(result.exception))
     assert (tmp_path / "bpe_out" / "tokenizer.json").is_file()
     assert (tmp_path / "bpe_out" / "vocab.json").is_file()
-    vocab = json.loads(
-        (tmp_path / "bpe_out" / "vocab.json").read_text(encoding="utf-8")
-    )
+    vocab = json.loads((tmp_path / "bpe_out" / "vocab.json").read_text(encoding="utf-8"))
     assert isinstance(vocab, dict)
     assert len(vocab) >= 1
 
 
 # -------------------------------------------------- #28 backend auto-detect
+
 
 def test_detect_backend_fallback_transformers():
     from soup_cli.utils.backend_detect import detect_backend
@@ -488,6 +496,7 @@ def test_detect_backend_config_malformed_falls_back(tmp_path, monkeypatch):
 
 # ----------------------------------------------------- #26 bench percentiles
 
+
 def test_bench_help_lists_percentile_flags():
     runner = CliRunner()
     result = runner.invoke(app, ["bench", "infer", "--help"])
@@ -511,6 +520,7 @@ def test_bench_invalid_backend_rejected(tmp_path, monkeypatch):
 
 # --------------------------------------------------- #95 ui --public + QR
 
+
 def test_ui_help_includes_public_and_auth_token():
     runner = CliRunner()
     result = runner.invoke(app, ["ui", "--help"])
@@ -530,7 +540,8 @@ def test_ui_show_token_via_custom_token(tmp_path, monkeypatch):
         [
             "ui",
             "--show-token",
-            "--auth-token", valid,
+            "--auth-token",
+            valid,
             "--no-browser",
         ],
     )
@@ -545,7 +556,8 @@ def test_ui_rejects_malformed_auth_token():
         app,
         [
             "ui",
-            "--auth-token", "short",  # < 16 chars
+            "--auth-token",
+            "short",  # < 16 chars
             "--show-token",
             "--no-browser",
         ],
@@ -555,6 +567,7 @@ def test_ui_rejects_malformed_auth_token():
 
 
 # ------------------------------------------------ #12 example workflow doc
+
 
 def test_train_event_buffer_snapshot_since_returns_only_new_events():
     from soup_cli.utils.sse_train_stream import TrainEvent
@@ -614,9 +627,12 @@ def test_tokenizer_train_rejects_symlink_input(tmp_path, monkeypatch):
     result = runner.invoke(
         app,
         [
-            "tokenizer", "train",
-            "--input", "link.jsonl",
-            "--output", "out",
+            "tokenizer",
+            "train",
+            "--input",
+            "link.jsonl",
+            "--output",
+            "out",
         ],
     )
     assert result.exit_code != 0
@@ -727,9 +743,7 @@ def test_strip_reasoning_fast_path_skips_regex():
 def test_strip_reasoning_multiple_blocks():
     from soup_cli.utils.reasoning_parser import strip_reasoning
 
-    out = strip_reasoning(
-        "<think>a</think>mid<think>b</think>final", "deepseek-r1"
-    )
+    out = strip_reasoning("<think>a</think>mid<think>b</think>final", "deepseek-r1")
     assert out == "midfinal"
 
 
@@ -784,11 +798,16 @@ def test_tokenizer_train_plaintext_corpus(tmp_path, monkeypatch):
     result = runner.invoke(
         app,
         [
-            "tokenizer", "train",
-            "--input", "corpus.txt",
-            "--vocab-size", "300",
-            "--output", "bpe_out",
-            "--min-frequency", "1",
+            "tokenizer",
+            "train",
+            "--input",
+            "corpus.txt",
+            "--vocab-size",
+            "300",
+            "--output",
+            "bpe_out",
+            "--min-frequency",
+            "1",
         ],
     )
     assert result.exit_code == 0, (result.output, repr(result.exception))
@@ -797,16 +816,17 @@ def test_tokenizer_train_plaintext_corpus(tmp_path, monkeypatch):
 
 def test_tokenizer_train_rejects_min_frequency_zero(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    (tmp_path / "corpus.jsonl").write_text(
-        '{"text": "hello"}\n', encoding="utf-8"
-    )
+    (tmp_path / "corpus.jsonl").write_text('{"text": "hello"}\n', encoding="utf-8")
     runner = CliRunner()
     result = runner.invoke(
         app,
         [
-            "tokenizer", "train",
-            "--input", "corpus.jsonl",
-            "--min-frequency", "0",
+            "tokenizer",
+            "train",
+            "--input",
+            "corpus.jsonl",
+            "--min-frequency",
+            "0",
         ],
     )
     assert result.exit_code != 0
@@ -825,11 +845,16 @@ def test_tokenizer_train_special_token_dedup_and_validation(tmp_path, monkeypatc
     result = runner.invoke(
         app,
         [
-            "tokenizer", "train",
-            "--input", "corpus.jsonl",
-            "--special-token", "<pad>\x00bad",
-            "--vocab-size", "300",
-            "--min-frequency", "1",
+            "tokenizer",
+            "train",
+            "--input",
+            "corpus.jsonl",
+            "--special-token",
+            "<pad>\x00bad",
+            "--vocab-size",
+            "300",
+            "--min-frequency",
+            "1",
         ],
     )
     assert result.exit_code != 0

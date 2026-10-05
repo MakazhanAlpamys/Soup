@@ -161,9 +161,7 @@ def rewind(
     else:
         detail_step = step
         if not run.batches_for(detail_step):
-            console.print(
-                f"[red]No records for step {detail_step}[/] in {escape(str(path))}"
-            )
+            console.print(f"[red]No records for step {detail_step}[/] in {escape(str(path))}")
             raise typer.Exit(1)
 
     rows = rewind_utils.rank_rows(run, detail_step)[:top]

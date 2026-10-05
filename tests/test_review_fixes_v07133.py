@@ -66,9 +66,7 @@ class TestVllmTrustRemoteCode:
             seen.update(kwargs)
             return object(), "m"
 
-        monkeypatch.setattr(
-            "soup_cli.utils.vllm.create_vllm_engine", _fake_engine
-        )
+        monkeypatch.setattr("soup_cli.utils.vllm.create_vllm_engine", _fake_engine)
         monkeypatch.setattr(
             "soup_cli.utils.vllm.create_vllm_app",
             lambda **kw: object(),
@@ -112,9 +110,7 @@ class TestVisionImageContainment:
         img_dir.mkdir()
         secret = tmp_path / "secret.png"
         secret.write_bytes(b"x")
-        out = _validate_vision_images(
-            [{"image": "../secret.png", "messages": []}], img_dir
-        )
+        out = _validate_vision_images([{"image": "../secret.png", "messages": []}], img_dir)
         assert out == []
 
 
@@ -214,9 +210,7 @@ class TestLoadNamedAdapters:
         monkeypatch.setitem(sys.modules, "peft", fake_peft)
 
         plain = object()  # not a PeftModel → must be wrapped
-        model, names = serve._load_named_adapters(
-            plain, {"chat": "a/path", "code": "b/path"}
-        )
+        model, names = serve._load_named_adapters(plain, {"chat": "a/path", "code": "b/path"})
         assert names == {"chat", "code"}
         # First adapter wraps the base; the rest are load_adapter'd.
         assert loaded["from_pretrained"] == [("a/path", "chat")]
@@ -247,9 +241,7 @@ def _force_two_gpus(monkeypatch):
     monkeypatch.setattr(topo_mod, "detect_topology", lambda: topo)
     monkeypatch.setattr(topo_mod, "resolve_num_gpus", lambda spec: 2)
     monkeypatch.setattr(train_cmd, "detect_topology", lambda: topo, raising=False)
-    monkeypatch.setattr(
-        train_cmd, "resolve_num_gpus", lambda spec: 2, raising=False
-    )
+    monkeypatch.setattr(train_cmd, "resolve_num_gpus", lambda spec: 2, raising=False)
     monkeypatch.setattr(launcher_mod, "is_in_distributed", lambda: False)
 
 
@@ -269,12 +261,8 @@ class TestDryRunNoReexec:
 
         monkeypatch.setattr("os.execvp", _fake_execvp)
 
-        CliRunner().invoke(
-            app, ["train", "--config", "soup.yaml", "--gpus", "2", "--dry-run"]
-        )
-        assert called["execvp"] is False, (
-            "os.execvp was called on a --dry-run multi-GPU invocation"
-        )
+        CliRunner().invoke(app, ["train", "--config", "soup.yaml", "--gpus", "2", "--dry-run"])
+        assert called["execvp"] is False, "os.execvp was called on a --dry-run multi-GPU invocation"
 
 
 class TestReexecForwardsFlags:
@@ -296,9 +284,16 @@ class TestReexecForwardsFlags:
         CliRunner().invoke(
             app,
             [
-                "train", "--config", "soup.yaml", "--gpus", "2", "--yes",
-                "--capture-activations", "model.layers.5",
-                "--capture-prompts", "p.jsonl",
+                "train",
+                "--config",
+                "soup.yaml",
+                "--gpus",
+                "2",
+                "--yes",
+                "--capture-activations",
+                "model.layers.5",
+                "--capture-prompts",
+                "p.jsonl",
             ],
         )
         argv = captured.get("argv", [])
@@ -339,7 +334,10 @@ class TestMlxOptimizer:
         # config actually takes.
         class _ChatMLTokenizer:
             def apply_chat_template(
-                self, messages, tools=None, add_generation_prompt=False,
+                self,
+                messages,
+                tools=None,
+                add_generation_prompt=False,
                 return_dict=False,
             ):
                 if not messages:
@@ -402,11 +400,9 @@ class TestMlxOptimizer:
         # than `learning_rate`. Recording stubs only -- the assertion below is
         # still that a non-None optimizer reaches `train()`, unchanged.
         opt_mod.AdamW = lambda **kwargs: sentinel
-        opt_mod.linear_schedule = lambda init, end, steps: (lambda step: end)
-        opt_mod.cosine_decay = lambda init, steps: (lambda step: init)
-        opt_mod.join_schedules = lambda scheds, boundaries: (
-            lambda step: scheds[-1](step)
-        )
+        opt_mod.linear_schedule = lambda init, end, steps: lambda step: end
+        opt_mod.cosine_decay = lambda init, steps: lambda step: init
+        opt_mod.join_schedules = lambda scheds, boundaries: lambda step: scheds[-1](step)
         mlx_root = types.ModuleType("mlx")
 
         monkeypatch.setitem(sys.modules, "mlx", mlx_root)
@@ -444,9 +440,7 @@ class TestDataInspectEscape:
             {"instruction": "hi [/] there", "output": "[link=http://x]clickme[/]"},
             {"instruction": "normal", "output": "fine"},
         ]
-        data_file.write_text(
-            "\n".join(json.dumps(r) for r in rows), encoding="utf-8"
-        )
+        data_file.write_text("\n".join(json.dumps(r) for r in rows), encoding="utf-8")
         result = CliRunner().invoke(data_app, ["inspect", "d.jsonl"])
         assert result.exit_code == 0, (result.output, repr(result.exception))
         # Literal markup survives as text (escaped), not interpreted.
@@ -474,22 +468,28 @@ class TestAsrInferMetricGuard:
         _write_asr_input(
             tmp_path,
             [
-                {"audio": "a.wav", "text": big},        # metric must be skipped
-                {"audio": "b.wav", "text": "hello"},    # metric ok
+                {"audio": "a.wav", "text": big},  # metric must be skipped
+                {"audio": "b.wav", "text": "hello"},  # metric ok
             ],
         )
         monkeypatch.setattr(infer, "_ASR_TRANSCRIBER_OVERRIDE", lambda p: "hello")
 
         result = CliRunner().invoke(
             cli_app,
-            ["infer", "--task", "asr", "--model", "whatever",
-             "--input", "in.jsonl", "--output", "out.jsonl"],
+            [
+                "infer",
+                "--task",
+                "asr",
+                "--model",
+                "whatever",
+                "--input",
+                "in.jsonl",
+                "--output",
+                "out.jsonl",
+            ],
         )
         assert result.exit_code == 0, (result.output, repr(result.exception))
-        lines = [
-            json.loads(x)
-            for x in (tmp_path / "out.jsonl").read_text().splitlines() if x
-        ]
+        lines = [json.loads(x) for x in (tmp_path / "out.jsonl").read_text().splitlines() if x]
         assert len(lines) == 2  # both rows still transcribed
         # Oversized row present but unscored; the small row scored.
         assert "wer" not in lines[0]
@@ -519,8 +519,17 @@ class TestAsrSkipControlStrip:
         _write_asr_input(tmp_path, [{"audio": "clip.wav"}])
         result = CliRunner().invoke(
             cli_app,
-            ["infer", "--task", "asr", "--model", "m",
-             "--input", "in.jsonl", "--output", "out.jsonl"],
+            [
+                "infer",
+                "--task",
+                "asr",
+                "--model",
+                "m",
+                "--input",
+                "in.jsonl",
+                "--output",
+                "out.jsonl",
+            ],
         )
         # All rows skipped → exit 2 (L2), and no raw ESC reaches the terminal.
         assert result.exit_code == 2
@@ -539,8 +548,19 @@ class TestAsrTaskValidation:
         _write_asr_input(tmp_path, [{"audio": "a.wav"}])
         result = CliRunner().invoke(
             cli_app,
-            ["infer", "--task", "asr", "--model", "m", "--input", "in.jsonl",
-             "--output", "out.jsonl", "--asr-task", "translat"],
+            [
+                "infer",
+                "--task",
+                "asr",
+                "--model",
+                "m",
+                "--input",
+                "in.jsonl",
+                "--output",
+                "out.jsonl",
+                "--asr-task",
+                "translat",
+            ],
         )
         assert result.exit_code == 2
         assert "transcribe" in result.output
@@ -561,8 +581,17 @@ class TestAsrAllSkippedExit:
         _write_asr_input(tmp_path, [{"audio": "a.wav"}])
         result = CliRunner().invoke(
             cli_app,
-            ["infer", "--task", "asr", "--model", "m",
-             "--input", "in.jsonl", "--output", "out.jsonl"],
+            [
+                "infer",
+                "--task",
+                "asr",
+                "--model",
+                "m",
+                "--input",
+                "in.jsonl",
+                "--output",
+                "out.jsonl",
+            ],
         )
         assert result.exit_code == 2
         assert not (tmp_path / "out.jsonl").exists()
@@ -586,17 +615,13 @@ class TestDistillKdShift:
         # Case A: only the PREDICTED token (index 2) is trained → after the
         # shift, position 1 is included → non-zero divergence.
         labels_a = torch.tensor([[-100, -100, 5, -100]])
-        loss_a = _compute_distill_term(
-            student, teacher, "forward_kl", 1.0, labels=labels_a
-        )
+        loss_a = _compute_distill_term(student, teacher, "forward_kl", 1.0, labels=labels_a)
         assert float(loss_a) > 0.0
 
         # Case B: only the INPUT token at index 1 is trained (its prediction,
         # index 1's target = index 2, is NOT) → position 1 excluded → ~0.
         labels_b = torch.tensor([[-100, 5, -100, -100]])
-        loss_b = _compute_distill_term(
-            student, teacher, "forward_kl", 1.0, labels=labels_b
-        )
+        loss_b = _compute_distill_term(student, teacher, "forward_kl", 1.0, labels=labels_b)
         assert float(loss_b) == pytest.approx(0.0, abs=1e-6)
 
 
@@ -641,9 +666,7 @@ class TestRunsEscape:
             def close(self):
                 pass
 
-        monkeypatch.setattr(
-            "soup_cli.experiment.tracker.ExperimentTracker", _FakeTracker
-        )
+        monkeypatch.setattr("soup_cli.experiment.tracker.ExperimentTracker", _FakeTracker)
 
     def _crafted_run(self):
         return {
@@ -723,9 +746,7 @@ class TestAtomicWrites:
         with pytest.raises(FileExistsError):
             write_vscode_launch(config_path="soup.yaml", target_dir=".vscode")
         # force=True overwrites atomically.
-        write_vscode_launch(
-            config_path="other.yaml", target_dir=".vscode", force=True
-        )
+        write_vscode_launch(config_path="other.yaml", target_dir=".vscode", force=True)
         assert Path(out).exists()
 
     def test_lr_finder_writes_under_cwd(self, tmp_path, monkeypatch):

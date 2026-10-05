@@ -117,9 +117,7 @@ def _has_rows(dataset: Any) -> bool:
         return True
 
 
-def training_eval_kwargs(
-    cfg: SoupConfig, eval_dataset: Any, *, batch_size: int
-) -> dict[str, Any]:
+def training_eval_kwargs(cfg: SoupConfig, eval_dataset: Any, *, batch_size: int) -> dict[str, Any]:
     """Evaluation kwargs for any ``TrainingArguments`` subclass.
 
     ``eval_dataset`` is what the wrapper is about to hand its trainer, after its
@@ -134,10 +132,7 @@ def training_eval_kwargs(
             if cfg.data.val_split > 0:
                 why = "every validation row was dropped while the dataset was prepared"
             else:
-                why = (
-                    "data.val_split is 0 and the dataset carries no validation "
-                    "split of its own"
-                )
+                why = "data.val_split is 0 and the dataset carries no validation split of its own"
             raise ValueError(
                 f"training.eval_steps={eval_steps} asks for evaluation, but this "
                 f"run has no validation rows: {why}. Set data.val_split above 0, "

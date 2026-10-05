@@ -294,9 +294,8 @@ class TestJsonEvidence:
     def test_the_measured_loop_writes_it_after_every_step(self) -> None:
         """A hard kill (OOM, power cut) runs no handler, so the flush has to be
         inside the loop rather than only after it."""
-        assert (
-            '_partial_row("measuring", step_times, losses, versions)'
-            in _HARNESS.read_text(encoding="utf-8")
+        assert '_partial_row("measuring", step_times, losses, versions)' in _HARNESS.read_text(
+            encoding="utf-8"
         )
 
 

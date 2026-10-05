@@ -29,7 +29,10 @@ def test_prm_compat_happy_auto_format():
 def test_prm_compat_rejects_wrong_format():
     with pytest.raises(ValueError, match="format"):
         validate_prm_compat(
-            task="prm", data_format="alpaca", backend="transformers", modality="text",
+            task="prm",
+            data_format="alpaca",
+            backend="transformers",
+            modality="text",
         )
 
 
@@ -41,21 +44,30 @@ def test_prm_compat_rejects_mlx():
 def test_prm_compat_rejects_vision_modality():
     with pytest.raises(ValueError, match="modality"):
         validate_prm_compat(
-            task="prm", data_format="prm", backend="transformers", modality="vision",
+            task="prm",
+            data_format="prm",
+            backend="transformers",
+            modality="vision",
         )
 
 
 def test_prm_compat_rejects_audio_modality():
     with pytest.raises(ValueError, match="modality"):
         validate_prm_compat(
-            task="prm", data_format="prm", backend="transformers", modality="audio",
+            task="prm",
+            data_format="prm",
+            backend="transformers",
+            modality="audio",
         )
 
 
 def test_prm_compat_rejects_non_prm_task():
     with pytest.raises(ValueError, match="prm"):
         validate_prm_compat(
-            task="sft", data_format="prm", backend="transformers", modality="text",
+            task="sft",
+            data_format="prm",
+            backend="transformers",
+            modality="text",
         )
 
 

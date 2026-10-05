@@ -34,9 +34,7 @@ class GracefulSaveHandler:
             if self._installed:
                 return
             try:
-                self._previous_handler = signal.signal(
-                    signal.SIGINT, self._handle_sigint
-                )
+                self._previous_handler = signal.signal(signal.SIGINT, self._handle_sigint)
                 self._installed = True
             except (ValueError, OSError):
                 # signal() raises ValueError when called from a non-main thread,

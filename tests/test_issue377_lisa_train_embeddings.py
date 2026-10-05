@@ -67,9 +67,7 @@ def _sampled_layer_numel(model):
 
     pat = re.compile(r"(?:layers|h)\.(\d+)\.")
     return sum(
-        p.numel()
-        for name, p in model.named_parameters()
-        if pat.search(name) and p.requires_grad
+        p.numel() for name, p in model.named_parameters() if pat.search(name) and p.requires_grad
     )
 
 

@@ -242,13 +242,15 @@ def build_train_report(
     ]
     if steps_requested is not None and len(steps) != steps_requested:
         # Matched work is the premise of comparing two runs at all.
-        failures.append({
-            "check": "step_count",
-            "message": (
-                f"{len(steps)} optimizer step(s) measured, {steps_requested} "
-                f"requested: this run did not do the work it is labelled with."
-            ),
-        })
+        failures.append(
+            {
+                "check": "step_count",
+                "message": (
+                    f"{len(steps)} optimizer step(s) measured, {steps_requested} "
+                    f"requested: this run did not do the work it is labelled with."
+                ),
+            }
+        )
 
     return {
         "valid": not failures,

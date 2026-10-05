@@ -105,12 +105,18 @@ class TestInferCLI:
         from soup_cli.cli import app
 
         runner = CliRunner()
-        result = runner.invoke(app, [
-            "infer",
-            "--model", str(tmp_path),
-            "--input", "/nonexistent/prompts.jsonl",
-            "--output", str(tmp_path / "out.jsonl"),
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "infer",
+                "--model",
+                str(tmp_path),
+                "--input",
+                "/nonexistent/prompts.jsonl",
+                "--output",
+                str(tmp_path / "out.jsonl"),
+            ],
+        )
         assert result.exit_code != 0
         assert "not found" in result.output.lower()
 
@@ -124,12 +130,18 @@ class TestInferCLI:
         prompts_file.write_text(json.dumps({"prompt": "test"}) + "\n")
 
         runner = CliRunner()
-        result = runner.invoke(app, [
-            "infer",
-            "--model", "/nonexistent/model",
-            "--input", str(prompts_file),
-            "--output", str(tmp_path / "out.jsonl"),
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "infer",
+                "--model",
+                "/nonexistent/model",
+                "--input",
+                str(prompts_file),
+                "--output",
+                str(tmp_path / "out.jsonl"),
+            ],
+        )
         assert result.exit_code != 0
         assert "not found" in result.output.lower()
 
@@ -143,12 +155,18 @@ class TestInferCLI:
         prompts_file.write_text("")
 
         runner = CliRunner()
-        result = runner.invoke(app, [
-            "infer",
-            "--model", str(tmp_path),
-            "--input", str(prompts_file),
-            "--output", str(tmp_path / "out.jsonl"),
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "infer",
+                "--model",
+                str(tmp_path),
+                "--input",
+                str(prompts_file),
+                "--output",
+                str(tmp_path / "out.jsonl"),
+            ],
+        )
         assert result.exit_code != 0
         assert "no prompts" in result.output.lower()
 
@@ -193,13 +211,20 @@ class TestInferCLI:
         prompts_file.write_text(json.dumps({"prompt": "test"}) + "\n")
 
         runner = CliRunner()
-        result = runner.invoke(app, [
-            "infer",
-            "--model", str(tmp_path),
-            "--input", str(prompts_file),
-            "--output", str(tmp_path / "out.jsonl"),
-            "--max-tokens", "99999",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "infer",
+                "--model",
+                str(tmp_path),
+                "--input",
+                str(prompts_file),
+                "--output",
+                str(tmp_path / "out.jsonl"),
+                "--max-tokens",
+                "99999",
+            ],
+        )
         assert result.exit_code != 0
 
     def test_max_tokens_zero_rejected(self, tmp_path):
@@ -212,13 +237,20 @@ class TestInferCLI:
         prompts_file.write_text(json.dumps({"prompt": "test"}) + "\n")
 
         runner = CliRunner()
-        result = runner.invoke(app, [
-            "infer",
-            "--model", str(tmp_path),
-            "--input", str(prompts_file),
-            "--output", str(tmp_path / "out.jsonl"),
-            "--max-tokens", "0",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "infer",
+                "--model",
+                str(tmp_path),
+                "--input",
+                str(prompts_file),
+                "--output",
+                str(tmp_path / "out.jsonl"),
+                "--max-tokens",
+                "0",
+            ],
+        )
         assert result.exit_code != 0
 
 
@@ -257,9 +289,9 @@ class TestLoadModel:
     def test_adapter_config_reads_base_model(self, tmp_path):
         """Should read base_model_name_or_path from adapter_config.json."""
         adapter_config = tmp_path / "adapter_config.json"
-        adapter_config.write_text(json.dumps({
-            "base_model_name_or_path": "meta-llama/Llama-3.1-8B-Instruct"
-        }))
+        adapter_config.write_text(
+            json.dumps({"base_model_name_or_path": "meta-llama/Llama-3.1-8B-Instruct"})
+        )
 
         config = json.loads(adapter_config.read_text())
         assert config["base_model_name_or_path"] == "meta-llama/Llama-3.1-8B-Instruct"
@@ -333,8 +365,10 @@ class TestGenerate:
         response, token_count = _generate(model, tokenizer, messages)
 
         # Should NOT call apply_chat_template
-        assert not hasattr(tokenizer.apply_chat_template, 'called') or \
-            not tokenizer.apply_chat_template.called
+        assert (
+            not hasattr(tokenizer.apply_chat_template, "called")
+            or not tokenizer.apply_chat_template.called
+        )
         assert isinstance(response, str)
         assert token_count == 3
 
@@ -421,18 +455,22 @@ class TestInferImports:
 
     def test_import_infer_module(self):
         from soup_cli.commands.infer import infer
+
         assert infer is not None
 
     def test_import_read_prompts(self):
         from soup_cli.commands.infer import _read_prompts
+
         assert callable(_read_prompts)
 
     def test_import_load_model(self):
         from soup_cli.commands.infer import _load_model
+
         assert callable(_load_model)
 
     def test_import_generate(self):
         from soup_cli.commands.infer import _generate
+
         assert callable(_generate)
 
 
@@ -460,14 +498,22 @@ class TestInferHFRepoId:
 
         monkeypatch.chdir(tmp_path)
         runner = CliRunner()
-        with patch("soup_cli.commands.infer._load_model", mock_load), \
-             patch("soup_cli.commands.infer._generate", return_value=("answer", 5)):
-            result = runner.invoke(app, [
-                "infer",
-                "--model", "HuggingFaceTB/SmolLM2-135M-Instruct",
-                "--input", str(prompts_file),
-                "--output", "out.jsonl",
-            ])
+        with (
+            patch("soup_cli.commands.infer._load_model", mock_load),
+            patch("soup_cli.commands.infer._generate", return_value=("answer", 5)),
+        ):
+            result = runner.invoke(
+                app,
+                [
+                    "infer",
+                    "--model",
+                    "HuggingFaceTB/SmolLM2-135M-Instruct",
+                    "--input",
+                    str(prompts_file),
+                    "--output",
+                    "out.jsonl",
+                ],
+            )
 
         assert result.exit_code == 0, result.output
         mock_load.assert_called_once()
@@ -497,14 +543,22 @@ class TestInferHFRepoId:
 
         monkeypatch.chdir(tmp_path)
         runner = CliRunner()
-        with patch("soup_cli.commands.infer._load_model", mock_load), \
-             patch("soup_cli.commands.infer._generate", return_value=("answer", 5)):
-            result = runner.invoke(app, [
-                "infer",
-                "--model", str(model_dir),
-                "--input", str(prompts_file),
-                "--output", "out.jsonl",
-            ])
+        with (
+            patch("soup_cli.commands.infer._load_model", mock_load),
+            patch("soup_cli.commands.infer._generate", return_value=("answer", 5)),
+        ):
+            result = runner.invoke(
+                app,
+                [
+                    "infer",
+                    "--model",
+                    str(model_dir),
+                    "--input",
+                    str(prompts_file),
+                    "--output",
+                    "out.jsonl",
+                ],
+            )
 
         assert result.exit_code == 0, result.output
         mock_load.assert_called_once()
@@ -523,12 +577,14 @@ class TestInferHFRepoId:
 
         mock_model_inst = MagicMock()
 
-        with patch(
-            "transformers.AutoTokenizer.from_pretrained", return_value=mock_tok_inst
-        ) as mock_tok, patch(
-            "transformers.AutoModelForCausalLM.from_pretrained", return_value=mock_model_inst
-        ) as mock_model, patch(
-            "soup_cli.utils.trust_remote.resolve_trust_remote_code", return_value=False
+        with (
+            patch(
+                "transformers.AutoTokenizer.from_pretrained", return_value=mock_tok_inst
+            ) as mock_tok,
+            patch(
+                "transformers.AutoModelForCausalLM.from_pretrained", return_value=mock_model_inst
+            ) as mock_model,
+            patch("soup_cli.utils.trust_remote.resolve_trust_remote_code", return_value=False),
         ):
             _load_model(repo_id, None, "cpu", trust_remote_code=False)
 
@@ -543,4 +599,3 @@ class TestInferHFRepoId:
             assert called_model_arg == repo_id
             assert "\\" not in called_model_arg
             assert "/" in called_model_arg
-

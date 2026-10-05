@@ -20,7 +20,11 @@ BITNET_QUANT_FORMATS: frozenset[str] = frozenset({"bitnet_1.58"})
 BITNET_EXPORT_FORMATS: frozenset[str] = frozenset({"bitnet", "tq1_0"})
 
 _BITNET_FAMILY_RE_PREFIXES: tuple[str, ...] = (
-    "bitnet", "falcon-e", "falcone", "1bitllm", "onebit",
+    "bitnet",
+    "falcon-e",
+    "falcone",
+    "1bitllm",
+    "onebit",
 )
 
 
@@ -34,14 +38,16 @@ class BitNetSpec:
     live_wired: bool
 
 
-_BITNET_METADATA: Mapping[str, BitNetSpec] = MappingProxyType({
-    "bitnet_1.58": BitNetSpec(
-        name="bitnet_1.58",
-        description="BitNet 1.58-bit ternary weights (axolotl + onebitllms)",
-        bits=1.58,
-        live_wired=False,
-    ),
-})
+_BITNET_METADATA: Mapping[str, BitNetSpec] = MappingProxyType(
+    {
+        "bitnet_1.58": BitNetSpec(
+            name="bitnet_1.58",
+            description="BitNet 1.58-bit ternary weights (axolotl + onebitllms)",
+            bits=1.58,
+            live_wired=False,
+        ),
+    }
+)
 
 
 def is_bitnet_quant(value: object) -> bool:
@@ -66,9 +72,7 @@ def get_bitnet_spec(name: str) -> BitNetSpec:
     """Return the frozen :class:`BitNetSpec` for ``name`` or raise."""
     if not is_bitnet_quant(name):
         supported = ", ".join(sorted(BITNET_QUANT_FORMATS))
-        raise ValueError(
-            f"BitNet quant {name!r} not supported. Supported: {supported}"
-        )
+        raise ValueError(f"BitNet quant {name!r} not supported. Supported: {supported}")
     return _BITNET_METADATA[name]
 
 
@@ -99,26 +103,18 @@ def is_bitnet_model(model_name: object) -> bool:
 def validate_bitnet_export(format_name: object) -> str:
     """Validate a BitNet export-format string. Returns canonical form."""
     if isinstance(format_name, bool):
-        raise TypeError(
-            f"bitnet export format must not be bool, got {format_name!r}"
-        )
+        raise TypeError(f"bitnet export format must not be bool, got {format_name!r}")
     if not isinstance(format_name, str):
-        raise TypeError(
-            f"bitnet export format must be str, "
-            f"got {type(format_name).__name__}"
-        )
+        raise TypeError(f"bitnet export format must be str, got {type(format_name).__name__}")
     if not format_name:
         raise ValueError("bitnet export format must be non-empty")
     if "\x00" in format_name:
-        raise ValueError(
-            "bitnet export format must not contain null bytes"
-        )
+        raise ValueError("bitnet export format must not contain null bytes")
     canonical = format_name.lower()
     if canonical not in BITNET_EXPORT_FORMATS:
         supported = ", ".join(sorted(BITNET_EXPORT_FORMATS))
         raise ValueError(
-            f"bitnet export format {format_name!r} not supported. "
-            f"Supported: {supported}"
+            f"bitnet export format {format_name!r} not supported. Supported: {supported}"
         )
     return canonical
 
@@ -126,10 +122,12 @@ def validate_bitnet_export(format_name: object) -> str:
 # BitNet export-format → llama.cpp ternary quantize CLI arg. Both the
 # friendly ``bitnet`` alias and the explicit ``tq1_0`` map to TQ1_0 (the
 # llama.cpp 1.58-bit ternary GGUF type).
-_BITNET_GGUF_QUANT_ARG: Mapping[str, str] = MappingProxyType({
-    "bitnet": "TQ1_0",
-    "tq1_0": "TQ1_0",
-})
+_BITNET_GGUF_QUANT_ARG: Mapping[str, str] = MappingProxyType(
+    {
+        "bitnet": "TQ1_0",
+        "tq1_0": "TQ1_0",
+    }
+)
 
 
 def export_bitnet_gguf(
@@ -170,16 +168,15 @@ def export_bitnet_gguf(
     _enforce_under_cwd_and_no_symlink(llama_cpp_dir, "llama_cpp_dir")
 
     if not os.path.isdir(model_dir):
-        raise FileNotFoundError(
-            f"model_dir not a directory: {os.path.basename(model_dir)!r}"
-        )
+        raise FileNotFoundError(f"model_dir not a directory: {os.path.basename(model_dir)!r}")
     if not os.path.isdir(llama_cpp_dir):
         raise FileNotFoundError(
             f"llama_cpp_dir not a directory: {os.path.basename(llama_cpp_dir)!r}"
         )
 
     with tempfile.TemporaryDirectory(
-        prefix=".soup_bitnet_gguf_", dir=str(Path.cwd()),
+        prefix=".soup_bitnet_gguf_",
+        dir=str(Path.cwd()),
     ) as staged:
         f16_path = Path(staged) / "model.f16.gguf"
         _run_convert_to_f16(llama_cpp_dir, model_dir, str(f16_path))
@@ -192,6 +189,4 @@ def export_bitnet_gguf(
         )
 
     if not os.path.isfile(output_path):
-        raise RuntimeError(
-            f"llama-quantize did not produce {os.path.basename(output_path)!r}"
-        )
+        raise RuntimeError(f"llama-quantize did not produce {os.path.basename(output_path)!r}")

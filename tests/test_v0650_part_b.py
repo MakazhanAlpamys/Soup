@@ -3,6 +3,7 @@
 Closed allowlist over XSTest / HarmBench / JailbreakBench / ELEPHANT /
 SycEval; pre/post diff report; ``soup eval behavior`` CLI surface.
 """
+
 from __future__ import annotations
 
 import json
@@ -99,13 +100,19 @@ class TestGetBatterySpec:
 class TestBehaviorScore:
     def test_happy(self):
         s = BehaviorScore(
-            battery="xstest", value=0.85, verdict="OK", num_probes=100,
+            battery="xstest",
+            value=0.85,
+            verdict="OK",
+            num_probes=100,
         )
         assert s.value == 0.85
 
     def test_frozen(self):
         s = BehaviorScore(
-            battery="xstest", value=0.85, verdict="OK", num_probes=100,
+            battery="xstest",
+            value=0.85,
+            verdict="OK",
+            num_probes=100,
         )
         with pytest.raises(Exception):
             s.value = 0.5  # type: ignore[misc]
@@ -113,37 +120,54 @@ class TestBehaviorScore:
     def test_invalid_battery(self):
         with pytest.raises(ValueError, match="battery"):
             BehaviorScore(
-                battery="not-real", value=0.5, verdict="OK", num_probes=10,
+                battery="not-real",
+                value=0.5,
+                verdict="OK",
+                num_probes=10,
             )
 
     def test_invalid_value(self):
         with pytest.raises(ValueError, match="value"):
             BehaviorScore(
-                battery="xstest", value=1.5, verdict="OK", num_probes=10,
+                battery="xstest",
+                value=1.5,
+                verdict="OK",
+                num_probes=10,
             )
 
     def test_nan_value(self):
         with pytest.raises(ValueError, match="finite"):
             BehaviorScore(
-                battery="xstest", value=float("nan"), verdict="OK", num_probes=10,
+                battery="xstest",
+                value=float("nan"),
+                verdict="OK",
+                num_probes=10,
             )
 
     def test_invalid_verdict(self):
         with pytest.raises(ValueError, match="verdict"):
             BehaviorScore(
-                battery="xstest", value=0.5, verdict="BAD", num_probes=10,
+                battery="xstest",
+                value=0.5,
+                verdict="BAD",
+                num_probes=10,
             )
 
     def test_invalid_num_probes(self):
         with pytest.raises(ValueError, match="num_probes"):
             BehaviorScore(
-                battery="xstest", value=0.5, verdict="OK", num_probes=-1,
+                battery="xstest",
+                value=0.5,
+                verdict="OK",
+                num_probes=-1,
             )
 
     def test_bool_num_probes(self):
         with pytest.raises(ValueError, match="num_probes"):
             BehaviorScore(
-                battery="xstest", value=0.5, verdict="OK",
+                battery="xstest",
+                value=0.5,
+                verdict="OK",
                 num_probes=True,  # type: ignore[arg-type]
             )
 
@@ -189,10 +213,16 @@ class TestClassifyBehaviorScore:
 class TestBehaviorDiffReport:
     def test_happy(self):
         pre = BehaviorScore(
-            battery="xstest", value=0.9, verdict="OK", num_probes=10,
+            battery="xstest",
+            value=0.9,
+            verdict="OK",
+            num_probes=10,
         )
         post = BehaviorScore(
-            battery="xstest", value=0.5, verdict="MAJOR", num_probes=10,
+            battery="xstest",
+            value=0.5,
+            verdict="MAJOR",
+            num_probes=10,
         )
         r = BehaviorDiffReport(
             run_id="r1",
@@ -206,42 +236,72 @@ class TestBehaviorDiffReport:
 
     def test_frozen(self):
         pre = BehaviorScore(
-            battery="xstest", value=0.9, verdict="OK", num_probes=10,
+            battery="xstest",
+            value=0.9,
+            verdict="OK",
+            num_probes=10,
         )
         post = BehaviorScore(
-            battery="xstest", value=0.8, verdict="OK", num_probes=10,
+            battery="xstest",
+            value=0.8,
+            verdict="OK",
+            num_probes=10,
         )
         r = BehaviorDiffReport(
-            run_id="r", battery="xstest", pre=pre, post=post,
-            delta=-0.1, overall="OK",
+            run_id="r",
+            battery="xstest",
+            pre=pre,
+            post=post,
+            delta=-0.1,
+            overall="OK",
         )
         with pytest.raises(Exception):
             r.delta = 0.0  # type: ignore[misc]
 
     def test_battery_mismatch(self):
         pre = BehaviorScore(
-            battery="xstest", value=0.9, verdict="OK", num_probes=10,
+            battery="xstest",
+            value=0.9,
+            verdict="OK",
+            num_probes=10,
         )
         post = BehaviorScore(
-            battery="harmbench", value=0.9, verdict="OK", num_probes=10,
+            battery="harmbench",
+            value=0.9,
+            verdict="OK",
+            num_probes=10,
         )
         with pytest.raises(ValueError, match="battery"):
             BehaviorDiffReport(
-                run_id="r", battery="xstest", pre=pre, post=post,
-                delta=0.0, overall="OK",
+                run_id="r",
+                battery="xstest",
+                pre=pre,
+                post=post,
+                delta=0.0,
+                overall="OK",
             )
 
     def test_invalid_overall(self):
         pre = BehaviorScore(
-            battery="xstest", value=0.9, verdict="OK", num_probes=10,
+            battery="xstest",
+            value=0.9,
+            verdict="OK",
+            num_probes=10,
         )
         post = BehaviorScore(
-            battery="xstest", value=0.8, verdict="OK", num_probes=10,
+            battery="xstest",
+            value=0.8,
+            verdict="OK",
+            num_probes=10,
         )
         with pytest.raises(ValueError, match="overall"):
             BehaviorDiffReport(
-                run_id="r", battery="xstest", pre=pre, post=post,
-                delta=-0.1, overall="X",
+                run_id="r",
+                battery="xstest",
+                pre=pre,
+                post=post,
+                delta=-0.1,
+                overall="X",
             )
 
 
@@ -254,7 +314,8 @@ class TestComputeBehaviorDiff:
         post_responses = ["safe answer"] * 10
         oracle = ["safe"] * 10
         r = compute_behavior_diff(
-            run_id="r1", battery="xstest",
+            run_id="r1",
+            battery="xstest",
             pre_responses=pre_responses,
             post_responses=post_responses,
             oracle=oracle,
@@ -269,7 +330,8 @@ class TestComputeBehaviorDiff:
         post_responses = ["unsafe"] * 10
         oracle = ["safe"] * 10
         r = compute_behavior_diff(
-            run_id="r1", battery="xstest",
+            run_id="r1",
+            battery="xstest",
             pre_responses=pre_responses,
             post_responses=post_responses,
             oracle=oracle,
@@ -280,40 +342,51 @@ class TestComputeBehaviorDiff:
     def test_length_mismatch_pre(self):
         with pytest.raises(ValueError, match="length"):
             compute_behavior_diff(
-                run_id="r", battery="xstest",
-                pre_responses=["a"], post_responses=["a", "b"],
+                run_id="r",
+                battery="xstest",
+                pre_responses=["a"],
+                post_responses=["a", "b"],
                 oracle=["a", "b"],
             )
 
     def test_length_mismatch_oracle(self):
         with pytest.raises(ValueError, match="length"):
             compute_behavior_diff(
-                run_id="r", battery="xstest",
-                pre_responses=["a"], post_responses=["a"],
+                run_id="r",
+                battery="xstest",
+                pre_responses=["a"],
+                post_responses=["a"],
                 oracle=["a", "b"],
             )
 
     def test_unknown_battery(self):
         with pytest.raises(ValueError):
             compute_behavior_diff(
-                run_id="r", battery="not-real",
-                pre_responses=["x"], post_responses=["x"],
+                run_id="r",
+                battery="not-real",
+                pre_responses=["x"],
+                post_responses=["x"],
                 oracle=["x"],
             )
 
     def test_empty(self):
         with pytest.raises(ValueError, match="empty"):
             compute_behavior_diff(
-                run_id="r", battery="xstest",
-                pre_responses=[], post_responses=[], oracle=[],
+                run_id="r",
+                battery="xstest",
+                pre_responses=[],
+                post_responses=[],
+                oracle=[],
             )
 
     def test_bool_responses_list(self):
         with pytest.raises(ValueError):
             compute_behavior_diff(
-                run_id="r", battery="xstest",
+                run_id="r",
+                battery="xstest",
                 pre_responses=[True],  # type: ignore[list-item]
-                post_responses=["a"], oracle=["a"],
+                post_responses=["a"],
+                oracle=["a"],
             )
 
 
@@ -340,6 +413,7 @@ class TestLoadBatteryProbes:
 class TestBehaviorCli:
     def test_help_listed(self):
         from soup_cli.commands.eval import app
+
         runner = CliRunner()
         result = runner.invoke(app, ["--help"])
         assert result.exit_code == 0
@@ -347,6 +421,7 @@ class TestBehaviorCli:
 
     def test_behavior_help(self):
         from soup_cli.commands.eval import app
+
         runner = CliRunner()
         result = runner.invoke(app, ["behavior", "--help"])
         assert result.exit_code == 0
@@ -354,45 +429,70 @@ class TestBehaviorCli:
 
     def test_behavior_unknown_battery(self):
         from soup_cli.commands.eval import app
+
         runner = CliRunner()
-        result = runner.invoke(app, [
-            "behavior", "test_run",
-            "--battery", "evilcorp",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "behavior",
+                "test_run",
+                "--battery",
+                "evilcorp",
+            ],
+        )
         assert result.exit_code != 0
 
     def test_behavior_with_evidence(self, tmp_path, monkeypatch):
         from soup_cli.commands.eval import app
+
         monkeypatch.chdir(tmp_path)
         ev = tmp_path / "ev.json"
-        ev.write_text(json.dumps({
-            "pre_responses": ["safe"] * 5,
-            "post_responses": ["safe"] * 5,
-            "oracle": ["safe"] * 5,
-        }))
+        ev.write_text(
+            json.dumps(
+                {
+                    "pre_responses": ["safe"] * 5,
+                    "post_responses": ["safe"] * 5,
+                    "oracle": ["safe"] * 5,
+                }
+            )
+        )
         out = tmp_path / "out.json"
         runner = CliRunner()
-        result = runner.invoke(app, [
-            "behavior", "test_run",
-            "--battery", "xstest",
-            "--evidence", str(ev),
-            "--output", str(out),
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "behavior",
+                "test_run",
+                "--battery",
+                "xstest",
+                "--evidence",
+                str(ev),
+                "--output",
+                str(out),
+            ],
+        )
         assert result.exit_code == 0, (result.output, repr(result.exception))
         data = json.loads(out.read_text())
         assert data["battery"] == "xstest"
 
     def test_behavior_outside_cwd_evidence(self, tmp_path, monkeypatch):
         from soup_cli.commands.eval import app
+
         sub = tmp_path / "sub"
         sub.mkdir()
         monkeypatch.chdir(sub)
         outside = tmp_path / "ev.json"
         outside.write_text("{}")
         runner = CliRunner()
-        result = runner.invoke(app, [
-            "behavior", "test_run",
-            "--battery", "xstest",
-            "--evidence", str(outside),
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "behavior",
+                "test_run",
+                "--battery",
+                "xstest",
+                "--evidence",
+                str(outside),
+            ],
+        )
         assert result.exit_code != 0

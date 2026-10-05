@@ -46,6 +46,7 @@ def test_ffd_packs_into_min_bins():
 def test_ffd_full_coverage_invariant():
     # Property test: every index appears exactly once.
     import random
+
     rng = random.Random(42)
     lengths = [rng.randint(1, 20) for _ in range(100)]
     bins = ffd_bin_pack(lengths, max_len=32)
@@ -107,10 +108,12 @@ def test_ffd_all_lengths_equal_max_len():
 def test_ffd_rejects_too_many_items():
     # Defence against O(N^2) DoS — cap is 1M.
     from soup_cli.utils.multipack_sampler import _MAX_FFD_ITEMS
+
     too_many = _MAX_FFD_ITEMS + 1
     # Don't actually allocate 1M ints — just confirm the cap exists by
     # patching it lower for the test.
     import soup_cli.utils.multipack_sampler as ms
+
     original = ms._MAX_FFD_ITEMS
     try:
         ms._MAX_FFD_ITEMS = 5
@@ -179,7 +182,11 @@ def test_architectures_allowlist_is_frozen():
 def test_sampler_iter_returns_index_lists():
     lengths = [3, 5, 2, 4, 1, 6]
     sampler = MultipackBatchSampler(
-        lengths, batch_max_len=10, batch_size=1, real_batches=False, seed=0,
+        lengths,
+        batch_max_len=10,
+        batch_size=1,
+        real_batches=False,
+        seed=0,
     )
     batches = list(sampler)
     assert len(batches) > 0
@@ -193,7 +200,11 @@ def test_sampler_iter_returns_index_lists():
 def test_sampler_full_coverage():
     lengths = [3, 5, 2, 4, 1, 6, 7, 2]
     sampler = MultipackBatchSampler(
-        lengths, batch_max_len=10, batch_size=1, real_batches=False, seed=0,
+        lengths,
+        batch_max_len=10,
+        batch_size=1,
+        real_batches=False,
+        seed=0,
     )
     seen: list[int] = []
     for batch in sampler:
@@ -205,7 +216,11 @@ def test_sampler_respects_batch_max_len():
     lengths = [3, 5, 2, 4, 1, 6]
     max_len = 10
     sampler = MultipackBatchSampler(
-        lengths, batch_max_len=max_len, batch_size=1, real_batches=False, seed=0,
+        lengths,
+        batch_max_len=max_len,
+        batch_size=1,
+        real_batches=False,
+        seed=0,
     )
     for batch in sampler:
         total = sum(lengths[i] for i in batch)
@@ -215,10 +230,18 @@ def test_sampler_respects_batch_max_len():
 def test_sampler_deterministic_with_seed():
     lengths = [3, 5, 2, 4, 1, 6, 7, 2, 8]
     sampler1 = MultipackBatchSampler(
-        lengths, batch_max_len=10, batch_size=1, real_batches=False, seed=42,
+        lengths,
+        batch_max_len=10,
+        batch_size=1,
+        real_batches=False,
+        seed=42,
     )
     sampler2 = MultipackBatchSampler(
-        lengths, batch_max_len=10, batch_size=1, real_batches=False, seed=42,
+        lengths,
+        batch_max_len=10,
+        batch_size=1,
+        real_batches=False,
+        seed=42,
     )
     assert list(sampler1) == list(sampler2)
 
@@ -226,7 +249,11 @@ def test_sampler_deterministic_with_seed():
 def test_sampler_len_matches_iter():
     lengths = [3, 5, 2, 4, 1, 6]
     sampler = MultipackBatchSampler(
-        lengths, batch_max_len=10, batch_size=1, real_batches=False, seed=0,
+        lengths,
+        batch_max_len=10,
+        batch_size=1,
+        real_batches=False,
+        seed=0,
     )
     assert len(sampler) == len(list(sampler))
 
@@ -235,7 +262,11 @@ def test_sampler_real_batches_groups_into_batch_size():
     # real_batches=True groups packed bins into chunks of batch_size
     lengths = [3] * 12
     sampler = MultipackBatchSampler(
-        lengths, batch_max_len=6, batch_size=2, real_batches=True, seed=0,
+        lengths,
+        batch_max_len=6,
+        batch_size=2,
+        real_batches=True,
+        seed=0,
     )
     for batch in sampler:
         # Each batch is a list of bins; each bin is a list of indices.
@@ -247,12 +278,20 @@ def test_sampler_real_batches_groups_into_batch_size():
 def test_sampler_drop_last():
     lengths = [3] * 13  # 13 / 2 doesn't divide evenly
     sampler_drop = MultipackBatchSampler(
-        lengths, batch_max_len=6, batch_size=2, real_batches=True,
-        seed=0, drop_last=True,
+        lengths,
+        batch_max_len=6,
+        batch_size=2,
+        real_batches=True,
+        seed=0,
+        drop_last=True,
     )
     sampler_keep = MultipackBatchSampler(
-        lengths, batch_max_len=6, batch_size=2, real_batches=True,
-        seed=0, drop_last=False,
+        lengths,
+        batch_max_len=6,
+        batch_size=2,
+        real_batches=True,
+        seed=0,
+        drop_last=False,
     )
     # drop_last=False keeps the trailing partial batch; True drops it.
     assert len(list(sampler_keep)) >= len(list(sampler_drop))
@@ -261,53 +300,88 @@ def test_sampler_drop_last():
 def test_sampler_rejects_empty_lengths():
     with pytest.raises(ValueError, match="lengths"):
         MultipackBatchSampler(
-            [], batch_max_len=10, batch_size=1, real_batches=False, seed=0,
+            [],
+            batch_max_len=10,
+            batch_size=1,
+            real_batches=False,
+            seed=0,
         )
 
 
 def test_sampler_rejects_non_positive_batch_max_len():
     with pytest.raises(ValueError, match="batch_max_len must be positive"):
         MultipackBatchSampler(
-            [3, 4], batch_max_len=0, batch_size=1, real_batches=False, seed=0,
+            [3, 4],
+            batch_max_len=0,
+            batch_size=1,
+            real_batches=False,
+            seed=0,
         )
 
 
 def test_sampler_rejects_non_positive_batch_size():
     with pytest.raises(ValueError, match="batch_size must be positive"):
         MultipackBatchSampler(
-            [3, 4], batch_max_len=10, batch_size=0, real_batches=True, seed=0,
+            [3, 4],
+            batch_max_len=10,
+            batch_size=0,
+            real_batches=True,
+            seed=0,
         )
 
 
 def test_sampler_rejects_bool_batch_size():
     with pytest.raises(TypeError, match="bool"):
         MultipackBatchSampler(
-            [3, 4], batch_max_len=10, batch_size=True, real_batches=True, seed=0,
+            [3, 4],
+            batch_max_len=10,
+            batch_size=True,
+            real_batches=True,
+            seed=0,
         )
 
 
 def test_sampler_rejects_bool_batch_max_len():
     with pytest.raises(TypeError, match="bool"):
         MultipackBatchSampler(
-            [3, 4], batch_max_len=True, batch_size=1, real_batches=False, seed=0,
+            [3, 4],
+            batch_max_len=True,
+            batch_size=1,
+            real_batches=False,
+            seed=0,
         )
 
 
 def test_sampler_rejects_item_larger_than_max():
     with pytest.raises(ValueError, match="exceeds"):
         MultipackBatchSampler(
-            [3, 100], batch_max_len=10, batch_size=1,
-            real_batches=False, seed=0,
+            [3, 100],
+            batch_max_len=10,
+            batch_size=1,
+            real_batches=False,
+            seed=0,
         )
 
 
 def test_sampler_different_seeds_yield_different_orderings():
     lengths = [3, 5, 2, 4, 1, 6, 7, 2, 8, 4, 5]
-    s1 = list(MultipackBatchSampler(
-        lengths, batch_max_len=10, batch_size=1, real_batches=False, seed=1,
-    ))
-    s2 = list(MultipackBatchSampler(
-        lengths, batch_max_len=10, batch_size=1, real_batches=False, seed=999,
-    ))
+    s1 = list(
+        MultipackBatchSampler(
+            lengths,
+            batch_max_len=10,
+            batch_size=1,
+            real_batches=False,
+            seed=1,
+        )
+    )
+    s2 = list(
+        MultipackBatchSampler(
+            lengths,
+            batch_max_len=10,
+            batch_size=1,
+            real_batches=False,
+            seed=999,
+        )
+    )
     # Not strictly guaranteed but vanishingly improbable for 11 items.
     assert s1 != s2

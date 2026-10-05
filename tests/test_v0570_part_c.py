@@ -23,20 +23,24 @@ _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 def _strip_ansi(text: str) -> str:
     return _ANSI_RE.sub("", text or "")
 
+
 runner = CliRunner()
 
 
 # ---------- parse_budget ----------
 
 
-@pytest.mark.parametrize("spec,expected", [
-    ("60", 60),
-    ("60s", 60),
-    ("5m", 300),
-    ("2h", 7200),
-    ("1h", 3600),
-    ("90s", 90),
-])
+@pytest.mark.parametrize(
+    "spec,expected",
+    [
+        ("60", 60),
+        ("60s", 60),
+        ("5m", 300),
+        ("2h", 7200),
+        ("1h", 3600),
+        ("90s", 90),
+    ],
+)
 def test_parse_budget_happy(spec, expected):
     assert parse_budget(spec) == expected
 
@@ -93,8 +97,11 @@ def _setup_blame(tmp_path, monkeypatch, n_rows: int = 100):
 def test_plan_blame_happy(tmp_path, monkeypatch):
     adapter, dataset = _setup_blame(tmp_path, monkeypatch, n_rows=100)
     plan = plan_blame(
-        adapter, dataset,
-        layer="q_proj.7", budget_seconds=3600, num_shards=10,
+        adapter,
+        dataset,
+        layer="q_proj.7",
+        budget_seconds=3600,
+        num_shards=10,
     )
     assert isinstance(plan, BlamePlan)
     assert len(plan.shards) == 10
@@ -107,8 +114,11 @@ def test_plan_blame_happy(tmp_path, monkeypatch):
 def test_plan_blame_infeasible_budget(tmp_path, monkeypatch):
     adapter, dataset = _setup_blame(tmp_path, monkeypatch)
     plan = plan_blame(
-        adapter, dataset,
-        layer="q_proj.7", budget_seconds=60, num_shards=100,
+        adapter,
+        dataset,
+        layer="q_proj.7",
+        budget_seconds=60,
+        num_shards=100,
     )
     # 60s / 100 shards = 0s/shard → infeasible
     assert plan.feasible is False
@@ -118,8 +128,11 @@ def test_plan_blame_infeasible_budget(tmp_path, monkeypatch):
 def test_plan_blame_shard_offsets(tmp_path, monkeypatch):
     adapter, dataset = _setup_blame(tmp_path, monkeypatch, n_rows=50)
     plan = plan_blame(
-        adapter, dataset,
-        layer="layer", budget_seconds=3600, num_shards=5,
+        adapter,
+        dataset,
+        layer="layer",
+        budget_seconds=3600,
+        num_shards=5,
     )
     offsets = [s.holdout_offset for s in plan.shards]
     assert offsets == [0, 10, 20, 30, 40]
@@ -128,8 +141,11 @@ def test_plan_blame_shard_offsets(tmp_path, monkeypatch):
 def test_plan_blame_uneven_split(tmp_path, monkeypatch):
     adapter, dataset = _setup_blame(tmp_path, monkeypatch, n_rows=23)
     plan = plan_blame(
-        adapter, dataset,
-        layer="layer", budget_seconds=3600, num_shards=5,
+        adapter,
+        dataset,
+        layer="layer",
+        budget_seconds=3600,
+        num_shards=5,
     )
     # ceil(23 / 5) = 5 → last shard gets 3 rows
     sizes = [s.holdout_size for s in plan.shards]
@@ -142,16 +158,22 @@ def test_plan_blame_empty_dataset(tmp_path, monkeypatch):
     (tmp_path / "empty.jsonl").write_text("", encoding="utf-8")
     with pytest.raises(ValueError, match="empty"):
         plan_blame(
-            "adapter", "empty.jsonl",
-            layer="x", budget_seconds=3600, num_shards=5,
+            "adapter",
+            "empty.jsonl",
+            layer="x",
+            budget_seconds=3600,
+            num_shards=5,
         )
 
 
 def test_plan_blame_outside_cwd_adapter(tmp_path):
     with pytest.raises(ValueError):
         plan_blame(
-            str(tmp_path), "data.jsonl",
-            layer="x", budget_seconds=3600, num_shards=5,
+            str(tmp_path),
+            "data.jsonl",
+            layer="x",
+            budget_seconds=3600,
+            num_shards=5,
         )
 
 
@@ -161,8 +183,11 @@ def test_plan_blame_outside_cwd_dataset(tmp_path, monkeypatch):
     outside = os.path.join(os.path.dirname(str(tmp_path)), "data.jsonl")
     with pytest.raises(ValueError):
         plan_blame(
-            "adapter", outside,
-            layer="x", budget_seconds=3600, num_shards=5,
+            "adapter",
+            outside,
+            layer="x",
+            budget_seconds=3600,
+            num_shards=5,
         )
 
 
@@ -170,13 +195,19 @@ def test_plan_blame_invalid_layer(tmp_path, monkeypatch):
     adapter, dataset = _setup_blame(tmp_path, monkeypatch)
     with pytest.raises(ValueError, match="non-empty"):
         plan_blame(
-            adapter, dataset,
-            layer="", budget_seconds=3600, num_shards=5,
+            adapter,
+            dataset,
+            layer="",
+            budget_seconds=3600,
+            num_shards=5,
         )
     with pytest.raises(ValueError, match="null"):
         plan_blame(
-            adapter, dataset,
-            layer="x\x00y", budget_seconds=3600, num_shards=5,
+            adapter,
+            dataset,
+            layer="x\x00y",
+            budget_seconds=3600,
+            num_shards=5,
         )
 
 
@@ -184,13 +215,19 @@ def test_plan_blame_invalid_shards(tmp_path, monkeypatch):
     adapter, dataset = _setup_blame(tmp_path, monkeypatch)
     with pytest.raises(ValueError, match="num_shards"):
         plan_blame(
-            adapter, dataset,
-            layer="x", budget_seconds=3600, num_shards=1,
+            adapter,
+            dataset,
+            layer="x",
+            budget_seconds=3600,
+            num_shards=1,
         )
     with pytest.raises(ValueError, match="num_shards"):
         plan_blame(
-            adapter, dataset,
-            layer="x", budget_seconds=3600, num_shards=200,
+            adapter,
+            dataset,
+            layer="x",
+            budget_seconds=3600,
+            num_shards=200,
         )
 
 
@@ -200,8 +237,10 @@ def test_plan_blame_bool_shards(tmp_path, monkeypatch, bool_value):
     adapter, dataset = _setup_blame(tmp_path, monkeypatch)
     with pytest.raises(TypeError):
         plan_blame(
-            adapter, dataset,
-            layer="x", budget_seconds=3600,
+            adapter,
+            dataset,
+            layer="x",
+            budget_seconds=3600,
             num_shards=bool_value,  # type: ignore[arg-type]
         )
 
@@ -211,7 +250,8 @@ def test_plan_blame_bool_budget_rejected(tmp_path, monkeypatch):
     adapter, dataset = _setup_blame(tmp_path, monkeypatch)
     with pytest.raises(TypeError):
         plan_blame(
-            adapter, dataset,
+            adapter,
+            dataset,
             layer="x",
             budget_seconds=True,  # type: ignore[arg-type]
             num_shards=5,
@@ -228,8 +268,11 @@ def test_plan_blame_missing_dataset(tmp_path, monkeypatch):
     with pytest.raises(ValueError):
         # Empty file → empty dataset rejection
         plan_blame(
-            "adapter", "missing.jsonl",
-            layer="x", budget_seconds=3600, num_shards=2,
+            "adapter",
+            "missing.jsonl",
+            layer="x",
+            budget_seconds=3600,
+            num_shards=2,
         )
 
 
@@ -241,10 +284,15 @@ def test_run_blame_no_longer_raises_v0_66_lifted():
     from soup_cli.utils.blame import BlameResult
 
     plan = BlamePlan(
-        adapter_dir="a", dataset_path="d", layer="x",
-        budget_seconds=3600, num_shards=2, per_shard_seconds=600,
+        adapter_dir="a",
+        dataset_path="d",
+        layer="x",
+        budget_seconds=3600,
+        num_shards=2,
+        per_shard_seconds=600,
         shards=(BlameShardWork(0, 0, 1, 600), BlameShardWork(1, 1, 1, 600)),
-        feasible=True, reason="ok",
+        feasible=True,
+        reason="ok",
     )
     result = run_blame(plan)
     assert isinstance(result, BlameResult)
@@ -260,10 +308,17 @@ def test_run_blame_rejects_non_plan():
 
 def test_blame_plan_frozen():
     import dataclasses
+
     plan = BlamePlan(
-        adapter_dir="a", dataset_path="d", layer="x",
-        budget_seconds=3600, num_shards=1, per_shard_seconds=3600,
-        shards=(), feasible=False, reason="r",
+        adapter_dir="a",
+        dataset_path="d",
+        layer="x",
+        budget_seconds=3600,
+        num_shards=1,
+        per_shard_seconds=3600,
+        shards=(),
+        feasible=False,
+        reason="r",
     )
     with pytest.raises(dataclasses.FrozenInstanceError):
         plan.layer = "y"  # type: ignore[misc]
@@ -271,6 +326,7 @@ def test_blame_plan_frozen():
 
 def test_blame_shard_work_frozen():
     import dataclasses
+
     shard = BlameShardWork(0, 0, 10, 60)
     with pytest.raises(dataclasses.FrozenInstanceError):
         shard.shard_id = 1  # type: ignore[misc]
@@ -289,27 +345,45 @@ def test_adapters_blame_help():
 
 def test_adapters_blame_plan_only(tmp_path, monkeypatch):
     adapter, dataset = _setup_blame(tmp_path, monkeypatch)
-    result = runner.invoke(soup_app, [
-        "adapters", "blame", adapter,
-        "--dataset", dataset,
-        "--layer", "q_proj.7",
-        "--budget", "1h",
-        "--shards", "5",
-        "--plan-only",
-    ])
+    result = runner.invoke(
+        soup_app,
+        [
+            "adapters",
+            "blame",
+            adapter,
+            "--dataset",
+            dataset,
+            "--layer",
+            "q_proj.7",
+            "--budget",
+            "1h",
+            "--shards",
+            "5",
+            "--plan-only",
+        ],
+    )
     assert result.exit_code == 0, (result.output, repr(result.exception))
     assert "Blame plan" in _strip_ansi(result.output)
 
 
 def test_adapters_blame_invalid_budget(tmp_path, monkeypatch):
     adapter, dataset = _setup_blame(tmp_path, monkeypatch)
-    result = runner.invoke(soup_app, [
-        "adapters", "blame", adapter,
-        "--dataset", dataset,
-        "--layer", "x",
-        "--budget", "abc",
-        "--shards", "5",
-    ])
+    result = runner.invoke(
+        soup_app,
+        [
+            "adapters",
+            "blame",
+            adapter,
+            "--dataset",
+            dataset,
+            "--layer",
+            "x",
+            "--budget",
+            "abc",
+            "--shards",
+            "5",
+        ],
+    )
     assert result.exit_code == 2
     assert "Invalid --budget" in _strip_ansi(result.output)
 
@@ -317,13 +391,22 @@ def test_adapters_blame_invalid_budget(tmp_path, monkeypatch):
 def test_adapters_blame_live_runner_runs(tmp_path, monkeypatch):
     """v0.66.0 Part B — live runner produces a real BlameResult (no advisory)."""
     adapter, dataset = _setup_blame(tmp_path, monkeypatch)
-    result = runner.invoke(soup_app, [
-        "adapters", "blame", adapter,
-        "--dataset", dataset,
-        "--layer", "x",
-        "--budget", "1h",
-        "--shards", "5",
-    ])
+    result = runner.invoke(
+        soup_app,
+        [
+            "adapters",
+            "blame",
+            adapter,
+            "--dataset",
+            dataset,
+            "--layer",
+            "x",
+            "--budget",
+            "1h",
+            "--shards",
+            "5",
+        ],
+    )
     assert result.exit_code == 0, (result.output, repr(result.exception))
     out = _strip_ansi(result.output)
     # The v0.57.1 advisory is gone (PR #171 closed in v0.66.0); the

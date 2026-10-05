@@ -26,9 +26,7 @@ def validate_vllm_url(base_url: str) -> None:
 
     parsed = urlparse(base_url)
     if parsed.scheme not in ("http", "https"):
-        raise ValueError(
-            f"vLLM URL must use HTTP or HTTPS scheme (got {parsed.scheme}://)"
-        )
+        raise ValueError(f"vLLM URL must use HTTP or HTTPS scheme (got {parsed.scheme}://)")
     # 0.0.0.0 is the bind-any wildcard, NOT loopback (v0.71.6 #232 hardening,
     # matching the newer SSRF validators). It drops out of the local set, so
     # http://0.0.0.0 is now rejected (remote needs HTTPS).
@@ -70,9 +68,7 @@ def generate_vllm(
     try:
         import httpx
     except ImportError:
-        raise ImportError(
-            "httpx is required for vLLM generation. Install: pip install httpx"
-        )
+        raise ImportError("httpx is required for vLLM generation. Install: pip install httpx")
 
     validate_vllm_url(base_url)
 

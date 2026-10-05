@@ -201,9 +201,7 @@ class TestWatchdogSweep:
         """loss_watchdog_threshold is a valid sweep param."""
         from soup_cli.commands.sweep import _parse_sweep_params
 
-        params = _parse_sweep_params(
-            ["training.loss_watchdog_threshold=2.0,3.0,5.0"]
-        )
+        params = _parse_sweep_params(["training.loss_watchdog_threshold=2.0,3.0,5.0"])
         assert "training.loss_watchdog_threshold" in params
         assert len(params["training.loss_watchdog_threshold"]) == 3
 
@@ -211,8 +209,6 @@ class TestWatchdogSweep:
         """loss_watchdog_patience is a valid sweep param."""
         from soup_cli.commands.sweep import _parse_sweep_params
 
-        params = _parse_sweep_params(
-            ["training.loss_watchdog_patience=3,5,10"]
-        )
+        params = _parse_sweep_params(["training.loss_watchdog_patience=3,5,10"])
         assert "training.loss_watchdog_patience" in params
         assert len(params["training.loss_watchdog_patience"]) == 3

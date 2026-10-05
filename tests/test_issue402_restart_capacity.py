@@ -6,6 +6,7 @@ from the previous server is still alive. The cap is now gated on a persisted
 run whose pid is still alive, so a restart cannot double-book — while a stale
 record whose process is gone never blocks execution forever.
 """
+
 import subprocess
 import sys
 from unittest.mock import MagicMock, patch
@@ -77,9 +78,7 @@ def test_stale_dead_pid_record_does_not_block(tmp_path, monkeypatch):
     assert res["status"] == _RUNNING
 
 
-def test_capacity_check_rejects_a_dead_pid_without_help_from_reconcile(
-    tmp_path, monkeypatch
-):
+def test_capacity_check_rejects_a_dead_pid_without_help_from_reconcile(tmp_path, monkeypatch):
     """The cap's own liveness check must hold when reconcile-on-read does not.
 
     #407 rewrites a stale 'running' row on read, so by the time
@@ -95,16 +94,12 @@ def test_capacity_check_rejects_a_dead_pid_without_help_from_reconcile(
     dead.wait()
     _seed_running_run(dead.pid)
 
-    with patch.object(
-        ExperimentTracker, "_reconcile_orphaned_run", side_effect=lambda run: run
-    ):
+    with patch.object(ExperimentTracker, "_reconcile_orphaned_run", side_effect=lambda run: run):
         assert ExperimentTracker().list_runs()[0]["status"] == _RUNNING  # precondition
         assert ExecutionManager()._live_persisted_run() is None
 
 
-def test_control_the_capacity_check_still_sees_a_live_pid_without_reconcile(
-    tmp_path, monkeypatch
-):
+def test_control_the_capacity_check_still_sees_a_live_pid_without_reconcile(tmp_path, monkeypatch):
     # CONTROL: neutralising reconcile must not make the check reject everything.
     _use_temp_db(tmp_path, monkeypatch)
     child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])

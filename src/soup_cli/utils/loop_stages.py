@@ -146,9 +146,7 @@ def _render_dpo_yaml(state: LoopState, pairs_path: str, output_dir: str) -> str:
     return yaml.safe_dump(config, sort_keys=False)
 
 
-def train_dpo_from_pairs(
-    state: LoopState, ctx: Mapping[str, object]
-) -> Mapping[str, object]:
+def train_dpo_from_pairs(state: LoopState, ctx: Mapping[str, object]) -> Mapping[str, object]:
     """Train a DPO adapter from harvested pairs via a ``soup train`` subprocess.
 
     Returns ``{run_id, skipped, adapter_path}``. Skips (no run) when the
@@ -215,9 +213,7 @@ def _build_gate_generator(adapter_dir: str) -> Callable[[str], str]:
     return make_model_generator(adapter_dir)
 
 
-def gate_against_baseline(
-    state: LoopState, ctx: Mapping[str, object]
-) -> Mapping[str, object]:
+def gate_against_baseline(state: LoopState, ctx: Mapping[str, object]) -> Mapping[str, object]:
     """Run the v0.26.0 eval gate for the trained adapter vs the baseline.
 
     Returns ``{gate_verdict}`` — ``SKIPPED`` when training was skipped or the
@@ -314,9 +310,7 @@ def _post_activate(endpoint: str, name: str) -> bool:
         return False
 
 
-def deploy_to_canary(
-    state: LoopState, ctx: Mapping[str, object]
-) -> Mapping[str, object]:
+def deploy_to_canary(state: LoopState, ctx: Mapping[str, object]) -> Mapping[str, object]:
     """Promote the trained adapter as a canary when the gate verdict is OK.
 
     Returns ``{deployed, canary_verdict}``. No-op (not deployed) unless the

@@ -23,6 +23,7 @@ class TestModuleSurface:
             get_ra_dit_stage_spec,
             validate_ra_dit_stage,
         )
+
         assert callable(validate_ra_dit_stage)
         assert callable(get_ra_dit_stage_spec)
         assert dataclasses.is_dataclass(RaDitStageSpec)
@@ -135,8 +136,10 @@ class TestRetrieverModel:
     def test_happy(self):
         from soup_cli.utils.ra_dit import validate_ra_dit_retriever_model
 
-        assert validate_ra_dit_retriever_model("sentence-transformers/all-mpnet-base-v2") == \
-            "sentence-transformers/all-mpnet-base-v2"
+        assert (
+            validate_ra_dit_retriever_model("sentence-transformers/all-mpnet-base-v2")
+            == "sentence-transformers/all-mpnet-base-v2"
+        )
 
     def test_none_passthrough(self):
         from soup_cli.utils.ra_dit import validate_ra_dit_retriever_model

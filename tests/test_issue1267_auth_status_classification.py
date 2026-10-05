@@ -35,10 +35,12 @@ class _HTTPStatusError(Exception):
 
 
 def test_row_number_401_is_not_an_auth_failure():
-    out = _render(ValueError(
-        "train row 401: no causal-loss target remains after tokenization/truncation "
-        "at data.max_length=64; the assistant response is absent or fully truncated."
-    ))
+    out = _render(
+        ValueError(
+            "train row 401: no causal-loss target remains after tokenization/truncation "
+            "at data.max_length=64; the assistant response is absent or fully truncated."
+        )
+    )
     assert "Authentication failed." not in out
     assert "train row 401" in out
 
@@ -50,42 +52,36 @@ def test_row_number_403_is_not_an_access_denial():
 
 
 def test_config_digits_in_message_are_not_an_access_denial():
-    out = _render(ValueError(
-        "train row 7: no causal-loss target remains at data.max_length=4030"
-    ))
+    out = _render(ValueError("train row 7: no causal-loss target remains at data.max_length=4030"))
     assert "Access denied." not in out
     assert "max_length=4030" in out
 
 
 def test_tensor_size_with_401_digits_keeps_the_real_message():
-    out = _render(RuntimeError(
-        "The size of tensor a (4013) must match the size of tensor b (4096) "
-        "at non-singleton dimension 0"
-    ))
+    out = _render(
+        RuntimeError(
+            "The size of tensor a (4013) must match the size of tensor b (4096) "
+            "at non-singleton dimension 0"
+        )
+    )
     assert "Authentication failed." not in out
     assert "tensor a (4013)" in out
 
 
 def test_matmul_shapes_with_403_digits_keep_the_real_message():
-    out = _render(RuntimeError(
-        "mat1 and mat2 shapes cannot be multiplied (2x4030 and 4096x8)"
-    ))
+    out = _render(RuntimeError("mat1 and mat2 shapes cannot be multiplied (2x4030 and 4096x8)"))
     assert "Access denied." not in out
     assert "2x4030" in out
 
 
 def test_index_digits_keep_the_real_message():
-    out = _render(IndexError(
-        "index 40132 is out of bounds for dimension 0 with size 32000"
-    ))
+    out = _render(IndexError("index 40132 is out of bounds for dimension 0 with size 32000"))
     assert "Authentication failed." not in out
     assert "40132" in out
 
 
 def test_adapter_path_digits_keep_the_real_message():
-    out = _render(ValueError(
-        "Can't find 'adapter_config.json' at 'output/checkpoint-4010'"
-    ))
+    out = _render(ValueError("Can't find 'adapter_config.json' at 'output/checkpoint-4010'"))
     assert "Authentication failed." not in out
     assert "checkpoint-4010" in out
 

@@ -47,20 +47,14 @@ def validate_capacity_factor(value: object) -> float:
     if isinstance(value, bool):
         raise TypeError(f"capacity_factor must not be bool, got {value!r}")
     if not isinstance(value, (int, float)):
-        raise TypeError(
-            f"capacity_factor must be numeric, got {type(value).__name__}"
-        )
+        raise TypeError(f"capacity_factor must be numeric, got {type(value).__name__}")
     fval = float(value)
     if not math.isfinite(fval):
         raise ValueError(f"capacity_factor must be finite, got {value!r}")
     if fval <= MIN_CAPACITY_FACTOR:
-        raise ValueError(
-            f"capacity_factor must be > {MIN_CAPACITY_FACTOR}, got {fval}"
-        )
+        raise ValueError(f"capacity_factor must be > {MIN_CAPACITY_FACTOR}, got {fval}")
     if fval > MAX_CAPACITY_FACTOR:
-        raise ValueError(
-            f"capacity_factor must be <= {MAX_CAPACITY_FACTOR}, got {fval}"
-        )
+        raise ValueError(f"capacity_factor must be <= {MAX_CAPACITY_FACTOR}, got {fval}")
     return fval
 
 
@@ -97,9 +91,7 @@ def is_mod_supported_arch(model_name: object) -> bool:
 
     try:
         return (
-            is_llama_model(model_name)
-            or is_qwen_model(model_name)
-            or is_mistral_model(model_name)
+            is_llama_model(model_name) or is_qwen_model(model_name) or is_mistral_model(model_name)
         )
     except (TypeError, ValueError):
         return False
@@ -181,10 +173,7 @@ def _gather_block_inputs(hidden_states, topk, args, kwargs):
         return None
     if kwargs.get("use_cache"):
         return None
-    if (
-        kwargs.get("past_key_value") is not None
-        or kwargs.get("past_key_values") is not None
-    ):
+    if kwargs.get("past_key_value") is not None or kwargs.get("past_key_values") is not None:
         return None
 
     bsz, cap = topk.shape
@@ -227,11 +216,7 @@ def _gather_block_inputs(hidden_states, topk, args, kwargs):
             return None
         gathered = []
         for part in pe:
-            if (
-                not hasattr(part, "dim")
-                or part.dim() != 3
-                or part.shape[1] != seq_len
-            ):
+            if not hasattr(part, "dim") or part.dim() != 3 or part.shape[1] != seq_len:
                 return None
             gathered.append(_gather_dim1(part, topk))
         new_kwargs["position_embeddings"] = tuple(gathered)
@@ -256,10 +241,7 @@ def _make_mod_forward(original, router, capacity_factor: float):
 
         out = original(hidden_states, *args, **kwargs)
         new_hidden = out[0] if isinstance(out, tuple) else out
-        if (
-            not hasattr(new_hidden, "shape")
-            or new_hidden.shape != hidden_states.shape
-        ):
+        if not hasattr(new_hidden, "shape") or new_hidden.shape != hidden_states.shape:
             return out
         mask = torch.zeros_like(router_logits)
         mask.scatter_(1, topk, 1.0)
@@ -397,8 +379,7 @@ def apply_mod_if_configured(
     if console is not None and patched:
         try:
             console.print(
-                f"[green]Mixture-of-Depths:[/] routed {patched} layers "
-                f"(capacity_factor={cf})"
+                f"[green]Mixture-of-Depths:[/] routed {patched} layers (capacity_factor={cf})"
             )
         except Exception:  # noqa: BLE001
             pass

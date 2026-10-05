@@ -38,16 +38,18 @@ def build_runs_table_rows(runs: List[dict]) -> List[List[str]]:
     rows: List[List[str]] = []
     for run in runs:
         cost = run.get("cost_usd")
-        rows.append([
-            _safe(run.get("run_id"))[:32],
-            _safe(run.get("experiment_name"))[:24],
-            _safe(run.get("base_model"))[:32],
-            _safe(run.get("task")),
-            _safe(run.get("status")),
-            f"{run['final_loss']:.4f}" if run.get("final_loss") is not None else "-",
-            str(run.get("total_steps") or "-"),
-            format_cost_usd(cost),
-        ])
+        rows.append(
+            [
+                _safe(run.get("run_id"))[:32],
+                _safe(run.get("experiment_name"))[:24],
+                _safe(run.get("base_model"))[:32],
+                _safe(run.get("task")),
+                _safe(run.get("status")),
+                f"{run['final_loss']:.4f}" if run.get("final_loss") is not None else "-",
+                str(run.get("total_steps") or "-"),
+                format_cost_usd(cost),
+            ]
+        )
     return rows
 
 

@@ -190,9 +190,7 @@ def test_flag_downstream_risk_llama_community_high_mau():
     """Llama community license + commercial use > 700M MAU is the canonical risk."""
     from soup_cli.utils.license_advisor import flag_downstream_risk
 
-    r = flag_downstream_risk(
-        license_id="llama-3", target="b2c", monthly_active_users=800_000_000
-    )
+    r = flag_downstream_risk(license_id="llama-3", target="b2c", monthly_active_users=800_000_000)
     assert r.ok is False
     assert r.severity in ("warn", "block")
 
@@ -201,9 +199,7 @@ def test_flag_downstream_risk_llama_community_low_mau_warns():
     """Llama community on small B2C: warning, not block."""
     from soup_cli.utils.license_advisor import flag_downstream_risk
 
-    r = flag_downstream_risk(
-        license_id="llama-3", target="b2c", monthly_active_users=10_000
-    )
+    r = flag_downstream_risk(license_id="llama-3", target="b2c", monthly_active_users=10_000)
     # Either OK with note or a warn — not a hard block
     assert r.severity in ("ok", "warn")
 
@@ -211,9 +207,7 @@ def test_flag_downstream_risk_llama_community_low_mau_warns():
 def test_flag_downstream_risk_nc_b2c_blocked():
     from soup_cli.utils.license_advisor import flag_downstream_risk
 
-    r = flag_downstream_risk(
-        license_id="cc-by-nc-4.0", target="b2c", monthly_active_users=100
-    )
+    r = flag_downstream_risk(license_id="cc-by-nc-4.0", target="b2c", monthly_active_users=100)
     assert r.ok is False
 
 
@@ -221,9 +215,7 @@ def test_flag_downstream_risk_rejects_negative_mau():
     from soup_cli.utils.license_advisor import flag_downstream_risk
 
     with pytest.raises(ValueError, match="monthly_active_users"):
-        flag_downstream_risk(
-            license_id="apache-2.0", target="b2c", monthly_active_users=-1
-        )
+        flag_downstream_risk(license_id="apache-2.0", target="b2c", monthly_active_users=-1)
 
 
 def test_flag_downstream_risk_rejects_bool_mau():
@@ -231,7 +223,8 @@ def test_flag_downstream_risk_rejects_bool_mau():
 
     with pytest.raises(TypeError, match="bool"):
         flag_downstream_risk(
-            license_id="apache-2.0", target="b2c",
+            license_id="apache-2.0",
+            target="b2c",
             monthly_active_users=True,  # type: ignore[arg-type]
         )
 
@@ -319,10 +312,10 @@ def test_no_heavy_top_level_imports():
     from pathlib import Path
 
     src = (
-        Path(__file__).resolve().parent.parent
-        / "src" / "soup_cli" / "utils" / "license_advisor.py"
+        Path(__file__).resolve().parent.parent / "src" / "soup_cli" / "utils" / "license_advisor.py"
     )
     text = src.read_text(encoding="utf-8")
     import re
+
     for bad in ["^import torch", "^from torch", "^import transformers", "^from transformers"]:
         assert not re.search(bad, text, re.MULTILINE)

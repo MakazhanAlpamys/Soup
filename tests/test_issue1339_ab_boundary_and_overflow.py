@@ -48,9 +48,7 @@ def _run_cli(tmp_path, monkeypatch, control, treatment, extra=()):
 
     monkeypatch.chdir(tmp_path)
     _write_ab(tmp_path / "ab.jsonl", "judge_score", control, treatment)
-    return runner.invoke(
-        app, ["ab", "--input", "ab.jsonl", "--metric", "judge_score", *extra]
-    )
+    return runner.invoke(app, ["ab", "--input", "ab.jsonl", "--metric", "judge_score", *extra])
 
 
 class TestAlphaPlusBeta:
@@ -94,16 +92,17 @@ class TestAlphaPlusBeta:
         """
         with pytest.raises(ValueError):
             msprt_step(
-                MsprtConfig(
-                    metric="judge_score", alpha=0.6, beta=0.5, effect_size=0.01
-                ),
+                MsprtConfig(metric="judge_score", alpha=0.6, beta=0.5, effect_size=0.01),
                 control=_WIDE_CONTROL,
                 treatment=_WIDE_CONTROL,
             )
 
     def test_cli_exits_2_naming_alpha_and_beta(self, tmp_path, monkeypatch):
         result = _run_cli(
-            tmp_path, monkeypatch, _H0_CONTROL, _H0_CONTROL,
+            tmp_path,
+            monkeypatch,
+            _H0_CONTROL,
+            _H0_CONTROL,
             extra=["--alpha", "0.05", "--beta", "0.95"],
         )
         assert result.exit_code == 2, (result.output, repr(result.exception))
@@ -113,7 +112,10 @@ class TestAlphaPlusBeta:
 
     def test_cli_still_runs_the_documented_pair(self, tmp_path, monkeypatch):
         result = _run_cli(
-            tmp_path, monkeypatch, _H0_CONTROL, _H0_CONTROL,
+            tmp_path,
+            monkeypatch,
+            _H0_CONTROL,
+            _H0_CONTROL,
             extra=["--alpha", "0.01", "--beta", "0.10"],
         )
         assert result.exit_code == 0, (result.output, repr(result.exception))
@@ -144,7 +146,10 @@ class TestStandardisedEffectOverflow:
         """At 2 rows per arm too: the statistic runs before the burn-in check."""
         control = _H0_CONTROL[:rows_per_arm]
         result = _run_cli(
-            tmp_path, monkeypatch, control, control,
+            tmp_path,
+            monkeypatch,
+            control,
+            control,
             extra=["--effect-size", "1e200"],
         )
         assert result.exit_code == 1, (result.output, repr(result.exception))

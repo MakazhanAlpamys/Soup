@@ -55,8 +55,7 @@ def _count_safetensors_tensors(path: str) -> int:
             header_len = int.from_bytes(f.read(8), "little")
             if not 0 < header_len <= file_size:
                 raise ValueError(
-                    f"declared header length {header_len} is invalid for a "
-                    f"{file_size}-byte file"
+                    f"declared header length {header_len} is invalid for a {file_size}-byte file"
                 )
             header = json.loads(f.read(header_len))
     except (OSError, ValueError, json.JSONDecodeError) as exc:
@@ -263,7 +262,7 @@ class MLXSFTTrainerWrapper:
         except ImportError as exc:
             raise ImportError(
                 "MLX backend requires the 'mlx' and 'mlx-lm' packages. "
-                "Install with: pip install \"soup-cli[mlx]\""
+                'Install with: pip install "soup-cli[mlx]"'
             ) from exc
 
     def _check_unsupported(self) -> None:
@@ -287,8 +286,7 @@ class MLXSFTTrainerWrapper:
         # trained the last turn on transformers and every turn here, in silence.
         if getattr(dcfg, "mask_history", False):
             unsupported.append(
-                "data.mask_history (MLX supervises every assistant turn, not "
-                "only the last)"
+                "data.mask_history (MLX supervises every assistant turn, not only the last)"
             )
         if getattr(dcfg, "train_on_prompt", False):
             unsupported.append(
@@ -300,9 +298,7 @@ class MLXSFTTrainerWrapper:
         if tcfg.use_galore:
             unsupported.append("GaLore")
         if getattr(tcfg, "use_lorafa", False):
-            unsupported.append(
-                "training.use_lorafa (LoRA-FA has no MLX implementation)"
-            )
+            unsupported.append("training.use_lorafa (LoRA-FA has no MLX implementation)")
         if tcfg.use_ring_attention:
             unsupported.append("Ring Attention")
         if tcfg.use_flash_attn:
@@ -365,9 +361,7 @@ class MLXSFTTrainerWrapper:
                 "(there is no VRAM total to measure pressure against on unified memory)"
             )
         if unsupported:
-            console.print(
-                "[yellow]MLX backend ignores: " + ", ".join(unsupported) + "[/]"
-            )
+            console.print("[yellow]MLX backend ignores: " + ", ".join(unsupported) + "[/]")
 
     def setup(self, dataset: dict) -> None:
         """Load MLX model, configure LoRA, prepare dataset."""
@@ -485,25 +479,17 @@ class MLXSFTTrainerWrapper:
         output_dir.mkdir(parents=True, exist_ok=True)
 
         if self.model is None or self.tokenizer is None:
-            raise RuntimeError(
-                "MLX backend: setup(dataset) must be called before train()"
-            )
+            raise RuntimeError("MLX backend: setup(dataset) must be called before train()")
 
         self._apply_lora(self.model)
 
         if resume_from_checkpoint is not None:
             self._load_checkpoint_weights(resume_from_checkpoint)
 
-        batch_size = (
-            int(cfg.training.batch_size)
-            if isinstance(cfg.training.batch_size, int)
-            else 1
-        )
+        batch_size = int(cfg.training.batch_size) if isinstance(cfg.training.batch_size, int) else 1
         train_rows = list(self._dataset.get("train", []))
         val_rows = list(self._dataset.get("val", []))
-        iters = int(
-            cfg.training.epochs * max(1, math.ceil(len(train_rows) / batch_size))
-        )
+        iters = int(cfg.training.epochs * max(1, math.ceil(len(train_rows) / batch_size)))
 
         max_seq_length = int(getattr(cfg.data, "max_length", 2048) or 2048)
         steps_per_report = int(getattr(cfg.training, "logging_steps", 10) or 10)
@@ -559,9 +545,7 @@ class MLXSFTTrainerWrapper:
         from soup_cli.trainer.mlx_masking import plan_response_masking
 
         responses_only = bool(getattr(cfg.data, "train_on_responses_only", False))
-        plan = plan_response_masking(
-            responses_only, train_rows[0] if train_rows else {}
-        )
+        plan = plan_response_masking(responses_only, train_rows[0] if train_rows else {})
         use_token_mask = plan.token_mask
         args.mask_prompt = plan.mask_prompt
         if plan.warning:
@@ -575,9 +559,7 @@ class MLXSFTTrainerWrapper:
                 masked_loss,
             )
 
-            masked_train = MaskedChatDataset(
-                train_rows, self.tokenizer, chat_key=_CHAT_KEY
-            )
+            masked_train = MaskedChatDataset(train_rows, self.tokenizer, chat_key=_CHAT_KEY)
             # Probe row 0 now. `process` is otherwise called lazily by
             # `CacheDataset` from inside `train()`, so a template this cannot
             # mask -- Qwen3's, which injects its thinking block only for the
@@ -597,9 +579,7 @@ class MLXSFTTrainerWrapper:
 
             train_dataset = CacheDataset(masked_train)
             val_dataset = (
-                CacheDataset(
-                    MaskedChatDataset(val_rows, self.tokenizer, chat_key=_CHAT_KEY)
-                )
+                CacheDataset(MaskedChatDataset(val_rows, self.tokenizer, chat_key=_CHAT_KEY))
                 if val_rows
                 else None
             )
@@ -607,9 +587,7 @@ class MLXSFTTrainerWrapper:
         else:
             train_dataset = CacheDataset(create_dataset(train_rows, self.tokenizer, args))
             val_dataset = (
-                CacheDataset(create_dataset(val_rows, self.tokenizer, args))
-                if val_rows
-                else None
+                CacheDataset(create_dataset(val_rows, self.tokenizer, args)) if val_rows else None
             )
             train_hooks = {}
 

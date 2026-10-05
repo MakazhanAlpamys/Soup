@@ -98,7 +98,14 @@ class TestAMalformedMarkerIsACleanMiss:
         _src, out, stripe, index, marker = striped
         _write(marker, b'{"source_fingerprint": "SECRET-LOOKING", "position": 1, "n_roots": 2}')
         found, reason = inspect_shard_cache(
-            out, "float32", index.source_fingerprint, (), "none", False, "", "",
+            out,
+            "float32",
+            index.source_fingerprint,
+            (),
+            "none",
+            False,
+            "",
+            "",
             stripe_roots=(stripe,),
         )
         assert found is None and "another cache" in reason and marker in reason, reason
@@ -120,7 +127,14 @@ class TestAMalformedMarkerIsACleanMiss:
 
         monkeypatch.setattr(layer_shard_mod.json, "loads", spy)
         found, reason = inspect_shard_cache(
-            out, "float32", index.source_fingerprint, (), "none", False, "", "",
+            out,
+            "float32",
+            index.source_fingerprint,
+            (),
+            "none",
+            False,
+            "",
+            "",
             stripe_roots=(stripe,),
         )
         assert found is None and "not a stripe marker" in reason, reason

@@ -66,7 +66,7 @@ MACOS_SANDBOX_PROFILE = (
     # bypasses ``(deny network*)``. The names below are required for the
     # interpreter to boot (entitlement / system-services lookup) but do
     # NOT include ``com.apple.SystemConfiguration`` or ``com.apple.dnssd``.
-    '(allow mach-lookup'
+    "(allow mach-lookup"
     ' (global-name "com.apple.SecurityServer")'
     ' (global-name "com.apple.system.notification_center")'
     ' (global-name "com.apple.system.opendirectoryd.libinfo"))'
@@ -346,9 +346,7 @@ def _apply_rlimit(strict_namespaces: bool = False) -> None:
         )
         if hasattr(resource, "RLIMIT_FSIZE"):
             # Limit file size created by subprocess (10 MB max)
-            resource.setrlimit(
-                resource.RLIMIT_FSIZE, (10 * 1024 * 1024, 10 * 1024 * 1024)
-            )
+            resource.setrlimit(resource.RLIMIT_FSIZE, (10 * 1024 * 1024, 10 * 1024 * 1024))
         if hasattr(resource, "RLIMIT_CORE"):
             # Disable core dumps
             resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
@@ -670,15 +668,12 @@ def _validated_reward_fn(reward_fn: Callable) -> Callable:
             elif args:
                 completions = args[0]
         if completions is None:
-            raise ValueError(
-                f"Reward function {reward_name!r} was called without completions"
-            )
+            raise ValueError(f"Reward function {reward_name!r} was called without completions")
         try:
             reward_count = len(rewards)
         except TypeError as exc:
             raise ValueError(
-                f"Reward function {reward_name!r} must return one finite score "
-                "per completion"
+                f"Reward function {reward_name!r} must return one finite score per completion"
             ) from exc
         completion_count = len(completions)
         if reward_count != completion_count:
@@ -715,7 +710,8 @@ def validate_reward_funcs(reward_funcs: Any) -> Any:
 
 
 def load_reward_fn(
-    reward_fn_spec: str, verifiable_domain: "str | None" = None,
+    reward_fn_spec: str,
+    verifiable_domain: "str | None" = None,
 ) -> Callable:
     """Load a reward function by name or from a custom Python file.
 
@@ -741,9 +737,7 @@ def load_reward_fn(
                 f"Unknown verifiable_domain: '{verifiable_domain}'. "
                 f"Options: {', '.join(VERIFIABLE_DOMAINS.keys())}"
             )
-        console.print(
-            f"[dim]Using verifiable reward: domain={verifiable_domain}[/]"
-        )
+        console.print(f"[dim]Using verifiable reward: domain={verifiable_domain}[/]")
         return VERIFIABLE_DOMAINS[verifiable_domain]
 
     # Built-in reward function
@@ -781,7 +775,8 @@ def load_reward_fn(
 
 
 def load_reward_fns(
-    reward_fn_spec: str, verifiable_domain: "str | None" = None,
+    reward_fn_spec: str,
+    verifiable_domain: "str | None" = None,
 ) -> list[Callable]:
     """Load one OR MORE reward functions from a comma-separated spec (v0.71.40 #311).
 
@@ -807,8 +802,7 @@ def load_reward_fns(
     segments = [seg.strip() for seg in reward_fn_spec.split(",")]
     if any(not seg for seg in segments):
         raise ValueError(
-            f"reward_fn {reward_fn_spec!r} has an empty comma segment — "
-            "remove the stray comma"
+            f"reward_fn {reward_fn_spec!r} has an empty comma segment — remove the stray comma"
         )
     seen: set[str] = set()
     for seg in segments:

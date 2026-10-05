@@ -18,11 +18,11 @@ MOE_CONFIG_KEYS = (
 
 # Common expert FFN module name patterns across MoE architectures
 MOE_EXPERT_PATTERNS = [
-    "experts",          # Mixtral, Qwen3, DeepSeek
-    "gate_proj",        # Expert gate projection
-    "up_proj",          # Expert up projection
-    "down_proj",        # Expert down projection
-    "w1",              # DeepSeek V3 expert naming
+    "experts",  # Mixtral, Qwen3, DeepSeek
+    "gate_proj",  # Expert gate projection
+    "up_proj",  # Expert up projection
+    "down_proj",  # Expert down projection
+    "w1",  # DeepSeek V3 expert naming
     "w2",
     "w3",
 ]
@@ -224,9 +224,7 @@ def resolve_moe_lora_targets(model, tcfg, target_modules, console=None):
         return target_modules
     _refuse_dropout_on_fused_experts(model, tcfg, moe_targets)
     if console is not None:
-        console.print(
-            f"[green]ScatterMoE LoRA:[/] targeting {len(moe_targets)} module patterns"
-        )
+        console.print(f"[green]ScatterMoE LoRA:[/] targeting {len(moe_targets)} module patterns")
     return moe_targets
 
 

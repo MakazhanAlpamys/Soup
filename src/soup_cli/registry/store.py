@@ -34,12 +34,23 @@ if TYPE_CHECKING:
 class AmbiguousRefError(ValueError):
     """Raised when a reference matches more than one registry entry."""
 
+
 REGISTRY_DB_FILENAME = "registry.db"
 
 _VALID_KINDS = frozenset(
     {
-        "adapter", "merged", "gguf", "awq", "gptq", "onnx", "dataset", "config",
-        "eval_results", "tensorrt", "eval_suite", "canaries",
+        "adapter",
+        "merged",
+        "gguf",
+        "awq",
+        "gptq",
+        "onnx",
+        "dataset",
+        "config",
+        "eval_results",
+        "tensorrt",
+        "eval_suite",
+        "canaries",
         "diagnose_report",
         # v0.62.0 Part C — Activation steering vectors (CAA / ITI / RepE).
         "steering_vector",
@@ -58,9 +69,7 @@ _VALID_KINDS = frozenset(
         "attestation",
     }
 )
-_VALID_RELATIONS = frozenset(
-    {"forked_from", "merged_from", "evaluated_with", "promoted_from"}
-)
+_VALID_RELATIONS = frozenset({"forked_from", "merged_from", "evaluated_with", "promoted_from"})
 
 _NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_\-.]{0,127}$")
 _TAG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_\-.]{0,63}$")
@@ -279,7 +288,9 @@ class RegistryStore:
         config_hash = hash_config(config)
         data_hash = hash_file(data_path) if data_path is not None else None
         entry_hash = hash_entry(
-            config=config, data_path=data_path, base_model=base_model,
+            config=config,
+            data_path=data_path,
+            base_model=base_model,
         )
 
         conn = self._get_conn()
@@ -289,9 +300,17 @@ class RegistryStore:
                 config_hash, data_hash, entry_hash, created_at, notes)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
-                entry_id, name, base_model, task, run_id,
+                entry_id,
+                name,
+                base_model,
+                task,
+                run_id,
                 json.dumps(config, default=str, sort_keys=True),
-                config_hash, data_hash, entry_hash, now, notes,
+                config_hash,
+                data_hash,
+                entry_hash,
+                now,
+                notes,
             ),
         )
         conn.execute(
@@ -315,7 +334,8 @@ class RegistryStore:
     def get(self, entry_id: str) -> Optional[dict]:
         conn = self._get_conn()
         row = conn.execute(
-            "SELECT * FROM registry_entries WHERE id = ?", (entry_id,),
+            "SELECT * FROM registry_entries WHERE id = ?",
+            (entry_id,),
         ).fetchone()
         if row is None:
             return None
@@ -325,7 +345,8 @@ class RegistryStore:
         """Attach tags + artifacts to an entry row."""
         conn = self._get_conn()
         tags = [
-            r[0] for r in conn.execute(
+            r[0]
+            for r in conn.execute(
                 "SELECT tag FROM registry_tags WHERE entry_id = ? ORDER BY tag",
                 (row["id"],),
             ).fetchall()
@@ -357,9 +378,7 @@ class RegistryStore:
             clauses.append("e.task = ?")
             params.append(task)
         if tag:
-            clauses.append(
-                "e.id IN (SELECT entry_id FROM registry_tags WHERE tag = ?)"
-            )
+            clauses.append("e.id IN (SELECT entry_id FROM registry_tags WHERE tag = ?)")
             params.append(tag)
 
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
@@ -397,7 +416,8 @@ class RegistryStore:
         """Delete an entry. FK ``ON DELETE CASCADE`` removes child rows."""
         conn = self._get_conn()
         cursor = conn.execute(
-            "DELETE FROM registry_entries WHERE id = ?", (entry_id,),
+            "DELETE FROM registry_entries WHERE id = ?",
+            (entry_id,),
         )
         conn.commit()
         return cursor.rowcount > 0
@@ -413,13 +433,14 @@ class RegistryStore:
         if not ref:
             return None
         if ref.startswith("registry://"):
-            ref = ref[len("registry://"):]
+            ref = ref[len("registry://") :]
 
         conn = self._get_conn()
 
         # Exact id match
         row = conn.execute(
-            "SELECT id FROM registry_entries WHERE id = ?", (ref,),
+            "SELECT id FROM registry_entries WHERE id = ?",
+            (ref,),
         ).fetchone()
         if row:
             return row["id"]
@@ -476,10 +497,7 @@ class RegistryStore:
         absolute paths the library produced itself).
         """
         if kind not in _VALID_KINDS:
-            raise ValueError(
-                f"unknown artifact kind '{kind}'. "
-                f"Allowed: {sorted(_VALID_KINDS)}"
-            )
+            raise ValueError(f"unknown artifact kind '{kind}'. Allowed: {sorted(_VALID_KINDS)}")
         if self.get(entry_id) is None:
             raise ValueError(f"registry entry not found: {entry_id}")
 
@@ -488,9 +506,7 @@ class RegistryStore:
             raise FileNotFoundError(f"artifact not found: {path}")
 
         if enforce_cwd and not _is_under(artifact_path, self._cwd_snapshot):
-            raise ValueError(
-                f"artifact '{path}' is outside cwd - refusing to register"
-            )
+            raise ValueError(f"artifact '{path}' is outside cwd - refusing to register")
 
         digest = hash_file(str(artifact_path))
         size = artifact_path.stat().st_size
@@ -511,8 +527,7 @@ class RegistryStore:
     def get_artifacts(self, entry_id: str) -> list[dict]:
         conn = self._get_conn()
         rows = conn.execute(
-            "SELECT * FROM registry_artifacts WHERE entry_id = ? "
-            "ORDER BY created_at ASC",
+            "SELECT * FROM registry_artifacts WHERE entry_id = ? ORDER BY created_at ASC",
             (entry_id,),
         ).fetchall()
         return [dict(r) for r in rows]
@@ -520,7 +535,11 @@ class RegistryStore:
     # -- lineage ------------------------------------------------------------
 
     def add_lineage(
-        self, *, child_id: str, parent_id: str, relation: str,
+        self,
+        *,
+        child_id: str,
+        parent_id: str,
+        relation: str,
     ) -> None:
         """Record a ``child → parent`` lineage edge.
 
@@ -530,8 +549,7 @@ class RegistryStore:
         """
         if relation not in _VALID_RELATIONS:
             raise ValueError(
-                f"unknown lineage relation '{relation}'. "
-                f"Allowed: {sorted(_VALID_RELATIONS)}"
+                f"unknown lineage relation '{relation}'. Allowed: {sorted(_VALID_RELATIONS)}"
             )
         if child_id == parent_id:
             raise ValueError("lineage cannot reference self")
@@ -546,8 +564,7 @@ class RegistryStore:
         # daemon builds long chains), corrupting the DAG.
         if self._reaches_ancestor(parent_id, child_id):
             raise ValueError(
-                "lineage would introduce a cycle "
-                f"({child_id} -> {parent_id} -> ... -> {child_id})"
+                f"lineage would introduce a cycle ({child_id} -> {parent_id} -> ... -> {child_id})"
             )
         now = datetime.now().isoformat()
         conn = self._get_conn()
@@ -650,8 +667,7 @@ class RegistryStore:
         validate_name(name)
         conn = self._get_conn()
         rows = conn.execute(
-            "SELECT * FROM registry_entries WHERE name = ? "
-            "ORDER BY created_at ASC",
+            "SELECT * FROM registry_entries WHERE name = ? ORDER BY created_at ASC",
             (name,),
         ).fetchall()
         return [self._hydrate(dict(r)) for r in rows]

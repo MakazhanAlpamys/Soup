@@ -30,8 +30,10 @@ class TestRunLRSweep:
 
         with pytest.raises(ValueError, match="schedule must be non-empty"):
             run_lr_sweep(
-                model=MagicMock(), dataloader=iter([]),
-                schedule=[], optimizer_factory=lambda p: MagicMock(),
+                model=MagicMock(),
+                dataloader=iter([]),
+                schedule=[],
+                optimizer_factory=lambda p: MagicMock(),
             )
 
     def test_loop_records_loss_per_step(self):
@@ -76,7 +78,9 @@ class TestRunLRSweep:
         schedule = [1e-6, 1e-5, 1e-4, 1e-3]
 
         losses = run_lr_sweep(
-            model=model, dataloader=dl, schedule=schedule,
+            model=model,
+            dataloader=dl,
+            schedule=schedule,
             optimizer_factory=FakeOptim,
         )
         assert losses == loss_values
@@ -117,7 +121,8 @@ class TestRunLRSweep:
 
         dl = iter([{"x": MagicMock()}] * 3)
         losses = run_lr_sweep(
-            model=FakeModel(), dataloader=dl,
+            model=FakeModel(),
+            dataloader=dl,
             schedule=[1e-6, 1e-5, 1e-4],
             optimizer_factory=FakeOptim,
         )
@@ -193,7 +198,8 @@ class TestResolveMixedPrecision:
         wrapper = SFTTrainerWrapper.__new__(SFTTrainerWrapper)
         wrapper.device = "cuda"
         monkeypatch.setattr(
-            torch.cuda, "get_device_capability",
+            torch.cuda,
+            "get_device_capability",
             lambda *_a, **_k: (8, 6),
             raising=False,
         )
@@ -209,13 +215,15 @@ class TestResolveMixedPrecision:
         wrapper = SFTTrainerWrapper.__new__(SFTTrainerWrapper)
         wrapper.device = "cuda"
         monkeypatch.setattr(
-            torch.cuda, "get_device_capability",
+            torch.cuda,
+            "get_device_capability",
             lambda *_a, **_k: (8, 6),
             raising=False,
         )
         tcfg = SimpleNamespace(auto_mixed_precision=True)
         bf16, fp16 = wrapper._resolve_mixed_precision(
-            tcfg, "Qwen/Qwen2-7B-Instruct",
+            tcfg,
+            "Qwen/Qwen2-7B-Instruct",
         )
         assert (bf16, fp16) == (False, True)
 
@@ -249,7 +257,8 @@ class TestSpikeRecoveryHint:
             spike_recovery_lr_decay=0.5,
         )
         args = SimpleNamespace(
-            learning_rate=1e-3, output_dir=str(tmp_path),
+            learning_rate=1e-3,
+            output_dir=str(tmp_path),
         )
         cb._write_spike_recovery_hint(args, loss=10.0)
         hint = tmp_path / "spike_recovery.json"
@@ -269,7 +278,8 @@ class TestSpikeRecoveryHint:
             spike_recovery_lr_decay=0.5,
         )
         args = SimpleNamespace(
-            learning_rate=1e-3, output_dir=str(tmp_path),
+            learning_rate=1e-3,
+            output_dir=str(tmp_path),
         )
         cb._write_spike_recovery_hint(args, loss=10.0)
         cb._write_spike_recovery_hint(args, loss=10.0)
@@ -279,7 +289,8 @@ class TestSpikeRecoveryHint:
     def test_disabled_when_strategy_not_set(self, tmp_path):
         cb = _make_callback(tmp_path, spike_recovery=False)
         args = SimpleNamespace(
-            learning_rate=1e-3, output_dir=str(tmp_path),
+            learning_rate=1e-3,
+            output_dir=str(tmp_path),
         )
         cb._write_spike_recovery_hint(args, loss=10.0)
         # No hint file written.
@@ -295,7 +306,8 @@ class TestSpikeRecoveryHint:
             spike_recovery_lr_decay=0.5,
         )
         args = SimpleNamespace(
-            learning_rate=1e-3, output_dir=str(tmp_path),
+            learning_rate=1e-3,
+            output_dir=str(tmp_path),
         )
         # Bump internal counter to budget cap
         cb._spike_recovery_attempts = 2
@@ -311,7 +323,8 @@ class TestSpikeRecoveryHint:
             spike_recovery=True,
         )
         args = SimpleNamespace(
-            learning_rate=1e-3, output_dir=str(tmp_path),
+            learning_rate=1e-3,
+            output_dir=str(tmp_path),
         )
         cb._write_spike_recovery_hint(args, loss=10.0)
         # No hint written; no exception raised.

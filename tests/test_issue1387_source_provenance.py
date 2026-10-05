@@ -57,8 +57,16 @@ def checkout(tmp_path: Path) -> Path:
     _git(root, "add", ".")
     _git(
         root,
-        "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false",
-        "commit", "-q", "-m", "init",
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@t",
+        "-c",
+        "commit.gpgsign=false",
+        "commit",
+        "-q",
+        "-m",
+        "init",
     )
     return root
 

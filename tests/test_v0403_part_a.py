@@ -21,14 +21,26 @@ from soup_cli.utils.batch_probe import make_cuda_probe_fn
 
 class TestMakeCudaProbeFn:
     def test_returns_none_on_cpu_device(self):
-        assert make_cuda_probe_fn(
-            object(), object(), max_length=128, device="cpu",
-        ) is None
+        assert (
+            make_cuda_probe_fn(
+                object(),
+                object(),
+                max_length=128,
+                device="cpu",
+            )
+            is None
+        )
 
     def test_returns_none_on_mps_device(self):
-        assert make_cuda_probe_fn(
-            object(), object(), max_length=128, device="mps",
-        ) is None
+        assert (
+            make_cuda_probe_fn(
+                object(),
+                object(),
+                max_length=128,
+                device="mps",
+            )
+            is None
+        )
 
     def test_returns_none_when_model_missing(self):
         assert make_cuda_probe_fn(None, object(), max_length=128) is None
@@ -60,9 +72,15 @@ class TestMakeCudaProbeFn:
             return real_import(name, *args, **kwargs)
 
         monkeypatch.setattr(builtins, "__import__", fake_import)
-        assert make_cuda_probe_fn(
-            object(), object(), max_length=128, device="cuda",
-        ) is None
+        assert (
+            make_cuda_probe_fn(
+                object(),
+                object(),
+                max_length=128,
+                device="cuda",
+            )
+            is None
+        )
 
     def test_returns_none_when_cuda_not_available(self, monkeypatch):
         # Patch the torch.cuda.is_available used inside the function.
@@ -71,9 +89,14 @@ class TestMakeCudaProbeFn:
         except ImportError:
             pytest.skip("torch not installed")
         monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
-        assert make_cuda_probe_fn(
-            SimpleNamespace(), SimpleNamespace(), max_length=128,
-        ) is None
+        assert (
+            make_cuda_probe_fn(
+                SimpleNamespace(),
+                SimpleNamespace(),
+                max_length=128,
+            )
+            is None
+        )
 
     def test_probe_pad_id_falls_back_to_eos(self, monkeypatch):
         # Indirect coverage: when CUDA is unavailable, no-op branch hit.
@@ -83,9 +106,14 @@ class TestMakeCudaProbeFn:
         except ImportError:
             pytest.skip("torch not installed")
         monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
-        assert make_cuda_probe_fn(
-            SimpleNamespace(), tokenizer, max_length=128,
-        ) is None
+        assert (
+            make_cuda_probe_fn(
+                SimpleNamespace(),
+                tokenizer,
+                max_length=128,
+            )
+            is None
+        )
 
     def test_max_length_boundary_eight_accepted(self, monkeypatch):
         try:
@@ -126,7 +154,10 @@ class TestProbeClosure:
         # Use device="cuda" so the closure is built; the model receives tensors
         # via .to is not used here (model is a fake callable).
         probe = make_cuda_probe_fn(
-            model, tokenizer, max_length=max_length, device="cuda",
+            model,
+            tokenizer,
+            max_length=max_length,
+            device="cuda",
         )
         # NOTE: the fake model below ignores device placement — torch.full
         # with device="cuda" requires CUDA, which is why every caller is

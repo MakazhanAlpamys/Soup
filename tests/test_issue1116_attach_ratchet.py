@@ -88,8 +88,12 @@ def test_skipped_rows_are_reported_by_reason():
     gated = "gated repo; set HF_TOKEN to check it"
     remote = "needs trust_remote_code, which this check never enables"
     result = compare(
-        [_row("g1", "unverified", gated), _row("g2", "unverified", gated),
-         _row("r", "unverified", remote), _row("a", "attaches")],
+        [
+            _row("g1", "unverified", gated),
+            _row("g2", "unverified", gated),
+            _row("r", "unverified", remote),
+            _row("a", "attaches"),
+        ],
         {},
     )
 
@@ -102,8 +106,9 @@ def test_skipped_rows_are_reported_by_reason():
 def test_a_new_failure_says_how_to_pin_it():
     result = compare([_row("b", "cannot_attach", "no mapping")], {})
 
-    assert any("pin it in EXCEPTIONS in scripts/check_recipe_attach.py" in line
-               for line in report(result))
+    assert any(
+        "pin it in EXCEPTIONS in scripts/check_recipe_attach.py" in line for line in report(result)
+    )
 
 
 class TestMain:

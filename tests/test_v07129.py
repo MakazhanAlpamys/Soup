@@ -3,6 +3,7 @@
 Tests the pure verdict half, the torch-lazy prune/importance half, the CLI
 orchestration, the subprocess distill-heal wiring, and registry attach.
 """
+
 import ast
 import inspect
 import math
@@ -86,8 +87,16 @@ class TestDecideShrink:
         assert d["decision"] == v.decision
         assert d["healed"] is True
         assert set(d) >= {
-            "decision", "ppl_original", "ppl_final", "ppl_ratio", "tolerance",
-            "layers_before", "layers_after", "params_saved_pct", "healed", "soup_version",
+            "decision",
+            "ppl_original",
+            "ppl_final",
+            "ppl_ratio",
+            "tolerance",
+            "layers_before",
+            "layers_after",
+            "params_saved_pct",
+            "healed",
+            "soup_version",
         }
 
     def test_render_panel_names_decision(self):
@@ -122,9 +131,7 @@ class TestNoTopLevelTorch:
                 names += [a.name for a in node.names]
             elif isinstance(node, ast.ImportFrom):
                 names.append(node.module or "")
-        assert not any(
-            m.split(".")[0] in {"torch", "transformers", "peft"} for m in names
-        ), names
+        assert not any(m.split(".")[0] in {"torch", "transformers", "peft"} for m in names), names
 
 
 # ---------------------------------------------------------------------------
@@ -263,9 +270,7 @@ class TestImportance:
                     "attention_mask": torch.ones(1, 3, dtype=torch.long),
                 }
 
-        imps = shrink.compute_layer_importance(
-            _Model(), _Tok(), ["hi"], block_size=2, device="cpu"
-        )
+        imps = shrink.compute_layer_importance(_Model(), _Tok(), ["hi"], block_size=2, device="cpu")
         by_start = {i.start: i.angular_distance for i in imps}
         assert sorted(by_start) == [1, 2]
         # start=1 -> hs[1] vs hs[3]: |theta_1 - theta_3| = |0.1 - 0.9| = 0.8 rad.
@@ -298,9 +303,9 @@ class TestImportance:
 
         def _hs_for(seq_len: int, theta_out: float):
             in_row = torch.tensor([1.0, 0.0]).repeat(1, seq_len, 1)
-            out_row = torch.tensor(
-                [_math.cos(theta_out), _math.sin(theta_out)]
-            ).repeat(1, seq_len, 1)
+            out_row = torch.tensor([_math.cos(theta_out), _math.sin(theta_out)]).repeat(
+                1, seq_len, 1
+            )
             # layer 0 (emb) + layer1 out (in) + layer2 out (out) — index1 vs index2
             return (in_row, in_row, out_row, out_row)
 
@@ -317,7 +322,7 @@ class TestImportance:
             def __call__(self, **kw):
                 if calls["n"] == 0:
                     calls["n"] = 1
-                    return _Out(_hs_for(1, 0.0))       # 1 token, dist 0
+                    return _Out(_hs_for(1, 0.0))  # 1 token, dist 0
                 return _Out(_hs_for(3, _math.pi / 2))  # 3 tokens, dist 0.5
 
         class _Tok:
@@ -363,9 +368,7 @@ class TestImportance:
                 }
 
         with pytest.raises(ValueError, match="hidden states"):
-            shrink.compute_layer_importance(
-                _Model(), _Tok(), ["hi"], block_size=1, device="cpu"
-            )
+            shrink.compute_layer_importance(_Model(), _Tok(), ["hi"], block_size=1, device="cpu")
 
     def test_select_drop_block_min(self):
         from soup_cli.utils.shrink import LayerImportance, select_drop_block
@@ -442,9 +445,7 @@ class TestImportance:
                 }
 
         with pytest.raises(ValueError, match="position-valid"):
-            shrink.compute_layer_importance(
-                _Model(), _Tok(), ["hi"], block_size=3, device="cpu"
-            )
+            shrink.compute_layer_importance(_Model(), _Tok(), ["hi"], block_size=3, device="cpu")
 
 
 # ---------------------------------------------------------------------------
@@ -481,8 +482,17 @@ class TestShrinkCli:
         calib.write_text('{"text":"hello world"}\n', encoding="utf-8")
         r = CliRunner().invoke(
             app,
-            ["shrink", "--model", "x", "--drop-ratio", "0.25", "--drop-layers",
-             "2", "--calib", "c.jsonl"],
+            [
+                "shrink",
+                "--model",
+                "x",
+                "--drop-ratio",
+                "0.25",
+                "--drop-layers",
+                "2",
+                "--calib",
+                "c.jsonl",
+            ],
         )
         assert r.exit_code == 1, (r.output, repr(r.exception))
         assert "exactly one" in r.output.lower() or "exactly one" in str(r.exception).lower()
@@ -514,8 +524,17 @@ class TestShrinkCli:
         calib.write_text('{"text":"hi"}\n', encoding="utf-8")
         r = CliRunner().invoke(
             app,
-            ["shrink", "--model", "x", "--drop-layers", "2", "--calib", "c.jsonl",
-             "--tolerance", "9.0"],
+            [
+                "shrink",
+                "--model",
+                "x",
+                "--drop-layers",
+                "2",
+                "--calib",
+                "c.jsonl",
+                "--tolerance",
+                "9.0",
+            ],
         )
         assert r.exit_code == 1, (r.output, repr(r.exception))
         assert "tolerance" in r.output.lower()
@@ -533,16 +552,27 @@ class TestShrinkCli:
         model_dir = _write_tiny_model(tmp_path / "src_model", layers=6)
         calib = tmp_path / "calib.jsonl"
         calib.write_text(
-            "\n".join('{"text":"the quick brown fox jumps over the lazy dog"}'
-                      for _ in range(4)),
+            "\n".join('{"text":"the quick brown fox jumps over the lazy dog"}' for _ in range(4)),
             encoding="utf-8",
         )
         out_dir = tmp_path / "shrunk"
         r = CliRunner().invoke(
             app,
-            ["shrink", "--model", model_dir, "--drop-layers", "2",
-             "--calib", "calib.jsonl", "--device", "cpu",
-             "--output-dir", str(out_dir), "--tolerance", "5.0"],
+            [
+                "shrink",
+                "--model",
+                model_dir,
+                "--drop-layers",
+                "2",
+                "--calib",
+                "calib.jsonl",
+                "--device",
+                "cpu",
+                "--output-dir",
+                str(out_dir),
+                "--tolerance",
+                "5.0",
+            ],
         )
         assert r.exit_code == 0, (r.output, repr(r.exception))
         cfg = json.loads((out_dir / "model" / "config.json").read_text(encoding="utf-8"))
@@ -564,9 +594,20 @@ class TestShrinkCli:
         out_dir = tmp_path / "shrunk2"
         r = CliRunner().invoke(
             app,
-            ["shrink", "--model", model_dir, "--drop-layers", "2",
-             "--calib", "calib.jsonl", "--device", "cpu",
-             "--output-dir", str(out_dir), "--plan-only"],
+            [
+                "shrink",
+                "--model",
+                model_dir,
+                "--drop-layers",
+                "2",
+                "--calib",
+                "calib.jsonl",
+                "--device",
+                "cpu",
+                "--output-dir",
+                str(out_dir),
+                "--plan-only",
+            ],
         )
         assert r.exit_code == 0, (r.output, repr(r.exception))
         assert not (out_dir / "model").exists()
@@ -581,8 +622,12 @@ class TestShrinkCli:
         monkeypatch.chdir(tmp_path)
         tok = _tiny_tokenizer()
         cfg = GPTNeoXConfig(
-            hidden_size=32, intermediate_size=64, num_hidden_layers=6,
-            num_attention_heads=4, vocab_size=len(tok), max_position_embeddings=512,
+            hidden_size=32,
+            intermediate_size=64,
+            num_hidden_layers=6,
+            num_attention_heads=4,
+            vocab_size=len(tok),
+            max_position_embeddings=512,
         )
         mdir = tmp_path / "neox"
         GPTNeoXForCausalLM(cfg).save_pretrained(str(mdir))
@@ -591,8 +636,17 @@ class TestShrinkCli:
         calib.write_text('{"text":"hi there"}\n', encoding="utf-8")
         r = CliRunner().invoke(
             app,
-            ["shrink", "--model", str(mdir), "--drop-layers", "2",
-             "--calib", "calib.jsonl", "--device", "cpu"],
+            [
+                "shrink",
+                "--model",
+                str(mdir),
+                "--drop-layers",
+                "2",
+                "--calib",
+                "calib.jsonl",
+                "--device",
+                "cpu",
+            ],
         )
         assert r.exit_code == 1, (r.output, repr(r.exception))
         assert "support" in r.output.lower() or "support" in str(r.exception).lower()
@@ -627,14 +681,22 @@ class TestHeal:
 
         few = load_config_from_string(
             _build_heal_config_yaml(
-                pruned_dir="./m", teacher="t", heal_data="./h.jsonl",
-                steps=10, out_dir="./o", heal_rows=100,
+                pruned_dir="./m",
+                teacher="t",
+                heal_data="./h.jsonl",
+                steps=10,
+                out_dir="./o",
+                heal_rows=100,
             )
         )
         many = load_config_from_string(
             _build_heal_config_yaml(
-                pruned_dir="./m", teacher="t", heal_data="./h.jsonl",
-                steps=800, out_dir="./o", heal_rows=100,
+                pruned_dir="./m",
+                teacher="t",
+                heal_data="./h.jsonl",
+                steps=800,
+                out_dir="./o",
+                heal_rows=100,
             )
         )
         assert many.training.epochs > few.training.epochs
@@ -665,9 +727,25 @@ class TestHeal:
         out_dir = tmp_path / "shrunk_h"
         r = CliRunner().invoke(
             app,
-            ["shrink", "--model", model_dir, "--drop-layers", "2",
-             "--calib", "calib.jsonl", "--heal", "heal.jsonl", "--heal-steps", "5",
-             "--device", "cpu", "--output-dir", str(out_dir), "--tolerance", "5.0"],
+            [
+                "shrink",
+                "--model",
+                model_dir,
+                "--drop-layers",
+                "2",
+                "--calib",
+                "calib.jsonl",
+                "--heal",
+                "heal.jsonl",
+                "--heal-steps",
+                "5",
+                "--device",
+                "cpu",
+                "--output-dir",
+                str(out_dir),
+                "--tolerance",
+                "5.0",
+            ],
         )
         assert r.exit_code == 0, (r.output, repr(r.exception))
         report = json.loads((out_dir / "shrink_report.json").read_text(encoding="utf-8"))
@@ -693,8 +771,19 @@ class TestHeal:
         monkeypatch.setenv("HF_HUB_OFFLINE", "1")
         r = CliRunner().invoke(
             app,
-            ["shrink", "--model", str(model_dir), "--drop-layers", "2",
-             "--calib", "calib.jsonl", "--heal", str(outside), "--device", "cpu"],
+            [
+                "shrink",
+                "--model",
+                str(model_dir),
+                "--drop-layers",
+                "2",
+                "--calib",
+                "calib.jsonl",
+                "--heal",
+                str(outside),
+                "--device",
+                "cpu",
+            ],
         )
         assert r.exit_code == 1, (r.output, repr(r.exception))
         assert "cwd" in r.output.lower()
@@ -783,9 +872,19 @@ class TestReviewFixes:
         )
         r = CliRunner().invoke(
             app,
-            ["shrink", "--model", str(model_dir), "--drop-layers", "2",
-             "--calib", "calib.jsonl", "--device", "cpu",
-             "--output-dir", str(tmp_path / "escape")],
+            [
+                "shrink",
+                "--model",
+                str(model_dir),
+                "--drop-layers",
+                "2",
+                "--calib",
+                "calib.jsonl",
+                "--device",
+                "cpu",
+                "--output-dir",
+                str(tmp_path / "escape"),
+            ],
         )
         assert r.exit_code == 1, (r.output, repr(r.exception))
         assert "must stay under cwd" in " ".join(_strip_ansi(r.output).split())
@@ -798,8 +897,12 @@ class TestReviewFixes:
 
         with pytest.raises(typer.BadParameter):
             _build_heal_config_yaml(
-                pruned_dir="./m", teacher="t", heal_data="./h.jsonl",
-                steps=1_000_000, out_dir="./o", heal_rows=1,
+                pruned_dir="./m",
+                teacher="t",
+                heal_data="./h.jsonl",
+                steps=1_000_000,
+                out_dir="./o",
+                heal_rows=1,
             )
 
     def test_perplexity_no_top_level_math_import_uses_isnan(self):
@@ -828,8 +931,9 @@ class TestReviewFixes:
         base = AutoModelForCausalLM.from_pretrained(str(base_dir))
         peft_model = get_peft_model(
             base,
-            LoraConfig(r=4, lora_alpha=8, target_modules=["q_proj", "v_proj"],
-                       task_type=TaskType.CAUSAL_LM),
+            LoraConfig(
+                r=4, lora_alpha=8, target_modules=["q_proj", "v_proj"], task_type=TaskType.CAUSAL_LM
+            ),
         )
         peft_model.save_pretrained(str(adapter_dir))
 
@@ -858,13 +962,24 @@ class TestReviewFixes:
         out_dir.mkdir()
         escape_target = tmp_path / "escape_target"
         escape_target.mkdir()
-        _os.symlink(str(escape_target), str(out_dir / "model"),
-                    target_is_directory=True)
+        _os.symlink(str(escape_target), str(out_dir / "model"), target_is_directory=True)
         r = CliRunner().invoke(
             app,
-            ["shrink", "--model", model_dir, "--drop-layers", "2",
-             "--calib", "calib.jsonl", "--device", "cpu",
-             "--output-dir", str(out_dir), "--tolerance", "5.0"],
+            [
+                "shrink",
+                "--model",
+                model_dir,
+                "--drop-layers",
+                "2",
+                "--calib",
+                "calib.jsonl",
+                "--device",
+                "cpu",
+                "--output-dir",
+                str(out_dir),
+                "--tolerance",
+                "5.0",
+            ],
         )
         assert r.exit_code == 1, (r.output, repr(r.exception))
         assert "symlink" in r.output.lower()
@@ -894,9 +1009,21 @@ class TestReviewFixes:
         out_dir = tmp_path / "shrunk_ds"
         r = CliRunner().invoke(
             app,
-            ["shrink", "--model", model_dir, "--drop-layers", "2",
-             "--calib", "calib.jsonl", "--device", "cpu",
-             "--output-dir", str(out_dir), "--tolerance", "0.10"],
+            [
+                "shrink",
+                "--model",
+                model_dir,
+                "--drop-layers",
+                "2",
+                "--calib",
+                "calib.jsonl",
+                "--device",
+                "cpu",
+                "--output-dir",
+                str(out_dir),
+                "--tolerance",
+                "0.10",
+            ],
         )
         assert r.exit_code == 2, (r.output, repr(r.exception))
 
@@ -919,10 +1046,16 @@ class TestRunHeal:
         (tmp_path / "model").mkdir()
         seen = {}
         monkeypatch.setattr("subprocess.run", lambda *a, **k: _StubProc(returncode=0))
-        monkeypatch.setattr(sc, "_fuse_adapter",
-                            lambda **kw: seen.update(kw))
-        sc._run_heal(pruned_dir="./model", teacher="t", heal_data="./h.jsonl",
-                     steps=5, out_dir="./adapter", heal_rows=10, trc=False)
+        monkeypatch.setattr(sc, "_fuse_adapter", lambda **kw: seen.update(kw))
+        sc._run_heal(
+            pruned_dir="./model",
+            teacher="t",
+            heal_data="./h.jsonl",
+            steps=5,
+            out_dir="./adapter",
+            heal_rows=10,
+            trc=False,
+        )
         assert seen["base_dir"] == "./model"
         assert seen["adapter_dir"] == "./adapter"
         assert (tmp_path / "heal_config.yaml").exists()
@@ -937,8 +1070,14 @@ class TestRunHeal:
         )
         monkeypatch.setattr(sc, "_fuse_adapter", lambda **kw: None)
         with pytest.raises(RuntimeError, match="heal distill failed"):
-            sc._run_heal(pruned_dir="./model", teacher="t", heal_data="./h.jsonl",
-                         steps=5, out_dir="./adapter", heal_rows=10)
+            sc._run_heal(
+                pruned_dir="./model",
+                teacher="t",
+                heal_data="./h.jsonl",
+                steps=5,
+                out_dir="./adapter",
+                heal_rows=10,
+            )
 
     def test_run_heal_reports_rendered_config_validation_error(self, tmp_path, monkeypatch):
         import typer
@@ -973,9 +1112,7 @@ class TestRunHeal:
         messages: list[str] = []
         monkeypatch.setattr(
             "soup_cli.config.loader.load_config_from_string",
-            lambda _yaml: (_ for _ in ()).throw(
-                ValueError("bad \x1b[2J[bold red]field[/]")
-            ),
+            lambda _yaml: (_ for _ in ()).throw(ValueError("bad \x1b[2J[bold red]field[/]")),
         )
         monkeypatch.setattr(sc.console, "print", lambda message: messages.append(message))
 
@@ -999,11 +1136,18 @@ class TestRunHeal:
 
         monkeypatch.chdir(tmp_path)
         (tmp_path / "model").mkdir()
-        monkeypatch.setattr("subprocess.run",
-                            lambda *a, **k: _StubProc(returncode=1, stderr=b"a\x1bb"))
+        monkeypatch.setattr(
+            "subprocess.run", lambda *a, **k: _StubProc(returncode=1, stderr=b"a\x1bb")
+        )
         with pytest.raises(RuntimeError) as exc:
-            sc._run_heal(pruned_dir="./model", teacher="t", heal_data="./h.jsonl",
-                         steps=5, out_dir="./adapter", heal_rows=10)
+            sc._run_heal(
+                pruned_dir="./model",
+                teacher="t",
+                heal_data="./h.jsonl",
+                steps=5,
+                out_dir="./adapter",
+                heal_rows=10,
+            )
         assert "\x1b" not in str(exc.value)
 
     def test_timeout_raises(self, tmp_path, monkeypatch):
@@ -1019,8 +1163,14 @@ class TestRunHeal:
 
         monkeypatch.setattr("subprocess.run", _boom)
         with pytest.raises(RuntimeError, match="timeout"):
-            sc._run_heal(pruned_dir="./model", teacher="t", heal_data="./h.jsonl",
-                         steps=5, out_dir="./adapter", heal_rows=10)
+            sc._run_heal(
+                pruned_dir="./model",
+                teacher="t",
+                heal_data="./h.jsonl",
+                steps=5,
+                out_dir="./adapter",
+                heal_rows=10,
+            )
 
     def test_device_cpu_hides_gpu_in_subprocess_env(self, tmp_path, monkeypatch):
         """device='cpu' must run the heal with CUDA_VISIBLE_DEVICES=-1 so the
@@ -1037,8 +1187,15 @@ class TestRunHeal:
 
         monkeypatch.setattr("subprocess.run", _capture)
         monkeypatch.setattr(sc, "_fuse_adapter", lambda **kw: None)
-        sc._run_heal(pruned_dir="./model", teacher="t", heal_data="./h.jsonl",
-                     steps=5, out_dir="./adapter", heal_rows=10, device="cpu")
+        sc._run_heal(
+            pruned_dir="./model",
+            teacher="t",
+            heal_data="./h.jsonl",
+            steps=5,
+            out_dir="./adapter",
+            heal_rows=10,
+            device="cpu",
+        )
         assert seen["env"]["CUDA_VISIBLE_DEVICES"] == "-1"
 
     def test_config_has_gradient_checkpointing_and_batch1(self):
@@ -1046,9 +1203,14 @@ class TestRunHeal:
         from soup_cli.config.loader import load_config_from_string
 
         cfg = load_config_from_string(
-            _build_heal_config_yaml(pruned_dir="./m", teacher="t",
-                                    heal_data="./h.jsonl", steps=8, out_dir="./o",
-                                    heal_rows=8)
+            _build_heal_config_yaml(
+                pruned_dir="./m",
+                teacher="t",
+                heal_data="./h.jsonl",
+                steps=8,
+                out_dir="./o",
+                heal_rows=8,
+            )
         )
         assert cfg.training.batch_size == 1
         assert cfg.training.gradient_checkpointing is True
@@ -1163,8 +1325,9 @@ class TestExtractText:
     def test_messages_join(self):
         from soup_cli.commands.shrink import _extract_text
 
-        row = {"messages": [{"role": "user", "content": "a"},
-                            {"role": "assistant", "content": "b"}]}
+        row = {
+            "messages": [{"role": "user", "content": "a"}, {"role": "assistant", "content": "b"}]
+        }
         assert _extract_text(row) == "a\nb"
 
     def test_text_precedence_over_messages(self):
@@ -1215,7 +1378,8 @@ class TestLoadCalibEdges:
 
         monkeypatch.setattr(sc, "_MAX_CALIB_ROWS", 3)
         prompts = self._run(
-            tmp_path, monkeypatch,
+            tmp_path,
+            monkeypatch,
             "\n".join('{"text":"row %d"}' % i for i in range(10)),
         )
         assert len(prompts) == 3
@@ -1299,8 +1463,9 @@ class TestDecideShrinkBoundaries:
     def test_just_past_tolerance_dont_ship(self):
         from soup_cli.utils.shrink import DECISION_DONT_SHIP, decide_shrink
 
-        v = decide_shrink(10.0, 10.0 * (1.10 + 5e-9), tolerance=0.10,
-                          layers_before=30, layers_after=24)
+        v = decide_shrink(
+            10.0, 10.0 * (1.10 + 5e-9), tolerance=0.10, layers_before=30, layers_after=24
+        )
         assert v.decision == DECISION_DONT_SHIP
 
     def test_match_keywords_on_validation(self):
@@ -1328,9 +1493,7 @@ class TestCommandsNoTopLevelTorch:
                 names += [a.name for a in node.names]
             elif isinstance(node, ast.ImportFrom):
                 names.append(node.module or "")
-        assert not any(
-            m.split(".")[0] in {"torch", "transformers", "peft"} for m in names
-        ), names
+        assert not any(m.split(".")[0] in {"torch", "transformers", "peft"} for m in names), names
 
 
 class TestFuseAdapterSymlinkGuard:

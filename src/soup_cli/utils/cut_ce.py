@@ -124,9 +124,7 @@ def apply_cut_ce(model_name: str) -> bool:
     return False
 
 
-def validate_cut_ce_config(
-    use_cut_ce: bool, backend: str, device: str
-) -> list[str]:
+def validate_cut_ce_config(use_cut_ce: bool, backend: str, device: str) -> list[str]:
     """Validate Cut Cross-Entropy configuration.
 
     Returns a list of error messages. Empty list means valid.
@@ -138,8 +136,7 @@ def validate_cut_ce_config(
 
     if not check_cut_ce_available():
         errors.append(
-            "cut_cross_entropy is not installed. "
-            "Install it with: pip install cut-cross-entropy"
+            "cut_cross_entropy is not installed. Install it with: pip install cut-cross-entropy"
         )
 
     if backend == "unsloth":
@@ -150,14 +147,10 @@ def validate_cut_ce_config(
 
     if backend == "mlx":
         errors.append(
-            "Cut Cross-Entropy is not supported on the mlx backend. "
-            "Use backend: transformers."
+            "Cut Cross-Entropy is not supported on the mlx backend. Use backend: transformers."
         )
 
     if device != "cuda":
-        errors.append(
-            "Cut Cross-Entropy requires CUDA. "
-            f"Current device: {device}."
-        )
+        errors.append(f"Cut Cross-Entropy requires CUDA. Current device: {device}.")
 
     return errors

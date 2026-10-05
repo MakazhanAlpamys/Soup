@@ -392,9 +392,7 @@ class TestResolveTokenizer:
             captured["trust_remote_code"] = trust_remote_code
             return _FakeTokenizer()
 
-        monkeypatch.setattr(
-            transformers.AutoTokenizer, "from_pretrained", fake_from_pretrained
-        )
+        monkeypatch.setattr(transformers.AutoTokenizer, "from_pretrained", fake_from_pretrained)
         from soup_cli.utils.data_doctor import resolve_tokenizer
 
         result = resolve_tokenizer("some-org/some-model", trust_remote_code=True)
@@ -407,9 +405,7 @@ class TestResolveTokenizer:
         def fake_from_pretrained(model_id, trust_remote_code=False):
             raise OSError("model not found on the Hub")
 
-        monkeypatch.setattr(
-            transformers.AutoTokenizer, "from_pretrained", fake_from_pretrained
-        )
+        monkeypatch.setattr(transformers.AutoTokenizer, "from_pretrained", fake_from_pretrained)
         from soup_cli.utils.data_doctor import resolve_tokenizer
 
         with pytest.raises(ValueError, match="nonexistent/model") as excinfo:
@@ -937,7 +933,10 @@ class TestRunDoctor:
         assert default_eos.verdict == "OK", default_eos.message
 
         train_field_report = run_doctor(
-            rows, tok, fmt="chatml", max_length=2048,
+            rows,
+            tok,
+            fmt="chatml",
+            max_length=2048,
             train_on_messages_with_train_field=True,
         )
         train_field_eos = next(c for c in train_field_report.checks if c.name == "eos_in_labels")
@@ -951,9 +950,7 @@ class TestRunDoctor:
         with pytest.raises(TypeError):
             run_doctor(rows, _FakeTokenizer(), fmt="chatml", train_on_responses_only="yes")
         with pytest.raises(TypeError):
-            run_doctor(
-                rows, _FakeTokenizer(), fmt="chatml", train_on_messages_with_train_field=1
-            )
+            run_doctor(rows, _FakeTokenizer(), fmt="chatml", train_on_messages_with_train_field=1)
 
 
 # ---------------------------------------------------------------------------
@@ -991,7 +988,11 @@ class TestRenderMaskPreview:
 
         rows = [_chat_row(("user", "hi"), ("assistant", "hello"))]
         previews = render_mask_preview(
-            rows, _FakeTokenizer(), fmt="chatml", n=1, train_on_messages_with_train_field=True,
+            rows,
+            _FakeTokenizer(),
+            fmt="chatml",
+            n=1,
+            train_on_messages_with_train_field=True,
         )
         assert previews[0].strategy == "per_message_train"
 
@@ -1000,7 +1001,11 @@ class TestRenderMaskPreview:
 
         rows = [_chat_row(("user", "hi"), ("assistant", "hello"))]
         previews = render_mask_preview(
-            rows, _FakeTokenizer(), fmt="chatml", n=1, train_on_responses_only=False,
+            rows,
+            _FakeTokenizer(),
+            fmt="chatml",
+            n=1,
+            train_on_responses_only=False,
         )
         assert previews[0].strategy == "legacy_text"
         assert all(t.trained for t in previews[0].tokens)
@@ -1014,8 +1019,12 @@ class TestRenderMaskPreview:
 
         rows = [_chat_row(("user", "hi"), ("assistant", "x" * 200))]
         previews = render_mask_preview(
-            rows, _FakeTokenizer(), fmt="chatml", n=1,
-            train_on_responses_only=False, max_length=10,
+            rows,
+            _FakeTokenizer(),
+            fmt="chatml",
+            n=1,
+            train_on_responses_only=False,
+            max_length=10,
         )
         assert len(previews) == 1
         assert len(previews[0].tokens) == 10
@@ -1837,8 +1846,15 @@ class TestDoctorCli:
         result = runner.invoke(
             app,
             [
-                "data", "doctor", str(data_path), "--model", "fake/model",
-                "--format", "raft", "--show-mask", "1",
+                "data",
+                "doctor",
+                str(data_path),
+                "--model",
+                "fake/model",
+                "--format",
+                "raft",
+                "--show-mask",
+                "1",
             ],
         )
         assert result.exit_code == 0, result.output
@@ -2035,9 +2051,7 @@ class TestLintCli:
         _write_jsonl(data_path, [{"prompt": "q", "chosen": "a", "rejected": "b"}])
         from soup_cli.cli import app
 
-        result = runner.invoke(
-            app, ["data", "lint", str(data_path), "--output", "../outside.json"]
-        )
+        result = runner.invoke(app, ["data", "lint", str(data_path), "--output", "../outside.json"])
         assert result.exit_code == 3
 
     def test_model_flag_uses_tokenizer_for_length_bias(self, tmp_path, monkeypatch):
@@ -2048,19 +2062,14 @@ class TestLintCli:
         data_path = tmp_path / "pref.jsonl"
         _write_jsonl(
             data_path,
-            [
-                {"prompt": f"q{i}", "chosen": "a" * 200, "rejected": "b"}
-                for i in range(10)
-            ],
+            [{"prompt": f"q{i}", "chosen": "a" * 200, "rejected": "b"} for i in range(10)],
         )
 
         _patch_tokenizer(monkeypatch)
 
         from soup_cli.cli import app
 
-        result = runner.invoke(
-            app, ["data", "lint", str(data_path), "--model", "fake/model"]
-        )
+        result = runner.invoke(app, ["data", "lint", str(data_path), "--model", "fake/model"])
         assert result.exit_code == 2, result.output
         assert "length_bias" in result.output.lower() or "cohen" in result.output.lower()
 
@@ -2101,9 +2110,7 @@ class TestLintCli:
 
         from soup_cli.cli import app
 
-        result = runner.invoke(
-            app, ["data", "lint", str(data_path), "--model", "fake/model"]
-        )
+        result = runner.invoke(app, ["data", "lint", str(data_path), "--model", "fake/model"])
         # chosen="aaaa" (4 char-tokens) vs rejected="b" (1) via the TypeError
         # fallback's char-level tokenizer -> constant, zero-variance Cohen's
         # d=1.0 -> MAJOR.
@@ -2122,9 +2129,7 @@ class TestLintCli:
 
         from soup_cli.cli import app
 
-        result = runner.invoke(
-            app, ["data", "lint", str(data_path), "--model", "fake/model"]
-        )
+        result = runner.invoke(app, ["data", "lint", str(data_path), "--model", "fake/model"])
         # Both "aaaa" and "b" are 1 word -> word-count fallback gives d=0.0 -> OK.
         assert result.exit_code == 0, result.output
         assert "length_bias" in result.output.lower()

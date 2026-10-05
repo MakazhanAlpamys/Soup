@@ -163,10 +163,12 @@ class TestGetMoETargetModules:
 
     def test_fallback_expert_modules(self):
         """If no expert modules found, should include fallback patterns."""
-        model = self._make_moe_model(named_modules=[
-            ("model.layers.0.self_attn.q_proj", MagicMock()),
-            ("model.layers.0.some_custom_layer", MagicMock()),
-        ])
+        model = self._make_moe_model(
+            named_modules=[
+                ("model.layers.0.self_attn.q_proj", MagicMock()),
+                ("model.layers.0.some_custom_layer", MagicMock()),
+            ]
+        )
         targets = get_moe_target_modules(model)
         # Should fall back to standard expert patterns
         assert "gate_proj" in targets
@@ -188,8 +190,13 @@ class TestGetMoEInfo:
         config.num_experts_per_tok = 2
         config.model_type = "mixtral"
         # Set other keys to None
-        for key in ("num_experts", "n_routed_experts", "moe_num_experts",
-                     "num_experts_per_token", "num_selected_experts"):
+        for key in (
+            "num_experts",
+            "n_routed_experts",
+            "moe_num_experts",
+            "num_experts_per_token",
+            "num_selected_experts",
+        ):
             setattr(config, key, None)
         model.config = config
 
@@ -205,8 +212,7 @@ class TestGetMoEInfo:
         for key in MOE_CONFIG_KEYS:
             setattr(config, key, None)
         # Also set active-expert keys to None to prevent MagicMock auto-creation
-        for key in ("num_experts_per_tok", "num_experts_per_token",
-                     "num_selected_experts"):
+        for key in ("num_experts_per_tok", "num_experts_per_token", "num_selected_experts"):
             setattr(config, key, None)
         config.model_type = "llama"
         model.config = config
@@ -227,8 +233,13 @@ class TestGetMoEInfo:
         config.num_experts = 128
         config.num_experts_per_tok = 8
         config.model_type = "qwen3_moe"
-        for key in ("num_local_experts", "n_routed_experts", "moe_num_experts",
-                     "num_experts_per_token", "num_selected_experts"):
+        for key in (
+            "num_local_experts",
+            "n_routed_experts",
+            "moe_num_experts",
+            "num_experts_per_token",
+            "num_selected_experts",
+        ):
             setattr(config, key, None)
         model.config = config
 
@@ -247,8 +258,13 @@ class TestGetMoEInfo:
         text_config.num_experts = 128
         text_config.num_experts_per_tok = 8
         text_config.model_type = "qwen3_5_moe_text"
-        for key in ("num_local_experts", "n_routed_experts", "moe_num_experts",
-                     "num_experts_per_token", "num_selected_experts"):
+        for key in (
+            "num_local_experts",
+            "n_routed_experts",
+            "moe_num_experts",
+            "num_experts_per_token",
+            "num_selected_experts",
+        ):
             setattr(text_config, key, None)
         config.text_config = text_config
         model.config = config
@@ -265,8 +281,13 @@ class TestGetMoEInfo:
         config.n_routed_experts = 256
         config.num_experts_per_token = 8
         config.model_type = "deepseek_v3"
-        for key in ("num_local_experts", "num_experts", "moe_num_experts",
-                     "num_experts_per_tok", "num_selected_experts"):
+        for key in (
+            "num_local_experts",
+            "num_experts",
+            "moe_num_experts",
+            "num_experts_per_tok",
+            "num_selected_experts",
+        ):
             setattr(config, key, None)
         model.config = config
 
@@ -312,9 +333,17 @@ class TestDetectAdditionalMoETypes:
         model.config = config
         return model
 
-    @pytest.mark.parametrize("model_type", [
-        "jetmoe", "arctic", "grok", "qwen2_moe", "deepseek_v2", "qwen3_5_moe",
-    ])
+    @pytest.mark.parametrize(
+        "model_type",
+        [
+            "jetmoe",
+            "arctic",
+            "grok",
+            "qwen2_moe",
+            "deepseek_v2",
+            "qwen3_5_moe",
+        ],
+    )
     def test_detect_moe_type(self, model_type):
         """All listed MoE model types should be detected."""
         model = self._make_model(model_type)
@@ -341,12 +370,14 @@ class TestDeepSeekExpertNaming:
 
     def test_w1_w2_w3_discovered(self):
         """DeepSeek w1/w2/w3 expert module names should be discovered."""
-        model = self._make_moe_model([
-            ("model.layers.0.self_attn.q_proj", MagicMock()),
-            ("model.layers.0.moe.experts.0.w1", MagicMock()),
-            ("model.layers.0.moe.experts.0.w2", MagicMock()),
-            ("model.layers.0.moe.experts.0.w3", MagicMock()),
-        ])
+        model = self._make_moe_model(
+            [
+                ("model.layers.0.self_attn.q_proj", MagicMock()),
+                ("model.layers.0.moe.experts.0.w1", MagicMock()),
+                ("model.layers.0.moe.experts.0.w2", MagicMock()),
+                ("model.layers.0.moe.experts.0.w3", MagicMock()),
+            ]
+        )
         targets = get_moe_target_modules(model)
         assert "w1" in targets
         assert "w2" in targets
@@ -354,11 +385,13 @@ class TestDeepSeekExpertNaming:
 
     def test_w1_w2_w3_combined_with_attention(self):
         """Expert targets should be combined with standard attention targets."""
-        model = self._make_moe_model([
-            ("model.layers.0.self_attn.q_proj", MagicMock()),
-            ("model.layers.0.moe.experts.0.w1", MagicMock()),
-            ("model.layers.0.moe.experts.0.w2", MagicMock()),
-        ])
+        model = self._make_moe_model(
+            [
+                ("model.layers.0.self_attn.q_proj", MagicMock()),
+                ("model.layers.0.moe.experts.0.w1", MagicMock()),
+                ("model.layers.0.moe.experts.0.w2", MagicMock()),
+            ]
+        )
         targets = get_moe_target_modules(model)
         assert "q_proj" in targets
         assert "w1" in targets

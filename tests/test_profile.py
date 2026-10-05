@@ -138,11 +138,17 @@ class TestEstimateActivationMemory:
         from soup_cli.utils.profiler import estimate_activation_memory
 
         normal = estimate_activation_memory(
-            batch_size=4, seq_len=2048, hidden_size=4096, num_layers=32,
+            batch_size=4,
+            seq_len=2048,
+            hidden_size=4096,
+            num_layers=32,
             gradient_checkpointing=False,
         )
         checkpointed = estimate_activation_memory(
-            batch_size=4, seq_len=2048, hidden_size=4096, num_layers=32,
+            batch_size=4,
+            seq_len=2048,
+            hidden_size=4096,
+            num_layers=32,
             gradient_checkpointing=True,
         )
         assert checkpointed < normal
@@ -226,9 +232,7 @@ class TestEstimateTrainingTime:
     def test_basic_time(self):
         from soup_cli.utils.profiler import estimate_training_time
 
-        minutes = estimate_training_time(
-            dataset_size=10000, epochs=3, samples_per_sec=0.5
-        )
+        minutes = estimate_training_time(dataset_size=10000, epochs=3, samples_per_sec=0.5)
         assert minutes > 0
 
     def test_more_epochs_more_time(self):
@@ -241,9 +245,7 @@ class TestEstimateTrainingTime:
     def test_zero_speed_returns_inf(self):
         from soup_cli.utils.profiler import estimate_training_time
 
-        minutes = estimate_training_time(
-            dataset_size=10000, epochs=3, samples_per_sec=0.0
-        )
+        minutes = estimate_training_time(dataset_size=10000, epochs=3, samples_per_sec=0.0)
         assert minutes == float("inf")
 
 
@@ -429,9 +431,7 @@ class TestProfileCLI:
             "    r: 64\n"
             "output: ./output\n"
         )
-        result = runner.invoke(
-            app, ["profile", "--config", str(config_file), "--gpu", "a100"]
-        )
+        result = runner.invoke(app, ["profile", "--config", str(config_file), "--gpu", "a100"])
         assert result.exit_code == 0
         assert "A100" in result.output or "80" in result.output
 
@@ -582,9 +582,7 @@ class TestTrainableParamsEstimate:
     def test_lora_params(self):
         from soup_cli.utils.profiler import estimate_trainable_params
 
-        params = estimate_trainable_params(
-            model_params_b=7.0, lora_r=64, hidden_size=4096
-        )
+        params = estimate_trainable_params(model_params_b=7.0, lora_r=64, hidden_size=4096)
         assert params > 0
         # LoRA should be a small fraction of total
         assert params < 7_000_000_000 * 0.05

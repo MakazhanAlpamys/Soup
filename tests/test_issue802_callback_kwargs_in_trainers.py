@@ -327,9 +327,7 @@ class TestTrainerWrapperBehaviouralCallbackWiring:
     on their train() execution path rather than relying on unpinned defaults (#802).
     """
 
-    def test_grpo_wrapper_train_wires_spike_and_grad_accum_config(
-        self, tmp_path: Path
-    ) -> None:
+    def test_grpo_wrapper_train_wires_spike_and_grad_accum_config(self, tmp_path: Path) -> None:
         from soup_cli.trainer.grpo import GRPOTrainerWrapper
 
         wrapper = object.__new__(GRPOTrainerWrapper)
@@ -355,18 +353,14 @@ class TestTrainerWrapperBehaviouralCallbackWiring:
 
         wrapper.train(display=MagicMock())
 
-        soup_cbs = [
-            cb for cb in captured_callbacks if isinstance(cb, SoupTrainerCallback)
-        ]
+        soup_cbs = [cb for cb in captured_callbacks if isinstance(cb, SoupTrainerCallback)]
         assert len(soup_cbs) == 1
         cb = soup_cbs[0]
         assert cb._spike_recovery_enabled is True
         assert cb._grad_accum_enabled is True
         assert cb._grad_accum_batch == 4
 
-    def test_dpo_wrapper_train_wires_spike_and_grad_accum_config(
-        self, tmp_path: Path
-    ) -> None:
+    def test_dpo_wrapper_train_wires_spike_and_grad_accum_config(self, tmp_path: Path) -> None:
         from soup_cli.trainer.dpo import DPOTrainerWrapper
 
         wrapper = object.__new__(DPOTrainerWrapper)
@@ -392,9 +386,7 @@ class TestTrainerWrapperBehaviouralCallbackWiring:
 
         wrapper.train(display=MagicMock())
 
-        soup_cbs = [
-            cb for cb in captured_callbacks if isinstance(cb, SoupTrainerCallback)
-        ]
+        soup_cbs = [cb for cb in captured_callbacks if isinstance(cb, SoupTrainerCallback)]
         assert len(soup_cbs) == 1
         cb = soup_cbs[0]
         assert cb._spike_recovery_enabled is True

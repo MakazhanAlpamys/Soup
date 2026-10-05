@@ -88,9 +88,7 @@ class TestValidateSourceAdapter:
         (adapter / "adapter_config.json").write_text("{}", encoding="utf-8")
         assert validate_source_adapter(str(adapter)).endswith("adapter")
 
-    def test_outside_cwd_rejected(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_outside_cwd_rejected(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from soup_cli.utils.apple_adapter import validate_source_adapter
 
         outside = tmp_path / "outside"
@@ -103,9 +101,7 @@ class TestValidateSourceAdapter:
         with pytest.raises(ValueError):
             validate_source_adapter(str(adapter))
 
-    def test_non_directory_rejected(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_non_directory_rejected(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from soup_cli.utils.apple_adapter import validate_source_adapter
 
         monkeypatch.chdir(tmp_path)
@@ -122,9 +118,7 @@ class TestValidateSourceAdapter:
 
 
 class TestAppleAdapterPlan:
-    def test_frozen(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_frozen(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from soup_cli.utils.apple_adapter import AppleAdapterPlan
 
         monkeypatch.chdir(tmp_path)
@@ -141,9 +135,7 @@ class TestAppleAdapterPlan:
         with pytest.raises(dataclasses.FrozenInstanceError):
             plan.sign = True  # type: ignore[misc]
 
-    def test_invalid_direction(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_invalid_direction(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from soup_cli.utils.apple_adapter import AppleAdapterPlan
 
         monkeypatch.chdir(tmp_path)
@@ -159,9 +151,7 @@ class TestAppleAdapterPlan:
                 sign=False,
             )
 
-    def test_sign_must_be_bool(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_sign_must_be_bool(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from soup_cli.utils.apple_adapter import AppleAdapterPlan
 
         monkeypatch.chdir(tmp_path)
@@ -218,9 +208,7 @@ class TestCli:
         result = runner.invoke(app, ["apple-adapter", "--help"])
         assert result.exit_code == 0, (result.output, repr(result.exception))
 
-    def test_plan_only(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_plan_only(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from soup_cli.cli import app
 
         monkeypatch.chdir(tmp_path)
@@ -296,7 +284,8 @@ class TestSourceWiring:
     def test_no_top_level_heavy_imports(self) -> None:
         path = (
             Path(__file__).resolve().parent.parent
-            / "src" / "soup_cli"
+            / "src"
+            / "soup_cli"
             / "utils"
             / "apple_adapter.py"
         )

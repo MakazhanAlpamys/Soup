@@ -271,11 +271,7 @@ def run_live_diagnose(
         scores["refusal"] = _probe_failed("refusal", exc)
 
     # The dataset-driven probes need rows.
-    pairs = [
-        (_row_input(r), _row_output(r))
-        for r in rows
-        if isinstance(r, Mapping)
-    ]
+    pairs = [(_row_input(r), _row_output(r)) for r in rows if isinstance(r, Mapping)]
     pairs = [(p, t) for p, t in pairs if p and t]
 
     if pairs:
@@ -300,9 +296,7 @@ def run_live_diagnose(
             except (ValueError, TypeError) as exc:
                 scores["format"] = _probe_failed("format", exc)
         else:
-            scores["format"] = neutral_score(
-                "format", "dataset targets are not JSON"
-            )
+            scores["format"] = neutral_score("format", "dataset targets are not JSON")
 
         # --- mode_collapse (diversity over K completions) ---
         try:

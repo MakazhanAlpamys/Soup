@@ -326,9 +326,7 @@ _CASES = ("detector+echo_trap", "rm_ensemble", "kl_control+shaping", "pid_lagran
 
 class TestEvaluationLeavesTheSignalUntouched:
     @pytest.mark.parametrize("case", _CASES)
-    def test_state_is_bit_identical_with_and_without_evaluation(
-        self, tmp_path, monkeypatch, case
-    ):
+    def test_state_is_bit_identical_with_and_without_evaluation(self, tmp_path, monkeypatch, case):
         pytest.importorskip("transformers")
         monkeypatch.chdir(tmp_path)
         with_eval = _simulate(tmp_path / "with", case, evaluate=True)
@@ -395,8 +393,7 @@ def _real_grpo_run(root: Path, monkeypatch, *, eval_steps):
     trainer.args.num_iterations = 2
     trainer.args.max_steps = 4
     detector = next(
-        cb for cb in trainer.callback_handler.callbacks
-        if type(cb).__name__ == "RewardHackCallback"
+        cb for cb in trainer.callback_handler.callbacks if type(cb).__name__ == "RewardHackCallback"
     )
     seen = []
     on_step_end = detector.on_step_end

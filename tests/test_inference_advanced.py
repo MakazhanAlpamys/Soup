@@ -13,7 +13,7 @@ import pytest
 
 def _strip_ansi(text: str) -> str:
     """Remove ANSI escape codes from Rich-formatted output."""
-    return re.sub(r'\x1b\[[0-9;]*m', '', text)
+    return re.sub(r"\x1b\[[0-9;]*m", "", text)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -55,12 +55,15 @@ class TestPrefixCachingEngine:
         mock_engine_cls = MagicMock()
         mock_engine_cls.from_engine_args.return_value = mock_engine
 
-        with patch.dict("sys.modules", {
-            "vllm": MagicMock(
-                AsyncEngineArgs=mock_args_cls,
-                AsyncLLMEngine=mock_engine_cls,
-            ),
-        }):
+        with patch.dict(
+            "sys.modules",
+            {
+                "vllm": MagicMock(
+                    AsyncEngineArgs=mock_args_cls,
+                    AsyncLLMEngine=mock_engine_cls,
+                ),
+            },
+        ):
             from importlib import reload
 
             import soup_cli.utils.vllm as vllm_mod
@@ -80,12 +83,15 @@ class TestPrefixCachingEngine:
         mock_engine_cls = MagicMock()
         mock_engine_cls.from_engine_args.return_value = MagicMock()
 
-        with patch.dict("sys.modules", {
-            "vllm": MagicMock(
-                AsyncEngineArgs=mock_args_cls,
-                AsyncLLMEngine=mock_engine_cls,
-            ),
-        }):
+        with patch.dict(
+            "sys.modules",
+            {
+                "vllm": MagicMock(
+                    AsyncEngineArgs=mock_args_cls,
+                    AsyncLLMEngine=mock_engine_cls,
+                ),
+            },
+        ):
             from importlib import reload
 
             import soup_cli.utils.vllm as vllm_mod
@@ -185,6 +191,7 @@ class TestLoRAHotSwap:
         (adapter_dir / "adapter_config.json").write_text("{}")
 
         import os
+
         old_cwd = os.getcwd()
         os.chdir(tmp_path)
         try:
@@ -476,9 +483,7 @@ class TestRequestTracing:
     def test_build_tracer_returns_none_when_otel_missing(self):
         from soup_cli.utils.tracing import build_tracer
 
-        with patch(
-            "soup_cli.utils.tracing.is_otel_available", return_value=False
-        ):
+        with patch("soup_cli.utils.tracing.is_otel_available", return_value=False):
             # Should not raise, just return None + log
             assert build_tracer(enabled=True) is None
 

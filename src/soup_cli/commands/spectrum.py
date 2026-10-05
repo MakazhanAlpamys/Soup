@@ -9,6 +9,7 @@ a ``soup.yaml`` to fine-tune only the high-SNR layers (full FT, LoRA off).
 The scan is pure-numpy and runs on a CPU box even for very large models —
 peak RSS is the largest single weight matrix, not the whole model.
 """
+
 from __future__ import annotations
 
 from collections import defaultdict
@@ -40,9 +41,7 @@ def _spectrum() -> None:
     """
 
 
-def _render_table(
-    result: "ScanResult", kept: list[str], top_percent: float
-) -> None:
+def _render_table(result: "ScanResult", kept: list[str], top_percent: float) -> None:
     # Group by the same key as select_unfrozen_parameters (the layer-type
     # signature), so the "Kept" column can never desync from the selection.
     from soup_cli.utils.spectrum_scan import param_prefix
@@ -52,10 +51,7 @@ def _render_table(
     for layer in result.layers:
         groups[layer.group].append(layer)
 
-    table = Table(
-        title=f"Spectrum SNR — {escape(result.model)} "
-        f"(top {top_percent:g}% per group)"
-    )
+    table = Table(title=f"Spectrum SNR — {escape(result.model)} (top {top_percent:g}% per group)")
     table.add_column("Type")
     table.add_column("Group")
     table.add_column("Layers", justify="right")
@@ -78,9 +74,7 @@ def _render_table(
 
 @app.command()
 def scan(
-    model: str = typer.Option(
-        ..., "--model", "-m", help="HF Hub id or local model directory."
-    ),
+    model: str = typer.Option(..., "--model", "-m", help="HF Hub id or local model directory."),
     top_percent: float = typer.Option(
         50.0,
         "--top-percent",
@@ -128,22 +122,18 @@ def scan(
         raise typer.Exit(1) from exc
     except Exception as exc:  # hub validation / unexpected — friendly, no traceback
         console.print(
-            f"[red]Spectrum scan failed:[/] "
-            f"{escape(type(exc).__name__)}: {escape(str(exc))}"
+            f"[red]Spectrum scan failed:[/] {escape(type(exc).__name__)}: {escape(str(exc))}"
         )
         raise typer.Exit(1) from exc
 
     if not result.layers:
         console.print(
-            "[yellow]No scannable 2-D weight matrices found "
-            "(check --model and --modules).[/]"
+            "[yellow]No scannable 2-D weight matrices found (check --model and --modules).[/]"
         )
         raise typer.Exit(1)
 
     try:
-        kept = select_unfrozen_parameters(
-            result.layers, top_percent=top_percent, modules=modules
-        )
+        kept = select_unfrozen_parameters(result.layers, top_percent=top_percent, modules=modules)
     except ValueError as exc:
         console.print(f"[red]{escape(str(exc))}[/]")
         raise typer.Exit(2) from exc

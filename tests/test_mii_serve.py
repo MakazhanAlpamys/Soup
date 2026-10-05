@@ -318,9 +318,7 @@ class TestServeMiiCallSite:
             patch("uvicorn.run"),
         ):
             runner = CliRunner()
-            result = runner.invoke(
-                app, ["serve", "--model", str(model_dir), "--backend", "mii"]
-            )
+            result = runner.invoke(app, ["serve", "--model", str(model_dir), "--backend", "mii"])
         return result, captured, pipeline_captured, call_order, loader
 
     def test_serve_mii_passes_the_loaded_tokenizer_to_build_mii_app(self, tmp_path):
@@ -348,9 +346,7 @@ class TestServeMiiCallSite:
         only inspects `build_mii_app` would notice.
         """
         sentinel = object()
-        result, _, pipeline_captured, call_order, _ = self._invoke(
-            tmp_path, tokenizer=sentinel
-        )
+        result, _, pipeline_captured, call_order, _ = self._invoke(tmp_path, tokenizer=sentinel)
 
         assert pipeline_captured.get("called"), (
             f"create_mii_pipeline was never reached: {result.output}"

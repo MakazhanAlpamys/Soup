@@ -192,9 +192,7 @@ def test_prune_traces_strips_prefix(tmp_path, monkeypatch):
         {"prompt": "System: be nice.\nUser: bye", "output": "goodbye"},
         {"prompt": "System: be nice.\nUser: morning", "output": "good morning"},
     ]
-    input_path.write_text(
-        "\n".join(json.dumps(r) for r in rows), encoding="utf-8"
-    )
+    input_path.write_text("\n".join(json.dumps(r) for r in rows), encoding="utf-8")
 
     report = prune_traces(
         str(input_path),
@@ -223,9 +221,7 @@ def test_prune_traces_passthrough_when_no_prefix(tmp_path, monkeypatch):
         {"prompt": "beta", "output": "y"},
         {"prompt": "gamma", "output": "z"},
     ]
-    input_path.write_text(
-        "\n".join(json.dumps(r) for r in rows), encoding="utf-8"
-    )
+    input_path.write_text("\n".join(json.dumps(r) for r in rows), encoding="utf-8")
 
     report = prune_traces(str(input_path), output_path=str(output_path), min_frequency=0.95)
     assert report.prefix == ""
@@ -262,8 +258,11 @@ def test_prune_traces_missing_input(tmp_path, monkeypatch):
 
     monkeypatch.chdir(tmp_path)
     with pytest.raises(FileNotFoundError):
-        prune_traces(str(tmp_path / "missing.jsonl"), output_path=str(tmp_path / "o.jsonl"),
-                     min_frequency=0.95)
+        prune_traces(
+            str(tmp_path / "missing.jsonl"),
+            output_path=str(tmp_path / "o.jsonl"),
+            min_frequency=0.95,
+        )
 
 
 def test_prune_traces_invalid_min_frequency():

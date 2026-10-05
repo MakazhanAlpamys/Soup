@@ -28,9 +28,7 @@ if TYPE_CHECKING:
 
 
 # Module-level set so schema.py validators can reference the same source of truth.
-PREQUANTIZED_FORMATS: frozenset[str] = frozenset(
-    {"gptq", "awq", "aqlm", "eetq", "mxfp4", "fp8"}
-)
+PREQUANTIZED_FORMATS: frozenset[str] = frozenset({"gptq", "awq", "aqlm", "eetq", "mxfp4", "fp8"})
 
 
 def is_quant_menu_format(quantization: str) -> bool:
@@ -38,10 +36,8 @@ def is_quant_menu_format(quantization: str) -> bool:
     bit-rate plus ``gptq`` / ``awq`` / ``aqlm`` / ``eetq`` / ``mxfp4`` /
     ``fp8``. False for legacy ``4bit`` / ``8bit`` / ``none``.
     """
-    return (
-        quantization in PREQUANTIZED_FORMATS
-        or quantization.startswith("hqq:")
-    )
+    return quantization in PREQUANTIZED_FORMATS or quantization.startswith("hqq:")
+
 
 _NULL_BYTE = "\x00"
 
@@ -156,9 +152,7 @@ _HQQ_BITS: tuple[int, ...] = (1, 2, 3, 4, 5, 6, 8)
 def parse_hqq_bits(quantization: str) -> int:
     """Extract bit-rate from a ``hqq:Nbit`` string."""
     if not quantization.startswith("hqq:"):
-        raise ValueError(
-            f"build_hqq_config expects a 'hqq:Nbit' string, got {quantization!r}"
-        )
+        raise ValueError(f"build_hqq_config expects a 'hqq:Nbit' string, got {quantization!r}")
     suffix = quantization.split(":", 1)[1]
     # DoS cap — closed Literal in schema makes this defence-in-depth, but
     # public callers (Autopilot, recipe builders) might pass arbitrary strings.
@@ -171,9 +165,7 @@ def parse_hqq_bits(quantization: str) -> int:
     except ValueError as exc:
         raise ValueError(f"HQQ bits must be int, got {suffix!r}") from exc
     if bits not in _HQQ_BITS:
-        raise ValueError(
-            f"HQQ bits must be one of {_HQQ_BITS}; got {bits}"
-        )
+        raise ValueError(f"HQQ bits must be one of {_HQQ_BITS}; got {bits}")
     return bits
 
 
@@ -189,14 +181,8 @@ def build_hqq_config(
     other builders, callers translate to ``nbits`` at HfApi seam.
     """
     bits = parse_hqq_bits(quantization)
-    if (
-        isinstance(group_size, bool)
-        or not isinstance(group_size, int)
-        or group_size < 32
-    ):
-        raise ValueError(
-            f"HQQ group_size must be int >= 32, got {group_size!r}"
-        )
+    if isinstance(group_size, bool) or not isinstance(group_size, int) or group_size < 32:
+        raise ValueError(f"HQQ group_size must be int >= 32, got {group_size!r}")
     return {"bits": bits, "group_size": group_size}
 
 
@@ -257,26 +243,17 @@ def build_fp8_dequant_config() -> dict[str, Any]:
 # v0.38.0 plan), Axolotl docs/multipack-vs-quant.md, and bitsandbytes README.
 _INCOMPATIBLE: dict[tuple[str, str], str] = {
     ("hqq", "zero3"): (
-        "HQQ is incompatible with DeepSpeed ZeRO-3 "
-        "(LlamaFactory quantization.py:199)."
+        "HQQ is incompatible with DeepSpeed ZeRO-3 (LlamaFactory quantization.py:199)."
     ),
-    ("hqq", "fsdp"): (
-        "HQQ is incompatible with FSDP (state-dict assumes dense weights)."
-    ),
+    ("hqq", "fsdp"): ("HQQ is incompatible with FSDP (state-dict assumes dense weights)."),
     ("eetq", "zero3"): (
-        "EETQ is incompatible with DeepSpeed ZeRO-3 "
-        "(LlamaFactory quantization.py:211)."
+        "EETQ is incompatible with DeepSpeed ZeRO-3 (LlamaFactory quantization.py:211)."
     ),
-    ("eetq", "fsdp"): (
-        "EETQ is incompatible with FSDP (8-bit kernels assume single-device)."
-    ),
+    ("eetq", "fsdp"): ("EETQ is incompatible with FSDP (8-bit kernels assume single-device)."),
     ("aqlm", "zero3"): (
-        "AQLM is incompatible with DeepSpeed ZeRO-3 "
-        "(sharded codes break dequant)."
+        "AQLM is incompatible with DeepSpeed ZeRO-3 (sharded codes break dequant)."
     ),
-    ("aqlm", "fsdp"): (
-        "AQLM is incompatible with FSDP (sharded codes break dequant)."
-    ),
+    ("aqlm", "fsdp"): ("AQLM is incompatible with FSDP (sharded codes break dequant)."),
 }
 
 
@@ -294,9 +271,7 @@ def _quant_family(quantization: str) -> str:
     raise ValueError(f"unknown quantization {quantization!r}")
 
 
-_DS_ZERO3_TOKENS: frozenset[str] = frozenset(
-    {"zero3", "zero++", "zeropp", "zero_pp", "stage3"}
-)
+_DS_ZERO3_TOKENS: frozenset[str] = frozenset({"zero3", "zero++", "zeropp", "zero_pp", "stage3"})
 _DS_ZERO2_TOKENS: frozenset[str] = frozenset({"zero2", "stage2"})
 _DS_ZERO1_TOKENS: frozenset[str] = frozenset({"zero1", "stage1"})
 
@@ -334,8 +309,7 @@ def _floating_dtype_name(dtype: object) -> str:
     name = str(dtype).removeprefix("torch.")
     if name not in {"float16", "bfloat16", "float32"}:
         raise ValueError(
-            "FSDP + BNB 4-bit requires a floating compute dtype for "
-            f"quant storage; got {name!r}"
+            f"FSDP + BNB 4-bit requires a floating compute dtype for quant storage; got {name!r}"
         )
     return name
 
@@ -412,9 +386,7 @@ def build_quantization_config_for_loader(
         from transformers import GPTQConfig
 
         validate_gptq_checkpoint(base)
-        gptq_kwargs = build_gptq_config(
-            disable_exllama=tcfg.gptq_disable_exllama
-        )
+        gptq_kwargs = build_gptq_config(disable_exllama=tcfg.gptq_disable_exllama)
         if console is not None:
             console.print(
                 f"[green]GPTQ:[/] pre-quantized checkpoint "
@@ -428,8 +400,7 @@ def build_quantization_config_for_loader(
         awq_kwargs = build_awq_config()
         if console is not None:
             console.print(
-                f"[green]AWQ:[/] pre-quantized checkpoint "
-                f"(version={awq_kwargs['version']})"
+                f"[green]AWQ:[/] pre-quantized checkpoint (version={awq_kwargs['version']})"
             )
         return AwqConfig(**awq_kwargs)
     if quantization.startswith("hqq:"):
@@ -438,28 +409,21 @@ def build_quantization_config_for_loader(
         hqq_kwargs = build_hqq_config(quantization=quantization)
         if console is not None:
             console.print(
-                f"[green]HQQ:[/] {hqq_kwargs['bits']}-bit "
-                f"(group_size={hqq_kwargs['group_size']})"
+                f"[green]HQQ:[/] {hqq_kwargs['bits']}-bit (group_size={hqq_kwargs['group_size']})"
             )
         # transformers HqqConfig uses nbits, not bits.
-        return HqqConfig(
-            nbits=hqq_kwargs["bits"], group_size=hqq_kwargs["group_size"]
-        )
+        return HqqConfig(nbits=hqq_kwargs["bits"], group_size=hqq_kwargs["group_size"])
     if quantization == "aqlm":
         from transformers import AqlmConfig
 
         if console is not None:
-            console.print(
-                "[green]AQLM:[/] 2-bit pre-quantized checkpoint"
-            )
+            console.print("[green]AQLM:[/] 2-bit pre-quantized checkpoint")
         return AqlmConfig()
     if quantization == "eetq":
         from transformers import EetqConfig
 
         if console is not None:
-            console.print(
-                "[green]EETQ:[/] 8-bit (transformers EetqConfig)"
-            )
+            console.print("[green]EETQ:[/] 8-bit (transformers EetqConfig)")
         return EetqConfig()
     if quantization == "mxfp4":
         from transformers import BitsAndBytesConfig

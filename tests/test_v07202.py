@@ -265,9 +265,7 @@ class TestNF4Sharding:
 
         src = _fake_weights_dir(tmp_path)
         out = str(tmp_path / "shards")
-        shard_checkpoint(
-            src, out, dtype="float32", quant=QUANT_NF4, quant_suffixes=QUANT_SUFFIXES
-        )
+        shard_checkpoint(src, out, dtype="float32", quant=QUANT_NF4, quant_suffixes=QUANT_SUFFIXES)
         extras = load_file(extras_shard_path(out))
         assert extras[NF4_CODE_KEY].shape == (16,)
         assert extras[NF4_NESTED_CODE_KEY].shape == (256,)
@@ -286,9 +284,7 @@ class TestNF4Sharding:
 
         src = _fake_weights_dir(tmp_path)
         out = str(tmp_path / "shards")
-        shard_checkpoint(
-            src, out, dtype="float32", quant=QUANT_NF4, quant_suffixes=QUANT_SUFFIXES
-        )
+        shard_checkpoint(src, out, dtype="float32", quant=QUANT_NF4, quant_suffixes=QUANT_SUFFIXES)
         blob = load_file(layer_shard_path(out, 0))
         offset = blob["mlp.down_proj.weight" + NESTED_OFFSET_SUFFIX]
         assert offset.shape == ()
@@ -347,9 +343,7 @@ class TestQuantCacheInvalidation:
 
         src = _fake_weights_dir(tmp_path)
         out = str(tmp_path / "shards")
-        shard_checkpoint(
-            src, out, dtype="float32", quant=QUANT_NF4, quant_suffixes=QUANT_SUFFIXES
-        )
+        shard_checkpoint(src, out, dtype="float32", quant=QUANT_NF4, quant_suffixes=QUANT_SUFFIXES)
         plain = shard_checkpoint(src, out, dtype="float32")
         assert plain.quant == QUANT_NONE
         assert not plain.quant_specs
@@ -359,9 +353,7 @@ class TestQuantCacheInvalidation:
 
         src = _fake_weights_dir(tmp_path)
         out = str(tmp_path / "shards")
-        shard_checkpoint(
-            src, out, dtype="float32", quant=QUANT_NF4, quant_suffixes=QUANT_SUFFIXES
-        )
+        shard_checkpoint(src, out, dtype="float32", quant=QUANT_NF4, quant_suffixes=QUANT_SUFFIXES)
         again = shard_checkpoint(
             src,
             out,
@@ -430,13 +422,21 @@ class TestQuantCacheInvalidation:
         src = _fake_weights_dir(tmp_path)
         out = str(tmp_path / "shards")
         shard_checkpoint(
-            src, out, dtype="float32", quant=QUANT_NF4,
-            quant_suffixes=QUANT_SUFFIXES, quant_device="cpu",
+            src,
+            out,
+            dtype="float32",
+            quant=QUANT_NF4,
+            quant_suffixes=QUANT_SUFFIXES,
+            quant_device="cpu",
         )
         stamp = os.stat(layer_shard_path(out, 0)).st_mtime_ns
         again = shard_checkpoint(
-            src, out, dtype="float32", quant=QUANT_NF4,
-            quant_suffixes=QUANT_SUFFIXES, quant_device="cpu:0",
+            src,
+            out,
+            dtype="float32",
+            quant=QUANT_NF4,
+            quant_suffixes=QUANT_SUFFIXES,
+            quant_device="cpu:0",
         )
         assert again.quant_device == "cpu"
         assert os.stat(layer_shard_path(out, 0)).st_mtime_ns == stamp
@@ -452,13 +452,9 @@ class TestQuantCacheInvalidation:
 
         src = _fake_weights_dir(tmp_path)
         out = str(tmp_path / "shards")
-        shard_checkpoint(
-            src, out, dtype="float32", quant=QUANT_NF4, quant_suffixes=QUANT_SUFFIXES
-        )
+        shard_checkpoint(src, out, dtype="float32", quant=QUANT_NF4, quant_suffixes=QUANT_SUFFIXES)
         stamp = os.stat(layer_shard_path(out, 0)).st_mtime_ns
-        shard_checkpoint(
-            src, out, dtype="float32", quant=QUANT_NF4, quant_suffixes=QUANT_SUFFIXES
-        )
+        shard_checkpoint(src, out, dtype="float32", quant=QUANT_NF4, quant_suffixes=QUANT_SUFFIXES)
         assert os.stat(layer_shard_path(out, 0)).st_mtime_ns == stamp
 
 
@@ -852,15 +848,12 @@ class TestPeftDispatchesTheBnbLoraPath:
         from soup_cli.utils.quant_menu import build_quantization_config_for_loader
 
         cfg = load_config_from_string(
-            "base: m\ntask: sft\ndata:\n  train: d.jsonl\n"
-            "training:\n  quantization: 4bit\n"
+            "base: m\ntask: sft\ndata:\n  train: d.jsonl\ntraining:\n  quantization: 4bit\n"
         )
         resident = build_quantization_config_for_loader(tcfg=cfg.training, base="m")
         streamed = build_nf4_config("bfloat16")
         assert streamed.bnb_4bit_quant_type == resident.bnb_4bit_quant_type
-        assert (
-            streamed.bnb_4bit_use_double_quant is resident.bnb_4bit_use_double_quant
-        )
+        assert streamed.bnb_4bit_use_double_quant is resident.bnb_4bit_use_double_quant
         assert streamed.load_in_4bit is resident.load_in_4bit
 
     @pytest.mark.parametrize(
@@ -895,9 +888,7 @@ class TestPeftDispatchesTheBnbLoraPath:
         monkeypatch.setattr(
             "soup_cli.utils.spectrum_scan.resolve_model_weights", lambda *_a, **_k: weights
         )
-        monkeypatch.setattr(
-            "soup_cli.utils.layer_stream.free_ram_bytes", lambda: 10_000_000_000
-        )
+        monkeypatch.setattr("soup_cli.utils.layer_stream.free_ram_bytes", lambda: 10_000_000_000)
         monkeypatch.setattr(
             "soup_cli.utils.layer_stream.detect_disk_kind", lambda *_a, **_k: "nvme"
         )
@@ -917,8 +908,12 @@ class TestPeftDispatchesTheBnbLoraPath:
             runtime = MagicMock()
             runtime.tier = "ram"
             runtime.stats.return_value = {
-                "tier": "ram", "store_bytes": 1, "pinned": False,
-                "buffers": 2, "buffer_bytes": 4, "n_layers": 2,
+                "tier": "ram",
+                "store_bytes": 1,
+                "pinned": False,
+                "buffers": 2,
+                "buffer_bytes": 4,
+                "n_layers": 2,
             }
             return MagicMock(), runtime
 
@@ -948,9 +943,7 @@ class TestPeftDispatchesTheBnbLoraPath:
 
         weights, _, _ = _tiny_llama_dir(tmp_path)
         model = build_meta_skeleton(weights, dtype="float32")
-        assert not any(
-            isinstance(param, bnb.nn.Params4bit) for param in model.parameters()
-        )
+        assert not any(isinstance(param, bnb.nn.Params4bit) for param in model.parameters())
         assert getattr(model, "is_loaded_in_4bit", False) is False
 
 
@@ -1088,9 +1081,7 @@ def _randomise_lora_b(model, seed=7):
         for name, param in model.named_parameters():
             if "lora_B" in name:
                 param.copy_(
-                    torch.randn(param.shape, generator=generator).to(
-                        param.device, param.dtype
-                    )
+                    torch.randn(param.shape, generator=generator).to(param.device, param.dtype)
                     * 0.02
                 )
 
@@ -1105,9 +1096,7 @@ def _sync_adapters(dst, src):
     def norm(key):
         return key.replace(".inner.", ".")
 
-    source = {
-        norm(k): v.detach().clone() for k, v in src.state_dict().items() if "lora_" in k
-    }
+    source = {norm(k): v.detach().clone() for k, v in src.state_dict().items() if "lora_" in k}
     copied = 0
     with torch.no_grad():
         for key, tensor in dst.state_dict().items():
@@ -1315,9 +1304,7 @@ class TestNF4BitExactVsResident:
 
         def run(target):
             torch.manual_seed(0)
-            opt = torch.optim.AdamW(
-                [p for p in target.parameters() if p.requires_grad], lr=1e-3
-            )
+            opt = torch.optim.AdamW([p for p in target.parameters() if p.requires_grad], lr=1e-3)
             out = []
             target.train()
             for _ in range(5):
@@ -1383,15 +1370,10 @@ class TestAdapterRoundTripUnderNF4:
             device_map={"": "cpu"},
         )
         reloaded = PeftModel.from_pretrained(base, out)
-        landed = {
-            name: param
-            for name, param in reloaded.named_parameters()
-            if "lora_B" in name
-        }
+        landed = {name: param for name, param in reloaded.named_parameters() if "lora_B" in name}
         assert landed
         assert any(param.abs().max().item() > 0 for param in landed.values()), (
-            "every lora_B is zero — the adapter was dropped on reload, which "
-            "raises no exception"
+            "every lora_B is zero — the adapter was dropped on reload, which raises no exception"
         )
 
 
@@ -1515,8 +1497,15 @@ class TestPreflightUsesTheStreamedSize:
     not catch a regression that simply stops passing ``quant=`` through."""
 
     def _run(
-        self, tmp_path, monkeypatch, *, quantization, free_ram, on_disk,
-        stream_source="auto", disk_kind="nvme",
+        self,
+        tmp_path,
+        monkeypatch,
+        *,
+        quantization,
+        free_ram,
+        on_disk,
+        stream_source="auto",
+        disk_kind="nvme",
     ):
         from soup_cli.config.loader import load_config_from_string
         from soup_cli.trainer.sft import SFTTrainerWrapper
@@ -1528,9 +1517,7 @@ class TestPreflightUsesTheStreamedSize:
         monkeypatch.setattr(
             "soup_cli.utils.spectrum_scan.resolve_model_weights", lambda *_a, **_k: weights
         )
-        monkeypatch.setattr(
-            "soup_cli.utils.layer_stream.free_ram_bytes", lambda: free_ram
-        )
+        monkeypatch.setattr("soup_cli.utils.layer_stream.free_ram_bytes", lambda: free_ram)
         monkeypatch.setattr(
             "soup_cli.utils.layer_shard.source_weight_bytes", lambda *_a, **_k: on_disk
         )
@@ -1570,9 +1557,7 @@ training:
     FREE_RAM = 10_000_000_000
     ON_DISK = 16_000_000_000
 
-    def test_nf4_run_is_allowed_where_the_raw_size_would_refuse(
-        self, tmp_path, monkeypatch
-    ):
+    def test_nf4_run_is_allowed_where_the_raw_size_would_refuse(self, tmp_path, monkeypatch):
         wrapper = self._run(
             tmp_path,
             monkeypatch,
@@ -1583,9 +1568,7 @@ training:
         )
         assert wrapper.model.is_loaded_in_4bit is True
 
-    def test_control_the_same_size_unquantised_is_still_refused(
-        self, tmp_path, monkeypatch
-    ):
+    def test_control_the_same_size_unquantised_is_still_refused(self, tmp_path, monkeypatch):
         """Without this control the test above proves nothing — a pre-flight
         that never refuses anything would satisfy it.
 
@@ -1604,9 +1587,7 @@ training:
                 stream_source="ram",
             )
 
-    def test_nf4_still_refuses_when_even_quantised_it_will_not_fit(
-        self, tmp_path, monkeypatch
-    ):
+    def test_nf4_still_refuses_when_even_quantised_it_will_not_fit(self, tmp_path, monkeypatch):
         """And the NF4 branch must not become a blanket bypass.
 
         Asserted through `stream_source: ram`, because under v0.72.3's default
@@ -1883,9 +1864,7 @@ class TestNF4ParityOnCuda:
     def test_logits_bit_exact_vs_resident_nf4_on_cuda(self, tmp_path):
         import torch
 
-        model, _, weights, _, _ = _nf4_stream(
-            tmp_path, device="cuda", dtype="bfloat16"
-        )
+        model, _, weights, _, _ = _nf4_stream(tmp_path, device="cuda", dtype="bfloat16")
         resident = _resident_nf4(weights, dtype="bfloat16", device=0)
         _randomise_lora_b(resident)
         assert _sync_adapters(model, resident) > 0, "vacuous: no adapters copied"
@@ -1895,9 +1874,7 @@ class TestNF4ParityOnCuda:
         # Soup's checkpoint-visible Function owns the fused arm, while this
         # larger shape keeps #331's dequant+linear arm without a third
         # dequantisation. The #842 GPU matrix also pins the fused shape.
-        ids = torch.randint(
-            0, 64, (1, 128), generator=torch.Generator().manual_seed(11)
-        ).cuda()
+        ids = torch.randint(0, 64, (1, 128), generator=torch.Generator().manual_seed(11)).cuda()
         batch = {"input_ids": ids, "attention_mask": torch.ones_like(ids)}
         model.eval()
         resident.eval()
@@ -1917,22 +1894,16 @@ class TestNF4ParityOnCuda:
 
         # 128 for the same reason as the parity test above — kept identical so
         # both CUDA gates exercise the kernel path production actually takes.
-        ids = torch.randint(
-            0, 64, (1, 128), generator=torch.Generator().manual_seed(12)
-        ).cuda()
+        ids = torch.randint(0, 64, (1, 128), generator=torch.Generator().manual_seed(12)).cuda()
 
         def run():
             model, _, _, _, _ = _nf4_stream(tmp_path, device="cuda", dtype="bfloat16")
             torch.manual_seed(0)
-            opt = torch.optim.AdamW(
-                [p for p in model.parameters() if p.requires_grad], lr=1e-3
-            )
+            opt = torch.optim.AdamW([p for p in model.parameters() if p.requires_grad], lr=1e-3)
             out = []
             model.train()
             for _ in range(3):
-                loss = model(
-                    input_ids=ids, attention_mask=torch.ones_like(ids), labels=ids
-                ).loss
+                loss = model(input_ids=ids, attention_mask=torch.ones_like(ids), labels=ids).loss
                 loss.backward()
                 opt.step()
                 opt.zero_grad(set_to_none=True)
@@ -1946,9 +1917,7 @@ class TestNF4ParityOnCuda:
 # import hygiene
 # ==========================================================================
 class TestNoTopLevelTorch:
-    @pytest.mark.parametrize(
-        "module", ["layer_stream", "layer_shard", "layer_stream_runtime"]
-    )
+    @pytest.mark.parametrize("module", ["layer_stream", "layer_shard", "layer_stream_runtime"])
     def test_module_has_no_top_level_training_import(self, module):
         """An AST guard proves a SYNTACTIC property only — the runtime
         authority is tests/test_cli_startup_is_light.py. Kept as a cheap first

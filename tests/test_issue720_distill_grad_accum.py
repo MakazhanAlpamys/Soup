@@ -37,11 +37,7 @@ transformers = pytest.importorskip("transformers")
 pytest.importorskip("accelerate")
 
 _DISTILL_SOURCE = (
-    pathlib.Path(__file__).resolve().parents[1]
-    / "src"
-    / "soup_cli"
-    / "trainer"
-    / "distill.py"
+    pathlib.Path(__file__).resolve().parents[1] / "src" / "soup_cli" / "trainer" / "distill.py"
 ).read_text(encoding="utf-8")
 
 _COMPILE_FILENAME = "<compiled _DistillTrainer>"
@@ -205,9 +201,7 @@ def _eval_factory_expr(
     if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
         return not _eval_factory_expr(node.operand, env, sentinels)
     if isinstance(node, ast.BoolOp):
-        values = [
-            _eval_factory_expr(value, env, sentinels) for value in node.values
-        ]
+        values = [_eval_factory_expr(value, env, sentinels) for value in node.values]
         result: object = isinstance(node.op, ast.And)
         for value in values:
             if isinstance(node.op, ast.And):
@@ -240,11 +234,7 @@ def _eval_factory_expr(
                 return caster(_eval_factory_expr(node.args[0], env, sentinels))
             except (TypeError, ValueError) as exc:
                 raise _UnresolvableFactoryError(str(exc)) from exc
-        if (
-            isinstance(func, ast.Name)
-            and func.id == "getattr"
-            and 2 <= len(node.args) <= 3
-        ):
+        if isinstance(func, ast.Name) and func.id == "getattr" and 2 <= len(node.args) <= 3:
             name = _eval_factory_expr(node.args[1], env, sentinels)
             if (
                 isinstance(node.args[0], ast.Name)
@@ -317,19 +307,17 @@ def _closure_namespace(compute_loss: ast.FunctionDef) -> dict[str, Any]:
 
     namespace: dict[str, Any] = {}
     namespace.update(_factory_derived_bindings())
-    namespace.update({
-        "_sequence_mode": True,
-        "_minillm_on_policy": False,
-    })
+    namespace.update(
+        {
+            "_sequence_mode": True,
+            "_minillm_on_policy": False,
+        }
+    )
     free = _compute_loss_free_names(compute_loss)
     for name in free:
         if name not in namespace and hasattr(distill_mod, name):
             namespace[name] = getattr(distill_mod, name)
-    missing = sorted(
-        name
-        for name in free
-        if name not in namespace and name not in _BUILTIN_NAMES
-    )
+    missing = sorted(name for name in free if name not in namespace and name not in _BUILTIN_NAMES)
     assert not missing, (
         "_compile_distill_trainer() must bind "
         f"{missing} — the factory gained them and this harness was not updated."
@@ -343,9 +331,7 @@ def _exec_distill_trainer_class(
     trainer_base: type | None = None,
 ) -> type:
     namespace = _closure_namespace(_compute_loss_node(node))
-    namespace["Trainer"] = (
-        transformers.Trainer if trainer_base is None else trainer_base
-    )
+    namespace["Trainer"] = transformers.Trainer if trainer_base is None else trainer_base
     compiled = compile(ast.Module([node], []), _COMPILE_FILENAME, "exec")
     exec(compiled, namespace)
     return namespace["_DistillTrainer"]
@@ -365,8 +351,7 @@ def _compile_distill_trainer(*, without_token_weighting: bool = False) -> type:
         normalizer = next(
             stmt
             for stmt in compute_loss.body
-            if isinstance(stmt, ast.FunctionDef)
-            and stmt.name == "_token_weighted_accumulation"
+            if isinstance(stmt, ast.FunctionDef) and stmt.name == "_token_weighted_accumulation"
         )
         normalizer.body = [ast.Return(value=ast.Name(id="loss", ctx=ast.Load()))]
         ast.fix_missing_locations(node)
@@ -454,25 +439,25 @@ def _unequal_length_gradient(
         teacher.eval()
         teacher.requires_grad_(False)
         trainer_globals = trainer_cls.compute_loss.__globals__
-        trainer_globals.update({
-            "_sequence_mode": False,
-            "_minillm_on_policy": False,
-            "_uld_aligned": False,
-            "_uld_teacher_tokenizer": None,
-            "_student_tokenizer": None,
-            "teacher_ref": teacher,
-            "_uld_projection": None,
-            "_minillm_cb": None,
-            "_CE_WEIGHT": 0.5,
-            "_DISTILL_WEIGHT": 0.5,
-            "_compute_distill_term": _compute_distill_term,
-            "divergence": "forward_kl",
-            "temperature": 2.0,
-            "_distill_chunk_size": _training_config_default("distill_chunk_size"),
-            "_distill_checkpoint": bool(
-                _training_config_default("distill_checkpoint")
-            ),
-        })
+        trainer_globals.update(
+            {
+                "_sequence_mode": False,
+                "_minillm_on_policy": False,
+                "_uld_aligned": False,
+                "_uld_teacher_tokenizer": None,
+                "_student_tokenizer": None,
+                "teacher_ref": teacher,
+                "_uld_projection": None,
+                "_minillm_cb": None,
+                "_CE_WEIGHT": 0.5,
+                "_DISTILL_WEIGHT": 0.5,
+                "_compute_distill_term": _compute_distill_term,
+                "divergence": "forward_kl",
+                "temperature": 2.0,
+                "_distill_chunk_size": _training_config_default("distill_chunk_size"),
+                "_distill_checkpoint": bool(_training_config_default("distill_checkpoint")),
+            }
+        )
     args = transformers.TrainingArguments(
         output_dir=str(tmp_path / f"unequal-ga{steps}"),
         gradient_accumulation_steps=steps,
@@ -495,11 +480,13 @@ def _unequal_length_gradient(
     if steps == 1:
         padded_ids = input_ids.clone()
         padded_ids[attention_mask == 0] = 0
-        batches = [{
-            "input_ids": padded_ids,
-            "labels": labels,
-            "attention_mask": attention_mask,
-        }]
+        batches = [
+            {
+                "input_ids": padded_ids,
+                "labels": labels,
+                "attention_mask": attention_mask,
+            }
+        ]
     else:
         batches = [
             {
@@ -556,12 +543,8 @@ def test_unequal_microbatch_lengths_match_for_live_token_distillation(tmp_path):
     """The CE+teacher-KL branch obeys the same window-wide token contract."""
     trainer_cls = _compile_distill_trainer()
 
-    full_batch = _unequal_length_gradient(
-        trainer_cls, 1, tmp_path, token_distill=True
-    )
-    accumulated = _unequal_length_gradient(
-        trainer_cls, 2, tmp_path, token_distill=True
-    )
+    full_batch = _unequal_length_gradient(trainer_cls, 1, tmp_path, token_distill=True)
+    accumulated = _unequal_length_gradient(trainer_cls, 2, tmp_path, token_distill=True)
 
     torch.testing.assert_close(accumulated, full_batch, rtol=1e-5, atol=1e-6)
 
@@ -595,11 +578,7 @@ def test_distill_trainer_sets_loss_kwargs_contract_after_trainer_init(tmp_path):
     assert inits, "_DistillTrainer defines no __init__, so it cannot set the loss contract"
 
     body = inits[0].body
-    super_at = next(
-        i
-        for i, stmt in enumerate(body)
-        if "super().__init__" in ast.unparse(stmt)
-    )
+    super_at = next(i for i, stmt in enumerate(body) if "super().__init__" in ast.unparse(stmt))
     flag_at = [
         i
         for i, stmt in enumerate(body)
@@ -670,29 +649,19 @@ def test_unresolved_free_name_fails_with_the_missing_binding() -> None:
 
 
 def test_compiled_trainer_binds_schema_defaults_for_chunked_distill() -> None:
-    compiled_globals = _closure_namespace(
-        _compute_loss_node(_distill_trainer_class_node())
-    )
-    assert compiled_globals["_distill_chunk_size"] == _training_config_default(
-        "distill_chunk_size"
-    )
-    assert compiled_globals["_distill_checkpoint"] == _training_config_default(
-        "distill_checkpoint"
-    )
+    compiled_globals = _closure_namespace(_compute_loss_node(_distill_trainer_class_node()))
+    assert compiled_globals["_distill_chunk_size"] == _training_config_default("distill_chunk_size")
+    assert compiled_globals["_distill_checkpoint"] == _training_config_default("distill_checkpoint")
 
 
 def test_tcfg_attribute_binds_the_schema_default() -> None:
     node = ast.parse("tcfg.distill_chunk_size", mode="eval").body
-    assert _eval_factory_expr(node, {}) == _training_config_default(
-        "distill_chunk_size"
-    )
+    assert _eval_factory_expr(node, {}) == _training_config_default("distill_chunk_size")
 
 
 def test_recompiled_compute_loss_filename_is_not_the_real_module() -> None:
     node = ast.parse(ast.unparse(_distill_trainer_class_node())).body[0]
-    trainer_cls = _exec_distill_trainer_class(
-        node, trainer_base=type("Trainer", (), {})
-    )
+    trainer_cls = _exec_distill_trainer_class(node, trainer_base=type("Trainer", (), {}))
     assert trainer_cls.compute_loss.__code__.co_filename == _COMPILE_FILENAME
 
 
@@ -706,9 +675,7 @@ def test_distill_module_has_exactly_one_setup_function() -> None:
 
 
 def test_runtime_identity_bindings_stay_none_sentinels() -> None:
-    compiled_globals = _closure_namespace(
-        _compute_loss_node(_distill_trainer_class_node())
-    )
+    compiled_globals = _closure_namespace(_compute_loss_node(_distill_trainer_class_node()))
     assert compiled_globals["teacher_ref"] is None
     assert compiled_globals["_student_tokenizer"] is None
 

@@ -29,24 +29,30 @@ JUDGE_REPLY_LIMIT = 65_536
 
 class TestJudgeReadsTheWholeObject:
     def test_nested_reasoning_scores_first(self) -> None:
-        reply = json.dumps({
-            "scores": {"helpfulness": 5, "accuracy": 5, "safety": 5},
-            "reasoning": NESTED_REASONING,
-        })
+        reply = json.dumps(
+            {
+                "scores": {"helpfulness": 5, "accuracy": 5, "safety": 5},
+                "reasoning": NESTED_REASONING,
+            }
+        )
         assert _parse_judge_response(reply, DEFAULT_RUBRIC) == (FIVES, NESTED_REASONING)
 
     def test_nested_reasoning_before_scores(self) -> None:
-        reply = json.dumps({
-            "reasoning": NESTED_REASONING,
-            "scores": {"helpfulness": 5, "accuracy": 5, "safety": 5},
-        })
+        reply = json.dumps(
+            {
+                "reasoning": NESTED_REASONING,
+                "scores": {"helpfulness": 5, "accuracy": 5, "safety": 5},
+            }
+        )
         assert _parse_judge_response(reply, DEFAULT_RUBRIC) == (FIVES, NESTED_REASONING)
 
     def test_code_like_reasoning_and_surrounding_prose(self) -> None:
-        body = json.dumps({
-            "scores": {"helpfulness": 4, "accuracy": 3, "safety": 5},
-            "reasoning": "cfg = {'a': {'b': 1}}",
-        })
+        body = json.dumps(
+            {
+                "scores": {"helpfulness": 4, "accuracy": 3, "safety": 5},
+                "reasoning": "cfg = {'a': {'b': 1}}",
+            }
+        )
         scores, reasoning = _parse_judge_response(
             f"Here is my verdict {{draft}}:\n```json\n{body}\n```", DEFAULT_RUBRIC
         )
@@ -54,9 +60,11 @@ class TestJudgeReadsTheWholeObject:
         assert reasoning == "cfg = {'a': {'b': 1}}"
 
     def test_capitalised_keys_and_score_objects_are_read(self) -> None:
-        reply = json.dumps({
-            "scores": {"Helpfulness": 4, "ACCURACY": {"score": 2}, "safety": {"score": "5"}},
-        })
+        reply = json.dumps(
+            {
+                "scores": {"Helpfulness": 4, "ACCURACY": {"score": 2}, "safety": {"score": "5"}},
+            }
+        )
         scores, _ = _parse_judge_response(reply, DEFAULT_RUBRIC)
         assert scores == {"helpfulness": 4.0, "accuracy": 2.0, "safety": 5.0}
 
@@ -65,9 +73,7 @@ class TestJudgeReadsTheWholeObject:
         with pytest.raises(ValueError, match="no score for criterion 'safety'"):
             _parse_judge_response(reply, DEFAULT_RUBRIC)
 
-    @pytest.mark.parametrize(
-        "value", ["high", None, True, [5], {"points": 5}, "NaN", 10**400]
-    )
+    @pytest.mark.parametrize("value", ["high", None, True, [5], {"points": 5}, "NaN", 10**400])
     def test_unreadable_score_names_the_criterion(self, value: object) -> None:
         reply = json.dumps({"scores": {"helpfulness": 5, "accuracy": value, "safety": 5}})
         with pytest.raises(ValueError, match="criterion 'accuracy' is not a number"):
@@ -111,9 +117,7 @@ def test_scores_that_is_not_an_object_is_a_value_error(scores: object) -> None:
 
 def test_a_criterion_scored_under_two_spellings_is_refused() -> None:
     # _parse_judge_response, without the check the later spelling's score wins
-    reply = json.dumps(
-        {"scores": {"Helpfulness": 5, "helpfulness": 1, "accuracy": 5, "safety": 5}}
-    )
+    reply = json.dumps({"scores": {"Helpfulness": 5, "helpfulness": 1, "accuracy": 5, "safety": 5}})
     with pytest.raises(
         ValueError,
         match="criterion 'helpfulness' more than once, as 'Helpfulness', 'helpfulness'",
@@ -165,8 +169,13 @@ class TestKeywordsWithPunctuationEdges:
     @pytest.mark.parametrize(
         ("response", "keyword"),
         [
-            ("sand castle", "and"), ("unsafe", "safe"), ("C++ and C", "C#"), ("x-5y", "-5"),
-            ("the safety net", "safe"), ("uses C++11 here", "C++"), ("andy came", "and"),
+            ("sand castle", "and"),
+            ("unsafe", "safe"),
+            ("C++ and C", "C#"),
+            ("x-5y", "-5"),
+            ("the safety net", "safe"),
+            ("uses C++11 here", "C++"),
+            ("andy came", "and"),
             ("5th", "5"),
         ],
     )
@@ -183,16 +192,18 @@ class TestKeywordsWithPunctuationEdges:
     def test_checklist_cli_passes_a_correct_negative_answer(self, tmp_path, monkeypatch) -> None:
         monkeypatch.chdir(tmp_path)
         (tmp_path / "spec.yaml").write_text(
-            yaml.safe_dump({
-                "tests": [
-                    {
-                        "name": "neg",
-                        "kind": "mft",
-                        "prompts": ["What is 2 - 7?"],
-                        "expected": ["-5"],
-                    }
-                ]
-            }),
+            yaml.safe_dump(
+                {
+                    "tests": [
+                        {
+                            "name": "neg",
+                            "kind": "mft",
+                            "prompts": ["What is 2 - 7?"],
+                            "expected": ["-5"],
+                        }
+                    ]
+                }
+            ),
             encoding="utf-8",
         )
         (tmp_path / "evidence.json").write_text(
@@ -204,11 +215,13 @@ class TestKeywordsWithPunctuationEdges:
     def test_behavior_evidence_cli_matches_lettered_options(self, tmp_path, monkeypatch) -> None:
         monkeypatch.chdir(tmp_path)
         (tmp_path / "behavior.json").write_text(
-            json.dumps({
-                "pre_responses": ["Answer: (B)", "Answer: (A)"],
-                "post_responses": ["Answer: (B)", "Answer: (A)"],
-                "oracle": ["(B)", "(A)"],
-            }),
+            json.dumps(
+                {
+                    "pre_responses": ["Answer: (B)", "Answer: (A)"],
+                    "post_responses": ["Answer: (B)", "Answer: (A)"],
+                    "oracle": ["(B)", "(A)"],
+                }
+            ),
             encoding="utf-8",
         )
         result = runner.invoke(
@@ -227,7 +240,7 @@ def _run_judge_node(monkeypatch, replies: list[str]):
     monkeypatch.setattr(
         data_forge,
         "make_judge_provider_fn",
-        lambda *a, **k: (lambda prompt: {"text": next(answers)}),
+        lambda *a, **k: lambda prompt: {"text": next(answers)},
     )
     rows = [[{"text": f"row {i}"} for i in range(len(replies))]]
     return _node_judge(

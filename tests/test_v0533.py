@@ -44,13 +44,15 @@ class TestGRPOFP16:
         assert cfg.training.grpo_fp16 is False
 
     def test_grpo_fp16_true_accepted_on_grpo(self) -> None:
-        cfg = load_config_from_string(_minimal_grpo_yaml(
-            training={
-                "reward_fn": "accuracy",
-                "num_generations": 2,
-                "grpo_fp16": True,
-            },
-        ))
+        cfg = load_config_from_string(
+            _minimal_grpo_yaml(
+                training={
+                    "reward_fn": "accuracy",
+                    "num_generations": 2,
+                    "grpo_fp16": True,
+                },
+            )
+        )
         assert cfg.training.grpo_fp16 is True
 
     def test_grpo_fp16_with_auto_mixed_precision_rejected(self) -> None:
@@ -70,25 +72,29 @@ class TestGRPOFP16:
         assert "auto_mixed_precision" in msg
 
     def test_grpo_fp16_alone_with_amp_off_passes(self) -> None:
-        cfg = load_config_from_string(_minimal_grpo_yaml(
-            training={
-                "reward_fn": "accuracy",
-                "num_generations": 2,
-                "grpo_fp16": True,
-                "auto_mixed_precision": False,
-            },
-        ))
+        cfg = load_config_from_string(
+            _minimal_grpo_yaml(
+                training={
+                    "reward_fn": "accuracy",
+                    "num_generations": 2,
+                    "grpo_fp16": True,
+                    "auto_mixed_precision": False,
+                },
+            )
+        )
         assert cfg.training.grpo_fp16 is True
         assert cfg.training.auto_mixed_precision is False
 
     def test_amp_alone_passes(self) -> None:
-        cfg = load_config_from_string(_minimal_grpo_yaml(
-            training={
-                "reward_fn": "accuracy",
-                "num_generations": 2,
-                "auto_mixed_precision": True,
-            },
-        ))
+        cfg = load_config_from_string(
+            _minimal_grpo_yaml(
+                training={
+                    "reward_fn": "accuracy",
+                    "num_generations": 2,
+                    "auto_mixed_precision": True,
+                },
+            )
+        )
         assert cfg.training.grpo_fp16 is False
         assert cfg.training.auto_mixed_precision is True
 
@@ -98,13 +104,15 @@ class TestGRPOFP16Routing:
         """v0.53.3 #128 — wrapper translates grpo_fp16=True into HF kwargs."""
         from soup_cli.trainer.grpo import GRPOTrainerWrapper
 
-        cfg = load_config_from_string(_minimal_grpo_yaml(
-            training={
-                "reward_fn": "accuracy",
-                "num_generations": 2,
-                "grpo_fp16": True,
-            },
-        ))
+        cfg = load_config_from_string(
+            _minimal_grpo_yaml(
+                training={
+                    "reward_fn": "accuracy",
+                    "num_generations": 2,
+                    "grpo_fp16": True,
+                },
+            )
+        )
         wrapper = GRPOTrainerWrapper(cfg, device="cuda")
         kwargs = wrapper._build_precision_kwargs()
         assert kwargs == {"fp16": True, "bf16": False}
@@ -147,13 +155,15 @@ class TestGRPOFP16Routing:
     def test_grpo_wrapper_cpu_no_precision(self) -> None:
         from soup_cli.trainer.grpo import GRPOTrainerWrapper
 
-        cfg = load_config_from_string(_minimal_grpo_yaml(
-            training={
-                "reward_fn": "accuracy",
-                "num_generations": 2,
-                "grpo_fp16": True,
-            },
-        ))
+        cfg = load_config_from_string(
+            _minimal_grpo_yaml(
+                training={
+                    "reward_fn": "accuracy",
+                    "num_generations": 2,
+                    "grpo_fp16": True,
+                },
+            )
+        )
         wrapper = GRPOTrainerWrapper(cfg, device="cpu")
         kwargs = wrapper._build_precision_kwargs()
         # CPU path: never enable mixed precision.
@@ -268,17 +278,23 @@ class TestValidateVisionGRPOCompatWithBase:
         """Adding `base` must not regress the v0.50.0 Part E rejections."""
         with pytest.raises(ValueError, match="task in"):
             validate_vision_grpo_compat(
-                task="sft", modality="vision", backend="transformers",
+                task="sft",
+                modality="vision",
+                backend="transformers",
                 base="Qwen/Qwen2-VL-7B-Instruct",
             )
         with pytest.raises(ValueError, match="modality"):
             validate_vision_grpo_compat(
-                task="grpo", modality="text", backend="transformers",
+                task="grpo",
+                modality="text",
+                backend="transformers",
                 base="Qwen/Qwen2-VL-7B-Instruct",
             )
         with pytest.raises(ValueError, match="mlx"):
             validate_vision_grpo_compat(
-                task="grpo", modality="vision", backend="mlx",
+                task="grpo",
+                modality="vision",
+                backend="mlx",
                 base="Qwen/Qwen2-VL-7B-Instruct",
             )
 
@@ -371,13 +387,15 @@ class TestReviewFixes:
 
         from soup_cli.trainer.grpo import GRPOTrainerWrapper
 
-        cfg = load_config_from_string(_minimal_grpo_yaml(
-            training={
-                "reward_fn": "accuracy",
-                "num_generations": 2,
-                "grpo_fp16": False,
-            },
-        ))
+        cfg = load_config_from_string(
+            _minimal_grpo_yaml(
+                training={
+                    "reward_fn": "accuracy",
+                    "num_generations": 2,
+                    "grpo_fp16": False,
+                },
+            )
+        )
         wrapper = GRPOTrainerWrapper(cfg, device="cuda")
 
         class _Cuda:
@@ -393,9 +411,7 @@ class TestReviewFixes:
         monkeypatch.setattr(torch, "cuda", _Cuda())
         assert wrapper._build_precision_kwargs() == {"fp16": False, "bf16": True}
 
-    def test_precision_kwargs_mps_falls_back_when_bf16_is_unavailable(
-        self, monkeypatch
-    ) -> None:
+    def test_precision_kwargs_mps_falls_back_when_bf16_is_unavailable(self, monkeypatch) -> None:
         """#567 — MPS remains FP32 when its live runtime rejects BF16."""
         from soup_cli.trainer.grpo import GRPOTrainerWrapper
         from soup_cli.utils import gpu

@@ -116,7 +116,9 @@ def test_apply_v028_speed_memory_no_exception(task: str, feature: str, monkeypat
         monkeypatch.setattr("soup_cli.utils.fp8.is_fp8_available", lambda: False)
         with pytest.raises(FP8DependencyMissingError):
             vf.apply_v028_speed_memory(
-                model=MagicMock(), tcfg=tcfg, base_model="meta-llama/Llama-3.2-1B",
+                model=MagicMock(),
+                tcfg=tcfg,
+                base_model="meta-llama/Llama-3.2-1B",
                 console=None,
             )
         return
@@ -141,8 +143,10 @@ def test_apply_v028_speed_memory_invokes_cut_ce_patcher(task: str) -> None:
     tcfg = _make_tcfg("use_cut_ce")
     with patch("soup_cli.utils.cut_ce.apply_cut_ce", return_value=True):
         result = vf.apply_v028_speed_memory(
-            model=MagicMock(), tcfg=tcfg,
-            base_model="meta-llama/Llama-3.2-1B", console=None,
+            model=MagicMock(),
+            tcfg=tcfg,
+            base_model="meta-llama/Llama-3.2-1B",
+            console=None,
         )
     assert result["cut_ce"] is True
 
@@ -154,8 +158,10 @@ def test_apply_v028_speed_memory_invokes_fp8(task: str) -> None:
     tcfg = _make_tcfg("fp8")
     with patch("soup_cli.utils.fp8.apply_fp8_training", return_value=True):
         result = vf.apply_v028_speed_memory(
-            model=MagicMock(), tcfg=tcfg,
-            base_model="meta-llama/Llama-3.2-1B", console=None,
+            model=MagicMock(),
+            tcfg=tcfg,
+            base_model="meta-llama/Llama-3.2-1B",
+            console=None,
         )
     assert result["fp8"] is True
 
@@ -167,9 +173,12 @@ def test_apply_v028_speed_memory_refuses_kernel_picker(task: str) -> None:
 
     tcfg = _make_tcfg("kernel_auto_compose")
     result = vf.apply_v028_speed_memory(
-        model=MagicMock(), tcfg=tcfg,
-        base_model="meta-llama/Llama-3.2-1B", console=None,
-        device="cuda", backend="transformers",
+        model=MagicMock(),
+        tcfg=tcfg,
+        base_model="meta-llama/Llama-3.2-1B",
+        console=None,
+        device="cuda",
+        backend="transformers",
     )
     assert result["kernel_auto_compose"] is False
 
@@ -290,7 +299,10 @@ def test_mlx_backend_still_rejects_v028_features() -> None:
         "backend": "mlx",
         "data": {"train": "data.jsonl", "format": "alpaca"},
         "training": {
-            "epochs": 1, "lr": 1e-4, "batch_size": 1, "use_cut_ce": True,
+            "epochs": 1,
+            "lr": 1e-4,
+            "batch_size": 1,
+            "use_cut_ce": True,
         },
     }
     with pytest.raises(ValueError, match="mlx"):
@@ -417,10 +429,7 @@ def test_trainer_module_wraps_train_with_offloading_context(
     src = inspect.getsource(mod)
     # SFT uses the inline offload_context (older pattern); the others use the
     # shared activation_offloading_context helper from v028_features.
-    assert (
-        "activation_offloading_context" in src
-        or "offload_context" in src
-    ), (
+    assert "activation_offloading_context" in src or "offload_context" in src, (
         f"{module_path} does not wrap trainer.train() with the activation-"
         "offloading context — disk/cpu offloading will silently no-op."
     )
@@ -481,10 +490,8 @@ def test_benchmark_kernel_combos_cpu_returns_none_times() -> None:
     from soup_cli.utils.kernel_picker import benchmark_kernel_combos
 
     candidates = [
-        {"name": "baseline", "use_liger": False, "use_flash_attn": False,
-         "use_cut_ce": False},
-        {"name": "liger", "use_liger": True, "use_flash_attn": False,
-         "use_cut_ce": False},
+        {"name": "baseline", "use_liger": False, "use_flash_attn": False, "use_cut_ce": False},
+        {"name": "liger", "use_liger": True, "use_flash_attn": False, "use_cut_ce": False},
     ]
     out = benchmark_kernel_combos(model=None, candidates=candidates, device="cpu")
     assert len(out) == 2
@@ -499,9 +506,12 @@ def test_benchmark_kernel_combos_no_cuda_returns_none_times() -> None:
     candidates = [{"name": "baseline"}]
     # Mock torch.cuda.is_available returning False
     import torch  # noqa
+
     with patch("torch.cuda.is_available", return_value=False):
         out = benchmark_kernel_combos(
-            model=MagicMock(), candidates=candidates, device="cuda",
+            model=MagicMock(),
+            candidates=candidates,
+            device="cuda",
         )
     assert out[0]["time_ms"] is None
 
@@ -512,10 +522,12 @@ def test_benchmark_kernel_combos_does_not_mutate_input() -> None:
 
     candidates = [{"name": "baseline"}]
     out = benchmark_kernel_combos(
-        model=None, candidates=candidates, device="cpu",
+        model=None,
+        candidates=candidates,
+        device="cpu",
     )
     assert "time_ms" not in candidates[0]  # input untouched
-    assert "time_ms" in out[0]              # output annotated
+    assert "time_ms" in out[0]  # output annotated
 
 
 def test_benchmark_kernel_combos_clamps_seq_len() -> None:
@@ -525,7 +537,9 @@ def test_benchmark_kernel_combos_clamps_seq_len() -> None:
     # device="cpu" short-circuits without ever touching seq_len, so this just
     # confirms no exception escapes the bounds-clamp branch.
     out = benchmark_kernel_combos(
-        model=None, candidates=[{"name": "baseline"}], device="cpu",
+        model=None,
+        candidates=[{"name": "baseline"}],
+        device="cpu",
         seq_len=10**6,
     )
     assert out[0]["time_ms"] is None
@@ -543,13 +557,18 @@ def test_apply_v028_kernel_auto_compose_never_claims_application() -> None:
     from soup_cli.utils import v028_features as vf
 
     tcfg = SimpleNamespace(
-        use_cut_ce=False, quantization_aware=False,
-        kernel_auto_compose=True, activation_offloading=None,
+        use_cut_ce=False,
+        quantization_aware=False,
+        kernel_auto_compose=True,
+        activation_offloading=None,
     )
     result = vf.apply_v028_speed_memory(
-        model=MagicMock(), tcfg=tcfg,
-        base_model="meta-llama/Llama-3.2-1B", console=None,
-        device="cuda", backend="transformers",
+        model=MagicMock(),
+        tcfg=tcfg,
+        base_model="meta-llama/Llama-3.2-1B",
+        console=None,
+        device="cuda",
+        backend="transformers",
     )
     assert result["kernel_auto_compose"] is False
 

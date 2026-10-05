@@ -35,10 +35,12 @@ class TestChunkedDistillKernel:
 
         s_dense = torch.randn(batch, seq, vocab, dtype=dtype, requires_grad=True)
         t_dense = torch.randn(batch, seq, vocab, dtype=dtype)
-        labels = torch.tensor([
-            [-100, 1, 2, -100, 4, -100, 6, -100],
-            [-100, -100, 2, 3, -100, 5, 6, -100],
-        ])
+        labels = torch.tensor(
+            [
+                [-100, 1, 2, -100, 4, -100, 6, -100],
+                [-100, -100, 2, 3, -100, 5, 6, -100],
+            ]
+        )
 
         # Dense baseline (chunk_size=None, use_checkpoint=False)
         loss_dense = _compute_distill_term(
@@ -80,10 +82,12 @@ class TestChunkedDistillKernel:
 
         s_dense = torch.randn(batch, seq, vocab, dtype=dtype, requires_grad=True)
         t_dense = torch.randn(batch, seq, vocab, dtype=dtype)
-        labels = torch.tensor([
-            [-100, 0, 1, 2, -100, -100, 3, 4, 5, -100],
-            [-100, -100, 1, -100, 2, 3, 4, -100, 5, -100],
-        ])
+        labels = torch.tensor(
+            [
+                [-100, 0, 1, 2, -100, -100, 3, 4, 5, -100],
+                [-100, -100, 1, -100, 2, 3, 4, -100, 5, -100],
+            ]
+        )
 
         loss_dense = _compute_distill_term(
             s_dense, t_dense, divergence, temp, labels=labels, chunk_size=None, use_checkpoint=False
@@ -149,10 +153,12 @@ class TestChunkedDistillKernel:
         temp = 2.0
         s = torch.randn(batch, seq, vocab, dtype=torch.float32, requires_grad=True)
         t = torch.randn(batch, seq, vocab, dtype=torch.float32)
-        labels = torch.tensor([
-            [-100, 1, 2, -100, 4, -100, 6, -100],
-            [-100, -100, 2, 3, -100, 5, 6, -100],
-        ])
+        labels = torch.tensor(
+            [
+                [-100, 1, 2, -100, 4, -100, 6, -100],
+                [-100, -100, 2, 3, -100, 5, 6, -100],
+            ]
+        )
 
         s_ref = s.detach().clone().requires_grad_(True)
         loss_ref = _reference_double_precision_distill(s_ref, t, divergence, temp, labels_in=labels)
@@ -161,8 +167,13 @@ class TestChunkedDistillKernel:
 
         s_new = s.detach().clone().requires_grad_(True)
         loss_new = _compute_distill_term(
-            s_new, t, divergence, temp, labels=labels,
-            chunk_size=chunk_size, use_checkpoint=use_checkpoint
+            s_new,
+            t,
+            divergence,
+            temp,
+            labels=labels,
+            chunk_size=chunk_size,
+            use_checkpoint=use_checkpoint,
         )
         loss_new.backward()
         grad_new = s_new.grad.clone()
@@ -428,10 +439,12 @@ training:
 
         def measure_bytes(fn):
             saved = 0
+
             def pack(tensor):
                 nonlocal saved
                 saved += tensor.numel() * tensor.element_size()
                 return tensor
+
             with torch.autograd.graph.saved_tensors_hooks(pack, lambda x: x):
                 fn()
             return saved

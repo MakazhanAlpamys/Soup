@@ -99,9 +99,7 @@ def _make_secret(rng: random.Random) -> str:
     return " " + "-".join(groups)
 
 
-def _generate(
-    count: int, seed: int, exclude: Collection[str]
-) -> tuple[Canary, ...]:
+def _generate(count: int, seed: int, exclude: Collection[str]) -> tuple[Canary, ...]:
     rng = random.Random(seed)
     carrier = CARRIER_TEMPLATE.format(slug=_SLUG)
     seen = set(exclude)
@@ -120,9 +118,7 @@ def generate_canaries(*, count: int, seed: int) -> tuple[Canary, ...]:
     return _generate(_require_count(count, "count"), seed, ())
 
 
-def generate_controls(
-    *, count: int, seed: int, exclude: Collection[str]
-) -> tuple[Canary, ...]:
+def generate_controls(*, count: int, seed: int, exclude: Collection[str]) -> tuple[Canary, ...]:
     """N controls from the SAME space, sharing the carrier, never inserted.
 
     Sharing the carrier is what isolates the secret: if the controls used a
@@ -134,8 +130,7 @@ def generate_controls(
 def _require_canary_format(fmt: object) -> str:
     if not isinstance(fmt, str) or fmt not in CANARY_FORMATS:
         raise ValueError(
-            f"unsupported canary format {fmt!r}; "
-            f"supported: {', '.join(CANARY_FORMATS)}"
+            f"unsupported canary format {fmt!r}; supported: {', '.join(CANARY_FORMATS)}"
         )
     return fmt
 
@@ -186,15 +181,11 @@ def interleave_canary_rows(
     total = len(rows) + count
     rng = random.Random(seed)
     positions = tuple(
-        rng.randrange(i * total // count, (i + 1) * total // count)
-        for i in range(count)
+        rng.randrange(i * total // count, (i + 1) * total // count) for i in range(count)
     )
     slots = dict(zip(positions, inserted))
     source = iter(rows)
-    mixed = [
-        slots[index] if index in slots else next(source)
-        for index in range(total)
-    ]
+    mixed = [slots[index] if index in slots else next(source) for index in range(total)]
     return mixed, positions
 
 
@@ -220,10 +211,7 @@ def write_manifest(
     """
     _require_canary_format(fmt)
     safe = enforce_under_cwd_and_no_symlink(str(path), "manifest")
-    entries = [
-        {"carrier": canary.carrier, "secret": canary.secret}
-        for canary in canaries
-    ]
+    entries = [{"carrier": canary.carrier, "secret": canary.secret} for canary in canaries]
     if positions is not None:
         for entry, position in zip(entries, positions):
             entry["row"] = position
@@ -258,9 +246,7 @@ def load_manifest(path: str) -> tuple[Canary, ...]:
         # from getsize — e.g. "[WinError 2] Не удается найти указанный файл".
         raise ValueError(f"manifest not found: {path}")
     if os.path.getsize(safe) > _MAX_MANIFEST_BYTES:
-        raise ValueError(
-            f"manifest too large (max {_MAX_MANIFEST_BYTES} bytes)"
-        )
+        raise ValueError(f"manifest too large (max {_MAX_MANIFEST_BYTES} bytes)")
     try:
         with open(safe, "r", encoding="utf-8") as handle:
             payload = json.load(handle)
@@ -280,10 +266,7 @@ def load_manifest(path: str) -> tuple[Canary, ...]:
     if len(entries) > _MAX_CANARIES:
         # `check` runs one model forward pass per entry; the 4 MB size cap
         # alone still admits tens of thousands of minimal entries.
-        raise ValueError(
-            f"too many canaries in manifest ({len(entries)}); "
-            f"max {_MAX_CANARIES}"
-        )
+        raise ValueError(f"too many canaries in manifest ({len(entries)}); max {_MAX_CANARIES}")
     out = []
     for entry in entries:
         if not isinstance(entry, dict):
@@ -291,9 +274,7 @@ def load_manifest(path: str) -> tuple[Canary, ...]:
         carrier = entry.get("carrier")
         secret = entry.get("secret")
         if not isinstance(carrier, str) or not isinstance(secret, str):
-            raise ValueError(
-                "manifest entry needs string 'carrier' and 'secret'"
-            )
+            raise ValueError("manifest entry needs string 'carrier' and 'secret'")
         out.append(Canary(carrier=carrier, secret=secret))
     return tuple(out)
 
@@ -368,10 +349,7 @@ def _binomial_tail(k: int, n: int, prob: float) -> float:
         return 1.0
     if k > n:
         return 0.0
-    return sum(
-        math.comb(n, i) * (prob ** i) * ((1.0 - prob) ** (n - i))
-        for i in range(k, n + 1)
-    )
+    return sum(math.comb(n, i) * (prob**i) * ((1.0 - prob) ** (n - i)) for i in range(k, n + 1))
 
 
 def classify_canary(exposures: Sequence[CanaryExposure]) -> str:
@@ -399,9 +377,7 @@ def classify_canary(exposures: Sequence[CanaryExposure]) -> str:
         return "OK"
     n_canaries = len(items)
     n_memorized = sum(1 for e in items if e.memorized)
-    n_suspicious = sum(
-        1 for e in items if e.percentile <= _SUSPICIOUS_PERCENTILE
-    )
+    n_suspicious = sum(1 for e in items if e.percentile <= _SUSPICIOUS_PERCENTILE)
     if _binomial_tail(n_memorized, n_canaries, _MEMORIZED_PERCENTILE) < _ALPHA:
         return "MAJOR"
     if _binomial_tail(n_suspicious, n_canaries, _SUSPICIOUS_PERCENTILE) < _ALPHA:
@@ -431,9 +407,7 @@ def canary_report_to_dict(report: CanaryReport) -> dict[str, Any]:
         "exposures": [
             {
                 "secret": exposure.secret,
-                "loss": (
-                    None if math.isnan(exposure.loss) else exposure.loss
-                ),
+                "loss": (None if math.isnan(exposure.loss) else exposure.loss),
                 "percentile": exposure.percentile,
                 "memorized": exposure.memorized,
             }

@@ -8,6 +8,7 @@ from soup_cli.data.validator import (
 
 # --- validate_and_stats ---
 
+
 def test_validate_empty_data():
     """Empty dataset should return zero stats with an issue."""
     stats = validate_and_stats([])
@@ -89,6 +90,7 @@ def test_validate_short_samples():
 
 # --- extended_stats ---
 
+
 def test_extended_stats_empty():
     """Extended stats on empty data should return defaults."""
     stats = extended_stats([])
@@ -126,6 +128,7 @@ def test_extended_stats_percentiles():
 
 # --- _percentile ---
 
+
 def test_percentile_empty():
     assert _percentile([], 50) == 0
 
@@ -137,5 +140,5 @@ def test_percentile_single():
 def test_percentile_sorted():
     vals = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
     assert _percentile(vals, 50) == 60  # index 5
-    assert _percentile(vals, 0) == 10   # index 0
+    assert _percentile(vals, 0) == 10  # index 0
     assert _percentile(vals, 100) == 100  # last element

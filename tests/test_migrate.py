@@ -18,6 +18,7 @@ def _plain(text: str) -> str:
     """ANSI-stripped, whitespace-collapsed CLI output, safe to substring-match."""
     return " ".join(_ANSI_RE.sub("", text).split())
 
+
 # ---------------------------------------------------------------------------
 # Fixtures — sample configs
 # ---------------------------------------------------------------------------
@@ -520,6 +521,7 @@ UNSLOTH_PACKING_NOTEBOOK = {
 # LLaMA-Factory migration tests
 # ---------------------------------------------------------------------------
 
+
 class TestLlamaFactoryMigration:
     """LLaMA-Factory → Soup config migration."""
 
@@ -724,6 +726,7 @@ class TestLlamaFactoryMigration:
 # Axolotl migration tests
 # ---------------------------------------------------------------------------
 
+
 class TestAxolotlMigration:
     """Axolotl → Soup config migration."""
 
@@ -871,6 +874,7 @@ class TestAxolotlMigration:
 # Unsloth migration tests
 # ---------------------------------------------------------------------------
 
+
 class TestUnslothMigration:
     """Unsloth notebook → Soup config migration."""
 
@@ -887,7 +891,10 @@ class TestUnslothMigration:
         assert result["training"]["lora"]["alpha"] == 32
         assert result["training"]["lora"]["dropout"] == 0.05
         assert result["training"]["lora"]["target_modules"] == [
-            "q_proj", "v_proj", "k_proj", "o_proj"
+            "q_proj",
+            "v_proj",
+            "k_proj",
+            "o_proj",
         ]
         assert result["training"]["quantization"] == "4bit"
         assert result["training"]["batch_size"] == 4
@@ -976,6 +983,7 @@ class TestUnslothMigration:
 # Common utilities tests
 # ---------------------------------------------------------------------------
 
+
 class TestCommon:
     """Common migration utilities."""
 
@@ -1062,6 +1070,7 @@ class TestCommon:
 # CLI integration tests
 # ---------------------------------------------------------------------------
 
+
 class TestMigrateCLI:
     """CLI tests for soup migrate command."""
 
@@ -1076,13 +1085,18 @@ class TestMigrateCLI:
         monkeypatch.chdir(tmp_path)
         cfg_file = tmp_path / "config.yaml"
         cfg_file.write_text(LLAMA_FACTORY_SFT, encoding="utf-8")
-        result = runner.invoke(app, [
-            "migrate",
-            "--from", "llamafactory",
-            str(cfg_file),
-            "--output", "soup.yaml",
-            "--yes",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "migrate",
+                "--from",
+                "llamafactory",
+                str(cfg_file),
+                "--output",
+                "soup.yaml",
+                "--yes",
+            ],
+        )
         assert result.exit_code == 0
         out_path = tmp_path / "soup.yaml"
         assert out_path.exists()
@@ -1094,13 +1108,18 @@ class TestMigrateCLI:
         monkeypatch.chdir(tmp_path)
         cfg_file = tmp_path / "config.yaml"
         cfg_file.write_text(AXOLOTL_SFT, encoding="utf-8")
-        result = runner.invoke(app, [
-            "migrate",
-            "--from", "axolotl",
-            str(cfg_file),
-            "--output", "soup.yaml",
-            "--yes",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "migrate",
+                "--from",
+                "axolotl",
+                str(cfg_file),
+                "--output",
+                "soup.yaml",
+                "--yes",
+            ],
+        )
         assert result.exit_code == 0
         out_path = tmp_path / "soup.yaml"
         assert out_path.exists()
@@ -1125,13 +1144,18 @@ class TestMigrateCLI:
             "rl: ebft\n",
             encoding="utf-8",
         )
-        result = runner.invoke(app, [
-            "migrate",
-            "--from", "axolotl",
-            str(cfg_file),
-            "--output", "soup.yaml",
-            "--yes",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "migrate",
+                "--from",
+                "axolotl",
+                str(cfg_file),
+                "--output",
+                "soup.yaml",
+                "--yes",
+            ],
+        )
         assert result.exit_code == 1, (result.output, repr(result.exception))
         assert "ebft" in _plain(result.output)
         assert not (tmp_path / "soup.yaml").exists()
@@ -1141,13 +1165,18 @@ class TestMigrateCLI:
         monkeypatch.chdir(tmp_path)
         nb_file = tmp_path / "finetune.ipynb"
         nb_file.write_text(json.dumps(UNSLOTH_SFT_NOTEBOOK), encoding="utf-8")
-        result = runner.invoke(app, [
-            "migrate",
-            "--from", "unsloth",
-            str(nb_file),
-            "--output", "soup.yaml",
-            "--yes",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "migrate",
+                "--from",
+                "unsloth",
+                str(nb_file),
+                "--output",
+                "soup.yaml",
+                "--yes",
+            ],
+        )
         assert result.exit_code == 0
         out_path = tmp_path / "soup.yaml"
         assert out_path.exists()
@@ -1157,12 +1186,16 @@ class TestMigrateCLI:
         monkeypatch.chdir(tmp_path)
         cfg_file = tmp_path / "config.yaml"
         cfg_file.write_text(LLAMA_FACTORY_SFT, encoding="utf-8")
-        result = runner.invoke(app, [
-            "migrate",
-            "--from", "llamafactory",
-            str(cfg_file),
-            "--dry-run",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "migrate",
+                "--from",
+                "llamafactory",
+                str(cfg_file),
+                "--dry-run",
+            ],
+        )
         assert result.exit_code == 0
         out_path = tmp_path / "soup.yaml"
         assert not out_path.exists()
@@ -1173,21 +1206,29 @@ class TestMigrateCLI:
         monkeypatch.chdir(tmp_path)
         cfg_file = tmp_path / "config.yaml"
         cfg_file.write_text("test: true\n", encoding="utf-8")
-        result = runner.invoke(app, [
-            "migrate",
-            "--from", "invalid_tool",
-            str(cfg_file),
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "migrate",
+                "--from",
+                "invalid_tool",
+                str(cfg_file),
+            ],
+        )
         assert result.exit_code != 0
 
     def test_file_not_found(self, tmp_path, monkeypatch):
         """Non-existent input file shows error."""
         monkeypatch.chdir(tmp_path)
-        result = runner.invoke(app, [
-            "migrate",
-            "--from", "llamafactory",
-            "nonexistent.yaml",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "migrate",
+                "--from",
+                "llamafactory",
+                "nonexistent.yaml",
+            ],
+        )
         assert result.exit_code != 0
 
     def test_overwrite_confirmation(self, tmp_path, monkeypatch):
@@ -1198,12 +1239,18 @@ class TestMigrateCLI:
         out_file = tmp_path / "soup.yaml"
         out_file.write_text("existing content", encoding="utf-8")
         # Without --yes, deny confirmation
-        runner.invoke(app, [
-            "migrate",
-            "--from", "llamafactory",
-            str(cfg_file),
-            "--output", "soup.yaml",
-        ], input="n\n")
+        runner.invoke(
+            app,
+            [
+                "migrate",
+                "--from",
+                "llamafactory",
+                str(cfg_file),
+                "--output",
+                "soup.yaml",
+            ],
+            input="n\n",
+        )
         # File should be unchanged
         assert out_file.read_text(encoding="utf-8") == "existing content"
 
@@ -1212,12 +1259,16 @@ class TestMigrateCLI:
         monkeypatch.chdir(tmp_path)
         cfg_file = tmp_path / "config.yaml"
         cfg_file.write_text(LLAMA_FACTORY_SFT, encoding="utf-8")
-        result = runner.invoke(app, [
-            "migrate",
-            "--from", "llamafactory",
-            str(cfg_file),
-            "--dry-run",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "migrate",
+                "--from",
+                "llamafactory",
+                str(cfg_file),
+                "--dry-run",
+            ],
+        )
         assert result.exit_code == 0
         # LF SFT has dataset name warning
         assert "warning" in result.output.lower() or "Warning" in result.output
@@ -1227,17 +1278,22 @@ class TestMigrateCLI:
 # Security tests
 # ---------------------------------------------------------------------------
 
+
 class TestMigrateSecurity:
     """Security tests for soup migrate."""
 
     def test_input_path_traversal_cli(self, tmp_path, monkeypatch):
         """Path traversal in input file is blocked."""
         monkeypatch.chdir(tmp_path)
-        result = runner.invoke(app, [
-            "migrate",
-            "--from", "llamafactory",
-            "../../../etc/passwd",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "migrate",
+                "--from",
+                "llamafactory",
+                "../../../etc/passwd",
+            ],
+        )
         assert result.exit_code != 0
 
     def test_output_path_traversal_cli(self, tmp_path, monkeypatch):
@@ -1245,13 +1301,18 @@ class TestMigrateSecurity:
         monkeypatch.chdir(tmp_path)
         cfg_file = tmp_path / "config.yaml"
         cfg_file.write_text(LLAMA_FACTORY_SFT, encoding="utf-8")
-        result = runner.invoke(app, [
-            "migrate",
-            "--from", "llamafactory",
-            str(cfg_file),
-            "--output", "../../../tmp/evil.yaml",
-            "--yes",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "migrate",
+                "--from",
+                "llamafactory",
+                str(cfg_file),
+                "--output",
+                "../../../tmp/evil.yaml",
+                "--yes",
+            ],
+        )
         assert result.exit_code != 0
 
     def test_unsloth_no_exec(self, tmp_path):
@@ -1307,6 +1368,7 @@ class TestMigrateSecurity:
 # Additional coverage tests (TDD review gaps)
 # ---------------------------------------------------------------------------
 
+
 class TestMigrateTDDGaps:
     """Tests for coverage gaps identified in TDD review."""
 
@@ -1320,6 +1382,7 @@ class TestMigrateTDDGaps:
 
         # Temporarily lower the limit to test the check
         import soup_cli.migrate.common as common_mod
+
         original = common_mod.MAX_CONFIG_FILE_SIZE
         common_mod.MAX_CONFIG_FILE_SIZE = 50  # 50 bytes
         try:
@@ -1394,14 +1457,15 @@ class TestMigrateTDDGaps:
         result = migrate_axolotl(cfg_file)
         assert result["task"] == "grpo"
 
-    @pytest.mark.parametrize("rl_value,soup_task", [
-        ("orpo", "orpo"),
-        ("ipo", "ipo"),
-        ("simpo", "simpo"),
-    ])
-    def test_axolotl_preference_rl_maps_to_soup_task(
-        self, tmp_path, rl_value, soup_task
-    ):
+    @pytest.mark.parametrize(
+        "rl_value,soup_task",
+        [
+            ("orpo", "orpo"),
+            ("ipo", "ipo"),
+            ("simpo", "simpo"),
+        ],
+    )
+    def test_axolotl_preference_rl_maps_to_soup_task(self, tmp_path, rl_value, soup_task):
         """rl: orpo/ipo/simpo → matching Soup task, not a silent sft fallback."""
         from soup_cli.migrate.axolotl import migrate_axolotl
 
@@ -1424,18 +1488,17 @@ class TestMigrateTDDGaps:
         result = migrate_axolotl(cfg_file)
         assert result["task"] == soup_task
         assert result["data"]["format"] == "dpo"
-        assert not any(
-            "No Soup task matches" in w for w in result.get("_warnings", [])
-        )
+        assert not any("No Soup task matches" in w for w in result.get("_warnings", []))
 
-    @pytest.mark.parametrize("rl_value,soup_task", [
-        ("orpo", "orpo"),
-        ("ipo", "ipo"),
-        ("simpo", "simpo"),
-    ])
-    def test_axolotl_preference_rl_migration_loads(
-        self, tmp_path, rl_value, soup_task
-    ):
+    @pytest.mark.parametrize(
+        "rl_value,soup_task",
+        [
+            ("orpo", "orpo"),
+            ("ipo", "ipo"),
+            ("simpo", "simpo"),
+        ],
+    )
+    def test_axolotl_preference_rl_migration_loads(self, tmp_path, rl_value, soup_task):
         """The migrated orpo/ipo/simpo config must load as a valid
         SoupConfig, not just build without raising (same shape as #806 for
         grpo). Uses chat_template.argilla, the issue's second acceptance
@@ -1530,9 +1593,7 @@ class TestMigrateTDDGaps:
         cfg_file = tmp_path / "config.yaml"
         cfg_file.write_text(LLAMA_FACTORY_NEFTUNE, encoding="utf-8")
         result = migrate_llamafactory(cfg_file)
-        assert any(
-            "neftune" in w.lower() for w in result.get("_warnings", [])
-        )
+        assert any("neftune" in w.lower() for w in result.get("_warnings", []))
 
 
 def test_axolotl_refused_rl_is_printed_as_text(tmp_path, monkeypatch):
@@ -1540,12 +1601,8 @@ def test_axolotl_refused_rl_is_printed_as_text(tmp_path, monkeypatch):
     bytes in it must reach the terminal as text, not as styling or escapes."""
     monkeypatch.chdir(tmp_path)
     cfg_file = tmp_path / "config.yaml"
-    cfg_file.write_text(
-        'base_model: m\nrl: "[bold]x[/bold]\\e]0;t\\a"\n', encoding="utf-8"
-    )
-    result = runner.invoke(
-        app, ["migrate", "--from", "axolotl", str(cfg_file), "--dry-run"]
-    )
+    cfg_file.write_text('base_model: m\nrl: "[bold]x[/bold]\\e]0;t\\a"\n', encoding="utf-8")
+    result = runner.invoke(app, ["migrate", "--from", "axolotl", str(cfg_file), "--dry-run"])
     assert result.exit_code == 1, (result.output, repr(result.exception))
     assert "rl: [bold]x[/bold]" in _plain(result.output)
     assert "\x1b]" not in result.output

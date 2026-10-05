@@ -14,7 +14,8 @@ class TestComputeCacheKey:
         from soup_cli.utils.deploy_measure import compute_cache_key
 
         key = compute_cache_key(
-            base_sha="abc123", profile_name="rtx-4090-24gb",
+            base_sha="abc123",
+            profile_name="rtx-4090-24gb",
             tasks_sha="def456",
         )
         assert isinstance(key, str)
@@ -24,10 +25,14 @@ class TestComputeCacheKey:
         from soup_cli.utils.deploy_measure import compute_cache_key
 
         k1 = compute_cache_key(
-            base_sha="x", profile_name="p", tasks_sha="t",
+            base_sha="x",
+            profile_name="p",
+            tasks_sha="t",
         )
         k2 = compute_cache_key(
-            base_sha="x", profile_name="p", tasks_sha="t",
+            base_sha="x",
+            profile_name="p",
+            tasks_sha="t",
         )
         assert k1 == k2
 
@@ -53,7 +58,9 @@ class TestComputeCacheKey:
 
         with pytest.raises(ValueError):
             compute_cache_key(
-                base_sha="ev\x00il", profile_name="x", tasks_sha="y",
+                base_sha="ev\x00il",
+                profile_name="x",
+                tasks_sha="y",
             )
 
     def test_empty_rejected(self):
@@ -108,13 +115,17 @@ class TestMeasureCandidate:
         from soup_cli.utils.deploy_measure import measure_candidate
 
         tasks = _write_tasks(tmp_path)
+
         def gen(p):
             if "hello" in p:
                 return "hello"
             return "world"
+
         result = measure_candidate(
-            candidate="gptq", tasks_file=str(tasks),
-            before_gen=gen, after_gen=gen,
+            candidate="gptq",
+            tasks_file=str(tasks),
+            before_gen=gen,
+            after_gen=gen,
         )
         assert result.candidate == "gptq"
         assert result.verdict == "OK"
@@ -128,8 +139,7 @@ class TestMeasureCandidate:
         big = tmp_path / "tasks_big.jsonl"
         big.write_text(
             "\n".join(
-                '{"prompt": "p%d", "expected": "ok", "scoring": "exact"}' % i
-                for i in range(100)
+                '{"prompt": "p%d", "expected": "ok", "scoring": "exact"}' % i for i in range(100)
             ),
             encoding="utf-8",
         )
@@ -144,8 +154,10 @@ class TestMeasureCandidate:
             return "WRONG" if p in miss_set else "ok"
 
         r = measure_candidate(
-            candidate="awq", tasks_file=str(big),
-            before_gen=before, after_gen=after,
+            candidate="awq",
+            tasks_file=str(big),
+            before_gen=before,
+            after_gen=after,
         )
         assert isinstance(r, MeasureResult)
         assert r.verdict == "MINOR"
@@ -155,14 +167,19 @@ class TestMeasureCandidate:
         from soup_cli.utils.deploy_measure import measure_candidate
 
         tasks = _write_tasks(tmp_path)
+
         def before(p):
             return "hello" if "hello" in p else "world"
+
         # Always wrong → score 0.0; before score 1.0 → drop 1.0 → MAJOR
         def after(p):
             return "WRONG"
+
         r = measure_candidate(
-            candidate="awq", tasks_file=str(tasks),
-            before_gen=before, after_gen=after,
+            candidate="awq",
+            tasks_file=str(tasks),
+            before_gen=before,
+            after_gen=after,
         )
         assert r.verdict == "MAJOR"
         assert r.delta < 0
@@ -241,9 +258,19 @@ class TestCacheRoundtrip:
         from soup_cli.utils.deploy_measure import load_cache, save_cache
 
         cache_path = tmp_path / "cache.json"
-        payload = {"abc123": {"rows": [{"candidate": "gptq",
-                                        "before": 0.8, "after": 0.79,
-                                        "delta": -0.01, "verdict": "OK"}]}}
+        payload = {
+            "abc123": {
+                "rows": [
+                    {
+                        "candidate": "gptq",
+                        "before": 0.8,
+                        "after": 0.79,
+                        "delta": -0.01,
+                        "verdict": "OK",
+                    }
+                ]
+            }
+        }
         save_cache(payload, str(cache_path))
         loaded = load_cache(str(cache_path))
         assert loaded == payload
@@ -280,6 +307,7 @@ class TestRunMeasure:
                 if candidate == "awq":
                     return "hello" if "hello" in p else "world"
                 return "WRONG"
+
             return gen
 
         results1, hit1 = run_measure(
@@ -322,11 +350,12 @@ class TestRunMeasure:
         tasks = _write_tasks(tmp_path)
         with pytest.raises(ValueError):
             run_measure(
-                profile_name="p", base_sha="b",
+                profile_name="p",
+                base_sha="b",
                 candidates=(),
                 tasks_file=str(tasks),
                 before_gen=lambda p: "",
-                after_gen_factory=lambda c: (lambda p: ""),
+                after_gen_factory=lambda c: lambda p: "",
                 cache_path=str(tmp_path / "cache.json"),
             )
 
@@ -336,11 +365,12 @@ class TestRunMeasure:
         tasks = _write_tasks(tmp_path)
         with pytest.raises(TypeError):
             run_measure(
-                profile_name="p", base_sha="b",
+                profile_name="p",
+                base_sha="b",
                 candidates="awq",  # type: ignore[arg-type]
                 tasks_file=str(tasks),
                 before_gen=lambda p: "",
-                after_gen_factory=lambda c: (lambda p: ""),
+                after_gen_factory=lambda c: lambda p: "",
                 cache_path=str(tmp_path / "cache.json"),
             )
 
@@ -361,7 +391,9 @@ class TestDeployAutopilotMeasureCLI:
         # default to 80-col which splits `--measure` mid-line.
         runner = CliRunner()
         result = runner.invoke(
-            app, ["--help"], env={"COLUMNS": "200", "TERM": "dumb"},
+            app,
+            ["--help"],
+            env={"COLUMNS": "200", "TERM": "dumb"},
         )
         assert result.exit_code == 0
         # Inspect registered click params directly so the assertion doesn't
@@ -369,9 +401,7 @@ class TestDeployAutopilotMeasureCLI:
         # 80-col which splits long option names mid-line).
         click_cmd = typer.main.get_command(app)
         registered = {
-            opt
-            for param in click_cmd.params
-            for opt in (param.opts + param.secondary_opts)
+            opt for param in click_cmd.params for opt in (param.opts + param.secondary_opts)
         }
         assert "--measure" in registered, registered
         assert "--tasks" in registered, registered
@@ -388,8 +418,13 @@ class TestDeployAutopilotMeasureCLI:
         runner = CliRunner()
         result = runner.invoke(
             app,
-            ["--target", "rtx-4090-24gb", "--base", "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
-             "--measure"],
+            [
+                "--target",
+                "rtx-4090-24gb",
+                "--base",
+                "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+                "--measure",
+            ],
         )
         assert result.exit_code != 0
         assert "--tasks" in result.output
@@ -410,14 +445,10 @@ class TestDeployAutopilotMeasureCLI:
             return "hello" if "hello" in p else "world"
 
         def after_factory(candidate):
-            return lambda p: ("hello" if "hello" in p else "world")
+            return lambda p: "hello" if "hello" in p else "world"
 
-        monkeypatch.setattr(
-            _dm, "_DEPLOY_MEASURE_BEFORE_GEN", before, raising=False
-        )
-        monkeypatch.setattr(
-            _dm, "_DEPLOY_MEASURE_AFTER_FACTORY", after_factory, raising=False
-        )
+        monkeypatch.setattr(_dm, "_DEPLOY_MEASURE_BEFORE_GEN", before, raising=False)
+        monkeypatch.setattr(_dm, "_DEPLOY_MEASURE_AFTER_FACTORY", after_factory, raising=False)
         # Redirect cache to tmp
         monkeypatch.setenv(
             "SOUP_DEPLOY_AUTOPILOT_CACHE",
@@ -430,13 +461,19 @@ class TestDeployAutopilotMeasureCLI:
         result = runner.invoke(
             app,
             [
-                "--target", "rtx-4090-24gb",
-                "--base", "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
-                "--recipe-out", str(tmp_path / "recipe.yaml"),
-                "--script-out", str(tmp_path / "deploy.sh"),
+                "--target",
+                "rtx-4090-24gb",
+                "--base",
+                "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+                "--recipe-out",
+                str(tmp_path / "recipe.yaml"),
+                "--script-out",
+                str(tmp_path / "deploy.sh"),
                 "--measure",
-                "--tasks", str(tasks),
-                "--measure-candidates", "awq,gptq",
+                "--tasks",
+                str(tasks),
+                "--measure-candidates",
+                "awq,gptq",
             ],
         )
         assert result.exit_code == 0, (result.output, repr(result.exception))
@@ -456,11 +493,12 @@ class TestMaxCandidatesCap:
         tasks = _write_tasks(tmp_path)
         with pytest.raises(ValueError, match="too many candidates"):
             run_measure(
-                profile_name="p", base_sha="b",
+                profile_name="p",
+                base_sha="b",
                 candidates=tuple(f"q{i}" for i in range(33)),
                 tasks_file=str(tasks),
                 before_gen=lambda p: "",
-                after_gen_factory=lambda c: (lambda p: ""),
+                after_gen_factory=lambda c: lambda p: "",
                 cache_path=str(tmp_path / "cache.json"),
             )
 
@@ -512,9 +550,7 @@ class TestRenderMeasureTableEscape:
         rows = [MeasureResult("[red]evil[/]", 0.8, 0.79, -0.01, "OK")]
         table = render_measure_table(rows)
         buf = StringIO()
-        Console(file=buf, force_terminal=False, no_color=True, width=200).print(
-            table
-        )
+        Console(file=buf, force_terminal=False, no_color=True, width=200).print(table)
         # The raw bracketed text must appear (escaped); the colour markup
         # must NOT have been interpreted as Rich styling.
         output = buf.getvalue()

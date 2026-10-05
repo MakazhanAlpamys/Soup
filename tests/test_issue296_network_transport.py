@@ -34,6 +34,7 @@ def _plain(text: str) -> str:
     """
     return " ".join(_ANSI_RE.sub("", text).split())
 
+
 TOKEN = "T" * 43
 WRONG = "W" * 43
 
@@ -105,11 +106,7 @@ class TestBearerGate:
 
     def test_malformed_authorization_header_is_401(self):
         # Right token, wrong scheme: "Bearer" is not optional.
-        resp = _run(
-            _request(
-                _build("sse"), "POST", "/messages/", headers={"Authorization": TOKEN}
-            )
-        )
+        resp = _run(_request(_build("sse"), "POST", "/messages/", headers={"Authorization": TOKEN}))
         assert resp.status_code == 401
 
     def test_correct_token_reaches_the_transport(self):
@@ -347,10 +344,7 @@ class TestSseEndToEnd:
         # Parity with stdio is the acceptance criterion: SSE must serve the
         # SAME registry, not a subset. Compared against build_registry rather
         # than a hardcoded count so adding a tool cannot make this drift.
-        expected = {
-            spec.name
-            for spec in build_registry(allow_mutating=False, allow_execute=False)
-        }
+        expected = {spec.name for spec in build_registry(allow_mutating=False, allow_execute=False)}
         assert names == expected
         assert "recipes_search" in names
         assert result.content and result.content[0].text.strip().startswith("{")
@@ -445,6 +439,8 @@ class TestTransportEntryPoints:
                 port=1234,
             )
         assert "app" not in seen  # never reached uvicorn
+
+
 class TestExecutionIsStdioOnly:
     """--allow-execute must not reach a network listener (#296 review).
 
@@ -486,9 +482,7 @@ class TestExecutionIsStdioOnly:
 
     def test_stdio_banner_does_not_claim_execution_is_disabled(self, monkeypatch):
         """The stale banner was the half that made the hole quiet."""
-        monkeypatch.setattr(
-            "soup_cli.mcp_server.server.run_stdio_server", lambda **kw: None
-        )
+        monkeypatch.setattr("soup_cli.mcp_server.server.run_stdio_server", lambda **kw: None)
         result = CliRunner().invoke(cli_app, ["mcp", "serve", "--allow-execute"])
         plain = _plain(result.output)
         assert "execution disabled" not in plain.lower(), plain
@@ -537,9 +531,7 @@ class TestExecuteGateIsCoveredByBehaviour:
 
         specs = {
             spec.name: spec
-            for spec in build_registry(
-                allow_mutating=True, allow_execute=allow_execute
-            )
+            for spec in build_registry(allow_mutating=True, allow_execute=allow_execute)
         }
         return specs[name]
 
@@ -600,9 +592,7 @@ class TestExecuteGateIsCoveredByBehaviour:
         with pytest.raises(McpToolError, match="--allow-execute"):
             specs[name].handler({"confirmation_token": "x" * 43})
 
-    def test_stdio_entry_point_passes_an_execution_manager_unconditionally(
-        self, monkeypatch
-    ):
+    def test_stdio_entry_point_passes_an_execution_manager_unconditionally(self, monkeypatch):
         """Control: pins WHY the test above is the one that matters.
 
         If run_stdio_server ever stops handing an ExecutionManager to a

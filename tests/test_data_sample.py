@@ -32,12 +32,18 @@ class TestSampleCLI:
         monkeypatch.chdir(tmp_path)
         input_path = _create_jsonl(tmp_path, "big.jsonl", 100)
         output_path = tmp_path / "small.jsonl"
-        result = runner.invoke(app, [
-            "data", "sample",
-            str(input_path),
-            "--output", str(output_path),
-            "--n", "10",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "data",
+                "sample",
+                str(input_path),
+                "--output",
+                str(output_path),
+                "--n",
+                "10",
+            ],
+        )
         assert result.exit_code == 0
         with open(output_path, encoding="utf-8") as fh:
             rows = [json.loads(line) for line in fh]
@@ -48,12 +54,18 @@ class TestSampleCLI:
         monkeypatch.chdir(tmp_path)
         input_path = _create_jsonl(tmp_path, "big.jsonl", 100)
         output_path = tmp_path / "small.jsonl"
-        result = runner.invoke(app, [
-            "data", "sample",
-            str(input_path),
-            "--output", str(output_path),
-            "--pct", "10",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "data",
+                "sample",
+                str(input_path),
+                "--output",
+                str(output_path),
+                "--pct",
+                "10",
+            ],
+        )
         assert result.exit_code == 0
         with open(output_path, encoding="utf-8") as fh:
             rows = [json.loads(line) for line in fh]
@@ -64,12 +76,18 @@ class TestSampleCLI:
         monkeypatch.chdir(tmp_path)
         input_path = _create_jsonl(tmp_path, "small.jsonl", 5)
         output_path = tmp_path / "out.jsonl"
-        result = runner.invoke(app, [
-            "data", "sample",
-            str(input_path),
-            "--output", str(output_path),
-            "--n", "100",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "data",
+                "sample",
+                str(input_path),
+                "--output",
+                str(output_path),
+                "--n",
+                "100",
+            ],
+        )
         assert result.exit_code == 0
         with open(output_path, encoding="utf-8") as fh:
             rows = [json.loads(line) for line in fh]
@@ -82,14 +100,34 @@ class TestSampleCLI:
         out1 = tmp_path / "out1.jsonl"
         out2 = tmp_path / "out2.jsonl"
 
-        runner.invoke(app, [
-            "data", "sample", str(input_path),
-            "--output", str(out1), "--n", "10", "--seed", "42",
-        ])
-        runner.invoke(app, [
-            "data", "sample", str(input_path),
-            "--output", str(out2), "--n", "10", "--seed", "42",
-        ])
+        runner.invoke(
+            app,
+            [
+                "data",
+                "sample",
+                str(input_path),
+                "--output",
+                str(out1),
+                "--n",
+                "10",
+                "--seed",
+                "42",
+            ],
+        )
+        runner.invoke(
+            app,
+            [
+                "data",
+                "sample",
+                str(input_path),
+                "--output",
+                str(out2),
+                "--n",
+                "10",
+                "--seed",
+                "42",
+            ],
+        )
 
         with open(out1, encoding="utf-8") as fh:
             rows1 = fh.readlines()
@@ -102,12 +140,20 @@ class TestSampleCLI:
         monkeypatch.chdir(tmp_path)
         input_path = _create_jsonl(tmp_path, "data.jsonl", 50)
         output_path = tmp_path / "diverse.jsonl"
-        result = runner.invoke(app, [
-            "data", "sample", str(input_path),
-            "--output", str(output_path),
-            "--n", "10",
-            "--strategy", "diverse",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "data",
+                "sample",
+                str(input_path),
+                "--output",
+                str(output_path),
+                "--n",
+                "10",
+                "--strategy",
+                "diverse",
+            ],
+        )
         assert result.exit_code == 0
         with open(output_path, encoding="utf-8") as fh:
             rows = [json.loads(line) for line in fh]
@@ -118,12 +164,20 @@ class TestSampleCLI:
         monkeypatch.chdir(tmp_path)
         input_path = _create_jsonl(tmp_path, "data.jsonl", 50)
         output_path = tmp_path / "hard.jsonl"
-        result = runner.invoke(app, [
-            "data", "sample", str(input_path),
-            "--output", str(output_path),
-            "--n", "10",
-            "--strategy", "hard",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "data",
+                "sample",
+                str(input_path),
+                "--output",
+                str(output_path),
+                "--n",
+                "10",
+                "--strategy",
+                "hard",
+            ],
+        )
         assert result.exit_code == 0
         with open(output_path, encoding="utf-8") as fh:
             rows = [json.loads(line) for line in fh]
@@ -131,10 +185,18 @@ class TestSampleCLI:
 
     def test_missing_input_file(self):
         """Should fail for nonexistent input file."""
-        result = runner.invoke(app, [
-            "data", "sample", "nonexistent.jsonl",
-            "--output", "out.jsonl", "--n", "10",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "data",
+                "sample",
+                "nonexistent.jsonl",
+                "--output",
+                "out.jsonl",
+                "--n",
+                "10",
+            ],
+        )
         assert result.exit_code != 0
 
     def test_empty_input(self, tmp_path):
@@ -142,10 +204,18 @@ class TestSampleCLI:
         empty_file = tmp_path / "empty.jsonl"
         empty_file.write_text("")
         output_path = tmp_path / "out.jsonl"
-        result = runner.invoke(app, [
-            "data", "sample", str(empty_file),
-            "--output", str(output_path), "--n", "10",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "data",
+                "sample",
+                str(empty_file),
+                "--output",
+                str(output_path),
+                "--n",
+                "10",
+            ],
+        )
         assert result.exit_code != 0
 
     def test_default_output_name(self, tmp_path):
@@ -153,9 +223,16 @@ class TestSampleCLI:
         overwrite when running successive `random`/`diverse`/`hard` passes.
         """
         input_path = _create_jsonl(tmp_path, "data.jsonl", 20)
-        result = runner.invoke(app, [
-            "data", "sample", str(input_path), "--n", "5",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "data",
+                "sample",
+                str(input_path),
+                "--n",
+                "5",
+            ],
+        )
         assert result.exit_code == 0
         expected_output = tmp_path / "data_sampled_random.jsonl"
         assert expected_output.exists()
@@ -166,18 +243,31 @@ class TestSampleCLI:
     def test_must_specify_n_or_pct(self, tmp_path):
         """Should fail if neither --n nor --pct specified."""
         input_path = _create_jsonl(tmp_path, "data.jsonl", 20)
-        result = runner.invoke(app, [
-            "data", "sample", str(input_path),
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "data",
+                "sample",
+                str(input_path),
+            ],
+        )
         assert result.exit_code != 0
 
     def test_invalid_strategy(self, tmp_path):
         """Unknown strategy shows error."""
         input_path = _create_jsonl(tmp_path, "data.jsonl", 20)
-        result = runner.invoke(app, [
-            "data", "sample", str(input_path),
-            "--n", "5", "--strategy", "nonexistent",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "data",
+                "sample",
+                str(input_path),
+                "--n",
+                "5",
+                "--strategy",
+                "nonexistent",
+            ],
+        )
         assert result.exit_code != 0
 
 
@@ -187,10 +277,18 @@ class TestSampleSecurity:
     def test_sample_output_path_traversal(self, tmp_path):
         """--output with path traversal should be rejected."""
         input_path = _create_jsonl(tmp_path, "data.jsonl", 20)
-        result = runner.invoke(app, [
-            "data", "sample", str(input_path),
-            "--output", "../../evil.jsonl", "--n", "5",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "data",
+                "sample",
+                str(input_path),
+                "--output",
+                "../../evil.jsonl",
+                "--n",
+                "5",
+            ],
+        )
         assert result.exit_code != 0
 
 
@@ -210,10 +308,7 @@ class TestSampleStrategies:
     def test_diverse_sample(self):
         from soup_cli.commands.data import _sample_diverse
 
-        data = [
-            {"text": "Python is a programming language" * (idx + 1)}
-            for idx in range(50)
-        ]
+        data = [{"text": "Python is a programming language" * (idx + 1)} for idx in range(50)]
         result = _sample_diverse(data, 10, seed=42)
         assert len(result) == 10
 
@@ -221,10 +316,7 @@ class TestSampleStrategies:
         from soup_cli.commands.data import _sample_hard
 
         # Create data with varying lengths (proxy for difficulty)
-        data = [
-            {"text": "word " * (idx + 1)}
-            for idx in range(50)
-        ]
+        data = [{"text": "word " * (idx + 1)} for idx in range(50)]
         result = _sample_hard(data, 10)
         assert len(result) == 10
         # Hard samples should be longer (more difficult)

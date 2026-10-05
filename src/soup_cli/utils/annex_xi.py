@@ -114,7 +114,7 @@ def _format_flops(flops: float) -> str:
     if flops <= 0:
         return "0"
     exp = int(math.floor(math.log10(flops)))
-    mant = flops / (10 ** exp)
+    mant = flops / (10**exp)
     return f"{mant:.2f}e{exp}"
 
 
@@ -138,10 +138,10 @@ def _md_escape(value: str) -> str:
 
 def _build_domains_block(data: AnnexXIData) -> str:
     """Render the top-10 domains as a markdown list (shared by XI + XII)."""
-    return "\n".join(
-        f"- {_md_escape(domain)}: {share:.2%}"
-        for domain, share in data.top_domains[:10]
-    ) or "_(no domains recorded)_"
+    return (
+        "\n".join(f"- {_md_escape(domain)}: {share:.2%}" for domain, share in data.top_domains[:10])
+        or "_(no domains recorded)_"
+    )
 
 
 def _build_modalities(data: AnnexXIData) -> str:
@@ -223,10 +223,7 @@ _VALID_FORMATS = ("markdown", "md", "pdf")
 
 
 def _render_markdown(data: AnnexXIData, section_lc: str) -> str:
-    return (
-        render_annex_xi_markdown(data) if section_lc == "xi"
-        else render_annex_xii_markdown(data)
-    )
+    return render_annex_xi_markdown(data) if section_lc == "xi" else render_annex_xii_markdown(data)
 
 
 def render_annex_pdf(data: AnnexXIData, section: str) -> bytes:
@@ -242,9 +239,7 @@ def render_annex_pdf(data: AnnexXIData, section: str) -> bytes:
     if not isinstance(data, AnnexXIData):
         raise TypeError(f"data must be AnnexXIData, got {type(data).__name__}")
     if not isinstance(section, str) or section.lower() not in _VALID_SECTIONS:
-        raise ValueError(
-            f"section must be one of {_VALID_SECTIONS}, got {section!r}"
-        )
+        raise ValueError(f"section must be one of {_VALID_SECTIONS}, got {section!r}")
     try:
         import io  # noqa: PLC0415
         from xml.sax.saxutils import escape as _xml_escape  # noqa: PLC0415
@@ -295,9 +290,7 @@ def render_annex_pdf(data: AnnexXIData, section: str) -> bytes:
             _flush_bullets()
             flowables.append(Paragraph(_clean(stripped[2:]), styles["Title"]))
         elif stripped.startswith("- "):
-            bullets.append(
-                ListItem(Paragraph(_clean(stripped[2:]), styles["BodyText"]))
-            )
+            bullets.append(ListItem(Paragraph(_clean(stripped[2:]), styles["BodyText"])))
         else:
             _flush_bullets()
             flowables.append(Paragraph(_clean(stripped), styles["BodyText"]))
@@ -322,9 +315,7 @@ def write_annex_doc(
     ``pdf`` (v0.71.3 #181) for a reportlab-rendered PDF.
     """
     if not isinstance(section, str) or section.lower() not in _VALID_SECTIONS:
-        raise ValueError(
-            f"section must be one of {_VALID_SECTIONS}, got {section!r}"
-        )
+        raise ValueError(f"section must be one of {_VALID_SECTIONS}, got {section!r}")
     if not isinstance(fmt, str) or fmt.lower() not in _VALID_FORMATS:
         raise ValueError(f"fmt must be one of {_VALID_FORMATS}, got {fmt!r}")
     section_lc = section.lower()
@@ -333,11 +324,17 @@ def write_annex_doc(
 
         pdf_bytes = render_annex_pdf(data, section)
         return atomic_write_bytes(
-            pdf_bytes, output_path, prefix=".annex.", suffix=".pdf.tmp",
+            pdf_bytes,
+            output_path,
+            prefix=".annex.",
+            suffix=".pdf.tmp",
         )
     text = _render_markdown(data, section_lc)
     return atomic_write_text(
-        text, output_path, prefix=".annex.", suffix=".md.tmp",
+        text,
+        output_path,
+        prefix=".annex.",
+        suffix=".md.tmp",
     )
 
 
@@ -413,9 +410,7 @@ def extract_top_domains(
     return tuple((domain, count / total) for domain, count in ranked)
 
 
-def load_top_domains_from_jsonl(
-    path: object, *, top_n: int = 10
-) -> Tuple[Tuple[str, float], ...]:
+def load_top_domains_from_jsonl(path: object, *, top_n: int = 10) -> Tuple[Tuple[str, float], ...]:
     """Best-effort domain extraction from cwd-contained JSONL file(s).
 
     ``path`` may be a single path or a list of paths (#443 — data.interleave

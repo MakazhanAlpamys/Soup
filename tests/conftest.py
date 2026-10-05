@@ -259,7 +259,7 @@ training:
     r: 8
     alpha: 16
   quantization: 4bit
-output: {tmp_path / 'output'}
+output: {tmp_path / "output"}
 """,
         encoding="utf-8",
     )

@@ -173,7 +173,6 @@ class TestRunLogDirectorySymlinkAndHardlink:
         assert not os.path.islink(log_path)
         assert log_path.read_bytes() == b"regular output\n"
 
-
     @pytest.mark.requires_symlink
     def test_a_refused_execute_frees_the_slot_for_the_next_plan(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)

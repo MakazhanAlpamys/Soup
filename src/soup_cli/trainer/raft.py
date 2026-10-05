@@ -118,11 +118,7 @@ class RaftEpochShuffleCollator:
         citation_style: str = "bracket",
         citation_boost: float = _DEFAULT_CITATION_BOOST,
     ) -> None:
-        if (
-            isinstance(max_length, bool)
-            or not isinstance(max_length, int)
-            or max_length < 8
-        ):
+        if isinstance(max_length, bool) or not isinstance(max_length, int) or max_length < 8:
             raise ValueError("max_length must be an int >= 8")
         if not isinstance(epoch_state, RaftEpochState):
             raise TypeError("epoch_state must be a RaftEpochState")
@@ -219,11 +215,7 @@ def make_raft_trainer_class(base_cls: type) -> type:
 
             labels = inputs.get("labels")
             loss_weights = inputs.get("loss_weights")
-            model_inputs = {
-                k: v
-                for k, v in inputs.items()
-                if k not in ("labels", "loss_weights")
-            }
+            model_inputs = {k: v for k, v in inputs.items() if k not in ("labels", "loss_weights")}
             outputs = model(**model_inputs)
             logits = outputs.logits
             shift_logits = logits[:, :-1, :].contiguous()
@@ -251,7 +243,9 @@ def make_raft_trainer_class(base_cls: type) -> type:
                 # NaN: `nan * 0.0 == nan`, so anchor on a fresh zeros tensor
                 # with grad rather than `per_token.mean() * 0.0`).
                 loss = torch.zeros(
-                    (), device=per_token.device, dtype=per_token.dtype,
+                    (),
+                    device=per_token.device,
+                    dtype=per_token.dtype,
                     requires_grad=True,
                 )
             return (loss, outputs) if return_outputs else loss

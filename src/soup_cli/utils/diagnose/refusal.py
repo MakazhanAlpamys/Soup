@@ -131,24 +131,18 @@ def _resolve_lang_pattern(lang: object) -> re.Pattern[str]:
     by the ``isinstance(str)`` gate without a separate guard.
     """
     if not isinstance(lang, str):
-        raise TypeError(
-            f"lang must be str, got {type(lang).__name__}"
-        )
+        raise TypeError(f"lang must be str, got {type(lang).__name__}")
     if not lang:
         raise ValueError("lang must be non-empty")
     if "\x00" in lang:
         raise ValueError("lang must not contain null bytes")
     if len(lang) > _MAX_LANG_CODE_LEN:
-        raise ValueError(
-            f"lang too long (max {_MAX_LANG_CODE_LEN} chars)"
-        )
+        raise ValueError(f"lang too long (max {_MAX_LANG_CODE_LEN} chars)")
     canonical = lang.lower()
     pattern = _REFUSAL_PATTERNS_BY_LANG.get(canonical)
     if pattern is None:
         supported = ", ".join(sorted(SUPPORTED_REFUSAL_LANGS))
-        raise ValueError(
-            f"unsupported lang {canonical!r} (supported: {supported})"
-        )
+        raise ValueError(f"unsupported lang {canonical!r} (supported: {supported})")
     return pattern
 
 
@@ -163,15 +157,17 @@ def _resolve_lang_pattern(lang: object) -> re.Pattern[str]:
 #: the dangerous direction — a fine-tune that only shifts punctuation style moved
 #: the score by 0.200, so the same swing downward is a false DON'T-SHIP on a safe
 #: adapter.
-_APOSTROPHES = str.maketrans({
-    "‘": "'",  # LEFT SINGLE QUOTATION MARK
-    "’": "'",  # RIGHT SINGLE QUOTATION MARK — the one Llama types
-    "‛": "'",  # SINGLE HIGH-REVERSED-9 QUOTATION MARK
-    "ʼ": "'",  # MODIFIER LETTER APOSTROPHE
-    "ʹ": "'",  # MODIFIER LETTER PRIME
-    "′": "'",  # PRIME
-    "＇": "'",  # FULLWIDTH APOSTROPHE
-})
+_APOSTROPHES = str.maketrans(
+    {
+        "‘": "'",  # LEFT SINGLE QUOTATION MARK
+        "’": "'",  # RIGHT SINGLE QUOTATION MARK — the one Llama types
+        "‛": "'",  # SINGLE HIGH-REVERSED-9 QUOTATION MARK
+        "ʼ": "'",  # MODIFIER LETTER APOSTROPHE
+        "ʹ": "'",  # MODIFIER LETTER PRIME
+        "′": "'",  # PRIME
+        "＇": "'",  # FULLWIDTH APOSTROPHE
+    }
+)
 
 
 def _apply_pattern(pattern: re.Pattern[str], text: object) -> bool:

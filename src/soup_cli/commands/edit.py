@@ -19,8 +19,7 @@ console = Console()
 app = typer.Typer(
     name="edit",
     help=(
-        "Knowledge editing (ROME / MEMIT / AlphaEdit) - patch facts "
-        "without re-training (v0.61.0)."
+        "Knowledge editing (ROME / MEMIT / AlphaEdit) - patch facts without re-training (v0.61.0)."
     ),
     no_args_is_help=True,
     rich_markup_mode="rich",
@@ -52,9 +51,7 @@ def _load_cov_corpus(path: str) -> list[str]:
     if "\x00" in path:
         raise ValueError("--cov-corpus path must not contain null bytes")
     if not is_under_cwd(path):
-        raise ValueError(
-            f"--cov-corpus path must stay under cwd: {os.path.basename(path)!r}"
-        )
+        raise ValueError(f"--cov-corpus path must stay under cwd: {os.path.basename(path)!r}")
     # Raw-path symlink guard (the Windows guard, where O_NOFOLLOW is a no-op).
     try:
         if os.path.lexists(path) and stat.S_ISLNK(os.lstat(path).st_mode):
@@ -67,15 +64,11 @@ def _load_cov_corpus(path: str) -> list[str]:
     try:
         fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
     except FileNotFoundError as exc:
-        raise FileNotFoundError(
-            f"--cov-corpus file not found: {os.path.basename(path)!r}"
-        ) from exc
+        raise FileNotFoundError(f"--cov-corpus file not found: {os.path.basename(path)!r}") from exc
     except OSError as exc:
         if getattr(exc, "errno", None) == errno.ELOOP:
             raise ValueError("--cov-corpus path must not be a symlink") from exc
-        raise ValueError(
-            f"--cov-corpus path is not readable ({type(exc).__name__})"
-        ) from exc
+        raise ValueError(f"--cov-corpus path is not readable ({type(exc).__name__})") from exc
     # fstat the RAW fd before wrapping it: on POSIX ``os.open`` succeeds on a
     # directory, and ``os.fdopen`` then raises ``IsADirectoryError`` before our
     # ``S_ISREG`` check could run — so reject non-regular files (and oversize)
@@ -85,17 +78,13 @@ def _load_cov_corpus(path: str) -> list[str]:
         st = os.fstat(fd)
     except OSError as exc:
         os.close(fd)
-        raise ValueError(
-            f"--cov-corpus path is not readable ({type(exc).__name__})"
-        ) from exc
+        raise ValueError(f"--cov-corpus path is not readable ({type(exc).__name__})") from exc
     if not stat.S_ISREG(st.st_mode):
         os.close(fd)
         raise ValueError("--cov-corpus path must be a regular file")
     if st.st_size > _MAX_COV_CORPUS_BYTES:
         os.close(fd)
-        raise ValueError(
-            f"--cov-corpus file too large (> {_MAX_COV_CORPUS_BYTES} bytes)"
-        )
+        raise ValueError(f"--cov-corpus file too large (> {_MAX_COV_CORPUS_BYTES} bytes)")
     rows: list[str] = []
     with os.fdopen(fd, encoding="utf-8") as fh:
         for i, line in enumerate(fh):
@@ -126,50 +115,67 @@ def _load_cov_corpus(path: str) -> list[str]:
 @app.command(name="set")
 def set_edit(
     base: str = typer.Option(
-        ..., "--base", "-b",
+        ...,
+        "--base",
+        "-b",
         help="Base model HF id or local path.",
     ),
     method: str = typer.Option(
-        "rome", "--method", "-m",
+        "rome",
+        "--method",
+        "-m",
         help="Edit method: rome / memit / alphaedit.",
     ),
     subject: str = typer.Option(
-        ..., "--subject", "-s",
+        ...,
+        "--subject",
+        "-s",
         help='Prefix sentence (e.g. "Paris is the capital of France").',
     ),
     target: str = typer.Option(
-        ..., "--target", "-t",
+        ...,
+        "--target",
+        "-t",
         help='New completion target (e.g. "Lyon").',
     ),
     layer: Optional[int] = typer.Option(
-        None, "--layer", "-l",
+        None,
+        "--layer",
+        "-l",
         help="MLP layer index to edit (defaults to method-specific recommended layer).",
     ),
     output: Optional[str] = typer.Option(
-        None, "--output", "-o",
+        None,
+        "--output",
+        "-o",
         help="Directory to save the edited model / GRACE codebook (cwd-contained).",
     ),
     device: Optional[str] = typer.Option(
-        None, "--device",
+        None,
+        "--device",
         help="torch device (cpu / cuda). Defaults to CUDA when available.",
     ),
     use_governor: bool = typer.Option(
-        True, "--governor/--no-governor",
+        True,
+        "--governor/--no-governor",
         help="Consult the sequential-edit governor (refuse on norm blowup).",
     ),
     cov_corpus: Optional[str] = typer.Option(
-        None, "--cov-corpus",
+        None,
+        "--cov-corpus",
         help=(
             "ROME only: JSONL/text corpus to estimate the key covariance C "
             "for a C^{-1}-preconditioned update (reduces collateral damage)."
         ),
     ),
     plan_only: bool = typer.Option(
-        False, "--plan-only",
+        False,
+        "--plan-only",
         help="Print the resolved EditPlan and exit without applying.",
     ),
     registry_id: Optional[str] = typer.Option(
-        None, "--registry-id",
+        None,
+        "--registry-id",
         help="Optional Registry entry id to attach the edited model as a child.",
     ),
 ) -> None:
@@ -290,11 +296,7 @@ def set_edit(
             f"[bold]Norm delta:[/] {result.norm_delta:.4f}\n"
             f"[bold]Target prob:[/] {result.target_prob_before:.4f} -> "
             f"{result.target_prob_after:.4f}\n"
-            + (
-                f"[bold]Saved:[/] {escape(result.output_dir)}\n"
-                if result.output_dir
-                else ""
-            )
+            + (f"[bold]Saved:[/] {escape(result.output_dir)}\n" if result.output_dir else "")
             + (
                 f"[bold]Governor:[/] count="
                 f"{governor.edit_count} verdict={escape(governor.last_verdict)}"
@@ -312,26 +314,24 @@ def set_edit(
         kind = "grace_codebook" if result.method == "grace" else "edited_model"
         try:
             attach_artifact(registry_id, path=result.output_dir, kind=kind)
-            console.print(
-                f"[green]Attached {kind} to Registry entry "
-                f"{escape(registry_id)}.[/]"
-            )
+            console.print(f"[green]Attached {kind} to Registry entry {escape(registry_id)}.[/]")
         except (ValueError, FileNotFoundError) as exc:
-            console.print(
-                f"[yellow]Could not attach to Registry:[/] {escape(str(exc))}"
-            )
+            console.print(f"[yellow]Could not attach to Registry:[/] {escape(str(exc))}")
 
 
 @app.command(name="diff")
 def diff_edit(
     before: str = typer.Argument(
-        ..., help="Label or run id of the model BEFORE the edit (metadata).",
+        ...,
+        help="Label or run id of the model BEFORE the edit (metadata).",
     ),
     after: str = typer.Argument(
-        ..., help="Label or run id of the model AFTER the edit (metadata).",
+        ...,
+        help="Label or run id of the model AFTER the edit (metadata).",
     ),
     probe_file: Optional[str] = typer.Option(
-        None, "--probes",
+        None,
+        "--probes",
         help=(
             "JSONL file with probe prompts; required when both "
             "--before-model and --after-model are given. Each row should "
@@ -339,29 +339,36 @@ def diff_edit(
         ),
     ),
     output: Optional[str] = typer.Option(
-        None, "--output", "-o",
+        None,
+        "--output",
+        "-o",
         help="Where to write the rendered diff JSON.",
     ),
     top_k: int = typer.Option(
-        10, "--top-k", "-k",
+        10,
+        "--top-k",
+        "-k",
         help="Number of changed facts to surface (1-100).",
     ),
     before_model: Optional[str] = typer.Option(
-        None, "--before-model",
+        None,
+        "--before-model",
         help=(
             "Model path / HF id of the BEFORE model "
             "(live generation with --after-model and --probes)."
         ),
     ),
     after_model: Optional[str] = typer.Option(
-        None, "--after-model",
+        None,
+        "--after-model",
         help=(
             "Model path / HF id of the AFTER model "
             "(live generation with --before-model and --probes)."
         ),
     ),
     device: Optional[str] = typer.Option(
-        None, "--device",
+        None,
+        "--device",
         help="torch device (cpu / cuda). Defaults to CUDA when available.",
     ),
 ) -> None:

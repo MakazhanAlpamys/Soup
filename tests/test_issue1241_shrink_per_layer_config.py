@@ -11,6 +11,7 @@ the tail: a mixed full/sliding Qwen2 list and SmolLM3's `no_rope_layers` both
 have a different entry in the dropped block than at the end, so a tail cut
 fails here.
 """
+
 import pytest
 
 pytest.importorskip("torch")
@@ -144,9 +145,7 @@ _LAYER_INDEX_CASES = [
 _LAYER_INDEX_IDS = [attr for _, _, attr, _ in _LAYER_INDEX_CASES]
 
 
-@pytest.mark.parametrize(
-    "config_name,extra,attr,value", _LAYER_INDEX_CASES, ids=_LAYER_INDEX_IDS
-)
+@pytest.mark.parametrize("config_name,extra,attr,value", _LAYER_INDEX_CASES, ids=_LAYER_INDEX_IDS)
 def test_prune_refuses_a_non_default_layer_index_attr(config_name, extra, attr, value):
     import torch
     from transformers import AutoModelForCausalLM
@@ -163,9 +162,7 @@ def test_prune_refuses_a_non_default_layer_index_attr(config_name, extra, attr, 
     assert model.config.num_hidden_layers == 6
 
 
-@pytest.mark.parametrize(
-    "config_name,extra,attr,value", _LAYER_INDEX_CASES, ids=_LAYER_INDEX_IDS
-)
+@pytest.mark.parametrize("config_name,extra,attr,value", _LAYER_INDEX_CASES, ids=_LAYER_INDEX_IDS)
 def test_prune_accepts_the_default_layer_index_attr(tmp_path, config_name, extra, attr, value):
     import torch
     from transformers import AutoModelForCausalLM
@@ -226,8 +223,21 @@ def test_shrink_cli_saves_a_pruned_qwen2(tmp_path, monkeypatch):
     out_dir = tmp_path / "shrunk"
     r = CliRunner().invoke(
         app,
-        ["shrink", "--model", model_dir, "--drop-layers", "2", "--calib", "calib.jsonl",
-         "--device", "cpu", "--output-dir", str(out_dir), "--tolerance", "5.0"],
+        [
+            "shrink",
+            "--model",
+            model_dir,
+            "--drop-layers",
+            "2",
+            "--calib",
+            "calib.jsonl",
+            "--device",
+            "cpu",
+            "--output-dir",
+            str(out_dir),
+            "--tolerance",
+            "5.0",
+        ],
     )
     plain = " ".join(strip_ansi(r.output).split())
     assert r.exit_code == 0, (plain, repr(r.exception))
@@ -292,8 +302,18 @@ def test_shrink_cli_refuses_an_index_valued_layout_before_loading(tmp_path, monk
 
     r = CliRunner().invoke(
         app,
-        ["shrink", "--model", "moe", "--drop-layers", "1", "--calib", "calib.jsonl",
-         "--device", "cpu", "--plan-only"],
+        [
+            "shrink",
+            "--model",
+            "moe",
+            "--drop-layers",
+            "1",
+            "--calib",
+            "calib.jsonl",
+            "--device",
+            "cpu",
+            "--plan-only",
+        ],
     )
     plain = " ".join(strip_ansi(r.output).split())
     assert r.exit_code == 1, (plain, repr(r.exception))

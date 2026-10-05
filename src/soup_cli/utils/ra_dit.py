@@ -35,28 +35,30 @@ class RaDitStageSpec:
     live_wired: bool
 
 
-_RA_DIT_STAGE_METADATA: Mapping[str, RaDitStageSpec] = MappingProxyType({
-    "retriever": RaDitStageSpec(
-        name="retriever",
-        description=(
-            "Stage 1 — train a sentence-transformer with contrastive loss "
-            "on (anchor, positive, negative) triples. Composes with the "
-            "v0.16 embedding trainer."
+_RA_DIT_STAGE_METADATA: Mapping[str, RaDitStageSpec] = MappingProxyType(
+    {
+        "retriever": RaDitStageSpec(
+            name="retriever",
+            description=(
+                "Stage 1 — train a sentence-transformer with contrastive loss "
+                "on (anchor, positive, negative) triples. Composes with the "
+                "v0.16 embedding trainer."
+            ),
+            base_task="embedding",
+            live_wired=False,
         ),
-        base_task="embedding",
-        live_wired=False,
-    ),
-    "generator": RaDitStageSpec(
-        name="generator",
-        description=(
-            "Stage 2 — SFT the generator on RAFT-style rows "
-            "{query, golden_doc, distractor_docs, answer}. Uses "
-            "v0.62.0 Part A `data.format='raft'`."
+        "generator": RaDitStageSpec(
+            name="generator",
+            description=(
+                "Stage 2 — SFT the generator on RAFT-style rows "
+                "{query, golden_doc, distractor_docs, answer}. Uses "
+                "v0.62.0 Part A `data.format='raft'`."
+            ),
+            base_task="sft",
+            live_wired=False,
         ),
-        base_task="sft",
-        live_wired=False,
-    ),
-})
+    }
+)
 
 
 def validate_ra_dit_stage(value: object) -> str:
@@ -68,27 +70,19 @@ def validate_ra_dit_stage(value: object) -> str:
     normalisation, unknown rejected with friendly actionable message.
     """
     if isinstance(value, bool):
-        raise TypeError(
-            f"ra_dit_stage must not be bool, got {value!r}"
-        )
+        raise TypeError(f"ra_dit_stage must not be bool, got {value!r}")
     if not isinstance(value, str):
-        raise TypeError(
-            f"ra_dit_stage must be str, got {type(value).__name__}"
-        )
+        raise TypeError(f"ra_dit_stage must be str, got {type(value).__name__}")
     if not value:
         raise ValueError("ra_dit_stage must be non-empty")
     if "\x00" in value:
         raise ValueError("ra_dit_stage must not contain null bytes")
     if len(value) > _MAX_STAGE_LEN:
-        raise ValueError(
-            f"ra_dit_stage must be <= {_MAX_STAGE_LEN} chars"
-        )
+        raise ValueError(f"ra_dit_stage must be <= {_MAX_STAGE_LEN} chars")
     canonical = value.lower()
     if canonical not in SUPPORTED_RA_DIT_STAGES:
         supported = ", ".join(sorted(SUPPORTED_RA_DIT_STAGES))
-        raise ValueError(
-            f"unknown ra_dit_stage {value!r}; supported: {supported}"
-        )
+        raise ValueError(f"unknown ra_dit_stage {value!r}; supported: {supported}")
     return canonical
 
 
@@ -108,23 +102,15 @@ def validate_ra_dit_retriever_model(value: object) -> Optional[str]:
     if value is None:
         return None
     if isinstance(value, bool):
-        raise TypeError(
-            f"ra_dit_retriever_model must not be bool, got {value!r}"
-        )
+        raise TypeError(f"ra_dit_retriever_model must not be bool, got {value!r}")
     if not isinstance(value, str):
-        raise TypeError(
-            f"ra_dit_retriever_model must be str, got {type(value).__name__}"
-        )
+        raise TypeError(f"ra_dit_retriever_model must be str, got {type(value).__name__}")
     if not value:
         raise ValueError("ra_dit_retriever_model must be non-empty")
     if "\x00" in value:
-        raise ValueError(
-            "ra_dit_retriever_model must not contain null bytes"
-        )
+        raise ValueError("ra_dit_retriever_model must not contain null bytes")
     if len(value) > _MAX_RETRIEVER_MODEL_LEN:
-        raise ValueError(
-            f"ra_dit_retriever_model must be <= {_MAX_RETRIEVER_MODEL_LEN} chars"
-        )
+        raise ValueError(f"ra_dit_retriever_model must be <= {_MAX_RETRIEVER_MODEL_LEN} chars")
     return value
 
 
@@ -140,9 +126,7 @@ def validate_ra_dit_compat(*, stage: str, task: str) -> None:
         if isinstance(value, bool):
             raise TypeError(f"{name} must not be bool, got {value!r}")
         if not isinstance(value, str):
-            raise TypeError(
-                f"{name} must be str, got {type(value).__name__}"
-            )
+            raise TypeError(f"{name} must be str, got {type(value).__name__}")
         if not value:
             raise ValueError(f"{name} must be non-empty")
         if "\x00" in value:

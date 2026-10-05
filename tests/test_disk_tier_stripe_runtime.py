@@ -25,8 +25,13 @@ def _tiny_llama(tmp_path, n_layers=3, tie=True):
     torch.manual_seed(7)
     # hidden 64: see tests/test_v07203.py::_tiny_stream — at 32 the bnb CPU NF4 path breaks.
     config = LlamaConfig(
-        vocab_size=64, hidden_size=64, intermediate_size=64, num_hidden_layers=n_layers,
-        num_attention_heads=4, num_key_value_heads=2, tie_word_embeddings=tie,
+        vocab_size=64,
+        hidden_size=64,
+        intermediate_size=64,
+        num_hidden_layers=n_layers,
+        num_attention_heads=4,
+        num_key_value_heads=2,
+        tie_word_embeddings=tie,
         max_position_embeddings=128,
     )
     model = AutoModelForCausalLM.from_config(config).to(torch.float32).eval()
@@ -75,7 +80,12 @@ def test_every_tensor_matches_the_single_root_cache(caches, kind):
         if kind == "disk":
             return DiskSource(shard_dir, len(paths), spec, shard_paths=paths)
         return AsyncDiskSource(
-            shard_dir, len(paths), spec, pin=False, shard_paths=paths, layer_roots=roots,
+            shard_dir,
+            len(paths),
+            spec,
+            pin=False,
+            shard_paths=paths,
+            layer_roots=roots,
             read_ahead=3,
         )
 
@@ -85,7 +95,8 @@ def test_every_tensor_matches_the_single_root_cache(caches, kind):
         for idx in range(len(striped_paths)):
             for name in spec[idx]:
                 assert torch.equal(_raw(mine.get(idx, name)), _raw(theirs.get(idx, name))), (
-                    idx, name,
+                    idx,
+                    name,
                 )
     finally:
         for source in (mine, theirs):
@@ -108,13 +119,27 @@ def _stream(weights, shard_dir, index, *, read_ahead, **extra):
     from soup_cli.utils.layer_stream_runtime import build_streamed_model
 
     lora = LoraConfig(
-        r=4, lora_alpha=8, lora_dropout=0.0, bias="none",
-        target_modules=["q_proj", "v_proj"], task_type=TaskType.CAUSAL_LM,
+        r=4,
+        lora_alpha=8,
+        lora_dropout=0.0,
+        bias="none",
+        target_modules=["q_proj", "v_proj"],
+        task_type=TaskType.CAUSAL_LM,
     )
     return build_streamed_model(
-        model_id=weights, shard_dir=shard_dir, index=index, lora_config=lora, device="cpu",
-        dtype="float32", buffers=2, pin=False, seed=3, tier="disk", quant="none",
-        read_ahead=read_ahead, **extra,
+        model_id=weights,
+        shard_dir=shard_dir,
+        index=index,
+        lora_config=lora,
+        device="cpu",
+        dtype="float32",
+        buffers=2,
+        pin=False,
+        seed=3,
+        tier="disk",
+        quant="none",
+        read_ahead=read_ahead,
+        **extra,
     )
 
 

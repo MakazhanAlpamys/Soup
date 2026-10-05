@@ -183,9 +183,7 @@ def _containment_reason(
                 _handler_catches_value_error(h) for h in parent.handlers
             ):
                 return "relative_to guarded by an except that catches ValueError"
-        if isinstance(parent, (ast.With, ast.AsyncWith)) and _in_field(
-            parent, child, "body"
-        ):
+        if isinstance(parent, (ast.With, ast.AsyncWith)) and _in_field(parent, child, "body"):
             # `body` only, never `items`: a `relative_to` used while building the
             # `suppress(...)` call is not guarded by it — same distinction as
             # `If.test` versus `If.body`.
@@ -272,9 +270,7 @@ class TestNoUnjustifiedContainmentRelativeToInSrc:
         scanned = list(SRC.rglob("*.py"))
         assert len(scanned) >= 400, f"only {len(scanned)} modules scanned"
         # And the walk must still reach the two known call sites.
-        assert {(rel, lineno) for rel, lineno, _text, _reason in _scan_src()} == set(
-            ALLOWLIST
-        )
+        assert {(rel, lineno) for rel, lineno, _text, _reason in _scan_src()} == set(ALLOWLIST)
 
     def test_the_allowlist_has_no_dead_entries(self):
         """An allowlist entry that no longer matches a live call site is a hole:
@@ -298,7 +294,7 @@ class TestTheScannerCanActuallyFail:
     scanner is shown able to find something it has not been told about."""
 
     #: The exact idiom the seven migrated files used to carry.
-    CWD_IDIOM = '''
+    CWD_IDIOM = """
 def _validate(output_path):
     cwd = Path.cwd()
     try:
@@ -306,22 +302,22 @@ def _validate(output_path):
     except ValueError:
         raise ValueError("output must stay under cwd")
     return output_path
-'''
+"""
 
     #: Same bug, different variable name — invisible to a `".relative_to(cwd)"`
     #: text match, which is the reason this file exists.
-    OTHER_NAME = '''
+    OTHER_NAME = """
 def _validate(target, base):
     try:
         target.resolve().relative_to(base)
     except ValueError:
         return False
     return True
-'''
+"""
 
     #: Same bug, split across lines by the formatter — also invisible to a
     #: single-line text match.
-    WRAPPED = '''
+    WRAPPED = """
 def _validate(target, root):
     try:
         relative = target.resolve().relative_to(
@@ -330,7 +326,7 @@ def _validate(target, root):
     except ValueError:
         return None
     return relative
-'''
+"""
 
     def test_it_catches_the_cwd_idiom(self):
         found = find_containment_relative_to(textwrap.dedent(self.CWD_IDIOM))
@@ -349,11 +345,11 @@ def _validate(target, root):
         assert "relative_to( root.resolve(), )" in found[0][1]
 
     def test_it_catches_is_relative_to_in_a_condition(self):
-        source = '''
+        source = """
 def _validate(target, base):
     if not target.resolve().is_relative_to(base.resolve()):
         raise ValueError("escape")
-'''
+"""
         found = find_containment_relative_to(source)
         assert len(found) == 1, found
         assert "is_relative_to" in found[0][1]
@@ -361,29 +357,27 @@ def _validate(target, base):
     def test_it_catches_a_bare_is_relative_to_return(self):
         """`is_relative_to` is flagged wherever it appears — it answers exactly
         the containment question and nothing else."""
-        found = find_containment_relative_to(
-            "def under(p, b):\n    return p.is_relative_to(b)\n"
-        )
+        found = find_containment_relative_to("def under(p, b):\n    return p.is_relative_to(b)\n")
         assert len(found) == 1, found
 
     def test_it_catches_a_comprehension_filter(self):
-        source = '''
+        source = """
 def _keep(paths, base):
     return [p for p in paths if p.resolve().is_relative_to(base)]
-'''
+"""
         assert len(find_containment_relative_to(source)) == 1
 
     def test_a_bare_except_still_counts(self):
         """`except:` and `except Exception:` catch ValueError as well, so the
         containment decision is the same one — only the blast radius differs."""
-        source = '''
+        source = """
 def _validate(target, base):
     try:
         target.relative_to(base)
     except Exception:
         return False
     return True
-'''
+"""
         assert len(find_containment_relative_to(source)) == 1
 
     # ── controls: the shapes that must NOT be flagged ──
@@ -391,60 +385,60 @@ def _validate(target, base):
     def test_the_migrated_helper_is_accepted(self):
         """CONTROL. The repaired form must be clean, or the guard would demand
         rewriting the fix it exists to protect."""
-        source = '''
+        source = """
 def _validate(output_path):
     from soup_cli.utils.paths import is_under_cwd
 
     if not is_under_cwd(output_path):
         raise ValueError("output must stay under cwd")
     return output_path
-'''
+"""
         assert find_containment_relative_to(source) == []
 
     def test_display_only_relative_to_is_not_flagged(self):
         """CONTROL. Shortening a path for a table is the method's normal use and
         decides nothing. A guard that flagged it would be noise, and a noisy
         guard gets deleted."""
-        source = '''
+        source = """
 def _label(path, root):
     rel = path.relative_to(root)
     return str(rel)
-'''
+"""
         assert find_containment_relative_to(source) == []
 
     def test_relative_to_inside_a_branch_body_is_not_flagged(self):
         """CONTROL. `If.body` is not `If.test`: sitting inside a branch does not
         make a call a condition."""
-        source = '''
+        source = """
 def _label(path, root, shorten):
     if shorten:
         return str(path.relative_to(root))
     return str(path)
-'''
+"""
         assert find_containment_relative_to(source) == []
 
     def test_a_try_catching_only_os_error_is_not_flagged(self):
         """CONTROL. `except OSError` cannot catch the ValueError that
         `relative_to` raises, so that handler is not the containment decision."""
-        source = '''
+        source = """
 def _label(path, root):
     try:
         return str(path.relative_to(root))
     except OSError:
         return str(path)
-'''
+"""
         assert find_containment_relative_to(source) == []
 
     def test_an_enclosing_function_boundary_stops_the_walk(self):
         """CONTROL. A `try` around a *definition* does not guard calls in the
         body — those run later, at the caller's mercy."""
-        source = '''
+        source = """
 try:
     def _label(path, root):
         return str(path.relative_to(root))
 except ValueError:
     _label = None
-'''
+"""
         assert find_containment_relative_to(source) == []
 
     def test_an_unrelated_method_named_similarly_is_not_flagged(self):
@@ -460,7 +454,7 @@ class TestSuppressGuardedRelativeTo:
     spelling — the ratchet has to see both or the idiom just moves."""
 
     def test_it_catches_the_issue_example(self):
-        source = '''
+        source = """
 from contextlib import suppress
 
 def _validate(target, base):
@@ -468,106 +462,106 @@ def _validate(target, base):
         target.resolve().relative_to(base)
         return True
     return False
-'''
+"""
         found = find_containment_relative_to(source)
         assert len(found) == 1, found
         assert "relative_to(base)" in found[0][1]
         assert found[0][0] == 6, found
 
     def test_it_catches_the_attribute_form(self):
-        source = '''
+        source = """
 import contextlib
 
 def _validate(target, base):
     with contextlib.suppress(ValueError):
         target.relative_to(base)
-'''
+"""
         assert len(find_containment_relative_to(source)) == 1
 
     def test_it_catches_a_flat_multi_argument_suppress(self):
-        source = '''
+        source = """
 from contextlib import suppress
 
 def _validate(target, base):
     with suppress(OSError, ValueError):
         target.relative_to(base)
-'''
+"""
         assert len(find_containment_relative_to(source)) == 1
 
     def test_it_catches_a_nested_tuple_argument(self):
-        source = '''
+        source = """
 from contextlib import suppress
 
 def _validate(target, base):
     with suppress((OSError, ValueError)):
         target.relative_to(base)
-'''
+"""
         assert len(find_containment_relative_to(source)) == 1
 
     def test_it_catches_an_aliased_import(self):
-        source = '''
+        source = """
 from contextlib import suppress as quiet
 
 def _validate(target, base):
     with quiet(ValueError):
         target.relative_to(base)
-'''
+"""
         assert len(find_containment_relative_to(source)) == 1
 
     def test_it_catches_an_aliased_module(self):
-        source = '''
+        source = """
 import contextlib as cl
 
 def _validate(target, base):
     with cl.suppress(ValueError):
         target.relative_to(base)
-'''
+"""
         assert len(find_containment_relative_to(source)) == 1
 
     # ── controls ──
 
     def test_suppressing_only_os_error_is_not_flagged(self):
         """CONTROL. OSError cannot catch the ValueError `relative_to` raises."""
-        source = '''
+        source = """
 from contextlib import suppress
 
 def _label(path, root):
     with suppress(OSError):
         return str(path.relative_to(root))
-'''
+"""
         assert find_containment_relative_to(source) == []
 
     def test_suppress_around_unrelated_code_is_not_flagged(self):
-        source = '''
+        source = """
 from contextlib import suppress
 
 def _clean(path):
     with suppress(ValueError):
         path.unlink()
-'''
+"""
         assert find_containment_relative_to(source) == []
 
     def test_relative_to_outside_the_with_body_is_not_flagged(self):
         """CONTROL. Only the `body` is guarded — not the `context_expr` that
         builds the `suppress(...)` call, and not code after the block."""
-        source = '''
+        source = """
 from contextlib import suppress
 
 def _label(path, root, pick):
     with suppress(ValueError, pick(path.relative_to(root))):
         pass
     return str(path.relative_to(root))
-'''
+"""
         assert find_containment_relative_to(source) == []
 
     def test_a_nested_function_boundary_stops_the_walk(self):
         """CONTROL. A `with` around a *definition* does not guard calls in the
         body — those run later, at the caller's mercy."""
-        source = '''
+        source = """
 from contextlib import suppress
 
 with suppress(ValueError):
     def _label(path, root):
         return str(path.relative_to(root))
-'''
+"""
         assert find_containment_relative_to(source) == []

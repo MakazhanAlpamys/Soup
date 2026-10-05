@@ -310,9 +310,7 @@ class TestVramEstimate:
     def test_logits_budget_without_upcast(self):
         from soup_cli.utils.layer_stream import estimate_logits_bytes
 
-        got = estimate_logits_bytes(
-            vocab_size=1000, seq_len=10, batch_size=1, upcast_fp32=False
-        )
+        got = estimate_logits_bytes(vocab_size=1000, seq_len=10, batch_size=1, upcast_fp32=False)
         assert got == 10 * 1000 * 2
 
 
@@ -503,8 +501,14 @@ class TestStreamPlan:
         from soup_cli.utils.layer_stream import build_stream_plan
 
         plan = build_stream_plan(
-            arch="llama", n_layers=2, layer_bytes=10, embed_bytes=10,
-            available_ram_bytes=10**9, pinned_limit_bytes=None, buffers=2, disk_kind="nvme",
+            arch="llama",
+            n_layers=2,
+            layer_bytes=10,
+            embed_bytes=10,
+            available_ram_bytes=10**9,
+            pinned_limit_bytes=None,
+            buffers=2,
+            disk_kind="nvme",
         )
         with pytest.raises(dataclasses.FrozenInstanceError):
             plan.tier = "disk"
@@ -516,8 +520,14 @@ class TestStreamPlan:
         from soup_cli.utils.layer_stream import build_stream_plan, render_stream_panel
 
         plan = build_stream_plan(
-            arch="llama", n_layers=2, layer_bytes=10, embed_bytes=10,
-            available_ram_bytes=10**9, pinned_limit_bytes=None, buffers=2, disk_kind="nvme",
+            arch="llama",
+            n_layers=2,
+            layer_bytes=10,
+            embed_bytes=10,
+            available_ram_bytes=10**9,
+            pinned_limit_bytes=None,
+            buffers=2,
+            disk_kind="nvme",
         )
         panel = render_stream_panel(plan)
         assert isinstance(panel, Panel)
@@ -595,9 +605,7 @@ def _fake_weights_dir(tmp_path, n_layers=3, split=False, untied=False):
         # a layer's tensors deliberately straddle two files
         keys = sorted(layer)
         half = len(keys) // 2
-        _write_safetensors(
-            str(src / "model-00001.safetensors"), {k: layer[k] for k in keys[:half]}
-        )
+        _write_safetensors(str(src / "model-00001.safetensors"), {k: layer[k] for k in keys[:half]})
         _write_safetensors(
             str(src / "model-00002.safetensors"),
             {**{k: layer[k] for k in keys[half:]}, **extras},
@@ -687,9 +695,7 @@ class TestShardRoundTrip:
                 "input_layernorm.weight",
             }
             pre = f"model.layers.{idx}."
-            assert torch.equal(
-                blob["mlp.down_proj.weight"], layer[pre + "mlp.down_proj.weight"]
-            )
+            assert torch.equal(blob["mlp.down_proj.weight"], layer[pre + "mlp.down_proj.weight"])
 
     def test_dtype_is_converted(self, tmp_path):
         import torch
@@ -779,9 +785,7 @@ class TestShardGuards:
 
         src, _, _ = _fake_weights_dir(tmp_path)
         outside = tmp_path / "outside.safetensors"
-        _write_safetensors(
-            str(outside), {"model.layers.9.mlp.down_proj.weight": torch.randn(4, 4)}
-        )
+        _write_safetensors(str(outside), {"model.layers.9.mlp.down_proj.weight": torch.randn(4, 4)})
         os.symlink(str(outside), os.path.join(src, "model-evil.safetensors"))
         index = shard_checkpoint(src, str(tmp_path / "out"), dtype="float32")
         assert index.n_layers == 3  # the symlinked layer 9 was not picked up
@@ -1151,20 +1155,12 @@ class TestStreamMutualExclusions:
             ValueError,
             match=r"stream_layers.*moe_expert_quant.*silently ignored",
         ):
-            _load(
-                _stream_yaml(
-                    training={"moe_lora": True, "moe_expert_quant": "nf4"}
-                )
-            )
+            _load(_stream_yaml(training={"moe_lora": True, "moe_expert_quant": "nf4"}))
 
     def test_expand_layers_conflict(self):
         """Likewise: freeze_trainable_layers satisfies the LLaMA-Pro validator."""
         with pytest.raises(ValueError, match="stream_layers"):
-            _load(
-                _stream_yaml(
-                    training={"expand_layers": 2, "freeze_trainable_layers": 2}
-                )
-            )
+            _load(_stream_yaml(training={"expand_layers": 2, "freeze_trainable_layers": 2}))
 
 
 class TestStreamFootgunRejection:
@@ -1260,8 +1256,12 @@ def _tiny_lora():
     from peft import LoraConfig, TaskType
 
     return LoraConfig(
-        r=4, lora_alpha=8, lora_dropout=0.0, bias="none",
-        target_modules=["q_proj", "v_proj"], task_type=TaskType.CAUSAL_LM,
+        r=4,
+        lora_alpha=8,
+        lora_dropout=0.0,
+        bias="none",
+        target_modules=["q_proj", "v_proj"],
+        task_type=TaskType.CAUSAL_LM,
     )
 
 
@@ -1273,9 +1273,15 @@ def _build_streamed_cpu(tmp_path, n_layers=2, tie=True, buffers=2, device="cpu")
     shards = str(tmp_path / "shards")
     index = shard_checkpoint(weights, shards, dtype="float32", arch="llama")
     model, runtime = build_streamed_model(
-        model_id=weights, shard_dir=shards, index=index,
-        lora_config=_tiny_lora(), device=device, dtype="float32",
-        buffers=buffers, pin=False, seed=3,
+        model_id=weights,
+        shard_dir=shards,
+        index=index,
+        lora_config=_tiny_lora(),
+        device=device,
+        dtype="float32",
+        buffers=buffers,
+        pin=False,
+        seed=3,
     )
     return model, runtime, resident, weights
 
@@ -1379,8 +1385,7 @@ class TestRegressionMetaAdapterMaterialisation:
     def test_no_adapter_parameter_is_left_on_meta(self, tmp_path):
         model, _, _, _ = _build_streamed_cpu(tmp_path)
         stranded = [
-            name for name, param in model.named_parameters()
-            if "lora_" in name and param.is_meta
+            name for name, param in model.named_parameters() if "lora_" in name and param.is_meta
         ]
         assert stranded == [], stranded
 
@@ -1408,8 +1413,7 @@ class TestRegressionMetaAdapterMaterialisation:
         """The whole point: the resident load must not happen."""
         model, runtime, _, _ = _build_streamed_cpu(tmp_path)
         meta_layer_params = [
-            name for name, param in model.named_parameters()
-            if param.is_meta and ".layers." in name
+            name for name, param in model.named_parameters() if param.is_meta and ".layers." in name
         ]
         assert meta_layer_params, "decoder weights were materialised — not streaming"
         assert runtime.n_layers == 2
@@ -1434,7 +1438,8 @@ class TestRegressionAllocateOnceThenCopy:
 
         calls = []
         monkeypatch.setattr(
-            torch.Tensor, "pin_memory",
+            torch.Tensor,
+            "pin_memory",
             lambda self, *a, **k: calls.append(1) or self,
         )
         spec = RamSource.spec_from_shard(shards)
@@ -1634,9 +1639,7 @@ class TestStreamedForwardParityCpu:
         with torch.no_grad():
             for name, parameter in model.named_parameters():
                 if "lora_B" in name:
-                    parameter.copy_(
-                        torch.randn(parameter.shape, generator=generator) * 0.02
-                    )
+                    parameter.copy_(torch.randn(parameter.shape, generator=generator) * 0.02)
         _copy_lora(model, ref)
         model.eval()
         ref.eval()
@@ -1647,8 +1650,8 @@ class TestStreamedForwardParityCpu:
         streamed_loss = model(input_ids=ids, labels=ids).loss
         resident_loss = ref(input_ids=ids, labels=ids).loss
         assert torch.equal(streamed_loss, resident_loss), (
-            streamed_loss - resident_loss
-        ).abs().item()
+            (streamed_loss - resident_loss).abs().item()
+        )
 
         streamed_loss.backward()
         resident_loss.backward()
@@ -1727,9 +1730,7 @@ class TestStreamedLargeLayerParityMps:
         import torch
         from peft import get_peft_model
 
-        model, runtime, resident, _ = _build_streamed_cpu(
-            tmp_path, tie=False, device="mps"
-        )
+        model, runtime, resident, _ = _build_streamed_cpu(tmp_path, tie=False, device="mps")
         ref = get_peft_model(resident.to("mps"), _tiny_lora())
         _copy_lora(model, ref)
         ids = torch.randint(0, 64, (1, 12), device="mps")
@@ -1744,6 +1745,7 @@ class TestStreamedLargeLayerParityMps:
 
 def _copy_lora(src, dst):
     """StreamedDecoderLayer inserts an `.inner.` segment into state-dict keys."""
+
     def norm(key):
         return key.replace(".inner.", ".")
 
@@ -1770,9 +1772,15 @@ class TestStreamedTrainingParityCuda:
         shards = str(tmp_path / "shards")
         index = shard_checkpoint(weights, shards, dtype="float32", arch="llama")
         streamed, _ = build_streamed_model(
-            model_id=weights, shard_dir=shards, index=index,
-            lora_config=_tiny_lora(), device="cuda", dtype="float32",
-            buffers=2, pin=True, seed=3,
+            model_id=weights,
+            shard_dir=shards,
+            index=index,
+            lora_config=_tiny_lora(),
+            device="cuda",
+            dtype="float32",
+            buffers=2,
+            pin=True,
+            seed=3,
         )
         ref = get_peft_model(resident, _tiny_lora()).to("cuda")
         _copy_lora(streamed, ref)
@@ -1806,15 +1814,19 @@ class TestStreamedTrainingParityCuda:
         runs = []
         for _ in range(2):
             model, _ = build_streamed_model(
-                model_id=weights, shard_dir=shards, index=index,
-                lora_config=_tiny_lora(), device="cuda", dtype="float32",
-                buffers=2, pin=True, seed=3,
+                model_id=weights,
+                shard_dir=shards,
+                index=index,
+                lora_config=_tiny_lora(),
+                device="cuda",
+                dtype="float32",
+                buffers=2,
+                pin=True,
+                seed=3,
             )
             torch.manual_seed(0)
             batches = [torch.randint(0, 64, (1, 12), device="cuda") for _ in range(4)]
-            opt = torch.optim.AdamW(
-                [p for p in model.parameters() if p.requires_grad], lr=1e-3
-            )
+            opt = torch.optim.AdamW([p for p in model.parameters() if p.requires_grad], lr=1e-3)
             run = []
             for ids in batches:
                 out = model(input_ids=ids, labels=ids)
@@ -1838,9 +1850,7 @@ class TestRuntimeNoTopLevelTorch:
                 for alias in node.names:
                     assert not alias.name.startswith(("torch", "peft", "transformers"))
             elif isinstance(node, ast.ImportFrom):
-                assert not (node.module or "").startswith(
-                    ("torch", "peft", "transformers")
-                )
+                assert not (node.module or "").startswith(("torch", "peft", "transformers"))
 
 
 # ==========================================================================
@@ -1981,7 +1991,8 @@ class TestStreamingSetupIntegration:
         weights, _, _ = _tiny_llama_dir(tmp_path, n_layers=n_layers)
         monkeypatch.setenv("SOUP_LAYER_STREAM_CACHE_DIR", str(tmp_path / "cache"))
         monkeypatch.setattr(
-            transformers.AutoTokenizer, "from_pretrained",
+            transformers.AutoTokenizer,
+            "from_pretrained",
             classmethod(lambda cls, *a, **k: _StubTokenizer()),
         )
         cfg = _stream_config(weights)
@@ -1992,8 +2003,7 @@ class TestStreamingSetupIntegration:
     def test_decoder_weights_stay_on_meta(self, tmp_path, monkeypatch):
         wrapper = self._run(tmp_path, monkeypatch)
         meta_layer = [
-            n for n, p in wrapper.model.named_parameters()
-            if p.is_meta and ".layers." in n
+            n for n, p in wrapper.model.named_parameters() if p.is_meta and ".layers." in n
         ]
         assert meta_layer, "the base was materialised — that defeats streaming"
 
@@ -2038,7 +2048,8 @@ class TestStreamingSetupIntegration:
         config.save_pretrained(str(weights))
         monkeypatch.setenv("SOUP_LAYER_STREAM_CACHE_DIR", str(tmp_path / "cache"))
         monkeypatch.setattr(
-            transformers.AutoTokenizer, "from_pretrained",
+            transformers.AutoTokenizer,
+            "from_pretrained",
             classmethod(lambda cls, *a, **k: _StubTokenizer()),
         )
         cfg = _stream_config(str(weights))
@@ -2109,13 +2120,11 @@ class TestRegressionTrainerConstructsWithoutMovingMetaWeights:
         model, while the base placeholders STAY meta (or streaming is over)."""
         model, _, _, _ = _build_streamed_cpu(tmp_path)
         model.to("cpu")  # must not raise
-        still_meta = [
-            n for n, p in model.named_parameters() if p.is_meta and ".layers." in n
-        ]
+        still_meta = [n for n, p in model.named_parameters() if p.is_meta and ".layers." in n]
         assert still_meta, "the base was materialised by .to() — streaming defeated"
-        assert all(
-            not p.is_meta for n, p in model.named_parameters() if "lora_" in n
-        ), "adapters must remain real after a device move"
+        assert all(not p.is_meta for n, p in model.named_parameters() if "lora_" in n), (
+            "adapters must remain real after a device move"
+        )
 
     def test_streamed_model_declares_a_device_map(self, tmp_path):
         model, runtime, _, _ = _build_streamed_cpu(tmp_path)
@@ -2172,18 +2181,14 @@ class TestStreamLoraHeadTargetGate:
     def test_lm_head_target_rejected(self):
         with pytest.raises(ValueError, match="lm_head"):
             _load(
-                _stream_yaml(
-                    training={"lora": {"r": 4, "target_modules": ["q_proj", "lm_head"]}}
-                )
+                _stream_yaml(training={"lora": {"r": 4, "target_modules": ["q_proj", "lm_head"]}})
             )
 
     def test_embed_tokens_target_rejected(self):
         with pytest.raises(ValueError, match="embed_tokens"):
             _load(
                 _stream_yaml(
-                    training={
-                        "lora": {"r": 4, "target_modules": ["q_proj", "embed_tokens"]}
-                    }
+                    training={"lora": {"r": 4, "target_modules": ["q_proj", "embed_tokens"]}}
                 )
             )
 
@@ -2316,9 +2321,7 @@ class TestShardCacheIdentityBinding:
 
         # retrain in place: same filenames, different weights
         changed = {k: torch.full_like(v, 0.5) for k, v in layer.items()}
-        _write_safetensors(
-            str(tmp_path / "weights" / "model.safetensors"), {**changed, **extras}
-        )
+        _write_safetensors(str(tmp_path / "weights" / "model.safetensors"), {**changed, **extras})
         index = shard_checkpoint(src, out, dtype="float32")
         blob = load_file(layer_shard_path(out, 0))
         assert torch.allclose(blob["mlp.down_proj.weight"], torch.tensor(0.5)), (
@@ -2518,9 +2521,15 @@ class TestInstallStreamingGuards:
         lying = dataclasses.replace(index, n_layers=5)
         with pytest.raises(ValueError, match="decoder layers"):
             build_streamed_model(
-                model_id=weights, shard_dir=shards, index=lying,
-                lora_config=_tiny_lora(), device="cpu", dtype="float32",
-                buffers=2, pin=False, seed=1,
+                model_id=weights,
+                shard_dir=shards,
+                index=lying,
+                lora_config=_tiny_lora(),
+                device="cpu",
+                dtype="float32",
+                buffers=2,
+                pin=False,
+                seed=1,
             )
 
     def test_shard_missing_a_decoder_weight_is_refused(self, tmp_path):
@@ -2541,9 +2550,15 @@ class TestInstallStreamingGuards:
             save_file(blob, layer_shard_path(shards, idx))
         with pytest.raises(ValueError, match="missing decoder weights"):
             build_streamed_model(
-                model_id=weights, shard_dir=shards, index=index,
-                lora_config=_tiny_lora(), device="cpu", dtype="float32",
-                buffers=2, pin=False, seed=1,
+                model_id=weights,
+                shard_dir=shards,
+                index=index,
+                lora_config=_tiny_lora(),
+                device="cpu",
+                dtype="float32",
+                buffers=2,
+                pin=False,
+                seed=1,
             )
 
 
@@ -2583,6 +2598,7 @@ class TestPinnedFallbackRuntime:
         assert source.nbytes > 0
         assert any("pageable" in msg.lower() for msg in printed)
         assert any("utilisation" in msg.lower() for msg in printed)
+
 
 #: One decoder layer's weight for the AC3 refusal message, sized realistically so
 #: the rendered figure is a real number and not `0.00 GB`.
@@ -2642,9 +2658,7 @@ class TestStreamPinRuntimeRefusal:
         assert pinned is False
         assert source.nbytes > 0
 
-    def test_the_returned_flag_is_read_off_the_source_on_the_ram_tier_too(
-        self, monkeypatch
-    ):
+    def test_the_returned_flag_is_read_off_the_source_on_the_ram_tier_too(self, monkeypatch):
         """`_build_source`'s docstring promises the second element "means the
         same thing on both tiers". The disk branch returns `source.pinned`; the
         RAM branch returned the literal it had just asked for, which is a claim
@@ -2705,9 +2719,7 @@ class TestStreamPinRuntimeRefusal:
         ]
 
         with pytest.raises(RuntimeError) as excinfo:
-            rt._build_source(
-                "d", 2, layer_specs, True, None, require_pin=True
-            )
+            rt._build_source("d", 2, layer_specs, True, None, require_pin=True)
 
         message = str(excinfo.value)
         assert "0.05 GB" in message, message
@@ -2766,22 +2778,25 @@ class TestDiskTierPinsItsStagingOrRefuses:
         monkeypatch.setattr(ads, "AsyncDiskSource", _StubAsyncDisk)
         return opened
 
-    def _build_on_disk(self, monkeypatch, *, require_pin, pin=True, fails=True,
-                       read_ahead=4):
+    def _build_on_disk(self, monkeypatch, *, require_pin, pin=True, fails=True, read_ahead=4):
         import soup_cli.utils.layer_stream_runtime as rt
 
         opened = self._patch_async_source(monkeypatch, fails_when_pinned=fails)
         console = self._RecordingConsole()
         source, pinned = rt._build_source(
-            "d", 1, self._SPEC, pin, console, "disk",
-            require_pin=require_pin, read_ahead=read_ahead,
+            "d",
+            1,
+            self._SPEC,
+            pin,
+            console,
+            "disk",
+            require_pin=require_pin,
+            read_ahead=read_ahead,
         )
         return source, pinned, console.messages, opened
 
     @pytest.mark.parametrize("read_ahead", _REFUSAL_READ_AHEAD_DEPTHS)
-    def test_an_explicit_request_that_cannot_be_met_refuses(
-        self, monkeypatch, read_ahead
-    ):
+    def test_an_explicit_request_that_cannot_be_met_refuses(self, monkeypatch, read_ahead):
         """The RAM tier's contract, now the disk tier's: stream_pin=true means
         refuse, not degrade. The remedy list must include the one that is
         specific to this tier — the read-ahead depth IS the multiplier on how
@@ -2798,21 +2813,16 @@ class TestDiskTierPinsItsStagingOrRefuses:
         message = str(excinfo.value)
         assert "training.stream_pin" in message, message
         assert f"training.stream_read_ahead={read_ahead}" in message, (
-            "the refusal must quote the depth it could not pin, not just name "
-            f"the field: {message}"
+            f"the refusal must quote the depth it could not pin, not just name the field: {message}"
         )
         for other in others:
             assert f"stream_read_ahead={other}" not in message, message
 
-    def test_without_the_flag_it_falls_back_loudly_and_retries_pageable(
-        self, monkeypatch
-    ):
+    def test_without_the_flag_it_falls_back_loudly_and_retries_pageable(self, monkeypatch):
         """Refusing here would brick the very runs the disk tier exists for, so
         the default is a fallback — but a silent one would spend the whole
         overlap margin without saying so."""
-        source, pinned, messages, opened = self._build_on_disk(
-            monkeypatch, require_pin=False
-        )
+        source, pinned, messages, opened = self._build_on_disk(monkeypatch, require_pin=False)
         assert pinned is False
         assert source.pinned is False
         assert [kwargs["pin"] for kwargs in opened] == [True, False], (
@@ -2838,9 +2848,7 @@ class TestDiskTierPinsItsStagingOrRefuses:
         assert [kwargs["pin"] for kwargs in opened] == [True]
         assert messages == []
 
-    def test_an_honoured_request_never_says_pinning_does_not_apply(
-        self, monkeypatch
-    ):
+    def test_an_honoured_request_never_says_pinning_does_not_apply(self, monkeypatch):
         """The deleted announcement was FALSE once staging existed. A run that
         asked for pinning and got it must not be told it was inapplicable."""
         _source, pinned, messages, _opened = self._build_on_disk(
@@ -2859,9 +2867,7 @@ class TestDiskTierPinsItsStagingOrRefuses:
         assert opened[0]["read_ahead"] == 7
         assert source.read_ahead == 7
 
-    def test_the_fallback_still_reaches_the_log_without_a_console(
-        self, monkeypatch, caplog
-    ):
+    def test_the_fallback_still_reaches_the_log_without_a_console(self, monkeypatch, caplog):
         """`_build_source` is also called with `console=None` (the runtime does
         not always have one). The decision must still be recorded there, or the
         degradation is silent on exactly the path with no screen to print to."""

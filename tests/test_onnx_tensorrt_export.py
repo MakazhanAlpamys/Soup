@@ -90,21 +90,24 @@ class TestOnnxExportFunction:
         ):
             # Need to patch the import inside the function
             import soup_cli.commands.export as export_mod
+
             original = getattr(export_mod, "main_export", None)
             try:
                 # Inject mock at module level for the lazy import
                 with mock_patch.object(
-                    export_mod, "_export_onnx",
+                    export_mod,
+                    "_export_onnx",
                     wraps=export_mod._export_onnx,
                 ):
                     # Patch the actual import
-                    with mock_patch.dict("sys.modules", {
-                        "optimum": MagicMock(),
-                        "optimum.exporters": MagicMock(),
-                        "optimum.exporters.onnx": MagicMock(
-                            main_export=mock_main_export
-                        ),
-                    }):
+                    with mock_patch.dict(
+                        "sys.modules",
+                        {
+                            "optimum": MagicMock(),
+                            "optimum.exporters": MagicMock(),
+                            "optimum.exporters.onnx": MagicMock(main_export=mock_main_export),
+                        },
+                    ):
                         export_mod._export_onnx(model_dir, str(tmp_path / "out"), None)
                         mock_main_export.assert_called_once()
             finally:
@@ -117,11 +120,14 @@ class TestOnnxExportFunction:
         model_dir.mkdir()
 
         mock_main_export = MagicMock()
-        with mock_patch.dict("sys.modules", {
-            "optimum": MagicMock(),
-            "optimum.exporters": MagicMock(),
-            "optimum.exporters.onnx": MagicMock(main_export=mock_main_export),
-        }):
+        with mock_patch.dict(
+            "sys.modules",
+            {
+                "optimum": MagicMock(),
+                "optimum.exporters": MagicMock(),
+                "optimum.exporters.onnx": MagicMock(main_export=mock_main_export),
+            },
+        ):
             import soup_cli.commands.export as export_mod
 
             export_mod._export_onnx(model_dir, None, None)
@@ -143,19 +149,23 @@ class TestTensorrtExportFunction:
         mock_result = MagicMock()
         mock_result.returncode = 0
 
-        with mock_patch.dict("sys.modules", {
-            "optimum": MagicMock(),
-            "optimum.exporters": MagicMock(),
-            "optimum.exporters.onnx": MagicMock(),
-            "tensorrt_llm": MagicMock(),
-            "tensorrt_llm.commands": MagicMock(),
-            "tensorrt_llm.commands.convert_checkpoint": MagicMock(),
-        }), mock_patch("subprocess.run", return_value=mock_result) as mock_run:
+        with (
+            mock_patch.dict(
+                "sys.modules",
+                {
+                    "optimum": MagicMock(),
+                    "optimum.exporters": MagicMock(),
+                    "optimum.exporters.onnx": MagicMock(),
+                    "tensorrt_llm": MagicMock(),
+                    "tensorrt_llm.commands": MagicMock(),
+                    "tensorrt_llm.commands.convert_checkpoint": MagicMock(),
+                },
+            ),
+            mock_patch("subprocess.run", return_value=mock_result) as mock_run,
+        ):
             import soup_cli.commands.export as export_mod
 
-            export_mod._export_tensorrt(
-                model_dir, str(tmp_path / "trt_out"), None
-            )
+            export_mod._export_tensorrt(model_dir, str(tmp_path / "trt_out"), None)
             # Should call subprocess at least twice (checkpoint + build)
             assert mock_run.call_count >= 2
 
@@ -167,18 +177,22 @@ class TestTensorrtExportFunction:
         model_dir = tmp_path / "model"
         model_dir.mkdir()
 
-        with mock_patch.dict("sys.modules", {
-            "optimum": MagicMock(),
-            "optimum.exporters": MagicMock(),
-            "optimum.exporters.onnx": MagicMock(),
-            "tensorrt_llm": MagicMock(),
-        }), mock_patch("subprocess.run") as mock_run:
+        with (
+            mock_patch.dict(
+                "sys.modules",
+                {
+                    "optimum": MagicMock(),
+                    "optimum.exporters": MagicMock(),
+                    "optimum.exporters.onnx": MagicMock(),
+                    "tensorrt_llm": MagicMock(),
+                },
+            ),
+            mock_patch("subprocess.run") as mock_run,
+        ):
             import soup_cli.commands.export as export_mod
 
             with pytest.raises(typer.Exit):
-                export_mod._export_tensorrt(
-                    model_dir, str(tmp_path / "trt_out"), None
-                )
+                export_mod._export_tensorrt(model_dir, str(tmp_path / "trt_out"), None)
             mock_run.assert_not_called()
 
 

@@ -206,7 +206,10 @@ class TestBCOTrainerWrapper:
             data={"train": "./data.jsonl", "format": "dpo"},
         )
         wrapper = BCOTrainerWrapper(
-            cfg, device="cuda", report_to="wandb", deepspeed_config="ds.json",
+            cfg,
+            device="cuda",
+            report_to="wandb",
+            deepspeed_config="ds.json",
         )
         assert wrapper.report_to == "wandb"
         assert wrapper.deepspeed_config == "ds.json"
@@ -252,22 +255,33 @@ class TestBCOTrainRouting:
         }
         fake_gpu_info = {"memory_total": "0 MB", "memory_total_bytes": 0}
 
-        with mock_patch(
-            "soup_cli.data.loader.load_dataset", return_value=fake_dataset,
-        ), mock_patch(
-            "soup_cli.utils.gpu.detect_device", return_value=("cpu", "CPU"),
-        ), mock_patch(
-            "soup_cli.utils.gpu.get_gpu_info", return_value=fake_gpu_info,
-        ), mock_patch(
-            "soup_cli.experiment.tracker.ExperimentTracker",
-        ) as mock_tracker_cls, mock_patch(
-            "soup_cli.monitoring.display.TrainingDisplay",
-        ), mock_patch(
-            "soup_cli.trainer.bco.BCOTrainerWrapper.setup",
-        ), mock_patch(
-            "soup_cli.trainer.bco.BCOTrainerWrapper.train",
-            return_value=fake_result,
-        ) as mock_train:
+        with (
+            mock_patch(
+                "soup_cli.data.loader.load_dataset",
+                return_value=fake_dataset,
+            ),
+            mock_patch(
+                "soup_cli.utils.gpu.detect_device",
+                return_value=("cpu", "CPU"),
+            ),
+            mock_patch(
+                "soup_cli.utils.gpu.get_gpu_info",
+                return_value=fake_gpu_info,
+            ),
+            mock_patch(
+                "soup_cli.experiment.tracker.ExperimentTracker",
+            ) as mock_tracker_cls,
+            mock_patch(
+                "soup_cli.monitoring.display.TrainingDisplay",
+            ),
+            mock_patch(
+                "soup_cli.trainer.bco.BCOTrainerWrapper.setup",
+            ),
+            mock_patch(
+                "soup_cli.trainer.bco.BCOTrainerWrapper.train",
+                return_value=fake_result,
+            ) as mock_train,
+        ):
             mock_tracker = MagicMock()
             mock_tracker.start_run.return_value = "run-bco-1"
             mock_tracker_cls.return_value = mock_tracker

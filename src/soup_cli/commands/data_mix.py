@@ -43,41 +43,54 @@ def _offline_proxy(weights: Tuple[float, ...]) -> float:
 
 def mix(
     optimize: bool = typer.Option(
-        False, "--optimize",
+        False,
+        "--optimize",
         help="Run Bayesian search over dataset mixture weights.",
     ),
     apply_recipe: Optional[str] = typer.Option(
-        None, "--apply",
+        None,
+        "--apply",
         help="Re-print a previously written mix-recipe (path under cwd).",
     ),
     datasets: Optional[str] = typer.Option(
-        None, "--datasets",
+        None,
+        "--datasets",
         help="Comma-separated list of dataset JSONL paths (>= 2, all under cwd).",
     ),
     budget: str = typer.Option(
-        "1h", "--budget",
+        "1h",
+        "--budget",
         help="Wall-clock cap: digits + optional s/m/h suffix (e.g. 1h, 30m).",
     ),
     num_probes: int = typer.Option(
-        8, "--num-probes", "-n",
-        min=1, max=256,
+        8,
+        "--num-probes",
+        "-n",
+        min=1,
+        max=256,
         help="Maximum number of proxy runs.",
     ),
     seed: int = typer.Option(
-        42, "--seed",
-        min=0, max=2**31 - 1,
+        42,
+        "--seed",
+        min=0,
+        max=2**31 - 1,
         help="RNG seed for the optimiser.",
     ),
     output: str = typer.Option(
-        "mix_recipe.yaml", "--output", "-o",
+        "mix_recipe.yaml",
+        "--output",
+        "-o",
         help="YAML recipe output path (under cwd).",
     ),
     overwrite: bool = typer.Option(
-        False, "--overwrite",
+        False,
+        "--overwrite",
         help="Overwrite the output path when it exists.",
     ),
     live: bool = typer.Option(
-        False, "--live",
+        False,
+        "--live",
         help=(
             "v0.53.5 #116 — run live short `soup train` proxy runs per "
             "candidate (requires --base-yaml). Defaults to the offline "
@@ -85,7 +98,8 @@ def mix(
         ),
     ),
     base_yaml: Optional[str] = typer.Option(
-        None, "--base-yaml",
+        None,
+        "--base-yaml",
         help=(
             "Path to a base soup.yaml (under cwd) supplying base/task/training/output. "
             "Required with --live."
@@ -102,14 +116,10 @@ def mix(
     )
 
     if optimize and apply_recipe is not None:
-        console.print(
-            "[red]Pick exactly one of --optimize or --apply.[/red]"
-        )
+        console.print("[red]Pick exactly one of --optimize or --apply.[/red]")
         raise typer.Exit(code=2)
     if not optimize and apply_recipe is None:
-        console.print(
-            "[red]Pick one of --optimize or --apply.[/red]"
-        )
+        console.print("[red]Pick one of --optimize or --apply.[/red]")
         raise typer.Exit(code=2)
 
     if apply_recipe is not None:
@@ -126,9 +136,7 @@ def mix(
         )
         # Round-trip via the renderer so the user sees the canonical shape.
         train_value = data_block.get("train") if hasattr(data_block, "get") else None
-        interleave = (
-            data_block.get("interleave", {}) if hasattr(data_block, "get") else {}
-        )
+        interleave = data_block.get("interleave", {}) if hasattr(data_block, "get") else {}
         probs = interleave.get("probs", []) if hasattr(interleave, "get") else []
         console.print("data:")
         console.print("  interleave:")
@@ -153,15 +161,11 @@ def mix(
         return
 
     if not datasets:
-        console.print(
-            "[red]--datasets is required when --optimize is set.[/red]"
-        )
+        console.print("[red]--datasets is required when --optimize is set.[/red]")
         raise typer.Exit(code=2)
     raw = [p.strip() for p in datasets.split(",") if p.strip()]
     try:
-        plan = build_optimization_plan(
-            raw, budget=budget, num_probes=num_probes, seed=seed
-        )
+        plan = build_optimization_plan(raw, budget=budget, num_probes=num_probes, seed=seed)
     except (ValueError, TypeError) as exc:
         console.print(f"[red]plan validation failed: {escape(str(exc))}[/red]")
         raise typer.Exit(code=2) from exc
@@ -177,9 +181,7 @@ def mix(
 
     if live:
         if not base_yaml:
-            console.print(
-                "[red]--live requires --base-yaml <path/to/soup.yaml>.[/red]"
-            )
+            console.print("[red]--live requires --base-yaml <path/to/soup.yaml>.[/red]")
             raise typer.Exit(code=2)
         from soup_cli.utils.mix_proxy import proxy_run_for_weights
 

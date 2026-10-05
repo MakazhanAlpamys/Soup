@@ -69,9 +69,7 @@ def _make(
     notes: str = "",
 ) -> DeployProfile:
     if not isinstance(name, str) or not _PROFILE_NAME_RE.match(name):
-        raise ValueError(
-            "profile name must be kebab-case ([a-z0-9][a-z0-9-]{0,31})"
-        )
+        raise ValueError("profile name must be kebab-case ([a-z0-9][a-z0-9-]{0,31})")
     if runtime not in _ALLOWED_RUNTIME:
         raise ValueError(f"runtime {runtime!r} not in allowlist")
     if quant not in _ALLOWED_QUANT:
@@ -80,9 +78,7 @@ def _make(
         raise ValueError(f"peft {peft!r} not in allowlist")
     if not isinstance(spec_decoding, bool):
         raise TypeError("spec_decoding must be bool")
-    if isinstance(recommended_max_length, bool) or not isinstance(
-        recommended_max_length, int
-    ):
+    if isinstance(recommended_max_length, bool) or not isinstance(recommended_max_length, int):
         raise TypeError("recommended_max_length must be int (not bool)")
     if not (64 <= recommended_max_length <= 1_048_576):
         raise ValueError("recommended_max_length must be in [64, 1048576]")
@@ -106,48 +102,98 @@ def _make(
 _BUILTIN: Mapping[str, DeployProfile] = MappingProxyType(
     {
         "mac-m3": _make(
-            "mac-m3", "Apple Silicon M3 / M3 Pro / M3 Max — MLX inference",
-            "mlx", "4bit", "lora", False, 8192,
+            "mac-m3",
+            "Apple Silicon M3 / M3 Pro / M3 Max — MLX inference",
+            "mlx",
+            "4bit",
+            "lora",
+            False,
+            8192,
             "MLX backend handles quantisation; LoRA stays as adapter",
         ),
         "mac-m4-pro": _make(
-            "mac-m4-pro", "Apple Silicon M4 / M4 Pro — MLX inference",
-            "mlx", "4bit", "lora", False, 16384,
+            "mac-m4-pro",
+            "Apple Silicon M4 / M4 Pro — MLX inference",
+            "mlx",
+            "4bit",
+            "lora",
+            False,
+            16384,
             "Higher memory band; doubles default context window",
         ),
         "rtx-3060-12gb": _make(
-            "rtx-3060-12gb", "Consumer NVIDIA 12GB — 4bit + speculative decoding",
-            "transformers", "4bit", "qlora", True, 4096,
+            "rtx-3060-12gb",
+            "Consumer NVIDIA 12GB — 4bit + speculative decoding",
+            "transformers",
+            "4bit",
+            "qlora",
+            True,
+            4096,
         ),
         "rtx-4090-24gb": _make(
-            "rtx-4090-24gb", "Consumer NVIDIA 24GB — AWQ + vLLM",
-            "vllm", "awq", "lora", True, 8192,
+            "rtx-4090-24gb",
+            "Consumer NVIDIA 24GB — AWQ + vLLM",
+            "vllm",
+            "awq",
+            "lora",
+            True,
+            8192,
         ),
         "iphone-16": _make(
-            "iphone-16", "iPhone 16 / 16 Pro — ExecuTorch on-device",
-            "executorch", "4bit", "qlora", False, 2048,
+            "iphone-16",
+            "iPhone 16 / 16 Pro — ExecuTorch on-device",
+            "executorch",
+            "4bit",
+            "qlora",
+            False,
+            2048,
             "Plan-only; ExecuTorch packaging lands in v0.54.0 Part D",
         ),
         "pixel-9": _make(
-            "pixel-9", "Pixel 9 — ExecuTorch / AICore on-device",
-            "executorch", "4bit", "qlora", False, 2048,
+            "pixel-9",
+            "Pixel 9 — ExecuTorch / AICore on-device",
+            "executorch",
+            "4bit",
+            "qlora",
+            False,
+            2048,
             "Plan-only; export pipeline lands in v0.54.0",
         ),
         "ollama-local": _make(
-            "ollama-local", "Local Ollama / llama.cpp via GGUF",
-            "ollama", "4bit", "lora", False, 4096,
+            "ollama-local",
+            "Local Ollama / llama.cpp via GGUF",
+            "ollama",
+            "4bit",
+            "lora",
+            False,
+            4096,
         ),
         "lm-studio": _make(
-            "lm-studio", "LM Studio desktop app — GGUF model",
-            "lm-studio", "4bit", "lora", False, 4096,
+            "lm-studio",
+            "LM Studio desktop app — GGUF model",
+            "lm-studio",
+            "4bit",
+            "lora",
+            False,
+            4096,
         ),
         "runpod-a100": _make(
-            "runpod-a100", "RunPod A100 40GB — bf16 vLLM with speculative",
-            "vllm", "none", "lora", True, 32768,
+            "runpod-a100",
+            "RunPod A100 40GB — bf16 vLLM with speculative",
+            "vllm",
+            "none",
+            "lora",
+            True,
+            32768,
         ),
         "hf-jobs-h100": _make(
-            "hf-jobs-h100", "HF Jobs H100 80GB — FP8 + vLLM prefix cache",
-            "vllm", "fp8", "lora", True, 65536,
+            "hf-jobs-h100",
+            "HF Jobs H100 80GB — FP8 + vLLM prefix cache",
+            "vllm",
+            "fp8",
+            "lora",
+            True,
+            65536,
         ),
     }
 )
@@ -200,23 +246,13 @@ def render_recipe_yaml(profile: DeployProfile, base: str, output_dir: str) -> st
     base = _validate_base(base)
     if not isinstance(output_dir, str):
         raise TypeError("output_dir must be a string")
-    if (
-        not output_dir
-        or "\x00" in output_dir
-        or "\n" in output_dir
-        or "\r" in output_dir
-    ):
+    if not output_dir or "\x00" in output_dir or "\n" in output_dir or "\r" in output_dir:
         raise ValueError("output_dir must be a non-empty single-line NUL-free string")
     if len(output_dir) > _MAX_OUTPUT_PATH_LEN:
         raise ValueError(f"output_dir exceeds {_MAX_OUTPUT_PATH_LEN} chars")
     peft_section = ""
     if profile.peft in ("lora", "qlora", "dora"):
-        peft_section = (
-            "  lora:\n"
-            "    r: 16\n"
-            "    alpha: 32\n"
-            "    dropout: 0.05\n"
-        )
+        peft_section = "  lora:\n    r: 16\n    alpha: 32\n    dropout: 0.05\n"
         if profile.peft == "dora":
             peft_section += "    use_dora: true\n"
     lines = [
@@ -253,12 +289,7 @@ def render_deploy_script(profile: DeployProfile, model_path: str) -> str:
         raise TypeError("profile must be a DeployProfile")
     if not isinstance(model_path, str):
         raise TypeError("model_path must be a string")
-    if (
-        not model_path
-        or "\x00" in model_path
-        or "\n" in model_path
-        or "\r" in model_path
-    ):
+    if not model_path or "\x00" in model_path or "\n" in model_path or "\r" in model_path:
         raise ValueError("model_path must be non-empty single-line NUL-free string")
     if len(model_path) > _MAX_OUTPUT_PATH_LEN:
         raise ValueError(f"model_path exceeds {_MAX_OUTPUT_PATH_LEN} chars")
@@ -272,7 +303,7 @@ def render_deploy_script(profile: DeployProfile, model_path: str) -> str:
     )
     if profile.runtime == "ollama":
         body = (
-            'NAME="soup-${USER:-local}-$(basename \"$MODEL\")"\n'
+            'NAME="soup-${USER:-local}-$(basename "$MODEL")"\n'
             'echo "Planned: soup deploy ollama --model $MODEL --name $NAME"\n'
         )
     elif profile.runtime == "lm-studio":
@@ -286,10 +317,7 @@ def render_deploy_script(profile: DeployProfile, model_path: str) -> str:
         body = 'echo "Planned: soup serve --backend mlx --model $MODEL"\n'
     else:
         spec_flag = " --auto-spec" if profile.spec_decoding else ""
-        body = (
-            'echo "Planned: soup serve --backend '
-            f'{profile.runtime} --model $MODEL{spec_flag}"\n'
-        )
+        body = f'echo "Planned: soup serve --backend {profile.runtime} --model $MODEL{spec_flag}"\n'
     return header + body
 
 
@@ -305,9 +333,7 @@ def _reject_symlink_target(path: str, label: str) -> None:
     except FileNotFoundError:
         return
     if _stat.S_ISLNK(st.st_mode):
-        raise ValueError(
-            f"{label} must not be a symlink: {os.path.basename(path)}"
-        )
+        raise ValueError(f"{label} must not be a symlink: {os.path.basename(path)}")
 
 
 def write_recipe(
@@ -324,9 +350,7 @@ def write_recipe(
     if len(recipe_path) > _MAX_OUTPUT_PATH_LEN:
         raise ValueError(f"recipe_path exceeds {_MAX_OUTPUT_PATH_LEN} chars")
     if not is_under_cwd(recipe_path):
-        raise ValueError(
-            f"recipe_path must stay under cwd: {os.path.basename(recipe_path)}"
-        )
+        raise ValueError(f"recipe_path must stay under cwd: {os.path.basename(recipe_path)}")
     _reject_symlink_target(recipe_path, "recipe_path")
     text = render_recipe_yaml(profile, base=base, output_dir=output_dir)
     real = os.path.realpath(recipe_path)
@@ -336,9 +360,7 @@ def write_recipe(
     return real
 
 
-def write_deploy_script(
-    profile: DeployProfile, model_path: str, script_path: str
-) -> str:
+def write_deploy_script(profile: DeployProfile, model_path: str, script_path: str) -> str:
     """Write the deploy bash script under cwd; returns the realpath written."""
     if not isinstance(script_path, str):
         raise TypeError("script_path must be a string")
@@ -347,9 +369,7 @@ def write_deploy_script(
     if len(script_path) > _MAX_OUTPUT_PATH_LEN:
         raise ValueError(f"script_path exceeds {_MAX_OUTPUT_PATH_LEN} chars")
     if not is_under_cwd(script_path):
-        raise ValueError(
-            f"script_path must stay under cwd: {os.path.basename(script_path)}"
-        )
+        raise ValueError(f"script_path must stay under cwd: {os.path.basename(script_path)}")
     _reject_symlink_target(script_path, "script_path")
     text = render_deploy_script(profile, model_path=model_path)
     real = os.path.realpath(script_path)

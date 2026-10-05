@@ -54,8 +54,12 @@ def registry_run(tmp_path, monkeypatch):
 
     store = RegistryStore(db_path=tmp_path / "reg.db")
     eid = store.push(
-        name="baseline", tag="v1", base_model="llama", task="sft",
-        run_id=run_id, config={},
+        name="baseline",
+        tag="v1",
+        base_model="llama",
+        task="sft",
+        run_id=run_id,
+        config={},
     )
     store.close()
 
@@ -164,9 +168,7 @@ def test_tracker_orders_ties_by_insertion(tmp_path, monkeypatch):
     tracker.close()
 
 
-def test_gate_flags_regression_against_remeasured_baseline(
-    registry_run, tmp_path, monkeypatch
-):
+def test_gate_flags_regression_against_remeasured_baseline(registry_run, tmp_path, monkeypatch):
     """A candidate at 0.38 regresses against a re-measured 0.45 baseline."""
     from soup_cli.eval.gate import EvalSuite, GateTask, run_gate
 
@@ -186,10 +188,15 @@ def test_gate_flags_regression_against_remeasured_baseline(
     )
     suite = EvalSuite(
         suite="s",
-        tasks=[GateTask(
-            type="custom", name="mmlu", tasks=str(tasks_file),
-            scorer="exact", threshold=0.0,
-        )],
+        tasks=[
+            GateTask(
+                type="custom",
+                name="mmlu",
+                tasks=str(tasks_file),
+                scorer="exact",
+                threshold=0.0,
+            )
+        ],
     )
     correct = {f"q{i}" for i in range(19)}
 
@@ -218,7 +225,9 @@ def test_eval_gate_prints_a_markup_bearing_benchmark_name_literally(tmp_path, mo
 
     tracker = ExperimentTracker()
     tracker.save_eval_result(
-        model_path="m", benchmark="mmlu[/]", score=0.3,
+        model_path="m",
+        benchmark="mmlu[/]",
+        score=0.3,
         details={"provenance": {"soup_version": "0.60.0", "scorer_revision": 0}},
         run_id="R",
     )

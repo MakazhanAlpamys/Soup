@@ -212,4 +212,3 @@ class TestNonLoopbackBindingProtection:
         result = runner.invoke(cli_app, ["ui", "--public"])
         assert result.exit_code == 2
         assert "binding non-loopback host" in result.output.lower()
-

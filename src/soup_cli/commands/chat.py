@@ -73,9 +73,7 @@ def chat(
         from soup_cli.utils.hubs import apply_hub_to_cli_model
 
         try:
-            model, base_model = apply_hub_to_cli_model(
-                model, base_model, hub, console=console
-            )
+            model, base_model = apply_hub_to_cli_model(model, base_model, hub, console=console)
         except (TypeError, ValueError) as exc:
             console.print(f"[red]{exc}[/]")
             raise typer.Exit(code=2) from exc
@@ -190,7 +188,9 @@ def chat(
 
         # Generate response
         response = _generate(
-            model_obj, tokenizer, history,
+            model_obj,
+            tokenizer,
+            history,
             max_tokens=max_tokens,
             temperature=temperature,
         )
@@ -224,9 +224,7 @@ def _load_model(
     device_map, torch_dtype = resolve_inference_device_map_and_dtype(device)
 
     console.print("[dim]Loading tokenizer...[/]")
-    tokenizer = AutoTokenizer.from_pretrained(
-        model_path, trust_remote_code=trust_remote_code
-    )
+    tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=trust_remote_code)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
@@ -267,9 +265,7 @@ def _generate(
 
     from soup_cli.utils.vllm import encode_chat_prompt
 
-    inputs = encode_chat_prompt(
-        messages, tokenizer, fallback_on_error=False, return_tensors="pt"
-    )
+    inputs = encode_chat_prompt(messages, tokenizer, fallback_on_error=False, return_tensors="pt")
     input_ids = inputs["input_ids"].to(model.device)
     attention_mask = inputs["attention_mask"].to(model.device)
 
@@ -288,6 +284,6 @@ def _generate(
         outputs = model.generate(**gen_kwargs)
 
     # Decode only new tokens
-    new_tokens = outputs[0][input_ids.shape[1]:]
+    new_tokens = outputs[0][input_ids.shape[1] :]
     response = tokenizer.decode(new_tokens, skip_special_tokens=True).strip()
     return response

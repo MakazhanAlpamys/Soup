@@ -15,6 +15,7 @@ Security model — mirrors v0.29.0 Part F policy:
 - Only ``app.py``, ``README.md``, and ``requirements.txt`` are read; any
   other files in the directory are ignored.
 """
+
 from __future__ import annotations
 
 import os
@@ -103,8 +104,7 @@ def render_custom_template_dir(template_dir: str, model_repo: str) -> dict[str, 
 
     if not is_under_cwd(template_dir):
         raise ValueError(
-            "template-dir must stay under the current working directory; "
-            f"got: {template_dir!r}"
+            f"template-dir must stay under the current working directory; got: {template_dir!r}"
         )
 
     base = Path(template_dir)
@@ -124,31 +124,22 @@ def render_custom_template_dir(template_dir: str, model_repo: str) -> dict[str, 
             st = os.lstat(fpath)
         except OSError:
             if fname in _REQUIRED_FILES:
-                raise FileNotFoundError(
-                    f"template-dir is missing required file: {fname}"
-                ) from None
+                raise FileNotFoundError(f"template-dir is missing required file: {fname}") from None
             continue
         if stat_module.S_ISLNK(st.st_mode):
-            raise ValueError(
-                f"template file {fname} is a symlink; refusing to render"
-            )
+            raise ValueError(f"template file {fname} is a symlink; refusing to render")
         if not stat_module.S_ISREG(st.st_mode):
             if fname in _REQUIRED_FILES:
-                raise FileNotFoundError(
-                    f"template-dir is missing required file: {fname}"
-                )
+                raise FileNotFoundError(f"template-dir is missing required file: {fname}")
             continue
         if st.st_size > _MAX_TEMPLATE_FILE_BYTES:
             raise ValueError(
-                f"template file {fname} exceeds 256 KB cap "
-                f"({st.st_size} bytes); refusing to render"
+                f"template file {fname} exceeds 256 KB cap ({st.st_size} bytes); refusing to render"
             )
         try:
             content = fpath.read_text(encoding="utf-8")
         except UnicodeDecodeError as exc:
-            raise ValueError(
-                f"template file {fname} is not valid UTF-8"
-            ) from exc
+            raise ValueError(f"template file {fname} is not valid UTF-8") from exc
         rendered[fname] = content.replace("{MODEL_REPO}", model_repo)
 
     return rendered

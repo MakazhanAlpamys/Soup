@@ -292,9 +292,7 @@ class TestAdapterSignEd25519:
         sign_adapter(str(adir), backend="ed25519", key_path=key_path)
         # Trusted pubkey == signer's pubkey -> verify passes authentication.
         trusted = tmp_path / "trusted.pub"
-        trusted.write_text(
-            public_key_pem(load_private_key_file(key_path)), encoding="utf-8"
-        )
+        trusted.write_text(public_key_pem(load_private_key_file(key_path)), encoding="utf-8")
         report = verify_adapter(str(adir), trusted_public_key=str(trusted))
         assert report.valid is True
 
@@ -334,9 +332,7 @@ class TestAdapterSignEd25519:
 
         adir = _write_fake_adapter(tmp_path)
         out_key = tmp_path / "fresh.pem"
-        rec = sign_adapter(
-            str(adir), backend="ed25519", generate_key_path=str(out_key)
-        )
+        rec = sign_adapter(str(adir), backend="ed25519", generate_key_path=str(out_key))
         assert rec.backend == "ed25519"
         assert out_key.exists()
         # The generated key must round-trip verify.
@@ -547,9 +543,7 @@ class TestDownloadRepoNamespacePin:
     def _setup(self, tmp_path, monkeypatch):
         """Point the pin DB at a tmp path and chdir so local_dir stays in cwd."""
         monkeypatch.chdir(tmp_path)
-        monkeypatch.setenv(
-            "SOUP_NAMESPACE_PIN_DB", str(tmp_path / "pins.db")
-        )
+        monkeypatch.setenv("SOUP_NAMESPACE_PIN_DB", str(tmp_path / "pins.db"))
 
     def test_first_use_records_and_downloads(self, tmp_path, monkeypatch):
         from unittest.mock import patch
@@ -560,7 +554,9 @@ class TestDownloadRepoNamespacePin:
         meta = lambda rid: ("alice", "2024-01-01T00:00:00+00:00")  # noqa: E731
         with patch("huggingface_hub.snapshot_download", return_value="/snap") as m:
             result = download_repo(
-                "hf", "alice/model", local_dir="./snap_pin",
+                "hf",
+                "alice/model",
+                local_dir="./snap_pin",
                 _metadata_fn=meta,
             )
         assert result == "/snap"
@@ -586,13 +582,17 @@ class TestDownloadRepoNamespacePin:
 
         with patch("huggingface_hub.snapshot_download", return_value="/snap"):
             download_repo(
-                "hf", "alice/model", local_dir="./s1",
+                "hf",
+                "alice/model",
+                local_dir="./s1",
                 _metadata_fn=lambda rid: ("alice", "2024-01-01T00:00:00+00:00"),
             )
             # Namespace re-creation: same repo id, DIFFERENT author.
             with pytest.raises(ValueError, match="author changed"):
                 download_repo(
-                    "hf", "alice/model", local_dir="./s2",
+                    "hf",
+                    "alice/model",
+                    local_dir="./s2",
                     _metadata_fn=lambda rid: ("mallory", "2025-06-01T00:00:00+00:00"),
                 )
 
@@ -604,11 +604,15 @@ class TestDownloadRepoNamespacePin:
 
         with patch("huggingface_hub.snapshot_download", return_value="/snap") as m:
             download_repo(
-                "hf", "alice/model", local_dir="./s1",
+                "hf",
+                "alice/model",
+                local_dir="./s1",
                 _metadata_fn=lambda rid: ("alice", "2024-01-01T00:00:00+00:00"),
             )
             download_repo(
-                "hf", "alice/model", local_dir="./s2",
+                "hf",
+                "alice/model",
+                local_dir="./s2",
                 _metadata_fn=lambda rid: ("mallory", "2025-06-01T00:00:00+00:00"),
                 allow_namespace_shift="mallory",
             )
@@ -624,7 +628,9 @@ class TestDownloadRepoNamespacePin:
 
         with patch("huggingface_hub.snapshot_download", return_value="/snap") as m:
             result = download_repo(
-                "hf", "alice/model", local_dir="./s",
+                "hf",
+                "alice/model",
+                local_dir="./s",
                 _metadata_fn=lambda rid: None,
             )
         assert result == "/snap"
@@ -642,8 +648,11 @@ class TestDownloadRepoNamespacePin:
 
         with patch("huggingface_hub.snapshot_download", return_value="/snap") as m:
             download_repo(
-                "hf", "alice/model", local_dir="./s",
-                namespace_check=False, _metadata_fn=boom,
+                "hf",
+                "alice/model",
+                local_dir="./s",
+                namespace_check=False,
+                _metadata_fn=boom,
             )
         m.assert_called_once()
 
@@ -679,9 +688,7 @@ class TestLicenseExtraction:
 
         adir = tmp_path / "a"
         adir.mkdir()
-        (adir / "config.json").write_text(
-            json.dumps({"license": "mit"}), encoding="utf-8"
-        )
+        (adir / "config.json").write_text(json.dumps({"license": "mit"}), encoding="utf-8")
         assert extract_license_from_adapter(str(adir)) == "mit"
 
     def test_from_model_card_frontmatter(self, tmp_path):
@@ -701,9 +708,7 @@ class TestLicenseExtraction:
 
         adir = tmp_path / "a"
         adir.mkdir()
-        (adir / "README.md").write_text(
-            "---\nlicense: llama3.1\n---\n", encoding="utf-8"
-        )
+        (adir / "README.md").write_text("---\nlicense: llama3.1\n---\n", encoding="utf-8")
         assert extract_license_from_adapter(str(adir)) == "llama-3.1"
 
     def test_license_as_list(self, tmp_path):
@@ -711,9 +716,7 @@ class TestLicenseExtraction:
 
         adir = tmp_path / "a"
         adir.mkdir()
-        (adir / "README.md").write_text(
-            "---\nlicense:\n  - mit\n---\n", encoding="utf-8"
-        )
+        (adir / "README.md").write_text("---\nlicense:\n  - mit\n---\n", encoding="utf-8")
         assert extract_license_from_adapter(str(adir)) == "mit"
 
     def test_unknown_license_returns_none(self, tmp_path):
@@ -745,12 +748,8 @@ class TestLicenseExtraction:
 
         adir = tmp_path / "a"
         adir.mkdir()
-        (adir / "adapter_config.json").write_text(
-            json.dumps({"license": "mit"}), encoding="utf-8"
-        )
-        (adir / "README.md").write_text(
-            "---\nlicense: apache-2.0\n---\n", encoding="utf-8"
-        )
+        (adir / "adapter_config.json").write_text(json.dumps({"license": "mit"}), encoding="utf-8")
+        (adir / "README.md").write_text("---\nlicense: apache-2.0\n---\n", encoding="utf-8")
         assert extract_license_from_adapter(str(adir)) == "mit"
 
     @pytest.mark.requires_symlink
@@ -808,9 +807,7 @@ class TestLicenseOverrideAudit:
         from soup_cli.utils.license_matrix import record_license_override
 
         log = tmp_path / "audit.jsonl"
-        record_license_override(
-            ["apache-2.0", "gpl-3.0"], "x" * 5000, path=str(log)
-        )
+        record_license_override(["apache-2.0", "gpl-3.0"], "x" * 5000, path=str(log))
         rows = read_audit_tail(str(log))
         # Each arg must respect the AuditEvent 1024-char cap.
         assert all(len(a) <= 1024 for a in rows[0]["args"])
@@ -866,6 +863,7 @@ class TestMergeScanGate:
         from soup_cli.commands.adapters import app
 
         if scan_raises is not None:
+
             def _scan(path):
                 raise scan_raises
 
@@ -885,7 +883,8 @@ class TestMergeScanGate:
         a = _make_adapter(tmp_path, "a")
         b = _make_adapter(tmp_path, "b")
         result = self._run(
-            monkeypatch, tmp_path,
+            monkeypatch,
+            tmp_path,
             ["merge", a, b, "-o", "out"],
             scan_overall="FAIL",
         )
@@ -897,7 +896,8 @@ class TestMergeScanGate:
         a = _make_adapter(tmp_path, "a")
         b = _make_adapter(tmp_path, "b")
         result = self._run(
-            monkeypatch, tmp_path,
+            monkeypatch,
+            tmp_path,
             ["merge", a, b, "-o", "out", "--allow-unscanned"],
             scan_overall="FAIL",
         )
@@ -907,7 +907,8 @@ class TestMergeScanGate:
         a = _make_adapter(tmp_path, "a")
         b = _make_adapter(tmp_path, "b")
         result = self._run(
-            monkeypatch, tmp_path,
+            monkeypatch,
+            tmp_path,
             ["merge", a, b, "-o", "out"],
             scan_overall="WARN",
         )
@@ -917,7 +918,8 @@ class TestMergeScanGate:
         a = _make_adapter(tmp_path, "a")
         b = _make_adapter(tmp_path, "b")
         result = self._run(
-            monkeypatch, tmp_path,
+            monkeypatch,
+            tmp_path,
             ["merge", a, b, "-o", "out"],
             scan_overall="OK",
         )
@@ -927,7 +929,8 @@ class TestMergeScanGate:
         a = _make_adapter(tmp_path, "a")
         b = _make_adapter(tmp_path, "b")
         result = self._run(
-            monkeypatch, tmp_path,
+            monkeypatch,
+            tmp_path,
             ["merge", a, b, "-o", "out"],
             scan_raises=ValueError("cannot load safetensors"),
         )
@@ -938,7 +941,8 @@ class TestMergeScanGate:
         a = _make_adapter(tmp_path, "a")
         b = _make_adapter(tmp_path, "b")
         result = self._run(
-            monkeypatch, tmp_path,
+            monkeypatch,
+            tmp_path,
             ["merge", a, b, "-o", "out", "--allow-unscanned"],
             scan_raises=ValueError("cannot load safetensors"),
         )
@@ -952,9 +956,7 @@ class TestMergeLicenseAutoExtract:
         from soup_cli.commands.adapters import app
 
         # Scan always OK so we isolate the license gate.
-        monkeypatch.setattr(
-            "soup_cli.utils.adapter_scan.scan_adapter", _fake_scan("OK")
-        )
+        monkeypatch.setattr("soup_cli.utils.adapter_scan.scan_adapter", _fake_scan("OK"))
         monkeypatch.setattr(
             "soup_cli.utils.adapter_merge.merge_adapters",
             lambda *a, **k: _fake_merge_report(),
@@ -990,11 +992,20 @@ class TestMergeLicenseAutoExtract:
         b = _make_adapter(tmp_path, "b")
         log = tmp_path / "audit.jsonl"
         result = self._run(
-            monkeypatch, tmp_path,
+            monkeypatch,
+            tmp_path,
             [
-                "merge", a, b, "-o", "out",
-                "--license", "apache-2.0", "--license", "gpl-3.0",
-                "--license-override", "legal cleared this combo for v0.71.2 demo",
+                "merge",
+                a,
+                b,
+                "-o",
+                "out",
+                "--license",
+                "apache-2.0",
+                "--license",
+                "gpl-3.0",
+                "--license-override",
+                "legal cleared this combo for v0.71.2 demo",
             ],
             audit_log=log,
         )
@@ -1003,9 +1014,7 @@ class TestMergeLicenseAutoExtract:
 
         rows = read_audit_tail(str(log))
         assert any(r["command"] == "adapters merge" for r in rows)
-        assert any(
-            "legal cleared" in a for r in rows for a in r["args"]
-        )
+        assert any("legal cleared" in a for r in rows for a in r["args"])
 
 
 # ---------------------------------------------------------------------------
@@ -1049,8 +1058,7 @@ class TestCli:
         # Generate a key + sign in one shot.
         r1 = runner.invoke(
             app,
-            ["sign", str(adir), "--backend", "ed25519",
-             "--generate-key", "signing.pem"],
+            ["sign", str(adir), "--backend", "ed25519", "--generate-key", "signing.pem"],
         )
         assert r1.exit_code == 0, r1.output
         assert (tmp_path / "signing.pem").exists()
@@ -1121,8 +1129,21 @@ class TestReviewFollowups:
         key = self._key(tmp_path)
         r = runner.invoke(
             app,
-            ["emit", "--stage", "train", "--subject", "m", "--sha", "a" * 64,
-             "--sign", "ed25519", "--key", key, "-o", "stmt.json"],
+            [
+                "emit",
+                "--stage",
+                "train",
+                "--subject",
+                "m",
+                "--sha",
+                "a" * 64,
+                "--sign",
+                "ed25519",
+                "--key",
+                key,
+                "-o",
+                "stmt.json",
+            ],
         )
         assert r.exit_code == 0, r.output
         return key
@@ -1177,8 +1198,7 @@ class TestReviewFollowups:
             encoding="utf-8",
         )
         r = runner.invoke(
-            app, ["verify", "stmt.json", "--signature", "stmt.json.sig",
-                  "--public-key", str(other)]
+            app, ["verify", "stmt.json", "--signature", "stmt.json.sig", "--public-key", str(other)]
         )
         assert r.exit_code == 3, r.output
         assert "untrusted key" in r.output.lower()
@@ -1224,9 +1244,7 @@ class TestReviewFollowups:
 
         adir = _write_fake_adapter(tmp_path)
         sign_adapter(str(adir), backend="ed25519", key_path=self._key(tmp_path))
-        report = verify_adapter(
-            str(adir), trusted_public_key=str(tmp_path / "missing.pub")
-        )
+        report = verify_adapter(str(adir), trusted_public_key=str(tmp_path / "missing.pub"))
         assert report.valid is False
         assert any("unreadable" in f for f in report.findings)
 
@@ -1288,11 +1306,15 @@ class TestReviewFollowups:
         db = str(tmp_path / "pins.db")
         with NamespacePinStore(db) as store:
             record_repo_first_seen(
-                store, repo_id="o/r", author="alice",
+                store,
+                repo_id="o/r",
+                author="alice",
                 created_at="2024-06-01T00:00:00+00:00",
             )
             report = verify_namespace(
-                store, repo_id="o/r", current_author="alice",
+                store,
+                repo_id="o/r",
+                current_author="alice",
                 current_created_at="2024-01-01T00:00:00+00:00",  # earlier!
             )
         assert report.ok is False
@@ -1308,12 +1330,16 @@ class TestReviewFollowups:
         db = str(tmp_path / "pins.db")
         with NamespacePinStore(db) as store:
             record_repo_first_seen(
-                store, repo_id="o/r", author="alice",
+                store,
+                repo_id="o/r",
+                author="alice",
                 created_at="2024-01-01T00:00:00+00:00",
             )
             with pytest.raises(TypeError):
                 verify_namespace(
-                    store, repo_id="o/r", current_author="mallory",
+                    store,
+                    repo_id="o/r",
+                    current_author="mallory",
                     current_created_at="2025-01-01T00:00:00+00:00",
                     allow_namespace_shift=True,  # type: ignore[arg-type]
                 )
@@ -1349,12 +1375,8 @@ class TestReviewFollowups:
 
         adir = tmp_path / "a"
         adir.mkdir()
-        (adir / "config.json").write_text(
-            json.dumps({"license": "mit"}), encoding="utf-8"
-        )
-        (adir / "README.md").write_text(
-            "---\nlicense: apache-2.0\n---\n", encoding="utf-8"
-        )
+        (adir / "config.json").write_text(json.dumps({"license": "mit"}), encoding="utf-8")
+        (adir / "README.md").write_text("---\nlicense: apache-2.0\n---\n", encoding="utf-8")
         assert extract_license_from_adapter(str(adir)) == "mit"
 
     def test_license_adapter_config_over_config_json(self, tmp_path):
@@ -1362,12 +1384,8 @@ class TestReviewFollowups:
 
         adir = tmp_path / "a"
         adir.mkdir()
-        (adir / "adapter_config.json").write_text(
-            json.dumps({"license": "mit"}), encoding="utf-8"
-        )
-        (adir / "config.json").write_text(
-            json.dumps({"license": "apache-2.0"}), encoding="utf-8"
-        )
+        (adir / "adapter_config.json").write_text(json.dumps({"license": "mit"}), encoding="utf-8")
+        (adir / "config.json").write_text(json.dumps({"license": "apache-2.0"}), encoding="utf-8")
         assert extract_license_from_adapter(str(adir)) == "mit"
 
     # M8 — license-override-without-auto-detect advisory branch
@@ -1376,9 +1394,7 @@ class TestReviewFollowups:
 
         from soup_cli.commands.adapters import app
 
-        monkeypatch.setattr(
-            "soup_cli.utils.adapter_scan.scan_adapter", _fake_scan("OK")
-        )
+        monkeypatch.setattr("soup_cli.utils.adapter_scan.scan_adapter", _fake_scan("OK"))
         monkeypatch.setattr(
             "soup_cli.utils.adapter_merge.merge_adapters",
             lambda *a, **k: _fake_merge_report(),
@@ -1388,8 +1404,7 @@ class TestReviewFollowups:
         b = _make_adapter(tmp_path, "b")  # undetermined
         r = CliRunner().invoke(
             app,
-            ["merge", a, b, "-o", "out",
-             "--license-override", "no gate but cleared anyway 2026"],
+            ["merge", a, b, "-o", "out", "--license-override", "no gate but cleared anyway 2026"],
         )
         assert r.exit_code == 0, r.output
         assert "no conflict gate triggered" in r.output.lower()
@@ -1431,8 +1446,16 @@ class TestReviewFollowups:
         b = _make_adapter(tmp_path, "b")
         r = CliRunner().invoke(
             app,
-            ["merge", a, b, "-o", "out", "--allow-unscanned",
-             "--license", "apache-2.0"],  # one license, two adapters
+            [
+                "merge",
+                a,
+                b,
+                "-o",
+                "out",
+                "--allow-unscanned",
+                "--license",
+                "apache-2.0",
+            ],  # one license, two adapters
         )
         assert r.exit_code == 2, r.output
         assert "must match" in r.output.lower()
@@ -1459,7 +1482,8 @@ class TestReviewFollowups:
 
         log = tmp_path / "audit.jsonl"
         record_license_override(
-            ["apache-2.0", "gpl-3.0"], "cleared by legal 2026-06-01",
+            ["apache-2.0", "gpl-3.0"],
+            "cleared by legal 2026-06-01",
             path=str(log),
         )
         row = read_audit_tail(str(log))[0]
@@ -1488,23 +1512,31 @@ class TestReviewFollowups:
         sha = "a" * 64
         emit = runner.invoke(
             app,
-            ["emit", "--stage", "train", "--subject", "model",
-             "--sha", sha, "--sign", "ed25519", "--key", str(key),
-             "-o", "stmt.json"],
+            [
+                "emit",
+                "--stage",
+                "train",
+                "--subject",
+                "model",
+                "--sha",
+                sha,
+                "--sign",
+                "ed25519",
+                "--key",
+                str(key),
+                "-o",
+                "stmt.json",
+            ],
         )
         assert emit.exit_code == 0, emit.output
         assert (tmp_path / "stmt.json").exists()
         assert (tmp_path / "stmt.json.sig").exists()
         # Verify passes.
-        ok = runner.invoke(
-            app, ["verify", "stmt.json", "--signature", "stmt.json.sig"]
-        )
+        ok = runner.invoke(app, ["verify", "stmt.json", "--signature", "stmt.json.sig"])
         assert ok.exit_code == 0, ok.output
         # Tamper the statement -> verify fails (exit 3).
         (tmp_path / "stmt.json").write_text("tampered", encoding="utf-8")
-        bad = runner.invoke(
-            app, ["verify", "stmt.json", "--signature", "stmt.json.sig"]
-        )
+        bad = runner.invoke(app, ["verify", "stmt.json", "--signature", "stmt.json.sig"])
         assert bad.exit_code == 3, bad.output
 
 
@@ -1522,9 +1554,7 @@ class TestSecurityFixes:
         existing = tmp_path / "exists.pem"
         existing.write_text("placeholder", encoding="utf-8")
         with pytest.raises(ValueError, match="overwrite|existing"):
-            sign_adapter(
-                str(adir), backend="ed25519", generate_key_path=str(existing)
-            )
+            sign_adapter(str(adir), backend="ed25519", generate_key_path=str(existing))
 
     def test_read_public_key_file_size_cap_and_symlink(self, tmp_path):
         # M1 — the shared public-key reader rejects oversize + (POSIX) symlinks.
@@ -1564,11 +1594,14 @@ class TestSecurityFixes:
 
         # _run_namespace_check imports NamespacePinStore from namespace_pin at
         # call time, so patch it there (not on the hubs module).
-        with patch(
-            "soup_cli.utils.namespace_pin.NamespacePinStore", boom
-        ), patch("huggingface_hub.snapshot_download", return_value="/snap") as m:
+        with (
+            patch("soup_cli.utils.namespace_pin.NamespacePinStore", boom),
+            patch("huggingface_hub.snapshot_download", return_value="/snap") as m,
+        ):
             result = hubs.download_repo(
-                "hf", "alice/model", local_dir="./s",
+                "hf",
+                "alice/model",
+                local_dir="./s",
                 _metadata_fn=lambda rid: ("alice", "2024-01-01T00:00:00+00:00"),
             )
         assert result == "/snap"

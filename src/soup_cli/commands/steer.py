@@ -56,45 +56,62 @@ def _validate_pairs_path(pairs: str) -> str:
 @app.command(name="train")
 def train_steer(
     base: str = typer.Option(
-        ..., "--base", "-b",
+        ...,
+        "--base",
+        "-b",
         help="Base model HF id or local path.",
     ),
     method: str = typer.Option(
-        "caa", "--method", "-m",
+        "caa",
+        "--method",
+        "-m",
         help="Steering method: caa / iti / repe.",
     ),
     name: str = typer.Option(
-        ..., "--name", "-n",
+        ...,
+        "--name",
+        "-n",
         help="Identifier for the trained vector (e.g. 'safety-v1').",
     ),
     pairs: str = typer.Option(
-        ..., "--pairs", "-p",
+        ...,
+        "--pairs",
+        "-p",
         help="Path to JSONL of contrastive (positive, negative) prompt pairs.",
     ),
     layer: Optional[int] = typer.Option(
-        None, "--layer", "-l",
+        None,
+        "--layer",
+        "-l",
         help="Decoder layer index to extract the residual-stream vector from "
         "(default: the middle layer).",
     ),
     output: Optional[str] = typer.Option(
-        None, "--output", "-o",
+        None,
+        "--output",
+        "-o",
         help="Directory to write the steering vector to (default: "
         "./steering/<name>). Cwd-contained.",
     ),
     device: Optional[str] = typer.Option(
-        None, "--device",
+        None,
+        "--device",
         help="torch device (cpu / cuda). Defaults to CUDA when available.",
     ),
     top_k: int = typer.Option(
-        8, "--top-k", "-k",
+        8,
+        "--top-k",
+        "-k",
         help="ITI only: number of attention heads to intervene on (1-256).",
     ),
     plan_only: bool = typer.Option(
-        False, "--plan-only",
+        False,
+        "--plan-only",
         help="Validate inputs + print the resolved plan; skip the live fit.",
     ),
     registry_id: Optional[str] = typer.Option(
-        None, "--registry-id",
+        None,
+        "--registry-id",
         help="Optional Registry entry id to attach the trained vector to.",
     ),
 ) -> None:
@@ -134,28 +151,20 @@ def train_steer(
     # see junk. Mirrors v0.61.0 Part C policy on `--registry-id`.
     if registry_id is not None:
         if not isinstance(registry_id, str) or not registry_id:
-            console.print(
-                "[red]Invalid --registry-id:[/] must be non-empty"
-            )
+            console.print("[red]Invalid --registry-id:[/] must be non-empty")
             raise typer.Exit(2)
         if "\x00" in registry_id:
-            console.print(
-                "[red]Invalid --registry-id:[/] null bytes not allowed"
-            )
+            console.print("[red]Invalid --registry-id:[/] null bytes not allowed")
             raise typer.Exit(2)
         if len(registry_id) > 256:
             console.print("[red]Invalid --registry-id:[/] >256 chars")
             raise typer.Exit(2)
 
     if layer is not None and (layer < 0 or layer > 2048):
-        console.print(
-            f"[red]Invalid --layer:[/] must satisfy 0 <= layer <= 2048, got {layer}"
-        )
+        console.print(f"[red]Invalid --layer:[/] must satisfy 0 <= layer <= 2048, got {layer}")
         raise typer.Exit(2)
     if top_k < 1 or top_k > 256:
-        console.print(
-            f"[red]Invalid --top-k:[/] must satisfy 1 <= top_k <= 256, got {top_k}"
-        )
+        console.print(f"[red]Invalid --top-k:[/] must satisfy 1 <= top_k <= 256, got {top_k}")
         raise typer.Exit(2)
 
     spec = get_steering_method_spec(canonical_method)
@@ -215,27 +224,26 @@ def train_steer(
         from soup_cli.registry.attach import attach_artifact
 
         try:
-            attach_artifact(
-                registry_id, path=artifact.output_dir, kind="steering_vector"
-            )
+            attach_artifact(registry_id, path=artifact.output_dir, kind="steering_vector")
             console.print(
-                f"[green]Attached steering_vector to Registry entry "
-                f"{escape(registry_id)}.[/]"
+                f"[green]Attached steering_vector to Registry entry {escape(registry_id)}.[/]"
             )
         except (ValueError, FileNotFoundError) as exc:
-            console.print(
-                f"[yellow]Could not attach to Registry:[/] {escape(str(exc))}"
-            )
+            console.print(f"[yellow]Could not attach to Registry:[/] {escape(str(exc))}")
 
 
 @app.command(name="apply")
 def apply_steer(
     name: str = typer.Option(
-        ..., "--name", "-n",
+        ...,
+        "--name",
+        "-n",
         help="Identifier of a stored steering vector.",
     ),
     strength: float = typer.Option(
-        1.0, "--strength", "-s",
+        1.0,
+        "--strength",
+        "-s",
         help="Steering strength multiplier (|s| <= 10.0).",
     ),
 ) -> None:

@@ -357,7 +357,10 @@ class TestPretrainTrainRouting:
             data={"train": "./data.jsonl"},
         )
         wrapper = PretrainTrainerWrapper(
-            cfg, device="cuda", report_to="wandb", deepspeed_config="ds.json",
+            cfg,
+            device="cuda",
+            report_to="wandb",
+            deepspeed_config="ds.json",
         )
         assert wrapper.report_to == "wandb"
         assert wrapper.deepspeed_config == "ds.json"
@@ -400,9 +403,7 @@ class TestPretrainSweepParams:
             data={"train": "./data.jsonl"},
         )
 
-        fake_dataset = {
-            "train": [{"text": "Some pre-training text."}]
-        }
+        fake_dataset = {"train": [{"text": "Some pre-training text."}]}
         fake_result = {
             "initial_loss": 3.0,
             "final_loss": 2.5,
@@ -413,16 +414,18 @@ class TestPretrainSweepParams:
         }
 
         fake_gpu_info = {"memory_total": "0 MB", "memory_total_bytes": 0}
-        with mock_patch("soup_cli.data.loader.load_dataset", return_value=fake_dataset), \
-             mock_patch("soup_cli.utils.gpu.detect_device", return_value=("cpu", "CPU")), \
-             mock_patch("soup_cli.utils.gpu.get_gpu_info", return_value=fake_gpu_info), \
-             mock_patch("soup_cli.experiment.tracker.ExperimentTracker") as mock_tracker_cls, \
-             mock_patch("soup_cli.monitoring.display.TrainingDisplay"), \
-             mock_patch("soup_cli.trainer.pretrain.PretrainTrainerWrapper.setup"), \
-             mock_patch(
-                 "soup_cli.trainer.pretrain.PretrainTrainerWrapper.train",
-                 return_value=fake_result,
-             ) as mock_train:
+        with (
+            mock_patch("soup_cli.data.loader.load_dataset", return_value=fake_dataset),
+            mock_patch("soup_cli.utils.gpu.detect_device", return_value=("cpu", "CPU")),
+            mock_patch("soup_cli.utils.gpu.get_gpu_info", return_value=fake_gpu_info),
+            mock_patch("soup_cli.experiment.tracker.ExperimentTracker") as mock_tracker_cls,
+            mock_patch("soup_cli.monitoring.display.TrainingDisplay"),
+            mock_patch("soup_cli.trainer.pretrain.PretrainTrainerWrapper.setup"),
+            mock_patch(
+                "soup_cli.trainer.pretrain.PretrainTrainerWrapper.train",
+                return_value=fake_result,
+            ) as mock_train,
+        ):
             mock_tracker = MagicMock()
             mock_tracker.start_run.return_value = "run-pretrain-1"
             mock_tracker_cls.return_value = mock_tracker
@@ -559,9 +562,7 @@ class TestPretrainTrainResults:
             log_history=[{"loss": 2.0}], global_step=5
         )
         wrapper.train(resume_from_checkpoint="/ckpt/checkpoint-50")
-        mock_trainer.train.assert_called_once_with(
-            resume_from_checkpoint="/ckpt/checkpoint-50"
-        )
+        mock_trainer.train.assert_called_once_with(resume_from_checkpoint="/ckpt/checkpoint-50")
 
     def test_train_result_duration_minutes_format(self):
         """Short durations (<1h) should produce 'Xm' format."""
@@ -612,9 +613,7 @@ class TestPretrainInitTemplate:
 
         runner = CliRunner()
         output = tmp_path / "soup.yaml"
-        result = runner.invoke(
-            app, ["init", "--template", "pretrain", "--output", str(output)]
-        )
+        result = runner.invoke(app, ["init", "--template", "pretrain", "--output", str(output)])
         assert result.exit_code == 0
         assert output.exists()
         content = output.read_text()
@@ -632,9 +631,7 @@ class TestPretrainInitTemplate:
 
         runner = CliRunner()
         output = tmp_path / "soup.yaml"
-        runner.invoke(
-            app, ["init", "--template", "pretrain", "--output", str(output)]
-        )
+        runner.invoke(app, ["init", "--template", "pretrain", "--output", str(output)])
         cfg = load_config(Path(output))
         assert cfg.task == "pretrain"
         assert cfg.data.format == "plaintext"
@@ -647,9 +644,7 @@ class TestPretrainInitTemplate:
 
         runner = CliRunner()
         output = tmp_path / "soup.yaml"
-        result = runner.invoke(
-            app, ["init", "--template", "moe", "--output", str(output)]
-        )
+        result = runner.invoke(app, ["init", "--template", "moe", "--output", str(output)])
         assert result.exit_code == 0
         content = output.read_text()
         assert "moe_lora: true" in content
@@ -665,13 +660,16 @@ class TestPretrainWizardPath:
         """When the wizard receives task=pretrain, data format should be 'plaintext'."""
         from soup_cli.commands.init import _interactive_wizard
 
-        with mock_patch("soup_cli.commands.init.Prompt.ask", side_effect=[
-            "some-model",
-            "pretrain",
-            "./corpus.txt",
-            "1",
-            "yes",
-        ]):
+        with mock_patch(
+            "soup_cli.commands.init.Prompt.ask",
+            side_effect=[
+                "some-model",
+                "pretrain",
+                "./corpus.txt",
+                "1",
+                "yes",
+            ],
+        ):
             config_text = _interactive_wizard()
 
         assert "task: pretrain" in config_text
@@ -769,19 +767,20 @@ class TestPretrainMoEIntegration:
         mock_model = MagicMock()
         mock_model.get_nb_trainable_parameters.return_value = (1000, 10000)
 
-        with mock_patch("transformers.AutoModelForCausalLM.from_pretrained",
-                        return_value=mock_model), \
-             mock_patch("transformers.AutoTokenizer.from_pretrained"), \
-             mock_patch("peft.get_peft_model", return_value=mock_model), \
-             mock_patch("peft.LoraConfig"), \
-             mock_patch("peft.prepare_model_for_kbit_training"), \
-             mock_patch(
-                 "soup_cli.utils.moe.detect_moe_model", return_value=True
-             ), \
-             mock_patch(
-                 "soup_cli.utils.moe.get_moe_target_modules",
-                 return_value=["q_proj", "v_proj", "gate_proj", "up_proj"],
-             ) as mock_moe_targets:
+        with (
+            mock_patch(
+                "transformers.AutoModelForCausalLM.from_pretrained", return_value=mock_model
+            ),
+            mock_patch("transformers.AutoTokenizer.from_pretrained"),
+            mock_patch("peft.get_peft_model", return_value=mock_model),
+            mock_patch("peft.LoraConfig"),
+            mock_patch("peft.prepare_model_for_kbit_training"),
+            mock_patch("soup_cli.utils.moe.detect_moe_model", return_value=True),
+            mock_patch(
+                "soup_cli.utils.moe.get_moe_target_modules",
+                return_value=["q_proj", "v_proj", "gate_proj", "up_proj"],
+            ) as mock_moe_targets,
+        ):
             from soup_cli.trainer.pretrain import PretrainTrainerWrapper
 
             wrapper = PretrainTrainerWrapper(cfg, device="cpu")
@@ -803,17 +802,17 @@ class TestPretrainMoEIntegration:
         mock_model.config.router_aux_loss_coef = 0.01
         mock_model.config.output_router_logits = False
 
-        with mock_patch("transformers.AutoModelForCausalLM.from_pretrained",
-                        return_value=mock_model), \
-             mock_patch("transformers.AutoTokenizer.from_pretrained"), \
-             mock_patch("peft.get_peft_model", return_value=mock_model), \
-             mock_patch("peft.LoraConfig"), \
-             mock_patch("peft.prepare_model_for_kbit_training"), \
-             mock_patch(
-                 "soup_cli.utils.moe.detect_moe_model", return_value=True
-             ), \
-             mock_patch("soup_cli.utils.moe.get_moe_target_modules",
-                        return_value=None):
+        with (
+            mock_patch(
+                "transformers.AutoModelForCausalLM.from_pretrained", return_value=mock_model
+            ),
+            mock_patch("transformers.AutoTokenizer.from_pretrained"),
+            mock_patch("peft.get_peft_model", return_value=mock_model),
+            mock_patch("peft.LoraConfig"),
+            mock_patch("peft.prepare_model_for_kbit_training"),
+            mock_patch("soup_cli.utils.moe.detect_moe_model", return_value=True),
+            mock_patch("soup_cli.utils.moe.get_moe_target_modules", return_value=None),
+        ):
             from soup_cli.trainer.pretrain import PretrainTrainerWrapper
 
             wrapper = PretrainTrainerWrapper(cfg, device="cpu")
@@ -834,19 +833,20 @@ class TestPretrainMoEIntegration:
         mock_model = MagicMock()
         mock_model.get_nb_trainable_parameters.return_value = (1000, 10000)
 
-        with mock_patch("transformers.AutoModelForCausalLM.from_pretrained",
-                        return_value=mock_model), \
-             mock_patch("transformers.AutoTokenizer.from_pretrained"), \
-             mock_patch("peft.get_peft_model", return_value=mock_model), \
-             mock_patch("peft.LoraConfig"), \
-             mock_patch("peft.prepare_model_for_kbit_training"), \
-             mock_patch(
-                 "soup_cli.utils.moe.detect_moe_model", return_value=False
-             ), \
-             mock_patch(
-                 "soup_cli.utils.moe.get_moe_target_modules",
-                 return_value=None,
-             ) as mock_moe_targets:
+        with (
+            mock_patch(
+                "transformers.AutoModelForCausalLM.from_pretrained", return_value=mock_model
+            ),
+            mock_patch("transformers.AutoTokenizer.from_pretrained"),
+            mock_patch("peft.get_peft_model", return_value=mock_model),
+            mock_patch("peft.LoraConfig"),
+            mock_patch("peft.prepare_model_for_kbit_training"),
+            mock_patch("soup_cli.utils.moe.detect_moe_model", return_value=False),
+            mock_patch(
+                "soup_cli.utils.moe.get_moe_target_modules",
+                return_value=None,
+            ) as mock_moe_targets,
+        ):
             from soup_cli.trainer.pretrain import PretrainTrainerWrapper
 
             wrapper = PretrainTrainerWrapper(cfg, device="cpu")
@@ -867,9 +867,7 @@ class TestPlaintextLineChunking:
         from soup_cli.data.loader import load_raw_data
 
         txt_file = tmp_path / "corpus.txt"
-        txt_file.write_text(
-            "Para one line one\n\nPara two line one\n", encoding="utf-8"
-        )
+        txt_file.write_text("Para one line one\n\nPara two line one\n", encoding="utf-8")
         data = load_raw_data(txt_file)
         assert len(data) == 2
         assert data[0] == {"text": "Para one line one"}

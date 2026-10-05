@@ -119,9 +119,7 @@ _TRAINER_DIR = Path(__file__).resolve().parent.parent / "src" / "soup_cli" / "tr
 
 class TestTrainerSourceWiring:
     @pytest.mark.parametrize("filename", _TRAINER_FILES)
-    def test_trainer_calls_build_quantization_config_for_loader(
-        self, filename: str
-    ) -> None:
+    def test_trainer_calls_build_quantization_config_for_loader(self, filename: str) -> None:
         src = (_TRAINER_DIR / filename).read_text(encoding="utf-8")
         assert "build_quantization_config_for_loader" in src, (
             f"{filename} must call build_quantization_config_for_loader to "
@@ -150,12 +148,8 @@ class TestTrainerSourceWiring:
         if "prepare_model_for_kbit_training" not in src:
             pytest.skip(f"{filename} doesn't use kbit prep")
         # Match: ("4bit", "8bit", "mxfp4")  with arbitrary whitespace.
-        pattern = re.compile(
-            r'\(\s*"4bit"\s*,\s*"8bit"\s*,\s*"mxfp4"\s*\)'
-        )
-        assert pattern.search(src), (
-            f"{filename} kbit-prep tuple must be (\"4bit\", \"8bit\", \"mxfp4\")"
-        )
+        pattern = re.compile(r'\(\s*"4bit"\s*,\s*"8bit"\s*,\s*"mxfp4"\s*\)')
+        assert pattern.search(src), f'{filename} kbit-prep tuple must be ("4bit", "8bit", "mxfp4")'
 
 
 # ---------------------------------------------------------------------------
@@ -276,9 +270,7 @@ class TestPPORewardModelQuantMenu:
             "ppo.py must call build_quantization_config_for_loader"
         )
         # _setup_reward + _create_reward_model both pass tcfg=tcfg now.
-        assert src.count("tcfg=tcfg,") >= 2, (
-            "Both PPO reward-loading sites must forward tcfg"
-        )
+        assert src.count("tcfg=tcfg,") >= 2, "Both PPO reward-loading sites must forward tcfg"
 
     def test_load_reward_model_routes_through_quant_menu_live(self, monkeypatch):
         # Live dispatch — mock the heavy dependencies (transformers,
@@ -317,22 +309,24 @@ class TestPPORewardModelQuantMenu:
 
         # Stub trust_remote helpers to avoid filesystem probing.
         from soup_cli.utils import trust_remote
+
+        monkeypatch.setattr(trust_remote, "model_requires_trust_remote_code", lambda _p: False)
         monkeypatch.setattr(
-            trust_remote, "model_requires_trust_remote_code", lambda _p: False
-        )
-        monkeypatch.setattr(
-            trust_remote, "resolve_trust_remote_code",
+            trust_remote,
+            "resolve_trust_remote_code",
             lambda *a, **kw: kw.get("requested", False),
         )
 
         from soup_cli.utils import quant_menu
-        monkeypatch.setattr(
-            quant_menu, "build_quantization_config_for_loader", fake_loader
-        )
+
+        monkeypatch.setattr(quant_menu, "build_quantization_config_for_loader", fake_loader)
 
         tcfg = TrainingConfig(quantization="gptq", quantize_reward_model=True)
         ppo_mod._load_reward_model(
-            "some-org/some-rm", device="cpu", trust_remote_code=False, tcfg=tcfg,
+            "some-org/some-rm",
+            device="cpu",
+            trust_remote_code=False,
+            tcfg=tcfg,
         )
         # Assertions: loader was called with the supplied tcfg + path.
         loader_calls = [c for c in calls if "tcfg" in c]
@@ -356,9 +350,8 @@ class TestPPORewardModelQuantMenu:
             return None
 
         from soup_cli.utils import quant_menu
-        monkeypatch.setattr(
-            quant_menu, "build_quantization_config_for_loader", fake_loader
-        )
+
+        monkeypatch.setattr(quant_menu, "build_quantization_config_for_loader", fake_loader)
 
         # Stub transformers.
         import sys
@@ -379,20 +372,18 @@ class TestPPORewardModelQuantMenu:
         monkeypatch.setitem(sys.modules, "transformers", fake_tf)
 
         from soup_cli.utils import trust_remote
+
+        monkeypatch.setattr(trust_remote, "model_requires_trust_remote_code", lambda _p: False)
         monkeypatch.setattr(
-            trust_remote, "model_requires_trust_remote_code", lambda _p: False
-        )
-        monkeypatch.setattr(
-            trust_remote, "resolve_trust_remote_code",
+            trust_remote,
+            "resolve_trust_remote_code",
             lambda *a, **kw: kw.get("requested", False),
         )
 
         ppo_mod._load_reward_model("rm-path", device="cpu", trust_remote_code=False)
         assert called == [], "Quant Menu loader must not be called when tcfg is None"
 
-    def test_load_reward_model_quantize_reward_model_false_skips_quant_menu(
-        self, monkeypatch
-    ):
+    def test_load_reward_model_quantize_reward_model_false_skips_quant_menu(self, monkeypatch):
         # v0.53.0 gate: tcfg is provided and quantization != "none", but
         # training.quantize_reward_model is False (the default), so the
         # reward model must NOT inherit the policy's quantization config.
@@ -406,9 +397,8 @@ class TestPPORewardModelQuantMenu:
             return "FAKE_QUANT_OBJ"
 
         from soup_cli.utils import quant_menu
-        monkeypatch.setattr(
-            quant_menu, "build_quantization_config_for_loader", fake_loader
-        )
+
+        monkeypatch.setattr(quant_menu, "build_quantization_config_for_loader", fake_loader)
 
         import sys
         import types as _types
@@ -428,18 +418,21 @@ class TestPPORewardModelQuantMenu:
         monkeypatch.setitem(sys.modules, "transformers", fake_tf)
 
         from soup_cli.utils import trust_remote
+
+        monkeypatch.setattr(trust_remote, "model_requires_trust_remote_code", lambda _p: False)
         monkeypatch.setattr(
-            trust_remote, "model_requires_trust_remote_code", lambda _p: False
-        )
-        monkeypatch.setattr(
-            trust_remote, "resolve_trust_remote_code",
+            trust_remote,
+            "resolve_trust_remote_code",
             lambda *a, **kw: kw.get("requested", False),
         )
 
         tcfg = TrainingConfig(quantization="gptq")
         assert tcfg.quantize_reward_model is False
         ppo_mod._load_reward_model(
-            "some-org/some-rm", device="cpu", trust_remote_code=False, tcfg=tcfg,
+            "some-org/some-rm",
+            device="cpu",
+            trust_remote_code=False,
+            tcfg=tcfg,
         )
         assert called == [], (
             "Quant Menu loader must not be called when quantize_reward_model "
@@ -498,9 +491,7 @@ class TestRewardModelTaskQuantMenu:
 
         fake_tf = _types.ModuleType("transformers")
         fake_tf.AutoModelForSequenceClassification = _FakeRM
-        fake_tf.AutoTokenizer = _types.SimpleNamespace(
-            from_pretrained=lambda *a, **k: _FakeTok()
-        )
+        fake_tf.AutoTokenizer = _types.SimpleNamespace(from_pretrained=lambda *a, **k: _FakeTok())
         monkeypatch.setitem(sys.modules, "transformers", fake_tf)
 
         kbit_called = []
@@ -524,14 +515,15 @@ class TestRewardModelTaskQuantMenu:
             return sentinel
 
         from soup_cli.utils import quant_menu
+
         monkeypatch.setattr(quant_menu, "build_quantization_config_for_loader", fake_loader)
 
         from soup_cli.utils import trust_remote
+
+        monkeypatch.setattr(trust_remote, "model_requires_trust_remote_code", lambda _p: False)
         monkeypatch.setattr(
-            trust_remote, "model_requires_trust_remote_code", lambda _p: False
-        )
-        monkeypatch.setattr(
-            trust_remote, "resolve_trust_remote_code",
+            trust_remote,
+            "resolve_trust_remote_code",
             lambda *a, **kw: kw.get("requested", False),
         )
 

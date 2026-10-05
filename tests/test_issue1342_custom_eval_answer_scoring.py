@@ -84,7 +84,7 @@ def test_gate_answer_scorer_overrides_the_rows(tmp_path):
     path = _write(tmp_path / "t.jsonl", [{"prompt": "2+2?", "expected": "4"}])
     suite = EvalSuite(
         suite="s",
-        tasks=[GateTask(type="custom", name="m", threshold=1.0, tasks=str(path), scorer="answer")]
+        tasks=[GateTask(type="custom", name="m", threshold=1.0, tasks=str(path), scorer="answer")],
     )
     result = run_gate(suite, generate_fn=lambda _prompt: "The answer is 4.")
     assert result.task_results[0].score == 1.0
@@ -94,12 +94,11 @@ def test_gate_answer_scorer_refuses_an_unreadable_expected(tmp_path):
     path = _write(tmp_path / "t.jsonl", [{"prompt": "q", "expected": "Step 1.\nStep 2."}])
     suite = EvalSuite(
         suite="s",
-        tasks=[GateTask(type="custom", name="m", threshold=1.0, tasks=str(path), scorer="answer")]
+        tasks=[GateTask(type="custom", name="m", threshold=1.0, tasks=str(path), scorer="answer")],
     )
     (task,) = run_gate(suite, generate_fn=lambda _prompt: "4").task_results
     assert task.score is None and not task.passed
     assert "row 1" in task.error and "scoring 'answer'" in task.error
-
 
 
 @pytest.mark.parametrize(

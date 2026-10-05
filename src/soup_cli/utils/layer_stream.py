@@ -275,8 +275,7 @@ def stream_arch_of(config: Any) -> str:
     if family not in SUPPORTED_STREAM_ARCHS:
         raise ValueError(
             f"layer streaming does not support model_type={raw_family!r}. "
-            f"Supported: {', '.join(SUPPORTED_STREAM_ARCHS)}. "
-            
+            f"Supported: {', '.join(SUPPORTED_STREAM_ARCHS)}."
         )
     return family
 
@@ -290,6 +289,7 @@ DISK_KINDS = (_NVME, "ssd", "hdd", "unknown")
 #: thunk form so the ~9 s Windows probe is paid only when the tier decision
 #: actually depends on the answer.
 DiskKind = Union[str, Callable[[], str]]
+
 
 @dataclass(frozen=True)
 class DiskClassification:
@@ -692,11 +692,16 @@ def _probe_disk_kind(path: str) -> DiskClassification:
                 return DiskClassification("unknown")
             out = subprocess.run(
                 [
-                    shell, "-NoProfile", "-NonInteractive", "-Command",
-                    "Get-PhysicalDisk | Select-Object MediaType,BusType "
-                    "| ConvertTo-Json -Compress",
+                    shell,
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-Command",
+                    "Get-PhysicalDisk | Select-Object MediaType,BusType | ConvertTo-Json -Compress",
                 ],
-                capture_output=True, text=True, timeout=60, check=False,
+                capture_output=True,
+                text=True,
+                timeout=60,
+                check=False,
             )
             if out.returncode != 0 or not out.stdout.strip():
                 return DiskClassification("unknown")
@@ -759,9 +764,7 @@ def choose_tier(
     that are actually about to use the disk tier.
     """
     physical_limit = (
-        None
-        if total_ram_bytes is None
-        else total_ram_bytes * PHYSICAL_RAM_TIER_HEADROOM
+        None if total_ram_bytes is None else total_ram_bytes * PHYSICAL_RAM_TIER_HEADROOM
     )
     resident_store_bytes = store_bytes + int(resident_bytes)
     fits_available_ram = resident_store_bytes < free_ram_bytes * headroom
@@ -797,9 +800,7 @@ def choose_tier(
         )
     )
     resident_note = (
-        ""
-        if resident_bytes == 0
-        else f" plus {resident_bytes / 1e9:.1f} GB of resident extras"
+        "" if resident_bytes == 0 else f" plus {resident_bytes / 1e9:.1f} GB of resident extras"
     )
     raise ValueError(
         f"layer streaming needs NVMe or more RAM: the base needs "
@@ -1342,9 +1343,7 @@ def decide_measured_fit(
     )
 
 
-def resolve_available_vram_bytes(
-    *, measured_bytes: int, override_bytes: Optional[int]
-) -> int:
+def resolve_available_vram_bytes(*, measured_bytes: int, override_bytes: Optional[int]) -> int:
     """The free-VRAM figure the pre-flight fit check measures against.
 
     ``mem_get_info()`` is a device-level driver query, so it cannot see a
@@ -1379,9 +1378,7 @@ def accumulation_advice(*, batch_size: int, accum: int) -> Optional[str]:
     advice is only worth printing when there might be VRAM headroom to spend.
     """
     if batch_size <= 0 or accum <= 0:
-        raise ValueError(
-            f"batch_size and accum must be positive; got {batch_size}, {accum}"
-        )
+        raise ValueError(f"batch_size and accum must be positive; got {batch_size}, {accum}")
     if accum == 1:
         return None
     return (
@@ -1557,9 +1554,7 @@ def build_stream_plan(
     resident_bytes = int(embed_bytes)
     model_bytes = host_store_bytes + resident_bytes
     physical_limit = (
-        None
-        if total_ram_bytes is None
-        else total_ram_bytes * PHYSICAL_RAM_TIER_HEADROOM
+        None if total_ram_bytes is None else total_ram_bytes * PHYSICAL_RAM_TIER_HEADROOM
     )
     available_budget_exceeded = (
         model_bytes >= available_ram_bytes * RAM_TIER_HEADROOM

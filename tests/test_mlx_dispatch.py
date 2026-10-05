@@ -41,9 +41,7 @@ def test_mlx_registry_resolves_known_trainers():
 def test_mlx_registry_rejects_unknown_task_loudly():
     from soup_cli.trainer.mlx_routing import get_mlx_trainer
 
-    with pytest.raises(
-        ValueError, match="MLX backend does not support task 'pretrain'"
-    ):
+    with pytest.raises(ValueError, match="MLX backend does not support task 'pretrain'"):
         get_mlx_trainer("pretrain")
 
 
@@ -67,9 +65,7 @@ def test_transformers_backend_falls_through_to_task_chain():
 def test_resolve_trainer_forwards_trainer_kwargs():
     from soup_cli.trainer.mlx_routing import resolve_trainer
 
-    cls, kwargs = resolve_trainer(
-        _cfg("mlx", "sft"), {"trust_remote_code": True, "device": "cpu"}
-    )
+    cls, kwargs = resolve_trainer(_cfg("mlx", "sft"), {"trust_remote_code": True, "device": "cpu"})
     assert cls is not None
     assert kwargs == {"trust_remote_code": True, "device": "cpu"}
 

@@ -83,10 +83,7 @@ class TestPublicSharedHelper:
         imported: set[str] = set()
         defined: set[str] = set()
         for node in ast.walk(tree):
-            if (
-                isinstance(node, ast.ImportFrom)
-                and node.module == "soup_cli.data.loss_mask"
-            ):
+            if isinstance(node, ast.ImportFrom) and node.module == "soup_cli.data.loss_mask":
                 for alias in node.names:
                     imported.add(alias.name)
             if isinstance(node, ast.FunctionDef) and node.name in {
@@ -112,8 +109,8 @@ class TestPublicSharedHelper:
             text = path.read_text(encoding="utf-8")
             if "from soup_cli.data.loss_mask import" in text and "_coerce_token_ids" in text:
                 offenders.append(str(path.relative_to(src_root.parent.parent)))
-        assert offenders == [], (
-            "underscore-prefixed coerce imported across modules: " + ", ".join(offenders)
+        assert offenders == [], "underscore-prefixed coerce imported across modules: " + ", ".join(
+            offenders
         )
 
 
@@ -126,9 +123,7 @@ class TestDuckTypedMapping:
     def test_duck_mapping_returns_input_ids_not_keys(self):
         """Reproduces the measured failure: pre-fix this raised
         ``input_ids[0]='input_ids'`` because ``list(duck)`` is the keys."""
-        out = _DuckMapping(
-            {"input_ids": [1, 2, 3], "assistant_masks": [0, 1, 1]}
-        )
+        out = _DuckMapping({"input_ids": [1, 2, 3], "assistant_masks": [0, 1, 1]})
         assert coerce_token_ids(out) == [1, 2, 3]
 
     def test_duck_mapping_with_assistant_masks_takes_the_mask_path(self):

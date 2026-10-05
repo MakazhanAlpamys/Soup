@@ -420,9 +420,11 @@ class TestSFTVisionIntegration:
         with patch(
             "soup_cli.trainer.sft.SFTTrainerWrapper._setup_vision_transformers"
         ) as mock_setup:
-            mock_setup.side_effect = lambda c, t: setattr(wrapper, "model", mock_model) or setattr(
-                wrapper, "tokenizer", mock_processor
-            ) or setattr(wrapper, "processor", mock_processor)
+            mock_setup.side_effect = lambda c, t: (
+                setattr(wrapper, "model", mock_model)
+                or setattr(wrapper, "tokenizer", mock_processor)
+                or setattr(wrapper, "processor", mock_processor)
+            )
             wrapper._setup_vision_transformers(cfg, cfg.training)
             mock_setup.assert_called_once()
 

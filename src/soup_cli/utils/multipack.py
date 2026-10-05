@@ -68,22 +68,14 @@ def build_multipack_sampler_for_lengths(
     """
     if not getattr(tcfg, "multipack", False):
         raise ValueError(
-            "build_multipack_sampler_for_lengths called but "
-            "tcfg.multipack=False — guard upstream"
+            "build_multipack_sampler_for_lengths called but tcfg.multipack=False — guard upstream"
         )
     if isinstance(max_seq_length, bool):
-        raise TypeError(
-            f"max_seq_length must not be bool, got {max_seq_length!r}"
-        )
+        raise TypeError(f"max_seq_length must not be bool, got {max_seq_length!r}")
     if not isinstance(max_seq_length, int):
-        raise TypeError(
-            f"max_seq_length must be int, got "
-            f"{type(max_seq_length).__name__}"
-        )
+        raise TypeError(f"max_seq_length must be int, got {type(max_seq_length).__name__}")
     if max_seq_length <= 0:
-        raise ValueError(
-            f"max_seq_length must be positive, got {max_seq_length}"
-        )
+        raise ValueError(f"max_seq_length must be positive, got {max_seq_length}")
 
     raw_batch_size = getattr(tcfg, "batch_size", 1) or 1
     # batch_size=='auto' must be resolved upstream before the sampler is
@@ -97,13 +89,9 @@ def build_multipack_sampler_for_lengths(
         )
     # bool is a subclass of int — reject explicitly (matches v0.30.0 policy).
     if isinstance(raw_batch_size, bool):
-        raise TypeError(
-            f"tcfg.batch_size must not be bool, got {raw_batch_size!r}"
-        )
+        raise TypeError(f"tcfg.batch_size must not be bool, got {raw_batch_size!r}")
     if not isinstance(raw_batch_size, int):
-        raise TypeError(
-            f"tcfg.batch_size must be int, got {type(raw_batch_size).__name__}"
-        )
+        raise TypeError(f"tcfg.batch_size must be int, got {type(raw_batch_size).__name__}")
     batch_size = raw_batch_size
 
     if real_batches:

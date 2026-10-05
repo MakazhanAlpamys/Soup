@@ -403,9 +403,7 @@ class TestRouting:
 
     def test_split_approximates_traffic_pct(self):
         p = CanaryPolicy(stable="A", canary="B", traffic_pct=25.0)
-        canary_count = sum(
-            1 for i in range(2000) if route(p, f"key-{i}").bucket == "canary"
-        )
+        canary_count = sum(1 for i in range(2000) if route(p, f"key-{i}").bucket == "canary")
         # 25% of 2000 = 500; tolerate ±15% relative drift on a uniform hash.
         assert 350 <= canary_count <= 650
 
@@ -975,20 +973,14 @@ class TestCLI:
 
     def test_init_refuses_overwrite(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
-        runner.invoke(
-            app, ["loop", "init", "m", "--eval", "e", "--baseline", "b"]
-        )
-        result = runner.invoke(
-            app, ["loop", "init", "m2", "--eval", "e", "--baseline", "b"]
-        )
+        runner.invoke(app, ["loop", "init", "m", "--eval", "e", "--baseline", "b"])
+        result = runner.invoke(app, ["loop", "init", "m2", "--eval", "e", "--baseline", "b"])
         assert result.exit_code == 2, result.output
         assert "already exists" in result.output
 
     def test_init_force_overwrites(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
-        runner.invoke(
-            app, ["loop", "init", "m", "--eval", "e", "--baseline", "b"]
-        )
+        runner.invoke(app, ["loop", "init", "m", "--eval", "e", "--baseline", "b"])
         result = runner.invoke(
             app,
             ["loop", "init", "m2", "--eval", "e", "--baseline", "b", "--force"],
@@ -1021,18 +1013,14 @@ class TestCLI:
 
     def test_status_after_init(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
-        runner.invoke(
-            app, ["loop", "init", "m", "--eval", "e", "--baseline", "b"]
-        )
+        runner.invoke(app, ["loop", "init", "m", "--eval", "e", "--baseline", "b"])
         result = runner.invoke(app, ["loop", "status"])
         assert result.exit_code == 0, result.output
         assert "stopped" in result.output
 
     def test_pause_resume_cycle(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
-        runner.invoke(
-            app, ["loop", "init", "m", "--eval", "e", "--baseline", "b"]
-        )
+        runner.invoke(app, ["loop", "init", "m", "--eval", "e", "--baseline", "b"])
         # Mark running manually so pause has something to flip.
         s = read_state()
         write_state(s.with_status("running"))
@@ -1045,27 +1033,21 @@ class TestCLI:
 
     def test_pause_when_stopped(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
-        runner.invoke(
-            app, ["loop", "init", "m", "--eval", "e", "--baseline", "b"]
-        )
+        runner.invoke(app, ["loop", "init", "m", "--eval", "e", "--baseline", "b"])
         r = runner.invoke(app, ["loop", "pause"])
         assert r.exit_code == 0
         assert "already stopped" in r.output
 
     def test_resume_when_not_paused(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
-        runner.invoke(
-            app, ["loop", "init", "m", "--eval", "e", "--baseline", "b"]
-        )
+        runner.invoke(app, ["loop", "init", "m", "--eval", "e", "--baseline", "b"])
         r = runner.invoke(app, ["loop", "resume"])
         assert r.exit_code == 0
         assert "not paused" in r.output
 
     def test_watch_max_iterations(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
-        runner.invoke(
-            app, ["loop", "init", "m", "--eval", "e", "--baseline", "b"]
-        )
+        runner.invoke(app, ["loop", "init", "m", "--eval", "e", "--baseline", "b"])
         r = runner.invoke(
             app,
             [
@@ -1083,22 +1065,14 @@ class TestCLI:
 
     def test_watch_detach_and_foreground_mutex(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
-        runner.invoke(
-            app, ["loop", "init", "m", "--eval", "e", "--baseline", "b"]
-        )
-        r = runner.invoke(
-            app, ["loop", "watch", "--foreground", "--detach"]
-        )
+        runner.invoke(app, ["loop", "init", "m", "--eval", "e", "--baseline", "b"])
+        r = runner.invoke(app, ["loop", "watch", "--foreground", "--detach"])
         assert r.exit_code == 2
 
     def test_canary_command(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
-        runner.invoke(
-            app, ["loop", "init", "model-a", "--eval", "e", "--baseline", "b"]
-        )
-        r = runner.invoke(
-            app, ["loop", "canary", "model-b", "--traffic", "10%"]
-        )
+        runner.invoke(app, ["loop", "init", "model-a", "--eval", "e", "--baseline", "b"])
+        r = runner.invoke(app, ["loop", "canary", "model-b", "--traffic", "10%"])
         assert r.exit_code == 0, r.output
         s = read_state()
         assert s.canary_active == "model-b"
@@ -1106,38 +1080,26 @@ class TestCLI:
 
     def test_canary_invalid_traffic(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
-        runner.invoke(
-            app, ["loop", "init", "model-a", "--eval", "e", "--baseline", "b"]
-        )
-        r = runner.invoke(
-            app, ["loop", "canary", "model-b", "--traffic", "150"]
-        )
+        runner.invoke(app, ["loop", "init", "model-a", "--eval", "e", "--baseline", "b"])
+        r = runner.invoke(app, ["loop", "canary", "model-b", "--traffic", "150"])
         assert r.exit_code == 2
 
     def test_canary_same_as_stable_rejected(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
-        runner.invoke(
-            app, ["loop", "init", "same", "--eval", "e", "--baseline", "b"]
-        )
-        r = runner.invoke(
-            app, ["loop", "canary", "same", "--traffic", "5%"]
-        )
+        runner.invoke(app, ["loop", "init", "same", "--eval", "e", "--baseline", "b"])
+        r = runner.invoke(app, ["loop", "canary", "same", "--traffic", "5%"])
         assert r.exit_code == 2
 
     def test_replay_list_empty(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
-        runner.invoke(
-            app, ["loop", "init", "m", "--eval", "e", "--baseline", "b"]
-        )
+        runner.invoke(app, ["loop", "init", "m", "--eval", "e", "--baseline", "b"])
         r = runner.invoke(app, ["loop", "replay"])
         assert r.exit_code == 0
         assert "no iterations" in r.output
 
     def test_replay_show_iteration(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
-        runner.invoke(
-            app, ["loop", "init", "m", "--eval", "e", "--baseline", "b"]
-        )
+        runner.invoke(app, ["loop", "init", "m", "--eval", "e", "--baseline", "b"])
         rec = _make_record()
         write_iteration(rec)
         r = runner.invoke(app, ["loop", "replay", rec.iteration_id])
@@ -1146,9 +1108,7 @@ class TestCLI:
 
     def test_replay_unknown_iteration(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
-        runner.invoke(
-            app, ["loop", "init", "m", "--eval", "e", "--baseline", "b"]
-        )
+        runner.invoke(app, ["loop", "init", "m", "--eval", "e", "--baseline", "b"])
         r = runner.invoke(app, ["loop", "replay", "iter-nonexistent"])
         assert r.exit_code == 2
 
@@ -1261,9 +1221,7 @@ class TestReviewFixWave2:
     def test_canary_autoroll_persisted(self, tmp_path, monkeypatch):
         """HIGH #4: --autoroll-on-regress flag must survive into LoopState."""
         monkeypatch.chdir(tmp_path)
-        runner.invoke(
-            app, ["loop", "init", "model-a", "--eval", "e", "--baseline", "b"]
-        )
+        runner.invoke(app, ["loop", "init", "model-a", "--eval", "e", "--baseline", "b"])
         r = runner.invoke(
             app,
             [
@@ -1294,9 +1252,7 @@ class TestReviewFixWave2:
         """MEDIUM #5: 0.005 % must allocate ≥1 bucket, not round to 0."""
         p = CanaryPolicy(stable="A", canary="B", traffic_pct=0.005)
         # 10_000 buckets * 0.00005 = 0.5 → ceil = 1 bucket reserved for canary.
-        canary_hits = sum(
-            1 for i in range(10_000) if route(p, f"k-{i}").bucket == "canary"
-        )
+        canary_hits = sum(1 for i in range(10_000) if route(p, f"k-{i}").bucket == "canary")
         assert canary_hits >= 1, "ceil rounding lost the sub-bucket fraction"
 
     def test_parse_budget_usd_only(self):
@@ -1433,9 +1389,7 @@ class TestReviewFixWave3:
 
     # --- MEDIUM: optional-string empty-string rejection ------------------
 
-    @pytest.mark.parametrize(
-        "field_name", ["canary_active", "last_iteration_id", "last_run_date"]
-    )
+    @pytest.mark.parametrize("field_name", ["canary_active", "last_iteration_id", "last_run_date"])
     def test_optional_str_field_rejects_empty(self, field_name):
         kwargs = {"served_model": "m", "eval_suite": "e", "baseline": "b", field_name: ""}
         with pytest.raises(ValueError, match="must not be empty"):

@@ -46,40 +46,42 @@ class SteeringMethodSpec:
     live_wired: bool
 
 
-_STEERING_METHOD_METADATA: Mapping[str, SteeringMethodSpec] = MappingProxyType({
-    "caa": SteeringMethodSpec(
-        name="caa",
-        description=(
-            "Contrastive Activation Addition — add a contrastive vector "
-            "to the residual stream during decoding. Trains on "
-            "(positive, negative) prompt pairs (Panickssery et al., 2023)."
+_STEERING_METHOD_METADATA: Mapping[str, SteeringMethodSpec] = MappingProxyType(
+    {
+        "caa": SteeringMethodSpec(
+            name="caa",
+            description=(
+                "Contrastive Activation Addition — add a contrastive vector "
+                "to the residual stream during decoding. Trains on "
+                "(positive, negative) prompt pairs (Panickssery et al., 2023)."
+            ),
+            needs_contrastive_pairs=True,
+            needs_attention_heads=False,
+            live_wired=False,
         ),
-        needs_contrastive_pairs=True,
-        needs_attention_heads=False,
-        live_wired=False,
-    ),
-    "iti": SteeringMethodSpec(
-        name="iti",
-        description=(
-            "Inference-Time Intervention — shift specific attention heads "
-            "along a learned direction (Li et al., 2023). Needs per-head "
-            "calibration."
+        "iti": SteeringMethodSpec(
+            name="iti",
+            description=(
+                "Inference-Time Intervention — shift specific attention heads "
+                "along a learned direction (Li et al., 2023). Needs per-head "
+                "calibration."
+            ),
+            needs_contrastive_pairs=True,
+            needs_attention_heads=True,
+            live_wired=False,
         ),
-        needs_contrastive_pairs=True,
-        needs_attention_heads=True,
-        live_wired=False,
-    ),
-    "repe": SteeringMethodSpec(
-        name="repe",
-        description=(
-            "Representation Engineering — PCA over hidden states to "
-            "extract a behavioural direction (Zou et al., 2023)."
+        "repe": SteeringMethodSpec(
+            name="repe",
+            description=(
+                "Representation Engineering — PCA over hidden states to "
+                "extract a behavioural direction (Zou et al., 2023)."
+            ),
+            needs_contrastive_pairs=True,
+            needs_attention_heads=False,
+            live_wired=False,
         ),
-        needs_contrastive_pairs=True,
-        needs_attention_heads=False,
-        live_wired=False,
-    ),
-})
+    }
+)
 
 
 def validate_steering_method(value: object) -> str:
@@ -90,27 +92,19 @@ def validate_steering_method(value: object) -> str:
     unknown rejected with friendly actionable message.
     """
     if isinstance(value, bool):
-        raise TypeError(
-            f"steering method must not be bool, got {value!r}"
-        )
+        raise TypeError(f"steering method must not be bool, got {value!r}")
     if not isinstance(value, str):
-        raise TypeError(
-            f"steering method must be str, got {type(value).__name__}"
-        )
+        raise TypeError(f"steering method must be str, got {type(value).__name__}")
     if not value:
         raise ValueError("steering method must be non-empty")
     if "\x00" in value:
         raise ValueError("steering method must not contain null bytes")
     if len(value) > _MAX_METHOD_LEN:
-        raise ValueError(
-            f"steering method must be <= {_MAX_METHOD_LEN} chars"
-        )
+        raise ValueError(f"steering method must be <= {_MAX_METHOD_LEN} chars")
     canonical = value.lower()
     if canonical not in SUPPORTED_STEERING_METHODS:
         supported = ", ".join(sorted(SUPPORTED_STEERING_METHODS))
-        raise ValueError(
-            f"unknown steering method {value!r}; supported: {supported}"
-        )
+        raise ValueError(f"unknown steering method {value!r}; supported: {supported}")
     return canonical
 
 
@@ -123,21 +117,15 @@ def validate_steering_name(value: object) -> str:
     fragment on every platform.
     """
     if isinstance(value, bool):
-        raise TypeError(
-            f"steering name must not be bool, got {value!r}"
-        )
+        raise TypeError(f"steering name must not be bool, got {value!r}")
     if not isinstance(value, str):
-        raise TypeError(
-            f"steering name must be str, got {type(value).__name__}"
-        )
+        raise TypeError(f"steering name must be str, got {type(value).__name__}")
     if not value:
         raise ValueError("steering name must be non-empty")
     if "\x00" in value:
         raise ValueError("steering name must not contain null bytes")
     if len(value) > _MAX_NAME_LEN:
-        raise ValueError(
-            f"steering name must be <= {_MAX_NAME_LEN} chars"
-        )
+        raise ValueError(f"steering name must be <= {_MAX_NAME_LEN} chars")
     if not _NAME_RE.match(value):
         raise ValueError(
             f"steering name {value!r} must match {_NAME_RE.pattern!r} "
@@ -153,21 +141,14 @@ def validate_steering_strength(value: object) -> float:
     ``math.isfinite``, bounded ``|strength| <= 10.0`` as a sanity cap.
     """
     if isinstance(value, bool):
-        raise TypeError(
-            f"steering strength must not be bool, got {value!r}"
-        )
+        raise TypeError(f"steering strength must not be bool, got {value!r}")
     if not isinstance(value, (int, float)):
-        raise TypeError(
-            f"steering strength must be a number, got {type(value).__name__}"
-        )
+        raise TypeError(f"steering strength must be a number, got {type(value).__name__}")
     fval = float(value)
     if not math.isfinite(fval):
         raise ValueError("steering strength must be finite (no NaN / Inf)")
     if abs(fval) > _MAX_STRENGTH_ABS:
-        raise ValueError(
-            f"steering strength must satisfy |s| <= {_MAX_STRENGTH_ABS}; "
-            f"got {fval}"
-        )
+        raise ValueError(f"steering strength must satisfy |s| <= {_MAX_STRENGTH_ABS}; got {fval}")
     return fval
 
 
@@ -280,9 +261,7 @@ def compute_iti_directions(
     pos = _steer_as_3d(pos_heads, "pos_heads")
     neg = _steer_as_3d(neg_heads, "neg_heads")
     if pos.shape[1:] != neg.shape[1:]:
-        raise ValueError(
-            f"head-shape mismatch: pos{pos.shape[1:]} vs neg{neg.shape[1:]}"
-        )
+        raise ValueError(f"head-shape mismatch: pos{pos.shape[1:]} vs neg{neg.shape[1:]}")
     if isinstance(top_k, bool) or not isinstance(top_k, int) or top_k < 1:
         raise ValueError("top_k must be a positive int")
     num_heads = pos.shape[1]
@@ -342,9 +321,7 @@ def load_contrastive_pairs(path: str) -> list:
     except FileNotFoundError as exc:
         raise FileNotFoundError(f"pairs file not found: {path!r}") from exc
     except OSError as exc:
-        raise ValueError(
-            f"pairs file cannot be opened (symlink?): {type(exc).__name__}"
-        ) from exc
+        raise ValueError(f"pairs file cannot be opened (symlink?): {type(exc).__name__}") from exc
     pairs: list = []
     try:
         st = os.fstat(fd)
@@ -368,8 +345,10 @@ def load_contrastive_pairs(path: str) -> list:
                 pos = row.get("positive")
                 neg = row.get("negative")
                 if (
-                    isinstance(pos, str) and isinstance(neg, str)
-                    and pos and neg
+                    isinstance(pos, str)
+                    and isinstance(neg, str)
+                    and pos
+                    and neg
                     and len(pos) <= _MAX_PAIR_FIELD_LEN
                     and len(neg) <= _MAX_PAIR_FIELD_LEN
                 ):
@@ -464,9 +443,7 @@ def build_steering_vector(
     n_layers = len(layers)
     resolved_layer = n_layers // 2 if layer is None else layer
     if resolved_layer < 0 or resolved_layer >= n_layers:
-        raise ValueError(
-            f"layer {resolved_layer} out of range for a {n_layers}-layer model"
-        )
+        raise ValueError(f"layer {resolved_layer} out of range for a {n_layers}-layer model")
 
     extra: dict = {}
     if canonical in ("caa", "repe"):
@@ -484,12 +461,8 @@ def build_steering_vector(
         intervention = "residual"
     else:  # iti
         num_heads = int(getattr(model.config, "num_attention_heads", 0)) or 1
-        pos_h = _capture_attn_heads(
-            model, tokenizer, pos_prompts, resolved_layer, num_heads, dev
-        )
-        neg_h = _capture_attn_heads(
-            model, tokenizer, neg_prompts, resolved_layer, num_heads, dev
-        )
+        pos_h = _capture_attn_heads(model, tokenizer, pos_prompts, resolved_layer, num_heads, dev)
+        neg_h = _capture_attn_heads(model, tokenizer, neg_prompts, resolved_layer, num_heads, dev)
         dirs, selected = compute_iti_directions(pos_h, neg_h, top_k=top_k)
         vector = dirs.reshape(-1).astype(np.float32)
         intervention = "attn_o_proj_input"
@@ -548,9 +521,7 @@ def _capture_attn_heads(model, tokenizer, prompts, layer_idx, num_heads, device)
     attn = getattr(layers[layer_idx], "self_attn", None)
     o_proj = getattr(attn, "o_proj", None) if attn is not None else None
     if o_proj is None or not hasattr(o_proj, "weight"):
-        raise ValueError(
-            f"layer {layer_idx} has no self_attn.o_proj (unsupported arch for ITI)"
-        )
+        raise ValueError(f"layer {layer_idx} has no self_attn.o_proj (unsupported arch for ITI)")
     captured: list = []
 
     def _pre_hook(_mod, args):
@@ -564,9 +535,9 @@ def _capture_attn_heads(model, tokenizer, prompts, layer_idx, num_heads, device)
         with torch.no_grad():
             for prompt in prompts:
                 text = render_raft_prompt(tokenizer, prompt)
-                inputs = tokenizer(
-                    text, return_tensors="pt", truncation=True, max_length=1024
-                ).to(device)
+                inputs = tokenizer(text, return_tensors="pt", truncation=True, max_length=1024).to(
+                    device
+                )
                 captured.clear()
                 model(**inputs)
                 if captured:
@@ -579,9 +550,7 @@ def _capture_attn_heads(model, tokenizer, prompts, layer_idx, num_heads, device)
     in_features = flat.shape[1]
     head_dim = in_features // num_heads
     if head_dim * num_heads != in_features:
-        raise ValueError(
-            f"o_proj in_features {in_features} not divisible by num_heads {num_heads}"
-        )
+        raise ValueError(f"o_proj in_features {in_features} not divisible by num_heads {num_heads}")
     return flat.reshape(flat.shape[0], num_heads, head_dim)
 
 
@@ -693,14 +662,14 @@ def install_steering_hook(model: Any, loaded: LoadedSteering, *, strength: float
     layers = _locate_decoder_layers(model)
     if loaded.layer < 0 or loaded.layer >= len(layers):
         raise ValueError(
-            f"steering layer {loaded.layer} out of range for "
-            f"{len(layers)}-layer model"
+            f"steering layer {loaded.layer} out of range for {len(layers)}-layer model"
         )
     block = layers[loaded.layer]
     param = next(model.parameters())
     vec = torch.tensor(loaded.vector, dtype=param.dtype, device=param.device)
 
     if loaded.intervention_point == "residual":
+
         def _hook(_mod, _args, output):
             if isinstance(output, (tuple, list)):
                 hidden = output[0] + strength_f * vec

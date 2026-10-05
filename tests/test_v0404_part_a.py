@@ -32,6 +32,7 @@ _ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*[mK]")
 def _strip_ansi(text: str) -> str:
     return _ANSI_ESCAPE.sub("", text)
 
+
 # All 10 trainer modules + their wrapper class names.
 # Direct trainers that resolve trust_remote_code in __init__.
 TRAINER_TARGETS = [
@@ -226,7 +227,8 @@ class TestExportHelperSignatures:
         assert params["trust_remote_code"].default is False
 
     @pytest.mark.parametrize(
-        "fn_name", ["_export_onnx", "_export_tensorrt", "_export_awq", "_export_gptq"],
+        "fn_name",
+        ["_export_onnx", "_export_tensorrt", "_export_awq", "_export_gptq"],
     )
     def test_export_helper_signature(self, fn_name: str):
         import inspect
@@ -235,9 +237,7 @@ class TestExportHelperSignatures:
 
         fn = getattr(export_mod, fn_name)
         params = inspect.signature(fn).parameters
-        assert "trust_remote_code" in params, (
-            f"{fn_name} did not get the v0.40.4 flag"
-        )
+        assert "trust_remote_code" in params, f"{fn_name} did not get the v0.40.4 flag"
         assert params["trust_remote_code"].default is False
 
 
@@ -270,7 +270,9 @@ class TestResolverLoadedLazily:
     @patch("transformers.AutoTokenizer.from_pretrained")
     @patch("transformers.AutoModelForCausalLM.from_pretrained")
     def test_init_does_not_call_from_pretrained(
-        self, mock_model, mock_tok,
+        self,
+        mock_model,
+        mock_tok,
     ):
         from soup_cli.trainer.dpo import DPOTrainerWrapper
 
@@ -366,7 +368,9 @@ class TestPreferenceDispatcherLiveForwardsRejection:
         # The dispatcher itself constructs without resolving (forwarding
         # is deferred until ``_build_inner`` is called from ``setup``).
         wrapper = PreferenceTrainerWrapper(
-            cfg, device="cpu", trust_remote_code=False,
+            cfg,
+            device="cpu",
+            trust_remote_code=False,
         )
         # _build_inner constructs DPOTrainerWrapper which DOES resolve.
         with pytest.raises(ValueError, match="trust_remote_code"):

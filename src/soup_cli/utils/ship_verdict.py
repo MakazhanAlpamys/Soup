@@ -62,12 +62,14 @@ from soup_cli.utils.terminal import strip_control as for_terminal
 # a future optional addition cannot be silently ignored by both public readers.
 # ``provenance`` is intentionally opaque metadata, so its nested keys are not
 # part of the verdict schema.
-EVIDENCE_SCHEMA_FIELDS: Mapping[str, FrozenSet[str]] = MappingProxyType({
-    "root": frozenset({"task", "benchmarks", "noise_floor", "provenance", "numerics"}),
-    "task": frozenset({"mode", "base", "tuned"}),
-    "benchmark": frozenset({"base", "tuned"}),
-    "noise_floor": frozenset({"runs", "floors", "judge_inclusive"}),
-})
+EVIDENCE_SCHEMA_FIELDS: Mapping[str, FrozenSet[str]] = MappingProxyType(
+    {
+        "root": frozenset({"task", "benchmarks", "noise_floor", "provenance", "numerics"}),
+        "task": frozenset({"mode", "base", "tuned"}),
+        "benchmark": frozenset({"base", "tuned"}),
+        "noise_floor": frozenset({"runs", "floors", "judge_inclusive"}),
+    }
+)
 
 # Leg-1 task-win modes. ``pairwise`` (true judge win-rate) landed in v0.71.31:
 # a ``TaskWin(base=0.5 coin-flip, tuned=win-rate)`` where ``won = tuned > 0.5``.
@@ -137,6 +139,7 @@ _MAX_FLOOR_AXIS_CHARS = 256
 # ---------------------------------------------------------------------------
 # Frozen dataclasses
 # ---------------------------------------------------------------------------
+
 
 @dataclass(frozen=True)
 class TaskWin:
@@ -221,15 +224,14 @@ class ShipVerdict:
 # Validation helpers
 # ---------------------------------------------------------------------------
 
+
 def parse_numerics(value: object) -> str:
     """Validate a present numerics stamp. Does not echo unknown values."""
     if isinstance(value, str) and value in KNOWN_NUMERICS:
         return value
     if not isinstance(value, str):
         raise ValueError(f"numerics must be a string, got {type(value).__name__}")
-    raise ValueError(
-        "numerics must be one of " + ", ".join(KNOWN_NUMERICS)
-    )
+    raise ValueError("numerics must be one of " + ", ".join(KNOWN_NUMERICS))
 
 
 def numerics_family(numerics: str) -> str:
@@ -242,9 +244,7 @@ def numerics_family(numerics: str) -> str:
         return numerics
     if numerics in _FULL_PRECISION_NUMERICS:
         return NUMERICS_FAMILY_FULL
-    raise ValueError(
-        "numerics must be one of " + ", ".join(KNOWN_NUMERICS)
-    )
+    raise ValueError("numerics must be one of " + ", ".join(KNOWN_NUMERICS))
 
 
 def numerics_from_evidence(payload: object) -> Optional[str]:
@@ -280,9 +280,7 @@ def _validate_threshold(value: object) -> float:
     return out
 
 
-def _validate_evidence_fields(
-    payload: Mapping[object, object], section: str, path: str
-) -> None:
+def _validate_evidence_fields(payload: Mapping[object, object], section: str, path: str) -> None:
     """Refuse unregistered verdict fields instead of silently ignoring them."""
     allowed = EVIDENCE_SCHEMA_FIELDS[section]
     unknown = sorted(str(key) for key in payload if key not in allowed)
@@ -303,6 +301,7 @@ def _is_regressed(base: float, tuned: float, threshold: float) -> bool:
 # ---------------------------------------------------------------------------
 # Builders (pure)
 # ---------------------------------------------------------------------------
+
 
 def compute_noise_floor(
     runs: Sequence[Mapping[str, object]], *, judge_inclusive: bool = False
@@ -325,8 +324,7 @@ def compute_noise_floor(
     runs_list = list(runs)
     if len(runs_list) < MIN_NOISE_FLOOR_RUNS:
         raise ValueError(
-            f"a noise floor needs at least {MIN_NOISE_FLOOR_RUNS} runs, "
-            f"got {len(runs_list)}"
+            f"a noise floor needs at least {MIN_NOISE_FLOOR_RUNS} runs, got {len(runs_list)}"
         )
     for run in runs_list:
         if not isinstance(run, Mapping):
@@ -335,17 +333,11 @@ def compute_noise_floor(
     axes = set(runs_list[0])
     for index, run in enumerate(runs_list[1:], start=1):
         if set(run) != axes:
-            raise ValueError(
-                "every run must score the same axes; "
-                f"run {index} differs from run 0"
-            )
+            raise ValueError(f"every run must score the same axes; run {index} differs from run 0")
 
     floors: List[Tuple[str, float]] = []
     for axis in sorted(axes):
-        values = [
-            _validate_score(run[axis], f"noise-floor run[{axis!r}]")
-            for run in runs_list
-        ]
+        values = [_validate_score(run[axis], f"noise-floor run[{axis!r}]") for run in runs_list]
         floors.append((str(axis), round(max(values) - min(values), _DELTA_ROUND)))
     return NoiseFloor(
         runs=len(runs_list),
@@ -382,9 +374,7 @@ def build_task_win(
     base_f = _validate_score(base, "task base")
     tuned_f = _validate_score(tuned, "task tuned")
     floor = _floor_of(noise_floor, TASK_AXIS)
-    return TaskWin(
-        mode=mode, base=base_f, tuned=tuned_f, won=tuned_f > base_f + floor
-    )
+    return TaskWin(mode=mode, base=base_f, tuned=tuned_f, won=tuned_f > base_f + floor)
 
 
 def compute_benchmark_deltas(
@@ -432,6 +422,7 @@ def compute_benchmark_deltas(
 # ---------------------------------------------------------------------------
 # decide_ship — the moat (pure fn)
 # ---------------------------------------------------------------------------
+
 
 def decide_ship(
     task_win: TaskWin,
@@ -529,6 +520,7 @@ def decide_ship(
 # Reason strings (shared by rubric + panel)
 # ---------------------------------------------------------------------------
 
+
 def _regressed_names(verdict: ShipVerdict) -> List[str]:
     return [item.name for item in verdict.benchmark_deltas if item.regressed]
 
@@ -578,6 +570,7 @@ def _failed_rule_explanation(verdict: ShipVerdict) -> str:
 # Rendering — plain text (for --output / clipboard) and Rich (for the terminal)
 # ---------------------------------------------------------------------------
 
+
 def format_ship_rubric(verdict: ShipVerdict) -> str:
     """Plain-text, one-screen verdict (stable output; NO Rich markup applied).
 
@@ -597,13 +590,8 @@ def format_ship_rubric(verdict: ShipVerdict) -> str:
     else:
         parts.append("Judge numerics: unstamped")
     parts.append("")
-    parts.append(
-        f"Leg 1 task win ({win.mode}): "
-        f"{win.base:.4f} -> {win.tuned:.4f}  [{won_str}]"
-    )
-    parts.append(
-        f"Leg 2 general suite (forgetting_threshold {verdict.forgetting_threshold:.2%}):"
-    )
+    parts.append(f"Leg 1 task win ({win.mode}): {win.base:.4f} -> {win.tuned:.4f}  [{won_str}]")
+    parts.append(f"Leg 2 general suite (forgetting_threshold {verdict.forgetting_threshold:.2%}):")
     if verdict.benchmark_deltas:
         for item in verdict.benchmark_deltas:
             flag = "REGRESSED" if item.regressed else "ok"
@@ -673,13 +661,15 @@ def render_ship_panel(verdict: ShipVerdict) -> Panel:
     footer = f"[dim]{escape(for_terminal(_failed_rule_explanation(verdict)))}[/]"
     parts = [header, "", table, ""]
     if verdict.noise_floor is not None:
-        parts.extend([
-            _render_noise_floor(verdict.noise_floor),
-            f"[dim]Measured over {verdict.noise_floor.runs} base repeats. Each "
-            "axis is gated at max(threshold, its floor). A floor sizes this "
-            "instrument's resolution; it does not calibrate a threshold.[/]",
-            "",
-        ])
+        parts.extend(
+            [
+                _render_noise_floor(verdict.noise_floor),
+                f"[dim]Measured over {verdict.noise_floor.runs} base repeats. Each "
+                "axis is gated at max(threshold, its floor). A floor sizes this "
+                "instrument's resolution; it does not calibrate a threshold.[/]",
+                "",
+            ]
+        )
     parts.append(footer)
     body = Group(*parts)
     return Panel(body, title="soup ship", border_style=style)
@@ -704,11 +694,7 @@ def _render_noise_floor(floor: NoiseFloor) -> Table:
                 # A judge-inclusive floor mixes decode noise with the judge's
                 # own sampling noise; say so, so it is never read as the
                 # decode-only number the leg-2 axes report (#403).
-                label = (
-                    "leg 1 task (decode + judge)"
-                    if floor.judge_inclusive
-                    else "leg 1 task"
-                )
+                label = "leg 1 task (decode + judge)" if floor.judge_inclusive else "leg 1 task"
             else:
                 label = name
             table.add_row(escape(for_terminal(label)), f"{value:.4f}")
@@ -720,6 +706,7 @@ def _render_noise_floor(floor: NoiseFloor) -> Table:
 # ---------------------------------------------------------------------------
 # GitHub PR comment (--push) — v0.71.39
 # ---------------------------------------------------------------------------
+
 
 def _longest_backtick_run(text: str) -> int:
     longest = 0
@@ -756,6 +743,7 @@ def render_ship_pr_markdown(verdict: ShipVerdict) -> str:
 # Serialization (--output)
 # ---------------------------------------------------------------------------
 
+
 def verdict_to_evidence(
     verdict: ShipVerdict,
     *,
@@ -785,8 +773,7 @@ def verdict_to_evidence(
     evidence: Dict[str, object] = {
         "task": {"mode": win.mode, "base": win.base, "tuned": win.tuned},
         "benchmarks": {
-            item.name: {"base": item.base, "tuned": item.tuned}
-            for item in verdict.benchmark_deltas
+            item.name: {"base": item.base, "tuned": item.tuned} for item in verdict.benchmark_deltas
         },
     }
     # A verdict decided against a measured floor does NOT replay without it —
@@ -840,23 +827,19 @@ def noise_floor_from_evidence(payload: object) -> Optional[NoiseFloor]:
         raise ValueError("evidence.noise_floor.runs must be an integer")
     if not (MIN_NOISE_FLOOR_RUNS <= runs <= MAX_NOISE_FLOOR_RUNS):
         raise ValueError(
-            f"evidence.noise_floor.runs must be in "
-            f"[{MIN_NOISE_FLOOR_RUNS}, {MAX_NOISE_FLOOR_RUNS}]"
+            f"evidence.noise_floor.runs must be in [{MIN_NOISE_FLOOR_RUNS}, {MAX_NOISE_FLOOR_RUNS}]"
         )
     raw = payload.get("floors")
     if not isinstance(raw, Mapping):
         raise ValueError("evidence.noise_floor.floors must be an object")
     if len(raw) > _MAX_FLOOR_AXES:
-        raise ValueError(
-            f"evidence.noise_floor.floors has too many axes (max {_MAX_FLOOR_AXES})"
-        )
+        raise ValueError(f"evidence.noise_floor.floors has too many axes (max {_MAX_FLOOR_AXES})")
     floors: List[Tuple[str, float]] = []
     for axis in sorted(raw):
         name = str(axis)
         if len(name) > _MAX_FLOOR_AXIS_CHARS:
             raise ValueError(
-                f"evidence.noise_floor.floors axis names must be "
-                f"< {_MAX_FLOOR_AXIS_CHARS} chars"
+                f"evidence.noise_floor.floors axis names must be < {_MAX_FLOOR_AXIS_CHARS} chars"
             )
         value = _validate_score(raw[axis], f"evidence.noise_floor.floors[{name!r}]")
         if not (0.0 <= value <= 1.0):
@@ -865,9 +848,7 @@ def noise_floor_from_evidence(payload: object) -> Optional[NoiseFloor]:
     judge_inclusive = payload.get("judge_inclusive", False)
     if not isinstance(judge_inclusive, bool):
         raise ValueError("evidence.noise_floor.judge_inclusive must be a boolean")
-    return NoiseFloor(
-        runs=runs, floors=tuple(floors), judge_inclusive=judge_inclusive
-    )
+    return NoiseFloor(runs=runs, floors=tuple(floors), judge_inclusive=judge_inclusive)
 
 
 def verdict_from_evidence(
@@ -893,9 +874,7 @@ def verdict_from_evidence(
     mode = task.get("mode", "metric")
     if mode not in SUPPORTED_TASK_MODES:
         supported = ", ".join(SUPPORTED_TASK_MODES)
-        raise ValueError(
-            f"evidence.task.mode must be one of {supported}; got {mode!r}"
-        )
+        raise ValueError(f"evidence.task.mode must be one of {supported}; got {mode!r}")
     if "base" not in task or "tuned" not in task:
         raise ValueError("evidence.task needs both 'base' and 'tuned' scores")
 
@@ -904,27 +883,19 @@ def verdict_from_evidence(
     except (TypeError, ValueError, OverflowError) as exc:
         raise ValueError(f"invalid evidence.noise_floor: {exc}") from exc
     try:
-        task_win = build_task_win(
-            str(mode), task["base"], task["tuned"], noise_floor=stored_floor
-        )
+        task_win = build_task_win(str(mode), task["base"], task["tuned"], noise_floor=stored_floor)
     except (TypeError, ValueError, OverflowError) as exc:
         raise ValueError(f"invalid evidence.task: {exc}") from exc
 
     raw_benchmarks = payload.get("benchmarks", {})
     if not isinstance(raw_benchmarks, Mapping):
-        raise ValueError(
-            "evidence.benchmarks must be an object of {name: {base, tuned}}"
-        )
+        raise ValueError("evidence.benchmarks must be an object of {name: {base, tuned}}")
     base_scores: Dict[str, object] = {}
     tuned_scores: Dict[str, object] = {}
     for name, entry in raw_benchmarks.items():
         if not isinstance(entry, Mapping) or "base" not in entry or "tuned" not in entry:
-            raise ValueError(
-                f"evidence.benchmarks[{name!r}] needs 'base' and 'tuned'"
-            )
-        _validate_evidence_fields(
-            entry, "benchmark", f"evidence.benchmarks[{name!r}]"
-        )
+            raise ValueError(f"evidence.benchmarks[{name!r}] needs 'base' and 'tuned'")
+        _validate_evidence_fields(entry, "benchmark", f"evidence.benchmarks[{name!r}]")
         key = str(name)
         base_scores[key] = entry["base"]
         tuned_scores[key] = entry["tuned"]
@@ -966,9 +937,7 @@ def floor_exceeds_threshold(
     """
     if noise_floor is None:
         return []
-    return sorted(
-        (name, value) for name, value in noise_floor.floors if value > threshold
-    )
+    return sorted((name, value) for name, value in noise_floor.floors if value > threshold)
 
 
 def verdict_to_dict(verdict: ShipVerdict) -> Dict[str, object]:

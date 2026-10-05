@@ -38,11 +38,7 @@ def test_extracts_tool_calls_field():
 
 def test_extracts_subscript_access():
     # message["content"] form — used by some HF templates
-    template = (
-        "{% for m in messages %}"
-        '{{ m["role"] }}: {{ m["content"] }}'
-        "{% endfor %}"
-    )
+    template = '{% for m in messages %}{{ m["role"] }}: {{ m["content"] }}{% endfor %}'
     fields = extract_message_fields(template)
     assert "role" in fields
     assert "content" in fields
@@ -50,11 +46,7 @@ def test_extracts_subscript_access():
 
 def test_extracts_weight_field():
     # message.weight — used by Axolotl per-message training masks
-    template = (
-        "{% for m in messages %}"
-        "{% if m.weight > 0 %}{{ m.content }}{% endif %}"
-        "{% endfor %}"
-    )
+    template = "{% for m in messages %}{% if m.weight > 0 %}{{ m.content }}{% endif %}{% endfor %}"
     fields = extract_message_fields(template)
     assert "weight" in fields
 
@@ -66,11 +58,7 @@ def test_returns_empty_set_for_no_message_loop():
 
 
 def test_handles_train_field_axolotl_style():
-    template = (
-        "{% for m in messages %}"
-        "{% if m.train %}{{ m.content }}{% endif %}"
-        "{% endfor %}"
-    )
+    template = "{% for m in messages %}{% if m.train %}{{ m.content }}{% endif %}{% endfor %}"
     fields = extract_message_fields(template)
     assert "train" in fields
 

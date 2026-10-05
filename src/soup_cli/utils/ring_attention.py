@@ -89,15 +89,11 @@ def validate_ring_attention_config(
         return errors
 
     if device != "cuda":
-        errors.append(
-            "Ring FlashAttention requires CUDA GPUs. "
-            f"Current device: {device}."
-        )
+        errors.append(f"Ring FlashAttention requires CUDA GPUs. Current device: {device}.")
 
     if not check_ring_attention_available():
         errors.append(
-            "Ring FlashAttention is not available. "
-            "Install it with: pip install ring-flash-attn"
+            "Ring FlashAttention is not available. Install it with: pip install ring-flash-attn"
         )
 
     try:

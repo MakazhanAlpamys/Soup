@@ -23,7 +23,7 @@ class TestDiagnose:
 
     def test_healthy_run_no_findings(self):
         # Decreasing loss across 100 steps with healthy gradients
-        rows = [_row(i, 2.0 * 0.99 ** i, grad_norm=2.0) for i in range(100)]
+        rows = [_row(i, 2.0 * 0.99**i, grad_norm=2.0) for i in range(100)]
         result = diagnose(rows)
         assert result == []
 
@@ -50,18 +50,18 @@ class TestDiagnose:
         assert "loss_diverged" in cats
 
     def test_high_grad_norm_detected(self):
-        rows = [_row(i, 2.0 * 0.99 ** i, grad_norm=100.0) for i in range(30)]
+        rows = [_row(i, 2.0 * 0.99**i, grad_norm=100.0) for i in range(30)]
         result = diagnose(rows)
         assert any(finding.category == "grad_norm_high" for finding in result)
 
     def test_lr_too_low_warning(self):
-        rows = [_row(i, 2.0 * 0.99 ** i) for i in range(30)]
+        rows = [_row(i, 2.0 * 0.99**i) for i in range(30)]
         config = {"training": {"lr": 1e-9}}
         result = diagnose(rows, config)
         assert any(finding.category == "lr_too_low" for finding in result)
 
     def test_lr_too_high_warning(self):
-        rows = [_row(i, 2.0 * 0.99 ** i) for i in range(30)]
+        rows = [_row(i, 2.0 * 0.99**i) for i in range(30)]
         config = {"training": {"lr": 0.1}}
         result = diagnose(rows, config)
         assert any(finding.category == "lr_too_high" for finding in result)
@@ -94,7 +94,10 @@ class TestDiagnose:
 
     def test_finding_is_frozen(self):
         finding = Finding(
-            category="x", severity="info", message="m", suggestion="s",
+            category="x",
+            severity="info",
+            message="m",
+            suggestion="s",
         )
         try:
             finding.category = "y"  # type: ignore[misc]

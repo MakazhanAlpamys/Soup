@@ -30,12 +30,8 @@ def _seed_db(path: str, n_pairs: int) -> None:
 
     init_local_rl_db(path)
     for i in range(n_pairs):
-        record_thumb(
-            db_path=path, prompt=f"q{i}", response=f"good{i}", thumb="up"
-        )
-        record_thumb(
-            db_path=path, prompt=f"q{i}", response=f"bad{i}", thumb="down"
-        )
+        record_thumb(db_path=path, prompt=f"q{i}", response=f"good{i}", thumb="up")
+        record_thumb(db_path=path, prompt=f"q{i}", response=f"bad{i}", thumb="down")
 
 
 class TestStateTable:
@@ -440,9 +436,7 @@ class TestTrainCli:
         import soup_cli.utils.local_rl as lr
 
         calls = []
-        monkeypatch.setattr(
-            lr, "_default_train_fn", lambda **kw: calls.append(kw)
-        )
+        monkeypatch.setattr(lr, "_default_train_fn", lambda **kw: calls.append(kw))
         res = runner.invoke(
             self._import_app(),
             [
@@ -469,9 +463,7 @@ class TestTrainCli:
         _seed_db("db.sqlite", 1)
         import soup_cli.utils.local_rl as lr
 
-        monkeypatch.setattr(
-            lr, "_default_train_fn", lambda **kw: pytest.fail("should not train")
-        )
+        monkeypatch.setattr(lr, "_default_train_fn", lambda **kw: pytest.fail("should not train"))
         res = runner.invoke(
             self._import_app(),
             [
@@ -578,9 +570,7 @@ class TestPrepareDistillDataset:
         from soup_cli.utils.prompt_distill import prepare_distill_dataset
 
         plan = self._plan(tmp_path, "sft")
-        n = prepare_distill_dataset(
-            plan, teacher_fn=lambda p: {"text": f"T:{p}"}
-        )
+        n = prepare_distill_dataset(plan, teacher_fn=lambda p: {"text": f"T:{p}"})
         assert n == 2
         with open(tmp_path / "out.jsonl", encoding="utf-8") as fh:
             rows = [json.loads(line) for line in fh if line.strip()]
@@ -645,9 +635,7 @@ class TestPrepareDistillDataset:
         from soup_cli.utils.prompt_distill import prepare_distill_dataset
 
         plan = self._plan(tmp_path, "sft")
-        n = prepare_distill_dataset(
-            plan, teacher_fn=lambda p: {"text": "T"}, max_rows=1
-        )
+        n = prepare_distill_dataset(plan, teacher_fn=lambda p: {"text": "T"}, max_rows=1)
         assert n == 1
 
     def test_bad_max_rows(self, tmp_path, monkeypatch):
@@ -691,7 +679,7 @@ class TestDistillPromptCli:
         monkeypatch.setattr(
             pd,
             "_build_provider_fn",
-            lambda *a, **k: (lambda p: {"text": f"R:{p}"}),
+            lambda *a, **k: lambda p: {"text": f"R:{p}"},
         )
         app = typer.Typer()
         app.command()(distill_prompt_cmd)
@@ -716,9 +704,7 @@ class TestDistillPromptCli:
     def test_cli_no_longer_deferred(self):
         import soup_cli.utils.prompt_distill as pd
 
-        assert "deferred" not in (
-            pd.prepare_distill_dataset.__doc__ or ""
-        ).lower()
+        assert "deferred" not in (pd.prepare_distill_dataset.__doc__ or "").lower()
 
 
 # ===========================================================================
@@ -853,9 +839,7 @@ class TestRunCompileSeam:
         monkeypatch.chdir(tmp_path)
         import soup_cli.utils.prompt_compile as pc
 
-        (tmp_path / "prog2.py").write_text(
-            "def get_program():\n    return 42\n", encoding="utf-8"
-        )
+        (tmp_path / "prog2.py").write_text("def get_program():\n    return 42\n", encoding="utf-8")
         mod = pc._load_program_module("prog2.py")
         assert pc._resolve_program(mod) == 42
 
@@ -901,13 +885,9 @@ class TestCompileCli:
         )
         app = typer.Typer()
         app.command()(compile_cmd)
-        res = runner.invoke(
-            app, ["prog.py", "--eval", "eval.jsonl", "--optimizer", "mipro"]
-        )
+        res = runner.invoke(app, ["prog.py", "--eval", "eval.jsonl", "--optimizer", "mipro"])
         assert res.exit_code == 0, (res.output, repr(res.exception))
-        assert (tmp_path / "compiled_program.py").read_text(
-            encoding="utf-8"
-        ) == "# compiled\n"
+        assert (tmp_path / "compiled_program.py").read_text(encoding="utf-8") == "# compiled\n"
 
     def test_live_missing_dep_exit2(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
@@ -917,9 +897,7 @@ class TestCompileCli:
         (tmp_path / "eval.jsonl").write_text('{"q":"1"}\n', encoding="utf-8")
         app = typer.Typer()
         app.command()(compile_cmd)
-        res = runner.invoke(
-            app, ["prog.py", "--eval", "eval.jsonl", "--optimizer", "mipro"]
-        )
+        res = runner.invoke(app, ["prog.py", "--eval", "eval.jsonl", "--optimizer", "mipro"])
         assert res.exit_code == 2
         assert "compile" in res.output.lower()
 
@@ -931,9 +909,7 @@ class TestCompileCli:
         (tmp_path / "eval.jsonl").write_text('{"q":"1"}\n', encoding="utf-8")
         app = typer.Typer()
         app.command()(compile_cmd)
-        res = runner.invoke(
-            app, ["prog.py", "--eval", "eval.jsonl", "--optimizer", "nope"]
-        )
+        res = runner.invoke(app, ["prog.py", "--eval", "eval.jsonl", "--optimizer", "nope"])
         assert res.exit_code == 2
 
 
@@ -969,9 +945,7 @@ class TestOptimiseDescription:
     def test_override_returns_str(self, monkeypatch):
         import soup_cli.utils.compile_tools as ct
 
-        monkeypatch.setattr(
-            ct, "_TOOL_OPTIMIZER_OVERRIDE", lambda d, e, o: d.upper()
-        )
+        monkeypatch.setattr(ct, "_TOOL_OPTIMIZER_OVERRIDE", lambda d, e, o: d.upper())
         assert ct._optimise_description("hi", [], "textgrad") == "HI"
 
     def test_override_non_str_rejected(self, monkeypatch):
@@ -1012,9 +986,7 @@ class TestRunToolCompile:
         monkeypatch.chdir(tmp_path)
         import soup_cli.utils.compile_tools as ct
 
-        monkeypatch.setattr(
-            ct, "_TOOL_OPTIMIZER_OVERRIDE", lambda d, e, o: f"OPT:{d}"
-        )
+        monkeypatch.setattr(ct, "_TOOL_OPTIMIZER_OVERRIDE", lambda d, e, o: f"OPT:{d}")
         plan = self._plan(tmp_path)
         n = ct.run_tool_compile(plan)
         assert n == 2
@@ -1059,9 +1031,7 @@ class TestCompileToolsCli:
         _write_spec(tmp_path)
         app = typer.Typer()
         app.command()(compile_tools_cmd)
-        res = runner.invoke(
-            app, ["spec.json", "--eval", "eval.jsonl", "--plan-only"]
-        )
+        res = runner.invoke(app, ["spec.json", "--eval", "eval.jsonl", "--plan-only"])
         assert res.exit_code == 0, (res.output, repr(res.exception))
 
     def test_live_via_seam(self, tmp_path, monkeypatch):
@@ -1073,9 +1043,7 @@ class TestCompileToolsCli:
         monkeypatch.setattr(ct, "_TOOL_OPTIMIZER_OVERRIDE", lambda d, e, o: "OK")
         app = typer.Typer()
         app.command()(compile_tools_cmd)
-        res = runner.invoke(
-            app, ["spec.json", "--eval", "eval.jsonl", "--output", "out.json"]
-        )
+        res = runner.invoke(app, ["spec.json", "--eval", "eval.jsonl", "--output", "out.json"])
         assert res.exit_code == 0, (res.output, repr(res.exception))
         assert os.path.isfile(str(tmp_path / "out.json"))
 
@@ -1086,9 +1054,7 @@ class TestCompileToolsCli:
         _write_spec(tmp_path)
         app = typer.Typer()
         app.command()(compile_tools_cmd)
-        res = runner.invoke(
-            app, ["spec.json", "--eval", "eval.jsonl", "--output", "out.json"]
-        )
+        res = runner.invoke(app, ["spec.json", "--eval", "eval.jsonl", "--output", "out.json"])
         assert res.exit_code == 2
 
 
@@ -1141,9 +1107,7 @@ class TestReviewFixes:
         with pytest.raises(ValueError):
             _systemd_quote("a\nb")
 
-    def test_stamp_before_train_keeps_concurrent_thumbs(
-        self, tmp_path, monkeypatch
-    ):
+    def test_stamp_before_train_keeps_concurrent_thumbs(self, tmp_path, monkeypatch):
         # CORRECTNESS MEDIUM: thumbs recorded DURING the train window keep
         # ts > last_train_at and are counted by the next run (not dropped).
         monkeypatch.chdir(tmp_path)
@@ -1171,12 +1135,8 @@ class TestReviewFixes:
             import time as _t
 
             _t.sleep(0.05)
-            record_thumb(
-                db_path="db.sqlite", prompt="qZ", response="x", thumb="up"
-            )
-            record_thumb(
-                db_path="db.sqlite", prompt="qZ", response="y", thumb="down"
-            )
+            record_thumb(db_path="db.sqlite", prompt="qZ", response="x", thumb="up")
+            record_thumb(db_path="db.sqlite", prompt="qZ", response="y", thumb="down")
 
         run_nightly_train(cfg, min_pairs=1, train_fn=slow_train)
         last = float(get_state("db.sqlite", "last_train_at"))
@@ -1232,9 +1192,7 @@ class TestCoverageGaps:
     def _cfg(self, db, method="dpo"):
         from soup_cli.utils.local_rl import LocalRLConfig
 
-        return LocalRLConfig(
-            backend="ollama", model="org/model", db_path=db, train_method=method
-        )
+        return LocalRLConfig(backend="ollama", model="org/model", db_path=db, train_method=method)
 
     def test_new_thumbs_but_insufficient_pairs(self, tmp_path, monkeypatch):
         # last_train_at in the past + fresh thumbs that yield < min_pairs ->
@@ -1315,26 +1273,18 @@ class TestCoverageGaps:
         monkeypatch.chdir(tmp_path)
         from soup_cli.utils.prompt_compile import load_eval_examples
 
-        (tmp_path / "arr.json").write_text(
-            "[\n  {\"q\": \"1\"},\n  {\"q\": \"2\"}\n]", encoding="utf-8"
-        )
+        (tmp_path / "arr.json").write_text('[\n  {"q": "1"},\n  {"q": "2"}\n]', encoding="utf-8")
         assert load_eval_examples("arr.json") == [{"q": "1"}, {"q": "2"}]
 
     def test_compile_result_validation(self):
         from soup_cli.utils.prompt_compile import CompileResult
 
         with pytest.raises(ValueError):
-            CompileResult(
-                program_text="x", score=float("nan"), iterations=1, converged=True
-            )
+            CompileResult(program_text="x", score=float("nan"), iterations=1, converged=True)
         with pytest.raises(ValueError):
-            CompileResult(
-                program_text="x", score=0.0, iterations=-1, converged=True
-            )
+            CompileResult(program_text="x", score=0.0, iterations=-1, converged=True)
         with pytest.raises(TypeError):
-            CompileResult(
-                program_text="x", score=True, iterations=1, converged=True
-            )
+            CompileResult(program_text="x", score=True, iterations=1, converged=True)
 
     # --- #226 distill edge cases -----------------------------------------
     def test_extract_prompt_query_key(self):
@@ -1393,9 +1343,7 @@ class TestCoverageGaps:
             raise RuntimeError("down")
 
         with pytest.raises(ProviderCallError, match="down"):
-            prepare_distill_dataset(
-                plan, teacher_fn=lambda p: {"text": "T"}, student_fn=boom
-            )
+            prepare_distill_dataset(plan, teacher_fn=lambda p: {"text": "T"}, student_fn=boom)
 
     # --- #227 compile-tools ----------------------------------------------
     def test_spec_path_extension_rejected(self, tmp_path, monkeypatch):
@@ -1463,8 +1411,11 @@ class TestReachableInternals:
 
         def fake_make(provider, *, model, base_url, temperature, raise_on_error=False):
             seen.update(
-                provider=provider, model=model, base_url=base_url,
-                temperature=temperature, raise_on_error=raise_on_error,
+                provider=provider,
+                model=model,
+                base_url=base_url,
+                temperature=temperature,
+                raise_on_error=raise_on_error,
             )
             return lambda prompt: {"text": f"R:{prompt}"}
 

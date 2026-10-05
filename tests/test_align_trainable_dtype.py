@@ -27,8 +27,7 @@ def _make_model(*params):
 
     m = nn.Module()
     for name, dtype, requires_grad in params:
-        setattr(m, name, nn.Parameter(torch.zeros(2, 2, dtype=dtype),
-                                      requires_grad=requires_grad))
+        setattr(m, name, nn.Parameter(torch.zeros(2, 2, dtype=dtype), requires_grad=requires_grad))
     return m
 
 

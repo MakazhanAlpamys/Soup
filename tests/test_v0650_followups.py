@@ -13,6 +13,7 @@ Closes review L5 boundary tests + HIGH H1-H4 + MEDIUM M5/M6/M7/M2 fixes:
 - M6 — evidence file 16 MiB cap
 - L1-L6 — boundary tests
 """
+
 from __future__ import annotations
 
 import json
@@ -75,7 +76,8 @@ class TestWordBoundaryAgreement:
         # Combined H4 fix: post-responses say "unsafe" → oracle "safe" must
         # report MAJOR (was MISSING when substring match always passed).
         r = compute_behavior_diff(
-            run_id="r", battery="xstest",
+            run_id="r",
+            battery="xstest",
             pre_responses=["safe answer"] * 10,
             post_responses=["unsafe answer"] * 10,
             oracle=["safe"] * 10,
@@ -90,38 +92,53 @@ class TestWordBoundaryAgreement:
 class TestChecklistWordBoundary:
     def test_mft_word_boundary_rejects_substring(self):
         t = CheckListTest(
-            name="sand-test", kind="mft",
-            prompts=("Some prompt",), expected=("and",),
+            name="sand-test",
+            kind="mft",
+            prompts=("Some prompt",),
+            expected=("and",),
         )
         spec = CheckListSpec(tests=(t,))
         # "sand" should NOT match "and" — was passing under substring.
-        report = run_checklist_spec(spec, evidence={
-            "sand-test": ["I see sand on the beach."],
-        })
+        report = run_checklist_spec(
+            spec,
+            evidence={
+                "sand-test": ["I see sand on the beach."],
+            },
+        )
         assert report.results[0].verdict == "MAJOR"
         assert report.results[0].passed == 0
 
     def test_mft_word_boundary_accepts_word(self):
         t = CheckListTest(
-            name="and-test", kind="mft",
-            prompts=("Some prompt",), expected=("and",),
+            name="and-test",
+            kind="mft",
+            prompts=("Some prompt",),
+            expected=("and",),
         )
         spec = CheckListSpec(tests=(t,))
-        report = run_checklist_spec(spec, evidence={
-            "and-test": ["I see and you do too."],
-        })
+        report = run_checklist_spec(
+            spec,
+            evidence={
+                "and-test": ["I see and you do too."],
+            },
+        )
         assert report.results[0].verdict == "OK"
         assert report.results[0].passed == 1
 
     def test_mft_word_boundary_with_punctuation(self):
         t = CheckListTest(
-            name="and-test", kind="mft",
-            prompts=("Some prompt",), expected=("yes",),
+            name="and-test",
+            kind="mft",
+            prompts=("Some prompt",),
+            expected=("yes",),
         )
         spec = CheckListSpec(tests=(t,))
-        report = run_checklist_spec(spec, evidence={
-            "and-test": ["yes, of course"],
-        })
+        report = run_checklist_spec(
+            spec,
+            evidence={
+                "and-test": ["yes, of course"],
+            },
+        )
         assert report.results[0].verdict == "OK"
 
 
@@ -131,21 +148,24 @@ class TestChecklistWordBoundary:
 class TestParseChecklistNamedError:
     def test_non_list_prompts_names_index(self):
         with pytest.raises(ValueError, match=r"tests\[0\]\.prompts"):
-            parse_checklist_spec({
-                "tests": [{"name": "t", "kind": "mft",
-                           "prompts": "not a list", "expected": ["a"]}]
-            })
+            parse_checklist_spec(
+                {
+                    "tests": [
+                        {"name": "t", "kind": "mft", "prompts": "not a list", "expected": ["a"]}
+                    ]
+                }
+            )
 
     def test_non_list_expected_names_index(self):
         with pytest.raises(ValueError, match=r"tests\[1\]\.expected"):
-            parse_checklist_spec({
-                "tests": [
-                    {"name": "t0", "kind": "mft",
-                     "prompts": ["p"], "expected": ["a"]},
-                    {"name": "t1", "kind": "mft",
-                     "prompts": ["q"], "expected": "not a list"},
-                ]
-            })
+            parse_checklist_spec(
+                {
+                    "tests": [
+                        {"name": "t0", "kind": "mft", "prompts": ["p"], "expected": ["a"]},
+                        {"name": "t1", "kind": "mft", "prompts": ["q"], "expected": "not a list"},
+                    ]
+                }
+            )
 
 
 # ─── M5: CLI run_id validation ───
@@ -155,25 +175,43 @@ class TestCliRunIdValidation:
     def test_behavior_rejects_null_byte_run_id(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         runner = CliRunner()
-        result = runner.invoke(app, [
-            "behavior", "evil\x00", "--battery", "xstest",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "behavior",
+                "evil\x00",
+                "--battery",
+                "xstest",
+            ],
+        )
         assert result.exit_code != 0
 
     def test_capability_rejects_empty_run_id(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         runner = CliRunner()
-        result = runner.invoke(app, [
-            "capability", "", "--suite", "fast",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "capability",
+                "",
+                "--suite",
+                "fast",
+            ],
+        )
         assert result.exit_code != 0
 
     def test_behavior_rejects_oversize_run_id(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         runner = CliRunner()
-        result = runner.invoke(app, [
-            "behavior", "a" * 300, "--battery", "xstest",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "behavior",
+                "a" * 300,
+                "--battery",
+                "xstest",
+            ],
+        )
         assert result.exit_code != 0
 
 
@@ -193,10 +231,17 @@ class TestEvidenceCap:
         payload = '{"junk": "' + "a" * (17 * 1024 * 1024) + '"}'
         big.write_text(payload, encoding="utf-8")
         runner = CliRunner()
-        result = runner.invoke(app, [
-            "behavior", "r1", "--battery", "xstest",
-            "--evidence", str(big),
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "behavior",
+                "r1",
+                "--battery",
+                "xstest",
+                "--evidence",
+                str(big),
+            ],
+        )
         assert result.exit_code != 0
 
 
@@ -225,8 +270,10 @@ class TestBoundaries:
     def test_fit_position_bias_all_ties_returns_zero(self):
         judgements = [
             PairwiseJudgement(
-                prompt_id=f"p{i}", first_winner="tie",
-                second_winner="tie", oracle="tie",
+                prompt_id=f"p{i}",
+                first_winner="tie",
+                second_winner="tie",
+                oracle="tie",
             )
             for i in range(10)
         ]
@@ -245,7 +292,8 @@ class TestBoundaries:
         # Pre value 1.0, post value 0.89 → delta = -0.11 → just past the
         # -0.10 OK→MINOR boundary.
         r = compute_behavior_diff(
-            run_id="r", battery="xstest",
+            run_id="r",
+            battery="xstest",
             pre_responses=["safe"] * 100,
             post_responses=(["safe"] * 89) + (["unsafe"] * 11),
             oracle=["safe"] * 100,
@@ -256,17 +304,14 @@ class TestBoundaries:
         assert r.overall in ("MINOR", "MAJOR")
 
     def test_pick_irt_subset_total_one_tiny_floors_at_one(self):
-        difficulty = (
-            ItemDifficulty(item_id="q1", difficulty=0.0, info=1.0),
-        )
+        difficulty = (ItemDifficulty(item_id="q1", difficulty=0.0, info=1.0),)
         plan = pick_irt_subset(difficulty, size="tiny")
         assert len(plan.item_ids) == 1
         assert plan.cost_ratio == 1.0
 
     def test_pick_irt_subset_total_three_tiny_keeps_at_least_one(self):
         difficulty = tuple(
-            ItemDifficulty(item_id=f"q{i}", difficulty=0.0, info=1.0)
-            for i in range(3)
+            ItemDifficulty(item_id=f"q{i}", difficulty=0.0, info=1.0) for i in range(3)
         )
         plan = pick_irt_subset(difficulty, size="tiny")
         # 10% of 3 = 0.3 → max(1, round(0.3)) = 1.
@@ -282,10 +327,17 @@ class TestDeduplicatedWriteHelper:
         monkeypatch.chdir(tmp_path)
         out = tmp_path / "cap.json"
         runner = CliRunner()
-        result = runner.invoke(app, [
-            "capability", "test", "--suite", "fast",
-            "--output", str(out),
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "capability",
+                "test",
+                "--suite",
+                "fast",
+                "--output",
+                str(out),
+            ],
+        )
         assert result.exit_code == 0
         data = json.loads(out.read_text())
         assert data["suite"] == "fast"
@@ -293,15 +345,24 @@ class TestDeduplicatedWriteHelper:
     def test_irt_uses_atomic_write(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         p = tmp_path / "r.jsonl"
-        p.write_text("\n".join(
-            json.dumps({"item_id": f"q{i % 5}", "correct": i % 2 == 0})
-            for i in range(50)
-        ))
+        p.write_text(
+            "\n".join(
+                json.dumps({"item_id": f"q{i % 5}", "correct": i % 2 == 0}) for i in range(50)
+            )
+        )
         out = tmp_path / "plan.json"
         runner = CliRunner()
-        result = runner.invoke(app, [
-            "irt-subset", str(p), "--size", "small", "--output", str(out),
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "irt-subset",
+                str(p),
+                "--size",
+                "small",
+                "--output",
+                str(out),
+            ],
+        )
         assert result.exit_code == 0
         data = json.loads(out.read_text())
         assert data["size"] == "small"
@@ -309,18 +370,26 @@ class TestDeduplicatedWriteHelper:
     def test_checklist_uses_atomic_write(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         p = tmp_path / "spec.yaml"
-        p.write_text(yaml.safe_dump({
-            "tests": [{"name": "t1", "kind": "mft",
-                       "prompts": ["p"], "expected": ["a"]}]
-        }))
+        p.write_text(
+            yaml.safe_dump(
+                {"tests": [{"name": "t1", "kind": "mft", "prompts": ["p"], "expected": ["a"]}]}
+            )
+        )
         evidence = tmp_path / "evidence.json"
         evidence.write_text(json.dumps({"t1": ["a"]}))
         out = tmp_path / "report.json"
         runner = CliRunner()
-        result = runner.invoke(app, [
-            "checklist", str(p), "--evidence", str(evidence),
-            "--output", str(out),
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "checklist",
+                str(p),
+                "--evidence",
+                str(evidence),
+                "--output",
+                str(out),
+            ],
+        )
         assert result.exit_code == 0
         data = json.loads(out.read_text())
         assert "overall" in data
@@ -332,9 +401,13 @@ class TestDeduplicatedWriteHelper:
 class TestSourceWiring:
     def test_behavior_battery_uses_traversable_path(self):
         from pathlib import Path
+
         src = (
             Path(__file__).resolve().parent.parent
-            / "src" / "soup_cli" / "utils" / "behavior_battery.py"
+            / "src"
+            / "soup_cli"
+            / "utils"
+            / "behavior_battery.py"
         )
         text = src.read_text(encoding="utf-8")
         # H1 fix — must use as_file + Traversable / op, not os.path.join.
@@ -344,9 +417,13 @@ class TestSourceWiring:
 
     def test_checklist_uses_shared_helper(self):
         from pathlib import Path
+
         src = (
             Path(__file__).resolve().parent.parent
-            / "src" / "soup_cli" / "utils" / "checklist_dsl.py"
+            / "src"
+            / "soup_cli"
+            / "utils"
+            / "checklist_dsl.py"
         )
         text = src.read_text(encoding="utf-8")
         # H2 fix — must use the shared helper.
@@ -354,22 +431,24 @@ class TestSourceWiring:
 
     def test_irt_uses_shared_helper(self):
         from pathlib import Path
-        src = (
-            Path(__file__).resolve().parent.parent
-            / "src" / "soup_cli" / "utils" / "irt.py"
-        )
+
+        src = Path(__file__).resolve().parent.parent / "src" / "soup_cli" / "utils" / "irt.py"
         text = src.read_text(encoding="utf-8")
         # H3 fix — must use the shared helper.
         assert "enforce_under_cwd_and_no_symlink" in text
         # Must stream via .open(), not .read_text() (the old pattern that
         # materialised 256 MiB into RAM).
-        assert ".read_text(encoding=\"utf-8\")" not in text
+        assert '.read_text(encoding="utf-8")' not in text
 
     def test_cli_uses_dedup_helpers(self):
         from pathlib import Path
+
         src = (
             Path(__file__).resolve().parent.parent
-            / "src" / "soup_cli" / "commands" / "_eval_v0650.py"
+            / "src"
+            / "soup_cli"
+            / "commands"
+            / "_eval_v0650.py"
         )
         text = src.read_text(encoding="utf-8")
         # L6 dedup — _write_json_output + _read_evidence_json helpers.
@@ -385,9 +464,13 @@ class TestSourceWiring:
 class TestONofollowWiring:
     def test_checklist_uses_o_nofollow(self):
         from pathlib import Path
+
         src = (
             Path(__file__).resolve().parent.parent
-            / "src" / "soup_cli" / "utils" / "checklist_dsl.py"
+            / "src"
+            / "soup_cli"
+            / "utils"
+            / "checklist_dsl.py"
         )
         text = src.read_text(encoding="utf-8")
         # H-NEW-1 fix: must use O_NOFOLLOW + fstat (no more double-lstat).
@@ -396,19 +479,21 @@ class TestONofollowWiring:
 
     def test_irt_uses_o_nofollow(self):
         from pathlib import Path
-        src = (
-            Path(__file__).resolve().parent.parent
-            / "src" / "soup_cli" / "utils" / "irt.py"
-        )
+
+        src = Path(__file__).resolve().parent.parent / "src" / "soup_cli" / "utils" / "irt.py"
         text = src.read_text(encoding="utf-8")
         assert "O_NOFOLLOW" in text
         assert "os.fstat(fd)" in text
 
     def test_eval_v0650_uses_o_nofollow(self):
         from pathlib import Path
+
         src = (
             Path(__file__).resolve().parent.parent
-            / "src" / "soup_cli" / "commands" / "_eval_v0650.py"
+            / "src"
+            / "soup_cli"
+            / "commands"
+            / "_eval_v0650.py"
         )
         text = src.read_text(encoding="utf-8")
         # H-NEW-2 fix.
@@ -432,6 +517,7 @@ class TestIrtRowsCap:
         lines = b"not json\n" * (_MAX_ROWS + 100)
         p.write_bytes(lines)
         import pytest as _pytest
+
         with _pytest.raises(ValueError, match="cap"):
             load_response_rows(str(p))
 
@@ -460,9 +546,7 @@ class TestLoadResponseRowsWarnsOnSkip:
         monkeypatch.chdir(tmp_path)
         p = tmp_path / "responses.jsonl"
         p.write_text(
-            '{"item_id": "q1", "correct": true}\n'
-            'not json\n'
-            '{"item_id": "q2", "correct": false}\n'
+            '{"item_id": "q1", "correct": true}\nnot json\n{"item_id": "q2", "correct": false}\n'
         )
         with caplog.at_level(logging.WARNING, logger="soup_cli.utils.irt"):
             rows = load_response_rows(str(p))
@@ -476,14 +560,9 @@ class TestLoadResponseRowsWarnsOnSkip:
 
         monkeypatch.chdir(tmp_path)
         p = tmp_path / "responses.jsonl"
-        p.write_text(
-            '{"item_id": "q1", "correct": true}\n'
-            '{"item_id": "q2", "correct": false}\n'
-        )
+        p.write_text('{"item_id": "q1", "correct": true}\n{"item_id": "q2", "correct": false}\n')
         with caplog.at_level(logging.WARNING, logger="soup_cli.utils.irt"):
             rows = load_response_rows(str(p))
         assert len(rows) == 2
         # No skip messages.
-        assert not any(
-            "skipped" in rec.message.lower() for rec in caplog.records
-        )
+        assert not any("skipped" in rec.message.lower() for rec in caplog.records)

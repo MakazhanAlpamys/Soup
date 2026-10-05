@@ -150,8 +150,7 @@ def validate_liger_config(use_liger: bool, backend: str, device: str) -> list[st
 
     if not check_liger_available():
         errors.append(
-            "liger-kernel is not installed. "
-            "Install it with: pip install \"soup-cli[liger]\""
+            'liger-kernel is not installed. Install it with: pip install "soup-cli[liger]"'
         )
 
     if backend == "unsloth":
@@ -162,8 +161,7 @@ def validate_liger_config(use_liger: bool, backend: str, device: str) -> list[st
 
     if device != "cuda":
         errors.append(
-            "Liger Kernel requires CUDA. "
-            f"Current device: {device}. Use a GPU for Liger Kernel."
+            f"Liger Kernel requires CUDA. Current device: {device}. Use a GPU for Liger Kernel."
         )
 
     return errors

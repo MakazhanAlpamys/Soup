@@ -37,9 +37,7 @@ def validate_num_draft_tokens(value: int) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
         raise TypeError("num_draft_tokens must be an int")
     if value < _MIN_DRAFT or value > _MAX_DRAFT:
-        raise ValueError(
-            f"num_draft_tokens must be in [{_MIN_DRAFT}, {_MAX_DRAFT}]"
-        )
+        raise ValueError(f"num_draft_tokens must be in [{_MIN_DRAFT}, {_MAX_DRAFT}]")
     return value
 
 
@@ -47,9 +45,7 @@ def validate_prompt_lookup_max(value: int) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
         raise TypeError("prompt_lookup_max must be an int")
     if value < _MIN_PROMPT or value > _MAX_PROMPT:
-        raise ValueError(
-            f"prompt_lookup_max must be in [{_MIN_PROMPT}, {_MAX_PROMPT}]"
-        )
+        raise ValueError(f"prompt_lookup_max must be in [{_MIN_PROMPT}, {_MAX_PROMPT}]")
     return value
 
 

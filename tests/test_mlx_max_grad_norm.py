@@ -126,9 +126,7 @@ class TestTheConfiguredNormReachesTheOptimizer:
     recorded whether or not anything clipped.
     """
 
-    def test_the_optimizer_train_receives_clips_at_the_configured_norm(
-        self, tmp_path, monkeypatch
-    ):
+    def test_the_optimizer_train_receives_clips_at_the_configured_norm(self, tmp_path, monkeypatch):
         clip, _ = _install(monkeypatch)
         _, seen = _run(tmp_path, monkeypatch, max_grad_norm=0.5)
 
@@ -151,9 +149,7 @@ class TestTheConfiguredNormReachesTheOptimizer:
 
         assert clip.calls == [pytest.approx(2.5)]
 
-    def test_the_real_optimizer_is_handed_the_clipped_gradients(
-        self, tmp_path, monkeypatch
-    ):
+    def test_the_real_optimizer_is_handed_the_clipped_gradients(self, tmp_path, monkeypatch):
         """Clipping is worthless if the unclipped gradients are applied anyway."""
         clip, built = _install(monkeypatch)
         _, seen = _run(tmp_path, monkeypatch, max_grad_norm=1.0)
@@ -176,8 +172,12 @@ class TestTheConfiguredNormReachesTheOptimizer:
         # float rather than a callable schedule -- the value is then checkable.
         # Delegation is asserted by identity as well, which holds either way.
         _, seen = _run(
-            tmp_path, monkeypatch, lr=3e-4, max_grad_norm=1.0,
-            scheduler="constant", warmup_ratio=0.0,
+            tmp_path,
+            monkeypatch,
+            lr=3e-4,
+            max_grad_norm=1.0,
+            scheduler="constant",
+            warmup_ratio=0.0,
         )
 
         optimizer = seen["optimizer"]
@@ -185,9 +185,7 @@ class TestTheConfiguredNormReachesTheOptimizer:
         assert optimizer.learning_rate is built[0].learning_rate
         assert optimizer.learning_rate == pytest.approx(3e-4)
 
-    def test_delegation_holds_when_the_learning_rate_is_a_schedule(
-        self, tmp_path, monkeypatch
-    ):
+    def test_delegation_holds_when_the_learning_rate_is_a_schedule(self, tmp_path, monkeypatch):
         """#686 hands the optimizer a CALLABLE learning rate for any real
         schedule, and mlx-lm reads `.learning_rate` off the object to report
         it (trainer.py:337). An earlier version of the test above asserted a
@@ -195,8 +193,11 @@ class TestTheConfiguredNormReachesTheOptimizer:
         assumption was not."""
         _, built = _install(monkeypatch)
         _, seen = _run(
-            tmp_path, monkeypatch, max_grad_norm=1.0,
-            scheduler="cosine", warmup_ratio=0.25,
+            tmp_path,
+            monkeypatch,
+            max_grad_norm=1.0,
+            scheduler="cosine",
+            warmup_ratio=0.25,
         )
 
         optimizer = seen["optimizer"]
@@ -222,14 +223,11 @@ class TestTheHarnessCanObserveTheAbsence:
     a call is checked to be observable.
     """
 
-    def test_no_clip_call_happens_until_the_optimizer_updates(
-        self, tmp_path, monkeypatch
-    ):
+    def test_no_clip_call_happens_until_the_optimizer_updates(self, tmp_path, monkeypatch):
         clip, _ = _install(monkeypatch)
         _run(tmp_path, monkeypatch, max_grad_norm=1.0)
         assert clip.calls == [], (
-            "clipping must happen per optimizer update, not once at "
-            "construction time"
+            "clipping must happen per optimizer update, not once at construction time"
         )
 
 
@@ -241,8 +239,7 @@ class TestUpstreamStillHasNoClippingOfItsOwn:
         trainer = pytest.importorskip("mlx_lm.tuner.trainer")
         fields = getattr(trainer.TrainingArgs, "__dataclass_fields__", {})
         assert not [f for f in fields if "norm" in f or "clip" in f], (
-            "mlx-lm now exposes gradient clipping of its own; prefer it over "
-            "Soup's wrapper"
+            "mlx-lm now exposes gradient clipping of its own; prefer it over Soup's wrapper"
         )
 
     def test_mlx_optimizers_still_exposes_clip_grad_norm(self):

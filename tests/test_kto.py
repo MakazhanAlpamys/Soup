@@ -229,7 +229,10 @@ class TestKTOTrainRouting:
             data={"train": "./data.jsonl"},
         )
         wrapper = KTOTrainerWrapper(
-            cfg, device="cuda", report_to="wandb", deepspeed_config="ds.json",
+            cfg,
+            device="cuda",
+            report_to="wandb",
+            deepspeed_config="ds.json",
         )
         assert wrapper.report_to == "wandb"
         assert wrapper.deepspeed_config == "ds.json"
@@ -281,15 +284,17 @@ class TestKTOSweepParams:
         }
 
         fake_gpu_info = {"memory_total": "0 MB", "memory_total_bytes": 0}
-        with mock_patch("soup_cli.data.loader.load_dataset", return_value=fake_dataset), \
-             mock_patch("soup_cli.utils.gpu.detect_device", return_value=("cpu", "CPU")), \
-             mock_patch("soup_cli.utils.gpu.get_gpu_info", return_value=fake_gpu_info), \
-             mock_patch("soup_cli.experiment.tracker.ExperimentTracker") as mock_tracker_cls, \
-             mock_patch("soup_cli.monitoring.display.TrainingDisplay"), \
-             mock_patch("soup_cli.trainer.kto.KTOTrainerWrapper.setup"), \
-             mock_patch(
-                 "soup_cli.trainer.kto.KTOTrainerWrapper.train", return_value=fake_result
-             ) as mock_train:
+        with (
+            mock_patch("soup_cli.data.loader.load_dataset", return_value=fake_dataset),
+            mock_patch("soup_cli.utils.gpu.detect_device", return_value=("cpu", "CPU")),
+            mock_patch("soup_cli.utils.gpu.get_gpu_info", return_value=fake_gpu_info),
+            mock_patch("soup_cli.experiment.tracker.ExperimentTracker") as mock_tracker_cls,
+            mock_patch("soup_cli.monitoring.display.TrainingDisplay"),
+            mock_patch("soup_cli.trainer.kto.KTOTrainerWrapper.setup"),
+            mock_patch(
+                "soup_cli.trainer.kto.KTOTrainerWrapper.train", return_value=fake_result
+            ) as mock_train,
+        ):
             mock_tracker = MagicMock()
             mock_tracker.start_run.return_value = "run-kto-1"
             mock_tracker_cls.return_value = mock_tracker
@@ -637,9 +642,7 @@ class TestKTOTrainResults:
             log_history=[{"loss": 1.0}], global_step=5
         )
         wrapper.train(resume_from_checkpoint="/ckpt/checkpoint-50")
-        mock_trainer.train.assert_called_once_with(
-            resume_from_checkpoint="/ckpt/checkpoint-50"
-        )
+        mock_trainer.train.assert_called_once_with(resume_from_checkpoint="/ckpt/checkpoint-50")
 
     def test_train_log_history_skips_non_loss_entries(self):
         """Log entries without 'loss' key should not be counted in train_losses."""
@@ -707,13 +710,16 @@ class TestKTOWizardPath:
         """When the wizard receives task=kto, data format should be forced to 'kto'."""
         from soup_cli.commands.init import _interactive_wizard
 
-        with mock_patch("soup_cli.commands.init.Prompt.ask", side_effect=[
-            "some-model",
-            "kto",
-            "./data.jsonl",
-            "3",
-            "yes",
-        ]):
+        with mock_patch(
+            "soup_cli.commands.init.Prompt.ask",
+            side_effect=[
+                "some-model",
+                "kto",
+                "./data.jsonl",
+                "3",
+                "yes",
+            ],
+        ):
             config_text = _interactive_wizard()
 
         assert "task: kto" in config_text

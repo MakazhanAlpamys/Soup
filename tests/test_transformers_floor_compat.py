@@ -350,7 +350,7 @@ class TestTransformersFloorTracksDeclaredBound:
         constraints = CONSTRAINTS.read_text(encoding="utf-8")
         declared = _declared_transformers_floor(pyproject)
         mutated = pyproject.replace(
-            f'transformers>={declared}',
+            f"transformers>={declared}",
             "transformers>=99.0.0",
             1,
         )

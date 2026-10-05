@@ -36,9 +36,10 @@ def test_bench_custom_prompts(tmp_path, monkeypatch):
 
     from unittest.mock import patch
 
-    with patch("soup_cli.commands.infer._load_model") as mock_load, \
-         patch("soup_cli.commands.infer._generate") as mock_generate:
-
+    with (
+        patch("soup_cli.commands.infer._load_model") as mock_load,
+        patch("soup_cli.commands.infer._generate") as mock_generate,
+    ):
         mock_load.return_value = ("mock_model", "mock_tokenizer")
         mock_generate.return_value = (None, 10)
 
@@ -47,10 +48,7 @@ def test_bench_custom_prompts(tmp_path, monkeypatch):
         assert result.exit_code == 0, (result.output, repr(result.exception))
         assert "Running 2 test inferences" in strip_ansi(result.output)
 
-        used_contents = [
-            call.args[2][0]["content"]
-            for call in mock_generate.call_args_list
-        ]
+        used_contents = [call.args[2][0]["content"] for call in mock_generate.call_args_list]
         assert "Custom prompt 1" in used_contents
         assert "Custom prompt 2" in used_contents
 
@@ -61,10 +59,7 @@ def test_bench_custom_prompts(tmp_path, monkeypatch):
         assert result.exit_code == 0, (result.output, repr(result.exception))
         assert "Running 2 test inferences" in strip_ansi(result.output)
 
-        used_contents = [
-            call.args[2][0]["content"]
-            for call in mock_generate.call_args_list
-        ]
+        used_contents = [call.args[2][0]["content"] for call in mock_generate.call_args_list]
         assert "JSON prompt 1" in used_contents
         assert "JSON prompt 2" in used_contents
 
@@ -85,13 +80,14 @@ def test_bench_happy_path(tmp_path, monkeypatch):
 
     from unittest.mock import patch
 
-    with patch("soup_cli.commands.infer._load_model") as mock_load, \
-         patch("soup_cli.commands.infer._generate") as mock_generate, \
-         patch("torch.cuda.is_available") as mock_is_available, \
-         patch("torch.cuda.reset_peak_memory_stats"), \
-         patch("torch.cuda.max_memory_allocated") as mock_max_memory, \
-         patch("soup_cli.utils.gpu.detect_device") as mock_detect_device:
-
+    with (
+        patch("soup_cli.commands.infer._load_model") as mock_load,
+        patch("soup_cli.commands.infer._generate") as mock_generate,
+        patch("torch.cuda.is_available") as mock_is_available,
+        patch("torch.cuda.reset_peak_memory_stats"),
+        patch("torch.cuda.max_memory_allocated") as mock_max_memory,
+        patch("soup_cli.utils.gpu.detect_device") as mock_detect_device,
+    ):
         mock_load.return_value = ("mock_model", "mock_tokenizer")
         mock_generate.return_value = ("mock response", 128)
         mock_is_available.return_value = True
@@ -124,11 +120,12 @@ def test_bench_cpu_warning(tmp_path, monkeypatch):
 
     from unittest.mock import patch
 
-    with patch("soup_cli.commands.infer._load_model") as mock_load, \
-         patch("soup_cli.commands.infer._generate") as mock_generate, \
-         patch("torch.cuda.is_available") as mock_is_available, \
-         patch("soup_cli.utils.gpu.detect_device") as mock_detect_device:
-
+    with (
+        patch("soup_cli.commands.infer._load_model") as mock_load,
+        patch("soup_cli.commands.infer._generate") as mock_generate,
+        patch("torch.cuda.is_available") as mock_is_available,
+        patch("soup_cli.utils.gpu.detect_device") as mock_detect_device,
+    ):
         mock_load.return_value = ("mock_model", "mock_tokenizer")
         mock_generate.return_value = ("mock response", 10)
         mock_is_available.return_value = False
@@ -148,19 +145,26 @@ def test_bench_passes_hf_repo_id_byte_identical_with_slashes(tmp_path, monkeypat
     monkeypatch.chdir(tmp_path)
     from unittest.mock import patch
 
-    with patch("soup_cli.commands.infer._load_model") as mock_load, \
-         patch("soup_cli.commands.infer._generate") as mock_generate, \
-         patch("torch.cuda.is_available", return_value=False), \
-         patch("soup_cli.utils.gpu.detect_device", return_value=("cpu", None)):
-
+    with (
+        patch("soup_cli.commands.infer._load_model") as mock_load,
+        patch("soup_cli.commands.infer._generate") as mock_generate,
+        patch("torch.cuda.is_available", return_value=False),
+        patch("soup_cli.utils.gpu.detect_device", return_value=("cpu", None)),
+    ):
         mock_load.return_value = ("mock_model", "mock_tokenizer")
         mock_generate.return_value = ("mock response", 10)
 
-        result = runner.invoke(app, [
-            "bench", "HuggingFaceTB/SmolLM2-135M-Instruct",
-            "--num-prompts", "1",
-            "--max-tokens", "2",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "bench",
+                "HuggingFaceTB/SmolLM2-135M-Instruct",
+                "--num-prompts",
+                "1",
+                "--max-tokens",
+                "2",
+            ],
+        )
 
         assert result.exit_code == 0, (result.output, repr(result.exception))
         mock_load.assert_called_once()
@@ -178,19 +182,26 @@ def test_bench_passes_is_local_true_for_local_dir(tmp_path, monkeypatch):
     dummy_model.mkdir()
     from unittest.mock import patch
 
-    with patch("soup_cli.commands.infer._load_model") as mock_load, \
-         patch("soup_cli.commands.infer._generate") as mock_generate, \
-         patch("torch.cuda.is_available", return_value=False), \
-         patch("soup_cli.utils.gpu.detect_device", return_value=("cpu", None)):
-
+    with (
+        patch("soup_cli.commands.infer._load_model") as mock_load,
+        patch("soup_cli.commands.infer._generate") as mock_generate,
+        patch("torch.cuda.is_available", return_value=False),
+        patch("soup_cli.utils.gpu.detect_device", return_value=("cpu", None)),
+    ):
         mock_load.return_value = ("mock_model", "mock_tokenizer")
         mock_generate.return_value = ("mock response", 10)
 
-        result = runner.invoke(app, [
-            "bench", str(dummy_model),
-            "--num-prompts", "1",
-            "--max-tokens", "2",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "bench",
+                str(dummy_model),
+                "--num-prompts",
+                "1",
+                "--max-tokens",
+                "2",
+            ],
+        )
 
         assert result.exit_code == 0, (result.output, repr(result.exception))
         mock_load.assert_called_once()

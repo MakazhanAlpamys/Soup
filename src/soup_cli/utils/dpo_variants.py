@@ -31,6 +31,7 @@ if TYPE_CHECKING:
     class RefModelRegenCallback(TrainerCallback):
         pass
 
+
 # Allowed schedule shapes, kept as a frozenset for runtime immutability.
 SUPPORTED_SCHEDULES: frozenset[str] = frozenset({"linear", "cosine", "exponential"})
 
@@ -70,9 +71,7 @@ def compute_beta_at_step(
     _validate_finite_positive("beta_start", beta_start)
     _validate_finite_positive("beta_end", beta_end)
     if isinstance(total_steps, bool) or not isinstance(total_steps, int):
-        raise ValueError(
-            f"total_steps must be int; got {type(total_steps).__name__}"
-        )
+        raise ValueError(f"total_steps must be int; got {type(total_steps).__name__}")
     if isinstance(step, bool) or not isinstance(step, int):
         # Defence-in-depth: bool is a subclass of int. Project policy
         # (v0.30.0 Candidate) rejects bool for int fields.
@@ -80,9 +79,7 @@ def compute_beta_at_step(
     if total_steps < 0:
         raise ValueError(f"total_steps={total_steps!r} must be >= 0")
     if schedule not in SUPPORTED_SCHEDULES:
-        raise ValueError(
-            f"Unknown schedule={schedule!r}; supported: {sorted(SUPPORTED_SCHEDULES)}"
-        )
+        raise ValueError(f"Unknown schedule={schedule!r}; supported: {sorted(SUPPORTED_SCHEDULES)}")
     if total_steps == 0:
         return float(beta_end)
     if step <= 0:
@@ -125,8 +122,7 @@ class _BetaScheduleCallback_body:  # type: ignore[misc]  # noqa: N801
         _validate_finite_positive("beta_end", beta_end)
         if schedule not in SUPPORTED_SCHEDULES:
             raise ValueError(
-                f"Unknown schedule={schedule!r}; supported: "
-                f"{sorted(SUPPORTED_SCHEDULES)}"
+                f"Unknown schedule={schedule!r}; supported: {sorted(SUPPORTED_SCHEDULES)}"
             )
         self.beta_start = float(beta_start)
         self.beta_end = float(beta_end)
@@ -182,13 +178,9 @@ class _RefModelRegenCallback_body:  # type: ignore[misc]  # noqa: N801
 
     def __init__(self, every_n_epochs: int) -> None:
         if isinstance(every_n_epochs, bool) or not isinstance(every_n_epochs, int):
-            raise TypeError(
-                f"every_n_epochs must be int; got {type(every_n_epochs).__name__}"
-            )
+            raise TypeError(f"every_n_epochs must be int; got {type(every_n_epochs).__name__}")
         if every_n_epochs < 1:
-            raise ValueError(
-                f"every_n_epochs={every_n_epochs!r} must be >= 1"
-            )
+            raise ValueError(f"every_n_epochs={every_n_epochs!r} must be >= 1")
         self.every_n_epochs = every_n_epochs
         self._trainer = None
         self.regen_count = 0
@@ -234,7 +226,8 @@ class _RefModelRegenCallback_body:  # type: ignore[misc]  # noqa: N801
 
             logging.getLogger(__name__).warning(
                 "RefModelRegenCallback: load_state_dict failed (%s); ref "
-                "model not updated this epoch.", type(exc).__name__,
+                "model not updated this epoch.",
+                type(exc).__name__,
             )
             return
 
@@ -302,4 +295,3 @@ def __getattr__(name: str):  # PEP 562
         globals()[name] = cls
         return cls
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-

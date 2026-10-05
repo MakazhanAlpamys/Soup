@@ -83,28 +83,20 @@ def _compute_distill_term(
     if isinstance(temperature, bool):
         raise TypeError(f"temperature must not be bool, got {temperature!r}")
     if not isinstance(temperature, (int, float)):
-        raise TypeError(
-            f"temperature must be float, got {type(temperature).__name__}"
-        )
+        raise TypeError(f"temperature must be float, got {type(temperature).__name__}")
     if not math.isfinite(float(temperature)) or float(temperature) <= 0:
-        raise ValueError(
-            f"temperature must be finite and positive, got {temperature!r}"
-        )
+        raise ValueError(f"temperature must be finite and positive, got {temperature!r}")
     if divergence not in ("forward_kl", "reverse_kl", "js"):
         raise ValueError(f"Unknown divergence {divergence!r}")
     if chunk_size is not None:
         if isinstance(chunk_size, bool):
             raise TypeError(f"chunk_size must not be bool, got {chunk_size!r}")
         if not isinstance(chunk_size, int):
-            raise TypeError(
-                f"chunk_size must be int, got {type(chunk_size).__name__}"
-            )
+            raise TypeError(f"chunk_size must be int, got {type(chunk_size).__name__}")
         if chunk_size < 1:
             raise ValueError(f"chunk_size must be >= 1, got {chunk_size}")
     if not isinstance(use_checkpoint, bool):
-        raise TypeError(
-            f"use_checkpoint must be bool, got {type(use_checkpoint).__name__}"
-        )
+        raise TypeError(f"use_checkpoint must be bool, got {type(use_checkpoint).__name__}")
 
     # Causal-LM alignment: logits at position i predict token i+1, so the CE
     # term shifts (logits[:, :-1] vs labels[:, 1:]). The KD term must shift the
@@ -178,10 +170,9 @@ def _compute_distill_term(
                 s_chunk = s_flat[i : i + c_size]
                 t_chunk = t_flat[i : i + c_size]
                 if t_chunk.requires_grad:
-                    chunk_sum = checkpoint(
-                        _chunk_kernel, s_chunk, t_chunk, use_reentrant=False
-                    )
+                    chunk_sum = checkpoint(_chunk_kernel, s_chunk, t_chunk, use_reentrant=False)
                 else:
+
                     def _step(s_in: "_torch_typ.Tensor", _t=t_chunk) -> "_torch_typ.Tensor":
                         return _chunk_kernel(s_in, _t)
 
@@ -288,10 +279,7 @@ class DistillNonfiniteTracker:
         import torch
 
         with torch.no_grad():
-            if (
-                self._device_counter is None
-                or self._device_counter.device != distill_loss.device
-            ):
+            if self._device_counter is None or self._device_counter.device != distill_loss.device:
                 self._device_counter = torch.zeros(
                     (), dtype=torch.int32, device=distill_loss.device
                 )
@@ -329,9 +317,7 @@ class DistillNonfiniteTracker:
         from rich.panel import Panel
 
         temp_str = (
-            f" (distill_temperature={self.temperature})"
-            if self.temperature is not None
-            else ""
+            f" (distill_temperature={self.temperature})" if self.temperature is not None else ""
         )
         teacher_display = escape(str(self.teacher_name))
         msg = (
@@ -481,17 +467,13 @@ class DistillTrainerWrapper:
         apply_training_seed(tcfg)
 
         if tcfg.teacher_model is None:
-            raise ValueError(
-                "task='distill' requires training.teacher_model to be set"
-            )
+            raise ValueError("task='distill' requires training.teacher_model to be set")
         divergence = validate_divergence(tcfg.distill_divergence or "forward_kl")
         temperature = float(tcfg.distill_temperature or 2.0)
 
         # v0.71.12 #145 — sequence-level KD vs token-level logit KD.
         sequence_mode = getattr(tcfg, "distill_mode", "token") == "sequence"
-        if sequence_mode and (
-            tcfg.uld_strategy is not None or tcfg.minillm_enabled
-        ):
+        if sequence_mode and (tcfg.uld_strategy is not None or tcfg.minillm_enabled):
             raise ValueError(
                 "distill_mode='sequence' is incompatible with uld_strategy / "
                 "minillm_enabled (those are token/logit-level distillation). "
@@ -524,9 +506,7 @@ class DistillTrainerWrapper:
         # #1151: moe_lora picks the expert-FFN targets; see sft.py.
         from soup_cli.utils.moe import resolve_moe_lora_targets
 
-        target_modules = resolve_moe_lora_targets(
-            self.model, tcfg, target_modules, console
-        )
+        target_modules = resolve_moe_lora_targets(self.model, tcfg, target_modules, console)
         lora_config = build_lora_config(
             tcfg.lora,
             target_modules=target_modules,
@@ -536,6 +516,7 @@ class DistillTrainerWrapper:
             apply_post_lora_patches,
             apply_pre_lora_patches,
         )
+
         apply_pre_lora_patches(self.model, cfg.base)
         self.model = get_peft_model(self.model, lora_config)
         apply_post_lora_patches(self.model)
@@ -585,10 +566,7 @@ class DistillTrainerWrapper:
             teacher_tokenizer = AutoTokenizer.from_pretrained(
                 tcfg.teacher_model, trust_remote_code=teacher_trc
             )
-            if (
-                teacher_tokenizer.pad_token is None
-                and teacher_tokenizer.eos_token is not None
-            ):
+            if teacher_tokenizer.pad_token is None and teacher_tokenizer.eos_token is not None:
                 teacher_tokenizer.pad_token = teacher_tokenizer.eos_token
             seq_budget = min(int(cfg.data.max_length), 256)
             console.print(
@@ -657,10 +635,7 @@ class DistillTrainerWrapper:
                 _require_uld_id_compatible_tokenizers(
                     tcfg.uld_strategy, self.tokenizer, _teacher_tok_for_check
                 )
-            console.print(
-                f"[green]Cross-tokenizer ULD enabled[/] "
-                f"(strategy={tcfg.uld_strategy})"
-            )
+            console.print(f"[green]Cross-tokenizer ULD enabled[/] (strategy={tcfg.uld_strategy})")
         elif (
             teacher_vocab is not None
             and student_vocab is not None
@@ -692,9 +667,7 @@ class DistillTrainerWrapper:
                 MiniLLMConfig(
                     teacher_mix_ratio=float(tcfg.minillm_teacher_mix_ratio),
                     length_normalize=bool(tcfg.minillm_length_normalize),
-                    pretrain_anchor_weight=float(
-                        tcfg.minillm_pretrain_anchor_weight
-                    ),
+                    pretrain_anchor_weight=float(tcfg.minillm_pretrain_anchor_weight),
                     pretrain_anchor_path=tcfg.minillm_pretrain_anchor_path,
                     on_policy=bool(tcfg.minillm_on_policy),
                     rollout_length=rollout_len,
@@ -741,8 +714,7 @@ class DistillTrainerWrapper:
 
         batch_size = tcfg.batch_size if tcfg.batch_size != "auto" else 4
         total_steps = (
-            math.ceil(len(train_ds) / batch_size / tcfg.gradient_accumulation_steps)
-            * tcfg.epochs
+            math.ceil(len(train_ds) / batch_size / tcfg.gradient_accumulation_steps) * tcfg.epochs
         )
         warmup_steps = int(total_steps * tcfg.warmup_ratio)
 
@@ -801,9 +773,7 @@ class DistillTrainerWrapper:
         self.nonfinite_tracker = nonfinite_tracker
 
         class _DistillTrainer(Trainer):
-            def __init__(
-                self, *args, tracker: DistillNonfiniteTracker | None = None, **kwargs
-            ):
+            def __init__(self, *args, tracker: DistillNonfiniteTracker | None = None, **kwargs):
                 super().__init__(*args, **kwargs)
                 # compute_loss consumes Trainer's full accumulation-window
                 # target count. Keeping this True makes Trainer collect that
@@ -829,13 +799,11 @@ class DistillTrainerWrapper:
                     """Turn this microbatch mean into its share of the window mean."""
                     if num_items_in_batch is None or labels is None:
                         return loss
-                    local_items = labels[..., 1:].ne(-100).sum().to(
-                        device=loss.device, dtype=loss.dtype
+                    local_items = (
+                        labels[..., 1:].ne(-100).sum().to(device=loss.device, dtype=loss.dtype)
                     )
                     if torch.is_tensor(num_items_in_batch):
-                        window_items = num_items_in_batch.to(
-                            device=loss.device, dtype=loss.dtype
-                        )
+                        window_items = num_items_in_batch.to(device=loss.device, dtype=loss.dtype)
                     else:
                         window_items = loss.new_tensor(num_items_in_batch)
                     weighted = loss * local_items / window_items.clamp(min=1)
@@ -862,9 +830,7 @@ class DistillTrainerWrapper:
                             ignore_index=-100,
                         )
                     else:
-                        ce_loss = (student_logits.sum() * 0.0).to(
-                            dtype=student_logits.dtype
-                        )
+                        ce_loss = (student_logits.sum() * 0.0).to(dtype=student_logits.dtype)
 
                 # v0.71.12 #145 — sequence-level KD trains the student with
                 # plain CE on teacher-generated text. The teacher has already
@@ -903,9 +869,7 @@ class DistillTrainerWrapper:
 
                     student_ids = inputs["input_ids"]
                     s_mask = inputs.get("attention_mask")
-                    texts = _student_tokenizer.batch_decode(
-                        student_ids, skip_special_tokens=True
-                    )
+                    texts = _student_tokenizer.batch_decode(student_ids, skip_special_tokens=True)
                     t_enc = _uld_teacher_tokenizer(
                         texts,
                         return_tensors="pt",
@@ -924,9 +888,7 @@ class DistillTrainerWrapper:
                             input_ids=t_ids,
                             attention_mask=t_mask.to(t_dev),
                         )
-                        aligned_teacher_logits = t_out.logits.to(
-                            student_logits.device
-                        )
+                        aligned_teacher_logits = t_out.logits.to(student_logits.device)
                     # Per-token decoded strings, trimmed to the real (non-pad)
                     # length so pad tokens don't pollute the alignment. Special
                     # tokens decode to "" as on the teacher side (#1426), so
@@ -934,14 +896,10 @@ class DistillTrainerWrapper:
                     s_strings = []
                     s_ids_list = student_ids.tolist()
                     for bi, row in enumerate(s_ids_list):
-                        s_len = (
-                            int(s_mask[bi].sum()) if s_mask is not None else len(row)
-                        )
+                        s_len = int(s_mask[bi].sum()) if s_mask is not None else len(row)
                         s_strings.append(
                             [
-                                _student_tokenizer.decode(
-                                    [int(i)], skip_special_tokens=True
-                                )
+                                _student_tokenizer.decode([int(i)], skip_special_tokens=True)
                                 for i in row[:s_len]
                             ]
                         )
@@ -949,10 +907,7 @@ class DistillTrainerWrapper:
                     for bi, row in enumerate(t_ids.tolist()):
                         t_len = int(t_mask[bi].sum())
                         t_strings.append(
-                            [
-                                _uld_teacher_tokenizer.decode([int(i)])
-                                for i in row[:t_len]
-                            ]
+                            [_uld_teacher_tokenizer.decode([int(i)]) for i in row[:t_len]]
                         )
                     distill_loss = uld_aligned_loss(
                         student_logits,
@@ -1002,15 +957,16 @@ class DistillTrainerWrapper:
                 elif _minillm_cb is not None:
                     # v0.71.11 #237 — MiniLLM teacher-mixed reverse-KL +
                     # pretrain anchor.
-                    distill_loss = _minillm_cb.distill_term(
-                        student_logits, teacher_logits, labels
-                    )
+                    distill_loss = _minillm_cb.distill_term(student_logits, teacher_logits, labels)
                     anchor = _minillm_cb.anchor_term(model)
                 else:
                     # Mask padding + prompt tokens so the divergence is measured
                     # only over the completion tokens (parity with the ULD path).
                     distill_loss = _compute_distill_term(
-                        student_logits, teacher_logits, divergence, temperature,
+                        student_logits,
+                        teacher_logits,
+                        divergence,
+                        temperature,
                         labels=labels,
                         attention_mask=inputs.get("attention_mask"),
                         chunk_size=_distill_chunk_size,
@@ -1079,6 +1035,7 @@ class DistillTrainerWrapper:
             attach_plugin_callback,
             attach_relora_callback,
         )
+
         # LoRA+ optimizer (#724/#745) — build and attach now that the trainer exists.
         attach_loraplus_optimizer(self.trainer, tcfg)
         attach_relora_callback(self.trainer, tcfg)
@@ -1099,8 +1056,7 @@ class DistillTrainerWrapper:
     ) -> dict:
         if self.trainer is None:
             raise RuntimeError(
-                "DistillTrainerWrapper.train() called before setup(). "
-                "Call setup(dataset) first."
+                "DistillTrainerWrapper.train() called before setup(). Call setup(dataset) first."
             )
         start = time.time()
         if display is not None:

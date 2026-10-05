@@ -92,10 +92,7 @@ def _check_sha(value: object, fld: str) -> None:
     if not isinstance(value, str):
         raise TypeError(f"{fld} must be str, got {type(value).__name__}")
     if len(value) != _SHA_REGEX_LEN:
-        raise ValueError(
-            f"{fld} sha must be {_SHA_REGEX_LEN} hex chars, "
-            f"got len={len(value)}"
-        )
+        raise ValueError(f"{fld} sha must be {_SHA_REGEX_LEN} hex chars, got len={len(value)}")
     try:
         int(value, 16)
     except ValueError as exc:
@@ -124,9 +121,7 @@ class TrainingState:
 
     def __post_init__(self) -> None:
         if not isinstance(self.plan, TrainingPlan):
-            raise TypeError(
-                f"plan must be TrainingPlan, got {type(self.plan).__name__}"
-            )
+            raise TypeError(f"plan must be TrainingPlan, got {type(self.plan).__name__}")
         if not isinstance(self.applied, bool):
             raise TypeError("applied must be bool")
         if self.applied_at is not None and not isinstance(self.applied_at, str):
@@ -162,9 +157,7 @@ def compute_config_sha(config: Mapping[str, Any]) -> str:
     """
     if not isinstance(config, Mapping):
         raise TypeError(f"config must be a mapping, got {type(config).__name__}")
-    blob = json.dumps(
-        config, sort_keys=True, ensure_ascii=False, allow_nan=False
-    ).encode("utf-8")
+    blob = json.dumps(config, sort_keys=True, ensure_ascii=False, allow_nan=False).encode("utf-8")
     return hashlib.sha256(blob).hexdigest()
 
 
@@ -329,9 +322,7 @@ def _plan_from_dict(d: Mapping[str, Any]) -> TrainingPlan:
 def write_state(state: TrainingState, path: str) -> None:
     """Atomically write a ``TrainingState`` to JSON under cwd containment."""
     if not isinstance(state, TrainingState):
-        raise TypeError(
-            f"state must be TrainingState, got {type(state).__name__}"
-        )
+        raise TypeError(f"state must be TrainingState, got {type(state).__name__}")
     payload = {
         "schema_version": "1",
         "plan": _plan_to_dict(state.plan),
@@ -373,9 +364,7 @@ def read_state(path: str) -> TrainingState:
     plan = _plan_from_dict(plan_raw)
     applied_raw = payload.get("applied", False)
     if not isinstance(applied_raw, bool):
-        raise ValueError(
-            f"state.applied must be bool, got {type(applied_raw).__name__}"
-        )
+        raise ValueError(f"state.applied must be bool, got {type(applied_raw).__name__}")
     return TrainingState(
         plan=plan,
         applied=applied_raw,
@@ -391,13 +380,9 @@ def detect_drift(state: TrainingState, plan_now: TrainingPlan) -> DriftReport:
     drift. ``apply`` refuses to proceed when ``has_drift=True``.
     """
     if not isinstance(state, TrainingState):
-        raise TypeError(
-            f"state must be TrainingState, got {type(state).__name__}"
-        )
+        raise TypeError(f"state must be TrainingState, got {type(state).__name__}")
     if not isinstance(plan_now, TrainingPlan):
-        raise TypeError(
-            f"plan_now must be TrainingPlan, got {type(plan_now).__name__}"
-        )
+        raise TypeError(f"plan_now must be TrainingPlan, got {type(plan_now).__name__}")
     changed: list[str] = []
     if state.plan.base != plan_now.base:
         changed.append("base")

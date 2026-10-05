@@ -55,9 +55,7 @@ class AttestationStatement:
         if not isinstance(self.stage, str) or "\x00" in self.stage:
             raise ValueError("stage must be a non-null-byte str")
         if self.stage not in _STAGES:
-            raise ValueError(
-                f"stage must be one of {sorted(_STAGES)}, got {self.stage!r}"
-            )
+            raise ValueError(f"stage must be one of {sorted(_STAGES)}, got {self.stage!r}")
         if not isinstance(self.subject_name, str) or not self.subject_name:
             raise ValueError("subject_name must be a non-empty str")
         if "\x00" in self.subject_name or len(self.subject_name) > _MAX_NAME:
@@ -139,7 +137,10 @@ def write_attestation(s: AttestationStatement, output_path: str) -> str:
     """Atomic write of the in-toto Statement to ``output_path`` (cwd-contained)."""
     text = render_attestation(s)
     return atomic_write_text(
-        text, output_path, prefix=".attest.", suffix=".json.tmp",
+        text,
+        output_path,
+        prefix=".attest.",
+        suffix=".json.tmp",
     )
 
 
@@ -241,9 +242,7 @@ def verify_sigstore_attestation(
     return True
 
 
-def verify_attestation(
-    payload: bytes, signature_hex: str, public_key_pem_str: str
-) -> bool:
+def verify_attestation(payload: bytes, signature_hex: str, public_key_pem_str: str) -> bool:
     """Verify an ed25519 attestation signature over ``payload``.
 
     Returns ``False`` on any verification failure (bad signature, wrong key,

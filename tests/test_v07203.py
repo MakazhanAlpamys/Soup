@@ -25,10 +25,24 @@ pytestmark = pytest.mark.filterwarnings("ignore::UserWarning")
 #: forward+backward+step on this box with ``torch.cuda.max_memory_allocated()``
 #: recorded. These are the numbers the estimator is accountable to; a change
 #: that stops reproducing them is a regression in the estimator, not in the test.
-_SMOL = dict(pool=14160384, extras=56624256, adapter=921600, vocab=49152, hidden=576,
-             intermediate=1536, n_layers=30)
-_QWEN = dict(pool=59649536, extras=272271104, adapter=1081344, vocab=151936, hidden=896,
-             intermediate=4864, n_layers=24)
+_SMOL = dict(
+    pool=14160384,
+    extras=56624256,
+    adapter=921600,
+    vocab=49152,
+    hidden=576,
+    intermediate=1536,
+    n_layers=30,
+)
+_QWEN = dict(
+    pool=59649536,
+    extras=272271104,
+    adapter=1081344,
+    vocab=151936,
+    hidden=896,
+    intermediate=4864,
+    n_layers=24,
+)
 
 MEASURED_VRAM_GRID = [
     dict(label="SmolLM2-135M B1 S256", batch=1, seq=256, peak=284555264, **_SMOL),
@@ -111,15 +125,11 @@ class TestSecondStackDirectionProperty:
     would break a claim that is true on the stack it was fitted to.
     """
 
-    @pytest.mark.parametrize(
-        "row", SECOND_STACK_VRAM_GRID, ids=lambda r: r["label"]
-    )
+    @pytest.mark.parametrize("row", SECOND_STACK_VRAM_GRID, ids=lambda r: r["label"])
     def test_never_under_predicts_on_the_second_stack(self, row):
         assert _predict(row) >= row["peak"], row["label"]
 
-    @pytest.mark.parametrize(
-        "row", SECOND_STACK_VRAM_GRID, ids=lambda r: r["label"]
-    )
+    @pytest.mark.parametrize("row", SECOND_STACK_VRAM_GRID, ids=lambda r: r["label"])
     def test_sequence_axis_is_actually_exercised(self, row):
         """The rows are only worth anything if they are past the first grid's
         ceiling — a regression that quietly shortened them would leave this file
@@ -221,9 +231,7 @@ class TestLogitsBytesIsMeasuredNotDerived:
     def test_without_the_loss_only_the_bf16_logits_are_live(self):
         from soup_cli.utils.layer_stream import estimate_logits_bytes
 
-        got = estimate_logits_bytes(
-            vocab_size=1000, seq_len=10, batch_size=1, upcast_fp32=False
-        )
+        got = estimate_logits_bytes(vocab_size=1000, seq_len=10, batch_size=1, upcast_fp32=False)
         assert got == 10 * 1000 * 2
 
     def test_rejects_non_positive_dimensions(self):
@@ -353,9 +361,7 @@ class TestEstimateAdapterParams:
             hidden_size = 64
             num_hidden_layers = 2
 
-        assert SFTTrainerWrapper._estimate_adapter_params(None, _T(), _C()) == (
-            2 * 4 * 2 * 8 * 64
-        )
+        assert SFTTrainerWrapper._estimate_adapter_params(None, _T(), _C()) == (2 * 4 * 2 * 8 * 64)
 
     def test_moe_lora_auto_counts_expert_instances_not_pattern_names(self):
         from soup_cli.trainer.sft import SFTTrainerWrapper
@@ -404,8 +410,15 @@ class TestUntiedEmbeddingsAreBudgeted:
         from soup_cli.utils.layer_stream import estimate_stream_peak_vram
 
         kw = dict(
-            layer_bytes=1000, buffers=2, adapter_params=0, vocab_size=100,
-            hidden_size=8, intermediate_size=16, n_layers=2, seq_len=4, batch_size=1,
+            layer_bytes=1000,
+            buffers=2,
+            adapter_params=0,
+            vocab_size=100,
+            hidden_size=8,
+            intermediate_size=16,
+            n_layers=2,
+            seq_len=4,
+            batch_size=1,
         )
         tied = estimate_stream_peak_vram(extras_bytes=1_000_000, **kw)
         untied = estimate_stream_peak_vram(extras_bytes=2_000_000, **kw)
@@ -430,9 +443,7 @@ class TestUntiedEmbeddingsAreBudgeted:
             extras_bytes=0, large_layer_bytes=1_000_000, **kw
         )
         old_tied = estimate_stream_peak_vram(extras_bytes=1_000_000, **kw)
-        streamed_tied = estimate_stream_peak_vram(
-            extras_bytes=0, large_layer_bytes=1_000_000, **kw
-        )
+        streamed_tied = estimate_stream_peak_vram(extras_bytes=0, large_layer_bytes=1_000_000, **kw)
 
         assert old_untied - streamed_untied == 1_000_000
         assert old_tied == streamed_tied
@@ -479,9 +490,7 @@ class TestStreamFitDecision:
         top -- would refuse precisely the run this feature exists to enable."""
         from soup_cli.utils.layer_stream import decide_stream_fit
 
-        assert decide_stream_fit(
-            predicted_bytes=int(3.32e9), available_bytes=int(3.445e9)
-        ).fits
+        assert decide_stream_fit(predicted_bytes=int(3.32e9), available_bytes=int(3.445e9)).fits
 
     def test_the_measured_spill_config_is_refused(self):
         """Qwen2.5-0.5B B4 S512 demanded 4.82 GB on a 4.29 GB card. Windows did
@@ -490,9 +499,7 @@ class TestStreamFitDecision:
         a silent 10x slowdown."""
         from soup_cli.utils.layer_stream import decide_stream_fit
 
-        assert not decide_stream_fit(
-            predicted_bytes=int(4.82e9), available_bytes=int(3.445e9)
-        ).fits
+        assert not decide_stream_fit(predicted_bytes=int(4.82e9), available_bytes=int(3.445e9)).fits
 
     def test_reason_names_the_knobs_the_user_can_actually_turn(self):
         from soup_cli.utils.layer_stream import decide_stream_fit
@@ -602,9 +609,7 @@ class TestThroughputForecast:
         from soup_cli.utils.layer_stream import forecast_stream_throughput
 
         with pytest.raises(ValueError, match="finite"):
-            forecast_stream_throughput(
-                params=1, effective_tflops=float("inf"), tokens_per_epoch=1
-            )
+            forecast_stream_throughput(params=1, effective_tflops=float("inf"), tokens_per_epoch=1)
 
 
 #: Upper plausibility bound for the measured GEMM ceiling, in TFLOPS.
@@ -792,9 +797,7 @@ class TestIssue444BestRepeatSelection:
             lambda device: "bfloat16",
         )
 
-        res = layer_stream_runtime.measure_gemm_tflops(
-            device="cuda", iters=8, reps=4, size=4096
-        )
+        res = layer_stream_runtime.measure_gemm_tflops(device="cuda", iters=8, reps=4, size=4096)
         assert res is not None
         assert len(res.samples) == 4
         # Repeat index 1 (20ms) is 5x faster than repeat index 0 (100ms)
@@ -876,9 +879,7 @@ class TestIssue444BestRepeatSelection:
         assert res.dtype == resolved_dtype
         assert allocated_dtypes == [resolved_dtype, resolved_dtype]
 
-    def test_zero_elapsed_timing_returns_none(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_zero_elapsed_timing_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Degenerate timing (seconds <= 0) must return None without raising."""
         import sys
 
@@ -933,9 +934,7 @@ class TestIssue444BestRepeatSelection:
         got = layer_stream_runtime.measure_gemm_tflops(device="cuda", reps=4)
         assert got is None
 
-    def test_zero_iters_returns_none(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_zero_iters_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Degenerate iters=0 must yield non-positive rates and return None."""
         import sys
 
@@ -989,6 +988,7 @@ class TestIssue444BestRepeatSelection:
         )
         got = layer_stream_runtime.measure_gemm_tflops(device="cuda", iters=0, reps=4)
         assert got is None
+
 
 class TestIssue617PanelDtype:
     """Regression coverage for the user-visible GEMM dtype in the stream panel."""
@@ -1094,8 +1094,7 @@ class TestIssue617PanelDtype:
 
         panel_text = "\n".join(lines)
         assert (
-            f"(from 6.75 TFLOPS measured on this card now "
-            f"using {dtype} @ 862 MHz)"
+            f"(from 6.75 TFLOPS measured on this card now using {dtype} @ 862 MHz)"
         ) in panel_text
 
 
@@ -1112,7 +1111,7 @@ class TestBatchSizeIsSupported:
         assert cfg.training.stream_layers is True
 
     def test_auto_batch_size_is_still_refused(self):
-        """"auto" resolves by OOM-probing a resident model, which streaming does
+        """ "auto" resolves by OOM-probing a resident model, which streaming does
         not have -- it would probe a model that never loads."""
         from soup_cli.config.loader import load_config_from_string
 
@@ -1129,8 +1128,7 @@ class TestArchAllowlist:
 
     @pytest.mark.parametrize(
         "family",
-        ["llama", "qwen2", "qwen3", "mistral", "gemma", "gemma2", "gemma3_text",
-         "phi", "phi3"],
+        ["llama", "qwen2", "qwen3", "mistral", "gemma", "gemma2", "gemma3_text", "phi", "phi3"],
     )
     def test_gated_families_are_accepted(self, family):
         from soup_cli.utils.layer_stream import stream_arch_of
@@ -1318,9 +1316,7 @@ class TestDiskKindMeasuredFallback:
 
         self._fake_linux(monkeypatch, devices=["sda"], rotational=0, measured_bps=None)
         calls = []
-        monkeypatch.setattr(
-            ls, "_measure_seq_read_bytes_per_s", lambda _p: calls.append(1) or 9e9
-        )
+        monkeypatch.setattr(ls, "_measure_seq_read_bytes_per_s", lambda _p: calls.append(1) or 9e9)
         assert ls.detect_disk_kind("/data") == "ssd"
         assert calls == [], "measured probe ran on an authoritative rotational=0"
 
@@ -1415,9 +1411,7 @@ class TestDiskKindMeasuredFallback:
         assert len(readv_calls) == ls._MEASURE_READ_SAMPLES
         assert best == ls._MEASURE_READ_BYTES / 1.0  # bytes / fastest elapsed (1s)
 
-    def test_probe_writes_into_the_target_volume_not_its_parent(
-        self, monkeypatch, tmp_path
-    ):
+    def test_probe_writes_into_the_target_volume_not_its_parent(self, monkeypatch, tmp_path):
         """The caller passes shard_dir (a directory); the scratch probe must land
         INSIDE it, not its parent — else a mount point's throughput is measured
         on the wrong filesystem."""
@@ -1467,18 +1461,14 @@ class TestDiskKindMeasuredFallback:
         from soup_cli.config.loader import load_config_from_string
 
         with pytest.raises(ValueError, match="stream_disk_kind"):
-            load_config_from_string(
-                yaml.safe_dump(_stream_disk_kind_config(stream_layers=False))
-            )
+            load_config_from_string(yaml.safe_dump(_stream_disk_kind_config(stream_layers=False)))
 
     def test_stream_disk_kind_is_accepted_while_streaming(self):
         import yaml
 
         from soup_cli.config.loader import load_config_from_string
 
-        cfg = load_config_from_string(
-            yaml.safe_dump(_stream_disk_kind_config(stream_layers=True))
-        )
+        cfg = load_config_from_string(yaml.safe_dump(_stream_disk_kind_config(stream_layers=True)))
         assert cfg.training.stream_disk_kind == "nvme"
 
 
@@ -1519,9 +1509,7 @@ class TestDoctorReportsTheDiskKind:
 
         from soup_cli.cli import app
 
-        monkeypatch.setattr(
-            "soup_cli.utils.layer_stream.detect_disk_kind", lambda *_a, **_k: kind
-        )
+        monkeypatch.setattr("soup_cli.utils.layer_stream.detect_disk_kind", lambda *_a, **_k: kind)
         result = CliRunner().invoke(app, ["doctor", "--disk"])
         plain = _strip_ansi(result.output)
         assert "Disk type" in plain
@@ -1546,9 +1534,7 @@ class TestDoctorReportsTheDiskKind:
         assert calls == [], "the expensive probe ran without --disk"
         assert "Disk type" not in plain
 
-    def test_a_failing_probe_degrades_to_unknown_instead_of_crashing(
-        self, monkeypatch
-    ):
+    def test_a_failing_probe_degrades_to_unknown_instead_of_crashing(self, monkeypatch):
         from typer.testing import CliRunner
 
         from soup_cli.cli import app
@@ -1842,8 +1828,12 @@ class TestDiskTier:
         ref = get_peft_model(
             resident,
             LoraConfig(
-                r=4, lora_alpha=8, lora_dropout=0.0, bias="none",
-                target_modules=["q_proj", "v_proj"], task_type=TaskType.CAUSAL_LM,
+                r=4,
+                lora_alpha=8,
+                lora_dropout=0.0,
+                bias="none",
+                target_modules=["q_proj", "v_proj"],
+                task_type=TaskType.CAUSAL_LM,
             ),
         )
         _sync_lora(disk, ref)
@@ -1900,9 +1890,7 @@ class TestDiskTier:
         The RAM-tier control is the other half: `RamSource` reads nothing
         ahead, so a number there would be invented.
         """
-        _, runtime, _ = _tiny_stream(
-            tmp_path, name="d1", tier="disk", read_ahead=3
-        )
+        _, runtime, _ = _tiny_stream(tmp_path, name="d1", tier="disk", read_ahead=3)
         stats = runtime.stats()
         assert stats["read_ahead"] == 3
         assert stats["read_ahead"] == runtime.source.read_ahead
@@ -1956,9 +1944,7 @@ class TestDiskTier:
             DiskSource(shards, 3, spec)
         assert "layer_002" in str(excinfo.value) or "No such" in str(excinfo.value)
 
-    def test_runtime_close_stops_the_reader_thread_and_frees_the_staging(
-        self, tmp_path
-    ):
+    def test_runtime_close_stops_the_reader_thread_and_frees_the_staging(self, tmp_path):
         """What close() releases on this tier changed with #971.
 
         There are no shard handles to leak any more — ``AsyncDiskSource`` opens
@@ -2027,8 +2013,15 @@ class TestAutoTierFallback:
     threading the decision into `build_streamed_model`."""
 
     def _run(
-        self, tmp_path, monkeypatch, *, free_ram, stream_source,
-        disk_kind="nvme", device="cpu", extra_training_yaml="",
+        self,
+        tmp_path,
+        monkeypatch,
+        *,
+        free_ram,
+        stream_source,
+        disk_kind="nvme",
+        device="cpu",
+        extra_training_yaml="",
     ):
         from soup_cli.config.loader import load_config_from_string
         from soup_cli.trainer.sft import SFTTrainerWrapper
@@ -2041,9 +2034,7 @@ class TestAutoTierFallback:
         monkeypatch.setattr(
             "soup_cli.utils.spectrum_scan.resolve_model_weights", lambda *_a, **_k: weights
         )
-        monkeypatch.setattr(
-            "soup_cli.utils.layer_stream.free_ram_bytes", lambda: free_ram
-        )
+        monkeypatch.setattr("soup_cli.utils.layer_stream.free_ram_bytes", lambda: free_ram)
         # Pinned rather than probed: the real media type differs between this
         # box (NVMe) and a CI runner (often "unknown"), and an
         # environment-dependent tier would make these flaky rather than wrong.
@@ -2115,8 +2106,12 @@ class TestAutoTierFallback:
         captured = {}
         self._stub_build_streamed_model(monkeypatch, captured)
         self._run(
-            tmp_path, monkeypatch, free_ram=10_000_000_000, stream_source="auto",
-            device="cpu", extra_training_yaml="  stream_pin: true\n",
+            tmp_path,
+            monkeypatch,
+            free_ram=10_000_000_000,
+            stream_source="auto",
+            device="cpu",
+            extra_training_yaml="  stream_pin: true\n",
         )
         # The runtime call received require_pin (blocker 2) — False here because
         # it is gated on a real CUDA device, which is the correct value on CPU.
@@ -2139,20 +2134,19 @@ class TestAutoTierFallback:
         import soup_cli.trainer.stream_setup as ss
 
         buffer = io.StringIO()
-        monkeypatch.setattr(
-            ss, "console", Console(file=buffer, width=_PANEL_CAPTURE_WIDTH)
-        )
+        monkeypatch.setattr(ss, "console", Console(file=buffer, width=_PANEL_CAPTURE_WIDTH))
         self._stub_build_streamed_model(monkeypatch, {})
         self._run(
-            tmp_path, monkeypatch, free_ram=_RAM_TIER_FREE_BYTES,
-            stream_source="auto", device="cpu",
+            tmp_path,
+            monkeypatch,
+            free_ram=_RAM_TIER_FREE_BYTES,
+            stream_source="auto",
+            device="cpu",
             extra_training_yaml=extra_training_yaml,
         )
         return buffer.getvalue()
 
-    def test_stream_pin_false_makes_the_preflight_state_the_cost(
-        self, tmp_path, monkeypatch
-    ):
+    def test_stream_pin_false_makes_the_preflight_state_the_cost(self, tmp_path, monkeypatch):
         """#366 round-3 C1: the VALUE of training.stream_pin must reach the plan,
         not merely the keyword. Hardcoding `stream_pin=None` (or True/False) at
         the build_stream_plan call left the whole suite green, because every
@@ -2162,9 +2156,7 @@ class TestAutoTierFallback:
         assert _FORCED_PAGEABLE_TEXT in out, out
         assert _PIN_GAIN_REAL_TEXT in out, out
 
-    def test_unset_stream_pin_does_not_state_a_forced_pageable_cost(
-        self, tmp_path, monkeypatch
-    ):
+    def test_unset_stream_pin_does_not_state_a_forced_pageable_cost(self, tmp_path, monkeypatch):
         """The control that makes the test above discriminating: without it a
         mutant that ALWAYS emitted the forced-pageable note would pass."""
         out = self._run_capture(tmp_path, monkeypatch, "")
@@ -2187,49 +2179,43 @@ class TestAutoTierFallback:
         import soup_cli.utils.layer_stream_runtime as rt
 
         monkeypatch.setattr(
-            torch.cuda, "mem_get_info",
+            torch.cuda,
+            "mem_get_info",
             lambda *_a, **_k: (_SIMULATED_FREE_VRAM_BYTES, _SIMULATED_FREE_VRAM_BYTES),
         )
         # Patched on the SOURCE module, like build_streamed_model above:
         # stream_setup imports it inside the function.
-        monkeypatch.setattr(
-            rt, "expandable_segments_status", lambda *_a, **_k: (True, "")
-        )
+        monkeypatch.setattr(rt, "expandable_segments_status", lambda *_a, **_k: (True, ""))
         captured = {}
         self._stub_build_streamed_model(monkeypatch, captured)
         self._run(
-            tmp_path, monkeypatch, free_ram=_RAM_TIER_FREE_BYTES,
-            stream_source="auto", device="cuda",
+            tmp_path,
+            monkeypatch,
+            free_ram=_RAM_TIER_FREE_BYTES,
+            stream_source="auto",
+            device="cuda",
             extra_training_yaml=extra_training_yaml,
         )
         return captured
 
-    def test_stream_pin_true_reaches_the_runtime_as_true_on_cuda(
-        self, tmp_path, monkeypatch
-    ):
+    def test_stream_pin_true_reaches_the_runtime_as_true_on_cuda(self, tmp_path, monkeypatch):
         """#366 round-3 C3: on CPU `(stream_pin is True) and on_cuda` is False
         whatever stream_pin holds, so a CPU assertion of `is False` is satisfied
         identically by the real expression and by a hardcoded constant — it
         cannot discriminate. This is the case that pins the other half of that
         conjunction, and therefore the only one that fails when `require_pin` is
         hardcoded to False."""
-        captured = self._run_on_simulated_cuda(
-            tmp_path, monkeypatch, "  stream_pin: true\n"
-        )
+        captured = self._run_on_simulated_cuda(tmp_path, monkeypatch, "  stream_pin: true\n")
         assert captured["require_pin"] is True
 
-    def test_unset_stream_pin_reaches_the_runtime_as_false_on_cuda(
-        self, tmp_path, monkeypatch
-    ):
+    def test_unset_stream_pin_reaches_the_runtime_as_false_on_cuda(self, tmp_path, monkeypatch):
         """Control for the case above — otherwise a hardcoded `True` would pass
         and the pair would prove nothing about the value."""
         captured = self._run_on_simulated_cuda(tmp_path, monkeypatch, "")
         assert captured["require_pin"] is False
 
     def test_auto_uses_ram_when_the_base_fits(self, tmp_path, monkeypatch):
-        wrapper = self._run(
-            tmp_path, monkeypatch, free_ram=10_000_000_000, stream_source="auto"
-        )
+        wrapper = self._run(tmp_path, monkeypatch, free_ram=10_000_000_000, stream_source="auto")
         assert wrapper._stream_runtime.tier == "ram"
 
     def test_auto_falls_back_to_disk_when_it_does_not(self, tmp_path, monkeypatch):
@@ -2238,8 +2224,10 @@ class TestAutoTierFallback:
         reader's host staging, so the claim that distinguishes the tiers is no
         longer "nothing" but "a few layers rather than the whole model"."""
         wrapper = self._run(
-            tmp_path, monkeypatch,
-            free_ram=_DISK_TIER_FREE_BYTES, stream_source="auto",
+            tmp_path,
+            monkeypatch,
+            free_ram=_DISK_TIER_FREE_BYTES,
+            stream_source="auto",
         )
         runtime = wrapper._stream_runtime
         stats = runtime.stats()
@@ -2250,9 +2238,7 @@ class TestAutoTierFallback:
             f"{stats['store_bytes']} of {stats['disk_bytes']} bytes"
         )
 
-    def test_a_box_too_small_for_the_readers_staging_is_refused(
-        self, tmp_path, monkeypatch
-    ):
+    def test_a_box_too_small_for_the_readers_staging_is_refused(self, tmp_path, monkeypatch):
         """#971: the disk tier predicted ZERO host residency while the async
         reader page-locks whole layers for the run. Driven through the REAL
         pre-flight, not the validator alone — a check nothing calls is the #748
@@ -2293,7 +2279,10 @@ class TestAutoTierFallback:
         monkeypatch.setattr("soup_cli.utils.layer_stream.detect_disk_kind", _probe)
         with pytest.raises(ValueError, match="stream_source='ram'"):
             self._run(
-                tmp_path, monkeypatch, free_ram=1000, stream_source="ram",
+                tmp_path,
+                monkeypatch,
+                free_ram=1000,
+                stream_source="ram",
                 disk_kind="hdd",
             )
         assert probed == [], "the disk probe ran for a decision it cannot change"
@@ -2303,7 +2292,10 @@ class TestAutoTierFallback:
         the fallback must refuse rather than silently degrade."""
         with pytest.raises(ValueError, match="NVMe"):
             self._run(
-                tmp_path, monkeypatch, free_ram=1000, stream_source="auto",
+                tmp_path,
+                monkeypatch,
+                free_ram=1000,
+                stream_source="auto",
                 disk_kind="hdd",
             )
 
@@ -2321,8 +2313,11 @@ class TestAutoTierFallback:
         )
         with pytest.raises(ValueError, match="predicted to need"):
             self._run(
-                tmp_path, monkeypatch, free_ram=10_000_000_000,
-                stream_source="auto", device="cuda",
+                tmp_path,
+                monkeypatch,
+                free_ram=10_000_000_000,
+                stream_source="auto",
+                device="cuda",
             )
 
     @pytest.mark.gpu
@@ -2341,8 +2336,11 @@ class TestAutoTierFallback:
         )
         with pytest.raises(ValueError, match="predicted to need"):
             self._run(
-                tmp_path, monkeypatch, free_ram=10_000_000_000,
-                stream_source="auto", device="cuda",
+                tmp_path,
+                monkeypatch,
+                free_ram=10_000_000_000,
+                stream_source="auto",
+                device="cuda",
                 extra_training_yaml="  stream_vram_override: 1000000\n",
             )
 
@@ -2358,8 +2356,11 @@ class TestAutoTierFallback:
             torch.cuda, "mem_get_info", lambda *_a, **_k: (1_000_000, 4_000_000_000)
         )
         wrapper = self._run(
-            tmp_path, monkeypatch, free_ram=10_000_000_000,
-            stream_source="auto", device="cuda",
+            tmp_path,
+            monkeypatch,
+            free_ram=10_000_000_000,
+            stream_source="auto",
+            device="cuda",
             extra_training_yaml="  stream_vram_override: 16000000000\n",
         )
         assert wrapper._stream_runtime is not None
@@ -2384,8 +2385,11 @@ class TestAutoTierFallback:
 
             seen.update(rows=rows, seq_len=seq_len, vocab_size=vocab_size)
             return StepPeak(
-                peak_bytes=1_000, reserved_bytes=1_000, seconds=0.01,
-                rows=rows, seq_len=seq_len,
+                peak_bytes=1_000,
+                reserved_bytes=1_000,
+                seconds=0.01,
+                rows=rows,
+                seq_len=seq_len,
             )
 
         monkeypatch.setattr(
@@ -2395,8 +2399,11 @@ class TestAutoTierFallback:
             torch.cuda, "mem_get_info", lambda *_a, **_k: (4_000_000_000, 4_000_000_000)
         )
         wrapper = self._run(
-            tmp_path, monkeypatch, free_ram=10_000_000_000,
-            stream_source="auto", device="cuda",
+            tmp_path,
+            monkeypatch,
+            free_ram=10_000_000_000,
+            stream_source="auto",
+            device="cuda",
             extra_training_yaml="  stream_vram_probe: true\n",
         )
         assert seen, "setup() never invoked the measured VRAM probe"
@@ -2415,8 +2422,11 @@ class TestAutoTierFallback:
         monkeypatch.setattr(
             "soup_cli.utils.layer_stream_runtime.measure_step_peak_bytes",
             lambda *_a, **kw: StepPeak(
-                peak_bytes=9_000_000_000, reserved_bytes=9_000_000_000,
-                seconds=0.01, rows=kw["rows"], seq_len=kw["seq_len"],
+                peak_bytes=9_000_000_000,
+                reserved_bytes=9_000_000_000,
+                seconds=0.01,
+                rows=kw["rows"],
+                seq_len=kw["seq_len"],
             ),
         )
         monkeypatch.setattr(
@@ -2424,8 +2434,11 @@ class TestAutoTierFallback:
         )
         with pytest.raises(ValueError, match="MEASURED"):
             self._run(
-                tmp_path, monkeypatch, free_ram=10_000_000_000,
-                stream_source="auto", device="cuda",
+                tmp_path,
+                monkeypatch,
+                free_ram=10_000_000_000,
+                stream_source="auto",
+                device="cuda",
                 extra_training_yaml="  stream_vram_probe: true\n",
             )
 
@@ -2443,8 +2456,13 @@ class TestAutoTierFallback:
         from soup_cli.utils.layer_stream import build_stream_plan
 
         plan = build_stream_plan(
-            arch="llama", n_layers=2, layer_bytes=1000, embed_bytes=0,
-            available_ram_bytes=10, pinned_limit_bytes=None, disk_kind="nvme",
+            arch="llama",
+            n_layers=2,
+            layer_bytes=1000,
+            embed_bytes=0,
+            available_ram_bytes=10,
+            pinned_limit_bytes=None,
+            disk_kind="nvme",
         )
         joined = " ".join(plan.notes)
         assert "stream_source='ram'" in joined, joined
@@ -2487,12 +2505,15 @@ def _write_tiny_tokenizer(weights_dir):
     }
     with open(os.path.join(weights_dir, "tokenizer.json"), "w", encoding="utf-8") as fh:
         _json.dump(payload, fh)
-    with open(
-        os.path.join(weights_dir, "tokenizer_config.json"), "w", encoding="utf-8"
-    ) as fh:
+    with open(os.path.join(weights_dir, "tokenizer_config.json"), "w", encoding="utf-8") as fh:
         _json.dump(
-            {"tokenizer_class": "PreTrainedTokenizerFast", "unk_token": "<0>",
-             "eos_token": "<0>", "pad_token": "<0>"}, fh
+            {
+                "tokenizer_class": "PreTrainedTokenizerFast",
+                "unk_token": "<0>",
+                "eos_token": "<0>",
+                "pad_token": "<0>",
+            },
+            fh,
         )
 
 
@@ -2515,9 +2536,7 @@ class TestRequirePinSurvivesEveryHop:
         import soup_cli.utils.layer_stream_runtime as rt
 
         class _FailsWhenPinned(rt.RamSource):
-            def __init__(
-                self, shard_dir, n_layers, spec, *, pin=True, shard_paths=None
-            ):
+            def __init__(self, shard_dir, n_layers, spec, *, pin=True, shard_paths=None):
                 if pin:
                     raise RuntimeError("CUDA error: cannot allocate pinned memory")
                 super().__init__(
@@ -2530,16 +2549,12 @@ class TestRequirePinSurvivesEveryHop:
 
         monkeypatch.setattr(rt, "RamSource", _FailsWhenPinned)
 
-    def test_forced_pin_refuses_through_the_whole_real_chain(
-        self, tmp_path, monkeypatch
-    ):
+    def test_forced_pin_refuses_through_the_whole_real_chain(self, tmp_path, monkeypatch):
         self._fail_pinning(monkeypatch)
         with pytest.raises(RuntimeError, match="stream_pin"):
             _tiny_stream(tmp_path, pin=True, require_pin=True)
 
-    def test_the_same_failure_falls_back_silently_without_the_request(
-        self, tmp_path, monkeypatch
-    ):
+    def test_the_same_failure_falls_back_silently_without_the_request(self, tmp_path, monkeypatch):
         """The control that makes the case above discriminating: the identical
         page-lock failure must still fall back when nobody asked for the pin, so
         the refusal is attributable to the flag and not to the failure."""
@@ -2574,9 +2589,7 @@ class TestGradientAccumulationIsSupported:
     def test_batch_and_accumulation_compose(self):
         from soup_cli.config.loader import load_config_from_string
 
-        cfg = load_config_from_string(
-            _stream_yaml(batch_size=2, gradient_accumulation_steps=2)
-        )
+        cfg = load_config_from_string(_stream_yaml(batch_size=2, gradient_accumulation_steps=2))
         assert (cfg.training.batch_size, cfg.training.gradient_accumulation_steps) == (2, 2)
 
 
@@ -2591,9 +2604,7 @@ class TestAccumulationIsPerTokenIoNeutral:
 
         def reads_per_token(accum, micro_batches):
             model, runtime, _ = _tiny_stream(tmp_path, name=f"a{accum}", seed=3)
-            opt = torch.optim.AdamW(
-                [p for p in model.parameters() if p.requires_grad], lr=1e-4
-            )
+            opt = torch.optim.AdamW([p for p in model.parameters() if p.requires_grad], lr=1e-4)
             torch.manual_seed(0)
             ids = torch.randint(0, 64, (1, 12))
             model.train()
@@ -2648,9 +2659,7 @@ class TestAccumulationAdvice:
         )
 
         assert ACCUM_VS_BATCH_SPEEDUP == pytest.approx(2.5, abs=0.1)
-        assert f"{ACCUM_VS_BATCH_SPEEDUP:.1f}x" in accumulation_advice(
-            batch_size=1, accum=2
-        )
+        assert f"{ACCUM_VS_BATCH_SPEEDUP:.1f}x" in accumulation_advice(batch_size=1, accum=2)
 
     def test_says_accumulation_holds_vram_flat(self):
         """Its real value under streaming: effective batch at constant VRAM
@@ -2678,8 +2687,16 @@ def _advice(**kw):
 # item 4 — checkpoint / resume
 # ==========================================================================
 def _tiny_stream(
-    tmp_path, name="shards", seed=3, n_layers=3, device="cpu", tier="ram",
-    quant="none", pin=False, require_pin=False, read_ahead=None,
+    tmp_path,
+    name="shards",
+    seed=3,
+    n_layers=3,
+    device="cpu",
+    tier="ram",
+    quant="none",
+    pin=False,
+    require_pin=False,
+    read_ahead=None,
 ):
     """A streamed model over a real (tiny) on-disk Llama checkpoint."""
     import torch
@@ -2701,9 +2718,13 @@ def _tiny_stream(
         # calls that path, so it is invisible on a GPU box and fails on every
         # CPU-only CI runner. Do not shrink this back.
         config = LlamaConfig(
-            vocab_size=64, hidden_size=64, intermediate_size=64,
-            num_hidden_layers=n_layers, num_attention_heads=4,
-            num_key_value_heads=2, tie_word_embeddings=True,
+            vocab_size=64,
+            hidden_size=64,
+            intermediate_size=64,
+            num_hidden_layers=n_layers,
+            num_attention_heads=4,
+            num_key_value_heads=2,
+            tie_word_embeddings=True,
             max_position_embeddings=128,
         )
         model = AutoModelForCausalLM.from_config(config).to(torch.float32).eval()
@@ -2713,8 +2734,12 @@ def _tiny_stream(
         save_file(state, str(weights / "model.safetensors"))
         config.save_pretrained(str(weights))
     lora = LoraConfig(
-        r=4, lora_alpha=8, lora_dropout=0.0, bias="none",
-        target_modules=["q_proj", "v_proj"], task_type=TaskType.CAUSAL_LM,
+        r=4,
+        lora_alpha=8,
+        lora_dropout=0.0,
+        bias="none",
+        target_modules=["q_proj", "v_proj"],
+        task_type=TaskType.CAUSAL_LM,
     )
     shards = str(tmp_path / name)
     suffixes = ()
@@ -2728,16 +2753,31 @@ def _tiny_stream(
         suffixes = quantised_layer_suffixes(probe)
         del probe
     index = shard_checkpoint(
-        str(weights), shards, dtype="float32", arch="llama", quant=quant,
-        quant_suffixes=suffixes, quant_device="cpu",
+        str(weights),
+        shards,
+        dtype="float32",
+        arch="llama",
+        quant=quant,
+        quant_suffixes=suffixes,
+        quant_device="cpu",
     )
     # Omitted rather than defaulted, so the harness exercises the production
     # default unless a test deliberately asks for another depth (#971).
     depth = {} if read_ahead is None else {"read_ahead": read_ahead}
     model, runtime = build_streamed_model(
-        model_id=str(weights), shard_dir=shards, index=index, lora_config=lora,
-        device=device, dtype="float32", buffers=2, pin=pin, seed=seed,
-        tier=tier, quant=quant, require_pin=require_pin, **depth,
+        model_id=str(weights),
+        shard_dir=shards,
+        index=index,
+        lora_config=lora,
+        device=device,
+        dtype="float32",
+        buffers=2,
+        pin=pin,
+        seed=seed,
+        tier=tier,
+        quant=quant,
+        require_pin=require_pin,
+        **depth,
     )
     return model, runtime, str(weights)
 
@@ -2813,10 +2853,7 @@ def _landed(model, saved):
     """How many saved tensors are present in the live model, by name AND value."""
     import torch
 
-    norm = {
-        k.replace("base_model.model.", "").replace(".weight", ""): v
-        for k, v in saved.items()
-    }
+    norm = {k.replace("base_model.model.", "").replace(".weight", ""): v for k, v in saved.items()}
     count = 0
     for name, param in model.named_parameters():
         if "lora_" not in name or param.is_meta:
@@ -2827,9 +2864,7 @@ def _landed(model, saved):
             .replace(".default.", ".")
             .replace(".weight", "")
         )
-        if key in norm and torch.equal(
-            param.detach().cpu().float(), norm[key].cpu().float()
-        ):
+        if key in norm and torch.equal(param.detach().cpu().float(), norm[key].cpu().float()):
             count += 1
     return count
 
@@ -2890,9 +2925,7 @@ class TestResumeLoadsIntoAStreamedModel:
         """
         model, _, _ = _tiny_stream(tmp_path)
         _randomise_lora_b(model)
-        canonical = {
-            k.replace(".inner.", "."): v.clone() for k, v in model.state_dict().items()
-        }
+        canonical = {k.replace(".inner.", "."): v.clone() for k, v in model.state_dict().items()}
         result = model.load_state_dict(canonical, strict=False)
         assert list(result.unexpected_keys) == [], result.unexpected_keys
 
@@ -2974,10 +3007,14 @@ class TestResumeOnTheProductionPath:
             "hf_device_map was rewritten -- Trainer._move_model_to_device relies "
             "on it to skip .to() on meta weights"
         )
-        assert sum(
-            1 for n, p in resumed.named_parameters()
-            if p.is_meta and ".layers." in n and "lora_" not in n
-        ) > 0, "the base was materialised -- that is not streaming any more"
+        assert (
+            sum(
+                1
+                for n, p in resumed.named_parameters()
+                if p.is_meta and ".layers." in n and "lora_" not in n
+            )
+            > 0
+        ), "the base was materialised -- that is not streaming any more"
 
         after_resume = _train(resumed, batches[6:])
         scratch, _, _ = _tiny_stream(tmp_path, name="shards3", seed=99, device="cuda")
@@ -3018,9 +3055,7 @@ class TestResumeFlagsAreAccepted:
     """
 
     @pytest.mark.parametrize("flag", [["--resume", "ckpt"], ["--hf-resume"]])
-    def test_streaming_no_longer_refuses_the_resume_flags(
-        self, tmp_path, monkeypatch, flag
-    ):
+    def test_streaming_no_longer_refuses_the_resume_flags(self, tmp_path, monkeypatch, flag):
         import json as _json
 
         from typer.testing import CliRunner

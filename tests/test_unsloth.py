@@ -119,7 +119,6 @@ class TestUnslothDetection:
         """Should return True when unsloth is importable."""
         mock_module = MagicMock()
         with patch.dict("sys.modules", {"unsloth": mock_module}):
-
             # Need to reimport to avoid cached result
             import importlib
 

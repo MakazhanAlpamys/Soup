@@ -32,9 +32,7 @@ from soup_cli.config.backend_support import REGISTRY as _REGISTRY
 from soup_cli.config.schema import DataConfig, TrainingConfig
 from tests.conftest import strip_ansi
 
-MLX_SFT = pathlib.Path(__file__).resolve().parents[1] / (
-    "src/soup_cli/trainer/mlx_sft.py"
-)
+MLX_SFT = pathlib.Path(__file__).resolve().parents[1] / ("src/soup_cli/trainer/mlx_sft.py")
 
 #: Every entry the registry declares as read-only-to-warn. Tests parametrise
 #: over this so a new entry is covered without editing an assertion.
@@ -56,9 +54,7 @@ def config_at(tmp_path):
 
     def _make(task: str, backend: str, training: str = "", data: str = "") -> str:
         train_file = tmp_path / "train.jsonl"
-        train_file.write_text(
-            '{"instruction": "a", "output": "b"}\n', encoding="utf-8"
-        )
+        train_file.write_text('{"instruction": "a", "output": "b"}\n', encoding="utf-8")
         # Built by concatenation rather than by interpolating a multi-line block
         # into a dedented f-string. In an f-string only the FIRST line of a
         # substitution inherits the template's indentation; later lines land
@@ -93,6 +89,7 @@ def config_at(tmp_path):
 # --------------------------------------------------------------------------
 # the registry itself
 # --------------------------------------------------------------------------
+
 
 def _unknown_registry_fields(registry) -> list[str]:
     """Registry entries that do not resolve to a real field on the models."""
@@ -179,9 +176,7 @@ def test_registry_covers_every_field_the_mlx_trainer_warns_about():
     assert unknown == [], f"warning list names fields that do not exist: {unknown}"
     registered = {e.field for e in unsupported_for("sft", "mlx")}
     missing = sorted(warned - registered)
-    assert missing == [], (
-        f"mlx_sft.py warns about {missing} but the registry does not list them"
-    )
+    assert missing == [], f"mlx_sft.py warns about {missing} but the registry does not list them"
 
 
 @pytest.mark.parametrize(
@@ -224,6 +219,7 @@ def test_an_unregistered_task_backend_pair_reports_nothing():
 # check_config — only what the user set
 # --------------------------------------------------------------------------
 
+
 def test_a_setting_the_backend_ignores_is_reported(config_at):
     """Acceptance criterion 1.
 
@@ -245,9 +241,7 @@ def test_new_mlx_gaps_use_liger_and_neftune_alpha_are_reported(config_at):
     from soup_cli.config.backend_support import check_config
     from soup_cli.config.loader import load_config
 
-    cfg = load_config(
-        config_at("sft", "mlx", "  use_liger: true\n  neftune_alpha: 5")
-    )
+    cfg = load_config(config_at("sft", "mlx", "  use_liger: true\n  neftune_alpha: 5"))
     reported = {e.field for e in check_config(cfg)}
     assert {"training.use_liger", "training.neftune_alpha"} <= reported
 
@@ -284,9 +278,7 @@ def test_only_fields_the_user_actually_set_are_reported(config_at):
 
     cfg = load_config(config_at("sft", "mlx", "  seed: 42"))
     reported = {e.field for e in check_config(cfg)}
-    assert reported == {"training.seed"}, (
-        f"reported fields the user never set: {sorted(reported)}"
-    )
+    assert reported == {"training.seed"}, f"reported fields the user never set: {sorted(reported)}"
 
 
 def test_the_transformers_path_reports_nothing_for_the_same_config(config_at):
@@ -323,9 +315,8 @@ def test_transformers_is_not_flagged_for_helper_owned_fields(config_at):
 # the doctor leg
 # --------------------------------------------------------------------------
 
-def test_doctor_config_names_the_ignored_field_and_its_reason(
-    config_at, capsys, monkeypatch
-):
+
+def test_doctor_config_names_the_ignored_field_and_its_reason(config_at, capsys, monkeypatch):
     """Rendered at a pinned width.
 
     ``doctor`` builds its Console at import, so the row layout follows whatever
@@ -361,9 +352,7 @@ def test_doctor_config_names_the_ignored_field_and_its_reason(
         ("invalid.yaml", "schema-invalid"),
     ],
 )
-def test_doctor_exits_non_zero_when_the_config_cannot_be_read(
-    path, why, tmp_path, monkeypatch
-):
+def test_doctor_exits_non_zero_when_the_config_cannot_be_read(path, why, tmp_path, monkeypatch):
     """A leg CI can gate on must not report success on a config it never read."""
     from soup_cli.commands.doctor import doctor
 
@@ -372,8 +361,7 @@ def test_doctor_exits_non_zero_when_the_config_cannot_be_read(
         (tmp_path / path).write_text("base: [unclosed\n", encoding="utf-8")
     elif why == "schema-invalid":
         (tmp_path / path).write_text(
-            "base: m\ntask: sft\ndata: {train: x.jsonl}\n"
-            "training: {epochs: -5}\noutput: o\n",
+            "base: m\ntask: sft\ndata: {train: x.jsonl}\ntraining: {epochs: -5}\noutput: o\n",
             encoding="utf-8",
         )
 
@@ -402,9 +390,7 @@ def test_all_clear_states_what_was_checked(config_at, capsys, monkeypatch):
 
 
 @pytest.mark.parametrize("width", [35, 60, 200])
-def test_the_setting_name_survives_at_any_pinned_width(
-    width, config_at, capsys, monkeypatch
-):
+def test_the_setting_name_survives_at_any_pinned_width(width, config_at, capsys, monkeypatch):
     """A row that says a setting is ignored must say *which* setting.
 
     A dotted field name is one unbreakable word, so Rich ellipsised it to
@@ -427,7 +413,7 @@ def test_the_setting_name_survives_at_any_pinned_width(
     # collapsing whitespace alone does not rescue the split. conftest's
     # strip_ansi is the shared one; 38 files had grown their own copy.
     out = strip_ansi(capsys.readouterr().out)
-    section = out[out.index("Config check"):]
+    section = out[out.index("Config check") :]
 
     # A folded name is split down the FIRST column across consecutive lines, so
     # it has to be rebuilt column-wise. Concatenating the whole section instead
@@ -458,13 +444,12 @@ def test_doctor_without_config_does_not_read_one(config_at, capsys):
 # the bidirectional guard: the registry cannot silently go stale
 # --------------------------------------------------------------------------
 
+
 def _fields_read_by(path: pathlib.Path) -> set[str]:
     """Attribute names and exact string constants in a module, docstrings out."""
     tree = ast.parse(path.read_text(encoding="utf-8"))
     for node in ast.walk(tree):
-        if isinstance(
-            node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)
-        ):
+        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
             if (
                 node.body
                 and isinstance(node.body[0], ast.Expr)
@@ -600,9 +585,7 @@ def test_an_unfounded_gap_claim_is_caught():
     # #761 wired data.mask_history, which used to stand in here; the claim only
     # has to be about a field nothing consumes, and training.lr_groups is one
     # (see #748's KNOWN_UNCONSUMED).
-    fabricated = bs.SupportEntry(
-        "training.lr_groups", bs.IGNORED, "fabricated, unfounded claim"
-    )
+    fabricated = bs.SupportEntry("training.lr_groups", bs.IGNORED, "fabricated, unfounded claim")
     real = bs.REGISTRY[("sft", "mlx", "text")]
     try:
         bs.REGISTRY[("sft", "mlx", "text")] = (fabricated,) + real
@@ -610,9 +593,7 @@ def test_an_unfounded_gap_claim_is_caught():
     finally:
         bs.REGISTRY[("sft", "mlx", "text")] = real
 
-    assert any(
-        "lr_groups" in p and "globally unconsumed" in p for p in problems
-    ), problems
+    assert any("lr_groups" in p and "globally unconsumed" in p for p in problems), problems
 
 
 def test_a_gap_for_a_field_another_backend_reads_is_accepted():
@@ -629,9 +610,7 @@ def test_a_declared_module_that_does_not_exist_is_caught(tmp_path, monkeypatch):
     """A renamed helper must not silently shrink the guard's scope."""
     import soup_cli.config.backend_support as bs
 
-    monkeypatch.setitem(
-        bs.TRAINER_MODULES, ("sft", "mlx", "text"), ("soup_cli/trainer/gone.py",)
-    )
+    monkeypatch.setitem(bs.TRAINER_MODULES, ("sft", "mlx", "text"), ("soup_cli/trainer/gone.py",))
     problems = _registry_drift(tmp_path)
     assert any("does not exist" in p for p in problems), problems
 
@@ -729,9 +708,7 @@ def test_deleting_a_warning_makes_its_entry_fail(entry, tmp_path, monkeypatch):
 
     trainer = tmp_path / "src" / "soup_cli" / "trainer"
     trainer.mkdir(parents=True)
-    (trainer / "mlx_sft.py").write_text(
-        "def build(tcfg):\n    return None\n", encoding="utf-8"
-    )
+    (trainer / "mlx_sft.py").write_text("def build(tcfg):\n    return None\n", encoding="utf-8")
     monkeypatch.setitem(bs.REGISTRY, ("sft", "mlx", "text"), (entry,))
     monkeypatch.setitem(
         bs.TRAINER_MODULES, ("sft", "mlx", "text"), ("soup_cli/trainer/mlx_sft.py",)
@@ -761,14 +738,12 @@ class TestTheFixtureDoesNotDependOnCallerIndentation:
     }
 
     @pytest.mark.parametrize("spelling", sorted(BLOCKS))
-    def test_every_consistent_indentation_yields_the_same_config(
-        self, config_at, spelling
-    ):
+    def test_every_consistent_indentation_yields_the_same_config(self, config_at, spelling):
         import yaml
 
-        raw = pathlib.Path(
-            config_at("sft", "mlx", training=self.BLOCKS[spelling])
-        ).read_text(encoding="utf-8")
+        raw = pathlib.Path(config_at("sft", "mlx", training=self.BLOCKS[spelling])).read_text(
+            encoding="utf-8"
+        )
         parsed = yaml.safe_load(raw)
 
         assert set(parsed) == {
@@ -779,11 +754,7 @@ class TestTheFixtureDoesNotDependOnCallerIndentation:
             "training",
             "output",
         }, raw
-        expected = (
-            {"use_liger"}
-            if spelling == "single line"
-            else {"use_liger", "neftune_alpha"}
-        )
+        expected = {"use_liger"} if spelling == "single line" else {"use_liger", "neftune_alpha"}
         assert set(parsed["training"]) == expected, raw
         assert parsed["training"]["use_liger"] is True, raw
 

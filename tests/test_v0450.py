@@ -113,9 +113,7 @@ def test_register_plugin_rejects_bad_names(name):
     if name == "starts-with-":  # allowed — leading char is alnum
         pytest.skip("trailing hyphen permitted by regex")
     with pytest.raises((TypeError, ValueError)):
-        plugins_pkg.register_plugin(
-            name=name, version="1.0.0", plugin=_NoopPlugin()
-        )
+        plugins_pkg.register_plugin(name=name, version="1.0.0", plugin=_NoopPlugin())
 
 
 @pytest.mark.parametrize(
@@ -124,9 +122,7 @@ def test_register_plugin_rejects_bad_names(name):
 )
 def test_register_plugin_rejects_bad_version(version):
     with pytest.raises((TypeError, ValueError)):
-        plugins_pkg.register_plugin(
-            name="ok", version=version, plugin=_NoopPlugin()
-        )
+        plugins_pkg.register_plugin(name="ok", version=version, plugin=_NoopPlugin())
 
 
 def test_register_plugin_idempotent_same_spec():
@@ -140,17 +136,13 @@ def test_register_plugin_idempotent_preserves_disabled_state():
     plugin = _NoopPlugin()
     plugins_pkg.register_plugin(name="dup2", version="1.0.0", plugin=plugin)
     plugins_pkg.disable_plugin("dup2")
-    again = plugins_pkg.register_plugin(
-        name="dup2", version="1.0.0", plugin=plugin
-    )
+    again = plugins_pkg.register_plugin(name="dup2", version="1.0.0", plugin=plugin)
     assert again.enabled is False
 
 
 def test_register_plugin_rejects_conflicting_description():
     plugin = _NoopPlugin()
-    plugins_pkg.register_plugin(
-        name="dup3", version="1.0.0", plugin=plugin, description="first"
-    )
+    plugins_pkg.register_plugin(name="dup3", version="1.0.0", plugin=plugin, description="first")
     with pytest.raises(ValueError, match="already registered"):
         plugins_pkg.register_plugin(
             name="dup3", version="1.0.0", plugin=plugin, description="second"
@@ -189,9 +181,7 @@ def test_register_plugin_rejects_empty_plugin():
         pass
 
     with pytest.raises(ValueError, match="hook"):
-        plugins_pkg.register_plugin(
-            name="empty", version="1.0.0", plugin=_Empty()
-        )
+        plugins_pkg.register_plugin(name="empty", version="1.0.0", plugin=_Empty())
 
 
 def test_register_plugin_with_template_only_ok():
@@ -212,9 +202,7 @@ def test_register_plugin_rejects_none_plugin():
 
 
 def test_enable_disable_toggles_state():
-    plugins_pkg.register_plugin(
-        name="toggle", version="1.0.0", plugin=_NoopPlugin()
-    )
+    plugins_pkg.register_plugin(name="toggle", version="1.0.0", plugin=_NoopPlugin())
     assert plugins_pkg.is_enabled("toggle") is True
     assert plugins_pkg.disable_plugin("toggle") is True
     assert plugins_pkg.is_enabled("toggle") is False
@@ -229,9 +217,7 @@ def test_enable_unknown_raises():
 
 
 def test_list_plugins_returns_immutable_view():
-    plugins_pkg.register_plugin(
-        name="a", version="1.0.0", plugin=_NoopPlugin()
-    )
+    plugins_pkg.register_plugin(name="a", version="1.0.0", plugin=_NoopPlugin())
     view = plugins_pkg.list_plugins()
     with pytest.raises(TypeError):
         view["evil"] = "not allowed"  # type: ignore[index]
@@ -243,9 +229,7 @@ def test_get_plugin_unknown_returns_none():
 
 
 def test_pluginspec_frozen():
-    plugins_pkg.register_plugin(
-        name="frozen", version="1.0.0", plugin=_NoopPlugin()
-    )
+    plugins_pkg.register_plugin(name="frozen", version="1.0.0", plugin=_NoopPlugin())
     spec = plugins_pkg.get_plugin("frozen")
     with pytest.raises(Exception):
         spec.name = "mutated"  # type: ignore[misc]
@@ -253,13 +237,9 @@ def test_pluginspec_frozen():
 
 def test_too_many_plugins_rejected():
     for index in range(64):
-        plugins_pkg.register_plugin(
-            name=f"p{index}", version="1.0.0", plugin=_NoopPlugin()
-        )
+        plugins_pkg.register_plugin(name=f"p{index}", version="1.0.0", plugin=_NoopPlugin())
     with pytest.raises(RuntimeError, match="too many"):
-        plugins_pkg.register_plugin(
-            name="overflow", version="1.0.0", plugin=_NoopPlugin()
-        )
+        plugins_pkg.register_plugin(name="overflow", version="1.0.0", plugin=_NoopPlugin())
 
 
 def test_load_plugins_returns_count():
@@ -280,9 +260,7 @@ def test_plugins_cli_list_empty():
 def test_plugins_cli_lists_registered():
     from soup_cli.commands import plugins as plugins_cli
 
-    plugins_pkg.register_plugin(
-        name="cli-test", version="1.2.3", plugin=_NoopPlugin()
-    )
+    plugins_pkg.register_plugin(name="cli-test", version="1.2.3", plugin=_NoopPlugin())
     runner = CliRunner()
     result = runner.invoke(plugins_cli.app, ["list"])
     assert result.exit_code == 0, (result.output, repr(result.exception))
@@ -311,9 +289,7 @@ def test_plugins_cli_enable_unknown():
 def test_plugins_cli_enable_disable_cycle():
     from soup_cli.commands import plugins as plugins_cli
 
-    plugins_pkg.register_plugin(
-        name="cycle", version="1.0.0", plugin=_NoopPlugin()
-    )
+    plugins_pkg.register_plugin(name="cycle", version="1.0.0", plugin=_NoopPlugin())
     runner = CliRunner()
     plugins_pkg.disable_plugin("cycle")
     result = runner.invoke(plugins_cli.app, ["enable", "cycle"])
@@ -485,29 +461,35 @@ def test_from_anthropic_with_system():
 
 def test_validate_anthropic_payload_rejects_empty_messages():
     with pytest.raises(ValueError):
-        validate_anthropic_payload({
-            "model": "x",
-            "messages": [],
-            "max_tokens": 10,
-        })
+        validate_anthropic_payload(
+            {
+                "model": "x",
+                "messages": [],
+                "max_tokens": 10,
+            }
+        )
 
 
 def test_validate_anthropic_payload_rejects_bad_role():
     with pytest.raises(ValueError, match="role"):
-        validate_anthropic_payload({
-            "model": "x",
-            "messages": [{"role": "system", "content": "x"}],
-            "max_tokens": 10,
-        })
+        validate_anthropic_payload(
+            {
+                "model": "x",
+                "messages": [{"role": "system", "content": "x"}],
+                "max_tokens": 10,
+            }
+        )
 
 
 def test_validate_anthropic_payload_rejects_oversize_max_tokens():
     with pytest.raises(ValueError):
-        validate_anthropic_payload({
-            "model": "x",
-            "messages": [{"role": "user", "content": "x"}],
-            "max_tokens": 99999,
-        })
+        validate_anthropic_payload(
+            {
+                "model": "x",
+                "messages": [{"role": "user", "content": "x"}],
+                "max_tokens": 99999,
+            }
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -549,16 +531,12 @@ def test_validate_rate_limit_rejects(rpm):
         validate_rate_limit(rpm)
 
 
-@pytest.mark.parametrize(
-    "domain", ["example.com", ".example.com", "a.b.c.example.com"]
-)
+@pytest.mark.parametrize("domain", ["example.com", ".example.com", "a.b.c.example.com"])
 def test_validate_domain_happy(domain):
     assert validate_domain(domain) == domain.lower()
 
 
-@pytest.mark.parametrize(
-    "domain", ["", " ", "with space.com", "/path", "X" * 300, "evil.com\x00"]
-)
+@pytest.mark.parametrize("domain", ["", " ", "with space.com", "/path", "X" * 300, "evil.com\x00"])
 def test_validate_domain_rejects(domain):
     with pytest.raises((TypeError, ValueError)):
         validate_domain(domain)
@@ -800,9 +778,7 @@ def _good_recipe():
 
 
 def test_node_kinds_closed_set():
-    assert NODE_KINDS == frozenset(
-        {"seed", "llm_text", "code", "judge", "validator", "sampler"}
-    )
+    assert NODE_KINDS == frozenset({"seed", "llm_text", "code", "judge", "validator", "sampler"})
 
 
 def test_parse_recipe_happy():
@@ -865,9 +841,7 @@ def test_parse_recipe_rejects_non_dict_input():
 
 def test_parse_recipe_rejects_too_many_nodes():
     bad = {
-        "nodes": [
-            {"name": f"n{index}", "kind": "seed"} for index in range(257)
-        ],
+        "nodes": [{"name": f"n{index}", "kind": "seed"} for index in range(257)],
         "edges": [],
     }
     with pytest.raises(ValueError, match="exceeds"):
@@ -1062,9 +1036,7 @@ def test_register_plugin_rejects_oversize_description():
 
 
 def test_enable_plugin_already_enabled_returns_false():
-    plugins_pkg.register_plugin(
-        name="warm", version="1.0.0", plugin=_NoopPlugin()
-    )
+    plugins_pkg.register_plugin(name="warm", version="1.0.0", plugin=_NoopPlugin())
     assert plugins_pkg.enable_plugin("warm") is False
 
 
@@ -1089,38 +1061,46 @@ def test_to_anthropic_rejects_non_list_messages():
 
 def test_to_anthropic_rejects_non_str_or_list_content():
     with pytest.raises(TypeError):
-        to_anthropic({
-            "model": "x",
-            "messages": [{"role": "user", "content": 42}],
-        })
+        to_anthropic(
+            {
+                "model": "x",
+                "messages": [{"role": "user", "content": 42}],
+            }
+        )
 
 
 def test_to_anthropic_rejects_bool_temperature():
     with pytest.raises(TypeError):
-        to_anthropic({
-            "model": "x",
-            "messages": [{"role": "user", "content": "a"}],
-            "temperature": True,
-        })
+        to_anthropic(
+            {
+                "model": "x",
+                "messages": [{"role": "user", "content": "a"}],
+                "temperature": True,
+            }
+        )
 
 
 @pytest.mark.parametrize("temp", [0.0, 2.0])
 def test_to_anthropic_accepts_temperature_boundaries(temp):
-    out = to_anthropic({
-        "model": "x",
-        "messages": [{"role": "user", "content": "a"}],
-        "temperature": temp,
-    })
+    out = to_anthropic(
+        {
+            "model": "x",
+            "messages": [{"role": "user", "content": "a"}],
+            "temperature": temp,
+        }
+    )
     assert out["temperature"] == temp
 
 
 def test_to_anthropic_rejects_max_tokens_zero():
     with pytest.raises(ValueError):
-        to_anthropic({
-            "model": "x",
-            "messages": [{"role": "user", "content": "a"}],
-            "max_tokens": 0,
-        })
+        to_anthropic(
+            {
+                "model": "x",
+                "messages": [{"role": "user", "content": "a"}],
+                "max_tokens": 0,
+            }
+        )
 
 
 def test_validate_anthropic_payload_rejects_non_dict():
@@ -1130,11 +1110,13 @@ def test_validate_anthropic_payload_rejects_non_dict():
 
 def test_validate_anthropic_payload_rejects_bool_max_tokens():
     with pytest.raises(TypeError):
-        validate_anthropic_payload({
-            "model": "x",
-            "messages": [{"role": "user", "content": "a"}],
-            "max_tokens": True,
-        })
+        validate_anthropic_payload(
+            {
+                "model": "x",
+                "messages": [{"role": "user", "content": "a"}],
+                "max_tokens": True,
+            }
+        )
 
 
 def test_is_domain_allowed_strips_port():
@@ -1162,10 +1144,7 @@ def test_get_trainer_plugin_rejects_empty_string():
 
 
 def test_parse_recipe_rejects_too_many_edges():
-    nodes = [
-        {"name": f"n{index}", "kind": "seed"}
-        for index in range(50)
-    ]
+    nodes = [{"name": f"n{index}", "kind": "seed"} for index in range(50)]
     edges = [["n0", "n1"]] * 1025
     with pytest.raises(ValueError):
         parse_recipe({"nodes": nodes, "edges": edges})

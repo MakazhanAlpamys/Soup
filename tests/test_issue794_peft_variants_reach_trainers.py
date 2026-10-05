@@ -129,9 +129,7 @@ def test_loftq_changes_base_weight_through_real_sft_setup() -> None:
         return real_tensor_to(tensor, *positional, **kwargs)
 
     with patch.object(torch.Tensor, "to", _keep_peft_loftq_compute_on_cpu):
-        wrapped = _setup_sft(
-            _config(init_strategy="loftq", loftq_iter=3, loftq_bits=8), model
-        )
+        wrapped = _setup_sft(_config(init_strategy="loftq", loftq_iter=3, loftq_bits=8), model)
     q_proj = wrapped.base_model.model.model.layers[0].self_attn.q_proj
 
     config = wrapped.peft_config["default"]

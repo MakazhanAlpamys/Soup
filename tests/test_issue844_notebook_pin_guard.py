@@ -25,8 +25,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 NOTEBOOK_PATH = REPO_ROOT / "notebooks" / "proof-4gb.ipynb"
 CHANGELOG_PATH = REPO_ROOT / "CHANGELOG.md"
 
-PIN_RE = re.compile(r'soup-cli\[train\]\s*==\s*(?P<version>\d+\.\d+\.\d+)')
-GIT_INSTALL_RE = re.compile(r'soup-cli\[train\]\s*@\s*git\+')
+PIN_RE = re.compile(r"soup-cli\[train\]\s*==\s*(?P<version>\d+\.\d+\.\d+)")
+GIT_INSTALL_RE = re.compile(r"soup-cli\[train\]\s*@\s*git\+")
 
 
 def _load_notebook():
@@ -36,11 +36,7 @@ def _load_notebook():
 
 def _code_cell_sources():
     nb = _load_notebook()
-    return [
-        "".join(cell["source"])
-        for cell in nb["cells"]
-        if cell.get("cell_type") == "code"
-    ]
+    return ["".join(cell["source"]) for cell in nb["cells"] if cell.get("cell_type") == "code"]
 
 
 def _install_cell_source():
@@ -83,8 +79,7 @@ class TestTheInstallCellIsPinnedToARelease:
         src = _install_cell_source()
         match = PIN_RE.search(src)
         assert match, (
-            'expected `soup-cli[train]==X.Y.Z` in the install cell, found '
-            f'none in:\n{src}'
+            f"expected `soup-cli[train]==X.Y.Z` in the install cell, found none in:\n{src}"
         )
 
     def test_the_pinned_version_is_actually_released(self):
@@ -173,8 +168,7 @@ class TestEveryImportInTheNotebookStillResolves:
                 failures.append(f"{module_name}.{attr_name}: no such attribute")
         assert not failures, (
             "notebook imports names that no longer exist -- update the "
-            "notebook (or the pinned version) before merging:\n"
-            + "\n".join(failures)
+            "notebook (or the pinned version) before merging:\n" + "\n".join(failures)
         )
 
 

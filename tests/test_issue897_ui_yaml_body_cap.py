@@ -63,10 +63,12 @@ def test_body_cap_counts_chunks_when_content_length_is_understated() -> None:
 
     sent: list[dict[str, object]] = []
     downstream_called = False
-    chunks = iter([
-        {"type": "http.request", "body": b"1234", "more_body": True},
-        {"type": "http.request", "body": b"5678", "more_body": False},
-    ])
+    chunks = iter(
+        [
+            {"type": "http.request", "body": b"1234", "more_body": True},
+            {"type": "http.request", "body": b"5678", "more_body": False},
+        ]
+    )
 
     async def receive() -> dict[str, object]:
         return next(chunks)

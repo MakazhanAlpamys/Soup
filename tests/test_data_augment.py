@@ -14,6 +14,7 @@ runner = CliRunner()
 # Strategy unit tests (with a mocked provider)
 # ---------------------------------------------------------------------------
 
+
 class FakeProvider:
     """Deterministic fake LLM provider for testing."""
 
@@ -48,9 +49,7 @@ class TestAugmentStrategies:
             {"instruction": "Hello", "output": "Hi"},
         ]
         provider = FakeProvider()
-        augmented = augment_translate(
-            examples, provider=provider, languages=["ru", "zh"]
-        )
+        augmented = augment_translate(examples, provider=provider, languages=["ru", "zh"])
         # 1 example × 2 languages × 2 string fields = 4 provider calls
         assert provider.calls == 4
         assert len(augmented) == 2
@@ -65,9 +64,7 @@ class TestAugmentStrategies:
             },
         ]
         provider = FakeProvider()
-        augmented = augment_style(
-            examples, provider=provider, styles=["formal", "casual"]
-        )
+        augmented = augment_style(examples, provider=provider, styles=["formal", "casual"])
         # 1 example × 2 styles × 2 string fields = 4 provider calls
         assert provider.calls == 4
         assert len(augmented) == 2
@@ -118,7 +115,10 @@ class TestAugmentStrategies:
 
         stats = ForgeJudgeStats()
         augmented = augment_rephrase(
-            [{"instruction": "x"}], provider=FailingProvider(), count=1, stats=stats,
+            [{"instruction": "x"}],
+            provider=FailingProvider(),
+            count=1,
+            stats=stats,
         )
         assert augmented == []
         assert (stats.calls, stats.failures) == (1, 1)
@@ -129,15 +129,12 @@ class TestAugmentStrategies:
 # CLI
 # ---------------------------------------------------------------------------
 
+
 class TestAugmentCLI:
     def _write_data(self, tmp_path):
-        rows = [
-            {"instruction": f"q{i}", "output": f"a{i}"} for i in range(3)
-        ]
+        rows = [{"instruction": f"q{i}", "output": f"a{i}"} for i in range(3)]
         path = tmp_path / "data.jsonl"
-        path.write_text(
-            "\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8"
-        )
+        path.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
         return path
 
     def test_augment_help(self):
@@ -147,50 +144,83 @@ class TestAugmentCLI:
 
     def test_augment_missing_file(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
-        result = runner.invoke(app, [
-            "data", "augment",
-            "--input", "nonexistent.jsonl",
-            "--output", "out.jsonl",
-            "--strategy", "rephrase",
-            "--provider", "ollama",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "data",
+                "augment",
+                "--input",
+                "nonexistent.jsonl",
+                "--output",
+                "out.jsonl",
+                "--strategy",
+                "rephrase",
+                "--provider",
+                "ollama",
+            ],
+        )
         assert result.exit_code != 0
 
     def test_augment_count_cap(self, tmp_path, monkeypatch):
         """CLI rejects count > 10."""
         monkeypatch.chdir(tmp_path)
         path = self._write_data(tmp_path)
-        result = runner.invoke(app, [
-            "data", "augment",
-            "--input", str(path.name),
-            "--output", "out.jsonl",
-            "--strategy", "rephrase",
-            "--count", "15",
-            "--provider", "ollama",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "data",
+                "augment",
+                "--input",
+                str(path.name),
+                "--output",
+                "out.jsonl",
+                "--strategy",
+                "rephrase",
+                "--count",
+                "15",
+                "--provider",
+                "ollama",
+            ],
+        )
         assert result.exit_code != 0
 
     def test_input_path_traversal_blocked(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
-        result = runner.invoke(app, [
-            "data", "augment",
-            "--input", "../../../etc/passwd",
-            "--output", "out.jsonl",
-            "--strategy", "rephrase",
-            "--provider", "ollama",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "data",
+                "augment",
+                "--input",
+                "../../../etc/passwd",
+                "--output",
+                "out.jsonl",
+                "--strategy",
+                "rephrase",
+                "--provider",
+                "ollama",
+            ],
+        )
         assert result.exit_code != 0
 
     def test_output_path_traversal_blocked(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         path = self._write_data(tmp_path)
-        result = runner.invoke(app, [
-            "data", "augment",
-            "--input", str(path.name),
-            "--output", "../../evil.jsonl",
-            "--strategy", "rephrase",
-            "--provider", "ollama",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "data",
+                "augment",
+                "--input",
+                str(path.name),
+                "--output",
+                "../../evil.jsonl",
+                "--strategy",
+                "rephrase",
+                "--provider",
+                "ollama",
+            ],
+        )
         assert result.exit_code != 0
 
 
@@ -198,18 +228,27 @@ class TestAugmentCLI:
 # Strategy validation
 # ---------------------------------------------------------------------------
 
+
 class TestStrategyValidation:
     def test_unknown_strategy(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         path = tmp_path / "data.jsonl"
         path.write_text('{"instruction": "x", "output": "y"}\n', encoding="utf-8")
-        result = runner.invoke(app, [
-            "data", "augment",
-            "--input", str(path.name),
-            "--output", "out.jsonl",
-            "--strategy", "bogus",
-            "--provider", "ollama",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "data",
+                "augment",
+                "--input",
+                str(path.name),
+                "--output",
+                "out.jsonl",
+                "--strategy",
+                "bogus",
+                "--provider",
+                "ollama",
+            ],
+        )
         assert result.exit_code != 0
 
 

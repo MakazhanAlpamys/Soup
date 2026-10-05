@@ -222,9 +222,9 @@ def test_sample_uncertain_rows_dual_rm(tmp_path, monkeypatch):
     inp = tmp_path / "in.jsonl"
     out = tmp_path / "out.jsonl"
     rows = [
-        {"id": "a", "rm_scores": [0.1, 0.9]},   # disagreement 0.8
-        {"id": "b", "rm_scores": [0.5, 0.5]},   # disagreement 0.0
-        {"id": "c", "rm_scores": [0.3, 0.7]},   # disagreement 0.4
+        {"id": "a", "rm_scores": [0.1, 0.9]},  # disagreement 0.8
+        {"id": "b", "rm_scores": [0.5, 0.5]},  # disagreement 0.0
+        {"id": "c", "rm_scores": [0.3, 0.7]},  # disagreement 0.4
     ]
     inp.write_text("\n".join(json.dumps(r) for r in rows), encoding="utf-8")
 

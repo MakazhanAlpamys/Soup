@@ -9,6 +9,7 @@ Verifies:
    timeout, rejecting if any resolved IP is private/loopback/link-local, and
    failing closed on resolver errors/timeouts.
 """
+
 from __future__ import annotations
 
 import socket
@@ -153,27 +154,20 @@ class TestTier3DNSDefenceInDepth:
 
     def test_tier3_rejects_hostname_resolving_to_private_rfc1918(self) -> None:
         """10.0.0.1.nip.io or custom domain pointing to private IP is rejected."""
-        fake_addrinfo = [
-            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.1", 443))
-        ]
+        fake_addrinfo = [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.1", 443))]
         with patch("socket.getaddrinfo", return_value=fake_addrinfo):
             assert (
-                _telemetry_endpoint_is_safe("https://custom-analytics.example.com/capture")
-                is False
+                _telemetry_endpoint_is_safe("https://custom-analytics.example.com/capture") is False
             )
 
     def test_tier3_rejects_hostname_resolving_to_loopback(self) -> None:
         """localtest.me or domain pointing to 127.0.0.1 is rejected."""
-        fake_addrinfo = [
-            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", 443))
-        ]
+        fake_addrinfo = [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", 443))]
         with patch("socket.getaddrinfo", return_value=fake_addrinfo):
             assert _telemetry_endpoint_is_safe("https://localtest.me/capture/") is False
 
     def test_tier3_rejects_hostname_resolving_to_cloud_metadata(self) -> None:
-        fake_addrinfo = [
-            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("169.254.169.254", 443))
-        ]
+        fake_addrinfo = [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("169.254.169.254", 443))]
         with patch("socket.getaddrinfo", return_value=fake_addrinfo):
             assert _telemetry_endpoint_is_safe("https://cloud-meta.custom.org/capture") is False
 
@@ -188,9 +182,7 @@ class TestTier3DNSDefenceInDepth:
 
     def test_tier3_allows_custom_self_hosted_domain_resolving_to_public_ip(self) -> None:
         """Custom self-hosted PostHog on a legitimate public IP is permitted."""
-        fake_addrinfo = [
-            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))
-        ]
+        fake_addrinfo = [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))]
         with patch("socket.getaddrinfo", return_value=fake_addrinfo):
             assert _telemetry_endpoint_is_safe("https://telemetry.mycorp.org/capture/") is True
 
@@ -205,8 +197,10 @@ class TestTier3DNSDefenceInDepth:
 
     def test_resolve_host_ips_helper_timeout_handling(self) -> None:
         """_resolve_host_ips returns None when resolution exceeds timeout deadline."""
+
         def slow_getaddrinfo(*args: object, **kwargs: object) -> list[object]:
             import time
+
             time.sleep(0.5)
             return []
 
@@ -230,9 +224,7 @@ class TestResolvePosthogTargetTieredIntegration:
         assert "posthog.com" in endpoint
 
     def test_resolve_rejects_hostname_ssrf_via_env(self) -> None:
-        fake_addrinfo = [
-            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.1", 443))
-        ]
+        fake_addrinfo = [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.1", 443))]
         with patch("socket.getaddrinfo", return_value=fake_addrinfo):
             env = {"SOUP_POSTHOG_ENDPOINT": "https://10.0.0.1.nip.io/capture/"}
             assert _resolve_posthog_target(None, env=env) is None
@@ -242,9 +234,7 @@ class TestResolvePosthogTargetTieredIntegration:
         assert _resolve_posthog_target(None, env=env) is None
 
     def test_resolve_accepts_valid_custom_endpoint_via_env(self) -> None:
-        fake_addrinfo = [
-            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))
-        ]
+        fake_addrinfo = [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))]
         with patch("socket.getaddrinfo", return_value=fake_addrinfo):
             env = {"SOUP_POSTHOG_ENDPOINT": "https://telemetry.selfhosted.io/capture/"}
             resolved = _resolve_posthog_target("phc_custom", env=env)

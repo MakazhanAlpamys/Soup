@@ -101,8 +101,7 @@ def private_key_from_pem(pem: Any) -> Ed25519PrivateKey:
         raise ValueError(f"could not parse PEM private key: {exc}") from exc
     if not isinstance(key, Ed25519PrivateKey):
         raise ValueError(
-            f"key must be ed25519, got {type(key).__name__} "
-            "(only ed25519 signing is supported)"
+            f"key must be ed25519, got {type(key).__name__} (only ed25519 signing is supported)"
         )
     return key
 
@@ -211,13 +210,9 @@ def read_public_key_file(path: Any) -> str:
         raise ValueError("public key path must not contain null bytes")
     st = os.lstat(path)
     if stat.S_ISLNK(st.st_mode):
-        raise ValueError(
-            f"public key {os.path.basename(path)!r} must not be a symlink"
-        )
+        raise ValueError(f"public key {os.path.basename(path)!r} must not be a symlink")
     if not stat.S_ISREG(st.st_mode):
-        raise ValueError(
-            f"public key {os.path.basename(path)!r} must be a regular file"
-        )
+        raise ValueError(f"public key {os.path.basename(path)!r} must be a regular file")
     if st.st_size > _MAX_KEY_BYTES:
         raise ValueError(f"public key exceeds {_MAX_KEY_BYTES} bytes")
     with open(path, encoding="utf-8") as fh:

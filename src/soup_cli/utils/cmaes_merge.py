@@ -76,13 +76,9 @@ def validate_population_size(value: object) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
         raise TypeError("population_size must be int")
     if value < MIN_POPULATION:
-        raise ValueError(
-            f"population_size {value} below floor {MIN_POPULATION}"
-        )
+        raise ValueError(f"population_size {value} below floor {MIN_POPULATION}")
     if value > MAX_POPULATION:
-        raise ValueError(
-            f"population_size {value} above cap {MAX_POPULATION}"
-        )
+        raise ValueError(f"population_size {value} above cap {MAX_POPULATION}")
     return value
 
 
@@ -90,13 +86,9 @@ def validate_generations(value: object) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
         raise TypeError("max_generations must be int")
     if value < MIN_GENERATIONS:
-        raise ValueError(
-            f"max_generations {value} below floor {MIN_GENERATIONS}"
-        )
+        raise ValueError(f"max_generations {value} below floor {MIN_GENERATIONS}")
     if value > MAX_GENERATIONS:
-        raise ValueError(
-            f"max_generations {value} above cap {MAX_GENERATIONS}"
-        )
+        raise ValueError(f"max_generations {value} above cap {MAX_GENERATIONS}")
     return value
 
 
@@ -145,9 +137,7 @@ class CmaesPlan:
         if not isinstance(self.adapters, tuple):
             raise TypeError("adapters must be tuple")
         if len(self.adapters) < _MIN_ADAPTERS:
-            raise ValueError(
-                f"need at least {_MIN_ADAPTERS} adapters"
-            )
+            raise ValueError(f"need at least {_MIN_ADAPTERS} adapters")
         if len(self.adapters) > _MAX_ADAPTERS:
             raise ValueError(f"at most {_MAX_ADAPTERS} adapters")
         for path in self.adapters:
@@ -178,15 +168,11 @@ class CmaesResult:
     def __post_init__(self) -> None:
         # Score finite + bool-rejected
         _validate_finite_score(self.best_score, "best_score")
-        if not isinstance(self.generations_run, int) or isinstance(
-            self.generations_run, bool
-        ):
+        if not isinstance(self.generations_run, int) or isinstance(self.generations_run, bool):
             raise TypeError("generations_run must be int")
         if self.generations_run < 0:
             raise ValueError("generations_run must be non-negative")
-        if not isinstance(self.evaluations, int) or isinstance(
-            self.evaluations, bool
-        ):
+        if not isinstance(self.evaluations, int) or isinstance(self.evaluations, bool):
             raise TypeError("evaluations must be int")
         if self.evaluations < 0:
             raise ValueError("evaluations must be non-negative")
@@ -209,9 +195,7 @@ class CmaesResult:
                 raise ValueError("best_weights entries must be non-negative")
         total = sum(float(w) for w in self.best_weights)
         if not math.isclose(total, 1.0, abs_tol=_SIMPLEX_TOL):
-            raise ValueError(
-                f"best_weights must sum to 1.0 (got {total:.6f})"
-            )
+            raise ValueError(f"best_weights must sum to 1.0 (got {total:.6f})")
         if not isinstance(self.history, tuple):
             raise TypeError("history must be tuple")
         for h in self.history:
@@ -350,9 +334,7 @@ def run_cmaes_merge(
 
     history: list[float] = []
     best_score = -math.inf
-    best_weights: Tuple[float, ...] = tuple(
-        1.0 / len(plan.adapters) for _ in plan.adapters
-    )
+    best_weights: Tuple[float, ...] = tuple(1.0 / len(plan.adapters) for _ in plan.adapters)
 
     start = time.monotonic()
     generations_run = 0
@@ -367,9 +349,7 @@ def run_cmaes_merge(
         # Sample population
         candidates: list[Tuple[list[float], Tuple[float, ...], float]] = []
         for _ in range(plan.population_size):
-            sample = [
-                mean[i] + sigma[i] * rng.normal() for i in range(n_dim)
-            ]
+            sample = [mean[i] + sigma[i] * rng.normal() for i in range(n_dim)]
             # Append 0.0 reference logit (softmax is shift-invariant) so we
             # span the full simplex.
             logits = sample + [0.0]
@@ -388,15 +368,10 @@ def run_cmaes_merge(
         candidates.sort(key=lambda c: c[2], reverse=True)
         elite_samples = [c[0] for c in candidates[:elite_count]]
         # Recompute mean + sigma per dim from elite
-        new_mean = [
-            sum(s[i] for s in elite_samples) / len(elite_samples)
-            for i in range(n_dim)
-        ]
+        new_mean = [sum(s[i] for s in elite_samples) / len(elite_samples) for i in range(n_dim)]
         new_sigma = []
         for i in range(n_dim):
-            var = sum(
-                (s[i] - new_mean[i]) ** 2 for s in elite_samples
-            ) / len(elite_samples)
+            var = sum((s[i] - new_mean[i]) ** 2 for s in elite_samples) / len(elite_samples)
             # Clamp to a sensible floor; CMA-ES typically blends with prior
             # but for ≤16-adapter case the simple rank-mu update converges.
             new_sigma.append(max(math.sqrt(var), 1e-4))
@@ -453,9 +428,7 @@ def _read_merged_base_name(merged_dir: str) -> str:
     try:
         cst = os.lstat(cfg_path)
     except OSError as exc:
-        raise ValueError(
-            f"merged adapter_config.json unreadable: {type(exc).__name__}"
-        ) from exc
+        raise ValueError(f"merged adapter_config.json unreadable: {type(exc).__name__}") from exc
     if stat.S_ISLNK(cst.st_mode):
         raise ValueError("merged adapter_config.json must not be a symlink")
     if cst.st_size > _MAX_ADAPTER_CONFIG_BYTES:
@@ -463,9 +436,7 @@ def _read_merged_base_name(merged_dir: str) -> str:
     cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
     base = cfg.get("base_model_name_or_path")
     if not base:
-        raise ValueError(
-            "merged adapter_config.json has no base_model_name_or_path"
-        )
+        raise ValueError("merged adapter_config.json has no base_model_name_or_path")
     return base
 
 
@@ -480,7 +451,7 @@ def _generate(model, tokenizer, prompt: str) -> str:
         do_sample=False,
         pad_token_id=tokenizer.eos_token_id,
     )
-    new_tokens = outputs[0][inputs["input_ids"].shape[1]:]
+    new_tokens = outputs[0][inputs["input_ids"].shape[1] :]
     return tokenizer.decode(new_tokens, skip_special_tokens=True)
 
 
@@ -532,20 +503,15 @@ class _CachedBaseScorer:
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
         if self._base is None:
-            self._tokenizer = AutoTokenizer.from_pretrained(
-                base_name, trust_remote_code=False
-            )
-            self._base = AutoModelForCausalLM.from_pretrained(
-                base_name, trust_remote_code=False
-            )
+            self._tokenizer = AutoTokenizer.from_pretrained(base_name, trust_remote_code=False)
+            self._base = AutoModelForCausalLM.from_pretrained(base_name, trust_remote_code=False)
             self._base_name = base_name
         elif base_name != self._base_name:
             # All source adapters in one merge share a base; a mismatch means
             # a malformed merged dir. Fail loud rather than silently scoring
             # against the wrong base.
             raise ValueError(
-                "cmaes candidate base_model mismatch: "
-                f"{base_name!r} != cached {self._base_name!r}"
+                f"cmaes candidate base_model mismatch: {base_name!r} != cached {self._base_name!r}"
             )
 
     def __call__(self, merged_dir: str, eval_suite: str) -> float:
@@ -679,7 +645,7 @@ class _LcgRng:
         # 64-bit LCG (Numerical Recipes-style)
         self._state = (self._state * 6364136223846793005 + 1442695040888963407) & 0xFFFFFFFFFFFFFFFF
         # Take the top 53 bits to fit a double's mantissa
-        return ((self._state >> 11) / float(1 << 53))
+        return (self._state >> 11) / float(1 << 53)
 
     def normal(self) -> float:
         """Box-Muller standard normal."""

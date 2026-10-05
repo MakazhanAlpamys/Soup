@@ -137,9 +137,7 @@ def _sample_report() -> AdapterDiffReport:
     return AdapterDiffReport(
         adapter_a="A",
         adapter_b="B",
-        per_layer=(
-            LayerDiff(name="layer1", frobenius=2.0, norm_a=4.0, norm_b=3.0, relative=0.5),
-        ),
+        per_layer=(LayerDiff(name="layer1", frobenius=2.0, norm_a=4.0, norm_b=3.0, relative=0.5),),
         top_changed=("layer1",),
         effective_rank_a=8.0,
         effective_rank_b=8.0,
@@ -174,9 +172,12 @@ def test_render_report_markdown_renders():
 
 def test_render_report_markdown_only_lists():
     report = AdapterDiffReport(
-        adapter_a="x", adapter_b="y",
-        per_layer=(), top_changed=(),
-        effective_rank_a=None, effective_rank_b=None,
+        adapter_a="x",
+        adapter_b="y",
+        per_layer=(),
+        top_changed=(),
+        effective_rank_a=None,
+        effective_rank_b=None,
         shared_layers=0,
         only_in_a=("foo",),
         only_in_b=("bar",),
@@ -193,6 +194,7 @@ def test_render_report_markdown_rejects_non_report():
 
 def test_frozen_dataclasses():
     import dataclasses
+
     diff = LayerDiff(name="x", frobenius=1.0, norm_a=1.0, norm_b=1.0, relative=1.0)
     with pytest.raises(dataclasses.FrozenInstanceError):
         diff.frobenius = 2.0  # type: ignore[misc]
@@ -217,16 +219,20 @@ def test_compute_adapter_diff_end_to_end(tmp_path, monkeypatch):
     pytest.importorskip("safetensors")
     monkeypatch.chdir(tmp_path)
     weights_a = {
-        "base_model.model.layers.0.self_attn.q_proj.lora_A.weight":
-            np.ones((4, 8), dtype=np.float32),
-        "base_model.model.layers.0.self_attn.v_proj.lora_A.weight":
-            np.zeros((4, 8), dtype=np.float32),
+        "base_model.model.layers.0.self_attn.q_proj.lora_A.weight": np.ones(
+            (4, 8), dtype=np.float32
+        ),
+        "base_model.model.layers.0.self_attn.v_proj.lora_A.weight": np.zeros(
+            (4, 8), dtype=np.float32
+        ),
     }
     weights_b = {
-        "base_model.model.layers.0.self_attn.q_proj.lora_A.weight":
-            np.ones((4, 8), dtype=np.float32),  # identical
-        "base_model.model.layers.0.self_attn.v_proj.lora_A.weight":
-            np.ones((4, 8), dtype=np.float32),  # different
+        "base_model.model.layers.0.self_attn.q_proj.lora_A.weight": np.ones(
+            (4, 8), dtype=np.float32
+        ),  # identical
+        "base_model.model.layers.0.self_attn.v_proj.lora_A.weight": np.ones(
+            (4, 8), dtype=np.float32
+        ),  # different
     }
     _write_safetensors(tmp_path / "a", weights_a)
     _write_safetensors(tmp_path / "b", weights_b)
@@ -292,8 +298,9 @@ def test_compute_adapter_diff_rejects_symlinked_weights(tmp_path, monkeypatch):
 
 def test_no_top_level_torch_import():
     """Lazy-import policy: adapter_diff must not import torch at module level."""
-    src = (Path(__file__).parent.parent / "src" / "soup_cli" / "utils" / "adapter_diff.py"
-           ).read_text(encoding="utf-8")
+    src = (
+        Path(__file__).parent.parent / "src" / "soup_cli" / "utils" / "adapter_diff.py"
+    ).read_text(encoding="utf-8")
     # Only allowed inside def bodies
     for line in src.splitlines():
         stripped = line.lstrip()
@@ -345,11 +352,19 @@ def test_adapters_diff_json_output(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     _write_safetensors(tmp_path / "a", {"w": np.ones((2, 2), dtype=np.float32)})
     _write_safetensors(tmp_path / "b", {"w": np.zeros((2, 2), dtype=np.float32)})
-    result = runner.invoke(soup_app, [
-        "adapters", "diff", "a", "b",
-        "--format", "json",
-        "--output", "report.json",
-    ])
+    result = runner.invoke(
+        soup_app,
+        [
+            "adapters",
+            "diff",
+            "a",
+            "b",
+            "--format",
+            "json",
+            "--output",
+            "report.json",
+        ],
+    )
     assert result.exit_code == 0, (result.output, repr(result.exception))
     parsed = json.loads((tmp_path / "report.json").read_text())
     assert parsed["shared_layers"] == 1
@@ -360,11 +375,19 @@ def test_adapters_diff_markdown_output(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     _write_safetensors(tmp_path / "a", {"w": np.ones((2, 2), dtype=np.float32)})
     _write_safetensors(tmp_path / "b", {"w": np.zeros((2, 2), dtype=np.float32)})
-    result = runner.invoke(soup_app, [
-        "adapters", "diff", "a", "b",
-        "--format", "markdown",
-        "--output", "report.md",
-    ])
+    result = runner.invoke(
+        soup_app,
+        [
+            "adapters",
+            "diff",
+            "a",
+            "b",
+            "--format",
+            "markdown",
+            "--output",
+            "report.md",
+        ],
+    )
     assert result.exit_code == 0, (result.output, repr(result.exception))
     text = (tmp_path / "report.md").read_text()
     assert "# Adapter diff" in text
@@ -374,9 +397,17 @@ def test_adapters_diff_unknown_format(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     (tmp_path / "a").mkdir()
     (tmp_path / "b").mkdir()
-    result = runner.invoke(soup_app, [
-        "adapters", "diff", "a", "b", "--format", "yaml",
-    ])
+    result = runner.invoke(
+        soup_app,
+        [
+            "adapters",
+            "diff",
+            "a",
+            "b",
+            "--format",
+            "yaml",
+        ],
+    )
     assert result.exit_code == 2
     assert "Unknown --format" in _strip_ansi(result.output)
 
@@ -386,9 +417,17 @@ def test_adapters_diff_output_requires_non_table(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     _write_safetensors(tmp_path / "a", {"w": np.ones((2, 2), dtype=np.float32)})
     _write_safetensors(tmp_path / "b", {"w": np.zeros((2, 2), dtype=np.float32)})
-    result = runner.invoke(soup_app, [
-        "adapters", "diff", "a", "b", "--output", "out.txt",
-    ])
+    result = runner.invoke(
+        soup_app,
+        [
+            "adapters",
+            "diff",
+            "a",
+            "b",
+            "--output",
+            "out.txt",
+        ],
+    )
     assert result.exit_code == 2
     assert "requires --format" in _strip_ansi(result.output)
 
@@ -399,8 +438,17 @@ def test_adapters_diff_output_outside_cwd_rejected(tmp_path, monkeypatch):
     _write_safetensors(tmp_path / "a", {"w": np.ones((2, 2), dtype=np.float32)})
     _write_safetensors(tmp_path / "b", {"w": np.zeros((2, 2), dtype=np.float32)})
     outside = os.path.join(os.path.dirname(str(tmp_path)), "outside.json")
-    result = runner.invoke(soup_app, [
-        "adapters", "diff", "a", "b",
-        "--format", "json", "--output", outside,
-    ])
+    result = runner.invoke(
+        soup_app,
+        [
+            "adapters",
+            "diff",
+            "a",
+            "b",
+            "--format",
+            "json",
+            "--output",
+            outside,
+        ],
+    )
     assert result.exit_code != 0

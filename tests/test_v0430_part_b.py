@@ -1,4 +1,5 @@
 """Tests for v0.43.0 Part B — Eval metrics."""
+
 from __future__ import annotations
 
 import pytest
@@ -32,6 +33,7 @@ from soup_cli.utils.nlg_metrics import (
 
 # ----------------- BLEU / ROUGE -----------------
 
+
 class TestBleuScore:
     def test_perfect_match(self):
         score = bleu_score(["the cat sat on the mat"], ["the cat sat on the mat"])
@@ -58,9 +60,7 @@ class TestBleuScore:
         # pred unigrams the=2,cat=1,sat=1,on=1,the=2,mat=1 (6 total);
         # ref the=1,cat=1,sat=1.
         # min-clipped overlap = the(min(2,1)) + cat + sat = 3, total=6 → 0.5
-        score = bleu_score(
-            ["the cat sat on the mat"], ["the cat sat"], max_n=1
-        )
+        score = bleu_score(["the cat sat on the mat"], ["the cat sat"], max_n=1)
         assert score == pytest.approx(0.5)
 
     def test_partial_overlap(self):
@@ -168,48 +168,42 @@ class TestComputeNlgMetric:
 
 # ----------------- effective_tokens_per_second -----------------
 
+
 class TestEffectiveTokensPerSecond:
     def test_happy(self):
-        assert effective_tokens_per_second(
-            unmasked_tokens=10000, wall_clock_seconds=10.0
-        ) == 1000.0
+        assert effective_tokens_per_second(unmasked_tokens=10000, wall_clock_seconds=10.0) == 1000.0
 
     def test_zero_wall_clock_returns_none(self):
-        assert effective_tokens_per_second(
-            unmasked_tokens=100, wall_clock_seconds=0.0
-        ) is None
+        assert effective_tokens_per_second(unmasked_tokens=100, wall_clock_seconds=0.0) is None
 
     def test_negative_wall_clock_returns_none(self):
-        assert effective_tokens_per_second(
-            unmasked_tokens=100, wall_clock_seconds=-1.0
-        ) is None
+        assert effective_tokens_per_second(unmasked_tokens=100, wall_clock_seconds=-1.0) is None
 
     def test_negative_tokens_rejected(self):
         with pytest.raises(ValueError):
-            effective_tokens_per_second(
-                unmasked_tokens=-1, wall_clock_seconds=1.0
-            )
+            effective_tokens_per_second(unmasked_tokens=-1, wall_clock_seconds=1.0)
 
     def test_bool_tokens_rejected(self):
         with pytest.raises(ValueError):
             effective_tokens_per_second(
-                unmasked_tokens=True, wall_clock_seconds=1.0  # type: ignore[arg-type]
+                unmasked_tokens=True,
+                wall_clock_seconds=1.0,  # type: ignore[arg-type]
             )
 
     def test_bool_wall_clock_rejected(self):
         with pytest.raises(ValueError):
             effective_tokens_per_second(
-                unmasked_tokens=100, wall_clock_seconds=True  # type: ignore[arg-type]
+                unmasked_tokens=100,
+                wall_clock_seconds=True,  # type: ignore[arg-type]
             )
 
     def test_nonfinite_wall_clock_rejected(self):
         with pytest.raises(ValueError, match="finite"):
-            effective_tokens_per_second(
-                unmasked_tokens=100, wall_clock_seconds=float("inf")
-            )
+            effective_tokens_per_second(unmasked_tokens=100, wall_clock_seconds=float("inf"))
 
 
 # ----------------- KL Calibration -----------------
+
 
 class TestKlDivergence:
     def test_identical_distributions(self):
@@ -305,6 +299,7 @@ class TestRunCalibration:
 
 
 # ----------------- Arena -----------------
+
 
 class TestExpectedScore:
     def test_equal_ratings_50_50(self):
@@ -418,6 +413,7 @@ class TestTournament:
 
     def test_model_cap_exceeded(self):
         from soup_cli.eval.arena import _MAX_MODELS
+
         t = Tournament()
         for i in range(_MAX_MODELS):
             t.register(f"model_{i}")
@@ -459,6 +455,7 @@ class TestTournament:
 
 
 # ----------------- Benchmarks v0.43 -----------------
+
 
 class TestBenchmarksV043:
     @pytest.mark.parametrize("name", list(NEW_BENCHMARKS_V0_43))

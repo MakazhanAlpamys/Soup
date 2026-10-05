@@ -22,16 +22,35 @@ chat template is the genuine Jinja renderer and BOS/EOS come from a genuine
 ``tokenizers`` post-processor.
 """
 
-
 import pytest
 
 _SPECIALS = [
-    "<unk>", "<s>", "</s>",
-    "<|system|>", "<|user|>", "<|assistant|>", "<|end|>",
+    "<unk>",
+    "<s>",
+    "</s>",
+    "<|system|>",
+    "<|user|>",
+    "<|assistant|>",
+    "<|end|>",
 ]
 _WORDS = [
-    "You", "are", "terse", ".", "What", "is", "the", "capital", "of", "France",
-    "?", "Paris", "Berlin", "Germany", "system", "user", "assistant",
+    "You",
+    "are",
+    "terse",
+    ".",
+    "What",
+    "is",
+    "the",
+    "capital",
+    "of",
+    "France",
+    "?",
+    "Paris",
+    "Berlin",
+    "Germany",
+    "system",
+    "user",
+    "assistant",
 ]
 _BOS_ID = _SPECIALS.index("<s>")
 _EOS_ID = _SPECIALS.index("</s>")
@@ -156,9 +175,7 @@ class TestLeadingBOSAgreesWithTheLivePath:
 
 class TestTruncation:
     @pytest.mark.parametrize("template", sorted(_TEMPLATES))
-    def test_truncated_row_gains_no_eos_the_live_path_lacks(
-        self, tmp_path, monkeypatch, template
-    ):
+    def test_truncated_row_gains_no_eos_the_live_path_lacks(self, tmp_path, monkeypatch, template):
         """BOS-only post-processor, row longer than ``max_length``. The live path
         appends the EOS and then truncates, so its row ends on content. On ``main``
         the ``bos_template`` row still gained an EOS: the doubled BOS was removed
@@ -166,9 +183,7 @@ class TestTruncation:
         ``len < max_length`` check appended. Dropping the post-processor BOS for a
         preset too would have spread that to the ``preset`` row."""
         tok = _tokenizer(_TEMPLATES[template], post_processor="bos")
-        cached, _ = _run_preprocess(
-            tmp_path, monkeypatch, tok, messages=_LONG, max_length=64
-        )
+        cached, _ = _run_preprocess(tmp_path, monkeypatch, tok, messages=_LONG, max_length=64)
         live = _live_ids(tok, _LONG, max_length=64)
 
         assert len(live) == 64 and live[-1] != _EOS_ID, "sanity: live row truncated"
@@ -177,24 +192,18 @@ class TestTruncation:
         assert len(cached) <= 64
 
     @pytest.mark.parametrize("template", sorted(_TEMPLATES))
-    def test_truncated_row_keeps_the_post_processor_eos(
-        self, tmp_path, monkeypatch, template
-    ):
+    def test_truncated_row_keeps_the_post_processor_eos(self, tmp_path, monkeypatch, template):
         """#876 criterion 2, and the #788 round-2 regression: with a post-processor
         that appends EOS, HF truncation reserves room for it, so a truncated cache
         row still ends on its trained EOS. Removing the BOS must not cost it."""
         tok = _tokenizer(_TEMPLATES[template], post_processor="bos_eos")
-        cached, _ = _run_preprocess(
-            tmp_path, monkeypatch, tok, messages=_LONG, max_length=64
-        )
+        cached, _ = _run_preprocess(tmp_path, monkeypatch, tok, messages=_LONG, max_length=64)
         live = _live_ids(tok, _LONG, max_length=64)
 
         assert cached[-1] == _EOS_ID and cached.count(_EOS_ID) == 1, cached
         assert _leading_bos(cached) == _leading_bos(live)
 
-    def test_a_row_that_exactly_fits_with_the_bos_still_gets_its_eos(
-        self, tmp_path, monkeypatch
-    ):
+    def test_a_row_that_exactly_fits_with_the_bos_still_gets_its_eos(self, tmp_path, monkeypatch):
         """The other side of the truncation check. A preset row whose content plus
         the post-processor BOS is exactly ``max_length`` was NOT truncated: the live
         path's content plus EOS fits the same budget and ends on EOS. Deciding
@@ -215,9 +224,7 @@ class TestTruncation:
 
 
 class TestTheHelpers:
-    @pytest.mark.parametrize(
-        "post_processor, expected", [("bos", 1), ("bos_eos", 1), (None, 0)]
-    )
+    @pytest.mark.parametrize("post_processor, expected", [("bos", 1), ("bos_eos", 1), (None, 0)])
     def test_the_probe_measures_only_the_post_processor(self, post_processor, expected):
         """The count is a property of the tokenizer, not of any template: a
         ``{{ bos_token }}`` template must not change it."""

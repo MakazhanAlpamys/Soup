@@ -201,15 +201,17 @@ class TestStreamResponse:
         with patch("soup_cli.commands.serve._generate_response") as mock_gen:
             mock_gen.return_value = ("Hello world", 5, 2)
 
-            chunks = list(_stream_response(
-                model=MagicMock(),
-                tokenizer=MagicMock(),
-                messages=[{"role": "user", "content": "test"}],
-                max_tokens=256,
-                temperature=0.7,
-                top_p=0.9,
-                model_name="test",
-            ))
+            chunks = list(
+                _stream_response(
+                    model=MagicMock(),
+                    tokenizer=MagicMock(),
+                    messages=[{"role": "user", "content": "test"}],
+                    max_tokens=256,
+                    temperature=0.7,
+                    top_p=0.9,
+                    model_name="test",
+                )
+            )
 
             # Should have word chunks + final chunk + [DONE]
             assert len(chunks) >= 3
@@ -229,9 +231,7 @@ class TestDetectBaseModel:
         from soup_cli.commands.serve import _detect_base_model
 
         config_file = tmp_path / "adapter_config.json"
-        config_file.write_text(json.dumps({
-            "base_model_name_or_path": "meta-llama/Llama-3.1-8B"
-        }))
+        config_file.write_text(json.dumps({"base_model_name_or_path": "meta-llama/Llama-3.1-8B"}))
 
         result = _detect_base_model(config_file)
         assert result == "meta-llama/Llama-3.1-8B"

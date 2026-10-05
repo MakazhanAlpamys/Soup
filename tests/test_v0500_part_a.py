@@ -111,6 +111,7 @@ def test_deferred_live_invariant():
     because all 6 variants ship with live math kernels.
     """
     from soup_cli.utils.grpo_variants import _DEFERRED_LIVE
+
     assert len(SUPPORTED_GRPO_VARIANTS) == 7
     assert _DEFERRED_LIVE == frozenset()
 
@@ -184,12 +185,15 @@ def test_apply_variant_loss_standard_is_noop():
     logp_new = torch.zeros(2, 4)
     logp_old = torch.zeros(2, 4)
     advantages = torch.zeros(2)
-    assert apply_variant_loss(
-        "standard",
-        logp_new=logp_new,
-        logp_old=logp_old,
-        advantages=advantages,
-    ) is None
+    assert (
+        apply_variant_loss(
+            "standard",
+            logp_new=logp_new,
+            logp_old=logp_old,
+            advantages=advantages,
+        )
+        is None
+    )
 
 
 def test_apply_variant_loss_unknown_raises_validation():

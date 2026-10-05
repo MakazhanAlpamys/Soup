@@ -48,20 +48,18 @@ _HQQ_CANDIDATE_RE = re.compile(r"^hqq:[12348]bit$")
 # loaders are ``build_before_generator`` / ``build_after_generator_factory``).
 # NOT a public API; kept as the test seam.
 _DEPLOY_MEASURE_BEFORE_GEN: Optional[Callable[[str], str]] = None
-_DEPLOY_MEASURE_AFTER_FACTORY: Optional[
-    Callable[[str], Callable[[str], str]]
-] = None
+_DEPLOY_MEASURE_AFTER_FACTORY: Optional[Callable[[str], Callable[[str], str]]] = None
 
 
 @dataclass(frozen=True)
 class MeasureResult:
     """Outcome of a single candidate measurement."""
 
-    candidate: str   # e.g. "4bit" / "gptq" / "awq"
-    before: float    # baseline (unquantized) score in [0, 1]
-    after: float     # quantized score
-    delta: float     # after - before (negative = worse)
-    verdict: str     # "OK" | "MINOR" | "MAJOR"
+    candidate: str  # e.g. "4bit" / "gptq" / "awq"
+    before: float  # baseline (unquantized) score in [0, 1]
+    after: float  # quantized score
+    delta: float  # after - before (negative = worse)
+    verdict: str  # "OK" | "MINOR" | "MAJOR"
 
 
 def compute_cache_key(
@@ -96,9 +94,7 @@ def compute_cache_key(
         if isinstance(value, bool):
             raise TypeError(f"{name} must not be bool")
         if not isinstance(value, str):
-            raise TypeError(
-                f"{name} must be str, got {type(value).__name__}"
-            )
+            raise TypeError(f"{name} must be str, got {type(value).__name__}")
         if not value:
             raise ValueError(f"{name} must be non-empty")
         if "\x00" in value:
@@ -115,9 +111,7 @@ def compute_cache_key(
         hasher.update(b"\x1f")
         for cand in candidates:
             if not isinstance(cand, str):
-                raise TypeError(
-                    f"each candidate must be str, got {type(cand).__name__}"
-                )
+                raise TypeError(f"each candidate must be str, got {type(cand).__name__}")
             hasher.update(cand.encode("utf-8"))
             hasher.update(b"\x1e")
     return hasher.hexdigest()[:32]
@@ -154,16 +148,12 @@ def _default_cache_path() -> str:
             os.path.realpath(tempfile.gettempdir()),
         ):
             try:
-                if (
-                    os.path.commonpath([candidate, safe_root]) == safe_root
-                ):
+                if os.path.commonpath([candidate, safe_root]) == safe_root:
                     return candidate
             except ValueError:
                 continue
         # Fall through to default if override is unsafe
-    return os.path.join(
-        os.path.expanduser("~"), ".soup", "deploy_autopilot_cache.json"
-    )
+    return os.path.join(os.path.expanduser("~"), ".soup", "deploy_autopilot_cache.json")
 
 
 def load_cache(path: Optional[str] = None) -> dict:
@@ -218,7 +208,8 @@ def save_cache(cache: dict, path: Optional[str] = None) -> None:
     tmp_fd = None
     try:
         tmp_fd, tmp_name = tempfile.mkstemp(
-            prefix=".deploy_autopilot_cache_", suffix=".tmp",
+            prefix=".deploy_autopilot_cache_",
+            suffix=".tmp",
             dir=dir_part or None,
         )
         try:
@@ -242,7 +233,8 @@ def save_cache(cache: dict, path: Optional[str] = None) -> None:
 
 
 def _score_tasks(
-    tasks_file: str, generate_fn: Callable[[str], str],
+    tasks_file: str,
+    generate_fn: Callable[[str], str],
 ) -> float:
     """Average score across a JSONL task file (delegates to v0.25.0 eval)."""
     from soup_cli.eval.custom import load_eval_tasks, score_task
@@ -285,17 +277,13 @@ def measure_candidate(
         raise ValueError("candidate must not contain null bytes")
 
     if before_score is not None:
-        if isinstance(before_score, bool) or not isinstance(
-            before_score, (int, float)
-        ):
+        if isinstance(before_score, bool) or not isinstance(before_score, (int, float)):
             raise TypeError("before_score must be a non-bool number")
         before = float(before_score)
     elif before_gen is not None:
         before = _score_tasks(tasks_file, before_gen)
     else:
-        raise ValueError(
-            "measure_candidate requires either before_gen or before_score"
-        )
+        raise ValueError("measure_candidate requires either before_gen or before_score")
     after = _score_tasks(tasks_file, after_gen)
     delta = after - before
     if delta >= 0:
@@ -309,8 +297,11 @@ def measure_candidate(
         else:
             verdict = "MAJOR"
     return MeasureResult(
-        candidate=candidate, before=before, after=after,
-        delta=delta, verdict=verdict,
+        candidate=candidate,
+        before=before,
+        after=after,
+        delta=delta,
+        verdict=verdict,
     )
 
 
@@ -349,9 +340,7 @@ def validate_measure_candidate(candidate: object) -> str:
     if "\x00" in candidate:
         raise ValueError("candidate must not contain null bytes")
     canonical = candidate.lower()
-    if canonical in MEASURABLE_QUANT_CANDIDATES or _HQQ_CANDIDATE_RE.match(
-        canonical
-    ):
+    if canonical in MEASURABLE_QUANT_CANDIDATES or _HQQ_CANDIDATE_RE.match(canonical):
         return canonical
     supported = ", ".join(sorted(MEASURABLE_QUANT_CANDIDATES))
     # Truncate the echoed candidate (mirrors longlora._truncate_for_message
@@ -433,9 +422,7 @@ def _load_measure_model(
     transformers = _import_transformers()
     dev = resolve_device(device)
     tcfg = TrainingConfig(quantization=quantization)
-    quant_config = build_quantization_config_for_loader(
-        tcfg=tcfg, base=base, console=None
-    )
+    quant_config = build_quantization_config_for_loader(tcfg=tcfg, base=base, console=None)
     tokenizer = transformers.AutoTokenizer.from_pretrained(
         base, trust_remote_code=trust_remote_code
     )
@@ -568,9 +555,7 @@ def run_measure(
     if len(candidates) == 0:
         raise ValueError("candidates must not be empty")
     if len(candidates) > _MAX_CANDIDATES:
-        raise ValueError(
-            f"too many candidates ({len(candidates)}; cap {_MAX_CANDIDATES})"
-        )
+        raise ValueError(f"too many candidates ({len(candidates)}; cap {_MAX_CANDIDATES})")
 
     # M2 — pre-validate the ENTIRE candidate list up front so a typo'd Nth
     # candidate fails BEFORE any (expensive) model load, rather than burning a
@@ -583,7 +568,9 @@ def run_measure(
 
     tasks_sha = sha_of_file(tasks_file)
     key = compute_cache_key(
-        base_sha=base_sha, profile_name=profile_name, tasks_sha=tasks_sha,
+        base_sha=base_sha,
+        profile_name=profile_name,
+        tasks_sha=tasks_sha,
         candidates=list(candidates),
     )
 
@@ -607,8 +594,10 @@ def run_measure(
     for candidate in candidates:
         after_gen = after_gen_factory(candidate)
         result = measure_candidate(
-            candidate=candidate, tasks_file=tasks_file,
-            after_gen=after_gen, before_score=before_score,
+            candidate=candidate,
+            tasks_file=tasks_file,
+            after_gen=after_gen,
+            before_score=before_score,
         )
         results.append(result)
 

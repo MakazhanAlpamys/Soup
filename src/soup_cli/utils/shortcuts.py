@@ -78,7 +78,7 @@ def build_macos_command_file(*, name: str, command: str) -> ShortcutSpec:
     """Build a `.command` script (double-clickable on macOS Finder)."""
     name = _validate_name(name)
     command = _validate_command(command)
-    body = "#!/usr/bin/env bash\n" f"exec {command}\n"
+    body = f"#!/usr/bin/env bash\nexec {command}\n"
     safe_filename = name.lower().replace(" ", "-") + ".command"
     return ShortcutSpec(filename=safe_filename, content=body, platform="darwin")
 
@@ -92,7 +92,7 @@ def build_windows_cmd(*, name: str, command: str) -> ShortcutSpec:
     """
     name = _validate_name(name)
     command = _validate_command(command)
-    body = "@echo off\r\n" f"{command} %*\r\n"
+    body = f"@echo off\r\n{command} %*\r\n"
     safe_filename = name.lower().replace(" ", "-") + ".cmd"
     return ShortcutSpec(filename=safe_filename, content=body, platform="windows")
 

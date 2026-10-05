@@ -31,12 +31,14 @@ from soup_cli.cloud._common import (
 SUPPORTED_CLOUDS: frozenset[str] = frozenset({"lambda"})
 
 # Lambda instance type names from the public Cloud API catalogue.
-_GPU_LAMBDA_NAME: Mapping[str, str] = types.MappingProxyType({
-    "a10": "gpu_1x_a10",
-    "a100": "gpu_1x_a100_sxm4",
-    "h100": "gpu_1x_h100_pcie",
-    "a6000": "gpu_1x_a6000",
-})
+_GPU_LAMBDA_NAME: Mapping[str, str] = types.MappingProxyType(
+    {
+        "a10": "gpu_1x_a10",
+        "a100": "gpu_1x_a100_sxm4",
+        "h100": "gpu_1x_h100_pcie",
+        "a6000": "gpu_1x_a6000",
+    }
+)
 SUPPORTED_GPUS: frozenset[str] = frozenset(_GPU_LAMBDA_NAME)
 
 _REMOTE_OUTPUT_RE = re.compile(r"^[A-Za-z0-9._/-]+$")
@@ -91,8 +93,7 @@ def render_lambda_stub(
         raise ValueError("soup_version must be a NUL-free string")
     if len(soup_version) > _MAX_VERSION_LEN or not _VERSION_RE.match(soup_version):
         raise ValueError(
-            f"soup_version must match {_VERSION_RE.pattern} "
-            f"and be <= {_MAX_VERSION_LEN} chars"
+            f"soup_version must match {_VERSION_RE.pattern} and be <= {_MAX_VERSION_LEN} chars"
         )
 
     cfg_b64 = base64.b64encode(encoded).decode("ascii")
@@ -106,7 +107,7 @@ def render_lambda_stub(
         "  printf '%s\\n' \"$rc\" > /home/ubuntu/soup.exit\n"
         "  chmod -R a+rX /home/ubuntu/soup /home/ubuntu/soup.exit\n"
         "  trap - EXIT\n"
-        "  exit \"$rc\"\n"
+        '  exit "$rc"\n'
         "}\n"
         "trap finish EXIT\n"
         "apt-get update\n"
@@ -319,9 +320,7 @@ def write_stub(plan: CloudPlan) -> str:
     return write_cloud_stub(plan)
 
 
-_WAITING_NOTICE = (
-    "Interrupted: waiting for the Lambda controller to terminate the instance...\n"
-)
+_WAITING_NOTICE = "Interrupted: waiting for the Lambda controller to terminate the instance...\n"
 
 
 def _notify_waiting_for_controller() -> None:

@@ -192,12 +192,14 @@ class TestDeadline:
 
 class TestGenerationFilter:
     def _mixed_page(self):
-        return _page([
-            _observation(1, "GENERATION"),
-            _observation(2, "SPAN"),
-            _observation(3, "TOOL"),
-            _observation(4, "GENERATION"),
-        ])
+        return _page(
+            [
+                _observation(1, "GENERATION"),
+                _observation(2, "SPAN"),
+                _observation(3, "TOOL"),
+                _observation(4, "GENERATION"),
+            ]
+        )
 
     def test_only_generations_become_rows(self):
         """A server that ignores `type=GENERATION` must not get spans and tool

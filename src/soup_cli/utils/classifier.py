@@ -17,9 +17,7 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Mapping
 
-CLASSIFIER_TASKS: frozenset[str] = frozenset(
-    {"classifier", "reranker", "cross_encoder"}
-)
+CLASSIFIER_TASKS: frozenset[str] = frozenset({"classifier", "reranker", "cross_encoder"})
 
 _CLASSIFIER_KIND: frozenset[str] = frozenset({"single_label", "multi_label"})
 
@@ -37,26 +35,28 @@ class ClassifierKindSpec:
     live_wired: bool
 
 
-_CLASSIFIER_METADATA: Mapping[str, ClassifierKindSpec] = MappingProxyType({
-    "classifier": ClassifierKindSpec(
-        name="classifier",
-        description="Sequence classification head (single/multi-label)",
-        paired_input=False,
-        live_wired=False,
-    ),
-    "reranker": ClassifierKindSpec(
-        name="reranker",
-        description="Pointwise scoring head for retrieval reranking",
-        paired_input=False,
-        live_wired=False,
-    ),
-    "cross_encoder": ClassifierKindSpec(
-        name="cross_encoder",
-        description="Paired-input scoring head (query/document)",
-        paired_input=True,
-        live_wired=False,
-    ),
-})
+_CLASSIFIER_METADATA: Mapping[str, ClassifierKindSpec] = MappingProxyType(
+    {
+        "classifier": ClassifierKindSpec(
+            name="classifier",
+            description="Sequence classification head (single/multi-label)",
+            paired_input=False,
+            live_wired=False,
+        ),
+        "reranker": ClassifierKindSpec(
+            name="reranker",
+            description="Pointwise scoring head for retrieval reranking",
+            paired_input=False,
+            live_wired=False,
+        ),
+        "cross_encoder": ClassifierKindSpec(
+            name="cross_encoder",
+            description="Paired-input scoring head (query/document)",
+            paired_input=True,
+            live_wired=False,
+        ),
+    }
+)
 
 
 def is_classifier_task(task: object) -> bool:
@@ -72,9 +72,7 @@ def get_classifier_spec(task: str) -> ClassifierKindSpec:
     """Return the frozen :class:`ClassifierKindSpec` for ``task`` or raise."""
     if not is_classifier_task(task):
         supported = ", ".join(sorted(CLASSIFIER_TASKS))
-        raise ValueError(
-            f"task {task!r} is not a classifier task. Supported: {supported}"
-        )
+        raise ValueError(f"task {task!r} is not a classifier task. Supported: {supported}")
     return _CLASSIFIER_METADATA[task]
 
 
@@ -83,45 +81,33 @@ def validate_num_labels(value: object) -> int:
     if isinstance(value, bool):
         raise TypeError(f"num_labels must not be bool, got {value!r}")
     if not isinstance(value, int):
-        raise TypeError(
-            f"num_labels must be int, got {type(value).__name__}"
-        )
+        raise TypeError(f"num_labels must be int, got {type(value).__name__}")
     if value < 1:
         raise ValueError(f"num_labels must be >= 1, got {value}")
     if value > _MAX_LABELS:
-        raise ValueError(
-            f"num_labels must be <= {_MAX_LABELS}, got {value}"
-        )
+        raise ValueError(f"num_labels must be <= {_MAX_LABELS}, got {value}")
     return value
 
 
 def validate_label_names(value: object) -> list[str]:
     """Validate an optional label-name list. Returns a defensive copy."""
     if not isinstance(value, list):
-        raise TypeError(
-            f"label_names must be a list, got {type(value).__name__}"
-        )
+        raise TypeError(f"label_names must be a list, got {type(value).__name__}")
     if len(value) > _MAX_LABELS:
-        raise ValueError(
-            f"label_names too long (max {_MAX_LABELS} entries)"
-        )
+        raise ValueError(f"label_names too long (max {_MAX_LABELS} entries)")
     seen: set[str] = set()
     result: list[str] = []
     for entry in value:
         if isinstance(entry, bool):
             raise TypeError("label_names entries must not be bool")
         if not isinstance(entry, str):
-            raise TypeError(
-                f"label_names entries must be str, got {type(entry).__name__}"
-            )
+            raise TypeError(f"label_names entries must be str, got {type(entry).__name__}")
         if not entry:
             raise ValueError("label_names entries must be non-empty")
         if "\x00" in entry:
             raise ValueError("label_names entries must not contain null bytes")
         if len(entry) > _MAX_LABEL_LEN:
-            raise ValueError(
-                f"label_names entry too long (max {_MAX_LABEL_LEN} chars)"
-            )
+            raise ValueError(f"label_names entry too long (max {_MAX_LABEL_LEN} chars)")
         if entry in seen:
             raise ValueError(f"label_names entries must be unique: {entry!r}")
         seen.add(entry)
@@ -146,22 +132,15 @@ def validate_classifier_compat(*, task: str, backend: str, modality: str) -> Non
     if task not in CLASSIFIER_TASKS:
         supported = ", ".join(sorted(CLASSIFIER_TASKS))
         raise ValueError(
-            f"validate_classifier_compat called with task={task!r}; "
-            f"expected one of {supported}"
+            f"validate_classifier_compat called with task={task!r}; expected one of {supported}"
         )
     if backend == "mlx":
-        raise ValueError(
-            f"task={task!r} is not supported on backend=mlx in v0.52.0"
-        )
+        raise ValueError(f"task={task!r} is not supported on backend=mlx in v0.52.0")
     if modality != "text":
-        raise ValueError(
-            f"task={task!r} requires modality='text'; got modality={modality!r}"
-        )
+        raise ValueError(f"task={task!r} requires modality='text'; got modality={modality!r}")
 
 
-def build_classifier_trainer(
-    config: object, **kwargs: object
-) -> object:
+def build_classifier_trainer(config: object, **kwargs: object) -> object:
     """Live classifier / reranker / cross_encoder trainer factory (v0.53.2 #132).
 
     Returns a :class:`ClassifierTrainerWrapper`. Lazy import keeps the heavy

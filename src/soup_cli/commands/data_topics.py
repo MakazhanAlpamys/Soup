@@ -57,25 +57,21 @@ def _parse_clusters(value: str) -> "int | str":
     try:
         return int(value)
     except ValueError as exc:
-        raise ValueError(
-            f"--clusters must be an integer or 'auto', got {value!r}"
-        ) from exc
+        raise ValueError(f"--clusters must be an integer or 'auto', got {value!r}") from exc
 
 
 def topics(
     path: str = typer.Argument(..., help="Path to dataset file (jsonl/json/csv)"),
     clusters: str = typer.Option(
-        "auto", "--clusters", "-k",
+        "auto",
+        "--clusters",
+        "-k",
         help="Number of topic clusters, or 'auto' (sqrt heuristic).",
     ),
-    embed_model: str = typer.Option(
-        DEFAULT_EMBED_MODEL, "--embed-model", help="Embedding model."
-    ),
+    embed_model: str = typer.Option(DEFAULT_EMBED_MODEL, "--embed-model", help="Embedding model."),
     device: str = typer.Option("auto", "--device", help="auto/cpu/cuda"),
     seed: int = typer.Option(0, "--seed", help="Clustering seed."),
-    output: Optional[str] = typer.Option(
-        None, "--output", "-o", help="Write the report as JSON."
-    ),
+    output: Optional[str] = typer.Option(None, "--output", "-o", help="Write the report as JSON."),
 ):
     """Cluster a dataset into topics and show a coverage table.
 
@@ -87,8 +83,7 @@ def topics(
         raise typer.Exit(1)
     if output is not None and not is_under_cwd(Path(output)):
         console.print(
-            "[red]Output path is outside the working directory: "
-            f"{escape(str(output))}[/]"
+            f"[red]Output path is outside the working directory: {escape(str(output))}[/]"
         )
         raise typer.Exit(1)
 
@@ -103,13 +98,8 @@ def topics(
         console.print(f"[red]{escape(str(exc))}[/]")
         raise typer.Exit(1)
 
-    texts = [
-        row_text(row) or " ".join(str(v) for v in row.values() if v)
-        for row in rows
-    ]
-    console.print(
-        f"[dim]Embedding {len(rows)} rows with {escape(embed_model)}...[/]"
-    )
+    texts = [row_text(row) or " ".join(str(v) for v in row.values() if v) for row in rows]
+    console.print(f"[dim]Embedding {len(rows)} rows with {escape(embed_model)}...[/]")
     try:
         vectors = embed_texts(texts, model_id=embed_model, device=device)
     except ImportError:
@@ -117,7 +107,7 @@ def topics(
             "[red]soup data topics needs PyTorch + transformers.[/]\n"
             # \[train] escaped: Rich would eat the bracket and print a
             # command that installs WITHOUT the extra.
-            "Install with: [bold]pip install \"soup-cli\\[train]\"[/]"
+            'Install with: [bold]pip install "soup-cli\\[train]"[/]'
         )
         raise typer.Exit(1)
     except (ValueError, TypeError) as exc:
@@ -127,10 +117,7 @@ def topics(
     labels = kmeans(vectors, k=k_eff, seed=seed)
     report = build_topic_report(rows, labels, k=k_eff)
 
-    table = Table(
-        title=f"Topic map — {report.n_rows} rows, "
-              f"{report.n_clusters} clusters"
-    )
+    table = Table(title=f"Topic map — {report.n_rows} rows, {report.n_clusters} clusters")
     table.add_column("Topic")
     table.add_column("Rows", justify="right")
     table.add_column("Coverage", justify="right")
@@ -143,12 +130,8 @@ def topics(
     console.print(table)
     for warning in report.warnings:
         console.print(f"[yellow]{escape(warning)}[/]")
-    console.print(
-        "[dim]Labels are emergent term clusters, not a fixed taxonomy.[/]"
-    )
+    console.print("[dim]Labels are emergent term clusters, not a fixed taxonomy.[/]")
 
     if output is not None:
-        atomic_write_text(
-            json.dumps(_report_to_dict(report), indent=2), output
-        )
+        atomic_write_text(json.dumps(_report_to_dict(report), indent=2), output)
         console.print(f"[green]Report written:[/] [bold]{escape(output)}[/]")

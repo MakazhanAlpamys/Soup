@@ -107,9 +107,7 @@ def identity_of(handle: "object") -> ShardIdentity:
     different file than the one the caller is about to read.
     """
     st = os.fstat(handle.fileno())
-    return ShardIdentity(
-        size=st.st_size, mtime_ns=st.st_mtime_ns, ino=st.st_ino, dev=st.st_dev
-    )
+    return ShardIdentity(size=st.st_size, mtime_ns=st.st_mtime_ns, ino=st.st_ino, dev=st.st_dev)
 
 
 @dataclass(frozen=True)
@@ -206,9 +204,7 @@ def read_header_with_identity(path: str) -> Tuple[Dict[str, TensorRange], ShardI
                 f"{path}: tensor {name!r} declares shape {shape} of {dtype} "
                 f"({expected} bytes) but its byte range holds {end - start}"
             )
-        entries[name] = TensorRange(
-            name=name, dtype=dtype, shape=shape, start=start, end=end
-        )
+        entries[name] = TensorRange(name=name, dtype=dtype, shape=shape, start=start, end=end)
     return entries, identity
 
 
@@ -237,13 +233,10 @@ def read_into(handle: "object", entry: TensorRange, tensor: "object") -> None:
     import torch
 
     if not tensor.is_contiguous():
-        raise ValueError(
-            f"tensor {entry.name!r}: destination must be contiguous to be read into"
-        )
+        raise ValueError(f"tensor {entry.name!r}: destination must be contiguous to be read into")
     if tensor.device.type != "cpu":
         raise ValueError(
-            f"tensor {entry.name!r}: destination must live on the CPU, "
-            f"got {tensor.device}"
+            f"tensor {entry.name!r}: destination must live on the CPU, got {tensor.device}"
         )
     held = tensor.numel() * tensor.element_size()
     if held != entry.nbytes:
@@ -299,9 +292,7 @@ def plan_ranges(
     ]
 
 
-def read_range_into(
-    handle: IO[bytes], start: int, view: "torch.Tensor", expected: int
-) -> None:
+def read_range_into(handle: IO[bytes], start: int, view: "torch.Tensor", expected: int) -> None:
     """Read ``expected`` bytes at ``start`` into the FRONT of ``view``.
 
     ``view`` is a contiguous CPU ``uint8`` tensor at least ``expected`` long —
@@ -328,8 +319,7 @@ def read_range_into(
         raise ValueError("destination must be a contiguous CPU uint8 tensor")
     if view.numel() < expected:
         raise ValueError(
-            f"destination holds {view.numel()} bytes but {expected} were expected "
-            f"at offset {start}"
+            f"destination holds {view.numel()} bytes but {expected} were expected at offset {start}"
         )
     handle.seek(start)
     buffer = memoryview(view.numpy())
@@ -381,9 +371,7 @@ def open_direct(path: str) -> io.FileIO:
         except OSError as exc:
             # ``_winapi`` raises without the path; a missing shard must name
             # itself the way ``open`` does, or the operator gets "[WinError 2]".
-            raise type(exc)(
-                exc.errno, exc.strerror, path, getattr(exc, "winerror", None)
-            ) from None
+            raise type(exc)(exc.errno, exc.strerror, path, getattr(exc, "winerror", None)) from None
         try:
             fd = msvcrt.open_osfhandle(handle, os.O_RDONLY | os.O_BINARY)
         except OSError:

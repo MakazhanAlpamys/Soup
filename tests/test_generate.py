@@ -10,10 +10,12 @@ class TestParseJsonArray:
         """Should parse a clean JSON array."""
         from soup_cli.commands.generate import _parse_json_array
 
-        content = json.dumps([
-            {"instruction": "What is AI?", "input": "", "output": "AI is..."},
-            {"instruction": "Explain ML", "input": "", "output": "ML is..."},
-        ])
+        content = json.dumps(
+            [
+                {"instruction": "What is AI?", "input": "", "output": "AI is..."},
+                {"instruction": "Explain ML", "input": "", "output": "ML is..."},
+            ]
+        )
         result = _parse_json_array(content)
         assert len(result) == 2
         assert result[0]["instruction"] == "What is AI?"
@@ -32,8 +34,7 @@ class TestParseJsonArray:
         from soup_cli.commands.generate import _parse_json_array
 
         content = (
-            'Here are the examples:\n'
-            '[{"instruction": "a", "input": "", "output": "b"}]\nDone!'
+            'Here are the examples:\n[{"instruction": "a", "input": "", "output": "b"}]\nDone!'
         )
         result = _parse_json_array(content)
         assert len(result) == 1
@@ -200,12 +201,19 @@ class TestGenerateCLI:
         from soup_cli.cli import app
 
         runner = CliRunner()
-        result = runner.invoke(app, [
-            "data", "generate",
-            "--prompt", "test",
-            "--format", "invalid_format",
-            "--count", "1",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "data",
+                "generate",
+                "--prompt",
+                "test",
+                "--format",
+                "invalid_format",
+                "--count",
+                "1",
+            ],
+        )
         assert result.exit_code != 0
 
     def test_invalid_provider_rejected(self):
@@ -215,10 +223,17 @@ class TestGenerateCLI:
         from soup_cli.cli import app
 
         runner = CliRunner()
-        result = runner.invoke(app, [
-            "data", "generate",
-            "--prompt", "test",
-            "--provider", "invalid_provider",
-            "--count", "1",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "data",
+                "generate",
+                "--prompt",
+                "test",
+                "--provider",
+                "invalid_provider",
+                "--count",
+                "1",
+            ],
+        )
         assert result.exit_code != 0

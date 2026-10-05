@@ -101,9 +101,7 @@ BUNDLED_SCORER_REVISION: int = 4
 #: update together with ``BUNDLED_SCORER_REVISION``. Revision 4 (#1192) changed
 #: ``mini_arithmetic``'s items, not a scorer: the corpus fixes correctness by
 #: item parity, so the hash did not move, but old baselines are on the old scale.
-BUNDLED_SCORER_FINGERPRINT: str = (
-    "80992ac0369233b36d82e41c6f2baff510f6331a6647329fa139c4a99259d5c4"
-)
+BUNDLED_SCORER_FINGERPRINT: str = "80992ac0369233b36d82e41c6f2baff510f6331a6647329fa139c4a99259d5c4"
 
 # 4 MiB cap on a bundled fixture (mirrors behaviour_battery — defends against
 # bundle corruption / an accidentally-committed giant JSONL).
@@ -187,8 +185,7 @@ def load_suite_items(name: str) -> Tuple[dict, ...]:
     """Return the bundled rows for a behavioural suite ``name``."""
     if name not in _EXTENDED_SUITES:
         raise ValueError(
-            f"'{name}' is not a behavioural gate suite; "
-            f"options: {', '.join(EXTENDED_SUITE_NAMES)}"
+            f"'{name}' is not a behavioural gate suite; options: {', '.join(EXTENDED_SUITE_NAMES)}"
         )
     filename, _kind = _EXTENDED_SUITES[name]
     return _load_gate_fixture(filename)
@@ -207,9 +204,7 @@ def _call(gen: GeneratorFn, prompt: str) -> str:
     return out[:_MAX_OUTPUT_LEN]
 
 
-def _fraction_passing(
-    items: Tuple[dict, ...], gen: GeneratorFn, predicate
-) -> float:
+def _fraction_passing(items: Tuple[dict, ...], gen: GeneratorFn, predicate) -> float:
     """Fraction of ``items`` whose generated output satisfies ``predicate``.
 
     Each item is scored independently: a predicate that raises (e.g. a
@@ -457,9 +452,7 @@ def score_bundled_suite(name: str, gen: GeneratorFn) -> float:
         _filename, kind = _EXTENDED_SUITES[name]
         items = load_suite_items(name)
         return _EXTENDED_SCORERS[kind](items, gen)
-    raise ValueError(
-        f"unknown bundled suite {name!r}; options: {', '.join(DEFAULT_GENERAL_SUITE)}"
-    )
+    raise ValueError(f"unknown bundled suite {name!r}; options: {', '.join(DEFAULT_GENERAL_SUITE)}")
 
 
 def _wrong_mcq_answer(answer: str) -> str:
@@ -509,23 +502,17 @@ def _build_fingerprint_response_map() -> dict[str, str]:
                 fname = expected["function"]["name"]
                 args = expected["function"].get("arguments", {})
                 if i % 3 == 0:
-                    responses[prompt] = json.dumps(
-                        {"function": {"name": fname, "arguments": args}}
-                    )
+                    responses[prompt] = json.dumps({"function": {"name": fname, "arguments": args}})
                 elif i % 3 == 1:
                     # Bare inner object WITH arguments — #346 unwrap path.
-                    responses[prompt] = json.dumps(
-                        {"name": fname, "arguments": args}
-                    )
+                    responses[prompt] = json.dumps({"name": fname, "arguments": args})
                 else:
                     # Name-only catalogue echo — fails today; would pass if the
                     # ``arguments`` requirement were dropped (#346 mutation).
                     responses[prompt] = json.dumps({"name": fname})
         elif name == MINI_FORMAT_JSON:
             for i, item in enumerate(items):
-                responses[item["prompt"]] = (
-                    '{"ok": true}' if i % 2 == 0 else "not json at all"
-                )
+                responses[item["prompt"]] = '{"ok": true}' if i % 2 == 0 else "not json at all"
         elif name == MINI_SAFETY:
             for i, item in enumerate(items):
                 responses[item["prompt"]] = (
@@ -545,9 +532,7 @@ def _build_fingerprint_response_map() -> dict[str, str]:
                     else "I'm not able to help with that."
                 )
         else:
-            raise RuntimeError(
-                f"fingerprint corpus has no recipe for suite {name!r}"
-            )
+            raise RuntimeError(f"fingerprint corpus has no recipe for suite {name!r}")
     return responses
 
 
@@ -562,9 +547,7 @@ def _fingerprint_generator(prompt: str) -> str:
     try:
         return _fingerprint_responses[prompt]
     except KeyError as exc:
-        raise KeyError(
-            f"fingerprint corpus missing prompt ({prompt[:80]!r}...)"
-        ) from exc
+        raise KeyError(f"fingerprint corpus missing prompt ({prompt[:80]!r}...)") from exc
 
 
 def bundled_scorer_fingerprint_scores() -> dict[str, float]:
@@ -586,8 +569,7 @@ def bundled_scorer_fingerprint() -> str:
     import hashlib
 
     parts: list[str] = [
-        f"{name}:{score:.6f}"
-        for name, score in bundled_scorer_fingerprint_scores().items()
+        f"{name}:{score:.6f}" for name, score in bundled_scorer_fingerprint_scores().items()
     ]
     return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()
 

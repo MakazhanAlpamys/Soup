@@ -172,12 +172,14 @@ def _prepare_prm_dataset(raw_rows: list[dict], tokenizer: Any, max_length: int) 
                 break
         if not step_positions:
             continue
-        prepared.append({
-            "input_ids": input_ids,
-            "attention_mask": [1] * len(input_ids),
-            "step_positions": step_positions,
-            "labels": list(raw_labels[: len(step_positions)]),
-        })
+        prepared.append(
+            {
+                "input_ids": input_ids,
+                "attention_mask": [1] * len(input_ids),
+                "step_positions": step_positions,
+                "labels": list(raw_labels[: len(step_positions)]),
+            }
+        )
     return prepared
 
 
@@ -342,9 +344,9 @@ class PRMTrainerWrapper:
             )
             console.print(f"[green]Auto batch size (PRM):[/] {batch_size}")
         bs = int(batch_size)
-        total_steps = math.ceil(
-            len(train_rows) / bs / tcfg.gradient_accumulation_steps
-        ) * tcfg.epochs
+        total_steps = (
+            math.ceil(len(train_rows) / bs / tcfg.gradient_accumulation_steps) * tcfg.epochs
+        )
         warmup_steps = int(total_steps * tcfg.warmup_ratio)
         use_bf16, use_fp16 = bf16_fp16_flags(self.device, allow_mps_bf16=True)
         from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing

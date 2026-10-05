@@ -10,6 +10,7 @@ import pytest
 def _auth_headers():
     """Return auth headers with the current UI token."""
     from soup_cli.ui.app import get_auth_token
+
     return {"Authorization": f"Bearer {get_auth_token()}"}
 
 
@@ -48,6 +49,7 @@ class TestUICommand:
         result = runner.invoke(app, ["ui", "--help"])
         # Rich markup wraps dashes with ANSI codes, so check without codes
         import re
+
         clean = re.sub(r"\x1b\[[0-9;]*m", "", result.output)
         assert "--port" in clean
         assert "--host" in clean
@@ -369,9 +371,7 @@ class TestRunsEndpoint:
             from soup_cli.ui.app import create_app
 
             client = TestClient(create_app())
-            response = client.get(
-                "/api/runs/nonexistent_run_id", headers=_auth_headers()
-            )
+            response = client.get("/api/runs/nonexistent_run_id", headers=_auth_headers())
             assert response.status_code == 404
 
     def test_delete_run(self, tmp_path):
@@ -396,9 +396,7 @@ class TestRunsEndpoint:
             tracker.close()
 
             client = TestClient(create_app())
-            response = client.delete(
-                f"/api/runs/{run_id}", headers=_auth_headers()
-            )
+            response = client.delete(f"/api/runs/{run_id}", headers=_auth_headers())
             assert response.status_code == 200
             assert response.json()["deleted"] is True
 
@@ -418,9 +416,7 @@ class TestRunsEndpoint:
             from soup_cli.ui.app import create_app
 
             client = TestClient(create_app())
-            response = client.delete(
-                "/api/runs/nonexistent", headers=_auth_headers()
-            )
+            response = client.delete("/api/runs/nonexistent", headers=_auth_headers())
             assert response.status_code == 404
 
 
@@ -473,9 +469,7 @@ class TestRunMetrics:
             from soup_cli.ui.app import create_app
 
             client = TestClient(create_app())
-            response = client.get(
-                "/api/runs/nonexistent/metrics", headers=_auth_headers()
-            )
+            response = client.get("/api/runs/nonexistent/metrics", headers=_auth_headers())
             assert response.status_code == 404
 
 
@@ -582,12 +576,9 @@ class TestDataInspect:
 
         data_file = tmp_path / "data.jsonl"
         entries = [
-            {"instruction": f"Task {i}", "input": "", "output": f"Result {i}"}
-            for i in range(20)
+            {"instruction": f"Task {i}", "input": "", "output": f"Result {i}"} for i in range(20)
         ]
-        data_file.write_text(
-            "\n".join(json.dumps(e) for e in entries), encoding="utf-8"
-        )
+        data_file.write_text("\n".join(json.dumps(e) for e in entries), encoding="utf-8")
 
         client = TestClient(create_app())
         with patch("soup_cli.ui.app.Path.cwd", return_value=tmp_path):
@@ -685,9 +676,7 @@ class TestTrainEndpoints:
             client = TestClient(create_app())
             response = client.post(
                 "/api/train/start",
-                json={
-                    "config_yaml": "base: test\ndata:\n  train: ./data.jsonl\n"
-                },
+                json={"config_yaml": "base: test\ndata:\n  train: ./data.jsonl\n"},
                 headers=_auth_headers(),
             )
             assert response.status_code == 200
@@ -716,9 +705,7 @@ class TestTrainEndpoints:
         client = TestClient(create_app())
         response = client.post(
             "/api/train/start",
-            json={
-                "config_yaml": "base: test\ndata:\n  train: ./data.jsonl\n"
-            },
+            json={"config_yaml": "base: test\ndata:\n  train: ./data.jsonl\n"},
             headers=_auth_headers(),
         )
         assert response.status_code == 409

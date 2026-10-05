@@ -242,9 +242,7 @@ def test_generation_routes_refuse_foreign_origin(path, body):
     """A page the operator merely visits must not be able to drive generation."""
     with patch("soup_cli.commands.serve._generate_response") as mock_gen:
         mock_gen.return_value = ("hello world", 3, 2)
-        resp = _generation_client().post(
-            path, json=body, headers={"Origin": "http://evil.example"}
-        )
+        resp = _generation_client().post(path, json=body, headers={"Origin": "http://evil.example"})
     assert resp.status_code == 403, (path, resp.status_code, resp.text)
     assert mock_gen.call_count == 0, f"{path} generated before the Origin was checked"
 

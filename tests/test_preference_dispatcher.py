@@ -162,9 +162,12 @@ class TestPreferenceTrainerWrapper:
         with mock_patch(wrapper_path) as mock_inner:
             mock_instance = MagicMock()
             mock_instance.train.return_value = {
-                "initial_loss": 1.0, "final_loss": 0.5,
-                "duration": "1m", "duration_secs": 60.0,
-                "output_dir": "./out", "total_steps": 10,
+                "initial_loss": 1.0,
+                "final_loss": 0.5,
+                "duration": "1m",
+                "duration_secs": 60.0,
+                "output_dir": "./out",
+                "total_steps": 10,
             }
             mock_inner.return_value = mock_instance
 
@@ -242,28 +245,42 @@ class TestPreferenceTrainRouting:
         )
         fake_dataset = {"train": [{"prompt": "Q", "chosen": "A", "rejected": "B"}]}
         fake_result = {
-            "initial_loss": 1.0, "final_loss": 0.5,
-            "duration": "1m", "duration_secs": 60.0,
-            "output_dir": "./out", "total_steps": 10,
+            "initial_loss": 1.0,
+            "final_loss": 0.5,
+            "duration": "1m",
+            "duration_secs": 60.0,
+            "output_dir": "./out",
+            "total_steps": 10,
         }
         fake_gpu_info = {"memory_total": "0 MB", "memory_total_bytes": 0}
 
-        with mock_patch(
-            "soup_cli.data.loader.load_dataset", return_value=fake_dataset,
-        ), mock_patch(
-            "soup_cli.utils.gpu.detect_device", return_value=("cpu", "CPU"),
-        ), mock_patch(
-            "soup_cli.utils.gpu.get_gpu_info", return_value=fake_gpu_info,
-        ), mock_patch(
-            "soup_cli.experiment.tracker.ExperimentTracker",
-        ) as mock_tracker_cls, mock_patch(
-            "soup_cli.monitoring.display.TrainingDisplay",
-        ), mock_patch(
-            "soup_cli.trainer.preference.PreferenceTrainerWrapper.setup",
-        ), mock_patch(
-            "soup_cli.trainer.preference.PreferenceTrainerWrapper.train",
-            return_value=fake_result,
-        ) as mock_train:
+        with (
+            mock_patch(
+                "soup_cli.data.loader.load_dataset",
+                return_value=fake_dataset,
+            ),
+            mock_patch(
+                "soup_cli.utils.gpu.detect_device",
+                return_value=("cpu", "CPU"),
+            ),
+            mock_patch(
+                "soup_cli.utils.gpu.get_gpu_info",
+                return_value=fake_gpu_info,
+            ),
+            mock_patch(
+                "soup_cli.experiment.tracker.ExperimentTracker",
+            ) as mock_tracker_cls,
+            mock_patch(
+                "soup_cli.monitoring.display.TrainingDisplay",
+            ),
+            mock_patch(
+                "soup_cli.trainer.preference.PreferenceTrainerWrapper.setup",
+            ),
+            mock_patch(
+                "soup_cli.trainer.preference.PreferenceTrainerWrapper.train",
+                return_value=fake_result,
+            ) as mock_train,
+        ):
             mock_tracker = MagicMock()
             mock_tracker.start_run.return_value = "run-pref-1"
             mock_tracker_cls.return_value = mock_tracker

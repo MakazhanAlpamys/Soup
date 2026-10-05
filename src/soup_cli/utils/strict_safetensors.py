@@ -31,16 +31,18 @@ from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink, is_under
 # Closed allowlist of "definitely unsafe" extensions. Picklemod gives every
 # loader the right to execute arbitrary code on load — refusing the file at
 # the boundary is the only sound mitigation.
-UNSAFE_EXTENSIONS = frozenset({
-    ".bin",      # pytorch_model.bin (legacy)
-    ".pt",       # torch.save default
-    ".pth",      # torch.save alt
-    ".ckpt",     # PyTorch Lightning checkpoint
-    ".pkl",      # raw pickle
-    ".pickle",   # raw pickle
-    ".joblib",   # sklearn joblib (uses pickle internally)
-    ".msgpack",  # ambiguous binary blob — many loaders unpickle from this
-})
+UNSAFE_EXTENSIONS = frozenset(
+    {
+        ".bin",  # pytorch_model.bin (legacy)
+        ".pt",  # torch.save default
+        ".pth",  # torch.save alt
+        ".ckpt",  # PyTorch Lightning checkpoint
+        ".pkl",  # raw pickle
+        ".pickle",  # raw pickle
+        ".joblib",  # sklearn joblib (uses pickle internally)
+        ".msgpack",  # ambiguous binary blob — many loaders unpickle from this
+    }
+)
 
 SAFETENSORS_EXTENSION = ".safetensors"
 _SAFETENSORS_HEADER_LEN_BYTES = 8
@@ -91,9 +93,7 @@ def is_safetensors_magic(path: str) -> bool:
                 return False
             if len(head) < _SAFETENSORS_HEADER_LEN_BYTES:
                 return False
-            header_len = int.from_bytes(
-                head[:_SAFETENSORS_HEADER_LEN_BYTES], "little"
-            )
+            header_len = int.from_bytes(head[:_SAFETENSORS_HEADER_LEN_BYTES], "little")
             if header_len <= 0:
                 return False
             if header_len > _MAX_SAFETENSORS_HEADER_BYTES:
@@ -211,7 +211,9 @@ def assert_safe_top_level_weights(model_dir: str) -> None:
 
 
 def check_strict_safetensors(
-    model_dir: str, *, strict: bool = False,
+    model_dir: str,
+    *,
+    strict: bool = False,
 ) -> StrictSafetensorsReport:
     """Refuse pickle / PyTorch-classic weights when ``strict=True``.
 
@@ -230,9 +232,7 @@ def check_strict_safetensors(
         TypeError: when ``strict`` is not a bool.
     """
     if not isinstance(strict, bool):
-        raise TypeError(
-            f"strict must be bool, got {type(strict).__name__}"
-        )
+        raise TypeError(f"strict must be bool, got {type(strict).__name__}")
     enforce_under_cwd_and_no_symlink(model_dir, "model_dir")
     if not os.path.isdir(model_dir):
         raise FileNotFoundError(f"{model_dir}: not a directory")

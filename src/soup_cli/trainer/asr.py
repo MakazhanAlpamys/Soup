@@ -97,16 +97,12 @@ def _validate_asr_row(row: dict) -> tuple[str, str]:
     if audio is None or (isinstance(audio, str) and not audio.strip()):
         raise ValueError("ASR row must have a non-empty 'audio' path")
     if not isinstance(audio, str):
-        raise TypeError(
-            f"ASR row 'audio' must be a string path, got {type(audio).__name__}"
-        )
+        raise TypeError(f"ASR row 'audio' must be a string path, got {type(audio).__name__}")
     if "text" not in row:
         raise ValueError("ASR row must have a 'text' transcript")
     text = row["text"]
     if not isinstance(text, str):
-        raise ValueError(
-            f"ASR row 'text' must be a string, got {type(text).__name__}"
-        )
+        raise ValueError(f"ASR row 'text' must be a string, got {type(text).__name__}")
     return audio, text
 
 
@@ -227,9 +223,7 @@ class AsrTrainerWrapper:
         self.model.config.suppress_tokens = []
         # Store the decode-time forced ids for inference reuse.
         self._forced_decoder_ids = (
-            self.processor.get_decoder_prompt_ids(
-                language=tcfg.asr_language, task=tcfg.asr_task
-            )
+            self.processor.get_decoder_prompt_ids(language=tcfg.asr_language, task=tcfg.asr_task)
             if prefix_customized
             else None
         )
@@ -251,10 +245,7 @@ class AsrTrainerWrapper:
             )
             self.model = get_peft_model(self.model, lora_config)
             self._lora_active = True
-            console.print(
-                f"[green]ASR LoRA enabled[/] (r={tcfg.lora.r}, "
-                f"targets={target_modules})"
-            )
+            console.print(f"[green]ASR LoRA enabled[/] (r={tcfg.lora.r}, targets={target_modules})")
         else:
             self._lora_active = False
 
@@ -284,9 +275,7 @@ class AsrTrainerWrapper:
             wave = load_audio_mono(audio_path, target_sr=_ASR_SAMPLE_RATE)
             if len(wave) > max_audio_samples:
                 trunc["audio"] += 1
-            features = feature_extractor(
-                wave, sampling_rate=_ASR_SAMPLE_RATE
-            ).input_features[0]
+            features = feature_extractor(wave, sampling_rate=_ASR_SAMPLE_RATE).input_features[0]
             labels = tokenizer(text).input_ids
             if len(labels) > label_cap:
                 labels = labels[:label_cap]
@@ -317,8 +306,7 @@ class AsrTrainerWrapper:
 
         batch_size = tcfg.batch_size if tcfg.batch_size != "auto" else 8
         total_steps = (
-            math.ceil(len(train_ds) / batch_size / tcfg.gradient_accumulation_steps)
-            * tcfg.epochs
+            math.ceil(len(train_ds) / batch_size / tcfg.gradient_accumulation_steps) * tcfg.epochs
         )
         warmup_steps = int(total_steps * tcfg.warmup_ratio)
 
@@ -414,8 +402,7 @@ class AsrTrainerWrapper:
     ) -> dict:
         if self.trainer is None:
             raise RuntimeError(
-                "AsrTrainerWrapper.train() called before setup(). "
-                "Call setup(dataset) first."
+                "AsrTrainerWrapper.train() called before setup(). Call setup(dataset) first."
             )
         start = time.time()
         if display is not None:
@@ -505,19 +492,11 @@ class _SpeechSeq2SeqCollator:
         self.decoder_start_token_id = decoder_start_token_id
 
     def __call__(self, features: list[dict]) -> dict:
-        input_features = [
-            {"input_features": f["input_features"]} for f in features
-        ]
-        batch = self.processor.feature_extractor.pad(
-            input_features, return_tensors="pt"
-        )
+        input_features = [{"input_features": f["input_features"]} for f in features]
+        batch = self.processor.feature_extractor.pad(input_features, return_tensors="pt")
         label_features = [{"input_ids": f["labels"]} for f in features]
-        labels_batch = self.processor.tokenizer.pad(
-            label_features, return_tensors="pt"
-        )
-        labels = labels_batch["input_ids"].masked_fill(
-            labels_batch["attention_mask"].ne(1), -100
-        )
+        labels_batch = self.processor.tokenizer.pad(label_features, return_tensors="pt")
+        labels = labels_batch["input_ids"].masked_fill(labels_batch["attention_mask"].ne(1), -100)
         labels = _strip_decoder_start(labels, self.decoder_start_token_id)
         batch["labels"] = labels
         return batch

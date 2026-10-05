@@ -21,21 +21,28 @@ console = Console()
 
 def drift_alarm(
     reference_path: str = typer.Option(
-        ..., "--reference", help="JSONL of FT-time reference outputs.",
+        ...,
+        "--reference",
+        help="JSONL of FT-time reference outputs.",
     ),
     live_path: str = typer.Option(
-        ..., "--live", help="JSONL of live production outputs.",
+        ...,
+        "--live",
+        help="JSONL of live production outputs.",
     ),
     threshold: float = typer.Option(
-        0.2, "--threshold",
+        0.2,
+        "--threshold",
         help="Drift threshold (KL divergence). Default 0.2.",
     ),
     slack_url: Optional[str] = typer.Option(
-        None, "--slack-url",
+        None,
+        "--slack-url",
         help="Optional Slack webhook URL — POSTed on drift. SSRF-validated.",
     ),
     discord_url: Optional[str] = typer.Option(
-        None, "--discord-url",
+        None,
+        "--discord-url",
         help="Optional Discord webhook URL — POSTed on drift. SSRF-validated.",
     ),
 ) -> None:
@@ -80,9 +87,7 @@ def drift_alarm(
         f"n_reference: {report.n_reference}  n_live: {report.n_live}"
     )
     if report.top_drift_tokens:
-        top_str = ", ".join(
-            f"{escape(t)}={d:.3f}" for t, d in report.top_drift_tokens[:3]
-        )
+        top_str = ", ".join(f"{escape(t)}={d:.3f}" for t, d in report.top_drift_tokens[:3])
         panel_body += f"\nTop drift tokens: {top_str}"
     console.print(Panel(panel_body, title="drift-alarm", border_style=border))
 
@@ -92,9 +97,7 @@ def drift_alarm(
             "threshold": report.threshold,
             "n_reference": report.n_reference,
             "n_live": report.n_live,
-            "top_drift_tokens": [
-                [t, d] for t, d in report.top_drift_tokens
-            ],
+            "top_drift_tokens": [[t, d] for t, d in report.top_drift_tokens],
         }
         sent = []
         if slack_url:
@@ -103,9 +106,7 @@ def drift_alarm(
             sent.append(("discord", post_webhook(url=discord_url, payload=payload)))
         for label, ok in sent:
             colour = "green" if ok else "yellow"
-            console.print(
-                f"[{colour}]{label} webhook: {'delivered' if ok else 'failed'}[/]"
-            )
+            console.print(f"[{colour}]{label} webhook: {'delivered' if ok else 'failed'}[/]")
         # Drift detected -> non-zero exit so the operator's cron / Loop
         # can flag it. Matches v0.55 / v0.56 gate convention.
         raise typer.Exit(3)

@@ -64,24 +64,34 @@ def _strip_ansi(text: str) -> str:
 # Part A — Eval design from data
 # ---------------------------------------------------------------------------
 
+
 class TestEvalDesignFromData:
     def _rows(self) -> List[dict]:
         return [
-            {"messages": [
-                {"role": "user", "content": "what is sql"},
-                {"role": "assistant",
-                 "content": "SQL is structured query language for databases."},
-            ]},
-            {"messages": [
-                {"role": "user", "content": "write a query"},
-                {"role": "assistant",
-                 "content": "SELECT id FROM users WHERE active = true"},
-            ]},
-            {"messages": [
-                {"role": "user", "content": "join tables"},
-                {"role": "assistant",
-                 "content": "SELECT users.id FROM users JOIN orders ON ..."},
-            ]},
+            {
+                "messages": [
+                    {"role": "user", "content": "what is sql"},
+                    {
+                        "role": "assistant",
+                        "content": "SQL is structured query language for databases.",
+                    },
+                ]
+            },
+            {
+                "messages": [
+                    {"role": "user", "content": "write a query"},
+                    {"role": "assistant", "content": "SELECT id FROM users WHERE active = true"},
+                ]
+            },
+            {
+                "messages": [
+                    {"role": "user", "content": "join tables"},
+                    {
+                        "role": "assistant",
+                        "content": "SELECT users.id FROM users JOIN orders ON ...",
+                    },
+                ]
+            },
         ]
 
     def test_happy_path_returns_frozen_design(self):
@@ -110,9 +120,7 @@ class TestEvalDesignFromData:
     )
     def test_scorer_picked_by_goal_keyword(self, goal, expected_scorer):
         design = design_evals_from_data(self._rows(), goal=goal)
-        assert all(
-            d.scorer_type == expected_scorer for d in design.dimensions
-        )
+        assert all(d.scorer_type == expected_scorer for d in design.dimensions)
 
     def test_scorer_is_allowlisted(self):
         design = design_evals_from_data(self._rows(), goal="x")
@@ -159,7 +167,8 @@ class TestEvalDesignFromData:
 
     def test_rows_with_no_text_falls_through(self):
         design = design_evals_from_data(
-            [{"messages": []}, {"messages": []}], goal="x",
+            [{"messages": []}, {"messages": []}],
+            goal="x",
         )
         assert design.dimensions  # at least the fallback
 
@@ -168,7 +177,8 @@ class TestEvalDesignIO:
     def test_roundtrip(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         design = design_evals_from_data(
-            [{"output": "the quick brown fox"}], goal="x",
+            [{"output": "the quick brown fox"}],
+            goal="x",
         )
         out = "evals/d.json"
         write_eval_design(design, out)
@@ -202,31 +212,44 @@ class TestEvalDesignIO:
     def test_load_rejects_unknown_scorer(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         path = tmp_path / "bad.json"
-        path.write_text(json.dumps({
-            "goal": "x",
-            "row_count": 1,
-            "dimensions": [{
-                "name": "d1",
-                "rubric": "r",
-                "scorer_type": "fnord",
-                "keywords": [],
-            }],
-        }))
+        path.write_text(
+            json.dumps(
+                {
+                    "goal": "x",
+                    "row_count": 1,
+                    "dimensions": [
+                        {
+                            "name": "d1",
+                            "rubric": "r",
+                            "scorer_type": "fnord",
+                            "keywords": [],
+                        }
+                    ],
+                }
+            )
+        )
         with pytest.raises(ValueError, match="unknown scorer_type"):
             load_eval_design("bad.json")
 
     def test_load_rejects_bad_name(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         path = tmp_path / "bad.json"
-        path.write_text(json.dumps({
-            "goal": "x", "row_count": 1,
-            "dimensions": [{
-                "name": "Has Space",
-                "rubric": "r",
-                "scorer_type": "judge",
-                "keywords": [],
-            }],
-        }))
+        path.write_text(
+            json.dumps(
+                {
+                    "goal": "x",
+                    "row_count": 1,
+                    "dimensions": [
+                        {
+                            "name": "Has Space",
+                            "rubric": "r",
+                            "scorer_type": "judge",
+                            "keywords": [],
+                        }
+                    ],
+                }
+            )
+        )
         with pytest.raises(ValueError, match="invalid dimension name"):
             load_eval_design("bad.json")
 
@@ -239,24 +262,24 @@ class TestEvalDesignIO:
 # Part B — Canary discovery
 # ---------------------------------------------------------------------------
 
+
 class TestCanaryDiscovery:
     def _rows(self) -> List[dict]:
         return [
             {"prompt": "what is sql", "output": "structured query language"},
-            {"prompt": "write a select query",
-             "output": "SELECT id FROM users"},
-            {"prompt": "join two tables",
-             "output": "SELECT * FROM a JOIN b"},
-            {"prompt": "translate to french",
-             "output": "bonjour le monde"},
-            {"prompt": "translate to german",
-             "output": "guten tag welt"},
+            {"prompt": "write a select query", "output": "SELECT id FROM users"},
+            {"prompt": "join two tables", "output": "SELECT * FROM a JOIN b"},
+            {"prompt": "translate to french", "output": "bonjour le monde"},
+            {"prompt": "translate to german", "output": "guten tag welt"},
         ]
 
     def test_happy_path(self):
         canary = discover_canaries(
-            self._rows(), base="meta-llama/Llama-3-8B",
-            num_clusters=2, per_cluster=2, seed=42,
+            self._rows(),
+            base="meta-llama/Llama-3-8B",
+            num_clusters=2,
+            per_cluster=2,
+            seed=42,
         )
         assert isinstance(canary, CanarySet)
         assert canary.base == "meta-llama/Llama-3-8B"
@@ -312,7 +335,8 @@ class TestCanaryDiscovery:
 
     def test_dimensions_validated(self):
         canary = discover_canaries(
-            self._rows(), dimensions=("rewrite", "summarize"),
+            self._rows(),
+            dimensions=("rewrite", "summarize"),
         )
         assert canary.dimensions == ("rewrite", "summarize")
         with pytest.raises(ValueError):
@@ -325,16 +349,14 @@ class TestCanaryDiscovery:
         rows = [{"prompt": " ".join(["word"] * 40), "output": "x"}]
         canary = discover_canaries(rows, num_clusters=1, per_cluster=1)
         assert canary.memorization_probes
-        assert (
-            len(canary.memorization_probes[0].split())
-            < len(rows[0]["prompt"].split())
-        )
+        assert len(canary.memorization_probes[0].split()) < len(rows[0]["prompt"].split())
 
     def test_dedup_held_out(self):
         # Two identical rows → only one canary
         canary = discover_canaries(
             [{"prompt": "hi"}, {"prompt": "hi"}],
-            num_clusters=1, per_cluster=2,
+            num_clusters=1,
+            per_cluster=2,
         )
         assert canary.held_out.count("hi") <= 1
 
@@ -343,7 +365,8 @@ class TestCanaryIO:
     def test_roundtrip(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         canary = discover_canaries(
-            [{"prompt": "x", "output": "y"}], num_clusters=1,
+            [{"prompt": "x", "output": "y"}],
+            num_clusters=1,
         )
         write_canary_set(canary, "c.json")
         loaded = load_canary_set("c.json")
@@ -364,6 +387,7 @@ class TestCanaryIO:
 # Part C — Eval lock + coverage
 # ---------------------------------------------------------------------------
 
+
 class TestEvalLock:
     def test_canonicalise_deterministic(self):
         design = design_evals_from_data([{"output": "abc"}], goal="x")
@@ -374,10 +398,10 @@ class TestEvalLock:
         # strings may still contain ": " or "\n" — we only assert that
         # json.dumps was called with the separators+sort_keys flags by
         # checking common-prefix structure is compact.)
-        assert a.startswith(b"{\"")
+        assert a.startswith(b'{"')
         # The keys come back sorted: dimensions / goal / row_count.
-        assert a.index(b"\"dimensions\"") < a.index(b"\"goal\"")
-        assert a.index(b"\"goal\"") < a.index(b"\"row_count\"")
+        assert a.index(b'"dimensions"') < a.index(b'"goal"')
+        assert a.index(b'"goal"') < a.index(b'"row_count"')
 
     def test_checksum_stable(self):
         design = design_evals_from_data([{"output": "abc"}], goal="x")
@@ -400,6 +424,7 @@ class TestEvalLock:
         # checksum == sha256 of file bytes
         on_disk = Path("evals/locked.json").read_bytes()
         import hashlib
+
         assert locked.checksum == hashlib.sha256(on_disk).hexdigest()
 
     def test_lock_outside_cwd_rejected(self, tmp_path, monkeypatch):
@@ -457,9 +482,7 @@ class TestCoverage:
     def test_empty_design_recommendations(self):
         design = EvalDesign(goal="", row_count=0, dimensions=())
         report = compute_coverage(design, task_category="summarization")
-        assert any(
-            "no dimensions" in rec for rec in report.recommendations
-        )
+        assert any("no dimensions" in rec for rec in report.recommendations)
 
     def test_case_insensitive_task_category(self):
         design = self._design_with_scorers(["judge"])
@@ -470,6 +493,7 @@ class TestCoverage:
 # ---------------------------------------------------------------------------
 # Part D — git-hook regression gate + paired bootstrap
 # ---------------------------------------------------------------------------
+
 
 class TestPairedBootstrap:
     def test_identical_samples_zero_mean(self):
@@ -484,7 +508,10 @@ class TestPairedBootstrap:
         baseline = [0.5] * 100
         candidate = [0.7] * 100
         lo, hi, mean = paired_bootstrap_ci(
-            baseline, candidate, n_samples=500, seed=0,
+            baseline,
+            candidate,
+            n_samples=500,
+            seed=0,
         )
         assert mean == pytest.approx(0.2)
         # Constant series → CI collapses to point.
@@ -513,14 +540,20 @@ class TestPairedBootstrap:
     def test_seed_bool_rejected(self):
         with pytest.raises(TypeError):
             paired_bootstrap_ci(
-                [1.0], [1.0], n_samples=100, seed=True,  # type: ignore[arg-type]
+                [1.0],
+                [1.0],
+                n_samples=100,
+                seed=True,  # type: ignore[arg-type]
             )
 
     def test_non_finite_rejected(self):
         import math
+
         with pytest.raises(ValueError):
             paired_bootstrap_ci(
-                [math.nan, 1.0], [1.0, 1.0], n_samples=100,
+                [math.nan, 1.0],
+                [1.0, 1.0],
+                n_samples=100,
             )
 
     def test_deterministic(self):
@@ -536,8 +569,12 @@ class TestDecideRegression:
         baseline = [0.5] * 50
         candidate = [0.7] * 50
         verdict = decide_regression(
-            "task_accuracy", baseline, candidate, GateThresholds(),
-            n_samples=200, seed=0,
+            "task_accuracy",
+            baseline,
+            candidate,
+            GateThresholds(),
+            n_samples=200,
+            seed=0,
         )
         assert isinstance(verdict, RegressionVerdict)
         assert verdict.regressed is False
@@ -547,8 +584,12 @@ class TestDecideRegression:
         baseline = [0.9] * 50
         candidate = [0.5] * 50
         verdict = decide_regression(
-            "task_accuracy", baseline, candidate, GateThresholds(),
-            n_samples=200, seed=0,
+            "task_accuracy",
+            baseline,
+            candidate,
+            GateThresholds(),
+            n_samples=200,
+            seed=0,
         )
         assert verdict.regressed is True
         assert "task_accuracy" in verdict.offenders
@@ -559,8 +600,12 @@ class TestDecideRegression:
         baseline = [200.0] * 50
         candidate = [110.0] * 50
         verdict = decide_regression(
-            "p95_latency_ms", baseline, candidate, GateThresholds(),
-            n_samples=200, seed=0,
+            "p95_latency_ms",
+            baseline,
+            candidate,
+            GateThresholds(),
+            n_samples=200,
+            seed=0,
         )
         assert verdict.regressed is False
 
@@ -569,27 +614,39 @@ class TestDecideRegression:
         baseline = [100.0] * 50
         candidate = [600.0] * 50
         verdict = decide_regression(
-            "p95_latency_ms", baseline, candidate, GateThresholds(),
-            n_samples=200, seed=0,
+            "p95_latency_ms",
+            baseline,
+            candidate,
+            GateThresholds(),
+            n_samples=200,
+            seed=0,
         )
         assert verdict.regressed is True
 
     def test_unknown_metric_rejected(self):
         with pytest.raises(ValueError, match="unknown metric"):
             decide_regression(
-                "made_up_metric", [1.0], [1.0], GateThresholds(),
+                "made_up_metric",
+                [1.0],
+                [1.0],
+                GateThresholds(),
             )
 
     def test_metric_bool_rejected(self):
         with pytest.raises(TypeError):
             decide_regression(
-                True, [1.0], [1.0], GateThresholds(),  # type: ignore[arg-type]
+                True,
+                [1.0],
+                [1.0],
+                GateThresholds(),  # type: ignore[arg-type]
             )
 
     def test_thresholds_type_rejected(self):
         with pytest.raises(TypeError):
             decide_regression(
-                "task_accuracy", [1.0], [1.0],
+                "task_accuracy",
+                [1.0],
+                [1.0],
                 {"task_accuracy": -0.05},  # type: ignore[arg-type]
             )
 
@@ -743,9 +800,11 @@ class TestPrePushHookWrite:
 # Registry integration — eval_suite + canaries are valid artifact kinds.
 # ---------------------------------------------------------------------------
 
+
 class TestRegistryArtifactKinds:
     def test_eval_suite_in_valid_kinds(self):
         from soup_cli.registry.store import _VALID_KINDS
+
         assert "eval_suite" in _VALID_KINDS
         assert "canaries" in _VALID_KINDS
 
@@ -754,12 +813,14 @@ class TestRegistryArtifactKinds:
 # CLI smoke
 # ---------------------------------------------------------------------------
 
+
 class TestCLIPlumbing:
     def setup_method(self):
         self.runner = CliRunner()
 
     def test_eval_help_lists_new_commands(self):
         from soup_cli.commands.eval import app
+
         result = self.runner.invoke(app, ["--help"])
         assert result.exit_code == 0, result.output
         for cmd in ["design", "discover", "lock", "coverage", "gate-install"]:
@@ -767,12 +828,14 @@ class TestCLIPlumbing:
 
     def test_eval_design_help(self):
         from soup_cli.commands.eval import app
+
         result = self.runner.invoke(app, ["design", "--help"])
         assert result.exit_code == 0, result.output
         assert "--goal" in _strip_ansi(result.output)
 
     def test_eval_design_end_to_end(self, tmp_path, monkeypatch):
         from soup_cli.commands.eval import app
+
         monkeypatch.chdir(tmp_path)
         data = tmp_path / "data.jsonl"
         data.write_text(
@@ -780,37 +843,42 @@ class TestCLIPlumbing:
             '{"role":"assistant","content":"sql query database"}]}\n'
         )
         result = self.runner.invoke(
-            app, ["design", "data.jsonl", "--goal", "better at SQL"],
+            app,
+            ["design", "data.jsonl", "--goal", "better at SQL"],
         )
         assert result.exit_code == 0, (result.output, repr(result.exception))
         assert os.path.isfile("evals/design.json")
 
     def test_eval_design_missing_data_exits_nonzero(
-        self, tmp_path, monkeypatch,
+        self,
+        tmp_path,
+        monkeypatch,
     ):
         from soup_cli.commands.eval import app
+
         monkeypatch.chdir(tmp_path)
         result = self.runner.invoke(
-            app, ["design", "nope.jsonl", "--goal", "x"],
+            app,
+            ["design", "nope.jsonl", "--goal", "x"],
         )
         assert result.exit_code != 0
 
     def test_eval_discover_end_to_end(self, tmp_path, monkeypatch):
         from soup_cli.commands.eval import app
+
         monkeypatch.chdir(tmp_path)
         data = tmp_path / "d.jsonl"
-        data.write_text(
-            '{"prompt":"a","output":"x"}\n'
-            '{"prompt":"b","output":"y"}\n'
-        )
+        data.write_text('{"prompt":"a","output":"x"}\n{"prompt":"b","output":"y"}\n')
         result = self.runner.invoke(
-            app, ["discover", "d.jsonl", "--num-clusters", "2"],
+            app,
+            ["discover", "d.jsonl", "--num-clusters", "2"],
         )
         assert result.exit_code == 0, (result.output, repr(result.exception))
         assert os.path.isfile("evals/canaries.json")
 
     def test_eval_lock_end_to_end(self, tmp_path, monkeypatch):
         from soup_cli.commands.eval import app
+
         monkeypatch.chdir(tmp_path)
         design = design_evals_from_data([{"output": "x"}], goal="y")
         (tmp_path / "evals").mkdir()
@@ -821,28 +889,33 @@ class TestCLIPlumbing:
 
     def test_eval_coverage_end_to_end(self, tmp_path, monkeypatch):
         from soup_cli.commands.eval import app
+
         monkeypatch.chdir(tmp_path)
         design = design_evals_from_data([{"output": "x"}], goal="y")
         (tmp_path / "evals").mkdir()
         write_eval_design(design, "evals/d.json")
         result = self.runner.invoke(
-            app, ["coverage", "evals/d.json", "--task", "summarization"],
+            app,
+            ["coverage", "evals/d.json", "--task", "summarization"],
         )
         assert result.exit_code == 0, (result.output, repr(result.exception))
 
     def test_eval_coverage_bad_task_exits_nonzero(self, tmp_path, monkeypatch):
         from soup_cli.commands.eval import app
+
         monkeypatch.chdir(tmp_path)
         design = design_evals_from_data([{"output": "x"}], goal="y")
         (tmp_path / "evals").mkdir()
         write_eval_design(design, "evals/d.json")
         result = self.runner.invoke(
-            app, ["coverage", "evals/d.json", "--task", "garbage"],
+            app,
+            ["coverage", "evals/d.json", "--task", "garbage"],
         )
         assert result.exit_code == 2
 
     def test_gate_install_end_to_end(self, tmp_path, monkeypatch):
         from soup_cli.commands.eval import app
+
         monkeypatch.chdir(tmp_path)
         (tmp_path / "evals").mkdir()
         (tmp_path / "evals" / "locked.json").write_text("{}")
@@ -850,9 +923,12 @@ class TestCLIPlumbing:
             app,
             [
                 "gate-install",
-                "--baseline", "run-1",
-                "--suite", "evals/locked.json",
-                "--hook-path", "hooks/pre-push",
+                "--baseline",
+                "run-1",
+                "--suite",
+                "evals/locked.json",
+                "--hook-path",
+                "hooks/pre-push",
             ],
         )
         assert result.exit_code == 0, (result.output, repr(result.exception))
@@ -862,6 +938,7 @@ class TestCLIPlumbing:
 # ---------------------------------------------------------------------------
 # Source-grep regression guards.
 # ---------------------------------------------------------------------------
+
 
 class TestSourceGrep:
     REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -889,9 +966,9 @@ class TestSourceGrep:
         # v0.55.0+ floor — released versions are always >= 0.55.0.
         import re
 
-        init_text = (
-            self.REPO_ROOT / "src" / "soup_cli" / "__init__.py"
-        ).read_text(encoding="utf-8")
+        init_text = (self.REPO_ROOT / "src" / "soup_cli" / "__init__.py").read_text(
+            encoding="utf-8"
+        )
         match = re.search(r'__version__ = "(\d+)\.(\d+)\.(\d+)"', init_text)
         assert match is not None, "version line not found"
         major, minor, patch = int(match.group(1)), int(match.group(2)), int(match.group(3))
@@ -904,18 +981,21 @@ class TestSourceGrep:
 # `soup eval against` — run-vs-run regression check (Part D)
 # ---------------------------------------------------------------------------
 
+
 class TestEvalAgainst:
     def setup_method(self):
         self.runner = CliRunner()
 
     def test_against_listed_in_help(self):
         from soup_cli.commands.eval import app
+
         result = self.runner.invoke(app, ["--help"])
         assert result.exit_code == 0, (result.output, repr(result.exception))
         assert "against" in result.output, "missing 'against' in --help"
 
     def test_against_help(self):
         from soup_cli.commands.eval import app
+
         result = self.runner.invoke(app, ["against", "--help"])
         assert result.exit_code == 0, (result.output, repr(result.exception))
         out = _strip_ansi(result.output)
@@ -926,19 +1006,24 @@ class TestEvalAgainst:
     def test_against_requires_candidate(self):
         # `--candidate` is a required option; omitting must fail.
         from soup_cli.commands.eval import app
+
         result = self.runner.invoke(app, ["against", "run-baseline"])
         assert result.exit_code != 0
         assert "candidate" in result.output.lower()
 
     def test_against_unknown_metric_rejected(self, monkeypatch, tmp_path):
         from soup_cli.commands.eval import app
+
         monkeypatch.chdir(tmp_path)
         result = self.runner.invoke(
             app,
             [
-                "against", "run-baseline",
-                "--candidate", "run-cand",
-                "--metric", "made_up",
+                "against",
+                "run-baseline",
+                "--candidate",
+                "run-cand",
+                "--metric",
+                "made_up",
             ],
         )
         assert result.exit_code != 0
@@ -950,12 +1035,15 @@ class TestEvalAgainst:
         # The tracker doesn't yet expose `get_metric_series` — the command
         # must catch the AttributeError and emit a v0.55.1-deferred advisory.
         from soup_cli.commands.eval import app
+
         monkeypatch.chdir(tmp_path)
         result = self.runner.invoke(
             app,
             [
-                "against", "run-baseline",
-                "--candidate", "run-cand",
+                "against",
+                "run-baseline",
+                "--candidate",
+                "run-cand",
             ],
         )
         # Either the deferred-advisory (exit 2) or the empty-series failure
@@ -973,6 +1061,7 @@ class TestHookTemplate:
         (tmp_path / "evals").mkdir()
         (tmp_path / "evals" / "locked.json").write_text("{}")
         from soup_cli.utils.eval_gate_hook import render_pre_push_hook
+
         body = render_pre_push_hook(
             baseline_run_id="run-1",
             suite_path="evals/locked.json",

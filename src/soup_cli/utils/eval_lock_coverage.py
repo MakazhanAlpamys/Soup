@@ -89,6 +89,7 @@ _RECOMMENDED_SCORERS: Mapping[str, tuple[str, ...]] = types.MappingProxyType(
 # Canonical bytes + checksum
 # ---------------------------------------------------------------------------
 
+
 def canonicalise_design_bytes(design: EvalDesign) -> bytes:
     """Return UTF-8 bytes of a canonical (sorted-key, no-whitespace) JSON.
 
@@ -142,6 +143,7 @@ def lock_suite(design: EvalDesign, output_path: str) -> LockedSuite:
 # Coverage / gap analysis
 # ---------------------------------------------------------------------------
 
+
 def compute_coverage(
     design: EvalDesign,
     *,
@@ -157,14 +159,11 @@ def compute_coverage(
     if isinstance(task_category, bool):
         raise TypeError("task_category must be str, got bool")
     if not isinstance(task_category, str):
-        raise TypeError(
-            f"task_category must be str, got {type(task_category).__name__}"
-        )
+        raise TypeError(f"task_category must be str, got {type(task_category).__name__}")
     category = task_category.strip().lower()
     if category not in TASK_CATEGORIES:
         raise ValueError(
-            f"unknown task_category {task_category!r}; allowed: "
-            + ", ".join(TASK_CATEGORIES)
+            f"unknown task_category {task_category!r}; allowed: " + ", ".join(TASK_CATEGORIES)
         )
 
     scorer_mix: dict[str, int] = {s: 0 for s in SCORER_TYPES}
@@ -178,17 +177,12 @@ def compute_coverage(
     recommendations: list[str] = []
     for scorer in missing:
         recommendations.append(
-            f"task category {category!r} benefits from a "
-            f"{scorer!r} dimension — none configured"
+            f"task category {category!r} benefits from a {scorer!r} dimension — none configured"
         )
     if not design.dimensions:
-        recommendations.append(
-            "suite has no dimensions; run `soup eval design <data>` first"
-        )
+        recommendations.append("suite has no dimensions; run `soup eval design <data>` first")
     elif not missing:
-        recommendations.append(
-            f"coverage looks good for task category {category!r}"
-        )
+        recommendations.append(f"coverage looks good for task category {category!r}")
 
     return CoverageReport(
         task_category=category,

@@ -98,12 +98,15 @@ def test_get_rollout_backend_spec_frozen():
         spec.name = "evil"  # type: ignore[misc]
 
 
-@pytest.mark.parametrize("name,pkg", [
-    ("art", "openpipe-art"),
-    ("ruler", "ruler-eval"),
-    ("nemo_gym", "nemo-gym"),
-    ("openenv", None),
-])
+@pytest.mark.parametrize(
+    "name,pkg",
+    [
+        ("art", "openpipe-art"),
+        ("ruler", "ruler-eval"),
+        ("nemo_gym", "nemo-gym"),
+        ("openenv", None),
+    ],
+)
 def test_required_rollout_package(name, pkg):
     assert required_rollout_package(name) == pkg
 

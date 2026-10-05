@@ -11,6 +11,7 @@ from tests.conftest import strip_ansi
 
 runner = CliRunner()
 
+
 def _strip_ansi(text: str) -> str:
     return strip_ansi(text)
 
@@ -182,9 +183,7 @@ def test_torch_gpu_arch_supported_rejects_earlier_minor_same_major():
 
     from soup_cli.commands.doctor import _torch_gpu_arch_supported
 
-    fake_torch = SimpleNamespace(
-        cuda=SimpleNamespace(get_arch_list=lambda: ["sm_86"])
-    )
+    fake_torch = SimpleNamespace(cuda=SimpleNamespace(get_arch_list=lambda: ["sm_86"]))
 
     assert _torch_gpu_arch_supported(fake_torch, 8, 0) is False
 
@@ -194,9 +193,7 @@ def test_torch_gpu_arch_supported_keeps_suffixed_arch_exact():
 
     from soup_cli.commands.doctor import _torch_gpu_arch_supported
 
-    fake_torch = SimpleNamespace(
-        cuda=SimpleNamespace(get_arch_list=lambda: ["sm_100a"])
-    )
+    fake_torch = SimpleNamespace(cuda=SimpleNamespace(get_arch_list=lambda: ["sm_100a"]))
 
     assert _torch_gpu_arch_supported(fake_torch, 10, 3) is False
 
@@ -253,9 +250,7 @@ def test_doctor_gpu_panel_shows_compute_capability_and_precision(monkeypatch):
         is_available=lambda: True,
         device_count=lambda: 1,
         get_device_name=lambda idx: "NVIDIA GeForce RTX 5070 Laptop GPU",
-        get_device_properties=lambda idx: types.SimpleNamespace(
-            total_memory=8 * 1024**3
-        ),
+        get_device_properties=lambda idx: types.SimpleNamespace(total_memory=8 * 1024**3),
         get_device_capability=lambda idx: (12, 0),
         get_arch_list=lambda: ["sm_75", "sm_80", "sm_90", "sm_120"],
         is_bf16_supported=lambda including_emulation=True: True,
@@ -510,9 +505,7 @@ def test_doctor_gpu_panel_warns_when_torch_lacks_gpu_arch(monkeypatch):
         is_available=lambda: True,
         device_count=lambda: 1,
         get_device_name=lambda idx: "NVIDIA GeForce RTX 5070 Laptop GPU",
-        get_device_properties=lambda idx: types.SimpleNamespace(
-            total_memory=8 * 1024**3
-        ),
+        get_device_properties=lambda idx: types.SimpleNamespace(total_memory=8 * 1024**3),
         get_device_capability=lambda idx: (12, 0),
         get_arch_list=lambda: ["sm_75", "sm_80", "sm_90"],
         is_bf16_supported=lambda including_emulation=True: True,
@@ -866,9 +859,7 @@ def test_doctor_partial_train_group_in_range_exits_zero(monkeypatch):
 
 def test_doctor_nvidia_train_suggestion_is_two_step(monkeypatch):
     """On an NVIDIA box the [train] suggestion installs torch from its own index (#828 review)."""
-    monkeypatch.setattr(
-        "soup_cli.commands.doctor._nvidia_smi_cuda_version", lambda: (13, 0)
-    )
+    monkeypatch.setattr("soup_cli.commands.doctor._nvidia_smi_cuda_version", lambda: (13, 0))
     for name in ("torch", "transformers", "peft", "trl", "datasets", "bitsandbytes", "accelerate"):
         monkeypatch.setitem(sys.modules, name, None)
     result = runner.invoke(app, ["doctor"])
@@ -894,9 +885,7 @@ def test_doctor_nvidia_partial_stack_with_torch_missing(monkeypatch):
         return installed.get(pkg_name)
 
     monkeypatch.setattr("soup_cli.commands.doctor._installed_version_str", _fake_version)
-    monkeypatch.setattr(
-        "soup_cli.commands.doctor._nvidia_smi_cuda_version", lambda: (13, 0)
-    )
+    monkeypatch.setattr("soup_cli.commands.doctor._nvidia_smi_cuda_version", lambda: (13, 0))
     result = runner.invoke(app, ["doctor"])
     assert result.exit_code == 0
     out = _strip_ansi(result.output)
@@ -921,9 +910,7 @@ def test_doctor_nvidia_partial_stack_with_torch_present(monkeypatch):
         "soup_cli.commands.doctor._installed_version_str",
         lambda import_name, pkg_name: installed.get(pkg_name),
     )
-    monkeypatch.setattr(
-        "soup_cli.commands.doctor._nvidia_smi_cuda_version", lambda: (13, 0)
-    )
+    monkeypatch.setattr("soup_cli.commands.doctor._nvidia_smi_cuda_version", lambda: (13, 0))
     result = runner.invoke(app, ["doctor"])
     assert result.exit_code == 0
     out = _strip_ansi(result.output)

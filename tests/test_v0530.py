@@ -33,6 +33,7 @@ def _tiny_linear_model(with_attention: bool = True):
 
     return _Tiny()
 
+
 # ---------------------------------------------------------------------------
 # Part A — Unsloth Dynamic 2.0 GGUF ladder
 # ---------------------------------------------------------------------------
@@ -51,9 +52,13 @@ class TestUDGGUF:
         assert "UD-IQ2_XXS" in UD_GGUF_FORMATS
 
     @pytest.mark.parametrize(
-        "name", [
-            "UD-Q8_K_XL", "UD-Q4_K_XL", "UD-IQ1_M",
-            "ud-q8_k_xl", "Ud-Iq1_M",
+        "name",
+        [
+            "UD-Q8_K_XL",
+            "UD-Q4_K_XL",
+            "UD-IQ1_M",
+            "ud-q8_k_xl",
+            "Ud-Iq1_M",
         ],
     )
     def test_validate_ud_canonical_case_insensitive(self, name):
@@ -66,7 +71,8 @@ class TestUDGGUF:
         assert validate_ud_gguf_format(result) == result
 
     @pytest.mark.parametrize(
-        "bad,exc", [
+        "bad,exc",
+        [
             (True, TypeError),
             (123, TypeError),
             (b"UD-Q8_K_XL", TypeError),
@@ -109,7 +115,8 @@ class TestUDGGUF:
         assert validate_calibration_data_path("calib.jsonl") == "calib.jsonl"
 
     @pytest.mark.parametrize(
-        "bad,exc", [
+        "bad,exc",
+        [
             (True, TypeError),
             (None, TypeError),
             (123, TypeError),
@@ -162,7 +169,8 @@ class TestIQAppleARMGGUF:
         assert "Q5_K_M" in APPLE_ARM_GGUF_FORMATS
 
     @pytest.mark.parametrize(
-        "name", ["IQ1_S", "iq2_m", "IQ3_XXS", "IQ4_NL"],
+        "name",
+        ["IQ1_S", "iq2_m", "IQ3_XXS", "IQ4_NL"],
     )
     def test_validate_iq_canonical(self, name):
         from soup_cli.utils.gguf_quant import validate_iq_gguf_format
@@ -228,7 +236,8 @@ class TestKVCache:
         assert KV_CACHE_TYPES == {"q8_0", "bf16", "f16", "fp8"}
 
     @pytest.mark.parametrize(
-        "name", ["q8_0", "Q8_0", "bf16", "BF16", "f16", "fp8", "FP8"],
+        "name",
+        ["q8_0", "Q8_0", "bf16", "BF16", "f16", "fp8", "FP8"],
     )
     def test_validate_kv_canonical(self, name):
         from soup_cli.utils.kv_cache import validate_kv_cache_type
@@ -236,7 +245,8 @@ class TestKVCache:
         assert validate_kv_cache_type(name) == name.lower()
 
     @pytest.mark.parametrize(
-        "bad,exc", [
+        "bad,exc",
+        [
             (True, TypeError),
             (None, TypeError),
             ("", ValueError),
@@ -293,9 +303,7 @@ class TestKVCache:
 class TestKVCacheSchema:
     def test_schema_default_none(self):
         cfg = load_config_from_string(
-            "base: TinyLlama/TinyLlama-1.1B-Chat-v1.0\n"
-            "task: sft\n"
-            "data: {train: x.jsonl}\n"
+            "base: TinyLlama/TinyLlama-1.1B-Chat-v1.0\ntask: sft\ndata: {train: x.jsonl}\n"
         )
         assert cfg.training.kv_cache_type is None
 
@@ -320,10 +328,7 @@ class TestKVCacheSchema:
     def test_schema_rejects_unknown(self):
         with pytest.raises(ValueError, match="not supported|kv_cache_type"):
             load_config_from_string(
-                "base: a/b\n"
-                "task: sft\n"
-                "data: {train: x.jsonl}\n"
-                "training: {kv_cache_type: int8}\n"
+                "base: a/b\ntask: sft\ndata: {train: x.jsonl}\ntraining: {kv_cache_type: int8}\n"
             )
 
     def test_schema_fp8_rejected_on_mlx(self):
@@ -362,7 +367,9 @@ class TestFP8Attention:
         )
 
         validate_fp8_attention_compat(
-            fp8_attention=False, quantization_aware=False, backend="transformers",
+            fp8_attention=False,
+            quantization_aware=False,
+            backend="transformers",
         )
 
     def test_compat_happy(self):
@@ -371,7 +378,9 @@ class TestFP8Attention:
         )
 
         validate_fp8_attention_compat(
-            fp8_attention=True, quantization_aware="fp8", backend="transformers",
+            fp8_attention=True,
+            quantization_aware="fp8",
+            backend="transformers",
         )
 
     def test_compat_requires_fp8_qat(self):
@@ -381,7 +390,8 @@ class TestFP8Attention:
 
         with pytest.raises(ValueError, match="quantization_aware='fp8'"):
             validate_fp8_attention_compat(
-                fp8_attention=True, quantization_aware=False,
+                fp8_attention=True,
+                quantization_aware=False,
                 backend="transformers",
             )
 
@@ -392,7 +402,9 @@ class TestFP8Attention:
 
         with pytest.raises(ValueError, match="mlx"):
             validate_fp8_attention_compat(
-                fp8_attention=True, quantization_aware="fp8", backend="mlx",
+                fp8_attention=True,
+                quantization_aware="fp8",
+                backend="mlx",
             )
 
     def test_compat_bool_guard(self):
@@ -408,11 +420,7 @@ class TestFP8Attention:
             )
 
     def test_schema_default_false(self):
-        cfg = load_config_from_string(
-            "base: a/b\n"
-            "task: sft\n"
-            "data: {train: x.jsonl}\n"
-        )
+        cfg = load_config_from_string("base: a/b\ntask: sft\ndata: {train: x.jsonl}\n")
         assert cfg.training.fp8_attention is False
 
     def test_schema_happy(self):
@@ -427,10 +435,7 @@ class TestFP8Attention:
     def test_schema_rejects_without_fp8_qat(self):
         with pytest.raises(ValueError, match="quantization_aware='fp8'"):
             load_config_from_string(
-                "base: a/b\n"
-                "task: sft\n"
-                "data: {train: x.jsonl}\n"
-                "training: {fp8_attention: true}\n"
+                "base: a/b\ntask: sft\ndata: {train: x.jsonl}\ntraining: {fp8_attention: true}\n"
             )
 
     # #834: each gate is its own test with the gate patched, so the result is the
@@ -464,14 +469,18 @@ class TestNVFP4:
         from soup_cli.utils.advanced_precision import validate_nvfp4_compat
 
         validate_nvfp4_compat(
-            nvfp4=False, backend="transformers", modality="text",
+            nvfp4=False,
+            backend="transformers",
+            modality="text",
         )
 
     def test_compat_happy(self):
         from soup_cli.utils.advanced_precision import validate_nvfp4_compat
 
         validate_nvfp4_compat(
-            nvfp4=True, backend="transformers", modality="text",
+            nvfp4=True,
+            backend="transformers",
+            modality="text",
         )
 
     def test_compat_rejects_mlx(self):
@@ -485,7 +494,9 @@ class TestNVFP4:
 
         with pytest.raises(ValueError, match="text"):
             validate_nvfp4_compat(
-                nvfp4=True, backend="transformers", modality="vision",
+                nvfp4=True,
+                backend="transformers",
+                modality="vision",
             )
 
     def test_compat_bool_guard(self):
@@ -499,19 +510,12 @@ class TestNVFP4:
             )
 
     def test_schema_default_false(self):
-        cfg = load_config_from_string(
-            "base: a/b\n"
-            "task: sft\n"
-            "data: {train: x.jsonl}\n"
-        )
+        cfg = load_config_from_string("base: a/b\ntask: sft\ndata: {train: x.jsonl}\n")
         assert cfg.training.nvfp4 is False
 
     def test_schema_happy(self):
         cfg = load_config_from_string(
-            "base: a/b\n"
-            "task: sft\n"
-            "data: {train: x.jsonl}\n"
-            "training: {nvfp4: true}\n"
+            "base: a/b\ntask: sft\ndata: {train: x.jsonl}\ntraining: {nvfp4: true}\n"
         )
         assert cfg.training.nvfp4 is True
 
@@ -541,9 +545,7 @@ class TestNVFP4:
     def test_apply_refuses_off_blackwell(self, monkeypatch):
         from soup_cli.utils.advanced_precision import apply_nvfp4
 
-        monkeypatch.setattr(
-            "soup_cli.utils.advanced_precision.is_blackwell_gpu", lambda: False
-        )
+        monkeypatch.setattr("soup_cli.utils.advanced_precision.is_blackwell_gpu", lambda: False)
         with pytest.raises(RuntimeError, match="no Blackwell device detected"):
             apply_nvfp4(_tiny_linear_model())
 
@@ -551,13 +553,9 @@ class TestNVFP4:
         """On Blackwell the hardware gate passes and torchao decides."""
         from soup_cli.utils.advanced_precision import apply_nvfp4
 
-        monkeypatch.setattr(
-            "soup_cli.utils.advanced_precision.is_blackwell_gpu", lambda: True
-        )
+        monkeypatch.setattr("soup_cli.utils.advanced_precision.is_blackwell_gpu", lambda: True)
         monkeypatch.setitem(sys.modules, "torchao", None)
-        with pytest.raises(
-            RuntimeError, match="requires torchao"
-        ) as excinfo:
+        with pytest.raises(RuntimeError, match="requires torchao") as excinfo:
             apply_nvfp4(_tiny_linear_model())
         assert "no Blackwell device detected" not in str(excinfo.value)
 
@@ -569,7 +567,9 @@ class TestUnslothBNB4Bit:
         )
 
         validate_unsloth_bnb_4bit_compat(
-            unsloth_bnb_4bit=False, backend="transformers", quantization="none",
+            unsloth_bnb_4bit=False,
+            backend="transformers",
+            quantization="none",
         )
 
     def test_compat_happy(self):
@@ -578,7 +578,9 @@ class TestUnslothBNB4Bit:
         )
 
         validate_unsloth_bnb_4bit_compat(
-            unsloth_bnb_4bit=True, backend="unsloth", quantization="4bit",
+            unsloth_bnb_4bit=True,
+            backend="unsloth",
+            quantization="4bit",
         )
 
     def test_compat_requires_unsloth(self):
@@ -588,7 +590,8 @@ class TestUnslothBNB4Bit:
 
         with pytest.raises(ValueError, match="backend='unsloth'"):
             validate_unsloth_bnb_4bit_compat(
-                unsloth_bnb_4bit=True, backend="transformers",
+                unsloth_bnb_4bit=True,
+                backend="transformers",
                 quantization="4bit",
             )
 
@@ -599,7 +602,9 @@ class TestUnslothBNB4Bit:
 
         with pytest.raises(ValueError, match="quantization='4bit'"):
             validate_unsloth_bnb_4bit_compat(
-                unsloth_bnb_4bit=True, backend="unsloth", quantization="8bit",
+                unsloth_bnb_4bit=True,
+                backend="unsloth",
+                quantization="8bit",
             )
 
     def test_schema_happy(self):
@@ -633,11 +638,7 @@ class TestLFParity:
         # through model_dump() without emitting `true` and tripping the footgun),
         # while `double_quant_on` resolves the shipped default: every 4-bit load
         # path has always double-quantized.
-        cfg = load_config_from_string(
-            "base: a/b\n"
-            "task: sft\n"
-            "data: {train: x.jsonl}\n"
-        )
+        cfg = load_config_from_string("base: a/b\ntask: sft\ndata: {train: x.jsonl}\n")
         assert cfg.training.bnb_4bit_use_double_quant is None
         assert cfg.training.double_quant_on is True
 
@@ -646,10 +647,7 @@ class TestLFParity:
         # sets it must NOT be rejected for using a non-4bit quantization. The
         # footgun fires only on an explicit `true`.
         cfg = load_config_from_string(
-            "base: a/b\n"
-            "task: sft\n"
-            "data: {train: x.jsonl}\n"
-            "training: {quantization: 8bit}\n"
+            "base: a/b\ntask: sft\ndata: {train: x.jsonl}\ntraining: {quantization: 8bit}\n"
         )
         assert cfg.training.quantization == "8bit"
         assert cfg.training.bnb_4bit_use_double_quant is None
@@ -740,10 +738,15 @@ class TestLFParity:
             )
 
     @pytest.mark.parametrize(
-        "field", [
-            "fp8_attention", "nvfp4", "unsloth_bnb_4bit",
-            "bnb_4bit_use_double_quant", "llm_int8",
-            "quantize_ref_model", "quantize_reward_model",
+        "field",
+        [
+            "fp8_attention",
+            "nvfp4",
+            "unsloth_bnb_4bit",
+            "bnb_4bit_use_double_quant",
+            "llm_int8",
+            "quantize_ref_model",
+            "quantize_reward_model",
         ],
     )
     def test_bool_guards_reject_int(self, field):
@@ -751,10 +754,7 @@ class TestLFParity:
         # through Pydantic's field_validator(mode='before') unchanged.
         with pytest.raises(TypeError, match="v0.53.0 flag must be bool"):
             load_config_from_string(
-                "base: a/b\n"
-                "task: sft\n"
-                "data: {train: x.jsonl}\n"
-                f"training: {{{field}: 7}}\n"
+                f"base: a/b\ntask: sft\ndata: {{train: x.jsonl}}\ntraining: {{{field}: 7}}\n"
             )
 
     def test_quantize_ref_model_happy_grpo(self):
@@ -799,10 +799,7 @@ class TestLFParity:
     def test_llm_int8_rejects_default_none(self):
         with pytest.raises(ValueError, match="quantization='8bit'"):
             load_config_from_string(
-                "base: a/b\n"
-                "task: sft\n"
-                "data: {train: x.jsonl}\n"
-                "training: {llm_int8: true}\n"
+                "base: a/b\ntask: sft\ndata: {train: x.jsonl}\ntraining: {llm_int8: true}\n"
             )
 
     def test_quantize_reward_model_happy_reward_model_task(self):
@@ -821,10 +818,7 @@ class TestLFParity:
         # rather than masquerading as `False`.
         with pytest.raises(ValueError, match="valid boolean"):
             load_config_from_string(
-                "base: a/b\n"
-                "task: sft\n"
-                "data: {train: x.jsonl}\n"
-                "training: {fp8_attention: null}\n"
+                "base: a/b\ntask: sft\ndata: {train: x.jsonl}\ntraining: {fp8_attention: null}\n"
             )
 
 
@@ -848,7 +842,8 @@ class TestSaveFormats:
         assert "NVFP4" in TORCHAO_PTQ_SCHEMES
 
     @pytest.mark.parametrize(
-        "name", ["fp16", "FP16", "4bit", "4BIT", "4bit_forced"],
+        "name",
+        ["fp16", "FP16", "4bit", "4BIT", "4bit_forced"],
     )
     def test_validate_merge_canonical(self, name):
         from soup_cli.utils.save_formats import validate_merge_save_format
@@ -856,7 +851,8 @@ class TestSaveFormats:
         assert validate_merge_save_format(name) == name.lower()
 
     @pytest.mark.parametrize(
-        "bad,exc", [
+        "bad,exc",
+        [
             (True, TypeError),
             (None, TypeError),
             ("", ValueError),
@@ -879,7 +875,8 @@ class TestSaveFormats:
             validate_torchao_scheme("int4weightonly")
 
     @pytest.mark.parametrize(
-        "bad,exc", [
+        "bad,exc",
+        [
             (True, TypeError),
             (123, TypeError),
             ("", ValueError),
@@ -899,7 +896,8 @@ class TestSaveFormats:
         assert validate_quant_config_path("cfg.yaml") == "cfg.yaml"
 
     @pytest.mark.parametrize(
-        "bad,exc", [
+        "bad,exc",
+        [
             (True, TypeError),
             (None, TypeError),
             ("", ValueError),
@@ -957,9 +955,7 @@ class TestSaveFormats:
         assert off["bnb_4bit_quant_type"] == "nf4"
         assert "bnb_4bit_skip_modules" not in off
 
-        on = _build_merge_4bit_bnb_kwargs(
-            compute_dtype="bfloat16", forced=True, double_quant=True
-        )
+        on = _build_merge_4bit_bnb_kwargs(compute_dtype="bfloat16", forced=True, double_quant=True)
         assert on["bnb_4bit_use_double_quant"] is True
         # ``forced`` still quantizes every Linear (empty skip list) — unchanged.
         assert on["bnb_4bit_skip_modules"] == []
@@ -1056,9 +1052,7 @@ class TestCrossCutting:
         )
 
         assert len(ALL_ADVANCED_GGUF_FORMATS) == (
-            len(UD_GGUF_FORMATS)
-            + len(IQ_GGUF_FORMATS)
-            + len(APPLE_ARM_GGUF_FORMATS)
+            len(UD_GGUF_FORMATS) + len(IQ_GGUF_FORMATS) + len(APPLE_ARM_GGUF_FORMATS)
         )
 
 

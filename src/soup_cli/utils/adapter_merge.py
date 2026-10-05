@@ -33,12 +33,8 @@ CanaryScorer = Callable[[str, Sequence[Mapping[str, Any]]], Sequence[float]]
 # tuple alias preserved for caller code that iterates in canonical order.
 # v0.67.0 Part A: added "cmaes" — evolutionary search dispatched separately
 # in commands/adapters.py (requires --eval suite + --budget).
-SUPPORTED_STRATEGIES: FrozenSet[str] = frozenset(
-    {"linear", "ties", "dare", "svd", "cmaes"}
-)
-STRATEGY_ORDER: Tuple[MergeStrategy, ...] = (
-    "linear", "ties", "dare", "svd", "cmaes"
-)
+SUPPORTED_STRATEGIES: FrozenSet[str] = frozenset({"linear", "ties", "dare", "svd", "cmaes"})
+STRATEGY_ORDER: Tuple[MergeStrategy, ...] = ("linear", "ties", "dare", "svd", "cmaes")
 
 _MAX_ADAPTERS = 16
 _MIN_ADAPTERS = 2
@@ -275,9 +271,7 @@ def merge_adapters(
     from soup_cli.utils.adapter_diff import load_adapter_weights
 
     if strategy not in SUPPORTED_STRATEGIES:
-        raise ValueError(
-            f"strategy must be one of {SUPPORTED_STRATEGIES}, got {strategy!r}"
-        )
+        raise ValueError(f"strategy must be one of {SUPPORTED_STRATEGIES}, got {strategy!r}")
     if strategy == "cmaes":
         # cmaes is an evolutionary *search* over linear weights, not a
         # one-shot tensor merge — routing it through this function would
@@ -374,9 +368,7 @@ def write_merged_adapter(
     try:
         from safetensors.numpy import save_file
     except ImportError as exc:
-        raise RuntimeError(
-            "safetensors package required; pip install safetensors"
-        ) from exc
+        raise RuntimeError("safetensors package required; pip install safetensors") from exc
 
     out_path = Path(output_dir)
     out_path.mkdir(parents=True, exist_ok=True)
@@ -386,9 +378,7 @@ def write_merged_adapter(
     # safetensors.save_file writes atomically internally via mmap-rename on
     # POSIX, but on Windows it does not — write to sibling tmp + replace
     # ourselves so behaviour is consistent across platforms.
-    fd, tmp_safe = tempfile.mkstemp(
-        dir=str(out_path), prefix=".tmp_", suffix=".safetensors"
-    )
+    fd, tmp_safe = tempfile.mkstemp(dir=str(out_path), prefix=".tmp_", suffix=".safetensors")
     os.close(fd)
     try:
         save_file(weights, tmp_safe)
@@ -405,19 +395,14 @@ def write_merged_adapter(
     if os.path.lexists(str(source_cfg)):
         st = os.lstat(str(source_cfg))
         if stat.S_ISLNK(st.st_mode):
-            raise ValueError(
-                "source adapter_config.json must not be a symlink"
-            )
+            raise ValueError("source adapter_config.json must not be a symlink")
         if st.st_size > _MAX_ADAPTER_CONFIG_BYTES:
-            raise ValueError(
-                f"source adapter_config.json > {_MAX_ADAPTER_CONFIG_BYTES} byte cap"
-            )
+            raise ValueError(f"source adapter_config.json > {_MAX_ADAPTER_CONFIG_BYTES} byte cap")
         cfg = json.loads(source_cfg.read_text(encoding="utf-8"))
         if config_overrides:
             if not isinstance(cfg, dict):
                 raise ValueError(
-                    "source adapter_config.json is not a JSON object; cannot "
-                    "apply config overrides"
+                    "source adapter_config.json is not a JSON object; cannot apply config overrides"
                 )
             cfg.update(dict(config_overrides))
         target_cfg = out_path / "adapter_config.json"
@@ -538,8 +523,7 @@ def _load_canary_scores(
 
     if len(baseline) != len(candidate):
         raise ValueError(
-            f"baseline ({len(baseline)}) and candidate ({len(candidate)}) "
-            "score counts must match"
+            f"baseline ({len(baseline)}) and candidate ({len(candidate)}) score counts must match"
         )
     return baseline, candidate
 

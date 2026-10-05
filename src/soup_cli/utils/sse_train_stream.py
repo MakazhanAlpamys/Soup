@@ -62,9 +62,7 @@ class TrainEvent:
 
     def __post_init__(self) -> None:
         if self.type not in _VALID_TYPES:
-            raise ValueError(
-                f"type must be one of {sorted(_VALID_TYPES)}; got {self.type!r}"
-            )
+            raise ValueError(f"type must be one of {sorted(_VALID_TYPES)}; got {self.type!r}")
         if isinstance(self.ts, bool) or not isinstance(self.ts, (int, float)):
             raise ValueError("ts must be a number")
         if not math.isfinite(float(self.ts)):
@@ -75,9 +73,7 @@ class TrainEvent:
             if "\x00" in self.message:
                 raise ValueError("message contains NUL byte")
             if len(self.message) > _MAX_MESSAGE_LEN:
-                raise ValueError(
-                    f"message exceeds {_MAX_MESSAGE_LEN} chars"
-                )
+                raise ValueError(f"message exceeds {_MAX_MESSAGE_LEN} chars")
 
 
 def to_payload(event: TrainEvent) -> Dict[str, Any]:

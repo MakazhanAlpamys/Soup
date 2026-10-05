@@ -76,9 +76,7 @@ ROUTE_PROVENANCE = {
         "targets": 25017,
         "gap_nat": 0.0863441881,
         "ci95": [0.0802412531, 0.0931898109],
-        "result_sha256": (
-            "94fee10542da29281f7753cbf221a3421ad5acf67f2b290e52d65acece359cdf"
-        ),
+        "result_sha256": ("94fee10542da29281f7753cbf221a3421ad5acf67f2b290e52d65acece359cdf"),
     },
     "claims": {
         "artifact_training_quality": False,
@@ -433,8 +431,7 @@ def calibrate_activation_scales(
         raise ValueError("QuEST first slice fixes calibration_examples at 32")
     if type(position_limit) is not int or position_limit != CALIBRATION_POSITION_LIMIT:
         raise ValueError(
-            "QuEST first slice fixes calibration_position_limit at "
-            f"{CALIBRATION_POSITION_LIMIT}"
+            f"QuEST first slice fixes calibration_position_limit at {CALIBRATION_POSITION_LIMIT}"
         )
     if len(dataset) < examples:
         raise ValueError(
@@ -697,9 +694,9 @@ def validate_metadata(metadata: Any) -> dict[str, Any]:
     """Validate a route manifest as a closed, versioned schema."""
     if not isinstance(metadata, dict) or set(metadata) != _METADATA_KEYS:
         raise ValueError("Invalid QuEST metadata fields")
-    if (
-        type(metadata["format_version"]) is not int
-        or metadata["format_version"] not in (LEGACY_FORMAT_VERSION, FORMAT_VERSION)
+    if type(metadata["format_version"]) is not int or metadata["format_version"] not in (
+        LEGACY_FORMAT_VERSION,
+        FORMAT_VERSION,
     ):
         raise ValueError("Unsupported QuEST metadata format_version")
     if metadata["backend"] != "quest-fake-quant":

@@ -39,9 +39,7 @@ app = typer.Typer(no_args_is_help=True, help="Personal-LLM flywheel daemon (v0.6
 
 @app.command(name="init")
 def init_cmd(
-    db: str = typer.Option(
-        "local_rl.db", "--db", help="Path to local-RL SQLite database"
-    ),
+    db: str = typer.Option("local_rl.db", "--db", help="Path to local-RL SQLite database"),
 ) -> None:
     """Create the local-RL SQLite schema."""
     try:
@@ -61,9 +59,7 @@ def init_cmd(
 
 @app.command(name="status")
 def status_cmd(
-    db: str = typer.Option(
-        "local_rl.db", "--db", help="Path to local-RL SQLite database"
-    ),
+    db: str = typer.Option("local_rl.db", "--db", help="Path to local-RL SQLite database"),
 ) -> None:
     """Print counters from the local-RL database."""
     import os
@@ -82,15 +78,9 @@ def status_cmd(
         raise typer.Exit(2)
 
     with sqlite3.connect(real) as conn:
-        up = conn.execute(
-            "SELECT COUNT(*) FROM thumbs WHERE thumb='up'"
-        ).fetchone()[0]
-        down = conn.execute(
-            "SELECT COUNT(*) FROM thumbs WHERE thumb='down'"
-        ).fetchone()[0]
-        interactions = conn.execute(
-            "SELECT COUNT(*) FROM interactions"
-        ).fetchone()[0]
+        up = conn.execute("SELECT COUNT(*) FROM thumbs WHERE thumb='up'").fetchone()[0]
+        down = conn.execute("SELECT COUNT(*) FROM thumbs WHERE thumb='down'").fetchone()[0]
+        interactions = conn.execute("SELECT COUNT(*) FROM interactions").fetchone()[0]
 
     table = Table(title=f"soup local-rl status — {db}")
     table.add_column("Metric")
@@ -103,9 +93,7 @@ def status_cmd(
 
 @app.command(name="record")
 def record_cmd(
-    db: str = typer.Option(
-        "local_rl.db", "--db", help="Path to local-RL SQLite database"
-    ),
+    db: str = typer.Option("local_rl.db", "--db", help="Path to local-RL SQLite database"),
     prompt: str = typer.Option(..., "--prompt", help="Prompt text"),
     response: str = typer.Option(..., "--response", help="Model response"),
     thumb: str = typer.Option(..., "--thumb", help="up / down"),
@@ -117,19 +105,13 @@ def record_cmd(
         console.print(f"[red]{escape(str(exc))}[/]")
         raise typer.Exit(2) from exc
 
-    console.print(
-        f"[green]Recorded {escape(thumb)} for prompt {escape(prompt[:32])}…[/]"
-    )
+    console.print(f"[green]Recorded {escape(thumb)} for prompt {escape(prompt[:32])}…[/]")
 
 
 @app.command(name="harvest")
 def harvest_cmd(
-    db: str = typer.Option(
-        "local_rl.db", "--db", help="Path to local-RL SQLite database"
-    ),
-    output: str = typer.Option(
-        "dpo_pairs.jsonl", "--output", "-o", help="Output JSONL path"
-    ),
+    db: str = typer.Option("local_rl.db", "--db", help="Path to local-RL SQLite database"),
+    output: str = typer.Option("dpo_pairs.jsonl", "--output", "-o", help="Output JSONL path"),
 ) -> None:
     """Harvest DPO pairs from thumbs into a JSONL file."""
     try:
@@ -158,9 +140,7 @@ def harvest_cmd(
 
 @app.command(name="train")
 def train_cmd(
-    db: str = typer.Option(
-        "local_rl.db", "--db", help="Path to local-RL SQLite database"
-    ),
+    db: str = typer.Option("local_rl.db", "--db", help="Path to local-RL SQLite database"),
     backend: str = typer.Option(
         "ollama",
         "--backend",
@@ -246,9 +226,7 @@ def train_cmd(
     import subprocess
 
     try:
-        result = run_nightly_train(
-            cfg, once=True, min_pairs=min_pairs, output_dir=output
-        )
+        result = run_nightly_train(cfg, once=True, min_pairs=min_pairs, output_dir=output)
     except (TypeError, ValueError, FileNotFoundError) as exc:
         console.print(f"[red]{escape(str(exc))}[/]")
         raise typer.Exit(2) from exc

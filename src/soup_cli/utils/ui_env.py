@@ -22,9 +22,7 @@ class UiEnv:
     gradio_port: Optional[int]
 
 
-_VALID_HOST_CHARS = set(
-    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-:"
-)
+_VALID_HOST_CHARS = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-:")
 
 
 def _parse_host(raw: Optional[str]) -> Optional[str]:
@@ -38,9 +36,7 @@ def _parse_host(raw: Optional[str]) -> Optional[str]:
     if "\x00" in cleaned or len(cleaned) > 253:
         raise ValueError("invalid host string")
     if any(char not in _VALID_HOST_CHARS for char in cleaned):
-        raise ValueError(
-            "host contains characters outside [a-zA-Z0-9.-:]"
-        )
+        raise ValueError("host contains characters outside [a-zA-Z0-9.-:]")
     return cleaned
 
 

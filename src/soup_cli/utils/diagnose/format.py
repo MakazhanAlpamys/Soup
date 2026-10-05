@@ -97,9 +97,7 @@ def score_format(
             valid += 1
     score = valid / len(prompts_list)
     verdict = classify_score(score)
-    evidence = merge_evidence(
-        {"kind": kind, "valid": valid, "total": len(prompts_list)}
-    )
+    evidence = merge_evidence({"kind": kind, "valid": valid, "total": len(prompts_list)})
     return FailureScore(
         mode="format",
         score=score,

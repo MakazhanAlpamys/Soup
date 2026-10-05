@@ -131,18 +131,21 @@ class TestIsNewV041Optimizer:
 
 
 class TestRequiredPackageFull:
-    @pytest.mark.parametrize("name,pkg", [
-        ("adam_mini", "adam-mini"),
-        ("lomo", "lomo-optim"),
-        ("adalomo", "lomo-optim"),
-        ("grokadamw", "grokadamw"),
-        ("muon", "muon-optimizer"),
-        ("dion", "dion-optimizer"),
-        ("came_pytorch", "came-pytorch"),
-        ("ao_adamw_4bit", "torchao"),
-        ("ao_adamw_8bit", "torchao"),
-        ("schedule_free_sgd", "schedulefree"),
-    ])
+    @pytest.mark.parametrize(
+        "name,pkg",
+        [
+            ("adam_mini", "adam-mini"),
+            ("lomo", "lomo-optim"),
+            ("adalomo", "lomo-optim"),
+            ("grokadamw", "grokadamw"),
+            ("muon", "muon-optimizer"),
+            ("dion", "dion-optimizer"),
+            ("came_pytorch", "came-pytorch"),
+            ("ao_adamw_4bit", "torchao"),
+            ("ao_adamw_8bit", "torchao"),
+            ("schedule_free_sgd", "schedulefree"),
+        ],
+    )
     def test_each_pkg(self, name, pkg):
         assert required_package(name) == pkg
 

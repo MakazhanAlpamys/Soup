@@ -79,7 +79,7 @@ def ui(
     except ImportError:
         console.print(
             "[red]FastAPI/uvicorn not installed.[/]\n"
-            "Install with: [bold]pip install \"soup-cli\\[ui]\"[/]"
+            'Install with: [bold]pip install "soup-cli\\[ui]"[/]'
         )
         raise typer.Exit(1)
 
@@ -187,10 +187,7 @@ def ui(
             )
         qr_ascii = render_qr_ascii(phone_url)
         if qr_ascii is None:
-            console.print(
-                "[dim]Install 'qrcode' to print an ASCII QR: "
-                "pip install qrcode[/]"
-            )
+            console.print("[dim]Install 'qrcode' to print an ASCII QR: pip install qrcode[/]")
         else:
             console.print(qr_ascii)
 

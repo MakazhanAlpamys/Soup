@@ -249,9 +249,7 @@ training:
             self.lin = torch.nn.Linear(16, 16)
 
         def forward(self, **kw):
-            return type(
-                "Out", (), {"logits": torch.randn(1, 4, 16, requires_grad=True)}
-            )()
+            return type("Out", (), {"logits": torch.randn(1, 4, 16, requires_grad=True)})()
 
     class BrokenTeacherModel(torch.nn.Module):
         def __init__(self):
@@ -308,4 +306,3 @@ training:
 
     assert wrapper.nonfinite_tracker.warned
     assert any("broken-teacher-e2e" in r.message for r in caplog.records)
-

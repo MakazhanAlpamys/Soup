@@ -65,30 +65,41 @@ def autopilot_cmd(
     model: str = typer.Option(..., "--model", "-m", help="Base model (HF model id)"),
     data: str = typer.Option(..., "--data", "-d", help="Dataset path (JSONL)"),
     goal: str = typer.Option(
-        ..., "--goal", "-g",
+        ...,
+        "--goal",
+        "-g",
         help=(
             "Goal: chat | reasoning | code | classification | tool-calling | "
             "alignment | domain-adapt"
         ),
     ),
     gpu_budget: str = typer.Option(
-        "", "--gpu-budget", help="VRAM budget, e.g. 24GB (default: auto-detect)",
+        "",
+        "--gpu-budget",
+        help="VRAM budget, e.g. 24GB (default: auto-detect)",
     ),
     output: str = typer.Option(
-        "soup.yaml", "--output", "-o", help="Output config path",
+        "soup.yaml",
+        "--output",
+        "-o",
+        help="Output config path",
     ),
     dry_run: bool = typer.Option(
-        False, "--dry-run", help="Show decisions but don't write the config",
+        False,
+        "--dry-run",
+        help="Show decisions but don't write the config",
     ),
     yes: bool = typer.Option(
-        False, "--yes", "-y", help="Skip confirmation prompts",
+        False,
+        "--yes",
+        "-y",
+        help="Skip confirmation prompts",
     ),
 ) -> None:
     """Autopilot: give model+data+goal, Soup picks optimal hyperparameters."""
     if goal not in GOAL_TO_TASK:
         console.print(
-            f"[red]Unknown goal '{goal}'. "
-            f"Options: {', '.join(sorted(GOAL_TO_TASK.keys()))}[/]"
+            f"[red]Unknown goal '{goal}'. Options: {', '.join(sorted(GOAL_TO_TASK.keys()))}[/]"
         )
         raise typer.Exit(1)
 

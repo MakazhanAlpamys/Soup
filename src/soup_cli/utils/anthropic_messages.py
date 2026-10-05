@@ -71,9 +71,7 @@ def to_anthropic(openai_payload: Dict[str, Any]) -> Dict[str, Any]:
     for index, message in enumerate(messages):
         role = message.get("role")
         if not isinstance(role, str) or role not in _VALID_ROLES_OPENAI:
-            raise ValueError(
-                f"messages[{index}].role must be one of {_VALID_ROLES_OPENAI}"
-            )
+            raise ValueError(f"messages[{index}].role must be one of {_VALID_ROLES_OPENAI}")
         content = message.get("content", "")
         if isinstance(content, str):
             _check_str(content, f"messages[{index}].content")
@@ -84,9 +82,7 @@ def to_anthropic(openai_payload: Dict[str, Any]) -> Dict[str, Any]:
                 if isinstance(inner, dict) and isinstance(inner.get("text"), str):
                     _check_str(inner["text"], f"messages[{index}].content[].text")
         else:
-            raise TypeError(
-                f"messages[{index}].content must be str or list"
-            )
+            raise TypeError(f"messages[{index}].content must be str or list")
 
         if role == "system":
             if isinstance(content, str):
@@ -110,17 +106,13 @@ def to_anthropic(openai_payload: Dict[str, Any]) -> Dict[str, Any]:
             elif isinstance(content, list):
                 parts: List[str] = []
                 for inner in content:
-                    if isinstance(inner, dict) and isinstance(
-                        inner.get("text"), str
-                    ):
+                    if isinstance(inner, dict) and isinstance(inner.get("text"), str):
                         parts.append(inner["text"])
                     elif isinstance(inner, str):
                         parts.append(inner)
                 tool_content = "\n".join(parts)
             else:
-                raise TypeError(
-                    f"messages[{index}].content must be str or list"
-                )
+                raise TypeError(f"messages[{index}].content must be str or list")
             out_messages.append(
                 {
                     "role": "user",
@@ -193,9 +185,7 @@ def validate_anthropic_payload(payload: Dict[str, Any]) -> None:
     for index, message in enumerate(messages):
         role = message.get("role")
         if role not in _VALID_ROLES_ANTHROPIC:
-            raise ValueError(
-                f"messages[{index}].role must be one of {_VALID_ROLES_ANTHROPIC}"
-            )
+            raise ValueError(f"messages[{index}].role must be one of {_VALID_ROLES_ANTHROPIC}")
     raw_max = payload.get("max_tokens")
     if isinstance(raw_max, bool) or not isinstance(raw_max, int):
         raise TypeError("max_tokens must be an int")

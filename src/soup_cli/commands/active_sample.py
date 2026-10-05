@@ -17,22 +17,30 @@ console = Console()
 
 def active_sample(
     input_path: str = typer.Option(
-        ..., "--input", "-i", help="JSONL of trace rows with rm_score or rm_scores fields.",
+        ...,
+        "--input",
+        "-i",
+        help="JSONL of trace rows with rm_score or rm_scores fields.",
     ),
     output: str = typer.Option(
-        "active_samples.jsonl", "--output", "-o",
+        "active_samples.jsonl",
+        "--output",
+        "-o",
         help="Output JSONL of the top-uncertainty rows (default: active_samples.jsonl).",
     ),
     budget: int = typer.Option(
-        100, "--budget",
+        100,
+        "--budget",
         help="Max rows to surface for human review (1 - 100_000).",
     ),
     slack_url: Optional[str] = typer.Option(
-        None, "--slack-url",
+        None,
+        "--slack-url",
         help="Optional Slack webhook URL — POSTed on completion. SSRF-validated.",
     ),
     discord_url: Optional[str] = typer.Option(
-        None, "--discord-url",
+        None,
+        "--discord-url",
         help="Optional Discord webhook URL — POSTed on completion. SSRF-validated.",
     ),
 ) -> None:
@@ -43,9 +51,7 @@ def active_sample(
         console.print(f"[red]{escape(str(exc))}[/]")
         raise typer.Exit(2) from exc
 
-    slack_url, discord_url = validate_webhook_flags(
-        slack_url, discord_url, console=console
-    )
+    slack_url, discord_url = validate_webhook_flags(slack_url, discord_url, console=console)
 
     try:
         plan = sample_uncertain_rows(

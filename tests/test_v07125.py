@@ -61,6 +61,7 @@ def _module_head(rel_path: str) -> str:
 # build_task_win
 # ---------------------------------------------------------------------------
 
+
 class TestBuildTaskWin:
     def test_strict_win(self):
         win = build_task_win("metric", 0.40, 0.55)
@@ -115,6 +116,7 @@ class TestBuildTaskWin:
 # compute_benchmark_deltas
 # ---------------------------------------------------------------------------
 
+
 class TestComputeBenchmarkDeltas:
     def test_basic_delta(self):
         deltas = compute_benchmark_deltas(
@@ -130,15 +132,11 @@ class TestComputeBenchmarkDeltas:
         assert delta.regressed is False
 
     def test_regression_flagged(self):
-        deltas = compute_benchmark_deltas(
-            {"b": 0.80}, {"b": 0.70}, forgetting_threshold=0.05
-        )
+        deltas = compute_benchmark_deltas({"b": 0.80}, {"b": 0.70}, forgetting_threshold=0.05)
         assert deltas[0].regressed is True
 
     def test_improvement_never_regresses(self):
-        deltas = compute_benchmark_deltas(
-            {"b": 0.50}, {"b": 0.90}, forgetting_threshold=0.05
-        )
+        deltas = compute_benchmark_deltas({"b": 0.50}, {"b": 0.90}, forgetting_threshold=0.05)
         assert deltas[0].delta == pytest.approx(0.40)
         assert deltas[0].regressed is False
 
@@ -147,9 +145,7 @@ class TestComputeBenchmarkDeltas:
         # which WOULD trip a bare `> 0.05` — this pins that _REGRESSION_EPS
         # absorbs the noise.
         assert (0.80 - 0.75) > 0.05  # the float noise is real
-        deltas = compute_benchmark_deltas(
-            {"b": 0.80}, {"b": 0.75}, forgetting_threshold=0.05
-        )
+        deltas = compute_benchmark_deltas({"b": 0.80}, {"b": 0.75}, forgetting_threshold=0.05)
         assert deltas[0].regressed is False
 
     def test_non_string_keys_coerced(self):
@@ -158,9 +154,7 @@ class TestComputeBenchmarkDeltas:
 
     def test_boundary_just_past_threshold_regresses(self):
         # -5.01% drop regresses.
-        deltas = compute_benchmark_deltas(
-            {"b": 0.80}, {"b": 0.7499}, forgetting_threshold=0.05
-        )
+        deltas = compute_benchmark_deltas({"b": 0.80}, {"b": 0.7499}, forgetting_threshold=0.05)
         assert deltas[0].regressed is True
 
     def test_only_common_benchmarks(self):
@@ -189,6 +183,7 @@ class TestComputeBenchmarkDeltas:
 # ---------------------------------------------------------------------------
 # decide_ship — the moat truth table
 # ---------------------------------------------------------------------------
+
 
 def _deltas(pairs, threshold=0.05):
     base = {n: b for n, b, _ in pairs}
@@ -284,9 +279,7 @@ class TestDecideShip:
         # Deltas built with a LENIENT threshold (regressed=False) must still be
         # caught when decide_ship is told to use a STRICTER threshold.
         win = build_task_win("metric", 0.40, 0.55)
-        lenient = compute_benchmark_deltas(
-            {"b": 0.80}, {"b": 0.70}, forgetting_threshold=0.50
-        )
+        lenient = compute_benchmark_deltas({"b": 0.80}, {"b": 0.70}, forgetting_threshold=0.50)
         assert lenient[0].regressed is False  # lenient build said OK
         verdict = decide_ship(win, lenient, forgetting_threshold=0.05)
         assert verdict.decision == DECISION_DONT_SHIP
@@ -325,6 +318,7 @@ class TestDecideShip:
 # ---------------------------------------------------------------------------
 # render + rubric + serialization
 # ---------------------------------------------------------------------------
+
 
 class TestRenderAndSerialize:
     def _ship(self):
@@ -402,6 +396,7 @@ class TestRenderAndSerialize:
 # engine purity
 # ---------------------------------------------------------------------------
 
+
 class TestEnginePurity:
     def test_no_top_level_torch(self):
         head = _module_head("utils/ship_verdict.py")
@@ -413,6 +408,7 @@ class TestEnginePurity:
 # ---------------------------------------------------------------------------
 # CLI — offline --evidence path (primary tested contract, no GPU)
 # ---------------------------------------------------------------------------
+
 
 def _write_evidence(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload), encoding="utf-8")
@@ -499,26 +495,34 @@ class TestShipCliEvidence:
             ),
             # benchmark entry missing 'tuned'
             (
-                {"task": {"mode": "metric", "base": 0.4, "tuned": 0.5},
-                 "benchmarks": {"b": {"base": 0.8}}},
+                {
+                    "task": {"mode": "metric", "base": 0.4, "tuned": 0.5},
+                    "benchmarks": {"b": {"base": 0.8}},
+                },
                 "tuned",
             ),
             # non-numeric benchmark score
             (
-                {"task": {"mode": "metric", "base": 0.4, "tuned": 0.5},
-                 "benchmarks": {"b": {"base": 0.8, "tuned": "great"}}},
+                {
+                    "task": {"mode": "metric", "base": 0.4, "tuned": 0.5},
+                    "benchmarks": {"b": {"base": 0.8, "tuned": "great"}},
+                },
                 "number",
             ),
             # boolean task score
             (
-                {"task": {"mode": "metric", "base": True, "tuned": 0.5},
-                 "benchmarks": {"b": {"base": 0.8, "tuned": 0.7}}},
+                {
+                    "task": {"mode": "metric", "base": True, "tuned": 0.5},
+                    "benchmarks": {"b": {"base": 0.8, "tuned": 0.7}},
+                },
                 "bool",
             ),
             # unsupported task mode
             (
-                {"task": {"mode": "bogus", "base": 0.4, "tuned": 0.5},
-                 "benchmarks": {"b": {"base": 0.8, "tuned": 0.7}}},
+                {
+                    "task": {"mode": "bogus", "base": 0.4, "tuned": 0.5},
+                    "benchmarks": {"b": {"base": 0.8, "tuned": 0.7}},
+                },
                 "mode",
             ),
         ],
@@ -537,9 +541,7 @@ class TestShipCliEvidence:
 
         with runner.isolated_filesystem():
             _write_evidence(Path("ev.json"), _EVIDENCE_SHIP)
-            res = runner.invoke(
-                ship_cmd.app, ["--evidence", "ev.json", "--output", "verdict.json"]
-            )
+            res = runner.invoke(ship_cmd.app, ["--evidence", "ev.json", "--output", "verdict.json"])
             assert res.exit_code == 0, (res.output, repr(res.exception))
             data = json.loads(Path("verdict.json").read_text(encoding="utf-8"))
             assert data["decision"] == DECISION_SHIP
@@ -690,10 +692,14 @@ class TestShipCliLive:
             res = runner.invoke(
                 ship_cmd.app,
                 [
-                    "--base", "fake-base",
-                    "--adapter", "fake-adapter",
-                    "--task-eval", "tasks.jsonl",
-                    "--general-suite", "mini_mmlu",
+                    "--base",
+                    "fake-base",
+                    "--adapter",
+                    "fake-adapter",
+                    "--task-eval",
+                    "tasks.jsonl",
+                    "--general-suite",
+                    "mini_mmlu",
                 ],
             )
             assert res.exit_code == 0, (res.output, repr(res.exception))
@@ -717,10 +723,14 @@ class TestShipCliLive:
             res = runner.invoke(
                 ship_cmd.app,
                 [
-                    "--base", "fake-base",
-                    "--adapter", "fake-adapter",
-                    "--task-eval", "tasks.jsonl",
-                    "--general-suite", "mini_mmlu",
+                    "--base",
+                    "fake-base",
+                    "--adapter",
+                    "fake-adapter",
+                    "--task-eval",
+                    "tasks.jsonl",
+                    "--general-suite",
+                    "mini_mmlu",
                 ],
             )
             assert res.exit_code == 2, (res.output, repr(res.exception))
@@ -734,12 +744,11 @@ class TestShipCliLive:
         monkeypatch.setattr(
             live_eval,
             "make_generator",
-            _make_fake_factory({"task_ok": True, "bench_ok": True},
-                               {"task_ok": True, "bench_ok": True}),
+            _make_fake_factory(
+                {"task_ok": True, "bench_ok": True}, {"task_ok": True, "bench_ok": True}
+            ),
         )
-        res = runner.invoke(
-            ship_cmd.app, ["--base", "fake-base", "--adapter", "fake-adapter"]
-        )
+        res = runner.invoke(ship_cmd.app, ["--base", "fake-base", "--adapter", "fake-adapter"])
         assert res.exit_code == 3, (res.output, repr(res.exception))
         assert "task-eval" in res.output.lower() or "task_eval" in res.output.lower()
 
@@ -759,17 +768,20 @@ class TestShipCliLive:
         )
         with runner.isolated_filesystem():
             _write_task_eval(Path("tasks.jsonl"))
-            Path("baseline.json").write_text(
-                json.dumps({"mini_mmlu": 0.2}), encoding="utf-8"
-            )
+            Path("baseline.json").write_text(json.dumps({"mini_mmlu": 0.2}), encoding="utf-8")
             res = runner.invoke(
                 ship_cmd.app,
                 [
-                    "--base", "fake-base",
-                    "--adapter", "fake-adapter",
-                    "--task-eval", "tasks.jsonl",
-                    "--general-suite", "mini_mmlu",
-                    "--baseline", "baseline.json",
+                    "--base",
+                    "fake-base",
+                    "--adapter",
+                    "fake-adapter",
+                    "--task-eval",
+                    "tasks.jsonl",
+                    "--general-suite",
+                    "mini_mmlu",
+                    "--baseline",
+                    "baseline.json",
                 ],
             )
             assert res.exit_code == 0, (res.output, repr(res.exception))
@@ -788,9 +800,12 @@ class TestShipCliLive:
             res = runner.invoke(
                 ship_cmd.app,
                 [
-                    "--base", "fake-base",
-                    "--adapter", "fake-adapter",
-                    "--task-eval", "tasks.jsonl",
+                    "--base",
+                    "fake-base",
+                    "--adapter",
+                    "fake-adapter",
+                    "--task-eval",
+                    "tasks.jsonl",
                 ],
             )
             assert res.exit_code == 1, (res.output, repr(res.exception))
@@ -806,11 +821,16 @@ class TestShipCliLive:
             res = runner.invoke(
                 ship_cmd.app,
                 [
-                    "--base", "fake-base",
-                    "--adapter", "fake-adapter",
-                    "--task-eval", "tasks.jsonl",
-                    "--general-suite", "mini_mmlu",
-                    "--baseline", "../escape.json",
+                    "--base",
+                    "fake-base",
+                    "--adapter",
+                    "fake-adapter",
+                    "--task-eval",
+                    "tasks.jsonl",
+                    "--general-suite",
+                    "mini_mmlu",
+                    "--baseline",
+                    "../escape.json",
                 ],
             )
             assert res.exit_code == 3, (res.output, repr(res.exception))
@@ -827,8 +847,9 @@ class TestShipCliLmEvalRouting:
         monkeypatch.setattr(
             live_eval,
             "make_generator",
-            _make_fake_factory({"task_ok": False, "bench_ok": False},
-                               {"task_ok": True, "bench_ok": True}),
+            _make_fake_factory(
+                {"task_ok": False, "bench_ok": False}, {"task_ok": True, "bench_ok": True}
+            ),
         )
 
         calls = {"n": 0}
@@ -845,10 +866,14 @@ class TestShipCliLmEvalRouting:
             res = runner.invoke(
                 ship_cmd.app,
                 [
-                    "--base", "fake-base",
-                    "--adapter", "fake-adapter",
-                    "--task-eval", "tasks.jsonl",
-                    "--general-suite", "hellaswag",
+                    "--base",
+                    "fake-base",
+                    "--adapter",
+                    "fake-adapter",
+                    "--task-eval",
+                    "tasks.jsonl",
+                    "--general-suite",
+                    "hellaswag",
                 ],
             )
             assert res.exit_code == 0, (res.output, repr(res.exception))
@@ -862,18 +887,23 @@ class TestShipCliLmEvalRouting:
         monkeypatch.setattr(
             live_eval,
             "make_generator",
-            _make_fake_factory({"task_ok": False, "bench_ok": False},
-                               {"task_ok": True, "bench_ok": True}),
+            _make_fake_factory(
+                {"task_ok": False, "bench_ok": False}, {"task_ok": True, "bench_ok": True}
+            ),
         )
         with runner.isolated_filesystem():
             _write_task_eval(Path("tasks.jsonl"))
             res = runner.invoke(
                 ship_cmd.app,
                 [
-                    "--base", "fake-base",
-                    "--adapter", "lora,trust_remote_code=True",
-                    "--task-eval", "tasks.jsonl",
-                    "--general-suite", "hellaswag",
+                    "--base",
+                    "fake-base",
+                    "--adapter",
+                    "lora,trust_remote_code=True",
+                    "--task-eval",
+                    "tasks.jsonl",
+                    "--general-suite",
+                    "hellaswag",
                 ],
             )
             assert res.exit_code == 1, (res.output, repr(res.exception))
@@ -888,8 +918,9 @@ class TestShipCliLmEvalRouting:
         monkeypatch.setattr(
             live_eval,
             "make_generator",
-            _make_fake_factory({"task_ok": False, "bench_ok": False},
-                               {"task_ok": True, "bench_ok": True}),
+            _make_fake_factory(
+                {"task_ok": False, "bench_ok": False}, {"task_ok": True, "bench_ok": True}
+            ),
         )
 
         def empty_lm_eval(model_arg, tasks, num_fewshot, batch_size, device):
@@ -901,10 +932,14 @@ class TestShipCliLmEvalRouting:
             res = runner.invoke(
                 ship_cmd.app,
                 [
-                    "--base", "fake-base",
-                    "--adapter", "fake-adapter",
-                    "--task-eval", "tasks.jsonl",
-                    "--general-suite", "hellaswag",
+                    "--base",
+                    "fake-base",
+                    "--adapter",
+                    "fake-adapter",
+                    "--task-eval",
+                    "tasks.jsonl",
+                    "--general-suite",
+                    "hellaswag",
                 ],
             )
             # Refuse loudly (runtime error) rather than silently SHIP on missing data.
@@ -921,19 +956,25 @@ class TestShipCliSecurity:
         monkeypatch.setattr(
             live_eval,
             "make_generator",
-            _make_fake_factory({"task_ok": True, "bench_ok": True},
-                               {"task_ok": True, "bench_ok": True}),
+            _make_fake_factory(
+                {"task_ok": True, "bench_ok": True}, {"task_ok": True, "bench_ok": True}
+            ),
         )
         with runner.isolated_filesystem():
             _write_task_eval(Path("tasks.jsonl"))
             res = runner.invoke(
                 ship_cmd.app,
                 [
-                    "--base", "fake-base",
-                    "--adapter", "fake-adapter",
-                    "--task-eval", "tasks.jsonl",
-                    "--task-mode", "judge_score",
-                    "--judge-model", "http://localhost.attacker.com/model",
+                    "--base",
+                    "fake-base",
+                    "--adapter",
+                    "fake-adapter",
+                    "--task-eval",
+                    "tasks.jsonl",
+                    "--task-mode",
+                    "judge_score",
+                    "--judge-model",
+                    "http://localhost.attacker.com/model",
                 ],
             )
             assert res.exit_code == 3, (res.output, repr(res.exception))
@@ -947,8 +988,9 @@ class TestShipCliSecurity:
         monkeypatch.setattr(
             live_eval,
             "make_generator",
-            _make_fake_factory({"task_ok": True, "bench_ok": True},
-                               {"task_ok": True, "bench_ok": True}),
+            _make_fake_factory(
+                {"task_ok": True, "bench_ok": True}, {"task_ok": True, "bench_ok": True}
+            ),
         )
 
         class _FakeJudge:
@@ -966,12 +1008,18 @@ class TestShipCliSecurity:
             res = runner.invoke(
                 ship_cmd.app,
                 [
-                    "--base", "fake-base",
-                    "--adapter", "fake-adapter",
-                    "--task-eval", "tasks.jsonl",
-                    "--task-mode", "judge_score",
-                    "--judge-model", "ollama://llama3.1",
-                    "--general-suite", "mini_mmlu",
+                    "--base",
+                    "fake-base",
+                    "--adapter",
+                    "fake-adapter",
+                    "--task-eval",
+                    "tasks.jsonl",
+                    "--task-mode",
+                    "judge_score",
+                    "--judge-model",
+                    "ollama://llama3.1",
+                    "--general-suite",
+                    "mini_mmlu",
                 ],
             )
             # base == tuned judge score -> leg-1 tie -> DON'T SHIP (exit 2), but
@@ -985,9 +1033,12 @@ class TestShipCliSecurity:
         res = runner.invoke(
             ship_cmd.app,
             [
-                "--base", "fake-base",
-                "--adapter", "fake-adapter",
-                "--task-eval", "../escape.jsonl",
+                "--base",
+                "fake-base",
+                "--adapter",
+                "fake-adapter",
+                "--task-eval",
+                "../escape.jsonl",
             ],
         )
         assert res.exit_code == 3, (res.output, repr(res.exception))
@@ -1002,10 +1053,14 @@ class TestShipCliSecurity:
             res = runner.invoke(
                 ship_cmd.app,
                 [
-                    "--base", "fake-base",
-                    "--adapter", "fake-adapter",
-                    "--task-eval", "tasks.jsonl",
-                    "--general-suite", big,
+                    "--base",
+                    "fake-base",
+                    "--adapter",
+                    "fake-adapter",
+                    "--task-eval",
+                    "tasks.jsonl",
+                    "--general-suite",
+                    big,
                 ],
             )
             assert res.exit_code == 3, (res.output, repr(res.exception))
@@ -1019,10 +1074,14 @@ class TestShipCliSecurity:
             res = runner.invoke(
                 ship_cmd.app,
                 [
-                    "--base", "fake-base",
-                    "--adapter", "fake-adapter",
-                    "--task-eval", "tasks.jsonl",
-                    "--general-suite", "a" * 300,
+                    "--base",
+                    "fake-base",
+                    "--adapter",
+                    "fake-adapter",
+                    "--task-eval",
+                    "tasks.jsonl",
+                    "--general-suite",
+                    "a" * 300,
                 ],
             )
             assert res.exit_code == 3, (res.output, repr(res.exception))

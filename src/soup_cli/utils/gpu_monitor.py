@@ -187,12 +187,7 @@ def _parse_powermetrics_sample(payload: bytes) -> Optional[GpuSample]:
         util_gpu_pct = (1.0 - idle_ratio) * 100.0
 
     hw_model = parsed.get("hw_model")
-    if (
-        isinstance(hw_model, str)
-        and hw_model
-        and "\x00" not in hw_model
-        and len(hw_model) <= 128
-    ):
+    if isinstance(hw_model, str) and hw_model and "\x00" not in hw_model and len(hw_model) <= 128:
         name = f"Apple Silicon ({hw_model})"
     else:
         name = "Apple Silicon"

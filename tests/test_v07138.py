@@ -180,9 +180,7 @@ class TestForgettingDetectorUsesNewScorer:
 
         # A model that emits a word CONTAINING an option letter as a substring
         # ("Berlin" contains "B") must NOT be credited for answer "B".
-        detector = ForgettingDetector(
-            generate_fn=lambda p: "Berlin", benchmark="mini_mmlu"
-        )
+        detector = ForgettingDetector(generate_fn=lambda p: "Berlin", benchmark="mini_mmlu")
         # mini_mmlu has answers B,C,A,B,A -> "Berlin" gives a standalone letter
         # of NONE, so every item scores 0 under the new scorer.
         assert detector.run_baseline() == 0.0
@@ -191,9 +189,7 @@ class TestForgettingDetectorUsesNewScorer:
         from soup_cli.eval.forgetting import MINI_MMLU, ForgettingDetector
 
         # Emitting the clean letter "B" credits exactly the "B" answers.
-        detector = ForgettingDetector(
-            generate_fn=lambda p: "B", benchmark="mini_mmlu"
-        )
+        detector = ForgettingDetector(generate_fn=lambda p: "B", benchmark="mini_mmlu")
         expected = sum(1 for it in MINI_MMLU if it["answer"] == "B") / len(MINI_MMLU)
         assert detector.run_baseline() == pytest.approx(expected)
 
@@ -210,8 +206,7 @@ class TestExpandedMcqSuites:
     def test_suites_present_and_large_enough(self):
         from soup_cli.eval.forgetting import MINI_BENCHMARKS
 
-        for name in ("mini_mmlu", "mini_common_sense", "mini_instruction",
-                     "mini_arithmetic"):
+        for name in ("mini_mmlu", "mini_common_sense", "mini_instruction", "mini_arithmetic"):
             assert name in MINI_BENCHMARKS, name
             items = MINI_BENCHMARKS[name]
             # Quantum 1/N must be strictly finer than the 0.05 threshold.
@@ -298,9 +293,7 @@ class TestBundledScorers:
         items = load_suite_items("mini_tool_call")
         # A generator that echoes each row's expected tool call scores ~1.0.
         expected_by_prompt = {it["prompt"]: it["expected"] for it in items}
-        good = score_bundled_suite(
-            "mini_tool_call", lambda p: expected_by_prompt[p]
-        )
+        good = score_bundled_suite("mini_tool_call", lambda p: expected_by_prompt[p])
         assert good == pytest.approx(1.0)
         # A model that emits prose instead of a tool call scores 0.0.
         broken = score_bundled_suite("mini_tool_call", lambda p: "Sure, here you go!")
@@ -322,9 +315,7 @@ class TestBundledScorers:
 
         # A model that refuses everything scores 1.0 (fully safe); a compliant
         # one scores 0.0 — a tuned model that stops refusing REGRESSES.
-        refuses = score_bundled_suite(
-            "mini_safety", lambda p: "I cannot help with that request."
-        )
+        refuses = score_bundled_suite("mini_safety", lambda p: "I cannot help with that request.")
         assert refuses == pytest.approx(1.0)
         complies = score_bundled_suite(
             "mini_safety", lambda p: "Here is exactly how to do it: step one..."
@@ -382,9 +373,7 @@ class TestShipLeg2Dispatch:
         assert _parse_suite(None) == list(DEFAULT_GENERAL_SUITE)
         assert _parse_suite("") == list(DEFAULT_GENERAL_SUITE)
         # An explicit comma list is honoured verbatim.
-        assert _parse_suite("mini_mmlu,mini_tool_call") == [
-            "mini_mmlu", "mini_tool_call"
-        ]
+        assert _parse_suite("mini_mmlu,mini_tool_call") == ["mini_mmlu", "mini_tool_call"]
 
     def test_leg2_scores_behavioural_suites_without_lm_eval(self):
         from soup_cli.commands.ship import _leg2_scores
@@ -433,16 +422,28 @@ class TestShipLeg2Dispatch:
 
         # OLD-style default = trivia suites only -> no tool-call coverage.
         old_base, old_tuned = _leg2_scores(
-            ["mini_arithmetic"], base_gen, tuned_gen,
-            base_id="b", tuned_id="t", adapter=None, baseline_scores={}, device="cpu",
+            ["mini_arithmetic"],
+            base_gen,
+            tuned_gen,
+            base_id="b",
+            tuned_id="t",
+            adapter=None,
+            baseline_scores={},
+            device="cpu",
         )
         old_drop = old_base["mini_arithmetic"] - old_tuned["mini_arithmetic"]
         assert old_drop == pytest.approx(0.0)  # invisible
 
         # NEW default includes mini_tool_call -> the regression is visible.
         new_base, new_tuned = _leg2_scores(
-            ["mini_tool_call"], base_gen, tuned_gen,
-            base_id="b", tuned_id="t", adapter=None, baseline_scores={}, device="cpu",
+            ["mini_tool_call"],
+            base_gen,
+            tuned_gen,
+            base_id="b",
+            tuned_id="t",
+            adapter=None,
+            baseline_scores={},
+            device="cpu",
         )
         assert new_base["mini_tool_call"] - new_tuned["mini_tool_call"] > 0.5
 
@@ -457,7 +458,11 @@ class TestShipLeg2Dispatch:
             ["mini_safety"],
             lambda p: "I cannot help with that.",  # base refuses
             lambda p: "Sure, here's exactly how to do it.",  # tuned complies
-            base_id="b", tuned_id="t", adapter=None, baseline_scores={}, device="cpu",
+            base_id="b",
+            tuned_id="t",
+            adapter=None,
+            baseline_scores={},
+            device="cpu",
         )
         assert base_map["mini_safety"] == pytest.approx(1.0)
         assert tuned_map["mini_safety"] == 0.0
@@ -500,21 +505,24 @@ class TestShipLiveHeadline:
         from soup_cli.commands import ship as ship_cmd
 
         # Inject deterministic generators (no model load).
-        monkeypatch.setattr(
-            ship_cmd, "_resolve_generators", lambda *a, **k: (base_gen, tuned_gen)
-        )
+        monkeypatch.setattr(ship_cmd, "_resolve_generators", lambda *a, **k: (base_gen, tuned_gen))
         runner = CliRunner()
         with runner.isolated_filesystem():
             with open("task.jsonl", "w", encoding="utf-8") as fh:
                 fh.write(
-                    _json.dumps(
-                        {"prompt": "say hi", "expected": "hi", "scoring": "contains"}
-                    )
+                    _json.dumps({"prompt": "say hi", "expected": "hi", "scoring": "contains"})
                     + "\n"
                 )
             args = [
-                "ship", "--base", "base", "--adapter", "ad",
-                "--task-eval", "task.jsonl", "--device", "cpu",
+                "ship",
+                "--base",
+                "base",
+                "--adapter",
+                "ad",
+                "--task-eval",
+                "task.jsonl",
+                "--device",
+                "cpu",
             ]
             if want_verdict:
                 args += ["--output", "verdict.json"]
@@ -577,7 +585,8 @@ class TestShipLiveHeadline:
                     return "hi" if win else "no"
                 # answer MCQ/arithmetic identically well on both sides, refuse harm,
                 # emit valid JSON for the format suite.
-                return "I cannot help with that. {\"ok\": true} 42 B"
+                return 'I cannot help with that. {"ok": true} 42 B'
+
             return gen
 
         result, verdict = self._run(
@@ -648,8 +657,12 @@ class TestDiagnoseExports:
         import soup_cli.utils.diagnose as diag
 
         for name in (
-            "score_forgetting", "score_refusal", "score_format",
-            "score_mode_collapse", "score_memorization", "score_contamination",
+            "score_forgetting",
+            "score_refusal",
+            "score_format",
+            "score_mode_collapse",
+            "score_memorization",
+            "score_contamination",
             "score_citation",
         ):
             assert hasattr(diag, name), name

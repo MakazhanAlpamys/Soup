@@ -264,7 +264,7 @@ class _Expression:
 
     def value(self) -> Any:
         result = self._either()
-        assert self._position == len(self._tokens), f"unparsed: {self._tokens[self._position:]}"
+        assert self._position == len(self._tokens), f"unparsed: {self._tokens[self._position :]}"
         return result
 
     def _take(self, operator: str) -> bool:

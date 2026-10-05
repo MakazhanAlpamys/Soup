@@ -64,9 +64,11 @@ def test_load_jsonl_with_empty_lines(tmp_path: Path):
     """JSONL loader should skip empty lines."""
     path = tmp_path / "data.jsonl"
     content = (
-        json.dumps({"instruction": "Q1", "output": "A1"}) + "\n"
+        json.dumps({"instruction": "Q1", "output": "A1"})
         + "\n"
-        + json.dumps({"instruction": "Q2", "output": "A2"}) + "\n"
+        + "\n"
+        + json.dumps({"instruction": "Q2", "output": "A2"})
+        + "\n"
         + "\n"
     )
     path.write_text(content)
@@ -78,9 +80,11 @@ def test_load_jsonl_with_invalid_line(tmp_path: Path):
     """JSONL loader should skip invalid JSON lines with a warning."""
     path = tmp_path / "data.jsonl"
     content = (
-        json.dumps({"instruction": "Q1", "output": "A1"}) + "\n"
+        json.dumps({"instruction": "Q1", "output": "A1"})
+        + "\n"
         + "this is not json\n"
-        + json.dumps({"instruction": "Q2", "output": "A2"}) + "\n"
+        + json.dumps({"instruction": "Q2", "output": "A2"})
+        + "\n"
     )
     path.write_text(content)
     data = load_raw_data(path)

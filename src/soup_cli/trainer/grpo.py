@@ -378,9 +378,7 @@ class GRPOTrainerWrapper:
         else:
             self._setup_transformers(cfg, tcfg)
 
-        apply_chat_template_override(
-            self.tokenizer, cfg.data.chat_template, console=console
-        )
+        apply_chat_template_override(self.tokenizer, cfg.data.chat_template, console=console)
 
         # Ensure tokenizer has a chat template — trl's GRPOTrainer calls
         # apply_chat_template() when it detects conversational prompts (message
@@ -694,9 +692,7 @@ class GRPOTrainerWrapper:
         # resolution leaves peft with nothing to attach.
         from soup_cli.utils.moe import resolve_moe_lora_targets
 
-        target_modules = resolve_moe_lora_targets(
-            self.model, tcfg, target_modules, console
-        )
+        target_modules = resolve_moe_lora_targets(self.model, tcfg, target_modules, console)
 
         lora_config = build_lora_config(
             tcfg.lora,
@@ -850,9 +846,7 @@ def _prepare_grpo_dataset(data: list[dict]) -> list[dict]:
             # answer. Earlier assistant turns are part of the conversation and
             # must remain in the prompt for multi-turn GRPO (#565).
             messages = row["messages"]
-            has_reference_turn = bool(
-                messages and messages[-1].get("role") == "assistant"
-            )
+            has_reference_turn = bool(messages and messages[-1].get("role") == "assistant")
             prompt_msgs = messages[:-1] if has_reference_turn else messages
             entry = {"prompt": prompt_msgs}
             _copy_grpo_metadata(row, entry)

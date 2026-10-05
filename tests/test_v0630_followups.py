@@ -202,9 +202,16 @@ def test_v0630_no_heavy_top_level_imports(module_path):
     """
     repo_root = Path(__file__).resolve().parent.parent
     text = (repo_root / module_path).read_text(encoding="utf-8")
-    for needle in ("import torch", "from torch", "import transformers",
-                   "from transformers", "import peft", "from peft",
-                   "import trl", "from trl"):
+    for needle in (
+        "import torch",
+        "from torch",
+        "import transformers",
+        "from transformers",
+        "import peft",
+        "from peft",
+        "import trl",
+        "from trl",
+    ):
         # Check only the top of the file (first 50 lines = imports zone)
         head = "\n".join(text.splitlines()[:50])
         assert needle not in head, (

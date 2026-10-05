@@ -65,24 +65,26 @@ class HackDetectorSpec:
     paper: str
 
 
-_DETECTOR_METADATA = types.MappingProxyType({
-    "info_rm": HackDetectorSpec(
-        name="info_rm",
-        description=(
-            "InfoRM Cluster-Separation Index over (good, bad) reward "
-            "distributions. Drop across training = reward-hacking signal."
+_DETECTOR_METADATA = types.MappingProxyType(
+    {
+        "info_rm": HackDetectorSpec(
+            name="info_rm",
+            description=(
+                "InfoRM Cluster-Separation Index over (good, bad) reward "
+                "distributions. Drop across training = reward-hacking signal."
+            ),
+            paper="Wang et al. 2024 — arXiv:2402.09345",
         ),
-        paper="Wang et al. 2024 — arXiv:2402.09345",
-    ),
-    "rm_ensemble": HackDetectorSpec(
-        name="rm_ensemble",
-        description=(
-            "Pairwise variance across an RM ensemble. Rising disagreement "
-            "= unreliable reward signal."
+        "rm_ensemble": HackDetectorSpec(
+            name="rm_ensemble",
+            description=(
+                "Pairwise variance across an RM ensemble. Rising disagreement "
+                "= unreliable reward signal."
+            ),
+            paper="Coste et al. 2024 — arXiv:2312.09244",
         ),
-        paper="Coste et al. 2024 — arXiv:2312.09244",
-    ),
-})
+    }
+)
 
 
 def validate_hack_detector(name: object) -> str:
@@ -94,17 +96,13 @@ def validate_hack_detector(name: object) -> str:
     if isinstance(name, bool):
         raise ValueError("reward_hack_detector must be a string, got bool")
     if not isinstance(name, str):
-        raise ValueError(
-            f"reward_hack_detector must be a string, got {type(name).__name__}"
-        )
+        raise ValueError(f"reward_hack_detector must be a string, got {type(name).__name__}")
     if not name:
         raise ValueError("reward_hack_detector must be a non-empty string")
     if "\x00" in name:
         raise ValueError("reward_hack_detector must not contain null bytes")
     if len(name) > _MAX_DETECTOR_NAME_LEN:
-        raise ValueError(
-            f"reward_hack_detector exceeds {_MAX_DETECTOR_NAME_LEN} chars"
-        )
+        raise ValueError(f"reward_hack_detector exceeds {_MAX_DETECTOR_NAME_LEN} chars")
     normalised = name.lower()
     if normalised not in SUPPORTED_HACK_DETECTORS:
         raise ValueError(
@@ -127,19 +125,13 @@ def _check_finite_float_sequence(values: object, field: str) -> tuple[float, ...
     try:
         iterator = iter(values)  # type: ignore[arg-type]
     except TypeError as exc:
-        raise TypeError(
-            f"{field} must be iterable, got {type(values).__name__}"
-        ) from exc
+        raise TypeError(f"{field} must be iterable, got {type(values).__name__}") from exc
     out: list[float] = []
     for idx, v in enumerate(iterator):
         if isinstance(v, bool):
-            raise ValueError(
-                f"{field}[{idx}] must not be bool"
-            )
+            raise ValueError(f"{field}[{idx}] must not be bool")
         if not isinstance(v, (int, float)):
-            raise ValueError(
-                f"{field}[{idx}] must be a number, got {type(v).__name__}"
-            )
+            raise ValueError(f"{field}[{idx}] must be a number, got {type(v).__name__}")
         fv = float(v)
         if not math.isfinite(fv):
             raise ValueError(f"{field}[{idx}] must be finite (no NaN/Inf)")
@@ -197,15 +189,11 @@ def compute_rm_ensemble_divergence(rm_scores: object) -> float:
     try:
         outer = list(rm_scores)  # type: ignore[arg-type]
     except TypeError as exc:
-        raise TypeError(
-            f"rm_scores must be iterable, got {type(rm_scores).__name__}"
-        ) from exc
+        raise TypeError(f"rm_scores must be iterable, got {type(rm_scores).__name__}") from exc
     if len(outer) < 2:
         raise ValueError("rm_scores requires at least 2 RMs (ensemble divergence)")
     if len(outer) > _MAX_RM_ENSEMBLE_SIZE:
-        raise ValueError(
-            f"rm_scores has too many RMs (>{_MAX_RM_ENSEMBLE_SIZE} cap)"
-        )
+        raise ValueError(f"rm_scores has too many RMs (>{_MAX_RM_ENSEMBLE_SIZE} cap)")
     per_rm: list[tuple[float, ...]] = []
     expected_len: Optional[int] = None
     for idx, inner in enumerate(outer):
@@ -242,9 +230,7 @@ def classify_hack_signal(drop_pct: object) -> str:
     if isinstance(drop_pct, bool):
         raise ValueError("drop_pct must not be bool")
     if not isinstance(drop_pct, (int, float)):
-        raise ValueError(
-            f"drop_pct must be a number, got {type(drop_pct).__name__}"
-        )
+        raise ValueError(f"drop_pct must be a number, got {type(drop_pct).__name__}")
     fv = float(drop_pct)
     if not math.isfinite(fv):
         raise ValueError("drop_pct must be finite (no NaN/Inf)")
@@ -286,15 +272,11 @@ class RewardHackReport:
         if normalised != self.detector:
             object.__setattr__(self, "detector", normalised)
         if self.verdict not in _VALID_VERDICTS:
-            raise ValueError(
-                f"verdict={self.verdict!r} must be one of {sorted(_VALID_VERDICTS)}"
-            )
+            raise ValueError(f"verdict={self.verdict!r} must be one of {sorted(_VALID_VERDICTS)}")
         if isinstance(self.signal, bool):
             raise ValueError("signal must not be bool")
         if not isinstance(self.signal, (int, float)):
-            raise TypeError(
-                f"signal must be a number, got {type(self.signal).__name__}"
-            )
+            raise TypeError(f"signal must be a number, got {type(self.signal).__name__}")
         if not math.isfinite(float(self.signal)):
             raise ValueError("signal must be finite")
         if float(self.signal) < 0.0:
@@ -314,9 +296,7 @@ class RewardHackReport:
         if float(self.baseline_signal) < 0.0:
             raise ValueError("baseline_signal must be non-negative")
         if not isinstance(self.details, tuple):
-            raise TypeError(
-                f"details must be a tuple, got {type(self.details).__name__}"
-            )
+            raise TypeError(f"details must be a tuple, got {type(self.details).__name__}")
 
 
 def compute_separation_from_stats(reward_mean: object, reward_std: object) -> float:
@@ -333,9 +313,7 @@ def compute_separation_from_stats(reward_mean: object, reward_std: object) -> fl
     """
     if isinstance(reward_mean, bool) or isinstance(reward_std, bool):
         raise ValueError("reward_mean / reward_std must not be bool")
-    if not isinstance(reward_mean, (int, float)) or not isinstance(
-        reward_std, (int, float)
-    ):
+    if not isinstance(reward_mean, (int, float)) or not isinstance(reward_std, (int, float)):
         raise ValueError("reward_mean / reward_std must be numbers")
     m = float(reward_mean)
     s = float(reward_std)
@@ -403,28 +381,21 @@ class _RewardHackCallback_body:  # type: ignore[misc, valid-type]  # noqa: N801
     ) -> None:
         self.detector = validate_hack_detector(detector)
         if not isinstance(halt_on_hack, bool):
-            raise TypeError(
-                f"halt_on_hack must be bool, got {type(halt_on_hack).__name__}"
-            )
+            raise TypeError(f"halt_on_hack must be bool, got {type(halt_on_hack).__name__}")
         self.halt_on_hack = halt_on_hack
         if baseline_signal is not None:
             if isinstance(baseline_signal, bool):
                 raise TypeError("baseline_signal must not be bool")
             if not isinstance(baseline_signal, (int, float)):
                 raise TypeError("baseline_signal must be a number or None")
-            if (
-                not math.isfinite(float(baseline_signal))
-                or float(baseline_signal) < 0.0
-            ):
+            if not math.isfinite(float(baseline_signal)) or float(baseline_signal) < 0.0:
                 raise ValueError("baseline_signal must be finite and non-negative")
             baseline_signal = float(baseline_signal)
         self.buffer = buffer
         # Health baselines are recorded on the first observed signal.
         self._baseline_raw: Optional[float] = baseline_signal
         self._baseline_health: Optional[float] = (
-            None
-            if baseline_signal is None
-            else _health_from_signal(self.detector, baseline_signal)
+            None if baseline_signal is None else _health_from_signal(self.detector, baseline_signal)
         )
         self._last_report: Optional[RewardHackReport] = None
         self._hacks_seen = 0
@@ -469,9 +440,7 @@ class _RewardHackCallback_body:  # type: ignore[misc, valid-type]  # noqa: N801
         finite_rewards = [
             float(v)
             for v in rewards
-            if isinstance(v, (int, float))
-            and not isinstance(v, bool)
-            and math.isfinite(float(v))
+            if isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(float(v))
         ]
         if len(finite_rewards) < 4:
             return None
@@ -535,10 +504,12 @@ class _RewardHackCallback_body:  # type: ignore[misc, valid-type]  # noqa: N801
     def _record(self, state, report: RewardHackReport, control):
         log_history = getattr(state, "log_history", None)
         if log_history is not None:
-            log_history.append({
-                "reward_hack_signal": report.signal,
-                "reward_hack_verdict": report.verdict,
-            })
+            log_history.append(
+                {
+                    "reward_hack_signal": report.signal,
+                    "reward_hack_verdict": report.verdict,
+                }
+            )
         if report.verdict == "HACK" and self.halt_on_hack and control is not None:
             try:
                 control.should_training_stop = True

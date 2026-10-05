@@ -85,9 +85,7 @@ def validate_electricity_map_endpoint(endpoint: str) -> str:
         raise ValueError(f"endpoint unparseable: {exc}") from exc
     scheme = parts.scheme.lower()
     if scheme not in _SCHEMES:
-        raise ValueError(
-            f"endpoint scheme must be http or https, got {scheme!r}"
-        )
+        raise ValueError(f"endpoint scheme must be http or https, got {scheme!r}")
     host = (parts.hostname or "").lower()
     if not host:
         raise ValueError("endpoint must have a host")
@@ -96,9 +94,7 @@ def validate_electricity_map_endpoint(endpoint: str) -> str:
     is_loopback = host in _LOOPBACK
     if scheme == "http" and not is_loopback:
         # Reject plain HTTP except for loopback.
-        raise ValueError(
-            "http:// only permitted for loopback hosts; use https:// for remote"
-        )
+        raise ValueError("http:// only permitted for loopback hosts; use https:// for remote")
     # Reject private / link-local / cloud-metadata IPs explicitly.
     # ``parts.hostname`` already strips IPv6 brackets, so feed it directly.
     try:
@@ -107,9 +103,7 @@ def validate_electricity_map_endpoint(endpoint: str) -> str:
         ip = None
     if ip is not None and not is_loopback:
         if ip.is_private or ip.is_link_local or ip.is_reserved or ip.is_multicast:
-            raise ValueError(
-                f"endpoint host {host!r} resolves to a private/link-local IP"
-            )
+            raise ValueError(f"endpoint host {host!r} resolves to a private/link-local IP")
     return endpoint
 
 
@@ -153,10 +147,7 @@ def measure_run_energy(
         raise ValueError("duration_seconds must be a finite non-negative number")
     if not isinstance(grid_intensity_g_per_kwh, (int, float)):
         raise ValueError("grid_intensity_g_per_kwh must be numeric")
-    if (
-        not math.isfinite(float(grid_intensity_g_per_kwh))
-        or grid_intensity_g_per_kwh < 0
-    ):
+    if not math.isfinite(float(grid_intensity_g_per_kwh)) or grid_intensity_g_per_kwh < 0:
         raise ValueError("grid_intensity_g_per_kwh must be a finite non-negative number")
     try:
         adjust_for_pue(1.0, pue)
@@ -210,14 +201,9 @@ class EnergyTracker:
             grid_intensity_g_per_kwh, (int, float)
         ):
             raise ValueError("grid_intensity_g_per_kwh must be numeric")
-        if (
-            not math.isfinite(float(grid_intensity_g_per_kwh))
-            or grid_intensity_g_per_kwh < 0
-        ):
+        if not math.isfinite(float(grid_intensity_g_per_kwh)) or grid_intensity_g_per_kwh < 0:
             raise ValueError("grid_intensity_g_per_kwh must be finite and >= 0")
-        if not isinstance(country_iso_code, str) or not _COUNTRY_RE.match(
-            country_iso_code
-        ):
+        if not isinstance(country_iso_code, str) or not _COUNTRY_RE.match(country_iso_code):
             raise ValueError(
                 "country_iso_code must be a 3-letter ISO 3166-1 alpha-3 code "
                 f"(got {country_iso_code!r})"
@@ -262,19 +248,13 @@ class EnergyTracker:
             data = getattr(tracker, "final_emissions_data", None)
             energy_raw = float(getattr(data, "energy_consumed", 0.0) or 0.0)
             co2_raw = float(
-                emissions
-                if emissions is not None
-                else getattr(data, "emissions", 0.0) or 0.0
+                emissions if emissions is not None else getattr(data, "emissions", 0.0) or 0.0
             )
             if not math.isfinite(energy_raw) or energy_raw < 0:
                 energy_raw = 0.0
             if not math.isfinite(co2_raw) or co2_raw < 0:
                 co2_raw = 0.0
-            grid = (
-                (co2_raw / energy_raw * 1000.0)
-                if energy_raw > 0
-                else self._grid_default
-            )
+            grid = (co2_raw / energy_raw * 1000.0) if energy_raw > 0 else self._grid_default
             if not math.isfinite(grid) or grid < 0:
                 grid = self._grid_default
             self._measurement = EnergyMeasurement(

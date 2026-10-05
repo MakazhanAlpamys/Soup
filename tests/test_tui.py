@@ -54,16 +54,18 @@ class TestRowBuilders:
     def test_build_runs_table_rows(self):
         from soup_cli.tui_app import build_runs_table_rows
 
-        runs = [{
-            "run_id": "run_123",
-            "experiment_name": "exp",
-            "base_model": "meta-llama/Llama-3-8b",
-            "task": "sft",
-            "status": "completed",
-            "final_loss": 0.5,
-            "total_steps": 100,
-            "cost_usd": 1.23,
-        }]
+        runs = [
+            {
+                "run_id": "run_123",
+                "experiment_name": "exp",
+                "base_model": "meta-llama/Llama-3-8b",
+                "task": "sft",
+                "status": "completed",
+                "final_loss": 0.5,
+                "total_steps": 100,
+                "cost_usd": 1.23,
+            }
+        ]
         rows = build_runs_table_rows(runs)
         assert len(rows) == 1
         assert rows[0][0].startswith("run_123")

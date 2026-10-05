@@ -30,9 +30,7 @@ def trigger_path(output_dir: str) -> str:
         raise ValueError("output_dir contains NUL byte")
     candidate = os.path.realpath(os.path.join(output_dir, TRIGGER_FILENAME))
     if not is_under_cwd(candidate):
-        raise ValueError(
-            f"trigger path is outside cwd: {os.path.basename(candidate)}"
-        )
+        raise ValueError(f"trigger path is outside cwd: {os.path.basename(candidate)}")
     return candidate
 
 
@@ -88,10 +86,7 @@ def write_trigger(output_dir: str, *, contents: Optional[str] = None) -> str:
     except FileNotFoundError:
         link_stat = None
     if link_stat is not None and stat.S_ISLNK(link_stat.st_mode):
-        raise OSError(
-            f"refusing to write through symlink at "
-            f"{os.path.basename(unresolved)}"
-        )
+        raise OSError(f"refusing to write through symlink at {os.path.basename(unresolved)}")
     with open(path, "w", encoding="utf-8") as fh:
         fh.write(body)
     return path

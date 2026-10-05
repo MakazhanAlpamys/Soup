@@ -267,10 +267,12 @@ class TestLoadRewardFn:
         from soup_cli.trainer.rewards import load_reward_fn
 
         custom_file = tmp_path / "my_reward.py"
-        custom_file.write_text(textwrap.dedent("""\
+        custom_file.write_text(
+            textwrap.dedent("""\
             def reward_fn(completions, **kwargs):
                 return [1.0] * len(completions)
-        """))
+        """)
+        )
         fn = load_reward_fn(str(custom_file))
         result = fn([[{"content": "test"}]])
         assert result == [1.0]
@@ -505,6 +507,7 @@ class TestGRPOStabilityWiring:
         )
         # Write minimal training data
         import json
+
         train_file = tmp_path / "train.jsonl"
         for i in range(4):
             train_file.open("a").write(
@@ -516,7 +519,8 @@ class TestGRPOStabilityWiring:
         wrapper.setup(dataset)
 
         cbs = [
-            cb for cb in wrapper.trainer.callback_handler.callbacks
+            cb
+            for cb in wrapper.trainer.callback_handler.callbacks
             if isinstance(cb, GRPOStabilityCallback)
         ]
         assert len(cbs) == 1, f"Expected exactly 1 GRPOStabilityCallback, got {len(cbs)}"
@@ -566,10 +570,7 @@ class TestGRPOWatchdogE2E:
 
         from datasets import Dataset
 
-        ds = Dataset.from_list([
-            {"prompt": f"What is {i}+{i}?"}
-            for i in range(4)
-        ])
+        ds = Dataset.from_list([{"prompt": f"What is {i}+{i}?"} for i in range(4)])
 
         def reward_fn(completions, **kwargs):
             return [1.0] * len(completions)
@@ -658,8 +659,7 @@ class TestGRPOWatchdogE2E:
             for name, pre in snap_cb.snapshot.items():
                 post = dict(model.named_parameters())[name].data
                 assert torch.equal(pre, post), (
-                    f"Parameter {name} changed during poisoned step 2 "
-                    f"(watchdog failed to skip)"
+                    f"Parameter {name} changed during poisoned step 2 (watchdog failed to skip)"
                 )
         finally:
             handle.remove()
@@ -710,7 +710,5 @@ class TestGRPORunRecordReachesTheAudit:
         rel = os.path.relpath(out, tmp_path)
         res = CliRunner().invoke(adapters_app, ["audit", rel, "--config", "soup.yaml", "--json"])
         assert res.exit_code in (0, 2), (res.output, repr(res.exception))
-        row = next(
-            r for r in json.loads(res.stdout)["rows"] if r["setting"] == "nan_skip_fraction"
-        )
+        row = next(r for r in json.loads(res.stdout)["rows"] if r["setting"] == "nan_skip_fraction")
         assert (row["status"], row["ran"]) == ("ok", 0.0)

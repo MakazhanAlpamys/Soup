@@ -57,15 +57,11 @@ def validate_save_every_steps(value: object) -> int:
     if isinstance(value, bool):
         raise ValueError("save_every_steps must not be bool")
     if not isinstance(value, int):
-        raise ValueError(
-            f"save_every_steps must be int, got {type(value).__name__}"
-        )
+        raise ValueError(f"save_every_steps must be int, got {type(value).__name__}")
     if value < 1:
         raise ValueError(f"save_every_steps must be >= 1, got {value}")
     if value > _MAX_SAVE_EVERY_STEPS:
-        raise ValueError(
-            f"save_every_steps={value} exceeds {_MAX_SAVE_EVERY_STEPS} cap"
-        )
+        raise ValueError(f"save_every_steps={value} exceeds {_MAX_SAVE_EVERY_STEPS} cap")
     return value
 
 
@@ -73,14 +69,9 @@ def _validate_keep_last(value: object) -> int:
     if isinstance(value, bool):
         raise ValueError("keep_last must not be bool")
     if not isinstance(value, int):
-        raise ValueError(
-            f"keep_last must be int, got {type(value).__name__}"
-        )
+        raise ValueError(f"keep_last must be int, got {type(value).__name__}")
     if value < _MIN_KEEP_LAST or value > _MAX_KEEP_LAST:
-        raise ValueError(
-            f"keep_last must be in [{_MIN_KEEP_LAST}, {_MAX_KEEP_LAST}], "
-            f"got {value}"
-        )
+        raise ValueError(f"keep_last must be in [{_MIN_KEEP_LAST}, {_MAX_KEEP_LAST}], got {value}")
     return value
 
 
@@ -171,9 +162,7 @@ class RLCheckpointState:
         if not isinstance(self.task, str) or not self.task:
             raise ValueError("task must be a non-empty string")
         if self.task not in _RL_TASKS:
-            raise ValueError(
-                f"task={self.task!r} must be one of {sorted(_RL_TASKS)}"
-            )
+            raise ValueError(f"task={self.task!r} must be one of {sorted(_RL_TASKS)}")
         _validate_bool_flag(self.has_optimizer, "has_optimizer")
         _validate_bool_flag(self.has_ref_model, "has_ref_model")
         _validate_bool_flag(self.has_rollout_buffer, "has_rollout_buffer")
@@ -182,9 +171,7 @@ class RLCheckpointState:
         if "\x00" in self.soup_version:
             raise ValueError("soup_version must not contain null bytes")
         if len(self.soup_version) > _MAX_SOUP_VERSION_LEN:
-            raise ValueError(
-                f"soup_version exceeds {_MAX_SOUP_VERSION_LEN} chars"
-            )
+            raise ValueError(f"soup_version exceeds {_MAX_SOUP_VERSION_LEN} chars")
 
     def to_dict(self) -> dict[str, Any]:
         """JSON-serialisable dict for the manifest file."""
@@ -268,9 +255,7 @@ class _RLCheckpointCallback_body:  # type: ignore[misc, valid-type]  # noqa: N80
         soup_version: Optional[str] = None,
     ) -> None:
         if not isinstance(config, RLCheckpointConfig):
-            raise TypeError(
-                f"config must be RLCheckpointConfig, got {type(config).__name__}"
-            )
+            raise TypeError(f"config must be RLCheckpointConfig, got {type(config).__name__}")
         self.config = config
         self.output_dir = _validate_dir_shape(output_dir, "output_dir")
         # Containment: the run dir (and everything we write under it) must
@@ -406,9 +391,7 @@ class _RLCheckpointCallback_body:  # type: ignore[misc, valid-type]  # noqa: N80
                     import torch
 
                     optimizer.load_state_dict(
-                        torch.load(
-                            opt_path, map_location="cpu", weights_only=False
-                        )
+                        torch.load(opt_path, map_location="cpu", weights_only=False)
                     )
                     restored = True
                 except Exception:  # noqa: BLE001
@@ -432,7 +415,7 @@ class _RLCheckpointCallback_body:  # type: ignore[misc, valid-type]  # noqa: N80
                 continue
             entries.append((_step_number(name), full))
         entries.sort(key=lambda t: t[0], reverse=True)
-        for step_num, path in entries[self.config.keep_last:]:
+        for step_num, path in entries[self.config.keep_last :]:
             try:
                 shutil.rmtree(path)
             except OSError:
@@ -470,9 +453,7 @@ def build_rl_checkpoint_callback(
     Validates config type at the public boundary (fail-fast policy).
     """
     if not isinstance(config, RLCheckpointConfig):
-        raise TypeError(
-            f"config must be RLCheckpointConfig, got {type(config).__name__}"
-        )
+        raise TypeError(f"config must be RLCheckpointConfig, got {type(config).__name__}")
     if output_dir is None:
         raise ValueError("output_dir is required to build the RL checkpoint callback")
     from soup_cli.utils.rl_checkpoint import RLCheckpointCallback

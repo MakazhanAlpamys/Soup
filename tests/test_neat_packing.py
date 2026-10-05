@@ -123,9 +123,7 @@ def test_4d_mask_padding_segment_zero():
     # Padding tokens (rows 2,3) — every cell including diagonal is masked.
     for pad_row in (2, 3):
         for j in range(4):
-            assert plane[pad_row, j] < -1e9, (
-                f"padding row {pad_row} col {j} should be masked"
-            )
+            assert plane[pad_row, j] < -1e9, f"padding row {pad_row} col {j} should be masked"
     # No real token can attend to padding tokens (cols 2,3)
     for i in range(4):
         if i not in (2, 3):
@@ -135,10 +133,13 @@ def test_4d_mask_padding_segment_zero():
 
 def test_4d_mask_batch_dim():
     # Two batch elements with different segment layouts
-    seq_ids = np.array([
-        [1, 1, 2, 2],
-        [1, 2, 2, 3],
-    ], dtype=np.int32)
+    seq_ids = np.array(
+        [
+            [1, 1, 2, 2],
+            [1, 2, 2, 3],
+        ],
+        dtype=np.int32,
+    )
     mask = build_4d_attention_mask(seq_ids, dtype=np.float32)
     assert mask.shape == (2, 1, 4, 4)
     # Element 0: token 2 (doc2) can't see token 0 (doc1)
@@ -164,6 +165,7 @@ def test_4d_mask_rejects_negative_segment_id():
 def test_4d_mask_rejects_oversize_allocation():
     # Defence against (B, S, S) OOM — cap rejects too-large allocations.
     import soup_cli.utils.neat_packing as np_mod
+
     original = np_mod._MAX_MASK_ELEMENTS
     try:
         np_mod._MAX_MASK_ELEMENTS = 10
@@ -176,6 +178,7 @@ def test_4d_mask_rejects_oversize_allocation():
 
 def test_tag_rejects_too_many_segments():
     import soup_cli.utils.neat_packing as np_mod
+
     original = np_mod._MAX_BOUNDARY_SEGMENTS
     try:
         np_mod._MAX_BOUNDARY_SEGMENTS = 2

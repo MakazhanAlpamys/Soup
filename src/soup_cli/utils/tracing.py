@@ -41,9 +41,7 @@ def validate_otlp_endpoint(endpoint: str) -> str:
 
     parsed = urlparse(endpoint)
     if parsed.scheme not in ("http", "https"):
-        raise ValueError(
-            f"OTLP endpoint scheme must be http/https, got {parsed.scheme!r}"
-        )
+        raise ValueError(f"OTLP endpoint scheme must be http/https, got {parsed.scheme!r}")
     host = (parsed.hostname or "").lower()
     if not host:
         raise ValueError("OTLP endpoint missing host")
@@ -51,9 +49,7 @@ def validate_otlp_endpoint(endpoint: str) -> str:
     if host == "0.0.0.0":
         raise ValueError("OTLP endpoint host 0.0.0.0 is not a valid destination")
     if parsed.scheme == "http" and host not in _LOOPBACK_HOSTS:
-        raise ValueError(
-            f"plain HTTP is only allowed for loopback hosts; use HTTPS for {host}"
-        )
+        raise ValueError(f"plain HTTP is only allowed for loopback hosts; use HTTPS for {host}")
     if host not in _LOOPBACK_HOSTS and _is_private_ip(host):
         raise ValueError(
             f"OTLP endpoint host {host} is a private / link-local IP; "
@@ -103,13 +99,10 @@ def build_tracer(
                     OTLPSpanExporter,
                 )
 
-                provider.add_span_processor(
-                    BatchSpanProcessor(OTLPSpanExporter(endpoint=endpoint))
-                )
+                provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter(endpoint=endpoint)))
             except ImportError:
                 logger.warning(
-                    "opentelemetry-exporter-otlp not installed; spans "
-                    "will not be exported to %s",
+                    "opentelemetry-exporter-otlp not installed; spans will not be exported to %s",
                     endpoint,
                 )
 

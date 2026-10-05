@@ -398,9 +398,7 @@ def _text_fields(fmt: str) -> list:
     return sorted(declared | (set(FORMAT_SIGNATURES.get(fmt, ())) - NON_TEXT_FIELDS))
 
 
-PII_CASES = [
-    (fmt, field) for fmt in sorted(FORMAT_EXTRACTION_RULES) for field in _text_fields(fmt)
-]
+PII_CASES = [(fmt, field) for fmt in sorted(FORMAT_EXTRACTION_RULES) for field in _text_fields(fmt)]
 REFUSAL_CASES = [
     (fmt, field)
     for fmt in sorted(FORMAT_EXTRACTION_RULES)

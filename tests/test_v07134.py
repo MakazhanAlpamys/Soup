@@ -236,9 +236,7 @@ class TestMergeTaskArithmetic:
         b2 = rng.standard_normal((5, 3)).astype(np.float32)
         ak = "m.lora_A.weight"
         bk = "m.lora_B.weight"
-        merged, _ = merge_task_arithmetic(
-            [{ak: a1, bk: b1}, {ak: a2, bk: b2}], [0.5, -2.0]
-        )
+        merged, _ = merge_task_arithmetic([{ak: a1, bk: b1}, {ak: a2, bk: b2}], [0.5, -2.0])
         # A-factor coeff = sqrt(|c|); B-factor = sign(c)*sqrt(|c|)
         exp_a = math.sqrt(0.5) * a1 + math.sqrt(2.0) * a2
         exp_b = math.sqrt(0.5) * b1 + (-math.sqrt(2.0)) * b2
@@ -409,8 +407,16 @@ class TestArithmeticCli:
         a = _make_adapter(tmp_path / "coder", "meta/x", {key: self._rng_tensor((8, 16), 1)})
         b = _make_adapter(tmp_path / "math", "meta/x", {key: self._rng_tensor((8, 16), 2)})
         res = self._run(
-            ["arithmetic", "coder + math", "--adapter", f"coder={a}",
-             "--adapter", f"math={b}", "-o", "out"],
+            [
+                "arithmetic",
+                "coder + math",
+                "--adapter",
+                f"coder={a}",
+                "--adapter",
+                f"math={b}",
+                "-o",
+                "out",
+            ],
             tmp_path,
         )
         assert res.exit_code == 0, (res.output, repr(res.exception))
@@ -420,8 +426,9 @@ class TestArithmeticCli:
         from safetensors.numpy import load_file
 
         merged = load_file(str(tmp_path / "out" / "adapter_model.safetensors"))
-        assert np.allclose(merged[key], self._rng_tensor((8, 16), 1)
-                           + self._rng_tensor((8, 16), 2), atol=1e-4)
+        assert np.allclose(
+            merged[key], self._rng_tensor((8, 16), 1) + self._rng_tensor((8, 16), 2), atol=1e-4
+        )
 
     def test_negate_self_is_zero(self, tmp_path):
         key = "base_model.model.layers.0.mlp.down_proj.lora_B.weight"
@@ -429,8 +436,16 @@ class TestArithmeticCli:
         a = _make_adapter(tmp_path / "coder", "meta/x", {key: t})
         b = _make_adapter(tmp_path / "toxic", "meta/x", {key: t})
         res = self._run(
-            ["arithmetic", "coder - toxic", "--adapter", f"coder={a}",
-             "--adapter", f"toxic={b}", "-o", "out"],
+            [
+                "arithmetic",
+                "coder - toxic",
+                "--adapter",
+                f"coder={a}",
+                "--adapter",
+                f"toxic={b}",
+                "-o",
+                "out",
+            ],
             tmp_path,
         )
         assert res.exit_code == 0, (res.output, repr(res.exception))
@@ -444,8 +459,16 @@ class TestArithmeticCli:
         a = _make_adapter(tmp_path / "coder", "meta/x", {"w": np.ones((8, 16))})
         b = _make_adapter(tmp_path / "math", "meta/x", {"w": np.ones((8, 16))})
         res = self._run(
-            ["arithmetic", "coder + math", "--adapter", f"coder={a}",
-             "--adapter", f"math={b}", "-o", "out"],
+            [
+                "arithmetic",
+                "coder + math",
+                "--adapter",
+                f"coder={a}",
+                "--adapter",
+                f"math={b}",
+                "-o",
+                "out",
+            ],
             tmp_path,
         )
         assert res.exit_code == 1
@@ -455,8 +478,17 @@ class TestArithmeticCli:
         a = _make_adapter(tmp_path / "coder", "meta/x", {"w": np.ones((8, 16))})
         b = _make_adapter(tmp_path / "math", "meta/x", {"w": np.ones((8, 16))})
         res = self._run(
-            ["arithmetic", "coder + math", "--adapter", f"coder={a}",
-             "--adapter", f"math={b}", "-o", "out", "--allow-unscanned"],
+            [
+                "arithmetic",
+                "coder + math",
+                "--adapter",
+                f"coder={a}",
+                "--adapter",
+                f"math={b}",
+                "-o",
+                "out",
+                "--allow-unscanned",
+            ],
             tmp_path,
         )
         assert res.exit_code == 0, (res.output, repr(res.exception))
@@ -475,8 +507,17 @@ class TestArithmeticCli:
         a = _make_adapter(tmp_path / "coder", "meta/x", {key: self._rng_tensor((8, 16), 3)})
         b = _make_adapter(tmp_path / "math", "meta/x", {key: self._rng_tensor((4, 16), 4)})
         res = self._run(
-            ["arithmetic", "coder + math", "--adapter", f"coder={a}",
-             "--adapter", f"math={b}", "-o", "out", "--allow-unscanned"],
+            [
+                "arithmetic",
+                "coder + math",
+                "--adapter",
+                f"coder={a}",
+                "--adapter",
+                f"math={b}",
+                "-o",
+                "out",
+                "--allow-unscanned",
+            ],
             tmp_path,
         )
         assert res.exit_code == 1
@@ -486,8 +527,17 @@ class TestArithmeticCli:
         a = _make_adapter(tmp_path / "coder", "meta/x", {"w": self._rng_tensor((8, 16), 5)})
         b = _make_adapter(tmp_path / "math", "meta/DIFFERENT", {"w": self._rng_tensor((8, 16), 6)})
         res = self._run(
-            ["arithmetic", "coder + math", "--adapter", f"coder={a}",
-             "--adapter", f"math={b}", "-o", "out", "--allow-unscanned"],
+            [
+                "arithmetic",
+                "coder + math",
+                "--adapter",
+                f"coder={a}",
+                "--adapter",
+                f"math={b}",
+                "-o",
+                "out",
+                "--allow-unscanned",
+            ],
             tmp_path,
         )
         assert res.exit_code == 1
@@ -497,9 +547,18 @@ class TestArithmeticCli:
         a = _make_adapter(tmp_path / "coder", "meta/x", {"w": self._rng_tensor((8, 16), 8)})
         b = _make_adapter(tmp_path / "math", "meta/DIFFERENT", {"w": self._rng_tensor((8, 16), 9)})
         res = self._run(
-            ["arithmetic", "coder + math", "--adapter", f"coder={a}",
-             "--adapter", f"math={b}", "-o", "out",
-             "--allow-unscanned", "--allow-cross-base"],
+            [
+                "arithmetic",
+                "coder + math",
+                "--adapter",
+                f"coder={a}",
+                "--adapter",
+                f"math={b}",
+                "-o",
+                "out",
+                "--allow-unscanned",
+                "--allow-cross-base",
+            ],
             tmp_path,
         )
         assert res.exit_code == 0, (res.output, repr(res.exception))
@@ -515,8 +574,15 @@ class TestArithmeticCli:
     def test_output_outside_cwd_exit_1(self, tmp_path):
         a = _make_adapter(tmp_path / "coder", "meta/x", {"w": self._rng_tensor((8, 16), 10)})
         res = self._run(
-            ["arithmetic", "coder", "--adapter", f"coder={a}",
-             "-o", "../escape", "--allow-unscanned"],
+            [
+                "arithmetic",
+                "coder",
+                "--adapter",
+                f"coder={a}",
+                "-o",
+                "../escape",
+                "--allow-unscanned",
+            ],
             tmp_path,
         )
         assert res.exit_code == 1
@@ -525,8 +591,17 @@ class TestArithmeticCli:
     def test_duplicate_adapter_name_exit_1(self, tmp_path):
         a = _make_adapter(tmp_path / "coder", "meta/x", {"w": self._rng_tensor((8, 16), 11)})
         res = self._run(
-            ["arithmetic", "coder", "--adapter", f"coder={a}",
-             "--adapter", f"coder={a}", "-o", "out", "--allow-unscanned"],
+            [
+                "arithmetic",
+                "coder",
+                "--adapter",
+                f"coder={a}",
+                "--adapter",
+                f"coder={a}",
+                "-o",
+                "out",
+                "--allow-unscanned",
+            ],
             tmp_path,
         )
         assert res.exit_code == 1
@@ -561,8 +636,17 @@ class TestArithmeticCli:
         a = _make_adapter(tmp_path / "coder", "meta/x", {"a_only": self._rng_tensor((8, 16), 13)})
         b = _make_adapter(tmp_path / "math", "meta/x", {"b_only": self._rng_tensor((8, 16), 14)})
         res = self._run(
-            ["arithmetic", "coder + math", "--adapter", f"coder={a}",
-             "--adapter", f"math={b}", "-o", "out", "--allow-unscanned"],
+            [
+                "arithmetic",
+                "coder + math",
+                "--adapter",
+                f"coder={a}",
+                "--adapter",
+                f"math={b}",
+                "-o",
+                "out",
+                "--allow-unscanned",
+            ],
             tmp_path,
         )
         assert res.exit_code == 1
@@ -602,9 +686,11 @@ class TestLisaSchema:
         assert cfg.training.lisa_interval_steps == 25
 
     def test_defaults_when_disabled(self):
-        cfg = _load(_LISA_BASE.replace("lisa_enabled: true", "lisa_enabled: false")
-                    .replace("lisa_num_layers: 4\n", "")
-                    .replace("lisa_interval_steps: 25\n", ""))
+        cfg = _load(
+            _LISA_BASE.replace("lisa_enabled: true", "lisa_enabled: false")
+            .replace("lisa_num_layers: 4\n", "")
+            .replace("lisa_interval_steps: 25\n", "")
+        )
         assert cfg.training.lisa_enabled is False
         assert cfg.training.lisa_num_layers == 2
         assert cfg.training.lisa_interval_steps == 20
@@ -783,11 +869,7 @@ class TestLisaCallback:
         return idxs
 
     def _flag(self, model, substr):
-        return all(
-            p.requires_grad
-            for name, p in model.named_parameters()
-            if substr in name
-        )
+        return all(p.requires_grad for name, p in model.named_parameters() if substr in name)
 
     def test_initial_selection(self):
         from soup_cli.utils.lisa import LisaCallback, LisaPolicy
@@ -847,16 +929,14 @@ class TestLisaCallback:
 
         pat = re.compile(r"layers\.(\d+)\.")
         active_params = [
-            p for n, p in model.named_parameters()
-            if pat.search(n) and p.requires_grad
+            p for n, p in model.named_parameters() if pat.search(n) and p.requires_grad
         ]
         for p in active_params:
             opt.state[p] = {"exp_avg": 1}
         cb.on_step_end(None, _State(10), None, model=model, optimizer=opt)
         # any param that got frozen should have had its optimizer state cleared
         frozen_now = [
-            p for n, p in model.named_parameters()
-            if pat.search(n) and not p.requires_grad
+            p for n, p in model.named_parameters() if pat.search(n) and not p.requires_grad
         ]
         for p in frozen_now:
             assert p not in opt.state or opt.state[p] == {}
@@ -1142,11 +1222,7 @@ def _captured_console(monkeypatch):
 def _lisa_callbacks(trainer):
     from soup_cli.utils.lisa import LisaCallback
 
-    return [
-        cb
-        for cb in trainer.callback_handler.callbacks
-        if isinstance(cb, LisaCallback)
-    ]
+    return [cb for cb in trainer.callback_handler.callbacks if isinstance(cb, LisaCallback)]
 
 
 class TestLisaPretrainSchema:
@@ -1203,9 +1279,7 @@ class TestPretrainLisaWiring:
             captured_dtypes.append(kwargs["torch_dtype"])
             return real_from_pretrained(*args, **kwargs)
 
-        monkeypatch.setattr(
-            AutoModelForCausalLM, "from_pretrained", _capture_load_dtype
-        )
+        monkeypatch.setattr(AutoModelForCausalLM, "from_pretrained", _capture_load_dtype)
         overrides = {"lisa_enabled": True} if lisa_enabled else {}
         wrapper, dataset = _pretrain_wrapper(tmp_path, monkeypatch, **overrides)
         wrapper.setup(dataset)
@@ -1213,9 +1287,7 @@ class TestPretrainLisaWiring:
         expected_dtype = torch.float32 if lisa_enabled else "auto"
         assert captured_dtypes == [expected_dtype]
 
-    @pytest.mark.parametrize(
-        "num_layers,interval_steps", [(3, 15), (2, 7)]
-    )
+    @pytest.mark.parametrize("num_layers,interval_steps", [(3, 15), (2, 7)])
     def test_callback_carries_the_configured_policy(
         self, tmp_path, monkeypatch, num_layers, interval_steps
     ):
@@ -1252,15 +1324,11 @@ class TestPretrainLisaWiring:
         # the optimizer before on_train_begin, so a decoder parameter left out
         # of the param groups can never be re-activated by the callback.
         frozen = [
-            name
-            for name, param in wrapper.model.named_parameters()
-            if not param.requires_grad
+            name for name, param in wrapper.model.named_parameters() if not param.requires_grad
         ]
         assert frozen == []
 
-    def test_lora_control_still_wraps_and_attaches_no_lisa_callback(
-        self, tmp_path, monkeypatch
-    ):
+    def test_lora_control_still_wraps_and_attaches_no_lisa_callback(self, tmp_path, monkeypatch):
         """The control: a plain pretrain config must be untouched by #307."""
         _requires_train_extra()
         from peft import PeftModel
@@ -1273,9 +1341,7 @@ class TestPretrainLisaWiring:
         assert _lisa_callbacks(wrapper.trainer) == []
 
     @pytest.mark.parametrize("n_layers", [2, 4])
-    def test_summary_counts_every_parameter_and_says_lisa(
-        self, tmp_path, monkeypatch, n_layers
-    ):
+    def test_summary_counts_every_parameter_and_says_lisa(self, tmp_path, monkeypatch, n_layers):
         """``get_nb_trainable_parameters`` is a PeftModel method and a LISA run
         has no PeftModel, so the count comes off the parameters directly. Two
         model depths, so a summary printing a constant fails one of them."""
@@ -1291,9 +1357,7 @@ class TestPretrainLisaWiring:
         assert f"LISA: {expected:,} trainable / {expected:,} total (100.00%)" in out
         assert "LoRA applied" not in out
 
-    def test_lora_control_summary_reports_the_adapter_count(
-        self, tmp_path, monkeypatch
-    ):
+    def test_lora_control_summary_reports_the_adapter_count(self, tmp_path, monkeypatch):
         """Negative control for the label AND the number: without LISA the
         summary must still name LoRA and report only the adapter as trainable,
         which is strictly fewer parameters than the whole model."""
@@ -1324,14 +1388,10 @@ class TestSharedLisaSetup:
     def _tcfg(lisa_enabled):
         from types import SimpleNamespace
 
-        return SimpleNamespace(
-            lisa_enabled=lisa_enabled, lisa_num_layers=2, lisa_interval_steps=20
-        )
+        return SimpleNamespace(lisa_enabled=lisa_enabled, lisa_num_layers=2, lisa_interval_steps=20)
 
     @pytest.mark.parametrize("lisa_enabled,calls", [(True, 1), (False, 0)])
-    def test_input_require_grads_is_enabled_only_when_lisa_is_on(
-        self, lisa_enabled, calls
-    ):
+    def test_input_require_grads_is_enabled_only_when_lisa_is_on(self, lisa_enabled, calls):
         """Without a LoRA adapter nothing else makes the embedding output
         require grad, so gradient checkpointing dies with "None of the inputs
         have requires_grad". Both directions, so a helper that unconditionally
@@ -1376,9 +1436,7 @@ class TestSharedLisaSetup:
         return _plain(buf.getvalue())
 
     @pytest.mark.parametrize("num_layers,interval_steps", [(3, 15), (2, 7)])
-    def test_the_announcement_carries_the_configured_policy(
-        self, num_layers, interval_steps
-    ):
+    def test_the_announcement_carries_the_configured_policy(self, num_layers, interval_steps):
         """LISA replaces the LoRA path silently otherwise: the banner is the
         only thing telling the user which policy is live. Two policies, with
         the other one's figures asserted ABSENT, so a hardcoded banner passes
@@ -1420,9 +1478,7 @@ class TestSharedLisaSetup:
             return real(model, tcfg, console)
 
         monkeypatch.setattr(peft_wiring, "apply_lisa_setup", _spy)
-        over = (
-            {"lisa_enabled": True, "lisa_num_layers": 2} if lisa_enabled else {}
-        )
+        over = {"lisa_enabled": True, "lisa_num_layers": 2} if lisa_enabled else {}
         wrapper, dataset = _wrapper(tmp_path, monkeypatch, **over)
         wrapper.setup(dataset)
 
@@ -1454,9 +1510,7 @@ class TestSharedLisaSetup:
             return real(model, tcfg, console)
 
         monkeypatch.setattr(peft_wiring, "apply_lisa_setup", _spy)
-        over = (
-            {"lisa_enabled": True, "lisa_num_layers": 2} if lisa_enabled else {}
-        )
+        over = {"lisa_enabled": True, "lisa_num_layers": 2} if lisa_enabled else {}
         wrapper, dataset = _pretrain_wrapper(tmp_path, monkeypatch, **over)
         wrapper.setup(dataset)
 
@@ -1472,9 +1526,7 @@ class TestSharedLisaSetup:
 
 
 class TestPretrainLisaEndToEnd:
-    def test_a_pretrain_lisa_run_moves_only_the_sampled_decoder_layers(
-        self, tmp_path, monkeypatch
-    ):
+    def test_a_pretrain_lisa_run_moves_only_the_sampled_decoder_layers(self, tmp_path, monkeypatch):
         """The acceptance criterion, end to end: a real continued-pre-training
         run with LISA moves the sampled decoder layer and no OTHER decoder
         layer. Scoped to the decoder on purpose — the embeddings, the LM head
@@ -1499,10 +1551,7 @@ class TestPretrainLisaEndToEnd:
             lisa_interval_steps=1_000,
         )
         wrapper.setup(dataset)
-        before = {
-            name: param.detach().clone()
-            for name, param in wrapper.model.named_parameters()
-        }
+        before = {name: param.detach().clone() for name, param in wrapper.model.named_parameters()}
 
         wrapper.train()
 
@@ -1510,15 +1559,11 @@ class TestPretrainLisaEndToEnd:
 
         def _layers(names):
             return {
-                int(_LAYER_RE.search(name).group(1))
-                for name in names
-                if _LAYER_RE.search(name)
+                int(_LAYER_RE.search(name).group(1)) for name in names if _LAYER_RE.search(name)
             }
 
         active = _layers(
-            name
-            for name, param in wrapper.model.named_parameters()
-            if param.requires_grad
+            name for name, param in wrapper.model.named_parameters() if param.requires_grad
         )
         moved = _layers(
             name

@@ -62,12 +62,8 @@ def build_format_row(
     use_train_field = bool(data_cfg.train_on_messages_with_train_field)
     max_length = int(data_cfg.max_length)
 
-    reasoning_effort = (
-        getattr(training_cfg, "reasoning_effort", None) if training_cfg else None
-    )
-    include_eot = bool(
-        getattr(training_cfg, "train_on_eot", False) if training_cfg else False
-    )
+    reasoning_effort = getattr(training_cfg, "reasoning_effort", None) if training_cfg else None
+    include_eot = bool(getattr(training_cfg, "train_on_eot", False) if training_cfg else False)
 
     # v0.53.7 #87: custom prompt_strategy live runtime. Resolves the
     # ``module.path:fn_name`` spec once at setup time (fail-fast on bad import)
@@ -83,9 +79,7 @@ def build_format_row(
             )
         return _wrap_dropping_arrow_nulls(
             _wrap_with_prompt_strategy(
-                _wrap_with_reasoning_effort(
-                    _legacy_text_format_row(tokenizer), reasoning_effort
-                ),
+                _wrap_with_reasoning_effort(_legacy_text_format_row(tokenizer), reasoning_effort),
                 prompt_strategy_spec,
             )
         )
@@ -126,10 +120,12 @@ def _wrap_dropping_arrow_nulls(inner: Callable[[dict], dict]) -> Callable[[dict]
             return inner(example)
         cleaned = [
             {
-                key: value for key, value in msg.items()
+                key: value
+                for key, value in msg.items()
                 if not (key in _SPARSE_MESSAGE_KEYS and value is None)
             }
-            if isinstance(msg, dict) else msg
+            if isinstance(msg, dict)
+            else msg
             for msg in msgs
         ]
         return inner({**example, "messages": cleaned})
@@ -208,20 +204,14 @@ def _build_assistant_only_format_row(
     return format_row
 
 
-def _build_per_message_format_row(
-    tokenizer: Any, max_length: int
-) -> Callable[[dict], dict]:
+def _build_per_message_format_row(tokenizer: Any, max_length: int) -> Callable[[dict], dict]:
     def format_row(example: dict) -> dict:
-        return build_per_message_train_labels(
-            example["messages"], tokenizer, max_length=max_length
-        )
+        return build_per_message_train_labels(example["messages"], tokenizer, max_length=max_length)
 
     return format_row
 
 
-def _build_full_sequence_format_row(
-    tokenizer: Any, max_length: int
-) -> Callable[[dict], dict]:
+def _build_full_sequence_format_row(tokenizer: Any, max_length: int) -> Callable[[dict], dict]:
     """Legacy (both flags False) path: train on every token, no masking.
 
     #785: pre-tokenise with ``add_special_tokens=False`` so TRL skips its own
@@ -232,9 +222,7 @@ def _build_full_sequence_format_row(
     """
 
     def format_row(example: dict) -> dict:
-        return build_full_sequence_labels(
-            example["messages"], tokenizer, max_length=max_length
-        )
+        return build_full_sequence_labels(example["messages"], tokenizer, max_length=max_length)
 
     return format_row
 

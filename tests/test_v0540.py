@@ -49,17 +49,12 @@ runner = CliRunner()
 
 
 def _write_jsonl(path: Path, rows: list[dict]) -> None:
-    path.write_text(
-        "\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8"
-    )
+    path.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
 
 
 @pytest.fixture
 def tiny_sft_rows() -> List[dict]:
-    return [
-        {"prompt": f"Q{i}", "response": f"A{i} text body example here"}
-        for i in range(20)
-    ]
+    return [{"prompt": f"Q{i}", "response": f"A{i} text body example here"} for i in range(20)]
 
 
 @pytest.fixture
@@ -67,7 +62,7 @@ def big_sft_rows() -> List[dict]:
     return [
         {
             "prompt": f"User question number {i}: explain X",
-            "response": f"Response number {i} with varied vocabulary {i*7 % 999}",
+            "response": f"Response number {i} with varied vocabulary {i * 7 % 999}",
         }
         for i in range(200)
     ]
@@ -91,7 +86,7 @@ def reasoning_rows() -> List[dict]:
     return [
         {
             "prompt": f"Solve {i}*{i}",
-            "response": f"<think>Step: multiply {i} by {i}</think>{i*i}",
+            "response": f"<think>Step: multiply {i} by {i}</think>{i * i}",
         }
         for i in range(600)
     ]
@@ -102,7 +97,7 @@ def factual_rows() -> List[dict]:
     return [
         {
             "question": f"What is the capital of country_{i}?",
-            "answer": f"city_{i}_distinct_label_{i*3}",
+            "answer": f"city_{i}_distinct_label_{i * 3}",
         }
         for i in range(120)
     ]
@@ -125,7 +120,10 @@ class TestPublicSurface:
 
     def test_verdict_frozen(self):
         v = Verdict(
-            choice="SFT", confidence=0.7, reason="r", reverse_when="w",
+            choice="SFT",
+            confidence=0.7,
+            reason="r",
+            reverse_when="w",
             task_category="reasoning",
         )
         with pytest.raises(Exception):
@@ -138,8 +136,11 @@ class TestPublicSurface:
 
     def test_dataset_profile_frozen(self):
         p = DatasetProfile(
-            row_count=10, avg_input_chars=10.0, avg_output_chars=10.0,
-            type_token_diversity=0.5, label_variance=0.5,
+            row_count=10,
+            avg_input_chars=10.0,
+            avg_output_chars=10.0,
+            type_token_diversity=0.5,
+            label_variance=0.5,
         )
         with pytest.raises(Exception):
             p.row_count = 99  # type: ignore[misc]
@@ -230,9 +231,7 @@ class TestClassifyTask:
         assert classify_task(rows) == "summarization"
 
     def test_classification_keyword(self):
-        rows = [
-            {"prompt": "classify this", "response": "label A"} for _ in range(30)
-        ]
+        rows = [{"prompt": "classify this", "response": "label A"} for _ in range(30)]
         assert classify_task(rows) == "classification"
 
     def test_default_fallback(self):
@@ -433,7 +432,10 @@ class TestSynthProbeLoraDelta:
 class TestFormatVerdictRubric:
     def test_basic(self):
         v = Verdict(
-            choice="SFT", confidence=0.7, reason="r1", reverse_when="r2",
+            choice="SFT",
+            confidence=0.7,
+            reason="r1",
+            reverse_when="r2",
             task_category="reasoning",
         )
         text = format_verdict_rubric(v)
@@ -445,8 +447,12 @@ class TestFormatVerdictRubric:
     def test_roi_renders(self):
         roi = ROIEstimate(sft_delta=0.3, prompt_eng_delta=-0.1)
         v = Verdict(
-            choice="SFT", confidence=0.7, reason="r", reverse_when="w",
-            task_category="reasoning", estimated_roi=roi,
+            choice="SFT",
+            confidence=0.7,
+            reason="r",
+            reverse_when="w",
+            task_category="reasoning",
+            estimated_roi=roi,
         )
         text = format_verdict_rubric(v)
         assert "+0.300" in text
@@ -454,7 +460,10 @@ class TestFormatVerdictRubric:
 
     def test_not_measured_when_none(self):
         v = Verdict(
-            choice="SFT", confidence=0.7, reason="r", reverse_when="w",
+            choice="SFT",
+            confidence=0.7,
+            reason="r",
+            reverse_when="w",
             task_category="reasoning",
         )
         text = format_verdict_rubric(v)
@@ -477,7 +486,10 @@ def history_file(tmp_path):
 
 def _make_verdict() -> Verdict:
     return Verdict(
-        choice="SFT", confidence=0.7, reason="r", reverse_when="w",
+        choice="SFT",
+        confidence=0.7,
+        reason="r",
+        reverse_when="w",
         task_category="reasoning",
     )
 
@@ -485,7 +497,10 @@ def _make_verdict() -> Verdict:
 class TestRecordVerdict:
     def test_happy(self, history_file):
         entry = record_verdict(
-            _make_verdict(), accepted=True, outcome=0.5, path=history_file,
+            _make_verdict(),
+            accepted=True,
+            outcome=0.5,
+            path=history_file,
         )
         assert isinstance(entry, HistoryEntry)
         assert entry.choice == "SFT"
@@ -500,45 +515,62 @@ class TestRecordVerdict:
     def test_rejects_non_bool_accepted(self, history_file):
         with pytest.raises(TypeError):
             record_verdict(
-                _make_verdict(), accepted="yes", path=history_file,  # type: ignore
+                _make_verdict(),
+                accepted="yes",
+                path=history_file,  # type: ignore
             )
 
     def test_rejects_bool_outcome(self, history_file):
         with pytest.raises(TypeError):
             record_verdict(
-                _make_verdict(), accepted=True, outcome=True,  # type: ignore
+                _make_verdict(),
+                accepted=True,
+                outcome=True,  # type: ignore
                 path=history_file,
             )
 
     def test_rejects_non_finite_outcome(self, history_file):
         with pytest.raises(ValueError):
             record_verdict(
-                _make_verdict(), accepted=True, outcome=float("inf"),
+                _make_verdict(),
+                accepted=True,
+                outcome=float("inf"),
                 path=history_file,
             )
 
     def test_rejects_outcome_out_of_range(self, history_file):
         with pytest.raises(ValueError):
             record_verdict(
-                _make_verdict(), accepted=True, outcome=1.5, path=history_file,
+                _make_verdict(),
+                accepted=True,
+                outcome=1.5,
+                path=history_file,
             )
 
     def test_rejects_null_byte_notes(self, history_file):
         with pytest.raises(ValueError):
             record_verdict(
-                _make_verdict(), accepted=True, notes="bad\x00", path=history_file,
+                _make_verdict(),
+                accepted=True,
+                notes="bad\x00",
+                path=history_file,
             )
 
     def test_rejects_oversize_notes(self, history_file):
         with pytest.raises(ValueError):
             record_verdict(
-                _make_verdict(), accepted=True, notes="x" * 99999,
+                _make_verdict(),
+                accepted=True,
+                notes="x" * 99999,
                 path=history_file,
             )
 
     def test_rejects_invalid_choice(self, history_file):
         v = Verdict(
-            choice="NONSENSE", confidence=0.5, reason="r", reverse_when="w",
+            choice="NONSENSE",
+            confidence=0.5,
+            reason="r",
+            reverse_when="w",
             task_category="reasoning",
         )
         with pytest.raises(ValueError):
@@ -546,7 +578,10 @@ class TestRecordVerdict:
 
     def test_rejects_invalid_task_category(self, history_file):
         v = Verdict(
-            choice="SFT", confidence=0.5, reason="r", reverse_when="w",
+            choice="SFT",
+            confidence=0.5,
+            reason="r",
+            reverse_when="w",
             task_category="nonsense",
         )
         with pytest.raises(ValueError):
@@ -563,8 +598,10 @@ class TestRecordVerdict:
 
     def test_notes_strips_newlines(self, history_file):
         entry = record_verdict(
-            _make_verdict(), accepted=True,
-            notes="line1\nline2\rline3", path=history_file,
+            _make_verdict(),
+            accepted=True,
+            notes="line1\nline2\rline3",
+            path=history_file,
         )
         assert "\n" not in entry.notes
         assert "\r" not in entry.notes
@@ -584,10 +621,7 @@ class TestLoadHistory:
 
     def test_skips_malformed_lines(self, tmp_path):
         p = tmp_path / "h.jsonl"
-        good = (
-            '{"choice":"SFT","task_category":"reasoning",'
-            '"confidence":0.5,"accepted":true}'
-        )
+        good = '{"choice":"SFT","task_category":"reasoning","confidence":0.5,"accepted":true}'
         p.write_text("not json\n" + good + "\n", encoding="utf-8")
         entries = load_history(path=str(p))
         assert len(entries) == 1
@@ -627,6 +661,7 @@ class TestHistoryPath:
     def test_env_override_in_tempdir(self, monkeypatch, tmp_path):
         # tmp_path is typically inside the system temp dir
         import tempfile as _tempfile
+
         sysdir = os.path.realpath(_tempfile.gettempdir())
         override = os.path.join(sysdir, "soup_advise_test.jsonl")
         monkeypatch.setenv("SOUP_ADVISE_HISTORY_PATH", override)
@@ -660,7 +695,10 @@ class TestSummarizeHistory:
     def test_counts(self, history_file):
         v_sft = _make_verdict()
         v_dpo = Verdict(
-            choice="DPO", confidence=0.7, reason="r", reverse_when="w",
+            choice="DPO",
+            confidence=0.7,
+            reason="r",
+            reverse_when="w",
             task_category="reasoning",
         )
         record_verdict(v_sft, accepted=True, path=history_file)
@@ -708,13 +746,10 @@ class TestCLI:
     def test_default_happy_path(self, tmp_path, monkeypatch):
         os.chdir(tmp_path)
         p = tmp_path / "data.jsonl"
-        _write_jsonl(p, [
-            {"prompt": f"summarize doc {i}", "response": f"tldr {i}"}
-            for i in range(120)
-        ])
-        result = runner.invoke(
-            advise_cmd.app, ["run", "data.jsonl", "--goal", "summarize"]
+        _write_jsonl(
+            p, [{"prompt": f"summarize doc {i}", "response": f"tldr {i}"} for i in range(120)]
         )
+        result = runner.invoke(advise_cmd.app, ["run", "data.jsonl", "--goal", "summarize"])
         assert result.exit_code == 0, result.output
         # Either SFT or PROMPT_ENG depending on heuristics; must be a known choice
         assert any(c in result.output for c in CHOICES)
@@ -743,9 +778,7 @@ class TestCLI:
     def test_probe_flag(self, tmp_path, monkeypatch):
         os.chdir(tmp_path)
         p = tmp_path / "data.jsonl"
-        _write_jsonl(p, [
-            {"prompt": f"q{i}", "response": f"a{i}"} for i in range(120)
-        ])
+        _write_jsonl(p, [{"prompt": f"q{i}", "response": f"a{i}"} for i in range(120)])
         result = runner.invoke(
             advise_cmd.app,
             ["run", "data.jsonl", "--goal", "summarize", "--probe"],
@@ -760,9 +793,7 @@ class TestCLI:
         )
         os.chdir(tmp_path)
         p = tmp_path / "data.jsonl"
-        _write_jsonl(p, [
-            {"prompt": f"q{i}", "response": f"a{i}"} for i in range(120)
-        ])
+        _write_jsonl(p, [{"prompt": f"q{i}", "response": f"a{i}"} for i in range(120)])
         result = runner.invoke(
             advise_cmd.app,
             ["run", "data.jsonl", "--goal", "summarize", "--record"],
@@ -784,12 +815,8 @@ class TestCLI:
         # Run advise to populate scratch file, then explain
         os.chdir(tmp_path)
         p = tmp_path / "data.jsonl"
-        _write_jsonl(p, [
-            {"prompt": f"q{i}", "response": f"a{i}"} for i in range(120)
-        ])
-        result1 = runner.invoke(
-            advise_cmd.app, ["run", "data.jsonl", "--goal", "summarize"]
-        )
+        _write_jsonl(p, [{"prompt": f"q{i}", "response": f"a{i}"} for i in range(120)])
+        result1 = runner.invoke(advise_cmd.app, ["run", "data.jsonl", "--goal", "summarize"])
         assert result1.exit_code == 0
         result2 = runner.invoke(advise_cmd.app, ["explain"])
         assert result2.exit_code == 0
@@ -814,6 +841,7 @@ class TestSourceWiring:
 
     def test_version_bump(self):
         from soup_cli import __version__
+
         # Asserts a forward-compatible floor (v0.54.0 shipped advise);
         # later releases that bump the version must not regress this gate.
         assert __version__ >= "0.54.0"
@@ -828,23 +856,27 @@ class TestSourceWiring:
 class TestArgvRewriter:
     def test_no_advise_in_argv(self):
         from soup_cli.cli import _rewrite_advise_argv
+
         argv = ["soup", "train", "--config", "x.yaml"]
         assert _rewrite_advise_argv(argv) == argv
 
     def test_advise_with_subcommand_unchanged(self):
         from soup_cli.cli import _rewrite_advise_argv
+
         for sub in ("run", "explain", "compare", "--help"):
             argv = ["soup", "advise", sub]
             assert _rewrite_advise_argv(argv) == argv
 
     def test_advise_with_data_injects_run(self):
         from soup_cli.cli import _rewrite_advise_argv
+
         argv = ["soup", "advise", "data.jsonl"]
         out = _rewrite_advise_argv(argv)
         assert out == ["soup", "advise", "run", "data.jsonl"]
 
     def test_advise_with_data_and_flags(self):
         from soup_cli.cli import _rewrite_advise_argv
+
         argv = ["soup", "advise", "data.jsonl", "--goal", "summarize"]
         out = _rewrite_advise_argv(argv)
         assert out[2] == "run"
@@ -852,11 +884,13 @@ class TestArgvRewriter:
 
     def test_advise_with_flag_only_unchanged(self):
         from soup_cli.cli import _rewrite_advise_argv
+
         argv = ["soup", "advise", "--probe"]
         assert _rewrite_advise_argv(argv) == argv
 
     def test_advise_alone_unchanged(self):
         from soup_cli.cli import _rewrite_advise_argv
+
         argv = ["soup", "advise"]
         assert _rewrite_advise_argv(argv) == argv
 
@@ -868,9 +902,7 @@ class TestArgvRewriter:
 
 class TestDefensive:
     def test_classify_task_with_messages_assistant_only(self):
-        rows = [
-            {"messages": [{"role": "assistant", "content": "x"}]}
-        ] * 5
+        rows = [{"messages": [{"role": "assistant", "content": "x"}]}] * 5
         # No keywords + no tool_calls → default
         assert classify_task(rows) == "factual_lookup"
 
@@ -881,16 +913,12 @@ class TestDefensive:
 
     def test_build_verdict_with_preference_overrides_tiny(self):
         # Preference rule should fire BEFORE tiny rule
-        rows = [
-            {"chosen": "a", "rejected": "b"} for _ in range(5)
-        ]
+        rows = [{"chosen": "a", "rejected": "b"} for _ in range(5)]
         profile = compute_dataset_profile(rows)
         v = build_verdict(profile, "reasoning")
         assert v.choice == "DPO"
 
-    def test_synth_probe_baselines_rag_correlates_with_variance(
-        self, factual_rows
-    ):
+    def test_synth_probe_baselines_rag_correlates_with_variance(self, factual_rows):
         out = synth_probe_baselines(factual_rows)
         # High-variance factual dataset → rag delta should not be the worst.
         assert out["rag"] >= out["zero_shot"] - 0.1
@@ -898,8 +926,12 @@ class TestDefensive:
     def test_format_rubric_handles_nan_delta(self):
         roi = ROIEstimate(prompt_eng_delta=float("nan"))
         v = Verdict(
-            choice="SFT", confidence=0.5, reason="r", reverse_when="w",
-            task_category="reasoning", estimated_roi=roi,
+            choice="SFT",
+            confidence=0.5,
+            reason="r",
+            reverse_when="w",
+            task_category="reasoning",
+            estimated_roi=roi,
         )
         text = format_verdict_rubric(v)
         assert "non-finite" in text or "nan" in text.lower()
@@ -916,8 +948,14 @@ class TestDefensive:
 
     def test_history_entry_frozen(self):
         e = HistoryEntry(
-            timestamp="t", project="p", choice="SFT", task_category="reasoning",
-            confidence=0.5, reason="r", reverse_when="w", accepted=True,
+            timestamp="t",
+            project="p",
+            choice="SFT",
+            task_category="reasoning",
+            confidence=0.5,
+            reason="r",
+            reverse_when="w",
+            accepted=True,
             outcome=None,
         )
         with pytest.raises(Exception):
@@ -946,10 +984,7 @@ class TestTDDFollowups:
             '{"choice":"SFT","task_category":"reasoning","confidence":0.5,'
             '"accepted":true,"notes":"' + ("a" * 70000) + '"}'
         )
-        good = (
-            '{"choice":"DPO","task_category":"reasoning","confidence":0.5,'
-            '"accepted":true}'
-        )
+        good = '{"choice":"DPO","task_category":"reasoning","confidence":0.5,"accepted":true}'
         p.write_text(oversize + "\n" + good + "\n", encoding="utf-8")
         entries = load_history(path=str(p))
         # Oversize line dropped, valid one kept.
@@ -965,8 +1000,10 @@ class TestTDDFollowups:
         def worker(idx: int):
             try:
                 record_verdict(
-                    _make_verdict(), accepted=True,
-                    notes=f"thread-{idx}", path=p,
+                    _make_verdict(),
+                    accepted=True,
+                    notes=f"thread-{idx}",
+                    path=p,
                 )
             except Exception as exc:  # noqa: BLE001
                 errors.append(exc)
@@ -983,25 +1020,37 @@ class TestTDDFollowups:
 
     def test_prompt_eng_at_49_sft_at_50(self):
         prof_small = DatasetProfile(
-            row_count=49, avg_input_chars=10.0, avg_output_chars=10.0,
-            type_token_diversity=0.5, label_variance=0.3,
+            row_count=49,
+            avg_input_chars=10.0,
+            avg_output_chars=10.0,
+            type_token_diversity=0.5,
+            label_variance=0.3,
         )
         prof_50 = DatasetProfile(
-            row_count=50, avg_input_chars=10.0, avg_output_chars=10.0,
-            type_token_diversity=0.5, label_variance=0.3,
+            row_count=50,
+            avg_input_chars=10.0,
+            avg_output_chars=10.0,
+            type_token_diversity=0.5,
+            label_variance=0.3,
         )
         assert build_verdict(prof_small, "summarization").choice == "PROMPT_ENG"
         assert build_verdict(prof_50, "summarization").choice == "SFT"
 
     def test_grpo_threshold_exact(self):
         prof_499 = DatasetProfile(
-            row_count=499, avg_input_chars=10.0, avg_output_chars=10.0,
-            type_token_diversity=0.5, label_variance=0.3,
+            row_count=499,
+            avg_input_chars=10.0,
+            avg_output_chars=10.0,
+            type_token_diversity=0.5,
+            label_variance=0.3,
             has_reasoning_traces=True,
         )
         prof_500 = DatasetProfile(
-            row_count=500, avg_input_chars=10.0, avg_output_chars=10.0,
-            type_token_diversity=0.5, label_variance=0.3,
+            row_count=500,
+            avg_input_chars=10.0,
+            avg_output_chars=10.0,
+            type_token_diversity=0.5,
+            label_variance=0.3,
             has_reasoning_traces=True,
         )
         # 499 rows of reasoning traces → still SFT (below GRPO floor).
@@ -1028,8 +1077,11 @@ class TestTDDFollowups:
 
     def test_build_verdict_null_byte_goal_rejected(self):
         profile = DatasetProfile(
-            row_count=100, avg_input_chars=10.0, avg_output_chars=10.0,
-            type_token_diversity=0.5, label_variance=0.3,
+            row_count=100,
+            avg_input_chars=10.0,
+            avg_output_chars=10.0,
+            type_token_diversity=0.5,
+            label_variance=0.3,
         )
         with pytest.raises(ValueError, match="NUL"):
             build_verdict(profile, "summarization", goal="bad\x00goal")
@@ -1037,8 +1089,12 @@ class TestTDDFollowups:
     def test_fmt_delta_bool_renders_invalid(self):
         roi = ROIEstimate(prompt_eng_delta=True)  # type: ignore[arg-type]
         v = Verdict(
-            choice="SFT", confidence=0.5, reason="r", reverse_when="w",
-            task_category="reasoning", estimated_roi=roi,
+            choice="SFT",
+            confidence=0.5,
+            reason="r",
+            reverse_when="w",
+            task_category="reasoning",
+            estimated_roi=roi,
         )
         text = format_verdict_rubric(v)
         # bool is rejected as invalid even though it's technically isinstance(int).
@@ -1106,16 +1162,22 @@ advise:
 
 
 class TestNextCommandFor:
-    @pytest.mark.parametrize("choice,expected_token", [
-        ("PROMPT_ENG", "soup chat"),
-        ("RAG", "RAG is outside"),
-        ("SFT", "soup autopilot"),
-        ("DPO", "soup autopilot"),
-        ("GRPO", "soup autopilot"),
-    ])
+    @pytest.mark.parametrize(
+        "choice,expected_token",
+        [
+            ("PROMPT_ENG", "soup chat"),
+            ("RAG", "RAG is outside"),
+            ("SFT", "soup autopilot"),
+            ("DPO", "soup autopilot"),
+            ("GRPO", "soup autopilot"),
+        ],
+    )
     def test_known_choices(self, choice: str, expected_token: str):
         v = Verdict(
-            choice=choice, confidence=0.5, reason="r", reverse_when="w",
+            choice=choice,
+            confidence=0.5,
+            reason="r",
+            reverse_when="w",
             task_category="reasoning",
         )
         assert expected_token in next_command_for(v)
@@ -1130,15 +1192,21 @@ class TestProbeForwardCompatKwargs:
         # v0.54.1 will add live model/device/timeout — calling with them
         # today must not raise.
         out = synth_probe_baselines(
-            big_sft_rows, n_holdout=50,
-            model="meta-llama/Llama-3.1-8B", device="cpu", timeout_seconds=60,
+            big_sft_rows,
+            n_holdout=50,
+            model="meta-llama/Llama-3.1-8B",
+            device="cpu",
+            timeout_seconds=60,
         )
         assert "zero_shot" in out
 
     def test_lora_delta_accepts_future_kwargs(self, big_sft_rows):
         delta, _ = synth_probe_lora_delta(
-            big_sft_rows, n_steps=50,
-            model="meta-llama/Llama-3.1-8B", device="cpu",
-            lr=2e-5, timeout_seconds=120,
+            big_sft_rows,
+            n_steps=50,
+            model="meta-llama/Llama-3.1-8B",
+            device="cpu",
+            lr=2e-5,
+            timeout_seconds=120,
         )
         assert isinstance(delta, float)

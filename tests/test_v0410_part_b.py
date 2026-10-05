@@ -36,10 +36,12 @@ class TestParseLrGroups:
         assert len(out) == 2
 
     def test_dict_entries_form(self):
-        out = parse_lr_groups([
-            {"pattern": "q_proj", "lr": 1e-4},
-            {"pattern": "v_proj", "lr": 5e-5},
-        ])
+        out = parse_lr_groups(
+            [
+                {"pattern": "q_proj", "lr": 1e-4},
+                {"pattern": "v_proj", "lr": 5e-5},
+            ]
+        )
         assert len(out) == 2
 
     def test_dict_entry_extra_keys_rejected(self):
@@ -154,10 +156,12 @@ class TestBuildOptimizerParamGroups:
         assert "T_v0" in base_bucket["params"]
 
     def test_first_match_wins(self):
-        groups = parse_lr_groups([
-            ("self_attn", 1e-4),
-            ("q_proj", 9e-9),  # would also match q_proj; must NOT win
-        ])
+        groups = parse_lr_groups(
+            [
+                ("self_attn", 1e-4),
+                ("q_proj", 9e-9),  # would also match q_proj; must NOT win
+            ]
+        )
         out = build_optimizer_param_groups(self._named_params(), 2e-5, groups)
         attn_bucket = next(g for g in out if g["name"] == "lr_group:self_attn")
         assert "T_q0" in attn_bucket["params"]
@@ -174,11 +178,13 @@ class TestBuildOptimizerParamGroups:
     def test_all_params_matched_no_base_group(self):
         # Every param routes into a pattern group, so base_bucket stays empty
         # and must not be appended (branch 229->235 in lr_groups.py).
-        groups = parse_lr_groups([
-            ("self_attn", 1e-4),
-            ("mlp", 2e-4),
-            ("lm_head", 3e-4),
-        ])
+        groups = parse_lr_groups(
+            [
+                ("self_attn", 1e-4),
+                ("mlp", 2e-4),
+                ("lm_head", 3e-4),
+            ]
+        )
         out = build_optimizer_param_groups(self._named_params(), 2e-5, groups)
         names = [g["name"] for g in out]
         assert names == ["lr_group:self_attn", "lr_group:mlp", "lr_group:lm_head"]
@@ -210,10 +216,12 @@ class TestSchemaIntegration:
         assert "q_proj" in patterns
 
     def test_lr_groups_list_form(self):
-        cfg = TrainingConfig(lr_groups=[
-            {"pattern": "q_proj", "lr": 1e-4},
-            {"pattern": "v_proj", "lr": 5e-5},
-        ])
+        cfg = TrainingConfig(
+            lr_groups=[
+                {"pattern": "q_proj", "lr": 1e-4},
+                {"pattern": "v_proj", "lr": 5e-5},
+            ]
+        )
         assert len(cfg.lr_groups) == 2
 
     def test_lr_groups_invalid_lr(self):
@@ -222,9 +230,7 @@ class TestSchemaIntegration:
 
     def test_lr_groups_too_many(self):
         with pytest.raises(ValidationError, match="exceeds cap"):
-            TrainingConfig(
-                lr_groups={f"p{i}": 1e-4 for i in range(MAX_LR_GROUPS + 1)}
-            )
+            TrainingConfig(lr_groups={f"p{i}": 1e-4 for i in range(MAX_LR_GROUPS + 1)})
 
 
 class TestLrGroupFrozen:
@@ -248,9 +254,7 @@ class TestLrInfNan:
 
 class TestBuildOptimizerEdgeCases:
     def test_empty_lr_groups_list(self):
-        out = build_optimizer_param_groups(
-            [("p", "T")], 2e-5, []
-        )
+        out = build_optimizer_param_groups([("p", "T")], 2e-5, [])
         # Empty groups → single base bucket.
         assert len(out) == 1
         assert out[0]["name"] == "base"
@@ -283,6 +287,7 @@ class TestLrGroupsFromSchema:
         runtime = lr_groups_from_schema(cfg.lr_groups)
         out = build_optimizer_param_groups(
             [("model.q_proj.weight", "T_q"), ("model.other.weight", "T_o")],
-            2e-5, runtime,
+            2e-5,
+            runtime,
         )
         assert any(g["name"] == "lr_group:q_proj" for g in out)

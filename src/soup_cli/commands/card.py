@@ -136,8 +136,7 @@ def build_model_card(
     eval_results = list(eval_results or [])
 
     scorecard = {
-        str(row["benchmark"]): row["score"]
-        for row in newest_eval_rows(eval_results)[:_MAX_ROWS]
+        str(row["benchmark"]): row["score"] for row in newest_eval_rows(eval_results)[:_MAX_ROWS]
     }
 
     is_adapter = _is_adapter(artifacts, config)

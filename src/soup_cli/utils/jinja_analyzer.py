@@ -37,18 +37,13 @@ _MAX_TEMPLATE_BYTES: int = 128 * 1024
 
 def _validate_template_input(template: str) -> None:
     if not isinstance(template, str):
-        raise TypeError(
-            f"template must be str, got {type(template).__name__}"
-        )
+        raise TypeError(f"template must be str, got {type(template).__name__}")
     if not template:
         raise ValueError("template must be non-empty")
     if "\x00" in template:
         raise ValueError("template must not contain null bytes")
     if len(template) > _MAX_TEMPLATE_BYTES:
-        raise ValueError(
-            f"template too large: {len(template)} bytes "
-            f"(max {_MAX_TEMPLATE_BYTES})"
-        )
+        raise ValueError(f"template too large: {len(template)} bytes (max {_MAX_TEMPLATE_BYTES})")
 
 
 def extract_message_fields(template: str) -> set[str]:
@@ -98,10 +93,7 @@ def extract_message_fields(template: str) -> set[str]:
     # Walk the whole AST and collect attribute / subscript access on any
     # of our message loop variables.
     for getattr_node in ast.find_all(nodes.Getattr):
-        if (
-            isinstance(getattr_node.node, nodes.Name)
-            and getattr_node.node.name in loop_var_names
-        ):
+        if isinstance(getattr_node.node, nodes.Name) and getattr_node.node.name in loop_var_names:
             fields.add(getattr_node.attr)
     for getitem_node in ast.find_all(nodes.Getitem):
         if (
@@ -132,13 +124,12 @@ class JinjaTemplateAnalyzer:
     def has_field(self, name: str) -> bool:
         """Return True if the template references ``message.<name>``."""
         if not isinstance(name, str):
-            raise TypeError(
-                f"name must be str, got {type(name).__name__}"
-            )
+            raise TypeError(f"name must be str, got {type(name).__name__}")
         return name in self._fields
 
     def non_standard_fields(
-        self, standard: AbstractSet[str] = DEFAULT_MESSAGE_FIELDS,
+        self,
+        standard: AbstractSet[str] = DEFAULT_MESSAGE_FIELDS,
     ) -> set[str]:
         """Return fields used by the template that are NOT in ``standard``."""
         return self._fields - set(standard)

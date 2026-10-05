@@ -73,10 +73,7 @@ def bench(
     backend: str = typer.Option(
         "auto",
         "--backend",
-        help=(
-            "Inference backend hint: auto (default) | transformers | mlx. "
-            "v0.53.9 #28."
-        ),
+        help=("Inference backend hint: auto (default) | transformers | mlx. v0.53.9 #28."),
     ),
     cuda_graphs: bool = typer.Option(
         False,
@@ -101,9 +98,7 @@ def bench(
         )
         raise typer.Exit(1) from exc
     if model_kind == "hf":
-        console.print(
-            f"[dim]Local path not found; treating {model_ref!r} as a HF repo id.[/]"
-        )
+        console.print(f"[dim]Local path not found; treating {model_ref!r} as a HF repo id.[/]")
     model_target = model_ref
 
     device, _ = detect_device()
@@ -114,9 +109,7 @@ def bench(
     backend_lower = (backend or "auto").strip().lower()
     if backend_lower == "auto":
         backend_resolved = detect_backend(model_target)
-        console.print(
-            f"[dim]Backend auto-detected:[/] [bold]{backend_resolved}[/]"
-        )
+        console.print(f"[dim]Backend auto-detected:[/] [bold]{backend_resolved}[/]")
     else:
         if backend_lower not in SUPPORTED_BACKENDS:
             console.print(
@@ -160,9 +153,7 @@ def bench(
             console.print(f"[red]Prompts file not found:[/] {prompts_file}")
             raise typer.Exit(1)
         if _stat.S_ISLNK(_st.st_mode):
-            console.print(
-                "[red]Prompts file must not be a symlink.[/]"
-            )
+            console.print("[red]Prompts file must not be a symlink.[/]")
             raise typer.Exit(1)
         p_path = Path(_os.path.realpath(prompts_file))
 
@@ -266,8 +257,11 @@ def bench(
     else:
         warmup_messages = [{"role": "user", "content": test_prompts[0]}]
         _generate(
-            model_obj, tokenizer, warmup_messages,
-            max_tokens=min(max_tokens, 32), temperature=0.0,
+            model_obj,
+            tokenizer,
+            warmup_messages,
+            max_tokens=min(max_tokens, 32),
+            temperature=0.0,
         )
 
     total_tokens = 0
@@ -282,8 +276,11 @@ def bench(
 
         try:
             _, token_count = _generate(
-                model_obj, tokenizer, messages,
-                max_tokens=max_tokens, temperature=0.0,
+                model_obj,
+                tokenizer,
+                messages,
+                max_tokens=max_tokens,
+                temperature=0.0,
                 **({"cuda_graphs": True} if cuda_graphs is True else {}),
             )
         except Exception as exc:
@@ -381,7 +378,10 @@ def train(
     device, _ = detect_device(backend=cfg.backend)
     try:
         report = run_bench_train(
-            cfg, steps=steps, warmup=warmup, device=device,
+            cfg,
+            steps=steps,
+            warmup=warmup,
+            device=device,
             load_dataset=lambda c: load_dataset(c.data),
         )
     except ValueError as exc:

@@ -314,26 +314,121 @@ def detect_pii(text: Any) -> List[Dict[str, str]]:
 # Live fastText / langdetect support gated behind `[data-pro]` extras.
 _LANG_STOPWORDS: Mapping[str, frozenset] = MappingProxyType(
     {
-        "en": frozenset({
-            "the", "and", "of", "to", "in", "is", "that", "for", "on", "with",
-            "as", "are", "this", "be", "by", "at", "an", "or", "from", "it",
-        }),
-        "es": frozenset({
-            "el", "la", "los", "las", "de", "que", "y", "en", "un", "es",
-            "por", "con", "para", "se", "no", "más", "una", "su", "muy",
-        }),
-        "fr": frozenset({
-            "le", "la", "les", "de", "et", "à", "un", "une", "que", "qui",
-            "pour", "dans", "sur", "avec", "ne", "pas", "est", "ce", "des",
-        }),
-        "de": frozenset({
-            "der", "die", "das", "und", "in", "den", "von", "zu", "mit",
-            "ist", "im", "für", "auf", "ein", "eine", "auch", "als", "nicht",
-        }),
-        "pt": frozenset({
-            "de", "a", "o", "que", "e", "do", "da", "em", "um", "para",
-            "com", "não", "os", "as", "no", "se", "uma", "por", "mais",
-        }),
+        "en": frozenset(
+            {
+                "the",
+                "and",
+                "of",
+                "to",
+                "in",
+                "is",
+                "that",
+                "for",
+                "on",
+                "with",
+                "as",
+                "are",
+                "this",
+                "be",
+                "by",
+                "at",
+                "an",
+                "or",
+                "from",
+                "it",
+            }
+        ),
+        "es": frozenset(
+            {
+                "el",
+                "la",
+                "los",
+                "las",
+                "de",
+                "que",
+                "y",
+                "en",
+                "un",
+                "es",
+                "por",
+                "con",
+                "para",
+                "se",
+                "no",
+                "más",
+                "una",
+                "su",
+                "muy",
+            }
+        ),
+        "fr": frozenset(
+            {
+                "le",
+                "la",
+                "les",
+                "de",
+                "et",
+                "à",
+                "un",
+                "une",
+                "que",
+                "qui",
+                "pour",
+                "dans",
+                "sur",
+                "avec",
+                "ne",
+                "pas",
+                "est",
+                "ce",
+                "des",
+            }
+        ),
+        "de": frozenset(
+            {
+                "der",
+                "die",
+                "das",
+                "und",
+                "in",
+                "den",
+                "von",
+                "zu",
+                "mit",
+                "ist",
+                "im",
+                "für",
+                "auf",
+                "ein",
+                "eine",
+                "auch",
+                "als",
+                "nicht",
+            }
+        ),
+        "pt": frozenset(
+            {
+                "de",
+                "a",
+                "o",
+                "que",
+                "e",
+                "do",
+                "da",
+                "em",
+                "um",
+                "para",
+                "com",
+                "não",
+                "os",
+                "as",
+                "no",
+                "se",
+                "uma",
+                "por",
+                "mais",
+            }
+        ),
         "ru": frozenset({"и", "в", "не", "что", "на", "с", "по", "это", "как"}),
     }
 )
@@ -471,6 +566,7 @@ def score_educational_value(text: Any) -> float:
     unique = len(set(tokens))
     # Length component: ramps up smoothly to 1.0 around 200 tokens.
     import math
+
     length_score = min(1.0, math.log(1 + n) / math.log(200))
     diversity = unique / n
     # Convex combination keeps both signals in the unit interval.

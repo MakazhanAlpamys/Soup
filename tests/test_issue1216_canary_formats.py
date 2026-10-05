@@ -63,8 +63,7 @@ def _write_dataset(path: Path, fmt: str, count: int = 3) -> None:
 def _insert(*extra: str):
     return CliRunner().invoke(
         app,
-        ["data", "canary", "insert", "train.jsonl", "--manifest", "m.json",
-         "--count", "4", *extra],
+        ["data", "canary", "insert", "train.jsonl", "--manifest", "m.json", "--count", "4", *extra],
     )
 
 
@@ -106,9 +105,7 @@ def test_alpaca_canaries_reach_the_training_rows(tmp_path, monkeypatch):
 @pytest.mark.parametrize("load_as", ["auto", "explicit"])
 @pytest.mark.parametrize("insert_as", ["auto", "explicit"])
 @pytest.mark.parametrize("fmt", CANARY_FORMATS)
-def test_rendered_formats_load_every_canary(
-    fmt, insert_as, load_as, tmp_path, monkeypatch
-):
+def test_rendered_formats_load_every_canary(fmt, insert_as, load_as, tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     _write_dataset(Path("train.jsonl"), fmt)
     extra = ["--format", fmt] if insert_as == "explicit" else []
@@ -125,9 +122,7 @@ def test_rendered_formats_load_every_canary(
 
 @pytest.mark.parametrize("insert_as", ["auto", "explicit"])
 @pytest.mark.parametrize("fmt", _REFUSED)
-def test_other_formats_are_refused_and_nothing_is_written(
-    fmt, insert_as, tmp_path, monkeypatch
-):
+def test_other_formats_are_refused_and_nothing_is_written(fmt, insert_as, tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     _write_dataset(Path("train.jsonl"), fmt)
     extra = ["--format", fmt] if insert_as == "explicit" else []
@@ -142,9 +137,7 @@ def test_other_formats_are_refused_and_nothing_is_written(
     assert not Path("m.json").exists()
 
 
-def test_explicit_format_that_is_not_the_files_format_is_refused(
-    tmp_path, monkeypatch
-):
+def test_explicit_format_that_is_not_the_files_format_is_refused(tmp_path, monkeypatch):
     """Under `data.format: auto` the file loads as chatml and drops them."""
     monkeypatch.chdir(tmp_path)
     _write_dataset(Path("train.jsonl"), "chatml")
@@ -205,8 +198,18 @@ def test_a_first_row_that_is_not_an_object_is_refused_by_name(
 
     result = CliRunner().invoke(
         app,
-        ["data", "canary", "insert", name, "--manifest", "m.json",
-         "--count", "4", "-o", "canaried.jsonl"],
+        [
+            "data",
+            "canary",
+            "insert",
+            name,
+            "--manifest",
+            "m.json",
+            "--count",
+            "4",
+            "-o",
+            "canaried.jsonl",
+        ],
     )
 
     assert result.exit_code == 1, result.output
@@ -230,9 +233,7 @@ def test_json_output_is_an_array_that_loads_back(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("name", ["canaried.txt", "canaried.csv", "canaried"])
-def test_output_suffix_the_loader_would_misread_is_refused(
-    name, tmp_path, monkeypatch
-):
+def test_output_suffix_the_loader_would_misread_is_refused(name, tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     _write_dataset(Path("train.jsonl"), "alpaca")
     result = _insert("-o", name)
@@ -279,9 +280,7 @@ class TestManifestFormat:
         assert load_manifest("m.json") == canaries
 
     @pytest.mark.parametrize("value", ["plaintext", "dpo", "bogus", 7, None])
-    def test_unknown_format_is_refused_not_scored_as_chat(
-        self, value, tmp_path, monkeypatch
-    ):
+    def test_unknown_format_is_refused_not_scored_as_chat(self, value, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         write_manifest(generate_canaries(count=2, seed=0), "m.json")
         payload = json.loads(Path("m.json").read_text())
@@ -295,19 +294,26 @@ class TestCheckReadsTheFormat:
     def _check(self, monkeypatch):
         from soup_cli.commands import data_canary as cmd
 
-        monkeypatch.setattr(
-            cmd, "_load_pair", lambda *a, **k: (object(), object(), "cpu")
-        )
+        monkeypatch.setattr(cmd, "_load_pair", lambda *a, **k: (object(), object(), "cpu"))
         # Canaries mid-distribution -> OK.
         monkeypatch.setattr(
-            cmd, "compute_pair_losses",
-            lambda model, tok, pairs, **kw: (
-                [5.0] * 2 + [float(i) for i in range(len(pairs) - 2)]
-            ),
+            cmd,
+            "compute_pair_losses",
+            lambda model, tok, pairs, **kw: [5.0] * 2 + [float(i) for i in range(len(pairs) - 2)],
         )
         return CliRunner().invoke(
-            app, ["data", "canary", "check", "--manifest", "m.json",
-                  "--base", "fake/model", "--controls", "16"],
+            app,
+            [
+                "data",
+                "canary",
+                "check",
+                "--manifest",
+                "m.json",
+                "--base",
+                "fake/model",
+                "--controls",
+                "16",
+            ],
         )
 
     def _manifest(self, **overrides):

@@ -144,13 +144,9 @@ def load_prompts(path: Path) -> list[dict]:
             try:
                 row = json.loads(line)
             except json.JSONDecodeError as exc:
-                raise ValueError(
-                    f"Invalid JSON on line {line_num}: {exc}"
-                ) from exc
+                raise ValueError(f"Invalid JSON on line {line_num}: {exc}") from exc
             if "prompt" not in row:
-                raise ValueError(
-                    f"Line {line_num}: missing required field 'prompt'"
-                )
+                raise ValueError(f"Line {line_num}: missing required field 'prompt'")
             prompts.append(row)
     return prompts
 
@@ -171,14 +167,16 @@ def load_results(path: Path) -> HumanEvalResults:
 
     eval_results = HumanEvalResults()
     for jdata in data.get("judgments", []):
-        eval_results.judgments.append(HumanJudgment(
-            prompt=jdata["prompt"],
-            response_a=jdata["response_a"],
-            response_b=jdata["response_b"],
-            model_a=jdata["model_a"],
-            model_b=jdata["model_b"],
-            winner=jdata["winner"],
-        ))
+        eval_results.judgments.append(
+            HumanJudgment(
+                prompt=jdata["prompt"],
+                response_a=jdata["response_a"],
+                response_b=jdata["response_b"],
+                model_a=jdata["model_a"],
+                model_b=jdata["model_b"],
+                winner=jdata["winner"],
+            )
+        )
 
     eval_results.compute_ratings()
     return eval_results
@@ -210,14 +208,16 @@ def run_human_eval_session(
             resp_a = generate_a(prompt) if generate_a else ""
             resp_b = generate_b(prompt) if generate_b else ""
 
-        results.judgments.append(HumanJudgment(
-            prompt=prompt,
-            response_a=resp_a,
-            response_b=resp_b,
-            model_a=model_a_name,
-            model_b=model_b_name,
-            winner="tie",  # Default; interactive UI sets this
-        ))
+        results.judgments.append(
+            HumanJudgment(
+                prompt=prompt,
+                response_a=resp_a,
+                response_b=resp_b,
+                model_a=model_a_name,
+                model_b=model_b_name,
+                winner="tie",  # Default; interactive UI sets this
+            )
+        )
 
     results.compute_ratings()
     return results

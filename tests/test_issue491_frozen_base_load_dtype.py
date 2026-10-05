@@ -179,9 +179,11 @@ class TestWrapperModelKwargsCarryDtype:
             if class_name in ("PretrainTrainerWrapper", "EmbeddingTrainerWrapper")
             else "resolve_frozen_base_load_dtype"
         )
-        with patch("transformers.AutoTokenizer.from_pretrained", return_value=fake_tokenizer), \
-             patch(f"transformers.{model_class_name}.from_pretrained", load_mock), \
-             patch(f"{module_path}.{resolver_name}", return_value=sentinel):
+        with (
+            patch("transformers.AutoTokenizer.from_pretrained", return_value=fake_tokenizer),
+            patch(f"transformers.{model_class_name}.from_pretrained", load_mock),
+            patch(f"{module_path}.{resolver_name}", return_value=sentinel),
+        ):
             with pytest.raises(_StopAtLoadError):
                 wrapper._setup_transformers(cfg, cfg.training)
 
@@ -218,8 +220,7 @@ class TestRewardModelHeadUpcastToFp32:
             wrapper._setup_transformers(cfg, cfg.training)
 
         head_params = [
-            p for n, p in wrapper.model.named_parameters()
-            if p.requires_grad and "score" in n
+            p for n, p in wrapper.model.named_parameters() if p.requires_grad and "score" in n
         ]
         assert head_params, "no trainable score-head parameter found on the PEFT model"
         assert all(p.dtype == torch.float32 for p in head_params), (
@@ -228,7 +229,8 @@ class TestRewardModelHeadUpcastToFp32:
         # The base itself really did load bf16 (proves the fixture reproduces
         # the bug's precondition, not just that everything is fp32 already).
         base_dtype = next(
-            p.dtype for n, p in wrapper.model.named_parameters()
+            p.dtype
+            for n, p in wrapper.model.named_parameters()
             if not p.requires_grad and "lora_" not in n and "score" not in n
         )
         assert base_dtype == torch.bfloat16

@@ -42,12 +42,23 @@ class TestPartANewFormats:
             {"prm", "pre_tokenized", "input_output", "video", "multimodal"}
         )
         assert dp.new_formats() == (
-            "input_output", "multimodal", "pre_tokenized", "prm", "video",
+            "input_output",
+            "multimodal",
+            "pre_tokenized",
+            "prm",
+            "video",
         )
 
-    @pytest.mark.parametrize("fmt", [
-        "prm", "pre_tokenized", "input_output", "video", "multimodal",
-    ])
+    @pytest.mark.parametrize(
+        "fmt",
+        [
+            "prm",
+            "pre_tokenized",
+            "input_output",
+            "video",
+            "multimodal",
+        ],
+    )
     def test_data_config_accepts_new_format(self, fmt):
         kwargs = {"train": "data.jsonl", "format": fmt}
         if fmt == "pre_tokenized":
@@ -73,7 +84,9 @@ class TestPartANewFormats:
     def test_prm_converter_mismatched_lengths(self):
         # Wrapped converter swallows ValueError → returns None.
         row = {
-            "prompt": "p", "completions": ["a", "b"], "labels": [True],
+            "prompt": "p",
+            "completions": ["a", "b"],
+            "labels": [True],
         }
         assert format_to_messages(row, "prm") is None
 
@@ -95,10 +108,12 @@ class TestPartANewFormats:
         assert format_to_messages({"labels": [1]}, "pre_tokenized") is None
 
     def test_input_output_converter(self):
-        row = {"segments": [
-            {"text": "Q: hi", "label": False},
-            {"text": "A: hello", "label": True},
-        ]}
+        row = {
+            "segments": [
+                {"text": "Q: hi", "label": False},
+                {"text": "A: hello", "label": True},
+            ]
+        }
         out = format_to_messages(row, "input_output")
         assert out["segments"][0]["label"] is False
         assert out["segments"][1]["label"] is True
@@ -112,9 +127,12 @@ class TestPartANewFormats:
         assert format_to_messages({"segments": []}, "input_output") is None
 
     def test_video_converter(self):
-        row = {"video": "clip.mp4", "messages": [
-            {"role": "user", "content": "describe"},
-        ]}
+        row = {
+            "video": "clip.mp4",
+            "messages": [
+                {"role": "user", "content": "describe"},
+            ],
+        }
         out = format_to_messages(row, "video")
         assert out["video"] == "clip.mp4"
 
@@ -122,12 +140,17 @@ class TestPartANewFormats:
         assert format_to_messages({"messages": []}, "video") is None
 
     def test_multimodal_converter_typed_parts(self):
-        row = {"messages": [
-            {"role": "user", "content": [
-                {"type": "text", "text": "what?"},
-                {"type": "image", "url": "x.png"},
-            ]},
-        ]}
+        row = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "what?"},
+                        {"type": "image", "url": "x.png"},
+                    ],
+                },
+            ]
+        }
         out = format_to_messages(row, "multimodal")
         assert out["messages"][0]["content"][0]["type"] == "text"
 
@@ -137,9 +160,16 @@ class TestPartANewFormats:
         assert out["messages"][0]["content"] == "plain"
 
     def test_multimodal_converter_invalid_part_type(self):
-        row = {"messages": [{"role": "user", "content": [
-            {"type": "evil", "data": "x"},
-        ]}]}
+        row = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "evil", "data": "x"},
+                    ],
+                }
+            ]
+        }
         assert format_to_messages(row, "multimodal") is None
 
     @pytest.mark.parametrize("msg", ["plain", 42, None, ["role", "user"]])
@@ -164,7 +194,7 @@ class TestPartANewFormats:
     def test_pre_tokenized_rejects_live_text_transform(self, field, value):
         with pytest.raises(
             Exception,
-            match=fr"pre_tokenized.*data\.{field}.*cached ids do not contain it",
+            match=rf"pre_tokenized.*data\.{field}.*cached ids do not contain it",
         ):
             DataConfig(
                 train="data.jsonl",
@@ -177,7 +207,7 @@ class TestPartANewFormats:
     def test_pre_tokenized_rejects_non_text_modality(self, modality):
         with pytest.raises(
             Exception,
-            match=fr"pre_tokenized.*modality='{modality}'",
+            match=rf"pre_tokenized.*modality='{modality}'",
         ):
             load_config_from_string(
                 f"""
@@ -202,19 +232,22 @@ class TestPartBRemoteLoading:
         with pytest.raises(TypeError):
             dp._REMOTE_SCHEMES["evil"] = "evilfs"  # type: ignore
 
-    @pytest.mark.parametrize("uri,expected", [
-        ("s3://bucket/path/file.jsonl", True),
-        ("gs://bucket/path", True),
-        ("gcs://bucket/path", True),
-        ("az://container/path", True),
-        ("abfs://container/path", True),
-        ("oci://bucket/path", True),
-        ("./local.jsonl", False),
-        ("/abs/local.jsonl", False),
-        ("https://example.com/data", False),
-        ("ftp://bucket/path", False),
-        ("", False),
-    ])
+    @pytest.mark.parametrize(
+        "uri,expected",
+        [
+            ("s3://bucket/path/file.jsonl", True),
+            ("gs://bucket/path", True),
+            ("gcs://bucket/path", True),
+            ("az://container/path", True),
+            ("abfs://container/path", True),
+            ("oci://bucket/path", True),
+            ("./local.jsonl", False),
+            ("/abs/local.jsonl", False),
+            ("https://example.com/data", False),
+            ("ftp://bucket/path", False),
+            ("", False),
+        ],
+    )
     def test_is_remote_uri(self, uri, expected):
         assert dp.is_remote_uri(uri) is expected
 
@@ -309,60 +342,104 @@ class TestPartBRemoteLoading:
 class TestPartCPreprocess:
     def test_cache_key_deterministic(self):
         a = dp.make_preprocess_cache_key(
-            dataset_path="d.jsonl", tokenizer_name="x/y", max_length=512,
-            format_name="alpaca", mask_mode="responses_only", task="sft",
+            dataset_path="d.jsonl",
+            tokenizer_name="x/y",
+            max_length=512,
+            format_name="alpaca",
+            mask_mode="responses_only",
+            task="sft",
         )
         b = dp.make_preprocess_cache_key(
-            dataset_path="d.jsonl", tokenizer_name="x/y", max_length=512,
-            format_name="alpaca", mask_mode="responses_only", task="sft",
+            dataset_path="d.jsonl",
+            tokenizer_name="x/y",
+            max_length=512,
+            format_name="alpaca",
+            mask_mode="responses_only",
+            task="sft",
         )
         assert a == b
         assert len(a) == 16
 
     def test_cache_key_changes_on_each_arg(self):
         baseline = dp.make_preprocess_cache_key(
-            dataset_path="d.jsonl", tokenizer_name="x/y", max_length=512,
-            format_name="alpaca", mask_mode="responses_only", task="sft",
+            dataset_path="d.jsonl",
+            tokenizer_name="x/y",
+            max_length=512,
+            format_name="alpaca",
+            mask_mode="responses_only",
+            task="sft",
         )
         # Different dataset path → different key.
         diff_path = dp.make_preprocess_cache_key(
-            dataset_path="other.jsonl", tokenizer_name="x/y", max_length=512,
-            format_name="alpaca", mask_mode="responses_only", task="sft",
+            dataset_path="other.jsonl",
+            tokenizer_name="x/y",
+            max_length=512,
+            format_name="alpaca",
+            mask_mode="responses_only",
+            task="sft",
         )
         diff_tok = dp.make_preprocess_cache_key(
-            dataset_path="d.jsonl", tokenizer_name="z/w", max_length=512,
-            format_name="alpaca", mask_mode="responses_only", task="sft",
+            dataset_path="d.jsonl",
+            tokenizer_name="z/w",
+            max_length=512,
+            format_name="alpaca",
+            mask_mode="responses_only",
+            task="sft",
         )
         diff_len = dp.make_preprocess_cache_key(
-            dataset_path="d.jsonl", tokenizer_name="x/y", max_length=1024,
-            format_name="alpaca", mask_mode="responses_only", task="sft",
+            dataset_path="d.jsonl",
+            tokenizer_name="x/y",
+            max_length=1024,
+            format_name="alpaca",
+            mask_mode="responses_only",
+            task="sft",
         )
         diff_fmt = dp.make_preprocess_cache_key(
-            dataset_path="d.jsonl", tokenizer_name="x/y", max_length=512,
-            format_name="sharegpt", mask_mode="responses_only", task="sft",
+            dataset_path="d.jsonl",
+            tokenizer_name="x/y",
+            max_length=512,
+            format_name="sharegpt",
+            mask_mode="responses_only",
+            task="sft",
         )
         assert len({baseline, diff_path, diff_tok, diff_len, diff_fmt}) == 5
 
     def test_cache_key_rejects_bad_inputs(self):
         with pytest.raises(ValueError):
             dp.make_preprocess_cache_key(
-                dataset_path="", tokenizer_name="x", max_length=1,
-                format_name="a", mask_mode="responses_only", task="sft",
+                dataset_path="",
+                tokenizer_name="x",
+                max_length=1,
+                format_name="a",
+                mask_mode="responses_only",
+                task="sft",
             )
         with pytest.raises(ValueError, match="null bytes"):
             dp.make_preprocess_cache_key(
-                dataset_path="d\x00", tokenizer_name="x", max_length=1,
-                format_name="a", mask_mode="responses_only", task="sft",
+                dataset_path="d\x00",
+                tokenizer_name="x",
+                max_length=1,
+                format_name="a",
+                mask_mode="responses_only",
+                task="sft",
             )
         with pytest.raises(ValueError, match="bool"):
             dp.make_preprocess_cache_key(
-                dataset_path="d", tokenizer_name="x", max_length=True,
-                format_name="a", mask_mode="responses_only", task="sft",
+                dataset_path="d",
+                tokenizer_name="x",
+                max_length=True,
+                format_name="a",
+                mask_mode="responses_only",
+                task="sft",
             )
         with pytest.raises(ValueError):
             dp.make_preprocess_cache_key(
-                dataset_path="d", tokenizer_name="x", max_length=0,
-                format_name="a", mask_mode="responses_only", task="sft",
+                dataset_path="d",
+                tokenizer_name="x",
+                max_length=0,
+                format_name="a",
+                mask_mode="responses_only",
+                task="sft",
             )
 
     def test_tokenized_path_schema(self):
@@ -387,9 +464,7 @@ class TestPartCPreprocess:
 
 class TestPartDInterleave:
     def test_interleave_strategies_constant(self):
-        assert dp.INTERLEAVE_STRATEGIES == frozenset(
-            {"concat", "under", "over", "probs"}
-        )
+        assert dp.INTERLEAVE_STRATEGIES == frozenset({"concat", "under", "over", "probs"})
 
     def test_interleave_none(self):
         assert dp.parse_interleave(None, num_datasets=3) is None
@@ -411,13 +486,15 @@ class TestPartDInterleave:
     def test_interleave_probs_must_sum_to_one(self):
         with pytest.raises(ValueError, match="sum to 1"):
             dp.parse_interleave(
-                {"strategy": "probs", "probs": [0.5, 0.4]}, num_datasets=2,
+                {"strategy": "probs", "probs": [0.5, 0.4]},
+                num_datasets=2,
             )
 
     def test_interleave_probs_length_mismatch(self):
         with pytest.raises(ValueError, match="length"):
             dp.parse_interleave(
-                {"strategy": "probs", "probs": [0.5, 0.5]}, num_datasets=3,
+                {"strategy": "probs", "probs": [0.5, 0.5]},
+                num_datasets=3,
             )
 
     def test_interleave_probs_string_form_rejected(self):
@@ -427,7 +504,8 @@ class TestPartDInterleave:
     def test_interleave_probs_with_non_probs_strategy(self):
         with pytest.raises(ValueError, match="must not set"):
             dp.parse_interleave(
-                {"strategy": "concat", "probs": [0.5, 0.5]}, num_datasets=2,
+                {"strategy": "concat", "probs": [0.5, 0.5]},
+                num_datasets=2,
             )
 
     def test_interleave_unknown_strategy(self):
@@ -449,7 +527,8 @@ class TestPartDInterleave:
     def test_interleave_probs_bool_value(self):
         with pytest.raises(ValueError, match="bool"):
             dp.parse_interleave(
-                {"strategy": "probs", "probs": [True, 0.5]}, num_datasets=2,
+                {"strategy": "probs", "probs": [True, 0.5]},
+                num_datasets=2,
             )
 
     def test_interleave_probs_non_finite(self):
@@ -462,7 +541,8 @@ class TestPartDInterleave:
     def test_interleave_probs_out_of_range(self):
         with pytest.raises(ValueError, match=r"\(0\.0, 1\.0\]"):
             dp.parse_interleave(
-                {"strategy": "probs", "probs": [0.0, 1.0]}, num_datasets=2,
+                {"strategy": "probs", "probs": [0.0, 1.0]},
+                num_datasets=2,
             )
 
     def test_interleave_invalid_shape(self):
@@ -485,7 +565,9 @@ class TestPartDInterleave:
     def test_image_pixel_range_cross_validator(self):
         with pytest.raises(Exception, match="<= image_max"):
             DataConfig(
-                train="d.jsonl", image_min_pixels=1000, image_max_pixels=100,
+                train="d.jsonl",
+                image_min_pixels=1000,
+                image_max_pixels=100,
             )
 
     def test_video_fps_bounds(self):
@@ -525,7 +607,8 @@ class TestPartDInterleave:
     def test_train_on_prompt_mutually_exclusive_with_responses_only(self):
         with pytest.raises(Exception, match="mutually exclusive"):
             DataConfig(
-                train="d.jsonl", train_on_prompt=True,
+                train="d.jsonl",
+                train_on_prompt=True,
                 train_on_responses_only=True,
             )
 
@@ -687,24 +770,29 @@ class TestPartEVocabExpansion:
 
     def test_prompt_strategy_happy(self):
         cfg = DataConfig(
-            train="d.jsonl", prompt_strategy="my_module:my_fn",
+            train="d.jsonl",
+            prompt_strategy="my_module:my_fn",
         )
         assert cfg.prompt_strategy == "my_module:my_fn"
 
     def test_prompt_strategy_dotted_module(self):
         cfg = DataConfig(
-            train="d.jsonl", prompt_strategy="pkg.sub.mod:transform",
+            train="d.jsonl",
+            prompt_strategy="pkg.sub.mod:transform",
         )
         assert cfg.prompt_strategy == "pkg.sub.mod:transform"
 
-    @pytest.mark.parametrize("bad", [
-        "no_colon",
-        ":fn",
-        "module:",
-        "1bad:fn",
-        "module:1fn",
-        "mod-with-hyphen:fn",
-    ])
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            "no_colon",
+            ":fn",
+            "module:",
+            "1bad:fn",
+            "module:1fn",
+            "mod-with-hyphen:fn",
+        ],
+    )
     def test_prompt_strategy_invalid(self, bad):
         with pytest.raises(Exception):
             DataConfig(train="d.jsonl", prompt_strategy=bad)
@@ -752,9 +840,7 @@ class TestPartFIngest:
             dp.detect_ingest_format("")
 
     def test_ingest_extensions_constant(self):
-        assert dp.INGEST_EXTENSIONS == frozenset(
-            {".pdf", ".docx", ".md", ".txt"}
-        )
+        assert dp.INGEST_EXTENSIONS == frozenset({".pdf", ".docx", ".md", ".txt"})
 
     def test_ingest_cli_help(self):
         runner = CliRunner()
@@ -768,9 +854,16 @@ class TestPartFIngest:
         src.write_text("Hello world\nSecond line", encoding="utf-8")
         out = tmp_path / "ingested.jsonl"
         runner = CliRunner()
-        result = runner.invoke(app, [
-            "data", "ingest", "notes.txt", "--output", "ingested.jsonl",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "data",
+                "ingest",
+                "notes.txt",
+                "--output",
+                "ingested.jsonl",
+            ],
+        )
         assert result.exit_code == 0, (result.output, repr(result.exception))
         assert out.exists()
         with open(out, encoding="utf-8") as f:
@@ -926,7 +1019,9 @@ class TestSecurityReviewFixes:
         outside = str(Path(tmp_path).parent / "evil")
         with pytest.raises(Exception, match="cwd"):
             DataConfig(
-                train="d.jsonl", format="video", video_dir=outside,
+                train="d.jsonl",
+                format="video",
+                video_dir=outside,
             )
 
     def test_tokenized_path_outside_cwd_rejected(self, tmp_path, monkeypatch):
@@ -990,11 +1085,13 @@ class TestSecurityReviewFixes:
             encoding="utf-8",
         )
         (tmp_path / "d.jsonl").write_text(
-            '{"instruction": "hi", "output": "hello"}\n', encoding="utf-8",
+            '{"instruction": "hi", "output": "hello"}\n',
+            encoding="utf-8",
         )
         runner = CliRunner()
         result = runner.invoke(
-            app, ["data", "preprocess", "soup.yaml", "--yes"],
+            app,
+            ["data", "preprocess", "soup.yaml", "--yes"],
         )
         # Cache key + target are rendered before the live tokenize attempt; the
         # tokenizer download will fail with a fake base id but that's expected.
@@ -1010,7 +1107,8 @@ class TestSecurityReviewFixes:
         runner = CliRunner()
         outside = str(Path(tmp_path).parent / "evil")
         result = runner.invoke(
-            app, ["data", "preprocess", "soup.yaml", "--output", outside],
+            app,
+            ["data", "preprocess", "soup.yaml", "--output", outside],
         )
         assert result.exit_code == 1
         assert "--output must stay under cwd" in result.output
@@ -1022,7 +1120,8 @@ class TestSecurityReviewFixes:
         outside = str(Path(tmp_path).parent / "evil.jsonl")
         runner = CliRunner()
         result = runner.invoke(
-            app, ["data", "ingest", "doc.txt", "--output", outside],
+            app,
+            ["data", "ingest", "doc.txt", "--output", outside],
         )
         assert result.exit_code == 1
         assert "--output must stay under cwd" in result.output
@@ -1087,6 +1186,7 @@ def test_module_lazy_imports():
     # Force a re-import to be safe on test ordering.
     pre = set(sys.modules)
     import soup_cli.utils.data_pipeline  # noqa: F401
+
     new = set(sys.modules) - pre
     leaked = new & heavy
     assert not leaked, f"data_pipeline pulled in heavy deps: {leaked}"

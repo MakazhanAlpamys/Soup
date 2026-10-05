@@ -40,9 +40,7 @@ def _load_attestation_files(paths: Optional[List[str]]) -> list[dict]:
             # (the 1 MiB cap in validate_attestation_statement only fires
             # AFTER the parse).
             if os.path.getsize(real) > _MAX_ATTESTATION_BYTES:
-                raise ValueError(
-                    f"attestation file too large (> {_MAX_ATTESTATION_BYTES} bytes)"
-                )
+                raise ValueError(f"attestation file too large (> {_MAX_ATTESTATION_BYTES} bytes)")
             with open(real, encoding="utf-8") as fh:
                 stmt = json.load(fh)
             statements.append(validate_attestation_statement(stmt))
@@ -54,19 +52,29 @@ def _load_attestation_files(paths: Optional[List[str]]) -> list[dict]:
 @app.command(name="pack")
 def pack_cmd(
     entry_id: str = typer.Option(
-        ..., "--entry-id", help="Registry entry id / prefix / name:tag",
+        ...,
+        "--entry-id",
+        help="Registry entry id / prefix / name:tag",
     ),
     out: str = typer.Option(
-        ..., "--out", "-o", help="Output .can path",
+        ...,
+        "--out",
+        "-o",
+        help="Output .can path",
     ),
     author: str = typer.Option(
-        "unknown", "--author", help="Author handle",
+        "unknown",
+        "--author",
+        help="Author handle",
     ),
     description: str = typer.Option(
-        "", "--description", help="Free-form description",
+        "",
+        "--description",
+        help="Free-form description",
     ),
     attest: Optional[List[str]] = typer.Option(
-        None, "--attest",
+        None,
+        "--attest",
         help=(
             "Embed an in-toto Statement JSON into the can manifest (v3, "
             "repeatable). Each file is shape-validated. v0.71.3."
@@ -79,16 +87,21 @@ def pack_cmd(
     attestations = _load_attestation_files(attest)
     try:
         path = pack_entry(
-            entry_id=entry_id, out_path=out, author=author,
+            entry_id=entry_id,
+            out_path=out,
+            author=author,
             description=description or None,
             attestations=attestations,
         )
     except (ValueError, FileNotFoundError) as exc:
         _fail(str(exc))
-    console.print(Panel(
-        f"Packed [cyan]{for_terminal(entry_id)}[/] -> [bold]{for_terminal(str(path))}[/]",
-        title="Soup Can", border_style="green",
-    ))
+    console.print(
+        Panel(
+            f"Packed [cyan]{for_terminal(entry_id)}[/] -> [bold]{for_terminal(str(path))}[/]",
+            title="Soup Can",
+            border_style="green",
+        )
+    )
 
 
 @app.command(name="inspect")
@@ -141,19 +154,24 @@ def verify_cmd(
 def run_cmd(
     can_path: str = typer.Argument(..., help="Path to .can file"),
     yes: bool = typer.Option(
-        False, "--yes", "-y",
+        False,
+        "--yes",
+        "-y",
         help="Skip the security confirmation panel (auto-trains, auto-fetches data)",
     ),
     deploy: bool = typer.Option(
-        False, "--deploy",
+        False,
+        "--deploy",
         help="Run the can's deploy_targets after a successful train",
     ),
     extract_dir: Optional[str] = typer.Option(
-        None, "--extract-dir",
+        None,
+        "--extract-dir",
         help="Where to extract (default: fresh tmp dir)",
     ),
     env_capture: Optional[str] = typer.Option(
-        None, "--env-capture",
+        None,
+        "--env-capture",
         help="Write env summary (pip freeze + GPU info) to this path",
     ),
 ) -> None:
@@ -163,26 +181,33 @@ def run_cmd(
     if not yes:
         try:
             from soup_cli.cans.unpack import inspect_can
+
             manifest = inspect_can(can_path)
         except (FileNotFoundError, ValueError) as exc:
             _fail(str(exc))
-        console.print(Panel(
-            "[yellow]`soup can run` will:[/]\n"
-            "  - Extract the can\n"
-            "  - Auto-fetch any data referenced inside\n"
-            "  - Run [bold]soup train[/] against the embedded config\n\n"
-            f"Recipe: [bold]{for_terminal(manifest.name)}[/]\n"
-            f"Author: {for_terminal(manifest.author)}\n\n"
-            "Pass [bold]--yes[/] to confirm.",
-            title="Run can - confirm", border_style="yellow",
-        ))
+        console.print(
+            Panel(
+                "[yellow]`soup can run` will:[/]\n"
+                "  - Extract the can\n"
+                "  - Auto-fetch any data referenced inside\n"
+                "  - Run [bold]soup train[/] against the embedded config\n\n"
+                f"Recipe: [bold]{for_terminal(manifest.name)}[/]\n"
+                f"Author: {for_terminal(manifest.author)}\n\n"
+                "Pass [bold]--yes[/] to confirm.",
+                title="Run can - confirm",
+                border_style="yellow",
+            )
+        )
         raise typer.Exit(1)
 
     result = None
     try:
         result = run_can(
-            can_path, yes=True, deploy=deploy,
-            extract_dir=extract_dir, capture_env_to=env_capture,
+            can_path,
+            yes=True,
+            deploy=deploy,
+            extract_dir=extract_dir,
+            capture_env_to=env_capture,
         )
     except (ValueError, FileNotFoundError) as exc:
         _fail(str(exc))
@@ -199,9 +224,7 @@ def run_cmd(
         )
         raise typer.Exit(result.train_returncode)
     if result.deploy_returncode is not None and result.deploy_returncode != 0:
-        console.print(
-            f"[red]deploy failed (rc={result.deploy_returncode})[/]"
-        )
+        console.print(f"[red]deploy failed (rc={result.deploy_returncode})[/]")
         raise typer.Exit(result.deploy_returncode)
     console.print(
         f"[green]Can run complete[/] - extract dir: "
@@ -213,12 +236,15 @@ def run_cmd(
 def publish_cmd(
     can_path: str = typer.Argument(..., help="Path to .can file"),
     hf_hub: str = typer.Option(
-        ..., "--hf-hub",
+        ...,
+        "--hf-hub",
         help="HF Hub dataset repo (e.g. 'me/my-recipe-can')",
     ),
     private: bool = typer.Option(False, "--private"),
     commit_message: Optional[str] = typer.Option(
-        None, "--message", "-m",
+        None,
+        "--message",
+        "-m",
         help="Commit message (first line only, capped at 200 chars)",
     ),
 ) -> None:
@@ -244,7 +270,9 @@ def fork_cmd(
     source: str = typer.Argument(..., help="Source .can path"),
     out: str = typer.Option(..., "--out", "-o", help="Output forked .can path"),
     modify: list[str] = typer.Option(
-        [], "--modify", help="Modification like 'training.lr=5e-5' (repeatable)",
+        [],
+        "--modify",
+        help="Modification like 'training.lr=5e-5' (repeatable)",
     ),
     author: str = typer.Option("unknown", "--author"),
 ) -> None:
@@ -253,11 +281,11 @@ def fork_cmd(
 
     try:
         path = fork_can(
-            source=source, out_path=out, modifications=list(modify),
+            source=source,
+            out_path=out,
+            modifications=list(modify),
             author=author,
         )
     except (ValueError, FileNotFoundError) as exc:
         _fail(str(exc))
-    console.print(
-        f"[green]Forked[/] -> [bold]{for_terminal(str(path))}[/]"
-    )
+    console.print(f"[green]Forked[/] -> [bold]{for_terminal(str(path))}[/]")

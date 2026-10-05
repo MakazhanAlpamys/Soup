@@ -4,6 +4,7 @@ Covers SCOPE/CJE-style bidirectional pairwise judging, position-bias offset
 fitting, and conformal abstention thresholds. Refusal to use uncalibrated
 judges in production scoring is wired through a runtime gate.
 """
+
 from __future__ import annotations
 
 import math
@@ -29,7 +30,10 @@ from soup_cli.eval.calibrate import (
 class TestPairwiseJudgement:
     def test_frozen(self):
         j = PairwiseJudgement(
-            prompt_id="p1", first_winner="a", second_winner="a", oracle="a",
+            prompt_id="p1",
+            first_winner="a",
+            second_winner="a",
+            oracle="a",
         )
         with pytest.raises(Exception):
             j.first_winner = "b"  # type: ignore[misc]
@@ -37,36 +41,54 @@ class TestPairwiseJudgement:
     def test_invalid_winner_first(self):
         with pytest.raises(ValueError, match="first_winner"):
             PairwiseJudgement(
-                prompt_id="p", first_winner="X", second_winner="a", oracle="a",
+                prompt_id="p",
+                first_winner="X",
+                second_winner="a",
+                oracle="a",
             )
 
     def test_invalid_winner_second(self):
         with pytest.raises(ValueError, match="second_winner"):
             PairwiseJudgement(
-                prompt_id="p", first_winner="a", second_winner="Z", oracle="a",
+                prompt_id="p",
+                first_winner="a",
+                second_winner="Z",
+                oracle="a",
             )
 
     def test_invalid_oracle(self):
         with pytest.raises(ValueError, match="oracle"):
             PairwiseJudgement(
-                prompt_id="p", first_winner="a", second_winner="b", oracle="x",
+                prompt_id="p",
+                first_winner="a",
+                second_winner="b",
+                oracle="x",
             )
 
     def test_null_byte_prompt_id(self):
         with pytest.raises(ValueError, match="null"):
             PairwiseJudgement(
-                prompt_id="p\x00", first_winner="a", second_winner="b", oracle="a",
+                prompt_id="p\x00",
+                first_winner="a",
+                second_winner="b",
+                oracle="a",
             )
 
     def test_empty_prompt_id(self):
         with pytest.raises(ValueError, match="prompt_id"):
             PairwiseJudgement(
-                prompt_id="", first_winner="a", second_winner="a", oracle="a",
+                prompt_id="",
+                first_winner="a",
+                second_winner="a",
+                oracle="a",
             )
 
     def test_accepts_tie(self):
         j = PairwiseJudgement(
-            prompt_id="p", first_winner="tie", second_winner="tie", oracle="tie",
+            prompt_id="p",
+            first_winner="tie",
+            second_winner="tie",
+            oracle="tie",
         )
         assert j.first_winner == "tie"
 
@@ -77,8 +99,7 @@ class TestPairwiseJudgement:
 class TestFitPositionBias:
     def test_no_bias_when_consistent(self):
         judgements = [
-            PairwiseJudgement(prompt_id=f"p{i}", first_winner="a",
-                              second_winner="a", oracle="a")
+            PairwiseJudgement(prompt_id=f"p{i}", first_winner="a", second_winner="a", oracle="a")
             for i in range(10)
         ]
         bias = fit_position_bias(judgements)
@@ -91,12 +112,14 @@ class TestFitPositionBias:
         judgements = []
         for i in range(10):
             oracle = "a" if i % 2 == 0 else "b"
-            judgements.append(PairwiseJudgement(
-                prompt_id=f"p{i}",
-                first_winner="a",
-                second_winner="b",
-                oracle=oracle,
-            ))
+            judgements.append(
+                PairwiseJudgement(
+                    prompt_id=f"p{i}",
+                    first_winner="a",
+                    second_winner="b",
+                    oracle=oracle,
+                )
+            )
         bias = fit_position_bias(judgements)
         # judge always picks the first slot → strong positive position bias
         assert bias > 0.5
@@ -111,8 +134,7 @@ class TestFitPositionBias:
 
     def test_returns_finite(self):
         judgements = [
-            PairwiseJudgement(prompt_id=f"p{i}",
-                              first_winner="a", second_winner="b", oracle="a")
+            PairwiseJudgement(prompt_id=f"p{i}", first_winner="a", second_winner="b", oracle="a")
             for i in range(5)
         ]
         bias = fit_position_bias(judgements)
@@ -121,8 +143,7 @@ class TestFitPositionBias:
     def test_bias_in_range(self):
         # Position-bias coefficient should be in [-1, 1].
         judgements = [
-            PairwiseJudgement(prompt_id=f"p{i}",
-                              first_winner="a", second_winner="b", oracle="a")
+            PairwiseJudgement(prompt_id=f"p{i}", first_winner="a", second_winner="b", oracle="a")
             for i in range(10)
         ]
         bias = fit_position_bias(judgements)
@@ -267,9 +288,12 @@ class TestRunPairwiseCalibration:
     def test_perfect_calibration(self):
         judgements = [
             PairwiseJudgement(
-                prompt_id=f"p{i}", first_winner="a",
-                second_winner="a", oracle="a",
-            ) for i in range(10)
+                prompt_id=f"p{i}",
+                first_winner="a",
+                second_winner="a",
+                oracle="a",
+            )
+            for i in range(10)
         ]
         scores = [0.9] * 10
         report = run_pairwise_calibration(judgements, scores=scores, alpha=0.1)
@@ -280,9 +304,12 @@ class TestRunPairwiseCalibration:
     def test_returns_report(self):
         judgements = [
             PairwiseJudgement(
-                prompt_id=f"p{i}", first_winner="a",
-                second_winner="a", oracle="a",
-            ) for i in range(20)
+                prompt_id=f"p{i}",
+                first_winner="a",
+                second_winner="a",
+                oracle="a",
+            )
+            for i in range(20)
         ]
         scores = [0.5 + i * 0.02 for i in range(20)]
         r = run_pairwise_calibration(judgements, scores=scores, alpha=0.1)
@@ -291,8 +318,10 @@ class TestRunPairwiseCalibration:
     def test_length_mismatch(self):
         judgements = [
             PairwiseJudgement(
-                prompt_id="p", first_winner="a",
-                second_winner="a", oracle="a",
+                prompt_id="p",
+                first_winner="a",
+                second_winner="a",
+                oracle="a",
             )
         ]
         with pytest.raises(ValueError, match="length"):
@@ -306,9 +335,12 @@ class TestRunPairwiseCalibration:
     def test_too_many_pairs(self):
         judgements = [
             PairwiseJudgement(
-                prompt_id=f"p{i}", first_winner="a",
-                second_winner="a", oracle="a",
-            ) for i in range(50_001)
+                prompt_id=f"p{i}",
+                first_winner="a",
+                second_winner="a",
+                oracle="a",
+            )
+            for i in range(50_001)
         ]
         scores = [0.5] * 50_001
         with pytest.raises(ValueError, match="cap"):
@@ -321,16 +353,22 @@ class TestRunPairwiseCalibration:
 class TestEnsureJudgeCalibrated:
     def test_passes_calibrated(self):
         r = JudgeCalibrationReport(
-            position_bias=0.05, conformal_threshold=0.3,
-            agreement_rate=0.85, num_pairs=20, calibrated=True,
+            position_bias=0.05,
+            conformal_threshold=0.3,
+            agreement_rate=0.85,
+            num_pairs=20,
+            calibrated=True,
         )
         # Should not raise.
         ensure_judge_calibrated(r)
 
     def test_refuses_uncalibrated(self):
         r = JudgeCalibrationReport(
-            position_bias=0.05, conformal_threshold=0.3,
-            agreement_rate=0.85, num_pairs=20, calibrated=False,
+            position_bias=0.05,
+            conformal_threshold=0.3,
+            agreement_rate=0.85,
+            num_pairs=20,
+            calibrated=False,
         )
         with pytest.raises(RuntimeError, match="calibrat"):
             ensure_judge_calibrated(r)
@@ -341,16 +379,22 @@ class TestEnsureJudgeCalibrated:
 
     def test_refuses_low_agreement(self):
         r = JudgeCalibrationReport(
-            position_bias=0.0, conformal_threshold=0.3,
-            agreement_rate=0.5, num_pairs=20, calibrated=True,
+            position_bias=0.0,
+            conformal_threshold=0.3,
+            agreement_rate=0.5,
+            num_pairs=20,
+            calibrated=True,
         )
         with pytest.raises(RuntimeError, match="agreement"):
             ensure_judge_calibrated(r, min_agreement=0.7)
 
     def test_refuses_high_bias(self):
         r = JudgeCalibrationReport(
-            position_bias=0.4, conformal_threshold=0.3,
-            agreement_rate=0.9, num_pairs=20, calibrated=True,
+            position_bias=0.4,
+            conformal_threshold=0.3,
+            agreement_rate=0.9,
+            num_pairs=20,
+            calibrated=True,
         )
         with pytest.raises(RuntimeError, match="bias"):
             ensure_judge_calibrated(r, max_bias=0.2)
@@ -379,6 +423,7 @@ class TestBackCompat:
 class TestSourceWiring:
     def test_no_heavy_imports(self):
         from pathlib import Path
+
         src = Path(__file__).resolve().parent.parent / "src" / "soup_cli" / "eval" / "calibrate.py"
         text = src.read_text(encoding="utf-8")
         # Should not import torch, transformers, peft at module scope.

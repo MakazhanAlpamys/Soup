@@ -32,13 +32,10 @@ class SpikeRecoveryStrategy:
     def __post_init__(self) -> None:
         if not (1 <= self.max_attempts <= MAX_ATTEMPTS_CAP):
             raise ValueError(
-                f"max_attempts must be in [1, {MAX_ATTEMPTS_CAP}], "
-                f"got {self.max_attempts}"
+                f"max_attempts must be in [1, {MAX_ATTEMPTS_CAP}], got {self.max_attempts}"
             )
         if not (0 < self.lr_decay < 1):
-            raise ValueError(
-                f"lr_decay must be in (0, 1), got {self.lr_decay}"
-            )
+            raise ValueError(f"lr_decay must be in (0, 1), got {self.lr_decay}")
         if self.min_lr <= 0:
             raise ValueError(f"min_lr must be > 0, got {self.min_lr}")
 

@@ -40,14 +40,12 @@ def validate_galore_config(
 
     if quantization in ("4bit", "8bit"):
         errors.append(
-            "GaLore is incompatible with quantization. "
-            "Set quantization: none when using GaLore."
+            "GaLore is incompatible with quantization. Set quantization: none when using GaLore."
         )
 
     if backend == "unsloth":
         errors.append(
-            "GaLore is not compatible with the unsloth backend. "
-            "Use backend: transformers."
+            "GaLore is not compatible with the unsloth backend. Use backend: transformers."
         )
 
     return errors

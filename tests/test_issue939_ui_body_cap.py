@@ -8,6 +8,7 @@ import pytest
 def _auth_headers():
     """Return auth headers with the current UI token."""
     from soup_cli.ui.app import get_auth_token
+
     return {"Authorization": f"Bearer {get_auth_token()}"}
 
 
@@ -116,9 +117,7 @@ def test_oversized_content_length_rejects_without_reading_body() -> None:
         "path": "/api/data/inspect",
         "headers": [(b"content-length", b"6")],
     }
-    middleware = _RequestBodySizeLimitMiddleware(
-        downstream, limits={"/api/data/inspect": 5}
-    )
+    middleware = _RequestBodySizeLimitMiddleware(downstream, limits={"/api/data/inspect": 5})
 
     asyncio.run(middleware(scope, receive, send))
 
@@ -146,9 +145,7 @@ def test_malformed_content_length_falls_through_to_stream_check() -> None:
         "path": "/api/data/inspect",
         "headers": [(b"content-length", b"not-a-number")],
     }
-    middleware = _RequestBodySizeLimitMiddleware(
-        downstream, limits={"/api/data/inspect": 5}
-    )
+    middleware = _RequestBodySizeLimitMiddleware(downstream, limits={"/api/data/inspect": 5})
 
     asyncio.run(middleware(scope, receive, send))
 
@@ -161,10 +158,12 @@ def test_body_cap_counts_chunks_when_content_length_is_understated() -> None:
 
     sent: list[dict] = []
     downstream_called = False
-    chunks = iter([
-        {"type": "http.request", "body": b"1234", "more_body": True},
-        {"type": "http.request", "body": b"5678", "more_body": False},
-    ])
+    chunks = iter(
+        [
+            {"type": "http.request", "body": b"1234", "more_body": True},
+            {"type": "http.request", "body": b"5678", "more_body": False},
+        ]
+    )
 
     async def receive() -> dict:
         return next(chunks)
@@ -182,9 +181,7 @@ def test_body_cap_counts_chunks_when_content_length_is_understated() -> None:
         "path": "/api/chat/send",
         "headers": [(b"content-length", b"1")],
     }
-    middleware = _RequestBodySizeLimitMiddleware(
-        downstream, limits={"/api/chat/send": 5}
-    )
+    middleware = _RequestBodySizeLimitMiddleware(downstream, limits={"/api/chat/send": 5})
 
     asyncio.run(middleware(scope, receive, send))
 

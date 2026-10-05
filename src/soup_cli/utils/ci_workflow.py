@@ -127,9 +127,7 @@ def _validate_path(value: str, field: str) -> str:
     # single-line `run:` plain scalar (chaining a command or truncating the
     # step); reject them all up front. See _FORBIDDEN_PATH_CHARS.
     if any(ch in value for ch in _FORBIDDEN_PATH_CHARS):
-        raise ValueError(
-            f"{field} must be a single line and must not contain '#'"
-        )
+        raise ValueError(f"{field} must be a single line and must not contain '#'")
     if len(value) > _MAX_PATH_LEN:
         raise ValueError(f"{field} exceeds {_MAX_PATH_LEN} characters")
     if not is_under_cwd(value):

@@ -51,13 +51,20 @@ def test_resolve_step_counts_matches_the_recorded_wrapper_arithmetic(inputs, exp
 
 @pytest.mark.parametrize(("inputs", "expected"), _CASES)
 def test_resolve_step_counts_matches_what_the_wrapper_hands_mlx_lm(
-    tmp_path, monkeypatch, inputs, expected,
+    tmp_path,
+    monkeypatch,
+    inputs,
+    expected,
 ):
     rows, epochs, batch_size, accum = inputs
     captured = _install_fake_mlx(monkeypatch)
     wrapper = _mlx_wrapper(
-        tmp_path, train_row_count=rows, epochs=epochs, lr=1e-4,
-        batch_size=batch_size, gradient_accumulation_steps=accum,
+        tmp_path,
+        train_row_count=rows,
+        epochs=epochs,
+        lr=1e-4,
+        batch_size=batch_size,
+        gradient_accumulation_steps=accum,
     )
 
     wrapper.train()

@@ -42,10 +42,8 @@ _UNHONOURED = sorted(_MINIMAL)
 def _yaml(task, training_extra="", *, base="org/model"):
     data_extra, training = _MINIMAL[task]
     body = training + training_extra
-    return (
-        f"base: {base}\ntask: {task}\n"
-        f"data:\n  train: x.jsonl\n{data_extra}"
-        + (f"training:\n{body}" if body else "")
+    return f"base: {base}\ntask: {task}\ndata:\n  train: x.jsonl\n{data_extra}" + (
+        f"training:\n{body}" if body else ""
     )
 
 
@@ -147,7 +145,6 @@ class TestAnExplicitBnbValueWarnsAndResolves:
 
 
 class TestAnExplicitValueIsRefused:
-
     @pytest.mark.parametrize("task", ["prm", "distill"])
     def test_a_quant_menu_value_is_refused_too(self, task):
         with pytest.raises(ValueError, match=f"task='{task}'"):
@@ -303,8 +300,12 @@ class TestShippedConfigs:
         from soup_cli.commands.draft import _build_distill_config_yaml
 
         text = _build_distill_config_yaml(
-            draft_base="org/draft", target="org/target", data="d.jsonl",
-            out_dir="out", steps=10, data_rows=100,
+            draft_base="org/draft",
+            target="org/target",
+            data="d.jsonl",
+            out_dir="out",
+            steps=10,
+            data_rows=100,
         )
         assert load_config_from_string(text).training.quantization == "none"
 
@@ -313,8 +314,12 @@ class TestShippedConfigs:
         from soup_cli.commands.shrink import _build_heal_config_yaml
 
         text = _build_heal_config_yaml(
-            pruned_dir="pruned", teacher="org/teacher", heal_data="h.jsonl",
-            steps=10, out_dir="out", heal_rows=100,
+            pruned_dir="pruned",
+            teacher="org/teacher",
+            heal_data="h.jsonl",
+            steps=10,
+            out_dir="out",
+            heal_rows=100,
         )
         assert "quantization" not in text
         assert load_config_from_string(text).training.quantization == "none"

@@ -44,6 +44,7 @@ from soup_cli.utils.tool_outputs import (
 
 # --- tail_latency -----------------------------------------------------------
 
+
 def test_update_ema_initialises_with_first_sample():
     assert update_ema(None, 5.0, 0.1) == 5.0
 
@@ -111,6 +112,7 @@ def test_summarise_latency_basic():
 
 # --- gpu_monitor ------------------------------------------------------------
 
+
 def test_parse_nvidia_smi_csv_happy_path():
     text = (
         "0, NVIDIA RTX 4090, 87, 12, 8192, 24576, 65, 320.5\n"
@@ -160,6 +162,7 @@ def test_parse_nvidia_smi_csv_type_check():
 
 # --- sse_train_stream -------------------------------------------------------
 
+
 def test_train_event_default_ts_is_now():
     event = TrainEvent(type="metric")
     assert abs(event.ts - time.time()) < 5
@@ -191,11 +194,12 @@ def test_format_sse_frame_shape():
     frame = format_sse_frame(event)
     assert frame.startswith("data: ")
     assert frame.endswith("\n\n")
-    body = frame[len("data: "):].strip()
+    body = frame[len("data: ") :].strip()
     assert json.loads(body) == {"type": "status", "ts": 1.0, "message": "ok"}
 
 
 # --- qr_url ------------------------------------------------------------------
+
 
 def test_validate_token_happy():
     validate_token("aBcDeFgHiJkLmNoP")  # 16 chars
@@ -244,20 +248,14 @@ def test_build_phone_url_https_lan_ok():
 
 def test_build_phone_url_invalid_port():
     with pytest.raises(ValueError):
-        build_phone_url(
-            scheme="https", host="x", port=0, token="x" * 32
-        )
+        build_phone_url(scheme="https", host="x", port=0, token="x" * 32)
     with pytest.raises(ValueError):
-        build_phone_url(
-            scheme="https", host="x", port=True, token="x" * 32
-        )  # type: ignore[arg-type]
+        build_phone_url(scheme="https", host="x", port=True, token="x" * 32)  # type: ignore[arg-type]
 
 
 def test_build_phone_url_invalid_scheme():
     with pytest.raises(ValueError):
-        build_phone_url(
-            scheme="ftp", host="x", port=80, token="x" * 32
-        )
+        build_phone_url(scheme="ftp", host="x", port=80, token="x" * 32)
 
 
 def test_render_qr_ascii_returns_none_or_string():
@@ -272,6 +270,7 @@ def test_render_qr_ascii_rejects_empty():
 
 
 # --- llama_server_timings ---------------------------------------------------
+
 
 def test_parse_timings_happy_path():
     payload = {
@@ -293,9 +292,7 @@ def test_parse_timings_happy_path():
 
 def test_parse_timings_missing_fields():
     timings = parse_timings({})
-    assert timings == LlamaServerTimings(
-        None, None, None, None, None, None, None, None, None
-    )
+    assert timings == LlamaServerTimings(None, None, None, None, None, None, None, None, None)
 
 
 def test_parse_timings_rejects_non_dict():
@@ -331,6 +328,7 @@ def test_format_kv_bar_invalid_width():
 
 
 # --- tool_outputs -----------------------------------------------------------
+
 
 def test_tool_outputs_buffer_records():
     buffer = ToolOutputsBuffer()

@@ -37,9 +37,7 @@ import yaml
 
 from soup_cli.recipes.catalog import RECIPES
 
-_FIXTURE_PATH = (
-    Path(__file__).resolve().parent / "fixtures" / "recipe_base_architectures.json"
-)
+_FIXTURE_PATH = Path(__file__).resolve().parent / "fixtures" / "recipe_base_architectures.json"
 
 #: Bases that have no safetensors metadata on the Hugging Face Hub.
 EXCLUDED_SIZE_BASES = {
@@ -120,18 +118,26 @@ def test_every_recipe_label_matches_its_base():
     problems, checked = size_problems(RECIPES, _load_base_architectures())
     assert problems == [], "\n".join(problems)
     excluded = sum(
-        1 for m in RECIPES.values()
+        1
+        for m in RECIPES.values()
         if (yaml.safe_load(m.yaml_str) or {}).get("base") in EXCLUDED_SIZE_BASES
     )
     na_count = sum(1 for m in RECIPES.values() if m.size == "N/A")
     assert checked + excluded + na_count == len(RECIPES)
 
 
-@pytest.mark.parametrize(("name", "old_label"), [
-    ("glm-4.6-sft", "9B"), ("glm-5-sft", "9B"), ("minimax-m2-sft", "9B"),
-    ("deepseek-v3-7b-sft", "7B"), ("voxtral-sft", "3B"), ("llama4-scout-17b-sft", "17B"),
-    ("qwen2.5-7b-sft", "10B"),  # overstated: the upper bound has to bite too
-])
+@pytest.mark.parametrize(
+    ("name", "old_label"),
+    [
+        ("glm-4.6-sft", "9B"),
+        ("glm-5-sft", "9B"),
+        ("minimax-m2-sft", "9B"),
+        ("deepseek-v3-7b-sft", "7B"),
+        ("voxtral-sft", "3B"),
+        ("llama4-scout-17b-sft", "17B"),
+        ("qwen2.5-7b-sft", "10B"),  # overstated: the upper bound has to bite too
+    ],
+)
 def test_the_real_check_rejects_the_old_label(name, old_label):
     mutated = {**RECIPES, name: dataclasses.replace(RECIPES[name], size=old_label)}
     problems, _ = size_problems(mutated, _load_base_architectures())

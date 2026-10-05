@@ -61,9 +61,7 @@ def _scaled_lora_add(out: Any, hidden: Any, lora_b: Any, scaling: float) -> Any:
 
     lora_term = torch.matmul(hidden, lora_b.t())
     promoted = torch.promote_types(out.dtype, lora_term.dtype)
-    return torch.add(
-        out.to(promoted), lora_term.to(promoted), alpha=float(scaling)
-    ).to(out.dtype)
+    return torch.add(out.to(promoted), lora_term.to(promoted), alpha=float(scaling)).to(out.dtype)
 
 
 def _flatten(tensor: Any) -> Any:
@@ -367,9 +365,7 @@ def _single_projection_function() -> Any:
                 grad_x = torch.matmul(grad_out, _as_dtype(dense, grad_out.dtype))
                 grad_x = torch.add(
                     grad_x,
-                    torch.matmul(
-                        _as_dtype(grad_h, grad_x.dtype), _as_dtype(lora_a, grad_x.dtype)
-                    ),
+                    torch.matmul(_as_dtype(grad_h, grad_x.dtype), _as_dtype(lora_a, grad_x.dtype)),
                 )
             return grad_x, None, None, grad_a, grad_b, None, None
 

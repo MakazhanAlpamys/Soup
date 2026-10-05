@@ -94,8 +94,16 @@ def _infer_env(monkeypatch, tmp_path, prompts, generate):
 
 
 def _infer_args(model_dir, *extra):
-    return ["infer", "--model", str(model_dir), "--input", "prompts.txt",
-            "--output", "output.jsonl", *extra]
+    return [
+        "infer",
+        "--model",
+        str(model_dir),
+        "--input",
+        "prompts.txt",
+        "--output",
+        "output.jsonl",
+        *extra,
+    ]
 
 
 @pytest.mark.parametrize("command", ["infer", "bench"])
@@ -126,8 +134,18 @@ def test_cuda_graphs_reject_asr_before_loading(monkeypatch, tmp_path):
     monkeypatch.setattr(infer, "_infer_asr", load)
     result = CliRunner().invoke(
         app,
-        ["infer", "--model", ".", "--task", "asr", "--input", "audio.jsonl",
-         "--output", "output.jsonl", "--cuda-graphs"],
+        [
+            "infer",
+            "--model",
+            ".",
+            "--task",
+            "asr",
+            "--input",
+            "audio.jsonl",
+            "--output",
+            "output.jsonl",
+            "--cuda-graphs",
+        ],
     )
     assert result.exit_code == 2
     assert "text generation only" in _plain(result.output)
@@ -154,8 +172,16 @@ def test_unsupported_graph_model_preserves_existing_output(monkeypatch, tmp_path
     monkeypatch.setattr(infer, "_generate", generate)
     result = CliRunner().invoke(
         app,
-        ["infer", "--model", str(model_dir), "--input", "prompts.txt",
-         "--output", str(output), "--cuda-graphs"],
+        [
+            "infer",
+            "--model",
+            str(model_dir),
+            "--input",
+            "prompts.txt",
+            "--output",
+            str(output),
+            "--cuda-graphs",
+        ],
     )
     assert result.exit_code == 1
     assert "Unsupported model for CUDA graphs" in _plain(result.output)
@@ -278,8 +304,16 @@ def test_warm_up_picks_the_prompt_with_the_most_tokens_not_characters(monkeypatc
 
 
 def _bench_args(model_dir, *extra):
-    return ["bench", "infer", str(model_dir), "--prompts-file", "prompts.txt",
-            "--max-tokens", "64", *extra]
+    return [
+        "bench",
+        "infer",
+        str(model_dir),
+        "--prompts-file",
+        "prompts.txt",
+        "--max-tokens",
+        "64",
+        *extra,
+    ]
 
 
 def test_bench_warms_on_the_longest_prompt_at_the_timed_length(monkeypatch, tmp_path):
@@ -327,8 +361,13 @@ def test_the_hint_is_not_repeated_when_the_refusal_already_carries_it(monkeypatc
     infer._generate.assert_not_called()
 
 
-@pytest.mark.parametrize("error", [TypeError("cudagraphify() got an unexpected keyword"),
-                                   AssertionError("cudagraph tree invariant")])
+@pytest.mark.parametrize(
+    "error",
+    [
+        TypeError("cudagraphify() got an unexpected keyword"),
+        AssertionError("cudagraph tree invariant"),
+    ],
+)
 def test_any_error_in_the_warm_up_is_a_named_failure(monkeypatch, tmp_path, error):
     from soup_cli.cli import app
 

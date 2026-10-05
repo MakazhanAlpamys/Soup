@@ -28,9 +28,7 @@ def _path_like_fields() -> set[str]:
         for name, info in model.model_fields.items():
             ann = info.annotation
             subs = [
-                a
-                for a in typing.get_args(ann)
-                if isinstance(a, type) and issubclass(a, BaseModel)
+                a for a in typing.get_args(ann) if isinstance(a, type) and issubclass(a, BaseModel)
             ]
             if isinstance(ann, type) and issubclass(ann, BaseModel):
                 subs.append(ann)
@@ -183,14 +181,11 @@ def test_forget_set_change_refused(project):
 def test_absent_input_created_after_plan_refused(project):
     _write_config(
         project,
-        "base: Qwen/Qwen2.5-0.5B\ntask: sft\ndata:\n  train: data.jsonl\n"
-        "  replay: later.jsonl\n",
+        "base: Qwen/Qwen2.5-0.5B\ntask: sft\ndata:\n  train: data.jsonl\n  replay: later.jsonl\n",
     )
     manager = ExecutionManager()
     token = _plan(manager)
-    (project / "later.jsonl").write_text(
-        '{"instruction": "x", "output": "y"}\n', encoding="utf-8"
-    )
+    (project / "later.jsonl").write_text('{"instruction": "x", "output": "y"}\n', encoding="utf-8")
     _assert_refused(manager, token)
 
 
@@ -217,8 +212,7 @@ def test_existing_input_outside_cwd_refused_at_plan(tmp_path, monkeypatch):
     monkeypatch.chdir(proj)
     _write_config(
         proj,
-        "base: Qwen/Qwen2.5-0.5B\ntask: sft\ndata:\n"
-        f"  train: '{data.as_posix()}'\n",
+        f"base: Qwen/Qwen2.5-0.5B\ntask: sft\ndata:\n  train: '{data.as_posix()}'\n",
     )
     manager = ExecutionManager()
     specs = reg.build_registry(allow_mutating=False, allow_execute=True, execution=manager)

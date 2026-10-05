@@ -50,7 +50,7 @@ def test_serve_has_no_stub_picker_or_quantization_forwarding() -> None:
     source = inspect.getsource(serve)
     assert "run_auto_quant_picker" not in source
     assert "quant_name_to_vllm_kwargs" not in source
-    assert "return (\"\", True)" not in source
+    assert 'return ("", True)' not in source
     assert "quantization=None" in source
 
 

@@ -105,9 +105,25 @@ class TestMath:
 
         def call(x_, ag_, bgl_, au_, bul_, ad_, bdl_):
             return fn.apply(
-                x_, wg, bg, wu, bu, wd, bd,
-                ag_, bgl_, au_, bul_, ad_, bdl_,
-                1.7, 0.8, 2.1, None, None, None,
+                x_,
+                wg,
+                bg,
+                wu,
+                bu,
+                wd,
+                bd,
+                ag_,
+                bgl_,
+                au_,
+                bul_,
+                ad_,
+                bdl_,
+                1.7,
+                0.8,
+                2.1,
+                None,
+                None,
+                None,
             )
 
         assert torch.autograd.gradcheck(
@@ -153,14 +169,22 @@ class TestMath:
                     adapters.extend((next(values), next(values)))
             return _mlp_function().apply(
                 x_,
-                weights[0], biases[0], weights[1], biases[1], weights[2], biases[2],
+                weights[0],
+                biases[0],
+                weights[1],
+                biases[1],
+                weights[2],
+                biases[2],
                 *adapters,
-                1.7, 0.8, 2.1, None, None, None,
+                1.7,
+                0.8,
+                2.1,
+                None,
+                None,
+                None,
             )
 
-        assert torch.autograd.gradcheck(
-            call, (x, *active), eps=1e-6, atol=1e-5, rtol=1e-4
-        )
+        assert torch.autograd.gradcheck(call, (x, *active), eps=1e-6, atol=1e-5, rtol=1e-4)
 
     @pytest.mark.parametrize(
         "targets",
@@ -284,9 +308,7 @@ class TestPatching:
         _deps()
         from soup_cli.utils.fast_lora_mlp import patch_fast_lora_mlp
 
-        model = _make_model(
-            ("gate_proj", "up_proj"), modules_to_save=["down_proj"]
-        )
+        model = _make_model(("gate_proj", "up_proj"), modules_to_save=["down_proj"])
 
         assert hasattr(model.mlp.down_proj, "modules_to_save")
         assert patch_fast_lora_mlp(model) == 0
@@ -360,9 +382,7 @@ class TestFastPathAndScope:
             pytest.param(("up_proj",), None, id="up"),
             pytest.param(("down_proj",), None, id="down"),
             pytest.param(("gate_proj", "down_proj"), None, id="gate-down"),
-            pytest.param(
-                ("gate_proj", "up_proj", "down_proj"), None, id="all-equal-rank"
-            ),
+            pytest.param(("gate_proj", "up_proj", "down_proj"), None, id="all-equal-rank"),
             pytest.param(
                 ("gate_proj", "up_proj", "down_proj"),
                 {"gate_proj": 2, "up_proj": 3, "down_proj": 4},
@@ -541,13 +561,9 @@ class TestFastPathAndScope:
         )
         assert patch_fast_lora_mlp(model) == 0
 
-    @pytest.mark.parametrize(
-        "device", ["cpu", pytest.param("cuda", marks=pytest.mark.gpu)]
-    )
+    @pytest.mark.parametrize("device", ["cpu", pytest.param("cuda", marks=pytest.mark.gpu)])
     @pytest.mark.parametrize("seed", [3, 7, 11])
-    def test_nf4_forward_backward_and_all_adapter_grads_match_peft(
-        self, seed, device
-    ):
+    def test_nf4_forward_backward_and_all_adapter_grads_match_peft(self, seed, device):
         torch = _deps()
         bnb = pytest.importorskip("bitsandbytes")
         import torch.nn as nn
@@ -601,9 +617,7 @@ class TestFastPathAndScope:
             assert getattr(model.mlp, name).get_base_layer().weight.quant_state is not None
 
         reference_model = copy.deepcopy(model)
-        x_ref = torch.randn(
-            2, 3, 8, device=device, dtype=torch.bfloat16, requires_grad=True
-        )
+        x_ref = torch.randn(2, 3, 8, device=device, dtype=torch.bfloat16, requires_grad=True)
         reference = reference_model(x_ref)
         assert type(reference.grad_fn).__name__ != "_FastLoraSwiGLUBackward"
         reference.float().square().mean().backward()
@@ -615,37 +629,24 @@ class TestFastPathAndScope:
 
         def oracle_projection(layer, value, projection_name):
             base = layer.get_base_layer()
-            dense = bnb.functional.dequantize_4bit(
-                base.weight, base.weight.quant_state
-            ).double()
+            dense = bnb.functional.dequantize_4bit(base.weight, base.weight.quant_state).double()
             adapter = layer.active_adapters[0]
             lora_a = layer.lora_A[adapter].weight.detach().double().requires_grad_(True)
             lora_b = layer.lora_B[adapter].weight.detach().double().requires_grad_(True)
-            oracle_adapters[
-                f"mlp.{projection_name}.lora_A.{adapter}.weight"
-            ] = lora_a
-            oracle_adapters[
-                f"mlp.{projection_name}.lora_B.{adapter}.weight"
-            ] = lora_b
+            oracle_adapters[f"mlp.{projection_name}.lora_A.{adapter}.weight"] = lora_a
+            oracle_adapters[f"mlp.{projection_name}.lora_B.{adapter}.weight"] = lora_b
             base_out = torch.nn.functional.linear(value, dense)
-            lora_out = torch.nn.functional.linear(
-                torch.nn.functional.linear(value, lora_a), lora_b
-            )
+            lora_out = torch.nn.functional.linear(torch.nn.functional.linear(value, lora_a), lora_b)
             return base_out + lora_out * float(layer.scaling[adapter])
 
-        oracle_gate = oracle_projection(
-            reference_model.mlp.gate_proj, oracle_x, "gate_proj"
-        )
+        oracle_gate = oracle_projection(reference_model.mlp.gate_proj, oracle_x, "gate_proj")
         oracle_up = oracle_projection(reference_model.mlp.up_proj, oracle_x, "up_proj")
         oracle_hidden = torch.nn.functional.silu(oracle_gate) * oracle_up
-        oracle = oracle_projection(
-            reference_model.mlp.down_proj, oracle_hidden, "down_proj"
-        )
+        oracle = oracle_projection(reference_model.mlp.down_proj, oracle_hidden, "down_proj")
         oracle.square().mean().backward()
         oracle_x_grad = oracle_x.grad.detach()
         oracle_grads = {
-            name: parameter.grad.detach()
-            for name, parameter in oracle_adapters.items()
+            name: parameter.grad.detach() for name, parameter in oracle_adapters.items()
         }
 
         x = x_ref.detach().clone().requires_grad_(True)
@@ -660,33 +661,24 @@ class TestFastPathAndScope:
             actual_error = (actual.double() - oracle_value).abs().max().item()
             peft_error = (peft_value.double() - oracle_value).abs().max().item()
             ratio = (
-                actual_error / peft_error
-                if peft_error
-                else (float("inf") if actual_error else 0.0)
+                actual_error / peft_error if peft_error else (float("inf") if actual_error else 0.0)
             )
             measured_ratios.append((name, ratio))
             assert actual_error <= 2.0 * peft_error + 1e-8, (
-                f"{name}: kernel error {actual_error:.6g} exceeds twice "
-                f"peft error {peft_error:.6g}"
+                f"{name}: kernel error {actual_error:.6g} exceeds twice peft error {peft_error:.6g}"
             )
 
         assert_within_twice_peft_error(out, reference, oracle.detach(), "output")
-        assert_within_twice_peft_error(
-            x.grad, reference_x_grad, oracle_x_grad, "input gradient"
-        )
+        assert_within_twice_peft_error(x.grad, reference_x_grad, oracle_x_grad, "input gradient")
         got_grads = _adapter_grads(model)
         assert got_grads.keys() == reference_grads.keys()
         for name, grad in got_grads.items():
-            assert_within_twice_peft_error(
-                grad, reference_grads[name], oracle_grads[name], name
-            )
+            assert_within_twice_peft_error(grad, reference_grads[name], oracle_grads[name], name)
         print("#837 NF4 fast/PEFT error ratios: " + repr(measured_ratios))
 
 
 @pytest.mark.parametrize("seed", range(12))
-def test_bf16_mlp_stays_within_twice_pefts_error_against_float64(
-    seed, aten_half_matmuls
-):
+def test_bf16_mlp_stays_within_twice_pefts_error_against_float64(seed, aten_half_matmuls):
     torch = _deps()
     import torch.nn as nn
     from peft import LoraConfig, inject_adapter_in_model
@@ -736,11 +728,7 @@ def test_bf16_mlp_stays_within_twice_pefts_error_against_float64(
         x = x.clone().requires_grad_(True)
         out = module(x)
         out.double().square().mean().backward()
-        grads = [
-            param.grad
-            for name, param in sorted(module.named_parameters())
-            if "lora_" in name
-        ]
+        grads = [param.grad for name, param in sorted(module.named_parameters()) if "lora_" in name]
         result = [tensor.detach().double().clone() for tensor in (out, x.grad, *grads)]
         module.zero_grad(set_to_none=True)
         return result
@@ -751,15 +739,11 @@ def test_bf16_mlp_stays_within_twice_pefts_error_against_float64(
     fast = run(model, x0)
     for got, ref, exact in zip(fast, reference, oracle):
         assert (got - exact).abs().max() <= 2 * (ref - exact).abs().max() + 1e-8
-    assert (fast[0] - oracle[0]).abs().max() <= 1.05 * (
-        reference[0] - oracle[0]
-    ).abs().max() + 1e-8
+    assert (fast[0] - oracle[0]).abs().max() <= 1.05 * (reference[0] - oracle[0]).abs().max() + 1e-8
 
 
 class TestStreamedModel:
-    def test_mlp_kernel_matches_resident_peft_across_reused_stream_buffers(
-        self, tmp_path
-    ):
+    def test_mlp_kernel_matches_resident_peft_across_reused_stream_buffers(self, tmp_path):
         torch = _deps()
         pytest.importorskip("transformers")
         pytest.importorskip("safetensors")
@@ -1032,9 +1016,7 @@ class TestRealLlamaAndSavedBytes:
                     total += tensor.numel() * tensor.element_size()
                 return tensor
 
-            x = torch.empty(
-                1, 2048, 4096, device="meta", dtype=torch.bfloat16, requires_grad=True
-            )
+            x = torch.empty(1, 2048, 4096, device="meta", dtype=torch.bfloat16, requires_grad=True)
             with torch.autograd.graph.saved_tensors_hooks(pack, lambda tensor: tensor):
                 model(x).sum().backward()
             model.zero_grad(set_to_none=True)
@@ -1050,7 +1032,4 @@ class TestRealLlamaAndSavedBytes:
         # without allocating the roughly 584 MiB of saved state. The fused path
         # must eliminate at least two, but fewer than three, [N, f] tensors.
         assert 2 * n_f <= saved < 3 * n_f
-        print(
-            "#837 Llama-3.1-8B saved bytes: "
-            f"peft={peft_bytes} fast={fast_bytes} saved={saved}"
-        )
+        print(f"#837 Llama-3.1-8B saved bytes: peft={peft_bytes} fast={fast_bytes} saved={saved}")

@@ -13,6 +13,7 @@ the user explicitly enables it. Hardware-info-only payload schema lives in
 `build_telemetry_payload` for documentation/testing; no network calls in
 v0.43.0 (PostHog wire-up deferred to v0.43.1).
 """
+
 from __future__ import annotations
 
 import math
@@ -22,14 +23,16 @@ from types import MappingProxyType
 from typing import Mapping
 
 # Closed allowlist of report_to backends.
-_REPORT_TO_BACKENDS: Mapping[str, str | None] = MappingProxyType({
-    "none": None,
-    "wandb": "wandb",
-    "tensorboard": "tensorboard",
-    "mlflow": "mlflow",
-    "swanlab": "swanlab",
-    "trackio": "trackio",
-})
+_REPORT_TO_BACKENDS: Mapping[str, str | None] = MappingProxyType(
+    {
+        "none": None,
+        "wandb": "wandb",
+        "tensorboard": "tensorboard",
+        "mlflow": "mlflow",
+        "swanlab": "swanlab",
+        "trackio": "trackio",
+    }
+)
 
 SUPPORTED_TRACKERS = frozenset(_REPORT_TO_BACKENDS.keys())
 
@@ -52,15 +55,11 @@ def validate_tracker_name(name: object) -> str:
     if "\x00" in name:
         raise ValueError("tracker name must not contain null bytes")
     if len(name) > _MAX_NAME_LEN:
-        raise ValueError(
-            f"tracker name length {len(name)} exceeds max {_MAX_NAME_LEN}"
-        )
+        raise ValueError(f"tracker name length {len(name)} exceeds max {_MAX_NAME_LEN}")
     canonical = name.lower()
     if canonical not in SUPPORTED_TRACKERS:
         supported = ", ".join(sorted(SUPPORTED_TRACKERS))
-        raise ValueError(
-            f"unknown tracker '{name}'. Supported: {supported}"
-        )
+        raise ValueError(f"unknown tracker '{name}'. Supported: {supported}")
     return canonical
 
 
@@ -169,9 +168,7 @@ def build_telemetry_payload(
         raise ValueError("command must not contain null bytes")
     if duration_seconds is not None:
         # bool is a subclass of int — reject explicitly (project policy)
-        if isinstance(duration_seconds, bool) or not isinstance(
-            duration_seconds, (int, float)
-        ):
+        if isinstance(duration_seconds, bool) or not isinstance(duration_seconds, (int, float)):
             raise ValueError("duration_seconds must be int / float / None")
         if not math.isfinite(float(duration_seconds)):
             raise ValueError("duration_seconds must be finite")
@@ -195,9 +192,7 @@ def build_telemetry_payload(
         "python": py_major_minor,
         "os": platform.system(),
         "arch": platform.machine(),
-        "duration_seconds": (
-            float(duration_seconds) if duration_seconds is not None else None
-        ),
+        "duration_seconds": (float(duration_seconds) if duration_seconds is not None else None),
         "distinct_id": resolved_distinct_id,
     }
 
@@ -291,15 +286,17 @@ _INTERNAL_TLD_SUFFIXES: tuple[str, ...] = (
     ".intranet",
 )
 
-_INTERNAL_TLD_EXACT: frozenset[str] = frozenset({
-    "local",
-    "internal",
-    "localhost",
-    "lan",
-    "home",
-    "corp",
-    "intranet",
-})
+_INTERNAL_TLD_EXACT: frozenset[str] = frozenset(
+    {
+        "local",
+        "internal",
+        "localhost",
+        "lan",
+        "home",
+        "corp",
+        "intranet",
+    }
+)
 
 
 def _is_trusted_posthog_domain(host: str) -> bool:
@@ -463,9 +460,7 @@ def send_telemetry_payload(
         import json  # noqa: PLC0415
         from urllib import request  # noqa: PLC0415
 
-        encoded = json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode(
-            "utf-8"
-        )
+        encoded = json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         req = request.Request(
             endpoint,
             data=encoded,
@@ -553,9 +548,7 @@ def resolve_report_to(
         if x
     )
     if set_count > 1:
-        raise ValueError(
-            "--wandb, --tensorboard, and --tracker are mutually exclusive"
-        )
+        raise ValueError("--wandb, --tensorboard, and --tracker are mutually exclusive")
     if wandb:
         return "wandb"
     if tensorboard:

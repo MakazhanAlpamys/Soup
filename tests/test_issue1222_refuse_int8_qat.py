@@ -46,8 +46,25 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 #: plus the bare ``y``/``Y`` that YAML leaves as a string) and the numbers 1
 #: and 1.0. ``test_each_spelling_is_read_as_true`` keeps the list honest.
 YAML_SPELLINGS_READ_AS_TRUE = [
-    "true", "True", "TRUE", "yes", "Yes", "YES", "on", "On", "ON",
-    "y", "Y", "1", "1.0", "'true'", '"True"', "'1'", "'yes'", "'on'", "'t'",
+    "true",
+    "True",
+    "TRUE",
+    "yes",
+    "Yes",
+    "YES",
+    "on",
+    "On",
+    "ON",
+    "y",
+    "Y",
+    "1",
+    "1.0",
+    "'true'",
+    '"True"',
+    "'1'",
+    "'yes'",
+    "'on'",
+    "'t'",
 ]
 
 #: The same property for a caller that builds the model directly (``soup
@@ -62,7 +79,16 @@ YAML_SPELLINGS_READ_AS_FALSE = ["false", "False", "no", "off", "0", "'false'", "
 #: and ``preference`` reached it through another trainer; they have their own
 #: test below.
 TASKS_THAT_REACHED_THE_INT8_HELPER = [
-    "sft", "dpo", "kto", "orpo", "ipo", "bco", "simpo", "grpo", "ppo", "pretrain",
+    "sft",
+    "dpo",
+    "kto",
+    "orpo",
+    "ipo",
+    "bco",
+    "simpo",
+    "grpo",
+    "ppo",
+    "pretrain",
 ]
 
 
@@ -218,8 +244,7 @@ def test_the_refusal_wins_over_the_pre_quantized_cross_validator():
 def _write_config(tmp_path: Path, value: str, *, backend: str = "transformers") -> Path:
     train = tmp_path / "train.jsonl"
     train.write_text(
-        '{"messages": [{"role": "user", "content": "q"}, '
-        '{"role": "assistant", "content": "a"}]}\n',
+        '{"messages": [{"role": "user", "content": "q"}, {"role": "assistant", "content": "a"}]}\n',
         encoding="utf-8",
     )
     path = tmp_path / "soup.yaml"
@@ -400,9 +425,10 @@ class TestTheInt8HelperIsUnreachableFromAConfigThatLoads:
 
     def test_off_never_reaches_it(self):
         wrapper, cfg = _sft_wrapper({"quantization_aware": False})
-        with patch(
-            "soup_cli.utils.qat.prepare_model_for_qat", _the_int8_helper_must_not_run
-        ), patch("soup_cli.utils.v028_features.apply_v028_speed_memory") as v028:
+        with (
+            patch("soup_cli.utils.qat.prepare_model_for_qat", _the_int8_helper_must_not_run),
+            patch("soup_cli.utils.v028_features.apply_v028_speed_memory") as v028,
+        ):
             wrapper._apply_quantization_aware(cfg.training)
         v028.assert_called_once()
         assert v028.call_args.kwargs["skip_cut_ce"] is True
@@ -410,9 +436,10 @@ class TestTheInt8HelperIsUnreachableFromAConfigThatLoads:
     def test_fp8_takes_its_own_path(self):
         wrapper, cfg = _sft_wrapper({"quantization_aware": "fp8"})
         model = wrapper.model
-        with patch(
-            "soup_cli.utils.qat.prepare_model_for_qat", _the_int8_helper_must_not_run
-        ), patch("soup_cli.utils.fp8.apply_fp8_training", return_value=True) as fp8:
+        with (
+            patch("soup_cli.utils.qat.prepare_model_for_qat", _the_int8_helper_must_not_run),
+            patch("soup_cli.utils.fp8.apply_fp8_training", return_value=True) as fp8,
+        ):
             wrapper._apply_quantization_aware(cfg.training)
         fp8.assert_called_once_with(model, recipe="tensorwise")
 
@@ -428,11 +455,12 @@ class TestTheInt8HelperIsUnreachableFromAConfigThatLoads:
         wrapper = SFTTrainerWrapper(config=cfg, device="cpu")
         model = MagicMock()
         wrapper.model = model
-        with patch(
-            "soup_cli.utils.qat.prepare_model_for_qat", _the_int8_helper_must_not_run
-        ), patch(
-            "soup_cli.utils.v028_features.apply_v028_speed_memory",
-            _the_int8_helper_must_not_run,
+        with (
+            patch("soup_cli.utils.qat.prepare_model_for_qat", _the_int8_helper_must_not_run),
+            patch(
+                "soup_cli.utils.v028_features.apply_v028_speed_memory",
+                _the_int8_helper_must_not_run,
+            ),
         ):
             wrapper._apply_quantization_aware(cfg.training)
         assert wrapper.model is model

@@ -47,8 +47,17 @@ def _write_alpaca(path: Path, count: int) -> None:
 def _insert(*extra: str):
     return CliRunner().invoke(
         app,
-        ["data", "canary", "insert", "train.jsonl", "-o", "canaried.jsonl",
-         "--manifest", "m.json", *extra],
+        [
+            "data",
+            "canary",
+            "insert",
+            "train.jsonl",
+            "-o",
+            "canaried.jsonl",
+            "--manifest",
+            "m.json",
+            *extra,
+        ],
     )
 
 
@@ -85,9 +94,7 @@ def test_the_default_split_trains_on_the_canaries(rows, tmp_path, monkeypatch):
     # The manifest says which canaries the default split trains on.
     split_idx = len(data["train"])
     trainable = {
-        entry["secret"].strip()
-        for entry in manifest["canaries"]
-        if entry["row"] < split_idx
+        entry["secret"].strip() for entry in manifest["canaries"] if entry["row"] < split_idx
     }
     assert in_train == trainable
     assert len(in_val) <= 3, sorted(in_val)
@@ -110,14 +117,27 @@ def test_each_recorded_row_holds_its_canary(suffix, seed, tmp_path, monkeypatch)
     _write_alpaca(Path("train.jsonl"), 40)
     result = CliRunner().invoke(
         app,
-        ["data", "canary", "insert", "train.jsonl", "-o", f"canaried{suffix}",
-         "--manifest", "m.json", "--count", "5", "--seed", seed],
+        [
+            "data",
+            "canary",
+            "insert",
+            "train.jsonl",
+            "-o",
+            f"canaried{suffix}",
+            "--manifest",
+            "m.json",
+            "--count",
+            "5",
+            "--seed",
+            seed,
+        ],
     )
     assert result.exit_code == 0, (result.output, repr(result.exception))
 
     text = Path(f"canaried{suffix}").read_text(encoding="utf-8")
     written = (
-        json.loads(text) if suffix == ".json"
+        json.loads(text)
+        if suffix == ".json"
         else [json.loads(line) for line in text.splitlines() if line]
     )
     manifest = json.loads(Path("m.json").read_text(encoding="utf-8"))
@@ -126,13 +146,12 @@ def test_each_recorded_row_holds_its_canary(suffix, seed, tmp_path, monkeypatch)
     assert rows == sorted(set(rows))
     for entry in manifest["canaries"]:
         assert written[entry["row"]] == {
-            "instruction": entry["carrier"], "output": entry["secret"].strip(),
+            "instruction": entry["carrier"],
+            "output": entry["secret"].strip(),
         }
     # Every other row is the dataset's, in its original order.
     others = [row for i, row in enumerate(written) if i not in set(rows)]
-    assert others == [
-        {"instruction": f"question {i}", "output": f"answer {i}"} for i in range(40)
-    ]
+    assert others == [{"instruction": f"question {i}", "output": f"answer {i}"} for i in range(40)]
     # `check` still reads the manifest.
     assert len(load_manifest("m.json")) == 5
 
@@ -189,8 +208,9 @@ def test_insertion_is_deterministic_in_the_seed(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("seed", range(10))
-@pytest.mark.parametrize("rows, count", [(0, 16), (1, 16), (100, 16), (135, 16),
-                                         (1000, 16), (7, 3), (50, 1)])
+@pytest.mark.parametrize(
+    "rows, count", [(0, 16), (1, 16), (100, 16), (135, 16), (1000, 16), (7, 3), (50, 1)]
+)
 def test_each_canary_lands_in_its_own_stretch_of_the_file(rows, count, seed):
     """Canary i sits in the i-th of `count` equal stretches of the mix, so no
     end of the file (the val tail included) can collect them."""

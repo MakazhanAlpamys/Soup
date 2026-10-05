@@ -83,26 +83,20 @@ class BuildModel:
         if "\x00" in self.transform:
             raise ValueError("BuildModel.transform must not contain null bytes")
         if len(self.transform) > _MAX_TRANSFORM_LEN:
-            raise ValueError(
-                f"BuildModel.transform must be <= {_MAX_TRANSFORM_LEN} chars"
-            )
+            raise ValueError(f"BuildModel.transform must be <= {_MAX_TRANSFORM_LEN} chars")
         if self.source is not None:
             if isinstance(self.source, bool) or not isinstance(self.source, str):
                 raise TypeError("BuildModel.source must be a string or None")
             if "\x00" in self.source:
                 raise ValueError("BuildModel.source must not contain null bytes")
             if len(self.source) > _MAX_SOURCE_LEN:
-                raise ValueError(
-                    f"BuildModel.source must be <= {_MAX_SOURCE_LEN} chars"
-                )
+                raise ValueError(f"BuildModel.source must be <= {_MAX_SOURCE_LEN} chars")
         # Freeze config for parity with the parse path (direct construction
         # otherwise leaves a mutable dict on a frozen dataclass).
         if not isinstance(self.config, Mapping):
             raise TypeError("BuildModel.config must be a mapping")
         if not isinstance(self.config, MappingProxyType):
-            object.__setattr__(
-                self, "config", MappingProxyType(dict(self.config))
-            )
+            object.__setattr__(self, "config", MappingProxyType(dict(self.config)))
         # Cross-validator: seed/derived shape must be unambiguous.
         if not self.refs and self.source is None:
             raise ValueError(
@@ -177,9 +171,7 @@ class BuildResult:
 def validate_model_kind(kind: object) -> str:
     """Return the canonical lower-case kind. Raise ValueError on unknown."""
     if isinstance(kind, bool) or not isinstance(kind, str):
-        raise TypeError(
-            f"model kind must be str, got {type(kind).__name__}"
-        )
+        raise TypeError(f"model kind must be str, got {type(kind).__name__}")
     if not kind:
         raise ValueError("model kind must be non-empty")
     if "\x00" in kind:
@@ -197,9 +189,7 @@ def validate_model_kind(kind: object) -> str:
 def validate_model_name(name: object) -> str:
     """Validate the model identifier. Returns the canonical name."""
     if isinstance(name, bool) or not isinstance(name, str):
-        raise TypeError(
-            f"model name must be str, got {type(name).__name__}"
-        )
+        raise TypeError(f"model name must be str, got {type(name).__name__}")
     if not name:
         raise ValueError("model name must be non-empty")
     if "\x00" in name:
@@ -207,9 +197,7 @@ def validate_model_name(name: object) -> str:
     if len(name) > _MAX_NAME_LEN:
         raise ValueError(f"model name must be <= {_MAX_NAME_LEN} chars")
     if not _NAME_RE.match(name):
-        raise ValueError(
-            f"model name must match {_NAME_RE.pattern}: {name!r}"
-        )
+        raise ValueError(f"model name must match {_NAME_RE.pattern}: {name!r}")
     return name
 
 
@@ -253,9 +241,7 @@ def _topological_sort(
     for source, target in edges:
         in_degree[target] += 1
         successors[source].append(target)
-    queue: deque = deque(
-        sorted(name for name, deg in in_degree.items() if deg == 0)
-    )
+    queue: deque = deque(sorted(name for name, deg in in_degree.items() if deg == 0))
     order: List[str] = []
     while queue:
         current = queue.popleft()
@@ -294,9 +280,7 @@ def parse_build_plan(raw: Any) -> BuildPlan:
     if not raw_models:
         raise ValueError("build plan 'models' must be a non-empty list")
     if len(raw_models) > _MAX_MODELS:
-        raise ValueError(
-            f"build plan 'models' exceeds {_MAX_MODELS} entries"
-        )
+        raise ValueError(f"build plan 'models' exceeds {_MAX_MODELS} entries")
 
     models: List[BuildModel] = []
     seen_names: set = set()
@@ -314,24 +298,18 @@ def parse_build_plan(raw: Any) -> BuildPlan:
         kind = validate_model_kind(raw_model.get("kind", ""))
         transform = raw_model.get("transform")
         if not isinstance(transform, str) or isinstance(transform, bool):
-            raise TypeError(
-                f"models[{index}].transform must be a string"
-            )
+            raise TypeError(f"models[{index}].transform must be a string")
         raw_refs = raw_model.get("refs", [])
         if not isinstance(raw_refs, list):
             raise TypeError(f"models[{index}].refs must be a list")
         if len(raw_refs) > _MAX_REFS_PER_MODEL:
-            raise ValueError(
-                f"models[{index}].refs exceeds {_MAX_REFS_PER_MODEL} entries"
-            )
+            raise ValueError(f"models[{index}].refs exceeds {_MAX_REFS_PER_MODEL} entries")
         refs_seen: set = set()
         normalised_refs: List[str] = []
         for ref_index, ref in enumerate(raw_refs):
             ref_name = validate_model_name(ref)
             if ref_name in refs_seen:
-                raise ValueError(
-                    f"duplicate ref in models[{index}].refs: {ref_name!r}"
-                )
+                raise ValueError(f"duplicate ref in models[{index}].refs: {ref_name!r}")
             refs_seen.add(ref_name)
             normalised_refs.append(ref_name)
         source = raw_model.get("source")
@@ -354,13 +332,9 @@ def parse_build_plan(raw: Any) -> BuildPlan:
     for model in models:
         for ref in model.refs:
             if ref == model.name:
-                raise ValueError(
-                    f"self-loop edge rejected: {model.name!r}"
-                )
+                raise ValueError(f"self-loop edge rejected: {model.name!r}")
             if ref not in name_set:
-                raise ValueError(
-                    f"model {model.name!r} refs missing model: {ref!r}"
-                )
+                raise ValueError(f"model {model.name!r} refs missing model: {ref!r}")
             # Edge direction: upstream -> downstream (ref produces model)
             edges.append((ref, model.name))
 
@@ -422,9 +396,7 @@ def compute_row_hash(row: Mapping[str, Any]) -> str:
     separately (same id + changed content = diff row).
     """
     if not isinstance(row, Mapping):
-        raise TypeError(
-            f"row must be a Mapping, got {type(row).__name__}"
-        )
+        raise TypeError(f"row must be a Mapping, got {type(row).__name__}")
     payload = {k: row[k] for k in sorted(row.keys()) if k != "id"}
     canonical = json.dumps(payload, sort_keys=True, ensure_ascii=False)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
@@ -444,9 +416,7 @@ def incremental_diff(
         if not isinstance(row, Mapping):
             raise TypeError(f"prev[{index}] must be a Mapping")
         if "id" not in row:
-            raise ValueError(
-                f"prev[{index}] missing required 'id' field for incremental diff"
-            )
+            raise ValueError(f"prev[{index}] missing required 'id' field for incremental diff")
         prev_map[row["id"]] = compute_row_hash(row)
 
     new_map: dict = {}
@@ -454,9 +424,7 @@ def incremental_diff(
         if not isinstance(row, Mapping):
             raise TypeError(f"new[{index}] must be a Mapping")
         if "id" not in row:
-            raise ValueError(
-                f"new[{index}] missing required 'id' field for incremental diff"
-            )
+            raise ValueError(f"new[{index}] missing required 'id' field for incremental diff")
         new_map[row["id"]] = compute_row_hash(row)
 
     added = 0
@@ -492,9 +460,7 @@ def render_plan_table(plan: BuildPlan) -> str:
     for name in plan.topo_order:
         model = lookup[name]
         ref_str = ", ".join(model.refs) if model.refs else "(no refs)"
-        lines.append(
-            f"  {model.name} [{model.kind}] transform={model.transform} refs=[{ref_str}]"
-        )
+        lines.append(f"  {model.name} [{model.kind}] transform={model.transform} refs=[{ref_str}]")
     return "\n".join(lines)
 
 
@@ -519,9 +485,7 @@ def _t_identity(row: Mapping[str, Any], config: Mapping[str, Any]) -> dict:
     return dict(row)
 
 
-def _t_drop_empty(
-    row: Mapping[str, Any], config: Mapping[str, Any]
-) -> Optional[dict]:
+def _t_drop_empty(row: Mapping[str, Any], config: Mapping[str, Any]) -> Optional[dict]:
     field = config.get("field", "text")
     value = row.get(field)
     if isinstance(value, str) and value.strip():
@@ -592,14 +556,12 @@ def _resolve_transform_cached(name: str) -> TransformFn:
             mod = importlib.import_module(module_path)
         except ImportError as exc:
             raise ValueError(
-                f"transform {name!r}: cannot import module "
-                f"{module_path!r}: {exc}"
+                f"transform {name!r}: cannot import module {module_path!r}: {exc}"
             ) from exc
         attr = getattr(mod, attr_name, None)
         if attr is None:
             raise ValueError(
-                f"transform {name!r}: module {module_path!r} has no "
-                f"attribute {attr_name!r}"
+                f"transform {name!r}: module {module_path!r} has no attribute {attr_name!r}"
             )
         if not callable(attr):
             raise ValueError(
@@ -610,8 +572,10 @@ def _resolve_transform_cached(name: str) -> TransformFn:
         params = list(sig.parameters.values())
         # Must accept exactly two positional parameters (row, config).
         positional_params = [
-            p for p in params
-            if p.kind in (
+            p
+            for p in params
+            if p.kind
+            in (
                 inspect.Parameter.POSITIONAL_ONLY,
                 inspect.Parameter.POSITIONAL_OR_KEYWORD,
             )
@@ -716,9 +680,7 @@ def _read_seed_rows(source: str) -> List[dict]:
                 )
             rows.append(obj)
             if len(rows) > _MAX_BUILD_ROWS:
-                raise ValueError(
-                    f"build source {source!r} exceeds {_MAX_BUILD_ROWS} rows"
-                )
+                raise ValueError(f"build source {source!r} exceeds {_MAX_BUILD_ROWS} rows")
     return rows
 
 
@@ -810,14 +772,10 @@ def _materialize_incremental(
     for row in inputs:
         rid = row.get("id")
         if rid is None:
-            raise ValueError(
-                f"incremental model {model.name!r} input row missing 'id'"
-            )
+            raise ValueError(f"incremental model {model.name!r} input row missing 'id'")
         rid = str(rid)
         if rid in new_hash:
-            raise ValueError(
-                f"incremental model {model.name!r} has duplicate row id {rid!r}"
-            )
+            raise ValueError(f"incremental model {model.name!r} has duplicate row id {rid!r}")
         # Fold the transform+config fingerprint into the cache key so a config
         # edit (same inputs) re-runs the transform instead of carrying stale rows.
         new_hash[rid] = _combine_hash(fingerprint, compute_row_hash(row))
@@ -869,9 +827,7 @@ def _materialize_incremental(
             changed += 1
         calls += 1
         result = _apply_transform(fn, new_rows_by_id[rid], model.config, model.name)
-        output_json = (
-            json.dumps(result, ensure_ascii=False) if result is not None else None
-        )
+        output_json = json.dumps(result, ensure_ascii=False) if result is not None else None
         final_output[rid] = output_json
         if result is not None:
             out_rows.append(result)
@@ -880,19 +836,14 @@ def _materialize_incremental(
     # Rebuild state for this model: state == current inputs exactly.
     conn.execute("DELETE FROM build_rows WHERE model = ?", (model.name,))
     conn.executemany(
-        "INSERT INTO build_rows (model, row_id, input_hash, output_json) "
-        "VALUES (?, ?, ?, ?)",
+        "INSERT INTO build_rows (model, row_id, input_hash, output_json) VALUES (?, ?, ?, ?)",
         [(model.name, rid, new_hash[rid], final_output[rid]) for rid in order],
     )
-    diff = IncrementalDiffReport(
-        added=added, changed=changed, removed=removed, unchanged=unchanged
-    )
+    diff = IncrementalDiffReport(added=added, changed=changed, removed=removed, unchanged=unchanged)
     return out_rows, calls, diff
 
 
-def _write_model_jsonl(
-    output_dir: str, name: str, rows: Sequence[Mapping[str, Any]]
-) -> str:
+def _write_model_jsonl(output_dir: str, name: str, rows: Sequence[Mapping[str, Any]]) -> str:
     # ``name`` is regex-validated (no path separators / ``..``) so the join
     # cannot escape ``output_dir``. Delegate the atomic write + cwd-containment
     # + symlink rejection to the v0.59.0 shared helper (single-source TOCTOU
@@ -901,8 +852,7 @@ def _write_model_jsonl(
 
     target = os.path.join(output_dir, f"{name}.jsonl")
     payload = (
-        "\n".join(json.dumps(r, ensure_ascii=False) for r in rows)
-        + ("\n" if rows else "")
+        "\n".join(json.dumps(r, ensure_ascii=False) for r in rows) + ("\n" if rows else "")
     ).encode("utf-8")
     return atomic_write_bytes(payload, target, prefix=".build-", field="build output")
 
@@ -958,8 +908,7 @@ def run_build(
     # (code review MEDIUM fix). Mirrors parse_build_plan validating the whole
     # DAG before returning.
     resolved: dict[str, TransformFn] = {
-        name: resolve_transform(lookup[name].transform, transforms)
-        for name in plan.topo_order
+        name: resolve_transform(lookup[name].transform, transforms) for name in plan.topo_order
     }
 
     if state_db is None:
@@ -990,9 +939,7 @@ def run_build(
             inputs = _gather_inputs(model, materialized)
             fn = resolved[name]
             if model.kind == "incremental":
-                out_rows, calls, diff = _materialize_incremental(
-                    conn, model, inputs, fn
-                )
+                out_rows, calls, diff = _materialize_incremental(conn, model, inputs, fn)
             else:
                 out_rows, calls = _materialize_full(model, inputs, fn)
                 diff = None

@@ -44,8 +44,23 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 _SPECIALS = ["<unk>", "<s>", "</s>", "<|user|>", "<|assistant|>", "<|end|>"]
-_WORDS = ["You", "are", "terse", ".", "What", "is", "the", "capital", "of", "France", "?",
-          "System", "User", "Assistant", ":"]
+_WORDS = [
+    "You",
+    "are",
+    "terse",
+    ".",
+    "What",
+    "is",
+    "the",
+    "capital",
+    "of",
+    "France",
+    "?",
+    "System",
+    "User",
+    "Assistant",
+    ":",
+]
 _BOS_ID = _SPECIALS.index("<s>")
 
 # The vendor shape this issue is about (Llama-3, Gemma, Mistral): the template
@@ -188,9 +203,7 @@ class TestBuildEnginePrompt:
         [("none", "no tokenizer could be loaded"), ("no_template", "the model ships none")],
         ids=["no-tokenizer", "no-template"],
     )
-    def test_control_no_template_sends_the_legacy_string_and_no_ids(
-        self, tokenizer_kind, reason
-    ):
+    def test_control_no_template_sends_the_legacy_string_and_no_ids(self, tokenizer_kind, reason):
         """CONTROL: the legacy role-prefixed fallback carries no special tokens
         of its own, so the engine must go on adding its own. ``None`` ids is how
         each backend knows to send the string, exactly as it always did."""

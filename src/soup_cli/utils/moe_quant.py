@@ -32,20 +32,22 @@ class MoEExpertQuantSpec:
     live_wired: bool
 
 
-_MOE_EXPERT_QUANT_METADATA: Mapping[str, MoEExpertQuantSpec] = MappingProxyType({
-    "nf4": MoEExpertQuantSpec(
-        name="nf4",
-        description="NF4 per-expert (BNB 4-bit Normal-Float)",
-        bits=4,
-        live_wired=False,
-    ),
-    "int8_rowwise": MoEExpertQuantSpec(
-        name="int8_rowwise",
-        description="INT8 row-wise per-expert (LLM.int8 row-wise)",
-        bits=8,
-        live_wired=False,
-    ),
-})
+_MOE_EXPERT_QUANT_METADATA: Mapping[str, MoEExpertQuantSpec] = MappingProxyType(
+    {
+        "nf4": MoEExpertQuantSpec(
+            name="nf4",
+            description="NF4 per-expert (BNB 4-bit Normal-Float)",
+            bits=4,
+            live_wired=False,
+        ),
+        "int8_rowwise": MoEExpertQuantSpec(
+            name="int8_rowwise",
+            description="INT8 row-wise per-expert (LLM.int8 row-wise)",
+            bits=8,
+            live_wired=False,
+        ),
+    }
+)
 
 
 def validate_moe_expert_quant(name: object) -> str:
@@ -53,24 +55,17 @@ def validate_moe_expert_quant(name: object) -> str:
     if isinstance(name, bool):
         raise TypeError(f"moe_expert_quant must not be bool, got {name!r}")
     if not isinstance(name, str):
-        raise TypeError(
-            f"moe_expert_quant must be str, got {type(name).__name__}"
-        )
+        raise TypeError(f"moe_expert_quant must be str, got {type(name).__name__}")
     if not name:
         raise ValueError("moe_expert_quant must be non-empty")
     if "\x00" in name:
         raise ValueError("moe_expert_quant must not contain null bytes")
     if len(name) > _MAX_QUANT_LEN:
-        raise ValueError(
-            f"moe_expert_quant too long (max {_MAX_QUANT_LEN} chars)"
-        )
+        raise ValueError(f"moe_expert_quant too long (max {_MAX_QUANT_LEN} chars)")
     canonical = name.lower()
     if canonical not in MOE_EXPERT_QUANT_FORMATS:
         supported = ", ".join(sorted(MOE_EXPERT_QUANT_FORMATS))
-        raise ValueError(
-            f"moe_expert_quant {name!r} not supported. "
-            f"Supported: {supported}"
-        )
+        raise ValueError(f"moe_expert_quant {name!r} not supported. Supported: {supported}")
     return canonical
 
 
@@ -98,9 +93,7 @@ def validate_moe_expert_quant_compat(*, backend: str, moe_lora: bool) -> None:
     if not isinstance(moe_lora, bool):
         raise TypeError(f"moe_lora must be bool, got {type(moe_lora).__name__}")
     if backend == "mlx":
-        raise ValueError(
-            "moe_expert_quant is not supported on backend=mlx in v0.52.0"
-        )
+        raise ValueError("moe_expert_quant is not supported on backend=mlx in v0.52.0")
     if not moe_lora:
         raise ValueError(
             "moe_expert_quant requires moe_lora=true "
@@ -122,9 +115,7 @@ def validate_train_router_only_compat(*, backend: str, moe_lora: bool) -> None:
     if not isinstance(moe_lora, bool):
         raise TypeError(f"moe_lora must be bool, got {type(moe_lora).__name__}")
     if backend == "mlx":
-        raise ValueError(
-            "train_router_only is not supported on backend=mlx in v0.52.0"
-        )
+        raise ValueError("train_router_only is not supported on backend=mlx in v0.52.0")
     if not moe_lora:
         raise ValueError(
             "train_router_only requires moe_lora=true "
@@ -256,16 +247,24 @@ def apply_moe_expert_quant(model: object, quant_format: str) -> int:
         src = linear.weight.data.detach().clone()
         if canonical == "nf4":
             new = bnb.nn.Linear4bit(
-                in_f, out_f, bias=has_bias,
-                compute_dtype=torch.bfloat16, quant_type="nf4",
+                in_f,
+                out_f,
+                bias=has_bias,
+                compute_dtype=torch.bfloat16,
+                quant_type="nf4",
             )
             new.weight = bnb.nn.Params4bit(src, requires_grad=False, quant_type="nf4")
         else:  # int8_rowwise
             new = bnb.nn.Linear8bitLt(
-                in_f, out_f, bias=has_bias, has_fp16_weights=False,
+                in_f,
+                out_f,
+                bias=has_bias,
+                has_fp16_weights=False,
             )
             new.weight = bnb.nn.Int8Params(
-                src, requires_grad=False, has_fp16_weights=False,
+                src,
+                requires_grad=False,
+                has_fp16_weights=False,
             )
         if has_bias:
             new.bias = type(linear.bias)(linear.bias.data.detach().clone())
@@ -290,8 +289,7 @@ def apply_moe_expert_quant_if_configured(
     count = apply_moe_expert_quant(model, fmt)
     if console is not None:
         console.print(
-            f"[green]MoE expert quant:[/] {fmt} applied to {count} "
-            "expert Linear block(s)"
+            f"[green]MoE expert quant:[/] {fmt} applied to {count} expert Linear block(s)"
         )
 
 

@@ -45,18 +45,20 @@ _DEFAULT_RESIDUAL_PATHS: Tuple[Tuple[str, str], ...] = (
     ("mlp", "down_proj"),
     ("self_attn", "o_proj"),
 )
-_ARCH_RESIDUAL_PATHS: Mapping[str, Tuple[Tuple[str, str], ...]] = MappingProxyType({
-    "LlamaForCausalLM": _DEFAULT_RESIDUAL_PATHS,
-    "MistralForCausalLM": _DEFAULT_RESIDUAL_PATHS,
-    "Qwen2ForCausalLM": _DEFAULT_RESIDUAL_PATHS,
-    "Qwen3ForCausalLM": _DEFAULT_RESIDUAL_PATHS,
-    "Phi3ForCausalLM": _DEFAULT_RESIDUAL_PATHS,
-    "GemmaForCausalLM": _DEFAULT_RESIDUAL_PATHS,
-    "Gemma2ForCausalLM": _DEFAULT_RESIDUAL_PATHS,
-    "FalconForCausalLM": (("mlp", "dense_4h_to_h"), ("self_attention", "dense")),
-    "GPTNeoXForCausalLM": (("mlp", "dense_4h_to_h"), ("attention", "dense")),
-    "GPT2LMHeadModel": (("mlp", "c_proj"), ("attn", "c_proj")),
-})
+_ARCH_RESIDUAL_PATHS: Mapping[str, Tuple[Tuple[str, str], ...]] = MappingProxyType(
+    {
+        "LlamaForCausalLM": _DEFAULT_RESIDUAL_PATHS,
+        "MistralForCausalLM": _DEFAULT_RESIDUAL_PATHS,
+        "Qwen2ForCausalLM": _DEFAULT_RESIDUAL_PATHS,
+        "Qwen3ForCausalLM": _DEFAULT_RESIDUAL_PATHS,
+        "Phi3ForCausalLM": _DEFAULT_RESIDUAL_PATHS,
+        "GemmaForCausalLM": _DEFAULT_RESIDUAL_PATHS,
+        "Gemma2ForCausalLM": _DEFAULT_RESIDUAL_PATHS,
+        "FalconForCausalLM": (("mlp", "dense_4h_to_h"), ("self_attention", "dense")),
+        "GPTNeoXForCausalLM": (("mlp", "dense_4h_to_h"), ("attention", "dense")),
+        "GPT2LMHeadModel": (("mlp", "c_proj"), ("attn", "c_proj")),
+    }
+)
 
 
 def validate_expand_layers(value: object) -> int:
@@ -64,13 +66,10 @@ def validate_expand_layers(value: object) -> int:
     if value is None:
         return 0
     if isinstance(value, bool) or not isinstance(value, int):
-        raise ValueError(
-            f"expand_layers must be int, got {type(value).__name__}"
-        )
+        raise ValueError(f"expand_layers must be int, got {type(value).__name__}")
     if value < _MIN_EXPAND_LAYERS or value > _MAX_EXPAND_LAYERS:
         raise ValueError(
-            f"expand_layers must be in [{_MIN_EXPAND_LAYERS}, "
-            f"{_MAX_EXPAND_LAYERS}], got {value}"
+            f"expand_layers must be in [{_MIN_EXPAND_LAYERS}, {_MAX_EXPAND_LAYERS}], got {value}"
         )
     return int(value)
 
@@ -80,13 +79,9 @@ def validate_freeze_trainable_layers(value: object) -> int:
     if value is None:
         return 0
     if isinstance(value, bool) or not isinstance(value, int):
-        raise ValueError(
-            f"freeze_trainable_layers must be int, got {type(value).__name__}"
-        )
+        raise ValueError(f"freeze_trainable_layers must be int, got {type(value).__name__}")
     if abs(value) > 1000:
-        raise ValueError(
-            f"freeze_trainable_layers magnitude must be <= 1000, got {value}"
-        )
+        raise ValueError(f"freeze_trainable_layers magnitude must be <= 1000, got {value}")
     return int(value)
 
 
@@ -116,10 +111,7 @@ def expand_model_blocks(model: Any, num_new_blocks: int) -> int:
         )
     original_count = len(layers)
     if original_count == 0:
-        raise ValueError(
-            "expand_model_blocks: base model has zero decoder layers; "
-            "cannot clone."
-        )
+        raise ValueError("expand_model_blocks: base model has zero decoder layers; cannot clone.")
     # v0.71.12 #148 — per-arch residual-projection dispatch. Look up the
     # model class name in the table; fall back to the default Llama-shape
     # paths for unknown architectures (and warn so the user knows the
@@ -292,8 +284,7 @@ def apply_block_expansion_if_configured(
     added = int(new_total) - int(orig_total)
     if console is not None:
         console.print(
-            f"[green]LLaMA Pro:[/] expanded to {int(new_total)} layers "
-            f"(+{added} zero-init blocks)"
+            f"[green]LLaMA Pro:[/] expanded to {int(new_total)} layers (+{added} zero-init blocks)"
         )
     freeze = getattr(tcfg, "freeze_trainable_layers", None)
     # Project policy ``is None`` over falsy — but a value of 0 means "no

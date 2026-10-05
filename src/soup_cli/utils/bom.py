@@ -37,7 +37,11 @@ _VALID_FORMATS = ("cyclonedx", "spdx", "both")
 
 
 def _check_str(
-    value: object, *, field_name: str, max_len: int, allow_none: bool = False,
+    value: object,
+    *,
+    field_name: str,
+    max_len: int,
+    allow_none: bool = False,
 ) -> Optional[str]:
     if value is None:
         if allow_none:
@@ -154,10 +158,12 @@ def _energy_properties(entry: BomEntry) -> list[dict]:
     if entry.pue is not None:
         props.append({"name": "soup:pue", "value": str(entry.pue)})
     if entry.grid_intensity_g_per_kwh is not None:
-        props.append({
-            "name": "soup:grid_intensity_g_per_kwh",
-            "value": str(entry.grid_intensity_g_per_kwh),
-        })
+        props.append(
+            {
+                "name": "soup:grid_intensity_g_per_kwh",
+                "value": str(entry.grid_intensity_g_per_kwh),
+            }
+        )
     if entry.energy_source is not None:
         props.append({"name": "soup:energy_source", "value": entry.energy_source})
     return props
@@ -199,11 +205,13 @@ def build_cyclonedx_bom(entry: BomEntry) -> dict:
         }
     ]
     for parent in entry.parents:
-        components.append({
-            "type": "machine-learning-model",
-            "name": parent,
-            "bom-ref": f"parent:{parent}",
-        })
+        components.append(
+            {
+                "type": "machine-learning-model",
+                "name": parent,
+                "bom-ref": f"parent:{parent}",
+            }
+        )
     for index, art in enumerate(entry.artifacts):
         kind = str(art.get("kind", "artifact"))
         digest = str(art.get("sha256", "")).lower()
@@ -213,9 +221,7 @@ def build_cyclonedx_bom(entry: BomEntry) -> dict:
         try:
             size = int(raw_size)
         except (TypeError, ValueError) as exc:
-            raise ValueError(
-                f"artifact[{index}].size_bytes must be int-like: {exc}"
-            ) from exc
+            raise ValueError(f"artifact[{index}].size_bytes must be int-like: {exc}") from exc
         comp = {
             "type": "file",
             "name": f"{entry.name}/{kind}",
@@ -320,22 +326,26 @@ def build_spdx_bom(entry: BomEntry) -> dict:
         "relationships": relationships,
     }
     if entry.data_sha:
-        doc["packages"].append({
-            "SPDXID": "SPDXRef-Data",
-            "name": "training-data",
-            "downloadLocation": "NOASSERTION",
-            "filesAnalyzed": False,
-            "licenseConcluded": "NOASSERTION",
-            "licenseDeclared": "NOASSERTION",
-            "copyrightText": "NOASSERTION",
-            "primaryPackagePurpose": "SOURCE",
-            "checksums": [{"algorithm": "SHA256", "checksumValue": entry.data_sha}],
-        })
-        relationships.append({
-            "spdxElementId": spdx_id_main,
-            "relatedSpdxElement": "SPDXRef-Data",
-            "relationshipType": "BUILD_DEPENDENCY_OF",
-        })
+        doc["packages"].append(
+            {
+                "SPDXID": "SPDXRef-Data",
+                "name": "training-data",
+                "downloadLocation": "NOASSERTION",
+                "filesAnalyzed": False,
+                "licenseConcluded": "NOASSERTION",
+                "licenseDeclared": "NOASSERTION",
+                "copyrightText": "NOASSERTION",
+                "primaryPackagePurpose": "SOURCE",
+                "checksums": [{"algorithm": "SHA256", "checksumValue": entry.data_sha}],
+            }
+        )
+        relationships.append(
+            {
+                "spdxElementId": spdx_id_main,
+                "relatedSpdxElement": "SPDXRef-Data",
+                "relationshipType": "BUILD_DEPENDENCY_OF",
+            }
+        )
     return doc
 
 
@@ -360,6 +370,7 @@ def write_bom(entry: BomEntry, fmt: str, output_path: str) -> str:
 def _read_soup_version() -> str:
     try:
         from soup_cli import __version__
+
         return __version__
     except ImportError:
         return "unknown"

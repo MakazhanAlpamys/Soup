@@ -26,9 +26,7 @@ class Provider(Protocol):
 
 def _validate_count(count: int) -> None:
     if count < 1 or count > MAX_AUGMENT_COUNT:
-        raise ValueError(
-            f"count must be between 1 and {MAX_AUGMENT_COUNT}, got {count}"
-        )
+        raise ValueError(f"count must be between 1 and {MAX_AUGMENT_COUNT}, got {count}")
 
 
 def _text_fields(row: dict) -> dict:
@@ -79,12 +77,14 @@ def augment_rephrase(
     augmented: list[dict] = []
     for row in examples:
         for i in range(count):
+
             def _rewrite(text: str, _i: int = i) -> str:
                 prompt = (
                     f"Rewrite the following text preserving its meaning but using "
                     f"different wording (variant {_i + 1}):\n\n{text}"
                 )
                 return _call_provider(provider, prompt, stats)
+
             try:
                 augmented.append(_apply_rewrite(row, _rewrite))
             except Exception as exc:  # noqa: BLE001 — provider backends vary
@@ -111,20 +111,20 @@ def augment_translate(
     if not langs:
         raise ValueError("augment_translate requires at least one language")
     if len(langs) > MAX_AUGMENT_COUNT:
-        raise ValueError(
-            f"too many languages: {len(langs)} > {MAX_AUGMENT_COUNT}"
-        )
+        raise ValueError(f"too many languages: {len(langs)} > {MAX_AUGMENT_COUNT}")
     if stats is None:
         stats = ForgeJudgeStats()
     augmented: list[dict] = []
     for row in examples:
         for lang in langs:
+
             def _rewrite(text: str, _lang: str = lang) -> str:
                 prompt = (
                     f"Translate the following text into {_lang}, preserving the "
                     f"meaning exactly. Do not add commentary:\n\n{text}"
                 )
                 return _call_provider(provider, prompt, stats)
+
             try:
                 augmented.append(_apply_rewrite(row, _rewrite))
             except Exception as exc:  # noqa: BLE001 — provider backends vary
@@ -151,20 +151,17 @@ def augment_style(
     if not target_styles:
         raise ValueError("augment_style requires at least one style")
     if len(target_styles) > MAX_AUGMENT_COUNT:
-        raise ValueError(
-            f"too many styles: {len(target_styles)} > {MAX_AUGMENT_COUNT}"
-        )
+        raise ValueError(f"too many styles: {len(target_styles)} > {MAX_AUGMENT_COUNT}")
     if stats is None:
         stats = ForgeJudgeStats()
     augmented: list[dict] = []
     for row in examples:
         for style in target_styles:
+
             def _rewrite(text: str, _style: str = style) -> str:
-                prompt = (
-                    f"Rewrite the following in a {_style} tone, preserving "
-                    f"meaning:\n\n{text}"
-                )
+                prompt = f"Rewrite the following in a {_style} tone, preserving meaning:\n\n{text}"
                 return _call_provider(provider, prompt, stats)
+
             try:
                 augmented.append(_apply_rewrite(row, _rewrite))
             except Exception as exc:  # noqa: BLE001 — provider backends vary

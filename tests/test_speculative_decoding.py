@@ -9,7 +9,7 @@ import pytest
 
 def _strip_ansi(text: str) -> str:
     """Remove ANSI escape codes from Rich-formatted output."""
-    return re.sub(r'\x1b\[[0-9;]*m', '', text)
+    return re.sub(r"\x1b\[[0-9;]*m", "", text)
 
 
 # ─── CLI Flag Tests ──────────────────────────────────────────────────────
@@ -159,7 +159,8 @@ class TestGenerateWithDraftModel:
         from soup_cli.commands.serve import _generate_response
 
         _generate_response(
-            mock_model, mock_tokenizer,
+            mock_model,
+            mock_tokenizer,
             [{"role": "user", "content": "hello"}],
             max_tokens=10,
             assistant_model=mock_draft,
@@ -191,7 +192,8 @@ class TestGenerateWithDraftModel:
         from soup_cli.commands.serve import _generate_response
 
         _generate_response(
-            mock_model, mock_tokenizer,
+            mock_model,
+            mock_tokenizer,
             [{"role": "user", "content": "hello"}],
             max_tokens=10,
         )

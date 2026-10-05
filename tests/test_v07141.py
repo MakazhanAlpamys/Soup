@@ -194,9 +194,7 @@ class TestRunStress:
     def test_real_accuracy_builtin_gold_path_robust(self):
         from soup_cli.trainer.rewards import load_reward_fn
 
-        rep = rst.run_stress(
-            load_reward_fn("accuracy"), ["42", "7"], attacks=rst.CLASSIC_ATTACKS
-        )
+        rep = rst.run_stress(load_reward_fn("accuracy"), ["42", "7"], attacks=rst.CLASSIC_ATTACKS)
         # Under classic attacks, accuracy compares the completion tail against the gold;
         # classic junk never matches, and a gold scored as its own completion is a perfect match.
         assert rep.gameable is False
@@ -206,7 +204,7 @@ class TestRunStress:
 # ---------------------------------------------------------------------------
 # Task 3 — CLI
 # ---------------------------------------------------------------------------
-_ROBUST_VERIFIER = '''
+_ROBUST_VERIFIER = """
 import re
 _NUM = re.compile(r"[+-]?\\d+(?:\\.\\d+)?")
 def reward_fn(completions, **kwargs):
@@ -218,12 +216,12 @@ def reward_fn(completions, **kwargs):
         got = _NUM.findall(text)
         out.append(1.0 if got and got[-1] == gold else 0.0)
     return out
-'''
+"""
 
-_DEGENERATE_VERIFIER = '''
+_DEGENERATE_VERIFIER = """
 def reward_fn(completions, **kwargs):
     return [1.0] * len(completions)
-'''
+"""
 
 
 def _write(tmp_path, name, text):
@@ -298,8 +296,15 @@ class TestStressCli:
         monkeypatch.chdir(tmp_path)
         r = runner.invoke(
             soup_app,
-            ["reward", "stress", "verifiable", "--verifiable-domain", "math",
-             "--references", _refs(tmp_path).name],
+            [
+                "reward",
+                "stress",
+                "verifiable",
+                "--verifiable-domain",
+                "math",
+                "--references",
+                _refs(tmp_path).name,
+            ],
         )
         assert r.exit_code == 0, (r.output, repr(r.exception))
         assert "robust" in r.output.lower()
@@ -310,7 +315,8 @@ class TestStressCli:
         monkeypatch.chdir(tmp_path)
         marker = tmp_path / "IMPORTED"
         target = _write(
-            tmp_path, "marks.py",
+            tmp_path,
+            "marks.py",
             f"open(r{str(marker)!r}, 'w').close()\n"
             "def reward_fn(completions, **kwargs):\n    return [0.0]*len(completions)\n",
         )
@@ -355,8 +361,17 @@ class TestStressCli:
         v = _write(tmp_path, "v.py", _ROBUST_VERIFIER)
         r = runner.invoke(
             soup_app,
-            ["reward", "stress", v.name, "--references", _refs(tmp_path).name,
-             "--attacks", "empty,empty,sentinel", "--output-report", "rep.json"],
+            [
+                "reward",
+                "stress",
+                v.name,
+                "--references",
+                _refs(tmp_path).name,
+                "--attacks",
+                "empty,empty,sentinel",
+                "--output-report",
+                "rep.json",
+            ],
         )
         assert r.exit_code == 0, (r.output, repr(r.exception))
         data = json.loads((tmp_path / "rep.json").read_text(encoding="utf-8"))
@@ -369,9 +384,13 @@ class TestStressCli:
         r = runner.invoke(
             soup_app,
             [
-                "reward", "stress", v.name,
-                "--references", _refs(tmp_path).name,
-                "--output-report", "rep.json",
+                "reward",
+                "stress",
+                v.name,
+                "--references",
+                _refs(tmp_path).name,
+                "--output-report",
+                "rep.json",
             ],
         )
         assert r.exit_code == 2, (r.output, repr(r.exception))

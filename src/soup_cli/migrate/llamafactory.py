@@ -74,24 +74,17 @@ def migrate_llamafactory(config_path: Path) -> Dict[str, Any]:
     lora_section: Dict[str, Any] = {}
 
     if finetuning_type == "freeze":
-        warnings.append(
-            "finetuning_type: freeze is not supported in Soup. "
-            "Using LoRA instead."
-        )
+        warnings.append("finetuning_type: freeze is not supported in Soup. Using LoRA instead.")
         include_lora = True
 
     elif finetuning_type == "oft":
-        warnings.append(
-            "finetuning_type: oft is not supported in Soup. "
-            "Using LoRA instead."
-        )
+        warnings.append("finetuning_type: oft is not supported in Soup. Using LoRA instead.")
         include_lora = True
 
     elif finetuning_type == "full":
         if task in ("sft", "embedding"):
             warnings.append(
-                "finetuning_type: full — no LoRA will be used. "
-                "Soup will train all parameters."
+                "finetuning_type: full — no LoRA will be used. Soup will train all parameters."
             )
             lora_section = {"r": 0}
         else:
@@ -156,16 +149,12 @@ def migrate_llamafactory(config_path: Path) -> Dict[str, Any]:
             training["quantization"] = "8bit"
         else:
             method_name = quant_method or "bitsandbytes"
-            raise ValueError(
-                f"Unsupported quantization_bit={quant_bit} for method '{method_name}'"
-            )
+            raise ValueError(f"Unsupported quantization_bit={quant_bit} for method '{method_name}'")
     elif quant_method == "hqq":
         if quant_bit in (1, 2, 3, 4, 5, 6, 8):
             training["quantization"] = f"hqq:{quant_bit}bit"
         else:
-            raise ValueError(
-                f"Unsupported quantization_bit={quant_bit} for method 'hqq'"
-            )
+            raise ValueError(f"Unsupported quantization_bit={quant_bit} for method 'hqq'")
     elif quant_method == "eetq":
         if quant_bit == 8:
             training["quantization"] = "eetq"

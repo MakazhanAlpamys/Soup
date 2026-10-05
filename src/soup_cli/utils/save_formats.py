@@ -22,18 +22,24 @@ from types import MappingProxyType
 from typing import Any, Mapping, Optional
 
 # --- Merge save formats ------------------------------------------------------
-MERGE_SAVE_FORMATS: frozenset[str] = frozenset({
-    "fp16", "4bit", "4bit_forced",
-})
+MERGE_SAVE_FORMATS: frozenset[str] = frozenset(
+    {
+        "fp16",
+        "4bit",
+        "4bit_forced",
+    }
+)
 
 # --- TorchAO PTQ schemes (a closed allowlist, mirrors the v0.38.0 Quant Menu
 # string convention so YAML round-trips cleanly).
-TORCHAO_PTQ_SCHEMES: frozenset[str] = frozenset({
-    "Int4WeightOnly",
-    "Int8DynActInt4",
-    "Float8DynActFloat8",
-    "NVFP4",
-})
+TORCHAO_PTQ_SCHEMES: frozenset[str] = frozenset(
+    {
+        "Int4WeightOnly",
+        "Int8DynActInt4",
+        "Float8DynActFloat8",
+        "NVFP4",
+    }
+)
 
 #: Per-scheme closed kwarg allowlist for ``--quant-config`` (security review H1),
 #: module level so the #826 contract test can check each key against the fields
@@ -64,23 +70,28 @@ class MergeSaveSpec:
     live_wired: bool
 
 
-_MERGE_METADATA: Mapping[str, MergeSaveSpec] = MappingProxyType({
-    "fp16": MergeSaveSpec(
-        name="fp16", bits=16,
-        description="Standard FP16 merged checkpoint (default — pre-v0.53.0)",
-        live_wired=True,
-    ),
-    "4bit": MergeSaveSpec(
-        name="4bit", bits=4,
-        description="Single BNB-4bit-quantized merged checkpoint",
-        live_wired=False,
-    ),
-    "4bit_forced": MergeSaveSpec(
-        name="4bit_forced", bits=4,
-        description="Forced BNB-4bit merge (unsloth 4bit_forced)",
-        live_wired=False,
-    ),
-})
+_MERGE_METADATA: Mapping[str, MergeSaveSpec] = MappingProxyType(
+    {
+        "fp16": MergeSaveSpec(
+            name="fp16",
+            bits=16,
+            description="Standard FP16 merged checkpoint (default — pre-v0.53.0)",
+            live_wired=True,
+        ),
+        "4bit": MergeSaveSpec(
+            name="4bit",
+            bits=4,
+            description="Single BNB-4bit-quantized merged checkpoint",
+            live_wired=False,
+        ),
+        "4bit_forced": MergeSaveSpec(
+            name="4bit_forced",
+            bits=4,
+            description="Forced BNB-4bit merge (unsloth 4bit_forced)",
+            live_wired=False,
+        ),
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -93,28 +104,34 @@ class TorchAOPTQSpec:
     live_wired: bool
 
 
-_TORCHAO_METADATA: Mapping[str, TorchAOPTQSpec] = MappingProxyType({
-    "Int4WeightOnly": TorchAOPTQSpec(
-        name="Int4WeightOnly", bits=4,
-        description="TorchAO Int4WeightOnly (weight-only int4)",
-        live_wired=False,
-    ),
-    "Int8DynActInt4": TorchAOPTQSpec(
-        name="Int8DynActInt4", bits=4,
-        description="TorchAO Int8DynActInt4 (dynamic int8 act + int4 weight)",
-        live_wired=False,
-    ),
-    "Float8DynActFloat8": TorchAOPTQSpec(
-        name="Float8DynActFloat8", bits=8,
-        description="TorchAO FP8 dynamic activations + FP8 weight",
-        live_wired=False,
-    ),
-    "NVFP4": TorchAOPTQSpec(
-        name="NVFP4", bits=4,
-        description="TorchAO NVFP4 (Blackwell FP4 PTQ)",
-        live_wired=False,
-    ),
-})
+_TORCHAO_METADATA: Mapping[str, TorchAOPTQSpec] = MappingProxyType(
+    {
+        "Int4WeightOnly": TorchAOPTQSpec(
+            name="Int4WeightOnly",
+            bits=4,
+            description="TorchAO Int4WeightOnly (weight-only int4)",
+            live_wired=False,
+        ),
+        "Int8DynActInt4": TorchAOPTQSpec(
+            name="Int8DynActInt4",
+            bits=4,
+            description="TorchAO Int8DynActInt4 (dynamic int8 act + int4 weight)",
+            live_wired=False,
+        ),
+        "Float8DynActFloat8": TorchAOPTQSpec(
+            name="Float8DynActFloat8",
+            bits=8,
+            description="TorchAO FP8 dynamic activations + FP8 weight",
+            live_wired=False,
+        ),
+        "NVFP4": TorchAOPTQSpec(
+            name="NVFP4",
+            bits=4,
+            description="TorchAO NVFP4 (Blackwell FP4 PTQ)",
+            live_wired=False,
+        ),
+    }
+)
 
 
 def _validate_string_field(value: object, field: str, max_len: int) -> str:
@@ -141,9 +158,7 @@ def validate_merge_save_format(value: object) -> str:
     canonical = validated.lower()
     if canonical not in MERGE_SAVE_FORMATS:
         supported = ", ".join(sorted(MERGE_SAVE_FORMATS))
-        raise ValueError(
-            f"save_format {value!r} not supported. Supported: {supported}"
-        )
+        raise ValueError(f"save_format {value!r} not supported. Supported: {supported}")
     return canonical
 
 
@@ -157,13 +172,13 @@ def validate_torchao_scheme(value: object) -> str:
     on purpose: TorchAO uses CapWords, the others are operator-facing flags.
     """
     validated = _validate_string_field(
-        value, "torchao_scheme", _MAX_TORCHAO_SCHEME_LEN,
+        value,
+        "torchao_scheme",
+        _MAX_TORCHAO_SCHEME_LEN,
     )
     if validated not in TORCHAO_PTQ_SCHEMES:
         supported = ", ".join(sorted(TORCHAO_PTQ_SCHEMES))
-        raise ValueError(
-            f"torchao_scheme {value!r} not supported. Supported: {supported}"
-        )
+        raise ValueError(f"torchao_scheme {value!r} not supported. Supported: {supported}")
     return validated
 
 
@@ -196,9 +211,7 @@ def validate_quant_config_path(path: object) -> str:
     if isinstance(path, bool):
         raise TypeError(f"quant_config must not be bool, got {path!r}")
     if not isinstance(path, str):
-        raise TypeError(
-            f"quant_config must be str, got {type(path).__name__}"
-        )
+        raise TypeError(f"quant_config must be str, got {type(path).__name__}")
     if not path:
         raise ValueError("quant_config must be non-empty")
     if "\x00" in path:
@@ -242,27 +255,19 @@ def load_quant_config(path: object) -> Mapping[str, Any]:
     lower = validated_shape.lower()
     if not (lower.endswith(".yaml") or lower.endswith(".yml")):
         raise ValueError(
-            f"quant_config extension must be .yaml or .yml: "
-            f"{os.path.basename(validated_shape)!r}"
+            f"quant_config extension must be .yaml or .yml: {os.path.basename(validated_shape)!r}"
         )
     if not os.path.isfile(validated_shape):
-        raise FileNotFoundError(
-            f"quant_config not found: {os.path.basename(validated_shape)!r}"
-        )
+        raise FileNotFoundError(f"quant_config not found: {os.path.basename(validated_shape)!r}")
     size = os.path.getsize(validated_shape)
     if size > _MAX_QUANT_CONFIG_BYTES:
-        raise ValueError(
-            f"quant_config too large ({size} bytes; "
-            f"cap {_MAX_QUANT_CONFIG_BYTES})"
-        )
+        raise ValueError(f"quant_config too large ({size} bytes; cap {_MAX_QUANT_CONFIG_BYTES})")
     with open(validated_shape, encoding="utf-8") as fh:
         data = yaml.safe_load(fh)
     if data is None:
         return {}
     if not isinstance(data, dict):
-        raise ValueError(
-            f"quant_config must be a YAML mapping, got {type(data).__name__}"
-        )
+        raise ValueError(f"quant_config must be a YAML mapping, got {type(data).__name__}")
     return data
 
 
@@ -312,23 +317,17 @@ def merge_4bit(
     if not isinstance(forced, bool):
         raise TypeError(f"forced must be bool, got {type(forced).__name__}")
     if not isinstance(double_quant, bool):
-        raise TypeError(
-            f"double_quant must be bool, got {type(double_quant).__name__}"
-        )
+        raise TypeError(f"double_quant must be bool, got {type(double_quant).__name__}")
     if not isinstance(dtype, str):
         raise TypeError(f"dtype must be str, got {type(dtype).__name__}")
     if dtype not in {"float16", "bfloat16", "float32"}:
-        raise ValueError(
-            f"dtype {dtype!r} invalid; expected float16 / bfloat16 / float32"
-        )
+        raise ValueError(f"dtype {dtype!r} invalid; expected float16 / bfloat16 / float32")
 
     _enforce_under_cwd_and_no_symlink(merged_dir, "merged_dir")
     _enforce_under_cwd_and_no_symlink(output_dir, "output_dir")
 
     if not os.path.isdir(merged_dir):
-        raise FileNotFoundError(
-            f"merged_dir not a directory: {os.path.basename(merged_dir)!r}"
-        )
+        raise FileNotFoundError(f"merged_dir not a directory: {os.path.basename(merged_dir)!r}")
 
     import torch
     from transformers import (  # type: ignore[import-not-found]
@@ -359,9 +358,7 @@ def merge_4bit(
         device_map="auto" if torch.cuda.is_available() else "cpu",
     )
     model.save_pretrained(output_dir)
-    tokenizer = AutoTokenizer.from_pretrained(
-        merged_dir, trust_remote_code=trust_remote_code
-    )
+    tokenizer = AutoTokenizer.from_pretrained(merged_dir, trust_remote_code=trust_remote_code)
     tokenizer.save_pretrained(output_dir)
 
 
@@ -382,9 +379,7 @@ def export_torchao(
     _enforce_under_cwd_and_no_symlink(model_dir, "model_dir")
     _enforce_under_cwd_and_no_symlink(output_dir, "output_dir")
     if not os.path.isdir(model_dir):
-        raise FileNotFoundError(
-            f"model_dir not a directory: {os.path.basename(model_dir)!r}"
-        )
+        raise FileNotFoundError(f"model_dir not a directory: {os.path.basename(model_dir)!r}")
     if quant_config_data is not None and not isinstance(quant_config_data, Mapping):
         raise TypeError(
             f"quant_config_data must be Mapping, got {type(quant_config_data).__name__}"
@@ -395,7 +390,6 @@ def export_torchao(
         AutoTokenizer,
     )
 
-
     # Build the config from quant_config_data if provided; else defaults.
     # Apply a per-scheme closed key allowlist to defeat kwarg injection
     # (security review H1).
@@ -403,14 +397,11 @@ def export_torchao(
     raw_kwargs = dict(quant_config_data or {})
     raw_kwargs.pop("scheme", None)
     bad_keys = [
-        k for k in raw_kwargs
-        if (not isinstance(k, str)) or k.startswith("__") or k not in allowed
+        k for k in raw_kwargs if (not isinstance(k, str)) or k.startswith("__") or k not in allowed
     ]
     if bad_keys:
         allowed_str = (
-            ", ".join(sorted(allowed))
-            if allowed
-            else "(none — scheme takes no extra args)"
+            ", ".join(sorted(allowed)) if allowed else "(none — scheme takes no extra args)"
         )
         raise ValueError(
             f"quant_config keys not allowed for scheme {canonical_scheme}: "
@@ -429,14 +420,13 @@ def export_torchao(
     os.makedirs(output_dir, exist_ok=True)
 
     model = AutoModelForCausalLM.from_pretrained(
-        model_dir, trust_remote_code=trust_remote_code,
+        model_dir,
+        trust_remote_code=trust_remote_code,
     )
     # torchao quantize in-place, through the same resolver (#826).
     quantize_fn = resolve_torchao_class("quantize_")
 
     quantize_fn(model, config_obj)
     model.save_pretrained(output_dir)
-    tokenizer = AutoTokenizer.from_pretrained(
-        model_dir, trust_remote_code=trust_remote_code
-    )
+    tokenizer = AutoTokenizer.from_pretrained(model_dir, trust_remote_code=trust_remote_code)
     tokenizer.save_pretrained(output_dir)

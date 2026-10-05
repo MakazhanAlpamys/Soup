@@ -100,9 +100,7 @@ def apply_unfrozen_parameters(model: Any, patterns: list) -> int:
         try:
             compiled.append(re.compile(pat))
         except re.error as exc:
-            raise ValueError(
-                f"apply_unfrozen_parameters: invalid regex {pat!r}: {exc}"
-            ) from exc
+            raise ValueError(f"apply_unfrozen_parameters: invalid regex {pat!r}: {exc}") from exc
 
     # Single pass over named_parameters() (cheaper than two walks on a large
     # model): a parameter is trainable iff a pattern matches AND it is a

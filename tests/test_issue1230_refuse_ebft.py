@@ -188,8 +188,7 @@ def test_ebft_temperature_alone_no_longer_asks_for_the_refused_field():
 def _write_config(tmp_path: Path, value: str, *, backend: str = "transformers") -> Path:
     train = tmp_path / "train.jsonl"
     train.write_text(
-        '{"messages": [{"role": "user", "content": "q"}, '
-        '{"role": "assistant", "content": "a"}]}\n',
+        '{"messages": [{"role": "user", "content": "q"}, {"role": "assistant", "content": "a"}]}\n',
         encoding="utf-8",
     )
     path = tmp_path / "soup.yaml"
@@ -424,9 +423,7 @@ def _shipped_config_texts() -> list[tuple[str, str]]:
     for directory in (REPO_ROOT / "src" / "soup_cli" / "templates", REPO_ROOT / "examples"):
         assert directory.is_dir(), directory
         for path in sorted(directory.rglob("*.yaml")):
-            texts.append(
-                (path.relative_to(REPO_ROOT).as_posix(), path.read_text(encoding="utf-8"))
-            )
+            texts.append((path.relative_to(REPO_ROOT).as_posix(), path.read_text(encoding="utf-8")))
     return texts
 
 

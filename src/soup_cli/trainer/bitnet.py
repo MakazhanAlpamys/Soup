@@ -47,8 +47,7 @@ class BitNetTrainerWrapper(SFTTrainerWrapper):
 
         if importlib.util.find_spec("onebitllms") is None:
             console.print(
-                "[yellow]BitNet 1.58-bit fine-tuning requires the "
-                "'onebitllms' package.[/]"
+                "[yellow]BitNet 1.58-bit fine-tuning requires the 'onebitllms' package.[/]"
             )
             raise RuntimeError(
                 "BitNet 1.58-bit fine-tuning (quantization='bitnet_1.58') "

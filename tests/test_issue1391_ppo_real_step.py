@@ -30,9 +30,17 @@ def _tiny_models(root):
 
     def config(**extra):
         return LlamaConfig(
-            vocab_size=64, hidden_size=64, intermediate_size=128, num_hidden_layers=2,
-            num_attention_heads=4, num_key_value_heads=2, tie_word_embeddings=True,
-            max_position_embeddings=128, pad_token_id=3, bos_token_id=1, eos_token_id=2,
+            vocab_size=64,
+            hidden_size=64,
+            intermediate_size=128,
+            num_hidden_layers=2,
+            num_attention_heads=4,
+            num_key_value_heads=2,
+            tie_word_embeddings=True,
+            max_position_embeddings=128,
+            pad_token_id=3,
+            bos_token_id=1,
+            eos_token_id=2,
             **extra,
         )
 
@@ -43,8 +51,11 @@ def _tiny_models(root):
     base, rm = root / "base", root / "rm"
     LlamaForCausalLM(config()).save_pretrained(base)
     PreTrainedTokenizerFast(
-        tokenizer_object=tok, unk_token="<unk>", bos_token="<s>",
-        eos_token="</s>", pad_token="<pad>",
+        tokenizer_object=tok,
+        unk_token="<unk>",
+        bos_token="<s>",
+        eos_token="</s>",
+        pad_token="<pad>",
     ).save_pretrained(base)
     LlamaForSequenceClassification(config(num_labels=1)).save_pretrained(rm)
     return base.as_posix(), rm.as_posix()

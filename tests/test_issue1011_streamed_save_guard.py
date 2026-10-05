@@ -291,8 +291,7 @@ def test_the_streamable_task_list_matches_the_schema():
     trainers = {
         path.stem
         for path in trainer_dir.glob("*.py")
-        if "_training_context(" in path.read_text(encoding="utf-8")
-        and path.stem != "stream_setup"
+        if "_training_context(" in path.read_text(encoding="utf-8") and path.stem != "stream_setup"
     }
     assert trainers == set(STREAMABLE_TRAINERS)
 

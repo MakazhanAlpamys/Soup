@@ -61,14 +61,20 @@ class TestTheTableResolves:
         """Pinned literally. These came from instantiating each architecture and
         listing its ``nn.Linear`` modules; a plausible-looking edit to one of
         them is a guess unless the probe is re-run."""
-        assert MOE_TEXT_LORA_TARGETS["qwen3_moe"] == (
-            "q_proj", "k_proj", "v_proj", "o_proj"
-        )
+        assert MOE_TEXT_LORA_TARGETS["qwen3_moe"] == ("q_proj", "k_proj", "v_proj", "o_proj")
         assert MOE_TEXT_LORA_TARGETS["deepseek_v3"] == (
-            "q_a_proj", "q_b_proj", "kv_a_proj_with_mqa", "kv_b_proj", "o_proj"
+            "q_a_proj",
+            "q_b_proj",
+            "kv_a_proj_with_mqa",
+            "kv_b_proj",
+            "o_proj",
         )
         assert MOE_TEXT_LORA_TARGETS["deepseek_v4"] == (
-            "q_a_proj", "q_b_proj", "kv_proj", "o_a_proj", "o_b_proj"
+            "q_a_proj",
+            "q_b_proj",
+            "kv_proj",
+            "o_a_proj",
+            "o_b_proj",
         )
         assert MOE_TEXT_LORA_TARGETS["glm_moe_dsa"] == MOE_TEXT_LORA_TARGETS["deepseek_v3"]
         assert MOE_TEXT_LORA_TARGETS["kimi_k25"] == MOE_TEXT_LORA_TARGETS["deepseek_v3"]
@@ -125,13 +131,21 @@ class TestTheVisionTowerIsNotAdapted:
 
         config = LlavaConfig(
             text_config=LlamaConfig(
-                vocab_size=64, hidden_size=16, intermediate_size=32,
-                num_hidden_layers=2, num_attention_heads=2, num_key_value_heads=2,
+                vocab_size=64,
+                hidden_size=16,
+                intermediate_size=32,
+                num_hidden_layers=2,
+                num_attention_heads=2,
+                num_key_value_heads=2,
                 pad_token_id=0,
             ),
             vision_config=CLIPVisionConfig(
-                hidden_size=16, intermediate_size=32, num_hidden_layers=2,
-                num_attention_heads=2, image_size=32, patch_size=16,
+                hidden_size=16,
+                intermediate_size=32,
+                num_hidden_layers=2,
+                num_attention_heads=2,
+                image_size=32,
+                patch_size=16,
             ),
             image_token_index=63,
         )
@@ -159,8 +173,7 @@ class TestTheVisionTowerIsNotAdapted:
         pattern = resolve_lora_target_modules(_model("minimax_m3_vl"), "auto")
         keys = self._linear_keys(self._vl_model())
         language = [
-            k for k in keys if "language_model" in k
-            and re.search(r"self_attn\.(q|k|v|o)_proj$", k)
+            k for k in keys if "language_model" in k and re.search(r"self_attn\.(q|k|v|o)_proj$", k)
         ]
 
         assert isinstance(pattern, str), "peft reads a string target as a regex"
@@ -252,9 +265,16 @@ class TestWhatIsLeftAlone:
 def _lora(target_modules="auto"):
     """The LoRA block ``build_lora_config`` reads, as the schema defaults it."""
     return types.SimpleNamespace(
-        r=4, alpha=8, dropout=0.0, target_modules=target_modules, use_dora=False,
-        use_rslora=False, rank_pattern=None, alpha_pattern=None,
-        init_lora_weights=True, variant="lora",
+        r=4,
+        alpha=8,
+        dropout=0.0,
+        target_modules=target_modules,
+        use_dora=False,
+        use_rslora=False,
+        rank_pattern=None,
+        alpha_pattern=None,
+        init_lora_weights=True,
+        variant="lora",
     )
 
 
@@ -311,7 +331,9 @@ class TestTheRefusal:
 
         resolved = resolve_lora_target_modules(_model("not_a_real_arch_9000"), "auto")
         config = build_lora_config(
-            _lora(), target_modules=resolved, task_type="CAUSAL_LM",
+            _lora(),
+            target_modules=resolved,
+            task_type="CAUSAL_LM",
             target_parameters=["model.layers.0.mlp.experts.gate_up_proj"],
         )
 
@@ -332,10 +354,16 @@ class TestMoeLoraStillSuppliesTargets:
 
         return Qwen2MoeForCausalLM(
             Qwen2MoeConfig(
-                vocab_size=64, hidden_size=16, intermediate_size=32,
-                moe_intermediate_size=16, shared_expert_intermediate_size=16,
-                num_hidden_layers=1, num_attention_heads=2, num_key_value_heads=1,
-                num_experts=4, num_experts_per_tok=2,
+                vocab_size=64,
+                hidden_size=16,
+                intermediate_size=32,
+                moe_intermediate_size=16,
+                shared_expert_intermediate_size=16,
+                num_hidden_layers=1,
+                num_attention_heads=2,
+                num_key_value_heads=1,
+                num_experts=4,
+                num_experts_per_tok=2,
             )
         )
 
@@ -394,9 +422,7 @@ class TestWhatIsDelegated:
         assert resolve_lora_target_modules(MagicMock(), "auto") is None
 
     def test_an_explicit_list_is_never_refused(self):
-        assert resolve_lora_target_modules(_model("not_a_real_arch_9000"), ["q_proj"]) == [
-            "q_proj"
-        ]
+        assert resolve_lora_target_modules(_model("not_a_real_arch_9000"), ["q_proj"]) == ["q_proj"]
 
 
 # Every base a shipped recipe names, with its ``model_type`` and routed-expert
@@ -409,9 +435,7 @@ class TestWhatIsDelegated:
 # passed straight through it (#1102 review, F3). A MoE base is now one whose
 # config DECLARES experts, and a new base fails the completeness test until it is
 # recorded, whatever its recipe sets.
-_RECORD_PATH = (
-    Path(__file__).resolve().parent / "fixtures" / "recipe_base_architectures.json"
-)
+_RECORD_PATH = Path(__file__).resolve().parent / "fixtures" / "recipe_base_architectures.json"
 
 #: MoE ``model_type`` values covered before this table existed.
 _ALREADY_MAPPED = {"qwen3_5", "qwen3_5_text", "qwen3_5_moe", "qwen3_5_moe_text"}
@@ -477,7 +501,8 @@ class TestTheRatchet:
 
         assert missing == [], (
             "These recipe bases are not in tests/fixtures/"
-            "recipe_base_architectures.json:\n  " + "\n  ".join(missing)
+            "recipe_base_architectures.json:\n  "
+            + "\n  ".join(missing)
             + "\nRun scripts/record_recipe_base_architectures.py and review the diff."
         )
 
@@ -496,7 +521,8 @@ class TestTheRatchet:
         )
 
         assert uncovered == [], (
-            "These shipped MoE bases resolve to nothing:\n  " + "\n  ".join(uncovered)
+            "These shipped MoE bases resolve to nothing:\n  "
+            + "\n  ".join(uncovered)
             + "\nAdd each model_type to MOE_TEXT_LORA_TARGETS with module names "
             "MEASURED from the architecture, or to EXCLUDED_MOE_BASES with a reason."
         )
@@ -507,7 +533,8 @@ class TestTheRatchet:
         is wrong, and a hand edit to the record would show up here."""
         record = _record()
         disagree = sorted(
-            base for base in _flagged_bases()
+            base
+            for base in _flagged_bases()
             if record.get(base, {}).get("routed_experts", 0) <= 1
             and "unresolvable" not in record.get(base, {})
         )
@@ -571,11 +598,10 @@ def _drive_trainer(task, monkeypatch, *, moe_lora):
     module_path, class_name, data_format = _TRAINERS[task]
     wrapper_cls = getattr(importlib.import_module(module_path), class_name)
     tokenizer = types.SimpleNamespace(pad_token=None, eos_token="</s>", pad_token_id=0)
+    monkeypatch.setattr(transformers.AutoTokenizer, "from_pretrained", lambda *_a, **_k: tokenizer)
     monkeypatch.setattr(
-        transformers.AutoTokenizer, "from_pretrained", lambda *_a, **_k: tokenizer
-    )
-    monkeypatch.setattr(
-        transformers.AutoModelForCausalLM, "from_pretrained",
+        transformers.AutoModelForCausalLM,
+        "from_pretrained",
         lambda *_a, **_k: TestMoeLoraStillSuppliesTargets._qwen2_moe(),
     )
     cfg = load_config_from_string(

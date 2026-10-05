@@ -63,9 +63,7 @@ def _names_dos_device(value: str) -> bool:
     return False
 
 
-def is_network_or_device_path(
-    value: str, *, dos_device_names: bool = os.name == "nt"
-) -> bool:
+def is_network_or_device_path(value: str, *, dos_device_names: bool = os.name == "nt") -> bool:
     """Whether ``value`` names a network share or a device, not a local file.
 
     True for two leading separators in any mix of ``\\`` and ``/`` -- a UNC
@@ -141,20 +139,14 @@ def enforce_under_cwd_and_no_symlink(path: str, field: str) -> str:
     if "\x00" in path:
         raise ValueError(f"{field} must not contain null bytes")
     if not is_under_cwd(path):
-        raise ValueError(
-            f"{field} {os.path.basename(path)!r} must stay under cwd"
-        )
+        raise ValueError(f"{field} {os.path.basename(path)!r} must stay under cwd")
     if os.path.lexists(path):
         try:
             st = os.lstat(path)
         except OSError as exc:
-            raise ValueError(
-                f"{field} unreadable: {type(exc).__name__}"
-            ) from exc
+            raise ValueError(f"{field} unreadable: {type(exc).__name__}") from exc
         if stat.S_ISLNK(st.st_mode):
-            raise ValueError(
-                f"{field} must not be a symlink (TOCTOU defence)"
-            )
+            raise ValueError(f"{field} must not be a symlink (TOCTOU defence)")
         # Windows junctions / mount-point reparse points do NOT report
         # S_ISLNK (they carry IO_REPARSE_TAG_MOUNT_POINT, not _SYMLINK), so
         # the check above misses them — yet shutil.rmtree would happily delete
@@ -162,10 +154,7 @@ def enforce_under_cwd_and_no_symlink(path: str, field: str) -> str:
         if os.name == "nt":
             reparse = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
             if getattr(st, "st_file_attributes", 0) & reparse:
-                raise ValueError(
-                    f"{field} must not be a reparse point / junction "
-                    "(TOCTOU defence)"
-                )
+                raise ValueError(f"{field} must not be a reparse point / junction (TOCTOU defence)")
     return path
 
 
@@ -325,9 +314,7 @@ def atomic_write_bytes_group(
         for data, output_path, _field in prepared:
             parent = os.path.dirname(os.path.abspath(output_path)) or "."
             os.makedirs(parent, exist_ok=True)
-            fd, tmp_path = tempfile.mkstemp(
-                prefix=".soup.group.", suffix=".tmp", dir=parent
-            )
+            fd, tmp_path = tempfile.mkstemp(prefix=".soup.group.", suffix=".tmp", dir=parent)
             try:
                 with os.fdopen(fd, "wb") as fh:
                     fh.write(data)
@@ -347,9 +334,7 @@ def atomic_write_bytes_group(
             if not stat.S_ISREG(st.st_mode):
                 raise ValueError(f"{field} must be a regular file")
             parent = os.path.dirname(os.path.abspath(output_path)) or "."
-            fd, backup_path = tempfile.mkstemp(
-                prefix=".soup.backup.", suffix=".tmp", dir=parent
-            )
+            fd, backup_path = tempfile.mkstemp(prefix=".soup.backup.", suffix=".tmp", dir=parent)
             os.close(fd)
             try:
                 os.replace(output_path, backup_path)
@@ -432,15 +417,11 @@ def refuse_linked_dirs(
         if os.path.lexists(curr):
             st = os.lstat(curr)
             if stat.S_ISLNK(st.st_mode):
-                raise OSError(
-                    errno.ELOOP, f"Directory symbolic link not allowed: {curr!r}"
-                )
+                raise OSError(errno.ELOOP, f"Directory symbolic link not allowed: {curr!r}")
             if os.name == "nt":
                 reparse = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
                 if getattr(st, "st_file_attributes", 0) & reparse:
-                    raise OSError(
-                        errno.ELOOP, f"Directory reparse point not allowed: {curr!r}"
-                    )
+                    raise OSError(errno.ELOOP, f"Directory reparse point not allowed: {curr!r}")
         if stop is not None:
             try:
                 if os.path.samefile(curr, stop):
@@ -502,37 +483,27 @@ def open_no_follow(
     fd = os.open(p, open_flags, mode)
     try:
         post_fst = os.fstat(fd)
-        if (
-            refuse_hardlink
-            and stat.S_ISREG(post_fst.st_mode)
-            and post_fst.st_nlink > 1
-        ):
+        if refuse_hardlink and stat.S_ISREG(post_fst.st_mode) and post_fst.st_nlink > 1:
             raise OSError(errno.EMLINK, f"Hard link not allowed: {p!r}")
         if os.name == "nt":
             if pre_st is not None:
                 if (
                     pre_st.st_ino != 0
                     and post_fst.st_ino != 0
-                    and (pre_st.st_ino, pre_st.st_dev)
-                    != (post_fst.st_ino, post_fst.st_dev)
+                    and (pre_st.st_ino, pre_st.st_dev) != (post_fst.st_ino, post_fst.st_dev)
                 ):
                     raise OSError(errno.ELOOP, f"File swapped during open: {p!r}")
             else:
                 post_lst = os.lstat(p)
                 if stat.S_ISLNK(post_lst.st_mode):
-                    raise OSError(
-                        errno.ELOOP, f"Symbolic link created during open: {p!r}"
-                    )
+                    raise OSError(errno.ELOOP, f"Symbolic link created during open: {p!r}")
                 reparse = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
                 if getattr(post_lst, "st_file_attributes", 0) & reparse:
-                    raise OSError(
-                        errno.ELOOP, f"Reparse point created during open: {p!r}"
-                    )
+                    raise OSError(errno.ELOOP, f"Reparse point created during open: {p!r}")
                 if (
                     post_lst.st_ino != 0
                     and post_fst.st_ino != 0
-                    and (post_lst.st_ino, post_lst.st_dev)
-                    != (post_fst.st_ino, post_fst.st_dev)
+                    and (post_lst.st_ino, post_lst.st_dev) != (post_fst.st_ino, post_fst.st_dev)
                 ):
                     raise OSError(errno.ELOOP, f"File swapped during open: {p!r}")
     except Exception:

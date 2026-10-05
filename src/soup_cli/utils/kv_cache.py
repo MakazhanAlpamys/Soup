@@ -46,28 +46,38 @@ class KVCacheSpec:
     live_wired: bool
 
 
-_KV_CACHE_METADATA: Mapping[str, KVCacheSpec] = MappingProxyType({
-    "q8_0": KVCacheSpec(
-        name="q8_0", bits=8, requires_hopper=False,
-        description="8-bit KV cache (default for unsloth runtime)",
-        live_wired=False,
-    ),
-    "bf16": KVCacheSpec(
-        name="bf16", bits=16, requires_hopper=False,
-        description="bfloat16 KV cache",
-        live_wired=False,
-    ),
-    "f16": KVCacheSpec(
-        name="f16", bits=16, requires_hopper=False,
-        description="float16 KV cache",
-        live_wired=False,
-    ),
-    "fp8": KVCacheSpec(
-        name="fp8", bits=8, requires_hopper=True,
-        description="FP8 KV cache (Hopper+ only)",
-        live_wired=False,
-    ),
-})
+_KV_CACHE_METADATA: Mapping[str, KVCacheSpec] = MappingProxyType(
+    {
+        "q8_0": KVCacheSpec(
+            name="q8_0",
+            bits=8,
+            requires_hopper=False,
+            description="8-bit KV cache (default for unsloth runtime)",
+            live_wired=False,
+        ),
+        "bf16": KVCacheSpec(
+            name="bf16",
+            bits=16,
+            requires_hopper=False,
+            description="bfloat16 KV cache",
+            live_wired=False,
+        ),
+        "f16": KVCacheSpec(
+            name="f16",
+            bits=16,
+            requires_hopper=False,
+            description="float16 KV cache",
+            live_wired=False,
+        ),
+        "fp8": KVCacheSpec(
+            name="fp8",
+            bits=8,
+            requires_hopper=True,
+            description="FP8 KV cache (Hopper+ only)",
+            live_wired=False,
+        ),
+    }
+)
 
 
 def validate_kv_cache_type(value: object) -> str:
@@ -79,23 +89,17 @@ def validate_kv_cache_type(value: object) -> str:
     if isinstance(value, bool):
         raise TypeError(f"kv_cache_type must not be bool, got {value!r}")
     if not isinstance(value, str):
-        raise TypeError(
-            f"kv_cache_type must be str, got {type(value).__name__}"
-        )
+        raise TypeError(f"kv_cache_type must be str, got {type(value).__name__}")
     if not value:
         raise ValueError("kv_cache_type must be non-empty")
     if "\x00" in value:
         raise ValueError("kv_cache_type must not contain null bytes")
     if len(value) > _MAX_KV_CACHE_LEN:
-        raise ValueError(
-            f"kv_cache_type too long (max {_MAX_KV_CACHE_LEN} chars)"
-        )
+        raise ValueError(f"kv_cache_type too long (max {_MAX_KV_CACHE_LEN} chars)")
     canonical = value.lower()
     if canonical not in KV_CACHE_TYPES:
         supported = ", ".join(sorted(KV_CACHE_TYPES))
-        raise ValueError(
-            f"kv_cache_type {value!r} not supported. Supported: {supported}"
-        )
+        raise ValueError(f"kv_cache_type {value!r} not supported. Supported: {supported}")
     return canonical
 
 
@@ -136,9 +140,7 @@ class KvCacheRuntime:
     kv_cache_type: str
     backend: str
     model_dtype: Optional[str]
-    generate_kwargs: Mapping[str, object] = field(
-        default_factory=lambda: MappingProxyType({})
-    )
+    generate_kwargs: Mapping[str, object] = field(default_factory=lambda: MappingProxyType({}))
     requires_quant_backend: bool = False
     note: str = ""
 
@@ -182,9 +184,7 @@ def _validate_compute_capability(
     if cc is None:
         return None
     if isinstance(cc, bool) or not isinstance(cc, tuple) or len(cc) != 2:
-        raise TypeError(
-            "compute_capability must be a (major, minor) int 2-tuple or None"
-        )
+        raise TypeError("compute_capability must be a (major, minor) int 2-tuple or None")
     major, minor = cc
     if isinstance(major, bool) or isinstance(minor, bool):
         raise TypeError("compute_capability entries must be int, not bool")
@@ -217,9 +217,7 @@ def apply_kv_cache_type(
     """
     canonical = validate_kv_cache_type(kv_cache_type)
     if isinstance(backend, bool) or not isinstance(backend, str):
-        raise TypeError(
-            f"backend must be str, got {type(backend).__name__}"
-        )
+        raise TypeError(f"backend must be str, got {type(backend).__name__}")
     backend_l = backend.lower()
     if backend_l not in _LIVE_BACKENDS:
         raise NotImplementedError(
@@ -270,18 +268,19 @@ def apply_kv_cache_type(
         kv_cache_type=canonical,
         backend=backend_l,
         model_dtype=None,
-        generate_kwargs=MappingProxyType({
-            "cache_implementation": "quantized",
-            "cache_config": MappingProxyType({
-                "backend": "hqq",
-                "nbits": 8,
-                "axis_key": 0,
-                "axis_value": 0,
-            }),
-        }),
-        requires_quant_backend=True,
-        note=(
-            "8-bit quantized KV cache via the HQQ backend "
-            "(install with `pip install hqq`)."
+        generate_kwargs=MappingProxyType(
+            {
+                "cache_implementation": "quantized",
+                "cache_config": MappingProxyType(
+                    {
+                        "backend": "hqq",
+                        "nbits": 8,
+                        "axis_key": 0,
+                        "axis_value": 0,
+                    }
+                ),
+            }
         ),
+        requires_quant_backend=True,
+        note=("8-bit quantized KV cache via the HQQ backend (install with `pip install hqq`)."),
     )

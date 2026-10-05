@@ -22,9 +22,7 @@ def _load_receipt_json(path: str) -> dict:
 
     real = enforce_under_cwd_and_no_symlink(path, "repro-receipt")
     if os.path.getsize(real) > _MAX_RECEIPT_BYTES:
-        raise ValueError(
-            f"repro-receipt too large (> {_MAX_RECEIPT_BYTES} bytes)"
-        )
+        raise ValueError(f"repro-receipt too large (> {_MAX_RECEIPT_BYTES} bytes)")
     with open(real, encoding="utf-8") as fh:
         data = json.load(fh)
     if not isinstance(data, dict):
@@ -60,27 +58,31 @@ def _resolve_repro_receipt(explicit: Optional[str], model_dir: str) -> Optional[
 
 
 def airgap_bundle(
-    output: str = typer.Option(..., "--output", "-o",
-                               help="Output tarball path (cwd-contained)"),
+    output: str = typer.Option(..., "--output", "-o", help="Output tarball path (cwd-contained)"),
     model: str = typer.Option(..., "--model", help="Path to model directory"),
     dataset: Optional[List[str]] = typer.Option(
-        None, "--dataset",
+        None,
+        "--dataset",
         help="Dataset directory (repeatable)",
     ),
     wheel: Optional[List[str]] = typer.Option(
-        None, "--wheel",
+        None,
+        "--wheel",
         help="Wheel directory (repeatable)",
     ),
     kernel: Optional[List[str]] = typer.Option(
-        None, "--kernel",
+        None,
+        "--kernel",
         help="CUDA / kernel directory (repeatable)",
     ),
     bundle_size_cap: float = typer.Option(
-        100.0, "--bundle-size-cap",
+        100.0,
+        "--bundle-size-cap",
         help="Cap in GiB (default 100). Build aborts when exceeded.",
     ),
     repro_receipt: Optional[str] = typer.Option(
-        None, "--repro-receipt",
+        None,
+        "--repro-receipt",
         help=(
             "Embed a reproducibility receipt JSON (from `soup train "
             "--repro-receipt`) into the bundle. Auto-detected from "

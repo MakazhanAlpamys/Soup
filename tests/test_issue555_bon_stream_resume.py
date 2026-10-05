@@ -67,15 +67,13 @@ def test_candidate_export_rejects_prompt_destination_collision(tmp_path, monkeyp
     assert not (tmp_path / "prompts.jsonl.checkpoint.jsonl").exists()
 
 
-def test_late_candidate_failure_resumes_without_replaying_completed_groups(
-    tmp_path, monkeypatch
-):
+def test_late_candidate_failure_resumes_without_replaying_completed_groups(tmp_path, monkeypatch):
     from soup_cli.commands.data import app
     from soup_cli.utils.best_of_n_artifact import load_candidate_artifact
 
     monkeypatch.chdir(tmp_path)
     (tmp_path / "prompts.jsonl").write_text(
-        ''.join(json.dumps({"prompt": prompt}) + "\n" for prompt in ("q1", "q2", "q3")),
+        "".join(json.dumps({"prompt": prompt}) + "\n" for prompt in ("q1", "q2", "q3")),
         encoding="utf-8",
     )
     first_calls = []
@@ -186,9 +184,7 @@ def test_offline_large_artifacts_bypass_whole_file_materializers(tmp_path, monke
     count = 1500
     candidate_path = tmp_path / "large-candidates.jsonl"
     judgment_path = tmp_path / "large-judgments.jsonl"
-    with candidate_path.open("wb") as candidate_file, judgment_path.open(
-        "wb"
-    ) as judgment_file:
+    with candidate_path.open("wb") as candidate_file, judgment_path.open("wb") as judgment_file:
         candidate_file.write(stable_json_line(candidate_artifact_header(count, sampler)))
         for index in range(count):
             group = build_candidate_group(
@@ -276,9 +272,7 @@ def test_streaming_candidate_structure_failures_never_commit_manifest(
         "max_new_tokens": 256,
     }
     groups = [
-        build_candidate_group(
-            f"q{index}", index, ["a", "b"], sampler, source_line=index + 1
-        )
+        build_candidate_group(f"q{index}", index, ["a", "b"], sampler, source_line=index + 1)
         for index in range(2)
     ]
     records = [candidate_artifact_header(2, sampler), *groups]
@@ -326,9 +320,10 @@ def test_resume_discards_an_uncommitted_candidate_tail(tmp_path, monkeypatch):
     }
     prompts = ["q1", "q2"]
     checkpoint = tmp_path / "checkpoint.jsonl"
-    assert prepare_candidate_checkpoint(
-        str(checkpoint), prompts, sampler, _FINGERPRINT, resume=False
-    ) == 0
+    assert (
+        prepare_candidate_checkpoint(str(checkpoint), prompts, sampler, _FINGERPRINT, resume=False)
+        == 0
+    )
     append_candidate_group(
         str(checkpoint),
         build_candidate_group("q1", 0, ["a", "b"], sampler, source_line=1),
@@ -358,12 +353,8 @@ def test_checkpoint_identity_is_private_and_not_published(tmp_path, monkeypatch)
     result = CliRunner().invoke(app, _args(tmp_path))
 
     assert result.exit_code == 0, (result.output, repr(result.exception))
-    identity = sampler_identity_fingerprint(
-        "provider-endpoint", "http://localhost:11434"
-    )
-    checkpoint = (tmp_path / "candidates.jsonl.checkpoint.jsonl").read_text(
-        encoding="utf-8"
-    )
+    identity = sampler_identity_fingerprint("provider-endpoint", "http://localhost:11434")
+    checkpoint = (tmp_path / "candidates.jsonl.checkpoint.jsonl").read_text(encoding="utf-8")
     artifact = (tmp_path / "candidates.jsonl").read_text(encoding="utf-8")
     assert identity in checkpoint
     assert identity not in artifact
@@ -412,9 +403,7 @@ def test_resume_rejects_a_different_private_local_model(tmp_path, monkeypatch):
 
     first = CliRunner().invoke(app, _local_args(tmp_path, model_a))
     assert first.exit_code == 0, (first.output, repr(first.exception))
-    resumed = CliRunner().invoke(
-        app, _local_args(tmp_path, model_b, "--resume")
-    )
+    resumed = CliRunner().invoke(app, _local_args(tmp_path, model_b, "--resume"))
 
     assert resumed.exit_code == 1
     assert "does not match this run" in resumed.output
@@ -423,9 +412,7 @@ def test_resume_rejects_a_different_private_local_model(tmp_path, monkeypatch):
     assert str(model_b) not in artifact_text
 
 
-def test_resume_rejects_replaced_content_at_the_same_local_model_path(
-    tmp_path, monkeypatch
-):
+def test_resume_rejects_replaced_content_at_the_same_local_model_path(tmp_path, monkeypatch):
     from soup_cli.commands.data import app
 
     monkeypatch.chdir(tmp_path)
@@ -441,9 +428,7 @@ def test_resume_rejects_replaced_content_at_the_same_local_model_path(
     )
     monkeypatch.setattr(
         "soup_cli.commands.data._load_bon_model",
-        lambda *_args, **_kwargs: (
-            load_calls.append(True) or (object(), object())
-        ),
+        lambda *_args, **_kwargs: load_calls.append(True) or (object(), object()),
     )
     monkeypatch.setattr(
         "soup_cli.utils.best_of_n.sample_candidates",
@@ -491,9 +476,7 @@ def test_local_resume_reuses_the_same_prompt_seed(tmp_path, monkeypatch):
             raise RuntimeError("simulated interruption")
         return values
 
-    monkeypatch.setattr(
-        "soup_cli.utils.best_of_n.sample_candidates", sample_candidates
-    )
+    monkeypatch.setattr("soup_cli.utils.best_of_n.sample_candidates", sample_candidates)
     first = CliRunner().invoke(app, _local_args(tmp_path, model))
     assert first.exit_code == 1, (first.output, repr(first.exception))
     interrupted = sampled[-1][1]
@@ -505,9 +488,7 @@ def test_local_resume_reuses_the_same_prompt_seed(tmp_path, monkeypatch):
     assert sampled[-1] == ("second", interrupted)
 
 
-def test_streamed_publication_restores_changed_generation_on_dpo_failure(
-    tmp_path, monkeypatch
-):
+def test_streamed_publication_restores_changed_generation_on_dpo_failure(tmp_path, monkeypatch):
     import os
 
     from soup_cli.utils.best_of_n_stream import StagedDatasets, publish_staged_datasets
@@ -605,13 +586,9 @@ def test_atomic_group_removal_validation_is_directly_covered(tmp_path, monkeypat
     with pytest.raises(TypeError, match="removals must be a list"):
         atomic_write_bytes_group([(b"new", output, "output")], removals=())
     with pytest.raises(TypeError, match="each removal"):
-        atomic_write_bytes_group(
-            [(b"new", output, "output")], removals=[(output,)]
-        )
+        atomic_write_bytes_group([(b"new", output, "output")], removals=[(output,)])
     with pytest.raises(ValueError, match="must be distinct"):
-        atomic_write_bytes_group(
-            [(b"new", output, "output")], removals=[(output, "stale output")]
-        )
+        atomic_write_bytes_group([(b"new", output, "output")], removals=[(output, "stale output")])
 
     removal_directory = tmp_path / "stale-directory"
     removal_directory.mkdir()

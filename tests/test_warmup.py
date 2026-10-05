@@ -4,10 +4,9 @@ from soup_cli.utils.warmup import MAX_WARMUP, MIN_WARMUP, compute_warmup_steps
 
 # --- Happy path ---
 
+
 def test_typical_inputs_returns_clamped_value():
-    result = compute_warmup_steps(
-        num_examples=1000, batch_size=8, grad_accum=1, epochs=3
-    )
+    result = compute_warmup_steps(num_examples=1000, batch_size=8, grad_accum=1, epochs=3)
     assert MIN_WARMUP <= result <= MAX_WARMUP
 
 
@@ -18,6 +17,7 @@ def test_default_ratio_used_when_not_specified():
 
 # --- ratio=0 special case ---
 
+
 def test_zero_ratio_returns_zero():
     result = compute_warmup_steps(1000, 8, 1, 3, ratio=0.0)
     assert result == 0
@@ -25,10 +25,9 @@ def test_zero_ratio_returns_zero():
 
 # --- Clamping ---
 
+
 def test_clamps_to_min_warmup_for_tiny_dataset():
-    result = compute_warmup_steps(
-        num_examples=10, batch_size=8, grad_accum=1, epochs=1, ratio=0.03
-    )
+    result = compute_warmup_steps(num_examples=10, batch_size=8, grad_accum=1, epochs=1, ratio=0.03)
     assert result == MIN_WARMUP
 
 
@@ -40,6 +39,7 @@ def test_clamps_to_max_warmup_for_huge_dataset():
 
 
 # --- Bounds ---
+
 
 def test_max_ratio_accepted():
     result = compute_warmup_steps(1000, 8, 1, 3, ratio=0.5)
@@ -54,6 +54,7 @@ def test_grad_accum_reduces_steps():
 
 # --- Edge cases ---
 
+
 def test_single_example():
     result = compute_warmup_steps(1, 1, 1, 1)
     assert result == MIN_WARMUP
@@ -65,6 +66,7 @@ def test_single_epoch():
 
 
 # --- Validation errors ---
+
 
 def test_raises_for_zero_examples():
     with pytest.raises(ValueError, match="num_examples"):

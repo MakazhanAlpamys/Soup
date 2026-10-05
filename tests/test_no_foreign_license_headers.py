@@ -136,17 +136,12 @@ class TestNoForeignLicenseHeaders:
         assert not problems, (
             "These files carry a third-party licence header. This project is "
             "Apache-2.0 and ships to PyPI, so a foreign header is a licensing "
-            "claim we cannot make. Delete the header (see 8e4f012):\n  "
-            + "\n  ".join(problems)
+            "claim we cannot make. Delete the header (see 8e4f012):\n  " + "\n  ".join(problems)
         )
 
     def test_the_scan_actually_covers_the_suite(self):
         """A scanner that silently stopped reading files would pass vacuously."""
-        scanned = [
-            p
-            for p in _tracked_files()
-            if p.suffix.lower() in SCANNED_SUFFIXES
-        ]
+        scanned = [p for p in _tracked_files() if p.suffix.lower() in SCANNED_SUFFIXES]
         assert len(scanned) > 400, (
             f"only {len(scanned)} files matched the scan; the tracked-file "
             "listing or the suffix set has broken"
@@ -219,8 +214,7 @@ class TestTheScannerCanActuallyFail:
                 '"""Why this guard exists.',
                 "",
                 "    # SPDX-License-Identifier: AGPL-3.0-only",
-                "    # Copyright 2026-present the Unsloth AI Inc. team."
-                " All rights reserved.",
+                "    # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.",
                 '"""',
             ]
         )

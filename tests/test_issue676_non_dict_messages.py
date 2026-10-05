@@ -95,14 +95,13 @@ def test_empty_chatml_list_is_preserved() -> None:
 @pytest.mark.parametrize("fields", [{}, {"messages": None}, {"messages": []}])
 def test_video_without_messages_still_converts(fields: dict) -> None:
     assert format_to_messages({"video": "clip.mp4", **fields}, "video") == {
-        "video": "clip.mp4", "messages": []
+        "video": "clip.mp4",
+        "messages": [],
     }
 
 
 def test_valid_chatml_audio_video_rows_convert_unchanged() -> None:
-    assert format_to_messages(VALID_CHATML, "chatml") == {
-        "messages": VALID_CHATML["messages"]
-    }
+    assert format_to_messages(VALID_CHATML, "chatml") == {"messages": VALID_CHATML["messages"]}
     assert format_to_messages(VALID_AUDIO, "audio") == {
         "messages": VALID_AUDIO["messages"],
         "audio": "clip.wav",
@@ -125,9 +124,7 @@ def test_validate_and_load_dataset_agree_on_chatml_file(tmp_path: Path) -> None:
     path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
 
     stats = validate_and_stats(rows, expected_format="chatml")
-    loaded = load_dataset(
-        DataConfig(train=str(path), format="chatml", val_split=0.0)
-    )
+    loaded = load_dataset(DataConfig(train=str(path), format="chatml", val_split=0.0))
     assert stats["valid_rows"] == 2
     assert len(loaded["train"]) == stats["valid_rows"]
 
@@ -150,8 +147,6 @@ def test_soup_data_validate_reports_dropped_chatml_rows(tmp_path: Path) -> None:
     path = tmp_path / "mixed.jsonl"
     rows = [VALID_CHATML, {"messages": ["hello"]}]
     path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
-    result = CliRunner().invoke(
-        app, ["data", "validate", str(path), "--format", "chatml"]
-    )
+    result = CliRunner().invoke(app, ["data", "validate", str(path), "--format", "chatml"])
     assert result.exit_code == 0, result.output
     assert "1/2 rows valid" in strip_ansi(result.output)

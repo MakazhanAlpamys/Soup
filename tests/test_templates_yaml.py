@@ -11,21 +11,37 @@ import pytest
 class TestTemplateRegistry:
     def test_list_templates_includes_core_set(self):
         from soup_cli.templates import list_templates
+
         names = list_templates()
         for required in (
-            "chat", "code", "reasoning", "vision", "kto", "orpo",
-            "simpo", "ipo", "pretrain", "moe", "longcontext", "embedding",
-            "audio", "tool-calling", "rlhf", "medical",
+            "chat",
+            "code",
+            "reasoning",
+            "vision",
+            "kto",
+            "orpo",
+            "simpo",
+            "ipo",
+            "pretrain",
+            "moe",
+            "longcontext",
+            "embedding",
+            "audio",
+            "tool-calling",
+            "rlhf",
+            "medical",
         ):
             assert required in names, f"{required} missing from {names}"
 
     def test_list_templates_returns_sorted(self):
         from soup_cli.templates import list_templates
+
         names = list_templates()
         assert names == sorted(names)
 
     def test_load_template_chat_from_yaml(self):
         from soup_cli.templates import load_template
+
         body = load_template("chat")
         assert body is not None
         assert "Soup template: Chat Assistant" in body
@@ -33,10 +49,12 @@ class TestTemplateRegistry:
 
     def test_load_template_unknown_returns_none(self):
         from soup_cli.templates import load_template
+
         assert load_template("does-not-exist") is None
 
     def test_load_template_rejects_path_traversal(self):
         from soup_cli.templates import load_template
+
         with pytest.raises(ValueError):
             load_template("../../etc/passwd")
         with pytest.raises(ValueError):
@@ -46,16 +64,19 @@ class TestTemplateRegistry:
 
     def test_load_template_rejects_null_byte(self):
         from soup_cli.templates import load_template
+
         with pytest.raises(ValueError):
             load_template("chat\x00malicious")
 
     def test_load_template_rejects_empty_name(self):
         from soup_cli.templates import load_template
+
         with pytest.raises(ValueError):
             load_template("")
 
     def test_yaml_files_exist_for_all_inline(self):
         from soup_cli.config.schema import TEMPLATES
+
         templates_dir = Path(__file__).resolve().parent.parent / "src" / "soup_cli" / "templates"
         for name in TEMPLATES:
             yaml_path = templates_dir / f"{name}.yaml"
@@ -80,6 +101,7 @@ class TestTemplateRegistry:
         """
         from soup_cli.config.schema import TEMPLATES
         from soup_cli.templates import load_template
+
         for name in TEMPLATES:
             assert load_template(name) == TEMPLATES[name], (
                 f"YAML / inline drift for template {name!r}"
@@ -103,6 +125,7 @@ class TestSecurityFallbacks:
         # Should fall back to inline TEMPLATES["chat"], not return the giant blob.
         body = tpl_mod.load_template("chat")
         from soup_cli.config.schema import TEMPLATES
+
         assert body == TEMPLATES["chat"]
         assert len(body) < 256 * 1024
 
@@ -124,6 +147,7 @@ class TestSecurityFallbacks:
         monkeypatch.setattr(tpl_mod, "_templates_dir", lambda: fake_dir)
         body = tpl_mod.load_template("chat")
         from soup_cli.config.schema import TEMPLATES
+
         # Must NOT contain the leaked content; falls back to inline.
         assert "LEAKED CONTENT" not in (body or "")
         assert body == TEMPLATES["chat"]
@@ -134,6 +158,7 @@ class TestInitUsesRegistry:
         from typer.testing import CliRunner
 
         from soup_cli.cli import app
+
         runner = CliRunner()
         result = runner.invoke(app, ["init", "--help"])
         # init --help should still succeed after the migration

@@ -20,6 +20,7 @@ OK / MINOR / MAJOR taxonomy not used here — feature diff is a descriptive
 report, not a regression gate. Callers chain into ``soup diagnose`` if they
 want verdict classification.
 """
+
 from __future__ import annotations
 
 import json
@@ -37,20 +38,22 @@ from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
 # SSRF-hardened ``hubs.snapshot_download`` (with the #186 namespace-pin gate);
 # everything else stays operator-local. The allowlist is the provenance gate —
 # a tampered manifest cannot quietly cite (or download) a random repo.
-HF_HUB_ALLOWLIST: frozenset[str] = frozenset({
-    # DeepMind Gemma Scope (Gemma 2 9B / 27B residual-stream SAEs).
-    "google/gemma-scope-2b-pt-res",
-    "google/gemma-scope-9b-pt-res",
-    "google/gemma-scope-27b-pt-res",
-    # EleutherAI Pythia SAE family.
-    "eleutherai/sae-pythia-70m-deduped",
-    "eleutherai/sae-pythia-160m-deduped",
-    # JBloomAus SAE Lens — Llama family.
-    "jbloomaus/llama-2-7b-saes",
-    "jbloomaus/llama-3-8b-saes",
-    # OpenAI GPT-2 small SAE (research demo).
-    "openai/sae-gpt2-small",
-})
+HF_HUB_ALLOWLIST: frozenset[str] = frozenset(
+    {
+        # DeepMind Gemma Scope (Gemma 2 9B / 27B residual-stream SAEs).
+        "google/gemma-scope-2b-pt-res",
+        "google/gemma-scope-9b-pt-res",
+        "google/gemma-scope-27b-pt-res",
+        # EleutherAI Pythia SAE family.
+        "eleutherai/sae-pythia-70m-deduped",
+        "eleutherai/sae-pythia-160m-deduped",
+        # JBloomAus SAE Lens — Llama family.
+        "jbloomaus/llama-2-7b-saes",
+        "jbloomaus/llama-3-8b-saes",
+        # OpenAI GPT-2 small SAE (research demo).
+        "openai/sae-gpt2-small",
+    }
+)
 
 _MAX_REPO_LEN = 200
 _MAX_TOP_K = 100_000
@@ -75,9 +78,7 @@ class SaeFeatureChange:
     post_mean: float
 
     def __post_init__(self) -> None:
-        if isinstance(self.feature_id, bool) or not isinstance(
-            self.feature_id, int
-        ):
+        if isinstance(self.feature_id, bool) or not isinstance(self.feature_id, int):
             raise TypeError("feature_id must be int")
         if self.feature_id < 0:
             raise ValueError("feature_id must be non-negative")
@@ -105,9 +106,7 @@ class SaeFeatureDiffReport:
                 raise TypeError(f"{name} must be int")
             if val < 0:
                 raise ValueError(f"{name} must be non-negative")
-        if isinstance(self.l2_drift, bool) or not isinstance(
-            self.l2_drift, (int, float)
-        ):
+        if isinstance(self.l2_drift, bool) or not isinstance(self.l2_drift, (int, float)):
             raise TypeError("l2_drift must be float")
         if not math.isfinite(float(self.l2_drift)):
             raise ValueError("l2_drift must be finite")
@@ -133,9 +132,7 @@ def validate_sae_repo(name: object) -> str:
     if isinstance(name, bool):
         raise TypeError("repo name must be str, got bool")
     if not isinstance(name, str):
-        raise TypeError(
-            f"repo name must be str, got {type(name).__name__}"
-        )
+        raise TypeError(f"repo name must be str, got {type(name).__name__}")
     if not name:
         raise ValueError("repo name must be non-empty")
     if "\x00" in name:
@@ -145,8 +142,7 @@ def validate_sae_repo(name: object) -> str:
     lower = name.lower()
     if lower not in HF_HUB_ALLOWLIST:
         raise ValueError(
-            f"repo {name!r} not in HF_HUB_ALLOWLIST "
-            f"(known: {sorted(HF_HUB_ALLOWLIST)})"
+            f"repo {name!r} not in HF_HUB_ALLOWLIST (known: {sorted(HF_HUB_ALLOWLIST)})"
         )
     return lower
 
@@ -188,24 +184,16 @@ def encode_activations(
     if weights.ndim != 2:
         raise ValueError(f"W_enc must be 2D, got shape {weights.shape}")
     if acts.shape[1] != weights.shape[0]:
-        raise ValueError(
-            f"shape mismatch: activations[{acts.shape}] @ w_enc[{weights.shape}]"
-        )
+        raise ValueError(f"shape mismatch: activations[{acts.shape}] @ w_enc[{weights.shape}]")
     if weights.shape[1] > _MAX_FEATURES:
-        raise ValueError(
-            f"SAE has >{_MAX_FEATURES} features (got {weights.shape[1]})"
-        )
+        raise ValueError(f"SAE has >{_MAX_FEATURES} features (got {weights.shape[1]})")
     if acts.shape[0] > _MAX_TOKENS:
-        raise ValueError(
-            f"activations has >{_MAX_TOKENS} tokens (got {acts.shape[0]})"
-        )
+        raise ValueError(f"activations has >{_MAX_TOKENS} tokens (got {acts.shape[0]})")
     pre = acts @ weights
     if b_enc is not None:
         bias = np.asarray(b_enc, dtype=np.float32)
         if bias.ndim != 1 or bias.shape[0] != weights.shape[1]:
-            raise ValueError(
-                f"b_enc must be 1D with {weights.shape[1]} entries"
-            )
+            raise ValueError(f"b_enc must be 1D with {weights.shape[1]} entries")
         pre = pre + bias
     return np.maximum(pre, 0.0)
 
@@ -246,9 +234,7 @@ def compute_feature_diff(
     if pre.ndim != 2 or post.ndim != 2:
         raise ValueError("pre/post must be 2D feature arrays")
     if pre.shape != post.shape:
-        raise ValueError(
-            f"shape mismatch: pre={pre.shape}, post={post.shape}"
-        )
+        raise ValueError(f"shape mismatch: pre={pre.shape}, post={post.shape}")
     num_tokens, num_features = pre.shape
     if num_features > _MAX_FEATURES:
         raise ValueError(f"too many features ({num_features})")
@@ -313,9 +299,7 @@ def _read_safetensors_dict(real_path: str) -> dict[str, Any]:
     try:
         from safetensors import safe_open
     except ImportError as exc:  # pragma: no cover - exercised when dep missing
-        raise RuntimeError(
-            "safetensors package required; pip install safetensors"
-        ) from exc
+        raise RuntimeError("safetensors package required; pip install safetensors") from exc
     out: dict[str, Any] = {}
     with safe_open(real_path, framework="numpy") as f:
         # M5 review fix: pre-check key count BEFORE materializing tensors so
@@ -349,14 +333,9 @@ def load_sae_weights(path: str) -> Mapping[str, Any]:
     try:
         fd = os.open(path, os.O_RDONLY | no_follow)
     except FileNotFoundError as exc:
-        raise FileNotFoundError(
-            f"SAE weights not found: {os.path.basename(path)}"
-        ) from exc
+        raise FileNotFoundError(f"SAE weights not found: {os.path.basename(path)}") from exc
     except OSError as exc:
-        raise ValueError(
-            f"SAE weights cannot be opened (symlink?): "
-            f"{type(exc).__name__}"
-        ) from exc
+        raise ValueError(f"SAE weights cannot be opened (symlink?): {type(exc).__name__}") from exc
     os.close(fd)
     real = os.path.realpath(path)
     if os.path.getsize(real) > _MAX_SAE_BYTES:
@@ -407,12 +386,9 @@ def download_sae(
         revision=revision,
         allow_patterns=["*.safetensors"],
     )
-    matches = sorted(glob.glob(os.path.join(snapshot_dir, "**", "*.safetensors"),
-                               recursive=True))
+    matches = sorted(glob.glob(os.path.join(snapshot_dir, "**", "*.safetensors"), recursive=True))
     if not matches:
-        raise FileNotFoundError(
-            f"no .safetensors checkpoint in downloaded SAE {repo_id!r}"
-        )
+        raise FileNotFoundError(f"no .safetensors checkpoint in downloaded SAE {repo_id!r}")
     # HF's own snapshot blob-store symlinks are legitimate and stay INSIDE the
     # cache, but a malicious allowlisted-repo snapshot could ship a *.safetensors
     # symlink pointing at e.g. /etc/shadow. Confirm the resolved file stays under
@@ -421,9 +397,7 @@ def download_sae(
 
     chosen = matches[0]
     if not is_under(os.path.realpath(chosen), os.path.realpath(snapshot_dir)):
-        raise ValueError(
-            "downloaded SAE checkpoint resolves outside the snapshot dir"
-        )
+        raise ValueError("downloaded SAE checkpoint resolves outside the snapshot dir")
     return _read_safetensors_dict(chosen)
 
 
@@ -452,9 +426,7 @@ def compute_sae_diff(
     pre = np.asarray(pre_activations)
     post = np.asarray(post_activations)
     if pre.shape != post.shape:
-        raise ValueError(
-            f"pre/post activations shape mismatch: {pre.shape} vs {post.shape}"
-        )
+        raise ValueError(f"pre/post activations shape mismatch: {pre.shape} vs {post.shape}")
     w_enc = sae["W_enc"]
     b_enc = sae.get("b_enc")
     pre_feats = encode_activations(pre, w_enc, b_enc=b_enc)
@@ -502,12 +474,14 @@ def render_report_markdown(report: SaeFeatureDiffReport) -> str:
     if not report.changes:
         lines.append("_no changes (empty report)_")
         return "\n".join(lines) + "\n"
-    lines.extend([
-        "## Top-changed features",
-        "",
-        "| Feature | Δ activation | pre mean | post mean |",
-        "| --- | --- | --- | --- |",
-    ])
+    lines.extend(
+        [
+            "## Top-changed features",
+            "",
+            "| Feature | Δ activation | pre mean | post mean |",
+            "| --- | --- | --- | --- |",
+        ]
+    )
     for change in report.changes:
         lines.append(
             f"| {change.feature_id} "
@@ -520,6 +494,6 @@ def render_report_markdown(report: SaeFeatureDiffReport) -> str:
 
 # Module-level: expose closed metadata via MappingProxyType for callers that
 # iterate (matches v0.51.0+ pattern).
-_REPO_METADATA: Mapping[str, str] = MappingProxyType({
-    name: name for name in sorted(HF_HUB_ALLOWLIST)
-})
+_REPO_METADATA: Mapping[str, str] = MappingProxyType(
+    {name: name for name in sorted(HF_HUB_ALLOWLIST)}
+)

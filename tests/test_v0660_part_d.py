@@ -14,6 +14,7 @@ Public surface:
 - ``build_interference_matrix(adapters, probe_losses)`` — pure orchestrator
 - ``render_matrix_json`` / ``render_matrix_markdown``
 """
+
 from __future__ import annotations
 
 import json
@@ -173,9 +174,7 @@ def test_classify_rejects_non_finite():
 def test_cell_frozen():
     from soup_cli.utils.interference import InterferenceCell
 
-    cell = InterferenceCell(
-        adapter_a="a", adapter_b="b", score=0.0, verdict="OK"
-    )
+    cell = InterferenceCell(adapter_a="a", adapter_b="b", score=0.0, verdict="OK")
     with pytest.raises((AttributeError, Exception)):
         cell.score = 1.0  # type: ignore[misc]
 
@@ -205,9 +204,7 @@ def test_cell_rejects_non_finite_score():
     from soup_cli.utils.interference import InterferenceCell
 
     with pytest.raises(ValueError):
-        InterferenceCell(
-            adapter_a="a", adapter_b="b", score=float("inf"), verdict="OK"
-        )
+        InterferenceCell(adapter_a="a", adapter_b="b", score=float("inf"), verdict="OK")
 
 
 def test_cell_rejects_null_byte_adapter_name():
@@ -306,11 +303,15 @@ def test_build_matrix_worst_pair():
 
     adapters = ("a", "b", "c")
     losses = {
-        ("a", "a"): 1.0, ("b", "b"): 1.0, ("c", "c"): 1.0,
+        ("a", "a"): 1.0,
+        ("b", "b"): 1.0,
+        ("c", "c"): 1.0,
         ("a", "b"): 1.1,  # 10% increase
         ("a", "c"): 1.5,  # 50% increase (MAJOR)
-        ("b", "a"): 1.05, ("b", "c"): 1.2,
-        ("c", "a"): 1.3, ("c", "b"): 1.0,
+        ("b", "a"): 1.05,
+        ("b", "c"): 1.2,
+        ("c", "a"): 1.3,
+        ("c", "b"): 1.0,
     }
     matrix = build_interference_matrix(adapters, losses)
     # Worst pair = (a, c) with score 0.5
@@ -421,9 +422,7 @@ def test_render_matrix_json_roundtrip():
 
     m = InterferenceMatrix(
         adapters=("a", "b"),
-        cells=(
-            InterferenceCell(adapter_a="a", adapter_b="b", score=0.10, verdict="MINOR"),
-        ),
+        cells=(InterferenceCell(adapter_a="a", adapter_b="b", score=0.10, verdict="MINOR"),),
         worst_pair=("a", "b"),
         worst_score=0.10,
     )
@@ -449,9 +448,7 @@ def test_render_matrix_markdown_has_table():
 
     m = InterferenceMatrix(
         adapters=("a", "b"),
-        cells=(
-            InterferenceCell(adapter_a="a", adapter_b="b", score=0.30, verdict="MAJOR"),
-        ),
+        cells=(InterferenceCell(adapter_a="a", adapter_b="b", score=0.30, verdict="MAJOR"),),
         worst_pair=("a", "b"),
         worst_score=0.30,
     )
@@ -492,7 +489,8 @@ def test_no_heavy_top_level_imports():
 
     source = inspect.getsource(interference)
     top_level_imports = [
-        line for line in source.splitlines()
+        line
+        for line in source.splitlines()
         if line.startswith("import ") or line.startswith("from ")
     ]
     for line in top_level_imports:

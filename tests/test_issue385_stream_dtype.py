@@ -207,9 +207,7 @@ class TestResolveStreamDtype:
 
         for bf16 in (True, False):
             fake_torch(available=True, bf16=bf16)
-            assert resolve_stream_dtype("cuda") == str(get_compute_dtype()).removeprefix(
-                "torch."
-            )
+            assert resolve_stream_dtype("cuda") == str(get_compute_dtype()).removeprefix("torch.")
         assert torch is not None  # the import is the point of the comparison
 
     @pytest.mark.skipif(
@@ -385,8 +383,12 @@ def _tiny_lora():
     from peft import LoraConfig, TaskType
 
     return LoraConfig(
-        r=4, lora_alpha=8, lora_dropout=0.0, bias="none",
-        target_modules=["q_proj", "v_proj"], task_type=TaskType.CAUSAL_LM,
+        r=4,
+        lora_alpha=8,
+        lora_dropout=0.0,
+        bias="none",
+        target_modules=["q_proj", "v_proj"],
+        task_type=TaskType.CAUSAL_LM,
     )
 
 
@@ -397,8 +399,13 @@ def _tiny_llama_dir(tmp_path):
 
     torch.manual_seed(7)
     config = LlamaConfig(
-        vocab_size=64, hidden_size=64, intermediate_size=128, num_hidden_layers=2,
-        num_attention_heads=4, num_key_value_heads=2, tie_word_embeddings=True,
+        vocab_size=64,
+        hidden_size=64,
+        intermediate_size=128,
+        num_hidden_layers=2,
+        num_attention_heads=4,
+        num_key_value_heads=2,
+        tie_word_embeddings=True,
         max_position_embeddings=128,
     )
     model = LlamaForCausalLM(config).to(torch.float32).eval()
@@ -472,8 +479,16 @@ class TestFloat16StreamingIsBitExact:
 
         index = shard_checkpoint(weights, shards, dtype=dtype, arch="llama", **shard_kwargs)
         model, runtime = build_streamed_model(
-            model_id=weights, shard_dir=shards, index=index, lora_config=_tiny_lora(),
-            device="cuda", dtype=dtype, buffers=2, pin=False, seed=3, **stream_kwargs,
+            model_id=weights,
+            shard_dir=shards,
+            index=index,
+            lora_config=_tiny_lora(),
+            device="cuda",
+            dtype=dtype,
+            buffers=2,
+            pin=False,
+            seed=3,
+            **stream_kwargs,
         )
         try:
             _randomise_lora_b(model)
@@ -490,8 +505,10 @@ class TestFloat16StreamingIsBitExact:
                 from soup_cli.utils.layer_stream_runtime import build_nf4_config
 
                 base = AutoModelForCausalLM.from_pretrained(
-                    weights, quantization_config=build_nf4_config(dtype),
-                    dtype=getattr(torch, dtype), device_map={"": "cuda"},
+                    weights,
+                    quantization_config=build_nf4_config(dtype),
+                    dtype=getattr(torch, dtype),
+                    device_map={"": "cuda"},
                 )
             base.config.use_cache = False
             for param in base.parameters():

@@ -34,12 +34,14 @@ class TestSequenceLevelGSPO:
         batch, seq = 4, 6
         logp_old = torch.randn(batch, seq)
         adv = torch.tensor([1.5, -0.8, 0.4, -1.2])
-        mask = torch.tensor([
-            [1.0, 1.0, 1.0, 0.0, 0.0, 0.0],
-            [1.0, 1.0, 0.0, 0.0, 0.0, 0.0],
-            [1.0, 1.0, 1.0, 1.0, 1.0, 0.0],
-            [1.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-        ])
+        mask = torch.tensor(
+            [
+                [1.0, 1.0, 1.0, 0.0, 0.0, 0.0],
+                [1.0, 1.0, 0.0, 0.0, 0.0, 0.0],
+                [1.0, 1.0, 1.0, 1.0, 1.0, 0.0],
+                [1.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            ]
+        )
 
         base_logp_new = logp_old.clone() + 0.1
         loss_baseline = apply_variant_loss(
@@ -75,11 +77,13 @@ class TestSequenceLevelGSPO:
         batch, seq = 3, 5
         logp_old = torch.randn(batch, seq)
         adv = torch.tensor([2.0, -1.0, 0.5])
-        mask = torch.tensor([
-            [1.0, 1.0, 1.0, 0.0, 0.0],
-            [1.0, 1.0, 0.0, 0.0, 0.0],
-            [1.0, 1.0, 1.0, 1.0, 0.0],
-        ])
+        mask = torch.tensor(
+            [
+                [1.0, 1.0, 1.0, 0.0, 0.0],
+                [1.0, 1.0, 0.0, 0.0, 0.0],
+                [1.0, 1.0, 1.0, 1.0, 0.0],
+            ]
+        )
 
         logp_new = (logp_old + 0.05).detach().clone().requires_grad_(True)
         loss = apply_variant_loss(
@@ -102,19 +106,25 @@ class TestSequenceLevelGSPO:
         torch = _torch_or_skip()
         from soup_cli.utils.grpo_variants import apply_variant_loss
 
-        logp_new = torch.tensor([
-            [1.2, 0.8, -0.4, 0.0],
-            [-0.5, 0.3, 0.0, 0.0],
-        ])
-        logp_old = torch.tensor([
-            [1.0, 0.5, -0.2, 0.0],
-            [-0.7, 0.1, 0.0, 0.0],
-        ])
+        logp_new = torch.tensor(
+            [
+                [1.2, 0.8, -0.4, 0.0],
+                [-0.5, 0.3, 0.0, 0.0],
+            ]
+        )
+        logp_old = torch.tensor(
+            [
+                [1.0, 0.5, -0.2, 0.0],
+                [-0.7, 0.1, 0.0, 0.0],
+            ]
+        )
         adv = torch.tensor([1.2, -0.8])
-        mask = torch.tensor([
-            [1.0, 1.0, 1.0, 0.0],  # length 3
-            [1.0, 1.0, 0.0, 0.0],  # length 2
-        ])
+        mask = torch.tensor(
+            [
+                [1.0, 1.0, 1.0, 0.0],  # length 3
+                [1.0, 1.0, 0.0, 0.0],  # length 2
+            ]
+        )
 
         # Manual calculation:
         # Row 0: token log-ratios = [0.2, 0.3, -0.2], sum = 0.3, length = 3 -> seq_log_ratio = 0.1
@@ -158,13 +168,16 @@ class TestSequenceLevelGSPO:
         torch.manual_seed(202)
         s = torch.randn(5, 8)
         o = torch.randn(5, 8)
-        mask = torch.tensor([
-            [1, 1, 1, 0, 0, 0, 0, 0],
-            [1, 1, 1, 1, 1, 0, 0, 0],
-            [1, 1, 0, 0, 0, 0, 0, 0],
-            [1, 1, 1, 1, 1, 1, 1, 1],
-            [1, 1, 1, 1, 0, 0, 0, 0],
-        ], dtype=torch.float32)
+        mask = torch.tensor(
+            [
+                [1, 1, 1, 0, 0, 0, 0, 0],
+                [1, 1, 1, 1, 1, 0, 0, 0],
+                [1, 1, 0, 0, 0, 0, 0, 0],
+                [1, 1, 1, 1, 1, 1, 1, 1],
+                [1, 1, 1, 1, 0, 0, 0, 0],
+            ],
+            dtype=torch.float32,
+        )
         adv = torch.tensor([1.4, -0.7, 0.3, -1.5, 0.9])
 
         loss_orig = apply_variant_loss(
@@ -229,18 +242,24 @@ class TestSequenceLevelGSPO:
         # Both have s = exp(0.1) ~ 1.105 (within [0.8, 1.2], unclipped).
         # Because both have the same length-normalized ratio and same advantage,
         # their per-sequence loss must be identical.
-        s = torch.tensor([
-            [1.1, 0.0, 0.0, 0.0, 0.0],
-            [1.1, 1.1, 1.1, 1.1, 1.1],
-        ])
-        o = torch.tensor([
-            [1.0, 0.0, 0.0, 0.0, 0.0],
-            [1.0, 1.0, 1.0, 1.0, 1.0],
-        ])
-        mask = torch.tensor([
-            [1.0, 0.0, 0.0, 0.0, 0.0],
-            [1.0, 1.0, 1.0, 1.0, 1.0],
-        ])
+        s = torch.tensor(
+            [
+                [1.1, 0.0, 0.0, 0.0, 0.0],
+                [1.1, 1.1, 1.1, 1.1, 1.1],
+            ]
+        )
+        o = torch.tensor(
+            [
+                [1.0, 0.0, 0.0, 0.0, 0.0],
+                [1.0, 1.0, 1.0, 1.0, 1.0],
+            ]
+        )
+        mask = torch.tensor(
+            [
+                [1.0, 0.0, 0.0, 0.0, 0.0],
+                [1.0, 1.0, 1.0, 1.0, 1.0],
+            ]
+        )
         adv = torch.tensor([1.0, 1.0])
 
         loss = apply_variant_loss(
@@ -256,15 +275,13 @@ class TestSequenceLevelGSPO:
     @pytest.mark.parametrize(
         "diff,adv_val,is_clipped",
         [
-            (0.0, 2.0, False),    # s = 1.0 -> within [0.8, 1.2], unclipped
-            (0.1, 2.0, False),    # s = exp(0.1) ~ 1.105 -> unclipped
-            (0.5, 2.0, True),     # s = exp(0.5) > 1.2, A > 0 -> upper clipped to 1.2 * A
-            (-0.5, -2.0, True),   # s = exp(-0.5) < 0.8, A < 0 -> lower clipped to 0.8 * A
+            (0.0, 2.0, False),  # s = 1.0 -> within [0.8, 1.2], unclipped
+            (0.1, 2.0, False),  # s = exp(0.1) ~ 1.105 -> unclipped
+            (0.5, 2.0, True),  # s = exp(0.5) > 1.2, A > 0 -> upper clipped to 1.2 * A
+            (-0.5, -2.0, True),  # s = exp(-0.5) < 0.8, A < 0 -> lower clipped to 0.8 * A
         ],
     )
-    def test_clip_boundary_regimes(
-        self, diff: float, adv_val: float, is_clipped: bool
-    ) -> None:
+    def test_clip_boundary_regimes(self, diff: float, adv_val: float, is_clipped: bool) -> None:
         """Test clip boundary regimes: unclipped vs upper-clipped vs lower-clipped."""
         torch = _torch_or_skip()
         from soup_cli.utils.grpo_variants import apply_variant_loss
@@ -322,11 +339,13 @@ class TestSequenceLevelGSPO:
         s = torch.randn(3, 4, requires_grad=True)
         o = torch.randn(3, 4)
         adv = torch.tensor([1.0, -0.5, 0.8])
-        mask = torch.tensor([
-            [1.0, 1.0, 0.0, 0.0],
-            [0.0, 0.0, 0.0, 0.0],  # empty completion
-            [1.0, 1.0, 1.0, 1.0],
-        ])
+        mask = torch.tensor(
+            [
+                [1.0, 1.0, 0.0, 0.0],
+                [0.0, 0.0, 0.0, 0.0],  # empty completion
+                [1.0, 1.0, 1.0, 1.0],
+            ]
+        )
 
         loss = apply_variant_loss(
             "gspo",
@@ -400,9 +419,7 @@ class TestSequenceLevelGSPO:
                 self._get_logps_called += 1
                 b = input_ids.size(0)
                 t = logits_to_keep
-                logps = torch.tensor(
-                    [[-0.1, -0.2, -0.3], [-0.4, -0.5, -0.6]], requires_grad=True
-                )
+                logps = torch.tensor([[-0.1, -0.2, -0.3], [-0.4, -0.5, -0.6]], requires_grad=True)
                 return logps, torch.zeros(b, t)
 
             def _compute_loss(self, model, inputs):

@@ -62,9 +62,7 @@ def _install_fake_entry_point(monkeypatch, name: str = "hello") -> list[str]:
         value=f"{module_name}:register",
         group="soup_cli.plugins",
     )
-    monkeypatch.setattr(
-        plugins_pkg, "_iter_plugin_entry_points", lambda: (entry_point,)
-    )
+    monkeypatch.setattr(plugins_pkg, "_iter_plugin_entry_points", lambda: (entry_point,))
     return registrations
 
 
@@ -233,9 +231,7 @@ def test_plugin_resources_are_rendered_as_literal_text(monkeypatch):
     assert "[bold red]GROUP-MARKUP[/]" in plain
 
 
-def test_partially_failing_entry_point_cannot_leave_plugin_enabled(
-    monkeypatch, _isolated_registry
-):
+def test_partially_failing_entry_point_cannot_leave_plugin_enabled(monkeypatch, _isolated_registry):
     class BrokenEntryPoint:
         name = "partial"
 
@@ -251,9 +247,7 @@ def test_partially_failing_entry_point_cannot_leave_plugin_enabled(
 
             return register_then_fail
 
-    monkeypatch.setattr(
-        plugins_pkg, "_iter_plugin_entry_points", lambda: (BrokenEntryPoint(),)
-    )
+    monkeypatch.setattr(plugins_pkg, "_iter_plugin_entry_points", lambda: (BrokenEntryPoint(),))
     _isolated_registry.write_text(
         json.dumps({"version": 1, "enabled": {"partial": True}}),
         encoding="utf-8",
@@ -276,9 +270,7 @@ def test_recursive_state_json_is_ignored_without_crashing(_isolated_registry):
 
 
 def test_enable_state_is_published_with_atomic_replace(monkeypatch, _isolated_registry):
-    plugins_pkg.register_plugin(
-        name="atomic", version="1.0.0", plugin=_HookPlugin()
-    )
+    plugins_pkg.register_plugin(name="atomic", version="1.0.0", plugin=_HookPlugin())
     real_replace = os.replace
     replacements: list[tuple[str, str]] = []
 

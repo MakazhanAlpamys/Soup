@@ -21,10 +21,9 @@ def _validate_name(name: str) -> None:
     """Validate dataset name — no path separators, null bytes, or empty."""
     if not name:
         raise ValueError("Dataset name must not be empty")
-    if re.search(r'[/\\:\x00]', name):
+    if re.search(r"[/\\:\x00]", name):
         raise ValueError(
-            f"Dataset name '{name}' must not contain "
-            "path separators (/ \\ :) or null bytes"
+            f"Dataset name '{name}' must not contain path separators (/ \\ :) or null bytes"
         )
 
 
@@ -96,7 +95,5 @@ def resolve_dataset(
     if entry is not None:
         stored_path = entry.get("path", "")
         if "\x00" in stored_path:
-            raise ValueError(
-                f"Registry entry '{name}' contains null bytes in path"
-            )
+            raise ValueError(f"Registry entry '{name}' contains null bytes in path")
     return entry

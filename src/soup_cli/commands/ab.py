@@ -24,21 +24,27 @@ console = Console()
 
 def ab(
     input_path: str = typer.Option(
-        ..., "--input", "-i", help="JSONL with {arm, <metric>} per row.",
+        ...,
+        "--input",
+        "-i",
+        help="JSONL with {arm, <metric>} per row.",
     ),
     metric: str = typer.Option(
-        ..., "--metric",
+        ...,
+        "--metric",
         help="Metric: latency | judge_score | retry_rate.",
     ),
     alpha: float = typer.Option(
-        0.05, "--alpha",
+        0.05,
+        "--alpha",
         help=(
             "Type-I error (false positive) rate (0, 1) of the two-sided test, kept for a "
             "test re-run after every new row, at any number of rows."
         ),
     ),
     beta: float = typer.Option(
-        0.20, "--beta",
+        0.20,
+        "--beta",
         help=(
             "Type-II error (false negative) rate (0, 1). Not the power: a power "
             "of 0.95 is --beta 0.05. alpha + beta must stay below 1, or the "
@@ -46,18 +52,21 @@ def ab(
         ),
     ),
     effect_size: float = typer.Option(
-        0.1, "--effect-size",
+        0.1,
+        "--effect-size",
         help="Minimum detectable difference in means.",
     ),
     slack_url: Optional[str] = typer.Option(
-        None, "--slack-url",
+        None,
+        "--slack-url",
         help=(
             "Optional Slack webhook URL — POSTed on a reject_h0 / accept_h0 "
             "decision (not on continue). SSRF-validated."
         ),
     ),
     discord_url: Optional[str] = typer.Option(
-        None, "--discord-url",
+        None,
+        "--discord-url",
         help=(
             "Optional Discord webhook URL — POSTed on a reject_h0 / accept_h0 "
             "decision (not on continue). SSRF-validated."
@@ -71,13 +80,14 @@ def ab(
         console.print(f"[red]{escape(str(exc))}[/]")
         raise typer.Exit(2) from exc
 
-    slack_url, discord_url = validate_webhook_flags(
-        slack_url, discord_url, console=console
-    )
+    slack_url, discord_url = validate_webhook_flags(slack_url, discord_url, console=console)
 
     try:
         cfg = MsprtConfig(
-            metric=canonical, alpha=alpha, beta=beta, effect_size=effect_size,
+            metric=canonical,
+            alpha=alpha,
+            beta=beta,
+            effect_size=effect_size,
         )
     except (TypeError, ValueError) as exc:
         console.print(f"[red]{escape(str(exc))}[/]")

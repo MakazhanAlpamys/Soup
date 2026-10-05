@@ -65,8 +65,7 @@ def test_probe_would_catch_a_regression():
         [
             sys.executable,
             "-c",
-            "import sys, torch; import soup_cli.cli; "
-            "print('torch' in sys.modules)",
+            "import sys, torch; import soup_cli.cli; print('torch' in sys.modules)",
         ],
         capture_output=True,
         text=True,

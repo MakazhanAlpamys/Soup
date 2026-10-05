@@ -88,10 +88,15 @@ def test_off_policy_mask_threshold_out_of_range(v):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("field", [
-    "ref_model_ema_alpha", "tis_threshold",
-    "off_policy_mask_threshold", "replay_buffer_size",
-])
+@pytest.mark.parametrize(
+    "field",
+    [
+        "ref_model_ema_alpha",
+        "tis_threshold",
+        "off_policy_mask_threshold",
+        "replay_buffer_size",
+    ],
+)
 def test_stability_numeric_bool_rejected(field):
     """tdd-guide HIGH fix: bool-before-int/float guard per project policy."""
     with pytest.raises(ValidationError):
@@ -152,29 +157,35 @@ training:
 """
 
 
-@pytest.mark.parametrize("field,value", [
-    ("ref_model_ema_alpha", 0.99),
-    ("replay_buffer_size", 1000),
-    ("async_grpo_prefetch", True),
-    ("tis_threshold", 2.0),
-    ("defer_rerolling", True),
-    ("skip_zero_advantage", True),
-    ("off_policy_mask_threshold", 0.5),
-])
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("ref_model_ema_alpha", 0.99),
+        ("replay_buffer_size", 1000),
+        ("async_grpo_prefetch", True),
+        ("tis_threshold", 2.0),
+        ("defer_rerolling", True),
+        ("skip_zero_advantage", True),
+        ("off_policy_mask_threshold", 0.5),
+    ],
+)
 def test_stability_field_on_grpo_happy(field, value):
     cfg = load_config_from_string(_grpo_yaml(f"  {field}: {value}\n"))
     assert getattr(cfg.training, field) == value
 
 
-@pytest.mark.parametrize("field,value", [
-    ("ref_model_ema_alpha", 0.99),
-    ("replay_buffer_size", 1000),
-    ("async_grpo_prefetch", True),
-    ("tis_threshold", 2.0),
-    ("defer_rerolling", True),
-    ("skip_zero_advantage", True),
-    ("off_policy_mask_threshold", 0.5),
-])
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("ref_model_ema_alpha", 0.99),
+        ("replay_buffer_size", 1000),
+        ("async_grpo_prefetch", True),
+        ("tis_threshold", 2.0),
+        ("defer_rerolling", True),
+        ("skip_zero_advantage", True),
+        ("off_policy_mask_threshold", 0.5),
+    ],
+)
 def test_stability_field_on_sft_rejected(field, value):
     with pytest.raises((ValidationError, ValueError), match="task='grpo'|task=.grpo."):
         load_config_from_string(_sft_yaml(f"  {field}: {value}\n"))
@@ -224,9 +235,6 @@ def test_grpo_fp16_on_grpo_happy():
 
 
 def test_combined_stability_fields_named_in_error():
-    yaml = _sft_yaml(
-        "  ref_model_ema_alpha: 0.99\n"
-        "  replay_buffer_size: 1000\n"
-    )
+    yaml = _sft_yaml("  ref_model_ema_alpha: 0.99\n  replay_buffer_size: 1000\n")
     with pytest.raises((ValidationError, ValueError), match="ref_model_ema_alpha"):
         load_config_from_string(yaml)

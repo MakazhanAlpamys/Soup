@@ -115,8 +115,7 @@ def _tensor_rows_from_header(
     dtype = str(entry.get("dtype", ""))
     if dtype not in _DTYPE_INFO:
         raise ValueError(
-            f"unsupported PLE dtype {dtype!r}; supported: "
-            f"{', '.join(sorted(_DTYPE_INFO))}"
+            f"unsupported PLE dtype {dtype!r}; supported: {', '.join(sorted(_DTYPE_INFO))}"
         )
     shape_raw = entry.get("shape")
     if not isinstance(shape_raw, list) or len(shape_raw) != 2:
@@ -132,9 +131,7 @@ def _tensor_rows_from_header(
         raise ValueError(f"PLE tensor has invalid data_offsets {offsets!r}")
     expected = math.prod(shape) * _DTYPE_INFO[dtype][0]
     if relative_end - relative_start != expected:
-        raise ValueError(
-            f"PLE byte range is {relative_end - relative_start}, expected {expected}"
-        )
+        raise ValueError(f"PLE byte range is {relative_end - relative_start}, expected {expected}")
     start = data_start + relative_start
     end = data_start + relative_end
     if end > file_size:
@@ -176,9 +173,7 @@ class _SafeTensorContainer:
     ) -> TensorRowsSpec:
         safe_spec = self.safe_specs.get(source_key)
         if safe_spec != (tuple(expected_shape), expected_dtype):
-            raise ValueError(
-                "PLE descriptor does not match the validated safetensors header"
-            )
+            raise ValueError("PLE descriptor does not match the validated safetensors header")
         spec = _tensor_rows_from_header(
             self.header,
             self.data_start,
@@ -188,9 +183,7 @@ class _SafeTensorContainer:
         if tuple(spec.shape) != tuple(expected_shape):
             raise ValueError(f"PLE shape changed ({spec.shape} != {tuple(expected_shape)})")
         if spec.dtype != expected_dtype:
-            raise ValueError(
-                f"PLE dtype changed ({spec.dtype!r} != {expected_dtype!r})"
-            )
+            raise ValueError(f"PLE dtype changed ({spec.dtype!r} != {expected_dtype!r})")
         return spec
 
     def close(self) -> None:
@@ -225,9 +218,7 @@ class SafeTensorRowReader:
         if self._container.path != self.path:
             raise ValueError("shared PLE container path mismatch")
         self._owns_container = _container is None
-        self.spec = self._container.tensor_spec(
-            source_key, expected_shape, expected_dtype
-        )
+        self.spec = self._container.tensor_spec(source_key, expected_shape, expected_dtype)
         self._mapping = self._container.mapping
         self.closed = False
 
@@ -258,8 +249,7 @@ class SafeTensorRowReader:
         maximum = int(flat.max())
         if minimum < 0 or maximum >= self.spec.shape[0]:
             raise IndexError(
-                f"PLE row id outside [0, {self.spec.shape[0]}): "
-                f"min={minimum}, max={maximum}"
+                f"PLE row id outside [0, {self.spec.shape[0]}): min={minimum}, max={maximum}"
             )
         _itemsize, numpy_dtype, torch_dtype = _DTYPE_INFO[self.spec.dtype]
         matrix = np.ndarray(
@@ -527,18 +517,12 @@ def _gather_sharded(
     ids = row_ids.detach().to(device="cpu", dtype=torch.long)
     flat = ids.reshape(-1)
     if flat.numel() == 0:
-        return torch.empty(
-            (*ids.shape, shape[1]), dtype=getattr(torch, _TORCH_DTYPE_NAMES[dtype])
-        )
+        return torch.empty((*ids.shape, shape[1]), dtype=getattr(torch, _TORCH_DTYPE_NAMES[dtype]))
     minimum = int(flat.min())
     maximum = int(flat.max())
     if minimum < 0 or maximum >= shape[0]:
-        raise IndexError(
-            f"PLE row id outside [0, {shape[0]}): min={minimum}, max={maximum}"
-        )
-    output = torch.empty(
-        (flat.numel(), shape[1]), dtype=getattr(torch, _TORCH_DTYPE_NAMES[dtype])
-    )
+        raise IndexError(f"PLE row id outside [0, {shape[0]}): min={minimum}, max={maximum}")
+    output = torch.empty((flat.numel(), shape[1]), dtype=getattr(torch, _TORCH_DTYPE_NAMES[dtype]))
     row_start = 0
     for part in parts:
         part_shape = part.shape if hasattr(part, "shape") else tuple(part.spec.shape)
@@ -598,9 +582,7 @@ def install_qwen4_ple_embeddings(
     try:
         for parameter_name, spec in external_tensors.items():
             if not parameter_name.endswith(".weight"):
-                raise ValueError(
-                    f"external PLE key must name a weight: {parameter_name!r}"
-                )
+                raise ValueError(f"external PLE key must name a weight: {parameter_name!r}")
             module_name = parameter_name[: -len(".weight")]
             parent, attribute = _module_for_name(model, module_name)
             is_oq = hasattr(spec, "bits")
@@ -629,6 +611,5 @@ def install_qwen4_ple_embeddings(
 def external_tensor_bytes(external_tensors: Mapping[str, Any]) -> int:
     """Exact bytes actually resident or mapped for the PLE descriptors."""
     return sum(
-        int(getattr(spec, "storage_nbytes", spec.nbytes))
-        for spec in external_tensors.values()
+        int(getattr(spec, "storage_nbytes", spec.nbytes)) for spec in external_tensors.values()
     )

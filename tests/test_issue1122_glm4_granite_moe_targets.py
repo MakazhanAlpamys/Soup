@@ -187,11 +187,7 @@ class TestBuiltOnTheMetaDevice:
         of the entry is a visible choice rather than an absence."""
         keys = _linear_keys(_build(_glm4_moe_config()))
 
-        assert [
-            key
-            for key in keys
-            if key.split(".")[-1] in {"gate_proj", "up_proj", "down_proj"}
-        ]
+        assert [key for key in keys if key.split(".")[-1] in {"gate_proj", "up_proj", "down_proj"}]
 
     def test_granite_is_a_hybrid_and_only_four_of_forty_layers_attend(self):
         """The 4-of-40 fact, COUNTED off the built model rather than asserted as a
@@ -319,9 +315,7 @@ class TestThePartialCoverageNotice:
             def print(self, *_args, **_kwargs):
                 raise RuntimeError("no terminal")
 
-        resolved = resolve_lora_target_modules(
-            _build(_granite_config()), "auto", Exploding()
-        )
+        resolved = resolve_lora_target_modules(_build(_granite_config()), "auto", Exploding())
 
         assert resolved == list(_ATTENTION)
 
@@ -330,9 +324,7 @@ class TestThePartialCoverageNotice:
         knows what they targeted."""
         console, buffer = _recording_console()
 
-        resolved = resolve_lora_target_modules(
-            _build(_granite_config()), ["q_proj"], console
-        )
+        resolved = resolve_lora_target_modules(_build(_granite_config()), ["q_proj"], console)
 
         assert resolved == ["q_proj"]
         assert buffer.getvalue() == ""
@@ -376,8 +368,7 @@ class TestEveryCallSiteSuppliesTheConsole:
         silent = [
             where
             for where, node in self._call_sites()
-            if len(node.args) < 3
-            and not any(kw.arg == "console" for kw in node.keywords)
+            if len(node.args) < 3 and not any(kw.arg == "console" for kw in node.keywords)
         ]
 
         assert silent == [], (

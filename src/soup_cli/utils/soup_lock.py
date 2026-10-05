@@ -66,9 +66,7 @@ def _check_str(value: object, field: str, max_len: int) -> str:
     if "\x00" in value:
         raise ValueError(f"{field} must not contain null bytes")
     if len(value) > max_len:
-        raise ValueError(
-            f"{field} length {len(value)} > {max_len}"
-        )
+        raise ValueError(f"{field} length {len(value)} > {max_len}")
     return value
 
 
@@ -175,9 +173,7 @@ def read_lock(path: str) -> SoupLock:
     if stat.S_ISLNK(st.st_mode):
         raise ValueError("lock path must not be a symlink (TOCTOU defence)")
     if st.st_size > _MAX_FILE_BYTES:
-        raise ValueError(
-            f"lock file size {st.st_size} > {_MAX_FILE_BYTES}"
-        )
+        raise ValueError(f"lock file size {st.st_size} > {_MAX_FILE_BYTES}")
     with open(real, encoding="utf-8") as fh:
         data = json.load(fh)
     if not isinstance(data, dict):

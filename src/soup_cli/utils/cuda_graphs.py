@@ -221,8 +221,15 @@ def _require_cudagraphify_signature(target: Any) -> None:
     """
     try:
         inspect.signature(target).bind(
-            None, [], [], device_index=0, is_backward=False, is_inference=True,
-            stack_traces=[], placeholders=[], mutated_input_idxs=set(),
+            None,
+            [],
+            [],
+            device_index=0,
+            is_backward=False,
+            is_inference=True,
+            stack_traces=[],
+            placeholders=[],
+            mutated_input_idxs=set(),
         )
     except (TypeError, ValueError) as exc:
         raise RuntimeError(

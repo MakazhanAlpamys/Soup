@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+
 import pytest
 
 from soup_cli.config.schema import TrainingConfig

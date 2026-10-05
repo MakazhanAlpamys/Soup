@@ -136,7 +136,9 @@ def get_attn_implementation(use_flash_attn: bool, device: str) -> str | None:
 
 
 def validate_flash_attn_config(
-    use_flash_attn: bool, backend: str, device: str,
+    use_flash_attn: bool,
+    backend: str,
+    device: str,
 ) -> list[str]:
     """Validate FlashAttention configuration and return error messages.
 
@@ -158,10 +160,7 @@ def validate_flash_attn_config(
         return errors
 
     if device != "cuda":
-        errors.append(
-            "FlashAttention requires CUDA. "
-            f"Current device: {device}."
-        )
+        errors.append(f"FlashAttention requires CUDA. Current device: {device}.")
 
     if device == "cuda" and check_flash_attn_available() is None:
         errors.append(

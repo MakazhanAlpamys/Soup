@@ -355,6 +355,7 @@ def test_compute_scorecard_full():
     assert rep.pii_flagged >= 1
     assert rep.toxic_flagged >= 1
     from collections.abc import Mapping as MappingABC
+
     assert isinstance(rep.languages, MappingABC)
 
 
@@ -486,6 +487,7 @@ def test_load_jsonl_rows_cap(tmp_path):
 
 def _make_app():
     from soup_cli.cli import app
+
     return app
 
 
@@ -545,9 +547,12 @@ def test_data_decontaminate_cli_unknown_benchmark(tmp_path, monkeypatch):
     result = runner.invoke(
         _make_app(),
         [
-            "data", "decontaminate",
-            "--input", str(p),
-            "--benchmarks", "bogus_benchmark",
+            "data",
+            "decontaminate",
+            "--input",
+            str(p),
+            "--benchmarks",
+            "bogus_benchmark",
         ],
     )
     assert result.exit_code != 0
@@ -567,10 +572,14 @@ def test_data_decontaminate_cli_happy(tmp_path, monkeypatch):
     result = runner.invoke(
         _make_app(),
         [
-            "data", "decontaminate",
-            "--input", str(p),
-            "--benchmarks", "mmlu",
-            "--output", "clean.jsonl",
+            "data",
+            "decontaminate",
+            "--input",
+            str(p),
+            "--benchmarks",
+            "mmlu",
+            "--output",
+            "clean.jsonl",
         ],
     )
     assert result.exit_code == 0, (result.output, repr(result.exception))

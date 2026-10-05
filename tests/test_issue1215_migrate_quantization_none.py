@@ -29,8 +29,6 @@ def _plain(text: str) -> str:
     return " ".join(strip_ansi(text).split())
 
 
-
-
 class TestAxolotlQuantizationAndFullFinetuning:
     def test_axolotl_explicit_load_in_false_gives_none(self, tmp_path: Path) -> None:
         cfg = tmp_path / "cfg.yaml"
@@ -254,19 +252,23 @@ class TestUnslothQuantizationAndFullFinetuning:
         cells = []
         if extra_code:
             cells.append({"cell_type": "code", "source": [extra_code + "\n"]})
-        cells.append({
-            "cell_type": "code",
-            "source": [
-                "from unsloth import FastLanguageModel\n",
-                from_pretrained_src + "\n",
-            ],
-        })
-        cells.append({
-            "cell_type": "code",
-            "source": [
-                "model = FastLanguageModel.get_peft_model(model, r=16)\n",
-            ],
-        })
+        cells.append(
+            {
+                "cell_type": "code",
+                "source": [
+                    "from unsloth import FastLanguageModel\n",
+                    from_pretrained_src + "\n",
+                ],
+            }
+        )
+        cells.append(
+            {
+                "cell_type": "code",
+                "source": [
+                    "model = FastLanguageModel.get_peft_model(model, r=16)\n",
+                ],
+            }
+        )
         return {"cells": cells}
 
     def test_unsloth_load_in_4bit_false_gives_none(self, tmp_path: Path) -> None:
@@ -307,15 +309,17 @@ class TestUnslothQuantizationAndFullFinetuning:
         assert loaded.training.quantization == "8bit"
 
     def test_unsloth_full_finetuning_gives_none_and_r_zero(self, tmp_path: Path) -> None:
-        cells = [{
-            "cell_type": "code",
-            "source": [
-                "from unsloth import FastLanguageModel\n",
-                "model, tok = FastLanguageModel.from_pretrained(\n"
-                "    'meta-llama/Llama-3.1-8B', full_finetuning=True\n"
-                ")\n",
-            ],
-        }]
+        cells = [
+            {
+                "cell_type": "code",
+                "source": [
+                    "from unsloth import FastLanguageModel\n",
+                    "model, tok = FastLanguageModel.from_pretrained(\n"
+                    "    'meta-llama/Llama-3.1-8B', full_finetuning=True\n"
+                    ")\n",
+                ],
+            }
+        ]
         nb_file = tmp_path / "test.ipynb"
         nb_file.write_text(json.dumps({"cells": cells}), encoding="utf-8")
         res = migrate_unsloth(nb_file)
@@ -323,11 +327,14 @@ class TestUnslothQuantizationAndFullFinetuning:
         assert loaded.training.quantization == "none"
         assert loaded.training.lora.r == 0
 
-    @pytest.mark.parametrize("call_str", [
-        "model, tok = FastLanguageModel.from_pretrained('meta-llama/Llama-3.1-8B')",
-        "model, tok = FastLanguageModel.from_pretrained(\n"
-        "    'meta-llama/Llama-3.1-8B', load_in_4bit=True\n)",
-    ])
+    @pytest.mark.parametrize(
+        "call_str",
+        [
+            "model, tok = FastLanguageModel.from_pretrained('meta-llama/Llama-3.1-8B')",
+            "model, tok = FastLanguageModel.from_pretrained(\n"
+            "    'meta-llama/Llama-3.1-8B', load_in_4bit=True\n)",
+        ],
+    )
     def test_unsloth_load_in_4bit_true_or_default(self, tmp_path: Path, call_str: str) -> None:
         nb = self._make_notebook(call_str)
         nb_file = tmp_path / "test.ipynb"
@@ -375,12 +382,16 @@ class TestMigrateCLIDryRunOutput:
             "dataset: alpaca\n",
             encoding="utf-8",
         )
-        result = runner.invoke(app, [
-            "migrate",
-            "--from", "llamafactory",
-            str(cfg_file),
-            "--dry-run",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "migrate",
+                "--from",
+                "llamafactory",
+                str(cfg_file),
+                "--dry-run",
+            ],
+        )
         assert result.exit_code == 0
         clean = strip_ansi(result.output)
         assert "quantization: none" in clean or "quantization=none" in clean
@@ -395,12 +406,16 @@ class TestMigrateCLIDryRunOutput:
             "dataset: alpaca\n",
             encoding="utf-8",
         )
-        result = runner.invoke(app, [
-            "migrate",
-            "--from", "llamafactory",
-            str(cfg_file),
-            "--dry-run",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "migrate",
+                "--from",
+                "llamafactory",
+                str(cfg_file),
+                "--dry-run",
+            ],
+        )
         assert result.exit_code == 0
         clean = strip_ansi(result.output)
         assert "lora.r=0" in clean or " r: 0" in clean
@@ -424,9 +439,7 @@ class TestMigrateCLIDryRunOutput:
         assert "lora -> r" in plain
         assert not (tmp_path / "soup.yaml").exists()
 
-    def test_cli_subtitle_reports_the_resolved_values(
-        self, tmp_path: Path, monkeypatch
-    ) -> None:
+    def test_cli_subtitle_reports_the_resolved_values(self, tmp_path: Path, monkeypatch) -> None:
         monkeypatch.chdir(tmp_path)
         src = tmp_path / "full_sft.yaml"
         src.write_text(
@@ -467,12 +480,17 @@ def test_llamafactory_bnb_bit_width_other_than_4_or_8_is_refused(tmp_path: Path)
 
 
 def test_unsloth_full_finetuning_on_dpo_is_refused(tmp_path: Path) -> None:
-    cells = [{"cell_type": "code", "source": [
-        "from unsloth import FastLanguageModel\n",
-        "model, tok = FastLanguageModel.from_pretrained('m', full_finetuning=True)\n",
-        "from trl import DPOTrainer\n",
-        "trainer = DPOTrainer(model=model)\n",
-    ]}]
+    cells = [
+        {
+            "cell_type": "code",
+            "source": [
+                "from unsloth import FastLanguageModel\n",
+                "model, tok = FastLanguageModel.from_pretrained('m', full_finetuning=True)\n",
+                "from trl import DPOTrainer\n",
+                "trainer = DPOTrainer(model=model)\n",
+            ],
+        }
+    ]
     nb = tmp_path / "nb.ipynb"
     nb.write_text(json.dumps({"cells": cells}), encoding="utf-8")
     with pytest.raises(ValueError, match="task 'dpo'"):
@@ -510,13 +528,18 @@ def test_llamafactory_hqq_5_and_6_bit(tmp_path: Path, bits: int) -> None:
 
 
 def test_unsloth_variable_in_helper_function_ignored(tmp_path: Path) -> None:
-    cells = [{"cell_type": "code", "source": [
-        "load_in_4bit = False\n",
-        "def helper():\n",
-        "    load_in_4bit = True\n",
-        "from unsloth import FastLanguageModel\n",
-        "model, tok = FastLanguageModel.from_pretrained('m', load_in_4bit=load_in_4bit)\n",
-    ]}]
+    cells = [
+        {
+            "cell_type": "code",
+            "source": [
+                "load_in_4bit = False\n",
+                "def helper():\n",
+                "    load_in_4bit = True\n",
+                "from unsloth import FastLanguageModel\n",
+                "model, tok = FastLanguageModel.from_pretrained('m', load_in_4bit=load_in_4bit)\n",
+            ],
+        }
+    ]
     nb = tmp_path / "nb.ipynb"
     nb.write_text(json.dumps({"cells": cells}), encoding="utf-8")
     res = migrate_unsloth(nb)
@@ -525,12 +548,17 @@ def test_unsloth_variable_in_helper_function_ignored(tmp_path: Path) -> None:
 
 
 def test_unsloth_conflicting_variable_assignments_warns(tmp_path: Path) -> None:
-    cells = [{"cell_type": "code", "source": [
-        "load_in_4bit = False\n",
-        "from unsloth import FastLanguageModel\n",
-        "model, tok = FastLanguageModel.from_pretrained('m', load_in_4bit=load_in_4bit)\n",
-        "load_in_4bit = True\n",
-    ]}]
+    cells = [
+        {
+            "cell_type": "code",
+            "source": [
+                "load_in_4bit = False\n",
+                "from unsloth import FastLanguageModel\n",
+                "model, tok = FastLanguageModel.from_pretrained('m', load_in_4bit=load_in_4bit)\n",
+                "load_in_4bit = True\n",
+            ],
+        }
+    ]
     nb = tmp_path / "nb.ipynb"
     nb.write_text(json.dumps({"cells": cells}), encoding="utf-8")
     res = migrate_unsloth(nb)

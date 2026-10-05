@@ -40,9 +40,7 @@ def test_the_fsdp2_compile_reason_names_the_refusal_that_soup_train_runs():
     ``soup train`` calls it, so renaming it turns this red instead of the doctor
     output going stale."""
     reason = next(
-        entry.reason
-        for _, entry in _entries()
-        if entry.field == "training.use_fsdp2_compile"
+        entry.reason for _, entry in _entries() if entry.field == "training.use_fsdp2_compile"
     )
     assert "validate_fsdp2_compile_config" in reason
 

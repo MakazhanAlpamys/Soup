@@ -60,9 +60,7 @@ def license_advisor_cmd(
         ", ".join(escape(lic) for lic in rec.forbidden_licenses),
     )
     console.print(table)
-    console.print(
-        Panel(escape(rec.reason), title="Reason", border_style="dim")
-    )
+    console.print(Panel(escape(rec.reason), title="Reason", border_style="dim"))
 
     if license_id:
         try:
@@ -82,8 +80,7 @@ def license_advisor_cmd(
         }.get(risk.severity, "yellow")
         console.print(
             Panel(
-                f"[bold]severity: {escape(risk.severity)}[/]\n"
-                f"{escape(risk.reason)}",
+                f"[bold]severity: {escape(risk.severity)}[/]\n{escape(risk.reason)}",
                 title=f"Risk check: {escape(license_id)}",
                 border_style=border,
             )

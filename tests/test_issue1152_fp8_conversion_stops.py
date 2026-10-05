@@ -100,7 +100,9 @@ class TestAFailedConversionStops:
             apply_v028_speed_memory(
                 model=_NoAttention(),
                 tcfg=TrainingConfig(quantization_aware="fp8", fp8_attention=True),
-                base_model="m", console=console, device="cuda",
+                base_model="m",
+                console=console,
+                device="cuda",
             )
 
         assert "FP8 attention" not in out.getvalue()

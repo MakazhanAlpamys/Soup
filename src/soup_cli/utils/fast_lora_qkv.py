@@ -50,16 +50,32 @@ def _qkv_function() -> Any:
     class _FastLoraQKV(torch.autograd.Function):
         @staticmethod
         def forward(
-            ctx, x, wq, bq, wk, bk, wv, bv,
-            aq, bql, ak, bkl, av, bvl,
-            sq, sk, sv, qq_meta, qk_meta, qv_meta, *qparts,
+            ctx,
+            x,
+            wq,
+            bq,
+            wk,
+            bk,
+            wv,
+            bv,
+            aq,
+            bql,
+            ak,
+            bkl,
+            av,
+            bvl,
+            sq,
+            sk,
+            sv,
+            qq_meta,
+            qk_meta,
+            qv_meta,
+            *qparts,
         ):
             metas = (qq_meta, qk_meta, qv_meta)
             counts = [0 if meta is None else int(meta["_count"]) for meta in metas]
             starts = (0, counts[0], counts[0] + counts[1])
-            qlists = [
-                list(qparts[starts[i] : starts[i] + counts[i]]) for i in range(3)
-            ]
+            qlists = [list(qparts[starts[i] : starts[i] + counts[i]]) for i in range(3)]
             weights = (wq, wk, wv)
             biases = (bq, bk, bv)
             outs = []
@@ -95,9 +111,7 @@ def _qkv_function() -> Any:
             ctx.qcounts = counts
             ctx.qparts_len = len(qparts)
 
-            ctx.save_for_backward(
-                x, wq, wk, wv, aq, bql, ak, bkl, av, bvl, h, *qparts
-            )
+            ctx.save_for_backward(x, wq, wk, wv, aq, bql, ak, bkl, av, bvl, h, *qparts)
             return tuple(outs)
 
         @staticmethod
@@ -119,9 +133,7 @@ def _qkv_function() -> Any:
             )
 
             grad_x = None
-            for grad, weight, meta, parts in zip(
-                grads_out, weights, ctx.qmetas, qlists
-            ):
+            for grad, weight, meta, parts in zip(grads_out, weights, ctx.qmetas, qlists):
                 dense = _dense_weight(weight, meta, parts, grad.dtype)
                 term = torch.matmul(grad, dense)
 
@@ -139,8 +151,7 @@ def _qkv_function() -> Any:
                     rank = ctx.ranks[i]
                     hi = h[..., cursor : cursor + rank]
                     grad_bs[i] = (
-                        _flatten(_as_dtype(grad, hi.dtype)).t() @ _flatten(hi)
-                        * scalings[i]
+                        _flatten(_as_dtype(grad, hi.dtype)).t() @ _flatten(hi) * scalings[i]
                     )
                     dhi = torch.matmul(_as_dtype(grad, b.dtype), b) * scalings[i]
                     dh_parts.append(dhi)
@@ -162,11 +173,24 @@ def _qkv_function() -> Any:
 
             result = [
                 grad_x,
-                None, None, None, None, None, None,
-                grad_as[0], grad_bs[0],
-                grad_as[1], grad_bs[1],
-                grad_as[2], grad_bs[2],
-                None, None, None, None, None, None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                grad_as[0],
+                grad_bs[0],
+                grad_as[1],
+                grad_bs[1],
+                grad_as[2],
+                grad_bs[2],
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
             ]
             result.extend([None] * ctx.qparts_len)
             return tuple(result)
@@ -212,10 +236,24 @@ def _install_attention_patch(attn: Any) -> None:
         qparts = [*q.qparts, *k.qparts, *v.qparts]
         q_out, k_out, v_out = fast.apply(
             work_x,
-            q.weight, q.bias, k.weight, k.bias, v.weight, v.bias,
-            q.lora_a, q.lora_b, k.lora_a, k.lora_b, v.lora_a, v.lora_b,
-            q.scaling, k.scaling, v.scaling,
-            q.qmeta, k.qmeta, v.qmeta,
+            q.weight,
+            q.bias,
+            k.weight,
+            k.bias,
+            v.weight,
+            v.bias,
+            q.lora_a,
+            q.lora_b,
+            k.lora_a,
+            k.lora_b,
+            v.lora_a,
+            v.lora_b,
+            q.scaling,
+            k.scaling,
+            v.scaling,
+            q.qmeta,
+            k.qmeta,
+            v.qmeta,
             *qparts,
         )
         if work_x is not x:
@@ -284,13 +322,10 @@ def patch_fast_lora_qkv(model: Any) -> int:
         if not all(hasattr(module, name) for name in ("q_proj", "k_proj", "v_proj")):
             continue
         if not any(
-            hasattr(getattr(module, name), "lora_A")
-            for name in ("q_proj", "k_proj", "v_proj")
+            hasattr(getattr(module, name), "lora_A") for name in ("q_proj", "k_proj", "v_proj")
         ):
             continue
-        projections = [
-            getattr(module, name) for name in ("q_proj", "k_proj", "v_proj")
-        ]
+        projections = [getattr(module, name) for name in ("q_proj", "k_proj", "v_proj")]
         # Shared-X fusion is only valid when Q, K and V consume the same-width
         # tensor.  Cross-attention modules such as TrOCR use a narrower memory
         # input for K/V; patching them would make q_proj speculatively apply the
@@ -305,15 +340,9 @@ def patch_fast_lora_qkv(model: Any) -> int:
             for proj in projections
         ):
             continue
-        if any(
-            getattr(proj, _GROUP_PATCH_OWNER_MARKER, None) is not None
-            for proj in projections
-        ):
+        if any(getattr(proj, _GROUP_PATCH_OWNER_MARKER, None) is not None for proj in projections):
             continue
-        if any(
-            getattr(proj, _SINGLE_PROJECTION_PATCH_MARKER, False)
-            for proj in projections
-        ):
+        if any(getattr(proj, _SINGLE_PROJECTION_PATCH_MARKER, False) for proj in projections):
             continue
         _install_attention_patch(module)
         count += 1

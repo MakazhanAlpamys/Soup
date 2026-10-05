@@ -42,8 +42,12 @@ def _tiny_peft_model(seed: int = 0):
     # weights - needed to compare a resumed run against an uninterrupted one.
     torch.manual_seed(seed)
     cfg = AutoConfig.for_model(
-        "llama", hidden_size=32, intermediate_size=64, num_hidden_layers=2,
-        num_attention_heads=4, vocab_size=128,
+        "llama",
+        hidden_size=32,
+        intermediate_size=64,
+        num_hidden_layers=2,
+        num_attention_heads=4,
+        vocab_size=128,
     )
     model = AutoModelForCausalLM.from_config(cfg)
     return get_peft_model(
@@ -69,10 +73,18 @@ def _trainer_with_data(model, tmp_path, dataset, *, max_steps, save_steps):
     from transformers import Trainer, TrainingArguments
 
     args = TrainingArguments(
-        output_dir=str(tmp_path), learning_rate=BASE_LR, optim="adamw_torch",
-        max_steps=max_steps, save_steps=save_steps, save_strategy="steps",
-        per_device_train_batch_size=4, report_to=[], logging_steps=1000,
-        disable_tqdm=True, seed=42, data_seed=42,
+        output_dir=str(tmp_path),
+        learning_rate=BASE_LR,
+        optim="adamw_torch",
+        max_steps=max_steps,
+        save_steps=save_steps,
+        save_strategy="steps",
+        per_device_train_batch_size=4,
+        report_to=[],
+        logging_steps=1000,
+        disable_tqdm=True,
+        seed=42,
+        data_seed=42,
     )
     return Trainer(model=model, args=args, train_dataset=dataset)
 
@@ -89,14 +101,18 @@ def _trainer(model, tmp_path, *, weight_decay=0.01, optim="adamw_torch"):
     from transformers import Trainer, TrainingArguments
 
     args = TrainingArguments(
-        output_dir=str(tmp_path), learning_rate=BASE_LR,
-        weight_decay=weight_decay, optim=optim, report_to=[],
+        output_dir=str(tmp_path),
+        learning_rate=BASE_LR,
+        weight_decay=weight_decay,
+        optim=optim,
+        report_to=[],
     )
     return Trainer(model=model, args=args)
 
 
 class _TCfg:
     """A real config-shaped object (not a mock): missing attributes raise."""
+
     def __init__(self, loraplus_lr_ratio=None, use_galore=False):
         self.loraplus_lr_ratio = loraplus_lr_ratio
         self.use_galore = use_galore
@@ -147,8 +163,12 @@ def test_non_peft_model_raises(tmp_path):
     from transformers import AutoConfig, AutoModelForCausalLM
 
     cfg = AutoConfig.for_model(
-        "llama", hidden_size=32, intermediate_size=64, num_hidden_layers=2,
-        num_attention_heads=4, vocab_size=128,
+        "llama",
+        hidden_size=32,
+        intermediate_size=64,
+        num_hidden_layers=2,
+        num_attention_heads=4,
+        vocab_size=128,
     )
     plain = AutoModelForCausalLM.from_config(cfg)
     assert not isinstance(plain, PeftModel)

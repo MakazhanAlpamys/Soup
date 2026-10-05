@@ -404,9 +404,7 @@ def test_render_blame_markdown_has_table():
         layer="lm_head",
         num_rows_scored=10,
         elapsed_seconds=1.5,
-        top_influencers=(
-            RowInfluence(row_id=3, score=0.9, shard_id=0),
-        ),
+        top_influencers=(RowInfluence(row_id=3, score=0.9, shard_id=0),),
     )
     text = render_blame_markdown(result)
     assert "adp" in text
@@ -458,7 +456,8 @@ def test_blame_no_heavy_top_level_imports():
 
     source = inspect.getsource(blame)
     top_level_imports = [
-        line for line in source.splitlines()
+        line
+        for line in source.splitlines()
         if line.startswith("import ") or line.startswith("from ")
     ]
     for line in top_level_imports:

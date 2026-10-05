@@ -92,9 +92,7 @@ def test_mcp_scorecard_preserves_legacy_key_and_adds_honest_alias(
 
 
 def test_docs_do_not_claim_unshipped_data_classifiers() -> None:
-    docs = (
-        Path(__file__).resolve().parents[1] / "docs" / "data.md"
-    ).read_text(encoding="utf-8")
+    docs = (Path(__file__).resolve().parents[1] / "docs" / "data.md").read_text(encoding="utf-8")
 
     assert "Llama-Guard-3-1B variant + FineWeb-Edu classifier ship" not in docs
     assert "not a toxicity classifier" in docs

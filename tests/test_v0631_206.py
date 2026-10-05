@@ -91,8 +91,7 @@ def test_adding_score_at_mean_decreases_uncertainty():
     u_before = score_uncertainty(scores=base)
     u_after = score_uncertainty(scores=base + [mean])
     assert u_after < u_before, (
-        f"adding the mean ({mean}) must reduce variance — "
-        f"before={u_before}, after={u_after}"
+        f"adding the mean ({mean}) must reduce variance — before={u_before}, after={u_after}"
     )
 
 
@@ -286,9 +285,9 @@ def test_sample_uncertain_rows_triple_rm(tmp_path, monkeypatch):
     inp = tmp_path / "in.jsonl"
     out = tmp_path / "out.jsonl"
     rows = [
-        {"id": "a", "rm_scores": [0.0, 0.5, 1.0]},   # high variance
-        {"id": "b", "rm_scores": [0.5, 0.5, 0.5]},   # zero variance
-        {"id": "c", "rm_scores": [0.4, 0.5, 0.6]},   # low variance
+        {"id": "a", "rm_scores": [0.0, 0.5, 1.0]},  # high variance
+        {"id": "b", "rm_scores": [0.5, 0.5, 0.5]},  # zero variance
+        {"id": "c", "rm_scores": [0.4, 0.5, 0.6]},  # low variance
     ]
     inp.write_text("\n".join(json.dumps(r) for r in rows), encoding="utf-8")
 
@@ -314,8 +313,7 @@ def test_max_minus_min_fallback_removed():
     from pathlib import Path
 
     src = (
-        Path(__file__).resolve().parent.parent
-        / "src" / "soup_cli" / "utils" / "active_sampler.py"
+        Path(__file__).resolve().parent.parent / "src" / "soup_cli" / "utils" / "active_sampler.py"
     )
     text = src.read_text(encoding="utf-8")
     # The exact broken line; if a comment mentions max/min that's fine.
@@ -326,8 +324,7 @@ def test_score_uncertainty_no_top_level_heavy_imports():
     from pathlib import Path
 
     src = (
-        Path(__file__).resolve().parent.parent
-        / "src" / "soup_cli" / "utils" / "active_sampler.py"
+        Path(__file__).resolve().parent.parent / "src" / "soup_cli" / "utils" / "active_sampler.py"
     )
     text = src.read_text(encoding="utf-8")
     for forbidden in ("import torch", "import numpy", "import statistics"):
@@ -364,9 +361,9 @@ def test_row_uncertainty_explicit_field_overrides_k3_rm_scores():
     """
     from soup_cli.utils.active_sampler import _row_uncertainty
 
-    assert _row_uncertainty(
-        {"uncertainty": 0.9, "rm_scores": [0.5, 0.5, 0.5]}
-    ) == pytest.approx(0.9)
+    assert _row_uncertainty({"uncertainty": 0.9, "rm_scores": [0.5, 0.5, 0.5]}) == pytest.approx(
+        0.9
+    )
 
 
 def test_old_k2_deferred_error_message_removed():
@@ -380,8 +377,7 @@ def test_old_k2_deferred_error_message_removed():
     from pathlib import Path
 
     src = (
-        Path(__file__).resolve().parent.parent
-        / "src" / "soup_cli" / "utils" / "active_sampler.py"
+        Path(__file__).resolve().parent.parent / "src" / "soup_cli" / "utils" / "active_sampler.py"
     )
     text = src.read_text(encoding="utf-8")
     assert "K>2 RMs deferred" not in text

@@ -31,17 +31,17 @@ import re
 # additive — extending it does not break callers because callers always
 # pass through :func:`is_known_vlm_base`.
 _VLM_PATTERNS = (
-    r"(?:^|[^a-z0-9])qwen[\d.]*-vl(?:[^a-z0-9]|$)",   # Qwen2-VL / Qwen2.5-VL
-    r"(?:^|[^a-z0-9])qvq(?:[^a-z0-9]|$)",              # QVQ-72B
-    r"(?:^|[^a-z0-9])pixtral(?:[^a-z0-9]|$)",          # Pixtral
+    r"(?:^|[^a-z0-9])qwen[\d.]*-vl(?:[^a-z0-9]|$)",  # Qwen2-VL / Qwen2.5-VL
+    r"(?:^|[^a-z0-9])qvq(?:[^a-z0-9]|$)",  # QVQ-72B
+    r"(?:^|[^a-z0-9])pixtral(?:[^a-z0-9]|$)",  # Pixtral
     r"(?:^|[^a-z0-9])internvl[\d._]*(?:[^a-z0-9]|$)",  # InternVL/InternVL2_5/InternVL3
     # Llama-3.2-Vision (any size in between, e.g. Llama-3.2-11B-Vision)
     r"(?:^|[^a-z0-9])llama-?3\.?2[a-z0-9._-]*vision(?:[^a-z0-9]|$)",
-    r"(?:^|[^a-z0-9])llava(?:[^a-z0-9]|$)",            # LLaVA
-    r"(?:^|[^a-z0-9])minicpm-?v(?:[^a-z0-9]|$)",       # MiniCPM-V
-    r"(?:^|[^a-z0-9])idefics[\d]*(?:[^a-z0-9]|$)",     # Idefics
-    r"(?:^|[^a-z0-9])sharegpt4v(?:[^a-z0-9]|$)",       # ShareGPT4V
-    r"(?:^|[^a-z0-9])fuyu(?:[^a-z0-9]|$)",             # Fuyu
+    r"(?:^|[^a-z0-9])llava(?:[^a-z0-9]|$)",  # LLaVA
+    r"(?:^|[^a-z0-9])minicpm-?v(?:[^a-z0-9]|$)",  # MiniCPM-V
+    r"(?:^|[^a-z0-9])idefics[\d]*(?:[^a-z0-9]|$)",  # Idefics
+    r"(?:^|[^a-z0-9])sharegpt4v(?:[^a-z0-9]|$)",  # ShareGPT4V
+    r"(?:^|[^a-z0-9])fuyu(?:[^a-z0-9]|$)",  # Fuyu
 )
 KNOWN_VLM_REGEX = re.compile("|".join(_VLM_PATTERNS), re.IGNORECASE)
 
@@ -89,24 +89,17 @@ def validate_prm_compat(
     if not isinstance(task, str) or not task:
         raise ValueError("task must be a non-empty string")
     if task != "prm":
-        raise ValueError(
-            f"validate_prm_compat called with task={task!r} (expected 'prm')"
-        )
+        raise ValueError(f"validate_prm_compat called with task={task!r} (expected 'prm')")
     if not isinstance(data_format, str) or not data_format:
         raise ValueError("data.format must be a non-empty string")
     if data_format not in ("prm", "auto"):
         raise ValueError(
-            f"task='prm' requires data.format in ('prm', 'auto'); "
-            f"got data.format={data_format!r}"
+            f"task='prm' requires data.format in ('prm', 'auto'); got data.format={data_format!r}"
         )
     if backend == "mlx":
-        raise ValueError(
-            "task='prm' is not supported on backend=mlx in v0.50.0"
-        )
+        raise ValueError("task='prm' is not supported on backend=mlx in v0.50.0")
     if modality != "text":
-        raise ValueError(
-            f"task='prm' requires modality='text'; got modality={modality!r}"
-        )
+        raise ValueError(f"task='prm' requires modality='text'; got modality={modality!r}")
 
 
 def validate_vision_grpo_compat(
@@ -133,17 +126,11 @@ def validate_vision_grpo_compat(
     if not isinstance(task, str) or not task:
         raise ValueError("task must be a non-empty string")
     if task not in ("grpo", "ppo"):
-        raise ValueError(
-            f"vision_grpo requires task in ('grpo', 'ppo'); got task={task!r}"
-        )
+        raise ValueError(f"vision_grpo requires task in ('grpo', 'ppo'); got task={task!r}")
     if modality != "vision":
-        raise ValueError(
-            f"vision_grpo requires modality='vision'; got modality={modality!r}"
-        )
+        raise ValueError(f"vision_grpo requires modality='vision'; got modality={modality!r}")
     if backend == "mlx":
-        raise ValueError(
-            "vision_grpo is not supported on backend=mlx in v0.50.0"
-        )
+        raise ValueError("vision_grpo is not supported on backend=mlx in v0.50.0")
     # v0.53.3 #129 — name-regex probe (deliberately permissive: empty /
     # None / non-string skips the probe).
     if isinstance(base, str) and base and not is_known_vlm_base(base):
@@ -178,9 +165,7 @@ def build_prm_trainer(*, config, **kwargs):
     }
     unknown = set(kwargs) - allowed
     if unknown:
-        raise TypeError(
-            f"build_prm_trainer got unexpected kwargs: {sorted(unknown)}"
-        )
+        raise TypeError(f"build_prm_trainer got unexpected kwargs: {sorted(unknown)}")
     return PRMTrainerWrapper(config, **kwargs)
 
 
@@ -206,8 +191,7 @@ def compute_prm_loss(predictions, labels, *, mask=None):
         return diff.mean()
     if mask.shape != predictions.shape:
         raise ValueError(
-            f"mask shape {tuple(mask.shape)} != predictions shape "
-            f"{tuple(predictions.shape)}"
+            f"mask shape {tuple(mask.shape)} != predictions shape {tuple(predictions.shape)}"
         )
     masked = diff * mask
     denom = mask.sum().clamp(min=1.0)

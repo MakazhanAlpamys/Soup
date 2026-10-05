@@ -281,9 +281,7 @@ def test_complete_target_modules_introspection_error_falls_back():
 
     from soup_cli.utils.completions import complete_target_modules
 
-    with patch(
-        "transformers.AutoConfig.from_pretrained", side_effect=OSError("not cached")
-    ):
+    with patch("transformers.AutoConfig.from_pretrained", side_effect=OSError("not cached")):
         out = complete_target_modules("", base="not/cached")
     assert "q_proj" in out
 
@@ -370,5 +368,6 @@ def test_no_heavy_top_level_imports():
     src = Path(__file__).resolve().parent.parent / "src" / "soup_cli" / "utils" / "completions.py"
     text = src.read_text(encoding="utf-8")
     import re
+
     for bad in ["^import torch", "^from torch", "^import transformers", "^from transformers"]:
         assert not re.search(bad, text, re.MULTILINE)

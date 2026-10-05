@@ -16,7 +16,6 @@ passing ``--llama-cpp`` or already holding ``~/.soup/llama.cpp`` hit
 """
 
 
-
 def _run_export(model_dir, output):
     """Drive the real CLI.
 
@@ -30,12 +29,20 @@ def _run_export(model_dir, output):
 
     result = CliRunner().invoke(
         app,
-        ["export", "--model", str(model_dir), "--format", "gguf",
-         "--quant", "q4_0", "--output", str(output)],
+        [
+            "export",
+            "--model",
+            str(model_dir),
+            "--format",
+            "gguf",
+            "--quant",
+            "q4_0",
+            "--output",
+            str(output),
+        ],
     )
     assert result.exit_code == 0, (result.output, repr(result.exception))
     return result
-
 
 
 class TestTheF16IntermediateCannotEatAUsersFile:
@@ -51,9 +58,7 @@ class TestTheF16IntermediateCannotEatAUsersFile:
         (model / "config.json").write_text('{"model_type": "llama"}', encoding="utf-8")
         return model
 
-    def test_a_quantised_export_does_not_delete_an_existing_f16_gguf(
-        self, tmp_path, monkeypatch
-    ):
+    def test_a_quantised_export_does_not_delete_an_existing_f16_gguf(self, tmp_path, monkeypatch):
         from soup_cli.commands import export as export_mod
 
         model = self._model_dir(tmp_path)
@@ -65,11 +70,13 @@ class TestTheF16IntermediateCannotEatAUsersFile:
 
         monkeypatch.setattr(export_mod, "_find_llama_cpp", lambda p=None: llama)
         monkeypatch.setattr(
-            export_mod, "_run_convert",
+            export_mod,
+            "_run_convert",
             lambda script, src, dst, outtype: dst.write_bytes(b"intermediate"),
         )
         monkeypatch.setattr(
-            export_mod, "_run_quantize",
+            export_mod,
+            "_run_quantize",
             lambda ldir, src, dst, quant: dst.write_bytes(b"quantised"),
         )
 
@@ -90,11 +97,13 @@ class TestTheF16IntermediateCannotEatAUsersFile:
         llama = self._fake_llama_cpp(tmp_path)
         monkeypatch.setattr(export_mod, "_find_llama_cpp", lambda p=None: llama)
         monkeypatch.setattr(
-            export_mod, "_run_convert",
+            export_mod,
+            "_run_convert",
             lambda script, src, dst, outtype: dst.write_bytes(b"intermediate"),
         )
         monkeypatch.setattr(
-            export_mod, "_run_quantize",
+            export_mod,
+            "_run_quantize",
             lambda ldir, src, dst, quant: dst.write_bytes(b"quantised"),
         )
 
@@ -102,16 +111,12 @@ class TestTheF16IntermediateCannotEatAUsersFile:
         _run_export(model, out)
 
         assert out.exists()
-        leftovers = [
-            p for p in tmp_path.rglob("*.f16.gguf") if p.name != "mymodel.f16.gguf"
-        ]
+        leftovers = [p for p in tmp_path.rglob("*.f16.gguf") if p.name != "mymodel.f16.gguf"]
         assert leftovers == [], f"intermediate f16 left behind: {leftovers}"
 
 
 class TestConvertDepsAreInstalledOnEveryPath:
-    def test_a_user_supplied_llama_cpp_still_gets_the_convert_deps(
-        self, tmp_path, monkeypatch
-    ):
+    def test_a_user_supplied_llama_cpp_still_gets_the_convert_deps(self, tmp_path, monkeypatch):
         """`--llama-cpp /path` and an already-cloned ~/.soup/llama.cpp both skipped
         the dependency install, so every conversion died on `sentencepiece`.
 
@@ -133,11 +138,13 @@ class TestConvertDepsAreInstalledOnEveryPath:
         monkeypatch.setattr(export_mod, "_find_llama_cpp", lambda p=None: llama)
         monkeypatch.setattr(export_mod, "_install_convert_deps", lambda: calls.append(1))
         monkeypatch.setattr(
-            export_mod, "_run_convert",
+            export_mod,
+            "_run_convert",
             lambda script, src, dst, outtype: dst.write_bytes(b"i"),
         )
         monkeypatch.setattr(
-            export_mod, "_run_quantize",
+            export_mod,
+            "_run_quantize",
             lambda ldir, src, dst, quant: dst.write_bytes(b"q"),
         )
 

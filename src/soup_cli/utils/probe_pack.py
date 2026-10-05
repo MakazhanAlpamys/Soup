@@ -23,6 +23,7 @@ Public surface:
 - ``list_probe_bases()`` sorted list
 - ``render_pack_json`` / ``render_pack_markdown``
 """
+
 from __future__ import annotations
 
 import json
@@ -75,18 +76,11 @@ class ProbeEntry:
     def __post_init__(self) -> None:
         _validate_name(self.name, "probe name")
         if self.kind not in PROBE_KINDS:
-            raise ValueError(
-                f"kind must be in {sorted(PROBE_KINDS)}, got {self.kind!r}"
-            )
-        if (
-            isinstance(self.hidden_dim, bool)
-            or not isinstance(self.hidden_dim, int)
-        ):
+            raise ValueError(f"kind must be in {sorted(PROBE_KINDS)}, got {self.kind!r}")
+        if isinstance(self.hidden_dim, bool) or not isinstance(self.hidden_dim, int):
             raise TypeError("hidden_dim must be int")
         if self.hidden_dim <= 0 or self.hidden_dim > _MAX_HIDDEN_DIM:
-            raise ValueError(
-                f"hidden_dim must be in (0, {_MAX_HIDDEN_DIM}]"
-            )
+            raise ValueError(f"hidden_dim must be in (0, {_MAX_HIDDEN_DIM}]")
         if not isinstance(self.description, str):
             raise TypeError("description must be str")
         if "\x00" in self.description:
@@ -94,9 +88,7 @@ class ProbeEntry:
         if len(self.description) > _MAX_DESCRIPTION_LEN:
             # M5 review fix: cap operator-controlled description so it
             # cannot blow up Rich render or downstream JSON sinks.
-            raise ValueError(
-                f"description must be ≤{_MAX_DESCRIPTION_LEN} chars"
-            )
+            raise ValueError(f"description must be ≤{_MAX_DESCRIPTION_LEN} chars")
 
 
 @dataclass(frozen=True)
@@ -111,13 +103,9 @@ class ProbePack:
         _validate_name(self.base, "base", max_len=_MAX_BASE_LEN)
         if not isinstance(self.probes, tuple):
             raise TypeError("probes must be tuple")
-        if (
-            len(self.probes) < _MIN_PROBES_PER_PACK
-            or len(self.probes) > _MAX_PROBES_PER_PACK
-        ):
+        if len(self.probes) < _MIN_PROBES_PER_PACK or len(self.probes) > _MAX_PROBES_PER_PACK:
             raise ValueError(
-                f"pack must have at least {_MIN_PROBES_PER_PACK} probe "
-                f"(max {_MAX_PROBES_PER_PACK})"
+                f"pack must have at least {_MIN_PROBES_PER_PACK} probe (max {_MAX_PROBES_PER_PACK})"
             )
         for entry in self.probes:
             if not isinstance(entry, ProbeEntry):
@@ -149,8 +137,7 @@ def _make_bundled_packs() -> Mapping[str, ProbePack]:
                 kind="sleeper",
                 hidden_dim=sleeper_spec.hidden_dim,
                 description=(
-                    f"Defection probe for {base} "
-                    f"(threshold={sleeper_spec.threshold:.2f})"
+                    f"Defection probe for {base} (threshold={sleeper_spec.threshold:.2f})"
                 ),
             )
         ]
@@ -206,10 +193,7 @@ def validate_pack_base(name: object) -> str:
     for known in BUNDLED_PACKS:
         if known.lower() == lower:
             return known
-    raise ValueError(
-        f"no probe pack for base {name!r} "
-        f"(known: {sorted(BUNDLED_PACKS)})"
-    )
+    raise ValueError(f"no probe pack for base {name!r} (known: {sorted(BUNDLED_PACKS)})")
 
 
 def get_probe_pack(base: str) -> ProbePack:

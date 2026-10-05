@@ -28,9 +28,7 @@ def _abort_on_symlink(_func, path, exc_info):
     # Prefer lstat to avoid following the symlink during inspection.
     try:
         if stat.S_ISLNK(os.lstat(path).st_mode):
-            raise OSError(
-                f"prune_checkpoints aborted: symlink encountered mid-walk: {path}"
-            )
+            raise OSError(f"prune_checkpoints aborted: symlink encountered mid-walk: {path}")
     except OSError:
         # Re-raise the original exc_info so the caller sees the real error.
         raise
@@ -39,6 +37,7 @@ def _abort_on_symlink(_func, path, exc_info):
     if exc_val is not None:
         raise exc_val
     raise OSError(f"prune_checkpoints failed: {path}")
+
 
 # Weighting for the composite metric
 COMPOSITE_WEIGHTS = {"judge": 0.5, "mmlu": 0.3, "custom": 0.2}
@@ -102,7 +101,7 @@ class CheckpointTracker:
         """Return True if quality regressed for ``patience`` consecutive evals."""
         if len(self.history) <= self.patience:
             return False
-        window = self.history[-(self.patience + 1):]
+        window = self.history[-(self.patience + 1) :]
         for i in range(1, len(window)):
             if window[i].score >= window[i - 1].score:
                 return False

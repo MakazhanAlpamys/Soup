@@ -76,7 +76,8 @@ def init_cmd(
         None, "--max-runs-per-day", help="Cap on iteration starts per UTC day."
     ),
     pre_wired: bool = typer.Option(
-        False, "--pre-wired",
+        False,
+        "--pre-wired",
         help=(
             "Use the pre-wired harvest/train/gate/deploy stages "
             "(utils/loop_stages.py) on watch instead of no-op stubs (v0.71.4)."
@@ -141,8 +142,7 @@ def status_cmd() -> None:
     if state.canary_active:
         table.add_row(
             "canary",
-            f"{escape(state.canary_active)} @ "
-            f"{state.canary_traffic_pct or 0:.1f}%",
+            f"{escape(state.canary_active)} @ {state.canary_traffic_pct or 0:.1f}%",
         )
     if state.monthly_budget_usd is not None:
         table.add_row(
@@ -202,11 +202,13 @@ def watch_cmd(
         60.0, "--poll-interval", help="Seconds between iterations [1, 3600]."
     ),
     pre_wired: bool = typer.Option(
-        False, "--pre-wired",
+        False,
+        "--pre-wired",
         help="Force the pre-wired production stages even if loop.yaml didn't set it.",
     ),
     pack_cans: bool = typer.Option(
-        False, "--pack-cans",
+        False,
+        "--pack-cans",
         help="Pack each iteration as a v0.26 Soup Can + Registry entry (v0.71.4).",
     ),
 ) -> None:
@@ -269,17 +271,13 @@ def watch_cmd(
         console.print(f"[red]invalid watch config:[/] {escape(str(exc))}")
         raise typer.Exit(code=2)
     final_state, ran = watch(cfg)
-    console.print(
-        f"[green]watch exited[/] iterations={ran} status={escape(final_state.status)}"
-    )
+    console.print(f"[green]watch exited[/] iterations={ran} status={escape(final_state.status)}")
 
 
 @app.command("canary")
 def canary_cmd(
     new_adapter: str = typer.Argument(..., help="Adapter id/path to canary."),
-    traffic: str = typer.Option(
-        "5%", "--traffic", help='Traffic share, e.g. "5%" or "5".'
-    ),
+    traffic: str = typer.Option("5%", "--traffic", help='Traffic share, e.g. "5%" or "5".'),
     autoroll_on_regress: bool = typer.Option(
         True,
         "--autoroll-on-regress/--no-autoroll-on-regress",
@@ -320,11 +318,10 @@ def canary_cmd(
 
 @app.command("replay")
 def replay_cmd(
-    iteration_id: Optional[str] = typer.Argument(
-        None, help="Iteration id (omit to list all)."
-    ),
+    iteration_id: Optional[str] = typer.Argument(None, help="Iteration id (omit to list all)."),
     extract: Optional[str] = typer.Option(
-        None, "--extract",
+        None,
+        "--extract",
         help="Extract the iteration's .can to this directory for a what-if re-run (v0.71.4).",
     ),
 ) -> None:
@@ -349,8 +346,7 @@ def replay_cmd(
         can_path = os.path.join(".soup-loops", iteration_id, "iteration.can")
         if not os.path.isfile(can_path):
             console.print(
-                f"[red]no .can for {escape(iteration_id)} "
-                "(was it run with `watch --pack-cans`?)[/]"
+                f"[red]no .can for {escape(iteration_id)} (was it run with `watch --pack-cans`?)[/]"
             )
             raise typer.Exit(code=1)
         try:
@@ -359,9 +355,7 @@ def replay_cmd(
         except (FileNotFoundError, ValueError, TypeError) as exc:
             console.print(f"[red]extract failed:[/] {escape(str(exc))}")
             raise typer.Exit(code=2)
-        console.print(
-            f"[green]extracted {escape(iteration_id)} -> {escape(str(dest))}[/]"
-        )
+        console.print(f"[green]extracted {escape(iteration_id)} -> {escape(str(dest))}[/]")
         return
 
     table = Table(title=f"replay {escape(record.iteration_id)}", show_header=False)

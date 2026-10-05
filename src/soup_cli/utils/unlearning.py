@@ -40,40 +40,42 @@ class UnlearnMethodSpec:
     live_wired: bool
 
 
-_UNLEARN_METHOD_METADATA: Mapping[str, UnlearnMethodSpec] = MappingProxyType({
-    "npo": UnlearnMethodSpec(
-        name="npo",
-        description=(
-            "Negative Preference Optimization — DPO-shaped loss that "
-            "pushes the model away from the forget set while a retain "
-            "set keeps general capability stable."
+_UNLEARN_METHOD_METADATA: Mapping[str, UnlearnMethodSpec] = MappingProxyType(
+    {
+        "npo": UnlearnMethodSpec(
+            name="npo",
+            description=(
+                "Negative Preference Optimization — DPO-shaped loss that "
+                "pushes the model away from the forget set while a retain "
+                "set keeps general capability stable."
+            ),
+            needs_retain_set=True,
+            needs_reference_model=True,
+            live_wired=False,
         ),
-        needs_retain_set=True,
-        needs_reference_model=True,
-        live_wired=False,
-    ),
-    "simnpo": UnlearnMethodSpec(
-        name="simnpo",
-        description=(
-            "SimNPO — length-normalised NPO without a reference model. "
-            "Faster + more stable on long sequences (Liu et al., 2024)."
+        "simnpo": UnlearnMethodSpec(
+            name="simnpo",
+            description=(
+                "SimNPO — length-normalised NPO without a reference model. "
+                "Faster + more stable on long sequences (Liu et al., 2024)."
+            ),
+            needs_retain_set=True,
+            needs_reference_model=False,
+            live_wired=False,
         ),
-        needs_retain_set=True,
-        needs_reference_model=False,
-        live_wired=False,
-    ),
-    "rmu": UnlearnMethodSpec(
-        name="rmu",
-        description=(
-            "Representation Misdirection Unlearning — adds a noise "
-            "vector to the residual stream for forget inputs while "
-            "preserving retain activations (Li et al., 2024)."
+        "rmu": UnlearnMethodSpec(
+            name="rmu",
+            description=(
+                "Representation Misdirection Unlearning — adds a noise "
+                "vector to the residual stream for forget inputs while "
+                "preserving retain activations (Li et al., 2024)."
+            ),
+            needs_retain_set=True,
+            needs_reference_model=False,
+            live_wired=False,
         ),
-        needs_retain_set=True,
-        needs_reference_model=False,
-        live_wired=False,
-    ),
-})
+    }
+)
 
 
 def validate_unlearn_method(value: object) -> str:
@@ -86,27 +88,19 @@ def validate_unlearn_method(value: object) -> str:
     actionable message.
     """
     if isinstance(value, bool):
-        raise TypeError(
-            f"unlearn_method must not be bool, got {value!r}"
-        )
+        raise TypeError(f"unlearn_method must not be bool, got {value!r}")
     if not isinstance(value, str):
-        raise TypeError(
-            f"unlearn_method must be str, got {type(value).__name__}"
-        )
+        raise TypeError(f"unlearn_method must be str, got {type(value).__name__}")
     if not value:
         raise ValueError("unlearn_method must be non-empty")
     if "\x00" in value:
         raise ValueError("unlearn_method must not contain null bytes")
     if len(value) > _MAX_METHOD_LEN:
-        raise ValueError(
-            f"unlearn_method must be <= {_MAX_METHOD_LEN} chars"
-        )
+        raise ValueError(f"unlearn_method must be <= {_MAX_METHOD_LEN} chars")
     canonical = value.lower()
     if canonical not in SUPPORTED_UNLEARN_METHODS:
         supported = ", ".join(sorted(SUPPORTED_UNLEARN_METHODS))
-        raise ValueError(
-            f"unknown unlearn method {value!r}; supported: {supported}"
-        )
+        raise ValueError(f"unknown unlearn method {value!r}; supported: {supported}")
     return canonical
 
 
@@ -125,13 +119,9 @@ def validate_unlearn_alpha(value: object) -> float:
     above 10 should rebalance their dataset instead.
     """
     if isinstance(value, bool):
-        raise TypeError(
-            f"unlearn_alpha must not be bool, got {value!r}"
-        )
+        raise TypeError(f"unlearn_alpha must not be bool, got {value!r}")
     if not isinstance(value, (int, float)):
-        raise TypeError(
-            f"unlearn_alpha must be a number, got {type(value).__name__}"
-        )
+        raise TypeError(f"unlearn_alpha must be a number, got {type(value).__name__}")
     fval = float(value)
     if not math.isfinite(fval):
         raise ValueError("unlearn_alpha must be finite (no NaN / Inf)")
@@ -159,17 +149,14 @@ def validate_unlearn_compat(*, task: str, backend: str) -> None:
         if isinstance(value, bool):
             raise TypeError(f"{name} must not be bool, got {value!r}")
         if not isinstance(value, str):
-            raise TypeError(
-                f"{name} must be str, got {type(value).__name__}"
-            )
+            raise TypeError(f"{name} must be str, got {type(value).__name__}")
         if not value:
             raise ValueError(f"{name} must be non-empty")
         if "\x00" in value:
             raise ValueError(f"{name} must not contain null bytes")
     if task != "unlearn":
         raise ValueError(
-            f"validate_unlearn_compat called with task={task!r}; "
-            f"expected task='unlearn'"
+            f"validate_unlearn_compat called with task={task!r}; expected task='unlearn'"
         )
     if backend == "mlx":
         raise ValueError(

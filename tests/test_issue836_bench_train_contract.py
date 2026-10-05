@@ -45,8 +45,9 @@ def _report(steps, *, warmup=0, trainable=3, snapshots=("before", "after")):
     return build_train_report(
         steps=steps,
         warmup_steps=warmup,
-        trainable=ParamSnapshot(count=trainable, fingerprint_first=snapshots[0],
-                                fingerprint_last=snapshots[1]),
+        trainable=ParamSnapshot(
+            count=trainable, fingerprint_first=snapshots[0], fingerprint_last=snapshots[1]
+        ),
         provenance={"torch": "2.6.0"},
         memory={"max_memory_allocated": 1, "max_memory_reserved": 2},
     )

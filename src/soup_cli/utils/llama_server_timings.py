@@ -76,9 +76,7 @@ def parse_timings(payload: Dict[str, Any]) -> LlamaServerTimings:
         prompt_per_token_ms=_coerce_float(timings.get("prompt_per_token_ms")),
         predicted_tokens=_coerce_int(timings.get("predicted_n")),
         predicted_ms=_coerce_float(timings.get("predicted_ms")),
-        predicted_per_token_ms=_coerce_float(
-            timings.get("predicted_per_token_ms")
-        ),
+        predicted_per_token_ms=_coerce_float(timings.get("predicted_per_token_ms")),
         kv_cache_used=used,
         kv_cache_size=size,
         kv_cache_pct=_kv_pct(used, size),

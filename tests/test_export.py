@@ -19,6 +19,7 @@ runner = CliRunner()
 
 # --- _format_size ---
 
+
 def test_format_size_bytes():
     assert _format_size(100) == "100.0 B"
 
@@ -29,11 +30,16 @@ def test_format_size_gb():
 
 # --- _detect_base_model ---
 
+
 def test_detect_base_model_valid(tmp_path: Path):
     config = tmp_path / "adapter_config.json"
-    config.write_text(json.dumps({
-        "base_model_name_or_path": "meta-llama/Llama-3.1-8B",
-    }))
+    config.write_text(
+        json.dumps(
+            {
+                "base_model_name_or_path": "meta-llama/Llama-3.1-8B",
+            }
+        )
+    )
     assert _detect_base_model(config) == "meta-llama/Llama-3.1-8B"
 
 
@@ -50,6 +56,7 @@ def test_detect_base_model_bad_json(tmp_path: Path):
 
 
 # --- _find_quantize_binary ---
+
 
 def test_find_quantize_binary_not_found(tmp_path: Path, monkeypatch):
     """Should return None if no quantize binary exists."""
@@ -79,6 +86,7 @@ def test_find_quantize_binary_on_path(tmp_path: Path, monkeypatch):
 
 # --- Constants ---
 
+
 def test_supported_formats():
     assert "gguf" in SUPPORTED_FORMATS
 
@@ -91,6 +99,7 @@ def test_gguf_quant_types():
 
 # --- CLI validation ---
 
+
 def test_export_missing_model():
     result = runner.invoke(app, ["export", "--model", "/nonexistent"])
     assert result.exit_code == 1
@@ -100,9 +109,7 @@ def test_export_missing_model():
 def test_export_unsupported_format(tmp_path: Path):
     model_dir = tmp_path / "model"
     model_dir.mkdir()
-    result = runner.invoke(
-        app, ["export", "--model", str(model_dir), "--format", "safetensors"]
-    )
+    result = runner.invoke(app, ["export", "--model", str(model_dir), "--format", "safetensors"])
     assert result.exit_code == 1
     assert "unsupported format" in result.output.lower()
 
@@ -110,9 +117,7 @@ def test_export_unsupported_format(tmp_path: Path):
 def test_export_unsupported_quant(tmp_path: Path):
     model_dir = tmp_path / "model"
     model_dir.mkdir()
-    result = runner.invoke(
-        app, ["export", "--model", str(model_dir), "--quant", "q2_k"]
-    )
+    result = runner.invoke(app, ["export", "--model", str(model_dir), "--quant", "q2_k"])
     assert result.exit_code == 1
     assert "unsupported quantization" in result.output.lower()
 

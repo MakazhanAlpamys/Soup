@@ -19,6 +19,7 @@ import yaml
 # Part A: Topology detector + --gpus flag
 # =============================================================================
 
+
 class TestResolveNumGpus:
     """Test --gpus resolution: int, 'auto', None."""
 
@@ -31,17 +32,13 @@ class TestResolveNumGpus:
     def test_resolve_auto_uses_detected(self):
         from soup_cli.utils.topology import resolve_num_gpus
 
-        with patch(
-            "soup_cli.utils.topology._detected_gpu_count", return_value=8
-        ):
+        with patch("soup_cli.utils.topology._detected_gpu_count", return_value=8):
             assert resolve_num_gpus("auto") == 8
 
     def test_resolve_auto_cpu_returns_zero(self):
         from soup_cli.utils.topology import resolve_num_gpus
 
-        with patch(
-            "soup_cli.utils.topology._detected_gpu_count", return_value=0
-        ):
+        with patch("soup_cli.utils.topology._detected_gpu_count", return_value=0):
             assert resolve_num_gpus("auto") == 0
 
     def test_resolve_none_returns_none(self):
@@ -80,9 +77,7 @@ class TestDetectTopology:
     def test_no_cuda_returns_none_interconnect(self):
         from soup_cli.utils.topology import detect_topology
 
-        with patch(
-            "soup_cli.utils.topology._detected_gpu_count", return_value=0
-        ):
+        with patch("soup_cli.utils.topology._detected_gpu_count", return_value=0):
             topo = detect_topology()
             assert topo["gpu_count"] == 0
             assert topo["interconnect"] == "none"
@@ -91,9 +86,7 @@ class TestDetectTopology:
     def test_single_gpu_has_no_interconnect(self):
         from soup_cli.utils.topology import detect_topology
 
-        with patch(
-            "soup_cli.utils.topology._detected_gpu_count", return_value=1
-        ):
+        with patch("soup_cli.utils.topology._detected_gpu_count", return_value=1):
             topo = detect_topology()
             assert topo["gpu_count"] == 1
             assert topo["interconnect"] == "single"
@@ -104,12 +97,8 @@ class TestDetectTopology:
 
         # Mock: 4 GPUs, all connected via NVLink
         with (
-            patch(
-                "soup_cli.utils.topology._detected_gpu_count", return_value=4
-            ),
-            patch(
-                "soup_cli.utils.topology._count_nvlink_pairs", return_value=6
-            ),
+            patch("soup_cli.utils.topology._detected_gpu_count", return_value=4),
+            patch("soup_cli.utils.topology._count_nvlink_pairs", return_value=6),
         ):
             topo = detect_topology()
             assert topo["gpu_count"] == 4
@@ -121,12 +110,8 @@ class TestDetectTopology:
 
         # 2 GPUs, no NVLink
         with (
-            patch(
-                "soup_cli.utils.topology._detected_gpu_count", return_value=2
-            ),
-            patch(
-                "soup_cli.utils.topology._count_nvlink_pairs", return_value=0
-            ),
+            patch("soup_cli.utils.topology._detected_gpu_count", return_value=2),
+            patch("soup_cli.utils.topology._count_nvlink_pairs", return_value=0),
         ):
             topo = detect_topology()
             assert topo["gpu_count"] == 2
@@ -199,6 +184,7 @@ class TestTrainGpusFlag:
 # Part B: Accelerate launcher wrapper
 # =============================================================================
 
+
 class TestLauncherArgv:
     """Test accelerate-launch argv construction."""
 
@@ -248,9 +234,7 @@ class TestLauncherArgv:
         from soup_cli.utils.launcher import build_accelerate_argv
 
         with pytest.raises(ValueError, match="num_machines"):
-            build_accelerate_argv(
-                num_processes=2, script_args=["soup", "train"], num_machines=0
-            )
+            build_accelerate_argv(num_processes=2, script_args=["soup", "train"], num_machines=0)
 
     def test_invalid_num_machines_high(self):
         from soup_cli.utils.launcher import build_accelerate_argv
@@ -267,10 +251,21 @@ class TestMultiNodeLauncher:
     @staticmethod
     def _prefix(rank=0, processes=16, port=29500):
         return [
-            "accelerate", "launch", "--num_processes", str(processes),
-            "--multi_gpu", "--num_machines", "2", "--machine_rank", str(rank),
-            "--main_process_ip", "head.internal", "--main_process_port", str(port),
-            "--rdzv_backend", "static",
+            "accelerate",
+            "launch",
+            "--num_processes",
+            str(processes),
+            "--multi_gpu",
+            "--num_machines",
+            "2",
+            "--machine_rank",
+            str(rank),
+            "--main_process_ip",
+            "head.internal",
+            "--main_process_port",
+            str(port),
+            "--rdzv_backend",
+            "static",
         ]
 
     @staticmethod
@@ -284,9 +279,12 @@ class TestMultiNodeLauncher:
         from soup_cli.utils.launcher import build_accelerate_argv
 
         argv = build_accelerate_argv(
-            16, [sys.executable, "-m", "soup_cli.cli", "train"],
-            num_machines=2, machine_rank=rank,
-            main_process_ip="head.internal", main_process_port=29500,
+            16,
+            [sys.executable, "-m", "soup_cli.cli", "train"],
+            num_machines=2,
+            machine_rank=rank,
+            main_process_ip="head.internal",
+            main_process_port=29500,
         )
         assert argv == self._prefix(rank) + ["--module", "soup_cli.cli", "train"]
 
@@ -294,8 +292,11 @@ class TestMultiNodeLauncher:
         from soup_cli.utils.launcher import build_accelerate_argv
 
         assert build_accelerate_argv(
-            16, ["train.py"], num_machines=2,
-            main_process_ip="head.internal", mixed_precision="bf16",
+            16,
+            ["train.py"],
+            num_machines=2,
+            main_process_ip="head.internal",
+            mixed_precision="bf16",
         ) == self._prefix() + ["--mixed_precision", "bf16", "train.py"]
 
     @pytest.mark.parametrize("processes", [1, 3, 15])
@@ -304,28 +305,33 @@ class TestMultiNodeLauncher:
 
         with pytest.raises(ValueError, match="num_processes"):
             build_accelerate_argv(
-                processes, ["train.py"], num_machines=2,
+                processes,
+                ["train.py"],
+                num_machines=2,
                 main_process_ip="head.internal",
             )
 
-    @pytest.mark.parametrize("options, field", [
-        ({"num_machines": True}, "num_machines"),
-        ({"num_machines": 1.5}, "num_machines"),
-        ({"machine_rank": -1}, "machine_rank"),
-        ({"machine_rank": 2}, "machine_rank"),
-        ({"machine_rank": True}, "machine_rank"),
-        ({"machine_rank": "1"}, "machine_rank"),
-        ({"main_process_ip": None}, "main_process_ip"),
-        ({"main_process_ip": ""}, "main_process_ip"),
-        ({"main_process_ip": "bad host"}, "main_process_ip"),
-        ({"main_process_ip": "head\x00host"}, "main_process_ip"),
-        ({"main_process_ip": "--bad"}, "main_process_ip"),
-        ({"main_process_ip": "http://head"}, "main_process_ip"),
-        ({"main_process_port": 0}, "main_process_port"),
-        ({"main_process_port": 65536}, "main_process_port"),
-        ({"main_process_port": True}, "main_process_port"),
-        ({"main_process_port": "29500"}, "main_process_port"),
-    ])
+    @pytest.mark.parametrize(
+        "options, field",
+        [
+            ({"num_machines": True}, "num_machines"),
+            ({"num_machines": 1.5}, "num_machines"),
+            ({"machine_rank": -1}, "machine_rank"),
+            ({"machine_rank": 2}, "machine_rank"),
+            ({"machine_rank": True}, "machine_rank"),
+            ({"machine_rank": "1"}, "machine_rank"),
+            ({"main_process_ip": None}, "main_process_ip"),
+            ({"main_process_ip": ""}, "main_process_ip"),
+            ({"main_process_ip": "bad host"}, "main_process_ip"),
+            ({"main_process_ip": "head\x00host"}, "main_process_ip"),
+            ({"main_process_ip": "--bad"}, "main_process_ip"),
+            ({"main_process_ip": "http://head"}, "main_process_ip"),
+            ({"main_process_port": 0}, "main_process_port"),
+            ({"main_process_port": 65536}, "main_process_port"),
+            ({"main_process_port": True}, "main_process_port"),
+            ({"main_process_port": "29500"}, "main_process_port"),
+        ],
+    )
     def test_rejects_invalid_node_settings(self, options, field):
         from soup_cli.utils.launcher import build_accelerate_argv
 
@@ -337,9 +343,17 @@ class TestMultiNodeLauncher:
     def test_single_node_control_is_unchanged(self, processes):
         from soup_cli.utils.launcher import build_accelerate_argv
 
-        expected = ["train.py"] if processes == 1 else [
-            "accelerate", "launch", "--num_processes", "4", "train.py",
-        ]
+        expected = (
+            ["train.py"]
+            if processes == 1
+            else [
+                "accelerate",
+                "launch",
+                "--num_processes",
+                "4",
+                "train.py",
+            ]
+        )
         assert build_accelerate_argv(processes, ["train.py"]) == expected
 
     @pytest.fixture
@@ -352,9 +366,15 @@ class TestMultiNodeLauncher:
         from soup_cli.utils import topology
 
         for key in (
-            "RANK", "WORLD_SIZE", "LOCAL_RANK", "ACCELERATE_MIXED_PRECISION",
-            "ACCELERATE_USE_DEEPSPEED", "ACCELERATE_USE_FSDP",
-            "NCCL_IB_DISABLE", "NCCL_P2P_DISABLE", "NCCL_NVLS_ENABLE",
+            "RANK",
+            "WORLD_SIZE",
+            "LOCAL_RANK",
+            "ACCELERATE_MIXED_PRECISION",
+            "ACCELERATE_USE_DEEPSPEED",
+            "ACCELERATE_USE_FSDP",
+            "NCCL_IB_DISABLE",
+            "NCCL_P2P_DISABLE",
+            "NCCL_NVLS_ENABLE",
         ):
             monkeypatch.delenv(key, raising=False)
         monkeypatch.chdir(tmp_path)
@@ -367,9 +387,14 @@ class TestMultiNodeLauncher:
             encoding="utf-8",
         )
         monkeypatch.setattr(topology, "_detected_gpu_count", lambda: 8)
-        monkeypatch.setattr(topology, "detect_topology", lambda: {
-            "gpu_count": 8, "interconnect": "pcie",
-        })
+        monkeypatch.setattr(
+            topology,
+            "detect_topology",
+            lambda: {
+                "gpu_count": 8,
+                "interconnect": "pcie",
+            },
+        )
         monkeypatch.setattr(train_cmd, "console", Console(width=1000, force_terminal=True))
         monkeypatch.setattr(train_cmd, "detect_device", lambda **kw: ("cpu", "CPU"))
         monkeypatch.setattr(train_cmd, "get_gpu_info", lambda **kw: {"memory_total": "0 GB"})
@@ -378,16 +403,22 @@ class TestMultiNodeLauncher:
         captured = []
 
         def fake_execvp(file, argv):
-            captured.append((file, list(argv), {
-                key: value for key, value in os.environ.items() if key.startswith("NCCL_")
-            }))
+            captured.append(
+                (
+                    file,
+                    list(argv),
+                    {key: value for key, value in os.environ.items() if key.startswith("NCCL_")},
+                )
+            )
             raise SystemExit(99)
 
         monkeypatch.setattr(os, "execvp", fake_execvp)
 
         def invoke(args):
             return CliRunner().invoke(
-                app, ["train", "--config", "soup.yaml", "--yes", *args], color=True,
+                app,
+                ["train", "--config", "soup.yaml", "--yes", *args],
+                color=True,
             )
 
         return invoke, captured, loader
@@ -396,24 +427,56 @@ class TestMultiNodeLauncher:
     @pytest.mark.parametrize("gpus", ["8", "1", "auto"])
     def test_cli_launches_exact_command_and_env(self, launch_cli, rank, gpus):
         invoke, captured, loader = launch_cli
-        result = invoke([
-            "--gpus", gpus, "--nodes", "2", "--node-rank", str(rank),
-            "--master-addr", "head.internal", "--master-port", "29601",
-        ])
+        result = invoke(
+            [
+                "--gpus",
+                gpus,
+                "--nodes",
+                "2",
+                "--node-rank",
+                str(rank),
+                "--master-addr",
+                "head.internal",
+                "--master-port",
+                "29601",
+            ]
+        )
         assert result.exit_code == 99, (self._output(result), result.exception)
         expected = self._prefix(rank, 2 if gpus == "1" else 16, 29601) + [
-            "--module", "soup_cli.cli", "train", "--config", "soup.yaml",
-            "--no-reexec", "--yes",
+            "--module",
+            "soup_cli.cli",
+            "train",
+            "--config",
+            "soup.yaml",
+            "--no-reexec",
+            "--yes",
         ]
-        assert captured == [("accelerate", expected, {
-            "NCCL_P2P_DISABLE": "0", "NCCL_IB_DISABLE": "0",
-        })]
+        assert captured == [
+            (
+                "accelerate",
+                expected,
+                {
+                    "NCCL_P2P_DISABLE": "0",
+                    "NCCL_IB_DISABLE": "0",
+                },
+            )
+        ]
         loader.assert_not_called()
 
     def test_no_reexec_prints_the_same_argv_and_does_not_mutate_env(self, launch_cli):
         invoke, captured, loader = launch_cli
-        args = ["--gpus", "8", "--nodes", "2", "--node-rank", "1",
-                "--master-addr", "head.internal", "--name", "space in name"]
+        args = [
+            "--gpus",
+            "8",
+            "--nodes",
+            "2",
+            "--node-rank",
+            "1",
+            "--master-addr",
+            "head.internal",
+            "--name",
+            "space in name",
+        ]
         result = invoke([*args, "--no-reexec"])
         out = self._output(result)
         assert result.exit_code == 1, (out, result.exception)
@@ -423,16 +486,17 @@ class TestMultiNodeLauncher:
         loader.assert_not_called()
         result = invoke(args)
         assert result.exit_code == 99, (self._output(result), result.exception)
-        printed = out[out.index("accelerate launch "):].split("Run this command", 1)[0]
+        printed = out[out.index("accelerate launch ") :].split("Run this command", 1)[0]
         assert shlex.split(printed) == captured[0][1]
 
     @pytest.mark.parametrize("no_reexec", [False, True])
     def test_dry_run_validates_data_without_launching_or_changing_env(
-        self, launch_cli, no_reexec,
+        self,
+        launch_cli,
+        no_reexec,
     ):
         invoke, captured, loader = launch_cli
-        args = ["--gpus", "8", "--nodes", "2", "--master-addr", "head.internal",
-                "--dry-run"]
+        args = ["--gpus", "8", "--nodes", "2", "--master-addr", "head.internal", "--dry-run"]
         result = invoke(args + (["--no-reexec"] if no_reexec else []))
         out = self._output(result)
         assert result.exit_code == 0, (out, result.exception)
@@ -442,21 +506,59 @@ class TestMultiNodeLauncher:
         assert "NCCL_IB_DISABLE" not in os.environ
         loader.assert_called_once()
 
-    @pytest.mark.parametrize("args, message", [
-        (["--gpus", "8", "--nodes", "2"], "--master-addr"),
-        (["--nodes", "2", "--master-addr", "head.internal"], "--gpus"),
-        (["--gpus", "8", "--nodes", "0"], "--nodes"),
-        (["--gpus", "8", "--nodes", "257"], "--nodes"),
-        (["--gpus", "8", "--nodes", "2", "--node-rank", "2",
-          "--master-addr", "head.internal"], "--node-rank"),
-        (["--gpus", "8", "--nodes", "2", "--master-addr", "head.internal",
-          "--master-port", "0"], "--master-port"),
-        (["--gpus", "8", "--master-addr", "head.internal"], "--nodes"),
-        (["--gpus", "8", "--nodes", "2", "--master-addr", "head.internal",
-          "--cloud", "modal"], "--cloud"),
-        (["--gpus", "8", "--nodes", "2", "--master-addr", "head.internal",
-          "--find-lr"], "--find-lr"),
-    ])
+    @pytest.mark.parametrize(
+        "args, message",
+        [
+            (["--gpus", "8", "--nodes", "2"], "--master-addr"),
+            (["--nodes", "2", "--master-addr", "head.internal"], "--gpus"),
+            (["--gpus", "8", "--nodes", "0"], "--nodes"),
+            (["--gpus", "8", "--nodes", "257"], "--nodes"),
+            (
+                [
+                    "--gpus",
+                    "8",
+                    "--nodes",
+                    "2",
+                    "--node-rank",
+                    "2",
+                    "--master-addr",
+                    "head.internal",
+                ],
+                "--node-rank",
+            ),
+            (
+                [
+                    "--gpus",
+                    "8",
+                    "--nodes",
+                    "2",
+                    "--master-addr",
+                    "head.internal",
+                    "--master-port",
+                    "0",
+                ],
+                "--master-port",
+            ),
+            (["--gpus", "8", "--master-addr", "head.internal"], "--nodes"),
+            (
+                [
+                    "--gpus",
+                    "8",
+                    "--nodes",
+                    "2",
+                    "--master-addr",
+                    "head.internal",
+                    "--cloud",
+                    "modal",
+                ],
+                "--cloud",
+            ),
+            (
+                ["--gpus", "8", "--nodes", "2", "--master-addr", "head.internal", "--find-lr"],
+                "--find-lr",
+            ),
+        ],
+    )
     def test_invalid_cli_settings_fail_before_loading_data(self, launch_cli, args, message):
         invoke, captured, loader = launch_cli
         result = invoke(args)
@@ -488,10 +590,19 @@ class TestMultiNodeLauncher:
         invoke, captured, _ = launch_cli
         monkeypatch.setenv("RANK", "8")
         monkeypatch.setenv("WORLD_SIZE", "16")
-        result = invoke([
-            "--gpus", "8", "--nodes", "2", "--node-rank", "1",
-            "--master-addr", "head.internal", "--dry-run",
-        ])
+        result = invoke(
+            [
+                "--gpus",
+                "8",
+                "--nodes",
+                "2",
+                "--node-rank",
+                "1",
+                "--master-addr",
+                "head.internal",
+                "--dry-run",
+            ]
+        )
         assert result.exit_code == 0, (self._output(result), result.exception)
         assert not captured
         assert "NCCL_IB_DISABLE" not in os.environ
@@ -524,9 +635,7 @@ class TestLauncherDetectActive:
         from soup_cli.utils.launcher import is_in_distributed
 
         # Delete any pre-existing distributed markers without wiping env.
-        stripped_env = {
-            key: val for key, val in os.environ.items() if key not in self._DIST_KEYS
-        }
+        stripped_env = {key: val for key, val in os.environ.items() if key not in self._DIST_KEYS}
         with patch.dict(os.environ, stripped_env, clear=True):
             assert is_in_distributed() is False
 
@@ -560,6 +669,7 @@ class TestLauncherAdvice:
 # =============================================================================
 # Part C: ZeRO++ DeepSpeed template
 # =============================================================================
+
 
 class TestZeroPlusPlus:
     """Test ZeRO++ (zero_plus_plus / zero++) config template."""
@@ -626,6 +736,7 @@ class TestZeroPlusPlus:
 # Part D: FSDP2 + torch.compile
 # =============================================================================
 
+
 class TestFsdp2Compile:
     """Test FSDP2 + torch.compile integration."""
 
@@ -691,6 +802,7 @@ class TestFsdp2Compile:
 # Part E: DeepSpeed-MII serve backend
 # =============================================================================
 
+
 class TestMiiBackend:
     """Test DeepSpeed-MII detection + runtime creation."""
 
@@ -750,6 +862,7 @@ class TestMiiBackend:
         runner = CliRunner()
         result = runner.invoke(app, ["serve", "--help"])
         import re
+
         out = re.sub(r"\x1b\[[0-9;]*m", "", result.output)
         out = re.sub(r"\s+", " ", out)
         assert "mii" in out.lower()
@@ -758,6 +871,7 @@ class TestMiiBackend:
 # =============================================================================
 # Part F: Pipeline parallelism config
 # =============================================================================
+
 
 class TestPipelineParallelConfig:
     """Test pipeline-parallel config fields + validation."""
@@ -798,7 +912,10 @@ class TestPipelineParallelConfig:
         from soup_cli.utils.pipeline import validate_pipeline_config
 
         errors = validate_pipeline_config(
-            parallelism="pipeline", pipeline_stages=1, device="cuda", gpu_count=4,
+            parallelism="pipeline",
+            pipeline_stages=1,
+            device="cuda",
+            gpu_count=4,
         )
         assert any("pipeline_stages" in e for e in errors)
 
@@ -806,7 +923,10 @@ class TestPipelineParallelConfig:
         from soup_cli.utils.pipeline import validate_pipeline_config
 
         errors = validate_pipeline_config(
-            parallelism="pipeline", pipeline_stages=4, device="cpu", gpu_count=0,
+            parallelism="pipeline",
+            pipeline_stages=4,
+            device="cpu",
+            gpu_count=0,
         )
         assert any("CUDA" in e for e in errors)
 
@@ -814,7 +934,10 @@ class TestPipelineParallelConfig:
         from soup_cli.utils.pipeline import validate_pipeline_config
 
         errors = validate_pipeline_config(
-            parallelism="pipeline", pipeline_stages=4, device="cuda", gpu_count=2,
+            parallelism="pipeline",
+            pipeline_stages=4,
+            device="cuda",
+            gpu_count=2,
         )
         assert any("GPUs" in e for e in errors)
 
@@ -822,7 +945,10 @@ class TestPipelineParallelConfig:
         from soup_cli.utils.pipeline import validate_pipeline_config
 
         errors = validate_pipeline_config(
-            parallelism="data", pipeline_stages=1, device="cpu", gpu_count=0,
+            parallelism="data",
+            pipeline_stages=1,
+            device="cpu",
+            gpu_count=0,
         )
         assert errors == []
 
@@ -830,6 +956,7 @@ class TestPipelineParallelConfig:
 # =============================================================================
 # Part G: Multi-GPU recipes
 # =============================================================================
+
 
 class TestMultiGpuRecipes:
     """Test new multi-GPU recipes in catalog."""
@@ -887,6 +1014,7 @@ class TestMultiGpuRecipes:
 # Integration: config field → trainer wiring
 # =============================================================================
 
+
 class TestFsdp2CompileHelper:
     """Behavioral tests for apply_fsdp_training_kwargs (extracted helper).
 
@@ -898,9 +1026,7 @@ class TestFsdp2CompileHelper:
         from soup_cli.utils.fsdp import apply_fsdp_training_kwargs
 
         kwargs = {"learning_rate": 2e-4}
-        result = apply_fsdp_training_kwargs(
-            kwargs, fsdp_config=None, use_fsdp2_compile=True
-        )
+        result = apply_fsdp_training_kwargs(kwargs, fsdp_config=None, use_fsdp2_compile=True)
         assert result is kwargs
         assert "torch_compile" not in result
         assert "fsdp" not in result
@@ -1017,9 +1143,7 @@ class TestTrainValidatorGating:
             f"output: {(tmp_path / 'out').as_posix()}\n"
         )
         runner = CliRunner()
-        result = runner.invoke(
-            app, ["train", "--config", str(cfg_file), "--yes", "--dry-run"]
-        )
+        result = runner.invoke(app, ["train", "--config", str(cfg_file), "--yes", "--dry-run"])
         # Exit non-zero, with a clear message mentioning the flag.
         assert result.exit_code != 0, (result.output, repr(result.exception))
         assert "fsdp2_compile" in result.output.lower() or "fsdp" in result.output.lower()
@@ -1040,9 +1164,7 @@ class TestTrainValidatorGating:
             f"output: {(tmp_path / 'out').as_posix()}\n"
         )
         runner = CliRunner()
-        result = runner.invoke(
-            app, ["train", "--config", str(cfg_file), "--yes", "--dry-run"]
-        )
+        result = runner.invoke(app, ["train", "--config", str(cfg_file), "--yes", "--dry-run"])
         assert result.exit_code != 0, (result.output, repr(result.exception))
         assert "pipeline" in result.output.lower() or "cuda" in result.output.lower()
 
@@ -1060,20 +1182,20 @@ class TestMasterAddrIsValidatedAsAnAddress:
     @pytest.mark.parametrize(
         "bad",
         [
-            "head:29500",       # port glued onto the hostname
-            "$(whoami)",        # command substitution
-            "`id`",             # backtick substitution
-            "a|b",              # shell pipe
-            "a;b",              # command separator
-            "A" * 5000,         # no length ceiling (one oversized label)
+            "head:29500",  # port glued onto the hostname
+            "$(whoami)",  # command substitution
+            "`id`",  # backtick substitution
+            "a|b",  # shell pipe
+            "a;b",  # command separator
+            "A" * 5000,  # no length ceiling (one oversized label)
             # 299 chars of individually LEGAL 2-char labels: only the
             # RFC 1035 total-length ceiling rejects this one.
             ".".join(["ab"] * 100),
-            "host name",        # embedded space
-            "-oProxyCommand",   # leading dash
-            "-",                # bare dash
-            "..",               # empty labels
-            "node_01",          # underscore is not a hostname character
+            "host name",  # embedded space
+            "-oProxyCommand",  # leading dash
+            "-",  # bare dash
+            "..",  # empty labels
+            "node_01",  # underscore is not a hostname character
         ],
     )
     def test_rejects_values_that_are_not_addresses(self, bad: str) -> None:

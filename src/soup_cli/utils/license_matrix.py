@@ -35,8 +35,8 @@ _WEAK_COPYLEFT = "weak-copyleft"
 _STRONG_COPYLEFT = "strong-copyleft"
 _NON_COMMERCIAL = "non-commercial"
 _RESTRICTED_USE = "restricted-use"  # Llama / Gemma / etc. — community licenses
-_OPENRAIL = "openrail"             # CreativeML OpenRAIL family — use-based
-_PROPRIETARY = "proprietary"        # OpenAI ToS, etc.
+_OPENRAIL = "openrail"  # CreativeML OpenRAIL family — use-based
+_PROPRIETARY = "proprietary"  # OpenAI ToS, etc.
 
 _LICENSE_KINDS_RAW: dict[str, str] = {
     # Permissive
@@ -178,7 +178,9 @@ def check_license_compat(
                 reason=f"unknown license: {dedup[0]!r}",
             )
         return LicenseConflictReport(
-            ok=True, licenses=licenses_tuple, conflict_pair=None,
+            ok=True,
+            licenses=licenses_tuple,
+            conflict_pair=None,
             reason="single-license merge",
         )
 
@@ -381,13 +383,9 @@ def validate_license_override_reason(reason: object) -> str:
         raise ValueError("override reason must not contain null bytes")
     stripped = reason.strip()
     if len(stripped) < _MIN_OVERRIDE_REASON:
-        raise ValueError(
-            f"override reason too short (need ≥ {_MIN_OVERRIDE_REASON} chars)"
-        )
+        raise ValueError(f"override reason too short (need ≥ {_MIN_OVERRIDE_REASON} chars)")
     if len(stripped) > _MAX_OVERRIDE_REASON:
-        raise ValueError(
-            f"override reason too long (> {_MAX_OVERRIDE_REASON} chars)"
-        )
+        raise ValueError(f"override reason too long (> {_MAX_OVERRIDE_REASON} chars)")
     return stripped
 
 

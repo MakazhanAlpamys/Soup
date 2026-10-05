@@ -47,7 +47,7 @@ def test_rendered_recipe_loads_through_config_schema(tmp_path):
     text = render_mix_recipe_yaml(report)
     # Strip the leading comment lines — only the `data:` block onward is
     # spliced into a real soup.yaml, matching how a human would use it.
-    data_block = text[text.index("data:"):]
+    data_block = text[text.index("data:") :]
     cfg = load_config_from_string(_splice_into_config(data_block))
     assert cfg.data.train == [str(tmp_path / "a.jsonl"), str(tmp_path / "b.jsonl")]
 
@@ -58,11 +58,9 @@ def test_train_contains_all_datasets_in_report_order(tmp_path):
     # ("highest weighted dataset only") is intentionally reversed, not
     # deleted: the full dataset list must survive, in report.datasets order,
     # index-aligned with data.interleave.probs.
-    report = _report(
-        ["a.jsonl", "b.jsonl", "c.jsonl"], [0.2, 0.55, 0.25], tmp_path
-    )
+    report = _report(["a.jsonl", "b.jsonl", "c.jsonl"], [0.2, 0.55, 0.25], tmp_path)
     text = render_mix_recipe_yaml(report)
-    data_block = text[text.index("data:"):]
+    data_block = text[text.index("data:") :]
     cfg = load_config_from_string(_splice_into_config(data_block))
     assert cfg.data.train == [
         str(tmp_path / "a.jsonl"),
@@ -100,12 +98,17 @@ def test_apply_cli_prints_dataset_list_shape_recipe(tmp_path, monkeypatch):
     result = runner.invoke(
         app,
         [
-            "data", "mix",
+            "data",
+            "mix",
             "--optimize",
-            "--datasets", "a.jsonl,b.jsonl",
-            "--budget", "60s",
-            "--num-probes", "2",
-            "--output", "rec.yaml",
+            "--datasets",
+            "a.jsonl,b.jsonl",
+            "--budget",
+            "60s",
+            "--num-probes",
+            "2",
+            "--output",
+            "rec.yaml",
         ],
     )
     assert result.exit_code == 0, (result.output, repr(result.exception))
@@ -119,7 +122,7 @@ def test_apply_cli_prints_dataset_list_shape_recipe(tmp_path, monkeypatch):
     # the fix that shipped here originally -- leaves escapes mid-token.
     compact = "".join(strip_ansi(result.output).split())
     assert "train:" in compact, result.output
-    after = compact[compact.index("train:") + len("train:"):]
+    after = compact[compact.index("train:") + len("train:") :]
     assert after.startswith("-"), result.output
     assert "a.jsonl" in after[:400], result.output
     assert "b.jsonl" in after[:400], result.output
@@ -156,11 +159,11 @@ def test_apply_cli_quotes_path_needing_quoting(tmp_path, monkeypatch):
 
     monkeypatch.chdir(tmp_path)
     (tmp_path / "odd.yaml").write_text(
-        'data:\n'
-        '  interleave:\n'
-        '    strategy: probs\n'
-        '    probs:\n'
-        '      - 1.000000\n'
+        "data:\n"
+        "  interleave:\n"
+        "    strategy: probs\n"
+        "    probs:\n"
+        "      - 1.000000\n"
         '  train: "odd: name.jsonl"\n'
     )
     from typer.testing import CliRunner
@@ -171,7 +174,7 @@ def test_apply_cli_quotes_path_needing_quoting(tmp_path, monkeypatch):
     result = runner.invoke(app, ["data", "mix", "--apply", "odd.yaml"])
     assert result.exit_code == 0, (result.output, repr(result.exception))
     plain = strip_ansi(result.output)  # #633 -- \x1b is not valid YAML
-    data_block = plain[plain.index("data:"):]
+    data_block = plain[plain.index("data:") :]
     loaded = yaml.safe_load(data_block)
     assert loaded["data"]["train"] == "odd: name.jsonl"
 
@@ -225,19 +228,24 @@ def test_apply_handles_new_multi_dataset_recipe(tmp_path, monkeypatch):
     result = runner.invoke(
         app,
         [
-            "data", "mix",
+            "data",
+            "mix",
             "--optimize",
-            "--datasets", "a.jsonl,b.jsonl,c.jsonl",
-            "--budget", "60s",
-            "--num-probes", "2",
-            "--output", "rec3.yaml",
+            "--datasets",
+            "a.jsonl,b.jsonl,c.jsonl",
+            "--budget",
+            "60s",
+            "--num-probes",
+            "2",
+            "--output",
+            "rec3.yaml",
         ],
     )
     assert result.exit_code == 0, (result.output, repr(result.exception))
     result = runner.invoke(app, ["data", "mix", "--apply", "rec3.yaml"])
     assert result.exit_code == 0, (result.output, repr(result.exception))
     plain = strip_ansi(result.output)  # #633 -- \x1b is not valid YAML
-    data_block = plain[plain.index("data:"):]
+    data_block = plain[plain.index("data:") :]
     from pathlib import Path
 
     import yaml

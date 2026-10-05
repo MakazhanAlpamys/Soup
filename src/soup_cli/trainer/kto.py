@@ -104,9 +104,7 @@ class KTOTrainerWrapper(StreamingSetupMixin):
         else:
             self._setup_transformers(cfg, tcfg)
 
-        apply_chat_template_override(
-            self.tokenizer, cfg.data.chat_template, console=console
-        )
+        apply_chat_template_override(self.tokenizer, cfg.data.chat_template, console=console)
 
         trainable, total = self.model.get_nb_trainable_parameters()
         # v0.72.4 (mirrors sft.py) — under NF4 streaming PEFT's total is wrong
@@ -119,8 +117,7 @@ class KTOTrainerWrapper(StreamingSetupMixin):
             total = stream_total
         pct = 100 * trainable / total if total else 0.0
         console.print(
-            f"[green]LoRA applied:[/] {trainable:,} trainable"
-            f" / {total:,} total ({pct:.2f}%)"
+            f"[green]LoRA applied:[/] {trainable:,} trainable / {total:,} total ({pct:.2f}%)"
         )
 
         # --- Batch size ---
@@ -159,8 +156,7 @@ class KTOTrainerWrapper(StreamingSetupMixin):
 
         # --- Calculate warmup steps from ratio ---
         total_steps = (
-            math.ceil(len(train_ds) / batch_size / tcfg.gradient_accumulation_steps)
-            * tcfg.epochs
+            math.ceil(len(train_ds) / batch_size / tcfg.gradient_accumulation_steps) * tcfg.epochs
         )
         warmup_steps = int(total_steps * tcfg.warmup_ratio)
 
@@ -207,8 +203,11 @@ class KTOTrainerWrapper(StreamingSetupMixin):
             # #326 — KTO lost `max_prompt_length` FIRST, at 0.27.0, two
             # releases before dpo. See dpo.py.
             **prompt_length_kwargs(KTOConfig, cfg.data.max_length // 2),
-            **({"neftune_noise_alpha": tcfg.neftune_alpha}
-               if tcfg.neftune_alpha is not None else {}),
+            **(
+                {"neftune_noise_alpha": tcfg.neftune_alpha}
+                if tcfg.neftune_alpha is not None
+                else {}
+            ),
         )
 
         # --- Trainer ---
@@ -238,6 +237,7 @@ class KTOTrainerWrapper(StreamingSetupMixin):
             attach_plugin_callback,
             attach_relora_callback,
         )
+
         # LoRA+ optimizer (#724/#745) — build and attach now that the trainer exists.
         attach_loraplus_optimizer(self.trainer, tcfg)
         attach_relora_callback(self.trainer, tcfg)
@@ -265,14 +265,17 @@ class KTOTrainerWrapper(StreamingSetupMixin):
         from soup_cli.utils.quant_menu import build_quantization_config_for_loader
 
         quant_config_obj = build_quantization_config_for_loader(
-            tcfg=tcfg, base=cfg.base, console=console,
+            tcfg=tcfg,
+            base=cfg.base,
+            console=console,
         )
 
         console.print(f"[dim]Loading model: {cfg.base}[/]")
         # On CPU, use device_map="cpu" to avoid meta tensors from "auto"
         dev_map = resolve_device_map(self.device)
         model_kwargs = {
-            "trust_remote_code": self._trust_remote_code, "device_map": dev_map,
+            "trust_remote_code": self._trust_remote_code,
+            "device_map": dev_map,
             "torch_dtype": resolve_frozen_base_load_dtype(self.device),
         }
         if quant_config_obj is not None:
@@ -307,9 +310,7 @@ class KTOTrainerWrapper(StreamingSetupMixin):
         # resolution leaves peft with nothing to attach.
         from soup_cli.utils.moe import resolve_moe_lora_targets
 
-        target_modules = resolve_moe_lora_targets(
-            self.model, tcfg, target_modules, console
-        )
+        target_modules = resolve_moe_lora_targets(self.model, tcfg, target_modules, console)
 
         lora_config = build_lora_config(
             tcfg.lora,
@@ -321,6 +322,7 @@ class KTOTrainerWrapper(StreamingSetupMixin):
             apply_post_lora_patches,
             apply_pre_lora_patches,
         )
+
         apply_pre_lora_patches(self.model, cfg.base)
         self.model = get_peft_model(self.model, lora_config)
         apply_post_lora_patches(self.model)
@@ -334,9 +336,14 @@ class KTOTrainerWrapper(StreamingSetupMixin):
 
         # v0.35.0 #60 — multi-trainer wiring of v0.28.0 speed/memory features.
         from soup_cli.utils.v028_features import apply_v028_speed_memory
+
         apply_v028_speed_memory(
-            model=self.model, tcfg=tcfg, base_model=cfg.base,
-            console=console, device=self.device, backend=cfg.backend,
+            model=self.model,
+            tcfg=tcfg,
+            base_model=cfg.base,
+            console=console,
+            device=self.device,
+            backend=cfg.backend,
         )
 
     def _setup_unsloth(self, cfg: SoupConfig, tcfg) -> None:
@@ -366,8 +373,7 @@ class KTOTrainerWrapper(StreamingSetupMixin):
         """Run KTO training and return results summary."""
         if self.trainer is None:
             raise RuntimeError(
-                "KTOTrainerWrapper.train() called before setup(). "
-                "Call setup(dataset) first."
+                "KTOTrainerWrapper.train() called before setup(). Call setup(dataset) first."
             )
         start = time.time()
 

@@ -31,8 +31,12 @@ def _run(clock_sampler, *, steps=6, warmup=3, before_train=None):
     from soup_cli.data.loader import load_dataset
 
     return run_bench_train(
-        load_config("soup.yaml"), steps=steps, warmup=warmup, device="cpu",
-        load_dataset=lambda c: load_dataset(c.data), before_train=before_train,
+        load_config("soup.yaml"),
+        steps=steps,
+        warmup=warmup,
+        device="cpu",
+        load_dataset=lambda c: load_dataset(c.data),
+        before_train=before_train,
         clock_sampler=clock_sampler,
     )
 
@@ -58,13 +62,24 @@ class _Canned:
 
 class TestTheClockIsReadWhileBusy:
     # Warm-up ramps at t<10, the counted steps run 10..20, the card idles after.
-    SAMPLES = [(1.0, 300), (5.0, 1400), (10.0, 2400), (12.0, 2550), (15.0, 2370),
-               (20.0, 2500), (21.0, 285), (25.0, 180)]
+    SAMPLES = [
+        (1.0, 300),
+        (5.0, 1400),
+        (10.0, 2400),
+        (12.0, 2550),
+        (15.0, 2370),
+        (20.0, 2500),
+        (21.0, 285),
+        (25.0, 180),
+    ]
 
     def test_only_the_counted_window_is_summarised(self):
         summary = summarize_clock_samples(self.SAMPLES, 10.0, 20.0)
         assert summary == {
-            "min": 2370, "median": 2450.0, "max": 2550, "sample_count": 4,
+            "min": 2370,
+            "median": 2450.0,
+            "max": 2550,
+            "sample_count": 4,
             "unavailable_reason": None,
         }
 
@@ -124,7 +139,8 @@ class TestTheRunCutsSamplesToTheCountedSteps:
 
         def slow_steps_and_grab_the_collector(wrapper):
             seen["collector"] = next(
-                cb for cb in wrapper.trainer.callback_handler.callbacks
+                cb
+                for cb in wrapper.trainer.callback_handler.callbacks
                 if type(cb).__name__ == "BenchCollector"
             )
             step = wrapper.trainer.training_step
@@ -191,9 +207,7 @@ class TestTheSampler:
     def test_it_reads_the_clock_through_the_resolved_tool(self, tmp_path, monkeypatch):
         from soup_cli.bench.train_run import ClockSampler
 
-        script = cli_tests.TestDriverAndClockProvenance._fake_tool(
-            tmp_path, monkeypatch, "2505\n"
-        )
+        script = cli_tests.TestDriverAndClockProvenance._fake_tool(tmp_path, monkeypatch, "2505\n")
         # stop() waits for the tick in flight, so at least one always lands.
         samples = ClockSampler(interval=0.01, gpu="00000000:01:00.0").start().stop()
         assert samples and {clock for _, clock in samples} == {2505}
@@ -277,8 +291,19 @@ class TestAPreFlightRefusalWritesNoReport:
 
         monkeypatch.setattr(SFTTrainerWrapper, "setup", setup_then_freeze)
         result = runner.invoke(
-            cli_tests.app, ["bench", "train", "--config", "soup.yaml", "--steps", "3",
-                            "--warmup", "1", "-o", "r.json"],
+            cli_tests.app,
+            [
+                "bench",
+                "train",
+                "--config",
+                "soup.yaml",
+                "--steps",
+                "3",
+                "--warmup",
+                "1",
+                "-o",
+                "r.json",
+            ],
         )
         assert result.exit_code == 1, result.output
         assert "0 trainable parameter tensors" in strip_ansi(result.output)
@@ -286,8 +311,19 @@ class TestAPreFlightRefusalWritesNoReport:
 
     def test_warmup_that_eats_every_step(self, workdir):
         result = runner.invoke(
-            cli_tests.app, ["bench", "train", "--config", "soup.yaml", "--steps", "2",
-                            "--warmup", "2", "-o", "r.json"],
+            cli_tests.app,
+            [
+                "bench",
+                "train",
+                "--config",
+                "soup.yaml",
+                "--steps",
+                "2",
+                "--warmup",
+                "2",
+                "-o",
+                "r.json",
+            ],
         )
         assert result.exit_code == 1, result.output
         assert "leaves nothing after --warmup" in strip_ansi(result.output)
@@ -299,8 +335,19 @@ class TestAPreFlightRefusalWritesNoReport:
         import json
 
         result = runner.invoke(
-            cli_tests.app, ["bench", "train", "--config", "soup.yaml", "--steps", "2",
-                            "--warmup", "1", "-o", "r.json"],
+            cli_tests.app,
+            [
+                "bench",
+                "train",
+                "--config",
+                "soup.yaml",
+                "--steps",
+                "2",
+                "--warmup",
+                "1",
+                "-o",
+                "r.json",
+            ],
         )
         assert result.exit_code == 0, result.output
         report = json.loads((workdir / "r.json").read_text(encoding="utf-8"))

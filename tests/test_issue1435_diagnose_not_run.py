@@ -46,9 +46,7 @@ def _gens(**overrides):
 
 
 def _write_rows(tmp_path: Path, rows) -> None:
-    (tmp_path / "d.jsonl").write_text(
-        "\n".join(json.dumps(row) for row in rows), encoding="utf-8"
-    )
+    (tmp_path / "d.jsonl").write_text("\n".join(json.dumps(row) for row in rows), encoding="utf-8")
 
 
 def _run_live(tmp_path, monkeypatch, rows, gens, **kwargs):
@@ -158,9 +156,7 @@ class TestLivePath:
         def boom(prompt, k):
             raise ValueError("generator exploded")
 
-        report, _ = _run_live(
-            tmp_path, monkeypatch, RECOGNISED, _gens(adapter_multi=boom)
-        )
+        report, _ = _run_live(tmp_path, monkeypatch, RECOGNISED, _gens(adapter_multi=boom))
         score = report.scores["mode_collapse"]
         assert score.verdict == "NOT_RUN"
         assert "ValueError" in score.evidence
@@ -171,9 +167,7 @@ class TestLivePath:
         def boom(prompt, k):
             raise ValueError("a\x00b" + "x" * 5000)
 
-        report, _ = _run_live(
-            tmp_path, monkeypatch, RECOGNISED, _gens(adapter_multi=boom)
-        )
+        report, _ = _run_live(tmp_path, monkeypatch, RECOGNISED, _gens(adapter_multi=boom))
         evidence = report.scores["mode_collapse"].evidence
         assert "\x00" not in evidence
         assert len(evidence) < 400
@@ -197,9 +191,7 @@ class TestLivePath:
         assert report.scores["citation"].verdict == "OK"
 
     def test_no_dataset_keeps_dataset_probes_neutral(self, tmp_path, monkeypatch):
-        report, _ = _run_live(
-            tmp_path, monkeypatch, RECOGNISED, _gens(), dataset_path=None
-        )
+        report, _ = _run_live(tmp_path, monkeypatch, RECOGNISED, _gens(), dataset_path=None)
         for mode in DATASET_MODES:
             assert report.scores[mode].verdict == "OK", mode
         assert "NOT_RUN" not in {score.verdict for score in report.scores.values()}
@@ -234,9 +226,7 @@ class TestCli:
         assert "NOT_RUN" in out
 
     def test_allow_not_run_exits_0(self, tmp_path, monkeypatch):
-        result, out, _ = _cli(
-            tmp_path, monkeypatch, UNRECOGNISED, _gens(), "--allow-not-run"
-        )
+        result, out, _ = _cli(tmp_path, monkeypatch, UNRECOGNISED, _gens(), "--allow-not-run")
         assert result.exit_code == 0
         assert "NOT_RUN" in out  # still visible, only the exit code changes
 
@@ -255,9 +245,7 @@ class TestCli:
             "soup_cli.utils.diagnose.memorization.score_memorization",
             side_effect=ValueError("probe broke"),
         ):
-            result, _, _ = _cli(
-                tmp_path, monkeypatch, RECOGNISED, collapsed, "--allow-not-run"
-            )
+            result, _, _ = _cli(tmp_path, monkeypatch, RECOGNISED, collapsed, "--allow-not-run")
         assert result.exit_code == 2
 
     def test_badge_is_grey_not_green_for_not_run(self, tmp_path, monkeypatch):
@@ -349,9 +337,7 @@ class TestEvidenceNotRun:
 # Every probe site reports NOT_RUN, and a probe with nothing to measure is not OK
 # ---------------------------------------------------------------------------
 
-JSON_ROWS = [
-    {"prompt": f"Return object {i}.", "completion": f'{{"id": {i}}}'} for i in range(12)
-]
+JSON_ROWS = [{"prompt": f"Return object {i}.", "completion": f'{{"id": {i}}}'} for i in range(12)]
 RAFT_ROWS = [
     {
         "query": f"question {i}?",
@@ -421,13 +407,12 @@ class TestEveryProbeSite:
 
 class TestReviewFollowUps:
     def test_table_shows_a_dash_not_a_zero_score_for_not_run(self, tmp_path, monkeypatch):
-        result, out, _ = _cli(
-            tmp_path, monkeypatch, UNRECOGNISED, _gens(), "--allow-not-run"
-        )
+        result, out, _ = _cli(tmp_path, monkeypatch, UNRECOGNISED, _gens(), "--allow-not-run")
         assert result.exit_code == 0
         modes = ("forgetting", "format", "mode_collapse", "memorization")
         rows = [
-            line for line in out.splitlines()
+            line
+            for line in out.splitlines()
             if "NOT_RUN" in line and any(mode in line for mode in modes)
         ]
         assert len(rows) == 4  # one table row per NOT_RUN probe, not the overall panel
@@ -436,9 +421,7 @@ class TestReviewFollowUps:
             assert "0.000" not in line
 
     def test_empty_tokenizer_is_an_input_error(self, tmp_path, monkeypatch):
-        result, out, calls = _cli(
-            tmp_path, monkeypatch, RECOGNISED, _gens(), "--tokenizer", ""
-        )
+        result, out, calls = _cli(tmp_path, monkeypatch, RECOGNISED, _gens(), "--tokenizer", "")
         assert result.exit_code == 3
         assert "non-empty" in out
         assert calls == []

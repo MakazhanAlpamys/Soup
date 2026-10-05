@@ -24,14 +24,19 @@ def register(app: typer.Typer, console: Console) -> None:
     @app.command(name="unlearning")
     def unlearning_cmd(
         run_id: str = typer.Argument(
-            ..., help="Run identifier (e.g. registry id of the unlearn run).",
+            ...,
+            help="Run identifier (e.g. registry id of the unlearn run).",
         ),
         benchmark: str = typer.Option(
-            "tofu", "--benchmark", "-b",
+            "tofu",
+            "--benchmark",
+            "-b",
             help="Benchmark: tofu / muse / wmdp.",
         ),
         evidence: Optional[str] = typer.Option(
-            None, "--evidence", "-e",
+            None,
+            "--evidence",
+            "-e",
             help=(
                 "Path to a JSON file with pre-computed evidence. Schema: "
                 "{forget_quality: {pre_loss, post_loss}, "
@@ -41,11 +46,14 @@ def register(app: typer.Typer, console: Console) -> None:
             ),
         ),
         output: Optional[str] = typer.Option(
-            None, "--output", "-o",
+            None,
+            "--output",
+            "-o",
             help="Where to write the rendered UnlearnReport JSON.",
         ),
         attach_to_registry: Optional[str] = typer.Option(
-            None, "--attach-to-registry",
+            None,
+            "--attach-to-registry",
             help=(
                 "Optional registry entry id to attach the report as an "
                 "eval_results artifact (mirrors v0.55.0 eval lock policy)."
@@ -74,9 +82,7 @@ def register(app: typer.Typer, console: Console) -> None:
                 # json.JSONDecodeError is a ValueError subclass — catch it
                 # FIRST so we can label the message specifically (review
                 # MEDIUM M10 — was unreachable after the broader except).
-                console.print(
-                    f"[red]Evidence file is not valid JSON:[/] {escape(str(exc))}"
-                )
+                console.print(f"[red]Evidence file is not valid JSON:[/] {escape(str(exc))}")
                 raise typer.Exit(2) from exc
             except (FileNotFoundError, ValueError, TypeError, OSError) as exc:
                 console.print(f"[red]Cannot read evidence:[/] {escape(str(exc))}")
@@ -116,9 +122,7 @@ def register(app: typer.Typer, console: Console) -> None:
             "MINOR": "yellow",
             "MAJOR": "red",
         }.get(report.overall, "white")
-        console.print(
-            f"Overall: [{overall_colour}]{escape(report.overall)}[/]"
-        )
+        console.print(f"Overall: [{overall_colour}]{escape(report.overall)}[/]")
 
         # Write the report.
         if output is not None:
@@ -132,24 +136,19 @@ def register(app: typer.Typer, console: Console) -> None:
         # Optional registry attach.
         if attach_to_registry is not None:
             if output is None:
-                console.print(
-                    "[yellow]--attach-to-registry requires --output;[/] skipping attach."
-                )
+                console.print("[yellow]--attach-to-registry requires --output;[/] skipping attach.")
             else:
                 try:
                     from soup_cli.registry.attach import attach_artifact
+
                     attach_artifact(
                         entry_id=attach_to_registry,
                         artifact_path=output,
                         kind="eval_results",
                     )
-                    console.print(
-                        f"Attached eval_results -> registry {escape(attach_to_registry)}"
-                    )
+                    console.print(f"Attached eval_results -> registry {escape(attach_to_registry)}")
                 except Exception as exc:  # noqa: BLE001
-                    console.print(
-                        f"[yellow]Registry attach failed:[/] {escape(str(exc))}"
-                    )
+                    console.print(f"[yellow]Registry attach failed:[/] {escape(str(exc))}")
 
         # Exit code: 0 on OK / MINOR; 2 on MAJOR (matches v0.56.0 diagnose
         # gate convention so CI scripts can chain `soup train` → `soup

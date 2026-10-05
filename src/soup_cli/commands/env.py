@@ -92,10 +92,7 @@ def env_status_cmd(
     try:
         lock = read_lock(lock_path)
     except FileNotFoundError:
-        console.print(
-            f"[yellow]No lock file at {escape(lock_path)}; "
-            "run `soup env lock` first.[/]"
-        )
+        console.print(f"[yellow]No lock file at {escape(lock_path)}; run `soup env lock` first.[/]")
         raise typer.Exit(1) from None
     except (TypeError, ValueError) as exc:
         console.print(f"[red]{escape(str(exc))}[/]")
@@ -145,10 +142,7 @@ def env_check_cmd(
     try:
         locked = read_lock(lock_path)
     except FileNotFoundError:
-        console.print(
-            f"[red]No lock file at {escape(lock_path)}; "
-            "run `soup env lock` first.[/]"
-        )
+        console.print(f"[red]No lock file at {escape(lock_path)}; run `soup env lock` first.[/]")
         lock_exit = 1
     except (TypeError, ValueError) as exc:
         console.print(f"[red]{escape(str(exc))}[/]")
@@ -226,10 +220,7 @@ def env_fix_cmd(
     try:
         lock = read_lock(lock_path)
     except FileNotFoundError:
-        console.print(
-            f"[red]No lock file at {escape(lock_path)}; "
-            "run `soup env lock` first.[/]"
-        )
+        console.print(f"[red]No lock file at {escape(lock_path)}; run `soup env lock` first.[/]")
         raise typer.Exit(1) from None
     except (TypeError, ValueError) as exc:
         console.print(f"[red]{escape(str(exc))}[/]")

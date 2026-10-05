@@ -42,8 +42,7 @@ def _write_can(path: str, members: dict[str, str]) -> None:
 
 
 _PLAIN_MANIFEST = (
-    "can_format_version: 1\nname: n\nauthor: a\ncreated_at: '2026-01-01'\n"
-    "base_hash: x\n"
+    "can_format_version: 1\nname: n\nauthor: a\ncreated_at: '2026-01-01'\nbase_hash: x\n"
 )
 
 
@@ -170,9 +169,7 @@ def test_large_alias_free_attestation_loads(tmp_path, monkeypatch):
     from soup_cli.cans.unpack import inspect_can
 
     count = 205_000
-    body = (
-        "_type: t\npredicateType: p\nitems: [" + ",".join(["0"] * count) + "]\n"
-    )
+    body = "_type: t\npredicateType: p\nitems: [" + ",".join(["0"] * count) + "]\n"
     _write_can("big.can", {"manifest.yaml": _manifest_with_attestation(body)})
     manifest = inspect_can("big.can")
     assert len(manifest.attestations[0]["items"]) == count

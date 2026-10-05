@@ -77,12 +77,8 @@ class MixCandidate:
     wall_clock_seconds: float
 
     def __post_init__(self) -> None:
-        if isinstance(self.weights, bool) or not isinstance(
-            self.weights, tuple
-        ):
-            raise TypeError(
-                f"weights must be tuple, got {type(self.weights).__name__}"
-            )
+        if isinstance(self.weights, bool) or not isinstance(self.weights, tuple):
+            raise TypeError(f"weights must be tuple, got {type(self.weights).__name__}")
         if not self.weights:
             raise ValueError("weights must be non-empty")
         for w in self.weights:
@@ -97,9 +93,7 @@ class MixCandidate:
                 raise ValueError(f"weight must be in [0, 1], got {fw}")
         total = sum(float(w) for w in self.weights)
         if abs(total - 1.0) > _FLOAT_TOL:
-            raise ValueError(
-                f"weights must sum to 1.0 ± {_FLOAT_TOL} (got {total})"
-            )
+            raise ValueError(f"weights must sum to 1.0 ± {_FLOAT_TOL} (got {total})")
         for name, value in (
             ("eval_loss", self.eval_loss),
             ("wall_clock_seconds", self.wall_clock_seconds),
@@ -107,18 +101,14 @@ class MixCandidate:
             if isinstance(value, bool):
                 raise ValueError(f"{name} must be float, not bool")
             if not isinstance(value, (int, float)):
-                raise TypeError(
-                    f"{name} must be float, got {type(value).__name__}"
-                )
+                raise TypeError(f"{name} must be float, got {type(value).__name__}")
             fv = float(value)
             if not math.isfinite(fv):
                 raise ValueError(f"{name} must be finite (got {value!r})")
             if fv < 0.0:
                 raise ValueError(f"{name} must be >= 0 (got {fv})")
         if self.eval_loss > _MAX_LOSS:
-            raise ValueError(
-                f"eval_loss exceeds sanity cap {_MAX_LOSS} (got {self.eval_loss})"
-            )
+            raise ValueError(f"eval_loss exceeds sanity cap {_MAX_LOSS} (got {self.eval_loss})")
 
 
 @dataclass(frozen=True)
@@ -180,9 +170,7 @@ def _check_str_path(name: str, value) -> str:
     if "\x00" in value:
         raise ValueError(f"{name} must not contain null bytes")
     if len(value) > _MAX_PATH_LEN:
-        raise ValueError(
-            f"{name} length {len(value)} exceeds cap {_MAX_PATH_LEN}"
-        )
+        raise ValueError(f"{name} length {len(value)} exceeds cap {_MAX_PATH_LEN}")
     return value
 
 
@@ -203,13 +191,9 @@ def validate_datasets(raw: Sequence[str]) -> Tuple[str, ...]:
     if not isinstance(raw, Sequence) or isinstance(raw, (str, bytes)):
         raise TypeError("datasets must be a non-string Sequence")
     if len(raw) < 2:
-        raise ValueError(
-            f"datasets must contain at least 2 entries (got {len(raw)})"
-        )
+        raise ValueError(f"datasets must contain at least 2 entries (got {len(raw)})")
     if len(raw) > _MAX_DATASETS:
-        raise ValueError(
-            f"datasets has {len(raw)} entries; cap is {_MAX_DATASETS}"
-        )
+        raise ValueError(f"datasets has {len(raw)} entries; cap is {_MAX_DATASETS}")
     seen: List[str] = []
     for item in raw:
         path = _check_str_path("dataset", item)
@@ -221,28 +205,19 @@ def validate_datasets(raw: Sequence[str]) -> Tuple[str, ...]:
         except FileNotFoundError:
             st = None
         except OSError as exc:
-            raise ValueError(
-                f"dataset path is not stat-able: {os.path.basename(path)!r}"
-            ) from exc
+            raise ValueError(f"dataset path is not stat-able: {os.path.basename(path)!r}") from exc
         if st is not None and stat.S_ISLNK(st.st_mode):
             raise ValueError(
-                f"dataset path is a symlink (rejected for safety): "
-                f"{os.path.basename(path)!r}"
+                f"dataset path is a symlink (rejected for safety): {os.path.basename(path)!r}"
             )
         real = os.path.realpath(path)
         if not is_under_cwd(real):
-            raise ValueError(
-                f"dataset path is outside cwd: {os.path.basename(real)!r}"
-            )
+            raise ValueError(f"dataset path is outside cwd: {os.path.basename(real)!r}")
         if real in seen:
-            raise ValueError(
-                f"duplicate dataset path: {os.path.basename(real)!r}"
-            )
+            raise ValueError(f"duplicate dataset path: {os.path.basename(real)!r}")
         seen.append(real)
     if len(seen) < 2:
-        raise ValueError(
-            "data mix requires at least 2 distinct datasets"
-        )
+        raise ValueError("data mix requires at least 2 distinct datasets")
     return tuple(seen)
 
 
@@ -274,9 +249,7 @@ def parse_budget(raw: str) -> int:
         body = s[:-1]
         multiplier = 3600
     if not body or not body.isdigit():
-        raise ValueError(
-            f"budget must be digits + optional suffix (s/m/h), got {raw!r}"
-        )
+        raise ValueError(f"budget must be digits + optional suffix (s/m/h), got {raw!r}")
     seconds = int(body) * multiplier
     if seconds < _MIN_BUDGET_SECONDS or seconds > _MAX_BUDGET_SECONDS:
         raise ValueError(
@@ -298,9 +271,7 @@ def build_optimization_plan(
     budget_seconds = parse_budget(budget)
     nb = _reject_bool_int("num_probes", num_probes)
     if nb < 1 or nb > _MAX_PROBES:
-        raise ValueError(
-            f"num_probes must be in [1, {_MAX_PROBES}], got {nb}"
-        )
+        raise ValueError(f"num_probes must be in [1, {_MAX_PROBES}], got {nb}")
     sd = _reject_bool_int("seed", seed)
     if sd < 0 or sd > 2**31 - 1:
         raise ValueError(f"seed must be in [0, 2**31-1], got {sd}")
@@ -375,24 +346,18 @@ class OptimizerProtocol(Protocol):
         """Record an observation."""
 
 
-def _build_skopt_optimizer(
-    num_datasets: int, seed: int
-) -> OptimizerProtocol:
+def _build_skopt_optimizer(num_datasets: int, seed: int) -> OptimizerProtocol:
     """Wrap ``skopt.Optimizer`` behind :class:`OptimizerProtocol` (v0.53.5 #117).
 
     Raises:
         ImportError: when ``scikit-optimize`` is not installed.
     """
     if isinstance(num_datasets, bool) or not isinstance(num_datasets, int):
-        raise TypeError(
-            f"num_datasets must be int, got {type(num_datasets).__name__}"
-        )
+        raise TypeError(f"num_datasets must be int, got {type(num_datasets).__name__}")
     if isinstance(seed, bool) or not isinstance(seed, int):
         raise TypeError(f"seed must be int, got {type(seed).__name__}")
     if num_datasets < 2:
-        raise ValueError(
-            f"num_datasets must be >= 2 (got {num_datasets})"
-        )
+        raise ValueError(f"num_datasets must be >= 2 (got {num_datasets})")
     import skopt  # noqa: PLC0415 — heavy optional dep, lazy.
 
     inner = skopt.Optimizer(
@@ -413,9 +378,7 @@ def _build_skopt_optimizer(
     return _SkoptWrapper()
 
 
-def _build_default_optimizer(
-    num_datasets: int, seed: int
-) -> OptimizerProtocol:
+def _build_default_optimizer(num_datasets: int, seed: int) -> OptimizerProtocol:
     """Return :func:`_build_skopt_optimizer` when ``scikit-optimize`` is
     installed; otherwise fall back to a deterministic Dirichlet-like sampler.
 
@@ -496,21 +459,13 @@ def run_mix_optimizer(
         A :class:`MixOptimizationReport`. ``partial=True`` when budget tripped.
     """
     if not isinstance(plan, MixOptimizationPlan):
-        raise TypeError(
-            f"plan must be MixOptimizationPlan, got {type(plan).__name__}"
-        )
+        raise TypeError(f"plan must be MixOptimizationPlan, got {type(plan).__name__}")
     if not callable(proxy_run):
         raise TypeError("proxy_run must be callable")
-    if optimizer is not None and (
-        not hasattr(optimizer, "ask") or not hasattr(optimizer, "tell")
-    ):
-        raise TypeError(
-            "optimizer must implement OptimizerProtocol (ask + tell)"
-        )
+    if optimizer is not None and (not hasattr(optimizer, "ask") or not hasattr(optimizer, "tell")):
+        raise TypeError("optimizer must implement OptimizerProtocol (ask + tell)")
 
-    opt = optimizer or _build_default_optimizer(
-        len(plan.datasets), plan.seed
-    )
+    opt = optimizer or _build_default_optimizer(len(plan.datasets), plan.seed)
     tracker = BudgetTracker(plan.budget_seconds, clock=clock)
     tracker.start()
 
@@ -526,8 +481,7 @@ def run_mix_optimizer(
         weights = _renormalize(opt.ask())
         if len(weights) != len(plan.datasets):
             raise ValueError(
-                f"optimizer returned {len(weights)} weights; "
-                f"expected {len(plan.datasets)}"
+                f"optimizer returned {len(weights)} weights; expected {len(plan.datasets)}"
             )
         t0 = tracker.elapsed
         try:
@@ -540,15 +494,14 @@ def run_mix_optimizer(
             # The candidate is recorded with a sentinel high loss so the
             # optimiser sees a valid observation and the run continues.
             import logging
+
             logging.getLogger(__name__).debug(
                 "proxy_run raised for candidate %s", weights, exc_info=True
             )
             opt.tell(weights, _MAX_LOSS)
             continue
         if isinstance(loss, bool) or not isinstance(loss, (int, float)):
-            raise TypeError(
-                f"proxy_run must return float, got {type(loss).__name__}"
-            )
+            raise TypeError(f"proxy_run must return float, got {type(loss).__name__}")
         loss_f = float(loss)
         if not math.isfinite(loss_f):
             # Skip — invalid observation should not poison best-of search.
@@ -575,9 +528,7 @@ def run_mix_optimizer(
     # time. Tracker.elapsed (which includes failed-proxy time) is no longer
     # surfaced via the public field; the caller can query the tracker directly
     # if total wall-clock is needed.
-    successful_elapsed = sum(
-        float(c.wall_clock_seconds) for c in candidates
-    )
+    successful_elapsed = sum(float(c.wall_clock_seconds) for c in candidates)
     return MixOptimizationReport(
         datasets=plan.datasets,
         candidates=tuple(candidates),
@@ -608,20 +559,12 @@ def render_mix_recipe_yaml(report: MixOptimizationReport) -> str:
     breakdown is still kept in a comment for quick human review.
     """
     if not isinstance(report, MixOptimizationReport):
-        raise TypeError(
-            "report must be MixOptimizationReport, "
-            f"got {type(report).__name__}"
-        )
+        raise TypeError(f"report must be MixOptimizationReport, got {type(report).__name__}")
     for path in report.datasets:
         if not isinstance(path, str) or "\n" in path or "\x00" in path:
-            raise ValueError(
-                "dataset path contains control characters — refusing to "
-                "render YAML."
-            )
+            raise ValueError("dataset path contains control characters — refusing to render YAML.")
         if len(path) > _MAX_PATH_LEN:
-            raise ValueError(
-                f"dataset path length {len(path)} exceeds {_MAX_PATH_LEN}"
-            )
+            raise ValueError(f"dataset path length {len(path)} exceeds {_MAX_PATH_LEN}")
     lines = ["# Generated by `soup data mix --optimize` (v0.48.0 — BETA)"]
     lines.append(f"# Probes evaluated: {len(report.candidates)}")
     lines.append(
@@ -641,9 +584,7 @@ def render_mix_recipe_yaml(report: MixOptimizationReport) -> str:
         )
     lines.append("#")
     lines.append("# Full ranked result:")
-    ranked = sorted(
-        zip(report.datasets, report.best_weights), key=lambda dw: -dw[1]
-    )
+    ranked = sorted(zip(report.datasets, report.best_weights), key=lambda dw: -dw[1])
     for path, w in ranked:
         lines.append(f"#   {w:.6f}  {path}")
     lines.append("data:")
@@ -687,30 +628,23 @@ def write_mix_recipe(
         st = None
     except OSError as exc:
         raise ValueError(
-            f"output_path is not stat-able: "
-            f"{os.path.basename(output_path)!r}"
+            f"output_path is not stat-able: {os.path.basename(output_path)!r}"
         ) from exc
     if st is not None and stat.S_ISLNK(st.st_mode):
         raise ValueError(
-            f"output_path is a symlink (rejected for safety): "
-            f"{os.path.basename(output_path)!r}"
+            f"output_path is a symlink (rejected for safety): {os.path.basename(output_path)!r}"
         )
     real = os.path.realpath(output_path)
     if not is_under_cwd(real):
-        raise ValueError(
-            f"output_path is outside cwd: {os.path.basename(real)!r}"
-        )
+        raise ValueError(f"output_path is outside cwd: {os.path.basename(real)!r}")
     if st is not None and not overwrite:
         raise ValueError(
-            f"output_path already exists (use overwrite=True): "
-            f"{os.path.basename(real)!r}"
+            f"output_path already exists (use overwrite=True): {os.path.basename(real)!r}"
         )
 
     text = render_mix_recipe_yaml(report)
     if len(text.encode("utf-8")) > _MAX_RECIPE_BYTES:
-        raise ValueError(
-            f"rendered recipe exceeds {_MAX_RECIPE_BYTES} bytes cap"
-        )
+        raise ValueError(f"rendered recipe exceeds {_MAX_RECIPE_BYTES} bytes cap")
     parent = os.path.dirname(real) or "."
     os.makedirs(parent, exist_ok=True)
     fd, tmp_path = tempfile.mkstemp(prefix=".mix_recipe.", dir=parent)
@@ -742,28 +676,19 @@ def load_mix_recipe(path: str) -> Mapping[str, object]:
     except FileNotFoundError:
         st = None
     except OSError as exc:
-        raise ValueError(
-            f"recipe path is not stat-able: {os.path.basename(path)!r}"
-        ) from exc
+        raise ValueError(f"recipe path is not stat-able: {os.path.basename(path)!r}") from exc
     if st is not None and stat.S_ISLNK(st.st_mode):
         raise ValueError(
-            f"recipe path is a symlink (rejected for safety): "
-            f"{os.path.basename(path)!r}"
+            f"recipe path is a symlink (rejected for safety): {os.path.basename(path)!r}"
         )
     real = os.path.realpath(path)
     if not is_under_cwd(real):
-        raise ValueError(
-            f"recipe path is outside cwd: {os.path.basename(real)!r}"
-        )
+        raise ValueError(f"recipe path is outside cwd: {os.path.basename(real)!r}")
     if not os.path.isfile(real):
-        raise FileNotFoundError(
-            f"recipe not found: {os.path.basename(real)!r}"
-        )
+        raise FileNotFoundError(f"recipe not found: {os.path.basename(real)!r}")
     size = os.path.getsize(real)
     if size > _MAX_RECIPE_BYTES:
-        raise ValueError(
-            f"recipe exceeds {_MAX_RECIPE_BYTES} bytes cap (got {size})"
-        )
+        raise ValueError(f"recipe exceeds {_MAX_RECIPE_BYTES} bytes cap (got {size})")
     import yaml
 
     with open(real, "r", encoding="utf-8") as fh:

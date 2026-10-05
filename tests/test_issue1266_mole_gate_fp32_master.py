@@ -48,8 +48,23 @@ ROWS = [
     {"text": "three plus two is five so the answer is five"},
 ]
 _WORDS = (
-    "two", "plus", "is", "four", "five", "so", "the", "answer", "step", "one", "three",
-    "we", "add", "then", "check", "it", "and",
+    "two",
+    "plus",
+    "is",
+    "four",
+    "five",
+    "so",
+    "the",
+    "answer",
+    "step",
+    "one",
+    "three",
+    "we",
+    "add",
+    "then",
+    "check",
+    "it",
+    "and",
 )
 _MAX_LENGTH = 64
 _DEFAULT_LR = 2.0e-5  # the schema default; the docs/training.md MoLE example sets no lr
@@ -60,11 +75,15 @@ _DEFAULT_LR = 2.0e-5  # the schema default; the docs/training.md MoLE example se
 # cannot move follows the init bound 1/sqrt(hidden), so both are pinned.
 _GEOMETRIES = {
     "h64": {
-        "hidden_size": 64, "num_attention_heads": 4, "num_key_value_heads": 4,
+        "hidden_size": 64,
+        "num_attention_heads": 4,
+        "num_key_value_heads": 4,
         "intermediate_size": 128,
     },
     "h576": {
-        "hidden_size": 576, "num_attention_heads": 9, "num_key_value_heads": 3,
+        "hidden_size": 576,
+        "num_attention_heads": 9,
+        "num_key_value_heads": 3,
         "intermediate_size": 256,
     },
 }
@@ -78,21 +97,33 @@ def _build_base(model_dir, geometry):
     from transformers import LlamaConfig, LlamaForCausalLM
 
     torch.manual_seed(0)
-    LlamaForCausalLM(LlamaConfig(
-        vocab_size=64, num_hidden_layers=2, max_position_embeddings=128,
-        **_GEOMETRIES[geometry],
-    )).to(torch.bfloat16).save_pretrained(str(model_dir))
+    LlamaForCausalLM(
+        LlamaConfig(
+            vocab_size=64,
+            num_hidden_layers=2,
+            max_position_embeddings=128,
+            **_GEOMETRIES[geometry],
+        )
+    ).to(torch.bfloat16).save_pretrained(str(model_dir))
     vocab = {"<unk>": 0, "<s>": 1, "</s>": 2, "<pad>": 3}
     for word in _WORDS:
         vocab[word] = len(vocab)
     tokenizer = Tokenizer(models.WordLevel(vocab=vocab, unk_token="<unk>"))
     tokenizer.pre_tokenizer = pre_tokenizers.Whitespace()
     tokenizer.save(str(model_dir / "tokenizer.json"))
-    (model_dir / "tokenizer_config.json").write_text(json.dumps({
-        "tokenizer_class": "PreTrainedTokenizerFast", "unk_token": "<unk>",
-        "bos_token": "<s>", "eos_token": "</s>", "pad_token": "<pad>",
-        "model_max_length": 128,
-    }), encoding="utf-8")
+    (model_dir / "tokenizer_config.json").write_text(
+        json.dumps(
+            {
+                "tokenizer_class": "PreTrainedTokenizerFast",
+                "unk_token": "<unk>",
+                "bos_token": "<s>",
+                "eos_token": "</s>",
+                "pad_token": "<pad>",
+                "model_max_length": 128,
+            }
+        ),
+        encoding="utf-8",
+    )
     return str(model_dir)
 
 
@@ -111,10 +142,15 @@ def _build_adapters(base_dir, root, count=2):
         out = root / f"task_adapter_{index}"
         torch.manual_seed(100 + index)
         base = AutoModelForCausalLM.from_pretrained(base_dir, dtype=torch.float32)
-        peft_model = get_peft_model(base, LoraConfig(
-            r=4, lora_alpha=8, lora_dropout=0.0,
-            target_modules=["q_proj", "v_proj", "o_proj", "up_proj", "down_proj"],
-        ))
+        peft_model = get_peft_model(
+            base,
+            LoraConfig(
+                r=4,
+                lora_alpha=8,
+                lora_dropout=0.0,
+                target_modules=["q_proj", "v_proj", "o_proj", "up_proj", "down_proj"],
+            ),
+        )
         with torch.no_grad():
             for name, param in peft_model.named_parameters():
                 if "lora_B" in name:
@@ -145,18 +181,27 @@ def _cfg(base, adapters, out_dir, *, lr=None):
     from soup_cli.config.loader import load_config_from_string
 
     training = {
-        "mole_task_adapters": adapters, "epochs": 2, "batch_size": 1,
-        "gradient_accumulation_steps": 1, "logging_steps": 1, "save_steps": 10_000,
+        "mole_task_adapters": adapters,
+        "epochs": 2,
+        "batch_size": 1,
+        "gradient_accumulation_steps": 1,
+        "logging_steps": 1,
+        "save_steps": 10_000,
         "seed": 0,
     }
     if lr is not None:
         training["lr"] = lr
-    return load_config_from_string(yaml.safe_dump({
-        "base": base, "task": "moe_lora_routing",
-        "data": {"train": "unused.jsonl", "max_length": _MAX_LENGTH},
-        "training": training,
-        "output": out_dir.as_posix(),
-    }))
+    return load_config_from_string(
+        yaml.safe_dump(
+            {
+                "base": base,
+                "task": "moe_lora_routing",
+                "data": {"train": "unused.jsonl", "max_length": _MAX_LENGTH},
+                "training": training,
+                "output": out_dir.as_posix(),
+            }
+        )
+    )
 
 
 @contextlib.contextmanager
@@ -431,9 +476,9 @@ class TestEightStepsAtTheDefaultLr:
         assert optimizer_probe["grad"] == [torch.float32] * 8, optimizer_probe["grad"]
         moments = optimizer_probe["moments"]
         assert len(moments) == 8, moments
-        assert all(
-            m == {"exp_avg": torch.float32, "exp_avg_sq": torch.float32} for m in moments
-        ), moments
+        assert all(m == {"exp_avg": torch.float32, "exp_avg_sq": torch.float32} for m in moments), (
+            moments
+        )
 
     @pytest.mark.parametrize("geometry", ["h64", "h576"])
     def test_the_cpu_branch_is_unchanged(self, mole_inputs, tmp_path, cpu_run, geometry):
@@ -525,9 +570,7 @@ class TestUnderTheFlagsACardGets:
         wrapper = _setup(*mole_inputs("h64"), tmp_path, device="cuda")
         model, tokenizer = wrapper.model, wrapper.tokenizer
         autocast = torch.autocast(device_type="cpu", dtype=torch.float16)
-        model.forward = MethodType(
-            convert_outputs_to_fp32(autocast(model.forward.__func__)), model
-        )
+        model.forward = MethodType(convert_outputs_to_fp32(autocast(model.forward.__func__)), model)
         batch = _build_collator(tokenizer)(_prepare_mole_dataset(ROWS, tokenizer, _MAX_LENGTH))
         weight = model.mole_gate.gate.weight
         before = weight.detach().clone()
@@ -567,8 +610,12 @@ class TestTheRoutingCastsBothWays:
             ("bfloat16", "bfloat16"),
             ("float32", "bfloat16"),
         ],
-        ids=["fp32-base-fp32-gate", "bf16-base-fp32-gate", "bf16-base-bf16-gate",
-             "fp32-base-bf16-gate"],
+        ids=[
+            "fp32-base-fp32-gate",
+            "bf16-base-fp32-gate",
+            "bf16-base-bf16-gate",
+            "fp32-base-bf16-gate",
+        ],
     )
     def test_compute_loss_casts_into_and_out_of_the_gate(self, base_dtype, gate_dtype):
         """``bf16 base, fp32 gate`` is the CUDA branch after this fix. The other pairs are
@@ -591,9 +638,14 @@ class TestTheRoutingCastsBothWays:
                 super().__init__()
                 self.active = "task_0"
                 self.disabled = False
-                self.mole_gate = build_gating_kernel(MoleGatingConfig(
-                    num_task_adapters=2, hidden_dim=8, temperature=1.0, top_k=2,
-                )).to(gate_type)
+                self.mole_gate = build_gating_kernel(
+                    MoleGatingConfig(
+                        num_task_adapters=2,
+                        hidden_dim=8,
+                        temperature=1.0,
+                        top_k=2,
+                    )
+                ).to(gate_type)
                 self._soup_mole_adapter_names = ["task_0", "task_1"]
 
             @contextlib.contextmanager
@@ -703,10 +755,17 @@ class TestTheSavedGate:
         base, adapters = mole_inputs("h64")
         monkeypatch.chdir(tmp_path)
         run = tmp_path / "old_run"
-        write_mole_manifest(MoleServeManifest(
-            base=base, adapters=tuple(adapters), num_task_adapters=2, hidden_dim=64,
-            top_k=2, temperature=1.0,
-        ), str(run))
+        write_mole_manifest(
+            MoleServeManifest(
+                base=base,
+                adapters=tuple(adapters),
+                num_task_adapters=2,
+                hidden_dim=64,
+                top_k=2,
+                temperature=1.0,
+            ),
+            str(run),
+        )
         old = (torch.randn(2, 64, generator=torch.Generator().manual_seed(7)) * 0.1).to(
             torch.bfloat16
         )

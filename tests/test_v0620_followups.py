@@ -104,57 +104,67 @@ class TestRaftFieldOversizeBoundary:
     def test_query_at_cap_accepted(self):
         from soup_cli.data.formats import _MAX_RAFT_FIELD_LEN, _convert_raft
 
-        out = _convert_raft({
-            "query": "x" * _MAX_RAFT_FIELD_LEN,
-            "golden_doc": "g",
-            "distractor_docs": [],
-            "answer": "a",
-        })
+        out = _convert_raft(
+            {
+                "query": "x" * _MAX_RAFT_FIELD_LEN,
+                "golden_doc": "g",
+                "distractor_docs": [],
+                "answer": "a",
+            }
+        )
         assert len(out["query"]) == _MAX_RAFT_FIELD_LEN
 
     def test_query_overcap_rejected(self):
         from soup_cli.data.formats import _MAX_RAFT_FIELD_LEN, _convert_raft
 
         with pytest.raises(ValueError, match="query"):
-            _convert_raft({
-                "query": "x" * (_MAX_RAFT_FIELD_LEN + 1),
-                "golden_doc": "g",
-                "distractor_docs": [],
-                "answer": "a",
-            })
+            _convert_raft(
+                {
+                    "query": "x" * (_MAX_RAFT_FIELD_LEN + 1),
+                    "golden_doc": "g",
+                    "distractor_docs": [],
+                    "answer": "a",
+                }
+            )
 
     def test_golden_doc_overcap_rejected(self):
         from soup_cli.data.formats import _MAX_RAFT_FIELD_LEN, _convert_raft
 
         with pytest.raises(ValueError, match="golden_doc"):
-            _convert_raft({
-                "query": "q",
-                "golden_doc": "x" * (_MAX_RAFT_FIELD_LEN + 1),
-                "distractor_docs": [],
-                "answer": "a",
-            })
+            _convert_raft(
+                {
+                    "query": "q",
+                    "golden_doc": "x" * (_MAX_RAFT_FIELD_LEN + 1),
+                    "distractor_docs": [],
+                    "answer": "a",
+                }
+            )
 
     def test_answer_overcap_rejected(self):
         from soup_cli.data.formats import _MAX_RAFT_FIELD_LEN, _convert_raft
 
         with pytest.raises(ValueError, match="answer"):
-            _convert_raft({
-                "query": "q",
-                "golden_doc": "g",
-                "distractor_docs": [],
-                "answer": "x" * (_MAX_RAFT_FIELD_LEN + 1),
-            })
+            _convert_raft(
+                {
+                    "query": "q",
+                    "golden_doc": "g",
+                    "distractor_docs": [],
+                    "answer": "x" * (_MAX_RAFT_FIELD_LEN + 1),
+                }
+            )
 
     def test_distractor_overcap_rejected(self):
         from soup_cli.data.formats import _MAX_RAFT_FIELD_LEN, _convert_raft
 
         with pytest.raises(ValueError, match="distractor"):
-            _convert_raft({
-                "query": "q",
-                "golden_doc": "g",
-                "distractor_docs": ["x" * (_MAX_RAFT_FIELD_LEN + 1)],
-                "answer": "a",
-            })
+            _convert_raft(
+                {
+                    "query": "q",
+                    "golden_doc": "g",
+                    "distractor_docs": ["x" * (_MAX_RAFT_FIELD_LEN + 1)],
+                    "answer": "a",
+                }
+            )
 
 
 # ---------- H3 — RAFT null-byte rejection on every field ----------
@@ -165,34 +175,40 @@ class TestRaftNullByteRejection:
         from soup_cli.data.formats import _convert_raft
 
         with pytest.raises(ValueError, match="null"):
-            _convert_raft({
-                "query": "q",
-                "golden_doc": "bad\x00",
-                "distractor_docs": [],
-                "answer": "a",
-            })
+            _convert_raft(
+                {
+                    "query": "q",
+                    "golden_doc": "bad\x00",
+                    "distractor_docs": [],
+                    "answer": "a",
+                }
+            )
 
     def test_null_byte_answer_rejected(self):
         from soup_cli.data.formats import _convert_raft
 
         with pytest.raises(ValueError, match="null"):
-            _convert_raft({
-                "query": "q",
-                "golden_doc": "g",
-                "distractor_docs": [],
-                "answer": "bad\x00",
-            })
+            _convert_raft(
+                {
+                    "query": "q",
+                    "golden_doc": "g",
+                    "distractor_docs": [],
+                    "answer": "bad\x00",
+                }
+            )
 
     def test_null_byte_distractor_rejected(self):
         from soup_cli.data.formats import _convert_raft
 
         with pytest.raises(ValueError, match="null"):
-            _convert_raft({
-                "query": "q",
-                "golden_doc": "g",
-                "distractor_docs": ["bad\x00doc"],
-                "answer": "a",
-            })
+            _convert_raft(
+                {
+                    "query": "q",
+                    "golden_doc": "g",
+                    "distractor_docs": ["bad\x00doc"],
+                    "answer": "a",
+                }
+            )
 
 
 # ---------- `soup steer train --plan-only` (live as of v0.71.10 #201) ----------
@@ -207,21 +223,24 @@ class TestSteerPlanOnlyMarker:
 
         monkeypatch.chdir(tmp_path)
         pairs = tmp_path / "pairs.jsonl"
-        pairs.write_text(
-            '{"positive": "x", "negative": "y"}\n', encoding="utf-8"
-        )
+        pairs.write_text('{"positive": "x", "negative": "y"}\n', encoding="utf-8")
         runner = CliRunner()
-        result = runner.invoke(app, [
-            "train",
-            "--base", "meta-llama/Llama-3.1-8B-Instruct",
-            "--method", "caa",
-            "--name", "safety-v1",
-            "--pairs", "pairs.jsonl",
-            "--plan-only",
-        ])
-        assert result.exit_code == 0, (
-            result.output, repr(result.exception)
+        result = runner.invoke(
+            app,
+            [
+                "train",
+                "--base",
+                "meta-llama/Llama-3.1-8B-Instruct",
+                "--method",
+                "caa",
+                "--name",
+                "safety-v1",
+                "--pairs",
+                "pairs.jsonl",
+                "--plan-only",
+            ],
         )
+        assert result.exit_code == 0, (result.output, repr(result.exception))
         assert "Plan-only" in result.output
         # Live fitting shipped — the deferred-version marker is gone.
         assert "v0.62.1" not in result.output
@@ -249,7 +268,8 @@ class TestEditMarkerRegressionGuard:
         seen = {}
 
         monkeypatch.setattr(
-            live_eval, "load_model_and_tokenizer",
+            live_eval,
+            "load_model_and_tokenizer",
             lambda *a, **k: ("MODEL", "TOK", "cpu"),
         )
         monkeypatch.setattr(ek, "measure_target_prob", lambda *a, **k: 0.1)
@@ -257,7 +277,10 @@ class TestEditMarkerRegressionGuard:
         def _fake_kernel(model, tok, *, method, **kwargs):
             seen["method"] = method
             return ek.EditKernelResult(
-                method=method, layer=5, norm_delta=0.5, layers_edited=(5,),
+                method=method,
+                layer=5,
+                norm_delta=0.5,
+                layers_edited=(5,),
             )
 
         monkeypatch.setattr(ek, "run_edit_kernel", _fake_kernel)
@@ -312,14 +335,21 @@ class TestSteerTrainBaseValidation:
         from soup_cli.commands.steer import app
 
         runner = self._make_runner(tmp_path, monkeypatch)
-        result = runner.invoke(app, [
-            "train",
-            "--base", "x" * 513,
-            "--method", "caa",
-            "--name", "safety-v1",
-            "--pairs", "pairs.jsonl",
-            "--plan-only",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "train",
+                "--base",
+                "x" * 513,
+                "--method",
+                "caa",
+                "--name",
+                "safety-v1",
+                "--pairs",
+                "pairs.jsonl",
+                "--plan-only",
+            ],
+        )
         assert result.exit_code == 2
         assert "base" in result.output.lower()
 
@@ -327,14 +357,21 @@ class TestSteerTrainBaseValidation:
         from soup_cli.commands.steer import app
 
         runner = self._make_runner(tmp_path, monkeypatch)
-        result = runner.invoke(app, [
-            "train",
-            "--base", "bad\x00name",
-            "--method", "caa",
-            "--name", "safety-v1",
-            "--pairs", "pairs.jsonl",
-            "--plan-only",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "train",
+                "--base",
+                "bad\x00name",
+                "--method",
+                "caa",
+                "--name",
+                "safety-v1",
+                "--pairs",
+                "pairs.jsonl",
+                "--plan-only",
+            ],
+        )
         assert result.exit_code == 2
         assert "null" in result.output.lower() or "base" in result.output.lower()
 
@@ -342,17 +379,22 @@ class TestSteerTrainBaseValidation:
         from soup_cli.commands.steer import app
 
         runner = self._make_runner(tmp_path, monkeypatch)
-        result = runner.invoke(app, [
-            "train",
-            "--base", "x" * 512,
-            "--method", "caa",
-            "--name", "safety-v1",
-            "--pairs", "pairs.jsonl",
-            "--plan-only",
-        ])
-        assert result.exit_code == 0, (
-            result.output, repr(result.exception)
+        result = runner.invoke(
+            app,
+            [
+                "train",
+                "--base",
+                "x" * 512,
+                "--method",
+                "caa",
+                "--name",
+                "safety-v1",
+                "--pairs",
+                "pairs.jsonl",
+                "--plan-only",
+            ],
         )
+        assert result.exit_code == 0, (result.output, repr(result.exception))
 
 
 # ---------- M5 — extract_citation_ids public-API coverage ----------
@@ -363,7 +405,8 @@ class TestExtractCitationIds:
         from soup_cli.utils.citation_faithful import extract_citation_ids
 
         assert extract_citation_ids("See [doc-1] and [doc-2].") == (
-            "doc-1", "doc-2",
+            "doc-1",
+            "doc-2",
         )
 
     def test_preserves_duplicates(self):

@@ -37,9 +37,7 @@ class TestBackcompatNoMutation:
         """v0.39.0 security fix — _backcompat_align_olora must copy."""
         original = {"use_olora": True}
         LoraConfig(**original)
-        assert "init_strategy" not in original, (
-            "Validator mutated caller's dict in-place"
-        )
+        assert "init_strategy" not in original, "Validator mutated caller's dict in-place"
 
 
 class TestInitStrategyOloraBackcompat:
@@ -117,17 +115,20 @@ class TestPeftBuilderInitStrategy:
 class TestInstantiatePeftConfig:
     def test_instantiate_lora_config(self):
         from soup_cli.utils.peft_builder import instantiate_peft_config
+
         cfg = LoraConfig(init_strategy="pissa")
         spec = build_peft_config(cfg, target_modules=["q_proj", "v_proj"], task_type="CAUSAL_LM")
         result = instantiate_peft_config(spec)
         # Verify it really is a peft.LoraConfig with the right kwargs
         import peft
+
         assert isinstance(result, peft.LoraConfig)
         assert result.r == 64
         assert result.init_lora_weights == "pissa"
 
     def test_instantiate_with_rank_pattern(self):
         from soup_cli.utils.peft_builder import instantiate_peft_config
+
         cfg = LoraConfig(rank_pattern={"q_proj": 8})
         spec = build_peft_config(cfg, target_modules=["q_proj"], task_type="CAUSAL_LM")
         result = instantiate_peft_config(spec)

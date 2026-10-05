@@ -54,8 +54,7 @@ def test_unfrozen_parameters_literal_prefix_still_loads():
 
     cfg = load_config_from_string(
         _sft_yaml(
-            "unfrozen_parameters: "
-            "['model.layers.0.mlp.down_proj', 'model\\.layers\\.\\d+\\.mlp']\n"
+            "unfrozen_parameters: ['model.layers.0.mlp.down_proj', 'model\\.layers\\.\\d+\\.mlp']\n"
         )
     )
     assert cfg.training.unfrozen_parameters == [
@@ -76,9 +75,7 @@ def test_lr_groups_refused_through_the_config_loader():
     from soup_cli.config.loader import load_config_from_string
 
     with pytest.raises(ValueError, match=r"training\.lr_groups: pattern .* too complex"):
-        load_config_from_string(
-            _sft_yaml("lr_groups:\n  - pattern: '(.+){2,}z'\n    lr: 0.0001\n")
-        )
+        load_config_from_string(_sft_yaml("lr_groups:\n  - pattern: '(.+){2,}z'\n    lr: 0.0001\n"))
 
 
 def test_chain_payload_named_reason_through_unfrozen_parameters():
@@ -108,9 +105,7 @@ def test_spectrum_shaped_moe_pattern_still_loads():
     from soup_cli.config.loader import load_config_from_string
 
     pattern = r"model\.layers\.\d+\.mlp\.experts\.\d+\.(gate|up|down)_proj\.\d+\.weight"
-    cfg = load_config_from_string(
-        _sft_yaml(f"unfrozen_parameters: ['{pattern}']\n")
-    )
+    cfg = load_config_from_string(_sft_yaml(f"unfrozen_parameters: ['{pattern}']\n"))
     assert cfg.training.unfrozen_parameters == [pattern]
 
 

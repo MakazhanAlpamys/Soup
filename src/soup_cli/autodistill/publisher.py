@@ -313,10 +313,7 @@ class CaptureShardPublisher:
         payload = _contained_path(directory, _PAYLOAD_NAME).read_bytes()
         if canonicalize_jsonl_bytes(payload) != payload:
             raise ArtifactCorruptionError("capture payload is not canonical JSONL")
-        rows = tuple(
-            CaptureToken.model_validate(json.loads(line))
-            for line in payload.splitlines()
-        )
+        rows = tuple(CaptureToken.model_validate(json.loads(line)) for line in payload.splitlines())
         rebuilt = self._capture_payload(rows)
         if rebuilt != payload:
             raise ArtifactCorruptionError("capture payload semantic verification failed")

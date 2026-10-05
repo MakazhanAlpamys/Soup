@@ -61,16 +61,9 @@ def list_entries(namespace: Optional[str] = None) -> Mapping[str, FetchEntry]:
     if namespace is None:
         return CATALOG
     if namespace not in _VALID_NAMESPACES:
-        raise ValueError(
-            f"namespace must be one of {sorted(_VALID_NAMESPACES)}; "
-            f"got {namespace!r}"
-        )
+        raise ValueError(f"namespace must be one of {sorted(_VALID_NAMESPACES)}; got {namespace!r}")
     return MappingProxyType(
-        {
-            name: entry
-            for name, entry in CATALOG.items()
-            if entry.namespace == namespace
-        }
+        {name: entry for name, entry in CATALOG.items() if entry.namespace == namespace}
     )
 
 

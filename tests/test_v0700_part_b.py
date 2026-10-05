@@ -332,9 +332,7 @@ training:
         from soup_cli.config.loader import load_config_from_string
 
         with pytest.raises(ValueError, match="uld_top_k"):
-            load_config_from_string(
-                self._yaml(strategy="topk_align")
-            )
+            load_config_from_string(self._yaml(strategy="topk_align"))
 
     def test_topk_with_wasserstein_rejected(self):
         from soup_cli.config.loader import load_config_from_string
@@ -345,9 +343,7 @@ training:
     def test_topk_align_with_topk_accepted(self):
         from soup_cli.config.loader import load_config_from_string
 
-        cfg = load_config_from_string(
-            self._yaml(strategy="topk_align", top_k=128)
-        )
+        cfg = load_config_from_string(self._yaml(strategy="topk_align", top_k=128))
         assert cfg.training.uld_strategy == "topk_align"
         assert cfg.training.uld_top_k == 128
 
@@ -356,12 +352,7 @@ class TestSourceWiring:
     def test_module_no_top_level_torch(self):
         from pathlib import Path
 
-        src = (
-            Path(__file__).resolve().parent.parent
-            / "src" / "soup_cli"
-            / "utils"
-            / "uld.py"
-        )
+        src = Path(__file__).resolve().parent.parent / "src" / "soup_cli" / "utils" / "uld.py"
         body = src.read_text(encoding="utf-8")
         assert "\nimport torch" not in body
         assert "\nfrom torch" not in body

@@ -7,7 +7,8 @@ from unittest.mock import patch as mock_patch
 
 def _strip_ansi(text: str) -> str:
     """Remove ANSI escape codes from text."""
-    return re.sub(r'\x1b\[[0-9;]*m', '', text)
+    return re.sub(r"\x1b\[[0-9;]*m", "", text)
+
 
 # ─── Flag Conflict Tests ──────────────────────────────────────────────────
 
@@ -22,18 +23,19 @@ class TestTensorBoardFlagConflict:
         from soup_cli.cli import app
 
         config_file = tmp_path / "soup.yaml"
-        config_file.write_text(
-            "base: some-model\n"
-            "task: sft\n"
-            "data:\n"
-            "  train: ./data.jsonl\n"
-        )
+        config_file.write_text("base: some-model\ntask: sft\ndata:\n  train: ./data.jsonl\n")
 
         runner = CliRunner()
-        result = runner.invoke(app, [
-            "train", "--config", str(config_file),
-            "--wandb", "--tensorboard",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "train",
+                "--config",
+                str(config_file),
+                "--wandb",
+                "--tensorboard",
+            ],
+        )
         assert result.exit_code != 0
         assert "cannot use" in result.output.lower() or "pick one" in result.output.lower()
 
@@ -44,17 +46,18 @@ class TestTensorBoardFlagConflict:
         from soup_cli.cli import app
 
         config_file = tmp_path / "soup.yaml"
-        config_file.write_text(
-            "base: some-model\n"
-            "task: sft\n"
-            "data:\n"
-            "  train: ./data.jsonl\n"
-        )
+        config_file.write_text("base: some-model\ntask: sft\ndata:\n  train: ./data.jsonl\n")
 
         runner = CliRunner()
-        result = runner.invoke(app, [
-            "train", "--config", str(config_file), "--tensorboard",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "train",
+                "--config",
+                str(config_file),
+                "--tensorboard",
+            ],
+        )
         # Should not hit the conflict error — may fail later (import/data)
         assert "cannot use" not in result.output.lower()
 
@@ -72,21 +75,18 @@ class TestTensorBoardImportCheck:
         from soup_cli.cli import app
 
         config_file = tmp_path / "soup.yaml"
-        config_file.write_text(
-            "base: some-model\n"
-            "task: sft\n"
-            "data:\n"
-            "  train: ./data.jsonl\n"
-        )
+        config_file.write_text("base: some-model\ntask: sft\ndata:\n  train: ./data.jsonl\n")
 
         # Patch the specific import inside train.py to raise ImportError
         with mock_patch(
             "soup_cli.commands.train.typer",
             wraps=__import__("typer"),
         ):
-            original_import = __builtins__["__import__"] if isinstance(
-                __builtins__, dict
-            ) else __builtins__.__import__
+            original_import = (
+                __builtins__["__import__"]
+                if isinstance(__builtins__, dict)
+                else __builtins__.__import__
+            )
 
             def mock_import(name, *args, **kwargs):
                 if name == "tensorboard":
@@ -95,9 +95,15 @@ class TestTensorBoardImportCheck:
 
             with mock_patch("builtins.__import__", side_effect=mock_import):
                 runner = CliRunner()
-                result = runner.invoke(app, [
-                    "train", "--config", str(config_file), "--tensorboard",
-                ])
+                result = runner.invoke(
+                    app,
+                    [
+                        "train",
+                        "--config",
+                        str(config_file),
+                        "--tensorboard",
+                    ],
+                )
 
         assert result.exit_code != 0
 
@@ -218,15 +224,15 @@ class TestTensorBoardSweepRouting:
         }
         fake_gpu_info = {"memory_total": "0 MB", "memory_total_bytes": 0}
 
-        with mock_patch("soup_cli.data.loader.load_dataset", return_value=fake_dataset), \
-             mock_patch("soup_cli.utils.gpu.detect_device", return_value=("cpu", "CPU")), \
-             mock_patch("soup_cli.utils.gpu.get_gpu_info", return_value=fake_gpu_info), \
-             mock_patch("soup_cli.experiment.tracker.ExperimentTracker") as mock_tracker_cls, \
-             mock_patch("soup_cli.monitoring.display.TrainingDisplay"), \
-             mock_patch("soup_cli.trainer.sft.SFTTrainerWrapper.setup"), \
-             mock_patch(
-                 "soup_cli.trainer.sft.SFTTrainerWrapper.train", return_value=fake_result
-             ):
+        with (
+            mock_patch("soup_cli.data.loader.load_dataset", return_value=fake_dataset),
+            mock_patch("soup_cli.utils.gpu.detect_device", return_value=("cpu", "CPU")),
+            mock_patch("soup_cli.utils.gpu.get_gpu_info", return_value=fake_gpu_info),
+            mock_patch("soup_cli.experiment.tracker.ExperimentTracker") as mock_tracker_cls,
+            mock_patch("soup_cli.monitoring.display.TrainingDisplay"),
+            mock_patch("soup_cli.trainer.sft.SFTTrainerWrapper.setup"),
+            mock_patch("soup_cli.trainer.sft.SFTTrainerWrapper.train", return_value=fake_result),
+        ):
             mock_tracker = MagicMock()
             mock_tracker.start_run.return_value = "run-tb-1"
             mock_tracker_cls.return_value = mock_tracker
@@ -251,20 +257,22 @@ class TestTensorBoardHappyPath:
         from soup_cli.cli import app
 
         config_file = tmp_path / "soup.yaml"
-        config_file.write_text(
-            "base: some-model\n"
-            "task: sft\n"
-            "data:\n"
-            "  train: ./data.jsonl\n"
-        )
+        config_file.write_text("base: some-model\ntask: sft\ndata:\n  train: ./data.jsonl\n")
 
         # Mock tensorboard import to succeed
         mock_tb = MagicMock()
         with mock_patch.dict("sys.modules", {"tensorboard": mock_tb}):
             runner = CliRunner()
-            result = runner.invoke(app, [
-                "train", "--config", str(config_file), "--tensorboard", "--yes",
-            ])
+            result = runner.invoke(
+                app,
+                [
+                    "train",
+                    "--config",
+                    str(config_file),
+                    "--tensorboard",
+                    "--yes",
+                ],
+            )
             # Should get past the tensorboard check — will fail later on
             # data loading, but should print "TensorBoard logging enabled"
             assert "tensorboard logging enabled" in result.output.lower()

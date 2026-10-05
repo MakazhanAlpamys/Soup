@@ -77,11 +77,14 @@ def test_runtime_resolution_asks_the_shared_compute_dtype_probe(monkeypatch) -> 
     )
 
     assert resolved.bnb_4bit_quant_storage == "bfloat16"
-    assert resolve_fsdp_qlora_quant_storage(
-        resolved,
-        fsdp=True,
-        compute_dtype="bfloat16",
-    ) is resolved
+    assert (
+        resolve_fsdp_qlora_quant_storage(
+            resolved,
+            fsdp=True,
+            compute_dtype="bfloat16",
+        )
+        is resolved
+    )
 
 
 def test_resolved_storage_reaches_bitsandbytes_config(monkeypatch) -> None:
@@ -161,16 +164,22 @@ def test_non_fsdp_or_non_4bit_config_is_unchanged() -> None:
     four_bit = TrainingConfig(quantization="4bit")
     eight_bit = TrainingConfig(quantization="8bit")
 
-    assert resolve_fsdp_qlora_quant_storage(
-        four_bit,
-        fsdp=False,
-        compute_dtype="bfloat16",
-    ) is four_bit
-    assert resolve_fsdp_qlora_quant_storage(
-        eight_bit,
-        fsdp=True,
-        compute_dtype="bfloat16",
-    ) is eight_bit
+    assert (
+        resolve_fsdp_qlora_quant_storage(
+            four_bit,
+            fsdp=False,
+            compute_dtype="bfloat16",
+        )
+        is four_bit
+    )
+    assert (
+        resolve_fsdp_qlora_quant_storage(
+            eight_bit,
+            fsdp=True,
+            compute_dtype="bfloat16",
+        )
+        is eight_bit
+    )
 
 
 def test_fsdp_4bit_rejects_non_floating_compute_storage() -> None:
@@ -221,12 +230,15 @@ def test_fsdp_qlora_alignment_is_gated_to_the_exact_combination() -> None:
     for fsdp, quantization in ((False, "4bit"), (True, "8bit"), (False, "8bit")):
         param = _FakeParam("float32", requires_grad=True)
         model = _FakeModel(lora_A=param)
-        assert align_trainable_dtype_for_fsdp_qlora(
-            model,
-            fsdp=fsdp,
-            quantization=quantization,
-            compute_dtype="bfloat16",
-        ) == 0
+        assert (
+            align_trainable_dtype_for_fsdp_qlora(
+                model,
+                fsdp=fsdp,
+                quantization=quantization,
+                compute_dtype="bfloat16",
+            )
+            == 0
+        )
         assert param.dtype == "float32"
 
 
@@ -262,12 +274,13 @@ def test_alignment_accepts_wrapper_model_shape() -> None:
     """Document the exact command-boundary object shape used after setup()."""
     from soup_cli.utils.mixed_precision import align_trainable_dtype_for_fsdp_qlora
 
-    wrapper = SimpleNamespace(
-        model=_FakeModel(lora_A=_FakeParam("float32", requires_grad=True))
+    wrapper = SimpleNamespace(model=_FakeModel(lora_A=_FakeParam("float32", requires_grad=True)))
+    assert (
+        align_trainable_dtype_for_fsdp_qlora(
+            wrapper.model,
+            fsdp=True,
+            quantization="4bit",
+            compute_dtype="bfloat16",
+        )
+        == 1
     )
-    assert align_trainable_dtype_for_fsdp_qlora(
-        wrapper.model,
-        fsdp=True,
-        quantization="4bit",
-        compute_dtype="bfloat16",
-    ) == 1

@@ -403,14 +403,16 @@ def _wrapper(tmp_path, monkeypatch, **training):
         **training,
     }
     cfg = load_config_from_string(
-        yaml.safe_dump({
-            "base": model_path,
-            "task": "embedding",
-            # the shipped template's max_length: the estimator sizes for it
-            "data": {"train": "train.jsonl", "max_length": 512},
-            "training": body,
-            "output": str(tmp_path / "out"),
-        })
+        yaml.safe_dump(
+            {
+                "base": model_path,
+                "task": "embedding",
+                # the shipped template's max_length: the estimator sizes for it
+                "data": {"train": "train.jsonl", "max_length": 512},
+                "training": body,
+                "output": str(tmp_path / "out"),
+            }
+        )
     )
     return EmbeddingTrainerWrapper(cfg, device="cpu")
 
@@ -423,12 +425,13 @@ class TestTheIssueEstimatesHitTheFloor:
 
     @pytest.mark.parametrize("gib", [0, 16, 24, 40])
     def test_auto_resolves_to_exactly_two(self, tmp_path, monkeypatch, gib):
-        wrapper = _wrapper(
-            tmp_path, monkeypatch, batch_size="auto", embedding_loss="contrastive"
-        )
-        with patch("soup_cli.trainer.embedding.model_size_from_name", return_value=7.0), patch(
-            "soup_cli.utils.gpu.get_gpu_info",
-            return_value={"memory_total_bytes": int(gib * 1024**3)},
+        wrapper = _wrapper(tmp_path, monkeypatch, batch_size="auto", embedding_loss="contrastive")
+        with (
+            patch("soup_cli.trainer.embedding.model_size_from_name", return_value=7.0),
+            patch(
+                "soup_cli.utils.gpu.get_gpu_info",
+                return_value={"memory_total_bytes": int(gib * 1024**3)},
+            ),
         ):
             wrapper.setup({"train": list(ROWS)})
         assert wrapper.args.per_device_train_batch_size == 2
@@ -436,11 +439,10 @@ class TestTheIssueEstimatesHitTheFloor:
 
     def test_triplet_without_negatives_is_floored_too(self, tmp_path, monkeypatch):
         """The triplet -> contrastive fallback is contrastive for the floor as well."""
-        wrapper = _wrapper(
-            tmp_path, monkeypatch, batch_size="auto", embedding_loss="triplet"
-        )
-        with patch("soup_cli.trainer.embedding.model_size_from_name", return_value=7.0), patch(
-            "soup_cli.utils.gpu.get_gpu_info", return_value={"memory_total_bytes": 0}
+        wrapper = _wrapper(tmp_path, monkeypatch, batch_size="auto", embedding_loss="triplet")
+        with (
+            patch("soup_cli.trainer.embedding.model_size_from_name", return_value=7.0),
+            patch("soup_cli.utils.gpu.get_gpu_info", return_value={"memory_total_bytes": 0}),
         ):
             wrapper.setup({"train": list(ROWS)})
         assert wrapper.args.per_device_train_batch_size == 2

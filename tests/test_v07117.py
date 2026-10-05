@@ -95,9 +95,7 @@ class TestRaftEpochSalt:
         # With enough distractors the golden doc lands in a different slot for
         # at least one of several epochs (deterministic per epoch).
         golden_slots = {
-            build_raft_prompt(
-                _raft_row(6), shuffle_seed=1, row_index=2, epoch=e
-            ).golden_doc_id
+            build_raft_prompt(_raft_row(6), shuffle_seed=1, row_index=2, epoch=e).golden_doc_id
             for e in range(8)
         }
         assert len(golden_slots) > 1
@@ -173,9 +171,7 @@ class TestRaftEpochCollator:
 
         tok = _WordTok()
         state = RaftEpochState()
-        collator = RaftEpochShuffleCollator(
-            tok, max_length=128, shuffle_seed=1, epoch_state=state
-        )
+        collator = RaftEpochShuffleCollator(tok, max_length=128, shuffle_seed=1, epoch_state=state)
         row = dict(_raft_row(6))
         row["_raft_row_index"] = 0
         state.epoch = 0
@@ -194,9 +190,7 @@ class TestRaftEpochCollator:
         from soup_cli.trainer.raft import RaftEpochShuffleCollator, RaftEpochState
 
         tok = _WordTok()
-        collator = RaftEpochShuffleCollator(
-            tok, max_length=128, epoch_state=RaftEpochState()
-        )
+        collator = RaftEpochShuffleCollator(tok, max_length=128, epoch_state=RaftEpochState())
         r1 = dict(_raft_row(1))
         r1["_raft_row_index"] = 0
         r2 = dict(_raft_row(4))
@@ -266,9 +260,7 @@ class TestDiagnoseCitationStyle:
             captured.update(kwargs)
             from soup_cli.utils.diagnose.report import FailureScore
 
-            return FailureScore(
-                mode="citation", score=1.0, verdict="OK", evidence="fake"
-            )
+            return FailureScore(mode="citation", score=1.0, verdict="OK", evidence="fake")
 
         # Patch the module-level imports used by run_live_diagnose.
         import soup_cli.utils.diagnose.citation as cit_mod
@@ -758,9 +750,7 @@ class TestLoadedMole:
         loaded = self._loaded(n_adapters=2)
         ids = torch.tensor([[1, 2, 3]])
         attn = torch.ones_like(ids)
-        out = loaded.generate(
-            ids, attn, max_new_tokens=3, temperature=0.7, top_p=0.9
-        )
+        out = loaded.generate(ids, attn, max_new_tokens=3, temperature=0.7, top_p=0.9)
         assert out.shape[1] == 3 + 3
 
     def test_requires_two_adapters(self):
@@ -882,9 +872,7 @@ class TestServeMoleWiring:
         from soup_cli.cli import app
 
         monkeypatch.chdir(tmp_path)
-        result = CliRunner().invoke(
-            app, ["serve", "--model", "somemodel", "--mole", "/etc/passwd"]
-        )
+        result = CliRunner().invoke(app, ["serve", "--model", "somemodel", "--mole", "/etc/passwd"])
         assert result.exit_code == 2
         assert "Invalid --mole path" in _clean(result.output)
 

@@ -223,9 +223,7 @@ class TestTrainOnEot:
             {"role": "assistant", "content": "ok"},
         ]
         without_eot = build_assistant_only_labels(messages, tok, max_length=64)
-        with_eot = build_assistant_only_labels(
-            messages, tok, max_length=64, include_eot=True
-        )
+        with_eot = build_assistant_only_labels(messages, tok, max_length=64, include_eot=True)
         # With include_eot=True, the EOT (id=9) immediately following an
         # assistant span is KEPT (not IGNORE), so the unmasked count is
         # strictly higher by exactly the number of assistant turns.
@@ -282,9 +280,7 @@ class TestEbftLossLive:
 
         logits = torch.randn(2, 4, 8)
         labels = torch.tensor([[0, 1, 2, 3], [4, 5, 6, 7]])
-        loss = apply_ebft_loss(
-            logits, labels, variant="strided", temperature=0.5, stride=2
-        )
+        loss = apply_ebft_loss(logits, labels, variant="strided", temperature=0.5, stride=2)
         assert loss.ndim == 0
         assert torch.isfinite(loss)
 
@@ -572,9 +568,7 @@ class TestAttachEbftComputeLoss:
 
         trainer = _StubTrainer()
         original = trainer.compute_loss
-        tcfg = type(
-            "Tcfg", (), {"ebft_variant": "structured", "ebft_temperature": 1.0}
-        )()
+        tcfg = type("Tcfg", (), {"ebft_variant": "structured", "ebft_temperature": 1.0})()
         assert attach_ebft_compute_loss(trainer, tcfg) is True
         assert trainer.compute_loss is not original
 
@@ -636,9 +630,7 @@ class TestAttachGdpoComputeLoss:
         pol_r = torch.tensor([-2.0, -3.0])
         ref_c = torch.tensor([-1.1, -2.1])
         ref_r = torch.tensor([-2.1, -3.1])
-        losses, chosen_rewards, rejected_rewards = trainer.dpo_loss(
-            pol_c, pol_r, ref_c, ref_r
-        )
+        losses, chosen_rewards, rejected_rewards = trainer.dpo_loss(pol_c, pol_r, ref_c, ref_r)
         assert losses.shape == pol_c.shape
         assert chosen_rewards.shape == pol_c.shape
         assert rejected_rewards.shape == pol_r.shape
@@ -668,9 +660,7 @@ class TestDistillDivergenceKernel:
         from soup_cli.trainer.distill import _compute_distill_term
 
         with pytest.raises(ValueError, match="Unknown divergence"):
-            _compute_distill_term(
-                torch.zeros(1, 2, 3), torch.zeros(1, 2, 3), "bogus", 1.0
-            )
+            _compute_distill_term(torch.zeros(1, 2, 3), torch.zeros(1, 2, 3), "bogus", 1.0)
 
     def test_identical_logits_zero_kl(self) -> None:
         torch = _torch_or_skip()
@@ -808,9 +798,7 @@ class TestClassifierWrapperHelpers:
     def test_normalise_label_multi_label_from_list(self) -> None:
         from soup_cli.trainer.classifier import _normalise_label
 
-        vec = _normalise_label(
-            [0, 2], label_names=None, num_labels=3, multi_label=True
-        )
+        vec = _normalise_label([0, 2], label_names=None, num_labels=3, multi_label=True)
         assert vec == [1.0, 0.0, 1.0]
 
 
@@ -912,9 +900,7 @@ class _Tcfg:
         self.train_on_eot = train_on_eot
 
 
-def _make_data_cfg(
-    train_on_responses_only: bool = True, chat_template: Optional[str] = None
-):
+def _make_data_cfg(train_on_responses_only: bool = True, chat_template: Optional[str] = None):
     """Minimal duck-typed DataConfig for sft_format tests."""
     obj = type(
         "DataCfg",
@@ -1319,9 +1305,7 @@ class TestReasoningEffortNullByte:
         from soup_cli.utils.reasoning_effort import apply_reasoning_effort_prefix
 
         with pytest.raises(ValueError, match="null"):
-            apply_reasoning_effort_prefix(
-                [{"role": "user", "content": "x"}], "lo\x00w"
-            )
+            apply_reasoning_effort_prefix([{"role": "user", "content": "x"}], "lo\x00w")
 
 
 class TestEbftStrideValidation:
@@ -1439,9 +1423,7 @@ class TestRowToTextRejectsNonStrContent:
     def test_non_dict_message_silently_skipped(self) -> None:
         from soup_cli.trainer.classifier import _row_to_text
 
-        out = _row_to_text(
-            {"messages": ["not-a-dict", {"role": "user", "content": "real"}]}
-        )
+        out = _row_to_text({"messages": ["not-a-dict", {"role": "user", "content": "real"}]})
         assert "real" in out
 
 
@@ -1474,9 +1456,7 @@ class TestLabelIndexFurtherCoverage:
         from soup_cli.trainer.classifier import _normalise_label
 
         with pytest.raises(TypeError):
-            _normalise_label(
-                [0, 1], label_names=None, num_labels=3, multi_label=False
-            )
+            _normalise_label([0, 1], label_names=None, num_labels=3, multi_label=False)
 
     def test_string_not_in_label_names(self) -> None:
         from soup_cli.trainer.classifier import _label_index
@@ -1501,9 +1481,7 @@ class TestMultiLabelListCap:
         # _MAX_MULTI_LABEL_ENTRIES is 1024.
         big = [0] * 2000
         with pytest.raises(ValueError, match="too long"):
-            _normalise_label(
-                big, label_names=None, num_labels=3, multi_label=True
-            )
+            _normalise_label(big, label_names=None, num_labels=3, multi_label=True)
 
 
 class TestFactoryUnknownKwarg:
@@ -1592,9 +1570,7 @@ class TestFailureModeSmoke:
         from soup_cli.config.loader import load_config_from_string
 
         with pytest.raises(ValueError, match="num_labels"):
-            load_config_from_string(
-                "base: x\ntask: classifier\ndata:\n  train: ./f.jsonl\n"
-            )
+            load_config_from_string("base: x\ntask: classifier\ndata:\n  train: ./f.jsonl\n")
 
     def test_classifier_label_names_length_mismatch(self) -> None:
         from soup_cli.config.loader import load_config_from_string
@@ -1611,17 +1587,14 @@ class TestFailureModeSmoke:
 
         with pytest.raises(ValueError, match="num_labels|classifier"):
             load_config_from_string(
-                "base: x\ntask: sft\ntraining:\n  num_labels: 3\n"
-                "data:\n  train: ./f.jsonl\n"
+                "base: x\ntask: sft\ntraining:\n  num_labels: 3\ndata:\n  train: ./f.jsonl\n"
             )
 
     def test_distill_missing_teacher(self) -> None:
         from soup_cli.config.loader import load_config_from_string
 
         with pytest.raises(ValueError, match="teacher_model"):
-            load_config_from_string(
-                "base: x\ntask: distill\ndata:\n  train: ./f.jsonl\n"
-            )
+            load_config_from_string("base: x\ntask: distill\ndata:\n  train: ./f.jsonl\n")
 
     def test_distill_fields_outside_distill_task(self) -> None:
         from soup_cli.config.loader import load_config_from_string
@@ -1629,8 +1602,7 @@ class TestFailureModeSmoke:
         # teacher_model set on a non-distill task → rejected with named field.
         with pytest.raises(ValueError, match="teacher_model|distill"):
             load_config_from_string(
-                "base: x\ntask: sft\ntraining:\n  teacher_model: y\n"
-                "data:\n  train: ./f.jsonl\n"
+                "base: x\ntask: sft\ntraining:\n  teacher_model: y\ndata:\n  train: ./f.jsonl\n"
             )
 
     def test_reasoning_effort_on_non_sft_family_task(self) -> None:
@@ -1648,8 +1620,7 @@ class TestFailureModeSmoke:
 
         with pytest.raises(ValueError, match="train_on_eot"):
             load_config_from_string(
-                "base: x\ntask: grpo\ntraining:\n  train_on_eot: true\n"
-                "data:\n  train: ./f.jsonl\n"
+                "base: x\ntask: grpo\ntraining:\n  train_on_eot: true\ndata:\n  train: ./f.jsonl\n"
             )
 
     def test_ebft_temperature_without_variant(self) -> None:

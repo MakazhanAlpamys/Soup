@@ -116,6 +116,7 @@ class TestMakeMultipackTrainerClass:
         Our override accepts ``*args, **kwargs`` so the signature works on
         both old and new transformers.
         """
+
         class Base:
             def __init__(self):
                 pass
@@ -165,7 +166,11 @@ class TestAttachMultipackState:
     def test_happy_path(self):
         t = self._trainer()
         attach_multipack_state(
-            t, lengths=[1, 2, 3], max_seq_len=64, batch_size=4, seed=7,
+            t,
+            lengths=[1, 2, 3],
+            max_seq_len=64,
+            batch_size=4,
+            seed=7,
         )
         assert t._soup_multipack_lengths == [1, 2, 3]
         assert t._soup_multipack_max_seq_len == 64
@@ -193,13 +198,19 @@ class TestAttachMultipackState:
     def test_rejects_zero_max_seq_len(self):
         with pytest.raises(ValueError):
             attach_multipack_state(
-                self._trainer(), lengths=[1], max_seq_len=0, batch_size=1,
+                self._trainer(),
+                lengths=[1],
+                max_seq_len=0,
+                batch_size=1,
             )
 
     def test_rejects_negative_batch_size(self):
         with pytest.raises(ValueError):
             attach_multipack_state(
-                self._trainer(), lengths=[1], max_seq_len=64, batch_size=-1,
+                self._trainer(),
+                lengths=[1],
+                max_seq_len=64,
+                batch_size=-1,
             )
 
     def test_rejects_bool_seed(self):
@@ -215,7 +226,10 @@ class TestAttachMultipackState:
     def test_rejects_empty_lengths(self):
         with pytest.raises(ValueError, match="empty"):
             attach_multipack_state(
-                self._trainer(), lengths=[], max_seq_len=64, batch_size=1,
+                self._trainer(),
+                lengths=[],
+                max_seq_len=64,
+                batch_size=1,
             )
 
 

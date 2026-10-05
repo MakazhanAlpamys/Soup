@@ -22,11 +22,11 @@ class Finding:
 
 
 # --- thresholds (frozen so analysis is deterministic) ---
-_PLATEAU_REL_TOL = 0.005   # <0.5% loss change end-vs-start → flat
+_PLATEAU_REL_TOL = 0.005  # <0.5% loss change end-vs-start → flat
 _PLATEAU_MIN_STEPS = 30
-_EXPLODE_FACTOR = 3.0      # final loss > 3× initial → diverged
+_EXPLODE_FACTOR = 3.0  # final loss > 3× initial → diverged
 _NAN_PATTERNS = ("nan", "inf")
-_OVERFIT_GAP = 0.5         # train < 0.3, val > train + 0.5 → overfit
+_OVERFIT_GAP = 0.5  # train < 0.3, val > train + 0.5 → overfit
 _LR_TOO_LOW = 1e-6
 _LR_TOO_HIGH = 5e-3
 
@@ -168,8 +168,7 @@ def _check_short_run(metrics: List[dict]) -> Optional[Finding]:
             severity="info",
             message="No metric rows logged for this run.",
             suggestion=(
-                "Run may have failed before the first log step. "
-                "Check `soup runs show` for status."
+                "Run may have failed before the first log step. Check `soup runs show` for status."
             ),
         )
     return None

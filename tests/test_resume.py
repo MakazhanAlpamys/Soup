@@ -12,6 +12,7 @@ runner = CliRunner()
 
 # --- _resolve_checkpoint ---
 
+
 def test_resolve_checkpoint_auto_finds_latest(tmp_path: Path):
     """auto should find the latest checkpoint by number."""
     output_dir = tmp_path / "output"
@@ -79,6 +80,7 @@ def test_resolve_checkpoint_auto_ignores_non_checkpoint_dirs(tmp_path: Path):
 
 
 # --- CLI flags ---
+
 
 def test_train_resume_flag_in_help():
     result = runner.invoke(app, ["train", "--help"])

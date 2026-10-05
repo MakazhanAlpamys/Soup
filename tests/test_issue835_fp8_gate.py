@@ -400,8 +400,6 @@ class TestOneGate:
         assert converts == ["tensorwise", "tensorwise"]
 
 
-
-
 class TestTheRunStops:
     """#835 ruling: an explicitly requested FP8 that the card cannot run stops the
     run, on every trainer. Warning and training on without it is the defect class
@@ -443,9 +441,7 @@ class TestTheRunStops:
         # which sm120 cannot run before torch 2.8. Neither may convert.
         tcfg = TrainingConfig(quantization_aware="fp8", fp8_attention=True)
         monkeypatch.setattr(tcfg, "fp8_recipe", "rowwise")
-        monkeypatch.setattr(
-            "soup_cli.utils.fp8.apply_fp8_training", lambda *_a, **_k: True
-        )
+        monkeypatch.setattr("soup_cli.utils.fp8.apply_fp8_training", lambda *_a, **_k: True)
         _out, console = self._console()
         with pytest.raises(FP8HardwareUnsupportedError, match="fp8_attention.*2.8"):
             apply_v028_speed_memory(
@@ -488,8 +484,11 @@ class TestTheRunStops:
         monkeypatch.setitem(sys.modules, "torchao", None)
         out, console = self._console()
         applied = apply_v028_speed_memory(
-            model=_Attn(), tcfg=TrainingConfig(), base_model="m",
-            console=console, device="cuda",
+            model=_Attn(),
+            tcfg=TrainingConfig(),
+            base_model="m",
+            console=console,
+            device="cuda",
         )
         assert applied["fp8"] is False and "fp8_attention" not in applied
         assert out.getvalue() == ""
@@ -569,8 +568,18 @@ class TestSoupTrainReachesTheStop:
     before any model is fetched, so the base need not exist."""
 
     def _train(
-        self, tmp_path, monkeypatch, *, quantization_aware, card_ok, torchao,
-        gate=None, recipe=None, backend=None, dry_run=False, te=False,
+        self,
+        tmp_path,
+        monkeypatch,
+        *,
+        quantization_aware,
+        card_ok,
+        torchao,
+        gate=None,
+        recipe=None,
+        backend=None,
+        dry_run=False,
+        te=False,
     ):
         import yaml
         from typer.testing import CliRunner
@@ -588,29 +597,34 @@ class TestSoupTrainReachesTheStop:
             encoding="utf-8",
         )
         (tmp_path / "soup.yaml").write_text(
-            yaml.safe_dump({
-                "base": "nobody/not-a-real-model",
-                "task": "sft",
-                # val_split 0: at the default 0.1 the one row goes to validation
-                # and `soup train` stops on an empty train split (#1217).
-                "data": {
-                    "train": "train.jsonl", "format": "chatml", "max_length": 64,
-                    "val_split": 0.0,
-                },
-                **({"backend": backend} if backend else {}),
-                "training": {
-                    "epochs": 1,
-                    "quantization": "none",
-                    "quantization_aware": quantization_aware,
-                    **({"fp8_recipe": recipe} if recipe else {}),
-                },
-                "output": "./out",
-            }),
+            yaml.safe_dump(
+                {
+                    "base": "nobody/not-a-real-model",
+                    "task": "sft",
+                    # val_split 0: at the default 0.1 the one row goes to validation
+                    # and `soup train` stops on an empty train split (#1217).
+                    "data": {
+                        "train": "train.jsonl",
+                        "format": "chatml",
+                        "max_length": 64,
+                        "val_split": 0.0,
+                    },
+                    **({"backend": backend} if backend else {}),
+                    "training": {
+                        "epochs": 1,
+                        "quantization": "none",
+                        "quantization_aware": quantization_aware,
+                        **({"fp8_recipe": recipe} if recipe else {}),
+                    },
+                    "output": "./out",
+                }
+            ),
             encoding="utf-8",
         )
         reason = "FP8 training requires an Ada or newer GPU (compute capability >= 8.9)"
         monkeypatch.setattr(
-            fp8, "fp8_training_supported",
+            fp8,
+            "fp8_training_supported",
             gate or (lambda recipe="tensorwise": (True, "") if card_ok else (False, reason)),
         )
         # transformer-engine alone satisfies is_fp8_available(), not the torchao probe.
@@ -658,7 +672,11 @@ class TestSoupTrainReachesTheStop:
         the command ends right after validation and must end there successfully --
         an absent "QAT error" alone would also pass on a crash elsewhere."""
         result, out = self._train(
-            tmp_path, monkeypatch, quantization_aware="fp8", card_ok=True, torchao=True,
+            tmp_path,
+            monkeypatch,
+            quantization_aware="fp8",
+            card_ok=True,
+            torchao=True,
             dry_run=True,
         )
         assert result.exit_code == 0, out
@@ -696,8 +714,13 @@ class TestTheRecipeReachesTheGate:
 
     def test_a_rowwise_refusal_is_printed_not_the_install_hint(self, tmp_path, monkeypatch):
         result, out = TestSoupTrainReachesTheStop()._train(
-            tmp_path, monkeypatch, quantization_aware="fp8", card_ok=True, torchao=False,
-            gate=self._gate, recipe="rowwise",
+            tmp_path,
+            monkeypatch,
+            quantization_aware="fp8",
+            card_ok=True,
+            torchao=False,
+            gate=self._gate,
+            recipe="rowwise",
         )
 
         assert result.exit_code == 1
@@ -707,8 +730,13 @@ class TestTheRecipeReachesTheGate:
     def test_tensorwise_passes_the_same_gate(self, tmp_path, monkeypatch):
         """Control: the gate is not refusing everything."""
         result, out = TestSoupTrainReachesTheStop()._train(
-            tmp_path, monkeypatch, quantization_aware="fp8", card_ok=True, torchao=False,
-            gate=self._gate, recipe="tensorwise",
+            tmp_path,
+            monkeypatch,
+            quantization_aware="fp8",
+            card_ok=True,
+            torchao=False,
+            gate=self._gate,
+            recipe="tensorwise",
         )
 
         assert "ROWWISE REFUSED" not in out
@@ -722,7 +750,11 @@ class TestADryRunDoesNotFailOnTheLocalCard:
 
     def test_an_unsupported_card_is_a_note_and_exits_0(self, tmp_path, monkeypatch):
         result, out = TestSoupTrainReachesTheStop()._train(
-            tmp_path, monkeypatch, quantization_aware="fp8", card_ok=False, torchao=True,
+            tmp_path,
+            monkeypatch,
+            quantization_aware="fp8",
+            card_ok=False,
+            torchao=True,
             dry_run=True,
         )
 
@@ -733,7 +765,11 @@ class TestADryRunDoesNotFailOnTheLocalCard:
 
     def test_a_missing_torchao_still_fails_the_dry_run(self, tmp_path, monkeypatch):
         result, out = TestSoupTrainReachesTheStop()._train(
-            tmp_path, monkeypatch, quantization_aware="fp8", card_ok=False, torchao=False,
+            tmp_path,
+            monkeypatch,
+            quantization_aware="fp8",
+            card_ok=False,
+            torchao=False,
             dry_run=True,
         )
 
@@ -742,7 +778,11 @@ class TestADryRunDoesNotFailOnTheLocalCard:
 
     def test_the_real_run_still_stops_on_the_card(self, tmp_path, monkeypatch):
         result, out = TestSoupTrainReachesTheStop()._train(
-            tmp_path, monkeypatch, quantization_aware="fp8", card_ok=False, torchao=True,
+            tmp_path,
+            monkeypatch,
+            quantization_aware="fp8",
+            card_ok=False,
+            torchao=True,
         )
 
         assert result.exit_code == 1
@@ -755,7 +795,11 @@ class TestThePreflightAsksForTorchaoItself:
         """``is_fp8_available()`` accepts transformer-engine, but the converter is
         torchao's: that box used to pass pre-flight, load the model, then stop."""
         result, out = TestSoupTrainReachesTheStop()._train(
-            tmp_path, monkeypatch, quantization_aware="fp8", card_ok=True, torchao=False,
+            tmp_path,
+            monkeypatch,
+            quantization_aware="fp8",
+            card_ok=True,
+            torchao=False,
             te=True,
         )
 
@@ -766,7 +810,11 @@ class TestThePreflightAsksForTorchaoItself:
         """The unsloth refusal already stops the run; a torchao hint under it would
         point at a package that cannot help."""
         result, out = TestSoupTrainReachesTheStop()._train(
-            tmp_path, monkeypatch, quantization_aware="fp8", card_ok=True, torchao=False,
+            tmp_path,
+            monkeypatch,
+            quantization_aware="fp8",
+            card_ok=True,
+            torchao=False,
             backend="unsloth",
         )
 
@@ -814,8 +862,14 @@ class TestTheDryRunNoteRound3:
     def test_a_rowwise_dry_run_notes_the_recipe_refusal(self, tmp_path, monkeypatch):
         """The note must ask about the configured recipe, not the default."""
         result, out = TestSoupTrainReachesTheStop()._train(
-            tmp_path, monkeypatch, quantization_aware="fp8", card_ok=True, torchao=True,
-            gate=TestTheRecipeReachesTheGate._gate, recipe="rowwise", dry_run=True,
+            tmp_path,
+            monkeypatch,
+            quantization_aware="fp8",
+            card_ok=True,
+            torchao=True,
+            gate=TestTheRecipeReachesTheGate._gate,
+            recipe="rowwise",
+            dry_run=True,
         )
 
         assert result.exit_code == 0, out
@@ -825,7 +879,11 @@ class TestTheDryRunNoteRound3:
         """``quantization_aware: true`` no longer reaches the note: the config is
         refused when it loads (#1222)."""
         result, out = TestSoupTrainReachesTheStop()._train(
-            tmp_path, monkeypatch, quantization_aware=True, card_ok=False, torchao=True,
+            tmp_path,
+            monkeypatch,
+            quantization_aware=True,
+            card_ok=False,
+            torchao=True,
             dry_run=True,
         )
 
@@ -838,7 +896,11 @@ class TestTheDryRunNoteRound3:
         card note is FP8's, so a dry run that asks for no FP8 prints none, even on
         a card that could not run FP8."""
         result, out = TestSoupTrainReachesTheStop()._train(
-            tmp_path, monkeypatch, quantization_aware=False, card_ok=False, torchao=True,
+            tmp_path,
+            monkeypatch,
+            quantization_aware=False,
+            card_ok=False,
+            torchao=True,
             dry_run=True,
         )
 
@@ -848,8 +910,13 @@ class TestTheDryRunNoteRound3:
 
     def test_an_unsloth_dry_run_prints_only_the_refusal(self, tmp_path, monkeypatch):
         result, out = TestSoupTrainReachesTheStop()._train(
-            tmp_path, monkeypatch, quantization_aware="fp8", card_ok=False, torchao=False,
-            backend="unsloth", dry_run=True,
+            tmp_path,
+            monkeypatch,
+            quantization_aware="fp8",
+            card_ok=False,
+            torchao=False,
+            backend="unsloth",
+            dry_run=True,
         )
 
         assert result.exit_code == 1
@@ -862,7 +929,11 @@ class TestTheDryRunNoteRound3:
     def test_no_torchao_and_no_card_shows_both(self, tmp_path, monkeypatch):
         """Nit taken: the card verdict is printed before the dependency error exits."""
         result, out = TestSoupTrainReachesTheStop()._train(
-            tmp_path, monkeypatch, quantization_aware="fp8", card_ok=False, torchao=False,
+            tmp_path,
+            monkeypatch,
+            quantization_aware="fp8",
+            card_ok=False,
+            torchao=False,
             dry_run=True,
         )
 
@@ -928,8 +999,11 @@ class TestTheConversionFailedWording:
         out, console = TestTheRunStops()._console()
         with pytest.raises(RuntimeError) as info:
             apply_v028_speed_memory(
-                model=_Attn(), tcfg=TrainingConfig(quantization_aware="fp8"), base_model="m",
-                console=console, device="cuda",
+                model=_Attn(),
+                tcfg=TrainingConfig(quantization_aware="fp8"),
+                base_model="m",
+                console=console,
+                device="cuda",
             )
 
         assert "the float8 conversion failed" in str(info.value)

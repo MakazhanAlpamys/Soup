@@ -215,9 +215,7 @@ class MaskedChatDataset:
         self.chat_key = chat_key
 
     def process(self, d: Dict[str, Any]) -> Tuple[List[int], List[int]]:
-        return build_response_mask(
-            d[self.chat_key], self.tokenizer, tools=d.get("tools")
-        )
+        return build_response_mask(d[self.chat_key], self.tokenizer, tools=d.get("tools"))
 
     def __getitem__(self, idx: int):
         return self._data[idx]

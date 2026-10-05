@@ -39,12 +39,32 @@ import pytest
 from soup_cli.data.loss_mask import IGNORE_INDEX
 
 _SPECIALS = [
-    "<unk>", "<s>", "</s>",
-    "<|system|>", "<|user|>", "<|assistant|>", "<|end|>",
+    "<unk>",
+    "<s>",
+    "</s>",
+    "<|system|>",
+    "<|user|>",
+    "<|assistant|>",
+    "<|end|>",
 ]
 _WORDS = [
-    "You", "are", "terse", ".", "What", "is", "the", "capital", "of", "France",
-    "?", "Paris", "Berlin", "Germany", "system", "user", "assistant",
+    "You",
+    "are",
+    "terse",
+    ".",
+    "What",
+    "is",
+    "the",
+    "capital",
+    "of",
+    "France",
+    "?",
+    "Paris",
+    "Berlin",
+    "Germany",
+    "system",
+    "user",
+    "assistant",
 ]
 _BOS_ID = _SPECIALS.index("<s>")
 _EOS_ID = _SPECIALS.index("</s>")
@@ -130,9 +150,7 @@ def _trained(input_ids, labels):
     train on a prompt token and drop the span's last token while keeping the
     count identical.
     """
-    return [
-        token for token, label in zip(input_ids, labels) if label != IGNORE_INDEX
-    ]
+    return [token for token, label in zip(input_ids, labels) if label != IGNORE_INDEX]
 
 
 def _run_preprocess(tmp_path, monkeypatch, tok, *, rows, task="sft", data_extra=""):
@@ -155,14 +173,10 @@ def _run_preprocess(tmp_path, monkeypatch, tok, *, rows, task="sft", data_extra=
         encoding="utf-8",
     )
     (tmp_path / "d.jsonl").write_text("{}\n", encoding="utf-8")
-    monkeypatch.setattr(
-        transformers.AutoTokenizer, "from_pretrained", lambda *a, **k: tok
-    )
+    monkeypatch.setattr(transformers.AutoTokenizer, "from_pretrained", lambda *a, **k: tok)
     # Control the rows directly so the assertions are about masking, not format
     # conversion. preprocess_dataset local-imports this name.
-    monkeypatch.setattr(
-        "soup_cli.data.loader.load_dataset", lambda *a, **k: {"train": rows}
-    )
+    monkeypatch.setattr("soup_cli.data.loader.load_dataset", lambda *a, **k: {"train": rows})
     result = CliRunner().invoke(app, ["data", "preprocess", "soup.yaml", "--yes"])
     assert result.exit_code == 0, result.output
     cache_dirs = [p for p in (tmp_path / ".soup-tokenized").iterdir() if p.is_dir()]
@@ -178,9 +192,7 @@ def _load_cache(cache_dir):
 
 
 class TestCachedLabels:
-    def test_cache_masks_the_same_tokens_the_live_path_masks(
-        self, tmp_path, monkeypatch
-    ):
+    def test_cache_masks_the_same_tokens_the_live_path_masks(self, tmp_path, monkeypatch):
         """Acceptance criterion #1. The cached rows' unmasked-token count equals
         the live path's, and is strictly greater than zero.
 
@@ -223,11 +235,7 @@ class TestCachedLabels:
         region must be a strict subset of the row, and must not cover the user
         turn's content tokens."""
         tok = _tokenizer()
-        ds = _load_cache(
-            _run_preprocess(
-                tmp_path, monkeypatch, tok, rows=[{"messages": _ROWS[0]}]
-            )
-        )
+        ds = _load_cache(_run_preprocess(tmp_path, monkeypatch, tok, rows=[{"messages": _ROWS[0]}]))
         labels = list(ds[0]["labels"])
         input_ids = list(ds[0]["input_ids"])
         assert 0 < _unmasked(labels) < len(labels), (
@@ -244,11 +252,7 @@ class TestCachedLabels:
         #785 BOS de-duplication and the #791 training EOS -- the byte-parity this
         path is deliberately pinned to."""
         tok = _tokenizer()
-        ds = _load_cache(
-            _run_preprocess(
-                tmp_path, monkeypatch, tok, rows=[{"messages": _ROWS[0]}]
-            )
-        )
+        ds = _load_cache(_run_preprocess(tmp_path, monkeypatch, tok, rows=[{"messages": _ROWS[0]}]))
         input_ids = list(ds[0]["input_ids"])
         assert input_ids.count(_BOS_ID) == 1, "#785: exactly one leading BOS"
         assert input_ids[-1] == _EOS_ID, "#791: the training EOS is still appended"
@@ -324,17 +328,17 @@ class TestMaskFlagsReachTheCache:
         tok = _tokenizer()
         messages = _ROWS[2]
         cached = self._cached_trained(
-            tmp_path, monkeypatch, tok,
-            messages=messages, data_extra="  mask_history: true\n",
+            tmp_path,
+            monkeypatch,
+            tok,
+            messages=messages,
+            data_extra="  mask_history: true\n",
         )
-        built = build_assistant_only_labels(
-            messages, tok, max_length=128, mask_history=True
-        )
+        built = build_assistant_only_labels(messages, tok, max_length=128, mask_history=True)
         live = _trained(built["input_ids"], built["labels"])
         assert live, "sanity: the live path trains on some tokens"
         assert cached == live, (
-            f"cache trains on {tok.decode(cached)!r}, live path on "
-            f"{tok.decode(live)!r}"
+            f"cache trains on {tok.decode(cached)!r}, live path on {tok.decode(live)!r}"
         )
         # And it is genuinely narrower than the unmasked-history default, so a
         # cache that dropped the flag could not pass by coincidence.
@@ -351,8 +355,11 @@ class TestMaskFlagsReachTheCache:
         )
 
         common = dict(
-            dataset_path="d.jsonl", tokenizer_name="x/y",
-            max_length=128, format_name="chatml", task="sft",
+            dataset_path="d.jsonl",
+            tokenizer_name="x/y",
+            max_length=128,
+            format_name="chatml",
+            task="sft",
         )
         keys = {
             make_preprocess_cache_key(
@@ -386,13 +393,18 @@ class TestMaskFlagsReachTheCache:
         for history in (False, True):
             data_extra = "  mask_history: true\n" if history else ""
             cached = self._cached_trained(
-                tmp_path / f"eot-{history}", monkeypatch, tok,
+                tmp_path / f"eot-{history}",
+                monkeypatch,
+                tok,
                 messages=messages,
                 data_extra=data_extra + "training:\n  train_on_eot: true\n",
             )
             built = build_assistant_only_labels(
-                messages, tok, max_length=128,
-                include_eot=True, mask_history=history,
+                messages,
+                tok,
+                max_length=128,
+                include_eot=True,
+                mask_history=history,
             )
             live = _trained(built["input_ids"], built["labels"])
             assert cached == live, (
@@ -431,11 +443,16 @@ class TestTrainFieldCache:
         )
 
         tok = _tokenizer()
-        ds = _load_cache(_run_preprocess(
-            tmp_path, monkeypatch, tok, rows=[{"messages": _TF_ROW}],
-            data_extra="  train_on_responses_only: false\n"
-                       "  train_on_messages_with_train_field: true\n",
-        ))
+        ds = _load_cache(
+            _run_preprocess(
+                tmp_path,
+                monkeypatch,
+                tok,
+                rows=[{"messages": _TF_ROW}],
+                data_extra="  train_on_responses_only: false\n"
+                "  train_on_messages_with_train_field: true\n",
+            )
+        )
         cached = _trained(list(ds[0]["input_ids"]), list(ds[0]["labels"]))
         built = build_per_message_train_labels(_TF_ROW, tok, max_length=128)
         live = _trained(built["input_ids"], built["labels"])
@@ -550,9 +567,7 @@ class TestCacheKeyCoversMaskMode:
             ),
         ],
     )
-    def test_an_older_cache_names_the_gap(
-        self, tmp_path, monkeypatch, dropped, expected, absent
-    ):
+    def test_an_older_cache_names_the_gap(self, tmp_path, monkeypatch, dropped, expected, absent):
         """A v5-shaped cache (no ``mask_mode`` in metadata, an older key) names
         #1054; one also missing ``chat_template`` names only the older #1067."""
         from rich.console import Console
@@ -561,9 +576,7 @@ class TestCacheKeyCoversMaskMode:
         from soup_cli.trainer.sft import _maybe_load_pretokenized
 
         tok = _tokenizer()
-        cache_dir = _run_preprocess(
-            tmp_path, monkeypatch, tok, rows=[{"messages": _ROWS[0]}]
-        )
+        cache_dir = _run_preprocess(tmp_path, monkeypatch, tok, rows=[{"messages": _ROWS[0]}])
         meta_path = cache_dir / "metadata.json"
         meta = json.loads(meta_path.read_text(encoding="utf-8"))
         for field in dropped:
@@ -637,9 +650,7 @@ class TestCacheKeyCoversMaskMode:
 
         assert preprocess_mask_mode(DataConfig(train="d.jsonl")) == "responses_only"
         assert (
-            preprocess_mask_mode(
-                DataConfig(train="d.jsonl", train_on_responses_only=False)
-            )
+            preprocess_mask_mode(DataConfig(train="d.jsonl", train_on_responses_only=False))
             == "full"
         )
         assert (
@@ -653,9 +664,7 @@ class TestCacheKeyCoversMaskMode:
             == "train_field"
         )
 
-    def test_cache_built_under_another_mask_mode_is_refused(
-        self, tmp_path, monkeypatch
-    ):
+    def test_cache_built_under_another_mask_mode_is_refused(self, tmp_path, monkeypatch):
         """Acceptance criterion #2, end to end: a cache preprocessed with the
         default assistant-only mask is refused when loaded by a config that asks
         for the per-message ``train`` field mask.
@@ -669,9 +678,7 @@ class TestCacheKeyCoversMaskMode:
         from soup_cli.trainer.sft import _maybe_load_pretokenized
 
         tok = _tokenizer()
-        cache_dir = _run_preprocess(
-            tmp_path, monkeypatch, tok, rows=[{"messages": _ROWS[0]}]
-        )
+        cache_dir = _run_preprocess(tmp_path, monkeypatch, tok, rows=[{"messages": _ROWS[0]}])
         dcfg = DataConfig(
             train="./d.jsonl",
             format="pre_tokenized",
@@ -692,9 +699,7 @@ class TestCacheKeyCoversMaskMode:
         from soup_cli.trainer.sft import _maybe_load_pretokenized
 
         tok = _tokenizer()
-        cache_dir = _run_preprocess(
-            tmp_path, monkeypatch, tok, rows=[{"messages": _ROWS[0]}]
-        )
+        cache_dir = _run_preprocess(tmp_path, monkeypatch, tok, rows=[{"messages": _ROWS[0]}])
         dcfg = DataConfig(
             train="./d.jsonl",
             format="pre_tokenized",
@@ -706,9 +711,7 @@ class TestCacheKeyCoversMaskMode:
         train_ds, _ = loaded
         assert len(train_ds) == 1
 
-    def test_train_on_eot_cache_loads_through_the_pretrain_caller(
-        self, tmp_path, monkeypatch
-    ):
+    def test_train_on_eot_cache_loads_through_the_pretrain_caller(self, tmp_path, monkeypatch):
         """``task: pretrain`` + ``train_on_eot: true`` is a config the schema
         allows (pretrain is in the sft-family set). ``trainer/pretrain.py`` must
         derive the same mask mode ``soup data preprocess`` wrote, or the cache is
@@ -777,9 +780,7 @@ class TestSampleCount:
         """Control: a corrupt ``row_count`` must not print a negative count."""
         from soup_cli.commands.train import _train_sample_count
 
-        (tmp_path / "metadata.json").write_text(
-            json.dumps({"row_count": -3}), encoding="utf-8"
-        )
+        (tmp_path / "metadata.json").write_text(json.dumps({"row_count": -3}), encoding="utf-8")
         dcfg = SimpleNamespace(format="pre_tokenized", tokenized_path=str(tmp_path))
         assert _train_sample_count(dcfg, {"train": [1, 2]}) == 2
 
@@ -787,7 +788,5 @@ class TestSampleCount:
         """Control: a cache without usable metadata must not crash the launch."""
         from soup_cli.commands.train import _train_sample_count
 
-        dcfg = SimpleNamespace(
-            format="pre_tokenized", tokenized_path=str(tmp_path / "missing")
-        )
+        dcfg = SimpleNamespace(format="pre_tokenized", tokenized_path=str(tmp_path / "missing"))
         assert _train_sample_count(dcfg, {"train": [1, 2]}) == 2

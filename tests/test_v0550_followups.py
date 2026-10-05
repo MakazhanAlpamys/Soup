@@ -56,15 +56,18 @@ from soup_cli.utils.eval_lock_coverage import (
 # MappingProxyType / frozenset immutability
 # ---------------------------------------------------------------------------
 
+
 class TestImmutableRegistries:
     def test_recommended_scorers_is_mappingproxy(self):
         from soup_cli.utils.eval_lock_coverage import _RECOMMENDED_SCORERS
+
         assert isinstance(_RECOMMENDED_SCORERS, _types.MappingProxyType)
         with pytest.raises(TypeError):
             _RECOMMENDED_SCORERS["evil"] = ()  # type: ignore[index]
 
     def test_metric_direction_is_mappingproxy(self):
         from soup_cli.utils.eval_gate_hook import _METRIC_DIRECTION
+
         assert isinstance(_METRIC_DIRECTION, _types.MappingProxyType)
         with pytest.raises(TypeError):
             _METRIC_DIRECTION["evil"] = 0  # type: ignore[index]
@@ -80,10 +83,13 @@ class TestImmutableRegistries:
 # Frozen invariants on every public dataclass
 # ---------------------------------------------------------------------------
 
+
 class TestFrozenDataclasses:
     def test_canary_set_frozen(self):
         c = CanarySet(
-            held_out=(), adjacent_skills=(), memorization_probes=(),
+            held_out=(),
+            adjacent_skills=(),
+            memorization_probes=(),
             cluster_count=0,
         )
         with pytest.raises(dataclasses.FrozenInstanceError):
@@ -109,8 +115,12 @@ class TestFrozenDataclasses:
 
     def test_regression_verdict_frozen(self):
         verdict = decide_regression(
-            "task_accuracy", [0.5] * 50, [0.5] * 50, GateThresholds(),
-            n_samples=200, seed=0,
+            "task_accuracy",
+            [0.5] * 50,
+            [0.5] * 50,
+            GateThresholds(),
+            n_samples=200,
+            seed=0,
         )
         assert isinstance(verdict, RegressionVerdict)
         with pytest.raises(dataclasses.FrozenInstanceError):
@@ -120,6 +130,7 @@ class TestFrozenDataclasses:
 # ---------------------------------------------------------------------------
 # GateThresholds validation at construction
 # ---------------------------------------------------------------------------
+
 
 class TestGateThresholdsValidation:
     def test_nan_rejected(self):
@@ -145,10 +156,13 @@ class TestGateThresholdsValidation:
 # Atomic-write symlink rejection on every surface (POSIX)
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.requires_symlink
 class TestSymlinkAtomicWriteRejection:
     def test_write_eval_design_rejects_symlink_target(
-        self, tmp_path, monkeypatch,
+        self,
+        tmp_path,
+        monkeypatch,
     ):
         monkeypatch.chdir(tmp_path)
         real = tmp_path / "real-target"
@@ -160,7 +174,9 @@ class TestSymlinkAtomicWriteRejection:
             write_eval_design(design, "link.json")
 
     def test_write_canary_set_rejects_symlink_target(
-        self, tmp_path, monkeypatch,
+        self,
+        tmp_path,
+        monkeypatch,
     ):
         monkeypatch.chdir(tmp_path)
         real = tmp_path / "real-target"
@@ -195,6 +211,7 @@ class TestSymlinkAtomicWriteRejection:
 # Read-side unconditional lstat (TOCTOU defence)
 # ---------------------------------------------------------------------------
 
+
 class TestReadSideTOCTOU:
     def test_load_eval_design_missing_file_friendly_error(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
@@ -211,18 +228,25 @@ class TestReadSideTOCTOU:
 # Boundary tests
 # ---------------------------------------------------------------------------
 
+
 class TestBootstrapBoundaries:
     def test_n_samples_exact_lo_accepted(self):
         # _MIN_BOOTSTRAP_SAMPLES = 100 — must accept.
         result = paired_bootstrap_ci(
-            [0.5] * 5, [0.5] * 5, n_samples=100, seed=0,
+            [0.5] * 5,
+            [0.5] * 5,
+            n_samples=100,
+            seed=0,
         )
         assert result is not None
 
     def test_n_samples_exact_hi_accepted(self):
         # _MAX_BOOTSTRAP_SAMPLES = 100_000.
         result = paired_bootstrap_ci(
-            [0.5] * 5, [0.5] * 5, n_samples=100_000, seed=0,
+            [0.5] * 5,
+            [0.5] * 5,
+            n_samples=100_000,
+            seed=0,
         )
         assert result is not None
 
@@ -233,14 +257,26 @@ class TestBootstrapBoundaries:
     def test_ci_level_strict_open_interval(self):
         # 0.001 and 0.999 must both be accepted; 0.0 / 1.0 rejected.
         paired_bootstrap_ci(
-            [0.5] * 5, [0.5] * 5, n_samples=100, ci_level=0.001, seed=0,
+            [0.5] * 5,
+            [0.5] * 5,
+            n_samples=100,
+            ci_level=0.001,
+            seed=0,
         )
         paired_bootstrap_ci(
-            [0.5] * 5, [0.5] * 5, n_samples=100, ci_level=0.999, seed=0,
+            [0.5] * 5,
+            [0.5] * 5,
+            n_samples=100,
+            ci_level=0.999,
+            seed=0,
         )
         with pytest.raises(ValueError):
             paired_bootstrap_ci(
-                [0.5], [0.5], n_samples=100, ci_level=0.0, seed=0,
+                [0.5],
+                [0.5],
+                n_samples=100,
+                ci_level=0.0,
+                seed=0,
             )
 
     def test_decide_regression_well_above_tolerance_not_regressed(self):
@@ -250,8 +286,12 @@ class TestBootstrapBoundaries:
         thr = GateThresholds()  # task_accuracy = -0.02
         candidate = [0.49] * 50  # delta = -0.01, comfortably better than tol
         verdict = decide_regression(
-            "task_accuracy", baseline, candidate, thr,
-            n_samples=200, seed=0,
+            "task_accuracy",
+            baseline,
+            candidate,
+            thr,
+            n_samples=200,
+            seed=0,
         )
         assert verdict.regressed is False
 
@@ -262,8 +302,12 @@ class TestBootstrapBoundaries:
         thr = GateThresholds()  # task_accuracy = -0.02
         candidate = [0.40] * 50  # delta = -0.10, worse than tol
         verdict = decide_regression(
-            "task_accuracy", baseline, candidate, thr,
-            n_samples=200, seed=0,
+            "task_accuracy",
+            baseline,
+            candidate,
+            thr,
+            n_samples=200,
+            seed=0,
         )
         assert verdict.regressed is True
 
@@ -290,6 +334,7 @@ class TestPerClusterBoundaries:
 # shlex.quote substitution + injection resistance
 # ---------------------------------------------------------------------------
 
+
 class TestShellEscape:
     def test_render_uses_shlex_quote(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
@@ -312,12 +357,12 @@ class TestShellEscape:
         # double-quote wrapping depending on platform.
         idx = body.index("&")
         assert (
-            body[idx - 1] in ("'", '"')
-            or "'\"'\"'" in body  # POSIX shlex.quote idiom
+            body[idx - 1] in ("'", '"') or "'\"'\"'" in body  # POSIX shlex.quote idiom
         )
 
     def test_render_no_handrolled_escape_symbol_remains(self):
         from soup_cli.utils import eval_gate_hook as mod
+
         # Ensure the new helper name exists and the old function is gone.
         assert hasattr(mod, "_safe_shell_quote")
         assert not hasattr(mod, "_shell_quote")
@@ -326,6 +371,7 @@ class TestShellEscape:
 # ---------------------------------------------------------------------------
 # write_pre_push_hook — overwrite must be strict bool
 # ---------------------------------------------------------------------------
+
 
 class TestOverwriteValidation:
     def _setup(self, tmp_path, monkeypatch):
@@ -368,6 +414,7 @@ class TestOverwriteValidation:
 # Oversize rejection on hook fields
 # ---------------------------------------------------------------------------
 
+
 class TestHookOversize:
     def test_suite_path_oversize_rejected(self):
         with pytest.raises(ValueError, match="4096"):
@@ -387,6 +434,7 @@ class TestHookOversize:
 # ---------------------------------------------------------------------------
 # Source-grep: top-level imports do not include heavy deps
 # ---------------------------------------------------------------------------
+
 
 class TestNoHeavyImports:
     REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -411,31 +459,32 @@ class TestNoHeavyImports:
                 continue
             if line.startswith((" ", "\t")):
                 continue  # nested inside a function
-            assert "import torch" not in stripped, (
-                f"{module} has top-level torch import"
-            )
+            assert "import torch" not in stripped, f"{module} has top-level torch import"
             assert "from transformers" not in stripped, (
                 f"{module} has top-level transformers import"
             )
-            assert "from peft" not in stripped, (
-                f"{module} has top-level peft import"
-            )
+            assert "from peft" not in stripped, f"{module} has top-level peft import"
 
 
 # ---------------------------------------------------------------------------
 # Cross-module helpers extracted (no more private import)
 # ---------------------------------------------------------------------------
 
+
 class TestSharedTextUtils:
     def test_shared_module_exposes_row_text_and_tokenize(self):
         from soup_cli.utils import _eval_text
+
         assert hasattr(_eval_text, "row_text")
         assert hasattr(_eval_text, "tokenize")
 
     def test_canary_no_longer_imports_from_eval_design(self):
         src = (
             Path(__file__).resolve().parent.parent
-            / "src" / "soup_cli" / "utils" / "canary_discovery.py"
+            / "src"
+            / "soup_cli"
+            / "utils"
+            / "canary_discovery.py"
         ).read_text(encoding="utf-8")
         assert "from soup_cli.utils.eval_design import _row_text" not in src
         assert "from soup_cli.utils._eval_text import" in src
@@ -444,6 +493,7 @@ class TestSharedTextUtils:
 # ---------------------------------------------------------------------------
 # Coverage scorer_mix consistency
 # ---------------------------------------------------------------------------
+
 
 class TestScorerMixCompleteness:
     def test_every_scorer_type_present_with_count(self):
@@ -460,9 +510,11 @@ class TestScorerMixCompleteness:
 # `soup eval against` — run-vs-run paired-bootstrap CI
 # ---------------------------------------------------------------------------
 
+
 class TestEvalAgainst:
     def _make_tracker(self, tmp_path):
         from soup_cli.experiment.tracker import ExperimentTracker
+
         return ExperimentTracker(db_path=Path(tmp_path) / "t.db")
 
     def test_get_metric_series_happy(self, tmp_path):
@@ -503,6 +555,7 @@ class TestEvalAgainst:
         from typer.testing import CliRunner
 
         from soup_cli.commands.eval import app
+
         runner = CliRunner()
         result = runner.invoke(app, ["against", "--help"])
         assert result.exit_code == 0, (result.output, repr(result.exception))
@@ -519,11 +572,15 @@ class TestEvalAgainst:
 # Coverage table title is markup-escaped
 # ---------------------------------------------------------------------------
 
+
 class TestCoverageMarkupEscape:
     def test_v0550_module_escapes_task_category(self):
         src = (
             Path(__file__).resolve().parent.parent
-            / "src" / "soup_cli" / "commands" / "_eval_v0550.py"
+            / "src"
+            / "soup_cli"
+            / "commands"
+            / "_eval_v0550.py"
         ).read_text(encoding="utf-8")
         # The coverage table title must wrap report.task_category in escape().
         assert "escape(report.task_category)" in src

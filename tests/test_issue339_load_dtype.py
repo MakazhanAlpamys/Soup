@@ -766,9 +766,7 @@ class TestLoadDtypeMatchesCheckpoint:
         wrapper, dataset = _wrapper(tmp_path, monkeypatch, base=base)
         wrapper.setup(dataset)
 
-        base_params = [
-            p for n, p in wrapper.model.named_parameters() if "lora_" not in n
-        ]
+        base_params = [p for n, p in wrapper.model.named_parameters() if "lora_" not in n]
         assert base_params
         assert all(p.dtype == torch.bfloat16 for p in base_params)
 
@@ -793,9 +791,7 @@ class TestLoadDtypeMatchesCheckpoint:
         wrapper, dataset = _wrapper(tmp_path, monkeypatch, base=base)
         wrapper.setup(dataset)
 
-        base_params = [
-            p for n, p in wrapper.model.named_parameters() if "lora_" not in n
-        ]
+        base_params = [p for n, p in wrapper.model.named_parameters() if "lora_" not in n]
         assert base_params
         assert all(p.dtype == torch.float32 for p in base_params)
 
@@ -909,9 +905,7 @@ class TestBuildHardwareFitInputPeftClassification:
     def test_control_unfrozen_parameters_is_still_full(self):
         from soup_cli.commands.train import _build_hardware_fit_input
 
-        cfg = load_config_from_string(
-            _HW_FIT_BASE_YAML + "  unfrozen_parameters: ['.*']\n"
-        )
+        cfg = load_config_from_string(_HW_FIT_BASE_YAML + "  unfrozen_parameters: ['.*']\n")
         inp = _build_hardware_fit_input(cfg)
         assert inp is not None
         assert inp.peft == "full"
@@ -941,9 +935,7 @@ class TestBuildHardwareFitInputPeftClassification:
     def test_lora_r_zero_was_undercounted_now_full(self):
         from soup_cli.commands.train import _build_hardware_fit_input
 
-        cfg = load_config_from_string(
-            _HW_FIT_BASE_YAML + "  lora:\n    r: 0\n"
-        )
+        cfg = load_config_from_string(_HW_FIT_BASE_YAML + "  lora:\n    r: 0\n")
         inp = _build_hardware_fit_input(cfg)
         assert inp is not None
         assert inp.peft == "full"
@@ -965,9 +957,7 @@ class TestBuildHardwareFitInputPeftClassification:
     def test_freeze_layers_with_lora_still_on_was_overcounted_now_lora(self):
         from soup_cli.commands.train import _build_hardware_fit_input
 
-        cfg = load_config_from_string(
-            _HW_FIT_BASE_YAML + "  freeze_layers: 4\n  lora:\n    r: 8\n"
-        )
+        cfg = load_config_from_string(_HW_FIT_BASE_YAML + "  freeze_layers: 4\n  lora:\n    r: 8\n")
         inp = _build_hardware_fit_input(cfg)
         assert inp is not None
         assert inp.peft == "lora"

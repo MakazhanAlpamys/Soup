@@ -361,10 +361,12 @@ def test_parse_graphql_rejects_newline_in_field_name():
     spec = {
         "__schema": {
             "queryType": {"name": "Query"},
-            "types": [{
-                "name": "Query",
-                "fields": [{"name": "evil\nhost", "args": []}],
-            }],
+            "types": [
+                {
+                    "name": "Query",
+                    "fields": [{"name": "evil\nhost", "args": []}],
+                }
+            ],
         }
     }
     eps, _ = parse_graphql(spec)
@@ -379,8 +381,11 @@ def test_parse_graphql_rejects_newline_in_field_name():
 
 def test_endpoint_to_rows_basic():
     ep = Endpoint(
-        tool="search", method="get", path="/search",
-        description="Search the index", parameters=("query",),
+        tool="search",
+        method="get",
+        path="/search",
+        description="Search the index",
+        parameters=("query",),
         spec_kind="openapi",
     )
     rows = endpoint_to_rows(ep, examples_per_endpoint=2)
@@ -398,8 +403,12 @@ def test_endpoint_to_rows_basic():
 
 def test_endpoint_to_rows_arguments_are_json_string():
     ep = Endpoint(
-        tool="search", method="get", path="/search",
-        description="", parameters=("q", "limit"), spec_kind="openapi",
+        tool="search",
+        method="get",
+        path="/search",
+        description="",
+        parameters=("q", "limit"),
+        spec_kind="openapi",
     )
     rows = endpoint_to_rows(ep, examples_per_endpoint=1)
     tc = rows[0].messages[1]["tool_calls"][0]
@@ -409,8 +418,12 @@ def test_endpoint_to_rows_arguments_are_json_string():
 
 def test_endpoint_to_rows_bool_examples_rejected():
     ep = Endpoint(
-        tool="x", method="get", path="/x",
-        description="", parameters=(), spec_kind="openapi",
+        tool="x",
+        method="get",
+        path="/x",
+        description="",
+        parameters=(),
+        spec_kind="openapi",
     )
     with pytest.raises(TypeError):
         endpoint_to_rows(ep, examples_per_endpoint=True)  # type: ignore[arg-type]
@@ -418,8 +431,12 @@ def test_endpoint_to_rows_bool_examples_rejected():
 
 def test_endpoint_to_rows_zero_rejected():
     ep = Endpoint(
-        tool="x", method="get", path="/x",
-        description="", parameters=(), spec_kind="openapi",
+        tool="x",
+        method="get",
+        path="/x",
+        description="",
+        parameters=(),
+        spec_kind="openapi",
     )
     with pytest.raises(ValueError):
         endpoint_to_rows(ep, examples_per_endpoint=0)
@@ -427,8 +444,12 @@ def test_endpoint_to_rows_zero_rejected():
 
 def test_endpoint_to_rows_oversize_rejected():
     ep = Endpoint(
-        tool="x", method="get", path="/x",
-        description="", parameters=(), spec_kind="openapi",
+        tool="x",
+        method="get",
+        path="/x",
+        description="",
+        parameters=(),
+        spec_kind="openapi",
     )
     with pytest.raises(ValueError):
         endpoint_to_rows(ep, examples_per_endpoint=33)
@@ -453,8 +474,12 @@ def test_synthesise_dataset_rejects_string():
 
 def test_synth_row_to_dict_serialisable():
     ep = Endpoint(
-        tool="x", method="get", path="/x",
-        description="", parameters=(), spec_kind="openapi",
+        tool="x",
+        method="get",
+        path="/x",
+        description="",
+        parameters=(),
+        spec_kind="openapi",
     )
     row = endpoint_to_rows(ep, 1)[0]
     d = row.to_dict()
@@ -551,8 +576,7 @@ def test_write_dataset_under_cwd(tmp_path, monkeypatch):
 
 def test_write_dataset_outside_cwd_rejected(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    rows = [SynthRow(messages=({"role": "u", "content": "x"},), tool="t",
-                     source_endpoint="/")]
+    rows = [SynthRow(messages=({"role": "u", "content": "x"},), tool="t", source_endpoint="/")]
     abs_outside = str(tmp_path.parent / "evil.jsonl")
     with pytest.raises(ValueError, match="must stay under cwd"):
         write_dataset(rows, abs_outside)
@@ -584,12 +608,8 @@ def test_cli_agent_synth_smoke(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     from soup_cli.commands import agent
 
-    (tmp_path / "spec.json").write_text(
-        json.dumps(_OPENAPI_SAMPLE), encoding="utf-8"
-    )
-    result = runner.invoke(
-        agent.app, ["synth", "--spec", "spec.json", "--output", "ds.jsonl"]
-    )
+    (tmp_path / "spec.json").write_text(json.dumps(_OPENAPI_SAMPLE), encoding="utf-8")
+    result = runner.invoke(agent.app, ["synth", "--spec", "spec.json", "--output", "ds.jsonl"])
     assert result.exit_code == 0, (result.output, repr(result.exception))
     assert (tmp_path / "ds.jsonl").exists()
     assert "listPets" in result.output
@@ -616,13 +636,18 @@ def test_cli_agent_train_smoke(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     from soup_cli.commands import agent
 
-    (tmp_path / "spec.json").write_text(
-        json.dumps(_OPENAPI_SAMPLE), encoding="utf-8"
-    )
+    (tmp_path / "spec.json").write_text(json.dumps(_OPENAPI_SAMPLE), encoding="utf-8")
     result = runner.invoke(
         agent.app,
-        ["train", "--spec", "spec.json", "--base", "meta-llama/Llama-3.2-1B",
-         "--dataset-out", "ds.jsonl"],
+        [
+            "train",
+            "--spec",
+            "spec.json",
+            "--base",
+            "meta-llama/Llama-3.2-1B",
+            "--dataset-out",
+            "ds.jsonl",
+        ],
     )
     assert result.exit_code == 0, (result.output, repr(result.exception))
     assert (tmp_path / "ds.jsonl").exists()
@@ -633,9 +658,7 @@ def test_cli_agent_eval_smoke(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     from soup_cli.commands import agent
 
-    (tmp_path / "spec.json").write_text(
-        json.dumps(_OPENAPI_SAMPLE), encoding="utf-8"
-    )
+    (tmp_path / "spec.json").write_text(json.dumps(_OPENAPI_SAMPLE), encoding="utf-8")
     preds = [
         {"tool": "listPets", "arguments": {"limit": "10"}},
         {"tool": "listPets", "arguments": {"unknownParam": "x"}},
@@ -658,9 +681,7 @@ def test_cli_agent_eval_outside_cwd_predictions(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     from soup_cli.commands import agent
 
-    (tmp_path / "spec.json").write_text(
-        json.dumps(_OPENAPI_SAMPLE), encoding="utf-8"
-    )
+    (tmp_path / "spec.json").write_text(json.dumps(_OPENAPI_SAMPLE), encoding="utf-8")
     abs_outside = str(tmp_path.parent / "preds.jsonl")
     result = runner.invoke(
         agent.app,
@@ -706,7 +727,8 @@ def test_cli_agent_eval_missing_spec(tmp_path, monkeypatch):
 
     (tmp_path / "preds.jsonl").write_text("{}\n", encoding="utf-8")
     result = runner.invoke(
-        agent.app, ["eval", "--spec", "missing.json", "--predictions", "preds.jsonl"],
+        agent.app,
+        ["eval", "--spec", "missing.json", "--predictions", "preds.jsonl"],
     )
     assert result.exit_code == 1, result.output
 
@@ -728,13 +750,10 @@ def test_cli_agent_train_rejects_newline_in_base(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     from soup_cli.commands import agent
 
-    (tmp_path / "spec.json").write_text(
-        json.dumps(_OPENAPI_SAMPLE), encoding="utf-8"
-    )
+    (tmp_path / "spec.json").write_text(json.dumps(_OPENAPI_SAMPLE), encoding="utf-8")
     result = runner.invoke(
         agent.app,
-        ["train", "--spec", "spec.json",
-         "--base", "evil\ntraining: { epochs: 9999 }"],
+        ["train", "--spec", "spec.json", "--base", "evil\ntraining: { epochs: 9999 }"],
     )
     assert result.exit_code == 2, result.output
     assert "newline" in result.output.lower() or "base" in result.output.lower()
@@ -744,9 +763,7 @@ def test_cli_agent_train_rejects_null_byte_in_base(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     from soup_cli.commands import agent
 
-    (tmp_path / "spec.json").write_text(
-        json.dumps(_OPENAPI_SAMPLE), encoding="utf-8"
-    )
+    (tmp_path / "spec.json").write_text(json.dumps(_OPENAPI_SAMPLE), encoding="utf-8")
     result = runner.invoke(
         agent.app,
         ["train", "--spec", "spec.json", "--base", "evil\x00"],
@@ -783,8 +800,7 @@ def test_cli_agent_synth_no_endpoints_exits_1(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     from soup_cli.commands import agent
 
-    (tmp_path / "empty.json").write_text('{"openapi": "3.0.0", "paths": {}}',
-                                          encoding="utf-8")
+    (tmp_path / "empty.json").write_text('{"openapi": "3.0.0", "paths": {}}', encoding="utf-8")
     result = runner.invoke(agent.app, ["synth", "--spec", "empty.json"])
     assert result.exit_code == 1
 
@@ -798,8 +814,12 @@ def test_endpoint_is_frozen():
     import dataclasses
 
     ep = Endpoint(
-        tool="x", method="get", path="/x",
-        description="", parameters=(), spec_kind="openapi",
+        tool="x",
+        method="get",
+        path="/x",
+        description="",
+        parameters=(),
+        spec_kind="openapi",
     )
     with pytest.raises(dataclasses.FrozenInstanceError):
         ep.tool = "y"  # type: ignore[misc]

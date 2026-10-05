@@ -118,10 +118,7 @@ def test_resume_refuses_changed_rows_instead_of_mixing_transactions(tmp_path):
     rows = _captures(plan)
     root = tmp_path / "capture-cache"
     _publisher(root, plan).publish(rows, stop_after="staging")
-    changed = tuple(
-        row.model_copy(update={"example_id": "example-2"})
-        for row in rows
-    )
+    changed = tuple(row.model_copy(update={"example_id": "example-2"}) for row in rows)
 
     with pytest.raises(ArtifactCorruptionError, match="corrupt or mismatched"):
         _publisher(root, plan).publish(changed)
@@ -140,8 +137,7 @@ def test_publisher_rejects_duplicate_reordered_and_wrong_policy_rows(tmp_path):
     wrong_temperature_payload = rows[0].model_dump(by_alias=True)
     wrong_temperature_payload["temperature"] = 2.0
     selected_mass = sum(
-        math.exp(value)
-        for value in wrong_temperature_payload["teacher_log_probabilities"]
+        math.exp(value) for value in wrong_temperature_payload["teacher_log_probabilities"]
     )
     wrong_temperature_payload["tail_mass"] = 1.0 - selected_mass
     wrong_temperature = CaptureToken.model_validate(wrong_temperature_payload)
@@ -163,9 +159,7 @@ def test_publisher_rejects_student_rollout_at_teacher_only_boundary(tmp_path):
     student_row = CaptureToken.model_validate(payload)
 
     with pytest.raises(ValueError, match="teacher_expert rows only"):
-        _publisher(tmp_path / "capture-cache", plan).publish(
-            (student_row,), stop_after="staging"
-        )
+        _publisher(tmp_path / "capture-cache", plan).publish((student_row,), stop_after="staging")
 
 
 def test_publisher_constructor_rejects_shard_path_escape(tmp_path):
@@ -186,9 +180,7 @@ def test_resume_rejects_tampered_manifest_hash_chain(tmp_path):
     path = root / ".transactions/transaction-0001/manifest.complete.json"
     manifest = ShardManifest.model_validate_json(path.read_bytes())
     tampered = ShardManifest.model_validate(
-        manifest.model_copy(
-            update={"previous_manifest_sha256": "f" * 64}
-        ).model_dump(by_alias=True)
+        manifest.model_copy(update={"previous_manifest_sha256": "f" * 64}).model_dump(by_alias=True)
     )
     path.write_bytes(canonical_json_bytes(tampered) + b"\n")
 
@@ -205,9 +197,7 @@ def test_publisher_rejects_top_k_cardinality_that_disagrees_with_plan(tmp_path):
     wrong_top_k = _captures(capture_plan)[0]
 
     with pytest.raises(ValueError, match="top-k cardinality does not match plan"):
-        _publisher(tmp_path / "capture-cache", plan).publish(
-            (wrong_top_k,), stop_after="staging"
-        )
+        _publisher(tmp_path / "capture-cache", plan).publish((wrong_top_k,), stop_after="staging")
 
 
 def test_publisher_rejects_context_longer_than_plan_limit(tmp_path):
@@ -218,9 +208,7 @@ def test_publisher_rejects_context_longer_than_plan_limit(tmp_path):
     long_context = CaptureToken.model_validate(payload)
 
     with pytest.raises(ValueError, match="context exceeds plan max_sequence_length"):
-        _publisher(tmp_path / "capture-cache", plan).publish(
-            (long_context,), stop_after="staging"
-        )
+        _publisher(tmp_path / "capture-cache", plan).publish((long_context,), stop_after="staging")
 
 
 def test_publisher_rejects_vocabulary_size_that_disagrees_with_plan(tmp_path):

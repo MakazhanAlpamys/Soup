@@ -31,17 +31,27 @@ MAX_BUNDLE_BYTES = 1_000_000
 
 # Patterns that classify the failure mode. Order matters: more specific first.
 _CRASH_KIND_PATTERNS = (
-    ("oom", re.compile(
-        r"CUDA out of memory|OutOfMemoryError|cudaErrorMemoryAllocation",
-        re.IGNORECASE,
-    )),
-    ("nan", re.compile(
-        r"\b(NaN|infinit[ey])\b.*loss|loss.*\b(NaN|infinit[ey])\b",
-        re.IGNORECASE,
-    )),
-    ("cuda", re.compile(
-        r"CUDA error|cublas|cudnn|device-side assert", re.IGNORECASE,
-    )),
+    (
+        "oom",
+        re.compile(
+            r"CUDA out of memory|OutOfMemoryError|cudaErrorMemoryAllocation",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "nan",
+        re.compile(
+            r"\b(NaN|infinit[ey])\b.*loss|loss.*\b(NaN|infinit[ey])\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "cuda",
+        re.compile(
+            r"CUDA error|cublas|cudnn|device-side assert",
+            re.IGNORECASE,
+        ),
+    ),
     ("dataloader", re.compile(r"DataLoader worker|num_workers", re.IGNORECASE)),
     ("nccl", re.compile(r"NCCL|c10d", re.IGNORECASE)),
 )
@@ -110,16 +120,18 @@ def _capture_gpu_state() -> Dict[str, Any]:
                     free_bytes, total_bytes = torch.cuda.mem_get_info(index)
                 except Exception:
                     pass
-                state["devices"].append({
-                    "index": index,
-                    "name": props.name,
-                    "compute_capability": f"{props.major}.{props.minor}",
-                    "total_memory_bytes": props.total_memory,
-                    "free_memory_bytes": free_bytes,
-                    "queryable_total_bytes": total_bytes,
-                    "allocated_bytes": _safe_call(torch.cuda.memory_allocated, index),
-                    "reserved_bytes": _safe_call(torch.cuda.memory_reserved, index),
-                })
+                state["devices"].append(
+                    {
+                        "index": index,
+                        "name": props.name,
+                        "compute_capability": f"{props.major}.{props.minor}",
+                        "total_memory_bytes": props.total_memory,
+                        "free_memory_bytes": free_bytes,
+                        "queryable_total_bytes": total_bytes,
+                        "allocated_bytes": _safe_call(torch.cuda.memory_allocated, index),
+                        "reserved_bytes": _safe_call(torch.cuda.memory_reserved, index),
+                    }
+                )
     except Exception:
         # torch unavailable or CUDA broken — that's itself information.
         state["import_error"] = True

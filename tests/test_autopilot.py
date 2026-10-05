@@ -14,15 +14,11 @@ runner = CliRunner()
 # Dataset analyzer
 # ---------------------------------------------------------------------------
 
+
 class TestAnalyzeDataset:
     def _write_alpaca(self, path, count=100):
-        rows = [
-            {"instruction": f"q{i} " * 20, "output": f"a{i} " * 10}
-            for i in range(count)
-        ]
-        path.write_text(
-            "\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8"
-        )
+        rows = [{"instruction": f"q{i} " * 20, "output": f"a{i} " * 10} for i in range(count)]
+        path.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
         return path
 
     def test_analyze_alpaca_dataset(self, tmp_path):
@@ -49,6 +45,7 @@ class TestAnalyzeDataset:
 # Model analyzer
 # ---------------------------------------------------------------------------
 
+
 class TestAnalyzeModel:
     def test_analyze_llama3_8b(self):
         from soup_cli.autopilot.analyzer import analyze_model
@@ -69,6 +66,7 @@ class TestAnalyzeModel:
 # Hardware analyzer
 # ---------------------------------------------------------------------------
 
+
 class TestAnalyzeHardware:
     def test_returns_dict_like(self):
         from soup_cli.autopilot.analyzer import analyze_hardware
@@ -81,6 +79,7 @@ class TestAnalyzeHardware:
 # ---------------------------------------------------------------------------
 # Decision engine
 # ---------------------------------------------------------------------------
+
 
 class TestDecisionEngine:
     def test_decide_task_chat(self):
@@ -202,9 +201,7 @@ class TestDecisionEngine:
         # #1212 — the flags are install-aware: Ampere+ alone is not enough,
         # the packages must also be present (patched here; CI has neither).
         monkeypatch.setattr(decisions, "check_liger_available", lambda: True)
-        monkeypatch.setattr(
-            decisions, "check_flash_attn_available", lambda: "flash_attention_2"
-        )
+        monkeypatch.setattr(decisions, "check_flash_attn_available", lambda: "flash_attention_2")
         flags = decisions.decide_performance_flags(gpu_name="rtx4090", compute_capability=8.9)
         assert flags["use_flash_attn"] is True
         assert flags["use_liger"] is True
@@ -263,15 +260,12 @@ class TestDecisionEngine:
 # Build config end-to-end
 # ---------------------------------------------------------------------------
 
+
 class TestBuildConfig:
     def _write_data(self, tmp_path):
-        rows = [
-            {"instruction": f"q{i}", "output": f"a{i}"} for i in range(100)
-        ]
+        rows = [{"instruction": f"q{i}", "output": f"a{i}"} for i in range(100)]
         path = tmp_path / "data.jsonl"
-        path.write_text(
-            "\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8"
-        )
+        path.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
         return path
 
     def test_build_soup_config(self, tmp_path):
@@ -310,7 +304,10 @@ class TestBuildConfig:
             encoding="utf-8",
         )
         cfg = build_soup_config(
-            model=model, data_path=str(data_file), goal="chat", vram_gb=24.0,
+            model=model,
+            data_path=str(data_file),
+            goal="chat",
+            vram_gb=24.0,
         )
         assert cfg.training.quantization == expected
         assert cfg.training.lora.use_dora is False
@@ -336,15 +333,12 @@ class TestBuildConfig:
 # CLI command
 # ---------------------------------------------------------------------------
 
+
 class TestAutopilotCLI:
     def _write_data(self, tmp_path):
-        rows = [
-            {"instruction": f"q{i}", "output": f"a{i}"} for i in range(50)
-        ]
+        rows = [{"instruction": f"q{i}", "output": f"a{i}"} for i in range(50)]
         path = tmp_path / "data.jsonl"
-        path.write_text(
-            "\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8"
-        )
+        path.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
         return path
 
     def test_help(self):
@@ -355,62 +349,90 @@ class TestAutopilotCLI:
     def test_dry_run(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         data_file = self._write_data(tmp_path)
-        result = runner.invoke(app, [
-            "autopilot",
-            "--model", "meta-llama/Llama-3.1-8B-Instruct",
-            "--data", str(data_file.name),
-            "--goal", "chat",
-            "--gpu-budget", "24GB",
-            "--dry-run",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "autopilot",
+                "--model",
+                "meta-llama/Llama-3.1-8B-Instruct",
+                "--data",
+                str(data_file.name),
+                "--goal",
+                "chat",
+                "--gpu-budget",
+                "24GB",
+                "--dry-run",
+            ],
+        )
         assert result.exit_code == 0
 
     def test_writes_config(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         data_file = self._write_data(tmp_path)
-        result = runner.invoke(app, [
-            "autopilot",
-            "--model", "meta-llama/Llama-3.1-8B-Instruct",
-            "--data", str(data_file.name),
-            "--goal", "chat",
-            "--gpu-budget", "24GB",
-            "--output", "soup.yaml",
-            "--yes",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "autopilot",
+                "--model",
+                "meta-llama/Llama-3.1-8B-Instruct",
+                "--data",
+                str(data_file.name),
+                "--goal",
+                "chat",
+                "--gpu-budget",
+                "24GB",
+                "--output",
+                "soup.yaml",
+                "--yes",
+            ],
+        )
         assert result.exit_code == 0, (
-            f"exit={result.exit_code}\n"
-            f"output={result.output}\n"
-            f"exception={result.exception!r}"
+            f"exit={result.exit_code}\noutput={result.output}\nexception={result.exception!r}"
         )
         assert (tmp_path / "soup.yaml").exists()
 
     def test_rejects_path_traversal_data(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
-        result = runner.invoke(app, [
-            "autopilot",
-            "--model", "meta-llama/Llama-3.1-8B-Instruct",
-            "--data", "../../etc/passwd",
-            "--goal", "chat",
-            "--gpu-budget", "24GB",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "autopilot",
+                "--model",
+                "meta-llama/Llama-3.1-8B-Instruct",
+                "--data",
+                "../../etc/passwd",
+                "--goal",
+                "chat",
+                "--gpu-budget",
+                "24GB",
+            ],
+        )
         assert result.exit_code != 0
 
     def test_rejects_bad_goal(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         data_file = self._write_data(tmp_path)
-        result = runner.invoke(app, [
-            "autopilot",
-            "--model", "meta-llama/Llama-3.1-8B-Instruct",
-            "--data", str(data_file.name),
-            "--goal", "evil-goal",
-            "--gpu-budget", "24GB",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "autopilot",
+                "--model",
+                "meta-llama/Llama-3.1-8B-Instruct",
+                "--data",
+                str(data_file.name),
+                "--goal",
+                "evil-goal",
+                "--gpu-budget",
+                "24GB",
+            ],
+        )
         assert result.exit_code != 0
 
 
 # ---------------------------------------------------------------------------
 # GPU budget parsing
 # ---------------------------------------------------------------------------
+
 
 class TestGPUBudgetParsing:
     def test_parse_gb(self):
@@ -439,4 +461,3 @@ class TestGPUBudgetParsing:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
-

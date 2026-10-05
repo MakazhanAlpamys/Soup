@@ -54,14 +54,10 @@ def merge_sharded_fsdp_weights(
             f"Output (target): {escape(plan.output_path)}\n\n"
             "Plan-only run — pass without --plan-only to write the file."
         )
-        console.print(
-            Panel(body, title="FSDP Consolidation Plan", border_style="cyan")
-        )
+        console.print(Panel(body, title="FSDP Consolidation Plan", border_style="cyan"))
         raise typer.Exit(code=0)
 
-    console.print(
-        f"[dim]Consolidating {len(plan.shard_files)} shard(s)...[/]"
-    )
+    console.print(f"[dim]Consolidating {len(plan.shard_files)} shard(s)...[/]")
     try:
         result = consolidate_shards(plan)
     except (TypeError, ValueError) as exc:
@@ -70,7 +66,7 @@ def merge_sharded_fsdp_weights(
     except ImportError as exc:
         console.print(
             "[red]torch + safetensors are required for consolidation. "
-            "Install with: [bold]pip install \"soup-cli\\[train]\"[/][/]"
+            'Install with: [bold]pip install "soup-cli\\[train]"[/][/]'
         )
         raise typer.Exit(code=1) from exc
 
@@ -80,6 +76,4 @@ def merge_sharded_fsdp_weights(
         f"Size:            {result.total_bytes / 1e6:.2f} MB\n"
         f"Output:          {escape(result.output_path)}"
     )
-    console.print(
-        Panel(body, title="[bold green]FSDP Consolidation Done[/]", border_style="green")
-    )
+    console.print(Panel(body, title="[bold green]FSDP Consolidation Done[/]", border_style="green"))

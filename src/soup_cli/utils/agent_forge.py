@@ -32,9 +32,7 @@ _MAX_SPEC_BYTES = 5 * 1024 * 1024  # 5 MiB
 _MAX_DESCRIPTION = 512
 _MAX_ROWS_PER_ENDPOINT = 32
 _ALLOWED_SPEC_KINDS = frozenset({"openapi", "mcp", "graphql"})
-_HTTP_METHODS = frozenset(
-    {"get", "post", "put", "patch", "delete", "head", "options", "trace"}
-)
+_HTTP_METHODS = frozenset({"get", "post", "put", "patch", "delete", "head", "options", "trace"})
 
 
 @dataclass(frozen=True)
@@ -91,9 +89,7 @@ def _validate_tool_name(name: str) -> str:
     if not isinstance(name, str):
         raise TypeError("tool name must be a string")
     if not _TOOL_NAME_RE.match(name):
-        raise ValueError(
-            "tool name must match ^[A-Za-z_][A-Za-z0-9_.-]{0,127}$"
-        )
+        raise ValueError("tool name must match ^[A-Za-z_][A-Za-z0-9_.-]{0,127}$")
     return name
 
 
@@ -150,9 +146,7 @@ def parse_openapi(spec: Mapping[str, Any]) -> Tuple[List[Endpoint], List[str]]:
     version = spec.get("openapi", "")
     warnings: List[str] = []
     if not isinstance(version, str) or not version.startswith("3."):
-        warnings.append(
-            f"unrecognised openapi version: {version!r}; parser is OpenAPI 3.x"
-        )
+        warnings.append(f"unrecognised openapi version: {version!r}; parser is OpenAPI 3.x")
     paths = spec.get("paths")
     if not isinstance(paths, dict):
         return [], ["spec has no 'paths' object"]
@@ -195,17 +189,13 @@ def parse_openapi(spec: Mapping[str, Any]) -> Tuple[List[Endpoint], List[str]]:
                     tool=tool,
                     method=lower,
                     path=path,
-                    description=_truncate_desc(
-                        op.get("summary") or op.get("description")
-                    ),
+                    description=_truncate_desc(op.get("summary") or op.get("description")),
                     parameters=tuple(param_names),
                     spec_kind="openapi",
                 )
             )
             if len(endpoints) >= _MAX_ENDPOINTS:
-                warnings.append(
-                    f"endpoint cap {_MAX_ENDPOINTS} reached; truncating"
-                )
+                warnings.append(f"endpoint cap {_MAX_ENDPOINTS} reached; truncating")
                 return endpoints, warnings
     return endpoints, warnings
 
@@ -356,17 +346,11 @@ def detect_spec_kind(spec: Mapping[str, Any]) -> str:
         raise TypeError("spec must be a dict")
     if isinstance(spec.get("openapi"), str) and isinstance(spec.get("paths"), dict):
         return "openapi"
-    if isinstance(spec.get("tools"), list) and not isinstance(
-        spec.get("paths"), dict
-    ):
+    if isinstance(spec.get("tools"), list) and not isinstance(spec.get("paths"), dict):
         return "mcp"
-    if "__schema" in spec or (
-        isinstance(spec.get("data"), dict) and "__schema" in spec["data"]
-    ):
+    if "__schema" in spec or (isinstance(spec.get("data"), dict) and "__schema" in spec["data"]):
         return "graphql"
-    raise ValueError(
-        "cannot detect spec kind — must be OpenAPI 3.x / MCP / GraphQL"
-    )
+    raise ValueError("cannot detect spec kind — must be OpenAPI 3.x / MCP / GraphQL")
 
 
 def parse_spec(
@@ -404,9 +388,7 @@ def parse_spec(
     return list(seen.values()), report
 
 
-def endpoint_to_rows(
-    endpoint: Endpoint, examples_per_endpoint: int = 1
-) -> List[SynthRow]:
+def endpoint_to_rows(endpoint: Endpoint, examples_per_endpoint: int = 1) -> List[SynthRow]:
     """Synthesise ``examples_per_endpoint`` rows for one endpoint.
 
     A row is one user-question / assistant-tool-call pair. We do NOT make
@@ -415,14 +397,10 @@ def endpoint_to_rows(
     """
     if not isinstance(endpoint, Endpoint):
         raise TypeError("endpoint must be an Endpoint")
-    if isinstance(examples_per_endpoint, bool) or not isinstance(
-        examples_per_endpoint, int
-    ):
+    if isinstance(examples_per_endpoint, bool) or not isinstance(examples_per_endpoint, int):
         raise TypeError("examples_per_endpoint must be int (not bool)")
     if not (1 <= examples_per_endpoint <= _MAX_ROWS_PER_ENDPOINT):
-        raise ValueError(
-            f"examples_per_endpoint must be in [1, {_MAX_ROWS_PER_ENDPOINT}]"
-        )
+        raise ValueError(f"examples_per_endpoint must be in [1, {_MAX_ROWS_PER_ENDPOINT}]")
     desc = endpoint.description or f"Call {endpoint.tool}"
     # Parameter schemas stay opaque (see Endpoint.parameters), so each
     # property is typed as "any" rather than guessed.
@@ -495,9 +473,7 @@ def load_spec_file(spec_path: str) -> Mapping[str, Any]:
     if not spec_path or "\x00" in spec_path:
         raise ValueError("spec_path must be non-empty NUL-free string")
     if not is_under_cwd(spec_path):
-        raise ValueError(
-            f"spec_path must stay under cwd: {os.path.basename(spec_path)}"
-        )
+        raise ValueError(f"spec_path must stay under cwd: {os.path.basename(spec_path)}")
     # lstat BEFORE realpath: project-standard TOCTOU policy (v0.33.0 #22 /
     # v0.43.0 Part C / v0.44.0 Part B). The lstat must operate on the
     # original (pre-realpath) path so we see the symlink, not its target.
@@ -508,9 +484,7 @@ def load_spec_file(spec_path: str) -> Mapping[str, Any]:
     except FileNotFoundError as exc:
         raise FileNotFoundError(spec_path) from exc
     if _stat.S_ISLNK(st.st_mode):
-        raise ValueError(
-            f"spec_path must not be a symlink: {os.path.basename(spec_path)}"
-        )
+        raise ValueError(f"spec_path must not be a symlink: {os.path.basename(spec_path)}")
     real = os.path.realpath(spec_path)
     if not os.path.isfile(real):
         raise FileNotFoundError(spec_path)
@@ -546,18 +520,13 @@ def write_dataset(rows: Sequence[SynthRow], output_path: str) -> str:
     if not output_path or "\x00" in output_path:
         raise ValueError("output_path must be non-empty NUL-free string")
     if not is_under_cwd(output_path):
-        raise ValueError(
-            f"output_path must stay under cwd: {os.path.basename(output_path)}"
-        )
+        raise ValueError(f"output_path must stay under cwd: {os.path.basename(output_path)}")
     # Reject a pre-placed symlink at the target — defends against
     # `<output>.jsonl -> /etc/cron.d/x` overwrite.
     try:
         st = os.lstat(output_path)
         if _stat.S_ISLNK(st.st_mode):
-            raise ValueError(
-                f"output_path must not be a symlink: "
-                f"{os.path.basename(output_path)}"
-            )
+            raise ValueError(f"output_path must not be a symlink: {os.path.basename(output_path)}")
     except FileNotFoundError:
         pass
     real = os.path.realpath(output_path)

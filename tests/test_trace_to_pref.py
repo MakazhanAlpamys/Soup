@@ -80,15 +80,15 @@ class TestOpenAIParser:
 
         events = [
             {
-                "id": "a", "messages": [{"role": "user", "content": "Q"}],
-                "choices": [{"message": {"role": "assistant",
-                                         "content": "First"}}],
+                "id": "a",
+                "messages": [{"role": "user", "content": "Q"}],
+                "choices": [{"message": {"role": "assistant", "content": "First"}}],
                 "regenerated_from": None,
             },
             {
-                "id": "b", "messages": [{"role": "user", "content": "Q"}],
-                "choices": [{"message": {"role": "assistant",
-                                         "content": "Second"}}],
+                "id": "b",
+                "messages": [{"role": "user", "content": "Q"}],
+                "choices": [{"message": {"role": "assistant", "content": "Second"}}],
                 "regenerated_from": "a",
             },
         ]
@@ -108,12 +108,15 @@ class TestSoupServeParser:
         trace_dir = tmp_path / "traces"
         trace_dir.mkdir()
         (trace_dir / "req-1.jsonl").write_text(
-            json.dumps({
-                "id": "req-1",
-                "prompt": "What?",
-                "response": "That.",
-                "feedback": {"rating": "up"},
-            }) + "\n",
+            json.dumps(
+                {
+                    "id": "req-1",
+                    "prompt": "What?",
+                    "response": "That.",
+                    "feedback": {"rating": "up"},
+                }
+            )
+            + "\n",
             encoding="utf-8",
         )
         traces = list(parse_soup_serve(str(trace_dir)))
@@ -146,10 +149,8 @@ class TestPairBuilder:
         from soup_cli.data.traces.parsers import Trace
 
         traces = [
-            Trace(trace_id="1", prompt="Q", output="First", signal="regenerated",
-                  regen_order=0),
-            Trace(trace_id="2", prompt="Q", output="Better", signal="regenerated",
-                  regen_order=1),
+            Trace(trace_id="1", prompt="Q", output="First", signal="regenerated", regen_order=0),
+            Trace(trace_id="2", prompt="Q", output="Better", signal="regenerated", regen_order=1),
         ]
         pairs = list(build_pairs(traces, signal="regenerations"))
         assert len(pairs) == 1
@@ -161,8 +162,9 @@ class TestPairBuilder:
         from soup_cli.data.traces.parsers import Trace
 
         traces = [
-            Trace(trace_id="x", prompt="Q", output="Raw", signal="user_edit",
-                  edited_output="Polished"),
+            Trace(
+                trace_id="x", prompt="Q", output="Raw", signal="user_edit", edited_output="Polished"
+            ),
         ]
         pairs = list(build_pairs(traces, signal="user_edit"))
         assert len(pairs) == 1
@@ -191,12 +193,14 @@ class TestFromTracesCLI:
         """Write a JSONL log where each row is a LangChain run event."""
         rows = []
         for idx, (prompt, output, rating) in enumerate(prompts_and_ratings):
-            rows.append({
-                "id": f"run-{idx}",
-                "inputs": {"messages": [{"role": "user", "content": prompt}]},
-                "outputs": {"generations": [[{"text": output}]]},
-                "feedback": [{"key": "thumbs", "score": rating}],
-            })
+            rows.append(
+                {
+                    "id": f"run-{idx}",
+                    "inputs": {"messages": [{"role": "user", "content": prompt}]},
+                    "outputs": {"generations": [[{"text": output}]]},
+                    "feedback": [{"key": "thumbs", "score": rating}],
+                }
+            )
         path.write_text(
             "\n".join(json.dumps(r) for r in rows) + "\n",
             encoding="utf-8",
@@ -205,19 +209,30 @@ class TestFromTracesCLI:
     def test_happy_path(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         logs = tmp_path / "traces.jsonl"
-        self._write_langchain_log(logs, [
-            ("Hi", "Hello!", 1),
-            ("Hi", "Ugh.", 0),
-        ])
+        self._write_langchain_log(
+            logs,
+            [
+                ("Hi", "Hello!", 1),
+                ("Hi", "Ugh.", 0),
+            ],
+        )
         output = tmp_path / "prefs.jsonl"
 
-        result = runner.invoke(app, [
-            "data", "from-traces",
-            "--logs", str(logs),
-            "--format", "langchain",
-            "--signal", "thumbs_up",
-            "--output", str(output),
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "data",
+                "from-traces",
+                "--logs",
+                str(logs),
+                "--format",
+                "langchain",
+                "--signal",
+                "thumbs_up",
+                "--output",
+                str(output),
+            ],
+        )
         assert result.exit_code == 0, (result.output, repr(result.exception))
         assert output.exists()
         pairs = [json.loads(ln) for ln in output.read_text(encoding="utf-8").splitlines()]
@@ -229,26 +244,42 @@ class TestFromTracesCLI:
         monkeypatch.chdir(tmp_path)
         logs = tmp_path / "x.jsonl"
         logs.write_text("{}\n", encoding="utf-8")
-        result = runner.invoke(app, [
-            "data", "from-traces",
-            "--logs", str(logs),
-            "--format", "hacker",
-            "--signal", "thumbs_up",
-            "--output", "prefs.jsonl",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "data",
+                "from-traces",
+                "--logs",
+                str(logs),
+                "--format",
+                "hacker",
+                "--signal",
+                "thumbs_up",
+                "--output",
+                "prefs.jsonl",
+            ],
+        )
         assert result.exit_code != 0, (result.output, repr(result.exception))
 
     def test_invalid_signal_rejected(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         logs = tmp_path / "x.jsonl"
         logs.write_text("{}\n", encoding="utf-8")
-        result = runner.invoke(app, [
-            "data", "from-traces",
-            "--logs", str(logs),
-            "--format", "langchain",
-            "--signal", "bribery",
-            "--output", "prefs.jsonl",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "data",
+                "from-traces",
+                "--logs",
+                str(logs),
+                "--format",
+                "langchain",
+                "--signal",
+                "bribery",
+                "--output",
+                "prefs.jsonl",
+            ],
+        )
         assert result.exit_code != 0, (result.output, repr(result.exception))
 
     def test_path_traversal_on_logs_rejected(self, tmp_path, monkeypatch):
@@ -256,13 +287,21 @@ class TestFromTracesCLI:
         outside = tmp_path.parent / "outside_traces.jsonl"
         outside.write_text("{}\n", encoding="utf-8")
         try:
-            result = runner.invoke(app, [
-                "data", "from-traces",
-                "--logs", str(outside),
-                "--format", "langchain",
-                "--signal", "thumbs_up",
-                "--output", "prefs.jsonl",
-            ])
+            result = runner.invoke(
+                app,
+                [
+                    "data",
+                    "from-traces",
+                    "--logs",
+                    str(outside),
+                    "--format",
+                    "langchain",
+                    "--signal",
+                    "thumbs_up",
+                    "--output",
+                    "prefs.jsonl",
+                ],
+            )
             assert result.exit_code != 0, (result.output, repr(result.exception))
             assert "outside" in result.output.lower() or "cwd" in result.output.lower()
         finally:
@@ -272,13 +311,21 @@ class TestFromTracesCLI:
         monkeypatch.chdir(tmp_path)
         logs = tmp_path / "x.jsonl"
         logs.write_text("{}\n", encoding="utf-8")
-        result = runner.invoke(app, [
-            "data", "from-traces",
-            "--logs", str(logs),
-            "--format", "langchain",
-            "--signal", "thumbs_up",
-            "--output", str(tmp_path.parent / "escape.jsonl"),
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "data",
+                "from-traces",
+                "--logs",
+                str(logs),
+                "--format",
+                "langchain",
+                "--signal",
+                "thumbs_up",
+                "--output",
+                str(tmp_path.parent / "escape.jsonl"),
+            ],
+        )
         assert result.exit_code != 0, (result.output, repr(result.exception))
 
 
@@ -302,14 +349,26 @@ class TestReviewCLI:
         monkeypatch.chdir(tmp_path)
         prefs = tmp_path / "prefs.jsonl"
         prefs.write_text(
-            json.dumps({
-                "prompt": "Q", "chosen": "A", "rejected": "B",
-            }) + "\n",
+            json.dumps(
+                {
+                    "prompt": "Q",
+                    "chosen": "A",
+                    "rejected": "B",
+                }
+            )
+            + "\n",
             encoding="utf-8",
         )
-        result = runner.invoke(app, [
-            "data", "review", str(prefs), "--sample", "1",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "data",
+                "review",
+                str(prefs),
+                "--sample",
+                "1",
+            ],
+        )
         assert result.exit_code == 0, (result.output, repr(result.exception))
         assert "Q" in result.output or "prompt" in result.output.lower()
 
@@ -324,13 +383,21 @@ class TestEmptyAndMalformed:
         monkeypatch.chdir(tmp_path)
         logs = tmp_path / "empty.jsonl"
         logs.write_text("", encoding="utf-8")
-        result = runner.invoke(app, [
-            "data", "from-traces",
-            "--logs", str(logs),
-            "--format", "langchain",
-            "--signal", "thumbs_up",
-            "--output", "prefs.jsonl",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "data",
+                "from-traces",
+                "--logs",
+                str(logs),
+                "--format",
+                "langchain",
+                "--signal",
+                "thumbs_up",
+                "--output",
+                "prefs.jsonl",
+            ],
+        )
         assert result.exit_code == 0, (result.output, repr(result.exception))
         assert (tmp_path / "prefs.jsonl").exists()
         assert (tmp_path / "prefs.jsonl").read_text(encoding="utf-8") == ""
@@ -339,22 +406,33 @@ class TestEmptyAndMalformed:
         monkeypatch.chdir(tmp_path)
         logs = tmp_path / "mixed.jsonl"
         logs.write_text(
-            'not valid json\n'
-            + json.dumps({
-                "id": "ok",
-                "inputs": {"messages": [{"role": "user", "content": "Q"}]},
-                "outputs": {"generations": [[{"text": "A"}]]},
-                "feedback": [{"key": "thumbs", "score": 1}],
-            }) + "\n",
+            "not valid json\n"
+            + json.dumps(
+                {
+                    "id": "ok",
+                    "inputs": {"messages": [{"role": "user", "content": "Q"}]},
+                    "outputs": {"generations": [[{"text": "A"}]]},
+                    "feedback": [{"key": "thumbs", "score": 1}],
+                }
+            )
+            + "\n",
             encoding="utf-8",
         )
-        result = runner.invoke(app, [
-            "data", "from-traces",
-            "--logs", str(logs),
-            "--format", "langchain",
-            "--signal", "thumbs_up",
-            "--output", "prefs.jsonl",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "data",
+                "from-traces",
+                "--logs",
+                str(logs),
+                "--format",
+                "langchain",
+                "--signal",
+                "thumbs_up",
+                "--output",
+                "prefs.jsonl",
+            ],
+        )
         assert result.exit_code == 0, (result.output, repr(result.exception))
 
     def test_lone_thumbs_down_drops_pair(self):
@@ -362,8 +440,7 @@ class TestEmptyAndMalformed:
         from soup_cli.data.traces.parsers import Trace
 
         traces = [
-            Trace(trace_id="a", prompt="Q", output="Bad",
-                  signal="thumbs_down"),
+            Trace(trace_id="a", prompt="Q", output="Bad", signal="thumbs_down"),
         ]
         pairs = list(build_pairs(traces, signal="thumbs_up"))
         assert pairs == []

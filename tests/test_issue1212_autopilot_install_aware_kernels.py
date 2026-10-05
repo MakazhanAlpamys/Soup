@@ -21,10 +21,7 @@ def _plain(text):
 
 
 def _write_data(path, count=20):
-    rows = [
-        {"instruction": f"q{index} " * 8, "output": f"a{index} " * 4}
-        for index in range(count)
-    ]
+    rows = [{"instruction": f"q{index} " * 8, "output": f"a{index} " * 4} for index in range(count)]
     path.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
     return path
 
@@ -54,10 +51,14 @@ def _run_autopilot(tmp_path, monkeypatch, goal, compute_capability):
         app,
         [
             "autopilot",
-            "--model", "HuggingFaceTB/SmolLM2-135M-Instruct",
-            "--data", "ap.jsonl",
-            "--goal", goal,
-            "--output", "ap.yaml",
+            "--model",
+            "HuggingFaceTB/SmolLM2-135M-Instruct",
+            "--data",
+            "ap.jsonl",
+            "--goal",
+            goal,
+            "--output",
+            "ap.yaml",
             "--yes",
         ],
     )
@@ -68,8 +69,7 @@ def _run_autopilot(tmp_path, monkeypatch, goal, compute_capability):
 def test_panel_prints_the_liger_extra_literally(tmp_path, monkeypatch):
     plain = _run_autopilot(tmp_path, monkeypatch, "chat", 8.6)
     assert (
-        'Liger Kernel: off (liger-kernel not installed; '
-        'pip install "soup-cli[liger]" to enable)'
+        'Liger Kernel: off (liger-kernel not installed; pip install "soup-cli[liger]" to enable)'
     ) in plain
     assert (
         "Flash Attention: off (flash-attn not installed; "
@@ -136,9 +136,7 @@ class TestInstallAwareKernelFlags:
         )
 
     @pytest.mark.parametrize("goal", ["chat", "code", "classification", "tool-calling"])
-    def test_missing_packages_disable_flags_for_every_sft_goal(
-        self, tmp_path, monkeypatch, goal
-    ):
+    def test_missing_packages_disable_flags_for_every_sft_goal(self, tmp_path, monkeypatch, goal):
         config = self._build(tmp_path, monkeypatch, goal, 8.6, liger=False, flash=False)
         assert config.task == "sft"
         assert config.training.use_flash_attn is False
@@ -195,10 +193,14 @@ class TestInstallAwareKernelFlags:
             app,
             [
                 "autopilot",
-                "--model", "HuggingFaceTB/SmolLM2-135M-Instruct",
-                "--data", "ap.jsonl",
-                "--goal", "chat",
-                "--output", "ap_chat.yaml",
+                "--model",
+                "HuggingFaceTB/SmolLM2-135M-Instruct",
+                "--data",
+                "ap.jsonl",
+                "--goal",
+                "chat",
+                "--output",
+                "ap_chat.yaml",
                 "--yes",
             ],
         )
@@ -212,9 +214,7 @@ class TestInstallAwareKernelFlags:
         # asserted with a wide terminal in test_panel_prints_the_liger_extra_
         # literally above.
 
-    def test_autopilot_config_survives_train_dry_run_without_packages(
-        self, tmp_path, monkeypatch
-    ):
+    def test_autopilot_config_survives_train_dry_run_without_packages(self, tmp_path, monkeypatch):
         from soup_cli.commands import train as train_cmd
 
         self._patch_cli_hardware(monkeypatch)
@@ -239,18 +239,20 @@ class TestInstallAwareKernelFlags:
             app,
             [
                 "autopilot",
-                "--model", "HuggingFaceTB/SmolLM2-135M-Instruct",
-                "--data", "ap.jsonl",
-                "--goal", "chat",
-                "--output", "ap_chat.yaml",
+                "--model",
+                "HuggingFaceTB/SmolLM2-135M-Instruct",
+                "--data",
+                "ap.jsonl",
+                "--goal",
+                "chat",
+                "--output",
+                "ap_chat.yaml",
                 "--yes",
             ],
         )
         assert written.exit_code == 0, (written.output, repr(written.exception))
 
-        trained = runner.invoke(
-            app, ["train", "--config", "ap_chat.yaml", "--dry-run", "--yes"]
-        )
+        trained = runner.invoke(app, ["train", "--config", "ap_chat.yaml", "--dry-run", "--yes"])
         assert trained.exit_code == 0, _plain(trained.output)
         assert "Data OK" in _plain(trained.output)
 
@@ -285,9 +287,7 @@ class TestInstallAwareKernelFlags:
         )
         monkeypatch.setattr(liger_utils, "check_liger_available", lambda: False)
 
-        result = runner.invoke(
-            app, ["train", "--config", str(config_path), "--dry-run", "--yes"]
-        )
+        result = runner.invoke(app, ["train", "--config", str(config_path), "--dry-run", "--yes"])
         assert result.exit_code == 1
         plain = _plain(result.output)
         assert "liger-kernel is not installed" in plain

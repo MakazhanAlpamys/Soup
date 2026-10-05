@@ -51,8 +51,15 @@ def harness_run(monkeypatch, tmp_path):
     monkeypatch.setattr(sys, "argv", [str(path), harness.DEFAULT_MODEL, "10", "1"])
 
     state = SimpleNamespace(
-        harness=harness, artifacts=artifacts, displays=[], trackers=[], reloads=[],
-        events=event_buffer.TrainEventBuffer(), fail=None, emit_reports=True, rich_redirects=[],
+        harness=harness,
+        artifacts=artifacts,
+        displays=[],
+        trackers=[],
+        reloads=[],
+        events=event_buffer.TrainEventBuffer(),
+        fail=None,
+        emit_reports=True,
+        rich_redirects=[],
     )
     # Isolate the real SSE buffer, rather than pretending a recorder display
     # or tracker=None suppresses it: the merged bridge gates only on display.
@@ -86,11 +93,17 @@ def harness_run(monkeypatch, tmp_path):
                 f"It/sec {speed}, Tokens/sec 254.313, Trained Tokens {tokens}, Peak mem 0.497 GB\n"
             )
             if state.emit_reports:
-                kwargs["training_callback"].on_train_loss_report({
-                    "iteration": step, "train_loss": loss, "learning_rate": 1e-4,
-                    "iterations_per_second": speed, "tokens_per_second": 254.313,
-                    "trained_tokens": tokens, "peak_memory": 0.497,
-                })
+                kwargs["training_callback"].on_train_loss_report(
+                    {
+                        "iteration": step,
+                        "train_loss": loss,
+                        "learning_rate": 1e-4,
+                        "iterations_per_second": speed,
+                        "tokens_per_second": 254.313,
+                        "trained_tokens": tokens,
+                        "peak_memory": 0.497,
+                    }
+                )
             if state.fail:
                 raise state.fail
         Path(kwargs["args"].adapter_file).write_bytes(b"fake adapter")
@@ -105,7 +118,11 @@ def harness_run(monkeypatch, tmp_path):
     [(None, False), *((width, True) for width in range(20, 201)), (80, None)],
 )
 def test_harness_drives_rich_and_persists_metrics_without_losing_throughput(
-    harness_run, capsys, monkeypatch, terminal_width, force_terminal,
+    harness_run,
+    capsys,
+    monkeypatch,
+    terminal_width,
+    force_terminal,
 ):
     state = harness_run
     if terminal_width is not None:
@@ -114,18 +131,20 @@ def test_harness_drives_rich_and_persists_metrics_without_losing_throughput(
         if force_terminal is None:
             monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
         monkeypatch.setattr(
-            display_module, "console", Console(force_terminal=force_terminal, width=terminal_width),
+            display_module,
+            "console",
+            Console(force_terminal=force_terminal, width=terminal_width),
         )
     assert state.harness.main() == 0
     assert state.rich_redirects == [terminal_width is not None] * 2
 
-    display, = state.displays
+    (display,) = state.displays
     assert (display.current_step, display.total_steps) == (10, 10)
     assert display.loss == pytest.approx(1.976)
     assert display.speed == pytest.approx(5.481)  # it/s, not the 254.313 tok/s
     assert display._live is None
 
-    tracker, = state.trackers
+    (tracker,) = state.trackers
     assert tracker.db_path == state.artifacts / "experiments.db"
     assert tracker._conn is None
     with sqlite3.connect(tracker.db_path) as conn:
@@ -143,9 +162,14 @@ def test_harness_drives_rich_and_persists_metrics_without_losing_throughput(
     assert "454 trained tokens / 20.0s, whole-run average" in output
     # ansi-ok: harness bridge formatted text, not CLI console
     assert "22.7 tok/s" in output
-    assert state.reloads == [((state.harness.DEFAULT_MODEL,), {
-        "adapter_path": str(state.artifacts / "out"),
-    })]
+    assert state.reloads == [
+        (
+            (state.harness.DEFAULT_MODEL,),
+            {
+                "adapter_path": str(state.artifacts / "out"),
+            },
+        )
+    ]
 
 
 @pytest.mark.parametrize("failure", [RuntimeError("training failed"), KeyboardInterrupt()])
@@ -155,8 +179,8 @@ def test_harness_closes_display_and_records_failed_run(harness_run, failure):
     with pytest.raises(type(failure)):
         state.harness.main()
 
-    display, = state.displays
-    tracker, = state.trackers
+    (display,) = state.displays
+    (tracker,) = state.trackers
     assert display._live is None
     assert tracker._conn is None
     with sqlite3.connect(tracker.db_path) as conn:
@@ -169,7 +193,7 @@ def test_harness_refuses_success_when_the_bridge_receives_no_reports(harness_run
     state.emit_reports = False
     with pytest.raises(RuntimeError, match="bridge"):
         state.harness.main()
-    tracker, = state.trackers
+    (tracker,) = state.trackers
     assert tracker._conn is None
     with sqlite3.connect(tracker.db_path) as conn:
         assert conn.execute("SELECT status FROM runs").fetchone() == ("failed",)
@@ -177,7 +201,9 @@ def test_harness_refuses_success_when_the_bridge_receives_no_reports(harness_run
 
 @pytest.mark.parametrize("sink", ["display", "tracker"])
 def test_harness_refuses_success_when_one_bridge_sink_is_disconnected(
-    harness_run, monkeypatch, sink,
+    harness_run,
+    monkeypatch,
+    sink,
 ):
     if sink == "display":
         monkeypatch.setattr(harness_run.display_class, "update", lambda *a, **k: None)

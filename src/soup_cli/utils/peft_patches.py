@@ -82,13 +82,12 @@ def apply_gemma4_clippable_patch(model: Any) -> int:
             replacement.weight.data.copy_(child.weight.data)
             if bias and replacement.bias is not None and child.bias is not None:
                 replacement.bias.data.copy_(child.bias.data)
-            replacement = replacement.to(
-                dtype=child.weight.dtype, device=child.weight.device
-            )
+            replacement = replacement.to(dtype=child.weight.dtype, device=child.weight.device)
         except Exception as exc:  # noqa: BLE001 — fall back to random init w/ log
             logger.debug(
                 "Failed to copy ClippableLinear weights at %s: %s; using fresh init",
-                child_name, exc,
+                child_name,
+                exc,
             )
         setattr(parent, child_name, replacement)
         swapped += 1

@@ -39,12 +39,8 @@ class TestMixExtra:
     def test_pyproject_lists_mix_extra(self):
         body = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
         # ``mix`` extra MUST be declared and bundle scikit-optimize.
-        assert re.search(r"^mix\s*=\s*\[", body, re.MULTILINE), (
-            "[mix] extra missing from pyproject"
-        )
-        mix_block = re.search(
-            r"^mix\s*=\s*\[(.*?)\]", body, re.MULTILINE | re.DOTALL
-        )
+        assert re.search(r"^mix\s*=\s*\[", body, re.MULTILINE), "[mix] extra missing from pyproject"
+        mix_block = re.search(r"^mix\s*=\s*\[(.*?)\]", body, re.MULTILINE | re.DOTALL)
         assert mix_block is not None
         assert "scikit-optimize" in mix_block.group(1)
 
@@ -73,9 +69,7 @@ class TestDataProExtra:
         assert re.search(r"^data-pro\s*=\s*\[", body, re.MULTILINE), (
             "[data-pro] extra missing from pyproject"
         )
-        block = re.search(
-            r"^data-pro\s*=\s*\[(.*?)\]", body, re.MULTILINE | re.DOTALL
-        )
+        block = re.search(r"^data-pro\s*=\s*\[(.*?)\]", body, re.MULTILINE | re.DOTALL)
         assert block is not None
         assert "langdetect" in block.group(1)
         assert "presidio-analyzer" in block.group(1)
@@ -85,29 +79,21 @@ class TestDataProExtra:
         # any ``langdetect`` from sys.modules + blocking re-import.
         from soup_cli.utils import data_score
 
-        with patch.object(
-            data_score, "_langdetect_fast", return_value=None
-        ):
+        with patch.object(data_score, "_langdetect_fast", return_value=None):
             # Heuristic still picks 'en' on an English sentence.
-            assert data_score.detect_language(
-                "the quick brown fox jumps over the lazy dog"
-            ) == "en"
+            assert data_score.detect_language("the quick brown fox jumps over the lazy dog") == "en"
 
     def test_detect_language_uses_langdetect_when_available(self):
         from soup_cli.utils import data_score
 
         with patch.object(data_score, "_langdetect_fast", return_value="ja"):
-            assert data_score.detect_language(
-                "the quick brown fox jumps over the lazy dog"
-            ) == "ja"
+            assert data_score.detect_language("the quick brown fox jumps over the lazy dog") == "ja"
 
     def test_detect_pii_falls_back_to_regex_without_presidio(self):
         from soup_cli.utils import data_score
 
         with patch.object(data_score, "_presidio_pii", return_value=None):
-            hits = data_score.detect_pii(
-                "Email me at user@example.com or 555-867-5309"
-            )
+            hits = data_score.detect_pii("Email me at user@example.com or 555-867-5309")
             kinds = {h["kind"] for h in hits}
             assert "email" in kinds
 
@@ -115,9 +101,7 @@ class TestDataProExtra:
         from soup_cli.utils import data_score
 
         presidio_hits = [{"kind": "email", "snippet": "user@example.com"}]
-        with patch.object(
-            data_score, "_presidio_pii", return_value=presidio_hits
-        ):
+        with patch.object(data_score, "_presidio_pii", return_value=presidio_hits):
             assert data_score.detect_pii("anything") == presidio_hits
 
 
@@ -215,9 +199,7 @@ class TestHubPrefetchHelper:
     def test_hf_short_circuits_no_download(self):
         from soup_cli.utils.hubs import apply_hub_to_cli_model
 
-        model_out, base_out = apply_hub_to_cli_model(
-            "meta-llama/Llama-3.1-8B", None, "hf"
-        )
+        model_out, base_out = apply_hub_to_cli_model("meta-llama/Llama-3.1-8B", None, "hf")
         assert model_out == "meta-llama/Llama-3.1-8B"
         assert base_out is None
 
@@ -235,9 +217,7 @@ class TestHubPrefetchHelper:
         local.mkdir()
         from soup_cli.utils.hubs import apply_hub_to_cli_model
 
-        model_out, base_out = apply_hub_to_cli_model(
-            str(local), None, "modelscope"
-        )
+        model_out, base_out = apply_hub_to_cli_model(str(local), None, "modelscope")
         assert model_out == str(local)
 
     def test_non_existent_base_invokes_prefetch(self, tmp_path, monkeypatch):
@@ -274,9 +254,7 @@ class TestHubPrefetchHelper:
 
         outside = tmp_path.parent / "outside_cache"
         with pytest.raises(ValueError, match="escapes"):
-            prefetch_model_from_hub(
-                "some/repo", "modelscope", cache_root=str(outside)
-            )
+            prefetch_model_from_hub("some/repo", "modelscope", cache_root=str(outside))
 
 
 class TestCliHubFlags:
@@ -300,17 +278,13 @@ class TestCliHubFlags:
         import inspect
 
         sig = inspect.signature(target)
-        assert "hub" in sig.parameters, (
-            f"{cmd_module}.{cmd_name} missing --hub keyword"
-        )
+        assert "hub" in sig.parameters, f"{cmd_module}.{cmd_name} missing --hub keyword"
 
     def test_apply_hub_helper_imported_in_non_push_commands(self):
         # tdd-review HIGH #1: every command except push must use the
         # shared helper so a future refactor cannot silently drop it.
         for mod in ("chat", "serve", "infer", "merge", "export"):
-            src = (REPO_ROOT / f"src/soup_cli/commands/{mod}.py").read_text(
-                encoding="utf-8"
-            )
+            src = (REPO_ROOT / f"src/soup_cli/commands/{mod}.py").read_text(encoding="utf-8")
             assert "apply_hub_to_cli_model" in src, (
                 f"{mod}.py missing apply_hub_to_cli_model helper import"
             )
@@ -318,9 +292,7 @@ class TestCliHubFlags:
     def test_push_uses_upload_repo_path(self):
         # push.py does NOT call apply_hub_to_cli_model (it's an upload
         # surface, not a download). It must call upload_repo + validate_hub_name.
-        src = (REPO_ROOT / "src/soup_cli/commands/push.py").read_text(
-            encoding="utf-8"
-        )
+        src = (REPO_ROOT / "src/soup_cli/commands/push.py").read_text(encoding="utf-8")
         assert "upload_repo" in src
         assert "validate_hub_name" in src
 
@@ -337,9 +309,7 @@ class TestDataDownloadNonHfLive:
         from soup_cli.commands.data import app
 
         # No openmind_hub installed; expect ImportError advisory.
-        result = CliRunner().invoke(
-            app, ["download", "dummy/ds", "--hub", "modelers"]
-        )
+        result = CliRunner().invoke(app, ["download", "dummy/ds", "--hub", "modelers"])
         # exit_code 1 = friendly ImportError advisory; 2 = validation reject.
         assert result.exit_code in (1, 2)
         out = _strip_ansi(result.output)
@@ -354,9 +324,7 @@ class TestDataDownloadNonHfLive:
 
         if "modelscope" in sys.modules:
             pytest.skip("modelscope is installed; live branch tested separately")
-        result = CliRunner().invoke(
-            app, ["download", "dummy/ds", "--hub", "modelscope"]
-        )
+        result = CliRunner().invoke(app, ["download", "dummy/ds", "--hub", "modelscope"])
         assert result.exit_code in (1, 2)
         out = _strip_ansi(result.output)
         # Friendly advisory mentions the SDK or `pip install`.
@@ -366,9 +334,7 @@ class TestDataDownloadNonHfLive:
         # tdd-review LOW #9: a future regression of the advisory text
         # "wait for v0.53.9" must be caught at source-grep time, since
         # v0.53.11 lifted that advisory to live SDK dispatch.
-        src = (REPO_ROOT / "src/soup_cli/commands/data.py").read_text(
-            encoding="utf-8"
-        )
+        src = (REPO_ROOT / "src/soup_cli/commands/data.py").read_text(encoding="utf-8")
         assert "wait for v0.53.9" not in src
 
 
@@ -379,9 +345,7 @@ class TestDataDownloadNonHfLive:
 
 class TestWebUiToolOutputsPanel:
     def test_index_html_has_tools_nav_entry(self):
-        html = (REPO_ROOT / "src/soup_cli/ui/static/index.html").read_text(
-            encoding="utf-8"
-        )
+        html = (REPO_ROOT / "src/soup_cli/ui/static/index.html").read_text(encoding="utf-8")
         assert 'data-page="tools"' in html
         assert "Tool Outputs" in html
         assert 'id="page-tools"' in html

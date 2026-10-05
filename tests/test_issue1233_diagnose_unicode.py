@@ -184,17 +184,13 @@ class TestModeCollapseUnicode:
 
 class TestMemorizationUnicode:
     def test_russian_no_memorization(self) -> None:
-        rows = [
-            {"text": "быстрая коричневая лиса прыгает через забор на ферме"}
-        ]
+        rows = [{"text": "быстрая коричневая лиса прыгает через забор на ферме"}]
         gen = lambda p: "совершенно другой несвязанный ответ ассистента"  # noqa: E731
         score = score_memorization(rows, gen, prefix_fraction=0.4)
         assert score.verdict == "OK"
 
     def test_russian_full_memorization(self) -> None:
-        rows = [
-            {"text": "быстрая коричневая лиса прыгает через забор на ферме"}
-        ]
+        rows = [{"text": "быстрая коричневая лиса прыгает через забор на ферме"}]
         # Generator echoes suffix verbatim
         gen = lambda p: "прыгает через забор на ферме"  # noqa: E731
         score = score_memorization(rows, gen, prefix_fraction=0.4, echo_threshold=0.5)
@@ -213,9 +209,7 @@ class TestMemorizationUnicode:
         assert score.verdict == "MAJOR"
 
     def test_tokenizer_aware_greek_does_not_falsely_flag_unrelated(self) -> None:
-        rows = [
-            {"text": "Η γρήγορη καφέ αλεπού πηδά πάνω από σαράντα δύο σκυλιά"}
-        ]
+        rows = [{"text": "Η γρήγορη καφέ αλεπού πηδά πάνω από σαράντα δύο σκυλιά"}]
         # Completely unrelated Greek sentence
         gen = lambda p: "Ο καιρός σήμερα στην Αθήνα είναι πολύ καλός και ηλιόλουστος"  # noqa: E731
         try:
@@ -227,9 +221,7 @@ class TestMemorizationUnicode:
         assert score.verdict == "OK"
 
     def test_tokenizer_aware_greek_catches_echo(self) -> None:
-        rows = [
-            {"text": "Η γρήγορη καφέ αλεπού πηδά πάνω από σαράντα δύο σκυλιά στο χωράφι"}
-        ]
+        rows = [{"text": "Η γρήγορη καφέ αλεπού πηδά πάνω από σαράντα δύο σκυλιά στο χωράφι"}]
         # Generator echoes Greek suffix
         gen = lambda p: "πηδά πάνω από σαράντα δύο σκυλιά στο χωράφι"  # noqa: E731
         try:
@@ -394,6 +386,6 @@ def test_probes_discriminate_in_both_directions(script: str) -> None:
     unrelated = score_memorization([{"text": row}], lambda prefix: answers[3])
     echo = score_memorization(
         [{"text": row}],
-        lambda prefix: row[len(prefix):].strip() if row.startswith(prefix) else row,
+        lambda prefix: row[len(prefix) :].strip() if row.startswith(prefix) else row,
     )
     assert (unrelated.verdict, echo.verdict) == ("OK", "MAJOR"), (unrelated, echo)

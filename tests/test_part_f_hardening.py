@@ -118,8 +118,7 @@ class TestCodeExecIsolationStrategy:
         monkeypatch.setattr(sys, "platform", "linux")
         # Inject a fake os.unshare so the namespaces branch is reachable
         # regardless of the host kernel.
-        monkeypatch.setattr(os, "unshare", lambda *_a, **_k: None,
-                            raising=False)
+        monkeypatch.setattr(os, "unshare", lambda *_a, **_k: None, raising=False)
         if hasattr(rewards, "_ISOLATION_STRATEGY_CACHE"):
             rewards._ISOLATION_STRATEGY_CACHE = None
         strategy = rewards._compute_isolation_strategy()
@@ -135,9 +134,11 @@ class TestCodeExecIsolationStrategy:
 
         # Force fresh evaluation
         monkeypatch.setattr(sys, "platform", "darwin")
-        monkeypatch.setattr(shutil_mod, "which", lambda name: (
-            "/usr/bin/sandbox-exec" if name == "sandbox-exec" else None
-        ))
+        monkeypatch.setattr(
+            shutil_mod,
+            "which",
+            lambda name: "/usr/bin/sandbox-exec" if name == "sandbox-exec" else None,
+        )
         # Bypass any module-level cache
         if hasattr(rewards, "_ISOLATION_STRATEGY_CACHE"):
             rewards._ISOLATION_STRATEGY_CACHE = None

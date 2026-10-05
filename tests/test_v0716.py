@@ -145,9 +145,7 @@ class TestRunBuild:
         assert model_res.rows_out == 2
         assert model_res.transform_calls == 2
 
-    def test_drop_empty_reduces_rows(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_drop_empty_reduces_rows(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from soup_cli.utils import build_dag
 
         monkeypatch.chdir(tmp_path)
@@ -284,9 +282,7 @@ class TestRunBuild:
                 {"id": "3", "text": "c"},
             ],
         )
-        result = build_dag.run_build(
-            plan, output_dir="out", transforms={"custom": counting}
-        )
+        result = build_dag.run_build(plan, output_dir="out", transforms={"custom": counting})
         # only changed (2) + added (3) re-transformed; unchanged (1) carried over
         assert sorted(calls) == ["2", "3"]
         diff = result.models[0].diff
@@ -385,9 +381,7 @@ class TestRunBuild:
         with pytest.raises(ValueError):
             build_dag.run_build(plan, output_dir=str(tmp_path / "elsewhere"))
 
-    def test_missing_source_file(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_missing_source_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from soup_cli.utils import build_dag
 
         monkeypatch.chdir(tmp_path)
@@ -443,9 +437,7 @@ class TestRunBuild:
 
 
 class TestSoupBuildCliLive:
-    def test_live_run_writes_output(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_live_run_writes_output(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.chdir(tmp_path)
         _write_jsonl(tmp_path / "data" / "raw.jsonl", [{"id": "1", "text": "Hi"}])
         _write(
@@ -461,9 +453,7 @@ class TestSoupBuildCliLive:
         assert result.exit_code == 0, (result.output, repr(result.exception))
         assert (tmp_path / "out" / "lc.jsonl").is_file()
 
-    def test_dry_run_still_works(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_dry_run_still_works(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.chdir(tmp_path)
         _write(
             tmp_path / "build.yaml",
@@ -561,9 +551,7 @@ class TestMagpieHarvest:
     def test_clean_cuts_at_stop_marker(self) -> None:
         from soup_cli.utils import magpie
 
-        out = magpie._clean_generation(
-            "  Hello there<|im_end|>extra junk", ["<|im_end|>"]
-        )
+        out = magpie._clean_generation("  Hello there<|im_end|>extra junk", ["<|im_end|>"])
         assert out == "Hello there"
 
     def test_harvest_instruction(self) -> None:
@@ -585,10 +573,13 @@ class TestMagpieQualityFilter:
     def test_keeps_clean(self) -> None:
         from soup_cli.utils import magpie
 
-        assert magpie.default_quality_fn(
-            "Explain how photosynthesis converts sunlight into chemical energy.",
-            "Plants use chlorophyll to absorb light and produce glucose and oxygen.",
-        ) is True
+        assert (
+            magpie.default_quality_fn(
+                "Explain how photosynthesis converts sunlight into chemical energy.",
+                "Plants use chlorophyll to absorb light and produce glucose and oxygen.",
+            )
+            is True
+        )
 
     def test_drops_empty_response(self) -> None:
         from soup_cli.utils import magpie
@@ -609,20 +600,14 @@ class TestRunMagpie:
         defaults.update(kw)
         return magpie.MagpieConfig(**defaults)
 
-    def test_produces_target_rows(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_produces_target_rows(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from soup_cli.utils import magpie
 
         monkeypatch.chdir(tmp_path)
         cfg = self._cfg(target_rows=3)
-        result = magpie.run_magpie(
-            cfg, output_path="out.jsonl", generate_fn=_varied_generate_fn()
-        )
+        result = magpie.run_magpie(cfg, output_path="out.jsonl", generate_fn=_varied_generate_fn())
         rows = [
-            json.loads(line)
-            for line in (tmp_path / "out.jsonl").read_text().splitlines()
-            if line
+            json.loads(line) for line in (tmp_path / "out.jsonl").read_text().splitlines() if line
         ]
         assert len(rows) == 3
         assert rows[0]["messages"][0]["role"] == "user"
@@ -642,9 +627,7 @@ class TestRunMagpie:
         assert result.rows_kept == 1
         assert result.duplicates >= 1
 
-    def test_quality_filter_drops(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_quality_filter_drops(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from soup_cli.utils import magpie
 
         monkeypatch.chdir(tmp_path)
@@ -701,9 +684,7 @@ class TestRunMagpie:
             )
 
     @pytest.mark.requires_symlink
-    def test_output_symlink_rejected(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_output_symlink_rejected(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         import os
 
         from soup_cli.utils import magpie
@@ -713,9 +694,7 @@ class TestRunMagpie:
         os.symlink(tmp_path / "real" / "f.jsonl", tmp_path / "out.jsonl")
         cfg = self._cfg()
         with pytest.raises(ValueError):
-            magpie.run_magpie(
-                cfg, output_path="out.jsonl", generate_fn=_varied_generate_fn()
-            )
+            magpie.run_magpie(cfg, output_path="out.jsonl", generate_fn=_varied_generate_fn())
 
     def test_result_frozen(self) -> None:
         import dataclasses
@@ -742,9 +721,7 @@ class TestMakeMagpieGenerateFn:
         with pytest.raises(ValueError):
             magpie.make_magpie_generate_fn("openai", model="gpt")
 
-    def test_ollama_generation_mocked(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_ollama_generation_mocked(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from soup_cli.utils import magpie
 
         class FakeResp:
@@ -778,9 +755,7 @@ class TestMakeMagpieGenerateFn:
 
 
 class TestMagpieCliLive:
-    def test_live_run_writes_output(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_live_run_writes_output(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from soup_cli.utils import magpie
 
         monkeypatch.chdir(tmp_path)
@@ -808,9 +783,7 @@ class TestMagpieCliLive:
         assert (tmp_path / "out.jsonl").is_file()
         assert "0.69.1" not in result.output
 
-    def test_live_requires_output(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_live_requires_output(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.chdir(tmp_path)
         runner = CliRunner()
         result = runner.invoke(
@@ -828,9 +801,7 @@ class TestMagpieCliLive:
         )
         assert result.exit_code == 2
 
-    def test_plan_only_still_works(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_plan_only_still_works(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.chdir(tmp_path)
         runner = CliRunner()
         result = runner.invoke(
@@ -910,9 +881,7 @@ class TestSplitPrefixTokenizer:
         from soup_cli.utils.diagnose.memorization import split_prefix
 
         # char tokenizer: 11 chars, fraction 0.5 -> cut at 5 chars.
-        prefix, suffix = split_prefix(
-            "hello world", fraction=0.5, tokenizer=_CharTokenizer()
-        )
+        prefix, suffix = split_prefix("hello world", fraction=0.5, tokenizer=_CharTokenizer())
         assert prefix == "hello"
         assert suffix == " world"
 
@@ -934,14 +903,13 @@ class TestScoreMemorizationTokenizer:
         from soup_cli.utils.diagnose.memorization import score_memorization
 
         rows = [{"text": "alpha beta gamma delta epsilon"}]
+
         # adapter echoes the held-out suffix verbatim -> high overlap.
         def echo_gen(prefix: str) -> str:
             # return the canonical suffix so subword overlap is ~1.0
             return "beta gamma delta epsilon"
 
-        score = score_memorization(
-            rows, echo_gen, prefix_fraction=0.2, tokenizer=_CharTokenizer()
-        )
+        score = score_memorization(rows, echo_gen, prefix_fraction=0.2, tokenizer=_CharTokenizer())
         assert score.mode == "memorization"
         assert score.score < 1.0  # echo detected
         assert score.verdict in {"MINOR", "MAJOR"}
@@ -978,9 +946,7 @@ class TestScoreMemorizationTokenizer:
 
         monkeypatch.setattr(memorization, "resolve_tokenizer", counting)
         rows = [{"text": "alpha beta gamma delta"} for _ in range(3)]
-        memorization.score_memorization(
-            rows, lambda p: "x", tokenizer=_CharTokenizer()
-        )
+        memorization.score_memorization(rows, lambda p: "x", tokenizer=_CharTokenizer())
         assert calls["n"] == 1  # resolved once, not per-row
 
 
@@ -999,9 +965,7 @@ def _response_matrix_rows() -> list:
     rows = []
     for j in range(6):
         rows.append({"respondent_id": f"r{j}", "item_id": "const", "correct": True})
-        rows.append(
-            {"respondent_id": f"r{j}", "item_id": "split", "correct": j >= 3}
-        )
+        rows.append({"respondent_id": f"r{j}", "item_id": "split", "correct": j >= 3})
         rows.append({"respondent_id": f"r{j}", "item_id": "easy", "correct": j >= 1})
     return rows
 
@@ -1142,9 +1106,7 @@ class TestFitIrt:
 class TestIrtSubsetCliModels:
     def _write_responses(self, path: Path) -> Path:
         rows = _response_matrix_rows()
-        path.write_text(
-            "\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8"
-        )
+        path.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
         return path
 
     def test_model_2pl(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1173,10 +1135,7 @@ class TestIrtSubsetCliModels:
         # 1pl path stays {item_id, correct} (no respondent needed).
         monkeypatch.chdir(tmp_path)
         (tmp_path / "resp.jsonl").write_text(
-            "\n".join(
-                json.dumps({"item_id": f"q{i}", "correct": i % 2 == 0})
-                for i in range(6)
-            )
+            "\n".join(json.dumps({"item_id": f"q{i}", "correct": i % 2 == 0}) for i in range(6))
             + "\n",
             encoding="utf-8",
         )
@@ -1184,9 +1143,7 @@ class TestIrtSubsetCliModels:
         result = runner.invoke(app, ["eval", "irt-subset", "resp.jsonl"])
         assert result.exit_code == 0, result.output
 
-    def test_unknown_model_exit_2(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_unknown_model_exit_2(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.chdir(tmp_path)
         self._write_responses(tmp_path / "resp.jsonl")
         runner = CliRunner()
@@ -1210,9 +1167,7 @@ class TestAugmentProviderFix:
         prov = _load_augment_provider("ollama", 60, model="qwen2.5:0.5b")
         assert hasattr(prov, "generate")
 
-    def test_anthropic_provider_constructs(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_anthropic_provider_constructs(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from soup_cli.commands.data import _load_augment_provider
 
         monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
@@ -1279,9 +1234,7 @@ class TestValidateBuildSource:
         (tmp_path / "f.jsonl").write_text("{}\n", encoding="utf-8")
         assert build_dag.validate_build_source("f.jsonl") == "f.jsonl"
 
-    def test_outside_cwd_rejected(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_outside_cwd_rejected(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from soup_cli.utils import build_dag
 
         work = tmp_path / "work"
@@ -1297,9 +1250,7 @@ class TestValidateBuildSource:
             build_dag.validate_build_source(123)  # type: ignore[arg-type]
 
     @pytest.mark.requires_symlink
-    def test_symlink_rejected(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_symlink_rejected(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         import os
 
         from soup_cli.utils import build_dag
@@ -1534,10 +1485,7 @@ class TestMagpieReviewFixes:
             logger.removeHandler(handler)
         assert result.rows_kept == 1  # kept despite the crash
         # Surfaced at WARNING (not DEBUG) — the code-review M3 contract.
-        assert any(
-            lvl == logging.WARNING and "quality_fn raised" in msg
-            for lvl, msg in captured
-        )
+        assert any(lvl == logging.WARNING and "quality_fn raised" in msg for lvl, msg in captured)
 
     @pytest.mark.parametrize(
         "kwargs",
@@ -1561,9 +1509,7 @@ class TestMagpieReviewFixes:
         with pytest.raises((TypeError, ValueError)):
             magpie.make_magpie_generate_fn("ollama", **base)
 
-    def test_ollama_non_200_returns_empty(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_ollama_non_200_returns_empty(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from soup_cli.utils import magpie
 
         class FakeResp:
@@ -1579,9 +1525,7 @@ class TestMagpieReviewFixes:
         gen = magpie.make_magpie_generate_fn("ollama", model="m")
         assert gen("prefix") == ""
 
-    def test_ollama_parse_failure_returns_empty(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_ollama_parse_failure_returns_empty(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from soup_cli.utils import magpie
 
         class FakeResp:
@@ -1610,9 +1554,7 @@ class TestMagpieReviewFixes:
 
         # 0.0.0.0 is bind-any, not loopback (v0.71.6 #232 hardening).
         with pytest.raises(ValueError):
-            magpie.make_magpie_generate_fn(
-                "ollama", model="m", base_url="http://0.0.0.0:11434"
-            )
+            magpie.make_magpie_generate_fn("ollama", model="m", base_url="http://0.0.0.0:11434")
 
 
 class TestIrtReviewFixes:
@@ -1622,9 +1564,7 @@ class TestIrtReviewFixes:
         rows = _response_matrix_rows()
         a = irt.fit_irt(rows, model="3pl")
         b = irt.fit_irt(rows, model="3pl")
-        assert [
-            (p.item_id, p.difficulty, p.discrimination, p.guessing, p.info) for p in a
-        ] == [
+        assert [(p.item_id, p.difficulty, p.discrimination, p.guessing, p.info) for p in a] == [
             (p.item_id, p.difficulty, p.discrimination, p.guessing, p.info) for p in b
         ]
 
@@ -1662,9 +1602,7 @@ class TestAugmentProviderReviewFixes:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.chdir(tmp_path)
-        (tmp_path / "in.jsonl").write_text(
-            '{"instruction":"q","output":"a"}\n', encoding="utf-8"
-        )
+        (tmp_path / "in.jsonl").write_text('{"instruction":"q","output":"a"}\n', encoding="utf-8")
         runner = CliRunner()
         result = runner.invoke(
             app,

@@ -32,6 +32,7 @@ Public surface:
 - ``synthetic_probe_weights(base, hidden_dim, *, salt)`` → offline fallback vector
 - ``run_linear_probe(activations, *, kind, base, w, threshold, minor, major)``
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -64,9 +65,7 @@ def _as_2d(value: Any, field: str) -> Any:
     if arr.shape[0] > _MAX_TOKENS:
         raise ValueError(f"{field} has too many rows ({arr.shape[0]})")
     if arr.shape[1] <= 0 or arr.shape[1] > _MAX_HIDDEN_DIM:
-        raise ValueError(
-            f"{field} hidden dim must be in (0, {_MAX_HIDDEN_DIM}]"
-        )
+        raise ValueError(f"{field} hidden dim must be in (0, {_MAX_HIDDEN_DIM}]")
     if not np.all(np.isfinite(arr)):
         raise ValueError(f"{field} must be finite")
     return arr
@@ -96,17 +95,14 @@ def compute_contrast_probe(
     neg = _as_2d(negative, "negative")
     if pos.shape[1] != neg.shape[1]:
         raise ValueError(
-            f"hidden-dim mismatch: positive[{pos.shape[1]}] vs "
-            f"negative[{neg.shape[1]}]"
+            f"hidden-dim mismatch: positive[{pos.shape[1]}] vs negative[{neg.shape[1]}]"
         )
     pos_mean = pos.mean(axis=0)
     neg_mean = neg.mean(axis=0)
     direction = pos_mean - neg_mean
     norm = float(np.linalg.norm(direction))
     if norm <= 0.0 or not math.isfinite(norm):
-        raise ValueError(
-            "degenerate contrast probe (positive and negative means coincide)"
-        )
+        raise ValueError("degenerate contrast probe (positive and negative means coincide)")
     w = (direction / norm).astype(np.float32)
     proj_pos = float(pos_mean @ w)
     proj_neg = float(neg_mean @ w)
@@ -151,9 +147,7 @@ def apply_linear_probe(
     if vec.ndim != 1:
         raise ValueError(f"w must be 1D, got {vec.shape}")
     if acts.shape[1] != vec.shape[0]:
-        raise ValueError(
-            f"shape mismatch: activations[{acts.shape}] @ w[{vec.shape}]"
-        )
+        raise ValueError(f"shape mismatch: activations[{acts.shape}] @ w[{vec.shape}]")
     if acts.shape[0] > _MAX_TOKENS:
         raise ValueError(f"too many tokens ({acts.shape[0]})")
     if vec.shape[0] > _MAX_HIDDEN_DIM:
@@ -236,9 +230,7 @@ class ProbeSpec:
             raise TypeError("hidden_dim must be int")
         if self.hidden_dim <= 0 or self.hidden_dim > _MAX_HIDDEN_DIM:
             raise ValueError(f"hidden_dim must be in (0, {_MAX_HIDDEN_DIM}]")
-        if isinstance(self.threshold, bool) or not isinstance(
-            self.threshold, (int, float)
-        ):
+        if isinstance(self.threshold, bool) or not isinstance(self.threshold, (int, float)):
             raise TypeError("threshold must be float")
         if not math.isfinite(float(self.threshold)):
             raise ValueError("threshold must be finite")
@@ -364,9 +356,7 @@ def validate_bundled_base(name: object, bundled: "Mapping[str, ProbeSpec]") -> s
     for known in bundled:
         if known.lower() == lower:
             return known
-    raise ValueError(
-        f"no bundled probe for base {name!r} (known: {sorted(bundled)})"
-    )
+    raise ValueError(f"no bundled probe for base {name!r} (known: {sorted(bundled)})")
 
 
 def run_bundled_probe(
@@ -408,8 +398,7 @@ def run_bundled_probe(
             raise ValueError("weights[0] must be a 1D vector")
         if acts.shape[1] != w.shape[0]:
             raise ValueError(
-                f"hidden_dim mismatch: activations[{acts.shape[1]}] vs "
-                f"probe[{w.shape[0]}]"
+                f"hidden_dim mismatch: activations[{acts.shape[1]}] vs probe[{w.shape[0]}]"
             )
         if isinstance(threshold, bool) or not isinstance(threshold, (int, float)):
             raise TypeError("weights[1] (threshold) must be float")
@@ -421,16 +410,20 @@ def run_bundled_probe(
         spec = bundled[canonical]
         if acts.shape[1] != spec.hidden_dim:
             raise ValueError(
-                f"hidden_dim mismatch: activations[{acts.shape[1]}] vs "
-                f"probe[{spec.hidden_dim}]"
+                f"hidden_dim mismatch: activations[{acts.shape[1]}] vs probe[{spec.hidden_dim}]"
             )
         result_base = canonical
         w = synthetic_probe_weights(canonical, spec.hidden_dim, salt=salt)
         thr = spec.threshold
 
     return run_linear_probe(
-        acts, kind=kind, base=result_base, w=w, threshold=thr,
-        minor=minor, major=major,
+        acts,
+        kind=kind,
+        base=result_base,
+        w=w,
+        threshold=thr,
+        minor=minor,
+        major=major,
     )
 
 
@@ -459,9 +452,7 @@ def load_probe_weights(path: str) -> Tuple[Any, float]:
     try:
         fd = os.open(path, os.O_RDONLY | no_follow)
     except FileNotFoundError as exc:
-        raise FileNotFoundError(
-            f"probe weights not found: {os.path.basename(path)}"
-        ) from exc
+        raise FileNotFoundError(f"probe weights not found: {os.path.basename(path)}") from exc
     except OSError as exc:
         raise ValueError(
             f"probe weights cannot be opened (symlink?): {type(exc).__name__}"
@@ -470,9 +461,7 @@ def load_probe_weights(path: str) -> Tuple[Any, float]:
     real = os.path.realpath(path)
     # DoS cap before any read (mirrors the CLI evidence loader's 16 MiB cap).
     if os.path.getsize(real) > _MAX_WEIGHTS_BYTES:
-        raise ValueError(
-            f"probe weights file exceeds {_MAX_WEIGHTS_BYTES} bytes"
-        )
+        raise ValueError(f"probe weights file exceeds {_MAX_WEIGHTS_BYTES} bytes")
 
     import numpy as np
 
@@ -491,9 +480,7 @@ def load_probe_weights(path: str) -> Tuple[Any, float]:
         try:
             from safetensors import safe_open
         except ImportError as exc:  # pragma: no cover - dep present in CI
-            raise RuntimeError(
-                "safetensors package required; pip install safetensors"
-            ) from exc
+            raise RuntimeError("safetensors package required; pip install safetensors") from exc
         with safe_open(real, framework="numpy") as handle:
             keys = list(handle.keys())
             if "W_probe" not in keys:
@@ -502,17 +489,13 @@ def load_probe_weights(path: str) -> Tuple[Any, float]:
             if "threshold" in keys:
                 threshold = float(handle.get_tensor("threshold").reshape(-1)[0])
     else:
-        raise ValueError(
-            "probe weights must be .npz / .npy / .safetensors"
-        )
+        raise ValueError("probe weights must be .npz / .npy / .safetensors")
 
     w = np.asarray(w, dtype=np.float32)
     if w.ndim != 1:
         raise ValueError(f"probe weights 'w' must be 1D, got shape {w.shape}")
     if w.shape[0] <= 0 or w.shape[0] > _MAX_HIDDEN_DIM:
-        raise ValueError(
-            f"probe weights hidden dim must be in (0, {_MAX_HIDDEN_DIM}]"
-        )
+        raise ValueError(f"probe weights hidden dim must be in (0, {_MAX_HIDDEN_DIM}]")
     if not np.all(np.isfinite(w)):
         raise ValueError("probe weights must be finite")
     if not math.isfinite(threshold):

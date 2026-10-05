@@ -18,6 +18,7 @@ import pytest
 # Helpers — create a temporary module on the fly for dotted-path tests.
 # ---------------------------------------------------------------------------
 
+
 def _make_transform_module(
     name: str,
     func_name: str,
@@ -37,22 +38,30 @@ def _make_transform_module(
     """
     mod = types.ModuleType(name)
     if kind == "callable":
+
         def _fn(row, config):
             return dict(row)
+
         setattr(mod, func_name, _fn)
     elif kind == "non_callable":
         setattr(mod, func_name, 42)
     elif kind == "partial":
+
         def _fn_one(row):
             return dict(row)
+
         setattr(mod, func_name, _fn_one)
     elif kind == "kwonly":
+
         def _fn_kwonly(*, row, config):
             return dict(row)
+
         setattr(mod, func_name, _fn_kwonly)
     elif kind == "three_args":
+
         def _fn_three(row, config, extra):
             return dict(row)
+
         setattr(mod, func_name, _fn_three)
     mod.__file__ = f"<test_{name}>"
     sys.modules[name] = mod
@@ -269,9 +278,7 @@ class TestResolveTransformExtraShadowsManifest:
 
         # Second call with extra: the extra entry shadows the dotted path.
         custom = lambda row, config: {"from_extra": True}  # noqa: E731
-        fn_from_extra = resolve_transform(
-            dotted, extra={dotted: custom}
-        )
+        fn_from_extra = resolve_transform(dotted, extra={dotted: custom})
         assert fn_from_extra is custom
 
     def test_builtin_overridden_by_extra(self):

@@ -617,10 +617,7 @@ class CaptureToken(_FrozenArtifact):
             raise ValueError("selected_token_ids must equal top-k union forced ids")
         if len(self.teacher_log_probabilities) != len(self.selected_token_ids):
             raise ValueError("one teacher log-probability is required per selected token")
-        if any(
-            not math.isfinite(value) or value > 0.0
-            for value in self.teacher_log_probabilities
-        ):
+        if any(not math.isfinite(value) or value > 0.0 for value in self.teacher_log_probabilities):
             raise ValueError("teacher_log_probabilities must be finite and <= 0")
         selected_mass = math.fsum(math.exp(value) for value in self.teacher_log_probabilities)
         if len(self.selected_token_ids) < self.vocab_size and self.tail_mass <= 0.0:
@@ -775,8 +772,7 @@ def coarse_tail_forward_kl(
         ("student_log_probabilities", student_log_probabilities),
     ):
         if any(
-            isinstance(value, bool) or not math.isfinite(value) or value > 0.0
-            for value in values
+            isinstance(value, bool) or not math.isfinite(value) or value > 0.0 for value in values
         ):
             raise ValueError(f"{field} must contain finite log-probabilities <= 0")
     for field, tail in (

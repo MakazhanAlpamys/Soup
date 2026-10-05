@@ -189,7 +189,8 @@ class TestSymlinkRefusedAtReadTime:
 
     def _disable_the_lstat_guard(self, monkeypatch):
         monkeypatch.setattr(
-            execution_mod, "enforce_under_cwd_and_no_symlink",
+            execution_mod,
+            "enforce_under_cwd_and_no_symlink",
             lambda path, field: None,
         )
 
@@ -220,15 +221,11 @@ class TestSymlinkRefusedAtReadTime:
         os.symlink(str(cwd / "real.bin"), str(cwd / "tree" / "member.bin"))
         self._disable_the_lstat_guard(monkeypatch)
 
-        with pytest.raises(
-            ExecutionError, match="non-regular file|unavailable for execution"
-        ):
+        with pytest.raises(ExecutionError, match="non-regular file|unavailable for execution"):
             digest_file("tree", "model")
 
     @pytest.mark.requires_symlink
-    def test_single_file_symlink_is_refused_before_the_target_is_read(
-        self, cwd, monkeypatch
-    ):
+    def test_single_file_symlink_is_refused_before_the_target_is_read(self, cwd, monkeypatch):
         """The refusal must come from the open, with no byte of the target read.
 
         ``digest_file`` used to open ``os.path.realpath(path)`` — a path with
@@ -268,7 +265,8 @@ class TestSymlinkRefusedAtReadTime:
             f"the open must fail BECAUSE the path is a symlink, got {only['error']!r}"
         )
         descriptors = [
-            attempt for attempt in raw_opens
+            attempt
+            for attempt in raw_opens
             if attempt["fd"] is not None
             and os.path.basename(attempt["path"]) in {"swapped.bin", "real.bin"}
         ]

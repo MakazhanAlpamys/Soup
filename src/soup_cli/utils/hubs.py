@@ -16,6 +16,7 @@ Live download / upload wiring is deferred to v0.51.1 — this module ships the
 schema lock-in (``hub`` Literal on ``TrainingConfig``) plus the validators
 that the live wiring will call.
 """
+
 from __future__ import annotations
 
 import logging
@@ -34,35 +35,43 @@ _LOG = logging.getLogger(__name__)
 # cannot mutate the registry at runtime (matches v0.36.0 _REGISTRY policy).
 SUPPORTED_HUBS: frozenset[str] = frozenset({"hf", "modelscope", "modelers"})
 
-_HUB_DEFAULT_ENDPOINTS: Mapping[str, str] = MappingProxyType({
-    "hf": "https://huggingface.co",
-    "modelscope": "https://modelscope.cn",
-    "modelers": "https://modelers.cn",
-})
+_HUB_DEFAULT_ENDPOINTS: Mapping[str, str] = MappingProxyType(
+    {
+        "hf": "https://huggingface.co",
+        "modelscope": "https://modelscope.cn",
+        "modelers": "https://modelers.cn",
+    }
+)
 
 # Per-hub env var that overrides the default endpoint (mirrors HF_ENDPOINT).
-_HUB_ENDPOINT_ENV: Mapping[str, str] = MappingProxyType({
-    "hf": "HF_ENDPOINT",
-    "modelscope": "MODELSCOPE_ENDPOINT",
-    "modelers": "MODELERS_ENDPOINT",
-})
+_HUB_ENDPOINT_ENV: Mapping[str, str] = MappingProxyType(
+    {
+        "hf": "HF_ENDPOINT",
+        "modelscope": "MODELSCOPE_ENDPOINT",
+        "modelers": "MODELERS_ENDPOINT",
+    }
+)
 
 # Per-hub credential env var. Each hub authenticates with its OWN token; a
 # token for one hub is never offered to another. MODELSCOPE_API_TOKEN is the
 # ModelScope SDK's own variable; openMind has none, so MODELERS_TOKEN mirrors
 # MODELERS_ENDPOINT.
-_HUB_TOKEN_ENV: Mapping[str, str] = MappingProxyType({
-    "hf": "HF_TOKEN",
-    "modelscope": "MODELSCOPE_API_TOKEN",
-    "modelers": "MODELERS_TOKEN",
-})
+_HUB_TOKEN_ENV: Mapping[str, str] = MappingProxyType(
+    {
+        "hf": "HF_TOKEN",
+        "modelscope": "MODELSCOPE_API_TOKEN",
+        "modelers": "MODELERS_TOKEN",
+    }
+)
 
 # Per-hub pip-install hint, surfaced when the live downloader complains.
-_HUB_PACKAGE: Mapping[str, str] = MappingProxyType({
-    "hf": "huggingface-hub",
-    "modelscope": "modelscope",
-    "modelers": "openmind-hub",
-})
+_HUB_PACKAGE: Mapping[str, str] = MappingProxyType(
+    {
+        "hf": "huggingface-hub",
+        "modelscope": "modelscope",
+        "modelers": "openmind-hub",
+    }
+)
 
 _MAX_HUB_NAME_LEN: int = 32
 
@@ -83,15 +92,11 @@ def validate_hub_name(name: str) -> str:
     if "\x00" in name:
         raise ValueError("hub name must not contain null bytes")
     if len(name) > _MAX_HUB_NAME_LEN:
-        raise ValueError(
-            f"hub name too long (max {_MAX_HUB_NAME_LEN} chars)"
-        )
+        raise ValueError(f"hub name too long (max {_MAX_HUB_NAME_LEN} chars)")
     canonical = name.lower()
     if canonical not in SUPPORTED_HUBS:
         supported = ", ".join(sorted(SUPPORTED_HUBS))
-        raise ValueError(
-            f"hub {name!r} not supported. Supported: {supported}"
-        )
+        raise ValueError(f"hub {name!r} not supported. Supported: {supported}")
     return canonical
 
 
@@ -156,9 +161,7 @@ def validate_hub_endpoint(endpoint: str, *, hub: str | None = None) -> str:
     if isinstance(endpoint, bool):
         raise TypeError(f"{label} must not be bool, got {endpoint!r}")
     if not isinstance(endpoint, str):
-        raise TypeError(
-            f"{label} must be str, got {type(endpoint).__name__}"
-        )
+        raise TypeError(f"{label} must be str, got {type(endpoint).__name__}")
     if not endpoint:
         raise ValueError(f"{label} must be a non-empty string")
     if "\x00" in endpoint:
@@ -172,17 +175,13 @@ def validate_hub_endpoint(endpoint: str, *, hub: str | None = None) -> str:
     stripped = endpoint.rstrip("/")
     parsed = urlparse(stripped)
     if parsed.scheme not in ("http", "https"):
-        raise ValueError(
-            f"{label} must use http/https scheme, got: {parsed.scheme!r}"
-        )
+        raise ValueError(f"{label} must use http/https scheme, got: {parsed.scheme!r}")
     if not parsed.netloc:
         raise ValueError(f"{label} is missing a host")
 
     host = parsed.hostname or ""
     if host == "0.0.0.0":
-        raise ValueError(
-            f"{label} 0.0.0.0 is ambiguous; use 127.0.0.1 or localhost"
-        )
+        raise ValueError(f"{label} 0.0.0.0 is ambiguous; use 127.0.0.1 or localhost")
     host_clean = host.lower().rstrip(".")
     if parsed.scheme == "http" and host_clean not in _LOOPBACK_HOSTS:
         if _is_private_or_link_local(host):
@@ -191,10 +190,7 @@ def validate_hub_endpoint(endpoint: str, *, hub: str | None = None) -> str:
                 f"(localhost / 127.0.0.1 / ::1); private/link-local hosts "
                 f"require HTTPS"
             )
-        raise ValueError(
-            f"{label} for remote hosts must use HTTPS "
-            f"(localhost HTTP allowed)"
-        )
+        raise ValueError(f"{label} for remote hosts must use HTTPS (localhost HTTP allowed)")
     return stripped
 
 
@@ -250,17 +246,13 @@ def _validate_repo_id_shape(repo_id: str) -> str:
     if isinstance(repo_id, bool):
         raise TypeError(f"repo_id must not be bool, got {repo_id!r}")
     if not isinstance(repo_id, str):
-        raise TypeError(
-            f"repo_id must be str, got {type(repo_id).__name__}"
-        )
+        raise TypeError(f"repo_id must be str, got {type(repo_id).__name__}")
     if not repo_id:
         raise ValueError("repo_id must be non-empty")
     if "\x00" in repo_id:
         raise ValueError("repo_id must not contain null bytes")
     if len(repo_id) > _REPO_ID_MAX:
-        raise ValueError(
-            f"repo_id too long (max {_REPO_ID_MAX} chars)"
-        )
+        raise ValueError(f"repo_id too long (max {_REPO_ID_MAX} chars)")
     if repo_id.startswith("/") or repo_id.startswith("\\"):
         raise ValueError("repo_id must not start with a path separator")
     if ".." in repo_id.split("/"):
@@ -275,10 +267,7 @@ def _validate_repo_id_shape(repo_id: str) -> str:
 def _missing_dep_message(hub: str) -> str:
     """Friendly ImportError message naming the pip install command."""
     pkg = required_hub_package(hub) or hub
-    return (
-        f"hub={hub!r} requires the '{pkg}' package. "
-        f"Install with: pip install {pkg}"
-    )
+    return f"hub={hub!r} requires the '{pkg}' package. Install with: pip install {pkg}"
 
 
 def _validate_local_path(value: str, *, field: str) -> str:
@@ -293,17 +282,13 @@ def _validate_local_path(value: str, *, field: str) -> str:
     if isinstance(value, bool):
         raise TypeError(f"{field} must not be bool, got {value!r}")
     if not isinstance(value, str):
-        raise TypeError(
-            f"{field} must be str, got {type(value).__name__}"
-        )
+        raise TypeError(f"{field} must be str, got {type(value).__name__}")
     if not value:
         raise ValueError(f"{field} must be a non-empty string")
     if "\x00" in value:
         raise ValueError(f"{field} must not contain null bytes")
     if not is_under_cwd(value):
-        raise ValueError(
-            f"{field} must stay under the current working directory"
-        )
+        raise ValueError(f"{field} must stay under the current working directory")
     return value
 
 
@@ -412,9 +397,7 @@ def _validate_cache_dir(cache_dir: str, *, field: str = "cache_dir") -> str:
             continue
         if common == allowed:
             return realpath
-    raise ValueError(
-        f"{field} must stay under $HOME / cwd / tmpdir"
-    )
+    raise ValueError(f"{field} must stay under $HOME / cwd / tmpdir")
 
 
 def snapshot_download(
@@ -465,8 +448,7 @@ def snapshot_download(
         from huggingface_hub import snapshot_download as hf_snapshot_download
     except ImportError as exc:  # pragma: no cover - HF present in CI
         raise ImportError(
-            "huggingface_hub required for snapshot_download; "
-            "pip install huggingface-hub"
+            "huggingface_hub required for snapshot_download; pip install huggingface-hub"
         ) from exc
     kwargs = {
         "repo_id": repo_id,
@@ -520,9 +502,7 @@ def download_repo(
         if "\x00" in revision or any(ord(c) < 0x20 for c in revision):
             raise ValueError("revision must not contain control characters")
     if repo_type not in ("model", "dataset", "space"):
-        raise ValueError(
-            "repo_type must be one of 'model' / 'dataset' / 'space'"
-        )
+        raise ValueError("repo_type must be one of 'model' / 'dataset' / 'space'")
 
     # #186 — namespace-pin gate (HF model repos only; modelscope/modelers
     # expose different metadata APIs — tracked separately).
@@ -610,9 +590,7 @@ def upload_repo(
     # multi-line injection into public commit history).
     commit_message = commit_message.splitlines()[0][:200]
     if repo_type not in ("model", "dataset", "space"):
-        raise ValueError(
-            "repo_type must be one of 'model' / 'dataset' / 'space'"
-        )
+        raise ValueError("repo_type must be one of 'model' / 'dataset' / 'space'")
 
     if canonical == "hf":
         try:
@@ -725,9 +703,7 @@ def prefetch_model_from_hub(
         root_path = os.path.realpath(cache_root)
     cache_dir = os.path.realpath(os.path.join(root_path, safe_slug))
     if not is_under_cwd(cache_dir):
-        raise ValueError(
-            "resolved hub cache dir escapes the current working directory"
-        )
+        raise ValueError("resolved hub cache dir escapes the current working directory")
     # v0.53.10 security-review HIGH: escape Rich markup on every
     # user-controlled string before embedding in console.print. A crafted
     # ``base`` like ``[bold red]evil[/bold red]`` must NOT render styled.
@@ -742,8 +718,7 @@ def prefetch_model_from_hub(
                 except (ValueError, OSError):
                     display_dir = os.path.basename(cache_dir)
                 console.print(  # type: ignore[attr-defined]
-                    f"[dim]Using cached snapshot at "
-                    f"{_markup_escape(display_dir)}[/]"
+                    f"[dim]Using cached snapshot at {_markup_escape(display_dir)}[/]"
                 )
             except Exception:  # noqa: BLE001 — advisory is best-effort
                 pass

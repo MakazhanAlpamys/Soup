@@ -264,16 +264,12 @@ def tool_data_validate(args: dict) -> dict:
     fmt = _opt_str(args, "format")
     fmt = "auto" if fmt is None else fmt
     if fmt != "auto" and fmt not in _formats.VALID_FORMATS:
-        raise _unknown_choice(
-            "format", fmt, ("auto", *_formats.VALID_FORMATS), preserve_order=True
-        )
+        raise _unknown_choice("format", fmt, ("auto", *_formats.VALID_FORMATS), preserve_order=True)
     if fmt == "auto":
         try:
             fmt = _formats.detect_format(rows)
         except ValueError as exc:
-            raise McpToolError(
-                "could not auto-detect data format; pass 'format'"
-            ) from exc
+            raise McpToolError("could not auto-detect data format; pass 'format'") from exc
     # The resolved format travels back with the report: without it a caller
     # cannot tell which format was checked, which makes the schema's
     # "omit to auto-detect" unobservable even once it is true.
@@ -307,9 +303,7 @@ def tool_data_doctor(args: dict) -> dict:
     fmt = _opt_str(args, "format")
     fmt = "auto" if fmt is None else fmt
     if fmt != "auto" and fmt not in _formats.VALID_FORMATS:
-        raise _unknown_choice(
-            "format", fmt, ("auto", *_formats.VALID_FORMATS), preserve_order=True
-        )
+        raise _unknown_choice("format", fmt, ("auto", *_formats.VALID_FORMATS), preserve_order=True)
     max_length = _opt_int(args, "max_length", 2048, lo=64, hi=1_048_576)
     sample_size = _opt_int(args, "sample_size", 200, lo=1, hi=2000)
     if fmt == "auto":
@@ -324,16 +318,14 @@ def tool_data_doctor(args: dict) -> dict:
         import transformers  # noqa: F401
     except ImportError as exc:
         raise McpToolError(
-            "data_doctor needs the tokenizer stack: pip install \"soup-cli[train]\""
+            'data_doctor needs the tokenizer stack: pip install "soup-cli[train]"'
         ) from exc
     try:
         tok = _dd.resolve_tokenizer(model, trust_remote_code=False)
     except (ImportError, ValueError, TypeError, OSError) as exc:
         raise McpToolError(f"could not load tokenizer ({type(exc).__name__})") from exc
     try:
-        report = _dd.run_doctor(
-            rows, tok, fmt=fmt, max_length=max_length, sample_size=sample_size
-        )
+        report = _dd.run_doctor(rows, tok, fmt=fmt, max_length=max_length, sample_size=sample_size)
     except (ValueError, TypeError) as exc:
         raise McpToolError(f"data doctor failed ({type(exc).__name__})") from exc
     return report.to_dict()
@@ -575,9 +567,7 @@ def tool_diagnose_evidence(args: dict) -> dict:
 # The trailing alternative redacts from an UNTERMINATED quote to end-of-string:
 # ``repr()`` always balances its quotes, so that cannot happen today, but a
 # boundary that fails open on one malformed message is the wrong default.
-_EVIDENCE_ERROR_QUOTED = re.compile(
-    r"'(?:\\.|[^'\\])*'|\"(?:\\.|[^\"\\])*\"|['\"].*\Z", re.DOTALL
-)
+_EVIDENCE_ERROR_QUOTED = re.compile(r"'(?:\\.|[^'\\])*'|\"(?:\\.|[^\"\\])*\"|['\"].*\Z", re.DOTALL)
 _EVIDENCE_ERROR_REDACTION = "<redacted>"
 
 
@@ -610,9 +600,7 @@ def tool_ship_evidence(args: dict) -> dict:
     payload = _read_json_under_cwd(_require_str(args, "evidence"), "evidence")
     threshold = args.get("forgetting_threshold", DEFAULT_FORGETTING_THRESHOLD)
     try:
-        verdict = verdict_from_evidence(
-            payload, forgetting_threshold=threshold
-        )
+        verdict = verdict_from_evidence(payload, forgetting_threshold=threshold)
     except (TypeError, ValueError, OverflowError) as exc:
         raise McpToolError(_evidence_error_message(exc)) from exc
     payload_out = verdict_to_dict(verdict)
@@ -621,9 +609,7 @@ def tool_ship_evidence(args: dict) -> dict:
     # server redirects prints away from it. So the warning rides in the RESULT,
     # which is the MCP-native equivalent — the point is that neither reader is
     # the quiet one an attacker would pick.
-    widened = floor_exceeds_threshold(
-        verdict.noise_floor, verdict.forgetting_threshold
-    )
+    widened = floor_exceeds_threshold(verdict.noise_floor, verdict.forgetting_threshold)
     payload_out["warnings"] = [
         f"noise floor {value:.4f} on {name!r} exceeds forgetting_threshold "
         f"{verdict.forgetting_threshold:.4f}; that axis is gated LOOSER than requested"
@@ -638,8 +624,7 @@ def tool_ship_evidence(args: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 _MUTATING_NOTE = (
-    "plan-only: 'soup mcp serve' does not execute this. Run the command "
-    "yourself to proceed."
+    "plan-only: 'soup mcp serve' does not execute this. Run the command yourself to proceed."
 )
 
 
@@ -705,8 +690,7 @@ def _protect_plan_input(entry: str, field: str) -> ProtectedFile:
     """Digest an existing input, or record that it is absent; refuse outside cwd."""
     if not is_under_cwd(entry):
         raise ExecutionError(
-            f"{field} points outside the working directory; move it under the "
-            "project to execute"
+            f"{field} points outside the working directory; move it under the project to execute"
         )
     if os.path.lexists(entry):
         return digest_file(entry, field)
@@ -848,6 +832,7 @@ def _execute_handler(execution: ExecutionManager, kind: str) -> Callable[[dict],
             return execution.execute(token=args.get("confirmation_token"), kind=kind)
         except ExecutionError as exc:
             raise McpToolError(str(exc)) from None
+
     return _handler
 
 

@@ -32,6 +32,7 @@ class TestSpectralKernels:
             compute_spectral_features,
             scan_adapter_weights,
         )
+
         assert callable(compute_spectral_features)
         assert callable(scan_adapter_weights)
         assert dataclasses.is_dataclass(ScanFinding)
@@ -84,13 +85,11 @@ class TestScanAdapterWeights:
 
         rng = np.random.default_rng(seed=42)
         weights = {
-            f"layer_{i}.lora_A.weight": rng.standard_normal((16, 64)) * 0.01
-            for i in range(4)
+            f"layer_{i}.lora_A.weight": rng.standard_normal((16, 64)) * 0.01 for i in range(4)
         }
-        weights.update({
-            f"layer_{i}.lora_B.weight": rng.standard_normal((64, 16)) * 0.01
-            for i in range(4)
-        })
+        weights.update(
+            {f"layer_{i}.lora_B.weight": rng.standard_normal((64, 16)) * 0.01 for i in range(4)}
+        )
         report = scan_adapter_weights(weights, adapter_name="clean")
         assert report.overall == "OK"
         # No FAIL findings.
@@ -102,8 +101,7 @@ class TestScanAdapterWeights:
         rng = np.random.default_rng(seed=0)
         # Start clean, then inject a high-magnitude rank-1 outer product on one layer.
         weights = {
-            f"layer_{i}.lora_A.weight": rng.standard_normal((16, 64)) * 0.01
-            for i in range(4)
+            f"layer_{i}.lora_A.weight": rng.standard_normal((16, 64)) * 0.01 for i in range(4)
         }
         u = np.ones((16, 1)) * 5.0
         v = np.ones((1, 64)) * 5.0
@@ -145,8 +143,12 @@ class TestScanAdapterWeights:
         from soup_cli.utils.adapter_scan import ScanFinding
 
         finding = ScanFinding(
-            layer="L", kind="rank1_dominance", severity="WARN",
-            value=42.0, threshold=10.0, message="ok",
+            layer="L",
+            kind="rank1_dominance",
+            severity="WARN",
+            value=42.0,
+            threshold=10.0,
+            message="ok",
         )
         with pytest.raises(dataclasses.FrozenInstanceError):
             finding.severity = "FAIL"  # type: ignore[misc]
@@ -182,8 +184,12 @@ class TestScanAdapterWeights:
 
         with pytest.raises(ValueError):
             ScanFinding(
-                layer="L", kind="rank1_dominance", severity="UNKNOWN_SEV",
-                value=0.0, threshold=0.0, message="",
+                layer="L",
+                kind="rank1_dominance",
+                severity="UNKNOWN_SEV",
+                value=0.0,
+                threshold=0.0,
+                message="",
             )
 
     def test_unknown_kind_rejected(self):
@@ -191,8 +197,12 @@ class TestScanAdapterWeights:
 
         with pytest.raises(ValueError):
             ScanFinding(
-                layer="L", kind="bogus_kind", severity="WARN",
-                value=0.0, threshold=0.0, message="",
+                layer="L",
+                kind="bogus_kind",
+                severity="WARN",
+                value=0.0,
+                threshold=0.0,
+                message="",
             )
 
     def test_scan_finding_rejects_bool_value(self):
@@ -201,13 +211,21 @@ class TestScanAdapterWeights:
 
         with pytest.raises(ValueError):
             ScanFinding(
-                layer="L", kind="rank1_dominance", severity="WARN",
-                value=True, threshold=0.0, message="",  # type: ignore[arg-type]
+                layer="L",
+                kind="rank1_dominance",
+                severity="WARN",
+                value=True,
+                threshold=0.0,
+                message="",  # type: ignore[arg-type]
             )
         with pytest.raises(ValueError):
             ScanFinding(
-                layer="L", kind="rank1_dominance", severity="WARN",
-                value=0.0, threshold=False, message="",  # type: ignore[arg-type]
+                layer="L",
+                kind="rank1_dominance",
+                severity="WARN",
+                value=0.0,
+                threshold=False,
+                message="",  # type: ignore[arg-type]
             )
 
     def test_scan_finding_rejects_non_finite_value(self):
@@ -215,13 +233,21 @@ class TestScanAdapterWeights:
 
         with pytest.raises(ValueError):
             ScanFinding(
-                layer="L", kind="rank1_dominance", severity="WARN",
-                value=float("nan"), threshold=0.0, message="",
+                layer="L",
+                kind="rank1_dominance",
+                severity="WARN",
+                value=float("nan"),
+                threshold=0.0,
+                message="",
             )
         with pytest.raises(ValueError):
             ScanFinding(
-                layer="L", kind="rank1_dominance", severity="WARN",
-                value=float("inf"), threshold=0.0, message="",
+                layer="L",
+                kind="rank1_dominance",
+                severity="WARN",
+                value=float("inf"),
+                threshold=0.0,
+                message="",
             )
 
 
@@ -332,7 +358,10 @@ class TestSourceWiring:
     def test_no_top_level_torch(self):
         src = (
             Path(__file__).resolve().parent.parent
-            / "src" / "soup_cli" / "utils" / "adapter_scan.py"
+            / "src"
+            / "soup_cli"
+            / "utils"
+            / "adapter_scan.py"
         )
         text = src.read_text(encoding="utf-8")
         # numpy is fine; torch must be lazy

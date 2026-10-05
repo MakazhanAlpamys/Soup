@@ -23,32 +23,32 @@ from soup_cli.config.loader import load_config_from_string
 
 
 def _ok(i):
-    return {"messages": [
-        {"role": "user", "content": f"q{i}"},
-        {"role": "assistant", "content": f"a{i}"},
-    ]}
+    return {
+        "messages": [
+            {"role": "user", "content": f"q{i}"},
+            {"role": "assistant", "content": f"a{i}"},
+        ]
+    }
 
 
-_TYPO = {"mesages": [
-    {"role": "user", "content": "typo"},
-    {"role": "assistant", "content": "x"},
-]}
+_TYPO = {
+    "mesages": [
+        {"role": "user", "content": "typo"},
+        {"role": "assistant", "content": "x"},
+    ]
+}
 
 
 @pytest.fixture
 def out(monkeypatch):
     buf = io.StringIO()
-    monkeypatch.setattr(
-        loader, "console", Console(file=buf, width=400, color_system=None)
-    )
+    monkeypatch.setattr(loader, "console", Console(file=buf, width=400, color_system=None))
     return buf
 
 
 def _load(tmp_path, monkeypatch, rows):
     monkeypatch.chdir(tmp_path)
-    (tmp_path / "d.jsonl").write_text(
-        "".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8"
-    )
+    (tmp_path / "d.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
     cfg = load_config_from_string(
         "base: x\ntask: sft\ndata:\n  train: d.jsonl\n  format: chatml\n  val_split: 0\n"
     )

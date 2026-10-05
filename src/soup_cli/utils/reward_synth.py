@@ -186,9 +186,7 @@ def detect_kind(golds: Sequence[str]) -> Optional[str]:
         if kind == "tool_call":
             frac = _fraction(golds, lambda g: _is_tool_call(_json_or_none(g)))
         elif kind == "json_schema":
-            frac = _fraction(
-                golds, lambda g: isinstance(_json_or_none(g), (dict, list))
-            )
+            frac = _fraction(golds, lambda g: isinstance(_json_or_none(g), (dict, list)))
         elif kind == "numeric":
             frac = _fraction(golds, _is_number)
         else:  # regex
@@ -201,9 +199,7 @@ def detect_kind(golds: Sequence[str]) -> Optional[str]:
 # ---------------------------------------------------------------------------
 # Inducers
 # ---------------------------------------------------------------------------
-def induce_numeric(
-    golds: Sequence[str], *, tolerance: Optional[float] = None
-) -> NumericSpec:
+def induce_numeric(golds: Sequence[str], *, tolerance: Optional[float] = None) -> NumericSpec:
     if _fraction(golds, _is_number) < _MIN_CONFIDENCE:
         raise ValueError(
             "references are not numeric — cannot induce a numeric verifier "
@@ -247,9 +243,7 @@ def induce_json_schema(golds: Sequence[str]) -> dict:
     parsed = [_json_or_none(g) for g in golds]
     containers = [o for o in parsed if isinstance(o, (dict, list))]
     if not containers:
-        raise ValueError(
-            "no JSON object/array references found — cannot induce a json_schema"
-        )
+        raise ValueError("no JSON object/array references found — cannot induce a json_schema")
     dicts = [o for o in containers if isinstance(o, dict)]
     lists = [o for o in containers if isinstance(o, list)]
     if dicts and lists:
@@ -279,9 +273,7 @@ def induce_tool_call(golds: Sequence[str]) -> ToolCallSpec:
     for gold in golds:
         obj = _json_or_none(gold)
         if _is_tool_call(obj):
-            per_name.setdefault(obj["name"], []).append(
-                {str(k) for k in obj["arguments"].keys()}
-            )
+            per_name.setdefault(obj["name"], []).append({str(k) for k in obj["arguments"].keys()})
     if not per_name:
         raise ValueError(
             "no tool-call references found (each needs a JSON object with string "
@@ -357,7 +349,7 @@ def _last_content(completion):
     return completion[-1]["content"] if completion else ""
 '''
 
-_NUMERIC_BODY = '''
+_NUMERIC_BODY = """
 _NUMBER_RE = re.compile(r"[+-]?(?:\\d+\\.?\\d*|\\.\\d+)(?:[eE][+-]?\\d+)?")
 _BOXED_RE = re.compile(r"\\\\boxed\\{([^}]*)\\}")
 
@@ -401,9 +393,9 @@ def reward_fn(completions, **kwargs):
         gold = str(expected).strip()
         out.append(1.0 if _numbers_match(predicted, gold, _TOLERANCE) else 0.0)
     return out
-'''
+"""
 
-_JSON_SCHEMA_BODY = '''
+_JSON_SCHEMA_BODY = """
 
 def _json_type(value):
     if isinstance(value, bool):
@@ -461,9 +453,9 @@ def reward_fn(completions, **kwargs):
             continue
         out.append(1.0 if _matches_schema(data) else 0.0)
     return out
-'''
+"""
 
-_REGEX_BODY = '''
+_REGEX_BODY = """
 
 def reward_fn(completions, **kwargs):
     out = []
@@ -471,9 +463,9 @@ def reward_fn(completions, **kwargs):
         content = _last_content(completion).strip()
         out.append(1.0 if _PATTERN.fullmatch(content) else 0.0)
     return out
-'''
+"""
 
-_TOOL_CALL_BODY = '''
+_TOOL_CALL_BODY = """
 
 def reward_fn(completions, **kwargs):
     out = []
@@ -499,7 +491,7 @@ def reward_fn(completions, **kwargs):
         allowed = set(sig["allowed"])
         out.append(1.0 if required <= keys <= allowed else 0.0)
     return out
-'''
+"""
 
 
 def _safe_hint(value: object) -> str:
@@ -575,13 +567,11 @@ def perturb_negatives(golds: Sequence[str], kind: str) -> list[str]:
                 # Valid JSON, WRONG tool name — a "just parse JSON" verifier would
                 # accept this; a name-bound verifier must reject it.
                 negatives.append(
-                    json.dumps({"name": "__nonexistent_tool__",
-                                "arguments": obj["arguments"]})
+                    json.dumps({"name": "__nonexistent_tool__", "arguments": obj["arguments"]})
                 )
                 # Valid JSON, right name, a foreign arg key outside `allowed`.
                 negatives.append(
-                    json.dumps({"name": obj["name"],
-                                "arguments": {"__foreign_arg__": 1}})
+                    json.dumps({"name": obj["name"], "arguments": {"__foreign_arg__": 1}})
                 )
         elif kind == "regex":
             negatives.append(gold + "ZZZ_definitely_wrong")
@@ -608,9 +598,8 @@ def calibrate(
     all — a hard floor the user cannot disable via ``--min-discrimination 0``),
     or (c) ``discrimination < min_discrimination``.
     """
-    def _accept_rate(
-        items: Sequence[str], answers: Sequence[str]
-    ) -> tuple[float, int]:
+
+    def _accept_rate(items: Sequence[str], answers: Sequence[str]) -> tuple[float, int]:
         if not items:
             return 0.0, 0
         completions = [[{"role": "assistant", "content": s}] for s in items]
@@ -710,7 +699,5 @@ def synthesize(
                 "references — pass --kind numeric|json_schema|regex|tool_call"
             )
     spec = _induce(resolved, golds, tolerance)
-    source = render_verifier_py(
-        resolved, spec, meta={"n_refs": len(golds), "rel_hint": rel_hint}
-    )
+    source = render_verifier_py(resolved, spec, meta={"n_refs": len(golds), "rel_hint": rel_hint})
     return SynthResult(kind=resolved, source=source, spec=spec, report=None)

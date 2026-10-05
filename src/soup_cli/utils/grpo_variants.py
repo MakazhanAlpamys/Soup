@@ -30,15 +30,17 @@ from dataclasses import dataclass
 
 _MAX_VARIANT_NAME_LEN = 32
 
-SUPPORTED_GRPO_VARIANTS: frozenset[str] = frozenset({
-    "gspo",
-    "dapo",
-    "dr_grpo",
-    "bnpo",
-    "two_sided",
-    "rft",
-    "standard",
-})
+SUPPORTED_GRPO_VARIANTS: frozenset[str] = frozenset(
+    {
+        "gspo",
+        "dapo",
+        "dr_grpo",
+        "bnpo",
+        "two_sided",
+        "rft",
+        "standard",
+    }
+)
 
 # Variants that require an explicit delta (symmetric clipping radius).
 _REQUIRES_DELTA: frozenset[str] = frozenset({"two_sided"})
@@ -60,50 +62,52 @@ class GRPOVariantSpec:
     live_wired: bool
 
 
-_VARIANT_METADATA = types.MappingProxyType({
-    "standard": GRPOVariantSpec(
-        name="standard",
-        description="Default GRPO (DeepSeek-R1 style)",
-        requires_delta=False,
-        live_wired=True,
-    ),
-    "gspo": GRPOVariantSpec(
-        name="gspo",
-        description="Group Sequence Policy Optimization",
-        requires_delta=False,
-        live_wired=True,
-    ),
-    "dapo": GRPOVariantSpec(
-        name="dapo",
-        description="Decoupled Advantage Policy Optimization",
-        requires_delta=False,
-        live_wired=True,
-    ),
-    "dr_grpo": GRPOVariantSpec(
-        name="dr_grpo",
-        description="Doubly Robust GRPO",
-        requires_delta=False,
-        live_wired=True,
-    ),
-    "bnpo": GRPOVariantSpec(
-        name="bnpo",
-        description="Batch Normalized Policy Optimization",
-        requires_delta=False,
-        live_wired=True,
-    ),
-    "two_sided": GRPOVariantSpec(
-        name="two_sided",
-        description="Two-sided GRPO with symmetric delta clipping",
-        requires_delta=True,
-        live_wired=True,
-    ),
-    "rft": GRPOVariantSpec(
-        name="rft",
-        description="Reinforced Fine-Tuning",
-        requires_delta=False,
-        live_wired=True,
-    ),
-})
+_VARIANT_METADATA = types.MappingProxyType(
+    {
+        "standard": GRPOVariantSpec(
+            name="standard",
+            description="Default GRPO (DeepSeek-R1 style)",
+            requires_delta=False,
+            live_wired=True,
+        ),
+        "gspo": GRPOVariantSpec(
+            name="gspo",
+            description="Group Sequence Policy Optimization",
+            requires_delta=False,
+            live_wired=True,
+        ),
+        "dapo": GRPOVariantSpec(
+            name="dapo",
+            description="Decoupled Advantage Policy Optimization",
+            requires_delta=False,
+            live_wired=True,
+        ),
+        "dr_grpo": GRPOVariantSpec(
+            name="dr_grpo",
+            description="Doubly Robust GRPO",
+            requires_delta=False,
+            live_wired=True,
+        ),
+        "bnpo": GRPOVariantSpec(
+            name="bnpo",
+            description="Batch Normalized Policy Optimization",
+            requires_delta=False,
+            live_wired=True,
+        ),
+        "two_sided": GRPOVariantSpec(
+            name="two_sided",
+            description="Two-sided GRPO with symmetric delta clipping",
+            requires_delta=True,
+            live_wired=True,
+        ),
+        "rft": GRPOVariantSpec(
+            name="rft",
+            description="Reinforced Fine-Tuning",
+            requires_delta=False,
+            live_wired=True,
+        ),
+    }
+)
 
 
 def validate_grpo_variant(name: object) -> str:
@@ -115,22 +119,17 @@ def validate_grpo_variant(name: object) -> str:
     if isinstance(name, bool):
         raise ValueError("grpo_variant must be a string, got bool")
     if not isinstance(name, str):
-        raise ValueError(
-            f"grpo_variant must be a string, got {type(name).__name__}"
-        )
+        raise ValueError(f"grpo_variant must be a string, got {type(name).__name__}")
     if not name:
         raise ValueError("grpo_variant must be a non-empty string")
     if "\x00" in name:
         raise ValueError("grpo_variant must not contain null bytes")
     if len(name) > _MAX_VARIANT_NAME_LEN:
-        raise ValueError(
-            f"grpo_variant exceeds {_MAX_VARIANT_NAME_LEN} chars"
-        )
+        raise ValueError(f"grpo_variant exceeds {_MAX_VARIANT_NAME_LEN} chars")
     normalised = name.lower()
     if normalised not in SUPPORTED_GRPO_VARIANTS:
         raise ValueError(
-            f"grpo_variant={name!r} is not supported. "
-            f"Valid: {sorted(SUPPORTED_GRPO_VARIANTS)}"
+            f"grpo_variant={name!r} is not supported. Valid: {sorted(SUPPORTED_GRPO_VARIANTS)}"
         )
     return normalised
 
@@ -171,16 +170,12 @@ def validate_grpo_delta(value: object) -> float:
     if isinstance(value, bool):
         raise ValueError("grpo_delta must not be bool")
     if not isinstance(value, (int, float)):
-        raise ValueError(
-            f"grpo_delta must be a number, got {type(value).__name__}"
-        )
+        raise ValueError(f"grpo_delta must be a number, got {type(value).__name__}")
     fvalue = float(value)
     if not math.isfinite(fvalue):
         raise ValueError("grpo_delta must be finite (no NaN/Inf)")
     if not (0.0 < fvalue <= 1.0):
-        raise ValueError(
-            f"grpo_delta={fvalue} must be in (0, 1]"
-        )
+        raise ValueError(f"grpo_delta={fvalue} must be in (0, 1]")
     return fvalue
 
 

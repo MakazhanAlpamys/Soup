@@ -222,8 +222,13 @@ def test_write_state_outside_cwd_rejected(tmp_path, monkeypatch):
 
     monkeypatch.chdir(tmp_path)
     plan = TrainingPlan(
-        base="m", task="sft", config_sha="a" * 64, dataset_sha="b" * 64,
-        estimated_cost_usd=0.5, estimated_minutes=10.0, peak_vram_gb=8.0,
+        base="m",
+        task="sft",
+        config_sha="a" * 64,
+        dataset_sha="b" * 64,
+        estimated_cost_usd=0.5,
+        estimated_minutes=10.0,
+        peak_vram_gb=8.0,
         spot_price_usd_per_hour=0.30,
     )
     state = TrainingState(plan=plan, applied=False, applied_at=None, run_id=None)
@@ -238,8 +243,13 @@ def test_write_state_symlink_rejected(tmp_path, monkeypatch):
 
     monkeypatch.chdir(tmp_path)
     plan = TrainingPlan(
-        base="m", task="sft", config_sha="a" * 64, dataset_sha="b" * 64,
-        estimated_cost_usd=0.5, estimated_minutes=10.0, peak_vram_gb=8.0,
+        base="m",
+        task="sft",
+        config_sha="a" * 64,
+        dataset_sha="b" * 64,
+        estimated_cost_usd=0.5,
+        estimated_minutes=10.0,
+        peak_vram_gb=8.0,
         spot_price_usd_per_hour=0.30,
     )
     state = TrainingState(plan=plan, applied=False, applied_at=None, run_id=None)
@@ -438,17 +448,17 @@ def test_cli_registers_plan_apply():
 
     src = Path(__file__).resolve().parent.parent / "src" / "soup_cli" / "cli.py"
     text = src.read_text(encoding="utf-8")
-    assert '"plan"' in text or "'plan'" in text or "name=\"plan\"" in text
+    assert '"plan"' in text or "'plan'" in text or 'name="plan"' in text
 
 
 def test_no_heavy_top_level_imports():
     from pathlib import Path
 
     src = (
-        Path(__file__).resolve().parent.parent
-        / "src" / "soup_cli" / "utils" / "terraform_plan.py"
+        Path(__file__).resolve().parent.parent / "src" / "soup_cli" / "utils" / "terraform_plan.py"
     )
     text = src.read_text(encoding="utf-8")
     import re
+
     for bad in ["^import torch", "^from torch", "^import transformers", "^from transformers"]:
         assert not re.search(bad, text, re.MULTILINE)

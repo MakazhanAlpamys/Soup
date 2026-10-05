@@ -52,21 +52,16 @@ def validate_long_context_grpo_compat(
     if "\x00" in task:
         raise ValueError("task must not contain null bytes")
     if task != "grpo":
-        raise ValueError(
-            f"long_context_grpo requires task='grpo'; got task={task!r}"
-        )
+        raise ValueError(f"long_context_grpo requires task='grpo'; got task={task!r}")
     if not isinstance(backend, str) or not backend:
         raise ValueError("backend must be a non-empty string")
     if "\x00" in backend:
         raise ValueError("backend must not contain null bytes")
     if backend == "mlx":
-        raise ValueError(
-            "long_context_grpo is not supported on backend=mlx in v0.50.0"
-        )
+        raise ValueError("long_context_grpo is not supported on backend=mlx in v0.50.0")
     if not isinstance(use_ring_attention, bool):
         raise ValueError(
-            "use_ring_attention must be a bool, got "
-            f"{type(use_ring_attention).__name__}"
+            f"use_ring_attention must be a bool, got {type(use_ring_attention).__name__}"
         )
     if use_ring_attention:
         raise ValueError(
@@ -149,7 +144,7 @@ def apply_vllm_sleep_mode(engine_args: object) -> object:
     if version is None:
         raise RuntimeError(
             "vllm_sleep_mode requires vLLM >= 0.7 but vLLM is not "
-            "installed (pip install \"soup-cli[serve-fast]\")."
+            'installed (pip install "soup-cli[serve-fast]").'
         )
     if version < _MIN_VLLM_SLEEP_VERSION:
         found = ".".join(str(part) for part in version) or "unknown"
@@ -216,9 +211,7 @@ def maybe_enable_trl_sleep_mode(
     if "vllm_enable_sleep_mode" in grpo_param_names:
         grpo_kwargs["vllm_enable_sleep_mode"] = True
         if console is not None:
-            console.print(
-                "[green]vLLM sleep mode enabled via TRL GRPOConfig[/]"
-            )
+            console.print("[green]vLLM sleep mode enabled via TRL GRPOConfig[/]")
         return True
     if console is not None:
         console.print(

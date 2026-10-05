@@ -138,8 +138,12 @@ def test_simpo_term_length_normalised(torch_module):
     chosen_lens = torch.tensor([1])
     rejected_lens = torch.tensor([2])
     out = pc.compute_simpo_term(
-        pol_chosen, pol_rejected, beta=1.0, gamma=0.0,
-        chosen_lens=chosen_lens, rejected_lens=rejected_lens,
+        pol_chosen,
+        pol_rejected,
+        beta=1.0,
+        gamma=0.0,
+        chosen_lens=chosen_lens,
+        rejected_lens=rejected_lens,
     )
     # Normalised: chosen=2/1=2, rejected=2/2=1; logits=1*(2-1)-0=1
     expected = -math.log(1 / (1 + math.exp(-1.0)))

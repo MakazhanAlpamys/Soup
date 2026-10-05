@@ -236,8 +236,15 @@ class TestTheDetector:
             "    return f'[red]{escape(name)!r}[/]'\n",
         ],
         ids=[
-            "escape", "escape-alias", "for-terminal", "reassigned", "module-attribute",
-            "dotted-module", "terminal-module", "explicit-repr", "function-local-import",
+            "escape",
+            "escape-alias",
+            "for-terminal",
+            "reassigned",
+            "module-attribute",
+            "dotted-module",
+            "terminal-module",
+            "explicit-repr",
+            "function-local-import",
         ],
     )
     def test_each_spelling_is_flagged(self, source: str) -> None:
@@ -252,12 +259,15 @@ class TestTheDetector:
             "msg = f'{name!r}'\n",
             "import re\nmsg = f'{re.escape(name)!r}'\n",
             "from html import escape\nmsg = f'{escape(name)!r}'\n",
-            "from soup_cli.utils.terminal import strip_control\n"
-            "msg = f'{strip_control(name)!r}'\n",
+            "from soup_cli.utils.terminal import strip_control\nmsg = f'{strip_control(name)!r}'\n",
         ],
         ids=[
-            "quote-then-escape", "escape-without-repr", "plain-repr", "re-escape",
-            "html-escape", "strip-only",
+            "quote-then-escape",
+            "escape-without-repr",
+            "plain-repr",
+            "re-escape",
+            "html-escape",
+            "strip-only",
         ],
     )
     def test_other_spellings_are_not_flagged(self, source: str) -> None:
@@ -304,8 +314,12 @@ class TestTheDetectorFollowsAssignedNames:
             "_safe = for_terminal\nmsg = f'{_safe!r}'\n",
         ],
         ids=[
-            "quoted-first", "escaped-without-repr", "other-scope", "plain-assignment",
-            "re-escape", "function-alias",
+            "quoted-first",
+            "escaped-without-repr",
+            "other-scope",
+            "plain-assignment",
+            "re-escape",
+            "function-alias",
         ],
     )
     def test_other_spellings_are_not_flagged(self, source: str) -> None:

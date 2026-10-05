@@ -27,9 +27,7 @@ def test_suggest_recipes_returns_close_matches():
     else:
         typo = real_name + "x"
     suggestions = _suggest_recipes(typo)
-    assert real_name in suggestions or any(
-        s in real_name or real_name in s for s in suggestions
-    )
+    assert real_name in suggestions or any(s in real_name or real_name in s for s in suggestions)
 
 
 def test_suggest_recipes_empty_for_garbage():
@@ -79,6 +77,6 @@ def test_data_sample_default_filename_includes_strategy():
     from soup_cli.commands.data import sample_data
 
     src = inspect.getsource(sample_data)
-    assert '_sampled_{strategy}.jsonl' in src, (
+    assert "_sampled_{strategy}.jsonl" in src, (
         "default sampled filename must embed the strategy to prevent overwrite"
     )

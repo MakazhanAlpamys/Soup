@@ -50,32 +50,40 @@ _FORGET_SATURATION: float = 2.0
 _METRIC_NAMES: Tuple[str, ...] = ("forget_quality", "model_utility", "priv_leak")
 
 
-_BENCHMARK_METADATA: Mapping[str, Mapping[str, str]] = MappingProxyType({
-    "tofu": MappingProxyType({
-        "description": (
-            "TOFU — synthetic author profiles for forget-set unlearning "
-            "(Maini et al., 2024)."
+_BENCHMARK_METADATA: Mapping[str, Mapping[str, str]] = MappingProxyType(
+    {
+        "tofu": MappingProxyType(
+            {
+                "description": (
+                    "TOFU — synthetic author profiles for forget-set unlearning "
+                    "(Maini et al., 2024)."
+                ),
+                "fixture": "tofu_demo.jsonl",
+            }
         ),
-        "fixture": "tofu_demo.jsonl",
-    }),
-    "muse": MappingProxyType({
-        "description": (
-            "MUSE — real-world books / news corpora with paired retain "
-            "sets (Shi et al., 2024)."
+        "muse": MappingProxyType(
+            {
+                "description": (
+                    "MUSE — real-world books / news corpora with paired retain "
+                    "sets (Shi et al., 2024)."
+                ),
+                "fixture": "muse_demo.jsonl",
+            }
         ),
-        "fixture": "muse_demo.jsonl",
-    }),
-    "wmdp": MappingProxyType({
-        "description": (
-            "WMDP — hazardous-knowledge unlearning across biology / "
-            "cyber / chemistry (Li et al., 2024). The bundled mini-set "
-            "ships REDACTED forget-set probes — Soup never bundles "
-            "verbatim hazardous content (matches v0.65.0 behaviour "
-            "battery policy)."
+        "wmdp": MappingProxyType(
+            {
+                "description": (
+                    "WMDP — hazardous-knowledge unlearning across biology / "
+                    "cyber / chemistry (Li et al., 2024). The bundled mini-set "
+                    "ships REDACTED forget-set probes — Soup never bundles "
+                    "verbatim hazardous content (matches v0.65.0 behaviour "
+                    "battery policy)."
+                ),
+                "fixture": "wmdp_demo.jsonl",
+            }
         ),
-        "fixture": "wmdp_demo.jsonl",
-    }),
-})
+    }
+)
 
 
 def validate_benchmark_name(value: object) -> str:
@@ -83,23 +91,17 @@ def validate_benchmark_name(value: object) -> str:
     if isinstance(value, bool):
         raise TypeError("benchmark must not be bool")
     if not isinstance(value, str):
-        raise TypeError(
-            f"benchmark must be str, got {type(value).__name__}"
-        )
+        raise TypeError(f"benchmark must be str, got {type(value).__name__}")
     if not value:
         raise ValueError("benchmark must be non-empty")
     if "\x00" in value:
         raise ValueError("benchmark must not contain null bytes")
     if len(value) > _MAX_BENCHMARK_LEN:
-        raise ValueError(
-            f"benchmark must be <= {_MAX_BENCHMARK_LEN} chars"
-        )
+        raise ValueError(f"benchmark must be <= {_MAX_BENCHMARK_LEN} chars")
     canonical = value.lower()
     if canonical not in BENCHMARKS:
         supported = ", ".join(sorted(BENCHMARKS))
-        raise ValueError(
-            f"unknown benchmark {value!r}; supported: {supported}"
-        )
+        raise ValueError(f"unknown benchmark {value!r}; supported: {supported}")
     return canonical
 
 
@@ -107,9 +109,7 @@ def _validate_run_id(value: object) -> str:
     if isinstance(value, bool):
         raise TypeError("run_id must not be bool")
     if not isinstance(value, str):
-        raise TypeError(
-            f"run_id must be str, got {type(value).__name__}"
-        )
+        raise TypeError(f"run_id must be str, got {type(value).__name__}")
     if not value:
         raise ValueError("run_id must be non-empty")
     if "\x00" in value:
@@ -124,9 +124,7 @@ def classify_unlearn_score(score: float) -> str:
     if isinstance(score, bool):
         raise TypeError("score must be float, not bool")
     if not isinstance(score, (int, float)):
-        raise TypeError(
-            f"score must be float, got {type(score).__name__}"
-        )
+        raise TypeError(f"score must be float, got {type(score).__name__}")
     value = float(score)
     if not math.isfinite(value):
         raise ValueError("score must be finite (no NaN / Inf)")
@@ -143,9 +141,7 @@ def _check_finite_non_negative(value: object, name: str) -> float:
     if isinstance(value, bool):
         raise TypeError(f"{name} must not be bool")
     if not isinstance(value, (int, float)):
-        raise TypeError(
-            f"{name} must be a number, got {type(value).__name__}"
-        )
+        raise TypeError(f"{name} must be a number, got {type(value).__name__}")
     fval = float(value)
     if not math.isfinite(fval):
         raise ValueError(f"{name} must be finite (no NaN / Inf)")
@@ -158,9 +154,7 @@ def _check_unit_interval(value: object, name: str) -> float:
     if isinstance(value, bool):
         raise TypeError(f"{name} must not be bool")
     if not isinstance(value, (int, float)):
-        raise TypeError(
-            f"{name} must be a number, got {type(value).__name__}"
-        )
+        raise TypeError(f"{name} must be a number, got {type(value).__name__}")
     fval = float(value)
     if not math.isfinite(fval):
         raise ValueError(f"{name} must be finite (no NaN / Inf)")
@@ -227,14 +221,10 @@ class UnlearnMetric:
         if not isinstance(self.name, str) or not self.name:
             raise ValueError("name must be non-empty str")
         if self.name not in _METRIC_NAMES:
-            raise ValueError(
-                f"name must be one of {_METRIC_NAMES}, got {self.name!r}"
-            )
+            raise ValueError(f"name must be one of {_METRIC_NAMES}, got {self.name!r}")
         expected = classify_unlearn_score(self.score)
         if not isinstance(self.verdict, str) or self.verdict not in VERDICTS:
-            raise ValueError(
-                f"verdict must be one of {VERDICTS}, got {self.verdict!r}"
-            )
+            raise ValueError(f"verdict must be one of {VERDICTS}, got {self.verdict!r}")
         if self.verdict != expected:
             raise ValueError(
                 f"verdict {self.verdict!r} disagrees with score "
@@ -266,27 +256,19 @@ class UnlearnReport:
     def __post_init__(self) -> None:
         _validate_run_id(self.run_id)
         if self.benchmark not in BENCHMARKS:
-            raise ValueError(
-                f"benchmark must be in {sorted(BENCHMARKS)}, got "
-                f"{self.benchmark!r}"
-            )
+            raise ValueError(f"benchmark must be in {sorted(BENCHMARKS)}, got {self.benchmark!r}")
         if not isinstance(self.metrics, tuple):
             raise TypeError("metrics must be a tuple of UnlearnMetric")
         for m in self.metrics:
             if not isinstance(m, UnlearnMetric):
-                raise TypeError(
-                    "metrics entries must be UnlearnMetric instances"
-                )
+                raise TypeError("metrics entries must be UnlearnMetric instances")
         if self.overall not in VERDICTS:
-            raise ValueError(
-                f"overall must be one of {VERDICTS}, got {self.overall!r}"
-            )
+            raise ValueError(f"overall must be one of {VERDICTS}, got {self.overall!r}")
         # overall must match worst-case
         expected_overall = _overall_verdict(tuple(m.verdict for m in self.metrics))
         if self.overall != expected_overall:
             raise ValueError(
-                f"overall {self.overall!r} disagrees with worst metric "
-                f"verdict {expected_overall!r}"
+                f"overall {self.overall!r} disagrees with worst metric verdict {expected_overall!r}"
             )
         if not isinstance(self.soup_version, str) or not self.soup_version:
             raise ValueError("soup_version must be non-empty str")
@@ -475,8 +457,7 @@ def get_fixture_path(benchmark: str) -> Optional[Path]:
     except (ModuleNotFoundError, TypeError):
         return None
     raw_candidate = Path(
-        os.path.join(str(pkg_root), "data", "_fixtures",
-                     "unlearning", fixture_name)
+        os.path.join(str(pkg_root), "data", "_fixtures", "unlearning", fixture_name)
     )
     # Symlink rejection at the RAW path BEFORE realpath (review-fix —
     # realpath resolves symlinks so lstat on the resolved target always
@@ -517,9 +498,7 @@ def load_evidence_file(path: str) -> Mapping[str, Mapping[str, Any]]:
         raise ValueError("evidence path must not be a symlink")
     real = os.path.realpath(path)
     if st.st_size > _MAX_EVIDENCE_BYTES:
-        raise ValueError(
-            f"evidence file exceeds {_MAX_EVIDENCE_BYTES} bytes"
-        )
+        raise ValueError(f"evidence file exceeds {_MAX_EVIDENCE_BYTES} bytes")
     with open(real, "r", encoding="utf-8") as f:
         data = json.load(f)
     if not isinstance(data, dict):

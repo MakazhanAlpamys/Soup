@@ -53,9 +53,7 @@ def _loss(s_tok, t_tok, student=None, teacher=None, **masks):
 
     student = _peaked(len(s_tok)) if student is None else student
     teacher = _peaked(len(t_tok)) if teacher is None else teacher
-    return uld_aligned_loss(
-        student, teacher, [s_tok], [t_tok], config=_cfg(), **masks
-    )
+    return uld_aligned_loss(student, teacher, [s_tok], [t_tok], config=_cfg(), **masks)
 
 
 class TestUnalignedPositionsLeaveTheLoss:
@@ -94,8 +92,10 @@ class TestUnalignedPositionsLeaveTheLoss:
         got = _loss(s_tok, t_tok, student=student, labels=labels)
 
         aligned_only = _loss(
-            ["a", "c"], ["a", "c"],
-            student=student[:, [0, 2, 3]], teacher=_peaked(2),
+            ["a", "c"],
+            ["a", "c"],
+            student=student[:, [0, 2, 3]],
+            teacher=_peaked(2),
             labels=torch.zeros((1, 3), dtype=torch.long),
         )
         # Same two supervised targets (positions 0 and 2 of the original).
@@ -113,7 +113,11 @@ class TestUnalignedPositionsLeaveTheLoss:
         from soup_cli.utils.uld import aligned_position_mask
 
         assert aligned_position_mask([[0], [], [5], [-1], [1, 9]], 2) == [
-            True, False, False, False, True,
+            True,
+            False,
+            False,
+            False,
+            True,
         ]
 
     def test_gradient_reaches_only_aligned_positions(self):
@@ -153,8 +157,7 @@ class _CharTokenizer:
     def batch_decode(self, rows, skip_special_tokens: bool = False):
         return [self.decode(r, skip_special_tokens=skip_special_tokens) for r in rows]
 
-    def __call__(self, texts, return_tensors=None, padding=True, truncation=True,
-                 max_length=None):
+    def __call__(self, texts, return_tensors=None, padding=True, truncation=True, max_length=None):
         rows = [[self.ids[c] for c in t][:max_length] for t in texts]
         width = max(len(r) for r in rows)
         ids = torch.zeros((len(rows), width), dtype=torch.long)
@@ -207,18 +210,20 @@ def test_trainer_keeps_student_special_tokens_out_of_aligned_uld(monkeypatch, tm
     monkeypatch.setattr(uld, "uld_aligned_loss", spy)
 
     trainer_cls = _compile_distill_trainer()
-    trainer_cls.compute_loss.__globals__.update({
-        "_sequence_mode": False,
-        "_minillm_on_policy": False,
-        "_uld_aligned": True,
-        "_uld_teacher_tokenizer": teacher_tok,
-        "_student_tokenizer": student_tok,
-        "teacher_ref": _PeakedLM(vocab).eval(),
-        "_uld_projection": types.SimpleNamespace(config=_cfg(vocab)),
-        "_minillm_cb": None,
-        "_CE_WEIGHT": 0.5,
-        "_DISTILL_WEIGHT": 0.5,
-    })
+    trainer_cls.compute_loss.__globals__.update(
+        {
+            "_sequence_mode": False,
+            "_minillm_on_policy": False,
+            "_uld_aligned": True,
+            "_uld_teacher_tokenizer": teacher_tok,
+            "_student_tokenizer": student_tok,
+            "teacher_ref": _PeakedLM(vocab).eval(),
+            "_uld_projection": types.SimpleNamespace(config=_cfg(vocab)),
+            "_minillm_cb": None,
+            "_CE_WEIGHT": 0.5,
+            "_DISTILL_WEIGHT": 0.5,
+        }
+    )
     args = transformers.TrainingArguments(
         output_dir=str(tmp_path / "uld1426"), report_to=[], use_cpu=True
     )

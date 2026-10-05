@@ -118,15 +118,11 @@ class TestSaveResumeLandsEveryLoraTensor:
         _requires_train_extra()
         targets = ["q_proj", "v_proj", head_target]
 
-        model, runtime = _build_streamed(
-            tmp_path / "a", tie=False, target_modules=targets, seed=3
-        )
+        model, runtime = _build_streamed(tmp_path / "a", tie=False, target_modules=targets, seed=3)
         try:
             _perturb_lora(model, seed=1234)
             saved = {
-                name: p.detach().clone()
-                for name, p in model.named_parameters()
-                if "lora_" in name
+                name: p.detach().clone() for name, p in model.named_parameters() if "lora_" in name
             }
             assert saved, "fixture: no LoRA parameters produced"
 
@@ -168,15 +164,11 @@ class TestDecoderOnlyTargetsStillWork:
         _requires_train_extra()
         targets = ["q_proj", "v_proj"]
 
-        model, runtime = _build_streamed(
-            tmp_path / "a", tie=False, target_modules=targets, seed=3
-        )
+        model, runtime = _build_streamed(tmp_path / "a", tie=False, target_modules=targets, seed=3)
         try:
             _perturb_lora(model, seed=1234)
             saved = {
-                name: p.detach().clone()
-                for name, p in model.named_parameters()
-                if "lora_" in name
+                name: p.detach().clone() for name, p in model.named_parameters() if "lora_" in name
             }
             ckpt_dir = tmp_path / "ckpt"
             ckpt_dir.mkdir()

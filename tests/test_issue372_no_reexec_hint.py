@@ -134,30 +134,32 @@ def test_a_flag_added_only_to_the_builder_shows_up_in_the_hint():
 # train() options that must NOT appear as collect_reexec_passthrough kwargs.
 # Adding a soup train flag fails this test until you either pass it through
 # or write it down here as local-only — silence is no longer a decision.
-EXPECTED_LOCAL_ONLY = frozenset({
-    # Wired by build_train_reexec_argv, not as passthrough kwargs.
-    "config",
-    "no_reexec",
-    # Becomes accelerate --num_processes; repeating --gpus would double-count.
-    "gpus",
-    # Consumed by Accelerate, not passed to its training subprocesses (#40).
-    "nodes",
-    "node_rank",
-    "master_addr",
-    "master_port",
-    # Plan-only: the multi-GPU path skips re-exec entirely.
-    "dry_run",
-    # Early-return before any launch.
-    "find_lr",
-    "find_lr_start",
-    "find_lr_end",
-    "find_lr_steps",
-    "find_lr_output",
-    # Different launch path (Modal). Incompatible with --gpus / accelerate.
-    "cloud",
-    "gpu",
-    "cloud_submit",
-})
+EXPECTED_LOCAL_ONLY = frozenset(
+    {
+        # Wired by build_train_reexec_argv, not as passthrough kwargs.
+        "config",
+        "no_reexec",
+        # Becomes accelerate --num_processes; repeating --gpus would double-count.
+        "gpus",
+        # Consumed by Accelerate, not passed to its training subprocesses (#40).
+        "nodes",
+        "node_rank",
+        "master_addr",
+        "master_port",
+        # Plan-only: the multi-GPU path skips re-exec entirely.
+        "dry_run",
+        # Early-return before any launch.
+        "find_lr",
+        "find_lr_start",
+        "find_lr_end",
+        "find_lr_steps",
+        "find_lr_output",
+        # Different launch path (Modal). Incompatible with --gpus / accelerate.
+        "cloud",
+        "gpu",
+        "cloud_submit",
+    }
+)
 
 
 def test_every_train_option_is_passed_through_or_deliberately_local():
@@ -175,19 +177,13 @@ def test_every_train_option_is_passed_through_or_deliberately_local():
     cli = set(inspect.signature(train).parameters)
     passed = set(inspect.signature(collect_reexec_passthrough).parameters)
     missing = cli - passed - EXPECTED_LOCAL_ONLY
-    assert not missing, (
-        f"new `soup train` flags not routed to re-exec: {sorted(missing)}"
-    )
+    assert not missing, f"new `soup train` flags not routed to re-exec: {sorted(missing)}"
     extra = passed - cli
-    assert not extra, (
-        f"passthrough kwargs that are not `soup train` options: {sorted(extra)}"
-    )
+    assert not extra, f"passthrough kwargs that are not `soup train` options: {sorted(extra)}"
     # The exclusion set itself must not list a flag that IS passed through,
     # or a later deletion of the passthrough kwarg would be hidden.
     overlap = passed & EXPECTED_LOCAL_ONLY
-    assert not overlap, (
-        f"flags listed local-only but also passed through: {sorted(overlap)}"
-    )
+    assert not overlap, f"flags listed local-only but also passed through: {sorted(overlap)}"
 
 
 def test_name_and_replay_survive_the_passthrough():
@@ -235,7 +231,8 @@ def _invoke_no_reexec(tmp_path, monkeypatch, extra_args):
         encoding="utf-8",
     )
     monkeypatch.setattr(
-        topo_mod, "detect_topology",
+        topo_mod,
+        "detect_topology",
         lambda: {"gpu_count": 4, "interconnect": "PCIe"},
     )
     monkeypatch.setattr(topo_mod, "resolve_num_gpus", lambda spec: 4)
@@ -243,8 +240,7 @@ def _invoke_no_reexec(tmp_path, monkeypatch, extra_args):
 
     result = CliRunner().invoke(
         app,
-        ["train", "--config", "soup.yaml", "--gpus", "4", "--no-reexec", "--yes",
-         *extra_args],
+        ["train", "--config", "soup.yaml", "--gpus", "4", "--no-reexec", "--yes", *extra_args],
     )
     out = re.sub(r"\x1b\[[0-9;]*m", "", result.output).replace("\n", " ")
     return result, out
@@ -252,9 +248,7 @@ def _invoke_no_reexec(tmp_path, monkeypatch, extra_args):
 
 class TestNoReexecHintCli:
     def test_fsdp_appears_in_the_printed_command(self, tmp_path, monkeypatch):
-        result, out = _invoke_no_reexec(
-            tmp_path, monkeypatch, ["--fsdp", "full_shard"]
-        )
+        result, out = _invoke_no_reexec(tmp_path, monkeypatch, ["--fsdp", "full_shard"])
         assert result.exit_code == 1, (out, repr(result.exception))
         assert "Multi-GPU launch required" in out, out
         assert "--fsdp" in out, out

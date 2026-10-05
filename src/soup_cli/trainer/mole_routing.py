@@ -127,9 +127,7 @@ def make_mole_trainer_class(base_cls: type) -> type:
             for i, name in enumerate(adapter_names):
                 model.set_adapter(name)
                 with torch.no_grad():
-                    out_i = model(
-                        input_ids=input_ids, attention_mask=attention_mask
-                    )
+                    out_i = model(input_ids=input_ids, attention_mask=attention_mask)
                 logits_i = out_i.logits.detach()  # [B, T, V] — frozen, no grad
                 w_i = weights[..., i : i + 1].to(logits_i.dtype)
                 term = w_i * logits_i
@@ -167,9 +165,7 @@ def _row_to_text(row: dict) -> str:
     messages = row.get("messages")
     if isinstance(messages, list):
         parts = [
-            str(m.get("content", ""))
-            for m in messages
-            if isinstance(m, dict) and m.get("content")
+            str(m.get("content", "")) for m in messages if isinstance(m, dict) and m.get("content")
         ]
         if parts:
             return "\n".join(parts)
@@ -180,9 +176,7 @@ def _row_to_text(row: dict) -> str:
     return ""
 
 
-def _prepare_mole_dataset(
-    raw_rows: list[dict], tokenizer: Any, max_length: int
-) -> list[dict]:
+def _prepare_mole_dataset(raw_rows: list[dict], tokenizer: Any, max_length: int) -> list[dict]:
     """Tokenise rows into (input_ids, attention_mask, labels) for causal LM."""
     prepared: list[dict] = []
     for row in raw_rows:
@@ -286,8 +280,7 @@ class MoleRoutingTrainerWrapper:
 
         if not isinstance(dataset, dict) or "train" not in dataset:
             raise ValueError(
-                "MoleRoutingTrainerWrapper.setup() needs a dataset dict with a "
-                "'train' key."
+                "MoleRoutingTrainerWrapper.setup() needs a dataset dict with a 'train' key."
             )
         cfg = self.config
         tcfg = cfg.training
@@ -298,8 +291,7 @@ class MoleRoutingTrainerWrapper:
         adapters = list(tcfg.mole_task_adapters or [])
         if len(adapters) < 2:
             raise RuntimeError(
-                "MoLE training requires >= 2 task adapters in "
-                "training.mole_task_adapters."
+                "MoLE training requires >= 2 task adapters in training.mole_task_adapters."
             )
 
         self.tokenizer = AutoTokenizer.from_pretrained(
@@ -318,9 +310,7 @@ class MoleRoutingTrainerWrapper:
         # Load the first adapter via from_pretrained, then load_adapter for the
         # rest — PEFT multi-adapter pattern (matches v0.71.8 interference_live).
         adapter_names = [f"task_{i}" for i in range(len(adapters))]
-        model = PeftModel.from_pretrained(
-            base_model, adapters[0], adapter_name=adapter_names[0]
-        )
+        model = PeftModel.from_pretrained(base_model, adapters[0], adapter_name=adapter_names[0])
         for name, path in zip(adapter_names[1:], adapters[1:]):
             model.load_adapter(path, adapter_name=name)
 
@@ -329,9 +319,7 @@ class MoleRoutingTrainerWrapper:
             param.requires_grad_(False)
 
         top_k = tcfg.mole_top_k if tcfg.mole_top_k is not None else len(adapters)
-        temperature = (
-            tcfg.mole_temperature if tcfg.mole_temperature is not None else 1.0
-        )
+        temperature = tcfg.mole_temperature if tcfg.mole_temperature is not None else 1.0
         gate_cfg = MoleGatingConfig(
             num_task_adapters=len(adapters),
             hidden_dim=hidden_size,
@@ -366,9 +354,7 @@ class MoleRoutingTrainerWrapper:
         self.model = model
         self._adapter_names = adapter_names
         self._dataset = dataset
-        n_trainable = sum(
-            p.numel() for p in model.parameters() if p.requires_grad
-        )
+        n_trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
         console.print(
             f"[green]MoLE trainer ready[/]: base={cfg.base}, "
             f"adapters={len(adapters)}, top_k={top_k}, temp={temperature}, "
@@ -388,9 +374,7 @@ class MoleRoutingTrainerWrapper:
         # #802 contract: display, tracker, and run_id are accepted for caller
         # uniformity but not wired here.
         if self.model is None:
-            raise RuntimeError(
-                "MoleRoutingTrainerWrapper.train() called before setup()"
-            )
+            raise RuntimeError("MoleRoutingTrainerWrapper.train() called before setup()")
         from datasets import Dataset
         from transformers import Trainer, TrainingArguments
 
@@ -427,9 +411,9 @@ class MoleRoutingTrainerWrapper:
             )
             console.print(f"[green]Auto batch size (MoLE):[/] {batch_size}")
         bs = int(batch_size)
-        total_steps = math.ceil(
-            len(train_rows) / bs / tcfg.gradient_accumulation_steps
-        ) * tcfg.epochs
+        total_steps = (
+            math.ceil(len(train_rows) / bs / tcfg.gradient_accumulation_steps) * tcfg.epochs
+        )
         warmup_steps = int(total_steps * tcfg.warmup_ratio)
         use_bf16, use_fp16 = bf16_fp16_flags(self.device)
         from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
@@ -515,9 +499,7 @@ class MoleRoutingTrainerWrapper:
             temperature=self._gate_cfg.temperature,
         )
         manifest_path = write_mole_manifest(manifest, str(output_dir))
-        console.print(
-            f"[green]MoLE serve manifest written:[/] {manifest_path}"
-        )
+        console.print(f"[green]MoLE serve manifest written:[/] {manifest_path}")
         # Match the generic train.py result shape (initial/final loss, duration,
         # total_steps) so `soup train task=moe_lora_routing` completes cleanly,
         # while keeping the MoLE-specific keys (gate_path / manifest_path).

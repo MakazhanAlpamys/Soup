@@ -31,12 +31,32 @@ import sys
 import pytest
 
 _SPECIALS = [
-    "<unk>", "<s>", "</s>",
-    "<|system|>", "<|user|>", "<|assistant|>", "<|end|>",
+    "<unk>",
+    "<s>",
+    "</s>",
+    "<|system|>",
+    "<|user|>",
+    "<|assistant|>",
+    "<|end|>",
 ]
 _WORDS = [
-    "You", "are", "terse", ".", "What", "is", "the", "capital", "of", "France",
-    "?", "Paris", "Berlin", "Germany", "system", "user", "assistant",
+    "You",
+    "are",
+    "terse",
+    ".",
+    "What",
+    "is",
+    "the",
+    "capital",
+    "of",
+    "France",
+    "?",
+    "Paris",
+    "Berlin",
+    "Germany",
+    "system",
+    "user",
+    "assistant",
 ]
 _BOS_ID = _SPECIALS.index("<s>")
 _EOS_ID = _SPECIALS.index("</s>")
@@ -117,9 +137,7 @@ def _trl_main_text_eos_count(tok, messages):
     it agrees with :func:`_live_eos_count`; both are the stop token the cache
     must match.
     """
-    text = tok.apply_chat_template(
-        messages, tokenize=False, add_generation_prompt=False
-    )
+    text = tok.apply_chat_template(messages, tokenize=False, add_generation_prompt=False)
     if not text.endswith(tok.eos_token):
         text = text + tok.eos_token
     return tok(text)["input_ids"].count(_EOS_ID)
@@ -142,14 +160,10 @@ def _run_preprocess(tmp_path, monkeypatch, tok, *, task="sft", rows, max_length=
         encoding="utf-8",
     )
     (tmp_path / "d.jsonl").write_text("{}\n", encoding="utf-8")
-    monkeypatch.setattr(
-        transformers.AutoTokenizer, "from_pretrained", lambda *a, **k: tok
-    )
+    monkeypatch.setattr(transformers.AutoTokenizer, "from_pretrained", lambda *a, **k: tok)
     # Control the rows directly so the assertion is about tokenization, not
     # format conversion. preprocess_dataset local-imports this name.
-    monkeypatch.setattr(
-        "soup_cli.data.loader.load_dataset", lambda *a, **k: {"train": rows}
-    )
+    monkeypatch.setattr("soup_cli.data.loader.load_dataset", lambda *a, **k: {"train": rows})
     result = CliRunner().invoke(app, ["data", "preprocess", "soup.yaml", "--yes"])
     assert result.exit_code == 0, result.output
     cache_dirs = [p for p in (tmp_path / ".soup-tokenized").iterdir() if p.is_dir()]
@@ -218,9 +232,7 @@ class TestControls:
         expected = tok(raw, add_special_tokens=True)["input_ids"]
         assert expected[-1] != _EOS_ID, "guard: the raw row must not already end on EOS"
 
-        (ids,) = _run_preprocess(
-            tmp_path, monkeypatch, tok, task="pretrain", rows=[{"text": raw}]
-        )
+        (ids,) = _run_preprocess(tmp_path, monkeypatch, tok, task="pretrain", rows=[{"text": raw}])
         assert ids == expected
 
     def test_truncated_row_is_not_pushed_past_the_budget(self, tmp_path, monkeypatch):

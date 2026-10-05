@@ -24,6 +24,7 @@ _ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*[mK]")
 def _strip_ansi(text: str) -> str:
     return _ANSI_ESCAPE.sub("", text)
 
+
 # ---------------------------------------------------------------------------
 # Allowlist
 # ---------------------------------------------------------------------------
@@ -201,8 +202,7 @@ class TestRequiresProbe:
 
         config = tmp_path / "config.json"
         config.write_text(
-            '{"model_type": "custom", "auto_map": '
-            '{"AutoModelForCausalLM": "modeling.Custom"}}',
+            '{"model_type": "custom", "auto_map": {"AutoModelForCausalLM": "modeling.Custom"}}',
             encoding="utf-8",
         )
         assert model_requires_trust_remote_code(str(tmp_path)) is True

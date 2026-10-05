@@ -56,26 +56,32 @@ class GateTask(BaseModel):
     )
     name: str = Field(description="Task name (used as baseline key)")
     threshold: float = Field(
-        ge=0.0, le=1000.0,
+        ge=0.0,
+        le=1000.0,
         description="Minimum score to pass (scale depends on scorer)",
     )
     # type=custom
     tasks: Optional[str] = Field(
-        default=None, description="JSONL file of custom eval tasks",
+        default=None,
+        description="JSONL file of custom eval tasks",
     )
     scorer: Optional[Literal["exact", "contains", "answer", "regex", "semantic"]] = Field(
-        default=None, description="Scorer for type=custom",
+        default=None,
+        description="Scorer for type=custom",
     )
     # type=judge
     prompts: Optional[str] = Field(
-        default=None, description="JSONL prompts for LLM judge",
+        default=None,
+        description="JSONL prompts for LLM judge",
     )
     judge_model: Optional[str] = Field(
-        default=None, description="Judge model URL (e.g. ollama://llama3.1)",
+        default=None,
+        description="Judge model URL (e.g. ollama://llama3.1)",
     )
     # type=benchmark
     benchmark: Optional[str] = Field(
-        default=None, description="Registered benchmark id (e.g. mini_mmlu)",
+        default=None,
+        description="Registered benchmark id (e.g. mini_mmlu)",
     )
 
     @field_validator("tasks", "prompts")
@@ -106,7 +112,7 @@ class GateTask(BaseModel):
             refuse_private_ip_literal(parsed.hostname, label="judge_model URL")
             return value
 
-        if (parsed.scheme == "http" and parsed.hostname in {"localhost", "127.0.0.1"}):
+        if parsed.scheme == "http" and parsed.hostname in {"localhost", "127.0.0.1"}:
             return value
 
         raise ValueError(
@@ -126,9 +132,7 @@ def load_suite(path: str) -> EvalSuite:
     """Load and validate an eval suite from disk."""
     suite_path = Path(path)
     if not is_under_cwd(suite_path):
-        raise ValueError(
-            f"eval-gate suite '{path}' is outside cwd - refusing to load"
-        )
+        raise ValueError(f"eval-gate suite '{path}' is outside cwd - refusing to load")
     if not suite_path.exists():
         raise FileNotFoundError(f"eval-gate suite not found: {path}")
     data = yaml.safe_load(suite_path.read_text(encoding="utf-8")) or {}
@@ -161,8 +165,7 @@ def stamp_baseline_scores(scores: Mapping[str, float]) -> dict[str, object]:
             raise ValueError("baseline score names must be non-empty and null-free")
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             raise TypeError(
-                f"baseline score for {name!r} must be a number, "
-                f"got {type(value).__name__}"
+                f"baseline score for {name!r} must be a number, got {type(value).__name__}"
             )
         clean[name] = float(value)
     return {
@@ -201,8 +204,7 @@ def _coerce_score_map(raw: Mapping[object, object], *, context: str) -> dict[str
             continue
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             raise ValueError(
-                f"{context}: score for {name!r} must be a number, "
-                f"got {type(value).__name__}"
+                f"{context}: score for {name!r} must be a number, got {type(value).__name__}"
             )
         out[name] = float(value)
     return out
@@ -225,9 +227,7 @@ def _envelope_extra_keys(data: Mapping[object, object]) -> list[str]:
     if not isinstance(data.get(_BASELINE_SCORES_KEY), Mapping):
         return []
     return sorted(
-        str(k)
-        for k in data.keys()
-        if k not in {_BASELINE_SCORES_KEY, _BASELINE_PROVENANCE_KEY}
+        str(k) for k in data.keys() if k not in {_BASELINE_SCORES_KEY, _BASELINE_PROVENANCE_KEY}
     )
 
 
@@ -317,20 +317,15 @@ def resolve_baseline(
     if spec.startswith("registry://"):
         from soup_cli.registry.store import RegistryStore
 
-        ref = spec[len("registry://"):]
+        ref = spec[len("registry://") :]
         with RegistryStore() as store:
             # ``resolve`` strips the scheme itself; pass the raw ref so the
             # error path below reports what the user typed.
             entry_id = store.resolve(ref)
             if entry_id is None:
-                raise ValueError(
-                    f"registry baseline not found: {ref} (use `soup registry list`)"
-                )
+                raise ValueError(f"registry baseline not found: {ref} (use `soup registry list`)")
             rows = store.get_eval_results(entry_id)
-        newest = {
-            row["benchmark"]: row
-            for row in newest_eval_rows(rows)
-        }
+        newest = {row["benchmark"]: row for row in newest_eval_rows(rows)}
         scores = {name: float(row["score"]) for name, row in newest.items()}
         # Registry rows predate the stamp (or carry it inside details_json).
         # Checked per benchmark: re-measuring one benchmark says nothing about
@@ -351,9 +346,7 @@ def resolve_baseline(
     # Filesystem path
     baseline_path = Path(spec)
     if not is_under_cwd(baseline_path):
-        raise ValueError(
-            f"baseline file '{spec}' is outside cwd - refusing to load"
-        )
+        raise ValueError(f"baseline file '{spec}' is outside cwd - refusing to load")
     if not baseline_path.exists():
         raise FileNotFoundError(f"baseline file not found: {spec}")
     try:
@@ -362,8 +355,7 @@ def resolve_baseline(
         raise ValueError(f"invalid JSON in baseline file: {exc}") from exc
     if not isinstance(data, dict):
         raise ValueError(
-            f"baseline file must be a JSON object mapping name -> score; "
-            f"got {type(data).__name__}"
+            f"baseline file must be a JSON object mapping name -> score; got {type(data).__name__}"
         )
 
     # Stamped envelope (exact keys) OR scores-mapping with unsupported extras.
@@ -380,9 +372,7 @@ def resolve_baseline(
                 warn=warn,
             )
         if _is_stamped_envelope(data) or extra:
-            scores = _coerce_score_map(
-                data[_BASELINE_SCORES_KEY], context="baseline scores"
-            )
+            scores = _coerce_score_map(data[_BASELINE_SCORES_KEY], context="baseline scores")
             message = _provenance_warning(data.get(_BASELINE_PROVENANCE_KEY))
             if message is not None and scores:
                 _emit_baseline_warning(message, warn=warn)
@@ -413,7 +403,7 @@ def _parse_judge_url(judge_model: str) -> tuple[str, str, Optional[str]]:
     parsed = urlparse(judge_model)
 
     if parsed.scheme == "ollama":
-        return ("ollama", judge_model[len("ollama://"):], None)
+        return ("ollama", judge_model[len("ollama://") :], None)
 
     if parsed.scheme == "https":
         # Only the OpenAI API host is given the OpenAI provider (and so
@@ -423,32 +413,25 @@ def _parse_judge_url(judge_model: str) -> tuple[str, str, Optional[str]]:
             default_provider = "openai"
         else:
             default_provider = "server"
-    elif (
-        parsed.scheme == "http"
-        and parsed.hostname in ("localhost", "127.0.0.1")
-    ):
+    elif parsed.scheme == "http" and parsed.hostname in ("localhost", "127.0.0.1"):
         default_provider = "server"
     else:
-        raise ValueError(
-            f"judge_model '{judge_model}' uses unsupported scheme"
-        )
+        raise ValueError(f"judge_model '{judge_model}' uses unsupported scheme")
 
     try:
         base, model = judge_model.rsplit("/", 1)
     except ValueError as exc:
-        raise ValueError(
-            f"judge_model '{judge_model}' missing model id"
-        ) from exc
+        raise ValueError(f"judge_model '{judge_model}' missing model id") from exc
 
     if not model:
-        raise ValueError(
-            f"judge_model '{judge_model}' missing model id"
-        )
+        raise ValueError(f"judge_model '{judge_model}' missing model id")
 
     return (default_provider, model, base)
 
+
 def _run_judge_task(
-    task: GateTask, generate_fn: Callable[[str], str],
+    task: GateTask,
+    generate_fn: Callable[[str], str],
 ) -> float:
     """Run a type=judge task. Generates a completion per prompt, then asks
     the judge model to score the (prompt, response) pair according to the
@@ -457,9 +440,7 @@ def _run_judge_task(
     if not task.prompts:
         raise ValueError(f"task '{task.name}' is type=judge but 'prompts' is missing")
     if not task.judge_model:
-        raise ValueError(
-            f"task '{task.name}' is type=judge but 'judge_model' is missing"
-        )
+        raise ValueError(f"task '{task.name}' is type=judge but 'judge_model' is missing")
 
     prompts_path = Path(task.prompts)
     if not is_under_cwd(prompts_path):
@@ -481,16 +462,16 @@ def _run_judge_task(
             try:
                 row = json.loads(line)
             except json.JSONDecodeError as exc:
-                raise ValueError(
-                    f"invalid JSONL in {task.prompts}: {exc}"
-                ) from exc
+                raise ValueError(f"invalid JSONL in {task.prompts}: {exc}") from exc
             prompt = row.get("prompt", "")
             response = generate_fn(prompt)
-            items.append({
-                "prompt": prompt,
-                "response": response,
-                "category": row.get("category", "default"),
-            })
+            items.append(
+                {
+                    "prompt": prompt,
+                    "response": response,
+                    "category": row.get("category", "default"),
+                }
+            )
 
     if not items:
         return 0.0
@@ -520,13 +501,12 @@ def _run_judge_task(
 
 
 def _run_benchmark_task(
-    task: GateTask, generate_fn: Callable[[str], str],
+    task: GateTask,
+    generate_fn: Callable[[str], str],
 ) -> float:
     """Run a type=benchmark task using the existing forgetting-mini-benchmark."""
     if not task.benchmark:
-        raise ValueError(
-            f"task '{task.name}' is type=benchmark but 'benchmark' is missing"
-        )
+        raise ValueError(f"task '{task.name}' is type=benchmark but 'benchmark' is missing")
     from soup_cli.eval.forgetting import ForgettingDetector
 
     score = ForgettingDetector(
@@ -537,7 +517,8 @@ def _run_benchmark_task(
 
 
 def _run_custom_task(
-    task: GateTask, generate_fn: Callable[[str], str],
+    task: GateTask,
+    generate_fn: Callable[[str], str],
 ) -> float:
     """Run a type=custom task and return its aggregate score in [0, 1]."""
     from dataclasses import replace
@@ -622,15 +603,17 @@ def run_gate(
         if regressed:
             any_regressed = True
 
-        task_results.append(GateTaskResult(
-            name=task.name,
-            score=score,
-            threshold=task.threshold,
-            baseline=base_score,
-            delta=delta,
-            passed=passed_threshold and not regressed,
-            error=error,
-        ))
+        task_results.append(
+            GateTaskResult(
+                name=task.name,
+                score=score,
+                threshold=task.threshold,
+                baseline=base_score,
+                delta=delta,
+                passed=passed_threshold and not regressed,
+                error=error,
+            )
+        )
 
     return GateResult(
         passed=not (any_failed_threshold or any_regressed),

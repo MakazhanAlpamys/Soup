@@ -8,6 +8,7 @@ Tests cover:
 * #93 — package-data migration (soup_cli/data/_fixtures/)
 * #69 — HF Space SDK auto-pick from requirements.txt
 """
+
 from __future__ import annotations
 
 import json
@@ -183,9 +184,7 @@ class TestDownloadRepoLazyImport:
             hubs.download_repo("modelers", "owner/repo", local_dir="./snap_v0538")
 
     def test_hf_dispatch_calls_snapshot_download(self):
-        with patch(
-            "huggingface_hub.snapshot_download", return_value="/local/snap"
-        ) as mocked:
+        with patch("huggingface_hub.snapshot_download", return_value="/local/snap") as mocked:
             from soup_cli.utils.hubs import download_repo
 
             # namespace_check=False: this test exercises SDK dispatch only;
@@ -193,7 +192,9 @@ class TestDownloadRepoLazyImport:
             # tests/test_v0712.py and would otherwise attempt a network
             # metadata fetch here.
             result = download_repo(
-                "hf", "owner/repo", local_dir="./snap_v0538",
+                "hf",
+                "owner/repo",
+                local_dir="./snap_v0538",
                 namespace_check=False,
             )
             assert result == "/local/snap"
@@ -273,10 +274,7 @@ class TestSendTelemetryPayload:
         from soup_cli.utils.trackers import send_telemetry_payload
 
         assert (
-            send_telemetry_payload(
-                {"command": "train"}, endpoint="http://evil.example/i/"
-            )
-            is False
+            send_telemetry_payload({"command": "train"}, endpoint="http://evil.example/i/") is False
         )
 
     def test_private_ip_endpoint_rejected(self, monkeypatch):
@@ -284,21 +282,14 @@ class TestSendTelemetryPayload:
         monkeypatch.setenv("SOUP_TELEMETRY", "1")
         from soup_cli.utils.trackers import send_telemetry_payload
 
-        assert (
-            send_telemetry_payload(
-                {"command": "train"}, endpoint="https://10.0.0.1/i/"
-            )
-            is False
-        )
+        assert send_telemetry_payload({"command": "train"}, endpoint="https://10.0.0.1/i/") is False
 
     def test_link_local_endpoint_rejected(self, monkeypatch):
         monkeypatch.setenv("SOUP_TELEMETRY", "1")
         from soup_cli.utils.trackers import send_telemetry_payload
 
         assert (
-            send_telemetry_payload(
-                {"command": "train"}, endpoint="https://169.254.169.254/i/"
-            )
+            send_telemetry_payload({"command": "train"}, endpoint="https://169.254.169.254/i/")
             is False
         )
 
@@ -351,12 +342,7 @@ class TestSendTelemetryPayload:
         from soup_cli.utils.trackers import send_telemetry_payload
 
         # Must never raise
-        assert (
-            send_telemetry_payload(
-                {"command": "train"}, api_key="phc_live_test_key"
-            )
-            is False
-        )
+        assert send_telemetry_payload({"command": "train"}, api_key="phc_live_test_key") is False
 
 
 # ----------------------------------------------------------------------
@@ -463,9 +449,7 @@ class TestRemoteLoader:
 
         from soup_cli.data.loader import _load_remote_dataset
 
-        cfg = DataConfig(
-            train="s3://bucket/data.jsonl", format="alpaca", val_split=0
-        )
+        cfg = DataConfig(train="s3://bucket/data.jsonl", format="alpaca", val_split=0)
         result = _load_remote_dataset("s3://bucket/data.jsonl", cfg)
         assert "train" in result
         assert len(result["train"]) == 2
@@ -547,9 +531,7 @@ class TestDataDownloadHubFlag:
 
         from soup_cli.commands.data import app
 
-        result = CliRunner().invoke(
-            app, ["download", "ds", "--hub", "evilcorp"]
-        )
+        result = CliRunner().invoke(app, ["download", "ds", "--hub", "evilcorp"])
         assert result.exit_code != 0
         clean = _strip_ansi(result.output)
         assert "evilcorp" in clean or "not supported" in clean
@@ -559,9 +541,7 @@ class TestDataDownloadHubFlag:
 
         from soup_cli.commands.data import app
 
-        result = CliRunner().invoke(
-            app, ["download", "ds", "--hub", "modelscope"]
-        )
+        result = CliRunner().invoke(app, ["download", "ds", "--hub", "modelscope"])
         assert result.exit_code != 0
         clean = _strip_ansi(result.output)
         assert "modelscope" in clean

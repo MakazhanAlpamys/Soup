@@ -33,17 +33,13 @@ _LLAMA_REGEX = re.compile(r"(?:^|[^a-z0-9])(?:code)?-?llama(?:-?\d+(?:\.\d+)?)?(
 # a substring inside an unrelated identifier (e.g. ``my-mistralish-finetune``)
 # must NOT match silently. Each regex accepts the family name with an optional
 # version digit suffix.
-_MISTRAL_REGEX = re.compile(
-    r"(?:^|[^a-z0-9])mistral(?:-?\d+(?:\.\d+)?)?(?:[^a-z0-9]|$)"
-)
+_MISTRAL_REGEX = re.compile(r"(?:^|[^a-z0-9])mistral(?:-?\d+(?:\.\d+)?)?(?:[^a-z0-9]|$)")
 # v0.71.16 #147 — Mixtral needs its OWN regex: the bare ``mistral`` token does
 # not appear in ``mixtral`` (m-i-x vs m-i-s), so ``is_mistral_model`` excludes
 # the MoE variant. The Mixtral attention is structurally identical to Mistral's
 # (separate q/k/v projections, GQA) — only the MLP is a sparse MoE — so the S²
 # forward override reuses the separate-QKV projection-shift path.
-_MIXTRAL_REGEX = re.compile(
-    r"(?:^|[^a-z0-9])mixtral(?:-?\d+(?:\.\d+)?)?(?:[^a-z0-9]|$)"
-)
+_MIXTRAL_REGEX = re.compile(r"(?:^|[^a-z0-9])mixtral(?:-?\d+(?:\.\d+)?)?(?:[^a-z0-9]|$)")
 _QWEN_REGEX = re.compile(r"(?:^|[^a-z0-9])qwen(?:-?\d+(?:\.\d+)?)?(?:[^a-z0-9]|$)")
 _PHI_REGEX = re.compile(r"(?:^|[^a-z0-9])phi(?:-?\d+(?:\.\d+)?)?(?:[^a-z0-9]|$)")
 
@@ -65,9 +61,7 @@ def _check_model_name(model_name: str) -> str | None:
     clean error rather than silently falling through.
     """
     if isinstance(model_name, bool):
-        raise TypeError(
-            f"model_name must be a string, got {type(model_name).__name__}"
-        )
+        raise TypeError(f"model_name must be a string, got {type(model_name).__name__}")
     if not isinstance(model_name, str):
         raise TypeError(f"model_name must be a string, got {type(model_name).__name__}")
     if "\x00" in model_name:
@@ -222,9 +216,7 @@ def validate_longlora_compat(
             "or set use_longlora=false."
         )
     if backend != "transformers":
-        raise ValueError(
-            f"LongLoRA requires backend='transformers' (got backend={backend!r})."
-        )
+        raise ValueError(f"LongLoRA requires backend='transformers' (got backend={backend!r}).")
     if task != "sft":
         raise ValueError(
             f"LongLoRA is currently restricted to task='sft' (got task={task!r}). "
@@ -291,9 +283,7 @@ def shift_heads_for_s2(
     if group_size < 2:
         raise ValueError(f"group_size must be >= 2, got {group_size}")
     if not hasattr(tensor, "shape") or len(tensor.shape) != 4:
-        raise ValueError(
-            "shift_heads_for_s2 expects a 4-D tensor [B, H, T, D]"
-        )
+        raise ValueError("shift_heads_for_s2 expects a 4-D tensor [B, H, T, D]")
     num_heads = tensor.shape[1]
     if num_heads < 2:
         # Can't split into two head groups — return as-is.
@@ -328,21 +318,14 @@ def _resolve_head_dim(attn: Any) -> int | None:
             return hd
         n = getattr(cfg, "num_attention_heads", None)
         hs = getattr(cfg, "hidden_size", None)
-        if (
-            isinstance(n, int)
-            and isinstance(hs, int)
-            and n > 0
-            and hs % n == 0
-        ):
+        if isinstance(n, int) and isinstance(hs, int) and n > 0 and hs % n == 0:
             return hs // n
     return None
 
 
 def _resolve_head_counts(attn: Any) -> tuple[int | None, int | None]:
     """Best-effort (num_q_heads, num_kv_heads) for the fused-QKV split."""
-    n_q = getattr(attn, "num_heads", None) or getattr(
-        attn, "num_attention_heads", None
-    )
+    n_q = getattr(attn, "num_heads", None) or getattr(attn, "num_attention_heads", None)
     n_kv = getattr(attn, "num_key_value_heads", None)
     cfg = getattr(attn, "config", None)
     if cfg is not None:
@@ -418,9 +401,7 @@ class LongLoRAForwardOverride:
         if isinstance(group_size, bool):
             raise TypeError("group_size must be int, not bool")
         if not isinstance(group_size, int):
-            raise TypeError(
-                f"group_size must be int, got {type(group_size).__name__}"
-            )
+            raise TypeError(f"group_size must be int, got {type(group_size).__name__}")
         if group_size < 2:
             raise ValueError(f"group_size must be >= 2, got {group_size}")
         self.model = model
@@ -454,9 +435,7 @@ class LongLoRAForwardOverride:
         # v0.71.16 #147 — ``Mixtral`` added: ``Mistral\w*Attention`` does NOT
         # match ``MixtralAttention`` (different token), so the override would
         # silently skip Mixtral without this alternative.
-        attention_class_re = re.compile(
-            r"(?:Llama|Mistral|Mixtral|Qwen|Phi)\w*Attention$"
-        )
+        attention_class_re = re.compile(r"(?:Llama|Mistral|Mixtral|Qwen|Phi)\w*Attention$")
 
         for module in _walk_modules(self.model):
             cls_name = type(module).__name__
@@ -553,8 +532,8 @@ class LongLoRAForwardOverride:
 
                 try:
                     q = out[..., :q_dim]
-                    k = out[..., q_dim:q_dim + k_dim]
-                    v = out[..., q_dim + k_dim:]
+                    k = out[..., q_dim : q_dim + k_dim]
+                    v = out[..., q_dim + k_dim :]
                     q_sh = _shift_proj_block(
                         q, head_dim=head_dim, n_heads=n_q, group_size=group_size
                     )

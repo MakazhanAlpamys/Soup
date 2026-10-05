@@ -36,7 +36,8 @@ def init(
     ),
     branch: str = typer.Option("main", "--branch", help="Branch the workflow triggers on"),
     config: Optional[str] = typer.Option(
-        None, "--config",
+        None,
+        "--config",
         help="Bind the ship gate to a committed soup.yaml (refuses stale evidence)",
     ),
     output: str = typer.Option(

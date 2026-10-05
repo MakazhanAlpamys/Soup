@@ -61,8 +61,7 @@ class TestThereIsExactlyOneDefinition:
                 continue
             for node in ast.walk(tree):
                 if isinstance(node, ast.Assign) and any(
-                    isinstance(t, ast.Name) and t.id == "skip_on_windows_ci"
-                    for t in node.targets
+                    isinstance(t, ast.Name) and t.id == "skip_on_windows_ci" for t in node.targets
                 ):
                     builders.append(path.name)
         assert builders == [_HOME.name], (
@@ -142,8 +141,7 @@ FIXTURE_TESTS: dict[str, tuple[str, ...]] = {
 
 def _decorator_names(node: ast.AST) -> set:
     return {
-        d.id if isinstance(d, ast.Name) else getattr(d, "attr", "")
-        for d in node.decorator_list
+        d.id if isinstance(d, ast.Name) else getattr(d, "attr", "") for d in node.decorator_list
     }
 
 
@@ -154,9 +152,7 @@ def _param_names(node: ast.FunctionDef) -> set:
 def _find_test(filename: str, target: str) -> ast.FunctionDef:
     tree = ast.parse((_TESTS_DIR / filename).read_text(encoding="utf-8"))
     found = [
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.FunctionDef) and node.name == target
+        node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef) and node.name == target
     ]
     assert found, f"{filename}::{target} not found — did it move or get renamed?"
     return found[0]
@@ -172,8 +168,7 @@ class TestTheCrashingTestsAreActuallyGuarded:
     def test_the_guarded_test_carries_the_marker(self, filename, target):
         node = _find_test(filename, target)
         assert "skip_on_windows_ci" in _decorator_names(node), (
-            f"{filename}::{target} runs a real trainer.train() and must carry the "
-            f"#382 guard"
+            f"{filename}::{target} runs a real trainer.train() and must carry the #382 guard"
         )
 
     def test_every_guarded_file_is_a_known_call_site(self):
@@ -198,6 +193,7 @@ class TestTheHalfPrecisionTestsRequestTheFixture:
             f"{filename}::{target} requests aten_half_matmuls and must not also skip; "
             f"if it needs the #382 skip back, move it to GUARDED_TESTS and link the log"
         )
+
 
 @pytest.mark.skipif(
     os.environ.get("CI") == "true" and sys.platform == "win32",

@@ -35,6 +35,7 @@ from soup_cli.utils.shortcuts import (
 
 # --- graceful_save (SIGINT handler) -----------------------------------------
 
+
 class _FakeState:
     should_save = False
     should_training_stop = False
@@ -93,6 +94,7 @@ def test_graceful_save_state_attribute_missing_does_not_crash():
 
 
 # --- checkpoint_trigger -----------------------------------------------------
+
 
 def test_trigger_path_under_cwd(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
@@ -167,6 +169,7 @@ def test_should_save_now_false_for_invalid_input():
 
 # --- shortcuts --------------------------------------------------------------
 
+
 def test_detect_platform_known():
     assert detect_platform() in {"linux", "darwin", "windows", "unknown"}
 
@@ -230,6 +233,7 @@ def test_build_for_current_platform_returns_a_spec():
 
 # --- onboarding wizard ------------------------------------------------------
 
+
 def test_render_onboarding_yaml_happy_path():
     text = render_onboarding_yaml(
         {
@@ -264,9 +268,7 @@ def test_render_onboarding_yaml_default_quant_and_output():
 
 def test_render_onboarding_yaml_rejects_unknown_task():
     with pytest.raises(ValueError, match="task must be"):
-        render_onboarding_yaml(
-            {"base": "x/y", "dataset": "d", "task": "bogus", "epochs": 1}
-        )
+        render_onboarding_yaml({"base": "x/y", "dataset": "d", "task": "bogus", "epochs": 1})
 
 
 def test_render_onboarding_yaml_rejects_unknown_quant():
@@ -284,17 +286,11 @@ def test_render_onboarding_yaml_rejects_unknown_quant():
 
 def test_render_onboarding_yaml_rejects_bad_epochs():
     with pytest.raises(ValueError):
-        render_onboarding_yaml(
-            {"base": "x/y", "dataset": "d", "task": "sft", "epochs": 0}
-        )
+        render_onboarding_yaml({"base": "x/y", "dataset": "d", "task": "sft", "epochs": 0})
     with pytest.raises(ValueError):
-        render_onboarding_yaml(
-            {"base": "x/y", "dataset": "d", "task": "sft", "epochs": 99}
-        )
+        render_onboarding_yaml({"base": "x/y", "dataset": "d", "task": "sft", "epochs": 99})
     with pytest.raises(TypeError):
-        render_onboarding_yaml(
-            {"base": "x/y", "dataset": "d", "task": "sft", "epochs": True}
-        )
+        render_onboarding_yaml({"base": "x/y", "dataset": "d", "task": "sft", "epochs": True})
 
 
 def test_render_onboarding_yaml_rejects_null_byte():

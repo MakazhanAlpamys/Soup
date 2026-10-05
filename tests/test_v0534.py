@@ -315,8 +315,12 @@ class TestApplyLongContextLlama3Autodetect:
 
         model_config = SimpleNamespace(
             max_position_embeddings=8192,
-            rope_scaling={"type": "llama3", "factor": 8.0,
-                          "low_freq_factor": 1.0, "high_freq_factor": 4.0},
+            rope_scaling={
+                "type": "llama3",
+                "factor": 8.0,
+                "low_freq_factor": 1.0,
+                "high_freq_factor": 4.0,
+            },
         )
         # Caller explicitly asks for linear — must not silently switch to llama3.
         # #1239: nor may linear silently replace the checkpoint's own llama3
@@ -571,9 +575,7 @@ class TestZeroInitWarningOnUnknownArch:
 
         class StubModel:
             def __init__(self):
-                self.model = SimpleNamespace(
-                    layers=StubLayers([StubBlock(), StubBlock()])
-                )
+                self.model = SimpleNamespace(layers=StubLayers([StubBlock(), StubBlock()]))
                 self.config = SimpleNamespace(num_hidden_layers=2)
 
             def parameters(self):
@@ -584,8 +586,7 @@ class TestZeroInitWarningOnUnknownArch:
             warnings.simplefilter("always")
             expand_model_blocks(m, 1)
             assert any(
-                "could not locate standard residual projections" in str(w.message)
-                for w in caught
+                "could not locate standard residual projections" in str(w.message) for w in caught
             )
 
 
@@ -703,9 +704,7 @@ task: sft
 training:
   expand_layers: 4
 """
-        with pytest.raises(
-            (ValidationError, ValueError), match="freeze_trainable_layers"
-        ):
+        with pytest.raises((ValidationError, ValueError), match="freeze_trainable_layers"):
             _load(yaml_in)
 
     def test_expand_layers_with_freeze_accepted(self):

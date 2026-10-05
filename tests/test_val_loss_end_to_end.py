@@ -65,8 +65,9 @@ def _legacy_db(path, *, rows: int = 5) -> None:
 
     from soup_cli.experiment import tracker as _tracker_mod
 
-    live = re.search(r'_SCHEMA_SQL = """(.*?)"""', Path(_tracker_mod.__file__).read_text(
-        encoding="utf-8"), re.S).group(1)
+    live = re.search(
+        r'_SCHEMA_SQL = """(.*?)"""', Path(_tracker_mod.__file__).read_text(encoding="utf-8"), re.S
+    ).group(1)
     pre_change = live.replace("    val_loss  REAL,\n", "")
     assert "val_loss" not in pre_change, "fixture must genuinely predate the column"
 
@@ -134,9 +135,7 @@ class TestTheMigration:
         assert [r["step"] for r in rows] == [1, 2, 3, 4, 5]
         assert rows[0]["loss"] == pytest.approx(2.75), "pre-existing data must survive"
         assert all(r["gpu_mem"] == "2.0 GB" for r in rows)
-        assert all(r["val_loss"] is None for r in rows), (
-            "unmeasured must be NULL, never 0.0"
-        )
+        assert all(r["val_loss"] is None for r in rows), "unmeasured must be NULL, never 0.0"
 
     def test_the_read_path_still_works_after_migrating(self, tmp_path):
         """`soup runs show` reads through `list_runs()`; migrating must not
@@ -159,7 +158,7 @@ class TestTheMigration:
         db = tmp_path / "experiments.db"
         _legacy_db(db)
         ExperimentTracker(db_path=str(db)).init_db()
-        ExperimentTracker(db_path=str(db)).init_db()   # must not raise
+        ExperimentTracker(db_path=str(db)).init_db()  # must not raise
 
         assert "val_loss" in _columns(db, "metrics")
 
@@ -182,13 +181,13 @@ class TestTheMigration:
 
         db = tmp_path / "experiments.db"
         _legacy_db(db)
-        ExperimentTracker(db_path=str(db)).init_db()          # first: must ALTER
+        ExperimentTracker(db_path=str(db)).init_db()  # first: must ALTER
 
         tracker = ExperimentTracker(db_path=str(db))
         conn = tracker._get_conn()
         statements: list[str] = []
         conn.set_trace_callback(statements.append)
-        tracker.init_db()                                     # second: must not
+        tracker.init_db()  # second: must not
         conn.set_trace_callback(None)
 
         alters = [q for q in statements if "ALTER TABLE" in q.upper()]
@@ -197,8 +196,7 @@ class TestTheMigration:
             f"duplicate-column handler to swallow it: {alters}"
         )
         assert any("PRAGMA table_info(metrics)" in q for q in statements), (
-            "the metrics table was never inspected, so the guard cannot be "
-            "checking the right table"
+            "the metrics table was never inspected, so the guard cannot be checking the right table"
         )
 
     def test_a_fresh_db_has_the_column_without_migrating(self, tmp_path):
@@ -287,7 +285,8 @@ class TestTheDisplayCarriesItAsItsOwnSeries:
         from soup_cli.monitoring.display import TrainingDisplay
 
         cfg = SoupConfig(
-            base="m", task="sft",
+            base="m",
+            task="sft",
             data=DataConfig(train="t.jsonl", format="chatml"),
             training=TrainingConfig(),
             output="./o",
@@ -303,7 +302,8 @@ class TestTheDisplayCarriesItAsItsOwnSeries:
         from soup_cli.monitoring.display import TrainingDisplay
 
         cfg = SoupConfig(
-            base="m", task="sft",
+            base="m",
+            task="sft",
             data=DataConfig(train="t.jsonl", format="chatml"),
             training=TrainingConfig(),
             output="./o",
@@ -356,10 +356,8 @@ class TestTheTransformersProducer:
 
         display, tracker = _RecordingDisplay(), _RecordingTracker()
         cb = SoupTrainerCallback(display, tracker=tracker, run_id="r1")
-        cb.on_log(object(), _State(), object(),
-                  logs={"loss": 2.5, "learning_rate": 1e-4})
-        cb.on_log(object(), _State(), object(),
-                  logs={"eval_loss": 0.75, "eval_runtime": 1.2})
+        cb.on_log(object(), _State(), object(), logs={"loss": 2.5, "learning_rate": 1e-4})
+        cb.on_log(object(), _State(), object(), logs={"eval_loss": 0.75, "eval_runtime": 1.2})
         return display, tracker
 
     def test_the_eval_loss_reaches_both_sinks(self):
@@ -390,8 +388,7 @@ class TestTheTransformersProducer:
 
         display = _RecordingDisplay()
         cb = SoupTrainerCallback(display)
-        cb.on_log(object(), _State(), object(),
-                  logs={"loss": 2.5, "learning_rate": 1e-4})
+        cb.on_log(object(), _State(), object(), logs={"loss": 2.5, "learning_rate": 1e-4})
 
         assert display.calls[0].get("val_loss") is None
 
@@ -478,7 +475,7 @@ class TestStickyForThePanelPerCallForTheRecord:
         cb, _, tracker = self._cb()
         cb.on_log(object(), _State(), object(), logs={"loss": 2.5})
         cb.on_log(object(), _State(), object(), logs={"eval_loss": 0.9})
-        cb.on_log(object(), _State(), object(), logs={"loss": 2.4})   # no eval
+        cb.on_log(object(), _State(), object(), logs={"loss": 2.4})  # no eval
 
         stored = [c.get("val_loss") for c in tracker.calls]
         assert stored[-1] is None, (
@@ -491,7 +488,7 @@ class TestStickyForThePanelPerCallForTheRecord:
         """Sticky, and the mutation that made it non-sticky passed 311 tests."""
         cb, display, _ = self._cb()
         cb.on_log(object(), _State(), object(), logs={"eval_loss": 0.9})
-        cb.on_log(object(), _State(), object(), logs={"loss": 2.4})   # no eval
+        cb.on_log(object(), _State(), object(), logs={"loss": 2.4})  # no eval
 
         assert display.calls[-1].get("val_loss") == pytest.approx(0.9), (
             "the panel row must not blink out between evaluations"
@@ -518,14 +515,17 @@ class TestThePanelActuallyRendersIt:
         from soup_cli.monitoring.display import TrainingDisplay
 
         cfg = SoupConfig(
-            base="m", task="sft",
+            base="m",
+            task="sft",
             data=DataConfig(train="t.jsonl", format="chatml"),
-            training=TrainingConfig(), output="./o",
+            training=TrainingConfig(),
+            output="./o",
         )
         display = TrainingDisplay(cfg)
         display.update(step=10, epoch=1.0, loss=2.5, lr=1e-4, val_loss=0.75)
 
         from rich.console import Console
+
         console = Console(file=__import__("io").StringIO(), width=100)
         console.print(display._render())
         rendered = console.file.getvalue()
@@ -539,14 +539,17 @@ class TestThePanelActuallyRendersIt:
         from soup_cli.monitoring.display import TrainingDisplay
 
         cfg = SoupConfig(
-            base="m", task="sft",
+            base="m",
+            task="sft",
             data=DataConfig(train="t.jsonl", format="chatml"),
-            training=TrainingConfig(), output="./o",
+            training=TrainingConfig(),
+            output="./o",
         )
         display = TrainingDisplay(cfg)
         display.update(step=1, epoch=0.1, loss=3.0, lr=1e-4)
 
         from rich.console import Console
+
         console = Console(file=__import__("io").StringIO(), width=100)
         console.print(display._render())
 
@@ -567,16 +570,18 @@ class TestTheDisplayIsStickyOnItsOwn:
         from soup_cli.monitoring.display import TrainingDisplay
 
         cfg = SoupConfig(
-            base="m", task="sft",
+            base="m",
+            task="sft",
             data=DataConfig(train="t.jsonl", format="chatml"),
-            training=TrainingConfig(), output="./o",
+            training=TrainingConfig(),
+            output="./o",
         )
         return TrainingDisplay(cfg)
 
     def test_an_update_without_val_loss_keeps_the_last_one(self):
         display = self._display()
         display.update(step=5, epoch=0.5, loss=2.0, lr=1e-4, val_loss=0.9)
-        display.update(step=6, epoch=0.6, loss=1.9, lr=1e-4)      # no val_loss
+        display.update(step=6, epoch=0.6, loss=1.9, lr=1e-4)  # no val_loss
 
         assert display.val_loss == pytest.approx(0.9), (
             "the display must carry the last measured value forward on its own, "

@@ -15,7 +15,8 @@ import pytest
 
 def _strip_ansi(text: str) -> str:
     """Remove ANSI escape codes from Rich-formatted output."""
-    return re.sub(r'\x1b\[[0-9;]*m', '', text)
+    return re.sub(r"\x1b\[[0-9;]*m", "", text)
+
 
 # ─── Provider Validation Tests ──────────────────────────────────────────
 
@@ -56,12 +57,19 @@ class TestNewProvidersValidation:
         from soup_cli.cli import app
 
         runner = CliRunner()
-        result = runner.invoke(app, [
-            "data", "generate",
-            "--prompt", "test",
-            "--provider", "invalid_provider",
-            "--count", "1",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "data",
+                "generate",
+                "--prompt",
+                "test",
+                "--provider",
+                "invalid_provider",
+                "--count",
+                "1",
+            ],
+        )
         assert result.exit_code != 0
 
 
@@ -169,14 +177,14 @@ class TestOllamaProvider:
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.json.return_value = {
-            "choices": [
-                {"message": {"content": '[{"instruction": "test", "output": "ok"}]'}}
-            ]
+            "choices": [{"message": {"content": '[{"instruction": "test", "output": "ok"}]'}}]
         }
 
         with mock_patch("httpx.post", return_value=mock_response) as mock_post:
             result = generate_ollama(
-                prompt="test", count=1, fmt="alpaca",
+                prompt="test",
+                count=1,
+                fmt="alpaca",
                 model_name="llama3.1",
                 base_url="http://localhost:11434",
                 temperature=0.8,
@@ -200,7 +208,9 @@ class TestOllamaProvider:
         with mock_patch("httpx.post", return_value=mock_response):
             with pytest.raises(ValueError, match="Ollama returned 404"):
                 generate_ollama(
-                    prompt="test", count=1, fmt="alpaca",
+                    prompt="test",
+                    count=1,
+                    fmt="alpaca",
                     model_name="nonexistent",
                     base_url="http://localhost:11434",
                     temperature=0.8,
@@ -243,7 +253,9 @@ class TestOllamaSSRF:
 
         with pytest.raises(ValueError, match="localhost"):
             generate_ollama(
-                prompt="test", count=1, fmt="alpaca",
+                prompt="test",
+                count=1,
+                fmt="alpaca",
                 model_name="m",
                 base_url="http://169.254.169.254",
                 temperature=0.8,
@@ -264,15 +276,15 @@ class TestAnthropicProvider:
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.json.return_value = {
-            "content": [
-                {"type": "text", "text": '[{"instruction": "test", "output": "ok"}]'}
-            ]
+            "content": [{"type": "text", "text": '[{"instruction": "test", "output": "ok"}]'}]
         }
 
         with mock_patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-test"}):
             with mock_patch("httpx.post", return_value=mock_response) as mock_post:
                 result = generate_anthropic(
-                    prompt="test", count=1, fmt="alpaca",
+                    prompt="test",
+                    count=1,
+                    fmt="alpaca",
                     model_name="claude-3-haiku-20240307",
                     temperature=0.8,
                     generation_prompt="Generate 1 example",
@@ -296,7 +308,9 @@ class TestAnthropicProvider:
             with mock_patch.dict(os.environ, env, clear=True):
                 with pytest.raises(ValueError, match="ANTHROPIC_API_KEY"):
                     generate_anthropic(
-                        prompt="test", count=1, fmt="alpaca",
+                        prompt="test",
+                        count=1,
+                        fmt="alpaca",
                         model_name="claude-3-haiku-20240307",
                         temperature=0.8,
                         generation_prompt="test",
@@ -314,7 +328,9 @@ class TestAnthropicProvider:
             with mock_patch("httpx.post", return_value=mock_response):
                 with pytest.raises(ValueError, match="401"):
                     generate_anthropic(
-                        prompt="test", count=1, fmt="alpaca",
+                        prompt="test",
+                        count=1,
+                        fmt="alpaca",
                         model_name="claude-3-haiku-20240307",
                         temperature=0.8,
                         generation_prompt="test",
@@ -346,7 +362,9 @@ class TestAnthropicProvider:
         with mock_patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-test"}):
             with mock_patch("httpx.post", return_value=mock_response):
                 result = generate_anthropic(
-                    prompt="test", count=2, fmt="alpaca",
+                    prompt="test",
+                    count=2,
+                    fmt="alpaca",
                     model_name="claude-3-haiku-20240307",
                     temperature=0.8,
                     generation_prompt="test",
@@ -368,14 +386,14 @@ class TestVLLMProvider:
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.json.return_value = {
-            "choices": [
-                {"message": {"content": '[{"instruction": "test", "output": "ok"}]'}}
-            ]
+            "choices": [{"message": {"content": '[{"instruction": "test", "output": "ok"}]'}}]
         }
 
         with mock_patch("httpx.post", return_value=mock_response) as mock_post:
             result = generate_vllm(
-                prompt="test", count=1, fmt="alpaca",
+                prompt="test",
+                count=1,
+                fmt="alpaca",
                 model_name="meta-llama/Llama-3.1-8B-Instruct",
                 base_url="http://localhost:8000",
                 temperature=0.8,
@@ -394,15 +412,17 @@ class TestVLLMProvider:
 
         mock_response = MagicMock()
         mock_response.status_code = 200
-        mock_response.json.return_value = {
-            "choices": [{"message": {"content": "[]"}}]
-        }
+        mock_response.json.return_value = {"choices": [{"message": {"content": "[]"}}]}
 
         with mock_patch("httpx.post", return_value=mock_response) as mock_post:
             generate_vllm(
-                prompt="test", count=1, fmt="alpaca",
-                model_name="m", base_url="http://localhost:8000",
-                temperature=0.8, generation_prompt="test",
+                prompt="test",
+                count=1,
+                fmt="alpaca",
+                model_name="m",
+                base_url="http://localhost:8000",
+                temperature=0.8,
+                generation_prompt="test",
             )
 
         call_url = mock_post.call_args[0][0]
@@ -419,9 +439,13 @@ class TestVLLMProvider:
         with mock_patch("httpx.post", return_value=mock_response):
             with pytest.raises(ValueError, match="vLLM server returned 500"):
                 generate_vllm(
-                    prompt="test", count=1, fmt="alpaca",
-                    model_name="m", base_url="http://localhost:8000",
-                    temperature=0.8, generation_prompt="test",
+                    prompt="test",
+                    count=1,
+                    fmt="alpaca",
+                    model_name="m",
+                    base_url="http://localhost:8000",
+                    temperature=0.8,
+                    generation_prompt="test",
                 )
 
 
@@ -460,7 +484,9 @@ class TestVLLMSSRF:
 
         with pytest.raises(ValueError, match="HTTPS for remote"):
             generate_vllm(
-                prompt="test", count=1, fmt="alpaca",
+                prompt="test",
+                count=1,
+                fmt="alpaca",
                 model_name="m",
                 base_url="http://evil.com:8000",
                 temperature=0.8,
@@ -507,7 +533,9 @@ class TestProviderMalformedResponse:
             with mock_patch("httpx.post", return_value=mock_response):
                 with pytest.raises(ValueError, match="Unexpected"):
                     generate_anthropic(
-                        prompt="test", count=1, fmt="alpaca",
+                        prompt="test",
+                        count=1,
+                        fmt="alpaca",
                         model_name="claude-3-haiku-20240307",
                         temperature=0.8,
                         generation_prompt="test",
@@ -524,7 +552,9 @@ class TestProviderMalformedResponse:
         with mock_patch("httpx.post", return_value=mock_response):
             with pytest.raises(ValueError, match="Unexpected"):
                 generate_vllm(
-                    prompt="test", count=1, fmt="alpaca",
+                    prompt="test",
+                    count=1,
+                    fmt="alpaca",
                     model_name="m",
                     base_url="http://localhost:8000",
                     temperature=0.8,
@@ -542,7 +572,9 @@ class TestProviderMalformedResponse:
         with mock_patch("httpx.post", return_value=mock_response):
             with pytest.raises(ValueError, match="Unexpected"):
                 generate_ollama(
-                    prompt="test", count=1, fmt="alpaca",
+                    prompt="test",
+                    count=1,
+                    fmt="alpaca",
                     model_name="m",
                     base_url="http://localhost:11434",
                     temperature=0.8,
@@ -598,10 +630,15 @@ class TestBatchRoutingNewProviders:
             return_value=[{"instruction": "x", "output": "y"}],
         ) as mock_ollama:
             result = _generate_batch(
-                prompt="test", count=1, fmt="alpaca",
-                provider="ollama", model_name="llama3.1",
-                api_key=None, api_base=None,
-                temperature=0.8, seed_examples=[],
+                prompt="test",
+                count=1,
+                fmt="alpaca",
+                provider="ollama",
+                model_name="llama3.1",
+                api_key=None,
+                api_base=None,
+                temperature=0.8,
+                seed_examples=[],
             )
 
         mock_ollama.assert_called_once()
@@ -616,10 +653,15 @@ class TestBatchRoutingNewProviders:
             return_value=[{"instruction": "x", "output": "y"}],
         ) as mock_anthropic:
             result = _generate_batch(
-                prompt="test", count=1, fmt="alpaca",
-                provider="anthropic", model_name="claude-3-haiku-20240307",
-                api_key=None, api_base=None,
-                temperature=0.8, seed_examples=[],
+                prompt="test",
+                count=1,
+                fmt="alpaca",
+                provider="anthropic",
+                model_name="claude-3-haiku-20240307",
+                api_key=None,
+                api_base=None,
+                temperature=0.8,
+                seed_examples=[],
             )
 
         mock_anthropic.assert_called_once()
@@ -634,10 +676,15 @@ class TestBatchRoutingNewProviders:
             return_value=[{"instruction": "x", "output": "y"}],
         ) as mock_vllm:
             result = _generate_batch(
-                prompt="test", count=1, fmt="alpaca",
-                provider="vllm", model_name="m",
-                api_key=None, api_base=None,
-                temperature=0.8, seed_examples=[],
+                prompt="test",
+                count=1,
+                fmt="alpaca",
+                provider="vllm",
+                model_name="m",
+                api_key=None,
+                api_base=None,
+                temperature=0.8,
+                seed_examples=[],
             )
 
         mock_vllm.assert_called_once()
@@ -654,11 +701,15 @@ class TestBatchRoutingNewProviders:
         ]:
             with mock_patch(mock_target, return_value=[]) as mock_fn:
                 _generate_batch(
-                    prompt="test", count=1, fmt="alpaca",
-                    provider=prov, model_name="m",
+                    prompt="test",
+                    count=1,
+                    fmt="alpaca",
+                    provider=prov,
+                    model_name="m",
                     api_key="key" if prov == "openai" else None,
                     api_base=None,
-                    temperature=0.8, seed_examples=[],
+                    temperature=0.8,
+                    seed_examples=[],
                 )
             mock_fn.assert_called_once()
 
@@ -686,12 +737,19 @@ class TestTemplateValidation:
         from soup_cli.cli import app
 
         runner = CliRunner()
-        result = runner.invoke(app, [
-            "data", "generate",
-            "--prompt", "test",
-            "--template", "invalid_template",
-            "--count", "1",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "data",
+                "generate",
+                "--prompt",
+                "test",
+                "--template",
+                "invalid_template",
+                "--count",
+                "1",
+            ],
+        )
         assert result.exit_code != 0
 
 
@@ -861,8 +919,12 @@ class TestTemplateBuildPromptIntegration:
         from soup_cli.commands.generate import _build_template_prompt
 
         result = _build_template_prompt(
-            template="code", prompt="test", count=5, fmt="alpaca",
-            language="Go", task_type="debug",
+            template="code",
+            prompt="test",
+            count=5,
+            fmt="alpaca",
+            language="Go",
+            task_type="debug",
         )
         assert "Go" in result
 
@@ -871,7 +933,10 @@ class TestTemplateBuildPromptIntegration:
         from soup_cli.commands.generate import _build_template_prompt
 
         result = _build_template_prompt(
-            template="conversation", prompt="test", count=5, fmt="chatml",
+            template="conversation",
+            prompt="test",
+            count=5,
+            fmt="chatml",
             topic="cooking",
         )
         assert "cooking" in result
@@ -881,7 +946,10 @@ class TestTemplateBuildPromptIntegration:
         from soup_cli.commands.generate import _build_template_prompt
 
         result = _build_template_prompt(
-            template="qa", prompt="test", count=5, fmt="alpaca",
+            template="qa",
+            prompt="test",
+            count=5,
+            fmt="alpaca",
             context_text="Sample context text",
         )
         assert "Sample context" in result
@@ -891,7 +959,10 @@ class TestTemplateBuildPromptIntegration:
         from soup_cli.commands.generate import _build_template_prompt
 
         result = _build_template_prompt(
-            template="preference", prompt="test", count=5, fmt="alpaca",
+            template="preference",
+            prompt="test",
+            count=5,
+            fmt="alpaca",
             pref_task="kto",
         )
         assert "label" in result
@@ -901,7 +972,10 @@ class TestTemplateBuildPromptIntegration:
         from soup_cli.commands.generate import _build_template_prompt
 
         result = _build_template_prompt(
-            template="reasoning", prompt="test", count=5, fmt="alpaca",
+            template="reasoning",
+            prompt="test",
+            count=5,
+            fmt="alpaca",
             domain="logic",
         )
         assert "logic" in result.lower()
@@ -911,7 +985,10 @@ class TestTemplateBuildPromptIntegration:
         from soup_cli.commands.generate import _build_template_prompt
 
         result = _build_template_prompt(
-            template="nonexistent", prompt="test topic", count=5, fmt="alpaca",
+            template="nonexistent",
+            prompt="test topic",
+            count=5,
+            fmt="alpaca",
         )
         assert "test topic" in result
 
@@ -1145,13 +1222,21 @@ class TestOutputPathSanitization:
             "soup_cli.commands.generate._generate_batch",
             return_value=[{"instruction": "x", "output": "y"}],
         ):
-            result = runner.invoke(app, [
-                "data", "generate",
-                "--prompt", "test",
-                "--output", "../../../etc/evil.jsonl",
-                "--count", "1",
-                "--provider", "server",
-            ])
+            result = runner.invoke(
+                app,
+                [
+                    "data",
+                    "generate",
+                    "--prompt",
+                    "test",
+                    "--output",
+                    "../../../etc/evil.jsonl",
+                    "--count",
+                    "1",
+                    "--provider",
+                    "server",
+                ],
+            )
         assert result.exit_code != 0
 
     def test_absolute_output_path_blocked(self):
@@ -1166,13 +1251,21 @@ class TestOutputPathSanitization:
             "soup_cli.commands.generate._generate_batch",
             return_value=[{"instruction": "x", "output": "y"}],
         ):
-            result = runner.invoke(app, [
-                "data", "generate",
-                "--prompt", "test",
-                "--output", "/tmp/exfil.jsonl",
-                "--count", "1",
-                "--provider", "server",
-            ])
+            result = runner.invoke(
+                app,
+                [
+                    "data",
+                    "generate",
+                    "--prompt",
+                    "test",
+                    "--output",
+                    "/tmp/exfil.jsonl",
+                    "--count",
+                    "1",
+                    "--provider",
+                    "server",
+                ],
+            )
         assert result.exit_code != 0
 
 
@@ -1262,26 +1355,39 @@ class TestEndToEndGeneration:
 
         output_path = tmp_path / "output.jsonl"
 
-        with mock_patch(
-            "soup_cli.data.providers.ollama.generate_ollama",
-            return_value=[
-                {"instruction": "What is AI?", "input": "", "output": "AI is..."},
-                {"instruction": "Explain ML", "input": "", "output": "ML is..."},
-            ],
-        ), mock_patch(
-            "soup_cli.commands.generate._path_within_cwd",
-            return_value=True,
+        with (
+            mock_patch(
+                "soup_cli.data.providers.ollama.generate_ollama",
+                return_value=[
+                    {"instruction": "What is AI?", "input": "", "output": "AI is..."},
+                    {"instruction": "Explain ML", "input": "", "output": "ML is..."},
+                ],
+            ),
+            mock_patch(
+                "soup_cli.commands.generate._path_within_cwd",
+                return_value=True,
+            ),
         ):
             runner = CliRunner()
-            result = runner.invoke(app, [
-                "data", "generate",
-                "--prompt", "Generate AI questions",
-                "--provider", "ollama",
-                "--model", "llama3.1",
-                "--count", "2",
-                "--batch-size", "2",
-                "--output", str(output_path),
-            ])
+            result = runner.invoke(
+                app,
+                [
+                    "data",
+                    "generate",
+                    "--prompt",
+                    "Generate AI questions",
+                    "--provider",
+                    "ollama",
+                    "--model",
+                    "llama3.1",
+                    "--count",
+                    "2",
+                    "--batch-size",
+                    "2",
+                    "--output",
+                    str(output_path),
+                ],
+            )
 
         assert result.exit_code == 0
         assert output_path.exists()
@@ -1297,26 +1403,40 @@ class TestEndToEndGeneration:
 
         output_path = tmp_path / "output.jsonl"
 
-        with mock_patch(
-            "soup_cli.commands.generate._generate_server",
-            return_value=[
-                {"instruction": "Write a function", "input": "", "output": "def foo(): pass"},
-            ],
-        ), mock_patch(
-            "soup_cli.commands.generate._path_within_cwd",
-            return_value=True,
+        with (
+            mock_patch(
+                "soup_cli.commands.generate._generate_server",
+                return_value=[
+                    {"instruction": "Write a function", "input": "", "output": "def foo(): pass"},
+                ],
+            ),
+            mock_patch(
+                "soup_cli.commands.generate._path_within_cwd",
+                return_value=True,
+            ),
         ):
             runner = CliRunner()
-            result = runner.invoke(app, [
-                "data", "generate",
-                "--prompt", "Generate code",
-                "--template", "code",
-                "--language", "Python",
-                "--provider", "server",
-                "--count", "1",
-                "--batch-size", "1",
-                "--output", str(output_path),
-            ])
+            result = runner.invoke(
+                app,
+                [
+                    "data",
+                    "generate",
+                    "--prompt",
+                    "Generate code",
+                    "--template",
+                    "code",
+                    "--language",
+                    "Python",
+                    "--provider",
+                    "server",
+                    "--count",
+                    "1",
+                    "--batch-size",
+                    "1",
+                    "--output",
+                    str(output_path),
+                ],
+            )
 
         assert result.exit_code == 0
         assert "code" in result.output.lower() or "Template" in result.output
@@ -1329,25 +1449,38 @@ class TestEndToEndGeneration:
 
         output_path = tmp_path / "output.jsonl"
 
-        with mock_patch(
-            "soup_cli.data.providers.anthropic.generate_anthropic",
-            return_value=[
-                {"instruction": "What is AI?", "input": "", "output": "AI is..."},
-            ],
-        ), mock_patch(
-            "soup_cli.commands.generate._path_within_cwd",
-            return_value=True,
+        with (
+            mock_patch(
+                "soup_cli.data.providers.anthropic.generate_anthropic",
+                return_value=[
+                    {"instruction": "What is AI?", "input": "", "output": "AI is..."},
+                ],
+            ),
+            mock_patch(
+                "soup_cli.commands.generate._path_within_cwd",
+                return_value=True,
+            ),
         ):
             runner = CliRunner()
-            result = runner.invoke(app, [
-                "data", "generate",
-                "--prompt", "Generate AI questions",
-                "--provider", "anthropic",
-                "--model", "claude-3-haiku-20240307",
-                "--count", "1",
-                "--batch-size", "1",
-                "--output", str(output_path),
-            ])
+            result = runner.invoke(
+                app,
+                [
+                    "data",
+                    "generate",
+                    "--prompt",
+                    "Generate AI questions",
+                    "--provider",
+                    "anthropic",
+                    "--model",
+                    "claude-3-haiku-20240307",
+                    "--count",
+                    "1",
+                    "--batch-size",
+                    "1",
+                    "--output",
+                    str(output_path),
+                ],
+            )
 
         assert result.exit_code == 0
         assert output_path.exists()
@@ -1360,24 +1493,36 @@ class TestEndToEndGeneration:
 
         output_path = tmp_path / "output.jsonl"
 
-        with mock_patch(
-            "soup_cli.data.providers.vllm.generate_vllm",
-            return_value=[
-                {"instruction": "What is AI?", "input": "", "output": "AI is..."},
-            ],
-        ), mock_patch(
-            "soup_cli.commands.generate._path_within_cwd",
-            return_value=True,
+        with (
+            mock_patch(
+                "soup_cli.data.providers.vllm.generate_vllm",
+                return_value=[
+                    {"instruction": "What is AI?", "input": "", "output": "AI is..."},
+                ],
+            ),
+            mock_patch(
+                "soup_cli.commands.generate._path_within_cwd",
+                return_value=True,
+            ),
         ):
             runner = CliRunner()
-            result = runner.invoke(app, [
-                "data", "generate",
-                "--prompt", "Generate AI questions",
-                "--provider", "vllm",
-                "--count", "1",
-                "--batch-size", "1",
-                "--output", str(output_path),
-            ])
+            result = runner.invoke(
+                app,
+                [
+                    "data",
+                    "generate",
+                    "--prompt",
+                    "Generate AI questions",
+                    "--provider",
+                    "vllm",
+                    "--count",
+                    "1",
+                    "--batch-size",
+                    "1",
+                    "--output",
+                    str(output_path),
+                ],
+            )
 
         assert result.exit_code == 0
         assert output_path.exists()

@@ -49,7 +49,9 @@ SMOOTHING_BETA = 0.98
 
 
 def compute_lr_schedule(
-    start_lr: float, end_lr: float, num_steps: int,
+    start_lr: float,
+    end_lr: float,
+    num_steps: int,
 ) -> list[float]:
     """Geometric (log-linear) LR sweep from ``start_lr`` to ``end_lr``."""
     if not (start_lr > 0 and math.isfinite(start_lr)):
@@ -74,12 +76,13 @@ def _smooth(losses: Sequence[float], beta: float = SMOOTHING_BETA) -> list[float
     avg = 0.0
     for index, loss in enumerate(losses, start=1):
         avg = beta * avg + (1 - beta) * loss
-        smoothed.append(avg / (1 - beta ** index))
+        smoothed.append(avg / (1 - beta**index))
     return smoothed
 
 
 def find_optimal_lr(
-    lrs: Sequence[float], losses: Sequence[float],
+    lrs: Sequence[float],
+    losses: Sequence[float],
 ) -> LRFinderResult:
     """Pick the LR with the steepest negative gradient before divergence.
 
@@ -89,9 +92,7 @@ def find_optimal_lr(
     callers get a deterministic fallback rather than ``None``.
     """
     if len(lrs) != len(losses):
-        raise ValueError(
-            f"lrs and losses must have equal length (got {len(lrs)} vs {len(losses)})"
-        )
+        raise ValueError(f"lrs and losses must have equal length (got {len(lrs)} vs {len(losses)})")
     if len(lrs) < MIN_NUM_STEPS:
         raise ValueError(f"Need at least {MIN_NUM_STEPS} (lr, loss) pairs, got {len(lrs)}")
 
@@ -150,7 +151,12 @@ def _finite_or_reject(values: Sequence[float], label: str) -> list[float]:
 
 
 def run_lr_sweep(
-    *, model, dataloader, schedule, optimizer_factory, device: str = "cpu",
+    *,
+    model,
+    dataloader,
+    schedule,
+    optimizer_factory,
+    device: str = "cpu",
 ) -> list[float]:
     """Run an in-process LR-sweep training loop (#56, v0.33.0).
 
@@ -200,10 +206,7 @@ def run_lr_sweep(
         # Stays import-free here; ``v.to(device)`` is duck-typed against any
         # tensor-like object so we don't need a hard torch dependency.
         if isinstance(batch, dict):
-            batch = {
-                k: (v.to(device) if hasattr(v, "to") else v)
-                for k, v in batch.items()
-            }
+            batch = {k: (v.to(device) if hasattr(v, "to") else v) for k, v in batch.items()}
 
         optimizer.zero_grad(set_to_none=True)
         out = model(**batch) if isinstance(batch, dict) else model(batch)
@@ -218,7 +221,9 @@ def run_lr_sweep(
 
 
 def save_lr_finder_report(
-    lrs: Sequence[float], losses: Sequence[float], output_path: Path | str,
+    lrs: Sequence[float],
+    losses: Sequence[float],
+    output_path: Path | str,
 ) -> None:
     """Write a JSON report with the sweep + recommended LR."""
     output = Path(output_path)

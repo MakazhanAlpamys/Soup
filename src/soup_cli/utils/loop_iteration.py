@@ -148,9 +148,9 @@ def write_iteration(
     os.makedirs(iter_dir, exist_ok=True)
     target = os.path.join(iter_dir, "iteration.json")
     _check_dir(target)
-    body = json.dumps(
-        dict(record.to_dict()), allow_nan=False, indent=2, sort_keys=True
-    ).encode("utf-8")
+    body = json.dumps(dict(record.to_dict()), allow_nan=False, indent=2, sort_keys=True).encode(
+        "utf-8"
+    )
     if len(body) > _MAX_MANIFEST_BYTES:
         raise ValueError("iteration manifest exceeds 1 MiB cap")
     fd, tmp = tempfile.mkstemp(prefix=".iter_", dir=iter_dir)
@@ -167,9 +167,7 @@ def write_iteration(
     return target
 
 
-def read_iteration(
-    iteration_id: str, *, base_dir: Optional[str] = None
-) -> IterationRecord:
+def read_iteration(iteration_id: str, *, base_dir: Optional[str] = None) -> IterationRecord:
     """Reload an iteration record by id."""
     _check_id(iteration_id)
     parent = base_dir if base_dir is not None else _DEFAULT_DIR

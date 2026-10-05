@@ -234,7 +234,6 @@ def test_clean_row_alpaca_no_input_key_no_synthesis():
     assert json.dumps(cleaned) == json.dumps(row)
 
 
-
 def test_clean_row_sharegpt():
     """Test cleaning a ShareGPT row with opt-in boilerplate stripping."""
     row = {
@@ -252,9 +251,7 @@ def test_clean_row_tool_calling():
     """Test repairing JSON in tool_calls arguments with opt-in repair_json."""
     row = {
         "messages": [{"role": "user", "content": "Fetch order 123"}],
-        "tool_calls": [
-            {"name": "get_order", "arguments": '{"order_id": 123,}'}
-        ],
+        "tool_calls": [{"name": "get_order", "arguments": '{"order_id": 123,}'}],
     }
     cleaned, rules = clean_row(row, "tool-calling", repair_json=True)
     assert cleaned is not None
@@ -382,9 +379,7 @@ def test_silently_altered_row_is_reported_modified_not_clean(monkeypatch: pytest
     )
 
 
-def test_input_file_never_modified_under_any_flags(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
+def test_input_file_never_modified_under_any_flags(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """Verify that soup data clean NEVER modifies its input file in place under any flags."""
     monkeypatch.chdir(tmp_path)
     dirty_file = _create_sample_dirty_file(tmp_path)
@@ -465,10 +460,7 @@ def test_cli_rejects_negative_min_tokens(tmp_path: Path, monkeypatch: pytest.Mon
     assert "Invalid --min-tokens value" in _strip_ansi(result.output)
 
 
-
-def test_cli_rejects_existing_output_without_force(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
+def test_cli_rejects_existing_output_without_force(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """Verify that writing to an existing output file is rejected without --force."""
     monkeypatch.chdir(tmp_path)
     dirty_file = _create_sample_dirty_file(tmp_path)

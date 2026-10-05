@@ -183,82 +183,125 @@ MINI_MMLU: MiniBenchmark = [
     {"question": "What is 2 + 2? (A) 3 (B) 4 (C) 5", "answer": "B"},
     {"question": "The capital of France is: (A) London (B) Berlin (C) Paris", "answer": "C"},
     {"question": "Water freezes at: (A) 0C (B) 50C (C) 100C", "answer": "A"},
-    {"question": "Photosynthesis mainly uses: (A) oxygen (B) carbon dioxide (C) nitrogen",
-     "answer": "B"},
+    {
+        "question": "Photosynthesis mainly uses: (A) oxygen (B) carbon dioxide (C) nitrogen",
+        "answer": "B",
+    },
     {"question": "Atomic number of hydrogen is: (A) 1 (B) 2 (C) 3", "answer": "A"},
-    {"question": "The largest planet in our solar system is: (A) Earth (B) Jupiter (C) Mars",
-     "answer": "B"},
+    {
+        "question": "The largest planet in our solar system is: (A) Earth (B) Jupiter (C) Mars",
+        "answer": "B",
+    },
     {"question": "The chemical symbol for gold is: (A) Gd (B) Go (C) Au", "answer": "C"},
     {"question": "How many continents are there on Earth? (A) 5 (B) 7 (C) 9", "answer": "B"},
-    {"question": "The powerhouse of the cell is the: (A) nucleus (B) ribosome (C) mitochondrion",
-     "answer": "C"},
-    {"question": "Light travels faster than: (A) sound (B) nothing (C) radio waves",
-     "answer": "A"},
+    {
+        "question": "The powerhouse of the cell is the: (A) nucleus (B) ribosome (C) mitochondrion",
+        "answer": "C",
+    },
+    {"question": "Light travels faster than: (A) sound (B) nothing (C) radio waves", "answer": "A"},
     {"question": "The square root of 81 is: (A) 8 (B) 9 (C) 18", "answer": "B"},
-    {"question": "Which gas do plants release during photosynthesis? "
-                 "(A) oxygen (B) hydrogen (C) methane", "answer": "A"},
-    {"question": "The author of 'Romeo and Juliet' is: (A) Dickens (B) Shakespeare (C) Austen",
-     "answer": "B"},
-    {"question": "The freezing point of water in Fahrenheit is: (A) 0 (B) 32 (C) 100",
-     "answer": "B"},
-    {"question": "Which ocean is the largest? (A) Atlantic (B) Indian (C) Pacific",
-     "answer": "C"},
-    {"question": "The human body has how many pairs of ribs? (A) 10 (B) 12 (C) 14",
-     "answer": "B"},
+    {
+        "question": "Which gas do plants release during photosynthesis? "
+        "(A) oxygen (B) hydrogen (C) methane",
+        "answer": "A",
+    },
+    {
+        "question": "The author of 'Romeo and Juliet' is: (A) Dickens (B) Shakespeare (C) Austen",
+        "answer": "B",
+    },
+    {
+        "question": "The freezing point of water in Fahrenheit is: (A) 0 (B) 32 (C) 100",
+        "answer": "B",
+    },
+    {"question": "Which ocean is the largest? (A) Atlantic (B) Indian (C) Pacific", "answer": "C"},
+    {"question": "The human body has how many pairs of ribs? (A) 10 (B) 12 (C) 14", "answer": "B"},
     {"question": "The currency of Japan is the: (A) yuan (B) won (C) yen", "answer": "C"},
-    {"question": "Which metal is liquid at room temperature? (A) mercury (B) iron (C) copper",
-     "answer": "A"},
-    {"question": "The speed of light is closest to: (A) 300 km/s (B) 300,000 km/s (C) 30 km/s",
-     "answer": "B"},
+    {
+        "question": "Which metal is liquid at room temperature? (A) mercury (B) iron (C) copper",
+        "answer": "A",
+    },
+    {
+        "question": "The speed of light is closest to: (A) 300 km/s (B) 300,000 km/s (C) 30 km/s",
+        "answer": "B",
+    },
     {"question": "A triangle has how many sides? (A) 3 (B) 4 (C) 5", "answer": "A"},
     {"question": "The closest star to Earth is the: (A) Moon (B) Sun (C) Sirius", "answer": "B"},
     {"question": "DNA carries: (A) genetic information (B) oxygen (C) sugar", "answer": "A"},
-    {"question": "The tallest mountain above sea level is: (A) K2 (B) Everest (C) Denali",
-     "answer": "B"},
+    {
+        "question": "The tallest mountain above sea level is: (A) K2 (B) Everest (C) Denali",
+        "answer": "B",
+    },
     {"question": "Which is a prime number? (A) 9 (B) 15 (C) 13", "answer": "C"},
-    {"question": "The primary gas in Earth's atmosphere is: (A) oxygen (B) nitrogen (C) argon",
-     "answer": "B"},
+    {
+        "question": "The primary gas in Earth's atmosphere is: (A) oxygen (B) nitrogen (C) argon",
+        "answer": "B",
+    },
     {"question": "Sound cannot travel through a: (A) solid (B) liquid (C) vacuum", "answer": "C"},
 ]
 
 MINI_COMMON_SENSE: MiniBenchmark = [
-    {"question": "If it is raining, you should bring a: (A) hat (B) umbrella (C) fan",
-     "answer": "B"},
+    {
+        "question": "If it is raining, you should bring a: (A) hat (B) umbrella (C) fan",
+        "answer": "B",
+    },
     {"question": "You eat breakfast in the: (A) morning (B) evening (C) night", "answer": "A"},
     {"question": "Fish live in: (A) trees (B) water (C) sand", "answer": "B"},
     {"question": "The sun rises in the: (A) west (B) south (C) east", "answer": "C"},
     {"question": "Ice melts when: (A) heated (B) frozen (C) pressed", "answer": "A"},
-    {"question": "To unlock a door you usually need a: (A) spoon (B) key (C) pillow",
-     "answer": "B"},
-    {"question": "Before crossing a busy street you should: (A) close your eyes "
-                 "(B) look both ways (C) run fast", "answer": "B"},
-    {"question": "If a glass falls on tile it will likely: (A) bounce (B) break (C) float",
-     "answer": "B"},
+    {
+        "question": "To unlock a door you usually need a: (A) spoon (B) key (C) pillow",
+        "answer": "B",
+    },
+    {
+        "question": "Before crossing a busy street you should: (A) close your eyes "
+        "(B) look both ways (C) run fast",
+        "answer": "B",
+    },
+    {
+        "question": "If a glass falls on tile it will likely: (A) bounce (B) break (C) float",
+        "answer": "B",
+    },
     {"question": "To write on paper you use a: (A) hammer (B) pen (C) plate", "answer": "B"},
-    {"question": "A wet towel is best dried by: (A) folding it (B) hanging it in the sun "
-                 "(C) burying it", "answer": "B"},
-    {"question": "You feel cold, so you put on a: (A) swimsuit (B) coat (C) sandal",
-     "answer": "B"},
-    {"question": "Plants need this to grow: (A) darkness (B) sunlight (C) television",
-     "answer": "B"},
-    {"question": "To call a friend far away you use a: (A) phone (B) fork (C) broom",
-     "answer": "A"},
-    {"question": "After you finish eating, dirty dishes should be: (A) washed (B) painted "
-                 "(C) planted", "answer": "A"},
-    {"question": "If the room is dark you should turn on the: (A) faucet (B) light (C) oven",
-     "answer": "B"},
+    {
+        "question": "A wet towel is best dried by: (A) folding it (B) hanging it in the sun "
+        "(C) burying it",
+        "answer": "B",
+    },
+    {"question": "You feel cold, so you put on a: (A) swimsuit (B) coat (C) sandal", "answer": "B"},
+    {
+        "question": "Plants need this to grow: (A) darkness (B) sunlight (C) television",
+        "answer": "B",
+    },
+    {
+        "question": "To call a friend far away you use a: (A) phone (B) fork (C) broom",
+        "answer": "A",
+    },
+    {
+        "question": "After you finish eating, dirty dishes should be: (A) washed (B) painted "
+        "(C) planted",
+        "answer": "A",
+    },
+    {
+        "question": "If the room is dark you should turn on the: (A) faucet (B) light (C) oven",
+        "answer": "B",
+    },
     {"question": "A baby is younger than a: (A) grandparent (B) newborn (C) egg", "answer": "A"},
     {"question": "To cut paper you use: (A) scissors (B) a magnet (C) glue", "answer": "A"},
-    {"question": "Bread that is very old may become: (A) fresh (B) moldy (C) cold",
-     "answer": "B"},
-    {"question": "If you are thirsty you should drink: (A) sand (B) water (C) paper",
-     "answer": "B"},
+    {"question": "Bread that is very old may become: (A) fresh (B) moldy (C) cold", "answer": "B"},
+    {
+        "question": "If you are thirsty you should drink: (A) sand (B) water (C) paper",
+        "answer": "B",
+    },
     {"question": "A car needs this to run: (A) fuel (B) music (C) paint", "answer": "A"},
     {"question": "You wear shoes on your: (A) hands (B) head (C) feet", "answer": "C"},
-    {"question": "To keep food cold you put it in the: (A) oven (B) refrigerator (C) closet",
-     "answer": "B"},
-    {"question": "If you are tired at night you should: (A) sleep (B) exercise hard (C) shout",
-     "answer": "A"},
+    {
+        "question": "To keep food cold you put it in the: (A) oven (B) refrigerator (C) closet",
+        "answer": "B",
+    },
+    {
+        "question": "If you are tired at night you should: (A) sleep (B) exercise hard (C) shout",
+        "answer": "A",
+    },
     {"question": "Rain falls from the: (A) ground (B) clouds (C) ocean floor", "answer": "B"},
 ]
 
@@ -286,8 +329,10 @@ MINI_INSTRUCTION: MiniBenchmark = [
     {"question": "Answer with one word: what color is a ripe tomato?", "answer": "red"},
     {"question": "Reply with a single word: the season after winter.", "answer": "spring"},
     {"question": "Answer in one word: what do you call frozen water?", "answer": "ice"},
-    {"question": "Respond with only the number: how many wheels does a bicycle have?",
-     "answer": "2"},
+    {
+        "question": "Respond with only the number: how many wheels does a bicycle have?",
+        "answer": "2",
+    },
 ]
 
 # Arithmetic — the market asks for basic numeracy; scored by extraction + exact.
@@ -324,23 +369,32 @@ MINI_ARITHMETIC: MiniBenchmark = [
     {"question": "What is 47 times 38?", "answer": "1786"},
     {"question": "What is 1234 times 56?", "answer": "69104"},
     {"question": "What is 7 + 3 times 4 - 6 divided by 2?", "answer": "16"},
-    {"question": "A shirt costs 80 dollars. It is discounted by 25 percent, then the "
-                 "discounted price is raised by 25 percent. What is the final price "
-                 "in dollars?", "answer": "75"},
+    {
+        "question": "A shirt costs 80 dollars. It is discounted by 25 percent, then the "
+        "discounted price is raised by 25 percent. What is the final price "
+        "in dollars?",
+        "answer": "75",
+    },
     {"question": "What is 2 to the power of 15?", "answer": "32768"},
     {"question": "What is the remainder when 2024 is divided by 37?", "answer": "26"},
     {"question": "How many seconds are in 3 days?", "answer": "259200"},
     {"question": "What is 999 times 999?", "answer": "998001"},
     {"question": "What is the sum of all the whole numbers from 1 to 250?", "answer": "31375"},
     {"question": "What is 17 squared minus 13 squared?", "answer": "120"},
-    {"question": "A train leaves at 9:47 and arrives at 14:12 the same day. How many "
-                 "minutes long is the trip?", "answer": "265"},
+    {
+        "question": "A train leaves at 9:47 and arrives at 14:12 the same day. How many "
+        "minutes long is the trip?",
+        "answer": "265",
+    },
     {"question": "What is 15 percent of 15 percent of 4000?", "answer": "90"},
     {"question": "What is 123456789 divided by 9?", "answer": "13717421"},
     {"question": "What is the least common multiple of 18, 24 and 40?", "answer": "360"},
     {"question": "What is 3/8 plus 5/12, as a fraction in lowest terms?", "answer": "19/24"},
-    {"question": "How many times is the digit 7 written when you write out every whole "
-                 "number from 1 to 100?", "answer": "20"},
+    {
+        "question": "How many times is the digit 7 written when you write out every whole "
+        "number from 1 to 100?",
+        "answer": "20",
+    },
 ]
 
 MINI_BENCHMARKS: dict[str, MiniBenchmark] = {
@@ -373,8 +427,7 @@ class ForgettingDetector:
     ) -> None:
         if benchmark not in MINI_BENCHMARKS:
             raise ValueError(
-                f"Unknown benchmark '{benchmark}'. "
-                f"Options: {', '.join(MINI_BENCHMARKS.keys())}"
+                f"Unknown benchmark '{benchmark}'. Options: {', '.join(MINI_BENCHMARKS.keys())}"
             )
         self.generate_fn = generate_fn
         self.benchmark_name = benchmark
@@ -385,9 +438,7 @@ class ForgettingDetector:
     def _evaluate(self) -> float:
         correct = 0
         for item in self.benchmark:
-            output = self.generate_fn(
-                build_mcq_prompt(item["question"], item.get("answer", ""))
-            )
+            output = self.generate_fn(build_mcq_prompt(item["question"], item.get("answer", "")))
             if not isinstance(output, str):
                 continue
             if score_answer(output, item["answer"]):

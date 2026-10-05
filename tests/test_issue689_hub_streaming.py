@@ -100,9 +100,7 @@ def test_hub_streaming_shuffles_train_with_buffer_size(tmp_path, monkeypatch):
     fake_module.load_dataset = fake_load_dataset
     monkeypatch.setitem(sys.modules, "datasets", fake_module)
 
-    result = load_dataset(
-        _cfg(tmp_path, streaming=True, buffer_size=1000).data
-    )
+    result = load_dataset(_cfg(tmp_path, streaming=True, buffer_size=1000).data)
     assert calls[0]["kwargs"].get("streaming") is True
     assert train.shuffle_calls == [1000]
     assert val.shuffle_calls == []
@@ -156,4 +154,3 @@ def test_hub_streaming_cap_terminates_unbounded_source(tmp_path, monkeypatch):
     result = load_dataset(_cfg(tmp_path, streaming=True).data)
     assert [row["text"] for row in result["train"]] == [f"r{i}" for i in range(1, cap + 1)]
     assert stream.consumed == cap + 1
-

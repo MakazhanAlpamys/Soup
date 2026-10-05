@@ -274,9 +274,7 @@ class ExternalTensorSpec:
         if not self.parts:
             raise ValueError("external tensor must contain at least one source part")
         if len(self.shape) != 2 or any(dim <= 0 for dim in self.shape):
-            raise ValueError(
-                f"external tensor must be a positive 2-D matrix; got {self.shape}"
-            )
+            raise ValueError(f"external tensor must be a positive 2-D matrix; got {self.shape}")
         if math.prod(self.shape) > _MAX_EXTERNAL_TENSOR_ELEMENTS:
             raise ValueError(
                 "external tensor exceeds the element cap: "
@@ -309,9 +307,7 @@ class ExternalTensorSpec:
     @classmethod
     def from_json(cls, payload: Mapping[str, Any]) -> "ExternalTensorSpec":
         return cls(
-            parts=tuple(
-                ExternalTensorPart.from_json(part) for part in payload["parts"]
-            ),
+            parts=tuple(ExternalTensorPart.from_json(part) for part in payload["parts"]),
             shape=tuple(int(dim) for dim in payload["shape"]),
             dtype=str(payload["dtype"]),
         )
@@ -327,13 +323,12 @@ class ExternalTensorPart:
     dtype: str
 
     def __post_init__(self) -> None:
-        if (
-            self.source_file != os.path.basename(self.source_file)
-            or self.source_file in ("", ".", "..")
+        if self.source_file != os.path.basename(self.source_file) or self.source_file in (
+            "",
+            ".",
+            "..",
         ):
-            raise ValueError(
-                f"invalid external tensor source filename {self.source_file!r}"
-            )
+            raise ValueError(f"invalid external tensor source filename {self.source_file!r}")
         if not self.source_key:
             raise ValueError("external tensor source key must not be empty")
         if len(self.shape) != 2 or any(dim <= 0 for dim in self.shape):
@@ -365,35 +360,28 @@ class OQExternalTensorPart:
     stats_dtype: str
 
     def __post_init__(self) -> None:
-        if (
-            self.source_file != os.path.basename(self.source_file)
-            or self.source_file in ("", ".", "..")
+        if self.source_file != os.path.basename(self.source_file) or self.source_file in (
+            "",
+            ".",
+            "..",
         ):
-            raise ValueError(
-                f"invalid external oQ tensor source filename {self.source_file!r}"
-            )
+            raise ValueError(f"invalid external oQ tensor source filename {self.source_file!r}")
         if not all((self.weight_key, self.scales_key, self.biases_key)):
             raise ValueError("external oQ tensor keys must not be empty")
         if len(self.packed_shape) != 2 or any(dim <= 0 for dim in self.packed_shape):
             raise ValueError(
-                f"external oQ packed tensor must be a positive 2-D matrix; "
-                f"got {self.packed_shape}"
+                f"external oQ packed tensor must be a positive 2-D matrix; got {self.packed_shape}"
             )
         if len(self.stats_shape) != 2 or any(dim <= 0 for dim in self.stats_shape):
             raise ValueError(
-                f"external oQ stats tensor must be a positive 2-D matrix; "
-                f"got {self.stats_shape}"
+                f"external oQ stats tensor must be a positive 2-D matrix; got {self.stats_shape}"
             )
         if self.packed_shape[0] != self.stats_shape[0]:
             raise ValueError("external oQ weight and statistics must have equal row counts")
         if self.packed_dtype != "U32":
-            raise ValueError(
-                f"external oQ packed tensor must use U32; got {self.packed_dtype!r}"
-            )
+            raise ValueError(f"external oQ packed tensor must use U32; got {self.packed_dtype!r}")
         if self.stats_dtype not in ("BF16", "F16", "F32"):
-            raise ValueError(
-                f"unsupported external oQ stats dtype {self.stats_dtype!r}"
-            )
+            raise ValueError(f"unsupported external oQ stats dtype {self.stats_dtype!r}")
 
     @classmethod
     def from_json(cls, payload: Mapping[str, Any]) -> "OQExternalTensorPart":
@@ -437,9 +425,7 @@ class OQExternalTensorSpec:
             )
         if self.dtype not in _SUPPORTED_DTYPES:
             raise ValueError(f"unsupported external oQ output dtype {self.dtype!r}")
-        widths = {
-            logical_width(part.packed_shape[1], self.bits) for part in self.parts
-        }
+        widths = {logical_width(part.packed_shape[1], self.bits) for part in self.parts}
         if widths != {self.shape[1]}:
             raise ValueError("external oQ parts disagree with the logical tensor width")
         if sum(part.packed_shape[0] for part in self.parts) != self.shape[0]:
@@ -465,9 +451,7 @@ class OQExternalTensorSpec:
     @classmethod
     def from_json(cls, payload: Mapping[str, Any]) -> "OQExternalTensorSpec":
         return cls(
-            parts=tuple(
-                OQExternalTensorPart.from_json(part) for part in payload["parts"]
-            ),
+            parts=tuple(OQExternalTensorPart.from_json(part) for part in payload["parts"]),
             shape=tuple(int(dim) for dim in payload["shape"]),
             dtype=str(payload["dtype"]),
             bits=int(payload["bits"]),
@@ -646,12 +630,9 @@ def read_shard_index(out_dir: str) -> ShardIndex:
         quant=str(payload.get("quant", QUANT_NONE)),
         double_quant=bool(payload.get("double_quant", False)),
         quant_device=str(payload.get("quant_device", "")),
-        quant_specs={
-            key: NF4WeightSpec.from_json(value) for key, value in specs.items()
-        },
+        quant_specs={key: NF4WeightSpec.from_json(value) for key, value in specs.items()},
         external_tensors={
-            str(key): _external_spec_from_json(value)
-            for key, value in external.items()
+            str(key): _external_spec_from_json(value) for key, value in external.items()
         },
         external_mode=str(payload.get("external_mode", "")),
         stripe_roots=stripe_roots,
@@ -738,9 +719,7 @@ def _discover_safetensors(weights_dir: str) -> List[str]:
     return found
 
 
-def estimate_oq_stream_cache_bytes(
-    weights_dir: str, *, dtype: str, arch: str
-) -> Optional[int]:
+def estimate_oq_stream_cache_bytes(weights_dir: str, *, dtype: str, arch: str) -> Optional[int]:
     """Estimate the dense shard-cache payload for an oQ Qwen4 checkpoint.
 
     The packed source size is not a safe proxy: decoder weights expand to the
@@ -769,9 +748,7 @@ def estimate_oq_stream_cache_bytes(
                     source_key,
                     tuple(int(dim) for dim in tensor_slice.get_shape()),
                 )
-                saw_companion = saw_companion or source_key.endswith(
-                    (".scales", ".biases")
-                )
+                saw_companion = saw_companion or source_key.endswith((".scales", ".biases"))
     if not saw_companion:
         return None
     quant_config = load_affine_quant_config(weights_dir)
@@ -810,9 +787,7 @@ def _source_file_components(shards: List[str]) -> Tuple[Tuple[str, int, int], ..
     components = []
     for path in sorted(shards):
         stat = os.stat(path)
-        components.append(
-            (os.path.basename(path), int(stat.st_size), int(stat.st_mtime_ns))
-        )
+        components.append((os.path.basename(path), int(stat.st_size), int(stat.st_mtime_ns)))
     return tuple(components)
 
 
@@ -887,8 +862,7 @@ def _validate_out_dir(out_dir: str) -> str:
     ]
     if not any(is_under(resolved, bound) for bound in bounds):
         raise ValueError(
-            f"shard output directory must be under $HOME, $CWD or $TMPDIR; "
-            f"got {out_dir}"
+            f"shard output directory must be under $HOME, $CWD or $TMPDIR; got {out_dir}"
         )
     os.makedirs(resolved, exist_ok=True)
     return resolved
@@ -917,9 +891,7 @@ def _atomic_write_index(index: ShardIndex, out_dir: str) -> None:
     payload["large_keys"] = list(index.large_keys)
     payload["stripe_roots"] = list(index.stripe_roots)
     payload["layer_roots"] = list(index.layer_roots)
-    payload["quant_specs"] = {
-        key: spec.to_json() for key, spec in index.quant_specs.items()
-    }
+    payload["quant_specs"] = {key: spec.to_json() for key, spec in index.quant_specs.items()}
     path = os.path.join(out_dir, _INDEX_NAME)
     fd, tmp = tempfile.mkstemp(prefix=".soup.", suffix=".tmp", dir=out_dir)
     try:
@@ -938,10 +910,7 @@ def _describe_source_change(
 ) -> str:
     """Name the first fingerprint component that invalidated the cache."""
     if not previous:
-        return (
-            "source_fingerprint changed; the cached index predates per-file "
-            "component records"
-        )
+        return "source_fingerprint changed; the cached index predates per-file component records"
     old = {name: (size, mtime) for name, size, mtime in previous}
     new = {name: (size, mtime) for name, size, mtime in current}
     if old.keys() != new.keys():
@@ -957,15 +926,9 @@ def _describe_source_change(
         old_size, old_mtime = old[name]
         new_size, new_mtime = new[name]
         if old_size != new_size:
-            return (
-                f"source size changed for {name!r} "
-                f"({old_size} -> {new_size} bytes)"
-            )
+            return f"source size changed for {name!r} ({old_size} -> {new_size} bytes)"
         if old_mtime != new_mtime:
-            return (
-                f"source mtime_ns changed for {name!r} "
-                f"({old_mtime} -> {new_mtime})"
-            )
+            return f"source mtime_ns changed for {name!r} ({old_mtime} -> {new_mtime})"
     return "source_fingerprint changed although its recorded components match"
 
 
@@ -998,25 +961,18 @@ def inspect_shard_cache(
     if index.quant != quant:
         return None, f"quantization changed ({index.quant!r} -> {quant!r})"
     if index.quant != QUANT_NONE and index.double_quant != double_quant:
-        return None, (
-            f"double_quant changed ({index.double_quant!r} -> {double_quant!r})"
-        )
+        return None, (f"double_quant changed ({index.double_quant!r} -> {double_quant!r})")
     if index.quant != QUANT_NONE and index.quant_device != quant_device:
-        return None, (
-            f"quantization device changed "
-            f"({index.quant_device!r} -> {quant_device!r})"
-        )
+        return None, (f"quantization device changed ({index.quant_device!r} -> {quant_device!r})")
     if index.source_fingerprint != fingerprint:
         return None, _describe_source_change(index.source_files, source_files)
     if index.external_mode != external_mode:
         return None, (
-            f"external tensor policy changed ({index.external_mode!r} -> "
-            f"{external_mode!r})"
+            f"external tensor policy changed ({index.external_mode!r} -> {external_mode!r})"
         )
     if index.format_version != _SHARD_FORMAT_VERSION:
         return None, (
-            f"shard format changed "
-            f"({index.format_version!r} -> {_SHARD_FORMAT_VERSION!r})"
+            f"shard format changed ({index.format_version!r} -> {_SHARD_FORMAT_VERSION!r})"
         )
     if not _same_roots(index.stripe_roots, stripe_roots):
         # Joined plainly: a list repr doubles every Windows backslash in the printed reason.
@@ -1280,21 +1236,15 @@ def shard_checkpoint(
                     )
                 where[key] = (path, source_key)
                 ple_match = _QWEN4_PLE_SHARD_RE.match(key) if external_mode else None
-                oq_ple_match = (
-                    _QWEN4_OQ_PLE_SHARD_RE.match(key) if external_mode else None
-                )
+                oq_ple_match = _QWEN4_OQ_PLE_SHARD_RE.match(key) if external_mode else None
                 is_dense_ple = external_mode and key.endswith(QWEN4_PLE_WEIGHT_SUFFIX)
                 if oq_ple_match:
                     logical_key = oq_ple_match.group("prefix") + ".weight"
                     part_index = int(oq_ple_match.group("part"))
-                    oq_external_keys.setdefault(logical_key, []).append(
-                        (part_index, key)
-                    )
+                    oq_external_keys.setdefault(logical_key, []).append((part_index, key))
                 elif ple_match or is_dense_ple:
                     tensor_slice = handle.get_slice(source_key)
-                    logical_key = (
-                        ple_match.group("prefix") + ".weight" if ple_match else key
-                    )
+                    logical_key = ple_match.group("prefix") + ".weight" if ple_match else key
                     part_index = int(ple_match.group("part")) if ple_match else 0
                     part = ExternalTensorPart(
                         source_file=os.path.basename(path),
@@ -1302,14 +1252,10 @@ def shard_checkpoint(
                         shape=tuple(int(dim) for dim in tensor_slice.get_shape()),
                         dtype=str(tensor_slice.get_dtype()),
                     )
-                    external_parts.setdefault(logical_key, []).append(
-                        (part_index, part)
-                    )
+                    external_parts.setdefault(logical_key, []).append((part_index, part))
                     external_source_keys.add(key)
                 if len(where) > _MAX_TOTAL_TENSORS:
-                    raise ValueError(
-                        f"checkpoint declares more than {_MAX_TOTAL_TENSORS} tensors"
-                    )
+                    raise ValueError(f"checkpoint declares more than {_MAX_TOTAL_TENSORS} tensors")
                 match = _LAYER_RE.match(key)
                 if match:
                     layer_ids.add(int(match.group(1)))
@@ -1326,14 +1272,10 @@ def shard_checkpoint(
             key: location
             for key, location in where.items()
             if location[1].startswith("language_model.")
-            and not location[1].endswith(
-                ".ple.ple_embedding.ngram_embedding.weight_scale"
-            )
+            and not location[1].endswith(".ple.ple_embedding.ngram_embedding.weight_scale")
         }
         layer_ids = {
-            int(match.group(1))
-            for key in where
-            if (match := _LAYER_RE.match(key)) is not None
+            int(match.group(1)) for key in where if (match := _LAYER_RE.match(key)) is not None
         }
 
     external_tensors: Dict[str, Any] = {}
@@ -1342,16 +1284,13 @@ def shard_checkpoint(
         indices = [part_index for part_index, _part in indexed_parts]
         if indices != list(range(len(indices))):
             raise ValueError(
-                f"PLE shards for {logical_key!r} must be contiguous from zero; "
-                f"got {indices[:8]}"
+                f"PLE shards for {logical_key!r} must be contiguous from zero; got {indices[:8]}"
             )
         parts = tuple(part for _part_index, part in indexed_parts)
         dtype_names = {part.dtype for part in parts}
         trailing_shapes = {part.shape[1:] for part in parts}
         if len(dtype_names) != 1 or len(trailing_shapes) != 1:
-            raise ValueError(
-                f"PLE shards for {logical_key!r} disagree on dtype or width"
-            )
+            raise ValueError(f"PLE shards for {logical_key!r} disagree on dtype or width")
         external_tensors[logical_key] = ExternalTensorSpec(
             parts=parts,
             shape=(sum(part.shape[0] for part in parts), *parts[0].shape[1:]),
@@ -1365,8 +1304,7 @@ def shard_checkpoint(
         indices = [part_index for part_index, _key in indexed_keys]
         if indices != list(range(len(indices))):
             raise ValueError(
-                f"oQ PLE shards for {logical_key!r} must be contiguous from zero; "
-                f"got {indices[:8]}"
+                f"oQ PLE shards for {logical_key!r} must be contiguous from zero; got {indices[:8]}"
             )
         parts = []
         part_specs = set()
@@ -1394,9 +1332,7 @@ def shard_checkpoint(
                 scales_shape = tuple(int(dim) for dim in scales_slice.get_shape())
                 biases_shape = tuple(int(dim) for dim in biases_slice.get_shape())
                 if scales_shape != biases_shape:
-                    raise ValueError(
-                        f"oQ PLE part {weight_key!r} scales and biases disagree"
-                    )
+                    raise ValueError(f"oQ PLE part {weight_key!r} scales and biases disagree")
                 from soup_cli.utils.oq_affine import logical_width
 
                 width = logical_width(packed_shape[-1], quant_spec.bits)
@@ -1448,9 +1384,7 @@ def shard_checkpoint(
     # needs only one matrix, and its acceptance control is explicitly
     # "unaffected". Splitting its lone embedding would change the CUDA kernel
     # path for no memory win and regressed preference-loss bit-exactness.
-    large_roles_present = {
-        role for key in where if (role := large_weight_role(key)) is not None
-    }
+    large_roles_present = {role for key in where if (role := large_weight_role(key)) is not None}
     stream_untied_pair = {
         _LARGE_EMBED_ROLE,
         _LARGE_HEAD_ROLE,
@@ -1483,9 +1417,7 @@ def shard_checkpoint(
                     continue
                 if saw_oq_companion and key.endswith((".scales", ".biases")):
                     continue
-                oq_expert_match = (
-                    _QWEN4_OQ_EXPERT_RE.match(key) if saw_oq_companion else None
-                )
+                oq_expert_match = _QWEN4_OQ_EXPERT_RE.match(key) if saw_oq_companion else None
                 if oq_expert_match:
                     oq_experts[oq_expert_match.group("projection")] = key
                     continue
@@ -1496,11 +1428,9 @@ def shard_checkpoint(
                     qwen4_experts.setdefault(projection, {})[expert] = location
                     continue
                 path, source_key = location
-                short = key[len(prefix):]
+                short = key[len(prefix) :]
                 if saw_oq_companion and key.endswith(".weight"):
-                    tensor = _read_oq_tensor(
-                        handles, where, key, oq_config=oq_config, dtype=dtype
-                    )
+                    tensor = _read_oq_tensor(handles, where, key, oq_config=oq_config, dtype=dtype)
                 else:
                     tensor = _read_tensor(handles[path], source_key, dtype)
                 total_params += tensor.numel()
@@ -1539,8 +1469,7 @@ def shard_checkpoint(
                     )
                 expert_ids = sorted(qwen4_experts["gate_proj"])
                 if expert_ids != list(range(len(expert_ids))) or any(
-                    sorted(qwen4_experts[name]) != expert_ids
-                    for name in expected_projections
+                    sorted(qwen4_experts[name]) != expert_ids for name in expected_projections
                 ):
                     raise ValueError(
                         f"Qwen4 layer {idx} expert ids must be contiguous and "
@@ -1658,9 +1587,7 @@ def shard_checkpoint(
                 continue
             path, source_key = location
             if saw_oq_companion and key.endswith(".weight"):
-                tensor = _read_oq_tensor(
-                    handles, where, key, oq_config=oq_config, dtype=dtype
-                )
+                tensor = _read_oq_tensor(handles, where, key, oq_config=oq_config, dtype=dtype)
             else:
                 tensor = _read_tensor(handles[path], source_key, dtype)
             total_params += tensor.numel()

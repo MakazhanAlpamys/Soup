@@ -100,9 +100,7 @@ def resolve_endpoint() -> str:
 
     host = parsed.hostname or ""
     if host == "0.0.0.0":
-        raise ValueError(
-            "HF_ENDPOINT 0.0.0.0 is ambiguous; use 127.0.0.1 or localhost"
-        )
+        raise ValueError("HF_ENDPOINT 0.0.0.0 is ambiguous; use 127.0.0.1 or localhost")
     host_clean = host.lower().rstrip(".")
     if parsed.scheme == "http" and host_clean not in _LOOPBACK_HOSTS:
         # Reject plain HTTP for RFC1918 / link-local / cloud metadata too —
@@ -114,9 +112,7 @@ def resolve_endpoint() -> str:
                 "(localhost / 127.0.0.1 / ::1); private/link-local hosts "
                 "require HTTPS"
             )
-        raise ValueError(
-            "HF_ENDPOINT for remote hosts must use HTTPS (localhost HTTP allowed)"
-        )
+        raise ValueError("HF_ENDPOINT for remote hosts must use HTTPS (localhost HTTP allowed)")
     return stripped
 
 

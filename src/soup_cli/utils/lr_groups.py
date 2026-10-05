@@ -68,8 +68,7 @@ def parse_lr_groups(value: object) -> Optional[List[LrGroup]]:
             elif isinstance(entry, (list, tuple)):
                 if len(entry) != 2:
                     raise ValueError(
-                        "lr_groups pair entries must be (pattern, lr), "
-                        f"got {len(entry)} elements"
+                        f"lr_groups pair entries must be (pattern, lr), got {len(entry)} elements"
                     )
                 items.append((entry[0], entry[1]))
             else:
@@ -79,23 +78,18 @@ def parse_lr_groups(value: object) -> Optional[List[LrGroup]]:
                 )
     else:
         raise ValueError(
-            "lr_groups must be a list of (pattern, lr) pairs or a dict, "
-            f"got {type(value).__name__}"
+            f"lr_groups must be a list of (pattern, lr) pairs or a dict, got {type(value).__name__}"
         )
     if not items:
         return None
     if len(items) > MAX_LR_GROUPS:
-        raise ValueError(
-            f"lr_groups exceeds cap of {MAX_LR_GROUPS}, got {len(items)}"
-        )
+        raise ValueError(f"lr_groups exceeds cap of {MAX_LR_GROUPS}, got {len(items)}")
     seen: Set[str] = set()
     out: List[LrGroup] = []
     for raw_pattern, raw_lr in items:
         pattern = _validate_pattern(raw_pattern)
         if pattern in seen:
-            raise ValueError(
-                f"lr_groups contains duplicate pattern {pattern!r}"
-            )
+            raise ValueError(f"lr_groups contains duplicate pattern {pattern!r}")
         seen.add(pattern)
         lr_value = _validate_lr(raw_lr, pattern)
         out.append(LrGroup(pattern=pattern, lr=lr_value))
@@ -104,23 +98,17 @@ def parse_lr_groups(value: object) -> Optional[List[LrGroup]]:
 
 def _validate_pattern(raw: object) -> str:
     if not isinstance(raw, str):
-        raise ValueError(
-            f"lr_groups pattern must be a string, got {type(raw).__name__}"
-        )
+        raise ValueError(f"lr_groups pattern must be a string, got {type(raw).__name__}")
     if not raw:
         raise ValueError("lr_groups pattern must be non-empty")
     if "\x00" in raw:
         raise ValueError("lr_groups pattern must not contain null bytes")
     if len(raw) > _MAX_PATTERN_LEN:
-        raise ValueError(
-            f"lr_groups pattern exceeds {_MAX_PATTERN_LEN} chars"
-        )
+        raise ValueError(f"lr_groups pattern exceeds {_MAX_PATTERN_LEN} chars")
     try:
         re.compile(raw)
     except re.error as exc:
-        raise ValueError(
-            f"lr_groups pattern {raw!r} is not a valid regex: {exc}"
-        ) from None
+        raise ValueError(f"lr_groups pattern {raw!r} is not a valid regex: {exc}") from None
     # Structural check, never a probe match: running a pattern that can
     # backtrack super-linearly is exactly what must not happen here.
     check_config_regex(raw, "training.lr_groups")
@@ -135,19 +123,13 @@ def _validate_lr(raw: object, pattern: str) -> float:
             raw = float(raw)
         except (TypeError, ValueError):
             raise ValueError(
-                f"lr_groups[{pattern!r}].lr must be a number, "
-                f"got string {raw!r}"
+                f"lr_groups[{pattern!r}].lr must be a number, got string {raw!r}"
             ) from None
     if isinstance(raw, bool) or not isinstance(raw, (int, float)):
-        raise ValueError(
-            f"lr_groups[{pattern!r}].lr must be a number, "
-            f"got {type(raw).__name__}"
-        )
+        raise ValueError(f"lr_groups[{pattern!r}].lr must be a number, got {type(raw).__name__}")
     lr_value = float(raw)
     if not math.isfinite(lr_value):
-        raise ValueError(
-            f"lr_groups[{pattern!r}].lr must be finite, got {lr_value}"
-        )
+        raise ValueError(f"lr_groups[{pattern!r}].lr must be finite, got {lr_value}")
     if lr_value <= _LR_LOWER_EXCLUSIVE or lr_value > _LR_UPPER_INCLUSIVE:
         raise ValueError(
             f"lr_groups[{pattern!r}].lr={lr_value} must be in "
@@ -168,8 +150,7 @@ def lr_groups_from_schema(
     """
     if not raw:
         return None
-    return [LrGroup(pattern=entry["pattern"], lr=float(entry["lr"]))
-            for entry in raw]
+    return [LrGroup(pattern=entry["pattern"], lr=float(entry["lr"])) for entry in raw]
 
 
 def build_optimizer_param_groups(
@@ -188,16 +169,13 @@ def build_optimizer_param_groups(
     omitted from the output.
     """
     if not isinstance(base_lr, (int, float)) or isinstance(base_lr, bool):
-        raise ValueError(
-            f"base_lr must be a number, got {type(base_lr).__name__}"
-        )
+        raise ValueError(f"base_lr must be a number, got {type(base_lr).__name__}")
     if base_lr <= 0:
         raise ValueError(f"base_lr must be > 0, got {base_lr}")
 
     materialised = list(named_params)
     if lr_groups is None or not lr_groups:
-        return [{"params": [p for _, p in materialised], "lr": float(base_lr),
-                 "name": "base"}]
+        return [{"params": [p for _, p in materialised], "lr": float(base_lr), "name": "base"}]
 
     compiled = [(g, re.compile(g.pattern)) for g in lr_groups]
     buckets: List[List[Any]] = [[] for _ in compiled]
@@ -213,15 +191,19 @@ def build_optimizer_param_groups(
     for (group, _), bucket in zip(compiled, buckets):
         if not bucket:
             continue
-        out.append({
-            "params": bucket,
-            "lr": float(group.lr),
-            "name": f"lr_group:{group.pattern}",
-        })
+        out.append(
+            {
+                "params": bucket,
+                "lr": float(group.lr),
+                "name": f"lr_group:{group.pattern}",
+            }
+        )
     if base_bucket:
-        out.append({
-            "params": base_bucket,
-            "lr": float(base_lr),
-            "name": "base",
-        })
+        out.append(
+            {
+                "params": base_bucket,
+                "lr": float(base_lr),
+                "name": "base",
+            }
+        )
     return out

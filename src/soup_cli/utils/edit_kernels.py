@@ -198,9 +198,7 @@ def _optimise_residual(
     if not tgt_ids:
         raise ValueError("target tokenised to an empty sequence")
     input_ids = torch.tensor([subj_ids + tgt_ids], dtype=torch.long, device=device)
-    labels = torch.tensor(
-        [[-100] * len(subj_ids) + tgt_ids], dtype=torch.long, device=device
-    )
+    labels = torch.tensor([[-100] * len(subj_ids) + tgt_ids], dtype=torch.long, device=device)
     # Inject delta at the LAST subject token position (the position whose
     # residual feeds the prediction of the first target token).
     inject_pos = len(subj_ids) - 1
@@ -208,9 +206,7 @@ def _optimise_residual(
     # Delta lives in the OUTPUT (hidden) space — for a GPT-2 Conv1D that is
     # ``nf``, NOT ``weight.shape[0]`` (which is the input dim there).
     hidden = _proj_out_dim(down)
-    delta = torch.zeros(
-        hidden, device=device, dtype=down.weight.dtype, requires_grad=True
-    )
+    delta = torch.zeros(hidden, device=device, dtype=down.weight.dtype, requires_grad=True)
 
     def _hook(_mod, _args, output):
         # output: [batch, seq, hidden]; add delta at inject_pos only.
@@ -264,13 +260,11 @@ def _rank1_update(down, key, delta, *, cov=None) -> float:
         # singular / non-finite covariance makes solve raise a torch LinAlgError
         # (a RuntimeError subclass) — surface it as a clean ValueError.
         try:
-            u = torch.linalg.solve(
-                cov.to(torch.float32), key.to(torch.float32)
-            ).to(down.weight.dtype)
+            u = torch.linalg.solve(cov.to(torch.float32), key.to(torch.float32)).to(
+                down.weight.dtype
+            )
         except RuntimeError as exc:
-            raise ValueError(
-                f"covariance solve failed (singular / non-finite C): {exc}"
-            ) from exc
+            raise ValueError(f"covariance solve failed (singular / non-finite C): {exc}") from exc
     else:
         u = key_w
     denom = float(torch.dot(u, key_w).item())
@@ -279,8 +273,7 @@ def _rank1_update(down, key, delta, *, cov=None) -> float:
     # otherwise let a NaN update silently corrupt the weights.
     if not math.isfinite(denom) or denom <= 0.0:
         raise ValueError(
-            "key vector has zero norm (or degenerate covariance); "
-            "cannot apply rank-1 update"
+            "key vector has zero norm (or degenerate covariance); cannot apply rank-1 update"
         )
     delta_w = delta.to(down.weight.dtype)
     if _is_transposed_proj(down):
@@ -314,9 +307,7 @@ def _alphaedit_project(down, update):
         # Seed the generator on CPU so the projection is deterministic /
         # reproducible across runs (review MEDIUM M3).
         gen = torch.Generator(device="cpu").manual_seed(0)
-        u = torch.randn(w.shape[0], generator=gen).to(
-            device=w.device, dtype=torch.float32
-        )
+        u = torch.randn(w.shape[0], generator=gen).to(device=w.device, dtype=torch.float32)
         u = u / (torch.linalg.norm(u) + 1e-8)
         for _ in range(8):
             v = w.t() @ u
@@ -387,9 +378,7 @@ def estimate_key_covariance(
                 continue
             ks = captured[-1]  # [seq, in]
             if cov is None:
-                cov = torch.zeros(
-                    ks.shape[1], ks.shape[1], dtype=torch.float32, device=ks.device
-                )
+                cov = torch.zeros(ks.shape[1], ks.shape[1], dtype=torch.float32, device=ks.device)
             cov += ks.t() @ ks
             count += ks.shape[0]
     finally:
@@ -397,9 +386,7 @@ def estimate_key_covariance(
     if cov is None or count == 0:
         raise ValueError("covariance corpus produced no key vectors")
     cov = cov / float(count)
-    cov = cov + ridge * torch.eye(
-        cov.shape[0], dtype=torch.float32, device=cov.device
-    )
+    cov = cov + ridge * torch.eye(cov.shape[0], dtype=torch.float32, device=cov.device)
     return cov
 
 
@@ -427,18 +414,31 @@ def apply_rome_edit(
     down = _down_proj(layers, layer)
     key = _capture_key(model, tokenizer, down, subject, device)
     delta = _optimise_residual(
-        model, tokenizer, down,
-        subject=subject, target=target, device=device,
-        grad_steps=grad_steps, lr=lr,
+        model,
+        tokenizer,
+        down,
+        subject=subject,
+        target=target,
+        device=device,
+        grad_steps=grad_steps,
+        lr=lr,
     )
     cov = None
     if cov_corpus:
         cov = estimate_key_covariance(
-            model, tokenizer, down, cov_corpus, device=device, ridge=cov_ridge,
+            model,
+            tokenizer,
+            down,
+            cov_corpus,
+            device=device,
+            ridge=cov_ridge,
         )
     norm = _rank1_update(down, key, delta, cov=cov)
     return EditKernelResult(
-        method="rome", layer=layer, norm_delta=norm, layers_edited=(layer,),
+        method="rome",
+        layer=layer,
+        norm_delta=norm,
+        layers_edited=(layer,),
     )
 
 
@@ -462,9 +462,14 @@ def apply_memit_edit(
     layers = _locate_decoder_layers(model)
     top_down = _down_proj(layers, layer)
     delta = _optimise_residual(
-        model, tokenizer, top_down,
-        subject=subject, target=target, device=device,
-        grad_steps=grad_steps, lr=lr,
+        model,
+        tokenizer,
+        top_down,
+        subject=subject,
+        target=target,
+        device=device,
+        grad_steps=grad_steps,
+        lr=lr,
     )
     band = [idx for idx in range(layer - _MEMIT_BAND + 1, layer + 1) if idx >= 0]
     if not band:
@@ -514,9 +519,14 @@ def apply_alphaedit_edit(
     down = _down_proj(layers, layer)
     key = _capture_key(model, tokenizer, down, subject, device)
     delta = _optimise_residual(
-        model, tokenizer, down,
-        subject=subject, target=target, device=device,
-        grad_steps=grad_steps, lr=lr,
+        model,
+        tokenizer,
+        down,
+        subject=subject,
+        target=target,
+        device=device,
+        grad_steps=grad_steps,
+        lr=lr,
     )
     key_t = key.to(down.weight.dtype)
     denom = float(torch.dot(key_t, key_t).item())
@@ -535,7 +545,10 @@ def apply_alphaedit_edit(
             down.weight.add_(projected)
     norm = float(torch.linalg.norm(projected).item())
     return EditKernelResult(
-        method="alphaedit", layer=layer, norm_delta=norm, layers_edited=(layer,),
+        method="alphaedit",
+        layer=layer,
+        norm_delta=norm,
+        layers_edited=(layer,),
     )
 
 
@@ -559,27 +572,50 @@ def run_edit_kernel(
     """
     if method == "rome":
         return apply_rome_edit(
-            model, tokenizer, subject=subject, target=target, layer=layer,
-            device=device, grad_steps=grad_steps, lr=lr, cov_corpus=cov_corpus,
+            model,
+            tokenizer,
+            subject=subject,
+            target=target,
+            layer=layer,
+            device=device,
+            grad_steps=grad_steps,
+            lr=lr,
+            cov_corpus=cov_corpus,
         )
     if method == "memit":
         return apply_memit_edit(
-            model, tokenizer, subject=subject, target=target, layer=layer,
-            device=device, grad_steps=grad_steps, lr=lr,
+            model,
+            tokenizer,
+            subject=subject,
+            target=target,
+            layer=layer,
+            device=device,
+            grad_steps=grad_steps,
+            lr=lr,
         )
     if method == "alphaedit":
         return apply_alphaedit_edit(
-            model, tokenizer, subject=subject, target=target, layer=layer,
-            device=device, grad_steps=grad_steps, lr=lr,
+            model,
+            tokenizer,
+            subject=subject,
+            target=target,
+            layer=layer,
+            device=device,
+            grad_steps=grad_steps,
+            lr=lr,
         )
     raise ValueError(
-        f"run_edit_kernel does not handle method={method!r}; "
-        "expected rome / memit / alphaedit"
+        f"run_edit_kernel does not handle method={method!r}; expected rome / memit / alphaedit"
     )
 
 
 def measure_target_prob(
-    model, tokenizer, *, subject: str, target: str, device: str,
+    model,
+    tokenizer,
+    *,
+    subject: str,
+    target: str,
+    device: str,
 ) -> float:
     """Return the model's mean probability of the ``target`` tokens after
     ``subject`` (a cheap correctness probe for tests + smoke)."""

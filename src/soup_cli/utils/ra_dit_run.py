@@ -195,9 +195,7 @@ def validate_ra_dit_config_path(name: str, raw: str) -> str:
         raise ValueError(f"{name} length {len(raw)} exceeds {_MAX_PATH_LEN}")
     enforce_under_cwd_and_no_symlink(raw, name)
     if not os.path.isfile(os.path.realpath(raw)):
-        raise FileNotFoundError(
-            f"{name} not found: {os.path.basename(raw)!r}"
-        )
+        raise FileNotFoundError(f"{name} not found: {os.path.basename(raw)!r}")
     return raw
 
 
@@ -209,9 +207,7 @@ def _validate_timeout(timeout_seconds: object) -> int:
     if isinstance(timeout_seconds, bool):
         raise ValueError("timeout_seconds must be int, not bool")
     if not isinstance(timeout_seconds, int):
-        raise TypeError(
-            f"timeout_seconds must be int, got {type(timeout_seconds).__name__}"
-        )
+        raise TypeError(f"timeout_seconds must be int, got {type(timeout_seconds).__name__}")
     if timeout_seconds < _MIN_TIMEOUT_S or timeout_seconds > _MAX_TIMEOUT_S:
         raise ValueError(
             f"timeout_seconds must be in [{_MIN_TIMEOUT_S}, "
@@ -240,8 +236,7 @@ def _load_yaml_config(path: str) -> dict:
             raise ValueError("config YAML must be a regular file")
         if st.st_size > _MAX_YAML_BYTES:
             raise ValueError(
-                f"config YAML exceeds {_MAX_YAML_BYTES // 1024}KB cap "
-                f"(got {st.st_size} bytes)"
+                f"config YAML exceeds {_MAX_YAML_BYTES // 1024}KB cap (got {st.st_size} bytes)"
             )
         with os.fdopen(fd, "r", encoding="utf-8") as fh:
             text = fh.read()
@@ -280,13 +275,9 @@ def _run_train_subprocess(config_path: str, *, timeout_seconds: int) -> None:
             timeout=timeout_seconds,
         )
     except subprocess.TimeoutExpired as exc:
-        raise RuntimeError(
-            f"RA-DIT stage exceeded {timeout_seconds}s timeout"
-        ) from exc
+        raise RuntimeError(f"RA-DIT stage exceeded {timeout_seconds}s timeout") from exc
     if result.returncode != 0:
-        raise RuntimeError(
-            f"RA-DIT stage failed (rc={result.returncode})"
-        )
+        raise RuntimeError(f"RA-DIT stage failed (rc={result.returncode})")
 
 
 def run_ra_dit(
@@ -318,22 +309,20 @@ def run_ra_dit(
     retr_path = _validate_config_path("retriever_config", retriever_config)
     gen_path = _validate_config_path("generator_config", generator_config)
     timeout = _validate_timeout(timeout_seconds)
-    runner = _runner if _runner is not None else (
-        lambda p: _run_train_subprocess(p, timeout_seconds=timeout)
+    runner = (
+        _runner
+        if _runner is not None
+        else (lambda p: _run_train_subprocess(p, timeout_seconds=timeout))
     )
 
     retr_cfg = _load_yaml_config(retr_path)
     gen_cfg = _load_yaml_config(gen_path)
     retriever_output = retr_cfg.get("output")
     if not isinstance(retriever_output, str) or not retriever_output:
-        raise ValueError(
-            "retriever config must declare a non-empty 'output' directory"
-        )
+        raise ValueError("retriever config must declare a non-empty 'output' directory")
     generator_output = gen_cfg.get("output")
     if not isinstance(generator_output, str) or not generator_output:
-        raise ValueError(
-            "generator config must declare a non-empty 'output' directory"
-        )
+        raise ValueError("generator config must declare a non-empty 'output' directory")
 
     # Stage 1 — train the retriever.
     runner(retr_path)

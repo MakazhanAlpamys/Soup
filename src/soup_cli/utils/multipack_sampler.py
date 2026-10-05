@@ -24,47 +24,49 @@ from typing import Union
 # Allow-list of HF model architectures that support the FA varlen path
 # (``_get_unpad_data`` monkey-patch). Mirrors Axolotl's list plus the v0.31.0
 # Soup recipe expansion. Keep frozenset to prevent runtime mutation.
-MULTIPACK_ARCHITECTURES: frozenset[str] = frozenset({
-    "LlamaForCausalLM",
-    "MistralForCausalLM",
-    "MixtralForCausalLM",
-    "QwenForCausalLM",
-    "Qwen2ForCausalLM",
-    "Qwen3ForCausalLM",
-    "Qwen2MoeForCausalLM",
-    "GemmaForCausalLM",
-    "Gemma2ForCausalLM",
-    "Gemma3ForCausalLM",
-    "PhiForCausalLM",
-    "Phi3ForCausalLM",
-    "Phi4ForCausalLM",
-    "DeepseekV2ForCausalLM",
-    "DeepseekV3ForCausalLM",
-    "FalconForCausalLM",
-    "StableLmForCausalLM",
-    "SmolLM2ForCausalLM",
-    # v0.51.0 Part D — new model families from the catalog expansion.
-    "GraniteForCausalLM",
-    "GraniteMoeForCausalLM",
-    "Glm4ForCausalLM",
-    "Glm5ForCausalLM",
-    "KimiForCausalLM",
-    "MiniMaxForCausalLM",
-    "QwQForCausalLM",
-    "QVQForCausalLM",
-    "GptOssForCausalLM",
-    "MagistralForCausalLM",
-    "DevstralForCausalLM",
-    "MinistralForCausalLM",
-    "MedGemmaForCausalLM",
-    "Lfm2ForCausalLM",
-    "CogitoForCausalLM",
-    "HunyuanForCausalLM",
-    "ErnieForCausalLM",
-    "YiForCausalLM",
-    "BaichuanForCausalLM",
-    "ChatGLMForConditionalGeneration",
-})
+MULTIPACK_ARCHITECTURES: frozenset[str] = frozenset(
+    {
+        "LlamaForCausalLM",
+        "MistralForCausalLM",
+        "MixtralForCausalLM",
+        "QwenForCausalLM",
+        "Qwen2ForCausalLM",
+        "Qwen3ForCausalLM",
+        "Qwen2MoeForCausalLM",
+        "GemmaForCausalLM",
+        "Gemma2ForCausalLM",
+        "Gemma3ForCausalLM",
+        "PhiForCausalLM",
+        "Phi3ForCausalLM",
+        "Phi4ForCausalLM",
+        "DeepseekV2ForCausalLM",
+        "DeepseekV3ForCausalLM",
+        "FalconForCausalLM",
+        "StableLmForCausalLM",
+        "SmolLM2ForCausalLM",
+        # v0.51.0 Part D — new model families from the catalog expansion.
+        "GraniteForCausalLM",
+        "GraniteMoeForCausalLM",
+        "Glm4ForCausalLM",
+        "Glm5ForCausalLM",
+        "KimiForCausalLM",
+        "MiniMaxForCausalLM",
+        "QwQForCausalLM",
+        "QVQForCausalLM",
+        "GptOssForCausalLM",
+        "MagistralForCausalLM",
+        "DevstralForCausalLM",
+        "MinistralForCausalLM",
+        "MedGemmaForCausalLM",
+        "Lfm2ForCausalLM",
+        "CogitoForCausalLM",
+        "HunyuanForCausalLM",
+        "ErnieForCausalLM",
+        "YiForCausalLM",
+        "BaichuanForCausalLM",
+        "ChatGLMForConditionalGeneration",
+    }
+)
 
 
 # Cap N to prevent a crafted dataset from pinning a CPU or exhausting memory.
@@ -182,26 +184,21 @@ def ffd_bin_pack(lengths: Sequence[int], max_len: int) -> list[list[int]]:
     if not lengths:
         return []
     if len(lengths) > _MAX_FFD_ITEMS:
-        raise ValueError(
-            f"too many items for FFD bin-packing: {len(lengths)} > "
-            f"{_MAX_FFD_ITEMS}"
-        )
+        raise ValueError(f"too many items for FFD bin-packing: {len(lengths)} > {_MAX_FFD_ITEMS}")
 
     # Validate each length up-front so we fail loudly before packing.
     for idx, length in enumerate(lengths):
         _check_int(f"lengths[{idx}]", length)
         if length <= 0:
-            raise ValueError(
-                f"lengths[{idx}] must be positive, got {length}"
-            )
+            raise ValueError(f"lengths[{idx}] must be positive, got {length}")
         if length > max_len:
-            raise ValueError(
-                f"lengths[{idx}]={length} exceeds max_len={max_len}"
-            )
+            raise ValueError(f"lengths[{idx}]={length} exceeds max_len={max_len}")
 
     # Pair each length with its original index, then sort by length descending.
     indexed = sorted(
-        enumerate(lengths), key=lambda pair: pair[1], reverse=True,
+        enumerate(lengths),
+        key=lambda pair: pair[1],
+        reverse=True,
     )
 
     bins: list[list[int]] = []
@@ -231,9 +228,7 @@ def validate_multipack_architecture(arch_name: str) -> None:
     Loud-fail policy (vs Axolotl's silent miss) — see module docstring.
     """
     if not isinstance(arch_name, str):
-        raise TypeError(
-            f"arch_name must be str, got {type(arch_name).__name__}"
-        )
+        raise TypeError(f"arch_name must be str, got {type(arch_name).__name__}")
     if not arch_name:
         raise ValueError("arch_name must be non-empty")
     if "\x00" in arch_name:
@@ -280,13 +275,9 @@ class MultipackBatchSampler:
         batch_size = _check_int("batch_size", batch_size)
         seed = _check_int("seed", seed)
         if batch_max_len <= 0:
-            raise ValueError(
-                f"batch_max_len must be positive, got {batch_max_len}"
-            )
+            raise ValueError(f"batch_max_len must be positive, got {batch_max_len}")
         if batch_size <= 0:
-            raise ValueError(
-                f"batch_size must be positive, got {batch_size}"
-            )
+            raise ValueError(f"batch_size must be positive, got {batch_size}")
         if not lengths:
             raise ValueError("lengths must be non-empty")
 

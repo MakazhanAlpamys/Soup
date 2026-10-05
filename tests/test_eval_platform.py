@@ -57,7 +57,7 @@ runner = CliRunner()
 
 def _strip_ansi(text: str) -> str:
     """Remove ANSI escape codes from Rich-formatted output."""
-    return re.sub(r'\x1b\[[0-9;]*m', '', text)
+    return re.sub(r"\x1b\[[0-9;]*m", "", text)
 
 
 # ═══════════════════════════════════════════════════════════
@@ -205,9 +205,7 @@ class TestLoadEvalTasks:
     def test_blank_lines_skipped(self, tmp_path):
         path = tmp_path / "tasks.jsonl"
         path.write_text(
-            '{"prompt": "q1", "expected": "a1"}\n'
-            "\n"
-            '{"prompt": "q2", "expected": "a2"}\n',
+            '{"prompt": "q1", "expected": "a1"}\n\n{"prompt": "q2", "expected": "a2"}\n',
             encoding="utf-8",
         )
         tasks = load_eval_tasks(path)
@@ -217,9 +215,15 @@ class TestLoadEvalTasks:
         path = tmp_path / "tasks.jsonl"
         lines = []
         for scoring in ["exact", "contains", "regex", "semantic"]:
-            lines.append(json.dumps({
-                "prompt": "q", "expected": "a", "scoring": scoring,
-            }))
+            lines.append(
+                json.dumps(
+                    {
+                        "prompt": "q",
+                        "expected": "a",
+                        "scoring": scoring,
+                    }
+                )
+            )
         path.write_text("\n".join(lines) + "\n", encoding="utf-8")
         tasks = load_eval_tasks(path)
         assert len(tasks) == 4
@@ -266,7 +270,9 @@ class TestScoreTask:
 
     def test_semantic_match(self):
         task = EvalTask(
-            prompt="q", expected="hello world", scoring="semantic",
+            prompt="q",
+            expected="hello world",
+            scoring="semantic",
         )
         result = score_task(task, "hello world test")
         assert result.matched is True
@@ -280,20 +286,28 @@ class TestScoreTask:
 
 class TestEvalResults:
     def test_compute_basic(self):
-        results = EvalResults(results=[
-            EvalResult(
-                task=EvalTask(prompt="q1", expected="a", category="math"),
-                output="a", score=1.0, matched=True,
-            ),
-            EvalResult(
-                task=EvalTask(prompt="q2", expected="b", category="math"),
-                output="x", score=0.0, matched=False,
-            ),
-            EvalResult(
-                task=EvalTask(prompt="q3", expected="c", category="code"),
-                output="c", score=1.0, matched=True,
-            ),
-        ])
+        results = EvalResults(
+            results=[
+                EvalResult(
+                    task=EvalTask(prompt="q1", expected="a", category="math"),
+                    output="a",
+                    score=1.0,
+                    matched=True,
+                ),
+                EvalResult(
+                    task=EvalTask(prompt="q2", expected="b", category="math"),
+                    output="x",
+                    score=0.0,
+                    matched=False,
+                ),
+                EvalResult(
+                    task=EvalTask(prompt="q3", expected="c", category="code"),
+                    output="c",
+                    score=1.0,
+                    matched=True,
+                ),
+            ]
+        )
         results.compute()
         assert results.total == 3
         assert results.correct == 2
@@ -348,7 +362,9 @@ class TestRunEval:
             EvalTask(prompt="q2", expected="no", scoring="exact"),
         ]
         results = run_eval(
-            "dummy", tasks, generate_fn=lambda p: "yes",
+            "dummy",
+            tasks,
+            generate_fn=lambda p: "yes",
         )
         assert results.total == 2
         assert results.correct == 1
@@ -363,10 +379,16 @@ class TestHumanEvalEdgeCases:
     def test_invalid_winner_treated_as_tie(self):
         """Invalid winner value falls through to tie (else branch)."""
         results = HumanEvalResults()
-        results.judgments.append(HumanJudgment(
-            prompt="q", response_a="a", response_b="b",
-            model_a="m1", model_b="m2", winner="invalid",
-        ))
+        results.judgments.append(
+            HumanJudgment(
+                prompt="q",
+                response_a="a",
+                response_b="b",
+                model_a="m1",
+                model_b="m2",
+                winner="invalid",
+            )
+        )
         results.compute_ratings()
         # Both models should be near default (tie behavior)
         assert abs(results.ratings["m1"].rating - ELO_DEFAULT) < 1e-6
@@ -388,9 +410,11 @@ class TestHumanEvalEdgeCases:
 class TestLeaderboardEdgeCases:
     def test_export_unknown_format_defaults_to_json(self):
         """Unknown format falls through to JSON export."""
-        lb = Leaderboard(entries=[
-            LeaderboardEntry(model_path="m1", benchmark="mmlu", score=0.8),
-        ])
+        lb = Leaderboard(
+            entries=[
+                LeaderboardEntry(model_path="m1", benchmark="mmlu", score=0.8),
+            ]
+        )
         lb.compute()
         output = export_leaderboard(lb, fmt="xml")
         # Should still be valid JSON
@@ -480,7 +504,8 @@ class TestLoadRubric:
     def test_invalid_criterion(self, tmp_path):
         rubric_path = tmp_path / "rubric.yaml"
         rubric_path.write_text(
-            "criteria:\n  - name: test\n", encoding="utf-8",
+            "criteria:\n  - name: test\n",
+            encoding="utf-8",
         )
         with pytest.raises(ValueError, match="description"):
             load_rubric(rubric_path)
@@ -506,20 +531,24 @@ class TestJudgePromptAndParsing:
         assert "JSON" in prompt
 
     def test_parse_valid_response(self):
-        response = json.dumps({
-            "scores": {"helpfulness": 4, "accuracy": 5, "safety": 3},
-            "reasoning": "Good response.",
-        })
+        response = json.dumps(
+            {
+                "scores": {"helpfulness": 4, "accuracy": 5, "safety": 3},
+                "reasoning": "Good response.",
+            }
+        )
         scores, reasoning = _parse_judge_response(response, DEFAULT_RUBRIC)
         assert scores["helpfulness"] == 4.0
         assert scores["accuracy"] == 5.0
         assert reasoning == "Good response."
 
     def test_parse_clamps_scores(self):
-        response = json.dumps({
-            "scores": {"helpfulness": 10, "accuracy": -1, "safety": 3},
-            "reasoning": "Test",
-        })
+        response = json.dumps(
+            {
+                "scores": {"helpfulness": 10, "accuracy": -1, "safety": 3},
+                "reasoning": "Test",
+            }
+        )
         scores, _ = _parse_judge_response(response, DEFAULT_RUBRIC)
         assert scores["helpfulness"] == 5.0  # clamped to max
         assert scores["accuracy"] == 1.0  # clamped to min
@@ -566,17 +595,20 @@ class TestJudgeEvaluator:
 
     def test_valid_init(self):
         evaluator = JudgeEvaluator(
-            provider="openai", model="gpt-4o-mini",
+            provider="openai",
+            model="gpt-4o-mini",
         )
         assert evaluator.provider == "openai"
         assert evaluator.model == "gpt-4o-mini"
 
     def test_evaluate_with_mock(self):
         evaluator = JudgeEvaluator(provider="openai")
-        mock_response = json.dumps({
-            "scores": {"helpfulness": 4, "accuracy": 5, "safety": 4},
-            "reasoning": "Solid response.",
-        })
+        mock_response = json.dumps(
+            {
+                "scores": {"helpfulness": 4, "accuracy": 5, "safety": 4},
+                "reasoning": "Solid response.",
+            }
+        )
         with patch.object(evaluator, "_call_llm", return_value=mock_response):
             score = evaluator.evaluate("test prompt", "test response")
             assert score.weighted_score > 0
@@ -584,10 +616,12 @@ class TestJudgeEvaluator:
 
     def test_evaluate_batch_with_mock(self):
         evaluator = JudgeEvaluator(provider="openai")
-        mock_response = json.dumps({
-            "scores": {"helpfulness": 3, "accuracy": 4, "safety": 5},
-            "reasoning": "Ok.",
-        })
+        mock_response = json.dumps(
+            {
+                "scores": {"helpfulness": 3, "accuracy": 4, "safety": 5},
+                "reasoning": "Ok.",
+            }
+        )
         items = [
             {"prompt": "q1", "response": "a1", "category": "cat1"},
             {"prompt": "q2", "response": "a2"},
@@ -614,13 +648,17 @@ class TestJudgeResults:
     def test_compute_with_scores(self):
         scores = [
             JudgeScore(
-                prompt="q1", response="a1",
-                scores={"h": 4, "a": 5}, weighted_score=4.5,
+                prompt="q1",
+                response="a1",
+                scores={"h": 4, "a": 5},
+                weighted_score=4.5,
                 category="cat1",
             ),
             JudgeScore(
-                prompt="q2", response="a2",
-                scores={"h": 3, "a": 4}, weighted_score=3.5,
+                prompt="q2",
+                response="a2",
+                scores={"h": 3, "a": 4},
+                weighted_score=3.5,
                 category="cat2",
             ),
         ]
@@ -648,10 +686,16 @@ class TestEloRating:
 
     def test_elo_update_winner_a(self):
         results = HumanEvalResults()
-        results.judgments.append(HumanJudgment(
-            prompt="q", response_a="a", response_b="b",
-            model_a="m1", model_b="m2", winner="a",
-        ))
+        results.judgments.append(
+            HumanJudgment(
+                prompt="q",
+                response_a="a",
+                response_b="b",
+                model_a="m1",
+                model_b="m2",
+                winner="a",
+            )
+        )
         results.compute_ratings()
         assert results.ratings["m1"].rating > ELO_DEFAULT
         assert results.ratings["m2"].rating < ELO_DEFAULT
@@ -660,20 +704,32 @@ class TestEloRating:
 
     def test_elo_update_winner_b(self):
         results = HumanEvalResults()
-        results.judgments.append(HumanJudgment(
-            prompt="q", response_a="a", response_b="b",
-            model_a="m1", model_b="m2", winner="b",
-        ))
+        results.judgments.append(
+            HumanJudgment(
+                prompt="q",
+                response_a="a",
+                response_b="b",
+                model_a="m1",
+                model_b="m2",
+                winner="b",
+            )
+        )
         results.compute_ratings()
         assert results.ratings["m1"].rating < ELO_DEFAULT
         assert results.ratings["m2"].rating > ELO_DEFAULT
 
     def test_elo_update_tie(self):
         results = HumanEvalResults()
-        results.judgments.append(HumanJudgment(
-            prompt="q", response_a="a", response_b="b",
-            model_a="m1", model_b="m2", winner="tie",
-        ))
+        results.judgments.append(
+            HumanJudgment(
+                prompt="q",
+                response_a="a",
+                response_b="b",
+                model_a="m1",
+                model_b="m2",
+                winner="tie",
+            )
+        )
         results.compute_ratings()
         assert abs(results.ratings["m1"].rating - ELO_DEFAULT) < 1e-6
         assert results.ratings["m1"].ties == 1
@@ -681,20 +737,32 @@ class TestEloRating:
     def test_multiple_judgments(self):
         results = HumanEvalResults()
         for _ in range(3):
-            results.judgments.append(HumanJudgment(
-                prompt="q", response_a="a", response_b="b",
-                model_a="m1", model_b="m2", winner="a",
-            ))
+            results.judgments.append(
+                HumanJudgment(
+                    prompt="q",
+                    response_a="a",
+                    response_b="b",
+                    model_a="m1",
+                    model_b="m2",
+                    winner="a",
+                )
+            )
         results.compute_ratings()
         assert results.ratings["m1"].wins == 3
         assert results.ratings["m1"].rating > ELO_DEFAULT + 30
 
     def test_to_dict(self):
         results = HumanEvalResults()
-        results.judgments.append(HumanJudgment(
-            prompt="q", response_a="a", response_b="b",
-            model_a="m1", model_b="m2", winner="a",
-        ))
+        results.judgments.append(
+            HumanJudgment(
+                prompt="q",
+                response_a="a",
+                response_b="b",
+                model_a="m1",
+                model_b="m2",
+                winner="a",
+            )
+        )
         results.compute_ratings()
         data = results.to_dict()
         assert len(data["judgments"]) == 1
@@ -710,8 +778,7 @@ class TestHumanEvalIO:
     def test_load_prompts(self, tmp_path):
         path = tmp_path / "prompts.jsonl"
         path.write_text(
-            '{"prompt": "Hello"}\n'
-            '{"prompt": "World", "category": "test"}\n',
+            '{"prompt": "Hello"}\n{"prompt": "World", "category": "test"}\n',
             encoding="utf-8",
         )
         prompts = load_prompts(path)
@@ -735,10 +802,16 @@ class TestHumanEvalIO:
 
     def test_save_and_load_results(self, tmp_path):
         results = HumanEvalResults()
-        results.judgments.append(HumanJudgment(
-            prompt="q", response_a="a", response_b="b",
-            model_a="m1", model_b="m2", winner="a",
-        ))
+        results.judgments.append(
+            HumanJudgment(
+                prompt="q",
+                response_a="a",
+                response_b="b",
+                model_a="m1",
+                model_b="m2",
+                winner="a",
+            )
+        )
         results.compute_ratings()
 
         path = tmp_path / "results.json"
@@ -775,41 +848,49 @@ class TestRunHumanEvalSession:
 
 class TestLeaderboard:
     def test_compute(self):
-        lb = Leaderboard(entries=[
-            LeaderboardEntry(model_path="m1", benchmark="mmlu", score=0.8),
-            LeaderboardEntry(model_path="m1", benchmark="gsm8k", score=0.6),
-            LeaderboardEntry(model_path="m2", benchmark="mmlu", score=0.9),
-        ])
+        lb = Leaderboard(
+            entries=[
+                LeaderboardEntry(model_path="m1", benchmark="mmlu", score=0.8),
+                LeaderboardEntry(model_path="m1", benchmark="gsm8k", score=0.6),
+                LeaderboardEntry(model_path="m2", benchmark="mmlu", score=0.9),
+            ]
+        )
         lb.compute()
         assert len(lb.models) == 2
         assert lb.models["m1"]["mmlu"] == 0.8
         assert lb.models["m2"]["mmlu"] == 0.9
 
     def test_get_sorted_models_by_avg(self):
-        lb = Leaderboard(entries=[
-            LeaderboardEntry(model_path="m1", benchmark="mmlu", score=0.8),
-            LeaderboardEntry(model_path="m2", benchmark="mmlu", score=0.9),
-        ])
+        lb = Leaderboard(
+            entries=[
+                LeaderboardEntry(model_path="m1", benchmark="mmlu", score=0.8),
+                LeaderboardEntry(model_path="m2", benchmark="mmlu", score=0.9),
+            ]
+        )
         lb.compute()
         sorted_models = lb.get_sorted_models()
         assert sorted_models[0][0] == "m2"  # higher score first
 
     def test_get_sorted_by_benchmark(self):
-        lb = Leaderboard(entries=[
-            LeaderboardEntry(model_path="m1", benchmark="mmlu", score=0.9),
-            LeaderboardEntry(model_path="m1", benchmark="gsm8k", score=0.3),
-            LeaderboardEntry(model_path="m2", benchmark="mmlu", score=0.7),
-            LeaderboardEntry(model_path="m2", benchmark="gsm8k", score=0.8),
-        ])
+        lb = Leaderboard(
+            entries=[
+                LeaderboardEntry(model_path="m1", benchmark="mmlu", score=0.9),
+                LeaderboardEntry(model_path="m1", benchmark="gsm8k", score=0.3),
+                LeaderboardEntry(model_path="m2", benchmark="mmlu", score=0.7),
+                LeaderboardEntry(model_path="m2", benchmark="gsm8k", score=0.8),
+            ]
+        )
         lb.compute()
         # Sort by gsm8k: m2 should be first
         sorted_models = lb.get_sorted_models(sort_by="gsm8k")
         assert sorted_models[0][0] == "m2"
 
     def test_export_json(self):
-        lb = Leaderboard(entries=[
-            LeaderboardEntry(model_path="m1", benchmark="mmlu", score=0.8),
-        ])
+        lb = Leaderboard(
+            entries=[
+                LeaderboardEntry(model_path="m1", benchmark="mmlu", score=0.8),
+            ]
+        )
         lb.compute()
         output = export_leaderboard(lb, fmt="json")
         data = json.loads(output)
@@ -817,10 +898,12 @@ class TestLeaderboard:
         assert data[0]["model"] == "m1"
 
     def test_export_csv(self):
-        lb = Leaderboard(entries=[
-            LeaderboardEntry(model_path="m1", benchmark="mmlu", score=0.8),
-            LeaderboardEntry(model_path="m1", benchmark="gsm8k", score=0.6),
-        ])
+        lb = Leaderboard(
+            entries=[
+                LeaderboardEntry(model_path="m1", benchmark="mmlu", score=0.8),
+                LeaderboardEntry(model_path="m1", benchmark="gsm8k", score=0.6),
+            ]
+        )
         lb.compute()
         output = export_leaderboard(lb, fmt="csv")
         lines = output.strip().split("\n")
@@ -873,8 +956,13 @@ class TestCompareRuns:
     def test_build_leaderboard_from_tracker(self):
         tracker = MagicMock()
         tracker.get_eval_results.return_value = [
-            {"model_path": "m1", "benchmark": "mmlu", "score": 0.8,
-             "run_id": "r1", "created_at": "2026-01-01"},
+            {
+                "model_path": "m1",
+                "benchmark": "mmlu",
+                "score": 0.8,
+                "run_id": "r1",
+                "created_at": "2026-01-01",
+            },
         ]
         lb = build_leaderboard_from_tracker(tracker)
         assert len(lb.entries) == 1
@@ -889,6 +977,7 @@ class TestCompareRuns:
 class TestEvalConfig:
     def test_eval_config_default(self):
         from soup_cli.config.schema import EvalConfig
+
         config = EvalConfig()
         assert config.auto_eval is False
         assert config.benchmarks is None
@@ -897,6 +986,7 @@ class TestEvalConfig:
 
     def test_eval_config_with_values(self):
         from soup_cli.config.schema import EvalConfig
+
         config = EvalConfig(
             auto_eval=True,
             benchmarks=["mmlu", "gsm8k"],
@@ -908,6 +998,7 @@ class TestEvalConfig:
 
     def test_soup_config_with_eval(self):
         from soup_cli.config.schema import SoupConfig
+
         config = SoupConfig(
             base="test-model",
             data={"train": "data.jsonl"},
@@ -919,6 +1010,7 @@ class TestEvalConfig:
 
     def test_soup_config_without_eval(self):
         from soup_cli.config.schema import SoupConfig
+
         config = SoupConfig(
             base="test-model",
             data={"train": "data.jsonl"},
@@ -934,6 +1026,7 @@ class TestEvalConfig:
 class TestCallbackAutoEval:
     def test_auto_eval_not_called_without_config(self):
         from soup_cli.monitoring.callback import SoupTrainerCallback
+
         display = MagicMock()
         callback = SoupTrainerCallback(display=display)
         callback._run_auto_eval()  # Should be a no-op
@@ -941,19 +1034,23 @@ class TestCallbackAutoEval:
     def test_auto_eval_not_called_when_disabled(self):
         from soup_cli.config.schema import EvalConfig
         from soup_cli.monitoring.callback import SoupTrainerCallback
+
         display = MagicMock()
         eval_config = EvalConfig(auto_eval=False)
         callback = SoupTrainerCallback(
-            display=display, eval_config=eval_config,
+            display=display,
+            eval_config=eval_config,
         )
         callback._run_auto_eval()  # Should be a no-op
 
     def test_auto_eval_called_when_enabled(self):
         from soup_cli.config.schema import EvalConfig
         from soup_cli.monitoring.callback import SoupTrainerCallback
+
         display = MagicMock()
         eval_config = EvalConfig(
-            auto_eval=True, benchmarks=["mmlu"],
+            auto_eval=True,
+            benchmarks=["mmlu"],
         )
         callback = SoupTrainerCallback(
             display=display,
@@ -1018,7 +1115,8 @@ class TestEvalCLI:
 
     def test_eval_benchmark_missing_model(self):
         result = runner.invoke(
-            app, ["eval", "benchmark", "--model", "nonexistent_path"],
+            app,
+            ["eval", "benchmark", "--model", "nonexistent_path"],
         )
         assert result.exit_code == 1
         assert "not found" in result.output.lower()
@@ -1026,13 +1124,18 @@ class TestEvalCLI:
     def test_eval_custom_missing_model(self, tmp_path):
         tasks_path = tmp_path / "tasks.jsonl"
         tasks_path.write_text(
-            '{"prompt": "q", "expected": "a"}\n', encoding="utf-8",
+            '{"prompt": "q", "expected": "a"}\n',
+            encoding="utf-8",
         )
         result = runner.invoke(
-            app, [
-                "eval", "custom",
-                "--tasks", str(tasks_path),
-                "--model", "nonexistent_path",
+            app,
+            [
+                "eval",
+                "custom",
+                "--tasks",
+                str(tasks_path),
+                "--model",
+                "nonexistent_path",
             ],
         )
         assert result.exit_code == 1
@@ -1040,7 +1143,8 @@ class TestEvalCLI:
 
     def test_eval_judge_missing_target(self):
         result = runner.invoke(
-            app, ["eval", "judge", "--target", "nonexistent.jsonl"],
+            app,
+            ["eval", "judge", "--target", "nonexistent.jsonl"],
         )
         assert result.exit_code == 1
         assert "not found" in result.output.lower()
@@ -1048,6 +1152,7 @@ class TestEvalCLI:
     def test_eval_leaderboard_empty(self, tmp_path):
         """Leaderboard with no results should show a message."""
         import os
+
         db_path = tmp_path / "test.db"
         with patch.dict(os.environ, {"SOUP_DB_PATH": str(db_path)}):
             result = runner.invoke(app, ["eval", "leaderboard"])
@@ -1057,10 +1162,12 @@ class TestEvalCLI:
     def test_eval_compare_run_not_found(self, tmp_path):
         """Compare with nonexistent run IDs."""
         import os
+
         db_path = tmp_path / "test.db"
         with patch.dict(os.environ, {"SOUP_DB_PATH": str(db_path)}):
             result = runner.invoke(
-                app, ["eval", "compare", "nonexistent1", "nonexistent2"],
+                app,
+                ["eval", "compare", "nonexistent1", "nonexistent2"],
             )
             assert result.exit_code == 1
             assert "not found" in result.output.lower()
@@ -1124,6 +1231,7 @@ class TestSecurity:
     def test_judge_api_key_not_leaked_to_ollama(self):
         """OpenAI API key should NOT be auto-loaded for non-openai providers."""
         import os
+
         with patch.dict(os.environ, {"OPENAI_API_KEY": "sk-secret-key"}):
             evaluator = JudgeEvaluator(provider="ollama")
             assert evaluator.api_key == ""
@@ -1131,6 +1239,7 @@ class TestSecurity:
     def test_judge_api_key_loaded_for_openai(self):
         """OpenAI API key SHOULD be auto-loaded for openai provider."""
         import os
+
         with patch.dict(os.environ, {"OPENAI_API_KEY": "sk-secret-key"}):
             evaluator = JudgeEvaluator(provider="openai")
             assert evaluator.api_key == "sk-secret-key"
@@ -1138,6 +1247,7 @@ class TestSecurity:
     def test_judge_api_key_not_leaked_to_server(self):
         """OpenAI API key should NOT be auto-loaded for server provider."""
         import os
+
         with patch.dict(os.environ, {"OPENAI_API_KEY": "sk-secret-key"}):
             evaluator = JudgeEvaluator(
                 provider="server",

@@ -9,6 +9,7 @@ errors, and fingerprint key-order independence.
 Stdlib + rich only: a "numpy-like scalar" is simulated with a small class
 whose ``__float__`` raises, never by importing numpy/torch/mlx.
 """
+
 from __future__ import annotations
 
 import json
@@ -541,4 +542,3 @@ def test_reading_a_run_indexes_the_batches_once_not_once_per_step():
         f"the log was re-scanned {batches.iterations - 1} times after construction; "
         "reading is quadratic in the number of steps again"
     )
-

@@ -32,8 +32,7 @@ class AffineQuantSpec:
     def __post_init__(self) -> None:
         if self.bits not in _SUPPORTED_BITS:
             raise ValueError(
-                f"unsupported oQ affine bit width {self.bits}; "
-                f"supported: {sorted(_SUPPORTED_BITS)}"
+                f"unsupported oQ affine bit width {self.bits}; supported: {sorted(_SUPPORTED_BITS)}"
             )
         if self.group_size not in _SUPPORTED_GROUP_SIZES:
             raise ValueError(
@@ -76,9 +75,7 @@ def load_affine_quant_config(weights_dir: str) -> AffineQuantConfig:
         raise ValueError("oQ checkpoint needs a regular config.json beside its weights")
     size = os.path.getsize(path)
     if size <= 0 or size > _CONFIG_LIMIT:
-        raise ValueError(
-            f"oQ config.json size must be in [1, {_CONFIG_LIMIT}] bytes; got {size}"
-        )
+        raise ValueError(f"oQ config.json size must be in [1, {_CONFIG_LIMIT}] bytes; got {size}")
     try:
         with open(path, encoding="utf-8") as handle:
             payload = json.load(handle)
@@ -99,9 +96,7 @@ def logical_width(packed_width: int, bits: int) -> int:
     """Return the unpacked final dimension, rejecting partial bit streams."""
     total_bits = int(packed_width) * 32
     if packed_width <= 0 or bits not in _SUPPORTED_BITS or total_bits % bits:
-        raise ValueError(
-            f"invalid oQ packed width {packed_width} for {bits}-bit affine weights"
-        )
+        raise ValueError(f"invalid oQ packed width {packed_width} for {bits}-bit affine weights")
     return total_bits // bits
 
 

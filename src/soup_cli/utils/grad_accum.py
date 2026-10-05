@@ -31,13 +31,10 @@ class GradAccumMonitor:
 
     def __post_init__(self) -> None:
         if not (self.total_vram_gb > 0):
-            raise ValueError(
-                f"total_vram_gb must be > 0, got {self.total_vram_gb}"
-            )
+            raise ValueError(f"total_vram_gb must be > 0, got {self.total_vram_gb}")
         if not (MIN_THRESHOLD < self.threshold < MAX_THRESHOLD):
             raise ValueError(
-                f"threshold must be in ({MIN_THRESHOLD}, {MAX_THRESHOLD}), "
-                f"got {self.threshold}"
+                f"threshold must be in ({MIN_THRESHOLD}, {MAX_THRESHOLD}), got {self.threshold}"
             )
 
     def observe(self, used_vram_gb: float) -> None:
@@ -54,7 +51,9 @@ class GradAccumMonitor:
         return (used_vram_gb / self.total_vram_gb) >= self.threshold
 
     def recommend(
-        self, current_batch: int, current_accum: int,
+        self,
+        current_batch: int,
+        current_accum: int,
     ) -> tuple[int, int]:
         """Halve batch and double accum, preserving effective batch.
 

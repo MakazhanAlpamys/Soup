@@ -69,8 +69,7 @@ def test_generate_path_within_cwd_behaviour(tmp_path, monkeypatch):
     monkeypatch.chdir(proj)
     assert _path_within_cwd((proj / "d.jsonl").resolve(), Path.cwd()) is True
     assert (
-        _path_within_cwd((tmp_path / "project-secrets" / "d.jsonl").resolve(), Path.cwd())
-        is False
+        _path_within_cwd((tmp_path / "project-secrets" / "d.jsonl").resolve(), Path.cwd()) is False
     )
 
 
@@ -105,13 +104,10 @@ def test_active_sampler_writes_selected_rows(tmp_path, monkeypatch):
 
     monkeypatch.chdir(tmp_path)
     rows = [
-        {"messages": [{"role": "user", "content": f"q{i}"}], "logprob": -float(i)}
-        for i in range(5)
+        {"messages": [{"role": "user", "content": f"q{i}"}], "logprob": -float(i)} for i in range(5)
     ]
     inp = tmp_path / "in.jsonl"
-    inp.write_text(
-        "".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8"
-    )
+    inp.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
     out = tmp_path / "out.jsonl"
     sample_uncertain_rows(str(inp), output_path=str(out), budget=3)
     assert out.exists()

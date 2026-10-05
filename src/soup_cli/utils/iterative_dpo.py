@@ -46,9 +46,7 @@ def validate_rounds(value: object) -> int:
     if value < _MIN_ROUNDS:
         raise ValueError(f"rounds must be >= {_MIN_ROUNDS}, got {value}")
     if value > _MAX_ROUNDS:
-        raise ValueError(
-            f"rounds={value} exceeds {_MAX_ROUNDS} cap"
-        )
+        raise ValueError(f"rounds={value} exceeds {_MAX_ROUNDS} cap")
     return value
 
 
@@ -61,17 +59,11 @@ def validate_pairs_per_round(value: object) -> int:
     if isinstance(value, bool):
         raise ValueError("pairs_per_round must not be bool")
     if not isinstance(value, int):
-        raise ValueError(
-            f"pairs_per_round must be int, got {type(value).__name__}"
-        )
+        raise ValueError(f"pairs_per_round must be int, got {type(value).__name__}")
     if value < _MIN_PAIRS_PER_ROUND:
-        raise ValueError(
-            f"pairs_per_round must be >= {_MIN_PAIRS_PER_ROUND}, got {value}"
-        )
+        raise ValueError(f"pairs_per_round must be >= {_MIN_PAIRS_PER_ROUND}, got {value}")
     if value > _MAX_PAIRS_PER_ROUND:
-        raise ValueError(
-            f"pairs_per_round={value} exceeds {_MAX_PAIRS_PER_ROUND} cap"
-        )
+        raise ValueError(f"pairs_per_round={value} exceeds {_MAX_PAIRS_PER_ROUND} cap")
     return value
 
 
@@ -147,16 +139,13 @@ class IterativeDPOPlan:
         _check_path(self.base_model, "base_model")
         _check_path(self.reward_model, "reward_model")
         if not isinstance(self.rounds, tuple):
-            raise TypeError(
-                f"rounds must be a tuple, got {type(self.rounds).__name__}"
-            )
+            raise TypeError(f"rounds must be a tuple, got {type(self.rounds).__name__}")
         if len(self.rounds) < 1:
             raise ValueError("rounds must contain at least 1 round")
         for r in self.rounds:
             if not isinstance(r, IterativeDPORound):
                 raise TypeError(
-                    f"every rounds[] entry must be IterativeDPORound, "
-                    f"got {type(r).__name__}"
+                    f"every rounds[] entry must be IterativeDPORound, got {type(r).__name__}"
                 )
         for idx, r in enumerate(self.rounds):
             if r.round_index != idx:
@@ -292,11 +281,7 @@ def _write_pairs_jsonl(pairs: list[tuple[str, str, str]], path: str) -> int:
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     lines = []
     for prompt, chosen, rejected in pairs:
-        lines.append(
-            json.dumps(
-                {"prompt": prompt, "chosen": chosen, "rejected": rejected}
-            )
-        )
+        lines.append(json.dumps({"prompt": prompt, "chosen": chosen, "rejected": rejected}))
     atomic_write_text("\n".join(lines) + ("\n" if lines else ""), path)
     return len(pairs)
 
@@ -343,9 +328,7 @@ def _default_sample_fn(
             )
         prompt_len = enc["input_ids"].shape[1]
         for seq in gen:
-            completions.append(
-                tok.decode(seq[prompt_len:], skip_special_tokens=True)
-            )
+            completions.append(tok.decode(seq[prompt_len:], skip_special_tokens=True))
         out.append(completions)
     return out
 
@@ -370,9 +353,7 @@ def _default_score_fn(
     scores: list[float] = []
     with torch.no_grad():
         for completion in completions:
-            enc = tok(
-                prompt, completion, return_tensors="pt", truncation=True
-            ).to(dev)
+            enc = tok(prompt, completion, return_tensors="pt", truncation=True).to(dev)
             logits = rm(**enc).logits
             scores.append(float(logits.reshape(-1)[0]))
     return scores
@@ -448,9 +429,7 @@ def run_iterative_dpo(
     ``soup train``); tests inject fast fakes.
     """
     if not isinstance(plan, IterativeDPOPlan):
-        raise TypeError(
-            f"plan must be IterativeDPOPlan, got {type(plan).__name__}"
-        )
+        raise TypeError(f"plan must be IterativeDPOPlan, got {type(plan).__name__}")
     sample_fn = sample_fn or _default_sample_fn
     score_fn = score_fn or _default_score_fn
     train_fn = train_fn or _default_train_fn

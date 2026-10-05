@@ -84,9 +84,7 @@ class TestRequireUldIdCompatibleTokenizers:
         from soup_cli.trainer.distill import _require_uld_id_compatible_tokenizers
 
         with pytest.raises(ValueError, match="wasserstein_aligned"):
-            _require_uld_id_compatible_tokenizers(
-                "wasserstein", _FakeTok(32000), _FakeTok(49152)
-            )
+            _require_uld_id_compatible_tokenizers("wasserstein", _FakeTok(32000), _FakeTok(49152))
 
     def test_wasserstein_aligned_is_not_gated(self):
         """#258's own strategy re-tokenizes and aligns; it never reuses raw
@@ -131,9 +129,7 @@ class TestDistillSetupRejectsIncompatibleUld:
         def _fake_model(model_id, trust_remote_code=False, device_map=None, **kwargs):
             return _FakeModel(vocab_size=student_tok.vocab_size)
 
-        monkeypatch.setattr(
-            transformers.AutoTokenizer, "from_pretrained", staticmethod(_fake_tok)
-        )
+        monkeypatch.setattr(transformers.AutoTokenizer, "from_pretrained", staticmethod(_fake_tok))
         monkeypatch.setattr(
             transformers.AutoModelForCausalLM,
             "from_pretrained",
@@ -151,9 +147,7 @@ class TestDistillSetupRejectsIncompatibleUld:
         monkeypatch.setattr(peft, "get_peft_model", lambda model, config: model)
 
     @pytest.mark.parametrize("strategy", ["wasserstein", "topk_align"])
-    def test_setup_raises_before_training_on_mismatched_tokenizers(
-        self, monkeypatch, strategy
-    ):
+    def test_setup_raises_before_training_on_mismatched_tokenizers(self, monkeypatch, strategy):
         pytest.importorskip("torch")
         from soup_cli.trainer.distill import DistillTrainerWrapper
 
@@ -166,9 +160,7 @@ class TestDistillSetupRejectsIncompatibleUld:
         with pytest.raises(ValueError, match="wasserstein_aligned"):
             wrapper.setup({})
 
-    def test_setup_does_not_raise_id_compat_error_on_identical_tokenizer(
-        self, monkeypatch
-    ):
+    def test_setup_does_not_raise_id_compat_error_on_identical_tokenizer(self, monkeypatch):
         """Same-tokenizer fast path (#258's own requirement): setup() must
         get past the compatibility gate without our new error firing."""
         pytest.importorskip("torch")
