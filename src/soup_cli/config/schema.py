@@ -7199,7 +7199,7 @@ class SoupConfig(BaseModel):
                 f"preference_loss={tcfg.preference_loss!r}."
             )
         # dpo_ref_regen_epochs requires LoRA (full fine-tuning unsupported, #1345).
-        if regen is not None and (tcfg.lora is None or tcfg.lora.r == 0):
+        if regen is not None and tcfg.lora.r == 0:
             raise ValueError(
                 "dpo_ref_regen_epochs requires LoRA (lora.r >= 1): full fine-tuning "
                 f"(lora.r: 0) is not supported for DPO-family reference "

@@ -639,6 +639,53 @@ class TestRefModelRegenCallbackUnit:
         assert cb.regen_count == 0
         assert "no '.ref.' adapter parameters found on model" in caplog.text
 
+    def test_ref_model_regen_counts_nothing_when_no_source_matches(self, caplog):
+        import logging
+
+        import torch
+        from torch import nn
+
+        from soup_cli.utils.dpo_variants import RefModelRegenCallback
+
+        class OnlyRef(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.w = nn.Parameter(torch.zeros(2, 2), requires_grad=False)
+
+            def named_parameters(self, prefix="", recurse=True, remove_duplicate=True):
+                yield "base_model.model.layer.lora_A.ref.weight", self.w
+
+        trainer = MagicMock(ref_model=None, model=OnlyRef())
+        cb = RefModelRegenCallback(every_n_epochs=1)
+        cb.attach(trainer)
+        with caplog.at_level(logging.WARNING):
+            cb.on_epoch_end(args=None, state=MagicMock(epoch=1.0), control=None)
+        assert cb.regen_count == 0
+        assert "matching source parameter" in caplog.text
+
+    def test_ref_model_regen_ensures_ref_adapter_is_frozen(self):
+        import torch
+        from torch import nn
+
+        from soup_cli.utils.dpo_variants import RefModelRegenCallback
+
+        class ModelWithUnfrozenRef(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.default_w = nn.Parameter(torch.ones(2, 2), requires_grad=True)
+                self.ref_w = nn.Parameter(torch.zeros(2, 2), requires_grad=True)
+
+            def named_parameters(self, prefix="", recurse=True, remove_duplicate=True):
+                yield "base_model.model.layer.lora_A.default.weight", self.default_w
+                yield "base_model.model.layer.lora_A.ref.weight", self.ref_w
+
+        trainer = MagicMock(ref_model=None, model=ModelWithUnfrozenRef())
+        cb = RefModelRegenCallback(every_n_epochs=1)
+        cb.attach(trainer)
+        cb.on_epoch_end(args=None, state=MagicMock(epoch=1.0), control=None)
+        assert trainer.model.ref_w.requires_grad is False
+        assert cb.regen_count == 1
+
     def test_ref_model_regen_supports_separate_ref_model(self):
         import torch
         from torch import nn
