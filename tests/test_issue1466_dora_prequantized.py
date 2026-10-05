@@ -101,3 +101,25 @@ def test_the_mlx_backend_keeps_its_own_refusal(quantization):
     message = str(excinfo.value)
     assert "not supported on the mlx backend" in message
     assert "use_dora: false" not in message
+
+
+def _on_unsloth(yaml: str) -> str:
+    return yaml.replace("task: sft\n", "task: sft\nbackend: unsloth\n")
+
+
+@pytest.mark.parametrize("quantization", NO_DORA)
+def test_the_unsloth_backend_gets_the_dora_refusal(quantization):
+    """The early return is for mlx alone: on unsloth the pairing is refused
+    with the same message as on transformers."""
+    with pytest.raises(ValueError) as excinfo:
+        load_config_from_string(_on_unsloth(_yaml(quantization, use_dora=True)))
+    message = str(excinfo.value)
+    assert repr(quantization) in message
+    assert "use_dora: false" in message
+
+
+@pytest.mark.parametrize("quantization", NO_DORA)
+def test_plain_lora_on_the_unsloth_backend_still_loads(quantization):
+    cfg = load_config_from_string(_on_unsloth(_yaml(quantization, use_dora=False)))
+    assert cfg.backend == "unsloth"
+    assert cfg.training.quantization == quantization
