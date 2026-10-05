@@ -30,20 +30,18 @@ class EBFTSpec:
     live_wired: bool
 
 
-_EBFT_METADATA: Mapping[str, EBFTSpec] = MappingProxyType(
-    {
-        "structured": EBFTSpec(
-            name="structured",
-            description="Structured Energy-Based FT (per-token energies)",
-            live_wired=True,  # v0.53.2 #135 — kernel + attach hook shipped.
-        ),
-        "strided": EBFTSpec(
-            name="strided",
-            description="Strided Energy-Based FT (block-sampled energies)",
-            live_wired=True,  # v0.53.2 #135
-        ),
-    }
-)
+_EBFT_METADATA: Mapping[str, EBFTSpec] = MappingProxyType({
+    "structured": EBFTSpec(
+        name="structured",
+        description="Structured Energy-Based FT (per-token energies)",
+        live_wired=True,  # v0.53.2 #135 — kernel + attach hook shipped.
+    ),
+    "strided": EBFTSpec(
+        name="strided",
+        description="Strided Energy-Based FT (block-sampled energies)",
+        live_wired=True,  # v0.53.2 #135
+    ),
+})
 
 
 @dataclass(frozen=True)
@@ -55,25 +53,23 @@ class GDPOSpec:
     live_wired: bool
 
 
-_GDPO_METADATA: Mapping[str, GDPOSpec] = MappingProxyType(
-    {
-        "standard": GDPOSpec(
-            name="standard",
-            description="Standard GDPO (general preference objective)",
-            live_wired=True,  # v0.53.2 #135 — kernel + DPO attach hook shipped.
-        ),
-        "length_normalized": GDPOSpec(
-            name="length_normalized",
-            description="Length-normalized GDPO (SimPO-style normalisation)",
-            live_wired=True,  # v0.53.2 #135
-        ),
-        "margin": GDPOSpec(
-            name="margin",
-            description="Margin-augmented GDPO (DPO + margin term)",
-            live_wired=True,  # v0.53.2 #135
-        ),
-    }
-)
+_GDPO_METADATA: Mapping[str, GDPOSpec] = MappingProxyType({
+    "standard": GDPOSpec(
+        name="standard",
+        description="Standard GDPO (general preference objective)",
+        live_wired=False,  # #1309 — supported TRL versions lack the dpo_loss hook.
+    ),
+    "length_normalized": GDPOSpec(
+        name="length_normalized",
+        description="Length-normalized GDPO (SimPO-style normalisation)",
+        live_wired=False,  # #1309 — refused at config load.
+    ),
+    "margin": GDPOSpec(
+        name="margin",
+        description="Margin-augmented GDPO (DPO + margin term)",
+        live_wired=False,  # #1309 — refused at config load.
+    ),
+})
 
 
 def _validate_variant(name: object, allowed: frozenset[str], label: str) -> str:
@@ -87,11 +83,15 @@ def _validate_variant(name: object, allowed: frozenset[str], label: str) -> str:
     if "\x00" in name:
         raise ValueError(f"{label} must not contain null bytes")
     if len(name) > _MAX_VARIANT_LEN:
-        raise ValueError(f"{label} too long (max {_MAX_VARIANT_LEN} chars)")
+        raise ValueError(
+            f"{label} too long (max {_MAX_VARIANT_LEN} chars)"
+        )
     canonical = name.lower()
     if canonical not in allowed:
         supported = ", ".join(sorted(allowed))
-        raise ValueError(f"{label} {name!r} not supported. Supported: {supported}")
+        raise ValueError(
+            f"{label} {name!r} not supported. Supported: {supported}"
+        )
     return canonical
 
 
@@ -120,14 +120,22 @@ def validate_ebft_temperature(value: object) -> float:
     if isinstance(value, bool):
         raise TypeError(f"ebft_temperature must not be bool, got {value!r}")
     if not isinstance(value, (int, float)):
-        raise TypeError(f"ebft_temperature must be float, got {type(value).__name__}")
+        raise TypeError(
+            f"ebft_temperature must be float, got {type(value).__name__}"
+        )
     fval = float(value)
     if not math.isfinite(fval):
-        raise ValueError(f"ebft_temperature must be finite, got {value!r}")
+        raise ValueError(
+            f"ebft_temperature must be finite, got {value!r}"
+        )
     if fval < _MIN_EBFT_TEMP:
-        raise ValueError(f"ebft_temperature must be >= {_MIN_EBFT_TEMP}, got {fval}")
+        raise ValueError(
+            f"ebft_temperature must be >= {_MIN_EBFT_TEMP}, got {fval}"
+        )
     if fval > _MAX_EBFT_TEMP:
-        raise ValueError(f"ebft_temperature must be <= {_MAX_EBFT_TEMP}, got {fval}")
+        raise ValueError(
+            f"ebft_temperature must be <= {_MAX_EBFT_TEMP}, got {fval}"
+        )
     return fval
 
 
@@ -144,18 +152,27 @@ def validate_ebft_compat(*, task: str, backend: str) -> None:
     """Schema-time gate for ``ebft_variant`` — SFT-only, non-MLX."""
     _check_task_backend(task, backend)
     if backend == "mlx":
-        raise ValueError("ebft_variant is not supported on backend=mlx in v0.52.0")
+        raise ValueError(
+            "ebft_variant is not supported on backend=mlx in v0.52.0"
+        )
     if task != "sft":
-        raise ValueError(f"ebft_variant requires task='sft'; got task={task!r}")
+        raise ValueError(
+            f"ebft_variant requires task='sft'; got task={task!r}"
+        )
 
 
 def validate_gdpo_compat(*, task: str, backend: str) -> None:
     """Schema-time gate for ``gdpo_variant`` — DPO-family-only, non-MLX."""
     _check_task_backend(task, backend)
     if backend == "mlx":
-        raise ValueError("gdpo_variant is not supported on backend=mlx in v0.52.0")
+        raise ValueError(
+            "gdpo_variant is not supported on backend=mlx in v0.52.0"
+        )
     if task not in ("dpo", "preference"):
-        raise ValueError(f"gdpo_variant requires task in ('dpo', 'preference'); got task={task!r}")
+        raise ValueError(
+            f"gdpo_variant requires task in ('dpo', 'preference'); "
+            f"got task={task!r}"
+        )
 
 
 def attach_ebft_compute_loss(trainer: object, tcfg: object) -> bool:
@@ -188,7 +205,9 @@ def attach_ebft_compute_loss(trainer: object, tcfg: object) -> bool:
         return_outputs: bool = False,
         num_items_in_batch: object = None,
     ):
-        result = original(model, inputs, return_outputs=True, num_items_in_batch=num_items_in_batch)
+        result = original(
+            model, inputs, return_outputs=True, num_items_in_batch=num_items_in_batch
+        )
         ce_loss, outputs = result
         labels = inputs.get("labels")
         if labels is None:
@@ -208,10 +227,11 @@ def attach_ebft_compute_loss(trainer: object, tcfg: object) -> bool:
 
 
 def attach_gdpo_compute_loss(trainer: object, tcfg: object) -> bool:
-    """Wrap TRL's ``DPOTrainer.dpo_loss`` so a GDPO variant is used (v0.53.2 #135).
+    """Wrap a legacy ``dpo_loss`` hook (v0.53.2 #135), not supported TRL trainers.
 
-    No-op when ``tcfg.gdpo_variant`` is None. Replaces the trainer's
-    ``dpo_loss`` method (the stable TRL hook returning losses, chosen rewards,
+    Config load refuses every non-null ``gdpo_variant`` (#1309); this legacy
+    helper and kernel remain for isolated tests. No-op when the variant is None.
+    Replaces a trainer's ``dpo_loss`` method (returning losses, chosen rewards,
     rejected rewards) with a thin wrapper that calls :func:`apply_gdpo_loss`.
 
     Returns:
@@ -229,7 +249,10 @@ def attach_gdpo_compute_loss(trainer: object, tcfg: object) -> bool:
     margin = float(raw_margin) if raw_margin is not None else 0.0
     original = getattr(trainer, "dpo_loss", None)
     if original is None:
-        return False
+        raise ValueError(
+            "cannot attach GDPO: the trainer lacks dpo_loss (#1309); "
+            "training.gdpo_variant is refused at config load"
+        )
 
     def wrapped(
         policy_chosen_logps,
@@ -245,7 +268,11 @@ def attach_gdpo_compute_loss(trainer: object, tcfg: object) -> bool:
         # callers either pass them positionally (newer TRL with length-norm
         # support) or via **kwargs.
         lens_c = chosen_lens if chosen_lens is not None else kwargs.get("chosen_lens")
-        lens_r = rejected_lens if rejected_lens is not None else kwargs.get("rejected_lens")
+        lens_r = (
+            rejected_lens
+            if rejected_lens is not None
+            else kwargs.get("rejected_lens")
+        )
         loss = apply_gdpo_loss(
             policy_chosen_logps=policy_chosen_logps,
             policy_rejected_logps=policy_rejected_logps,
@@ -262,7 +289,9 @@ def attach_gdpo_compute_loss(trainer: object, tcfg: object) -> bool:
         # tensor and compute simple rewards = beta * (pi - ref).
         per_sample_loss = loss.expand_as(policy_chosen_logps)
         chosen_rewards = beta * (policy_chosen_logps - reference_chosen_logps).detach()
-        rejected_rewards = beta * (policy_rejected_logps - reference_rejected_logps).detach()
+        rejected_rewards = beta * (
+            policy_rejected_logps - reference_rejected_logps
+        ).detach()
         return per_sample_loss, chosen_rewards, rejected_rewards
 
     trainer.dpo_loss = wrapped  # type: ignore[attr-defined]
@@ -319,12 +348,17 @@ def apply_ebft_loss(
         raise ValueError(f"stride must be >= 1, got {stride}")
 
     if logits.dim() != 3:
-        raise ValueError(f"logits must be (batch, seq, vocab); got shape {tuple(logits.shape)}")
+        raise ValueError(
+            f"logits must be (batch, seq, vocab); got shape {tuple(logits.shape)}"
+        )
     if labels.dim() != 2:
-        raise ValueError(f"labels must be (batch, seq); got shape {tuple(labels.shape)}")
+        raise ValueError(
+            f"labels must be (batch, seq); got shape {tuple(labels.shape)}"
+        )
     if logits.shape[:2] != labels.shape:
         raise ValueError(
-            f"logits/labels shape mismatch: {tuple(logits.shape[:2])} vs {tuple(labels.shape)}"
+            f"logits/labels shape mismatch: {tuple(logits.shape[:2])} vs "
+            f"{tuple(labels.shape)}"
         )
 
     batch, seq, _ = logits.shape
@@ -418,7 +452,9 @@ def apply_gdpo_loss(
             ref_chosen_logps.shape != policy_chosen_logps.shape
             or ref_rejected_logps.shape != policy_rejected_logps.shape
         ):
-            raise ValueError("reference log-probs shape mismatch with policy log-probs")
+            raise ValueError(
+                "reference log-probs shape mismatch with policy log-probs"
+            )
         pi_delta = policy_chosen_logps - policy_rejected_logps
         ref_delta = ref_chosen_logps - ref_rejected_logps
         logits = fbeta * (pi_delta - ref_delta)
@@ -428,7 +464,10 @@ def apply_gdpo_loss(
 
     # length_normalized
     if chosen_lens is None or rejected_lens is None:
-        raise ValueError("variant 'length_normalized' requires chosen_lens and rejected_lens")
+        raise ValueError(
+            "variant 'length_normalized' requires chosen_lens and "
+            "rejected_lens"
+        )
     chosen_lens_f = torch.clamp(chosen_lens.float(), min=1.0)
     rejected_lens_f = torch.clamp(rejected_lens.float(), min=1.0)
     chosen_norm = policy_chosen_logps / chosen_lens_f

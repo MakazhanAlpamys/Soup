@@ -1930,8 +1930,9 @@ class TrainingConfig(BaseModel):
     gdpo_variant: Optional[Literal["standard", "length_normalized", "margin"]] = Field(
         default=None,
         description=(
-            "Generalized DPO variant. DPO-family-task-only; replaces the "
-            "trainer's preference loss with the selected objective."
+            "Refused at config load (#1309): supported TRL versions lack the "
+            "DPO loss hook. Remove this field; use plain task: dpo for standard, "
+            "or task: simpo as the nearest (not identical) length-normalized objective."
         ),
     )
     # Part F — MoE expert quantization + router-only training
@@ -2718,7 +2719,7 @@ class TrainingConfig(BaseModel):
         that every non-null value -- not only the two the ``Literal`` accepts --
         gets this message instead of one pointing at a refused value. The
         kernel and the hook in ``utils/ebft_gdpo.py`` stay in place,
-        unreachable; GDPO, which shares that module, is unaffected.
+        unreachable; GDPO is separately refused by #1309.
         """
         if v is not None:
             raise ValueError(
@@ -2734,6 +2735,20 @@ class TrainingConfig(BaseModel):
                 "plain SFT."
             )
         return v
+
+    @field_validator("gdpo_variant", mode="before")
+    @classmethod
+    def _refuse_gdpo_variant(cls, value: Any) -> Any:
+        """#1309 — refuse every non-null value before the Literal/task/backend gates."""
+        if value is not None:
+            raise ValueError(
+                "training.gdpo_variant is refused (#1309): supported TRL versions "
+                "do not expose the dpo_loss hook, so this setting was accepted but "
+                "ignored. Remove gdpo_variant to use plain task: dpo for standard; "
+                "task: simpo is the nearest (not identical) length-normalized "
+                "objective; margin has no equivalent."
+            )
+        return value
 
     @field_validator("label_names")
     @classmethod
@@ -5740,7 +5755,7 @@ class SoupConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_gdpo_compat(self) -> "SoupConfig":
-        """v0.52.0 Part E — ``gdpo_variant`` requires DPO/preference, non-MLX."""
+        """Legacy task/backend gate; #1309 refuses non-null values at the field first."""
         if self.training.gdpo_variant is None:
             return self
         from soup_cli.utils.ebft_gdpo import validate_gdpo_compat

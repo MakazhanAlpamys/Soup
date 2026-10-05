@@ -66,7 +66,6 @@ class PairwiseJudge(Protocol):
 
     def compare_pair(self, prompt: str, resp_a: str, resp_b: str) -> int: ...
 
-
 DEFAULT_RUBRIC = {
     "criteria": [
         {
@@ -118,13 +117,17 @@ class JudgeResults:
             return
 
         # Overall average
-        self.overall_score = sum(s.weighted_score for s in self.scores) / len(self.scores)
+        self.overall_score = (
+            sum(s.weighted_score for s in self.scores) / len(self.scores)
+        )
 
         # Per-category averages
         cats: dict[str, list[float]] = {}
         for score in self.scores:
             cats.setdefault(score.category, []).append(score.weighted_score)
-        self.category_scores = {cat: sum(vals) / len(vals) for cat, vals in sorted(cats.items())}
+        self.category_scores = {
+            cat: sum(vals) / len(vals) for cat, vals in sorted(cats.items())
+        }
 
         # Per-criteria averages
         all_criteria: dict[str, list[float]] = {}
@@ -132,7 +135,8 @@ class JudgeResults:
             for crit, val in score.scores.items():
                 all_criteria.setdefault(crit, []).append(val)
         self.criteria_averages = {
-            crit: sum(vals) / len(vals) for crit, vals in sorted(all_criteria.items())
+            crit: sum(vals) / len(vals)
+            for crit, vals in sorted(all_criteria.items())
         }
 
 
@@ -159,7 +163,9 @@ def load_rubric(path: Path) -> dict:
         if not isinstance(crit, dict):
             raise ValueError(f"Criterion {idx} must be a mapping")
         if "name" not in crit or "description" not in crit:
-            raise ValueError(f"Criterion {idx} must have 'name' and 'description'")
+            raise ValueError(
+                f"Criterion {idx} must have 'name' and 'description'"
+            )
 
     return rubric
 
@@ -174,7 +180,7 @@ def validate_judge_api_base(api_base: Optional[str]) -> None:
     if api_base is None:
         return
 
-    from soup_cli.utils.net_guard import refuse_private_ip_literal
+    from soup_cli.utils.net_guard import LOOPBACK_HOSTS, refuse_private_ip_literal
 
     parsed = urlparse(api_base)
     if parsed.scheme not in ("http", "https"):
@@ -186,8 +192,11 @@ def validate_judge_api_base(api_base: Optional[str]) -> None:
     # Block non-HTTPS for remote URLs (allow HTTP only for localhost)
     if parsed.scheme == "http":
         hostname = parsed.hostname or ""
-        if hostname not in ("localhost", "127.0.0.1", "::1"):
-            raise ValueError("HTTP is only allowed for localhost. Use HTTPS for remote URLs.")
+        if hostname not in LOOPBACK_HOSTS:
+            raise ValueError(
+                "HTTP is only allowed for localhost. "
+                "Use HTTPS for remote URLs."
+            )
     # ...and no private / link-local / reserved IP literal on either scheme.
     refuse_private_ip_literal(parsed.hostname, label="judge URL")
 
@@ -198,7 +207,10 @@ def _build_judge_prompt(
     rubric: dict,
 ) -> str:
     """Build the judge evaluation prompt."""
-    criteria_text = "\n".join(f"- **{c['name']}**: {c['description']}" for c in rubric["criteria"])
+    criteria_text = "\n".join(
+        f"- **{c['name']}**: {c['description']}"
+        for c in rubric["criteria"]
+    )
 
     scale = rubric.get("scale", {"min": 1, "max": 5})
     scale_min = scale.get("min", 1)
@@ -312,7 +324,9 @@ def _parse_judge_response(
         except (TypeError, ValueError, OverflowError):
             val = math.nan
         if not math.isfinite(val):
-            raise ValueError(f"Judge score for criterion {name!r} is not a number: {folded[key]!r}")
+            raise ValueError(
+                f"Judge score for criterion {name!r} is not a number: {folded[key]!r}"
+            )
         val = max(scale_min, min(scale_max, val))
         validated_scores[name] = val
 
@@ -414,7 +428,9 @@ class JudgeEvaluator:
         (#1447). A failed call is not a tie: scoring it as one turned a dead
         judge into a measured 0.5 win-rate and a DON'T SHIP verdict.
         """
-        judge_prompt = _PAIRWISE_INSTRUCTIONS.format(prompt=prompt, resp_a=resp_a, resp_b=resp_b)
+        judge_prompt = _PAIRWISE_INSTRUCTIONS.format(
+            prompt=prompt, resp_a=resp_a, resp_b=resp_b
+        )
         return _parse_pairwise(self._call_llm(judge_prompt))
 
     def _call_llm(self, prompt: str) -> str:
@@ -456,7 +472,7 @@ def _retry_delay(retry_after: Optional[str], attempt: int) -> float:
             seconds = math.nan
         if math.isfinite(seconds):  # nan and inf would reach time.sleep
             return min(max(seconds, 0.0), JUDGE_MAX_BACKOFF_SECONDS)
-    return min(float(2**attempt), JUDGE_MAX_BACKOFF_SECONDS)
+    return min(float(2 ** attempt), JUDGE_MAX_BACKOFF_SECONDS)
 
 
 def _reply_content(resp, url: str) -> str:
@@ -504,10 +520,7 @@ def _judge_request(url: str, payload: dict, headers: dict, *, timeout: float = 1
             delay = _retry_delay(retry_after, attempt)
             logger.debug(
                 "judge request failed (%s); retry %d/%d in %.1fs",
-                failure,
-                attempt + 1,
-                JUDGE_MAX_RETRIES,
-                delay,
+                failure, attempt + 1, JUDGE_MAX_RETRIES, delay,
             )
             _sleep(delay)
     raise JudgeUnavailableError(f"{failure} ({JUDGE_MAX_RETRIES + 1} attempts)", url=url)
@@ -525,14 +538,14 @@ _PAIRWISE_INSTRUCTIONS = (
     "## Response A\n{resp_a}\n\n"
     "## Response B\n{resp_b}\n\n"
     "## Task\nWhich response is better overall (helpfulness, accuracy, "
-    'safety)? Reply with a JSON object: {{"winner": "A"}} or '
-    '{{"winner": "B"}}. Return ONLY the JSON object.'
+    "safety)? Reply with a JSON object: {{\"winner\": \"A\"}} or "
+    "{{\"winner\": \"B\"}}. Return ONLY the JSON object."
 )
 
 
 def _parse_pairwise(text: str) -> int:
     """Parse a judge reply into 0 (A) / 1 (B) / -1 (tie or unparseable)."""
-    match = re.search(r"\{[^{}]*\}", text or "", re.DOTALL)
+    match = re.search(r'\{[^{}]*\}', text or "", re.DOTALL)
     if match:
         try:
             data = json.loads(match.group())
@@ -587,7 +600,9 @@ def pairwise_compare(
     return -1
 
 
-def pairwise_winrate(pairs: "list[tuple[str, str, str]]", evaluator: "PairwiseJudge") -> float:
+def pairwise_winrate(
+    pairs: "list[tuple[str, str, str]]", evaluator: "PairwiseJudge"
+) -> float:
     """Tuned win-rate in [0, 1] over ``(prompt, base_resp, tuned_resp)`` triples.
 
     Base is compared as A, tuned as B. A tuned win (verdict 1) scores 1.0, a tie
@@ -613,7 +628,8 @@ def _as_prompt_text(prompt) -> str:
         users = [
             m["content"]
             for m in prompt
-            if isinstance(m, dict) and m.get("role") == "user" and isinstance(m.get("content"), str)
+            if isinstance(m, dict) and m.get("role") == "user"
+            and isinstance(m.get("content"), str)
         ]
         if users:
             return users[-1]
@@ -730,10 +746,7 @@ def make_soup_pairwise_judge(evaluator: "PairwiseJudge") -> "BasePairwiseJudge":
                     continue
                 try:
                     rank = pairwise_compare(
-                        prompt,
-                        pair[0],
-                        pair[1],
-                        self.evaluator,
+                        prompt, pair[0], pair[1], self.evaluator,
                         swap=shuffle_order,
                     )
                 except Exception as exc:  # noqa: BLE001 — unranked; #1225 stops the run

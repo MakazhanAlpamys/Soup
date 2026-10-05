@@ -124,13 +124,8 @@ def _vllm_generate(base: str) -> None:
     from soup_cli.data.providers.vllm import generate_vllm
 
     generate_vllm(
-        prompt="p",
-        count=1,
-        fmt="alpaca",
-        model_name="m",
-        base_url=base,
-        temperature=0.0,
-        generation_prompt="g",
+        prompt="p", count=1, fmt="alpaca", model_name="m", base_url=base,
+        temperature=0.0, generation_prompt="g",
     )
 
 
@@ -138,15 +133,8 @@ def _generate_openai(base: str) -> None:
     from soup_cli.commands.generate import _generate_openai as run
 
     run(
-        prompt="p",
-        count=1,
-        fmt="alpaca",
-        model_name="m",
-        api_key="sk-test",
-        api_base=base,
-        temperature=0.0,
-        seed_examples=[],
-        generation_prompt="g",
+        prompt="p", count=1, fmt="alpaca", model_name="m", api_key="sk-test",
+        api_base=base, temperature=0.0, seed_examples=[], generation_prompt="g",
     )
 
 
@@ -154,14 +142,8 @@ def _generate_server(base: str) -> None:
     from soup_cli.commands.generate import _generate_server as run
 
     run(
-        prompt="p",
-        count=1,
-        fmt="alpaca",
-        model_name="m",
-        api_base=base,
-        temperature=0.0,
-        seed_examples=[],
-        generation_prompt="g",
+        prompt="p", count=1, fmt="alpaca", model_name="m", api_base=base,
+        temperature=0.0, seed_examples=[], generation_prompt="g",
     )
 
 
@@ -180,7 +162,9 @@ def _judge_evaluator(base: str) -> None:
 def _gate_suite_task(base: str) -> None:
     from soup_cli.eval.gate import GateTask
 
-    GateTask(type="judge", name="t", threshold=0.5, prompts="p.jsonl", judge_model=f"{base}/m")
+    GateTask(
+        type="judge", name="t", threshold=0.5, prompts="p.jsonl", judge_model=f"{base}/m"
+    )
 
 
 def _online_dpo_field(base: str) -> None:
@@ -194,7 +178,15 @@ def _online_dpo_trainer(base: str) -> None:
     import soup_cli.trainer.online_dpo as od
 
     wrapper = object.__new__(od.OnlineDPOTrainerWrapper)
-    wrapper._build_judge_or_reward(SimpleNamespace(online_dpo_judge=f"{base}/m", reward_model=None))
+    wrapper._build_judge_or_reward(
+        SimpleNamespace(online_dpo_judge=f"{base}/m", reward_model=None)
+    )
+
+
+def _ship_judge_model(base: str) -> None:
+    from soup_cli.commands.ship import _validate_judge_model_url
+
+    _validate_judge_model_url(f"{base}/Qwen2.5")
 
 
 _VALIDATORS = [
@@ -281,18 +273,14 @@ class TestPublicAndLoopbackStillPass:
     @pytest.mark.parametrize(
         "validator",
         [
-            _vllm_url,
-            _vllm_generate,
-            _generate_openai,
-            _generate_server,
-            _judge_api_base,
-            _judge_evaluator,
-            _online_dpo_field,
+            _vllm_url, _vllm_generate, _generate_openai, _generate_server, _judge_api_base,
+            _judge_evaluator, _online_dpo_field, _gate_suite_task, _ship_judge_model,
+            _online_dpo_trainer,
         ],
     )
     def test_ipv6_loopback_over_http(self, validator, sent):
-        """``::1`` is loopback for these gates. The eval-gate suite, ``soup ship`` and
-        the online-DPO trainer accept only ``localhost`` and ``127.0.0.1`` over http."""
+        """``::1`` is loopback for every outbound gate: all of them accept it over
+        http through the shared ``LOOPBACK_HOSTS`` set (#1548)."""
         try:
             validator("http://[::1]:8000")
         except _RequestAttemptedError:
@@ -304,15 +292,8 @@ class TestPublicAndLoopbackStillPass:
 
         with pytest.raises(_RequestAttemptedError):
             run(
-                prompt="p",
-                count=1,
-                fmt="alpaca",
-                model_name="m",
-                api_key="sk-test",
-                api_base=None,
-                temperature=0.0,
-                seed_examples=[],
-                generation_prompt="g",
+                prompt="p", count=1, fmt="alpaca", model_name="m", api_key="sk-test",
+                api_base=None, temperature=0.0, seed_examples=[], generation_prompt="g",
             )
         [(url, headers)] = sent
         assert url == "https://api.openai.com/v1/chat/completions"
@@ -411,16 +392,9 @@ class TestShipJudgeModelFlag:
         res = CliRunner().invoke(
             ship_cmd.app,
             [
-                "--base",
-                "fake-base",
-                "--adapter",
-                "fake-adapter",
-                "--task-eval",
-                "tasks.jsonl",
-                "--task-mode",
-                "judge_score",
-                "--judge-model",
-                "https://10.0.0.1/m",
+                "--base", "fake-base", "--adapter", "fake-adapter",
+                "--task-eval", "tasks.jsonl", "--task-mode", "judge_score",
+                "--judge-model", "https://10.0.0.1/m",
             ],
         )
         assert res.exit_code == 3, (res.output, repr(res.exception))
@@ -554,18 +528,8 @@ class TestCliEntryPoints:
         res = CliRunner().invoke(
             app,
             [
-                "data",
-                "generate",
-                "--prompt",
-                "x",
-                "--provider",
-                "server",
-                "--api-base",
-                "https://10.0.0.1/v1",
-                "--count",
-                "1",
-                "--output",
-                "out.jsonl",
+                "data", "generate", "--prompt", "x", "--provider", "server",
+                "--api-base", "https://10.0.0.1/v1", "--count", "1", "--output", "out.jsonl",
             ],
         )
         assert res.exit_code == 1, (res.output, repr(res.exception))
@@ -592,18 +556,8 @@ class TestTheSharedHelper:
     @pytest.mark.parametrize(
         "host",
         [
-            None,
-            "",
-            "localhost",
-            "localhost.",
-            "127.0.0.1",
-            "::1",
-            "[::1]",
-            "127.1",
-            "2130706433",
-            "::ffff:127.0.0.1",
-            "api.example.com",
-            "8.8.8.8",
+            None, "", "localhost", "localhost.", "127.0.0.1", "::1", "[::1]", "127.1",
+            "2130706433", "::ffff:127.0.0.1", "api.example.com", "8.8.8.8",
             "2606:4700::1111",
         ],
     )
@@ -615,14 +569,8 @@ class TestTheSharedHelper:
     @pytest.mark.parametrize(
         "host",
         [
-            "10.0.0.1",
-            " 10.0.0.1",
-            "[fd00::1]",
-            "FE80::1",
-            "fe80::1%eth0",
-            "169.254.169.254.",
-            "0",
-            "::",
+            "10.0.0.1", " 10.0.0.1", "[fd00::1]", "FE80::1", "fe80::1%eth0", "169.254.169.254.",
+            "0", "::",
         ],
     )
     def test_refuses_with_the_label_first(self, host):
@@ -669,12 +617,8 @@ class TestTheSharedPredicate:
     @pytest.mark.parametrize(
         "host",
         [
-            "100.64.0.0",
-            "100.100.100.200",
-            "100.127.255.255",
-            "::ffff:100.64.0.1",
-            "fec0::1",
-            "feff:ffff::1",
+            "100.64.0.0", "100.100.100.200", "100.127.255.255", "::ffff:100.64.0.1",
+            "fec0::1", "feff:ffff::1",
         ],
     )
     def test_non_public(self, host):
@@ -767,15 +711,8 @@ class TestWhatTheClientConnectsTo:
     @pytest.mark.parametrize(
         "address",
         [
-            "10.0.0.1",
-            "192.168.1.10",
-            "169.254.169.254",
-            "100.64.0.1",
-            "0xa.0.0.1",
-            "10.1",
-            "127.0.0.1",
-            "127.0.0.5",
-            "8.8.8.8",
+            "10.0.0.1", "192.168.1.10", "169.254.169.254", "100.64.0.1", "0xa.0.0.1",
+            "10.1", "127.0.0.1", "127.0.0.5", "8.8.8.8",
         ],
     )
     def test_the_check_agrees_with_the_client(self, separator, address):

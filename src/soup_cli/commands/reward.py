@@ -36,6 +36,7 @@ console = Console()
 
 _MAX_INPUT_BYTES = 64 * 1024 * 1024
 _MAX_ROWS = 1_000_000
+_MAX_LISTED_REJECTED = 10
 _ALLOWED_KINDS = ("auto",) + rs.KINDS
 _MAX_SENTINEL_LEN = 256
 
@@ -100,11 +101,14 @@ def _render_report_panel(report: rs.CalibrationReport, kind: str, out_path: str)
     table.add_column()
     table.add_row("verifier kind", escape(kind))
     table.add_row("references (accepted)", f"{report.positives} ({report.pos_accept:.0%})")
+    for ref in report.rejected_references:
+        table.add_row("rejected reference", escape(repr(ref)))
     table.add_row("negatives (accepted)", f"{report.negatives} ({report.neg_accept:.0%})")
     table.add_row("discrimination", f"{report.discrimination:.2f}")
     table.add_row("precision", f"{report.precision:.2f}")
     table.add_row("emitted", escape(out_path))
-    return Panel(table, title="[bold green]reward verifier synthesized[/]", border_style="green")
+    return Panel(table, title="[bold green]reward verifier synthesized[/]",
+                 border_style="green")
 
 
 @app.command()
@@ -116,17 +120,17 @@ def synth(
         None, "-o", "--output", help="Where to write the verifier .py."
     ),
     kind: str = typer.Option(
-        "auto",
-        "--kind",
+        "auto", "--kind",
         help="Verifier family: auto | numeric | json_schema | regex | tool_call.",
     ),
-    field: str = typer.Option("answer", "--field", help="Gold-output field (default: answer)."),
+    field: str = typer.Option(
+        "answer", "--field", help="Gold-output field (default: answer)."
+    ),
     tolerance: Optional[float] = typer.Option(
         None, "--tolerance", help="Numeric match tolerance (numeric kind only)."
     ),
     min_discrimination: float = typer.Option(
-        rs.DEFAULT_MIN_DISCRIMINATION,
-        "--min-discrimination",
+        rs.DEFAULT_MIN_DISCRIMINATION, "--min-discrimination",
         help="Refuse to emit unless (accept_rate refs - accept_rate negatives) >= this.",
     ),
     force: bool = typer.Option(False, "--force", help="Overwrite an existing output."),
@@ -155,20 +159,15 @@ def synth(
 
     # Detect + induce + render (no file written yet).
     try:
-        result = rs.synthesize(
-            rows, field=field, kind=kind, tolerance=tolerance, rel_hint=(output or "reward.py")
-        )
+        result = rs.synthesize(rows, field=field, kind=kind, tolerance=tolerance,
+                               rel_hint=(output or "reward.py"))
     except (ValueError, TypeError) as exc:
         _fail(str(exc))
 
     if plan_only:
-        console.print(
-            Panel(
-                escape(_spec_summary(result.kind, result.spec)),
-                title=f"[bold]plan: {escape(result.kind)} verifier[/]",
-                border_style="cyan",
-            )
-        )
+        console.print(Panel(
+            escape(_spec_summary(result.kind, result.spec)),
+            title=f"[bold]plan: {escape(result.kind)} verifier[/]", border_style="cyan"))
         raise typer.Exit(0)
 
     # Output guards.
@@ -217,13 +216,11 @@ def synth(
     # calibrate the loaded callable.
     try:
         from soup_cli.trainer.rewards import load_reward_fn
-
         reward_fn = load_reward_fn(candidate_path)
         golds = rs.extract_golds(rows, field=field)
         negatives = rs.perturb_negatives(golds, result.kind)
-        report = rs.calibrate(
-            reward_fn, golds, negatives, kind=result.kind, min_discrimination=min_discrimination
-        )
+        report = rs.calibrate(reward_fn, golds, negatives, kind=result.kind,
+                              min_discrimination=min_discrimination)
     except Exception as exc:  # noqa: BLE001 — clean up the candidate only
         _cleanup(candidate_path)
         _fail(f"calibration failed: {exc}")
@@ -239,13 +236,14 @@ def synth(
 
     if report.refused:
         _cleanup(candidate_path)
-        console.print(
-            Panel(
-                escape(report.reason),
-                title="[bold red]verifier refused (not emitted)[/]",
-                border_style="red",
-            )
-        )
+        shown = report.rejected_references[:_MAX_LISTED_REJECTED]
+        rejected = "".join(f"\nrejected reference: {escape(repr(ref))}" for ref in shown)
+        remaining = len(report.rejected_references) - len(shown)
+        if remaining:
+            rejected += f"\n+{remaining} more (see --output-report)"
+        console.print(Panel(
+            escape(report.reason) + rejected,
+            title="[bold red]verifier refused (not emitted)[/]", border_style="red"))
         raise typer.Exit(2)
 
     # Accepted: atomically swap the calibrated candidate onto ``output`` —
@@ -287,21 +285,18 @@ def _render_stress_panel(report: reward_stress.StressReport, target: str) -> Pan
         # the per-row colour, so the two never contradict.)
         style = "red" if a.accept_rate > 0 else "green"
         table.add_row(
-            escape(a.kind),
-            str(a.n),
-            str(a.accepted),
+            escape(a.kind), str(a.n), str(a.accepted),
             f"[{style}]{a.accept_rate:.0%}[/]",
         )
     ref = "n/a" if report.reference_accept is None else f"{report.reference_accept:.0%}"
-    verdict = "[bold red]GAMEABLE[/]" if report.gameable else "[bold green]robust (not gameable)[/]"
-    footer = (
-        f"\nreference accept: {ref}   gameability: {report.gameability:.0%}   verdict: {verdict}"
-    )
+    verdict = ("[bold red]GAMEABLE[/]" if report.gameable
+               else "[bold green]robust (not gameable)[/]")
+    footer = (f"\nreference accept: {ref}   "
+              f"gameability: {report.gameability:.0%}   verdict: {verdict}")
     border = "red" if report.gameable else "green"
     return Panel(
         Group(table, footer),
-        title=f"[bold]reward stress: {escape(target)}[/]",
-        border_style=border,
+        title=f"[bold]reward stress: {escape(target)}[/]", border_style=border,
     )
 
 
@@ -324,13 +319,11 @@ def stress(
         reward_stress.DEFAULT_THRESHOLD, "--threshold", help="Reward >= this = accept."
     ),
     max_gameable: float = typer.Option(
-        reward_stress.DEFAULT_MAX_GAMEABLE,
-        "--max-gameable",
+        reward_stress.DEFAULT_MAX_GAMEABLE, "--max-gameable",
         help="Max junk accept-rate allowed before the verdict flips to gameable.",
     ),
     attacks: str = typer.Option(
-        ",".join(reward_stress.ATTACKS),
-        "--attacks",
+        ",".join(reward_stress.ATTACKS), "--attacks",
         help=f"Comma list: {','.join(reward_stress.ATTACKS)}.",
     ),
     output_report: Optional[str] = typer.Option(
@@ -348,9 +341,8 @@ def stress(
         _fail("--attacks must name at least one attack kind")
     bad = [k for k in kinds if k not in reward_stress.ATTACKS]
     if bad:
-        _fail(
-            f"unknown attack kind(s): {', '.join(bad)}; options: {', '.join(reward_stress.ATTACKS)}"
-        )
+        _fail(f"unknown attack kind(s): {', '.join(bad)}; "
+              f"options: {', '.join(reward_stress.ATTACKS)}")
     if len(sentinel) > _MAX_SENTINEL_LEN:
         _fail(f"--sentinel must be <= {_MAX_SENTINEL_LEN} characters")
 
@@ -385,7 +377,6 @@ def stress(
 
     try:
         from soup_cli.trainer.rewards import load_reward_fn
-
         reward_fn = load_reward_fn(reward_target, verifiable_domain=verifiable_domain)
     except Exception as exc:  # noqa: BLE001 — the target file runs arbitrary code
         _fail(f"could not load reward target: {exc}")
@@ -397,13 +388,8 @@ def stress(
             else "answer"
         )
         report = reward_stress.run_stress(
-            reward_fn,
-            golds,
-            sentinel=sentinel,
-            threshold=threshold,
-            max_gameable=max_gameable,
-            attacks=kinds,
-            reference_key=reference_key,
+            reward_fn, golds, sentinel=sentinel, threshold=threshold,
+            max_gameable=max_gameable, attacks=kinds, reference_key=reference_key,
         )
     except Exception as exc:  # noqa: BLE001 — a broken reward fn is a usage error
         _fail(f"stress run failed: {exc}")

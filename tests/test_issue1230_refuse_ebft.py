@@ -23,9 +23,9 @@ reference". This file pins:
 * ``ebft_temperature`` on its own no longer tells the user to set the refused
   field;
 * ``soup train`` and ``soup doctor --config`` stop at config load;
-* the controls that must NOT change: null and unset still load, the EBFT hook
-  stays a no-op for every config that loads, and GDPO -- which shares
-  ``utils/ebft_gdpo.py`` -- loads, gates and computes exactly as before;
+* null and unset still load, and the EBFT hook stays a no-op for every config
+  that loads; GDPO is now separately refused at load by #1309, while its
+  isolated legacy kernel and hook stay unchanged;
 * every shipped recipe, template and example still loads;
 * no doc still shows ``ebft_variant`` as a setting to copy.
 """
@@ -269,11 +269,11 @@ def _loadable_configs() -> list[str]:
         "base: some-model\ntask: sft\ndata: {train: ./data.jsonl}\n",
         _yaml("null"),
         "base: some-model\ntask: dpo\ndata: {train: ./data.jsonl}\n"
-        "training: {gdpo_variant: margin}\n",
+        "training: {gdpo_variant: null}\n",
     ]
 
 
-@pytest.mark.parametrize("text", _loadable_configs(), ids=["sft", "sft-null", "dpo-gdpo"])
+@pytest.mark.parametrize("text", _loadable_configs(), ids=["sft", "sft-null", "dpo-null"])
 def test_the_ebft_hook_is_a_no_op_for_every_config_that_loads(text):
     """``SFTTrainerWrapper.train()`` calls this hook unconditionally; with the
     field refused it can never install the term."""
@@ -289,41 +289,35 @@ def test_the_ebft_hook_is_a_no_op_for_every_config_that_loads(text):
     assert not getattr(trainer, "_soup_ebft_wrapped", False)
 
 
-class TestGdpoIsUnchanged:
-    """GDPO shares ``utils/ebft_gdpo.py``; this change leaves its config
-    surface, gates and kernel as they were. These controls do not show that
-    GDPO reaches the real DPO trainer: on trl 0.29 it does not (#1309), and
-    the fix for #1309 owns these tests if it changes what loads."""
+class TestGdpoRefusedWithLegacyKernelUnchanged:
+    """#1309 takes the config controls handed over by #1279. The legacy
+    kernel remains, but a loaded config can no longer activate its hook."""
 
     @pytest.mark.parametrize("variant", GDPO_VARIANTS)
-    def test_every_gdpo_variant_still_loads_on_dpo(self, variant):
-        cfg = load_config_from_string(
-            "base: some-model\ntask: dpo\ndata: {train: ./data.jsonl}\n"
-            f"training: {{gdpo_variant: {variant}, dpo_beta: 0.2}}\n"
-        )
-        assert cfg.training.gdpo_variant == variant
-        assert cfg.training.dpo_beta == 0.2
-        assert cfg.training.ebft_variant is None
+    def test_every_gdpo_variant_is_refused_on_dpo(self, variant):
+        with pytest.raises(ValueError, match="#1309"):
+            load_config_from_string(
+                "base: some-model\ntask: dpo\ndata: {train: ./data.jsonl}\n"
+                f"training: {{gdpo_variant: {variant}, dpo_beta: 0.2}}\n"
+            )
 
     @pytest.mark.parametrize("variant", GDPO_VARIANTS)
-    def test_every_gdpo_variant_still_loads_on_preference(self, variant):
-        cfg = load_config_from_string(
-            "base: some-model\ntask: preference\ndata: {train: ./data.jsonl}\n"
-            f"training: {{preference_loss: dpo, gdpo_variant: {variant}}}\n"
-        )
-        assert cfg.training.gdpo_variant == variant
+    def test_every_gdpo_variant_is_refused_on_preference(self, variant):
+        with pytest.raises(ValueError, match="#1309"):
+            load_config_from_string(
+                "base: some-model\ntask: preference\ndata: {train: ./data.jsonl}\n"
+                f"training: {{preference_loss: dpo, gdpo_variant: {variant}}}\n"
+            )
 
-    def test_the_gdpo_task_gate_is_unchanged(self):
-        with pytest.raises(
-            ValueError, match=r"gdpo_variant requires task in \('dpo', 'preference'\)"
-        ):
+    def test_refusal_precedes_the_gdpo_task_gate(self):
+        with pytest.raises(ValueError, match="#1309"):
             load_config_from_string(
                 "base: some-model\ntask: sft\ndata: {train: ./data.jsonl}\n"
                 "training: {gdpo_variant: standard}\n"
             )
 
-    def test_the_gdpo_backend_gate_is_unchanged(self):
-        with pytest.raises(ValueError, match="gdpo_variant is not supported on backend=mlx"):
+    def test_refusal_precedes_the_gdpo_backend_gate(self):
+        with pytest.raises(ValueError, match="#1309"):
             load_config_from_string(
                 "base: some-model\ntask: dpo\nbackend: mlx\ndata: {train: ./data.jsonl}\n"
                 "training: {gdpo_variant: standard}\n"
@@ -367,11 +361,8 @@ class TestGdpoIsUnchanged:
         assert torch.allclose(loss, expected, atol=1e-7), (loss, expected)
 
     @pytest.mark.parametrize("variant", GDPO_VARIANTS)
-    def test_the_gdpo_hook_still_installs_from_a_loaded_config(self, variant):
-        """The hook's own behaviour, on a stub trainer that exposes
-        ``dpo_loss``. trl 0.29's ``DPOTrainer`` has no ``dpo_loss``, so on the
-        real trainer the hook returns False today (#1309); this change leaves
-        GDPO exactly as it was."""
+    def test_the_legacy_gdpo_hook_still_installs_on_a_stub(self, variant):
+        """Test the retained hook directly, not through a config that cannot load."""
         import torch
 
         from soup_cli.utils.ebft_gdpo import apply_gdpo_loss, attach_gdpo_compute_loss
@@ -379,12 +370,9 @@ class TestGdpoIsUnchanged:
         def trl_dpo_loss(*args, **kwargs):
             raise AssertionError("the GDPO wrapper replaces TRL's dpo_loss")
 
-        cfg = load_config_from_string(
-            "base: some-model\ntask: dpo\ndata: {train: ./data.jsonl}\n"
-            f"training: {{gdpo_variant: {variant}, dpo_beta: 0.2}}\n"
-        )
+        training = SimpleNamespace(gdpo_variant=variant, dpo_beta=0.2)
         trainer = SimpleNamespace(dpo_loss=trl_dpo_loss)
-        assert attach_gdpo_compute_loss(trainer, cfg.training) is True
+        assert attach_gdpo_compute_loss(trainer, training) is True
         assert trainer._soup_gdpo_wrapped is True
 
         pc = torch.tensor([-1.0, -2.5])

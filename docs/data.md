@@ -550,8 +550,9 @@ soup data from-traces --logs ./logs/openai.jsonl \
   --format openai --signal regenerations --output prefs.jsonl
 
 # Soup-serve logs + user-edit signal (edited response wins over original).
-# `--logs` is a DIRECTORY of *.jsonl: the soup-serve parser reads a directory,
-# and returns nothing for a single file (#1440).
+# `--logs` is a DIRECTORY of *.jsonl (one per `soup serve` session): the
+# soup-serve format reads a directory; a single file is refused at the
+# CLI — read a single JSONL with --format langchain or openai instead (#1530).
 soup data from-traces --logs ./traces \
   --format soup-serve --signal user_edit --output prefs.jsonl
 
