@@ -207,6 +207,27 @@ class TestDoctorStripeOutput:
         output = _plain(_doctor_resources_raw(monkeypatch))
         assert "on the same volume as the primary cache root" in output, output
 
+    def test_doctor_disk_flag_refuses_a_stripe_root_that_is_not_nvme(self, tmp_path, monkeypatch):
+        import soup_cli.utils.stripe_roots as stripe_roots
+        from soup_cli.commands import doctor
+
+        folder = tmp_path / "stripe"
+        folder.mkdir()
+        monkeypatch.setenv(STRIPE_DIRS_ENV, str(folder))
+        real = os.path.realpath(str(folder))
+        monkeypatch.setattr(
+            stripe_roots, "volume_of", lambda p: 2 if os.path.realpath(p) == real else 1
+        )
+        monkeypatch.setattr("soup_cli.utils.layer_stream.detect_disk_kind", lambda path: "ssd")
+        out = StringIO()
+        monkeypatch.setattr(doctor, "console", Console(file=out, width=400, color_system=None))
+        issues = []
+        doctor._check_resources(probe_disk=True, issues=issues)
+        output = _plain(out.getvalue())
+        assert f"Stripe root {folder} — Refused" in output, output
+        assert "classifies as 'ssd'" in output, output
+        assert len(issues) == 1 and STRIPE_DIRS_ENV in issues[0], issues
+
 
 class TestValidateEarlyStripeRootsUnit:
     def test_unset_and_empty_return_empty_tuple(self):

@@ -990,7 +990,8 @@ def _check_resources(probe_disk: bool = False, issues: list[str] | None = None):
                     has_refused = True
                     reason_disk = (
                         "the disk tier streams from NVMe only, and this volume classifies "
-                        f"as {kind!r}"
+                        f"as {kind!r}. If the probe is wrong, "
+                        "training.stream_disk_kind overrides it."
                     )
                     refused_msg = for_terminal(reason_disk)
                     row_val = f"{for_terminal(entry)} — [red]Refused[/]: {refused_msg}"
