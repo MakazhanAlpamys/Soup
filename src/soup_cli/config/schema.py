@@ -1411,8 +1411,9 @@ class TrainingConfig(BaseModel):
         ge=1,
         le=1000,
         description=(
-            "Replace the frozen ref model with the current student every N "
-            "epochs. Refused at load (#1345) - not wired yet."
+            "Replace the frozen ref adapter with the current active adapter every "
+            "N epochs. Copies .default. adapter weights into .ref. under torch.no_grad(). "
+            "Requires LoRA (lora.r >= 1); full fine-tuning is not supported."
         ),
     )
     # Multi-objective preference loss (v0.40.0 Part D).
@@ -7197,12 +7198,12 @@ class SoupConfig(BaseModel):
                 f"preference_loss in {{dpo, ipo}}; got task={self.task!r}, "
                 f"preference_loss={tcfg.preference_loss!r}."
             )
-        # dpo_ref_regen_epochs refusal (#1345).
-        if regen is not None:
+        # dpo_ref_regen_epochs requires LoRA (full fine-tuning unsupported, #1345).
+        if regen is not None and (tcfg.lora is None or tcfg.lora.r == 0):
             raise ValueError(
-                "dpo_ref_regen_epochs is not wired yet (#1345): with LoRA TRL builds "
-                "no separate reference model, and full fine-tuning is not supported on "
-                f"task={self.task!r}. Remove dpo_ref_regen_epochs."
+                "dpo_ref_regen_epochs requires LoRA (lora.r >= 1): full fine-tuning "
+                f"(lora.r: 0) is not supported for DPO-family reference "
+                f"regeneration on task={self.task!r}."
             )
         return self
 

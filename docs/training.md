@@ -1285,7 +1285,18 @@ training:
   dpo_beta_end: 0.01
 ```
 
-Gated to DPO-family tasks (`dpo`, `ipo`, or `preference` with `preference_loss in {dpo, ipo}`); transformers backend only. `dpo_ref_regen_epochs` is refused at config load: it never regenerated the reference. With LoRA there is no separate reference model to copy into, and the DPO-family trainers cannot run with `lora.r: 0`. The wiring is tracked in [#1345](https://github.com/MakazhanAlpamys/Soup/issues/1345).
+Gated to DPO-family tasks (`dpo`, `ipo`, or `preference` with `preference_loss in {dpo, ipo}`); transformers backend only.
+
+Periodically sync the frozen reference model with the active student using `dpo_ref_regen_epochs`:
+
+```yaml
+training:
+  epochs: 4
+  dpo_beta: 0.1
+  dpo_ref_regen_epochs: 2  # copies .default. adapter weights into .ref. every 2 epochs
+```
+
+With LoRA, TRL creates a frozen `.ref.` adapter on the model. On every Nth epoch (1-indexed, skipping epoch 0), parameters from the active `.default.` adapter are copied into the frozen `.ref.` adapter under `torch.no_grad()`. Requires LoRA (`lora.r >= 1`); full fine-tuning (`lora.r: 0`) is refused at config load (#1345).
 
 ### Multi-objective preference loss
 
