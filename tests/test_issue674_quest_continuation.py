@@ -49,6 +49,16 @@ def test_warm_start_restores_the_declared_route_without_new_calibration(tmp_path
     assert wrapper.model.config.soup_quest == original
 
 
+def test_warm_start_rejects_a_declaration_without_a_local_artifact(tmp_path, monkeypatch):
+    original = metadata()
+    wrapper = wrapper_for(tmp_path / "org" / "hub-model", monkeypatch, copy.deepcopy(original))
+    monkeypatch.setattr(
+        quest, "restore_mixed_quest", lambda *_: pytest.fail("non-local artifact restored")
+    )
+    with pytest.raises(ValueError, match="requires a local artifact"):
+        wrapper._setup_quest([])
+
+
 @pytest.mark.parametrize("mutation", ["missing-sidecar", "missing-config", "different-config"])
 def test_warm_start_rejects_incomplete_or_different_declarations(tmp_path, monkeypatch, mutation):
     original = metadata()
