@@ -177,6 +177,42 @@ def validate_stripe_root(entry: str, *, primary_root: str, accepted: Sequence[st
     return resolved
 
 
+def validate_early_stripe_roots(
+    primary_root: str,
+    *,
+    environ: Optional[Mapping[str, str]] = None,
+) -> Tuple[str, ...]:
+    """Syntax, existence, count cap, symlink, overlap and same-volume rules.
+
+    Runs early in the CLI (``soup train``, ``--dry-run``) before expensive dataset
+    loading or run creation. Omits the ~9 s NVMe disk-kind probe, which stays in
+    :func:`resolve_stripe_roots` on the setup path.
+    """
+    env = os.environ if environ is None else environ
+    entries = parse_stripe_dirs(env.get(STRIPE_DIRS_ENV))
+    if not entries:
+        return ()
+    if len(entries) > MAX_STRIPE_DIRS:
+        raise StripeRootError(
+            f"{STRIPE_DIRS_ENV} names {len(entries)} folders; at most {MAX_STRIPE_DIRS} "
+            f"(training.stream_read_ahead stops at {MAX_STREAM_READ_AHEAD}, and every drive "
+            f"needs a staging slot of its own)"
+        )
+    accepted: List[str] = []
+    owners = {volume_of(primary_root): f"the primary cache root {primary_root}"}
+    for entry in entries:
+        resolved = validate_stripe_root(entry, primary_root=primary_root, accepted=accepted)
+        volume = volume_of(resolved)
+        if volume in owners:
+            raise StripeRootError(
+                f"{STRIPE_DIRS_ENV} entry {entry!r}: on the same volume as {owners[volume]}. "
+                f"Two roots on one drive read no faster than one and cost a staging slot."
+            )
+        owners[volume] = f"stripe root {resolved}"
+        accepted.append(resolved)
+    return tuple(accepted)
+
+
 def resolve_stripe_roots(
     primary_root: str,
     *,
@@ -191,22 +227,10 @@ def resolve_stripe_roots(
     """
     env = os.environ if environ is None else environ
     entries = parse_stripe_dirs(env.get(STRIPE_DIRS_ENV))
-    if len(entries) > MAX_STRIPE_DIRS:
-        raise StripeRootError(
-            f"{STRIPE_DIRS_ENV} names {len(entries)} folders; at most {MAX_STRIPE_DIRS} "
-            f"(training.stream_read_ahead stops at {MAX_STREAM_READ_AHEAD}, and every drive "
-            f"needs a staging slot of its own)"
-        )
-    accepted: List[str] = []
-    owners = {volume_of(primary_root): f"the primary cache root {primary_root}"} if entries else {}
-    for entry in entries:
-        resolved = validate_stripe_root(entry, primary_root=primary_root, accepted=accepted)
-        volume = volume_of(resolved)
-        if volume in owners:
-            raise StripeRootError(
-                f"{STRIPE_DIRS_ENV} entry {entry!r}: on the same volume as {owners[volume]}. "
-                f"Two roots on one drive read no faster than one and cost a staging slot."
-            )
+    if not entries:
+        return ()
+    accepted = validate_early_stripe_roots(primary_root, environ=env)
+    for entry, resolved in zip(entries, accepted):
         kind = disk_kind(resolved)
         if kind != "nvme":
             raise StripeRootError(
@@ -214,9 +238,7 @@ def resolve_stripe_roots(
                 f"this volume classifies as {kind!r}. If the probe is wrong, "
                 f"training.stream_disk_kind overrides it."
             )
-        owners[volume] = f"stripe root {resolved}"
-        accepted.append(resolved)
-    return tuple(accepted)
+    return accepted
 
 
 def layer_roots_for(n_layers: int, n_roots: int) -> Tuple[int, ...]:

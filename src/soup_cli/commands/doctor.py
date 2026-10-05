@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import platform
 import re
 import sys
@@ -922,7 +923,7 @@ def _check_resources(probe_disk: bool = False):
 
     table = Table(title="System Resources")
     table.add_column("Resource", style="bold")
-    table.add_column("Value")
+    table.add_column("Value", overflow="fold")
 
     table.add_row("RAM", _get_ram_gb())
 
@@ -958,6 +959,65 @@ def _check_resources(probe_disk: bool = False):
             "hdd": "[red]HDD[/] — layer streaming refuses the disk tier (RAM only)",
         }.get(kind, "[yellow]Unknown[/] — layer streaming will refuse the disk tier")
         table.add_row("Disk type", verdict)
+
+    stripe_var = os.environ.get("SOUP_LAYER_STREAM_STRIPE_DIRS")
+    if stripe_var:
+        from soup_cli.utils.layer_shard import resolve_cache_root
+        from soup_cli.utils.stripe_roots import (
+            MAX_STRIPE_DIRS,
+            STRIPE_DIRS_ENV,
+            StripeRootError,
+            parse_stripe_dirs,
+            validate_stripe_root,
+            volume_of,
+        )
+
+        stripe_entries = parse_stripe_dirs(stripe_var)
+        primary = resolve_cache_root()
+        accepted_stripes: list[str] = []
+        owners = {volume_of(primary): f"the primary cache root {primary}"}
+
+        for entry in stripe_entries:
+            row_label = "Stripe root"
+            try:
+                if len(stripe_entries) > MAX_STRIPE_DIRS:
+                    raise StripeRootError(
+                        f"names {len(stripe_entries)} folders; at most {MAX_STRIPE_DIRS} "
+                        f"(training.stream_read_ahead stops at 32, and every drive needs "
+                        f"a staging slot of its own)"
+                    )
+                resolved = validate_stripe_root(
+                    entry, primary_root=primary, accepted=accepted_stripes
+                )
+                volume = volume_of(resolved)
+                if volume in owners:
+                    raise StripeRootError(f"on the same volume as {owners[volume]}")
+                if probe_disk:
+                    from soup_cli.utils.layer_stream import detect_disk_kind
+
+                    try:
+                        kind = detect_disk_kind(resolved)
+                    except Exception:  # noqa: BLE001
+                        kind = "unknown"
+                    if kind != "nvme":
+                        raise StripeRootError(
+                            "the disk tier streams from NVMe only, and this volume classifies "
+                            f"as {kind!r}"
+                        )
+                    row_val = f"{escape(entry)} — [green]NVMe[/]"
+                else:
+                    row_val = f"{escape(entry)} — [green]OK[/]"
+                owners[volume] = f"stripe root {resolved}"
+                accepted_stripes.append(resolved)
+            except StripeRootError as exc:
+                prefix = f"{STRIPE_DIRS_ENV} entry {entry!r}: "
+                exc_msg = str(exc)
+                if exc_msg.startswith(prefix):
+                    reason = exc_msg[len(prefix):]
+                else:
+                    reason = exc_msg
+                row_val = f"{escape(entry)} — [red]Refused[/]: {escape(reason)}"
+            table.add_row(row_label, row_val)
 
     console.print(table)
     console.print()
