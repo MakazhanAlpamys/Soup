@@ -150,6 +150,26 @@ class TestContinuationLinesAreNotMagics:
         assert out == "\n" + self._CONT  # the magic blanked, the operators kept
         assert out.count("\n") == cell.count("\n")  # line numbers stable
 
+    def test_a_backslash_after_a_continuation_operator_is_not_a_magic(self) -> None:
+        # `% 7 \` is Python (a continuation line), not a magic, so the line after it
+        # stays Python even though it follows a backslash (review of #1583: without the
+        # `replacement is not None` guard, `+ warmup` was blanked and silently lost).
+        body = "steps, warmup = 9, 1\ntotal = steps \\\n    % 7 \\\n    + warmup\n"
+        cell = "!pip install x\n" + body
+        assert _strip_ipython_magics(cell) == "\n" + body
+
+    def test_the_probes_do_not_repeat_an_invalid_escape_warning(self) -> None:
+        # The real parse reports an invalid escape once; the per-line probes must not
+        # repeat it with cell-local line numbers (SyntaxWarning on 3.12; earlier
+        # Pythons emit a DeprecationWarning, where this passes either way).
+        import warnings
+
+        cell = "s = '\\{'\n!pip install x\n"
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            assert _strip_ipython_magics(cell) == "s = '\\{'\n\n"
+        assert not [w for w in caught if issubclass(w.category, SyntaxWarning)]
+
     def test_the_notebook_migrates_exactly_as_today(self, tmp_path: Path) -> None:
         clean = _migrate(tmp_path, _LOAD, _GRPO)
         with_cont = _migrate(tmp_path, _LOAD, self._CONT, _GRPO)
