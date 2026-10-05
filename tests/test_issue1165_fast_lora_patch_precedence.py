@@ -251,6 +251,30 @@ def test_a_group_kernel_that_refuses_leaves_the_single_kernel_in_place(group, sa
     assert fast_lora.unpatch_fast_lora_single_projection(model) == 2
 
 
+@pytest.mark.parametrize(
+    "group, module, odd, kept",
+    [
+        ("qkv", fast_lora_qkv, "self_attn.k_proj", ("self_attn.q_proj", "self_attn.v_proj")),
+        ("mlp", fast_lora_mlp, "mlp.down_proj", ("mlp.gate_proj", "mlp.up_proj")),
+    ],
+)
+def test_a_group_kernel_that_refuses_an_unsupported_layer_leaves_the_single_kernel(
+    monkeypatch, group, module, odd, kept
+):
+    model = _model()
+    assert fast_lora.patch_fast_lora_single_projection(model) == 7
+    # Stand-in for an 8-bit or custom LoRA layer in the block: the group
+    # kernel's support check says no to that one projection.
+    odd_proj = _layer(model).get_submodule(odd)
+    monkeypatch.setattr(module, "_is_supported_lora_projection", lambda proj: proj is not odd_proj)
+    assert PATCHERS[group][0](model) == 0
+    x = torch.randn(1, 3, 32, requires_grad=True)
+    for path in kept:
+        out = _layer(model).get_submodule(path)(x)
+        assert type(out.grad_fn).__name__ == "_FastLoraSingleProjectionBackward", path
+    assert fast_lora.unpatch_fast_lora_single_projection(model) == 7
+
+
 def test_the_single_projection_kernel_skips_what_a_group_kernel_owns():
     model = _model()
     fast_lora_qkv.patch_fast_lora_qkv(model)
