@@ -106,6 +106,13 @@ _LONG_COMPLETION = " " + " ".join(["answer"] * _LONG_COMPLETION_WORDS)
 #: The label used to mask prompt tokens out of the completion loss.
 _IGNORE_LABEL = -100
 
+_FALLBACK_MAX_SEQUENCE_LENGTH = 4
+_FALLBACK_MAX_PROMPT_LENGTH = 2
+_FALLBACK_PROMPT_TOKENS = [101, 102, 103, 104]
+_FALLBACK_COMPLETION_TOKENS = [201, 202, 203]
+_FALLBACK_KL_COMPLETION_TOKENS = [301, 302, 303]
+_FALLBACK_ATTENTION_MASK = [1]
+
 
 def _mixed_kto_rows(n=8):
     """Half the rows overflow on the prompt, half on the completion.
@@ -481,6 +488,52 @@ class TestKtoTruncatesThePromptFromTheEnd:
             if label == _IGNORE_LABEL
         ]
         assert masked == tail
+
+
+class TestUnpairedKlFallbackWithoutAnswerColumns:
+    def test_kl_completion_caps_without_answer_columns(self):
+        from datasets import Dataset
+
+        from soup_cli.trainer._trl_compat import enforce_preference_sequence_limit
+
+        prompt = _FALLBACK_PROMPT_TOKENS
+        completion = _FALLBACK_COMPLETION_TOKENS
+        kl_completion = _FALLBACK_KL_COMPLETION_TOKENS
+        prompt_mask = _FALLBACK_ATTENTION_MASK * len(prompt)
+        completion_mask = _FALLBACK_ATTENTION_MASK * len(completion)
+        kl_completion_mask = _FALLBACK_ATTENTION_MASK * len(kl_completion)
+        dataset = Dataset.from_dict(
+            {
+                "prompt_input_ids": [prompt],
+                "prompt_attention_mask": [prompt_mask],
+                "completion_input_ids": [prompt + completion],
+                "completion_attention_mask": [prompt_mask + completion_mask],
+                "completion_labels": [[_IGNORE_LABEL] * len(prompt) + completion],
+                "KL_prompt_input_ids": [prompt],
+                "KL_prompt_attention_mask": [prompt_mask],
+                "KL_completion_input_ids": [prompt + kl_completion],
+                "KL_completion_attention_mask": [prompt_mask + kl_completion_mask],
+                "KL_completion_labels": [[_IGNORE_LABEL] * len(prompt) + kl_completion],
+            }
+        )
+
+        capped = enforce_preference_sequence_limit(
+            dataset,
+            max_length=_FALLBACK_MAX_SEQUENCE_LENGTH,
+            max_prompt_length=_FALLBACK_MAX_PROMPT_LENGTH,
+            truncation_mode="keep_end",
+        )[0]
+
+        expected_prompt = prompt[-_FALLBACK_MAX_PROMPT_LENGTH:]
+        expected_kl_completion = kl_completion[
+            : _FALLBACK_MAX_SEQUENCE_LENGTH - len(expected_prompt)
+        ]
+        assert list(capped["KL_completion_input_ids"]) == (
+            expected_prompt + expected_kl_completion
+        )
+        assert list(capped["KL_completion_labels"]) == (
+            [_IGNORE_LABEL] * len(expected_prompt) + expected_kl_completion
+        )
 
 
 #: 41 words: longer than max_length // 2, yet prompt + completion is 45 of 64 tokens.
