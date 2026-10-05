@@ -304,8 +304,16 @@ class TestPairFilter:
     def test_the_count_leaves_out_the_pairs_already_judged(self, evaluator, no_sleep):
         from soup_cli.data.traces.quality import judge_filter_pairs
 
-        # Four pairs are judged (two requests each), then nothing answers.
-        steps = [_reply(200, SCORED)] * 8
+        def scored(value):
+            content = json.dumps({
+                "scores": {"helpfulness": value, "accuracy": value, "safety": value},
+                "reasoning": "ok",
+            })
+            return _reply(200, {"choices": [{"message": {"content": content}}]})
+
+        # Pair 1 is kept (chosen 5, rejected 1), pairs 2-4 are dropped (a tie
+        # is below the 0.7 default), then nothing answers.
+        steps = [scored(5), scored(1)] + [_reply(200, SCORED)] * 6
         with mock.patch("httpx.post", side_effect=_script(*steps)):
             with pytest.raises(JudgeDownError) as excinfo:
                 judge_filter_pairs(self._pairs(10), judge=evaluator)
