@@ -820,8 +820,12 @@ above); it does not make the reference free.
 **Disk pre-flight and shard cache.** Before Soup materialises or shards a checkpoint, it
 reports the complete projected footprint: the HF/local source, any regular-file copy Soup
 still needs, and the per-layer shard cache. Required writes are grouped by target volume and
-the run refuses before either write when that volume lacks free space. Override the two cache
-roots with `SOUP_SPECTRUM_CACHE_DIR` and `SOUP_LAYER_STREAM_CACHE_DIR`; both retain Soup's
+the run refuses before either write when that volume lacks free space. With
+`SOUP_LAYER_STREAM_STRIPE_DIRS` set, each root is charged the bytes it will receive,
+read from the source safetensors headers (the primary root also holds the embedding,
+head and extras); when a header cannot be read or the model is qwen4_exp the split is
+even and the panel says approximately. Override the two cache roots with
+`SOUP_SPECTRUM_CACHE_DIR` and `SOUP_LAYER_STREAM_CACHE_DIR`; both retain Soup's
 home/cwd/tmp containment policy.
 
 **Two or more NVMe drives.** On a cold store larger than RAM the disk-tier step can wait on the
