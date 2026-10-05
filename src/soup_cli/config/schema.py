@@ -5163,7 +5163,7 @@ class SoupConfig(BaseModel):
     def _validate_peft_variant_backend_and_quantization(self) -> "SoupConfig":
         """Keep advertised PEFT variants on paths that actually implement them."""
         lcfg = self.training.lora
-        variant = "vera" if lcfg.use_vera else lcfg.init_strategy
+        variant = "vera" if lcfg.use_vera else ("dora" if lcfg.use_dora else lcfg.init_strategy)
         if variant == "random":
             return self
         if self.task == "moe_lora_routing":
@@ -5175,6 +5175,10 @@ class SoupConfig(BaseModel):
                 "through training.mole_task_adapters."
             )
         if self.backend != "transformers":
+            from soup_cli.utils.quant_menu import is_quant_menu_format
+
+            if self.backend == "mlx" and is_quant_menu_format(self.training.quantization):
+                return self
             raise ValueError(
                 f"training.lora variant {variant!r} requires backend='transformers'; "
                 f"backend={self.backend!r} has its own adapter constructor and cannot "
