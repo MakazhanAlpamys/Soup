@@ -245,3 +245,31 @@ class TestSftVisionAndAudioOnUnsloth:
                                  data={"format": "chatml"}))
 
         assert "is not applied on backend='mlx'" in message, message
+
+
+class TestOnlySftsVisionAndAudioPathsAreExempt:
+    """``DPOTrainerWrapper.setup`` has no vision branch and runs ``_setup_unsloth``, so
+    the exemption is SFT's alone (review of #1622)."""
+
+    @pytest.mark.parametrize("field", _FIELDS)
+    @pytest.mark.parametrize("modality", ["vision", "audio"])
+    def test_dpo_on_unsloth_stays_refused_whatever_the_modality(self, modality, field):
+        message = _refusal(_yaml("dpo", backend="unsloth", field=field, modality=modality))
+
+        assert "is not applied on backend='unsloth'" in message, message
+
+
+class TestABackendTheTaskCannotRunOnIsNamedFirst:
+    """Where the task has no setup on the backend at all, that refusal speaks, so
+    following "remove it" never meets a second, different refusal (review of #1622)."""
+
+    @pytest.mark.parametrize(("task", "backend", "expected"), [
+        ("online_dpo", "unsloth", "task='online_dpo' requires backend='transformers'"),
+        ("dpo", "mlx", "MLX backend only ships SFT"),
+        ("kto", "mlx", "MLX backend only ships SFT"),
+    ])
+    def test_the_backend_refusal_comes_first(self, task, backend, expected):
+        message = _refusal(_yaml(task, backend=backend))
+
+        assert expected in message, message
+        assert "add_new_tokens" not in message, message

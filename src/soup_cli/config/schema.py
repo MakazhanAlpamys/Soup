@@ -5110,6 +5110,10 @@ class SoupConfig(BaseModel):
             # it reads the backend, and both of those call apply_vocab_expansion
             # (review of #1622); the unsloth reason below would be the wrong one.
             return self
+        if self.backend == "unsloth" and self.task not in UNSLOTH_SETUP_TASKS:
+            return self  # that task's own backend refusal names the real problem
+        if self.backend == "mlx" and self.task != "sft":
+            return self  # _validate_mlx_task_support refuses the task itself
         why = {
             "unsloth": "its setup loads the model and attaches LoRA in one call, with "
             "no step that adds tokens",
