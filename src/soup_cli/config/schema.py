@@ -5104,6 +5104,12 @@ class SoupConfig(BaseModel):
                 "model is built without the step that adds tokens and resizes the "
                 "embeddings. Remove it, or turn off stream_layers."
             )
+        if (self.backend == "unsloth" and self.task == "sft"
+                and self.modality in ("vision", "audio")):
+            # SFT's setup() sends vision / audio to their transformers setups before
+            # it reads the backend, and both of those call apply_vocab_expansion
+            # (review of #1622); the unsloth reason below would be the wrong one.
+            return self
         why = {
             "unsloth": "its setup loads the model and attaches LoRA in one call, with "
             "no step that adds tokens",

@@ -221,3 +221,27 @@ class TestTheSplitMatchesTheTrainers:
         for path in importlib.resources.files("soup_cli.trainer").iterdir():
             if path.name.startswith("mlx_") and path.name.endswith(".py"):
                 assert "apply_vocab_expansion" not in path.read_text(encoding="utf-8"), path.name
+
+
+class TestSftVisionAndAudioOnUnsloth:
+    """SFT's setup() sends vision / audio to their transformers setups before it
+    reads the backend, and both of those call apply_vocab_expansion (review of
+    #1622); only the text path reaches _setup_unsloth. MLX stays refused: it
+    ignores modality."""
+
+    @pytest.mark.parametrize("field", _FIELDS)
+    @pytest.mark.parametrize(("modality", "fmt"), [("vision", "llava"), ("audio", "audio")])
+    def test_they_still_load(self, modality, fmt, field):
+        cfg = load_config_from_string(
+            _yaml("sft", backend="unsloth", field=field, modality=modality,
+                  data={"format": fmt})
+        )
+
+        assert getattr(cfg.data, field) == ["<x>"]
+
+    @pytest.mark.parametrize("modality", ["vision", "audio"])
+    def test_mlx_is_still_refused_whatever_the_modality(self, modality):
+        message = _refusal(_yaml("sft", backend="mlx", modality=modality,
+                                 data={"format": "chatml"}))
+
+        assert "is not applied on backend='mlx'" in message, message
