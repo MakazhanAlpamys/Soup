@@ -533,8 +533,10 @@ def _run_single(base_cfg, params: dict, run_name: str, config_path: Path) -> dic
         )
         result["run_id"] = run_id
         return result
-    except Exception:
-        tracker.fail_run(run_id)
+    except Exception as exc:
+        from soup_cli.commands.train import _describe_exception_for_tracker
+
+        tracker.fail_run(run_id, error=_describe_exception_for_tracker(exc))
         raise
 
 

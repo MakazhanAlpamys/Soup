@@ -381,3 +381,4 @@ def test_sweep_setup_failure_marks_run_failed(tmp_path, monkeypatch, failure_sta
     assert len(runs) == 1
     assert runs[0]["experiment_name"] == "sweep_1"
     assert runs[0]["status"] == "failed", runs[0]
+    assert runs[0]["error_message"] == "OSError: repo not found", runs[0]
