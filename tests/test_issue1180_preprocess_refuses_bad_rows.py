@@ -32,17 +32,21 @@ _STRICT = (
 
 
 def _ok(i):
-    return {"messages": [
-        {"role": "user", "content": f"What is {i} ?"},
+    return {
+        "messages": [
+            {"role": "user", "content": f"What is {i} ?"},
+            {"role": "assistant", "content": "Paris ."},
+        ]
+    }
+
+
+_TWO_USERS = {
+    "messages": [
+        {"role": "user", "content": "first"},
+        {"role": "user", "content": "second"},
         {"role": "assistant", "content": "Paris ."},
-    ]}
-
-
-_TWO_USERS = {"messages": [
-    {"role": "user", "content": "first"},
-    {"role": "user", "content": "second"},
-    {"role": "assistant", "content": "Paris ."},
-]}
+    ]
+}
 
 
 def _preprocess(tmp_path, monkeypatch, rows, *, template=_STRICT):
@@ -53,9 +57,7 @@ def _preprocess(tmp_path, monkeypatch, rows, *, template=_STRICT):
     from soup_cli.cli import app
 
     monkeypatch.chdir(tmp_path)
-    (tmp_path / "d.jsonl").write_text(
-        "".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8"
-    )
+    (tmp_path / "d.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
     tok = _tokenizer()
     tok.chat_template = template
     monkeypatch.setattr(transformers.AutoTokenizer, "from_pretrained", lambda *a, **k: tok)
@@ -104,16 +106,14 @@ class TestABadRowStopsTheCommand:
         assert "Train row 2 cannot be tokenized: it has no messages" in out
 
     def test_a_row_the_template_renders_empty_is_refused(self, tmp_path, monkeypatch):
-        blank_for_one = (
-            "{% if messages[0]['content'] != 'blank' %}" + _STRICT + "{% endif %}"
-        )
-        blank = {"messages": [
-            {"role": "user", "content": "blank"},
-            {"role": "assistant", "content": "Paris ."},
-        ]}
-        result, out = _preprocess(
-            tmp_path, monkeypatch, [_ok(0), blank], template=blank_for_one
-        )
+        blank_for_one = "{% if messages[0]['content'] != 'blank' %}" + _STRICT + "{% endif %}"
+        blank = {
+            "messages": [
+                {"role": "user", "content": "blank"},
+                {"role": "assistant", "content": "Paris ."},
+            ]
+        }
+        result, out = _preprocess(tmp_path, monkeypatch, [_ok(0), blank], template=blank_for_one)
 
         assert result.exit_code == 1, out
         assert "Train row 2 cannot be tokenized: the chat template rendered it as empty" in out
@@ -129,10 +129,12 @@ class TestABadRowStopsTheCommand:
             return real(self, text, *a, **k)
 
         monkeypatch.setattr(transformers.PreTrainedTokenizerFast, "__call__", _boom)
-        ok_second = {"messages": [
-            {"role": "user", "content": "second"},
-            {"role": "assistant", "content": "Paris ."},
-        ]}
+        ok_second = {
+            "messages": [
+                {"role": "user", "content": "second"},
+                {"role": "assistant", "content": "Paris ."},
+            ]
+        }
         result, out = _preprocess(tmp_path, monkeypatch, [_ok(0), ok_second])
 
         assert result.exit_code == 1, out
@@ -150,9 +152,7 @@ def plain_console(monkeypatch):
 
     import soup_cli.commands.data as data_cmd
 
-    monkeypatch.setattr(
-        data_cmd, "console", Console(color_system=None, highlight=False, width=400)
-    )
+    monkeypatch.setattr(data_cmd, "console", Console(color_system=None, highlight=False, width=400))
 
 
 @pytest.mark.usefixtures("plain_console")
@@ -162,10 +162,12 @@ class TestTheMessageIsSafeForATerminal:
     ``rich.markup.escape`` neutralises ``[...]`` and nothing else."""
 
     def test_control_bytes_in_the_role_do_not_reach_the_terminal(self, tmp_path, monkeypatch):
-        evil = {"messages": [
-            {"role": "\x1b[2J\x1b[31mEVIL", "content": "x"},
-            {"role": "assistant", "content": "Paris ."},
-        ]}
+        evil = {
+            "messages": [
+                {"role": "\x1b[2J\x1b[31mEVIL", "content": "x"},
+                {"role": "assistant", "content": "Paris ."},
+            ]
+        }
         result, _ = _preprocess(tmp_path, monkeypatch, [_ok(0), evil])
 
         assert result.exit_code == 1, result.output
@@ -183,10 +185,12 @@ class TestTheMessageIsSafeForATerminal:
             return real(self, text, *a, **k)
 
         monkeypatch.setattr(transformers.PreTrainedTokenizerFast, "__call__", _boom)
-        row = {"messages": [
-            {"role": "user", "content": "second"},
-            {"role": "assistant", "content": "Paris ."},
-        ]}
+        row = {
+            "messages": [
+                {"role": "user", "content": "second"},
+                {"role": "assistant", "content": "Paris ."},
+            ]
+        }
         result, _ = _preprocess(tmp_path, monkeypatch, [_ok(0), row])
 
         assert result.exit_code == 1
@@ -195,10 +199,12 @@ class TestTheMessageIsSafeForATerminal:
 
     def test_a_long_role_is_capped(self, tmp_path, monkeypatch):
         """Round-3 nit: the role was capped at 30 characters but nothing held it."""
-        long_role = {"messages": [
-            {"role": "R" * 1000, "content": "x"},
-            {"role": "assistant", "content": "Paris ."},
-        ]}
+        long_role = {
+            "messages": [
+                {"role": "R" * 1000, "content": "x"},
+                {"role": "assistant", "content": "Paris ."},
+            ]
+        }
         result, out = _preprocess(tmp_path, monkeypatch, [_ok(0), long_role])
 
         assert result.exit_code == 1
@@ -206,10 +212,12 @@ class TestTheMessageIsSafeForATerminal:
         assert "R" * 31 not in out
 
     def test_a_markup_role_prints_literally(self, tmp_path, monkeypatch):
-        styled = {"messages": [
-            {"role": "[bold red]x[/]", "content": "y"},
-            {"role": "assistant", "content": "Paris ."},
-        ]}
+        styled = {
+            "messages": [
+                {"role": "[bold red]x[/]", "content": "y"},
+                {"role": "assistant", "content": "Paris ."},
+            ]
+        }
         result, out = _preprocess(tmp_path, monkeypatch, [_ok(0), styled])
 
         assert result.exit_code == 1

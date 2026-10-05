@@ -31,16 +31,10 @@ def validate_pipeline_config(
 
     if pipeline_stages < 2:
         errors.append(
-            "parallelism='pipeline' requires pipeline_stages >= 2 "
-            f"(got {pipeline_stages})."
+            f"parallelism='pipeline' requires pipeline_stages >= 2 (got {pipeline_stages})."
         )
     if device != "cuda":
-        errors.append(
-            f"Pipeline parallelism requires CUDA GPUs. Current device: {device}."
-        )
+        errors.append(f"Pipeline parallelism requires CUDA GPUs. Current device: {device}.")
     if gpu_count < pipeline_stages:
-        errors.append(
-            f"Pipeline parallelism needs >= {pipeline_stages} GPUs "
-            f"(got {gpu_count})."
-        )
+        errors.append(f"Pipeline parallelism needs >= {pipeline_stages} GPUs (got {gpu_count}).")
     return errors

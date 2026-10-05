@@ -74,16 +74,12 @@ class NormBlowupPolicy:
             if isinstance(value, bool):
                 raise TypeError(f"{name} must not be bool")
             if not isinstance(value, (int, float)):
-                raise TypeError(
-                    f"{name} must be a number, got {type(value).__name__}"
-                )
+                raise TypeError(f"{name} must be a number, got {type(value).__name__}")
             fval = float(value)
             if not math.isfinite(fval):
                 raise ValueError(f"{name} must be finite")
             if fval < 0.0 or fval > _MAX_THRESHOLD:
-                raise ValueError(
-                    f"{name} must be in [0, {_MAX_THRESHOLD}], got {fval}"
-                )
+                raise ValueError(f"{name} must be in [0, {_MAX_THRESHOLD}], got {fval}")
         if self.warn_threshold >= self.blowup_threshold:
             raise ValueError(
                 f"warn_threshold ({self.warn_threshold}) must be < "
@@ -96,15 +92,11 @@ class NormBlowupPolicy:
             if isinstance(value, bool):
                 raise TypeError(f"{name} must not be bool")
             if not isinstance(value, int):
-                raise TypeError(
-                    f"{name} must be int, got {type(value).__name__}"
-                )
+                raise TypeError(f"{name} must be int, got {type(value).__name__}")
         if self.max_sequential_edits < 1:
             raise ValueError("max_sequential_edits must be >= 1")
         if self.max_sequential_edits > _MAX_SEQ_EDITS:
-            raise ValueError(
-                f"max_sequential_edits must be <= {_MAX_SEQ_EDITS}"
-            )
+            raise ValueError(f"max_sequential_edits must be <= {_MAX_SEQ_EDITS}")
         if self.auto_switch_at < 0:
             raise ValueError("auto_switch_at must be >= 0")
 
@@ -113,7 +105,8 @@ DEFAULT_BLOWUP_POLICY: NormBlowupPolicy = NormBlowupPolicy()
 
 
 def classify_norm_blowup(
-    delta: float, policy: NormBlowupPolicy = DEFAULT_BLOWUP_POLICY,
+    delta: float,
+    policy: NormBlowupPolicy = DEFAULT_BLOWUP_POLICY,
 ) -> str:
     """Classify a Frobenius norm delta as OK / WARN / BLOWUP.
 
@@ -123,9 +116,7 @@ def classify_norm_blowup(
     if isinstance(delta, bool):
         raise TypeError("delta must not be bool")
     if not isinstance(delta, (int, float)):
-        raise TypeError(
-            f"delta must be a number, got {type(delta).__name__}"
-        )
+        raise TypeError(f"delta must be a number, got {type(delta).__name__}")
     fval = float(delta)
     if not math.isfinite(fval):
         raise ValueError("delta must be finite (no NaN / Inf)")
@@ -171,15 +162,11 @@ def governor_recommend_method(
     if isinstance(edit_count, bool):
         raise TypeError("edit_count must not be bool")
     if not isinstance(edit_count, int):
-        raise TypeError(
-            f"edit_count must be int, got {type(edit_count).__name__}"
-        )
+        raise TypeError(f"edit_count must be int, got {type(edit_count).__name__}")
     if edit_count < 0:
         raise ValueError(f"edit_count must be >= 0, got {edit_count}")
     if edit_count > _MAX_SEQ_EDITS:
-        raise ValueError(
-            f"edit_count must be <= {_MAX_SEQ_EDITS}"
-        )
+        raise ValueError(f"edit_count must be <= {_MAX_SEQ_EDITS}")
     verdict = classify_norm_blowup(norm_delta, policy)
 
     # Rule 1: AlphaEdit stays.
@@ -251,30 +238,23 @@ class EditGovernor:
 
     def __post_init__(self) -> None:
         if not isinstance(self.base_model, str):
-            raise TypeError(
-                f"base_model must be str, got {type(self.base_model).__name__}"
-            )
+            raise TypeError(f"base_model must be str, got {type(self.base_model).__name__}")
         if not self.base_model:
             raise ValueError("base_model must be non-empty")
         if "\x00" in self.base_model:
             raise ValueError("base_model must not contain null bytes")
         if len(self.base_model) > _MAX_BASE_LEN:
-            raise ValueError(
-                f"base_model must be <= {_MAX_BASE_LEN} chars"
-            )
+            raise ValueError(f"base_model must be <= {_MAX_BASE_LEN} chars")
         if isinstance(self.max_sequential_edits, bool):
             raise TypeError("max_sequential_edits must not be bool")
         if not isinstance(self.max_sequential_edits, int):
             raise TypeError(
-                f"max_sequential_edits must be int, got "
-                f"{type(self.max_sequential_edits).__name__}"
+                f"max_sequential_edits must be int, got {type(self.max_sequential_edits).__name__}"
             )
         if self.max_sequential_edits < 1:
             raise ValueError("max_sequential_edits must be >= 1")
         if self.max_sequential_edits > _MAX_SEQ_EDITS:
-            raise ValueError(
-                f"max_sequential_edits must be <= {_MAX_SEQ_EDITS}"
-            )
+            raise ValueError(f"max_sequential_edits must be <= {_MAX_SEQ_EDITS}")
         # v0.71.16 #252 — seed the baseline at construction time. ``-1`` is the
         # "not supplied" sentinel; otherwise honour an explicit baseline.
         if self._persisted_edit_count < 0:
@@ -308,7 +288,9 @@ class EditGovernor:
             )
 
     def recommend_next_method(
-        self, *, current_method: str,
+        self,
+        *,
+        current_method: str,
     ) -> MethodRecommendation:
         """Recommend the next method given accumulated state."""
         return governor_recommend_method(
@@ -416,8 +398,7 @@ class EditGovernorStore:
             raise ValueError("path must not contain null bytes")
         if _validate_governor_db_override(path) is None:
             raise ValueError(
-                f"path {os.path.basename(path)!r} must stay under "
-                "$HOME / $CWD / $TMPDIR"
+                f"path {os.path.basename(path)!r} must stay under $HOME / $CWD / $TMPDIR"
             )
         parent = os.path.dirname(os.path.realpath(path)) or "."
         os.makedirs(parent, exist_ok=True)

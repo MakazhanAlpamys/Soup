@@ -13,8 +13,8 @@ from __future__ import annotations
 from typing import Literal
 
 # Compute capability thresholds.
-BF16_MIN_CC = 8.0   # Ampere
-FP16_MIN_CC = 6.0   # Pascal
+BF16_MIN_CC = 8.0  # Ampere
+FP16_MIN_CC = 6.0  # Pascal
 MAX_MODEL_NAME_LEN = 200
 
 # Known fp16-stable / bf16-unstable model families.
@@ -33,7 +33,8 @@ KNOWN_PRECISION_QUIRKS: dict[str, str] = {
 
 
 def pick_mixed_precision(
-    model_name: str, compute_capability: float,
+    model_name: str,
+    compute_capability: float,
 ) -> Literal["bf16", "fp16", "no"]:
     """Pick mixed-precision mode for a model + GPU.
 
@@ -46,17 +47,11 @@ def pick_mixed_precision(
     if "\x00" in model_name:
         raise ValueError("model_name must not contain null bytes")
     if len(model_name) > MAX_MODEL_NAME_LEN:
-        raise ValueError(
-            f"model_name must be <= {MAX_MODEL_NAME_LEN} chars, got {len(model_name)}"
-        )
+        raise ValueError(f"model_name must be <= {MAX_MODEL_NAME_LEN} chars, got {len(model_name)}")
     if not isinstance(compute_capability, (int, float)):
-        raise ValueError(
-            f"compute_capability must be a number, got {type(compute_capability)}"
-        )
+        raise ValueError(f"compute_capability must be a number, got {type(compute_capability)}")
     if compute_capability < 0:
-        raise ValueError(
-            f"compute_capability must be non-negative, got {compute_capability}"
-        )
+        raise ValueError(f"compute_capability must be non-negative, got {compute_capability}")
 
     if compute_capability < FP16_MIN_CC:
         return "no"
@@ -136,11 +131,7 @@ def align_trainable_dtype_for_fsdp_qlora(
 
     casted = 0
     for _name, param in model.named_parameters():
-        if (
-            param.requires_grad
-            and param.is_floating_point()
-            and param.dtype != compute_dtype
-        ):
+        if param.requires_grad and param.is_floating_point() and param.dtype != compute_dtype:
             param.data = param.data.to(compute_dtype)
             casted += 1
     return casted

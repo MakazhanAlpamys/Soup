@@ -49,9 +49,7 @@ class TestInvalidFormatIsRefused:
         from soup_cli.mcp_server.registry import McpToolError, tool_data_doctor
 
         with pytest.raises(McpToolError) as exc_info:
-            tool_data_doctor(
-                {"data": str(dataset), "model": "fake/model", "format": bad_format}
-            )
+            tool_data_doctor({"data": str(dataset), "model": "fake/model", "format": bad_format})
 
         message = str(exc_info.value)
         assert f"unknown format {bad_format!r}" in message
@@ -67,9 +65,7 @@ class TestInvalidFormatIsRefused:
         with pytest.raises(McpToolError) as validate_exc:
             tool_data_validate({"data": str(dataset), "format": "bogus"})
         with pytest.raises(McpToolError) as doctor_exc:
-            tool_data_doctor(
-                {"data": str(dataset), "model": "fake/model", "format": "bogus"}
-            )
+            tool_data_doctor({"data": str(dataset), "model": "fake/model", "format": "bogus"})
 
         message = str(doctor_exc.value)
         assert message == str(validate_exc.value)
@@ -89,9 +85,7 @@ class TestSharedAllowlistAndAutoDetection:
 
         _stub_doctor_runtime(monkeypatch)
         for fmt in sorted(VALID_FORMATS):
-            result = tool_data_doctor(
-                {"data": str(dataset), "model": "fake/model", "format": fmt}
-            )
+            result = tool_data_doctor({"data": str(dataset), "model": "fake/model", "format": fmt})
             assert result["format"] == fmt
 
     def test_new_allowlist_member_needs_no_handler_change(self, dataset, monkeypatch):

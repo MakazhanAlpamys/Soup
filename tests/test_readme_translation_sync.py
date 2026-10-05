@@ -598,7 +598,5 @@ class TestExemptSectionsDoNotGateOnTranslation:
 
         import sys
 
-        monkeypatch.setattr(
-            sys.modules[__name__], "EXEMPT_SECTIONS", EXEMPT_SECTIONS | {"Support"}
-        )
+        monkeypatch.setattr(sys.modules[__name__], "EXEMPT_SECTIONS", EXEMPT_SECTIONS | {"Support"})
         assert structure_problems(tree) == []  # same drift, silenced by widening it

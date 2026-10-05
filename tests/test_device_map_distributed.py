@@ -124,9 +124,7 @@ class TestNoTrainerStillHardcodesAuto:
         # the modules the H100 run proved are reachable with `--gpus`
         assert {"sft.py", "dpo.py", "orpo.py", "simpo.py", "ppo.py"} <= names
 
-    @pytest.mark.parametrize(
-        "path", _TRAINER_SOURCES, ids=[p.stem for p in _TRAINER_SOURCES]
-    )
+    @pytest.mark.parametrize("path", _TRAINER_SOURCES, ids=[p.stem for p in _TRAINER_SOURCES])
     def test_module_does_not_hardcode_device_map_auto(self, path):
         code = _code_without_comments(path.read_text(encoding="utf-8"))
         assert not _OLD_IDIOM.search(code), (
@@ -137,9 +135,7 @@ class TestNoTrainerStillHardcodesAuto:
             f"{path.name} passes device_map='auto' literally; same defect."
         )
 
-    @pytest.mark.parametrize(
-        "path", _TRAINER_SOURCES, ids=[p.stem for p in _TRAINER_SOURCES]
-    )
+    @pytest.mark.parametrize("path", _TRAINER_SOURCES, ids=[p.stem for p in _TRAINER_SOURCES])
     def test_module_that_sets_a_device_map_uses_the_shared_helper(self, path):
         """The negative check above is satisfied by deleting the line entirely.
         This is its positive half: whatever a module does pass must come from
@@ -149,8 +145,7 @@ class TestNoTrainerStillHardcodesAuto:
         if "device_map" not in mentions:
             return
         assert "resolve_device_map" in code, (
-            f"{path.name} passes a device_map that does not come from "
-            "resolve_device_map()"
+            f"{path.name} passes a device_map that does not come from resolve_device_map()"
         )
 
     def test_the_patterns_would_catch_the_old_lines(self):

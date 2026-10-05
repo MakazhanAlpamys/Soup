@@ -99,8 +99,7 @@ class PreferenceTrainerWrapper:
         loss = self.config.training.preference_loss
         if loss not in _SUPPORTED_LOSSES:
             raise ValueError(
-                f"Unknown preference_loss={loss!r}. "
-                f"Supported: {sorted(_SUPPORTED_LOSSES)}"
+                f"Unknown preference_loss={loss!r}. Supported: {sorted(_SUPPORTED_LOSSES)}"
             )
         inner_cfg = _make_inner_cfg(self.config, loss)
         kwargs = {
@@ -112,18 +111,23 @@ class PreferenceTrainerWrapper:
         }
         if loss == "dpo":
             from soup_cli.trainer.dpo import DPOTrainerWrapper
+
             return DPOTrainerWrapper(inner_cfg, **kwargs)
         if loss == "simpo":
             from soup_cli.trainer.simpo import SimPOTrainerWrapper
+
             return SimPOTrainerWrapper(inner_cfg, **kwargs)
         if loss == "orpo":
             from soup_cli.trainer.orpo import ORPOTrainerWrapper
+
             return ORPOTrainerWrapper(inner_cfg, **kwargs)
         if loss == "ipo":
             from soup_cli.trainer.ipo import IPOTrainerWrapper
+
             return IPOTrainerWrapper(inner_cfg, **kwargs)
         # BCO — last branch by allowlist exhaustion.
         from soup_cli.trainer.bco import BCOTrainerWrapper
+
         return BCOTrainerWrapper(inner_cfg, **kwargs)
 
     def _build_multi_objective(self):
@@ -231,8 +235,7 @@ class PreferenceTrainerWrapper:
     def train(self, **kwargs) -> dict:
         if self._inner is None:
             raise RuntimeError(
-                "PreferenceTrainerWrapper.train() called before setup(). "
-                "Call setup(dataset) first."
+                "PreferenceTrainerWrapper.train() called before setup(). Call setup(dataset) first."
             )
         return self._inner.train(**kwargs)
 

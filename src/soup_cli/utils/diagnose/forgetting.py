@@ -50,9 +50,7 @@ def score_forgetting(
     worst_delta = 0.0
     for task in shared:
         base = require_finite_unit(base_accuracy[task], f"base_accuracy[{task!r}]")
-        adapter = require_finite_unit(
-            adapter_accuracy[task], f"adapter_accuracy[{task!r}]"
-        )
+        adapter = require_finite_unit(adapter_accuracy[task], f"adapter_accuracy[{task!r}]")
         delta = max(0.0, base - adapter - tol)
         drops.append(min(1.0, delta))
         if delta > worst_delta:

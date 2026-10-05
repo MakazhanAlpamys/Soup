@@ -137,9 +137,7 @@ class TestAdapterPR:
             adapter_path="adapter/",
             dataset_diff="+ 100 rows of support data\n",
             deltas=(EvalDelta(metric="accuracy", baseline=0.7, candidate=0.85),),
-            samples=(
-                SampleDiff(prompt="hi", baseline_output="hello", candidate_output="hey"),
-            ),
+            samples=(SampleDiff(prompt="hi", baseline_output="hello", candidate_output="hey"),),
         )
         assert pr.title == "add-customer-support-tone"
 
@@ -248,9 +246,7 @@ class TestRenderPR:
             adapter_path="adapter/",
             dataset_diff="+row1\n+row2\n",
             deltas=(EvalDelta(metric="accuracy", baseline=0.7, candidate=0.85),),
-            samples=(
-                SampleDiff(prompt="hi", baseline_output="a", candidate_output="b"),
-            ),
+            samples=(SampleDiff(prompt="hi", baseline_output="a", candidate_output="b"),),
         )
         md = render_pr_markdown(pr)
         assert "my-pr" in md
@@ -376,9 +372,7 @@ class TestSourceWiring:
         from pathlib import Path
 
         root = Path(__file__).resolve().parent.parent
-        src = (root / "src" / "soup_cli" / "utils" / "adapter_pr.py").read_text(
-            encoding="utf-8"
-        )
+        src = (root / "src" / "soup_cli" / "utils" / "adapter_pr.py").read_text(encoding="utf-8")
         head_lines = [
             line
             for line in src.splitlines()[:50]

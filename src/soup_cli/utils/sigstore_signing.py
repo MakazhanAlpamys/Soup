@@ -71,9 +71,7 @@ def verify_payload_sigstore(
     if not isinstance(identity, str) or not identity.strip():
         raise ValueError("sigstore verification requires a non-empty trusted identity")
     if not isinstance(issuer, str) or not issuer.strip():
-        raise ValueError(
-            "sigstore verification requires a non-empty trusted OIDC issuer"
-        )
+        raise ValueError("sigstore verification requires a non-empty trusted OIDC issuer")
     try:
         from sigstore.models import Bundle
         from sigstore.verify import Verifier

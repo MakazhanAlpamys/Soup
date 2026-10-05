@@ -78,9 +78,7 @@ def _write_judgments(path, groups):
     return rows
 
 
-def test_candidate_export_needs_no_judge_and_preserves_order_and_digests(
-    tmp_path, monkeypatch
-):
+def test_candidate_export_needs_no_judge_and_preserves_order_and_digests(tmp_path, monkeypatch):
     artifact, calls = _export_candidates(tmp_path, monkeypatch)
     assert calls == ["question one", "question one", "question two", "question two"]
     records = [json.loads(line) for line in artifact.read_text().splitlines()]
@@ -200,9 +198,7 @@ def test_offline_manifest_commits_and_verifies_exact_output_set(tmp_path, monkey
     )
     assert result.exit_code == 0, (result.output, repr(result.exception))
     manifest_path = tmp_path / "sft.jsonl.manifest.json"
-    manifest = verify_offline_manifest(
-        str(manifest_path), sft_path=str(sft), dpo_path=str(dpo)
-    )
+    manifest = verify_offline_manifest(str(manifest_path), sft_path=str(sft), dpo_path=str(dpo))
     assert manifest["schema"] == "soup.best_of_n.offline_manifest.v1"
     assert manifest["dpo_requested"] is True
     assert manifest["sft"]["rows"] == 2
@@ -240,9 +236,7 @@ def test_sft_only_manifest_records_that_dpo_was_not_requested(tmp_path, monkeypa
     assert manifest["dpo"] is None
 
 
-def test_later_sft_only_generation_removes_prior_manifest_bound_dpo(
-    tmp_path, monkeypatch
-):
+def test_later_sft_only_generation_removes_prior_manifest_bound_dpo(tmp_path, monkeypatch):
     from soup_cli.commands.data import app
     from soup_cli.utils.best_of_n_artifact import verify_offline_manifest
 
@@ -316,14 +310,10 @@ def test_failed_dpo_replacement_restores_previous_generation(tmp_path, monkeypat
     failed = CliRunner().invoke(app, args)
     assert failed.exit_code == 1
     assert (sft.read_bytes(), dpo.read_bytes(), manifest_path.read_bytes()) == previous
-    verify_offline_manifest(
-        str(manifest_path), sft_path=str(sft), dpo_path=str(dpo)
-    )
+    verify_offline_manifest(str(manifest_path), sft_path=str(sft), dpo_path=str(dpo))
 
 
-def test_failed_sft_only_replacement_restores_manifest_bound_dpo(
-    tmp_path, monkeypatch
-):
+def test_failed_sft_only_replacement_restores_manifest_bound_dpo(tmp_path, monkeypatch):
     from soup_cli.commands.data import app
     from soup_cli.utils.best_of_n_artifact import verify_offline_manifest
 
@@ -350,20 +340,14 @@ def test_failed_sft_only_replacement_restores_manifest_bound_dpo(
     changed = _write_judgments(judgments, _artifact_groups(artifact))
     changed[0]["winner_idx"] = 0
     changed[0]["scores"] = [0.9, 0.1]
-    judgments.write_text(
-        "".join(json.dumps(row) + "\n" for row in changed), encoding="utf-8"
-    )
+    judgments.write_text("".join(json.dumps(row) + "\n" for row in changed), encoding="utf-8")
 
     real_replace = __import__("os").replace
     failed_once = False
 
     def fail_sft(source, destination):
         nonlocal failed_once
-        if (
-            not failed_once
-            and destination == str(sft)
-            and ".soup.group." in str(source)
-        ):
+        if not failed_once and destination == str(sft) and ".soup.group." in str(source):
             failed_once = True
             raise OSError("simulated SFT publication failure")
         return real_replace(source, destination)
@@ -373,9 +357,7 @@ def test_failed_sft_only_replacement_restores_manifest_bound_dpo(
 
     assert failed.exit_code == 1
     assert (sft.read_bytes(), dpo.read_bytes(), manifest_path.read_bytes()) == previous
-    verify_offline_manifest(
-        str(manifest_path), sft_path=str(sft), dpo_path=str(dpo)
-    )
+    verify_offline_manifest(str(manifest_path), sft_path=str(sft), dpo_path=str(dpo))
 
 
 def test_manifest_verifier_rejects_replaced_output(tmp_path, monkeypatch):
@@ -401,9 +383,7 @@ def test_manifest_verifier_rejects_replaced_output(tmp_path, monkeypatch):
     assert result.exit_code == 0, (result.output, repr(result.exception))
     sft.write_bytes(sft.read_bytes() + b"{}\n")
     with pytest.raises(ValueError, match="SFT content does not match"):
-        verify_offline_manifest(
-            str(tmp_path / "sft.jsonl.manifest.json"), sft_path=str(sft)
-        )
+        verify_offline_manifest(str(tmp_path / "sft.jsonl.manifest.json"), sft_path=str(sft))
 
 
 def test_offline_manifest_path_must_be_distinct(tmp_path, monkeypatch):
@@ -443,9 +423,7 @@ def test_offline_manifest_path_must_be_distinct(tmp_path, monkeypatch):
         ("digest", "candidate digest mismatch"),
     ],
 )
-def test_invalid_offline_judgments_fail_before_publication(
-    tmp_path, monkeypatch, mutation, match
-):
+def test_invalid_offline_judgments_fail_before_publication(tmp_path, monkeypatch, mutation, match):
     from soup_cli.commands.data import app
 
     artifact, _calls = _export_candidates(tmp_path, monkeypatch)
@@ -488,9 +466,7 @@ def test_invalid_offline_judgments_fail_before_publication(
 
 
 @pytest.mark.parametrize("preexisting", [False, True])
-def test_dpo_write_failure_rolls_back_the_complete_publication(
-    tmp_path, monkeypatch, preexisting
-):
+def test_dpo_write_failure_rolls_back_the_complete_publication(tmp_path, monkeypatch, preexisting):
     from soup_cli.commands.data import app
 
     artifact, _calls = _export_candidates(tmp_path, monkeypatch)
@@ -539,9 +515,7 @@ def test_dpo_write_failure_rolls_back_the_complete_publication(
         assert not dpo.exists()
 
 
-def test_local_export_records_revision_and_seed_without_exposing_local_path(
-    tmp_path, monkeypatch
-):
+def test_local_export_records_revision_and_seed_without_exposing_local_path(tmp_path, monkeypatch):
     from soup_cli.commands.data import app
 
     monkeypatch.chdir(tmp_path)
@@ -552,7 +526,7 @@ def test_local_export_records_revision_and_seed_without_exposing_local_path(
     load_calls = []
     monkeypatch.setattr(
         "soup_cli.commands.data._load_bon_model",
-        lambda *args, **kwargs: (load_calls.append((args, kwargs)) or (object(), object())),
+        lambda *args, **kwargs: load_calls.append((args, kwargs)) or (object(), object()),
     )
     monkeypatch.setattr(
         "soup_cli.utils.best_of_n.sample_candidates",
@@ -579,9 +553,7 @@ def test_local_export_records_revision_and_seed_without_exposing_local_path(
     )
     assert result.exit_code == 0, (result.output, repr(result.exception))
     assert load_calls[0][1] == {"revision": "abc123"}
-    sampler = json.loads(artifact.read_text().splitlines()[0])[
-        "_best_of_n_candidates"
-    ]["sampler"]
+    sampler = json.loads(artifact.read_text().splitlines()[0])["_best_of_n_candidates"]["sampler"]
     assert sampler["model"] == "<local-model>"
     assert sampler["revision"] == "abc123"
     assert sampler["seed"] == 42

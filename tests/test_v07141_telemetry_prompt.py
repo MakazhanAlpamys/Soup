@@ -10,6 +10,7 @@ Validates the complete opt-in telemetry pipeline:
 - Anonymous distinct_id: generated, validated, persisted, resilient to FS errors
 - Every single test contains load-bearing AST assertions.
 """
+
 from __future__ import annotations
 
 import ast
@@ -164,9 +165,7 @@ def test_send_boundary_enabled_uses_stdlib_post(monkeypatch):
     from soup_cli.utils.trackers import send_telemetry_payload
 
     monkeypatch.setenv("SOUP_TELEMETRY", "1")
-    monkeypatch.setattr(
-        "soup_cli.utils.trackers._telemetry_endpoint_is_safe", lambda _url: True
-    )
+    monkeypatch.setattr("soup_cli.utils.trackers._telemetry_endpoint_is_safe", lambda _url: True)
 
     captured: dict[str, object] = {}
 
@@ -276,9 +275,7 @@ def test_send_telemetry_refuses_placeholder_key_with_notice(capsys, monkeypatch)
     from soup_cli.utils.trackers import send_telemetry_payload
 
     monkeypatch.setenv("SOUP_TELEMETRY", "1")
-    monkeypatch.setattr(
-        "soup_cli.utils.trackers._telemetry_endpoint_is_safe", lambda _url: True
-    )
+    monkeypatch.setattr("soup_cli.utils.trackers._telemetry_endpoint_is_safe", lambda _url: True)
     network_mock = MagicMock(side_effect=AssertionError("network opened with placeholder key"))
     monkeypatch.setattr("urllib.request.urlopen", network_mock)
 

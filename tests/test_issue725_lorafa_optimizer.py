@@ -447,4 +447,3 @@ def test_lorafa_preserves_custom_betas_and_eps(tmp_path):
     for group in trainer.optimizer.param_groups:
         assert group["betas"] == (0.88, 0.95)
         assert group["eps"] == 1e-7
-

@@ -76,9 +76,7 @@ class TraceLogWriter:
         if isinstance(cap_mb, bool) or not isinstance(cap_mb, int):
             raise TypeError("cap_mb must be int")
         if not (_MIN_CAP_MB <= cap_mb <= _MAX_CAP_MB):
-            raise ValueError(
-                f"cap_mb must be in [{_MIN_CAP_MB}, {_MAX_CAP_MB}], got {cap_mb}"
-            )
+            raise ValueError(f"cap_mb must be in [{_MIN_CAP_MB}, {_MAX_CAP_MB}], got {cap_mb}")
         if not isinstance(path, str) or not path or "\x00" in path:
             raise ValueError("path must be a non-empty string with no null bytes")
         if not is_under_cwd(path):

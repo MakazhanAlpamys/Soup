@@ -56,9 +56,7 @@ class TestExpandableSegmentsStatus:
         assert enabled is False
         assert "Windows" in why
 
-    def test_linux_with_cuda_already_up_names_the_real_cause(
-        self, fake_cuda, monkeypatch
-    ):
+    def test_linux_with_cuda_already_up_names_the_real_cause(self, fake_cuda, monkeypatch):
         """The Colab case. Must NOT mention Windows, and must name the cause."""
         from soup_cli.utils.layer_stream_runtime import expandable_segments_status
 
@@ -83,9 +81,7 @@ class TestExpandableSegmentsStatus:
         assert enabled is True
         assert why == ""
 
-    def test_already_set_by_the_operator_counts_as_enabled(
-        self, fake_cuda, monkeypatch
-    ):
+    def test_already_set_by_the_operator_counts_as_enabled(self, fake_cuda, monkeypatch):
         """CUDA is up, but the env var was exported before the process started —
         which is the one way to actually get this on a notebook."""
         from soup_cli.utils.layer_stream_runtime import expandable_segments_status

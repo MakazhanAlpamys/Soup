@@ -39,16 +39,32 @@ def _mlp_function() -> Any:
     class _FastLoraSwiGLU(torch.autograd.Function):
         @staticmethod
         def forward(
-            ctx, x, wg, bg, wu, bu, wd, bd,
-            ag, bgl, au, bul, ad, bdl,
-            sg, su, sd, qg_meta, qu_meta, qd_meta, *qparts,
+            ctx,
+            x,
+            wg,
+            bg,
+            wu,
+            bu,
+            wd,
+            bd,
+            ag,
+            bgl,
+            au,
+            bul,
+            ad,
+            bdl,
+            sg,
+            su,
+            sd,
+            qg_meta,
+            qu_meta,
+            qd_meta,
+            *qparts,
         ):
             metas = (qg_meta, qu_meta, qd_meta)
             counts = [0 if meta is None else int(meta["_count"]) for meta in metas]
             starts = (0, counts[0], counts[0] + counts[1])
-            qlists = [
-                list(qparts[starts[i] : starts[i] + counts[i]]) for i in range(3)
-            ]
+            qlists = [list(qparts[starts[i] : starts[i] + counts[i]]) for i in range(3)]
 
             dense_g = _dense_weight(wg, qg_meta, qlists[0], x.dtype)
             dense_u = _dense_weight(wu, qu_meta, qlists[1], x.dtype)
@@ -94,9 +110,7 @@ def _mlp_function() -> Any:
             ctx.qmetas = metas
             ctx.qcounts = counts
             ctx.qparts_len = len(qparts)
-            ctx.save_for_backward(
-                x, wg, wu, wd, g, u, ag, bgl, au, bul, ad, bdl, h_gu, *qparts
-            )
+            ctx.save_for_backward(x, wg, wu, wd, g, u, ag, bgl, au, bul, ad, bdl, h_gu, *qparts)
             return y
 
         @staticmethod
@@ -138,12 +152,7 @@ def _mlp_function() -> Any:
             opmath = torch.promote_types(g.dtype, torch.float32)
             g_hi = g.to(opmath)
             sig = torch.sigmoid(g_hi)
-            grad_g = (
-                grad_m.to(opmath)
-                * u.to(opmath)
-                * sig
-                * (1 + g_hi * (1 - sig))
-            ).to(g.dtype)
+            grad_g = (grad_m.to(opmath) * u.to(opmath) * sig * (1 + g_hi * (1 - sig))).to(g.dtype)
 
             grad_x = None
             if ctx.needs_input_grad[0]:
@@ -199,9 +208,24 @@ def _mlp_function() -> Any:
 
             result = [
                 grad_x,
-                None, None, None, None, None, None,
-                grad_ag, grad_bgl, grad_au, grad_bul, grad_ad, grad_bdl,
-                None, None, None, None, None, None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                grad_ag,
+                grad_bgl,
+                grad_au,
+                grad_bul,
+                grad_ad,
+                grad_bdl,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
             ]
             result.extend([None] * ctx.qparts_len)
             return tuple(result)
@@ -238,10 +262,24 @@ def _make_mlp_forward(original_forward: Any) -> Any:
         qparts = [*gate.qparts, *up.qparts, *down.qparts]
         out = fast.apply(
             work_x,
-            gate.weight, gate.bias, up.weight, up.bias, down.weight, down.bias,
-            gate.lora_a, gate.lora_b, up.lora_a, up.lora_b, down.lora_a, down.lora_b,
-            gate.scaling, up.scaling, down.scaling,
-            gate.qmeta, up.qmeta, down.qmeta,
+            gate.weight,
+            gate.bias,
+            up.weight,
+            up.bias,
+            down.weight,
+            down.bias,
+            gate.lora_a,
+            gate.lora_b,
+            up.lora_a,
+            up.lora_b,
+            down.lora_a,
+            down.lora_b,
+            gate.scaling,
+            up.scaling,
+            down.scaling,
+            gate.qmeta,
+            up.qmeta,
+            down.qmeta,
             *qparts,
         )
         return out if work_x is x else out.to(input_dtype)
@@ -272,9 +310,7 @@ def patch_fast_lora_mlp(model: Any) -> int:
     """Patch supported dense SiLU MLP blocks and return the number patched."""
     hidden_act = str(getattr(getattr(model, "config", None), "hidden_act", "")).lower()
     if hidden_act not in {"silu", "swish"}:
-        logger.info(
-            "Fast-LoRA MLP skipped: hidden_act=%r is not SiLU/swish", hidden_act or None
-        )
+        logger.info("Fast-LoRA MLP skipped: hidden_act=%r is not SiLU/swish", hidden_act or None)
         return 0
 
     patched = 0
@@ -283,9 +319,7 @@ def patch_fast_lora_mlp(model: Any) -> int:
             continue
         if _looks_like_moe_expert(path, module):
             continue
-        if not all(
-            hasattr(module, name) for name in ("gate_proj", "up_proj", "down_proj")
-        ):
+        if not all(hasattr(module, name) for name in ("gate_proj", "up_proj", "down_proj")):
             continue
         if not _module_uses_silu(module):
             continue
@@ -294,9 +328,7 @@ def patch_fast_lora_mlp(model: Any) -> int:
             for name in ("gate_proj", "up_proj", "down_proj")
         ):
             continue
-        projections = [
-            getattr(module, name) for name in ("gate_proj", "up_proj", "down_proj")
-        ]
+        projections = [getattr(module, name) for name in ("gate_proj", "up_proj", "down_proj")]
         if any(hasattr(proj, "modules_to_save") for proj in projections):
             continue
         if any(

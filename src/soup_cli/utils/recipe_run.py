@@ -141,9 +141,7 @@ def _node_output_path(output_dir: str, node_name: str) -> str:
     return os.path.join(output_dir, f".node-{safe}.jsonl")
 
 
-def _save_node_output(
-    output_dir: str, node_name: str, rows: Sequence[Mapping[str, Any]]
-) -> None:
+def _save_node_output(output_dir: str, node_name: str, rows: Sequence[Mapping[str, Any]]) -> None:
     """Persist a node's row output for later resume rehydration."""
     parent = output_dir or "."
     fd, tmp = tempfile.mkstemp(dir=parent, suffix=".tmp", prefix=".node-")
@@ -161,9 +159,7 @@ def _save_node_output(
         raise
 
 
-def _load_node_output(
-    output_dir: str, node_name: str
-) -> List[Mapping[str, Any]]:
+def _load_node_output(output_dir: str, node_name: str) -> List[Mapping[str, Any]]:
     """Best-effort sidecar reload — empty list on missing / unparseable."""
     path = _node_output_path(output_dir, node_name)
     if not os.path.isfile(path):
@@ -211,6 +207,7 @@ def _redact_exc_message(exc: BaseException, limit: int = 256) -> str:
         lambda m: os.path.basename(m.group(0)) or m.group(0),
         msg,
     )
+
     # Windows drive-letter paths (``C:\\foo\\bar`` or ``C:/foo/bar``).
     # Use a cross-platform basename: split on both ``/`` and ``\\`` so this
     # works on POSIX hosts too (``os.path.basename`` only splits on ``/``
@@ -247,18 +244,12 @@ def _node_seed(
     try:
         lst = os.lstat(raw_path)
     except OSError as exc:
-        raise ValueError(
-            f"seed node {node.name!r}: path not found: {raw_path!r}"
-        ) from exc
+        raise ValueError(f"seed node {node.name!r}: path not found: {raw_path!r}") from exc
     if _stat.S_ISLNK(lst.st_mode):
-        raise ValueError(
-            f"seed node {node.name!r}: path must not be a symlink"
-        )
+        raise ValueError(f"seed node {node.name!r}: path must not be a symlink")
     real = os.path.realpath(raw_path)
     if not is_under_cwd(real):
-        raise ValueError(
-            f"seed node {node.name!r}: path must stay under cwd"
-        )
+        raise ValueError(f"seed node {node.name!r}: path must stay under cwd")
     rows: List[Mapping[str, Any]] = []
     with open(real, encoding="utf-8-sig") as f:
         for line_no, line in enumerate(f, start=1):
@@ -322,13 +313,9 @@ def _node_llm_text(
     """Call an LLM provider with ``node.config.prompt.format(**row)``."""
     prompt_template = node.config.get("prompt")
     if not isinstance(prompt_template, str) or not prompt_template:
-        raise ValueError(
-            f"llm_text node {node.name!r}: 'prompt' must be a non-empty string"
-        )
+        raise ValueError(f"llm_text node {node.name!r}: 'prompt' must be a non-empty string")
     if len(prompt_template) > _MAX_PROMPT_LEN:
-        raise ValueError(
-            f"llm_text node {node.name!r}: prompt exceeds {_MAX_PROMPT_LEN} chars"
-        )
+        raise ValueError(f"llm_text node {node.name!r}: prompt exceeds {_MAX_PROMPT_LEN} chars")
     if judge_provider is None:
         # Deterministic offline stub — useful for CI where no Ollama runs.
         rows = _merge_inputs(inputs)
@@ -410,9 +397,7 @@ def _node_judge(
     if not isinstance(prompt_template, str) or not prompt_template:
         raise ValueError(f"judge node {node.name!r}: 'prompt' must be a string")
     if len(prompt_template) > _MAX_PROMPT_LEN:
-        raise ValueError(
-            f"judge node {node.name!r}: prompt exceeds {_MAX_PROMPT_LEN} chars"
-        )
+        raise ValueError(f"judge node {node.name!r}: prompt exceeds {_MAX_PROMPT_LEN} chars")
 
     if judge_provider is None:
         rows = _merge_inputs(inputs)
@@ -473,13 +458,9 @@ def _node_code(
     """
     code = node.config.get("code")
     if not isinstance(code, str) or not code:
-        raise ValueError(
-            f"code node {node.name!r}: 'code' must be a non-empty string"
-        )
+        raise ValueError(f"code node {node.name!r}: 'code' must be a non-empty string")
     if len(code) > _MAX_CODE_LEN:
-        raise ValueError(
-            f"code node {node.name!r}: code exceeds {_MAX_CODE_LEN} bytes"
-        )
+        raise ValueError(f"code node {node.name!r}: code exceeds {_MAX_CODE_LEN} bytes")
 
     from soup_cli.trainer.rewards import _run_code_sandbox
 
@@ -492,11 +473,7 @@ def _node_code(
         # on a string always emits a valid Python (and JSON) string
         # literal — eliminating the repr-based injection surface.
         row_json = json.dumps(row, ensure_ascii=False)
-        wrapped = (
-            "import json\n"
-            f"_row = json.loads({json.dumps(row_json)})\n"
-            + code
-        )
+        wrapped = f"import json\n_row = json.loads({json.dumps(row_json)})\n" + code
         try:
             stdout = _run_code_sandbox(wrapped)
         except Exception as exc:  # noqa: BLE001 — sandbox already swallows most
@@ -526,20 +503,14 @@ def _node_validator(
     field = node.config.get("field", "text")
 
     if regex_src is None and schema is None:
-        raise ValueError(
-            f"validator node {node.name!r}: 'regex' or 'schema' required"
-        )
+        raise ValueError(f"validator node {node.name!r}: 'regex' or 'schema' required")
 
     compiled = None
     if regex_src is not None:
         if not isinstance(regex_src, str):
-            raise ValueError(
-                f"validator node {node.name!r}: 'regex' must be a string"
-            )
+            raise ValueError(f"validator node {node.name!r}: 'regex' must be a string")
         if len(regex_src) > 2048:
-            raise ValueError(
-                f"validator node {node.name!r}: regex too long"
-            )
+            raise ValueError(f"validator node {node.name!r}: regex too long")
         try:
             check_config_regex(
                 regex_src,
@@ -547,16 +518,12 @@ def _node_validator(
             )
             compiled = re.compile(regex_src)
         except re.error as exc:
-            raise ValueError(
-                f"validator node {node.name!r}: invalid regex: {exc}"
-            ) from exc
+            raise ValueError(f"validator node {node.name!r}: invalid regex: {exc}") from exc
 
     validator = None
     if schema is not None:
         if not isinstance(schema, Mapping):
-            raise ValueError(
-                f"validator node {node.name!r}: 'schema' must be a mapping"
-            )
+            raise ValueError(f"validator node {node.name!r}: 'schema' must be a mapping")
         try:
             import jsonschema  # type: ignore[import-not-found]
         except ImportError as exc:
@@ -568,9 +535,7 @@ def _node_validator(
             validator_cls = jsonschema.validators.validator_for(dict(schema))
             validator = validator_cls(dict(schema))
         except Exception as exc:  # noqa: BLE001 — jsonschema error variety
-            raise ValueError(
-                f"validator node {node.name!r}: invalid JSON schema: {exc}"
-            ) from exc
+            raise ValueError(f"validator node {node.name!r}: invalid JSON schema: {exc}") from exc
 
     rows = _merge_inputs(inputs)
     kept: List[Mapping[str, Any]] = []
@@ -740,7 +705,8 @@ def run_recipe(
                 result = _node_seed(node, pred_outputs)
             elif node.kind == "llm_text":
                 result = _node_llm_text(
-                    node, pred_outputs,
+                    node,
+                    pred_outputs,
                     judge_provider=judge_provider,
                     judge_model=judge_model,
                     judge_base_url=judge_base_url,
@@ -749,7 +715,8 @@ def run_recipe(
                 result = _node_code(node, pred_outputs)
             elif node.kind == "judge":
                 result = _node_judge(
-                    node, pred_outputs,
+                    node,
+                    pred_outputs,
                     judge_provider=judge_provider,
                     judge_model=judge_model,
                     judge_base_url=judge_base_url,

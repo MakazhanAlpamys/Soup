@@ -62,8 +62,7 @@ class ActiveLearningPlan:
             raise ValueError("budget must be >= 1")
         if self.rows_selected > self.rows_in:
             raise ValueError(
-                f"rows_selected ({self.rows_selected}) cannot exceed "
-                f"rows_in ({self.rows_in})"
+                f"rows_selected ({self.rows_selected}) cannot exceed rows_in ({self.rows_in})"
             )
         # NaN/Inf guard on the mean (code-review LOW fix v0.63.0 — matches
         # project-wide finite-only policy for every other numeric field).
@@ -80,15 +79,11 @@ def validate_budget(value: object) -> int:
     if isinstance(value, bool):
         raise TypeError("budget must be int, not bool")
     if not isinstance(value, int):
-        raise TypeError(
-            f"budget must be int, got {type(value).__name__}"
-        )
+        raise TypeError(f"budget must be int, got {type(value).__name__}")
     if value < 1:
         raise ValueError(f"budget must be >= 1, got {value}")
     if value > _MAX_BUDGET:
-        raise ValueError(
-            f"budget must be <= {_MAX_BUDGET}, got {value}"
-        )
+        raise ValueError(f"budget must be <= {_MAX_BUDGET}, got {value}")
     return value
 
 
@@ -96,16 +91,12 @@ def _validate_score(score: object, *, idx: int) -> float:
     if isinstance(score, bool):
         raise TypeError(f"scores[{idx}] must be number, not bool")
     if not isinstance(score, (int, float)):
-        raise TypeError(
-            f"scores[{idx}] must be number, got {type(score).__name__}"
-        )
+        raise TypeError(f"scores[{idx}] must be number, got {type(score).__name__}")
     f_score = float(score)
     if not math.isfinite(f_score):
         raise ValueError(f"scores[{idx}] must be finite (no NaN / Inf)")
     if not (0.0 <= f_score <= 1.0):
-        raise ValueError(
-            f"scores[{idx}] must be in [0.0, 1.0], got {f_score}"
-        )
+        raise ValueError(f"scores[{idx}] must be in [0.0, 1.0], got {f_score}")
     return f_score
 
 
@@ -125,9 +116,7 @@ def score_uncertainty(*, scores: Sequence[float | int]) -> float:
     out-of-range scores at every K — see ``_validate_score``.
     """
     if not isinstance(scores, Sequence) or isinstance(scores, str):
-        raise TypeError(
-            f"scores must be a sequence, got {type(scores).__name__}"
-        )
+        raise TypeError(f"scores must be a sequence, got {type(scores).__name__}")
     if len(scores) == 0:
         return 0.0
     if len(scores) > _MAX_RM_SCORES:
@@ -165,9 +154,7 @@ def _row_uncertainty(row: Mapping[str, object]) -> float:
     ``rm_score`` scalar > 0.0.
     """
     if not isinstance(row, Mapping):
-        raise TypeError(
-            f"row must be a Mapping, got {type(row).__name__}"
-        )
+        raise TypeError(f"row must be a Mapping, got {type(row).__name__}")
     explicit = row.get("uncertainty")
     if isinstance(explicit, (int, float)) and not isinstance(explicit, bool):
         f_val = float(explicit)
@@ -214,17 +201,13 @@ def pick_top_uncertain(
     materialised: list[Mapping[str, object]] = []
     for row in rows:
         if not isinstance(row, Mapping):
-            raise TypeError(
-                f"rows must yield Mapping, got {type(row).__name__}"
-            )
+            raise TypeError(f"rows must yield Mapping, got {type(row).__name__}")
         materialised.append(row)
         if len(materialised) >= _MAX_INPUT_ROWS:
             break
     if not materialised:
         return []
-    scored = [
-        (idx, _row_uncertainty(row), row) for idx, row in enumerate(materialised)
-    ]
+    scored = [(idx, _row_uncertainty(row), row) for idx, row in enumerate(materialised)]
     # Sort: highest uncertainty first, ties broken by original order.
     scored.sort(key=lambda triple: (-triple[1], triple[0]))
     return [row for (_, _, row) in scored[:n_budget]]
@@ -239,13 +222,9 @@ def sample_uncertain_rows(
     """Read JSONL, pick top-uncertainty rows, write out, return summary."""
     n_budget = validate_budget(budget)
     if not isinstance(input_path, str):
-        raise TypeError(
-            f"input_path must be str, got {type(input_path).__name__}"
-        )
+        raise TypeError(f"input_path must be str, got {type(input_path).__name__}")
     if not isinstance(output_path, str):
-        raise TypeError(
-            f"output_path must be str, got {type(output_path).__name__}"
-        )
+        raise TypeError(f"output_path must be str, got {type(output_path).__name__}")
     if not input_path or not output_path:
         raise ValueError("input/output paths must be non-empty")
     if "\x00" in input_path or "\x00" in output_path:

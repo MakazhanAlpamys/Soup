@@ -50,9 +50,7 @@ class TestIsAttentionProjection:
 
         assert is_attention_projection("transformer.h.0.attn.c_attn")
         assert is_attention_projection("model.layers.3.self_attn.qkv_proj")
-        assert is_attention_projection(
-            "transformer.layers.1.attention.query_key_value"
-        )
+        assert is_attention_projection("transformer.layers.1.attention.query_key_value")
 
     def test_mlp_projections_rejected(self):
         from soup_cli.utils.advanced_precision import is_attention_projection
@@ -93,9 +91,7 @@ class TestIsBlackwellGpu:
         from soup_cli.utils.advanced_precision import is_blackwell_gpu
 
         monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
-        monkeypatch.setattr(
-            torch.cuda, "get_device_capability", lambda _i=0: capability
-        )
+        monkeypatch.setattr(torch.cuda, "get_device_capability", lambda _i=0: capability)
         assert is_blackwell_gpu() is expected
 
 
@@ -226,12 +222,8 @@ class TestApplyFp8Attention:
     def test_non_hopper_friendly_gate(self, monkeypatch):
         from soup_cli.utils.advanced_precision import apply_fp8_attention
 
-        monkeypatch.setitem(
-            sys.modules, "torchao", types.ModuleType("torchao")
-        )
-        monkeypatch.setattr(
-            "soup_cli.utils.fp8.is_fp8_gpu_supported", lambda: False
-        )
+        monkeypatch.setitem(sys.modules, "torchao", types.ModuleType("torchao"))
+        monkeypatch.setattr("soup_cli.utils.fp8.is_fp8_gpu_supported", lambda: False)
         with pytest.raises(RuntimeError, match="Hopper"):
             apply_fp8_attention(_tiny_attn_model())
 
@@ -336,18 +328,14 @@ class TestApplyNvfp4:
     def test_non_blackwell_friendly_gate(self, monkeypatch):
         from soup_cli.utils.advanced_precision import apply_nvfp4
 
-        monkeypatch.setattr(
-            "soup_cli.utils.advanced_precision.is_blackwell_gpu", lambda: False
-        )
+        monkeypatch.setattr("soup_cli.utils.advanced_precision.is_blackwell_gpu", lambda: False)
         with pytest.raises(RuntimeError, match="Blackwell"):
             apply_nvfp4(_tiny_attn_model())
 
     def test_missing_torchao_friendly(self, monkeypatch):
         from soup_cli.utils.advanced_precision import apply_nvfp4
 
-        monkeypatch.setattr(
-            "soup_cli.utils.advanced_precision.is_blackwell_gpu", lambda: True
-        )
+        monkeypatch.setattr("soup_cli.utils.advanced_precision.is_blackwell_gpu", lambda: True)
         monkeypatch.setitem(sys.modules, "torchao", None)
         with pytest.raises(RuntimeError, match="torchao"):
             apply_nvfp4(_tiny_attn_model())
@@ -357,9 +345,7 @@ class TestApplyNvfp4:
 
         record: dict = {}
         _install_fake_torchao_quant(monkeypatch, record, with_nvfp4=False)
-        monkeypatch.setattr(
-            "soup_cli.utils.advanced_precision.is_blackwell_gpu", lambda: True
-        )
+        monkeypatch.setattr("soup_cli.utils.advanced_precision.is_blackwell_gpu", lambda: True)
         with pytest.raises(RuntimeError, match="NVFP4TrainingConfig"):
             apply_nvfp4(_tiny_attn_model())
 
@@ -368,9 +354,7 @@ class TestApplyNvfp4:
 
         record: dict = {}
         _install_fake_torchao_quant(monkeypatch, record)
-        monkeypatch.setattr(
-            "soup_cli.utils.advanced_precision.is_blackwell_gpu", lambda: True
-        )
+        monkeypatch.setattr("soup_cli.utils.advanced_precision.is_blackwell_gpu", lambda: True)
         model = _tiny_attn_model()
         count = apply_nvfp4(model)
         assert count == 5  # 4 attention + 1 mlp linear
@@ -413,10 +397,14 @@ class TestV028PrecisionWiring:
         from soup_cli.utils.v028_features import apply_v028_speed_memory
 
         result = apply_v028_speed_memory(
-            model=object(), tcfg=self._tcfg(), base_model="x/y",
+            model=object(),
+            tcfg=self._tcfg(),
+            base_model="x/y",
         )
         assert result == {
-            "cut_ce": False, "fp8": False, "kernel_auto_compose": False,
+            "cut_ce": False,
+            "fp8": False,
+            "kernel_auto_compose": False,
         }
 
     def test_fp8_attention_gate_failure_stops(self, monkeypatch):
@@ -429,9 +417,7 @@ class TestV028PrecisionWiring:
 
         # Hermetic: force the gate (review fix — the bare call passed only
         # because the host lacks torchao/Hopper).
-        monkeypatch.setattr(
-            "soup_cli.utils.advanced_precision.apply_fp8_attention", _gate
-        )
+        monkeypatch.setattr("soup_cli.utils.advanced_precision.apply_fp8_attention", _gate)
         # quantization_aware: fp8 is set too, and a missing torchao now stops the
         # run (#835 ruling); this test is about fp8_attention, so stub that half.
         monkeypatch.setattr("soup_cli.utils.fp8.apply_fp8_training", lambda *_a, **_k: True)
@@ -465,11 +451,11 @@ class TestV028PrecisionWiring:
         def _gate(model, **kwargs):
             raise RuntimeError("no Blackwell")
 
-        monkeypatch.setattr(
-            "soup_cli.utils.advanced_precision.apply_nvfp4", _gate
-        )
+        monkeypatch.setattr("soup_cli.utils.advanced_precision.apply_nvfp4", _gate)
         result = apply_v028_speed_memory(
-            model=object(), tcfg=self._tcfg(nvfp4=True), base_model="x/y",
+            model=object(),
+            tcfg=self._tcfg(nvfp4=True),
+            base_model="x/y",
         )
         assert result["nvfp4"] is False
 
@@ -477,10 +463,13 @@ class TestV028PrecisionWiring:
         from soup_cli.utils.v028_features import apply_v028_speed_memory
 
         monkeypatch.setattr(
-            "soup_cli.utils.advanced_precision.apply_nvfp4", lambda model: 2,
+            "soup_cli.utils.advanced_precision.apply_nvfp4",
+            lambda model: 2,
         )
         result = apply_v028_speed_memory(
-            model=object(), tcfg=self._tcfg(nvfp4=True), base_model="x/y",
+            model=object(),
+            tcfg=self._tcfg(nvfp4=True),
+            base_model="x/y",
         )
         assert result["nvfp4"] is True
 
@@ -616,7 +605,9 @@ class TestMaybeEnableTrlSleepMode:
 
         kwargs: dict = {}
         ok = maybe_enable_trl_sleep_mode(
-            kwargs, ("output_dir", "vllm_enable_sleep_mode"), None,
+            kwargs,
+            ("output_dir", "vllm_enable_sleep_mode"),
+            None,
         )
         assert ok is True
         assert kwargs["vllm_enable_sleep_mode"] is True
@@ -631,7 +622,9 @@ class TestMaybeEnableTrlSleepMode:
         buf = io.StringIO()
         kwargs: dict = {}
         ok = maybe_enable_trl_sleep_mode(
-            kwargs, ("output_dir",), Console(file=buf),
+            kwargs,
+            ("output_dir",),
+            Console(file=buf),
         )
         assert ok is False
         assert kwargs == {}
@@ -778,7 +771,9 @@ class TestLaunchRolloutOpenenv:
             "    ] + [{'prompt': 'extra'}]\n",
         )
         result = launch_rollout(
-            "openenv", prompts=["hello", "world"], rollout_func=spec,
+            "openenv",
+            prompts=["hello", "world"],
+            rollout_func=spec,
         )
         assert result.backend == "openenv"
         assert len(result.rows) == 3
@@ -792,8 +787,7 @@ class TestLaunchRolloutOpenenv:
         spec = _write_rollout_module(
             tmp_path,
             monkeypatch,
-            "def rollout(prompts):\n"
-            "    return [{'prompt': [{'role': 'user', 'content': 'hi'}]}]\n",
+            "def rollout(prompts):\n    return [{'prompt': [{'role': 'user', 'content': 'hi'}]}]\n",
         )
         result = launch_rollout("openenv", prompts=[], rollout_func=spec)
         assert result.rows[0]["prompt"] == [{"role": "user", "content": "hi"}]
@@ -842,7 +836,9 @@ class TestLaunchRolloutOpenenv:
         )
         with pytest.raises((TypeError, ValueError), match="max_steps"):
             launch_rollout(
-                "openenv", prompts=["x"], rollout_func=spec,
+                "openenv",
+                prompts=["x"],
+                rollout_func=spec,
                 max_steps=bad_steps,
             )
 
@@ -883,9 +879,7 @@ class TestLaunchRolloutExternal:
         def _fake_runner(**kwargs):
             return [{"prompt": "from-art", "answer": "ok"}]
 
-        monkeypatch.setitem(
-            agent_rollout._EXTERNAL_ROLLOUT_RUNNERS, "art", _fake_runner
-        )
+        monkeypatch.setitem(agent_rollout._EXTERNAL_ROLLOUT_RUNNERS, "art", _fake_runner)
         result = agent_rollout.launch_rollout("art", prompts=["x"])
         assert result.backend == "art"
         assert result.rows[0]["prompt"] == "from-art"
@@ -1018,10 +1012,12 @@ class TestConvertArrays:
     def _hf_arrays(self):
         rng = np.random.default_rng(0)
         return {
-            "base_model.model.model.layers.0.self_attn.q_proj.lora_A.weight":
-                rng.standard_normal((4, 16)).astype(np.float32),
-            "base_model.model.model.layers.0.self_attn.q_proj.lora_B.weight":
-                rng.standard_normal((16, 4)).astype(np.float32),
+            "base_model.model.model.layers.0.self_attn.q_proj.lora_A.weight": rng.standard_normal(
+                (4, 16)
+            ).astype(np.float32),
+            "base_model.model.model.layers.0.self_attn.q_proj.lora_B.weight": rng.standard_normal(
+                (16, 4)
+            ).astype(np.float32),
         }
 
     def test_hf_to_mlx_transposes(self):
@@ -1038,9 +1034,7 @@ class TestConvertArrays:
         from soup_cli.utils.apple_adapter import convert_hf_to_mlx_arrays
 
         arrays = self._hf_arrays()
-        arrays["base_model.model.model.embed_tokens.weight"] = np.zeros(
-            (4, 4), dtype=np.float32
-        )
+        arrays["base_model.model.model.embed_tokens.weight"] = np.zeros((4, 4), dtype=np.float32)
         converted, skipped = convert_hf_to_mlx_arrays(arrays)
         assert len(converted) == 2
         assert skipped == ("base_model.model.model.embed_tokens.weight",)
@@ -1049,9 +1043,7 @@ class TestConvertArrays:
         from soup_cli.utils.apple_adapter import convert_hf_to_mlx_arrays
 
         with pytest.raises(ValueError, match="no LoRA"):
-            convert_hf_to_mlx_arrays(
-                {"embed_tokens.weight": np.zeros((2, 2), dtype=np.float32)}
-            )
+            convert_hf_to_mlx_arrays({"embed_tokens.weight": np.zeros((2, 2), dtype=np.float32)})
 
     def test_mlx_to_hf_round_trip_values(self):
         from soup_cli.utils.apple_adapter import (
@@ -1073,24 +1065,30 @@ def _write_peft_adapter(adapter_dir: Path) -> dict:
 
     rng = np.random.default_rng(7)
     arrays = {
-        "base_model.model.model.layers.0.self_attn.q_proj.lora_A.weight":
-            rng.standard_normal((4, 16)).astype(np.float32),
-        "base_model.model.model.layers.0.self_attn.q_proj.lora_B.weight":
-            rng.standard_normal((16, 4)).astype(np.float32),
-        "base_model.model.model.layers.0.self_attn.v_proj.lora_A.weight":
-            rng.standard_normal((4, 16)).astype(np.float32),
-        "base_model.model.model.layers.0.self_attn.v_proj.lora_B.weight":
-            rng.standard_normal((16, 4)).astype(np.float32),
+        "base_model.model.model.layers.0.self_attn.q_proj.lora_A.weight": rng.standard_normal(
+            (4, 16)
+        ).astype(np.float32),
+        "base_model.model.model.layers.0.self_attn.q_proj.lora_B.weight": rng.standard_normal(
+            (16, 4)
+        ).astype(np.float32),
+        "base_model.model.model.layers.0.self_attn.v_proj.lora_A.weight": rng.standard_normal(
+            (4, 16)
+        ).astype(np.float32),
+        "base_model.model.model.layers.0.self_attn.v_proj.lora_B.weight": rng.standard_normal(
+            (16, 4)
+        ).astype(np.float32),
     }
     adapter_dir.mkdir(parents=True, exist_ok=True)
     save_file(arrays, str(adapter_dir / "adapter_model.safetensors"))
     (adapter_dir / "adapter_config.json").write_text(
-        json.dumps({
-            "r": 4,
-            "lora_alpha": 8,
-            "peft_type": "LORA",
-            "base_model_name_or_path": "tiny/base",
-        }),
+        json.dumps(
+            {
+                "r": 4,
+                "lora_alpha": 8,
+                "peft_type": "LORA",
+                "base_model_name_or_path": "tiny/base",
+            }
+        ),
         encoding="utf-8",
     )
     return arrays
@@ -1111,7 +1109,9 @@ class TestConvertAppleAdapterLive:
         monkeypatch.chdir(tmp_path)
         arrays = _write_peft_adapter(tmp_path / "adapter")
         plan = build_apple_adapter_plan(
-            source_dir="adapter", output_dir="out", direction="hf-to-mlx",
+            source_dir="adapter",
+            output_dir="out",
+            direction="hf-to-mlx",
         )
         report = convert_apple_adapter(plan)
         assert report.converted_keys == 4
@@ -1122,13 +1122,9 @@ class TestConvertAppleAdapterLive:
         assert key in loaded
         np.testing.assert_allclose(
             loaded[key],
-            arrays[
-                "base_model.model.model.layers.0.self_attn.q_proj.lora_A.weight"
-            ].T,
+            arrays["base_model.model.model.layers.0.self_attn.q_proj.lora_A.weight"].T,
         )
-        config = json.loads(
-            (tmp_path / "out" / "adapter_config.json").read_text(encoding="utf-8")
-        )
+        config = json.loads((tmp_path / "out" / "adapter_config.json").read_text(encoding="utf-8"))
         assert config["fine_tune_type"] == "lora"
         assert config["num_layers"] == 1  # max layer index + 1
         assert config["lora_parameters"]["rank"] == 4
@@ -1146,21 +1142,23 @@ class TestConvertAppleAdapterLive:
         arrays = _write_peft_adapter(tmp_path / "adapter")
         convert_apple_adapter(
             build_apple_adapter_plan(
-                source_dir="adapter", output_dir="mlx", direction="hf-to-mlx",
+                source_dir="adapter",
+                output_dir="mlx",
+                direction="hf-to-mlx",
             )
         )
         report = convert_apple_adapter(
             build_apple_adapter_plan(
-                source_dir="mlx", output_dir="hf2", direction="mlx-to-hf",
+                source_dir="mlx",
+                output_dir="hf2",
+                direction="mlx-to-hf",
             )
         )
         assert report.converted_keys == 4
         back = load_file(str(tmp_path / "hf2" / "adapter_model.safetensors"))
         for key, value in arrays.items():
             np.testing.assert_allclose(back[key], value)
-        config = json.loads(
-            (tmp_path / "hf2" / "adapter_config.json").read_text(encoding="utf-8")
-        )
+        config = json.loads((tmp_path / "hf2" / "adapter_config.json").read_text(encoding="utf-8"))
         assert config["peft_type"] == "LORA"
         assert config["r"] == 4
         # scale (2.0) * rank (4) reconstructs the source lora_alpha — and
@@ -1178,8 +1176,10 @@ class TestConvertAppleAdapterLive:
         _write_peft_adapter(tmp_path / "adapter")
         report = convert_apple_adapter(
             build_apple_adapter_plan(
-                source_dir="adapter", output_dir="out",
-                direction="hf-to-mlx", sign=True,
+                source_dir="adapter",
+                output_dir="out",
+                direction="hf-to-mlx",
+                sign=True,
             )
         )
         assert report.signed is True
@@ -1195,7 +1195,9 @@ class TestConvertAppleAdapterLive:
         monkeypatch.chdir(tmp_path)
         _write_peft_adapter(tmp_path / "adapter")
         plan = build_apple_adapter_plan(
-            source_dir="adapter", output_dir="out", direction=direction,
+            source_dir="adapter",
+            output_dir="out",
+            direction=direction,
         )
         with pytest.raises(RuntimeError, match="FoundationModels"):
             convert_apple_adapter(plan)
@@ -1209,7 +1211,9 @@ class TestConvertAppleAdapterLive:
         monkeypatch.chdir(tmp_path)
         (tmp_path / "adapter").mkdir()
         plan = build_apple_adapter_plan(
-            source_dir="adapter", output_dir="out", direction="hf-to-mlx",
+            source_dir="adapter",
+            output_dir="out",
+            direction="hf-to-mlx",
         )
         with pytest.raises(FileNotFoundError, match="adapter_model"):
             convert_apple_adapter(plan)
@@ -1225,7 +1229,9 @@ class TestConvertAppleAdapterLive:
         adapter.mkdir()
         (adapter / "adapter_model.bin").write_bytes(b"\x80\x02")
         plan = build_apple_adapter_plan(
-            source_dir="adapter", output_dir="out", direction="hf-to-mlx",
+            source_dir="adapter",
+            output_dir="out",
+            direction="hf-to-mlx",
         )
         with pytest.raises(ValueError, match="safetensors"):
             convert_apple_adapter(plan)
@@ -1257,7 +1263,9 @@ class TestConvertAppleAdapterLive:
         monkeypatch.chdir(tmp_path)
         (tmp_path / "mlx").mkdir()
         plan = build_apple_adapter_plan(
-            source_dir="mlx", output_dir="out", direction="mlx-to-hf",
+            source_dir="mlx",
+            output_dir="out",
+            direction="mlx-to-hf",
         )
         with pytest.raises(FileNotFoundError, match="adapters"):
             convert_apple_adapter(plan)
@@ -1274,8 +1282,11 @@ class TestConvertAppleAdapterLive:
         from soup_cli.utils.apple_adapter import ConversionReport
 
         report = ConversionReport(
-            direction="hf-to-mlx", output_dir="out",
-            converted_keys=2, skipped_keys=(), signed=False,
+            direction="hf-to-mlx",
+            output_dir="out",
+            converted_keys=2,
+            skipped_keys=(),
+            signed=False,
         )
         with pytest.raises(dataclasses.FrozenInstanceError):
             report.direction = "mlx-to-hf"  # type: ignore[misc]
@@ -1290,9 +1301,12 @@ class TestAppleAdapterCli:
         result = runner.invoke(
             app,
             [
-                "apple-adapter", "adapter",
-                "--direction", "hf-to-mlx",
-                "--output", "out",
+                "apple-adapter",
+                "adapter",
+                "--direction",
+                "hf-to-mlx",
+                "--output",
+                "out",
             ],
         )
         assert result.exit_code == 0, (result.output, repr(result.exception))
@@ -1306,9 +1320,12 @@ class TestAppleAdapterCli:
         result = runner.invoke(
             app,
             [
-                "apple-adapter", "adapter",
-                "--direction", "hf-to-apple",
-                "--output", "out",
+                "apple-adapter",
+                "adapter",
+                "--direction",
+                "hf-to-apple",
+                "--output",
+                "out",
             ],
         )
         assert result.exit_code == 3, (result.output, repr(result.exception))
@@ -1321,9 +1338,12 @@ class TestAppleAdapterCli:
         result = runner.invoke(
             app,
             [
-                "apple-adapter", "adapter",
-                "--direction", "hf-to-mlx",
-                "--output", "out",
+                "apple-adapter",
+                "adapter",
+                "--direction",
+                "hf-to-mlx",
+                "--output",
+                "out",
             ],
         )
         assert result.exit_code == 2, (result.output, repr(result.exception))
@@ -1446,14 +1466,16 @@ def _write_llama4_stub(source: Path, *, num_experts: int = 4) -> dict:
     from safetensors.torch import save_file
 
     tensors = {
-        "language_model.model.layers.0.feed_forward.experts.gate_up_proj":
-            torch.arange(48, dtype=torch.float32).reshape(8, 6),
-        "language_model.model.layers.0.feed_forward.experts.down_proj":
-            torch.arange(48, dtype=torch.float32).reshape(12, 4),
-        "language_model.model.layers.0.self_attn.q_proj.weight":
-            torch.ones(4, 4),
-        "language_model.model.layers.1.feed_forward.experts.gate_up_proj":
-            torch.zeros(num_experts, 2, 6),
+        "language_model.model.layers.0.feed_forward.experts.gate_up_proj": torch.arange(
+            48, dtype=torch.float32
+        ).reshape(8, 6),
+        "language_model.model.layers.0.feed_forward.experts.down_proj": torch.arange(
+            48, dtype=torch.float32
+        ).reshape(12, 4),
+        "language_model.model.layers.0.self_attn.q_proj.weight": torch.ones(4, 4),
+        "language_model.model.layers.1.feed_forward.experts.gate_up_proj": torch.zeros(
+            num_experts, 2, 6
+        ),
     }
     source.mkdir(parents=True, exist_ok=True)
     save_file(tensors, str(source / "model.safetensors"))
@@ -1483,13 +1505,9 @@ class TestRunDelinearize:
         assert result.passthrough_keys == 1
         assert result.already_3d_keys == 1
         out = load_file(str(tmp_path / "out" / "model.safetensors"))
-        gate_up = out[
-            "language_model.model.layers.0.feed_forward.experts.gate_up_proj"
-        ]
+        gate_up = out["language_model.model.layers.0.feed_forward.experts.gate_up_proj"]
         assert tuple(gate_up.shape) == (4, 2, 6)
-        original = tensors[
-            "language_model.model.layers.0.feed_forward.experts.gate_up_proj"
-        ]
+        original = tensors["language_model.model.layers.0.feed_forward.experts.gate_up_proj"]
         assert torch.equal(gate_up, original.reshape(4, 2, 6))
         # Sidecar config copied for a loadable target checkpoint.
         assert (tmp_path / "out" / "config.json").is_file()
@@ -1509,9 +1527,7 @@ class TestRunDelinearize:
         result = run_delinearize(plan, num_experts=2)
         assert result.reshaped_keys == 2
         out = load_file(str(tmp_path / "out" / "model.safetensors"))
-        gate_up = out[
-            "language_model.model.layers.0.feed_forward.experts.gate_up_proj"
-        ]
+        gate_up = out["language_model.model.layers.0.feed_forward.experts.gate_up_proj"]
         assert tuple(gate_up.shape) == (2, 4, 6)
 
     def test_missing_num_experts_friendly(self, tmp_path, monkeypatch):
@@ -1546,8 +1562,7 @@ class TestRunDelinearize:
         src.mkdir()
         save_file(
             {
-                "model.layers.0.feed_forward.experts.gate_up_proj":
-                    torch.zeros(7, 4),
+                "model.layers.0.feed_forward.experts.gate_up_proj": torch.zeros(7, 4),
             },
             str(src / "model.safetensors"),
         )
@@ -1582,8 +1597,12 @@ class TestRunDelinearize:
         from soup_cli.utils.delinearize_llama4 import DelinearizeResult
 
         result = DelinearizeResult(
-            source_dir="a", target_dir="b", files_written=("x",),
-            reshaped_keys=1, passthrough_keys=0, already_3d_keys=0,
+            source_dir="a",
+            target_dir="b",
+            files_written=("x",),
+            reshaped_keys=1,
+            passthrough_keys=0,
+            already_3d_keys=0,
         )
         with pytest.raises(dataclasses.FrozenInstanceError):
             result.reshaped_keys = 9  # type: ignore[misc]
@@ -1597,7 +1616,8 @@ class TestDelinearizeCli:
         _write_llama4_stub(tmp_path / "src")
         (tmp_path / "out").mkdir()
         result = runner.invoke(
-            app, ["delinearize-llama4", "src", "--target", "out"],
+            app,
+            ["delinearize-llama4", "src", "--target", "out"],
         )
         assert result.exit_code == 0, (result.output, repr(result.exception))
         assert (tmp_path / "out" / "model.safetensors").is_file()
@@ -1627,7 +1647,8 @@ class TestDelinearizeCli:
         save_file({"x": torch.zeros(2, 2)}, str(src / "model.safetensors"))
         (tmp_path / "out").mkdir()
         result = runner.invoke(
-            app, ["delinearize-llama4", "src", "--target", "out"],
+            app,
+            ["delinearize-llama4", "src", "--target", "out"],
         )
         assert result.exit_code == 2, (result.output, repr(result.exception))
         assert "--num-experts" in result.output
@@ -1758,9 +1779,7 @@ class TestReviewFollowupsPrecision:
         # the training config resolves, but quantize_ is gone
         fake_q = sys.modules["torchao.quantization"]
         monkeypatch.delattr(fake_q, "quantize_")
-        monkeypatch.setattr(
-            "soup_cli.utils.advanced_precision.is_blackwell_gpu", lambda: True
-        )
+        monkeypatch.setattr("soup_cli.utils.advanced_precision.is_blackwell_gpu", lambda: True)
         with pytest.raises(RuntimeError, match="quantize_"):
             apply_nvfp4(_tiny_attn_model())
 
@@ -1782,6 +1801,7 @@ class TestReviewFollowupsPrecision:
         # quantization_aware: fp8 is set too, and a missing torchao now stops the
         # run (#835 ruling); this test is about fp8_attention, so stub that half.
         monkeypatch.setattr("soup_cli.utils.fp8.apply_fp8_training", lambda *_a, **_k: True)
+
         def _cfg(fp8_attention):
             return load_config_from_string(
                 "base: test-llama\n"
@@ -1797,8 +1817,12 @@ class TestReviewFollowupsPrecision:
 
         def _apply(cfg):
             return v028_features.apply_v028_speed_memory(
-                model=object(), tcfg=cfg.training, base_model=cfg.base,
-                console=None, device="cpu", backend="transformers",
+                model=object(),
+                tcfg=cfg.training,
+                base_model=cfg.base,
+                console=None,
+                device="cpu",
+                backend="transformers",
             )
 
         applied = _apply(_cfg(False))
@@ -1856,9 +1880,7 @@ class TestReviewFollowupsSleepMode:
 
         engine = SimpleNamespace(sleep=lambda level: None)  # no wake_up
         ran = []
-        with caplog.at_level(
-            logging.WARNING, logger="soup_cli.utils.grpo_long_context"
-        ):
+        with caplog.at_level(logging.WARNING, logger="soup_cli.utils.grpo_long_context"):
             with vllm_sleep_cycle(engine):
                 ran.append(True)
         assert ran == [True]
@@ -1886,8 +1908,7 @@ class TestReviewFollowupsRollout:
         spec = _write_rollout_module(
             tmp_path,
             monkeypatch,
-            "def rollout(prompts):\n"
-            "    return [{'prompt': 'x', 'answer': 42}]\n",
+            "def rollout(prompts):\n    return [{'prompt': 'x', 'answer': 42}]\n",
         )
         with pytest.raises(ValueError, match="answer"):
             launch_rollout("openenv", prompts=["p"], rollout_func=spec)
@@ -1934,12 +1955,8 @@ class TestReviewFollowupsRollout:
         with pytest.raises(ValueError, match="rollout_func"):
             validate_rollout_func(True)  # type: ignore[arg-type]
 
-    @pytest.mark.parametrize(
-        ("max_steps", "ok"), [(100_000, True), (100_001, False)]
-    )
-    def test_max_steps_exact_boundary(
-        self, tmp_path, monkeypatch, max_steps, ok
-    ):
+    @pytest.mark.parametrize(("max_steps", "ok"), [(100_000, True), (100_001, False)])
+    def test_max_steps_exact_boundary(self, tmp_path, monkeypatch, max_steps, ok):
         from soup_cli.utils.agent_rollout import launch_rollout
 
         spec = _write_rollout_module(
@@ -1949,14 +1966,18 @@ class TestReviewFollowupsRollout:
         )
         if ok:
             result = launch_rollout(
-                "openenv", prompts=["p"], rollout_func=spec,
+                "openenv",
+                prompts=["p"],
+                rollout_func=spec,
                 max_steps=max_steps,
             )
             assert len(result.rows) == 1
         else:
             with pytest.raises(ValueError, match="max_steps"):
                 launch_rollout(
-                    "openenv", prompts=["p"], rollout_func=spec,
+                    "openenv",
+                    prompts=["p"],
+                    rollout_func=spec,
                     max_steps=max_steps,
                 )
 
@@ -1969,13 +1990,15 @@ class TestReviewFollowupsRollout:
             seen.update(kwargs)
             return [{"prompt": "from-runner"}]
 
-        monkeypatch.setitem(
-            agent_rollout._EXTERNAL_ROLLOUT_RUNNERS, "art", _runner
-        )
+        monkeypatch.setitem(agent_rollout._EXTERNAL_ROLLOUT_RUNNERS, "art", _runner)
         model, tokenizer, reward = object(), object(), object()
         agent_rollout.launch_rollout(
-            "art", prompts=["p"], model=model, tokenizer=tokenizer,
-            reward_fn=reward, max_steps=7,
+            "art",
+            prompts=["p"],
+            model=model,
+            tokenizer=tokenizer,
+            reward_fn=reward,
+            max_steps=7,
         )
         assert seen["prompts"] == ["p"]
         assert seen["model"] is model
@@ -1992,10 +2015,15 @@ class TestReviewFollowupsAppleAdapter:
         (caught by the real bf16 PEFT adapter smoke)."""
         from soup_cli.utils.apple_adapter import _infer_num_layers
 
-        assert _infer_num_layers({
-            "transformer.h.4.attn.c_attn.lora_a": None,
-            "transformer.h.0.attn.c_attn.lora_b": None,
-        }) == 5
+        assert (
+            _infer_num_layers(
+                {
+                    "transformer.h.4.attn.c_attn.lora_a": None,
+                    "transformer.h.0.attn.c_attn.lora_b": None,
+                }
+            )
+            == 5
+        )
         assert _infer_num_layers({"model.layers.2.q_proj.lora_a": None}) == 3
         assert _infer_num_layers({"no_layer_key.lora_a": None}) is None
 
@@ -2026,13 +2054,13 @@ class TestReviewFollowupsAppleAdapter:
         config_path.write_text(json.dumps(config), encoding="utf-8")
         convert_apple_adapter(
             build_apple_adapter_plan(
-                source_dir="adapter", output_dir="out", direction="hf-to-mlx",
+                source_dir="adapter",
+                output_dir="out",
+                direction="hf-to-mlx",
             )
         )
         out_config = json.loads(
-            (tmp_path / "out" / "adapter_config.json").read_text(
-                encoding="utf-8"
-            )
+            (tmp_path / "out" / "adapter_config.json").read_text(encoding="utf-8")
         )
         assert out_config["lora_parameters"]["dropout"] == 0.05
 
@@ -2051,23 +2079,24 @@ class TestReviewFollowupsAppleAdapter:
         np.savez(
             str(mlx_dir / "adapters.npz"),
             **{
-                "model.layers.0.self_attn.q_proj.lora_a":
-                    rng.standard_normal((16, 4)).astype(np.float32),
-                "model.layers.0.self_attn.q_proj.lora_b":
-                    rng.standard_normal((4, 16)).astype(np.float32),
+                "model.layers.0.self_attn.q_proj.lora_a": rng.standard_normal((16, 4)).astype(
+                    np.float32
+                ),
+                "model.layers.0.self_attn.q_proj.lora_b": rng.standard_normal((4, 16)).astype(
+                    np.float32
+                ),
             },
         )
         report = convert_apple_adapter(
             build_apple_adapter_plan(
-                source_dir="mlx", output_dir="hf", direction="mlx-to-hf",
+                source_dir="mlx",
+                output_dir="hf",
+                direction="mlx-to-hf",
             )
         )
         assert report.converted_keys == 2
         back = load_file(str(tmp_path / "hf" / "adapter_model.safetensors"))
-        assert (
-            "base_model.model.model.layers.0.self_attn.q_proj.lora_A.weight"
-            in back
-        )
+        assert "base_model.model.model.layers.0.self_attn.q_proj.lora_A.weight" in back
 
     def test_corrupt_safetensors_value_error(self, tmp_path, monkeypatch):
         pytest.importorskip("torch")
@@ -2081,7 +2110,9 @@ class TestReviewFollowupsAppleAdapter:
         adapter.mkdir()
         (adapter / "adapter_model.safetensors").write_bytes(b"not-safetensors")
         plan = build_apple_adapter_plan(
-            source_dir="adapter", output_dir="out", direction="hf-to-mlx",
+            source_dir="adapter",
+            output_dir="out",
+            direction="hf-to-mlx",
         )
         with pytest.raises(ValueError, match="not a valid safetensors"):
             convert_apple_adapter(plan)
@@ -2097,7 +2128,9 @@ class TestReviewFollowupsAppleAdapter:
         mlx_dir.mkdir()
         (mlx_dir / "adapters.npz").write_bytes(b"not-a-zip")
         plan = build_apple_adapter_plan(
-            source_dir="mlx", output_dir="out", direction="mlx-to-hf",
+            source_dir="mlx",
+            output_dir="out",
+            direction="mlx-to-hf",
         )
         with pytest.raises(ValueError, match="not a valid npz"):
             convert_apple_adapter(plan)
@@ -2111,15 +2144,13 @@ class TestReviewFollowupsAppleAdapter:
         mlx_dir.mkdir()
         zeros = np.zeros((128, 128), dtype=np.float32)  # 64 KiB, compresses tiny
         with open(mlx_dir / "adapters.npz", "wb") as handle:
-            np.savez_compressed(
-                handle, **{"model.layers.0.self_attn.q_proj.lora_a": zeros}
-            )
+            np.savez_compressed(handle, **{"model.layers.0.self_attn.q_proj.lora_a": zeros})
         on_disk = (mlx_dir / "adapters.npz").stat().st_size
-        monkeypatch.setattr(
-            apple_adapter, "_MAX_ADAPTER_FILE_BYTES", on_disk + 1024
-        )
+        monkeypatch.setattr(apple_adapter, "_MAX_ADAPTER_FILE_BYTES", on_disk + 1024)
         plan = apple_adapter.build_apple_adapter_plan(
-            source_dir="mlx", output_dir="out", direction="mlx-to-hf",
+            source_dir="mlx",
+            output_dir="out",
+            direction="mlx-to-hf",
         )
         with pytest.raises(ValueError, match="decompresses past"):
             apple_adapter.convert_apple_adapter(plan)
@@ -2131,7 +2162,9 @@ class TestReviewFollowupsAppleAdapter:
         _write_peft_adapter(tmp_path / "adapter")
         monkeypatch.setattr(apple_adapter, "_MAX_ADAPTER_FILE_BYTES", 16)
         plan = apple_adapter.build_apple_adapter_plan(
-            source_dir="adapter", output_dir="out", direction="hf-to-mlx",
+            source_dir="adapter",
+            output_dir="out",
+            direction="hf-to-mlx",
         )
         with pytest.raises(ValueError, match="cap"):
             apple_adapter.convert_apple_adapter(plan)
@@ -2155,7 +2188,9 @@ class TestReviewFollowupsAppleAdapter:
             str(adapter / "adapter_model.safetensors"),
         )
         plan = build_apple_adapter_plan(
-            source_dir="adapter", output_dir="out", direction="hf-to-mlx",
+            source_dir="adapter",
+            output_dir="out",
+            direction="hf-to-mlx",
         )
         with pytest.raises(ValueError, match="symlink"):
             convert_apple_adapter(plan)
@@ -2187,9 +2222,7 @@ class TestReviewFollowupsAppleAdapter:
 class TestReviewFollowupsDelinearize:
     """#97 review fixes — plan containment, corrupt shards, boundaries."""
 
-    @pytest.mark.parametrize(
-        ("value", "ok"), [(4096, True), (4097, False), (1, True), (0, False)]
-    )
+    @pytest.mark.parametrize(("value", "ok"), [(4096, True), (4097, False), (1, True), (0, False)])
     def test_num_experts_exact_boundary(self, value, ok):
         from soup_cli.utils.delinearize_llama4 import _validate_num_experts
 
@@ -2199,9 +2232,7 @@ class TestReviewFollowupsDelinearize:
             with pytest.raises(ValueError, match="num_experts"):
                 _validate_num_experts(value)
 
-    def test_plan_direct_construction_outside_cwd_rejected(
-        self, tmp_path, monkeypatch
-    ):
+    def test_plan_direct_construction_outside_cwd_rejected(self, tmp_path, monkeypatch):
         from soup_cli.utils.delinearize_llama4 import DelinearizePlan
 
         workdir = tmp_path / "work"
@@ -2255,8 +2286,7 @@ class TestReviewFollowupsDelinearize:
         _write_llama4_stub(tmp_path / "src")
         save_file(
             {
-                "language_model.model.layers.2.feed_forward.experts.down_proj":
-                    torch.zeros(8, 4),
+                "language_model.model.layers.2.feed_forward.experts.down_proj": torch.zeros(8, 4),
             },
             str(tmp_path / "src" / "model-00002.safetensors"),
         )
@@ -2272,9 +2302,7 @@ class TestReviewFollowupsDelinearize:
             ({"text_config": {"num_local_experts": 5000}}, None),  # OOB
         ],
     )
-    def test_read_num_experts_fallbacks(
-        self, tmp_path, monkeypatch, config, expected
-    ):
+    def test_read_num_experts_fallbacks(self, tmp_path, monkeypatch, config, expected):
         from soup_cli.utils.delinearize_llama4 import read_num_experts
 
         monkeypatch.chdir(tmp_path)
@@ -2298,9 +2326,7 @@ class TestReviewFollowupsDelinearize:
         _write_llama4_stub(real)
         src = tmp_path / "src"
         src.mkdir()
-        os.symlink(
-            str(real / "model.safetensors"), str(src / "model.safetensors")
-        )
+        os.symlink(str(real / "model.safetensors"), str(src / "model.safetensors"))
         (tmp_path / "out").mkdir()
         plan = plan_delinearize("src", "out")
         with pytest.raises(ValueError, match="symlink"):
@@ -2315,9 +2341,7 @@ class TestReviewFollowupsDelinearize:
         monkeypatch.chdir(tmp_path)
         real = tmp_path / "real"
         real.mkdir()
-        (real / "config.json").write_text(
-            json.dumps({"num_local_experts": 4}), encoding="utf-8"
-        )
+        (real / "config.json").write_text(json.dumps({"num_local_experts": 4}), encoding="utf-8")
         src = tmp_path / "src"
         src.mkdir()
         os.symlink(str(real / "config.json"), str(src / "config.json"))
@@ -2335,9 +2359,12 @@ class TestReviewFollowupsDelinearize:
         result = runner.invoke(
             app,
             [
-                "delinearize-llama4", "src",
-                "--target", "out",
-                "--num-experts", "4",
+                "delinearize-llama4",
+                "src",
+                "--target",
+                "out",
+                "--num-experts",
+                "4",
             ],
         )
         assert result.exit_code == 0, (result.output, repr(result.exception))

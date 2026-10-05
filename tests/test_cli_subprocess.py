@@ -28,7 +28,9 @@ TIMEOUT = 30
 
 
 def run_soup(
-    *args: str, timeout: int = TIMEOUT, env: dict | None = None,
+    *args: str,
+    timeout: int = TIMEOUT,
+    env: dict | None = None,
 ) -> subprocess.CompletedProcess:
     """Run soup CLI as a subprocess and return CompletedProcess."""
     merged_env = {**os.environ, **(env or {})}
@@ -181,9 +183,7 @@ class TestErrorHandling:
         assert result.returncode == 1
 
     def test_push_missing_model(self):
-        result = run_soup(
-            "push", "--model", "nonexistent_model_path", "--repo", "user/model"
-        )
+        result = run_soup("push", "--model", "nonexistent_model_path", "--repo", "user/model")
         assert result.returncode == 1
 
     def test_init_unknown_template(self):
@@ -201,9 +201,12 @@ class TestErrorHandling:
     def test_infer_missing_files(self):
         result = run_soup(
             "infer",
-            "--model", "nonexistent_model",
-            "--input", "nonexistent.jsonl",
-            "--output", "out.jsonl",
+            "--model",
+            "nonexistent_model",
+            "--input",
+            "nonexistent.jsonl",
+            "--output",
+            "out.jsonl",
         )
         assert result.returncode == 1
 
@@ -263,15 +266,15 @@ class TestDataCommands:
         """Inspect a small JSONL file via subprocess."""
         data_file = tmp_path / "test.jsonl"
         rows = [
-            {"messages": [
-                {"role": "user", "content": "Hello"},
-                {"role": "assistant", "content": "Hi there!"},
-            ]}
+            {
+                "messages": [
+                    {"role": "user", "content": "Hello"},
+                    {"role": "assistant", "content": "Hi there!"},
+                ]
+            }
             for _ in range(5)
         ]
-        data_file.write_text(
-            "\n".join(json.dumps(r) for r in rows), encoding="utf-8"
-        )
+        data_file.write_text("\n".join(json.dumps(r) for r in rows), encoding="utf-8")
         result = run_soup("data", "inspect", str(data_file))
         assert result.returncode == 0
         assert "5" in result.stdout  # row count
@@ -284,15 +287,15 @@ class TestDataCommands:
         """Validate a well-formed JSONL file."""
         data_file = tmp_path / "valid.jsonl"
         rows = [
-            {"messages": [
-                {"role": "user", "content": f"Q{i}"},
-                {"role": "assistant", "content": f"A{i}"},
-            ]}
+            {
+                "messages": [
+                    {"role": "user", "content": f"Q{i}"},
+                    {"role": "assistant", "content": f"A{i}"},
+                ]
+            }
             for i in range(3)
         ]
-        data_file.write_text(
-            "\n".join(json.dumps(r) for r in rows), encoding="utf-8"
-        )
+        data_file.write_text("\n".join(json.dumps(r) for r in rows), encoding="utf-8")
         result = run_soup("data", "validate", str(data_file))
         assert result.returncode == 0
 
@@ -300,15 +303,15 @@ class TestDataCommands:
         """Stats command should work without encoding errors on any OS."""
         data_file = tmp_path / "stats.jsonl"
         rows = [
-            {"messages": [
-                {"role": "user", "content": f"Question {i}"},
-                {"role": "assistant", "content": f"Answer {i} " + "x" * (i * 10)},
-            ]}
+            {
+                "messages": [
+                    {"role": "user", "content": f"Question {i}"},
+                    {"role": "assistant", "content": f"Answer {i} " + "x" * (i * 10)},
+                ]
+            }
             for i in range(10)
         ]
-        data_file.write_text(
-            "\n".join(json.dumps(r) for r in rows), encoding="utf-8"
-        )
+        data_file.write_text("\n".join(json.dumps(r) for r in rows), encoding="utf-8")
         result = run_soup(
             "data",
             "stats",
@@ -375,12 +378,12 @@ class TestInitCommand:
         """soup init --template X should create a valid YAML config."""
         result = run_soup(
             "init",
-            "--template", template,
-            "--output", str(tmp_path / f"{template}.yaml"),
+            "--template",
+            template,
+            "--output",
+            str(tmp_path / f"{template}.yaml"),
         )
-        assert result.returncode == 0, (
-            f"init --template {template} failed:\n{result.stderr}"
-        )
+        assert result.returncode == 0, f"init --template {template} failed:\n{result.stderr}"
         config_file = tmp_path / f"{template}.yaml"
         assert config_file.exists(), f"Config file not created for template {template}"
         content = config_file.read_text(encoding="utf-8")
@@ -454,10 +457,14 @@ class TestPlatformRegression:
         spaced_dir.mkdir()
         data_file = spaced_dir / "test.jsonl"
         data_file.write_text(
-            json.dumps({"messages": [
-                {"role": "user", "content": "Hi"},
-                {"role": "assistant", "content": "Hello"},
-            ]}),
+            json.dumps(
+                {
+                    "messages": [
+                        {"role": "user", "content": "Hi"},
+                        {"role": "assistant", "content": "Hello"},
+                    ]
+                }
+            ),
             encoding="utf-8",
         )
         result = run_soup("data", "inspect", str(data_file))
@@ -472,10 +479,14 @@ class TestPlatformRegression:
             long_dir.mkdir()
         data_file = long_dir / "data.jsonl"
         data_file.write_text(
-            json.dumps({"messages": [
-                {"role": "user", "content": "Test"},
-                {"role": "assistant", "content": "OK"},
-            ]}),
+            json.dumps(
+                {
+                    "messages": [
+                        {"role": "user", "content": "Test"},
+                        {"role": "assistant", "content": "OK"},
+                    ]
+                }
+            ),
             encoding="utf-8",
         )
         assert len(str(data_file)) > 100
@@ -486,18 +497,24 @@ class TestPlatformRegression:
         """Data files with Unicode content must load on all platforms."""
         data_file = tmp_path / "unicode.jsonl"
         rows = [
-            {"messages": [
-                {"role": "user", "content": "Wie geht es dir?"},
-                {"role": "assistant", "content": "Mir geht es gut, danke!"},
-            ]},
-            {"messages": [
-                {"role": "user", "content": "Как дела?"},
-                {"role": "assistant", "content": "Хорошо, спасибо!"},
-            ]},
-            {"messages": [
-                {"role": "user", "content": "お元気ですか？"},
-                {"role": "assistant", "content": "元気です、ありがとう！"},
-            ]},
+            {
+                "messages": [
+                    {"role": "user", "content": "Wie geht es dir?"},
+                    {"role": "assistant", "content": "Mir geht es gut, danke!"},
+                ]
+            },
+            {
+                "messages": [
+                    {"role": "user", "content": "Как дела?"},
+                    {"role": "assistant", "content": "Хорошо, спасибо!"},
+                ]
+            },
+            {
+                "messages": [
+                    {"role": "user", "content": "お元気ですか？"},
+                    {"role": "assistant", "content": "元気です、ありがとう！"},
+                ]
+            },
         ]
         data_file.write_text(
             "\n".join(json.dumps(r, ensure_ascii=False) for r in rows),
@@ -539,8 +556,11 @@ class TestSweepCommand:
 
     def test_sweep_missing_config(self):
         result = run_soup(
-            "sweep", "--config", "nonexistent.yaml",
-            "--param", "lr=1e-4,2e-4",
+            "sweep",
+            "--config",
+            "nonexistent.yaml",
+            "--param",
+            "lr=1e-4,2e-4",
         )
         assert result.returncode == 1
 

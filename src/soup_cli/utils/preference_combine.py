@@ -161,9 +161,7 @@ def compute_orpo_term(
         lp_chosen = pol_chosen
         lp_rejected = pol_rejected
     log_odds_chosen = lp_chosen - torch.log1p(-torch.exp(lp_chosen).clamp(max=1 - 1e-7))
-    log_odds_rejected = lp_rejected - torch.log1p(
-        -torch.exp(lp_rejected).clamp(max=1 - 1e-7)
-    )
+    log_odds_rejected = lp_rejected - torch.log1p(-torch.exp(lp_rejected).clamp(max=1 - 1e-7))
     sigm_term = _logsigmoid(log_odds_chosen - log_odds_rejected)
     return (-alpha * sigm_term).mean()
 
@@ -181,16 +179,12 @@ def combine_losses(
     if not weights:
         raise ValueError("weights mapping must not be empty")
     if set(losses.keys()) != set(weights.keys()):
-        raise ValueError(
-            f"loss keys {sorted(losses)} != weight keys {sorted(weights)}"
-        )
+        raise ValueError(f"loss keys {sorted(losses)} != weight keys {sorted(weights)}")
     # v0.40.1 review fix — defence-in-depth bool rejection (schema also
     # rejects bool, but the runtime path should not silently accept True/False).
     for name, weight in weights.items():
         if isinstance(weight, bool):
-            raise TypeError(
-                f"preference_loss_weights[{name!r}] must be float, not bool"
-            )
+            raise TypeError(f"preference_loss_weights[{name!r}] must be float, not bool")
     total = sum(weights.values())
     if not math.isclose(total, 1.0, abs_tol=1e-6):
         raise ValueError(f"weights must sum to 1.0 (±1e-6), got {total}")
@@ -264,40 +258,32 @@ def attach_weighted_preference_combine(trainer: object, weights: Mapping[str, fl
                 try:
                     if name == "dpo":
                         if ref_chosen is None or ref_rejected is None:
-                            logger.debug(
-                                "weighted-combine: dpo term skipped — ref logps missing"
-                            )
+                            logger.debug("weighted-combine: dpo term skipped — ref logps missing")
                             continue
                         terms["dpo"] = compute_dpo_term(
                             pol_chosen, pol_rejected, ref_chosen, ref_rejected, beta
                         )
                     elif name == "ipo":
                         if ref_chosen is None or ref_rejected is None:
-                            logger.debug(
-                                "weighted-combine: ipo term skipped — ref logps missing"
-                            )
+                            logger.debug("weighted-combine: ipo term skipped — ref logps missing")
                             continue
                         terms["ipo"] = compute_ipo_term(
                             pol_chosen, pol_rejected, ref_chosen, ref_rejected, beta
                         )
                     elif name == "simpo":
                         gamma_attr = getattr(trainer, "simpo_gamma", None)
-                        gamma = (
-                            float(gamma_attr) if gamma_attr is not None else 1.0
-                        )
-                        terms["simpo"] = compute_simpo_term(
-                            pol_chosen, pol_rejected, beta, gamma
-                        )
+                        gamma = float(gamma_attr) if gamma_attr is not None else 1.0
+                        terms["simpo"] = compute_simpo_term(pol_chosen, pol_rejected, beta, gamma)
                     elif name == "orpo":
                         alpha_attr = getattr(trainer, "orpo_alpha", None)
-                        alpha = (
-                            float(alpha_attr) if alpha_attr is not None else 1.0
-                        )
+                        alpha = float(alpha_attr) if alpha_attr is not None else 1.0
                         # Length-normalise when the batch carries response
                         # lengths/labels — otherwise summed log-probs underflow
                         # exp() and the odds-ratio correction degenerates.
                         terms["orpo"] = compute_orpo_term(
-                            pol_chosen, pol_rejected, alpha,
+                            pol_chosen,
+                            pol_rejected,
+                            alpha,
                             chosen_lens=_read_lens(inputs, "chosen"),
                             rejected_lens=_read_lens(inputs, "rejected"),
                         )
@@ -306,9 +292,7 @@ def attach_weighted_preference_combine(trainer: object, weights: Mapping[str, fl
                         # by validate_weight_compat. Defensive skip.
                         continue
                 except (TypeError, ValueError) as exc:
-                    logger.debug(
-                        "weighted-combine: %s term skipped — %s", name, exc
-                    )
+                    logger.debug("weighted-combine: %s term skipped — %s", name, exc)
                     continue
 
         if len(terms) == len(snapshot):

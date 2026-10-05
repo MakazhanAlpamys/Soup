@@ -20,9 +20,7 @@ import yaml
 
 from soup_cli.utils.paths import is_under_cwd
 
-VALID_TASKS = frozenset(
-    {"sft", "dpo", "kto", "orpo", "simpo", "ipo", "bco", "preference"}
-)
+VALID_TASKS = frozenset({"sft", "dpo", "kto", "orpo", "simpo", "ipo", "bco", "preference"})
 VALID_QUANT = frozenset({"4bit", "8bit", "none"})
 
 _MAX_BASE_LEN = 256
@@ -51,34 +49,24 @@ def render_onboarding_yaml(answers: Dict[str, Any]) -> str:
     if not isinstance(answers, dict):
         raise TypeError("answers must be dict")
     base = _check_string(answers.get("base"), field="base", max_len=_MAX_BASE_LEN)
-    dataset = _check_string(
-        answers.get("dataset"), field="dataset", max_len=_MAX_DATASET_LEN
-    )
+    dataset = _check_string(answers.get("dataset"), field="dataset", max_len=_MAX_DATASET_LEN)
     task = answers.get("task")
     if task not in VALID_TASKS:
-        raise ValueError(
-            f"task must be one of {sorted(VALID_TASKS)}; got {task!r}"
-        )
+        raise ValueError(f"task must be one of {sorted(VALID_TASKS)}; got {task!r}")
     quant = answers.get("quantization", "4bit")
     if quant not in VALID_QUANT:
-        raise ValueError(
-            f"quantization must be one of {sorted(VALID_QUANT)}; got {quant!r}"
-        )
+        raise ValueError(f"quantization must be one of {sorted(VALID_QUANT)}; got {quant!r}")
     epochs = answers.get("epochs")
     if isinstance(epochs, bool) or not isinstance(epochs, int):
         raise TypeError("epochs must be int")
     if not (1 <= epochs <= 10):
         raise ValueError("epochs must be in [1, 10]")
-    output = _check_string(
-        answers.get("output", "./out"), field="output", max_len=_MAX_OUTPUT_LEN
-    )
+    output = _check_string(answers.get("output", "./out"), field="output", max_len=_MAX_OUTPUT_LEN)
     if not is_under_cwd(output):
         # Match the project policy of leaking only the basename in errors.
         import os
 
-        raise ValueError(
-            f"output must stay under cwd: {os.path.basename(output)}"
-        )
+        raise ValueError(f"output must stay under cwd: {os.path.basename(output)}")
     batch_size: Any = answers.get("batch_size", "auto")
     if isinstance(batch_size, bool):
         raise TypeError("batch_size must be int or 'auto'")

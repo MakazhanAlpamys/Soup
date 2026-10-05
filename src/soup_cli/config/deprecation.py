@@ -37,6 +37,4 @@ def deadline_clause() -> str:
 
 def warn_deprecated_value(message: str) -> None:
     """Warn that ``message`` describes a value that will be refused."""
-    warnings.warn(
-        f"{message} {deadline_clause()}", SoupConfigDeprecationWarning, stacklevel=3
-    )
+    warnings.warn(f"{message} {deadline_clause()}", SoupConfigDeprecationWarning, stacklevel=3)

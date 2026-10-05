@@ -22,50 +22,56 @@ from types import MappingProxyType
 from typing import Mapping, Optional, cast
 
 # --- Part A: Unsloth Dynamic 2.0 GGUF ladder ---------------------------------
-UD_GGUF_FORMATS: frozenset[str] = frozenset({
-    "UD-Q8_K_XL",
-    "UD-Q6_K_XL",
-    "UD-Q5_K_XL",
-    "UD-Q4_K_XL",
-    "UD-Q3_K_XL",
-    "UD-Q2_K_XL",
-    "UD-IQ4_XS",
-    "UD-IQ3_M",
-    "UD-IQ3_XXS",
-    "UD-IQ2_M",
-    "UD-IQ2_XS",
-    "UD-IQ2_XXS",
-    "UD-IQ1_M",
-    "UD-IQ1_S",
-})
+UD_GGUF_FORMATS: frozenset[str] = frozenset(
+    {
+        "UD-Q8_K_XL",
+        "UD-Q6_K_XL",
+        "UD-Q5_K_XL",
+        "UD-Q4_K_XL",
+        "UD-Q3_K_XL",
+        "UD-Q2_K_XL",
+        "UD-IQ4_XS",
+        "UD-IQ3_M",
+        "UD-IQ3_XXS",
+        "UD-IQ2_M",
+        "UD-IQ2_XS",
+        "UD-IQ2_XXS",
+        "UD-IQ1_M",
+        "UD-IQ1_S",
+    }
+)
 
 # --- Part B: IQ + Apple/ARM quant flavours -----------------------------------
-IQ_GGUF_FORMATS: frozenset[str] = frozenset({
-    "IQ1_S",
-    "IQ1_M",
-    "IQ2_XXS",
-    "IQ2_XS",
-    "IQ2_S",
-    "IQ2_M",
-    "IQ3_XXS",
-    "IQ3_XS",
-    "IQ3_S",
-    "IQ3_M",
-    "IQ4_XS",
-    "IQ4_NL",
-})
-APPLE_ARM_GGUF_FORMATS: frozenset[str] = frozenset({
-    "Q4_0_4_4",
-    "Q4_0_4_8",
-    "Q4_0_8_8",
-    "Q4_NL",
-    "Q5_0",
-    "Q5_1",
-    "Q5_K_S",
-    "Q5_K_M",
-    "Q4_K_S",
-    "Q4_K_M",
-})
+IQ_GGUF_FORMATS: frozenset[str] = frozenset(
+    {
+        "IQ1_S",
+        "IQ1_M",
+        "IQ2_XXS",
+        "IQ2_XS",
+        "IQ2_S",
+        "IQ2_M",
+        "IQ3_XXS",
+        "IQ3_XS",
+        "IQ3_S",
+        "IQ3_M",
+        "IQ4_XS",
+        "IQ4_NL",
+    }
+)
+APPLE_ARM_GGUF_FORMATS: frozenset[str] = frozenset(
+    {
+        "Q4_0_4_4",
+        "Q4_0_4_8",
+        "Q4_0_8_8",
+        "Q4_NL",
+        "Q5_0",
+        "Q5_1",
+        "Q5_K_S",
+        "Q5_K_M",
+        "Q4_K_S",
+        "Q4_K_M",
+    }
+)
 
 # Union of all v0.53.0 schema-only GGUF flavours (excludes TQ1_0 which is owned
 # by v0.52.0 Part D ``utils/bitnet.py``; ``is_advanced_gguf_format`` returns
@@ -82,7 +88,7 @@ class GGUFQuantSpec:
     """Frozen metadata for a v0.53.0 advanced GGUF flavour."""
 
     name: str
-    family: str          # "ud" | "iq" | "apple_arm"
+    family: str  # "ud" | "iq" | "apple_arm"
     bits: float
     description: str
     live_wired: bool
@@ -90,52 +96,57 @@ class GGUFQuantSpec:
 
 def _spec(name: str, family: str, bits: float, description: str) -> GGUFQuantSpec:
     return GGUFQuantSpec(
-        name=name, family=family, bits=bits,
-        description=description, live_wired=False,
+        name=name,
+        family=family,
+        bits=bits,
+        description=description,
+        live_wired=False,
     )
 
 
-_GGUF_METADATA: Mapping[str, GGUFQuantSpec] = MappingProxyType({
-    # Unsloth Dynamic 2.0 ladder
-    "UD-Q8_K_XL": _spec("UD-Q8_K_XL", "ud", 8.0, "UD Q8_K_XL (Unsloth Dynamic 2.0)"),
-    "UD-Q6_K_XL": _spec("UD-Q6_K_XL", "ud", 6.0, "UD Q6_K_XL"),
-    "UD-Q5_K_XL": _spec("UD-Q5_K_XL", "ud", 5.0, "UD Q5_K_XL"),
-    "UD-Q4_K_XL": _spec("UD-Q4_K_XL", "ud", 4.0, "UD Q4_K_XL"),
-    "UD-Q3_K_XL": _spec("UD-Q3_K_XL", "ud", 3.0, "UD Q3_K_XL"),
-    "UD-Q2_K_XL": _spec("UD-Q2_K_XL", "ud", 2.0, "UD Q2_K_XL"),
-    "UD-IQ4_XS":  _spec("UD-IQ4_XS",  "ud", 4.0, "UD IQ4_XS"),
-    "UD-IQ3_M":   _spec("UD-IQ3_M",   "ud", 3.0, "UD IQ3_M"),
-    "UD-IQ3_XXS": _spec("UD-IQ3_XXS", "ud", 3.0, "UD IQ3_XXS"),
-    "UD-IQ2_M":   _spec("UD-IQ2_M",   "ud", 2.0, "UD IQ2_M"),
-    "UD-IQ2_XS":  _spec("UD-IQ2_XS",  "ud", 2.0, "UD IQ2_XS"),
-    "UD-IQ2_XXS": _spec("UD-IQ2_XXS", "ud", 2.0, "UD IQ2_XXS"),
-    "UD-IQ1_M":   _spec("UD-IQ1_M",   "ud", 1.0, "UD IQ1_M (smallest UD)"),
-    "UD-IQ1_S":   _spec("UD-IQ1_S",   "ud", 1.0, "UD IQ1_S"),
-    # IQ family (non-UD)
-    "IQ1_S":   _spec("IQ1_S",   "iq", 1.0, "IQ1_S 1-bit"),
-    "IQ1_M":   _spec("IQ1_M",   "iq", 1.0, "IQ1_M 1-bit"),
-    "IQ2_XXS": _spec("IQ2_XXS", "iq", 2.0, "IQ2_XXS 2-bit"),
-    "IQ2_XS":  _spec("IQ2_XS",  "iq", 2.0, "IQ2_XS 2-bit"),
-    "IQ2_S":   _spec("IQ2_S",   "iq", 2.0, "IQ2_S 2-bit"),
-    "IQ2_M":   _spec("IQ2_M",   "iq", 2.0, "IQ2_M 2-bit"),
-    "IQ3_XXS": _spec("IQ3_XXS", "iq", 3.0, "IQ3_XXS 3-bit"),
-    "IQ3_XS":  _spec("IQ3_XS",  "iq", 3.0, "IQ3_XS 3-bit"),
-    "IQ3_S":   _spec("IQ3_S",   "iq", 3.0, "IQ3_S 3-bit"),
-    "IQ3_M":   _spec("IQ3_M",   "iq", 3.0, "IQ3_M 3-bit"),
-    "IQ4_XS":  _spec("IQ4_XS",  "iq", 4.0, "IQ4_XS 4-bit"),
-    "IQ4_NL":  _spec("IQ4_NL",  "iq", 4.0, "IQ4_NL 4-bit (non-linear)"),
-    # Apple/ARM neural-engine-friendly
-    "Q4_0_4_4": _spec("Q4_0_4_4", "apple_arm", 4.0, "Apple/ARM Q4_0_4_4"),
-    "Q4_0_4_8": _spec("Q4_0_4_8", "apple_arm", 4.0, "Apple/ARM Q4_0_4_8"),
-    "Q4_0_8_8": _spec("Q4_0_8_8", "apple_arm", 4.0, "Apple/ARM Q4_0_8_8"),
-    "Q4_NL":    _spec("Q4_NL",    "apple_arm", 4.0, "Apple/ARM Q4_NL"),
-    "Q5_0":     _spec("Q5_0",     "apple_arm", 5.0, "Apple/ARM Q5_0"),
-    "Q5_1":     _spec("Q5_1",     "apple_arm", 5.0, "Apple/ARM Q5_1"),
-    "Q5_K_S":   _spec("Q5_K_S",   "apple_arm", 5.0, "Apple/ARM Q5_K_S"),
-    "Q5_K_M":   _spec("Q5_K_M",   "apple_arm", 5.0, "Apple/ARM Q5_K_M"),
-    "Q4_K_S":   _spec("Q4_K_S",   "apple_arm", 4.0, "Apple/ARM Q4_K_S"),
-    "Q4_K_M":   _spec("Q4_K_M",   "apple_arm", 4.0, "Apple/ARM Q4_K_M"),
-})
+_GGUF_METADATA: Mapping[str, GGUFQuantSpec] = MappingProxyType(
+    {
+        # Unsloth Dynamic 2.0 ladder
+        "UD-Q8_K_XL": _spec("UD-Q8_K_XL", "ud", 8.0, "UD Q8_K_XL (Unsloth Dynamic 2.0)"),
+        "UD-Q6_K_XL": _spec("UD-Q6_K_XL", "ud", 6.0, "UD Q6_K_XL"),
+        "UD-Q5_K_XL": _spec("UD-Q5_K_XL", "ud", 5.0, "UD Q5_K_XL"),
+        "UD-Q4_K_XL": _spec("UD-Q4_K_XL", "ud", 4.0, "UD Q4_K_XL"),
+        "UD-Q3_K_XL": _spec("UD-Q3_K_XL", "ud", 3.0, "UD Q3_K_XL"),
+        "UD-Q2_K_XL": _spec("UD-Q2_K_XL", "ud", 2.0, "UD Q2_K_XL"),
+        "UD-IQ4_XS": _spec("UD-IQ4_XS", "ud", 4.0, "UD IQ4_XS"),
+        "UD-IQ3_M": _spec("UD-IQ3_M", "ud", 3.0, "UD IQ3_M"),
+        "UD-IQ3_XXS": _spec("UD-IQ3_XXS", "ud", 3.0, "UD IQ3_XXS"),
+        "UD-IQ2_M": _spec("UD-IQ2_M", "ud", 2.0, "UD IQ2_M"),
+        "UD-IQ2_XS": _spec("UD-IQ2_XS", "ud", 2.0, "UD IQ2_XS"),
+        "UD-IQ2_XXS": _spec("UD-IQ2_XXS", "ud", 2.0, "UD IQ2_XXS"),
+        "UD-IQ1_M": _spec("UD-IQ1_M", "ud", 1.0, "UD IQ1_M (smallest UD)"),
+        "UD-IQ1_S": _spec("UD-IQ1_S", "ud", 1.0, "UD IQ1_S"),
+        # IQ family (non-UD)
+        "IQ1_S": _spec("IQ1_S", "iq", 1.0, "IQ1_S 1-bit"),
+        "IQ1_M": _spec("IQ1_M", "iq", 1.0, "IQ1_M 1-bit"),
+        "IQ2_XXS": _spec("IQ2_XXS", "iq", 2.0, "IQ2_XXS 2-bit"),
+        "IQ2_XS": _spec("IQ2_XS", "iq", 2.0, "IQ2_XS 2-bit"),
+        "IQ2_S": _spec("IQ2_S", "iq", 2.0, "IQ2_S 2-bit"),
+        "IQ2_M": _spec("IQ2_M", "iq", 2.0, "IQ2_M 2-bit"),
+        "IQ3_XXS": _spec("IQ3_XXS", "iq", 3.0, "IQ3_XXS 3-bit"),
+        "IQ3_XS": _spec("IQ3_XS", "iq", 3.0, "IQ3_XS 3-bit"),
+        "IQ3_S": _spec("IQ3_S", "iq", 3.0, "IQ3_S 3-bit"),
+        "IQ3_M": _spec("IQ3_M", "iq", 3.0, "IQ3_M 3-bit"),
+        "IQ4_XS": _spec("IQ4_XS", "iq", 4.0, "IQ4_XS 4-bit"),
+        "IQ4_NL": _spec("IQ4_NL", "iq", 4.0, "IQ4_NL 4-bit (non-linear)"),
+        # Apple/ARM neural-engine-friendly
+        "Q4_0_4_4": _spec("Q4_0_4_4", "apple_arm", 4.0, "Apple/ARM Q4_0_4_4"),
+        "Q4_0_4_8": _spec("Q4_0_4_8", "apple_arm", 4.0, "Apple/ARM Q4_0_4_8"),
+        "Q4_0_8_8": _spec("Q4_0_8_8", "apple_arm", 4.0, "Apple/ARM Q4_0_8_8"),
+        "Q4_NL": _spec("Q4_NL", "apple_arm", 4.0, "Apple/ARM Q4_NL"),
+        "Q5_0": _spec("Q5_0", "apple_arm", 5.0, "Apple/ARM Q5_0"),
+        "Q5_1": _spec("Q5_1", "apple_arm", 5.0, "Apple/ARM Q5_1"),
+        "Q5_K_S": _spec("Q5_K_S", "apple_arm", 5.0, "Apple/ARM Q5_K_S"),
+        "Q5_K_M": _spec("Q5_K_M", "apple_arm", 5.0, "Apple/ARM Q5_K_M"),
+        "Q4_K_S": _spec("Q4_K_S", "apple_arm", 4.0, "Apple/ARM Q4_K_S"),
+        "Q4_K_M": _spec("Q4_K_M", "apple_arm", 4.0, "Apple/ARM Q4_K_M"),
+    }
+)
 
 
 def _basic_validate(value: object, field: str) -> str:
@@ -155,9 +166,9 @@ def _basic_validate(value: object, field: str) -> str:
 # Lowercase index built once at module load — O(1) lookup vs O(N) walk
 # (code-review MEDIUM fix). Mirrors v0.32.0 ``pick_mixed_precision`` quirk
 # ordering policy where sorting / indexing is precomputed.
-_LOWER_INDEX: Mapping[str, str] = MappingProxyType({
-    name.lower(): name for name in ALL_ADVANCED_GGUF_FORMATS
-})
+_LOWER_INDEX: Mapping[str, str] = MappingProxyType(
+    {name.lower(): name for name in ALL_ADVANCED_GGUF_FORMATS}
+)
 
 
 def _resolve_canonical(value: str) -> str | None:
@@ -175,9 +186,7 @@ def validate_ud_gguf_format(value: object) -> str:
     canonical = _resolve_canonical(value)  # type: ignore[arg-type]
     if canonical is None or canonical not in UD_GGUF_FORMATS:
         supported = ", ".join(sorted(UD_GGUF_FORMATS))
-        raise ValueError(
-            f"ud_gguf_format {value!r} not supported. Supported: {supported}"
-        )
+        raise ValueError(f"ud_gguf_format {value!r} not supported. Supported: {supported}")
     return canonical
 
 
@@ -187,9 +196,7 @@ def validate_iq_gguf_format(value: object) -> str:
     canonical = _resolve_canonical(value)  # type: ignore[arg-type]
     if canonical is None or canonical not in IQ_GGUF_FORMATS:
         supported = ", ".join(sorted(IQ_GGUF_FORMATS))
-        raise ValueError(
-            f"iq_gguf_format {value!r} not supported. Supported: {supported}"
-        )
+        raise ValueError(f"iq_gguf_format {value!r} not supported. Supported: {supported}")
     return canonical
 
 
@@ -199,10 +206,7 @@ def validate_apple_arm_gguf_format(value: object) -> str:
     canonical = _resolve_canonical(value)  # type: ignore[arg-type]
     if canonical is None or canonical not in APPLE_ARM_GGUF_FORMATS:
         supported = ", ".join(sorted(APPLE_ARM_GGUF_FORMATS))
-        raise ValueError(
-            f"apple_arm_gguf_format {value!r} not supported. "
-            f"Supported: {supported}"
-        )
+        raise ValueError(f"apple_arm_gguf_format {value!r} not supported. Supported: {supported}")
     return canonical
 
 
@@ -232,11 +236,7 @@ def is_apple_arm_gguf_format(value: object) -> bool:
 
 def is_advanced_gguf_format(value: object) -> bool:
     """Return True iff ``value`` is any v0.53.0 advanced GGUF format."""
-    return (
-        is_ud_gguf_format(value)
-        or is_iq_gguf_format(value)
-        or is_apple_arm_gguf_format(value)
-    )
+    return is_ud_gguf_format(value) or is_iq_gguf_format(value) or is_apple_arm_gguf_format(value)
 
 
 def get_gguf_spec(name: str) -> GGUFQuantSpec:
@@ -246,10 +246,7 @@ def get_gguf_spec(name: str) -> GGUFQuantSpec:
     canonical = _resolve_canonical(name)
     if canonical is None:
         supported_n = len(ALL_ADVANCED_GGUF_FORMATS)
-        raise ValueError(
-            f"GGUF format {name!r} not in v0.53.0 catalog "
-            f"({supported_n} known)"
-        )
+        raise ValueError(f"GGUF format {name!r} not in v0.53.0 catalog ({supported_n} known)")
     return _GGUF_METADATA[canonical]
 
 
@@ -274,9 +271,7 @@ def validate_calibration_data_path(path: object) -> str:
     if isinstance(path, bool):
         raise TypeError(f"calibration_data must not be bool, got {path!r}")
     if not isinstance(path, str):
-        raise TypeError(
-            f"calibration_data must be str, got {type(path).__name__}"
-        )
+        raise TypeError(f"calibration_data must be str, got {type(path).__name__}")
     if not path:
         raise ValueError("calibration_data must be non-empty")
     if "\x00" in path:
@@ -308,11 +303,10 @@ def _safe_stderr(stderr: Optional[str], cap: int = 512) -> str:
     truncated = stderr[:cap]
     return escape(truncated)
 
+
 # Quantize flavours that require an imatrix file (UD ladder + low-bit IQ family).
-_REQUIRES_IMATRIX: frozenset[str] = (
-    UD_GGUF_FORMATS
-    | frozenset({"IQ1_S", "IQ1_M", "IQ2_XXS", "IQ2_XS", "IQ2_S", "IQ2_M",
-                 "IQ3_XXS", "IQ3_XS"})
+_REQUIRES_IMATRIX: frozenset[str] = UD_GGUF_FORMATS | frozenset(
+    {"IQ1_S", "IQ1_M", "IQ2_XXS", "IQ2_XS", "IQ2_S", "IQ2_M", "IQ3_XXS", "IQ3_XS"}
 )
 
 
@@ -444,21 +438,20 @@ def _prepare_calibration_text(calibration_data: str, staged_dir: Path) -> Path:
                 break
     if line_count == 0:
         raise ValueError(
-            "calibration_data produced 0 usable rows; "
-            "expected JSONL with a 'text' field."
+            "calibration_data produced 0 usable rows; expected JSONL with a 'text' field."
         )
     return out
 
 
 def _run_convert_to_f16(
-    llama_cpp_dir: str, model_dir: str, f16_out: str,
+    llama_cpp_dir: str,
+    model_dir: str,
+    f16_out: str,
 ) -> None:
     """Invoke ``convert_hf_to_gguf.py`` to produce an f16 GGUF."""
     script = Path(llama_cpp_dir) / "convert_hf_to_gguf.py"
     if not script.is_file():
-        raise FileNotFoundError(
-            f"convert_hf_to_gguf.py not found in {llama_cpp_dir!r}"
-        )
+        raise FileNotFoundError(f"convert_hf_to_gguf.py not found in {llama_cpp_dir!r}")
     # Security review M5 — defend against a crafted llama_cpp_dir whose
     # ``convert_hf_to_gguf.py`` is a symlink escaping the directory. Resolve
     # both paths to realpath and require the script to stay inside.
@@ -470,25 +463,28 @@ def _run_convert_to_f16(
         common = ""
     if common != dir_real:
         raise FileNotFoundError(
-            "convert_hf_to_gguf.py is outside the llama.cpp dir "
-            "(symlink escape rejected)"
+            "convert_hf_to_gguf.py is outside the llama.cpp dir (symlink escape rejected)"
         )
 
     argv = [
         sys.executable,
         script_real,
         str(model_dir),
-        "--outfile", str(f16_out),
-        "--outtype", "f16",
+        "--outfile",
+        str(f16_out),
+        "--outtype",
+        "f16",
     ]
     result = subprocess.run(  # noqa: S603 — argv list, no shell
-        argv, shell=False, timeout=_SUBPROC_TIMEOUT_SECONDS,
-        capture_output=True, text=True,
+        argv,
+        shell=False,
+        timeout=_SUBPROC_TIMEOUT_SECONDS,
+        capture_output=True,
+        text=True,
     )
     if result.returncode != 0:
         raise RuntimeError(
-            f"convert_hf_to_gguf.py failed (rc={result.returncode}): "
-            f"{_safe_stderr(result.stderr)}"
+            f"convert_hf_to_gguf.py failed (rc={result.returncode}): {_safe_stderr(result.stderr)}"
         )
 
 
@@ -503,19 +499,25 @@ def _run_imatrix(
     binary = _resolve_imatrix_binary(llama_cpp_dir)
     argv = [
         str(binary),
-        "-m", str(f16_path),
-        "-f", str(calib_data),
-        "-o", str(imatrix_out),
-        "--chunks", "32",
+        "-m",
+        str(f16_path),
+        "-f",
+        str(calib_data),
+        "-o",
+        str(imatrix_out),
+        "--chunks",
+        "32",
     ]
     result = subprocess.run(  # noqa: S603 — argv list, no shell
-        argv, shell=False, timeout=_SUBPROC_TIMEOUT_SECONDS,
-        capture_output=True, text=True,
+        argv,
+        shell=False,
+        timeout=_SUBPROC_TIMEOUT_SECONDS,
+        capture_output=True,
+        text=True,
     )
     if result.returncode != 0:
         raise RuntimeError(
-            f"llama-imatrix failed (rc={result.returncode}): "
-            f"{_safe_stderr(result.stderr)}"
+            f"llama-imatrix failed (rc={result.returncode}): {_safe_stderr(result.stderr)}"
         )
 
 
@@ -527,7 +529,7 @@ def _flavour_to_quantize_arg(flavour: str) -> str:
     pass through verbatim.
     """
     if flavour.startswith("UD-"):
-        return flavour[len("UD-"):]
+        return flavour[len("UD-") :]
     return flavour
 
 
@@ -546,13 +548,15 @@ def _run_quantize_binary(
         argv += ["--imatrix", str(imatrix_path)]
     argv += [str(f16_path), str(output_path), _flavour_to_quantize_arg(flavour)]
     result = subprocess.run(  # noqa: S603 — argv list, no shell
-        argv, shell=False, timeout=_SUBPROC_TIMEOUT_SECONDS,
-        capture_output=True, text=True,
+        argv,
+        shell=False,
+        timeout=_SUBPROC_TIMEOUT_SECONDS,
+        capture_output=True,
+        text=True,
     )
     if result.returncode != 0:
         raise RuntimeError(
-            f"llama-quantize failed (rc={result.returncode}): "
-            f"{_safe_stderr(result.stderr)}"
+            f"llama-quantize failed (rc={result.returncode}): {_safe_stderr(result.stderr)}"
         )
 
 
@@ -578,23 +582,17 @@ def export_advanced_gguf(
     """
     # Flavour validation
     if not is_advanced_gguf_format(flavour):
-        raise ValueError(
-            f"Unknown gguf flavour {flavour!r}. "
-            "See ALL_ADVANCED_GGUF_FORMATS."
-        )
+        raise ValueError(f"Unknown gguf flavour {flavour!r}. See ALL_ADVANCED_GGUF_FORMATS.")
 
     _enforce_under_cwd_and_no_symlink(model_dir, "model_dir")
     _enforce_under_cwd_and_no_symlink(output_path, "output_path")
     _enforce_under_cwd_and_no_symlink(llama_cpp_dir, "llama_cpp_dir")
 
     if not os.path.isdir(model_dir):
-        raise FileNotFoundError(
-            f"model_dir not a directory: {os.path.basename(model_dir)!r}"
-        )
+        raise FileNotFoundError(f"model_dir not a directory: {os.path.basename(model_dir)!r}")
     if not os.path.isdir(llama_cpp_dir):
         raise FileNotFoundError(
-            f"llama_cpp_dir not a directory: "
-            f"{os.path.basename(llama_cpp_dir)!r}"
+            f"llama_cpp_dir not a directory: {os.path.basename(llama_cpp_dir)!r}"
         )
 
     needs_imatrix = flavour in _REQUIRES_IMATRIX
@@ -605,12 +603,14 @@ def export_advanced_gguf(
         )
     if calibration_data is not None:
         _enforce_under_cwd_and_no_symlink(
-            calibration_data, "calibration_data",
+            calibration_data,
+            "calibration_data",
         )
 
     # Stage intermediate files inside a tempdir under cwd
     with tempfile.TemporaryDirectory(
-        prefix=".soup_gguf_", dir=str(Path.cwd()),
+        prefix=".soup_gguf_",
+        dir=str(Path.cwd()),
     ) as staged:
         staged_path = Path(staged)
         f16_path = staged_path / "model.f16.gguf"
@@ -643,6 +643,4 @@ def export_advanced_gguf(
 
     # Ensure the writer produced the file
     if not os.path.isfile(output_path):
-        raise RuntimeError(
-            f"llama-quantize did not produce {os.path.basename(output_path)!r}"
-        )
+        raise RuntimeError(f"llama-quantize did not produce {os.path.basename(output_path)!r}")

@@ -120,8 +120,12 @@ def stub_judge() -> Iterator[tuple[_StubJudge, str]]:
 def test_unreachable_judge_exits_nonzero_and_writes_no_rows(tmp_path, monkeypatch) -> None:
     # Nothing listens on port 9: every call fails with "connection refused".
     result = _run_forge(
-        tmp_path, monkeypatch,
-        "--judge-provider", "ollama", "--judge-base-url", "http://127.0.0.1:9",
+        tmp_path,
+        monkeypatch,
+        "--judge-provider",
+        "ollama",
+        "--judge-base-url",
+        "http://127.0.0.1:9",
     )
     output = _terminal_text(result)
 
@@ -153,8 +157,12 @@ def test_failing_stub_judge_exits_nonzero(
     stub, url = stub_judge
     stub.mode = mode
     result = _run_forge(
-        tmp_path, monkeypatch,
-        "--judge-provider", provider, "--judge-base-url", url,
+        tmp_path,
+        monkeypatch,
+        "--judge-provider",
+        provider,
+        "--judge-base-url",
+        url,
     )
     output = _terminal_text(result)
 
@@ -173,8 +181,12 @@ def test_partial_outage_keeps_only_successful_rows(
     stub, url = stub_judge
     stub.mode = "alternate"
     result = _run_forge(
-        tmp_path, monkeypatch,
-        "--judge-provider", provider, "--judge-base-url", url,
+        tmp_path,
+        monkeypatch,
+        "--judge-provider",
+        provider,
+        "--judge-base-url",
+        url,
     )
     output = _terminal_text(result)
 
@@ -195,9 +207,14 @@ def test_empty_replies_pruned_at_any_threshold_cli(
     stub, url = stub_judge
     stub.mode = "empty"
     result = _run_forge(
-        tmp_path, monkeypatch,
-        "--judge-provider", "ollama", "--judge-base-url", url,
-        "--uncertainty-threshold", threshold,
+        tmp_path,
+        monkeypatch,
+        "--judge-provider",
+        "ollama",
+        "--judge-base-url",
+        url,
+        "--uncertainty-threshold",
+        threshold,
     )
     assert result.exit_code == 1, _terminal_text(result)
     assert _dataset_rows(tmp_path) == []
@@ -260,8 +277,11 @@ def test_synthesise_rejects_wrong_stats_type(tmp_path, monkeypatch) -> None:
     _write_docs(tmp_path)
     with pytest.raises(TypeError, match="stats"):
         synthesise_forge_rows(
-            discover_documents("docs"), task="sft", target_rows=1,
-            judge=lambda _p: {"text": "x"}, stats={},  # type: ignore[arg-type]
+            discover_documents("docs"),
+            task="sft",
+            target_rows=1,
+            judge=lambda _p: {"text": "x"},
+            stats={},  # type: ignore[arg-type]
         )
 
 
@@ -287,9 +307,7 @@ def test_anthropic_failures_exit_nonzero(
     import httpx
 
     monkeypatch.setenv("ANTHROPIC_API_KEY", "synthetic-test-value")
-    monkeypatch.setattr(
-        httpx, "post", lambda *_a, **_k: _AnthropicResponse(status, text)
-    )
+    monkeypatch.setattr(httpx, "post", lambda *_a, **_k: _AnthropicResponse(status, text))
     result = _run_forge(tmp_path, monkeypatch, "--judge-provider", "anthropic")
     output = _terminal_text(result)
 
@@ -317,8 +335,12 @@ def test_anthropic_failure_names_the_real_endpoint_not_the_given_base_url(
     monkeypatch.setattr(httpx, "post", _record)
     given_base_url = "http://127.0.0.1:9"
     result = _run_forge(
-        tmp_path, monkeypatch,
-        "--judge-provider", "anthropic", "--judge-base-url", given_base_url,
+        tmp_path,
+        monkeypatch,
+        "--judge-provider",
+        "anthropic",
+        "--judge-base-url",
+        given_base_url,
     )
     output = _terminal_text(result)
 
@@ -356,8 +378,12 @@ def test_anthropic_partial_outage_keeps_successful_rows(tmp_path, monkeypatch) -
 def test_healthy_judge_control(tmp_path, monkeypatch, stub_judge) -> None:
     stub, url = stub_judge
     result = _run_forge(
-        tmp_path, monkeypatch,
-        "--judge-provider", "ollama", "--judge-base-url", url,
+        tmp_path,
+        monkeypatch,
+        "--judge-provider",
+        "ollama",
+        "--judge-base-url",
+        url,
     )
     output = _terminal_text(result)
 

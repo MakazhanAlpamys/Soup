@@ -45,12 +45,8 @@ def _assert_no_top_level_import(rel_path: str, mod: str) -> None:
     np``, ``import torch, snac``, and ``from numpy import ...`` (L11).
     """
     head = _module_head(rel_path)
-    assert f"\nimport {mod}" not in head, (
-        f"top-level `import {mod}` in {rel_path}"
-    )
-    assert f"\nfrom {mod} " not in head, (
-        f"top-level `from {mod} ` in {rel_path}"
-    )
+    assert f"\nimport {mod}" not in head, f"top-level `import {mod}` in {rel_path}"
+    assert f"\nfrom {mod} " not in head, f"top-level `from {mod} ` in {rel_path}"
 
 
 def _torch_or_skip():
@@ -435,9 +431,7 @@ def _make_legacy_mole_model(hidden: int = 4, vocab: int = 6):
         def set_adapter(self, name):
             self._adapter = name
 
-        def forward(
-            self, input_ids=None, attention_mask=None, output_hidden_states=False
-        ):
+        def forward(self, input_ids=None, attention_mask=None, output_hidden_states=False):
             mode = "base" if self._disabled else self._adapter
             self.calls.append((mode, int(input_ids.shape[1])))
             b, t = input_ids.shape
@@ -578,12 +572,8 @@ class TestMoleKvCache:
         here (M4 — the equality must hold THROUGH the skip/catch-up sequence)."""
         torch = _torch_or_skip()
         script = [[1.0, 0.0], [0.0, 1.0], [1.0, 0.0], [0.0, 1.0]]
-        out_cached = self._generate(
-            _make_cached_mole_model(), _make_scripted_gate(script), steps=4
-        )
-        out_legacy = self._generate(
-            _make_legacy_mole_model(), _make_scripted_gate(script), steps=4
-        )
+        out_cached = self._generate(_make_cached_mole_model(), _make_scripted_gate(script), steps=4)
+        out_legacy = self._generate(_make_legacy_mole_model(), _make_scripted_gate(script), steps=4)
         assert torch.equal(out_cached, out_legacy)
 
     def test_no_past_in_output_falls_back(self):
@@ -653,8 +643,20 @@ class TestMoleKvCache:
 class TestValidateMeasureCandidate:
     @pytest.mark.parametrize(
         "candidate",
-        ["none", "4bit", "8bit", "gptq", "awq", "aqlm", "eetq", "mxfp4", "fp8",
-         "hqq:4bit", "hqq:8bit", "hqq:1bit"],
+        [
+            "none",
+            "4bit",
+            "8bit",
+            "gptq",
+            "awq",
+            "aqlm",
+            "eetq",
+            "mxfp4",
+            "fp8",
+            "hqq:4bit",
+            "hqq:8bit",
+            "hqq:1bit",
+        ],
     )
     def test_known_candidates_accepted(self, candidate):
         from soup_cli.utils.deploy_measure import validate_measure_candidate
@@ -786,9 +788,7 @@ class TestMeasureGeneratorFactories:
             captured["base"] = base
             return None  # behave like quantization='none'
 
-        monkeypatch.setattr(
-            quant_menu, "build_quantization_config_for_loader", fake_build
-        )
+        monkeypatch.setattr(quant_menu, "build_quantization_config_for_loader", fake_build)
 
         class _FakeTok:
             pad_token = "x"
@@ -805,14 +805,10 @@ class TestMeasureGeneratorFactories:
             AutoModelForCausalLM=types.SimpleNamespace(
                 from_pretrained=lambda *a, **k: _FakeModel()
             ),
-            AutoTokenizer=types.SimpleNamespace(
-                from_pretrained=lambda *a, **k: _FakeTok()
-            ),
+            AutoTokenizer=types.SimpleNamespace(from_pretrained=lambda *a, **k: _FakeTok()),
         )
         monkeypatch.setattr(dm, "_import_transformers", lambda: fake_tf)
-        model, tok, dev = dm._load_measure_model(
-            "org/tiny", quantization="4bit", device="cpu"
-        )
+        model, tok, dev = dm._load_measure_model("org/tiny", quantization="4bit", device="cpu")
         assert captured == {"quantization": "4bit", "base": "org/tiny"}
         assert dev == "cpu"
 
@@ -854,31 +850,33 @@ class TestDeployMeasureLiveFailure:
 
         # Injected before-gen raises mid-eval; surfaces through run_measure to
         # the CLI's (RuntimeError, ImportError, OSError) -> exit 1 branch.
-        monkeypatch.setattr(
-            _dm, "_DEPLOY_MEASURE_BEFORE_GEN", boom, raising=False
-        )
+        monkeypatch.setattr(_dm, "_DEPLOY_MEASURE_BEFORE_GEN", boom, raising=False)
         monkeypatch.setattr(
             _dm,
             "_DEPLOY_MEASURE_AFTER_FACTORY",
-            lambda candidate: (lambda p: "x"),
+            lambda candidate: lambda p: "x",
             raising=False,
         )
-        monkeypatch.setenv(
-            "SOUP_DEPLOY_AUTOPILOT_CACHE", str(tmp_path / "cache.json")
-        )
+        monkeypatch.setenv("SOUP_DEPLOY_AUTOPILOT_CACHE", str(tmp_path / "cache.json"))
 
         app = typer.Typer()
         app.command()(autopilot)
         result = runner.invoke(
             app,
             [
-                "--target", "rtx-4090-24gb",
-                "--base", "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
-                "--recipe-out", str(tmp_path / "recipe.yaml"),
-                "--script-out", str(tmp_path / "deploy.sh"),
+                "--target",
+                "rtx-4090-24gb",
+                "--base",
+                "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+                "--recipe-out",
+                str(tmp_path / "recipe.yaml"),
+                "--script-out",
+                str(tmp_path / "deploy.sh"),
                 "--measure",
-                "--tasks", str(tasks),
-                "--measure-candidates", "awq",
+                "--tasks",
+                str(tasks),
+                "--measure-candidates",
+                "awq",
             ],
         )
         assert result.exit_code == 1, (result.output, repr(result.exception))
@@ -893,8 +891,7 @@ class TestDeployMeasureLiveFailure:
 # ---------------------------------------------------------------------------
 
 
-def _write_wav(path: Path, *, sr: int = 24_000, seconds: float = 0.05,
-               channels: int = 1) -> None:
+def _write_wav(path: Path, *, sr: int = 24_000, seconds: float = 0.05, channels: int = 1) -> None:
     """Write a tiny PCM16 sine WAV using only the stdlib."""
     import struct
 
@@ -977,10 +974,7 @@ class TestOrpheusTokenString:
     def test_token_string_format(self):
         from soup_cli.utils.tts_codec import orpheus_tokens_to_string
 
-        assert (
-            orpheus_tokens_to_string([15, 4106])
-            == "<custom_token_15><custom_token_4106>"
-        )
+        assert orpheus_tokens_to_string([15, 4106]) == "<custom_token_15><custom_token_4106>"
 
     def test_empty_rejected(self):
         from soup_cli.utils.tts_codec import orpheus_tokens_to_string
@@ -1232,9 +1226,7 @@ class TestEncodeTtsDataset:
             {"audio": "a.wav", "messages": [{"role": "user", "content": "x"}]},
         ]
         ds = {"train": list(rows), "val": list(rows)}
-        out = encode_tts_dataset(
-            ds, "orpheus", encoder=lambda p: "<custom_token_10>"
-        )
+        out = encode_tts_dataset(ds, "orpheus", encoder=lambda p: "<custom_token_10>")
         assert out["train"][0]["messages"][-1]["role"] == "assistant"
         assert out["val"][0]["messages"][-1]["role"] == "assistant"
         # input dataset untouched
@@ -1266,7 +1258,7 @@ class TestTtsTrainerLiveCodecWiring:
         monkeypatch.setattr(
             tts_codec,
             "tts_encoder_for_family",
-            lambda family, device=None: (lambda path: "<custom_token_10>"),
+            lambda family, device=None: lambda path: "<custom_token_10>",
         )
         captured = {}
         monkeypatch.setattr(

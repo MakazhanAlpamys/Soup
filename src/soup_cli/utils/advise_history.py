@@ -145,9 +145,7 @@ def record_verdict(
     if verdict.choice not in CHOICES:
         raise ValueError(f"verdict.choice must be one of {CHOICES}")
     if verdict.task_category not in TASK_CATEGORIES:
-        raise ValueError(
-            f"verdict.task_category must be one of {TASK_CATEGORIES}"
-        )
+        raise ValueError(f"verdict.task_category must be one of {TASK_CATEGORIES}")
     cleaned_notes = _validate_notes(notes)
 
     entry = HistoryEntry(
@@ -262,9 +260,7 @@ def _append_with_lock(target: str, line: str) -> None:
                 pass
 
 
-def load_history(
-    *, limit: int = 100, path: Optional[str] = None
-) -> List[HistoryEntry]:
+def load_history(*, limit: int = 100, path: Optional[str] = None) -> List[HistoryEntry]:
     """Read the most recent ``limit`` entries, newest first.
 
     Returns an empty list when the file does not exist. Malformed lines are
@@ -290,9 +286,7 @@ def load_history(
         return []
 
     if os.path.getsize(target) > _MAX_FILE_BYTES:
-        raise ValueError(
-            f"history file exceeds {_MAX_FILE_BYTES} bytes; rotate or trim"
-        )
+        raise ValueError(f"history file exceeds {_MAX_FILE_BYTES} bytes; rotate or trim")
 
     entries: List[HistoryEntry] = []
     with open(target, "r", encoding="utf-8") as fh:

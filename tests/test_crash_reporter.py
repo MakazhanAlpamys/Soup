@@ -130,7 +130,8 @@ class TestBuildBundle:
             raise RuntimeError("x")
         except RuntimeError as exc:
             bundle = build_crash_bundle(
-                error=exc, output_dir="/home/alice/.cache/models/run_x",
+                error=exc,
+                output_dir="/home/alice/.cache/models/run_x",
             )
         assert "alice" not in str(bundle.get("output_dir") or "")
         assert bundle["output_dir"] == "run_x"

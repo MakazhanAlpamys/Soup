@@ -102,6 +102,7 @@ def build_server(specs: List[ToolSpec]) -> Server:
     by_name = {spec.name: spec for spec in specs}
 
     if _uses_callback_handlers():  # mcp 2.x
+
         async def _on_list_tools(ctx, params) -> types.ListToolsResult:
             return types.ListToolsResult(tools=_tool_descriptors(specs))
 
@@ -117,9 +118,7 @@ def build_server(specs: List[ToolSpec]) -> Server:
                     content=[types.TextContent(type="text", text=str(exc))],
                     isError=True,
                 )
-            return types.CallToolResult(
-                content=[types.TextContent(type="text", text=text)]
-            )
+            return types.CallToolResult(content=[types.TextContent(type="text", text=text)])
 
         return Server(
             SERVER_NAME,
@@ -148,11 +147,13 @@ def build_server(specs: List[ToolSpec]) -> Server:
 def run_stdio_server(*, allow_mutating: bool, allow_execute: bool) -> None:
     """Run the MCP server over stdio until the client disconnects."""
     execution = ExecutionManager()
-    server = build_server(build_registry(
-        allow_mutating=allow_mutating,
-        allow_execute=allow_execute,
-        execution=execution,
-    ))
+    server = build_server(
+        build_registry(
+            allow_mutating=allow_mutating,
+            allow_execute=allow_execute,
+            execution=execution,
+        )
+    )
 
     async def _main() -> None:
         async with stdio_server() as (read_stream, write_stream):
@@ -195,9 +196,7 @@ def allowed_hosts_for(host: str, port: int) -> List[str]:
     # An IPv6 literal is bracketed in a Host header (`[::1]:8765`); joining it
     # with a bare colon would produce `::1:8765`, which matches nothing and
     # would 421 every IPv6 loopback client.
-    authorities = [
-        f"[{name}]:{port}" if ":" in name else f"{name}:{port}" for name in names
-    ]
+    authorities = [f"[{name}]:{port}" if ":" in name else f"{name}:{port}" for name in names]
     return authorities + names
 
 
@@ -212,9 +211,11 @@ def _security_settings(host: str, port: int):
     from mcp.server.transport_security import TransportSecuritySettings
 
     hosts = allowed_hosts_for(host, port)
-    origins = ["*"] if hosts == ["*"] else [
-        f"{scheme}://{name}" for name in hosts for scheme in ("http", "https")
-    ]
+    origins = (
+        ["*"]
+        if hosts == ["*"]
+        else [f"{scheme}://{name}" for name in hosts for scheme in ("http", "https")]
+    )
     return TransportSecuritySettings(
         enable_dns_rebinding_protection=True,
         allowed_hosts=hosts,
@@ -271,12 +272,11 @@ def _sse_app(server: Server, security):
     async def _handle_sse(request):
         # ``request._send`` is how the SDK's own examples drive this transport:
         # connect_sse needs the raw ASGI send, which Request does not expose.
-        async with sse.connect_sse(
-            request.scope, request.receive, request._send
-        ) as (read_stream, write_stream):
-            await server.run(
-                read_stream, write_stream, server.create_initialization_options()
-            )
+        async with sse.connect_sse(request.scope, request.receive, request._send) as (
+            read_stream,
+            write_stream,
+        ):
+            await server.run(read_stream, write_stream, server.create_initialization_options())
         return Response(status_code=200)
 
     return Starlette(
@@ -340,9 +340,7 @@ def build_asgi_app(
     from soup_cli.utils.qr_url import validate_token
 
     if transport not in NETWORK_TRANSPORTS:
-        raise ValueError(
-            f"transport must be one of {NETWORK_TRANSPORTS}, got {transport!r}"
-        )
+        raise ValueError(f"transport must be one of {NETWORK_TRANSPORTS}, got {transport!r}")
     # Refused here, not only in the CLI: a direct caller of build_asgi_app /
     # run_network_server must not be able to put an executing registry behind
     # a listener either. The CLI guard gives the operator a readable message;
@@ -354,11 +352,13 @@ def build_asgi_app(
         )
     token = validate_token(auth_token)
 
-    server = build_server(build_registry(
-        allow_mutating=allow_mutating,
-        allow_execute=allow_execute,
-        execution=ExecutionManager(),
-    ))
+    server = build_server(
+        build_registry(
+            allow_mutating=allow_mutating,
+            allow_execute=allow_execute,
+            execution=ExecutionManager(),
+        )
+    )
     security = _security_settings(host, port)
     inner = _sse_app(server, security) if transport == "sse" else _http_app(server, security)
     return _BearerAuthMiddleware(inner, token)

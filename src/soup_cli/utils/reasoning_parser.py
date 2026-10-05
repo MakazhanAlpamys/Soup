@@ -39,8 +39,7 @@ def validate_parser_name(name: str) -> str:
     canonical = name.lower()
     if canonical not in _REASONING_PARSERS:
         raise ValueError(
-            f"unknown reasoning parser {name!r}; "
-            f"expected one of {sorted(_REASONING_PARSERS)}"
+            f"unknown reasoning parser {name!r}; expected one of {sorted(_REASONING_PARSERS)}"
         )
     return canonical
 
@@ -56,9 +55,7 @@ def parser_description(name: str) -> Optional[str]:
 # All four parsers strip the same standard `<think>...</think>` block;
 # OpenThinker uses `<|begin_of_thought|>...<|end_of_thought|>` per upstream.
 _THINK_RE = re.compile(r"<think\b[^>]*>.*?</think>", re.IGNORECASE | re.DOTALL)
-_OPENTHINKER_RE = re.compile(
-    r"<\|begin_of_thought\|>.*?<\|end_of_thought\|>", re.DOTALL
-)
+_OPENTHINKER_RE = re.compile(r"<\|begin_of_thought\|>.*?<\|end_of_thought\|>", re.DOTALL)
 
 
 def strip_reasoning(text: str, parser: Optional[str]) -> str:

@@ -14,6 +14,7 @@ runner = CliRunner()
 # Format detection + normalization
 # ---------------------------------------------------------------------------
 
+
 class TestToolCallingFormat:
     """Format detection + normalization for tool-calling data."""
 
@@ -23,26 +24,30 @@ class TestToolCallingFormat:
             "messages": [
                 {"role": "user", "content": "What's the weather in Tokyo?"},
             ],
-            "tools": [{
-                "type": "function",
-                "function": {
-                    "name": "get_weather",
-                    "description": "Get current weather for a city",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "city": {"type": "string"},
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "description": "Get current weather for a city",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "city": {"type": "string"},
+                            },
+                            "required": ["city"],
                         },
-                        "required": ["city"],
                     },
-                },
-            }],
-            "tool_calls": [{
-                "function": {
-                    "name": "get_weather",
-                    "arguments": "{\"city\": \"Tokyo\"}",
-                },
-            }],
+                }
+            ],
+            "tool_calls": [
+                {
+                    "function": {
+                        "name": "get_weather",
+                        "arguments": '{"city": "Tokyo"}',
+                    },
+                }
+            ],
         }
 
     def test_detect_format(self):
@@ -97,9 +102,7 @@ class TestToolCallingFormat:
                     "function": {"name": "f", "parameters": {"type": "object"}},
                 }
             ],
-            "tool_calls": [
-                {"function": {"name": "f", "arguments": "not-json-content{"}}
-            ],
+            "tool_calls": [{"function": {"name": "f", "arguments": "not-json-content{"}}],
         }
         assert format_to_messages(bad, "tool-calling") is None
 
@@ -107,6 +110,7 @@ class TestToolCallingFormat:
 # ---------------------------------------------------------------------------
 # Synth data template
 # ---------------------------------------------------------------------------
+
 
 class TestToolCallingTemplate:
     def test_build_prompt_contains_domains_and_count(self):
@@ -133,6 +137,7 @@ class TestToolCallingTemplate:
 # ---------------------------------------------------------------------------
 # DataConfig literal accepts tool-calling
 # ---------------------------------------------------------------------------
+
 
 class TestToolCallingConfig:
     def test_dataconfig_accepts_tool_calling(self):
@@ -163,6 +168,7 @@ output: ./output
 # Init template
 # ---------------------------------------------------------------------------
 
+
 class TestToolCallingInitTemplate:
     def test_tool_calling_template_in_templates(self):
         from soup_cli.config.schema import TEMPLATES
@@ -181,9 +187,14 @@ class TestToolCallingInitTemplate:
         from soup_cli.cli import app
 
         monkeypatch.chdir(tmp_path)
-        result = runner.invoke(app, [
-            "init", "--template", "tool-calling",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "init",
+                "--template",
+                "tool-calling",
+            ],
+        )
         assert result.exit_code == 0
         soup_yaml = tmp_path / "soup.yaml"
         assert soup_yaml.exists()
@@ -195,81 +206,106 @@ class TestToolCallingInitTemplate:
 # Eval scoring functions
 # ---------------------------------------------------------------------------
 
+
 class TestToolCallScoring:
     """Scoring functions for tool-call evaluation."""
 
     def test_tool_call_match_exact(self):
         from soup_cli.eval.custom import tool_call_match
 
-        output = json.dumps({
-            "function": {"name": "get_weather", "arguments": "{\"city\": \"Tokyo\"}"},
-        })
-        expected = json.dumps({
-            "function": {"name": "get_weather", "arguments": "{\"city\": \"Tokyo\"}"},
-        })
+        output = json.dumps(
+            {
+                "function": {"name": "get_weather", "arguments": '{"city": "Tokyo"}'},
+            }
+        )
+        expected = json.dumps(
+            {
+                "function": {"name": "get_weather", "arguments": '{"city": "Tokyo"}'},
+            }
+        )
         assert tool_call_match(output, expected) is True
 
     def test_tool_call_match_wrong_name(self):
         from soup_cli.eval.custom import tool_call_match
 
-        output = json.dumps({
-            "function": {"name": "get_time", "arguments": "{\"city\": \"Tokyo\"}"},
-        })
-        expected = json.dumps({
-            "function": {"name": "get_weather", "arguments": "{\"city\": \"Tokyo\"}"},
-        })
+        output = json.dumps(
+            {
+                "function": {"name": "get_time", "arguments": '{"city": "Tokyo"}'},
+            }
+        )
+        expected = json.dumps(
+            {
+                "function": {"name": "get_weather", "arguments": '{"city": "Tokyo"}'},
+            }
+        )
         assert tool_call_match(output, expected) is False
 
     def test_tool_call_match_wrong_args(self):
         from soup_cli.eval.custom import tool_call_match
 
-        output = json.dumps({
-            "function": {"name": "get_weather", "arguments": "{\"city\": \"Kyoto\"}"},
-        })
-        expected = json.dumps({
-            "function": {"name": "get_weather", "arguments": "{\"city\": \"Tokyo\"}"},
-        })
+        output = json.dumps(
+            {
+                "function": {"name": "get_weather", "arguments": '{"city": "Kyoto"}'},
+            }
+        )
+        expected = json.dumps(
+            {
+                "function": {"name": "get_weather", "arguments": '{"city": "Tokyo"}'},
+            }
+        )
         assert tool_call_match(output, expected) is False
 
     def test_tool_call_name_match_only_name(self):
         from soup_cli.eval.custom import tool_call_name_match
 
-        output = json.dumps({
-            "function": {"name": "get_weather", "arguments": "{\"city\": \"Osaka\"}"},
-        })
-        expected = json.dumps({
-            "function": {"name": "get_weather", "arguments": "{\"city\": \"Tokyo\"}"},
-        })
+        output = json.dumps(
+            {
+                "function": {"name": "get_weather", "arguments": '{"city": "Osaka"}'},
+            }
+        )
+        expected = json.dumps(
+            {
+                "function": {"name": "get_weather", "arguments": '{"city": "Tokyo"}'},
+            }
+        )
         assert tool_call_name_match(output, expected) is True
 
     def test_tool_call_args_subset_partial(self):
         from soup_cli.eval.custom import tool_call_args_subset
 
         # Expected args is a subset of output args — partial credit
-        output = json.dumps({
-            "function": {
-                "name": "search",
-                "arguments": "{\"query\": \"cats\", \"limit\": 10}",
-            },
-        })
-        expected = json.dumps({
-            "function": {
-                "name": "search",
-                "arguments": "{\"query\": \"cats\"}",
-            },
-        })
+        output = json.dumps(
+            {
+                "function": {
+                    "name": "search",
+                    "arguments": '{"query": "cats", "limit": 10}',
+                },
+            }
+        )
+        expected = json.dumps(
+            {
+                "function": {
+                    "name": "search",
+                    "arguments": '{"query": "cats"}',
+                },
+            }
+        )
         score = tool_call_args_subset(output, expected)
         assert score > 0.9  # name matches + query matches
 
     def test_tool_call_args_subset_no_match(self):
         from soup_cli.eval.custom import tool_call_args_subset
 
-        output = json.dumps({
-            "function": {"name": "search", "arguments": "{\"query\": \"dogs\"}"},
-        })
-        expected = json.dumps({
-            "function": {"name": "search", "arguments": "{\"query\": \"cats\"}"},
-        })
+        output = json.dumps(
+            {
+                "function": {"name": "search", "arguments": '{"query": "dogs"}'},
+            }
+        )
+        expected = json.dumps(
+            {
+                "function": {"name": "search", "arguments": '{"query": "cats"}'},
+            }
+        )
         score = tool_call_args_subset(output, expected)
         assert score < 1.0
 
@@ -290,6 +326,7 @@ class TestToolCallScoring:
 # ---------------------------------------------------------------------------
 # Recipes
 # ---------------------------------------------------------------------------
+
 
 class TestToolCallingRecipes:
     def test_qwen3_8b_tools_recipe(self):
@@ -316,6 +353,7 @@ class TestToolCallingRecipes:
 # Round-trip and security
 # ---------------------------------------------------------------------------
 
+
 class TestToolCallingRoundTrip:
     def test_validate_and_stats_tool_calling(self, tmp_path):
         from soup_cli.data.loader import load_raw_data
@@ -323,19 +361,23 @@ class TestToolCallingRoundTrip:
 
         row = {
             "messages": [{"role": "user", "content": "Query weather"}],
-            "tools": [{
-                "type": "function",
-                "function": {
-                    "name": "get_weather",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {"city": {"type": "string"}},
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"city": {"type": "string"}},
+                        },
                     },
-                },
-            }],
-            "tool_calls": [{
-                "function": {"name": "get_weather", "arguments": "{\"city\": \"NYC\"}"},
-            }],
+                }
+            ],
+            "tool_calls": [
+                {
+                    "function": {"name": "get_weather", "arguments": '{"city": "NYC"}'},
+                }
+            ],
         }
 
         data_file = tmp_path / "tools.jsonl"
@@ -401,6 +443,7 @@ class TestToolCallingRoundTrip:
 # Data validator accepts tool-calling format
 # ---------------------------------------------------------------------------
 
+
 class TestToolCallingValidator:
     def test_validator_accepts_tool_calling_format(self, tmp_path):
         import json as json_mod
@@ -411,10 +454,15 @@ class TestToolCallingValidator:
         rows = [
             {
                 "messages": [{"role": "user", "content": f"q{i}"}],
-                "tools": [{"type": "function", "function": {
-                    "name": "f",
-                    "parameters": {"type": "object"},
-                }}],
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "f",
+                            "parameters": {"type": "object"},
+                        },
+                    }
+                ],
                 "tool_calls": [{"function": {"name": "f", "arguments": "{}"}}],
             }
             for i in range(3)

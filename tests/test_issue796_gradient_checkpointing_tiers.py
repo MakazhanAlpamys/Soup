@@ -241,9 +241,7 @@ def test_selective_falls_back_truthfully_when_architecture_has_no_attention_chil
 def test_sft_setup_forwards_medium_plan_to_real_trainer(
     tmp_path, monkeypatch, tier: str, memory_gb: int
 ) -> None:
-    wrapper = _setup_real_sft(
-        tmp_path, monkeypatch, tier=tier, memory_gb=memory_gb
-    )
+    wrapper = _setup_real_sft(tmp_path, monkeypatch, tier=tier, memory_gb=memory_gb)
 
     assert wrapper.trainer.args.gradient_checkpointing is True
     assert wrapper.trainer.args.gradient_checkpointing_kwargs == {

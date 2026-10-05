@@ -283,11 +283,16 @@ class TestCliSmoke:
             app,
             [
                 "write",
-                "--base-model", "test-model",
-                "--base-sha", "a" * 64,
-                "--dataset-sha", "b" * 64,
-                "--env-hash", "c" * 64,
-                "--output", "soup.lock",
+                "--base-model",
+                "test-model",
+                "--base-sha",
+                "a" * 64,
+                "--dataset-sha",
+                "b" * 64,
+                "--env-hash",
+                "c" * 64,
+                "--output",
+                "soup.lock",
             ],
         )
         assert result.exit_code == 0, (result.output, repr(result.exception))
@@ -313,11 +318,15 @@ class TestCliSmoke:
             app,
             [
                 "write",
-                "--base-model", "test-model",
-                "--base-sha", "a" * 64,
-                "--dataset-sha", "b" * 64,
+                "--base-model",
+                "test-model",
+                "--base-sha",
+                "a" * 64,
+                "--dataset-sha",
+                "b" * 64,
                 # NOTE: no --env-hash; must auto-derive from soup-env.lock.
-                "--output", "soup.lock",
+                "--output",
+                "soup.lock",
             ],
         )
         assert result.exit_code == 0, (result.output, repr(result.exception))
@@ -335,10 +344,14 @@ class TestCliSmoke:
             app,
             [
                 "write",
-                "--base-model", "test-model",
-                "--base-sha", "a" * 64,
-                "--dataset-sha", "b" * 64,
-                "--output", "soup.lock",
+                "--base-model",
+                "test-model",
+                "--base-sha",
+                "a" * 64,
+                "--dataset-sha",
+                "b" * 64,
+                "--output",
+                "soup.lock",
             ],
         )
         assert result.exit_code == 2
@@ -362,11 +375,16 @@ class TestCliSmoke:
             app,
             [
                 "write",
-                "--base-model", "test-model",
-                "--base-sha", "a" * 64,
-                "--dataset-sha", "b" * 64,
-                "--env-lock", "custom-env.lock",
-                "--output", "soup.lock",
+                "--base-model",
+                "test-model",
+                "--base-sha",
+                "a" * 64,
+                "--dataset-sha",
+                "b" * 64,
+                "--env-lock",
+                "custom-env.lock",
+                "--output",
+                "soup.lock",
             ],
         )
         assert result.exit_code == 0, (result.output, repr(result.exception))
@@ -389,11 +407,16 @@ class TestCliSmoke:
             app,
             [
                 "write",
-                "--base-model", "test-model",
-                "--base-sha", "a" * 64,
-                "--dataset-sha", "b" * 64,
-                "--env-hash", "c" * 64,
-                "--output", "soup.lock",
+                "--base-model",
+                "test-model",
+                "--base-sha",
+                "a" * 64,
+                "--dataset-sha",
+                "b" * 64,
+                "--env-hash",
+                "c" * 64,
+                "--output",
+                "soup.lock",
             ],
         )
         assert result.exit_code == 0, (result.output, repr(result.exception))
@@ -407,11 +430,16 @@ class TestCliSmoke:
             app,
             [
                 "write",
-                "--base-model", "test-model",
-                "--base-sha", "a" * 64,
-                "--dataset-sha", "b" * 64,
-                "--env-hash", "c" * 64,
-                "--output", "soup.lock",
+                "--base-model",
+                "test-model",
+                "--base-sha",
+                "a" * 64,
+                "--dataset-sha",
+                "b" * 64,
+                "--env-hash",
+                "c" * 64,
+                "--output",
+                "soup.lock",
             ],
         )
         assert result.exit_code == 0, (result.output, repr(result.exception))
@@ -448,11 +476,16 @@ class TestCliSmoke:
         result = runner.invoke(
             app,
             [
-                "check", "soup.lock",
-                "--base-model", "test-model",
-                "--base-sha", "a" * 64,
-                "--dataset-sha", "b" * 64,
-                "--env-hash", "c" * 64,
+                "check",
+                "soup.lock",
+                "--base-model",
+                "test-model",
+                "--base-sha",
+                "a" * 64,
+                "--dataset-sha",
+                "b" * 64,
+                "--env-hash",
+                "c" * 64,
             ],
         )
         assert result.exit_code == 0, (result.output, repr(result.exception))
@@ -470,11 +503,16 @@ class TestCliSmoke:
         result = runner.invoke(
             app,
             [
-                "check", "soup.lock",
-                "--base-model", "test-model",
-                "--base-sha", "d" * 64,
-                "--dataset-sha", "b" * 64,
-                "--env-hash", "c" * 64,
+                "check",
+                "soup.lock",
+                "--base-model",
+                "test-model",
+                "--base-sha",
+                "d" * 64,
+                "--dataset-sha",
+                "b" * 64,
+                "--env-hash",
+                "c" * 64,
             ],
         )
         assert result.exit_code == 2
@@ -489,11 +527,16 @@ class TestCliSmoke:
         result = CliRunner().invoke(
             app,
             [
-                "check", "nonexistent.lock",
-                "--base-model", "test-model",
-                "--base-sha", "a" * 64,
-                "--dataset-sha", "b" * 64,
-                "--env-hash", "c" * 64,
+                "check",
+                "nonexistent.lock",
+                "--base-model",
+                "test-model",
+                "--base-sha",
+                "a" * 64,
+                "--dataset-sha",
+                "b" * 64,
+                "--env-hash",
+                "c" * 64,
             ],
         )
         assert result.exit_code == 3
@@ -504,9 +547,7 @@ class TestSourceWiring:
         from pathlib import Path
 
         root = Path(__file__).resolve().parent.parent
-        src = (root / "src" / "soup_cli" / "utils" / "soup_lock.py").read_text(
-            encoding="utf-8"
-        )
+        src = (root / "src" / "soup_cli" / "utils" / "soup_lock.py").read_text(encoding="utf-8")
         head_lines = [
             line
             for line in src.splitlines()[:50]
@@ -520,7 +561,5 @@ class TestSourceWiring:
         from pathlib import Path
 
         root = Path(__file__).resolve().parent.parent
-        src = (root / "src" / "soup_cli" / "utils" / "soup_lock.py").read_text(
-            encoding="utf-8"
-        )
+        src = (root / "src" / "soup_cli" / "utils" / "soup_lock.py").read_text(encoding="utf-8")
         assert "atomic_write_text" in src

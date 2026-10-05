@@ -28,16 +28,24 @@ class TestBuildLogitsProcessors:
     def test_off_kind_returns_empty(self):
         from soup_cli.utils.structured_output import build_logits_processors
 
-        assert build_logits_processors(
-            {"kind": "off"}, MagicMock(),
-        ) == []
+        assert (
+            build_logits_processors(
+                {"kind": "off"},
+                MagicMock(),
+            )
+            == []
+        )
 
     def test_unknown_kind_returns_empty(self):
         from soup_cli.utils.structured_output import build_logits_processors
 
-        assert build_logits_processors(
-            {"kind": "weird"}, MagicMock(),
-        ) == []
+        assert (
+            build_logits_processors(
+                {"kind": "weird"},
+                MagicMock(),
+            )
+            == []
+        )
 
     def test_no_libs_installed_returns_empty(self, monkeypatch):
         """When neither outlines nor lmfe is installed, return [] not error."""
@@ -87,7 +95,8 @@ class TestGenerateResponseLogitsProcessorPlumb:
             captured.update(kwargs)
             mock_out = MagicMock()
             mock_out.__getitem__ = lambda self, idx: MagicMock(
-                shape=[5], __getitem__=lambda s, j: MagicMock(),
+                shape=[5],
+                __getitem__=lambda s, j: MagicMock(),
             )
             return mock_out
 
@@ -106,8 +115,12 @@ class TestGenerateResponseLogitsProcessorPlumb:
         sentinel = ["my-processor"]
         try:
             serve._generate_response(
-                model, tok, [{"role": "user", "content": "hi"}],
-                max_tokens=4, temperature=0.5, top_p=0.9,
+                model,
+                tok,
+                [{"role": "user", "content": "hi"}],
+                max_tokens=4,
+                temperature=0.5,
+                top_p=0.9,
                 logits_processor=sentinel,
             )
         except Exception:  # tokenizer mock approximation may explode in decode
@@ -181,10 +194,12 @@ class TestPushAsResumeIntegration:
         fake_hub = MagicMock()
         fake_hub.HfApi = MagicMock(return_value=fake_api)
         with patch.dict(
-            "sys.modules", {"huggingface_hub": fake_hub},
+            "sys.modules",
+            {"huggingface_hub": fake_hub},
         ):
             cb = hf_push.HFPushCallback(
-                repo_id="test/integration", token="test-token-not-real-1234",
+                repo_id="test/integration",
+                token="test-token-not-real-1234",
             )
             # Smoke: callback constructed and has the failure-flag plumbing
             assert hasattr(cb, "_repo_failed")

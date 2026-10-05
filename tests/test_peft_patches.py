@@ -17,12 +17,14 @@ import pytest
 class TestGemma4Detection:
     def test_is_gemma4_positive_lower(self):
         from soup_cli.utils.peft_patches import is_gemma4_model
+
         assert is_gemma4_model("google/gemma-4-9b") is True
         assert is_gemma4_model("google/gemma-4-it") is True
         assert is_gemma4_model("Gemma-4-2B") is True
 
     def test_is_gemma4_negative(self):
         from soup_cli.utils.peft_patches import is_gemma4_model
+
         assert is_gemma4_model("google/gemma-2-9b") is False
         assert is_gemma4_model("meta-llama/Meta-Llama-3.1-8B") is False
         assert is_gemma4_model("") is False
@@ -31,6 +33,7 @@ class TestGemma4Detection:
     def test_is_gemma4_word_boundary(self):
         """v0.39.0 security fix — substring match would over-match."""
         from soup_cli.utils.peft_patches import is_gemma4_model
+
         # NOT Gemma 4
         assert is_gemma4_model("ungemma4ed") is False
         assert is_gemma4_model("megagemma40-experiment") is False
@@ -40,6 +43,7 @@ class TestGemma4Detection:
 
     def test_is_gemma4_rejects_null_byte(self):
         from soup_cli.utils.peft_patches import is_gemma4_model
+
         # crafted name with null byte should not match
         assert is_gemma4_model("gemma-4\x00malicious") is False
 
@@ -91,6 +95,7 @@ class TestClippableLinearPatch:
 class TestMoE3DDropoutStrip:
     def test_strip_when_no_3d_experts(self):
         from soup_cli.utils.peft_patches import strip_lora_dropout_for_3d_experts
+
         # peft model with only 2-D weights — strip is no-op
         peft_model = MagicMock()
         peft_model.named_modules.return_value = [
@@ -101,6 +106,7 @@ class TestMoE3DDropoutStrip:
 
     def test_strip_zeroes_dropout_on_3d_module(self):
         from soup_cli.utils.peft_patches import strip_lora_dropout_for_3d_experts
+
         # Build a fake module tree: experts.0.gate_proj has 3-D weight + lora_dropout
         expert = MagicMock()
         expert.weight = MagicMock(ndim=3)
@@ -188,10 +194,12 @@ class TestApplySurgicalPatches:
 
     def test_rejects_empty_model_name(self):
         from soup_cli.utils.peft_patches import apply_surgical_patches
+
         with pytest.raises(ValueError):
             apply_surgical_patches(MagicMock(), model_name="")
 
     def test_rejects_null_byte_model_name(self):
         from soup_cli.utils.peft_patches import apply_surgical_patches
+
         with pytest.raises(ValueError):
             apply_surgical_patches(MagicMock(), model_name="gemma-4\x00x")

@@ -44,11 +44,19 @@ def _probes(fs: str) -> Path:
 class TestBothModelsWithoutProbes:
     def test_it_is_refused_rather_than_reporting_an_empty_diff(self, tmp_path):
         with runner.isolated_filesystem(temp_dir=tmp_path):
-            result = runner.invoke(app, [
-                "edit", "diff", "runA", "runB",
-                "--before-model", "./base",
-                "--after-model", "./edited",
-            ])
+            result = runner.invoke(
+                app,
+                [
+                    "edit",
+                    "diff",
+                    "runA",
+                    "runB",
+                    "--before-model",
+                    "./base",
+                    "--after-model",
+                    "./edited",
+                ],
+            )
             assert result.exit_code == 2, result.output
 
     def test_the_message_names_the_missing_flag(self, tmp_path):
@@ -56,11 +64,19 @@ class TestBothModelsWithoutProbes:
         because some *other* guard fired — which is exactly how a new guard
         that can never be reached would look green."""
         with runner.isolated_filesystem(temp_dir=tmp_path):
-            result = runner.invoke(app, [
-                "edit", "diff", "runA", "runB",
-                "--before-model", "./base",
-                "--after-model", "./edited",
-            ])
+            result = runner.invoke(
+                app,
+                [
+                    "edit",
+                    "diff",
+                    "runA",
+                    "runB",
+                    "--before-model",
+                    "./base",
+                    "--after-model",
+                    "./edited",
+                ],
+            )
             assert "--probes" in _clean(result.output), result.output
 
     def test_no_diff_file_is_written(self, tmp_path):
@@ -68,12 +84,21 @@ class TestBothModelsWithoutProbes:
         it. Refusing must not leave a file that says "nothing changed"."""
         with runner.isolated_filesystem(temp_dir=tmp_path) as fs:
             out = Path(fs) / "d.json"
-            result = runner.invoke(app, [
-                "edit", "diff", "runA", "runB",
-                "--before-model", "./base",
-                "--after-model", "./edited",
-                "-o", str(out),
-            ])
+            result = runner.invoke(
+                app,
+                [
+                    "edit",
+                    "diff",
+                    "runA",
+                    "runB",
+                    "--before-model",
+                    "./base",
+                    "--after-model",
+                    "./edited",
+                    "-o",
+                    str(out),
+                ],
+            )
             assert result.exit_code == 2, result.output
             assert not out.exists(), "an empty diff was written despite the refusal"
 
@@ -88,27 +113,53 @@ class TestTheGuardsAlreadyLandedStillFire:
 
     def test_probes_without_either_model(self, tmp_path):
         with runner.isolated_filesystem(temp_dir=tmp_path) as fs:
-            result = runner.invoke(app, [
-                "edit", "diff", "runA", "runB", "--probes", str(_probes(fs)),
-            ])
+            result = runner.invoke(
+                app,
+                [
+                    "edit",
+                    "diff",
+                    "runA",
+                    "runB",
+                    "--probes",
+                    str(_probes(fs)),
+                ],
+            )
             assert result.exit_code == 2, result.output
             assert "both --before-model and --after-model are required" in _clean(result.output)
 
     def test_only_before_model(self, tmp_path):
         with runner.isolated_filesystem(temp_dir=tmp_path) as fs:
-            result = runner.invoke(app, [
-                "edit", "diff", "runA", "runB",
-                "--probes", str(_probes(fs)), "--before-model", "./base",
-            ])
+            result = runner.invoke(
+                app,
+                [
+                    "edit",
+                    "diff",
+                    "runA",
+                    "runB",
+                    "--probes",
+                    str(_probes(fs)),
+                    "--before-model",
+                    "./base",
+                ],
+            )
             assert result.exit_code == 2, result.output
             assert "--after-model is required" in _clean(result.output)
 
     def test_only_after_model(self, tmp_path):
         with runner.isolated_filesystem(temp_dir=tmp_path) as fs:
-            result = runner.invoke(app, [
-                "edit", "diff", "runA", "runB",
-                "--probes", str(_probes(fs)), "--after-model", "./edited",
-            ])
+            result = runner.invoke(
+                app,
+                [
+                    "edit",
+                    "diff",
+                    "runA",
+                    "runB",
+                    "--probes",
+                    str(_probes(fs)),
+                    "--after-model",
+                    "./edited",
+                ],
+            )
             assert result.exit_code == 2, result.output
             assert "--before-model is required" in _clean(result.output)
 
@@ -120,9 +171,17 @@ class TestTheValidInvocationIsUnchanged:
         *contradictory* combination, not about probes being mandatory."""
         with runner.isolated_filesystem(temp_dir=tmp_path) as fs:
             out = Path(fs) / "d.json"
-            result = runner.invoke(app, [
-                "edit", "diff", "before-run", "after-run", "--output", str(out),
-            ])
+            result = runner.invoke(
+                app,
+                [
+                    "edit",
+                    "diff",
+                    "before-run",
+                    "after-run",
+                    "--output",
+                    str(out),
+                ],
+            )
             assert result.exit_code == 0, result.output
             data = json.loads(out.read_text(encoding="utf-8"))
             assert data["total_probes"] == 0

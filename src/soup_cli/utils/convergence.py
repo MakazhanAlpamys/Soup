@@ -16,7 +16,9 @@ MAX_REL_TOL = 1.0
 
 
 def detect_plateau(
-    losses: Sequence[float], window: int = 50, rel_tol: float = 0.005,
+    losses: Sequence[float],
+    window: int = 50,
+    rel_tol: float = 0.005,
 ) -> bool:
     """True when relative range of the last ``window`` losses < ``rel_tol``.
 
@@ -24,13 +26,9 @@ def detect_plateau(
     or non-finite, returns False (refuses to assess).
     """
     if not (MIN_WINDOW <= window <= MAX_WINDOW):
-        raise ValueError(
-            f"window must be in [{MIN_WINDOW}, {MAX_WINDOW}], got {window}"
-        )
+        raise ValueError(f"window must be in [{MIN_WINDOW}, {MAX_WINDOW}], got {window}")
     if not (0.0 <= rel_tol <= MAX_REL_TOL):
-        raise ValueError(
-            f"rel_tol must be in [0, {MAX_REL_TOL}], got {rel_tol}"
-        )
+        raise ValueError(f"rel_tol must be in [0, {MAX_REL_TOL}], got {rel_tol}")
     if len(losses) < window:
         return False
     tail = losses[-window:]

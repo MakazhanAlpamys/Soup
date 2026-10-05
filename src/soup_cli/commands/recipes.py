@@ -52,16 +52,16 @@ def show(
         # built-in "Did you mean" for unknown CLI flags).
         suggestions = _suggest_recipes(name)
         if suggestions:
-            console.print(
-                f"[dim]Did you mean: [bold]{', '.join(suggestions)}[/]?[/]"
-            )
+            console.print(f"[dim]Did you mean: [bold]{', '.join(suggestions)}[/]?[/]")
         console.print("[dim]Run 'soup recipes list' to see all recipes.[/]")
         raise typer.Exit(1)
 
-    console.print(Panel(
-        Syntax(recipe.yaml_str, "yaml", theme="monokai"),
-        title=f"[bold green]{name}[/] -- {recipe.description}",
-    ))
+    console.print(
+        Panel(
+            Syntax(recipe.yaml_str, "yaml", theme="monokai"),
+            title=f"[bold green]{name}[/] -- {recipe.description}",
+        )
+    )
 
 
 @app.command()
@@ -144,14 +144,15 @@ def search(
 @app.command(cls=GateCommand)
 def verify(
     config: Optional[str] = typer.Option(
-        None, "--config", "-c",
+        None,
+        "--config",
+        "-c",
         help="Verify one config instead of the whole catalogue.",
     ),
-    json_out: bool = typer.Option(
-        False, "--json", help="Machine-readable rows on stdout."
-    ),
+    json_out: bool = typer.Option(False, "--json", help="Machine-readable rows on stdout."),
     templates: bool = typer.Option(
-        True, "--templates/--no-templates",
+        True,
+        "--templates/--no-templates",
         help="Also verify src/soup_cli/templates and examples/ (catalogue mode).",
     ),
 ):
@@ -210,7 +211,10 @@ def verify(
     for name, cfg in configs:
         report.checks.append(
             check_attach(
-                name, cfg, load_hf_config=load_hf_config, build_model=build_on_meta,
+                name,
+                cfg,
+                load_hf_config=load_hf_config,
+                build_model=build_on_meta,
                 # stderr: the resolver's partial-coverage advisory must not land
                 # in --json's stdout (#1117 review, after #1164).
                 console=err_console,
@@ -225,10 +229,15 @@ def verify(
             _json.dumps(
                 [
                     {
-                        "name": c.name, "base": c.base, "task": c.task,
-                        "verdict": c.verdict.value, "model_type": c.model_type,
-                        "adapted": c.adapted, "expert_modules": c.expert_modules,
-                        "vision_modules": c.vision_modules, "detail": c.detail,
+                        "name": c.name,
+                        "base": c.base,
+                        "task": c.task,
+                        "verdict": c.verdict.value,
+                        "model_type": c.model_type,
+                        "adapted": c.adapted,
+                        "expert_modules": c.expert_modules,
+                        "vision_modules": c.vision_modules,
+                        "detail": c.detail,
                     }
                     for c in report.checks
                 ],
@@ -305,8 +314,10 @@ def _print_preflight(report, verdict_cls) -> None:
             # verbatim): markup would crash the report or restyle it, and a raw
             # ESC would reach the terminal (#1117 review).
             table.add_row(
-                for_terminal(check.name), for_terminal(check.model_type),
-                for_terminal(check.stage), for_terminal(check.detail[:90]),
+                for_terminal(check.name),
+                for_terminal(check.model_type),
+                for_terminal(check.stage),
+                for_terminal(check.detail[:90]),
             )
         console.print(table)
 
@@ -329,9 +340,7 @@ def _print_preflight(report, verdict_cls) -> None:
     if experts:
         console.print(f"[dim]{experts} of them adapted expert modules.[/]")
     if vision:
-        console.print(
-            f"[yellow]adapted a vision tower:[/] {for_terminal(', '.join(vision))}"
-        )
+        console.print(f"[yellow]adapted a vision tower:[/] {for_terminal(', '.join(vision))}")
 
 
 def _suggest_recipes(query: str, n: int = 3) -> list[str]:
@@ -341,9 +350,7 @@ def _suggest_recipes(query: str, n: int = 3) -> list[str]:
     from soup_cli.recipes.catalog import RECIPES
 
     try:
-        names = list(RECIPES.keys()) if hasattr(RECIPES, "keys") else [
-            r.name for r in RECIPES
-        ]
+        names = list(RECIPES.keys()) if hasattr(RECIPES, "keys") else [r.name for r in RECIPES]
     except Exception:  # noqa: BLE001
         return []
     return get_close_matches(query, names, n=n, cutoff=0.6)

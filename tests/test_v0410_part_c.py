@@ -40,6 +40,7 @@ def _sft(**training):
 
 # ---------- LoftQ ----------
 
+
 class TestLoftqValidators:
     def test_iter_default(self):
         assert validate_loftq_iter(1) == 1
@@ -94,6 +95,7 @@ class TestLoraInitStrategyLoftq:
 
 # ---------- LLaMA Pro / block expansion ----------
 
+
 class TestBlockExpansion:
     def test_expand_layers_validation(self):
         assert validate_expand_layers(None) == 0
@@ -146,9 +148,7 @@ class TestSchemaBlockExpansion:
             TrainingConfig(expand_layers=4)
 
     def test_expand_layers_with_freeze_accepted(self):
-        cfg = TrainingConfig(
-            expand_layers=4, freeze_trainable_layers=4, quantization="none"
-        )
+        cfg = TrainingConfig(expand_layers=4, freeze_trainable_layers=4, quantization="none")
         assert cfg.expand_layers == 4
         assert cfg.freeze_trainable_layers == 4
 
@@ -253,6 +253,7 @@ class TestSchemaBlockExpansion:
 
 # ---------- Mixture-of-Depths ----------
 
+
 class TestUseMod:
     def test_default_off(self):
         assert TrainingConfig().use_mod is False
@@ -263,6 +264,7 @@ class TestUseMod:
 
 
 # ---------- 8/16-bit aliases ----------
+
 
 class TestLoadInAliases:
     def test_default_none(self):
@@ -283,9 +285,7 @@ class TestLoadInAliases:
             TrainingConfig(load_in_8bit=True, load_in_16bit=True)
 
     def test_both_false_no_op(self):
-        cfg = TrainingConfig(
-            load_in_8bit=False, load_in_16bit=False, quantization="4bit"
-        )
+        cfg = TrainingConfig(load_in_8bit=False, load_in_16bit=False, quantization="4bit")
         assert cfg.quantization == "4bit"
 
     def test_alias_with_quant_menu_rejected(self):
@@ -294,6 +294,7 @@ class TestLoadInAliases:
 
 
 # ---------- Full SoupConfig integration ----------
+
 
 class TestSoupConfigIntegration:
     def test_full_yaml_loftq(self):

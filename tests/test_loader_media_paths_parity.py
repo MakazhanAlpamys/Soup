@@ -322,9 +322,7 @@ def _load(kind, fmt, rows, extra_rows, tmp_path, monkeypatch, **data_overrides) 
         monkeypatch,
         hub={_HUB_NAME: {"train": rows}, "org/more": {"train": extra_rows}},
     )
-    return load_dataset(
-        DataConfig(train=[_HUB_NAME, "org/more"], interleave="concat", **common)
-    )
+    return load_dataset(DataConfig(train=[_HUB_NAME, "org/more"], interleave="concat", **common))
 
 
 def _skip_lines(key: str, count: int, base: Path | str) -> str:
@@ -429,14 +427,13 @@ def _two_entry_dirs(tmp_path: Path, *, shared: bool = False) -> tuple[Path, Path
 
 def _streaming_config(train, interleave="concat", **overrides) -> DataConfig:
     common = {"format": "llava", "val_split": 0.0, **overrides}
-    return DataConfig(train=[str(path) for path in train], interleave=interleave,
-                      streaming=True, **common)
+    return DataConfig(
+        train=[str(path) for path in train], interleave=interleave, streaming=True, **common
+    )
 
 
 @pytest.mark.parametrize("fmt", ["llava", "asr", "auto"])
-def test_streamed_rows_resolve_against_their_own_entry(
-    fmt, tmp_path, monkeypatch, loader_output
-):
+def test_streamed_rows_resolve_against_their_own_entry(fmt, tmp_path, monkeypatch, loader_output):
     shape = "asr" if fmt == "asr" else "llava"
     first_dir, second_dir = _two_entry_dirs(tmp_path)
     # The first row converts to nothing, so formatted rows sit one place
@@ -461,9 +458,7 @@ def test_streamed_rows_resolve_against_their_own_entry(
         "from-second": _resolved(second_dir),
     }
     assert calls.count("map") == 2
-    assert _plain(loader_output.getvalue()).count(
-        _skip_lines(_KEY[shape], 1, second_dir)
-    ) == 1
+    assert _plain(loader_output.getvalue()).count(_skip_lines(_KEY[shape], 1, second_dir)) == 1
 
 
 @pytest.mark.parametrize(
@@ -517,9 +512,7 @@ def test_streamed_entries_sharing_a_directory_are_not_tagged(
         ("b", _resolved(first_dir)),
     ]
     assert "map" not in calls
-    assert _plain(loader_output.getvalue()).count(
-        _skip_lines(_KEY[shape], 1, first_dir)
-    ) == 1
+    assert _plain(loader_output.getvalue()).count(_skip_lines(_KEY[shape], 1, first_dir)) == 1
 
 
 @pytest.mark.parametrize("layout", ["one_directory", "two_directories"])
@@ -901,9 +894,7 @@ def test_hub_validation_split_is_resolved_too(tmp_path, monkeypatch, loader_outp
     )
 
     result = load_dataset(
-        DataConfig(
-            train=_HUB_NAME, format="llava", val_split=0.0, image_dir=str(dirs["media"])
-        )
+        DataConfig(train=_HUB_NAME, format="llava", val_split=0.0, image_dir=str(dirs["media"]))
     )
 
     assert [(_tag_of(row), row["image"]) for row in result["val"]] == [
@@ -970,9 +961,7 @@ def test_network_device_and_nul_values_are_skipped_before_realpath(
     [b"clips/ok.bin", Path("clips/ok.bin"), os.fsencode(NETWORK_FORMS[0])],
     ids=["bytes", "path-object", "bytes-network"],
 )
-def test_a_bytes_or_path_object_value_is_skipped_not_passed_on(
-    key, value, tmp_path, loader_output
-):
+def test_a_bytes_or_path_object_value_is_skipped_not_passed_on(key, value, tmp_path, loader_output):
     dirs = _layout(tmp_path)
     validate = loader._validate_vision_images if key == "image" else loader._validate_audio_files
 
@@ -997,9 +986,7 @@ def test_a_hub_bytes_value_is_skipped_like_a_path_outside(tmp_path, monkeypatch,
     assert _skip_lines("image", 1, dirs["media"]) in _plain(loader_output.getvalue())
 
 
-def test_a_hub_bytes_value_without_a_media_dir_is_skipped_not_refused(
-    monkeypatch, loader_output
-):
+def test_a_hub_bytes_value_without_a_media_dir_is_skipped_not_refused(monkeypatch, loader_output):
     decoded = object()
     rows = [_row("llava", b"clips/ok.bin", "bytes"), _row("llava", decoded, "decoded")]
     _install_fake_datasets(monkeypatch, hub={_HUB_NAME: {"train": rows}})
@@ -1504,8 +1491,19 @@ def test_soup_infer_asr_skips_network_and_device_rows(tmp_path, monkeypatch):
 
     result = CliRunner().invoke(
         app,
-        ["infer", "--task", "asr", "--model", "m", "--input", "in.jsonl",
-         "--output", "out.jsonl", "--audio-dir", "audio"],
+        [
+            "infer",
+            "--task",
+            "asr",
+            "--model",
+            "m",
+            "--input",
+            "in.jsonl",
+            "--output",
+            "out.jsonl",
+            "--audio-dir",
+            "audio",
+        ],
     )
 
     assert result.exit_code == 0, (result.output, repr(result.exception))

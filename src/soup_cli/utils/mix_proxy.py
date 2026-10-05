@@ -53,55 +53,36 @@ def _validate_path_under_cwd(name: str, raw: object) -> str:
     if "\x00" in raw:
         raise ValueError(f"{name} must not contain null bytes")
     if len(raw) > _MAX_PATH_LEN:
-        raise ValueError(
-            f"{name} length {len(raw)} exceeds cap {_MAX_PATH_LEN}"
-        )
+        raise ValueError(f"{name} length {len(raw)} exceeds cap {_MAX_PATH_LEN}")
     try:
         st = os.lstat(raw)
     except FileNotFoundError as exc:
-        raise FileNotFoundError(
-            f"{name} not found: {os.path.basename(raw)!r}"
-        ) from exc
+        raise FileNotFoundError(f"{name} not found: {os.path.basename(raw)!r}") from exc
     except OSError as exc:
-        raise ValueError(
-            f"{name} is not stat-able: {os.path.basename(raw)!r}"
-        ) from exc
+        raise ValueError(f"{name} is not stat-able: {os.path.basename(raw)!r}") from exc
     if stat.S_ISLNK(st.st_mode):
-        raise ValueError(
-            f"{name} is a symlink (rejected for safety): "
-            f"{os.path.basename(raw)!r}"
-        )
+        raise ValueError(f"{name} is a symlink (rejected for safety): {os.path.basename(raw)!r}")
     from soup_cli.utils.paths import is_under_cwd  # noqa: PLC0415
 
     real = os.path.realpath(raw)
     if not is_under_cwd(real):
         raise ValueError(f"{name} is outside cwd: {os.path.basename(real)!r}")
     if not os.path.isfile(real):
-        raise FileNotFoundError(
-            f"{name} is not a regular file: {os.path.basename(real)!r}"
-        )
+        raise FileNotFoundError(f"{name} is not a regular file: {os.path.basename(real)!r}")
     return real
 
 
-def _validate_weights(
-    weights: Sequence[float], num_datasets: int
-) -> Tuple[float, ...]:
+def _validate_weights(weights: Sequence[float], num_datasets: int) -> Tuple[float, ...]:
     if not isinstance(weights, (list, tuple)):
-        raise TypeError(
-            f"weights must be list/tuple, got {type(weights).__name__}"
-        )
+        raise TypeError(f"weights must be list/tuple, got {type(weights).__name__}")
     if len(weights) != num_datasets:
-        raise ValueError(
-            f"weights length {len(weights)} != datasets {num_datasets}"
-        )
+        raise ValueError(f"weights length {len(weights)} != datasets {num_datasets}")
     floats: list = []
     for value in weights:
         if isinstance(value, bool):
             raise ValueError("weight must be float, not bool")
         if not isinstance(value, (int, float)):
-            raise TypeError(
-                f"weight must be float, got {type(value).__name__}"
-            )
+            raise TypeError(f"weight must be float, got {type(value).__name__}")
         fv = float(value)
         if not math.isfinite(fv):
             raise ValueError(f"weight must be finite (got {value!r})")
@@ -110,30 +91,20 @@ def _validate_weights(
         floats.append(fv)
     total = sum(floats)
     if abs(total - 1.0) > _FLOAT_TOL:
-        raise ValueError(
-            f"weights must sum to 1.0 ± {_FLOAT_TOL} (got {total})"
-        )
+        raise ValueError(f"weights must sum to 1.0 ± {_FLOAT_TOL} (got {total})")
     return tuple(floats)
 
 
 def _validate_datasets(datasets: Sequence[str]) -> Tuple[str, ...]:
     if not isinstance(datasets, (list, tuple)):
-        raise TypeError(
-            f"datasets must be list/tuple, got {type(datasets).__name__}"
-        )
+        raise TypeError(f"datasets must be list/tuple, got {type(datasets).__name__}")
     if len(datasets) < 2:
-        raise ValueError(
-            f"datasets must contain at least 2 entries (got {len(datasets)})"
-        )
+        raise ValueError(f"datasets must contain at least 2 entries (got {len(datasets)})")
     if len(datasets) > _MAX_DATASETS:
-        raise ValueError(
-            f"datasets has {len(datasets)} entries; cap is {_MAX_DATASETS}"
-        )
+        raise ValueError(f"datasets has {len(datasets)} entries; cap is {_MAX_DATASETS}")
     for entry in datasets:
         if not isinstance(entry, str):
-            raise TypeError(
-                f"dataset must be str, got {type(entry).__name__}"
-            )
+            raise TypeError(f"dataset must be str, got {type(entry).__name__}")
         if not entry:
             raise ValueError("dataset path must be non-empty")
         if "\x00" in entry:
@@ -141,9 +112,7 @@ def _validate_datasets(datasets: Sequence[str]) -> Tuple[str, ...]:
         if "\n" in entry:
             raise ValueError("dataset path must not contain newlines")
         if len(entry) > _MAX_PATH_LEN:
-            raise ValueError(
-                f"dataset path length {len(entry)} exceeds {_MAX_PATH_LEN}"
-            )
+            raise ValueError(f"dataset path length {len(entry)} exceeds {_MAX_PATH_LEN}")
     return tuple(datasets)
 
 
@@ -151,10 +120,7 @@ def _validate_timeout(timeout_seconds: object) -> int:
     if isinstance(timeout_seconds, bool):
         raise ValueError("timeout_seconds must be int, not bool")
     if not isinstance(timeout_seconds, int):
-        raise TypeError(
-            "timeout_seconds must be int, got "
-            f"{type(timeout_seconds).__name__}"
-        )
+        raise TypeError(f"timeout_seconds must be int, got {type(timeout_seconds).__name__}")
     if timeout_seconds < _MIN_TIMEOUT_S or timeout_seconds > _MAX_TIMEOUT_S:
         raise ValueError(
             f"timeout_seconds must be in [{_MIN_TIMEOUT_S}, "
@@ -214,17 +180,14 @@ def _render_overlay_yaml(
                 rounded_probs = [round(float(w), 6) for w in weights]
                 lines.insert(
                     i,
-                    f"  # data.interleave=probs {rounded_probs} over "
-                    f"{list(datasets)!r} — see #443",
+                    f"  # data.interleave=probs {rounded_probs} over {list(datasets)!r} — see #443",
                 )
                 break
         dumped = "\n".join(lines)
     return dumped
 
 
-def _read_final_eval_loss(
-    tracker_db_path: Optional[str], started_at: float
-) -> float:
+def _read_final_eval_loss(tracker_db_path: Optional[str], started_at: float) -> float:
     """Read the most-recent finished run's final eval_loss / final_loss.
 
     Looks for runs created at or after ``started_at`` (epoch seconds) so a
@@ -248,9 +211,7 @@ def _read_final_eval_loss(
         if not math.isfinite(fv):
             continue
         return fv
-    raise RuntimeError(
-        "no completed run found in tracker — proxy training failed"
-    )
+    raise RuntimeError("no completed run found in tracker — proxy training failed")
 
 
 def proxy_run_for_weights(
@@ -290,9 +251,7 @@ def proxy_run_for_weights(
     with open(yaml_real, "r", encoding="utf-8") as fh:
         base_text = fh.read()
     if len(base_text) > 256 * 1024:
-        raise ValueError(
-            f"base YAML exceeds 256KB cap (got {len(base_text)} bytes)"
-        )
+        raise ValueError(f"base YAML exceeds 256KB cap (got {len(base_text)} bytes)")
     overlay = _render_overlay_yaml(base_text, ds, w)
 
     tmp_dir = tempfile.mkdtemp(prefix=".soup_mix_proxy.")
@@ -322,14 +281,9 @@ def proxy_run_for_weights(
                 timeout=timeout,
             )
         except subprocess.TimeoutExpired as exc:
-            raise RuntimeError(
-                f"proxy training exceeded {timeout}s timeout"
-            ) from exc
+            raise RuntimeError(f"proxy training exceeded {timeout}s timeout") from exc
         if result.returncode != 0:
-            raise RuntimeError(
-                "proxy training subprocess failed "
-                f"(rc={result.returncode})"
-            )
+            raise RuntimeError(f"proxy training subprocess failed (rc={result.returncode})")
         return _read_final_eval_loss(tracker_db_path, started_at)
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)

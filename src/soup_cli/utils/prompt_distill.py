@@ -54,9 +54,7 @@ def validate_distill_strategy(name: object) -> str:
     if "\x00" in name:
         raise ValueError("strategy must not contain null bytes")
     if len(name) > _MAX_STRATEGY_LEN:
-        raise ValueError(
-            f"strategy length {len(name)} > {_MAX_STRATEGY_LEN}"
-        )
+        raise ValueError(f"strategy length {len(name)} > {_MAX_STRATEGY_LEN}")
     canonical = name.lower()
     if canonical not in SUPPORTED_DISTILL_STRATEGIES:
         raise ValueError(
@@ -126,9 +124,7 @@ class DistillPromptPlan:
         validate_traces_path(self.traces_path)
         validate_teacher_id(self.teacher)
         validate_student_id(self.student)
-        object.__setattr__(
-            self, "strategy", validate_distill_strategy(self.strategy)
-        )
+        object.__setattr__(self, "strategy", validate_distill_strategy(self.strategy))
         _validate_output_path(self.output_path)
 
 

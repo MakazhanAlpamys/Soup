@@ -9,6 +9,7 @@ import pytest
 def _has_fastapi():
     try:
         import fastapi  # noqa: F401
+
         return True
     except ImportError:
         return False
@@ -221,14 +222,17 @@ class TestServeSGLangCommand:
         model_dir.mkdir()
 
         runner = CliRunner()
-        with mock_patch(
-            "soup_cli.utils.sglang.check_sglang_available", return_value=False
-        ):
-            result = runner.invoke(app, [
-                "serve",
-                "--model", str(model_dir),
-                "--backend", "sglang",
-            ])
+        with mock_patch("soup_cli.utils.sglang.check_sglang_available", return_value=False):
+            result = runner.invoke(
+                app,
+                [
+                    "serve",
+                    "--model",
+                    str(model_dir),
+                    "--backend",
+                    "sglang",
+                ],
+            )
         assert result.exit_code != 0
 
     @pytest.mark.skipif(not _has_fastapi(), reason="fastapi not installed")
@@ -242,11 +246,16 @@ class TestServeSGLangCommand:
         model_dir.mkdir()
 
         runner = CliRunner()
-        result = runner.invoke(app, [
-            "serve",
-            "--model", str(model_dir),
-            "--backend", "invalid_backend",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "serve",
+                "--model",
+                str(model_dir),
+                "--backend",
+                "invalid_backend",
+            ],
+        )
         assert result.exit_code != 0
         assert "sglang" in result.output  # Should list valid backends
 

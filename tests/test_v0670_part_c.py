@@ -72,9 +72,7 @@ class TestMoleGatingConfig:
         from soup_cli.utils.mole_routing import MoleGatingConfig
 
         with pytest.raises(ValueError):
-            MoleGatingConfig(
-                num_task_adapters=1, hidden_dim=128, temperature=1.0, top_k=1
-            )
+            MoleGatingConfig(num_task_adapters=1, hidden_dim=128, temperature=1.0, top_k=1)
 
     def test_num_task_adapters_above_cap(self) -> None:
         from soup_cli.utils.mole_routing import (
@@ -244,9 +242,7 @@ class TestBuildGatingKernel:
 
         from soup_cli.utils.mole_routing import MoleGatingConfig, build_gating_kernel
 
-        cfg = MoleGatingConfig(
-            num_task_adapters=4, hidden_dim=8, temperature=1.0, top_k=2
-        )
+        cfg = MoleGatingConfig(num_task_adapters=4, hidden_dim=8, temperature=1.0, top_k=2)
         kernel = build_gating_kernel(cfg)
         weights = kernel(torch.randn(2, 3, 8))
         assert weights.shape == (2, 3, 4)
@@ -311,9 +307,7 @@ class TestSourceWiring:
         from pathlib import Path
 
         root = Path(__file__).resolve().parent.parent
-        src = (root / "src" / "soup_cli" / "utils" / "mole_routing.py").read_text(
-            encoding="utf-8"
-        )
+        src = (root / "src" / "soup_cli" / "utils" / "mole_routing.py").read_text(encoding="utf-8")
         head_lines = [
             line
             for line in src.splitlines()[:50]

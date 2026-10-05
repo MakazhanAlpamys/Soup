@@ -209,8 +209,10 @@ class TestLabelValidationUpfront:
     def test_dry_run_refuses_missing_label_with_row_index(self, tmp_path: Path) -> None:
         data_file = tmp_path / "data.jsonl"
         data_file.write_text(
-            json.dumps({"text": "sample 0", "label": "ham"}) + "\n"
-            + json.dumps({"text": "sample 1"}) + "\n"
+            json.dumps({"text": "sample 0", "label": "ham"})
+            + "\n"
+            + json.dumps({"text": "sample 1"})
+            + "\n"
         )
         cfg_file = tmp_path / "soup.yaml"
         cfg_file.write_text(
@@ -235,9 +237,7 @@ class TestLabelValidationUpfront:
 
     def test_train_load_refuses_missing_label_before_model_loads(self, tmp_path: Path) -> None:
         data_file = tmp_path / "data.jsonl"
-        data_file.write_text(
-            json.dumps({"text": "sample 0"}) + "\n"
-        )
+        data_file.write_text(json.dumps({"text": "sample 0"}) + "\n")
         cfg_file = tmp_path / "soup.yaml"
         cfg_file.write_text(
             f"""
@@ -447,15 +447,12 @@ class TestDocumentedExampleTraining:
     """End-to-end training of the documented classifier example."""
 
     @skip_on_windows_ci
-    def test_documented_classifier_example_trains_and_records_labels(
-        self, tmp_path: Path
-    ) -> None:
+    def test_documented_classifier_example_trains_and_records_labels(self, tmp_path: Path) -> None:
         labels = ["ham", "spam", "promo"]
         data_path = tmp_path / "labelled.jsonl"
         data_path.write_text(
             "\n".join(
-                json.dumps({"text": f"message {i}", "label": labels[i % 3]})
-                for i in range(6)
+                json.dumps({"text": f"message {i}", "label": labels[i % 3]}) for i in range(6)
             )
             + "\n"
         )

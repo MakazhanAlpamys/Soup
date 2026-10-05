@@ -187,23 +187,19 @@ class _GRPOStabilityCallback_body:  # type: ignore[misc, valid-type]  # noqa: N8
                 raise TypeError("replay_buffer_size must be int, not bool")
             if not (1 <= int(replay_buffer_size) <= 1_000_000):
                 raise ValueError(
-                    f"replay_buffer_size must be in [1, 1e6], got "
-                    f"{replay_buffer_size}"
+                    f"replay_buffer_size must be in [1, 1e6], got {replay_buffer_size}"
                 )
         if tis_threshold is not None:
             if isinstance(tis_threshold, bool):
                 raise TypeError("tis_threshold must be float, not bool")
             if not (0.0 < float(tis_threshold) <= 100.0):
-                raise ValueError(
-                    f"tis_threshold must be in (0, 100], got {tis_threshold}"
-                )
+                raise ValueError(f"tis_threshold must be in (0, 100], got {tis_threshold}")
         if off_policy_mask_threshold is not None:
             if isinstance(off_policy_mask_threshold, bool):
                 raise TypeError("off_policy_mask_threshold must be float, not bool")
             if not (0.0 <= float(off_policy_mask_threshold) <= 1.0):
                 raise ValueError(
-                    f"off_policy_mask_threshold must be in [0, 1], got "
-                    f"{off_policy_mask_threshold}"
+                    f"off_policy_mask_threshold must be in [0, 1], got {off_policy_mask_threshold}"
                 )
         self.ref_model_ema_alpha = ref_model_ema_alpha
         self.replay_buffer_size = replay_buffer_size
@@ -295,9 +291,7 @@ class _GRPOStabilityCallback_body:  # type: ignore[misc, valid-type]  # noqa: N8
         ):
             try:
                 policy = model if model is not None else self._policy_model
-                updated = update_ema_in_place(
-                    self._ref_model, policy, self.ref_model_ema_alpha
-                )
+                updated = update_ema_in_place(self._ref_model, policy, self.ref_model_ema_alpha)
                 if updated == 0 and not self._ema_noop_warned:
                     self._ema_noop_warned = True
                     logger.warning(
@@ -325,9 +319,7 @@ class _GRPOStabilityCallback_body:  # type: ignore[misc, valid-type]  # noqa: N8
 
     # --- #342 gradient watchdog ---
 
-    def on_pre_optimizer_step(
-        self, args, state, control, model=None, **kwargs
-    ):
+    def on_pre_optimizer_step(self, args, state, control, model=None, **kwargs):
         """Zero non-finite gradients before ``optimizer.step()``.
 
         #342 — HF Trainer has no ``TrainerControl.should_skip_optimizer_step``
@@ -394,15 +386,10 @@ class _GRPOStabilityCallback_body:  # type: ignore[misc, valid-type]  # noqa: N8
 
         # Console / log messages are conditional.
         if self._nan_skip_count > 0:
-            msg = (
-                "%d of %d optimizer steps were skipped due to "
-                "non-finite gradients (%.1f%%)"
-            )
+            msg = "%d of %d optimizer steps were skipped due to non-finite gradients (%.1f%%)"
             # Always report (logger.info at minimum).
             if fraction >= 0.05:
-                logger.warning(
-                    msg, self._nan_skip_count, total, fraction * 100
-                )
+                logger.warning(msg, self._nan_skip_count, total, fraction * 100)
                 from rich.console import Console
 
                 Console().print(
@@ -412,11 +399,8 @@ class _GRPOStabilityCallback_body:  # type: ignore[misc, valid-type]  # noqa: N8
                     f"numerical issue"
                 )
             else:
-                logger.info(
-                    msg, self._nan_skip_count, total, fraction * 100
-                )
+                logger.info(msg, self._nan_skip_count, total, fraction * 100)
         return control
-
 
 
 _LAZY_CALLBACKS = {

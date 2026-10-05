@@ -24,9 +24,7 @@ def _write(path: Path, text: str) -> Path:
 
 class TestSupportedProviders:
     def test_exact(self) -> None:
-        assert magpie.SUPPORTED_MAGPIE_PROVIDERS == frozenset(
-            {"ollama", "anthropic", "vllm"}
-        )
+        assert magpie.SUPPORTED_MAGPIE_PROVIDERS == frozenset({"ollama", "anthropic", "vllm"})
 
     def test_immutable(self) -> None:
         with pytest.raises(AttributeError):

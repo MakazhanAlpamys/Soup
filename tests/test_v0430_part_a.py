@@ -1,4 +1,5 @@
 """Tests for v0.43.0 Part A — Tracker integrations + PostHog opt-out."""
+
 from __future__ import annotations
 
 import pytest
@@ -116,9 +117,7 @@ class TestIsTelemetryEnabled:
 
 class TestBuildTelemetryPayload:
     def test_required_fields(self):
-        payload = build_telemetry_payload(
-            soup_version="0.43.0", command="train"
-        )
+        payload = build_telemetry_payload(soup_version="0.43.0", command="train")
         assert payload["soup_version"] == "0.43.0"
         assert payload["command"] == "train"
         assert "python" in payload
@@ -145,9 +144,7 @@ class TestBuildTelemetryPayload:
 
     def test_no_user_data_in_payload(self):
         # Schema invariant: no model name / dataset path / user identifier.
-        payload = build_telemetry_payload(
-            soup_version="0.43.0", command="train"
-        )
+        payload = build_telemetry_payload(soup_version="0.43.0", command="train")
         # Closed key set:
         assert set(payload.keys()) == {
             "soup_version",
@@ -180,7 +177,9 @@ class TestBuildTelemetryPayload:
     def test_bool_duration_rejected(self):
         with pytest.raises(ValueError):
             build_telemetry_payload(
-                soup_version="0.43.0", command="train", duration_seconds=True  # type: ignore[arg-type]
+                soup_version="0.43.0",
+                command="train",
+                duration_seconds=True,  # type: ignore[arg-type]
             )
 
     def test_nonfinite_duration_rejected(self):
@@ -197,14 +196,10 @@ class TestBuildTelemetryPayload:
 
     def test_negative_duration_rejected(self):
         with pytest.raises(ValueError, match=">= 0"):
-            build_telemetry_payload(
-                soup_version="0.43.0", command="train", duration_seconds=-1
-            )
+            build_telemetry_payload(soup_version="0.43.0", command="train", duration_seconds=-1)
 
     def test_python_is_major_minor_only(self):
-        payload = build_telemetry_payload(
-            soup_version="0.43.0", command="train"
-        )
+        payload = build_telemetry_payload(soup_version="0.43.0", command="train")
         # Should be like "3.11" not "3.11.7"
         assert payload["python"].count(".") == 1
 
@@ -259,6 +254,7 @@ class TestResolveReportTo:
 class TestRegistryImmutability:
     def test_report_to_backends_immutable(self):
         from soup_cli.utils.trackers import _REPORT_TO_BACKENDS
+
         with pytest.raises(TypeError):
             _REPORT_TO_BACKENDS["evil"] = "evil"  # type: ignore[index]
 

@@ -177,9 +177,7 @@ def enforce_preference_sequence_limit(
     if dpo_columns <= columns:
 
         def cap_dpo(row: dict[str, Any]) -> dict[str, Any]:
-            prompt = _truncate_tokens(
-                list(row["prompt_ids"]), max_prompt_length, truncation_mode
-            )
+            prompt = _truncate_tokens(list(row["prompt_ids"]), max_prompt_length, truncation_mode)
             completion_limit = max(0, max_length - len(prompt))
             return {
                 "prompt_ids": prompt,
@@ -277,5 +275,6 @@ def preference_rows_with_empty_completion(dataset: Any) -> list[int]:
         if min(
             completion_len(list(row["chosen_labels"])),
             completion_len(list(row["rejected_labels"])),
-        ) == 0
+        )
+        == 0
     ]

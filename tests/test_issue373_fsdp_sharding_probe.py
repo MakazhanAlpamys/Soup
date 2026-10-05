@@ -33,9 +33,7 @@ from pathlib import Path
 
 import pytest
 
-_PROBE_PATH = (
-    Path(__file__).parents[1] / "benchmarks" / "harness" / "fsdp_sharding_probe.py"
-)
+_PROBE_PATH = Path(__file__).parents[1] / "benchmarks" / "harness" / "fsdp_sharding_probe.py"
 
 
 def _load_probe():
@@ -152,9 +150,7 @@ class TestCompileWrappersBelowTheRootAreUnwrapped:
     """
 
     def test_a_compiled_child_is_counted_by_its_wrapped_class(self) -> None:
-        compiled_child = OptimizedModule(
-            FullyShardedDataParallel(params=[FakeParameter(4)])
-        )
+        compiled_child = OptimizedModule(FullyShardedDataParallel(params=[FakeParameter(4)]))
         root = FullyShardedDataParallel(params=[FakeParameter(4)])
         root._children = {"layer_0": compiled_child}
 
@@ -162,8 +158,7 @@ class TestCompileWrappersBelowTheRootAreUnwrapped:
 
         assert histogram["FullyShardedDataParallel"] == 2, histogram
         assert "OptimizedModule" not in histogram, (
-            "a compiled submodule must be reported by the class it wraps; "
-            f"got {dict(histogram)}"
+            f"a compiled submodule must be reported by the class it wraps; got {dict(histogram)}"
         )
 
 
@@ -233,8 +228,7 @@ class TestUnwrappingIsPinned:
     def test_fsdp_wrappers_are_counted_through_the_compile_wrapper(self) -> None:
         """The 0.5B record's evidence was '217x FullyShardedDataParallel'."""
         leaves = {
-            f"layer{i}": FullyShardedDataParallel(params=[FakeParameter(10)])
-            for i in range(217)
+            f"layer{i}": FullyShardedDataParallel(params=[FakeParameter(10)]) for i in range(217)
         }
         model = OptimizedModule(FullyShardedDataParallel(children=leaves))
         histogram = probe.module_class_histogram(model)

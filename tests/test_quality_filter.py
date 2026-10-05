@@ -158,7 +158,9 @@ class TestFilterByQuality:
             {"instruction": "y", "output": "z"},
         ]
         kept, removed = filter_by_quality(
-            data, coherence_threshold=0.3, text_field="output",
+            data,
+            coherence_threshold=0.3,
+            text_field="output",
         )
         assert len(kept) >= 1
 
@@ -174,7 +176,8 @@ class TestFilterByQuality:
             return_value=[50.0],
         ):
             kept, removed = filter_by_quality(
-                data, perplexity_threshold=100.0,
+                data,
+                perplexity_threshold=100.0,
             )
             assert len(kept) == 1
             assert len(removed) == 0
@@ -193,7 +196,8 @@ class TestFilterByQuality:
             return_value=[50.0, 5000.0],
         ):
             kept, removed = filter_by_quality(
-                data, perplexity_threshold=100.0,
+                data,
+                perplexity_threshold=100.0,
             )
             assert len(kept) == 1
             assert len(removed) == 1
@@ -234,9 +238,7 @@ class TestFilterCommand:
         from soup_cli.cli import app
 
         runner = CliRunner()
-        result = runner.invoke(
-            app, ["data", "filter", "nonexistent.jsonl", "--coherence", "0.5"]
-        )
+        result = runner.invoke(app, ["data", "filter", "nonexistent.jsonl", "--coherence", "0.5"])
         assert result.exit_code != 0
 
     def test_filter_with_coherence(self, tmp_path):
@@ -259,12 +261,18 @@ class TestFilterCommand:
 
         output_file = tmp_path / "filtered.jsonl"
         runner = CliRunner()
-        result = runner.invoke(app, [
-            "data", "filter",
-            str(data_file),
-            "--coherence", "0.3",
-            "--output", str(output_file),
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "data",
+                "filter",
+                str(data_file),
+                "--coherence",
+                "0.3",
+                "--output",
+                str(output_file),
+            ],
+        )
         assert result.exit_code == 0
         assert output_file.exists()
 
@@ -295,12 +303,17 @@ class TestFilterCommand:
         runner = CliRunner()
 
         # score-only without perplexity (only coherence scores)
-        result = runner.invoke(app, [
-            "data", "filter",
-            str(data_file),
-            "--score-only",
-            "--output", str(output_file),
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "data",
+                "filter",
+                str(data_file),
+                "--score-only",
+                "--output",
+                str(output_file),
+            ],
+        )
         # May fail on torch import, but command structure should work
         if result.exit_code == 0:
             with open(output_file) as f:

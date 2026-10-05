@@ -201,6 +201,7 @@ def build_repro_receipt(
         created_at = datetime.now(tz=timezone.utc).isoformat()
 
     from soup_cli import __version__ as _soup_version
+
     kernel = _detect_torch_kernel_versions()
     return ReproReceipt(
         run_id=run_id,
@@ -245,5 +246,8 @@ def write_repro_receipt(r: ReproReceipt, output_path: str) -> str:
     """Atomic write of the receipt to ``output_path`` (cwd-contained)."""
     text = json.dumps(receipt_to_dict(r), indent=2, sort_keys=True)
     return atomic_write_text(
-        text, output_path, prefix=".repro.", suffix=".json.tmp",
+        text,
+        output_path,
+        prefix=".repro.",
+        suffix=".json.tmp",
     )

@@ -51,9 +51,7 @@ def score_contamination(
     # nested scan is O(N×M) n-gram set ops; reject when the product
     # would exceed 1 e9 to prevent operator-side DoS.
     if len(training_rows) * len(benchmark_corpus) > 1_000_000_000:
-        raise ValueError(
-            "training_rows × benchmark_corpus exceeds 1e9 (combined-complexity cap)"
-        )
+        raise ValueError("training_rows × benchmark_corpus exceeds 1e9 (combined-complexity cap)")
     # Lazy import — keeps utils/diagnose import-cheap.
     from soup_cli.utils.data_score import ngram_overlap_ratio
 

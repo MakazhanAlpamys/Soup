@@ -20,9 +20,15 @@ class TestServerProviderValidation:
             return_value=[],
         ):
             result = _generate_batch(
-                prompt="test", count=1, fmt="alpaca",
-                provider="server", model_name="m", api_key=None,
-                api_base=None, temperature=0.8, seed_examples=[],
+                prompt="test",
+                count=1,
+                fmt="alpaca",
+                provider="server",
+                model_name="m",
+                api_key=None,
+                api_base=None,
+                temperature=0.8,
+                seed_examples=[],
             )
         assert result == []
 
@@ -33,12 +39,19 @@ class TestServerProviderValidation:
         from soup_cli.cli import app
 
         runner = CliRunner()
-        result = runner.invoke(app, [
-            "data", "generate",
-            "--prompt", "test",
-            "--provider", "invalid_provider",
-            "--count", "1",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "data",
+                "generate",
+                "--prompt",
+                "test",
+                "--provider",
+                "invalid_provider",
+                "--count",
+                "1",
+            ],
+        )
         assert result.exit_code != 0
 
     def test_server_provider_in_help_text(self):
@@ -65,9 +78,7 @@ class TestGenerateServer:
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.json.return_value = {
-            "choices": [
-                {"message": {"content": '[{"instruction": "test", "output": "response"}]'}}
-            ]
+            "choices": [{"message": {"content": '[{"instruction": "test", "output": "response"}]'}}]
         }
 
         with mock_patch("httpx.post", return_value=mock_response) as mock_post:
@@ -92,11 +103,7 @@ class TestGenerateServer:
 
         mock_response = MagicMock()
         mock_response.status_code = 200
-        mock_response.json.return_value = {
-            "choices": [
-                {"message": {"content": '[]'}}
-            ]
-        }
+        mock_response.json.return_value = {"choices": [{"message": {"content": "[]"}}]}
 
         with mock_patch("httpx.post", return_value=mock_response) as mock_post:
             _generate_server(
@@ -118,11 +125,7 @@ class TestGenerateServer:
 
         mock_response = MagicMock()
         mock_response.status_code = 200
-        mock_response.json.return_value = {
-            "choices": [
-                {"message": {"content": '[]'}}
-            ]
-        }
+        mock_response.json.return_value = {"choices": [{"message": {"content": "[]"}}]}
 
         with mock_patch("httpx.post", return_value=mock_response) as mock_post:
             _generate_server(
@@ -144,11 +147,7 @@ class TestGenerateServer:
 
         mock_response = MagicMock()
         mock_response.status_code = 200
-        mock_response.json.return_value = {
-            "choices": [
-                {"message": {"content": '[]'}}
-            ]
-        }
+        mock_response.json.return_value = {"choices": [{"message": {"content": "[]"}}]}
 
         with mock_patch("httpx.post", return_value=mock_response) as mock_post:
             _generate_server(
@@ -194,10 +193,7 @@ class TestGenerateServer:
             "choices": [
                 {
                     "message": {
-                        "content": (
-                            '[{"instruction": "What is 2+2?", '
-                            '"input": "", "output": "4"}]'
-                        )
+                        "content": ('[{"instruction": "What is 2+2?", "input": "", "output": "4"}]')
                     }
                 }
             ]
@@ -223,9 +219,7 @@ class TestGenerateServer:
 
         mock_response = MagicMock()
         mock_response.status_code = 200
-        mock_response.json.return_value = {
-            "choices": [{"message": {"content": "[]"}}]
-        }
+        mock_response.json.return_value = {"choices": [{"message": {"content": "[]"}}]}
 
         with mock_patch("httpx.post", return_value=mock_response) as mock_post:
             _generate_server(
@@ -449,9 +443,13 @@ class TestServerSSRFValidation:
 
         with pytest.raises(ValueError, match="HTTP or HTTPS"):
             _generate_server(
-                prompt="test", count=1, fmt="alpaca",
-                model_name="m", api_base="file:///etc/passwd",
-                temperature=0.8, seed_examples=[],
+                prompt="test",
+                count=1,
+                fmt="alpaca",
+                model_name="m",
+                api_base="file:///etc/passwd",
+                temperature=0.8,
+                seed_examples=[],
             )
 
     def test_server_blocks_remote_http(self):
@@ -460,9 +458,13 @@ class TestServerSSRFValidation:
 
         with pytest.raises(ValueError, match="HTTPS for remote"):
             _generate_server(
-                prompt="test", count=1, fmt="alpaca",
-                model_name="m", api_base="http://169.254.169.254/latest",
-                temperature=0.8, seed_examples=[],
+                prompt="test",
+                count=1,
+                fmt="alpaca",
+                model_name="m",
+                api_base="http://169.254.169.254/latest",
+                temperature=0.8,
+                seed_examples=[],
             )
 
     def test_server_allows_localhost_http(self):
@@ -471,14 +473,16 @@ class TestServerSSRFValidation:
 
         mock_response = MagicMock()
         mock_response.status_code = 200
-        mock_response.json.return_value = {
-            "choices": [{"message": {"content": "[]"}}]
-        }
+        mock_response.json.return_value = {"choices": [{"message": {"content": "[]"}}]}
 
         with mock_patch("httpx.post", return_value=mock_response):
             result = _generate_server(
-                prompt="test", count=1, fmt="alpaca",
-                model_name="m", api_base="http://127.0.0.1:8000",
-                temperature=0.8, seed_examples=[],
+                prompt="test",
+                count=1,
+                fmt="alpaca",
+                model_name="m",
+                api_base="http://127.0.0.1:8000",
+                temperature=0.8,
+                seed_examples=[],
             )
         assert result == []

@@ -26,35 +26,51 @@ TOOLS = [{"type": "function", "function": {"name": "get_weather", "parameters": 
 
 
 def _call(args):
-    return {"id": "call_0", "type": "function",
-            "function": {"name": "get_weather", "arguments": args}}
+    return {
+        "id": "call_0",
+        "type": "function",
+        "function": {"name": "get_weather", "arguments": args},
+    }
 
 
 def _nested_row(args):
     """A call inside the assistant turn, no top-level keys (``soup agent synth``)."""
-    return {"messages": [{"role": "user", "content": "Weather in Paris?"},
-                         {"role": "assistant", "tool_calls": [_call(args)]}]}
+    return {
+        "messages": [
+            {"role": "user", "content": "Weather in Paris?"},
+            {"role": "assistant", "tool_calls": [_call(args)]},
+        ]
+    }
 
 
 def _openai_row(args):
     """The OpenAI fine-tuning shape."""
-    return {"messages": [{"role": "user", "content": "Weather in Paris?"},
-                         {"role": "assistant", "content": None, "tool_calls": [_call(args)]},
-                         {"role": "tool", "tool_call_id": "call_0", "content": "21"},
-                         {"role": "assistant", "content": "21 C."}],
-            "tools": TOOLS}
+    return {
+        "messages": [
+            {"role": "user", "content": "Weather in Paris?"},
+            {"role": "assistant", "content": None, "tool_calls": [_call(args)]},
+            {"role": "tool", "tool_call_id": "call_0", "content": "21"},
+            {"role": "assistant", "content": "21 C."},
+        ],
+        "tools": TOOLS,
+    }
 
 
 def _top_level_row(args):
     """The documented shape, calls at the row's top level."""
-    return {"messages": [{"role": "user", "content": "Weather in Paris?"}],
-            "tools": TOOLS, "tool_calls": [_call(args)]}
+    return {
+        "messages": [{"role": "user", "content": "Weather in Paris?"}],
+        "tools": TOOLS,
+        "tool_calls": [_call(args)],
+    }
 
 
 def _flat_row(args):
     """The flat shape the existing tests use: the control."""
-    return {"messages": [{"role": "user", "content": "Weather in Paris?"}],
-            "tool_calls": [{"name": "get_weather", "arguments": args}]}
+    return {
+        "messages": [{"role": "user", "content": "Weather in Paris?"}],
+        "tool_calls": [{"name": "get_weather", "arguments": args}],
+    }
 
 
 def _all_args(row):
@@ -227,9 +243,7 @@ def test_clean_dataset_counts_the_nested_repair():
 def test_the_issue_repro_end_to_end(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     rows = [_nested_row(BROKEN), _openai_row(BROKEN), _top_level_row(BROKEN)]
-    Path("raw.jsonl").write_text(
-        "".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8"
-    )
+    Path("raw.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
     runner = CliRunner()
     result = runner.invoke(
         app, ["data", "clean", "raw.jsonl", "-o", "clean.jsonl", "-f", "--repair-json"]

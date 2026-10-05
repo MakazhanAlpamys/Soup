@@ -15,6 +15,7 @@ Items with β near 0 carry the most information (50/50 questions are most
 discriminating); items at the extremes (always right / always wrong) carry
 little new information.
 """
+
 from __future__ import annotations
 
 import json
@@ -29,11 +30,13 @@ from typing import Mapping, Sequence
 _LOG = logging.getLogger(__name__)
 
 # Profile -> keep-fraction.
-IRT_PROFILES: Mapping[str, float] = MappingProxyType({
-    "full": 1.0,
-    "small": 0.30,
-    "tiny": 0.10,
-})
+IRT_PROFILES: Mapping[str, float] = MappingProxyType(
+    {
+        "full": 1.0,
+        "small": 0.30,
+        "tiny": 0.10,
+    }
+)
 
 # DoS / sanity caps.
 _MAX_ROWS = 1_000_000
@@ -144,9 +147,7 @@ class IrtSubsetPlan:
             raise ValueError("total_items must be non-negative int")
         if len(self.item_ids) > self.total_items:
             raise ValueError("item_ids cannot exceed total_items")
-        if isinstance(self.cost_ratio, bool) or not isinstance(
-            self.cost_ratio, (int, float)
-        ):
+        if isinstance(self.cost_ratio, bool) or not isinstance(self.cost_ratio, (int, float)):
             raise ValueError("cost_ratio must be a number")
         if not math.isfinite(float(self.cost_ratio)):
             raise ValueError("cost_ratio must be finite")
@@ -211,9 +212,13 @@ def fit_difficulty(rows: Sequence[Mapping[str, object]]) -> tuple[ItemDifficulty
         beta = -math.log(p_clipped / (1.0 - p_clipped))
         # Rasch info at θ=0: σ(-β) · σ(β) = p̂ · (1-p̂).
         info = p_clipped * (1.0 - p_clipped)
-        results.append(ItemDifficulty(
-            item_id=item_id, difficulty=beta, info=info,
-        ))
+        results.append(
+            ItemDifficulty(
+                item_id=item_id,
+                difficulty=beta,
+                info=info,
+            )
+        )
     # Deterministic order: sort by item_id.
     results.sort(key=lambda d: d.item_id)
     return tuple(results)
@@ -255,9 +260,7 @@ def fit_irt(
     composes with :func:`pick_irt_subset`. Returns items sorted by ``item_id``.
     """
     if model not in _SUPPORTED_IRT_MODELS:
-        raise ValueError(
-            f"model must be one of {sorted(_SUPPORTED_IRT_MODELS)}; got {model!r}"
-        )
+        raise ValueError(f"model must be one of {sorted(_SUPPORTED_IRT_MODELS)}; got {model!r}")
     if not isinstance(rows, (list, tuple)):
         raise TypeError("rows must be a list/tuple of mappings")
     if not rows:
@@ -396,8 +399,10 @@ def pick_irt_subset(
     item_ids = tuple(d.item_id for d in sorted(selected, key=lambda d: d.item_id))
     cost_ratio = keep_n / total if total else 1.0
     return IrtSubsetPlan(
-        size=size, item_ids=item_ids,
-        total_items=total, cost_ratio=cost_ratio,
+        size=size,
+        item_ids=item_ids,
+        total_items=total,
+        cost_ratio=cost_ratio,
     )
 
 
@@ -438,9 +443,7 @@ def load_response_rows(path: object) -> tuple[dict, ...]:
         if stat.S_ISLNK(st.st_mode):  # impossible under O_NOFOLLOW
             raise ValueError("path must not be a symlink")
         if st.st_size > _MAX_FILE_BYTES:
-            raise ValueError(
-                f"responses file too large ({st.st_size} > {_MAX_FILE_BYTES})"
-            )
+            raise ValueError(f"responses file too large ({st.st_size} > {_MAX_FILE_BYTES})")
         with os.fdopen(fd, "r", encoding="utf-8", closefd=True) as fh:
             fd = -1  # ownership transferred to fdopen
             seen = 0

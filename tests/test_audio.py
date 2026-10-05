@@ -1,6 +1,5 @@
 """Tests for audio modality — config, data format, template, routing."""
 
-
 import pytest
 from pydantic import ValidationError
 
@@ -109,13 +108,15 @@ class TestAudioDataFormat:
         """Should auto-detect audio format from audio+messages keys."""
         from soup_cli.data.formats import detect_format
 
-        data = [{
-            "audio": "test.wav",
-            "messages": [
-                {"role": "user", "content": "Transcribe this."},
-                {"role": "assistant", "content": "Hello world."},
-            ],
-        }]
+        data = [
+            {
+                "audio": "test.wav",
+                "messages": [
+                    {"role": "user", "content": "Transcribe this."},
+                    {"role": "assistant", "content": "Hello world."},
+                ],
+            }
+        ]
         assert detect_format(data) == "audio"
 
     def test_convert_audio_format(self):
@@ -164,10 +165,12 @@ class TestAudioDataFormat:
         """Audio data (audio+messages) should not be detected as chatml."""
         from soup_cli.data.formats import detect_format
 
-        data = [{
-            "audio": "test.wav",
-            "messages": [{"role": "user", "content": "test"}],
-        }]
+        data = [
+            {
+                "audio": "test.wav",
+                "messages": [{"role": "user", "content": "test"}],
+            }
+        ]
         assert detect_format(data) == "audio"
 
     def test_is_audio_format(self):
@@ -298,9 +301,7 @@ class TestAudioInitTemplate:
 
         runner = CliRunner()
         output = tmp_path / "soup.yaml"
-        result = runner.invoke(
-            app, ["init", "--template", "audio", "--output", str(output)]
-        )
+        result = runner.invoke(app, ["init", "--template", "audio", "--output", str(output)])
         assert result.exit_code == 0
         assert output.exists()
         content = output.read_text()
@@ -318,9 +319,7 @@ class TestAudioInitTemplate:
 
         runner = CliRunner()
         output = tmp_path / "soup.yaml"
-        runner.invoke(
-            app, ["init", "--template", "audio", "--output", str(output)]
-        )
+        runner.invoke(app, ["init", "--template", "audio", "--output", str(output)])
         cfg = load_config(Path(output))
         assert cfg.modality == "audio"
         assert cfg.data.format == "audio"

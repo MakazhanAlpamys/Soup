@@ -41,15 +41,11 @@ def generate_anthropic(
     try:
         import httpx
     except ImportError:
-        raise ImportError(
-            "httpx is required for Anthropic generation. Install: pip install httpx"
-        )
+        raise ImportError("httpx is required for Anthropic generation. Install: pip install httpx")
 
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
-        raise ValueError(
-            "Anthropic API key not found. Set ANTHROPIC_API_KEY environment variable."
-        )
+        raise ValueError("Anthropic API key not found. Set ANTHROPIC_API_KEY environment variable.")
 
     response = httpx.post(
         ANTHROPIC_API_URL,
@@ -73,17 +69,14 @@ def generate_anthropic(
     if response.status_code != 200:
         logger.debug("Anthropic error response: %s", response.text)
         raise ValueError(
-            f"Anthropic API returned {response.status_code}. "
-            "Check your API key and model name."
+            f"Anthropic API returned {response.status_code}. Check your API key and model name."
         )
 
     data = response.json()
     try:
         # Anthropic Messages API returns content as a list of blocks
         content_blocks = data["content"]
-        content = "".join(
-            block["text"] for block in content_blocks if block.get("type") == "text"
-        )
+        content = "".join(block["text"] for block in content_blocks if block.get("type") == "text")
     except (KeyError, IndexError, TypeError) as exc:
         raise ValueError(f"Unexpected Anthropic response format: {exc}") from exc
 

@@ -70,14 +70,20 @@ class TestEvalSuiteLoading:
 
         suite_path = tmp_path / "gate.yaml"
         suite_path.write_text(
-            yaml.safe_dump({
-                "suite": "my-gate",
-                "tasks": [
-                    {"type": "custom", "name": "math_acc",
-                     "tasks": "evals/math.jsonl", "scorer": "exact",
-                     "threshold": 0.8},
-                ],
-            }),
+            yaml.safe_dump(
+                {
+                    "suite": "my-gate",
+                    "tasks": [
+                        {
+                            "type": "custom",
+                            "name": "math_acc",
+                            "tasks": "evals/math.jsonl",
+                            "scorer": "exact",
+                            "threshold": 0.8,
+                        },
+                    ],
+                }
+            ),
             encoding="utf-8",
         )
         suite = load_suite(str(suite_path))
@@ -92,10 +98,12 @@ class TestEvalSuiteLoading:
 
         suite_path = tmp_path / "gate.yaml"
         suite_path.write_text(
-            yaml.safe_dump({
-                "suite": "bad",
-                "tasks": [{"type": "zap", "name": "x", "threshold": 0.5}],
-            }),
+            yaml.safe_dump(
+                {
+                    "suite": "bad",
+                    "tasks": [{"type": "zap", "name": "x", "threshold": 0.5}],
+                }
+            ),
             encoding="utf-8",
         )
         with pytest.raises(ValueError):
@@ -128,8 +136,9 @@ class TestBaseline:
         from soup_cli.registry.store import RegistryStore
 
         store = RegistryStore()
-        eid = store.push(name="baseline", tag="v1", base_model="llama",
-                         task="sft", run_id=None, config={})
+        eid = store.push(
+            name="baseline", tag="v1", base_model="llama", task="sft", run_id=None, config={}
+        )
         store.close()
 
         # Simulate attached eval via ExperimentTracker — if no run, returns {}
@@ -142,8 +151,7 @@ class TestBaseline:
         from soup_cli.eval.gate import resolve_baseline
 
         baseline_file = tmp_path / "baseline.json"
-        baseline_file.write_text('{"math_acc": 0.80, "helpfulness": 7.5}',
-                                 encoding="utf-8")
+        baseline_file.write_text('{"math_acc": 0.80, "helpfulness": 7.5}', encoding="utf-8")
         baseline = resolve_baseline(str(baseline_file))
         assert baseline["math_acc"] == 0.80
 
@@ -195,11 +203,17 @@ class TestRunGate:
         tasks_file = self._suite_with_custom_task(tmp_path)
         suite = EvalSuite(
             suite="pass",
-            tasks=[GateTask(
-                type="custom", name="math", tasks=str(tasks_file),
-                scorer="exact", threshold=0.5,
-            )],
+            tasks=[
+                GateTask(
+                    type="custom",
+                    name="math",
+                    tasks=str(tasks_file),
+                    scorer="exact",
+                    threshold=0.5,
+                )
+            ],
         )
+
         # Model that always returns correct answers
         def fake_generate(prompt: str) -> str:
             return {"2+2=": "4", "3+3=": "6"}.get(prompt, "")
@@ -215,11 +229,17 @@ class TestRunGate:
         tasks_file = self._suite_with_custom_task(tmp_path)
         suite = EvalSuite(
             suite="fail",
-            tasks=[GateTask(
-                type="custom", name="math", tasks=str(tasks_file),
-                scorer="exact", threshold=0.9,
-            )],
+            tasks=[
+                GateTask(
+                    type="custom",
+                    name="math",
+                    tasks=str(tasks_file),
+                    scorer="exact",
+                    threshold=0.9,
+                )
+            ],
         )
+
         # Only one correct
         def fake_generate(prompt: str) -> str:
             return {"2+2=": "4"}.get(prompt, "")
@@ -236,10 +256,15 @@ class TestRunGate:
         tasks_file = self._suite_with_custom_task(tmp_path)
         suite = EvalSuite(
             suite="regress",
-            tasks=[GateTask(
-                type="custom", name="math", tasks=str(tasks_file),
-                scorer="exact", threshold=0.0,
-            )],
+            tasks=[
+                GateTask(
+                    type="custom",
+                    name="math",
+                    tasks=str(tasks_file),
+                    scorer="exact",
+                    threshold=0.0,
+                )
+            ],
         )
 
         def fake_generate(prompt: str) -> str:
@@ -247,8 +272,10 @@ class TestRunGate:
 
         # Baseline was 1.0, candidate 0.5 → delta -0.5, exceeds 0.05 threshold
         result = run_gate(
-            suite, generate_fn=fake_generate,
-            baseline={"math": 1.0}, regression_threshold=0.05,
+            suite,
+            generate_fn=fake_generate,
+            baseline={"math": 1.0},
+            regression_threshold=0.05,
         )
         assert result.passed is False
         assert result.regression is True
@@ -260,10 +287,15 @@ class TestRunGate:
         tasks_file = self._suite_with_custom_task(tmp_path)
         suite = EvalSuite(
             suite="ok",
-            tasks=[GateTask(
-                type="custom", name="math", tasks=str(tasks_file),
-                scorer="exact", threshold=0.0,
-            )],
+            tasks=[
+                GateTask(
+                    type="custom",
+                    name="math",
+                    tasks=str(tasks_file),
+                    scorer="exact",
+                    threshold=0.0,
+                )
+            ],
         )
 
         def fake_generate(prompt: str) -> str:
@@ -271,8 +303,10 @@ class TestRunGate:
 
         # Baseline was 0.95, candidate 1.0 → improvement
         result = run_gate(
-            suite, generate_fn=fake_generate,
-            baseline={"math": 0.95}, regression_threshold=0.05,
+            suite,
+            generate_fn=fake_generate,
+            baseline={"math": 0.95},
+            regression_threshold=0.05,
         )
         assert result.passed is True
         assert result.regression is False
@@ -287,6 +321,7 @@ class TestCallbackIntegration:
     def test_callback_runs_gate_on_epoch_end(self, tmp_path):
         from soup_cli.eval.gate import EvalSuite, GateResult, GateTaskResult
         from soup_cli.monitoring.callback import SoupTrainerCallback
+
         display = MagicMock()
 
         cb = SoupTrainerCallback(
@@ -294,8 +329,11 @@ class TestCallbackIntegration:
             tracker=None,
             run_id="test_run",
             eval_gate_config=MagicMock(
-                enabled=True, every_n_epochs=1, on_regression="warn",
-                regression_threshold=0.05, suite="dummy.yaml",
+                enabled=True,
+                every_n_epochs=1,
+                on_regression="warn",
+                regression_threshold=0.05,
+                suite="dummy.yaml",
                 baseline=None,
             ),
         )
@@ -309,11 +347,16 @@ class TestCallbackIntegration:
         # Stub run_gate to return a failing result
         def fake_run_gate(suite, generate_fn, baseline, regression_threshold=0.05):
             return GateResult(
-                passed=False, regression=True,
+                passed=False,
+                regression=True,
                 task_results=[
                     GateTaskResult(
-                        name="math", score=0.5, threshold=0.8,
-                        baseline=0.9, delta=-0.4, passed=False,
+                        name="math",
+                        score=0.5,
+                        threshold=0.8,
+                        baseline=0.9,
+                        delta=-0.4,
+                        passed=False,
                     ),
                 ],
             )
@@ -326,6 +369,7 @@ class TestCallbackIntegration:
     def test_callback_stops_training_on_regression(self, tmp_path):
         from soup_cli.eval.gate import EvalSuite, GateResult, GateTaskResult
         from soup_cli.monitoring.callback import SoupTrainerCallback
+
         display = MagicMock()
 
         cb = SoupTrainerCallback(
@@ -333,8 +377,11 @@ class TestCallbackIntegration:
             tracker=None,
             run_id="test_run",
             eval_gate_config=MagicMock(
-                enabled=True, every_n_epochs=1, on_regression="stop",
-                regression_threshold=0.05, suite="dummy.yaml",
+                enabled=True,
+                every_n_epochs=1,
+                on_regression="stop",
+                regression_threshold=0.05,
+                suite="dummy.yaml",
                 baseline=None,
             ),
         )
@@ -347,11 +394,18 @@ class TestCallbackIntegration:
 
         def fake_run_gate(suite, generate_fn, baseline, regression_threshold=0.05):
             return GateResult(
-                passed=False, regression=True,
-                task_results=[GateTaskResult(
-                    name="x", score=0.1, threshold=0.5,
-                    baseline=1.0, delta=-0.9, passed=False,
-                )],
+                passed=False,
+                regression=True,
+                task_results=[
+                    GateTaskResult(
+                        name="x",
+                        score=0.1,
+                        threshold=0.5,
+                        baseline=1.0,
+                        delta=-0.9,
+                        passed=False,
+                    )
+                ],
             )
 
         cb._gate_run_fn = fake_run_gate
@@ -360,9 +414,12 @@ class TestCallbackIntegration:
 
     def test_callback_skips_gate_when_disabled(self):
         from soup_cli.monitoring.callback import SoupTrainerCallback
+
         display = MagicMock()
         cb = SoupTrainerCallback(
-            display=display, tracker=None, run_id="test_run",
+            display=display,
+            tracker=None,
+            run_id="test_run",
             eval_gate_config=None,
         )
 
@@ -384,18 +441,23 @@ class TestCallbackIntegration:
             raise AssertionError("gate should not have been run")
 
         cb = SoupTrainerCallback(
-            display=display, tracker=None, run_id="test_run",
+            display=display,
+            tracker=None,
+            run_id="test_run",
             eval_gate_config=MagicMock(
-                enabled=True, every_n_epochs=2, on_regression="stop",
-                regression_threshold=0.05, suite="x.yaml", baseline=None,
+                enabled=True,
+                every_n_epochs=2,
+                on_regression="stop",
+                regression_threshold=0.05,
+                suite="x.yaml",
+                baseline=None,
             ),
         )
         cb._gate_suite = EvalSuite(suite="s", tasks=[])
         cb._gate_generate_fn = lambda p: ""
         cb._gate_run_fn = should_not_run
         control = MagicMock(should_training_stop=False)
-        cb.on_epoch_end(MagicMock(), MagicMock(epoch=1.0, global_step=100),
-                        control)
+        cb.on_epoch_end(MagicMock(), MagicMock(epoch=1.0, global_step=100), control)
         assert control.should_training_stop is False
 
     def test_callback_continue_on_regression_does_not_stop(self):
@@ -405,24 +467,36 @@ class TestCallbackIntegration:
 
         display = MagicMock()
         cb = SoupTrainerCallback(
-            display=display, tracker=None, run_id="test_run",
+            display=display,
+            tracker=None,
+            run_id="test_run",
             eval_gate_config=MagicMock(
-                enabled=True, every_n_epochs=1, on_regression="continue",
-                regression_threshold=0.05, suite="x.yaml", baseline=None,
+                enabled=True,
+                every_n_epochs=1,
+                on_regression="continue",
+                regression_threshold=0.05,
+                suite="x.yaml",
+                baseline=None,
             ),
         )
         cb._gate_suite = EvalSuite(suite="s", tasks=[])
         cb._gate_generate_fn = lambda p: ""
         cb._gate_run_fn = lambda *a, **k: GateResult(
-            passed=False, regression=True,
-            task_results=[GateTaskResult(
-                name="t", score=0.1, threshold=0.5, baseline=1.0,
-                delta=-0.9, passed=False,
-            )],
+            passed=False,
+            regression=True,
+            task_results=[
+                GateTaskResult(
+                    name="t",
+                    score=0.1,
+                    threshold=0.5,
+                    baseline=1.0,
+                    delta=-0.9,
+                    passed=False,
+                )
+            ],
         )
         control = MagicMock(should_training_stop=False)
-        cb.on_epoch_end(MagicMock(), MagicMock(epoch=1.0, global_step=100),
-                        control)
+        cb.on_epoch_end(MagicMock(), MagicMock(epoch=1.0, global_step=100), control)
         assert control.should_training_stop is False
 
     def test_callback_structured_error_triggers_stop(self):
@@ -432,10 +506,16 @@ class TestCallbackIntegration:
 
         display = MagicMock()
         cb = SoupTrainerCallback(
-            display=display, tracker=None, run_id="test_run",
+            display=display,
+            tracker=None,
+            run_id="test_run",
             eval_gate_config=MagicMock(
-                enabled=True, every_n_epochs=1, on_regression="stop",
-                regression_threshold=0.05, suite="x.yaml", baseline=None,
+                enabled=True,
+                every_n_epochs=1,
+                on_regression="stop",
+                regression_threshold=0.05,
+                suite="x.yaml",
+                baseline=None,
             ),
         )
         cb._gate_suite = EvalSuite(suite="s", tasks=[])
@@ -446,8 +526,7 @@ class TestCallbackIntegration:
 
         cb._gate_run_fn = raising_run
         control = MagicMock(should_training_stop=False)
-        cb.on_epoch_end(MagicMock(), MagicMock(epoch=1.0, global_step=100),
-                        control)
+        cb.on_epoch_end(MagicMock(), MagicMock(epoch=1.0, global_step=100), control)
         assert control.should_training_stop is True
 
 
@@ -465,18 +544,18 @@ class TestEvalGateCLI:
     def test_eval_gate_missing_suite_file(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         result = runner.invoke(
-            app, ["eval", "gate", "--suite", "nope.yaml"],
+            app,
+            ["eval", "gate", "--suite", "nope.yaml"],
         )
         assert result.exit_code != 0, (result.output, repr(result.exception))
 
     def test_eval_gate_invalid_regression_threshold(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         suite = tmp_path / "gate.yaml"
-        suite.write_text(yaml.safe_dump({"suite": "s", "tasks": []}),
-                         encoding="utf-8")
+        suite.write_text(yaml.safe_dump({"suite": "s", "tasks": []}), encoding="utf-8")
         result = runner.invoke(
-            app, ["eval", "gate", "--suite", str(suite),
-                  "--regression-threshold", "2.5"],
+            app,
+            ["eval", "gate", "--suite", str(suite), "--regression-threshold", "2.5"],
         )
         assert result.exit_code != 0, (result.output, repr(result.exception))
 
@@ -498,6 +577,8 @@ class TestTrainGateFlag:
         cleaned = re.sub(r"\x1b\[[0-9;]*m", "", result.output)
         assert "--gate" in cleaned
         assert "eval-gated" in cleaned
+
+
 class TestJudgeModelValidation:
     def test_rejects_localhost_prefix_bypass(self):
         from soup_cli.eval.gate import GateTask
@@ -542,7 +623,8 @@ class TestJudgeTaskNormalization:
         mock_evaluator = MagicMock()
         mock_evaluator.rubric = rubric if rubric is not None else DEFAULT_RUBRIC
         mock_evaluator.evaluate_batch.return_value = JudgeResults(
-            scores=[], overall_score=overall_score,
+            scores=[],
+            overall_score=overall_score,
         )
 
         with pytest.MonkeyPatch.context() as mp:
@@ -573,17 +655,23 @@ class TestJudgeTaskNormalization:
         """A 1-10 custom rubric must normalize dynamically: (8-1)/9 = 7/9."""
         custom_rubric = {"scale": {"min": 1, "max": 10}}
         score = self._run_with_mock_judge(
-            prompts_file, overall_score=8.0, rubric=custom_rubric,
+            prompts_file,
+            overall_score=8.0,
+            rubric=custom_rubric,
         )
         assert score == pytest.approx(7.0 / 9.0)
 
         score_max = self._run_with_mock_judge(
-            prompts_file, overall_score=10.0, rubric=custom_rubric,
+            prompts_file,
+            overall_score=10.0,
+            rubric=custom_rubric,
         )
         assert score_max == pytest.approx(1.0)
 
         score_min = self._run_with_mock_judge(
-            prompts_file, overall_score=1.0, rubric=custom_rubric,
+            prompts_file,
+            overall_score=1.0,
+            rubric=custom_rubric,
         )
         assert score_min == pytest.approx(0.0)
 
@@ -601,7 +689,9 @@ class TestJudgeTaskNormalization:
         """If min == max, division by zero is avoided and score is safely clamped."""
         degenerate_rubric = {"scale": {"min": 5, "max": 5}}
         score = self._run_with_mock_judge(
-            prompts_file, overall_score=5.0, rubric=degenerate_rubric,
+            prompts_file,
+            overall_score=5.0,
+            rubric=degenerate_rubric,
         )
         assert 0.0 <= score <= 1.0
 
@@ -631,7 +721,8 @@ class TestJudgeTaskNormalization:
         mock_evaluator.rubric = DEFAULT_RUBRIC
         # Perfect 5/5 score from judge
         mock_evaluator.evaluate_batch.return_value = JudgeResults(
-            scores=[], overall_score=5.0,
+            scores=[],
+            overall_score=5.0,
         )
 
         monkeypatch.setattr("soup_cli.eval.judge.JudgeEvaluator", lambda **kw: mock_evaluator)

@@ -6,6 +6,7 @@ import pytest
 # Math verification reward
 # ---------------------------------------------------------------------------
 
+
 class TestMathVerifyReward:
     def test_exact_numeric_match(self):
         from soup_cli.trainer.rewards import math_verify_reward
@@ -85,6 +86,7 @@ class TestMathVerifyReward:
 # Code execution reward
 # ---------------------------------------------------------------------------
 
+
 class TestCodeExecReward:
     def test_correct_code(self):
         from soup_cli.trainer.rewards import code_exec_reward
@@ -127,10 +129,12 @@ class TestCodeExecReward:
         from soup_cli.trainer.rewards import code_exec_reward
 
         completions = [
-            [{
-                "role": "assistant",
-                "content": "import urllib.request\nprint(urllib.request.urlopen('http://example.com'))",
-            }],
+            [
+                {
+                    "role": "assistant",
+                    "content": "import urllib.request\nprint(urllib.request.urlopen('http://example.com'))",
+                }
+            ],
         ]
         rewards = code_exec_reward(completions, expected=["hello"])
         assert rewards[0] == 0.0
@@ -153,6 +157,7 @@ class TestCodeExecReward:
 # JSON schema reward
 # ---------------------------------------------------------------------------
 
+
 class TestJsonSchemaReward:
     def test_valid_matching_schema(self):
         from soup_cli.trainer.rewards import json_schema_reward
@@ -160,11 +165,13 @@ class TestJsonSchemaReward:
         completions = [
             [{"role": "assistant", "content": '{"name": "alice", "age": 30}'}],
         ]
-        schemas = [{
-            "type": "object",
-            "properties": {"name": {"type": "string"}, "age": {"type": "integer"}},
-            "required": ["name", "age"],
-        }]
+        schemas = [
+            {
+                "type": "object",
+                "properties": {"name": {"type": "string"}, "age": {"type": "integer"}},
+                "required": ["name", "age"],
+            }
+        ]
         rewards = json_schema_reward(completions, schema=schemas)
         assert rewards[0] == 1.0
 
@@ -174,11 +181,13 @@ class TestJsonSchemaReward:
         completions = [
             [{"role": "assistant", "content": '{"name": "alice"}'}],
         ]
-        schemas = [{
-            "type": "object",
-            "properties": {"name": {"type": "string"}, "age": {"type": "integer"}},
-            "required": ["name", "age"],
-        }]
+        schemas = [
+            {
+                "type": "object",
+                "properties": {"name": {"type": "string"}, "age": {"type": "integer"}},
+                "required": ["name", "age"],
+            }
+        ]
         rewards = json_schema_reward(completions, schema=schemas)
         assert rewards[0] < 1.0
 
@@ -199,14 +208,16 @@ class TestJsonSchemaReward:
         completions = [
             [{"role": "assistant", "content": '{"name": "alice", "age": "thirty"}'}],
         ]
-        schemas = [{
-            "type": "object",
-            "properties": {
-                "name": {"type": "string"},
-                "age": {"type": "integer"},
-            },
-            "required": ["name", "age"],
-        }]
+        schemas = [
+            {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "age": {"type": "integer"},
+                },
+                "required": ["name", "age"],
+            }
+        ]
         rewards = json_schema_reward(completions, schema=schemas)
         # name matches (0.5), age wrong type (0.0) — score 0.5
         assert rewards[0] == 0.5
@@ -218,11 +229,13 @@ class TestJsonSchemaReward:
         completions = [
             [{"role": "assistant", "content": '{"enabled": true}'}],
         ]
-        schemas = [{
-            "type": "object",
-            "properties": {"enabled": {"type": "integer"}},
-            "required": ["enabled"],
-        }]
+        schemas = [
+            {
+                "type": "object",
+                "properties": {"enabled": {"type": "integer"}},
+                "required": ["enabled"],
+            }
+        ]
         rewards = json_schema_reward(completions, schema=schemas)
         assert rewards[0] == 0.0
 
@@ -230,6 +243,7 @@ class TestJsonSchemaReward:
 # ---------------------------------------------------------------------------
 # Verifiable routing via config
 # ---------------------------------------------------------------------------
+
 
 class TestVerifiableRouting:
     def test_verifiable_math_loads(self):
@@ -261,6 +275,7 @@ class TestVerifiableRouting:
 # Config validation
 # ---------------------------------------------------------------------------
 
+
 class TestVerifiableConfig:
     def test_verifiable_domain_accepted(self):
         from soup_cli.config.schema import TrainingConfig
@@ -289,6 +304,7 @@ class TestVerifiableConfig:
 # ---------------------------------------------------------------------------
 # Synth data template
 # ---------------------------------------------------------------------------
+
 
 class TestVerifiableTemplate:
     def test_build_prompt_math(self):

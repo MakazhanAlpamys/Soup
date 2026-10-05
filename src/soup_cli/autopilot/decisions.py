@@ -32,9 +32,7 @@ def decide_task(goal: str, dataset_profile: Any = None) -> str:
     """
     del dataset_profile  # reserved for future heuristics
     if goal not in GOAL_TO_TASK:
-        raise ValueError(
-            f"Unknown goal '{goal}'. Options: {', '.join(GOAL_TO_TASK.keys())}"
-        )
+        raise ValueError(f"Unknown goal '{goal}'. Options: {', '.join(GOAL_TO_TASK.keys())}")
     return GOAL_TO_TASK[goal]
 
 
@@ -42,9 +40,16 @@ def decide_task(goal: str, dataset_profile: Any = None) -> str:
 
 # Quant Menu formats Autopilot can recommend back. Mirrors v0.38.0 + v0.40.5
 # canonical strings; ``hqq:Nbit`` is the only parameterised entry.
-_VALID_PREQUANT_FORMATS: frozenset[str] = frozenset({
-    "gptq", "awq", "aqlm", "eetq", "fp8", "mxfp4",
-})
+_VALID_PREQUANT_FORMATS: frozenset[str] = frozenset(
+    {
+        "gptq",
+        "awq",
+        "aqlm",
+        "eetq",
+        "fp8",
+        "mxfp4",
+    }
+)
 # HQQ uses ``hqq:<N>bit`` where N ∈ {1, 2, 3, 4, 8}.
 _HQQ_VALID_BITS: frozenset[int] = frozenset({1, 2, 3, 4, 8})
 
@@ -128,7 +133,8 @@ def _detect_from_config(hf_config: Any) -> Optional[str]:
 
 
 def detect_prequantized_format(
-    name: object, hf_config: Any = None,
+    name: object,
+    hf_config: Any = None,
 ) -> Optional[str]:
     """Detect a pre-quantized base model's quant format.
 
@@ -156,9 +162,7 @@ def detect_prequantized_format_from_path(model_dir: object) -> Optional[str]:
     if isinstance(model_dir, bool):
         raise TypeError("model_dir must not be bool")
     if not isinstance(model_dir, str):
-        raise TypeError(
-            f"model_dir must be str, got {type(model_dir).__name__}"
-        )
+        raise TypeError(f"model_dir must be str, got {type(model_dir).__name__}")
     if not model_dir:
         return None
     if "\x00" in model_dir:
@@ -199,9 +203,7 @@ def _validate_prequantized(value: object) -> str:
     if isinstance(value, bool):
         raise TypeError(f"prequantized must not be bool, got {value!r}")
     if not isinstance(value, str):
-        raise TypeError(
-            f"prequantized must be str, got {type(value).__name__}"
-        )
+        raise TypeError(f"prequantized must be str, got {type(value).__name__}")
     if not value:
         raise ValueError("prequantized must be non-empty")
     if "\x00" in value:
@@ -211,9 +213,7 @@ def _validate_prequantized(value: object) -> str:
         # Validate hqq:Nbit shape
         tail = canonical.split(":", 1)[1]
         if not tail.endswith("bit"):
-            raise ValueError(
-                f"prequantized {value!r} invalid HQQ shape; expected hqq:Nbit"
-            )
+            raise ValueError(f"prequantized {value!r} invalid HQQ shape; expected hqq:Nbit")
         bits_str = tail[: -len("bit")]
         if not bits_str.isdigit() or int(bits_str) not in _HQQ_VALID_BITS:
             raise ValueError(
@@ -382,19 +382,18 @@ def kernel_flag_notes(compute_capability: float) -> dict:
         return notes
     if check_flash_attn_available() is None:
         notes["flash_attn"] = (
-            "flash-attn not installed; "
-            "pip install flash-attn --no-build-isolation to enable"
+            "flash-attn not installed; pip install flash-attn --no-build-isolation to enable"
         )
     if not check_liger_available():
-        notes["liger"] = (
-            'liger-kernel not installed; '
-            'pip install "soup-cli[liger]" to enable'
-        )
+        notes["liger"] = 'liger-kernel not installed; pip install "soup-cli[liger]" to enable'
     return notes
 
 
 def decide_warmup(
-    num_examples: int, batch_size: int, grad_accum: int, epochs: int,
+    num_examples: int,
+    batch_size: int,
+    grad_accum: int,
+    epochs: int,
     ratio: float = 0.03,
 ) -> int:
     """Wrap ``compute_warmup_steps`` for the autopilot decision flow."""
@@ -410,7 +409,8 @@ def decide_warmup(
 
 
 def decide_mixed_precision(
-    model_name: str, compute_capability: float,
+    model_name: str,
+    compute_capability: float,
 ) -> Literal["bf16", "fp16", "no"]:
     """Wrap ``pick_mixed_precision`` for the autopilot decision flow."""
     from soup_cli.utils.mixed_precision import pick_mixed_precision

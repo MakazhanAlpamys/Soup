@@ -56,16 +56,12 @@ def validate_webhook_url(url: object, *, allow_private_hosts: bool = False) -> s
     stripped = url.rstrip("/")
     parsed = urlparse(stripped)
     if parsed.scheme not in ("http", "https"):
-        raise ValueError(
-            f"webhook URL must use http/https scheme, got {parsed.scheme!r}"
-        )
+        raise ValueError(f"webhook URL must use http/https scheme, got {parsed.scheme!r}")
     if not parsed.netloc:
         raise ValueError("webhook URL is missing a host")
     host = parsed.hostname or ""
     if host == "0.0.0.0":
-        raise ValueError(
-            "webhook URL 0.0.0.0 is ambiguous; use 127.0.0.1 or localhost"
-        )
+        raise ValueError("webhook URL 0.0.0.0 is ambiguous; use 127.0.0.1 or localhost")
     # SSRF gate — runs for BOTH http and https. Nesting this inside the
     # http-only branch (the pre-fix bug) let ``https://169.254.169.254`` and
     # any ``https://10.x`` / ``192.168.x`` sail straight through to the return.
@@ -75,8 +71,7 @@ def validate_webhook_url(url: object, *, allow_private_hosts: bool = False) -> s
     if host_clean not in _LOOPBACK_HOSTS:
         if _is_private_or_link_local(host) and not allow_private_hosts:
             raise ValueError(
-                "webhook URL private/link-local/reserved hosts are not "
-                "allowed (SSRF protection)"
+                "webhook URL private/link-local/reserved hosts are not allowed (SSRF protection)"
             )
         if parsed.scheme == "http":
             raise ValueError("webhook URL for remote hosts must use HTTPS")

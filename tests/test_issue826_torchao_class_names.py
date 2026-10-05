@@ -150,7 +150,6 @@ class TestTheOrderOfTheChecks:
         with pytest.raises(RuntimeError, match="Could not import torchao"):
             resolve_torchao_class("NVFP4Training")
 
-
     def test_a_rejected_kwarg_is_a_kwarg_error_even_without_torchao(self, monkeypatch):
         """The allowlist runs before the class is resolved. Resolving first turned
         "that key is not allowed" into "torchao is missing", which sends the user
@@ -202,9 +201,7 @@ class TestTheResolverLoop:
         for name, value in modules.items():
             monkeypatch.setitem(sys.modules, name, value)
 
-    def test_the_public_candidate_wins_when_both_modules_define_the_name(
-        self, monkeypatch
-    ):
+    def test_the_public_candidate_wins_when_both_modules_define_the_name(self, monkeypatch):
         """``test_the_public_candidate_is_tried_before_the_prototype_one`` checks
         the order of the ``TORCHAO_CLASSES`` tuple, not that the resolver follows
         it — reversing the loop leaves it green. Here the two modules define the
@@ -246,9 +243,7 @@ class TestTheResolverLoop:
         assert resolve_torchao_class("StubKey") is PublicConfig
         assert PublicConfig is not PrototypeConfig, "sanity: distinguishable"
 
-    def test_a_candidate_that_fails_to_import_is_skipped_not_fatal(
-        self, monkeypatch
-    ):
+    def test_a_candidate_that_fails_to_import_is_skipped_not_fatal(self, monkeypatch):
         """A failed candidate import must ``continue`` to the next one. Replacing
         that ``continue`` with a raise or a break is green against 0.18.0, where
         every candidate imports; it is the path a torchao that removed a
@@ -281,9 +276,7 @@ class TestTheResolverLoop:
 
         assert resolve_torchao_class("StubKey") is Survivor
 
-    def test_an_absent_root_is_fatal_even_with_a_candidate_cached(
-        self, monkeypatch
-    ):
+    def test_an_absent_root_is_fatal_even_with_a_candidate_cached(self, monkeypatch):
         """The stub twin of
         ``test_absent_torchao_is_absent_even_with_its_submodules_cached``, which
         needs the real package and therefore skips on the 3x3 matrix — where
@@ -304,16 +297,12 @@ class TestTheResolverLoop:
         import sys
 
         monkeypatch.setitem(sys.modules, "torchao", None)
-        monkeypatch.setitem(
-            TORCHAO_CLASSES, "StubKey", (("torchao.prototype.cached", "Cached"),)
-        )
+        monkeypatch.setitem(TORCHAO_CLASSES, "StubKey", (("torchao.prototype.cached", "Cached"),))
 
         with pytest.raises(RuntimeError, match="Could not import torchao"):
             resolve_torchao_class("StubKey")
 
-    def test_the_message_names_every_candidate_when_none_answers(
-        self, monkeypatch
-    ):
+    def test_the_message_names_every_candidate_when_none_answers(self, monkeypatch):
         """Control for the two above: when the loop really does run out, the error
         carries both paths — so a passing fallback above cannot be a resolver that
         silently returns something on any input."""

@@ -64,7 +64,7 @@ def infer(
         ...,
         "--input",
         "-i",
-        help="Path to input JSONL file (each line: {\"prompt\": \"...\"})",
+        help='Path to input JSONL file (each line: {"prompt": "..."})',
     ),
     output_file: str = typer.Option(
         ...,
@@ -101,8 +101,8 @@ def infer(
         "--task",
         help=(
             "Inference task: 'text' (default, chat generation) or 'asr' "
-            "(Whisper transcription; input rows are {\"audio\": path[, "
-            "\"text\": reference]})."
+            '(Whisper transcription; input rows are {"audio": path[, '
+            '"text": reference]}).'
         ),
     ),
     asr_language: Optional[str] = typer.Option(
@@ -180,8 +180,7 @@ def infer(
         # per-row skips instead of one upfront rejection).
         if asr_task is not None and asr_task not in ("transcribe", "translate"):
             console.print(
-                f"[red]--asr-task must be 'transcribe' or 'translate', "
-                f"got {asr_task!r}.[/]"
+                f"[red]--asr-task must be 'transcribe' or 'translate', got {asr_task!r}.[/]"
             )
             raise typer.Exit(2)
         _infer_asr(
@@ -212,16 +211,14 @@ def infer(
         )
         raise typer.Exit(1) from exc
     if model_kind == "hf":
-        console.print(
-            f"[dim]Local path not found; treating {model_ref!r} as a HF repo id.[/]"
-        )
+        console.print(f"[dim]Local path not found; treating {model_ref!r} as a HF repo id.[/]")
     model_target = model_ref
 
     # Read prompts
     prompts = _read_prompts(input_path)
     if not prompts:
         console.print("[red]No prompts found in input file.[/]")
-        console.print("[dim]Expected JSONL with {\"prompt\": \"...\"} or plain text lines.[/]")
+        console.print('[dim]Expected JSONL with {"prompt": "..."} or plain text lines.[/]')
         raise typer.Exit(1)
 
     # Detect device
@@ -245,7 +242,11 @@ def infer(
     # Load model — gate trust_remote_code via the v0.36.0 helper.
     console.print("[dim]Loading model...[/]")
     model_obj, tokenizer = _load_model(
-        model_target, base, device, trust_remote_code, is_local=(model_kind == "local"),
+        model_target,
+        base,
+        device,
+        trust_remote_code,
+        is_local=(model_kind == "local"),
     )
     if cuda_graphs is True:
         from soup_cli.utils.cuda_graphs import cuda_graph_generation_kwargs
@@ -262,9 +263,7 @@ def infer(
     # asserting on "model not found" / "no prompts" errors keep working when
     # they pass an out-of-cwd `tmp_path`.
     if not is_under_cwd(output_file):
-        console.print(
-            "[red]--output must stay under the current working directory.[/]"
-        )
+        console.print("[red]--output must stay under the current working directory.[/]")
         raise typer.Exit(1)
 
     if cuda_graphs is True:
@@ -293,8 +292,11 @@ def infer(
             messages = [{"role": "user", "content": prompt_text}]
             try:
                 response, token_count = _generate(
-                    model_obj, tokenizer, messages,
-                    max_tokens=max_tokens, temperature=temperature,
+                    model_obj,
+                    tokenizer,
+                    messages,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
                     **({"cuda_graphs": True} if cuda_graphs is True else {}),
                 )
             except Exception as exc:
@@ -368,13 +370,9 @@ def _read_asr_rows(path: Path) -> list[dict]:
                 capped = True
                 break
     if dropped:
-        console.print(
-            f"[yellow]Skipped {dropped} row(s) with no 'audio' path.[/]"
-        )
+        console.print(f"[yellow]Skipped {dropped} row(s) with no 'audio' path.[/]")
     if capped:
-        console.print(
-            f"[yellow]Capped at {_MAX_ASR_ROWS} rows; remaining input ignored.[/]"
-        )
+        console.print(f"[yellow]Capped at {_MAX_ASR_ROWS} rows; remaining input ignored.[/]")
     return rows
 
 
@@ -399,9 +397,7 @@ def _resolve_asr_audio(audio: str, base_dir: Path) -> str:
     if not candidate.is_absolute():
         candidate = base_dir / candidate
     if not is_under(candidate, base_dir):
-        raise ValueError(
-            f"audio path {Path(audio).name!r} must stay under the audio dir"
-        )
+        raise ValueError(f"audio path {Path(audio).name!r} must stay under the audio dir")
     return str(candidate)
 
 
@@ -463,8 +459,7 @@ def _build_asr_transcriber(
             base_ref = None
         if not base_ref:
             console.print(
-                f"[red]Cannot detect base model for adapter {model_path}; "
-                "pass --base.[/]"
+                f"[red]Cannot detect base model for adapter {model_path}; pass --base.[/]"
             )
             raise typer.Exit(1)
 
@@ -475,7 +470,9 @@ def _build_asr_transcriber(
 
     requires = model_requires_trust_remote_code(weights_ref) or False
     resolved_trust = resolve_trust_remote_code(
-        weights_ref, requested=trust_remote_code, console=console,
+        weights_ref,
+        requested=trust_remote_code,
+        console=console,
         requires_remote_code=requires,
     )
     # Arch guard: reject a non-Whisper base before the (large) weight load.
@@ -557,7 +554,7 @@ def _infer_asr(
 
     rows = _read_asr_rows(Path(input_file))
     if not rows:
-        console.print("[red]No ASR rows found (need {\"audio\": path} JSONL).[/]")
+        console.print('[red]No ASR rows found (need {"audio": path} JSONL).[/]')
         raise typer.Exit(1)
 
     if _ASR_TRANSCRIBER_OVERRIDE is not None:
@@ -565,8 +562,13 @@ def _infer_asr(
     else:
         try:
             transcribe = _build_asr_transcriber(
-                model, base, device, max_tokens, trust_remote_code,
-                asr_language=asr_language, asr_task=asr_task,
+                model,
+                base,
+                device,
+                max_tokens,
+                trust_remote_code,
+                asr_language=asr_language,
+                asr_task=asr_task,
             )
         except ImportError as exc:
             console.print(f"[red]{exc}[/]")
@@ -591,9 +593,7 @@ def _infer_asr(
             # escape's backslash and make a tag live again); the exception,
             # whose message embeds that filename, is escaped too.
             name = for_terminal(repr(Path(str(audio)).name))
-            console.print(
-                f"[yellow]Skipped {name}: {for_terminal(str(exc))}[/]"
-            )
+            console.print(f"[yellow]Skipped {name}: {for_terminal(str(exc))}[/]")
             continue
         rec = {"audio": audio, "transcription": hyp}
         ref = row.get("text")
@@ -607,10 +607,7 @@ def _infer_asr(
                 row_cer = cer(ref, hyp)
             except ValueError as exc:
                 name = for_terminal(repr(Path(str(audio)).name))
-                console.print(
-                    f"[yellow]Metric skipped for {name}: "
-                    f"{for_terminal(str(exc))}[/]"
-                )
+                console.print(f"[yellow]Metric skipped for {name}: {for_terminal(str(exc))}[/]")
             else:
                 rec["reference"] = ref
                 rec["wer"] = row_wer
@@ -698,9 +695,7 @@ def _load_model(
                 pass
 
         if is_adapter and not base_model:
-            console.print(
-                f"[red]Cannot detect base model for {path}. Use --base.[/]"
-            )
+            console.print(f"[red]Cannot detect base model for {path}. Use --base.[/]")
             raise typer.Exit(1)
 
     probe_target = base_model or model_path
@@ -739,17 +734,20 @@ def _load_model(
 
 
 def _generate(
-    model, tokenizer, messages, max_tokens=256, temperature=0.7,
-    cuda_graphs: bool = False, min_tokens: int | None = None,
+    model,
+    tokenizer,
+    messages,
+    max_tokens=256,
+    temperature=0.7,
+    cuda_graphs: bool = False,
+    min_tokens: int | None = None,
 ) -> tuple[str, int]:
     """Generate a response from the model. Returns (text, token_count)."""
     import torch
 
     from soup_cli.utils.vllm import encode_chat_prompt
 
-    inputs = encode_chat_prompt(
-        messages, tokenizer, fallback_on_error=False, return_tensors="pt"
-    )
+    inputs = encode_chat_prompt(messages, tokenizer, fallback_on_error=False, return_tensors="pt")
     input_ids = inputs["input_ids"].to(model.device)
     attention_mask = inputs["attention_mask"].to(model.device)
 
@@ -772,7 +770,7 @@ def _generate(
             gen_kwargs.update(cuda_graph_generation_kwargs(model))
         outputs = model.generate(**gen_kwargs)
 
-    new_tokens = outputs[0][input_ids.shape[1]:]
+    new_tokens = outputs[0][input_ids.shape[1] :]
     token_count = new_tokens.shape[0]
     response_text = tokenizer.decode(new_tokens, skip_special_tokens=True).strip()
     return response_text, token_count
@@ -783,8 +781,10 @@ def _count_prompt_tokens(tokenizer, prompt_text: str) -> int:
     from soup_cli.utils.vllm import encode_chat_prompt
 
     inputs = encode_chat_prompt(
-        [{"role": "user", "content": prompt_text}], tokenizer,
-        fallback_on_error=False, return_tensors="pt",
+        [{"role": "user", "content": prompt_text}],
+        tokenizer,
+        fallback_on_error=False,
+        return_tensors="pt",
     )
     return int(inputs["input_ids"].shape[1])
 
@@ -825,7 +825,12 @@ def _warm_cuda_graphs(model, tokenizer, prompts: list[str], max_tokens: int) -> 
     messages = [{"role": "user", "content": _longest_prompt(tokenizer, prompts)}]
     try:
         _generate(
-            model, tokenizer, messages, max_tokens=max_tokens, temperature=0.0, cuda_graphs=True,
+            model,
+            tokenizer,
+            messages,
+            max_tokens=max_tokens,
+            temperature=0.0,
+            cuda_graphs=True,
             min_tokens=min(max_tokens, _CUDA_GRAPH_WARMUP_TOKENS),
         )
     except Exception as exc:

@@ -170,8 +170,11 @@ def test_packed_can_round_trips_under_the_caps(tmp_path, monkeypatch):
     store = RegistryStore()
     try:
         eid = store.push(
-            name="recipe", tag="v1", base_model="llama-3.1-8b",
-            task="sft", run_id=None,
+            name="recipe",
+            tag="v1",
+            base_model="llama-3.1-8b",
+            task="sft",
+            run_id=None,
             config={"base": "llama-3.1-8b", "task": "sft", "training": {"lr": 2e-5}},
             notes="demo",
         )
@@ -179,7 +182,9 @@ def test_packed_can_round_trips_under_the_caps(tmp_path, monkeypatch):
         store.close()
     attestation = {"_type": "https://in-toto.io/Statement/v1", "predicateType": "p"}
     out = pack_entry(
-        entry_id=eid, out_path=str(tmp_path / "recipe.can"), attestations=[attestation],
+        entry_id=eid,
+        out_path=str(tmp_path / "recipe.can"),
+        attestations=[attestation],
     )
 
     manifest = unpack.inspect_can(str(out))
@@ -188,11 +193,15 @@ def test_packed_can_round_trips_under_the_caps(tmp_path, monkeypatch):
     assert unpack.read_config(str(out))["training"] == {"lr": 2e-5}
     dest = unpack.extract_can(str(out), str(tmp_path / "out"))
     assert {p.name for p in dest.iterdir()} == {
-        "manifest.yaml", "config.yaml", "data_ref.yaml", "recipe.md",
+        "manifest.yaml",
+        "config.yaml",
+        "data_ref.yaml",
+        "recipe.md",
     }
 
     forked = fork_can(
-        source=str(out), out_path=str(tmp_path / "fork.can"),
+        source=str(out),
+        out_path=str(tmp_path / "fork.can"),
         modifications=["training.lr=5e-5"],
     )
     assert unpack.inspect_can(str(forked)).name == "recipe-fork"

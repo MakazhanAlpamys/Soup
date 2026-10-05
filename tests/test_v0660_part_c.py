@@ -145,9 +145,7 @@ def test_validate_base_oversize_rejected():
 def test_probe_spec_frozen():
     from soup_cli.utils.sleeper_probe import SleeperProbeSpec
 
-    s = SleeperProbeSpec(
-        base="x", hidden_dim=4, threshold=0.5, description="d"
-    )
+    s = SleeperProbeSpec(base="x", hidden_dim=4, threshold=0.5, description="d")
     with pytest.raises((AttributeError, Exception)):
         s.threshold = 0.9  # type: ignore[misc]
 
@@ -170,9 +168,7 @@ def test_probe_spec_rejects_non_finite_threshold():
     from soup_cli.utils.sleeper_probe import SleeperProbeSpec
 
     with pytest.raises(ValueError):
-        SleeperProbeSpec(
-            base="x", hidden_dim=4, threshold=float("nan"), description="d"
-        )
+        SleeperProbeSpec(base="x", hidden_dim=4, threshold=float("nan"), description="d")
 
 
 def test_probe_spec_rejects_out_of_range_threshold():
@@ -411,9 +407,7 @@ def test_run_sleeper_probe_happy():
 
     base = next(iter(BUNDLED_PROBES))
     spec = BUNDLED_PROBES[base]
-    activations = np.random.RandomState(0).randn(50, spec.hidden_dim).astype(
-        np.float32
-    )
+    activations = np.random.RandomState(0).randn(50, spec.hidden_dim).astype(np.float32)
     result = run_sleeper_probe(activations, base)
     assert isinstance(result, SleeperProbeResult)
     assert result.num_tokens == 50
@@ -538,7 +532,8 @@ def test_no_heavy_top_level_imports():
 
     source = inspect.getsource(sleeper_probe)
     top_level_imports = [
-        line for line in source.splitlines()
+        line
+        for line in source.splitlines()
         if line.startswith("import ") or line.startswith("from ")
     ]
     for line in top_level_imports:

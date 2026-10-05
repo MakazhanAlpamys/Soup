@@ -62,9 +62,7 @@ def analyze_dataset(path: str) -> DatasetProfile:
     stats = validate_and_stats(data, expected_format=fmt if fmt != "unknown" else None)
 
     # Rough quality score — 1.0 minus penalty for issues
-    total_issues = sum(
-        1 for key in ("empty_fields", "duplicates") if stats.get(key, 0) > 0
-    )
+    total_issues = sum(1 for key in ("empty_fields", "duplicates") if stats.get(key, 0) > 0)
     quality = max(0.0, 1.0 - 0.15 * total_issues - 0.05 * len(stats.get("issues", [])))
     quality = round(quality, 2)
 
@@ -139,6 +137,7 @@ def _probe_cache_param_count(name: str) -> Optional[float]:
         for idx in cache.rglob("model.safetensors.index.json"):
             try:
                 import json as _json
+
                 data = _json.loads(idx.read_text(encoding="utf-8"))
                 total_bytes = data.get("metadata", {}).get("total_size")
                 if isinstance(total_bytes, (int, float)) and total_bytes > 0:

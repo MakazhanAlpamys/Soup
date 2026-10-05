@@ -53,8 +53,7 @@ def migrate(
     # Validate source
     if source not in SUPPORTED_SOURCES:
         console.print(
-            f"[red]Unknown source: {source}[/]\n"
-            f"Supported: {', '.join(SUPPORTED_SOURCES)}"
+            f"[red]Unknown source: {source}[/]\nSupported: {', '.join(SUPPORTED_SOURCES)}"
         )
         raise typer.Exit(1)
 
@@ -70,11 +69,8 @@ def migrate(
     # other suffix, require two complete JSON objects on separate lines so a
     # single JSON config or notebook is not mistaken for training data.
     suffix = input_path.suffix.lower()
-    is_jsonl = (
-        suffix == ".jsonl" and _looks_like_jsonl(input_path)
-    ) or (
-        suffix != ".jsonl"
-        and _looks_like_jsonl(input_path, require_multiple_objects=True)
+    is_jsonl = (suffix == ".jsonl" and _looks_like_jsonl(input_path)) or (
+        suffix != ".jsonl" and _looks_like_jsonl(input_path, require_multiple_objects=True)
     )
     if is_jsonl:
         console.print(
@@ -100,12 +96,15 @@ def migrate(
     try:
         if source == "llamafactory":
             from soup_cli.migrate.llamafactory import migrate_llamafactory
+
             result = migrate_llamafactory(input_path)
         elif source == "axolotl":
             from soup_cli.migrate.axolotl import migrate_axolotl
+
             result = migrate_axolotl(input_path)
         elif source == "unsloth":
             from soup_cli.migrate.unsloth import migrate_unsloth
+
             result = migrate_unsloth(input_path)
     except ValueError as exc:
         console.print(f"[red]Migration failed:[/] {for_terminal(exc)}")
@@ -115,12 +114,15 @@ def migrate(
     migration_warnings = result.get("_warnings", [])
     if migration_warnings:
         from rich.markup import escape
+
         warning_text = "\n".join(f"  [yellow]![/] {escape(w)}" for w in migration_warnings)
-        console.print(Panel(
-            warning_text,
-            title="[yellow]Migration Warnings[/]",
-            border_style="yellow",
-        ))
+        console.print(
+            Panel(
+                warning_text,
+                title="[yellow]Migration Warnings[/]",
+                border_style="yellow",
+            )
+        )
 
     # Generate YAML
     yaml_str = config_to_yaml(result)
@@ -140,14 +142,15 @@ def migrate(
     lora_r_val = getattr(lora_obj, "r", "none") if lora_obj is not None else "none"
 
     # Show generated config
-    console.print(Panel(
-        Syntax(yaml_str, "yaml", theme="monokai"),
-        title=f"[bold green]Generated soup.yaml[/] (from {source})",
-        subtitle=(
-            f"[dim]Resolved: task={task_val}, "
-            f"quantization={quant_val}, lora.r={lora_r_val}[/]"
-        ),
-    ))
+    console.print(
+        Panel(
+            Syntax(yaml_str, "yaml", theme="monokai"),
+            title=f"[bold green]Generated soup.yaml[/] (from {source})",
+            subtitle=(
+                f"[dim]Resolved: task={task_val}, quantization={quant_val}, lora.r={lora_r_val}[/]"
+            ),
+        )
+    )
 
     if dry_run:
         console.print("[dim]Dry run -- no file written.[/]")
@@ -155,9 +158,7 @@ def migrate(
 
     # Check for existing file
     if output_path.exists() and not yes:
-        confirm = typer.confirm(
-            f"File '{output}' already exists. Overwrite?"
-        )
+        confirm = typer.confirm(f"File '{output}' already exists. Overwrite?")
         if not confirm:
             console.print("[yellow]Aborted.[/]")
             raise typer.Exit(0)

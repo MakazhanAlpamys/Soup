@@ -173,21 +173,15 @@ class TestDispatchIsolation:
     English signal (and vice versa). Documents the design contract."""
 
     def test_spanish_phrase_does_not_match_under_en(self) -> None:
-        assert not looks_like_refusal(
-            "No puedo ayudarte con eso.", lang="en"
-        )
+        assert not looks_like_refusal("No puedo ayudarte con eso.", lang="en")
 
     def test_french_phrase_does_not_match_under_en(self) -> None:
-        assert not looks_like_refusal(
-            "Je refuse de répondre.", lang="en"
-        )
+        assert not looks_like_refusal("Je refuse de répondre.", lang="en")
 
     def test_german_phrase_does_not_match_under_en(self) -> None:
         # No English sub-strings here ("Ich weigere mich..." has no
         # "I cannot" or "sorry" tokens).
-        assert not looks_like_refusal(
-            "Ich weigere mich, das zu tun.", lang="en"
-        )
+        assert not looks_like_refusal("Ich weigere mich, das zu tun.", lang="en")
 
     def test_russian_phrase_does_not_match_under_en(self) -> None:
         assert not looks_like_refusal("Я не могу помочь.", lang="en")
@@ -255,9 +249,7 @@ class TestScoreRefusalIntegration:
     def test_spanish_score_perfect_match(self) -> None:
         base = lambda p: "No puedo ayudar" if "harm" in p else "¡Claro!"  # noqa: E731
         adapter = base
-        score = score_refusal(
-            ["harm1", "harm2"], ["ben1", "ben2"], base, adapter, lang="es"
-        )
+        score = score_refusal(["harm1", "harm2"], ["ben1", "ben2"], base, adapter, lang="es")
         assert score.verdict == "OK"
         assert score.score == pytest.approx(1.0)
 
@@ -277,9 +269,7 @@ class TestScoreRefusalIntegration:
 
     def test_russian_score_perfect_match(self) -> None:
         base = lambda p: "Я не могу" if "harm" in p else "Конечно"  # noqa: E731
-        score = score_refusal(
-            ["harm1"], ["ben1"], base, base, lang="ru"
-        )
+        score = score_refusal(["harm1"], ["ben1"], base, base, lang="ru")
         assert score.verdict == "OK"
 
     def test_default_lang_is_english_back_compat(self) -> None:
@@ -335,15 +325,11 @@ class TestPerLanguageInputCap:
         assert looks_like_refusal(text, lang="es")
 
     @pytest.mark.parametrize("lang", ["en", "es", "fr", "de", "ru"])
-    def test_null_byte_text_returns_false_for_every_language(
-        self, lang: str
-    ) -> None:
+    def test_null_byte_text_returns_false_for_every_language(self, lang: str) -> None:
         assert not looks_like_refusal("ok\x00bad", lang=lang)
 
     @pytest.mark.parametrize("lang", ["en", "es", "fr", "de", "ru"])
-    def test_non_string_text_returns_false_for_every_language(
-        self, lang: str
-    ) -> None:
+    def test_non_string_text_returns_false_for_every_language(self, lang: str) -> None:
         assert not looks_like_refusal(None, lang=lang)  # type: ignore[arg-type]
         assert not looks_like_refusal(42, lang=lang)  # type: ignore[arg-type]
 
@@ -398,7 +384,10 @@ class TestBackCompatGeneratorTypeGuard:
     def test_default_lang_generator_must_return_str(self) -> None:
         with pytest.raises(TypeError):
             score_refusal(
-                ["x"], [], lambda p: 42, lambda p: "ok"  # type: ignore[arg-type,return-value]
+                ["x"],
+                [],
+                lambda p: 42,
+                lambda p: "ok",  # type: ignore[arg-type,return-value]
             )
 
     @pytest.mark.parametrize("lang", ["es", "fr", "de", "ru"])
@@ -445,23 +434,17 @@ class TestEvidenceLangAnnotation:
     """
 
     def test_evidence_includes_lang_es(self) -> None:
-        score = score_refusal(
-            ["x"], ["y"], lambda p: "No puedo", lambda p: "No puedo", lang="es"
-        )
+        score = score_refusal(["x"], ["y"], lambda p: "No puedo", lambda p: "No puedo", lang="es")
         assert "lang=es" in score.evidence
 
     def test_evidence_default_lang_is_en(self) -> None:
-        score = score_refusal(
-            ["x"], ["y"], lambda p: "I cannot", lambda p: "I cannot"
-        )
+        score = score_refusal(["x"], ["y"], lambda p: "I cannot", lambda p: "I cannot")
         assert "lang=en" in score.evidence
 
     def test_evidence_lang_canonicalised_lowercase(self) -> None:
         # Uppercase input lang normalises to lowercase in the evidence
         # field so downstream parsers don't have to.
-        score = score_refusal(
-            ["x"], ["y"], lambda p: "I cannot", lambda p: "I cannot", lang="EN"
-        )
+        score = score_refusal(["x"], ["y"], lambda p: "I cannot", lambda p: "I cannot", lang="EN")
         assert "lang=en" in score.evidence
 
 
@@ -472,18 +455,14 @@ class TestEmptyPromptsMultilingual:
 
     @pytest.mark.parametrize("lang", ["es", "fr", "de", "ru"])
     def test_empty_harmful_non_en_lang(self, lang: str) -> None:
-        score = score_refusal(
-            [], ["benign"], lambda p: "ok", lambda p: "ok", lang=lang
-        )
+        score = score_refusal([], ["benign"], lambda p: "ok", lambda p: "ok", lang=lang)
         # Zero delta → score 1.0 → OK verdict regardless of lang.
         assert score.verdict == "OK"
         assert score.score == pytest.approx(1.0)
 
     @pytest.mark.parametrize("lang", ["es", "fr", "de", "ru"])
     def test_empty_benign_non_en_lang(self, lang: str) -> None:
-        score = score_refusal(
-            ["harm"], [], lambda p: "ok", lambda p: "ok", lang=lang
-        )
+        score = score_refusal(["harm"], [], lambda p: "ok", lambda p: "ok", lang=lang)
         assert score.verdict == "OK"
 
 
@@ -506,9 +485,7 @@ class TestSourceWiring:
     def test_no_heavy_top_level_imports(self) -> None:
         from pathlib import Path
 
-        source = Path(
-            "src/soup_cli/utils/diagnose/refusal.py"
-        ).read_text(encoding="utf-8")
+        source = Path("src/soup_cli/utils/diagnose/refusal.py").read_text(encoding="utf-8")
         # Pure-python utility: no torch / transformers / peft at module
         # top so this stays GPU-free + CI-fast.
         assert "\nimport torch" not in source

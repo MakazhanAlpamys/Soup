@@ -87,9 +87,7 @@ class TestTheDeadline:
         """The constant is defined in exactly one source file."""
         assert STAGED_FIELD_REJECTION_VERSION == "0.77"
 
-        pattern = re.compile(
-            r"^\s*STAGED_FIELD_REJECTION_VERSION\s*(?::\s*str\s*)?=", re.MULTILINE
-        )
+        pattern = re.compile(r"^\s*STAGED_FIELD_REJECTION_VERSION\s*(?::\s*str\s*)?=", re.MULTILINE)
         src = Path(__file__).parents[1] / "src" / "soup_cli"
         holders = sorted(
             p.relative_to(src).as_posix()
@@ -246,9 +244,7 @@ class TestStagedFieldsInventory:
 class TestLoaderStagedFieldIntegration:
     """Test loader behavior under warning vs error severity."""
 
-    def test_staged_field_warns_and_loads_under_warn_severity(
-        self, capsys, monkeypatch
-    ) -> None:
+    def test_staged_field_warns_and_loads_under_warn_severity(self, capsys, monkeypatch) -> None:
         monkeypatch.setattr(loader, "STAGED_FIELD_SEVERITY", "warn")
         yaml_str = _valid_with_data(split_thinking="true")
         cfg = loader.load_config_from_string(yaml_str)
@@ -330,9 +326,7 @@ class TestLoaderStagedFieldIntegration:
         assert cfg.training.convergence_rel_tol == 0.005
         assert capsys.readouterr().out == ""
 
-    def test_group_b_tunables_no_longer_listed_in_train_command(
-        self, monkeypatch
-    ) -> None:
+    def test_group_b_tunables_no_longer_listed_in_train_command(self, monkeypatch) -> None:
         """Group B tunables are staged fields; train command lists only enabled flags."""
         from soup_cli.commands.train import _nondefault_unwired_training_settings
 
@@ -395,9 +389,7 @@ class TestGroupBTunablesIntegration:
         assert f"v{STAGED_FIELD_REJECTION_VERSION} will refuse it" in plain_out
 
     @pytest.mark.parametrize("path", sorted(_GROUP_B_CASES))
-    def test_group_b_knob_refuses_under_error_severity(
-        self, path: str, monkeypatch
-    ) -> None:
+    def test_group_b_knob_refuses_under_error_severity(self, path: str, monkeypatch) -> None:
         monkeypatch.setattr(loader, "STAGED_FIELD_SEVERITY", "error")
         yaml_str = _VALID + "\n" + self._GROUP_B_CASES[path]
         with pytest.raises(ValueError) as excinfo:
@@ -406,9 +398,7 @@ class TestGroupBTunablesIntegration:
         assert f"v{STAGED_FIELD_REJECTION_VERSION}" in str(excinfo.value)
 
     @pytest.mark.parametrize("severity", ["warn", "error"])
-    def test_group_b_defaults_stay_silent(
-        self, severity: str, capsys, monkeypatch
-    ) -> None:
+    def test_group_b_defaults_stay_silent(self, severity: str, capsys, monkeypatch) -> None:
         monkeypatch.setattr(loader, "STAGED_FIELD_SEVERITY", severity)
         yaml_defaults = (
             _VALID

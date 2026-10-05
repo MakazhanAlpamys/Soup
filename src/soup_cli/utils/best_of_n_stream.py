@@ -67,15 +67,14 @@ def _run_digest(
     records = _normalise_prompt_records(prompts)
     payload = {
         "prompts": [
-            {"prompt": prompt, "source_line": source_line}
-            for prompt, source_line in records
+            {"prompt": prompt, "source_line": source_line} for prompt, source_line in records
         ],
         "sampler": sampler,
         "identity_fingerprint": _validate_identity_fingerprint(identity_fingerprint),
     }
-    data = json.dumps(
-        payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
-    ).encode("utf-8")
+    data = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode(
+        "utf-8"
+    )
     return hashlib.sha256(data).hexdigest()
 
 
@@ -120,9 +119,7 @@ def _checkpoint_header(
             "run_digest": _run_digest(records, sampler, identity_fingerprint),
             "prompt_count": len(records),
             "sampler": sampler,
-            "identity_fingerprint": _validate_identity_fingerprint(
-                identity_fingerprint
-            ),
+            "identity_fingerprint": _validate_identity_fingerprint(identity_fingerprint),
         }
     }
 
@@ -221,12 +218,7 @@ def prepare_candidate_checkpoint(
 def append_candidate_group(path: str, group: dict) -> None:
     """Durably append one complete candidate group."""
     enforce_under_cwd_and_no_symlink(path, "--checkpoint path")
-    flags = (
-        os.O_WRONLY
-        | os.O_APPEND
-        | getattr(os, "O_NOFOLLOW", 0)
-        | getattr(os, "O_BINARY", 0)
-    )
+    flags = os.O_WRONLY | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
     fd = os.open(path, flags)
     try:
         if not stat.S_ISREG(os.fstat(fd).st_mode):
@@ -254,9 +246,7 @@ def publish_candidate_checkpoint(
         with os.fdopen(fd, "wb") as target:
             fd = -1
             target.write(
-                artifact.stable_json_line(
-                    artifact.candidate_artifact_header(len(records), sampler)
-                )
+                artifact.stable_json_line(artifact.candidate_artifact_header(len(records), sampler))
             )
             completed = 0
             saw_header = False
@@ -266,9 +256,7 @@ def publish_candidate_checkpoint(
                         continue
                     row = _parse_line(raw, "candidate checkpoint", line_number)
                     if not saw_header:
-                        if row != _checkpoint_header(
-                            records, sampler, identity_fingerprint
-                        ):
+                        if row != _checkpoint_header(records, sampler, identity_fingerprint):
                             raise ValueError("candidate checkpoint does not match this run")
                         saw_header = True
                         continue
@@ -315,9 +303,7 @@ class OfflineArtifactIndex:
         """
         for position, group_raw, judgment_raw in self.connection.execute(query):
             group = json.loads(group_raw)
-            judgment = artifact.validate_judgment(
-                json.loads(judgment_raw), group, position
-            )
+            judgment = artifact.validate_judgment(json.loads(judgment_raw), group, position)
             yield artifact.materialize_group(
                 group,
                 judgment,
@@ -388,9 +374,7 @@ def _index_judgments(connection: sqlite3.Connection, path: str) -> tuple[str, in
                     (prompt_id, artifact.stable_json_line(row).decode("utf-8")),
                 )
             except sqlite3.IntegrityError as exc:
-                raise ValueError(
-                    "judgments contain a missing or duplicate prompt_id"
-                ) from exc
+                raise ValueError("judgments contain a missing or duplicate prompt_id") from exc
             count += 1
     return digest.hexdigest(), count
 
@@ -411,9 +395,7 @@ def index_offline_artifacts(
             connection.execute(
                 "CREATE TABLE judgments(prompt_id TEXT PRIMARY KEY, payload TEXT NOT NULL)"
             )
-            sampler, candidate_sha, group_count = _index_candidates(
-                connection, candidate_path
-            )
+            sampler, candidate_sha, group_count = _index_candidates(connection, candidate_path)
             judgments_sha, judgment_count = _index_judgments(connection, judgments_path)
             connection.commit()
             matched = connection.execute(
@@ -534,12 +516,8 @@ def publish_staged_datasets(
         ("sft_temp", staged.sft_temp, sft_path, "--output path")
     ]
     if dpo_path:
-        publications.append(
-            ("dpo_temp", staged.dpo_temp, dpo_path, "--emit-pairs path")
-        )
-    removals = (
-        [(stale_dpo_path, "previous DPO path")] if stale_dpo_path else []
-    )
+        publications.append(("dpo_temp", staged.dpo_temp, dpo_path, "--emit-pairs path"))
+    removals = [(stale_dpo_path, "previous DPO path")] if stale_dpo_path else []
     identities: set[str] = set()
     destinations: list[tuple[str, str]] = []
     for _attribute, staging, destination, field in publications:
@@ -596,9 +574,7 @@ def publish_staged_datasets(
             if not stat.S_ISREG(os.lstat(destination).st_mode):
                 raise ValueError(f"{field} must be a regular file")
             parent = os.path.dirname(os.path.abspath(destination)) or "."
-            fd, backup = tempfile.mkstemp(
-                prefix=".soup-bon-backup.", suffix=".tmp", dir=parent
-            )
+            fd, backup = tempfile.mkstemp(prefix=".soup-bon-backup.", suffix=".tmp", dir=parent)
             os.close(fd)
             try:
                 os.replace(destination, backup)

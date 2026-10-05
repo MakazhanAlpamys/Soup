@@ -84,9 +84,7 @@ class AirgapBundlePlan:
             raise ValueError("bundle_size_cap_bytes must be int")
         if self.bundle_size_cap_bytes <= 0:
             raise ValueError("bundle_size_cap_bytes must be > 0")
-        if self.repro_receipt is not None and not isinstance(
-            self.repro_receipt, Mapping
-        ):
+        if self.repro_receipt is not None and not isinstance(self.repro_receipt, Mapping):
             raise ValueError("repro_receipt must be a mapping or None")
 
 
@@ -94,7 +92,7 @@ class AirgapBundlePlan:
 class BundleFileEntry:
     """One file in the bundle manifest."""
 
-    name: str    # path-inside-tar (no leading slash)
+    name: str  # path-inside-tar (no leading slash)
     size: int
     sha256: str
 
@@ -181,6 +179,7 @@ def build_airgap_bundle(plan: AirgapBundlePlan) -> BundleManifest:
 
     members: list[tuple[str, str]] = []
     members.extend(_enumerate_dir(plan.model_dir, label="model"))
+
     # Label by sorted basename rather than caller-supplied index so the
     # manifest is reorder-stable: `[a, b]` and `[b, a]` produce the same
     # tarball layout, fulfilling the "same inputs → same SHA-256 list"
@@ -214,9 +213,7 @@ def build_airgap_bundle(plan: AirgapBundlePlan) -> BundleManifest:
     receipt_bytes: Optional[bytes] = None
     if plan.repro_receipt is not None:
         receipt_dict = dict(plan.repro_receipt)
-        receipt_bytes = json.dumps(
-            receipt_dict, indent=2, sort_keys=True
-        ).encode("utf-8")
+        receipt_bytes = json.dumps(receipt_dict, indent=2, sort_keys=True).encode("utf-8")
 
     # Hash + pre-size check (refuse early if cap exceeded).
     entries: list[BundleFileEntry] = []
@@ -281,6 +278,7 @@ def build_airgap_bundle(plan: AirgapBundlePlan) -> BundleManifest:
             manifest_info.size = len(manifest_bytes)
             manifest_info.mtime = 0
             import io as _io
+
             tar.addfile(manifest_info, _io.BytesIO(manifest_bytes))
             # v0.71.3 #188 — write the repro receipt as a top-level member.
             if receipt_bytes is not None:
@@ -323,10 +321,7 @@ def _manifest_to_bytes(manifest: BundleManifest) -> bytes:
         "kernels": list(manifest.kernels),
         "total_bytes": manifest.total_bytes,
         "repro_receipt": manifest.repro_receipt,
-        "files": [
-            {"name": e.name, "size": e.size, "sha256": e.sha256}
-            for e in manifest.files
-        ],
+        "files": [{"name": e.name, "size": e.size, "sha256": e.sha256} for e in manifest.files],
     }
     return json.dumps(payload, indent=2, sort_keys=True).encode("utf-8")
 
@@ -385,14 +380,10 @@ def inspect_airgap_bundle(bundle_path: str) -> BundleManifest:
         try:
             member: tarfile.TarInfo = tar.getmember(_MANIFEST_FILENAME)
         except KeyError as exc:
-            raise ValueError(
-                f"{bundle_path}: missing {_MANIFEST_FILENAME}"
-            ) from exc
+            raise ValueError(f"{bundle_path}: missing {_MANIFEST_FILENAME}") from exc
         # Cap manifest size — reject crafted bundles with multi-GiB manifest.
         if member.size > _MAX_MANIFEST_BYTES:
-            raise ValueError(
-                f"{bundle_path}: manifest.json exceeds {_MAX_MANIFEST_BYTES} bytes"
-            )
+            raise ValueError(f"{bundle_path}: manifest.json exceeds {_MAX_MANIFEST_BYTES} bytes")
         extracted = tar.extractfile(member)
         if extracted is None:
             raise ValueError(f"{bundle_path}: manifest.json is not a regular file")

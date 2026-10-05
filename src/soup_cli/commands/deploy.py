@@ -187,8 +187,7 @@ def render_space_template(template: str, model_repo: str) -> dict[str, str]:
     validate_repo_id(model_repo)
     if template not in HF_SPACE_TEMPLATES:
         raise ValueError(
-            f"Unknown template: {template!r}. "
-            f"Available: {', '.join(HF_SPACE_TEMPLATES.keys())}"
+            f"Unknown template: {template!r}. Available: {', '.join(HF_SPACE_TEMPLATES.keys())}"
         )
     spec = HF_SPACE_TEMPLATES[template]
     return {
@@ -334,10 +333,7 @@ def ollama(
     # Check Ollama is installed
     version = detect_ollama()
     if not version:
-        console.print(
-            "[red]Ollama not found.[/]\n"
-            "Install from: [bold]https://ollama.com[/]"
-        )
+        console.print("[red]Ollama not found.[/]\nInstall from: [bold]https://ollama.com[/]")
         raise typer.Exit(1)
 
     # Resolve template
@@ -382,8 +378,7 @@ def ollama(
     # Confirmation — warn that this overwrites an existing model
     if not yes:
         console.print(
-            "[yellow]Warning:[/] This will overwrite any existing Ollama model "
-            f"named '{name}'."
+            f"[yellow]Warning:[/] This will overwrite any existing Ollama model named '{name}'."
         )
         confirm = typer.confirm("Proceed?")
         if not confirm:
@@ -449,10 +444,15 @@ def hf_space(
         ),
     ),
     private: bool = typer.Option(
-        False, "--private", help="Create the Space as private",
+        False,
+        "--private",
+        help="Create the Space as private",
     ),
     yes: bool = typer.Option(
-        False, "--yes", "-y", help="Skip confirmation",
+        False,
+        "--yes",
+        "-y",
+        help="Skip confirmation",
     ),
 ):
     """Create a HuggingFace Space wrapping a fine-tuned model.
@@ -503,6 +503,7 @@ def hf_space(
                 detect_space_sdk,
                 render_custom_template_dir,
             )
+
             files = render_custom_template_dir(template_dir, model_repo=model)
             # v0.53.8 #69 — auto-pick space_sdk from requirements.txt
             # (closes the v0.40.2 known limitation that custom templates
@@ -542,9 +543,11 @@ def hf_space(
 
     try:
         api.create_repo(
-            repo_id=space, repo_type="space",
+            repo_id=space,
+            repo_type="space",
             space_sdk=sdk,
-            private=private, exist_ok=True,
+            private=private,
+            exist_ok=True,
         )
         for in_repo_name, content in files.items():
             api.upload_file(
@@ -666,18 +669,14 @@ def autopilot(
         from rich.markup import escape
 
         console.print(f"[red]Unknown profile:[/] {escape(str(exc))}")
-        console.print(
-            "[dim]Run [bold]soup deploy autopilot --list[/] to see options.[/]"
-        )
+        console.print("[dim]Run [bold]soup deploy autopilot --list[/] to see options.[/]")
         raise typer.Exit(2) from exc
 
     try:
         recipe_path = write_recipe(
             profile, base=base, output_dir=output_dir, recipe_path=recipe_out
         )
-        script_path = write_deploy_script(
-            profile, model_path=output_dir, script_path=script_out
-        )
+        script_path = write_deploy_script(profile, model_path=output_dir, script_path=script_out)
     except (ValueError, TypeError) as exc:
         from rich.markup import escape
 
@@ -704,9 +703,7 @@ def autopilot(
     # v0.53.1 #109 — optional live measurement
     if measure:
         if not tasks_file:
-            console.print(
-                "[red]--measure requires --tasks <jsonl>.[/]"
-            )
+            console.print("[red]--measure requires --tasks <jsonl>.[/]")
             raise typer.Exit(2)
         _run_deploy_autopilot_measure(
             profile=profile,
@@ -764,9 +761,7 @@ def _run_deploy_autopilot_measure(
     from soup_cli.utils.terminal import for_terminal
 
     if not is_under_cwd(tasks_file):
-        console.print(
-            f"[red]--tasks {for_terminal(repr(tasks_file))} must stay under cwd[/]"
-        )
+        console.print(f"[red]--tasks {for_terminal(repr(tasks_file))} must stay under cwd[/]")
         raise typer.Exit(2)
     if not Path(tasks_file).is_file():
         console.print(f"[red]Tasks file not found: {escape(tasks_file)}[/]")
@@ -774,9 +769,7 @@ def _run_deploy_autopilot_measure(
 
     # Determine candidate list
     if measure_candidates:
-        candidates = [
-            c.strip() for c in measure_candidates.split(",") if c.strip()
-        ]
+        candidates = [c.strip() for c in measure_candidates.split(",") if c.strip()]
         if not candidates:
             console.print("[red]--measure-candidates parsed to empty list.[/]")
             raise typer.Exit(2)
@@ -789,8 +782,7 @@ def _run_deploy_autopilot_measure(
     base_sha = hashlib.sha256(base_sha_seed.encode("utf-8")).hexdigest()[:16]
 
     console.print(
-        f"[dim]Measuring {len(candidates)} candidate(s) "
-        f"against {Path(tasks_file).name}...[/]"
+        f"[dim]Measuring {len(candidates)} candidate(s) against {Path(tasks_file).name}...[/]"
     )
 
     # Injected generators (test seam / advanced operator workflows) still win;

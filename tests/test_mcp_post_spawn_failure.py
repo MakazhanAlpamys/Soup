@@ -75,10 +75,13 @@ def test_mark_running_failure_stops_child_and_frees_slot(project):
     token = manager.issue(kind="train", argv=_SLEEPER, display_command="sleep")
     recorder = _RecordingPopen()
     try:
-        with patch("subprocess.Popen", side_effect=recorder), patch.object(
-            ExperimentTracker,
-            "mark_running",
-            side_effect=sqlite3.OperationalError("database is locked"),
+        with (
+            patch("subprocess.Popen", side_effect=recorder),
+            patch.object(
+                ExperimentTracker,
+                "mark_running",
+                side_effect=sqlite3.OperationalError("database is locked"),
+            ),
         ):
             with pytest.raises(ExecutionError) as exc:
                 manager.execute(token=token, kind="train")
@@ -94,10 +97,13 @@ def test_thread_start_failure_stops_child(project):
     token = manager.issue(kind="train", argv=_SLEEPER, display_command="sleep")
     recorder = _RecordingPopen()
     try:
-        with patch("subprocess.Popen", side_effect=recorder), patch.object(
-            execution.threading.Thread,
-            "start",
-            side_effect=RuntimeError("can't start new thread"),
+        with (
+            patch("subprocess.Popen", side_effect=recorder),
+            patch.object(
+                execution.threading.Thread,
+                "start",
+                side_effect=RuntimeError("can't start new thread"),
+            ),
         ):
             with pytest.raises(ExecutionError) as exc:
                 manager.execute(token=token, kind="train")
@@ -112,10 +118,13 @@ def test_next_execution_allowed_after_bookkeeping_failure(project):
     second = manager.issue(kind="train", argv=_SLEEPER, display_command="sleep")
     recorder = _RecordingPopen()
     try:
-        with patch("subprocess.Popen", side_effect=recorder), patch.object(
-            ExperimentTracker,
-            "mark_running",
-            side_effect=sqlite3.OperationalError("database is locked"),
+        with (
+            patch("subprocess.Popen", side_effect=recorder),
+            patch.object(
+                ExperimentTracker,
+                "mark_running",
+                side_effect=sqlite3.OperationalError("database is locked"),
+            ),
         ):
             with pytest.raises(ExecutionError):
                 manager.execute(token=first, kind="train")

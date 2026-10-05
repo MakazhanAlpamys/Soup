@@ -15,6 +15,7 @@ runner = CliRunner()
 # Recipe catalog tests
 # ---------------------------------------------------------------------------
 
+
 class TestRecipeCatalog:
     """Tests for recipe catalog and search."""
 
@@ -120,13 +121,14 @@ class TestRecipeCatalog:
             parsed = yaml.safe_load(recipe.yaml_str)
             yaml_base = parsed.get("base")
             assert recipe.model == yaml_base, (
-                f"Recipe '{name}' model mismatch: "
-                f"meta={recipe.model}, yaml={yaml_base}"
+                f"Recipe '{name}' model mismatch: meta={recipe.model}, yaml={yaml_base}"
             )
+
 
 # ---------------------------------------------------------------------------
 # CLI tests
 # ---------------------------------------------------------------------------
+
 
 class TestRecipesCLI:
     """CLI tests for soup recipes command."""
@@ -156,10 +158,15 @@ class TestRecipesCLI:
     def test_use_recipe(self, tmp_path, monkeypatch):
         """soup recipes use <name> writes soup.yaml."""
         monkeypatch.chdir(tmp_path)
-        result = runner.invoke(app, [
-            "recipes", "use", "llama3.1-8b-sft",
-            "--yes",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "recipes",
+                "use",
+                "llama3.1-8b-sft",
+                "--yes",
+            ],
+        )
         assert result.exit_code == 0
         out_path = tmp_path / "soup.yaml"
         assert out_path.exists()
@@ -169,11 +176,17 @@ class TestRecipesCLI:
     def test_use_custom_output(self, tmp_path, monkeypatch):
         """soup recipes use <name> -o custom.yaml writes to custom path."""
         monkeypatch.chdir(tmp_path)
-        result = runner.invoke(app, [
-            "recipes", "use", "qwen2.5-7b-sft",
-            "-o", "my_config.yaml",
-            "--yes",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "recipes",
+                "use",
+                "qwen2.5-7b-sft",
+                "-o",
+                "my_config.yaml",
+                "--yes",
+            ],
+        )
         assert result.exit_code == 0
         assert (tmp_path / "my_config.yaml").exists()
 
@@ -183,9 +196,15 @@ class TestRecipesCLI:
         out_file = tmp_path / "soup.yaml"
         out_file.write_text("existing content", encoding="utf-8")
         # Deny confirmation
-        runner.invoke(app, [
-            "recipes", "use", "llama3.1-8b-sft",
-        ], input="n\n")
+        runner.invoke(
+            app,
+            [
+                "recipes",
+                "use",
+                "llama3.1-8b-sft",
+            ],
+            input="n\n",
+        )
         assert out_file.read_text(encoding="utf-8") == "existing content"
 
     def test_search_command(self):
@@ -207,20 +226,31 @@ class TestRecipesCLI:
     def test_use_output_path_traversal(self, tmp_path, monkeypatch):
         """Output path traversal is blocked."""
         monkeypatch.chdir(tmp_path)
-        result = runner.invoke(app, [
-            "recipes", "use", "llama3.1-8b-sft",
-            "-o", "../../../tmp/evil.yaml",
-            "--yes",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "recipes",
+                "use",
+                "llama3.1-8b-sft",
+                "-o",
+                "../../../tmp/evil.yaml",
+                "--yes",
+            ],
+        )
         assert result.exit_code != 0
 
     def test_use_unknown_recipe(self, tmp_path, monkeypatch):
         """soup recipes use <unknown> shows error."""
         monkeypatch.chdir(tmp_path)
-        result = runner.invoke(app, [
-            "recipes", "use", "nonexistent-recipe",
-            "--yes",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "recipes",
+                "use",
+                "nonexistent-recipe",
+                "--yes",
+            ],
+        )
         assert result.exit_code != 0
 
     def test_help(self):
@@ -263,9 +293,7 @@ class TestIssue278Qwen35PretrainRecipe:
             ["recipes", "use", "qwen3.5-4b-pretrain", "--yes"],
         )
         assert use_result.exit_code == 0
-        assert "Qwen/Qwen3.5-4B-Base" in (tmp_path / "soup.yaml").read_text(
-            encoding="utf-8"
-        )
+        assert "Qwen/Qwen3.5-4B-Base" in (tmp_path / "soup.yaml").read_text(encoding="utf-8")
 
 
 class TestIssue279DeepSeekV4FlashGrpoRecipe:
@@ -348,9 +376,7 @@ class TestIssue277Qwen35GrpoRecipe:
             ["recipes", "use", "qwen3.5-9b-grpo", "--yes"],
         )
         assert use_result.exit_code == 0
-        assert "Qwen/Qwen3.5-9B" in (tmp_path / "soup.yaml").read_text(
-            encoding="utf-8"
-        )
+        assert "Qwen/Qwen3.5-9B" in (tmp_path / "soup.yaml").read_text(encoding="utf-8")
 
 
 class TestQwen35SmallGrpoRecipes:
@@ -472,9 +498,7 @@ class TestIssue280Glm51DpoRecipe:
             ["recipes", "use", "glm-5.1-dpo", "--yes"],
         )
         assert use_result.exit_code == 0
-        assert "zai-org/GLM-5.1" in (tmp_path / "soup.yaml").read_text(
-            encoding="utf-8"
-        )
+        assert "zai-org/GLM-5.1" in (tmp_path / "soup.yaml").read_text(encoding="utf-8")
 
 
 class TestGlm51GrpoRecipe:
@@ -891,9 +915,7 @@ class TestIssue271SmolLM3Recipe:
         monkeypatch.chdir(tmp_path)
         use_result = runner.invoke(app, ["recipes", "use", "smollm3-3b-sft", "--yes"])
         assert use_result.exit_code == 0
-        assert "HuggingFaceTB/SmolLM3-3B" in (tmp_path / "soup.yaml").read_text(
-            encoding="utf-8"
-        )
+        assert "HuggingFaceTB/SmolLM3-3B" in (tmp_path / "soup.yaml").read_text(encoding="utf-8")
 
 
 class TestIssue276Qwen35A3bDpoRecipe:
@@ -950,9 +972,7 @@ class TestIssue276Qwen35A3bDpoRecipe:
             ["recipes", "use", "qwen3.5-35b-a3b-dpo", "--yes"],
         )
         assert use_result.exit_code == 0
-        assert "Qwen/Qwen3.5-35B-A3B" in (tmp_path / "soup.yaml").read_text(
-            encoding="utf-8"
-        )
+        assert "Qwen/Qwen3.5-35B-A3B" in (tmp_path / "soup.yaml").read_text(encoding="utf-8")
 
 
 class TestIssue847Qwen35A3bGrpoRecipe:
@@ -1073,9 +1093,7 @@ class TestIssue281KimiK26GrpoRecipe:
         monkeypatch.chdir(tmp_path)
         use_result = runner.invoke(app, ["recipes", "use", "kimi-k2.6-grpo", "--yes"])
         assert use_result.exit_code == 0
-        assert "moonshotai/Kimi-K2.6" in (tmp_path / "soup.yaml").read_text(
-            encoding="utf-8"
-        )
+        assert "moonshotai/Kimi-K2.6" in (tmp_path / "soup.yaml").read_text(encoding="utf-8")
 
 
 class TestKimiK26DpoRecipe:
@@ -1622,7 +1640,6 @@ class TestQwen36A3bDpoRecipe:
         assert self.MODEL in (tmp_path / "soup.yaml").read_text(encoding="utf-8")
 
 
-
 class TestQwen36A3bGrpoRecipe:
     """Coverage for the qwen3.6-35b-a3b-grpo recipe (#275 / #846 task-variant).
 
@@ -1719,10 +1736,10 @@ class TestQwen36A3bGrpoRecipe:
         assert self.MODEL in (tmp_path / "soup.yaml").read_text(encoding="utf-8")
 
 
-
 # ---------------------------------------------------------------------------
 # Part A: v0.25.0 new model recipes (Llama 4, Qwen 3, Gemma 3, DeepSeek V3)
 # ---------------------------------------------------------------------------
+
 
 class TestV025NewRecipes:
     """Tests for the 9 new recipes added in v0.25.0."""
@@ -1843,20 +1860,27 @@ class TestNewModelRecipes:
     """Catalog-expansion SFT recipes + Mistral Small repo-id fix (#523)."""
 
     EXPECTED = [
-        ("qwen2.5-coder-1.5b-sft", "sft",
-         "Qwen/Qwen2.5-Coder-1.5B-Instruct", 16, 32, 2e-4),
-        ("qwen2.5-coder-14b-sft", "sft",
-         "Qwen/Qwen2.5-Coder-14B-Instruct", 32, 64, 1e-4),
-        ("qwen2.5-coder-32b-sft", "sft",
-         "Qwen/Qwen2.5-Coder-32B-Instruct", 32, 64, 1e-4),
-        ("qwen2.5-math-1.5b-sft", "sft",
-         "Qwen/Qwen2.5-Math-1.5B-Instruct", 16, 32, 2e-4),
-        ("qwen2.5-math-7b-sft", "sft",
-         "Qwen/Qwen2.5-Math-7B-Instruct", 16, 32, 2e-4),
-        ("deepseek-r1-distill-qwen-1.5b-sft", "sft",
-         "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B", 16, 32, 2e-4),
-        ("deepseek-r1-distill-qwen-7b-sft", "sft",
-         "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B", 16, 32, 2e-4),
+        ("qwen2.5-coder-1.5b-sft", "sft", "Qwen/Qwen2.5-Coder-1.5B-Instruct", 16, 32, 2e-4),
+        ("qwen2.5-coder-14b-sft", "sft", "Qwen/Qwen2.5-Coder-14B-Instruct", 32, 64, 1e-4),
+        ("qwen2.5-coder-32b-sft", "sft", "Qwen/Qwen2.5-Coder-32B-Instruct", 32, 64, 1e-4),
+        ("qwen2.5-math-1.5b-sft", "sft", "Qwen/Qwen2.5-Math-1.5B-Instruct", 16, 32, 2e-4),
+        ("qwen2.5-math-7b-sft", "sft", "Qwen/Qwen2.5-Math-7B-Instruct", 16, 32, 2e-4),
+        (
+            "deepseek-r1-distill-qwen-1.5b-sft",
+            "sft",
+            "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B",
+            16,
+            32,
+            2e-4,
+        ),
+        (
+            "deepseek-r1-distill-qwen-7b-sft",
+            "sft",
+            "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
+            16,
+            32,
+            2e-4,
+        ),
     ]
 
     def test_all_new_recipes_registered(self):
@@ -1916,9 +1940,7 @@ class TestNewModelRecipes:
         assert "Qwen/Qwen2.5-Math-7B-Instruct" in show_result.output
 
         monkeypatch.chdir(tmp_path)
-        use_result = runner.invoke(
-            app, ["recipes", "use", "qwen2.5-math-7b-sft", "--yes"]
-        )
+        use_result = runner.invoke(app, ["recipes", "use", "qwen2.5-math-7b-sft", "--yes"])
         assert use_result.exit_code == 0
         content = (tmp_path / "soup.yaml").read_text(encoding="utf-8")
         assert "Qwen/Qwen2.5-Math-7B-Instruct" in content
@@ -1928,14 +1950,38 @@ class TestR1DistillLlamaAndDpoRecipes:
     """R1-Distill Llama SFT + R1-Distill DPO variants (#523)."""
 
     EXPECTED = [
-        ("deepseek-r1-distill-llama-8b-sft", "sft",
-         "deepseek-ai/DeepSeek-R1-Distill-Llama-8B", 16, 32, 2e-4),
-        ("deepseek-r1-distill-qwen-1.5b-dpo", "dpo",
-         "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B", 16, 32, 5e-6),
-        ("deepseek-r1-distill-qwen-7b-dpo", "dpo",
-         "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B", 16, 32, 5e-6),
-        ("deepseek-r1-distill-llama-8b-dpo", "dpo",
-         "deepseek-ai/DeepSeek-R1-Distill-Llama-8B", 16, 32, 5e-6),
+        (
+            "deepseek-r1-distill-llama-8b-sft",
+            "sft",
+            "deepseek-ai/DeepSeek-R1-Distill-Llama-8B",
+            16,
+            32,
+            2e-4,
+        ),
+        (
+            "deepseek-r1-distill-qwen-1.5b-dpo",
+            "dpo",
+            "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B",
+            16,
+            32,
+            5e-6,
+        ),
+        (
+            "deepseek-r1-distill-qwen-7b-dpo",
+            "dpo",
+            "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
+            16,
+            32,
+            5e-6,
+        ),
+        (
+            "deepseek-r1-distill-llama-8b-dpo",
+            "dpo",
+            "deepseek-ai/DeepSeek-R1-Distill-Llama-8B",
+            16,
+            32,
+            5e-6,
+        ),
     ]
 
     def test_all_new_recipes_registered(self):
@@ -1966,9 +2012,11 @@ class TestR1DistillLlamaAndDpoRecipes:
         from soup_cli.config.loader import load_config_from_string
         from soup_cli.recipes.catalog import get_recipe
 
-        for name in ("deepseek-r1-distill-qwen-1.5b-dpo",
-                     "deepseek-r1-distill-qwen-7b-dpo",
-                     "deepseek-r1-distill-llama-8b-dpo"):
+        for name in (
+            "deepseek-r1-distill-qwen-1.5b-dpo",
+            "deepseek-r1-distill-qwen-7b-dpo",
+            "deepseek-r1-distill-llama-8b-dpo",
+        ):
             cfg = load_config_from_string(get_recipe(name).yaml_str)
             assert cfg.data.format == "dpo"
             assert cfg.training.dpo_beta == 0.1

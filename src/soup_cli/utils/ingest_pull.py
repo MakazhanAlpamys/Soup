@@ -144,9 +144,7 @@ def parse_since(value: object) -> timedelta:
     return window
 
 
-def resolve_langfuse_host(
-    environ: Mapping[str, str], *, allow_private_host: bool = False
-) -> str:
+def resolve_langfuse_host(environ: Mapping[str, str], *, allow_private_host: bool = False) -> str:
     """Return the validated Langfuse base URL (default: Langfuse Cloud EU).
 
     HTTPS only, because the key pair travels with every request. The address
@@ -290,7 +288,9 @@ def pull_langfuse_generations(
         observations, cursor = _decode_page(response, credentials)
         _LOG.debug(
             "langfuse pull: page %d, %d observation(s), %s",
-            pages, len(observations), "more pending" if cursor else "last page",
+            pages,
+            len(observations),
+            "more pending" if cursor else "last page",
         )
         for observation in observations:
             counters.observations += 1
@@ -444,8 +444,10 @@ def _decode_io(value: Any) -> Any:
         decoded = json.loads(value)
     except ValueError:
         return value
-    if isinstance(decoded, list) and decoded and all(
-        isinstance(message, dict) and "role" in message for message in decoded
+    if (
+        isinstance(decoded, list)
+        and decoded
+        and all(isinstance(message, dict) and "role" in message for message in decoded)
     ):
         return {"messages": decoded}
     if isinstance(decoded, (dict, list)):
@@ -573,7 +575,7 @@ def _error_detail(body: bytes, credentials: LangfuseCredentials) -> str:
 
 
 def _scrub(text: str, credentials: LangfuseCredentials) -> str:
-    token = _basic_authorization(credentials)[len("Basic "):]
+    token = _basic_authorization(credentials)[len("Basic ") :]
     for secret in (token, credentials.secret_key, credentials.public_key):
         if secret:
             text = text.replace(secret, "***")

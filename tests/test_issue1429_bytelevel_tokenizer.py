@@ -26,7 +26,7 @@ _CORPUS = [
 ] * 50
 
 # Absent from the corpus: accented, emoji, CJK.
-_UNSEEN = ["héllo", "\U0001F600", "世界"]
+_UNSEEN = ["héllo", "\U0001f600", "世界"]
 
 
 def _write_corpus(tmp_path: Path) -> str:
@@ -43,8 +43,7 @@ def _train(tmp_path, monkeypatch, *extra: str) -> Path:
     _write_corpus(tmp_path)
     result = CliRunner().invoke(
         app,
-        ["tokenizer", "train", "-i", "corpus.jsonl", "-v", "500",
-         "-o", "tok", *extra],
+        ["tokenizer", "train", "-i", "corpus.jsonl", "-v", "500", "-o", "tok", *extra],
     )
     assert result.exit_code == 0, result.output
     return tmp_path / "tok" / "tokenizer.json"
@@ -65,13 +64,11 @@ def test_round_trip_pretrained_tokenizer_fast(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     _write_corpus(tmp_path)
     result = CliRunner().invoke(
-        app, ["tokenizer", "train", "-i", "corpus.jsonl", "-v", "500",
-              "-o", "tok2"],
+        app,
+        ["tokenizer", "train", "-i", "corpus.jsonl", "-v", "500", "-o", "tok2"],
     )
     assert result.exit_code == 0, result.output
-    fast = PreTrainedTokenizerFast(
-        tokenizer_file=str(tmp_path / "tok2" / "tokenizer.json")
-    )
+    fast = PreTrainedTokenizerFast(tokenizer_file=str(tmp_path / "tok2" / "tokenizer.json"))
     for text in ["hello world", *_UNSEEN]:
         assert fast.decode(fast(text)["input_ids"]) == text
 
@@ -100,8 +97,18 @@ def test_saved_model_declares_no_unk_token(tmp_path, monkeypatch):
     _write_corpus(tmp_path)
     result = CliRunner().invoke(
         app,
-        ["tokenizer", "train", "-i", "corpus.jsonl", "-v", "400", "-o", "tok",
-         "--special-token", "<|endoftext|>"],
+        [
+            "tokenizer",
+            "train",
+            "-i",
+            "corpus.jsonl",
+            "-v",
+            "400",
+            "-o",
+            "tok",
+            "--special-token",
+            "<|endoftext|>",
+        ],
     )
     assert result.exit_code == 0, result.output
     model = json.loads((tmp_path / "tok" / "tokenizer.json").read_text(encoding="utf-8"))["model"]
@@ -112,8 +119,8 @@ def test_saved_model_declares_no_unk_token(tmp_path, monkeypatch):
     "vocab, extra_specials, ok",
     [
         (258, ("a", "b"), False),  # 256 + 2 specials = 258: zero merges
-        (259, ("a", "b"), True),   # one merge fits
-        (260, (), False),          # default four specials: 260 = zero merges
+        (259, ("a", "b"), True),  # one merge fits
+        (260, (), False),  # default four specials: 260 = zero merges
         (261, (), True),
     ],
 )

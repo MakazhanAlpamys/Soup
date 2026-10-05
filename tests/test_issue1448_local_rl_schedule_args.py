@@ -43,10 +43,14 @@ def _schedule(*extra: str) -> "object":
     return runner.invoke(
         app,
         [
-            "local-rl", "train",
-            "--db", "local_rl.db",
-            "--model", "org/base",
-            "--scheduler-dir", "sched",
+            "local-rl",
+            "train",
+            "--db",
+            "local_rl.db",
+            "--model",
+            "org/base",
+            "--scheduler-dir",
+            "sched",
             *extra,
         ],
     )
@@ -55,7 +59,7 @@ def _schedule(*extra: str) -> "object":
 def _service_argv(tmp_path) -> list:
     text = (tmp_path / "sched" / SYSTEMD_SERVICE_NAME).read_text(encoding="utf-8")
     line = next(ln for ln in text.splitlines() if ln.startswith("ExecStart="))
-    return shlex.split(line[len("ExecStart="):], posix=True)
+    return shlex.split(line[len("ExecStart=") :], posix=True)
 
 
 def _plist_argv(tmp_path) -> list:
@@ -110,9 +114,7 @@ class TestTheRenderedJobCarriesTheOptions:
             assert _value_after(argv, "--output") == "local_rl_adapter"
 
 
-def test_the_rendered_command_reaches_the_runner_with_the_same_values(
-    workdir, monkeypatch
-):
+def test_the_rendered_command_reaches_the_runner_with_the_same_values(workdir, monkeypatch):
     """Run the scheduled command through the real CLI and record what the
     runner receives: a flag rendered under the wrong name would fail here."""
     import soup_cli.commands.local_rl as local_rl_cmd
@@ -123,7 +125,9 @@ def test_the_rendered_command_reaches_the_runner_with_the_same_values(
     def fake_run(cfg, *, once, min_pairs, output_dir):
         seen.update(once=once, min_pairs=min_pairs, output_dir=output_dir)
         return NightlyTrainResult(
-            status="skipped_insufficient_pairs", num_pairs=0, output_dir=None,
+            status="skipped_insufficient_pairs",
+            num_pairs=0,
+            output_dir=None,
             reason="test",
         )
 

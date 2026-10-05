@@ -136,9 +136,7 @@ def estimate_model_memory(model_params_b: float, quantization: str) -> float:
     return model_params_b * bpp
 
 
-def estimate_trainable_params(
-    model_params_b: float, lora_r: int, hidden_size: int
-) -> int:
+def estimate_trainable_params(model_params_b: float, lora_r: int, hidden_size: int) -> int:
     """Estimate number of trainable LoRA parameters.
 
     LoRA adds r × hidden_size × 2 params per target module.
@@ -153,9 +151,7 @@ def estimate_trainable_params(
     return params_per_layer * num_layers
 
 
-def estimate_lora_memory(
-    model_params_b: float, lora_r: int, lora_alpha: int
-) -> float:
+def estimate_lora_memory(model_params_b: float, lora_r: int, lora_alpha: int) -> float:
     """Estimate LoRA adapter memory in GB (FP16 for trainable params)."""
     arch = get_model_arch("", model_params_b)
     trainable = estimate_trainable_params(model_params_b, lora_r, arch["hidden_size"])
@@ -229,12 +225,13 @@ def estimate_total(
 
     model_mem = estimate_model_memory(model_params_b, quantization)
     lora_mem = estimate_lora_memory(model_params_b, lora_r, lora_alpha)
-    trainable = estimate_trainable_params(
-        model_params_b, lora_r, arch["hidden_size"]
-    )
+    trainable = estimate_trainable_params(model_params_b, lora_r, arch["hidden_size"])
     opt_mem = estimate_optimizer_memory(trainable, optimizer)
     act_mem = estimate_activation_memory(
-        batch_size, seq_len, arch["hidden_size"], arch["num_layers"],
+        batch_size,
+        seq_len,
+        arch["hidden_size"],
+        arch["num_layers"],
         gradient_checkpointing=gradient_checkpointing,
     )
 
@@ -260,9 +257,7 @@ def estimate_total(
     }
 
 
-def estimate_speed(
-    model_params_b: float, quantization: str, batch_size: int
-) -> float:
+def estimate_speed(model_params_b: float, quantization: str, batch_size: int) -> float:
     """Estimate training tokens/sec (rough lookup-based).
 
     Based on typical A100 throughput for different model sizes.
@@ -297,9 +292,7 @@ def estimate_speed(
     return speed
 
 
-def estimate_training_time(
-    dataset_size: int, epochs: int, samples_per_sec: float
-) -> float:
+def estimate_training_time(dataset_size: int, epochs: int, samples_per_sec: float) -> float:
     """Estimate total training time in minutes.
 
     Returns float('inf') if samples_per_sec is 0.

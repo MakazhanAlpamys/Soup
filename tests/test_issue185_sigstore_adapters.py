@@ -19,9 +19,7 @@ def _adapter(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     adir = tmp_path / "adapter"
     adir.mkdir()
-    (adir / "adapter_config.json").write_text(
-        '{"peft_type":"LORA"}', encoding="utf-8"
-    )
+    (adir / "adapter_config.json").write_text('{"peft_type":"LORA"}', encoding="utf-8")
     (adir / "adapter_model.safetensors").write_bytes(b"weights")
     return adir
 
@@ -29,9 +27,7 @@ def _adapter(tmp_path, monkeypatch):
 def _fake_sigstore(monkeypatch, *, verify_error=None):
     from soup_cli.utils import sigstore_signing
 
-    bundle_json = (
-        '{"mediaType":"application/vnd.dev.sigstore.bundle.v0.3+json"}'
-    )
+    bundle_json = '{"mediaType":"application/vnd.dev.sigstore.bundle.v0.3+json"}'
     monkeypatch.setattr(
         sigstore_signing,
         "sign_payload_sigstore",
@@ -55,9 +51,7 @@ def _fake_sigstore(monkeypatch, *, verify_error=None):
 
 
 class TestAdapterSigstoreRoundTrip:
-    def test_sign_writes_bundle_and_keeps_ed25519_fields_empty(
-        self, tmp_path, monkeypatch
-    ):
+    def test_sign_writes_bundle_and_keeps_ed25519_fields_empty(self, tmp_path, monkeypatch):
         from soup_cli.utils.adapter_sign import sign_adapter
 
         adir = _adapter(tmp_path, monkeypatch)
@@ -69,9 +63,7 @@ class TestAdapterSigstoreRoundTrip:
         assert record.public_key == ""
         assert "sigstore.bundle" in record.sigstore_bundle
 
-        payload = json.loads(
-            (adir / ".soup-signature.json").read_text(encoding="utf-8")
-        )
+        payload = json.loads((adir / ".soup-signature.json").read_text(encoding="utf-8"))
         assert payload["sigstore_bundle"] == record.sigstore_bundle
 
     def test_verify_requires_out_of_band_identity(self, tmp_path, monkeypatch):
@@ -85,9 +77,7 @@ class TestAdapterSigstoreRoundTrip:
         assert report.valid is False
         assert "--cert-identity and --cert-oidc-issuer" in report.reason
 
-    def test_verify_passes_identity_and_issuer_to_sigstore(
-        self, tmp_path, monkeypatch
-    ):
+    def test_verify_passes_identity_and_issuer_to_sigstore(self, tmp_path, monkeypatch):
         from soup_cli.utils.adapter_sign import sign_adapter, verify_adapter
 
         adir = _adapter(tmp_path, monkeypatch)
@@ -119,9 +109,7 @@ class TestAdapterSigstoreRoundTrip:
         assert report.valid is False
         assert "identity mismatch" in report.reason
 
-    def test_file_tamper_fails_even_when_bundle_verifier_accepts(
-        self, tmp_path, monkeypatch
-    ):
+    def test_file_tamper_fails_even_when_bundle_verifier_accepts(self, tmp_path, monkeypatch):
         from soup_cli.utils.adapter_sign import sign_adapter, verify_adapter
 
         adir = _adapter(tmp_path, monkeypatch)
@@ -164,7 +152,6 @@ class TestAdapterSigstoreCli:
                 str(adir),
                 "--cert-identity",
                 "trusted@example.com",
-
                 "--cert-oidc-issuer",
                 "https://issuer.example",
             ],
@@ -244,16 +231,12 @@ class TestAdapterSigstoreFailClosedControls:
         assert report.valid is False
         assert any("no bundle recorded" in finding for finding in report.findings)
 
-    def test_unsigned_record_does_not_grow_a_sigstore_bundle_key(
-        self, tmp_path, monkeypatch
-    ):
+    def test_unsigned_record_does_not_grow_a_sigstore_bundle_key(self, tmp_path, monkeypatch):
         from soup_cli.utils.adapter_sign import sign_adapter
 
         adir = _adapter(tmp_path, monkeypatch)
         sign_adapter(str(adir), backend="unsigned")
-        payload = json.loads(
-            (adir / ".soup-signature.json").read_text(encoding="utf-8")
-        )
+        payload = json.loads((adir / ".soup-signature.json").read_text(encoding="utf-8"))
         assert "sigstore_bundle" not in payload
 
 
@@ -325,9 +308,7 @@ def test_cli_cert_identity_rejects_unsigned_backend_in_both_modes(
 
 
 @pytest.mark.parametrize(("strict", "code"), [(False, 1), (True, 3)])
-def test_cli_sigstore_error_strips_terminal_control_bytes(
-    tmp_path, monkeypatch, strict, code
-):
+def test_cli_sigstore_error_strips_terminal_control_bytes(tmp_path, monkeypatch, strict, code):
     from soup_cli.commands.adapters import app
     from soup_cli.utils.adapter_sign import sign_adapter
 
@@ -384,9 +365,7 @@ def test_interactive_oidc_refuses_non_sigstore_backend(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize(("strict", "code"), [(False, 1), (True, 3)])
-def test_cli_verify_reports_missing_sigstore_extra(
-    tmp_path, monkeypatch, strict, code
-):
+def test_cli_verify_reports_missing_sigstore_extra(tmp_path, monkeypatch, strict, code):
     import builtins
 
     from soup_cli.commands.adapters import app
@@ -423,9 +402,7 @@ def test_cli_verify_reports_missing_sigstore_extra(
     assert "soup-cli[sigstore]" in _clean_output(result.output)
 
 
-def test_sigstore_sign_refuses_directory_target_before_external_signer(
-    tmp_path, monkeypatch
-):
+def test_sigstore_sign_refuses_directory_target_before_external_signer(tmp_path, monkeypatch):
     from soup_cli.utils import sigstore_signing
     from soup_cli.utils.adapter_sign import sign_adapter
 
@@ -456,9 +433,7 @@ def test_cli_sign_sanitizes_runtime_error_control_bytes(tmp_path, monkeypatch):
         raise RuntimeError(attack)
 
     monkeypatch.setattr(adapter_sign, "sign_adapter", fail_sign)
-    result = CliRunner().invoke(
-        app, ["sign", str(adir), "--backend", "sigstore"]
-    )
+    result = CliRunner().invoke(app, ["sign", str(adir), "--backend", "sigstore"])
 
     assert result.exit_code == 1
     out = _SGR.sub("", result.output)

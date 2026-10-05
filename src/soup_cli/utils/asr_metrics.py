@@ -38,9 +38,9 @@ def _guard_raw_len(*texts: str) -> None:
     for text in texts:
         if isinstance(text, str) and len(text) > _MAX_RAW_CHARS:
             raise ValueError(
-                f"input too long ({len(text)} chars > {_MAX_RAW_CHARS}); "
-                "split the input"
+                f"input too long ({len(text)} chars > {_MAX_RAW_CHARS}); split the input"
             )
+
 
 # Punctuation stripped by the default normalizer (removed, not spaced —
 # mirrors jiwer's RemovePunctuation default).
@@ -81,8 +81,7 @@ def _levenshtein(ref: Sequence, hyp: Sequence) -> int:
     """Edit distance between two sequences via a bounded two-row DP."""
     if len(ref) > _MAX_SEQ or len(hyp) > _MAX_SEQ:
         raise ValueError(
-            f"sequence too long for edit distance (> {_MAX_SEQ} units); "
-            "split the input"
+            f"sequence too long for edit distance (> {_MAX_SEQ} units); split the input"
         )
     n, m = len(ref), len(hyp)
     if n == 0:
@@ -96,8 +95,8 @@ def _levenshtein(ref: Sequence, hyp: Sequence) -> int:
         for j in range(1, m + 1):
             cost = 0 if ref_i == hyp[j - 1] else 1
             curr[j] = min(
-                prev[j] + 1,       # deletion
-                curr[j - 1] + 1,   # insertion
+                prev[j] + 1,  # deletion
+                curr[j - 1] + 1,  # insertion
                 prev[j - 1] + cost,  # substitution / match
             )
         prev = curr
@@ -137,9 +136,7 @@ def word_accuracy(ref: str, hyp: str, *, normalize: bool = True) -> float:
 def corpus_wer(refs: Sequence[str], hyps: Sequence[str], *, normalize: bool = True) -> float:
     """Corpus-level WER = ``sum(edits) / sum(ref_words)`` over paired lists."""
     if len(refs) != len(hyps):
-        raise ValueError(
-            f"refs and hyps must be the same length ({len(refs)} != {len(hyps)})"
-        )
+        raise ValueError(f"refs and hyps must be the same length ({len(refs)} != {len(hyps)})")
     total_edits = 0
     total_ref = 0
     for ref, hyp in zip(refs, hyps):

@@ -59,7 +59,12 @@ FORMAT_CASES = {
 # The formats that carried no FORMAT_SIGNATURES entry, so validation was skipped
 # for them entirely before this fix.
 SKIP_VALIDATION_FORMATS = [
-    "prm", "pre_tokenized", "input_output", "video", "multimodal", "raft",
+    "prm",
+    "pre_tokenized",
+    "input_output",
+    "video",
+    "multimodal",
+    "raft",
 ]
 
 

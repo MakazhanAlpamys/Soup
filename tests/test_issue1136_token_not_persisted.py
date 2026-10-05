@@ -162,11 +162,14 @@ LOGINS = {
 
 @pytest.mark.skipif(NODE is None, reason="node not installed")
 class TestTokenUnderNode:
-    def _run(self, body: str, search: str = f"?token={SECRET}&tab=1",
-             prompt: "str | None" = None, statuses: "list | None" = None):
-        args = json.dumps(
-            [str(SAFE_JS), str(APP_JS), SECRET, search, prompt, statuses or [], body]
-        )
+    def _run(
+        self,
+        body: str,
+        search: str = f"?token={SECRET}&tab=1",
+        prompt: "str | None" = None,
+        statuses: "list | None" = None,
+    ):
+        args = json.dumps([str(SAFE_JS), str(APP_JS), SECRET, search, prompt, statuses or [], body])
         res = subprocess.run(
             [NODE, "-e", _HARNESS, args], capture_output=True, text=True, timeout=30
         )
@@ -236,19 +239,24 @@ class TestTokenUnderNode:
         out, rec = self._run(
             "const rs = await Promise.all([authFetch('/a'), authFetch('/b')]);"
             "return rs.map(r => r.status);",
-            search="", prompt="NEW", statuses=[401, 401],
+            search="",
+            prompt="NEW",
+            statuses=[401, 401],
         )
         assert out == [200, 200]
         assert rec["prompt"] == 1
         assert [call["headers"].get("Authorization") for call in rec["fetch"][2:]] == [
-            "Bearer NEW", "Bearer NEW",
+            "Bearer NEW",
+            "Bearer NEW",
         ]
 
     def test_late_401_after_the_prompt_retries_without_asking_again(self):
         out, rec = self._run(
             "const rs = await Promise.all([authFetch('/a'), authFetch('/b')]);"
             "return rs.map(r => r.status);",
-            search="", prompt="NEW", statuses=[401, [401, 50]],
+            search="",
+            prompt="NEW",
+            statuses=[401, [401, 50]],
         )
         assert out == [200, 200]
         assert rec["prompt"] == 1
@@ -266,7 +274,9 @@ class TestTokenUnderNode:
         out, rec = self._run(
             "const a = await authFetch('/a'); const b = await authFetch('/b');"
             "return [a.status, b.status];",
-            search="", prompt=answer, statuses=[401, 401],
+            search="",
+            prompt=answer,
+            statuses=[401, 401],
         )
         assert out == [401, 401]
         assert rec["prompt"] == 1
@@ -275,7 +285,9 @@ class TestTokenUnderNode:
     def test_a_click_after_a_cancel_asks_again(self):
         _, rec = self._run(
             "await authFetch('/a'); userClick(); await authFetch('/b');",
-            search="", prompt=None, statuses=[401, 401],
+            search="",
+            prompt=None,
+            statuses=[401, 401],
         )
         assert rec["prompt"] == 2
 
@@ -283,7 +295,9 @@ class TestTokenUnderNode:
         out, rec = self._run(
             "const a = await authFetch('/a'); const b = await authFetch('/b');"
             "return [a.status, b.status];",
-            search="", prompt="__THROW__", statuses=[401, 401],
+            search="",
+            prompt="__THROW__",
+            statuses=[401, 401],
         )
         assert out == [401, 401]
         assert rec["prompt"] == 1
@@ -292,16 +306,16 @@ class TestTokenUnderNode:
         "pasted", ["Bearer NEW", "  bearer NEW  ", "Authorization: Bearer NEW"]
     )
     def test_pasted_header_prefix_is_stripped(self, pasted):
-        _, rec = self._run(
-            "await authFetch('/a');", search="", prompt=pasted, statuses=[401]
-        )
+        _, rec = self._run("await authFetch('/a');", search="", prompt=pasted, statuses=[401])
         assert rec["fetch"][-1]["headers"]["Authorization"] == "Bearer NEW"
 
     def test_non_ascii_paste_is_not_sent_and_asked_again(self):
         # The server answers such a header with 500, not 401 (#1195).
         _, rec = self._run(
             "await authFetch('/a'); await authFetch('/b');",
-            search="", prompt="abécd", statuses=[401, 401],
+            search="",
+            prompt="abécd",
+            statuses=[401, 401],
         )
         assert rec["prompt"] == 2
         assert all("Authorization" not in call["headers"] for call in rec["fetch"])

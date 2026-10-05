@@ -46,8 +46,12 @@ class TestPreferenceLossWeightsConfig:
         with pytest.raises(ValidationError, match="2 and 5"):
             _base(
                 preference_loss_weights={
-                    "dpo": 0.2, "bco": 0.2, "simpo": 0.2,
-                    "orpo": 0.2, "ipo": 0.1, "extra": 0.1,
+                    "dpo": 0.2,
+                    "bco": 0.2,
+                    "simpo": 0.2,
+                    "orpo": 0.2,
+                    "ipo": 0.1,
+                    "extra": 0.1,
                 },
             )
 

@@ -29,15 +29,21 @@ def register(app: typer.Typer, console: Console) -> None:
     def design_cmd(
         data: str = typer.Argument(..., help="Training-data JSONL path"),
         goal: str = typer.Option(
-            ..., "--goal", "-g",
+            ...,
+            "--goal",
+            "-g",
             help="One-line goal description (e.g. 'better at SQL').",
         ),
         num_dimensions: int = typer.Option(
-            5, "--num-dimensions", "-n",
+            5,
+            "--num-dimensions",
+            "-n",
             help="Number of eval dimensions to draft (1-20).",
         ),
         output: str = typer.Option(
-            "evals/design.json", "--output", "-o",
+            "evals/design.json",
+            "--output",
+            "-o",
             help="Where to write the rendered EvalDesign JSON.",
         ),
     ) -> None:
@@ -56,7 +62,9 @@ def register(app: typer.Typer, console: Console) -> None:
 
         try:
             design = design_evals_from_data(
-                rows, goal=goal, num_dimensions=num_dimensions,
+                rows,
+                goal=goal,
+                num_dimensions=num_dimensions,
             )
         except (TypeError, ValueError) as exc:
             console.print(f"[red]Cannot build design:[/] {exc}")
@@ -74,32 +82,38 @@ def register(app: typer.Typer, console: Console) -> None:
         table.add_column("Rubric", overflow="fold")
         for dim in design.dimensions:
             table.add_row(
-                escape(dim.name), escape(dim.scorer_type), escape(dim.rubric),
+                escape(dim.name),
+                escape(dim.scorer_type),
+                escape(dim.rubric),
             )
         console.print(table)
         console.print(
-            f"[green]Wrote {len(design.dimensions)} dimensions[/] to "
-            f"[cyan]{escape(path)}[/]"
+            f"[green]Wrote {len(design.dimensions)} dimensions[/] to [cyan]{escape(path)}[/]"
         )
 
     @app.command(name="discover")
     def discover_cmd(
         data: str = typer.Argument(..., help="Training-data JSONL path"),
         base: Optional[str] = typer.Option(
-            None, "--base",
+            None,
+            "--base",
             help="Base model id (recorded; consumed by `soup diagnose`).",
         ),
         num_clusters: int = typer.Option(
-            5, "--num-clusters",
+            5,
+            "--num-clusters",
             help="Number of behavioural clusters to discover (1-64).",
         ),
         per_cluster: int = typer.Option(
-            3, "--per-cluster",
+            3,
+            "--per-cluster",
             help="Held-out canaries to draw per cluster (1-64).",
         ),
         seed: int = typer.Option(0, "--seed", help="Deterministic seed."),
         output: str = typer.Option(
-            "evals/canaries.json", "--output", "-o",
+            "evals/canaries.json",
+            "--output",
+            "-o",
             help="Where to write the rendered CanarySet JSON.",
         ),
     ) -> None:
@@ -118,8 +132,11 @@ def register(app: typer.Typer, console: Console) -> None:
 
         try:
             canary = discover_canaries(
-                rows, base=base, num_clusters=num_clusters,
-                per_cluster=per_cluster, seed=seed,
+                rows,
+                base=base,
+                num_clusters=num_clusters,
+                per_cluster=per_cluster,
+                seed=seed,
             )
         except (TypeError, ValueError) as exc:
             console.print(f"[red]Cannot discover canaries:[/] {exc}")
@@ -141,14 +158,18 @@ def register(app: typer.Typer, console: Console) -> None:
     @app.command(name="lock")
     def lock_cmd(
         design_path: str = typer.Argument(
-            ..., help="Path to an EvalDesign JSON (from `soup eval design`)",
+            ...,
+            help="Path to an EvalDesign JSON (from `soup eval design`)",
         ),
         output: str = typer.Option(
-            "evals/locked.json", "--output", "-o",
+            "evals/locked.json",
+            "--output",
+            "-o",
             help="Where to write the canonicalised locked suite.",
         ),
         attach_to_registry: Optional[str] = typer.Option(
-            None, "--attach-to-registry",
+            None,
+            "--attach-to-registry",
             help="Registry entry id or name to attach the locked suite to.",
         ),
     ) -> None:
@@ -183,20 +204,19 @@ def register(app: typer.Typer, console: Console) -> None:
                     kind="eval_suite",
                     path=locked.path,
                 )
-                console.print(
-                    f"[green]Attached to registry entry "
-                    f"{escape(attach_to_registry)}[/]"
-                )
+                console.print(f"[green]Attached to registry entry {escape(attach_to_registry)}[/]")
             except (ValueError, FileNotFoundError, ImportError) as exc:
                 console.print(f"[yellow]Registry attach skipped:[/] {exc}")
 
     @app.command(name="coverage")
     def coverage_cmd(
         design_path: str = typer.Argument(
-            ..., help="Path to an EvalDesign JSON",
+            ...,
+            help="Path to an EvalDesign JSON",
         ),
         task_category: str = typer.Option(
-            ..., "--task",
+            ...,
+            "--task",
             help=(
                 "Task category from v0.54.0 taxonomy: factual_lookup | "
                 "style_shaping | format_conversion | reasoning | tool_use | "
@@ -230,24 +250,24 @@ def register(app: typer.Typer, console: Console) -> None:
             table.add_row(scorer, str(count))
         console.print(table)
         if report.missing_scorers:
-            console.print(
-                "[yellow]Missing scorers:[/] "
-                + ", ".join(report.missing_scorers)
-            )
+            console.print("[yellow]Missing scorers:[/] " + ", ".join(report.missing_scorers))
         for rec in report.recommendations:
             console.print(f"[dim]•[/] {escape(rec)}")
 
     @app.command(name="against", cls=GateCommand)
     def against_cmd(
         baseline_run_id: str = typer.Argument(
-            ..., help="Baseline run id (from `soup runs list`).",
+            ...,
+            help="Baseline run id (from `soup runs list`).",
         ),
         candidate_run_id: str = typer.Option(
-            ..., "--candidate",
+            ...,
+            "--candidate",
             help="Candidate run id whose metrics are compared to the baseline.",
         ),
         metric: str = typer.Option(
-            "task_accuracy", "--metric",
+            "task_accuracy",
+            "--metric",
             help=(
                 "Metric to check: task_accuracy | refusal_rate | format_validity | "
                 "p95_latency_ms | custom | aider_polyglot | judge:<model> | "
@@ -255,16 +275,19 @@ def register(app: typer.Typer, console: Console) -> None:
             ),
         ),
         n_samples: int = typer.Option(
-            1000, "--n-samples",
+            1000,
+            "--n-samples",
             help="Paired-bootstrap samples (100-100000).",
         ),
         seed: int = typer.Option(0, "--seed", help="Deterministic seed."),
         json_only: bool = typer.Option(
-            False, "--json-only",
+            False,
+            "--json-only",
             help="Suppress Rich output; emit a single JSON verdict line.",
         ),
         suite: str = typer.Option(
-            None, "--suite",
+            None,
+            "--suite",
             help=(
                 "Locked eval suite (from `soup eval lock`) to validate as a gate "
                 "precondition — a missing / unparseable suite BLOCKS the check "
@@ -313,8 +336,7 @@ def register(app: typer.Typer, console: Console) -> None:
                 load_locked_suite(suite)
             except (FileNotFoundError, ValueError, OSError) as exc:
                 console.print(
-                    f"[red]Locked eval suite invalid — gate blocked:[/] "
-                    f"{escape(str(exc))}"
+                    f"[red]Locked eval suite invalid — gate blocked:[/] {escape(str(exc))}"
                 )
                 raise typer.Exit(EXIT_USAGE_ERROR) from exc
 
@@ -384,28 +406,30 @@ def register(app: typer.Typer, console: Console) -> None:
         if json_only:
             # Plain stdout, not console.print: Rich folds a document wider than
             # the console and reads "[...]" in a string as markup (#1468).
-            typer.echo(_json.dumps({
-                "metric": metric,
-                "source_metric": source_metric,
-                "regressed": verdict.regressed,
-                "offenders": list(verdict.offenders),
-                "ci_lower": None if ci_degenerate else verdict.ci_lower,
-                "ci_upper": None if ci_degenerate else verdict.ci_upper,
-                "delta_mean": verdict.delta_mean,
-                "sample_count": sample_count,
-                "ci_degenerate": ci_degenerate,
-                "baseline_run_id": baseline_run_id,
-                "candidate_run_id": candidate_run_id,
-            }))
+            typer.echo(
+                _json.dumps(
+                    {
+                        "metric": metric,
+                        "source_metric": source_metric,
+                        "regressed": verdict.regressed,
+                        "offenders": list(verdict.offenders),
+                        "ci_lower": None if ci_degenerate else verdict.ci_lower,
+                        "ci_upper": None if ci_degenerate else verdict.ci_upper,
+                        "delta_mean": verdict.delta_mean,
+                        "sample_count": sample_count,
+                        "ci_degenerate": ci_degenerate,
+                        "baseline_run_id": baseline_run_id,
+                        "candidate_run_id": candidate_run_id,
+                    }
+                )
+            )
         else:
             color = "red" if verdict.regressed else "green"
             tag = "REGRESSED" if verdict.regressed else "OK"
             if ci_degenerate:
                 interval = "confidence interval unavailable (one aggregate result)"
             else:
-                interval = (
-                    f"ci=[{verdict.ci_lower:+.4f}, {verdict.ci_upper:+.4f}]"
-                )
+                interval = f"ci=[{verdict.ci_lower:+.4f}, {verdict.ci_upper:+.4f}]"
             console.print(
                 f"[{color}]{tag}[/] {escape(metric)} delta_mean="
                 f"{verdict.delta_mean:+.4f} {interval}"
@@ -415,19 +439,24 @@ def register(app: typer.Typer, console: Console) -> None:
     @app.command(name="gate-install")
     def gate_install_cmd(
         baseline_run_id: str = typer.Option(
-            ..., "--baseline",
+            ...,
+            "--baseline",
             help="Baseline run id the pre-push hook compares against.",
         ),
         suite_path: str = typer.Option(
-            "evals/locked.json", "--suite",
+            "evals/locked.json",
+            "--suite",
             help="Path to the locked eval suite (cwd-contained).",
         ),
         hook_path: str = typer.Option(
-            ".git/hooks/pre-push", "--hook-path",
+            ".git/hooks/pre-push",
+            "--hook-path",
             help="Hook target — usually .git/hooks/pre-push.",
         ),
         force: bool = typer.Option(
-            False, "--force", help="Overwrite an existing hook.",
+            False,
+            "--force",
+            help="Overwrite an existing hook.",
         ),
     ) -> None:
         """Install a pre-push regression gate for the selected baseline."""
@@ -443,10 +472,5 @@ def register(app: typer.Typer, console: Console) -> None:
         except (TypeError, ValueError, OSError) as exc:
             console.print(f"[red]Cannot install hook:[/] {exc}")
             raise typer.Exit(1) from exc
-        console.print(
-            f"[green]Installed pre-push gate[/] → [cyan]{escape(path)}[/]"
-        )
-        console.print(
-            f"[dim]Baseline: {escape(baseline_run_id)} • suite: "
-            f"{escape(suite_path)}[/]"
-        )
+        console.print(f"[green]Installed pre-push gate[/] → [cyan]{escape(path)}[/]")
+        console.print(f"[dim]Baseline: {escape(baseline_run_id)} • suite: {escape(suite_path)}[/]")

@@ -21,17 +21,13 @@ console = Console()
 
 def compile_tools_cmd(
     spec: str = typer.Argument(..., help="OpenAPI / MCP / GraphQL spec path"),
-    eval_suite: str = typer.Option(
-        ..., "--eval", help="Path to tool-call eval JSONL"
-    ),
+    eval_suite: str = typer.Option(..., "--eval", help="Path to tool-call eval JSONL"),
     optimizer: str = typer.Option(
         "textgrad",
         "--optimizer",
         help="Allowed: " + ", ".join(sorted(SUPPORTED_TOOL_OPTIMIZERS)),
     ),
-    output: str = typer.Option(
-        "compiled_tools.json", "--output", "-o", help="Output schema path"
-    ),
+    output: str = typer.Option("compiled_tools.json", "--output", "-o", help="Output schema path"),
     plan_only: bool = typer.Option(
         False, "--plan-only", help="Render plan + exit 0 (no live optimise)."
     ),
@@ -77,8 +73,7 @@ def compile_tools_cmd(
 
     console.print(
         Panel(
-            f"Tools:  [bold]{n}[/]\n"
-            f"Output: [bold]{escape(plan.output_path)}[/]",
+            f"Tools:  [bold]{n}[/]\nOutput: [bold]{escape(plan.output_path)}[/]",
             title="soup compile-tools — done",
         )
     )

@@ -37,9 +37,7 @@ class TestParseJudgeURL:
     def test_https_openai(self):
         from soup_cli.eval.gate import _parse_judge_url
 
-        provider, model, base = _parse_judge_url(
-            "https://api.openai.com/gpt-4o-mini"
-        )
+        provider, model, base = _parse_judge_url("https://api.openai.com/gpt-4o-mini")
         assert provider == "openai"
         assert model == "gpt-4o-mini"
         assert base == "https://api.openai.com"
@@ -66,12 +64,11 @@ class TestParseJudgeURL:
     def test_http_localhost_server(self):
         from soup_cli.eval.gate import _parse_judge_url
 
-        provider, model, base = _parse_judge_url(
-            "http://localhost:8000/Qwen2.5"
-        )
+        provider, model, base = _parse_judge_url("http://localhost:8000/Qwen2.5")
         assert provider == "server"
         assert model == "Qwen2.5"
         assert base == "http://localhost:8000"
+
     def test_rejects_localhost_prefix_bypass(self):
         from soup_cli.eval.gate import _parse_judge_url
 
@@ -80,6 +77,7 @@ class TestParseJudgeURL:
 
         with pytest.raises(ValueError, match="unsupported scheme"):
             _parse_judge_url("http://127.0.0.1.evil/model")
+
     def test_rejects_unsupported_scheme(self):
         from soup_cli.eval.gate import _parse_judge_url
 
@@ -101,20 +99,29 @@ class TestRunGateErrorPropagation:
         monkeypatch.chdir(tmp_path)
         prompts = tmp_path / "prompts.jsonl"
         prompts.write_text(
-            json.dumps({"prompt": "Hi"}) + "\n", encoding="utf-8",
+            json.dumps({"prompt": "Hi"}) + "\n",
+            encoding="utf-8",
         )
 
-        suite = EvalSuite(suite="t", tasks=[GateTask(
-            type="judge", name="quality", threshold=0.5,
-            prompts="prompts.jsonl",
-            judge_model="ollama://llama3.1",
-        )])
+        suite = EvalSuite(
+            suite="t",
+            tasks=[
+                GateTask(
+                    type="judge",
+                    name="quality",
+                    threshold=0.5,
+                    prompts="prompts.jsonl",
+                    judge_model="ollama://llama3.1",
+                )
+            ],
+        )
 
         # Inject a JudgeEvaluator that explodes on construction.
         with patch("soup_cli.eval.judge.JudgeEvaluator") as mock_judge:
             mock_judge.side_effect = OSError("connection refused")
             result = run_gate(
-                suite, generate_fn=lambda _p: "stub",
+                suite,
+                generate_fn=lambda _p: "stub",
                 regression_threshold=0.05,
             )
 
@@ -129,10 +136,18 @@ class TestRunGateErrorPropagation:
         from soup_cli.eval.gate import EvalSuite, GateTask, run_gate
 
         monkeypatch.chdir(tmp_path)
-        suite = EvalSuite(suite="t", tasks=[GateTask(
-            type="custom", name="cust", threshold=0.5,
-            tasks="missing.jsonl", scorer="exact",
-        )])
+        suite = EvalSuite(
+            suite="t",
+            tasks=[
+                GateTask(
+                    type="custom",
+                    name="cust",
+                    threshold=0.5,
+                    tasks="missing.jsonl",
+                    scorer="exact",
+                )
+            ],
+        )
 
         result = run_gate(suite, generate_fn=lambda _p: "out")
         row = result.task_results[0]
@@ -143,10 +158,17 @@ class TestRunGateErrorPropagation:
     def test_benchmark_task_runs_builtin_benchmark(self):
         from soup_cli.eval.gate import EvalSuite, GateTask, run_gate
 
-        suite = EvalSuite(suite="t", tasks=[GateTask(
-            type="benchmark", name="bench", threshold=0.2,
-            benchmark="mini_mmlu",
-        )])
+        suite = EvalSuite(
+            suite="t",
+            tasks=[
+                GateTask(
+                    type="benchmark",
+                    name="bench",
+                    threshold=0.2,
+                    benchmark="mini_mmlu",
+                )
+            ],
+        )
         result = run_gate(suite, generate_fn=lambda _p: "B")
         row = result.task_results[0]
 
@@ -163,10 +185,17 @@ class TestRunGateErrorPropagation:
     def test_benchmark_task_unknown_name_lists_options(self):
         from soup_cli.eval.gate import EvalSuite, GateTask, run_gate
 
-        suite = EvalSuite(suite="t", tasks=[GateTask(
-            type="benchmark", name="bench", threshold=0.3,
-            benchmark="not_a_benchmark",
-        )])
+        suite = EvalSuite(
+            suite="t",
+            tasks=[
+                GateTask(
+                    type="benchmark",
+                    name="bench",
+                    threshold=0.3,
+                    benchmark="not_a_benchmark",
+                )
+            ],
+        )
         result = run_gate(suite, generate_fn=lambda _p: "")
         row = result.task_results[0]
 
@@ -180,8 +209,12 @@ class TestGateTaskResultSchema:
         from soup_cli.eval.gate import GateTaskResult
 
         row = GateTaskResult(
-            name="x", score=0.7, threshold=0.5,
-            baseline=None, delta=None, passed=True,
+            name="x",
+            score=0.7,
+            threshold=0.5,
+            baseline=None,
+            delta=None,
+            passed=True,
         )
         assert row.error is None
 
@@ -189,8 +222,12 @@ class TestGateTaskResultSchema:
         from soup_cli.eval.gate import GateTaskResult
 
         row = GateTaskResult(
-            name="x", score=None, threshold=0.5,
-            baseline=None, delta=None, passed=False,
+            name="x",
+            score=None,
+            threshold=0.5,
+            baseline=None,
+            delta=None,
+            passed=False,
             error="boom",
         )
         assert row.score is None
@@ -224,16 +261,26 @@ class TestMakeModelGenerator:
         fake_model = MagicMock()
         fake_model.generate.return_value = [[1, 2, 3, 4, 5, 6]]
 
-        with patch.dict("sys.modules", {"transformers": MagicMock(
-            AutoTokenizer=MagicMock(from_pretrained=MagicMock(
-                return_value=fake_tokenizer,
-            )),
-            AutoModelForCausalLM=MagicMock(from_pretrained=MagicMock(
-                return_value=fake_model,
-            )),
-        )}):
+        with patch.dict(
+            "sys.modules",
+            {
+                "transformers": MagicMock(
+                    AutoTokenizer=MagicMock(
+                        from_pretrained=MagicMock(
+                            return_value=fake_tokenizer,
+                        )
+                    ),
+                    AutoModelForCausalLM=MagicMock(
+                        from_pretrained=MagicMock(
+                            return_value=fake_model,
+                        )
+                    ),
+                )
+            },
+        ):
             gen = quant_check.make_model_generator(
-                "/fake/model", max_new_tokens=8,
+                "/fake/model",
+                max_new_tokens=8,
             )
             out = gen("hello")
         assert out == "out"
@@ -244,10 +291,17 @@ class TestMakeModelGenerator:
         fake_tok = MagicMock()
         fake_tok.eos_token_id = 0
         fake_model = MagicMock()
-        with patch.dict("sys.modules", {"transformers": MagicMock(
-            AutoTokenizer=MagicMock(from_pretrained=MagicMock(return_value=fake_tok)),
-            AutoModelForCausalLM=MagicMock(from_pretrained=MagicMock(return_value=fake_model)),
-        )}):
+        with patch.dict(
+            "sys.modules",
+            {
+                "transformers": MagicMock(
+                    AutoTokenizer=MagicMock(from_pretrained=MagicMock(return_value=fake_tok)),
+                    AutoModelForCausalLM=MagicMock(
+                        from_pretrained=MagicMock(return_value=fake_model)
+                    ),
+                )
+            },
+        ):
             gen = quant_check.make_model_generator("/fake/model")
             assert gen("") == ""
 
@@ -263,7 +317,8 @@ class TestRegistryAttachHelpers:
 
         monkeypatch.chdir(tmp_path)
         out = write_eval_json(
-            "results.json", payload={"score": 0.7},
+            "results.json",
+            payload={"score": 0.7},
         )
         assert out.exists()
         data = json.loads(out.read_text(encoding="utf-8"))
@@ -296,7 +351,9 @@ class TestRegistryAttachHelpers:
         monkeypatch.chdir(tmp_path)
         with pytest.raises(FileNotFoundError):
             attach_artifact(
-                "any", path=str(tmp_path / "missing.json"), kind="eval_results",
+                "any",
+                path=str(tmp_path / "missing.json"),
+                kind="eval_results",
             )
 
     def test_attach_artifact_outside_cwd_rejected(self, tmp_path, monkeypatch):
@@ -320,7 +377,9 @@ class TestRegistryAttachHelpers:
         # as long as the artifact never gets registered.
         with pytest.raises((ValueError, FileNotFoundError)):
             attach_artifact(
-                "any", path=str(outside_file), kind="eval_results",
+                "any",
+                path=str(outside_file),
+                kind="eval_results",
             )
 
 
@@ -358,7 +417,8 @@ class TestEvalCustomAttachCLI:
         monkeypatch.chdir(tmp_path)
         # Isolated registry DB so we don't pollute the user's ~/.soup
         monkeypatch.setenv(
-            "SOUP_REGISTRY_DB_PATH", str(tmp_path / "reg.db"),
+            "SOUP_REGISTRY_DB_PATH",
+            str(tmp_path / "reg.db"),
         )
         (tmp_path / "tasks.jsonl").write_text(
             json.dumps({"prompt": "p", "expected": "x"}) + "\n",
@@ -373,15 +433,17 @@ class TestEvalCustomAttachCLI:
             result = runner.invoke(
                 app,
                 [
-                    "eval", "custom",
-                    "--tasks", "tasks.jsonl",
-                    "--model", "model",
-                    "--attach-to-registry", "no-such-id",
-                    "--output", "results.json",
+                    "eval",
+                    "custom",
+                    "--tasks",
+                    "tasks.jsonl",
+                    "--model",
+                    "model",
+                    "--attach-to-registry",
+                    "no-such-id",
+                    "--output",
+                    "results.json",
                 ],
             )
         assert result.exit_code == 1, (result.output, repr(result.exception))
-        assert (
-            "registry entry not found" in result.output
-            or "not found" in result.output
-        )
+        assert "registry entry not found" in result.output or "not found" in result.output

@@ -117,9 +117,7 @@ def build_raft_prompt(
     raw_distractors = row.get("distractor_docs", []) or []
     if not isinstance(raw_distractors, list):
         raise ValueError("RAFT 'distractor_docs' must be a list")
-    distractors = [
-        _check_str(f"distractor_docs[{i}]", d) for i, d in enumerate(raw_distractors)
-    ]
+    distractors = [_check_str(f"distractor_docs[{i}]", d) for i, d in enumerate(raw_distractors)]
     if 1 + len(distractors) > _MAX_DOCS:
         raise ValueError(f"RAFT example has > {_MAX_DOCS} documents")
 
@@ -252,9 +250,7 @@ def _tokenize_answer_with_citation(
     logs at DEBUG — never raises.
     """
     try:
-        enc = tokenizer(
-            answer, add_special_tokens=False, return_offsets_mapping=True
-        )
+        enc = tokenizer(answer, add_special_tokens=False, return_offsets_mapping=True)
         answer_ids = list(enc["input_ids"])
         offsets = enc.get("offset_mapping")
     except (NotImplementedError, ValueError, TypeError):

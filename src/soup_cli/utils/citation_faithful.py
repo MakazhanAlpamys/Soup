@@ -24,9 +24,7 @@ import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 
-SUPPORTED_CITATION_STYLES: frozenset[str] = frozenset(
-    {"bracket", "inline", "footnote"}
-)
+SUPPORTED_CITATION_STYLES: frozenset[str] = frozenset({"bracket", "inline", "footnote"})
 
 _MAX_STYLE_LEN: int = 32
 _MAX_PREDICTED_LEN: int = 2_000_000  # 2 MB cap on per-row predicted text.
@@ -76,27 +74,19 @@ def validate_citation_style(value: object) -> str:
     Mirrors v0.41.0 / v0.51.0 / v0.61.0 validator policy.
     """
     if isinstance(value, bool):
-        raise TypeError(
-            f"citation_style must not be bool, got {value!r}"
-        )
+        raise TypeError(f"citation_style must not be bool, got {value!r}")
     if not isinstance(value, str):
-        raise TypeError(
-            f"citation_style must be str, got {type(value).__name__}"
-        )
+        raise TypeError(f"citation_style must be str, got {type(value).__name__}")
     if not value:
         raise ValueError("citation_style must be non-empty")
     if "\x00" in value:
         raise ValueError("citation_style must not contain null bytes")
     if len(value) > _MAX_STYLE_LEN:
-        raise ValueError(
-            f"citation_style must be <= {_MAX_STYLE_LEN} chars"
-        )
+        raise ValueError(f"citation_style must be <= {_MAX_STYLE_LEN} chars")
     canonical = value.lower()
     if canonical not in SUPPORTED_CITATION_STYLES:
         supported = ", ".join(sorted(SUPPORTED_CITATION_STYLES))
-        raise ValueError(
-            f"unknown citation_style {value!r}; supported: {supported}"
-        )
+        raise ValueError(f"unknown citation_style {value!r}; supported: {supported}")
     return canonical
 
 
@@ -106,23 +96,14 @@ def validate_citation_threshold(value: object) -> float:
     Bool-rejected, NaN/Inf-rejected via ``math.isfinite``.
     """
     if isinstance(value, bool):
-        raise TypeError(
-            f"citation_recall_threshold must not be bool, got {value!r}"
-        )
+        raise TypeError(f"citation_recall_threshold must not be bool, got {value!r}")
     if not isinstance(value, (int, float)):
-        raise TypeError(
-            f"citation_recall_threshold must be a number, "
-            f"got {type(value).__name__}"
-        )
+        raise TypeError(f"citation_recall_threshold must be a number, got {type(value).__name__}")
     fval = float(value)
     if not math.isfinite(fval):
-        raise ValueError(
-            "citation_recall_threshold must be finite (no NaN / Inf)"
-        )
+        raise ValueError("citation_recall_threshold must be finite (no NaN / Inf)")
     if fval < 0.0 or fval > 1.0:
-        raise ValueError(
-            f"citation_recall_threshold must be in [0.0, 1.0]; got {fval}"
-        )
+        raise ValueError(f"citation_recall_threshold must be in [0.0, 1.0]; got {fval}")
     return fval
 
 
@@ -136,13 +117,9 @@ def extract_citation_ids(text: str, *, style: str = "bracket") -> tuple[str, ...
     ``footnote`` (``[^id]``). Defaults to ``bracket`` for back-compat.
     """
     if not isinstance(text, str):
-        raise TypeError(
-            f"text must be str, got {type(text).__name__}"
-        )
+        raise TypeError(f"text must be str, got {type(text).__name__}")
     if len(text) > _MAX_PREDICTED_LEN:
-        raise ValueError(
-            f"text must be <= {_MAX_PREDICTED_LEN} chars for citation extract"
-        )
+        raise ValueError(f"text must be <= {_MAX_PREDICTED_LEN} chars for citation extract")
     pattern = _resolve_style_re(style)
     return tuple(m.group("id") for m in pattern.finditer(text))
 
@@ -157,9 +134,7 @@ def citation_spans(text: str, *, style: str = "bracket") -> tuple[tuple[int, int
     if not isinstance(text, str):
         raise TypeError(f"text must be str, got {type(text).__name__}")
     if len(text) > _MAX_PREDICTED_LEN:
-        raise ValueError(
-            f"text must be <= {_MAX_PREDICTED_LEN} chars for citation extract"
-        )
+        raise ValueError(f"text must be <= {_MAX_PREDICTED_LEN} chars for citation extract")
     pattern = _resolve_style_re(style)
     return tuple((m.start(), m.end()) for m in pattern.finditer(text))
 
@@ -180,38 +155,24 @@ def score_citations(
     ``style`` selects the per-style extractor (bracket / inline / footnote).
     """
     if isinstance(predicted, bool):
-        raise TypeError(
-            f"predicted must not be bool, got {predicted!r}"
-        )
+        raise TypeError(f"predicted must not be bool, got {predicted!r}")
     if not isinstance(predicted, str):
-        raise TypeError(
-            f"predicted must be str, got {type(predicted).__name__}"
-        )
+        raise TypeError(f"predicted must be str, got {type(predicted).__name__}")
     if len(predicted) > _MAX_PREDICTED_LEN:
-        raise ValueError(
-            f"predicted must be <= {_MAX_PREDICTED_LEN} chars"
-        )
+        raise ValueError(f"predicted must be <= {_MAX_PREDICTED_LEN} chars")
     if not isinstance(expected_ids, Iterable) or isinstance(expected_ids, str):
-        raise TypeError(
-            "expected_ids must be an iterable of strings (not a single str)"
-        )
+        raise TypeError("expected_ids must be an iterable of strings (not a single str)")
     expected_tuple = tuple(expected_ids)
     if len(expected_tuple) > _MAX_EXPECTED_IDS:
-        raise ValueError(
-            f"expected_ids must have <= {_MAX_EXPECTED_IDS} entries"
-        )
+        raise ValueError(f"expected_ids must have <= {_MAX_EXPECTED_IDS} entries")
     expected_set: set[str] = set()
     for index, eid in enumerate(expected_tuple):
         if isinstance(eid, bool) or not isinstance(eid, str):
-            raise TypeError(
-                f"expected_ids[{index}] must be str, got {type(eid).__name__}"
-            )
+            raise TypeError(f"expected_ids[{index}] must be str, got {type(eid).__name__}")
         if not eid:
             raise ValueError(f"expected_ids[{index}] must be non-empty")
         if "\x00" in eid:
-            raise ValueError(
-                f"expected_ids[{index}] must not contain null bytes"
-            )
+            raise ValueError(f"expected_ids[{index}] must not contain null bytes")
         expected_set.add(eid)
 
     predicted_ids = extract_citation_ids(predicted, style=style)

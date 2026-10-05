@@ -40,9 +40,7 @@ def decode_sglang_response(response: Any) -> dict:
                 f"SGLang returned JSON of type {type(decoded).__name__}, expected an object"
             )
         return decoded
-    raise ValueError(
-        f"SGLang returned an unsupported response type {type(response).__name__}"
-    )
+    raise ValueError(f"SGLang returned an unsupported response type {type(response).__name__}")
 
 
 def generate_with_runtime(
@@ -181,10 +179,9 @@ def create_sglang_runtime(
 
     # SSRF protection: block URL-based model paths
     for path_val in (model_path, base_model):
-        if path_val and re.match(r'^https?://', path_val):
+        if path_val and re.match(r"^https?://", path_val):
             raise ValueError(
-                "model_path/base_model must be a local path or HuggingFace model ID, "
-                "not a URL"
+                "model_path/base_model must be a local path or HuggingFace model ID, not a URL"
             )
 
     # For LoRA adapters, load the base model
@@ -322,13 +319,12 @@ def create_sglang_app(
 
         # Non-streaming
         try:
-            response = generate_with_runtime(
-                runtime, prompt, prompt_token_ids, sampling_params
-            )
+            response = generate_with_runtime(runtime, prompt, prompt_token_ids, sampling_params)
             response_text = response["text"]
             prompt_tokens = response.get("meta_info", {}).get("prompt_tokens", 0)
             completion_tokens = response.get(
-                "meta_info", {},
+                "meta_info",
+                {},
             ).get("completion_tokens", len(response_text.split()))
 
             return {
@@ -371,9 +367,7 @@ def create_sglang_app(
         created = int(time.time())
 
         try:
-            response = generate_with_runtime(
-                runtime, prompt, prompt_token_ids, sampling_params
-            )
+            response = generate_with_runtime(runtime, prompt, prompt_token_ids, sampling_params)
             response_text = response["text"]
             meta_info = response.get("meta_info")
         except Exception:

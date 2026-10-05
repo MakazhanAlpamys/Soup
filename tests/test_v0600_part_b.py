@@ -40,6 +40,7 @@ class TestManifest:
             sign_adapter,
             verify_adapter,
         )
+
         assert callable(compute_adapter_manifest)
         assert callable(sign_adapter)
         assert callable(verify_adapter)

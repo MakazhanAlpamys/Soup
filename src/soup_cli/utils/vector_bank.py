@@ -77,22 +77,16 @@ def validate_bank_name(name: object) -> str:
     if isinstance(name, bool):
         raise TypeError("name must not be bool")
     if not isinstance(name, str):
-        raise TypeError(
-            f"name must be str, got {type(name).__name__}"
-        )
+        raise TypeError(f"name must be str, got {type(name).__name__}")
     if not name:
         raise ValueError("name must be non-empty")
     if "\x00" in name:
         raise ValueError("name must not contain null bytes")
     if len(name) > MAX_NAME_LEN:
-        raise ValueError(
-            f"name length {len(name)} > {MAX_NAME_LEN}"
-        )
+        raise ValueError(f"name length {len(name)} > {MAX_NAME_LEN}")
     canonical = name.lower()
     if not _NAME_RE.match(canonical):
-        raise ValueError(
-            f"name must be kebab-case alphanumeric + `._-`, got {name!r}"
-        )
+        raise ValueError(f"name must be kebab-case alphanumeric + `._-`, got {name!r}")
     return canonical
 
 
@@ -106,9 +100,7 @@ def validate_user_id(user_id: object) -> str:
     if "\x00" in user_id:
         raise ValueError("user_id must not contain null bytes")
     if len(user_id) > MAX_USER_ID_LEN:
-        raise ValueError(
-            f"user_id length {len(user_id)} > {MAX_USER_ID_LEN}"
-        )
+        raise ValueError(f"user_id length {len(user_id)} > {MAX_USER_ID_LEN}")
     return user_id
 
 
@@ -129,9 +121,7 @@ def validate_scaling_vector(values: object) -> Tuple[float, ...]:
     if not out:
         raise ValueError("scaling vector must be non-empty")
     if len(out) > MAX_VECTOR_DIM:
-        raise ValueError(
-            f"scaling vector length {len(out)} > {MAX_VECTOR_DIM}"
-        )
+        raise ValueError(f"scaling vector length {len(out)} > {MAX_VECTOR_DIM}")
     return tuple(out)
 
 
@@ -145,9 +135,7 @@ def _validate_base_model(base_model: object) -> str:
     if "\x00" in base_model:
         raise ValueError("base_model must not contain null bytes")
     if len(base_model) > MAX_BASE_MODEL_LEN:
-        raise ValueError(
-            f"base_model length {len(base_model)} > {MAX_BASE_MODEL_LEN}"
-        )
+        raise ValueError(f"base_model length {len(base_model)} > {MAX_BASE_MODEL_LEN}")
     return base_model
 
 
@@ -165,13 +153,9 @@ def _validate_vector_dim(dim: object) -> int:
     if isinstance(dim, bool) or not isinstance(dim, int):
         raise TypeError("vector_dim must be int")
     if dim < MIN_VECTOR_DIM:
-        raise ValueError(
-            f"vector_dim {dim} below floor {MIN_VECTOR_DIM}"
-        )
+        raise ValueError(f"vector_dim {dim} below floor {MIN_VECTOR_DIM}")
     if dim > MAX_VECTOR_DIM:
-        raise ValueError(
-            f"vector_dim {dim} above cap {MAX_VECTOR_DIM}"
-        )
+        raise ValueError(f"vector_dim {dim} above cap {MAX_VECTOR_DIM}")
     return dim
 
 
@@ -222,10 +206,7 @@ class VectorBank:
         if not isinstance(self.entries, tuple):
             raise TypeError("entries must be tuple")
         if len(self.entries) > MAX_ENTRIES_PER_BANK:
-            raise ValueError(
-                f"entries length {len(self.entries)} > "
-                f"{MAX_ENTRIES_PER_BANK}"
-            )
+            raise ValueError(f"entries length {len(self.entries)} > {MAX_ENTRIES_PER_BANK}")
         for entry in self.entries:
             if not isinstance(entry, BankEntry):
                 raise TypeError("entries must be BankEntry instances")
@@ -258,7 +239,7 @@ def estimate_bank_size(*, num_users: int, vector_dim: int) -> int:
     if vector_dim < 1:
         raise ValueError("vector_dim must be positive")
     projection_bytes = vector_dim * vector_dim * 4  # P : (d×d) fp32
-    user_bytes = num_users * vector_dim * 4         # v_u : (d,) fp32
+    user_bytes = num_users * vector_dim * 4  # v_u : (d,) fp32
     return projection_bytes + user_bytes
 
 
@@ -273,10 +254,7 @@ def _bank_to_dict(bank: VectorBank) -> dict:
         "base_model": bank.base_model,
         "projection_seed": bank.projection_seed,
         "vector_dim": bank.vector_dim,
-        "entries": [
-            {"user_id": e.user_id, "scaling": list(e.scaling)}
-            for e in bank.entries
-        ],
+        "entries": [{"user_id": e.user_id, "scaling": list(e.scaling)} for e in bank.entries],
     }
 
 
@@ -338,9 +316,7 @@ def load_bank(path: str) -> VectorBank:
     if stat.S_ISLNK(st.st_mode):
         raise ValueError("bank path must not be a symlink (TOCTOU defence)")
     if st.st_size > _MAX_FILE_BYTES:
-        raise ValueError(
-            f"bank file size {st.st_size} > {_MAX_FILE_BYTES}"
-        )
+        raise ValueError(f"bank file size {st.st_size} > {_MAX_FILE_BYTES}")
     with open(real, encoding="utf-8") as fh:
         data = json.load(fh)
     return _bank_from_dict(data)
@@ -364,7 +340,7 @@ def reconstruct_projection(seed: int, dim: int):
     dim = _validate_vector_dim(dim)
     gen = torch.Generator().manual_seed(int(seed))
     # 1/sqrt(dim) scale keeps Px in a sane magnitude regardless of dim.
-    return torch.randn(dim, dim, generator=gen) * (dim ** -0.5)
+    return torch.randn(dim, dim, generator=gen) * (dim**-0.5)
 
 
 class LoadedVectorBank:
@@ -384,12 +360,9 @@ class LoadedVectorBank:
         self.name = bank.name
         self.base_model = bank.base_model
         self.vector_dim = bank.vector_dim
-        self.projection = reconstruct_projection(
-            bank.projection_seed, bank.vector_dim
-        )
+        self.projection = reconstruct_projection(bank.projection_seed, bank.vector_dim)
         self._user_vectors = {
-            e.user_id: torch.tensor(e.scaling, dtype=torch.float32)
-            for e in bank.entries
+            e.user_id: torch.tensor(e.scaling, dtype=torch.float32) for e in bank.entries
         }
         # v0.71.17 #260 — the active user is REQUEST-LOCAL, not shared instance
         # state. A ``ContextVar`` isolates the value per request even when a
@@ -398,10 +371,8 @@ class LoadedVectorBank:
         # ``set_active_user`` writes its own context, and the decode hook reads
         # back the value set in the SAME call stack. One ContextVar per bank
         # instance (there is one bank per ``soup serve`` process).
-        self._active_user_var: contextvars.ContextVar[Optional[str]] = (
-            contextvars.ContextVar(
-                "soup_vector_bank_active_user", default=None
-            )
+        self._active_user_var: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+            "soup_vector_bank_active_user", default=None
         )
 
     @property
@@ -455,8 +426,7 @@ class LoadedVectorBank:
             raise ValueError("strength must be finite")
         if abs(strength_f) > _MAX_BANK_STRENGTH:
             raise ValueError(
-                f"bank strength magnitude {strength_f} exceeds "
-                f"{_MAX_BANK_STRENGTH} (sanity cap)"
+                f"bank strength magnitude {strength_f} exceeds {_MAX_BANK_STRENGTH} (sanity cap)"
             )
 
         from soup_cli.utils.edit_kernels import _locate_decoder_layers
@@ -465,9 +435,7 @@ class LoadedVectorBank:
         n_layers = len(layers)
         idx = layer if layer >= 0 else n_layers + layer
         if idx < 0 or idx >= n_layers:
-            raise ValueError(
-                f"bank serve layer {layer} out of range for {n_layers}-layer model"
-            )
+            raise ValueError(f"bank serve layer {layer} out of range for {n_layers}-layer model")
         block = layers[idx]
         bank_ref = self
         warned = {"dim": False}

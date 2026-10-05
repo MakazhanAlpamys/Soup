@@ -27,6 +27,7 @@ class TestModuleSurface:
             validate_citation_style,
             validate_citation_threshold,
         )
+
         assert callable(validate_citation_style)
         assert callable(validate_citation_threshold)
         assert callable(score_citations)
@@ -36,9 +37,7 @@ class TestModuleSurface:
     def test_styles_exact(self):
         from soup_cli.utils.citation_faithful import SUPPORTED_CITATION_STYLES
 
-        assert SUPPORTED_CITATION_STYLES == frozenset(
-            {"bracket", "inline", "footnote"}
-        )
+        assert SUPPORTED_CITATION_STYLES == frozenset({"bracket", "inline", "footnote"})
 
 
 # ---------- validate_citation_style ----------

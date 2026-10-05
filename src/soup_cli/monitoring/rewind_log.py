@@ -4,6 +4,7 @@ One header line, then one line per micro-batch: the dataset rows in it, each row
 mean supervised-token loss and supervised-token count. Written by the SFT trainers
 when `training.rewind_log` is on. Never raises into training.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -221,9 +222,7 @@ class RewindRun:
         for batch in self.batches:
             index.setdefault(batch.step, []).append(batch)
         # frozen dataclass: the index is derived state, not an input.
-        object.__setattr__(
-            self, "_by_step", {step: tuple(rows) for step, rows in index.items()}
-        )
+        object.__setattr__(self, "_by_step", {step: tuple(rows) for step, rows in index.items()})
 
     def steps(self) -> list[int]:
         """Sorted unique step numbers across all recorded batches."""

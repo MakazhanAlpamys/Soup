@@ -285,9 +285,7 @@ def test_build_forge_plan_target_rows_cap(tmp_path):
     (docs / "a.txt").write_text("x", encoding="utf-8")
     os.chdir(tmp_path)
     with pytest.raises(ValueError, match="target_rows"):
-        build_forge_plan(
-            docs_dir=str(docs), task="sft", target_rows=_MAX_TARGET_ROWS + 1
-        )
+        build_forge_plan(docs_dir=str(docs), task="sft", target_rows=_MAX_TARGET_ROWS + 1)
 
 
 def test_build_forge_plan_teacher_null_byte_rejected(tmp_path):
@@ -298,9 +296,7 @@ def test_build_forge_plan_teacher_null_byte_rejected(tmp_path):
     (docs / "a.txt").write_text("x", encoding="utf-8")
     os.chdir(tmp_path)
     with pytest.raises(ValueError, match="teacher"):
-        build_forge_plan(
-            docs_dir=str(docs), task="sft", target_rows=1, teacher="bad\x00"
-        )
+        build_forge_plan(docs_dir=str(docs), task="sft", target_rows=1, teacher="bad\x00")
 
 
 def test_build_forge_plan_rejects_nan_threshold(tmp_path):
@@ -362,7 +358,11 @@ def test_forge_row_frozen():
     from soup_cli.utils.data_forge import ForgeRow, ProvenanceRecord
 
     prov = ProvenanceRecord(
-        row_id="r0", source_doc="d", judge_id="j", filter_score=0.5, chunk_id="c0",
+        row_id="r0",
+        source_doc="d",
+        judge_id="j",
+        filter_score=0.5,
+        chunk_id="c0",
     )
     row = ForgeRow(messages=(), provenance=prov, task="sft")
     with pytest.raises(dataclasses.FrozenInstanceError):
@@ -621,8 +621,11 @@ def test_write_forge_dataset_symlink_target_rejected(tmp_path):
     row = ForgeRow(
         messages=({"role": "user", "content": "hi"},),
         provenance=ProvenanceRecord(
-            row_id="r0", source_doc="d", judge_id="j",
-            filter_score=0.5, chunk_id="c0",
+            row_id="r0",
+            source_doc="d",
+            judge_id="j",
+            filter_score=0.5,
+            chunk_id="c0",
         ),
         task="sft",
     )
@@ -679,6 +682,7 @@ def test_write_provenance_outside_cwd_rejected(tmp_path):
 
 def _make_app():
     from soup_cli.cli import app
+
     return app
 
 
@@ -700,12 +704,18 @@ def test_data_forge_cli_happy(tmp_path, monkeypatch):
     result = runner.invoke(
         _make_app(),
         [
-            "data", "forge",
-            "--docs", str(docs),
-            "--task", "sft",
-            "--target-rows", "4",
-            "--output", "forge.jsonl",
-            "--provenance", "forge_provenance.json",
+            "data",
+            "forge",
+            "--docs",
+            str(docs),
+            "--task",
+            "sft",
+            "--target-rows",
+            "4",
+            "--output",
+            "forge.jsonl",
+            "--provenance",
+            "forge_provenance.json",
         ],
     )
     assert result.exit_code == 0, (result.output, repr(result.exception))
@@ -722,10 +732,14 @@ def test_data_forge_cli_unknown_task(tmp_path, monkeypatch):
     result = runner.invoke(
         _make_app(),
         [
-            "data", "forge",
-            "--docs", str(docs),
-            "--task", "BOGUS",
-            "--target-rows", "1",
+            "data",
+            "forge",
+            "--docs",
+            str(docs),
+            "--task",
+            "BOGUS",
+            "--target-rows",
+            "1",
         ],
     )
     assert result.exit_code != 0
@@ -737,10 +751,14 @@ def test_data_forge_cli_missing_docs(tmp_path, monkeypatch):
     result = runner.invoke(
         _make_app(),
         [
-            "data", "forge",
-            "--docs", "nonexistent",
-            "--task", "sft",
-            "--target-rows", "1",
+            "data",
+            "forge",
+            "--docs",
+            "nonexistent",
+            "--task",
+            "sft",
+            "--target-rows",
+            "1",
         ],
     )
     assert result.exit_code != 0
@@ -757,10 +775,14 @@ def test_data_forge_cli_outside_cwd(tmp_path, monkeypatch):
     result = runner.invoke(
         _make_app(),
         [
-            "data", "forge",
-            "--docs", str(outside),
-            "--task", "sft",
-            "--target-rows", "1",
+            "data",
+            "forge",
+            "--docs",
+            str(outside),
+            "--task",
+            "sft",
+            "--target-rows",
+            "1",
         ],
     )
     assert result.exit_code != 0

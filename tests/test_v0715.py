@@ -117,8 +117,15 @@ class TestGetMetricSeriesEvalResults:
 class _FakeHistoryEntry:
     """Duck-typed HistoryEntry stand-in for build_verdict bias tests."""
 
-    def __init__(self, *, choice, task_category="factual_lookup", accepted=True,
-                 outcome=0.5, project="proj-a"):
+    def __init__(
+        self,
+        *,
+        choice,
+        task_category="factual_lookup",
+        accepted=True,
+        outcome=0.5,
+        project="proj-a",
+    ):
         self.choice = choice
         self.task_category = task_category
         self.accepted = accepted
@@ -194,13 +201,8 @@ class TestBuildVerdictHistoryBias:
         from soup_cli.utils.advise import build_verdict
 
         profile = self._profile()  # would be RAG by default
-        hist = [
-            _FakeHistoryEntry(choice="SFT", outcome=0.4, project="proj-a")
-            for _ in range(3)
-        ]
-        verdict = build_verdict(
-            profile, "factual_lookup", history=hist, project="proj-a"
-        )
+        hist = [_FakeHistoryEntry(choice="SFT", outcome=0.4, project="proj-a") for _ in range(3)]
+        verdict = build_verdict(profile, "factual_lookup", history=hist, project="proj-a")
         assert verdict.choice == "SFT"
         assert "precedent" in verdict.reason.lower()
 
@@ -208,43 +210,30 @@ class TestBuildVerdictHistoryBias:
         from soup_cli.utils.advise import build_verdict
 
         profile = self._profile()
-        hist = [
-            _FakeHistoryEntry(choice="SFT", outcome=0.4, project="other")
-            for _ in range(3)
-        ]
-        verdict = build_verdict(
-            profile, "factual_lookup", history=hist, project="proj-a"
-        )
+        hist = [_FakeHistoryEntry(choice="SFT", outcome=0.4, project="other") for _ in range(3)]
+        verdict = build_verdict(profile, "factual_lookup", history=hist, project="proj-a")
         assert verdict.choice == "RAG"  # unchanged — wrong project
 
     def test_fewer_than_three_sft_precedents_no_flip(self):
         from soup_cli.utils.advise import build_verdict
 
         profile = self._profile()
-        hist = [
-            _FakeHistoryEntry(choice="SFT", outcome=0.4, project="proj-a")
-            for _ in range(2)
-        ]
-        verdict = build_verdict(
-            profile, "factual_lookup", history=hist, project="proj-a"
-        )
+        hist = [_FakeHistoryEntry(choice="SFT", outcome=0.4, project="proj-a") for _ in range(2)]
+        verdict = build_verdict(profile, "factual_lookup", history=hist, project="proj-a")
         assert verdict.choice == "RAG"
 
     def test_negative_grpo_precedents_suppress_grpo(self):
         from soup_cli.utils.advise import build_verdict
 
         profile = self._profile(
-            row_count=800, has_reasoning_traces=True, label_variance=0.3,
+            row_count=800,
+            has_reasoning_traces=True,
+            label_variance=0.3,
         )
         # Default (no history) → GRPO.
         assert build_verdict(profile, "reasoning").choice == "GRPO"
-        hist = [
-            _FakeHistoryEntry(choice="GRPO", outcome=-0.2, project="proj-a")
-            for _ in range(3)
-        ]
-        verdict = build_verdict(
-            profile, "reasoning", history=hist, project="proj-a"
-        )
+        hist = [_FakeHistoryEntry(choice="GRPO", outcome=-0.2, project="proj-a") for _ in range(3)]
+        verdict = build_verdict(profile, "reasoning", history=hist, project="proj-a")
         assert verdict.choice == "SFT"
         assert "precedent" in verdict.reason.lower()
 
@@ -255,13 +244,8 @@ class TestBuildVerdictHistoryBias:
         profile = self._profile(label_variance=0.3)
         base = build_verdict(profile, "style_shaping")
         assert base.choice == "SFT"
-        hist = [
-            _FakeHistoryEntry(choice="SFT", outcome=0.5, project="proj-a")
-            for _ in range(3)
-        ]
-        biased = build_verdict(
-            profile, "style_shaping", history=hist, project="proj-a"
-        )
+        hist = [_FakeHistoryEntry(choice="SFT", outcome=0.5, project="proj-a") for _ in range(3)]
+        biased = build_verdict(profile, "style_shaping", history=hist, project="proj-a")
         assert biased.choice == "SFT"
         # Exact nudge (+0.05, clamped at 0.95) — a zero-nudge bug would fail.
         assert biased.confidence == pytest.approx(min(0.95, base.confidence + 0.05))
@@ -387,7 +371,8 @@ class TestSharedWebhooks:
 
         calls = []
         monkeypatch.setattr(
-            webhooks, "post_webhook",
+            webhooks,
+            "post_webhook",
             lambda **kw: (calls.append(kw), True)[1],
         )
         results = webhooks.send_webhooks(
@@ -404,7 +389,8 @@ class TestSharedWebhooks:
 
         calls = []
         monkeypatch.setattr(
-            webhooks, "post_webhook",
+            webhooks,
+            "post_webhook",
             lambda **kw: (calls.append(kw), True)[1],
         )
         results = webhooks.send_webhooks({"k": 1}, slack_url=None, discord_url=None)
@@ -415,9 +401,7 @@ class TestSharedWebhooks:
         from soup_cli.utils import webhooks
 
         monkeypatch.setattr(webhooks, "post_webhook", lambda **kw: False)
-        results = webhooks.send_webhooks(
-            {"k": 1}, slack_url="https://hooks.slack.com/x"
-        )
+        results = webhooks.send_webhooks({"k": 1}, slack_url="https://hooks.slack.com/x")
         assert results == [("slack", False)]
 
     # --- CLI flag plumbing on each of the 4 commands ----------------------
@@ -448,13 +432,18 @@ class TestSharedWebhooks:
         from soup_cli.cli import app
 
         monkeypatch.chdir(tmp_path)
-        (tmp_path / "logs.jsonl").write_text(
-            '{"input": "hi", "output": "yo"}\n', encoding="utf-8"
-        )
+        (tmp_path / "logs.jsonl").write_text('{"input": "hi", "output": "yo"}\n', encoding="utf-8")
         result = runner.invoke(
             app,
-            ["ingest", "--source", "langfuse", "--logs", "logs.jsonl",
-             "--slack-url", "http://10.0.0.1/h"],
+            [
+                "ingest",
+                "--source",
+                "langfuse",
+                "--logs",
+                "logs.jsonl",
+                "--slack-url",
+                "http://10.0.0.1/h",
+            ],
         )
         assert result.exit_code == 2
 
@@ -466,13 +455,18 @@ class TestSharedWebhooks:
         from soup_cli.cli import app
 
         monkeypatch.chdir(tmp_path)
-        (tmp_path / "logs.jsonl").write_text(
-            '{"input": "hi", "output": "yo"}\n', encoding="utf-8"
-        )
+        (tmp_path / "logs.jsonl").write_text('{"input": "hi", "output": "yo"}\n', encoding="utf-8")
         result = runner.invoke(
             app,
-            ["ingest", "--source", "langfuse", "--logs", "logs.jsonl",
-             "--discord-url", "http://10.0.0.1/h"],
+            [
+                "ingest",
+                "--source",
+                "langfuse",
+                "--logs",
+                "logs.jsonl",
+                "--discord-url",
+                "http://10.0.0.1/h",
+            ],
         )
         assert result.exit_code == 2
         clean = _re.sub(r"\x1b\[[0-9;]*m", "", result.output).replace("\n", " ")
@@ -493,17 +487,23 @@ class TestSharedWebhooks:
 
         captured = []
         monkeypatch.setattr(
-            webhooks, "post_webhook",
+            webhooks,
+            "post_webhook",
             lambda **kw: (captured.append(kw), True)[1],
         )
         monkeypatch.chdir(tmp_path)
-        (tmp_path / "logs.jsonl").write_text(
-            '{"input": "hi", "output": "yo"}\n', encoding="utf-8"
-        )
+        (tmp_path / "logs.jsonl").write_text('{"input": "hi", "output": "yo"}\n', encoding="utf-8")
         result = runner.invoke(
             app,
-            ["ingest", "--source", "langfuse", "--logs", "logs.jsonl",
-             "--slack-url", "https://hooks.slack.com/x"],
+            [
+                "ingest",
+                "--source",
+                "langfuse",
+                "--logs",
+                "logs.jsonl",
+                "--slack-url",
+                "https://hooks.slack.com/x",
+            ],
         )
         assert result.exit_code == 0, (result.output, repr(result.exception))
         assert len(captured) == 1
@@ -518,20 +518,26 @@ class TestSharedWebhooks:
 
         captured = []
         monkeypatch.setattr(
-            webhooks, "post_webhook",
+            webhooks,
+            "post_webhook",
             lambda **kw: (captured.append(kw), True)[1],
         )
         monkeypatch.chdir(tmp_path)
-        rows = "".join(
-            '{"prompt": "SYS PREAMBLE. ask %d", "output": "a"}\n' % i
-            for i in range(5)
-        )
+        rows = "".join('{"prompt": "SYS PREAMBLE. ask %d", "output": "a"}\n' % i for i in range(5))
         (tmp_path / "in.jsonl").write_text(rows, encoding="utf-8")
         result = runner.invoke(
             app,
-            ["prune-prompt", "--input", "in.jsonl", "--output", "out.jsonl",
-             "--min-frequency", "0.9",
-             "--discord-url", "https://discord.com/api/webhooks/x"],
+            [
+                "prune-prompt",
+                "--input",
+                "in.jsonl",
+                "--output",
+                "out.jsonl",
+                "--min-frequency",
+                "0.9",
+                "--discord-url",
+                "https://discord.com/api/webhooks/x",
+            ],
         )
         assert result.exit_code == 0, (result.output, repr(result.exception))
         assert len(captured) == 1
@@ -545,20 +551,27 @@ class TestSharedWebhooks:
 
         captured = []
         monkeypatch.setattr(
-            webhooks, "post_webhook",
+            webhooks,
+            "post_webhook",
             lambda **kw: (captured.append(kw), True)[1],
         )
         monkeypatch.chdir(tmp_path)
         # Two-row "continue" case → no webhook fired.
         (tmp_path / "ab.jsonl").write_text(
-            '{"arm": "control", "latency": 1.0}\n'
-            '{"arm": "treatment", "latency": 1.0}\n',
+            '{"arm": "control", "latency": 1.0}\n{"arm": "treatment", "latency": 1.0}\n',
             encoding="utf-8",
         )
         result = runner.invoke(
             app,
-            ["ab", "--input", "ab.jsonl", "--metric", "latency",
-             "--slack-url", "https://hooks.slack.com/x"],
+            [
+                "ab",
+                "--input",
+                "ab.jsonl",
+                "--metric",
+                "latency",
+                "--slack-url",
+                "https://hooks.slack.com/x",
+            ],
         )
         assert result.exit_code == 0, (result.output, repr(result.exception))
         # decision == continue → no webhook
@@ -570,20 +583,29 @@ class TestSharedWebhooks:
 
         captured = []
         monkeypatch.setattr(
-            webhooks, "post_webhook",
+            webhooks,
+            "post_webhook",
             lambda **kw: (captured.append(kw), True)[1],
         )
         monkeypatch.chdir(tmp_path)
         (tmp_path / "traces.jsonl").write_text(
-            '{"prompt": "a", "rm_score": 0.5}\n'
-            '{"prompt": "b", "rm_score": 0.9}\n',
+            '{"prompt": "a", "rm_score": 0.5}\n{"prompt": "b", "rm_score": 0.9}\n',
             encoding="utf-8",
         )
         result = runner.invoke(
             app,
-            ["data", "active-sample", "--input", "traces.jsonl",
-             "--output", "sel.jsonl", "--budget", "1",
-             "--slack-url", "https://hooks.slack.com/x"],
+            [
+                "data",
+                "active-sample",
+                "--input",
+                "traces.jsonl",
+                "--output",
+                "sel.jsonl",
+                "--budget",
+                "1",
+                "--slack-url",
+                "https://hooks.slack.com/x",
+            ],
         )
         assert result.exit_code == 0, (result.output, repr(result.exception))
         assert len(captured) == 1
@@ -690,8 +712,7 @@ class TestPrunePromptTokenizer:
         # The varying token (ask0/ask1/...) carries no leading space so the
         # shared prefix is exactly the 3-token preamble.
         rows = "".join(
-            '{"prompt": "SYS PREAMBLE HERE ask%d", "output": "a"}\n' % i
-            for i in range(5)
+            '{"prompt": "SYS PREAMBLE HERE ask%d", "output": "a"}\n' % i for i in range(5)
         )
         (tmp_path / "in.jsonl").write_text(rows, encoding="utf-8")
         report = prune_traces(
@@ -707,9 +728,7 @@ class TestPrunePromptTokenizer:
 
         lines = [
             _json.loads(line)
-            for line in (tmp_path / "out.jsonl").read_text(
-                encoding="utf-8"
-            ).splitlines()
+            for line in (tmp_path / "out.jsonl").read_text(encoding="utf-8").splitlines()
             if line.strip()
         ]
         assert all(not row["prompt"].startswith("SYS PREAMBLE") for row in lines)
@@ -721,10 +740,7 @@ class TestPrunePromptTokenizer:
         from soup_cli.utils.prune_prompt import prune_traces
 
         monkeypatch.chdir(tmp_path)
-        rows = "".join(
-            '{"prompt": "café ☕ menu item %d", "output": "x"}\n' % i
-            for i in range(4)
-        )
+        rows = "".join('{"prompt": "café ☕ menu item %d", "output": "x"}\n' % i for i in range(4))
         (tmp_path / "in.jsonl").write_text(rows, encoding="utf-8")
         report = prune_traces(
             "in.jsonl",
@@ -752,9 +768,7 @@ class TestPrunePromptTokenizer:
         fake_transformers = types.SimpleNamespace(AutoTokenizer=fake_auto)
         monkeypatch.setitem(sys.modules, "transformers", fake_transformers)
 
-        rows = "".join(
-            '{"prompt": "SYS ask %d", "output": "a"}\n' % i for i in range(3)
-        )
+        rows = "".join('{"prompt": "SYS ask %d", "output": "a"}\n' % i for i in range(3))
         (tmp_path / "in.jsonl").write_text(rows, encoding="utf-8")
         report = pp.prune_traces(
             "in.jsonl",
@@ -777,12 +791,11 @@ class TestPrunePromptTokenizer:
 
         fake_auto = types.SimpleNamespace(from_pretrained=_boom)
         monkeypatch.setitem(
-            sys.modules, "transformers",
+            sys.modules,
+            "transformers",
             types.SimpleNamespace(AutoTokenizer=fake_auto),
         )
-        (tmp_path / "in.jsonl").write_text(
-            '{"prompt": "a", "output": "b"}\n', encoding="utf-8"
-        )
+        (tmp_path / "in.jsonl").write_text('{"prompt": "a", "output": "b"}\n', encoding="utf-8")
         with pytest.raises(ValueError, match="could not load tokenizer"):
             pp.prune_traces(
                 "in.jsonl",
@@ -794,9 +807,7 @@ class TestPrunePromptTokenizer:
         from soup_cli.utils.prune_prompt import prune_traces
 
         monkeypatch.chdir(tmp_path)
-        rows = "".join(
-            '{"prompt": "PREFIX %d", "output": "a"}\n' % i for i in range(4)
-        )
+        rows = "".join('{"prompt": "PREFIX %d", "output": "a"}\n' % i for i in range(4))
         (tmp_path / "in.jsonl").write_text(rows, encoding="utf-8")
         report = prune_traces(
             "in.jsonl",
@@ -811,9 +822,9 @@ class TestPrunePromptTokenizer:
         # Anchor on __file__ (not cwd) so the guard survives another test's
         # monkeypatch.chdir (v0.58.0 source-grep precedent).
         repo_root = Path(__file__).resolve().parent.parent
-        src = (
-            repo_root / "src" / "soup_cli" / "utils" / "prune_prompt.py"
-        ).read_text(encoding="utf-8")
+        src = (repo_root / "src" / "soup_cli" / "utils" / "prune_prompt.py").read_text(
+            encoding="utf-8"
+        )
         assert "\nimport transformers" not in src
         assert "\nfrom transformers" not in src
 
@@ -1011,8 +1022,7 @@ class TestDataPushHub:
         (tmp_path / "ds.jsonl").write_text('{"a": 1}\n', encoding="utf-8")
         result = runner.invoke(
             app,
-            ["data", "push", "--input", "ds.jsonl",
-             "--hf-dataset", "user/ds", "--hub", "bogus"],
+            ["data", "push", "--input", "ds.jsonl", "--hf-dataset", "user/ds", "--hub", "bogus"],
         )
         assert result.exit_code == 2
 
@@ -1028,9 +1038,7 @@ class TestDataPushHub:
             captured.update(kw)
             # The staging dir is cleaned up after this returns, so check the
             # file is present at call time (proves the JSONL was staged).
-            captured["staged_file_present"] = (
-                Path(kw["folder_path"]) / "ds.jsonl"
-            ).exists()
+            captured["staged_file_present"] = (Path(kw["folder_path"]) / "ds.jsonl").exists()
             # upload_repo enforces cwd-containment on folder_path; the staging
             # dir MUST be under cwd (regression guard for the system-tempdir
             # bug found in the v0.71.5 step-6 smoke).
@@ -1043,8 +1051,16 @@ class TestDataPushHub:
         (tmp_path / "ds.jsonl").write_text('{"a": 1}\n', encoding="utf-8")
         result = runner.invoke(
             app,
-            ["data", "push", "--input", "ds.jsonl",
-             "--hf-dataset", "user/ds", "--hub", "modelscope"],
+            [
+                "data",
+                "push",
+                "--input",
+                "ds.jsonl",
+                "--hf-dataset",
+                "user/ds",
+                "--hub",
+                "modelscope",
+            ],
         )
         assert result.exit_code == 0, (result.output, repr(result.exception))
         assert captured["hub"] == "modelscope"
@@ -1065,8 +1081,7 @@ class TestDataPushHub:
         (tmp_path / "ds.jsonl").write_text('{"a": 1}\n', encoding="utf-8")
         result = runner.invoke(
             app,
-            ["data", "push", "--input", "ds.jsonl",
-             "--hf-dataset", "user/ds", "--hub", "modelers"],
+            ["data", "push", "--input", "ds.jsonl", "--hf-dataset", "user/ds", "--hub", "modelers"],
         )
         assert result.exit_code == 1
         assert "openmind_hub" in result.output
@@ -1083,8 +1098,16 @@ class TestDataPushHub:
         (tmp_path / "ds.jsonl").write_text('{"a": 1}\n', encoding="utf-8")
         result = runner.invoke(
             app,
-            ["data", "push", "--input", "ds.jsonl",
-             "--hf-dataset", "user/ds", "--hub", "modelscope"],
+            [
+                "data",
+                "push",
+                "--input",
+                "ds.jsonl",
+                "--hf-dataset",
+                "user/ds",
+                "--hub",
+                "modelscope",
+            ],
         )
         assert result.exit_code == 1
         assert "Upload failed" in result.output
@@ -1132,8 +1155,7 @@ class TestDataForgeHub:
         self._docs(tmp_path)
         result = runner.invoke(
             app,
-            ["data", "forge", "--docs", "docs", "--hub", "bogus",
-             "--teacher", "owner/repo"],
+            ["data", "forge", "--docs", "docs", "--hub", "bogus", "--teacher", "owner/repo"],
         )
         assert result.exit_code == 2
 
@@ -1153,8 +1175,18 @@ class TestDataForgeHub:
         self._docs(tmp_path)
         result = runner.invoke(
             app,
-            ["data", "forge", "--docs", "docs", "--hub", "modelers",
-             "--teacher", "owner/teacher-model", "--target-rows", "2"],
+            [
+                "data",
+                "forge",
+                "--docs",
+                "docs",
+                "--hub",
+                "modelers",
+                "--teacher",
+                "owner/teacher-model",
+                "--target-rows",
+                "2",
+            ],
         )
         assert result.exit_code == 0, (result.output, repr(result.exception))
         assert captured["base"] == "owner/teacher-model"
@@ -1175,8 +1207,16 @@ class TestDataForgeHub:
         self._docs(tmp_path)
         result = runner.invoke(
             app,
-            ["data", "forge", "--docs", "docs", "--target-rows", "2",
-             "--teacher", "owner/teacher-model"],
+            [
+                "data",
+                "forge",
+                "--docs",
+                "docs",
+                "--target-rows",
+                "2",
+                "--teacher",
+                "owner/teacher-model",
+            ],
         )
         assert result.exit_code == 0, (result.output, repr(result.exception))
         assert called["n"] == 0  # --hub hf default → no prefetch
@@ -1189,15 +1229,26 @@ class TestDataForgeHub:
 
         called = {"n": 0}
         monkeypatch.setattr(
-            hubs, "prefetch_model_from_hub",
+            hubs,
+            "prefetch_model_from_hub",
             lambda *a, **k: (called.__setitem__("n", called["n"] + 1), "x")[1],
         )
         monkeypatch.chdir(tmp_path)
         self._docs(tmp_path)
         result = runner.invoke(
             app,
-            ["data", "forge", "--docs", "docs", "--hub", "modelers",
-             "--teacher", "barename", "--target-rows", "2"],
+            [
+                "data",
+                "forge",
+                "--docs",
+                "docs",
+                "--hub",
+                "modelers",
+                "--teacher",
+                "barename",
+                "--target-rows",
+                "2",
+            ],
         )
         assert result.exit_code == 0, (result.output, repr(result.exception))
         assert called["n"] == 0
@@ -1215,8 +1266,18 @@ class TestDataForgeHub:
         self._docs(tmp_path)
         result = runner.invoke(
             app,
-            ["data", "forge", "--docs", "docs", "--hub", "modelers",
-             "--teacher", "owner/teacher", "--target-rows", "2"],
+            [
+                "data",
+                "forge",
+                "--docs",
+                "docs",
+                "--hub",
+                "modelers",
+                "--teacher",
+                "owner/teacher",
+                "--target-rows",
+                "2",
+            ],
         )
         assert result.exit_code == 1
         assert "openmind_hub" in result.output

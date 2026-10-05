@@ -62,7 +62,13 @@ class TestRegistry:
         names = list_template_names()
         # At minimum: the 7 declared in v0.36.0 Part C.
         for required in (
-            "chatml", "llama3", "qwen2.5", "gemma3", "phi4", "deepseek-r1", "mistral",
+            "chatml",
+            "llama3",
+            "qwen2.5",
+            "gemma3",
+            "phi4",
+            "deepseek-r1",
+            "mistral",
         ):
             assert required in names
 
@@ -314,9 +320,7 @@ class TestUnregisteredNameExitsCleanly:
             raise AssertionError("nothing should load for an invalid config")
 
         for name in ("AutoTokenizer", "AutoModelForCausalLM"):
-            monkeypatch.setattr(
-                getattr(transformers, name), "from_pretrained", _no_download
-            )
+            monkeypatch.setattr(getattr(transformers, name), "from_pretrained", _no_download)
         monkeypatch.chdir(tmp_path)
         (tmp_path / "d.jsonl").write_text("{}\n", encoding="utf-8")
         (tmp_path / "soup.yaml").write_text(config, encoding="utf-8")

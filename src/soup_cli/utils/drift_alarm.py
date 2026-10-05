@@ -73,9 +73,7 @@ def validate_threshold(value: object) -> float:
     if isinstance(value, bool):
         raise TypeError("threshold must be number, not bool")
     if not isinstance(value, (int, float)):
-        raise TypeError(
-            f"threshold must be number, got {type(value).__name__}"
-        )
+        raise TypeError(f"threshold must be number, got {type(value).__name__}")
     f_val = float(value)
     if not math.isfinite(f_val):
         raise ValueError("threshold must be finite (no NaN / Inf)")
@@ -98,9 +96,7 @@ def compute_token_distribution(rows: Iterable[object]) -> Mapping[str, float]:
     try:
         iterator = iter(rows)
     except TypeError as exc:
-        raise TypeError(
-            f"rows must be iterable, got {type(rows).__name__}"
-        ) from exc
+        raise TypeError(f"rows must be iterable, got {type(rows).__name__}") from exc
 
     counts: dict[str, int] = {}
     total = 0
@@ -118,23 +114,17 @@ def compute_token_distribution(rows: Iterable[object]) -> Mapping[str, float]:
 
 def _validate_distribution(dist: object, *, name: str) -> Mapping[str, float]:
     if not isinstance(dist, Mapping):
-        raise TypeError(
-            f"{name} must be a Mapping, got {type(dist).__name__}"
-        )
+        raise TypeError(f"{name} must be a Mapping, got {type(dist).__name__}")
     for tok, prob in dist.items():
         if isinstance(prob, bool):
             raise TypeError(f"{name}[{tok!r}] must be number, not bool")
         if not isinstance(prob, (int, float)):
-            raise TypeError(
-                f"{name}[{tok!r}] must be number, got {type(prob).__name__}"
-            )
+            raise TypeError(f"{name}[{tok!r}] must be number, got {type(prob).__name__}")
         f_prob = float(prob)
         if not math.isfinite(f_prob):
             raise ValueError(f"{name}[{tok!r}] must be finite")
         if f_prob < 0.0:
-            raise ValueError(
-                f"{name}[{tok!r}] must be >= 0, got {f_prob}"
-            )
+            raise ValueError(f"{name}[{tok!r}] must be >= 0, got {f_prob}")
     return dist
 
 
@@ -199,9 +189,7 @@ def _read_jsonl_outputs(path: str) -> list[str]:
 
 def _check_path(path: str, *, label: str) -> None:
     if not isinstance(path, str):
-        raise TypeError(
-            f"{label} must be str, got {type(path).__name__}"
-        )
+        raise TypeError(f"{label} must be str, got {type(path).__name__}")
     if not path:
         raise ValueError(f"{label} must be non-empty")
     if "\x00" in path:

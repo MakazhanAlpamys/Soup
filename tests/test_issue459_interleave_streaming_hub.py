@@ -152,13 +152,13 @@ def _install_fake_streaming_datasets(monkeypatch, calls: list):
             combined.extend(list(s))
         return _FakeIterableDataset(combined)
 
-    def fake_interleave_datasets(
-        streams, probabilities=None, stopping_strategy="first_exhausted"
-    ):
-        calls.append((
-            "interleave_datasets",
-            {"probabilities": probabilities, "stopping_strategy": stopping_strategy},
-        ))
+    def fake_interleave_datasets(streams, probabilities=None, stopping_strategy="first_exhausted"):
+        calls.append(
+            (
+                "interleave_datasets",
+                {"probabilities": probabilities, "stopping_strategy": stopping_strategy},
+            )
+        )
         pools = [list(s) for s in streams]
         if probabilities is not None:
             combined = _weighted_sample(pools, probabilities, stopping_strategy)
@@ -353,10 +353,12 @@ def test_streaming_probs_calls_interleave_with_probabilities(tmp_path, monkeypat
         streaming=True,
     )
     result = load_dataset(cfg.data)
-    assert calls == [(
-        "interleave_datasets",
-        {"probabilities": [0.75, 0.25], "stopping_strategy": "first_exhausted"},
-    )]
+    assert calls == [
+        (
+            "interleave_datasets",
+            {"probabilities": [0.75, 0.25], "stopping_strategy": "first_exhausted"},
+        )
+    ]
     texts = [row["text"] for row in result["train"]]
     assert any(t.startswith("A-") for t in texts)
     assert any(t.startswith("B-") for t in texts)

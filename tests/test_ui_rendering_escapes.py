@@ -37,13 +37,14 @@ class TestSingleMarkupSink:
     def test_no_other_html_or_code_sinks(self, sink):
         for path in (APP_JS, SAFE_JS):
             assert sink not in _code_without_comments(path.read_text(encoding="utf-8")), (
-                path.name, sink,
+                path.name,
+                sink,
             )
 
     def test_every_set_html_call_uses_html_template_or_constant(self):
         code = _code_without_comments(APP_JS.read_text(encoding="utf-8"))
         for match in re.finditer(r"setHtml\(([^,]+),\s*", code):
-            rest = code[match.end():match.end() + 40].lstrip()
+            rest = code[match.end() : match.end() + 40].lstrip()
             assert rest.startswith(("html`", "'", '"')) or re.match(r"[A-Za-z_]\w*\s*\)", rest), (
                 "setHtml second argument must be html`...`, a plain string literal, "
                 f"or a variable holding SafeHtml: {rest!r}"
@@ -102,9 +103,7 @@ class TestSafeHtmlUnderNode:
         assert out == "&lt;a href=&quot;x&quot; title=&#39;y&#39;&gt;&amp;&lt;/a&gt;"
 
     def test_escape_html_nullish(self):
-        out = self._run(
-            "return [m.escapeHtml(null), m.escapeHtml(undefined), m.escapeHtml(0)];"
-        )
+        out = self._run("return [m.escapeHtml(null), m.escapeHtml(undefined), m.escapeHtml(0)];")
         assert out == ["", "", "0"]
 
     def test_html_escapes_interpolations(self):
@@ -112,8 +111,8 @@ class TestSafeHtmlUnderNode:
         assert out == "<span>&lt;img src=x onerror=1&gt;</span>"
 
     def test_html_escapes_attribute_quotes(self):
-        out = self._run("return m.html`<option value=\"${'a\" onmouseover=\"x'}\">`.value;")
-        assert "onmouseover=\"x" not in out and "&quot;" in out
+        out = self._run('return m.html`<option value="${\'a" onmouseover="x\'}">`.value;')
+        assert 'onmouseover="x' not in out and "&quot;" in out
 
     def test_html_keeps_nested_safe_html_and_arrays(self):
         out = self._run(
@@ -156,8 +155,12 @@ class TestNoInlineHandlers:
 
     def test_every_data_action_is_registered(self):
         code = APP_JS.read_text(encoding="utf-8")
-        used = set(re.findall(r'data-(?:action|change|keydown)="([A-Za-z_]\w*)"',
-                              code + INDEX.read_text(encoding="utf-8")))
+        used = set(
+            re.findall(
+                r'data-(?:action|change|keydown)="([A-Za-z_]\w*)"',
+                code + INDEX.read_text(encoding="utf-8"),
+            )
+        )
         block = re.search(r"const ACTIONS = Object\.freeze\(\{(.*?)\}\);", code, re.S)
         assert block, "ACTIONS map missing"
         registered = set(re.findall(r"^\s*([A-Za-z_]\w*)\s*[:,(]", block.group(1), re.M))

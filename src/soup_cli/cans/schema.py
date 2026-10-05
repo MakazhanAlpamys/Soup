@@ -47,9 +47,7 @@ def validate_attestation_statement(stmt: object) -> dict:
     except (TypeError, ValueError) as exc:
         raise ValueError(f"attestation is not JSON-serialisable: {exc}") from exc
     if size > _MAX_ATTESTATION_BYTES:
-        raise ValueError(
-            f"attestation too large ({size} > {_MAX_ATTESTATION_BYTES} bytes)"
-        )
+        raise ValueError(f"attestation too large ({size} > {_MAX_ATTESTATION_BYTES} bytes)")
     return stmt
 
 
@@ -64,11 +62,13 @@ class DeployTarget(BaseModel):
 
     kind: Literal["ollama", "gguf", "vllm"] = Field(description="Deploy backend")
     name: Optional[str] = Field(
-        default=None, max_length=128,
+        default=None,
+        max_length=128,
         description="Model / artifact name (kind-specific)",
     )
     path: Optional[str] = Field(
-        default=None, max_length=512,
+        default=None,
+        max_length=512,
         description="Relative path within the can for kind=gguf",
     )
 
@@ -138,8 +138,7 @@ class DataRef(BaseModel):
             return value
         if not _HF_NAME_RE.match(value):
             raise ValueError(
-                f"hf_dataset '{value}' is invalid - "
-                "use 'org/name' with alphanumeric + _-./"
+                f"hf_dataset '{value}' is invalid - use 'org/name' with alphanumeric + _-./"
             )
         return value
 
@@ -171,9 +170,7 @@ class Manifest(BaseModel):
         if not isinstance(value, list):
             raise ValueError("attestations must be a list of in-toto Statements")
         if len(value) > _MAX_ATTESTATIONS:
-            raise ValueError(
-                f"too many attestations ({len(value)} > {_MAX_ATTESTATIONS})"
-            )
+            raise ValueError(f"too many attestations ({len(value)} > {_MAX_ATTESTATIONS})")
         return [validate_attestation_statement(s) for s in value]
 
     @field_validator("can_format_version")
@@ -219,7 +216,5 @@ class Manifest(BaseModel):
         try:
             _dt.fromisoformat(value)
         except ValueError as exc:
-            raise ValueError(
-                f"created_at '{value}' is not valid ISO-8601"
-            ) from exc
+            raise ValueError(f"created_at '{value}' is not valid ISO-8601") from exc
         return value

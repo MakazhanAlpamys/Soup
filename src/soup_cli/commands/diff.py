@@ -114,11 +114,17 @@ def diff(
     # Load models
     console.print("[dim]Loading Model A...[/]")
     model_obj_a, tokenizer_a = _load_model(
-        str(path_a), base_a, device, trust_remote_code,
+        str(path_a),
+        base_a,
+        device,
+        trust_remote_code,
     )
     console.print("[dim]Loading Model B...[/]")
     model_obj_b, tokenizer_b = _load_model(
-        str(path_b), base_b, device, trust_remote_code,
+        str(path_b),
+        base_b,
+        device,
+        trust_remote_code,
     )
     console.print("[green]Both models loaded.[/]\n")
 
@@ -131,12 +137,18 @@ def diff(
         messages = [{"role": "user", "content": prompt_text}]
 
         response_a = _generate(
-            model_obj_a, tokenizer_a, messages,
-            max_tokens=max_tokens, temperature=temperature,
+            model_obj_a,
+            tokenizer_a,
+            messages,
+            max_tokens=max_tokens,
+            temperature=temperature,
         )
         response_b = _generate(
-            model_obj_b, tokenizer_b, messages,
-            max_tokens=max_tokens, temperature=temperature,
+            model_obj_b,
+            tokenizer_b,
+            messages,
+            max_tokens=max_tokens,
+            temperature=temperature,
         )
 
         # Side-by-side display
@@ -163,12 +175,14 @@ def diff(
         )
         console.print(f"[dim]{metrics_str}[/]\n")
 
-        results.append({
-            "prompt": prompt_text,
-            "response_a": response_a,
-            "response_b": response_b,
-            "metrics": metrics,
-        })
+        results.append(
+            {
+                "prompt": prompt_text,
+                "response_a": response_a,
+                "response_b": response_b,
+                "metrics": metrics,
+            }
+        )
 
     # Summary
     _display_summary(results, path_a.name, path_b.name)
@@ -285,9 +299,7 @@ def _generate(model, tokenizer, messages, max_tokens=256, temperature=0.7) -> st
 
     from soup_cli.utils.vllm import encode_chat_prompt
 
-    inputs = encode_chat_prompt(
-        messages, tokenizer, fallback_on_error=False, return_tensors="pt"
-    )
+    inputs = encode_chat_prompt(messages, tokenizer, fallback_on_error=False, return_tensors="pt")
     input_ids = inputs["input_ids"].to(model.device)
     attention_mask = inputs["attention_mask"].to(model.device)
 
@@ -304,7 +316,7 @@ def _generate(model, tokenizer, messages, max_tokens=256, temperature=0.7) -> st
             gen_kwargs["top_p"] = 0.9
         outputs = model.generate(**gen_kwargs)
 
-    new_tokens = outputs[0][input_ids.shape[1]:]
+    new_tokens = outputs[0][input_ids.shape[1] :]
     return tokenizer.decode(new_tokens, skip_special_tokens=True).strip()
 
 

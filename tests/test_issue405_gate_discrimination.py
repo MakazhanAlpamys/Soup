@@ -10,9 +10,7 @@ import pytest
 from soup_cli.eval.gate_suites import load_suite_items, tool_names_in_prompt
 
 RECORD = (
-    Path(__file__).resolve().parents[1]
-    / "benchmarks"
-    / "gate-v0.76.0-tool-call-discrimination.md"
+    Path(__file__).resolve().parents[1] / "benchmarks" / "gate-v0.76.0-tool-call-discrimination.md"
 )
 
 
@@ -145,10 +143,7 @@ class TestNoToolScoring:
     def test_every_expected_answer_still_scores(self):
         from soup_cli.eval.gate_suites import score_bundled_suite
 
-        expected = {
-            item["prompt"]: item["expected"]
-            for item in load_suite_items("mini_tool_call")
-        }
+        expected = {item["prompt"]: item["expected"] for item in load_suite_items("mini_tool_call")}
         assert score_bundled_suite("mini_tool_call", expected.__getitem__) == 1.0
 
 
@@ -156,6 +151,7 @@ def test_fixture_scale_change_bumps_baseline_provenance_revision():
     from soup_cli.eval.gate_suites import BUNDLED_SCORER_REVISION
 
     assert BUNDLED_SCORER_REVISION >= 2
+
 
 def test_no_tool_scorer_mutation_moves_fingerprint(monkeypatch):
     """Breaking the NO_TOOL branch must move the provenance fingerprint."""

@@ -173,8 +173,7 @@ def extract_completion_text(value: Any) -> str:
     """
     if isinstance(value, list):
         assistant_turns = [
-            turn for turn in value
-            if isinstance(turn, Mapping) and turn.get("role") == "assistant"
+            turn for turn in value if isinstance(turn, Mapping) and turn.get("role") == "assistant"
         ]
         if assistant_turns:
             return extract_pref_text(assistant_turns)
@@ -271,10 +270,7 @@ def check_length_bias(rows: Sequence[Mapping], *, length_fn: Callable[[str], flo
             f"effect size (Cohen's d) = {d:.3f} ({direction}), mean lengths "
             f"differ by {rel_diff:.1%}; chosen is longer in {frac_longer:.1%} of rows"
         ),
-        evidence=(
-            f"mean chosen={mean_chosen:.1f}, "
-            f"mean rejected={mean_rejected:.1f}"
-        ),
+        evidence=(f"mean chosen={mean_chosen:.1f}, mean rejected={mean_rejected:.1f}"),
     )
 
 
@@ -297,8 +293,7 @@ def check_label_imbalance(rows: Sequence[Mapping]) -> LintCheck:
         name="label_imbalance",
         verdict=verdict,
         message=(
-            f"{positive} desirable / {negative} undesirable "
-            f"({minority_frac:.1%} minority class)"
+            f"{positive} desirable / {negative} undesirable ({minority_frac:.1%} minority class)"
         ),
         evidence="KTO trains best with a reasonably balanced desirable:undesirable ratio",
     )
@@ -318,11 +313,13 @@ def check_near_duplicates(
             name="near_duplicates",
             verdict="OK",
             message="near-dup check skipped (datasketch not installed)",
-            evidence="pip install \"soup-cli[data]\" to enable",
+            evidence='pip install "soup-cli[data]" to enable',
         )
     if len(rows) < 2:
         return LintCheck(
-            name="near_duplicates", verdict="OK", message="not enough rows to compare",
+            name="near_duplicates",
+            verdict="OK",
+            message="not enough rows to compare",
             evidence=f"{len(rows)} row(s)",
         )
     num_perm = 128
@@ -375,8 +372,7 @@ def check_identical_pairs(rows: Sequence[Mapping]) -> LintCheck:
         name="identical_pairs",
         verdict=verdict,
         message=(
-            f"{bad}/{len(rows)} rows ({frac:.1%}) have chosen == rejected "
-            "(zero preference signal)"
+            f"{bad}/{len(rows)} rows ({frac:.1%}) have chosen == rejected (zero preference signal)"
         ),
     )
 

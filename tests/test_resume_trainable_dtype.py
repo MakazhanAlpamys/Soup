@@ -4,6 +4,7 @@ TRL casts a quantized base's LoRA adapter to bf16 at init; the resume path reloa
 it through ``load_adapter`` (``autocast_adapter_dtype=True``), which upcasts it to
 fp32. ``keep_trainable_dtype_on_resume`` restores the pre-resume dtypes.
 """
+
 from __future__ import annotations
 
 import contextlib
@@ -29,7 +30,7 @@ def _trainer(model, calls):
         calls.append(resume_from_checkpoint)
         target = model if model is not None else trainer.model
         for param in target.parameters():
-            param.data = param.data.to(torch.float32)   # what load_adapter's autocast does
+            param.data = param.data.to(torch.float32)  # what load_adapter's autocast does
 
     trainer = SimpleNamespace(model=model, _load_from_checkpoint=load)
     return trainer
@@ -167,11 +168,18 @@ def test_qlora_sft_resume_keeps_bf16_adapter(tmp_path):
             dtype=torch.bfloat16,
         )
         args = SFTConfig(
-            output_dir=str(tmp_path), max_steps=4, per_device_train_batch_size=4,
-            save_steps=2, bf16=True, report_to=[], seed=0,
+            output_dir=str(tmp_path),
+            max_steps=4,
+            per_device_train_batch_size=4,
+            save_steps=2,
+            bf16=True,
+            report_to=[],
+            seed=0,
         )
         return SFTTrainer(
-            model=model, args=args, train_dataset=Dataset.from_list(rows),
+            model=model,
+            args=args,
+            train_dataset=Dataset.from_list(rows),
             peft_config=LoraConfig(r=4, target_modules=["q_proj", "v_proj"]),
             callbacks=callbacks,
         )

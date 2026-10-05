@@ -62,9 +62,7 @@ def _get_adapter_size(adapter_path: Path) -> str:
 
 @app.command(name="list")
 def list_adapters(
-    directory: str = typer.Argument(
-        ".", help="Directory to scan for adapters (recursive)"
-    ),
+    directory: str = typer.Argument(".", help="Directory to scan for adapters (recursive)"),
 ):
     """Scan a directory for LoRA adapters and list them."""
     dir_path = Path(directory).resolve()
@@ -162,9 +160,7 @@ def info(
         f"Size on disk: [bold]{size}[/]"
     )
 
-    console.print(
-        Panel(info_text, title=f"Adapter Info -- {for_terminal(adapter_path.name)}")
-    )
+    console.print(Panel(info_text, title=f"Adapter Info -- {for_terminal(adapter_path.name)}"))
 
 
 @app.command()
@@ -241,12 +237,15 @@ def compare(
 def diff(
     adapter_a: str = typer.Argument(..., help="Path to first adapter"),
     adapter_b: str = typer.Argument(..., help="Path to second adapter"),
-    top_k: int = typer.Option(10, "--top-k", min=1, max=200,
-                              help="Number of top changed projections to report"),
-    output_format: str = typer.Option("table", "--format",
-                                      help="Output format: table | json | markdown"),
-    output: str = typer.Option(None, "--output", "-o",
-                               help="Write report to file (json/markdown only)"),
+    top_k: int = typer.Option(
+        10, "--top-k", min=1, max=200, help="Number of top changed projections to report"
+    ),
+    output_format: str = typer.Option(
+        "table", "--format", help="Output format: table | json | markdown"
+    ),
+    output: str = typer.Option(
+        None, "--output", "-o", help="Write report to file (json/markdown only)"
+    ),
 ):
     """Per-layer ΔW Frobenius diff + effective-rank drift (v0.57.0)."""
     from soup_cli.utils.adapter_diff import (
@@ -289,6 +288,7 @@ def diff(
         # not leave a partial report at the target path (review fix MEDIUM).
         import os as _os
         import tempfile as _tf
+
         target = Path(output)
         target.parent.mkdir(parents=True, exist_ok=True)
         fd, tmp = _tf.mkstemp(dir=str(target.parent), prefix=".tmp_")
@@ -312,8 +312,7 @@ def diff(
     # Default Rich table
     table = Table(
         title=(
-            f"Adapter diff: {for_terminal(report.adapter_a)} "
-            f"vs {for_terminal(report.adapter_b)}"
+            f"Adapter diff: {for_terminal(report.adapter_a)} vs {for_terminal(report.adapter_b)}"
         )
     )
     table.add_column("Layer", style="bold")
@@ -328,8 +327,7 @@ def diff(
     console.print(table)
     if report.effective_rank_a is not None and report.effective_rank_b is not None:
         console.print(
-            f"Effective rank: A={report.effective_rank_a:.2f}, "
-            f"B={report.effective_rank_b:.2f}"
+            f"Effective rank: A={report.effective_rank_a:.2f}, B={report.effective_rank_b:.2f}"
         )
     console.print(
         f"Shared layers: {report.shared_layers} | "
@@ -341,35 +339,41 @@ def diff(
 def merge(
     adapters: list[str] = typer.Argument(..., help="Two or more adapter paths to merge"),
     output: str = typer.Option(..., "--output", "-o", help="Output directory for merged adapter"),
-    strategy: str = typer.Option("linear", "--strategy",
-                                 help="linear | ties | dare | svd | cmaes"),
-    weights: str = typer.Option(None, "--weights",
-                                help="Comma-separated weights (default: equal)"),
-    density: float = typer.Option(0.2, "--density",
-                                  help="Trim density for ties/dare in (0, 1]"),
+    strategy: str = typer.Option("linear", "--strategy", help="linear | ties | dare | svd | cmaes"),
+    weights: str = typer.Option(None, "--weights", help="Comma-separated weights (default: equal)"),
+    density: float = typer.Option(0.2, "--density", help="Trim density for ties/dare in (0, 1]"),
     seed: int = typer.Option(0, "--seed", help="Random seed for dare / cmaes"),
     rank: int = typer.Option(None, "--rank", help="SVD rank (svd strategy only)"),
     eval_suite: Optional[str] = typer.Option(
-        None, "--eval",
+        None,
+        "--eval",
         help=(
             "Path to eval suite (required for --strategy cmaes). "
             "Used by the evolutionary loop to score candidate merges."
         ),
     ),
     budget: str = typer.Option(
-        "1h", "--budget",
+        "1h",
+        "--budget",
         help="Wall-clock budget for cmaes (60s..24h, e.g. 1h, 30m)",
     ),
     population: int = typer.Option(
-        8, "--population", min=2, max=256,
+        8,
+        "--population",
+        min=2,
+        max=256,
         help="cmaes population size per generation",
     ),
     max_generations: int = typer.Option(
-        20, "--max-generations", min=1, max=10_000,
+        20,
+        "--max-generations",
+        min=1,
+        max=10_000,
         help="cmaes generation cap",
     ),
     license_ids: list[str] = typer.Option(
-        None, "--license",
+        None,
+        "--license",
         help=(
             "SPDX license id per adapter (repeatable; same order as inputs). "
             "v0.60.0 refuses merges with conflicting licenses unless "
@@ -377,14 +381,16 @@ def merge(
         ),
     ),
     license_override: str = typer.Option(
-        None, "--license-override",
+        None,
+        "--license-override",
         help=(
             "Free-text justification (>=8 chars) to merge across a license "
             "conflict. Logged to the audit log for legal review (v0.71.2)."
         ),
     ),
     allow_unscanned: bool = typer.Option(
-        False, "--allow-unscanned",
+        False,
+        "--allow-unscanned",
         help=(
             "Skip the v0.71.2 backdoor-scan gate. By default `adapters merge` "
             "refuses to merge an input whose `adapters scan` returns FAIL (or "
@@ -392,7 +398,8 @@ def merge(
         ),
     ),
     canary: Optional[str] = typer.Option(
-        None, "--canary",
+        None,
+        "--canary",
         help=(
             "Canary-suite JSON to compute a live OK/MINOR/MAJOR verdict for "
             "the merged adapter vs the first input (v0.71.4 #172). Shape: "
@@ -400,7 +407,8 @@ def merge(
         ),
     ),
     strict_verdict: bool = typer.Option(
-        False, "--strict-verdict",
+        False,
+        "--strict-verdict",
         help="Exit 2 when the canary verdict is MAJOR (CI gate).",
     ),
 ):
@@ -432,8 +440,7 @@ def merge(
     if strategy == "cmaes":
         if eval_suite is None:
             console.print(
-                "[red]--strategy cmaes requires --eval <suite> "
-                "(path to a YAML/JSONL eval).[/]"
+                "[red]--strategy cmaes requires --eval <suite> (path to a YAML/JSONL eval).[/]"
             )
             raise typer.Exit(2)
         if canary is not None or strict_verdict:
@@ -496,10 +503,7 @@ def merge(
         extracted = [extract_license_from_adapter(a) for a in adapters]
         if all(e is not None for e in extracted):
             gate_licenses = [str(e) for e in extracted]
-            console.print(
-                "[dim]Auto-detected licenses: "
-                f"{escape(', '.join(gate_licenses))}[/]"
-            )
+            console.print(f"[dim]Auto-detected licenses: {escape(', '.join(gate_licenses))}[/]")
         elif license_override is not None:
             console.print(
                 "[yellow]--license-override given but licenses could not be "
@@ -514,10 +518,7 @@ def merge(
             raise typer.Exit(2) from exc
         if not license_report.ok:
             if license_override is None:
-                console.print(
-                    f"[red]License conflict refused: "
-                    f"{escape(license_report.reason)}[/]"
-                )
+                console.print(f"[red]License conflict refused: {escape(license_report.reason)}[/]")
                 console.print(
                     "[dim]Pass --license-override '<legal-cleared justification>' "
                     "(>=8 chars) to proceed.[/]"
@@ -526,9 +527,7 @@ def merge(
             try:
                 cleared = validate_license_override_reason(license_override)
             except (TypeError, ValueError) as exc:
-                console.print(
-                    f"[red]Invalid --license-override: {escape(str(exc))}[/]"
-                )
+                console.print(f"[red]Invalid --license-override: {escape(str(exc))}[/]")
                 raise typer.Exit(2) from exc
             # #190 — persist the override decision for legal review.
             record_license_override(gate_licenses, cleared)
@@ -586,7 +585,9 @@ def merge(
         # simplex weights).
         try:
             report = merge_adapters(
-                adapters, output, strategy="linear",
+                adapters,
+                output,
+                strategy="linear",
                 weights=list(result.best_weights),
             )
         except (FileNotFoundError, TypeError, ValueError, RuntimeError, OSError) as exc:
@@ -655,9 +656,7 @@ def merge(
             raise typer.Exit(2) from exc
         verdict_suffix = ""
 
-    verdict_color = {"OK": "green", "MINOR": "yellow", "MAJOR": "red"}.get(
-        verdict, "yellow"
-    )
+    verdict_color = {"OK": "green", "MINOR": "yellow", "MAJOR": "red"}.get(verdict, "yellow")
     panel = Panel(
         f"Strategy:       [bold]{escape(report.strategy)}[/]\n"
         f"Inputs:         {len(report.adapters)}\n"
@@ -755,16 +754,13 @@ def arithmetic(
     mapping: dict[str, str] = {}
     for spec in adapter:
         if "=" not in spec:
-            console.print(
-                f"[red]--adapter must be name=path, got {escape(spec)}[/]"
-            )
+            console.print(f"[red]--adapter must be name=path, got {escape(spec)}[/]")
             raise typer.Exit(1)
         name, _, path = spec.partition("=")
         name, path = name.strip(), path.strip()
         if not name_re.match(name):
             console.print(
-                f"[red]Invalid adapter name {for_terminal(repr(name))} "
-                "(use [A-Za-z0-9_.-]).[/]"
+                f"[red]Invalid adapter name {for_terminal(repr(name))} (use [A-Za-z0-9_.-]).[/]"
             )
             raise typer.Exit(1)
         if not path:
@@ -776,10 +772,7 @@ def arithmetic(
         try:
             enforce_under_cwd_and_no_symlink(path, "adapter")
         except (ValueError, OSError) as exc:
-            console.print(
-                f"[red]Adapter path refused for {escape(name)}: "
-                f"{escape(str(exc))}[/]"
-            )
+            console.print(f"[red]Adapter path refused for {escape(name)}: {escape(str(exc))}[/]")
             raise typer.Exit(1) from exc
         mapping[name] = path
 
@@ -829,17 +822,13 @@ def arithmetic(
             bases[name] = read_adapter_base(path)
         except (ValueError, OSError) as exc:
             console.print(
-                f"[red]Could not read base model for {escape(name)}: "
-                f"{escape(str(exc))}[/]"
+                f"[red]Could not read base model for {escape(name)}: {escape(str(exc))}[/]"
             )
             raise typer.Exit(1) from exc
     distinct = {b for b in bases.values() if b is not None}
     if len(distinct) > 1:
         if not allow_cross_base:
-            listed = ", ".join(
-                f"{escape(n)}={for_terminal(str(b))}"
-                for n, b in bases.items()
-            )
+            listed = ", ".join(f"{escape(n)}={for_terminal(str(b))}" for n, b in bases.items())
             console.print(
                 f"[red]Base-model mismatch across adapters: {listed}.[/]\n"
                 "[dim]Task vectors from different bases are not comparable. "
@@ -914,14 +903,11 @@ def arithmetic(
             raise typer.Exit(1) from exc
         if not merged:
             console.print(
-                "[red]No shared LoRA tensors across the referenced adapters — "
-                "nothing to merge.[/]"
+                "[red]No shared LoRA tensors across the referenced adapters — nothing to merge.[/]"
             )
             raise typer.Exit(1)
     try:
-        write_merged_adapter(
-            output, ref_paths[0], merged, config_overrides=config_overrides
-        )
+        write_merged_adapter(output, ref_paths[0], merged, config_overrides=config_overrides)
     except (ValueError, RuntimeError, OSError) as exc:
         console.print(f"[red]Could not write merged adapter: {escape(str(exc))}[/]")
         raise typer.Exit(1) from exc
@@ -934,9 +920,7 @@ def arithmetic(
         skipped_layers=skipped,
         base_model=next(iter(distinct)) if len(distinct) == 1 else None,
     )
-    terms_str = "  ".join(
-        f"[bold]{t.coeff:+g}[/]·{escape(t.name)}" for t in report.terms
-    )
+    terms_str = "  ".join(f"[bold]{t.coeff:+g}[/]·{escape(t.name)}" for t in report.terms)
     panel = Panel(
         f"Expression:     {escape(report.expression)}\n"
         f"Terms:          {terms_str}\n"
@@ -955,14 +939,19 @@ def blame(
     dataset: str = typer.Option(..., "--dataset", help="Training JSONL the adapter was built on"),
     layer: str = typer.Option(..., "--layer", help="Layer to attribute (e.g. q_proj.7)"),
     budget: str = typer.Option("4h", "--budget", help="Wall-clock budget (e.g. 4h, 30m)"),
-    num_shards: int = typer.Option(10, "--shards", min=2, max=100,
-                                   help="Number of dataset shards for leave-one-out"),
-    top_k: int = typer.Option(50, "--top-k", min=1, max=10000,
-                              help="Number of top influencer rows to report (v0.66.0)"),
-    plan_only: bool = typer.Option(False, "--plan-only",
-                                   help="Print plan and exit without running"),
+    num_shards: int = typer.Option(
+        10, "--shards", min=2, max=100, help="Number of dataset shards for leave-one-out"
+    ),
+    top_k: int = typer.Option(
+        50, "--top-k", min=1, max=10000, help="Number of top influencer rows to report (v0.66.0)"
+    ),
+    plan_only: bool = typer.Option(
+        False, "--plan-only", help="Print plan and exit without running"
+    ),
     output: Optional[str] = typer.Option(
-        None, "--output", "-o",
+        None,
+        "--output",
+        "-o",
         help="Write JSON blame result to path (v0.66.0)",
     ),
 ):
@@ -988,8 +977,11 @@ def blame(
 
     try:
         plan = plan_blame(
-            adapter_dir, dataset,
-            layer=layer, budget_seconds=seconds, num_shards=num_shards,
+            adapter_dir,
+            dataset,
+            layer=layer,
+            budget_seconds=seconds,
+            num_shards=num_shards,
         )
     except FileNotFoundError as exc:
         console.print(f"[red]{escape(str(exc))}[/]")
@@ -1034,8 +1026,7 @@ def blame(
         from soup_cli.utils.paths import atomic_write_text
 
         try:
-            atomic_write_text(render_blame_json(result), output,
-                              field="--output")
+            atomic_write_text(render_blame_json(result), output, field="--output")
         except (TypeError, ValueError) as exc:
             console.print(f"[red]Cannot write --output: {escape(str(exc))}[/]")
             raise typer.Exit(2) from exc
@@ -1046,22 +1037,28 @@ def blame(
 def branch(
     name: str = typer.Argument(..., help="Branch name (alphanumeric + ._-)"),
     config: Optional[str] = typer.Option(
-        None, "--config", "-c",
+        None,
+        "--config",
+        "-c",
         help="Path to soup.yaml (required unless --from-registry)",
     ),
     base: Optional[str] = typer.Option(
-        None, "--base", help="Base model id (required unless --from-registry)",
+        None,
+        "--base",
+        help="Base model id (required unless --from-registry)",
     ),
     dataset: str = typer.Option(None, "--dataset", help="Training dataset path (optional)"),
     attach_to_registry: Optional[str] = typer.Option(
-        None, "--attach-to-registry",
+        None,
+        "--attach-to-registry",
         help=(
             "Registry entry id/ref to attach this branch pointer to as a "
             "branch_ref artifact + link via registry_entry_id (v0.71.4)."
         ),
     ),
     from_registry: Optional[str] = typer.Option(
-        None, "--from-registry",
+        None,
+        "--from-registry",
         help=(
             "Derive config + base_model + dataset hash from a Registry entry "
             "instead of --config/--base (v0.71.4)."
@@ -1086,17 +1083,16 @@ def branch(
             snap = branch_from_registry(name, from_registry)
         else:
             if not config:
-                console.print(
-                    "[red]--config is required (or use --from-registry)[/]"
-                )
+                console.print("[red]--config is required (or use --from-registry)[/]")
                 raise typer.Exit(2)
             if not base:
-                console.print(
-                    "[red]--base is required (or use --from-registry)[/]"
-                )
+                console.print("[red]--base is required (or use --from-registry)[/]")
                 raise typer.Exit(2)
             snap = create_branch(
-                name, config_path=config, base_model=base, dataset_path=dataset,
+                name,
+                config_path=config,
+                base_model=base,
+                dataset_path=dataset,
             )
             if attach_to_registry is not None:
                 attach_branch_to_registry(name, attach_to_registry)
@@ -1109,9 +1105,7 @@ def branch(
         raise typer.Exit(2) from exc
 
     reg_line = (
-        f"\nRegistry: [dim]{escape(snap.registry_entry_id)}[/]"
-        if snap.registry_entry_id
-        else ""
+        f"\nRegistry: [dim]{escape(snap.registry_entry_id)}[/]" if snap.registry_entry_id else ""
     )
     console.print(
         Panel(
@@ -1130,8 +1124,9 @@ def branch(
 @app.command()
 def checkout(
     name: str = typer.Argument(..., help="Branch name to check out"),
-    output: str = typer.Option("soup.yaml", "--output", "-o",
-                               help="Where to write the restored config"),
+    output: str = typer.Option(
+        "soup.yaml", "--output", "-o", help="Where to write the restored config"
+    ),
 ):
     """Restore a snapshotted branch's config into cwd (v0.57.0)."""
     from soup_cli.utils.adapter_branch import load_branch, write_checkout
@@ -1154,9 +1149,7 @@ def checkout(
         console.print(f"[red]{escape(str(exc))}[/]")
         raise typer.Exit(2) from exc
 
-    console.print(
-        f"[green]Restored branch {escape(snap.name)} → {escape(str(target))}[/]"
-    )
+    console.print(f"[green]Restored branch {escape(snap.name)} → {escape(str(target))}[/]")
 
 
 @app.command(name="branches")
@@ -1193,7 +1186,8 @@ def list_branches_cmd():
 def scan(
     adapter: str = typer.Argument(..., help="Path to adapter directory"),
     output_format: str = typer.Option(
-        "text", "--format",
+        "text",
+        "--format",
         help="Output format: text | json",
     ),
 ):
@@ -1246,22 +1240,26 @@ def scan(
 def sign(
     adapter: str = typer.Argument(..., help="Path to adapter directory"),
     backend: str = typer.Option(
-        "unsigned", "--backend",
+        "unsigned",
+        "--backend",
         help="Signing backend: unsigned | ed25519 | sigstore (keyless OIDC)",
     ),
     key: Optional[str] = typer.Option(
-        None, "--key",
+        None,
+        "--key",
         help="ed25519 private-key PEM path (or set SOUP_SIGNING_KEY).",
     ),
     generate_key: Optional[str] = typer.Option(
-        None, "--generate-key",
+        None,
+        "--generate-key",
         help="Generate a fresh ed25519 keypair, persist the private key here "
-             "(PEM, 0600), and sign with it.",
+        "(PEM, 0600), and sign with it.",
     ),
     interactive_oidc: bool = typer.Option(
-        False, "--interactive-oidc",
+        False,
+        "--interactive-oidc",
         help="Allow Sigstore browser OIDC when no ambient credential exists. "
-             "Off by default so headless runners fail instead of hanging.",
+        "Off by default so headless runners fail instead of hanging.",
     ),
 ):
     """Compute manifest + write ``.soup-signature.json`` (v0.60.0, ed25519 v0.71.2).
@@ -1316,22 +1314,26 @@ def sign(
 def verify(
     adapter: str = typer.Argument(..., help="Path to adapter directory"),
     strict: bool = typer.Option(
-        False, "--strict",
+        False,
+        "--strict",
         help="Exit 3 on any verification failure (CI-friendly)",
     ),
     public_key: Optional[str] = typer.Option(
-        None, "--public-key",
+        None,
+        "--public-key",
         help="Trusted ed25519 public-key PEM. When set, the embedded signing "
-             "key must match it and requires an ed25519 signature "
-             "(genuine authentication, not just consistency).",
+        "key must match it and requires an ed25519 signature "
+        "(genuine authentication, not just consistency).",
     ),
     cert_identity: Optional[str] = typer.Option(
-        None, "--cert-identity",
+        None,
+        "--cert-identity",
         help="Trusted Sigstore certificate identity (SAN). Requires "
-             "--cert-oidc-issuer and is required for sigstore-signed adapters.",
+        "--cert-oidc-issuer and is required for sigstore-signed adapters.",
     ),
     cert_oidc_issuer: Optional[str] = typer.Option(
-        None, "--cert-oidc-issuer",
+        None,
+        "--cert-oidc-issuer",
         help="Trusted OIDC issuer. Required together with --cert-identity.",
     ),
 ):
@@ -1390,7 +1392,8 @@ def verify(
 def check_safetensors(
     adapter: str = typer.Argument(..., help="Path to adapter / model directory"),
     strict: bool = typer.Option(
-        False, "--strict",
+        False,
+        "--strict",
         help="Exit 3 on any unsafe (pickle / PyTorch-classic) weight file",
     ),
 ):
@@ -1446,32 +1449,40 @@ def adapter_pr(
     base_sha: str = typer.Option(..., "--base-sha", help="64-hex SHA of the base model"),
     adapter_path: str = typer.Option(..., "--adapter", help="Path to candidate adapter"),
     eval_json: Optional[str] = typer.Option(
-        None, "--eval",
+        None,
+        "--eval",
         help=(
-            "Path to JSON eval-deltas: list of "
-            '{"metric": ..., "baseline": ..., "candidate": ...}'
+            'Path to JSON eval-deltas: list of {"metric": ..., "baseline": ..., "candidate": ...}'
         ),
     ),
     samples_json: Optional[str] = typer.Option(
-        None, "--samples",
+        None,
+        "--samples",
         help=(
             "Path to JSON sample diffs: list of "
             '{"prompt": ..., "baseline_output": ..., "candidate_output": ...}'
         ),
     ),
     dataset_diff_path: Optional[str] = typer.Option(
-        None, "--dataset-diff",
+        None,
+        "--dataset-diff",
         help="Path to a text file containing the dataset diff",
     ),
     output: Optional[str] = typer.Option(
-        None, "--output", "-o",
+        None,
+        "--output",
+        "-o",
         help="Write rendered Markdown to path (default: stdout)",
     ),
     format_: str = typer.Option(
-        "markdown", "--format", "-f", help="markdown | json",
+        "markdown",
+        "--format",
+        "-f",
+        help="markdown | json",
     ),
     push: Optional[str] = typer.Option(
-        None, "--push",
+        None,
+        "--push",
         help=(
             "Post the rendered Markdown as a comment on a GitHub PR: "
             "owner/repo#N (e.g. MakazhanAlpamys/Soup#42). Auth via "
@@ -1520,9 +1531,7 @@ def adapter_pr(
         samples = _load_json_list(samples_json, "samples")
         dataset_diff = ""
         if dataset_diff_path is not None:
-            enforce_under_cwd_and_no_symlink(
-                dataset_diff_path, field="dataset_diff"
-            )
+            enforce_under_cwd_and_no_symlink(dataset_diff_path, field="dataset_diff")
             real_diff = os.path.realpath(dataset_diff_path)
             if os.path.getsize(real_diff) > pr_input_cap:
                 raise ValueError("dataset_diff exceeds 8 MiB cap")
@@ -1559,8 +1568,7 @@ def adapter_pr(
             console.print(f"[red]{escape(str(exc))}[/]")
             raise typer.Exit(2) from exc
         console.print(
-            f"[green]Posted PR comment to {escape(push)}[/]"
-            + (f" -> {escape(url)}" if url else "")
+            f"[green]Posted PR comment to {escape(push)}[/]" + (f" -> {escape(url)}" if url else "")
         )
         if output is None:
             return
@@ -1609,11 +1617,14 @@ def adapter_bisect(
         ),
     ),
     plan_only: bool = typer.Option(
-        False, "--plan-only",
+        False,
+        "--plan-only",
         help="Print the plan and exit without running the bisect",
     ),
     output: Optional[str] = typer.Option(
-        None, "--output", "-o",
+        None,
+        "--output",
+        "-o",
         help="Write JSON result to path",
     ),
 ):
@@ -1635,9 +1646,7 @@ def adapter_bisect(
         raise typer.Exit(2) from exc
 
     if "{ckpt}" not in eval_command:
-        console.print(
-            "[red]--eval-command must include `{ckpt}` placeholder[/]"
-        )
+        console.print("[red]--eval-command must include `{ckpt}` placeholder[/]")
         raise typer.Exit(2)
 
     if plan_only:
@@ -1664,10 +1673,7 @@ def adapter_bisect(
                 argv, capture_output=True, timeout=3600, check=False
             )
         except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
-            console.print(
-                f"[yellow]Eval failed for {escape(ckpt)}: "
-                f"{escape(str(exc))}[/]"
-            )
+            console.print(f"[yellow]Eval failed for {escape(ckpt)}: {escape(str(exc))}[/]")
             return False
         return result.returncode == 0
 
@@ -1680,8 +1686,7 @@ def adapter_bisect(
     if result.verdict == "ALL_OK":
         console.print(
             Panel(
-                f"Verdict: [green]ALL_OK[/]\n"
-                f"Probes:  {result.probes}",
+                f"Verdict: [green]ALL_OK[/]\nProbes:  {result.probes}",
                 title="Adapter bisect",
             )
         )
@@ -1702,10 +1707,7 @@ def adapter_bisect(
             "verdict": result.verdict,
             "first_broken": result.first_broken,
             "probes": result.probes,
-            "steps": [
-                {"checkpoint": s.checkpoint, "ok": s.ok}
-                for s in result.steps
-            ],
+            "steps": [{"checkpoint": s.checkpoint, "ok": s.ok} for s in result.steps],
         }
         atomic_write_text(
             json.dumps(data, indent=2, sort_keys=True),
@@ -1822,22 +1824,14 @@ def audit(
     trainer_state_file = adapter_path / "trainer_state.json"
     if trainer_state_file.is_file():
         try:
-            state_data = _json.loads(
-                trainer_state_file.read_text(encoding="utf-8")
-            )
+            state_data = _json.loads(trainer_state_file.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             state_data = None  # unreadable or not JSON: the row stays unknown
-        history = (
-            state_data.get("log_history")
-            if isinstance(state_data, dict)
-            else None
-        )
+        history = state_data.get("log_history") if isinstance(state_data, dict) else None
         for entry in reversed(history if isinstance(history, list) else []):
             if isinstance(entry, dict) and "nan_skip_count" in entry:
                 record["nan_skip_count"] = entry["nan_skip_count"]
-                record["nan_skip_fraction"] = entry.get(
-                    "nan_skip_fraction", 0.0
-                )
+                record["nan_skip_fraction"] = entry.get("nan_skip_fraction", 0.0)
                 break
 
     result = audit_adapter(cfg, record)
@@ -1884,10 +1878,7 @@ def audit(
 
     for row in result.rows:
         if row.status == "diverged" and row.detail:
-            console.print(
-                f"  [red]{for_terminal(row.setting)}[/]: "
-                f"{for_terminal(row.detail)}"
-            )
+            console.print(f"  [red]{for_terminal(row.setting)}[/]: {for_terminal(row.detail)}")
 
     reason = unknown_reason(result.record_kind)
     if reason and result.unknown_count:

@@ -58,25 +58,23 @@ def _toy_qwen35_classes():
 
         def forward(self, hidden_states):
             routing = self.gate(hidden_states).softmax(dim=-1)
-            expert_outputs = torch.stack(
-                [expert(hidden_states) for expert in self.experts], dim=-2
-            )
+            expert_outputs = torch.stack([expert(hidden_states) for expert in self.experts], dim=-2)
             return (expert_outputs * routing.unsqueeze(-1)).sum(dim=-2)
 
     class ToyFullAttentionLayer(nn.Module):
         def __init__(self, config):
             super().__init__()
             self.self_attn = nn.Module()
-            self.self_attn.q_proj = nn.Linear(
-                config.hidden_size, config.hidden_size, bias=False
-            )
+            self.self_attn.q_proj = nn.Linear(config.hidden_size, config.hidden_size, bias=False)
             self.mlp = ToyMoe(config)
 
         def forward(self, hidden_states, *args, **kwargs):
             del args, kwargs
-            return hidden_states + torch.tanh(
-                self.self_attn.q_proj(hidden_states)
-            ) + self.mlp(hidden_states)
+            return (
+                hidden_states
+                + torch.tanh(self.self_attn.q_proj(hidden_states))
+                + self.mlp(hidden_states)
+            )
 
     class ToyLinearAttentionLayer(nn.Module):
         def __init__(self, config):
@@ -89,9 +87,11 @@ def _toy_qwen35_classes():
 
         def forward(self, hidden_states, *args, **kwargs):
             del args, kwargs
-            return hidden_states + torch.sigmoid(
-                self.linear_attn.in_proj_qkv(hidden_states)
-            ) + self.mlp(hidden_states)
+            return (
+                hidden_states
+                + torch.sigmoid(self.linear_attn.in_proj_qkv(hidden_states))
+                + self.mlp(hidden_states)
+            )
 
     class ToyDecoder(nn.Module):
         def __init__(self, config):
@@ -157,9 +157,7 @@ def _toy_qwen35_classes():
                 hidden_states = self.model(input_ids)
             return CausalLMOutput(logits=self.lm_head(hidden_states))
 
-    AutoModelForCausalLM.register(
-        ToyQwen35Config, ToyQwen35ForCausalLM, exist_ok=True
-    )
+    AutoModelForCausalLM.register(ToyQwen35Config, ToyQwen35ForCausalLM, exist_ok=True)
     result = ToyQwen35Config, ToyQwen35ForCausalLM
     _toy_qwen35_classes._cached = result
     return result
@@ -374,9 +372,7 @@ class TestQwen35StreamingParity:
         finally:
             runtime.close()
 
-    def test_heterogeneous_moe_logits_match_resident_bit_exactly(
-        self, tmp_path, monkeypatch
-    ):
+    def test_heterogeneous_moe_logits_match_resident_bit_exactly(self, tmp_path, monkeypatch):
         """Admission gate: exercise the alias through the complete CPU runtime.
 
         Layer 0 owns ``self_attn.q_proj`` while layer 1 owns
@@ -406,9 +402,7 @@ class TestQwen35StreamingParity:
         monkeypatch.setattr(
             AutoConfig,
             "from_pretrained",
-            staticmethod(
-                lambda model_id, **kwargs: config_cls.from_pretrained(model_id)
-            ),
+            staticmethod(lambda model_id, **kwargs: config_cls.from_pretrained(model_id)),
         )
 
         arch = stream_arch_of(config)
@@ -580,15 +574,11 @@ class TestQwen35StreamingRuntime:
         assert requested_devices
         assert all(str(device) == "cpu" for device in requested_devices)
         assert all(
-            tensor.device.type == "cpu"
-            for layer in source.store
-            for tensor in layer.values()
+            tensor.device.type == "cpu" for layer in source.store for tensor in layer.values()
         )
 
     @pytest.mark.parametrize("device_type", ["meta", "mps"])
-    def test_ram_source_refuses_a_non_cpu_allocation(
-        self, tmp_path, monkeypatch, device_type
-    ):
+    def test_ram_source_refuses_a_non_cpu_allocation(self, tmp_path, monkeypatch, device_type):
         from soup_cli.utils.layer_shard import shard_checkpoint
         from soup_cli.utils.layer_stream_runtime import RamSource
 
@@ -596,6 +586,7 @@ class TestQwen35StreamingRuntime:
         out = str(tmp_path / "shards")
         index = shard_checkpoint(weights, out, dtype="float32", arch="qwen3")
         layer_specs = RamSource.layer_specs_from_shards(out, index.n_layers)
+
         def _misplaced_empty(*args, **kwargs):
             del args
             if kwargs.get("pin_memory"):
@@ -627,9 +618,7 @@ class TestQwen35StreamingRuntime:
         with pytest.raises(RuntimeError, match="returned pageable memory"):
             RamSource(out, index.n_layers, layer_specs, pin=True)
 
-    def test_mps_gate_disables_pinning_for_direct_callers(
-        self, tmp_path, monkeypatch
-    ):
+    def test_mps_gate_disables_pinning_for_direct_callers(self, tmp_path, monkeypatch):
         import soup_cli.utils.layer_stream_runtime as runtime_module
         from soup_cli.utils.layer_shard import shard_checkpoint
 
@@ -715,9 +704,7 @@ class TestQwen35StreamingRuntime:
         index = shard_checkpoint(weights, out, dtype="float32", arch="qwen3")
         model = _heterogeneous_meta_model()
 
-        runtime = install_streaming(
-            model, shard_dir=out, index=index, device="cpu", pin=False
-        )
+        runtime = install_streaming(model, shard_dir=out, index=index, device="cpu", pin=False)
         try:
             for layer in runtime.source.store:
                 for tensor in layer.values():
@@ -783,9 +770,7 @@ class TestQwen35StreamingRuntime:
 
         budget = StreamingSetupMixin._stream_layer_budget_bytes(layer_specs)
         union = RamSource.merge_layer_specs(layer_specs)
-        actual = sum(
-            math.prod(shape) * dtype_bytes(stored) for shape, stored in union.values()
-        )
+        actual = sum(math.prod(shape) * dtype_bytes(stored) for shape, stored in union.values())
         per_layer = [
             sum(math.prod(shape) * dtype_bytes(stored) for shape, stored in spec.values())
             for spec in layer_specs
@@ -910,9 +895,7 @@ class TestQwen35StreamingSetup:
             "soup_cli.utils.layer_stream_runtime.RamSource.layer_specs_from_paths",
             lambda *_a, **_k: layer_specs,
         )
-        monkeypatch.setattr(
-            "soup_cli.utils.layer_stream.build_stream_plan", capture_stream_plan
-        )
+        monkeypatch.setattr("soup_cli.utils.layer_stream.build_stream_plan", capture_stream_plan)
         monkeypatch.setattr(
             "soup_cli.utils.layer_stream_runtime.extras_resident_bytes",
             lambda *_a, **_k: 0,

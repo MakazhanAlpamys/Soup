@@ -29,7 +29,8 @@ pytest.importorskip("transformers")
 
 def _write_config(tmp_path):
     (tmp_path / "data.jsonl").write_text(
-        '{"instruction": "hi", "output": "hello"}\n', encoding="utf-8",
+        '{"instruction": "hi", "output": "hello"}\n',
+        encoding="utf-8",
     )
     (tmp_path / "soup.yaml").write_text(
         "base: sshleifer/tiny-gpt2\n"
@@ -191,9 +192,7 @@ class TestDescribeExceptionForTracker:
             try:
                 raise OSError("permission denied: /home/u/.ssh/id_rsa")
             except OSError as exc:
-                raise RuntimeError(
-                    "failed to load tokenizer for meta-llama/Llama-3.1-8B"
-                ) from exc
+                raise RuntimeError("failed to load tokenizer for meta-llama/Llama-3.1-8B") from exc
         except RuntimeError as e:
             message = _describe_exception_for_tracker(e)
 
@@ -214,12 +213,14 @@ class TestFailRunRedactsAndCapsTheErrorMessage:
         db_path = tmp_path / "experiments.db"
         tracker = ExperimentTracker(db_path=db_path)
         run_id = tracker.start_run(
-            config_dict={"base": "x"}, device="cpu", device_name="cpu", gpu_info={},
+            config_dict={"base": "x"},
+            device="cpu",
+            device_name="cpu",
+            gpu_info={},
         )
         tracker.fail_run(
             run_id,
-            error="RuntimeError: failed to download: "
-            "token=hf_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345",
+            error="RuntimeError: failed to download: token=hf_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345",
         )
 
         stored = tracker.get_run(run_id)["error_message"]
@@ -235,7 +236,10 @@ class TestFailRunRedactsAndCapsTheErrorMessage:
         db_path = tmp_path / "experiments.db"
         tracker = ExperimentTracker(db_path=db_path)
         run_id = tracker.start_run(
-            config_dict={"base": "x"}, device="cpu", device_name="cpu", gpu_info={},
+            config_dict={"base": "x"},
+            device="cpu",
+            device_name="cpu",
+            gpu_info={},
         )
         tracker.fail_run(run_id, error="x" * (_MAX_ERROR_MESSAGE_CHARS * 3))
 
@@ -249,7 +253,10 @@ class TestFailRunRedactsAndCapsTheErrorMessage:
         db_path = tmp_path / "experiments.db"
         tracker = ExperimentTracker(db_path=db_path)
         run_id = tracker.start_run(
-            config_dict={"base": "x"}, device="cpu", device_name="cpu", gpu_info={},
+            config_dict={"base": "x"},
+            device="cpu",
+            device_name="cpu",
+            gpu_info={},
         )
         tracker.fail_run(run_id, error="ValueError: bad config")
 

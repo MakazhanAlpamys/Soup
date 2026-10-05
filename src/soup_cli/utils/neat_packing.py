@@ -54,8 +54,7 @@ def tag_sub_sequences(boundaries: Sequence[int]) -> list[int]:
         raise ValueError("boundaries must be non-empty")
     if len(boundaries) > _MAX_BOUNDARY_SEGMENTS + 1:
         raise ValueError(
-            f"too many segments ({len(boundaries) - 1}); cap is "
-            f"{_MAX_BOUNDARY_SEGMENTS}"
+            f"too many segments ({len(boundaries) - 1}); cap is {_MAX_BOUNDARY_SEGMENTS}"
         )
     if len(boundaries) < 2:
         raise ValueError(
@@ -63,9 +62,7 @@ def tag_sub_sequences(boundaries: Sequence[int]) -> list[int]:
             f"got {len(boundaries)} entries"
         )
     if boundaries[0] != 0:
-        raise ValueError(
-            f"boundaries must start at 0, got {boundaries[0]}"
-        )
+        raise ValueError(f"boundaries must start at 0, got {boundaries[0]}")
     for idx in range(len(boundaries) - 1):
         if boundaries[idx] >= boundaries[idx + 1]:
             raise ValueError(
@@ -125,9 +122,7 @@ def build_4d_attention_mask(
     import numpy as np
 
     if seq_pos_ids.ndim != 2:
-        raise ValueError(
-            f"seq_pos_ids must be 2D (B, S), got shape {seq_pos_ids.shape}"
-        )
+        raise ValueError(f"seq_pos_ids must be 2D (B, S), got shape {seq_pos_ids.shape}")
     if (seq_pos_ids < 0).any():
         raise ValueError("seq_pos_ids must be non-negative")
 
@@ -141,16 +136,12 @@ def build_4d_attention_mask(
         )
 
     if not np.issubdtype(dtype, np.floating):
-        raise TypeError(
-            f"dtype must be a numpy float dtype, got {dtype}"
-        )
+        raise TypeError(f"dtype must be a numpy float dtype, got {dtype}")
     batch, seq_len = seq_pos_ids.shape
     # Same-segment matrix: (B, S, S) bool — True iff query and key share id.
-    same_segment = (
-        seq_pos_ids[:, :, None] == seq_pos_ids[:, None, :]
-    )
+    same_segment = seq_pos_ids[:, :, None] == seq_pos_ids[:, None, :]
     # Padding (id=0) cannot attend to anyone, including itself.
-    is_real = (seq_pos_ids != 0)
+    is_real = seq_pos_ids != 0
     # (B, S, S) — both query and key must be real tokens.
     real_pair = is_real[:, :, None] & is_real[:, None, :]
     # Causal: (S, S) lower-triangular True.
@@ -176,7 +167,6 @@ def select_packing_strategy(*, flash_attn_available: bool) -> PackingStrategy:
     """
     if not isinstance(flash_attn_available, bool):
         raise TypeError(
-            "flash_attn_available must be bool, got "
-            f"{type(flash_attn_available).__name__}"
+            f"flash_attn_available must be bool, got {type(flash_attn_available).__name__}"
         )
     return "varlen" if flash_attn_available else "4d_mask"

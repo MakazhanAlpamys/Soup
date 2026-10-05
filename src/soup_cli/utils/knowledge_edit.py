@@ -25,9 +25,7 @@ from typing import TYPE_CHECKING, Mapping, Optional, Sequence, Tuple
 if TYPE_CHECKING:  # pragma: no cover — type-only import, no runtime cost
     from soup_cli.utils.edit_governor import EditGovernor
 
-SUPPORTED_EDIT_METHODS: frozenset[str] = frozenset(
-    {"rome", "memit", "alphaedit", "grace"}
-)
+SUPPORTED_EDIT_METHODS: frozenset[str] = frozenset({"rome", "memit", "alphaedit", "grace"})
 
 _MAX_METHOD_LEN: int = 32
 _MAX_SUBJECT_LEN: int = 2048
@@ -46,46 +44,48 @@ class EditMethodSpec:
     live_wired: bool
 
 
-_EDIT_METHOD_METADATA: Mapping[str, EditMethodSpec] = MappingProxyType({
-    "rome": EditMethodSpec(
-        name="rome",
-        description=(
-            "Rank-One Model Editing — closed-form rank-1 update at a "
-            "single MLP layer. Best for one-shot factual patches."
+_EDIT_METHOD_METADATA: Mapping[str, EditMethodSpec] = MappingProxyType(
+    {
+        "rome": EditMethodSpec(
+            name="rome",
+            description=(
+                "Rank-One Model Editing — closed-form rank-1 update at a "
+                "single MLP layer. Best for one-shot factual patches."
+            ),
+            multi_edit_capable=False,
+            live_wired=False,
         ),
-        multi_edit_capable=False,
-        live_wired=False,
-    ),
-    "memit": EditMethodSpec(
-        name="memit",
-        description=(
-            "Mass-Editing Memory in a Transformer — distributes the "
-            "update across multiple layers for higher capacity."
+        "memit": EditMethodSpec(
+            name="memit",
+            description=(
+                "Mass-Editing Memory in a Transformer — distributes the "
+                "update across multiple layers for higher capacity."
+            ),
+            multi_edit_capable=True,
+            live_wired=False,
         ),
-        multi_edit_capable=True,
-        live_wired=False,
-    ),
-    "alphaedit": EditMethodSpec(
-        name="alphaedit",
-        description=(
-            "Null-space-projected ROME variant — survives sequential "
-            "edits better than vanilla ROME / MEMIT."
+        "alphaedit": EditMethodSpec(
+            name="alphaedit",
+            description=(
+                "Null-space-projected ROME variant — survives sequential "
+                "edits better than vanilla ROME / MEMIT."
+            ),
+            multi_edit_capable=True,
+            live_wired=False,
         ),
-        multi_edit_capable=True,
-        live_wired=False,
-    ),
-    "grace": EditMethodSpec(
-        name="grace",
-        description=(
-            "GRACE codebook — discrete latent-space (key, value) store "
-            "that survives thousands of sequential edits without "
-            "norm-blowup. v0.62.0 Part E ships the schema; live "
-            "lookup / write kernel lands in v0.62.1."
+        "grace": EditMethodSpec(
+            name="grace",
+            description=(
+                "GRACE codebook — discrete latent-space (key, value) store "
+                "that survives thousands of sequential edits without "
+                "norm-blowup. v0.62.0 Part E ships the schema; live "
+                "lookup / write kernel lands in v0.62.1."
+            ),
+            multi_edit_capable=True,
+            live_wired=False,
         ),
-        multi_edit_capable=True,
-        live_wired=False,
-    ),
-})
+    }
+)
 
 
 def validate_edit_method(value: object) -> str:
@@ -93,23 +93,17 @@ def validate_edit_method(value: object) -> str:
     if isinstance(value, bool):
         raise TypeError("edit_method must not be bool")
     if not isinstance(value, str):
-        raise TypeError(
-            f"edit_method must be str, got {type(value).__name__}"
-        )
+        raise TypeError(f"edit_method must be str, got {type(value).__name__}")
     if not value:
         raise ValueError("edit_method must be non-empty")
     if "\x00" in value:
         raise ValueError("edit_method must not contain null bytes")
     if len(value) > _MAX_METHOD_LEN:
-        raise ValueError(
-            f"edit_method must be <= {_MAX_METHOD_LEN} chars"
-        )
+        raise ValueError(f"edit_method must be <= {_MAX_METHOD_LEN} chars")
     canonical = value.lower()
     if canonical not in SUPPORTED_EDIT_METHODS:
         supported = ", ".join(sorted(SUPPORTED_EDIT_METHODS))
-        raise ValueError(
-            f"unknown edit method {value!r}; supported: {supported}"
-        )
+        raise ValueError(f"unknown edit method {value!r}; supported: {supported}")
     return canonical
 
 
@@ -117,9 +111,7 @@ def _validate_text_field(value: object, name: str, max_len: int) -> str:
     if isinstance(value, bool):
         raise TypeError(f"{name} must not be bool")
     if not isinstance(value, str):
-        raise TypeError(
-            f"{name} must be str, got {type(value).__name__}"
-        )
+        raise TypeError(f"{name} must be str, got {type(value).__name__}")
     if not value:
         raise ValueError(f"{name} must be non-empty")
     if "\x00" in value:
@@ -148,15 +140,11 @@ def _validate_layer(value: Optional[object]) -> Optional[int]:
     if isinstance(value, bool):
         raise TypeError("layer must not be bool")
     if not isinstance(value, int):
-        raise TypeError(
-            f"layer must be int, got {type(value).__name__}"
-        )
+        raise TypeError(f"layer must be int, got {type(value).__name__}")
     if value < 0:
         raise ValueError(f"layer must be >= 0, got {value}")
     if value > _MAX_LAYER_IDX:
-        raise ValueError(
-            f"layer must be <= {_MAX_LAYER_IDX}, got {value}"
-        )
+        raise ValueError(f"layer must be <= {_MAX_LAYER_IDX}, got {value}")
     return value
 
 
@@ -192,30 +180,29 @@ class EditPlan:
         # smuggle in an inconsistent plan.
         if self.method not in SUPPORTED_EDIT_METHODS:
             raise ValueError(
-                f"method must be in {sorted(SUPPORTED_EDIT_METHODS)}, "
-                f"got {self.method!r}"
+                f"method must be in {sorted(SUPPORTED_EDIT_METHODS)}, got {self.method!r}"
             )
         if not isinstance(self.layer, int) or isinstance(self.layer, bool):
             raise TypeError("layer must be int (not bool)")
         if self.layer < 0 or self.layer > _MAX_LAYER_IDX:
-            raise ValueError(
-                f"layer must be in [0, {_MAX_LAYER_IDX}], got {self.layer}"
-            )
+            raise ValueError(f"layer must be in [0, {_MAX_LAYER_IDX}], got {self.layer}")
 
 
 # Per-method default edit layer (heuristic — operator can override via
 # CLI). ROME papers target the middle-to-late MLP layer; AlphaEdit
 # follows the same convention. MEMIT updates a range so we treat the
 # "layer" arg as the centre of the spread.
-_DEFAULT_EDIT_LAYER: Mapping[str, int] = MappingProxyType({
-    "rome": 5,
-    "memit": 8,
-    "alphaedit": 5,
-    # GRACE writes to a single dedicated codebook so the "layer" arg is
-    # the residual-stream layer where the lookup hook is installed.
-    # v0.62.0 Part E ships the schema; default mirrors AlphaEdit.
-    "grace": 5,
-})
+_DEFAULT_EDIT_LAYER: Mapping[str, int] = MappingProxyType(
+    {
+        "rome": 5,
+        "memit": 8,
+        "alphaedit": 5,
+        # GRACE writes to a single dedicated codebook so the "layer" arg is
+        # the residual-stream layer where the lookup hook is installed.
+        # v0.62.0 Part E ships the schema; default mirrors AlphaEdit.
+        "grace": 5,
+    }
+)
 
 
 def build_edit_plan(
@@ -235,7 +222,8 @@ def build_edit_plan(
     canonical_base = _validate_text_field(base, "base", _MAX_BASE_LEN)
     canonical_method = validate_edit_method(method)
     canonical_subject, canonical_target = parse_edit_subject_target(
-        subject=subject, target=target,
+        subject=subject,
+        target=target,
     )
     canonical_layer = _validate_layer(layer)
     if canonical_layer is None:
@@ -326,19 +314,35 @@ def apply_edit(
     from soup_cli.utils.live_eval import load_model_and_tokenizer
 
     model, tokenizer, dev = load_model_and_tokenizer(
-        plan.base, device=device, trust_remote_code=trust_remote_code,
+        plan.base,
+        device=device,
+        trust_remote_code=trust_remote_code,
     )
     prob_before = measure_target_prob(
-        model, tokenizer, subject=plan.subject, target=plan.target, device=dev,
+        model,
+        tokenizer,
+        subject=plan.subject,
+        target=plan.target,
+        device=dev,
     )
     kernel_result = run_edit_kernel(
-        model, tokenizer,
-        method=canonical, subject=plan.subject, target=plan.target,
-        layer=plan.layer, device=dev, grad_steps=grad_steps, lr=lr,
+        model,
+        tokenizer,
+        method=canonical,
+        subject=plan.subject,
+        target=plan.target,
+        layer=plan.layer,
+        device=dev,
+        grad_steps=grad_steps,
+        lr=lr,
         cov_corpus=cov_corpus,
     )
     prob_after = measure_target_prob(
-        model, tokenizer, subject=plan.subject, target=plan.target, device=dev,
+        model,
+        tokenizer,
+        subject=plan.subject,
+        target=plan.target,
+        device=dev,
     )
 
     saved_dir: Optional[str] = None

@@ -73,8 +73,7 @@ class RewindSink(Protocol):
         rows: Sequence[int],
         row_loss: Sequence[float],
         row_tokens: Sequence[int],
-    ) -> None:
-        ...
+    ) -> None: ...
 
 
 class RewindState:
@@ -272,8 +271,7 @@ def make_rewind_trainer_class(base_cls: type) -> type:
                 and not getattr(self.args, "ignore_data_skip", False)
             ):
                 state.disable(
-                    "resumed runs skip batches the recorder cannot see; "
-                    "start a fresh run to record"
+                    "resumed runs skip batches the recorder cannot see; start a fresh run to record"
                 )
             return super().train(resume_from_checkpoint, *args, **kwargs)
 

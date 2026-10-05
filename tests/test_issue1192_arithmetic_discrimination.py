@@ -10,8 +10,22 @@ from soup_cli.eval.forgetting import MINI_ARITHMETIC, _standalone_match, score_a
 # The multi-step rows that took the strong reference off the ceiling. Dropping
 # any of them (or restoring the v0.73.2 single-step set) fails this file.
 _HARD_ANSWERS = {
-    "1786", "69104", "16", "75", "32768", "26", "259200", "998001",
-    "31375", "120", "265", "90", "13717421", "360", "19/24", "20",
+    "1786",
+    "69104",
+    "16",
+    "75",
+    "32768",
+    "26",
+    "259200",
+    "998001",
+    "31375",
+    "120",
+    "265",
+    "90",
+    "13717421",
+    "360",
+    "19/24",
+    "20",
 }
 
 

@@ -107,8 +107,7 @@ def build_teacher_expert_capture_token(
     omitted_ids = set(range(vocab_size)) - set(selected_ids)
     tail_mass = math.fsum(math.exp(log_probabilities[token_id]) for token_id in omitted_ids)
     entropy = math.fsum(
-        -math.exp(log_probability) * log_probability
-        for log_probability in log_probabilities
+        -math.exp(log_probability) * log_probability for log_probability in log_probabilities
     )
 
     return CaptureToken(

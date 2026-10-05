@@ -30,17 +30,19 @@ from __future__ import annotations
 # Attention-projection module names (last FQN component). Covers the
 # separate-QKV Llama/Mistral/Qwen/Phi shape, GPT-2's fused ``c_attn``,
 # Phi-3 / GPT-NeoX fused variants, and encoder-style ``out_proj``.
-_ATTENTION_PROJ_NAMES: frozenset[str] = frozenset({
-    "q_proj",
-    "k_proj",
-    "v_proj",
-    "o_proj",
-    "out_proj",
-    "qkv_proj",
-    "c_attn",
-    "query_key_value",
-    "Wqkv",
-})
+_ATTENTION_PROJ_NAMES: frozenset[str] = frozenset(
+    {
+        "q_proj",
+        "k_proj",
+        "v_proj",
+        "o_proj",
+        "out_proj",
+        "qkv_proj",
+        "c_attn",
+        "query_key_value",
+        "Wqkv",
+    }
+)
 
 # NVIDIA Blackwell compute capability: SM 10.0 (B100 / B200 / GB200
 # datacenter) and SM 12.0 (RTX 50-series consumer). Anything >= 10 is
@@ -118,9 +120,7 @@ def validate_fp8_attention_compat(
     - ``backend == 'mlx'`` (MLX path has no FP8 attention kernel).
     """
     if not isinstance(fp8_attention, bool):
-        raise TypeError(
-            f"fp8_attention must be bool, got {type(fp8_attention).__name__}"
-        )
+        raise TypeError(f"fp8_attention must be bool, got {type(fp8_attention).__name__}")
     if not fp8_attention:
         return
     if isinstance(backend, bool):
@@ -136,9 +136,7 @@ def validate_fp8_attention_compat(
             f"(got quantization_aware={quantization_aware!r})"
         )
     if backend == "mlx":
-        raise ValueError(
-            "fp8_attention=true is not supported on backend=mlx"
-        )
+        raise ValueError("fp8_attention=true is not supported on backend=mlx")
     if backend == "unsloth":
         raise ValueError(
             "fp8_attention=true is not supported on backend=unsloth "
@@ -169,8 +167,7 @@ def validate_nvfp4_compat(
             raise ValueError(f"{name} must be a non-empty string")
     if backend == "mlx":
         raise ValueError(
-            "nvfp4=true is not supported on backend=mlx "
-            "(NVFP4 is CUDA-only — requires Blackwell)"
+            "nvfp4=true is not supported on backend=mlx (NVFP4 is CUDA-only — requires Blackwell)"
         )
     if backend == "unsloth":
         raise ValueError(
@@ -178,10 +175,7 @@ def validate_nvfp4_compat(
             f"({UNSLOTH_PRECISION_INCOMPATIBLE_REASON})"
         )
     if modality != "text":
-        raise ValueError(
-            f"nvfp4=true is wired for modality='text' only; "
-            f"got modality={modality!r}"
-        )
+        raise ValueError(f"nvfp4=true is wired for modality='text' only; got modality={modality!r}")
 
 
 def validate_unsloth_bnb_4bit_compat(
@@ -199,10 +193,7 @@ def validate_unsloth_bnb_4bit_compat(
       with the v0.38.0 Quant Menu formats which raise loudly at runtime).
     """
     if not isinstance(unsloth_bnb_4bit, bool):
-        raise TypeError(
-            f"unsloth_bnb_4bit must be bool, "
-            f"got {type(unsloth_bnb_4bit).__name__}"
-        )
+        raise TypeError(f"unsloth_bnb_4bit must be bool, got {type(unsloth_bnb_4bit).__name__}")
     if not unsloth_bnb_4bit:
         return
     for name, value in (("backend", backend), ("quantization", quantization)):
@@ -212,13 +203,11 @@ def validate_unsloth_bnb_4bit_compat(
             raise ValueError(f"{name} must be a non-empty string")
     if backend != "unsloth":
         raise ValueError(
-            f"unsloth_bnb_4bit=true requires backend='unsloth'; "
-            f"got backend={backend!r}"
+            f"unsloth_bnb_4bit=true requires backend='unsloth'; got backend={backend!r}"
         )
     if quantization != "4bit":
         raise ValueError(
-            f"unsloth_bnb_4bit=true requires quantization='4bit'; "
-            f"got quantization={quantization!r}"
+            f"unsloth_bnb_4bit=true requires quantization='4bit'; got quantization={quantization!r}"
         )
 
 
@@ -367,10 +356,7 @@ def apply_nvfp4(model: object) -> int:
 
     import torch.nn as nn
 
-    linear_count = sum(
-        1 for _fqn, module in model.named_modules()
-        if isinstance(module, nn.Linear)
-    )
+    linear_count = sum(1 for _fqn, module in model.named_modules() if isinstance(module, nn.Linear))
     try:
         quantize_(model, training_config())
     except Exception as exc:  # noqa: BLE001 — in-place mutation honesty

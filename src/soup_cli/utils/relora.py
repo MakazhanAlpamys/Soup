@@ -41,9 +41,7 @@ class ReLoRAPolicy:
         # Mirror magnitude_prune_tensor's strict (0, 1) bound. prune_ratio=1.0
         # would zero every weight on first fire — that's a footgun, not a feature.
         if not (0.0 < self.prune_ratio < 1.0):
-            raise ValueError(
-                f"ReLoRAPolicy.prune_ratio must be in (0, 1), got {self.prune_ratio}"
-            )
+            raise ValueError(f"ReLoRAPolicy.prune_ratio must be in (0, 1), got {self.prune_ratio}")
 
     def should_fire(self, global_step: int, total_steps: Optional[int] = None) -> bool:
         if global_step <= 0:
@@ -67,9 +65,7 @@ def magnitude_prune_tensor(tensor: Any, prune_ratio: float) -> Any:
     pruned); retained so the exact keep-count under ties stays tested.
     """
     if not (0.0 < prune_ratio < 1.0):
-        raise ValueError(
-            f"magnitude_prune_tensor prune_ratio must be in (0, 1), got {prune_ratio}"
-        )
+        raise ValueError(f"magnitude_prune_tensor prune_ratio must be in (0, 1), got {prune_ratio}")
     import torch  # lazy
 
     if not isinstance(tensor, torch.Tensor):
@@ -119,8 +115,7 @@ def _require_writable_base(base_weight: Any) -> Any:
         )
     if not base_weight.is_floating_point():
         raise RuntimeError(
-            "ReLoRA restart requires a floating-point base weight "
-            f"(got dtype={base_weight.dtype})."
+            f"ReLoRA restart requires a floating-point base weight (got dtype={base_weight.dtype})."
         )
     return base_weight
 
@@ -161,17 +156,14 @@ def _resolve_base_weight(module: Any) -> Any:
         return module.base.weight
     if hasattr(module, "weight") and not hasattr(module, "lora_embedding_A"):
         return module.weight
-    raise RuntimeError(
-        f"ReLoRA could not locate a base weight on module {type(module).__name__}"
-    )
+    raise RuntimeError(f"ReLoRA could not locate a base weight on module {type(module).__name__}")
 
 
 def _compute_delta(module: Any, adapter: str) -> Any:
     get_delta_weight = getattr(module, "get_delta_weight", None)
     if get_delta_weight is None:
         raise RuntimeError(
-            f"ReLoRA module {type(module).__name__} does not expose PEFT "
-            "`get_delta_weight`"
+            f"ReLoRA module {type(module).__name__} does not expose PEFT `get_delta_weight`"
         )
     return get_delta_weight(adapter)
 
@@ -334,9 +326,7 @@ class _ReLoRACallback_body:  # type: ignore[misc]  # noqa: N801
         self.fire_count += 1
         if self.console is not None:
             try:
-                self.console.print(
-                    f"[yellow]ReLoRA[/yellow] restart at step {global_step}"
-                )
+                self.console.print(f"[yellow]ReLoRA[/yellow] restart at step {global_step}")
             except Exception:  # noqa: BLE001
                 pass
         return control
@@ -362,11 +352,7 @@ class _ReLoRACallback_body:  # type: ignore[misc]  # noqa: N801
             pg["lr"] = target * frac
 
     def _maybe_advance_lr_warmup(self, optimizer: Any) -> None:
-        if (
-            optimizer is None
-            or self._warmup_steps_total is None
-            or self._warmup_target_lrs is None
-        ):
+        if optimizer is None or self._warmup_steps_total is None or self._warmup_target_lrs is None:
             return
         if self._warmup_steps_done >= self._warmup_steps_total:
             return

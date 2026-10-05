@@ -36,7 +36,6 @@ def _clean(output: str) -> str:
     return re.sub(r"\s+", " ", re.sub(r"\[[0-9;]*m", "", output))
 
 
-
 # --------------------------------------------------------------------------- #
 # Compliance init templates
 # --------------------------------------------------------------------------- #
@@ -99,22 +98,33 @@ def _make_entry(db_path, *, notes=None, with_eval=False, with_artifact=None, par
         parent_id = None
         if parent:
             parent_id = store.push(
-                name="base-run", tag="v1", base_model="Qwen/Qwen2.5-7B-Instruct",
-                task="sft", run_id=None, config={"base": "Qwen/Qwen2.5-7B-Instruct"},
+                name="base-run",
+                tag="v1",
+                base_model="Qwen/Qwen2.5-7B-Instruct",
+                task="sft",
+                run_id=None,
+                config={"base": "Qwen/Qwen2.5-7B-Instruct"},
                 notes=None,
             )
         eid = store.push(
-            name="phi-model", tag="v1", base_model="Qwen/Qwen2.5-7B-Instruct",
-            task="sft", run_id=None,
-            config={"base": "Qwen/Qwen2.5-7B-Instruct", "task": "sft",
-                    "training": {"epochs": 3, "lr": 2e-5}},
+            name="phi-model",
+            tag="v1",
+            base_model="Qwen/Qwen2.5-7B-Instruct",
+            task="sft",
+            run_id=None,
+            config={
+                "base": "Qwen/Qwen2.5-7B-Instruct",
+                "task": "sft",
+                "training": {"epochs": 3, "lr": 2e-5},
+            },
             notes=notes,
         )
         if parent_id:
             store.add_lineage(child_id=eid, parent_id=parent_id, relation="forked_from")
         if with_artifact is not None:
-            store.add_artifact(entry_id=eid, kind=with_artifact[0],
-                               path=with_artifact[1], enforce_cwd=True)
+            store.add_artifact(
+                entry_id=eid, kind=with_artifact[0], path=with_artifact[1], enforce_cwd=True
+            )
     return eid
 
 
@@ -123,12 +133,23 @@ class TestBuildModelCard:
         from soup_cli.commands.card import build_model_card
 
         entry = {
-            "id": "reg_x", "name": "my-model", "base_model": "Qwen/Qwen2.5-7B-Instruct",
-            "task": "sft", "created_at": "2026-07-15T00:00:00", "notes": "clean run",
-            "config_hash": "a" * 64, "data_hash": "b" * 64, "run_id": None,
+            "id": "reg_x",
+            "name": "my-model",
+            "base_model": "Qwen/Qwen2.5-7B-Instruct",
+            "task": "sft",
+            "created_at": "2026-07-15T00:00:00",
+            "notes": "clean run",
+            "config_hash": "a" * 64,
+            "data_hash": "b" * 64,
+            "run_id": None,
             "tags": ["prod"],
-            "config_json": json.dumps({"base": "Qwen/Qwen2.5-7B-Instruct", "task": "sft",
-                                       "training": {"epochs": 3, "lr": 2e-5}}),
+            "config_json": json.dumps(
+                {
+                    "base": "Qwen/Qwen2.5-7B-Instruct",
+                    "task": "sft",
+                    "training": {"epochs": 3, "lr": 2e-5},
+                }
+            ),
         }
         md = build_model_card(entry, [], [], [])
         assert md.startswith("---")  # YAML frontmatter
@@ -140,9 +161,16 @@ class TestBuildModelCard:
         from soup_cli.commands.card import build_model_card
 
         entry = {
-            "id": "reg_x", "name": "m", "base_model": "b", "task": "sft",
-            "created_at": "t", "notes": "<script>alert(1)</script>",
-            "config_hash": "", "data_hash": "", "run_id": None, "tags": [],
+            "id": "reg_x",
+            "name": "m",
+            "base_model": "b",
+            "task": "sft",
+            "created_at": "t",
+            "notes": "<script>alert(1)</script>",
+            "config_hash": "",
+            "data_hash": "",
+            "run_id": None,
+            "tags": [],
             "config_json": "{}",
         }
         md = build_model_card(entry, [], [], [])
@@ -153,9 +181,17 @@ class TestBuildModelCard:
         from soup_cli.commands.card import build_model_card
 
         entry = {
-            "id": "r", "name": "m", "base_model": "b", "task": "sft",
-            "created_at": "t", "notes": None, "config_hash": "", "data_hash": "",
-            "run_id": "run1", "tags": [], "config_json": "{}",
+            "id": "r",
+            "name": "m",
+            "base_model": "b",
+            "task": "sft",
+            "created_at": "t",
+            "notes": None,
+            "config_hash": "",
+            "data_hash": "",
+            "run_id": "run1",
+            "tags": [],
+            "config_json": "{}",
         }
         evals = [{"benchmark": "mmlu", "score": 0.61}]
         md = build_model_card(entry, [], evals, [])
@@ -168,9 +204,16 @@ class TestBuildModelCard:
         from soup_cli.commands.card import build_model_card
 
         entry = {
-            "id": "r", "name": "m", "base_model": 'evil"\ninjected: true',
-            "task": "sft", "created_at": "t", "notes": None,
-            "config_hash": "", "data_hash": "", "run_id": None, "tags": [],
+            "id": "r",
+            "name": "m",
+            "base_model": 'evil"\ninjected: true',
+            "task": "sft",
+            "created_at": "t",
+            "notes": None,
+            "config_hash": "",
+            "data_hash": "",
+            "run_id": None,
+            "tags": [],
             "config_json": "{}",
         }
         md = build_model_card(entry, [], [], [])
@@ -290,7 +333,7 @@ class TestRenderWorkflow:
             evidence_path="ev.json",
         )
         yaml.safe_load(body)  # must parse
-        assert '3.11' in body
+        assert "3.11" in body
         # `on:` parses to True in YAML 1.1 (the "Norway problem"); assert via body
         assert "pull_request" in body
 
@@ -312,7 +355,9 @@ class TestRenderWorkflow:
 
         with pytest.raises((ValueError, TypeError)):
             render_soup_gate_workflow(
-                data_path=bad, suite_path="s.yaml", evidence_path="e.json",
+                data_path=bad,
+                suite_path="s.yaml",
+                evidence_path="e.json",
             )
 
     @pytest.mark.parametrize("bad_py", ["3", "3.x", "3.11; rm", "abc"])
@@ -321,7 +366,9 @@ class TestRenderWorkflow:
 
         with pytest.raises(ValueError):
             render_soup_gate_workflow(
-                data_path="d.jsonl", suite_path="s.yaml", evidence_path="e.json",
+                data_path="d.jsonl",
+                suite_path="s.yaml",
+                evidence_path="e.json",
                 python_version=bad_py,
             )
 
@@ -331,7 +378,9 @@ class TestRenderWorkflow:
 
         with pytest.raises(ValueError):
             render_soup_gate_workflow(
-                data_path="d.jsonl", suite_path="s.yaml", evidence_path="e.json",
+                data_path="d.jsonl",
+                suite_path="s.yaml",
+                evidence_path="e.json",
                 branch=bad_branch,
             )
 
@@ -386,7 +435,9 @@ class TestCodeReviewFixes:
         from soup_cli.utils.ci_workflow import render_soup_gate_workflow
 
         body = render_soup_gate_workflow(
-            data_path="d.jsonl", suite_path="s.yaml", evidence_path="e.json",
+            data_path="d.jsonl",
+            suite_path="s.yaml",
+            evidence_path="e.json",
         )
         assert "pip install -e" not in body
         assert "pip install soup-cli" in body
@@ -396,9 +447,16 @@ class TestCodeReviewFixes:
         from soup_cli.commands.card import build_model_card
 
         entry = {
-            "id": "r", "name": "m", "base_model": 'we"ird/model',
-            "task": "sft", "created_at": "t", "notes": None,
-            "config_hash": "", "data_hash": "", "run_id": None, "tags": [],
+            "id": "r",
+            "name": "m",
+            "base_model": 'we"ird/model',
+            "task": "sft",
+            "created_at": "t",
+            "notes": None,
+            "config_hash": "",
+            "data_hash": "",
+            "run_id": None,
+            "tags": [],
             "config_json": "{}",
         }
         md = build_model_card(entry, [{"kind": "adapter", "path": "a", "sha256": "x"}], [], [])
@@ -416,15 +474,25 @@ class TestSecurityReviewFixes:
         the code span) into a card published to the public HF Hub."""
         from soup_cli.commands.card import build_model_card
 
-        hostile = '` </code><script>alert(1)</script><code> `'
+        hostile = "` </code><script>alert(1)</script><code> `"
         entry = {
-            "id": "r", "name": "m", "base_model": "safe/base", "task": "sft",
-            "created_at": "t", "notes": None, "config_hash": "", "data_hash": "",
-            "run_id": None, "tags": [],
-            "config_json": json.dumps({
-                "base": hostile, "task": "sft",
-                "training": {"epochs": 1, "scheduler": "<img src=x onerror=alert(1)>"},
-            }),
+            "id": "r",
+            "name": "m",
+            "base_model": "safe/base",
+            "task": "sft",
+            "created_at": "t",
+            "notes": None,
+            "config_hash": "",
+            "data_hash": "",
+            "run_id": None,
+            "tags": [],
+            "config_json": json.dumps(
+                {
+                    "base": hostile,
+                    "task": "sft",
+                    "training": {"epochs": 1, "scheduler": "<img src=x onerror=alert(1)>"},
+                }
+            ),
         }
         md = build_model_card(entry, [], [], [])
         # The security property is that no HTML TAG survives — angle brackets and
@@ -454,9 +522,16 @@ class TestSecurityReviewFixes:
         from soup_cli.commands.card import _MAX_NOTES_CHARS, build_model_card
 
         entry = {
-            "id": "r", "name": "m", "base_model": "b", "task": "sft",
-            "created_at": "t", "notes": "A" * (_MAX_NOTES_CHARS + 5_000),
-            "config_hash": "", "data_hash": "", "run_id": None, "tags": [],
+            "id": "r",
+            "name": "m",
+            "base_model": "b",
+            "task": "sft",
+            "created_at": "t",
+            "notes": "A" * (_MAX_NOTES_CHARS + 5_000),
+            "config_hash": "",
+            "data_hash": "",
+            "run_id": None,
+            "tags": [],
             "config_json": "{}",
         }
         md = build_model_card(entry, [], [], [])
@@ -466,13 +541,20 @@ class TestSecurityReviewFixes:
         from soup_cli.commands.card import _MAX_ROWS, build_model_card
 
         arts = [
-            {"kind": "gguf", "path": f"m{i}.gguf", "sha256": "x"}
-            for i in range(_MAX_ROWS + 50)
+            {"kind": "gguf", "path": f"m{i}.gguf", "sha256": "x"} for i in range(_MAX_ROWS + 50)
         ]
         entry = {
-            "id": "r", "name": "m", "base_model": "b", "task": "sft",
-            "created_at": "t", "notes": None, "config_hash": "", "data_hash": "",
-            "run_id": None, "tags": [], "config_json": "{}",
+            "id": "r",
+            "name": "m",
+            "base_model": "b",
+            "task": "sft",
+            "created_at": "t",
+            "notes": None,
+            "config_hash": "",
+            "data_hash": "",
+            "run_id": None,
+            "tags": [],
+            "config_json": "{}",
         }
         md = build_model_card(entry, arts, [], [])
         assert f"m{_MAX_ROWS + 10}.gguf" not in md  # beyond the cap
@@ -498,7 +580,9 @@ class TestSecurityReviewFixes:
         monkeypatch.chdir(work)
         with pytest.raises(ValueError):
             write_soup_gate_workflow(
-                data_path="d.jsonl", suite_path="s.yaml", evidence_path="e.json",
+                data_path="d.jsonl",
+                suite_path="s.yaml",
+                evidence_path="e.json",
                 output_path="../escape.yml",
             )
 
@@ -531,12 +615,11 @@ class TestPushCardIntegration:
         fake_api = MagicMock()
         monkeypatch.setattr("soup_cli.utils.hf.get_hf_api", lambda **_: fake_api)
 
-        result = runner.invoke(
-            app, ["push", "--model", "out", "--repo", "user/m", "--card", eid]
-        )
+        result = runner.invoke(app, ["push", "--model", "out", "--repo", "user/m", "--card", eid])
         assert result.exit_code == 0, (result.output, repr(result.exception))
         readme_calls = [
-            c for c in fake_api.upload_file.call_args_list
+            c
+            for c in fake_api.upload_file.call_args_list
             if c.kwargs.get("path_in_repo") == "README.md"
         ]
         assert readme_calls, fake_api.upload_file.call_args_list
@@ -584,8 +667,7 @@ class TestPushCardIntegration:
         monkeypatch.setattr("soup_cli.utils.hubs.upload_repo", _fake_upload_repo)
         result = runner.invoke(
             app,
-            ["push", "--model", "out", "--repo", "user/m", "--hub", "modelscope",
-             "--card", eid],
+            ["push", "--model", "out", "--repo", "user/m", "--hub", "modelscope", "--card", eid],
         )
         assert result.exit_code == 0, (result.output, repr(result.exception))
         assert "HF-only" in _clean(result.output)
@@ -659,9 +741,17 @@ class TestBuildModelCardEdges:
         from soup_cli.commands.card import build_model_card
 
         entry = {
-            "id": "r", "name": "m", "base_model": "b", "task": "sft",
-            "created_at": "t", "notes": None, "config_hash": "", "data_hash": "",
-            "run_id": "run1", "tags": [], "config_json": "{}",
+            "id": "r",
+            "name": "m",
+            "base_model": "b",
+            "task": "sft",
+            "created_at": "t",
+            "notes": None,
+            "config_hash": "",
+            "data_hash": "",
+            "run_id": "run1",
+            "tags": [],
+            "config_json": "{}",
         }
         evals = [
             {"benchmark": None, "score": 0.5},
@@ -676,9 +766,17 @@ class TestBuildModelCardEdges:
         from soup_cli.commands.card import build_model_card
 
         entry = {
-            "id": "r", "name": "m", "base_model": "b", "task": "sft",
-            "created_at": "t", "notes": None, "config_hash": "", "data_hash": "",
-            "run_id": "run1", "tags": [], "config_json": "{}",
+            "id": "r",
+            "name": "m",
+            "base_model": "b",
+            "task": "sft",
+            "created_at": "t",
+            "notes": None,
+            "config_hash": "",
+            "data_hash": "",
+            "run_id": "run1",
+            "tags": [],
+            "config_json": "{}",
         }
         # ExperimentTracker returns rows newest first; card must not let the
         # older row overwrite the newest score.
@@ -695,9 +793,17 @@ class TestBuildModelCardEdges:
         from soup_cli.commands.card import build_model_card
 
         entry = {
-            "id": "r", "name": "m", "base_model": "b", "task": "sft",
-            "created_at": "t", "notes": None, "config_hash": "", "data_hash": "",
-            "run_id": "run1", "tags": [], "config_json": "{}",
+            "id": "r",
+            "name": "m",
+            "base_model": "b",
+            "task": "sft",
+            "created_at": "t",
+            "notes": None,
+            "config_hash": "",
+            "data_hash": "",
+            "run_id": "run1",
+            "tags": [],
+            "config_json": "{}",
         }
         evals = [
             {"benchmark": "mmlu", "score": 0.9, "created_at": "2026-01-01", "id": 2},
@@ -714,9 +820,17 @@ class TestBuildModelCardEdges:
         from soup_cli.commands.card import _MAX_ROWS, build_model_card
 
         entry = {
-            "id": "r", "name": "m", "base_model": "b", "task": "sft",
-            "created_at": "t", "notes": None, "config_hash": "", "data_hash": "",
-            "run_id": "run1", "tags": [], "config_json": "{}",
+            "id": "r",
+            "name": "m",
+            "base_model": "b",
+            "task": "sft",
+            "created_at": "t",
+            "notes": None,
+            "config_hash": "",
+            "data_hash": "",
+            "run_id": "run1",
+            "tags": [],
+            "config_json": "{}",
         }
         noise = [
             {"benchmark": "noise", "score": 0.5, "created_at": "2026-02-01", "id": 1000 - i}
@@ -730,13 +844,25 @@ class TestBuildModelCardEdges:
         from soup_cli.commands.card import _MAX_ROWS, build_model_card
 
         entry = {
-            "id": "r", "name": "m", "base_model": "b", "task": "sft",
-            "created_at": "t", "notes": None, "config_hash": "", "data_hash": "",
-            "run_id": "run1", "tags": [], "config_json": "{}",
+            "id": "r",
+            "name": "m",
+            "base_model": "b",
+            "task": "sft",
+            "created_at": "t",
+            "notes": None,
+            "config_hash": "",
+            "data_hash": "",
+            "run_id": "run1",
+            "tags": [],
+            "config_json": "{}",
         }
         evals = [
-            {"benchmark": f"bench{index:04d}", "score": 0.5,
-             "created_at": "2026-01-01", "id": 10_000 - index}
+            {
+                "benchmark": f"bench{index:04d}",
+                "score": 0.5,
+                "created_at": "2026-01-01",
+                "id": 10_000 - index,
+            }
             for index in range(_MAX_ROWS + 50)
         ]
         md = build_model_card(entry, [], evals, [])
@@ -749,9 +875,17 @@ class TestBuildModelCardEdges:
         from soup_cli.experiment.tracker import ExperimentTracker
 
         entry = {
-            "id": "r", "name": "m", "base_model": "b", "task": "sft",
-            "created_at": "t", "notes": None, "config_hash": "", "data_hash": "",
-            "run_id": "run1", "tags": [], "config_json": "{}",
+            "id": "r",
+            "name": "m",
+            "base_model": "b",
+            "task": "sft",
+            "created_at": "t",
+            "notes": None,
+            "config_hash": "",
+            "data_hash": "",
+            "run_id": "run1",
+            "tags": [],
+            "config_json": "{}",
         }
         tracker = ExperimentTracker(db_path=tmp_path / "exp.db")
         tracker.save_eval_result("model", "mmlu", 0.30, {}, run_id="run1")
@@ -766,9 +900,17 @@ class TestBuildModelCardEdges:
         from soup_cli.commands.card import build_model_card
 
         entry = {
-            "id": "r", "name": "m", "base_model": "b", "task": "sft",
-            "created_at": "t", "notes": None, "config_hash": "", "data_hash": "",
-            "run_id": None, "tags": [], "config_json": "not json{{",
+            "id": "r",
+            "name": "m",
+            "base_model": "b",
+            "task": "sft",
+            "created_at": "t",
+            "notes": None,
+            "config_hash": "",
+            "data_hash": "",
+            "run_id": None,
+            "tags": [],
+            "config_json": "not json{{",
         }
         md = build_model_card(entry, [], [], [])
         assert "# m" in md
@@ -797,7 +939,9 @@ class TestCiWorkflowEdges:
 
         with pytest.raises(TypeError):
             write_soup_gate_workflow(
-                data_path="d.jsonl", suite_path="s.yaml", evidence_path="e.json",
+                data_path="d.jsonl",
+                suite_path="s.yaml",
+                evidence_path="e.json",
                 overwrite="yes",
             )
 
@@ -807,7 +951,9 @@ class TestCiWorkflowEdges:
 
         with pytest.raises((ValueError, TypeError)):
             write_soup_gate_workflow(
-                data_path="d.jsonl", suite_path="s.yaml", evidence_path="e.json",
+                data_path="d.jsonl",
+                suite_path="s.yaml",
+                evidence_path="e.json",
                 output_path=bad_out,
             )
 
@@ -820,7 +966,9 @@ class TestCiWorkflowEdges:
         monkeypatch.setattr(ci_workflow, "_MAX_FILE_BYTES", 10)
         with pytest.raises(ValueError, match="cap"):
             ci_workflow.write_soup_gate_workflow(
-                data_path="d.jsonl", suite_path="s.yaml", evidence_path="e.json",
+                data_path="d.jsonl",
+                suite_path="s.yaml",
+                evidence_path="e.json",
             )
 
     @pytest.mark.requires_symlink
@@ -835,8 +983,11 @@ class TestCiWorkflowEdges:
         link.symlink_to(target)
         with pytest.raises(ValueError):
             write_soup_gate_workflow(
-                data_path="d.jsonl", suite_path="s.yaml", evidence_path="e.json",
-                output_path="link.yml", overwrite=True,
+                data_path="d.jsonl",
+                suite_path="s.yaml",
+                evidence_path="e.json",
+                output_path="link.yml",
+                overwrite=True,
             )
 
     def test_ci_init_bad_python_names_the_problem(self, tmp_path, monkeypatch):
@@ -857,17 +1008,23 @@ class TestAdapterInference:
 
     def _entry(self, config):
         return {
-            "id": "r", "name": "m", "base_model": "b", "task": "sft",
-            "created_at": "t", "notes": None, "config_hash": "", "data_hash": "",
-            "run_id": None, "tags": [], "config_json": json.dumps(config),
+            "id": "r",
+            "name": "m",
+            "base_model": "b",
+            "task": "sft",
+            "created_at": "t",
+            "notes": None,
+            "config_hash": "",
+            "data_hash": "",
+            "run_id": None,
+            "tags": [],
+            "config_json": json.dumps(config),
         }
 
     def test_lora_config_without_artifacts_is_adapter(self):
         from soup_cli.commands.card import build_model_card
 
-        md = build_model_card(
-            self._entry({"training": {"lora": {"r": 4, "alpha": 8}}}), [], [], []
-        )
+        md = build_model_card(self._entry({"training": {"lora": {"r": 4, "alpha": 8}}}), [], [], [])
         assert "LoRA adapter" in md
         assert "library_name: peft" in md
         assert "Full model" not in md
@@ -890,7 +1047,9 @@ class TestAdapterInference:
 
         md = build_model_card(
             self._entry({"training": {}}),
-            [{"kind": "adapter", "path": "a", "sha256": "x"}], [], [],
+            [{"kind": "adapter", "path": "a", "sha256": "x"}],
+            [],
+            [],
         )
         assert "LoRA adapter" in md
 
@@ -900,7 +1059,9 @@ class TestAdapterInference:
 
         md = build_model_card(
             self._entry({"training": {"lora": {"r": 8}}}),
-            [{"kind": "merged", "path": "m", "sha256": "x"}], [], [],
+            [{"kind": "merged", "path": "m", "sha256": "x"}],
+            [],
+            [],
         )
         assert "Full model" in md
 
@@ -910,8 +1071,10 @@ class TestAdapterInference:
         from soup_cli.commands.card import build_model_card
 
         md = build_model_card(
-            self._entry({"training": {"unfrozen_parameters": ["q_proj"],
-                                      "lora": {"r": 8}}}), [], [], [],
+            self._entry({"training": {"unfrozen_parameters": ["q_proj"], "lora": {"r": 8}}}),
+            [],
+            [],
+            [],
         )
         assert "Full model" in md
 
@@ -919,7 +1082,10 @@ class TestAdapterInference:
         from soup_cli.commands.card import build_model_card
 
         md = build_model_card(
-            self._entry({"training": {"lisa_enabled": True, "lora": {"r": 8}}}), [], [], [],
+            self._entry({"training": {"lisa_enabled": True, "lora": {"r": 8}}}),
+            [],
+            [],
+            [],
         )
         assert "Full model" in md
 
@@ -993,8 +1159,10 @@ class TestGgufWindowsFixes:
 
         def _fake_run(cmd, **kwargs):
             calls["cmd"] = cmd
+
             class R:
                 returncode = 0
+
             return R()
 
         monkeypatch.setattr(export_mod.subprocess, "run", _fake_run)
@@ -1041,7 +1209,7 @@ class TestOllamaModelfileAbsolutePath:
         body = create_modelfile("m.q8_0.gguf")  # relative input
         from_line = body.splitlines()[0]
         assert from_line.startswith("FROM ")
-        emitted = from_line[len("FROM "):]
+        emitted = from_line[len("FROM ") :]
         assert os.path.isabs(emitted), emitted
         assert emitted.endswith("m.q8_0.gguf")
 
@@ -1051,7 +1219,7 @@ class TestOllamaModelfileAbsolutePath:
         gguf = tmp_path / "m.gguf"
         gguf.write_text("stub", encoding="utf-8")
         body = create_modelfile(str(gguf))
-        assert os.path.isabs(body.splitlines()[0][len("FROM "):])
+        assert os.path.isabs(body.splitlines()[0][len("FROM ") :])
 
     def test_other_directives_still_render(self, tmp_path, monkeypatch):
         from soup_cli.utils.ollama import create_modelfile
@@ -1122,8 +1290,15 @@ class TestBomAttestRegistryKinds:
         att = tmp_path / "m.attest.json"
         att.write_text("{}", encoding="utf-8")
         with RegistryStore(db_path=db) as store:
-            eid = store.push(name="m", tag="v1", base_model="b", task="sft",
-                             run_id=None, config={"base": "b"}, notes=None)
+            eid = store.push(
+                name="m",
+                tag="v1",
+                base_model="b",
+                task="sft",
+                run_id=None,
+                config={"base": "b"},
+                notes=None,
+            )
             store.add_artifact(entry_id=eid, kind="bom", path=str(bom))
             store.add_artifact(entry_id=eid, kind="attestation", path=str(att))
             kinds = {a["kind"] for a in store.get_artifacts(eid)}
@@ -1137,11 +1312,25 @@ class TestBomAttestRegistryKinds:
         eid = _make_entry(db)
         monkeypatch.setenv("SOUP_REGISTRY_DB_PATH", str(db))
         monkeypatch.chdir(tmp_path)
-        result = runner.invoke(app, [
-            "bom", "emit", "--name", "m", "--base-model", "b",
-            "--base-sha", _SHA64_A, "--config-sha", _SHA64_B,
-            "-o", "bom.cdx.json", "--attach-to-registry", eid,
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "bom",
+                "emit",
+                "--name",
+                "m",
+                "--base-model",
+                "b",
+                "--base-sha",
+                _SHA64_A,
+                "--config-sha",
+                _SHA64_B,
+                "-o",
+                "bom.cdx.json",
+                "--attach-to-registry",
+                eid,
+            ],
+        )
         assert result.exit_code == 0, (result.output, repr(result.exception))
         with RegistryStore(db_path=db) as store:
             arts = store.get_artifacts(eid)
@@ -1156,11 +1345,27 @@ class TestBomAttestRegistryKinds:
         eid = _make_entry(db)
         monkeypatch.setenv("SOUP_REGISTRY_DB_PATH", str(db))
         monkeypatch.chdir(tmp_path)
-        result = runner.invoke(app, [
-            "bom", "emit", "--name", "m", "--base-model", "b",
-            "--base-sha", _SHA64_A, "--config-sha", _SHA64_B,
-            "--format", "both", "-o", "bom", "--attach-to-registry", eid,
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "bom",
+                "emit",
+                "--name",
+                "m",
+                "--base-model",
+                "b",
+                "--base-sha",
+                _SHA64_A,
+                "--config-sha",
+                _SHA64_B,
+                "--format",
+                "both",
+                "-o",
+                "bom",
+                "--attach-to-registry",
+                eid,
+            ],
+        )
         assert result.exit_code == 0, (result.output, repr(result.exception))
         with RegistryStore(db_path=db) as store:
             names = sorted(os.path.basename(a["path"]) for a in store.get_artifacts(eid))
@@ -1174,11 +1379,23 @@ class TestBomAttestRegistryKinds:
         eid = _make_entry(db)
         monkeypatch.setenv("SOUP_REGISTRY_DB_PATH", str(db))
         monkeypatch.chdir(tmp_path)
-        result = runner.invoke(app, [
-            "bom", "emit", "--name", "m", "--base-model", "b",
-            "--base-sha", _SHA64_A, "--config-sha", _SHA64_B,
-            "--attach-to-registry", eid,  # no --output -> nothing to attach
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "bom",
+                "emit",
+                "--name",
+                "m",
+                "--base-model",
+                "b",
+                "--base-sha",
+                _SHA64_A,
+                "--config-sha",
+                _SHA64_B,
+                "--attach-to-registry",
+                eid,  # no --output -> nothing to attach
+            ],
+        )
         assert result.exit_code == 2, (result.output, repr(result.exception))
         assert "attach-to-registry needs --output" in _clean(result.output)
         with RegistryStore(db_path=db) as store:
@@ -1192,10 +1409,23 @@ class TestBomAttestRegistryKinds:
         eid = _make_entry(db)
         monkeypatch.setenv("SOUP_REGISTRY_DB_PATH", str(db))
         monkeypatch.chdir(tmp_path)
-        result = runner.invoke(app, [
-            "attest", "emit", "--stage", "train", "--subject", "m",
-            "--sha", _SHA64_C, "-o", "att.json", "--attach-to-registry", eid,
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "attest",
+                "emit",
+                "--stage",
+                "train",
+                "--subject",
+                "m",
+                "--sha",
+                _SHA64_C,
+                "-o",
+                "att.json",
+                "--attach-to-registry",
+                eid,
+            ],
+        )
         assert result.exit_code == 0, (result.output, repr(result.exception))
         with RegistryStore(db_path=db) as store:
             arts = store.get_artifacts(eid)
@@ -1220,15 +1450,32 @@ class TestBomAttestRegistryKinds:
                 "public_key": "public",
             },
         )
-        result = runner.invoke(app, [
-            "attest", "emit", "--stage", "train", "--subject", "m",
-            "--sha", _SHA64_C, "--sign", "ed25519", "--key", "key.pem",
-            "-o", "signed.attest.json", "--attach-to-registry", eid,
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "attest",
+                "emit",
+                "--stage",
+                "train",
+                "--subject",
+                "m",
+                "--sha",
+                _SHA64_C,
+                "--sign",
+                "ed25519",
+                "--key",
+                "key.pem",
+                "-o",
+                "signed.attest.json",
+                "--attach-to-registry",
+                eid,
+            ],
+        )
         assert result.exit_code == 0, (result.output, repr(result.exception))
         with RegistryStore(db_path=db) as store:
-            paths = sorted(os.path.basename(artifact["path"])
-                           for artifact in store.get_artifacts(eid))
+            paths = sorted(
+                os.path.basename(artifact["path"]) for artifact in store.get_artifacts(eid)
+            )
         assert paths == ["signed.attest.json", "signed.attest.json.sig"]
 
     def test_attest_emit_attach_without_output_is_usage_error(self, tmp_path, monkeypatch):
@@ -1239,46 +1486,97 @@ class TestBomAttestRegistryKinds:
         eid = _make_entry(db)
         monkeypatch.setenv("SOUP_REGISTRY_DB_PATH", str(db))
         monkeypatch.chdir(tmp_path)
-        result = runner.invoke(app, [
-            "attest", "emit", "--stage", "train", "--subject", "m",
-            "--sha", _SHA64_C, "--attach-to-registry", eid,
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "attest",
+                "emit",
+                "--stage",
+                "train",
+                "--subject",
+                "m",
+                "--sha",
+                _SHA64_C,
+                "--attach-to-registry",
+                eid,
+            ],
+        )
         assert result.exit_code == 2, (result.output, repr(result.exception))
         assert "attach-to-registry needs --output" in _clean(result.output)
         with RegistryStore(db_path=db) as store:
             assert store.get_artifacts(eid) == []
 
-    @pytest.mark.parametrize("command_args,output_name", [
-        ([
-            "bom", "emit", "--name", "m", "--base-model", "b",
-            "--base-sha", _SHA64_A, "--config-sha", _SHA64_B,
-        ], "failed.bom.json"),
-        ([
-            "attest", "emit", "--stage", "train", "--subject", "m",
-            "--sha", _SHA64_C,
-        ], "failed.attest.json"),
-    ])
+    @pytest.mark.parametrize(
+        "command_args,output_name",
+        [
+            (
+                [
+                    "bom",
+                    "emit",
+                    "--name",
+                    "m",
+                    "--base-model",
+                    "b",
+                    "--base-sha",
+                    _SHA64_A,
+                    "--config-sha",
+                    _SHA64_B,
+                ],
+                "failed.bom.json",
+            ),
+            (
+                [
+                    "attest",
+                    "emit",
+                    "--stage",
+                    "train",
+                    "--subject",
+                    "m",
+                    "--sha",
+                    _SHA64_C,
+                ],
+                "failed.attest.json",
+            ),
+        ],
+    )
     def test_emit_registry_failure_exits_one_and_preserves_output(
-        self, tmp_path, monkeypatch, command_args, output_name,
+        self,
+        tmp_path,
+        monkeypatch,
+        command_args,
+        output_name,
     ):
         from soup_cli.cli import app
 
         monkeypatch.setenv("SOUP_REGISTRY_DB_PATH", str(tmp_path / "reg.db"))
         monkeypatch.chdir(tmp_path)
-        result = runner.invoke(app, [
-            *command_args, "--output", output_name,
-            "--attach-to-registry", "missing-entry",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                *command_args,
+                "--output",
+                output_name,
+                "--attach-to-registry",
+                "missing-entry",
+            ],
+        )
         assert result.exit_code == 1, (result.output, repr(result.exception))
         assert "could not attach to registry" in _clean(result.output)
         assert (tmp_path / output_name).is_file()
 
-    @pytest.mark.parametrize("command_module,helper_name", [
-        ("soup_cli.commands.attest", "_attach_attestation"),
-        ("soup_cli.commands.bom", "_attach_bom"),
-    ])
+    @pytest.mark.parametrize(
+        "command_module,helper_name",
+        [
+            ("soup_cli.commands.attest", "_attach_attestation"),
+            ("soup_cli.commands.bom", "_attach_bom"),
+        ],
+    )
     def test_attach_helpers_fail_when_registry_helper_is_unavailable(
-        self, monkeypatch, capsys, command_module, helper_name,
+        self,
+        monkeypatch,
+        capsys,
+        command_module,
+        helper_name,
     ):
         import builtins
         import importlib
@@ -1297,12 +1595,19 @@ class TestBomAttestRegistryKinds:
         assert exc_info.value.exit_code == 1
         assert "could not import registry attach helper" in _clean(capsys.readouterr().out)
 
-    @pytest.mark.parametrize("command_module,helper_name", [
-        ("soup_cli.commands.attest", "_attach_attestation"),
-        ("soup_cli.commands.bom", "_attach_bom"),
-    ])
+    @pytest.mark.parametrize(
+        "command_module,helper_name",
+        [
+            ("soup_cli.commands.attest", "_attach_attestation"),
+            ("soup_cli.commands.bom", "_attach_bom"),
+        ],
+    )
     def test_attach_helpers_fail_after_attach_failure(
-        self, monkeypatch, capsys, command_module, helper_name,
+        self,
+        monkeypatch,
+        capsys,
+        command_module,
+        helper_name,
     ):
         import importlib
 
@@ -1337,6 +1642,7 @@ class TestBomAttestRegistryKinds:
         att.write_text("{}", encoding="utf-8")
         eid = _make_entry(db, with_artifact=("bom", str(bom)))
         from soup_cli.registry.store import RegistryStore
+
         with RegistryStore(db_path=db) as store:
             store.add_artifact(entry_id=eid, kind="attestation", path=str(att))
         monkeypatch.setenv("SOUP_REGISTRY_DB_PATH", str(db))

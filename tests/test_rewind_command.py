@@ -34,9 +34,7 @@ def _build(path: Path, entries, *, fingerprint: str = "fp0", task: str = "sft"):
         dataset_fingerprint=fingerprint,
     )
     for step, micro, rows, losses, tokens in entries:
-        log.record_batch(
-            step=step, micro=micro, rows=rows, row_loss=losses, row_tokens=tokens
-        )
+        log.record_batch(step=step, micro=micro, rows=rows, row_loss=losses, row_tokens=tokens)
     log.close()
     assert log.dropped == 0, "fixture batches must all be recorded"
     return read_rewind_log(path)
@@ -87,9 +85,7 @@ def _patch_tracker(monkeypatch, target):
     import soup_cli.experiment.tracker as trk
 
     monkeypatch.setattr(trk.ExperimentTracker, "__init__", lambda self, *a, **k: None)
-    monkeypatch.setattr(
-        trk.ExperimentTracker, "list_runs", lambda self, limit=50: [target]
-    )
+    monkeypatch.setattr(trk.ExperimentTracker, "list_runs", lambda self, limit=50: [target])
     monkeypatch.setattr(trk.ExperimentTracker, "get_run", lambda self, rid: target)
 
 
@@ -191,9 +187,7 @@ def test_loss_exactly_at_the_factor_is_not_a_spike(tmp_path):
 def test_rank_rows_weights_loss_by_tokens(tmp_path):
     from soup_cli.utils.rewind import rank_rows
 
-    run = _build(
-        tmp_path / RewindLog.FILENAME, [(1, 0, SPIKE_ROWS, SPIKE_LOSS, SPIKE_TOKENS)]
-    )
+    run = _build(tmp_path / RewindLog.FILENAME, [(1, 0, SPIKE_ROWS, SPIKE_LOSS, SPIKE_TOKENS)])
     ranked = rank_rows(run, 1)
     assert [r.row for r in ranked] == [13, 10, 11, 12]
     assert sum(r.share for r in ranked) == pytest.approx(1.0, abs=1e-9)
@@ -228,9 +222,7 @@ def test_rank_rows_zero_token_step_has_zero_shares(tmp_path):
 # ------------------------------------------------------------ the command --
 
 
-def test_missing_log_names_the_path_and_the_config_field(
-    tmp_path, plain_console, monkeypatch
-):
+def test_missing_log_names_the_path_and_the_config_field(tmp_path, plain_console, monkeypatch):
     _patch_tracker(
         monkeypatch, {"run_id": "r1", "output_dir": str(tmp_path), "status": "completed"}
     )
@@ -533,4 +525,3 @@ def test_a_header_only_log_refuses_rather_than_reporting_clean(
     assert result.exit_code == 1, result.output
     assert "No micro-batches were recorded" in result.output
     assert "No loss spikes recorded" not in result.output
-

@@ -143,9 +143,7 @@ def _load_parquet(path: Path) -> list[dict]:
     }
 
     if hidden:
-        table = table.select(
-            [name for name in table.column_names if name not in hidden]
-        )
+        table = table.select([name for name in table.column_names if name not in hidden])
     return table.to_pylist()
 
 
@@ -202,12 +200,14 @@ def last_load_outcome() -> LoadOutcome:
 # GRPO uses raw columns for custom reward functions (answer, expected, etc.).
 # The classifier family (classifier, reranker, cross_encoder) uses source columns
 # to retain label, paired text (text_a, text_b, question, answer), and metadata.
-PRESERVE_SOURCE_TASKS: frozenset[str] = frozenset({
-    "grpo",
-    "classifier",
-    "reranker",
-    "cross_encoder",
-})
+PRESERVE_SOURCE_TASKS: frozenset[str] = frozenset(
+    {
+        "grpo",
+        "classifier",
+        "reranker",
+        "cross_encoder",
+    }
+)
 
 
 def task_preserves_source_columns(task: str) -> bool:
@@ -268,9 +268,7 @@ def _format_rows(
     if dropped and first_drop is not None:
         _report_dropped_rows(dropped, len(raw_data), fmt, first_drop, source)
         if _last_load.first_drop is None:
-            _last_load = replace(
-                _last_load, first_drop=(fmt, first_drop[0], first_drop[1], source)
-            )
+            _last_load = replace(_last_load, first_drop=(fmt, first_drop[0], first_drop[1], source))
     if _last_load.fmt is None:
         _last_load = replace(_last_load, fmt=fmt)
     return formatted
@@ -298,8 +296,7 @@ def _report_dropped_rows(
     )
     if source:
         message += (
-            f"\n  List them all with: soup data validate {escape(source)} --format "
-            f"{escape(fmt)}"
+            f"\n  List them all with: soup data validate {escape(source)} --format {escape(fmt)}"
         )
     console.print(message)
 
@@ -325,13 +322,9 @@ def _load_replay_rows(
     """
     replay_path = Path(data_config.replay)
     if not is_under_cwd(replay_path):
-        raise ValueError(
-            f"data.replay path is outside the working directory: {replay_path}"
-        )
+        raise ValueError(f"data.replay path is outside the working directory: {replay_path}")
     if not replay_path.exists():
-        raise FileNotFoundError(
-            f"data.replay file not found: {replay_path}"
-        )
+        raise FileNotFoundError(f"data.replay file not found: {replay_path}")
     raw = load_raw_data(replay_path)
     fmt = detect_format(raw)
     rows = _format_rows(
@@ -342,18 +335,10 @@ def _load_replay_rows(
     )
 
     if is_vision_format(fmt):
-        image_dir = (
-            Path(data_config.image_dir)
-            if data_config.image_dir
-            else replay_path.parent
-        )
+        image_dir = Path(data_config.image_dir) if data_config.image_dir else replay_path.parent
         rows = _validate_vision_images(rows, image_dir)
     if is_audio_format(fmt):
-        audio_dir = (
-            Path(data_config.audio_dir)
-            if data_config.audio_dir
-            else replay_path.parent
-        )
+        audio_dir = Path(data_config.audio_dir) if data_config.audio_dir else replay_path.parent
         rows = _validate_audio_files(rows, audio_dir)
     return rows
 
@@ -619,9 +604,7 @@ def _row_key(row: dict) -> str:
         return repr(sorted(row.items(), key=lambda kv: str(kv[0])))
 
 
-def _split_val_deduplicated(
-    rows: list[dict], val_split: float
-) -> tuple[list[dict], list[dict]]:
+def _split_val_deduplicated(rows: list[dict], val_split: float) -> tuple[list[dict], list[dict]]:
     """Carve val out of ``rows`` so no val row has a duplicate left in train (#702).
 
     The streaming ``over`` path interleaves with
@@ -707,7 +690,7 @@ def _apportion(probs: tuple[float, ...], total: int) -> list[int]:
     raw = [p * total for p in probs]
     base = [int(x) for x in raw]
     remainder = total - sum(base)
-    order = sorted(range(len(probs)), key=lambda i: (raw[i] - base[i]), reverse=True)
+    order = sorted(range(len(probs)), key=lambda i: raw[i] - base[i], reverse=True)
     for i in order[:remainder]:
         base[i] += 1
     return base
@@ -723,8 +706,7 @@ def _combine_interleaved(per_dataset_rows: list[list[dict]], spec) -> list[dict]
     sizes = [len(rows) for rows in per_dataset_rows]
     if any(n == 0 for n in sizes):
         raise ValueError(
-            "data.interleave: every dataset in data.train must have "
-            ">= 1 row after formatting"
+            "data.interleave: every dataset in data.train must have >= 1 row after formatting"
         )
     if spec.strategy == "concat":
         combined: list[dict] = []
@@ -809,9 +791,7 @@ def _load_interleaved_local_datasets(
         per_dataset_train = []
         per_dataset_val = []
         for rows in per_dataset_rows:
-            train_rows, val_rows = _split_val_per_source(
-                rows, data_config.val_split, spec.strategy
-            )
+            train_rows, val_rows = _split_val_per_source(rows, data_config.val_split, spec.strategy)
             per_dataset_train.append(train_rows)
             per_dataset_val.append(val_rows)
         combined_train = _combine_interleaved(per_dataset_train, spec)
@@ -922,8 +902,7 @@ def _load_interleaved_streaming_datasets(
         from datasets import load_dataset as hf_load
     except ImportError as exc:
         raise ImportError(
-            "data.streaming=true requires the 'datasets' package: "
-            "pip install datasets"
+            "data.streaming=true requires the 'datasets' package: pip install datasets"
         ) from exc
 
     from soup_cli.utils.data_pipeline import validate_remote_uri
@@ -999,9 +978,7 @@ def _load_interleaved_streaming_datasets(
     # its copy on opposite sides (#702). The other three strategies never
     # duplicate a row here, so they keep the ordinary path.
     if spec.strategy == "over" and data_config.val_split > 0:
-        train_rows, val_rows = _split_val_deduplicated(
-            formatted, data_config.val_split
-        )
+        train_rows, val_rows = _split_val_deduplicated(formatted, data_config.val_split)
         return _finalize(
             train_rows,
             data_config,
@@ -1162,9 +1139,7 @@ def _warn_media_skips(key: str, missing: int, outside: int, media_dir: Path | No
             reason = f"image path outside {media_dir}"
         console.print(f"[yellow]Warning: {outside} rows skipped ({reason})[/]")
     elif outside > 0:
-        console.print(
-            f"[red]Warning: {outside} rows skipped (audio path traversal blocked)[/]"
-        )
+        console.print(f"[red]Warning: {outside} rows skipped (audio path traversal blocked)[/]")
 
 
 def _resolve_media_column(
@@ -1221,10 +1196,7 @@ def _streams_need_source_tags(
     if data_config.format != "auto":
         return _media_key(data_config.format) in keys
     return any(
-        key in row
-        for stream in streams
-        for row in islice(stream, MAX_DETECT_ROWS)
-        for key in keys
+        key in row for stream in streams for row in islice(stream, MAX_DETECT_ROWS) for key in keys
     )
 
 
@@ -1380,8 +1352,7 @@ def _load_remote_dataset(
             from datasets import load_dataset as hf_load
         except ImportError as exc:
             raise ImportError(
-                "data.streaming=true requires the 'datasets' package: "
-                "pip install datasets"
+                "data.streaming=true requires the 'datasets' package: pip install datasets"
             ) from exc
         ds = hf_load(
             "json",
@@ -1410,8 +1381,7 @@ def _load_remote_dataset(
             for i, raw_line in enumerate(fh):
                 if i >= MAX_REMOTE_ROWS:
                     console.print(
-                        f"[yellow]Remote dataset truncated at "
-                        f"{MAX_REMOTE_ROWS:,} rows.[/]"
+                        f"[yellow]Remote dataset truncated at {MAX_REMOTE_ROWS:,} rows.[/]"
                     )
                     break
                 stripped = raw_line.strip()
@@ -1420,10 +1390,7 @@ def _load_remote_dataset(
                 try:
                     raw_data.append(json.loads(stripped))
                 except json.JSONDecodeError as exc:
-                    console.print(
-                        f"[yellow]Warning: invalid JSON on line "
-                        f"{i + 1}: {exc}[/]"
-                    )
+                    console.print(f"[yellow]Warning: invalid JSON on line {i + 1}: {exc}[/]")
 
     fmt = data_config.format
     if fmt == "auto":
@@ -1511,13 +1478,13 @@ def _load_one_hub_dataset(
         fmt,
         preserve_source_columns=preserve_source_columns,
     )
-    formatted = _resolve_remote_media(
-        formatted, fmt, data_config, source=f"Hub dataset {name!r}"
-    )
+    formatted = _resolve_remote_media(formatted, fmt, data_config, source=f"Hub dataset {name!r}")
 
     if "validation" in ds:
         val_data = _rows_from_hub_split(
-            ds["validation"], data_config, shuffle=False,
+            ds["validation"],
+            data_config,
+            shuffle=False,
         )
         val_formatted = _format_rows(
             val_data,
@@ -1609,9 +1576,7 @@ def _load_interleaved_hub_datasets(
     has_val = [v is not None for v in per_dataset_val]
     if all(has_val):
         combined_train = _combine_interleaved(per_dataset_train, spec)
-        combined_val = _combine_interleaved(
-            [v for v in per_dataset_val if v is not None], spec
-        )
+        combined_val = _combine_interleaved([v for v in per_dataset_val if v is not None], spec)
         result = _finalize(
             combined_train,
             data_config,
@@ -1620,9 +1585,7 @@ def _load_interleaved_hub_datasets(
         )
     else:
         if any(has_val):
-            missing = [
-                name for name, v in zip(train_names, per_dataset_val) if v is None
-            ]
+            missing = [name for name, v in zip(train_names, per_dataset_val) if v is None]
             if spec.strategy in ("over", "probs"):
                 detail = "carving data.val_split out per source before oversampling"
             else:

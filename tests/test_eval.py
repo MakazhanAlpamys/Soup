@@ -10,7 +10,8 @@ runner = CliRunner()
 def test_eval_benchmark_missing_model():
     """soup eval benchmark with nonexistent model path should fail."""
     result = runner.invoke(
-        app, ["eval", "benchmark", "--model", "nonexistent_path", "--benchmarks", "mmlu"],
+        app,
+        ["eval", "benchmark", "--model", "nonexistent_path", "--benchmarks", "mmlu"],
     )
     assert result.exit_code == 1
     assert "not found" in result.output.lower()

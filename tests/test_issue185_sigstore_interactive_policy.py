@@ -21,9 +21,7 @@ def _install_fake_sigstore(monkeypatch, *, credential):
         def production(cls):
             events.append("trust")
             return SimpleNamespace(
-                signing_config=SimpleNamespace(
-                    get_oidc_url=lambda: "https://issuer.example"
-                )
+                signing_config=SimpleNamespace(get_oidc_url=lambda: "https://issuer.example")
             )
 
     models.ClientTrustConfig = ClientTrustConfig
@@ -96,9 +94,7 @@ def test_default_refuses_before_browser_issuer_when_no_ambient_oidc(monkeypatch)
         sign_payload_sigstore(b"payload")
 
     assert "detect" in events
-    assert not any(
-        isinstance(event, tuple) and event[0] == "issuer" for event in events
-    )
+    assert not any(isinstance(event, tuple) and event[0] == "issuer" for event in events)
 
 
 def test_interactive_oidc_is_explicit_opt_in(monkeypatch):
@@ -121,9 +117,7 @@ def test_ambient_oidc_never_needs_browser_opt_in(monkeypatch):
 
     assert bundle == '{"bundle":"ok"}'
     assert ("identity-token", "ambient-token") in events
-    assert not any(
-        isinstance(event, tuple) and event[0] == "issuer" for event in events
-    )
+    assert not any(isinstance(event, tuple) and event[0] == "issuer" for event in events)
 
 
 def _install_fake_verify_sigstore(monkeypatch):
@@ -253,17 +247,11 @@ def test_verify_helper_wraps_sigstore_verification_error(monkeypatch):
             return cls()
 
         def verify_artifact(self, payload, bundle, policy):
-            raise VerificationError(
-                "Certificate's SANs do not match trusted@example.com"
-            )
+            raise VerificationError("Certificate's SANs do not match trusted@example.com")
 
-    monkeypatch.setattr(
-        sys.modules["sigstore.verify"], "Verifier", RejectingVerifier
-    )
+    monkeypatch.setattr(sys.modules["sigstore.verify"], "Verifier", RejectingVerifier)
 
-    with pytest.raises(
-        ValueError, match="Sigstore verification failed: Certificate's SANs"
-    ):
+    with pytest.raises(ValueError, match="Sigstore verification failed: Certificate's SANs"):
         verify_payload_sigstore(
             b"payload",
             '{"bundle":"ok"}',

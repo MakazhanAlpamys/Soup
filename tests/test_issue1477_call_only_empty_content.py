@@ -20,8 +20,11 @@ from soup_cli.cli import app
 from soup_cli.data.formats import format_to_messages
 from soup_cli.utils.data_clean import clean_row
 
-CALL = {"id": "c1", "type": "function",
-        "function": {"name": "get_weather", "arguments": "{\"city\": \"Paris\"}"}}
+CALL = {
+    "id": "c1",
+    "type": "function",
+    "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+}
 
 
 def _row(content, tool_calls):
@@ -29,12 +32,14 @@ def _row(content, tool_calls):
     turn = {"role": "assistant", "content": content}
     if tool_calls is not ...:
         turn["tool_calls"] = tool_calls
-    return {"messages": [
-        {"role": "user", "content": "Weather in Paris?"},
-        turn,
-        {"role": "tool", "tool_call_id": "c1", "content": "{\"temp\": 18}"},
-        {"role": "assistant", "content": "It is 18C in Paris."},
-    ]}
+    return {
+        "messages": [
+            {"role": "user", "content": "Weather in Paris?"},
+            turn,
+            {"role": "tool", "tool_call_id": "c1", "content": '{"temp": 18}'},
+            {"role": "assistant", "content": "It is 18C in Paris."},
+        ]
+    }
 
 
 def _call_turn(cleaned):
@@ -89,8 +94,10 @@ class TestToolCallingBranch:
     @pytest.mark.parametrize("content", ["", None], ids=["empty", "null"])
     @pytest.mark.parametrize("tool_calls", [[CALL], []], ids=["one-call", "empty-list"])
     def test_the_row_is_kept(self, content, tool_calls):
-        row = {**_row(content, tool_calls), "tools": [{"type": "function", "function": {
-            "name": "get_weather", "parameters": {}}}]}
+        row = {
+            **_row(content, tool_calls),
+            "tools": [{"type": "function", "function": {"name": "get_weather", "parameters": {}}}],
+        }
         cleaned, rules = clean_row(row, "tool-calling")
         assert cleaned is not None, rules
         assert _call_turn(cleaned)["content"] == content
@@ -109,8 +116,9 @@ def test_every_kept_call_row_loads(content):
 def test_cli_keeps_the_call_row(tmp_path, monkeypatch):
     """The issue's CLI run: the ``""`` row plus one plain chat row, no flags."""
     monkeypatch.chdir(tmp_path)
-    plain = {"messages": [{"role": "user", "content": "Hi"},
-                          {"role": "assistant", "content": "Hello!"}]}
+    plain = {
+        "messages": [{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello!"}]
+    }
     rows = [_row("", [CALL]), plain]
     Path("raw.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
     result = CliRunner().invoke(app, ["data", "clean", "raw.jsonl", "-o", "clean.jsonl", "-f"])

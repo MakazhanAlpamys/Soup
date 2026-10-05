@@ -55,9 +55,7 @@ def test_init_force_flag_overwrites_without_prompt(tmp_path):
     )
 
     # With --force, overwrites silently using a registered template.
-    result = runner.invoke(
-        app, ["init", "--output", str(target), "--template", "chat", "--force"]
-    )
+    result = runner.invoke(app, ["init", "--output", str(target), "--template", "chat", "--force"])
     assert result.exit_code == 0, (result.output, repr(result.exception))
     assert target.read_text(encoding="utf-8") != "base: existing"
 
@@ -74,9 +72,7 @@ def test_migrate_jsonl_input_yields_friendly_error(tmp_path: Path, monkeypatch):
     jsonl.write_text('{"prompt": "hi"}\n{"prompt": "world"}\n', encoding="utf-8")
 
     runner = CliRunner()
-    result = runner.invoke(
-        app, ["migrate", "--from", "llamafactory", "data.jsonl", "--dry-run"]
-    )
+    result = runner.invoke(app, ["migrate", "--from", "llamafactory", "data.jsonl", "--dry-run"])
     assert result.exit_code == 2, (result.output, repr(result.exception))
     assert "got JSONL" in result.output
 
@@ -156,9 +152,7 @@ def test_migrate_unsloth_notebook_is_not_reported_as_jsonl(tmp_path: Path, monke
         encoding="utf-8",
     )
 
-    result = CliRunner().invoke(
-        app, ["migrate", "--from", "unsloth", "train.ipynb", "--dry-run"]
-    )
+    result = CliRunner().invoke(app, ["migrate", "--from", "unsloth", "train.ipynb", "--dry-run"])
 
     assert result.exit_code == 0, (result.output, repr(result.exception))
     assert "got JSONL" not in result.output
@@ -174,16 +168,12 @@ def test_migrate_yaml_config_named_jsonl_still_migrates(tmp_path: Path, monkeypa
     monkeypatch.chdir(tmp_path)
     config = tmp_path / "config.jsonl"
     config.write_text(
-        "model_name_or_path: meta-llama/Llama-3-8B\n"
-        "stage: sft\n"
-        "finetuning_type: lora\n",
+        "model_name_or_path: meta-llama/Llama-3-8B\nstage: sft\nfinetuning_type: lora\n",
         encoding="utf-8",
     )
 
     runner = CliRunner()
-    result = runner.invoke(
-        app, ["migrate", "--from", "llamafactory", "config.jsonl", "--dry-run"]
-    )
+    result = runner.invoke(app, ["migrate", "--from", "llamafactory", "config.jsonl", "--dry-run"])
     assert result.exit_code == 0, (result.output, repr(result.exception))
     assert "got JSONL" not in result.output
 
@@ -201,16 +191,12 @@ def test_migrate_bomd_jsonl_still_yields_friendly_error(tmp_path: Path, monkeypa
 
     monkeypatch.chdir(tmp_path)
     jsonl = tmp_path / "bom.jsonl"
-    jsonl.write_bytes(
-        b"\xef\xbb\xbf" + b'{"prompt": "hi"}\n{"prompt": "world"}\n'
-    )
+    jsonl.write_bytes(b"\xef\xbb\xbf" + b'{"prompt": "hi"}\n{"prompt": "world"}\n')
     # Guard the fixture itself: plain utf-8 must see the BOM this test is about.
     assert jsonl.read_text(encoding="utf-8").startswith("\ufeff")
 
     runner = CliRunner()
-    result = runner.invoke(
-        app, ["migrate", "--from", "llamafactory", "bom.jsonl", "--dry-run"]
-    )
+    result = runner.invoke(app, ["migrate", "--from", "llamafactory", "bom.jsonl", "--dry-run"])
     assert result.exit_code == 2, (result.output, repr(result.exception))
     assert "got JSONL" in result.output
 
@@ -271,9 +257,7 @@ def test_history_dataset_registry_helper_handles_missing():
     from soup_cli.commands.history import _name_exists_in_dataset_registry
 
     # Should never raise even if registry module / file is missing.
-    assert isinstance(
-        _name_exists_in_dataset_registry("definitely-not-a-dataset-xxx"), bool
-    )
+    assert isinstance(_name_exists_in_dataset_registry("definitely-not-a-dataset-xxx"), bool)
 
 
 # --- G10: soup eval custom --output writes JSON without --attach-to-registry

@@ -80,19 +80,16 @@ class TestTheWrittenConfigMatchesWhatWasTrained:
 
         for raw in ("auto", ["auto"], ["self_attn.k_proj"], "mlp.down_proj", None):
             cfg = _lora(raw)
-            assert (
-                build_mlx_adapter_config(cfg, adapter_path="/tmp/out")["lora_parameters"]["keys"]
-                == resolve_mlx_target_keys(cfg)
-            )
+            assert build_mlx_adapter_config(cfg, adapter_path="/tmp/out")["lora_parameters"][
+                "keys"
+            ] == resolve_mlx_target_keys(cfg)
 
     def test_rank_scale_and_dropout_still_come_from_the_config(self):
         """CONTROL. A repair that hardcoded the whole block would also make the
         assertions above pass."""
         from soup_cli.trainer.mlx_sft import build_mlx_adapter_config
 
-        params = build_mlx_adapter_config(_lora("auto"), adapter_path="/tmp/out")[
-            "lora_parameters"
-        ]
+        params = build_mlx_adapter_config(_lora("auto"), adapter_path="/tmp/out")["lora_parameters"]
         assert params["rank"] == 16
         assert params["scale"] == pytest.approx(32 / 16)
         assert params["dropout"] == 0.0

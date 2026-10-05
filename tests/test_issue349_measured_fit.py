@@ -142,9 +142,7 @@ class TestTheProbeFailsSafeRatherThanFailingOpen:
         into a silent fallback to the prediction that just accepted the run."""
         from soup_cli.utils.layer_stream_runtime import StepPeak
 
-        peak = StepPeak(
-            peak_bytes=0, reserved_bytes=0, seconds=1.0, rows=1, seq_len=4096, oom=True
-        )
+        peak = StepPeak(peak_bytes=0, reserved_bytes=0, seconds=1.0, rows=1, seq_len=4096, oom=True)
         assert peak.oom is True
 
 
@@ -217,9 +215,7 @@ class TestTheProbeIsActuallyWiredIntoSetup:
         assert "ran out of VRAM" in str(exc.value)
         assert wrapper.closed == 1
 
-    def test_a_probe_that_raised_mid_step_refuses_rather_than_falling_back(
-        self, monkeypatch
-    ):
+    def test_a_probe_that_raised_mid_step_refuses_rather_than_falling_back(self, monkeypatch):
         """`failed` is not `None`. The probe ran a real CUDA op and it raised,
         which can leave the context poisoned — so "the arithmetic was happy" is
         not a reason to keep driving the device. A fall-back here would be a
@@ -251,9 +247,7 @@ class TestTheProbeIsActuallyWiredIntoSetup:
         assert "failed to run" in str(exc.value)
         assert wrapper.closed == 1
 
-    def test_an_unexpected_exception_still_releases_the_pinned_ram_store(
-        self, monkeypatch
-    ):
+    def test_an_unexpected_exception_still_releases_the_pinned_ram_store(self, monkeypatch):
         """`measure_step_peak_bytes` validates its arguments and raises BEFORE
         its own handler exists. Unreachable from the current caller, but the
         docstring promises the runtime is released before anything propagates,
@@ -263,16 +257,12 @@ class TestTheProbeIsActuallyWiredIntoSetup:
             raise ValueError("rows/seq_len/vocab_size must all be >= 1")
 
         wrapper = self._wrapper(monkeypatch, None)
-        monkeypatch.setattr(
-            "soup_cli.utils.layer_stream_runtime.measure_step_peak_bytes", _boom
-        )
+        monkeypatch.setattr("soup_cli.utils.layer_stream_runtime.measure_step_peak_bytes", _boom)
         with pytest.raises(ValueError, match="must all be >= 1"):
             wrapper._run_stream_vram_probe(object(), self._plan(GB, 4 * GB))
         assert wrapper.closed == 1
 
-    def test_a_failed_probe_does_not_invent_a_refusal_when_the_formula_was_happy(
-        self, monkeypatch
-    ):
+    def test_a_failed_probe_does_not_invent_a_refusal_when_the_formula_was_happy(self, monkeypatch):
         """Control for the test above — otherwise 'refuses on None' would pass
         for an implementation that refuses on None unconditionally."""
         wrapper = self._wrapper(monkeypatch, None)
@@ -410,9 +400,7 @@ class TestTheFormulaStillProducesTheNumbersThisIssueWasFiledOn:
             (6144, 4.59, 5.830),  # formula 0.787x — under by 21%
         ],
     )
-    def test_the_formula_reproduces_its_published_prediction(
-        self, seq, predicted_gb, measured_gb
-    ):
+    def test_the_formula_reproduces_its_published_prediction(self, seq, predicted_gb, measured_gb):
         from soup_cli.utils.layer_stream import estimate_stream_peak_vram
 
         got = estimate_stream_peak_vram(seq_len=seq, **self._GEOM) / GB
@@ -511,9 +499,7 @@ class TestTheProbeItselfOnRealHardware:
                 raise RuntimeError("no parameters for you")
 
         with caplog.at_level("WARNING"):
-            peak = measure_step_peak_bytes(
-                _BadParams(real), rows=1, seq_len=16, vocab_size=64
-            )
+            peak = measure_step_peak_bytes(_BadParams(real), rows=1, seq_len=16, vocab_size=64)
         assert peak is not None and not peak.failed, "the measurement must survive"
         assert any("clear the VRAM probe's gradients" in r.message for r in caplog.records)
         del real
@@ -560,9 +546,9 @@ class TestTheSchemaGate:
         same SAFE direction it shows for SFT. So this is not "the probe is known
         to be unsafe here"; it is "one point is not a validation", and if the
         sign ever flips the failure is a gate waving through over-budget runs."""
-        body = _cfg(
-            stream_layers="true", stream_vram_probe="true", quantization="none"
-        ).replace("task: sft", "task: dpo")
+        body = _cfg(stream_layers="true", stream_vram_probe="true", quantization="none").replace(
+            "task: sft", "task: dpo"
+        )
         with pytest.raises(Exception) as exc:
             load_config_from_string(body)
         assert "stream_vram_probe" in str(exc.value)
@@ -571,9 +557,7 @@ class TestTheSchemaGate:
     def test_streaming_still_accepts_a_preference_task_without_the_probe(self):
         """Control: the refusal above must be about the PROBE, not re-refusing
         the preference streaming that v0.72.4 shipped."""
-        body = _cfg(stream_layers="true", quantization="none").replace(
-            "task: sft", "task: dpo"
-        )
+        body = _cfg(stream_layers="true", quantization="none").replace("task: sft", "task: dpo")
         cfg = load_config_from_string(body)
         assert cfg.training.stream_layers is True
 

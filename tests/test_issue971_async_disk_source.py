@@ -36,9 +36,7 @@ def _shards(tmp_path: Path, n_layers: int = N_LAYERS) -> str:
     for idx in range(n_layers):
         save_file(
             {
-                "self_attn.q_proj.weight": torch.randint(
-                    0, 255, (64, 32), dtype=torch.uint8
-                ),
+                "self_attn.q_proj.weight": torch.randint(0, 255, (64, 32), dtype=torch.uint8),
                 "self_attn.q_proj.weight::absmax": torch.rand(16, dtype=torch.float32),
                 "self_attn.q_proj.weight::nested_offset": torch.tensor(
                     0.125 * (idx + 1), dtype=torch.float32
@@ -73,9 +71,7 @@ class TestByteIdentityAgainstTheShippedSource:
         shard_dir = _shards(tmp_path)
         spec = _spec(shard_dir)
         shipped = DiskSource(shard_dir, N_LAYERS, spec)
-        ours = AsyncDiskSource(
-            shard_dir, N_LAYERS, spec, read_ahead=read_ahead, pin=False
-        )
+        ours = AsyncDiskSource(shard_dir, N_LAYERS, spec, read_ahead=read_ahead, pin=False)
         try:
             for idx in range(N_LAYERS):
                 for name in spec[idx]:
@@ -83,9 +79,7 @@ class TestByteIdentityAgainstTheShippedSource:
                     mine = ours.get(idx, name)
                     assert mine.dtype == theirs.dtype, (idx, name)
                     assert mine.shape == theirs.shape, (idx, name)
-                    assert torch.equal(
-                        _raw_bytes(mine), _raw_bytes(theirs)
-                    ), (idx, name)
+                    assert torch.equal(_raw_bytes(mine), _raw_bytes(theirs)), (idx, name)
         finally:
             ours.close()
             shipped.close()
@@ -224,9 +218,7 @@ class TestFailuresAreLoudAndNeverHang:
         # Depth N_LAYERS so every layer has its own slot and NOTHING is
         # evicted: the resident control below is vacuous at depth 1, where the
         # group holds one slot and layer 0 is gone by the time layer 3 fails.
-        source = AsyncDiskSource(
-            shard_dir, N_LAYERS, spec, read_ahead=N_LAYERS, pin=False
-        )
+        source = AsyncDiskSource(shard_dir, N_LAYERS, spec, read_ahead=N_LAYERS, pin=False)
         try:
             # Before the first get, so the only thing queued is the layer-0
             # prime: the reader cannot have read layer 3 yet.
@@ -304,9 +296,7 @@ class TestFailuresAreLoudAndNeverHang:
                 pass
 
         shard_dir = _shards(tmp_path)
-        source = AsyncDiskSource(
-            shard_dir, N_LAYERS, _spec(shard_dir), read_ahead=1, pin=False
-        )
+        source = AsyncDiskSource(shard_dir, N_LAYERS, _spec(shard_dir), read_ahead=1, pin=False)
         event = _Event()
         source.get(0, "input_layernorm.weight")
         source.release(0, event)
@@ -346,9 +336,7 @@ class TestFailuresAreLoudAndNeverHang:
 
         monkeypatch.setattr(mod, "read_range_into", held)
         shard_dir = _shards(tmp_path)
-        source = AsyncDiskSource(
-            shard_dir, N_LAYERS, _spec(shard_dir), read_ahead=1, pin=False
-        )
+        source = AsyncDiskSource(shard_dir, N_LAYERS, _spec(shard_dir), read_ahead=1, pin=False)
         try:
             deadline = time.monotonic() + 10.0
             while source._in_flight is None and time.monotonic() < deadline:
@@ -388,9 +376,7 @@ class TestFailuresAreLoudAndNeverHang:
                 assert gate.wait(timeout=10.0), "the test never released the drain"
 
         shard_dir = _shards(tmp_path)
-        source = AsyncDiskSource(
-            shard_dir, N_LAYERS, _spec(shard_dir), read_ahead=1, pin=False
-        )
+        source = AsyncDiskSource(shard_dir, N_LAYERS, _spec(shard_dir), read_ahead=1, pin=False)
         try:
             source.get(0, "input_layernorm.weight")
             source.release(0, _SlowEvent())
@@ -493,9 +479,7 @@ class TestTheLivenessChecksCanActuallyFire:
     wedged reader made these very tests HANG rather than fail.
     """
 
-    def test_a_read_that_never_returns_is_refused_by_the_limit(
-        self, tmp_path, monkeypatch
-    ):
+    def test_a_read_that_never_returns_is_refused_by_the_limit(self, tmp_path, monkeypatch):
         """The reachable wedge. A range worker blocked inside ``read_range_into``
         keeps the layer legitimately in flight (the reader thread is waiting on
         it), so no amount of state-inspection can tell it from a slow read —
@@ -547,9 +531,7 @@ class TestTheLivenessChecksCanActuallyFire:
         finally:
             source.close()
 
-    def test_a_reader_thread_that_exits_silently_is_refused(
-        self, tmp_path, monkeypatch
-    ):
+    def test_a_reader_thread_that_exits_silently_is_refused(self, tmp_path, monkeypatch):
         """A backstop, and it is labelled one in the docstring: no path in the
         shipped ``_run`` can exit without ``_fail`` or ``_closed``. It exists
         for the paths that are not in that file — this monkeypatch stands in
@@ -617,9 +599,7 @@ class TestAShardThatChangesUnderTheRunIsRefused:
         finally:
             source.close()
 
-    def test_the_check_runs_before_the_read_so_a_truncation_says_what_happened(
-        self, tmp_path
-    ):
+    def test_the_check_runs_before_the_read_so_a_truncation_says_what_happened(self, tmp_path):
         """A SHORTER replacement used to surface as "short read", which names
         the symptom. The identity check runs first and names the cause."""
         from soup_cli.utils.layer_shard import layer_shard_path
@@ -673,9 +653,7 @@ class TestPinnedStagingRefusesAnUnreleasedBorrowWithoutAGpu:
         ``TestPinningRefusesPageableMemory``, which monkeypatches the other way.
         """
         shard_dir = _shards(tmp_path)
-        source = AsyncDiskSource(
-            shard_dir, N_LAYERS, _spec(shard_dir), read_ahead=2, pin=False
-        )
+        source = AsyncDiskSource(shard_dir, N_LAYERS, _spec(shard_dir), read_ahead=2, pin=False)
         source.pinned = True
         return source
 
@@ -705,9 +683,7 @@ class TestPinnedStagingRefusesAnUnreleasedBorrowWithoutAGpu:
         """Genuinely ``pin=False``: the same sequence must NOT raise, or the
         refusal is a block on all traffic rather than on the hazard."""
         shard_dir = _shards(tmp_path)
-        source = AsyncDiskSource(
-            shard_dir, N_LAYERS, _spec(shard_dir), read_ahead=2, pin=False
-        )
+        source = AsyncDiskSource(shard_dir, N_LAYERS, _spec(shard_dir), read_ahead=2, pin=False)
         try:
             assert not source.pinned
             source.get(0, "input_layernorm.weight")
@@ -776,18 +752,14 @@ class TestTheDeviceGetsTheLayerItAskedFor:
     """
 
     @pytest.mark.parametrize("read_ahead", [1, 2, 4, 8])
-    def test_no_layer_reaches_the_device_holding_another_layers_weights(
-        self, tmp_path, read_ahead
-    ):
+    def test_no_layer_reaches_the_device_holding_another_layers_weights(self, tmp_path, read_ahead):
         from soup_cli.utils.layer_shard import layer_shard_path
         from soup_cli.utils.layer_stream_runtime import LayerBufferPool, StreamPrefetcher
 
         n_layers = 8
         shard_dir = _uniform_shards(tmp_path, n_layers, 8 * 1024 * 1024)
         spec = RamSource.layer_specs_from_shards(shard_dir, n_layers)
-        source = AsyncDiskSource(
-            shard_dir, n_layers, spec, read_ahead=read_ahead, pin=True
-        )
+        source = AsyncDiskSource(shard_dir, n_layers, spec, read_ahead=read_ahead, pin=True)
         try:
             assert source.pinned, "the hazard needs genuinely pinned staging"
             pool = LayerBufferPool(spec[0], n_buffers=2, device="cuda")
@@ -979,14 +951,10 @@ class TestTheShapeBuildSourceActuallyPasses:
         ]
         return str(out), specs, paths
 
-    def test_the_large_layer_comes_back_exactly_as_disk_source_returns_it(
-        self, tmp_path
-    ):
+    def test_the_large_layer_comes_back_exactly_as_disk_source_returns_it(self, tmp_path):
         shard_dir, specs, paths = self._hetero(tmp_path)
         shipped = DiskSource(shard_dir, 3, specs, shard_paths=paths)
-        ours = AsyncDiskSource(
-            shard_dir, 3, specs, shard_paths=paths, read_ahead=2, pin=False
-        )
+        ours = AsyncDiskSource(shard_dir, 3, specs, shard_paths=paths, read_ahead=2, pin=False)
         try:
             for idx, per_layer in enumerate(specs):
                 for name in per_layer:
@@ -1006,17 +974,13 @@ class TestTheShapeBuildSourceActuallyPasses:
         whole vocabulary matrix.
         """
         shard_dir, specs, paths = self._hetero(tmp_path)
-        source = AsyncDiskSource(
-            shard_dir, 3, specs, shard_paths=paths, read_ahead=2, pin=False
-        )
+        source = AsyncDiskSource(shard_dir, 3, specs, shard_paths=paths, read_ahead=2, pin=False)
         try:
             decoder = 8 * 4 * 4
             embed = 64 * 4 * 4
             assert source.nbytes == 2 * decoder + embed
             observed = sum(
-                dst.numel() * dst.element_size()
-                for slot in source._slots
-                for dst in slot.values()
+                dst.numel() * dst.element_size() for slot in source._slots for dst in slot.values()
             )
             assert source.nbytes == observed, "nbytes disagrees with what was allocated"
         finally:
@@ -1025,9 +989,7 @@ class TestTheShapeBuildSourceActuallyPasses:
     def test_disk_bytes_counts_what_the_headers_say(self, tmp_path):
         """Not recomputed from the spec through a fourth dtype-size table."""
         shard_dir, specs, paths = self._hetero(tmp_path)
-        source = AsyncDiskSource(
-            shard_dir, 3, specs, shard_paths=paths, read_ahead=2, pin=False
-        )
+        source = AsyncDiskSource(shard_dir, 3, specs, shard_paths=paths, read_ahead=2, pin=False)
         try:
             assert source.disk_bytes == 2 * (8 * 4 * 4) + 64 * 4 * 4
         finally:
@@ -1091,9 +1053,7 @@ class TestReadAheadActuallyReadsAhead:
     def test_forward_depth_scales_with_the_setting(self, tmp_path, read_ahead):
         shard_dir = _deep_shards(tmp_path, self.N_LAYERS)
         spec = RamSource.layer_specs_from_shards(shard_dir, self.N_LAYERS)
-        source = AsyncDiskSource(
-            shard_dir, self.N_LAYERS, spec, read_ahead=read_ahead, pin=False
-        )
+        source = AsyncDiskSource(shard_dir, self.N_LAYERS, spec, read_ahead=read_ahead, pin=False)
         try:
             deepest = 0
             for idx in range(self.N_LAYERS - read_ahead):
@@ -1137,9 +1097,7 @@ class TestTheDirectionIsFollowedNotAssumed:
 
     N_LAYERS = 16
 
-    def test_the_backward_walk_is_prefetched_as_deeply_as_the_forward_one(
-        self, tmp_path
-    ):
+    def test_the_backward_walk_is_prefetched_as_deeply_as_the_forward_one(self, tmp_path):
         shard_dir = _deep_shards(tmp_path, self.N_LAYERS)
         spec = RamSource.layer_specs_from_shards(shard_dir, self.N_LAYERS)
         source = AsyncDiskSource(shard_dir, self.N_LAYERS, spec, read_ahead=4, pin=False)
@@ -1186,9 +1144,7 @@ class TestPinningRefusesPageableMemory:
     would have reported the fast path while paying the ~97% -> ~79% cost.
     """
 
-    def test_a_pageable_allocation_is_refused_not_reported_as_pinned(
-        self, tmp_path, monkeypatch
-    ):
+    def test_a_pageable_allocation_is_refused_not_reported_as_pinned(self, tmp_path, monkeypatch):
         shard_dir = _shards(tmp_path)
         spec = _spec(shard_dir)
         real_empty = torch.empty
@@ -1250,18 +1206,12 @@ class TestDepthSurvivesTheTurnaround:
         return min(depths), misses
 
     @pytest.mark.parametrize("read_ahead", [2, 4, 8])
-    def test_full_depth_is_sustained_across_repeated_reversals(
-        self, tmp_path, read_ahead
-    ):
+    def test_full_depth_is_sustained_across_repeated_reversals(self, tmp_path, read_ahead):
         shard_dir = _deep_shards(tmp_path, self.N_LAYERS)
         spec = RamSource.layer_specs_from_shards(shard_dir, self.N_LAYERS)
-        source = AsyncDiskSource(
-            shard_dir, self.N_LAYERS, spec, read_ahead=read_ahead, pin=False
-        )
+        source = AsyncDiskSource(shard_dir, self.N_LAYERS, spec, read_ahead=read_ahead, pin=False)
         try:
-            sustained, misses = self._sweep(
-                source, read_ahead, self.N_LAYERS, self.SWEEPS
-            )
+            sustained, misses = self._sweep(source, read_ahead, self.N_LAYERS, self.SWEEPS)
             assert sustained == read_ahead - 1, (
                 f"read_ahead={read_ahead} peaks at the depth it promises on a "
                 f"one-way walk but only SUSTAINS {sustained} of {read_ahead - 1} "
@@ -1348,9 +1298,7 @@ class TestDepthOnTheShapeProductionActuallyHas:
         return str(out), specs, paths, large
 
     @pytest.mark.parametrize("read_ahead", [2, 4, 8])
-    def test_both_passes_keep_full_depth_with_the_embed_primed_first(
-        self, tmp_path, read_ahead
-    ):
+    def test_both_passes_keep_full_depth_with_the_embed_primed_first(self, tmp_path, read_ahead):
         decoders = self.N_DECODER
         shard_dir, specs, paths, large = self._hetero_fixture(tmp_path, decoders)
         (embed_idx, embed_key), (head_idx, head_key) = large
@@ -1375,9 +1323,7 @@ class TestDepthOnTheShapeProductionActuallyHas:
                     source.release(idx, None)
                     _settle(source)
                     if step >= 1 and idx + read_ahead - 1 < decoders:
-                        forward.append(
-                            sum(1 for lay in source._slot_of if idx < lay < decoders)
-                        )
+                        forward.append(sum(1 for lay in source._slot_of if idx < lay < decoders))
                         if not staged:
                             missed_forward += 1
                 # StreamPrefetcher's tail prefetch at the forward turnaround.
@@ -1393,8 +1339,7 @@ class TestDepthOnTheShapeProductionActuallyHas:
                         if not staged:
                             missed_backward += 1
             assert min(forward) == read_ahead - 1, (
-                f"forward pass sustained {min(forward)} of {read_ahead - 1} on the "
-                f"production shape"
+                f"forward pass sustained {min(forward)} of {read_ahead - 1} on the production shape"
             )
             assert min(backward) == read_ahead - 1, (
                 f"BACKWARD pass sustained {min(backward)} of {read_ahead - 1} on the "
@@ -1487,9 +1432,7 @@ class TestTheSettingReachesTheSource:
         from soup_cli.utils.layer_stream_runtime import _build_source
 
         shard_dir = _shards(tmp_path)
-        source, _ = _build_source(
-            shard_dir, N_LAYERS, _spec(shard_dir), False, None, "ram"
-        )
+        source, _ = _build_source(shard_dir, N_LAYERS, _spec(shard_dir), False, None, "ram")
         assert isinstance(source, RamSource)
 
     def test_every_stream_setup_call_site_passes_read_ahead(self):
@@ -1501,11 +1444,7 @@ class TestTheSettingReachesTheSource:
         import ast
 
         path = (
-            Path(__file__).resolve().parents[1]
-            / "src"
-            / "soup_cli"
-            / "trainer"
-            / "stream_setup.py"
+            Path(__file__).resolve().parents[1] / "src" / "soup_cli" / "trainer" / "stream_setup.py"
         )
         tree = ast.parse(path.read_text(encoding="utf-8"))
 
@@ -1587,11 +1526,17 @@ class TestEveryRuntimeConsumerReleases:
             # module-level defs — where neither consumer lives — cannot pass
             # by finding nothing.
             if isinstance(parent, ast.ClassDef):
-                bodies = [(f"{parent.name}.{n.name}", n) for n in parent.body
-                          if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
+                bodies = [
+                    (f"{parent.name}.{n.name}", n)
+                    for n in parent.body
+                    if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+                ]
             elif isinstance(parent, ast.Module):
-                bodies = [(n.name, n) for n in parent.body
-                          if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
+                bodies = [
+                    (n.name, n)
+                    for n in parent.body
+                    if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+                ]
             else:
                 continue
             for name, node in bodies:
@@ -1656,9 +1601,7 @@ class TestPinnedStagingRefusesAnUnreleasedBorrow:
         finally:
             source.close()
 
-    def test_repeated_gets_for_the_same_layer_are_not_a_borrow_violation(
-        self, tmp_path
-    ):
+    def test_repeated_gets_for_the_same_layer_are_not_a_borrow_violation(self, tmp_path):
         """`load_async` calls `get` once per tensor NAME before releasing the
         layer once. If that read as a violation the refusal would fire on the
         real consumer's normal path."""
@@ -1757,9 +1700,7 @@ class TestTheReaderSurvivesDyingInBootstrap:
         monkeypatch.setattr(threading, "excepthook", lambda args: None)
         return killed
 
-    def test_a_reader_that_died_in_bootstrap_is_restarted_and_serves(
-        self, tmp_path, monkeypatch
-    ):
+    def test_a_reader_that_died_in_bootstrap_is_restarted_and_serves(self, tmp_path, monkeypatch):
         killed = self._kill_the_reader(monkeypatch, times=1)
         shard_dir = _shards(tmp_path)
         spec = _spec(shard_dir)
@@ -1817,9 +1758,7 @@ class TestTheReaderSurvivesDyingInBootstrap:
         shard_dir = _shards(tmp_path)
         source = AsyncDiskSource(shard_dir, N_LAYERS, _spec(shard_dir), pin=False)
         try:
-            captured = _get_on_a_thread(
-                source, 0, "input_layernorm.weight", timeout=10.0
-            )
+            captured = _get_on_a_thread(source, 0, "input_layernorm.weight", timeout=10.0)
             exc = captured.get("exc")
             assert isinstance(exc, RuntimeError), repr(captured)
             message = str(exc)
@@ -1859,9 +1798,7 @@ class TestTheRangeWorkersSurviveDyingInBootstrap:
         shard_dir = _shards(tmp_path)
         spec = _spec(shard_dir)
         shipped = DiskSource(shard_dir, N_LAYERS, spec)
-        ours = AsyncDiskSource(
-            shard_dir, N_LAYERS, spec, read_ahead=2, pin=False, read_ranges=2
-        )
+        ours = AsyncDiskSource(shard_dir, N_LAYERS, spec, read_ahead=2, pin=False, read_ranges=2)
         try:
             first_name = next(iter(spec[0]))
             captured = _get_on_a_thread(ours, 0, first_name)
@@ -1878,20 +1815,14 @@ class TestTheRangeWorkersSurviveDyingInBootstrap:
             ours.close()
             shipped.close()
 
-    def test_every_worker_dead_is_a_start_failure_not_closed(
-        self, tmp_path, monkeypatch
-    ):
+    def test_every_worker_dead_is_a_start_failure_not_closed(self, tmp_path, monkeypatch):
         import soup_cli.utils.async_disk_source as mod
 
         killed = self._kill_workers(monkeypatch, "soup-layer-range-", times=10**6)
         shard_dir = _shards(tmp_path)
-        source = AsyncDiskSource(
-            shard_dir, N_LAYERS, _spec(shard_dir), pin=False, read_ranges=1
-        )
+        source = AsyncDiskSource(shard_dir, N_LAYERS, _spec(shard_dir), pin=False, read_ranges=1)
         try:
-            captured = _get_on_a_thread(
-                source, 0, "input_layernorm.weight", timeout=15.0
-            )
+            captured = _get_on_a_thread(source, 0, "input_layernorm.weight", timeout=15.0)
             exc = captured.get("exc")
             assert isinstance(exc, RuntimeError), repr(captured)
             message = str(exc)

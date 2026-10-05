@@ -55,9 +55,7 @@ def reconcile(
 
     console = Console()
     if not expunge_launching:
-        console.print(
-            "[red]--expunge-launching is required[/] - no run records were changed."
-        )
+        console.print("[red]--expunge-launching is required[/] - no run records were changed.")
         raise typer.Exit(2)
 
     try:
@@ -73,8 +71,7 @@ def reconcile(
 
     if not removed:
         console.print(
-            "[dim]No stale launching MCP runs found "
-            f"(older than {older_than_seconds} seconds).[/]"
+            f"[dim]No stale launching MCP runs found (older than {older_than_seconds} seconds).[/]"
         )
         return
     for run_id in removed:
@@ -218,7 +215,7 @@ def serve(
         # instead of parsing '[mcp]' as a (dropped) markup tag.
         console.print(
             "[red]The MCP server needs the 'mcp' SDK.[/] "
-            "Install it with: [bold]pip install \"soup-cli\\[mcp]\"[/]"
+            'Install it with: [bold]pip install "soup-cli\\[mcp]"[/]'
         )
         raise typer.Exit(1) from None
 
@@ -233,9 +230,7 @@ def serve(
         mode = "read-only"
 
     if transport == _STDIO:
-        console.print(
-            f"[dim]soup mcp serve - stdio transport - {mode}. Waiting for a client...[/]"
-        )
+        console.print(f"[dim]soup mcp serve - stdio transport - {mode}. Waiting for a client...[/]")
         run_stdio_server(allow_mutating=allow_mutating, allow_execute=allow_execute)
         return
 
@@ -257,7 +252,7 @@ def serve(
     except ImportError:
         console.print(
             "[red]--transport sse/http needs a newer 'mcp' SDK.[/] "
-            "Upgrade with: [bold]pip install -U \"soup-cli\\[mcp]\"[/] "
+            'Upgrade with: [bold]pip install -U "soup-cli\\[mcp]"[/] '
             "(streamable HTTP landed in mcp 1.8.0, rebinding protection in 1.10.0)"
         )
         raise typer.Exit(1) from None

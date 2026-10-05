@@ -83,12 +83,8 @@ class DynamicCurriculumPolicy:
     def __post_init__(self) -> None:
         nb = _reject_bool_int("num_buckets", self.num_buckets)
         if nb < _MIN_BUCKETS or nb > _MAX_BUCKETS:
-            raise ValueError(
-                f"num_buckets must be in [{_MIN_BUCKETS}, {_MAX_BUCKETS}], got {nb}"
-            )
-        rs = _reject_bool_int(
-            "recompute_every_n_steps", self.recompute_every_n_steps
-        )
+            raise ValueError(f"num_buckets must be in [{_MIN_BUCKETS}, {_MAX_BUCKETS}], got {nb}")
+        rs = _reject_bool_int("recompute_every_n_steps", self.recompute_every_n_steps)
         if rs < _MIN_RECOMPUTE_STEPS or rs > _MAX_RECOMPUTE_STEPS:
             raise ValueError(
                 f"recompute_every_n_steps must be in "
@@ -98,9 +94,7 @@ class DynamicCurriculumPolicy:
         # floor must leave at least equal-share room; uniform = 1/nb.
         ceiling = 1.0 / nb
         if fv <= 0.0 or fv > ceiling:
-            raise ValueError(
-                f"floor must be in (0.0, {ceiling}] for num_buckets={nb}, got {fv}"
-            )
+            raise ValueError(f"floor must be in (0.0, {ceiling}] for num_buckets={nb}, got {fv}")
         tv = _reject_bool_float("temperature", self.temperature)
         if tv <= 0.0:
             raise ValueError(f"temperature must be > 0, got {tv}")
@@ -136,30 +130,19 @@ def _coerce_stats(raw: Mapping[int, Mapping[str, float]]) -> List[BucketStats]:
     out: List[BucketStats] = []
     for bucket_id, payload in raw.items():
         if isinstance(bucket_id, bool) or not isinstance(bucket_id, int):
-            raise TypeError(
-                f"bucket id must be int, got {type(bucket_id).__name__}"
-            )
+            raise TypeError(f"bucket id must be int, got {type(bucket_id).__name__}")
         if bucket_id < 0:
             raise ValueError(f"bucket id must be >= 0, got {bucket_id}")
         if not isinstance(payload, Mapping):
-            raise TypeError(
-                f"bucket payload must be Mapping, got {type(payload).__name__}"
-            )
+            raise TypeError(f"bucket payload must be Mapping, got {type(payload).__name__}")
         num_samples = payload.get("num_samples", 0)
         ns = _reject_bool_int("num_samples", num_samples)
         if ns < 0 or ns > _MAX_BUCKET_SAMPLES:
-            raise ValueError(
-                f"num_samples must be in [0, {_MAX_BUCKET_SAMPLES}], got {ns}"
-            )
+            raise ValueError(f"num_samples must be in [0, {_MAX_BUCKET_SAMPLES}], got {ns}")
         ml = _reject_bool_float("mean_loss", payload.get("mean_loss", 0.0))
-        mg = _reject_bool_float(
-            "mean_grad_norm", payload.get("mean_grad_norm", 0.0)
-        )
+        mg = _reject_bool_float("mean_grad_norm", payload.get("mean_grad_norm", 0.0))
         if ml < 0.0 or mg < 0.0:
-            raise ValueError(
-                "mean_loss / mean_grad_norm must be >= 0 "
-                f"(got loss={ml}, grad={mg})"
-            )
+            raise ValueError(f"mean_loss / mean_grad_norm must be >= 0 (got loss={ml}, grad={mg})")
         out.append(BucketStats(bucket_id, ns, ml, mg))
     return out
 
@@ -206,17 +189,13 @@ def percentile_bucket(
     """
     nb = _reject_bool_int("num_buckets", num_buckets)
     if nb < _MIN_BUCKETS or nb > _MAX_BUCKETS:
-        raise ValueError(
-            f"num_buckets must be in [{_MIN_BUCKETS}, {_MAX_BUCKETS}], got {nb}"
-        )
+        raise ValueError(f"num_buckets must be in [{_MIN_BUCKETS}, {_MAX_BUCKETS}], got {nb}")
     fv = _reject_bool_float("value", value)
     if nb == 1:
         return 0
     if not window:
         return 0
-    le = sum(
-        1 for w in window if _reject_bool_float("window value", w) <= fv
-    )
+    le = sum(1 for w in window if _reject_bool_float("window value", w) <= fv)
     rank = le / len(window)
     bucket = int(rank * nb)
     return min(nb - 1, max(0, bucket))
@@ -241,10 +220,7 @@ def compute_bucket_weights(
         Tuple of ``policy.num_buckets`` floats that sum to 1.0 ± 1e-6.
     """
     if not isinstance(policy, DynamicCurriculumPolicy):
-        raise TypeError(
-            f"policy must be DynamicCurriculumPolicy, "
-            f"got {type(policy).__name__}"
-        )
+        raise TypeError(f"policy must be DynamicCurriculumPolicy, got {type(policy).__name__}")
     if not isinstance(stats, Mapping):
         raise TypeError(f"stats must be Mapping, got {type(stats).__name__}")
 
@@ -263,9 +239,7 @@ def compute_bucket_weights(
         # Median is robust to outliers; matches Axolotl curriculum policy.
         srt = sorted(populated)
         mid = len(srt) // 2
-        neutral = (
-            srt[mid] if len(srt) % 2 == 1 else (srt[mid - 1] + srt[mid]) / 2
-        )
+        neutral = srt[mid] if len(srt) % 2 == 1 else (srt[mid - 1] + srt[mid]) / 2
     else:
         # No data — uniform fallback.
         return (1.0 / nb,) * nb
@@ -360,42 +334,29 @@ def render_curve(
     """
     nb = _reject_bool_int("num_buckets", num_buckets)
     if nb < 1 or nb > _MAX_BUCKETS:
-        raise ValueError(
-            f"num_buckets must be in [1, {_MAX_BUCKETS}], got {nb}"
-        )
+        raise ValueError(f"num_buckets must be in [1, {_MAX_BUCKETS}], got {nb}")
     w = _reject_bool_int("width", width)
     if w < 4 or w > 200:
         raise ValueError(f"width must be in [4, 200], got {w}")
     if not isinstance(history, Sequence) or isinstance(history, (str, bytes)):
         raise TypeError("history must be a non-string Sequence")
     if len(history) > _MAX_HISTORY_ROWS:
-        raise ValueError(
-            f"history has {len(history)} rows; cap is {_MAX_HISTORY_ROWS}"
-        )
+        raise ValueError(f"history has {len(history)} rows; cap is {_MAX_HISTORY_ROWS}")
 
     if not history:
         return "(no curriculum history recorded yet)"
 
-    header = "step".ljust(8) + "".join(
-        f"B{i}".rjust(w) for i in range(nb)
-    )
+    header = "step".ljust(8) + "".join(f"B{i}".rjust(w) for i in range(nb))
     lines = [header]
     for entry in history:
         if not isinstance(entry, Mapping):
-            raise TypeError(
-                f"history entry must be Mapping, got {type(entry).__name__}"
-            )
+            raise TypeError(f"history entry must be Mapping, got {type(entry).__name__}")
         step = _reject_bool_int("step", entry.get("step", 0))
         weights = entry.get("weights", ())
-        if not isinstance(weights, Sequence) or isinstance(
-            weights, (str, bytes)
-        ):
+        if not isinstance(weights, Sequence) or isinstance(weights, (str, bytes)):
             raise TypeError("weights must be a non-string Sequence")
         if len(weights) != nb:
-            raise ValueError(
-                f"weights length {len(weights)} != num_buckets {nb} at "
-                f"step={step}"
-            )
+            raise ValueError(f"weights length {len(weights)} != num_buckets {nb} at step={step}")
         cells = "".join(f"{float(v):>{w}.4f}" for v in weights)
         lines.append(str(step).ljust(8) + cells)
     return "\n".join(lines)
@@ -418,25 +379,19 @@ def parse_history_jsonl(rows: Sequence[Mapping]) -> List[Dict[str, object]]:
     if not isinstance(rows, Sequence) or isinstance(rows, (str, bytes)):
         raise TypeError("rows must be a non-string Sequence")
     if len(rows) > _MAX_HISTORY_ROWS:
-        raise ValueError(
-            f"history has {len(rows)} rows; cap is {_MAX_HISTORY_ROWS}"
-        )
+        raise ValueError(f"history has {len(rows)} rows; cap is {_MAX_HISTORY_ROWS}")
     for row in rows:
         if not isinstance(row, Mapping):
             raise TypeError("history row must be Mapping")
         step = _reject_bool_int("step", row.get("step", 0))
         weights = row.get("weights")
-        if not isinstance(weights, Sequence) or isinstance(
-            weights, (str, bytes)
-        ):
+        if not isinstance(weights, Sequence) or isinstance(weights, (str, bytes)):
             raise TypeError("weights must be a non-string Sequence")
         floats = []
         for v in weights:
             floats.append(_reject_bool_float("weight", v))
         s = sum(floats)
         if s <= 0 or abs(s - 1.0) > 1e-3:
-            raise ValueError(
-                f"weights at step={step} must sum to 1.0 ± 1e-3, got {s}"
-            )
+            raise ValueError(f"weights at step={step} must sum to 1.0 ± 1e-3, got {s}")
         out.append({"step": step, "weights": tuple(floats)})
     return out

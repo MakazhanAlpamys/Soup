@@ -10,6 +10,7 @@ def sort_by_length(data: list[dict]) -> list[dict]:
 
     Supports both 'text' field and 'messages' format.
     """
+
     def _row_length(row: dict) -> int:
         if "text" in row:
             return len(str(row["text"]))

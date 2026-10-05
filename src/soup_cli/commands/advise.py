@@ -63,6 +63,7 @@ app = typer.Typer(
 # Internal helpers
 # ---------------------------------------------------------------------------
 
+
 def _last_verdict_path() -> str:
     """Path to the per-user last-verdict scratch file used by `explain`.
 
@@ -189,7 +190,8 @@ def _render_roi_table(roi: ROIEstimate) -> Table:
             table.add_row(label, f"{sign}{val:.3f}", escape(note))
     if roi.sft_wall_clock_secs is not None:
         table.add_row(
-            "sft ETA", f"{roi.sft_wall_clock_secs:.0f}s",
+            "sft ETA",
+            f"{roi.sft_wall_clock_secs:.0f}s",
             "Estimated full-run wall clock",
         )
     return table
@@ -198,6 +200,7 @@ def _render_roi_table(roi: ROIEstimate) -> Table:
 # ---------------------------------------------------------------------------
 # Default (callback): soup advise <data> --goal <s>
 # ---------------------------------------------------------------------------
+
 
 @app.command(name="run")
 def advise_run(
@@ -210,7 +213,7 @@ def advise_run(
         "--goal",
         "-g",
         help=(
-            "One-line goal statement: e.g. \"make our chatbot more concise\". "
+            'One-line goal statement: e.g. "make our chatbot more concise". '
             "Sharpens task classification."
         ),
     ),
@@ -271,9 +274,7 @@ def advise_run(
     proximity: Optional[float] = None
     if probe_model is not None:
         try:
-            proximity = measure_base_model_proximity(
-                rows, model=probe_model, device=probe_device
-            )
+            proximity = measure_base_model_proximity(rows, model=probe_model, device=probe_device)
         except (TypeError, ValueError) as exc:
             console.print(f"[red]Proximity probe failed:[/] {escape(str(exc))}")
             raise typer.Exit(1) from exc
@@ -338,13 +339,9 @@ def advise_run(
     if record:
         try:
             record_verdict(verdict, accepted=True, notes=notes)
-            console.print(
-                f"[dim]Recorded to {escape(history_path())}[/]"
-            )
+            console.print(f"[dim]Recorded to {escape(history_path())}[/]")
         except (TypeError, ValueError, OSError) as exc:
-            console.print(
-                f"[yellow]History record failed:[/] {escape(str(exc))}"
-            )
+            console.print(f"[yellow]History record failed:[/] {escape(str(exc))}")
 
     console.print(
         "[dim]Next: `soup advise explain` for the rubric, "
@@ -356,20 +353,16 @@ def advise_run(
 # `soup advise explain`
 # ---------------------------------------------------------------------------
 
+
 @app.command()
 def explain() -> None:
     """Print the rubric, weights, and evidence trail of the last verdict."""
     verdict = _read_last_verdict()
     if verdict is None:
-        console.print(
-            "[yellow]No prior verdict cached.[/] Run `soup advise <data>` "
-            "first."
-        )
+        console.print("[yellow]No prior verdict cached.[/] Run `soup advise <data>` first.")
         raise typer.Exit(1)
     if verdict.choice not in CHOICES:
-        console.print(
-            "[red]Cached verdict is malformed[/] — re-run `soup advise`."
-        )
+        console.print("[red]Cached verdict is malformed[/] — re-run `soup advise`.")
         raise typer.Exit(1)
     console.print(escape(format_verdict_rubric(verdict)))
 
@@ -377,6 +370,7 @@ def explain() -> None:
 # ---------------------------------------------------------------------------
 # `soup advise compare`
 # ---------------------------------------------------------------------------
+
 
 @app.command()
 def compare(
@@ -404,8 +398,7 @@ def compare(
 
     summary = summarise_history(entries)
     summary_line = "  ".join(
-        f"[cyan]{escape(choice)}[/]: [bold]{count}[/]"
-        for choice, count in summary.items()
+        f"[cyan]{escape(choice)}[/]: [bold]{count}[/]" for choice, count in summary.items()
     )
     console.print(f"[bold]Recent verdicts[/]    {summary_line}\n")
 
@@ -419,9 +412,7 @@ def compare(
     table.add_column("Outcome", justify="right")
     for entry in entries:
         when_short = entry.timestamp[:16] if entry.timestamp else "—"
-        outcome_render = (
-            f"{entry.outcome:+.2f}" if entry.outcome is not None else "—"
-        )
+        outcome_render = f"{entry.outcome:+.2f}" if entry.outcome is not None else "—"
         table.add_row(
             escape(when_short),
             escape(entry.project),

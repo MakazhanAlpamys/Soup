@@ -69,9 +69,7 @@ def _batch(torch):
         "logp_old": logp_old,
         "reference": logp_new.detach() + offset,
         "advantages": torch.tensor([1.0, -0.5, 0.75], dtype=dtype),
-        "mask": torch.tensor(
-            [[1, 1, 1, 1, 1], [1, 1, 1, 0, 0], [1, 1, 0, 0, 0]], dtype=dtype
-        ),
+        "mask": torch.tensor([[1, 1, 1, 1, 1], [1, 1, 1, 0, 0], [1, 1, 0, 0, 0]], dtype=dtype),
     }
 
 
@@ -205,16 +203,19 @@ class TestTheKernelAppliesTheKlTerm:
         torch = _torch()
         batch = _batch(torch)
         expected = _expected_kl(
-            torch, variant, batch["logp_new"].detach(), batch["reference"],
-            batch["mask"], batch["advantages"],
+            torch,
+            variant,
+            batch["logp_new"].detach(),
+            batch["reference"],
+            batch["mask"],
+            batch["advantages"],
         ).item()
         assert expected > 0.01, "the fixture must put the reference visibly away"
         base = _loss(variant, batch, beta=0.0).item()
         for beta in (0.1, 1.0, 5.0):
             moved = _loss(variant, batch, beta=beta).item() - base
             assert moved == pytest.approx(beta * expected, rel=1e-9, abs=1e-12), (
-                f"{variant}: beta={beta} moved the loss by {moved}, "
-                f"expected {beta * expected}"
+                f"{variant}: beta={beta} moved the loss by {moved}, expected {beta * expected}"
             )
 
     @pytest.mark.parametrize("variant", VARIANTS)
@@ -273,7 +274,9 @@ class TestTheKernelAppliesTheKlTerm:
         assert len(set(losses)) == 4, f"{variant}: loss did not move with beta: {losses}"
         for b, value in zip((0.1, 5.0, 100.0), losses[1:]):
             assert value - losses[0] == pytest.approx(b * factor * per_token, rel=1e-5), (
-                variant, b, value - losses[0],
+                variant,
+                b,
+                value - losses[0],
             )
 
     @pytest.mark.parametrize("variant", VARIANTS)
@@ -313,8 +316,12 @@ class TestTheKernelControls:
         batch = _batch(torch)
         logp = batch["logp_new"]
         old = _pre_1232_loss(
-            torch, variant, logp_new=logp, logp_old=batch["logp_old"],
-            advantages=batch["advantages"], delta=_delta(variant),
+            torch,
+            variant,
+            logp_new=logp,
+            logp_old=batch["logp_old"],
+            advantages=batch["advantages"],
+            delta=_delta(variant),
             completion_mask=batch["mask"],
         )
         old_grad = _grad(torch, old, logp)
@@ -410,8 +417,7 @@ class TestTheKernelReadsOnlyTheTokensItScores:
         accepted[2, 0] -= 2.0
         assert _loss("rft", batch, beta=1.0, reference=accepted).item() != base.item()
 
-        none_accepted = dict(batch, advantages=torch.tensor([-1.0, 0.0, -0.3],
-                                                            dtype=torch.float64))
+        none_accepted = dict(batch, advantages=torch.tensor([-1.0, 0.0, -0.3], dtype=torch.float64))
         loss = _loss("rft", none_accepted, beta=5.0)
         assert loss.item() == 0.0
 
@@ -424,7 +430,11 @@ class TestTheKernelReadsOnlyTheTokensItScores:
         loss = _loss("gspo", batch, beta=1.0, mask=mask)
         base = _loss("gspo", batch, beta=0.0, mask=mask)
         expected = _expected_kl(
-            torch, "gspo", batch["logp_new"].detach(), batch["reference"], mask,
+            torch,
+            "gspo",
+            batch["logp_new"].detach(),
+            batch["reference"],
+            mask,
             batch["advantages"],
         ).item()
         assert math.isfinite(loss.item())
@@ -446,8 +456,9 @@ class _StandInGRPOBase:
         self._logps = logps
         self.stock_calls = 0
 
-    def _get_per_token_logps_and_entropies(self, model, input_ids, attention_mask,
-                                           logits_to_keep, **kwargs):
+    def _get_per_token_logps_and_entropies(
+        self, model, input_ids, attention_mask, logits_to_keep, **kwargs
+    ):
         return self._logps, None
 
     def _compute_loss(self, model, inputs):
@@ -495,14 +506,22 @@ class TestTheVariantTrainerWiresBeta:
         batch = _batch(torch)
         logp = batch["logp_new"]
         kl = _expected_kl(
-            torch, variant, logp.detach(), batch["reference"], batch["mask"],
+            torch,
+            variant,
+            logp.detach(),
+            batch["reference"],
+            batch["mask"],
             batch["advantages"],
         ).item()
         # ratio 1 inside the trainer (no old_per_token_logps): the policy term
         # is the beta=0 loss evaluated at logp_old = logp_new
         policy = _pre_1232_loss(
-            torch, variant, logp_new=logp, logp_old=logp.detach(),
-            advantages=batch["advantages"], delta=_delta(variant),
+            torch,
+            variant,
+            logp_new=logp,
+            logp_old=logp.detach(),
+            advantages=batch["advantages"],
+            delta=_delta(variant),
             completion_mask=batch["mask"],
         ).item()
 
@@ -775,9 +794,7 @@ class TestTheRealTrainer:
         assert losses[0] < losses[1] < losses[2], (variant, losses)
         assert len(set(norms)) == 3, f"{variant}: gradient norm constant across beta: {norms}"
 
-    def test_the_reward_hack_controllers_beta_reaches_the_variant_loss(
-        self, tmp_path, monkeypatch
-    ):
+    def test_the_reward_hack_controllers_beta_reaches_the_variant_loss(self, tmp_path, monkeypatch):
         """``kl_control`` raises beta through ``_apply_coefficient``; the variant sees it.
 
         The controller is the one ``setup()`` attached. One tripping vote
@@ -796,7 +813,8 @@ class TestTheRealTrainer:
         )
         trainer = wrapper.trainer
         controllers = [
-            cb for cb in trainer.callback_handler.callbacks
+            cb
+            for cb in trainer.callback_handler.callbacks
             if type(cb).__name__ == "RewardHackMitigationCallback"
         ]
         assert len(controllers) == 1, trainer.callback_handler.callbacks
@@ -821,5 +839,6 @@ class TestTheRealTrainer:
         moved = after.item() - before.item()
         assert moved > 0.0, "the controller's beta did not reach the variant loss"
         assert moved == pytest.approx(stock_after.item() - stock_before.item(), rel=1e-4), (
-            moved, stock_after.item() - stock_before.item(),
+            moved,
+            stock_after.item() - stock_before.item(),
         )

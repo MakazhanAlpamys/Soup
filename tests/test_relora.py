@@ -15,7 +15,6 @@ from soup_cli.config.schema import TrainingConfig
 TRAINER_DIR = Path(__file__).resolve().parents[1] / "src" / "soup_cli" / "trainer"
 
 
-
 class TestReLoRASchema:
     def test_default_disabled(self):
         cfg = TrainingConfig()
@@ -288,7 +287,6 @@ class TestReLoRACallback:
         assert 0 < opt.param_groups[0]["lr"] <= 1e-3
 
 
-
 def _make_fake_lora_module():
     try:
         import torch.nn as nn
@@ -555,9 +553,7 @@ class TestMergeReinitAndReset:
         param = model.lora_A.weight
         before = len(opt.state[param])
 
-        cb = ReLoRACallback(
-            policy=ReLoRAPolicy(steps=10, prune_ratio=0.9, reset_optimizer=False)
-        )
+        cb = ReLoRACallback(policy=ReLoRAPolicy(steps=10, prune_ratio=0.9, reset_optimizer=False))
         cb._merge_reinit_and_reset(model, opt)
         assert len(opt.state[param]) == before
 
@@ -738,6 +734,7 @@ def test_attach_relora_preflight_rejects_quantized_base():
         attach_relora_callback(trainer, TrainingConfig(relora_steps=100))
     trainer.add_callback.assert_not_called()
 
+
 def test_attach_relora_rejects_model_without_dense_merge():
     from soup_cli.utils.peft_wiring import attach_relora_callback
 
@@ -898,7 +895,6 @@ class TestReLoRARealPeft:
         assert torch.allclose(live_logits, reloaded_logits, atol=1e-5, rtol=1e-5)
 
 
-
 class TestReLoRAWrapperSaves:
     def test_embedding_wrapper_saves_dense_reloadable_model(self, tmp_path):
         try:
@@ -955,9 +951,7 @@ class TestReLoRAWrapperSaves:
             temperature=0.05,
             max_length=8,
         )
-        assert attach_relora_callback(
-            wrapper, TrainingConfig(relora_steps=1, quantization="none")
-        )
+        assert attach_relora_callback(wrapper, TrainingConfig(relora_steps=1, quantization="none"))
         save_model_with_relora(wrapper, str(tmp_path / "output"), relora_steps=1)
 
         reloaded = LlamaModel.from_pretrained(tmp_path / "output").eval()
@@ -1025,15 +1019,14 @@ class TestReLoRAWrapperSaves:
                 self.model.policy.save_pretrained(output_dir)
 
         trainer = _Trainer(holder)
-        assert attach_relora_callback(
-            trainer, TrainingConfig(relora_steps=1, quantization="none")
-        )
+        assert attach_relora_callback(trainer, TrainingConfig(relora_steps=1, quantization="none"))
         save_model_with_relora(trainer, str(tmp_path / "output"), relora_steps=1)
 
         reloaded = LlamaForCausalLM.from_pretrained(tmp_path / "output").eval()
         with torch.no_grad():
             reloaded_logits = reloaded(input_ids=input_ids).logits
         assert torch.allclose(live_logits, reloaded_logits, atol=1e-5, rtol=1e-5)
+
 
 class TestReLoRATaskGate:
     def _base_cfg(self, task: str = "sft", backend: str = "transformers") -> dict:

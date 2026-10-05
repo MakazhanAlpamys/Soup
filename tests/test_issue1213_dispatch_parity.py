@@ -146,10 +146,7 @@ def built(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     test that walks the MRO or monkeypatches the real base.
     """
     names: list[str] = []
-    modules = {
-        module_path: importlib.import_module(module_path)
-        for module_path in _WRAPPER_SITES
-    }
+    modules = {module_path: importlib.import_module(module_path) for module_path in _WRAPPER_SITES}
     for module_path, cls_name in _WRAPPER_SITES.items():
         monkeypatch.setattr(modules[module_path], cls_name, _recorder(cls_name, names))
 
@@ -231,9 +228,7 @@ class TestDispatchParity:
         _run_sweep_arm(cfg)
         assert built == ["MLXSFTTrainerWrapper"], built
 
-    def test_an_unknown_task_raises_instead_of_falling_back_to_sft(
-        self, built: list[str]
-    ) -> None:
+    def test_an_unknown_task_raises_instead_of_falling_back_to_sft(self, built: list[str]) -> None:
         from soup_cli.trainer.dispatch import build_trainer
 
         with pytest.raises(ValueError) as excinfo:
@@ -315,8 +310,14 @@ class TestTheKwargsReachTheWrapper:
                     pass
 
                 def train(self, **kwargs):
-                    return {"initial_loss": 1.0, "final_loss": 0.5, "total_steps": 1,
-                            "duration_secs": 1.0, "output_dir": "out", "duration": "1s"}
+                    return {
+                        "initial_loss": 1.0,
+                        "final_loss": 0.5,
+                        "total_steps": 1,
+                        "duration_secs": 1.0,
+                        "output_dir": "out",
+                        "duration": "1s",
+                    }
 
             return _Recorder
 

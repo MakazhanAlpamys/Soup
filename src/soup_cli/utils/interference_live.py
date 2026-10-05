@@ -14,6 +14,7 @@ and in :mod:`soup_cli.utils.live_eval`; importing this module is cheap.
 On a 4 GB box keep the adapters tiny (SmolLM2-135M LoRA) and the eval suite
 small — the eval pairs are capped at ``_MAX_EVAL_PAIRS``.
 """
+
 from __future__ import annotations
 
 import math
@@ -88,9 +89,7 @@ def measure_interference_losses(
     )
 
     first = names[0]
-    peft_model = PeftModel.from_pretrained(
-        model, adapters[first], adapter_name=first
-    )
+    peft_model = PeftModel.from_pretrained(model, adapters[first], adapter_name=first)
     try:
         for name in names[1:]:
             peft_model.load_adapter(adapters[name], adapter_name=name)
@@ -132,14 +131,14 @@ def measure_interference_losses(
                     continue
                 combo = f"__combo__{target}__{co_loaded}"
                 peft_model.add_weighted_adapter(
-                    [target, co_loaded], weights=[1.0, 1.0],
-                    adapter_name=combo, combination_type="cat",
+                    [target, co_loaded],
+                    weights=[1.0, 1.0],
+                    adapter_name=combo,
+                    combination_type="cat",
                 )
                 try:
                     peft_model.set_adapter(combo)
-                    losses[(target, co_loaded)] = _measure(
-                        peft_model, (target, co_loaded)
-                    )
+                    losses[(target, co_loaded)] = _measure(peft_model, (target, co_loaded))
                 finally:
                     # Free the combo even if the eval raised, so the live
                     # adapter set never blows up to N^2 (review fix).

@@ -133,7 +133,10 @@ class TestIPOTrainRouting:
             data={"train": "./data.jsonl"},
         )
         wrapper = IPOTrainerWrapper(
-            cfg, device="cuda", report_to="wandb", deepspeed_config="ds.json",
+            cfg,
+            device="cuda",
+            report_to="wandb",
+            deepspeed_config="ds.json",
         )
         assert wrapper.report_to == "wandb"
         assert wrapper.deepspeed_config == "ds.json"
@@ -183,15 +186,17 @@ class TestIPOSweepParams:
         }
 
         fake_gpu_info = {"memory_total": "0 MB", "memory_total_bytes": 0}
-        with mock_patch("soup_cli.data.loader.load_dataset", return_value=fake_dataset), \
-             mock_patch("soup_cli.utils.gpu.detect_device", return_value=("cpu", "CPU")), \
-             mock_patch("soup_cli.utils.gpu.get_gpu_info", return_value=fake_gpu_info), \
-             mock_patch("soup_cli.experiment.tracker.ExperimentTracker") as mock_tracker_cls, \
-             mock_patch("soup_cli.monitoring.display.TrainingDisplay"), \
-             mock_patch("soup_cli.trainer.ipo.IPOTrainerWrapper.setup"), \
-             mock_patch(
-                 "soup_cli.trainer.ipo.IPOTrainerWrapper.train", return_value=fake_result
-             ) as mock_train:
+        with (
+            mock_patch("soup_cli.data.loader.load_dataset", return_value=fake_dataset),
+            mock_patch("soup_cli.utils.gpu.detect_device", return_value=("cpu", "CPU")),
+            mock_patch("soup_cli.utils.gpu.get_gpu_info", return_value=fake_gpu_info),
+            mock_patch("soup_cli.experiment.tracker.ExperimentTracker") as mock_tracker_cls,
+            mock_patch("soup_cli.monitoring.display.TrainingDisplay"),
+            mock_patch("soup_cli.trainer.ipo.IPOTrainerWrapper.setup"),
+            mock_patch(
+                "soup_cli.trainer.ipo.IPOTrainerWrapper.train", return_value=fake_result
+            ) as mock_train,
+        ):
             mock_tracker = MagicMock()
             mock_tracker.start_run.return_value = "run-ipo-1"
             mock_tracker_cls.return_value = mock_tracker
@@ -329,9 +334,7 @@ class TestIPOTrainResults:
             log_history=[{"loss": 1.0}], global_step=5
         )
         wrapper.train(resume_from_checkpoint="/ckpt/checkpoint-50")
-        mock_trainer.train.assert_called_once_with(
-            resume_from_checkpoint="/ckpt/checkpoint-50"
-        )
+        mock_trainer.train.assert_called_once_with(resume_from_checkpoint="/ckpt/checkpoint-50")
 
 
 # ─── CLI Init IPO Template Tests ─────────────────────────────────────────────
@@ -376,13 +379,16 @@ class TestIPOWizardPath:
     def test_wizard_ipo_task_sets_dpo_format(self):
         from soup_cli.commands.init import _interactive_wizard
 
-        with mock_patch("soup_cli.commands.init.Prompt.ask", side_effect=[
-            "some-model",
-            "ipo",
-            "./data.jsonl",
-            "3",
-            "yes",
-        ]):
+        with mock_patch(
+            "soup_cli.commands.init.Prompt.ask",
+            side_effect=[
+                "some-model",
+                "ipo",
+                "./data.jsonl",
+                "3",
+                "yes",
+            ],
+        ):
             config_text = _interactive_wizard()
 
         assert "task: ipo" in config_text

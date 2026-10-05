@@ -167,9 +167,7 @@ def find_raw_help_assertions(source: str) -> list[tuple[int, str]]:
                 match = _ASSIGN_RE.match(line)
                 if match:
                     name, rhs = match.group(1), match.group(2)
-                    derived = _RAW_OUTPUT_RE.search(rhs) or any(
-                        f"{var}" in rhs for var in tainted
-                    )
+                    derived = _RAW_OUTPUT_RE.search(rhs) or any(f"{var}" in rhs for var in tainted)
                     if derived and not _looks_normalised(rhs):
                         tainted.add(name)
                     elif derived:
@@ -181,9 +179,7 @@ def find_raw_help_assertions(source: str) -> list[tuple[int, str]]:
             if not _FLAG_RE.search(stripped):
                 continue
             reads_raw = _RAW_OUTPUT_RE.search(stripped)
-            reads_tainted = any(
-                re.search(rf"\b{re.escape(var)}\b", stripped) for var in tainted
-            )
+            reads_tainted = any(re.search(rf"\b{re.escape(var)}\b", stripped) for var in tainted)
             if reads_raw or reads_tainted:
                 offenders.append((node.lineno + offset, stripped[:100]))
     return offenders
@@ -225,17 +221,17 @@ class TestTheScannerCanActuallyFail:
     shown able to find something — otherwise it is indistinguishable from a
     scanner that silently matches nothing at all."""
 
-    BAD = '''
+    BAD = """
 def test_help_mentions_the_flag():
     result = runner.invoke(app, ["ship", "--help"])
     assert "--noise-floor" in result.output
-'''
+"""
 
     #: VERBATIM from `15b57f7`, the commit whose CI went red on all nine test
     #: cells. Not paraphrased — the first version of this scanner passed its
     #: invented example and missed this, because the assertion names a local
     #: variable rather than `result.output`.
-    REAL_BROKEN = '''
+    REAL_BROKEN = """
     def test_the_flag_exists_and_is_documented(self):
         from typer.testing import CliRunner
 
@@ -245,7 +241,7 @@ def test_help_mentions_the_flag():
         assert result.exit_code == 0, (result.output, repr(result.exception))
         plain = " ".join(result.output.split())
         assert "--noise-floor" in plain
-'''
+"""
 
     def test_it_catches_the_real_commit_that_broke_ci(self):
         """The load-bearing test in this file. Whitespace-collapse via a local
@@ -276,20 +272,20 @@ def test_help_mentions_the_flag():
         """The narrow scope, pinned. A flag named in an ERROR message is plain
         interpolated text that Rich does not style per-token — 13 such
         assertions exist in this suite and every one is correct."""
-        err = '''
+        err = """
 def test_missing_model_is_reported():
     result = runner.invoke(app, ["deploy", "ollama"])
     assert result.exit_code == 1
     assert "--model" in result.output
-'''
+"""
         assert find_raw_help_assertions(err) == []
 
     def test_an_assertion_without_a_flag_is_not_flagged(self):
-        plain = '''
+        plain = """
 def test_help_renders():
     result = runner.invoke(app, ["ship", "--help"])
     assert "SHIP" in result.output
-'''
+"""
         assert find_raw_help_assertions(plain) == []
 
     def test_unparseable_source_does_not_explode(self):
@@ -483,9 +479,7 @@ def find_unsafe_highlighted_assertions(source: str) -> list[tuple[int, str]]:
                 continue
 
             reads_raw = _ANY_RAW_OUTPUT_RE.search(stripped)
-            reads_tainted = any(
-                re.search(rf"\b{re.escape(var)}\b", stripped) for var in tainted
-            )
+            reads_tainted = any(re.search(rf"\b{re.escape(var)}\b", stripped) for var in tainted)
             if not (reads_raw or reads_tainted):
                 continue
             if _PARSES_OUTPUT.search(stripped):
@@ -494,9 +488,7 @@ def find_unsafe_highlighted_assertions(source: str) -> list[tuple[int, str]]:
             is_assert_head = stripped.startswith("assert")
             if not (is_assert_head or (node.lineno + offset) in assert_lines):
                 continue
-            expression = (
-                _assert_expression(stripped) if is_assert_head else stripped
-            )
+            expression = _assert_expression(stripped) if is_assert_head else stripped
             if not (
                 _ANY_RAW_OUTPUT_RE.search(expression)
                 or any(re.search(rf"\b{re.escape(var)}\b", expression) for var in tainted)
@@ -701,9 +693,7 @@ def find_stale_ansi_ok_markers(source: str) -> list[tuple[int, str]]:
     records = _find_raw_cli_output_statements(source)
     stale: list[tuple[int, str]] = []
     for lineno, text in marker_lines:
-        matches_any = any(
-            start - 1 <= lineno <= end for start, end, _, _ in records
-        )
+        matches_any = any(start - 1 <= lineno <= end for start, end, _, _ in records)
         if not matches_any:
             stale.append((lineno, text))
 
@@ -762,41 +752,41 @@ class TestTheCliOutputScannerCanActuallyFail:
     if it is proven capable of finding both direct, indirect, wrapped, and token-based
     unsafe assertions."""
 
-    DIRECT_BAD = '''
+    DIRECT_BAD = """
 def test_draft_acceptance():
     result = runner.invoke(app, ["measure", "--target", "org/target"])
     assert "60.0%" in result.output
-'''
+"""
 
-    INDIRECT_BAD = '''
+    INDIRECT_BAD = """
 def test_draft_acceptance_indirect():
     result = runner.invoke(app, ["measure", "--target", "org/target"])
     plain = " ".join(result.output.split())
     assert "60.0%" in plain
-'''
+"""
 
-    WRAPPED_BAD = '''
+    WRAPPED_BAD = """
 def test_draft_acceptance_wrapped():
     result = runner.invoke(app, ["measure", "--target", "org/target"])
     assert (
         "60.0%"
         in result.output
     )
-'''
+"""
 
-    NON_PCT_BAD = '''
+    NON_PCT_BAD = """
 def test_merge_row_count():
     result = runner.invoke(app, ["data", "merge"])
     assert "5 rows" in result.output
-'''
+"""
 
-    KEY_EQUALS_BAD = '''
+    KEY_EQUALS_BAD = """
 def test_param_forwarding():
     result = runner.invoke(app, ["train"])
     assert "iterations=2" in result.output
-'''
+"""
 
-    REAL_PRE_FIX = '''
+    REAL_PRE_FIX = """
 def test_below_min_acceptance_exits_two(self, runner, in_tmp_cwd, monkeypatch):
     result = runner.invoke(
         app,
@@ -806,7 +796,7 @@ def test_below_min_acceptance_exits_two(self, runner, in_tmp_cwd, monkeypatch):
     assert result.exit_code == 2
     assert "60.0%" in result.output
     assert "below" in result.output.lower()
-'''
+"""
 
     INLINE_FIXTURE = '''
 def test_inline_fixture_handling():
@@ -858,28 +848,28 @@ def test_inline_fixture_handling():
         assert find_raw_cli_output_assertions(textwrap.dedent(good)) == []
 
     def test_plain_non_token_assertion_is_not_flagged(self):
-        plain = '''
+        plain = """
 def test_draft_measure():
     result = runner.invoke(app, ["measure", "--target", "org/target"])
     assert "STRONG" in result.output
-'''
+"""
         assert find_raw_cli_output_assertions(textwrap.dedent(plain)) == []
 
     def test_exempt_model_identifier_is_not_flagged(self):
-        model = '''
+        model = """
 def test_adapters_list():
     result = runner.invoke(app, ["adapters", "list"])
     assert "Llama-3.1-8B" in result.output
-'''
+"""
         assert find_raw_cli_output_assertions(textwrap.dedent(model)) == []
 
     def test_failure_message_reading_raw_output_is_not_flagged(self):
-        msg_only = '''
+        msg_only = """
 def test_draft_acceptance_msg():
     result = runner.invoke(app, ["measure", "--target", "org/target"])
     plain = _plain(result.output)
     assert "60.0%" in plain, result.output
-'''
+"""
         assert find_raw_cli_output_assertions(textwrap.dedent(msg_only)) == []
 
     def test_multiline_string_fixture_in_test_is_skipped(self):
@@ -900,22 +890,21 @@ def test_number_output():
         assert bad_number in found[0][1]
 
     def test_ansi_ok_inline_marker_suppresses_offender(self):
-        src = '''
+        src = """
 def test_uncoloured_stdout():
     result = runner.invoke(app, ["measure"])
     assert "60.0%" in result.output  # ansi-ok: mock subprocess stdout is uncoloured
-'''
+"""
         assert find_raw_cli_output_assertions(textwrap.dedent(src)) == []
         found = find_raw_cli_output_assertions(textwrap.dedent(src), ignore_exemptions=True)
         assert len(found) == 1
         assert "60.0%" in found[0][1]
 
     def test_stale_ansi_ok_marker_is_flagged(self):
-        src = '''
+        src = """
 def test_safe():
     assert "plain text" in result.output  # ansi-ok: unnecessary exemption
-'''
+"""
         stale = find_stale_ansi_ok_markers(textwrap.dedent(src))
         assert len(stale) == 1
         assert "unnecessary exemption" in stale[0][1]
-

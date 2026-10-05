@@ -444,9 +444,7 @@ class TestCompatMatrix:
     def test_compat_check_gptq_ddp_clean(self):
         from soup_cli.utils.quant_menu import check_quant_distributed_compat
 
-        problems = check_quant_distributed_compat(
-            quantization="gptq", deepspeed=None, fsdp=False
-        )
+        problems = check_quant_distributed_compat(quantization="gptq", deepspeed=None, fsdp=False)
         assert problems == []
 
     def test_compat_check_normalizes_hyphenated_deepspeed(self):
@@ -474,9 +472,7 @@ class TestCompatMatrix:
         from soup_cli.utils.quant_menu import check_quant_distributed_compat
 
         with pytest.raises(ValueError, match="unknown quantization"):
-            check_quant_distributed_compat(
-                quantization="bogus", deepspeed=None, fsdp=False
-            )
+            check_quant_distributed_compat(quantization="bogus", deepspeed=None, fsdp=False)
 
     def test_compat_check_eetq_zero3_message_specific(self):
         from soup_cli.utils.quant_menu import check_quant_distributed_compat
@@ -486,24 +482,19 @@ class TestCompatMatrix:
         )
         # Message must explicitly name BOTH the format AND the strategy.
         assert any(
-            "eetq" in p.lower() and ("zero" in p.lower() or "stage" in p.lower())
-            for p in problems
+            "eetq" in p.lower() and ("zero" in p.lower() or "stage" in p.lower()) for p in problems
         )
 
     def test_compat_check_eetq_fsdp_rejected(self):
         from soup_cli.utils.quant_menu import check_quant_distributed_compat
 
-        problems = check_quant_distributed_compat(
-            quantization="eetq", deepspeed=None, fsdp=True
-        )
+        problems = check_quant_distributed_compat(quantization="eetq", deepspeed=None, fsdp=True)
         assert any("eetq" in p.lower() and "fsdp" in p.lower() for p in problems)
 
     def test_compat_check_aqlm_fsdp_rejected(self):
         from soup_cli.utils.quant_menu import check_quant_distributed_compat
 
-        problems = check_quant_distributed_compat(
-            quantization="aqlm", deepspeed=None, fsdp=True
-        )
+        problems = check_quant_distributed_compat(quantization="aqlm", deepspeed=None, fsdp=True)
         assert any("aqlm" in p.lower() and "fsdp" in p.lower() for p in problems)
 
     def test_compat_check_hqq_zero3_message_specific(self):
@@ -514,8 +505,7 @@ class TestCompatMatrix:
         )
         # Per security-review finding: assert both keywords present.
         assert any(
-            "hqq" in p.lower() and ("zero" in p.lower() or "stage" in p.lower())
-            for p in problems
+            "hqq" in p.lower() and ("zero" in p.lower() or "stage" in p.lower()) for p in problems
         )
 
 

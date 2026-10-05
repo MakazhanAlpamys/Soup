@@ -43,8 +43,7 @@ def _to_hashable(val: Any) -> Any:
 def _row_signature(row: dict) -> tuple:
     """Return a type-tagged hashable canonical representation of a row dict."""
     return tuple(
-        (str(k), _to_hashable(v))
-        for k, v in sorted(row.items(), key=lambda item: str(item[0]))
+        (str(k), _to_hashable(v)) for k, v in sorted(row.items(), key=lambda item: str(item[0]))
     )
 
 
@@ -98,9 +97,7 @@ def validate_and_stats(data: list[dict], expected_format: Optional[str] = None) 
     # Real JSONL datasets are homogeneous — if row 0 is flat, all rows are.
     # The fast path avoids the _to_hashable type-tagging overhead entirely.
     # Guard with try/except for heterogeneous datasets (mixed formats).
-    _flat_values = all(
-        isinstance(v, str) or v is None for v in data[0].values()
-    )
+    _flat_values = all(isinstance(v, str) or v is None for v in data[0].values())
 
     for idx, row in enumerate(data):
         # 1. Duplicate detection — fast path for flat rows (3x faster),

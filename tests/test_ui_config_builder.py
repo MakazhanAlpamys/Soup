@@ -6,6 +6,7 @@ import pytest
 def _auth_headers():
     """Return auth headers with the current UI token."""
     from soup_cli.ui.app import get_auth_token
+
     return {"Authorization": f"Bearer {get_auth_token()}"}
 
 

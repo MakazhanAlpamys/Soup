@@ -33,8 +33,10 @@ ALLOWED_SKIP_GATES = {
         "test_issue349_measured_fit.py",
         "test_the_probe_returns_none_without_cuda_instead_of_raising",
     ): "skips when CUDA IS present: it asserts the no-CUDA fallback",
-    ("test_v07120.py", "test_gates_without_bnb_or_cuda"):
-        "skips when CUDA + bitsandbytes ARE present: it asserts the refusal without them",
+    (
+        "test_v07120.py",
+        "test_gates_without_bnb_or_cuda",
+    ): "skips when CUDA + bitsandbytes ARE present: it asserts the refusal without them",
 }
 
 
@@ -88,7 +90,9 @@ def violations(source: str, filename: str = "<snippet>", allowed=None) -> list[s
             function = node.name
         if isinstance(node, ast.If) and _calls_named(node.test, "cuda_available"):
             skips = [
-                sub for stmt in node.body + node.orelse for sub in ast.walk(stmt)
+                sub
+                for stmt in node.body + node.orelse
+                for sub in ast.walk(stmt)
                 if _is_attr_call(sub, "pytest", "skip")
             ]
             if skips and (filename, function) not in allowed:
@@ -214,9 +218,7 @@ class TestDeviceCountGating:
     other test callers do not regress.
     """
 
-    def test_probe_initial_device_count_returns_zero_when_no_device_visible(
-        self, monkeypatch
-    ):
+    def test_probe_initial_device_count_returns_zero_when_no_device_visible(self, monkeypatch):
         """Under CUDA_VISIBLE_DEVICES='', is_available is True but device_count is 0."""
         import torch
 
@@ -225,9 +227,7 @@ class TestDeviceCountGating:
 
         assert conftest._probe_initial_device_count() == 0
 
-    def test_probe_initial_device_count_returns_count_when_device_visible(
-        self, monkeypatch
-    ):
+    def test_probe_initial_device_count_returns_count_when_device_visible(self, monkeypatch):
         """When device is visible, probe returns positive count."""
         import torch
 
@@ -246,16 +246,12 @@ class TestDeviceCountGating:
         monkeypatch.setattr(torch.cuda, "is_available", _boom)
         assert conftest._probe_initial_device_count() == 0
 
-    def test_predicate_returns_false_when_initial_device_count_is_zero(
-        self, monkeypatch
-    ):
+    def test_predicate_returns_false_when_initial_device_count_is_zero(self, monkeypatch):
         """_cuda_device_available() returns False when initial count is 0 (#1128)."""
         monkeypatch.setattr(conftest, "_INITIAL_CUDA_DEVICE_COUNT", 0)
         assert conftest._cuda_device_available() is False
 
-    def test_predicate_returns_true_when_device_is_available_and_visible(
-        self, monkeypatch
-    ):
+    def test_predicate_returns_true_when_device_is_available_and_visible(self, monkeypatch):
         """Prove both directions: when card was visible at start, probe returns True (#1128)."""
         monkeypatch.setattr(conftest, "_INITIAL_CUDA_DEVICE_COUNT", 1)
         assert conftest._cuda_device_available() is True

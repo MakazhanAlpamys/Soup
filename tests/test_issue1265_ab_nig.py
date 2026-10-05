@@ -163,9 +163,7 @@ class TestPriorScale:
 
         from soup_cli.utils.ab_test import PRIOR_SCALE_ROWS
 
-        docs = (Path(__file__).parent.parent / "docs" / "evaluation.md").read_text(
-            encoding="utf-8"
-        )
+        docs = (Path(__file__).parent.parent / "docs" / "evaluation.md").read_text(encoding="utf-8")
         assert f"the first {PRIOR_SCALE_ROWS} rows of each arm" in docs
         assert f"from {PRIOR_SCALE_ROWS + 2} rows per arm" in docs
 
@@ -385,10 +383,50 @@ def test_the_prior_bound_sits_at_the_largest_n_eff_the_tool_accepts(factor, refu
 # 1.0 early), then ordinary rows. Seeded Gaussian rows, sd 0.03, rounded.
 _SATURATED_C = [1.0, 1.0, 1.0, 1.0, 0.99]
 _SATURATED_T = [1.0] * 5
-_ORDINARY_C = [0.792, 0.815, 0.793, 0.791, 0.772, 0.794, 0.833, 0.813, 0.831, 0.807,
-               0.812, 0.806, 0.75, 0.826, 0.815, 0.815, 0.749, 0.748, 0.773, 0.786]
-_ORDINARY_T = [0.818, 0.782, 0.786, 0.762, 0.771, 0.784, 0.839, 0.739, 0.756, 0.807,
-               0.843, 0.817, 0.743, 0.724, 0.811, 0.778, 0.766, 0.829, 0.833, 0.805]
+_ORDINARY_C = [
+    0.792,
+    0.815,
+    0.793,
+    0.791,
+    0.772,
+    0.794,
+    0.833,
+    0.813,
+    0.831,
+    0.807,
+    0.812,
+    0.806,
+    0.75,
+    0.826,
+    0.815,
+    0.815,
+    0.749,
+    0.748,
+    0.773,
+    0.786,
+]
+_ORDINARY_T = [
+    0.818,
+    0.782,
+    0.786,
+    0.762,
+    0.771,
+    0.784,
+    0.839,
+    0.739,
+    0.756,
+    0.807,
+    0.843,
+    0.817,
+    0.743,
+    0.724,
+    0.811,
+    0.778,
+    0.766,
+    0.829,
+    0.833,
+    0.805,
+]
 
 
 def _peeks(control, treatment, **kwargs):
@@ -557,8 +595,9 @@ class TestUnderPeeking:
         """
         np = pytest.importorskip("numpy")
         sim = _simulate(np, ratio=ratio, shift_in_effects=1.0, reps=1000, seed=3107, alpha=0.05)
-        right = sum(1 for o in sim["outcomes"] if o is not None and o[:2] == ("reject_h0",
-                                                                               "better"))
+        right = sum(
+            1 for o in sim["outcomes"] if o is not None and o[:2] == ("reject_h0", "better")
+        )
         assert right / len(sim["outcomes"]) >= min_power
 
     def test_msprt_step_replays_the_simulated_runs(self):
@@ -603,8 +642,9 @@ class TestCli:
         ("rows", "extra"),
         [(40, ("--alpha", "0.005")), (1001, ()), (12, ("--alpha", "0.001"))],
     )
-    def test_no_calibration_warning_at_any_alpha_or_length(self, tmp_path, monkeypatch, rows,
-                                                           extra):
+    def test_no_calibration_warning_at_any_alpha_or_length(
+        self, tmp_path, monkeypatch, rows, extra
+    ):
         pattern = ([0.80, 0.82, 0.78, 0.81, 0.79] * 201)[:rows]
         result = _run_cli(tmp_path, monkeypatch, pattern, [x - 0.30 for x in pattern], extra)
         assert result.exit_code == 0, (result.output, repr(result.exception))

@@ -154,17 +154,13 @@ class TestShapesTheFirstGuardCouldNotSee:
 
     def test_an_assigned_lambda_is_a_definition(self, tmp_path) -> None:
         rogue = tmp_path / "rogue_lambda.py"
-        rogue.write_text(
-            "_is_private_or_link_local = lambda host: False\n", encoding="utf-8"
-        )
+        rogue.write_text("_is_private_or_link_local = lambda host: False\n", encoding="utf-8")
 
         assert _definers(rogue) == ["_is_private_or_link_local"]
 
     def test_a_de_underscored_constant_is_a_builder(self, tmp_path) -> None:
         rogue = tmp_path / "rogue_renamed.py"
-        rogue.write_text(
-            '_LOOPBACKHOSTS = frozenset({"localhost"})\n', encoding="utf-8"
-        )
+        rogue.write_text('_LOOPBACKHOSTS = frozenset({"localhost"})\n', encoding="utf-8")
 
         assert _builders(rogue) == ["_LOOPBACKHOSTS"]
 
@@ -362,12 +358,8 @@ class TestOutboundGatesShareTheRefusal:
             f"_HOSTNAME_CHECKS_WITHOUT_THE_REFUSAL with the reason: {unaccounted}"
         )
 
-    @pytest.mark.parametrize(
-        ("relpath", "func_name"), sorted(_HOSTNAME_CHECKS_WITHOUT_THE_REFUSAL)
-    )
-    def test_every_declared_exemption_is_still_needed(
-        self, relpath: str, func_name: str
-    ) -> None:
+    @pytest.mark.parametrize(("relpath", "func_name"), sorted(_HOSTNAME_CHECKS_WITHOUT_THE_REFUSAL))
+    def test_every_declared_exemption_is_still_needed(self, relpath: str, func_name: str) -> None:
         """A renamed, rewritten or since-fixed entry must leave the table, not rot in it."""
         funcs = [func for func in _functions(_SRC_ROOT / relpath) if func.name == func_name]
         assert len(funcs) == 1 and _is_hostname_check(funcs[0]), (

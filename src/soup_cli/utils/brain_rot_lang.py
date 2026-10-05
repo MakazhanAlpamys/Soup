@@ -69,9 +69,7 @@ class BrainRotLangBundle:
                 if not entry:
                     raise ValueError(f"{name} entries must be non-empty")
                 if "\x00" in entry:
-                    raise ValueError(
-                        f"{name} entries must not contain null bytes"
-                    )
+                    raise ValueError(f"{name} entries must not contain null bytes")
 
 
 # ---------------------------------------------------------------------------
@@ -84,8 +82,18 @@ class BrainRotLangBundle:
 _EN_BUNDLE = BrainRotLangBundle(
     code="en",
     low_effort_tokens=(
-        "lol", "omg", "lmao", "rofl", "smh", "tbh", "idk",
-        "wtf", "ikr", "tldr", "fml", "yolo",
+        "lol",
+        "omg",
+        "lmao",
+        "rofl",
+        "smh",
+        "tbh",
+        "idk",
+        "wtf",
+        "ikr",
+        "tldr",
+        "fml",
+        "yolo",
     ),
     clickbait_phrases=(
         "you won't believe",
@@ -107,8 +115,16 @@ _EN_BUNDLE = BrainRotLangBundle(
 _ES_BUNDLE = BrainRotLangBundle(
     code="es",
     low_effort_tokens=(
-        "jaja", "jajaja", "jeje", "jiji", "lol", "omg",
-        "xd", "wtf", "ojalá", "ay",
+        "jaja",
+        "jajaja",
+        "jeje",
+        "jiji",
+        "lol",
+        "omg",
+        "xd",
+        "wtf",
+        "ojalá",
+        "ay",
     ),
     clickbait_phrases=(
         "no creerás",
@@ -129,8 +145,16 @@ _ES_BUNDLE = BrainRotLangBundle(
 _FR_BUNDLE = BrainRotLangBundle(
     code="fr",
     low_effort_tokens=(
-        "mdr", "ptdr", "lol", "omg", "xd", "jpp", "tkt",
-        "wtf", "rofl", "lmao",
+        "mdr",
+        "ptdr",
+        "lol",
+        "omg",
+        "xd",
+        "jpp",
+        "tkt",
+        "wtf",
+        "rofl",
+        "lmao",
     ),
     clickbait_phrases=(
         "vous n'allez pas le croire",
@@ -151,8 +175,17 @@ _FR_BUNDLE = BrainRotLangBundle(
 _DE_BUNDLE = BrainRotLangBundle(
     code="de",
     low_effort_tokens=(
-        "krass", "omg", "lol", "wtf", "xd", "hä", "alter",
-        "boah", "ehh", "rofl", "lmao",
+        "krass",
+        "omg",
+        "lol",
+        "wtf",
+        "xd",
+        "hä",
+        "alter",
+        "boah",
+        "ehh",
+        "rofl",
+        "lmao",
     ),
     clickbait_phrases=(
         "du wirst es nicht glauben",
@@ -173,8 +206,16 @@ _DE_BUNDLE = BrainRotLangBundle(
 _RU_BUNDLE = BrainRotLangBundle(
     code="ru",
     low_effort_tokens=(
-        "ааа", "ххх", "лол", "ржу", "кек", "ыыы", "омг",
-        "пиздец", "жесть", "капец",
+        "ааа",
+        "ххх",
+        "лол",
+        "ржу",
+        "кек",
+        "ыыы",
+        "омг",
+        "пиздец",
+        "жесть",
+        "капец",
     ),
     clickbait_phrases=(
         "вы не поверите",
@@ -221,9 +262,7 @@ def _check_lang_arg_shape(value: object) -> None:
     if "\x00" in value:
         raise ValueError("lang must not contain null bytes")
     if len(value) > _MAX_LANG_CODE_LEN:
-        raise ValueError(
-            f"lang must be <= {_MAX_LANG_CODE_LEN} chars"
-        )
+        raise ValueError(f"lang must be <= {_MAX_LANG_CODE_LEN} chars")
 
 
 def get_lang_bundle(lang: object) -> BrainRotLangBundle:
@@ -258,8 +297,7 @@ def validate_lang_code(value: object) -> str:
         return canonical
     if canonical not in SUPPORTED_LANGS:
         raise ValueError(
-            f"lang {canonical!r} not in supported set "
-            f"{sorted(SUPPORTED_LANGS) + ['auto']}"
+            f"lang {canonical!r} not in supported set {sorted(SUPPORTED_LANGS) + ['auto']}"
         )
     return canonical
 

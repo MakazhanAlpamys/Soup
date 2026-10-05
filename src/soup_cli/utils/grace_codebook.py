@@ -50,42 +50,26 @@ def validate_grace_codebook_size(value: object) -> int:
     a multi-GB codebook by accident.
     """
     if isinstance(value, bool):
-        raise TypeError(
-            f"grace_codebook_size must not be bool, got {value!r}"
-        )
+        raise TypeError(f"grace_codebook_size must not be bool, got {value!r}")
     if not isinstance(value, int):
-        raise TypeError(
-            f"grace_codebook_size must be int, got {type(value).__name__}"
-        )
+        raise TypeError(f"grace_codebook_size must be int, got {type(value).__name__}")
     if value < 1:
-        raise ValueError(
-            f"grace_codebook_size must be >= 1, got {value}"
-        )
+        raise ValueError(f"grace_codebook_size must be >= 1, got {value}")
     if value > MAX_CODEBOOK_SIZE:
-        raise ValueError(
-            f"grace_codebook_size must be <= {MAX_CODEBOOK_SIZE}, got {value}"
-        )
+        raise ValueError(f"grace_codebook_size must be <= {MAX_CODEBOOK_SIZE}, got {value}")
     return value
 
 
 def validate_grace_codebook_dim(value: object) -> int:
     """Validate the codebook entry dimension (residual-stream width)."""
     if isinstance(value, bool):
-        raise TypeError(
-            f"grace_codebook_dim must not be bool, got {value!r}"
-        )
+        raise TypeError(f"grace_codebook_dim must not be bool, got {value!r}")
     if not isinstance(value, int):
-        raise TypeError(
-            f"grace_codebook_dim must be int, got {type(value).__name__}"
-        )
+        raise TypeError(f"grace_codebook_dim must be int, got {type(value).__name__}")
     if value < 1:
-        raise ValueError(
-            f"grace_codebook_dim must be >= 1, got {value}"
-        )
+        raise ValueError(f"grace_codebook_dim must be >= 1, got {value}")
     if value > MAX_CODEBOOK_DIM:
-        raise ValueError(
-            f"grace_codebook_dim must be <= {MAX_CODEBOOK_DIM}, got {value}"
-        )
+        raise ValueError(f"grace_codebook_dim must be <= {MAX_CODEBOOK_DIM}, got {value}")
     return value
 
 
@@ -106,8 +90,7 @@ def apply_grace_codebook(config: GraceCodebookConfig) -> "GraceCodebook":
     """
     if not isinstance(config, GraceCodebookConfig):
         raise TypeError(
-            f"apply_grace_codebook expects GraceCodebookConfig, "
-            f"got {type(config).__name__}"
+            f"apply_grace_codebook expects GraceCodebookConfig, got {type(config).__name__}"
         )
     return GraceCodebook(config=config)
 
@@ -158,13 +141,11 @@ class GraceCodebook:
         """Append a (key, value, label) triple. Enforces dim + size caps."""
         if len(key) != self.config.dim or len(value) != self.config.dim:
             raise ValueError(
-                f"key/value must have dim {self.config.dim}, "
-                f"got key={len(key)} value={len(value)}"
+                f"key/value must have dim {self.config.dim}, got key={len(key)} value={len(value)}"
             )
         if len(self._keys) >= self.config.size:
             raise ValueError(
-                f"codebook is full ({self.config.size} entries); "
-                "increase grace_codebook_size"
+                f"codebook is full ({self.config.size} entries); increase grace_codebook_size"
             )
         self._keys.append([float(x) for x in key])
         self._values.append([float(x) for x in value])
@@ -175,9 +156,7 @@ class GraceCodebook:
         if not self._keys:
             return None
         if len(query) != self.config.dim:
-            raise ValueError(
-                f"query must have dim {self.config.dim}, got {len(query)}"
-            )
+            raise ValueError(f"query must have dim {self.config.dim}, got {len(query)}")
         best_idx = -1
         best_dist = float("inf")
         for i, key in enumerate(self._keys):
@@ -285,9 +264,7 @@ def install_grace_hook(model: object, codebook: GraceCodebook, *, device: str = 
     layers = _locate_decoder_layers(model)
     block = layers[codebook.layer]  # type: ignore[index]
     keys_t = (
-        torch.tensor(codebook._keys, dtype=torch.float32, device=device)
-        if codebook._keys
-        else None
+        torch.tensor(codebook._keys, dtype=torch.float32, device=device) if codebook._keys else None
     )
     values_t = (
         torch.tensor(codebook._values, dtype=torch.float32, device=device)
@@ -343,14 +320,20 @@ def apply_grace_edit(
         governor.check_can_edit()
 
     model, tokenizer, dev = load_model_and_tokenizer(
-        plan.base, device=device, trust_remote_code=trust_remote_code,
+        plan.base,
+        device=device,
+        trust_remote_code=trust_remote_code,
     )
     layers = _locate_decoder_layers(model)
     block = layers[plan.layer]  # type: ignore[index]
     hidden_dim = int(model.config.hidden_size)
 
     prob_before = measure_target_prob(
-        model, tokenizer, subject=plan.subject, target=plan.target, device=dev,
+        model,
+        tokenizer,
+        subject=plan.subject,
+        target=plan.target,
+        device=dev,
     )
 
     # Capture the residual key at the subject's last token (layer output).
@@ -386,13 +369,9 @@ def apply_grace_edit(
     if not tgt_ids:
         raise ValueError("target tokenised to an empty sequence")
     input_ids = torch.tensor([subj_ids + tgt_ids], dtype=torch.long, device=dev)
-    labels = torch.tensor(
-        [[-100] * len(subj_ids) + tgt_ids], dtype=torch.long, device=dev
-    )
+    labels = torch.tensor([[-100] * len(subj_ids) + tgt_ids], dtype=torch.long, device=dev)
     inject_pos = len(subj_ids) - 1
-    delta = torch.zeros(
-        hidden_dim, device=dev, dtype=key_vec.dtype, requires_grad=True
-    )
+    delta = torch.zeros(hidden_dim, device=dev, dtype=key_vec.dtype, requires_grad=True)
 
     def _inject(_mod, _args, output):
         hidden = output[0] if isinstance(output, (tuple, list)) else output
@@ -434,7 +413,9 @@ def apply_grace_edit(
                 codebook = None
     if codebook is None:
         codebook = GraceCodebook(
-            cfg, layer=plan.layer, base_model=plan.base,
+            cfg,
+            layer=plan.layer,
+            base_model=plan.base,
         )
     codebook.add(key_list, value_vec, plan.subject)
 

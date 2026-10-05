@@ -35,7 +35,8 @@ def test_validate_threshold_happy(value):
 
 
 @pytest.mark.parametrize(
-    "bad", [True, False, None, "0.1", -0.1, 0.0, float("nan"), float("inf"), 100.1],
+    "bad",
+    [True, False, None, "0.1", -0.1, 0.0, float("nan"), float("inf"), 100.1],
 )
 def test_validate_threshold_rejects(bad):
     from soup_cli.utils.drift_alarm import validate_threshold
@@ -233,15 +234,11 @@ def test_run_drift_check_happy(tmp_path, monkeypatch):
     ref = tmp_path / "ref.jsonl"
     live = tmp_path / "live.jsonl"
     ref.write_text(
-        "\n".join(
-            json.dumps({"output": text}) for text in ["hello world"] * 10
-        ),
+        "\n".join(json.dumps({"output": text}) for text in ["hello world"] * 10),
         encoding="utf-8",
     )
     live.write_text(
-        "\n".join(
-            json.dumps({"output": text}) for text in ["completely different content"] * 10
-        ),
+        "\n".join(json.dumps({"output": text}) for text in ["completely different content"] * 10),
         encoding="utf-8",
     )
 
@@ -260,9 +257,7 @@ def test_run_drift_check_below_threshold(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     ref = tmp_path / "ref.jsonl"
     live = tmp_path / "live.jsonl"
-    payload = "\n".join(
-        json.dumps({"output": text}) for text in ["hello world"] * 10
-    )
+    payload = "\n".join(json.dumps({"output": text}) for text in ["hello world"] * 10)
     ref.write_text(payload, encoding="utf-8")
     live.write_text(payload, encoding="utf-8")
 

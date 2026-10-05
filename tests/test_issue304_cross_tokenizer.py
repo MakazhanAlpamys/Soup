@@ -350,8 +350,7 @@ class TestDistillConfigCrossTokenizer:
         runner = CliRunner()
         d_file = tmp_path / "d.jsonl"
         d_file.write_text(
-            "\n".join(json.dumps({"prompt": "hi", "response": "hello"}) for _ in range(200))
-            + "\n"
+            "\n".join(json.dumps({"prompt": "hi", "response": "hello"}) for _ in range(200)) + "\n"
         )
 
         # Monkeypatch vocab sizes to differ
@@ -365,10 +364,14 @@ class TestDistillConfigCrossTokenizer:
             app,
             [
                 "distill",
-                "--target", "org/target",
-                "--draft-base", "org/tiny",
-                "--data", str(d_file),
-                "-o", "draftout",
+                "--target",
+                "org/target",
+                "--draft-base",
+                "org/tiny",
+                "--data",
+                str(d_file),
+                "-o",
+                "draftout",
                 "--plan-only",
             ],
         )
@@ -391,8 +394,7 @@ class TestDistillConfigCrossTokenizer:
         runner = CliRunner()
         d_file = tmp_path / "d.jsonl"
         d_file.write_text(
-            "\n".join(json.dumps({"prompt": "hi", "response": "hello"}) for _ in range(200))
-            + "\n"
+            "\n".join(json.dumps({"prompt": "hi", "response": "hello"}) for _ in range(200)) + "\n"
         )
 
         # Equal vocab size
@@ -405,19 +407,21 @@ class TestDistillConfigCrossTokenizer:
         def _fake_tok_from_pretrained(m, **kwargs):
             return tok_a if "target" in m else tok_b
 
-        monkeypatch.setattr(
-            "transformers.AutoTokenizer.from_pretrained", _fake_tok_from_pretrained
-        )
+        monkeypatch.setattr("transformers.AutoTokenizer.from_pretrained", _fake_tok_from_pretrained)
         monkeypatch.chdir(tmp_path)
 
         result = runner.invoke(
             app,
             [
                 "distill",
-                "--target", "org/target",
-                "--draft-base", "org/tiny",
-                "--data", str(d_file),
-                "-o", "draftout",
+                "--target",
+                "org/target",
+                "--draft-base",
+                "org/tiny",
+                "--data",
+                str(d_file),
+                "-o",
+                "draftout",
                 "--plan-only",
             ],
         )
@@ -425,9 +429,7 @@ class TestDistillConfigCrossTokenizer:
         assert result.exit_code == 0
         assert "uld_strategy: wasserstein_aligned" in result.output
 
-    def test_distill_cli_tokenizer_load_failure_raises_error(
-        self, tmp_path, monkeypatch
-    ):
+    def test_distill_cli_tokenizer_load_failure_raises_error(self, tmp_path, monkeypatch):
         """When tokenizers cannot be loaded to verify compatibility, distill fails."""
         import json
 
@@ -439,8 +441,7 @@ class TestDistillConfigCrossTokenizer:
         runner = CliRunner()
         d_file = tmp_path / "d.jsonl"
         d_file.write_text(
-            "\n".join(json.dumps({"prompt": "hi", "response": "hello"}) for _ in range(200))
-            + "\n"
+            "\n".join(json.dumps({"prompt": "hi", "response": "hello"}) for _ in range(200)) + "\n"
         )
 
         monkeypatch.setattr(draft_cmd, "_vocab_size_of", lambda m, trc=False: 32000)
@@ -455,10 +456,14 @@ class TestDistillConfigCrossTokenizer:
             app,
             [
                 "distill",
-                "--target", "org/target",
-                "--draft-base", "org/tiny",
-                "--data", str(d_file),
-                "-o", "draftout",
+                "--target",
+                "org/target",
+                "--draft-base",
+                "org/tiny",
+                "--data",
+                str(d_file),
+                "-o",
+                "draftout",
                 "--plan-only",
             ],
         )

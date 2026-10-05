@@ -375,9 +375,7 @@ def test_each_canary_promotion_gets_a_fresh_rollout_id(tmp_path, monkeypatch):
     assert rollout_ids[0] != rollout_ids[1]
 
 
-def test_keyed_stable_traffic_is_the_base_even_after_a_manual_cutover(
-    tmp_path, monkeypatch
-):
+def test_keyed_stable_traffic_is_the_base_even_after_a_manual_cutover(tmp_path, monkeypatch):
     """The stable bucket is what the stats call stable, not an activated adapter."""
     monkeypatch.chdir(tmp_path)
     state_path, stats_path = _write_canary_state(
@@ -406,9 +404,7 @@ def test_keyed_stable_traffic_is_the_base_even_after_a_manual_cutover(
     assert stats.stable_ok == observed.count(None)
 
 
-def test_failing_live_canary_stream_requests_reach_the_rollout_stats(
-    tmp_path, monkeypatch
-):
+def test_failing_live_canary_stream_requests_reach_the_rollout_stats(tmp_path, monkeypatch):
     """A streamed generation error still answers 200; the stats file is its only record."""
     monkeypatch.chdir(tmp_path)
     state_path, stats_path = _write_canary_state(

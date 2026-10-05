@@ -118,7 +118,6 @@ class TestPairwiseFailureIsNotATie:
         with pytest.raises(JudgeUnavailableError):
             evaluator.compare_pair("p", "x", "y")
 
-
     def test_online_dpo_adapter_keeps_a_down_judge_unranked(self, evaluator, no_sleep):
         # #1225's contract: the ranking trainer counts -1 pairs and stops the run
         # itself with an error naming the judge, so this one adapter must not raise.
@@ -141,8 +140,9 @@ class TestPairwiseFailureIsNotATie:
 
 class TestRetry:
     def test_429_then_200_is_scored_after_one_retry(self, evaluator, no_sleep):
-        replies = iter([_reply(429, {"error": "rate limited"}, {"Retry-After": "3"}),
-                        _reply(200, SCORED)])
+        replies = iter(
+            [_reply(429, {"error": "rate limited"}, {"Retry-After": "3"}), _reply(200, SCORED)]
+        )
         with mock.patch("httpx.post", side_effect=lambda *a, **k: next(replies)) as post:
             score = evaluator.evaluate("q", "a")
         assert score.weighted_score == 4.0
@@ -176,9 +176,7 @@ class TestRetry:
         assert all(0 < d <= judge_mod.JUDGE_MAX_BACKOFF_SECONDS for d in no_sleep)
 
     def test_retry_after_is_capped(self, evaluator, no_sleep):
-        with mock.patch(
-            "httpx.post", return_value=_reply(429, {}, {"Retry-After": "86400"})
-        ):
+        with mock.patch("httpx.post", return_value=_reply(429, {}, {"Retry-After": "86400"})):
             with pytest.raises(JudgeUnavailableError):
                 evaluator.evaluate("q", "a")
         assert no_sleep == [judge_mod.JUDGE_MAX_BACKOFF_SECONDS] * judge_mod.JUDGE_MAX_RETRIES
@@ -238,9 +236,7 @@ def test_hostile_retry_after_never_yields_a_bad_pause(evaluator, no_sleep, value
             evaluator.evaluate("q", "a")
     assert no_sleep
     # time.sleep(nan) and time.sleep(-1) both raise ValueError
-    assert all(
-        math.isfinite(d) and 0 <= d <= judge_mod.JUDGE_MAX_BACKOFF_SECONDS for d in no_sleep
-    )
+    assert all(math.isfinite(d) and 0 <= d <= judge_mod.JUDGE_MAX_BACKOFF_SECONDS for d in no_sleep)
 
 
 def test_the_bounds_are_absolute_not_derived_from_themselves():
@@ -323,15 +319,17 @@ class TestEvalJudgeCli:
         ],
         ids=["429-after-retries", "read-timeout", "empty-choices"],
     )
-    def test_one_failing_row_is_skipped_and_the_rest_scored(self, tmp_path, monkeypatch,
-                                                            no_sleep, failure):
+    def test_one_failing_row_is_skipped_and_the_rest_scored(
+        self, tmp_path, monkeypatch, no_sleep, failure
+    ):
         from soup_cli.cli import app
 
         monkeypatch.chdir(tmp_path)
         _write_rows(tmp_path / "t.jsonl")
         with mock.patch("httpx.post", side_effect=_failing_row("q1", failure)):
             result = CliRunner().invoke(
-                app, ["eval", "judge", "--target", "t.jsonl", "--provider", "server"],
+                app,
+                ["eval", "judge", "--target", "t.jsonl", "--provider", "server"],
             )
         out = strip_ansi(result.output)
         assert result.exit_code == 0, (out, repr(result.exception))
@@ -354,7 +352,8 @@ class TestEvalJudgeCli:
 
         with mock.patch("httpx.post", side_effect=_failing_row("q1", hostile)):
             result = CliRunner().invoke(
-                app, ["eval", "judge", "--target", "t.jsonl", "--provider", "server"],
+                app,
+                ["eval", "judge", "--target", "t.jsonl", "--provider", "server"],
             )
         out = strip_ansi(result.output)
         assert result.exit_code == 0, (out, repr(result.exception))
@@ -368,7 +367,8 @@ class TestEvalJudgeCli:
         _write_rows(tmp_path / "t.jsonl")
         with mock.patch("httpx.post", side_effect=_refused):
             result = CliRunner().invoke(
-                app, ["eval", "judge", "--target", "t.jsonl", "--provider", "server"],
+                app,
+                ["eval", "judge", "--target", "t.jsonl", "--provider", "server"],
             )
         out = strip_ansi(result.output)
         assert result.exit_code == 1, (out, repr(result.exception))
@@ -391,14 +391,25 @@ class TestShipPairwiseCli:
             for i in range(2):
                 fh.write(json.dumps({"prompt": f"task {i}", "expected": "x"}) + "\n")
         monkeypatch.setattr(
-            ship_cmd, "_resolve_generators",
+            ship_cmd,
+            "_resolve_generators",
             lambda *a, **k: (lambda p: "base answer", lambda p: "tuned answer"),
         )
         with mock.patch("httpx.post", side_effect=_refused):
             result = CliRunner().invoke(
                 ship_cmd.app,
-                ["--base", "m", "--tuned", "t", "--task-eval", "tasks.jsonl",
-                 "--task-mode", "pairwise", "--judge-model", f"{JUDGE_BASE}/judge-m"],
+                [
+                    "--base",
+                    "m",
+                    "--tuned",
+                    "t",
+                    "--task-eval",
+                    "tasks.jsonl",
+                    "--task-mode",
+                    "pairwise",
+                    "--judge-model",
+                    f"{JUDGE_BASE}/judge-m",
+                ],
             )
         out = strip_ansi(result.output)
         assert result.exit_code == 1, (out, repr(result.exception))
@@ -422,8 +433,15 @@ class TestEvalGate:
         )
         suite = EvalSuite(
             suite="s",
-            tasks=[GateTask(type="judge", name="quality", threshold=0.7,
-                            prompts="prompts.jsonl", judge_model=f"{JUDGE_BASE}/m")],
+            tasks=[
+                GateTask(
+                    type="judge",
+                    name="quality",
+                    threshold=0.7,
+                    prompts="prompts.jsonl",
+                    judge_model=f"{JUDGE_BASE}/m",
+                )
+            ],
         )
         with mock.patch("httpx.post", side_effect=_refused):
             result = run_gate(suite, generate_fn=lambda prompt: "x")
@@ -440,10 +458,16 @@ class TestEvalGate:
         from soup_cli.monitoring.callback import SoupTrainerCallback
 
         cb = SoupTrainerCallback(
-            display=MagicMock(), tracker=None, run_id="test_run",
+            display=MagicMock(),
+            tracker=None,
+            run_id="test_run",
             eval_gate_config=MagicMock(
-                enabled=True, every_n_epochs=1, on_regression=policy,
-                regression_threshold=0.05, suite="dummy.yaml", baseline=None,
+                enabled=True,
+                every_n_epochs=1,
+                on_regression=policy,
+                regression_threshold=0.05,
+                suite="dummy.yaml",
+                baseline=None,
             ),
         )
         cb._gate_suite = EvalSuite(suite="s", tasks=[])
@@ -453,10 +477,19 @@ class TestEvalGate:
             "ConnectError: connection refused (3 attempts)"
         )
         cb._gate_run_fn = lambda suite, generate_fn, baseline, regression_threshold: GateResult(
-            passed=False, regression=False,
-            task_results=[GateTaskResult(name="quality", score=None, threshold=0.7,
-                                         baseline=None, delta=None, passed=False,
-                                         error=error)],
+            passed=False,
+            regression=False,
+            task_results=[
+                GateTaskResult(
+                    name="quality",
+                    score=None,
+                    threshold=0.7,
+                    baseline=None,
+                    delta=None,
+                    passed=False,
+                    error=error,
+                )
+            ],
         )
         control = MagicMock(should_training_stop=False)
         with caplog.at_level(logging.WARNING, logger="soup_cli.monitoring.callback"):
@@ -475,18 +508,28 @@ class TestEvalGate:
         from soup_cli.monitoring.callback import SoupTrainerCallback
 
         cb = SoupTrainerCallback(
-            display=MagicMock(), tracker=None, run_id="test_run",
+            display=MagicMock(),
+            tracker=None,
+            run_id="test_run",
             eval_gate_config=MagicMock(
-                enabled=True, every_n_epochs=1, on_regression="stop",
-                regression_threshold=0.05, suite="dummy.yaml", baseline=None,
+                enabled=True,
+                every_n_epochs=1,
+                on_regression="stop",
+                regression_threshold=0.05,
+                suite="dummy.yaml",
+                baseline=None,
             ),
         )
         cb._gate_suite = EvalSuite(suite="s", tasks=[])
         cb._gate_generate_fn = lambda prompt: "x"
         cb._gate_run_fn = lambda suite, generate_fn, baseline, regression_threshold: GateResult(
-            passed=False, regression=True,
-            task_results=[GateTaskResult(name="math", score=0.5, threshold=0.8,
-                                         baseline=0.9, delta=-0.4, passed=False)],
+            passed=False,
+            regression=True,
+            task_results=[
+                GateTaskResult(
+                    name="math", score=0.5, threshold=0.8, baseline=0.9, delta=-0.4, passed=False
+                )
+            ],
         )
         control = MagicMock(should_training_stop=False)
         with caplog.at_level(logging.WARNING, logger="soup_cli.monitoring.callback"):
@@ -495,6 +538,4 @@ class TestEvalGate:
         gate_lines = [
             r.getMessage() for r in caplog.records if "eval gate FAILED" in r.getMessage()
         ]
-        assert gate_lines == [
-            "eval gate FAILED (1 task(s) regressed); stopping training"
-        ]
+        assert gate_lines == ["eval gate FAILED (1 task(s) regressed); stopping training"]

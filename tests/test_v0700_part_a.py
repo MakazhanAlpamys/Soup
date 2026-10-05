@@ -564,7 +564,8 @@ class TestSourceWiring:
 
         src = (
             Path(__file__).resolve().parent.parent
-            / "src" / "soup_cli"
+            / "src"
+            / "soup_cli"
             / "utils"
             / "reward_hacking.py"
         )

@@ -86,8 +86,11 @@ class TestHighestNumberedCheckpointIsOrderIndependent:
     def test_the_highest_step_wins_regardless_of_input_order(self, tmp_path):
         from soup_cli.commands.train import _highest_numbered_mlx_checkpoint
 
-        names = ["0000200_adapters.safetensors", "0000300_adapters.safetensors",
-                 "0000100_adapters.safetensors"]
+        names = [
+            "0000200_adapters.safetensors",
+            "0000300_adapters.safetensors",
+            "0000100_adapters.safetensors",
+        ]
         paths = []
         for name in names:
             path = tmp_path / name
@@ -98,7 +101,7 @@ class TestHighestNumberedCheckpointIsOrderIndependent:
         assert result == tmp_path / "0000300_adapters.safetensors"
 
     def test_the_highest_step_wins_by_numeric_value_not_string_order(self, tmp_path):
-        """"100_adapters.safetensors" < "99_adapters.safetensors" as strings
+        """ "100_adapters.safetensors" < "99_adapters.safetensors" as strings
         (```"1" < "9"```) but 100 > 99 as integers. Only a key that parses
         the digits to an int before comparing picks the right file here."""
         from soup_cli.commands.train import _highest_numbered_mlx_checkpoint
@@ -398,11 +401,9 @@ def _install_fake_mlx(monkeypatch):
     # only AdamW raises AttributeError from `mlx_optim.build_lr_schedule`.
     # Recording stubs, not real curves -- the curve itself is asserted against
     # the real library in tests/test_issue686_mlx_optimizer_schedule.py.
-    mlx_optimizers.linear_schedule = lambda init, end, steps: (lambda step: end)
-    mlx_optimizers.cosine_decay = lambda init, steps: (lambda step: init)
-    mlx_optimizers.join_schedules = lambda scheds, boundaries: (
-        lambda step: scheds[-1](step)
-    )
+    mlx_optimizers.linear_schedule = lambda init, end, steps: lambda step: end
+    mlx_optimizers.cosine_decay = lambda init, steps: lambda step: init
+    mlx_optimizers.join_schedules = lambda scheds, boundaries: lambda step: scheds[-1](step)
 
     mlx_lm = types.ModuleType("mlx_lm")
     mlx_lm_tuner = types.ModuleType("mlx_lm.tuner")
@@ -594,9 +595,7 @@ class TestResumeWiringReachesTheBackendAwareResolver:
         )
         assert result == str(tmp_path / "0000100_adapters.safetensors")
 
-    def test_transformers_backend_reaches_the_resolver_as_transformers(
-        self, tmp_path, monkeypatch
-    ):
+    def test_transformers_backend_reaches_the_resolver_as_transformers(self, tmp_path, monkeypatch):
         """Negative control: the default backend must still say so, not
         "mlx" leaking in from a hardcoded value."""
         import soup_cli.commands.train as train_module

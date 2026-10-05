@@ -63,6 +63,7 @@ def apply_v028_speed_memory(
 
             try:
                 from soup_cli.utils.cut_ce import apply_cut_ce
+
                 ok = bool(apply_cut_ce(base_model))
             except Exception:  # noqa: BLE001 — degrade gracefully
                 ok = False
@@ -102,6 +103,7 @@ def apply_v028_speed_memory(
     if getattr(tcfg, "nvfp4", False):
         try:
             from soup_cli.utils.advanced_precision import apply_nvfp4
+
             targeted = apply_nvfp4(model)
             applied["nvfp4"] = True
             _say(f"NVFP4 quantisation applied ({targeted} linears)")
@@ -115,8 +117,7 @@ def apply_v028_speed_memory(
     # that it never applied (#801).
     if getattr(tcfg, "kernel_auto_compose", False):
         _say(
-            "Kernel auto-compose is unsupported; enable use_liger and/or "
-            "use_flash_attn explicitly",
+            "Kernel auto-compose is unsupported; enable use_liger and/or use_flash_attn explicitly",
             style="yellow",
         )
 
@@ -125,7 +126,8 @@ def apply_v028_speed_memory(
 
 @contextlib.contextmanager
 def activation_offloading_context(
-    tcfg: "TrainingConfig", output_dir: str,
+    tcfg: "TrainingConfig",
+    output_dir: str,
 ) -> Iterator[None]:
     """Wrap a trainer's ``trainer.train()`` call with activation offloading.
 
@@ -184,7 +186,8 @@ def supports_v028_features(task: str) -> bool:
 
 
 def warn_unsupported_features(
-    tcfg: "TrainingConfig", task: str,
+    tcfg: "TrainingConfig",
+    task: str,
 ) -> Optional[str]:
     """Return a human warning if non-v0.28.0-wired tasks set v0.28.0 flags.
 

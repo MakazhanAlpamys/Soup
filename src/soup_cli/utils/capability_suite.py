@@ -9,6 +9,7 @@ This module ships only the schema + dispatcher. Live ``lm-eval-harness``
 invocation lives in ``soup eval benchmark`` (existing v0.10 surface) so
 the operator can compose capability suites with the existing eval gate.
 """
+
 from __future__ import annotations
 
 from collections.abc import Sequence
@@ -17,10 +18,17 @@ from types import MappingProxyType
 from typing import Mapping, Optional
 
 # Closed allowlist.
-CAPABILITY_BENCHMARKS = frozenset({
-    "mmlu-pro", "gpqa", "bbeh", "aime",
-    "math-500", "humaneval-plus", "swe-bench-verified",
-})
+CAPABILITY_BENCHMARKS = frozenset(
+    {
+        "mmlu-pro",
+        "gpqa",
+        "bbeh",
+        "aime",
+        "math-500",
+        "humaneval-plus",
+        "swe-bench-verified",
+    }
+)
 
 # Closed profile allowlist.
 _SUITES = frozenset({"full", "fast", "math", "code"})
@@ -59,58 +67,62 @@ class CapabilityBenchmark:
 
 
 # Per-benchmark metadata.
-_BENCHMARK_METADATA: Mapping[str, CapabilityBenchmark] = MappingProxyType({
-    "mmlu-pro": CapabilityBenchmark(
-        name="mmlu-pro",
-        lm_eval_task="mmlu_pro",
-        category="knowledge",
-        default_fewshot=5,
-    ),
-    "gpqa": CapabilityBenchmark(
-        name="gpqa",
-        lm_eval_task="gpqa_diamond_n_shot",
-        category="reasoning",
-        default_fewshot=5,
-    ),
-    "bbeh": CapabilityBenchmark(
-        name="bbeh",
-        lm_eval_task="bbeh",
-        category="reasoning",
-        default_fewshot=0,
-    ),
-    "aime": CapabilityBenchmark(
-        name="aime",
-        lm_eval_task="aime",
-        category="math",
-        default_fewshot=0,
-    ),
-    "math-500": CapabilityBenchmark(
-        name="math-500",
-        lm_eval_task="math_500",
-        category="math",
-        default_fewshot=4,
-    ),
-    "humaneval-plus": CapabilityBenchmark(
-        name="humaneval-plus",
-        lm_eval_task="humaneval_plus",
-        category="code",
-        default_fewshot=0,
-    ),
-    "swe-bench-verified": CapabilityBenchmark(
-        name="swe-bench-verified",
-        lm_eval_task="swe_bench_verified",
-        category="code",
-        default_fewshot=0,
-    ),
-})
+_BENCHMARK_METADATA: Mapping[str, CapabilityBenchmark] = MappingProxyType(
+    {
+        "mmlu-pro": CapabilityBenchmark(
+            name="mmlu-pro",
+            lm_eval_task="mmlu_pro",
+            category="knowledge",
+            default_fewshot=5,
+        ),
+        "gpqa": CapabilityBenchmark(
+            name="gpqa",
+            lm_eval_task="gpqa_diamond_n_shot",
+            category="reasoning",
+            default_fewshot=5,
+        ),
+        "bbeh": CapabilityBenchmark(
+            name="bbeh",
+            lm_eval_task="bbeh",
+            category="reasoning",
+            default_fewshot=0,
+        ),
+        "aime": CapabilityBenchmark(
+            name="aime",
+            lm_eval_task="aime",
+            category="math",
+            default_fewshot=0,
+        ),
+        "math-500": CapabilityBenchmark(
+            name="math-500",
+            lm_eval_task="math_500",
+            category="math",
+            default_fewshot=4,
+        ),
+        "humaneval-plus": CapabilityBenchmark(
+            name="humaneval-plus",
+            lm_eval_task="humaneval_plus",
+            category="code",
+            default_fewshot=0,
+        ),
+        "swe-bench-verified": CapabilityBenchmark(
+            name="swe-bench-verified",
+            lm_eval_task="swe_bench_verified",
+            category="code",
+            default_fewshot=0,
+        ),
+    }
+)
 
 # Profile -> tuple of benchmark names.
-PROFILES: Mapping[str, tuple[str, ...]] = MappingProxyType({
-    "full": tuple(sorted(CAPABILITY_BENCHMARKS)),
-    "fast": ("mmlu-pro", "humaneval-plus"),
-    "math": ("aime", "math-500"),
-    "code": ("humaneval-plus", "swe-bench-verified"),
-})
+PROFILES: Mapping[str, tuple[str, ...]] = MappingProxyType(
+    {
+        "full": tuple(sorted(CAPABILITY_BENCHMARKS)),
+        "fast": ("mmlu-pro", "humaneval-plus"),
+        "math": ("aime", "math-500"),
+        "code": ("humaneval-plus", "swe-bench-verified"),
+    }
+)
 
 
 def validate_benchmark_name(name: object) -> str:
@@ -118,9 +130,7 @@ def validate_benchmark_name(name: object) -> str:
     if isinstance(name, bool):
         raise TypeError("benchmark name must be str, got bool")
     if not isinstance(name, str):
-        raise TypeError(
-            f"benchmark name must be str, got {type(name).__name__}"
-        )
+        raise TypeError(f"benchmark name must be str, got {type(name).__name__}")
     if "\x00" in name:
         raise ValueError("benchmark name must not contain null bytes")
     if not name:
@@ -129,10 +139,7 @@ def validate_benchmark_name(name: object) -> str:
         raise ValueError(f"benchmark name too long ({len(name)} > {_MAX_NAME_LEN})")
     canonical = name.strip().lower()
     if canonical not in CAPABILITY_BENCHMARKS:
-        raise ValueError(
-            f"unknown benchmark {canonical!r}; "
-            f"valid: {sorted(CAPABILITY_BENCHMARKS)}"
-        )
+        raise ValueError(f"unknown benchmark {canonical!r}; valid: {sorted(CAPABILITY_BENCHMARKS)}")
     return canonical
 
 
@@ -154,9 +161,7 @@ def validate_suite_name(name: object) -> str:
     if isinstance(name, bool):
         raise TypeError("suite name must be str, got bool")
     if not isinstance(name, str):
-        raise TypeError(
-            f"suite name must be str, got {type(name).__name__}"
-        )
+        raise TypeError(f"suite name must be str, got {type(name).__name__}")
     if "\x00" in name:
         raise ValueError("suite name must not contain null bytes")
     if not name:
@@ -165,9 +170,7 @@ def validate_suite_name(name: object) -> str:
         raise ValueError(f"suite name too long ({len(name)} > {_MAX_SUITE_LEN})")
     canonical = name.strip().lower()
     if canonical not in _SUITES:
-        raise ValueError(
-            f"unknown suite {canonical!r}; valid: {sorted(_SUITES)}"
-        )
+        raise ValueError(f"unknown suite {canonical!r}; valid: {sorted(_SUITES)}")
     return canonical
 
 
@@ -255,8 +258,7 @@ def run_capability_suite(
         hflm_cls = importlib.import_module("lm_eval.models.huggingface").HFLM
     except Exception as exc:  # noqa: BLE001
         raise RuntimeError(
-            "lm-eval-harness is required for a live capability run "
-            "(pip install soup-cli[eval])."
+            "lm-eval-harness is required for a live capability run (pip install soup-cli[eval])."
         ) from exc
 
     from soup_cli.utils.live_eval import resolve_device

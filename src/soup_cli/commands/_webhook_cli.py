@@ -59,13 +59,9 @@ def emit_webhooks(
         return
     from soup_cli.utils.webhooks import send_webhooks
 
-    for label, ok in send_webhooks(
-        payload, slack_url=slack_url, discord_url=discord_url
-    ):
+    for label, ok in send_webhooks(payload, slack_url=slack_url, discord_url=discord_url):
         colour = "green" if ok else "yellow"
-        console.print(
-            f"[{colour}]{label} webhook: {'delivered' if ok else 'failed'}[/]"
-        )
+        console.print(f"[{colour}]{label} webhook: {'delivered' if ok else 'failed'}[/]")
 
 
 __all__ = ["emit_webhooks", "validate_webhook_flags"]

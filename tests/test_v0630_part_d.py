@@ -69,19 +69,22 @@ def test_msprt_config_frozen():
         cfg.alpha = 0.1  # type: ignore[misc]
 
 
-@pytest.mark.parametrize("field,bad", [
-    ("alpha", 0.0),
-    ("alpha", 1.0),
-    ("alpha", -0.1),
-    ("alpha", float("nan")),
-    ("alpha", True),
-    ("beta", 0.0),
-    ("beta", 1.0),
-    ("beta", float("inf")),
-    ("effect_size", 0.0),
-    ("effect_size", -0.1),
-    ("effect_size", float("nan")),
-])
+@pytest.mark.parametrize(
+    "field,bad",
+    [
+        ("alpha", 0.0),
+        ("alpha", 1.0),
+        ("alpha", -0.1),
+        ("alpha", float("nan")),
+        ("alpha", True),
+        ("beta", 0.0),
+        ("beta", 1.0),
+        ("beta", float("inf")),
+        ("effect_size", 0.0),
+        ("effect_size", -0.1),
+        ("effect_size", float("nan")),
+    ],
+)
 def test_msprt_config_rejects(field, bad):
     from soup_cli.utils.ab_test import MsprtConfig
 

@@ -29,7 +29,10 @@ class TestBundledShortOptions:
 
     def test_secret_bundled_with_the_value_in_the_next_token(self):
         assert mask_secret_args(["-xt", "SECRET", "--port", "1"], OPTS) == (
-            "-xt", REDACTED, "--port", "1",
+            "-xt",
+            REDACTED,
+            "--port",
+            "1",
         )
 
     def test_the_secret_never_survives_anywhere_in_the_output(self):
@@ -50,7 +53,8 @@ class TestBundledShortOptions:
 
     def test_a_positional_value_is_untouched(self):
         assert mask_secret_args(["train", "config.yaml"], OPTS) == (
-            "train", "config.yaml",
+            "train",
+            "config.yaml",
         )
 
 

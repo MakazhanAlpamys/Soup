@@ -137,8 +137,18 @@ _STANDS_ALONE = r"(?<![\w\\{}^/.])"
 # 1, a number that stands alone.
 _VALUE_TOKEN_RE = re.compile(
     r"\\(?:begin|end)\{[A-Za-z*]*\}|[()\[\]{}]"
-    + "|" + _STANDS_ALONE + "[-+]?" + _UNSIGNED_PATTERN + "(?::" + _UNSIGNED_PATTERN + ")+"
-    + "|" + _STANDS_ALONE + r"(?<!\d:)(" + _NUMBER_PATTERN + r")(?![\w{}^/]|:\d)"
+    + "|"
+    + _STANDS_ALONE
+    + "[-+]?"
+    + _UNSIGNED_PATTERN
+    + "(?::"
+    + _UNSIGNED_PATTERN
+    + ")+"
+    + "|"
+    + _STANDS_ALONE
+    + r"(?<!\d:)("
+    + _NUMBER_PATTERN
+    + r")(?![\w{}^/]|:\d)"
 )
 # After ", " or "; " inside a clause: a number next means a list that goes on ("41, 42 or 43",
 # "41, $42$"). Only one ``\s*`` can match a given whitespace run, because the second one follows

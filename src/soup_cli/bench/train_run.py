@@ -24,10 +24,7 @@ def bench_scope_error(cfg: Any) -> Optional[str]:
     if cfg.task != "sft":
         return f"task: {cfg.task} -- bench train measures the SFT trainer only"
     if getattr(cfg, "backend", "transformers") != "transformers":
-        return (
-            f"backend: {cfg.backend} -- bench train measures the transformers "
-            f"trainer only"
-        )
+        return f"backend: {cfg.backend} -- bench train measures the transformers trainer only"
     return None
 
 
@@ -85,10 +82,7 @@ def _pci_bus_id(props: Any) -> Optional[str]:
     """torch's device as nvidia-smi names it, since nvidia-smi's GPU 0 need not be
     torch's ``cuda:0`` (CUDA_VISIBLE_DEVICES, or a different enumeration order)."""
     try:
-        return (
-            f"{props.pci_domain_id:08X}:{props.pci_bus_id:02X}:"
-            f"{props.pci_device_id:02X}.0"
-        )
+        return f"{props.pci_domain_id:08X}:{props.pci_bus_id:02X}:{props.pci_device_id:02X}.0"
     except (AttributeError, TypeError, ValueError):
         return None  # older torch: fall back to nvidia-smi's first GPU
 
@@ -120,8 +114,10 @@ class ClockSampler:
         if read is None:
             tool = _resolve_tool("nvidia-smi")  # absolute path only (CWE-427)
             if tool is not None:
+
                 def read():
                     return _nvidia_smi(tool, "--query-gpu=clocks.sm", gpu)
+
         self._read = read
         self.available = read is not None
         self.samples: list[tuple[float, int]] = []
@@ -159,8 +155,12 @@ class ClockSampler:
 
 def _device_provenance(torch: Any, device: str, sm_clock_mhz_busy: dict) -> dict:
     empty = {
-        "device": device, "card": None, "cuda_runtime": None,
-        "compute_capability": None, "driver": None, "sm_clock_mhz_busy": sm_clock_mhz_busy,
+        "device": device,
+        "card": None,
+        "cuda_runtime": None,
+        "compute_capability": None,
+        "driver": None,
+        "sm_clock_mhz_busy": sm_clock_mhz_busy,
     }
     if device != "cuda" or not torch.cuda.is_available():
         return empty
@@ -210,9 +210,7 @@ def run_bench_train(
     with tempfile.TemporaryDirectory(prefix="soup-bench-") as scratch:
         # Log every step (the grad_norm check reads each one), never save, and
         # never write into the config's own output directory.
-        training = cfg.training.model_copy(
-            update={"logging_steps": 1, "save_steps": steps + 1}
-        )
+        training = cfg.training.model_copy(update={"logging_steps": 1, "save_steps": steps + 1})
         cfg = cfg.model_copy(update={"training": training, "output": scratch})
 
         wrapper = SFTTrainerWrapper(cfg, device=device)
@@ -268,7 +266,9 @@ def run_bench_train(
         else:
             unavailable = None
         sm_clock_mhz_busy = summarize_clock_samples(
-            samples, collector.counted_window_started, collector.counted_window_ended,
+            samples,
+            collector.counted_window_started,
+            collector.counted_window_ended,
             unavailable_reason=unavailable,
         )
         if on_cuda:

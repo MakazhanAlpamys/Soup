@@ -1366,8 +1366,7 @@ output: ./output
         size="70B",
         tags=("llama", "sft", "fsdp2", "multi-gpu", "torch-compile"),
         description=(
-            "Llama 3.1 70B SFT with FSDP2 full shard + torch.compile. "
-            "Requires 8 x A100/H100 80GB."
+            "Llama 3.1 70B SFT with FSDP2 full shard + torch.compile. Requires 8 x A100/H100 80GB."
         ),
         yaml_str="""\
 base: meta-llama/Llama-3.1-70B-Instruct
@@ -2164,7 +2163,7 @@ output: ./output
         size="39M",
         tags=("whisper", "asr", "speech", "audio", "tiny", "edge"),
         description="Whisper tiny (39M) ASR fine-tune with LoRA on q/v "
-        "projections — fits a 4 GB GPU. Rows: {\"audio\": path, \"text\": "
+        'projections — fits a 4 GB GPU. Rows: {"audio": path, "text": '
         "transcript}",
         yaml_str="""\
 base: openai/whisper-tiny
@@ -4471,8 +4470,7 @@ output: ./output
         size="N/A",
         tags=("deepseek", "deepseek-v4", "sft", "moe", "large", "multi-gpu"),
         description=(
-            "DeepSeek V4 Pro flagship MoE SFT (MIT, 1.6T-class). "
-            "Requires multi-node DeepSpeed."
+            "DeepSeek V4 Pro flagship MoE SFT (MIT, 1.6T-class). Requires multi-node DeepSpeed."
         ),
         yaml_str="""\
 base: deepseek-ai/DeepSeek-V4-Pro
@@ -4591,9 +4589,7 @@ output: ./output
         task="sft",
         size="754B",
         tags=("glm", "zai-org", "sft", "moe", "large", "multi-gpu"),
-        description=(
-            "GLM 5.1 MoE SFT (MIT, 754B). Multi-GPU / multi-node recommended."
-        ),
+        description=("GLM 5.1 MoE SFT (MIT, 754B). Multi-GPU / multi-node recommended."),
         yaml_str="""\
 base: zai-org/GLM-5.1
 task: sft
@@ -4626,9 +4622,7 @@ output: ./output
         task="dpo",
         size="754B",
         tags=("glm", "zai-org", "dpo", "alignment", "preference", "moe", "large", "multi-gpu"),
-        description=(
-            "GLM 5.1 MoE DPO alignment (MIT, 754B). Multi-GPU / multi-node recommended."
-        ),
+        description=("GLM 5.1 MoE DPO alignment (MIT, 754B). Multi-GPU / multi-node recommended."),
         yaml_str="""\
 base: zai-org/GLM-5.1
 task: dpo
@@ -4663,8 +4657,7 @@ output: ./output
         size="754B",
         tags=("glm", "zai-org", "grpo", "reasoning", "moe", "large", "multi-gpu"),
         description=(
-            "GLM 5.1 MoE GRPO reasoning training (MIT, 754B). "
-            "Multi-GPU / multi-node recommended."
+            "GLM 5.1 MoE GRPO reasoning training (MIT, 754B). Multi-GPU / multi-node recommended."
         ),
         yaml_str="""\
 base: zai-org/GLM-5.1
@@ -4702,8 +4695,7 @@ output: ./output
         size="1T",
         tags=("kimi", "moonshot", "sft", "moe", "large", "multi-gpu"),
         description=(
-            "Kimi K2.5 MoE SFT (Modified MIT, ~1T / 32B active). "
-            "Requires multi-node DeepSpeed."
+            "Kimi K2.5 MoE SFT (Modified MIT, ~1T / 32B active). Requires multi-node DeepSpeed."
         ),
         yaml_str="""\
 base: moonshotai/Kimi-K2.5
@@ -4813,8 +4805,7 @@ output: ./output
         size="1T",
         tags=("kimi", "moonshot", "sft", "moe", "large", "multi-gpu"),
         description=(
-            "Kimi K2.6 MoE SFT (Modified MIT, ~1T / 32B active). "
-            "Requires multi-node DeepSpeed."
+            "Kimi K2.6 MoE SFT (Modified MIT, ~1T / 32B active). Requires multi-node DeepSpeed."
         ),
         yaml_str="""\
 base: moonshotai/Kimi-K2.6

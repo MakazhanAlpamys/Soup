@@ -435,8 +435,12 @@ class TestAsrCollatorCall:
             tokenizer = _Tok()
 
         collator = _SpeechSeq2SeqCollator(_Proc(), decoder_start_token_id=50258)
-        batch = collator([{"input_features": None, "labels": [50258, 7, 9]},
-                          {"input_features": None, "labels": [50258, 8]}])
+        batch = collator(
+            [
+                {"input_features": None, "labels": [50258, 7, 9]},
+                {"input_features": None, "labels": [50258, 8]},
+            ]
+        )
         labels = batch["labels"]
         # decoder-start column stripped -> width 2
         assert labels.shape[1] == 2
@@ -473,9 +477,7 @@ class TestAsrBuildTranscriberGuards:
 
         (tmp_path / "adapter_config.json").write_text(json.dumps({}), encoding="utf-8")
         with pytest.raises(typer.Exit) as exc:
-            infer_mod._build_asr_transcriber(
-                str(tmp_path), None, "cpu", 8, False
-            )
+            infer_mod._build_asr_transcriber(str(tmp_path), None, "cpu", 8, False)
         assert exc.value.exit_code == 1
 
 
@@ -489,8 +491,13 @@ class TestAsrInferExitPaths:
         (tmp_path / "in.jsonl").write_text('{"audio": "a.wav"}\n', encoding="utf-8")
         with pytest.raises(typer.Exit) as exc:
             infer_mod._infer_asr(
-                model="m", base=None, input_file="in.jsonl", device="cpu",
-                output_file="../evil.jsonl", max_tokens=8, trust_remote_code=False,
+                model="m",
+                base=None,
+                input_file="in.jsonl",
+                device="cpu",
+                output_file="../evil.jsonl",
+                max_tokens=8,
+                trust_remote_code=False,
             )
         assert exc.value.exit_code == 1
 
@@ -503,8 +510,13 @@ class TestAsrInferExitPaths:
         (tmp_path / "in.jsonl").write_text('{"audio": "a.wav"}\n', encoding="utf-8")
         with pytest.raises(typer.Exit) as exc:
             infer_mod._infer_asr(
-                model="m", base=None, input_file="in.jsonl", device="cpu",
-                output_file="out.jsonl", max_tokens=8, trust_remote_code=False,
+                model="m",
+                base=None,
+                input_file="in.jsonl",
+                device="cpu",
+                output_file="out.jsonl",
+                max_tokens=8,
+                trust_remote_code=False,
                 audio_dir="../elsewhere",
             )
         assert exc.value.exit_code == 1
@@ -518,8 +530,13 @@ class TestAsrInferExitPaths:
         (tmp_path / "in.jsonl").write_text('{"text": "no audio"}\n', encoding="utf-8")
         with pytest.raises(typer.Exit) as exc:
             infer_mod._infer_asr(
-                model="m", base=None, input_file="in.jsonl", device="cpu",
-                output_file="out.jsonl", max_tokens=8, trust_remote_code=False,
+                model="m",
+                base=None,
+                input_file="in.jsonl",
+                device="cpu",
+                output_file="out.jsonl",
+                max_tokens=8,
+                trust_remote_code=False,
             )
         assert exc.value.exit_code == 1
 
@@ -538,8 +555,13 @@ class TestAsrInferExitPaths:
         monkeypatch.setattr(infer_mod, "_build_asr_transcriber", _boom)
         with pytest.raises(typer.Exit) as exc:
             infer_mod._infer_asr(
-                model="m", base=None, input_file="in.jsonl", device="cpu",
-                output_file="out.jsonl", max_tokens=8, trust_remote_code=False,
+                model="m",
+                base=None,
+                input_file="in.jsonl",
+                device="cpu",
+                output_file="out.jsonl",
+                max_tokens=8,
+                trust_remote_code=False,
             )
         assert exc.value.exit_code == 1
 
@@ -558,8 +580,13 @@ class TestAsrInferExitPaths:
         monkeypatch.setattr(infer_mod, "_build_asr_transcriber", _boom)
         with pytest.raises(typer.Exit) as exc:
             infer_mod._infer_asr(
-                model="m", base=None, input_file="in.jsonl", device="cpu",
-                output_file="out.jsonl", max_tokens=8, trust_remote_code=False,
+                model="m",
+                base=None,
+                input_file="in.jsonl",
+                device="cpu",
+                output_file="out.jsonl",
+                max_tokens=8,
+                trust_remote_code=False,
             )
         assert exc.value.exit_code == 2
 
@@ -636,17 +663,13 @@ class TestAsrTrainSidecar:
             save_model=lambda d: saved.__setitem__("model", True),
             state=SimpleNamespace(log_history=[{"loss": 1.0}], global_step=1),
         )
-        w.processor = SimpleNamespace(
-            save_pretrained=lambda d: saved.__setitem__("proc", True)
-        )
+        w.processor = SimpleNamespace(save_pretrained=lambda d: saved.__setitem__("proc", True))
         return w
 
     def test_writes_sidecar_when_customized(self, tmp_path):
         from soup_cli.trainer.asr import read_asr_sidecar
 
-        w = self._fake_wrapper(
-            tmp_path, prefix_customized=True, language="es", task="translate"
-        )
+        w = self._fake_wrapper(tmp_path, prefix_customized=True, language="es", task="translate")
         w.train()
         assert read_asr_sidecar(str(tmp_path)) == {"language": "es", "task": "translate"}
 
@@ -655,9 +678,7 @@ class TestAsrTrainSidecar:
 
         from soup_cli.trainer.asr import _ASR_SIDECAR
 
-        w = self._fake_wrapper(
-            tmp_path, prefix_customized=False, language=None, task=None
-        )
+        w = self._fake_wrapper(tmp_path, prefix_customized=False, language=None, task=None)
         w.train()
         assert not os.path.exists(os.path.join(str(tmp_path), _ASR_SIDECAR))
 
@@ -818,8 +839,10 @@ class TestAsrInfer:
 
         in_path = tmp_path / "in.jsonl"
         in_path.write_text(
-            json.dumps({"audio": "clip.wav", "text": "hello world"}) + "\n"
-            + json.dumps({"audio": "clip2.wav", "text": "goodbye"}) + "\n",
+            json.dumps({"audio": "clip.wav", "text": "hello world"})
+            + "\n"
+            + json.dumps({"audio": "clip2.wav", "text": "goodbye"})
+            + "\n",
             encoding="utf-8",
         )
         out_path = tmp_path / "out.jsonl"
@@ -874,19 +897,23 @@ class TestAsrInfer:
 
         import soup_cli.commands.infer as infer_mod
 
-        monkeypatch.setattr(
-            infer_mod, "_ASR_TRANSCRIBER_OVERRIDE", lambda audio_path: "hi"
-        )
+        monkeypatch.setattr(infer_mod, "_ASR_TRANSCRIBER_OVERRIDE", lambda audio_path: "hi")
         in_path = tmp_path / "in.jsonl"
         in_path.write_text(
-            json.dumps({"audio": "../evil.wav", "text": "x"}) + "\n"
-            + json.dumps({"audio": "ok.wav", "text": "hi"}) + "\n",
+            json.dumps({"audio": "../evil.wav", "text": "x"})
+            + "\n"
+            + json.dumps({"audio": "ok.wav", "text": "hi"})
+            + "\n",
             encoding="utf-8",
         )
         monkeypatch.chdir(tmp_path)
         infer_mod._infer_asr(
-            model="openai/whisper-tiny", base=None, input_file="in.jsonl",
-            device="cpu", output_file="out.jsonl", max_tokens=8,
+            model="openai/whisper-tiny",
+            base=None,
+            input_file="in.jsonl",
+            device="cpu",
+            output_file="out.jsonl",
+            max_tokens=8,
             trust_remote_code=False,
         )
         lines = [json.loads(x) for x in (tmp_path / "out.jsonl").read_text().splitlines()]

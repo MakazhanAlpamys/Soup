@@ -44,55 +44,75 @@ class TTSFamilySpec:
     live_wired: bool
 
 
-_TTS_FAMILY_METADATA: Mapping[str, TTSFamilySpec] = MappingProxyType({
-    "orpheus": TTSFamilySpec(
-        name="orpheus",
-        description="Orpheus emotional TTS (canopylabs)",
-        supports_emotion=True,
-        live_wired=False,
-    ),
-    "sesame_csm": TTSFamilySpec(
-        name="sesame_csm",
-        description="Sesame CSM conversational speech",
-        supports_emotion=False,
-        live_wired=False,
-    ),
-    "llasa": TTSFamilySpec(
-        name="llasa",
-        description="Llasa-TTS (HKUSTAudio)",
-        supports_emotion=False,
-        live_wired=False,
-    ),
-    "spark": TTSFamilySpec(
-        name="spark",
-        description="Spark-TTS (SparkAudio)",
-        supports_emotion=False,
-        live_wired=False,
-    ),
-    "oute": TTSFamilySpec(
-        name="oute",
-        description="Oute-TTS (outeai)",
-        supports_emotion=True,
-        live_wired=False,
-    ),
-})
+_TTS_FAMILY_METADATA: Mapping[str, TTSFamilySpec] = MappingProxyType(
+    {
+        "orpheus": TTSFamilySpec(
+            name="orpheus",
+            description="Orpheus emotional TTS (canopylabs)",
+            supports_emotion=True,
+            live_wired=False,
+        ),
+        "sesame_csm": TTSFamilySpec(
+            name="sesame_csm",
+            description="Sesame CSM conversational speech",
+            supports_emotion=False,
+            live_wired=False,
+        ),
+        "llasa": TTSFamilySpec(
+            name="llasa",
+            description="Llasa-TTS (HKUSTAudio)",
+            supports_emotion=False,
+            live_wired=False,
+        ),
+        "spark": TTSFamilySpec(
+            name="spark",
+            description="Spark-TTS (SparkAudio)",
+            supports_emotion=False,
+            live_wired=False,
+        ),
+        "oute": TTSFamilySpec(
+            name="oute",
+            description="Oute-TTS (outeai)",
+            supports_emotion=True,
+            live_wired=False,
+        ),
+    }
+)
 
 # Per-family emotion allowlists. Orpheus + Oute support emotion conditioning;
 # the others ignore the tag. Closed allowlist keeps trainer dispatch
 # deterministic.
-ORPHEUS_EMOTIONS: frozenset[str] = frozenset({
-    "neutral", "happy", "sad", "angry", "excited", "calm", "whisper", "laugh",
-})
+ORPHEUS_EMOTIONS: frozenset[str] = frozenset(
+    {
+        "neutral",
+        "happy",
+        "sad",
+        "angry",
+        "excited",
+        "calm",
+        "whisper",
+        "laugh",
+    }
+)
 
 # Oute supports a tighter set focused on prosody / register.
-OUTE_EMOTIONS: frozenset[str] = frozenset({
-    "neutral", "happy", "sad", "angry", "calm", "excited",
-})
+OUTE_EMOTIONS: frozenset[str] = frozenset(
+    {
+        "neutral",
+        "happy",
+        "sad",
+        "angry",
+        "calm",
+        "excited",
+    }
+)
 
-_FAMILY_EMOTIONS: Mapping[str, frozenset[str]] = MappingProxyType({
-    "orpheus": ORPHEUS_EMOTIONS,
-    "oute": OUTE_EMOTIONS,
-})
+_FAMILY_EMOTIONS: Mapping[str, frozenset[str]] = MappingProxyType(
+    {
+        "orpheus": ORPHEUS_EMOTIONS,
+        "oute": OUTE_EMOTIONS,
+    }
+)
 
 
 def validate_tts_family(name: object) -> str:
@@ -100,23 +120,17 @@ def validate_tts_family(name: object) -> str:
     if isinstance(name, bool):
         raise TypeError(f"tts_family must not be bool, got {name!r}")
     if not isinstance(name, str):
-        raise TypeError(
-            f"tts_family must be str, got {type(name).__name__}"
-        )
+        raise TypeError(f"tts_family must be str, got {type(name).__name__}")
     if not name:
         raise ValueError("tts_family must be non-empty")
     if "\x00" in name:
         raise ValueError("tts_family must not contain null bytes")
     if len(name) > _MAX_TTS_FAMILY_LEN:
-        raise ValueError(
-            f"tts_family too long (max {_MAX_TTS_FAMILY_LEN} chars)"
-        )
+        raise ValueError(f"tts_family too long (max {_MAX_TTS_FAMILY_LEN} chars)")
     canonical = name.lower()
     if canonical not in SUPPORTED_TTS_FAMILIES:
         supported = ", ".join(sorted(SUPPORTED_TTS_FAMILIES))
-        raise ValueError(
-            f"tts_family {name!r} not supported. Supported: {supported}"
-        )
+        raise ValueError(f"tts_family {name!r} not supported. Supported: {supported}")
     return canonical
 
 
@@ -143,23 +157,16 @@ def validate_emotion_tag(emotion: object, *, family: str) -> str:
     if isinstance(emotion, bool):
         raise TypeError(f"emotion must not be bool, got {emotion!r}")
     if not isinstance(emotion, str):
-        raise TypeError(
-            f"emotion must be str, got {type(emotion).__name__}"
-        )
+        raise TypeError(f"emotion must be str, got {type(emotion).__name__}")
     if not emotion:
         raise ValueError("emotion must be non-empty")
     if "\x00" in emotion:
         raise ValueError("emotion must not contain null bytes")
     if len(emotion) > _MAX_EMOTION_LEN:
-        raise ValueError(
-            f"emotion too long (max {_MAX_EMOTION_LEN} chars)"
-        )
+        raise ValueError(f"emotion too long (max {_MAX_EMOTION_LEN} chars)")
     spec = _TTS_FAMILY_METADATA[canonical_family]
     if not spec.supports_emotion:
-        raise ValueError(
-            f"tts_family={canonical_family!r} does not support emotion "
-            "conditioning"
-        )
+        raise ValueError(f"tts_family={canonical_family!r} does not support emotion conditioning")
     canonical = emotion.lower()
     # Per-family allowlist — data-driven so future emotion-supporting
     # families cannot silently bypass the check.
@@ -167,8 +174,7 @@ def validate_emotion_tag(emotion: object, *, family: str) -> str:
     if family_allowlist is not None and canonical not in family_allowlist:
         allowed = ", ".join(sorted(family_allowlist))
         raise ValueError(
-            f"emotion {emotion!r} not in {canonical_family} allowlist. "
-            f"Allowed: {allowed}"
+            f"emotion {emotion!r} not in {canonical_family} allowlist. Allowed: {allowed}"
         )
     return canonical
 
@@ -189,17 +195,11 @@ def validate_tts_compat(*, task: str, modality: str, backend: str) -> None:
         if not isinstance(value, str) or not value:
             raise ValueError(f"{name} must be a non-empty string")
     if task != "tts":
-        raise ValueError(
-            f"validate_tts_compat called with task={task!r} (expected 'tts')"
-        )
+        raise ValueError(f"validate_tts_compat called with task={task!r} (expected 'tts')")
     if modality != "audio_out":
-        raise ValueError(
-            f"task='tts' requires modality='audio_out'; got modality={modality!r}"
-        )
+        raise ValueError(f"task='tts' requires modality='audio_out'; got modality={modality!r}")
     if backend == "mlx":
-        raise ValueError(
-            "task='tts' is not supported on backend=mlx in v0.52.0"
-        )
+        raise ValueError("task='tts' is not supported on backend=mlx in v0.52.0")
 
 
 # v0.71.20 #131 — per-family audio-codec package map.
@@ -217,19 +217,23 @@ def validate_tts_compat(*, task: str, modality: str, backend: str) -> None:
 #   BiCodec, XCodec2, …) — this mode is hardware/dependency-gated and surfaces
 #   a friendly per-family ``RuntimeError`` naming the required package when it
 #   is missing.
-TTS_CODEC_PACKAGES: Mapping[str, str] = MappingProxyType({
-    "orpheus": "snac",
-    "llasa": "torchaudio",
-})
+TTS_CODEC_PACKAGES: Mapping[str, str] = MappingProxyType(
+    {
+        "orpheus": "snac",
+        "llasa": "torchaudio",
+    }
+)
 
 # Per-family emotion control templating. Emotion-conditioned families
 # (Orpheus / Oute) prepend a family-specific control string to the user turn.
 # Kept deliberately small + documented — the codec-token contents live in the
 # operator's data; Soup's per-family contribution is the emotion convention.
-_TTS_EMOTION_TEMPLATE: Mapping[str, str] = MappingProxyType({
-    "orpheus": "<|emotion|>{emotion}<|/emotion|> ",
-    "oute": "[emotion: {emotion}] ",
-})
+_TTS_EMOTION_TEMPLATE: Mapping[str, str] = MappingProxyType(
+    {
+        "orpheus": "<|emotion|>{emotion}<|/emotion|> ",
+        "oute": "[emotion: {emotion}] ",
+    }
+)
 
 
 def tts_codec_package(family: str) -> str:
@@ -262,9 +266,7 @@ def format_tts_messages(
 
     canonical_family = validate_tts_family(family)
     if not isinstance(messages, (list, tuple)):
-        raise TypeError(
-            f"messages must be a list, got {type(messages).__name__}"
-        )
+        raise TypeError(f"messages must be a list, got {type(messages).__name__}")
     out: list[dict] = []
     for msg in messages:
         if not isinstance(msg, dict):

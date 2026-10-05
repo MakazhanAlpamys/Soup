@@ -47,8 +47,6 @@ _UNRESOLVABLE_CATALOG_REASONS = {
 }
 
 
-
-
 class TestIssue1198HubModelSizeParsing:
     """Acceptance criteria tests for Issue #1198."""
 

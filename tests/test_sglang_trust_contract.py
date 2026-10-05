@@ -115,14 +115,10 @@ class TestServeSglangThreadsTheResolvedValue:
             return tok
 
         monkeypatch.setattr(sglang_mod, "create_sglang_runtime", _runtime, raising=False)
-        monkeypatch.setattr(
-            sglang_mod, "create_sglang_app", lambda **kwargs: kwargs, raising=False
-        )
+        monkeypatch.setattr(sglang_mod, "create_sglang_app", lambda **kwargs: kwargs, raising=False)
         monkeypatch.setattr(serve_mod, "_load_serve_tokenizer", _tokenizer)
         printed = []
-        monkeypatch.setattr(
-            serve_mod.console, "print", lambda *a, **k: printed.append(str(a[0]))
-        )
+        monkeypatch.setattr(serve_mod.console, "print", lambda *a, **k: printed.append(str(a[0])))
         seen["printed"] = printed
 
         serve_mod._serve_sglang(

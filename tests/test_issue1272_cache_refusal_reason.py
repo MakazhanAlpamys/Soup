@@ -165,9 +165,7 @@ class TestTheOldestGapStillWins:
             (("mask_mode", "chat_template"), "predates chat_template keying (#1067)"),
         ],
     )
-    def test_an_older_cache_names_its_own_gap(
-        self, tmp_path, monkeypatch, dropped, expected
-    ):
+    def test_an_older_cache_names_its_own_gap(self, tmp_path, monkeypatch, dropped, expected):
         """A real v5 or v4 cache has no ``key_schema`` or ``dataset_key`` either,
         so it predates #1127 too; the oldest gap is the one named."""
         cache_dir = _cache(tmp_path, monkeypatch)

@@ -52,6 +52,7 @@ _SEED = 7
 _HIDDEN = 64
 _SEQ_LEN = 12  # <= FUSED_KERNEL_MAX_ROWS, and the shape test_issue385 uses
 
+
 def _bnb_version() -> str:
     try:
         import importlib.metadata
@@ -201,14 +202,10 @@ class TestSoupMatchesNativeBitsandbytesDispatch:
     """
 
     @pytest.mark.parametrize("dtype", ["float16", "bfloat16"])
-    def test_patched_and_unpatched_agree_at_a_fused_m(
-        self, tmp_path, dtype, monkeypatch
-    ):
+    def test_patched_and_unpatched_agree_at_a_fused_m(self, tmp_path, dtype, monkeypatch):
         if dtype == "bfloat16":
             _require_bf16()
-        gap, calls = _divergence(
-            tmp_path, dtype, patch_reference=False, monkeypatch=monkeypatch
-        )
+        gap, calls = _divergence(tmp_path, dtype, patch_reference=False, monkeypatch=monkeypatch)
         assert calls["checkpoint_visible"] > 0, (
             "the patched arm never ran Soup's checkpoint-visible Function at "
             "the fused shape, so exact agreement would not pin #842"

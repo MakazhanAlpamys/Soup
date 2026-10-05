@@ -253,9 +253,7 @@ def resolve_deepspeed_config(
         zero["zero_hpz_partition_size"] = partition
 
     quant_keys = [
-        key
-        for key in ("zero_quantized_weights", "zero_quantized_gradients")
-        if zero.get(key)
+        key for key in ("zero_quantized_weights", "zero_quantized_gradients") if zero.get(key)
     ]
     if quant_keys:
         bf16_on = bool((resolved.get("bf16") or {}).get("enabled"))
@@ -289,9 +287,7 @@ def write_deepspeed_config(stage: str = "zero2", gpu_count: int | None = None) -
         console = Console()
         for note in notes:
             console.print(f"[yellow]DeepSpeed {stage}:[/] {escape(note)}")
-    tmp = tempfile.NamedTemporaryFile(
-        mode="w", suffix=".json", prefix="ds_config_", delete=False
-    )
+    tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".json", prefix="ds_config_", delete=False)
     json.dump(config, tmp, indent=2)
     tmp.close()
     return tmp.name
@@ -339,9 +335,7 @@ def resolve_user_deepspeed_file(path: str, *, gpu_count: int | None = None) -> s
     for note in notes:
         console.print(f"[yellow]DeepSpeed {escape(label)}:[/] {escape(note)}")
 
-    tmp = tempfile.NamedTemporaryFile(
-        mode="w", suffix=".json", prefix="ds_user_", delete=False
-    )
+    tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".json", prefix="ds_user_", delete=False)
     json.dump(resolved, tmp, indent=2)
     tmp.close()
     return tmp.name
@@ -444,11 +438,13 @@ def detect_multi_gpu() -> dict:
         gpus = []
         for idx in range(gpu_count):
             props = torch.cuda.get_device_properties(idx)
-            gpus.append({
-                "index": idx,
-                "name": props.name,
-                "memory_gb": props.total_memory / (1024 ** 3),
-            })
+            gpus.append(
+                {
+                    "index": idx,
+                    "name": props.name,
+                    "memory_gb": props.total_memory / (1024**3),
+                }
+            )
 
         return {"gpu_count": gpu_count, "gpus": gpus}
     except ImportError:

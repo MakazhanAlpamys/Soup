@@ -26,6 +26,7 @@ from tests.conftest import accelerator_device, cuda_available, mps_is_the_accele
 # fixtures (mirroring tests/test_v07200.py so the two cannot drift)
 # ==========================================================================
 
+
 def _torch_version():
     """Reported in the KTO xfail message: the failure it tolerates is a torch
     version property, so the version is the one datum that makes the record
@@ -156,9 +157,7 @@ def _batch_on(model, batch):
     deliberately pins the MODEL to CPU (for exact float32 arithmetic) still gets
     CUDA batch tensors from the dataloader.
     """
-    device = next(
-        parameter.device for parameter in model.parameters() if not parameter.is_meta
-    )
+    device = next(parameter.device for parameter in model.parameters() if not parameter.is_meta)
     return {
         key: (value.to(device) if hasattr(value, "to") else value) for key, value in batch.items()
     }
@@ -227,9 +226,7 @@ def _loss_of(trainer, model, batch):
         trainer.model = original_model
     chosen_logratios = policy["chosen_logps"] - ref_chosen
     rejected_logratios = policy["rejected_logps"] - ref_rejected
-    return -functional.logsigmoid(
-        trainer.beta * (chosen_logratios - rejected_logratios)
-    ).mean()
+    return -functional.logsigmoid(trainer.beta * (chosen_logratios - rejected_logratios)).mean()
 
 
 def _match_streamed_dtype(resident, streamed):
@@ -455,9 +452,7 @@ class TestNoSecondModelInstance:
         if task == "dpo":
             assert "ref" in trainer.model.peft_config
             assert not any(
-                param.is_meta
-                for name, param in trainer.model.named_parameters()
-                if ".ref." in name
+                param.is_meta for name, param in trainer.model.named_parameters() if ".ref." in name
             )
 
     @pytest.mark.parametrize("task", _ALL_PREFERENCE)
@@ -1331,13 +1326,20 @@ class TestIssue1420KtoBatchAutoAndLocalRl:
         )
         raw.pre_tokenizer = pre_tokenizers.Whitespace()
         PreTrainedTokenizerFast(
-            tokenizer_object=raw, unk_token="<unk>", bos_token="<s>",
-            eos_token="</s>", pad_token="<pad>",
+            tokenizer_object=raw,
+            unk_token="<unk>",
+            bos_token="<s>",
+            eos_token="</s>",
+            pad_token="<pad>",
         ).save_pretrained(str(tmp_path / "tiny"))
         LlamaForCausalLM(
             LlamaConfig(
-                vocab_size=len(words), hidden_size=32, intermediate_size=64,
-                num_hidden_layers=2, num_attention_heads=2, num_key_value_heads=2,
+                vocab_size=len(words),
+                hidden_size=32,
+                intermediate_size=64,
+                num_hidden_layers=2,
+                num_attention_heads=2,
+                num_key_value_heads=2,
                 pad_token_id=3,
             )
         ).save_pretrained(str(tmp_path / "tiny"))
@@ -1351,9 +1353,7 @@ class TestIssue1420KtoBatchAutoAndLocalRl:
         monkeypatch.setattr(kto_mod, "estimate_batch_size", lambda **kwargs: estimate)
         import soup_cli.utils.gpu as gpu_mod
 
-        monkeypatch.setattr(
-            gpu_mod, "get_gpu_info", lambda: {"memory_total_bytes": 24 * 1024**3}
-        )
+        monkeypatch.setattr(gpu_mod, "get_gpu_info", lambda: {"memory_total_bytes": 24 * 1024**3})
 
         cfg = load_config_from_string(
             yaml.safe_dump(
@@ -1362,7 +1362,9 @@ class TestIssue1420KtoBatchAutoAndLocalRl:
                     "task": "kto",
                     "data": {"train": "unused.jsonl", "format": "kto", "max_length": 64},
                     "training": {
-                        "batch_size": "auto", "quantization": "none", "epochs": 1,
+                        "batch_size": "auto",
+                        "quantization": "none",
+                        "epochs": 1,
                         "lora": {"r": 4, "alpha": 8},
                     },
                     "output": str(tmp_path / "out"),
@@ -1371,10 +1373,12 @@ class TestIssue1420KtoBatchAutoAndLocalRl:
         )
         wrapper = KTOTrainerWrapper(cfg, device="cpu")
         wrapper.setup(
-            {"train": [
-                {"prompt": "hi", "completion": " good answer", "label": i % 2 == 0}
-                for i in range(8)
-            ]}
+            {
+                "train": [
+                    {"prompt": "hi", "completion": " good answer", "label": i % 2 == 0}
+                    for i in range(8)
+                ]
+            }
         )
         assert wrapper.trainer.args.per_device_train_batch_size >= 2
 
@@ -1393,13 +1397,20 @@ class TestIssue1420KtoBatchAutoAndLocalRl:
         )
         raw.pre_tokenizer = pre_tokenizers.Whitespace()
         PreTrainedTokenizerFast(
-            tokenizer_object=raw, unk_token="<unk>", bos_token="<s>",
-            eos_token="</s>", pad_token="<pad>",
+            tokenizer_object=raw,
+            unk_token="<unk>",
+            bos_token="<s>",
+            eos_token="</s>",
+            pad_token="<pad>",
         ).save_pretrained(str(tmp_path / "tiny"))
         LlamaForCausalLM(
             LlamaConfig(
-                vocab_size=len(words), hidden_size=32, intermediate_size=64,
-                num_hidden_layers=2, num_attention_heads=2, num_key_value_heads=2,
+                vocab_size=len(words),
+                hidden_size=32,
+                intermediate_size=64,
+                num_hidden_layers=2,
+                num_attention_heads=2,
+                num_key_value_heads=2,
                 pad_token_id=3,
             )
         ).save_pretrained(str(tmp_path / "tiny"))

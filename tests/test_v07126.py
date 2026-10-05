@@ -247,9 +247,7 @@ class TestMitigationLogWriter:
             w.record(step=i, snapshot={"x": i})
         assert target.read_text() == "keep me"  # symlink target untouched
 
-    def test_vanished_directory_is_not_silently_dropped(
-        self, tmp_path, monkeypatch, caplog
-    ):
+    def test_vanished_directory_is_not_silently_dropped(self, tmp_path, monkeypatch, caplog):
         """A parent dir deleted mid-stream must not silently swallow the next
         record (#343): the writer recreates the directory, the entry lands, and
         the loss is surfaced once via a warning naming the path."""
@@ -337,9 +335,7 @@ class TestCombineSignals:
     def test_mean(self):
         from soup_cli.utils.reward_hack_control import combine_signals
 
-        got = combine_signals(
-            {"info_rm": 0.4, "length_trend": 0.2}, ["info_rm", "length_trend"]
-        )
+        got = combine_signals({"info_rm": 0.4, "length_trend": 0.2}, ["info_rm", "length_trend"])
         assert got == pytest.approx(0.3)
 
     def test_missing_signal_skipped(self):
@@ -485,12 +481,7 @@ class TestSyntheticRewards:
         import importlib.util
         from pathlib import Path
 
-        path = (
-            Path(__file__).resolve().parents[1]
-            / "examples"
-            / "reward_hacking"
-            / "rewards.py"
-        )
+        path = Path(__file__).resolve().parents[1] / "examples" / "reward_hacking" / "rewards.py"
         spec = importlib.util.spec_from_file_location("soup_synth_rewards", path)
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
@@ -654,9 +645,7 @@ class TestAttachMitigationWiring:
         from soup_cli.config.schema import TrainingConfig
         from soup_cli.utils.peft_wiring import rl_callbacks_need_buffer
 
-        tcfg = TrainingConfig(
-            reward_hack_mitigation="log_only", reward_hack_detector="info_rm"
-        )
+        tcfg = TrainingConfig(reward_hack_mitigation="log_only", reward_hack_detector="info_rm")
         assert rl_callbacks_need_buffer(tcfg) is True
 
     def test_need_buffer_false_when_off(self):
@@ -671,14 +660,10 @@ class TestAttachMitigationWiring:
         from soup_cli.utils.peft_wiring import attach_rl_callbacks
         from soup_cli.utils.reward_hack_control import RewardHackMitigationCallback
 
-        tcfg = TrainingConfig(
-            reward_hack_mitigation="log_only", reward_hack_detector="info_rm"
-        )
+        tcfg = TrainingConfig(reward_hack_mitigation="log_only", reward_hack_detector="info_rm")
         added: list = []
         trainer = _fake_trainer_recording(added)
-        attach_rl_callbacks(
-            trainer, tcfg, buffer=object(), output_dir=str(tmp_path), task="grpo"
-        )
+        attach_rl_callbacks(trainer, tcfg, buffer=object(), output_dir=str(tmp_path), task="grpo")
         mit = [c for c in added if isinstance(c, RewardHackMitigationCallback)]
         assert len(mit) == 1
         assert mit[0]._trainer is trainer  # .attach(trainer) was called
@@ -691,9 +676,7 @@ class TestAttachMitigationWiring:
         from soup_cli.utils.reward_hack_control import RewardHackMitigationCallback
         from soup_cli.utils.reward_hacking import RewardHackCallback
 
-        tcfg = TrainingConfig(
-            reward_hack_mitigation="log_only", reward_hack_detector="info_rm"
-        )
+        tcfg = TrainingConfig(reward_hack_mitigation="log_only", reward_hack_detector="info_rm")
         added: list = []
         attach_rl_callbacks(
             _fake_trainer_recording(added),
@@ -703,8 +686,7 @@ class TestAttachMitigationWiring:
             task="grpo",
         )
         assert not any(
-            isinstance(c, RewardHackCallback)
-            and not isinstance(c, RewardHackMitigationCallback)
+            isinstance(c, RewardHackCallback) and not isinstance(c, RewardHackMitigationCallback)
             for c in added
         )
 
@@ -794,9 +776,7 @@ class TestStage1Schema:
 
         with pytest.raises(ValueError, match="reward_hack_mitigation"):
             load_config_from_string(
-                _yaml(
-                    "grpo", detector=None, mitigation="off", extra="reward_hack_kl_gain: 2.0"
-                )
+                _yaml("grpo", detector=None, mitigation="off", extra="reward_hack_kl_gain: 2.0")
             )
 
 
@@ -1054,9 +1034,7 @@ class TestKlControlCallback:
         assert trainer.writes == 1
         assert trainer.beta == pytest.approx(0.04)
 
-    def test_mitigation_status_distinguishes_held_acted_released(
-        self, tmp_path, monkeypatch
-    ):
+    def test_mitigation_status_distinguishes_held_acted_released(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         cb = _kl_callback(tmp_path, _SeqBuffer([_HEALTHY, _HACK, _HEALTHY]))
         cb.attach(_fake_grpo_trainer(beta=0.02))
@@ -1066,9 +1044,7 @@ class TestKlControlCallback:
         statuses = [json.loads(line)["mitigation_status"] for line in lines]
         assert statuses == ["held", "acted", "released"]
 
-    def test_sentinel_is_resolved_before_the_first_hold_step(
-        self, tmp_path, monkeypatch
-    ):
+    def test_sentinel_is_resolved_before_the_first_hold_step(self, tmp_path, monkeypatch):
         """``bang_bang_step`` falls back to ``policy.beta_floor`` whenever
         ``state.beta <= 0.0`` (the unseeded sentinel). ``_run_bang_bang`` seeds
         ``state.beta`` from the live trainer coefficient *before* calling
@@ -1367,9 +1343,7 @@ class TestPidLagrangian:
 
     def test_derivative_spikes_then_settles(self):
         # kd=1: β spikes on the error jump then returns to floor on constant error.
-        states = _run_pid(
-            _pid_policy(kp=0.0, ki=0.0, kd=1.0), [0.15, 0.65, 0.65]
-        )
+        states = _run_pid(_pid_policy(kp=0.0, ki=0.0, kd=1.0), [0.15, 0.65, 0.65])
         assert states[1].beta > 0.02  # jump
         assert states[2].beta == pytest.approx(0.02)  # deriv back to 0
 
@@ -1434,14 +1408,10 @@ class TestRestoreCheckpoint:
         # mutate optimizer state
         param.grad = torch.ones(2) * 7
         opt.step()
-        assert not torch.allclose(
-            opt.state_dict()["state"][0]["momentum_buffer"], saved
-        )
+        assert not torch.allclose(opt.state_dict()["state"][0]["momentum_buffer"], saved)
         ok = cb.restore_checkpoint(step=1, model=_FakeSavableModel(), optimizer=opt)
         assert ok is True
-        assert torch.allclose(
-            opt.state_dict()["state"][0]["momentum_buffer"], saved
-        )
+        assert torch.allclose(opt.state_dict()["state"][0]["momentum_buffer"], saved)
 
     def test_restore_missing_step_returns_false(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
@@ -1463,18 +1433,14 @@ class TestRestoreCheckpoint:
             def forward(self, x):
                 return self.lin(x)
 
-        model = peft.get_peft_model(
-            Tiny(), peft.LoraConfig(target_modules=["lin"], r=2)
-        )
+        model = peft.get_peft_model(Tiny(), peft.LoraConfig(target_modules=["lin"], r=2))
         key = "base_model.model.lin.lora_A.default.weight"
         original = model.state_dict()[key].clone()
         cb = self._cb(tmp_path)
         cb.save_checkpoint(step=1, model=model, optimizer=None)
         # mutate the LoRA weight in place
         with torch.no_grad():
-            dict(model.named_parameters())[
-                "base_model.model.lin.lora_A.default.weight"
-            ].add_(5.0)
+            dict(model.named_parameters())["base_model.model.lin.lora_A.default.weight"].add_(5.0)
         assert not torch.allclose(model.state_dict()[key], original)
         ok = cb.restore_checkpoint(step=1, model=model, optimizer=None)
         assert ok is True
@@ -1496,8 +1462,9 @@ class _FakeCkptCb:
         return True
 
 
-def _pid_callback(tmp_path, buffer, *, rollback=False, rollback_patience=2,
-                  max_recovery_attempts=1, ckpt_cb=None):
+def _pid_callback(
+    tmp_path, buffer, *, rollback=False, rollback_patience=2, max_recovery_attempts=1, ckpt_cb=None
+):
     from soup_cli.utils.reward_hack_control import (
         MitigationLogWriter,
         PIDLagrangianPolicy,
@@ -1505,8 +1472,13 @@ def _pid_callback(tmp_path, buffer, *, rollback=False, rollback_patience=2,
     )
 
     pid = PIDLagrangianPolicy(
-        kp=1.0, ki=0.0, kd=0.0, signal_target=0.15,
-        beta_floor=0.02, beta_ceil=10.0, integral_clamp=10.0,
+        kp=1.0,
+        ki=0.0,
+        kd=0.0,
+        signal_target=0.15,
+        beta_floor=0.02,
+        beta_ceil=10.0,
+        integral_clamp=10.0,
     )
     return RewardHackMitigationCallback(
         mode="pid_lagrangian",
@@ -1589,8 +1561,11 @@ class TestPidCallback:
         control = types.SimpleNamespace(should_training_stop=False)
         for step in range(1, 5):
             control = cb.on_step_end(
-                None, types.SimpleNamespace(global_step=step), control,
-                model=object(), optimizer=object(),
+                None,
+                types.SimpleNamespace(global_step=step),
+                control,
+                model=object(),
+                optimizer=object(),
             )
         assert ckpt.restore_calls == []  # rollback disabled
         assert control.should_training_stop is False
@@ -1738,10 +1713,7 @@ class TestConservativeAndDrift:
             detect_reward_distribution_drift,
         )
 
-        assert (
-            detect_reward_distribution_drift([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.9])
-            is False
-        )
+        assert detect_reward_distribution_drift([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.9]) is False
 
     def test_drift_ignores_constant(self):
         from soup_cli.utils.reward_hack_control import (
@@ -1853,9 +1825,7 @@ class TestExplainGiveup:
         from soup_cli.utils.reward_hack_control import ControllerState, explain_giveup
 
         state = ControllerState(recovery_attempts=2, last_signal=0.8)
-        text = explain_giveup(
-            state, signal_name="info_rm", action_history=["raise", "rollback"]
-        )
+        text = explain_giveup(state, signal_name="info_rm", action_history=["raise", "rollback"])
         assert "info_rm" in text
         assert "2" in text
         assert "gave up" in text.lower()
@@ -1863,9 +1833,7 @@ class TestExplainGiveup:
     def test_handles_empty_history(self):
         from soup_cli.utils.reward_hack_control import ControllerState, explain_giveup
 
-        text = explain_giveup(
-            ControllerState(), signal_name="rm_ensemble", action_history=[]
-        )
+        text = explain_giveup(ControllerState(), signal_name="rm_ensemble", action_history=[])
         assert isinstance(text, str) and "rm_ensemble" in text
 
 
@@ -1902,9 +1870,7 @@ class TestStage3CallbackWiring:
 
     def test_drift_logged_when_conservative(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
-        bimodal = _grpo_snapshot(
-            [0, 0, 0, 0, 1, 1, 1, 1], ["a", "b", "c", "d", "e", "f", "g", "h"]
-        )
+        bimodal = _grpo_snapshot([0, 0, 0, 0, 1, 1, 1, 1], ["a", "b", "c", "d", "e", "f", "g", "h"])
         cb = self._cb(tmp_path, _SeqBuffer([bimodal]), conservative=True)
         cb.attach(_fake_grpo_trainer(beta=0.02))
         cb.on_step_end(None, types.SimpleNamespace(global_step=1), None)
@@ -1913,9 +1879,7 @@ class TestStage3CallbackWiring:
 
     def test_no_drift_key_when_not_conservative(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
-        bimodal = _grpo_snapshot(
-            [0, 0, 0, 0, 1, 1, 1, 1], ["a", "b", "c", "d", "e", "f", "g", "h"]
-        )
+        bimodal = _grpo_snapshot([0, 0, 0, 0, 1, 1, 1, 1], ["a", "b", "c", "d", "e", "f", "g", "h"])
         cb = self._cb(tmp_path, _SeqBuffer([bimodal]), conservative=False)
         cb.attach(_fake_grpo_trainer(beta=0.02))
         cb.on_step_end(None, types.SimpleNamespace(global_step=1), None)
@@ -1937,12 +1901,14 @@ class TestStage3CallbackWiring:
         control = types.SimpleNamespace(should_training_stop=False)
         for step in range(1, 6):
             control = cb.on_step_end(
-                None, types.SimpleNamespace(global_step=step), control,
-                model=object(), optimizer=object(),
+                None,
+                types.SimpleNamespace(global_step=step),
+                control,
+                model=object(),
+                optimizer=object(),
             )
         entries = [
-            json.loads(line)
-            for line in (tmp_path / "m.jsonl").read_text().strip().splitlines()
+            json.loads(line) for line in (tmp_path / "m.jsonl").read_text().strip().splitlines()
         ]
         explained = [e for e in entries if "explanation" in e]
         assert explained and "gave up" in explained[-1]["explanation"].lower()
@@ -2071,9 +2037,7 @@ class TestReviewFixesPython:
         from soup_cli.config.schema import TrainingConfig
 
         assert TrainingConfig().reward_hack_integral_clamp == 1.0
-        cfg = self._cfg(
-            "reward_hack_integral_clamp: 5.0", mitigation="pid_lagrangian"
-        )
+        cfg = self._cfg("reward_hack_integral_clamp: 5.0", mitigation="pid_lagrangian")
         assert cfg.training.reward_hack_integral_clamp == 5.0
 
     def test_integral_clamp_wired_into_pid_policy(self, tmp_path, monkeypatch):
@@ -2138,9 +2102,7 @@ class TestReviewFixesCode:
         for step in (1, 2, 3, 4):
             cb.save_checkpoint(step=step, model=_FakeSavableModel(), optimizer=None)
         root = os.path.join("run", "rl-checkpoints")
-        on_disk = sorted(
-            int(d.split("-")[1]) for d in os.listdir(root) if d.startswith("step-")
-        )
+        on_disk = sorted(int(d.split("-")[1]) for d in os.listdir(root) if d.startswith("step-"))
         assert on_disk == [3, 4]
         assert sorted(cb._saved) == on_disk  # in-memory list matches disk
 
@@ -2197,8 +2159,11 @@ class TestReviewFixesCode:
         control = types.SimpleNamespace(should_training_stop=False)
         for step in range(1, 6):
             control = cb.on_step_end(
-                None, types.SimpleNamespace(global_step=step), control,
-                model=object(), optimizer=object(),
+                None,
+                types.SimpleNamespace(global_step=step),
+                control,
+                model=object(),
+                optimizer=object(),
             )
         assert ckpt.restore_calls == []
         assert cb._state.recovery_attempts == 0  # not wasted on a None target
@@ -2360,8 +2325,11 @@ class TestReviewFixesTdd:
         control = types.SimpleNamespace(should_training_stop=False)
         for step in (1, 2, 3):
             control = cb.on_step_end(
-                None, types.SimpleNamespace(global_step=step), control,
-                model=object(), optimizer=object(),
+                None,
+                types.SimpleNamespace(global_step=step),
+                control,
+                model=object(),
+                optimizer=object(),
             )
         assert ckpt.restore_calls == [10]
         assert cb._state.recovery_attempts == 1
@@ -2370,9 +2338,7 @@ class TestReviewFixesTdd:
 
     def test_pid_derivative_exact_spike(self):
         # GAP 2b — pin the exact D-term magnitude, not just > floor.
-        states = _run_pid(
-            _pid_policy(kp=0.0, ki=0.0, kd=1.0), [0.65]
-        )
+        states = _run_pid(_pid_policy(kp=0.0, ki=0.0, kd=1.0), [0.65])
         # error=0.65-0.15=0.5, prev_error=0 → deriv=0.5 → β=floor+0.5=0.52
         assert states[0].beta == pytest.approx(0.52)
         assert states[0].prev_error == pytest.approx(0.5)
@@ -2443,9 +2409,7 @@ class TestReviewFixesTdd:
             # module-scope imports have no indentation
             if line and not line[0].isspace():
                 assert not stripped.startswith(("import torch", "from torch")), line
-                assert not stripped.startswith(
-                    ("import transformers", "from transformers")
-                ), line
+                assert not stripped.startswith(("import transformers", "from transformers")), line
 
 
 # =====================================================================
@@ -2478,9 +2442,7 @@ class TestLadderThresholds:
         assert actions[2].reason.startswith("trip")  # fires on step N exactly
         assert all(a.verdict == "HACK" for a in actions)
 
-    def test_rollback_ladder_fires_on_nth_hack_vote_with_nm1_control(
-        self, tmp_path, monkeypatch
-    ):
+    def test_rollback_ladder_fires_on_nth_hack_vote_with_nm1_control(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
 
         def _run(n_hacks):
@@ -2540,13 +2502,9 @@ class TestBetaFloorDegenerate:
         assert state.beta == pytest.approx(policy.beta_floor)
         assert all(a.new_beta >= policy.beta_floor for a in actions)
 
-    def test_defaults_seed_at_floor_and_the_ladder_runs_from_there(
-        self, tmp_path, monkeypatch
-    ):
+    def test_defaults_seed_at_floor_and_the_ladder_runs_from_there(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
-        cb = _kl_callback(
-            tmp_path, _SeqBuffer([_HEALTHY, _HACK, _HEALTHY, _HACK, _HACK])
-        )
+        cb = _kl_callback(tmp_path, _SeqBuffer([_HEALTHY, _HACK, _HEALTHY, _HACK, _HACK]))
         trainer = _fake_grpo_trainer(beta=0.02)  # the default coefficient
         cb.attach(trainer)
         betas = []

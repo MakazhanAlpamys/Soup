@@ -56,5 +56,7 @@ def test_other_https_host_is_server_provider():
     from soup_cli.eval.gate import _parse_judge_url
 
     assert _parse_judge_url("https://judge.example.com/m") == (
-        "server", "m", "https://judge.example.com"
+        "server",
+        "m",
+        "https://judge.example.com",
     )

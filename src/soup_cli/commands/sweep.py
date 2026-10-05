@@ -134,9 +134,7 @@ def sweep(
     elif param:
         sweep_params = _parse_sweep_params(param)
     else:
-        console.print(
-            "[red]Provide --param, or --sweep-config for a standalone sweep file.[/]"
-        )
+        console.print("[red]Provide --param, or --sweep-config for a standalone sweep file.[/]")
         raise typer.Exit(1)
 
     if strategy not in ("grid", "random"):
@@ -221,14 +219,16 @@ def sweep(
         try:
             result = _run_single(base_cfg, combo, run_name, config_path)
             final_loss = result.get("final_loss", 0)
-            results.append({
-                "name": run_name,
-                "params": combo,
-                "run_id": result.get("run_id", ""),
-                "final_loss": final_loss,
-                "duration": result.get("duration", ""),
-                "status": "completed",
-            })
+            results.append(
+                {
+                    "name": run_name,
+                    "params": combo,
+                    "run_id": result.get("run_id", ""),
+                    "final_loss": final_loss,
+                    "duration": result.get("duration", ""),
+                    "status": "completed",
+                }
+            )
 
             # A diverged run stays in results but can never become the best arm.
             finite_loss = _finite_loss(final_loss)
@@ -253,14 +253,16 @@ def sweep(
             # and drops it, so the hint that tells the user what to install is
             # the part that disappears. `for_terminal` escapes it.
             console.print(f"[red]Run {run_name} failed:[/] {for_terminal(exc)}")
-            results.append({
-                "name": run_name,
-                "params": combo,
-                "run_id": "",
-                "final_loss": 0,
-                "duration": "",
-                "status": "failed",
-            })
+            results.append(
+                {
+                    "name": run_name,
+                    "params": combo,
+                    "run_id": "",
+                    "final_loss": 0,
+                    "duration": "",
+                    "status": "failed",
+                }
+            )
 
         # Early stopping: skip remaining runs if too many are poor
         if early_stop and len(results) >= 2:
@@ -274,9 +276,7 @@ def sweep(
                         if _is_diverged_loss(recent["final_loss"]):
                             reason = "Last run diverged."
                         else:
-                            reason = (
-                                f"Last loss {recent['final_loss']:.4f} exceeded threshold."
-                            )
+                            reason = f"Last loss {recent['final_loss']:.4f} exceeded threshold."
                         console.print(
                             f"[yellow]Early stopping: skipping {remaining} remaining run(s). "
                             f"{reason}[/]"
@@ -563,11 +563,7 @@ def _display_summary(results: list[dict], sweep_params: dict[str, list]):
             loss_str = f"{finite_loss:.4f}"
         else:
             loss_str = "-"
-        best_marker = (
-            " [bold yellow]*[/]"
-            if idx == 0 and display_status == "completed"
-            else ""
-        )
+        best_marker = " [bold yellow]*[/]" if idx == 0 and display_status == "completed" else ""
         table.add_row(
             res["name"],
             *param_vals,
@@ -586,10 +582,7 @@ def _display_summary(results: list[dict], sweep_params: dict[str, list]):
     ]
     if completed:
         best = completed[0]
-        console.print(
-            f"\n[bold green]Best run:[/] {best['name']} "
-            f"(loss: {best['final_loss']:.4f})"
-        )
+        console.print(f"\n[bold green]Best run:[/] {best['name']} (loss: {best['final_loss']:.4f})")
         for key, val in best["params"].items():
             console.print(f"  {key} = {val}")
         if best.get("run_id"):

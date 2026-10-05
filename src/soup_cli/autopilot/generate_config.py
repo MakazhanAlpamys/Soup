@@ -108,9 +108,7 @@ def build_soup_config(
             ),
             # Only the SFT-family trainers read either flag; every other
             # task would silently ignore them, so don't auto-enable there.
-            use_flash_attn=(
-                perf_flags["use_flash_attn"] and task in SFT_KERNEL_AWARE_TASKS
-            ),
+            use_flash_attn=(perf_flags["use_flash_attn"] and task in SFT_KERNEL_AWARE_TASKS),
             use_liger=perf_flags["use_liger"] and task in SFT_KERNEL_AWARE_TASKS,
             gradient_checkpointing=perf_flags["gradient_checkpointing"],
         ),
@@ -146,9 +144,7 @@ def generate_config(
         raise ValueError(f"output_path must stay under cwd: {output}")
     output_field = decisions.get("output", "./output")
     if not is_under_cwd(Path(output_field)):
-        raise ValueError(
-            f"decisions['output'] must stay under cwd: {output_field}"
-        )
+        raise ValueError(f"decisions['output'] must stay under cwd: {output_field}")
     perf = decisions.get("perf", {})
     lora = decisions.get("lora", {})
     training_kwargs = {
@@ -166,13 +162,9 @@ def generate_config(
         # Same scoping as build_soup_config above: only the SFT-family
         # trainers read either flag.
         "use_flash_attn": (
-            perf.get("use_flash_attn", False)
-            and decisions["task"] in SFT_KERNEL_AWARE_TASKS
+            perf.get("use_flash_attn", False) and decisions["task"] in SFT_KERNEL_AWARE_TASKS
         ),
-        "use_liger": (
-            perf.get("use_liger", False)
-            and decisions["task"] in SFT_KERNEL_AWARE_TASKS
-        ),
+        "use_liger": (perf.get("use_liger", False) and decisions["task"] in SFT_KERNEL_AWARE_TASKS),
         "gradient_checkpointing": perf.get("gradient_checkpointing", False),
         "warmup_auto": bool(decisions.get("warmup_auto", False)),
         "auto_mixed_precision": bool(decisions.get("mixed_precision") is not None),

@@ -86,10 +86,7 @@ def validate_qat_config(
     if backend == "unsloth":
         # Reached by `quantization_aware: fp8`; `true` is refused at config
         # load (#1222), so the fix is the backend alone.
-        errors.append(
-            "QAT is not compatible with the unsloth backend. "
-            "Use backend: transformers."
-        )
+        errors.append("QAT is not compatible with the unsloth backend. Use backend: transformers.")
 
     if quantization not in ("4bit", "none"):
         errors.append(
@@ -104,10 +101,7 @@ def validate_qat_config(
         if backend != "unsloth":
             errors.extend(_fp8_preflight_errors(fp8_recipe, check_card))
     elif not is_qat_available():
-        errors.append(
-            "torchao is not installed. "
-            "Install it with: pip install torchao"
-        )
+        errors.append("torchao is not installed. Install it with: pip install torchao")
 
     return errors
 
@@ -130,9 +124,7 @@ def _fp8_preflight_errors(fp8_recipe: str, check_card: bool) -> list[str]:
     # torchao specifically: transformer-engine alone passes is_fp8_available()
     # but this converter is torchao's, so that box would load the model and
     # only then stop.
-    supported, reason = (
-        fp8_training_supported(fp8_recipe) if check_card else (True, "")
-    )
+    supported, reason = fp8_training_supported(fp8_recipe) if check_card else (True, "")
     if not supported:
         return [reason]
     if not is_torchao_float8_available():

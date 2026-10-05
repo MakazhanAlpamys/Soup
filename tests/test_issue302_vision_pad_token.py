@@ -185,11 +185,13 @@ class TestVisionSetupWiring:
 
         fake_proc = _FakeIdefics3Processor(_FakeTokenizer(pad_token=None))
         monkeypatch.setattr(
-            transformers.AutoProcessor, "from_pretrained",
+            transformers.AutoProcessor,
+            "from_pretrained",
             lambda *a, **k: fake_proc,
         )
         monkeypatch.setattr(
-            transformers.AutoModelForImageTextToText, "from_pretrained",
+            transformers.AutoModelForImageTextToText,
+            "from_pretrained",
             lambda *a, **k: MagicMock(),
         )
         import peft
@@ -203,9 +205,7 @@ class TestVisionSetupWiring:
             "soup_cli.utils.data_pipeline.apply_vocab_expansion",
             lambda *a, **k: None,
         )
-        monkeypatch.setattr(
-            SFTTrainerWrapper, "_apply_quantization_aware", lambda self, tcfg: None
-        )
+        monkeypatch.setattr(SFTTrainerWrapper, "_apply_quantization_aware", lambda self, tcfg: None)
 
         cfg = load_config_from_string(
             "base: fake/vlm\ntask: sft\nmodality: vision\n"
@@ -545,9 +545,7 @@ class TestVisionLanguageCollation:
             )
             return sentinel
 
-        monkeypatch.setattr(
-            SFTTrainerWrapper, "_setup_vision_transformers", _fake_vision_setup
-        )
+        monkeypatch.setattr(SFTTrainerWrapper, "_setup_vision_transformers", _fake_vision_setup)
         monkeypatch.setattr(SFTTrainerWrapper, "_prepare_vision_dataset", _fake_prepare)
         monkeypatch.setattr(sft_module, "_make_vision_trainer", _fake_make)
 

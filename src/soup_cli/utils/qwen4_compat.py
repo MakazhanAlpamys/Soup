@@ -90,9 +90,8 @@ def apply_qwen4_exp_scatter_compat(model: Any) -> int:
     indexers = []
     for module in model.modules():
         module_type = type(module)
-        if (
-            module_type.__name__ != _INDEXER_CLASS
-            or not module_type.__module__.startswith(_INDEXER_MODULE_PREFIX)
+        if module_type.__name__ != _INDEXER_CLASS or not module_type.__module__.startswith(
+            _INDEXER_MODULE_PREFIX
         ):
             continue
         indexers.append(module)

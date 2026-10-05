@@ -1,4 +1,5 @@
 """Tests for v0.43.0 Part D — soup data demo bundles."""
+
 from __future__ import annotations
 
 import json
@@ -142,9 +143,7 @@ class TestDataDemoCli:
     def test_copy_custom_output(self, tmp_path):
         runner = CliRunner()
         with runner.isolated_filesystem(temp_dir=str(tmp_path)):
-            result = runner.invoke(
-                data_app, ["demo", "dpo_demo", "--output", "./mine.jsonl"]
-            )
+            result = runner.invoke(data_app, ["demo", "dpo_demo", "--output", "./mine.jsonl"])
             assert result.exit_code == 0, (result.output, repr(result.exception))
             assert Path("mine.jsonl").is_file()
 
@@ -167,9 +166,7 @@ class TestDataDemoCli:
         runner = CliRunner()
         evil = str(tmp_path.parent / "evil.jsonl")
         with runner.isolated_filesystem(temp_dir=str(tmp_path)):
-            result = runner.invoke(
-                data_app, ["demo", "alpaca_demo", "--output", evil]
-            )
+            result = runner.invoke(data_app, ["demo", "alpaca_demo", "--output", evil])
         assert result.exit_code == 1, (result.output, repr(result.exception))
         assert "under cwd" in result.output.lower()
 

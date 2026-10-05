@@ -387,8 +387,7 @@ def test_tunability_uses_atomic_write_text():
 
 def test_terraform_plan_uses_atomic_write_text():
     src = (
-        Path(__file__).resolve().parent.parent
-        / "src" / "soup_cli" / "utils" / "terraform_plan.py"
+        Path(__file__).resolve().parent.parent / "src" / "soup_cli" / "utils" / "terraform_plan.py"
     )
     text = src.read_text(encoding="utf-8")
     assert "atomic_write_text" in text, "terraform_plan.write_state must use shared helper"

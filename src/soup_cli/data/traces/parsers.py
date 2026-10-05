@@ -12,12 +12,14 @@ SUPPORTED_FORMATS: tuple[str, ...] = ("langchain", "openai", "soup-serve")
 # The per-trace signal vocabulary a producer may write. Distinct from
 # ``pair_builder.SUPPORTED_SIGNALS``, which names pair *modes*: a trace can carry
 # ``thumbs_down`` (a signal) even though no ``--signal thumbs_down`` exists (#1440).
-TRACE_SIGNALS: frozenset[str] = frozenset({
-    "thumbs_up",
-    "thumbs_down",
-    "regenerated",
-    "user_edit",
-})
+TRACE_SIGNALS: frozenset[str] = frozenset(
+    {
+        "thumbs_up",
+        "thumbs_down",
+        "regenerated",
+        "user_edit",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -108,7 +110,10 @@ def parse_langchain(events: Iterable[Any]) -> Iterator[Trace]:
         trace_id = str(event.get("id") or f"lc-{idx}")
         signal = _langchain_signal(event.get("feedback"))
         yield Trace(
-            trace_id=trace_id, prompt=prompt, output=output, signal=signal,
+            trace_id=trace_id,
+            prompt=prompt,
+            output=output,
+            signal=signal,
         )
 
 
@@ -167,14 +172,20 @@ def parse_openai(events: Iterable[Any]) -> Iterator[Trace]:
             regen_orders[prompt] = order
             signal = "regenerated" if signal == "none" else signal
             yield Trace(
-                trace_id=trace_id, prompt=prompt, output=output,
-                signal=signal, regen_order=order,
+                trace_id=trace_id,
+                prompt=prompt,
+                output=output,
+                signal=signal,
+                regen_order=order,
             )
         else:
             regen_orders.setdefault(prompt, 0)
             yield Trace(
-                trace_id=trace_id, prompt=prompt, output=output,
-                signal=signal, regen_order=regen_orders[prompt],
+                trace_id=trace_id,
+                prompt=prompt,
+                output=output,
+                signal=signal,
+                regen_order=regen_orders[prompt],
             )
 
 
@@ -237,6 +248,8 @@ def parse_soup_serve(path: str) -> Iterator[Trace]:
             signal = _record_signal(event)
             yield Trace(
                 trace_id=str(event.get("id") or file_path.stem),
-                prompt=prompt, output=output, signal=signal,
+                prompt=prompt,
+                output=output,
+                signal=signal,
                 edited_output=_edited_output(event),
             )

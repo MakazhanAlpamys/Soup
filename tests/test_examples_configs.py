@@ -93,6 +93,5 @@ def test_example_config_data_file_exists(config_path: Path):
 
     if cfg.data.image_dir and cfg.data.image_dir.startswith("examples/"):
         assert (REPO_ROOT / cfg.data.image_dir).is_dir(), (
-            f"{config_path.name} references image_dir={cfg.data.image_dir!r}, "
-            "which does not exist"
+            f"{config_path.name} references image_dir={cfg.data.image_dir!r}, which does not exist"
         )

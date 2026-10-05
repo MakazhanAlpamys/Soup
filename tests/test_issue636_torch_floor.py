@@ -40,9 +40,7 @@ CONSTRAINTS = ROOT / ".github" / "constraints" / "transformers-floor.txt"
 
 def _train_extra_block() -> str:
     text = PYPROJECT.read_text(encoding="utf-8")
-    table = re.search(
-        r"^\[project\.optional-dependencies\]\s*$(.*?)^\[", text, re.M | re.S
-    )
+    table = re.search(r"^\[project\.optional-dependencies\]\s*$(.*?)^\[", text, re.M | re.S)
     assert table, "pyproject.toml has no [project.optional-dependencies] table"
     train = re.search(r"^train\s*=\s*\[(.*?)^\]", table.group(1), re.M | re.S)
     assert train, "no train = [...] array in [project.optional-dependencies]"
@@ -102,9 +100,7 @@ class TestIssue636TorchFloor:
                 continue
             if req.marker is not None and not req.marker.evaluate({"extra": "torch"}):
                 continue
-            floors.extend(
-                spec.version for spec in req.specifier if spec.operator == ">="
-            )
+            floors.extend(spec.version for spec in req.specifier if spec.operator == ">=")
         assert floors, f"transformers {declared_tf} declares no torch>= floor"
         required = Version(max(floors, key=Version))
 

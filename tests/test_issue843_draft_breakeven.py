@@ -121,8 +121,15 @@ class TestNoRatePays:
 class TestLatencyRatio:
     @pytest.mark.parametrize(
         "plain, draft",
-        [(0.0, 10.0), (10.0, 0.0), (-1.0, 10.0), (float("nan"), 10.0),
-         (10.0, float("inf")), (None, 10.0), (10.0, None)],
+        [
+            (0.0, 10.0),
+            (10.0, 0.0),
+            (-1.0, 10.0),
+            (float("nan"), 10.0),
+            (10.0, float("inf")),
+            (None, 10.0),
+            (10.0, None),
+        ],
     )
     def test_unusable_throughput_gives_no_ratio(self, plain, draft):
         from soup_cli.utils.draft import latency_ratio
@@ -179,9 +186,9 @@ class TestTheBandNoLongerClaimsToPay:
         the one pair measured at scale was a 0.481x slowdown at 0.813."""
         from pathlib import Path
 
-        docs = (
-            Path(__file__).resolve().parents[1] / "docs" / "serving-and-export.md"
-        ).read_text(encoding="utf-8")
+        docs = (Path(__file__).resolve().parents[1] / "docs" / "serving-and-export.md").read_text(
+            encoding="utf-8"
+        )
         assert not re.search(r"starts?\s+paying", docs), "0.70 does not mark payback"
 
 
@@ -243,18 +250,29 @@ def _run(monkeypatch, tmp_path, throughput, extra=(), acceptance=(81, 100)):
     )
     monkeypatch.setattr(draft_cmd, "measure_acceptance", lambda *a, **k: acceptance)
 
-    def _throughput(model, tok, prompts, *, assistant_model=None, num_assistant_tokens=5,
-                    **kw):
-        role = "draft" if model is draft_model else (
-            "assisted" if assistant_model is not None else "plain"
+    def _throughput(model, tok, prompts, *, assistant_model=None, num_assistant_tokens=5, **kw):
+        role = (
+            "draft"
+            if model is draft_model
+            else ("assisted" if assistant_model is not None else "plain")
         )
         return throughput(role, num_assistant_tokens)
 
     monkeypatch.setattr(draft_cmd, "measure_throughput", _throughput)
     result = CliRunner().invoke(
         app,
-        ["measure", "--target", "org/target", "--draft", "org/tiny",
-         "--prompts", "p.jsonl", "-o", "report.json", *extra],
+        [
+            "measure",
+            "--target",
+            "org/target",
+            "--draft",
+            "org/tiny",
+            "--prompts",
+            "p.jsonl",
+            "-o",
+            "report.json",
+            *extra,
+        ],
     )
     report = tmp_path / "report.json"
     data = json.loads(report.read_text(encoding="utf-8")) if report.exists() else None
@@ -284,9 +302,7 @@ class TestMeasureReportsTheModel:
     def test_breakeven_is_for_the_k_in_use(self, in_tmp_cwd, monkeypatch):
         """Break-even is reported at ``--num-assistant-tokens``, not at the default:
         k=2 on the H100 inputs is 0.701, not k=5's 0.832."""
-        result, data = _run(
-            monkeypatch, in_tmp_cwd, _h100, extra=["--num-assistant-tokens", "2"]
-        )
+        result, data = _run(monkeypatch, in_tmp_cwd, _h100, extra=["--num-assistant-tokens", "2"])
         assert result.exit_code == 0, (result.output, repr(result.exception))
         assert data["num_assistant_tokens"] == 2
         assert data["breakeven_acceptance"] == pytest.approx(0.701, abs=5e-4)
@@ -310,9 +326,7 @@ class TestMeasureReportsTheModel:
         assert data["breakeven_acceptance"] is None
         assert "no acceptance rate pays" in _plain(result.output).lower()
 
-    def test_a_best_k_that_is_still_a_slowdown_is_not_recommended(
-        self, in_tmp_cwd, monkeypatch
-    ):
+    def test_a_best_k_that_is_still_a_slowdown_is_not_recommended(self, in_tmp_cwd, monkeypatch):
         """Seen live (gpt2 <- tiny-gpt2 on CPU, 0% acceptance): the panel printed
         "k=1 -> 0.98x" as the best k. Below 1x no k pays, and the panel says so."""
         result, data = _run(monkeypatch, in_tmp_cwd, _h100, acceptance=(0, 100))
@@ -324,9 +338,7 @@ class TestMeasureReportsTheModel:
     def test_a_near_miss_is_not_rounded_up_to_one(self, in_tmp_cwd, monkeypatch):
         """c = 1.0 at 99% acceptance models k=1 at 0.995x. Two decimals printed
         "no k pays ... 1.00x", which reads as a contradiction."""
-        result, data = _run(
-            monkeypatch, in_tmp_cwd, lambda role, k: 20.0, acceptance=(99, 100)
-        )
+        result, data = _run(monkeypatch, in_tmp_cwd, lambda role, k: 20.0, acceptance=(99, 100))
         assert result.exit_code == 0, (result.output, repr(result.exception))
         assert data["modelled_best_k"] == 1
         assert data["modelled_speedup_best_k"] == pytest.approx(0.995)
@@ -347,6 +359,7 @@ class TestMeasureReportsTheModel:
     def test_a_crashed_draft_arm_keeps_everything_else(self, in_tmp_cwd, monkeypatch):
         """Best-effort, #344 pattern: acceptance, plain and assisted all survive,
         and the report says the draft arm crashed rather than looking un-run."""
+
         def _draft_crashes(role, k):
             if role == "draft":
                 raise RuntimeError("draft OOM")
@@ -376,7 +389,8 @@ class TestSweepK:
 
         calls = []
         result, data = _run(
-            monkeypatch, in_tmp_cwd,
+            monkeypatch,
+            in_tmp_cwd,
             lambda role, k: (calls.append((role, k)), _by_k(role, k))[1],
             extra=["--sweep-k", "1,2,5"],
         )
@@ -409,9 +423,7 @@ class TestSweepK:
         # naming the flag, the second was silently read as 3.
         ["0", "65", "1,x", "", "1,,2", "1,2,3,4,5,6,7,8,9", "2,2", "²", "1,٣"],
     )
-    def test_bad_values_refused_before_any_model_loads(
-        self, in_tmp_cwd, monkeypatch, value
-    ):
+    def test_bad_values_refused_before_any_model_loads(self, in_tmp_cwd, monkeypatch, value):
         from typer.testing import CliRunner
 
         from soup_cli.commands import draft as draft_cmd
@@ -421,13 +433,23 @@ class TestSweepK:
         loaded = []
         monkeypatch.setattr(draft_cmd, "_vocab_size_of", lambda mid, trc=False: 49152)
         monkeypatch.setattr(
-            draft_cmd, "_load_pair_member",
+            draft_cmd,
+            "_load_pair_member",
             lambda model_id, **kw: loaded.append(model_id) or (object(), _FakeTok(49152), "cpu"),
         )
         result = CliRunner().invoke(
             app,
-            ["measure", "--target", "org/target", "--draft", "org/tiny",
-             "--prompts", "p.jsonl", "--sweep-k", value],
+            [
+                "measure",
+                "--target",
+                "org/target",
+                "--draft",
+                "org/tiny",
+                "--prompts",
+                "p.jsonl",
+                "--sweep-k",
+                value,
+            ],
         )
         out = _plain(result.output).lower()
         assert "no such option" not in out, "the option must exist and refuse the value"
@@ -441,7 +463,8 @@ class TestSweepK:
     ):
         """Matches the modelled best k, which takes the smallest k on a tie."""
         result, data = _run(
-            monkeypatch, in_tmp_cwd,
+            monkeypatch,
+            in_tmp_cwd,
             lambda role, k: 30.0 if role == "assisted" else _h100(role, k),
             extra=["--sweep-k", order],
         )

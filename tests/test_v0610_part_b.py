@@ -38,6 +38,7 @@ class TestModuleSurface:
             run_unlearn_eval,
             validate_benchmark_name,
         )
+
         assert callable(classify_unlearn_score)
         assert callable(compute_forget_quality)
         assert callable(compute_model_utility)
@@ -348,9 +349,7 @@ class TestUnlearnReport:
         report = UnlearnReport(
             run_id="r",
             benchmark="tofu",
-            metrics=(
-                UnlearnMetric(name="forget_quality", score=0.9, verdict="OK", evidence=""),
-            ),
+            metrics=(UnlearnMetric(name="forget_quality", score=0.9, verdict="OK", evidence=""),),
             overall="OK",
             soup_version="0.61.0",
         )
@@ -363,9 +362,7 @@ class TestUnlearnReport:
         report = UnlearnReport(
             run_id="r",
             benchmark="tofu",
-            metrics=(
-                UnlearnMetric(name="forget_quality", score=0.9, verdict="OK", evidence="e"),
-            ),
+            metrics=(UnlearnMetric(name="forget_quality", score=0.9, verdict="OK", evidence="e"),),
             overall="OK",
             soup_version="0.61.0",
         )
@@ -477,11 +474,18 @@ class TestCli:
         runner = CliRunner()
         with runner.isolated_filesystem(temp_dir=tmp_path) as fs:
             out = Path(fs) / "report.json"
-            result = runner.invoke(app, [
-                "eval", "unlearning", "test-run",
-                "--benchmark", "tofu",
-                "--output", str(out),
-            ])
+            result = runner.invoke(
+                app,
+                [
+                    "eval",
+                    "unlearning",
+                    "test-run",
+                    "--benchmark",
+                    "tofu",
+                    "--output",
+                    str(out),
+                ],
+            )
             assert result.exit_code == 0, result.output
             assert out.exists()
             data = json.loads(out.read_text())
@@ -497,11 +501,18 @@ class TestCli:
         # outside the new cwd regardless of OS or symlink layout.
         outside_target = str(tmp_path / "evil.json")
         with runner.isolated_filesystem(temp_dir=tmp_path):
-            result = runner.invoke(app, [
-                "eval", "unlearning", "test-run",
-                "--benchmark", "tofu",
-                "--output", outside_target,
-            ])
+            result = runner.invoke(
+                app,
+                [
+                    "eval",
+                    "unlearning",
+                    "test-run",
+                    "--benchmark",
+                    "tofu",
+                    "--output",
+                    outside_target,
+                ],
+            )
             assert result.exit_code != 0
 
 

@@ -124,6 +124,7 @@ _MAX_BENCHMARK_NAME_CHARS = 256
 # Small helpers
 # ---------------------------------------------------------------------------
 
+
 def _fail(message: str, code: int) -> NoReturn:
     """Print a friendly red error and raise ``typer.Exit(code)``."""
     console.print(f"[red]Error:[/] {escape(message)}")
@@ -212,14 +213,14 @@ def _reject_lm_eval_injection(value: str, field: str) -> None:
     """
     if "," in value or "=" in value:
         raise ValueError(
-            f"{field} must not contain ',' or '=' "
-            f"(lm-eval model_args injection guard): {value!r}"
+            f"{field} must not contain ',' or '=' (lm-eval model_args injection guard): {value!r}"
         )
 
 
 # ---------------------------------------------------------------------------
 # --config — read leg-1/leg-2 defaults from a committed soup.yaml (v0.71.39)
 # ---------------------------------------------------------------------------
+
 
 def _safe_read_text(path: str, field: str, max_bytes: int) -> str:
     """O_NOFOLLOW + fstat-capped read of a cwd-contained file.
@@ -282,9 +283,7 @@ def _config_sha_of(cfg: "SoupConfig") -> str:
     from soup_cli.registry.hashing import hash_config
 
     return hash_config(
-        cfg.model_dump(
-            mode="json", exclude={"eval": {"ship"}, "training": {"rewind_log"}}
-        )
+        cfg.model_dump(mode="json", exclude={"eval": {"ship"}, "training": {"rewind_log"}})
     )
 
 
@@ -346,14 +345,9 @@ def _compute_provenance(cfg: "SoupConfig") -> Dict[str, object]:
             import hashlib
 
             shas = [
-                sha for p in data
-                if (sha := _safe_hash_file(p, _MAX_DATA_SHA_BYTES)) is not None
+                sha for p in data if (sha := _safe_hash_file(p, _MAX_DATA_SHA_BYTES)) is not None
             ]
-            data_sha = (
-                hashlib.sha256("\x1e".join(shas).encode()).hexdigest()
-                if shas
-                else None
-            )
+            data_sha = hashlib.sha256("\x1e".join(shas).encode()).hexdigest() if shas else None
         else:
             data_sha = _safe_hash_file(data, _MAX_DATA_SHA_BYTES)
         if data_sha is not None:
@@ -418,6 +412,7 @@ def _flag_is_default(ctx: typer.Context, name: str) -> bool:
 # Offline path — --evidence
 # ---------------------------------------------------------------------------
 
+
 def _load_evidence(path: str) -> dict:
     """Load an evidence JSON (cwd-contained, symlink-rejected, size-capped)."""
     payload = json.loads(_safe_read_text(path, "evidence path", _MAX_EVIDENCE_BYTES))
@@ -429,9 +424,7 @@ def _load_evidence(path: str) -> dict:
 def _verdict_from_evidence(payload: dict, *, forgetting_threshold: float) -> ShipVerdict:
     """Build a verdict from an already-loaded evidence payload (no model load)."""
     try:
-        verdict = verdict_from_evidence(
-            payload, forgetting_threshold=forgetting_threshold
-        )
+        verdict = verdict_from_evidence(payload, forgetting_threshold=forgetting_threshold)
     except (TypeError, ValueError, OverflowError) as exc:
         _fail(str(exc), _EXIT_USAGE)
     _warn_if_floor_widens(
@@ -464,9 +457,7 @@ def _live_eval_quantization_from_config(soup_config: Optional["SoupConfig"]) -> 
     return quant if quant in _LIVE_EVAL_QUANTIZATION_FORMATS else None
 
 
-def _live_eval_numerics(
-    quantization: Optional[str], device: Optional[str]
-) -> str:
+def _live_eval_numerics(quantization: Optional[str], device: Optional[str]) -> str:
     """The actual load precision this live run will use.
 
     Quantized loads stamp the format name; full-precision loads stamp the
@@ -555,19 +546,28 @@ def _resolve_generators(
         )
 
     base_gen = live_eval.make_generator(
-        base, device=device, max_new_tokens=BEHAVIOURAL_MAX_NEW_TOKENS,
-        dtype=dtype, quantization=quantization,
+        base,
+        device=device,
+        max_new_tokens=BEHAVIOURAL_MAX_NEW_TOKENS,
+        dtype=dtype,
+        quantization=quantization,
     )
     if adapter:
         tuned_gen = live_eval.make_generator(
-            base, adapter=adapter, device=device,
+            base,
+            adapter=adapter,
+            device=device,
             max_new_tokens=BEHAVIOURAL_MAX_NEW_TOKENS,
-            dtype=dtype, quantization=quantization,
+            dtype=dtype,
+            quantization=quantization,
         )
     elif tuned:
         tuned_gen = live_eval.make_generator(
-            tuned, device=device, max_new_tokens=BEHAVIOURAL_MAX_NEW_TOKENS,
-            dtype=dtype, quantization=quantization,
+            tuned,
+            device=device,
+            max_new_tokens=BEHAVIOURAL_MAX_NEW_TOKENS,
+            dtype=dtype,
+            quantization=quantization,
         )
     else:  # pragma: no cover — _verdict_live guarantees one of tuned/adapter
         raise ValueError("need --tuned or --adapter")
@@ -629,12 +629,9 @@ def _build_judge_scorer(
 
     def _score(gen: Callable[[str], str]) -> float:
         items = [
-            {"prompt": t.prompt, "response": gen(t.prompt), "category": t.category}
-            for t in tasks
+            {"prompt": t.prompt, "response": gen(t.prompt), "category": t.category} for t in tasks
         ]
-        overall = float(
-            getattr(evaluator.evaluate_batch(items), "overall_score", scale_min)
-        )
+        overall = float(getattr(evaluator.evaluate_batch(items), "overall_score", scale_min))
         return max(0.0, min(1.0, (overall - scale_min) / span))
 
     return _score
@@ -671,9 +668,7 @@ def _build_pairwise_scorer(
     provider, model, api_base = _parse_judge_url(judge_model)
     evaluator = JudgeEvaluator(provider=provider, model=model, api_base=api_base)
 
-    def _winrate(
-        gen_a: Callable[[str], str], gen_b: Callable[[str], str]
-    ) -> float:
+    def _winrate(gen_a: Callable[[str], str], gen_b: Callable[[str], str]) -> float:
         pairs = [(t.prompt, gen_a(t.prompt), gen_b(t.prompt)) for t in tasks]
         return pairwise_winrate(pairs, evaluator)
 
@@ -736,9 +731,7 @@ def _lm_eval_leg2(
     base_map: Dict[str, object] = {}
     tuned_map: Dict[str, object] = {}
 
-    tuned_results = eval_cmd._run_lm_eval(
-        tuned_arg, names, None, _LM_EVAL_BATCH_SIZE, dev
-    )
+    tuned_results = eval_cmd._run_lm_eval(tuned_arg, names, None, _LM_EVAL_BATCH_SIZE, dev)
     tuned_blocks = tuned_results.get("results", {})
     for name in names:
         score = _extract_lm_score(tuned_blocks.get(name, {}))
@@ -752,9 +745,7 @@ def _lm_eval_leg2(
         else:
             base_to_run.append(name)
     if base_to_run:
-        base_results = eval_cmd._run_lm_eval(
-            base_arg, base_to_run, None, _LM_EVAL_BATCH_SIZE, dev
-        )
+        base_results = eval_cmd._run_lm_eval(base_arg, base_to_run, None, _LM_EVAL_BATCH_SIZE, dev)
         base_blocks = base_results.get("results", {})
         for name in base_to_run:
             score = _extract_lm_score(base_blocks.get(name, {}))
@@ -814,8 +805,7 @@ def _leg2_scores(
     missing = [n for n in suite_names if n not in base_map or n not in tuned_map]
     if missing:
         raise ValueError(
-            f"could not score benchmark(s) on both base and tuned: "
-            f"{', '.join(sorted(missing))}"
+            f"could not score benchmark(s) on both base and tuned: {', '.join(sorted(missing))}"
         )
 
     return base_map, tuned_map
@@ -947,9 +937,7 @@ def _measure_noise_floor(
     return floor
 
 
-def _warn_if_floor_widens(
-    floor: Optional[NoiseFloor], threshold: float, *, source: str
-) -> None:
+def _warn_if_floor_widens(floor: Optional[NoiseFloor], threshold: float, *, source: str) -> None:
     """Announce any axis whose floor loosens the gate past ``threshold``.
 
     Shared by the live path and the ``--evidence`` reader on purpose: an
@@ -1018,8 +1006,7 @@ def _verdict_live(
     for _name in suite_names:
         if "\x00" in _name or len(_name) > _MAX_BENCHMARK_NAME_CHARS:
             _fail(
-                "--general-suite names must be null-free and "
-                f"< {_MAX_BENCHMARK_NAME_CHARS} chars",
+                f"--general-suite names must be null-free and < {_MAX_BENCHMARK_NAME_CHARS} chars",
                 _EXIT_USAGE,
             )
 
@@ -1032,9 +1019,7 @@ def _verdict_live(
         try:
             baseline_scores = resolve_baseline(
                 baseline_spec,
-                warn=lambda msg: console.print(
-                    f"[yellow]Warning:[/] {escape(msg)}"
-                ),
+                warn=lambda msg: console.print(f"[yellow]Warning:[/] {escape(msg)}"),
             )
         except (ValueError, FileNotFoundError, OSError) as exc:
             _fail(f"--baseline: {exc}", _EXIT_USAGE)
@@ -1101,9 +1086,7 @@ def _verdict_live(
             forgetting_threshold=forgetting_threshold,
             noise_floor=measured_floor,
         )
-        return replace(
-            verdict, numerics=_live_eval_numerics(quantization, device)
-        )
+        return replace(verdict, numerics=_live_eval_numerics(quantization, device))
     except typer.Exit:
         # typer.Exit subclasses RuntimeError — re-raise so in-try _fail() usage
         # errors (exit 3) keep their code instead of being re-coded as exit 1.
@@ -1115,6 +1098,7 @@ def _verdict_live(
 # ---------------------------------------------------------------------------
 # Render + exit
 # ---------------------------------------------------------------------------
+
 
 def _push_pr_comment(verdict: ShipVerdict, target: str) -> None:
     """Post the verdict as a GitHub PR comment — best-effort (reuses adapter_pr).
@@ -1138,8 +1122,7 @@ def _push_pr_comment(verdict: ShipVerdict, target: str) -> None:
         )
         return
     console.print(
-        f"[green]Posted PR comment to[/] {escape(target)}"
-        + (f" -> {escape(url)}" if url else "")
+        f"[green]Posted PR comment to[/] {escape(target)}" + (f" -> {escape(url)}" if url else "")
     )
 
 
@@ -1163,9 +1146,7 @@ def _emit_and_exit(
     if emit_evidence:
         try:
             payload = verdict_to_evidence(verdict, provenance=provenance)
-            atomic_write_text(
-                json.dumps(payload, indent=2), emit_evidence, field="emit-evidence"
-            )
+            atomic_write_text(json.dumps(payload, indent=2), emit_evidence, field="emit-evidence")
             console.print(f"[green]Wrote evidence[/] {escape(emit_evidence)}")
         except (OSError, ValueError, TypeError) as exc:
             _fail(
@@ -1184,12 +1165,11 @@ def _emit_and_exit(
 # CLI entrypoint (callback so `soup ship <opts>` needs no subcommand)
 # ---------------------------------------------------------------------------
 
+
 @app.callback(invoke_without_command=True)
 def ship(
     ctx: typer.Context,
-    base: Optional[str] = typer.Option(
-        None, "--base", help="Base model id/path (the 'before')."
-    ),
+    base: Optional[str] = typer.Option(None, "--base", help="Base model id/path (the 'before')."),
     tuned: Optional[str] = typer.Option(
         None, "--tuned", help="Tuned model id/path (a separate 'after' model)."
     ),
@@ -1344,9 +1324,7 @@ def ship(
         if config_sha is not None and not emit_evidence:
             _check_evidence_staleness(payload, config_sha)
             assert soup_config is not None  # config_sha is computed from it
-            _check_evidence_numerics(
-                payload, _expected_numerics_family(soup_config)
-            )
+            _check_evidence_numerics(payload, _expected_numerics_family(soup_config))
         verdict = _verdict_from_evidence(payload, forgetting_threshold=threshold)
     elif base or tuned or adapter or task_eval:
         verdict = _verdict_live(
@@ -1379,9 +1357,7 @@ def ship(
         provenance = dict(current_baseline_stamp())
         if soup_config is not None:
             provenance.update(_compute_provenance(soup_config))
-    _emit_and_exit(
-        verdict, output, emit_evidence=emit_evidence, push=push, provenance=provenance
-    )
+    _emit_and_exit(verdict, output, emit_evidence=emit_evidence, push=push, provenance=provenance)
 
 
 __all__ = ["app", "ship"]

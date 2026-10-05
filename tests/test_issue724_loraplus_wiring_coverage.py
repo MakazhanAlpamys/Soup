@@ -122,8 +122,7 @@ def _hands_peft_config_to_trl(source: str) -> bool:
 
 def _source_builds_peft(source: str) -> bool:
     return bool(
-        _BUILDS_PEFT.search(_code_without_comments(source))
-        or _hands_peft_config_to_trl(source)
+        _BUILDS_PEFT.search(_code_without_comments(source)) or _hands_peft_config_to_trl(source)
     )
 
 
@@ -430,14 +429,11 @@ class TestPpoWiresLoraPlusByInjectionNotAttach:
             "    self.trainer = cls(**trainer_kwargs)\n"
         )
         kwarg_form = ast.parse(
-            "if is_experimental:\n"
-            "    self.trainer = cls(optimizers=(loraplus_optimizer, None))\n"
+            "if is_experimental:\n    self.trainer = cls(optimizers=(loraplus_optimizer, None))\n"
         )
         assert _hands_optimizer_to_constructor(_if_is_experimental_bodies(wired)[0])
         assert _hands_optimizer_to_constructor(_if_is_experimental_bodies(kwarg_form)[0])
-        assert not _hands_optimizer_to_constructor(
-            _if_is_experimental_bodies(unwired)[0]
-        )
+        assert not _hands_optimizer_to_constructor(_if_is_experimental_bodies(unwired)[0])
 
 
 class TestUnlearnExemptionIsEarned:
@@ -561,8 +557,18 @@ class TestLoraPlusRefusedWithVera:
     parse, as ``use_lorafa`` already refuses VeRA."""
 
     _TASKS = [
-        "sft", "pretrain", "dpo", "kto", "orpo", "simpo", "ipo", "bco",
-        "grpo", "ppo", "reward_model", "online_dpo",
+        "sft",
+        "pretrain",
+        "dpo",
+        "kto",
+        "orpo",
+        "simpo",
+        "ipo",
+        "bco",
+        "grpo",
+        "ppo",
+        "reward_model",
+        "online_dpo",
     ]
     # What each task needs to parse at all, so the refusal tested is the ratio's.
     _EXTRA = {"online_dpo": {"reward_model": "hf-internal-testing/tiny-random-gpt2"}}

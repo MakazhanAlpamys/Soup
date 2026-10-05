@@ -66,9 +66,7 @@ def fetch(
         return
     entry = get_entry(name)
     if entry is None or entry.namespace != namespace:
-        console.print(
-            f"[red]Unknown {escape(namespace)} entry: {escape(str(name))}.[/]"
-        )
+        console.print(f"[red]Unknown {escape(namespace)} entry: {escape(str(name))}.[/]")
         raise typer.Exit(code=2)
     bundled_root = os.path.realpath(fetch_examples_dir())
     src = os.path.realpath(os.path.join(bundled_root, entry.filename))
@@ -79,15 +77,13 @@ def fetch(
         common = ""
     if common != bundled_root or not os.path.isfile(src):
         console.print(
-            f"[red]Bundled file is missing or escaped its root: "
-            f"{escape(entry.filename)}.[/]"
+            f"[red]Bundled file is missing or escaped its root: {escape(entry.filename)}.[/]"
         )
         raise typer.Exit(code=1)
     target_path = output or entry.filename
     if not is_under_cwd(target_path):
         console.print(
-            f"[red]--output must stay under cwd: "
-            f"{escape(os.path.basename(target_path))}.[/]"
+            f"[red]--output must stay under cwd: {escape(os.path.basename(target_path))}.[/]"
         )
         raise typer.Exit(code=2)
     real_target = os.path.realpath(target_path)
@@ -109,8 +105,7 @@ def fetch(
         raise typer.Exit(code=1) from exc
     if link_stat is not None and stat.S_ISLNK(link_stat.st_mode):
         console.print(
-            f"[red]Refusing to overwrite symlink at "
-            f"{escape(os.path.basename(real_target))}[/]"
+            f"[red]Refusing to overwrite symlink at {escape(os.path.basename(real_target))}[/]"
         )
         raise typer.Exit(code=1)
     if link_stat is not None and not force:
@@ -123,7 +118,4 @@ def fetch(
     if parent and not os.path.isdir(parent):
         os.makedirs(parent, exist_ok=True)
     shutil.copyfile(src, real_target)
-    console.print(
-        f"[green]Wrote[/] {escape(real_target)}\n"
-        f"[dim]{escape(entry.description)}[/]"
-    )
+    console.print(f"[green]Wrote[/] {escape(real_target)}\n[dim]{escape(entry.description)}[/]")

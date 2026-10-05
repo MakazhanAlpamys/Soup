@@ -67,20 +67,14 @@ class BisectPlan:
         if not isinstance(self.history, tuple):
             raise TypeError("history must be tuple")
         if len(self.history) < 2:
-            raise ValueError(
-                "history must contain at least 2 entries"
-            )
+            raise ValueError("history must contain at least 2 entries")
         if len(self.history) > MAX_HISTORY:
-            raise ValueError(
-                f"history length {len(self.history)} > {MAX_HISTORY}"
-            )
+            raise ValueError(f"history length {len(self.history)} > {MAX_HISTORY}")
         seen: set[str] = set()
         for entry in self.history:
             _check_checkpoint(entry, "history")
             if entry in seen:
-                raise ValueError(
-                    f"history must be unique (duplicate {entry!r})"
-                )
+                raise ValueError(f"history must be unique (duplicate {entry!r})")
             seen.add(entry)
 
 
@@ -113,9 +107,7 @@ class BisectResult:
     def __post_init__(self) -> None:
         valid_verdicts = ("ALL_OK", "BROKEN_AT")
         if self.verdict not in valid_verdicts:
-            raise ValueError(
-                f"verdict must be one of {valid_verdicts}"
-            )
+            raise ValueError(f"verdict must be one of {valid_verdicts}")
         if self.first_broken is not None:
             _check_checkpoint(self.first_broken, "first_broken")
         if not isinstance(self.steps, tuple):

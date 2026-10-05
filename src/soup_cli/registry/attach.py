@@ -13,7 +13,11 @@ from typing import Any, Optional
 
 
 def attach_artifact(
-    entry_id: str, *, path: str, kind: str, enforce_cwd: bool = True,
+    entry_id: str,
+    *,
+    path: str,
+    kind: str,
+    enforce_cwd: bool = True,
 ) -> Optional[int]:
     """Attach a file at ``path`` to a registry entry as ``kind``.
 
@@ -40,7 +44,9 @@ def attach_artifact(
 
 
 def write_eval_json(
-    output_path: str, *, payload: dict[str, Any],
+    output_path: str,
+    *,
+    payload: dict[str, Any],
 ) -> Path:
     """Write an eval payload as JSON, returning the resolved path.
 
@@ -51,9 +57,7 @@ def write_eval_json(
     try:
         common = os.path.commonpath([cwd_real, out_real])
     except ValueError as exc:
-        raise ValueError(
-            f"output path '{output_path}' is outside cwd"
-        ) from exc
+        raise ValueError(f"output path '{output_path}' is outside cwd") from exc
     if common != cwd_real:
         raise ValueError(f"output path '{output_path}' is outside cwd")
 

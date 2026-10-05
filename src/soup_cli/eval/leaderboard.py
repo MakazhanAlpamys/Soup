@@ -38,7 +38,8 @@ class Leaderboard:
             self.models[model][entry.benchmark] = entry.score
 
     def get_sorted_models(
-        self, sort_by: Optional[str] = None,
+        self,
+        sort_by: Optional[str] = None,
     ) -> list[tuple[str, dict[str, float], float]]:
         """Return models sorted by average score or specific benchmark.
 
@@ -49,9 +50,7 @@ class Leaderboard:
             if sort_by and sort_by in scores:
                 sort_score = scores[sort_by]
             else:
-                sort_score = (
-                    sum(scores.values()) / len(scores) if scores else 0.0
-                )
+                sort_score = sum(scores.values()) / len(scores) if scores else 0.0
             result.append((model, scores, sort_score))
 
         result.sort(key=lambda item: item[2], reverse=True)
@@ -66,16 +65,16 @@ def build_leaderboard_from_tracker(
     eval_results = tracker.get_eval_results(run_id=run_id)
 
     entries = []
-    for row in newest_eval_rows(
-        eval_results, key_fields=("model_path", "benchmark")
-    ):
-        entries.append(LeaderboardEntry(
-            model_path=row.get("model_path", ""),
-            benchmark=row.get("benchmark", ""),
-            score=row.get("score", 0.0),
-            run_id=row.get("run_id"),
-            created_at=row.get("created_at", ""),
-        ))
+    for row in newest_eval_rows(eval_results, key_fields=("model_path", "benchmark")):
+        entries.append(
+            LeaderboardEntry(
+                model_path=row.get("model_path", ""),
+                benchmark=row.get("benchmark", ""),
+                score=row.get("score", 0.0),
+                run_id=row.get("run_id"),
+                created_at=row.get("created_at", ""),
+            )
+        )
 
     leaderboard = Leaderboard(entries=entries)
     leaderboard.compute()
@@ -115,12 +114,14 @@ def compare_runs(
             if delta < -0.01:
                 regressions.append(bench)
 
-        comparisons.append({
-            "benchmark": bench,
-            "run_1_score": score_a,
-            "run_2_score": score_b,
-            "delta": delta,
-        })
+        comparisons.append(
+            {
+                "benchmark": bench,
+                "run_1_score": score_a,
+                "run_2_score": score_b,
+                "delta": delta,
+            }
+        )
 
     return {
         "run_1": run_id_1,
@@ -154,9 +155,11 @@ def export_leaderboard(
     # Default: JSON
     data = []
     for model, scores, avg in sorted_models:
-        data.append({
-            "model": model,
-            "scores": scores,
-            "average": round(avg, 4),
-        })
+        data.append(
+            {
+                "model": model,
+                "scores": scores,
+                "average": round(avg, 4),
+            }
+        )
     return json.dumps(data, indent=2)

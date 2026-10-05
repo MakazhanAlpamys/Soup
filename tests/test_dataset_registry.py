@@ -204,9 +204,7 @@ class TestRegistryValidation:
 
         registry_path = tmp_path / "datasets.json"
         with __import__("pytest").raises(ValueError):
-            register_dataset(
-                "bad/name", "/data.jsonl", "alpaca", registry_path=registry_path
-            )
+            register_dataset("bad/name", "/data.jsonl", "alpaca", registry_path=registry_path)
 
     def test_name_with_null_byte_rejected(self, tmp_path):
         """Names with null bytes are rejected."""
@@ -214,9 +212,7 @@ class TestRegistryValidation:
 
         registry_path = tmp_path / "datasets.json"
         with __import__("pytest").raises(ValueError):
-            register_dataset(
-                "bad\x00name", "/data.jsonl", "alpaca", registry_path=registry_path
-            )
+            register_dataset("bad\x00name", "/data.jsonl", "alpaca", registry_path=registry_path)
 
     def test_empty_name_rejected(self, tmp_path):
         """Empty names are rejected."""

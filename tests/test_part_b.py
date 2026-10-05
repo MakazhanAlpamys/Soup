@@ -50,10 +50,13 @@ class TestBuildMiiApp:
         app = build_mii_app(_pipeline, model_name="test-mii-model")
         client = TestClient(app)
 
-        resp = client.post("/v1/chat/completions", json={
-            "model": "test-mii-model",
-            "messages": [{"role": "user", "content": "Hi"}],
-        })
+        resp = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "test-mii-model",
+                "messages": [{"role": "user", "content": "Hi"}],
+            },
+        )
         assert resp.status_code == 200, resp.text
         data = resp.json()
         assert data["choices"][0]["message"]["content"] == "Hello, world!"
@@ -68,11 +71,14 @@ class TestBuildMiiApp:
         app = build_mii_app(MagicMock(), model_name="test")
         client = TestClient(app)
 
-        resp = client.post("/v1/chat/completions", json={
-            "model": "test",
-            "messages": [{"role": "user", "content": "Hi"}],
-            "stream": True,
-        })
+        resp = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "test",
+                "messages": [{"role": "user", "content": "Hi"}],
+                "stream": True,
+            },
+        )
         assert resp.status_code == 400
         assert "stream" in resp.text.lower()
 
@@ -86,19 +92,25 @@ class TestBuildMiiApp:
         client = TestClient(app)
 
         # Below lower bound
-        resp = client.post("/v1/chat/completions", json={
-            "model": "test",
-            "messages": [{"role": "user", "content": "Hi"}],
-            "max_tokens": 0,
-        })
+        resp = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "test",
+                "messages": [{"role": "user", "content": "Hi"}],
+                "max_tokens": 0,
+            },
+        )
         assert resp.status_code == 400
 
         # Above upper bound
-        resp = client.post("/v1/chat/completions", json={
-            "model": "test",
-            "messages": [{"role": "user", "content": "Hi"}],
-            "max_tokens": 99999,
-        })
+        resp = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "test",
+                "messages": [{"role": "user", "content": "Hi"}],
+                "max_tokens": 99999,
+            },
+        )
         assert resp.status_code == 400
 
     def test_pipeline_failure_returns_500(self):
@@ -113,10 +125,13 @@ class TestBuildMiiApp:
         app = build_mii_app(_bad_pipeline, model_name="test")
         client = TestClient(app)
 
-        resp = client.post("/v1/chat/completions", json={
-            "model": "test",
-            "messages": [{"role": "user", "content": "Hi"}],
-        })
+        resp = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "test",
+                "messages": [{"role": "user", "content": "Hi"}],
+            },
+        )
         assert resp.status_code == 500
 
     def test_empty_pipeline_response_returns_500(self):
@@ -128,10 +143,13 @@ class TestBuildMiiApp:
         app = build_mii_app(lambda prompts, **k: [], model_name="test")
         client = TestClient(app)
 
-        resp = client.post("/v1/chat/completions", json={
-            "model": "test",
-            "messages": [{"role": "user", "content": "Hi"}],
-        })
+        resp = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "test",
+                "messages": [{"role": "user", "content": "Hi"}],
+            },
+        )
         assert resp.status_code == 500
 
 
@@ -168,12 +186,15 @@ class TestAutoReexec:
         )
         # Mock topology to report 2 GPUs
         monkeypatch.setattr(
-            topo_mod, "detect_topology",
+            topo_mod,
+            "detect_topology",
             lambda: {"gpu_count": 2, "interconnect": "PCIe"},
         )
         # Don't let resolve_num_gpus fail on a real CUDA check
         monkeypatch.setattr(
-            topo_mod, "resolve_num_gpus", lambda spec: 2,
+            topo_mod,
+            "resolve_num_gpus",
+            lambda spec: 2,
         )
 
         runner = CliRunner()
@@ -181,8 +202,10 @@ class TestAutoReexec:
             app,
             [
                 "train",
-                "--config", "soup.yaml",
-                "--gpus", "2",
+                "--config",
+                "soup.yaml",
+                "--gpus",
+                "2",
                 "--no-reexec",
                 "--yes",
             ],
@@ -207,7 +230,9 @@ class TestAutoReexec:
         # Strip env-var contamination from prior tests / parent shell so
         # is_in_distributed deterministically returns False.
         for var in (
-            "RANK", "WORLD_SIZE", "LOCAL_RANK",
+            "RANK",
+            "WORLD_SIZE",
+            "LOCAL_RANK",
             "ACCELERATE_MIXED_PRECISION",
             "ACCELERATE_USE_DEEPSPEED",
             "ACCELERATE_USE_FSDP",
@@ -223,23 +248,30 @@ class TestAutoReexec:
             encoding="utf-8",
         )
         monkeypatch.setattr(
-            topo_mod, "detect_topology",
+            topo_mod,
+            "detect_topology",
             lambda: {"gpu_count": 2, "interconnect": "PCIe"},
         )
         monkeypatch.setattr(
-            topo_mod, "resolve_num_gpus", lambda spec: 2,
+            topo_mod,
+            "resolve_num_gpus",
+            lambda spec: 2,
         )
         # Patch the *imported* names: train.py does
         # ``from soup_cli.utils.topology import ...`` so the reference is on
         # the train module, not the topology module.
-        monkeypatch.setattr(train_cmd, "detect_topology",
-                            lambda: {"gpu_count": 2, "interconnect": "PCIe"},
-                            raising=False)
-        monkeypatch.setattr(train_cmd, "resolve_num_gpus", lambda spec: 2,
-                            raising=False)
+        monkeypatch.setattr(
+            train_cmd,
+            "detect_topology",
+            lambda: {"gpu_count": 2, "interconnect": "PCIe"},
+            raising=False,
+        )
+        monkeypatch.setattr(train_cmd, "resolve_num_gpus", lambda spec: 2, raising=False)
         # is_in_distributed lives in launcher; train does an inline import.
         monkeypatch.setattr(
-            launcher_mod, "is_in_distributed", lambda: False,
+            launcher_mod,
+            "is_in_distributed",
+            lambda: False,
         )
 
         captured: dict = {}
@@ -257,8 +289,10 @@ class TestAutoReexec:
             app,
             [
                 "train",
-                "--config", "soup.yaml",
-                "--gpus", "2",
+                "--config",
+                "soup.yaml",
+                "--gpus",
+                "2",
                 "--yes",
             ],
         )

@@ -196,6 +196,7 @@ class TestReasonStringsByteIdenticalAcrossSurfaces:
         )
         lines = []
         import unittest.mock
+
         with unittest.mock.patch("soup_cli.trainer.mlx_sft.console.print") as mock_print:
             wrapper._check_unsupported()
             if mock_print.called:

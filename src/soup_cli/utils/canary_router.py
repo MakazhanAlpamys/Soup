@@ -132,6 +132,7 @@ def rollback(policy: CanaryPolicy, *, reason: str = "regression") -> CanaryPolic
 # v0.26.0 Quant-Lobotomy verdict surface).
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class BucketStats:
     """Mutable per-bucket counters. NOT thread-safe — call ``aggregate``
@@ -141,9 +142,7 @@ class BucketStats:
     stable_major: int = 0
     canary_ok: int = 0
     canary_major: int = 0
-    _lock: threading.Lock = field(
-        default_factory=threading.Lock, repr=False, compare=False
-    )
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
 
     def record(self, bucket: str, ok: bool) -> None:
         if bucket not in ("stable", "canary"):

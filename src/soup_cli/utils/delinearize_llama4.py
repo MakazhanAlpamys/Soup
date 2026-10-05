@@ -40,9 +40,7 @@ _LLAMA4_RE = re.compile(r"(?i)(?:^|[^a-z0-9])llama-?4(?:[^a-z0-9]|$)")
 
 # Fused-expert parameter keys on Llama4TextExperts. Numbered per-expert
 # keys (``.experts.0.gate_proj``) are already unfused — never matched.
-_EXPERT_FUSED_KEY_RE = re.compile(
-    r"\.experts\.(?:gate_up_proj|down_proj)(?:\.weight)?$"
-)
+_EXPERT_FUSED_KEY_RE = re.compile(r"\.experts\.(?:gate_up_proj|down_proj)(?:\.weight)?$")
 
 # Mirrors the v0.71.14 fsdp_consolidate per-shard cap.
 _MAX_WEIGHT_FILE_BYTES = 16 * 1024**3  # 16 GiB
@@ -72,9 +70,7 @@ class DelinearizePlan:
             if "\x00" in value:
                 raise ValueError(f"{field_name} contains NUL byte")
             if not is_under_cwd(value):
-                raise ValueError(
-                    f"{field_name} is outside cwd: {os.path.basename(value)}"
-                )
+                raise ValueError(f"{field_name} is outside cwd: {os.path.basename(value)}")
         if not isinstance(self.weight_files, tuple):
             raise TypeError("weight_files must be a tuple")
 
@@ -91,21 +87,13 @@ def discover_weight_files(source_dir: str) -> List[str]:
     if not isinstance(source_dir, str):
         raise TypeError("source_dir must be str")
     if not is_under_cwd(source_dir):
-        raise ValueError(
-            f"source_dir is outside cwd: {os.path.basename(source_dir)}"
-        )
+        raise ValueError(f"source_dir is outside cwd: {os.path.basename(source_dir)}")
     real = os.path.realpath(source_dir)
     if not os.path.isdir(real):
-        raise FileNotFoundError(
-            f"source_dir not found: {os.path.basename(real)}"
-        )
-    files = sorted(
-        entry for entry in os.listdir(real) if entry.endswith(".safetensors")
-    )
+        raise FileNotFoundError(f"source_dir not found: {os.path.basename(real)}")
+    files = sorted(entry for entry in os.listdir(real) if entry.endswith(".safetensors"))
     if not files:
-        raise FileNotFoundError(
-            "no .safetensors files found in source_dir"
-        )
+        raise FileNotFoundError("no .safetensors files found in source_dir")
     return files
 
 
@@ -116,9 +104,7 @@ def plan_delinearize(source_dir: str, target_dir: str) -> DelinearizePlan:
     if "\x00" in target_dir:
         raise ValueError("target_dir contains NUL byte")
     if not is_under_cwd(target_dir):
-        raise ValueError(
-            f"target_dir is outside cwd: {os.path.basename(target_dir)}"
-        )
+        raise ValueError(f"target_dir is outside cwd: {os.path.basename(target_dir)}")
     files = discover_weight_files(source_dir)
     return DelinearizePlan(
         source_dir=os.path.realpath(source_dir),
@@ -173,13 +159,9 @@ def is_expert_weight_key(key: object) -> bool:
 def _validate_num_experts(value: object) -> int:
     """Bounds-check ``num_experts`` (bool-rejected, [1, 4096])."""
     if isinstance(value, bool) or not isinstance(value, int):
-        raise TypeError(
-            f"num_experts must be an int, got {type(value).__name__}"
-        )
+        raise TypeError(f"num_experts must be an int, got {type(value).__name__}")
     if not 1 <= value <= _MAX_NUM_EXPERTS:
-        raise ValueError(
-            f"num_experts must be in [1, {_MAX_NUM_EXPERTS}], got {value}"
-        )
+        raise ValueError(f"num_experts must be in [1, {_MAX_NUM_EXPERTS}], got {value}")
     return value
 
 
@@ -234,14 +216,11 @@ def delinearize_tensor(tensor: Any, *, num_experts: int) -> Tuple[Any, str]:
     if ndim == 3:
         return tensor, "already_3d"
     if ndim != 2:
-        raise ValueError(
-            f"expert tensor must be 2-D (linearised) or 3-D, got {ndim}-D"
-        )
+        raise ValueError(f"expert tensor must be 2-D (linearised) or 3-D, got {ndim}-D")
     rows = int(tensor.shape[0])
     if rows % num_experts != 0:
         raise ValueError(
-            f"expert tensor dim 0 ({rows}) is not divisible by "
-            f"num_experts={num_experts}"
+            f"expert tensor dim 0 ({rows}) is not divisible by num_experts={num_experts}"
         )
     return tensor.reshape(num_experts, rows // num_experts, tensor.shape[1]), "reshaped"
 
@@ -266,7 +245,9 @@ def _copy_json_sidecars(source_dir: str, target_dir: str) -> int:
             with open(source_path, encoding="utf-8") as handle:
                 text = handle.read()
             atomic_write_text(
-                text, os.path.join(target_dir, entry), field="target_dir",
+                text,
+                os.path.join(target_dir, entry),
+                field="target_dir",
             )
             copied += 1
         except (OSError, ValueError, UnicodeDecodeError):
@@ -304,17 +285,14 @@ def run_delinearize(
         from safetensors.torch import save as st_save
     except ImportError as exc:
         raise ImportError(
-            "delinearize-llama4 requires torch + safetensors "
-            "(pip install \"soup-cli[train]\")"
+            'delinearize-llama4 requires torch + safetensors (pip install "soup-cli[train]")'
         ) from exc
 
     # Containment BEFORE makedirs — a directly constructed plan must not
     # be able to create directories outside cwd (defence-in-depth on top
     # of DelinearizePlan.__post_init__).
     if not is_under_cwd(plan.target_dir):
-        raise ValueError(
-            f"target_dir is outside cwd: {os.path.basename(plan.target_dir)}"
-        )
+        raise ValueError(f"target_dir is outside cwd: {os.path.basename(plan.target_dir)}")
     os.makedirs(plan.target_dir, exist_ok=True)
 
     reshaped = 0
@@ -327,23 +305,19 @@ def run_delinearize(
         size = os.path.getsize(source_path)
         if size > _MAX_WEIGHT_FILE_BYTES:
             raise ValueError(
-                f"{name} exceeds the "
-                f"{_MAX_WEIGHT_FILE_BYTES // 1024**3} GiB per-file cap"
+                f"{name} exceeds the {_MAX_WEIGHT_FILE_BYTES // 1024**3} GiB per-file cap"
             )
         try:
             tensors = load_file(source_path)
         except Exception as exc:  # noqa: BLE001 — SafetensorError is bare Exception
             raise ValueError(
-                f"{name} is not a valid safetensors file: "
-                f"{type(exc).__name__}"
+                f"{name} is not a valid safetensors file: {type(exc).__name__}"
             ) from exc
         out_tensors = {}
         for key, tensor in tensors.items():
             if is_expert_weight_key(key):
                 try:
-                    out_tensor, status = delinearize_tensor(
-                        tensor, num_experts=num_experts
-                    )
+                    out_tensor, status = delinearize_tensor(tensor, num_experts=num_experts)
                 except ValueError as exc:
                     raise ValueError(f"{key}: {exc}") from exc
                 out_tensors[key] = out_tensor

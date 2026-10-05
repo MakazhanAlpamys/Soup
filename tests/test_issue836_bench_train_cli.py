@@ -35,21 +35,23 @@ def workdir(tmp_path, monkeypatch):
         "".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8"
     )
     (tmp_path / "soup.yaml").write_text(
-        yaml.safe_dump({
-            "base": base,
-            "task": "sft",
-            "backend": "transformers",
-            "modality": "text",
-            "data": {"train": "train.jsonl", "max_length": 64, "chat_template": "chatml"},
-            "training": {
-                "batch_size": 2,
-                "gradient_accumulation_steps": 1,
-                "quantization": "none",
-                "lr": 1e-2,
-                "lora": {"r": 4, "alpha": 8, "dropout": 0.0, "target_modules": ["q_proj"]},
-            },
-            "output": str(tmp_path / "out"),
-        }),
+        yaml.safe_dump(
+            {
+                "base": base,
+                "task": "sft",
+                "backend": "transformers",
+                "modality": "text",
+                "data": {"train": "train.jsonl", "max_length": 64, "chat_template": "chatml"},
+                "training": {
+                    "batch_size": 2,
+                    "gradient_accumulation_steps": 1,
+                    "quantization": "none",
+                    "lr": 1e-2,
+                    "lora": {"r": 4, "alpha": 8, "dropout": 0.0, "target_modules": ["q_proj"]},
+                },
+                "output": str(tmp_path / "out"),
+            }
+        ),
         encoding="utf-8",
     )
     monkeypatch.chdir(tmp_path)
@@ -64,8 +66,12 @@ def _run(steps=5, warmup=1):
 
     def go(before_train=None):
         return run_bench_train(
-            load_config("soup.yaml"), steps=steps, warmup=warmup, device="cpu",
-            load_dataset=lambda c: load_dataset(c.data), before_train=before_train,
+            load_config("soup.yaml"),
+            steps=steps,
+            warmup=warmup,
+            device="cpu",
+            load_dataset=lambda c: load_dataset(c.data),
+            before_train=before_train,
         )
 
     return go
@@ -94,7 +100,8 @@ class TestTheCommand:
             # runs inside trainer.train() -- so "somewhere on the stack" would
             # blame Soup for a call it does not make, on any NVIDIA box.
             frames = [
-                f for f in traceback.extract_stack()[:-2]
+                f
+                for f in traceback.extract_stack()[:-2]
                 if os.path.basename(f.filename) != "subprocess.py"
             ]
             origin = os.path.realpath(frames[-1].filename) if frames else ""
@@ -115,8 +122,19 @@ class TestTheCommand:
         # memory, which is a different quantity from the allocator's.
         monkeypatch.setattr(subprocess.Popen, "__init__", watching)
         result = runner.invoke(
-            app, ["bench", "train", "--config", "soup.yaml", "--steps", "5",
-                  "--warmup", "1", "-o", "r.json"],
+            app,
+            [
+                "bench",
+                "train",
+                "--config",
+                "soup.yaml",
+                "--steps",
+                "5",
+                "--warmup",
+                "1",
+                "-o",
+                "r.json",
+            ],
         )
         assert result.exit_code == 0, result.output
         report = json.loads((workdir / "r.json").read_text(encoding="utf-8"))
@@ -127,21 +145,15 @@ class TestTheCommand:
         assert report["checks"]["grad_norm"] == "all reported steps finite and non-zero"
         assert report["checks"]["parameters_changed"] is True
         assert 0 < report["tokens"]["useful"] < report["tokens"]["total"]
-        assert set(report["memory"]) == {
-            "max_memory_allocated_bytes", "max_memory_reserved_bytes"
-        }
+        assert set(report["memory"]) == {"max_memory_allocated_bytes", "max_memory_reserved_bytes"}
         assert len(report["config_hash"]) == 64
         assert report["resolved_config"]["training"]["logging_steps"] == 1
-        assert not [
-            cmd for cmd in spawned if "nvidia-smi" in cmd and "memory" in cmd
-        ], spawned
+        assert not [cmd for cmd in spawned if "nvidia-smi" in cmd and "memory" in cmd], spawned
         assert "output" not in report["resolved_config"]
         # A benchmark never writes into the config's own output directory.
         assert not (workdir / "out").exists()
 
-    def test_a_run_that_does_not_train_exits_non_zero_and_still_writes(
-        self, workdir, monkeypatch
-    ):
+    def test_a_run_that_does_not_train_exits_non_zero_and_still_writes(self, workdir, monkeypatch):
         """A zero learning rate: the backend reports real norms and nothing
         moves, so only the fingerprint can see it -- and the report is kept as
         evidence. The schema refuses ``lr: 0``, so it is set on the real
@@ -156,8 +168,19 @@ class TestTheCommand:
 
         monkeypatch.setattr(SFTTrainerWrapper, "setup", setup_then_stall)
         result = runner.invoke(
-            app, ["bench", "train", "--config", "soup.yaml", "--steps", "3",
-                  "--warmup", "1", "-o", "r.json"],
+            app,
+            [
+                "bench",
+                "train",
+                "--config",
+                "soup.yaml",
+                "--steps",
+                "3",
+                "--warmup",
+                "1",
+                "-o",
+                "r.json",
+            ],
         )
         assert result.exit_code == 1, result.output
         report = json.loads((workdir / "r.json").read_text(encoding="utf-8"))
@@ -176,7 +199,8 @@ class TestTheCommand:
 
     def test_warmup_that_eats_every_step_is_refused(self, workdir):
         result = runner.invoke(
-            app, ["bench", "train", "--config", "soup.yaml", "--steps", "2", "--warmup", "2"],
+            app,
+            ["bench", "train", "--config", "soup.yaml", "--steps", "2", "--warmup", "2"],
         )
         assert result.exit_code == 1, result.output
         # The pre-flight guard's own text, not the post-run summary's, which
@@ -216,9 +240,7 @@ class TestTheChecksFireOnARealTrainer:
             f["message"] for f in report["failures"] if f["check"] == "grad_norm"
         )
 
-    def test_without_a_norm_the_fingerprint_still_fails_a_run_that_did_not_train(
-        self, workdir
-    ):
+    def test_without_a_norm_the_fingerprint_still_fails_a_run_that_did_not_train(self, workdir):
         """The MLX/DeepSpeed shape: no grad_norm at all, nothing moved."""
 
         def no_norm_no_update(wrapper):
@@ -261,9 +283,7 @@ class TestInferStillAnswersToTheOldForm:
             seen["model"] = model
             raise FileNotFoundError("stop here")
 
-        monkeypatch.setattr(
-            "soup_cli.commands.infer._resolve_model_source", fake_resolve
-        )
+        monkeypatch.setattr("soup_cli.commands.infer._resolve_model_source", fake_resolve)
         result = runner.invoke(app, argv)
         assert seen == {"model": "nonexistent_model_path"}, result.output
         assert result.exit_code == 1
@@ -324,9 +344,7 @@ class TestDriverAndClockProvenance:
             ),
         ],
     )
-    def test_unreadable_output_is_none_not_a_guess(
-        self, tmp_path, monkeypatch, stdout, returncode
-    ):
+    def test_unreadable_output_is_none_not_a_guess(self, tmp_path, monkeypatch, stdout, returncode):
         from soup_cli.bench.train_run import _driver_version
 
         self._fake_tool(tmp_path, monkeypatch, stdout, returncode)

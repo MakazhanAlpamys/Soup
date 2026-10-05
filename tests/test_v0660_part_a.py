@@ -343,9 +343,7 @@ def test_feature_change_rejects_non_finite_delta():
     from soup_cli.utils.sae_diff import SaeFeatureChange
 
     with pytest.raises(ValueError):
-        SaeFeatureChange(
-            feature_id=0, delta=float("nan"), pre_mean=0.0, post_mean=0.0
-        )
+        SaeFeatureChange(feature_id=0, delta=float("nan"), pre_mean=0.0, post_mean=0.0)
 
 
 def test_feature_diff_report_l2_drift_computed():
@@ -508,9 +506,7 @@ def test_render_report_markdown_has_table():
         num_features=10,
         num_tokens=4,
         l2_drift=2.5,
-        changes=(
-            SaeFeatureChange(feature_id=3, delta=1.5, pre_mean=0.0, post_mean=1.5),
-        ),
+        changes=(SaeFeatureChange(feature_id=3, delta=1.5, pre_mean=0.0, post_mean=1.5),),
     )
     text = render_report_markdown(report)
     assert "SAE feature diff" in text
@@ -556,7 +552,8 @@ def test_no_heavy_top_level_imports():
     source = inspect.getsource(sae_diff)
     # Only inspect top-level lines (no leading whitespace).
     top_level_imports = [
-        line for line in source.splitlines()
+        line
+        for line in source.splitlines()
         if (line.startswith("import ") or line.startswith("from "))
     ]
     forbidden = ("torch", "transformers", "peft", "safetensors")

@@ -129,7 +129,8 @@ class TestResolvePooling:
         from soup_cli.utils import embed
 
         monkeypatch.setattr(
-            embed, "_fetch_pooling_config",
+            embed,
+            "_fetch_pooling_config",
             lambda mid: pytest.fail("must reject before any fetch"),
         )
         with pytest.raises(ValueError, match="non-empty"):
@@ -139,7 +140,8 @@ class TestResolvePooling:
         from soup_cli.utils import embed
 
         monkeypatch.setattr(
-            embed, "_fetch_pooling_config",
+            embed,
+            "_fetch_pooling_config",
             lambda mid: pytest.fail("must reject before any fetch"),
         )
         with pytest.raises(ValueError, match="null byte"):
@@ -149,7 +151,8 @@ class TestResolvePooling:
         from soup_cli.utils import embed
 
         monkeypatch.setattr(
-            embed, "_fetch_pooling_config",
+            embed,
+            "_fetch_pooling_config",
             lambda mid: pytest.fail("must reject before any fetch"),
         )
         with pytest.raises(ValueError, match="too long"):
@@ -159,9 +162,7 @@ class TestResolvePooling:
         from soup_cli.utils.embed import resolve_pooling
 
         # surrounding whitespace must not defeat the allowlist
-        assert resolve_pooling(
-            "  sentence-transformers/all-MiniLM-L6-v2  "
-        ) == "mean"
+        assert resolve_pooling("  sentence-transformers/all-MiniLM-L6-v2  ") == "mean"
 
 
 class TestEmbedTexts:
@@ -336,11 +337,13 @@ class TestGreedySemdedup:
         from soup_cli.utils.semdedup import greedy_semdedup
 
         theta = float(np.arccos(0.95))
-        vecs = self._vecs([
-            [1.0, 0.0],
-            [0.0, 1.0],
-            [float(np.sin(theta)), float(np.cos(theta))],
-        ])
+        vecs = self._vecs(
+            [
+                [1.0, 0.0],
+                [0.0, 1.0],
+                [float(np.sin(theta)), float(np.cos(theta))],
+            ]
+        )
         rep = greedy_semdedup(vecs, threshold=0.9)
         assert rep.pairs[0][0] == 2
         assert rep.pairs[0][1] == 1, "must cite the NEAREST kept row"
@@ -352,11 +355,13 @@ class TestGreedySemdedup:
         from soup_cli.utils.semdedup import greedy_semdedup
 
         t1 = float(np.arccos(0.95))
-        vecs = self._vecs([
-            [1.0, 0.0],
-            [float(np.cos(t1)), float(np.sin(t1))],
-            [float(np.cos(2 * t1)), float(np.sin(2 * t1))],
-        ])
+        vecs = self._vecs(
+            [
+                [1.0, 0.0],
+                [float(np.cos(t1)), float(np.sin(t1))],
+                [float(np.cos(2 * t1)), float(np.sin(2 * t1))],
+            ]
+        )
         rep = greedy_semdedup(vecs, threshold=0.9)
         assert rep.kept == (0, 2)
         assert rep.dropped == (1,)
@@ -372,9 +377,7 @@ class TestGreedySemdedup:
 
         from soup_cli.utils.semdedup import greedy_semdedup
 
-        rep = greedy_semdedup(
-            np.zeros((0, 2), dtype=np.float32), threshold=0.9
-        )
+        rep = greedy_semdedup(np.zeros((0, 2), dtype=np.float32), threshold=0.9)
         assert rep.kept == ()
         assert rep.dropped == ()
 
@@ -405,9 +408,7 @@ class TestGreedySemdedup:
     def test_kept_and_dropped_partition_the_input(self):
         from soup_cli.utils.semdedup import greedy_semdedup
 
-        vecs = self._vecs(
-            [[1.0, 0.0], [1.0, 0.0], [0.0, 1.0], [0.0, 1.0], [1.0, 1.0]]
-        )
+        vecs = self._vecs([[1.0, 0.0], [1.0, 0.0], [0.0, 1.0], [0.0, 1.0], [1.0, 1.0]])
         rep = greedy_semdedup(vecs, threshold=0.9)
         assert sorted(rep.kept + rep.dropped) == list(range(5))
         assert not set(rep.kept) & set(rep.dropped)
@@ -451,9 +452,9 @@ class TestExtrasHintsAreEscaped:
             Console(file=buf, force_terminal=False, width=100).print(markup)
             return buf.getvalue().strip()
 
-        assert render("[bold]pip install 'soup-cli[train]'[/]") == (
-            "pip install 'soup-cli'"
-        ), "unescaped bracket must be eaten (this is the bug)"
+        assert render("[bold]pip install 'soup-cli[train]'[/]") == ("pip install 'soup-cli'"), (
+            "unescaped bracket must be eaten (this is the bug)"
+        )
         assert render("[bold]pip install 'soup-cli\\[train]'[/]") == (
             "pip install 'soup-cli[train]'"
         ), "escaped bracket must survive (this is the fix)"
@@ -470,9 +471,7 @@ class TestExtrasHintsAreEscaped:
         offenders = []
         for path in sorted(root.rglob("*.py")):
             rel = path.relative_to(root).as_posix()
-            for lineno, line in enumerate(
-                path.read_text(encoding="utf-8").splitlines(), start=1
-            ):
+            for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
                 if line.strip().startswith("#"):
                     continue  # a code comment never reaches Rich
                 if not any(tag in line for tag in self._RICH_TAGS):
@@ -481,8 +480,7 @@ class TestExtrasHintsAreEscaped:
                     offenders.append(f"{rel}:{lineno}: {line.strip()}")
         assert not offenders, (
             "unescaped soup-cli[extra] inside Rich markup — the bracket is "
-            "eaten and the printed command installs WITHOUT the extra:\n"
-            + "\n".join(offenders)
+            "eaten and the printed command installs WITHOUT the extra:\n" + "\n".join(offenders)
         )
 
     @pytest.mark.parametrize(
@@ -531,9 +529,7 @@ class TestExtrasHintsAreEscaped:
 class TestDedupSemanticCli:
     def _write(self, tmp_path, rows):
         path = tmp_path / "data.jsonl"
-        path.write_text(
-            "\n".join(json.dumps(r) for r in rows), encoding="utf-8"
-        )
+        path.write_text("\n".join(json.dumps(r) for r in rows), encoding="utf-8")
         return path
 
     def test_help_mentions_semantic(self):
@@ -560,21 +556,15 @@ class TestDedupSemanticCli:
         ]
         path = self._write(tmp_path, rows)
         # rows 0 and 1 are "paraphrases" -> near-identical vectors
-        fake = np.array(
-            [[1.0, 0.0], [0.999, 0.0447], [0.0, 1.0]], dtype=np.float32
-        )
+        fake = np.array([[1.0, 0.0], [0.999, 0.0447], [0.0, 1.0]], dtype=np.float32)
         monkeypatch.setattr(data_cmd, "embed_texts", lambda *a, **k: fake)
         monkeypatch.chdir(tmp_path)
         res = CliRunner().invoke(
             app,
-            ["data", "dedup", str(path), "--semantic",
-             "--threshold", "0.9", "-o", "out.jsonl"],
+            ["data", "dedup", str(path), "--semantic", "--threshold", "0.9", "-o", "out.jsonl"],
         )
         assert res.exit_code == 0, (res.output, repr(res.exception))
-        kept = [
-            json.loads(ln)
-            for ln in (tmp_path / "out.jsonl").read_text().splitlines() if ln
-        ]
+        kept = [json.loads(ln) for ln in (tmp_path / "out.jsonl").read_text().splitlines() if ln]
         assert len(kept) == 2
         assert kept[0]["text"] == "the cat sat on the mat"
         assert kept[1]["text"] == "quantum chromodynamics is hard"
@@ -603,16 +593,13 @@ class TestDedupSemanticCli:
 
         monkeypatch.setattr(builtins, "__import__", _no_datasketch)
         monkeypatch.setattr(
-            data_cmd, "embed_texts",
-            lambda *a, **k: np.array(
-                [[1.0, 0.0], [0.0, 1.0]], dtype=np.float32
-            ),
+            data_cmd,
+            "embed_texts",
+            lambda *a, **k: np.array([[1.0, 0.0], [0.0, 1.0]], dtype=np.float32),
         )
         path = self._write(tmp_path, [{"text": "a"}, {"text": "b"}])
         monkeypatch.chdir(tmp_path)
-        res = CliRunner().invoke(
-            app, ["data", "dedup", str(path), "--semantic", "-o", "out.jsonl"]
-        )
+        res = CliRunner().invoke(app, ["data", "dedup", str(path), "--semantic", "-o", "out.jsonl"])
         assert res.exit_code == 0, (res.output, repr(res.exception))
         assert "datasketch" not in _clean(res.output)
 
@@ -629,9 +616,7 @@ class TestDedupSemanticCli:
 
         monkeypatch.setattr(data_cmd, "embed_texts", _boom)
         monkeypatch.chdir(tmp_path)
-        res = CliRunner().invoke(
-            app, ["data", "dedup", str(path), "--semantic"]
-        )
+        res = CliRunner().invoke(app, ["data", "dedup", str(path), "--semantic"])
         assert res.exit_code == 1
         assert "soup-cli[train]" in _clean(res.output)
 
@@ -648,9 +633,7 @@ class TestDedupSemanticCli:
 
         monkeypatch.setattr(data_cmd, "embed_texts", _refuse)
         monkeypatch.chdir(tmp_path)
-        res = CliRunner().invoke(
-            app, ["data", "dedup", str(path), "--semantic"]
-        )
+        res = CliRunner().invoke(app, ["data", "dedup", str(path), "--semantic"])
         assert res.exit_code == 1
         assert "pooling" in _clean(res.output)
 
@@ -664,12 +647,11 @@ class TestDedupSemanticCli:
 
         called = []
         monkeypatch.setattr(
-            data_cmd, "embed_texts",
+            data_cmd,
+            "embed_texts",
             lambda *a, **k: called.append(1) or None,
         )
-        path = self._write(
-            tmp_path, [{"text": "a b c"}, {"text": "x y z"}]
-        )
+        path = self._write(tmp_path, [{"text": "a b c"}, {"text": "x y z"}])
         monkeypatch.chdir(tmp_path)
         res = CliRunner().invoke(app, ["data", "dedup", str(path)])
         assert res.exit_code == 0, (res.output, repr(res.exception))
@@ -698,8 +680,7 @@ class TestDedupSemanticCli:
         monkeypatch.chdir(tmp_path)
         res = CliRunner().invoke(
             app,
-            ["data", "dedup", str(path), "--semantic",
-             "--field", "text", "-o", "out.jsonl"],
+            ["data", "dedup", str(path), "--semantic", "--field", "text", "-o", "out.jsonl"],
         )
         assert res.exit_code == 0, (res.output, repr(res.exception))
         assert seen["texts"] == ["keep me", "other"]
@@ -716,8 +697,7 @@ class TestDedupSemanticCli:
         monkeypatch.chdir(work)
         res = CliRunner().invoke(
             app,
-            ["data", "dedup", str(path), "--semantic",
-             "-o", str(tmp_path / "escape.jsonl")],
+            ["data", "dedup", str(path), "--semantic", "-o", str(tmp_path / "escape.jsonl")],
         )
         assert res.exit_code == 1
         assert "outside" in _clean(res.output).lower()
@@ -806,7 +786,8 @@ class TestKmeans:
         first = kmeans(vecs, k=5, seed=42)
         for _ in range(3):
             np.testing.assert_array_equal(
-                first, kmeans(vecs, k=5, seed=42),
+                first,
+                kmeans(vecs, k=5, seed=42),
                 err_msg="same seed must give the same partition",
             )
 
@@ -816,12 +797,9 @@ class TestKmeans:
         from soup_cli.utils.topics import kmeans
 
         vecs = self._unstructured()
-        partitions = {
-            tuple(kmeans(vecs, k=5, seed=seed).tolist()) for seed in range(6)
-        }
+        partitions = {tuple(kmeans(vecs, k=5, seed=seed).tolist()) for seed in range(6)}
         assert len(partitions) > 1, (
-            "seeds produce identical partitions on this fixture — it cannot "
-            "detect an unseeded RNG"
+            "seeds produce identical partitions on this fixture — it cannot detect an unseeded RNG"
         )
 
     def test_k_equals_one(self):
@@ -925,9 +903,7 @@ class TestCtfidfLabels:
     def test_top_n_respected(self):
         from soup_cli.utils.topics import ctfidf_labels
 
-        out = ctfidf_labels(
-            [["alpha", "beta", "gamma"], ["delta"]], [0, 1], k=2, top_n=2
-        )
+        out = ctfidf_labels([["alpha", "beta", "gamma"], ["delta"]], [0, 1], k=2, top_n=2)
         assert len(out[0]) <= 2
 
     def test_empty_cluster_yields_empty_terms(self):
@@ -960,8 +936,7 @@ class TestCtfidfLabels:
 class TestBuildTopicReport:
     def _rows(self, tag, count):
         return [
-            {"messages": [{"role": "assistant", "content": f"{tag} {i}"}]}
-            for i in range(count)
+            {"messages": [{"role": "assistant", "content": f"{tag} {i}"}]} for i in range(count)
         ]
 
     def test_fractions_sum_to_one(self):
@@ -984,9 +959,7 @@ class TestBuildTopicReport:
         from soup_cli.utils.topics import build_topic_report
 
         rows = self._rows("code", 99) + self._rows("safety", 1)
-        rep = build_topic_report(
-            rows, [0] * 99 + [1], k=2, min_fraction=0.02
-        )
+        rep = build_topic_report(rows, [0] * 99 + [1], k=2, min_fraction=0.02)
         assert any("thin" in w.lower() for w in rep.warnings)
 
     def test_no_warning_when_all_clusters_healthy(self):
@@ -1030,24 +1003,26 @@ class TestBuildTopicReport:
 class TestDataTopicsCli:
     def _write(self, tmp_path, rows):
         path = tmp_path / "data.jsonl"
-        path.write_text(
-            "\n".join(json.dumps(r) for r in rows), encoding="utf-8"
-        )
+        path.write_text("\n".join(json.dumps(r) for r in rows), encoding="utf-8")
         return path
 
     def _rows(self):
         rows = [
-            {"messages": [
-                {"role": "user", "content": "q"},
-                {"role": "assistant", "content": f"python function def {i}"},
-            ]}
+            {
+                "messages": [
+                    {"role": "user", "content": "q"},
+                    {"role": "assistant", "content": f"python function def {i}"},
+                ]
+            }
             for i in range(5)
         ]
         rows += [
-            {"messages": [
-                {"role": "user", "content": "q"},
-                {"role": "assistant", "content": f"protein enzyme fold {i}"},
-            ]}
+            {
+                "messages": [
+                    {"role": "user", "content": "q"},
+                    {"role": "assistant", "content": f"protein enzyme fold {i}"},
+                ]
+            }
             for i in range(5)
         ]
         return rows
@@ -1055,9 +1030,9 @@ class TestDataTopicsCli:
     def _fake_vecs(self):
         import numpy as np
 
-        return np.vstack([
-            np.tile([1.0, 0.0], (5, 1)), np.tile([0.0, 1.0], (5, 1))
-        ]).astype(np.float32)
+        return np.vstack([np.tile([1.0, 0.0], (5, 1)), np.tile([0.0, 1.0], (5, 1))]).astype(
+            np.float32
+        )
 
     def test_help(self):
         from typer.testing import CliRunner
@@ -1109,9 +1084,7 @@ class TestDataTopicsCli:
 
         path = self._write(tmp_path, self._rows())
         monkeypatch.chdir(tmp_path)
-        res = CliRunner().invoke(
-            app, ["data", "topics", str(path), "--clusters", "banana"]
-        )
+        res = CliRunner().invoke(app, ["data", "topics", str(path), "--clusters", "banana"])
         assert res.exit_code == 1
         assert "auto" in _clean(res.output).lower()
 
@@ -1192,18 +1165,15 @@ class TestDataTopicsCli:
         from soup_cli.cli import app
         from soup_cli.commands import data_topics as cmd
 
-        rows = [
-            {"messages": [{"role": "assistant", "content": "[red]boom[/] alpha"}]}
-        ] * 4
+        rows = [{"messages": [{"role": "assistant", "content": "[red]boom[/] alpha"}]}] * 4
         path = self._write(tmp_path, rows)
         monkeypatch.setattr(
-            cmd, "embed_texts",
+            cmd,
+            "embed_texts",
             lambda *a, **k: np.tile([1.0, 0.0], (4, 1)).astype(np.float32),
         )
         monkeypatch.chdir(tmp_path)
-        res = CliRunner().invoke(
-            app, ["data", "topics", str(path), "--clusters", "1"]
-        )
+        res = CliRunner().invoke(app, ["data", "topics", str(path), "--clusters", "1"])
         assert res.exit_code == 0, (res.output, repr(res.exception))
 
     def test_gap_warning_surfaces_in_output(self, tmp_path, monkeypatch):
@@ -1213,20 +1183,15 @@ class TestDataTopicsCli:
         from soup_cli.cli import app
         from soup_cli.commands import data_topics as cmd
 
-        rows = [
-            {"messages": [{"role": "assistant", "content": f"code {i}"}]}
-            for i in range(99)
-        ]
+        rows = [{"messages": [{"role": "assistant", "content": f"code {i}"}]} for i in range(99)]
         rows += [{"messages": [{"role": "assistant", "content": "safety"}]}]
         path = self._write(tmp_path, rows)
-        vecs = np.vstack([
-            np.tile([1.0, 0.0], (99, 1)), np.tile([0.0, 1.0], (1, 1))
-        ]).astype(np.float32)
+        vecs = np.vstack([np.tile([1.0, 0.0], (99, 1)), np.tile([0.0, 1.0], (1, 1))]).astype(
+            np.float32
+        )
         monkeypatch.setattr(cmd, "embed_texts", lambda *a, **k: vecs)
         monkeypatch.chdir(tmp_path)
-        res = CliRunner().invoke(
-            app, ["data", "topics", str(path), "--clusters", "2"]
-        )
+        res = CliRunner().invoke(app, ["data", "topics", str(path), "--clusters", "2"])
         assert res.exit_code == 0, (res.output, repr(res.exception))
         assert "thin" in _clean(res.output).lower()
 
@@ -1275,15 +1240,14 @@ class TestComputePairLosses:
 
     def test_empty_pairs_returns_empty_list(self, monkeypatch):
         live_eval, model = self._fake_torch_env(monkeypatch)
-        assert live_eval.compute_pair_losses(
-            model, object(), [], device="cpu"
-        ) == []
+        assert live_eval.compute_pair_losses(model, object(), [], device="cpu") == []
 
     def test_compute_eval_loss_is_mean_of_non_nan(self, monkeypatch):
         from soup_cli.utils import live_eval
 
         monkeypatch.setattr(
-            live_eval, "compute_pair_losses",
+            live_eval,
+            "compute_pair_losses",
             lambda *a, **k: [1.0, float("nan"), 3.0],
         )
         assert live_eval.compute_eval_loss(
@@ -1295,13 +1259,9 @@ class TestComputePairLosses:
 
         from soup_cli.utils import live_eval
 
-        monkeypatch.setattr(
-            live_eval, "compute_pair_losses", lambda *a, **k: [float("nan")]
-        )
+        monkeypatch.setattr(live_eval, "compute_pair_losses", lambda *a, **k: [float("nan")])
         assert math.isnan(
-            live_eval.compute_eval_loss(
-                object(), object(), [("p", "a")], device="cpu"
-            )
+            live_eval.compute_eval_loss(object(), object(), [("p", "a")], device="cpu")
         )
 
     def test_compute_eval_loss_empty_returns_nan(self, monkeypatch):
@@ -1310,44 +1270,34 @@ class TestComputePairLosses:
         from soup_cli.utils import live_eval
 
         monkeypatch.setattr(live_eval, "compute_pair_losses", lambda *a, **k: [])
-        assert math.isnan(
-            live_eval.compute_eval_loss(object(), object(), [], device="cpu")
-        )
+        assert math.isnan(live_eval.compute_eval_loss(object(), object(), [], device="cpu"))
 
     def test_refactor_preserves_mean_behaviour(self, monkeypatch):
         """compute_eval_loss must equal mean(non-nan compute_pair_losses)."""
         live_eval, model = self._fake_torch_env(monkeypatch, loss_value=2.0)
         pairs = [("p", "a"), ("p", ""), ("p", "b")]
-        losses = live_eval.compute_pair_losses(
-            model, object(), pairs, device="cpu"
-        )
+        losses = live_eval.compute_pair_losses(model, object(), pairs, device="cpu")
         finite = [x for x in losses if x == x]
-        assert live_eval.compute_eval_loss(
-            model, object(), pairs, device="cpu"
-        ) == pytest.approx(sum(finite) / len(finite))
+        assert live_eval.compute_eval_loss(model, object(), pairs, device="cpu") == pytest.approx(
+            sum(finite) / len(finite)
+        )
 
     def test_max_length_still_validated(self, monkeypatch):
         live_eval, model = self._fake_torch_env(monkeypatch)
         with pytest.raises((ValueError, TypeError)):
-            live_eval.compute_pair_losses(
-                model, object(), [("p", "a")], device="cpu", max_length=0
-            )
+            live_eval.compute_pair_losses(model, object(), [("p", "a")], device="cpu", max_length=0)
 
 
 class TestCanaryGeneration:
     def test_deterministic_by_seed(self):
         from soup_cli.utils.canary import generate_canaries
 
-        assert generate_canaries(count=5, seed=7) == generate_canaries(
-            count=5, seed=7
-        )
+        assert generate_canaries(count=5, seed=7) == generate_canaries(count=5, seed=7)
 
     def test_different_seeds_differ(self):
         from soup_cli.utils.canary import generate_canaries
 
-        assert generate_canaries(count=5, seed=1) != generate_canaries(
-            count=5, seed=2
-        )
+        assert generate_canaries(count=5, seed=1) != generate_canaries(count=5, seed=2)
 
     def test_secrets_unique(self):
         from soup_cli.utils.canary import generate_canaries
@@ -1359,9 +1309,7 @@ class TestCanaryGeneration:
         from soup_cli.utils.canary import generate_canaries, generate_controls
 
         inserted = generate_canaries(count=10, seed=0)
-        controls = generate_controls(
-            count=20, seed=0, exclude={c.secret for c in inserted}
-        )
+        controls = generate_controls(count=20, seed=0, exclude={c.secret for c in inserted})
         assert not ({c.secret for c in controls} & {c.secret for c in inserted})
 
     def test_controls_share_carrier_with_canaries(self):
@@ -1431,9 +1379,7 @@ class TestCanaryManifest:
         work.mkdir()
         monkeypatch.chdir(work)
         with pytest.raises(ValueError):
-            write_manifest(
-                generate_canaries(count=1, seed=0), str(tmp_path / "esc.json")
-            )
+            write_manifest(generate_canaries(count=1, seed=0), str(tmp_path / "esc.json"))
 
     def test_missing_manifest_is_a_friendly_message(self, tmp_path, monkeypatch):
         """Not a raw locale-dependent OS error.
@@ -1473,9 +1419,7 @@ class TestCanaryManifest:
         from soup_cli.utils.canary import load_manifest
 
         monkeypatch.chdir(tmp_path)
-        Path("bad.json").write_text(
-            '{"canaries": [{"carrier": "c"}]}', encoding="utf-8"
-        )
+        Path("bad.json").write_text('{"canaries": [{"carrier": "c"}]}', encoding="utf-8")
         with pytest.raises(ValueError, match="carrier"):
             load_manifest("bad.json")
 
@@ -1485,15 +1429,11 @@ class TestCanaryManifest:
         from soup_cli.utils.canary import _MAX_MANIFEST_BYTES, load_manifest
 
         monkeypatch.chdir(tmp_path)
-        Path("big.json").write_text(
-            " " * (_MAX_MANIFEST_BYTES + 10), encoding="utf-8"
-        )
+        Path("big.json").write_text(" " * (_MAX_MANIFEST_BYTES + 10), encoding="utf-8")
         with pytest.raises(ValueError, match="too large"):
             load_manifest("big.json")
 
-    @pytest.mark.skipif(
-        __import__("os").name == "nt", reason="POSIX permissions only"
-    )
+    @pytest.mark.skipif(__import__("os").name == "nt", reason="POSIX permissions only")
     def test_manifest_is_not_world_readable(self, tmp_path, monkeypatch):
         """The manifest IS the secret. On a shared box a 0644 file lets any
         local user read every canary without ever running check."""
@@ -1515,13 +1455,8 @@ class TestCanaryManifest:
         from soup_cli.utils.canary import _MAX_CANARIES, load_manifest
 
         monkeypatch.chdir(tmp_path)
-        entries = [
-            {"carrier": "c", "secret": f"s{i}"}
-            for i in range(_MAX_CANARIES + 1)
-        ]
-        Path("big.json").write_text(
-            json.dumps({"canaries": entries}), encoding="utf-8"
-        )
+        entries = [{"carrier": "c", "secret": f"s{i}"} for i in range(_MAX_CANARIES + 1)]
+        Path("big.json").write_text(json.dumps({"canaries": entries}), encoding="utf-8")
         with pytest.raises(ValueError, match="too many canaries"):
             load_manifest("big.json")
 
@@ -1628,9 +1563,7 @@ class TestClassifyCanary:
 
         controls = [float(i) for i in range(100)]
         losses = [pct * 100 - 0.5 for pct in percentiles]
-        return compute_exposure(
-            losses, controls, [f"s{i}" for i in range(len(losses))]
-        )
+        return compute_exposure(losses, controls, [f"s{i}" for i in range(len(losses))])
 
     def test_every_canary_memorized_is_major(self):
         """The real signal: a memorized set lands at percentile 0.0."""
@@ -1642,9 +1575,10 @@ class TestClassifyCanary:
         """A partial leak must still fire: P(X>=2 | K=10, p=.01) = 0.4%."""
         from soup_cli.utils.canary import classify_canary
 
-        assert classify_canary(
-            self._exposures([0.0, 0.01, 0.5, 0.6, 0.4, 0.7, 0.3, 0.8, 0.5, 0.9])
-        ) == "MAJOR"
+        assert (
+            classify_canary(self._exposures([0.0, 0.01, 0.5, 0.6, 0.4, 0.7, 0.3, 0.8, 0.5, 0.9]))
+            == "MAJOR"
+        )
 
     def test_one_of_sixteen_memorized_is_not_major(self):
         """THE LIVE-SMOKE FIX. P(X>=1 | K=16, p=.01) = 15% — one canary
@@ -1663,8 +1597,7 @@ class TestClassifyCanary:
         """
         from soup_cli.utils.canary import classify_canary
 
-        observed = [0.609, 0.391, 0.930, 0.383, 0.328,
-                    0.016, 0.609, 0.695, 0.156, 0.039]
+        observed = [0.609, 0.391, 0.930, 0.383, 0.328, 0.016, 0.609, 0.695, 0.156, 0.039]
         assert classify_canary(self._exposures(observed)) == "OK"
 
     def test_many_suspicious_is_minor(self):
@@ -1696,7 +1629,7 @@ class TestBinomialTail:
         from soup_cli.utils.canary import _binomial_tail
 
         # P(X>=1 | n=16, p=.01) = 1 - .99^16
-        assert _binomial_tail(1, 16, 0.01) == pytest.approx(1 - 0.99 ** 16)
+        assert _binomial_tail(1, 16, 0.01) == pytest.approx(1 - 0.99**16)
         # P(X>=0) is certain; P(X>n) impossible
         assert _binomial_tail(0, 10, 0.1) == 1.0
         assert _binomial_tail(11, 10, 0.1) == 0.0
@@ -1721,7 +1654,9 @@ class TestBinomialTail:
         for _ in range(trials):
             exposures = tuple(
                 CanaryExposure(
-                    secret=f"s{i}", loss=1.0, percentile=pct,
+                    secret=f"s{i}",
+                    loss=1.0,
+                    percentile=pct,
                     memorized=pct <= 0.01,
                 )
                 for i, pct in enumerate(rng.random() for _ in range(16))
@@ -1786,10 +1721,14 @@ class TestDataCanaryCli:
         path = tmp_path / "d.jsonl"
         path.write_text(
             "\n".join(
-                json.dumps({"messages": [
-                    {"role": "user", "content": "q"},
-                    {"role": "assistant", "content": "a"},
-                ]})
+                json.dumps(
+                    {
+                        "messages": [
+                            {"role": "user", "content": "q"},
+                            {"role": "assistant", "content": "a"},
+                        ]
+                    }
+                )
                 for _ in range(count)
             ),
             encoding="utf-8",
@@ -1823,14 +1762,21 @@ class TestDataCanaryCli:
         src = self._dataset(tmp_path, count=10)
         res = CliRunner().invoke(
             app,
-            ["data", "canary", "insert", str(src), "-o", "out.jsonl",
-             "--count", "4", "--manifest", "m.json"],
+            [
+                "data",
+                "canary",
+                "insert",
+                str(src),
+                "-o",
+                "out.jsonl",
+                "--count",
+                "4",
+                "--manifest",
+                "m.json",
+            ],
         )
         assert res.exit_code == 0, (res.output, repr(res.exception))
-        rows = [
-            json.loads(x)
-            for x in Path("out.jsonl").read_text().splitlines() if x
-        ]
+        rows = [json.loads(x) for x in Path("out.jsonl").read_text().splitlines() if x]
         assert len(rows) == 14
         manifest = json.loads(Path("m.json").read_text())
         assert len(manifest["canaries"]) == 4
@@ -1847,8 +1793,18 @@ class TestDataCanaryCli:
         src = self._dataset(tmp_path, count=5)
         res = CliRunner().invoke(
             app,
-            ["data", "canary", "insert", str(src), "-o", "out.jsonl",
-             "--count", "3", "--manifest", "m.json"],
+            [
+                "data",
+                "canary",
+                "insert",
+                str(src),
+                "-o",
+                "out.jsonl",
+                "--count",
+                "3",
+                "--manifest",
+                "m.json",
+            ],
         )
         assert res.exit_code == 0, (res.output, repr(res.exception))
         blob = Path("out.jsonl").read_text()
@@ -1863,16 +1819,14 @@ class TestDataCanaryCli:
         monkeypatch.chdir(tmp_path)
         src = self._dataset(tmp_path, count=2)
         res = CliRunner().invoke(
-            app, ["data", "canary", "insert", str(src), "-o", "o.jsonl",
-                  "--manifest", "m.json"],
+            app,
+            ["data", "canary", "insert", str(src), "-o", "o.jsonl", "--manifest", "m.json"],
         )
         assert res.exit_code == 0, (res.output, repr(res.exception))
         out = _clean(res.output).lower()
         assert "commit" in out or "secret" in out
 
-    def test_manifest_is_written_before_the_poisoned_dataset(
-        self, tmp_path, monkeypatch
-    ):
+    def test_manifest_is_written_before_the_poisoned_dataset(self, tmp_path, monkeypatch):
         """Order matters: a dataset with no manifest is unauditable.
 
         If the data were written first and the manifest then failed, a
@@ -1895,17 +1849,14 @@ class TestDataCanaryCli:
         monkeypatch.setattr(cmd, "write_manifest", _boom)
         res = CliRunner().invoke(
             app,
-            ["data", "canary", "insert", str(src), "-o", "out.jsonl",
-             "--manifest", "m.json"],
+            ["data", "canary", "insert", str(src), "-o", "out.jsonl", "--manifest", "m.json"],
         )
         assert res.exit_code == 1
         assert not Path("out.jsonl").exists(), (
             "a canary-poisoned dataset must not survive a manifest failure"
         )
 
-    def test_data_write_failure_warns_the_manifest_is_now_stale(
-        self, tmp_path, monkeypatch
-    ):
+    def test_data_write_failure_warns_the_manifest_is_now_stale(self, tmp_path, monkeypatch):
         from typer.testing import CliRunner
 
         from soup_cli.cli import app
@@ -1920,8 +1871,7 @@ class TestDataCanaryCli:
         monkeypatch.setattr(cmd, "atomic_write_text", _boom)
         res = CliRunner().invoke(
             app,
-            ["data", "canary", "insert", str(src), "-o", "out.jsonl",
-             "--manifest", "m.json"],
+            ["data", "canary", "insert", str(src), "-o", "out.jsonl", "--manifest", "m.json"],
         )
         assert res.exit_code == 1
         out = _clean(res.output).lower()
@@ -1938,8 +1888,16 @@ class TestDataCanaryCli:
         monkeypatch.chdir(work)
         res = CliRunner().invoke(
             app,
-            ["data", "canary", "insert", str(src),
-             "-o", str(tmp_path / "esc.jsonl"), "--manifest", "m.json"],
+            [
+                "data",
+                "canary",
+                "insert",
+                str(src),
+                "-o",
+                str(tmp_path / "esc.jsonl"),
+                "--manifest",
+                "m.json",
+            ],
         )
         assert res.exit_code == 1
         assert "outside" in _clean(res.output).lower()
@@ -1955,8 +1913,16 @@ class TestDataCanaryCli:
         monkeypatch.chdir(work)
         res = CliRunner().invoke(
             app,
-            ["data", "canary", "insert", str(src), "-o", "o.jsonl",
-             "--manifest", str(tmp_path / "esc.json")],
+            [
+                "data",
+                "canary",
+                "insert",
+                str(src),
+                "-o",
+                "o.jsonl",
+                "--manifest",
+                str(tmp_path / "esc.json"),
+            ],
         )
         assert res.exit_code == 1
         assert "outside" in _clean(res.output).lower()
@@ -1974,9 +1940,7 @@ class TestDataCanaryCli:
 
         monkeypatch.chdir(tmp_path)
         self._seed_manifest(tmp_path, count=2)
-        monkeypatch.setattr(
-            cmd, "_load_pair", lambda *a, **k: (object(), object(), "cpu")
-        )
+        monkeypatch.setattr(cmd, "_load_pair", lambda *a, **k: (object(), object(), "cpu"))
 
         def _losses(model, tok, pairs, **kwargs):
             # first 2 are the canaries -> far cheaper than every control
@@ -1984,8 +1948,18 @@ class TestDataCanaryCli:
 
         monkeypatch.setattr(cmd, "compute_pair_losses", _losses)
         res = CliRunner().invoke(
-            app, ["data", "canary", "check", "--manifest", "m.json",
-                  "--base", "fake/model", "--controls", "16"],
+            app,
+            [
+                "data",
+                "canary",
+                "check",
+                "--manifest",
+                "m.json",
+                "--base",
+                "fake/model",
+                "--controls",
+                "16",
+            ],
         )
         assert res.exit_code == 2, (res.output, repr(res.exception))
         assert "MAJOR" in _clean(res.output)
@@ -1998,29 +1972,34 @@ class TestDataCanaryCli:
 
         monkeypatch.chdir(tmp_path)
         self._seed_manifest(tmp_path, count=2)
-        monkeypatch.setattr(
-            cmd, "_load_pair", lambda *a, **k: (object(), object(), "cpu")
-        )
+        monkeypatch.setattr(cmd, "_load_pair", lambda *a, **k: (object(), object(), "cpu"))
         # Canaries sit mid-distribution: 5 of 16 controls are cheaper ->
         # percentile 0.31 -> OK. (An all-equal fixture would make NO control
         # strictly cheaper -> percentile 0.0 -> MAJOR, which is the rule
         # working correctly on an unrealistic input.)
         monkeypatch.setattr(
-            cmd, "compute_pair_losses",
-            lambda model, tok, pairs, **kw: (
-                [5.0] * 2 + [float(i) for i in range(len(pairs) - 2)]
-            ),
+            cmd,
+            "compute_pair_losses",
+            lambda model, tok, pairs, **kw: [5.0] * 2 + [float(i) for i in range(len(pairs) - 2)],
         )
         res = CliRunner().invoke(
-            app, ["data", "canary", "check", "--manifest", "m.json",
-                  "--base", "fake/model", "--controls", "16"],
+            app,
+            [
+                "data",
+                "canary",
+                "check",
+                "--manifest",
+                "m.json",
+                "--base",
+                "fake/model",
+                "--controls",
+                "16",
+            ],
         )
         assert res.exit_code == 0, (res.output, repr(res.exception))
         assert "OK" in _clean(res.output)
 
-    def test_check_splits_canary_and_control_losses_correctly(
-        self, tmp_path, monkeypatch
-    ):
+    def test_check_splits_canary_and_control_losses_correctly(self, tmp_path, monkeypatch):
         """The canary/control split must follow the manifest length."""
         from typer.testing import CliRunner
 
@@ -2029,9 +2008,7 @@ class TestDataCanaryCli:
 
         monkeypatch.chdir(tmp_path)
         self._seed_manifest(tmp_path, count=3)
-        monkeypatch.setattr(
-            cmd, "_load_pair", lambda *a, **k: (object(), object(), "cpu")
-        )
+        monkeypatch.setattr(cmd, "_load_pair", lambda *a, **k: (object(), object(), "cpu"))
         seen = {}
 
         def _losses(model, tok, pairs, **kwargs):
@@ -2040,8 +2017,20 @@ class TestDataCanaryCli:
 
         monkeypatch.setattr(cmd, "compute_pair_losses", _losses)
         res = CliRunner().invoke(
-            app, ["data", "canary", "check", "--manifest", "m.json",
-                  "--base", "fake/model", "--controls", "8", "-o", "r.json"],
+            app,
+            [
+                "data",
+                "canary",
+                "check",
+                "--manifest",
+                "m.json",
+                "--base",
+                "fake/model",
+                "--controls",
+                "8",
+                "-o",
+                "r.json",
+            ],
         )
         assert res.exit_code == 0, (res.output, repr(res.exception))
         assert seen["n_pairs"] == 3 + 8, "3 canaries + 8 controls"
@@ -2061,27 +2050,34 @@ class TestDataCanaryCli:
 
         monkeypatch.chdir(tmp_path)
         self._seed_manifest(tmp_path, count=1)
+        monkeypatch.setattr(cmd, "_load_pair", lambda *a, **k: (object(), object(), "cpu"))
         monkeypatch.setattr(
-            cmd, "_load_pair", lambda *a, **k: (object(), object(), "cpu")
-        )
-        monkeypatch.setattr(
-            cmd, "compute_pair_losses",
-            lambda model, tok, pairs, **kw: (
-                [5.0] + [float(i) for i in range(len(pairs) - 1)]
-            ),
+            cmd,
+            "compute_pair_losses",
+            lambda model, tok, pairs, **kw: [5.0] + [float(i) for i in range(len(pairs) - 1)],
         )
         res = CliRunner().invoke(
-            app, ["data", "canary", "check", "--manifest", "m.json",
-                  "--base", "fake/model", "-o", "r.json", "--controls", "8"],
+            app,
+            [
+                "data",
+                "canary",
+                "check",
+                "--manifest",
+                "m.json",
+                "--base",
+                "fake/model",
+                "-o",
+                "r.json",
+                "--controls",
+                "8",
+            ],
         )
         assert res.exit_code == 0, (res.output, repr(res.exception))
         report = json.loads(Path("r.json").read_text())
         assert report["verdict"] == "OK"
         assert report["n_controls"] == 8
 
-    def test_check_model_load_import_error_is_friendly(
-        self, tmp_path, monkeypatch
-    ):
+    def test_check_model_load_import_error_is_friendly(self, tmp_path, monkeypatch):
         from typer.testing import CliRunner
 
         from soup_cli.cli import app
@@ -2095,8 +2091,8 @@ class TestDataCanaryCli:
 
         monkeypatch.setattr(cmd, "_load_pair", _boom)
         res = CliRunner().invoke(
-            app, ["data", "canary", "check", "--manifest", "m.json",
-                  "--base", "fake/model"],
+            app,
+            ["data", "canary", "check", "--manifest", "m.json", "--base", "fake/model"],
         )
         assert res.exit_code == 1
         assert "soup-cli[train]" in _clean(res.output)
@@ -2115,8 +2111,8 @@ class TestDataCanaryCli:
 
         monkeypatch.setattr(cmd, "_load_pair", _boom)
         res = CliRunner().invoke(
-            app, ["data", "canary", "check", "--manifest", "m.json",
-                  "--base", "nope/model"],
+            app,
+            ["data", "canary", "check", "--manifest", "m.json", "--base", "nope/model"],
         )
         assert res.exit_code == 1
         assert "could not load" in _clean(res.output).lower()
@@ -2146,23 +2142,28 @@ class TestDataCanaryCli:
             json.dumps({"canaries": [{"carrier": "c", "secret": evil}]}),
             encoding="utf-8",
         )
+        monkeypatch.setattr(cmd, "_load_pair", lambda *a, **k: (object(), object(), "cpu"))
         monkeypatch.setattr(
-            cmd, "_load_pair", lambda *a, **k: (object(), object(), "cpu")
-        )
-        monkeypatch.setattr(
-            cmd, "compute_pair_losses",
-            lambda model, tok, pairs, **kw: (
-                [5.0] + [float(i) for i in range(len(pairs) - 1)]
-            ),
+            cmd,
+            "compute_pair_losses",
+            lambda model, tok, pairs, **kw: [5.0] + [float(i) for i in range(len(pairs) - 1)],
         )
         res = CliRunner().invoke(
-            app, ["data", "canary", "check", "--manifest", "m.json",
-                  "--base", "fake/model", "--controls", "8"],
+            app,
+            [
+                "data",
+                "canary",
+                "check",
+                "--manifest",
+                "m.json",
+                "--base",
+                "fake/model",
+                "--controls",
+                "8",
+            ],
         )
         assert res.exit_code == 0, (res.output, repr(res.exception))
-        assert "\x1b" not in res.output, (
-            "a raw ESC byte from the manifest reached the terminal"
-        )
+        assert "\x1b" not in res.output, "a raw ESC byte from the manifest reached the terminal"
         # Paired visibility: stripped, not swallowed.
         assert "]52;c;" in res.output
 
@@ -2173,8 +2174,8 @@ class TestDataCanaryCli:
 
         monkeypatch.chdir(tmp_path)
         res = CliRunner().invoke(
-            app, ["data", "canary", "check", "--manifest", "nope.json",
-                  "--base", "m"],
+            app,
+            ["data", "canary", "check", "--manifest", "nope.json", "--base", "m"],
         )
         assert res.exit_code == 1
 
@@ -2188,8 +2189,8 @@ class TestDataCanaryCli:
         monkeypatch.chdir(tmp_path)
         Path("m.json").write_text('{"canaries": []}', encoding="utf-8")
         res = CliRunner().invoke(
-            app, ["data", "canary", "check", "--manifest", "m.json",
-                  "--base", "m"],
+            app,
+            ["data", "canary", "check", "--manifest", "m.json", "--base", "m"],
         )
         assert res.exit_code == 1
         assert "no canaries" in _clean(res.output).lower()
@@ -2206,9 +2207,7 @@ training:
   epochs: 1
 """
 
-_PLAIN_YAML = (
-    "base: m\ntask: sft\ndata:\n  train: t.jsonl\ntraining:\n  epochs: 1\n"
-)
+_PLAIN_YAML = "base: m\ntask: sft\ndata:\n  train: t.jsonl\ntraining:\n  epochs: 1\n"
 
 
 class TestReplaySchema:
@@ -2280,14 +2279,10 @@ class TestReplaySchema:
     @pytest.mark.parametrize("bad", ["0.0", "0.6", "1.0", "-0.1"])
     def test_ratio_bounds(self, bad):
         with pytest.raises(Exception):
-            self._load(
-                _REPLAY_YAML.replace("replay_ratio: 0.2", f"replay_ratio: {bad}")
-            )
+            self._load(_REPLAY_YAML.replace("replay_ratio: 0.2", f"replay_ratio: {bad}"))
 
     def test_ratio_boundary_0_5_allowed(self):
-        cfg = self._load(
-            _REPLAY_YAML.replace("replay_ratio: 0.2", "replay_ratio: 0.5")
-        )
+        cfg = self._load(_REPLAY_YAML.replace("replay_ratio: 0.2", "replay_ratio: 0.5"))
         assert cfg.data.replay_ratio == 0.5
 
     @pytest.mark.parametrize("bad", ['""', '"   "'])
@@ -2309,17 +2304,11 @@ class TestReplaySchema:
 
     def test_ratio_rejects_bool(self):
         with pytest.raises(Exception):
-            self._load(
-                _REPLAY_YAML.replace("replay_ratio: 0.2", "replay_ratio: true")
-            )
+            self._load(_REPLAY_YAML.replace("replay_ratio: 0.2", "replay_ratio: true"))
 
     def test_seed_rejects_bool(self):
         with pytest.raises(Exception):
-            self._load(
-                _REPLAY_YAML.replace(
-                    "replay_ratio: 0.2", "replay_seed: true"
-                )
-            )
+            self._load(_REPLAY_YAML.replace("replay_ratio: 0.2", "replay_seed: true"))
 
     def test_replay_survives_model_dump(self):
         """Provenance rides the schema — the tracker/registry capture it."""
@@ -2375,10 +2364,7 @@ class TestResolveReplayCount:
 
 class TestMixReplay:
     def _rows(self, tag, count):
-        return [
-            {"messages": [{"role": "assistant", "content": f"{tag}{i}"}]}
-            for i in range(count)
-        ]
+        return [{"messages": [{"role": "assistant", "content": f"{tag}{i}"}]} for i in range(count)]
 
     def _tags(self, mixed):
         return [row["messages"][0]["content"] for row in mixed]
@@ -2386,9 +2372,7 @@ class TestMixReplay:
     def test_counts(self):
         from soup_cli.utils.rehearsal import mix_replay
 
-        mixed, rep = mix_replay(
-            self._rows("new", 1000), self._rows("old", 500), ratio=0.1, seed=0
-        )
+        mixed, rep = mix_replay(self._rows("new", 1000), self._rows("old", 500), ratio=0.1, seed=0)
         assert rep.n_new == 1000
         assert rep.n_replay == 111
         assert rep.n_final == 1111
@@ -2403,12 +2387,8 @@ class TestMixReplay:
         """
         from soup_cli.utils.rehearsal import mix_replay
 
-        mixed, rep = mix_replay(
-            self._rows("new", 900), self._rows("old", 500), ratio=0.1, seed=0
-        )
-        positions = [
-            i for i, tag in enumerate(self._tags(mixed)) if tag.startswith("old")
-        ]
+        mixed, rep = mix_replay(self._rows("new", 900), self._rows("old", 500), ratio=0.1, seed=0)
+        positions = [i for i, tag in enumerate(self._tags(mixed)) if tag.startswith("old")]
         assert len(positions) == rep.n_replay
         first_half = sum(1 for p in positions if p < len(mixed) / 2)
         assert first_half > 0, "replay rows must appear in the first half"
@@ -2419,9 +2399,7 @@ class TestMixReplay:
         should sit near the middle, not near the end."""
         from soup_cli.utils.rehearsal import mix_replay
 
-        mixed, _ = mix_replay(
-            self._rows("new", 900), self._rows("old", 500), ratio=0.1, seed=0
-        )
+        mixed, _ = mix_replay(self._rows("new", 900), self._rows("old", 500), ratio=0.1, seed=0)
         tags = self._tags(mixed)
         positions = [i for i, t in enumerate(tags) if t.startswith("old")]
         mean_pos = sum(positions) / len(positions) / len(tags)
@@ -2432,9 +2410,7 @@ class TestMixReplay:
     def test_undersized_replay_uses_all_and_reports_shortfall(self):
         from soup_cli.utils.rehearsal import mix_replay
 
-        mixed, rep = mix_replay(
-            self._rows("new", 1000), self._rows("old", 10), ratio=0.1, seed=0
-        )
+        mixed, rep = mix_replay(self._rows("new", 1000), self._rows("old", 10), ratio=0.1, seed=0)
         assert rep.requested == 111
         assert rep.n_replay == 10
         assert rep.shortfall == 101
@@ -2444,18 +2420,14 @@ class TestMixReplay:
         """Repeating rows would silently change epoch semantics."""
         from soup_cli.utils.rehearsal import mix_replay
 
-        mixed, _ = mix_replay(
-            self._rows("new", 1000), self._rows("old", 10), ratio=0.1, seed=0
-        )
+        mixed, _ = mix_replay(self._rows("new", 1000), self._rows("old", 10), ratio=0.1, seed=0)
         old = [t for t in self._tags(mixed) if t.startswith("old")]
         assert len(old) == len(set(old))
 
     def test_sampling_without_replacement(self):
         from soup_cli.utils.rehearsal import mix_replay
 
-        mixed, _ = mix_replay(
-            self._rows("new", 90), self._rows("old", 500), ratio=0.1, seed=0
-        )
+        mixed, _ = mix_replay(self._rows("new", 90), self._rows("old", 500), ratio=0.1, seed=0)
         old = [t for t in self._tags(mixed) if t.startswith("old")]
         assert len(old) == len(set(old))
 
@@ -2505,9 +2477,7 @@ class TestMixReplay:
     def test_ratio_actual_reported(self):
         from soup_cli.utils.rehearsal import mix_replay
 
-        _, rep = mix_replay(
-            self._rows("new", 1000), self._rows("old", 500), ratio=0.1, seed=0
-        )
+        _, rep = mix_replay(self._rows("new", 1000), self._rows("old", 500), ratio=0.1, seed=0)
         assert rep.ratio_actual == pytest.approx(111 / 1111)
 
     def test_report_is_frozen(self):
@@ -2515,25 +2485,23 @@ class TestMixReplay:
 
         from soup_cli.utils.rehearsal import mix_replay
 
-        _, rep = mix_replay(
-            self._rows("new", 10), self._rows("old", 10), ratio=0.1, seed=0
-        )
+        _, rep = mix_replay(self._rows("new", 10), self._rows("old", 10), ratio=0.1, seed=0)
         with pytest.raises(dataclasses.FrozenInstanceError):
             rep.n_replay = 99
 
 
 class TestLoaderReplay:
     def _write(self, path, rows):
-        path.write_text(
-            "\n".join(json.dumps(r) for r in rows), encoding="utf-8"
-        )
+        path.write_text("\n".join(json.dumps(r) for r in rows), encoding="utf-8")
 
     def _chat(self, tag, count):
         return [
-            {"messages": [
-                {"role": "user", "content": "q"},
-                {"role": "assistant", "content": f"{tag}{i}"},
-            ]}
+            {
+                "messages": [
+                    {"role": "user", "content": "q"},
+                    {"role": "assistant", "content": f"{tag}{i}"},
+                ]
+            }
             for i in range(count)
         ]
 
@@ -2548,8 +2516,11 @@ class TestLoaderReplay:
         self._write(tmp_path / "new.jsonl", self._chat("new", 90))
         self._write(tmp_path / "old.jsonl", self._chat("old", 90))
         cfg = DataConfig(
-            train="new.jsonl", replay="old.jsonl",
-            replay_ratio=0.1, replay_seed=0, val_split=0.0,
+            train="new.jsonl",
+            replay="old.jsonl",
+            replay_ratio=0.1,
+            replay_seed=0,
+            val_split=0.0,
         )
         out = load_dataset(cfg)
         answers = self._answers(out["train"])
@@ -2565,14 +2536,17 @@ class TestLoaderReplay:
         self._write(tmp_path / "new.jsonl", self._chat("new", 100))
         self._write(tmp_path / "old.jsonl", self._chat("old", 100))
         cfg = DataConfig(
-            train="new.jsonl", replay="old.jsonl",
-            replay_ratio=0.2, replay_seed=0, val_split=0.2,
+            train="new.jsonl",
+            replay="old.jsonl",
+            replay_ratio=0.2,
+            replay_seed=0,
+            val_split=0.2,
         )
         out = load_dataset(cfg)
         assert out["val"], "val must be non-empty for this test to mean anything"
-        assert all(
-            a.startswith("new") for a in self._answers(out["val"])
-        ), "val must contain no replay rows"
+        assert all(a.startswith("new") for a in self._answers(out["val"])), (
+            "val must contain no replay rows"
+        )
 
     def test_no_replay_is_unchanged(self, tmp_path, monkeypatch):
         from soup_cli.config.schema import DataConfig
@@ -2585,9 +2559,7 @@ class TestLoaderReplay:
         assert len(out["train"]) == 10
         assert self._answers(out["train"]) == [f"new{i}" for i in range(10)]
 
-    def test_replay_file_gets_its_own_format_detection(
-        self, tmp_path, monkeypatch
-    ):
+    def test_replay_file_gets_its_own_format_detection(self, tmp_path, monkeypatch):
         """New data is chat, old data is alpaca -> both must normalize."""
         from soup_cli.config.schema import DataConfig
         from soup_cli.data.loader import load_dataset
@@ -2596,14 +2568,14 @@ class TestLoaderReplay:
         self._write(tmp_path / "new.jsonl", self._chat("new", 90))
         self._write(
             tmp_path / "old.jsonl",
-            [
-                {"instruction": f"old-q{i}", "output": f"old{i}"}
-                for i in range(90)
-            ],
+            [{"instruction": f"old-q{i}", "output": f"old{i}"} for i in range(90)],
         )
         cfg = DataConfig(
-            train="new.jsonl", replay="old.jsonl",
-            replay_ratio=0.1, replay_seed=0, val_split=0.0,
+            train="new.jsonl",
+            replay="old.jsonl",
+            replay_ratio=0.1,
+            replay_seed=0,
+            val_split=0.0,
         )
         out = load_dataset(cfg)
         assert len(out["train"]) == 100
@@ -2612,9 +2584,7 @@ class TestLoaderReplay:
                 "the alpaca replay file must be normalized via its OWN format "
                 "detection, not the new file's"
             )
-        assert sum(
-            1 for a in self._answers(out["train"]) if a.startswith("old")
-        ) == 10
+        assert sum(1 for a in self._answers(out["train"]) if a.startswith("old")) == 10
 
     def test_missing_replay_file_raises(self, tmp_path, monkeypatch):
         from soup_cli.config.schema import DataConfig
@@ -2636,7 +2606,8 @@ class TestLoaderReplay:
         self._write(tmp_path / "old.jsonl", self._chat("old", 10))
         monkeypatch.chdir(work)
         cfg = DataConfig(
-            train="new.jsonl", replay=str(tmp_path / "old.jsonl"),
+            train="new.jsonl",
+            replay=str(tmp_path / "old.jsonl"),
             val_split=0.0,
         )
         with pytest.raises(ValueError, match="outside"):
@@ -2650,8 +2621,11 @@ class TestLoaderReplay:
         self._write(tmp_path / "new.jsonl", self._chat("new", 90))
         self._write(tmp_path / "old.jsonl", self._chat("old", 3))
         cfg = DataConfig(
-            train="new.jsonl", replay="old.jsonl",
-            replay_ratio=0.1, replay_seed=0, val_split=0.0,
+            train="new.jsonl",
+            replay="old.jsonl",
+            replay_ratio=0.1,
+            replay_seed=0,
+            val_split=0.0,
         )
         out = load_dataset(cfg)
         old = [a for a in self._answers(out["train"]) if a.startswith("old")]
@@ -2670,9 +2644,7 @@ class TestLoaderReplay:
             for i in range(count)
         ]
 
-    def test_replay_vision_rows_get_traversal_protection(
-        self, tmp_path, monkeypatch
-    ):
+    def test_replay_vision_rows_get_traversal_protection(self, tmp_path, monkeypatch):
         """The replay file must get the SAME image containment as the main one.
 
         load_dataset runs _validate_vision_images on the primary dataset
@@ -2692,22 +2664,20 @@ class TestLoaderReplay:
             self._llava("old", "../../../../../../etc/passwd", 90),
         )
         cfg = DataConfig(
-            train="new.jsonl", format="llava", replay="old.jsonl",
-            replay_ratio=0.1, replay_seed=0, val_split=0.0,
+            train="new.jsonl",
+            format="llava",
+            replay="old.jsonl",
+            replay_ratio=0.1,
+            replay_seed=0,
+            val_split=0.0,
         )
         out = load_dataset(cfg)
-        escaped = [
-            row for row in out["train"]
-            if "etc/passwd" in str(row.get("image", ""))
-        ]
+        escaped = [row for row in out["train"] if "etc/passwd" in str(row.get("image", ""))]
         assert not escaped, (
-            "a traversal image path from the replay file reached the mix "
-            "unvalidated"
+            "a traversal image path from the replay file reached the mix unvalidated"
         )
 
-    def test_replay_audio_rows_get_traversal_protection(
-        self, tmp_path, monkeypatch
-    ):
+    def test_replay_audio_rows_get_traversal_protection(self, tmp_path, monkeypatch):
         from soup_cli.config.schema import DataConfig
         from soup_cli.data.loader import load_dataset
 
@@ -2719,23 +2689,20 @@ class TestLoaderReplay:
         )
         self._write(
             tmp_path / "old.jsonl",
-            [
-                {"audio": "../../../../../../etc/shadow", "text": f"old{i}"}
-                for i in range(90)
-            ],
+            [{"audio": "../../../../../../etc/shadow", "text": f"old{i}"} for i in range(90)],
         )
         cfg = DataConfig(
-            train="new.jsonl", format="asr", replay="old.jsonl",
-            replay_ratio=0.1, replay_seed=0, val_split=0.0,
+            train="new.jsonl",
+            format="asr",
+            replay="old.jsonl",
+            replay_ratio=0.1,
+            replay_seed=0,
+            val_split=0.0,
         )
         out = load_dataset(cfg)
-        escaped = [
-            row for row in out["train"]
-            if "etc/shadow" in str(row.get("audio", ""))
-        ]
+        escaped = [row for row in out["train"] if "etc/shadow" in str(row.get("audio", ""))]
         assert not escaped, (
-            "a traversal audio path from the replay file reached the mix "
-            "unvalidated"
+            "a traversal audio path from the replay file reached the mix unvalidated"
         )
 
     def test_finalize_is_the_single_seam(self):
@@ -2768,7 +2735,9 @@ class TestTrainReplayFlags:
         from soup_cli.commands.train import _apply_replay_overrides
 
         out = _apply_replay_overrides(
-            self._cfg(_REPLAY_YAML), replay=None, replay_ratio=None,
+            self._cfg(_REPLAY_YAML),
+            replay=None,
+            replay_ratio=None,
             replay_seed=7,
         )
         assert out.data.replay_seed == 7
@@ -2777,9 +2746,7 @@ class TestTrainReplayFlags:
         from soup_cli.commands.train import _apply_replay_overrides
 
         with pytest.raises(Exception, match="replay"):
-            _apply_replay_overrides(
-                self._cfg(), replay=None, replay_ratio=None, replay_seed=7
-            )
+            _apply_replay_overrides(self._cfg(), replay=None, replay_ratio=None, replay_seed=7)
 
     def _cfg(self, yaml_str=None):
         from soup_cli.config.loader import load_config_from_string
@@ -2789,9 +2756,7 @@ class TestTrainReplayFlags:
     def test_apply_replay_overrides(self):
         from soup_cli.commands.train import _apply_replay_overrides
 
-        out = _apply_replay_overrides(
-            self._cfg(), replay="old.jsonl", replay_ratio=0.25
-        )
+        out = _apply_replay_overrides(self._cfg(), replay="old.jsonl", replay_ratio=0.25)
         assert out.data.replay == "old.jsonl"
         assert out.data.replay_ratio == 0.25
 
@@ -2812,8 +2777,7 @@ class TestTrainReplayFlags:
         from soup_cli.commands.train import _apply_replay_overrides
 
         dpo = self._cfg(
-            "base: m\ntask: dpo\ndata:\n  train: t.jsonl\n  format: dpo\n"
-            "training:\n  epochs: 1\n"
+            "base: m\ntask: dpo\ndata:\n  train: t.jsonl\n  format: dpo\ntraining:\n  epochs: 1\n"
         )
         with pytest.raises(Exception, match="replay"):
             _apply_replay_overrides(dpo, replay="old.jsonl", replay_ratio=None)
@@ -2828,9 +2792,7 @@ class TestTrainReplayFlags:
         from soup_cli.commands.train import _apply_replay_overrides
 
         with pytest.raises(Exception):
-            _apply_replay_overrides(
-                self._cfg(), replay="old.jsonl", replay_ratio=0.9
-            )
+            _apply_replay_overrides(self._cfg(), replay="old.jsonl", replay_ratio=0.9)
 
     def test_yaml_value_preserved_when_flag_absent(self):
         """--replay-ratio alone must not clobber a YAML data.replay."""
@@ -2863,8 +2825,7 @@ class TestLocalModelSizeGate:
         import struct
 
         header = {
-            name: {"dtype": "F16", "shape": list(shape),
-                   "data_offsets": [0, 0]}
+            name: {"dtype": "F16", "shape": list(shape), "data_offsets": [0, 0]}
             for name, shape in shapes.items()
         }
         blob = json.dumps(header).encode("utf-8")
@@ -2876,9 +2837,7 @@ class TestLocalModelSizeGate:
         from soup_cli.utils.gpu import model_size_from_name
 
         # 2 tensors x 1e8 params = 0.2B
-        self._fake_checkpoint(
-            tmp_path, {"a.weight": [10000, 10000], "b.weight": [10000, 10000]}
-        )
+        self._fake_checkpoint(tmp_path, {"a.weight": [10000, 10000], "b.weight": [10000, 10000]})
         assert model_size_from_name(str(tmp_path)) == pytest.approx(0.2)
 
     def test_nameless_local_dir_does_not_become_7b(self, tmp_path):
@@ -2897,10 +2856,7 @@ class TestLocalModelSizeGate:
         from soup_cli.utils.gpu import model_size_from_name
 
         for idx in range(2):
-            header = {
-                "w": {"dtype": "F16", "shape": [10000, 5000],
-                      "data_offsets": [0, 0]}
-            }
+            header = {"w": {"dtype": "F16", "shape": [10000, 5000], "data_offsets": [0, 0]}}
             blob = json.dumps(header).encode("utf-8")
             (tmp_path / f"model-0000{idx}.safetensors").write_bytes(
                 struct.pack("<Q", len(blob)) + blob
@@ -2911,9 +2867,7 @@ class TestLocalModelSizeGate:
         from soup_cli.utils.gpu import model_size_from_name
 
         assert model_size_from_name("meta-llama/Meta-Llama-3-8B") == 8
-        assert model_size_from_name(
-            "HuggingFaceTB/SmolLM2-135M-Instruct"
-        ) == pytest.approx(0.135)
+        assert model_size_from_name("HuggingFaceTB/SmolLM2-135M-Instruct") == pytest.approx(0.135)
 
     def test_missing_dir_falls_back_to_the_guess(self):
         from soup_cli.utils.gpu import model_size_from_name
@@ -2937,9 +2891,7 @@ class TestLocalModelSizeGate:
 
         from soup_cli.utils.gpu import model_size_from_name
 
-        (tmp_path / "model.safetensors").write_bytes(
-            struct.pack("<Q", 2**40) + b"{}"
-        )
+        (tmp_path / "model.safetensors").write_bytes(struct.pack("<Q", 2**40) + b"{}")
         assert model_size_from_name(str(tmp_path)) == 7.0
 
 
@@ -2953,9 +2905,7 @@ class TestNoTopLevelTorch:
 
     _BANNED = {"torch", "transformers", "peft"}
 
-    @pytest.mark.parametrize(
-        "module", ["semdedup", "topics", "canary", "rehearsal", "embed"]
-    )
+    @pytest.mark.parametrize("module", ["semdedup", "topics", "canary", "rehearsal", "embed"])
     def test_no_top_level_heavy_import(self, module):
         import ast
         import pathlib
@@ -2981,10 +2931,7 @@ class TestNoTopLevelTorch:
 
         tree = ast.parse("import torch\n\ndef f():\n    import peft\n")
         top = [
-            alias.name
-            for node in tree.body
-            if isinstance(node, ast.Import)
-            for alias in node.names
+            alias.name for node in tree.body if isinstance(node, ast.Import) for alias in node.names
         ]
         assert "torch" in top, "walk must see a real top-level import"
         assert "peft" not in top, "and must ignore a lazy one inside a function"

@@ -40,7 +40,6 @@ def _loaded_rows(path: str, data_format: str) -> list[dict]:
     return list(load_dataset(config)["train"])
 
 
-
 def _write_config(path: Path, data_file: str, data_format: str) -> None:
     path.write_text(
         f"base: {_BASE}\ntask: sft\ndata:\n  train: {data_file}\n"
@@ -49,9 +48,7 @@ def _write_config(path: Path, data_file: str, data_format: str) -> None:
     )
 
 
-def test_dry_run_with_zero_rows_exits_non_zero_naming_format_and_reason(
-    tmp_path, monkeypatch
-):
+def test_dry_run_with_zero_rows_exits_non_zero_naming_format_and_reason(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     _write_jsonl(Path("data.jsonl"), [{"instruction": "q", "output": "a"}] * 2)
     _write_config(Path("soup.yaml"), "data.jsonl", "chatml")
@@ -62,9 +59,7 @@ def test_dry_run_with_zero_rows_exits_non_zero_naming_format_and_reason(
     assert result.exit_code == 1, output
     assert "Ready to train" not in output
     assert "Data OK" not in output
-    assert (
-        "No training rows: data.jsonl loaded 0 train samples as format 'chatml'."
-    ) in output
+    assert ("No training rows: data.jsonl loaded 0 train samples as format 'chatml'.") in output
     assert "First: row 0 (as 'chatml'): 'messages'." in output
 
 
@@ -160,9 +155,7 @@ def test_a_pre_tokenized_dry_run_reports_the_caches_row_count(tmp_path, monkeypa
     assert "Config valid. Ready to train!" in output
 
 
-def test_the_outcome_is_a_snapshot_no_caller_or_later_load_can_change(
-    tmp_path, monkeypatch
-):
+def test_the_outcome_is_a_snapshot_no_caller_or_later_load_can_change(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     _write_jsonl(Path("bad.jsonl"), [{"instruction": "q", "output": "a"}])
     _write_jsonl(Path("good.jsonl"), [{"messages": _CHAT}])

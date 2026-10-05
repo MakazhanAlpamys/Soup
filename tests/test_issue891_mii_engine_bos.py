@@ -419,9 +419,7 @@ class TestMiiBackend:
 
         assert _mii_would_send(tok, sent_before)[:2] == [_BOS_ID, _BOS_ID]
 
-    @pytest.mark.parametrize(
-        "tokenizer_kind", ["none", "no_template", "broken_template"]
-    )
+    @pytest.mark.parametrize("tokenizer_kind", ["none", "no_template", "broken_template"])
     def test_control_no_template_sends_a_plain_legacy_string(self, tokenizer_kind):
         """CONTROL: nothing rendered special tokens, so the prompt must reach
         MII as a plain str and be tokenized exactly as it always was."""

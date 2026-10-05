@@ -173,8 +173,7 @@ def clean(
 
         if output_path.exists() and not force:
             console.print(
-                f"[red]Output file already exists:[/] {output_path} "
-                "(use --force / -f to overwrite)"
+                f"[red]Output file already exists:[/] {output_path} (use --force / -f to overwrite)"
             )
             raise typer.Exit(1)
 
@@ -216,6 +215,5 @@ def clean(
 
     if output_path is not None:
         console.print(
-            f"\n[bold green]✓ Cleaned dataset saved to:[/] {output_path} "
-            f"({len(cleaned_data)} rows)"
+            f"\n[bold green]✓ Cleaned dataset saved to:[/] {output_path} ({len(cleaned_data)} rows)"
         )

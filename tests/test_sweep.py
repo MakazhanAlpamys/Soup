@@ -211,20 +211,22 @@ class TestEarlyStopping:
         from soup_cli.cli import app
 
         config_file = tmp_path / "soup.yaml"
-        config_file.write_text(
-            "base: test-model\n"
-            "data:\n"
-            "  train: ./data.jsonl\n"
-        )
+        config_file.write_text("base: test-model\ndata:\n  train: ./data.jsonl\n")
 
         runner = CliRunner()
-        result = runner.invoke(app, [
-            "sweep",
-            "--config", str(config_file),
-            "--param", "lr=1e-5,2e-5,5e-5",
-            "--early-stop", "1.5",
-            "--dry-run",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "sweep",
+                "--config",
+                str(config_file),
+                "--param",
+                "lr=1e-5,2e-5,5e-5",
+                "--early-stop",
+                "1.5",
+                "--dry-run",
+            ],
+        )
         assert result.exit_code == 0
         assert "Sweep Plan" in result.output
 
@@ -251,11 +253,11 @@ class TestEarlyStopping:
 
         # 1.2 = 20% worse tolerance
         assert 1.15 <= best_loss * 1.2  # within threshold
-        assert 1.25 > best_loss * 1.2   # exceeds threshold
+        assert 1.25 > best_loss * 1.2  # exceeds threshold
 
         # 2.0 = 100% worse tolerance
         assert 1.99 <= best_loss * 2.0  # within threshold
-        assert 2.01 > best_loss * 2.0   # exceeds threshold
+        assert 2.01 > best_loss * 2.0  # exceeds threshold
 
 
 class TestSweepCLI:
@@ -269,19 +271,20 @@ class TestSweepCLI:
 
         # Create a minimal config
         config_file = tmp_path / "soup.yaml"
-        config_file.write_text(
-            "base: test-model\n"
-            "data:\n"
-            "  train: ./data.jsonl\n"
-        )
+        config_file.write_text("base: test-model\ndata:\n  train: ./data.jsonl\n")
 
         runner = CliRunner()
-        result = runner.invoke(app, [
-            "sweep",
-            "--config", str(config_file),
-            "--param", "lr=1e-5,2e-5",
-            "--dry-run",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "sweep",
+                "--config",
+                str(config_file),
+                "--param",
+                "lr=1e-5,2e-5",
+                "--dry-run",
+            ],
+        )
         assert result.exit_code == 0
         assert "Sweep Plan" in result.output
         assert "lr" in result.output
@@ -293,11 +296,16 @@ class TestSweepCLI:
         from soup_cli.cli import app
 
         runner = CliRunner()
-        result = runner.invoke(app, [
-            "sweep",
-            "--config", "/nonexistent/soup.yaml",
-            "--param", "lr=1e-5,2e-5",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "sweep",
+                "--config",
+                "/nonexistent/soup.yaml",
+                "--param",
+                "lr=1e-5,2e-5",
+            ],
+        )
         assert result.exit_code != 0
 
     def test_sweep_invalid_strategy(self, tmp_path):
@@ -307,19 +315,21 @@ class TestSweepCLI:
         from soup_cli.cli import app
 
         config_file = tmp_path / "soup.yaml"
-        config_file.write_text(
-            "base: test-model\n"
-            "data:\n"
-            "  train: ./data.jsonl\n"
-        )
+        config_file.write_text("base: test-model\ndata:\n  train: ./data.jsonl\n")
 
         runner = CliRunner()
-        result = runner.invoke(app, [
-            "sweep",
-            "--config", str(config_file),
-            "--param", "lr=1e-5",
-            "--strategy", "bayesian",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "sweep",
+                "--config",
+                str(config_file),
+                "--param",
+                "lr=1e-5",
+                "--strategy",
+                "bayesian",
+            ],
+        )
         assert result.exit_code != 0
 
 

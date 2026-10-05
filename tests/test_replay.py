@@ -161,20 +161,24 @@ class TestCli:
         # force_terminal=False pins tty detection; no_color=True alone does not,
         # so under FORCE_COLOR=1 Rich still styles the surrounding panel markup
         # and the "\x1b" assertion below fails on sanitised output.
-        monkeypatch.setattr(
-            runs_command, "console", Console(force_terminal=False)
-        )
+        monkeypatch.setattr(runs_command, "console", Console(force_terminal=False))
 
         tracker = ExperimentTracker()
         run_id = tracker.start_run(
             config_dict={"base": "x", "task": "sft"},
-            device="cpu", device_name="cpu", gpu_info={},
+            device="cpu",
+            device_name="cpu",
+            gpu_info={},
         )
         for step in range(0, 50, 10):
             tracker.log_metrics(run_id, step=step, loss=2.0 - step * 0.01)
         tracker.finish_run(
-            run_id=run_id, initial_loss=2.0, final_loss=1.5,
-            total_steps=50, duration_secs=10.0, output_dir="/tmp/x",
+            run_id=run_id,
+            initial_loss=2.0,
+            final_loss=1.5,
+            total_steps=50,
+            duration_secs=10.0,
+            output_dir="/tmp/x",
         )
         tracker.close()
         runner = CliRunner()

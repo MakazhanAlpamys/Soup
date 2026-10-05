@@ -28,6 +28,7 @@ class TestModuleSurface:
             validate_grace_codebook_dim,
             validate_grace_codebook_size,
         )
+
         assert callable(validate_grace_codebook_size)
         assert callable(validate_grace_codebook_dim)
         assert callable(apply_grace_codebook)

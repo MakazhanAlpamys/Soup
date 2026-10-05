@@ -245,15 +245,12 @@ class PPOTrainerWrapper:
         else:
             self._setup_transformers(cfg, tcfg)
 
-        apply_chat_template_override(
-            self.tokenizer, cfg.data.chat_template, console=console
-        )
+        apply_chat_template_override(self.tokenizer, cfg.data.chat_template, console=console)
 
         trainable, total = self.model.get_nb_trainable_parameters()
         pct = 100 * trainable / total
         console.print(
-            f"[green]LoRA applied:[/] {trainable:,} trainable"
-            f" / {total:,} total ({pct:.2f}%)"
+            f"[green]LoRA applied:[/] {trainable:,} trainable / {total:,} total ({pct:.2f}%)"
         )
 
         # --- Dataset ---
@@ -302,12 +299,15 @@ class PPOTrainerWrapper:
 
         ppo_params = inspect.signature(ppo_config_cls).parameters
 
-        total_steps = math.ceil(
-            len(train_ds) / batch_size / tcfg.gradient_accumulation_steps
-        ) * tcfg.epochs
+        total_steps = (
+            math.ceil(len(train_ds) / batch_size / tcfg.gradient_accumulation_steps) * tcfg.epochs
+        )
         applied_ppo_fields = _set_ppo_training_kwargs(
-            ppo_kwargs, ppo_config_cls, tcfg,
-            total_steps=total_steps, device=self.device,
+            ppo_kwargs,
+            ppo_config_cls,
+            tcfg,
+            total_steps=total_steps,
+            device=self.device,
         )
 
         if "cliprange" in ppo_params:
@@ -315,9 +315,7 @@ class PPOTrainerWrapper:
 
         # Optional params that may not exist in all trl versions
         if "log_with" in ppo_params:
-            ppo_kwargs["log_with"] = (
-                self.report_to if self.report_to != "none" else None
-            )
+            ppo_kwargs["log_with"] = self.report_to if self.report_to != "none" else None
         elif "report_to" in ppo_params:
             ppo_kwargs["report_to"] = self.report_to
 
@@ -380,9 +378,7 @@ class PPOTrainerWrapper:
 
             self._rl_buffer = RLSignalBuffer()
             reward_funcs = [
-                wrap_reward_funcs(
-                    apply_reward_shaping(fn, tcfg), self._rl_buffer
-                )
+                wrap_reward_funcs(apply_reward_shaping(fn, tcfg), self._rl_buffer)
                 if callable(fn) and not hasattr(fn, "forward")
                 else fn
                 for fn in reward_funcs
@@ -432,9 +428,7 @@ class PPOTrainerWrapper:
                 )
             from soup_cli.utils.peft_wiring import build_loraplus_optimizer
 
-            loraplus_optimizer = build_loraplus_optimizer(
-                self.model, ppo_config, tcfg
-            )
+            loraplus_optimizer = build_loraplus_optimizer(self.model, ppo_config, tcfg)
 
         if is_experimental:
             # trl >=0.28 experimental API: PPOTrainer(args, processing_class,
@@ -455,9 +449,7 @@ class PPOTrainerWrapper:
             }
             # LoRA+ (#724/#745): inject so the eagerly-built scheduler binds to it.
             if loraplus_optimizer is not None:
-                self._complete_loraplus_optimizer(
-                    loraplus_optimizer, value_model_obj, ppo_config
-                )
+                self._complete_loraplus_optimizer(loraplus_optimizer, value_model_obj, ppo_config)
                 trainer_kwargs["optimizers"] = (loraplus_optimizer, None)
             self._dataset_in_constructor = True
             self.trainer = ppo_trainer_cls(**trainer_kwargs)
@@ -480,7 +472,8 @@ class PPOTrainerWrapper:
                 trainer_kwargs["ref_model"] = None
             if "reward_model" in ppo_trainer_params:
                 trainer_kwargs["reward_model"] = self._get_or_create_reward_model(
-                    cfg, tcfg,
+                    cfg,
+                    tcfg,
                     reward_funcs_supplied=bool(reward_funcs)
                     and "reward_funcs" in ppo_trainer_params,
                 )
@@ -548,6 +541,7 @@ class PPOTrainerWrapper:
             attach_plugin_callback,
             attach_relora_callback,
         )
+
         attach_relora_callback(self.trainer, tcfg)
         # v0.53.5 #114/#115 — dynamic curriculum live callback.
         attach_curriculum_callback(self.trainer, tcfg, str(output_dir), console)
@@ -579,7 +573,9 @@ class PPOTrainerWrapper:
         # If a reward_model path is configured, load it
         if tcfg.reward_model:
             return _load_reward_model(
-                tcfg.reward_model, self.device, self.trust_remote_code,
+                tcfg.reward_model,
+                self.device,
+                self.trust_remote_code,
                 tcfg=tcfg,
             )
 
@@ -656,7 +652,9 @@ class PPOTrainerWrapper:
         # Reward model (pre-trained classifier)
         if tcfg.reward_model:
             self.reward_model_instance = _load_reward_model(
-                tcfg.reward_model, self.device, self.trust_remote_code,
+                tcfg.reward_model,
+                self.device,
+                self.trust_remote_code,
                 tcfg=tcfg,
             )
             console.print(f"[green]Reward model loaded:[/] {tcfg.reward_model}")
@@ -694,14 +692,17 @@ class PPOTrainerWrapper:
         from soup_cli.utils.quant_menu import build_quantization_config_for_loader
 
         quant_config_obj = build_quantization_config_for_loader(
-            tcfg=tcfg, base=cfg.base, console=console,
+            tcfg=tcfg,
+            base=cfg.base,
+            console=console,
         )
 
         console.print(f"[dim]Loading model: {cfg.base}[/]")
         # On CPU, use device_map="cpu" to avoid meta tensors from "auto"
         dev_map = resolve_device_map(self.device)
         model_kwargs = {
-            "trust_remote_code": self._trust_remote_code, "device_map": dev_map,
+            "trust_remote_code": self._trust_remote_code,
+            "device_map": dev_map,
             "torch_dtype": resolve_frozen_base_load_dtype(self.device),
         }
         if quant_config_obj is not None:
@@ -730,9 +731,7 @@ class PPOTrainerWrapper:
         # resolution leaves peft with nothing to attach.
         from soup_cli.utils.moe import resolve_moe_lora_targets
 
-        target_modules = resolve_moe_lora_targets(
-            self.model, tcfg, target_modules, console
-        )
+        target_modules = resolve_moe_lora_targets(self.model, tcfg, target_modules, console)
 
         lora_config = build_lora_config(
             tcfg.lora,
@@ -744,6 +743,7 @@ class PPOTrainerWrapper:
             apply_post_lora_patches,
             apply_pre_lora_patches,
         )
+
         apply_pre_lora_patches(self.model, cfg.base)
         self.model = get_peft_model(self.model, lora_config)
         apply_post_lora_patches(self.model)
@@ -758,9 +758,14 @@ class PPOTrainerWrapper:
 
         # v0.35.0 #60 — multi-trainer wiring of v0.28.0 speed/memory features.
         from soup_cli.utils.v028_features import apply_v028_speed_memory
+
         apply_v028_speed_memory(
-            model=self.model, tcfg=tcfg, base_model=cfg.base,
-            console=console, device=self.device, backend=cfg.backend,
+            model=self.model,
+            tcfg=tcfg,
+            base_model=cfg.base,
+            console=console,
+            device=self.device,
+            backend=cfg.backend,
         )
 
     def _setup_unsloth(self, cfg, tcfg):
@@ -794,9 +799,7 @@ class PPOTrainerWrapper:
           - trl <0.28: manual loop with generate() + step()
         """
         # Detect API: trl >=0.28 PPOTrainer has a .train() from OnlineDPOTrainer
-        has_builtin_train = hasattr(self.trainer, "train") and not hasattr(
-            self.trainer, "step"
-        )
+        has_builtin_train = hasattr(self.trainer, "train") and not hasattr(self.trainer, "step")
 
         if has_builtin_train:
             return self._train_builtin(display, tracker, run_id, resume_from_checkpoint)
@@ -841,7 +844,8 @@ class PPOTrainerWrapper:
 
         train_params = inspect.signature(self.trainer.train).parameters
         with activation_offloading_context(
-            self.config.training, self._output_dir,
+            self.config.training,
+            self._output_dir,
         ):
             if resume_from_checkpoint and "resume_from_checkpoint" in train_params:
                 align_trainable_dtype_for_fp16(
@@ -909,8 +913,7 @@ class PPOTrainerWrapper:
                 # Tokenize prompts
                 prompt_texts = batch["prompt_text"]
                 query_tensors = [
-                    self.tokenizer.encode(p, return_tensors="pt").squeeze()
-                    for p in prompt_texts
+                    self.tokenizer.encode(p, return_tensors="pt").squeeze() for p in prompt_texts
                 ]
 
                 # Generate completions
@@ -923,11 +926,13 @@ class PPOTrainerWrapper:
                         "temperature": 0.7,
                     }
                     response = self.trainer.generate(query.unsqueeze(0), **gen_kwargs)
-                    response_tensors.append(response.squeeze()[len(query):])
+                    response_tensors.append(response.squeeze()[len(query) :])
 
                 # Compute rewards
                 rewards = self._compute_rewards(
-                    query_tensors, response_tensors, batch,
+                    query_tensors,
+                    response_tensors,
+                    batch,
                 )
 
                 # PPO step
@@ -1067,11 +1072,13 @@ def _import_ppo_classes():
     """
     try:
         from trl.experimental.ppo import PPOConfig, PPOTrainer
+
         return PPOTrainer, PPOConfig, True
     except (ImportError, ModuleNotFoundError):
         pass
 
     from trl import PPOConfig, PPOTrainer
+
     return PPOTrainer, PPOConfig, False
 
 
@@ -1120,7 +1127,9 @@ def _load_reward_model(
         from soup_cli.utils.quant_menu import build_quantization_config_for_loader
 
         quant_config_obj = build_quantization_config_for_loader(
-            tcfg=tcfg, base=model_path, console=console,
+            tcfg=tcfg,
+            base=model_path,
+            console=console,
         )
         if quant_config_obj is not None:
             model_kwargs["quantization_config"] = quant_config_obj
@@ -1211,9 +1220,7 @@ def _prepare_ppo_dataset(data: list[dict], tokenizer: Any | None = None) -> list
             if prompt_text is None:
                 # Message list → join content
                 prompt_parts = [
-                    msg.get("content", "")
-                    for msg in prompt_list
-                    if isinstance(msg, dict)
+                    msg.get("content", "") for msg in prompt_list if isinstance(msg, dict)
                 ]
                 prompt_text = " ".join(prompt_parts)
             entry = {"prompt_text": prompt_text}

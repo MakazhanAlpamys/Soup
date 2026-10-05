@@ -55,9 +55,7 @@ class ProfilerSchedule:
         if self.active == 0:
             raise ValueError("profiler active must be > 0 (nothing would be recorded)")
         if self.active > MAX_ACTIVE_STEPS:
-            raise ValueError(
-                f"profiler active {self.active} exceeds cap {MAX_ACTIVE_STEPS}"
-            )
+            raise ValueError(f"profiler active {self.active} exceeds cap {MAX_ACTIVE_STEPS}")
 
 
 def resolve_trace_path(output_dir: Path, run_id: str) -> Path:

@@ -87,7 +87,6 @@ class TestAttestationSigstoreBackend:
         }
         assert seen["payload"] == b'{"hello":"world"}'
 
-
     def test_verify_wrapper_threads_identity_and_issuer(self, monkeypatch):
         from soup_cli.utils import sigstore_signing
         from soup_cli.utils.attest import verify_sigstore_attestation
@@ -128,17 +127,13 @@ class TestAttestSigstoreCli:
         result = CliRunner().invoke(app, _emit_args(output))
         assert result.exit_code == 0, result.output
         assert output.exists()
-        sidecar = json.loads(
-            (tmp_path / "attestation.json.sig").read_text(encoding="utf-8")
-        )
+        sidecar = json.loads((tmp_path / "attestation.json.sig").read_text(encoding="utf-8"))
         assert sidecar["backend"] == "sigstore"
         assert sidecar["signature"] == ""
         assert sidecar["public_key"] == ""
         assert sidecar["sigstore_bundle"] == '{"bundle":"ok"}'
 
-    def test_sigstore_failure_never_downgrades_to_unsigned(
-        self, tmp_path, monkeypatch
-    ):
+    def test_sigstore_failure_never_downgrades_to_unsigned(self, tmp_path, monkeypatch):
         from soup_cli.commands.attest import app
         from soup_cli.utils import sigstore_signing
 
@@ -234,7 +229,6 @@ class TestAttestSigstoreCli:
                 str(statement),
                 "--signature",
                 str(sidecar),
-
                 "--cert-identity",
                 "trusted@example.com",
                 "--cert-oidc-issuer",
@@ -273,10 +267,7 @@ class TestAttestSigstoreCli:
         assert result.exit_code == 3
         assert "identity mismatch" in result.output
 
-
-    def test_oversized_signature_sidecar_is_rejected_before_json_load(
-        self, tmp_path, monkeypatch
-    ):
+    def test_oversized_signature_sidecar_is_rejected_before_json_load(self, tmp_path, monkeypatch):
         import soup_cli.commands.attest as attest_cmd
 
         monkeypatch.chdir(tmp_path)
@@ -376,9 +367,7 @@ class TestAttestSigstoreReviewFollowups:
         link = output if which == "output" else tmp_path / "att.json.sig"
         link.symlink_to(target)
 
-        result = CliRunner().invoke(
-            attest_cmd.app, _emit_args(output)
-        )
+        result = CliRunner().invoke(attest_cmd.app, _emit_args(output))
         assert result.exit_code == 2, result.output
         assert called["sign"] is False
 
@@ -400,9 +389,7 @@ class TestAttestSigstoreReviewFollowups:
         directory = output if which == "output" else tmp_path / "att.json.sig"
         directory.mkdir()
 
-        result = CliRunner().invoke(
-            attest_cmd.app, _emit_args(output)
-        )
+        result = CliRunner().invoke(attest_cmd.app, _emit_args(output))
         assert result.exit_code == 2, result.output
         assert called["sign"] is False
 
@@ -481,9 +468,7 @@ class TestAttestSigstoreReviewFollowups:
         assert emitted.exit_code == 0, emitted.output
 
         document = json.loads(output.read_text(encoding="utf-8"))
-        output.write_bytes(
-            (json.dumps(document, separators=(",", ":")) + "\r\n").encode("utf-8")
-        )
+        output.write_bytes((json.dumps(document, separators=(",", ":")) + "\r\n").encode("utf-8"))
         verified = {}
 
         def verify(payload, bundle, *, identity, issuer):
@@ -536,15 +521,11 @@ class TestAttestSigstoreReviewFollowups:
             ],
         )
         assert result.exit_code == 0, result.output
-        sidecar = json.loads(
-            (tmp_path / "att.json.sig").read_text(encoding="utf-8")
-        )
+        sidecar = json.loads((tmp_path / "att.json.sig").read_text(encoding="utf-8"))
         assert sidecar["backend"] == "ed25519"
         assert "sigstore_bundle" not in sidecar
 
-    @pytest.mark.parametrize(
-        "backend", ["ed25519", "SIGSTORE", "sigstore ", "", "unsigned"]
-    )
+    @pytest.mark.parametrize("backend", ["ed25519", "SIGSTORE", "sigstore ", "", "unsigned"])
     def test_cert_identity_rejects_every_non_sigstore_backend_with_valid_ed25519(
         self, tmp_path, monkeypatch, backend
     ):
@@ -661,9 +642,7 @@ class TestAttestSigstoreReviewFollowups:
         assert "Sigstore verification unavailable" in out
         assert "soup-cli[sigstore]" in out
 
-    def test_interactive_oidc_refuses_non_sigstore_backend(
-        self, tmp_path, monkeypatch
-    ):
+    def test_interactive_oidc_refuses_non_sigstore_backend(self, tmp_path, monkeypatch):
         from soup_cli.commands.attest import app
 
         monkeypatch.chdir(tmp_path)
@@ -711,9 +690,7 @@ def test_verifier_production_failure_is_unavailable_not_invalid(tmp_path, monkey
     class Verifier:
         @classmethod
         def production(cls):
-            raise RuntimeError(
-                "TUF metadata unavailable\x1b]0;SPOOFED-TITLE\x07\x1b[2J"
-            )
+            raise RuntimeError("TUF metadata unavailable\x1b]0;SPOOFED-TITLE\x07\x1b[2J")
 
     models.Bundle = Bundle
     verify_mod.Verifier = Verifier
@@ -725,9 +702,14 @@ def test_verifier_production_failure_is_unavailable_not_invalid(tmp_path, monkey
     result = CliRunner().invoke(
         attest_cmd.app,
         [
-            "verify", str(statement), "--signature", str(sidecar),
-            "--cert-identity", "trusted@example.com",
-            "--cert-oidc-issuer", "https://issuer.example",
+            "verify",
+            str(statement),
+            "--signature",
+            str(sidecar),
+            "--cert-identity",
+            "trusted@example.com",
+            "--cert-oidc-issuer",
+            "https://issuer.example",
         ],
     )
     assert result.exit_code == 1, result.output
@@ -758,8 +740,6 @@ def test_emit_write_oserror_is_usage_failure(tmp_path, monkeypatch):
 
 
 def test_attest_docs_document_unavailable_exit():
-    docs_path = (
-        Path(__file__).resolve().parents[1] / "docs" / "adapters-and-governance.md"
-    )
+    docs_path = Path(__file__).resolve().parents[1] / "docs" / "adapters-and-governance.md"
     docs = docs_path.read_text(encoding="utf-8")
     assert "exits 1 when Sigstore" in docs

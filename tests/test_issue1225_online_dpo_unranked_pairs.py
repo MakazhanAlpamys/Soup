@@ -149,9 +149,7 @@ def _build(path, monkeypatch, evaluator, *, batch_size=4, n_prompts=4, extra="")
         "  online_dpo_max_new_tokens: 6\n  lr: 1e-4\n  quantization: none\n"
         "  seed: 7\n" + extra + f"output: {(path / 'out').as_posix()}\n"
     )
-    rows = [
-        {"messages": [{"role": "user", "content": text}]} for text in _PROMPTS[:n_prompts]
-    ]
+    rows = [{"messages": [{"role": "user", "content": text}]} for text in _PROMPTS[:n_prompts]]
     wrapper = od.OnlineDPOTrainerWrapper(cfg, device="cpu")
     wrapper.setup({"train": rows})
     return wrapper
@@ -205,9 +203,7 @@ class _Replay:
     def grads(self):
         return torch.cat(
             [
-                p.grad.detach().flatten().clone()
-                if p.grad is not None
-                else torch.zeros(p.numel())
+                p.grad.detach().flatten().clone() if p.grad is not None else torch.zeros(p.numel())
                 for p in self.trainable
             ]
         )
@@ -252,9 +248,7 @@ class TestAnUnrankedStepTrainsNothing:
         ],
         ids=["server-down", "tie", "position-biased", "unparseable"],
     )
-    def test_soup_judge_failure_gives_exactly_zero_gradient(
-        self, replay, judge_kwargs
-    ):
+    def test_soup_judge_failure_gives_exactly_zero_gradient(self, replay, judge_kwargs):
         from soup_cli.eval.judge import make_soup_pairwise_judge
 
         judge = make_soup_pairwise_judge(_soup_judge(**judge_kwargs))
@@ -301,8 +295,8 @@ class TestMixedRanks:
         loss_mixed, grads_mixed = replay.step(_fixed_judge([0, -1, 1, -1]))
         loss_ref, grads_ref = replay.step(_fixed_judge([0, 1]), pairs=[0, 2])
 
-        assert torch.allclose(grads_mixed, grads_ref, atol=_ATOL, rtol=_RTOL), (
-            float((grads_mixed - grads_ref).abs().max())
+        assert torch.allclose(grads_mixed, grads_ref, atol=_ATOL, rtol=_RTOL), float(
+            (grads_mixed - grads_ref).abs().max()
         )
         # the loss is a mean over the KEPT pairs, divided by the accumulation
         # steps exactly as trl divides the mean over all pairs
@@ -324,9 +318,7 @@ class TestMixedRanks:
         assert torch.allclose(grads_mixed, grads_ref, atol=_ATOL, rtol=_RTOL)
         assert torch.allclose(loss_mixed, loss_ref, atol=0, rtol=1e-6)
 
-    def test_chosen_and_rejected_statistics_describe_only_the_ranked_pairs(
-        self, replay
-    ):
+    def test_chosen_and_rejected_statistics_describe_only_the_ranked_pairs(self, replay):
         stats = replay.trainer.stats
         replay.step(_fixed_judge([0, 1]), pairs=[0, 2])
         reference = {key: stats[key][-1] for key in _LABELLED}
@@ -374,7 +366,11 @@ class TestCleanRanksAreUnchanged:
     def _train_clean(path, monkeypatch):
         path.mkdir()
         wrapper = _build(
-            path, monkeypatch, _Ranked(), batch_size=2, n_prompts=8,
+            path,
+            monkeypatch,
+            _Ranked(),
+            batch_size=2,
+            n_prompts=8,
             extra="  gradient_accumulation_steps: 2\n  logging_steps: 1\n",
         )
         trainer = wrapper.trainer
@@ -413,14 +409,10 @@ class TestCleanRanksAreUnchanged:
 
 @needs_pairwise_judge
 class TestGradientAccumulation:
-    def test_an_unranked_micro_batch_adds_nothing_to_the_accumulated_gradient(
-        self, replay
-    ):
+    def test_an_unranked_micro_batch_adds_nothing_to_the_accumulated_gradient(self, replay):
         _, grads_alone = replay.step(_fixed_judge([0, 1, 1, 0]))
         loss_first, _ = replay.step(_fixed_judge([-1] * replay.n))
-        loss_second, grads_accumulated = replay.step(
-            _fixed_judge([0, 1, 1, 0]), zero_grad=False
-        )
+        loss_second, grads_accumulated = replay.step(_fixed_judge([0, 1, 1, 0]), zero_grad=False)
         assert loss_first.item() == 0.0
         assert torch.equal(grads_accumulated, grads_alone)
 
@@ -456,7 +448,11 @@ class TestAJudgeThatRanksNothingIsVisible:
         monkeypatch.setattr(JudgeEvaluator, "_call_llm", refused)
         _stop_after(monkeypatch, 8)
         wrapper = _build(
-            tmp_path, monkeypatch, None, batch_size=4, n_prompts=12,
+            tmp_path,
+            monkeypatch,
+            None,
+            batch_size=4,
+            n_prompts=12,
             extra="  gradient_accumulation_steps: 1\n  logging_steps: 1\n",
         )
         caplog.set_level(logging.WARNING, logger=_RANKING_LOGGER)
@@ -491,7 +487,11 @@ class TestAJudgeThatRanksNothingIsVisible:
 
         assert make_soup_pairwise_judge(AlwaysA()).judge(["p"], [["a", "b"]]) == [-1]
         wrapper = _build(
-            tmp_path, monkeypatch, AlwaysA(), batch_size=2, n_prompts=4,
+            tmp_path,
+            monkeypatch,
+            AlwaysA(),
+            batch_size=2,
+            n_prompts=4,
             extra="  gradient_accumulation_steps: 1\n  logging_steps: 1\n",
         )
         caplog.set_level(logging.WARNING, logger=_RANKING_LOGGER)
@@ -514,11 +514,13 @@ class TestAJudgeThatRanksNothingIsVisible:
         assert sum("could not rank any" in text for text in warnings) == 2, warnings
         assert not (tmp_path / "out" / "adapter_model.safetensors").exists()
 
-    def test_partial_ties_warn_once_and_log_their_rate(
-        self, tmp_path, monkeypatch, caplog, capsys
-    ):
+    def test_partial_ties_warn_once_and_log_their_rate(self, tmp_path, monkeypatch, caplog, capsys):
         wrapper = _build(
-            tmp_path, monkeypatch, _Ranked(), batch_size=4, n_prompts=12,
+            tmp_path,
+            monkeypatch,
+            _Ranked(),
+            batch_size=4,
+            n_prompts=12,
             extra="  gradient_accumulation_steps: 1\n  logging_steps: 1\n",
         )
         wrapper.trainer.judge = _fixed_judge([0, -1, 1, 1])
@@ -596,9 +598,7 @@ def _step_logs(trainer):
 
 
 def _train_loss(trainer):
-    return [entry for entry in trainer.state.log_history if "train_loss" in entry][-1][
-        "train_loss"
-    ]
+    return [entry for entry in trainer.state.log_history if "train_loss" in entry][-1]["train_loss"]
 
 
 @needs_pairwise_judge
@@ -613,7 +613,11 @@ class TestAnUnrankedStretch:
         from soup_cli.utils.replay import summarise
 
         wrapper = _build(
-            tmp_path, monkeypatch, _Ranked(), batch_size=2, n_prompts=12,
+            tmp_path,
+            monkeypatch,
+            _Ranked(),
+            batch_size=2,
+            n_prompts=12,
             extra="  gradient_accumulation_steps: 1\n  logging_steps: 1\n",
         )
         trainer = wrapper.trainer
@@ -621,9 +625,7 @@ class TestAnUnrankedStretch:
         returned = _record_returned_losses(trainer, monkeypatch)
         tracker = ExperimentTracker(db_path=tmp_path / "runs.db")
         try:
-            run_id = tracker.start_run(
-                config_dict={}, device="cpu", device_name="cpu", gpu_info={}
-            )
+            run_id = tracker.start_run(config_dict={}, device="cpu", device_name="cpu", gpu_info={})
             result = wrapper.train(display=MagicMock(), tracker=tracker, run_id=run_id)
             rows = tracker.get_metrics(run_id)
         finally:
@@ -680,7 +682,11 @@ class TestAnUnrankedStretch:
                 self._take()
 
         wrapper = _build(
-            tmp_path, monkeypatch, _Ranked(), batch_size=2, n_prompts=12,
+            tmp_path,
+            monkeypatch,
+            _Ranked(),
+            batch_size=2,
+            n_prompts=12,
             extra="  gradient_accumulation_steps: 1\n  logging_steps: 1\n",
         )
         trainer = wrapper.trainer
@@ -712,7 +718,11 @@ class TestAnUnrankedStretch:
         self, tmp_path, monkeypatch
     ):
         wrapper = _build(
-            tmp_path, monkeypatch, _Ranked(), batch_size=2, n_prompts=8,
+            tmp_path,
+            monkeypatch,
+            _Ranked(),
+            batch_size=2,
+            n_prompts=8,
             extra="  gradient_accumulation_steps: 1\n  logging_steps: 2\n",
         )
         trainer = wrapper.trainer
@@ -855,9 +865,7 @@ class TestContract:
         with pytest.raises(ValueError, match="returned 3 ranks for 4 completion pairs"):
             replay.step(_fixed_judge([0, 1, 0]))
 
-    def test_a_trl_that_bypasses_the_capture_is_refused_before_the_optimizer_step(
-        self, replay
-    ):
+    def test_a_trl_that_bypasses_the_capture_is_refused_before_the_optimizer_step(self, replay):
         """If trl stopped routing the policy forward through ``_forward``, the
         unranked pairs could not be kept out of the gradient: the step must
         fail instead of training them."""
@@ -876,9 +884,7 @@ class TestContract:
         [([0, 1, 1, 0], 0.0), ([0, -1, 1, -1], 0.5), ([-1, -1, -1, -1], 1.0)],
         ids=["clean", "mixed", "none"],
     )
-    def test_every_process_gathers_the_same_way_whatever_the_judge_says(
-        self, replay, ranks, rate
-    ):
+    def test_every_process_gathers_the_same_way_whatever_the_judge_says(self, replay, ranks, rate):
         """A distributed run deadlocks if one process issues a collective the
         others do not. What the judge returned must not change which gathers a
         step performs, or the shape of what it gathers."""
@@ -957,8 +963,14 @@ class TestJudgeLabel:
             ("http://localhost:8000/judge@v2", "http://localhost:8000/judge@v2"),
         ],
         ids=[
-            "ollama", "local-server", "userinfo", "unset", "esc-bel", "newline-del",
-            "unbalanced-bracket", "at-in-path",
+            "ollama",
+            "local-server",
+            "userinfo",
+            "unset",
+            "esc-bel",
+            "newline-del",
+            "unbalanced-bracket",
+            "at-in-path",
         ],
     )
     def test_the_label_names_the_judge_without_its_credentials(self, url, expected):

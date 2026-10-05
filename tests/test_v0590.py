@@ -38,6 +38,7 @@ class TestBomSpec:
             render_bom,
             write_bom,
         )
+
         assert callable(build_cyclonedx_bom)
         assert callable(build_spdx_bom)
         assert callable(render_bom)
@@ -277,16 +278,26 @@ class TestBomSpec:
         result = runner.invoke(
             app,
             [
-                "bom", "emit",
-                "--name", "adapter-v1",
-                "--version", "0.1.0",
-                "--base-model", "meta-llama/Llama-3.1-8B",
-                "--base-sha", "a" * 64,
-                "--config-sha", "b" * 64,
-                "--task", "sft",
-                "--license", "apache-2.0",
-                "--format", "cyclonedx",
-                "--output", str(out),
+                "bom",
+                "emit",
+                "--name",
+                "adapter-v1",
+                "--version",
+                "0.1.0",
+                "--base-model",
+                "meta-llama/Llama-3.1-8B",
+                "--base-sha",
+                "a" * 64,
+                "--config-sha",
+                "b" * 64,
+                "--task",
+                "sft",
+                "--license",
+                "apache-2.0",
+                "--format",
+                "cyclonedx",
+                "--output",
+                str(out),
             ],
         )
         assert result.exit_code == 0, (result.output, repr(result.exception))
@@ -306,6 +317,7 @@ class TestAttestation:
             build_slsa_provenance,
             write_attestation,
         )
+
         assert callable(build_in_toto_statement)
         assert callable(build_slsa_provenance)
         assert callable(write_attestation)
@@ -467,6 +479,7 @@ class TestAnnexXI:
             render_annex_xii_markdown,
             write_annex_doc,
         )
+
         assert dataclasses.is_dataclass(AnnexXIData)
         assert callable(render_annex_xi_markdown)
         assert callable(render_annex_xii_markdown)
@@ -568,6 +581,7 @@ class TestAnnexXI:
             created_at="2026-05-18T12:00:00+00:00",
         )
         from soup_cli.utils.annex_xi import render_annex_xi_markdown
+
         md = render_annex_xi_markdown(d)
         # We slice to top-10
         for i in range(10):
@@ -578,11 +592,18 @@ class TestAnnexXI:
 
         with pytest.raises(ValueError):
             AnnexXIData(
-                model_name="a", base_model="b", task="sft",
-                dataset_summary="", modalities=("text",),
-                train_compute_flops=-1.0, train_energy_kwh=0.0,
-                train_co2_kg=0.0, top_domains=(), soup_version="0.59.0",
-                run_id="r", created_at="2026-05-18T12:00:00+00:00",
+                model_name="a",
+                base_model="b",
+                task="sft",
+                dataset_summary="",
+                modalities=("text",),
+                train_compute_flops=-1.0,
+                train_energy_kwh=0.0,
+                train_co2_kg=0.0,
+                top_domains=(),
+                soup_version="0.59.0",
+                run_id="r",
+                created_at="2026-05-18T12:00:00+00:00",
             )
 
     def test_null_byte_model_name_rejected(self):
@@ -590,11 +611,18 @@ class TestAnnexXI:
 
         with pytest.raises(ValueError):
             AnnexXIData(
-                model_name="bad\x00", base_model="b", task="sft",
-                dataset_summary="", modalities=("text",),
-                train_compute_flops=0.0, train_energy_kwh=0.0,
-                train_co2_kg=0.0, top_domains=(), soup_version="0.59.0",
-                run_id="r", created_at="2026-05-18T12:00:00+00:00",
+                model_name="bad\x00",
+                base_model="b",
+                task="sft",
+                dataset_summary="",
+                modalities=("text",),
+                train_compute_flops=0.0,
+                train_energy_kwh=0.0,
+                train_co2_kg=0.0,
+                top_domains=(),
+                soup_version="0.59.0",
+                run_id="r",
+                created_at="2026-05-18T12:00:00+00:00",
             )
 
     def test_write_annex_doc_atomic(self, tmp_path, monkeypatch):
@@ -602,11 +630,18 @@ class TestAnnexXI:
 
         monkeypatch.chdir(tmp_path)
         d = AnnexXIData(
-            model_name="a", base_model="b", task="sft",
-            dataset_summary="", modalities=("text",),
-            train_compute_flops=0.0, train_energy_kwh=0.0,
-            train_co2_kg=0.0, top_domains=(), soup_version="0.59.0",
-            run_id="r", created_at="2026-05-18T12:00:00+00:00",
+            model_name="a",
+            base_model="b",
+            task="sft",
+            dataset_summary="",
+            modalities=("text",),
+            train_compute_flops=0.0,
+            train_energy_kwh=0.0,
+            train_co2_kg=0.0,
+            top_domains=(),
+            soup_version="0.59.0",
+            run_id="r",
+            created_at="2026-05-18T12:00:00+00:00",
         )
         out = tmp_path / "annex.md"
         write_annex_doc(d, "xi", str(out))
@@ -618,11 +653,18 @@ class TestAnnexXI:
 
         monkeypatch.chdir(tmp_path)
         d = AnnexXIData(
-            model_name="a", base_model="b", task="sft",
-            dataset_summary="", modalities=("text",),
-            train_compute_flops=0.0, train_energy_kwh=0.0,
-            train_co2_kg=0.0, top_domains=(), soup_version="0.59.0",
-            run_id="r", created_at="2026-05-18T12:00:00+00:00",
+            model_name="a",
+            base_model="b",
+            task="sft",
+            dataset_summary="",
+            modalities=("text",),
+            train_compute_flops=0.0,
+            train_energy_kwh=0.0,
+            train_co2_kg=0.0,
+            top_domains=(),
+            soup_version="0.59.0",
+            run_id="r",
+            created_at="2026-05-18T12:00:00+00:00",
         )
         with pytest.raises(ValueError):
             write_annex_doc(d, "xx", str(tmp_path / "x.md"))
@@ -639,6 +681,7 @@ class TestAuditLog:
             redact_event,
             rotate_if_needed,
         )
+
         assert dataclasses.is_dataclass(AuditEvent)
         assert callable(append_audit_event)
         assert callable(redact_event)
@@ -722,9 +765,7 @@ class TestAuditLog:
                 ),
                 str(log_path),
             )
-        lines = [
-            line for line in log_path.read_text().splitlines() if line.strip()
-        ]
+        lines = [line for line in log_path.read_text().splitlines() if line.strip()]
         assert len(lines) == 3
 
     def test_rotate_if_needed_renames_at_cap(self, tmp_path):
@@ -759,8 +800,12 @@ class TestAuditLog:
 
         log_path = tmp_path / "audit.jsonl"
         ev = AuditEvent(
-            timestamp="t", command="train", args=(), exit_code=0,
-            host_id="h", operator_id="o",
+            timestamp="t",
+            command="train",
+            args=(),
+            exit_code=0,
+            host_id="h",
+            operator_id="o",
         )
         append_audit_event(ev, str(log_path))
         mode = stat.S_IMODE(os.stat(str(log_path)).st_mode)
@@ -777,6 +822,7 @@ class TestReproReceipt:
             build_repro_receipt,
             write_repro_receipt,
         )
+
         assert dataclasses.is_dataclass(ReproReceipt)
         assert callable(build_repro_receipt)
         assert callable(write_repro_receipt)
@@ -978,6 +1024,7 @@ class TestEnergy:
             measure_run_energy,
             validate_electricity_map_endpoint,
         )
+
         assert dataclasses.is_dataclass(EnergyMeasurement)
         assert callable(measure_run_energy)
         assert callable(validate_electricity_map_endpoint)
@@ -987,7 +1034,9 @@ class TestEnergy:
         from soup_cli.utils.energy import EnergyMeasurement
 
         m = EnergyMeasurement(
-            energy_kwh=1.0, co2_kg=0.4, pue=1.2,
+            energy_kwh=1.0,
+            co2_kg=0.4,
+            pue=1.2,
             grid_intensity_g_per_kwh=400.0,
             source="codecarbon",
         )
@@ -1005,9 +1054,10 @@ class TestEnergy:
     def test_validate_electricity_map_endpoint_loopback_ok(self):
         from soup_cli.utils.energy import validate_electricity_map_endpoint
 
-        assert validate_electricity_map_endpoint(
-            "http://localhost:8080/co2"
-        ) == "http://localhost:8080/co2"
+        assert (
+            validate_electricity_map_endpoint("http://localhost:8080/co2")
+            == "http://localhost:8080/co2"
+        )
 
     def test_validate_electricity_map_endpoint_https_ok(self):
         from soup_cli.utils.energy import validate_electricity_map_endpoint
@@ -1074,7 +1124,9 @@ class TestBomEnergyAttach:
             created_at="2026-05-18T12:00:00+00:00",
         )
         m = EnergyMeasurement(
-            energy_kwh=12.5, co2_kg=4.0, pue=1.2,
+            energy_kwh=12.5,
+            co2_kg=4.0,
+            pue=1.2,
             grid_intensity_g_per_kwh=400.0,
             source="codecarbon",
         )
@@ -1109,8 +1161,14 @@ class TestSourceWiring:
     def test_no_top_level_heavy_imports(self):
         """v0.59 modules must not import torch/transformers at module top."""
         utils = Path(soup_cli.__file__).parent / "utils"
-        for name in ("bom.py", "attest.py", "annex_xi.py", "audit_log.py",
-                     "repro_receipt.py", "energy.py"):
+        for name in (
+            "bom.py",
+            "attest.py",
+            "annex_xi.py",
+            "audit_log.py",
+            "repro_receipt.py",
+            "energy.py",
+        ):
             text = (utils / name).read_text()
             # Allow lazy imports inside functions; reject top-level only
             top = text.split("def ")[0]
@@ -1196,9 +1254,12 @@ class TestReviewFollowups:
         from soup_cli.utils.audit_log import AuditEvent, redact_event
 
         ev = AuditEvent(
-            timestamp="t", command="serve",
+            timestamp="t",
+            command="serve",
             args=("--token", "Bearer abcdefgh12345"),
-            exit_code=0, host_id="h", operator_id="o",
+            exit_code=0,
+            host_id="h",
+            operator_id="o",
         )
         red = redact_event(ev)
         joined = " ".join(red.args)
@@ -1276,9 +1337,14 @@ class TestReviewFollowups:
         from soup_cli.utils.bom import BomEntry, build_cyclonedx_bom
 
         entry = BomEntry(
-            name="a", version="0.1", base_model="m",
-            base_sha="a" * 64, config_sha="b" * 64, data_sha=None,
-            task="sft", license=None,
+            name="a",
+            version="0.1",
+            base_model="m",
+            base_sha="a" * 64,
+            config_sha="b" * 64,
+            data_sha=None,
+            task="sft",
+            license=None,
             parents=(),
             artifacts=({"kind": "adapter", "sha256": "c" * 64, "size_bytes": "not-int"},),
             created_at="2026-05-18T12:00:00+00:00",
@@ -1290,9 +1356,14 @@ class TestReviewFollowups:
         from soup_cli.utils.bom import BomEntry, build_cyclonedx_bom
 
         entry = BomEntry(
-            name="a", version="0.1", base_model="m",
-            base_sha="a" * 64, config_sha="b" * 64, data_sha=None,
-            task="sft", license=None,
+            name="a",
+            version="0.1",
+            base_model="m",
+            base_sha="a" * 64,
+            config_sha="b" * 64,
+            data_sha=None,
+            task="sft",
+            license=None,
             parents=(),
             artifacts=({"kind": "adapter", "sha256": "c" * 64, "size_bytes": True},),
             created_at="2026-05-18T12:00:00+00:00",
@@ -1332,11 +1403,16 @@ class TestReviewFollowups:
         # A newline injected into model_name would otherwise forge a heading.
         d = AnnexXIData(
             model_name="evil\n## Forged Heading",
-            base_model="b", task="sft",
-            dataset_summary="", modalities=("text",),
-            train_compute_flops=0.0, train_energy_kwh=0.0,
-            train_co2_kg=0.0, top_domains=(),
-            soup_version="0.59.0", run_id="r",
+            base_model="b",
+            task="sft",
+            dataset_summary="",
+            modalities=("text",),
+            train_compute_flops=0.0,
+            train_energy_kwh=0.0,
+            train_co2_kg=0.0,
+            top_domains=(),
+            soup_version="0.59.0",
+            run_id="r",
             created_at="2026-05-18T12:00:00+00:00",
         )
         md = render_annex_xi_markdown(d)
@@ -1357,8 +1433,12 @@ class TestReviewFollowups:
 
         monkeypatch.chdir(tmp_path)
         s = AttestationStatement(
-            stage="train", subject_name="a", subject_sha256="a" * 64,
-            builder_id="b", invocation={}, materials=(),
+            stage="train",
+            subject_name="a",
+            subject_sha256="a" * 64,
+            builder_id="b",
+            invocation={},
+            materials=(),
             created_at="2026-05-18T12:00:00+00:00",
         )
         target = tmp_path / "att.json"
@@ -1372,11 +1452,17 @@ class TestReviewFollowups:
 
         monkeypatch.chdir(tmp_path)
         d = AnnexXIData(
-            model_name="a", base_model="b", task="sft",
-            dataset_summary="", modalities=("text",),
-            train_compute_flops=0.0, train_energy_kwh=0.0,
-            train_co2_kg=0.0, top_domains=(),
-            soup_version="0.59.0", run_id="r",
+            model_name="a",
+            base_model="b",
+            task="sft",
+            dataset_summary="",
+            modalities=("text",),
+            train_compute_flops=0.0,
+            train_energy_kwh=0.0,
+            train_co2_kg=0.0,
+            top_domains=(),
+            soup_version="0.59.0",
+            run_id="r",
             created_at="2026-05-18T12:00:00+00:00",
         )
         target = tmp_path / "annex.md"
@@ -1400,8 +1486,12 @@ class TestReviewFollowups:
         from soup_cli.utils.audit_log import AuditEvent, append_audit_event
 
         ev = AuditEvent(
-            timestamp="t", command="train", args=(),
-            exit_code=0, host_id="h", operator_id="o",
+            timestamp="t",
+            command="train",
+            args=(),
+            exit_code=0,
+            host_id="h",
+            operator_id="o",
         )
         with pytest.raises(ValueError):
             append_audit_event(ev, "/tmp/\x00/x")
@@ -1410,8 +1500,12 @@ class TestReviewFollowups:
         from soup_cli.utils.audit_log import AuditEvent, append_audit_event
 
         ev = AuditEvent(
-            timestamp="t", command="train", args=(),
-            exit_code=0, host_id="h", operator_id="o",
+            timestamp="t",
+            command="train",
+            args=(),
+            exit_code=0,
+            host_id="h",
+            operator_id="o",
         )
         with pytest.raises(ValueError):
             append_audit_event(ev, "")
@@ -1473,12 +1567,17 @@ class TestReviewFollowups:
 
         with pytest.raises(ValueError):
             AnnexXIData(
-                model_name="a", base_model="b", task="sft",
-                dataset_summary="", modalities=("text",),
+                model_name="a",
+                base_model="b",
+                task="sft",
+                dataset_summary="",
+                modalities=("text",),
                 train_compute_flops=True,  # type: ignore[arg-type]
                 train_energy_kwh=0.0,
-                train_co2_kg=0.0, top_domains=(),
-                soup_version="0.59.0", run_id="r",
+                train_co2_kg=0.0,
+                top_domains=(),
+                soup_version="0.59.0",
+                run_id="r",
                 created_at="2026-05-18T12:00:00+00:00",
             )
 
@@ -1487,12 +1586,17 @@ class TestReviewFollowups:
 
         with pytest.raises(ValueError):
             AnnexXIData(
-                model_name="a", base_model="b", task="sft",
-                dataset_summary="", modalities=("text",),
+                model_name="a",
+                base_model="b",
+                task="sft",
+                dataset_summary="",
+                modalities=("text",),
                 train_compute_flops=0.0,
                 train_energy_kwh=True,  # type: ignore[arg-type]
-                train_co2_kg=0.0, top_domains=(),
-                soup_version="0.59.0", run_id="r",
+                train_co2_kg=0.0,
+                top_domains=(),
+                soup_version="0.59.0",
+                run_id="r",
                 created_at="2026-05-18T12:00:00+00:00",
             )
 
@@ -1501,9 +1605,12 @@ class TestReviewFollowups:
 
         with pytest.raises(ValueError):
             AuditEvent(
-                timestamp="t", command="train", args=(),
+                timestamp="t",
+                command="train",
+                args=(),
                 exit_code=True,  # type: ignore[arg-type]
-                host_id="h", operator_id="o",
+                host_id="h",
+                operator_id="o",
             )
 
     def test_repro_seeds_bool_value_rejected(self):
@@ -1532,11 +1639,17 @@ class TestReviewFollowups:
 
         many = tuple((f"d{i}.com", 0.05) for i in range(15))
         d = AnnexXIData(
-            model_name="a", base_model="b", task="sft",
-            dataset_summary="", modalities=("text",),
-            train_compute_flops=0.0, train_energy_kwh=0.0,
-            train_co2_kg=0.0, top_domains=many,
-            soup_version="0.59.0", run_id="r",
+            model_name="a",
+            base_model="b",
+            task="sft",
+            dataset_summary="",
+            modalities=("text",),
+            train_compute_flops=0.0,
+            train_energy_kwh=0.0,
+            train_co2_kg=0.0,
+            top_domains=many,
+            soup_version="0.59.0",
+            run_id="r",
             created_at="2026-05-18T12:00:00+00:00",
         )
         md = render_annex_xi_markdown(d)
@@ -1576,29 +1689,44 @@ class TestBomEnergyCli:
         """Valid JSON energy file produces successful BOM output."""
         monkeypatch.chdir(tmp_path)
         energy_file = tmp_path / "energy.json"
-        energy_file.write_text(json.dumps({
-            "energy_kwh": 12.5,
-            "co2_kg": 4.0,
-            "pue": 1.2,
-            "grid_intensity_g_per_kwh": 400.0,
-            "source": "codecarbon",
-        }))
+        energy_file.write_text(
+            json.dumps(
+                {
+                    "energy_kwh": 12.5,
+                    "co2_kg": 4.0,
+                    "pue": 1.2,
+                    "grid_intensity_g_per_kwh": 400.0,
+                    "source": "codecarbon",
+                }
+            )
+        )
         out = tmp_path / "bom.json"
         runner = CliRunner()
         result = runner.invoke(
             app,
             [
-                "bom", "emit",
-                "--name", "adapter-v1",
-                "--version", "0.1.0",
-                "--base-model", "meta-llama/Llama-3.1-8B",
-                "--base-sha", "a" * 64,
-                "--config-sha", "b" * 64,
-                "--task", "sft",
-                "--license", "apache-2.0",
-                "--format", "cyclonedx",
-                "--output", str(out),
-                "--energy", str(energy_file),
+                "bom",
+                "emit",
+                "--name",
+                "adapter-v1",
+                "--version",
+                "0.1.0",
+                "--base-model",
+                "meta-llama/Llama-3.1-8B",
+                "--base-sha",
+                "a" * 64,
+                "--config-sha",
+                "b" * 64,
+                "--task",
+                "sft",
+                "--license",
+                "apache-2.0",
+                "--format",
+                "cyclonedx",
+                "--output",
+                str(out),
+                "--energy",
+                str(energy_file),
             ],
         )
         assert result.exit_code == 0, (result.output, repr(result.exception))
@@ -1614,29 +1742,44 @@ class TestBomEnergyCli:
         """--format both writes cdx + spdx, and energy lands in BOTH (#244)."""
         monkeypatch.chdir(tmp_path)
         energy_file = tmp_path / "energy.json"
-        energy_file.write_text(json.dumps({
-            "energy_kwh": 12.5,
-            "co2_kg": 4.0,
-            "pue": 1.2,
-            "grid_intensity_g_per_kwh": 400.0,
-            "source": "codecarbon",
-        }))
+        energy_file.write_text(
+            json.dumps(
+                {
+                    "energy_kwh": 12.5,
+                    "co2_kg": 4.0,
+                    "pue": 1.2,
+                    "grid_intensity_g_per_kwh": 400.0,
+                    "source": "codecarbon",
+                }
+            )
+        )
         prefix = tmp_path / "bom"
         runner = CliRunner()
         result = runner.invoke(
             app,
             [
-                "bom", "emit",
-                "--name", "adapter-v1",
-                "--version", "0.1.0",
-                "--base-model", "meta-llama/Llama-3.1-8B",
-                "--base-sha", "a" * 64,
-                "--config-sha", "b" * 64,
-                "--task", "sft",
-                "--license", "apache-2.0",
-                "--format", "both",
-                "--output", str(prefix),
-                "--energy", str(energy_file),
+                "bom",
+                "emit",
+                "--name",
+                "adapter-v1",
+                "--version",
+                "0.1.0",
+                "--base-model",
+                "meta-llama/Llama-3.1-8B",
+                "--base-sha",
+                "a" * 64,
+                "--config-sha",
+                "b" * 64,
+                "--task",
+                "sft",
+                "--license",
+                "apache-2.0",
+                "--format",
+                "both",
+                "--output",
+                str(prefix),
+                "--energy",
+                str(energy_file),
             ],
         )
         assert result.exit_code == 0, (result.output, repr(result.exception))
@@ -1658,15 +1801,24 @@ class TestBomEnergyCli:
         result = runner.invoke(
             app,
             [
-                "bom", "emit",
-                "--name", "adapter-v1",
-                "--version", "0.1.0",
-                "--base-model", "meta-llama/Llama-3.1-8B",
-                "--base-sha", "a" * 64,
-                "--config-sha", "b" * 64,
-                "--task", "sft",
-                "--format", "cyclonedx",
-                "--energy", str(energy_file),
+                "bom",
+                "emit",
+                "--name",
+                "adapter-v1",
+                "--version",
+                "0.1.0",
+                "--base-model",
+                "meta-llama/Llama-3.1-8B",
+                "--base-sha",
+                "a" * 64,
+                "--config-sha",
+                "b" * 64,
+                "--task",
+                "sft",
+                "--format",
+                "cyclonedx",
+                "--energy",
+                str(energy_file),
             ],
         )
         assert result.exit_code == 2
@@ -1678,15 +1830,24 @@ class TestBomEnergyCli:
         result = runner.invoke(
             app,
             [
-                "bom", "emit",
-                "--name", "adapter-v1",
-                "--version", "0.1.0",
-                "--base-model", "meta-llama/Llama-3.1-8B",
-                "--base-sha", "a" * 64,
-                "--config-sha", "b" * 64,
-                "--task", "sft",
-                "--format", "cyclonedx",
-                "--energy", str(tmp_path / "nonexistent_energy.json"),
+                "bom",
+                "emit",
+                "--name",
+                "adapter-v1",
+                "--version",
+                "0.1.0",
+                "--base-model",
+                "meta-llama/Llama-3.1-8B",
+                "--base-sha",
+                "a" * 64,
+                "--config-sha",
+                "b" * 64,
+                "--task",
+                "sft",
+                "--format",
+                "cyclonedx",
+                "--energy",
+                str(tmp_path / "nonexistent_energy.json"),
             ],
         )
         assert result.exit_code == 2
@@ -1696,28 +1857,41 @@ class TestBomEnergyCli:
         """Symlink passed to --energy is rejected with exit code 2."""
         monkeypatch.chdir(tmp_path)
         real_file = tmp_path / "real_energy.json"
-        real_file.write_text(json.dumps({
-            "energy_kwh": 1.0,
-            "co2_kg": 0.4,
-            "pue": 1.2,
-            "grid_intensity_g_per_kwh": 400.0,
-            "source": "codecarbon",
-        }))
+        real_file.write_text(
+            json.dumps(
+                {
+                    "energy_kwh": 1.0,
+                    "co2_kg": 0.4,
+                    "pue": 1.2,
+                    "grid_intensity_g_per_kwh": 400.0,
+                    "source": "codecarbon",
+                }
+            )
+        )
         symlink = tmp_path / "symlink_energy.json"
         os.symlink(str(real_file), str(symlink))
         runner = CliRunner()
         result = runner.invoke(
             app,
             [
-                "bom", "emit",
-                "--name", "adapter-v1",
-                "--version", "0.1.0",
-                "--base-model", "meta-llama/Llama-3.1-8B",
-                "--base-sha", "a" * 64,
-                "--config-sha", "b" * 64,
-                "--task", "sft",
-                "--format", "cyclonedx",
-                "--energy", str(symlink),
+                "bom",
+                "emit",
+                "--name",
+                "adapter-v1",
+                "--version",
+                "0.1.0",
+                "--base-model",
+                "meta-llama/Llama-3.1-8B",
+                "--base-sha",
+                "a" * 64,
+                "--config-sha",
+                "b" * 64,
+                "--task",
+                "sft",
+                "--format",
+                "cyclonedx",
+                "--energy",
+                str(symlink),
             ],
         )
         assert result.exit_code == 2

@@ -19,9 +19,7 @@ _OVERRIDE = "{% for m in messages %}{{ m['content'] }} <|end|> {% endfor %}"
 
 
 def _config(train_format, chat_template, extra=""):
-    template_line = (
-        f"  chat_template: {json.dumps(chat_template)}\n" if chat_template else ""
-    )
+    template_line = f"  chat_template: {json.dumps(chat_template)}\n" if chat_template else ""
     return (
         f"base: {_BASE}\ntask: sft\ndata:\n  train: d.jsonl\n"
         f"  format: {train_format}\n{template_line}{extra}"
@@ -60,8 +58,7 @@ def _gate(tmp_path, cache_dir, chat_template=None):
 
     path = cache_dir.relative_to(tmp_path).as_posix()
     cfg = load_config_from_string(
-        _config("pre_tokenized", chat_template, f"  tokenized_path: {path}\n")
-        + "output: ./out\n"
+        _config("pre_tokenized", chat_template, f"  tokenized_path: {path}\n") + "output: ./out\n"
     )
     return _maybe_load_pretokenized(cfg.data, cfg.base, MagicMock(), task="sft")
 
@@ -131,9 +128,7 @@ class TestTheGate:
             _gate(tmp_path, cache_dir)
         assert "predates chat_template keying" in str(exc.value)
 
-    def test_a_current_cache_mismatch_does_not_claim_to_predate(
-        self, tmp_path, monkeypatch
-    ):
+    def test_a_current_cache_mismatch_does_not_claim_to_predate(self, tmp_path, monkeypatch):
         cache_dir = _preprocess(tmp_path, monkeypatch, _OVERRIDE)
         with pytest.raises(ValueError, match="cache hash mismatch") as exc:
             _gate(tmp_path, cache_dir)

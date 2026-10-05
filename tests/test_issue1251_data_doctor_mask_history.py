@@ -24,16 +24,27 @@ pytestmark = pytest.mark.unit
 
 _SPECIALS = ["<unk>", "<s>", "</s>", "<|user|>", "<|assistant|>", "<|end|>"]
 _WORDS = [
-    "Hi", "Hello", "there", "What", "is", "two", "plus", "Four", "Three",
-    "and", "one", "more", "Thanks", "Welcome", "you", "are",
+    "Hi",
+    "Hello",
+    "there",
+    "What",
+    "is",
+    "two",
+    "plus",
+    "Four",
+    "Three",
+    "and",
+    "one",
+    "more",
+    "Thanks",
+    "Welcome",
+    "you",
+    "are",
 ]
 
 # Plain template (no {% generation %}) and the generation-marker variant —
 # build_assistant_only_labels reaches its labels by different code on the two.
-_BODY = (
-    "{% for m in messages %}<|{{ m['role'] }}|> "
-    "{{ m['content'] }} <|end|> {% endfor %}"
-)
+_BODY = "{% for m in messages %}<|{{ m['role'] }}|> {{ m['content'] }} <|end|> {% endfor %}"
 _BODY_WITH_GENERATION = (
     "{% for m in messages %}<|{{ m['role'] }}|> "
     "{% if m['role'] == 'assistant' %}{% generation %}{{ m['content'] }}"
@@ -79,8 +90,13 @@ def _trained_positions(tok, messages, *, mask_history):
     from soup_cli.utils.data_doctor import render_mask_preview
 
     previews = render_mask_preview(
-        [_row(messages)], tok, fmt="chatml", n=1, max_length=2048,
-        train_on_responses_only=True, mask_history=mask_history,
+        [_row(messages)],
+        tok,
+        fmt="chatml",
+        n=1,
+        max_length=2048,
+        train_on_responses_only=True,
+        mask_history=mask_history,
     )
     assert len(previews) == 1
     return sum(1 for token in previews[0].tokens if token.trained)
@@ -90,35 +106,27 @@ def _expected_trained_positions(messages, tok, *, mask_history):
     """Ground truth from the SAME builder the trainer uses."""
     from soup_cli.data.loss_mask import build_assistant_only_labels
 
-    labels = build_assistant_only_labels(
-        messages, tok, max_length=2048, mask_history=mask_history
-    )["labels"]
+    labels = build_assistant_only_labels(messages, tok, max_length=2048, mask_history=mask_history)[
+        "labels"
+    ]
     return sum(1 for label in labels if label != IGNORE_INDEX)
 
 
 class TestShowMaskPreviewHonorsMaskHistory:
     @pytest.mark.parametrize("template", _TEMPLATES)
     def test_two_turn_preview_trains_only_the_last_assistant_span(self, template):
-        tok = _tokenizer(
-            _BODY_WITH_GENERATION if template == "generation_markers" else _BODY
-        )
+        tok = _tokenizer(_BODY_WITH_GENERATION if template == "generation_markers" else _BODY)
         with_flag = _trained_positions(tok, _TWO_TURN, mask_history=True)
         without_flag = _trained_positions(tok, _TWO_TURN, mask_history=False)
-        assert with_flag == _expected_trained_positions(
-            _TWO_TURN, tok, mask_history=True
-        )
+        assert with_flag == _expected_trained_positions(_TWO_TURN, tok, mask_history=True)
         assert with_flag < without_flag
 
     @pytest.mark.parametrize("template", _TEMPLATES)
     def test_three_turn_preview_trains_only_the_last_assistant_span(self, template):
-        tok = _tokenizer(
-            _BODY_WITH_GENERATION if template == "generation_markers" else _BODY
-        )
+        tok = _tokenizer(_BODY_WITH_GENERATION if template == "generation_markers" else _BODY)
         with_flag = _trained_positions(tok, _THREE_TURN, mask_history=True)
         without_flag = _trained_positions(tok, _THREE_TURN, mask_history=False)
-        assert with_flag == _expected_trained_positions(
-            _THREE_TURN, tok, mask_history=True
-        )
+        assert with_flag == _expected_trained_positions(_THREE_TURN, tok, mask_history=True)
         assert with_flag < without_flag
 
     def test_default_off_trains_every_assistant_turn(self):
@@ -129,9 +137,7 @@ class TestShowMaskPreviewHonorsMaskHistory:
         equal without_flag."""
         tok = _tokenizer(_BODY)
         without_flag = _trained_positions(tok, _TWO_TURN, mask_history=False)
-        assert without_flag == _expected_trained_positions(
-            _TWO_TURN, tok, mask_history=False
-        )
+        assert without_flag == _expected_trained_positions(_TWO_TURN, tok, mask_history=False)
         assert without_flag > _trained_positions(tok, _TWO_TURN, mask_history=True)
 
     def test_trained_spans_match_build_assistant_only_labels_bit_for_bit(self):
@@ -149,8 +155,12 @@ class TestEngineRefusesMaskHistoryWithoutResponsesOnly:
         tok = _tokenizer(_BODY)
         with pytest.raises(ValueError) as exc_info:
             render_mask_preview(
-                [_row(_TWO_TURN)], tok, fmt="chatml", n=1,
-                train_on_responses_only=False, mask_history=True,
+                [_row(_TWO_TURN)],
+                tok,
+                fmt="chatml",
+                n=1,
+                train_on_responses_only=False,
+                mask_history=True,
             )
         message = str(exc_info.value)
         assert "mask_history" in message
@@ -162,8 +172,11 @@ class TestEngineRefusesMaskHistoryWithoutResponsesOnly:
         tok = _tokenizer(_BODY)
         with pytest.raises(ValueError) as exc_info:
             run_doctor(
-                [_row(_TWO_TURN)], tok, fmt="chatml",
-                train_on_responses_only=False, mask_history=True,
+                [_row(_TWO_TURN)],
+                tok,
+                fmt="chatml",
+                train_on_responses_only=False,
+                mask_history=True,
             )
         message = str(exc_info.value)
         assert "mask_history" in message
@@ -179,14 +192,17 @@ class TestCliRefusesMaskHistoryWithoutResponsesOnly:
 
         monkeypatch.chdir(tmp_path)
         path = tmp_path / "d.jsonl"
-        path.write_text(
-            json.dumps({"messages": _TWO_TURN}) + "\n", encoding="utf-8"
-        )
+        path.write_text(json.dumps({"messages": _TWO_TURN}) + "\n", encoding="utf-8")
         result = CliRunner().invoke(
             app,
             [
-                "data", "doctor", str(path), "--model", "fake/model",
-                "--mask-history", "--no-train-on-responses-only",
+                "data",
+                "doctor",
+                str(path),
+                "--model",
+                "fake/model",
+                "--mask-history",
+                "--no-train-on-responses-only",
             ],
         )
         assert result.exit_code == 3
@@ -213,9 +229,7 @@ def _invoke_doctor(monkeypatch, tmp_path, template, *extra):
     from soup_cli.cli import app
 
     tok = _tokenizer(template)
-    monkeypatch.setattr(
-        engine, "resolve_tokenizer", lambda model, *, trust_remote_code=False: tok
-    )
+    monkeypatch.setattr(engine, "resolve_tokenizer", lambda model, *, trust_remote_code=False: tok)
     trained = []
     real = engine.render_mask_preview
 
@@ -228,9 +242,7 @@ def _invoke_doctor(monkeypatch, tmp_path, template, *extra):
     monkeypatch.chdir(tmp_path)
     path = tmp_path / "d.jsonl"
     path.write_text(json.dumps({"messages": _THREE_TURN}) + "\n", encoding="utf-8")
-    result = CliRunner().invoke(
-        app, ["data", "doctor", str(path), "--model", "fake/model", *extra]
-    )
+    result = CliRunner().invoke(app, ["data", "doctor", str(path), "--model", "fake/model", *extra])
     return result, trained
 
 
@@ -264,17 +276,20 @@ def test_cli_refuses_mask_history_with_the_train_field(tmp_path, monkeypatch):
     # A local tokenizer, so a regression shows up as a wrong exit code
     # rather than as an attempt to download "fake/model".
     tok = _tokenizer(_BODY)
-    monkeypatch.setattr(
-        engine, "resolve_tokenizer", lambda model, *, trust_remote_code=False: tok
-    )
+    monkeypatch.setattr(engine, "resolve_tokenizer", lambda model, *, trust_remote_code=False: tok)
     monkeypatch.chdir(tmp_path)
     path = tmp_path / "d.jsonl"
     path.write_text(json.dumps({"messages": _TWO_TURN}) + "\n", encoding="utf-8")
     result = CliRunner().invoke(
         app,
         [
-            "data", "doctor", str(path), "--model", "fake/model",
-            "--mask-history", "--train-on-messages-with-train-field",
+            "data",
+            "doctor",
+            str(path),
+            "--model",
+            "fake/model",
+            "--mask-history",
+            "--train-on-messages-with-train-field",
         ],
     )
     assert result.exit_code == 3, (result.output, repr(result.exception))

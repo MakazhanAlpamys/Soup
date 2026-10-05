@@ -46,17 +46,20 @@ def validate_multi_node_options(
 ) -> None:
     """Validate node settings without loading a model or probing the network."""
     if (
-        isinstance(num_machines, bool) or not isinstance(num_machines, int)
+        isinstance(num_machines, bool)
+        or not isinstance(num_machines, int)
         or not 1 <= num_machines <= MAX_NUM_MACHINES
     ):
         raise ValueError(f"num_machines must be an integer in [1, {MAX_NUM_MACHINES}]")
     if machine_rank is not None and (
-        isinstance(machine_rank, bool) or not isinstance(machine_rank, int)
+        isinstance(machine_rank, bool)
+        or not isinstance(machine_rank, int)
         or not 0 <= machine_rank < num_machines
     ):
         raise ValueError("machine_rank must be an integer from 0 to num_machines - 1")
     if main_process_port is not None and (
-        isinstance(main_process_port, bool) or not isinstance(main_process_port, int)
+        isinstance(main_process_port, bool)
+        or not isinstance(main_process_port, int)
         or not 1 <= main_process_port <= 65535
     ):
         raise ValueError("main_process_port must be an integer from 1 to 65535")
@@ -113,9 +116,7 @@ def build_accelerate_argv(
         ValueError: On invalid launch settings or an uneven process count per node.
     """
     if isinstance(num_processes, bool) or not isinstance(num_processes, int) or num_processes < 1:
-        raise ValueError(
-            f"num_processes must be a positive integer (got {num_processes!r})."
-        )
+        raise ValueError(f"num_processes must be a positive integer (got {num_processes!r}).")
     if mixed_precision is not None and mixed_precision not in VALID_MIXED_PRECISION:
         raise ValueError(
             f"Invalid mixed_precision: {mixed_precision!r}. "
@@ -134,15 +135,21 @@ def build_accelerate_argv(
         # Select the distributed path even on a node with only one local GPU.
         # Pin rendezvous settings instead of inheriting a cached Accelerate config.
         assert main_process_ip is not None  # validated above
-        argv.extend([
-            "--multi_gpu", "--num_machines", str(num_machines),
-            "--machine_rank", str(0 if machine_rank is None else machine_rank),
-            "--main_process_ip", main_process_ip,
-            "--main_process_port", str(
-                DEFAULT_MAIN_PROCESS_PORT if main_process_port is None else main_process_port
-            ),
-            "--rdzv_backend", "static",
-        ])
+        argv.extend(
+            [
+                "--multi_gpu",
+                "--num_machines",
+                str(num_machines),
+                "--machine_rank",
+                str(0 if machine_rank is None else machine_rank),
+                "--main_process_ip",
+                main_process_ip,
+                "--main_process_port",
+                str(DEFAULT_MAIN_PROCESS_PORT if main_process_port is None else main_process_port),
+                "--rdzv_backend",
+                "static",
+            ]
+        )
     if mixed_precision is not None:
         argv.extend(["--mixed_precision", mixed_precision])
     argv.extend(_as_accelerate_target(script_list))
@@ -174,11 +181,7 @@ def _as_accelerate_target(script_list: list[str]) -> list[str]:
     A real script path is returned untouched, because that form is valid and
     translating it would break it.
     """
-    if (
-        len(script_list) >= 3
-        and script_list[1] == "-m"
-        and _is_python_interpreter(script_list[0])
-    ):
+    if len(script_list) >= 3 and script_list[1] == "-m" and _is_python_interpreter(script_list[0]):
         return ["--module", script_list[2], *script_list[3:]]
     return list(script_list)
 
@@ -314,15 +317,8 @@ def hint_argv_from_reexec(script_args: Sequence[str]) -> list[str]:
     distributed and never re-execs, so repeating the flag would be noise.
     """
     args = list(script_args)
-    if (
-        len(args) < 4
-        or args[1] != "-m"
-        or args[3] != "train"
-    ):
-        raise ValueError(
-            "re-exec argv must look like "
-            "[python, '-m', 'soup_cli.cli', 'train', ...]"
-        )
+    if len(args) < 4 or args[1] != "-m" or args[3] != "train":
+        raise ValueError("re-exec argv must look like [python, '-m', 'soup_cli.cli', 'train', ...]")
     rest = [item for item in args[4:] if item != "--no-reexec"]
     return ["soup", "train", *rest]
 
@@ -338,17 +334,17 @@ def format_advice(
 ) -> str:
     """Human-readable hint telling the user the exact command to re-run."""
     cmd = build_accelerate_argv(
-        num_processes, script_args, num_machines=num_machines,
-        machine_rank=machine_rank, main_process_ip=main_process_ip,
+        num_processes,
+        script_args,
+        num_machines=num_machines,
+        machine_rank=machine_rank,
+        main_process_ip=main_process_ip,
         main_process_port=main_process_port,
     )
     quoted = " ".join(shlex.quote(arg) for arg in cmd)
     footer = (
         "Run this command on each node with that node's rank."
-        if num_machines > 1 else "Run this command to start training."
+        if num_machines > 1
+        else "Run this command to start training."
     )
-    return (
-        f"To train on {num_processes} GPUs, re-run under accelerate:\n\n"
-        f"    {quoted}\n\n"
-        f"{footer}"
-    )
+    return f"To train on {num_processes} GPUs, re-run under accelerate:\n\n    {quoted}\n\n{footer}"

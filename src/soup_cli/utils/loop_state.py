@@ -81,9 +81,7 @@ class LoopState:
         _require_str("eval_suite", self.eval_suite)
         _require_str("baseline", self.baseline)
         if self.status not in LOOP_STATUSES:
-            raise ValueError(
-                f"status must be one of {sorted(LOOP_STATUSES)}, got {self.status!r}"
-            )
+            raise ValueError(f"status must be one of {sorted(LOOP_STATUSES)}, got {self.status!r}")
         for fname in (
             "traces_collected",
             "pairs_distilled",
@@ -132,9 +130,7 @@ class LoopState:
     def with_status(self, status: str) -> "LoopState":
         """Return a copy with ``status`` set + ``updated_at`` refreshed."""
         if status not in LOOP_STATUSES:
-            raise ValueError(
-                f"status must be one of {sorted(LOOP_STATUSES)}, got {status!r}"
-            )
+            raise ValueError(f"status must be one of {sorted(LOOP_STATUSES)}, got {status!r}")
         return replace(self, status=status, updated_at=_utc_now_iso())
 
     def bumped(self, **counters: int) -> "LoopState":
@@ -196,9 +192,7 @@ def _check_path(path: str, *, allow_missing: bool) -> str:
         st = os.lstat(path)
     except FileNotFoundError:
         if not allow_missing:
-            raise FileNotFoundError(
-                f"state file not found: {os.path.basename(path)}"
-            ) from None
+            raise FileNotFoundError(f"state file not found: {os.path.basename(path)}") from None
         return path
     except OSError as exc:
         raise ValueError(f"path unreadable: {type(exc).__name__}") from exc

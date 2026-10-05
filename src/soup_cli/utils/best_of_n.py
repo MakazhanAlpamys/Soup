@@ -85,10 +85,7 @@ def sample_candidates(
                 pad_token_id=pad_id,
             )
         prompt_len = enc["input_ids"].shape[1]
-        return [
-            tokenizer.decode(seq[prompt_len:], skip_special_tokens=True).strip()
-            for seq in out
-        ]
+        return [tokenizer.decode(seq[prompt_len:], skip_special_tokens=True).strip() for seq in out]
     except Exception as exc:
         raise BestOfNRuntimeError("local sampler failed") from exc
 
@@ -110,16 +107,12 @@ def judge_pick_best(
         try:
             score = float(raw_score)
         except (TypeError, ValueError) as exc:
-            raise ValueError(
-                f"candidate {index} judge score must be a finite number"
-            ) from exc
+            raise ValueError(f"candidate {index} judge score must be a finite number") from exc
         if not math.isfinite(score):
             raise ValueError(f"candidate {index} judge score must be finite")
         scores.append(score)
     winner_idx = max(range(len(scores)), key=lambda i: scores[i])
-    return BestOfNPick(
-        winner_idx=winner_idx, winner=candidates[winner_idx], scores=tuple(scores)
-    )
+    return BestOfNPick(winner_idx=winner_idx, winner=candidates[winner_idx], scores=tuple(scores))
 
 
 def build_sft_row(prompt: str, pick: BestOfNPick, *, judge_model: str) -> dict:
@@ -138,9 +131,7 @@ def build_sft_row(prompt: str, pick: BestOfNPick, *, judge_model: str) -> dict:
     }
 
 
-def build_dpo_pair(
-    prompt: str, pick: BestOfNPick, candidates: "list[str]"
-) -> Optional[dict]:
+def build_dpo_pair(prompt: str, pick: BestOfNPick, candidates: "list[str]") -> Optional[dict]:
     """Winner vs lowest-scored candidate as a DPO pair; None if they coincide."""
     loser_idx = min(range(len(pick.scores)), key=lambda i: pick.scores[i])
     if loser_idx == pick.winner_idx:

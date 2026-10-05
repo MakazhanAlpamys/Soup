@@ -14,46 +14,110 @@ console = Console()
 
 # Minimal demo dataset — 20 instruction-following examples
 DEMO_DATA = [
-    {"instruction": "What is machine learning?", "input": "",
-     "output": "Machine learning is a subset of AI where computers learn patterns from data."},
-    {"instruction": "Explain what a neural network is.", "input": "",
-     "output": "A neural network is a computing system inspired by biological neural networks."},
-    {"instruction": "What is Python?", "input": "",
-     "output": "Python is a high-level programming language known for its readability."},
-    {"instruction": "Define overfitting.", "input": "",
-     "output": "Overfitting is when a model learns noise in training data instead of patterns."},
-    {"instruction": "What is a GPU?", "input": "",
-     "output": "A GPU is a specialized processor designed for parallel computation."},
-    {"instruction": "Explain LoRA.", "input": "",
-     "output": "LoRA (Low-Rank Adaptation) is a technique to fine-tune large models efficiently."},
-    {"instruction": "What is tokenization?", "input": "",
-     "output": "Tokenization is the process of splitting text into smaller units called tokens."},
-    {"instruction": "Define transfer learning.", "input": "",
-     "output": "Transfer learning uses a pre-trained model as a starting point for a new task."},
-    {"instruction": "What is an epoch?", "input": "",
-     "output": "An epoch is one complete pass through the entire training dataset."},
-    {"instruction": "Explain gradient descent.", "input": "",
-     "output": "Gradient descent is an optimization algorithm that minimizes loss iteratively."},
-    {"instruction": "What is a loss function?", "input": "",
-     "output": "A loss function measures how far model predictions are from actual values."},
-    {"instruction": "Define batch size.", "input": "",
-     "output": "Batch size is the number of training samples processed before updating weights."},
-    {"instruction": "What is quantization?", "input": "",
-     "output": "Quantization reduces model precision (e.g., 32-bit to 4-bit) to save memory."},
-    {"instruction": "Explain attention mechanism.", "input": "",
-     "output": "Attention lets models focus on relevant parts of input when generating output."},
-    {"instruction": "What is fine-tuning?", "input": "",
-     "output": "Fine-tuning is training a pre-trained model on task-specific data."},
-    {"instruction": "Define learning rate.", "input": "",
-     "output": "Learning rate controls how much model weights change during each training step."},
-    {"instruction": "What is a transformer?", "input": "",
-     "output": "A transformer is a neural network architecture based on self-attention."},
-    {"instruction": "Explain backpropagation.", "input": "",
-     "output": "Backpropagation computes gradients by propagating errors backward through layers."},
-    {"instruction": "What is RLHF?", "input": "",
-     "output": "RLHF trains models using human feedback as a reward signal."},
-    {"instruction": "Define inference.", "input": "",
-     "output": "Inference is using a trained model to make predictions on new data."},
+    {
+        "instruction": "What is machine learning?",
+        "input": "",
+        "output": "Machine learning is a subset of AI where computers learn patterns from data.",
+    },
+    {
+        "instruction": "Explain what a neural network is.",
+        "input": "",
+        "output": "A neural network is a computing system inspired by biological neural networks.",
+    },
+    {
+        "instruction": "What is Python?",
+        "input": "",
+        "output": "Python is a high-level programming language known for its readability.",
+    },
+    {
+        "instruction": "Define overfitting.",
+        "input": "",
+        "output": "Overfitting is when a model learns noise in training data instead of patterns.",
+    },
+    {
+        "instruction": "What is a GPU?",
+        "input": "",
+        "output": "A GPU is a specialized processor designed for parallel computation.",
+    },
+    {
+        "instruction": "Explain LoRA.",
+        "input": "",
+        "output":(
+            "LoRA (Low-Rank Adaptation) is a technique to fine-tune large models efficiently.",
+        )
+    },
+    {
+        "instruction": "What is tokenization?",
+        "input": "",
+        "output": "Tokenization is the process of splitting text into smaller units called tokens.",
+    },
+    {
+        "instruction": "Define transfer learning.",
+        "input": "",
+        "output": "Transfer learning uses a pre-trained model as a starting point for a new task.",
+    },
+    {
+        "instruction": "What is an epoch?",
+        "input": "",
+        "output": "An epoch is one complete pass through the entire training dataset.",
+    },
+    {
+        "instruction": "Explain gradient descent.",
+        "input": "",
+        "output": "Gradient descent is an optimization algorithm that minimizes loss iteratively.",
+    },
+    {
+        "instruction": "What is a loss function?",
+        "input": "",
+        "output": "A loss function measures how far model predictions are from actual values.",
+    },
+    {
+        "instruction": "Define batch size.",
+        "input": "",
+        "output": "Batch size is the number of training samples processed before updating weights.",
+    },
+    {
+        "instruction": "What is quantization?",
+        "input": "",
+        "output": "Quantization reduces model precision (e.g., 32-bit to 4-bit) to save memory.",
+    },
+    {
+        "instruction": "Explain attention mechanism.",
+        "input": "",
+        "output": "Attention lets models focus on relevant parts of input when generating output.",
+    },
+    {
+        "instruction": "What is fine-tuning?",
+        "input": "",
+        "output": "Fine-tuning is training a pre-trained model on task-specific data.",
+    },
+    {
+        "instruction": "Define learning rate.",
+        "input": "",
+        "output": "Learning rate controls how much model weights change during each training step.",
+    },
+    {
+        "instruction": "What is a transformer?",
+        "input": "",
+        "output": "A transformer is a neural network architecture based on self-attention.",
+    },
+    {
+        "instruction": "Explain backpropagation.",
+        "input": "",
+        "output": (
+            "Backpropagation computes gradients by propagating errors backward through layers.",
+        )
+    },
+    {
+        "instruction": "What is RLHF?",
+        "input": "",
+        "output": "RLHF trains models using human feedback as a reward signal.",
+    },
+    {
+        "instruction": "Define inference.",
+        "input": "",
+        "output": "Inference is using a trained model to make predictions on new data.",
+    },
 ]
 
 _DEFAULT_MODEL = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
@@ -127,10 +191,7 @@ def quickstart(
         None,
         "--output",
         "-o",
-        help=(
-            "Output directory for data, config, and run artifacts "
-            "(default: current directory)."
-        ),
+        help=("Output directory for data, config, and run artifacts (default: current directory)."),
     ),
 ):
     """Run a complete demo: create sample data, config, and train."""
@@ -148,8 +209,7 @@ def quickstart(
     else:
         if not is_under_cwd(output):
             console.print(
-                f"[red]--output must stay under the current working directory; "
-                f"got: {output}[/]"
+                f"[red]--output must stay under the current working directory; got: {output}[/]"
             )
             raise typer.Exit(2)
         out_dir = Path(os.path.realpath(output))
@@ -190,18 +250,16 @@ def quickstart(
         rendered = DEMO_CONFIG.replace(_DEFAULT_MODEL, model_id)
         # When --output is set, retarget data + run dirs into that dir.
         if output is not None:
-            rendered = rendered.replace(
-                "./quickstart_data.jsonl", str(data_path)
-            ).replace("./quickstart_output", str(out_dir / "quickstart_output"))
+            rendered = rendered.replace("./quickstart_data.jsonl", str(data_path)).replace(
+                "./quickstart_output", str(out_dir / "quickstart_output")
+            )
         config_path.write_text(rendered, encoding="utf-8")
         console.print(f"[green]Created:[/] {config_path}")
     # Also write a `soup.yaml` symlink-style alias for tools that look for it.
     soup_yaml = out_dir / "soup.yaml"
     if not soup_yaml.exists() and output is not None:
         try:
-            soup_yaml.write_text(
-                config_path.read_text(encoding="utf-8"), encoding="utf-8"
-            )
+            soup_yaml.write_text(config_path.read_text(encoding="utf-8"), encoding="utf-8")
         except OSError:
             pass
 

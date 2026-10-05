@@ -57,9 +57,7 @@ class TestBundledScorerRevisionLock:
 
         def name_only(obj: object) -> bool:
             return (
-                isinstance(obj, dict)
-                and "function" not in obj
-                and isinstance(obj.get("name"), str)
+                isinstance(obj, dict) and "function" not in obj and isinstance(obj.get("name"), str)
             )
 
         monkeypatch.setattr(gate_suites_mod, "_looks_like_a_bare_function", name_only)
@@ -105,13 +103,9 @@ class TestStampBaselineScores:
         monkeypatch.chdir(tmp_path)
         payload = stamp_baseline_scores({"mini_mmlu": 0.42})
         payload["extra_meta"] = "nope"
-        (tmp_path / "baseline.json").write_text(
-            json.dumps(payload), encoding="utf-8"
-        )
+        (tmp_path / "baseline.json").write_text(json.dumps(payload), encoding="utf-8")
         seen: list[str] = []
-        scores = resolve_baseline(
-            "baseline.json", warn=lambda msg: seen.append(msg)
-        )
+        scores = resolve_baseline("baseline.json", warn=lambda msg: seen.append(msg))
         assert scores == {"mini_mmlu": 0.42}
         assert len(seen) == 1
         assert "extra_meta" in seen[0]
@@ -204,9 +198,7 @@ class TestRegistryBaselineStamp:
         store.close()
 
         seen: list[str] = []
-        scores = resolve_baseline(
-            f"registry://{eid}", warn=lambda m: seen.append(m)
-        )
+        scores = resolve_baseline(f"registry://{eid}", warn=lambda m: seen.append(m))
         assert scores == {"mini_mmlu": 0.55}
         assert seen == []
 
@@ -250,9 +242,7 @@ class TestRegistryBaselineStamp:
         store.close()
 
         seen: list[str] = []
-        scores = resolve_baseline(
-            f"registry://{eid}", warn=lambda m: seen.append(m)
-        )
+        scores = resolve_baseline(f"registry://{eid}", warn=lambda m: seen.append(m))
         assert scores == {"mini_mmlu": 0.61}
         assert len(seen) == 1
         assert "unknown provenance" in seen[0]
@@ -271,26 +261,25 @@ class TestWriteBaselineCli:
                 }
             ]
         suite = {"suite": "smoke", "tasks": tasks}
-        (tmp_path / "suite.yaml").write_text(
-            yaml.safe_dump(suite), encoding="utf-8"
-        )
+        (tmp_path / "suite.yaml").write_text(yaml.safe_dump(suite), encoding="utf-8")
         if tasks:
             (tmp_path / "tasks.jsonl").write_text(
                 json.dumps({"prompt": "hi", "expected": ""}) + "\n",
                 encoding="utf-8",
             )
 
-    def test_write_baseline_without_model_fails_and_creates_no_file(
-        self, tmp_path, monkeypatch
-    ):
+    def test_write_baseline_without_model_fails_and_creates_no_file(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         self._write_suite(tmp_path)
         result = runner.invoke(
             app,
             [
-                "eval", "gate",
-                "--suite", "suite.yaml",
-                "--write-baseline", "baseline.json",
+                "eval",
+                "gate",
+                "--suite",
+                "suite.yaml",
+                "--write-baseline",
+                "baseline.json",
             ],
         )
         assert result.exit_code == 3, (result.output, repr(result.exception))
@@ -303,22 +292,24 @@ class TestWriteBaselineCli:
         with pytest.raises(ValueError, match="empty baseline"):
             write_baseline_file("unused.json", {})
 
-    def test_empty_result_set_refused_creates_no_file(
-        self, tmp_path, monkeypatch
-    ):
+    def test_empty_result_set_refused_creates_no_file(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         self._write_suite(tmp_path, tasks=[])  # no scored tasks
         monkeypatch.setattr(
             "soup_cli.eval.quant_check.make_model_generator",
-            lambda _model: (lambda _prompt: ""),
+            lambda _model: lambda _prompt: "",
         )
         result = runner.invoke(
             app,
             [
-                "eval", "gate",
-                "--suite", "suite.yaml",
-                "--model", "fake-model",
-                "--write-baseline", "baseline.json",
+                "eval",
+                "gate",
+                "--suite",
+                "suite.yaml",
+                "--model",
+                "fake-model",
+                "--write-baseline",
+                "baseline.json",
             ],
         )
         assert result.exit_code == 1, (result.output, repr(result.exception))
@@ -326,10 +317,8 @@ class TestWriteBaselineCli:
         assert "empty baseline" in result.output
         assert not (tmp_path / "baseline.json").exists()
 
-    def test_preexisting_empty_baseline_resolves_silently(
-        self, tmp_path, monkeypatch
-    ):
-        """Backward-compatible read: empty scores file stays silent. """
+    def test_preexisting_empty_baseline_resolves_silently(self, tmp_path, monkeypatch):
+        """Backward-compatible read: empty scores file stays silent."""
         from soup_cli.eval.gate import resolve_baseline
 
         monkeypatch.chdir(tmp_path)
@@ -338,9 +327,7 @@ class TestWriteBaselineCli:
             encoding="utf-8",
         )
         seen: list[str] = []
-        scores = resolve_baseline(
-            "empty.json", warn=lambda msg: seen.append(msg)
-        )
+        scores = resolve_baseline("empty.json", warn=lambda msg: seen.append(msg))
         assert scores == {}
         assert seen == []
 
@@ -349,16 +336,20 @@ class TestWriteBaselineCli:
         self._write_suite(tmp_path)
         monkeypatch.setattr(
             "soup_cli.eval.quant_check.make_model_generator",
-            lambda _model: (lambda _prompt: ""),
+            lambda _model: lambda _prompt: "",
         )
 
         result = runner.invoke(
             app,
             [
-                "eval", "gate",
-                "--suite", "suite.yaml",
-                "--model", "fake-model",
-                "--write-baseline", "baseline.json",
+                "eval",
+                "gate",
+                "--suite",
+                "suite.yaml",
+                "--model",
+                "fake-model",
+                "--write-baseline",
+                "baseline.json",
             ],
         )
         assert result.exit_code in (0, 1), (result.output, repr(result.exception))
@@ -372,9 +363,7 @@ class TestWriteBaselineCli:
         from soup_cli.eval.gate import resolve_baseline
 
         seen: list[str] = []
-        scores = resolve_baseline(
-            "baseline.json", warn=lambda msg: seen.append(msg)
-        )
+        scores = resolve_baseline("baseline.json", warn=lambda msg: seen.append(msg))
         assert scores == payload["scores"]
         assert seen == []
 
@@ -394,9 +383,7 @@ class TestCliWarnPlumbing:
         assert "warn=" in src
         assert "console.print" in src
 
-    def test_eval_gate_cli_shows_unknown_provenance_warning(
-        self, tmp_path, monkeypatch
-    ):
+    def test_eval_gate_cli_shows_unknown_provenance_warning(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         suite = {
             "suite": "smoke",
@@ -410,9 +397,7 @@ class TestCliWarnPlumbing:
                 }
             ],
         }
-        (tmp_path / "suite.yaml").write_text(
-            yaml.safe_dump(suite), encoding="utf-8"
-        )
+        (tmp_path / "suite.yaml").write_text(yaml.safe_dump(suite), encoding="utf-8")
         (tmp_path / "tasks.jsonl").write_text(
             json.dumps({"prompt": "hi", "expected": ""}) + "\n",
             encoding="utf-8",
@@ -423,18 +408,19 @@ class TestCliWarnPlumbing:
         result = runner.invoke(
             app,
             [
-                "eval", "gate",
-                "--suite", "suite.yaml",
-                "--baseline", "old_baseline.json",
+                "eval",
+                "gate",
+                "--suite",
+                "suite.yaml",
+                "--baseline",
+                "old_baseline.json",
             ],
         )
         assert result.exit_code in (0, 1), (result.output, repr(result.exception))
         assert "Warning" in result.output
         assert "unknown provenance" in result.output
 
-    def test_ship_cli_shows_unknown_provenance_warning(
-        self, tmp_path, monkeypatch
-    ):
+    def test_ship_cli_shows_unknown_provenance_warning(self, tmp_path, monkeypatch):
         from pathlib import Path
 
         from soup_cli.commands import ship as ship_cmd
@@ -472,17 +458,20 @@ class TestCliWarnPlumbing:
                 ),
                 encoding="utf-8",
             )
-            Path("baseline.json").write_text(
-                json.dumps({"mini_mmlu": 0.2}), encoding="utf-8"
-            )
+            Path("baseline.json").write_text(json.dumps({"mini_mmlu": 0.2}), encoding="utf-8")
             result = runner.invoke(
                 ship_cmd.app,
                 [
-                    "--base", "fake-base",
-                    "--adapter", "fake-adapter",
-                    "--task-eval", "tasks.jsonl",
-                    "--general-suite", "mini_mmlu",
-                    "--baseline", "baseline.json",
+                    "--base",
+                    "fake-base",
+                    "--adapter",
+                    "fake-adapter",
+                    "--task-eval",
+                    "tasks.jsonl",
+                    "--general-suite",
+                    "mini_mmlu",
+                    "--baseline",
+                    "baseline.json",
                 ],
             )
             assert "Warning" in result.output, result.output

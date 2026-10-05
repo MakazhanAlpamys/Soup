@@ -741,22 +741,58 @@ EXPLICIT_ANSWERS = [
 ]
 
 NO_EXPLICIT_ANSWER = [
-    "Just plain text", "Six times seven is 42.", "", "#### ", r"\boxed{}",
-    r"\boxed{\frac{1}{2}", "the answer isn't 41; it's 42", "What is the answer?",
+    "Just plain text",
+    "Six times seven is 42.",
+    "",
+    "#### ",
+    r"\boxed{}",
+    r"\boxed{\frac{1}{2}",
+    "the answer isn't 41; it's 42",
+    "What is the answer?",
     "The answers: 41 and 42",
 ]
 
 NUMBERS = [
-    ("42", "42"), ("42.0", "42"), ("-42", "-42"), ("+42", "42"), (MINUS + "42", "-42"),
-    ("1,000", "1000"), ("1,000,000", "1000000"), ("1,000.5", "1000.5"), (".5", "0.5"),
-    ("-.5", "-0.5"), ("1e5", "100000"), ("1E-3", "0.001"), ("042", "42"), ("42.", "42"),
-    ("$42", "42"), (r"\$42", "42"), ("  42  ", "42"), ("1{,}000", "1000"),
-    (r"1\;000", "1000"), (r"\(42\)", "42"), (r"\[-3.5\]", "-3.5"),
+    ("42", "42"),
+    ("42.0", "42"),
+    ("-42", "-42"),
+    ("+42", "42"),
+    (MINUS + "42", "-42"),
+    ("1,000", "1000"),
+    ("1,000,000", "1000000"),
+    ("1,000.5", "1000.5"),
+    (".5", "0.5"),
+    ("-.5", "-0.5"),
+    ("1e5", "100000"),
+    ("1E-3", "0.001"),
+    ("042", "42"),
+    ("42.", "42"),
+    ("$42", "42"),
+    (r"\$42", "42"),
+    ("  42  ", "42"),
+    ("1{,}000", "1000"),
+    (r"1\;000", "1000"),
+    (r"\(42\)", "42"),
+    (r"\[-3.5\]", "-3.5"),
 ]
 
 NOT_NUMBERS = [
-    "1,00", "12,34", "42 apples", "4 2", "42x", "x", "", "1/2", r"\frac{1}{2}", "nan",
-    "inf", "1_000", "--42", "4.2.1", "0x1A", "42 or 43",
+    "1,00",
+    "12,34",
+    "42 apples",
+    "4 2",
+    "42x",
+    "x",
+    "",
+    "1/2",
+    r"\frac{1}{2}",
+    "nan",
+    "inf",
+    "1_000",
+    "--42",
+    "4.2.1",
+    "0x1A",
+    "42 or 43",
 ]
 
 
@@ -912,9 +948,20 @@ class TestAdversarialInputsStayLinear:
             "#### Final Answer\n" * 20_000,
             "The answer is 42," + " " * 20_000 + "x",  # see test_issue1226_clause_scanner_*
         ],
-        ids=["open-boxes", "open-boxes-around-a-close", "phrases", "markers", "commas",
-             "whitespace", "braces", "phrase-whitespace", "bold-labels", "open-parens",
-             "answer-headings", "clause-whitespace"],
+        ids=[
+            "open-boxes",
+            "open-boxes-around-a-close",
+            "phrases",
+            "markers",
+            "commas",
+            "whitespace",
+            "braces",
+            "phrase-whitespace",
+            "bold-labels",
+            "open-parens",
+            "answer-headings",
+            "clause-whitespace",
+        ],
     )
     def test_parsing_is_fast_on_adversarial_output(self, text):
         start = time.perf_counter()

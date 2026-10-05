@@ -88,7 +88,10 @@ def seeded_run(tmp_path: Path, monkeypatch):
 
     tracker = ExperimentTracker(db_path=db_path)
     run_id = tracker.start_run(
-        config_dict={}, device="cpu", device_name="CPU", gpu_info={},
+        config_dict={},
+        device="cpu",
+        device_name="CPU",
+        gpu_info={},
     )
     tracker.finish_run(
         run_id=run_id,

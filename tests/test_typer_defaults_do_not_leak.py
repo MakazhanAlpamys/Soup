@@ -16,6 +16,7 @@ naming an internal typer object. This walks the package and fails on any new
 one. Positional arguments are matched to parameters by declaration order, so a
 leak passed positionally is caught and the report names only what is unfilled.
 """
+
 from __future__ import annotations
 
 import ast
@@ -70,7 +71,7 @@ def _command(node: ast.FunctionDef | ast.AsyncFunctionDef) -> _Command:
     positional = args.posonlyargs + args.args
     typer_params = {
         arg.arg
-        for arg, default in zip(positional[len(positional) - len(args.defaults):], args.defaults)
+        for arg, default in zip(positional[len(positional) - len(args.defaults) :], args.defaults)
         if _is_typer_default(default)
     }
     typer_params |= {
@@ -171,8 +172,7 @@ def _leaking_calls(sources, commands) -> list[str]:
             missing = _unfilled(node, commands[target])
             if missing:
                 findings.append(
-                    f"{source.label}:{node.lineno} "
-                    f"calls {node.func.id}() without {sorted(missing)}"
+                    f"{source.label}:{node.lineno} calls {node.func.id}() without {sorted(missing)}"
                 )
     return findings
 
@@ -244,9 +244,7 @@ def test_positional_arguments_fill_parameters_by_position():
 def test_leading_plain_parameters_do_not_count_as_filled_typer_ones():
     # Two positional arguments are as many as gadget's typer parameters and
     # more, but they fill ctx and target, not force.
-    assert _scan_synthetic("gadget(ctx, 't')") == [
-        "pkg/use.py:2 calls gadget() without ['force']"
-    ]
+    assert _scan_synthetic("gadget(ctx, 't')") == ["pkg/use.py:2 calls gadget() without ['force']"]
     assert _scan_synthetic("gadget(ctx, 't', True)") == []
 
 
@@ -299,8 +297,7 @@ def test_a_partial_positional_call_names_only_the_unfilled_parameters():
         "caller.py",
         "caller",
         ast.parse(
-            "from soup_cli.commands.eval import custom\n"
-            "custom(tasks_file, str(output_dir))\n"
+            "from soup_cli.commands.eval import custom\ncustom(tasks_file, str(output_dir))\n"
         ),
     )
 

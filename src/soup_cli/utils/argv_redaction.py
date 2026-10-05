@@ -100,7 +100,7 @@ def resolve_command(root: click.Command, args: Sequence[str]) -> click.Command:
         if sub is None:
             break
         current = sub
-        tokens = tokens[index + 1:]
+        tokens = tokens[index + 1 :]
     return current
 
 
@@ -122,7 +122,7 @@ def _mask_short_bundle(tok: str, short_opts: set[str]) -> tuple[str, bool] | Non
         if index == len(tok) - 1:
             # The secret option ends the bundle: its value is the next token.
             return tok, True
-        return f"{tok[:index + 1]}{REDACTED}", False
+        return f"{tok[: index + 1]}{REDACTED}", False
     return None
 
 

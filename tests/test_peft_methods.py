@@ -6,6 +6,7 @@ import pytest
 # LoraConfig schema fields
 # ---------------------------------------------------------------------------
 
+
 class TestLoraConfigFields:
     def test_use_vera_default_false(self):
         from soup_cli.config.schema import LoraConfig
@@ -36,6 +37,7 @@ class TestLoraConfigFields:
 # Mutual exclusion
 # ---------------------------------------------------------------------------
 
+
 class TestPeftMutualExclusion:
     def test_vera_and_olora_rejected(self):
         from pydantic import ValidationError
@@ -65,6 +67,7 @@ class TestPeftMutualExclusion:
 # ---------------------------------------------------------------------------
 # Peft builder helper
 # ---------------------------------------------------------------------------
+
 
 class TestPeftBuilder:
     def test_standard_lora_returns_lora_config(self):
@@ -158,6 +161,7 @@ class TestPeftBuilder:
 # Sweep integration
 # ---------------------------------------------------------------------------
 
+
 class TestPeftSweep:
     def test_sweep_accepts_use_vera(self, tmp_path, monkeypatch):
         from soup_cli.commands.sweep import _parse_sweep_params
@@ -175,6 +179,7 @@ class TestPeftSweep:
 # ---------------------------------------------------------------------------
 # End-to-end config loads
 # ---------------------------------------------------------------------------
+
 
 class TestPeftYamlConfig:
     def test_yaml_with_vera(self):

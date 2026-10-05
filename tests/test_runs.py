@@ -136,9 +136,7 @@ def test_runs_show_strips_control_bytes_from_the_error_message(tracker, monkeypa
     # Pin tty detection so this asserts that for_terminal sanitised the
     # error_message, not that the ambient shell happens not to force colour
     # on the surrounding panel markup.
-    monkeypatch.setattr(
-        runs_command, "console", Console(force_terminal=False)
-    )
+    monkeypatch.setattr(runs_command, "console", Console(force_terminal=False))
 
     run_id = tracker.start_run(
         config_dict={"base": "test-model", "task": "sft"},
@@ -185,12 +183,16 @@ def test_runs_compare_with_data(tracker):
     """soup runs compare should show side-by-side table."""
     id1 = tracker.start_run(
         config_dict={"base": "model-a", "task": "sft", "training": {"epochs": 3, "lr": 2e-5}},
-        device="cpu", device_name="CPU", gpu_info={},
+        device="cpu",
+        device_name="CPU",
+        gpu_info={},
         experiment_name="exp-a",
     )
     id2 = tracker.start_run(
         config_dict={"base": "model-b", "task": "dpo", "training": {"epochs": 5, "lr": 1e-5}},
-        device="cuda", device_name="RTX 4090", gpu_info={},
+        device="cuda",
+        device_name="RTX 4090",
+        gpu_info={},
         experiment_name="exp-b",
     )
     result = runner.invoke(app, ["runs", "compare", id1, id2])
@@ -208,7 +210,10 @@ def test_runs_delete_not_found():
 def test_runs_delete_with_data(tracker):
     """soup runs delete should remove the run."""
     run_id = tracker.start_run(
-        config_dict={}, device="cpu", device_name="CPU", gpu_info={},
+        config_dict={},
+        device="cpu",
+        device_name="CPU",
+        gpu_info={},
     )
     result = runner.invoke(app, ["runs", "delete", run_id, "--force"])
     assert result.exit_code == 0
@@ -229,6 +234,7 @@ def test_runs_clean_with_data(tracker, tmp_path):
     out_dir = Path.cwd() / "test_output_clean"
     if out_dir.exists():
         import shutil
+
         shutil.rmtree(out_dir)
     out_dir.mkdir(parents=True)
 
@@ -245,12 +251,15 @@ def test_runs_clean_with_data(tracker, tmp_path):
         (ckpt2 / "adapter_model.bin").write_text("model")
 
         run_id = tracker.start_run(
-            config_dict={}, device="cpu", device_name="CPU", gpu_info={},
+            config_dict={},
+            device="cpu",
+            device_name="CPU",
+            gpu_info={},
         )
         tracker.finish_run(
             run_id=run_id,
             initial_loss=2.0,
-            final_loss=1.0, # let's say step 200 has lower loss
+            final_loss=1.0,  # let's say step 200 has lower loss
             total_steps=200,
             duration_secs=100.0,
             output_dir=str(out_dir),
@@ -273,5 +282,6 @@ def test_runs_clean_with_data(tracker, tmp_path):
         assert "No disposable checkpoint files found" in result.output
     finally:
         import shutil
+
         if out_dir.exists():
             shutil.rmtree(out_dir)

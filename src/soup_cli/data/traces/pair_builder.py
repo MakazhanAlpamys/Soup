@@ -45,8 +45,10 @@ def _pair_thumbs(traces: Iterable[Trace]) -> Iterator[PreferencePair]:
         if not ups or not downs:
             continue
         yield PreferencePair(
-            prompt=prompt, chosen=ups[0].output,
-            rejected=downs[0].output, source="thumbs_up",
+            prompt=prompt,
+            chosen=ups[0].output,
+            rejected=downs[0].output,
+            source="thumbs_up",
         )
 
 
@@ -54,9 +56,9 @@ def _pair_regenerations(traces: Iterable[Trace]) -> Iterator[PreferencePair]:
     grouped = _group_by_prompt(traces)
     for prompt, entries in grouped.items():
         relevant = [
-            t for t in entries
-            if t.signal in ("regenerated", "thumbs_up", "thumbs_down")
-            or t.regen_order is not None
+            t
+            for t in entries
+            if t.signal in ("regenerated", "thumbs_up", "thumbs_down") or t.regen_order is not None
         ]
         if len(relevant) < 2:
             continue
@@ -64,8 +66,10 @@ def _pair_regenerations(traces: Iterable[Trace]) -> Iterator[PreferencePair]:
         if ordered[0].output == ordered[-1].output:
             continue
         yield PreferencePair(
-            prompt=prompt, chosen=ordered[-1].output,
-            rejected=ordered[0].output, source="regenerations",
+            prompt=prompt,
+            chosen=ordered[-1].output,
+            rejected=ordered[0].output,
+            source="regenerations",
         )
 
 
@@ -76,20 +80,21 @@ def _pair_user_edit(traces: Iterable[Trace]) -> Iterator[PreferencePair]:
         if trace.output == trace.edited_output:
             continue
         yield PreferencePair(
-            prompt=trace.prompt, chosen=trace.edited_output,
-            rejected=trace.output, source="user_edit",
+            prompt=trace.prompt,
+            chosen=trace.edited_output,
+            rejected=trace.output,
+            source="user_edit",
         )
 
 
 def build_pairs(
-    traces: Iterable[Trace], *, signal: str,
+    traces: Iterable[Trace],
+    *,
+    signal: str,
 ) -> Iterator[PreferencePair]:
     """Produce preference pairs from ``traces`` according to ``signal``."""
     if signal not in SUPPORTED_SIGNALS:
-        raise ValueError(
-            f"unknown signal '{signal}'. "
-            f"Supported: {', '.join(SUPPORTED_SIGNALS)}"
-        )
+        raise ValueError(f"unknown signal '{signal}'. Supported: {', '.join(SUPPORTED_SIGNALS)}")
     traces = list(traces)  # materialise for multi-pass signals
     if signal == "thumbs_up":
         yield from _pair_thumbs(traces)

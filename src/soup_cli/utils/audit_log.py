@@ -30,8 +30,8 @@ _LOG = logging.getLogger(__name__)
 
 # Mirrors v0.40.3 #33 TraceLogWriter._SECRET_RE policy.
 _SECRET_RE = re.compile(
-    r"hf_[A-Za-z0-9_]{8,}"        # HF tokens
-    r"|sk-[A-Za-z0-9_\-]{16,}"     # OpenAI / Anthropic style
+    r"hf_[A-Za-z0-9_]{8,}"  # HF tokens
+    r"|sk-[A-Za-z0-9_\-]{16,}"  # OpenAI / Anthropic style
     r"|Bearer\s+[A-Za-z0-9_\-]{8,}"  # bearer header style
 )
 _CTRL_RE = re.compile(r"[\x00-\x1f\x7f]")
@@ -188,9 +188,7 @@ def _validate_log_path_override(override: str) -> Optional[str]:
     if not isinstance(override, str) or not override:
         return None
     if _CTRL_RE.search(override):
-        _LOG.warning(
-            "SOUP_AUDIT_LOG_PATH contains null/control chars; falling back to default"
-        )
+        _LOG.warning("SOUP_AUDIT_LOG_PATH contains null/control chars; falling back to default")
         return None
     if len(override) > 4096:
         _LOG.warning("SOUP_AUDIT_LOG_PATH too long; falling back to default")
@@ -210,8 +208,7 @@ def _validate_log_path_override(override: str) -> Optional[str]:
         if common == allowed:
             return override
     _LOG.warning(
-        "SOUP_AUDIT_LOG_PATH %r outside $HOME / $CWD / $TMPDIR; "
-        "falling back to default",
+        "SOUP_AUDIT_LOG_PATH %r outside $HOME / $CWD / $TMPDIR; falling back to default",
         override,
     )
     return None

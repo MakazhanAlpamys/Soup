@@ -166,9 +166,7 @@ def test_callback_on_step_end_writes_history(tmp_path, monkeypatch, policy):
     cb.on_step_end(args=None, state=state_step, control=None)
     history_path = Path(output_dir) / "curriculum_history.jsonl"
     assert history_path.exists()
-    lines = [
-        line for line in history_path.read_text(encoding="utf-8").splitlines() if line.strip()
-    ]
+    lines = [line for line in history_path.read_text(encoding="utf-8").splitlines() if line.strip()]
     assert len(lines) == 1
     row = json.loads(lines[0])
     assert row["step"] == 5
@@ -206,9 +204,7 @@ def test_callback_history_atomic_append(tmp_path, monkeypatch, policy):
         state_step.global_step = cycle
         cb.on_step_end(args=None, state=state_step, control=None)
     history_path = Path(output_dir) / "curriculum_history.jsonl"
-    lines = [
-        line for line in history_path.read_text(encoding="utf-8").splitlines() if line.strip()
-    ]
+    lines = [line for line in history_path.read_text(encoding="utf-8").splitlines() if line.strip()]
     assert len(lines) == 2
     steps = [json.loads(line)["step"] for line in lines]
     assert steps == [5, 10]
@@ -249,8 +245,19 @@ def test_callback_current_weights_is_defensive_copy(tmp_path, monkeypatch, polic
 @pytest.mark.parametrize(
     "task",
     [
-        "sft", "pretrain", "dpo", "grpo", "kto", "orpo", "simpo", "ipo",
-        "bco", "reward_model", "embedding", "ppo", "preference",
+        "sft",
+        "pretrain",
+        "dpo",
+        "grpo",
+        "kto",
+        "orpo",
+        "simpo",
+        "ipo",
+        "bco",
+        "reward_model",
+        "embedding",
+        "ppo",
+        "preference",
     ],
 )
 def test_curriculum_dynamic_accepts_every_transformer_task(task: str):
@@ -334,9 +341,7 @@ def test_attach_curriculum_callback_attaches_when_enabled(tmp_path, monkeypatch)
     assert isinstance(cb_arg, DynamicCurriculumCallback)
 
 
-def test_attach_curriculum_callback_returns_false_on_invalid_path(
-    tmp_path, monkeypatch
-):
+def test_attach_curriculum_callback_returns_false_on_invalid_path(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     trainer = MagicMock()
     tcfg = MagicMock()
@@ -355,8 +360,19 @@ def test_trainer_source_grep_curriculum_wired_everywhere():
     """v0.53.5 #115 — every transformer-backend trainer wires the callback."""
     root = Path(__file__).resolve().parent.parent / "src" / "soup_cli" / "trainer"
     trainers = [
-        "sft", "dpo", "grpo", "kto", "orpo", "simpo", "ipo", "bco",
-        "embedding", "reward_model", "ppo", "pretrain", "distill",
+        "sft",
+        "dpo",
+        "grpo",
+        "kto",
+        "orpo",
+        "simpo",
+        "ipo",
+        "bco",
+        "embedding",
+        "reward_model",
+        "ppo",
+        "pretrain",
+        "distill",
     ]
     for name in trainers:
         src = (root / f"{name}.py").read_text(encoding="utf-8")
@@ -391,7 +407,9 @@ def test_proxy_rejects_non_sequence_weights(tmp_path, monkeypatch):
     base = _make_base_yaml(tmp_path)
     with pytest.raises(TypeError):
         proxy_run_for_weights(
-            "not-a-seq", ["a.jsonl", "b.jsonl"], str(base)  # type: ignore[arg-type]
+            "not-a-seq",
+            ["a.jsonl", "b.jsonl"],
+            str(base),  # type: ignore[arg-type]
         )
 
 
@@ -399,18 +417,14 @@ def test_proxy_rejects_bool_weight(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     base = _make_base_yaml(tmp_path)
     with pytest.raises(ValueError, match="bool"):
-        proxy_run_for_weights(
-            [True, 0.5], ["a.jsonl", "b.jsonl"], str(base)
-        )
+        proxy_run_for_weights([True, 0.5], ["a.jsonl", "b.jsonl"], str(base))
 
 
 def test_proxy_rejects_non_simplex_weights(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     base = _make_base_yaml(tmp_path)
     with pytest.raises(ValueError, match="sum to 1"):
-        proxy_run_for_weights(
-            [0.3, 0.3], ["a.jsonl", "b.jsonl"], str(base)
-        )
+        proxy_run_for_weights([0.3, 0.3], ["a.jsonl", "b.jsonl"], str(base))
 
 
 def test_proxy_rejects_few_datasets(tmp_path, monkeypatch):
@@ -433,13 +447,12 @@ def test_proxy_rejects_outside_cwd(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     # Construct a path outside cwd via tempfile.gettempdir parent.
     import tempfile as _tf
+
     outside = Path(_tf.gettempdir()) / "definitely_outside_soup.yaml"
     outside.write_text("base: x\ntask: sft\n", encoding="utf-8")
     try:
         with pytest.raises(ValueError, match="outside cwd"):
-            proxy_run_for_weights(
-                [0.5, 0.5], ["a.jsonl", "b.jsonl"], str(outside)
-            )
+            proxy_run_for_weights([0.5, 0.5], ["a.jsonl", "b.jsonl"], str(outside))
     finally:
         outside.unlink(missing_ok=True)
 
@@ -448,9 +461,7 @@ def test_proxy_rejects_invalid_timeout(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     base = _make_base_yaml(tmp_path)
     with pytest.raises(ValueError, match="timeout_seconds"):
-        proxy_run_for_weights(
-            [0.5, 0.5], ["a.jsonl", "b.jsonl"], str(base), timeout_seconds=1
-        )
+        proxy_run_for_weights([0.5, 0.5], ["a.jsonl", "b.jsonl"], str(base), timeout_seconds=1)
     with pytest.raises(ValueError, match="bool"):
         proxy_run_for_weights(
             [0.5, 0.5],
@@ -464,9 +475,7 @@ def test_proxy_rejects_null_byte_dataset(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     base = _make_base_yaml(tmp_path)
     with pytest.raises(ValueError, match="null"):
-        proxy_run_for_weights(
-            [0.5, 0.5], ["a.jsonl", "b\x00.jsonl"], str(base)
-        )
+        proxy_run_for_weights([0.5, 0.5], ["a.jsonl", "b\x00.jsonl"], str(base))
 
 
 def test_proxy_subprocess_failure_raises_runtimeerror(tmp_path, monkeypatch):
@@ -475,9 +484,7 @@ def test_proxy_subprocess_failure_raises_runtimeerror(tmp_path, monkeypatch):
     fake_result = MagicMock(returncode=2, stdout=b"", stderr=b"boom")
     with patch.object(subprocess, "run", return_value=fake_result):
         with pytest.raises(RuntimeError, match="failed"):
-            proxy_run_for_weights(
-                [0.5, 0.5], ["a.jsonl", "b.jsonl"], str(base)
-            )
+            proxy_run_for_weights([0.5, 0.5], ["a.jsonl", "b.jsonl"], str(base))
 
 
 def test_proxy_timeout_raises_runtimeerror(tmp_path, monkeypatch):
@@ -489,9 +496,7 @@ def test_proxy_timeout_raises_runtimeerror(tmp_path, monkeypatch):
         side_effect=subprocess.TimeoutExpired(cmd="x", timeout=60),
     ):
         with pytest.raises(RuntimeError, match="timeout"):
-            proxy_run_for_weights(
-                [0.5, 0.5], ["a.jsonl", "b.jsonl"], str(base)
-            )
+            proxy_run_for_weights([0.5, 0.5], ["a.jsonl", "b.jsonl"], str(base))
 
 
 def test_overlay_yaml_loads_through_config_schema(tmp_path):
@@ -511,9 +516,7 @@ def test_overlay_yaml_loads_through_config_schema(tmp_path):
     from soup_cli.utils.mix_proxy import _render_overlay_yaml
 
     base_text = _make_base_yaml(tmp_path).read_text(encoding="utf-8")
-    overlay = _render_overlay_yaml(
-        base_text, ("a.jsonl", "b.jsonl"), (0.3, 0.7)
-    )
+    overlay = _render_overlay_yaml(base_text, ("a.jsonl", "b.jsonl"), (0.3, 0.7))
     cfg = load_config_from_string(overlay)
     assert cfg.data.train == ["a.jsonl", "b.jsonl"]
     assert cfg.data.interleave == {"strategy": "probs", "probs": [0.3, 0.7]}
@@ -531,9 +534,7 @@ def test_overlay_comment_does_not_drift_from_train_value(tmp_path):
     from soup_cli.utils.mix_proxy import _render_overlay_yaml
 
     base_text = _make_base_yaml(tmp_path).read_text(encoding="utf-8")
-    overlay = _render_overlay_yaml(
-        base_text, ("a.jsonl", "b.jsonl"), (0.3, 0.7)
-    )
+    overlay = _render_overlay_yaml(base_text, ("a.jsonl", "b.jsonl"), (0.3, 0.7))
     cfg = load_config_from_string(overlay)
     lines = overlay.split("\n")
     idx = next(i for i, ln in enumerate(lines) if ln.startswith("  train:"))
@@ -590,21 +591,19 @@ def test_proxy_happy_path_reads_tracker(tmp_path, monkeypatch):
     fake_tracker.list_runs.return_value = [
         {"status": "completed", "final_loss": 1.234},
     ]
-    with patch.object(subprocess, "run", return_value=fake_result), \
-            patch(
-                "soup_cli.utils.mix_proxy.ExperimentTracker",
-                return_value=fake_tracker,
-                create=True,
-            ):
+    with (
+        patch.object(subprocess, "run", return_value=fake_result),
+        patch(
+            "soup_cli.utils.mix_proxy.ExperimentTracker",
+            return_value=fake_tracker,
+            create=True,
+        ),
+    ):
         # We need to patch the lazy import inside `_read_final_eval_loss`:
         import soup_cli.experiment.tracker as tracker_mod
 
-        with patch.object(
-            tracker_mod, "ExperimentTracker", return_value=fake_tracker
-        ):
-            loss = proxy_run_for_weights(
-                [0.5, 0.5], ["a.jsonl", "b.jsonl"], str(base)
-            )
+        with patch.object(tracker_mod, "ExperimentTracker", return_value=fake_tracker):
+            loss = proxy_run_for_weights([0.5, 0.5], ["a.jsonl", "b.jsonl"], str(base))
     assert loss == pytest.approx(1.234)
 
 
@@ -653,9 +652,7 @@ def test_elapsed_seconds_excludes_failed_proxy(tmp_path, monkeypatch):
     ds.write_text("{}\n", encoding="utf-8")
     ds2 = tmp_path / "b.jsonl"
     ds2.write_text("{}\n", encoding="utf-8")
-    plan = build_optimization_plan(
-        [str(ds), str(ds2)], budget="5m", num_probes=4, seed=0
-    )
+    plan = build_optimization_plan([str(ds), str(ds2)], budget="5m", num_probes=4, seed=0)
     call_count = {"n": 0}
 
     def proxy(weights):
@@ -687,9 +684,7 @@ def test_report_elapsed_zero_when_all_fail(tmp_path, monkeypatch):
     ds.write_text("{}\n", encoding="utf-8")
     ds2 = tmp_path / "b.jsonl"
     ds2.write_text("{}\n", encoding="utf-8")
-    plan = build_optimization_plan(
-        [str(ds), str(ds2)], budget="5m", num_probes=2, seed=0
-    )
+    plan = build_optimization_plan([str(ds), str(ds2)], budget="5m", num_probes=2, seed=0)
 
     def proxy(_):
         raise RuntimeError("always fails")
@@ -763,8 +758,12 @@ def test_cli_mix_live_requires_base_yaml(tmp_path, monkeypatch):
     result = runner.invoke(
         app,
         [
-            "data", "mix", "--optimize", "--live",
-            "--datasets", f"{ds},{ds2}",
+            "data",
+            "mix",
+            "--optimize",
+            "--live",
+            "--datasets",
+            f"{ds},{ds2}",
         ],
     )
     assert result.exit_code == 2

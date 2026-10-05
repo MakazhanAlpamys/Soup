@@ -74,9 +74,7 @@ class TestQuantizationReachesFromPretrained:
 
     @patch("transformers.AutoTokenizer.from_pretrained")
     @patch("transformers.AutoModelForCausalLM.from_pretrained")
-    def test_4bit_on_a_bare_cuda_device_gets_an_indexed_device_map(
-        self, mock_model, mock_tok
-    ):
+    def test_4bit_on_a_bare_cuda_device_gets_an_indexed_device_map(self, mock_model, mock_tok):
         """A bare "cuda" has no index; accelerate's device_map resolution
         does torch.device(value).index next and raises a TypeError naming
         nothing the user could act on (the landmine layer_stream_runtime's
@@ -302,18 +300,14 @@ class TestResolveGeneratorsThreadsQuantization:
         from soup_cli.commands.ship import _resolve_generators
 
         calls = self._capture(monkeypatch)
-        _resolve_generators(
-            base="b", tuned=None, adapter="a", device="cpu", quantization="4bit"
-        )
+        _resolve_generators(base="b", tuned=None, adapter="a", device="cpu", quantization="4bit")
         assert calls == ["4bit", "4bit"]
 
     def test_tuned_branch_forwards_quantization(self, monkeypatch):
         from soup_cli.commands.ship import _resolve_generators
 
         calls = self._capture(monkeypatch)
-        _resolve_generators(
-            base="b", tuned="t", adapter=None, device="cpu", quantization="8bit"
-        )
+        _resolve_generators(base="b", tuned="t", adapter=None, device="cpu", quantization="8bit")
         assert calls == ["8bit", "8bit"]
 
     def test_unset_quantization_matches_the_pre_367_call_shape(self, monkeypatch):
@@ -329,9 +323,7 @@ class TestResolveGeneratorsThreadsQuantization:
         from soup_cli.commands.ship import _resolve_generators
 
         self._capture(monkeypatch)
-        _resolve_generators(
-            base="b", tuned=None, adapter="a", device="cpu", quantization="4bit"
-        )
+        _resolve_generators(base="b", tuned=None, adapter="a", device="cpu", quantization="4bit")
         assert "4bit" in capsys.readouterr().out
 
     def test_console_reports_the_resolved_dtype_on_cpu(self, monkeypatch, capsys):
@@ -374,9 +366,7 @@ class TestResolveGeneratorsThreadsQuantization:
         assert "bfloat16" in out
         assert calls_dtype == ["bfloat16", "bfloat16"]
 
-    def test_console_reports_the_resolved_dtype_on_indexed_cuda_device(
-        self, monkeypatch, capsys
-    ):
+    def test_console_reports_the_resolved_dtype_on_indexed_cuda_device(self, monkeypatch, capsys):
         """Regression for the OWNER review on #570: an explicit --device
         cuda:0 resolves verbatim (resolve_device returns it unchanged), so a
         bare `== "cuda"` check missed it and fell back to float32 on a real
@@ -409,9 +399,7 @@ class TestResolveGeneratorsThreadsQuantization:
             return lambda prompt: ""
 
         monkeypatch.setattr(_live_eval_mod, "make_generator", _fake)
-        _resolve_generators(
-            base="b", tuned=None, adapter="a", device="cpu", quantization="4bit"
-        )
+        _resolve_generators(base="b", tuned=None, adapter="a", device="cpu", quantization="4bit")
         assert calls_dtype == [None, None]
 
 
@@ -435,9 +423,7 @@ class TestShipDerivesQuantizationFromConfig:
         from soup_cli.commands.ship import _live_eval_quantization_from_config
         from soup_cli.config.schema import SoupConfig
 
-        cfg = SoupConfig(
-            base="m", data={"train": "t.jsonl"}, training={"quantization": "4bit"}
-        )
+        cfg = SoupConfig(base="m", data={"train": "t.jsonl"}, training={"quantization": "4bit"})
         assert _live_eval_quantization_from_config(cfg) == "4bit"
 
     def test_unsupported_quant_menu_format_falls_back_to_none(self):
@@ -447,9 +433,7 @@ class TestShipDerivesQuantizationFromConfig:
         from soup_cli.commands.ship import _live_eval_quantization_from_config
         from soup_cli.config.schema import SoupConfig
 
-        cfg = SoupConfig(
-            base="m", data={"train": "t.jsonl"}, training={"quantization": "gptq"}
-        )
+        cfg = SoupConfig(base="m", data={"train": "t.jsonl"}, training={"quantization": "gptq"})
         assert _live_eval_quantization_from_config(cfg) is None
 
     def test_ship_cli_threads_config_quantization_to_the_live_verdict(self, monkeypatch):
@@ -511,9 +495,7 @@ class TestShipDerivesQuantizationFromConfig:
         assert res.exit_code == 0, (res.output, repr(res.exception))
         assert captured["quantization"] is None
 
-    def test_ship_cli_reaches_resolve_generators_through_the_real_verdict_live(
-        self, monkeypatch
-    ):
+    def test_ship_cli_reaches_resolve_generators_through_the_real_verdict_live(self, monkeypatch):
         """The two tests above mock `_verdict_live` itself, so they never run
         the line inside it that forwards `quantization` on to
         `_resolve_generators`. This one leaves `_verdict_live` real (mocking
@@ -538,15 +520,22 @@ class TestShipDerivesQuantizationFromConfig:
         with runner.isolated_filesystem():
             Path("soup.yaml").write_text(cfg, encoding="utf-8")
             Path("task.jsonl").write_text(
-                json.dumps({"prompt": "say hi", "expected": "hi", "scoring": "contains"})
-                + "\n",
+                json.dumps({"prompt": "say hi", "expected": "hi", "scoring": "contains"}) + "\n",
                 encoding="utf-8",
             )
             res = runner.invoke(
                 ship_cmd.app,
                 [
-                    "--base", "m", "--adapter", "a", "--task-eval", "task.jsonl",
-                    "--device", "cpu", "--config", "soup.yaml",
+                    "--base",
+                    "m",
+                    "--adapter",
+                    "a",
+                    "--task-eval",
+                    "task.jsonl",
+                    "--device",
+                    "cpu",
+                    "--config",
+                    "soup.yaml",
                 ],
             )
             assert res.exit_code in (0, 2), (res.output, repr(res.exception))

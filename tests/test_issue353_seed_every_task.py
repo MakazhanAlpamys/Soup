@@ -228,9 +228,7 @@ def _trainer_args(wrapper, task):
     args = getattr(trainer, "args", None)
     if args is None:
         args = getattr(getattr(trainer, "_trainer", None), "args", None)
-    assert args is not None, (
-        f"{task}: no TrainingArguments found on {type(trainer).__name__}"
-    )
+    assert args is not None, f"{task}: no TrainingArguments found on {type(trainer).__name__}"
     return args
 
 
@@ -243,9 +241,7 @@ class TestSeedReachesEveryTaskConfig:
         _requires_train_extra()
         wrapper = _build(tmp_path, monkeypatch, task, seed=1234)
         args = _trainer_args(wrapper, task)
-        assert args.seed == 1234, (
-            f"{task}: training.seed did not reach the config; got {args.seed}"
-        )
+        assert args.seed == 1234, f"{task}: training.seed did not reach the config; got {args.seed}"
 
     @pytest.mark.parametrize("task", _LIVE_TASKS)
     def test_configured_data_seed_reaches_the_trainer(self, tmp_path, monkeypatch, task):
@@ -322,9 +318,7 @@ class TestEveryConfigClassAcceptsTheSeed:
         from soup_cli.trainer._trl_compat import resolve_trl_symbol
         from soup_cli.trainer.ppo import _import_ppo_classes
 
-        online_dpo_config = resolve_trl_symbol(
-            "OnlineDPOConfig", "trl.experimental.online_dpo"
-        )
+        online_dpo_config = resolve_trl_symbol("OnlineDPOConfig", "trl.experimental.online_dpo")
         _, ppo_config, _ = _import_ppo_classes()
 
         classes = {
@@ -351,11 +345,7 @@ class TestEveryConfigClassAcceptsTheSeed:
         _requires_train_extra()
         from soup_cli.trainer._trl_compat import config_accepts
 
-        refused = [
-            name
-            for name, cls in self._classes().items()
-            if not config_accepts(cls, field)
-        ]
+        refused = [name for name, cls in self._classes().items() if not config_accepts(cls, field)]
         assert not refused, (
             f"{refused} do not accept `{field}` on the installed trl, so the "
             f"wrappers that build them raise TypeError in setup()"
@@ -394,9 +384,7 @@ class TestSeedAppliesBeforeTheAdapterExists:
         raise AssertionError(f"{task}: no lora_A parameter on the built model")
 
     @pytest.mark.parametrize("task", ("sft", "dpo"))
-    def test_the_same_seed_initialises_the_adapter_identically(
-        self, tmp_path, monkeypatch, task
-    ):
+    def test_the_same_seed_initialises_the_adapter_identically(self, tmp_path, monkeypatch, task):
         _requires_train_extra()
         import torch
 
@@ -421,9 +409,7 @@ class TestSeedAppliesBeforeTheAdapterExists:
             f"not reaching adapter creation"
         )
 
-    def test_a_freshly_initialised_classifier_head_follows_the_seed(
-        self, tmp_path, monkeypatch
-    ):
+    def test_a_freshly_initialised_classifier_head_follows_the_seed(self, tmp_path, monkeypatch):
         """`classifier` draws its head inside `from_pretrained`, which runs
         before its TrainingArguments is built at all."""
         _requires_train_extra()
@@ -457,7 +443,7 @@ _NOT_DRIVABLE = {
     "prm": "builds its TrainingArguments in train(), not setup()",
     "unlearn": "builds no Trainer at all; covered by TestUnlearnSeeding",
     "preference": "delegates to an inner wrapper, which _make_inner_cfg's "
-                  "model_copy carries the seed into",
+    "model_copy carries the seed into",
     "reranker": "alias of classifier, same wrapper",
     "cross_encoder": "alias of classifier, same wrapper",
 }
@@ -510,7 +496,7 @@ class TestEveryTaskIsAccountedFor:
 _NOT_SEEDED = {
     "tts": "delegates to sft's setup() via super().setup(dataset)",
     "preference": "delegates to an inner wrapper, which _make_inner_cfg's "
-                  "model_copy carries the seed into",
+    "model_copy carries the seed into",
     "bitnet": "raises before it builds anything; hardware-gated path",
     "mlx_sft": "MLX backend, which seeds nothing on any path yet",
     "mlx_dpo": "MLX backend, which seeds nothing on any path yet",
@@ -795,8 +781,6 @@ class TestSeedingHelper:
             "import soup_cli.utils.seeding as s;"
             "print(s.resolve_training_seed(type('T', (), {'seed': None})()))"
         )
-        out = subprocess.run(
-            [sys.executable, "-c", code], capture_output=True, text=True
-        )
+        out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
         assert out.returncode == 0, out.stderr
         assert out.stdout.strip() == "42"

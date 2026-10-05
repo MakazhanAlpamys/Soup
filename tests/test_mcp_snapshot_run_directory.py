@@ -180,9 +180,7 @@ class TestALinkThatAppearsWhileTheSnapshotIsCreated:
         assert swapped
         assert _files_under(elsewhere) == []
 
-    def test_snapshot_file_created_by_someone_else_is_not_overwritten(
-        self, tmp_path, monkeypatch
-    ):
+    def test_snapshot_file_created_by_someone_else_is_not_overwritten(self, tmp_path, monkeypatch):
         manager = _manager(tmp_path, monkeypatch)
         real_open = execution_module.open_no_follow
         other = "written: elsewhere\n"
@@ -232,9 +230,7 @@ class TestTheRunIdIsOnePathComponent:
     """The snapshot path is built from the run id, so it must not walk anywhere."""
 
     @pytest.mark.parametrize("run_id", ["", ".", "..", "nested/run", "../run", "run\x00x"])
-    def test_run_id_that_is_not_one_path_component_is_refused(
-        self, tmp_path, monkeypatch, run_id
-    ):
+    def test_run_id_that_is_not_one_path_component_is_refused(self, tmp_path, monkeypatch, run_id):
         manager = _manager(tmp_path, monkeypatch)
 
         with pytest.raises(ExecutionError, match="invalid run id"):

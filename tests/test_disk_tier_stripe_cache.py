@@ -23,9 +23,16 @@ FP = "f" * 64
 
 def _index(n_layers=3, stripe_roots=(), layer_roots=()):
     return ShardIndex(
-        n_layers=n_layers, layer_keys=("w",), extra_keys=("e",), dtype="float32",
-        total_params=1, arch="llama", soup_version="test", source_fingerprint=FP,
-        stripe_roots=tuple(stripe_roots), layer_roots=tuple(layer_roots),
+        n_layers=n_layers,
+        layer_keys=("w",),
+        extra_keys=("e",),
+        dtype="float32",
+        total_params=1,
+        arch="llama",
+        soup_version="test",
+        source_fingerprint=FP,
+        stripe_roots=tuple(stripe_roots),
+        layer_roots=tuple(layer_roots),
     )
 
 
@@ -45,7 +52,10 @@ def _cache(tmp_path, *, striped):
     open(extras_shard_path(str(out)), "wb").close()
     for position, directory in enumerate(dirs[1:], start=1):
         _write_stripe_marker(
-            directory, fingerprint=FP, position=position, n_roots=len(dirs),
+            directory,
+            fingerprint=FP,
+            position=position,
+            n_roots=len(dirs),
             primary=primary_cache_identity(str(out)),
         )
     _atomic_write_index(index, str(out))
@@ -58,8 +68,12 @@ def _inspect(out, roots):
 
 def _write_raw_index(out, **extra):
     payload = {
-        "n_layers": 3, "layer_keys": ["w"], "extra_keys": ["e"], "dtype": "float32",
-        "total_params": 1, **extra,
+        "n_layers": 3,
+        "layer_keys": ["w"],
+        "extra_keys": ["e"],
+        "dtype": "float32",
+        "total_params": 1,
+        **extra,
     }
     os.makedirs(out, exist_ok=True)
     with open(os.path.join(out, "index.json"), "w", encoding="utf-8") as handle:
@@ -131,7 +145,10 @@ class TestTheCacheCheck:
         out, roots = _cache(tmp_path, striped=True)
         folder = stripe_dirs(out, roots)[1]
         _write_stripe_marker(
-            folder, fingerprint="0" * 64, position=1, n_roots=2,
+            folder,
+            fingerprint="0" * 64,
+            position=1,
+            n_roots=2,
             primary=primary_cache_identity(out),
         )
         index, reason = _inspect(out, roots)

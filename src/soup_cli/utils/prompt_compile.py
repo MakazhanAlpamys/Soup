@@ -85,9 +85,7 @@ def validate_prompt_optimizer(name: object) -> str:
     if "\x00" in name:
         raise ValueError("optimizer must not contain null bytes")
     if len(name) > _MAX_OPTIMIZER_NAME_LEN:
-        raise ValueError(
-            f"optimizer length {len(name)} > {_MAX_OPTIMIZER_NAME_LEN}"
-        )
+        raise ValueError(f"optimizer length {len(name)} > {_MAX_OPTIMIZER_NAME_LEN}")
     canonical = name.lower()
     if canonical not in SUPPORTED_PROMPT_OPTIMIZERS:
         raise ValueError(
@@ -176,9 +174,7 @@ class CompilePlan:
         # ``optimizer`` should already be lowercase canonical from the
         # factory; re-running the validator catches direct-construction
         # bugs that bypass ``build_compile_plan``.
-        object.__setattr__(
-            self, "optimizer", validate_prompt_optimizer(self.optimizer)
-        )
+        object.__setattr__(self, "optimizer", validate_prompt_optimizer(self.optimizer))
         validate_max_iters(self.max_iters)
         _validate_output_path(self.output_path)
 
@@ -244,9 +240,7 @@ def build_compile_plan(
 # ---------------------------------------------------------------------------
 
 
-_INSTALL_HINT = (
-    "Run: pip install \"soup-cli[compile]\"  (installs dspy-ai / textgrad / gepa)"
-)
+_INSTALL_HINT = 'Run: pip install "soup-cli[compile]"  (installs dspy-ai / textgrad / gepa)'
 
 
 def load_eval_examples(eval_suite_path: str) -> List[dict]:
@@ -319,9 +313,7 @@ def _resolve_program(module: Any) -> Any:
         return module.program
     if hasattr(module, "get_program") and callable(module.get_program):
         return module.get_program()
-    raise ValueError(
-        "program module must expose a `program` attribute or `get_program()`"
-    )
+    raise ValueError("program module must expose a `program` attribute or `get_program()`")
 
 
 def _resolve_metric(module: Any) -> "Optional[Callable]":
@@ -374,9 +366,7 @@ def _dspy_examples(dspy: Any, module: Any, eval_suite_path: str) -> List[Any]:
         if isinstance(input_keys, (list, tuple)) and input_keys:
             example = example.with_inputs(*input_keys)
         else:
-            inferred = [
-                k for k in ex if k not in ("output", "answer", "completion", "label")
-            ]
+            inferred = [k for k in ex if k not in ("output", "answer", "completion", "label")]
             if inferred:
                 example = example.with_inputs(*inferred)
         out.append(example)
@@ -398,9 +388,7 @@ def _run_gepa(plan: CompilePlan) -> CompileResult:
     try:
         import gepa  # noqa: F401
     except ImportError as exc:
-        raise ImportError(
-            f"GEPA is required for the 'gepa' optimizer. {_INSTALL_HINT}"
-        ) from exc
+        raise ImportError(f"GEPA is required for the 'gepa' optimizer. {_INSTALL_HINT}") from exc
     module = _load_program_module(plan.program_path)
     program = _resolve_program(module)
     examples = load_eval_examples(plan.eval_suite_path)
@@ -433,9 +421,7 @@ def _run_textgrad(plan: CompilePlan) -> CompileResult:
     if isinstance(program, tg.Variable):
         variable = program
     else:
-        variable = tg.Variable(
-            str(program), requires_grad=True, role_description="prompt program"
-        )
+        variable = tg.Variable(str(program), requires_grad=True, role_description="prompt program")
     optimizer = tg.TGD(parameters=[variable])
     examples = load_eval_examples(plan.eval_suite_path)
     iterations = min(plan.max_iters, max(1, len(examples)))

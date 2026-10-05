@@ -70,9 +70,7 @@ class TestHashing:
         config = {"base": "m1", "task": "sft"}
         digest = hash_entry(config=config, data_path=str(data_file), base_model="m1")
         assert len(digest) == 64
-        assert digest == hash_entry(
-            config=config, data_path=str(data_file), base_model="m1"
-        )
+        assert digest == hash_entry(config=config, data_path=str(data_file), base_model="m1")
 
     def test_hash_entry_changes_with_base(self, tmp_path):
         from soup_cli.registry.hashing import hash_entry
@@ -153,8 +151,16 @@ class TestValidation:
 
     @pytest.mark.parametrize(
         "bad",
-        ["../evil", "/abs/path", "bad\x00name", "", "a" * 300, "@invalid",
-         "-leading-dash", ".leading-dot"],
+        [
+            "../evil",
+            "/abs/path",
+            "bad\x00name",
+            "",
+            "a" * 300,
+            "@invalid",
+            "-leading-dash",
+            ".leading-dot",
+        ],
     )
     def test_validate_name_rejects_invalid(self, bad):
         from soup_cli.registry.store import validate_name
@@ -179,14 +185,16 @@ class TestRegistryStore:
         conn = sqlite3.connect(tmp_path / "reg.db")
         names = {
             row[0]
-            for row in conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'"
-            ).fetchall()
+            for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
         }
         conn.close()
         store.close()
-        assert {"registry_entries", "registry_artifacts",
-                "registry_lineage", "registry_tags"}.issubset(names)
+        assert {
+            "registry_entries",
+            "registry_artifacts",
+            "registry_lineage",
+            "registry_tags",
+        }.issubset(names)
 
     def test_push_and_get(self, tmp_path):
         store = self._store(tmp_path)
@@ -212,10 +220,12 @@ class TestRegistryStore:
 
     def test_push_duplicate_tag_under_name_replaces(self, tmp_path):
         store = self._store(tmp_path)
-        e1 = store.push(name="model-a", tag="v1", base_model="b", task="sft",
-                        run_id=None, config={"x": 1})
-        e2 = store.push(name="model-a", tag="v1", base_model="b", task="sft",
-                        run_id=None, config={"x": 2})
+        e1 = store.push(
+            name="model-a", tag="v1", base_model="b", task="sft", run_id=None, config={"x": 1}
+        )
+        e2 = store.push(
+            name="model-a", tag="v1", base_model="b", task="sft", run_id=None, config={"x": 2}
+        )
         # both entries exist but v1 points to the most recent by default
         listing = store.list(name="model-a")
         ids = [e["id"] for e in listing]
@@ -229,72 +239,82 @@ class TestRegistryStore:
     def test_list_all(self, tmp_path):
         store = self._store(tmp_path)
         for i in range(3):
-            store.push(name=f"m{i}", tag="v1", base_model="b", task="sft",
-                       run_id=None, config={"i": i})
+            store.push(
+                name=f"m{i}", tag="v1", base_model="b", task="sft", run_id=None, config={"i": i}
+            )
         entries = store.list()
         assert len(entries) >= 3
         store.close()
 
     def test_list_filter_by_tag(self, tmp_path):
         store = self._store(tmp_path)
-        store.push(name="m1", tag="v1", base_model="b", task="sft",
-                   run_id=None, config={})
-        store.push(name="m2", tag="v2", base_model="b", task="sft",
-                   run_id=None, config={})
+        store.push(name="m1", tag="v1", base_model="b", task="sft", run_id=None, config={})
+        store.push(name="m2", tag="v2", base_model="b", task="sft", run_id=None, config={})
         entries = store.list(tag="v1")
         assert all("v1" in e["tags"] for e in entries)
 
     def test_list_filter_by_base(self, tmp_path):
         store = self._store(tmp_path)
-        store.push(name="m1", tag="v1", base_model="llama-3.1-8b", task="sft",
-                   run_id=None, config={})
-        store.push(name="m2", tag="v1", base_model="qwen-3-8b", task="sft",
-                   run_id=None, config={})
+        store.push(
+            name="m1", tag="v1", base_model="llama-3.1-8b", task="sft", run_id=None, config={}
+        )
+        store.push(name="m2", tag="v1", base_model="qwen-3-8b", task="sft", run_id=None, config={})
         entries = store.list(base="llama-3.1-8b")
         assert len(entries) == 1
         assert entries[0]["base_model"] == "llama-3.1-8b"
 
     def test_search(self, tmp_path):
         store = self._store(tmp_path)
-        store.push(name="medical-chat", tag="v1", base_model="llama",
-                   task="sft", run_id=None, config={}, notes="medical QA")
-        store.push(name="legal-chat", tag="v1", base_model="llama",
-                   task="sft", run_id=None, config={}, notes="legal QA")
+        store.push(
+            name="medical-chat",
+            tag="v1",
+            base_model="llama",
+            task="sft",
+            run_id=None,
+            config={},
+            notes="medical QA",
+        )
+        store.push(
+            name="legal-chat",
+            tag="v1",
+            base_model="llama",
+            task="sft",
+            run_id=None,
+            config={},
+            notes="legal QA",
+        )
         hits = store.search("medical")
         assert len(hits) == 1
         assert hits[0]["name"] == "medical-chat"
 
     def test_search_is_case_insensitive(self, tmp_path):
         store = self._store(tmp_path)
-        store.push(name="Medical-Chat", tag="v1", base_model="llama",
-                   task="sft", run_id=None, config={})
+        store.push(
+            name="Medical-Chat", tag="v1", base_model="llama", task="sft", run_id=None, config={}
+        )
         hits = store.search("medical")
         assert len(hits) == 1
 
     def test_delete(self, tmp_path):
         store = self._store(tmp_path)
-        eid = store.push(name="m1", tag="v1", base_model="b", task="sft",
-                         run_id=None, config={})
+        eid = store.push(name="m1", tag="v1", base_model="b", task="sft", run_id=None, config={})
         assert store.delete(eid) is True
         assert store.get(eid) is None
         assert store.delete(eid) is False
 
     def test_resolve_by_name_tag(self, tmp_path):
         store = self._store(tmp_path)
-        eid = store.push(name="m1", tag="v1", base_model="b", task="sft",
-                         run_id=None, config={})
+        eid = store.push(name="m1", tag="v1", base_model="b", task="sft", run_id=None, config={})
         assert store.resolve("m1:v1") == eid
 
     def test_resolve_by_prefix(self, tmp_path):
         store = self._store(tmp_path)
-        eid = store.push(name="m1", tag="v1", base_model="b", task="sft",
-                         run_id=None, config={})
+        eid = store.push(name="m1", tag="v1", base_model="b", task="sft", run_id=None, config={})
         assert store.resolve(eid[:8]) == eid
 
     def test_resolve_registry_uri(self, tmp_path):
         store = self._store(tmp_path)
-        eid = store.push(name="m1", tag="v1", base_model="b", task="sft",
-                         run_id=None, config={})
+        eid = store.push(name="m1", tag="v1", base_model="b", task="sft", run_id=None, config={})
         assert store.resolve(f"registry://{eid}") == eid
 
     def test_resolve_unknown_returns_none(self, tmp_path):
@@ -306,6 +326,7 @@ class TestRegistryStore:
         # Monkeypatch _generate_entry_id to force a prefix collision
         import soup_cli.registry.store as store_mod
         from soup_cli.registry.store import AmbiguousRefError, RegistryStore
+
         original = store_mod._generate_entry_id
 
         counter = {"n": 0}
@@ -317,10 +338,8 @@ class TestRegistryStore:
         store_mod._generate_entry_id = gen_colliding
         try:
             store = RegistryStore(db_path=tmp_path / "reg.db")
-            store.push(name="m1", tag="v1", base_model="b",
-                       task="sft", run_id=None, config={})
-            store.push(name="m2", tag="v1", base_model="b",
-                       task="sft", run_id=None, config={})
+            store.push(name="m1", tag="v1", base_model="b", task="sft", run_id=None, config={})
+            store.push(name="m2", tag="v1", base_model="b", task="sft", run_id=None, config={})
             with pytest.raises(AmbiguousRefError):
                 store.resolve("reg_samepre_abc")
             store.close()
@@ -330,15 +349,13 @@ class TestRegistryStore:
     def test_push_rejects_empty_base_model(self, tmp_path):
         store = self._store(tmp_path)
         with pytest.raises(ValueError, match="base_model"):
-            store.push(name="m1", tag="v1", base_model="",
-                       task="sft", run_id=None, config={})
+            store.push(name="m1", tag="v1", base_model="", task="sft", run_id=None, config={})
         store.close()
 
     def test_push_rejects_empty_task(self, tmp_path):
         store = self._store(tmp_path)
         with pytest.raises(ValueError, match="task"):
-            store.push(name="m1", tag="v1", base_model="b",
-                       task="", run_id=None, config={})
+            store.push(name="m1", tag="v1", base_model="b", task="", run_id=None, config={})
         store.close()
 
     def test_push_with_data_path_records_data_hash(self, tmp_path):
@@ -346,8 +363,13 @@ class TestRegistryStore:
         data_file = tmp_path / "data.jsonl"
         data_file.write_text("hello\n", encoding="utf-8")
         eid = store.push(
-            name="m1", tag="v1", base_model="b", task="sft",
-            run_id=None, config={"x": 1}, data_path=str(data_file),
+            name="m1",
+            tag="v1",
+            base_model="b",
+            task="sft",
+            run_id=None,
+            config={"x": 1},
+            data_path=str(data_file),
         )
         entry = store.get(eid)
         assert entry is not None
@@ -357,10 +379,8 @@ class TestRegistryStore:
 
     def test_list_filter_by_task(self, tmp_path):
         store = self._store(tmp_path)
-        store.push(name="m1", tag="v1", base_model="b", task="sft",
-                   run_id=None, config={})
-        store.push(name="m2", tag="v1", base_model="b", task="dpo",
-                   run_id=None, config={})
+        store.push(name="m1", tag="v1", base_model="b", task="sft", run_id=None, config={})
+        store.push(name="m2", tag="v1", base_model="b", task="dpo", run_id=None, config={})
         entries = store.list(task="sft")
         assert len(entries) == 1
         assert entries[0]["task"] == "sft"
@@ -369,16 +389,14 @@ class TestRegistryStore:
     def test_list_respects_limit(self, tmp_path):
         store = self._store(tmp_path)
         for i in range(5):
-            store.push(name=f"m{i}", tag="v1", base_model="b", task="sft",
-                       run_id=None, config={})
+            store.push(name=f"m{i}", tag="v1", base_model="b", task="sft", run_id=None, config={})
         entries = store.list(limit=2)
         assert len(entries) == 2
         store.close()
 
     def test_search_empty_query_returns_empty(self, tmp_path):
         store = self._store(tmp_path)
-        store.push(name="m1", tag="v1", base_model="b", task="sft",
-                   run_id=None, config={})
+        store.push(name="m1", tag="v1", base_model="b", task="sft", run_id=None, config={})
         assert store.search("") == []
         store.close()
 
@@ -396,16 +414,18 @@ class TestRegistryStore:
 
         db_path = tmp_path / "reg.db"
         store = RegistryStore(db_path=db_path)
-        parent = store.push(name="parent", tag="v1", base_model="b",
-                            task="sft", run_id=None, config={})
-        child = store.push(name="child", tag="v1", base_model="b",
-                           task="sft", run_id=None, config={})
+        parent = store.push(
+            name="parent", tag="v1", base_model="b", task="sft", run_id=None, config={}
+        )
+        child = store.push(
+            name="child", tag="v1", base_model="b", task="sft", run_id=None, config={}
+        )
         artifact_file = tmp_path / "art.bin"
         artifact_file.write_bytes(b"x")
-        store.add_artifact(entry_id=parent, kind="adapter",
-                           path=str(artifact_file), enforce_cwd=False)
-        store.add_lineage(child_id=child, parent_id=parent,
-                          relation="forked_from")
+        store.add_artifact(
+            entry_id=parent, kind="adapter", path=str(artifact_file), enforce_cwd=False
+        )
+        store.add_lineage(child_id=child, parent_id=parent, relation="forked_from")
         store.close()
 
         # Use a fresh connection to check after delete
@@ -423,8 +443,7 @@ class TestRegistryStore:
             (parent,),
         ).fetchone()[0]
         lineage = conn.execute(
-            "SELECT COUNT(*) FROM registry_lineage "
-            "WHERE child_id = ? OR parent_id = ?",
+            "SELECT COUNT(*) FROM registry_lineage WHERE child_id = ? OR parent_id = ?",
             (parent, parent),
         ).fetchone()[0]
         conn.close()
@@ -434,8 +453,7 @@ class TestRegistryStore:
 
     def test_get_eval_results_with_no_run_id_returns_empty(self, tmp_path):
         store = self._store(tmp_path)
-        eid = store.push(name="m1", tag="v1", base_model="b",
-                         task="sft", run_id=None, config={})
+        eid = store.push(name="m1", tag="v1", base_model="b", task="sft", run_id=None, config={})
         assert store.get_eval_results(eid) == []
         store.close()
 
@@ -448,8 +466,7 @@ class TestRegistryStore:
         from soup_cli.registry.store import RegistryStore
 
         with RegistryStore(db_path=tmp_path / "reg.db") as store:
-            store.push(name="m1", tag="v1", base_model="b",
-                       task="sft", run_id=None, config={})
+            store.push(name="m1", tag="v1", base_model="b", task="sft", run_id=None, config={})
         # After __exit__, _conn must be reset to None
         assert store._conn is None
 
@@ -465,12 +482,13 @@ class TestRegistryArtifacts:
 
         monkeypatch.chdir(tmp_path)
         store = RegistryStore(db_path=tmp_path / "reg.db")
-        eid = store.push(name="m1", tag="v1", base_model="b", task="sft",
-                         run_id=None, config={})
+        eid = store.push(name="m1", tag="v1", base_model="b", task="sft", run_id=None, config={})
         artifact_file = tmp_path / "adapter.safetensors"
         artifact_file.write_bytes(b"fake weights")
         store.add_artifact(
-            entry_id=eid, kind="adapter", path=str(artifact_file),
+            entry_id=eid,
+            kind="adapter",
+            path=str(artifact_file),
         )
         arts = store.get_artifacts(eid)
         assert len(arts) == 1
@@ -484,8 +502,7 @@ class TestRegistryArtifacts:
 
         monkeypatch.chdir(tmp_path)
         store = RegistryStore(db_path=tmp_path / "reg.db")
-        eid = store.push(name="m1", tag="v1", base_model="b", task="sft",
-                         run_id=None, config={})
+        eid = store.push(name="m1", tag="v1", base_model="b", task="sft", run_id=None, config={})
         f = tmp_path / "x.bin"
         f.write_bytes(b"x")
         with pytest.raises(ValueError, match="kind"):
@@ -498,8 +515,7 @@ class TestRegistryArtifacts:
 
         monkeypatch.chdir(tmp_path)
         store = RegistryStore(db_path=tmp_path / "reg.db")
-        eid = store.push(name="m1", tag="v1", base_model="b", task="sft",
-                         run_id=None, config={})
+        eid = store.push(name="m1", tag="v1", base_model="b", task="sft", run_id=None, config={})
         f = tmp_path / "calib.json"
         f.write_text('{"calibrated": true}', encoding="utf-8")
         store.add_artifact(entry_id=eid, kind="judge_calibration", path=str(f))
@@ -517,24 +533,22 @@ class TestRegistryArtifacts:
         monkeypatch.chdir(workdir)
 
         store = RegistryStore(db_path=workdir / "reg.db")
-        eid = store.push(name="m1", tag="v1", base_model="b", task="sft",
-                         run_id=None, config={})
+        eid = store.push(name="m1", tag="v1", base_model="b", task="sft", run_id=None, config={})
         outside = tmp_path / "outside.bin"
         outside.write_bytes(b"x")
         with pytest.raises(ValueError, match="outside|cwd"):
-            store.add_artifact(entry_id=eid, kind="adapter",
-                               path=str(outside))
+            store.add_artifact(entry_id=eid, kind="adapter", path=str(outside))
         store.close()
 
     def test_add_artifact_missing_file_raises(self, tmp_path):
         from soup_cli.registry.store import RegistryStore
 
         store = RegistryStore(db_path=tmp_path / "reg.db")
-        eid = store.push(name="m1", tag="v1", base_model="b", task="sft",
-                         run_id=None, config={})
+        eid = store.push(name="m1", tag="v1", base_model="b", task="sft", run_id=None, config={})
         with pytest.raises(FileNotFoundError):
             store.add_artifact(
-                entry_id=eid, kind="adapter",
+                entry_id=eid,
+                kind="adapter",
                 path=str(tmp_path / "missing.bin"),
             )
         store.close()
@@ -550,10 +564,12 @@ class TestLineage:
         from soup_cli.registry.store import RegistryStore
 
         store = RegistryStore(db_path=tmp_path / "reg.db")
-        parent = store.push(name="base", tag="v1", base_model="b", task="sft",
-                            run_id=None, config={})
-        child = store.push(name="fork", tag="v1", base_model="b", task="sft",
-                           run_id=None, config={})
+        parent = store.push(
+            name="base", tag="v1", base_model="b", task="sft", run_id=None, config={}
+        )
+        child = store.push(
+            name="fork", tag="v1", base_model="b", task="sft", run_id=None, config={}
+        )
         store.add_lineage(child_id=child, parent_id=parent, relation="forked_from")
 
         ancestors = store.get_ancestors(child)
@@ -567,10 +583,8 @@ class TestLineage:
         from soup_cli.registry.store import RegistryStore
 
         store = RegistryStore(db_path=tmp_path / "reg.db")
-        a = store.push(name="a", tag="v1", base_model="b", task="sft",
-                       run_id=None, config={})
-        b = store.push(name="b", tag="v1", base_model="b", task="sft",
-                       run_id=None, config={})
+        a = store.push(name="a", tag="v1", base_model="b", task="sft", run_id=None, config={})
+        b = store.push(name="b", tag="v1", base_model="b", task="sft", run_id=None, config={})
         with pytest.raises(ValueError, match="relation"):
             store.add_lineage(child_id=a, parent_id=b, relation="hacked")
         store.close()
@@ -579,8 +593,7 @@ class TestLineage:
         from soup_cli.registry.store import RegistryStore
 
         store = RegistryStore(db_path=tmp_path / "reg.db")
-        a = store.push(name="a", tag="v1", base_model="b", task="sft",
-                       run_id=None, config={})
+        a = store.push(name="a", tag="v1", base_model="b", task="sft", run_id=None, config={})
         with pytest.raises(ValueError, match="self"):
             store.add_lineage(child_id=a, parent_id=a, relation="forked_from")
         store.close()
@@ -590,36 +603,29 @@ class TestLineage:
         from soup_cli.registry.store import RegistryStore
 
         store = RegistryStore(db_path=tmp_path / "reg.db")
-        a = store.push(name="a", tag="v1", base_model="b", task="sft",
-                       run_id=None, config={})
-        b = store.push(name="b", tag="v1", base_model="b", task="sft",
-                       run_id=None, config={})
+        a = store.push(name="a", tag="v1", base_model="b", task="sft", run_id=None, config={})
+        b = store.push(name="b", tag="v1", base_model="b", task="sft", run_id=None, config={})
         store.add_lineage(child_id=a, parent_id=b, relation="forked_from")
         with pytest.raises(ValueError, match="cycle"):
-            store.add_lineage(child_id=b, parent_id=a,
-                              relation="forked_from")
+            store.add_lineage(child_id=b, parent_id=a, relation="forked_from")
         store.close()
 
     def test_lineage_rejects_missing_child(self, tmp_path):
         from soup_cli.registry.store import RegistryStore
 
         store = RegistryStore(db_path=tmp_path / "reg.db")
-        parent = store.push(name="p", tag="v1", base_model="b", task="sft",
-                            run_id=None, config={})
+        parent = store.push(name="p", tag="v1", base_model="b", task="sft", run_id=None, config={})
         with pytest.raises(ValueError, match="child"):
-            store.add_lineage(child_id="nonexistent", parent_id=parent,
-                              relation="forked_from")
+            store.add_lineage(child_id="nonexistent", parent_id=parent, relation="forked_from")
         store.close()
 
     def test_lineage_rejects_missing_parent(self, tmp_path):
         from soup_cli.registry.store import RegistryStore
 
         store = RegistryStore(db_path=tmp_path / "reg.db")
-        child = store.push(name="c", tag="v1", base_model="b", task="sft",
-                           run_id=None, config={})
+        child = store.push(name="c", tag="v1", base_model="b", task="sft", run_id=None, config={})
         with pytest.raises(ValueError, match="parent"):
-            store.add_lineage(child_id=child, parent_id="nonexistent",
-                              relation="forked_from")
+            store.add_lineage(child_id=child, parent_id="nonexistent", relation="forked_from")
         store.close()
 
 
@@ -706,12 +712,13 @@ class TestTrackerHook:
         tracker = ExperimentTracker()
         run_id = tracker.start_run(
             config_dict={"base": "llama-3.1-8b", "task": "sft"},
-            device="cpu", device_name="cpu", gpu_info={},
+            device="cpu",
+            device_name="cpu",
+            gpu_info={},
         )
         tracker.finish_run(run_id, 2.0, 0.5, 100, 60.0, str(tmp_path / "out"))
         store = RegistryStore(db_path=tmp_path / "reg.db")
-        entry_id = store.register_from_run(tracker, run_id, tag="auto",
-                                           name="auto-chat")
+        entry_id = store.register_from_run(tracker, run_id, tag="auto", name="auto-chat")
         entry = store.get(entry_id)
         assert entry is not None
         assert entry["run_id"] == run_id
@@ -727,8 +734,7 @@ class TestTrackerHook:
         tracker = ExperimentTracker()
         store = RegistryStore(db_path=tmp_path / "reg.db")
         with pytest.raises(ValueError, match="run"):
-            store.register_from_run(tracker, "nonexistent_run", tag="v1",
-                                    name="m1")
+            store.register_from_run(tracker, "nonexistent_run", tag="v1", name="m1")
         store.close()
         tracker.close()
 
@@ -758,14 +764,16 @@ class TestRegistryCLI:
         tracker = ExperimentTracker()
         run_id = tracker.start_run(
             config_dict={"base": "llama", "task": "sft"},
-            device="cpu", device_name="cpu", gpu_info={},
+            device="cpu",
+            device_name="cpu",
+            gpu_info={},
         )
         tracker.finish_run(run_id, 2.0, 0.5, 100, 60.0, str(tmp_path / "out"))
         tracker.close()
 
         result = runner.invoke(
-            app, ["registry", "push", "--run-id", run_id,
-                  "--name", "my-chat", "--tag", "v1"],
+            app,
+            ["registry", "push", "--run-id", run_id, "--name", "my-chat", "--tag", "v1"],
         )
         assert result.exit_code == 0, (result.output, repr(result.exception))
         assert "my-chat" in result.output or "Registered" in result.output
@@ -781,14 +789,16 @@ class TestRegistryCLI:
         tracker = ExperimentTracker()
         run_id = tracker.start_run(
             config_dict={"base": "llama", "task": "sft"},
-            device="cpu", device_name="cpu", gpu_info={},
+            device="cpu",
+            device_name="cpu",
+            gpu_info={},
         )
         tracker.finish_run(run_id, 2.0, 0.5, 100, 60.0, str(tmp_path / "out"))
         tracker.close()
 
         result = runner.invoke(
-            app, ["registry", "push", "--run-id", run_id,
-                  "--name", "../evil", "--tag", "v1"],
+            app,
+            ["registry", "push", "--run-id", run_id, "--name", "../evil", "--tag", "v1"],
         )
         assert result.exit_code != 0, (result.output, repr(result.exception))
         assert "invalid" in result.output.lower() or "error" in result.output.lower()
@@ -796,8 +806,8 @@ class TestRegistryCLI:
     def test_push_rejects_missing_run(self, tmp_path, monkeypatch):
         self._setup_dbs(tmp_path, monkeypatch)
         result = runner.invoke(
-            app, ["registry", "push", "--run-id", "no_such_run",
-                  "--name", "m1", "--tag", "v1"],
+            app,
+            ["registry", "push", "--run-id", "no_such_run", "--name", "m1", "--tag", "v1"],
         )
         assert result.exit_code != 0, (result.output, repr(result.exception))
 
@@ -806,10 +816,15 @@ class TestRegistryCLI:
         from soup_cli.registry.store import RegistryStore
 
         store = RegistryStore()
-        eid = store.push(name="m1", tag="v1", base_model="llama",
-                         task="sft", run_id=None,
-                         config={"base": "llama", "task": "sft"},
-                         notes="demo")
+        eid = store.push(
+            name="m1",
+            tag="v1",
+            base_model="llama",
+            task="sft",
+            run_id=None,
+            config={"base": "llama", "task": "sft"},
+            notes="demo",
+        )
         store.close()
 
         result = runner.invoke(app, ["registry", "show", eid])
@@ -827,8 +842,15 @@ class TestRegistryCLI:
         from soup_cli.registry.store import RegistryStore
 
         store = RegistryStore()
-        store.push(name="medical-chat", tag="v1", base_model="llama",
-                   task="sft", run_id=None, config={}, notes="medical")
+        store.push(
+            name="medical-chat",
+            tag="v1",
+            base_model="llama",
+            task="sft",
+            run_id=None,
+            config={},
+            notes="medical",
+        )
         store.close()
 
         result = runner.invoke(app, ["registry", "search", "medical"])
@@ -840,12 +862,22 @@ class TestRegistryCLI:
         from soup_cli.registry.store import RegistryStore
 
         store = RegistryStore()
-        a = store.push(name="m1", tag="v1", base_model="llama",
-                       task="sft", run_id=None,
-                       config={"training": {"lr": 2e-5}})
-        b = store.push(name="m1", tag="v2", base_model="llama",
-                       task="sft", run_id=None,
-                       config={"training": {"lr": 5e-5}})
+        a = store.push(
+            name="m1",
+            tag="v1",
+            base_model="llama",
+            task="sft",
+            run_id=None,
+            config={"training": {"lr": 2e-5}},
+        )
+        b = store.push(
+            name="m1",
+            tag="v2",
+            base_model="llama",
+            task="sft",
+            run_id=None,
+            config={"training": {"lr": 5e-5}},
+        )
         store.close()
 
         result = runner.invoke(app, ["registry", "diff", a, b])
@@ -857,12 +889,14 @@ class TestRegistryCLI:
         from soup_cli.registry.store import RegistryStore
 
         store = RegistryStore()
-        eid = store.push(name="m1", tag="v1", base_model="llama",
-                         task="sft", run_id=None, config={})
+        eid = store.push(
+            name="m1", tag="v1", base_model="llama", task="sft", run_id=None, config={}
+        )
         store.close()
 
         result = runner.invoke(
-            app, ["registry", "delete", eid, "--yes"],
+            app,
+            ["registry", "delete", eid, "--yes"],
         )
         assert result.exit_code == 0, (result.output, repr(result.exception))
 
@@ -872,8 +906,9 @@ class TestRegistryCLI:
         from soup_cli.registry.store import RegistryStore
 
         store = RegistryStore()
-        eid = store.push(name="m1", tag="v1", base_model="llama",
-                         task="sft", run_id=None, config={})
+        eid = store.push(
+            name="m1", tag="v1", base_model="llama", task="sft", run_id=None, config={}
+        )
         store.close()
 
         result = runner.invoke(app, ["registry", "delete", eid])
@@ -889,12 +924,14 @@ class TestRegistryCLI:
         from soup_cli.registry.store import RegistryStore
 
         store = RegistryStore()
-        eid = store.push(name="m1", tag="v1", base_model="llama",
-                         task="sft", run_id=None, config={})
+        eid = store.push(
+            name="m1", tag="v1", base_model="llama", task="sft", run_id=None, config={}
+        )
         store.close()
 
         result = runner.invoke(
-            app, ["registry", "promote", eid, "--tag", "prod"],
+            app,
+            ["registry", "promote", eid, "--tag", "prod"],
         )
         assert result.exit_code == 0, (result.output, repr(result.exception))
 
@@ -908,12 +945,14 @@ class TestRegistryCLI:
         from soup_cli.registry.store import RegistryStore
 
         store = RegistryStore()
-        eid = store.push(name="m1", tag="v1", base_model="llama",
-                         task="sft", run_id=None, config={})
+        eid = store.push(
+            name="m1", tag="v1", base_model="llama", task="sft", run_id=None, config={}
+        )
         store.close()
 
         result = runner.invoke(
-            app, ["registry", "promote", eid, "--tag", "bad/slash"],
+            app,
+            ["registry", "promote", eid, "--tag", "bad/slash"],
         )
         assert result.exit_code != 0, (result.output, repr(result.exception))
         assert "invalid" in result.output.lower()
@@ -922,12 +961,11 @@ class TestRegistryCLI:
         """Error output must mention the run so operators can diagnose."""
         self._setup_dbs(tmp_path, monkeypatch)
         result = runner.invoke(
-            app, ["registry", "push", "--run-id", "no_such_run",
-                  "--name", "m1", "--tag", "v1"],
+            app,
+            ["registry", "push", "--run-id", "no_such_run", "--name", "m1", "--tag", "v1"],
         )
         assert result.exit_code != 0, (result.output, repr(result.exception))
-        assert "not found" in result.output.lower() \
-            or "no such" in result.output.lower()
+        assert "not found" in result.output.lower() or "no such" in result.output.lower()
 
 
 # ---------------------------------------------------------------------------
@@ -950,12 +988,13 @@ class TestHistoryCLI:
         from soup_cli.registry.store import RegistryStore
 
         store = RegistryStore()
-        parent = store.push(name="base", tag="v1", base_model="llama",
-                            task="sft", run_id=None, config={})
-        child = store.push(name="base", tag="v2", base_model="llama",
-                           task="sft", run_id=None, config={})
-        store.add_lineage(child_id=child, parent_id=parent,
-                          relation="forked_from")
+        parent = store.push(
+            name="base", tag="v1", base_model="llama", task="sft", run_id=None, config={}
+        )
+        child = store.push(
+            name="base", tag="v2", base_model="llama", task="sft", run_id=None, config={}
+        )
+        store.add_lineage(child_id=child, parent_id=parent, relation="forked_from")
         store.close()
 
         result = runner.invoke(app, ["history", "base"])
@@ -983,16 +1022,14 @@ class TestSecurity:
         # Attempt to register an artifact outside CWD
         monkeypatch.chdir(tmp_path)
         store = RegistryStore(db_path=tmp_path / "reg.db")
-        eid = store.push(name="m1", tag="v1", base_model="b", task="sft",
-                         run_id=None, config={})
+        eid = store.push(name="m1", tag="v1", base_model="b", task="sft", run_id=None, config={})
 
         outside = tmp_path.parent / "outside_artifact.bin"
         outside.write_bytes(b"x")
         try:
             with pytest.raises(ValueError, match="outside|cwd"):
                 # Default enforce_cwd=True should reject
-                store.add_artifact(entry_id=eid, kind="adapter",
-                                   path=str(outside))
+                store.add_artifact(entry_id=eid, kind="adapter", path=str(outside))
         finally:
             # Avoid polluting parent dir across CI reruns
             outside.unlink(missing_ok=True)
@@ -1002,8 +1039,7 @@ class TestSecurity:
         from soup_cli.registry.store import RegistryStore
 
         store = RegistryStore(db_path=tmp_path / "reg.db")
-        store.push(name="clean", tag="v1", base_model="b", task="sft",
-                   run_id=None, config={})
+        store.push(name="clean", tag="v1", base_model="b", task="sft", run_id=None, config={})
         # SQL injection attempt — should simply return 0 hits, not crash
         hits = store.search("'; DROP TABLE registry_entries; --")
         assert hits == []
@@ -1017,10 +1053,8 @@ class TestSecurity:
         from soup_cli.registry.store import RegistryStore
 
         store = RegistryStore(db_path=tmp_path / "reg.db")
-        store.push(name="alpha", tag="v1", base_model="b",
-                   task="sft", run_id=None, config={})
-        store.push(name="beta", tag="v1", base_model="b",
-                   task="sft", run_id=None, config={})
+        store.push(name="alpha", tag="v1", base_model="b", task="sft", run_id=None, config={})
+        store.push(name="beta", tag="v1", base_model="b", task="sft", run_id=None, config={})
         # `%` is a SQL LIKE wildcard; escaping must turn it into a literal
         hits = store.search("%")
         assert hits == []
@@ -1031,8 +1065,7 @@ class TestSecurity:
         from soup_cli.registry.store import RegistryStore
 
         store = RegistryStore(db_path=tmp_path / "reg.db")
-        store.push(name="m1", tag="v1", base_model="b",
-                   task="sft", run_id=None, config={})
+        store.push(name="m1", tag="v1", base_model="b", task="sft", run_id=None, config={})
         assert store.resolve("%") is None
         store.close()
 
@@ -1072,7 +1105,9 @@ class TestAutoRegister:
         tracker = ExperimentTracker()
         run_id = tracker.start_run(
             config_dict={"base": "llama", "task": "sft"},
-            device="cpu", device_name="cpu", gpu_info={},
+            device="cpu",
+            device_name="cpu",
+            gpu_info={},
         )
         tracker.finish_run(run_id, 2.0, 0.5, 100, 60.0, str(tmp_path / "out"))
 
@@ -1080,8 +1115,7 @@ class TestAutoRegister:
         store = RegistryStore()
         assert store.list() == []
 
-        eid = store.register_from_run(tracker, run_id, tag="auto",
-                                      name="autoregistered")
+        eid = store.register_from_run(tracker, run_id, tag="auto", name="autoregistered")
         assert store.get(eid) is not None
         store.close()
         tracker.close()

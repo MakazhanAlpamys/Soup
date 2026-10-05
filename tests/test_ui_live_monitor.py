@@ -9,6 +9,7 @@ import pytest
 def _auth_headers():
     """Return auth headers with the current UI token."""
     from soup_cli.ui.app import get_auth_token
+
     return {"Authorization": f"Bearer {get_auth_token()}"}
 
 
@@ -51,9 +52,7 @@ class TestTrainLogsSSE:
 
         client = TestClient(create_app())
         try:
-            with client.stream(
-                "GET", "/api/train/logs", headers=_auth_headers()
-            ) as resp:
+            with client.stream("GET", "/api/train/logs", headers=_auth_headers()) as resp:
                 assert resp.status_code == 200
                 assert "text/event-stream" in resp.headers["content-type"]
                 # Read at least one event
@@ -79,9 +78,7 @@ class TestTrainLogsSSE:
         ui_mod._train_process = None
 
         client = TestClient(create_app())
-        with client.stream(
-            "GET", "/api/train/logs", headers=_auth_headers()
-        ) as resp:
+        with client.stream("GET", "/api/train/logs", headers=_auth_headers()) as resp:
             assert resp.status_code == 200
             body = b""
             for chunk in resp.iter_bytes():
@@ -122,6 +119,7 @@ class TestTrainLogsSSE:
                 assert "Line 2" in text or "Line 3" in text
         finally:
             ui_mod._train_log_buffer = None
+
     def test_logs_no_auth_required(self):
         """SSE log endpoint requires auth (401 without token, 200 with one)."""
         try:
@@ -137,9 +135,7 @@ class TestTrainLogsSSE:
         client = TestClient(create_app())
         with client.stream("GET", "/api/train/logs") as resp:
             assert resp.status_code == 401
-        with client.stream(
-            "GET", "/api/train/logs", headers=_auth_headers()
-        ) as resp:
+        with client.stream("GET", "/api/train/logs", headers=_auth_headers()) as resp:
             assert resp.status_code == 200
 
 
@@ -177,9 +173,7 @@ class TestLiveMetricsSSE:
         db_path = tmp_path / "test.db"
         with patch.dict(os.environ, {"SOUP_DB_PATH": str(db_path)}):
             client = TestClient(create_app())
-            with client.stream(
-                "GET", "/api/train/metrics/live", headers=_auth_headers()
-            ) as resp:
+            with client.stream("GET", "/api/train/metrics/live", headers=_auth_headers()) as resp:
                 assert resp.status_code == 200
                 assert "text/event-stream" in resp.headers["content-type"]
 
@@ -251,9 +245,7 @@ class TestLiveMetricsSSE:
             client = TestClient(create_app())
             with client.stream("GET", "/api/train/metrics/live") as resp:
                 assert resp.status_code == 401
-            with client.stream(
-                "GET", "/api/train/metrics/live", headers=_auth_headers()
-            ) as resp:
+            with client.stream("GET", "/api/train/metrics/live", headers=_auth_headers()) as resp:
                 assert resp.status_code == 200
 
         ui_mod._train_process = None
@@ -273,9 +265,7 @@ class TestLiveMetricsSSE:
         db_path = tmp_path / "test.db"
         with patch.dict(os.environ, {"SOUP_DB_PATH": str(db_path)}):
             client = TestClient(create_app())
-            with client.stream(
-                "GET", "/api/train/metrics/live", headers=_auth_headers()
-            ) as resp:
+            with client.stream("GET", "/api/train/metrics/live", headers=_auth_headers()) as resp:
                 body = b""
                 for chunk in resp.iter_bytes():
                     body += chunk
@@ -350,9 +340,7 @@ class TestTrainProgress:
 
         with patch.dict(os.environ, {"SOUP_DB_PATH": str(db_path)}):
             client = TestClient(create_app())
-            response = client.get(
-                f"/api/train/progress?run_id={run_id}", headers=_auth_headers()
-            )
+            response = client.get(f"/api/train/progress?run_id={run_id}", headers=_auth_headers())
             assert response.status_code == 200
             data = response.json()
             assert data["running"] is True
@@ -391,9 +379,7 @@ class TestTrainProgress:
 
         with patch.dict(os.environ, {"SOUP_DB_PATH": str(db_path)}):
             client = TestClient(create_app())
-            response = client.get(
-                f"/api/train/progress?run_id={run_id}", headers=_auth_headers()
-            )
+            response = client.get(f"/api/train/progress?run_id={run_id}", headers=_auth_headers())
             data = response.json()
             expected_keys = {"running", "current_step", "run_id"}
             assert expected_keys.issubset(set(data.keys()))
@@ -414,10 +400,7 @@ class TestTrainProgress:
 
         client = TestClient(create_app())
         assert client.get("/api/train/progress").status_code == 401
-        assert (
-            client.get("/api/train/progress", headers=_auth_headers()).status_code
-            == 200
-        )
+        assert client.get("/api/train/progress", headers=_auth_headers()).status_code == 200
 
 
 class TestSSEGracefulClose:
@@ -443,9 +426,7 @@ class TestSSEGracefulClose:
             assert resp.status_code == 401
 
         try:
-            with client.stream(
-                "GET", "/api/train/logs", headers=_auth_headers()
-            ) as resp:
+            with client.stream("GET", "/api/train/logs", headers=_auth_headers()) as resp:
                 assert resp.status_code == 200
                 body = b""
                 for chunk in resp.iter_bytes():
@@ -471,9 +452,7 @@ class TestSSEGracefulClose:
         ui_mod._train_process = None
 
         client = TestClient(create_app())
-        with client.stream(
-            "GET", "/api/train/logs", headers=_auth_headers()
-        ) as resp:
+        with client.stream("GET", "/api/train/logs", headers=_auth_headers()) as resp:
             assert resp.status_code == 200
             body = b""
             for chunk in resp.iter_bytes():

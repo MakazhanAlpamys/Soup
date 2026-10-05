@@ -172,9 +172,7 @@ class TestToolCallSuiteShowsATooolSchema:
 
         items = load_suite_items("mini_tool_call")
         by_prompt = {it["prompt"]: it["expected"] for it in items}
-        assert score_bundled_suite(
-            "mini_tool_call", lambda p: by_prompt[p]
-        ) == pytest.approx(1.0)
+        assert score_bundled_suite("mini_tool_call", lambda p: by_prompt[p]) == pytest.approx(1.0)
 
 
 def _catalogue_json(prompt: str) -> str:
@@ -279,9 +277,7 @@ class TestJsonContainerExtraction:
     def test_suite_score_reflects_the_repair(self):
         from soup_cli.eval.gate_suites import score_bundled_suite
 
-        fenced = score_bundled_suite(
-            "mini_format_json", lambda p: '```json\n{"k": "v"}\n```'
-        )
+        fenced = score_bundled_suite("mini_format_json", lambda p: '```json\n{"k": "v"}\n```')
         assert fenced == pytest.approx(1.0)
         # ... and the floor still exists.
         assert score_bundled_suite("mini_format_json", lambda p: "sorry, no") == 0.0
@@ -299,9 +295,7 @@ class TestToolCallScoringToleratesTheSameEnvelope:
             by_prompt[item["prompt"]] = (
                 expected if expected == "NO_TOOL" else f"```json\n{expected}\n```"
             )
-        assert score_bundled_suite(
-            "mini_tool_call", lambda p: by_prompt[p]
-        ) == pytest.approx(1.0)
+        assert score_bundled_suite("mini_tool_call", lambda p: by_prompt[p]) == pytest.approx(1.0)
 
     def test_fenced_call_with_the_wrong_name_still_fails(self):
         """CONTROL: unwrapping must not become unconditional crediting."""
@@ -354,11 +348,8 @@ class TestSuitesStayOfflineAndDeterministic:
     def test_scoring_is_deterministic_across_runs(self):
         from soup_cli.eval.gate_suites import load_suite_items, score_bundled_suite
 
-        by_prompt = {
-            it["prompt"]: it["expected"] for it in load_suite_items("mini_tool_call")
-        }
-        runs = {score_bundled_suite("mini_tool_call", lambda p: by_prompt[p])
-                for _ in range(3)}
+        by_prompt = {it["prompt"]: it["expected"] for it in load_suite_items("mini_tool_call")}
+        runs = {score_bundled_suite("mini_tool_call", lambda p: by_prompt[p]) for _ in range(3)}
         assert len(runs) == 1
 
     def test_module_imports_no_network_or_torch(self):
@@ -373,9 +364,7 @@ class TestSuitesStayOfflineAndDeterministic:
             "assert 'urllib.request' not in sys.modules;"
             "print('ok')"
         )
-        out = subprocess.run(
-            [sys.executable, "-c", code], capture_output=True, text=True
-        )
+        out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
         assert out.returncode == 0, (out.stdout, out.stderr)
         assert "ok" in out.stdout
 

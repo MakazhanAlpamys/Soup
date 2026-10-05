@@ -31,6 +31,7 @@ class TestDataclasses:
             render_diff_table,
             write_diff_report,
         )
+
         assert callable(build_diff_report)
         assert callable(load_probes)
         assert callable(render_diff_table)
@@ -42,7 +43,10 @@ class TestDataclasses:
         from soup_cli.utils.edit_diff import FactChange
 
         c = FactChange(
-            prompt="p", before="b", after="a", changed=True,
+            prompt="p",
+            before="b",
+            after="a",
+            changed=True,
         )
         with pytest.raises(dataclasses.FrozenInstanceError):
             c.prompt = "x"  # type: ignore
@@ -78,9 +82,7 @@ class TestDataclasses:
         r = DiffReport(
             before_run_id="b",
             after_run_id="a",
-            changes=(
-                FactChange(prompt="p1", before="x", after="y", changed=True),
-            ),
+            changes=(FactChange(prompt="p1", before="x", after="y", changed=True),),
             total_probes=1,
             soup_version="0.61.0",
         )
@@ -140,10 +142,7 @@ class TestLoadProbes:
 
         p = tmp_path / "probes.jsonl"
         p.write_text(
-            '{"prompt": "good"}\n'
-            'this is not json\n'
-            '{"prompt": ""}\n'
-            '{"prompt": "another good"}\n',
+            '{"prompt": "good"}\nthis is not json\n{"prompt": ""}\n{"prompt": "another good"}\n',
             encoding="utf-8",
         )
 
@@ -248,11 +247,15 @@ class TestBuildDiffReport:
 
         with pytest.raises(ValueError):
             build_diff_report(
-                before_run_id="b", after_run_id="a", top_k=0,
+                before_run_id="b",
+                after_run_id="a",
+                top_k=0,
             )
         with pytest.raises(ValueError):
             build_diff_report(
-                before_run_id="b", after_run_id="a", top_k=200,
+                before_run_id="b",
+                after_run_id="a",
+                top_k=200,
             )
 
     def test_with_probe_file_requires_models(self, tmp_path):
@@ -283,7 +286,7 @@ class TestBuildDiffReport:
         monkeypatch.setattr(
             live_eval,
             "make_generator",
-            lambda m, **kw: (lambda p: f"{m}:{p}"),
+            lambda m, **kw: lambda p: f"{m}:{p}",
         )
         p = tmp_path / "probes.jsonl"
         p.write_text(
@@ -321,9 +324,7 @@ class TestRenderDiffTable:
         r = DiffReport(
             before_run_id="b",
             after_run_id="a",
-            changes=(
-                FactChange(prompt="p1", before="x", after="y", changed=True),
-            ),
+            changes=(FactChange(prompt="p1", before="x", after="y", changed=True),),
             total_probes=1,
             soup_version="0.61.0",
         )
@@ -405,27 +406,46 @@ class TestCli:
     def test_basic_diff(self, tmp_path):
         runner = CliRunner()
         with runner.isolated_filesystem(temp_dir=tmp_path):
-            result = runner.invoke(app, [
-                "edit", "diff", "before-run", "after-run",
-            ])
+            result = runner.invoke(
+                app,
+                [
+                    "edit",
+                    "diff",
+                    "before-run",
+                    "after-run",
+                ],
+            )
             assert result.exit_code == 0, result.output
 
     def test_same_runs_rejected(self, tmp_path):
         runner = CliRunner()
         with runner.isolated_filesystem(temp_dir=tmp_path):
-            result = runner.invoke(app, [
-                "edit", "diff", "same", "same",
-            ])
+            result = runner.invoke(
+                app,
+                [
+                    "edit",
+                    "diff",
+                    "same",
+                    "same",
+                ],
+            )
             assert result.exit_code != 0
 
     def test_writes_output(self, tmp_path):
         runner = CliRunner()
         with runner.isolated_filesystem(temp_dir=tmp_path) as fs:
             out = Path(fs) / "diff.json"
-            result = runner.invoke(app, [
-                "edit", "diff", "before-run", "after-run",
-                "--output", str(out),
-            ])
+            result = runner.invoke(
+                app,
+                [
+                    "edit",
+                    "diff",
+                    "before-run",
+                    "after-run",
+                    "--output",
+                    str(out),
+                ],
+            )
             assert result.exit_code == 0, result.output
             assert out.exists()
             data = json.loads(out.read_text())

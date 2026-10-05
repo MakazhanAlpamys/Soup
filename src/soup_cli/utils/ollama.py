@@ -9,47 +9,47 @@ from typing import Dict, List, Optional, Tuple
 # Ollama TEMPLATE blocks for common chat formats
 OLLAMA_TEMPLATES: Dict[str, str] = {
     "chatml": (
-        '{{ if .System }}<|im_start|>system\n'
-        '{{ .System }}<|im_end|>\n'
-        '{{ end }}{{ range .Messages }}'
+        "{{ if .System }}<|im_start|>system\n"
+        "{{ .System }}<|im_end|>\n"
+        "{{ end }}{{ range .Messages }}"
         '{{ if eq .Role "user" }}<|im_start|>user\n'
-        '{{ .Content }}<|im_end|>\n'
+        "{{ .Content }}<|im_end|>\n"
         '{{ else if eq .Role "assistant" }}<|im_start|>assistant\n'
-        '{{ .Content }}<|im_end|>\n'
-        '{{ end }}{{ end }}<|im_start|>assistant\n'
+        "{{ .Content }}<|im_end|>\n"
+        "{{ end }}{{ end }}<|im_start|>assistant\n"
     ),
     "llama": (
-        '<|begin_of_text|>'
-        '{{ if .System }}<|start_header_id|>system<|end_header_id|>\n\n'
-        '{{ .System }}<|eot_id|>{{ end }}'
-        '{{ range .Messages }}'
+        "<|begin_of_text|>"
+        "{{ if .System }}<|start_header_id|>system<|end_header_id|>\n\n"
+        "{{ .System }}<|eot_id|>{{ end }}"
+        "{{ range .Messages }}"
         '{{ if eq .Role "user" }}<|start_header_id|>user<|end_header_id|>\n\n'
-        '{{ .Content }}<|eot_id|>'
+        "{{ .Content }}<|eot_id|>"
         '{{ else if eq .Role "assistant" }}<|start_header_id|>assistant<|end_header_id|>\n\n'
-        '{{ .Content }}<|eot_id|>'
-        '{{ end }}{{ end }}'
-        '<|start_header_id|>assistant<|end_header_id|>\n\n'
+        "{{ .Content }}<|eot_id|>"
+        "{{ end }}{{ end }}"
+        "<|start_header_id|>assistant<|end_header_id|>\n\n"
     ),
     "mistral": (
-        '{{ if .System }}[INST] {{ .System }} [/INST]\n{{ end }}'
-        '{{ range .Messages }}'
+        "{{ if .System }}[INST] {{ .System }} [/INST]\n{{ end }}"
+        "{{ range .Messages }}"
         '{{ if eq .Role "user" }}[INST] {{ .Content }} [/INST]\n'
         '{{ else if eq .Role "assistant" }}{{ .Content }}</s>\n'
-        '{{ end }}{{ end }}'
+        "{{ end }}{{ end }}"
     ),
     "vicuna": (
-        '{{ if .System }}{{ .System }}\n\n{{ end }}'
-        '{{ range .Messages }}'
+        "{{ if .System }}{{ .System }}\n\n{{ end }}"
+        "{{ range .Messages }}"
         '{{ if eq .Role "user" }}USER: {{ .Content }}\n'
         '{{ else if eq .Role "assistant" }}ASSISTANT: {{ .Content }}</s>\n'
-        '{{ end }}{{ end }}ASSISTANT:'
+        "{{ end }}{{ end }}ASSISTANT:"
     ),
     "zephyr": (
-        '{{ if .System }}<|system|>\n{{ .System }}</s>\n{{ end }}'
-        '{{ range .Messages }}'
+        "{{ if .System }}<|system|>\n{{ .System }}</s>\n{{ end }}"
+        "{{ range .Messages }}"
         '{{ if eq .Role "user" }}<|user|>\n{{ .Content }}</s>\n'
         '{{ else if eq .Role "assistant" }}<|assistant|>\n{{ .Content }}</s>\n'
-        '{{ end }}{{ end }}<|assistant|>\n'
+        "{{ end }}{{ end }}<|assistant|>\n"
     ),
 }
 
@@ -71,12 +71,27 @@ _MODEL_NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._:-]*$")
 SOUP_MODEL_PREFIX = "soup-"
 
 # Allowed Ollama PARAMETER keys (prevents injection of arbitrary directives)
-ALLOWED_OLLAMA_PARAMS = frozenset({
-    "temperature", "top_p", "top_k", "num_ctx", "num_predict",
-    "stop", "repeat_penalty", "repeat_last_n", "seed", "mirostat",
-    "mirostat_tau", "mirostat_eta", "num_gpu", "num_thread",
-    "tfs_z", "typical_p", "penalize_newline",
-})
+ALLOWED_OLLAMA_PARAMS = frozenset(
+    {
+        "temperature",
+        "top_p",
+        "top_k",
+        "num_ctx",
+        "num_predict",
+        "stop",
+        "repeat_penalty",
+        "repeat_last_n",
+        "seed",
+        "mirostat",
+        "mirostat_tau",
+        "mirostat_eta",
+        "num_gpu",
+        "num_thread",
+        "tfs_z",
+        "typical_p",
+        "penalize_newline",
+    }
+)
 
 
 def validate_model_name(name: str) -> Tuple[bool, str]:
@@ -197,8 +212,7 @@ def create_modelfile(
                 )
             if "\n" in value or "\r" in value or "\0" in value:
                 raise ValueError(
-                    f"Parameter value for {key!r} contains "
-                    "illegal characters (newline or null)"
+                    f"Parameter value for {key!r} contains illegal characters (newline or null)"
                 )
             lines.append(f"PARAMETER {key} {value}")
 

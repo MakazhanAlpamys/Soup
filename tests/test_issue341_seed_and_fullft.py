@@ -222,12 +222,15 @@ class TestFullFinetuneSchema:
         assert cfg.training.lora.r == 0
         # ... and the sft-only gates did NOT fire: this combination would be
         # refused under task='sft' (4bit), but is untouched here.
-        assert _load(
-            task="dpo",
-            data={"format": "dpo"},
-            training={"quantization": "4bit"},
-            lora={"r": 0},
-        ).training.quantization == "4bit"
+        assert (
+            _load(
+                task="dpo",
+                data={"format": "dpo"},
+                training={"quantization": "4bit"},
+                lora={"r": 0},
+            ).training.quantization
+            == "4bit"
+        )
 
     def test_control_asr_may_still_set_rank_zero(self):
         """CONTROL — `trainer/asr.py` gates LoRA behind `asr_lora` (v0.71.32,
@@ -315,8 +318,24 @@ def _write_tiny_tokenizer(directory):
 
     vocab = {"<unk>": 0, "<s>": 1, "</s>": 2, "<pad>": 3}
     for word in (
-        "hello", "world", "hi", "yo", "the", "cat", "sat", "on", "mat",
-        "dog", "ran", "fast", "slow", "red", "blue", "green", "one", "two",
+        "hello",
+        "world",
+        "hi",
+        "yo",
+        "the",
+        "cat",
+        "sat",
+        "on",
+        "mat",
+        "dog",
+        "ran",
+        "fast",
+        "slow",
+        "red",
+        "blue",
+        "green",
+        "one",
+        "two",
     ):
         vocab[word] = len(vocab)
     tokenizer = Tokenizer(models.WordLevel(vocab=vocab, unk_token="<unk>"))
@@ -474,9 +493,9 @@ class TestSeedActuallyChangesTraining:
         first = self._train(tmp_path, monkeypatch, base, seed=1234)
         other = self._train(tmp_path, monkeypatch, base, seed=4321)
         assert first and other
-        assert any(
-            not torch.equal(first[name], other[name]) for name in first
-        ), "changing training.seed changed nothing — the value is being ignored"
+        assert any(not torch.equal(first[name], other[name]) for name in first), (
+            "changing training.seed changed nothing — the value is being ignored"
+        )
 
 
 class TestMultipackSamplerSeed:
@@ -514,9 +533,7 @@ class TestMultipackSamplerSeed:
 # #340 — full fine-tuning in the trainer
 # ==========================================================================
 class TestFullFinetuneTrainer:
-    def test_rank_zero_leaves_the_model_unwrapped_and_fully_trainable(
-        self, tmp_path, monkeypatch
-    ):
+    def test_rank_zero_leaves_the_model_unwrapped_and_fully_trainable(self, tmp_path, monkeypatch):
         _requires_train_extra()
         wrapper, dataset = _wrapper(tmp_path, monkeypatch, lora={"r": 0})
         wrapper.setup(dataset)
@@ -528,15 +545,11 @@ class TestFullFinetuneTrainer:
         )
         assert not any("lora_" in name for name, _ in wrapper.model.named_parameters())
         untrainable = [
-            name
-            for name, param in wrapper.model.named_parameters()
-            if not param.requires_grad
+            name for name, param in wrapper.model.named_parameters() if not param.requires_grad
         ]
         assert not untrainable, f"full-FT left parameters frozen: {untrainable[:5]}"
 
-    def test_control_lora_still_wraps_in_peft_with_the_base_frozen(
-        self, tmp_path, monkeypatch
-    ):
+    def test_control_lora_still_wraps_in_peft_with_the_base_frozen(self, tmp_path, monkeypatch):
         """CONTROL. Without it, the test above also passes for a build that
         stopped applying LoRA to everybody."""
         _requires_train_extra()
@@ -547,9 +560,7 @@ class TestFullFinetuneTrainer:
 
         assert isinstance(wrapper.model, PeftModel)
         trainable = [
-            name
-            for name, param in wrapper.model.named_parameters()
-            if param.requires_grad
+            name for name, param in wrapper.model.named_parameters() if param.requires_grad
         ]
         assert trainable, "the LoRA control trains nothing"
         assert all("lora_" in name for name in trainable), (
@@ -585,9 +596,7 @@ class TestFullFinetuneTrainer:
         assert "LoRA applied" not in out
         assert "Full fine-tuning" in out
 
-    def test_the_summary_line_says_lisa_not_lora_applied(
-        self, tmp_path, monkeypatch, capsys
-    ):
+    def test_the_summary_line_says_lisa_not_lora_applied(self, tmp_path, monkeypatch, capsys):
         """#471 review round 3 — the same false-statement bug as the
         `lora.r=0` case above, for `lisa_enabled` instead: `setup()`'s
         summary label was missing this flag entirely (only checked
@@ -628,17 +637,13 @@ class TestFullFinetuneTrainer:
         after = dict(wrapper.model.named_parameters())[target].detach().cpu()
         assert not torch.equal(before, after)
 
-    def test_full_ft_respects_freeze_layers_instead_of_undoing_it(
-        self, tmp_path, monkeypatch
-    ):
+    def test_full_ft_respects_freeze_layers_instead_of_undoing_it(self, tmp_path, monkeypatch):
         """`freeze_layers` stays legal with `r: 0` and the branch must NOT
         `requires_grad_(True)` over the top of it — "train everything above
         layer N" is a real technique, and silently unfreezing would train a
         model the config said not to."""
         _requires_train_extra()
-        wrapper, dataset = _wrapper(
-            tmp_path, monkeypatch, lora={"r": 0}, freeze_layers=1
-        )
+        wrapper, dataset = _wrapper(tmp_path, monkeypatch, lora={"r": 0}, freeze_layers=1)
         wrapper.setup(dataset)
         by_name = dict(wrapper.model.named_parameters())
         assert not by_name["model.layers.0.self_attn.q_proj.weight"].requires_grad
@@ -665,14 +670,10 @@ class TestFullFinetuneTrainer:
                 model.requires_grad_(False)
                 return model
 
-            monkeypatch.setattr(
-                transformers.AutoModelForCausalLM, "from_pretrained", loader
-            )
+            monkeypatch.setattr(transformers.AutoModelForCausalLM, "from_pretrained", loader)
             return original(self, cfg, tcfg)
 
-        monkeypatch.setattr(
-            SFTTrainerWrapper, "_setup_transformers", freeze_everything
-        )
+        monkeypatch.setattr(SFTTrainerWrapper, "_setup_transformers", freeze_everything)
         with pytest.raises(ValueError, match="(?i)no parameter is trainable"):
             wrapper.setup(dataset)
 
@@ -693,9 +694,7 @@ class TestSchemaHalfStaysLight:
         offenders = []
         for node in ast.walk(tree):
             if isinstance(node, ast.Import) and node.col_offset == 0:
-                offenders += [
-                    a.name for a in node.names if a.name.split(".")[0] == "torch"
-                ]
+                offenders += [a.name for a in node.names if a.name.split(".")[0] == "torch"]
             elif isinstance(node, ast.ImportFrom) and node.col_offset == 0:
                 if (node.module or "").split(".")[0] == "torch":
                     offenders.append(node.module)

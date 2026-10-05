@@ -47,12 +47,16 @@ def _write_rows(rows: Iterable[Mapping[str, Any]], path: str) -> str:
 def score(
     input: str = typer.Option(..., "--input", "-i", help="JSONL input under cwd."),
     benchmarks: Optional[str] = typer.Option(
-        None, "--benchmarks", "-b",
+        None,
+        "--benchmarks",
+        "-b",
         help="Comma-separated benchmark names (e.g. mmlu,gsm8k).",
     ),
     threshold: float = typer.Option(
-        0.8, "--threshold",
-        min=0.0, max=1.0,
+        0.8,
+        "--threshold",
+        min=0.0,
+        max=1.0,
         help="Decontamination overlap threshold.",
     ),
 ):
@@ -67,10 +71,7 @@ def score(
             if not canonical:
                 continue
             if canonical not in BENCHMARKS:
-                _exit(
-                    f"unknown benchmark: {canonical!r}; "
-                    f"choose from {sorted(BENCHMARKS)}"
-                )
+                _exit(f"unknown benchmark: {canonical!r}; choose from {sorted(BENCHMARKS)}")
             bench_list.append(canonical)
 
     try:
@@ -99,11 +100,14 @@ def score(
 def decontaminate(
     input: str = typer.Option(..., "--input", "-i"),
     benchmarks: Optional[str] = typer.Option(
-        None, "--benchmarks", "-b",
+        None,
+        "--benchmarks",
+        "-b",
         help="Comma-separated benchmark names (label only; corpora not bundled).",
     ),
     benchmark_file: Optional[str] = typer.Option(
-        None, "--benchmark-file",
+        None,
+        "--benchmark-file",
         help=(
             "v0.53.7: operator-supplied benchmark JSONL (under cwd). Each "
             "row's ``text``/``prompt``/``content`` field contributes to the "
@@ -111,7 +115,9 @@ def decontaminate(
         ),
     ),
     output: str = typer.Option(
-        "clean.jsonl", "--output", "-o",
+        "clean.jsonl",
+        "--output",
+        "-o",
         help="Output JSONL of rows that survived decontamination.",
     ),
     threshold: float = typer.Option(0.8, "--threshold", min=0.0, max=1.0),
@@ -138,10 +144,7 @@ def decontaminate(
             if not canonical:
                 continue
             if canonical not in BENCHMARKS:
-                _exit(
-                    f"unknown benchmark: {canonical!r}; "
-                    f"choose from {sorted(BENCHMARKS)}"
-                )
+                _exit(f"unknown benchmark: {canonical!r}; choose from {sorted(BENCHMARKS)}")
             bench_list.append(canonical)
     if not bench_list and not benchmark_file:
         _exit("decontaminate requires --benchmarks and/or --benchmark-file")
@@ -171,9 +174,7 @@ def decontaminate(
             "only. Pass --benchmark-file <jsonl> for real filtering."
         )
 
-    kept, removed = decontaminate_rows(
-        rows, benchmark_texts, n=n, threshold=threshold
-    )
+    kept, removed = decontaminate_rows(rows, benchmark_texts, n=n, threshold=threshold)
     path = _write_rows(kept, output)
     console.print(
         Panel(
@@ -190,7 +191,10 @@ def toxicity(
     input: str = typer.Option(..., "--input", "-i"),
     output: str = typer.Option("toxicity.jsonl", "--output", "-o"),
     threshold: float = typer.Option(
-        0.05, "--threshold", min=0.0, max=1.0,
+        0.05,
+        "--threshold",
+        min=0.0,
+        max=1.0,
         help="Rows meeting the abuse-keyword threshold are kept.",
     ),
 ):
@@ -238,8 +242,7 @@ def langdetect(
     path = _write_rows(out_rows, output)
     console.print(
         Panel(
-            f"Input:   [bold]{len(rows)}[/]\n"
-            f"Output:  [bold]{escape(path)}[/]",
+            f"Input:   [bold]{len(rows)}[/]\nOutput:  [bold]{escape(path)}[/]",
             title="[bold green]Lang Detect[/]",
         )
     )
@@ -292,8 +295,7 @@ def educational(
     path = _write_rows(out_rows, output)
     console.print(
         Panel(
-            f"Input:   [bold]{len(rows)}[/]\n"
-            f"Output:  [bold]{escape(path)}[/]",
+            f"Input:   [bold]{len(rows)}[/]\nOutput:  [bold]{escape(path)}[/]",
             title="[bold green]Educational[/]",
         )
     )

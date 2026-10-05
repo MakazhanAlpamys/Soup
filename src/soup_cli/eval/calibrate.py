@@ -18,6 +18,7 @@ scores; ``run_pairwise_calibration`` is the orchestrator returning a frozen
 ``JudgeCalibrationReport``; ``ensure_judge_calibrated`` is the production
 gate that refuses to score with an uncalibrated judge.
 """
+
 from __future__ import annotations
 
 import math
@@ -67,8 +68,7 @@ def kl_divergence(p_logits: Sequence[float], q_logits: Sequence[float]) -> float
     """
     if len(p_logits) != len(q_logits):
         raise ValueError(
-            f"p_logits ({len(p_logits)}) and q_logits "
-            f"({len(q_logits)}) must have the same length"
+            f"p_logits ({len(p_logits)}) and q_logits ({len(q_logits)}) must have the same length"
         )
     for name, logits in (("p_logits", p_logits), ("q_logits", q_logits)):
         if not logits:
@@ -122,12 +122,8 @@ def run_calibration(
     if not base_list:
         raise ValueError("at least one prompt is required")
     if len(base_list) > 10_000:
-        raise ValueError(
-            f"too many prompts ({len(base_list)}); cap is 10000"
-        )
-    per_prompt = tuple(
-        kl_divergence(b, q) for b, q in zip(base_list, quant_list)
-    )
+        raise ValueError(f"too many prompts ({len(base_list)}); cap is 10000")
+    per_prompt = tuple(kl_divergence(b, q) for b, q in zip(base_list, quant_list))
     mean = sum(per_prompt) / len(per_prompt)
     return CalibrationReport(
         mean_kl=mean,
@@ -147,9 +143,7 @@ def _validate_winner(value: object, field: str) -> str:
     if "\x00" in value:
         raise ValueError(f"{field} contains null byte")
     if value not in _WINNER_VALUES:
-        raise ValueError(
-            f"{field} must be one of {sorted(_WINNER_VALUES)}, got {value!r}"
-        )
+        raise ValueError(f"{field} must be one of {sorted(_WINNER_VALUES)}, got {value!r}")
     return value
 
 
@@ -186,15 +180,19 @@ class PairwiseJudgement:
         # can normalise (or just raise) without mutating the user's view.
         object.__setattr__(self, "prompt_id", _validate_prompt_id(self.prompt_id))
         object.__setattr__(
-            self, "first_winner",
+            self,
+            "first_winner",
             _validate_winner(self.first_winner, "first_winner"),
         )
         object.__setattr__(
-            self, "second_winner",
+            self,
+            "second_winner",
             _validate_winner(self.second_winner, "second_winner"),
         )
         object.__setattr__(
-            self, "oracle", _validate_winner(self.oracle, "oracle"),
+            self,
+            "oracle",
+            _validate_winner(self.oracle, "oracle"),
         )
 
 
@@ -216,9 +214,7 @@ def fit_position_bias(judgements: Iterable[PairwiseJudgement]) -> float:
         try:
             iter(judgements)
         except TypeError:
-            raise TypeError(
-                "judgements must be iterable of PairwiseJudgement"
-            ) from None
+            raise TypeError("judgements must be iterable of PairwiseJudgement") from None
         judgements = list(judgements)
     if not judgements:
         raise ValueError("judgements must not be empty")
@@ -230,9 +226,7 @@ def fit_position_bias(judgements: Iterable[PairwiseJudgement]) -> float:
     signed_sum = 0.0
     for j in judgements:
         if not isinstance(j, PairwiseJudgement):
-            raise TypeError(
-                "judgements must be PairwiseJudgement instances"
-            )
+            raise TypeError("judgements must be PairwiseJudgement instances")
         # For each row, compute +1 if judge picked first-slot label both
         # times, -1 if picked second-slot both times, 0 if mixed/tie.
         # "first" arrangement: a is in slot 1, b is in slot 2
@@ -428,9 +422,7 @@ def run_pairwise_calibration(
             f"({len(score_list)}) must have the same length"
         )
     if len(judgement_list) > _MAX_PAIRS:
-        raise ValueError(
-            f"too many pairs ({len(judgement_list)}); cap is {_MAX_PAIRS}"
-        )
+        raise ValueError(f"too many pairs ({len(judgement_list)}); cap is {_MAX_PAIRS}")
 
     bias = fit_position_bias(judgement_list)
     threshold = conformal_threshold(score_list, alpha=alpha)
@@ -440,10 +432,7 @@ def run_pairwise_calibration(
     agree = sum(1 for j in judgement_list if j.first_winner == j.oracle)
     agreement_rate = agree / len(judgement_list)
 
-    calibrated = (
-        agreement_rate >= min_agreement
-        and abs(bias) <= max_bias
-    )
+    calibrated = agreement_rate >= min_agreement and abs(bias) <= max_bias
 
     return JudgeCalibrationReport(
         position_bias=bias,
@@ -470,13 +459,10 @@ def ensure_judge_calibrated(
     """
     if report is None:
         raise RuntimeError(
-            "Judge is not calibrated. Run `soup eval design --calibrate "
-            "<oracle-set>` first."
+            "Judge is not calibrated. Run `soup eval design --calibrate <oracle-set>` first."
         )
     if not isinstance(report, JudgeCalibrationReport):
-        raise TypeError(
-            f"report must be JudgeCalibrationReport, got {type(report).__name__}"
-        )
+        raise TypeError(f"report must be JudgeCalibrationReport, got {type(report).__name__}")
     if not report.calibrated:
         raise RuntimeError(
             "Judge calibration failed; refusing to score in production. "

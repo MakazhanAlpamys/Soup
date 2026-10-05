@@ -255,9 +255,7 @@ def check_attach(
         hf_config = load_hf_config(base)
     except Exception as exc:  # noqa: BLE001 --- every loader failure is a verdict
         reason = classify_load_failure(exc) or f"{type(exc).__name__}: {exc}"
-        return AttachCheck(
-            **row, verdict=Verdict.UNVERIFIED, detail=reason, stage="config"
-        )
+        return AttachCheck(**row, verdict=Verdict.UNVERIFIED, detail=reason, stage="config")
 
     model_type = getattr(hf_config, "model_type", None)
     row["model_type"] = model_type
@@ -358,7 +356,8 @@ def trainer_lora_config(model: Any, cfg: Any, console: Any = None) -> tuple[Any,
         return build_lora_config(lora, target_modules=targets, task_type=None), targets
     targets = resolve_lora_target_modules(model, lora.target_modules, console)
     if getattr(cfg, "task", "") == "sft" and getattr(cfg, "modality", "text") in (
-        "vision", "audio",
+        "vision",
+        "audio",
     ):
         # SFT's vision and audio branches make only these two calls: no MoE
         # rescue and no target_parameters. Report what that path attaches.

@@ -214,9 +214,7 @@ class TestTtsTrainerSetup:
         monkeypatch.setattr(
             ilu,
             "find_spec",
-            lambda name, *a, **k: None
-            if name == "snac"
-            else real_find_spec(name, *a, **k),
+            lambda name, *a, **k: None if name == "snac" else real_find_spec(name, *a, **k),
         )
         w = self._wrapper(data_format="audio", family="orpheus")
         with pytest.raises(RuntimeError, match="snac"):
@@ -236,11 +234,13 @@ class TestTtsTrainerSetup:
         orig = SFTTrainerWrapper.setup
         try:
             SFTTrainerWrapper.setup = _fake_super_setup  # type: ignore[assignment]
-            w.setup({
-                "train": [
-                    {"messages": [{"role": "user", "content": "hi"}]},
-                ]
-            })
+            w.setup(
+                {
+                    "train": [
+                        {"messages": [{"role": "user", "content": "hi"}]},
+                    ]
+                }
+            )
         finally:
             SFTTrainerWrapper.setup = orig  # type: ignore[assignment]
 
@@ -249,9 +249,7 @@ class TestTtsTrainerSetup:
 
     def test_apply_tts_templating_non_message_rows_passthrough(self):
         w = self._wrapper(data_format="auto", family="spark")
-        ds = w._apply_tts_templating(
-            {"train": [{"text": "raw"}], "val": []}, "spark", None
-        )
+        ds = w._apply_tts_templating({"train": [{"text": "raw"}], "val": []}, "spark", None)
         assert ds["train"][0] == {"text": "raw"}
 
     def test_apply_tts_templating_val_split_templated(self):
@@ -546,17 +544,23 @@ class TestMoeExpertHelpers:
             def __init__(self):
                 super().__init__()
                 self.self_attn = nn.ModuleDict({"q_proj": nn.Linear(4, 4)})
-                experts = nn.ModuleList([
-                    nn.ModuleDict({
-                        "w1": nn.Linear(4, 8),
-                        "w2": nn.Linear(8, 4),
-                    })
-                    for _ in range(2)
-                ])
-                self.block_sparse_moe = nn.ModuleDict({
-                    "gate": nn.Linear(4, 2),
-                    "experts": experts,
-                })
+                experts = nn.ModuleList(
+                    [
+                        nn.ModuleDict(
+                            {
+                                "w1": nn.Linear(4, 8),
+                                "w2": nn.Linear(8, 4),
+                            }
+                        )
+                        for _ in range(2)
+                    ]
+                )
+                self.block_sparse_moe = nn.ModuleDict(
+                    {
+                        "gate": nn.Linear(4, 2),
+                        "experts": experts,
+                    }
+                )
 
         class Model(nn.Module):
             def __init__(self):
@@ -633,14 +637,18 @@ class TestApplyMoeExpertQuant:
         class Model(nn.Module):
             def __init__(self):
                 super().__init__()
-                experts = nn.ModuleList([
-                    nn.ModuleDict({"w1": nn.Linear(8, 16), "w2": nn.Linear(16, 8)})
-                    for _ in range(2)
-                ])
-                self.block_sparse_moe = nn.ModuleDict({
-                    "gate": nn.Linear(8, 2),
-                    "experts": experts,
-                })
+                experts = nn.ModuleList(
+                    [
+                        nn.ModuleDict({"w1": nn.Linear(8, 16), "w2": nn.Linear(16, 8)})
+                        for _ in range(2)
+                    ]
+                )
+                self.block_sparse_moe = nn.ModuleDict(
+                    {
+                        "gate": nn.Linear(8, 2),
+                        "experts": experts,
+                    }
+                )
 
             def get_submodule(self, target):
                 return dict(self.named_modules())[target]
@@ -690,10 +698,12 @@ class TestApplyMoeFeaturesIfConfigured:
             def __init__(self):
                 super().__init__()
                 experts = nn.ModuleList([nn.ModuleDict({"w1": nn.Linear(4, 4)})])
-                self.block_sparse_moe = nn.ModuleDict({
-                    "gate": nn.Linear(4, 1),
-                    "experts": experts,
-                })
+                self.block_sparse_moe = nn.ModuleDict(
+                    {
+                        "gate": nn.Linear(4, 1),
+                        "experts": experts,
+                    }
+                )
 
             def get_submodule(self, target):
                 return dict(self.named_modules())[target]

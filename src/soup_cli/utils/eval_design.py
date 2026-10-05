@@ -33,9 +33,7 @@ from soup_cli.utils._eval_text import tokenize as _tokenize
 from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink, is_under_cwd
 
 # Closed allowlist of scorer types. Frozenset for O(1) membership.
-SCORER_TYPES: frozenset[str] = frozenset(
-    {"exact_match", "regex", "judge", "rlvr"}
-)
+SCORER_TYPES: frozenset[str] = frozenset({"exact_match", "regex", "judge", "rlvr"})
 
 _MAX_ROWS = 1_000_000
 _MAX_GOAL_CHARS = 4096
@@ -90,13 +88,12 @@ class EvalDesign:
 # Input validation
 # ---------------------------------------------------------------------------
 
+
 def _require_str(value: object, *, field_name: str, max_len: int) -> str:
     if isinstance(value, bool):
         raise TypeError(f"{field_name} must be a string, got bool")
     if not isinstance(value, str):
-        raise TypeError(
-            f"{field_name} must be a string, got {type(value).__name__}"
-        )
+        raise TypeError(f"{field_name} must be a string, got {type(value).__name__}")
     if "\x00" in value:
         raise ValueError(f"{field_name} must not contain NUL bytes")
     if len(value) > max_len:
@@ -113,13 +110,9 @@ def _validate_num_dimensions(num: object) -> int:
     if isinstance(num, bool):
         raise TypeError("num_dimensions must be int, got bool")
     if not isinstance(num, int):
-        raise TypeError(
-            f"num_dimensions must be int, got {type(num).__name__}"
-        )
+        raise TypeError(f"num_dimensions must be int, got {type(num).__name__}")
     if num < _MIN_DIMENSIONS or num > _MAX_DIMENSIONS:
-        raise ValueError(
-            f"num_dimensions must be in [{_MIN_DIMENSIONS}, {_MAX_DIMENSIONS}]"
-        )
+        raise ValueError(f"num_dimensions must be in [{_MIN_DIMENSIONS}, {_MAX_DIMENSIONS}]")
     return num
 
 
@@ -134,7 +127,9 @@ _TOP_TERMS_SUBSAMPLE = 10_000
 
 
 def _top_terms(
-    rows: Sequence[Mapping[str, object]], *, k: int,
+    rows: Sequence[Mapping[str, object]],
+    *,
+    k: int,
 ) -> list[str]:
     """Return up to ``k`` most-salient tokens across the output side.
 
@@ -175,6 +170,7 @@ def _top_terms(
 # Scorer + rubric heuristics
 # ---------------------------------------------------------------------------
 
+
 def _pick_scorer(goal_normalised: str) -> str:
     """Goal-keyword → default scorer; falls back to ``judge``."""
     goal_lower = goal_normalised.lower()
@@ -201,8 +197,7 @@ def _build_rubric(goal: str, term: str, scorer: str) -> str:
     goal_clip = goal if goal else "the task"
     if scorer == "exact_match":
         body = (
-            f"Answer must match the gold label exactly for the {term!r} class. "
-            f"Goal: {goal_clip}."
+            f"Answer must match the gold label exactly for the {term!r} class. Goal: {goal_clip}."
         )
     elif scorer == "regex":
         body = (
@@ -210,10 +205,7 @@ def _build_rubric(goal: str, term: str, scorer: str) -> str:
             f"goal pattern. Goal: {goal_clip}."
         )
     elif scorer == "rlvr":
-        body = (
-            f"Answer must be verifiable on {term!r} (parse + run + assert). "
-            f"Goal: {goal_clip}."
-        )
+        body = f"Answer must be verifiable on {term!r} (parse + run + assert). Goal: {goal_clip}."
     else:
         body = (
             f"Score 1 if the answer addresses {term!r} per the goal, "
@@ -227,6 +219,7 @@ def _build_rubric(goal: str, term: str, scorer: str) -> str:
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
 
 def design_evals_from_data(
     rows: Sequence[Mapping[str, object]],
@@ -345,9 +338,7 @@ def load_eval_design(path: str) -> EvalDesign:
     try:
         st = os.lstat(path)
     except FileNotFoundError as exc:
-        raise FileNotFoundError(
-            f"eval design file not found: {os.path.basename(path)}"
-        ) from exc
+        raise FileNotFoundError(f"eval design file not found: {os.path.basename(path)}") from exc
     except OSError as exc:
         raise ValueError(f"path unreadable: {type(exc).__name__}") from exc
     if stat.S_ISLNK(st.st_mode):
@@ -377,9 +368,7 @@ def load_eval_design(path: str) -> EvalDesign:
         keywords_raw = entry.get("keywords", [])
         if not isinstance(keywords_raw, list):
             raise ValueError("dimension keywords must be a list")
-        keywords = tuple(
-            k for k in keywords_raw if isinstance(k, str) and k
-        )
+        keywords = tuple(k for k in keywords_raw if isinstance(k, str) and k)
         dims.append(
             EvalDimension(
                 name=name,

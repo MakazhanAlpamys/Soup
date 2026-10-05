@@ -20,8 +20,7 @@ runner = CliRunner()
 def _write_data(path: Path) -> Path:
     path.write_text(
         "\n".join(
-            json.dumps({"instruction": f"q{index}", "output": f"a{index}"})
-            for index in range(20)
+            json.dumps({"instruction": f"q{index}", "output": f"a{index}"}) for index in range(20)
         )
         + "\n",
         encoding="utf-8",

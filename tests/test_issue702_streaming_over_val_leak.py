@@ -256,9 +256,7 @@ def test_the_other_strategies_are_unchanged(tmp_path, monkeypatch, strategy) -> 
                 "format": "plaintext",
                 "streaming": True,
                 "interleave": (
-                    {"strategy": "probs", "probs": [0.5, 0.5]}
-                    if strategy == "probs"
-                    else strategy
+                    {"strategy": "probs", "probs": [0.5, 0.5]} if strategy == "probs" else strategy
                 ),
                 "val_split": 0.1,
             },

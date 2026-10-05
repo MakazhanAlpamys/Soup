@@ -60,9 +60,7 @@ def _make_with_renamed_zip(tmp_path: Path) -> Path:
 def _make_with_corrupt_safetensors_header(tmp_path: Path) -> Path:
     target = tmp_path / "corrupt_safetensors_adapter"
     target.mkdir()
-    (target / "adapter_model.safetensors").write_bytes(
-        (1024).to_bytes(8, "little") + b"{}"
-    )
+    (target / "adapter_model.safetensors").write_bytes((1024).to_bytes(8, "little") + b"{}")
     (target / "adapter_config.json").write_text('{"r": 8}', encoding="utf-8")
     return target
 
@@ -76,6 +74,7 @@ class TestStrictSafetensors:
             find_unsafe_weight_files,
             is_safetensors_magic,
         )
+
         assert callable(check_strict_safetensors)
         assert callable(find_unsafe_weight_files)
         assert callable(is_safetensors_magic)
@@ -250,11 +249,13 @@ class TestStrictSafetensorsCli:
         adapter = _make_with_pickle(tmp_path)
         runner = CliRunner()
         result = runner.invoke(
-            app, [
-                "adapters", "check-safetensors",
+            app,
+            [
+                "adapters",
+                "check-safetensors",
                 str(adapter.relative_to(tmp_path)),
                 "--strict",
-            ]
+            ],
         )
         # Exit code 3 is the distinct strict-fail code (planned).
         assert result.exit_code == 3, (result.output, repr(result.exception))
@@ -264,10 +265,12 @@ class TestStrictSafetensorsCli:
         adapter = _make_with_pickle(tmp_path)
         runner = CliRunner()
         result = runner.invoke(
-            app, [
-                "adapters", "check-safetensors",
+            app,
+            [
+                "adapters",
+                "check-safetensors",
                 str(adapter.relative_to(tmp_path)),
-            ]
+            ],
         )
         # Lenient: exit 1, not 0 (still flags the issue).
         assert result.exit_code == 1

@@ -63,6 +63,7 @@ def _dont_ship_evidence() -> dict:
 # Part A — verdict_to_evidence (pure) + round-trip
 # ---------------------------------------------------------------------------
 
+
 class TestVerdictToEvidence:
     def _verdict(self, payload: dict, threshold: float = 0.05):
         task = payload["task"]
@@ -128,6 +129,7 @@ class TestVerdictToEvidence:
 # Part A — CLI --emit-evidence
 # ---------------------------------------------------------------------------
 
+
 class TestEmitEvidenceCli:
     def test_emit_from_evidence_round_trips_through_cli(self):
         """`ship --evidence A --emit-evidence B` then `ship --evidence B` agree."""
@@ -137,8 +139,7 @@ class TestEmitEvidenceCli:
             _write_evidence(Path("a.json"), _ship_evidence())
             res1 = runner.invoke(
                 ship_cmd.app,
-                ["--evidence", "a.json", "--emit-evidence", "b.json",
-                 "--output", "v1.json"],
+                ["--evidence", "a.json", "--emit-evidence", "b.json", "--output", "v1.json"],
             )
             assert res1.exit_code == 0, (res1.output, repr(res1.exception))
             assert Path("b.json").exists()
@@ -147,9 +148,7 @@ class TestEmitEvidenceCli:
             assert "mini_mmlu" in emitted["benchmarks"]
             # Round-trip: the emitted evidence yields the SAME exit code AND the
             # SAME verdict content (not just the same SHIP/DON'T boundary).
-            res2 = runner.invoke(
-                ship_cmd.app, ["--evidence", "b.json", "--output", "v2.json"]
-            )
+            res2 = runner.invoke(ship_cmd.app, ["--evidence", "b.json", "--output", "v2.json"])
             assert res2.exit_code == res1.exit_code
             v1 = json.loads(Path("v1.json").read_text(encoding="utf-8"))
             v2 = json.loads(Path("v2.json").read_text(encoding="utf-8"))
@@ -307,8 +306,14 @@ class TestShipConfigReader:
             # Config says 0.20 (would SHIP), but explicit 0.05 wins -> DON'T SHIP.
             res = runner.invoke(
                 ship_cmd.app,
-                ["--evidence", "ev.json", "--config", "soup.yaml",
-                 "--forgetting-threshold", "0.05"],
+                [
+                    "--evidence",
+                    "ev.json",
+                    "--config",
+                    "soup.yaml",
+                    "--forgetting-threshold",
+                    "0.05",
+                ],
             )
             assert res.exit_code == 2, (res.output, repr(res.exception))
 
@@ -318,9 +323,7 @@ class TestShipConfigReader:
         with runner.isolated_filesystem():
             _write_evidence(Path("ev.json"), _ship_evidence())
             Path("bad.yaml").write_text("base: [unterminated\n", encoding="utf-8")
-            res = runner.invoke(
-                ship_cmd.app, ["--evidence", "ev.json", "--config", "bad.yaml"]
-            )
+            res = runner.invoke(ship_cmd.app, ["--evidence", "ev.json", "--config", "bad.yaml"])
             assert res.exit_code == 3, (res.output, repr(res.exception))
 
     def test_config_fills_every_live_leg_flag(self, monkeypatch):
@@ -391,8 +394,7 @@ class TestShipConfigReader:
             Path("soup.yaml").write_text(cfg, encoding="utf-8")
             res = runner.invoke(
                 ship_cmd.app,
-                ["--base", "m", "--adapter", "a", "--config", "soup.yaml",
-                 "--noise-floor", "5"],
+                ["--base", "m", "--adapter", "a", "--config", "soup.yaml", "--noise-floor", "5"],
             )
             assert res.exit_code == 0, (res.output, repr(res.exception))
             assert captured["noise_floor_runs"] == 5
@@ -406,9 +408,7 @@ class TestShipConfigReader:
         with runner.isolated_filesystem():
             _write_evidence(Path("ev.json"), _ship_evidence())
             Path("soup.yaml").write_text(cfg, encoding="utf-8")
-            res = runner.invoke(
-                ship_cmd.app, ["--evidence", "ev.json", "--config", "soup.yaml"]
-            )
+            res = runner.invoke(ship_cmd.app, ["--evidence", "ev.json", "--config", "soup.yaml"])
             assert res.exit_code == 3, (res.output, repr(res.exception))
             assert "noise-floor" in res.output
 
@@ -424,6 +424,7 @@ def _dont_ship_evidence_010() -> dict:
 # ---------------------------------------------------------------------------
 # Part C — render_ship_pr_markdown + soup ship --push
 # ---------------------------------------------------------------------------
+
 
 def _make_verdict(payload: dict, threshold: float = 0.05):
     task = payload["task"]
@@ -461,7 +462,7 @@ class TestRenderShipPrMarkdown:
         assert "```" in md
         # The opening fence must be strictly longer than any backtick run in the
         # body, so the content cannot inject markdown after it.
-        opening = md[md.index("```"):]
+        opening = md[md.index("```") :]
         fence_len = len(opening) - len(opening.lstrip("`"))
         assert fence_len >= 4  # longer than the 3-backtick run in the name
 
@@ -496,9 +497,7 @@ class TestShipPushCli:
         monkeypatch.setattr(adapter_pr, "post_pr_comment", _fake_post)
         with runner.isolated_filesystem():
             _write_evidence(Path("ev.json"), _ship_evidence())
-            res = runner.invoke(
-                ship_cmd.app, ["--evidence", "ev.json", "--push", "owner/repo#1"]
-            )
+            res = runner.invoke(ship_cmd.app, ["--evidence", "ev.json", "--push", "owner/repo#1"])
             assert res.exit_code == 0, (res.output, repr(res.exception))
             assert calls["target"] == "owner/repo#1"
             assert "soup ship" in calls["body"]
@@ -509,14 +508,13 @@ class TestShipPushCli:
 
         posted = {}
         monkeypatch.setattr(
-            adapter_pr, "post_pr_comment",
+            adapter_pr,
+            "post_pr_comment",
             lambda target, body, **kw: posted.setdefault("t", target) or "",
         )
         with runner.isolated_filesystem():
             _write_evidence(Path("ev.json"), _dont_ship_evidence())
-            res = runner.invoke(
-                ship_cmd.app, ["--evidence", "ev.json", "--push", "owner/repo#2"]
-            )
+            res = runner.invoke(ship_cmd.app, ["--evidence", "ev.json", "--push", "owner/repo#2"])
             assert res.exit_code == 2, (res.output, repr(res.exception))
             assert posted["t"] == "owner/repo#2"
 
@@ -525,9 +523,7 @@ class TestShipPushCli:
 
         with runner.isolated_filesystem():
             _write_evidence(Path("ev.json"), _ship_evidence())
-            res = runner.invoke(
-                ship_cmd.app, ["--evidence", "ev.json", "--push", "not-a-target"]
-            )
+            res = runner.invoke(ship_cmd.app, ["--evidence", "ev.json", "--push", "not-a-target"])
             assert res.exit_code == 3, (res.output, repr(res.exception))
 
     def test_push_transport_failure_warns_but_preserves_verdict_exit(self, monkeypatch):
@@ -541,9 +537,7 @@ class TestShipPushCli:
         monkeypatch.setattr(adapter_pr, "post_pr_comment", _raise)
         with runner.isolated_filesystem():
             _write_evidence(Path("ev.json"), _ship_evidence())
-            res = runner.invoke(
-                ship_cmd.app, ["--evidence", "ev.json", "--push", "owner/repo#1"]
-            )
+            res = runner.invoke(ship_cmd.app, ["--evidence", "ev.json", "--push", "owner/repo#1"])
             # SHIP verdict is preserved (exit 0); the post failure is a warning.
             assert res.exit_code == 0, (res.output, repr(res.exception))
             assert "could not post" in res.output.lower()
@@ -558,9 +552,7 @@ class TestShipPushCli:
         monkeypatch.setattr(adapter_pr, "post_pr_comment", _raise)
         with runner.isolated_filesystem():
             _write_evidence(Path("ev.json"), _dont_ship_evidence())
-            res = runner.invoke(
-                ship_cmd.app, ["--evidence", "ev.json", "--push", "owner/repo#2"]
-            )
+            res = runner.invoke(ship_cmd.app, ["--evidence", "ev.json", "--push", "owner/repo#2"])
             assert res.exit_code == 2, (res.output, repr(res.exception))
 
 
@@ -610,12 +602,10 @@ class TestComputeProvenance:
         evidence about an unchanged model.
         """
         with_ship = (
-            _CONFIG_MIN + "eval:\n  auto_eval: false\n  ship:\n"
-            "    forgetting_threshold: 0.20\n"
+            _CONFIG_MIN + "eval:\n  auto_eval: false\n  ship:\n    forgetting_threshold: 0.20\n"
         )
         different_ship = (
-            _CONFIG_MIN + "eval:\n  auto_eval: false\n  ship:\n"
-            "    forgetting_threshold: 0.03\n"
+            _CONFIG_MIN + "eval:\n  auto_eval: false\n  ship:\n    forgetting_threshold: 0.03\n"
         )
         no_ship = _CONFIG_MIN + "eval:\n  auto_eval: false\n"
         # Two configs differing ONLY in the eval.ship policy hash identically...
@@ -628,8 +618,7 @@ class TestComputeProvenance:
         adding it must NOT change the recipe hash (a floor tunes the verdict,
         not the trained model)."""
         no_floor = (
-            _CONFIG_MIN + "eval:\n  auto_eval: false\n  ship:\n"
-            "    forgetting_threshold: 0.20\n"
+            _CONFIG_MIN + "eval:\n  auto_eval: false\n  ship:\n    forgetting_threshold: 0.20\n"
         )
         with_floor = no_floor + "    noise_floor: 3\n"
         assert _config_sha(with_floor) == _config_sha(no_floor)
@@ -656,12 +645,8 @@ class TestStalenessGate:
 
         with runner.isolated_filesystem():
             Path("soup.yaml").write_text(_CONFIG_MIN, encoding="utf-8")
-            _write_evidence(
-                Path("ev.json"), _ship_with_provenance(_config_sha(_CONFIG_MIN))
-            )
-            res = runner.invoke(
-                ship_cmd.app, ["--evidence", "ev.json", "--config", "soup.yaml"]
-            )
+            _write_evidence(Path("ev.json"), _ship_with_provenance(_config_sha(_CONFIG_MIN)))
+            res = runner.invoke(ship_cmd.app, ["--evidence", "ev.json", "--config", "soup.yaml"])
             assert res.exit_code == 0, (res.output, repr(res.exception))
 
     def test_mismatched_config_sha_is_stale(self):
@@ -670,9 +655,7 @@ class TestStalenessGate:
         with runner.isolated_filesystem():
             Path("soup.yaml").write_text(_CONFIG_MIN, encoding="utf-8")
             _write_evidence(Path("ev.json"), _ship_with_provenance("deadbeef" * 8))
-            res = runner.invoke(
-                ship_cmd.app, ["--evidence", "ev.json", "--config", "soup.yaml"]
-            )
+            res = runner.invoke(ship_cmd.app, ["--evidence", "ev.json", "--config", "soup.yaml"])
             assert res.exit_code == 3, (res.output, repr(res.exception))
             assert "stale" in res.output.lower()
 
@@ -682,9 +665,7 @@ class TestStalenessGate:
         with runner.isolated_filesystem():
             Path("soup.yaml").write_text(_CONFIG_MIN, encoding="utf-8")
             _write_evidence(Path("ev.json"), _ship_evidence())  # no provenance
-            res = runner.invoke(
-                ship_cmd.app, ["--evidence", "ev.json", "--config", "soup.yaml"]
-            )
+            res = runner.invoke(ship_cmd.app, ["--evidence", "ev.json", "--config", "soup.yaml"])
             assert res.exit_code == 3, (res.output, repr(res.exception))
             assert "provenance" in res.output.lower()
 
@@ -721,16 +702,13 @@ class TestStalenessGate:
             _write_evidence(Path("raw.json"), _ship_evidence())  # NO provenance
             res = runner.invoke(
                 ship_cmd.app,
-                ["--evidence", "raw.json", "--config", "soup.yaml",
-                 "--emit-evidence", "out.json"],
+                ["--evidence", "raw.json", "--config", "soup.yaml", "--emit-evidence", "out.json"],
             )
             assert res.exit_code == 0, (res.output, repr(res.exception))
             out = json.loads(Path("out.json").read_text(encoding="utf-8"))
             assert out["provenance"]["config_sha"] == _config_sha(_CONFIG_MIN)
             # The GATE (no --emit-evidence) now accepts the stamped evidence.
-            gate = runner.invoke(
-                ship_cmd.app, ["--evidence", "out.json", "--config", "soup.yaml"]
-            )
+            gate = runner.invoke(ship_cmd.app, ["--evidence", "out.json", "--config", "soup.yaml"])
             assert gate.exit_code == 0, (gate.output, repr(gate.exception))
 
     def test_bound_evidence_reemits_with_provenance(self):
@@ -742,8 +720,7 @@ class TestStalenessGate:
             _write_evidence(Path("ev.json"), _ship_with_provenance(sha))
             res = runner.invoke(
                 ship_cmd.app,
-                ["--evidence", "ev.json", "--config", "soup.yaml",
-                 "--emit-evidence", "out.json"],
+                ["--evidence", "ev.json", "--config", "soup.yaml", "--emit-evidence", "out.json"],
             )
             assert res.exit_code == 0, (res.output, repr(res.exception))
             out = json.loads(Path("out.json").read_text(encoding="utf-8"))
@@ -819,9 +796,7 @@ class TestSecurityHardening:
             ev = _ship_evidence()
             ev["provenance"] = {"config_sha": "\x1b[2J\x1b[HPWNED"}
             _write_evidence(Path("ev.json"), ev)
-            res = runner.invoke(
-                ship_cmd.app, ["--evidence", "ev.json", "--config", "soup.yaml"]
-            )
+            res = runner.invoke(ship_cmd.app, ["--evidence", "ev.json", "--config", "soup.yaml"])
             assert res.exit_code == 3, (res.output, repr(res.exception))
             # The raw ESC byte must NOT reach the terminal.
             assert "\x1b" not in res.output

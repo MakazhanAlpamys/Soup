@@ -41,23 +41,30 @@ app = typer.Typer(
 @app.callback(invoke_without_command=True)
 def main(
     retriever_config: str = typer.Option(
-        ..., "--retriever-config", "-r",
+        ...,
+        "--retriever-config",
+        "-r",
         help="Stage-1 embedding/contrastive recipe (cwd-contained).",
     ),
     generator_config: str = typer.Option(
-        ..., "--generator-config", "-g",
+        ...,
+        "--generator-config",
+        "-g",
         help="Stage-2 RAFT-SFT recipe (cwd-contained).",
     ),
     retriever_model: Optional[str] = typer.Option(
-        None, "--retriever-model",
+        None,
+        "--retriever-model",
         help="Manual retriever-model override; skips Registry auto-link.",
     ),
     timeout: int = typer.Option(
-        6 * 60 * 60, "--timeout",
+        6 * 60 * 60,
+        "--timeout",
         help="Per-stage hard timeout in seconds (60..21600).",
     ),
     plan_only: bool = typer.Option(
-        False, "--plan-only",
+        False,
+        "--plan-only",
         help="Validate config paths + render the plan; skip training.",
     ),
 ) -> None:
@@ -80,9 +87,7 @@ def main(
     if plan_only:
         # Preview the retriever link without touching the Registry write path.
         if retriever_model is not None:
-            link_preview = (
-                f"manual override: {escape(retriever_model)}"
-            )
+            link_preview = f"manual override: {escape(retriever_model)}"
         else:
             resolved, advisory = resolve_retriever_for_generator(None)
             link_preview = escape(advisory)

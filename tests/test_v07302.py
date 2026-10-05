@@ -65,6 +65,7 @@ def _plain(text: str) -> str:
     """
     return " ".join(_ANSI_RE.sub("", text).split())
 
+
 REFUSAL = "I'm sorry, but I can't help with that."
 
 # The over-refusal axis's registered name. Imported lazily inside the #317
@@ -123,9 +124,7 @@ class TestTheAnsiHelperItself:
                 continue
             if "in result.output" in line or "readouterr().out" in line:
                 offenders.append(f"{num}: {stripped}")
-        assert not offenders, "assert on _plain(...), not raw output:\n" + "\n".join(
-            offenders
-        )
+        assert not offenders, "assert on _plain(...), not raw output:\n" + "\n".join(offenders)
 
 
 def _mcq_gen(bench, style):
@@ -147,6 +146,7 @@ def _mcq_gen(bench, style):
 # #357 — \boxed{C}
 # ---------------------------------------------------------------------------
 
+
 class TestIssue357BoxedLetterIsExtracted:
     @pytest.mark.parametrize(
         "output, want",
@@ -154,8 +154,8 @@ class TestIssue357BoxedLetterIsExtracted:
             (r"\boxed{C}", "C"),
             (r"The capital of France is Paris, so the answer is \boxed{C}", "C"),
             (r"Therefore \boxed{B}.", "B"),
-            (r"\boxed{ B }", "B"),          # whitespace inside the box
-            (r"\boxed{c}", "C"),            # lower-case is still a choice
+            (r"\boxed{ B }", "B"),  # whitespace inside the box
+            (r"\boxed{c}", "C"),  # lower-case is still a choice
         ],
     )
     def test_a_boxed_letter_is_the_chosen_option(self, output, want):
@@ -184,9 +184,7 @@ class TestIssue357BoxedLetterIsExtracted:
         """CONTROL against a tier-ordered extractor. POSITION decides, not form:
         a reasoning model that boxes a scratch answer and then self-corrects
         chose the correction."""
-        assert extract_mcq_letter(
-            r"Working: \boxed{A}. On reflection, the answer is B."
-        ) == "B"
+        assert extract_mcq_letter(r"Working: \boxed{A}. On reflection, the answer is B.") == "B"
 
     def test_a_later_paren_beats_an_earlier_box(self):
         """CONTROL against a tier-ordered extractor (paren arm)."""
@@ -238,8 +236,9 @@ class TestIssue357TheSuiteMoves:
     @pytest.mark.parametrize("bench", ["mini_mmlu", "mini_common_sense"])
     def test_a_perfect_boxed_letter_model_scores_one(self, bench):
         """Reproduced at 0.000 on shipped v0.73.1 for both suites."""
-        got = score_bundled_suite(bench, _mcq_gen(bench, lambda a: "Thinking...\n"
-                                                  + r"\boxed{" + a + "}"))
+        got = score_bundled_suite(
+            bench, _mcq_gen(bench, lambda a: "Thinking...\n" + r"\boxed{" + a + "}")
+        )
         assert got == 1.0
 
     @pytest.mark.parametrize("bench", ["mini_mmlu", "mini_common_sense"])
@@ -292,6 +291,7 @@ class TestIssue357TheSuiteMoves:
 # #346 — the tool-call envelope
 # ---------------------------------------------------------------------------
 
+
 def _tool_items():
     return load_suite_items("mini_tool_call")
 
@@ -325,6 +325,7 @@ class TestIssue346ToolCallEnvelope:
     def test_a_bare_function_object_scores(self):
         """The unwrapped inner object — what ``raw_decode`` actually returns
         once the outer brace is gone."""
+
         def gen(prompt):
             for item in _tool_items():
                 if item["prompt"] == prompt and item["expected"] == "NO_TOOL":
@@ -363,15 +364,14 @@ class TestIssue346PermissiveControls:
             names = tool_names_in_prompt(prompt)
             assert names, "the fixture lost its menu"
             # Echo EVERY menu entry, so the correct name is certainly present.
-            return json.dumps(
-                [{"name": n, "description": "a tool"} for n in names]
-            )
+            return json.dumps([{"name": n, "description": "a tool"} for n in names])
 
         assert score_bundled_suite("mini_tool_call", gen) == 0.0
 
     def test_a_lone_menu_shaped_object_with_the_right_name_fails(self):
         """The single-object form of the same thing: right name, but a
         ``description`` where a call has ``arguments``."""
+
         def gen(prompt):
             from soup_cli.eval.gate_suites import tool_names_in_prompt
 
@@ -380,9 +380,7 @@ class TestIssue346PermissiveControls:
                 if item["prompt"] == prompt:
                     if item["expected"] == "NO_TOOL":
                         first = tool_names_in_prompt(prompt)[0]
-                        return json.dumps(
-                            {"function": {"name": first, "arguments": {}}}
-                        )
+                        return json.dumps({"function": {"name": first, "arguments": {}}})
                     expected = json.loads(item["expected"])["function"]["name"]
             assert expected in tool_names_in_prompt(prompt)
             return json.dumps({"name": expected, "description": "a tool"})
@@ -399,6 +397,7 @@ class TestIssue346PermissiveControls:
 # ---------------------------------------------------------------------------
 # #355 — a non-callable generator
 # ---------------------------------------------------------------------------
+
 
 class TestIssue355NonCallableGeneratorRaises:
     @pytest.mark.parametrize("name", list(DEFAULT_GENERAL_SUITE))
@@ -445,6 +444,7 @@ class TestIssue355Controls:
 # #317 — the over-refusal axis
 # ---------------------------------------------------------------------------
 
+
 class TestIssue317SuiteIsRegistered:
     def test_the_axis_is_in_the_default_suite(self):
         """An opt-in axis leaves leg 2 blind by default, which is the finding."""
@@ -467,9 +467,7 @@ class TestIssue317SuiteIsRegistered:
 
 class TestIssue317ScoringDirection:
     def test_complying_with_benign_prompts_scores_one(self):
-        got = score_bundled_suite(
-            _over_refusal(), lambda p: "Sure — here is how you do that."
-        )
+        got = score_bundled_suite(_over_refusal(), lambda p: "Sure — here is how you do that.")
         assert got == 1.0
 
     def test_refusing_benign_prompts_scores_zero(self):
@@ -509,14 +507,13 @@ class TestIssue317LegTwoNowSeesIt:
 
         assert good.decision == "SHIP"
         assert bad.decision == "DON'T SHIP"
-        assert [d.name for d in bad.benchmark_deltas if d.regressed] == [
-            _over_refusal()
-        ]
+        assert [d.name for d in bad.benchmark_deltas if d.regressed] == [_over_refusal()]
 
 
 # ---------------------------------------------------------------------------
 # Noise floor
 # ---------------------------------------------------------------------------
+
 
 class TestNoiseFloorIsPure:
     def test_identical_runs_have_a_zero_floor(self):
@@ -535,9 +532,7 @@ class TestNoiseFloorIsPure:
     def test_each_axis_gets_its_own_floor(self):
         from soup_cli.utils.ship_verdict import compute_noise_floor
 
-        floor = compute_noise_floor(
-            [{"a": 0.5, "b": 0.1}, {"a": 0.5, "b": 0.3}]
-        )
+        floor = compute_noise_floor([{"a": 0.5, "b": 0.1}, {"a": 0.5, "b": 0.3}])
         assert floor.of("a") == 0.0
         assert floor.of("b") == pytest.approx(0.2)
 
@@ -704,15 +699,12 @@ class TestNoiseFloorSurvivesTheEvidenceRoundTrip:
             decide_ship,
         )
 
-        floor = compute_noise_floor(
-            [{"x": 0.50, TASK_AXIS: 0.40}, {"x": 0.62, TASK_AXIS: 0.40}]
-        )
+        floor = compute_noise_floor([{"x": 0.50, TASK_AXIS: 0.40}, {"x": 0.62, TASK_AXIS: 0.40}])
         win = build_task_win("metric", 0.50, 0.80, noise_floor=floor)
         deltas = compute_benchmark_deltas(
             {"x": 0.90}, {"x": 0.80}, forgetting_threshold=0.05, noise_floor=floor
         )
-        return floor, decide_ship(win, deltas, forgetting_threshold=0.05,
-                                  noise_floor=floor)
+        return floor, decide_ship(win, deltas, forgetting_threshold=0.05, noise_floor=floor)
 
     def test_evidence_carries_the_floor(self):
         from soup_cli.utils.ship_verdict import verdict_to_evidence
@@ -727,9 +719,7 @@ class TestNoiseFloorSurvivesTheEvidenceRoundTrip:
         from soup_cli.utils.ship_verdict import verdict_to_evidence
 
         _floor, verdict = self._floored_verdict()
-        replayed = _verdict_from_evidence(
-            verdict_to_evidence(verdict), forgetting_threshold=0.05
-        )
+        replayed = _verdict_from_evidence(verdict_to_evidence(verdict), forgetting_threshold=0.05)
         assert replayed.decision == verdict.decision
         assert [d.regressed for d in replayed.benchmark_deltas] == [
             d.regressed for d in verdict.benchmark_deltas
@@ -766,11 +756,11 @@ class TestNoiseFloorSurvivesTheEvidenceRoundTrip:
     @pytest.mark.parametrize(
         "block",
         [
-            {"runs": 1, "floors": {"x": 0.1}},        # below the minimum
-            {"runs": 99, "floors": {"x": 0.1}},       # above the maximum
-            {"runs": 2, "floors": {"x": -0.1}},       # negative floor
+            {"runs": 1, "floors": {"x": 0.1}},  # below the minimum
+            {"runs": 99, "floors": {"x": 0.1}},  # above the maximum
+            {"runs": 2, "floors": {"x": -0.1}},  # negative floor
             {"runs": 2, "floors": "not-a-mapping"},
-            {"floors": {"x": 0.1}},                   # no runs
+            {"floors": {"x": 0.1}},  # no runs
             "not-a-mapping",
         ],
     )
@@ -897,9 +887,7 @@ class TestAHostileEvidenceFloorIsBoundedAndLoud:
         # the verdict) would otherwise pass this test.
         assert result.exit_code == 0, (result.output, repr(result.exception))
 
-    def test_an_evidence_file_without_a_widening_floor_is_quiet(
-        self, tmp_path, monkeypatch
-    ):
+    def test_an_evidence_file_without_a_widening_floor_is_quiet(self, tmp_path, monkeypatch):
         """CONTROL. Warning on every evidence file trains the operator to
         ignore the warning."""
         from typer.testing import CliRunner
@@ -1030,9 +1018,7 @@ class TestTheMcpEvidenceReaderHonoursTheFloor:
         mcp = tool_ship_evidence({"evidence": "ev.json"})
         assert cli.decision == mcp["decision"]
 
-    def test_a_widening_floor_is_reported_in_the_mcp_result(
-        self, tmp_path, monkeypatch
-    ):
+    def test_a_widening_floor_is_reported_in_the_mcp_result(self, tmp_path, monkeypatch):
         """The CLI warns on stderr; this transport cannot (stdout is the
         JSON-RPC channel), so the warning must ride in the RESULT. Otherwise
         the MCP tool is the quiet reader an attacker would pick."""
@@ -1056,9 +1042,7 @@ class TestTheMcpEvidenceReaderHonoursTheFloor:
         self._write(tmp_path, payload)
         assert tool_ship_evidence({"evidence": "ev.json"})["warnings"] == []
 
-    def test_a_malformed_floor_is_refused_by_the_mcp_reader_too(
-        self, tmp_path, monkeypatch
-    ):
+    def test_a_malformed_floor_is_refused_by_the_mcp_reader_too(self, tmp_path, monkeypatch):
         from soup_cli.mcp_server.registry import McpToolError, tool_ship_evidence
 
         monkeypatch.chdir(tmp_path)
@@ -1097,13 +1081,9 @@ class TestBaselineProvenanceStamp:
         from soup_cli.eval.gate import resolve_baseline
 
         monkeypatch.chdir(tmp_path)
-        (tmp_path / "baseline.json").write_text(
-            '{"mini_mmlu": 0.42}', encoding="utf-8"
-        )
+        (tmp_path / "baseline.json").write_text('{"mini_mmlu": 0.42}', encoding="utf-8")
         seen: list[str] = []
-        scores = resolve_baseline(
-            "baseline.json", warn=lambda msg: seen.append(msg)
-        )
+        scores = resolve_baseline("baseline.json", warn=lambda msg: seen.append(msg))
         assert scores == {"mini_mmlu": 0.42}
         assert len(seen) == 1
         assert "unknown provenance" in seen[0]
@@ -1117,9 +1097,7 @@ class TestBaselineProvenanceStamp:
         monkeypatch.chdir(tmp_path)
         payload = stamp_baseline_scores({"mini_mmlu": 0.42})
         payload["provenance"]["scorer_revision"] = BUNDLED_SCORER_REVISION - 1
-        (tmp_path / "baseline.json").write_text(
-            json.dumps(payload), encoding="utf-8"
-        )
+        (tmp_path / "baseline.json").write_text(json.dumps(payload), encoding="utf-8")
         seen: list[str] = []
         resolve_baseline("baseline.json", warn=lambda msg: seen.append(msg))
         assert len(seen) == 1
@@ -1176,7 +1154,7 @@ def _const_task_scorer(monkeypatch, value=0.5):
     """
     monkeypatch.setattr(
         "soup_cli.commands.ship._build_task_floor_scorer",
-        lambda *args, **kwargs: (lambda: value),
+        lambda *args, **kwargs: lambda: value,
     )
 
 
@@ -1197,8 +1175,13 @@ class TestTheFloorWideningTheThresholdIsAnnounced:
             return "B" if calls["n"] <= n_items else "C"
 
         _measure_noise_floor(
-            2, ["mini_mmlu"], gen, base_id="b", task_mode="judge_score",
-            task_eval="unused.jsonl", judge_model="ollama://j",
+            2,
+            ["mini_mmlu"],
+            gen,
+            base_id="b",
+            task_mode="judge_score",
+            task_eval="unused.jsonl",
+            judge_model="ollama://j",
             forgetting_threshold=0.0,
         )
         out = _plain(capsys.readouterr().out)
@@ -1210,8 +1193,13 @@ class TestTheFloorWideningTheThresholdIsAnnounced:
 
         _const_task_scorer(monkeypatch)
         floor = _measure_noise_floor(
-            2, ["mini_mmlu"], lambda p: "B", base_id="b", task_mode="judge_score",
-            task_eval="unused.jsonl", judge_model="ollama://j",
+            2,
+            ["mini_mmlu"],
+            lambda p: "B",
+            base_id="b",
+            task_mode="judge_score",
+            task_eval="unused.jsonl",
+            judge_model="ollama://j",
             forgetting_threshold=0.0,
         )
         out = _plain(capsys.readouterr().out)
@@ -1348,20 +1336,25 @@ def _run_ship_cli(monkeypatch, base_gen, tuned_gen, extra_args=None):
     from soup_cli.cli import app
     from soup_cli.commands import ship as ship_cmd
 
-    monkeypatch.setattr(
-        ship_cmd, "_resolve_generators", lambda *a, **k: (base_gen, tuned_gen)
-    )
+    monkeypatch.setattr(ship_cmd, "_resolve_generators", lambda *a, **k: (base_gen, tuned_gen))
     runner = CliRunner()
     with runner.isolated_filesystem():
         with open("task.jsonl", "w", encoding="utf-8") as fh:
             fh.write(
-                json.dumps({"prompt": "say hi", "expected": "hi", "scoring": "contains"})
-                + "\n"
+                json.dumps({"prompt": "say hi", "expected": "hi", "scoring": "contains"}) + "\n"
             )
         args = [
-            "ship", "--base", "base", "--adapter", "ad",
-            "--task-eval", "task.jsonl", "--device", "cpu",
-            "--output", "verdict.json",
+            "ship",
+            "--base",
+            "base",
+            "--adapter",
+            "ad",
+            "--task-eval",
+            "task.jsonl",
+            "--device",
+            "cpu",
+            "--output",
+            "verdict.json",
         ]
         args += list(extra_args or [])
         result = runner.invoke(app, args)
@@ -1439,9 +1432,7 @@ class TestNoiseFloorThroughTheRealCli:
             return "hi"
         return "B"
 
-    def test_a_deterministic_run_measures_a_zero_floor_and_reports_it(
-        self, monkeypatch
-    ):
+    def test_a_deterministic_run_measures_a_zero_floor_and_reports_it(self, monkeypatch):
         result, verdict = _run_ship_cli(
             monkeypatch,
             self._stable_gen,
@@ -1476,15 +1467,15 @@ class TestNoiseFloorThroughTheRealCli:
             return "C"
 
         with_floor, v_floor = _run_ship_cli(
-            monkeypatch, noisy_base, dropped_tuned,
+            monkeypatch,
+            noisy_base,
+            dropped_tuned,
             extra_args=["--noise-floor", "2", "--general-suite", "mini_mmlu"],
         )
         assert v_floor["noise_floor"]["floors"]["mini_mmlu"] > 0.05
         assert [d["name"] for d in v_floor["benchmark_deltas"] if d["regressed"]] == []
 
-    def test_without_the_flag_the_same_run_is_gated_at_the_bare_threshold(
-        self, monkeypatch
-    ):
+    def test_without_the_flag_the_same_run_is_gated_at_the_bare_threshold(self, monkeypatch):
         """CONTROL for the test above — proves the floor is what changed the
         answer and not the generators. Same base/tuned, no --noise-floor."""
         n_items = len(MINI_BENCHMARKS["mini_mmlu"])
@@ -1502,13 +1493,13 @@ class TestNoiseFloorThroughTheRealCli:
             return "C"
 
         result, verdict = _run_ship_cli(
-            monkeypatch, noisy_base, dropped_tuned,
+            monkeypatch,
+            noisy_base,
+            dropped_tuned,
             extra_args=["--general-suite", "mini_mmlu"],
         )
         assert verdict["noise_floor"] is None
-        assert [d["name"] for d in verdict["benchmark_deltas"] if d["regressed"]] == [
-            "mini_mmlu"
-        ]
+        assert [d["name"] for d in verdict["benchmark_deltas"] if d["regressed"]] == ["mini_mmlu"]
         assert result.exit_code == 2, (result.output, repr(result.exception))
 
 
@@ -1521,13 +1512,18 @@ class TestMeasureNoiseFloorBranches:
 
         monkeypatch.chdir(tmp_path)
         (tmp_path / "task.jsonl").write_text(
-            json.dumps({"prompt": "say hi", "expected": "hi", "scoring": "contains"})
-            + "\n",
+            json.dumps({"prompt": "say hi", "expected": "hi", "scoring": "contains"}) + "\n",
             encoding="utf-8",
         )
         floor = _measure_noise_floor(
-            2, ["mini_mmlu"], lambda p: "hi B", base_id="b", task_mode="metric",
-            task_eval="task.jsonl", judge_model=None, forgetting_threshold=0.05,
+            2,
+            ["mini_mmlu"],
+            lambda p: "hi B",
+            base_id="b",
+            task_mode="metric",
+            task_eval="task.jsonl",
+            judge_model=None,
+            forgetting_threshold=0.05,
         )
         assert TASK_AXIS in dict(floor.floors)
         # Metric mode is decode-only — the floor must NOT be stamped judge.
@@ -1541,8 +1537,13 @@ class TestMeasureNoiseFloorBranches:
 
         _const_task_scorer(monkeypatch, value=0.5)
         floor = _measure_noise_floor(
-            2, ["mini_mmlu"], lambda p: "B", base_id="b", task_mode="judge_score",
-            task_eval="unused.jsonl", judge_model="ollama://j",
+            2,
+            ["mini_mmlu"],
+            lambda p: "B",
+            base_id="b",
+            task_mode="judge_score",
+            task_eval="unused.jsonl",
+            judge_model="ollama://j",
             forgetting_threshold=0.05,
         )
         assert TASK_AXIS in dict(floor.floors)
@@ -1557,9 +1558,14 @@ class TestMeasureNoiseFloorBranches:
 
         _const_task_scorer(monkeypatch)
         floor = _measure_noise_floor(
-            2, ["mini_mmlu", "hellaswag"], lambda p: "B", base_id="b",
-            task_mode="judge_score", task_eval="unused.jsonl",
-            judge_model="ollama://j", forgetting_threshold=0.05,
+            2,
+            ["mini_mmlu", "hellaswag"],
+            lambda p: "B",
+            base_id="b",
+            task_mode="judge_score",
+            task_eval="unused.jsonl",
+            judge_model="ollama://j",
+            forgetting_threshold=0.05,
         )
         assert "hellaswag" not in dict(floor.floors)
         out = _plain(capsys.readouterr().out)
@@ -1570,8 +1576,13 @@ class TestMeasureNoiseFloorBranches:
 
         _const_task_scorer(monkeypatch)
         _measure_noise_floor(
-            2, ["mini_mmlu"], lambda p: "B", base_id="b", task_mode="judge_score",
-            task_eval="unused.jsonl", judge_model="ollama://j",
+            2,
+            ["mini_mmlu"],
+            lambda p: "B",
+            base_id="b",
+            task_mode="judge_score",
+            task_eval="unused.jsonl",
+            judge_model="ollama://j",
             forgetting_threshold=0.05,
         )
         assert "deterministic" in _plain(capsys.readouterr().out)
@@ -1598,8 +1609,13 @@ class TestNoiseFloorJudgeModes:
 
         monkeypatch.setattr(ship_mod, "_build_pairwise_scorer", fake_pairwise)
         floor = _measure_noise_floor(
-            2, [], lambda p: "x", base_id="b", task_mode="pairwise",
-            task_eval="t.jsonl", judge_model="ollama://j",
+            2,
+            [],
+            lambda p: "x",
+            base_id="b",
+            task_mode="pairwise",
+            task_eval="t.jsonl",
+            judge_model="ollama://j",
             forgetting_threshold=0.05,
         )
         assert floor.of(TASK_AXIS) == pytest.approx(0.2, abs=1e-9)
@@ -1617,8 +1633,13 @@ class TestNoiseFloorJudgeModes:
 
         monkeypatch.setattr(ship_mod, "_build_judge_scorer", fake_judge)
         floor = _measure_noise_floor(
-            2, [], lambda p: "x", base_id="b", task_mode="judge_score",
-            task_eval="t.jsonl", judge_model="ollama://j",
+            2,
+            [],
+            lambda p: "x",
+            base_id="b",
+            task_mode="judge_score",
+            task_eval="t.jsonl",
+            judge_model="ollama://j",
             forgetting_threshold=0.05,
         )
         assert floor.of(TASK_AXIS) == pytest.approx(0.2, abs=1e-9)
@@ -1725,10 +1746,10 @@ class TestBareFunctionShapeGuard:
     @pytest.mark.parametrize(
         "obj",
         [
-            {"name": 123, "arguments": {}},          # non-string name
-            {"name": "x"},                            # no arguments
-            {"arguments": {}},                        # no name
-            {"name": "x", "description": "d"},        # a menu entry
+            {"name": 123, "arguments": {}},  # non-string name
+            {"name": "x"},  # no arguments
+            {"arguments": {}},  # no name
+            {"name": "x", "description": "d"},  # a menu entry
             {"function": {"name": "x"}, "name": "y", "arguments": {}},  # already wrapped
             [],
             None,
@@ -1744,9 +1765,10 @@ class TestBareFunctionShapeGuard:
         """CONTROL."""
         from soup_cli.eval.gate_suites import _looks_like_a_bare_function
 
-        assert _looks_like_a_bare_function(
-            {"name": "get_weather", "arguments": {"city": "Paris"}}
-        ) is True
+        assert (
+            _looks_like_a_bare_function({"name": "get_weather", "arguments": {"city": "Paris"}})
+            is True
+        )
 
 
 class TestNoiseFloorCliFlag:
@@ -1779,8 +1801,15 @@ class TestNoiseFloorCliFlag:
         result = CliRunner().invoke(
             app,
             [
-                "ship", "--base", "m", "--adapter", "a",
-                "--task-eval", str(tasks), "--noise-floor", bad,
+                "ship",
+                "--base",
+                "m",
+                "--adapter",
+                "a",
+                "--task-eval",
+                str(tasks),
+                "--noise-floor",
+                bad,
             ],
         )
         assert result.exit_code == 3, (result.output, repr(result.exception))
@@ -1804,8 +1833,7 @@ class TestNoiseFloorCliFlag:
             ),
             encoding="utf-8",
         )
-        result = CliRunner().invoke(app, ["ship", "--evidence", "ev.json",
-                                          "--noise-floor", "3"])
+        result = CliRunner().invoke(app, ["ship", "--evidence", "ev.json", "--noise-floor", "3"])
         assert result.exit_code == 3, (result.output, repr(result.exception))
         assert "--noise-floor" in _plain(result.output)
 

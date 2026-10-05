@@ -74,8 +74,7 @@ def get_fsdp_config(preset: str) -> dict:
     """
     if preset not in FSDP_CONFIGS:
         raise ValueError(
-            f"Unknown FSDP config: {preset}. "
-            f"Options: {', '.join(FSDP_CONFIGS.keys())}"
+            f"Unknown FSDP config: {preset}. Options: {', '.join(FSDP_CONFIGS.keys())}"
         )
     return copy.deepcopy(FSDP_CONFIGS[preset])
 
@@ -138,8 +137,7 @@ def is_fsdp_available() -> bool:
 
         parts = torch.__version__.split(".")[:2]
         torch_version = tuple(
-            int(p.split("+")[0].split("a")[0].split("b")[0].split("rc")[0])
-            for p in parts
+            int(p.split("+")[0].split("a")[0].split("b")[0].split("rc")[0]) for p in parts
         )
         if torch_version < (2, 2):
             return False
@@ -191,9 +189,7 @@ def validate_fsdp2_compile_config(
             "Pass --fsdp full_shard (or shard_grad / full_offload)."
         )
     if device != "cuda":
-        errors.append(
-            f"use_fsdp2_compile requires CUDA GPUs. Current device: {device}."
-        )
+        errors.append(f"use_fsdp2_compile requires CUDA GPUs. Current device: {device}.")
     if backend != "transformers":
         errors.append(
             f"use_fsdp2_compile is only supported with backend=transformers "
@@ -230,22 +226,13 @@ def validate_fsdp_config(
         return errors
 
     if deepspeed_config:
-        errors.append(
-            "Cannot use FSDP and DeepSpeed together. Choose one: "
-            "--fsdp or --deepspeed."
-        )
+        errors.append("Cannot use FSDP and DeepSpeed together. Choose one: --fsdp or --deepspeed.")
 
     if device != "cuda":
-        errors.append(
-            "FSDP requires CUDA GPUs. "
-            f"Current device: {device}."
-        )
+        errors.append(f"FSDP requires CUDA GPUs. Current device: {device}.")
 
     if backend == "unsloth":
-        errors.append(
-            "FSDP is not compatible with the unsloth backend. "
-            "Use backend: transformers."
-        )
+        errors.append("FSDP is not compatible with the unsloth backend. Use backend: transformers.")
 
     if not is_fsdp_available():
         errors.append(
@@ -255,8 +242,7 @@ def validate_fsdp_config(
 
     if fsdp_preset not in FSDP_CONFIGS:
         errors.append(
-            f"Unknown FSDP preset: {fsdp_preset}. "
-            f"Options: {', '.join(FSDP_CONFIGS.keys())}"
+            f"Unknown FSDP preset: {fsdp_preset}. Options: {', '.join(FSDP_CONFIGS.keys())}"
         )
 
     return errors

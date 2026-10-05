@@ -22,6 +22,7 @@ from soup_cli.config.schema import SoupConfig
 
 pytest.importorskip("torch")
 
+
 @pytest.fixture(scope="module", autouse=True)
 def _torchaudio_native_lib_guard():
     """Stub torchaudio only if the native extension fails, and only for this module."""
@@ -30,6 +31,7 @@ def _torchaudio_native_lib_guard():
 
     try:
         import torchaudio  # noqa: F401
+
         yield
         return
     except ImportError:
@@ -51,7 +53,6 @@ def _torchaudio_native_lib_guard():
             sys.modules.pop("torchaudio", None)
         else:
             sys.modules["torchaudio"] = previous
-
 
 
 def _write_tiny_tokenizer(directory: str) -> None:
@@ -228,7 +229,11 @@ def test_setup_packing_false_unchanged(tmp_path, monkeypatch):
 
 def test_setup_packing_true_actually_packs(tmp_path, monkeypatch):
     wrapper, n_rows = _sft_wrapper(
-        tmp_path, monkeypatch, packing=True, max_length=64, n_rows=8,
+        tmp_path,
+        monkeypatch,
+        packing=True,
+        max_length=64,
+        n_rows=8,
     )
     packed = wrapper.trainer.train_dataset
     if packed is not None and hasattr(packed, "__len__"):

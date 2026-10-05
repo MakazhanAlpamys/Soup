@@ -49,9 +49,7 @@ from typing import Mapping, Sequence
 
 from soup_cli.utils.paths import is_under_cwd
 
-SUPPORTED_METRICS: frozenset[str] = frozenset(
-    {"latency", "judge_score", "retry_rate"}
-)
+SUPPORTED_METRICS: frozenset[str] = frozenset({"latency", "judge_score", "retry_rate"})
 # Which way is an improvement, per metric (#1227). Every supported metric must
 # appear here (a test pins it), so a new metric cannot inherit a direction.
 HIGHER_IS_BETTER: Mapping[str, bool] = MappingProxyType(
@@ -84,9 +82,7 @@ _MAX_SAMPLES_PER_ARM = 1_000_000
 # verdict would never see the refusal. About 1.9e151. Any statistic that is
 # still non-finite is refused in msprt_step before the boundaries are compared.
 _MAX_PRIOR_EFFECT = math.sqrt(sys.float_info.max / (_MAX_SAMPLES_PER_ARM / 2))
-_VALID_DECISIONS: frozenset[str] = frozenset(
-    {"continue", "reject_h0", "accept_h0"}
-)
+_VALID_DECISIONS: frozenset[str] = frozenset({"continue", "reject_h0", "accept_h0"})
 _VALID_DIRECTIONS: frozenset[str] = frozenset({"better", "worse"})
 
 
@@ -101,14 +97,10 @@ def validate_metric_name(name: object) -> str:
     if "\x00" in name:
         raise ValueError("metric must not contain null bytes")
     if len(name) > _MAX_METRIC_NAME_LEN:
-        raise ValueError(
-            f"metric must be <= {_MAX_METRIC_NAME_LEN} chars, got {len(name)}"
-        )
+        raise ValueError(f"metric must be <= {_MAX_METRIC_NAME_LEN} chars, got {len(name)}")
     canonical = name.lower().strip()
     if canonical not in SUPPORTED_METRICS:
-        raise ValueError(
-            f"unknown metric {name!r}; supported: {sorted(SUPPORTED_METRICS)}"
-        )
+        raise ValueError(f"unknown metric {name!r}; supported: {sorted(SUPPORTED_METRICS)}")
     return canonical
 
 
@@ -198,8 +190,7 @@ class MsprtVerdict:
     def __post_init__(self) -> None:
         if self.decision not in _VALID_DECISIONS:
             raise ValueError(
-                f"decision must be one of {sorted(_VALID_DECISIONS)}, "
-                f"got {self.decision!r}"
+                f"decision must be one of {sorted(_VALID_DECISIONS)}, got {self.decision!r}"
             )
         if self.direction is not None and self.direction not in _VALID_DIRECTIONS:
             raise ValueError(
@@ -217,19 +208,13 @@ class MsprtVerdict:
 
 def _validate_sample_list(samples: object, *, arm: str) -> list[float]:
     if not isinstance(samples, Sequence) or isinstance(samples, str):
-        raise TypeError(
-            f"{arm} samples must be a list/tuple, got {type(samples).__name__}"
-        )
+        raise TypeError(f"{arm} samples must be a list/tuple, got {type(samples).__name__}")
     out: list[float] = []
     for i, value in enumerate(samples):
         if isinstance(value, bool):
-            raise TypeError(
-                f"{arm}[{i}] must be number, not bool"
-            )
+            raise TypeError(f"{arm}[{i}] must be number, not bool")
         if not isinstance(value, (int, float)):
-            raise TypeError(
-                f"{arm}[{i}] must be number, got {type(value).__name__}"
-            )
+            raise TypeError(f"{arm}[{i}] must be number, got {type(value).__name__}")
         f_val = float(value)
         if not math.isfinite(f_val):
             raise ValueError(f"{arm}[{i}] must be finite (no NaN / Inf)")
@@ -292,6 +277,7 @@ def _held_out_rows(control: Sequence[float], treatment: Sequence[float]) -> int 
     only on the held-out rows themselves, so the rows after them are still
     untouched by the prior, and the guarantee is unchanged.
     """
+
     def first_change(values: Sequence[float]) -> int:
         return next((i for i, x in enumerate(values) if x != values[0]), len(values))
 
@@ -455,9 +441,7 @@ def msprt_step(
     if held is None or n_c - held < 2 or n_t - held < 2:
         return verdict()
     rest_c, rest_t = ctrl[held:], treat[held:]
-    mean_c, mean_t, pooled_variance = _means_and_pooled_variance(
-        config.metric, rest_c, rest_t
-    )
+    mean_c, mean_t, pooled_variance = _means_and_pooled_variance(config.metric, rest_c, rest_t)
     # Both tested arms constant: t is 0/0, and without measurement noise
     # sequential testing cannot bound the Type-I error honestly (code-review LOW
     # fix v0.63.0), so keep collecting.
@@ -519,9 +503,7 @@ def run_msprt(
     field matching ``config.metric``.
     """
     if not isinstance(input_path, str):
-        raise TypeError(
-            f"input_path must be str, got {type(input_path).__name__}"
-        )
+        raise TypeError(f"input_path must be str, got {type(input_path).__name__}")
     if not input_path:
         raise ValueError("input_path must be non-empty")
     if "\x00" in input_path:

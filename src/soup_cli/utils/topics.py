@@ -59,16 +59,12 @@ def resolve_k(n_rows: int, requested: "int | str") -> int:
         raise ValueError("n_rows must be >= 0")
     if isinstance(requested, str):
         if requested.strip().lower() != "auto":
-            raise ValueError(
-                f"clusters must be an int or 'auto', got {requested!r}"
-            )
+            raise ValueError(f"clusters must be an int or 'auto', got {requested!r}")
         if n_rows < 4:
             return 1
         return max(2, min(_MAX_K, round(math.sqrt(n_rows / 2))))
     if isinstance(requested, bool) or not isinstance(requested, int):
-        raise TypeError(
-            f"clusters must be int or 'auto', got {type(requested).__name__}"
-        )
+        raise TypeError(f"clusters must be int or 'auto', got {type(requested).__name__}")
     if requested < 1:
         raise ValueError(f"clusters must be >= 1, got {requested}")
     return max(1, min(requested, n_rows)) if n_rows else 1
@@ -102,9 +98,7 @@ def kmeans(
     # k-means++ init: seed centers far apart so the result is stable.
     centers = [arr[rng.integers(n_rows)]]
     for _ in range(1, k_eff):
-        dists = np.min(
-            np.stack([((arr - c) ** 2).sum(axis=1) for c in centers]), axis=0
-        )
+        dists = np.min(np.stack([((arr - c) ** 2).sum(axis=1) for c in centers]), axis=0)
         total = float(dists.sum())
         if total <= 0.0:
             # Every point coincides with a center (e.g. all-identical rows).
@@ -147,8 +141,7 @@ def ctfidf_labels(
     label_list = list(labels)
     if len(docs) != len(label_list):
         raise ValueError(
-            "token_docs and labels must be the same length; got "
-            f"{len(docs)} and {len(label_list)}"
+            f"token_docs and labels must be the same length; got {len(docs)} and {len(label_list)}"
         )
     if isinstance(top_n, bool) or not isinstance(top_n, int) or top_n < 1:
         raise ValueError("top_n must be an int >= 1")
@@ -196,8 +189,7 @@ def build_topic_report(
     label_list = [int(x) for x in labels]
     if len(row_list) != len(label_list):
         raise ValueError(
-            "rows and labels must be the same length; got "
-            f"{len(row_list)} and {len(label_list)}"
+            f"rows and labels must be the same length; got {len(row_list)} and {len(label_list)}"
         )
     n_rows = len(row_list)
     if n_rows == 0:
@@ -209,9 +201,7 @@ def build_topic_report(
     topics: list[Topic] = []
     warnings: list[str] = []
     for idx in range(k):
-        members = tuple(
-            i for i, label in enumerate(label_list) if label == idx
-        )
+        members = tuple(i for i, label in enumerate(label_list) if label == idx)
         if not members:
             continue
         fraction = len(members) / n_rows

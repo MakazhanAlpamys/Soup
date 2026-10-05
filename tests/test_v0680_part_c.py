@@ -73,9 +73,7 @@ class TestValidateOptimizer:
 
 
 class TestValidateSpecPath:
-    def test_json_happy(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_json_happy(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from soup_cli.utils.compile_tools import validate_spec_path
 
         monkeypatch.chdir(tmp_path)
@@ -83,9 +81,7 @@ class TestValidateSpecPath:
         spec.write_text("{}", encoding="utf-8")
         assert validate_spec_path(str(spec)).endswith("spec.json")
 
-    def test_yaml_happy(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_yaml_happy(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from soup_cli.utils.compile_tools import validate_spec_path
 
         monkeypatch.chdir(tmp_path)
@@ -104,9 +100,7 @@ class TestValidateSpecPath:
         with pytest.raises(ValueError, match="extension"):
             validate_spec_path(str(spec))
 
-    def test_outside_cwd_rejected(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_outside_cwd_rejected(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from soup_cli.utils.compile_tools import validate_spec_path
 
         outside = tmp_path / "outside"
@@ -121,9 +115,7 @@ class TestValidateSpecPath:
 
 
 class TestToolCompilePlan:
-    def test_frozen(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_frozen(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from soup_cli.utils.compile_tools import ToolCompilePlan
 
         monkeypatch.chdir(tmp_path)
@@ -141,9 +133,7 @@ class TestToolCompilePlan:
         with pytest.raises(dataclasses.FrozenInstanceError):
             plan.optimizer = "gepa"  # type: ignore[misc]
 
-    def test_invalid_optimizer(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_invalid_optimizer(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from soup_cli.utils.compile_tools import ToolCompilePlan
 
         monkeypatch.chdir(tmp_path)
@@ -164,9 +154,7 @@ class TestToolCompilePlan:
 _VALID_OPENAPI = {
     "openapi": "3.0.0",
     "info": {"title": "t", "version": "1"},
-    "paths": {
-        "/w": {"get": {"operationId": "listW", "description": "List widgets"}}
-    },
+    "paths": {"/w": {"get": {"operationId": "listW", "description": "List widgets"}}},
 }
 
 
@@ -209,9 +197,7 @@ class TestCli:
         result = runner.invoke(app, ["compile-tools", "--help"])
         assert result.exit_code == 0, (result.output, repr(result.exception))
 
-    def test_plan_only(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_plan_only(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from soup_cli.cli import app
 
         monkeypatch.chdir(tmp_path)
@@ -255,7 +241,8 @@ class TestSourceWiring:
     def test_no_top_level_heavy_imports(self) -> None:
         path = (
             Path(__file__).resolve().parent.parent
-            / "src" / "soup_cli"
+            / "src"
+            / "soup_cli"
             / "utils"
             / "compile_tools.py"
         )

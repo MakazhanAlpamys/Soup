@@ -141,9 +141,7 @@ def _build_streamed_dpo_wrapper(tmp_path, monkeypatch):
 # the bug and the fix
 # --------------------------------------------------------------------------
 class TestCanonicalNamedParameters:
-    def test_raw_named_parameters_now_equal_the_resident_peft_model(
-        self, tmp_path, monkeypatch
-    ):
+    def test_raw_named_parameters_now_equal_the_resident_peft_model(self, tmp_path, monkeypatch):
         """This was the CONTROL that proved the bug: same checkpoint, same LoRA
         config, one streamed and one not, and the trainable (LoRA) name sets
         shared nothing because every streamed name carried `.inner.` —

@@ -35,14 +35,16 @@ _LLAMA_COMMUNITY_MAU_CAP = 700_000_000
 
 # Tight allowlist of Llama-family community license ids. Defends against
 # a future "llama-permissive" id wrongly tripping the MAU gate.
-_LLAMA_COMMUNITY_LICENSES = frozenset({
-    "llama-2",
-    "llama-3",
-    "llama-3.1",
-    "llama-3.2",
-    "llama-3.3",
-    "llama-community",
-})
+_LLAMA_COMMUNITY_LICENSES = frozenset(
+    {
+        "llama-2",
+        "llama-3",
+        "llama-3.1",
+        "llama-3.2",
+        "llama-3.3",
+        "llama-community",
+    }
+)
 
 
 def validate_deploy_target(value: object) -> str:
@@ -184,9 +186,7 @@ class DownstreamRisk:
         if not isinstance(self.severity, str):
             raise TypeError("severity must be str")
         if self.severity not in _VALID_SEVERITIES:
-            raise ValueError(
-                f"severity must be one of {{ok, warn, block}}, got {self.severity!r}"
-            )
+            raise ValueError(f"severity must be one of {{ok, warn, block}}, got {self.severity!r}")
         if not isinstance(self.reason, str):
             raise TypeError("reason must be str")
 
@@ -212,17 +212,11 @@ def _validate_mau(value: object) -> int:
     if isinstance(value, bool):
         raise TypeError("monthly_active_users must be int, not bool")
     if not isinstance(value, int):
-        raise TypeError(
-            f"monthly_active_users must be int, got {type(value).__name__}"
-        )
+        raise TypeError(f"monthly_active_users must be int, got {type(value).__name__}")
     if value < 0:
-        raise ValueError(
-            f"monthly_active_users must be >= 0, got {value}"
-        )
+        raise ValueError(f"monthly_active_users must be >= 0, got {value}")
     if value > _MAX_MAU:
-        raise ValueError(
-            f"monthly_active_users too large (> {_MAX_MAU}), got {value}"
-        )
+        raise ValueError(f"monthly_active_users too large (> {_MAX_MAU}), got {value}")
     return value
 
 
@@ -250,10 +244,7 @@ def flag_downstream_risk(
         return DownstreamRisk(
             ok=False,
             severity="warn",
-            reason=(
-                f"unknown license {lic!r}; "
-                "verify with legal before shipping."
-            ),
+            reason=(f"unknown license {lic!r}; verify with legal before shipping."),
         )
 
     kind = LICENSE_KINDS.get(lic)
@@ -261,10 +252,7 @@ def flag_downstream_risk(
         return DownstreamRisk(
             ok=False,
             severity="block",
-            reason=(
-                f"non-commercial license {lic!r} categorically forbidden "
-                f"on target {tgt!r}."
-            ),
+            reason=(f"non-commercial license {lic!r} categorically forbidden on target {tgt!r}."),
         )
 
     if kind == "restricted-use":
@@ -306,8 +294,7 @@ def flag_downstream_risk(
             ok=False,
             severity="block",
             reason=(
-                f"strong copyleft {lic!r} is incompatible with "
-                "closed-source embedded firmware."
+                f"strong copyleft {lic!r} is incompatible with closed-source embedded firmware."
             ),
         )
 

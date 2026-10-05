@@ -22,10 +22,12 @@ runner = CliRunner()
 
 def test_messages_to_alpaca():
     """Convert messages → alpaca format."""
-    row = {"messages": [
-        {"role": "user", "content": "What is AI?"},
-        {"role": "assistant", "content": "AI is artificial intelligence."},
-    ]}
+    row = {
+        "messages": [
+            {"role": "user", "content": "What is AI?"},
+            {"role": "assistant", "content": "AI is artificial intelligence."},
+        ]
+    }
     result = messages_to_format(row, "alpaca")
     assert result["instruction"] == "What is AI?"
     assert result["output"] == "AI is artificial intelligence."
@@ -33,11 +35,13 @@ def test_messages_to_alpaca():
 
 def test_messages_to_alpaca_with_system():
     """System message should be preserved in alpaca format."""
-    row = {"messages": [
-        {"role": "system", "content": "You are helpful."},
-        {"role": "user", "content": "Hello"},
-        {"role": "assistant", "content": "Hi!"},
-    ]}
+    row = {
+        "messages": [
+            {"role": "system", "content": "You are helpful."},
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "Hi!"},
+        ]
+    }
     result = messages_to_format(row, "alpaca")
     assert result["system"] == "You are helpful."
     assert result["instruction"] == "Hello"
@@ -46,10 +50,12 @@ def test_messages_to_alpaca_with_system():
 
 def test_messages_to_sharegpt():
     """Convert messages → sharegpt format."""
-    row = {"messages": [
-        {"role": "user", "content": "Hello"},
-        {"role": "assistant", "content": "Hi!"},
-    ]}
+    row = {
+        "messages": [
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "Hi!"},
+        ]
+    }
     result = messages_to_format(row, "sharegpt")
     assert result["conversations"][0]["from"] == "human"
     assert result["conversations"][0]["value"] == "Hello"
@@ -59,10 +65,12 @@ def test_messages_to_sharegpt():
 
 def test_messages_to_chatml():
     """Convert messages → chatml should be identity."""
-    row = {"messages": [
-        {"role": "user", "content": "Hello"},
-        {"role": "assistant", "content": "Hi!"},
-    ]}
+    row = {
+        "messages": [
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "Hi!"},
+        ]
+    }
     result = messages_to_format(row, "chatml")
     assert result == row
 
@@ -79,10 +87,12 @@ def test_roundtrip_alpaca_to_chatml_to_alpaca():
 
 def test_roundtrip_sharegpt_to_chatml_to_sharegpt():
     """Converting sharegpt → chatml → sharegpt should preserve content."""
-    original = {"conversations": [
-        {"from": "human", "value": "Hello"},
-        {"from": "gpt", "value": "Hi!"},
-    ]}
+    original = {
+        "conversations": [
+            {"from": "human", "value": "Hello"},
+            {"from": "gpt", "value": "Hi!"},
+        ]
+    }
     chatml = format_to_messages(original, "sharegpt")
     assert chatml is not None
     back = messages_to_format(chatml, "sharegpt")
@@ -144,14 +154,18 @@ def sample_alpaca_file(tmp_path: Path) -> Path:
 def sample_sharegpt_file(tmp_path: Path) -> Path:
     """Create a sample sharegpt JSONL file."""
     data = [
-        {"conversations": [
-            {"from": "human", "value": "Hello"},
-            {"from": "gpt", "value": "Hi!"},
-        ]},
-        {"conversations": [
-            {"from": "human", "value": "How are you?"},
-            {"from": "gpt", "value": "I'm good!"},
-        ]},
+        {
+            "conversations": [
+                {"from": "human", "value": "Hello"},
+                {"from": "gpt", "value": "Hi!"},
+            ]
+        },
+        {
+            "conversations": [
+                {"from": "human", "value": "How are you?"},
+                {"from": "gpt", "value": "I'm good!"},
+            ]
+        },
     ]
     filepath = tmp_path / "sharegpt.jsonl"
     with open(filepath, "w") as f:
@@ -179,9 +193,7 @@ def test_convert_command(sample_alpaca_file, tmp_path):
 
 def test_convert_same_format(sample_alpaca_file):
     """Converting to same format should warn and exit."""
-    result = runner.invoke(
-        app, ["data", "convert", str(sample_alpaca_file), "--to", "alpaca"]
-    )
+    result = runner.invoke(app, ["data", "convert", str(sample_alpaca_file), "--to", "alpaca"])
     assert result.exit_code == 0
     assert "Nothing to convert" in result.output
 
@@ -210,9 +222,7 @@ def test_merge_command(sample_alpaca_file, sample_sharegpt_file, tmp_path):
 
 def test_merge_missing_file(sample_alpaca_file):
     """Merge with nonexistent file should fail."""
-    result = runner.invoke(
-        app, ["data", "merge", str(sample_alpaca_file), "nonexistent.jsonl"]
-    )
+    result = runner.invoke(app, ["data", "merge", str(sample_alpaca_file), "nonexistent.jsonl"])
     assert result.exit_code == 1
 
 

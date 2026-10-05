@@ -59,9 +59,7 @@ def _load_yaml_config(path: str) -> dict:
 
 
 def plan_cmd(
-    config: str = typer.Option(
-        "soup.yaml", "--config", "-c", help="Path to soup.yaml."
-    ),
+    config: str = typer.Option("soup.yaml", "--config", "-c", help="Path to soup.yaml."),
     state_file: str = typer.Option(
         DEFAULT_STATE_FILE,
         "--state",
@@ -119,9 +117,7 @@ def plan_cmd(
 
 
 def apply_cmd(
-    config: str = typer.Option(
-        "soup.yaml", "--config", "-c", help="Path to soup.yaml."
-    ),
+    config: str = typer.Option("soup.yaml", "--config", "-c", help="Path to soup.yaml."),
     state_file: str = typer.Option(
         DEFAULT_STATE_FILE,
         "--state",
@@ -148,9 +144,7 @@ def apply_cmd(
     try:
         state = read_state(state_file)
     except FileNotFoundError:
-        console.print(
-            f"[red]No state file at {escape(state_file)}; run `soup plan` first.[/]"
-        )
+        console.print(f"[red]No state file at {escape(state_file)}; run `soup plan` first.[/]")
         raise typer.Exit(1) from None
     except (TypeError, ValueError) as exc:
         console.print(f"[red]{escape(str(exc))}[/]")

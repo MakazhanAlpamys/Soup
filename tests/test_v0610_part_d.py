@@ -26,6 +26,7 @@ class TestModuleSurface:
             classify_norm_blowup,
             governor_recommend_method,
         )
+
         assert callable(classify_norm_blowup)
         assert callable(governor_recommend_method)
         assert isinstance(VERDICTS, tuple)
@@ -100,8 +101,9 @@ class TestClassifyNormBlowup:
         warn = DEFAULT_BLOWUP_POLICY.warn_threshold
         assert classify_norm_blowup(warn) == "WARN"
         # Above warn but below blowup.
-        midpoint = (DEFAULT_BLOWUP_POLICY.warn_threshold +
-                    DEFAULT_BLOWUP_POLICY.blowup_threshold) / 2
+        midpoint = (
+            DEFAULT_BLOWUP_POLICY.warn_threshold + DEFAULT_BLOWUP_POLICY.blowup_threshold
+        ) / 2
         assert classify_norm_blowup(midpoint) == "WARN"
 
     def test_blowup_band(self):

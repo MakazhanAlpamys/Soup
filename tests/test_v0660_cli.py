@@ -3,6 +3,7 @@
 Verify the `soup probe` group is registered + all four sub-commands work
 end-to-end, plus the `soup adapters blame --live` runner is wired.
 """
+
 from __future__ import annotations
 
 import json
@@ -18,6 +19,7 @@ runner = CliRunner()
 
 def _strip_ansi(text: str) -> str:
     import re
+
     return re.sub(r"\x1b\[[0-9;]*m", "", text)
 
 
@@ -57,10 +59,16 @@ def test_probe_pack_unknown_base():
 
 def test_probe_pack_happy(tmp_path):
     out_path = tmp_path / "pack.json"
-    result = runner.invoke(soup_app, [
-        "probe", "pack", "meta-llama/Llama-3-8B",
-        "--output", str(out_path.name),
-    ])
+    result = runner.invoke(
+        soup_app,
+        [
+            "probe",
+            "pack",
+            "meta-llama/Llama-3-8B",
+            "--output",
+            str(out_path.name),
+        ],
+    )
     assert result.exit_code == 0, (result.output, repr(result.exception))
     assert out_path.exists()
     payload = json.loads(out_path.read_text(encoding="utf-8"))
@@ -75,9 +83,7 @@ def test_probe_pack_no_args_exits_2():
 
 
 def test_probe_sleeper_no_evidence_renders_metadata():
-    result = runner.invoke(
-        soup_app, ["probe", "sleeper", "meta-llama/Llama-3-8B"]
-    )
+    result = runner.invoke(soup_app, ["probe", "sleeper", "meta-llama/Llama-3-8B"])
     assert result.exit_code == 0, (result.output, repr(result.exception))
     out = _strip_ansi(result.output)
     assert "Sleeper probe" in out
@@ -92,13 +98,17 @@ def test_probe_sleeper_with_evidence(tmp_path):
     # Build evidence: 50 tokens × 4096-dim Llama-3 activations
     activations = np.random.RandomState(0).randn(50, 4096).astype(np.float32)
     evidence_path = tmp_path / "ev.json"
-    evidence_path.write_text(
-        json.dumps({"activations": activations.tolist()}), encoding="utf-8"
+    evidence_path.write_text(json.dumps({"activations": activations.tolist()}), encoding="utf-8")
+    result = runner.invoke(
+        soup_app,
+        [
+            "probe",
+            "sleeper",
+            "meta-llama/Llama-3-8B",
+            "--evidence",
+            evidence_path.name,
+        ],
     )
-    result = runner.invoke(soup_app, [
-        "probe", "sleeper", "meta-llama/Llama-3-8B",
-        "--evidence", evidence_path.name,
-    ])
     # Returns 0 unless MAJOR; deterministic synthetic probe + random activations
     # gives a low rate, so likely OK or MINOR
     out = _strip_ansi(result.output)
@@ -110,10 +120,15 @@ def test_probe_interference_happy(tmp_path):
     payload = {
         "adapters": ["a", "b", "c"],
         "losses": {
-            "a|a": 1.0, "b|b": 1.0, "c|c": 1.0,
-            "a|b": 1.05, "a|c": 1.10,
-            "b|a": 1.02, "b|c": 1.03,
-            "c|a": 1.04, "c|b": 1.01,
+            "a|a": 1.0,
+            "b|b": 1.0,
+            "c|c": 1.0,
+            "a|b": 1.05,
+            "a|c": 1.10,
+            "b|a": 1.02,
+            "b|c": 1.03,
+            "c|a": 1.04,
+            "c|b": 1.01,
         },
     }
     p = tmp_path / "losses.json"
@@ -128,7 +143,8 @@ def test_probe_interference_major_exits_2(tmp_path):
     payload = {
         "adapters": ["a", "b"],
         "losses": {
-            "a|a": 1.0, "b|b": 1.0,
+            "a|a": 1.0,
+            "b|b": 1.0,
             "a|b": 2.0,  # 100% increase -> MAJOR
             "b|a": 1.0,
         },
@@ -167,9 +183,16 @@ def test_probe_sae_diff_missing_sae(tmp_path):
     pre.write_text(json.dumps({"activations": [[1.0]]}), encoding="utf-8")
     post = tmp_path / "post.json"
     post.write_text(json.dumps({"activations": [[1.5]]}), encoding="utf-8")
-    result = runner.invoke(soup_app, [
-        "probe", "sae-diff", "nonexistent.safetensors", pre.name, post.name,
-    ])
+    result = runner.invoke(
+        soup_app,
+        [
+            "probe",
+            "sae-diff",
+            "nonexistent.safetensors",
+            pre.name,
+            post.name,
+        ],
+    )
     assert result.exit_code in (1, 2)
 
 
@@ -190,14 +213,24 @@ def test_adapters_blame_live_runs_default_probe(tmp_path):
         "\n".join('{"text": "row %d"}' % i for i in range(20)),
         encoding="utf-8",
     )
-    result = runner.invoke(soup_app, [
-        "adapters", "blame", adapter.name,
-        "--dataset", dataset.name,
-        "--layer", "q_proj.7",
-        "--budget", "1h",
-        "--shards", "5",
-        "--top-k", "5",
-    ])
+    result = runner.invoke(
+        soup_app,
+        [
+            "adapters",
+            "blame",
+            adapter.name,
+            "--dataset",
+            dataset.name,
+            "--layer",
+            "q_proj.7",
+            "--budget",
+            "1h",
+            "--shards",
+            "5",
+            "--top-k",
+            "5",
+        ],
+    )
     assert result.exit_code == 0, (result.output, repr(result.exception))
     out = _strip_ansi(result.output)
     # No deferred advisory

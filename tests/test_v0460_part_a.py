@@ -39,9 +39,16 @@ def test_catalog_is_mapping_proxy():
 def test_catalog_has_all_10_documented_profiles():
     names = set(list_profiles().keys())
     expected = {
-        "mac-m3", "mac-m4-pro", "rtx-3060-12gb", "rtx-4090-24gb",
-        "iphone-16", "pixel-9", "ollama-local", "lm-studio",
-        "runpod-a100", "hf-jobs-h100",
+        "mac-m3",
+        "mac-m4-pro",
+        "rtx-3060-12gb",
+        "rtx-4090-24gb",
+        "iphone-16",
+        "pixel-9",
+        "ollama-local",
+        "lm-studio",
+        "runpod-a100",
+        "hf-jobs-h100",
     }
     assert expected.issubset(names)
 
@@ -100,8 +107,7 @@ def test_deploy_profile_is_frozen():
 
 def test_render_recipe_includes_base_and_quant():
     profile = get_profile("rtx-4090-24gb")
-    yaml_text = render_recipe_yaml(profile, base="meta-llama/Llama-3.2-1B",
-                                   output_dir="./out")
+    yaml_text = render_recipe_yaml(profile, base="meta-llama/Llama-3.2-1B", output_dir="./out")
     assert "base: meta-llama/Llama-3.2-1B" in yaml_text
     assert "quantization: awq" in yaml_text
     assert "output: ./out" in yaml_text
@@ -109,22 +115,19 @@ def test_render_recipe_includes_base_and_quant():
 
 def test_render_recipe_mlx_backend_for_mlx_runtime():
     profile = get_profile("mac-m3")
-    yaml_text = render_recipe_yaml(profile, base="meta-llama/Llama-3.2-1B",
-                                   output_dir="./out")
+    yaml_text = render_recipe_yaml(profile, base="meta-llama/Llama-3.2-1B", output_dir="./out")
     assert "backend: mlx" in yaml_text
 
 
 def test_render_recipe_transformers_backend_default():
     profile = get_profile("rtx-3060-12gb")
-    yaml_text = render_recipe_yaml(profile, base="meta-llama/Llama-3.2-1B",
-                                   output_dir="./out")
+    yaml_text = render_recipe_yaml(profile, base="meta-llama/Llama-3.2-1B", output_dir="./out")
     assert "backend: transformers" in yaml_text
 
 
 def test_render_recipe_lora_section_present_for_lora_peft():
     profile = get_profile("rtx-4090-24gb")
-    yaml_text = render_recipe_yaml(profile, base="meta-llama/Llama-3.2-1B",
-                                   output_dir="./out")
+    yaml_text = render_recipe_yaml(profile, base="meta-llama/Llama-3.2-1B", output_dir="./out")
     assert "lora:" in yaml_text
     assert "r: 16" in yaml_text
 
@@ -133,23 +136,31 @@ def test_render_recipe_dora_flag_present():
     # No built-in profile uses dora, but the helper should emit it correctly
     # when given a synthetic profile. Validate by constructing manually.
     profile = DeployProfile(
-        name="dora-test", description="x", runtime="transformers",
-        quant="4bit", peft="dora", spec_decoding=False,
-        recommended_max_length=2048, notes="",
+        name="dora-test",
+        description="x",
+        runtime="transformers",
+        quant="4bit",
+        peft="dora",
+        spec_decoding=False,
+        recommended_max_length=2048,
+        notes="",
     )
-    yaml_text = render_recipe_yaml(profile, base="meta-llama/Llama-3.2-1B",
-                                   output_dir="./out")
+    yaml_text = render_recipe_yaml(profile, base="meta-llama/Llama-3.2-1B", output_dir="./out")
     assert "use_dora: true" in yaml_text
 
 
 def test_render_recipe_full_peft_omits_lora_section():
     profile = DeployProfile(
-        name="full-test", description="x", runtime="transformers",
-        quant="none", peft="full", spec_decoding=False,
-        recommended_max_length=2048, notes="",
+        name="full-test",
+        description="x",
+        runtime="transformers",
+        quant="none",
+        peft="full",
+        spec_decoding=False,
+        recommended_max_length=2048,
+        notes="",
     )
-    yaml_text = render_recipe_yaml(profile, base="meta-llama/Llama-3.2-1B",
-                                   output_dir="./out")
+    yaml_text = render_recipe_yaml(profile, base="meta-llama/Llama-3.2-1B", output_dir="./out")
     assert "lora:" not in yaml_text
 
 
@@ -187,8 +198,11 @@ def test_render_recipe_output_dir_validation():
 
 def test_render_recipe_profile_type_check():
     with pytest.raises(TypeError):
-        render_recipe_yaml("not-a-profile", base="m/r",  # type: ignore[arg-type]
-                          output_dir="./o")
+        render_recipe_yaml(
+            "not-a-profile",
+            base="m/r",  # type: ignore[arg-type]
+            output_dir="./o",
+        )
 
 
 def test_render_recipe_max_length_used():
@@ -296,8 +310,7 @@ def test_deploy_script_has_shebang_and_set_e():
 def test_write_recipe_under_cwd_succeeds(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     profile = get_profile("mac-m3")
-    out = write_recipe(profile, base="m/r", output_dir="./out",
-                       recipe_path="recipe.yaml")
+    out = write_recipe(profile, base="m/r", output_dir="./out", recipe_path="recipe.yaml")
     assert os.path.exists(out)
     with open(out, encoding="utf-8") as fh:
         assert "base: m/r" in fh.read()
@@ -308,31 +321,27 @@ def test_write_recipe_outside_cwd_rejected(tmp_path, monkeypatch):
     profile = get_profile("mac-m3")
     abs_outside = str(tmp_path.parent / "evil.yaml")
     with pytest.raises(ValueError, match="must stay under cwd"):
-        write_recipe(profile, base="m/r", output_dir="./out",
-                     recipe_path=abs_outside)
+        write_recipe(profile, base="m/r", output_dir="./out", recipe_path=abs_outside)
 
 
 def test_write_recipe_null_byte_rejected(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     profile = get_profile("mac-m3")
     with pytest.raises(ValueError, match="NUL"):
-        write_recipe(profile, base="m/r", output_dir="./out",
-                     recipe_path="recipe\x00.yaml")
+        write_recipe(profile, base="m/r", output_dir="./out", recipe_path="recipe\x00.yaml")
 
 
 def test_write_recipe_non_string_path(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     profile = get_profile("mac-m3")
     with pytest.raises(TypeError):
-        write_recipe(profile, base="m/r", output_dir="./out",
-                     recipe_path=123)  # type: ignore[arg-type]
+        write_recipe(profile, base="m/r", output_dir="./out", recipe_path=123)  # type: ignore[arg-type]
 
 
 def test_write_deploy_script_under_cwd_succeeds(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     profile = get_profile("mac-m3")
-    out = write_deploy_script(profile, model_path="./out",
-                              script_path="deploy.sh")
+    out = write_deploy_script(profile, model_path="./out", script_path="deploy.sh")
     assert os.path.exists(out)
     if os.name != "nt":
         mode = os.stat(out).st_mode
@@ -344,16 +353,14 @@ def test_write_deploy_script_outside_cwd_rejected(tmp_path, monkeypatch):
     profile = get_profile("mac-m3")
     abs_outside = str(tmp_path.parent / "evil.sh")
     with pytest.raises(ValueError, match="must stay under cwd"):
-        write_deploy_script(profile, model_path="./out",
-                            script_path=abs_outside)
+        write_deploy_script(profile, model_path="./out", script_path=abs_outside)
 
 
 def test_write_deploy_script_null_byte_rejected(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     profile = get_profile("mac-m3")
     with pytest.raises(ValueError):
-        write_deploy_script(profile, model_path="./out",
-                            script_path="x\x00.sh")
+        write_deploy_script(profile, model_path="./out", script_path="x\x00.sh")
 
 
 # ---------------------------------------------------------------------------
@@ -363,7 +370,9 @@ def test_write_deploy_script_null_byte_rejected(tmp_path, monkeypatch):
 
 def test_autopilot_artifacts_returns_pair():
     recipe, script = autopilot_artifacts(
-        "rtx-4090-24gb", base="m/r", output_dir="./out",
+        "rtx-4090-24gb",
+        base="m/r",
+        output_dir="./out",
     )
     assert "base: m/r" in recipe
     assert "soup serve" in script
@@ -371,14 +380,19 @@ def test_autopilot_artifacts_returns_pair():
 
 def test_autopilot_artifacts_default_model_path():
     _, script = autopilot_artifacts(
-        "mac-m3", base="m/r", output_dir="./out",
+        "mac-m3",
+        base="m/r",
+        output_dir="./out",
     )
     assert "./out" in script
 
 
 def test_autopilot_artifacts_explicit_model_path():
     _, script = autopilot_artifacts(
-        "mac-m3", base="m/r", output_dir="./train", model_path="./serve",
+        "mac-m3",
+        base="m/r",
+        output_dir="./train",
+        model_path="./serve",
     )
     assert "./serve" in script
     assert "./serve" in script
@@ -419,8 +433,17 @@ def test_cli_autopilot_writes_recipe_and_script(tmp_path, monkeypatch):
 
     result = runner.invoke(
         deploy.app,
-        ["autopilot", "--target", "mac-m3", "--base", "meta-llama/Llama-3.2-1B",
-         "--recipe-out", "recipe.yaml", "--script-out", "deploy.sh"],
+        [
+            "autopilot",
+            "--target",
+            "mac-m3",
+            "--base",
+            "meta-llama/Llama-3.2-1B",
+            "--recipe-out",
+            "recipe.yaml",
+            "--script-out",
+            "deploy.sh",
+        ],
     )
     assert result.exit_code == 0, (result.output, repr(result.exception))
     assert (tmp_path / "recipe.yaml").exists()
@@ -444,8 +467,7 @@ def test_write_recipe_symlink_target_rejected(tmp_path, monkeypatch):
     os.symlink(real, link)
     profile = get_profile("mac-m3")
     with pytest.raises(ValueError, match="symlink"):
-        write_recipe(profile, base="m/r", output_dir="./out",
-                     recipe_path="recipe.yaml")
+        write_recipe(profile, base="m/r", output_dir="./out", recipe_path="recipe.yaml")
 
 
 @pytest.mark.requires_symlink
@@ -457,16 +479,14 @@ def test_write_deploy_script_symlink_target_rejected(tmp_path, monkeypatch):
     os.symlink(real, link)
     profile = get_profile("mac-m3")
     with pytest.raises(ValueError, match="symlink"):
-        write_deploy_script(profile, model_path="./out",
-                            script_path="deploy.sh")
+        write_deploy_script(profile, model_path="./out", script_path="deploy.sh")
 
 
 def test_write_recipe_path_too_long_rejected(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     profile = get_profile("mac-m3")
     with pytest.raises(ValueError, match="exceeds"):
-        write_recipe(profile, base="m/r", output_dir="./out",
-                     recipe_path="x" * 4097)
+        write_recipe(profile, base="m/r", output_dir="./out", recipe_path="x" * 4097)
 
 
 def test_cli_autopilot_outside_cwd_script_rejected(tmp_path, monkeypatch):
@@ -502,56 +522,105 @@ def test_make_helper_rejects_invalid_runtime():
     from soup_cli.utils.deploy_autopilot import _make
 
     with pytest.raises(ValueError, match="runtime"):
-        _make("x", "d", runtime="nope", quant="4bit", peft="lora",
-              spec_decoding=False, recommended_max_length=2048)
+        _make(
+            "x",
+            "d",
+            runtime="nope",
+            quant="4bit",
+            peft="lora",
+            spec_decoding=False,
+            recommended_max_length=2048,
+        )
 
 
 def test_make_helper_rejects_invalid_quant():
     from soup_cli.utils.deploy_autopilot import _make
 
     with pytest.raises(ValueError, match="quant"):
-        _make("x", "d", runtime="transformers", quant="nope", peft="lora",
-              spec_decoding=False, recommended_max_length=2048)
+        _make(
+            "x",
+            "d",
+            runtime="transformers",
+            quant="nope",
+            peft="lora",
+            spec_decoding=False,
+            recommended_max_length=2048,
+        )
 
 
 def test_make_helper_rejects_invalid_peft():
     from soup_cli.utils.deploy_autopilot import _make
 
     with pytest.raises(ValueError, match="peft"):
-        _make("x", "d", runtime="transformers", quant="4bit", peft="nope",
-              spec_decoding=False, recommended_max_length=2048)
+        _make(
+            "x",
+            "d",
+            runtime="transformers",
+            quant="4bit",
+            peft="nope",
+            spec_decoding=False,
+            recommended_max_length=2048,
+        )
 
 
 def test_make_helper_rejects_bool_max_length():
     from soup_cli.utils.deploy_autopilot import _make
 
     with pytest.raises(TypeError, match="bool"):
-        _make("x", "d", runtime="transformers", quant="4bit", peft="lora",
-              spec_decoding=False, recommended_max_length=True)
+        _make(
+            "x",
+            "d",
+            runtime="transformers",
+            quant="4bit",
+            peft="lora",
+            spec_decoding=False,
+            recommended_max_length=True,
+        )
 
 
 def test_make_helper_rejects_max_length_out_of_bounds():
     from soup_cli.utils.deploy_autopilot import _make
 
     with pytest.raises(ValueError, match="64"):
-        _make("x", "d", runtime="transformers", quant="4bit", peft="lora",
-              spec_decoding=False, recommended_max_length=32)
+        _make(
+            "x",
+            "d",
+            runtime="transformers",
+            quant="4bit",
+            peft="lora",
+            spec_decoding=False,
+            recommended_max_length=32,
+        )
 
 
 def test_make_helper_rejects_bad_name():
     from soup_cli.utils.deploy_autopilot import _make
 
     with pytest.raises(ValueError, match="kebab"):
-        _make("Bad Name", "d", runtime="transformers", quant="4bit", peft="lora",
-              spec_decoding=False, recommended_max_length=2048)
+        _make(
+            "Bad Name",
+            "d",
+            runtime="transformers",
+            quant="4bit",
+            peft="lora",
+            spec_decoding=False,
+            recommended_max_length=2048,
+        )
 
 
 def test_make_helper_rejects_null_byte_description():
     from soup_cli.utils.deploy_autopilot import _make
 
     with pytest.raises(ValueError, match="NUL"):
-        _make("ok", "evil\x00", runtime="transformers", quant="4bit", peft="lora",
-              spec_decoding=False, recommended_max_length=2048)
+        _make(
+            "ok",
+            "evil\x00",
+            runtime="transformers",
+            quant="4bit",
+            peft="lora",
+            spec_decoding=False,
+            recommended_max_length=2048,
+        )
 
 
 def test_make_helper_via_known_failure_modes():

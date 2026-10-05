@@ -26,6 +26,7 @@ class TestLicenseMatrix:
             check_license_compat,
             normalise_license_id,
         )
+
         assert callable(check_license_compat)
         assert callable(normalise_license_id)
         assert isinstance(KNOWN_LICENSES, frozenset)
@@ -36,12 +37,20 @@ class TestLicenseMatrix:
         from soup_cli.utils.license_matrix import KNOWN_LICENSES
 
         for lic in (
-            "apache-2.0", "mit", "bsd-3-clause",
-            "llama-3", "llama-3.1", "llama-community",
-            "gemma", "qwen-research",
-            "gpl-3.0", "agpl-3.0",
-            "cc-by-4.0", "cc-by-nc-4.0",
-            "openrail", "creativeml-openrail-m",
+            "apache-2.0",
+            "mit",
+            "bsd-3-clause",
+            "llama-3",
+            "llama-3.1",
+            "llama-community",
+            "gemma",
+            "qwen-research",
+            "gpl-3.0",
+            "agpl-3.0",
+            "cc-by-4.0",
+            "cc-by-nc-4.0",
+            "openrail",
+            "creativeml-openrail-m",
             "openai-tos",
         ):
             assert lic in KNOWN_LICENSES, f"missing license: {lic}"
@@ -162,6 +171,7 @@ class TestOverride:
         from soup_cli.utils.license_matrix import (
             validate_license_override_reason,
         )
+
         # Empty reason rejected.
         with pytest.raises(ValueError):
             validate_license_override_reason("")
@@ -172,6 +182,7 @@ class TestOverride:
         from soup_cli.utils.license_matrix import (
             validate_license_override_reason,
         )
+
         # A reason of 1-2 chars is too short — defends against `--license-override y`.
         with pytest.raises(ValueError):
             validate_license_override_reason("ok")
@@ -180,6 +191,7 @@ class TestOverride:
         from soup_cli.utils.license_matrix import (
             validate_license_override_reason,
         )
+
         # 4kb cap to prevent log bloat.
         with pytest.raises(ValueError):
             validate_license_override_reason("x" * 5000)
@@ -189,6 +201,7 @@ class TestOverride:
         from soup_cli.utils.license_matrix import (
             validate_license_override_reason,
         )
+
         # Accepted: exactly 4096 chars.
         result = validate_license_override_reason("x" * 4096)
         assert len(result) == 4096
@@ -201,6 +214,7 @@ class TestOverride:
         from soup_cli.utils.license_matrix import (
             validate_license_override_reason,
         )
+
         # Rejected: 7 chars.
         with pytest.raises(ValueError):
             validate_license_override_reason("x" * 7)
@@ -212,6 +226,7 @@ class TestOverride:
         from soup_cli.utils.license_matrix import (
             validate_license_override_reason,
         )
+
         with pytest.raises(ValueError):
             validate_license_override_reason("legal cleared\x00")
 
@@ -219,6 +234,7 @@ class TestOverride:
         from soup_cli.utils.license_matrix import (
             validate_license_override_reason,
         )
+
         result = validate_license_override_reason(
             "legal-cleared by alice@example.com on 2026-05-19"
         )
@@ -240,6 +256,7 @@ class TestMergeIntegration:
         from typer.testing import CliRunner
 
         from soup_cli.cli import app
+
         runner = CliRunner()
         result = runner.invoke(app, ["adapters", "merge", "--help"])
         assert result.exit_code == 0, (result.output, repr(result.exception))
@@ -256,6 +273,7 @@ class TestMergeIntegration:
         from typer.testing import CliRunner
 
         from soup_cli.cli import app
+
         monkeypatch.chdir(tmp_path)
         # Create two minimal adapter dirs — the license gate fires before
         # the actual merge math, so we don't need real safetensors.
@@ -266,12 +284,20 @@ class TestMergeIntegration:
             (d / "adapter_model.safetensors").write_bytes(b"x")
         runner = CliRunner()
         result = runner.invoke(
-            app, [
-                "adapters", "merge", "a", "b",
-                "-o", "out", "--allow-unscanned",
-                "--license", "apache-2.0",
-                "--license", "cc-by-nc-4.0",
-            ]
+            app,
+            [
+                "adapters",
+                "merge",
+                "a",
+                "b",
+                "-o",
+                "out",
+                "--allow-unscanned",
+                "--license",
+                "apache-2.0",
+                "--license",
+                "cc-by-nc-4.0",
+            ],
         )
         assert result.exit_code == 3, (result.output, repr(result.exception))
         assert "license conflict" in result.output.lower()
@@ -286,6 +312,7 @@ class TestMergeIntegration:
         from typer.testing import CliRunner
 
         from soup_cli.cli import app
+
         monkeypatch.chdir(tmp_path)
         # v0.71.2 #190 — the override path now writes an audit record; keep it
         # out of the real ~/.soup during tests.
@@ -297,13 +324,22 @@ class TestMergeIntegration:
             (d / "adapter_model.safetensors").write_bytes(b"x")
         runner = CliRunner()
         result = runner.invoke(
-            app, [
-                "adapters", "merge", "a", "b",
-                "-o", "out", "--allow-unscanned",
-                "--license", "apache-2.0",
-                "--license", "cc-by-nc-4.0",
-                "--license-override", "legal-cleared 2026-05-19 by alice",
-            ]
+            app,
+            [
+                "adapters",
+                "merge",
+                "a",
+                "b",
+                "-o",
+                "out",
+                "--allow-unscanned",
+                "--license",
+                "apache-2.0",
+                "--license",
+                "cc-by-nc-4.0",
+                "--license-override",
+                "legal-cleared 2026-05-19 by alice",
+            ],
         )
         # Gate passed (no exit 3); downstream merge math likely fails on
         # the synthetic safetensors fixture.
@@ -318,6 +354,7 @@ class TestMergeIntegration:
         from typer.testing import CliRunner
 
         from soup_cli.cli import app
+
         monkeypatch.chdir(tmp_path)
         for name in ("a", "b"):
             d = tmp_path / name
@@ -326,13 +363,22 @@ class TestMergeIntegration:
             (d / "adapter_model.safetensors").write_bytes(b"x")
         runner = CliRunner()
         result = runner.invoke(
-            app, [
-                "adapters", "merge", "a", "b",
-                "-o", "out", "--allow-unscanned",
-                "--license", "apache-2.0",
-                "--license", "cc-by-nc-4.0",
-                "--license-override", "ok",  # < 8 chars
-            ]
+            app,
+            [
+                "adapters",
+                "merge",
+                "a",
+                "b",
+                "-o",
+                "out",
+                "--allow-unscanned",
+                "--license",
+                "apache-2.0",
+                "--license",
+                "cc-by-nc-4.0",
+                "--license-override",
+                "ok",  # < 8 chars
+            ],
         )
         assert result.exit_code == 2
         assert "short" in result.output.lower() or "8" in result.output
@@ -341,6 +387,7 @@ class TestMergeIntegration:
         from typer.testing import CliRunner
 
         from soup_cli.cli import app
+
         monkeypatch.chdir(tmp_path)
         for name in ("a", "b"):
             d = tmp_path / name
@@ -350,11 +397,18 @@ class TestMergeIntegration:
         runner = CliRunner()
         # Only one license for two adapters — mismatch.
         result = runner.invoke(
-            app, [
-                "adapters", "merge", "a", "b",
-                "-o", "out", "--allow-unscanned",
-                "--license", "apache-2.0",
-            ]
+            app,
+            [
+                "adapters",
+                "merge",
+                "a",
+                "b",
+                "-o",
+                "out",
+                "--allow-unscanned",
+                "--license",
+                "apache-2.0",
+            ],
         )
         assert result.exit_code == 2
         assert "must match" in result.output.lower() or "count" in result.output.lower()

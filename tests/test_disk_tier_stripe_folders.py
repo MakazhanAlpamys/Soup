@@ -81,7 +81,14 @@ def _digests(folder):
 
 def _inspect(out, index, stripe):
     return inspect_shard_cache(
-        out, index.dtype, index.source_fingerprint, (), "none", False, "", "",
+        out,
+        index.dtype,
+        index.source_fingerprint,
+        (),
+        "none",
+        False,
+        "",
+        "",
         stripe_roots=(stripe,),
     )
 
@@ -271,9 +278,7 @@ def _win_sid_api():
 
     advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    advapi32.ConvertStringSidToSidW.argtypes = [
-        wintypes.LPCWSTR, ctypes.POINTER(ctypes.c_void_p)
-    ]
+    advapi32.ConvertStringSidToSidW.argtypes = [wintypes.LPCWSTR, ctypes.POINTER(ctypes.c_void_p)]
     advapi32.ConvertStringSidToSidW.restype = wintypes.BOOL
     advapi32.EqualSid.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
     advapi32.EqualSid.restype = wintypes.BOOL
@@ -306,9 +311,7 @@ def _win_same_sid(left, right):
 def _assert_only_owner_and_system(trustees, where):
     """Every trustee is the current user or SYSTEM, and the current user is among them."""
     me = owner_only_dir._win_current_user_sid()
-    strangers = sorted(
-        t for t in trustees if not (_win_same_sid(t, me) or _win_same_sid(t, "SY"))
-    )
+    strangers = sorted(t for t in trustees if not (_win_same_sid(t, me) or _win_same_sid(t, "SY")))
     assert not strangers, (strangers, where)
     assert any(_win_same_sid(t, me) for t in trustees), (sorted(trustees), where)
 

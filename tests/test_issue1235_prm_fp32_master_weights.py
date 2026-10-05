@@ -39,18 +39,44 @@ import pytest
 import yaml
 
 ROWS = [
-    {"prompt": "two plus two", "completions": ["we add two and two", "so the answer is four"],
-     "labels": [1.0, 1.0]},
-    {"prompt": "two plus three", "completions": ["we add two and three", "the answer is four"],
-     "labels": [1.0, 0.0]},
-    {"prompt": "one plus three", "completions": ["step one we add", "then check it is four"],
-     "labels": [1.0, 1.0]},
-    {"prompt": "three plus two", "completions": ["we add", "so the answer is four"],
-     "labels": [1.0, 0.0]},
+    {
+        "prompt": "two plus two",
+        "completions": ["we add two and two", "so the answer is four"],
+        "labels": [1.0, 1.0],
+    },
+    {
+        "prompt": "two plus three",
+        "completions": ["we add two and three", "the answer is four"],
+        "labels": [1.0, 0.0],
+    },
+    {
+        "prompt": "one plus three",
+        "completions": ["step one we add", "then check it is four"],
+        "labels": [1.0, 1.0],
+    },
+    {
+        "prompt": "three plus two",
+        "completions": ["we add", "so the answer is four"],
+        "labels": [1.0, 0.0],
+    },
 ]
 _WORDS = (
-    "two", "plus", "is", "four", "five", "so", "the", "answer", "step", "one", "three",
-    "we", "add", "then", "check", "it",
+    "two",
+    "plus",
+    "is",
+    "four",
+    "five",
+    "so",
+    "the",
+    "answer",
+    "step",
+    "one",
+    "three",
+    "we",
+    "add",
+    "then",
+    "check",
+    "it",
 )
 _MAX_LENGTH = 64
 
@@ -92,21 +118,36 @@ def prm_base(tmp_path_factory):
 
     model_dir = tmp_path_factory.mktemp("prm1235") / "tiny-llama"
     torch.manual_seed(0)
-    LlamaForCausalLM(LlamaConfig(
-        vocab_size=64, hidden_size=64, intermediate_size=128, num_hidden_layers=2,
-        num_attention_heads=4, num_key_value_heads=4, max_position_embeddings=128,
-    )).to(torch.bfloat16).save_pretrained(str(model_dir))
+    LlamaForCausalLM(
+        LlamaConfig(
+            vocab_size=64,
+            hidden_size=64,
+            intermediate_size=128,
+            num_hidden_layers=2,
+            num_attention_heads=4,
+            num_key_value_heads=4,
+            max_position_embeddings=128,
+        )
+    ).to(torch.bfloat16).save_pretrained(str(model_dir))
     vocab = {"<unk>": 0, "<s>": 1, "</s>": 2, "<pad>": 3}
     for word in _WORDS:
         vocab[word] = len(vocab)
     tokenizer = Tokenizer(models.WordLevel(vocab=vocab, unk_token="<unk>"))
     tokenizer.pre_tokenizer = pre_tokenizers.Whitespace()
     tokenizer.save(str(model_dir / "tokenizer.json"))
-    (model_dir / "tokenizer_config.json").write_text(json.dumps({
-        "tokenizer_class": "PreTrainedTokenizerFast", "unk_token": "<unk>",
-        "bos_token": "<s>", "eos_token": "</s>", "pad_token": "<pad>",
-        "model_max_length": 128,
-    }), encoding="utf-8")
+    (model_dir / "tokenizer_config.json").write_text(
+        json.dumps(
+            {
+                "tokenizer_class": "PreTrainedTokenizerFast",
+                "unk_token": "<unk>",
+                "bos_token": "<s>",
+                "eos_token": "</s>",
+                "pad_token": "<pad>",
+                "model_max_length": 128,
+            }
+        ),
+        encoding="utf-8",
+    )
     return str(model_dir)
 
 
@@ -115,16 +156,25 @@ def _cfg(base, out_dir, *, lr=1.0e-5, epochs=2, batch_size=1, training=None):
     from soup_cli.config.loader import load_config_from_string
 
     block = {
-        "epochs": epochs, "lr": lr, "batch_size": batch_size, "logging_steps": 1,
-        "save_steps": 10_000, "gradient_accumulation_steps": 1,
+        "epochs": epochs,
+        "lr": lr,
+        "batch_size": batch_size,
+        "logging_steps": 1,
+        "save_steps": 10_000,
+        "gradient_accumulation_steps": 1,
     }
     block.update(training or {})
-    return load_config_from_string(yaml.safe_dump({
-        "base": base, "task": "prm",
-        "data": {"format": "prm", "train": "unused.jsonl", "max_length": _MAX_LENGTH},
-        "training": block,
-        "output": str(out_dir),
-    }))
+    return load_config_from_string(
+        yaml.safe_dump(
+            {
+                "base": base,
+                "task": "prm",
+                "data": {"format": "prm", "train": "unused.jsonl", "max_length": _MAX_LENGTH},
+                "training": block,
+                "output": str(out_dir),
+            }
+        )
+    )
 
 
 def _setup(base, out_dir, *, device="cuda", **kwargs):
@@ -227,8 +277,10 @@ class TestTheLoadDtype:
         import torch
 
         dtypes = {
-            device: {p.dtype for p in _setup(prm_base, tmp_path / str(i), device=device)
-                     .model.parameters()}
+            device: {
+                p.dtype
+                for p in _setup(prm_base, tmp_path / str(i), device=device).model.parameters()
+            }
             for i, device in enumerate(("cuda", "cuda:0"))
         }
         assert dtypes["cuda"] == dtypes["cuda:0"] == {torch.float32}, dtypes
@@ -250,11 +302,16 @@ class TestTheLoadDtype:
         from soup_cli.trainer.prm import PRMTrainerWrapper
 
         ds_config = tmp_path / "ds_zero2.json"
-        ds_config.write_text(json.dumps({
-            "train_micro_batch_size_per_gpu": "auto",
-            "bf16": {"enabled": "auto"},
-            "zero_optimization": {"stage": 2},
-        }), encoding="utf-8")
+        ds_config.write_text(
+            json.dumps(
+                {
+                    "train_micro_batch_size_per_gpu": "auto",
+                    "bf16": {"enabled": "auto"},
+                    "zero_optimization": {"stage": 2},
+                }
+            ),
+            encoding="utf-8",
+        )
         wrapper = PRMTrainerWrapper(
             _cfg(prm_base, tmp_path), device="cuda", deepspeed_config=str(ds_config)
         )
@@ -354,9 +411,7 @@ class TestPreAmpereFp16:
         real_create = transformers.Trainer.create_optimizer
 
         def spy(self, *args, **kwargs):
-            seen.update(
-                {n: p.dtype for n, p in self.model.named_parameters() if p.requires_grad}
-            )
+            seen.update({n: p.dtype for n, p in self.model.named_parameters() if p.requires_grad})
             return real_create(self, *args, **kwargs)
 
         monkeypatch.setattr(transformers.Trainer, "create_optimizer", spy)
@@ -371,9 +426,7 @@ class TestPreAmpereFp16:
         wrong = {n: str(d) for n, d in seen.items() if d != torch.float32}
         assert not wrong, f"the fp16 GradScaler would unscale these: {wrong}"
 
-    def test_an_fp16_autocast_grad_scaler_step_trains(
-        self, prm_base, tmp_path, aten_half_matmuls
-    ):
+    def test_an_fp16_autocast_grad_scaler_step_trains(self, prm_base, tmp_path, aten_half_matmuls):
         """An optimizer step the way Accelerate runs fp16 on a CUDA card: autocast
         only ``model.forward``, convert its outputs to fp32 (``prepare_model`` in
         ``accelerate/accelerator.py``), and scale the loss. CPU autocast and the CPU
@@ -397,9 +450,7 @@ class TestPreAmpereFp16:
         wrapper = _setup(prm_base, tmp_path)
         model, tokenizer = wrapper.model, wrapper.tokenizer
         autocast = torch.autocast(device_type="cpu", dtype=torch.float16)
-        model.forward = MethodType(
-            convert_outputs_to_fp32(autocast(model.forward.__func__)), model
-        )
+        model.forward = MethodType(convert_outputs_to_fp32(autocast(model.forward.__func__)), model)
         batch = _build_collator(tokenizer)(_prepare_prm_dataset(ROWS, tokenizer, _MAX_LENGTH))
         trained = {n: p for n, p in model.named_parameters() if _group(n) in _TRAINED_GROUPS}
         before = _snapshot(model)
@@ -527,7 +578,8 @@ class TestThePreflight:
 
         buffer = io.StringIO()
         monkeypatch.setattr(
-            train_cmd, "console",
+            train_cmd,
+            "console",
             Console(file=buffer, width=200, force_terminal=False, color_system=None),
         )
         return buffer
@@ -574,7 +626,8 @@ class TestTheQuantizationMessages:
 
         buffer = io.StringIO()
         monkeypatch.setattr(
-            loader, "console",
+            loader,
+            "console",
             Console(file=buffer, width=500, force_terminal=False, color_system=None),
         )
         cfg = load_config_from_string(self._PRM + "training: {quantization: 4bit}\n")

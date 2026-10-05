@@ -111,16 +111,12 @@ class TestAnOmittedFormatAutoDetects:
         from soup_cli.mcp_server.registry import tool_data_validate
 
         result = tool_data_validate({"data": str(dataset)})
-        assert result.get("format") == "alpaca", (
-            "the caller cannot tell which format was checked"
-        )
+        assert result.get("format") == "alpaca", "the caller cannot tell which format was checked"
 
     def test_auto_is_accepted_explicitly_as_the_cli_accepts_it(self, dataset):
         from soup_cli.mcp_server.registry import tool_data_validate
 
-        assert tool_data_validate({"data": str(dataset), "format": "auto"})["format"] == (
-            "alpaca"
-        )
+        assert tool_data_validate({"data": str(dataset), "format": "auto"})["format"] == ("alpaca")
 
     def test_undetectable_data_is_refused_not_silently_passed(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
@@ -149,9 +145,7 @@ class TestTheTwoSurfacesAgree:
 
         from soup_cli.commands.data import app
 
-        return CliRunner(env={"COLUMNS": "200"}).invoke(
-            app, ["validate", str(dataset), *args]
-        )
+        return CliRunner(env={"COLUMNS": "200"}).invoke(app, ["validate", str(dataset), *args])
 
     def test_both_refuse_an_unrecognised_format(self, dataset):
         from soup_cli.mcp_server.registry import McpToolError, tool_data_validate

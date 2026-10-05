@@ -81,8 +81,7 @@ def _tiny_model_and_tok(d: int = 8, n_layers: int = 3, vocab: int = 64):
     class _Tok:
         chat_template = None
 
-        def __call__(self, text, return_tensors=None, truncation=None,
-                     max_length=None, **_kw):
+        def __call__(self, text, return_tensors=None, truncation=None, max_length=None, **_kw):
             ids = [(len(w) % (vocab - 1)) + 1 for w in text.split()] or [1]
             return _DictBatch(input_ids=torch.tensor([ids], dtype=torch.long))
 
@@ -129,9 +128,7 @@ class TestProbeKernel:
     def test_contrast_probe_unit_norm(self) -> None:
         from soup_cli.utils.probe_kernel import compute_contrast_probe
 
-        w, _ = compute_contrast_probe(
-            np.ones((4, 8)) * 2.0, np.ones((4, 8)) * -1.0
-        )
+        w, _ = compute_contrast_probe(np.ones((4, 8)) * 2.0, np.ones((4, 8)) * -1.0)
         assert np.linalg.norm(w) == pytest.approx(1.0, abs=1e-5)
 
     def test_contrast_probe_degenerate_rejected(self) -> None:
@@ -252,8 +249,12 @@ class TestExtractLayerActivations:
 
         model, tok = _tiny_model_and_tok(d=8)
         acts = extract_layer_activations(
-            model, tok, ["hello world", "foo bar baz", "one"],
-            layer="model.layers.1", device="cpu", pool="mean",
+            model,
+            tok,
+            ["hello world", "foo bar baz", "one"],
+            layer="model.layers.1",
+            device="cpu",
+            pool="mean",
         )
         assert acts.shape == (3, 8)
         assert acts.dtype == np.float32
@@ -263,8 +264,12 @@ class TestExtractLayerActivations:
 
         model, tok = _tiny_model_and_tok(d=8)
         acts = extract_layer_activations(
-            model, tok, ["hello world", "foo bar baz"],
-            layer="model.layers.0", device="cpu", pool="none",
+            model,
+            tok,
+            ["hello world", "foo bar baz"],
+            layer="model.layers.0",
+            device="cpu",
+            pool="none",
         )
         # 2 + 3 tokens = 5 rows
         assert acts.shape == (5, 8)
@@ -274,8 +279,13 @@ class TestExtractLayerActivations:
 
         model, tok = _tiny_model_and_tok(d=8)
         acts = extract_layer_activations(
-            model, tok, ["a b c d e", "f g h i j"],
-            layer="model.layers.0", device="cpu", pool="none", max_tokens=4,
+            model,
+            tok,
+            ["a b c d e", "f g h i j"],
+            layer="model.layers.0",
+            device="cpu",
+            pool="none",
+            max_tokens=4,
         )
         assert acts.shape[0] == 4
 
@@ -285,7 +295,11 @@ class TestExtractLayerActivations:
         model, tok = _tiny_model_and_tok()
         with pytest.raises(ValueError, match="pool"):
             extract_layer_activations(
-                model, tok, ["x"], layer="model.layers.0", device="cpu",
+                model,
+                tok,
+                ["x"],
+                layer="model.layers.0",
+                device="cpu",
                 pool="bogus",
             )
 
@@ -295,7 +309,11 @@ class TestExtractLayerActivations:
         model, tok = _tiny_model_and_tok()
         with pytest.raises(ValueError, match="non-empty"):
             extract_layer_activations(
-                model, tok, ["", "  "], layer="model.layers.0", device="cpu",
+                model,
+                tok,
+                ["", "  "],
+                layer="model.layers.0",
+                device="cpu",
             )
 
     def test_hook_removed_after_extract(self) -> None:
@@ -304,7 +322,11 @@ class TestExtractLayerActivations:
         model, tok = _tiny_model_and_tok()
         target = model.model.layers[1]
         extract_layer_activations(
-            model, tok, ["a b"], layer="model.layers.1", device="cpu",
+            model,
+            tok,
+            ["a b"],
+            layer="model.layers.1",
+            device="cpu",
         )
         # No lingering forward hooks.
         assert len(target._forward_hooks) == 0
@@ -428,9 +450,7 @@ class TestSleeperRealWeights:
         from soup_cli.utils.sleeper_probe import run_sleeper_probe
 
         with pytest.raises(ValueError, match="hidden_dim mismatch"):
-            run_sleeper_probe(
-                np.ones((3, 8), dtype=np.float32), "x", weights=(np.ones(6), 0.0)
-            )
+            run_sleeper_probe(np.ones((3, 8), dtype=np.float32), "x", weights=(np.ones(6), 0.0))
 
     def test_run_with_bad_weights_tuple(self) -> None:
         from soup_cli.utils.sleeper_probe import run_sleeper_probe
@@ -442,9 +462,7 @@ class TestSleeperRealWeights:
         from soup_cli.utils.sleeper_probe import run_sleeper_probe
 
         with pytest.raises(TypeError, match="threshold"):
-            run_sleeper_probe(
-                np.ones((3, 8), dtype=np.float32), "x", weights=(np.ones(8), True)
-            )
+            run_sleeper_probe(np.ones((3, 8), dtype=np.float32), "x", weights=(np.ones(8), True))
 
     def test_synthetic_fallback_still_works(self) -> None:
         # The SHA-256 fallback path must remain (back-compat, #215 criterion).
@@ -603,7 +621,8 @@ class TestDownloadSae:
         # Must reject BEFORE any network call.
         called = {"n": 0}
         monkeypatch.setattr(
-            hubs, "snapshot_download",
+            hubs,
+            "snapshot_download",
             lambda *a, **k: called.__setitem__("n", called["n"] + 1),
         )
         with pytest.raises(ValueError, match="HF_HUB_ALLOWLIST"):
@@ -654,7 +673,8 @@ class TestDownloadSae:
         empty = tmp_path / "empty"
         empty.mkdir()
         monkeypatch.setattr(
-            hubs, "snapshot_download",
+            hubs,
+            "snapshot_download",
             lambda repo_id, **k: str(empty),
         )
         with pytest.raises(FileNotFoundError, match="no .safetensors"):
@@ -727,8 +747,7 @@ class TestSaeDiffCli216:
         )
         res = runner.invoke(
             probe_cmd.app,
-            ["sae-diff", "openai/sae-gpt2-small", "pre.json", "post.json",
-             "--auto-download"],
+            ["sae-diff", "openai/sae-gpt2-small", "pre.json", "post.json", "--auto-download"],
         )
         assert res.exit_code == 0, res.output
         assert "SAE feature diff" in res.output
@@ -908,9 +927,7 @@ class TestTruthHarmCli:
 
         acts = self._acts(tmp_path, 10, 8, 5)
         np.savez(tmp_path / "w.npz", w=np.array([1.0] + [0.0] * 7), threshold=np.array(0.5))
-        res = runner.invoke(
-            app, [kind, "custom/model", "--evidence", acts, "--weights", "w.npz"]
-        )
+        res = runner.invoke(app, [kind, "custom/model", "--evidence", acts, "--weights", "w.npz"])
         assert res.exit_code == 2  # 50% flagged -> MAJOR
         assert "MAJOR" in res.output
 
@@ -1003,10 +1020,7 @@ class TestInterferenceMeasureCli:
     def _eval_suite(self, tmp_path) -> str:
         p = tmp_path / "eval.jsonl"
         p.write_text(
-            "\n".join(
-                json.dumps({"prompt": f"q{i}", "response": f"a{i}"})
-                for i in range(5)
-            ),
+            "\n".join(json.dumps({"prompt": f"q{i}", "response": f"a{i}"}) for i in range(5)),
             encoding="utf-8",
         )
         return "eval.jsonl"
@@ -1040,8 +1054,7 @@ class TestInterferenceMeasureCli:
         suite = self._eval_suite(tmp_path)
         res = runner.invoke(
             app,
-            ["interference", "--measure", suite, "--base-model", "tiny",
-             "--adapter", "nope"],
+            ["interference", "--measure", suite, "--base-model", "tiny", "--adapter", "nope"],
         )
         assert res.exit_code == 2
         assert "name=path" in _clean_help(res.output)
@@ -1054,8 +1067,17 @@ class TestInterferenceMeasureCli:
         (tmp_path / "b").mkdir()
         res = runner.invoke(
             app,
-            ["interference", "--measure", "missing.jsonl", "--base-model", "tiny",
-             "--adapter", "a=a", "--adapter", "b=b"],
+            [
+                "interference",
+                "--measure",
+                "missing.jsonl",
+                "--base-model",
+                "tiny",
+                "--adapter",
+                "a=a",
+                "--adapter",
+                "b=b",
+            ],
         )
         assert res.exit_code == 2
 
@@ -1069,16 +1091,28 @@ class TestInterferenceMeasureCli:
         (tmp_path / "b").mkdir()
         # Mock the live measurement at the boundary.
         monkeypatch.setattr(
-            interference_live, "measure_interference_losses",
+            interference_live,
+            "measure_interference_losses",
             lambda base, adapters, rows, **k: {
-                ("a", "a"): 1.0, ("b", "b"): 1.0,
-                ("a", "b"): 1.02, ("b", "a"): 1.03,
+                ("a", "a"): 1.0,
+                ("b", "b"): 1.0,
+                ("a", "b"): 1.02,
+                ("b", "a"): 1.03,
             },
         )
         res = runner.invoke(
             app,
-            ["interference", "--measure", suite, "--base-model", "tiny",
-             "--adapter", "a=a", "--adapter", "b=b"],
+            [
+                "interference",
+                "--measure",
+                suite,
+                "--base-model",
+                "tiny",
+                "--adapter",
+                "a=a",
+                "--adapter",
+                "b=b",
+            ],
         )
         assert res.exit_code == 0, res.output
         assert "interference matrix" in res.output.lower()
@@ -1092,16 +1126,28 @@ class TestInterferenceMeasureCli:
         (tmp_path / "a").mkdir()
         (tmp_path / "b").mkdir()
         monkeypatch.setattr(
-            interference_live, "measure_interference_losses",
+            interference_live,
+            "measure_interference_losses",
             lambda base, adapters, rows, **k: {
-                ("a", "a"): 1.0, ("b", "b"): 1.0,
-                ("a", "b"): 1.5, ("b", "a"): 1.5,  # 50% interference -> MAJOR
+                ("a", "a"): 1.0,
+                ("b", "b"): 1.0,
+                ("a", "b"): 1.5,
+                ("b", "a"): 1.5,  # 50% interference -> MAJOR
             },
         )
         res = runner.invoke(
             app,
-            ["interference", "--measure", suite, "--base-model", "tiny",
-             "--adapter", "a=a", "--adapter", "b=b"],
+            [
+                "interference",
+                "--measure",
+                suite,
+                "--base-model",
+                "tiny",
+                "--adapter",
+                "a=a",
+                "--adapter",
+                "b=b",
+            ],
         )
         assert res.exit_code == 2
 
@@ -1110,10 +1156,12 @@ class TestInterferenceMeasureCli:
         from soup_cli.commands.probe import app
 
         (tmp_path / "losses.json").write_text(
-            json.dumps({
-                "adapters": ["a", "b"],
-                "losses": {"a|a": 1.0, "b|b": 1.0, "a|b": 1.01, "b|a": 1.01},
-            }),
+            json.dumps(
+                {
+                    "adapters": ["a", "b"],
+                    "losses": {"a|a": 1.0, "b|b": 1.0, "a|b": 1.01, "b|a": 1.01},
+                }
+            ),
             encoding="utf-8",
         )
         res = runner.invoke(app, ["interference", "losses.json"])
@@ -1199,9 +1247,7 @@ class TestCaptureActivations:
             json.dumps({"prompt": "a"}) + "\n" + json.dumps({"prompt": "b"}),
             encoding="utf-8",
         )
-        written = _capture_activations(
-            "model.layers.3", "probes.jsonl", "base", str(out_dir)
-        )
+        written = _capture_activations("model.layers.3", "probes.jsonl", "base", str(out_dir))
         assert os.path.exists(written)
         payload = json.loads((out_dir / "activations" / "activations.json").read_text())
         assert payload["layer"] == "model.layers.3"
@@ -1227,9 +1273,7 @@ class TestCaptureActivations:
         (tmp_path / "out").mkdir()
         (tmp_path / "empty.jsonl").write_text("\n\n", encoding="utf-8")
         with pytest.raises(ValueError, match="no usable prompts"):
-            _capture_activations(
-                "model.layers.0", "empty.jsonl", "base", str(tmp_path / "out")
-            )
+            _capture_activations("model.layers.0", "empty.jsonl", "base", str(tmp_path / "out"))
 
     def test_bad_layer(self, tmp_path, monkeypatch) -> None:
         monkeypatch.chdir(tmp_path)
@@ -1247,7 +1291,9 @@ class TestCaptureActivations:
         (tmp_path / "out").mkdir()
         with pytest.raises(ValueError):
             _capture_activations(
-                "model.layers.0", str(tmp_path.parent / "p.jsonl"), "base",
+                "model.layers.0",
+                str(tmp_path.parent / "p.jsonl"),
+                "base",
                 str(tmp_path / "out"),
             )
 
@@ -1376,8 +1422,13 @@ class TestReviewFollowups:
         acts = np.ones((10, 4), dtype=np.float32)
         w = np.ones(4, dtype=np.float32)
         res = run_linear_probe(
-            acts, kind="truth", base="b", w=w, threshold=-100.0,
-            minor=0.05, major=0.20,
+            acts,
+            kind="truth",
+            base="b",
+            w=w,
+            threshold=-100.0,
+            minor=0.05,
+            major=0.20,
         )
         assert res.verdict == "MAJOR"
         assert res.flag_rate == 1.0
@@ -1388,8 +1439,13 @@ class TestReviewFollowups:
 
         with pytest.raises(ValueError, match="2D"):
             run_linear_probe(
-                np.ones(4), kind="truth", base="b", w=np.ones(4),
-                threshold=0.0, minor=0.05, major=0.20,
+                np.ones(4),
+                kind="truth",
+                base="b",
+                w=np.ones(4),
+                threshold=0.0,
+                minor=0.05,
+                major=0.20,
             )
 
     # --- run_bundled_probe: weights path skips the allowlist ---
@@ -1398,8 +1454,13 @@ class TestReviewFollowups:
 
         acts = np.ones((5, 4), dtype=np.float32)
         res = run_bundled_probe(
-            acts, "totally/unknown/base", kind="harm", bundled={},
-            salt="harm", minor=0.05, major=0.20,
+            acts,
+            "totally/unknown/base",
+            kind="harm",
+            bundled={},
+            salt="harm",
+            minor=0.05,
+            major=0.20,
             weights=(np.ones(4, dtype=np.float32), -100.0),
         )
         assert res.verdict == "MAJOR"  # arbitrary base accepted with weights
@@ -1410,8 +1471,13 @@ class TestReviewFollowups:
         acts = np.ones((5, 4), dtype=np.float32)
         with pytest.raises(ValueError, match="hidden_dim mismatch"):
             run_bundled_probe(
-                acts, "b", kind="harm", bundled={}, salt="harm",
-                minor=0.05, major=0.20,
+                acts,
+                "b",
+                kind="harm",
+                bundled={},
+                salt="harm",
+                minor=0.05,
+                major=0.20,
                 weights=(np.ones(6, dtype=np.float32), 0.0),
             )
 
@@ -1421,8 +1487,13 @@ class TestReviewFollowups:
         acts = np.ones((5, 4), dtype=np.float32)
         with pytest.raises(ValueError, match="no bundled probe"):
             run_bundled_probe(
-                acts, "unknown", kind="harm", bundled={}, salt="harm",
-                minor=0.05, major=0.20,
+                acts,
+                "unknown",
+                kind="harm",
+                bundled={},
+                salt="harm",
+                minor=0.05,
+                major=0.20,
             )
 
     # --- ProbeSpec / ProbeResult __post_init__ + frozen ---
@@ -1446,8 +1517,12 @@ class TestReviewFollowups:
 
         with pytest.raises(ValueError, match="verdict"):
             ProbeResult(
-                kind="truth", base="b", num_tokens=1, flag_rate=0.0,
-                max_score=0.0, verdict="WAT",
+                kind="truth",
+                base="b",
+                num_tokens=1,
+                flag_rate=0.0,
+                max_score=0.0,
+                verdict="WAT",
             )
 
     def test_proberesult_rejects_negative_tokens(self) -> None:
@@ -1455,8 +1530,12 @@ class TestReviewFollowups:
 
         with pytest.raises(ValueError, match="num_tokens"):
             ProbeResult(
-                kind="truth", base="b", num_tokens=-1, flag_rate=0.0,
-                max_score=0.0, verdict="OK",
+                kind="truth",
+                base="b",
+                num_tokens=-1,
+                flag_rate=0.0,
+                max_score=0.0,
+                verdict="OK",
             )
 
     def test_proberesult_frozen(self) -> None:
@@ -1465,8 +1544,12 @@ class TestReviewFollowups:
         from soup_cli.utils.probe_kernel import ProbeResult
 
         res = ProbeResult(
-            kind="truth", base="b", num_tokens=1, flag_rate=0.0,
-            max_score=0.0, verdict="OK",
+            kind="truth",
+            base="b",
+            num_tokens=1,
+            flag_rate=0.0,
+            max_score=0.0,
+            verdict="OK",
         )
         with pytest.raises(dataclasses.FrozenInstanceError):
             res.verdict = "MAJOR"  # type: ignore[misc]
@@ -1508,9 +1591,7 @@ class TestReviewFollowups:
         out_dir.mkdir()  # neither config.json nor adapter_config.json
         (tmp_path / "p.jsonl").write_text('"x"', encoding="utf-8")
         with pytest.raises(ValueError, match="neither"):
-            _capture_activations(
-                "model.layers.0", "p.jsonl", "base", str(out_dir)
-            )
+            _capture_activations("model.layers.0", "p.jsonl", "base", str(out_dir))
 
 
 class TestPatchInvariants:

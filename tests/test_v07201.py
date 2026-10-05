@@ -54,8 +54,12 @@ def _tiny_lora():
     from peft import LoraConfig, TaskType
 
     return LoraConfig(
-        r=4, lora_alpha=8, lora_dropout=0.0, bias="none",
-        target_modules=["q_proj", "v_proj"], task_type=TaskType.CAUSAL_LM,
+        r=4,
+        lora_alpha=8,
+        lora_dropout=0.0,
+        bias="none",
+        target_modules=["q_proj", "v_proj"],
+        task_type=TaskType.CAUSAL_LM,
     )
 
 
@@ -67,9 +71,15 @@ def _build_streamed_cpu(tmp_path, n_layers=2):
     shards = str(tmp_path / "shards")
     index = shard_checkpoint(weights, shards, dtype="float32", arch="llama")
     model, runtime = build_streamed_model(
-        model_id=weights, shard_dir=shards, index=index,
-        lora_config=_tiny_lora(), device="cpu", dtype="float32",
-        buffers=2, pin=False, seed=3,
+        model_id=weights,
+        shard_dir=shards,
+        index=index,
+        lora_config=_tiny_lora(),
+        device="cpu",
+        dtype="float32",
+        buffers=2,
+        pin=False,
+        seed=3,
     )
     return model, runtime, weights
 
@@ -178,16 +188,11 @@ class TestAdapterReloadsIntoNormalModel:
 
         base = AutoModelForCausalLM.from_pretrained(weights, dtype=torch.float32)
         reloaded = PeftModel.from_pretrained(base, str(out))
-        landed = {
-            name: param
-            for name, param in reloaded.named_parameters()
-            if "lora_" in name
-        }
+        landed = {name: param for name, param in reloaded.named_parameters() if "lora_" in name}
 
         # by count
         assert len(landed) == len(saved), (
-            f"saved {len(saved)} adapter tensors but the reloaded model exposes "
-            f"{len(landed)}"
+            f"saved {len(saved)} adapter tensors but the reloaded model exposes {len(landed)}"
         )
         # by name + by value
         for key, tensor in saved.items():
@@ -198,9 +203,7 @@ class TestAdapterReloadsIntoNormalModel:
             )
         # and it is not the untuned base: B must be non-zero somewhere
         assert any(
-            param.abs().sum().item() > 0
-            for name, param in landed.items()
-            if "lora_B" in name
+            param.abs().sum().item() > 0 for name, param in landed.items() if "lora_B" in name
         ), "every lora_B is zero — the adapter loaded as a no-op"
 
     def test_the_assertion_would_catch_a_dropped_adapter(self, tmp_path):
@@ -348,8 +351,15 @@ class TestLoadingIntoAStreamedModelStaysUnsupported:
         monkeypatch.chdir(tmp_path)
         result = CliRunner().invoke(
             app,
-            ["train", "--config", str(config), "--yes",
-             "--push-as", "someone/somewhere", "--hf-resume"],
+            [
+                "train",
+                "--config",
+                str(config),
+                "--yes",
+                "--push-as",
+                "someone/somewhere",
+                "--hf-resume",
+            ],
         )
         assert "are not supported with" not in result.output, result.output
         assert "lands in v0.72.3" not in result.output, result.output
@@ -413,15 +423,17 @@ class TestProductionSavePathWritesCanonicalKeys:
                     "task": "sft",
                     "backend": "transformers",
                     "modality": "text",
-                    "data": {"train": "train.jsonl", "max_length": 64,
-                             "chat_template": "chatml"},
+                    "data": {"train": "train.jsonl", "max_length": 64, "chat_template": "chatml"},
                     "training": {
-                        "batch_size": 1, "gradient_accumulation_steps": 1,
-                        "quantization": "none", "stream_layers": True,
-                        "epochs": 1, "logging_steps": 1, "save_steps": 1000,
+                        "batch_size": 1,
+                        "gradient_accumulation_steps": 1,
+                        "quantization": "none",
+                        "stream_layers": True,
+                        "epochs": 1,
+                        "logging_steps": 1,
+                        "save_steps": 1000,
                         "gradient_checkpointing": True,
-                        "lora": {"r": 4, "alpha": 8,
-                                 "target_modules": ["q_proj", "v_proj"]},
+                        "lora": {"r": 4, "alpha": 8, "target_modules": ["q_proj", "v_proj"]},
                     },
                     "output": str(tmp_path / "out"),
                 }
@@ -429,8 +441,12 @@ class TestProductionSavePathWritesCanonicalKeys:
         )
         dataset = {
             "train": [
-                {"messages": [{"role": "user", "content": "hi"},
-                              {"role": "assistant", "content": "hello world"}]}
+                {
+                    "messages": [
+                        {"role": "user", "content": "hi"},
+                        {"role": "assistant", "content": "hello world"},
+                    ]
+                }
                 for _ in range(4)
             ]
         }

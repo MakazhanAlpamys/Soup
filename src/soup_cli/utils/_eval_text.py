@@ -17,9 +17,35 @@ from typing import List
 # enough to filter the dominant function-word tokens.
 STOPWORDS = frozenset(
     {
-        "a", "an", "and", "are", "as", "at", "be", "but", "by", "do", "for",
-        "from", "have", "i", "in", "is", "it", "of", "on", "or", "that", "the",
-        "this", "to", "was", "were", "will", "with", "you",
+        "a",
+        "an",
+        "and",
+        "are",
+        "as",
+        "at",
+        "be",
+        "but",
+        "by",
+        "do",
+        "for",
+        "from",
+        "have",
+        "i",
+        "in",
+        "is",
+        "it",
+        "of",
+        "on",
+        "or",
+        "that",
+        "the",
+        "this",
+        "to",
+        "was",
+        "were",
+        "will",
+        "with",
+        "you",
     }
 )
 

@@ -179,8 +179,11 @@ class ExperimentTracker:
         for table, column, ddl in (
             ("runs", "cost_usd", "ALTER TABLE runs ADD COLUMN cost_usd REAL"),
             ("runs", "cost_gpu_label", "ALTER TABLE runs ADD COLUMN cost_gpu_label TEXT"),
-            ("runs", "run_kind",
-             "ALTER TABLE runs ADD COLUMN run_kind TEXT NOT NULL DEFAULT 'train'"),
+            (
+                "runs",
+                "run_kind",
+                "ALTER TABLE runs ADD COLUMN run_kind TEXT NOT NULL DEFAULT 'train'",
+            ),
             ("runs", "pid", "ALTER TABLE runs ADD COLUMN pid INTEGER"),
             ("runs", "command_digest", "ALTER TABLE runs ADD COLUMN command_digest TEXT"),
             ("runs", "log_path", "ALTER TABLE runs ADD COLUMN log_path TEXT"),
@@ -191,10 +194,7 @@ class ExperimentTracker:
             # would read as a measurement nobody took.
             ("metrics", "val_loss", "ALTER TABLE metrics ADD COLUMN val_loss REAL"),
         ):
-            existing = {
-                row[1]
-                for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
-            }
+            existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
             if column in existing:
                 continue
             try:
@@ -237,7 +237,13 @@ class ExperimentTracker:
                    device_name = ?, gpu_memory = ?, experiment_name = ?, base_model = ?, task = ?
                    WHERE run_id = ?""",
                 (
-                    config_json, device, device_name, gpu_memory, experiment_name, base_model, task,
+                    config_json,
+                    device,
+                    device_name,
+                    gpu_memory,
+                    experiment_name,
+                    base_model,
+                    task,
                     run_id,
                 ),
             )
@@ -249,8 +255,15 @@ class ExperimentTracker:
                 device, device_name, gpu_memory, base_model, task)
                VALUES (?, ?, ?, 'running', ?, ?, ?, ?, ?, ?)""",
             (
-                run_id, experiment_name, now, config_json,
-                device, device_name, gpu_memory, base_model, task,
+                run_id,
+                experiment_name,
+                now,
+                config_json,
+                device,
+                device_name,
+                gpu_memory,
+                base_model,
+                task,
             ),
         )
         conn.commit()
@@ -274,7 +287,12 @@ class ExperimentTracker:
                 run_kind, command_digest, log_path)
                VALUES (?, ?, 'launching', ?, '', ?, ?, ?, ?)""",
             (
-                run_id, now, json.dumps(config_dict, default=str), kind, kind, command_digest,
+                run_id,
+                now,
+                json.dumps(config_dict, default=str),
+                kind,
+                kind,
+                command_digest,
                 log_path,
             ),
         )
@@ -385,9 +403,7 @@ class ExperimentTracker:
         # Look up device name for cost estimate (best-effort).
         cost_usd: Optional[float] = None
         cost_label: Optional[str] = None
-        row = conn.execute(
-            "SELECT device_name FROM runs WHERE run_id = ?", (run_id,)
-        ).fetchone()
+        row = conn.execute("SELECT device_name FROM runs WHERE run_id = ?", (run_id,)).fetchone()
         if row is not None:
             try:
                 from soup_cli.utils.run_cost import (
@@ -411,8 +427,14 @@ class ExperimentTracker:
                cost_usd = ?, cost_gpu_label = ?
                WHERE run_id = ?""",
             (
-                initial_loss, final_loss, total_steps, duration_secs, output_dir,
-                cost_usd, cost_label, run_id,
+                initial_loss,
+                final_loss,
+                total_steps,
+                duration_secs,
+                output_dir,
+                cost_usd,
+                cost_label,
+                run_id,
             ),
         )
         conn.commit()
@@ -448,14 +470,8 @@ class ExperimentTracker:
         terminal status intact and makes the rewrite idempotent.
         """
         pid = run.get("pid")
-        if (
-            run.get("status") == _STATUS_RUNNING
-            and pid is not None
-            and not _process_is_alive(pid)
-        ):
-            self.finish_execution(
-                run["run_id"], status=_STATUS_TERMINATED, exit_code=None
-            )
+        if run.get("status") == _STATUS_RUNNING and pid is not None and not _process_is_alive(pid):
+            self.finish_execution(run["run_id"], status=_STATUS_TERMINATED, exit_code=None)
             run["status"] = _STATUS_TERMINATED
             run["exit_code"] = None
         return run
@@ -485,21 +501,14 @@ class ExperimentTracker:
         """Get full details of a single run. Supports prefix matching."""
         conn = self._get_conn()
         # Try exact match first
-        row = conn.execute(
-            "SELECT * FROM runs WHERE run_id = ?", (run_id,)
-        ).fetchone()
+        row = conn.execute("SELECT * FROM runs WHERE run_id = ?", (run_id,)).fetchone()
 
         if row is None:
             # Try prefix match. Escape LIKE wildcards in user input so a
             # crafted run_id can't widen the match (% expands to "any").
-            escaped = (
-                run_id.replace("\\", "\\\\")
-                .replace("%", "\\%")
-                .replace("_", "\\_")
-            )
+            escaped = run_id.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
             rows = conn.execute(
-                "SELECT * FROM runs WHERE run_id LIKE ? ESCAPE '\\' "
-                "ORDER BY created_at DESC",
+                "SELECT * FROM runs WHERE run_id LIKE ? ESCAPE '\\' ORDER BY created_at DESC",
                 (f"{escaped}%",),
             ).fetchall()
             if len(rows) == 1:
@@ -563,8 +572,7 @@ class ExperimentTracker:
         """
         conn = self._get_conn()
         rows = conn.execute(
-            "SELECT score FROM eval_results "
-            "WHERE run_id = ? AND benchmark = ? ORDER BY id",
+            "SELECT score FROM eval_results WHERE run_id = ? AND benchmark = ? ORDER BY id",
             (run_id, benchmark),
         ).fetchall()
         out: list[float] = []
@@ -590,9 +598,7 @@ class ExperimentTracker:
         now = datetime.now().isoformat()
         # #404 — stamp scorer provenance so registry:// baselines can be checked.
         if not isinstance(details, dict):
-            raise TypeError(
-                f"details must be a dict, got {type(details).__name__}"
-            )
+            raise TypeError(f"details must be a dict, got {type(details).__name__}")
         stamped_details = dict(details)
         if "provenance" not in stamped_details:
             from soup_cli.eval.gate import current_baseline_stamp
@@ -617,8 +623,7 @@ class ExperimentTracker:
         conn = self._get_conn()
         if run_id:
             rows = conn.execute(
-                "SELECT * FROM eval_results WHERE run_id = ? "
-                "ORDER BY created_at DESC, rowid DESC",
+                "SELECT * FROM eval_results WHERE run_id = ? ORDER BY created_at DESC, rowid DESC",
                 (run_id,),
             ).fetchall()
         else:

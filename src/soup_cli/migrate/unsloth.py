@@ -52,10 +52,7 @@ def migrate_unsloth(notebook_path: Path) -> Dict[str, Any]:
         raise ValueError(f"Invalid JSON in notebook file: {exc}")
 
     cells = notebook.get("cells", [])
-    code_cells = [
-        cell for cell in cells
-        if cell.get("cell_type") == "code"
-    ]
+    code_cells = [cell for cell in cells if cell.get("cell_type") == "code"]
 
     if not code_cells:
         raise ValueError("No code cells found in notebook")
@@ -162,8 +159,7 @@ def migrate_unsloth(notebook_path: Path) -> Dict[str, Any]:
             kwargs = _extract_kwargs(node, scope=assignments)
             if kwargs.get("packing"):
                 warnings.append(
-                    "packing=True is not supported in Soup. "
-                    "Sequences will be padded individually."
+                    "packing=True is not supported in Soup. Sequences will be padded individually."
                 )
 
         elif func_name == "TrainingArguments" or func_name in _CONFIG_MAP:
@@ -288,6 +284,7 @@ def _extract_kwargs(
 
 class _SentinelType:
     """Sentinel for values that cannot be extracted."""
+
     pass
 
 

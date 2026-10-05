@@ -69,8 +69,7 @@ def summarize_trainable(model: Any) -> ParamSnapshot:
     meta = sum(
         1
         for _, param in model.named_parameters()
-        if param.requires_grad
-        and getattr(getattr(param, "device", None), "type", None) == "meta"
+        if param.requires_grad and getattr(getattr(param, "device", None), "type", None) == "meta"
     )
     digest = _digest(kept)
     return ParamSnapshot(

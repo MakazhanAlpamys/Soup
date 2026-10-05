@@ -136,6 +136,7 @@ def test_eval_against_json_only_keeps_bracketed_run_id(monkeypatch, tmp_path):
     The command closes over a ``console`` passed to ``register``, so there is no
     module attribute to pin to width 80; the runner is already a non-terminal.
     """
+
     class _FakeTracker:
         def get_metric_series(self, run_id, source_metric):
             return [0.50, 0.50, 0.50, 0.50]

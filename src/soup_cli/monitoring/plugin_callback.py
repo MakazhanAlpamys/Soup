@@ -37,9 +37,7 @@ def _collect_active_hooks() -> list[tuple[str, dict[str, Any]]]:
     return out
 
 
-def _safe_invoke(
-    plugin_name: str, hook_name: str, hook: Any, ctx: dict[str, Any]
-) -> None:
+def _safe_invoke(plugin_name: str, hook_name: str, hook: Any, ctx: dict[str, Any]) -> None:
     try:
         hook(ctx)
     except Exception:  # noqa: BLE001 — plugin failure must not crash training
@@ -62,9 +60,7 @@ def _build_callback_class() -> type:
     class SoupPluginCallback(TrainerCallback):
         """Fans HF Trainer events out to every enabled Soup plugin."""
 
-        def __init__(
-            self, hooks: list[tuple[str, dict[str, Any]]] | None = None
-        ) -> None:
+        def __init__(self, hooks: list[tuple[str, dict[str, Any]]] | None = None) -> None:
             super().__init__()
             # Snapshot at construction time so a plugin registered MID-run
             # does not silently start receiving hooks halfway through. The
@@ -72,9 +68,7 @@ def _build_callback_class() -> type:
             # path) to avoid a redundant registry scan + close a tiny
             # race-window between "is any plugin enabled?" and
             # "snapshot the registry".
-            self._hooks = (
-                list(hooks) if hooks is not None else _collect_active_hooks()
-            )
+            self._hooks = list(hooks) if hooks is not None else _collect_active_hooks()
 
         def _dispatch(self, hook_name: str, context: dict[str, Any]) -> None:
             for plugin_name, hooks in self._hooks:
@@ -84,24 +78,16 @@ def _build_callback_class() -> type:
                 _safe_invoke(plugin_name, hook_name, hook, context)
 
         def on_train_begin(self, args, state, control, **kwargs):  # noqa: D401
-            self._dispatch(
-                "pre_train", {"args": args, "state": state, "control": control}
-            )
+            self._dispatch("pre_train", {"args": args, "state": state, "control": control})
 
         def on_train_end(self, args, state, control, **kwargs):  # noqa: D401
-            self._dispatch(
-                "post_train", {"args": args, "state": state, "control": control}
-            )
+            self._dispatch("post_train", {"args": args, "state": state, "control": control})
 
         def on_step_begin(self, args, state, control, **kwargs):  # noqa: D401
-            self._dispatch(
-                "pre_step", {"args": args, "state": state, "control": control}
-            )
+            self._dispatch("pre_step", {"args": args, "state": state, "control": control})
 
         def on_step_end(self, args, state, control, **kwargs):  # noqa: D401
-            self._dispatch(
-                "post_step", {"args": args, "state": state, "control": control}
-            )
+            self._dispatch("post_step", {"args": args, "state": state, "control": control})
 
     return SoupPluginCallback
 

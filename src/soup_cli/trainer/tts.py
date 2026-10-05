@@ -98,8 +98,7 @@ class TTSTrainerWrapper(SFTTrainerWrapper):
 
         # Pre-encoded chat mode: plain SFT cross-entropy over the codec tokens.
         console.print(
-            f"[green]TTS fine-tune:[/] family={family} (pre-encoded chat mode, "
-            "next-token CE)"
+            f"[green]TTS fine-tune:[/] family={family} (pre-encoded chat mode, next-token CE)"
         )
         dataset = self._apply_tts_templating(dataset, family, tcfg.tts_emotion)
         super().setup(dataset)
@@ -124,7 +123,7 @@ class TTSTrainerWrapper(SFTTrainerWrapper):
                     "Llasa live-codec needs a torchaudio build that matches the "
                     "installed torch release for the Transformers-native XCodec2 "
                     "feature extractor. Install the audio extra with "
-                    "pip install \"soup-cli[audio]\", and pin matching torch/"
+                    'pip install "soup-cli[audio]", and pin matching torch/'
                     "torchaudio versions if your resolver does not."
                 ) from exc
             try:
@@ -144,9 +143,7 @@ class TTSTrainerWrapper(SFTTrainerWrapper):
                 "tokens offline and train with data.format=chatml."
             )
 
-    def _apply_tts_templating(
-        self, dataset: dict, family: str, emotion: Optional[str]
-    ) -> dict:
+    def _apply_tts_templating(self, dataset: dict, family: str, emotion: Optional[str]) -> dict:
         """Return a new dataset dict with per-family emotion templating."""
 
         def _map_split(rows: object) -> list:
@@ -196,9 +193,7 @@ class TTSTrainerWrapper(SFTTrainerWrapper):
         to_add = [t for t in dict.fromkeys(new_tokens) if t not in existing]
         if not to_add:
             return
-        added = self.tokenizer.add_special_tokens(
-            {"additional_special_tokens": to_add}
-        )
+        added = self.tokenizer.add_special_tokens({"additional_special_tokens": to_add})
         if added:
             self.model.resize_token_embeddings(len(self.tokenizer))
             console.print(

@@ -57,9 +57,7 @@ def _is_self_call(func: ast.expr) -> bool:
     if isinstance(func, ast.Name):
         return func.id == "self"
     return (
-        isinstance(func, ast.Call)
-        and isinstance(func.func, ast.Name)
-        and func.func.id == "super"
+        isinstance(func, ast.Call) and isinstance(func.func, ast.Name) and func.func.id == "super"
     )
 
 
@@ -211,9 +209,18 @@ class TestResumeRefusalForUnsupportedTasks:
             "output: ./out_unlearn\n"
         )
 
-        res = runner.invoke(app, [
-            "train", "--config", str(config_path), "--hf-resume", "--push-as", "test/repo", "--yes"
-        ])
+        res = runner.invoke(
+            app,
+            [
+                "train",
+                "--config",
+                str(config_path),
+                "--hf-resume",
+                "--push-as",
+                "test/repo",
+                "--yes",
+            ],
+        )
         assert res.exit_code != 0
         clean_output = _collapse_whitespace(_strip_ansi(res.output))
         assert "--hf-resume is not supported for task 'unlearn'" in clean_output
@@ -437,6 +444,7 @@ class TestMoleRoutingResume:
         resumed = torch.load(out_dir / "mole_gate.pt", map_location="cpu", weights_only=True)
         for k in gate4_saved:
             torch.testing.assert_close(resumed[k], gate4_saved[k], rtol=0, atol=1e-6)
+
 
 def test_save_mole_gate_writes_fp32_from_a_16_bit_gate(tmp_path):
     """A DeepSpeed bf16/fp16 engine casts the gate to 16-bit in place; the file is fp32."""

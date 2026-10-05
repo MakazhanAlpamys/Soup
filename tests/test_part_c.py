@@ -27,14 +27,19 @@ class TestApplyV028SpeedMemory:
         from soup_cli.utils.v028_features import apply_v028_speed_memory
 
         tcfg = SimpleNamespace(
-            use_cut_ce=False, quantization_aware=False,
+            use_cut_ce=False,
+            quantization_aware=False,
             kernel_auto_compose=False,
         )
         result = apply_v028_speed_memory(
-            model=MagicMock(), tcfg=tcfg, base_model="x/y",
+            model=MagicMock(),
+            tcfg=tcfg,
+            base_model="x/y",
         )
         assert result == {
-            "cut_ce": False, "fp8": False, "kernel_auto_compose": False,
+            "cut_ce": False,
+            "fp8": False,
+            "kernel_auto_compose": False,
         }
 
     def test_cut_ce_failure_logs_yellow(self, monkeypatch, capsys):
@@ -45,17 +50,23 @@ class TestApplyV028SpeedMemory:
             raise RuntimeError("no cut_cross_entropy")
 
         monkeypatch.setattr(
-            "soup_cli.utils.cut_ce.apply_cut_ce", _boom, raising=False,
+            "soup_cli.utils.cut_ce.apply_cut_ce",
+            _boom,
+            raising=False,
         )
         from rich.console import Console
+
         console = Console()
         tcfg = SimpleNamespace(
-            use_cut_ce=True, quantization_aware=False,
+            use_cut_ce=True,
+            quantization_aware=False,
             kernel_auto_compose=False,
         )
         result = vf.apply_v028_speed_memory(
-            model=MagicMock(), tcfg=tcfg,
-            base_model="x/y", console=console,
+            model=MagicMock(),
+            tcfg=tcfg,
+            base_model="x/y",
+            console=console,
         )
         assert result["cut_ce"] is False
 
@@ -65,8 +76,17 @@ class TestApplyV028SpeedMemory:
         from soup_cli.utils.v028_features import supports_v028_features
 
         for task in (
-            "sft", "dpo", "pretrain", "grpo", "kto", "orpo",
-            "simpo", "ipo", "ppo", "reward_model", "embedding",
+            "sft",
+            "dpo",
+            "pretrain",
+            "grpo",
+            "kto",
+            "orpo",
+            "simpo",
+            "ipo",
+            "ppo",
+            "reward_model",
+            "embedding",
         ):
             assert supports_v028_features(task) is True
         # Unknown / future tasks default to False
@@ -76,12 +96,23 @@ class TestApplyV028SpeedMemory:
         from soup_cli.utils.v028_features import warn_unsupported_features
 
         tcfg = SimpleNamespace(
-            use_cut_ce=True, quantization_aware="fp8",
-            kernel_auto_compose=True, activation_offloading="cpu",
+            use_cut_ce=True,
+            quantization_aware="fp8",
+            kernel_auto_compose=True,
+            activation_offloading="cpu",
         )
         for task in (
-            "sft", "dpo", "pretrain", "grpo", "kto", "orpo",
-            "simpo", "ipo", "ppo", "reward_model", "embedding",
+            "sft",
+            "dpo",
+            "pretrain",
+            "grpo",
+            "kto",
+            "orpo",
+            "simpo",
+            "ipo",
+            "ppo",
+            "reward_model",
+            "embedding",
         ):
             assert warn_unsupported_features(tcfg, task) is None
 
@@ -89,8 +120,10 @@ class TestApplyV028SpeedMemory:
         from soup_cli.utils.v028_features import warn_unsupported_features
 
         tcfg = SimpleNamespace(
-            use_cut_ce=True, quantization_aware="fp8",
-            kernel_auto_compose=False, activation_offloading=None,
+            use_cut_ce=True,
+            quantization_aware="fp8",
+            kernel_auto_compose=False,
+            activation_offloading=None,
         )
         msg = warn_unsupported_features(tcfg, "future_task")
         assert msg is not None

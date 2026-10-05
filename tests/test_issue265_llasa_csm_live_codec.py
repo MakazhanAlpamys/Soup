@@ -40,9 +40,7 @@ class _FakeXCodec2:
         import torch
 
         device = inputs["input_values"].device
-        return SimpleNamespace(
-            audio_codes=torch.tensor([[[7, 42, 65535]]], device=device)
-        )
+        return SimpleNamespace(audio_codes=torch.tensor([[[7, 42, 65535]]], device=device))
 
 
 class TestLlasaRendering:
@@ -50,9 +48,7 @@ class TestLlasaRendering:
         from soup_cli.utils.tts_codec import llasa_codes_to_string
 
         assert llasa_codes_to_string([7, 42]) == (
-            "<|SPEECH_GENERATION_START|>"
-            "<|s_7|><|s_42|>"
-            "<|SPEECH_GENERATION_END|>"
+            "<|SPEECH_GENERATION_START|><|s_7|><|s_42|><|SPEECH_GENERATION_END|>"
         )
 
     @pytest.mark.parametrize("bad", [[True], [-1], [65536], [1.5], []])
@@ -75,9 +71,7 @@ class TestLlasaRendering:
             feature_extractor=_FakeExtractor(),
         )
         assert out == (
-            "<|SPEECH_GENERATION_START|>"
-            "<|s_7|><|s_42|><|s_65535|>"
-            "<|SPEECH_GENERATION_END|>"
+            "<|SPEECH_GENERATION_START|><|s_7|><|s_42|><|s_65535|><|SPEECH_GENERATION_END|>"
         )
 
 
@@ -142,9 +136,7 @@ class TestDispatch:
         assert events == ["extractor", "model"]
 
     @pytest.mark.parametrize("error", [ImportError("missing"), OSError("libcudart mismatch")])
-    def test_llasa_gate_names_audio_extra_when_torchaudio_cannot_load(
-        self, monkeypatch, error
-    ):
+    def test_llasa_gate_names_audio_extra_when_torchaudio_cannot_load(self, monkeypatch, error):
         import builtins
 
         from soup_cli.trainer.tts import TTSTrainerWrapper

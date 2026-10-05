@@ -191,8 +191,7 @@ def check_lock_cmd(
 
     console.print(
         Panel(
-            f"Lock:    [bold]{escape(path)}[/]\n"
-            f"Status:  [red]DRIFT[/]",
+            f"Lock:    [bold]{escape(path)}[/]\nStatus:  [red]DRIFT[/]",
             title="soup lock check",
         )
     )

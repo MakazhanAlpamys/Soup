@@ -432,8 +432,11 @@ class TestCanManifestV3:
 
         for v in (1, 2, 3):
             m = Manifest(
-                can_format_version=v, name="x", author="a",
-                created_at="2026-01-01", base_hash="h",
+                can_format_version=v,
+                name="x",
+                author="a",
+                created_at="2026-01-01",
+                base_hash="h",
             )
             assert m.can_format_version == v
 
@@ -441,8 +444,11 @@ class TestCanManifestV3:
         from soup_cli.cans.schema import Manifest
 
         m = Manifest(
-            can_format_version=3, name="x", author="a",
-            created_at="2026-01-01", base_hash="h",
+            can_format_version=3,
+            name="x",
+            author="a",
+            created_at="2026-01-01",
+            base_hash="h",
         )
         assert m.attestations == []
 
@@ -450,8 +456,11 @@ class TestCanManifestV3:
         from soup_cli.cans.schema import Manifest
 
         m = Manifest(
-            can_format_version=3, name="x", author="a",
-            created_at="2026-01-01", base_hash="h",
+            can_format_version=3,
+            name="x",
+            author="a",
+            created_at="2026-01-01",
+            base_hash="h",
             attestations=[_sample_statement()],
         )
         assert len(m.attestations) == 1
@@ -461,8 +470,11 @@ class TestCanManifestV3:
         from soup_cli.cans.schema import Manifest
 
         m = Manifest(
-            can_format_version=3, name="x", author="a",
-            created_at="2026-01-01", base_hash="h",
+            can_format_version=3,
+            name="x",
+            author="a",
+            created_at="2026-01-01",
+            base_hash="h",
             attestations=None,
         )
         assert m.attestations == []
@@ -474,8 +486,11 @@ class TestCanManifestV3:
 
         with pytest.raises(ValidationError):
             Manifest(
-                can_format_version=3, name="x", author="a",
-                created_at="2026-01-01", base_hash="h",
+                can_format_version=3,
+                name="x",
+                author="a",
+                created_at="2026-01-01",
+                base_hash="h",
                 attestations=["not-a-dict"],
             )
 
@@ -486,8 +501,11 @@ class TestCanManifestV3:
 
         with pytest.raises(ValidationError):
             Manifest(
-                can_format_version=3, name="x", author="a",
-                created_at="2026-01-01", base_hash="h",
+                can_format_version=3,
+                name="x",
+                author="a",
+                created_at="2026-01-01",
+                base_hash="h",
                 attestations=[{"predicateType": "x"}],
             )
 
@@ -498,8 +516,11 @@ class TestCanManifestV3:
 
         with pytest.raises(ValidationError):
             Manifest(
-                can_format_version=3, name="x", author="a",
-                created_at="2026-01-01", base_hash="h",
+                can_format_version=3,
+                name="x",
+                author="a",
+                created_at="2026-01-01",
+                base_hash="h",
                 attestations=[_sample_statement() for _ in range(200)],
             )
 
@@ -535,20 +556,24 @@ class TestCanManifestV3:
 
             def get(self, eid):
                 return {
-                    "name": "my-recipe", "base_model": "b", "task": "sft",
-                    "entry_hash": "h", "config_json": "{}", "notes": "n",
+                    "name": "my-recipe",
+                    "base_model": "b",
+                    "task": "sft",
+                    "entry_hash": "h",
+                    "config_json": "{}",
+                    "notes": "n",
                     "tags": [],
                 }
 
         monkeypatch.setattr(pack_mod, "RegistryStore", lambda: _FakeStore())
         out = pack_mod.pack_entry(
-            entry_id="eid", out_path="x.can", author="a",
+            entry_id="eid",
+            out_path="x.can",
+            author="a",
             attestations=[_sample_statement()],
         )
         with tarfile.open(out, "r:gz") as tar:
-            manifest = yaml.safe_load(
-                tar.extractfile("manifest.yaml").read().decode("utf-8")
-            )
+            manifest = yaml.safe_load(tar.extractfile("manifest.yaml").read().decode("utf-8"))
         assert manifest["can_format_version"] == 3
         assert len(manifest["attestations"]) == 1
 
@@ -577,9 +602,7 @@ class TestAuditInstrumentation:
     def test_split_command_args_skips_log_level_value(self):
         from soup_cli.cli import _split_command_args
 
-        cmd, args = _split_command_args(
-            ["soup", "--log-level", "debug", "train", "--yes"]
-        )
+        cmd, args = _split_command_args(["soup", "--log-level", "debug", "train", "--yes"])
         assert cmd == "train"
         assert args == ["--yes"]
 
@@ -662,7 +685,10 @@ class TestAuditInstrumentation:
         env["PYTHONUTF8"] = "1"
         r = subprocess.run(
             [sys.executable, "-m", "soup_cli", "version"],
-            env=env, capture_output=True, text=True, timeout=120,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=120,
         )
         assert r.returncode == 0, (r.stdout, r.stderr)
         assert log.exists(), (r.stdout, r.stderr)
@@ -677,7 +703,10 @@ class TestAuditInstrumentation:
         env["PYTHONUTF8"] = "1"
         r = subprocess.run(
             [sys.executable, "-m", "soup_cli", "version"],
-            env=env, capture_output=True, text=True, timeout=120,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=120,
         )
         assert r.returncode == 0, (r.stdout, r.stderr)
         assert not log.exists()
@@ -704,8 +733,11 @@ class TestAirgapReproReceipt:
 
         monkeypatch.chdir(tmp_path)
         plan = AirgapBundlePlan(
-            output="b.tar", model_dir="model", dataset_dirs=(),
-            wheel_dirs=(), kernel_dirs=(),
+            output="b.tar",
+            model_dir="model",
+            dataset_dirs=(),
+            wheel_dirs=(),
+            kernel_dirs=(),
             bundle_size_cap_bytes=1024 * 1024,
             repro_receipt={"run_id": "r1"},
         )
@@ -716,8 +748,11 @@ class TestAirgapReproReceipt:
 
         monkeypatch.chdir(tmp_path)
         plan = AirgapBundlePlan(
-            output="b.tar", model_dir="model", dataset_dirs=(),
-            wheel_dirs=(), kernel_dirs=(),
+            output="b.tar",
+            model_dir="model",
+            dataset_dirs=(),
+            wheel_dirs=(),
+            kernel_dirs=(),
             bundle_size_cap_bytes=1024 * 1024,
         )
         assert plan.repro_receipt is None
@@ -728,8 +763,11 @@ class TestAirgapReproReceipt:
         monkeypatch.chdir(tmp_path)
         with pytest.raises(ValueError):
             AirgapBundlePlan(
-                output="b.tar", model_dir="model", dataset_dirs=(),
-                wheel_dirs=(), kernel_dirs=(),
+                output="b.tar",
+                model_dir="model",
+                dataset_dirs=(),
+                wheel_dirs=(),
+                kernel_dirs=(),
                 bundle_size_cap_bytes=1024 * 1024,
                 repro_receipt="not-a-dict",
             )
@@ -746,8 +784,11 @@ class TestAirgapReproReceipt:
         monkeypatch.chdir(tmp_path)
         _make_model_dir(tmp_path)
         plan = AirgapBundlePlan(
-            output="b.tar", model_dir="model", dataset_dirs=(),
-            wheel_dirs=(), kernel_dirs=(),
+            output="b.tar",
+            model_dir="model",
+            dataset_dirs=(),
+            wheel_dirs=(),
+            kernel_dirs=(),
             bundle_size_cap_bytes=10 * 1024 * 1024,
             repro_receipt={"run_id": "r1", "seeds": {"torch": 42}},
         )
@@ -772,8 +813,11 @@ class TestAirgapReproReceipt:
         monkeypatch.chdir(tmp_path)
         _make_model_dir(tmp_path)
         plan = AirgapBundlePlan(
-            output="b.tar", model_dir="model", dataset_dirs=(),
-            wheel_dirs=(), kernel_dirs=(),
+            output="b.tar",
+            model_dir="model",
+            dataset_dirs=(),
+            wheel_dirs=(),
+            kernel_dirs=(),
             bundle_size_cap_bytes=10 * 1024 * 1024,
         )
         build_airgap_bundle(plan)
@@ -798,8 +842,7 @@ class TestAirgapReproReceipt:
         receipt.write_text(json.dumps({"run_id": "explicit"}), encoding="utf-8")
         result = runner.invoke(
             app,
-            ["airgap-bundle", "-o", "b.tar", "--model", "model",
-             "--repro-receipt", "receipt.json"],
+            ["airgap-bundle", "-o", "b.tar", "--model", "model", "--repro-receipt", "receipt.json"],
         )
         assert result.exit_code == 0, (result.output, repr(result.exception))
         read = inspect_airgap_bundle("b.tar")
@@ -811,9 +854,7 @@ class TestAirgapReproReceipt:
 
         monkeypatch.chdir(tmp_path)
         _make_model_dir(tmp_path, with_receipt=True)
-        result = runner.invoke(
-            app, ["airgap-bundle", "-o", "b.tar", "--model", "model"]
-        )
+        result = runner.invoke(app, ["airgap-bundle", "-o", "b.tar", "--model", "model"])
         assert result.exit_code == 0, (result.output, repr(result.exception))
         read = inspect_airgap_bundle("b.tar")
         assert read.repro_receipt == {"run_id": "r1", "seeds": {"torch": 42}}
@@ -906,10 +947,16 @@ class TestReviewFollowups:
 
         data = AnnexXIData(
             model_name="<b>evil</b> & co",
-            base_model="b", task="sft", dataset_summary="d",
-            modalities=("text",), train_compute_flops=0.0,
-            train_energy_kwh=0.0, train_co2_kg=0.0, top_domains=(),
-            soup_version="0.71.3", run_id="r",
+            base_model="b",
+            task="sft",
+            dataset_summary="d",
+            modalities=("text",),
+            train_compute_flops=0.0,
+            train_energy_kwh=0.0,
+            train_co2_kg=0.0,
+            top_domains=(),
+            soup_version="0.71.3",
+            run_id="r",
             created_at="2026-06-01T00:00:00+00:00",
         )
         # Must not raise — reportlab paragraph parser would choke on raw <b>.
@@ -938,8 +985,11 @@ class TestReviewFollowups:
         big = {**_sample_statement(), "pad": "a" * (1024 * 1024 + 10)}
         with pytest.raises(ValidationError):
             Manifest(
-                can_format_version=3, name="x", author="a",
-                created_at="2026-01-01", base_hash="h",
+                can_format_version=3,
+                name="x",
+                author="a",
+                created_at="2026-01-01",
+                base_hash="h",
                 attestations=[big],
             )
 
@@ -959,9 +1009,7 @@ class TestReviewFollowups:
     def test_split_command_args_value_opt_followed_by_flag(self):
         from soup_cli.cli import _split_command_args
 
-        cmd, args = _split_command_args(
-            ["soup", "--log-level", "--yes", "train", "--config", "x"]
-        )
+        cmd, args = _split_command_args(["soup", "--log-level", "--yes", "train", "--config", "x"])
         # --yes is consumed as the --log-level value; train is the command.
         assert cmd == "train"
         assert args == ["--config", "x"]
@@ -997,7 +1045,10 @@ class TestReviewFollowups:
         env["PYTHONUTF8"] = "1"
         r = subprocess.run(
             [sys.executable, "-m", "soup_cli", "--no-audit-log", "version"],
-            env=env, capture_output=True, text=True, timeout=120,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=120,
         )
         assert r.returncode == 0, (r.stdout, r.stderr)
         assert not log.exists()
@@ -1012,8 +1063,11 @@ class TestReviewFollowups:
         monkeypatch.chdir(tmp_path)
         _make_model_dir(tmp_path)
         plan = AirgapBundlePlan(
-            output="b.tar", model_dir="model", dataset_dirs=(),
-            wheel_dirs=(), kernel_dirs=(),
+            output="b.tar",
+            model_dir="model",
+            dataset_dirs=(),
+            wheel_dirs=(),
+            kernel_dirs=(),
             bundle_size_cap_bytes=10,
             repro_receipt={"x": "a" * 1000},
         )
@@ -1032,8 +1086,11 @@ class TestReviewFollowups:
         monkeypatch.chdir(tmp_path)
         _make_model_dir(tmp_path)
         plan = AirgapBundlePlan(
-            output="b.tar", model_dir="model", dataset_dirs=(),
-            wheel_dirs=(), kernel_dirs=(),
+            output="b.tar",
+            model_dir="model",
+            dataset_dirs=(),
+            wheel_dirs=(),
+            kernel_dirs=(),
             bundle_size_cap_bytes=10 * 1024 * 1024,
             repro_receipt=MappingProxyType({"run_id": "proxy"}),
         )
@@ -1043,11 +1100,19 @@ class TestReviewFollowups:
     def test_manifest_from_payload_coerces_bad_receipt_to_none(self):
         from soup_cli.utils.airgap_bundle import _manifest_from_payload
 
-        m = _manifest_from_payload({
-            "soup_version": "0.71.3", "created_at": "x", "model_dir": "model",
-            "datasets": [], "wheels": [], "kernels": [], "files": [],
-            "total_bytes": 0, "repro_receipt": ["not", "a", "dict"],
-        })
+        m = _manifest_from_payload(
+            {
+                "soup_version": "0.71.3",
+                "created_at": "x",
+                "model_dir": "model",
+                "datasets": [],
+                "wheels": [],
+                "kernels": [],
+                "files": [],
+                "total_bytes": 0,
+                "repro_receipt": ["not", "a", "dict"],
+            }
+        )
         assert m.repro_receipt is None
 
     def test_cli_auto_detect_malformed_receipt_is_none(self, tmp_path, monkeypatch):
@@ -1057,9 +1122,7 @@ class TestReviewFollowups:
         monkeypatch.chdir(tmp_path)
         model = _make_model_dir(tmp_path)
         (model / "repro-receipt.json").write_text("not json{", encoding="utf-8")
-        result = runner.invoke(
-            app, ["airgap-bundle", "-o", "b.tar", "--model", "model"]
-        )
+        result = runner.invoke(app, ["airgap-bundle", "-o", "b.tar", "--model", "model"])
         assert result.exit_code == 0, (result.output, repr(result.exception))
         assert inspect_airgap_bundle("b.tar").repro_receipt is None
 
@@ -1070,7 +1133,6 @@ class TestReviewFollowups:
         _make_model_dir(tmp_path)
         result = runner.invoke(
             app,
-            ["airgap-bundle", "-o", "b.tar", "--model", "model",
-             "--repro-receipt", "nope.json"],
+            ["airgap-bundle", "-o", "b.tar", "--model", "model", "--repro-receipt", "nope.json"],
         )
         assert result.exit_code == 2, (result.output, repr(result.exception))

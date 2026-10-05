@@ -356,7 +356,12 @@ def _make_ranked_pairs_trainer_cached(base_cls: type) -> type:
             return self._soup_settle(step, loss, stat_sizes)
 
         def _forward(
-            self, model, prompt_ids, prompt_mask, completion_ids, completion_mask,
+            self,
+            model,
+            prompt_ids,
+            prompt_mask,
+            completion_ids,
+            completion_mask,
             vision_inputs=None,
         ):
             logprobs = super()._forward(
@@ -443,7 +448,10 @@ def _make_ranked_pairs_trainer_cached(base_cls: type) -> type:
                             "Online DPO: the judge %s could not rank %d of %d pairs in this "
                             "step (%s). Those pairs are left out of the loss; their share "
                             "is logged as %s.",
-                            self._soup_judge_label, unranked, judged, _UNRANKED_REASONS,
+                            self._soup_judge_label,
+                            unranked,
+                            judged,
+                            _UNRANKED_REASONS,
                             INVALID_RATE_KEY,
                         )
                 return
@@ -452,8 +460,7 @@ def _make_ranked_pairs_trainer_cached(base_cls: type) -> type:
                 raise JudgeUnusableError(
                     _unusable_message(
                         self._soup_judge_label,
-                        f"ranked none of the last {self._soup_unranked_streak} "
-                        "completion pairs",
+                        f"ranked none of the last {self._soup_unranked_streak} completion pairs",
                     )
                 )
             if self.accelerator.is_main_process:
@@ -461,8 +468,11 @@ def _make_ranked_pairs_trainer_cached(base_cls: type) -> type:
                     "Online DPO: the judge %s could not rank any of the %d pairs in this "
                     "step (%s); the step adds no gradient. %d pairs in a row are unranked; "
                     "training stops at %d.",
-                    self._soup_judge_label, judged, _UNRANKED_REASONS,
-                    self._soup_unranked_streak, MAX_CONSECUTIVE_UNRANKED_PAIRS,
+                    self._soup_judge_label,
+                    judged,
+                    _UNRANKED_REASONS,
+                    self._soup_unranked_streak,
+                    MAX_CONSECUTIVE_UNRANKED_PAIRS,
                 )
 
     return _RankedPairsOnlineDPOTrainer

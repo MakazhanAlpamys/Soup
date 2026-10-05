@@ -89,17 +89,13 @@ def test_non_finite_training_metric_is_rejected() -> None:
         RuntimeError,
         match=r"non-finite training metric grad_norm=nan.*step 2.*refusing to save",
     ):
-        _assert_finite_training_state(
-            [{"loss": 0.0, "grad_norm": float("nan"), "step": 2}]
-        )
+        _assert_finite_training_state([{"loss": 0.0, "grad_norm": float("nan"), "step": 2}])
 
 
 def test_finite_training_metrics_are_accepted() -> None:
     from soup_cli.trainer.sft import _assert_finite_training_state
 
-    _assert_finite_training_state(
-        [{"loss": 2.2, "grad_norm": 1.5, "entropy": 0.9, "step": 1}]
-    )
+    _assert_finite_training_state([{"loss": 2.2, "grad_norm": 1.5, "entropy": 0.9, "step": 1}])
 
 
 def test_non_finite_trainable_parameter_is_rejected() -> None:
@@ -139,15 +135,11 @@ def test_pretokenized_zero_target_row_is_rejected() -> None:
         ValueError,
         match=r"validation row 2.*data\.max_length=8",
     ):
-        _validate_pretokenized_targets(
-            _Pretokenized(), split="validation", max_length=8
-        )
+        _validate_pretokenized_targets(_Pretokenized(), split="validation", max_length=8)
 
 
 def test_training_state_is_checked_before_final_save() -> None:
     from soup_cli.trainer.sft import SFTTrainerWrapper
 
     source = inspect.getsource(SFTTrainerWrapper.train)
-    assert source.index("_assert_finite_training_state") < source.index(
-        "self.trainer.save_model"
-    )
+    assert source.index("_assert_finite_training_state") < source.index("self.trainer.save_model")

@@ -57,13 +57,13 @@ class TestAdapterFuse:
         for node in tree.body:
             if isinstance(node, ast.Import):
                 for alias in node.names:
-                    assert not alias.name.startswith(
-                        ("torch", "transformers", "peft")
-                    ), f"top-level import of {alias.name}"
+                    assert not alias.name.startswith(("torch", "transformers", "peft")), (
+                        f"top-level import of {alias.name}"
+                    )
             elif isinstance(node, ast.ImportFrom) and node.module:
-                assert not node.module.startswith(
-                    ("torch", "transformers", "peft")
-                ), f"top-level import from {node.module}"
+                assert not node.module.startswith(("torch", "transformers", "peft")), (
+                    f"top-level import from {node.module}"
+                )
 
     def test_failed_save_does_not_orphan_the_staging_dir(self, tmp_path, monkeypatch):
         """python-review HIGH: a save that raises mid-write used to leave a
@@ -114,9 +114,7 @@ class TestAdapterFuse:
         monkeypatch.setitem(sys.modules, "peft", fake_peft)
 
         with pytest.raises(RuntimeError, match="disk full"):
-            adapter_fuse.fuse_adapter_into(
-                base_dir="base", adapter_dir=str(tmp_path / "ad")
-            )
+            adapter_fuse.fuse_adapter_into(base_dir="base", adapter_dir=str(tmp_path / "ad"))
         assert list(tmp_path.glob(".fuse_*")) == [], "staging dir was orphaned"
         assert base.exists(), "the base model must survive a failed fuse"
 
@@ -151,9 +149,7 @@ class TestAdapterFuse:
                 base_model="org/tiny", adapter_dir=str(adapter), out_dir="out"
             )
 
-    def test_trainer_checkpoint_pickles_are_not_mistaken_for_an_attack(
-        self, tmp_path, monkeypatch
-    ):
+    def test_trainer_checkpoint_pickles_are_not_mistaken_for_an_attack(self, tmp_path, monkeypatch):
         """Live-smoke regression: the HF Trainer writes checkpoint-N/optimizer.pt
         (a pickle IT wrote). A recursive scan refused Soup's own distill output
         and made `soup draft distill` impossible. Only TOP-LEVEL weights — the
@@ -213,9 +209,7 @@ class TestAdapterFuse:
         with pytest.raises(ValueError, match="(?i)unsafe"):
             assert_safe_top_level_weights(str(model_dir))
 
-    def test_merge_loads_base_weights_from_the_base_model_not_out_dir(
-        self, tmp_path, monkeypatch
-    ):
+    def test_merge_loads_base_weights_from_the_base_model_not_out_dir(self, tmp_path, monkeypatch):
         """The whole point of the CRITICAL fix: an adapter-only dir has no base
         weights, so the base must be loaded from a separate model id/path."""
         import sys
@@ -282,18 +276,14 @@ class TestAdapterFuse:
             seen.append((path, field))
             raise ValueError("refused")
 
-        monkeypatch.setattr(
-            adapter_fuse, "enforce_under_cwd_and_no_symlink", _fake_enforce
-        )
+        monkeypatch.setattr(adapter_fuse, "enforce_under_cwd_and_no_symlink", _fake_enforce)
         with pytest.raises(ValueError, match="refused"):
             adapter_fuse.fuse_adapter_into(
                 base_dir=str(tmp_path / "base"), adapter_dir=str(tmp_path / "ad")
             )
         assert seen and seen[0][0] == str(tmp_path / "base")
 
-    def test_rechecks_immediately_before_the_destructive_swap(
-        self, tmp_path, monkeypatch
-    ):
+    def test_rechecks_immediately_before_the_destructive_swap(self, tmp_path, monkeypatch):
         """TOCTOU: a mock that raised on EVERY call could not distinguish
         'checked once at entry' from 'rechecked right before rmtree'. This one
         succeeds first and fails on the SECOND call, so it can only pass if the
@@ -362,9 +352,7 @@ class TestAdapterFuse:
         assert not (tmp_path / "out" / "model.safetensors").exists()
         assert list(tmp_path.glob(".fuse_*")) == []
 
-    def test_merge_falls_back_to_base_tokenizer_when_adapter_lacks_one(
-        self, tmp_path, monkeypatch
-    ):
+    def test_merge_falls_back_to_base_tokenizer_when_adapter_lacks_one(self, tmp_path, monkeypatch):
         import sys
         import types
 
@@ -778,9 +766,7 @@ class TestDraftRegistry:
         from soup_cli.utils.draft import list_drafts
 
         secret = tmp_path / "secret.json"
-        secret.write_text(
-            '{"drafts": [{"target": "leaked", "draft": "/tmp"}]}', encoding="utf-8"
-        )
+        secret.write_text('{"drafts": [{"target": "leaked", "draft": "/tmp"}]}', encoding="utf-8")
         draft_registry.symlink_to(secret)
         assert list_drafts() == []
 
@@ -793,9 +779,7 @@ class TestDraftRegistry:
         leftovers = [p.name for p in draft_registry.parent.glob(".soup.*")]
         assert leftovers == []
 
-    def test_concurrent_registration_does_not_lose_an_entry(
-        self, draft_registry, tmp_path
-    ):
+    def test_concurrent_registration_does_not_lose_an_entry(self, draft_registry, tmp_path):
         """code-review MEDIUM: read-modify-write under a cross-process lock."""
         import threading
 
@@ -1065,7 +1049,10 @@ class TestMeasureAcceptance:
 
         target = _FakeTarget(self.FULL_IDS, self.N_PROMPT)
         measure_acceptance(
-            target, _FakeDraft(self.ARGMAX), _TensorTok([5, 6]), ["a"],
+            target,
+            _FakeDraft(self.ARGMAX),
+            _TensorTok([5, 6]),
+            ["a"],
             max_new_tokens=8,
         )
         assert target.calls[0]["do_sample"] is False
@@ -1147,15 +1134,12 @@ class TestMeasureAcceptance:
         assert (accepted, total) == (3, 3)
 
 
-
 class TestMeasureThroughput:
     def test_discards_a_warmup_generate(self):
         from soup_cli.utils.draft import measure_throughput
 
         target = _FakeTarget([5, 6, 10, 11, 12], 2)
-        rate = measure_throughput(
-            target, _TensorTok([5, 6]), ["a", "b"], max_new_tokens=8
-        )
+        rate = measure_throughput(target, _TensorTok([5, 6]), ["a", "b"], max_new_tokens=8)
         # 2 prompts + 1 warm-up = 3 generate calls; only 2 are timed.
         assert len(target.calls) == 3
         assert rate > 0
@@ -1203,13 +1187,13 @@ class TestDraftNoTopLevelTorch:
         for node in tree.body:
             if isinstance(node, ast.Import):
                 for alias in node.names:
-                    assert not alias.name.startswith(
-                        ("torch", "transformers", "peft")
-                    ), f"top-level import of {alias.name}"
+                    assert not alias.name.startswith(("torch", "transformers", "peft")), (
+                        f"top-level import of {alias.name}"
+                    )
             elif isinstance(node, ast.ImportFrom) and node.module:
-                assert not node.module.startswith(
-                    ("torch", "transformers", "peft")
-                ), f"top-level import from {node.module}"
+                assert not node.module.startswith(("torch", "transformers", "peft")), (
+                    f"top-level import from {node.module}"
+                )
 
 
 # ---------------------------------------------------------------------------
@@ -1238,9 +1222,7 @@ def in_tmp_cwd(tmp_path, monkeypatch):
 def _write_jsonl(path: Path, rows: list[dict]) -> str:
     import json as _json
 
-    path.write_text(
-        "\n".join(_json.dumps(row) for row in rows) + "\n", encoding="utf-8"
-    )
+    path.write_text("\n".join(_json.dumps(row) for row in rows) + "\n", encoding="utf-8")
     return str(path)
 
 
@@ -1280,9 +1262,7 @@ class TestDraftCliPlumbing:
             seen["requested"] = requested
             return requested
 
-        monkeypatch.setattr(
-            "soup_cli.utils.trust_remote.resolve_trust_remote_code", _fake_resolve
-        )
+        monkeypatch.setattr("soup_cli.utils.trust_remote.resolve_trust_remote_code", _fake_resolve)
         monkeypatch.setattr(
             "soup_cli.utils.trust_remote.model_requires_trust_remote_code",
             lambda mid: False,
@@ -1295,8 +1275,15 @@ class TestDraftDistillCli:
     def _data(self, tmp_path, rows: int = 200):
         return _write_jsonl(
             tmp_path / "d.jsonl",
-            [{"messages": [{"role": "user", "content": "hi"},
-                           {"role": "assistant", "content": "yo"}]}] * rows,
+            [
+                {
+                    "messages": [
+                        {"role": "user", "content": "hi"},
+                        {"role": "assistant", "content": "yo"},
+                    ]
+                }
+            ]
+            * rows,
         )
 
     def _patch_configs(self, monkeypatch, target_vocab, draft_vocab):
@@ -1322,31 +1309,48 @@ class TestDraftDistillCli:
         data = self._data(in_tmp_cwd)
         result = runner.invoke(
             app,
-            ["distill", "--target", "org/target", "--draft-base", "org/tiny",
-             "--data", data, "-o", "draftout", "--plan-only"],
+            [
+                "distill",
+                "--target",
+                "org/target",
+                "--draft-base",
+                "org/tiny",
+                "--data",
+                data,
+                "-o",
+                "draftout",
+                "--plan-only",
+            ],
         )
         assert result.exit_code == 0, (result.output, repr(result.exception))
         assert "task: distill" in result.output
         assert not (in_tmp_cwd / "draftout").exists()
 
-    def test_vocab_mismatch_routes_to_cross_tokenizer_uld(
-        self, runner, in_tmp_cwd, monkeypatch
-    ):
+    def test_vocab_mismatch_routes_to_cross_tokenizer_uld(self, runner, in_tmp_cwd, monkeypatch):
         from soup_cli.commands.draft import app
 
         self._patch_configs(monkeypatch, 49152, 151936)
         data = self._data(in_tmp_cwd)
         result = runner.invoke(
             app,
-            ["distill", "--target", "org/target", "--draft-base", "org/tiny",
-             "--data", data, "-o", "draftout", "--plan-only"],
+            [
+                "distill",
+                "--target",
+                "org/target",
+                "--draft-base",
+                "org/tiny",
+                "--data",
+                data,
+                "-o",
+                "draftout",
+                "--plan-only",
+            ],
         )
         assert result.exit_code == 0
         assert "uld_strategy: wasserstein_aligned" in result.output
         assert "cross-tokenizer" in result.output.lower()
 
-    def test_data_outside_cwd_rejected(self, runner, in_tmp_cwd, tmp_path_factory,
-                                       monkeypatch):
+    def test_data_outside_cwd_rejected(self, runner, in_tmp_cwd, tmp_path_factory, monkeypatch):
         from soup_cli.commands.draft import app
 
         self._patch_configs(monkeypatch, 49152, 49152)
@@ -1354,8 +1358,18 @@ class TestDraftDistillCli:
         data = _write_jsonl(outside / "d.jsonl", [{"text": "x"}])
         result = runner.invoke(
             app,
-            ["distill", "--target", "org/target", "--draft-base", "org/tiny",
-             "--data", data, "-o", "draftout", "--plan-only"],
+            [
+                "distill",
+                "--target",
+                "org/target",
+                "--draft-base",
+                "org/tiny",
+                "--data",
+                data,
+                "-o",
+                "draftout",
+                "--plan-only",
+            ],
         )
         assert result.exit_code == 1
         assert "cwd" in result.output.lower() or "outside" in result.output.lower()
@@ -1367,8 +1381,18 @@ class TestDraftDistillCli:
         data = self._data(in_tmp_cwd)
         result = runner.invoke(
             app,
-            ["distill", "--target", "org/target", "--draft-base", "org/tiny",
-             "--data", data, "-o", "../escape", "--plan-only"],
+            [
+                "distill",
+                "--target",
+                "org/target",
+                "--draft-base",
+                "org/tiny",
+                "--data",
+                data,
+                "-o",
+                "../escape",
+                "--plan-only",
+            ],
         )
         assert result.exit_code == 1
         assert "cwd" in result.output.lower()
@@ -1381,15 +1405,23 @@ class TestDraftDistillCli:
         data = self._data(in_tmp_cwd)
         result = runner.invoke(
             app,
-            ["distill", "--target", "org/target", "--draft-base", "org/tiny",
-             "--data", data, "-o", ".", "--plan-only"],
+            [
+                "distill",
+                "--target",
+                "org/target",
+                "--draft-base",
+                "org/tiny",
+                "--data",
+                data,
+                "-o",
+                ".",
+                "--plan-only",
+            ],
         )
         assert result.exit_code == 1
         assert "current directory" in result.output.lower()
 
-    def test_output_preexisting_nondraft_dir_rejected(
-        self, runner, in_tmp_cwd, monkeypatch
-    ):
+    def test_output_preexisting_nondraft_dir_rejected(self, runner, in_tmp_cwd, monkeypatch):
         """security CRITICAL: overwriting an unrelated dir needs --force."""
         from soup_cli.commands.draft import app
 
@@ -1400,15 +1432,23 @@ class TestDraftDistillCli:
         (victim / "notes.txt").write_text("keep me", encoding="utf-8")
         result = runner.invoke(
             app,
-            ["distill", "--target", "org/target", "--draft-base", "org/tiny",
-             "--data", data, "-o", "important", "--plan-only"],
+            [
+                "distill",
+                "--target",
+                "org/target",
+                "--draft-base",
+                "org/tiny",
+                "--data",
+                data,
+                "-o",
+                "important",
+                "--plan-only",
+            ],
         )
         assert result.exit_code == 1
         assert "--force" in result.output
 
-    def test_output_preexisting_draft_dir_allowed(
-        self, runner, in_tmp_cwd, monkeypatch
-    ):
+    def test_output_preexisting_draft_dir_allowed(self, runner, in_tmp_cwd, monkeypatch):
         """Re-distilling into a prior draft (has config.json) is fine."""
         from soup_cli.commands.draft import app
 
@@ -1419,8 +1459,18 @@ class TestDraftDistillCli:
         (prior / "config.json").write_text("{}", encoding="utf-8")
         result = runner.invoke(
             app,
-            ["distill", "--target", "org/target", "--draft-base", "org/tiny",
-             "--data", data, "-o", "draftout", "--plan-only"],
+            [
+                "distill",
+                "--target",
+                "org/target",
+                "--draft-base",
+                "org/tiny",
+                "--data",
+                data,
+                "-o",
+                "draftout",
+                "--plan-only",
+            ],
         )
         assert result.exit_code == 0, (result.output, repr(result.exception))
 
@@ -1430,15 +1480,23 @@ class TestDraftDistillCli:
         self._patch_configs(monkeypatch, 49152, 49152)
         result = runner.invoke(
             app,
-            ["distill", "--target", "org/target", "--draft-base", "org/tiny",
-             "--data", "nope.jsonl", "-o", "draftout", "--plan-only"],
+            [
+                "distill",
+                "--target",
+                "org/target",
+                "--draft-base",
+                "org/tiny",
+                "--data",
+                "nope.jsonl",
+                "-o",
+                "draftout",
+                "--plan-only",
+            ],
         )
         assert result.exit_code == 1
         assert "unreadable" in result.output.lower()
 
-    def test_force_overwrites_a_preexisting_nondraft_dir(
-        self, runner, in_tmp_cwd, monkeypatch
-    ):
+    def test_force_overwrites_a_preexisting_nondraft_dir(self, runner, in_tmp_cwd, monkeypatch):
         from soup_cli.commands.draft import app
 
         self._patch_configs(monkeypatch, 49152, 49152)
@@ -1448,14 +1506,23 @@ class TestDraftDistillCli:
         (victim / "notes.txt").write_text("keep me", encoding="utf-8")
         result = runner.invoke(
             app,
-            ["distill", "--target", "org/target", "--draft-base", "org/tiny",
-             "--data", data, "-o", "important", "--force", "--plan-only"],
+            [
+                "distill",
+                "--target",
+                "org/target",
+                "--draft-base",
+                "org/tiny",
+                "--data",
+                data,
+                "-o",
+                "important",
+                "--force",
+                "--plan-only",
+            ],
         )
         assert result.exit_code == 0, (result.output, repr(result.exception))
 
-    def test_empty_preexisting_dir_allowed_without_force(
-        self, runner, in_tmp_cwd, monkeypatch
-    ):
+    def test_empty_preexisting_dir_allowed_without_force(self, runner, in_tmp_cwd, monkeypatch):
         from soup_cli.commands.draft import app
 
         self._patch_configs(monkeypatch, 49152, 49152)
@@ -1463,14 +1530,22 @@ class TestDraftDistillCli:
         (in_tmp_cwd / "draftout").mkdir()  # empty, no config.json
         result = runner.invoke(
             app,
-            ["distill", "--target", "org/target", "--draft-base", "org/tiny",
-             "--data", data, "-o", "draftout", "--plan-only"],
+            [
+                "distill",
+                "--target",
+                "org/target",
+                "--draft-base",
+                "org/tiny",
+                "--data",
+                data,
+                "-o",
+                "draftout",
+                "--plan-only",
+            ],
         )
         assert result.exit_code == 0, (result.output, repr(result.exception))
 
-    def test_config_unreadable_reports_friendly_error(
-        self, runner, in_tmp_cwd, monkeypatch
-    ):
+    def test_config_unreadable_reports_friendly_error(self, runner, in_tmp_cwd, monkeypatch):
         from soup_cli.commands import draft as draft_cmd
         from soup_cli.commands.draft import app
 
@@ -1481,8 +1556,18 @@ class TestDraftDistillCli:
         data = self._data(in_tmp_cwd)
         result = runner.invoke(
             app,
-            ["distill", "--target", "org/nope", "--draft-base", "org/tiny",
-             "--data", data, "-o", "draftout", "--plan-only"],
+            [
+                "distill",
+                "--target",
+                "org/nope",
+                "--draft-base",
+                "org/tiny",
+                "--data",
+                data,
+                "-o",
+                "draftout",
+                "--plan-only",
+            ],
         )
         assert result.exit_code == 1
         assert "could not read model config" in result.output.lower()
@@ -1501,13 +1586,15 @@ class TestDraftDistillCli:
         self._data(in_tmp_cwd)
         with pytest.raises(RuntimeError, match="rc=1"):
             draft_cmd._run_distill(
-                draft_base="org/tiny", target="org/target", data="d.jsonl",
-                out_dir="draftout", steps=100, data_rows=200,
+                draft_base="org/tiny",
+                target="org/target",
+                data="d.jsonl",
+                out_dir="draftout",
+                steps=100,
+                data_rows=200,
             )
 
-    def test_run_distill_reports_rendered_config_validation_error(
-        self, in_tmp_cwd, monkeypatch
-    ):
+    def test_run_distill_reports_rendered_config_validation_error(self, in_tmp_cwd, monkeypatch):
         import typer
 
         from soup_cli.commands import draft as draft_cmd
@@ -1532,9 +1619,7 @@ class TestDraftDistillCli:
         assert exc_info.value.exit_code == 1
         assert messages == ["[red]Invalid rendered distill config:[/] invalid rendered config"]
 
-    def test_run_distill_sanitizes_rendered_config_validation_error(
-        self, in_tmp_cwd, monkeypatch
-    ):
+    def test_run_distill_sanitizes_rendered_config_validation_error(self, in_tmp_cwd, monkeypatch):
         import typer
 
         from soup_cli.commands import draft as draft_cmd
@@ -1542,9 +1627,7 @@ class TestDraftDistillCli:
         messages: list[str] = []
         monkeypatch.setattr(
             "soup_cli.config.loader.load_config_from_string",
-            lambda _yaml: (_ for _ in ()).throw(
-                ValueError("bad \x1b[2J[bold red]field[/]")
-            ),
+            lambda _yaml: (_ for _ in ()).throw(ValueError("bad \x1b[2J[bold red]field[/]")),
         )
         monkeypatch.setattr(draft_cmd.console, "print", lambda message: messages.append(message))
 
@@ -1575,8 +1658,12 @@ class TestDraftDistillCli:
         self._data(in_tmp_cwd)
         with pytest.raises(RuntimeError, match="timeout"):
             draft_cmd._run_distill(
-                draft_base="org/tiny", target="org/target", data="d.jsonl",
-                out_dir="draftout", steps=100, data_rows=200,
+                draft_base="org/tiny",
+                target="org/target",
+                data="d.jsonl",
+                out_dir="draftout",
+                steps=100,
+                data_rows=200,
             )
 
     def test_run_distill_cpu_device_hides_gpus(self, in_tmp_cwd, monkeypatch):
@@ -1593,17 +1680,20 @@ class TestDraftDistillCli:
 
         def _fake_run(argv, **kwargs):
             captured["env"] = kwargs.get("env")
-            (Path("draftout") / draft_cmd._ADAPTER_SUBDIR).mkdir(
-                parents=True, exist_ok=True
-            )
+            (Path("draftout") / draft_cmd._ADAPTER_SUBDIR).mkdir(parents=True, exist_ok=True)
             return _Result()
 
         monkeypatch.setattr(_sp, "run", _fake_run)
         monkeypatch.setattr(draft_cmd, "merge_adapter_to_dense", lambda **kw: None)
         self._data(in_tmp_cwd)
         draft_cmd._run_distill(
-            draft_base="org/tiny", target="org/target", data="d.jsonl",
-            out_dir="draftout", steps=100, data_rows=200, device="cpu",
+            draft_base="org/tiny",
+            target="org/target",
+            data="d.jsonl",
+            out_dir="draftout",
+            steps=100,
+            data_rows=200,
+            device="cpu",
         )
         assert captured["env"]["CUDA_VISIBLE_DEVICES"] == "-1"
 
@@ -1669,9 +1759,7 @@ class TestDraftDistillCli:
             return _Result()
 
         def _fake_merge(*, base_model, adapter_dir, out_dir, trc=False):
-            calls.update(
-                base_model=base_model, adapter_dir=adapter_dir, out_dir=out_dir
-            )
+            calls.update(base_model=base_model, adapter_dir=adapter_dir, out_dir=out_dir)
 
         import subprocess as _sp
 
@@ -1692,9 +1780,7 @@ class TestDraftDistillCli:
         assert calls["out_dir"] == "draftout"
         assert calls["adapter_dir"] != calls["out_dir"]
 
-    def test_run_distill_fails_loudly_when_no_adapter_was_written(
-        self, in_tmp_cwd, monkeypatch
-    ):
+    def test_run_distill_fails_loudly_when_no_adapter_was_written(self, in_tmp_cwd, monkeypatch):
         from soup_cli.commands import draft as draft_cmd
 
         class _Result:
@@ -1705,9 +1791,7 @@ class TestDraftDistillCli:
         import subprocess as _sp
 
         monkeypatch.setattr(_sp, "run", lambda argv, **kw: _Result())
-        monkeypatch.setattr(
-            draft_cmd, "merge_adapter_to_dense", lambda **kw: None
-        )
+        monkeypatch.setattr(draft_cmd, "merge_adapter_to_dense", lambda **kw: None)
         with pytest.raises(RuntimeError, match="no adapter"):
             draft_cmd._run_distill(
                 draft_base="org/tiny",
@@ -1777,17 +1861,24 @@ class TestDraftDistillCli:
 
         result = runner.invoke(
             app,
-            ["distill", "--target", "org/target", "--draft-base", "org/tiny",
-             "--data", data, "-o", "draftout"],
+            [
+                "distill",
+                "--target",
+                "org/target",
+                "--draft-base",
+                "org/tiny",
+                "--data",
+                data,
+                "-o",
+                "draftout",
+            ],
         )
         assert result.exit_code == 0, (result.output, repr(result.exception))
         assert trained["target"] == "org/target"
         registered = lookup_draft("org/target")
         assert registered == os.path.realpath(str(in_tmp_cwd / "draftout"))
 
-    def test_no_register_flag_skips_registry(
-        self, runner, in_tmp_cwd, monkeypatch, draft_registry
-    ):
+    def test_no_register_flag_skips_registry(self, runner, in_tmp_cwd, monkeypatch, draft_registry):
         from soup_cli.commands import draft as draft_cmd
         from soup_cli.commands.draft import app
         from soup_cli.utils.draft import lookup_draft
@@ -1801,8 +1892,18 @@ class TestDraftDistillCli:
         )
         result = runner.invoke(
             app,
-            ["distill", "--target", "org/target", "--draft-base", "org/tiny",
-             "--data", data, "-o", "draftout", "--no-register"],
+            [
+                "distill",
+                "--target",
+                "org/target",
+                "--draft-base",
+                "org/tiny",
+                "--data",
+                data,
+                "-o",
+                "draftout",
+                "--no-register",
+            ],
         )
         assert result.exit_code == 0, (result.output, repr(result.exception))
         assert lookup_draft("org/target") is None
@@ -1810,9 +1911,7 @@ class TestDraftDistillCli:
 
 class TestDraftMeasureCli:
     def _prompts(self, tmp_path):
-        return _write_jsonl(
-            tmp_path / "p.jsonl", [{"prompt": "What is 2+2?"}, {"prompt": "Hi"}]
-        )
+        return _write_jsonl(tmp_path / "p.jsonl", [{"prompt": "What is 2+2?"}, {"prompt": "Hi"}])
 
     def _patch_load(self, monkeypatch, *, compatible=True):
         from soup_cli.commands import draft as draft_cmd
@@ -1836,9 +1935,7 @@ class TestDraftMeasureCli:
         monkeypatch.setattr(draft_cmd, "_load_pair_member", _fake_load)
         return (model_a, tok_a), (model_b, tok_b)
 
-    def test_happy_path_writes_report_and_exits_zero(
-        self, runner, in_tmp_cwd, monkeypatch
-    ):
+    def test_happy_path_writes_report_and_exits_zero(self, runner, in_tmp_cwd, monkeypatch):
         import json as _json
 
         from soup_cli.commands import draft as draft_cmd
@@ -1851,8 +1948,17 @@ class TestDraftMeasureCli:
         prompts = self._prompts(in_tmp_cwd)
         result = runner.invoke(
             app,
-            ["measure", "--target", "org/target", "--draft", "org/tiny",
-             "--prompts", prompts, "-o", "report.json"],
+            [
+                "measure",
+                "--target",
+                "org/target",
+                "--draft",
+                "org/tiny",
+                "--prompts",
+                prompts,
+                "-o",
+                "report.json",
+            ],
         )
         assert result.exit_code == 0, (result.output, repr(result.exception))
         assert "STRONG" in _plain(result.output)
@@ -1872,22 +1978,27 @@ class TestDraftMeasureCli:
         prompts = self._prompts(in_tmp_cwd)
         result = runner.invoke(
             app,
-            ["measure", "--target", "org/target", "--draft", "org/tiny",
-             "--prompts", prompts, "--min-acceptance", "0.6"],
+            [
+                "measure",
+                "--target",
+                "org/target",
+                "--draft",
+                "org/tiny",
+                "--prompts",
+                prompts,
+                "--min-acceptance",
+                "0.6",
+            ],
         )
         assert result.exit_code == 2
         assert "60.0%" in _plain(result.output)
         assert "below" in _plain(result.output).lower()
 
-    def test_mismatched_tokenizer_measures_cross_tokenizer(
-        self, runner, in_tmp_cwd, monkeypatch
-    ):
+    def test_mismatched_tokenizer_measures_cross_tokenizer(self, runner, in_tmp_cwd, monkeypatch):
         from soup_cli.commands import draft as draft_cmd
         from soup_cli.commands.draft import app
 
-        (_, _), (draft_model, draft_tok) = self._patch_load(
-            monkeypatch, compatible=False
-        )
+        (_, _), (draft_model, draft_tok) = self._patch_load(monkeypatch, compatible=False)
         monkeypatch.setattr(draft_cmd, "measure_acceptance", lambda *a, **k: (60, 100))
 
         captured_kwargs: list[dict] = []
@@ -1901,8 +2012,7 @@ class TestDraftMeasureCli:
         prompts = self._prompts(in_tmp_cwd)
         result = runner.invoke(
             app,
-            ["measure", "--target", "org/target", "--draft", "org/tiny",
-             "--prompts", prompts],
+            ["measure", "--target", "org/target", "--draft", "org/tiny", "--prompts", prompts],
         )
         assert result.exit_code == 0
         assert "Cross-tokenizer draft detected" in _plain(result.output)
@@ -1916,9 +2026,7 @@ class TestDraftMeasureCli:
         assert "max_new_tokens" in assisted
         assert "num_assistant_tokens" in assisted
 
-    def test_mismatched_tokenizer_unsupported_uad_warns(
-        self, runner, in_tmp_cwd, monkeypatch
-    ):
+    def test_mismatched_tokenizer_unsupported_uad_warns(self, runner, in_tmp_cwd, monkeypatch):
         from soup_cli.commands import draft as draft_cmd
         from soup_cli.commands.draft import app
 
@@ -1935,16 +2043,13 @@ class TestDraftMeasureCli:
         prompts = self._prompts(in_tmp_cwd)
         result = runner.invoke(
             app,
-            ["measure", "--target", "org/target", "--draft", "org/tiny",
-             "--prompts", prompts],
+            ["measure", "--target", "org/target", "--draft", "org/tiny", "--prompts", prompts],
         )
         assert result.exit_code == 0
         assert "Universal Assisted Decoding requires transformers>=4.45.0" in _plain(result.output)
         assert "could not be measured" in _plain(result.output)
 
-    def test_prompts_outside_cwd_rejected(
-        self, runner, in_tmp_cwd, tmp_path_factory, monkeypatch
-    ):
+    def test_prompts_outside_cwd_rejected(self, runner, in_tmp_cwd, tmp_path_factory, monkeypatch):
         from soup_cli.commands.draft import app
 
         self._patch_load(monkeypatch)
@@ -1952,8 +2057,7 @@ class TestDraftMeasureCli:
         prompts = _write_jsonl(outside / "p.jsonl", [{"prompt": "hi"}])
         result = runner.invoke(
             app,
-            ["measure", "--target", "org/target", "--draft", "org/tiny",
-             "--prompts", prompts],
+            ["measure", "--target", "org/target", "--draft", "org/tiny", "--prompts", prompts],
         )
         assert result.exit_code == 1
 
@@ -1965,8 +2069,7 @@ class TestDraftMeasureCli:
         empty.write_text("", encoding="utf-8")
         result = runner.invoke(
             app,
-            ["measure", "--target", "org/target", "--draft", "org/tiny",
-             "--prompts", str(empty)],
+            ["measure", "--target", "org/target", "--draft", "org/tiny", "--prompts", str(empty)],
         )
         assert result.exit_code == 1
 
@@ -1977,14 +2080,21 @@ class TestDraftMeasureCli:
         prompts = self._prompts(in_tmp_cwd)
         result = runner.invoke(
             app,
-            ["measure", "--target", "org/target", "--draft", "org/tiny",
-             "--prompts", prompts, "--min-acceptance", "1.5"],
+            [
+                "measure",
+                "--target",
+                "org/target",
+                "--draft",
+                "org/tiny",
+                "--prompts",
+                prompts,
+                "--min-acceptance",
+                "1.5",
+            ],
         )
         assert result.exit_code != 0
 
-    def test_model_load_failure_reports_friendly_error(
-        self, runner, in_tmp_cwd, monkeypatch
-    ):
+    def test_model_load_failure_reports_friendly_error(self, runner, in_tmp_cwd, monkeypatch):
         from soup_cli.commands import draft as draft_cmd
         from soup_cli.commands.draft import app
 
@@ -1998,15 +2108,12 @@ class TestDraftMeasureCli:
         prompts = self._prompts(in_tmp_cwd)
         result = runner.invoke(
             app,
-            ["measure", "--target", "org/nope", "--draft", "org/tiny",
-             "--prompts", prompts],
+            ["measure", "--target", "org/nope", "--draft", "org/tiny", "--prompts", prompts],
         )
         assert result.exit_code == 1
         assert "could not load the model pair" in result.output.lower()
 
-    def test_report_output_outside_cwd_rejected(
-        self, runner, in_tmp_cwd, monkeypatch
-    ):
+    def test_report_output_outside_cwd_rejected(self, runner, in_tmp_cwd, monkeypatch):
         from soup_cli.commands import draft as draft_cmd
         from soup_cli.commands.draft import app
 
@@ -2016,8 +2123,17 @@ class TestDraftMeasureCli:
         prompts = self._prompts(in_tmp_cwd)
         result = runner.invoke(
             app,
-            ["measure", "--target", "org/target", "--draft", "org/tiny",
-             "--prompts", prompts, "-o", "../escape.json"],
+            [
+                "measure",
+                "--target",
+                "org/target",
+                "--draft",
+                "org/tiny",
+                "--prompts",
+                prompts,
+                "-o",
+                "../escape.json",
+            ],
         )
         assert result.exit_code == 1
         assert "cwd" in result.output.lower()
@@ -2034,8 +2150,17 @@ class TestDraftMeasureCli:
         prompts = self._prompts(in_tmp_cwd)
         result = runner.invoke(
             app,
-            ["measure", "--target", "org/target", "--draft", "org/tiny",
-             "--prompts", prompts, "-o", "report.json"],
+            [
+                "measure",
+                "--target",
+                "org/target",
+                "--draft",
+                "org/tiny",
+                "--prompts",
+                prompts,
+                "-o",
+                "report.json",
+            ],
         )
         assert result.exit_code == 0, (result.output, repr(result.exception))
         assert "n/a" in result.output.lower()
@@ -2044,9 +2169,7 @@ class TestDraftMeasureCli:
         assert data["tok_s_assisted"] is None
         assert data["speedup"] is None
 
-    def test_zero_generated_tokens_is_not_a_crash(
-        self, runner, in_tmp_cwd, monkeypatch
-    ):
+    def test_zero_generated_tokens_is_not_a_crash(self, runner, in_tmp_cwd, monkeypatch):
         """A target that emits EOS immediately must not divide by zero."""
         from soup_cli.commands import draft as draft_cmd
         from soup_cli.commands.draft import app
@@ -2058,8 +2181,7 @@ class TestDraftMeasureCli:
         prompts = self._prompts(in_tmp_cwd)
         result = runner.invoke(
             app,
-            ["measure", "--target", "org/target", "--draft", "org/tiny",
-             "--prompts", prompts],
+            ["measure", "--target", "org/target", "--draft", "org/tiny", "--prompts", prompts],
         )
         assert result.exit_code == 1
         assert "no tokens" in result.output.lower()
@@ -2080,9 +2202,7 @@ class TestDraftMeasureVocabGate:
     measurement when the assisted arm fails inside transformers."""
 
     def _prompts(self, tmp_path):
-        return _write_jsonl(
-            tmp_path / "p.jsonl", [{"prompt": "What is 2+2?"}, {"prompt": "Hi"}]
-        )
+        return _write_jsonl(tmp_path / "p.jsonl", [{"prompt": "What is 2+2?"}, {"prompt": "Hi"}])
 
     @pytest.mark.parametrize(
         ("target_vocab", "draft_vocab"),
@@ -2124,8 +2244,17 @@ class TestDraftMeasureVocabGate:
         prompts = self._prompts(in_tmp_cwd)
         result = runner.invoke(
             app,
-            ["measure", "--target", "org/target-qwen-32b", "--draft", "org/qwen-0_5b",
-             "--prompts", prompts, "-o", "report.json"],
+            [
+                "measure",
+                "--target",
+                "org/target-qwen-32b",
+                "--draft",
+                "org/qwen-0_5b",
+                "--prompts",
+                prompts,
+                "-o",
+                "report.json",
+            ],
         )
         assert result.exit_code == 1, (result.output, repr(result.exception))
         assert "vocab" in result.output.lower()
@@ -2149,14 +2278,13 @@ class TestDraftMeasureVocabGate:
         )
         monkeypatch.setattr(draft_cmd, "measure_acceptance", lambda *a, **k: (75, 100))
 
-        def _throughput(model, tok, prompts, *, assistant_model=None,
-                        num_assistant_tokens=5, max_new_tokens=64):
+        def _throughput(
+            model, tok, prompts, *, assistant_model=None, num_assistant_tokens=5, max_new_tokens=64
+        ):
             # The assisted arm is the one transformers refuses (issue #344); the
             # plain arm has already succeeded by the time it runs.
             if assistant_model is not None:
-                raise ValueError(
-                    "The main and assistant models have different tokenizers"
-                )
+                raise ValueError("The main and assistant models have different tokenizers")
             return 20.0
 
         monkeypatch.setattr(draft_cmd, "measure_throughput", _throughput)
@@ -2164,8 +2292,17 @@ class TestDraftMeasureVocabGate:
         prompts = self._prompts(in_tmp_cwd)
         result = runner.invoke(
             app,
-            ["measure", "--target", "org/target", "--draft", "org/tiny",
-             "--prompts", prompts, "-o", "report.json"],
+            [
+                "measure",
+                "--target",
+                "org/target",
+                "--draft",
+                "org/tiny",
+                "--prompts",
+                prompts,
+                "-o",
+                "report.json",
+            ],
         )
         # A failed assisted arm is a loud warning, not a crash: the acceptance rate
         # and plain throughput already succeeded and must survive on disk.
@@ -2200,8 +2337,17 @@ class TestDraftMeasureVocabGate:
         prompts = self._prompts(in_tmp_cwd)
         return runner.invoke(
             app,
-            ["measure", "--target", "org/target", "--draft", "org/tiny",
-             "--prompts", prompts, "-o", "report.json"],
+            [
+                "measure",
+                "--target",
+                "org/target",
+                "--draft",
+                "org/tiny",
+                "--prompts",
+                prompts,
+                "-o",
+                "report.json",
+            ],
         )
 
     def test_assisted_arm_outcomes_are_distinguishable_on_disk(
@@ -2221,9 +2367,7 @@ class TestDraftMeasureVocabGate:
         assert data["tok_s_assisted"] == 30.0
         assert data["speedup"] == 1.5
 
-    def test_assisted_arm_untimed_is_recorded_and_silent(
-        self, runner, in_tmp_cwd, monkeypatch
-    ):
+    def test_assisted_arm_untimed_is_recorded_and_silent(self, runner, in_tmp_cwd, monkeypatch):
         """A non-positive assisted number is 'untimed', not 'crash', and prints no
         warning — the two must not collapse to the same on-disk state."""
         import json as _json
@@ -2238,9 +2382,7 @@ class TestDraftMeasureVocabGate:
         assert data["tok_s_assisted"] is None
         assert "could not be measured" not in _plain(result.output)
 
-    def test_assisted_arm_interrupt_is_recorded_and_reraised(
-        self, runner, in_tmp_cwd, monkeypatch
-    ):
+    def test_assisted_arm_interrupt_is_recorded_and_reraised(self, runner, in_tmp_cwd, monkeypatch):
         """Ctrl-C during the arm is recorded as 'interrupted' and re-raised (so the
         exit is not 0). Widening the ``except`` to swallow BaseException — or
         dropping the KeyboardInterrupt handler — fails this."""
@@ -2315,9 +2457,7 @@ class TestDraftMeasureVocabGate:
                 return
             raise OSError("no space left on device")
 
-        monkeypatch.setattr(
-            draft_cmd, "_write_draft_report", _fail_after_the_pre_arm_write
-        )
+        monkeypatch.setattr(draft_cmd, "_write_draft_report", _fail_after_the_pre_arm_write)
 
         def _throughput(model, tok, prompts, *, assistant_model=None, **kw):
             if assistant_model is None:
@@ -2363,8 +2503,15 @@ class TestDraftMeasureVocabGate:
         monkeypatch.setattr(draft_cmd, "measure_throughput", _crash)
         result = runner.invoke(
             app,
-            ["measure", "--target", "org/target", "--draft", "org/tiny",
-             "--prompts", self._prompts(in_tmp_cwd)],
+            [
+                "measure",
+                "--target",
+                "org/target",
+                "--draft",
+                "org/tiny",
+                "--prompts",
+                self._prompts(in_tmp_cwd),
+            ],
         )
         assert result.exit_code == 0, (result.output, repr(result.exception))
         assert "could not be measured" in _plain(result.output)
@@ -2391,9 +2538,7 @@ class TestVocabSizeOfCompositeConfig:
         with patch("transformers.AutoConfig.from_pretrained", return_value=config):
             return _vocab_size_of("org/model")
 
-    @pytest.mark.parametrize(
-        "text_vocab", [_LLAVA_TEXT_VOCAB, _QWEN_PADDED_VOCAB]
-    )
+    @pytest.mark.parametrize("text_vocab", [_LLAVA_TEXT_VOCAB, _QWEN_PADDED_VOCAB])
     def test_composite_config_resolves_through_get_text_config(self, text_vocab):
         """Two sizes, because one would be satisfied by a fallback that returns a
         hardcoded 32000 rather than reading the sub-config."""
@@ -2448,9 +2593,7 @@ class TestDraftListCli:
         assert result.exit_code == 0
         assert "no draft" in result.output.lower()
 
-    def test_renders_dash_for_unmeasured_acceptance(
-        self, runner, draft_registry, tmp_path
-    ):
+    def test_renders_dash_for_unmeasured_acceptance(self, runner, draft_registry, tmp_path):
         from soup_cli.commands.draft import app
         from soup_cli.utils.draft import register_draft
 
@@ -2461,9 +2604,7 @@ class TestDraftListCli:
         assert result.exit_code == 0
         assert "org/no-rate" in result.output
 
-    def test_escapes_markup_in_registered_target(
-        self, runner, draft_registry, tmp_path
-    ):
+    def test_escapes_markup_in_registered_target(self, runner, draft_registry, tmp_path):
         from soup_cli.commands.draft import app
         from soup_cli.utils.draft import register_draft
 
@@ -2485,15 +2626,9 @@ class TestMillionParamSizeGate:
     def test_million_suffix_is_parsed(self):
         from soup_cli.utils.gpu import model_size_from_name
 
-        assert model_size_from_name(
-            "HuggingFaceTB/SmolLM2-135M-Instruct"
-        ) == pytest.approx(0.135)
-        assert model_size_from_name(
-            "HuggingFaceTB/SmolLM2-360M-Instruct"
-        ) == pytest.approx(0.360)
-        assert model_size_from_name("HuggingFaceTB/SmolVLM-256M") == pytest.approx(
-            0.256
-        )
+        assert model_size_from_name("HuggingFaceTB/SmolLM2-135M-Instruct") == pytest.approx(0.135)
+        assert model_size_from_name("HuggingFaceTB/SmolLM2-360M-Instruct") == pytest.approx(0.360)
+        assert model_size_from_name("HuggingFaceTB/SmolVLM-256M") == pytest.approx(0.256)
 
     def test_billion_marker_still_wins_over_a_context_length_suffix(self):
         """`Qwen2.5-7B-Instruct-1M` is a 7B model with a 1M CONTEXT — the "1M"
@@ -2503,12 +2638,10 @@ class TestMillionParamSizeGate:
         assert model_size_from_name("Qwen/Qwen2.5-7B-Instruct-1M") == 7
 
     def test_one_point_seven_b_is_not_seven_b(self):
-        """"1.7b" contains "7b" — the marker list must match the longer one."""
+        """ "1.7b" contains "7b" — the marker list must match the longer one."""
         from soup_cli.utils.gpu import model_size_from_name
 
-        assert model_size_from_name(
-            "HuggingFaceTB/SmolLM2-1.7B-Instruct"
-        ) == pytest.approx(1.7)
+        assert model_size_from_name("HuggingFaceTB/SmolLM2-1.7B-Instruct") == pytest.approx(1.7)
 
     def test_unknown_model_still_defaults_to_7b(self):
         from soup_cli.utils.gpu import model_size_from_name
@@ -2521,10 +2654,12 @@ class TestPromptTexts:
         from soup_cli.commands.draft import _prompt_texts
 
         rows = [
-            {"messages": [
-                {"role": "system", "content": "sys"},
-                {"role": "user", "content": "hi"},
-            ]},
+            {
+                "messages": [
+                    {"role": "system", "content": "sys"},
+                    {"role": "user", "content": "hi"},
+                ]
+            },
             {"prompt": "direct"},
             {"nothing": "useful"},  # dropped
             {"messages": [{"role": "assistant", "content": "no user turn"}]},  # dropped
@@ -2562,8 +2697,12 @@ class TestDistillStepBudget:
         val_split = float(DataConfig.model_fields["val_split"].default)
         accum = int(TrainingConfig.model_fields["gradient_accumulation_steps"].default)
         yaml_text = draft._build_distill_config_yaml(
-            draft_base="org/tiny", target="org/target", data="d.jsonl",
-            out_dir="draft/_adapter", steps=requested, data_rows=rows,
+            draft_base="org/tiny",
+            target="org/target",
+            data="d.jsonl",
+            out_dir="draft/_adapter",
+            steps=requested,
+            data_rows=rows,
         )
         epochs = self._epochs_from_yaml(yaml_text)
         per_epoch = self._true_steps_per_epoch(
@@ -2602,8 +2741,12 @@ class TestDistillStepBudget:
         from soup_cli.config.loader import load_config_from_string
 
         yaml_text = draft._build_distill_config_yaml(
-            draft_base="HuggingFaceTB/SmolLM2-135M", target="org/target",
-            data="d.jsonl", out_dir="draft/_adapter", steps=50, data_rows=200,
+            draft_base="HuggingFaceTB/SmolLM2-135M",
+            target="org/target",
+            data="d.jsonl",
+            out_dir="draft/_adapter",
+            steps=50,
+            data_rows=200,
         )
         cfg = load_config_from_string(yaml_text)
         assert cfg.data.val_split == draft._DISTILL_VAL_SPLIT

@@ -17,8 +17,14 @@ MAX_REGEX_INPUT_LEN = 50_000
 TASK_NAME = "custom"
 
 VALID_SCORING = {
-    "exact", "contains", "answer", "regex", "semantic",
-    "tool_call_match", "tool_call_name_match", "tool_call_args_subset",
+    "exact",
+    "contains",
+    "answer",
+    "regex",
+    "semantic",
+    "tool_call_match",
+    "tool_call_name_match",
+    "tool_call_args_subset",
 }
 
 
@@ -105,19 +111,13 @@ def load_eval_tasks(path: "Path | str") -> list[EvalTask]:
             try:
                 row = json.loads(line)
             except json.JSONDecodeError as exc:
-                raise ValueError(
-                    f"Invalid JSON on line {line_num}: {exc}"
-                ) from exc
+                raise ValueError(f"Invalid JSON on line {line_num}: {exc}") from exc
 
             if not isinstance(row, dict):
-                raise ValueError(
-                    f"Line {line_num}: expected JSON object, got {type(row).__name__}"
-                )
+                raise ValueError(f"Line {line_num}: expected JSON object, got {type(row).__name__}")
 
             if "prompt" not in row:
-                raise ValueError(
-                    f"Line {line_num}: missing required field 'prompt'"
-                )
+                raise ValueError(f"Line {line_num}: missing required field 'prompt'")
 
             scoring = row.get("scoring", "exact")
             if scoring not in VALID_SCORING:
@@ -129,16 +129,19 @@ def load_eval_tasks(path: "Path | str") -> list[EvalTask]:
             if scoring == "answer":
                 require_single_answer(expected, f"Line {line_num}")
 
-            tasks.append(EvalTask(
-                prompt=str(row["prompt"]),
-                expected=expected,
-                category=str(row.get("category", "default")),
-                scoring=scoring,
-                metadata={
-                    k: v for k, v in row.items()
-                    if k not in ("prompt", "expected", "category", "scoring")
-                },
-            ))
+            tasks.append(
+                EvalTask(
+                    prompt=str(row["prompt"]),
+                    expected=expected,
+                    category=str(row.get("category", "default")),
+                    scoring=scoring,
+                    metadata={
+                        k: v
+                        for k, v in row.items()
+                        if k not in ("prompt", "expected", "category", "scoring")
+                    },
+                )
+            )
 
     if not tasks:
         raise ValueError(f"No eval tasks found in {path}")
@@ -311,9 +314,7 @@ def tool_call_args_subset(output: str, expected: str) -> float:
         # dead ternary gave them full credit).
         args_score = 0.5 if not out_args else 0.0
     else:
-        matched = sum(
-            1 for k, v in exp_args.items() if k in out_args and out_args[k] == v
-        )
+        matched = sum(1 for k, v in exp_args.items() if k in out_args and out_args[k] == v)
         args_score = 0.5 * (matched / len(exp_args))
 
     return name_score + args_score
@@ -335,20 +336,29 @@ def score_task(task: EvalTask, output: str) -> EvalResult:
         similarity = score_semantic(output, task.expected)
         matched = similarity >= 0.5
         return EvalResult(
-            task=task, output=output, score=similarity, matched=matched,
+            task=task,
+            output=output,
+            score=similarity,
+            matched=matched,
         )
 
     if task.scoring == "tool_call_args_subset":
         similarity = tool_call_args_subset(output, task.expected)
         matched = similarity >= 0.5
         return EvalResult(
-            task=task, output=output, score=similarity, matched=matched,
+            task=task,
+            output=output,
+            score=similarity,
+            matched=matched,
         )
 
     scorer = SCORING_FUNCTIONS.get(task.scoring, score_exact)
     matched = scorer(output, task.expected)
     return EvalResult(
-        task=task, output=output, score=1.0 if matched else 0.0, matched=matched,
+        task=task,
+        output=output,
+        score=1.0 if matched else 0.0,
+        matched=matched,
     )
 
 
@@ -389,12 +399,14 @@ def _create_default_generator(model_path: str, trust_remote_code: bool = False):
     from transformers import pipeline
 
     console = Console()
-    console.print(Panel(
-        f"[yellow]Loading model from: {model_path}[/]\n"
-        "This will execute model code from the specified path.",
-        title="Model Loading",
-        border_style="yellow",
-    ))
+    console.print(
+        Panel(
+            f"[yellow]Loading model from: {model_path}[/]\n"
+            "This will execute model code from the specified path.",
+            title="Model Loading",
+            border_style="yellow",
+        )
+    )
 
     pipe = pipeline(
         "text-generation",

@@ -64,10 +64,10 @@ class TestSupportedLangs:
 
 class TestBrainRotLangBundle:
     def test_frozen(self) -> None:
-            # tuples-not-lists so the dataclass is genuinely immutable.
-            en = brain_rot_lang._LANG_BUNDLES["en"]
-            with pytest.raises(dataclasses.FrozenInstanceError):
-                en.low_effort_tokens = ("lol",)  # type: ignore[misc]
+        # tuples-not-lists so the dataclass is genuinely immutable.
+        en = brain_rot_lang._LANG_BUNDLES["en"]
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            en.low_effort_tokens = ("lol",)  # type: ignore[misc]
 
     def test_tokens_are_tuple(self) -> None:
         for code in brain_rot_lang.SUPPORTED_LANGS:
@@ -336,9 +336,7 @@ class TestScoreRowLang:
         score_en = brain_rot.score_row_brain_rot(row, lang="en")
         assert score_auto == score_en
 
-    def test_auto_uses_detected_lang(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_auto_uses_detected_lang(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # tdd-review HIGH: prove the auto path actually routes to the
         # detected bundle (not a tautology). Force the detector to return
         # "es" and assert lang="auto" matches lang="es" byte-for-byte.
@@ -406,9 +404,7 @@ class TestScoreDatasetLang:
 
     def test_default_backward_compat(self) -> None:
         # English happy path is unchanged from v0.69.0.
-        rows = [
-            {"text": "Detailed scientific explanation of photosynthesis."}
-        ] * 3
+        rows = [{"text": "Detailed scientific explanation of photosynthesis."}] * 3
         report = brain_rot.score_dataset_brain_rot(rows)
         assert report.overall_verdict == "OK"
 
@@ -439,9 +435,7 @@ class TestRefuseIfRottenLang:
     def test_lang_threaded(self) -> None:
         rows = [{"text": "jaja!!! jeje jaja jiji!!! jaja!!!"} for _ in range(5)]
         with pytest.raises(ValueError, match="brain.?rot"):
-            brain_rot.refuse_if_rotten(
-                rows, max_major_fraction=0.1, lang="es"
-            )
+            brain_rot.refuse_if_rotten(rows, max_major_fraction=0.1, lang="es")
 
     def test_default_backward_compat(self) -> None:
         rows = [{"text": "Detailed scientific overview"}] * 3
@@ -460,47 +454,32 @@ class TestBrainRotCliLang:
         assert result.exit_code == 0, result.output
         assert "--lang" in _ANSI_RE.sub("", result.output)
 
-    def test_lang_en_default(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_lang_en_default(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.chdir(tmp_path)
+        path = _write(
+            tmp_path / "d.jsonl",
+            "\n".join(json.dumps({"text": "Detailed scientific text " + str(i)}) for i in range(5))
+            + "\n",
+        )
+        runner = CliRunner()
+        result = runner.invoke(app, ["data", "brain-rot", str(path), "--lang", "en"])
+        assert result.exit_code == 0, result.output
+
+    def test_lang_es(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.chdir(tmp_path)
         path = _write(
             tmp_path / "d.jsonl",
             "\n".join(
-                json.dumps({"text": "Detailed scientific text " + str(i)})
+                json.dumps({"text": "Explicación científica detallada número " + str(i)})
                 for i in range(5)
             )
             + "\n",
         )
         runner = CliRunner()
-        result = runner.invoke(
-            app, ["data", "brain-rot", str(path), "--lang", "en"]
-        )
+        result = runner.invoke(app, ["data", "brain-rot", str(path), "--lang", "es"])
         assert result.exit_code == 0, result.output
 
-    def test_lang_es(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.chdir(tmp_path)
-        path = _write(
-            tmp_path / "d.jsonl",
-            "\n".join(
-                json.dumps(
-                    {"text": "Explicación científica detallada número " + str(i)}
-                )
-                for i in range(5)
-            )
-            + "\n",
-        )
-        runner = CliRunner()
-        result = runner.invoke(
-            app, ["data", "brain-rot", str(path), "--lang", "es"]
-        )
-        assert result.exit_code == 0, result.output
-
-    def test_lang_auto(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_lang_auto(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         # tdd-review MEDIUM #2: assert auto-canonicalisation reaches the
         # Lang row of the rendered Rich table. This proves the CLI flag
         # is wired end-to-end (not just accepted by Typer) — silent
@@ -508,16 +487,11 @@ class TestBrainRotCliLang:
         monkeypatch.chdir(tmp_path)
         path = _write(
             tmp_path / "d.jsonl",
-            "\n".join(
-                json.dumps({"text": "Detailed scientific text " + str(i)})
-                for i in range(5)
-            )
+            "\n".join(json.dumps({"text": "Detailed scientific text " + str(i)}) for i in range(5))
             + "\n",
         )
         runner = CliRunner()
-        result = runner.invoke(
-            app, ["data", "brain-rot", str(path), "--lang", "auto"]
-        )
+        result = runner.invoke(app, ["data", "brain-rot", str(path), "--lang", "auto"])
         assert result.exit_code == 0, result.output
         # The rendered table includes `│ Lang  │ auto │` (with whitespace).
         assert "auto" in result.output
@@ -537,22 +511,14 @@ class TestBrainRotCliLang:
             json.dumps({"text": "jaja jeje jaja jiji jaja"}) + "\n",
         )
         runner = CliRunner()
-        result = runner.invoke(
-            app, ["data", "brain-rot", str(path), "--lang", "auto"]
-        )
+        result = runner.invoke(app, ["data", "brain-rot", str(path), "--lang", "auto"])
         assert result.exit_code == 0, result.output
 
-    def test_lang_unknown_exit_2(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_lang_unknown_exit_2(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.chdir(tmp_path)
-        path = _write(
-            tmp_path / "d.jsonl", json.dumps({"text": "x"}) + "\n"
-        )
+        path = _write(tmp_path / "d.jsonl", json.dumps({"text": "x"}) + "\n")
         runner = CliRunner()
-        result = runner.invoke(
-            app, ["data", "brain-rot", str(path), "--lang", "xx"]
-        )
+        result = runner.invoke(app, ["data", "brain-rot", str(path), "--lang", "xx"])
         assert result.exit_code == 2
 
     def test_lang_case_insensitive_es(
@@ -564,9 +530,7 @@ class TestBrainRotCliLang:
             json.dumps({"text": "x"}) + "\n",
         )
         runner = CliRunner()
-        result = runner.invoke(
-            app, ["data", "brain-rot", str(path), "--lang", "ES"]
-        )
+        result = runner.invoke(app, ["data", "brain-rot", str(path), "--lang", "ES"])
         assert result.exit_code == 0, result.output
 
 
@@ -581,9 +545,9 @@ class TestSourceWiring:
         # against "\nimport langdetect") so a top-level
         # `from langdetect import detect` is also caught.
         root = Path(__file__).resolve().parent.parent
-        src = (
-            root / "src" / "soup_cli" / "utils" / "brain_rot_lang.py"
-        ).read_text(encoding="utf-8")
+        src = (root / "src" / "soup_cli" / "utils" / "brain_rot_lang.py").read_text(
+            encoding="utf-8"
+        )
         for line in src.splitlines():
             stripped = line.strip()
             for forbidden in (
@@ -602,15 +566,11 @@ class TestSourceWiring:
         # langdetect is optional ([data-pro]); imports must stay lazy so
         # the brain-rot module loads on a bare install.
         root = Path(__file__).resolve().parent.parent
-        src = (
-            root / "src" / "soup_cli" / "utils" / "brain_rot.py"
-        ).read_text(encoding="utf-8")
+        src = (root / "src" / "soup_cli" / "utils" / "brain_rot.py").read_text(encoding="utf-8")
         # No top-level langdetect import.
         for line in src.splitlines():
             stripped = line.strip()
-            if stripped.startswith("import langdetect") or stripped.startswith(
-                "from langdetect"
-            ):
+            if stripped.startswith("import langdetect") or stripped.startswith("from langdetect"):
                 pytest.fail("brain_rot.py must not eager-import langdetect")
 
     def test_version_floor(self) -> None:
@@ -687,9 +647,7 @@ class TestAllBundlesPopulated:
     def test_no_duplicates_within_bundle(self, code: str) -> None:
         bundle = brain_rot_lang._LANG_BUNDLES[code]
         assert len(set(bundle.low_effort_tokens)) == len(bundle.low_effort_tokens)
-        assert len(set(bundle.clickbait_phrases)) == len(
-            bundle.clickbait_phrases
-        )
+        assert len(set(bundle.clickbait_phrases)) == len(bundle.clickbait_phrases)
 
     @pytest.mark.parametrize("code", ["en", "es", "fr", "de", "ru"])
     def test_phrases_lowercased(self, code: str) -> None:

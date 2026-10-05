@@ -182,9 +182,7 @@ def _load_safetensors(path: Path) -> Mapping[str, Any]:
     try:
         from safetensors import safe_open
     except ImportError as exc:
-        raise RuntimeError(
-            "safetensors package required; pip install safetensors"
-        ) from exc
+        raise RuntimeError("safetensors package required; pip install safetensors") from exc
     result: dict[str, Any] = {}
     with safe_open(str(path), framework="numpy") as f:
         for key in f.keys():
@@ -211,19 +209,14 @@ def _adapter_weights_path(adapter_dir: Path) -> Path:
             continue
         st = os.lstat(str(cand))
         if stat.S_ISLNK(st.st_mode):
-            raise ValueError(
-                f"{adapter_dir.name}/{cand.name}: must not be a symlink"
-            )
+            raise ValueError(f"{adapter_dir.name}/{cand.name}: must not be a symlink")
         if cand.is_file():
             if cand.suffix == ".bin":
                 raise RuntimeError(
-                    f"{adapter_dir.name}: .bin format not supported; "
-                    "re-save adapter as safetensors"
+                    f"{adapter_dir.name}: .bin format not supported; re-save adapter as safetensors"
                 )
             return cand
-    raise FileNotFoundError(
-        f"{adapter_dir.name}: no adapter_model.safetensors found"
-    )
+    raise FileNotFoundError(f"{adapter_dir.name}: no adapter_model.safetensors found")
 
 
 def load_adapter_weights(adapter_dir: str) -> Mapping[str, Any]:

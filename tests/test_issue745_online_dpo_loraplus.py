@@ -52,7 +52,7 @@ def _config(ratio):
         "task: online_dpo\n"
         "data:\n  train: x.jsonl\n  max_length: 64\n"
         "training:\n"
-        "  online_dpo_judge: \"ollama://m\"\n"
+        '  online_dpo_judge: "ollama://m"\n'
         "  epochs: 1\n"
         "  batch_size: 2\n"
         "  online_dpo_max_new_tokens: 6\n"
@@ -95,26 +95,33 @@ def _setup_against_a_stand_in_trainer(ratio):
 
     def setup_transformers(self, cfg, tcfg):
         model_cfg = AutoConfig.for_model(
-            "llama", hidden_size=32, intermediate_size=64, num_hidden_layers=2,
-            num_attention_heads=4, vocab_size=128,
+            "llama",
+            hidden_size=32,
+            intermediate_size=64,
+            num_hidden_layers=2,
+            num_attention_heads=4,
+            vocab_size=128,
         )
         self.model = AutoModelForCausalLM.from_config(model_cfg)
         self.tokenizer = MagicMock()
         self.tokenizer.pad_token = "pad"
         self.peft_config = LoraConfig(
-            r=8, lora_alpha=16, target_modules=["q_proj", "v_proj"],
+            r=8,
+            lora_alpha=16,
+            target_modules=["q_proj", "v_proj"],
             task_type="CAUSAL_LM",
         )
 
     wrapper = OnlineDPOTrainerWrapper(_config(ratio), device="cpu")
-    with mock_patch.object(trl_compat, "resolve_trl_symbol", side_effect=resolve), \
-         mock_patch.object(
-             OnlineDPOTrainerWrapper, "_setup_transformers", setup_transformers
-         ), \
-         mock_patch.object(
-             OnlineDPOTrainerWrapper, "_build_judge_or_reward",
-             return_value={"reward_funcs": [lambda **kw: [0.0]]},
-         ):
+    with (
+        mock_patch.object(trl_compat, "resolve_trl_symbol", side_effect=resolve),
+        mock_patch.object(OnlineDPOTrainerWrapper, "_setup_transformers", setup_transformers),
+        mock_patch.object(
+            OnlineDPOTrainerWrapper,
+            "_build_judge_or_reward",
+            return_value={"reward_funcs": [lambda **kw: [0.0]]},
+        ),
+    ):
         wrapper.setup(_DATASET)
     return wrapper
 

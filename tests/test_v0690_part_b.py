@@ -51,14 +51,10 @@ class TestSupportedExpectations:
 
 class TestValidateExpectationName:
     def test_happy(self) -> None:
-        assert (
-            expectations.validate_expectation_name("expect_no_pii") == "expect_no_pii"
-        )
+        assert expectations.validate_expectation_name("expect_no_pii") == "expect_no_pii"
 
     def test_case_insensitive(self) -> None:
-        assert (
-            expectations.validate_expectation_name("EXPECT_NO_PII") == "expect_no_pii"
-        )
+        assert expectations.validate_expectation_name("EXPECT_NO_PII") == "expect_no_pii"
 
     def test_unknown(self) -> None:
         with pytest.raises(ValueError, match="unknown expectation"):
@@ -324,7 +320,9 @@ class TestChosenPreferredByJudge:
     def test_non_callable_judge(self) -> None:
         with pytest.raises(TypeError):
             expectations.expect_chosen_preferred_over_rejected_by_judge(
-                [], judge_fn="not callable", threshold=0.5  # type: ignore[arg-type]
+                [],
+                judge_fn="not callable",
+                threshold=0.5,  # type: ignore[arg-type]
             )
 
     def test_bool_threshold(self) -> None:
@@ -386,18 +384,12 @@ class TestSuiteSpec:
 
     def test_unknown_expectation(self) -> None:
         with pytest.raises(ValueError):
-            expectations.parse_suite_spec(
-                {"expectations": [{"name": "expect_perfection"}]}
-            )
+            expectations.parse_suite_spec({"expectations": [{"name": "expect_perfection"}]})
 
     def test_args_must_be_dict(self) -> None:
         with pytest.raises(TypeError):
             expectations.parse_suite_spec(
-                {
-                    "expectations": [
-                        {"name": "expect_no_pii", "args": "not a dict"}
-                    ]
-                }
+                {"expectations": [{"name": "expect_no_pii", "args": "not a dict"}]}
             )
 
     def test_too_many_expectations(self) -> None:
@@ -412,18 +404,14 @@ class TestSuiteSpec:
 
 class TestRunSuite:
     def test_all_pass(self) -> None:
-        spec = expectations.parse_suite_spec(
-            {"expectations": [{"name": "expect_no_pii"}]}
-        )
+        spec = expectations.parse_suite_spec({"expectations": [{"name": "expect_no_pii"}]})
         rows = [{"text": "all clean here"}]
         report = expectations.run_suite(rows, spec)
         assert report.passed is True
         assert len(report.results) == 1
 
     def test_one_fails(self) -> None:
-        spec = expectations.parse_suite_spec(
-            {"expectations": [{"name": "expect_no_pii"}]}
-        )
+        spec = expectations.parse_suite_spec({"expectations": [{"name": "expect_no_pii"}]})
         rows = [{"text": "email me at a@b.com"}]
         report = expectations.run_suite(rows, spec)
         assert report.passed is False
@@ -461,9 +449,7 @@ class TestRunSuite:
         assert report.passed is True
 
     def test_report_frozen(self) -> None:
-        spec = expectations.parse_suite_spec(
-            {"expectations": [{"name": "expect_no_pii"}]}
-        )
+        spec = expectations.parse_suite_spec({"expectations": [{"name": "expect_no_pii"}]})
         report = expectations.run_suite([], spec)
         with pytest.raises(dataclasses.FrozenInstanceError):
             report.passed = False  # type: ignore[misc]
@@ -524,21 +510,15 @@ class TestSoupExpectCli:
     def test_all_pass(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.chdir(tmp_path)
         data = _write(tmp_path / "data.jsonl", '{"text": "clean output here"}\n')
-        suite = _write(
-            tmp_path / "suite.yaml", "expectations:\n  - name: expect_no_pii\n"
-        )
+        suite = _write(tmp_path / "suite.yaml", "expectations:\n  - name: expect_no_pii\n")
         runner = CliRunner()
         result = runner.invoke(app, ["expect", str(data), str(suite)])
         assert result.exit_code == 0, result.output
 
     def test_failure_exits_2(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.chdir(tmp_path)
-        data = _write(
-            tmp_path / "data.jsonl", '{"text": "email me at evil@e.com"}\n'
-        )
-        suite = _write(
-            tmp_path / "suite.yaml", "expectations:\n  - name: expect_no_pii\n"
-        )
+        data = _write(tmp_path / "data.jsonl", '{"text": "email me at evil@e.com"}\n')
+        suite = _write(tmp_path / "suite.yaml", "expectations:\n  - name: expect_no_pii\n")
         runner = CliRunner()
         result = runner.invoke(app, ["expect", str(data), str(suite)])
         assert result.exit_code == 2
@@ -552,9 +532,7 @@ class TestSoupExpectCli:
         suite = _write(sub / "suite.yaml", "expectations:\n  - name: expect_no_pii\n")
         monkeypatch.chdir(sub)
         runner = CliRunner()
-        result = runner.invoke(
-            app, ["expect", str(outside / "d.jsonl"), str(suite)]
-        )
+        result = runner.invoke(app, ["expect", str(outside / "d.jsonl"), str(suite)])
         assert result.exit_code == 3
 
 

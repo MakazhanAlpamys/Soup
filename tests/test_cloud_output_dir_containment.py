@@ -43,9 +43,7 @@ def project(tmp_path, monkeypatch):
 def _plan(output_dir: str):
     from soup_cli.cloud.modal import plan_modal_run
 
-    return plan_modal_run(
-        "soup.yaml", gpu="a100", output_dir=output_dir, soup_version="0.75.1"
-    )
+    return plan_modal_run("soup.yaml", gpu="a100", output_dir=output_dir, soup_version="0.75.1")
 
 
 class TestModalOutputDirContainment:
@@ -56,9 +54,7 @@ class TestModalOutputDirContainment:
         with pytest.raises(ValueError, match="output_dir"):
             _plan(outside)
 
-    def test_absolute_refusal_says_it_must_stay_under_the_working_dir(
-        self, project, tmp_path
-    ):
+    def test_absolute_refusal_says_it_must_stay_under_the_working_dir(self, project, tmp_path):
         with pytest.raises(ValueError) as excinfo:
             _plan(str(tmp_path.parent / "elsewhere"))
         message = str(excinfo.value)
@@ -104,7 +100,9 @@ class TestTheDefaultStillWorks:
 
         plan = _plan("./output")
         expected = render_modal_stub(
-            _SOUP_YAML, gpu="a100", output_dir="./output",
+            _SOUP_YAML,
+            gpu="a100",
+            output_dir="./output",
             soup_version="0.75.1",
             run_name=plan.stub_text.split("_RUN_NAME = ")[1].split("\n")[0].strip("'\""),
         )
@@ -125,7 +123,9 @@ class TestLambdaOutputDirContainment:
         from soup_cli.cloud.lambda_labs import plan_lambda_run
 
         return plan_lambda_run(
-            "soup.yaml", gpu="a100", output_dir=output_dir,
+            "soup.yaml",
+            gpu="a100",
+            output_dir=output_dir,
             soup_version="0.75.1",
         )
 

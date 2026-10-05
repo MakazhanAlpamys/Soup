@@ -55,15 +55,11 @@ class _LengthJudge:
 
     def evaluate(self, prompt, response, category="default"):
         self.evaluate_calls += 1
-        return JudgeScore(
-            prompt=prompt, response=response, weighted_score=float(len(response))
-        )
+        return JudgeScore(prompt=prompt, response=response, weighted_score=float(len(response)))
 
 
 def _reward_keys(log_history):
-    return sorted(
-        {k for entry in log_history for k in entry if k.startswith("rewards/")}
-    )
+    return sorted({k for entry in log_history for k in entry if k.startswith("rewards/")})
 
 
 @pytest.mark.smoke
@@ -85,7 +81,7 @@ class TestOnlineDpoTrainLogsReward:
             "task: online_dpo\n"
             "data:\n  train: x.jsonl\n  max_length: 64\n"
             "training:\n"
-            "  online_dpo_judge: \"ollama://m\"\n"
+            '  online_dpo_judge: "ollama://m"\n'
             "  epochs: 1\n"
             "  batch_size: 2\n"
             "  online_dpo_max_new_tokens: 6\n"
@@ -143,7 +139,7 @@ class TestOnlineDpoTrainLogsReward:
         cfg = load_config_from_string(
             "base: hf-internal-testing/tiny-random-gpt2\ntask: online_dpo\n"
             "data:\n  train: x.jsonl\n"
-            "training:\n  online_dpo_judge: \"ollama://m\"\n"
+            'training:\n  online_dpo_judge: "ollama://m"\n'
         )
         od._ONLINE_DPO_JUDGE_OVERRIDE = _LengthJudge()
         try:

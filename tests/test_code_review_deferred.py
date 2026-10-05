@@ -76,14 +76,10 @@ def test_hardware_fit_preflight_gate_and_optout():
         )
 
     # --allow-oom-attempt -> warn, don't refuse.
-    train_mod._hardware_fit_preflight(
-        cfg, {"memory_total_bytes": int(4e9)}, allow_oom_attempt=True
-    )
+    train_mod._hardware_fit_preflight(cfg, {"memory_total_bytes": int(4e9)}, allow_oom_attempt=True)
 
     # No detectable VRAM (CPU / CI) -> skip silently.
-    train_mod._hardware_fit_preflight(
-        cfg, {"memory_total_bytes": 0}, allow_oom_attempt=False
-    )
+    train_mod._hardware_fit_preflight(cfg, {"memory_total_bytes": 0}, allow_oom_attempt=False)
 
     # Plenty of VRAM -> fits, no refuse.
     train_mod._hardware_fit_preflight(

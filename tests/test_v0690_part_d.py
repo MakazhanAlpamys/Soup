@@ -320,9 +320,7 @@ class TestPersonaMixCli:
         result = runner.invoke(app, ["data", "persona-mix", "--help"])
         assert result.exit_code == 0, result.output
 
-    def test_writes_output(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_writes_output(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.chdir(tmp_path)
         prompts = _write(
             tmp_path / "prompts.jsonl",
@@ -366,9 +364,7 @@ class TestPersonaMixCli:
         )
         assert result.exit_code != 0
 
-    def test_outside_cwd_prompts(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_outside_cwd_prompts(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         outside = tmp_path / "outside"
         outside.mkdir()
         _write(outside / "p.jsonl", '{"prompt": "X"}\n')
@@ -400,9 +396,7 @@ class TestPersonaMixCli:
 class TestSourceWiring:
     def test_no_heavy_imports(self) -> None:
         root = Path(__file__).resolve().parent.parent
-        src = (root / "src" / "soup_cli" / "utils" / "persona_hub.py").read_text(
-            encoding="utf-8"
-        )
+        src = (root / "src" / "soup_cli" / "utils" / "persona_hub.py").read_text(encoding="utf-8")
         for forbidden in (
             "\nimport torch",
             "\nimport transformers",

@@ -317,9 +317,7 @@ class TestBuildIterativeDPOPlan:
         from soup_cli.utils.iterative_dpo import build_iterative_dpo_plan
 
         monkeypatch.chdir(tmp_path)
-        (tmp_path / "prompts.jsonl").write_text(
-            '{"prompt": "hello"}\n', encoding="utf-8"
-        )
+        (tmp_path / "prompts.jsonl").write_text('{"prompt": "hello"}\n', encoding="utf-8")
         plan = build_iterative_dpo_plan(
             base_model="meta-llama/Llama-3.1-8B",
             reward_model="./rm",
@@ -497,7 +495,8 @@ class TestSourceWiring:
 
         src = (
             Path(__file__).resolve().parent.parent
-            / "src" / "soup_cli"
+            / "src"
+            / "soup_cli"
             / "utils"
             / "iterative_dpo.py"
         )
@@ -509,11 +508,7 @@ class TestSourceWiring:
         """soup iterative-dpo command registered on the top-level Typer app."""
         from pathlib import Path
 
-        cli_src = (
-            Path(__file__).resolve().parent.parent
-            / "src" / "soup_cli"
-            / "cli.py"
-        )
+        cli_src = Path(__file__).resolve().parent.parent / "src" / "soup_cli" / "cli.py"
         body = cli_src.read_text(encoding="utf-8")
         # Either app.command or app.add_typer wiring.
         assert "iterative_dpo" in body or "iterative-dpo" in body

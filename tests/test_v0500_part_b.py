@@ -46,28 +46,36 @@ def test_vllm_sleep_mode_accepts_bool():
 
 def test_long_context_grpo_happy():
     validate_long_context_grpo_compat(
-        task="grpo", backend="transformers", use_ring_attention=False,
+        task="grpo",
+        backend="transformers",
+        use_ring_attention=False,
     )
 
 
 def test_long_context_grpo_rejects_non_grpo():
     with pytest.raises(ValueError, match="task='grpo'"):
         validate_long_context_grpo_compat(
-            task="sft", backend="transformers", use_ring_attention=False,
+            task="sft",
+            backend="transformers",
+            use_ring_attention=False,
         )
 
 
 def test_long_context_grpo_rejects_mlx():
     with pytest.raises(ValueError, match="mlx"):
         validate_long_context_grpo_compat(
-            task="grpo", backend="mlx", use_ring_attention=False,
+            task="grpo",
+            backend="mlx",
+            use_ring_attention=False,
         )
 
 
 def test_long_context_grpo_rejects_ring_attention():
     with pytest.raises(ValueError, match="mutually exclusive"):
         validate_long_context_grpo_compat(
-            task="grpo", backend="transformers", use_ring_attention=True,
+            task="grpo",
+            backend="transformers",
+            use_ring_attention=True,
         )
 
 
@@ -83,7 +91,9 @@ def test_long_context_grpo_task_must_be_string():
 def test_long_context_grpo_empty_task():
     with pytest.raises(ValueError):
         validate_long_context_grpo_compat(
-            task="", backend="transformers", use_ring_attention=False,
+            task="",
+            backend="transformers",
+            use_ring_attention=False,
         )
 
 
@@ -91,7 +101,9 @@ def test_long_context_grpo_null_byte_task():
     """Security review MEDIUM fix."""
     with pytest.raises(ValueError, match="null byte"):
         validate_long_context_grpo_compat(
-            task="grpo\x00", backend="transformers", use_ring_attention=False,
+            task="grpo\x00",
+            backend="transformers",
+            use_ring_attention=False,
         )
 
 
@@ -99,7 +111,9 @@ def test_long_context_grpo_null_byte_backend():
     """Security review MEDIUM fix."""
     with pytest.raises(ValueError, match="null byte"):
         validate_long_context_grpo_compat(
-            task="grpo", backend="transformers\x00", use_ring_attention=False,
+            task="grpo",
+            backend="transformers\x00",
+            use_ring_attention=False,
         )
 
 
@@ -107,7 +121,9 @@ def test_long_context_grpo_use_ring_attention_must_be_bool():
     """Security review MEDIUM fix."""
     with pytest.raises(ValueError, match="bool"):
         validate_long_context_grpo_compat(
-            task="grpo", backend="transformers", use_ring_attention=1,  # type: ignore[arg-type]
+            task="grpo",
+            backend="transformers",
+            use_ring_attention=1,  # type: ignore[arg-type]
         )
 
 

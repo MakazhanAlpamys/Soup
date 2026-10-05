@@ -170,9 +170,7 @@ class TestEveryPreferenceTrainerReachesALiveTrlTrainer:
         assert wrapper.model is not None and wrapper.tokenizer is not None
 
     @pytest.mark.parametrize("task", _ALL_SIX)
-    def test_the_config_carries_the_arguments_the_wrapper_passes(
-        self, tmp_path, monkeypatch, task
-    ):
+    def test_the_config_carries_the_arguments_the_wrapper_passes(self, tmp_path, monkeypatch, task):
         """`max_prompt_length` is the field that actually broke, so it is named
         here rather than left implicit in "setup() didn't raise". A trl release
         that keeps accepting the keyword but stops storing it would pass the

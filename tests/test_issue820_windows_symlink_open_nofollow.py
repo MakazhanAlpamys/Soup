@@ -302,8 +302,7 @@ class TestBareNoFollowRatchet:
         site_files = {rel for rel, _line in sites}
 
         assert "utils/draft.py" not in site_files, (
-            "utils/draft.py must use open_no_follow instead of "
-            "bare getattr(os, 'O_NOFOLLOW', 0)"
+            "utils/draft.py must use open_no_follow instead of bare getattr(os, 'O_NOFOLLOW', 0)"
         )
         assert "utils/audit_log.py" not in site_files, (
             "utils/audit_log.py must use open_no_follow instead of "

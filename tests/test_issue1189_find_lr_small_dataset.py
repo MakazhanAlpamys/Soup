@@ -80,11 +80,23 @@ def find_lr(tmp_path, monkeypatch):
 
         from soup_cli.cli import app
 
-        result = CliRunner().invoke(app, [
-            "train", "--config", "soup.yaml", "--find-lr",
-            "--find-lr-start", str(START), "--find-lr-end", str(END),
-            "--find-lr-steps", str(steps), "--find-lr-output", output,
-        ])
+        result = CliRunner().invoke(
+            app,
+            [
+                "train",
+                "--config",
+                "soup.yaml",
+                "--find-lr",
+                "--find-lr-start",
+                str(START),
+                "--find-lr-end",
+                str(END),
+                "--find-lr-steps",
+                str(steps),
+                "--find-lr-output",
+                output,
+            ],
+        )
         text = " ".join(strip_ansi(result.output).split())
         report = None
         if output == "lr_finder.json" and (tmp_path / output).exists():

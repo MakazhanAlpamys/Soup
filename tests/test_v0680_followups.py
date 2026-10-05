@@ -118,9 +118,7 @@ class TestHarvestEdgeCases:
 
         monkeypatch.chdir(tmp_path)
         init_local_rl_db("rl.db")
-        record_thumb(
-            db_path="rl.db", prompt="q", response="r", thumb="up"
-        )
+        record_thumb(db_path="rl.db", prompt="q", response="r", thumb="up")
         assert harvest_dpo_pairs("rl.db") == ()
 
     def test_one_down_no_up_returns_empty(
@@ -134,9 +132,7 @@ class TestHarvestEdgeCases:
 
         monkeypatch.chdir(tmp_path)
         init_local_rl_db("rl.db")
-        record_thumb(
-            db_path="rl.db", prompt="q", response="r", thumb="down"
-        )
+        record_thumb(db_path="rl.db", prompt="q", response="r", thumb="down")
         assert harvest_dpo_pairs("rl.db") == ()
 
     def test_multiple_prompts_independent(
@@ -152,9 +148,7 @@ class TestHarvestEdgeCases:
         init_local_rl_db("rl.db")
         for prompt, chosen, rejected in (("q1", "c1", "r1"), ("q2", "c2", "r2")):
             record_thumb(db_path="rl.db", prompt=prompt, response=chosen, thumb="up")
-            record_thumb(
-                db_path="rl.db", prompt=prompt, response=rejected, thumb="down"
-            )
+            record_thumb(db_path="rl.db", prompt=prompt, response=rejected, thumb="down")
         pairs = harvest_dpo_pairs("rl.db")
         assert len(pairs) == 2
         prompts = sorted(p.prompt for p in pairs)
@@ -223,9 +217,7 @@ class TestCompileResultBoundaries:
     def test_zero_iterations_accepted(self) -> None:
         from soup_cli.utils.prompt_compile import CompileResult
 
-        result = CompileResult(
-            program_text="# x", score=0.5, iterations=0, converged=False
-        )
+        result = CompileResult(program_text="# x", score=0.5, iterations=0, converged=False)
         assert result.iterations == 0
 
 
@@ -236,9 +228,7 @@ class TestCompileResultBoundaries:
 
 @pytest.mark.requires_symlink
 class TestEvalSuitePathSymlink:
-    def test_symlink_rejected(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_symlink_rejected(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from soup_cli.utils.prompt_compile import validate_eval_suite_path
 
         monkeypatch.chdir(tmp_path)
@@ -282,9 +272,7 @@ class TestValidateSpecPathExtras:
             validate_spec_path("spec\x00.json")
 
     @pytest.mark.requires_symlink
-    def test_symlink_rejected(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_symlink_rejected(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from soup_cli.utils.compile_tools import validate_spec_path
 
         monkeypatch.chdir(tmp_path)
@@ -366,9 +354,7 @@ class TestBuildAppleAdapterPlan:
 
 
 class TestAppleAdapterOutputDirValidation:
-    def test_empty_rejected(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_empty_rejected(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from soup_cli.utils.apple_adapter import AppleAdapterPlan
 
         monkeypatch.chdir(tmp_path)
@@ -383,9 +369,7 @@ class TestAppleAdapterOutputDirValidation:
                 sign=False,
             )
 
-    def test_null_byte_rejected(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_null_byte_rejected(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from soup_cli.utils.apple_adapter import AppleAdapterPlan
 
         monkeypatch.chdir(tmp_path)
@@ -493,9 +477,7 @@ class TestRecordThumbResponseValidation:
         monkeypatch.chdir(tmp_path)
         init_local_rl_db("rl.db")
         with pytest.raises(ValueError):
-            record_thumb(
-                db_path="rl.db", prompt="p", response="r\x00", thumb="up"
-            )
+            record_thumb(db_path="rl.db", prompt="p", response="r\x00", thumb="up")
 
     def test_response_oversize_rejected(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -516,17 +498,13 @@ class TestRecordThumbResponseValidation:
                 thumb="up",
             )
 
-    def test_response_empty_rejected(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_response_empty_rejected(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from soup_cli.utils.local_rl import init_local_rl_db, record_thumb
 
         monkeypatch.chdir(tmp_path)
         init_local_rl_db("rl.db")
         with pytest.raises(ValueError):
-            record_thumb(
-                db_path="rl.db", prompt="p", response="", thumb="up"
-            )
+            record_thumb(db_path="rl.db", prompt="p", response="", thumb="up")
 
 
 # ---------------------------------------------------------------------------
@@ -548,9 +526,7 @@ class TestTrainMethodAllowlistImmutability:
 
 
 class TestInitDbColumnLevel:
-    def test_thumbs_columns(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_thumbs_columns(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from soup_cli.utils.local_rl import init_local_rl_db
 
         monkeypatch.chdir(tmp_path)
@@ -562,9 +538,7 @@ class TestInitDbColumnLevel:
         for col in ("id", "ts", "prompt", "response", "thumb"):
             assert col in names
 
-    def test_interactions_columns(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_interactions_columns(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from soup_cli.utils.local_rl import init_local_rl_db
 
         monkeypatch.chdir(tmp_path)
@@ -623,9 +597,7 @@ class TestDpoPairFrozen:
 
 
 class TestHarvestMissingFile:
-    def test_missing_db_raises(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_missing_db_raises(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from soup_cli.utils.local_rl import harvest_dpo_pairs
 
         monkeypatch.chdir(tmp_path)
@@ -649,10 +621,7 @@ class TestSourceGuards:
             "local_rl",
         ):
             path = (
-                Path(__file__).resolve().parent.parent
-                / "src" / "soup_cli"
-                / "utils"
-                / f"{stem}.py"
+                Path(__file__).resolve().parent.parent / "src" / "soup_cli" / "utils" / f"{stem}.py"
             )
             text = path.read_text(encoding="utf-8")
             assert "shell=True" not in text, f"{stem}.py contains shell=True"
@@ -667,10 +636,7 @@ class TestSourceGuards:
             "local_rl",
         ):
             path = (
-                Path(__file__).resolve().parent.parent
-                / "src" / "soup_cli"
-                / "utils"
-                / f"{stem}.py"
+                Path(__file__).resolve().parent.parent / "src" / "soup_cli" / "utils" / f"{stem}.py"
             )
             text = path.read_text(encoding="utf-8")
             assert ".resolve()" not in text or ".resolve().parent" in text, (
@@ -680,10 +646,7 @@ class TestSourceGuards:
     def test_local_rl_cli_imports_public_helper(self) -> None:
         """CLI must import the public `validate_db_path`, not the private one."""
         path = (
-            Path(__file__).resolve().parent.parent
-            / "src" / "soup_cli"
-            / "commands"
-            / "local_rl.py"
+            Path(__file__).resolve().parent.parent / "src" / "soup_cli" / "commands" / "local_rl.py"
         )
         text = path.read_text(encoding="utf-8")
         assert "_validate_db_path" not in text, (
@@ -702,7 +665,8 @@ class TestSourceGuards:
         ):
             path = (
                 Path(__file__).resolve().parent.parent
-                / "src" / "soup_cli"
+                / "src"
+                / "soup_cli"
                 / "commands"
                 / f"{stem}.py"
             )

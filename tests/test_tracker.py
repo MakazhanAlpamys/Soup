@@ -136,11 +136,15 @@ def test_list_runs_ordering(tracker):
     """Runs should be listed newest first."""
     id1 = tracker.start_run(
         config_dict={"base": "model-a"},
-        device="cpu", device_name="CPU", gpu_info={},
+        device="cpu",
+        device_name="CPU",
+        gpu_info={},
     )
     id2 = tracker.start_run(
         config_dict={"base": "model-b"},
-        device="cpu", device_name="CPU", gpu_info={},
+        device="cpu",
+        device_name="CPU",
+        gpu_info={},
     )
     runs = tracker.list_runs()
     assert len(runs) == 2
@@ -153,7 +157,9 @@ def test_list_runs_limit(tracker):
     for idx in range(5):
         tracker.start_run(
             config_dict={"base": f"model-{idx}"},
-            device="cpu", device_name="CPU", gpu_info={},
+            device="cpu",
+            device_name="CPU",
+            gpu_info={},
         )
     runs = tracker.list_runs(limit=3)
     assert len(runs) == 3
@@ -177,7 +183,10 @@ def test_save_and_get_eval_results(tracker):
 def test_eval_results_linked_to_run(tracker):
     """Eval results should be filterable by run_id."""
     run_id = tracker.start_run(
-        config_dict={}, device="cpu", device_name="CPU", gpu_info={},
+        config_dict={},
+        device="cpu",
+        device_name="CPU",
+        gpu_info={},
     )
     tracker.save_eval_result(
         model_path="/tmp/model",
@@ -205,7 +214,10 @@ def test_eval_results_linked_to_run(tracker):
 def test_delete_run(tracker):
     """Deleting a run should remove it and its metrics."""
     run_id = tracker.start_run(
-        config_dict={}, device="cpu", device_name="CPU", gpu_info={},
+        config_dict={},
+        device="cpu",
+        device_name="CPU",
+        gpu_info={},
     )
     tracker.log_metrics(run_id, step=1, loss=2.0)
     tracker.log_metrics(run_id, step=2, loss=1.5)

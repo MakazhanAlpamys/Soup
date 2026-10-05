@@ -88,9 +88,7 @@ def setup_logging(tier: LogLevel) -> logging.Logger:
             )
         except Exception:  # pragma: no cover - rich is a hard dep, defensive
             handler = logging.StreamHandler()
-            handler.setFormatter(
-                logging.Formatter("%(levelname)s %(name)s: %(message)s")
-            )
+            handler.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
         handler._soup_log_tier = tier  # type: ignore[attr-defined]
         logger.addHandler(handler)
         logger.propagate = False

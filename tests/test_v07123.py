@@ -59,24 +59,22 @@ def _write_tiny_safetensors(dir_path: Path) -> Path:
     for layer in range(2):
         # attention projections (square)
         for proj in ("q_proj", "k_proj", "v_proj", "o_proj"):
-            tensors[f"model.layers.{layer}.self_attn.{proj}.weight"] = (
-                rng.standard_normal((32, 32)).astype(np.float32)
-            )
+            tensors[f"model.layers.{layer}.self_attn.{proj}.weight"] = rng.standard_normal(
+                (32, 32)
+            ).astype(np.float32)
         # mlp projections (rectangular)
-        tensors[f"model.layers.{layer}.mlp.gate_proj.weight"] = (
-            rng.standard_normal((64, 32)).astype(np.float32)
-        )
-        tensors[f"model.layers.{layer}.mlp.down_proj.weight"] = (
-            rng.standard_normal((32, 64)).astype(np.float32)
-        )
+        tensors[f"model.layers.{layer}.mlp.gate_proj.weight"] = rng.standard_normal(
+            (64, 32)
+        ).astype(np.float32)
+        tensors[f"model.layers.{layer}.mlp.down_proj.weight"] = rng.standard_normal(
+            (32, 64)
+        ).astype(np.float32)
         # 1-D norm — must be skipped by the scanner
-        tensors[f"model.layers.{layer}.input_layernorm.weight"] = (
-            rng.standard_normal((32,)).astype(np.float32)
+        tensors[f"model.layers.{layer}.input_layernorm.weight"] = rng.standard_normal((32,)).astype(
+            np.float32
         )
     # embedding (2-D "other") + lm_head
-    tensors["model.embed_tokens.weight"] = rng.standard_normal((100, 32)).astype(
-        np.float32
-    )
+    tensors["model.embed_tokens.weight"] = rng.standard_normal((100, 32)).astype(np.float32)
     dir_path.mkdir(parents=True, exist_ok=True)
     out = dir_path / "model.safetensors"
     save_file(tensors, str(out))
@@ -241,10 +239,7 @@ class TestIterWeightMatrices:
         from soup_cli.utils.spectrum_scan import iter_weight_matrices
 
         _write_tiny_safetensors(tmp_path)
-        names = {
-            name
-            for name, _ in iter_weight_matrices(str(tmp_path), modules=("mlp", "attn"))
-        }
+        names = {name for name, _ in iter_weight_matrices(str(tmp_path), modules=("mlp", "attn"))}
         assert "model.embed_tokens.weight" not in names
         assert "model.layers.0.mlp.gate_proj.weight" in names
 
@@ -331,9 +326,7 @@ class TestSelectUnfrozenParameters:
                 shape=(100, 32),
             )
         ]
-        kept = select_unfrozen_parameters(
-            layers, top_percent=50, modules=("mlp", "attn")
-        )
+        kept = select_unfrozen_parameters(layers, top_percent=50, modules=("mlp", "attn"))
         assert all("embed_tokens" not in p for p in kept)
 
 
@@ -590,9 +583,7 @@ class TestUnfrozenParametersSchema:
     def test_default_none(self):
         from soup_cli.config.loader import load_config_from_string
 
-        cfg = load_config_from_string(
-            f"base: {_BASE}\ntask: sft\ndata:\n  train: d.jsonl\n"
-        )
+        cfg = load_config_from_string(f"base: {_BASE}\ntask: sft\ndata:\n  train: d.jsonl\n")
         assert cfg.training.unfrozen_parameters is None
 
     def test_empty_string_rejected(self):
@@ -634,14 +625,13 @@ class TestUnfrozenParametersSchema:
         head = f"base: {_BASE}\ntask: sft\ndata:\n  train: d.jsonl\n"
         # 512 chars accepted, 513 rejected
         ok = load_config_from_string(
-            head + "training:\n  quantization: none\n"
-            f"  unfrozen_parameters:\n  - \"{'a' * 512}\"\n"
+            head + f'training:\n  quantization: none\n  unfrozen_parameters:\n  - "{"a" * 512}"\n'
         )
         assert ok.training.unfrozen_parameters == ["a" * 512]
         with pytest.raises(Exception) as exc:
             load_config_from_string(
                 head + "training:\n  quantization: none\n"
-                f"  unfrozen_parameters:\n  - \"{'a' * 513}\"\n"
+                f'  unfrozen_parameters:\n  - "{"a" * 513}"\n'
             )
         assert "512" in str(exc.value)
 
@@ -681,9 +671,7 @@ class TestUnfrozenParametersSchema:
             "training:\n  quantization: none\n  unfrozen_parameters:\n"
             '  - "model.layers.0.self_attn.(q|k|v)_proj"\n'
         )
-        assert cfg.training.unfrozen_parameters == [
-            "model.layers.0.self_attn.(q|k|v)_proj"
-        ]
+        assert cfg.training.unfrozen_parameters == ["model.layers.0.self_attn.(q|k|v)_proj"]
 
 
 class TestUnfrozenParametersCrossValidators:
@@ -825,9 +813,7 @@ class TestApplyUnfrozenParameters:
                 self.w = nn.Linear(4, 4)
                 # a non-float (quantized-like) parameter that matches but
                 # cannot require grad — must be skipped, not crash.
-                self.idx = nn.Parameter(
-                    torch.zeros(4, dtype=torch.long), requires_grad=False
-                )
+                self.idx = nn.Parameter(torch.zeros(4, dtype=torch.long), requires_grad=False)
 
         model = M()
         from soup_cli.utils.freeze import apply_unfrozen_parameters
@@ -859,8 +845,12 @@ class TestSftUnfrozenWiring:
         from soup_cli.utils.freeze import apply_unfrozen_parameters
 
         cfg = LlamaConfig(
-            vocab_size=64, hidden_size=32, intermediate_size=64,
-            num_hidden_layers=3, num_attention_heads=4, num_key_value_heads=4,
+            vocab_size=64,
+            hidden_size=32,
+            intermediate_size=64,
+            num_hidden_layers=3,
+            num_attention_heads=4,
+            num_key_value_heads=4,
         )
         model = LlamaForCausalLM(cfg)
         model.gradient_checkpointing_enable()

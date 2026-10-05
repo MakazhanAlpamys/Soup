@@ -69,8 +69,9 @@ class TestKbitPrepThreadsCheckpointingFlag:
     trainer (grpo) so the behavioral case isn't pinned to DPO alone.
     """
 
-    def _run(self, monkeypatch, *, task: str, module: str, cls_name: str,
-              gradient_checkpointing: bool):
+    def _run(
+        self, monkeypatch, *, task: str, module: str, cls_name: str, gradient_checkpointing: bool
+    ):
         import importlib
 
         wrapper_cls = getattr(importlib.import_module(module), cls_name)
@@ -140,7 +141,10 @@ class TestKbitPrepThreadsCheckpointingFlag:
         # at all and peft defaults use_gradient_checkpointing to True, so a
         # config that explicitly asks for it off never gets it off.
         captured = self._run(
-            monkeypatch, task=task, module=module, cls_name=cls_name,
+            monkeypatch,
+            task=task,
+            module=module,
+            cls_name=cls_name,
             gradient_checkpointing=False,
         )
         assert captured.get("use_gradient_checkpointing") is False
@@ -150,7 +154,10 @@ class TestKbitPrepThreadsCheckpointingFlag:
         self, monkeypatch, task, module, cls_name
     ):
         captured = self._run(
-            monkeypatch, task=task, module=module, cls_name=cls_name,
+            monkeypatch,
+            task=task,
+            module=module,
+            cls_name=cls_name,
             gradient_checkpointing=True,
         )
         assert captured.get("use_gradient_checkpointing") is True

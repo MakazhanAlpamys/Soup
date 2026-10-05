@@ -25,9 +25,7 @@ SUPPORTED_TOOL_OPTIMIZERS: frozenset[str] = frozenset({"textgrad", "gepa"})
 _SUPPORTED_SPEC_EXTENSIONS: frozenset[str] = frozenset({".json", ".yaml", ".yml"})
 
 _MAX_OPTIMIZER_NAME_LEN = 32
-_INSTALL_HINT = (
-    "Run: pip install \"soup-cli[compile]\"  (installs textgrad / gepa)"
-)
+_INSTALL_HINT = 'Run: pip install "soup-cli[compile]"  (installs textgrad / gepa)'
 
 # Injectable seam: tests set this to a ``(description, examples, optimizer)
 # -> str`` callable so the parse -> iterate -> write orchestration is
@@ -46,9 +44,7 @@ def validate_tool_optimizer(name: object) -> str:
     if "\x00" in name:
         raise ValueError("optimizer must not contain null bytes")
     if len(name) > _MAX_OPTIMIZER_NAME_LEN:
-        raise ValueError(
-            f"optimizer length {len(name)} > {_MAX_OPTIMIZER_NAME_LEN}"
-        )
+        raise ValueError(f"optimizer length {len(name)} > {_MAX_OPTIMIZER_NAME_LEN}")
     canonical = name.lower()
     if canonical not in SUPPORTED_TOOL_OPTIMIZERS:
         raise ValueError(
@@ -66,9 +62,7 @@ def validate_spec_path(path: object) -> str:
         raise TypeError("spec_path must be str")
     lower = path.lower()
     if not any(lower.endswith(ext) for ext in _SUPPORTED_SPEC_EXTENSIONS):
-        raise ValueError(
-            "spec_path extension must be .json / .yaml / .yml"
-        )
+        raise ValueError("spec_path extension must be .json / .yaml / .yml")
     enforce_under_cwd_and_no_symlink(path, field="spec_path")
     return os.path.realpath(path)
 
@@ -104,9 +98,7 @@ class ToolCompilePlan:
     def __post_init__(self) -> None:
         validate_spec_path(self.spec_path)
         validate_eval_suite_path(self.eval_suite_path)
-        object.__setattr__(
-            self, "optimizer", validate_tool_optimizer(self.optimizer)
-        )
+        object.__setattr__(self, "optimizer", validate_tool_optimizer(self.optimizer))
         _validate_output_path(self.output_path)
 
 
@@ -130,9 +122,7 @@ def build_tool_compile_plan(
 # ---------------------------------------------------------------------------
 
 
-def _optimise_description(
-    description: str, examples: List[dict], optimizer: str
-) -> str:
+def _optimise_description(description: str, examples: List[dict], optimizer: str) -> str:
     """Optimise one tool description via the chosen textual-gradient method.
 
     The ``_TOOL_OPTIMIZER_OVERRIDE`` seam short-circuits to a test fake.
@@ -167,9 +157,7 @@ def _optimise_description(
     try:
         import gepa  # noqa: F401
     except ImportError as exc:
-        raise ImportError(
-            f"GEPA is required for the 'gepa' optimizer. {_INSTALL_HINT}"
-        ) from exc
+        raise ImportError(f"GEPA is required for the 'gepa' optimizer. {_INSTALL_HINT}") from exc
     optimised = gepa.optimize(  # type: ignore[attr-defined]
         seed_candidate=description,
         trainset=examples,
@@ -213,9 +201,7 @@ def run_tool_compile(plan: ToolCompilePlan) -> int:
 
     tools: list[dict] = []
     for ep in endpoints:
-        new_desc = _optimise_description(
-            ep.description, examples, plan.optimizer
-        )
+        new_desc = _optimise_description(ep.description, examples, plan.optimizer)
         tools.append(
             {
                 "tool": ep.tool,

@@ -112,9 +112,7 @@ def test_validate_rejects_an_unknown_format(tmp_path: Path) -> None:
         ],
     )
 
-    result = CliRunner().invoke(
-        app, ["data", "validate", str(path), "--format", "bogus"]
-    )
+    result = CliRunner().invoke(app, ["data", "validate", str(path), "--format", "bogus"])
     output = strip_ansi(result.output)
 
     assert result.exit_code == 3, output
@@ -131,8 +129,6 @@ def test_validate_still_accepts_every_valid_format(tmp_path: Path, fmt: str) -> 
     path = tmp_path / "rows.jsonl"
     path.write_text('{"anything": "goes"}\n', encoding="utf-8")
 
-    result = CliRunner().invoke(
-        app, ["data", "validate", str(path), "--format", fmt]
-    )
+    result = CliRunner().invoke(app, ["data", "validate", str(path), "--format", fmt])
 
     assert "Unknown --format" not in strip_ansi(result.output), result.output

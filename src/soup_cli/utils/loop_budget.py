@@ -106,9 +106,7 @@ def check_budget(
         if runs_today >= max_runs_per_day:
             return BudgetDecision(
                 proceed=False,
-                reason=(
-                    f"daily cap reached: {runs_today}/{max_runs_per_day} runs"
-                ),
+                reason=(f"daily cap reached: {runs_today}/{max_runs_per_day} runs"),
                 projected_total_usd=float(spent_so_far_usd),
                 runs_today=runs_today,
             )

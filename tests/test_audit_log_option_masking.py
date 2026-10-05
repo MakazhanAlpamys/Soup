@@ -81,7 +81,10 @@ def test_mask_secret_args_forms():
 
     opts = frozenset({"--auth-token", "-a"})
     assert mask_secret_args(["--auth-token", "x", "--port", "1"], opts) == (
-        "--auth-token", "<redacted>", "--port", "1",
+        "--auth-token",
+        "<redacted>",
+        "--port",
+        "1",
     )
     assert mask_secret_args(["--auth-token=x"], opts) == ("--auth-token=<redacted>",)
     assert mask_secret_args(["-a", "x"], opts) == ("-a", "<redacted>")

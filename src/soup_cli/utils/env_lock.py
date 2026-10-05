@@ -118,9 +118,7 @@ class EnvEntry:
         _check_non_empty_str(self.source, "source", max_len=32)
         if self.source not in _VALID_SOURCES:
             allowed = ", ".join(sorted(_VALID_SOURCES))
-            raise ValueError(
-                f"source must be one of {{{allowed}}}, got {self.source!r}"
-            )
+            raise ValueError(f"source must be one of {{{allowed}}}, got {self.source!r}")
 
 
 @dataclass(frozen=True)
@@ -136,20 +134,14 @@ class EnvLock:
 
     def __post_init__(self) -> None:
         _check_non_empty_str(self.soup_version, "soup_version", max_len=64)
-        _check_non_empty_str(
-            self.python_version, "python_version", max_len=_MAX_PY_VERSION_LEN
-        )
+        _check_non_empty_str(self.python_version, "python_version", max_len=_MAX_PY_VERSION_LEN)
         _check_non_empty_str(self.platform, "platform", max_len=_MAX_PLATFORM_LEN)
         if self.cuda_version is not None:
-            _check_non_empty_str(
-                self.cuda_version, "cuda_version", max_len=_MAX_CUDA_VERSION_LEN
-            )
+            _check_non_empty_str(self.cuda_version, "cuda_version", max_len=_MAX_CUDA_VERSION_LEN)
         if not isinstance(self.entries, tuple):
             raise TypeError("entries must be a tuple of EnvEntry")
         if len(self.entries) > _MAX_ENTRIES:
-            raise ValueError(
-                f"too many entries ({len(self.entries)} > {_MAX_ENTRIES})"
-            )
+            raise ValueError(f"too many entries ({len(self.entries)} > {_MAX_ENTRIES})")
         for entry in self.entries:
             if not isinstance(entry, EnvEntry):
                 raise TypeError("every entry must be EnvEntry")
@@ -210,9 +202,7 @@ class BoundsCheck:
     def __post_init__(self) -> None:
         if not isinstance(self.ok, bool):
             raise TypeError("ok must be bool")
-        if isinstance(self.violation_count, bool) or not isinstance(
-            self.violation_count, int
-        ):
+        if isinstance(self.violation_count, bool) or not isinstance(self.violation_count, int):
             raise TypeError("violation_count must be int")
         if self.violation_count < 0:
             raise ValueError("violation_count must be >= 0")
@@ -265,6 +255,7 @@ def check_declared_bounds(
             continue
         if not req.specifier:
             continue
+
         # #368 review — EVALUATE the marker, don't just name it. A requirement
         # gated behind `extra == "X"` is only Soup's declared bound when the user
         # opted into `soup-cli[X]`; evaluating in the base environment (no extra
@@ -291,9 +282,7 @@ def check_declared_bounds(
         if req.marker is not None:
             selected = selects(req.marker, "")
             if not selected and key in tracked_keys:
-                selected = any(
-                    selects(req.marker, extra) for extra in _TRAINING_INSTALL_EXTRAS
-                )
+                selected = any(selects(req.marker, extra) for extra in _TRAINING_INSTALL_EXTRAS)
             if not selected:
                 continue
         have = installed_by_key.get(key)
@@ -548,9 +537,7 @@ def compute_env_hash(lock: EnvLock) -> str:
             key=lambda d: (d["name"], d["version"], d["source"]),
         ),
     }
-    canonical = json.dumps(
-        payload, sort_keys=True, ensure_ascii=False, separators=(",", ":")
-    )
+    canonical = json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
@@ -595,9 +582,7 @@ def render_install_plan(lock: EnvLock, fmt: str = "uv-pip") -> str:
         lines.append(f"# CUDA: {lock.cuda_version or 'none'}")
         for e in lock.entries:
             if e.source == "pip":
-                lines.append(
-                    f"uv pip install --python {py_minor} '{e.name}=={e.version}'"
-                )
+                lines.append(f"uv pip install --python {py_minor} '{e.name}=={e.version}'")
             else:
                 lines.append(f"# {e.source}: {e.name}=={e.version}")
     else:  # requirements

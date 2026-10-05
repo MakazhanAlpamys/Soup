@@ -34,9 +34,7 @@ def _clean_help(text: str) -> str:
 
 
 def _write_jsonl(path: Path, rows: list[dict]) -> None:
-    path.write_text(
-        "\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8"
-    )
+    path.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
 
 
 # ===========================================================================
@@ -131,9 +129,7 @@ class TestLiveEvalCore:
         from soup_cli.utils import live_eval
 
         with pytest.raises(ValueError):
-            live_eval.lora_probe(
-                "m", [], input_extractor=str, output_extractor=str, n_steps=0
-            )
+            live_eval.lora_probe("m", [], input_extractor=str, output_extractor=str, n_steps=0)
 
     def test_measure_logit_agreement_rejects_bad_max_pairs(self) -> None:
         from soup_cli.utils import live_eval
@@ -165,18 +161,14 @@ class TestLiveEvalPrimitives:
     def test_tokenize_pair_masks_prompt(self) -> None:
         from soup_cli.utils import live_eval
 
-        ids, labels = live_eval._tokenize_pair(
-            _FakeTok(eos=99), "a bb", "ccc dddd", max_length=256
-        )
+        ids, labels = live_eval._tokenize_pair(_FakeTok(eos=99), "a bb", "ccc dddd", max_length=256)
         assert ids[0].tolist() == [1, 2, 3, 4, 99]
         assert labels[0].tolist() == [-100, -100, 3, 4, 99]
 
     def test_tokenize_pair_truncates(self) -> None:
         from soup_cli.utils import live_eval
 
-        ids, _ = live_eval._tokenize_pair(
-            _FakeTok(eos=99), "a bb ccc", "dddd", max_length=2
-        )
+        ids, _ = live_eval._tokenize_pair(_FakeTok(eos=99), "a bb ccc", "dddd", max_length=2)
         assert ids.shape[1] == 2
 
     def test_compute_eval_loss_mean(self) -> None:
@@ -194,7 +186,9 @@ class TestLiveEvalPrimitives:
                 return types.SimpleNamespace(loss=torch.tensor(1.5))
 
         loss = live_eval.compute_eval_loss(
-            FakeModel(), _FakeTok(eos=99), [("a", "bb"), ("ccc", "dddd")],
+            FakeModel(),
+            _FakeTok(eos=99),
+            [("a", "bb"), ("ccc", "dddd")],
             device="cpu",
         )
         assert loss == pytest.approx(1.5)
@@ -215,7 +209,10 @@ class TestLiveEvalPrimitives:
 
         # eos=None + empty targets → labels are all -100 → skipped → NaN.
         loss = live_eval.compute_eval_loss(
-            FakeModel(), _FakeTok(eos=None), [("a", ""), ("bb", "")], device="cpu",
+            FakeModel(),
+            _FakeTok(eos=None),
+            [("a", ""), ("bb", "")],
+            device="cpu",
         )
         assert loss != loss  # NaN
 
@@ -241,12 +238,15 @@ class TestLiveEvalPrimitives:
                 return types.SimpleNamespace(logits=logits)
 
         monkeypatch.setattr(
-            live_eval, "load_model_and_tokenizer",
+            live_eval,
+            "load_model_and_tokenizer",
             lambda *a, **k: (FakeLogitModel(), _FakeTok(eos=99), "cpu"),
         )
         score = live_eval.measure_logit_agreement(
-            "m", [{"p": "a bb", "t": "ccc dddd"}],
-            input_extractor=lambda r: r["p"], output_extractor=lambda r: r["t"],
+            "m",
+            [{"p": "a bb", "t": "ccc dddd"}],
+            input_extractor=lambda r: r["p"],
+            output_extractor=lambda r: r["t"],
         )
         assert score == pytest.approx(1.0)
 
@@ -268,12 +268,15 @@ class TestLiveEvalPrimitives:
                 return types.SimpleNamespace(logits=logits)
 
         monkeypatch.setattr(
-            live_eval, "load_model_and_tokenizer",
+            live_eval,
+            "load_model_and_tokenizer",
             lambda *a, **k: (WrongModel(), _FakeTok(eos=99), "cpu"),
         )
         score = live_eval.measure_logit_agreement(
-            "m", [{"p": "a bb", "t": "ccc dddd"}],
-            input_extractor=lambda r: r["p"], output_extractor=lambda r: r["t"],
+            "m",
+            [{"p": "a bb", "t": "ccc dddd"}],
+            input_extractor=lambda r: r["p"],
+            output_extractor=lambda r: r["t"],
         )
         assert score == pytest.approx(0.0)
 
@@ -282,13 +285,21 @@ class TestLiveEvalPrimitives:
 
         with pytest.raises(ValueError):
             live_eval.lora_probe(
-                "m", [], input_extractor=str, output_extractor=str,
-                n_steps=1, lr=0,
+                "m",
+                [],
+                input_extractor=str,
+                output_extractor=str,
+                n_steps=1,
+                lr=0,
             )
         with pytest.raises(ValueError):
             live_eval.lora_probe(
-                "m", [], input_extractor=str, output_extractor=str,
-                n_steps=1, max_length=0,
+                "m",
+                [],
+                input_extractor=str,
+                output_extractor=str,
+                n_steps=1,
+                max_length=0,
             )
 
 
@@ -319,8 +330,7 @@ class TestAdviseLiveProbe:
 
         monkeypatch.setattr(live_eval, "make_generator", fake_make_generator)
         rows = [
-            {"prompt": "capital of france?", "response": "the capital is paris"}
-            for _ in range(4)
+            {"prompt": "capital of france?", "response": "the capital is paris"} for _ in range(4)
         ]
         out = synth_probe_baselines(rows, model="HuggingFaceTB/SmolLM2-135M")
         # Perfect match → high F1.
@@ -351,9 +361,7 @@ class TestAdviseLiveProbe:
         from soup_cli.utils import live_eval
         from soup_cli.utils.advise import synth_probe_lora_delta
 
-        monkeypatch.setattr(
-            live_eval, "lora_probe", lambda *a, **k: (2.0, 1.0, 12.5)
-        )
+        monkeypatch.setattr(live_eval, "lora_probe", lambda *a, **k: (2.0, 1.0, 12.5))
         rows = [{"prompt": "q", "response": "a"} for _ in range(10)]
         delta, wall = synth_probe_lora_delta(rows, model="m")
         assert delta == pytest.approx(0.5)  # (2-1)/2
@@ -363,9 +371,7 @@ class TestAdviseLiveProbe:
         from soup_cli.utils import live_eval
         from soup_cli.utils.advise import synth_probe_lora_delta
 
-        monkeypatch.setattr(
-            live_eval, "lora_probe", lambda *a, **k: (float("nan"), 1.0, 5.0)
-        )
+        monkeypatch.setattr(live_eval, "lora_probe", lambda *a, **k: (float("nan"), 1.0, 5.0))
         rows = [{"prompt": "q", "response": "a"} for _ in range(200)]
         delta, wall = synth_probe_lora_delta(rows, model="m")
         # NaN base_loss → fallback heuristic path.
@@ -380,9 +386,7 @@ class TestBaseModelProximity:
         from soup_cli.utils import live_eval
         from soup_cli.utils.advise import measure_base_model_proximity
 
-        monkeypatch.setattr(
-            live_eval, "measure_logit_agreement", lambda *a, **k: 0.42
-        )
+        monkeypatch.setattr(live_eval, "measure_logit_agreement", lambda *a, **k: 0.42)
         rows = [{"prompt": "q", "response": "a"}]
         assert measure_base_model_proximity(rows, model="m") == pytest.approx(0.42)
 
@@ -390,9 +394,7 @@ class TestBaseModelProximity:
         from soup_cli.utils import live_eval
         from soup_cli.utils.advise import measure_base_model_proximity
 
-        monkeypatch.setattr(
-            live_eval, "measure_logit_agreement", lambda *a, **k: float("nan")
-        )
+        monkeypatch.setattr(live_eval, "measure_logit_agreement", lambda *a, **k: float("nan"))
         assert measure_base_model_proximity([{"prompt": "q", "response": "a"}], model="m") is None
 
     def test_measure_proximity_rejects_empty_model(self) -> None:
@@ -420,20 +422,12 @@ class TestBaseModelProximity:
         from soup_cli.utils import live_eval
 
         # Mock the live boundary: proximity + generator + lora probe.
-        monkeypatch.setattr(
-            live_eval, "measure_logit_agreement", lambda *a, **k: 0.55
-        )
-        monkeypatch.setattr(
-            live_eval, "make_generator", lambda *a, **k: (lambda p: "a")
-        )
-        monkeypatch.setattr(
-            live_eval, "lora_probe", lambda *a, **k: (2.0, 1.0, 9.0)
-        )
+        monkeypatch.setattr(live_eval, "measure_logit_agreement", lambda *a, **k: 0.55)
+        monkeypatch.setattr(live_eval, "make_generator", lambda *a, **k: lambda p: "a")
+        monkeypatch.setattr(live_eval, "lora_probe", lambda *a, **k: (2.0, 1.0, 9.0))
         data = tmp_path / "d.jsonl"
         _write_jsonl(data, [{"prompt": f"q{i}", "response": "a"} for i in range(60)])
-        result = runner.invoke(
-            app, ["advise", "run", str(data), "--probe-model", "m"]
-        )
+        result = runner.invoke(app, ["advise", "run", str(data), "--probe-model", "m"])
         assert result.exit_code == 0, (result.output, result.exception)
 
 
@@ -447,16 +441,14 @@ class TestTunabilityLiveProbe:
 
         data = tmp_path / "d.jsonl"
         _write_jsonl(data, [{"prompt": "q", "response": "a"} for _ in range(10)])
-        monkeypatch.setattr(
-            live_eval, "lora_probe", lambda *a, **k: (3.0, 2.0, 30.0)
-        )
+        monkeypatch.setattr(live_eval, "lora_probe", lambda *a, **k: (3.0, 2.0, 30.0))
         cand = tunability.CandidateBase(
-            name="tiny", repo_id="HuggingFaceTB/SmolLM2-135M",
-            params_b=0.135, license_id="apache-2.0",
+            name="tiny",
+            repo_id="HuggingFaceTB/SmolLM2-135M",
+            params_b=0.135,
+            license_id="apache-2.0",
         )
-        res = tunability.live_lora_probe(
-            cand, str(data), probe_steps=5, holdout_size=2
-        )
+        res = tunability.live_lora_probe(cand, str(data), probe_steps=5, holdout_size=2)
         assert isinstance(res, tunability.TunabilityResult)
         assert res.base_loss == pytest.approx(3.0)
         assert res.delta == pytest.approx(1.0)  # base - probe
@@ -472,7 +464,10 @@ class TestTunabilityLiveProbe:
             live_eval, "lora_probe", lambda *a, **k: (float("nan"), float("nan"), 1.0)
         )
         cand = tunability.CandidateBase(
-            name="t", repo_id="r", params_b=0.1, license_id="mit",
+            name="t",
+            repo_id="r",
+            params_b=0.1,
+            license_id="mit",
         )
         res = tunability.live_lora_probe(cand, str(data), probe_steps=1, holdout_size=1)
         assert res.delta == 0.0
@@ -484,11 +479,12 @@ class TestTunabilityLiveProbe:
         data = tmp_path / "d.jsonl"
         _write_jsonl(data, [{"prompt": "q", "response": "a"} for _ in range(4)])
         # base_loss NaN but probe_loss finite → still neutral 0 delta.
-        monkeypatch.setattr(
-            live_eval, "lora_probe", lambda *a, **k: (float("nan"), 1.0, 2.0)
-        )
+        monkeypatch.setattr(live_eval, "lora_probe", lambda *a, **k: (float("nan"), 1.0, 2.0))
         cand = tunability.CandidateBase(
-            name="t", repo_id="r", params_b=0.1, license_id="mit",
+            name="t",
+            repo_id="r",
+            params_b=0.1,
+            license_id="mit",
         )
         res = tunability.live_lora_probe(cand, str(data), probe_steps=1, holdout_size=1)
         assert res.delta == 0.0
@@ -507,15 +503,22 @@ class TestTunabilityLiveProbe:
         from soup_cli.utils import tunability
 
         cand = tunability.CandidateBase(
-            name="t", repo_id="r", params_b=0.1, license_id="mit",
+            name="t",
+            repo_id="r",
+            params_b=0.1,
+            license_id="mit",
         )
         calls = []
 
         def fake_probe(c, ds, *, probe_steps, holdout_size):
             calls.append(c.name)
             return tunability.TunabilityResult(
-                candidate=c, base_loss=2.0, probe_loss=1.0, delta=1.0,
-                wall_clock_seconds=10.0, estimated_cost_usd=0.5,
+                candidate=c,
+                base_loss=2.0,
+                probe_loss=1.0,
+                delta=1.0,
+                wall_clock_seconds=10.0,
+                estimated_cost_usd=0.5,
             )
 
         report = tunability.run_tunability(
@@ -528,9 +531,7 @@ class TestTunabilityLiveProbe:
         monkeypatch.chdir(tmp_path)
         data = tmp_path / "d.jsonl"
         _write_jsonl(data, [{"prompt": "q", "response": "a"}])
-        result = runner.invoke(
-            app, ["tunability", "--dataset", str(data), "--plan-only", "--live"]
-        )
+        result = runner.invoke(app, ["tunability", "--dataset", str(data), "--plan-only", "--live"])
         assert result.exit_code == 0, (result.output, result.exception)
         assert "LIVE LoRA probe" in result.output
 
@@ -584,9 +585,7 @@ class TestCapabilityLiveRunner:
         from soup_cli.utils.capability_suite import run_capability_suite
 
         _install_fake_lm_eval(monkeypatch, results={"arc_easy": {"acc,none": 0.71}})
-        out = run_capability_suite(
-            run_id="r1", model_id="m", tasks=["arc_easy"], limit=2
-        )
+        out = run_capability_suite(run_id="r1", model_id="m", tasks=["arc_easy"], limit=2)
         assert out["run_id"] == "r1"
         assert out["results"][0]["benchmark"] == "arc_easy"
         assert out["results"][0]["score"] == pytest.approx(0.71)
@@ -650,8 +649,18 @@ class TestCapabilityLiveRunner:
         _install_fake_lm_eval(monkeypatch, results={"arc_easy": {"acc,none": 0.66}})
         result = runner.invoke(
             app,
-            ["eval", "capability", "r", "--live", "--model", "m",
-             "--tasks", "arc_easy", "--limit", "1"],
+            [
+                "eval",
+                "capability",
+                "r",
+                "--live",
+                "--model",
+                "m",
+                "--tasks",
+                "arc_easy",
+                "--limit",
+                "1",
+            ],
         )
         assert result.exit_code == 0, (result.output, result.exception)
         assert "arc_easy" in result.output
@@ -674,7 +683,8 @@ class TestBehaviorLive:
         from soup_cli.utils import live_eval
 
         monkeypatch.setattr(
-            live_eval, "load_model_and_tokenizer",
+            live_eval,
+            "load_model_and_tokenizer",
             lambda *a, **k: ("model", "tok", "cpu"),
         )
 
@@ -689,7 +699,10 @@ class TestBehaviorLive:
 
         self._patch_generators(monkeypatch, "safe answer", "safe answer")
         report = run_behavior_live(
-            run_id="r", battery="xstest", base_model="m", adapter="adp",
+            run_id="r",
+            battery="xstest",
+            base_model="m",
+            adapter="adp",
         )
         assert isinstance(report, BehaviorDiffReport)
         assert report.battery == "xstest"
@@ -705,9 +718,7 @@ class TestBehaviorLive:
 
         self._patch_generators(monkeypatch, "x", "x")
         with pytest.raises(ValueError):
-            run_behavior_live(
-                run_id="r", battery="xstest", base_model="m", max_probes=0
-            )
+            run_behavior_live(run_id="r", battery="xstest", base_model="m", max_probes=0)
 
     def test_cli_live_diff(self, monkeypatch, tmp_path) -> None:
         monkeypatch.chdir(tmp_path)
@@ -715,8 +726,15 @@ class TestBehaviorLive:
         result = runner.invoke(
             app,
             [
-                "eval", "behavior", "r", "--battery", "xstest",
-                "--base-model", "m", "--adapter", "adp",
+                "eval",
+                "behavior",
+                "r",
+                "--battery",
+                "xstest",
+                "--base-model",
+                "m",
+                "--adapter",
+                "adp",
             ],
         )
         # The adapter refuses every xstest "safe" probe the base answered →
@@ -747,7 +765,8 @@ class TestDiagnoseLive:
         from soup_cli.utils import live_eval
 
         monkeypatch.setattr(
-            live_eval, "load_model_and_tokenizer",
+            live_eval,
+            "load_model_and_tokenizer",
             lambda *a, **k: ("model", "tok", "cpu"),
         )
 
@@ -800,9 +819,7 @@ class TestDiagnoseLive:
 
         data = tmp_path / "d.jsonl"
         _write_jsonl(data, [{"prompt": f"q{i}", "response": f"a{i}"} for i in range(8)])
-        report = run_live_diagnose(
-            run_id="r", base="m", adapter=None, dataset_path=str(data)
-        )
+        report = run_live_diagnose(run_id="r", base="m", adapter=None, dataset_path=str(data))
         # All 6 modes present.
         assert set(report.scores) >= set(FAILURE_MODES)
         assert report.overall in {"OK", "MINOR", "MAJOR"}
@@ -837,9 +854,7 @@ class TestDiagnoseLive:
         self._patch_live_eval(monkeypatch)
         data = tmp_path / "d.jsonl"
         _write_jsonl(data, [{"prompt": f"q{i}", "response": f"a{i}"} for i in range(8)])
-        result = runner.invoke(
-            app, ["diagnose", "r1", "--base-model", "m", "--dataset", str(data)]
-        )
+        result = runner.invoke(app, ["diagnose", "r1", "--base-model", "m", "--dataset", str(data)])
         assert result.exit_code in (0, 2), (result.output, result.exception)
         assert "overall" in result.output.lower()
 
@@ -866,8 +881,7 @@ class TestPatchInvariants:
             "diagnose/live.py",
         ):
             src = (
-                Path(__file__).resolve().parent.parent
-                / "src" / "soup_cli" / "utils" / mod
+                Path(__file__).resolve().parent.parent / "src" / "soup_cli" / "utils" / mod
             ).read_text(encoding="utf-8")
             assert "\nimport torch" not in src, mod
             assert "\nimport transformers" not in src, mod

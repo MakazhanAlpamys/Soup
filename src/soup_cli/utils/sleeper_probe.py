@@ -44,6 +44,7 @@ Public surface:
 - ``run_sleeper_probe(activations, base, *, weights=None)`` orchestrator
 - ``render_sleeper_json`` / ``render_sleeper_markdown``
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -87,19 +88,11 @@ class SleeperProbeSpec:
             raise TypeError("base must be str")
         if not self.base:
             raise ValueError("base must be non-empty")
-        if (
-            isinstance(self.hidden_dim, bool)
-            or not isinstance(self.hidden_dim, int)
-        ):
+        if isinstance(self.hidden_dim, bool) or not isinstance(self.hidden_dim, int):
             raise TypeError("hidden_dim must be int")
         if self.hidden_dim <= 0 or self.hidden_dim > _MAX_HIDDEN_DIM:
-            raise ValueError(
-                f"hidden_dim must be in (0, {_MAX_HIDDEN_DIM}]"
-            )
-        if (
-            isinstance(self.threshold, bool)
-            or not isinstance(self.threshold, (int, float))
-        ):
+            raise ValueError(f"hidden_dim must be in (0, {_MAX_HIDDEN_DIM}]")
+        if isinstance(self.threshold, bool) or not isinstance(self.threshold, (int, float)):
             raise TypeError("threshold must be float")
         if not math.isfinite(float(self.threshold)):
             raise ValueError("threshold must be finite")
@@ -126,26 +119,19 @@ class SleeperProbeResult:
             raise TypeError("base must be str")
         if not self.base:
             raise ValueError("base must be non-empty")
-        if (
-            isinstance(self.num_tokens, bool)
-            or not isinstance(self.num_tokens, int)
-        ):
+        if isinstance(self.num_tokens, bool) or not isinstance(self.num_tokens, int):
             raise TypeError("num_tokens must be int")
         if self.num_tokens < 0:
             raise ValueError("num_tokens must be non-negative")
-        if (
-            isinstance(self.defection_rate, bool)
-            or not isinstance(self.defection_rate, (int, float))
+        if isinstance(self.defection_rate, bool) or not isinstance(
+            self.defection_rate, (int, float)
         ):
             raise TypeError("defection_rate must be float")
         if not math.isfinite(float(self.defection_rate)):
             raise ValueError("defection_rate must be finite")
         if not 0.0 <= self.defection_rate <= 1.0:
             raise ValueError("defection_rate must be in [0, 1]")
-        if (
-            isinstance(self.max_score, bool)
-            or not isinstance(self.max_score, (int, float))
-        ):
+        if isinstance(self.max_score, bool) or not isinstance(self.max_score, (int, float)):
             raise TypeError("max_score must be float")
         if not math.isfinite(float(self.max_score)):
             raise ValueError("max_score must be finite")
@@ -154,9 +140,7 @@ class SleeperProbeResult:
         if isinstance(self.verdict, bool) or not isinstance(self.verdict, str):
             raise TypeError("verdict must be str")
         if self.verdict not in DEFECTION_VERDICTS:
-            raise ValueError(
-                f"verdict must be in {DEFECTION_VERDICTS}, got {self.verdict!r}"
-            )
+            raise ValueError(f"verdict must be in {DEFECTION_VERDICTS}, got {self.verdict!r}")
 
 
 # ---------------------------------------------------------------------------
@@ -217,9 +201,7 @@ BUNDLED_PROBES: Mapping[str, SleeperProbeSpec] = _make_bundled_probes()
 # L3 review fix: O(1) lowercase lookup built once at module load
 # (mirrors v0.53.0 _LOWER_INDEX policy). Future v0.66.x can grow the
 # catalogue without paying O(N) per validate_base_for_probe call.
-_LOWER_INDEX: Mapping[str, str] = MappingProxyType(
-    {k.lower(): k for k in BUNDLED_PROBES}
-)
+_LOWER_INDEX: Mapping[str, str] = MappingProxyType({k.lower(): k for k in BUNDLED_PROBES})
 
 
 def validate_base_for_probe(name: object) -> str:
@@ -239,10 +221,7 @@ def validate_base_for_probe(name: object) -> str:
         raise ValueError(f"base must be ≤{_MAX_BASE_LEN} chars")
     canonical = _LOWER_INDEX.get(name.lower())
     if canonical is None:
-        raise ValueError(
-            f"no bundled probe for base {name!r} "
-            f"(known: {sorted(BUNDLED_PROBES)})"
-        )
+        raise ValueError(f"no bundled probe for base {name!r} (known: {sorted(BUNDLED_PROBES)})")
     return canonical
 
 
@@ -307,9 +286,7 @@ def apply_sleeper_probe(
     if w.ndim != 1:
         raise ValueError(f"probe_w must be 1D, got {w.shape}")
     if acts.shape[1] != w.shape[0]:
-        raise ValueError(
-            f"shape mismatch: activations[{acts.shape}] @ probe_w[{w.shape}]"
-        )
+        raise ValueError(f"shape mismatch: activations[{acts.shape}] @ probe_w[{w.shape}]")
     if acts.shape[0] > _MAX_TOKENS:
         raise ValueError(f"too many tokens ({acts.shape[0]})")
     if w.shape[0] > _MAX_HIDDEN_DIM:
@@ -389,8 +366,7 @@ def run_sleeper_probe(
             raise ValueError("weights[0] must be a 1D vector")
         if acts.shape[1] != probe_w.shape[0]:
             raise ValueError(
-                f"hidden_dim mismatch: activations[{acts.shape[1]}] vs "
-                f"probe[{probe_w.shape[0]}]"
+                f"hidden_dim mismatch: activations[{acts.shape[1]}] vs probe[{probe_w.shape[0]}]"
             )
         if isinstance(threshold, bool) or not isinstance(threshold, (int, float)):
             raise TypeError("weights[1] (threshold) must be float")
@@ -402,8 +378,7 @@ def run_sleeper_probe(
         spec = BUNDLED_PROBES[canonical]
         if acts.shape[1] != spec.hidden_dim:
             raise ValueError(
-                f"hidden_dim mismatch: activations[{acts.shape[1]}] vs "
-                f"probe[{spec.hidden_dim}]"
+                f"hidden_dim mismatch: activations[{acts.shape[1]}] vs probe[{spec.hidden_dim}]"
             )
         result_base = canonical
         probe_w = _probe_weights(spec)
@@ -453,11 +428,8 @@ def render_sleeper_markdown(result: SleeperProbeResult) -> str:
     ]
     if result.verdict == "MAJOR":
         lines.append(
-            "> ⚠ MAJOR defection rate detected. Review training data + "
-            "consider rolling back."
+            "> ⚠ MAJOR defection rate detected. Review training data + consider rolling back."
         )
     elif result.verdict == "MINOR":
-        lines.append(
-            "> ⚠ Elevated defection rate. Inspect outputs on the probe set."
-        )
+        lines.append("> ⚠ Elevated defection rate. Inspect outputs on the probe set.")
     return "\n".join(lines) + "\n"

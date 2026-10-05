@@ -25,6 +25,7 @@ class TestNamespacePin:
             record_repo_first_seen,
             verify_namespace,
         )
+
         assert callable(record_repo_first_seen)
         assert callable(verify_namespace)
         assert dataclasses.is_dataclass(NamespacePin)
@@ -84,6 +85,7 @@ class TestStore:
             NamespacePin,
             NamespacePinStore,
         )
+
         db = tmp_path / "ns.db"
         store = NamespacePinStore(str(db))
         pin = NamespacePin(
@@ -98,6 +100,7 @@ class TestStore:
 
     def test_get_missing_returns_none(self, tmp_path):
         from soup_cli.utils.namespace_pin import NamespacePinStore
+
         db = tmp_path / "ns.db"
         store = NamespacePinStore(str(db))
         assert store.get("nobody/nothing") is None
@@ -107,6 +110,7 @@ class TestStore:
             NamespacePin,
             NamespacePinStore,
         )
+
         db = tmp_path / "ns.db"
         store = NamespacePinStore(str(db))
         pin = NamespacePin(
@@ -124,6 +128,7 @@ class TestStore:
             NamespacePin,
             NamespacePinStore,
         )
+
         db = tmp_path / "ns.db"
         store = NamespacePinStore(str(db))
         pin = NamespacePin(
@@ -147,6 +152,7 @@ class TestStore:
 
     def test_invalid_repo_id_rejected(self, tmp_path):
         from soup_cli.utils.namespace_pin import NamespacePinStore
+
         db = tmp_path / "ns.db"
         store = NamespacePinStore(str(db))
         with pytest.raises(ValueError):
@@ -159,6 +165,7 @@ class TestVerify:
             NamespacePinStore,
             record_repo_first_seen,
         )
+
         db = tmp_path / "ns.db"
         store = NamespacePinStore(str(db))
         pin = record_repo_first_seen(
@@ -177,6 +184,7 @@ class TestVerify:
             record_repo_first_seen,
             verify_namespace,
         )
+
         db = tmp_path / "ns.db"
         store = NamespacePinStore(str(db))
         record_repo_first_seen(
@@ -199,6 +207,7 @@ class TestVerify:
             record_repo_first_seen,
             verify_namespace,
         )
+
         db = tmp_path / "ns.db"
         store = NamespacePinStore(str(db))
         record_repo_first_seen(
@@ -222,6 +231,7 @@ class TestVerify:
             record_repo_first_seen,
             verify_namespace,
         )
+
         db = tmp_path / "ns.db"
         store = NamespacePinStore(str(db))
         record_repo_first_seen(
@@ -245,6 +255,7 @@ class TestVerify:
             NamespacePinStore,
             verify_namespace,
         )
+
         db = tmp_path / "ns.db"
         store = NamespacePinStore(str(db))
         # Unknown repo — by policy this is OK on first-seen (trust-on-first-use).
@@ -263,6 +274,7 @@ class TestVerify:
             record_repo_first_seen,
             verify_namespace,
         )
+
         db = tmp_path / "ns.db"
         store = NamespacePinStore(str(db))
         record_repo_first_seen(
@@ -292,6 +304,7 @@ class TestVerify:
             record_repo_first_seen,
             verify_namespace,
         )
+
         db = tmp_path / "ns.db"
         store = NamespacePinStore(str(db))
         record_repo_first_seen(
@@ -316,6 +329,7 @@ class TestVerify:
             NamespacePinStore,
             verify_namespace,
         )
+
         db = tmp_path / "ns.db"
         store = NamespacePinStore(str(db))
         with pytest.raises(TypeError):
@@ -342,6 +356,7 @@ class TestSecurityReviewFixes:
         import sys
 
         from soup_cli.utils.namespace_pin import NamespacePinStore
+
         bogus = "Z:/no/such/dir/ns.db" if sys.platform == "win32" else "/no/such/dir/ns.db"
         with pytest.raises(ValueError):
             NamespacePinStore(bogus)
@@ -370,20 +385,29 @@ class TestSecurityReviewFixes:
         """
         from soup_cli.utils.namespace_pin import _is_backward
 
-        assert _is_backward(
-            "2024-01-01T01:00:00+02:00",
-            "2024-01-01T00:00:00+00:00",
-        ) is True
+        assert (
+            _is_backward(
+                "2024-01-01T01:00:00+02:00",
+                "2024-01-01T00:00:00+00:00",
+            )
+            is True
+        )
         # Plain backward case (works under either compare).
-        assert _is_backward(
-            "2023-01-01T00:00:00+00:00",
-            "2024-06-01T00:00:00+00:00",
-        ) is True
+        assert (
+            _is_backward(
+                "2023-01-01T00:00:00+00:00",
+                "2024-06-01T00:00:00+00:00",
+            )
+            is True
+        )
         # Forward case rejected.
-        assert _is_backward(
-            "2024-06-01T00:00:00+00:00",
-            "2023-01-01T00:00:00+00:00",
-        ) is False
+        assert (
+            _is_backward(
+                "2024-06-01T00:00:00+00:00",
+                "2023-01-01T00:00:00+00:00",
+            )
+            is False
+        )
 
     def test_author_override_case_insensitive(self, tmp_path):
         from soup_cli.utils.namespace_pin import (
@@ -391,15 +415,19 @@ class TestSecurityReviewFixes:
             record_repo_first_seen,
             verify_namespace,
         )
+
         db = tmp_path / "ns.db"
         store = NamespacePinStore(str(db))
         record_repo_first_seen(
-            store, repo_id="r/x", author="alice",
+            store,
+            repo_id="r/x",
+            author="alice",
             created_at="2024-01-01T00:00:00+00:00",
         )
         # Operator types uppercase; opt-in must still accept.
         report = verify_namespace(
-            store, repo_id="r/x",
+            store,
+            repo_id="r/x",
             current_author="Attacker",
             current_created_at="2025-01-01T00:00:00+00:00",
             allow_namespace_shift="attacker",  # lowercase matches
@@ -419,7 +447,10 @@ class TestSourceWiring:
     def test_no_top_level_torch(self):
         src = (
             Path(__file__).resolve().parent.parent
-            / "src" / "soup_cli" / "utils" / "namespace_pin.py"
+            / "src"
+            / "soup_cli"
+            / "utils"
+            / "namespace_pin.py"
         )
         text = src.read_text(encoding="utf-8")
         # no top-level torch/transformers imports

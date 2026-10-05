@@ -103,9 +103,12 @@ class TestExportAdvancedGguf:
             # Simulate llama-quantize writing the output file
             Path(kwargs["output_path"]).write_bytes(b"FAKEGGUF")
 
-        with patch("soup_cli.utils.gguf_quant._run_convert_to_f16") as mock_conv, \
-             patch("soup_cli.utils.gguf_quant._run_quantize_binary",
-                   side_effect=fake_quant) as mock_quant:
+        with (
+            patch("soup_cli.utils.gguf_quant._run_convert_to_f16") as mock_conv,
+            patch(
+                "soup_cli.utils.gguf_quant._run_quantize_binary", side_effect=fake_quant
+            ) as mock_quant,
+        ):
             mock_conv.return_value = None
             export_advanced_gguf(
                 model_dir=str(model),
@@ -140,10 +143,13 @@ class TestExportAdvancedGguf:
         def fake_quant(**kwargs):
             Path(kwargs["output_path"]).write_bytes(b"FAKEGGUF")
 
-        with patch("soup_cli.utils.gguf_quant._run_convert_to_f16") as mock_conv, \
-             patch("soup_cli.utils.gguf_quant._run_imatrix") as mock_imat, \
-             patch("soup_cli.utils.gguf_quant._run_quantize_binary",
-                   side_effect=fake_quant) as mock_quant:
+        with (
+            patch("soup_cli.utils.gguf_quant._run_convert_to_f16") as mock_conv,
+            patch("soup_cli.utils.gguf_quant._run_imatrix") as mock_imat,
+            patch(
+                "soup_cli.utils.gguf_quant._run_quantize_binary", side_effect=fake_quant
+            ) as mock_quant,
+        ):
             mock_conv.return_value = None
             mock_imat.return_value = None
             export_advanced_gguf(
@@ -309,9 +315,7 @@ class TestPrepareCalibrationText:
 
         src = tmp_path / "calib.jsonl"
         # JSON-escape the null byte; json.loads turns \u0000 into a real NUL
-        src.write_text(
-            '{"text": "ev\\u0000il"}\n', encoding="utf-8"
-        )
+        src.write_text('{"text": "ev\\u0000il"}\n', encoding="utf-8")
         out = _prepare_calibration_text(str(src), tmp_path)
         content = out.read_text(encoding="utf-8")
         assert "\x00" not in content
@@ -336,9 +340,7 @@ class TestPrepareCalibrationText:
         # Input must NOT be named `calib.txt` because the helper writes
         # its output to `<staged_dir>/calib.txt`. Use a different name.
         src = tmp_path / "raw_input.txt"
-        src.write_text(
-            "this is not json\nand neither is this\n", encoding="utf-8"
-        )
+        src.write_text("this is not json\nand neither is this\n", encoding="utf-8")
         out = _prepare_calibration_text(str(src), tmp_path)
         content = out.read_text(encoding="utf-8")
         assert "this is not json" in content

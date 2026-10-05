@@ -178,9 +178,7 @@ class TestAgreementAndDivergence:
         result = audit_adapter(
             _config(), _mlx_record(response_token_mask=False, train_on_responses_only=False)
         )
-        assert any(
-            r.status == "diverged" and "responses_only" in r.setting for r in result.rows
-        )
+        assert any(r.status == "diverged" and "responses_only" in r.setting for r in result.rows)
 
 
 class TestWarmupRoundingIsTheMotivatingCase:
@@ -291,9 +289,7 @@ class TestLoraShapeIsCheckedOnBothRecordKinds:
 
         cfg = _config()
         cfg["training"]["lora"] = {"r": 8, "alpha": 16}
-        row = next(
-            r for r in audit_adapter(cfg, _mlx_record()).rows if r.setting == "lora.r"
-        )
+        row = next(r for r in audit_adapter(cfg, _mlx_record()).rows if r.setting == "lora.r")
         assert row.status == "ok"
 
 
@@ -373,9 +369,7 @@ class TestLoraAlphaComesFromWhicheverShapeTheWriterChose:
         record = _mlx_record(lora_parameters={"rank": 4, "scale": 2.0, "dropout": 0.05})
 
         row = next(r for r in audit_adapter(cfg, record).rows if r.setting == "lora.alpha")
-        assert row.status == "ok", (
-            f"scale 2.0 x rank 4 is alpha 8; got {row.ran!r} ({row.status})"
-        )
+        assert row.status == "ok", f"scale 2.0 x rank 4 is alpha 8; got {row.ran!r} ({row.status})"
 
     def test_a_wrong_alpha_still_diverges_through_the_conversion(self):
         """Control: the conversion must not launder a real mismatch into `ok`."""
@@ -396,7 +390,8 @@ class TestLoraAlphaComesFromWhicheverShapeTheWriterChose:
         cfg = _config(backend="transformers")
         cfg["training"]["lora"] = {"r": 8, "alpha": 16}
         row = next(
-            r for r in audit_adapter(cfg, {"peft_type": "LORA", "r": 8, "lora_alpha": 16}).rows
+            r
+            for r in audit_adapter(cfg, {"peft_type": "LORA", "r": 8, "lora_alpha": 16}).rows
             if r.setting == "lora.alpha"
         )
         assert row.status == "ok"
@@ -415,6 +410,7 @@ class TestLoraAlphaComesFromWhicheverShapeTheWriterChose:
 # --------------------------------------------------------------------------
 # #763 review — the audit must not carry its own idea of a default
 # --------------------------------------------------------------------------
+
 
 class TestAuditDefaultsMatchTheSchema:
     """Three audit fallbacks disagreed with ``config/schema.py``.
@@ -436,9 +432,7 @@ class TestAuditDefaultsMatchTheSchema:
         import ast
         import pathlib
 
-        source = pathlib.Path(
-            __file__
-        ).resolve().parents[1] / "src/soup_cli/utils/adapter_audit.py"
+        source = pathlib.Path(__file__).resolve().parents[1] / "src/soup_cli/utils/adapter_audit.py"
         tree = ast.parse(source.read_text(encoding="utf-8"))
         found = {}
         for node in ast.walk(tree):
@@ -461,9 +455,7 @@ class TestAuditDefaultsMatchTheSchema:
         mismatches = []
         checked = 0
         for name, fallback in self._audit_fallbacks().items():
-            field = TrainingConfig.model_fields.get(name) or DataConfig.model_fields.get(
-                name
-            )
+            field = TrainingConfig.model_fields.get(name) or DataConfig.model_fields.get(name)
             if field is None:
                 continue  # a record key, not a config field
             checked += 1
@@ -512,9 +504,7 @@ class TestSchedulerIsComparedCaseInsensitively:
         from soup_cli.utils.adapter_audit import audit_adapter
 
         cfg = _config(training={"scheduler": written})
-        row = next(
-            r for r in audit_adapter(cfg, _mlx_record()).rows if r.setting == "scheduler"
-        )
+        row = next(r for r in audit_adapter(cfg, _mlx_record()).rows if r.setting == "scheduler")
         assert row.status == "ok", f"{written!r} reported {row.status}"
 
     def test_a_genuinely_different_scheduler_still_diverges(self):
@@ -522,9 +512,7 @@ class TestSchedulerIsComparedCaseInsensitively:
         from soup_cli.utils.adapter_audit import audit_adapter
 
         cfg = _config(training={"scheduler": "linear"})
-        row = next(
-            r for r in audit_adapter(cfg, _mlx_record()).rows if r.setting == "scheduler"
-        )
+        row = next(r for r in audit_adapter(cfg, _mlx_record()).rows if r.setting == "scheduler")
         assert row.status == "diverged"
 
     def test_the_displayed_value_is_what_the_user_wrote(self):
@@ -532,9 +520,7 @@ class TestSchedulerIsComparedCaseInsensitively:
         from soup_cli.utils.adapter_audit import audit_adapter
 
         cfg = _config(training={"scheduler": "Cosine"})
-        row = next(
-            r for r in audit_adapter(cfg, _mlx_record()).rows if r.setting == "scheduler"
-        )
+        row = next(r for r in audit_adapter(cfg, _mlx_record()).rows if r.setting == "scheduler")
         assert row.asked == "Cosine"
 
 
@@ -603,9 +589,7 @@ class TestMaskingIsAuditedByEffectNotByRequest:
         """Chat rows — the mask really happened, through `response_token_mask`."""
         from soup_cli.utils.adapter_audit import audit_adapter
 
-        record = self._record_a_run_would_write(
-            {"messages": [{"role": "user", "content": "q"}]}
-        )
+        record = self._record_a_run_would_write({"messages": [{"role": "user", "content": "q"}]})
         assert record["response_token_mask"] is True
         row = next(
             r
@@ -727,9 +711,7 @@ class TestEverySettingCanActuallyDiverge:
         ("lora.alpha", {"lora_parameters": {"rank": 8, "scale": 8.0, "dropout": 0.0}}),
     ]
 
-    @pytest.mark.parametrize(
-        "setting,overrides", DIVERGENT, ids=[s for s, _ in DIVERGENT]
-    )
+    @pytest.mark.parametrize("setting,overrides", DIVERGENT, ids=[s for s, _ in DIVERGENT])
     def test_the_setting_is_reported_diverged(self, setting, overrides):
         from soup_cli.utils.adapter_audit import audit_adapter
 
@@ -803,9 +785,7 @@ class TestABooleanIsNotTheNumberItEqualsInPython:
             ("lora.r", {"lora": {"r": 1, "alpha": 16}}, {"r": True}),
         ],
     )
-    def test_a_bool_in_the_record_never_agrees_with_a_number(
-        self, setting, asked, overrides
-    ):
+    def test_a_bool_in_the_record_never_agrees_with_a_number(self, setting, asked, overrides):
         from soup_cli.utils.adapter_audit import audit_adapter
 
         result = audit_adapter(_config(training=asked), _mlx_record(**overrides))
@@ -987,8 +967,13 @@ class TestTheJsonFlagEmitsOnlyJson:
         env["PYTHONPATH"] = src + os.pathsep + env.get("PYTHONPATH", "")
         return subprocess.run(
             [sys.executable, "-m", "soup_cli", "adapters", "audit", *args],
-            cwd=str(cwd), capture_output=True, text=True, timeout=120,
-            env=env, encoding="utf-8", errors="replace",
+            cwd=str(cwd),
+            capture_output=True,
+            text=True,
+            timeout=120,
+            env=env,
+            encoding="utf-8",
+            errors="replace",
         )
 
     def _write(self, tmp_path, config):
@@ -1019,8 +1004,13 @@ class TestTheJsonFlagEmitsOnlyJson:
         )
         return subprocess.run(
             [sys.executable, "-c", code, "audit", *args],
-            cwd=str(cwd), capture_output=True, text=True, timeout=120,
-            env=env, encoding="utf-8", errors="replace",
+            cwd=str(cwd),
+            capture_output=True,
+            text=True,
+            timeout=120,
+            env=env,
+            encoding="utf-8",
+            errors="replace",
         )
 
     @pytest.mark.integration
@@ -1295,7 +1285,8 @@ class TestTheMaskingKeysMustBeRealBooleans:
     ASKED = {"data": {"train_on_responses_only": True}}
 
     @pytest.mark.parametrize(
-        "value", ["false", "true", 0, 1, "", None.__class__.__name__],
+        "value",
+        ["false", "true", 0, 1, "", None.__class__.__name__],
         ids=["str-false", "str-true", "int-0", "int-1", "empty-str", "str-NoneType"],
     )
     def test_a_non_boolean_effect_key_is_never_a_clean_bill(self, value):
@@ -1307,9 +1298,7 @@ class TestTheMaskingKeysMustBeRealBooleans:
             for r in audit_adapter(_config(**self.ASKED), record).rows
             if r.setting == "data.train_on_responses_only"
         )
-        assert row.status != "ok", (
-            f"mask_prompt={value!r} was read as agreement"
-        )
+        assert row.status != "ok", f"mask_prompt={value!r} was read as agreement"
         assert row.detail, "a refusal has to say why"
 
     def test_the_string_false_specifically_does_not_read_as_masking(self):
@@ -1462,14 +1451,10 @@ class TestTheExplanationsSayTheSubstance:
         from soup_cli.utils.adapter_audit import audit_adapter
 
         result = audit_adapter(_config(**cfg_over), _mlx_record(**record_over))
-        return next(
-            r for r in result.rows if r.setting == "data.train_on_responses_only"
-        )
+        return next(r for r in result.rows if r.setting == "data.train_on_responses_only")
 
     def test_asked_for_masking_and_got_none_says_so(self):
-        row = self._mask_row(
-            self.MASK_ASKED_GOT_NONE, mask_prompt=False, response_token_mask=False
-        )
+        row = self._mask_row(self.MASK_ASKED_GOT_NONE, mask_prompt=False, response_token_mask=False)
         assert row.status == "diverged"
         detail = row.detail.lower()
         assert "requested" in detail
@@ -1601,9 +1586,7 @@ class TestTheSummaryCountsWhatItFound:
         ],
         ids=["one", "two", "three"],
     )
-    def test_the_printed_count_matches_the_number_found(
-        self, tmp_path, overrides, expected
-    ):
+    def test_the_printed_count_matches_the_number_found(self, tmp_path, overrides, expected):
         res = self._run(tmp_path, _mlx_record(**overrides))
         assert f"{expected} divergence(s)" in res.output, res.output
         assert res.exit_code == 2
@@ -1743,8 +1726,13 @@ class TestAdapterSuppliedTextCannotDriveTheTerminal:
 
         kinds = {
             classify_record(r)
-            for r in ({}, {"peft_type": "LORA"}, {"fine_tune_type": "lora"},
-                      {"total_updates": 1}, _mlx_record())
+            for r in (
+                {},
+                {"peft_type": "LORA"},
+                {"fine_tune_type": "lora"},
+                {"total_updates": 1},
+                _mlx_record(),
+            )
         }
         assert kinds == {"unknown", "peft", "mlx"}, kinds
         for kind in kinds:
@@ -1753,9 +1741,7 @@ class TestAdapterSuppliedTextCannotDriveTheTerminal:
                 continue
             assert not any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in reason), reason
 
-    def test_a_control_byte_in_the_config_is_stripped_from_the_asked_column(
-        self, tmp_path
-    ):
+    def test_a_control_byte_in_the_config_is_stripped_from_the_asked_column(self, tmp_path):
         """The `asked` column is the operator's own `soup.yaml` rather than the
         downloaded record, but a config can be generated or shared too, and
         the loader accepts `scheduler: "cosine\\x1b[2J"` as a plain `str`.
@@ -1819,9 +1805,7 @@ class TestAMalformedRecordIsReportedNotCrashedOn:
     def test_a_non_numeric_total_updates_does_not_raise(self):
         from soup_cli.utils.adapter_audit import audit_adapter
 
-        result = audit_adapter(
-            _config(), _mlx_record(total_updates="twelve", warmup_updates=0)
-        )
+        result = audit_adapter(_config(), _mlx_record(total_updates="twelve", warmup_updates=0))
         row = next(r for r in result.rows if r.setting == "warmup_ratio")
         assert row.status != "ok", "a record it cannot read is not agreement"
         assert row.detail
@@ -1892,9 +1876,7 @@ class TestAMalformedRecordIsReportedNotCrashedOn:
         from soup_cli.utils.adapter_audit import audit_adapter
 
         cfg = _config(training={"lora": {"r": 1, "alpha": 1}})
-        result = audit_adapter(
-            cfg, _mlx_record(lora_parameters={"rank": True, "scale": True})
-        )
+        result = audit_adapter(cfg, _mlx_record(lora_parameters={"rank": True, "scale": True}))
         row = next(r for r in result.rows if r.setting == "lora.alpha")
         assert row.status != "ok", "two bools multiplied into a matching alpha"
 
@@ -1951,9 +1933,7 @@ class TestAMalformedLoraBlockIsAVerdictNotAPathError:
     def test_a_non_finite_rank_does_not_crash(self, bad):
         from soup_cli.utils.adapter_audit import audit_adapter
 
-        result = audit_adapter(
-            _config(), _mlx_record(lora_parameters={"rank": bad, "scale": 2.0})
-        )
+        result = audit_adapter(_config(), _mlx_record(lora_parameters={"rank": bad, "scale": 2.0}))
         assert result.rows, "the audit produced nothing at all"
 
     @pytest.mark.parametrize("bad", [float("nan"), float("inf")])
@@ -1988,16 +1968,13 @@ class TestAMalformedLoraBlockIsAVerdictNotAPathError:
 
         from soup_cli.commands.adapters import app
 
-        (tmp_path / "adapter_config.json").write_text(
-            json.dumps(_mlx_record(**record_over))
-        )
+        (tmp_path / "adapter_config.json").write_text(json.dumps(_mlx_record(**record_over)))
         (tmp_path / "soup.yaml").write_text(yaml.safe_dump(_config()))
 
         res = _runner().invoke(app, ["audit", ".", "--config", "soup.yaml"])
 
         assert res.exit_code != 1, (
-            f"a malformed record exited 1, which the docs reserve for a path "
-            f"error:\n{res.output}"
+            f"a malformed record exited 1, which the docs reserve for a path error:\n{res.output}"
         )
         # Exactly the verdict code: 0 would mean the junk record passed the gate.
         assert res.exit_code == 2, res.output
@@ -2012,9 +1989,7 @@ class TestAMalformedLoraBlockIsAVerdictNotAPathError:
 
         from soup_cli.commands.adapters import app
 
-        (tmp_path / "adapter_config.json").write_text(
-            json.dumps(_mlx_record(optimizer="SGD"))
-        )
+        (tmp_path / "adapter_config.json").write_text(json.dumps(_mlx_record(optimizer="SGD")))
         (tmp_path / "soup.yaml").write_text(yaml.safe_dump(_config()))
 
         res = _runner().invoke(app, ["audit", ".", "--config", "soup.yaml"])

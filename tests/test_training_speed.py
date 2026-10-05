@@ -81,18 +81,14 @@ class TestCutCEApplication:
     def test_apply_cut_ce_not_installed(self):
         from soup_cli.utils.cut_ce import apply_cut_ce
 
-        with patch(
-            "soup_cli.utils.cut_ce.check_cut_ce_available", return_value=False
-        ):
+        with patch("soup_cli.utils.cut_ce.check_cut_ce_available", return_value=False):
             result = apply_cut_ce("meta-llama/Llama-3.1-8B")
             assert result is False
 
     def test_apply_cut_ce_available_tries_patching(self):
         from soup_cli.utils.cut_ce import apply_cut_ce
 
-        with patch(
-            "soup_cli.utils.cut_ce.check_cut_ce_available", return_value=True
-        ):
+        with patch("soup_cli.utils.cut_ce.check_cut_ce_available", return_value=True):
             # With cut_cross_entropy not actually installed, patch should return
             # False (can't import real module). Just verifying it doesn't crash.
             result = apply_cut_ce("meta-llama/Llama-3.1-8B")
@@ -112,16 +108,16 @@ class TestCutCEApplication:
         fake_cce = MagicMock()
         fake_transformers = MagicMock(cce_patch=fake_cce)
         fake_module = MagicMock(transformers=fake_transformers)
-        with patch(
-            "soup_cli.utils.cut_ce.check_cut_ce_available", return_value=True
-        ), patch(
-            "soup_cli.utils.cut_ce._detect_model_type", return_value=""
-        ), patch.dict(
-            "sys.modules",
-            {
-                "cut_cross_entropy": fake_module,
-                "cut_cross_entropy.transformers": fake_transformers,
-            },
+        with (
+            patch("soup_cli.utils.cut_ce.check_cut_ce_available", return_value=True),
+            patch("soup_cli.utils.cut_ce._detect_model_type", return_value=""),
+            patch.dict(
+                "sys.modules",
+                {
+                    "cut_cross_entropy": fake_module,
+                    "cut_cross_entropy.transformers": fake_transformers,
+                },
+            ),
         ):
             assert apply_cut_ce("meta-llama/Llama-3.1-8B") is True
             fake_cce.assert_called_once_with("llama")
@@ -138,16 +134,16 @@ class TestCutCEApplication:
         fake_cce = MagicMock()
         fake_transformers = MagicMock(cce_patch=fake_cce)
         fake_module = MagicMock(transformers=fake_transformers)
-        with patch(
-            "soup_cli.utils.cut_ce.check_cut_ce_available", return_value=True
-        ), patch(
-            "soup_cli.utils.cut_ce._detect_model_type", return_value=""
-        ), patch.dict(
-            "sys.modules",
-            {
-                "cut_cross_entropy": fake_module,
-                "cut_cross_entropy.transformers": fake_transformers,
-            },
+        with (
+            patch("soup_cli.utils.cut_ce.check_cut_ce_available", return_value=True),
+            patch("soup_cli.utils.cut_ce._detect_model_type", return_value=""),
+            patch.dict(
+                "sys.modules",
+                {
+                    "cut_cross_entropy": fake_module,
+                    "cut_cross_entropy.transformers": fake_transformers,
+                },
+            ),
         ):
             # Llama-distilled model name contains no "phi" substring
             # anymore thanks to the last-path-component detector.
@@ -171,16 +167,16 @@ class TestCutCEApplication:
         fake_cce = MagicMock(side_effect=_patch)
         fake_transformers = MagicMock(cce_patch=fake_cce)
         fake_module = MagicMock(transformers=fake_transformers)
-        with patch(
-            "soup_cli.utils.cut_ce.check_cut_ce_available", return_value=True
-        ), patch(
-            "soup_cli.utils.cut_ce._detect_model_type", return_value=""
-        ), patch.dict(
-            "sys.modules",
-            {
-                "cut_cross_entropy": fake_module,
-                "cut_cross_entropy.transformers": fake_transformers,
-            },
+        with (
+            patch("soup_cli.utils.cut_ce.check_cut_ce_available", return_value=True),
+            patch("soup_cli.utils.cut_ce._detect_model_type", return_value=""),
+            patch.dict(
+                "sys.modules",
+                {
+                    "cut_cross_entropy": fake_module,
+                    "cut_cross_entropy.transformers": fake_transformers,
+                },
+            ),
         ):
             assert apply_cut_ce("google/gemma-7b-it") is False
             fake_cce.assert_not_called()
@@ -253,9 +249,7 @@ class TestCutCEDetectsArchitectureFromTheConfig:
         assert cut_ce_mod.apply_cut_ce(str(directory)) is False
         assert calls == ["phi"], calls
 
-    def test_config_model_type_wins_over_a_conflicting_directory_name(
-        self, tmp_path, monkeypatch
-    ):
+    def test_config_model_type_wins_over_a_conflicting_directory_name(self, tmp_path, monkeypatch):
         """CONTROL pinning the config-over-name priority itself, not just its
         outcome on names that happen to agree. A ``soup merge``/``soup
         shrink`` output directory is commonly named after its *source*
@@ -363,13 +357,8 @@ class TestIssue456CrossPlatformPathComponentExtraction:
         monkeypatch.setattr(cut_ce_mod, "check_cut_ce_available", lambda: True)
         monkeypatch.setattr(cut_ce_mod, "_detect_model_type", lambda _: "")
 
-        assert (
-            cut_ce_mod.apply_cut_ce(r"C:\experiments\phi-3-runs\step-2000") is False
-        )
-        assert (
-            cut_ce_mod.apply_cut_ce(r"C:\models\llama-sweeps\checkpoint-100")
-            is False
-        )
+        assert cut_ce_mod.apply_cut_ce(r"C:\experiments\phi-3-runs\step-2000") is False
+        assert cut_ce_mod.apply_cut_ce(r"C:\models\llama-sweeps\checkpoint-100") is False
         assert calls == []
 
     def test_posix_parent_dir_with_architecture_keyword_does_not_overmatch_cut_ce(
@@ -383,20 +372,11 @@ class TestIssue456CrossPlatformPathComponentExtraction:
         monkeypatch.setattr(cut_ce_mod, "check_cut_ce_available", lambda: True)
         monkeypatch.setattr(cut_ce_mod, "_detect_model_type", lambda _: "")
 
-        assert (
-            cut_ce_mod.apply_cut_ce("/tmp/phi-3-experiments/step-2000") is False
-        )
-        assert (
-            cut_ce_mod.apply_cut_ce(
-                "/var/checkpoints/llama-runs/checkpoint-100"
-            )
-            is False
-        )
+        assert cut_ce_mod.apply_cut_ce("/tmp/phi-3-experiments/step-2000") is False
+        assert cut_ce_mod.apply_cut_ce("/var/checkpoints/llama-runs/checkpoint-100") is False
         assert calls == []
 
-    def test_trailing_separators_preserve_last_component_in_cut_ce(
-        self, monkeypatch
-    ):
+    def test_trailing_separators_preserve_last_component_in_cut_ce(self, monkeypatch):
         """Trailing slashes and backslashes must not cause the last component to become empty."""
         from soup_cli.utils import cut_ce as cut_ce_mod
 
@@ -404,10 +384,7 @@ class TestIssue456CrossPlatformPathComponentExtraction:
         monkeypatch.setattr(cut_ce_mod, "check_cut_ce_available", lambda: True)
         monkeypatch.setattr(cut_ce_mod, "_detect_model_type", lambda _: "")
 
-        assert (
-            cut_ce_mod.apply_cut_ce("C:\\experiments\\runs\\llama-3.1-8b\\")
-            is True
-        )
+        assert cut_ce_mod.apply_cut_ce("C:\\experiments\\runs\\llama-3.1-8b\\") is True
         assert cut_ce_mod.apply_cut_ce("/tmp/models/phi-3-mini/") is True
         assert calls == ["llama", "phi3"]
 
@@ -422,16 +399,8 @@ class TestIssue456CrossPlatformPathComponentExtraction:
         monkeypatch.setattr(liger_mod, "check_liger_available", lambda: True)
         monkeypatch.setattr(liger_mod, "_detect_model_type", lambda _: "")
 
-        assert (
-            liger_mod.apply_liger_kernel(
-                r"C:\experiments\llama_experiments\step-2000"
-            )
-            is False
-        )
-        assert (
-            liger_mod.apply_liger_kernel(r"C:\models\phi_runs\checkpoint-50")
-            is False
-        )
+        assert liger_mod.apply_liger_kernel(r"C:\experiments\llama_experiments\step-2000") is False
+        assert liger_mod.apply_liger_kernel(r"C:\models\phi_runs\checkpoint-50") is False
         assert calls == []
 
     def test_posix_parent_dir_does_not_overmatch_liger(self, monkeypatch):
@@ -443,19 +412,11 @@ class TestIssue456CrossPlatformPathComponentExtraction:
         monkeypatch.setattr(liger_mod, "check_liger_available", lambda: True)
         monkeypatch.setattr(liger_mod, "_detect_model_type", lambda _: "")
 
-        assert (
-            liger_mod.apply_liger_kernel("/home/llama_experiments/step-2000")
-            is False
-        )
-        assert (
-            liger_mod.apply_liger_kernel("/srv/qwen-sweeps/checkpoint-9")
-            is False
-        )
+        assert liger_mod.apply_liger_kernel("/home/llama_experiments/step-2000") is False
+        assert liger_mod.apply_liger_kernel("/srv/qwen-sweeps/checkpoint-9") is False
         assert calls == []
 
-    def test_trailing_separators_and_last_component_match_liger(
-        self, monkeypatch
-    ):
+    def test_trailing_separators_and_last_component_match_liger(self, monkeypatch):
         """Liger correctly patches when the last component itself matches."""
         from soup_cli.utils import liger as liger_mod
 
@@ -463,9 +424,7 @@ class TestIssue456CrossPlatformPathComponentExtraction:
         monkeypatch.setattr(liger_mod, "check_liger_available", lambda: True)
         monkeypatch.setattr(liger_mod, "_detect_model_type", lambda _: "")
 
-        assert (
-            liger_mod.apply_liger_kernel("C:\\models\\llama-3.1-8b\\") is True
-        )
+        assert liger_mod.apply_liger_kernel("C:\\models\\llama-3.1-8b\\") is True
         assert liger_mod.apply_liger_kernel("/tmp/runs/phi-3-mini/") is True
         assert calls == ["llama", "phi3"]
 
@@ -495,14 +454,8 @@ class TestIssue456CrossPlatformPathComponentExtraction:
         monkeypatch.setattr(liger_mod, "check_liger_available", lambda: True)
         monkeypatch.setattr(liger_mod, "_detect_model_type", lambda _: "")
 
-        assert (
-            cut_ce_mod.apply_cut_ce("C:\\\\experiments\\\\runs\\\\llama-3.1-8b\\\\")
-            is True
-        )
-        assert (
-            liger_mod.apply_liger_kernel("///tmp///models///phi-3-mini///")
-            is True
-        )
+        assert cut_ce_mod.apply_cut_ce("C:\\\\experiments\\\\runs\\\\llama-3.1-8b\\\\") is True
+        assert liger_mod.apply_liger_kernel("///tmp///models///phi-3-mini///") is True
         assert calls_cce == ["llama"]
         assert calls_liger == ["phi3"]
 
@@ -537,45 +490,35 @@ class TestCutCEValidation:
     def test_validate_cut_ce_not_installed(self):
         from soup_cli.utils.cut_ce import validate_cut_ce_config
 
-        with patch(
-            "soup_cli.utils.cut_ce.check_cut_ce_available", return_value=False
-        ):
+        with patch("soup_cli.utils.cut_ce.check_cut_ce_available", return_value=False):
             errors = validate_cut_ce_config(True, "transformers", "cuda")
             assert any("not installed" in err for err in errors)
 
     def test_validate_cut_ce_requires_cuda(self):
         from soup_cli.utils.cut_ce import validate_cut_ce_config
 
-        with patch(
-            "soup_cli.utils.cut_ce.check_cut_ce_available", return_value=True
-        ):
+        with patch("soup_cli.utils.cut_ce.check_cut_ce_available", return_value=True):
             errors = validate_cut_ce_config(True, "transformers", "cpu")
             assert any("CUDA" in err for err in errors)
 
     def test_validate_cut_ce_unsloth_incompatible(self):
         from soup_cli.utils.cut_ce import validate_cut_ce_config
 
-        with patch(
-            "soup_cli.utils.cut_ce.check_cut_ce_available", return_value=True
-        ):
+        with patch("soup_cli.utils.cut_ce.check_cut_ce_available", return_value=True):
             errors = validate_cut_ce_config(True, "unsloth", "cuda")
             assert any("unsloth" in err.lower() for err in errors)
 
     def test_validate_cut_ce_valid(self):
         from soup_cli.utils.cut_ce import validate_cut_ce_config
 
-        with patch(
-            "soup_cli.utils.cut_ce.check_cut_ce_available", return_value=True
-        ):
+        with patch("soup_cli.utils.cut_ce.check_cut_ce_available", return_value=True):
             errors = validate_cut_ce_config(True, "transformers", "cuda")
             assert errors == []
 
     def test_validate_cut_ce_mlx_incompatible(self):
         from soup_cli.utils.cut_ce import validate_cut_ce_config
 
-        with patch(
-            "soup_cli.utils.cut_ce.check_cut_ce_available", return_value=True
-        ):
+        with patch("soup_cli.utils.cut_ce.check_cut_ce_available", return_value=True):
             errors = validate_cut_ce_config(True, "mlx", "mps")
             assert any("mlx" in err.lower() for err in errors)
 
@@ -961,6 +904,7 @@ class TestCrossDocAttnMaskConfig:
                 training={"packing_cross_doc_attn_mask": True, "packing": True},
             )
 
+
 class TestCrossDocAttnMaskBuild:
     """Build cross-doc attention mask from document boundaries."""
 
@@ -1093,26 +1037,20 @@ class TestActivationOffloadingValidation:
     def test_validate_disk_valid(self):
         from soup_cli.utils.activation_offload import validate_offload_config
 
-        errors = validate_offload_config(
-            "disk", "transformers", "cuda", save_dir="./scratch"
-        )
+        errors = validate_offload_config("disk", "transformers", "cuda", save_dir="./scratch")
         assert errors == []
 
     def test_validate_disk_requires_save_dir(self):
         """Disk mode must reject calls without save_dir — fail-fast at validate()."""
         from soup_cli.utils.activation_offload import validate_offload_config
 
-        errors = validate_offload_config(
-            "disk", "transformers", "cuda", save_dir=None
-        )
+        errors = validate_offload_config("disk", "transformers", "cuda", save_dir=None)
         assert any("save_dir" in err for err in errors)
 
     def test_validate_disk_on_cpu_rejected(self):
         from soup_cli.utils.activation_offload import validate_offload_config
 
-        errors = validate_offload_config(
-            "disk", "transformers", "cpu", save_dir="./scratch"
-        )
+        errors = validate_offload_config("disk", "transformers", "cpu", save_dir="./scratch")
         assert any("CUDA" in err for err in errors)
 
     def test_validate_mlx_rejected(self):

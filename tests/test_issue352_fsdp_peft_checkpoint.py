@@ -36,11 +36,7 @@ def test_doctor_deps_accelerate_floor_matches_declared_extra():
     match = re.search(r'"accelerate>=([0-9.]+)"', pyproject.read_text(encoding="utf-8"))
     assert match, "accelerate floor pin not found in pyproject.toml"
 
-    doctor_floors = {
-        package: floor
-        for _, members in EXTRA_GROUPS
-        for _, package, floor in members
-    }
+    doctor_floors = {package: floor for _, members in EXTRA_GROUPS for _, package, floor in members}
     assert doctor_floors["accelerate"] == match.group(1), (
         f"soup doctor reports accelerate>={doctor_floors['accelerate']} but pyproject.toml "
         f"declares accelerate>={match.group(1)}; doctor would certify an environment that "

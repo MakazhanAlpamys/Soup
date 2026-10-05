@@ -341,9 +341,7 @@ def test_expert_replay_must_chain_to_prior_committed_event():
     payloads = _load_json("consumption_ledger.json")
     for payload in payloads:
         payload["view"] = "teacher_expert"
-    committed_events = tuple(
-        ConsumptionEvent.model_validate(payload) for payload in payloads
-    )
+    committed_events = tuple(ConsumptionEvent.model_validate(payload) for payload in payloads)
     replay_payload = {
         "schema": "soup.autodistill.consumption-event.v1",
         "event_id": "consume-0001-replay",
@@ -397,9 +395,7 @@ def test_expert_replay_requires_an_explicit_prior_commit():
         ("available", True, False, "quarantine"),
     ],
 )
-def test_resume_decisions_are_explicit(
-    state, payloads_valid, fingerprints_match, expected
-):
+def test_resume_decisions_are_explicit(state, payloads_valid, fingerprints_match, expected):
     assert (
         decide_resume(
             state=state,

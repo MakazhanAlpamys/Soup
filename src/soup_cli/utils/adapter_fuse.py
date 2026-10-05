@@ -188,6 +188,4 @@ def fuse_adapter_into(*, base_dir: str, adapter_dir: str, trc: bool = False) -> 
     ``base_dir`` is BOTH the base weights and the destination: the healed model
     replaces the pruned one. Thin wrapper over :func:`merge_adapter_to_dense`.
     """
-    merge_adapter_to_dense(
-        base_model=base_dir, adapter_dir=adapter_dir, out_dir=base_dir, trc=trc
-    )
+    merge_adapter_to_dense(base_model=base_dir, adapter_dir=adapter_dir, out_dir=base_dir, trc=trc)

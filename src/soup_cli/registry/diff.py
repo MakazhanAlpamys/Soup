@@ -38,52 +38,63 @@ def config_diff(left: dict, right: dict) -> list[ConfigChange]:
     for path in all_paths:
         if path in left_flat and path in right_flat:
             if left_flat[path] != right_flat[path]:
-                changes.append(ConfigChange(
-                    path=path, kind="changed",
-                    left=left_flat[path], right=right_flat[path],
-                ))
+                changes.append(
+                    ConfigChange(
+                        path=path,
+                        kind="changed",
+                        left=left_flat[path],
+                        right=right_flat[path],
+                    )
+                )
         elif path in right_flat:
-            changes.append(ConfigChange(
-                path=path, kind="added",
-                left=None, right=right_flat[path],
-            ))
+            changes.append(
+                ConfigChange(
+                    path=path,
+                    kind="added",
+                    left=None,
+                    right=right_flat[path],
+                )
+            )
         else:
-            changes.append(ConfigChange(
-                path=path, kind="removed",
-                left=left_flat[path], right=None,
-            ))
+            changes.append(
+                ConfigChange(
+                    path=path,
+                    kind="removed",
+                    left=left_flat[path],
+                    right=None,
+                )
+            )
     return changes
 
 
 def eval_delta(
-    left: list[dict], right: list[dict],
+    left: list[dict],
+    right: list[dict],
 ) -> list[dict]:
     """Compute per-benchmark delta given two eval_results lists."""
-    left_map = {
-        row["benchmark"]: row.get("score")
-        for row in newest_eval_rows(left)
-    }
-    right_map = {
-        row["benchmark"]: row.get("score")
-        for row in newest_eval_rows(right)
-    }
+    left_map = {row["benchmark"]: row.get("score") for row in newest_eval_rows(left)}
+    right_map = {row["benchmark"]: row.get("score") for row in newest_eval_rows(right)}
 
     deltas: list[dict] = []
     for bench in sorted(set(left_map) | set(right_map)):
         left_score = left_map.get(bench)
         right_score = right_map.get(bench)
         if left_score is None or right_score is None:
-            deltas.append({
-                "benchmark": bench,
-                "left": left_score,
-                "right": right_score,
-                "delta": None,
-            })
+            deltas.append(
+                {
+                    "benchmark": bench,
+                    "left": left_score,
+                    "right": right_score,
+                    "delta": None,
+                }
+            )
         else:
-            deltas.append({
-                "benchmark": bench,
-                "left": left_score,
-                "right": right_score,
-                "delta": float(right_score) - float(left_score),
-            })
+            deltas.append(
+                {
+                    "benchmark": bench,
+                    "left": left_score,
+                    "right": right_score,
+                    "delta": float(right_score) - float(left_score),
+                }
+            )
     return deltas

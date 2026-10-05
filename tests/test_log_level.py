@@ -27,6 +27,7 @@ _ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*[mK]")
 def _strip_ansi(text: str) -> str:
     return _ANSI_ESCAPE.sub("", text)
 
+
 class TestLogLevelEnum:
     def test_four_tiers_defined(self):
         assert set(LOG_LEVELS) == {"quiet", "normal", "verbose", "debug"}
@@ -74,7 +75,8 @@ class TestSetupLogging:
         # existing one: same tier keeps the same handler object.
         logger = setup_logging(LogLevel.NORMAL)
         tagged = [
-            handler for handler in logger.handlers
+            handler
+            for handler in logger.handlers
             if getattr(handler, "_soup_log_tier", None) == LogLevel.NORMAL
         ]
         assert len(tagged) == 1
@@ -88,7 +90,8 @@ class TestSetupLogging:
         setup_logging(LogLevel.DEBUG)
         # Exactly one tier-tagged handler should remain — the DEBUG one.
         tagged = [
-            handler for handler in logging.getLogger("soup").handlers
+            handler
+            for handler in logging.getLogger("soup").handlers
             if getattr(handler, "_soup_log_tier", None) is not None
         ]
         assert len(tagged) == 1
@@ -151,7 +154,8 @@ class TestIssue273ForeignHandlerContract:
         assert stale not in logger.handlers
         assert foreign in logger.handlers
         tagged = [
-            handler for handler in logger.handlers
+            handler
+            for handler in logger.handlers
             if getattr(handler, "_soup_log_tier", None) is not None
         ]
         assert len(tagged) == 1

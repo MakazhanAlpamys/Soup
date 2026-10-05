@@ -87,9 +87,7 @@ def _check_codes(codes, name: str, expected_len: int) -> list[int]:
         if isinstance(code, bool) or not isinstance(code, int):
             raise TypeError(f"{name} codes must be non-bool ints")
         if not (0 <= code < ORPHEUS_CODEBOOK_SIZE):
-            raise ValueError(
-                f"{name} code {code} out of range [0, {ORPHEUS_CODEBOOK_SIZE})"
-            )
+            raise ValueError(f"{name} code {code} out of range [0, {ORPHEUS_CODEBOOK_SIZE})")
         out.append(code)
     if len(out) != expected_len:
         raise ValueError(
@@ -169,9 +167,7 @@ def load_audio_mono(path: str, *, target_sr: int = SNAC_SAMPLE_RATE):
     if is_device_namespace_path(path):
         raise ValueError("audio path must not be a device path")
     if not os.path.exists(path):
-        raise FileNotFoundError(
-            f"audio file not found: {os.path.basename(path)!r}"
-        )
+        raise FileNotFoundError(f"audio file not found: {os.path.basename(path)!r}")
     # Symlink rejection — defence-in-depth; the loader already containment-
     # checks rows under data.audio_dir (v0.17.0 policy).
     mode = os.lstat(path).st_mode
@@ -280,9 +276,7 @@ def encode_audio_orpheus(
     coarse = [int(c) for c in codes[0][0].tolist()]
     medium = [int(c) for c in codes[1][0].tolist()]
     fine = [int(c) for c in codes[2][0].tolist()]
-    return orpheus_tokens_to_string(
-        interleave_orpheus_codes(coarse, medium, fine)
-    )
+    return orpheus_tokens_to_string(interleave_orpheus_codes(coarse, medium, fine))
 
 
 def llasa_codes_to_string(codes) -> str:
@@ -295,16 +289,9 @@ def llasa_codes_to_string(codes) -> str:
         if isinstance(code, bool) or not isinstance(code, int):
             raise TypeError("Llasa XCodec2 codes must be non-bool ints")
         if not (0 <= code < XCODEC2_CODEBOOK_SIZE):
-            raise ValueError(
-                f"Llasa XCodec2 code {code} out of range "
-                f"[0, {XCODEC2_CODEBOOK_SIZE})"
-            )
+            raise ValueError(f"Llasa XCodec2 code {code} out of range [0, {XCODEC2_CODEBOOK_SIZE})")
         rendered.append(f"<|s_{code}|>")
-    return (
-        "<|SPEECH_GENERATION_START|>"
-        + "".join(rendered)
-        + "<|SPEECH_GENERATION_END|>"
-    )
+    return "<|SPEECH_GENERATION_START|>" + "".join(rendered) + "<|SPEECH_GENERATION_END|>"
 
 
 def _get_xcodec2_components(device: Optional[str] = None):
@@ -417,14 +404,10 @@ def incompatible_live_codec_error(family: str) -> RuntimeError:
             "pre-encode training examples and train with data.format=chatml "
             "until a compatible native path lands."
         )
-    return RuntimeError(
-        f"TTS family {canonical!r} has no incompatible-live-codec contract"
-    )
+    return RuntimeError(f"TTS family {canonical!r} has no incompatible-live-codec contract")
 
 
-def tts_encoder_for_family(
-    family: str, *, device: Optional[str] = None
-) -> Callable[[str], str]:
+def tts_encoder_for_family(family: str, *, device: Optional[str] = None) -> Callable[[str], str]:
     """Return the live audio→codec-string encoder for ``family``.
 
     Only the families in :data:`LIVE_CODEC_FAMILIES` have a codec-string
@@ -480,16 +463,16 @@ def encode_tts_row(row: dict, encoder: Callable[[str], str]) -> dict:
 
     codec_string = encoder(audio)
     new_messages = [copy.deepcopy(m) for m in messages]
-    if new_messages and isinstance(new_messages[-1], dict) and (
-        new_messages[-1].get("role") == "assistant"
+    if (
+        new_messages
+        and isinstance(new_messages[-1], dict)
+        and (new_messages[-1].get("role") == "assistant")
     ):
         new_messages[-1]["content"] = codec_string
     else:
         new_messages.append({"role": "assistant", "content": codec_string})
     out = {
-        key: copy.deepcopy(value)
-        for key, value in row.items()
-        if key not in ("audio", "messages")
+        key: copy.deepcopy(value) for key, value in row.items() if key not in ("audio", "messages")
     }
     out["messages"] = new_messages
     return out
@@ -511,13 +494,9 @@ def encode_tts_dataset(
     families — #265).
     """
     if not isinstance(dataset, dict):
-        raise TypeError(
-            f"dataset must be a dict, got {type(dataset).__name__}"
-        )
+        raise TypeError(f"dataset must be a dict, got {type(dataset).__name__}")
     canonical = validate_tts_family(family)
-    encode = encoder if encoder is not None else tts_encoder_for_family(
-        canonical, device=device
-    )
+    encode = encoder if encoder is not None else tts_encoder_for_family(canonical, device=device)
 
     new_dataset = dict(dataset)
     total = 0
@@ -528,8 +507,5 @@ def encode_tts_dataset(
         new_dataset[split] = [encode_tts_row(row, encode) for row in rows]
         total += len(rows)
     if console is not None:
-        console.print(
-            f"[green]TTS live-codec:[/] encoded {total} row(s) "
-            f"(family={canonical})"
-        )
+        console.print(f"[green]TTS live-codec:[/] encoded {total} row(s) (family={canonical})")
     return new_dataset

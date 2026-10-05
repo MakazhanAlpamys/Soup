@@ -64,9 +64,7 @@ class TestDataSearch:
         """--sort downloads sorts by download count."""
         mock_list.return_value = []
 
-        result = runner.invoke(
-            app, ["search", "code", "--sort", "downloads"]
-        )
+        result = runner.invoke(app, ["search", "code", "--sort", "downloads"])
         assert result.exit_code == 0
         mock_list.assert_called_once()
         call_kwargs = mock_list.call_args
@@ -187,9 +185,7 @@ class TestDataDownload:
             {"instruction": "Hello", "output": "Hi there"},
         ]
 
-        result = runner.invoke(
-            app, ["download", "test/dataset", "-o", str(output_file)]
-        )
+        result = runner.invoke(app, ["download", "test/dataset", "-o", str(output_file)])
         assert result.exit_code == 0
         assert output_file.exists()
         lines = output_file.read_text(encoding="utf-8").strip().split("\n")
@@ -224,9 +220,12 @@ class TestDataDownload:
         result = runner.invoke(
             app,
             [
-                "download", "test/dataset",
-                "--format", "sharegpt",
-                "-o", str(output_file),
+                "download",
+                "test/dataset",
+                "--format",
+                "sharegpt",
+                "-o",
+                str(output_file),
             ],
         )
         assert result.exit_code == 0
@@ -239,9 +238,7 @@ class TestDataDownload:
         mock_download.return_value = []
         output_file = tmp_path / "data.jsonl"
 
-        result = runner.invoke(
-            app, ["download", "test/empty", "-o", str(output_file)]
-        )
+        result = runner.invoke(app, ["download", "test/empty", "-o", str(output_file)])
         assert result.exit_code == 1
         assert "empty" in result.output.lower() or "no data" in result.output.lower()
 
@@ -251,9 +248,7 @@ class TestDataDownload:
         mock_download.side_effect = ValueError("Dataset not found on HuggingFace Hub")
         output_file = tmp_path / "data.jsonl"
 
-        result = runner.invoke(
-            app, ["download", "nonexistent/dataset", "-o", str(output_file)]
-        )
+        result = runner.invoke(app, ["download", "nonexistent/dataset", "-o", str(output_file)])
         assert result.exit_code == 1
 
     @patch("soup_cli.commands.data._hf_download_dataset")
@@ -274,9 +269,7 @@ class TestDataDownload:
         monkeypatch.chdir(tmp_path)
         mock_download.return_value = [{"text": "hello"}]
 
-        result = runner.invoke(
-            app, ["download", "user/my-dataset"]
-        )
+        result = runner.invoke(app, ["download", "user/my-dataset"])
         assert result.exit_code == 0
         # Default should be my-dataset.jsonl in cwd
         expected = tmp_path / "my-dataset.jsonl"
@@ -287,9 +280,7 @@ class TestDataDownload:
         """--samples limits number of downloaded rows."""
         monkeypatch.chdir(tmp_path)
         output_file = tmp_path / "data.jsonl"
-        mock_download.return_value = [
-            {"text": f"row {idx}"} for idx in range(10)
-        ]
+        mock_download.return_value = [{"text": f"row {idx}"} for idx in range(10)]
 
         result = runner.invoke(
             app, ["download", "test/dataset", "--samples", "5", "-o", str(output_file)]

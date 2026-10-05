@@ -224,6 +224,5 @@ class TestTheGuardCoversHighlightedCommands:
             "These read syntax-highlighted CLI output without stripping ANSI. "
             "Rich splits one logical line across Pygments tokens, so a "
             "multi-token substring is absent and yaml.safe_load rejects \\x1b. "
-            "Route it through strip_ansi() from tests/conftest.py:\n"
-            + "\n".join(offenders)
+            "Route it through strip_ansi() from tests/conftest.py:\n" + "\n".join(offenders)
         )

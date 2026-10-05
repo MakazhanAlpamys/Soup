@@ -62,12 +62,8 @@ _MIN_CAP_MB = 1
 _MAX_CAP_MB = 10_000
 
 # Closed allowlists (frozenset — runtime-immutable, mirrors reward_hacking.py).
-MITIGATION_MODES: frozenset[str] = frozenset(
-    {"off", "log_only", "kl_control", "pid_lagrangian"}
-)
-SIGNAL_NAMES: frozenset[str] = frozenset(
-    {"info_rm", "rm_ensemble", "length_trend", "repetition"}
-)
+MITIGATION_MODES: frozenset[str] = frozenset({"off", "log_only", "kl_control", "pid_lagrangian"})
+SIGNAL_NAMES: frozenset[str] = frozenset({"info_rm", "rm_ensemble", "length_trend", "repetition"})
 SMOOTHING_METHODS: frozenset[str] = frozenset({"none", "ema", "median"})
 SHAPING_KINDS: frozenset[str] = frozenset({"length", "repetition", "sentinel"})
 
@@ -171,9 +167,7 @@ def smooth_signal(new: float, window: Sequence[float], *, method: str) -> float:
     to ``alpha·new + (1-alpha)·prev``. ``median`` → median of ``window + [new]``.
     """
     if method not in SMOOTHING_METHODS:
-        raise ValueError(
-            f"method must be one of {sorted(SMOOTHING_METHODS)}, got {method!r}"
-        )
+        raise ValueError(f"method must be one of {sorted(SMOOTHING_METHODS)}, got {method!r}")
     fnew = float(new)
     if method == "none":
         return fnew
@@ -303,9 +297,7 @@ def shape_reward_fn(
     ``__name__`` is preserved so TRL's per-function logging keys stay correct.
     """
     if not callable(inner):
-        raise TypeError(
-            f"shape_reward_fn inner must be callable, got {type(inner).__name__}"
-        )
+        raise TypeError(f"shape_reward_fn inner must be callable, got {type(inner).__name__}")
     if kind not in SHAPING_KINDS:
         raise ValueError(f"kind must be one of {sorted(SHAPING_KINDS)}, got {kind!r}")
     strength_val = _check_finite_float(strength, "strength", nonneg=True)
@@ -363,8 +355,7 @@ def explain_giveup(
     ``soup diagnose`` / ``soup why`` can surface it to the operator.
     """
     lines = [
-        "Reward-hacking mitigation gave up: the controller could not suppress "
-        "the hacking signal.",
+        "Reward-hacking mitigation gave up: the controller could not suppress the hacking signal.",
         f"It exhausted {state.recovery_attempts} recovery attempt(s) and then "
         "early-stopped training.",
         f"The '{signal_name}' signal stayed elevated (last smoothed drop_pct="
@@ -483,8 +474,7 @@ class BangBangPolicy:
             raise ValueError(f"beta_floor must be > 0, got {self.beta_floor}")
         if self.beta_floor >= self.beta_ceil:
             raise ValueError(
-                f"beta_floor ({self.beta_floor}) must be < "
-                f"beta_ceil ({self.beta_ceil})"
+                f"beta_floor ({self.beta_floor}) must be < beta_ceil ({self.beta_ceil})"
             )
         if not 0.0 <= self.release_band < self.trip_band <= 1.0:
             raise ValueError(
@@ -607,20 +597,15 @@ class PIDLagrangianPolicy:
         _check_finite_float(self.beta_ceil, "beta_ceil", nonneg=True)
         _check_finite_float(self.integral_clamp, "integral_clamp", nonneg=True)
         if not 0.0 <= self.signal_target < 1.0:
-            raise ValueError(
-                f"signal_target must be in [0, 1), got {self.signal_target}"
-            )
+            raise ValueError(f"signal_target must be in [0, 1), got {self.signal_target}")
         if self.beta_floor <= 0.0:
             raise ValueError(f"beta_floor must be > 0, got {self.beta_floor}")
         if self.beta_floor >= self.beta_ceil:
             raise ValueError(
-                f"beta_floor ({self.beta_floor}) must be < "
-                f"beta_ceil ({self.beta_ceil})"
+                f"beta_floor ({self.beta_floor}) must be < beta_ceil ({self.beta_ceil})"
             )
         if self.integral_clamp <= 0.0:
-            raise ValueError(
-                f"integral_clamp must be > 0, got {self.integral_clamp}"
-            )
+            raise ValueError(f"integral_clamp must be > 0, got {self.integral_clamp}")
 
 
 def pid_step(
@@ -673,9 +658,7 @@ class MitigationLogWriter:
         if isinstance(cap_mb, bool) or not isinstance(cap_mb, int):
             raise TypeError("cap_mb must be int")
         if not (_MIN_CAP_MB <= cap_mb <= _MAX_CAP_MB):
-            raise ValueError(
-                f"cap_mb must be in [{_MIN_CAP_MB}, {_MAX_CAP_MB}], got {cap_mb}"
-            )
+            raise ValueError(f"cap_mb must be in [{_MIN_CAP_MB}, {_MAX_CAP_MB}], got {cap_mb}")
         if not isinstance(path, str) or not path or "\x00" in path:
             raise ValueError("path must be a non-empty string with no null bytes")
         if not is_under_cwd(path):
@@ -831,9 +814,7 @@ class _RewardHackMitigationCallback_body:  # type: ignore[misc, valid-type]  # n
         conservative_on_disagreement: bool = False,
     ) -> None:
         if mode not in MITIGATION_MODES:
-            raise ValueError(
-                f"mode must be one of {sorted(MITIGATION_MODES)}, got {mode!r}"
-            )
+            raise ValueError(f"mode must be one of {sorted(MITIGATION_MODES)}, got {mode!r}")
         from soup_cli.utils.reward_hacking import (
             RewardHackCallback,
             validate_hack_detector,
@@ -849,9 +830,7 @@ class _RewardHackMitigationCallback_body:  # type: ignore[misc, valid-type]  # n
             raise ValueError("signals must be non-empty (the controller vote)")
         for name in self.signals:
             if name not in SIGNAL_NAMES:
-                raise ValueError(
-                    f"signal {name!r} not in {sorted(SIGNAL_NAMES)}"
-                )
+                raise ValueError(f"signal {name!r} not in {sorted(SIGNAL_NAMES)}")
         self.buffer = buffer
         self.tokenizer = tokenizer
         self.task = task
@@ -867,8 +846,7 @@ class _RewardHackMitigationCallback_body:  # type: ignore[misc, valid-type]  # n
         self.rl_checkpoint_cb = rl_checkpoint_cb
         if smoothing not in SMOOTHING_METHODS:
             raise ValueError(
-                f"smoothing must be one of {sorted(SMOOTHING_METHODS)}, "
-                f"got {smoothing!r}"
+                f"smoothing must be one of {sorted(SMOOTHING_METHODS)}, got {smoothing!r}"
             )
         self.smoothing = smoothing
         self.smoothing_window = int(smoothing_window)
@@ -974,9 +952,7 @@ class _RewardHackMitigationCallback_body:  # type: ignore[misc, valid-type]  # n
                 if name not in signals:
                     continue
                 window = self._signal_windows.setdefault(name, [])
-                signals_for_vote[name] = smooth_signal(
-                    signals[name], window, method=self.smoothing
-                )
+                signals_for_vote[name] = smooth_signal(signals[name], window, method=self.smoothing)
                 window.append(float(signals[name]))
                 if len(window) > self.smoothing_window:
                     del window[0]
@@ -1026,16 +1002,12 @@ class _RewardHackMitigationCallback_body:  # type: ignore[misc, valid-type]  # n
         current = self._current_coefficient()
         seed = (
             float(current)
-            if isinstance(current, (int, float))
-            and not isinstance(current, bool)
-            and current > 0
+            if isinstance(current, (int, float)) and not isinstance(current, bool) and current > 0
             else floor
         )
         self._state = replace(self._state, beta=seed)
 
-    def _run_bang_bang(
-        self, telemetry: dict[str, Any], signals: Mapping[str, float]
-    ) -> None:
+    def _run_bang_bang(self, telemetry: dict[str, Any], signals: Mapping[str, float]) -> None:
         """kl_control: vote → bang-bang step → mutate the trainer coefficient.
 
         No rollback rung here — by design the kl_control ladder ends with β
@@ -1060,11 +1032,7 @@ class _RewardHackMitigationCallback_body:  # type: ignore[misc, valid-type]  # n
         telemetry["tripped"] = action.tripped
         telemetry["action"] = action.reason
         telemetry["mitigation_status"] = (
-            "held"
-            if held
-            else "released"
-            if action.reason.startswith("relax")
-            else "acted"
+            "held" if held else "released" if action.reason.startswith("relax") else "acted"
         )
 
     def _request_stop(self, control: Any) -> None:
@@ -1074,18 +1042,14 @@ class _RewardHackMitigationCallback_body:  # type: ignore[misc, valid-type]  # n
             except Exception:  # noqa: BLE001
                 pass
 
-    def _escalate(
-        self, model: Any, optimizer: Any, control: Any, telemetry: dict[str, Any]
-    ) -> Any:
+    def _escalate(self, model: Any, optimizer: Any, control: Any, telemetry: dict[str, Any]) -> Any:
         """Escalation ladder rung: rollback to last-good, else early-stop."""
         target = self._last_good_step
         # No last-good checkpoint yet — do NOT burn a recovery attempt or
         # early-stop; keep training until a good checkpoint exists or the real
         # rollback budget is spent (v0.71.26 code-review MEDIUM).
         if target is None or self.rl_checkpoint_cb is None:
-            telemetry["escalation"] = (
-                "no rollback target available yet (no saved checkpoint)"
-            )
+            telemetry["escalation"] = "no rollback target available yet (no saved checkpoint)"
             self._hack_streak = 0
             return control
         if self._state.recovery_attempts >= self.max_recovery_attempts:
@@ -1110,9 +1074,7 @@ class _RewardHackMitigationCallback_body:  # type: ignore[misc, valid-type]  # n
         # optimizer, but the controller's β / integral state is intentionally
         # NOT reset — we keep KL elevated while recovering from hacking. The PID
         # continues from its last state, which is the conservative choice.
-        self._state = replace(
-            self._state, recovery_attempts=self._state.recovery_attempts + 1
-        )
+        self._state = replace(self._state, recovery_attempts=self._state.recovery_attempts + 1)
         self._hack_streak = 0
         telemetry["escalation"] = f"rollback to step {target} (restored={restored})"
         return control

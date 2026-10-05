@@ -38,7 +38,9 @@ class CrossDocCollator:
     """
 
     def __init__(
-        self, base_collator: Any, doc_lengths_key: str = "doc_lengths",
+        self,
+        base_collator: Any,
+        doc_lengths_key: str = "doc_lengths",
     ) -> None:
         if base_collator is None:
             raise ValueError("CrossDocCollator requires a base_collator")
@@ -55,9 +57,7 @@ class CrossDocCollator:
         for example in features:
             if isinstance(example, dict):
                 lengths = example.get(self._key)
-                cleaned.append(
-                    {k: v for k, v in example.items() if k != self._key}
-                )
+                cleaned.append({k: v for k, v in example.items() if k != self._key})
             else:
                 lengths = None
                 cleaned.append(example)
@@ -73,12 +73,15 @@ class CrossDocCollator:
             self._inject_block_diag_mask(batch, per_example_lengths)
         except Exception as exc:  # noqa: BLE001 — degrade rather than crash training
             logger.debug(
-                "CrossDocCollator: falling back to base mask: %s", exc,
+                "CrossDocCollator: falling back to base mask: %s",
+                exc,
             )
         return batch
 
     def _inject_block_diag_mask(
-        self, batch: dict, per_example_lengths: list[Optional[list[int]]],
+        self,
+        batch: dict,
+        per_example_lengths: list[Optional[list[int]]],
     ) -> None:
         from soup_cli.utils.cross_doc_attn import (
             build_cross_doc_mask,

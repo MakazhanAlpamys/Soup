@@ -33,9 +33,7 @@ def _validate_under_cwd(path: str, *, label: str) -> str:
     if "\x00" in path:
         raise typer.BadParameter(f"{label} contains NUL byte")
     if not is_under_cwd(path):
-        raise typer.BadParameter(
-            f"{label} must stay under the current working directory: {path}"
-        )
+        raise typer.BadParameter(f"{label} must stay under the current working directory: {path}")
     # TOCTOU defence: lstat the RAW user-supplied path BEFORE realpath
     # resolution (matches v0.53.7 #106 policy). `os.path.realpath` would
     # follow the link and `lstat` on the resolved target would see a
@@ -46,9 +44,7 @@ def _validate_under_cwd(path: str, *, label: str) -> str:
         # Missing-file path is handled by the caller's `is_file` check.
         return os.path.realpath(path)
     if stat.S_ISLNK(st.st_mode):
-        raise typer.BadParameter(
-            f"{label} target must not be a symlink"
-        )
+        raise typer.BadParameter(f"{label} target must not be a symlink")
     return os.path.realpath(path)
 
 
@@ -145,9 +141,7 @@ def train(
     if isinstance(vocab_size, bool) or not isinstance(vocab_size, int):
         raise typer.BadParameter("--vocab-size must be int")
     if not (_MIN_VOCAB_SIZE <= vocab_size <= _MAX_VOCAB_SIZE):
-        raise typer.BadParameter(
-            f"--vocab-size must be in [{_MIN_VOCAB_SIZE}, {_MAX_VOCAB_SIZE}]"
-        )
+        raise typer.BadParameter(f"--vocab-size must be in [{_MIN_VOCAB_SIZE}, {_MAX_VOCAB_SIZE}]")
     if isinstance(min_frequency, bool) or not isinstance(min_frequency, int):
         raise typer.BadParameter("--min-frequency must be int")
     if min_frequency < 1:
@@ -173,9 +167,7 @@ def train(
 
     texts = _extract_texts(resolved_input)
     if not texts:
-        console.print(
-            f"[red]No usable training text found in[/] {resolved_input.name}"
-        )
+        console.print(f"[red]No usable training text found in[/] {resolved_input.name}")
         raise typer.Exit(1)
 
     tokens = list(special_tokens or [])
@@ -239,9 +231,7 @@ def train(
         console.print(f"[red]Output directory not accessible:[/] {exc}")
         raise typer.Exit(1) from exc
     if stat.S_ISLNK(post_st.st_mode):
-        console.print(
-            "[red]Output directory is a symlink — refusing to write.[/]"
-        )
+        console.print("[red]Output directory is a symlink — refusing to write.[/]")
         raise typer.Exit(1)
     if not is_under_cwd(str(output_path)):
         console.print("[red]Output directory escaped cwd after mkdir.[/]")

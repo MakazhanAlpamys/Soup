@@ -89,13 +89,9 @@ def _pick_bucket(global_step: int, num_buckets: int) -> int:
     bucket evenly during the warm-up phase.
     """
     if isinstance(global_step, bool) or not isinstance(global_step, int):
-        raise TypeError(
-            f"global_step must be int, got {type(global_step).__name__}"
-        )
+        raise TypeError(f"global_step must be int, got {type(global_step).__name__}")
     if isinstance(num_buckets, bool) or not isinstance(num_buckets, int):
-        raise TypeError(
-            f"num_buckets must be int, got {type(num_buckets).__name__}"
-        )
+        raise TypeError(f"num_buckets must be int, got {type(num_buckets).__name__}")
     if global_step < 0:
         raise ValueError(f"global_step must be >= 0, got {global_step}")
     if num_buckets < 1:
@@ -105,22 +101,16 @@ def _pick_bucket(global_step: int, num_buckets: int) -> int:
 
 def _validate_output_dir(output_dir: object) -> str:
     if not isinstance(output_dir, str):
-        raise TypeError(
-            f"output_dir must be str, got {type(output_dir).__name__}"
-        )
+        raise TypeError(f"output_dir must be str, got {type(output_dir).__name__}")
     if not output_dir:
         raise ValueError("output_dir must be non-empty")
     if "\x00" in output_dir:
         raise ValueError("output_dir must not contain null bytes")
     if len(output_dir) > _MAX_PATH_LEN:
-        raise ValueError(
-            f"output_dir length {len(output_dir)} exceeds cap {_MAX_PATH_LEN}"
-        )
+        raise ValueError(f"output_dir length {len(output_dir)} exceeds cap {_MAX_PATH_LEN}")
     real = os.path.realpath(output_dir)
     if not is_under_cwd(real):
-        raise ValueError(
-            f"output_dir is outside cwd: {os.path.basename(real)!r}"
-        )
+        raise ValueError(f"output_dir is outside cwd: {os.path.basename(real)!r}")
     return real
 
 
@@ -163,10 +153,7 @@ class _DynamicCurriculumCallback_body:  # type: ignore[misc]  # noqa: N801
         curriculum_metric: str = "length",
     ) -> None:
         if not isinstance(policy, DynamicCurriculumPolicy):
-            raise TypeError(
-                "policy must be DynamicCurriculumPolicy, got "
-                f"{type(policy).__name__}"
-            )
+            raise TypeError(f"policy must be DynamicCurriculumPolicy, got {type(policy).__name__}")
         if curriculum_metric not in _VALID_CURRICULUM_METRICS:
             raise ValueError(
                 "curriculum_metric must be one of "
@@ -254,9 +241,7 @@ class _DynamicCurriculumCallback_body:  # type: ignore[misc]  # noqa: N801
             and len(self._signal_window) > 0
         ):
             try:
-                bucket_id = percentile_bucket(
-                    signal, list(self._signal_window), nb
-                )
+                bucket_id = percentile_bucket(signal, list(self._signal_window), nb)
             except (TypeError, ValueError):
                 bucket_id = None
         if bucket_id is None:
@@ -460,9 +445,7 @@ class _DynamicCurriculumCallback_body:  # type: ignore[misc]  # noqa: N801
         try:
             st = os.lstat(self._history_path)
             if stat.S_ISLNK(st.st_mode):
-                logger.debug(
-                    "curriculum_history target is symlink; refusing to write"
-                )
+                logger.debug("curriculum_history target is symlink; refusing to write")
                 return
         except FileNotFoundError:
             pass

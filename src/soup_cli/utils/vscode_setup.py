@@ -5,6 +5,7 @@ pytest config. Path containment via shared `is_under_cwd`; refuses to
 overwrite an existing launch.json without `force=True` (matches v0.40.2
 register_data policy).
 """
+
 from __future__ import annotations
 
 import json
@@ -86,9 +87,7 @@ def write_vscode_launch(
     # TOCTOU window: bytes go to a fresh mkstemp file + os.replace, never
     # through a swapped-in symlink.
     if not force and os.path.lexists(out_path) and not os.path.islink(out_path):
-        raise FileExistsError(
-            f"{out_path} already exists; pass force=True to overwrite"
-        )
+        raise FileExistsError(f"{out_path} already exists; pass force=True to overwrite")
     body = json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
     atomic_write_text(body, out_path, field="launch.json")
     return out_path

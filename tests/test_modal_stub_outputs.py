@@ -41,9 +41,7 @@ class _Entry:
 
 
 class _FakeVolume:
-    def __init__(
-        self, root: Path, *, leading_slash: bool, extra_entries=(), listdir_error=None
-    ):
+    def __init__(self, root: Path, *, leading_slash: bool, extra_entries=(), listdir_error=None):
         self.root = root
         self.leading_slash = leading_slash
         self.extra_entries = list(extra_entries)
@@ -153,9 +151,7 @@ def _exec_stub(stub: str) -> dict:
 def test_stub_is_valid_python_and_uses_a_volume():
     from soup_cli.cloud.modal import MODAL_OUTPUT_VOLUME, render_modal_stub
 
-    stub = render_modal_stub(
-        _SOUP_YAML, gpu="a100", output_dir="./out", soup_version="0.75.0"
-    )
+    stub = render_modal_stub(_SOUP_YAML, gpu="a100", output_dir="./out", soup_version="0.75.0")
     ast.parse(stub)
     assert MODAL_OUTPUT_VOLUME == "soup-outputs"
     assert "modal.Volume.from_name" in stub
@@ -225,9 +221,7 @@ def test_generated_app_downloads_outputs(tmp_path, monkeypatch, capsys, leading_
 
     local = tmp_path / "local-out"
     assert (local / "output" / "adapter_model.safetensors").read_bytes() == b"adapter-bytes"
-    assert (local / "output" / "checkpoint-5" / "optimizer.pt").read_bytes() == (
-        b"optimizer-bytes"
-    )
+    assert (local / "output" / "checkpoint-5" / "optimizer.pt").read_bytes() == (b"optimizer-bytes")
     assert len(calls) == 1
     assert volume.commits == 1
     out = " ".join(capsys.readouterr().out.split())

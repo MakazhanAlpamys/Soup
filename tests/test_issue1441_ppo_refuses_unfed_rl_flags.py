@@ -41,7 +41,8 @@ class TestTheRefusal:
     def test_the_detector_is_refused_and_named(self):
         with pytest.raises(ValueError) as excinfo:
             refuse_unfed_rl_flags(
-                _tcfg(reward_hack_detector="info_rm"), is_experimental=True,
+                _tcfg(reward_hack_detector="info_rm"),
+                is_experimental=True,
             )
         message = str(excinfo.value)
         assert "reward_hack_detector" in message, message
@@ -50,14 +51,16 @@ class TestTheRefusal:
     def test_the_mitigation_mode_is_refused_and_named(self):
         with pytest.raises(ValueError) as excinfo:
             refuse_unfed_rl_flags(
-                _tcfg(reward_hack_mitigation="kl_control"), is_experimental=True,
+                _tcfg(reward_hack_mitigation="kl_control"),
+                is_experimental=True,
             )
         assert "reward_hack_mitigation" in str(excinfo.value)
 
     def test_the_echo_trap_is_refused_and_named(self):
         with pytest.raises(ValueError) as excinfo:
             refuse_unfed_rl_flags(
-                _tcfg(echo_trap_enabled=True), is_experimental=True,
+                _tcfg(echo_trap_enabled=True),
+                is_experimental=True,
             )
         assert "echo_trap_enabled" in str(excinfo.value)
 
@@ -84,7 +87,8 @@ class TestTheRefusal:
         """A user who wants this feature needs to be told where it works."""
         with pytest.raises(ValueError) as excinfo:
             refuse_unfed_rl_flags(
-                _tcfg(reward_hack_detector="info_rm"), is_experimental=True,
+                _tcfg(reward_hack_detector="info_rm"),
+                is_experimental=True,
             )
         assert "grpo" in str(excinfo.value).lower()
 
@@ -92,7 +96,8 @@ class TestTheRefusal:
         """The transitional API does accept `reward_funcs`, so the refusal is
         scoped to the experimental class rather than to `task: ppo` itself."""
         refuse_unfed_rl_flags(
-            _tcfg(reward_hack_detector="info_rm"), is_experimental=False,
+            _tcfg(reward_hack_detector="info_rm"),
+            is_experimental=False,
         )
 
 
@@ -169,11 +174,13 @@ class TestSetupRefusesBeforeLoadingAnything:
 
         loaded: list[str] = []
         monkeypatch.setattr(
-            ppo.PPOTrainerWrapper, "_setup_reward",
+            ppo.PPOTrainerWrapper,
+            "_setup_reward",
             lambda self, *a: loaded.append("reward"),
         )
         monkeypatch.setattr(
-            ppo.PPOTrainerWrapper, "_setup_transformers",
+            ppo.PPOTrainerWrapper,
+            "_setup_transformers",
             lambda self, *a: loaded.append("policy"),
         )
         monkeypatch.chdir(tmp_path)
@@ -182,9 +189,7 @@ class TestSetupRefusesBeforeLoadingAnything:
             "data:\n  train: train.jsonl\n  max_length: 64\n"
             "training:\n  epochs: 1\n  batch_size: 2\n  gradient_accumulation_steps: 1\n"
             "  quantization: none\n  reward_model: ./rm\n"
-            "  lora:\n    r: 4\n    alpha: 8\n"
-            + self._FLAGS[flag]
-            + "output: ./out\n"
+            "  lora:\n    r: 4\n    alpha: 8\n" + self._FLAGS[flag] + "output: ./out\n"
         )
         wrapper = ppo.PPOTrainerWrapper(cfg, device="cpu")
         rows = [{"messages": [{"role": "user", "content": "hi"}]}] * 4
@@ -193,7 +198,9 @@ class TestSetupRefusesBeforeLoadingAnything:
         assert loaded == [], loaded
 
     def test_a_plain_ppo_setup_is_not_refused_by_the_call_site(
-        self, tmp_path, monkeypatch,
+        self,
+        tmp_path,
+        monkeypatch,
     ):
         """The control: the same path with no flags must get past the refusal.
 

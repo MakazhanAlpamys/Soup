@@ -243,15 +243,21 @@ def _run_cli(tmp_path, monkeypatch, metric, control, treatment, extra=()):
     from soup_cli.utils import webhooks
 
     captured = []
-    monkeypatch.setattr(
-        webhooks, "post_webhook", lambda **kw: (captured.append(kw), True)[1]
-    )
+    monkeypatch.setattr(webhooks, "post_webhook", lambda **kw: (captured.append(kw), True)[1])
     monkeypatch.chdir(tmp_path)
     _write_ab(tmp_path / "ab.jsonl", metric, control, treatment)
     result = runner.invoke(
         app,
-        ["ab", "--input", "ab.jsonl", "--metric", metric,
-         "--slack-url", "https://hooks.slack.com/x", *extra],
+        [
+            "ab",
+            "--input",
+            "ab.jsonl",
+            "--metric",
+            metric,
+            "--slack-url",
+            "https://hooks.slack.com/x",
+            *extra,
+        ],
     )
     return result, captured
 
@@ -259,8 +265,11 @@ def _run_cli(tmp_path, monkeypatch, metric, control, treatment, extra=()):
 class TestCli:
     def test_regression_file_reports_worse_and_rollback(self, tmp_path, monkeypatch):
         result, captured = _run_cli(
-            tmp_path, monkeypatch, "judge_score",
-            _JUDGE_CONTROL, _shifted(_JUDGE_CONTROL, -0.30),
+            tmp_path,
+            monkeypatch,
+            "judge_score",
+            _JUDGE_CONTROL,
+            _shifted(_JUDGE_CONTROL, -0.30),
         )
         # `soup ab` promises no gating exit code (docs/evaluation.md); a detected
         # regression is reported, not turned into a failure status.
@@ -282,8 +291,11 @@ class TestCli:
 
     def test_improvement_file_reports_better_without_rollback(self, tmp_path, monkeypatch):
         result, captured = _run_cli(
-            tmp_path, monkeypatch, "judge_score",
-            _JUDGE_CONTROL, _shifted(_JUDGE_CONTROL, 0.30),
+            tmp_path,
+            monkeypatch,
+            "judge_score",
+            _JUDGE_CONTROL,
+            _shifted(_JUDGE_CONTROL, 0.30),
         )
         assert result.exit_code == 0, (result.output, repr(result.exception))
         out = _plain(result.output)
@@ -292,14 +304,14 @@ class TestCli:
         assert "rollback" not in out.lower()
         assert captured[0]["payload"]["direction"] == "better"
 
-    @pytest.mark.parametrize(
-        ("shift", "expected"), [(-0.30, "better"), (+0.30, "worse")]
-    )
-    def test_latency_polarity_in_output_and_payload(self, tmp_path, monkeypatch, shift,
-                                                    expected):
+    @pytest.mark.parametrize(("shift", "expected"), [(-0.30, "better"), (+0.30, "worse")])
+    def test_latency_polarity_in_output_and_payload(self, tmp_path, monkeypatch, shift, expected):
         result, captured = _run_cli(
-            tmp_path, monkeypatch, "latency",
-            _LATENCY_CONTROL, _shifted(_LATENCY_CONTROL, shift),
+            tmp_path,
+            monkeypatch,
+            "latency",
+            _LATENCY_CONTROL,
+            _shifted(_LATENCY_CONTROL, shift),
         )
         assert result.exit_code == 0, (result.output, repr(result.exception))
         out = _plain(result.output)
@@ -310,7 +322,11 @@ class TestCli:
 
     def test_accept_h0_payload_has_no_direction(self, tmp_path, monkeypatch):
         result, captured = _run_cli(
-            tmp_path, monkeypatch, "judge_score", _JUDGE_CONTROL, list(_JUDGE_CONTROL),
+            tmp_path,
+            monkeypatch,
+            "judge_score",
+            _JUDGE_CONTROL,
+            list(_JUDGE_CONTROL),
         )
         assert result.exit_code == 0, (result.output, repr(result.exception))
         out = _plain(result.output)
@@ -326,7 +342,11 @@ class TestCli:
     def test_too_few_rows_file_says_why_there_is_no_verdict(self, tmp_path, monkeypatch):
         control = _JUDGE_CONTROL[:6]  # the 5 prior-scale rows and 1 more: 2 are needed
         result, captured = _run_cli(
-            tmp_path, monkeypatch, "judge_score", control, _shifted(control, -0.30),
+            tmp_path,
+            monkeypatch,
+            "judge_score",
+            control,
+            _shifted(control, -0.30),
         )
         assert result.exit_code == 0, (result.output, repr(result.exception))
         out = _plain(result.output)

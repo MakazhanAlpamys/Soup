@@ -59,9 +59,7 @@ def _save_tiny_qwen4(path):
     from transformers import AutoModelForCausalLM
 
     torch.manual_seed(602)
-    model = AutoModelForCausalLM.from_config(
-        _tiny_qwen4_config(), dtype=torch.float32
-    )
+    model = AutoModelForCausalLM.from_config(_tiny_qwen4_config(), dtype=torch.float32)
     model.save_pretrained(path, safe_serialization=True)
     return model
 
@@ -108,9 +106,7 @@ def test_sparse_reader_preserves_supported_dtypes(tmp_path, torch_dtype, safe_dt
 
     weights = tmp_path / "weights"
     weights.mkdir()
-    source = torch.arange(24, dtype=torch.float32).view(6, 4).to(
-        getattr(torch, torch_dtype)
-    )
+    source = torch.arange(24, dtype=torch.float32).view(6, 4).to(getattr(torch, torch_dtype))
     path = weights / "rows.safetensors"
     save_file({"rows": source}, path)
     reader = SafeTensorRowReader(
@@ -229,9 +225,7 @@ def test_qwen4_sharder_keeps_ple_in_original_checkpoint(tmp_path):
     weights.mkdir()
     _save_tiny_qwen4(weights)
 
-    index = shard_checkpoint(
-        str(weights), str(shards), dtype="float32", arch="qwen4_exp"
-    )
+    index = shard_checkpoint(str(weights), str(shards), dtype="float32", arch="qwen4_exp")
 
     assert index.external_mode == "qwen4_ple"
     assert len(index.external_tensors) == 1
@@ -241,12 +235,7 @@ def test_qwen4_sharder_keeps_ple_in_original_checkpoint(tmp_path):
     assert external_key not in index.layer_keys
     reloaded = read_shard_index(str(shards))
     assert reloaded.external_tensors == index.external_tensors
-    assert (
-        shard_checkpoint(
-            str(weights), str(shards), dtype="float32", arch="qwen4_exp"
-        )
-        == index
-    )
+    assert shard_checkpoint(str(weights), str(shards), dtype="float32", arch="qwen4_exp") == index
     for layer_idx in range(index.n_layers):
         with safe_open(layer_shard_path(str(shards), layer_idx), framework="pt") as handle:
             assert all("ngram_embedding.weight" not in key for key in handle.keys())
@@ -314,9 +303,7 @@ def test_oq_affine_decoder_matches_mlx_vectors(bits, words, scale, bias, expecte
         dtype="float32",
     )
 
-    torch.testing.assert_close(
-        actual[0, :4], torch.tensor(expected), rtol=0, atol=0
-    )
+    torch.testing.assert_close(actual[0, :4], torch.tensor(expected), rtol=0, atol=0)
 
 
 def test_qwen4_sharder_dequantizes_omlx_oq_without_copying_companions(tmp_path):
@@ -334,26 +321,19 @@ def test_qwen4_sharder_dequantizes_omlx_oq_without_copying_companions(tmp_path):
             "language_model.model.layers.0.proj.weight": torch.tensor(
                 [[0, 1, 2, 3], [4, 5, 6, 7]], dtype=torch.uint32
             ),
-            "language_model.model.layers.0.proj.scales": torch.ones(
-                (2, 1), dtype=torch.bfloat16
-            ),
-            "language_model.model.layers.0.proj.biases": torch.zeros(
-                (2, 1), dtype=torch.bfloat16
-            ),
+            "language_model.model.layers.0.proj.scales": torch.ones((2, 1), dtype=torch.bfloat16),
+            "language_model.model.layers.0.proj.biases": torch.zeros((2, 1), dtype=torch.bfloat16),
             "language_model.model.layers.0.conv1d.weight": torch.arange(
                 24, dtype=torch.float32
             ).reshape(2, 12, 1),
             (
-                "language_model.model.layers.0.ple.ple_embedding."
-                "ngram_embedding.shards.0.weight"
+                "language_model.model.layers.0.ple.ple_embedding.ngram_embedding.shards.0.weight"
             ): torch.tensor([[0, 1, 2, 3]] * 3, dtype=torch.uint32),
             (
-                "language_model.model.layers.0.ple.ple_embedding."
-                "ngram_embedding.shards.0.scales"
+                "language_model.model.layers.0.ple.ple_embedding.ngram_embedding.shards.0.scales"
             ): torch.ones((3, 1), dtype=torch.bfloat16),
             (
-                "language_model.model.layers.0.ple.ple_embedding."
-                "ngram_embedding.shards.0.biases"
+                "language_model.model.layers.0.ple.ple_embedding.ngram_embedding.shards.0.biases"
             ): torch.zeros((3, 1), dtype=torch.bfloat16),
             "vision_tower.ignored.weight": torch.ones(2, 2),
             "mtp.ignored.weight": torch.ones(2, 2),
@@ -373,9 +353,7 @@ def test_qwen4_sharder_dequantizes_omlx_oq_without_copying_companions(tmp_path):
         encoding="utf-8",
     )
 
-    index = shard_checkpoint(
-        str(weights), str(shards), dtype="float32", arch="qwen4_exp"
-    )
+    index = shard_checkpoint(str(weights), str(shards), dtype="float32", arch="qwen4_exp")
 
     assert index.n_layers == 1
     assert index.layer_keys == ("conv1d.weight", "proj.weight")
@@ -466,9 +444,7 @@ def test_tiny_qwen4_ple_matches_resident_forward_loss_and_lora_gradients(
     if device == "mps" and not torch.backends.mps.is_available():
         pytest.skip("needs an Apple Silicon MPS device")
     resident = _save_tiny_qwen4(weights).to(device).eval()
-    index = shard_checkpoint(
-        str(weights), str(shards), dtype="float32", arch="qwen4_exp"
-    )
+    index = shard_checkpoint(str(weights), str(shards), dtype="float32", arch="qwen4_exp")
     streamed, runtime = build_streamed_model(
         model_id=str(weights),
         weights_dir=str(weights),
@@ -524,10 +500,7 @@ def test_qwen4_streaming_gate_and_ngram_config():
     from soup_cli.utils.layer_stream import stream_arch_of
 
     assert stream_arch_of(SimpleNamespace(model_type="qwen4_exp")) == "qwen4_exp"
-    assert (
-        stream_arch_of(SimpleNamespace(model_type="qwen4_exp_text"))
-        == "qwen4_exp"
-    )
+    assert stream_arch_of(SimpleNamespace(model_type="qwen4_exp_text")) == "qwen4_exp"
     assert TrainingConfig(stream_ngram_source="disk").stream_ngram_source == "disk"
     with pytest.raises(ValueError, match="stream_ngram_source"):
         TrainingConfig(stream_ngram_source="network")
@@ -537,18 +510,14 @@ def test_qwen4_streaming_refuses_unsupported_task_by_name():
     from soup_cli.trainer.stream_setup import _validate_qwen4_streaming_mode
 
     with pytest.raises(ValueError, match="task='sft'"):
-        _validate_qwen4_streaming_mode(
-            arch="qwen4_exp", task="dpo", quant="none"
-        )
+        _validate_qwen4_streaming_mode(arch="qwen4_exp", task="dpo", quant="none")
 
 
 def test_qwen4_streaming_refuses_quantized_base_by_name():
     from soup_cli.trainer.stream_setup import _validate_qwen4_streaming_mode
 
     with pytest.raises(ValueError, match="quantization='none'"):
-        _validate_qwen4_streaming_mode(
-            arch="qwen4_exp", task="sft", quant="nf4"
-        )
+        _validate_qwen4_streaming_mode(arch="qwen4_exp", task="sft", quant="nf4")
 
 
 def test_qwen4_ple_disk_streaming_refuses_non_ssd_by_name():
@@ -597,18 +566,8 @@ def test_qwen4_ngram_policy_covers_oq_ram_and_auto_defaults():
     }
     with pytest.raises(ValueError, match="oQ PLE embeddings require"):
         _resolve_qwen4_ngram_source(oq_ngram=True, requested="ram", **common)
-    assert (
-        _resolve_qwen4_ngram_source(
-            oq_ngram=True, requested="auto", **common
-        )
-        == "disk"
-    )
-    assert (
-        _resolve_qwen4_ngram_source(
-            oq_ngram=False, requested="auto", **common
-        )
-        == "ram"
-    )
+    assert _resolve_qwen4_ngram_source(oq_ngram=True, requested="auto", **common) == "disk"
+    assert _resolve_qwen4_ngram_source(oq_ngram=False, requested="auto", **common) == "ram"
     assert (
         _resolve_qwen4_ngram_source(
             oq_ngram=False,
@@ -793,37 +752,22 @@ def _drive_qwen4_streaming_setup(tmp_path, monkeypatch, resolve_weights=None):
             TaskType=types.SimpleNamespace(CAUSAL_LM="CAUSAL_LM"),
         ),
     )
-    monkeypatch.setattr(
-        "transformers.AutoTokenizer.from_pretrained", lambda *_a, **_k: tokenizer
-    )
-    monkeypatch.setattr(
-        "transformers.AutoConfig.from_pretrained", lambda *_a, **_k: model_cfg
-    )
+    monkeypatch.setattr("transformers.AutoTokenizer.from_pretrained", lambda *_a, **_k: tokenizer)
+    monkeypatch.setattr("transformers.AutoConfig.from_pretrained", lambda *_a, **_k: model_cfg)
     monkeypatch.setattr("peft.LoraConfig", lambda **kwargs: types.SimpleNamespace(**kwargs))
-    monkeypatch.setattr(
-        "soup_cli.utils.layer_stream.stream_arch_of", lambda *_a, **_k: "qwen4_exp"
-    )
+    monkeypatch.setattr("soup_cli.utils.layer_stream.stream_arch_of", lambda *_a, **_k: "qwen4_exp")
     monkeypatch.setattr(
         "soup_cli.utils.layer_shard.resolve_shard_dir",
         lambda *_a, **_k: str(tmp_path / "shards"),
     )
-    monkeypatch.setattr(
-        "soup_cli.utils.layer_shard.shard_checkpoint", lambda *_a, **_k: index
-    )
-    monkeypatch.setattr(
-        "soup_cli.utils.layer_shard.source_weight_bytes", lambda *_a, **_k: 1_024
-    )
+    monkeypatch.setattr("soup_cli.utils.layer_shard.shard_checkpoint", lambda *_a, **_k: index)
+    monkeypatch.setattr("soup_cli.utils.layer_shard.source_weight_bytes", lambda *_a, **_k: 1_024)
     monkeypatch.setattr(
         "soup_cli.utils.spectrum_scan.resolve_model_weights",
-        resolve_weights
-        or (lambda *_a, **_k: str(tmp_path / "weights")),
+        resolve_weights or (lambda *_a, **_k: str(tmp_path / "weights")),
     )
-    monkeypatch.setattr(
-        "soup_cli.utils.layer_stream.free_ram_bytes", lambda: 1_000_000
-    )
-    monkeypatch.setattr(
-        "soup_cli.utils.layer_stream.total_ram_bytes", lambda: harness_total_ram
-    )
+    monkeypatch.setattr("soup_cli.utils.layer_stream.free_ram_bytes", lambda: 1_000_000)
+    monkeypatch.setattr("soup_cli.utils.layer_stream.total_ram_bytes", lambda: harness_total_ram)
     monkeypatch.setattr(
         "soup_cli.utils.layer_stream_runtime.RamSource.layer_specs_from_paths",
         lambda *_a, **_k: layer_specs,
@@ -910,9 +854,7 @@ def test_setup_passes_total_ram_to_qwen4_planner_and_refusal(tmp_path, monkeypat
     assert captured["plan"]["embed_bytes"] == resident_ram
 
 
-def test_planner_fingerprints_config_json_for_qwen4_but_not_for_llama(
-    tmp_path, monkeypatch
-):
+def test_planner_fingerprints_config_json_for_qwen4_but_not_for_llama(tmp_path, monkeypatch):
     """The planner half of the oQ cache fingerprint, which nothing pinned.
 
     `layer_shard` hashes `config.json` into the shard-cache fingerprint for an
@@ -961,12 +903,8 @@ def test_planner_fingerprints_config_json_for_qwen4_but_not_for_llama(
             "language_model.model.layers.0.proj.weight": torch.tensor(
                 [[0, 1, 2, 3]], dtype=torch.uint32
             ),
-            "language_model.model.layers.0.proj.scales": torch.ones(
-                (1, 1), dtype=torch.bfloat16
-            ),
-            "language_model.model.layers.0.proj.biases": torch.zeros(
-                (1, 1), dtype=torch.bfloat16
-            ),
+            "language_model.model.layers.0.proj.scales": torch.ones((1, 1), dtype=torch.bfloat16),
+            "language_model.model.layers.0.proj.biases": torch.zeros((1, 1), dtype=torch.bfloat16),
             "language_model.model.norm.weight": torch.ones(2),
         },
         blob,
@@ -1008,9 +946,7 @@ def test_planner_fingerprints_config_json_for_qwen4_but_not_for_llama(
         stat = probe_blob.stat()
         components = ((probe_blob.name, stat.st_size, stat.st_mtime_ns),)
         return fingerprint_source_files(
-            checkpoint_source_components(
-                str(probe), components, include_config=include_config
-            )
+            checkpoint_source_components(str(probe), components, include_config=include_config)
         )
 
     before_on, before_off = _digest(True), _digest(False)
@@ -1060,24 +996,16 @@ def test_qwen4_config_json_change_invalidates_oq_cache(tmp_path):
             "language_model.model.layers.0.proj.weight": torch.tensor(
                 [[0, 1, 2, 3]], dtype=torch.uint32
             ),
-            "language_model.model.layers.0.proj.scales": torch.ones(
-                (1, 1), dtype=torch.bfloat16
-            ),
-            "language_model.model.layers.0.proj.biases": torch.zeros(
-                (1, 1), dtype=torch.bfloat16
-            ),
+            "language_model.model.layers.0.proj.scales": torch.ones((1, 1), dtype=torch.bfloat16),
+            "language_model.model.layers.0.proj.biases": torch.zeros((1, 1), dtype=torch.bfloat16),
             "language_model.model.norm.weight": torch.ones(2),
         },
         weights / "model.safetensors",
     )
-    config = {
-        "quantization_config": {"bits": 4, "group_size": 32, "mode": "affine"}
-    }
+    config = {"quantization_config": {"bits": 4, "group_size": 32, "mode": "affine"}}
     config_path = weights / "config.json"
     config_path.write_text(json.dumps(config), encoding="utf-8")
-    first = shard_checkpoint(
-        str(weights), str(shards), dtype="float32", arch="qwen4_exp"
-    )
+    first = shard_checkpoint(str(weights), str(shards), dtype="float32", arch="qwen4_exp")
 
     config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
     notices = []
@@ -1176,9 +1104,7 @@ def test_qwen4_gate_record_and_changelog_are_discoverable_and_credited():
     root = Path(__file__).parents[1]
     benchmark_index = (root / "benchmarks" / "README.md").read_text(encoding="utf-8")
 
-    sources = [root / "CHANGELOG.md"] + sorted(
-        (root / "changelog.d").rglob("603.*.md")
-    )
+    sources = [root / "CHANGELOG.md"] + sorted((root / "changelog.d").rglob("603.*.md"))
     texts = [p.read_text(encoding="utf-8") for p in sources if p.is_file()]
     assert texts, "neither CHANGELOG.md nor a 603 fragment is readable"
 

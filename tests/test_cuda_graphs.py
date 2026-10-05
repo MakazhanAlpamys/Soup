@@ -357,8 +357,10 @@ _LORA = SimpleNamespace(peft_type="LORA", use_dora=False)
 @pytest.mark.parametrize(
     ("overrides", "message"),
     [
-        ({"peft_config": {"default": SimpleNamespace(peft_type="IA3", use_dora=False)}},
-         "LoRA adapters only"),
+        (
+            {"peft_config": {"default": SimpleNamespace(peft_type="IA3", use_dora=False)}},
+            "LoRA adapters only",
+        ),
         ({"peft_config": {"default": SimpleNamespace(peft_type="LORA", use_dora=True)}}, "DoRA"),
         ({"active_adapters": ["a", "b"], "peft_config": {"a": _LORA, "b": _LORA}}, "one active"),
         ({"active_adapters": []}, "one active"),
@@ -406,17 +408,34 @@ def test_tiny_llama_unmerged_lora_matches_eager_exactly(monkeypatch):
     torch.manual_seed(23)
     base = LlamaForCausalLM(
         LlamaConfig(
-            vocab_size=64, hidden_size=32, intermediate_size=64, num_hidden_layers=2,
-            num_attention_heads=4, num_key_value_heads=2, max_position_embeddings=128,
-            pad_token_id=0, bos_token_id=1, eos_token_id=2,
+            vocab_size=64,
+            hidden_size=32,
+            intermediate_size=64,
+            num_hidden_layers=2,
+            num_attention_heads=4,
+            num_key_value_heads=2,
+            max_position_embeddings=128,
+            pad_token_id=0,
+            bos_token_id=1,
+            eos_token_id=2,
         )
     ).to(device="cuda", dtype=torch.float16)
     model = get_peft_model(
         base,
         LoraConfig(
-            r=4, lora_alpha=8, init_lora_weights=False, task_type="CAUSAL_LM",
-            target_modules=["q_proj", "k_proj", "v_proj", "o_proj",
-                            "gate_proj", "up_proj", "down_proj"],
+            r=4,
+            lora_alpha=8,
+            init_lora_weights=False,
+            task_type="CAUSAL_LM",
+            target_modules=[
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj",
+            ],
         ),
     ).eval()
     ids = torch.tensor([[1, 5, 9]], device="cuda")
@@ -450,7 +469,10 @@ def test_tiny_llama_unmerged_lora_matches_eager_exactly(monkeypatch):
                 input_ids=ids, attention_mask=mask, max_new_tokens=8, do_sample=False
             )
             graphed = model.generate(
-                input_ids=ids, attention_mask=mask, max_new_tokens=8, do_sample=False,
+                input_ids=ids,
+                attention_mask=mask,
+                max_new_tokens=8,
+                do_sample=False,
                 **kwargs,
             )
             torch.testing.assert_close(graphed, normal, rtol=0, atol=0)
@@ -497,8 +519,17 @@ def test_the_real_cudagraphify_accepts_the_call_the_backend_makes():
 
 
 def test_a_drifted_cudagraphify_signature_is_refused_at_pre_flight():
-    def drifted(model, inputs, static_input_idxs=(), *, device_index, is_backward,
-                is_inference, stack_traces=None, mutated_input_idxs=()):
+    def drifted(
+        model,
+        inputs,
+        static_input_idxs=(),
+        *,
+        device_index,
+        is_backward,
+        is_inference,
+        stack_traces=None,
+        mutated_input_idxs=(),
+    ):
         raise AssertionError("binding must not call it")  # 'placeholders' was dropped
 
     with pytest.raises(RuntimeError, match="API changed.*Omit --cuda-graphs"):

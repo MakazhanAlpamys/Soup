@@ -35,143 +35,169 @@ class TestConvertRaft:
     def test_empty_distractors_ok(self):
         from soup_cli.data.formats import _convert_raft
 
-        out = _convert_raft({
-            "query": "q",
-            "golden_doc": "g",
-            "distractor_docs": [],
-            "answer": "a",
-        })
+        out = _convert_raft(
+            {
+                "query": "q",
+                "golden_doc": "g",
+                "distractor_docs": [],
+                "answer": "a",
+            }
+        )
         assert out["distractor_docs"] == []
 
     def test_missing_query_rejected(self):
         from soup_cli.data.formats import _convert_raft
 
         with pytest.raises((KeyError, ValueError)):
-            _convert_raft({
-                "golden_doc": "g",
-                "distractor_docs": [],
-                "answer": "a",
-            })
+            _convert_raft(
+                {
+                    "golden_doc": "g",
+                    "distractor_docs": [],
+                    "answer": "a",
+                }
+            )
 
     def test_missing_golden_doc_rejected(self):
         from soup_cli.data.formats import _convert_raft
 
         with pytest.raises((KeyError, ValueError)):
-            _convert_raft({
-                "query": "q",
-                "distractor_docs": [],
-                "answer": "a",
-            })
+            _convert_raft(
+                {
+                    "query": "q",
+                    "distractor_docs": [],
+                    "answer": "a",
+                }
+            )
 
     def test_missing_answer_rejected(self):
         from soup_cli.data.formats import _convert_raft
 
         with pytest.raises((KeyError, ValueError)):
-            _convert_raft({
-                "query": "q",
-                "golden_doc": "g",
-                "distractor_docs": [],
-            })
+            _convert_raft(
+                {
+                    "query": "q",
+                    "golden_doc": "g",
+                    "distractor_docs": [],
+                }
+            )
 
     def test_empty_query_rejected(self):
         from soup_cli.data.formats import _convert_raft
 
         with pytest.raises(ValueError, match="query"):
-            _convert_raft({
-                "query": "",
-                "golden_doc": "g",
-                "distractor_docs": [],
-                "answer": "a",
-            })
+            _convert_raft(
+                {
+                    "query": "",
+                    "golden_doc": "g",
+                    "distractor_docs": [],
+                    "answer": "a",
+                }
+            )
 
     def test_empty_golden_doc_rejected(self):
         from soup_cli.data.formats import _convert_raft
 
         with pytest.raises(ValueError, match="golden_doc"):
-            _convert_raft({
-                "query": "q",
-                "golden_doc": "",
-                "distractor_docs": [],
-                "answer": "a",
-            })
+            _convert_raft(
+                {
+                    "query": "q",
+                    "golden_doc": "",
+                    "distractor_docs": [],
+                    "answer": "a",
+                }
+            )
 
     def test_empty_answer_rejected(self):
         from soup_cli.data.formats import _convert_raft
 
         with pytest.raises(ValueError, match="answer"):
-            _convert_raft({
-                "query": "q",
-                "golden_doc": "g",
-                "distractor_docs": [],
-                "answer": "",
-            })
+            _convert_raft(
+                {
+                    "query": "q",
+                    "golden_doc": "g",
+                    "distractor_docs": [],
+                    "answer": "",
+                }
+            )
 
     def test_non_string_query_rejected(self):
         from soup_cli.data.formats import _convert_raft
 
         with pytest.raises(ValueError, match="query"):
-            _convert_raft({
-                "query": 123,
-                "golden_doc": "g",
-                "distractor_docs": [],
-                "answer": "a",
-            })
+            _convert_raft(
+                {
+                    "query": 123,
+                    "golden_doc": "g",
+                    "distractor_docs": [],
+                    "answer": "a",
+                }
+            )
 
     def test_non_list_distractors_rejected(self):
         from soup_cli.data.formats import _convert_raft
 
         with pytest.raises(ValueError, match="distractor_docs"):
-            _convert_raft({
-                "query": "q",
-                "golden_doc": "g",
-                "distractor_docs": "not-a-list",
-                "answer": "a",
-            })
+            _convert_raft(
+                {
+                    "query": "q",
+                    "golden_doc": "g",
+                    "distractor_docs": "not-a-list",
+                    "answer": "a",
+                }
+            )
 
     def test_non_string_distractor_rejected(self):
         from soup_cli.data.formats import _convert_raft
 
         with pytest.raises(ValueError, match="distractor"):
-            _convert_raft({
-                "query": "q",
-                "golden_doc": "g",
-                "distractor_docs": [123],
-                "answer": "a",
-            })
+            _convert_raft(
+                {
+                    "query": "q",
+                    "golden_doc": "g",
+                    "distractor_docs": [123],
+                    "answer": "a",
+                }
+            )
 
     def test_null_byte_query_rejected(self):
         from soup_cli.data.formats import _convert_raft
 
         with pytest.raises(ValueError, match="null"):
-            _convert_raft({
-                "query": "bad\x00",
-                "golden_doc": "g",
-                "distractor_docs": [],
-                "answer": "a",
-            })
+            _convert_raft(
+                {
+                    "query": "bad\x00",
+                    "golden_doc": "g",
+                    "distractor_docs": [],
+                    "answer": "a",
+                }
+            )
 
     def test_distractor_cap(self):
         from soup_cli.data.formats import _MAX_RAFT_DISTRACTORS, _convert_raft
 
         # exactly cap accepted
-        out = _convert_raft({
-            "query": "q",
-            "golden_doc": "g",
-            "distractor_docs": ["d"] * _MAX_RAFT_DISTRACTORS,
-            "answer": "a",
-        })
+        out = _convert_raft(
+            {
+                "query": "q",
+                "golden_doc": "g",
+                "distractor_docs": ["d"] * _MAX_RAFT_DISTRACTORS,
+                "answer": "a",
+            }
+        )
         assert len(out["distractor_docs"]) == _MAX_RAFT_DISTRACTORS
 
     def test_distractor_overcap_rejected(self):
         from soup_cli.data.formats import _MAX_RAFT_DISTRACTORS, _convert_raft
 
         with pytest.raises(ValueError, match="distractor"):
-            _convert_raft({
-                "query": "q",
-                "golden_doc": "g",
-                "distractor_docs": ["d"] * (_MAX_RAFT_DISTRACTORS + 1),
-                "answer": "a",
-            })
+            _convert_raft(
+                {
+                    "query": "q",
+                    "golden_doc": "g",
+                    "distractor_docs": ["d"] * (_MAX_RAFT_DISTRACTORS + 1),
+                    "answer": "a",
+                }
+            )
 
 
 # ---------- format dispatcher ----------

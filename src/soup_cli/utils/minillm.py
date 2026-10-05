@@ -53,15 +53,11 @@ def validate_rollout_length(value: object) -> int:
     if isinstance(value, bool):
         raise ValueError("rollout_length must not be bool")
     if not isinstance(value, int):
-        raise ValueError(
-            f"rollout_length must be int, got {type(value).__name__}"
-        )
+        raise ValueError(f"rollout_length must be int, got {type(value).__name__}")
     if value < 1:
         raise ValueError(f"rollout_length must be >= 1, got {value}")
     if value > _MAX_ROLLOUT_LENGTH:
-        raise ValueError(
-            f"rollout_length={value} exceeds {_MAX_ROLLOUT_LENGTH} cap"
-        )
+        raise ValueError(f"rollout_length={value} exceeds {_MAX_ROLLOUT_LENGTH} cap")
     return value
 
 
@@ -70,9 +66,7 @@ def _check_unit_float(value: object, field: str) -> float:
     if isinstance(value, bool):
         raise ValueError(f"{field} must not be bool")
     if not isinstance(value, (int, float)):
-        raise ValueError(
-            f"{field} must be a number, got {type(value).__name__}"
-        )
+        raise ValueError(f"{field} must be a number, got {type(value).__name__}")
     fv = float(value)
     if not math.isfinite(fv):
         raise ValueError(f"{field} must be finite (no NaN/Inf)")
@@ -111,17 +105,13 @@ def _check_path_shape(value: Optional[str]) -> Optional[str]:
     if isinstance(value, bool):
         raise ValueError("pretrain_anchor_path must not be bool")
     if not isinstance(value, str):
-        raise TypeError(
-            f"pretrain_anchor_path must be str, got {type(value).__name__}"
-        )
+        raise TypeError(f"pretrain_anchor_path must be str, got {type(value).__name__}")
     if not value:
         raise ValueError("pretrain_anchor_path must be non-empty")
     if "\x00" in value:
         raise ValueError("pretrain_anchor_path must not contain null bytes")
     if len(value) > _MAX_ANCHOR_PATH_LEN:
-        raise ValueError(
-            f"pretrain_anchor_path exceeds {_MAX_ANCHOR_PATH_LEN} chars"
-        )
+        raise ValueError(f"pretrain_anchor_path exceeds {_MAX_ANCHOR_PATH_LEN} chars")
     return value
 
 
@@ -151,25 +141,16 @@ class MiniLLMConfig:
         validate_teacher_mix_ratio(self.teacher_mix_ratio)
         if not isinstance(self.length_normalize, bool):
             raise TypeError(
-                f"length_normalize must be bool, got "
-                f"{type(self.length_normalize).__name__}"
+                f"length_normalize must be bool, got {type(self.length_normalize).__name__}"
             )
         if not isinstance(self.on_policy, bool):
-            raise TypeError(
-                f"on_policy must be bool, got {type(self.on_policy).__name__}"
-            )
+            raise TypeError(f"on_policy must be bool, got {type(self.on_policy).__name__}")
         validate_rollout_length(self.rollout_length)
         validate_pretrain_anchor_weight(self.pretrain_anchor_weight)
         _check_path_shape(self.pretrain_anchor_path)
         if self.pretrain_anchor_weight > 0.0 and self.pretrain_anchor_path is None:
-            raise ValueError(
-                "pretrain_anchor_weight > 0 requires pretrain_anchor_path "
-                "to be set"
-            )
-        if (
-            self.pretrain_anchor_weight == 0.0
-            and self.pretrain_anchor_path is not None
-        ):
+            raise ValueError("pretrain_anchor_weight > 0 requires pretrain_anchor_path to be set")
+        if self.pretrain_anchor_weight == 0.0 and self.pretrain_anchor_path is not None:
             raise ValueError(
                 "pretrain_anchor_path is set but pretrain_anchor_weight is "
                 "0 (silent no-op); set anchor_weight > 0 or clear the path"
@@ -203,9 +184,7 @@ def minillm_distill_term(
     import torch
 
     if not isinstance(config, MiniLLMConfig):
-        raise TypeError(
-            f"config must be MiniLLMConfig, got {type(config).__name__}"
-        )
+        raise TypeError(f"config must be MiniLLMConfig, got {type(config).__name__}")
     if isinstance(temperature, bool) or not isinstance(temperature, (int, float)):
         raise TypeError("temperature must be a non-bool number")
     t = float(temperature)
@@ -330,9 +309,7 @@ def minillm_on_policy_rollout(
     import torch
 
     if not isinstance(config, MiniLLMConfig):
-        raise TypeError(
-            f"config must be MiniLLMConfig, got {type(config).__name__}"
-        )
+        raise TypeError(f"config must be MiniLLMConfig, got {type(config).__name__}")
     if isinstance(max_new_tokens, bool) or not isinstance(max_new_tokens, int):
         raise TypeError("max_new_tokens must be a non-bool int")
     if max_new_tokens < 1:
@@ -352,11 +329,7 @@ def minillm_on_policy_rollout(
         cur_mask = torch.ones_like(input_ids)
     else:
         cur_mask = attention_mask
-    cache_ok = (
-        use_cache
-        and _supports_kv_cache(student_model)
-        and _supports_kv_cache(teacher_model)
-    )
+    cache_ok = use_cache and _supports_kv_cache(student_model) and _supports_kv_cache(teacher_model)
     s_past = None
     t_past = None
     step_ids = cur_ids  # full prompt on the first step; the delta afterwards
@@ -381,9 +354,7 @@ def minillm_on_policy_rollout(
                     use_cache=True,
                 )
             else:
-                te_out = teacher_model(
-                    input_ids=cur_ids, attention_mask=cur_mask
-                )
+                te_out = teacher_model(input_ids=cur_ids, attention_mask=cur_mask)
             te_logits = te_out.logits[:, -1, :] / t  # [B, Vt]  (grad OFF)
         if cache_ok:
             new_s_past = getattr(s_out, "past_key_values", None)
@@ -466,9 +437,7 @@ class _MiniLLMCallback_body:  # type: ignore[misc, valid-type]  # noqa: N801
         anchor_max_length: int = 128,
     ) -> None:
         if not isinstance(config, MiniLLMConfig):
-            raise TypeError(
-                f"config must be MiniLLMConfig, got {type(config).__name__}"
-            )
+            raise TypeError(f"config must be MiniLLMConfig, got {type(config).__name__}")
         self.config = config
         self.tokenizer = tokenizer
         self.temperature = float(temperature)
@@ -528,11 +497,7 @@ class _MiniLLMCallback_body:  # type: ignore[misc, valid-type]  # noqa: N801
             return self._anchor_inputs
         self._anchor_loaded = True
         path = self.config.pretrain_anchor_path
-        if (
-            path is None
-            or self.config.pretrain_anchor_weight <= 0.0
-            or self.tokenizer is None
-        ):
+        if path is None or self.config.pretrain_anchor_weight <= 0.0 or self.tokenizer is None:
             return None
         from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
 
@@ -620,9 +585,7 @@ def build_minillm_callback(
     :class:`MiniLLMCallback`.
     """
     if not isinstance(config, MiniLLMConfig):
-        raise TypeError(
-            f"config must be MiniLLMConfig, got {type(config).__name__}"
-        )
+        raise TypeError(f"config must be MiniLLMConfig, got {type(config).__name__}")
     from soup_cli.utils.minillm import MiniLLMCallback
 
     return MiniLLMCallback(config, tokenizer=tokenizer, temperature=temperature)

@@ -25,19 +25,29 @@ app = typer.Typer(no_args_is_help=True)
 @app.command()
 def synth(
     spec: str = typer.Option(
-        ..., "--spec", "-s",
+        ...,
+        "--spec",
+        "-s",
         help="Path to OpenAPI / MCP / GraphQL spec (YAML or JSON, under cwd).",
     ),
     output: str = typer.Option(
-        "agent_dataset.jsonl", "--output", "-o",
+        "agent_dataset.jsonl",
+        "--output",
+        "-o",
         help="Where to write the synthesised JSONL dataset (under cwd).",
     ),
     kind: Optional[str] = typer.Option(
-        None, "--kind", "-k",
+        None,
+        "--kind",
+        "-k",
         help="Spec kind override: openapi | mcp | graphql. Auto-detected if omitted.",
     ),
     examples_per_endpoint: int = typer.Option(
-        1, "--examples-per-endpoint", "-n", min=1, max=32,
+        1,
+        "--examples-per-endpoint",
+        "-n",
+        min=1,
+        max=32,
         help="Number of synthetic rows to emit per endpoint.",
     ),
 ):
@@ -110,19 +120,27 @@ def synth(
 def train(
     spec: str = typer.Option(..., "--spec", "-s", help="API spec (under cwd)."),
     base: str = typer.Option(
-        ..., "--base", "-b",
+        ...,
+        "--base",
+        "-b",
         help="Base model HF repo id to fine-tune.",
     ),
     dataset_out: str = typer.Option(
-        "agent_dataset.jsonl", "--dataset-out",
+        "agent_dataset.jsonl",
+        "--dataset-out",
         help="Where the synth step writes its dataset (under cwd).",
     ),
     output_dir: str = typer.Option(
-        "./agent_train_output", "--output-dir",
+        "./agent_train_output",
+        "--output-dir",
         help="Where the planned soup train run will store checkpoints.",
     ),
     examples_per_endpoint: int = typer.Option(
-        4, "--examples-per-endpoint", "-n", min=1, max=32,
+        4,
+        "--examples-per-endpoint",
+        "-n",
+        min=1,
+        max=32,
     ),
 ):
     """One-shot wrapper: synth + planned soup train invocation (printed)."""
@@ -167,9 +185,12 @@ def train(
         raise typer.Exit(1) from exc
 
     planned_cmd = " ".join(
-        shlex.quote(p) for p in [
-            "soup", "train",
-            "--config", "agent_train.yaml",
+        shlex.quote(p)
+        for p in [
+            "soup",
+            "train",
+            "--config",
+            "agent_train.yaml",
             "--yes",
         ]
     )
@@ -294,10 +315,7 @@ def eval(
                     tool_ok += 1
                     args = row.get("arguments") or {}
                     if isinstance(args, dict):
-                        invalid = [
-                            k for k in args.keys()
-                            if k not in tool_to_params[tool]
-                        ]
+                        invalid = [k for k in args.keys() if k not in tool_to_params[tool]]
                         if not invalid:
                             args_ok += 1
     except OSError as exc:

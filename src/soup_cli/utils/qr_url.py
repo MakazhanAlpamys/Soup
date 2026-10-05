@@ -25,9 +25,7 @@ def validate_token(token: str) -> str:
     if not isinstance(token, str):
         raise TypeError("token must be str")
     if not _TOKEN_RE.match(token):
-        raise ValueError(
-            "token must be 16-128 urlsafe-base64 chars (A-Z, a-z, 0-9, '_', '-')"
-        )
+        raise ValueError("token must be 16-128 urlsafe-base64 chars (A-Z, a-z, 0-9, '_', '-')")
     return token
 
 

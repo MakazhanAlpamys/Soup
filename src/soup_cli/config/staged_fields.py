@@ -98,9 +98,7 @@ def _coerce_staged_value(section: str, name: str, val: Any) -> Any:
         return val
 
 
-def find_staged_config_fields(
-    raw: dict, config: Any | None = None
-) -> list[StagedField]:
+def find_staged_config_fields(raw: dict, config: Any | None = None) -> list[StagedField]:
     """Find any staged config field set to a non-default value in the raw mapping.
 
     If a field is omitted or explicitly set to its schema default value, it is
@@ -127,9 +125,7 @@ def find_staged_config_fields(
     return found
 
 
-def format_staged_fields(
-    staged: list[StagedField], *, include_deadline: bool = True
-) -> str:
+def format_staged_fields(staged: list[StagedField], *, include_deadline: bool = True) -> str:
     """Format staged fields warning or refusal message.
 
     Per maintainer directive on #808:

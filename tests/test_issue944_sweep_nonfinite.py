@@ -82,9 +82,7 @@ def test_all_diverged_summary_has_no_best_marker_or_best_run(monkeypatch):
 def test_early_stop_treats_a_diverged_recent_arm_as_worse(tmp_path, monkeypatch):
     config_file = tmp_path / "soup.yaml"
     config_file.write_text(
-        "base: test-model\n"
-        "data:\n"
-        "  train: ./data.jsonl\n",
+        "base: test-model\ndata:\n  train: ./data.jsonl\n",
         encoding="utf-8",
     )
     run_results = [

@@ -23,7 +23,9 @@ from soup_cli.config.schema import SoupConfig
 # What each task needs besides base / task / data.train to load at all.
 _TOP = {"tts": {"modality": "audio_out"}}
 _DATA = {
-    "dpo": {"format": "dpo"}, "kto": {"format": "kto"}, "pretrain": {"format": "plaintext"},
+    "dpo": {"format": "dpo"},
+    "kto": {"format": "kto"},
+    "pretrain": {"format": "plaintext"},
     "unlearn": {"forget_set": "./f.jsonl"},
 }
 _TRAINING = {
@@ -40,32 +42,57 @@ _TRAINING = {
 
 # The trainer each task dispatches to in commands/train.py.
 _WRAPPERS = {
-    "sft": "sft:SFTTrainerWrapper", "dpo": "dpo:DPOTrainerWrapper",
-    "grpo": "grpo:GRPOTrainerWrapper", "ppo": "ppo:PPOTrainerWrapper",
+    "sft": "sft:SFTTrainerWrapper",
+    "dpo": "dpo:DPOTrainerWrapper",
+    "grpo": "grpo:GRPOTrainerWrapper",
+    "ppo": "ppo:PPOTrainerWrapper",
     "reward_model": "reward_model:RewardModelTrainerWrapper",
-    "kto": "kto:KTOTrainerWrapper", "orpo": "orpo:ORPOTrainerWrapper",
-    "simpo": "simpo:SimPOTrainerWrapper", "ipo": "ipo:IPOTrainerWrapper",
-    "bco": "bco:BCOTrainerWrapper", "preference": "preference:PreferenceTrainerWrapper",
+    "kto": "kto:KTOTrainerWrapper",
+    "orpo": "orpo:ORPOTrainerWrapper",
+    "simpo": "simpo:SimPOTrainerWrapper",
+    "ipo": "ipo:IPOTrainerWrapper",
+    "bco": "bco:BCOTrainerWrapper",
+    "preference": "preference:PreferenceTrainerWrapper",
     "pretrain": "pretrain:PretrainTrainerWrapper",
-    "embedding": "embedding:EmbeddingTrainerWrapper", "prm": "prm:PRMTrainerWrapper",
-    "tts": "tts:TTSTrainerWrapper", "classifier": "classifier:ClassifierTrainerWrapper",
+    "embedding": "embedding:EmbeddingTrainerWrapper",
+    "prm": "prm:PRMTrainerWrapper",
+    "tts": "tts:TTSTrainerWrapper",
+    "classifier": "classifier:ClassifierTrainerWrapper",
     "reranker": "classifier:ClassifierTrainerWrapper",
     "cross_encoder": "classifier:ClassifierTrainerWrapper",
-    "distill": "distill:DistillTrainerWrapper", "unlearn": "unlearn:UnlearnTrainerWrapper",
+    "distill": "distill:DistillTrainerWrapper",
+    "unlearn": "unlearn:UnlearnTrainerWrapper",
     "moe_lora_routing": "mole_routing:MoleRoutingTrainerWrapper",
-    "online_dpo": "online_dpo:OnlineDPOTrainerWrapper", "asr": "asr:AsrTrainerWrapper",
+    "online_dpo": "online_dpo:OnlineDPOTrainerWrapper",
+    "asr": "asr:AsrTrainerWrapper",
 }
 # preference builds one of these per preference_loss (trainer/preference.py).
 _PREFERENCE_DELEGATES = ("dpo", "simpo", "orpo", "ipo", "bco")
 
 _WITH_UNSLOTH = (
-    "sft", "dpo", "grpo", "ppo", "kto", "orpo", "simpo", "ipo", "bco", "preference",
-    "pretrain", "embedding", "tts",
+    "sft",
+    "dpo",
+    "grpo",
+    "ppo",
+    "kto",
+    "orpo",
+    "simpo",
+    "ipo",
+    "bco",
+    "preference",
+    "pretrain",
+    "embedding",
+    "tts",
 )
 # No unsloth setup, and moe_lora is read on transformers: the unsloth refusal
 # reaches these. prm / moe_lora_routing / asr get their task refusal instead.
 _WITHOUT_UNSLOTH = (
-    "reward_model", "classifier", "reranker", "cross_encoder", "unlearn", "distill",
+    "reward_model",
+    "classifier",
+    "reranker",
+    "cross_encoder",
+    "unlearn",
+    "distill",
     "online_dpo",
 )
 _TASK_REFUSED = ("prm", "moe_lora_routing", "asr")
@@ -82,8 +109,14 @@ def _yaml(task, backend, moe_lora=True, modality=None):
     if task != "prm":  # prm refuses any lora block: it fine-tunes every parameter
         training["lora"] = {"r": 4, "dropout": 0.0}
     training.update(_TRAINING.get(task, {}))
-    raw = {"base": "org/m", "task": task, "backend": backend, **top, "data": data,
-           "training": training}
+    raw = {
+        "base": "org/m",
+        "task": task,
+        "backend": backend,
+        **top,
+        "data": data,
+        "training": training,
+    }
     return yaml.safe_dump(raw)
 
 

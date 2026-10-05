@@ -353,7 +353,8 @@ class TestSourceWiring:
 
         src = (
             Path(__file__).resolve().parent.parent
-            / "src" / "soup_cli"
+            / "src"
+            / "soup_cli"
             / "utils"
             / "rl_checkpoint.py"
         )

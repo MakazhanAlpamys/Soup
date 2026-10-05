@@ -57,9 +57,7 @@ def _stream_source_line(stats: dict) -> str:
 
     pinned = "pinned" if stats["pinned"] else "pageable"
     if stats["tier"] == TIER_RAM:
-        return f"{stats['store_bytes'] / 1e9:.2f} GB {pinned} RAM store" + _page_locked_note(
-            stats
-        )
+        return f"{stats['store_bytes'] / 1e9:.2f} GB {pinned} RAM store" + _page_locked_note(stats)
     # Since #974 the staging lives in the same power-of-two arenas as the RAM
     # store, so the disk tier can say what was page-locked too.
     return (
@@ -672,9 +670,9 @@ class StreamingSetupMixin:
         # when the variable is set). A bad entry refuses the run by name.
         stripe_roots = resolve_stripe_roots(
             os.path.dirname(shard_dir),
-            disk_kind=lambda path: resolve_disk_kind(
-                path, tcfg.stream_disk_kind, notify=console.print
-            ).kind,
+            disk_kind=lambda path: (
+                resolve_disk_kind(path, tcfg.stream_disk_kind, notify=console.print).kind
+            ),
         )
         if stripe_roots:
             console.print(

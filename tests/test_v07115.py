@@ -84,9 +84,7 @@ class TestIterativeDpoDefaultTrainFn:
 
         def _fake_run(argv, **kw):
             cfg_path = argv[argv.index("--config") + 1]
-            captured["doc"] = yaml.safe_load(
-                Path(cfg_path).read_text(encoding="utf-8")
-            )
+            captured["doc"] = yaml.safe_load(Path(cfg_path).read_text(encoding="utf-8"))
 
             class _R:
                 returncode = 0
@@ -147,15 +145,11 @@ def _patch_cmaes_libs(monkeypatch, base_loads):
         base_loads.append(name)
         return _FakeBase()
 
-    monkeypatch.setattr(
-        transformers.AutoModelForCausalLM, "from_pretrained", _fake_model_load
-    )
+    monkeypatch.setattr(transformers.AutoModelForCausalLM, "from_pretrained", _fake_model_load)
     monkeypatch.setattr(
         transformers.AutoTokenizer, "from_pretrained", lambda name, **kw: _FakeTok()
     )
-    monkeypatch.setattr(
-        peft.PeftModel, "from_pretrained", lambda base, d, **kw: _FakePeft(base)
-    )
+    monkeypatch.setattr(peft.PeftModel, "from_pretrained", lambda base, d, **kw: _FakePeft(base))
     monkeypatch.setattr(cm, "_generate", lambda model, tok, prompt: "out")
 
     class _Task:
@@ -245,7 +239,7 @@ class TestCachedBaseScorer:
         monkeypatch.setattr(
             __import__("transformers").AutoModelForCausalLM,
             "from_pretrained",
-            lambda name, **kw: (base_loads.append(name) or _BaseWithCfg()),
+            lambda name, **kw: base_loads.append(name) or _BaseWithCfg(),
         )
         monkeypatch.setattr(
             peft.PeftModel, "from_pretrained", lambda base, d, **kw: _PeftLeavesCfg(base)
@@ -280,9 +274,7 @@ class TestEstimateCost:
         import soup_cli.experiment.tracker as trk
 
         monkeypatch.setattr(trk.ExperimentTracker, "__init__", lambda self, *a, **k: None)
-        monkeypatch.setattr(
-            trk.ExperimentTracker, "list_runs", lambda self, limit=50: runs
-        )
+        monkeypatch.setattr(trk.ExperimentTracker, "list_runs", lambda self, limit=50: runs)
 
     def test_uses_last_completed_priced_run(self, monkeypatch):
         from soup_cli.utils import loop_stages
@@ -333,17 +325,13 @@ class TestEstimateCost:
         from soup_cli.utils import loop_stages
 
         # completed but no duration_secs -> skip the field check -> 0.0
-        self._patch_tracker(
-            monkeypatch, [{"status": "completed", "device_name": "NVIDIA A100"}]
-        )
+        self._patch_tracker(monkeypatch, [{"status": "completed", "device_name": "NVIDIA A100"}])
         assert loop_stages.estimate_cost(self._state()) == 0.0
 
     def test_completed_run_missing_device_returns_zero(self, monkeypatch):
         from soup_cli.utils import loop_stages
 
-        self._patch_tracker(
-            monkeypatch, [{"status": "completed", "duration_secs": 3600.0}]
-        )
+        self._patch_tracker(monkeypatch, [{"status": "completed", "duration_secs": 3600.0}])
         assert loop_stages.estimate_cost(self._state()) == 0.0
 
     def test_estimate_raises_is_swallowed(self, monkeypatch):
@@ -448,12 +436,18 @@ class TestEnergyOutHandoff:
         result = CliRunner().invoke(
             app,
             [
-                "bom", "emit",
-                "--name", "m",
-                "--base-model", "b",
-                "--base-sha", sha,
-                "--config-sha", sha,
-                "--energy", "energy.json",
+                "bom",
+                "emit",
+                "--name",
+                "m",
+                "--base-model",
+                "b",
+                "--base-sha",
+                sha,
+                "--config-sha",
+                sha,
+                "--energy",
+                "energy.json",
             ],
         )
         assert result.exit_code == 0, (result.output, repr(result.exception))
@@ -536,8 +530,7 @@ class TestPatchInvariants:
         from pathlib import Path
 
         src = (
-            Path(__file__).resolve().parent.parent
-            / "src" / "soup_cli" / "utils" / "loop_stages.py"
+            Path(__file__).resolve().parent.parent / "src" / "soup_cli" / "utils" / "loop_stages.py"
         ).read_text(encoding="utf-8")
         for bad in ("\nimport torch", "\nimport transformers", "\nimport numpy"):
             assert bad not in src
@@ -546,8 +539,7 @@ class TestPatchInvariants:
         from pathlib import Path
 
         src = (
-            Path(__file__).resolve().parent.parent
-            / "src" / "soup_cli" / "utils" / "cmaes_merge.py"
+            Path(__file__).resolve().parent.parent / "src" / "soup_cli" / "utils" / "cmaes_merge.py"
         ).read_text(encoding="utf-8")
         for bad in ("\nimport torch", "\nimport transformers", "\nimport peft"):
             assert bad not in src

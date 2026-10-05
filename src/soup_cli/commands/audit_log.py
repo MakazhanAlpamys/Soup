@@ -24,12 +24,14 @@ app = typer.Typer(
 def tail_cmd(
     limit: int = typer.Option(50, "--limit", help="Max records to show (1-100000)."),
     path: Optional[str] = typer.Option(
-        None, "--path",
-        help="Override audit log path (default: $SOUP_AUDIT_LOG_PATH "
-             "or ~/.soup/audit.jsonl).",
+        None,
+        "--path",
+        help="Override audit log path (default: $SOUP_AUDIT_LOG_PATH or ~/.soup/audit.jsonl).",
     ),
     json_out: bool = typer.Option(
-        False, "--json", help="Emit raw JSONL instead of a table.",
+        False,
+        "--json",
+        help="Emit raw JSONL instead of a table.",
     ),
 ) -> None:
     """Show the most recent audit records."""
@@ -65,10 +67,16 @@ def tail_cmd(
 @app.command("rotate")
 def rotate_cmd(
     path: Optional[str] = typer.Option(
-        None, "--path", help="Override audit log path.",
+        None,
+        "--path",
+        help="Override audit log path.",
     ),
     cap_mb: int = typer.Option(
-        100, "--cap-mb", min=1, max=10000, help="Rotation cap in MiB.",
+        100,
+        "--cap-mb",
+        min=1,
+        max=10000,
+        help="Rotation cap in MiB.",
     ),
 ) -> None:
     """Force a rotation pass at the current cap."""

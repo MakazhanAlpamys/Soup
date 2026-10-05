@@ -59,9 +59,7 @@ class _FrozenModel(BaseModel):
 class TokenizedTeacherExample(_FrozenModel):
     """Bound JSONL row interpreted by the B1 MLX capture worker."""
 
-    schema_id: Literal["soup.autodistill.tokenized-teacher-example.v1"] = Field(
-        alias="schema"
-    )
+    schema_id: Literal["soup.autodistill.tokenized-teacher-example.v1"] = Field(alias="schema")
     example_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_.:-]+$")
     prompt_token_ids: tuple[int, ...] = Field(min_length=1)
     target_token_ids: tuple[int, ...] = Field(min_length=1)
@@ -72,9 +70,7 @@ class TokenizedTeacherExample(_FrozenModel):
         if isinstance(value, (str, bytes)) or not isinstance(value, (list, tuple)):
             raise TypeError(f"{info.field_name} must be a token-id sequence")
         if any(
-            isinstance(token_id, bool)
-            or not isinstance(token_id, int)
-            or token_id < 0
+            isinstance(token_id, bool) or not isinstance(token_id, int) or token_id < 0
             for token_id in value
         ):
             raise ValueError(f"{info.field_name} must contain non-negative integers")
@@ -111,9 +107,7 @@ class MlxTeacherCaptureRequest(_FrozenModel):
 
 
 class MlxTeacherWorkerReceipt(_FrozenModel):
-    schema_id: Literal["soup.autodistill.mlx-teacher-worker-receipt.v1"] = Field(
-        alias="schema"
-    )
+    schema_id: Literal["soup.autodistill.mlx-teacher-worker-receipt.v1"] = Field(alias="schema")
     # worker_pid is informational only: a venv's Scripts/python.exe launcher
     # spawns the real interpreter as a grandchild, so Popen.pid never equals
     # the child's own os.getpid() there (#898). worker_nonce is what the
@@ -131,9 +125,9 @@ class MlxTeacherWorkerReceipt(_FrozenModel):
     mlx_version: str = Field(min_length=1, max_length=128)
     mlx_lm_version: str = Field(min_length=1, max_length=128)
     inference_dtype: Literal["float16", "bfloat16", "float32"]
-    floating_parameter_dtypes: tuple[
-        Literal["float16", "bfloat16", "float32"], ...
-    ] = Field(min_length=1)
+    floating_parameter_dtypes: tuple[Literal["float16", "bfloat16", "float32"], ...] = Field(
+        min_length=1
+    )
     quantization: str = Field(min_length=1, max_length=128)
 
 
@@ -203,8 +197,7 @@ def _read_control(path: Path, model_type: type[_FrozenModel]) -> _FrozenModel:
 def _load_bound_examples(request: MlxTeacherCaptureRequest) -> tuple[TokenizedTeacherExample, ...]:
     payload = verified_dataset_bytes(request.plan, dataset_root=request.dataset_root)
     examples = tuple(
-        TokenizedTeacherExample.model_validate(json.loads(line))
-        for line in payload.splitlines()
+        TokenizedTeacherExample.model_validate(json.loads(line)) for line in payload.splitlines()
     )
     if not examples:
         raise ValueError("teacher capture dataset must not be empty")
@@ -217,7 +210,7 @@ def _load_bound_examples(request: MlxTeacherCaptureRequest) -> tuple[TokenizedTe
     end = len(examples) if request.example_end is None else request.example_end
     if request.example_start >= len(examples) or end > len(examples):
         raise ValueError("requested example range is outside the bound dataset")
-    selected = examples[request.example_start:end]
+    selected = examples[request.example_start : end]
     selected_token_count = sum(len(example.target_token_ids) for example in selected)
     if selected_token_count > _MAX_CAPTURE_ROWS:
         raise ValueError("teacher capture exceeds the B1 row safety cap")
@@ -548,9 +541,7 @@ def run_mlx_teacher_capture_process(
         detail = ""
         if error_path.is_file() and error_path.stat().st_size <= _MAX_CONTROL_BYTES:
             detail = error_path.read_text(encoding="utf-8").strip()
-        raise RuntimeError(
-            f"MLX teacher worker exited with {process.returncode}: {detail[:4096]}"
-        )
+        raise RuntimeError(f"MLX teacher worker exited with {process.returncode}: {detail[:4096]}")
     receipt = _read_control(
         _contained_path(worker_root, _WORKER_RECEIPT_NAME),
         MlxTeacherWorkerReceipt,

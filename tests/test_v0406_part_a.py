@@ -180,9 +180,7 @@ def test_apply_pre_lora_patches_runs_on_gemma4(monkeypatch) -> None:
     fake_patcher = MagicMock(return_value=1)
     # Patch the symbol resolved inside the helper's lazy import. We do this
     # via the source module, which `peft_wiring` imports lazily by name.
-    monkeypatch.setattr(
-        "soup_cli.utils.peft_patches.apply_gemma4_clippable_patch", fake_patcher
-    )
+    monkeypatch.setattr("soup_cli.utils.peft_patches.apply_gemma4_clippable_patch", fake_patcher)
     model = MagicMock()
     peft_wiring.apply_pre_lora_patches(model, "google/gemma-4-2b-it")
     fake_patcher.assert_called_once_with(model)
@@ -197,9 +195,7 @@ def test_apply_pre_lora_patches_swallows_exceptions(monkeypatch) -> None:
     def _boom(_model):
         raise RuntimeError("synthetic patch failure")
 
-    monkeypatch.setattr(
-        "soup_cli.utils.peft_patches.apply_gemma4_clippable_patch", _boom
-    )
+    monkeypatch.setattr("soup_cli.utils.peft_patches.apply_gemma4_clippable_patch", _boom)
     # Must not raise.
     peft_wiring.apply_pre_lora_patches(MagicMock(), "google/gemma-4-9b")
 
@@ -229,9 +225,7 @@ def test_apply_post_lora_patches_swallows_exceptions(monkeypatch) -> None:
     def _boom(_model):
         raise RuntimeError("synthetic strip failure")
 
-    monkeypatch.setattr(
-        "soup_cli.utils.peft_patches.strip_lora_dropout_for_3d_experts", _boom
-    )
+    monkeypatch.setattr("soup_cli.utils.peft_patches.strip_lora_dropout_for_3d_experts", _boom)
     peft_wiring.apply_post_lora_patches(MagicMock())
 
 
@@ -263,17 +257,21 @@ class TestPreferenceTaskGate:
 
         from soup_cli.config.loader import load_config_from_string
 
-        cfg = load_config_from_string(yaml.safe_dump({
-            "base": "meta-llama/Llama-3.1-8B",
-            "task": "preference",
-            "backend": "transformers",
-            "data": {"train": "./data.jsonl"},
-            "training": {
-                "relora_steps": 100,
-                "quantization": "none",
-                "preference_loss": "dpo",
-            },
-        }))
+        cfg = load_config_from_string(
+            yaml.safe_dump(
+                {
+                    "base": "meta-llama/Llama-3.1-8B",
+                    "task": "preference",
+                    "backend": "transformers",
+                    "data": {"train": "./data.jsonl"},
+                    "training": {
+                        "relora_steps": 100,
+                        "quantization": "none",
+                        "preference_loss": "dpo",
+                    },
+                }
+            )
+        )
         assert cfg.training.relora_steps == 100
         assert cfg.task == "preference"
 
@@ -283,9 +281,7 @@ class TestReLoRASchemaGateWidened:
     task now accepts `relora_steps`; MLX backend still rejected.
     """
 
-    def _base_cfg(
-        self, task: str = "sft", backend: str = "transformers"
-    ) -> dict:
+    def _base_cfg(self, task: str = "sft", backend: str = "transformers") -> dict:
         return {
             "base": "meta-llama/Llama-3.1-8B",
             "task": task,

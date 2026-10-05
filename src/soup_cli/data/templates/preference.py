@@ -21,20 +21,20 @@ def build_prompt(
     """
     if task == "kto":
         format_desc = (
-            'Each example must be a JSON object with keys: '
+            "Each example must be a JSON object with keys: "
             '"prompt" (the user question), '
             '"completion" (the model response), '
             '"label" (boolean: true for good, false for bad). '
-            'Generate roughly equal numbers of true and false labels.'
+            "Generate roughly equal numbers of true and false labels."
         )
     else:
         # DPO / ORPO format
         format_desc = (
-            'Each example must be a JSON object with keys: '
+            "Each example must be a JSON object with keys: "
             '"prompt" (the user question), '
             '"chosen" (a good, helpful response), '
             '"rejected" (a bad, unhelpful, or incorrect response). '
-            'The chosen response should be clearly better than the rejected one.'
+            "The chosen response should be clearly better than the rejected one."
         )
 
     return (

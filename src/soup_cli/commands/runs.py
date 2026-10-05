@@ -197,20 +197,22 @@ def show(
         # it can carry a remote error body verbatim, so it gets control-byte
         # stripping (for_terminal) rather than markup escaping alone (#767).
         info_lines.append(f"Error:      {for_terminal(run['error_message'])}")
-    info_lines.extend([
-        "",
-        f"Model:      [bold]{_esc(str(run.get('base_model') or '-'))}[/]",
-        f"Task:       {_esc(str(run.get('task') or '-'))}",
-        f"Device:     {_esc(str(run.get('device_name') or '-'))} "
-        f"({_esc(str(run.get('device') or '-'))})",
-        f"GPU Memory: {_esc(str(run.get('gpu_memory') or '-'))}",
-        "",
-        f"Loss:       {_fmt_loss(run)}",
-        f"Steps:      {run.get('total_steps') or '-'}",
-        f"Duration:   {duration_str}",
-        f"Cost:       {_fmt_cost(run)}",
-        f"Output:     {_esc(str(run.get('output_dir') or '-'))}",
-    ])
+    info_lines.extend(
+        [
+            "",
+            f"Model:      [bold]{_esc(str(run.get('base_model') or '-'))}[/]",
+            f"Task:       {_esc(str(run.get('task') or '-'))}",
+            f"Device:     {_esc(str(run.get('device_name') or '-'))} "
+            f"({_esc(str(run.get('device') or '-'))})",
+            f"GPU Memory: {_esc(str(run.get('gpu_memory') or '-'))}",
+            "",
+            f"Loss:       {_fmt_loss(run)}",
+            f"Steps:      {run.get('total_steps') or '-'}",
+            f"Duration:   {duration_str}",
+            f"Cost:       {_fmt_cost(run)}",
+            f"Output:     {_esc(str(run.get('output_dir') or '-'))}",
+        ]
+    )
     console.print(Panel("\n".join(info_lines), title="Run Details"))
 
     # Config section
@@ -275,8 +277,11 @@ def compare(
         ("Initial Loss", _fmt_float(r1.get("initial_loss")), _fmt_float(r2.get("initial_loss"))),
         ("Final Loss", _fmt_float(r1.get("final_loss")), _fmt_float(r2.get("final_loss"))),
         ("Steps", str(r1.get("total_steps") or "-"), str(r2.get("total_steps") or "-")),
-        ("Duration", _fmt_duration(r1.get("duration_secs")),
-         _fmt_duration(r2.get("duration_secs"))),
+        (
+            "Duration",
+            _fmt_duration(r1.get("duration_secs")),
+            _fmt_duration(r2.get("duration_secs")),
+        ),
     ]
 
     # Add config comparison for key fields
@@ -292,21 +297,31 @@ def compare(
 
     training1 = c1.get("training", {})
     training2 = c2.get("training", {})
-    rows.extend([
-        ("Epochs", str(training1.get("epochs", "-")), str(training2.get("epochs", "-"))),
-        ("Learning Rate", str(training1.get("lr", "-")), str(training2.get("lr", "-"))),
-        ("Batch Size", str(training1.get("batch_size", "-")),
-         str(training2.get("batch_size", "-"))),
-        ("Quantization", str(training1.get("quantization", "-")),
-         str(training2.get("quantization", "-"))),
-    ])
+    rows.extend(
+        [
+            ("Epochs", str(training1.get("epochs", "-")), str(training2.get("epochs", "-"))),
+            ("Learning Rate", str(training1.get("lr", "-")), str(training2.get("lr", "-"))),
+            (
+                "Batch Size",
+                str(training1.get("batch_size", "-")),
+                str(training2.get("batch_size", "-")),
+            ),
+            (
+                "Quantization",
+                str(training1.get("quantization", "-")),
+                str(training2.get("quantization", "-")),
+            ),
+        ]
+    )
 
     lora1 = training1.get("lora", {})
     lora2 = training2.get("lora", {})
-    rows.extend([
-        ("LoRA r", str(lora1.get("r", "-")), str(lora2.get("r", "-"))),
-        ("LoRA alpha", str(lora1.get("alpha", "-")), str(lora2.get("alpha", "-"))),
-    ])
+    rows.extend(
+        [
+            ("LoRA r", str(lora1.get("r", "-")), str(lora2.get("r", "-"))),
+            ("LoRA alpha", str(lora1.get("alpha", "-")), str(lora2.get("alpha", "-"))),
+        ]
+    )
 
     for label, val1, val2 in rows:
         # Highlight differences
@@ -388,7 +403,8 @@ def clean(
     ),
     force: bool = typer.Option(False, "--force", "-f", help="Skip confirmation"),
     keep_weights: bool = typer.Option(
-        True, "--keep-weights/--no-keep-weights",
+        True,
+        "--keep-weights/--no-keep-weights",
         help=(
             "Keep intermediate model weights and delete only optimizer and scheduler "
             "states (default). --no-keep-weights deletes whole non-best checkpoints."
@@ -473,23 +489,24 @@ def clean(
                     total_bytes_to_reclaim += sch_file.stat().st_size
                     files_to_delete.append(sch_file)
             else:
-                size = sum(f.stat().st_size for f in ckpt.rglob('*') if f.is_file())
+                size = sum(f.stat().st_size for f in ckpt.rglob("*") if f.is_file())
                 total_bytes_to_reclaim += size
                 dirs_to_delete.append(ckpt)
 
     if total_bytes_to_reclaim == 0:
         console.print(
-            "[green]No disposable checkpoint files found. "
-            "Storage is already optimized.[/]"
+            "[green]No disposable checkpoint files found. Storage is already optimized.[/]"
         )
         raise typer.Exit()
 
-    gb_to_reclaim = total_bytes_to_reclaim / (1024 ** 3)
+    gb_to_reclaim = total_bytes_to_reclaim / (1024**3)
 
     if dry_run:
-        console.print(f"[bold]Dry Run:[/] Would reclaim [green]{gb_to_reclaim:.2f} GB[/] "
-                      f"from {len(files_to_delete)} files "
-                      f"and {len(dirs_to_delete)} directories.")
+        console.print(
+            f"[bold]Dry Run:[/] Would reclaim [green]{gb_to_reclaim:.2f} GB[/] "
+            f"from {len(files_to_delete)} files "
+            f"and {len(dirs_to_delete)} directories."
+        )
         for d in dirs_to_delete:
             console.print(f"  [red]Delete dir:[/]\t{d}")
         for f in files_to_delete:
@@ -558,9 +575,7 @@ def replay(
     if summary.initial_loss is not None and summary.final_loss is not None:
         rendered.append(f"Loss:       {summary.initial_loss:.4f} → {summary.final_loss:.4f}")
     if summary.min_loss is not None and summary.min_loss_step is not None:
-        rendered.append(
-            f"Best:       {summary.min_loss:.4f} @ step {summary.min_loss_step}"
-        )
+        rendered.append(f"Best:       {summary.min_loss:.4f} @ step {summary.min_loss_step}")
     rendered.append(f"Cost:       {_fmt_cost(run)}")
     console.print(Panel("\n".join(rendered), title="Replay"))
 
@@ -596,8 +611,7 @@ def _plot_loss_curve(metrics: list[dict]) -> None:
         import plotext as plt
     except ImportError:
         console.print(
-            "[yellow]Install plotext for terminal charts:[/] "
-            "[bold]pip install plotext[/]"
+            "[yellow]Install plotext for terminal charts:[/] [bold]pip install plotext[/]"
         )
         return
 
@@ -627,7 +641,8 @@ def _plot_loss_curve(metrics: list[dict]) -> None:
 def curriculum_curve(
     run_id: str = typer.Argument(..., help="Run ID (or prefix)."),
     history_path: str = typer.Option(
-        None, "--history",
+        None,
+        "--history",
         help="Override path to curriculum_history.jsonl (default: under run output_dir).",
     ),
     width: int = typer.Option(10, "--width", min=4, max=200, help="Per-bucket column width."),
@@ -663,8 +678,7 @@ def curriculum_curve(
         _st = None
     except OSError as exc:
         console.print(
-            f"[red]history path is not stat-able:[/] "
-            f"{markup_escape(os.path.basename(candidate))}"
+            f"[red]history path is not stat-able:[/] {markup_escape(os.path.basename(candidate))}"
         )
         raise typer.Exit(2) from exc
     if _st is not None and _stat.S_ISLNK(_st.st_mode):

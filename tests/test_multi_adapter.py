@@ -44,9 +44,7 @@ class TestAdapterValidation:
     def test_adapter_path_must_exist(self, tmp_path):
         from soup_cli.commands.serve import _validate_adapter_path
 
-        assert _validate_adapter_path(
-            str(tmp_path / "nonexistent"), cwd=str(tmp_path)
-        ) is False
+        assert _validate_adapter_path(str(tmp_path / "nonexistent"), cwd=str(tmp_path)) is False
 
 
 class TestParseAdapters:
@@ -61,11 +59,13 @@ class TestParseAdapters:
     def test_parse_multiple_adapters(self):
         from soup_cli.commands.serve import _parse_adapters
 
-        result = _parse_adapters([
-            "chat=./adapters/chat",
-            "code=./adapters/code",
-            "medical=./adapters/med",
-        ])
+        result = _parse_adapters(
+            [
+                "chat=./adapters/chat",
+                "code=./adapters/code",
+                "medical=./adapters/med",
+            ]
+        )
         assert len(result) == 3
         assert result["chat"] == "./adapters/chat"
         assert result["code"] == "./adapters/code"
@@ -230,6 +230,7 @@ class TestAdapterPathAbsolute:
             from fastapi.testclient import TestClient
         except ImportError:
             import pytest
+
             pytest.skip("FastAPI not installed")
 
         from soup_cli.commands.serve import _create_app
@@ -266,11 +267,18 @@ class TestAdaptersBackendRejection:
         model_dir.mkdir()
         adapter_dir = tmp_path / "adapter"
         adapter_dir.mkdir()
-        result = runner.invoke(app, [
-            "serve", "--model", str(model_dir),
-            "--backend", "vllm",
-            "--adapters", f"chat={adapter_dir}",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "serve",
+                "--model",
+                str(model_dir),
+                "--backend",
+                "vllm",
+                "--adapters",
+                f"chat={adapter_dir}",
+            ],
+        )
         assert result.exit_code != 0
         assert "transformers" in result.output.lower() or "not" in result.output.lower()
 
@@ -287,10 +295,16 @@ class TestMultiAdapterCLI:
         runner = CliRunner()
         model_dir = tmp_path / "model"
         model_dir.mkdir()
-        result = runner.invoke(app, [
-            "serve", "--model", str(model_dir),
-            "--adapters", "invalid_no_equals",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "serve",
+                "--model",
+                str(model_dir),
+                "--adapters",
+                "invalid_no_equals",
+            ],
+        )
         assert result.exit_code != 0
 
     def test_adapters_flag_bad_name(self, tmp_path):
@@ -304,8 +318,14 @@ class TestMultiAdapterCLI:
         model_dir.mkdir()
         adapter_dir = tmp_path / "adapter"
         adapter_dir.mkdir()
-        result = runner.invoke(app, [
-            "serve", "--model", str(model_dir),
-            "--adapters", f"../evil={adapter_dir}",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "serve",
+                "--model",
+                str(model_dir),
+                "--adapters",
+                f"../evil={adapter_dir}",
+            ],
+        )
         assert result.exit_code != 0

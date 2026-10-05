@@ -118,9 +118,7 @@ def parse_expression(expr: str, known_names: set[str]) -> list[TaskTerm]:
                 i += 1
         elif seen_term:
             # Two terms with no operator between them → malformed.
-            raise ValueError(
-                f"expected '+' or '-' between terms at pos {i}: {s[i:i + 8]!r}"
-            )
+            raise ValueError(f"expected '+' or '-' between terms at pos {i}: {s[i : i + 8]!r}")
         _skip_ws()
         if i >= n:
             raise ValueError("expression ends with a dangling operator")
@@ -137,17 +135,13 @@ def parse_expression(expr: str, known_names: set[str]) -> list[TaskTerm]:
                 _skip_ws()
             nm = _NAME_RE.match(s, i)
             if not nm:
-                raise ValueError(
-                    f"expected adapter name after coefficient at pos {i}"
-                )
+                raise ValueError(f"expected adapter name after coefficient at pos {i}")
             name = nm.group()
             i = nm.end()
         else:
             nm = _NAME_RE.match(s, i)
             if not nm:
-                raise ValueError(
-                    f"unexpected token at pos {i}: {s[i:i + 8]!r}"
-                )
+                raise ValueError(f"unexpected token at pos {i}: {s[i : i + 8]!r}")
             name = nm.group()
             i = nm.end()
             _skip_ws()
@@ -156,9 +150,7 @@ def parse_expression(expr: str, known_names: set[str]) -> list[TaskTerm]:
                 _skip_ws()
                 cm = _FLOAT_RE.match(s, i)
                 if not cm:
-                    raise ValueError(
-                        f"expected coefficient after '*' at pos {i}"
-                    )
+                    raise ValueError(f"expected coefficient after '*' at pos {i}")
                 coeff = float(cm.group())
                 i = cm.end()
 
@@ -171,8 +163,7 @@ def parse_expression(expr: str, known_names: set[str]) -> list[TaskTerm]:
             )
         if name not in known_names:
             raise ValueError(
-                f"unknown adapter name {name!r} "
-                f"(declare it with --adapter {name}=<path>)"
+                f"unknown adapter name {name!r} (declare it with --adapter {name}=<path>)"
             )
         signed = sign * coeff
         if name not in coeffs:
@@ -230,8 +221,7 @@ def merge_task_arithmetic(
 
     if len(weights_list) != len(coeffs):
         raise ValueError(
-            f"weights_list ({len(weights_list)}) and coeffs "
-            f"({len(coeffs)}) length mismatch"
+            f"weights_list ({len(weights_list)}) and coeffs ({len(coeffs)}) length mismatch"
         )
     if not weights_list:
         raise ValueError("need at least one adapter")
@@ -289,15 +279,11 @@ def _read_adapter_config_dict(adapter_dir: str) -> dict | None:
     try:
         fd = os.open(str(cfg_path), os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
     except OSError as exc:
-        raise ValueError(
-            f"adapter_config.json unreadable: {type(exc).__name__}"
-        ) from exc
+        raise ValueError(f"adapter_config.json unreadable: {type(exc).__name__}") from exc
     fh = None
     try:
         if os.fstat(fd).st_size > _MAX_ADAPTER_CONFIG_BYTES:
-            raise ValueError(
-                f"adapter_config.json exceeds {_MAX_ADAPTER_CONFIG_BYTES} byte cap"
-            )
+            raise ValueError(f"adapter_config.json exceeds {_MAX_ADAPTER_CONFIG_BYTES} byte cap")
         fh = os.fdopen(fd, "r", encoding="utf-8")
         raw = fh.read()
     finally:
@@ -450,8 +436,7 @@ def merge_task_arithmetic_concat(
     rank = _validate_optional_rank(rank)
     if len(weights_list) != len(coeffs):
         raise ValueError(
-            f"weights_list ({len(weights_list)}) and coeffs "
-            f"({len(coeffs)}) length mismatch"
+            f"weights_list ({len(weights_list)}) and coeffs ({len(coeffs)}) length mismatch"
         )
     if not weights_list:
         raise ValueError("need at least one adapter")
@@ -459,8 +444,7 @@ def merge_task_arithmetic_concat(
         scalings = [1.0] * len(weights_list)
     elif len(scalings) != len(weights_list):
         raise ValueError(
-            f"scalings ({len(scalings)}) and weights_list "
-            f"({len(weights_list)}) length mismatch"
+            f"scalings ({len(scalings)}) and weights_list ({len(weights_list)}) length mismatch"
         )
 
     # Per-adapter: stem -> {"A": name, "B": name}; and a flat set of all names.
@@ -510,8 +494,7 @@ def merge_task_arithmetic_concat(
             b_mat = np.asarray(weights[b_name], dtype=np.float64)
             if a_mat.ndim != 2 or b_mat.ndim != 2:
                 raise ValueError(
-                    f"LoRA factor for {stem!r} is not 2-D "
-                    f"(A{a_mat.shape}, B{b_mat.shape})"
+                    f"LoRA factor for {stem!r} is not 2-D (A{a_mat.shape}, B{b_mat.shape})"
                 )
             r_a, in_a = a_mat.shape
             out_b, r_b = b_mat.shape
@@ -559,8 +542,7 @@ def merge_task_arithmetic_concat(
     # the padding-amplification DoS (one high-rank module forcing every module up
     # to new_rank) cannot exhaust memory even within the per-module cap.
     projected = sum(
-        (a_out.shape[1] + b_out.shape[0]) * new_rank
-        for _a, _b, a_out, b_out in stem_results
+        (a_out.shape[1] + b_out.shape[0]) * new_rank for _a, _b, a_out, b_out in stem_results
     )
     if projected > _MAX_OUTPUT_ELEMENTS:
         raise ValueError(

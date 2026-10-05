@@ -38,9 +38,7 @@ def compute_warmup_steps(
     if epochs < 1:
         raise ValueError(f"epochs must be >= 1, got {epochs}")
     if not (0.0 <= ratio <= MAX_RATIO):
-        raise ValueError(
-            f"ratio must be in [0, {MAX_RATIO}], got {ratio}"
-        )
+        raise ValueError(f"ratio must be in [0, {MAX_RATIO}], got {ratio}")
     if ratio == 0.0:
         return 0
     effective_batch = batch_size * grad_accum

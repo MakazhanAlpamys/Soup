@@ -58,9 +58,15 @@ class TestExportFormatsExtended:
     def test_all_formats_present(self):
         """v0.53.1 — adds torchao + gguf-ud to the v0.52.0 baseline."""
         expected = {
-            "gguf", "onnx", "tensorrt", "awq", "gptq",
-            "bitnet", "tq1_0",
-            "torchao", "gguf-ud",
+            "gguf",
+            "onnx",
+            "tensorrt",
+            "awq",
+            "gptq",
+            "bitnet",
+            "tq1_0",
+            "torchao",
+            "gguf-ud",
         }
         assert set(SUPPORTED_FORMATS) == expected
 
@@ -162,8 +168,13 @@ class TestAwqExportFunction:
         result = runner.invoke(
             app,
             [
-                "export", "--model", str(model_dir), "--format", "awq",
-                "--calibration-data", str(cal_file),
+                "export",
+                "--model",
+                str(model_dir),
+                "--format",
+                "awq",
+                "--calibration-data",
+                str(cal_file),
             ],
         )
         assert result.exit_code != 0
@@ -187,7 +198,11 @@ class TestAwqExportFunction:
         with mock_patch.object(builtins, "__import__", side_effect=reject_awq_import):
             with pytest.raises(ClickExit):
                 export_mod._export_awq(
-                    model_dir, None, None, bits=4, group_size=128,
+                    model_dir,
+                    None,
+                    None,
+                    bits=4,
+                    group_size=128,
                     calibration_data=None,
                 )
         output = _plain(capsys.readouterr().out)
@@ -217,7 +232,11 @@ class TestAwqExportFunction:
             ):
                 with pytest.raises(ClickExit):
                     export_mod._export_awq(
-                        model_dir, None, None, bits=4, group_size=128,
+                        model_dir,
+                        None,
+                        None,
+                        bits=4,
+                        group_size=128,
                         calibration_data=str(cal_file),
                     )
 
@@ -249,7 +268,11 @@ class TestAwqExportFunction:
             ):
                 with pytest.raises(ClickExit):
                     export_mod._export_awq(
-                        model_dir, None, None, bits=4, group_size=128,
+                        model_dir,
+                        None,
+                        None,
+                        bits=4,
+                        group_size=128,
                         calibration_data=str(cal_file),
                     )
 
@@ -277,7 +300,11 @@ class TestAwqExportFunction:
             ):
                 with pytest.raises(ClickExit):
                     export_mod._export_awq(
-                        model_dir, None, None, bits=4, group_size=128,
+                        model_dir,
+                        None,
+                        None,
+                        bits=4,
+                        group_size=128,
                         calibration_data=str(cal_file),
                     )
 
@@ -306,7 +333,11 @@ class TestAwqExportFunction:
             ):
                 with pytest.raises(ClickExit):
                     export_mod._export_awq(
-                        model_dir, None, None, bits=4, group_size=128,
+                        model_dir,
+                        None,
+                        None,
+                        bits=4,
+                        group_size=128,
                         calibration_data=str(cal_dir),
                     )
 
@@ -344,8 +375,11 @@ class TestAwqExportFunction:
                         return_value=cal_file,
                     ):
                         export_mod._export_awq(
-                            model_dir, str(out_path), None,
-                            bits=4, group_size=128,
+                            model_dir,
+                            str(out_path),
+                            None,
+                            bits=4,
+                            group_size=128,
                             calibration_data=str(cal_file),
                         )
         mock_awq_class.from_pretrained.assert_called_once()
@@ -383,7 +417,11 @@ class TestAwqExportFunction:
                     return_value=cal_file,
                 ):
                     export_mod._export_awq(
-                        model_dir, None, None, bits=4, group_size=128,
+                        model_dir,
+                        None,
+                        None,
+                        bits=4,
+                        group_size=128,
                         calibration_data=str(cal_file),
                     )
                     save_call = mock_model.save_quantized.call_args
@@ -426,8 +464,11 @@ class TestAwqExportFunction:
                         return_value=out_path,
                     ):
                         export_mod._export_awq(
-                            model_dir, str(out_path), None,
-                            bits=4, group_size=128,
+                            model_dir,
+                            str(out_path),
+                            None,
+                            bits=4,
+                            group_size=128,
                             calibration_data=str(cal_file),
                         )
                         quant_call = mock_model.quantize.call_args
@@ -443,7 +484,11 @@ class TestAwqExportFunction:
 
         with pytest.raises(ClickExit):
             export_mod._export_awq(
-                model_dir, None, None, bits=3, group_size=128,
+                model_dir,
+                None,
+                None,
+                bits=3,
+                group_size=128,
                 calibration_data=None,
             )
 
@@ -456,7 +501,11 @@ class TestAwqExportFunction:
 
         with pytest.raises(ClickExit):
             export_mod._export_awq(
-                model_dir, None, None, bits=4, group_size=128,
+                model_dir,
+                None,
+                None,
+                bits=4,
+                group_size=128,
                 calibration_data=str(Path("C:/Windows/System32/drivers/etc/hosts")),
             )
 
@@ -492,8 +541,13 @@ class TestGptqExportFunction:
         result = runner.invoke(
             app,
             [
-                "export", "--model", str(model_dir), "--format", "gptq",
-                "--calibration-data", str(cal_file),
+                "export",
+                "--model",
+                str(model_dir),
+                "--format",
+                "gptq",
+                "--calibration-data",
+                str(cal_file),
             ],
         )
         assert result.exit_code != 0
@@ -518,7 +572,11 @@ class TestGptqExportFunction:
         ):
             with pytest.raises(ClickExit):
                 export_mod._export_gptq(
-                    model_dir, None, None, bits=4, group_size=128,
+                    model_dir,
+                    None,
+                    None,
+                    bits=4,
+                    group_size=128,
                     calibration_data=None,
                 )
         mock_gptq_class.from_pretrained.assert_not_called()
@@ -549,7 +607,11 @@ class TestGptqExportFunction:
             ):
                 with pytest.raises(ClickExit):
                     export_mod._export_gptq(
-                        model_dir, None, None, bits=4, group_size=128,
+                        model_dir,
+                        None,
+                        None,
+                        bits=4,
+                        group_size=128,
                         calibration_data=str(cal_file),
                     )
         mock_gptq_class.from_pretrained.assert_not_called()
@@ -590,8 +652,12 @@ class TestGptqExportFunction:
                         return_value=cal_file,
                     ):
                         export_mod._export_gptq(
-                            model_dir, str(out_path), None,
-                            bits=4, group_size=128, calibration_data=str(cal_file),
+                            model_dir,
+                            str(out_path),
+                            None,
+                            bits=4,
+                            group_size=128,
+                            calibration_data=str(cal_file),
                         )
                         mock_gptq_class.from_pretrained.assert_called_once()
                         mock_model.quantize.assert_called_once()
@@ -627,7 +693,11 @@ class TestGptqExportFunction:
                     return_value=cal_file,
                 ):
                     export_mod._export_gptq(
-                        model_dir, None, None, bits=4, group_size=128,
+                        model_dir,
+                        None,
+                        None,
+                        bits=4,
+                        group_size=128,
                         calibration_data=str(cal_file),
                     )
                     save_call = mock_model.save_quantized.call_args
@@ -643,7 +713,11 @@ class TestGptqExportFunction:
 
         with pytest.raises(ClickExit):
             export_mod._export_gptq(
-                model_dir, None, None, bits=3, group_size=128,
+                model_dir,
+                None,
+                None,
+                bits=3,
+                group_size=128,
                 calibration_data=None,
             )
 
@@ -656,7 +730,11 @@ class TestGptqExportFunction:
 
         with pytest.raises(ClickExit):
             export_mod._export_gptq(
-                model_dir, None, None, bits=4, group_size=128,
+                model_dir,
+                None,
+                None,
+                bits=4,
+                group_size=128,
                 calibration_data=str(Path("C:/Windows/System32/drivers/etc/hosts")),
             )
 
@@ -743,8 +821,12 @@ class TestGptqStandardShardName:
                         return_value=cal_file,
                     ):
                         export_mod._export_gptq(
-                            model_dir, str(out_path), None,
-                            bits=4, group_size=128, calibration_data=str(cal_file),
+                            model_dir,
+                            str(out_path),
+                            None,
+                            bits=4,
+                            group_size=128,
+                            calibration_data=str(cal_file),
                         )
 
         assert (out_path / "model.safetensors").exists()
@@ -781,7 +863,11 @@ class TestAwqGptqImportErrorSurfacesRealCause:
             ):
                 with pytest.raises(ClickExit):
                     export_mod._export_gptq(
-                        model_dir, None, None, bits=4, group_size=128,
+                        model_dir,
+                        None,
+                        None,
+                        bits=4,
+                        group_size=128,
                         calibration_data=str(cal_file),
                     )
         output = capsys.readouterr().out
@@ -810,7 +896,11 @@ class TestAwqGptqImportErrorSurfacesRealCause:
             ):
                 with pytest.raises(ClickExit):
                     export_mod._export_awq(
-                        model_dir, None, None, bits=4, group_size=128,
+                        model_dir,
+                        None,
+                        None,
+                        bits=4,
+                        group_size=128,
                         calibration_data=str(cal_file),
                     )
         output = capsys.readouterr().out
@@ -841,7 +931,11 @@ class TestAwqGptqImportErrorSurfacesRealCause:
             ):
                 with pytest.raises(ClickExit):
                     export_mod._export_gptq(
-                        model_dir, None, None, bits=4, group_size=128,
+                        model_dir,
+                        None,
+                        None,
+                        bits=4,
+                        group_size=128,
                         calibration_data=str(cal_file),
                     )
         output = capsys.readouterr().out
@@ -909,9 +1003,13 @@ class TestAwqGptqSecurity:
         result = runner.invoke(
             app,
             [
-                "export", "--model", str(model_dir),
-                "--format", "awq",
-                "--calibration-data", "C:/Windows/System32/drivers/etc/hosts",
+                "export",
+                "--model",
+                str(model_dir),
+                "--format",
+                "awq",
+                "--calibration-data",
+                "C:/Windows/System32/drivers/etc/hosts",
             ],
         )
         assert result.exit_code != 0
@@ -928,9 +1026,13 @@ class TestAwqGptqSecurity:
         result = runner.invoke(
             app,
             [
-                "export", "--model", str(model_dir),
-                "--format", "gptq",
-                "--calibration-data", "C:/Windows/System32/drivers/etc/hosts",
+                "export",
+                "--model",
+                str(model_dir),
+                "--format",
+                "gptq",
+                "--calibration-data",
+                "C:/Windows/System32/drivers/etc/hosts",
             ],
         )
         assert result.exit_code != 0

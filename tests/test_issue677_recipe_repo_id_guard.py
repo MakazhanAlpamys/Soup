@@ -116,13 +116,17 @@ class TestClassification:
         """
         from scripts.check_recipe_repo_ids import Status, classify_repo
 
-        class _GatedError(_NotFoundError):      # the real subclass relationship
+        class _GatedError(_NotFoundError):  # the real subclass relationship
             pass
 
         api = _FakeApi({"meta-llama/Llama-3.1-8B-Instruct": _GatedError("gated")})
         result = classify_repo(
-            api, "meta-llama/Llama-3.1-8B-Instruct",
-            not_found=_NotFoundError, gated=_GatedError, attempts=1, backoff=0,
+            api,
+            "meta-llama/Llama-3.1-8B-Instruct",
+            not_found=_NotFoundError,
+            gated=_GatedError,
+            attempts=1,
+            backoff=0,
         )
 
         assert result.status is Status.GATED, (
@@ -150,15 +154,19 @@ class TestClassification:
         """
         from scripts.check_recipe_repo_ids import check_surfaces, missing_only
 
-        api = _FakeApi({
-            "real/model": _Info(),
-            "zz-invented/does-not-exist-xyz": _NotFoundError("404"),
-        })
+        api = _FakeApi(
+            {
+                "real/model": _Info(),
+                "zz-invented/does-not-exist-xyz": _NotFoundError("404"),
+            }
+        )
         report = check_surfaces(
-            {"fine": ("real/model", "real/model"),
-             "broken": ("zz-invented/does-not-exist-xyz",
-                        "zz-invented/does-not-exist-xyz")},
-            api=api, not_found=_NotFoundError,
+            {
+                "fine": ("real/model", "real/model"),
+                "broken": ("zz-invented/does-not-exist-xyz", "zz-invented/does-not-exist-xyz"),
+            },
+            api=api,
+            not_found=_NotFoundError,
         )
 
         assert missing_only(report) == ["broken"]
@@ -204,16 +212,21 @@ class TestReporting:
     def test_only_missing_is_reported(self):
         from scripts.check_recipe_repo_ids import check_surfaces, missing_only
 
-        api = _FakeApi({
-            "ok/public": _Info(),
-            "ok/gated": _Info(gated=True),
-            "bad/gone": _NotFoundError("404"),
-        })
+        api = _FakeApi(
+            {
+                "ok/public": _Info(),
+                "ok/gated": _Info(gated=True),
+                "bad/gone": _NotFoundError("404"),
+            }
+        )
         report = check_surfaces(
-            {"a": ("ok/public", "ok/public"),
-             "b": ("ok/gated", "ok/gated"),
-             "c": ("bad/gone", "bad/gone")},
-            api=api, not_found=_NotFoundError,
+            {
+                "a": ("ok/public", "ok/public"),
+                "b": ("ok/gated", "ok/gated"),
+                "c": ("bad/gone", "bad/gone"),
+            },
+            api=api,
+            not_found=_NotFoundError,
         )
 
         assert sorted(missing_only(report)) == ["c"], (
@@ -226,7 +239,10 @@ class TestReporting:
         api = _FakeApi({"ok/public": _Info(), "flaky/one": TimeoutError("t")})
         report = check_surfaces(
             {"a": ("ok/public", "ok/public"), "b": ("flaky/one", "flaky/one")},
-            api=api, not_found=_NotFoundError, attempts=1, backoff=0,
+            api=api,
+            not_found=_NotFoundError,
+            attempts=1,
+            backoff=0,
         )
 
         assert missing_only(report) == [], "a timeout is not a missing repo"
@@ -271,8 +287,7 @@ class TestTheWorkflow:
         triggers = self._triggers()
         for forbidden in ("pull_request", "pull_request_target", "push"):
             assert forbidden not in triggers, (
-                f"{forbidden!r} would put this sweep on the critical path of "
-                "unrelated changes"
+                f"{forbidden!r} would put this sweep on the critical path of unrelated changes"
             )
 
     def test_it_asks_for_no_write_permissions(self):
@@ -341,9 +356,7 @@ class TestTheExitCode:
         assert code == 1, "a missing repo must fail the scheduled job"
 
     def test_main_returns_0_when_everything_resolves(self, monkeypatch):
-        code = self._run_main(
-            monkeypatch, {"ok/real": _Info()}, {"r": ("ok/real", "ok/real")}
-        )
+        code = self._run_main(monkeypatch, {"ok/real": _Info()}, {"r": ("ok/real", "ok/real")})
         assert code == 0
 
     def test_an_unverified_only_run_does_not_fail(self, monkeypatch):
@@ -363,16 +376,23 @@ class TestTheReport:
     def _report(self):
         from scripts.check_recipe_repo_ids import check_surfaces
 
-        api = _FakeApi({
-            "ok/real": _Info(),
-            "bad/gone": _NotFoundError("404"),
-            "flaky/one": TimeoutError("read timed out"),
-        })
+        api = _FakeApi(
+            {
+                "ok/real": _Info(),
+                "bad/gone": _NotFoundError("404"),
+                "flaky/one": TimeoutError("read timed out"),
+            }
+        )
         return check_surfaces(
-            {"good-recipe": ("ok/real", "ok/real"),
-             "broken-recipe": ("bad/gone", "ok/real"),
-             "flaky-recipe": ("flaky/one", "ok/real")},
-            api=api, not_found=_NotFoundError, attempts=1, backoff=0,
+            {
+                "good-recipe": ("ok/real", "ok/real"),
+                "broken-recipe": ("bad/gone", "ok/real"),
+                "flaky-recipe": ("flaky/one", "ok/real"),
+            },
+            api=api,
+            not_found=_NotFoundError,
+            attempts=1,
+            backoff=0,
         )
 
     def test_it_names_the_broken_recipe_and_the_surface(self):

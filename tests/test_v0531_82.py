@@ -23,9 +23,7 @@ class TestDetectPrequantizedFormat:
     def test_gptq_name_match(self):
         from soup_cli.autopilot.decisions import detect_prequantized_format
 
-        assert (
-            detect_prequantized_format("TheBloke/Llama-2-7B-Chat-GPTQ") == "gptq"
-        )
+        assert detect_prequantized_format("TheBloke/Llama-2-7B-Chat-GPTQ") == "gptq"
 
     def test_gptq_lowercase(self):
         from soup_cli.autopilot.decisions import detect_prequantized_format
@@ -46,9 +44,7 @@ class TestDetectPrequantizedFormat:
     def test_hqq_explicit_bits(self):
         from soup_cli.autopilot.decisions import detect_prequantized_format
 
-        assert (
-            detect_prequantized_format("some-org/model-HQQ-2bit") == "hqq:2bit"
-        )
+        assert detect_prequantized_format("some-org/model-HQQ-2bit") == "hqq:2bit"
 
     def test_aqlm_name_match(self):
         from soup_cli.autopilot.decisions import detect_prequantized_format
@@ -63,9 +59,7 @@ class TestDetectPrequantizedFormat:
     def test_fp8_name_match(self):
         from soup_cli.autopilot.decisions import detect_prequantized_format
 
-        assert (
-            detect_prequantized_format("neuralmagic/Meta-Llama-3-8B-FP8") == "fp8"
-        )
+        assert detect_prequantized_format("neuralmagic/Meta-Llama-3-8B-FP8") == "fp8"
 
     def test_config_quantization_method(self):
         from soup_cli.autopilot.decisions import detect_prequantized_format
@@ -139,9 +133,14 @@ class TestDetectPrequantizedFormat:
         config_dir = tmp_path / "model"
         config_dir.mkdir()
         cfg_file = config_dir / "config.json"
-        cfg_file.write_text(json.dumps({
-            "quantization_config": {"quant_method": "gptq", "bits": 4},
-        }), encoding="utf-8")
+        cfg_file.write_text(
+            json.dumps(
+                {
+                    "quantization_config": {"quant_method": "gptq", "bits": 4},
+                }
+            ),
+            encoding="utf-8",
+        )
 
         assert detect_prequantized_format_from_path("./model") == "gptq"
 
@@ -163,7 +162,9 @@ class TestDetectPrequantizedFormat:
         assert detect_prequantized_format_from_path("./model") is None
 
     def test_config_probe_path_outside_cwd_returns_none(
-        self, tmp_path, monkeypatch,
+        self,
+        tmp_path,
+        monkeypatch,
     ):
         """Security review H2 — out-of-cwd model_dir silently falls through."""
         from soup_cli.autopilot.decisions import detect_prequantized_format_from_path
@@ -188,7 +189,9 @@ class TestDecideQuantizationPrequantized:
 
         # Even with plenty VRAM, prequantized hint takes precedence
         result = decide_quantization(
-            model_params_b=7.0, vram_gb=80.0, prequantized="gptq",
+            model_params_b=7.0,
+            vram_gb=80.0,
+            prequantized="gptq",
         )
         assert result == "gptq"
 
@@ -197,7 +200,9 @@ class TestDecideQuantizationPrequantized:
 
         assert (
             decide_quantization(
-                model_params_b=7.0, vram_gb=24.0, prequantized="awq",
+                model_params_b=7.0,
+                vram_gb=24.0,
+                prequantized="awq",
             )
             == "awq"
         )
@@ -207,7 +212,9 @@ class TestDecideQuantizationPrequantized:
 
         assert (
             decide_quantization(
-                model_params_b=7.0, vram_gb=24.0, prequantized="hqq:4bit",
+                model_params_b=7.0,
+                vram_gb=24.0,
+                prequantized="hqq:4bit",
             )
             == "hqq:4bit"
         )
@@ -216,17 +223,16 @@ class TestDecideQuantizationPrequantized:
         from soup_cli.autopilot.decisions import decide_quantization
 
         # Same as legacy behaviour when prequantized=None
-        assert (
-            decide_quantization(model_params_b=7.0, vram_gb=80.0)
-            == "none"
-        )
+        assert decide_quantization(model_params_b=7.0, vram_gb=80.0) == "none"
 
     def test_invalid_prequantized_raises(self):
         from soup_cli.autopilot.decisions import decide_quantization
 
         with pytest.raises(ValueError):
             decide_quantization(
-                model_params_b=7.0, vram_gb=24.0, prequantized="evilq",
+                model_params_b=7.0,
+                vram_gb=24.0,
+                prequantized="evilq",
             )
 
     def test_prequantized_bool_rejected(self):
@@ -234,7 +240,9 @@ class TestDecideQuantizationPrequantized:
 
         with pytest.raises(TypeError):
             decide_quantization(
-                model_params_b=7.0, vram_gb=24.0, prequantized=True,
+                model_params_b=7.0,
+                vram_gb=24.0,
+                prequantized=True,
             )
 
     def test_prequantized_null_byte_rejected(self):
@@ -242,7 +250,9 @@ class TestDecideQuantizationPrequantized:
 
         with pytest.raises(ValueError):
             decide_quantization(
-                model_params_b=7.0, vram_gb=24.0, prequantized="ev\x00il",
+                model_params_b=7.0,
+                vram_gb=24.0,
+                prequantized="ev\x00il",
             )
 
     def test_prequantized_none_legacy(self):
@@ -251,7 +261,9 @@ class TestDecideQuantizationPrequantized:
         # Explicit None == no hint == legacy behaviour
         assert (
             decide_quantization(
-                model_params_b=15.0, vram_gb=24.0, prequantized=None,
+                model_params_b=15.0,
+                vram_gb=24.0,
+                prequantized=None,
             )
             == "4bit"
         )
@@ -284,13 +296,17 @@ class TestDecideQuantizationPrequantized:
         # Even with plenty of VRAM, '4bit' wins
         assert (
             decide_quantization(
-                model_params_b=7.0, vram_gb=80.0, prequantized="4bit",
+                model_params_b=7.0,
+                vram_gb=80.0,
+                prequantized="4bit",
             )
             == "4bit"
         )
         assert (
             decide_quantization(
-                model_params_b=7.0, vram_gb=80.0, prequantized="8bit",
+                model_params_b=7.0,
+                vram_gb=80.0,
+                prequantized="8bit",
             )
             == "8bit"
         )

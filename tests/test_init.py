@@ -53,9 +53,7 @@ def test_init_overwrite_denied(tmp_path: Path):
     output = tmp_path / "soup.yaml"
     output.write_text("existing content")
     # typer.confirm will get "n" from stdin
-    runner.invoke(
-        app, ["init", "--template", "chat", "--output", str(output)], input="n\n"
-    )
+    runner.invoke(app, ["init", "--template", "chat", "--output", str(output)], input="n\n")
     # Should exit without overwriting
     assert output.read_text() == "existing content"
 

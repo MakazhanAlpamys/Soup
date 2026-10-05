@@ -571,9 +571,7 @@ def _validate_relora_save_capability(trainer: Any) -> None:
         return
 
     _owner, _holder, _policy_attr, model = _relora_merge_target(trainer)
-    if isinstance(model, nn.Module) and not callable(
-        getattr(model, "merge_and_unload", None)
-    ):
+    if isinstance(model, nn.Module) and not callable(getattr(model, "merge_and_unload", None)):
         raise RuntimeError(
             "ReLoRA requires a PEFT model with merge_and_unload() for dense final saving."
         )
@@ -665,9 +663,7 @@ def save_model_with_relora(
     owner, holder, policy_attr, model = _relora_merge_target(trainer)
     merge_and_unload = getattr(model, "merge_and_unload", None)
     if merge_and_unload is None:
-        raise RuntimeError(
-            "ReLoRA final save requires a PEFT model with merge_and_unload()."
-        )
+        raise RuntimeError("ReLoRA final save requires a PEFT model with merge_and_unload().")
 
     merged_model = merge_and_unload()
     if policy_attr is not None:
@@ -1065,13 +1061,9 @@ def attach_curriculum_callback(
 
     policy = DynamicCurriculumPolicy(
         num_buckets=int(tcfg.curriculum_buckets),
-        recompute_every_n_steps=int(
-            getattr(tcfg, "curriculum_dynamic_recompute_steps", 50) or 50
-        ),
+        recompute_every_n_steps=int(getattr(tcfg, "curriculum_dynamic_recompute_steps", 50) or 50),
         floor=float(getattr(tcfg, "curriculum_dynamic_floor", 0.05) or 0.05),
-        temperature=float(
-            getattr(tcfg, "curriculum_dynamic_temperature", 1.0) or 1.0
-        ),
+        temperature=float(getattr(tcfg, "curriculum_dynamic_temperature", 1.0) or 1.0),
     )
     # v0.71.5 #149 — thread curriculum_metric so the callback can bucket by
     # loss / perplexity percentile (round-robin fallback for `length`). Any
@@ -1246,12 +1238,8 @@ def _attach_reward_hack(
         )
 
         try:
-            writer = MitigationLogWriter(
-                os.path.join(output_dir, "mitigation_log.jsonl")
-            )
-            signals = tuple(
-                getattr(tcfg, "reward_hack_signals", None) or ("info_rm",)
-            )
+            writer = MitigationLogWriter(os.path.join(output_dir, "mitigation_log.jsonl"))
+            signals = tuple(getattr(tcfg, "reward_hack_signals", None) or ("info_rm",))
             bang_bang = None
             pid = None
             if mitigation == "kl_control":
@@ -1285,17 +1273,11 @@ def _attach_reward_hack(
                 bang_bang=bang_bang,
                 pid=pid,
                 rollback=bool(getattr(tcfg, "reward_hack_rollback", False)),
-                rollback_patience=int(
-                    getattr(tcfg, "reward_hack_rollback_patience", 3)
-                ),
-                max_recovery_attempts=int(
-                    getattr(tcfg, "reward_hack_max_recovery_attempts", 2)
-                ),
+                rollback_patience=int(getattr(tcfg, "reward_hack_rollback_patience", 3)),
+                max_recovery_attempts=int(getattr(tcfg, "reward_hack_max_recovery_attempts", 2)),
                 rl_checkpoint_cb=rl_checkpoint_cb,
                 smoothing=getattr(tcfg, "reward_hack_signal_smoothing", "none"),
-                smoothing_window=int(
-                    getattr(tcfg, "reward_hack_smoothing_window", 8)
-                ),
+                smoothing_window=int(getattr(tcfg, "reward_hack_smoothing_window", 8)),
                 conservative_on_disagreement=bool(
                     getattr(tcfg, "reward_hack_conservative_on_disagreement", False)
                 ),
@@ -1377,9 +1359,7 @@ def attach_rl_callbacks(
                 build_echo_trap_callback(
                     threshold=float(getattr(tcfg, "echo_trap_threshold", 0.6)),
                     halt_on_trap=bool(getattr(tcfg, "echo_trap_halt", False)),
-                    tokenizer_aware=bool(
-                        getattr(tcfg, "echo_trap_tokenizer_aware", False)
-                    ),
+                    tokenizer_aware=bool(getattr(tcfg, "echo_trap_tokenizer_aware", False)),
                     buffer=buffer,
                     tokenizer=tokenizer,
                 )
@@ -1412,20 +1392,14 @@ def _build_rl_checkpoint_cb(tcfg: Any, *, output_dir: str, task: str) -> Any:
     try:
         ckpt_cfg = RLCheckpointConfig(
             save_every_steps=int(save_every),
-            include_optimizer_state=bool(
-                getattr(tcfg, "rl_checkpoint_include_optimizer", True)
-            ),
-            include_ref_model=bool(
-                getattr(tcfg, "rl_checkpoint_include_ref_model", False)
-            ),
+            include_optimizer_state=bool(getattr(tcfg, "rl_checkpoint_include_optimizer", True)),
+            include_ref_model=bool(getattr(tcfg, "rl_checkpoint_include_ref_model", False)),
             include_rollout_buffer=bool(
                 getattr(tcfg, "rl_checkpoint_include_rollout_buffer", False)
             ),
             keep_last=int(getattr(tcfg, "rl_checkpoint_keep_last", 3)),
         )
-        return build_rl_checkpoint_callback(
-            ckpt_cfg, output_dir=output_dir, task=task
-        )
+        return build_rl_checkpoint_callback(ckpt_cfg, output_dir=output_dir, task=task)
     except (TypeError, ValueError) as exc:
         logger.debug("build RL-checkpoint callback rejected: %s", exc)
         return None
@@ -1465,9 +1439,7 @@ def attach_plugin_callback(trainer: Any, console: Any = None) -> bool:
             from soup_cli.plugins import list_plugins
 
             n_enabled = sum(1 for s in list_plugins().values() if s.enabled)
-            console.print(
-                f"[dim]Plugin callback attached ({n_enabled} enabled plugin(s)).[/]"
-            )
+            console.print(f"[dim]Plugin callback attached ({n_enabled} enabled plugin(s)).[/]")
         except Exception:  # noqa: BLE001
             pass
     return True
@@ -1516,7 +1488,7 @@ def strip_compile_prefix(output_dir: str) -> int:
         # fails on Windows with `os error 1224` (the same trap adapter_fuse.py
         # documents for an in-place save_pretrained). Cloning detaches the
         # tensors from the mapping so it can be released before the write.
-        target = key[len(_COMPILE_PREFIX):] if key.startswith(_COMPILE_PREFIX) else key
+        target = key[len(_COMPILE_PREFIX) :] if key.startswith(_COMPILE_PREFIX) else key
         if target != key:
             changed += 1
         rewritten[target] = value.clone()
@@ -1529,9 +1501,7 @@ def strip_compile_prefix(output_dir: str) -> int:
 
     # atomic: a half-written adapter is worse than the prefixed one, which at
     # least still holds the trained numbers
-    handle, tmp_path = tempfile.mkstemp(
-        dir=os.path.dirname(path) or ".", suffix=".safetensors"
-    )
+    handle, tmp_path = tempfile.mkstemp(dir=os.path.dirname(path) or ".", suffix=".safetensors")
     os.close(handle)
     try:
         save_file(rewritten, tmp_path)
@@ -1680,7 +1650,5 @@ def attach_compile_prefix_callback(
     """
     if not getattr(tcfg, "use_fsdp2_compile", False):
         return False
-    trainer.add_callback(
-        build_compile_prefix_callback(output_dir=output_dir, console=console)
-    )
+    trainer.add_callback(build_compile_prefix_callback(output_dir=output_dir, console=console))
     return True

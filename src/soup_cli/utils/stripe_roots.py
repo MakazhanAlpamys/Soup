@@ -95,8 +95,7 @@ class ReadAheadDecision:
         notes = []
         if self.raised:
             notes.append(
-                f"raised from {self.configured} because the layer cache spans "
-                f"{self.n_roots} drives"
+                f"raised from {self.configured} because the layer cache spans {self.n_roots} drives"
             )
         if lower < DEFAULT_STREAM_READ_AHEAD < self.depth:
             bumped = effective_read_ahead(DEFAULT_STREAM_READ_AHEAD, self.n_roots)

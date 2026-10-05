@@ -234,4 +234,3 @@ class TestMeasureStepPeakBytesOutcomeMappingGpuFree:
         assert peak.error == "AcceleratorError"
         assert peak.rows == 1
         assert peak.seq_len == 4
-

@@ -144,7 +144,6 @@ class TestTheControl:
                 offenders[name] = [u.path for u in unknown]
         assert offenders == {}
 
-
     def test_every_bundled_fetch_example_is_clean(self) -> None:
         """``soup fetch examples`` ships configs too, and two of them were not.
 
@@ -178,6 +177,7 @@ class TestTheControl:
                 f"{entry.name}: the bundled example spells lora: at the root; "
                 "the canonical spelling is training.lora"
             )
+
     def test_non_mapping_values_do_not_crash_the_walk(self) -> None:
         raw = _raw()
         raw["training"] = "not-a-mapping"
@@ -258,18 +258,14 @@ class TestNonStringKeysAreSkippedNotCrashedOn:
 
 class TestTheMessage:
     def test_message_names_the_path_and_the_suggestion(self) -> None:
-        unknown = find_unknown_config_keys(
-            _raw(extra_training="{epochs: 1, quantizaton: 4bit}")
-        )
+        unknown = find_unknown_config_keys(_raw(extra_training="{epochs: 1, quantizaton: 4bit}"))
         msg = format_unknown_keys(unknown)
         assert "training.quantizaton" in msg
         assert "quantization" in msg
         assert "did you mean" in msg.lower()
 
     def test_a_key_with_no_close_match_still_reports_cleanly(self) -> None:
-        unknown = find_unknown_config_keys(
-            _raw(extra_training="{epochs: 1, zzzzzzzz: 1}")
-        )
+        unknown = find_unknown_config_keys(_raw(extra_training="{epochs: 1, zzzzzzzz: 1}"))
         assert unknown[0].suggestions == ()
         msg = format_unknown_keys(unknown)
         assert "training.zzzzzzzz" in msg
@@ -431,8 +427,7 @@ class TestTheDeadline:
                 sections[-1].append(line)
             bodies = ["\n".join(s) for s in sections]
             assert any(
-                version in body and "unknown config key" in body.lower()
-                for body in bodies
+                version in body and "unknown config key" in body.lower() for body in bodies
             ), (
                 f"{rel} has no section that both names the {version} deadline and "
                 "says what expires -- one without the other is not a deadline"
@@ -475,9 +470,7 @@ class TestTheDocumentedExamplesAreOnesThatActuallyBreak:
     def test_each_documented_example_asks_for_something_the_default_is_not(self) -> None:
         defaults = self._defaults()
         vacuous = {
-            field: value
-            for field, value in self.INTENDED.items()
-            if defaults[field] == value
+            field: value for field, value in self.INTENDED.items() if defaults[field] == value
         }
         assert vacuous == {}, (
             "these documented examples are indistinguishable from the schema "
@@ -724,11 +717,7 @@ class TestATypodSweepFailsTheCommandAndNotJustTheArm:
 
     def _config(self, tmp_path) -> str:
         cfg = tmp_path / "soup.yaml"
-        cfg.write_text(
-            "base: test-model\n"
-            "data:\n"
-            "  train: ./data.jsonl\n"
-        )
+        cfg.write_text("base: test-model\ndata:\n  train: ./data.jsonl\n")
         return str(cfg)
 
     def test_a_typod_sweep_exits_non_zero(self, tmp_path) -> None:
@@ -736,12 +725,17 @@ class TestATypodSweepFailsTheCommandAndNotJustTheArm:
 
         from soup_cli.cli import app
 
-        result = CliRunner().invoke(app, [
-            "sweep",
-            "--config", self._config(tmp_path),
-            "--param", "learnig_rate=1e-5,2e-5",
-            "--yes",
-        ])
+        result = CliRunner().invoke(
+            app,
+            [
+                "sweep",
+                "--config",
+                self._config(tmp_path),
+                "--param",
+                "learnig_rate=1e-5,2e-5",
+                "--yes",
+            ],
+        )
         assert result.exit_code != 0, (
             "a sweep whose only swept parameter names no config field exited "
             f"{result.exit_code}; nothing downstream can detect that"
@@ -752,12 +746,17 @@ class TestATypodSweepFailsTheCommandAndNotJustTheArm:
 
         from soup_cli.cli import app
 
-        result = CliRunner().invoke(app, [
-            "sweep",
-            "--config", self._config(tmp_path),
-            "--param", "learnig_rate=1e-5,2e-5",
-            "--yes",
-        ])
+        result = CliRunner().invoke(
+            app,
+            [
+                "sweep",
+                "--config",
+                self._config(tmp_path),
+                "--param",
+                "learnig_rate=1e-5,2e-5",
+                "--yes",
+            ],
+        )
         assert "learnig_rate" in result.output
 
     def test_no_arm_is_started_and_no_results_table_is_printed(self, tmp_path) -> None:
@@ -766,12 +765,17 @@ class TestATypodSweepFailsTheCommandAndNotJustTheArm:
 
         from soup_cli.cli import app
 
-        result = CliRunner().invoke(app, [
-            "sweep",
-            "--config", self._config(tmp_path),
-            "--param", "learnig_rate=1e-5,2e-5",
-            "--yes",
-        ])
+        result = CliRunner().invoke(
+            app,
+            [
+                "sweep",
+                "--config",
+                self._config(tmp_path),
+                "--param",
+                "learnig_rate=1e-5,2e-5",
+                "--yes",
+            ],
+        )
         assert "--- Run 1/2" not in result.output, "an arm started despite the guard"
         assert "failed" not in result.output.lower(), (
             "a per-arm failure table means the loop swallowed the guard"
@@ -792,13 +796,19 @@ class TestATypodSweepFailsTheCommandAndNotJustTheArm:
 
         from soup_cli.cli import app
 
-        result = CliRunner().invoke(app, [
-            "sweep",
-            "--config", self._config(tmp_path),
-            "--param", "training.lr=1e-5",
-            "--max-runs", "-1",
-            "--yes",
-        ])
+        result = CliRunner().invoke(
+            app,
+            [
+                "sweep",
+                "--config",
+                self._config(tmp_path),
+                "--param",
+                "training.lr=1e-5",
+                "--max-runs",
+                "-1",
+                "--yes",
+            ],
+        )
         assert "IndexError" not in result.output, result.output
         assert result.exit_code == 0, result.output
 
@@ -817,12 +827,17 @@ class TestATypodSweepFailsTheCommandAndNotJustTheArm:
 
         from .conftest import strip_ansi
 
-        result = CliRunner().invoke(app, [
-            "sweep",
-            "--config", self._config(tmp_path),
-            "--param", "training.lr=1e-5",
-            "--yes",
-        ])
+        result = CliRunner().invoke(
+            app,
+            [
+                "sweep",
+                "--config",
+                self._config(tmp_path),
+                "--param",
+                "training.lr=1e-5",
+                "--yes",
+            ],
+        )
         # Normalised before matching (#886): with colour on, Rich splits the
         # banner with SGR codes, so `"--- Run 1/1" in result.output` is False
         # while the rendered line really is `--- Run 1/1: sweep_1 ---`. A
@@ -865,13 +880,7 @@ class TestTheLoaderIsActuallyWiredUp:
         "  epochs: 1\n"
         "  quantizaton: none\n"
     )
-    CLEAN = (
-        "base: test-model\n"
-        "data:\n"
-        "  train: ./data.jsonl\n"
-        "training:\n"
-        "  epochs: 1\n"
-    )
+    CLEAN = "base: test-model\ndata:\n  train: ./data.jsonl\ntraining:\n  epochs: 1\n"
 
     @staticmethod
     def _recording_console(monkeypatch) -> list:
@@ -968,9 +977,7 @@ class TestTheLoaderIsActuallyWiredUp:
         with pytest.raises(ValueError, match="quantizaton"):
             loader.load_config_from_string(self.TYPOD)
 
-    def test_the_file_call_site_refuses_under_error_severity(
-        self, monkeypatch, tmp_path
-    ) -> None:
+    def test_the_file_call_site_refuses_under_error_severity(self, monkeypatch, tmp_path) -> None:
         from soup_cli.config import loader
 
         path = tmp_path / "soup.yaml"
@@ -1371,9 +1378,7 @@ class TestPlanAndApplyRefuseUnknownKeys:
         monkeypatch.chdir(tmp_path)
         cfg = tmp_path / "soup.yaml"
         cfg.write_text(self.TYPOD, encoding="utf-8")
-        result = CliRunner().invoke(
-            app, ["apply", "--config", str(cfg), "--dry-run"]
-        )
+        result = CliRunner().invoke(app, ["apply", "--config", str(cfg), "--dry-run"])
         assert result.exit_code == 1, result.output
         assert "unknown config key" in result.output
         assert "training.quantizaton" in result.output

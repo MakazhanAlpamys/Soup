@@ -68,9 +68,7 @@ def validate_local_rl_backend(name: object) -> str:
     if "\x00" in name:
         raise ValueError("backend must not contain null bytes")
     if len(name) > _MAX_BACKEND_LEN:
-        raise ValueError(
-            f"backend length {len(name)} > {_MAX_BACKEND_LEN}"
-        )
+        raise ValueError(f"backend length {len(name)} > {_MAX_BACKEND_LEN}")
     canonical = name.lower()
     if canonical not in SUPPORTED_LOCAL_RL_BACKENDS:
         raise ValueError(
@@ -90,9 +88,7 @@ def validate_local_rl_train_method(name: object) -> str:
     if "\x00" in name:
         raise ValueError("train_method must not contain null bytes")
     if len(name) > _MAX_TRAIN_METHOD_LEN:
-        raise ValueError(
-            f"train_method length {len(name)} > {_MAX_TRAIN_METHOD_LEN}"
-        )
+        raise ValueError(f"train_method length {len(name)} > {_MAX_TRAIN_METHOD_LEN}")
     canonical = name.lower()
     if canonical not in SUPPORTED_LOCAL_RL_TRAIN_METHODS:
         raise ValueError(
@@ -126,9 +122,7 @@ def _validate_thumb(value: object) -> str:
     if not isinstance(value, str):
         raise TypeError("thumb must be str")
     if value not in _VALID_THUMBS:
-        raise ValueError(
-            f"thumb must be one of {sorted(_VALID_THUMBS)}, got {value!r}"
-        )
+        raise ValueError(f"thumb must be one of {sorted(_VALID_THUMBS)}, got {value!r}")
     return value
 
 
@@ -146,20 +140,14 @@ def validate_db_path(path: object) -> str:
     if "\n" in path or "\r" in path:
         raise ValueError("db_path must not contain newline / carriage return")
     if not is_under_cwd(path):
-        raise ValueError(
-            f"db_path {os.path.basename(path)!r} must stay under cwd"
-        )
+        raise ValueError(f"db_path {os.path.basename(path)!r} must stay under cwd")
     if os.path.lexists(path):
         try:
             st = os.lstat(path)
         except OSError as exc:
-            raise ValueError(
-                f"db_path unreadable: {type(exc).__name__}"
-            ) from exc
+            raise ValueError(f"db_path unreadable: {type(exc).__name__}") from exc
         if stat.S_ISLNK(st.st_mode):
-            raise ValueError(
-                "db_path must not be a symlink (TOCTOU defence)"
-            )
+            raise ValueError("db_path must not be a symlink (TOCTOU defence)")
     return path
 
 
@@ -192,9 +180,7 @@ class LocalRLConfig:
     train_method: str
 
     def __post_init__(self) -> None:
-        object.__setattr__(
-            self, "backend", validate_local_rl_backend(self.backend)
-        )
+        object.__setattr__(self, "backend", validate_local_rl_backend(self.backend))
         _validate_model(self.model)
         validate_db_path(self.db_path)
         object.__setattr__(
@@ -342,9 +328,7 @@ def get_state(db_path: str, key: str) -> "str | None":
         raise FileNotFoundError(f"db_path not found: {db_path!r}")
     with sqlite3.connect(real) as conn:
         _ensure_state_table(conn)
-        row = conn.execute(
-            "SELECT value FROM state WHERE key = ?", (key,)
-        ).fetchone()
+        row = conn.execute("SELECT value FROM state WHERE key = ?", (key,)).fetchone()
     return row[0] if row is not None else None
 
 
@@ -391,9 +375,7 @@ def count_new_thumbs_since(db_path: str, since_ts: "float | None") -> int:
 # ---------------------------------------------------------------------------
 
 
-def pairs_to_rows(
-    pairs: "Tuple[DpoPair, ...]", train_method: str
-) -> "list[dict]":
+def pairs_to_rows(pairs: "Tuple[DpoPair, ...]", train_method: str) -> "list[dict]":
     """Convert harvested DPO pairs to JSONL rows for ``train_method``.
 
     - ``dpo`` / ``orpo`` -> one ``{prompt, chosen, rejected}`` row per pair.
@@ -406,12 +388,8 @@ def pairs_to_rows(
         if not isinstance(pair, DpoPair):
             raise TypeError("pairs must contain DpoPair objects")
         if method == "kto":
-            rows.append(
-                {"prompt": pair.prompt, "completion": pair.chosen, "label": True}
-            )
-            rows.append(
-                {"prompt": pair.prompt, "completion": pair.rejected, "label": False}
-            )
+            rows.append({"prompt": pair.prompt, "completion": pair.chosen, "label": True})
+            rows.append({"prompt": pair.prompt, "completion": pair.rejected, "label": False})
         else:  # dpo / orpo
             rows.append(
                 {
@@ -472,9 +450,7 @@ def _default_train_fn(
         default_flow_style=False,
         sort_keys=False,
     )
-    fd, tmp_yaml = tempfile.mkstemp(
-        suffix=".yaml", prefix=".soup_localrl_", dir=os.getcwd()
-    )
+    fd, tmp_yaml = tempfile.mkstemp(suffix=".yaml", prefix=".soup_localrl_", dir=os.getcwd())
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write(yaml_text)

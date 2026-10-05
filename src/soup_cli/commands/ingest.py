@@ -45,10 +45,7 @@ def ingest(
     source: str = typer.Option(
         ...,
         "--source",
-        help=(
-            "Trace source: langfuse | langsmith | helicone | openpipe | "
-            "otel | openai-stored"
-        ),
+        help=("Trace source: langfuse | langsmith | helicone | openpipe | otel | openai-stored"),
     ),
     logs: Optional[str] = typer.Option(
         None,
@@ -95,11 +92,13 @@ def ingest(
         ),
     ),
     slack_url: Optional[str] = typer.Option(
-        None, "--slack-url",
+        None,
+        "--slack-url",
         help="Optional Slack webhook URL — POSTed on completion. SSRF-validated.",
     ),
     discord_url: Optional[str] = typer.Option(
-        None, "--discord-url",
+        None,
+        "--discord-url",
         help="Optional Discord webhook URL — POSTed on completion. SSRF-validated.",
     ),
 ) -> None:
@@ -116,9 +115,7 @@ def ingest(
         console.print(f"[red]{escape(str(exc))}[/]")
         raise typer.Exit(2) from exc
 
-    slack_url, discord_url = validate_webhook_flags(
-        slack_url, discord_url, console=console
-    )
+    slack_url, discord_url = validate_webhook_flags(slack_url, discord_url, console=console)
 
     if pull:
         _pull(
@@ -159,9 +156,7 @@ def ingest(
 
     output_path = Path(output) if output else Path("traces.jsonl")
     if not is_under_cwd(output_path):
-        console.print(
-            f"[red]--output '{escape(str(output_path))}' is outside cwd — refusing[/]"
-        )
+        console.print(f"[red]--output '{escape(str(output_path))}' is outside cwd — refusing[/]")
         raise typer.Exit(1)
 
     _print_pii_reminder(canonical)
@@ -169,8 +164,7 @@ def ingest(
     auth_value = resolve_auth_env(canonical)
     if auth_value is None:
         console.print(
-            "[dim]No auth env var set — this CLI parses the local export "
-            "only (no SaaS pull).[/]"
+            "[dim]No auth env var set — this CLI parses the local export only (no SaaS pull).[/]"
         )
 
     count = 0
@@ -180,8 +174,7 @@ def ingest(
             count += 1
 
     console.print(
-        f"[green]Wrote {count} traces from {escape(canonical)} -> "
-        f"{escape(output_path.name)}[/]"
+        f"[green]Wrote {count} traces from {escape(canonical)} -> {escape(output_path.name)}[/]"
     )
 
     emit_webhooks(

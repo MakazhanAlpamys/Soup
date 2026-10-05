@@ -35,11 +35,7 @@ _MESSAGES = [
     {"role": "user", "content": "What is the capital of France?"},
 ]
 
-_LEGACY = (
-    "System: You are terse.\n"
-    "User: What is the capital of France?\n"
-    "Assistant:"
-)
+_LEGACY = "System: You are terse.\nUser: What is the capital of France?\nAssistant:"
 
 
 def _tokenizer(chat_template):
@@ -55,9 +51,7 @@ def _tokenizer(chat_template):
         tokenizers.models.WordLevel(vocab={"<unk>": 0}, unk_token="<unk>")
     )
     backend.pre_tokenizer = tokenizers.pre_tokenizers.Whitespace()
-    tok = transformers.PreTrainedTokenizerFast(
-        tokenizer_object=backend, unk_token="<unk>"
-    )
+    tok = transformers.PreTrainedTokenizerFast(tokenizer_object=backend, unk_token="<unk>")
     tok.chat_template = chat_template
     return tok
 
@@ -83,9 +77,7 @@ class TestBuildChatPrompt:
         from soup_cli.utils.vllm import build_chat_prompt
 
         tok = _tokenizer(_CHATML)
-        expected = tok.apply_chat_template(
-            _MESSAGES, tokenize=False, add_generation_prompt=True
-        )
+        expected = tok.apply_chat_template(_MESSAGES, tokenize=False, add_generation_prompt=True)
 
         assert build_chat_prompt(_MESSAGES, tok) == expected
 
@@ -135,8 +127,7 @@ class TestBuildChatPrompt:
         from soup_cli.utils.vllm import build_chat_prompt
 
         tok = _tokenizer(
-            "{% for m in messages %}{{ m['role'] }}:{{ m.get('name', '-') }}"
-            "{% endfor %}"
+            "{% for m in messages %}{{ m['role'] }}:{{ m.get('name', '-') }}{% endfor %}"
         )
         msgs = [{"role": "tool", "content": "42", "name": "calculator"}]
 
@@ -168,9 +159,7 @@ class TestBothBackendsShareOneBuilder:
         # #781: serve renders through the builder's body and encodes in the same
         # call; the ids it sends are pinned in tests/test_issue781_inference_bos.py.
         src = Path("src/soup_cli/commands/serve.py").read_text(encoding="utf-8")
-        assert "encode_chat_prompt(" in src, (
-            "the transformers backend must use the shared builder"
-        )
+        assert "encode_chat_prompt(" in src, "the transformers backend must use the shared builder"
 
     def test_no_second_hand_rolled_prompt_remains_in_the_serve_backends(self):
         """The literal that produced the run-on loop must exist in exactly one
@@ -294,9 +283,7 @@ class TestVllmAppPrompt:
         tok = _tokenizer(_CHATML)
         capture, _ = self._post(tok)
 
-        templated = tok.apply_chat_template(
-            _MESSAGES, tokenize=False, add_generation_prompt=True
-        )
+        templated = tok.apply_chat_template(_MESSAGES, tokenize=False, add_generation_prompt=True)
         assert capture["prompt"] == {
             "prompt_token_ids": tok(templated, add_special_tokens=False)["input_ids"]
         }
@@ -351,9 +338,7 @@ class TestVllmAppFinishReason:
         pytest.importorskip("fastapi", reason="the [serve] extra is optional")
         from fastapi.testclient import TestClient
 
-        app = _build_app(
-            tokenizer=_tokenizer(_CHATML), output=output, capture={}
-        )
+        app = _build_app(tokenizer=_tokenizer(_CHATML), output=output, capture={})
         resp = TestClient(app).post(
             "/v1/chat/completions",
             json={
@@ -426,9 +411,7 @@ class TestVllmStreamFinishReason:
         pytest.importorskip("fastapi", reason="the [serve] extra is optional")
         from fastapi.testclient import TestClient
 
-        app = _build_app(
-            tokenizer=_tokenizer(_CHATML), output=output, capture={}
-        )
+        app = _build_app(tokenizer=_tokenizer(_CHATML), output=output, capture={})
         with TestClient(app).stream(
             "POST",
             "/v1/chat/completions",
@@ -441,7 +424,7 @@ class TestVllmStreamFinishReason:
         ) as resp:
             assert resp.status_code == 200
             frames = [
-                json.loads(line[len("data: "):])
+                json.loads(line[len("data: ") :])
                 for line in resp.iter_lines()
                 if line.startswith("data: ") and not line.endswith("[DONE]")
             ]
@@ -491,9 +474,7 @@ class TestVllmStreamFinishReason:
 
 class TestVllmMetrics:
     def test_metrics_route_exists(self):
-        app = _build_app(
-            tokenizer=None, output=_FakeOutput("x", [1]), capture={}
-        )
+        app = _build_app(tokenizer=None, output=_FakeOutput("x", [1]), capture={})
 
         assert "/metrics" in [r.path for r in app.routes if hasattr(r, "path")]
 
@@ -577,11 +558,12 @@ class TestMaxModelLenFlag:
         model_path = tmp_path / "model"
         model_path.mkdir()
 
-        with patch(
-            "soup_cli.utils.vllm.create_vllm_engine",
-            return_value=(MagicMock(), "base-model"),
-        ) as engine_factory, patch(
-            "soup_cli.utils.vllm.create_vllm_app", return_value=MagicMock()
+        with (
+            patch(
+                "soup_cli.utils.vllm.create_vllm_engine",
+                return_value=(MagicMock(), "base-model"),
+            ) as engine_factory,
+            patch("soup_cli.utils.vllm.create_vllm_app", return_value=MagicMock()),
         ):
             from soup_cli.commands.serve import _serve_vllm
 
@@ -602,11 +584,12 @@ class TestMaxModelLenFlag:
         model_path = tmp_path / "model"
         model_path.mkdir()
 
-        with patch(
-            "soup_cli.utils.vllm.create_vllm_engine",
-            return_value=(MagicMock(), "base-model"),
-        ) as engine_factory, patch(
-            "soup_cli.utils.vllm.create_vllm_app", return_value=MagicMock()
+        with (
+            patch(
+                "soup_cli.utils.vllm.create_vllm_engine",
+                return_value=(MagicMock(), "base-model"),
+            ) as engine_factory,
+            patch("soup_cli.utils.vllm.create_vllm_app", return_value=MagicMock()),
         ):
             from soup_cli.commands.serve import _serve_vllm
 

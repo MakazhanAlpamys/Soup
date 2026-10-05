@@ -44,12 +44,17 @@ def temp_registry(tmp_path, monkeypatch):
 
     from soup_cli.registry.store import RegistryStore
 
-    def _push(name="mymodel", tag="v1", base="meta-llama/x", task="dpo",
-              config=None, data_path=None):
+    def _push(
+        name="mymodel", tag="v1", base="meta-llama/x", task="dpo", config=None, data_path=None
+    ):
         with RegistryStore() as store:
             return store.push(
-                name=name, tag=tag, base_model=base, task=task,
-                run_id="run-1", config=config or {"base": base, "task": task},
+                name=name,
+                tag=tag,
+                base_model=base,
+                task=task,
+                run_id="run-1",
+                config=config or {"base": base, "task": task},
                 data_path=data_path,
             )
 
@@ -79,9 +84,7 @@ class TestBranchRefKind:
         entry_id = temp_registry()
         ptr = tmp_path / "ptr.json"
         ptr.write_text('{"k": "v"}', encoding="utf-8")
-        rowid = attach_artifact(
-            entry_id, path=str(ptr), kind="branch_ref", enforce_cwd=False
-        )
+        rowid = attach_artifact(entry_id, path=str(ptr), kind="branch_ref", enforce_cwd=False)
         assert isinstance(rowid, int)
 
 
@@ -100,7 +103,9 @@ class TestBranchSchema:
 
         cfg = _write_cfg(tmp_path)
         create_branch(
-            "b2", config_path=cfg, base_model="meta-llama/x",
+            "b2",
+            config_path=cfg,
+            base_model="meta-llama/x",
             registry_entry_id="reg_20260601_abc123",
         )
         assert load_branch("b2").registry_entry_id == "reg_20260601_abc123"
@@ -111,7 +116,10 @@ class TestBranchSchema:
         cfg = _write_cfg(tmp_path)
         sha = "c" * 64
         create_branch(
-            "b3", config_path=cfg, base_model="meta-llama/x", dataset_sha256=sha,
+            "b3",
+            config_path=cfg,
+            base_model="meta-llama/x",
+            dataset_sha256=sha,
         )
         assert load_branch("b3").dataset_sha256 == sha
 
@@ -123,8 +131,11 @@ class TestBranchSchema:
         ds.write_text("{}\n", encoding="utf-8")
         with pytest.raises(ValueError):
             create_branch(
-                "b4", config_path=cfg, base_model="meta-llama/x",
-                dataset_path=str(ds), dataset_sha256="d" * 64,
+                "b4",
+                config_path=cfg,
+                base_model="meta-llama/x",
+                dataset_path=str(ds),
+                dataset_sha256="d" * 64,
             )
 
     def test_registry_entry_id_null_byte_rejected(self, temp_registry, tmp_path):
@@ -133,7 +144,9 @@ class TestBranchSchema:
         cfg = _write_cfg(tmp_path)
         with pytest.raises(ValueError):
             create_branch(
-                "b5", config_path=cfg, base_model="meta-llama/x",
+                "b5",
+                config_path=cfg,
+                base_model="meta-llama/x",
                 registry_entry_id="reg\x00bad",
             )
 
@@ -150,9 +163,7 @@ class TestBranchSchema:
             "created_at": 1.0,
             "soup_version": "0.57.0",
         }
-        (_branches_dir() / "legacy.json").write_text(
-            json.dumps(legacy), encoding="utf-8"
-        )
+        (_branches_dir() / "legacy.json").write_text(json.dumps(legacy), encoding="utf-8")
         snap = load_branch("legacy")
         assert snap.registry_entry_id is None
         assert snap.base_model == "meta-llama/x"
@@ -230,9 +241,14 @@ class TestBranchCli:
         result = runner.invoke(
             self._app(),
             [
-                "branch", "clibranch",
-                "-c", cfg, "--base", "meta-llama/x",
-                "--attach-to-registry", entry_id,
+                "branch",
+                "clibranch",
+                "-c",
+                cfg,
+                "--base",
+                "meta-llama/x",
+                "--attach-to-registry",
+                entry_id,
             ],
         )
         assert result.exit_code == 0, (result.output, repr(result.exception))
@@ -305,19 +321,23 @@ def _make_adapter(dir_path, *, scale=1.0):
     dir_path.mkdir(parents=True, exist_ok=True)
     rng = np.random.default_rng(0)
     tensors = {
-        "base_model.model.layers.0.self_attn.q_proj.lora_A.weight":
-            (rng.standard_normal((8, 16)) * scale).astype("float32"),
-        "base_model.model.layers.0.self_attn.q_proj.lora_B.weight":
-            (rng.standard_normal((16, 8)) * scale).astype("float32"),
+        "base_model.model.layers.0.self_attn.q_proj.lora_A.weight": (
+            rng.standard_normal((8, 16)) * scale
+        ).astype("float32"),
+        "base_model.model.layers.0.self_attn.q_proj.lora_B.weight": (
+            rng.standard_normal((16, 8)) * scale
+        ).astype("float32"),
     }
     save_file(tensors, str(dir_path / "adapter_model.safetensors"))
     (dir_path / "adapter_config.json").write_text(
-        json.dumps({
-            "peft_type": "LORA",
-            "r": 8,
-            "lora_alpha": 16,
-            "base_model_name_or_path": "hf-internal-testing/tiny-random-gpt2",
-        }),
+        json.dumps(
+            {
+                "peft_type": "LORA",
+                "r": 8,
+                "lora_alpha": 16,
+                "base_model_name_or_path": "hf-internal-testing/tiny-random-gpt2",
+            }
+        ),
         encoding="utf-8",
     )
     return str(dir_path)
@@ -327,8 +347,13 @@ def _make_report():
     from soup_cli.utils.adapter_merge import MergeReport
 
     return MergeReport(
-        strategy="linear", adapters=("a", "b"), weights=(0.5, 0.5),
-        merged_layers=1, skipped_layers=(), output_dir="out", verdict="UNKNOWN",
+        strategy="linear",
+        adapters=("a", "b"),
+        weights=(0.5, 0.5),
+        merged_layers=1,
+        skipped_layers=(),
+        output_dir="out",
+        verdict="UNKNOWN",
     )
 
 
@@ -343,10 +368,15 @@ class TestPredictMergedVerdict:
 
         monkeypatch.chdir(tmp_path)
         suite = tmp_path / "canary.json"
-        suite.write_text(json.dumps({
-            "baseline_scores": [0.9, 0.8, 0.85, 0.9],
-            "candidate_scores": [0.9, 0.81, 0.86, 0.9],
-        }), encoding="utf-8")
+        suite.write_text(
+            json.dumps(
+                {
+                    "baseline_scores": [0.9, 0.8, 0.85, 0.9],
+                    "candidate_scores": [0.9, 0.81, 0.86, 0.9],
+                }
+            ),
+            encoding="utf-8",
+        )
         assert predict_merged_verdict(_make_report(), str(suite)) == "OK"
 
     def test_minor_drop(self, tmp_path, monkeypatch):
@@ -355,10 +385,15 @@ class TestPredictMergedVerdict:
         monkeypatch.chdir(tmp_path)
         suite = tmp_path / "canary.json"
         # ~3% drop on average → MINOR
-        suite.write_text(json.dumps({
-            "baseline_scores": [1.0, 1.0, 1.0, 1.0],
-            "candidate_scores": [0.97, 0.97, 0.97, 0.97],
-        }), encoding="utf-8")
+        suite.write_text(
+            json.dumps(
+                {
+                    "baseline_scores": [1.0, 1.0, 1.0, 1.0],
+                    "candidate_scores": [0.97, 0.97, 0.97, 0.97],
+                }
+            ),
+            encoding="utf-8",
+        )
         assert predict_merged_verdict(_make_report(), str(suite)) == "MINOR"
 
     def test_major_drop(self, tmp_path, monkeypatch):
@@ -366,10 +401,15 @@ class TestPredictMergedVerdict:
 
         monkeypatch.chdir(tmp_path)
         suite = tmp_path / "canary.json"
-        suite.write_text(json.dumps({
-            "baseline_scores": [1.0, 1.0, 1.0, 1.0],
-            "candidate_scores": [0.85, 0.85, 0.85, 0.85],
-        }), encoding="utf-8")
+        suite.write_text(
+            json.dumps(
+                {
+                    "baseline_scores": [1.0, 1.0, 1.0, 1.0],
+                    "candidate_scores": [0.85, 0.85, 0.85, 0.85],
+                }
+            ),
+            encoding="utf-8",
+        )
         assert predict_merged_verdict(_make_report(), str(suite)) == "MAJOR"
 
     def test_length_mismatch(self, tmp_path, monkeypatch):
@@ -377,10 +417,15 @@ class TestPredictMergedVerdict:
 
         monkeypatch.chdir(tmp_path)
         suite = tmp_path / "canary.json"
-        suite.write_text(json.dumps({
-            "baseline_scores": [1.0, 1.0],
-            "candidate_scores": [1.0],
-        }), encoding="utf-8")
+        suite.write_text(
+            json.dumps(
+                {
+                    "baseline_scores": [1.0, 1.0],
+                    "candidate_scores": [1.0],
+                }
+            ),
+            encoding="utf-8",
+        )
         with pytest.raises(ValueError):
             predict_merged_verdict(_make_report(), str(suite))
 
@@ -389,9 +434,15 @@ class TestPredictMergedVerdict:
 
         monkeypatch.chdir(tmp_path)
         suite = tmp_path / "canary.json"
-        suite.write_text(json.dumps({
-            "baseline_scores": [], "candidate_scores": [],
-        }), encoding="utf-8")
+        suite.write_text(
+            json.dumps(
+                {
+                    "baseline_scores": [],
+                    "candidate_scores": [],
+                }
+            ),
+            encoding="utf-8",
+        )
         with pytest.raises(ValueError):
             predict_merged_verdict(_make_report(), str(suite))
 
@@ -426,9 +477,14 @@ class TestPredictMergedVerdict:
 
         monkeypatch.chdir(tmp_path)
         suite = tmp_path / "canary.json"
-        suite.write_text(json.dumps({
-            "tasks": [{"prompt": "2+2", "expected": "4"}],
-        }), encoding="utf-8")
+        suite.write_text(
+            json.dumps(
+                {
+                    "tasks": [{"prompt": "2+2", "expected": "4"}],
+                }
+            ),
+            encoding="utf-8",
+        )
         with pytest.raises(ValueError, match="scorer"):
             predict_merged_verdict(_make_report(), str(suite))
 
@@ -437,18 +493,21 @@ class TestPredictMergedVerdict:
 
         monkeypatch.chdir(tmp_path)
         suite = tmp_path / "canary.json"
-        suite.write_text(json.dumps({
-            "tasks": [{"prompt": "p", "expected": "e"}, {"prompt": "p2", "expected": "e2"}],
-        }), encoding="utf-8")
+        suite.write_text(
+            json.dumps(
+                {
+                    "tasks": [{"prompt": "p", "expected": "e"}, {"prompt": "p2", "expected": "e2"}],
+                }
+            ),
+            encoding="utf-8",
+        )
 
         def scorer(role, tasks):
             assert role in ("baseline", "candidate")
             # 3% drop → MINOR (5% is the MAJOR boundary).
             return [1.0 for _ in tasks] if role == "baseline" else [0.97 for _ in tasks]
 
-        assert predict_merged_verdict(
-            _make_report(), str(suite), scorer=scorer
-        ) == "MINOR"
+        assert predict_merged_verdict(_make_report(), str(suite), scorer=scorer) == "MINOR"
 
     def test_canary_must_be_str(self):
         from soup_cli.utils.adapter_merge import predict_merged_verdict
@@ -468,13 +527,28 @@ class TestMergeCanaryCli:
         a = _make_adapter(tmp_path / "a")
         b = _make_adapter(tmp_path / "b")
         suite = tmp_path / "canary.json"
-        suite.write_text(json.dumps({
-            "baseline_scores": [0.9, 0.9], "candidate_scores": [0.9, 0.9],
-        }), encoding="utf-8")
-        result = runner.invoke(self._app(), [
-            "merge", a, b, "-o", str(tmp_path / "out"),
-            "--allow-unscanned", "--canary", str(suite),
-        ])
+        suite.write_text(
+            json.dumps(
+                {
+                    "baseline_scores": [0.9, 0.9],
+                    "candidate_scores": [0.9, 0.9],
+                }
+            ),
+            encoding="utf-8",
+        )
+        result = runner.invoke(
+            self._app(),
+            [
+                "merge",
+                a,
+                b,
+                "-o",
+                str(tmp_path / "out"),
+                "--allow-unscanned",
+                "--canary",
+                str(suite),
+            ],
+        )
         assert result.exit_code == 0, (result.output, repr(result.exception))
         assert "OK" in result.output
 
@@ -483,13 +557,29 @@ class TestMergeCanaryCli:
         a = _make_adapter(tmp_path / "a")
         b = _make_adapter(tmp_path / "b")
         suite = tmp_path / "canary.json"
-        suite.write_text(json.dumps({
-            "baseline_scores": [1.0, 1.0], "candidate_scores": [0.8, 0.8],
-        }), encoding="utf-8")
-        result = runner.invoke(self._app(), [
-            "merge", a, b, "-o", str(tmp_path / "out"),
-            "--allow-unscanned", "--canary", str(suite), "--strict-verdict",
-        ])
+        suite.write_text(
+            json.dumps(
+                {
+                    "baseline_scores": [1.0, 1.0],
+                    "candidate_scores": [0.8, 0.8],
+                }
+            ),
+            encoding="utf-8",
+        )
+        result = runner.invoke(
+            self._app(),
+            [
+                "merge",
+                a,
+                b,
+                "-o",
+                str(tmp_path / "out"),
+                "--allow-unscanned",
+                "--canary",
+                str(suite),
+                "--strict-verdict",
+            ],
+        )
         assert result.exit_code == 2, (result.output, repr(result.exception))
         assert "MAJOR" in result.output
 
@@ -497,9 +587,17 @@ class TestMergeCanaryCli:
         monkeypatch.chdir(tmp_path)
         a = _make_adapter(tmp_path / "a")
         b = _make_adapter(tmp_path / "b")
-        result = runner.invoke(self._app(), [
-            "merge", a, b, "-o", str(tmp_path / "out"), "--allow-unscanned",
-        ])
+        result = runner.invoke(
+            self._app(),
+            [
+                "merge",
+                a,
+                b,
+                "-o",
+                str(tmp_path / "out"),
+                "--allow-unscanned",
+            ],
+        )
         assert result.exit_code == 0, (result.output, repr(result.exception))
         assert "UNKNOWN" in result.output
 
@@ -511,10 +609,19 @@ class TestMergeCanaryCli:
         b = _make_adapter(sub / "b")
         outside = tmp_path / "canary.json"
         outside.write_text("{}", encoding="utf-8")
-        result = runner.invoke(self._app(), [
-            "merge", a, b, "-o", str(sub / "out"),
-            "--allow-unscanned", "--canary", str(outside),
-        ])
+        result = runner.invoke(
+            self._app(),
+            [
+                "merge",
+                a,
+                b,
+                "-o",
+                str(sub / "out"),
+                "--allow-unscanned",
+                "--canary",
+                str(outside),
+            ],
+        )
         assert result.exit_code == 2
         assert "cwd" in result.output.lower()
 
@@ -530,8 +637,11 @@ def _cmaes_plan(tmp_path, adapters, *, pop=4, gens=6):
     suite = tmp_path / "eval.jsonl"
     suite.write_text('{"prompt": "p", "expected": "e"}\n', encoding="utf-8")
     return build_cmaes_plan(
-        adapters=adapters, eval_suite=str(suite), budget_spec="60s",
-        population_size=pop, max_generations=gens,
+        adapters=adapters,
+        eval_suite=str(suite),
+        budget_spec="60s",
+        population_size=pop,
+        max_generations=gens,
     )
 
 
@@ -629,12 +739,26 @@ class TestCmaesCliLive:
         suite = tmp_path / "eval.jsonl"
         suite.write_text('{"prompt": "p", "expected": "e"}\n', encoding="utf-8")
         out = tmp_path / "merged"
-        result = runner.invoke(self._app(), [
-            "merge", a, b, "--strategy", "cmaes",
-            "--eval", str(suite), "--budget", "60s",
-            "--population", "4", "--max-generations", "6",
-            "-o", str(out),
-        ])
+        result = runner.invoke(
+            self._app(),
+            [
+                "merge",
+                a,
+                b,
+                "--strategy",
+                "cmaes",
+                "--eval",
+                str(suite),
+                "--budget",
+                "60s",
+                "--population",
+                "4",
+                "--max-generations",
+                "6",
+                "-o",
+                str(out),
+            ],
+        )
         assert result.exit_code == 0, (result.output, repr(result.exception))
         # The best merge was materialised to --output.
         assert (out / "adapter_model.safetensors").is_file()
@@ -647,10 +771,19 @@ class TestCmaesCliLive:
         # reach the cmaes arg-check (the scan gate now runs before dispatch).
         a = _make_adapter(tmp_path / "a")
         b = _make_adapter(tmp_path / "b")
-        result = runner.invoke(self._app(), [
-            "merge", a, b, "--strategy", "cmaes",
-            "-o", str(tmp_path / "out"), "--allow-unscanned",
-        ])
+        result = runner.invoke(
+            self._app(),
+            [
+                "merge",
+                a,
+                b,
+                "--strategy",
+                "cmaes",
+                "-o",
+                str(tmp_path / "out"),
+                "--allow-unscanned",
+            ],
+        )
         assert result.exit_code == 2
         assert "eval" in result.output.lower()
 
@@ -670,11 +803,15 @@ def loop_env(tmp_path, monkeypatch):
 
     from soup_cli.utils.loop_state import LoopState
 
-    def _state(served="mymodel", eval_suite="evals/gate.yaml", baseline="base-ref",
-               pre_wired=False):
+    def _state(
+        served="mymodel", eval_suite="evals/gate.yaml", baseline="base-ref", pre_wired=False
+    ):
         return LoopState(
-            served_model=served, eval_suite=eval_suite, baseline=baseline,
-            status="running", pre_wired=pre_wired,
+            served_model=served,
+            eval_suite=eval_suite,
+            baseline=baseline,
+            status="running",
+            pre_wired=pre_wired,
         )
 
     return _state
@@ -702,7 +839,9 @@ class TestLoopStatePreWired:
 
         with pytest.raises(ValueError):
             LoopState(
-                served_model="m", eval_suite="e", baseline="b",
+                served_model="m",
+                eval_suite="e",
+                baseline="b",
                 pre_wired="yes",  # type: ignore[arg-type]
             )
 
@@ -750,10 +889,8 @@ class TestHarvestStage:
         trace_dir.mkdir()
         # All thumbs-up, no down → build_pairs(signal="thumbs_up") yields none.
         rows = [
-            {"id": "1", "prompt": "Q", "response": "a",
-             "feedback": {"rating": "up"}},
-            {"id": "2", "prompt": "Q2", "response": "b",
-             "feedback": {"rating": "up"}},
+            {"id": "1", "prompt": "Q", "response": "a", "feedback": {"rating": "up"}},
+            {"id": "2", "prompt": "Q2", "response": "b", "feedback": {"rating": "up"}},
         ]
         (trace_dir / "s.jsonl").write_text(
             "\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8"
@@ -769,9 +906,7 @@ class TestTrainStage:
     def test_skips_without_pairs(self, loop_env):
         from soup_cli.utils.loop_stages import train_dpo_from_pairs
 
-        out = train_dpo_from_pairs(
-            loop_env(), {"pairs_harvested": 0, "pairs_path": None}
-        )
+        out = train_dpo_from_pairs(loop_env(), {"pairs_harvested": 0, "pairs_path": None})
         assert out["skipped"] is True
         assert out["run_id"] is None
 
@@ -790,9 +925,7 @@ class TestTrainStage:
         monkeypatch.setattr(ls, "_TRAIN_RUNNER", fake_runner)
         pairs = tmp_path / "p.jsonl"
         pairs.write_text('{"prompt":"q","chosen":"a","rejected":"b"}\n', encoding="utf-8")
-        out = ls.train_dpo_from_pairs(
-            loop_env(), {"pairs_harvested": 1, "pairs_path": str(pairs)}
-        )
+        out = ls.train_dpo_from_pairs(loop_env(), {"pairs_harvested": 1, "pairs_path": str(pairs)})
         assert out["skipped"] is False
         assert out["run_id"].startswith("loop-train-")
         argv = captured["argv"]
@@ -807,9 +940,7 @@ class TestTrainStage:
         monkeypatch.setattr(ls, "_TRAIN_RUNNER", lambda *a, **k: _R())
         pairs = tmp_path / "p.jsonl"
         pairs.write_text('{"prompt":"q","chosen":"a","rejected":"b"}\n', encoding="utf-8")
-        out = ls.train_dpo_from_pairs(
-            loop_env(), {"pairs_harvested": 1, "pairs_path": str(pairs)}
-        )
+        out = ls.train_dpo_from_pairs(loop_env(), {"pairs_harvested": 1, "pairs_path": str(pairs)})
         assert out["skipped"] is True
 
 
@@ -823,9 +954,7 @@ class TestGateStage:
     def test_skipped_when_adapter_missing(self, loop_env):
         from soup_cli.utils.loop_stages import gate_against_baseline
 
-        out = gate_against_baseline(
-            loop_env(), {"skipped": False, "adapter_path": "nope/dir"}
-        )
+        out = gate_against_baseline(loop_env(), {"skipped": False, "adapter_path": "nope/dir"})
         assert out["gate_verdict"] == "SKIPPED"
 
     def test_ok_verdict(self, loop_env, tmp_path, monkeypatch):
@@ -852,13 +981,9 @@ class TestGateStage:
         )
         adapter = tmp_path / "adapter"
         adapter.mkdir()
-        monkeypatch.setattr(
-            ls, "_GATE_GENERATE_FACTORY", lambda d: (lambda prompt: "4")
-        )
+        monkeypatch.setattr(ls, "_GATE_GENERATE_FACTORY", lambda d: lambda prompt: "4")
         state = loop_env(eval_suite=str(suite))
-        out = ls.gate_against_baseline(
-            state, {"skipped": False, "adapter_path": str(adapter)}
-        )
+        out = ls.gate_against_baseline(state, {"skipped": False, "adapter_path": str(adapter)})
         assert out["gate_verdict"] == "OK"
 
 
@@ -888,9 +1013,7 @@ class TestDeployStage:
         assert out["deployed"] is True
         assert seen["name"] == "run-1"
 
-    def test_successful_activation_reports_no_canary_verdict(
-        self, loop_env, monkeypatch
-    ):
+    def test_successful_activation_reports_no_canary_verdict(self, loop_env, monkeypatch):
         """#815: activate_adapter is a full hot-swap, not a canary split, so
         a successful POST must not be reported as a canary verdict of OK,
         since canary_router.route()/BucketStats never ran to produce one."""
@@ -935,14 +1058,13 @@ class TestPrewiredE2E:
             returncode = 0
 
         train_calls = []
-        monkeypatch.setattr(
-            ls, "_TRAIN_RUNNER", lambda argv, **k: train_calls.append(argv) or _R()
-        )
+        monkeypatch.setattr(ls, "_TRAIN_RUNNER", lambda argv, **k: train_calls.append(argv) or _R())
         write_state(loop_env(pre_wired=True))
         from soup_cli.utils.loop_stages import build_prewired_watch_config
 
         cfg = build_prewired_watch_config(
-            max_iterations=1, poll_interval_sec=1.0,
+            max_iterations=1,
+            poll_interval_sec=1.0,
         )
         from soup_cli.utils.loop_daemon import watch
 
@@ -962,15 +1084,17 @@ class TestLoopStagesSourceWiring:
         from pathlib import Path
 
         root = Path(__file__).resolve().parent.parent
-        src = (
-            root / "src" / "soup_cli" / "utils" / "loop_stages.py"
-        ).read_text(encoding="utf-8")
+        src = (root / "src" / "soup_cli" / "utils" / "loop_stages.py").read_text(encoding="utf-8")
         head = "\n".join(
-            line for line in src.splitlines()[:60]
+            line
+            for line in src.splitlines()[:60]
             if line.strip() and not line.strip().startswith("#")
         )
         for forbidden in (
-            "import torch", "import transformers", "import peft", "import trl",
+            "import torch",
+            "import transformers",
+            "import peft",
+            "import trl",
         ):
             assert forbidden not in head, f"top-level {forbidden!r} in loop_stages"
 
@@ -982,10 +1106,18 @@ class TestLoopCliPrewired:
         return app
 
     def test_init_pre_wired_flag(self, loop_env, tmp_path):
-        result = runner.invoke(self._app(), [
-            "init", "mymodel", "--eval", "evals/gate.yaml",
-            "--baseline", "base-ref", "--pre-wired",
-        ])
+        result = runner.invoke(
+            self._app(),
+            [
+                "init",
+                "mymodel",
+                "--eval",
+                "evals/gate.yaml",
+                "--baseline",
+                "base-ref",
+                "--pre-wired",
+            ],
+        )
         assert result.exit_code == 0, (result.output, repr(result.exception))
         from soup_cli.utils.loop_state import read_state
 
@@ -999,10 +1131,18 @@ class TestLoopCliPrewired:
         assert "--pre-wired" in out
 
     def test_status_shows_pre_wired(self, loop_env):
-        runner.invoke(self._app(), [
-            "init", "mymodel", "--eval", "evals/gate.yaml",
-            "--baseline", "base-ref", "--pre-wired",
-        ])
+        runner.invoke(
+            self._app(),
+            [
+                "init",
+                "mymodel",
+                "--eval",
+                "evals/gate.yaml",
+                "--baseline",
+                "base-ref",
+                "--pre-wired",
+            ],
+        )
         result = runner.invoke(self._app(), ["status"])
         assert result.exit_code == 0, (result.output, repr(result.exception))
         out = _clean_help(result.stdout)
@@ -1036,12 +1176,15 @@ def _write_iteration(iteration_id, *, served="mymodel"):
 
 
 class TestRegistryNameFrom:
-    @pytest.mark.parametrize("raw,expected_start", [
-        ("mymodel", "mymodel"),
-        ("registry://abc12", "abc12"),
-        ("org/big-model", "org-big-model"),
-        ("//weird", "weird"),
-    ])
+    @pytest.mark.parametrize(
+        "raw,expected_start",
+        [
+            ("mymodel", "mymodel"),
+            ("registry://abc12", "abc12"),
+            ("org/big-model", "org-big-model"),
+            ("//weird", "weird"),
+        ],
+    )
     def test_sanitises(self, raw, expected_start):
         from soup_cli.utils.loop_iteration import registry_name_from
 
@@ -1062,9 +1205,7 @@ class TestPackIterationAsCan:
         from soup_cli.utils.loop_iteration import pack_iteration_as_can
 
         _write_iteration("iter-aaa")
-        can_path, entry_id = pack_iteration_as_can(
-            "iter-aaa", served_model="mymodel"
-        )
+        can_path, entry_id = pack_iteration_as_can("iter-aaa", served_model="mymodel")
         assert os.path.isfile(can_path)
         assert can_path.endswith("iteration.can")
         with RegistryStore() as store:
@@ -1125,8 +1266,11 @@ class TestWatchPackCans:
         from soup_cli.utils.loop_stages import build_prewired_watch_config
 
         cfg = build_prewired_watch_config(
-            max_iterations=3, poll_interval_sec=1.0,
-            pack_iterations=True, served_model="mymodel", base_model="mymodel",
+            max_iterations=3,
+            poll_interval_sec=1.0,
+            pack_iterations=True,
+            served_model="mymodel",
+            base_model="mymodel",
         )
         _final, ran = watch(cfg)
         assert ran == 3
@@ -1138,6 +1282,7 @@ class TestWatchPackCans:
         import glob
 
         from soup_cli.cans.unpack import inspect_can
+
         cans = glob.glob(os.path.join(".soup-loops", "*", "iteration.can"))
         assert len(cans) == 3
         for c in cans:
@@ -1151,9 +1296,7 @@ class TestWatchPackCans:
 
         from soup_cli.commands.loop import app
 
-        result = runner.invoke(
-            app, ["replay", "iter-ext", "--extract", "extracted"]
-        )
+        result = runner.invoke(app, ["replay", "iter-ext", "--extract", "extracted"])
         assert result.exit_code == 0, (result.output, repr(result.exception))
         assert os.path.isfile(os.path.join("extracted", "manifest.yaml"))
 
@@ -1161,9 +1304,7 @@ class TestWatchPackCans:
         _write_iteration("iter-nocan")
         from soup_cli.commands.loop import app
 
-        result = runner.invoke(
-            app, ["replay", "iter-nocan", "--extract", "extracted"]
-        )
+        result = runner.invoke(app, ["replay", "iter-nocan", "--extract", "extracted"])
         assert result.exit_code == 1
         assert "can" in result.output.lower()
 
@@ -1303,9 +1444,7 @@ class TestPostPrComment:
         from soup_cli.utils.adapter_pr import post_pr_comment
 
         with pytest.raises(ValueError):
-            post_pr_comment(
-                "o/r#1", "   ", env={"GITHUB_TOKEN": "t"}, runner=lambda *a, **k: None
-            )
+            post_pr_comment("o/r#1", "   ", env={"GITHUB_TOKEN": "t"}, runner=lambda *a, **k: None)
 
     def test_null_byte_body_rejected(self):
         from soup_cli.utils.adapter_pr import post_pr_comment
@@ -1323,7 +1462,9 @@ class TestPostPrComment:
 
         with pytest.raises(ValueError):
             post_pr_comment(
-                "not-a-target", "body", env={"GITHUB_TOKEN": "t"},
+                "not-a-target",
+                "body",
+                env={"GITHUB_TOKEN": "t"},
                 runner=lambda *a, **k: None,
             )
 
@@ -1365,7 +1506,8 @@ class TestPrCliPush:
         import soup_cli.utils.adapter_pr as ap
 
         monkeypatch.setattr(
-            ap, "post_pr_comment",
+            ap,
+            "post_pr_comment",
             lambda target, body, **kw: "https://github.com/o/r/pull/42#c-1",
         )
         sha = "b" * 64
@@ -1399,40 +1541,36 @@ class TestVerdictBoundaries:
 
         monkeypatch.chdir(tmp_path)
         suite = tmp_path / "canary.json"
-        suite.write_text(json.dumps({
-            "baseline_scores": baseline, "candidate_scores": candidate,
-        }), encoding="utf-8")
+        suite.write_text(
+            json.dumps(
+                {
+                    "baseline_scores": baseline,
+                    "candidate_scores": candidate,
+                }
+            ),
+            encoding="utf-8",
+        )
         return predict_merged_verdict(_make_report(), str(suite))
 
     def test_drop_just_under_two_pct_is_ok(self, tmp_path, monkeypatch):
         # 1.9% drop → still OK (boundary is strict `< 0.02`).
-        assert self._verdict(
-            tmp_path, monkeypatch, [1.0, 1.0], [0.981, 0.981]
-        ) == "OK"
+        assert self._verdict(tmp_path, monkeypatch, [1.0, 1.0], [0.981, 0.981]) == "OK"
 
     def test_drop_exactly_two_pct_is_minor(self, tmp_path, monkeypatch):
         # Exactly 2.0% drop → MINOR (OK requires drop strictly < 0.02).
-        assert self._verdict(
-            tmp_path, monkeypatch, [1.0, 1.0], [0.98, 0.98]
-        ) == "MINOR"
+        assert self._verdict(tmp_path, monkeypatch, [1.0, 1.0], [0.98, 0.98]) == "MINOR"
 
     def test_drop_just_under_five_pct_is_minor(self, tmp_path, monkeypatch):
         # 4.9% drop → still MINOR.
-        assert self._verdict(
-            tmp_path, monkeypatch, [1.0, 1.0], [0.951, 0.951]
-        ) == "MINOR"
+        assert self._verdict(tmp_path, monkeypatch, [1.0, 1.0], [0.951, 0.951]) == "MINOR"
 
     def test_drop_exactly_five_pct_is_major(self, tmp_path, monkeypatch):
         # Exactly 5.0% drop → MAJOR (MINOR requires drop strictly < 0.05).
-        assert self._verdict(
-            tmp_path, monkeypatch, [1.0, 1.0], [0.95, 0.95]
-        ) == "MAJOR"
+        assert self._verdict(tmp_path, monkeypatch, [1.0, 1.0], [0.95, 0.95]) == "MAJOR"
 
     def test_improvement_is_ok(self, tmp_path, monkeypatch):
         # Candidate better than baseline → negative drop → OK.
-        assert self._verdict(
-            tmp_path, monkeypatch, [0.8, 0.8], [0.9, 0.9]
-        ) == "OK"
+        assert self._verdict(tmp_path, monkeypatch, [0.8, 0.8], [0.9, 0.9]) == "OK"
 
 
 class TestPackIterationSafely:
@@ -1451,13 +1589,16 @@ class TestPackIterationSafely:
         monkeypatch.setattr(li, "pack_iteration_as_can", boom)
 
         cfg = WatchConfig(
-            poll_interval_sec=1.0, max_iterations=1, pack_iterations=True,
+            poll_interval_sec=1.0,
+            max_iterations=1,
+            pack_iterations=True,
             served_model="mymodel",
         )
         final_state, n = watch(cfg)
         assert n == 1  # the daemon completed its single iteration
         # The manifest was re-written with the pack-failed note.
         from soup_cli.utils.loop_iteration import list_iterations, read_iteration
+
         ids = list_iterations()
         assert len(ids) == 1
         rec = read_iteration(ids[0])
@@ -1472,7 +1613,9 @@ class TestPackIterationSafely:
 
         init_state("mymodel", "evals/gate.yaml", "base-ref")
         cfg = WatchConfig(
-            poll_interval_sec=1.0, max_iterations=1, pack_iterations=False,
+            poll_interval_sec=1.0,
+            max_iterations=1,
+            pack_iterations=False,
         )
         watch(cfg)
         # No cans written, no registry rows created.
@@ -1496,9 +1639,7 @@ class TestGhArgvAdjacency:
             captured["argv"] = argv
             return _R()
 
-        post_pr_comment(
-            "o/r#1", "body", env={"GITHUB_TOKEN": "t"}, runner=fake_run
-        )
+        post_pr_comment("o/r#1", "body", env={"GITHUB_TOKEN": "t"}, runner=fake_run)
         argv = captured["argv"]
         # `--method POST` and `--input -` must be value-adjacent.
         assert argv[argv.index("--method") + 1] == "POST"
@@ -1543,7 +1684,9 @@ class TestPostPrCommentEnvAllowlist:
         big = "x" * 60_001
         with pytest.raises(ValueError, match="cap"):
             post_pr_comment(
-                "o/r#1", big, env={"GITHUB_TOKEN": "t"},
+                "o/r#1",
+                big,
+                env={"GITHUB_TOKEN": "t"},
                 runner=lambda *a, **k: None,
             )
 
@@ -1669,12 +1812,15 @@ class TestDeploySsrfGuard:
 class TestNoHeavyTopLevelImports:
     """Heavy deps must be lazy-imported inside functions (cold-start policy)."""
 
-    @pytest.mark.parametrize("module", [
-        "soup_cli.utils.cmaes_merge",
-        "soup_cli.utils.loop_stages",
-        "soup_cli.utils.loop_iteration",
-        "soup_cli.utils.adapter_pr",
-    ])
+    @pytest.mark.parametrize(
+        "module",
+        [
+            "soup_cli.utils.cmaes_merge",
+            "soup_cli.utils.loop_stages",
+            "soup_cli.utils.loop_iteration",
+            "soup_cli.utils.adapter_pr",
+        ],
+    )
     def test_no_top_level_heavy_imports(self, module):
         import importlib
 
@@ -1719,10 +1865,7 @@ class TestWriteMergedAdapterPublic:
 
         assert hasattr(adapter_merge, "write_merged_adapter")
         # back-compat alias preserved for any external caller.
-        assert (
-            adapter_merge._write_merged_adapter
-            is adapter_merge.write_merged_adapter
-        )
+        assert adapter_merge._write_merged_adapter is adapter_merge.write_merged_adapter
 
     def test_cmaes_imports_public_name(self):
         import soup_cli.utils.cmaes_merge as cm
@@ -1734,9 +1877,7 @@ class TestWriteMergedAdapterPublic:
 
 
 class TestPackEntryRollback:
-    def test_pack_failure_rolls_back_registry_entry(
-        self, loop_env, tmp_path, monkeypatch
-    ):
+    def test_pack_failure_rolls_back_registry_entry(self, loop_env, tmp_path, monkeypatch):
         """If pack_entry fails after the Registry push, the entry is rolled
         back so the watch-loop lineage chain never points at an orphan."""
         import soup_cli.cans.pack as pack_mod
@@ -1809,9 +1950,19 @@ class TestCmaesScanGate:
             summary = "rank-1 dominance"
 
         monkeypatch.setattr(scan_mod, "scan_adapter", lambda p: _Rep())
-        result = runner.invoke(self._app(), [
-            "merge", a, b, "--strategy", "cmaes",
-            "--eval", str(suite), "-o", str(tmp_path / "out"),
-        ])
+        result = runner.invoke(
+            self._app(),
+            [
+                "merge",
+                a,
+                b,
+                "--strategy",
+                "cmaes",
+                "--eval",
+                str(suite),
+                "-o",
+                str(tmp_path / "out"),
+            ],
+        )
         assert result.exit_code == 3, (result.output, repr(result.exception))
         assert "FAIL" in result.output

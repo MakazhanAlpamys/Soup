@@ -277,7 +277,9 @@ class TestHFPushCallback:
         callback.on_save(args, state, control)
 
         fake_api.create_repo.assert_called_once_with(
-            repo_id="user/my-model", private=False, exist_ok=True,
+            repo_id="user/my-model",
+            private=False,
+            exist_ok=True,
         )
         assert fake_api.upload_folder.called
         kwargs = fake_api.upload_folder.call_args.kwargs
@@ -341,9 +343,7 @@ class TestResolveLatestRevision:
                 types.SimpleNamespace(name="checkpoint-100"),
             ]
         )
-        monkeypatch.setattr(
-            "soup_cli.monitoring.hf_push.get_hf_api", lambda **_: fake_api
-        )
+        monkeypatch.setattr("soup_cli.monitoring.hf_push.get_hf_api", lambda **_: fake_api)
         result = resolve_latest_checkpoint_revision("user/my-model", token="t1")
         assert result == "checkpoint-150"
 
@@ -354,9 +354,7 @@ class TestResolveLatestRevision:
         fake_api.list_repo_refs.return_value = types.SimpleNamespace(
             branches=[types.SimpleNamespace(name="main")]
         )
-        monkeypatch.setattr(
-            "soup_cli.monitoring.hf_push.get_hf_api", lambda **_: fake_api
-        )
+        monkeypatch.setattr("soup_cli.monitoring.hf_push.get_hf_api", lambda **_: fake_api)
         result = resolve_latest_checkpoint_revision("user/my-model", token="t1")
         assert result is None
 
@@ -365,9 +363,7 @@ class TestResolveLatestRevision:
 
         fake_api = MagicMock()
         fake_api.list_repo_refs.side_effect = RuntimeError("no such repo")
-        monkeypatch.setattr(
-            "soup_cli.monitoring.hf_push.get_hf_api", lambda **_: fake_api
-        )
+        monkeypatch.setattr("soup_cli.monitoring.hf_push.get_hf_api", lambda **_: fake_api)
         result = resolve_latest_checkpoint_revision("user/my-model", token="t1")
         assert result is None
 
@@ -777,9 +773,7 @@ class TestAutoResume:
             "soup_cli.monitoring.hf_push.resolve_latest_checkpoint_revision",
             lambda repo_id, token=None, endpoint=None: "checkpoint-300",
         )
-        monkeypatch.setattr(
-            "soup_cli.monitoring.hf_push._download_checkpoint", fake_download
-        )
+        monkeypatch.setattr("soup_cli.monitoring.hf_push._download_checkpoint", fake_download)
 
         result = prepare_hf_resume(
             repo_id="user/my-model",
@@ -806,9 +800,7 @@ class TestAutoResume:
         )
         assert result is None
 
-    def test_prepare_hf_resume_rejects_output_dir_outside_cwd(
-        self, monkeypatch, tmp_path
-    ):
+    def test_prepare_hf_resume_rejects_output_dir_outside_cwd(self, monkeypatch, tmp_path):
         import pytest
 
         from soup_cli.monitoring.hf_push import prepare_hf_resume
@@ -953,9 +945,7 @@ class TestBuildPushCallback:
         monkeypatch.delenv("HF_TOKEN", raising=False)
         monkeypatch.delenv("HUGGINGFACE_HUB_TOKEN", raising=False)
         monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path / "no-creds")
-        cb = build_push_callback(
-            repo_id="user/my-model", output_dir=str(tmp_path)
-        )
+        cb = build_push_callback(repo_id="user/my-model", output_dir=str(tmp_path))
         assert cb is None
 
     def test_returns_none_on_bad_endpoint(self, monkeypatch, tmp_path):
@@ -963,9 +953,7 @@ class TestBuildPushCallback:
 
         monkeypatch.setenv("HF_TOKEN", "t1")
         monkeypatch.setenv("HF_ENDPOINT", "http://evil.example.com")
-        cb = build_push_callback(
-            repo_id="user/my-model", output_dir=str(tmp_path)
-        )
+        cb = build_push_callback(repo_id="user/my-model", output_dir=str(tmp_path))
         assert cb is None
 
     def test_happy_path_returns_callback(self, monkeypatch, tmp_path):
@@ -973,9 +961,7 @@ class TestBuildPushCallback:
 
         monkeypatch.setenv("HF_TOKEN", "t1")
         monkeypatch.delenv("HF_ENDPOINT", raising=False)
-        cb = build_push_callback(
-            repo_id="user/my-model", output_dir=str(tmp_path)
-        )
+        cb = build_push_callback(repo_id="user/my-model", output_dir=str(tmp_path))
         assert isinstance(cb, HFPushCallback)
         assert cb.repo_id == "user/my-model"
 
@@ -983,9 +969,7 @@ class TestBuildPushCallback:
 class TestCallbackLifecycle:
     def _fake_api(self, monkeypatch):
         fake_api = MagicMock()
-        monkeypatch.setattr(
-            "soup_cli.monitoring.hf_push.get_hf_api", lambda **_: fake_api
-        )
+        monkeypatch.setattr("soup_cli.monitoring.hf_push.get_hf_api", lambda **_: fake_api)
         return fake_api
 
     def test_on_train_begin_creates_repo(self, monkeypatch):
@@ -993,7 +977,9 @@ class TestCallbackLifecycle:
 
         fake_api = self._fake_api(monkeypatch)
         cb = HFPushCallback(
-            repo_id="user/my-model", token="t1", output_dir="/tmp",
+            repo_id="user/my-model",
+            token="t1",
+            output_dir="/tmp",
         )
         cb.on_train_begin(
             args=types.SimpleNamespace(output_dir="/tmp"),
@@ -1001,7 +987,9 @@ class TestCallbackLifecycle:
             control=types.SimpleNamespace(),
         )
         fake_api.create_repo.assert_called_once_with(
-            repo_id="user/my-model", private=False, exist_ok=True,
+            repo_id="user/my-model",
+            private=False,
+            exist_ok=True,
         )
 
     def test_on_train_begin_swallows_failure(self, monkeypatch):
@@ -1010,7 +998,9 @@ class TestCallbackLifecycle:
         fake_api = self._fake_api(monkeypatch)
         fake_api.create_repo.side_effect = RuntimeError("auth")
         cb = HFPushCallback(
-            repo_id="user/my-model", token="t1", output_dir="/tmp",
+            repo_id="user/my-model",
+            token="t1",
+            output_dir="/tmp",
         )
         cb.on_train_begin(
             args=types.SimpleNamespace(output_dir="/tmp"),
@@ -1030,7 +1020,9 @@ class TestCallbackLifecycle:
             (ckpt / "adapter_config.json").write_text("{}")
 
         cb = HFPushCallback(
-            repo_id="user/my-model", token="t1", output_dir=str(tmp_path),
+            repo_id="user/my-model",
+            token="t1",
+            output_dir=str(tmp_path),
         )
         for step in (50, 100, 150):
             cb.on_save(
@@ -1052,7 +1044,9 @@ class TestCallbackLifecycle:
         (ckpt / "adapter_config.json").write_text("{}")
 
         cb = HFPushCallback(
-            repo_id="user/my-model", token="t1", output_dir=str(tmp_path),
+            repo_id="user/my-model",
+            token="t1",
+            output_dir=str(tmp_path),
         )
         cb.on_train_begin(
             args=types.SimpleNamespace(output_dir=str(tmp_path)),
@@ -1172,7 +1166,6 @@ class TestHfResumeRequiresPushAs:
         assert "push-as" in result.output.lower()
 
 
-
 class TestReLoRAResumeRefusal:
     def _write_config(self, path):
         path.write_text(
@@ -1186,9 +1179,7 @@ class TestReLoRAResumeRefusal:
             encoding="utf-8",
         )
 
-    def test_local_resume_is_rejected_before_checkpoint_resolution(
-        self, tmp_path, monkeypatch
-    ):
+    def test_local_resume_is_rejected_before_checkpoint_resolution(self, tmp_path, monkeypatch):
         cfg = tmp_path / "soup.yaml"
         self._write_config(cfg)
         monkeypatch.setattr(
@@ -1249,14 +1240,20 @@ class TestDataPushHappyPathExtras:
         result = runner.invoke(
             app,
             [
-                "data", "push", "--input", "data.jsonl",
-                "--hf-dataset", "user/my-dataset",
+                "data",
+                "push",
+                "--input",
+                "data.jsonl",
+                "--hf-dataset",
+                "user/my-dataset",
             ],
         )
         assert result.exit_code == 0, (result.output, repr(result.exception))
         fake_api.create_repo.assert_called_once_with(
-            repo_id="user/my-dataset", repo_type="dataset",
-            private=False, exist_ok=True,
+            repo_id="user/my-dataset",
+            repo_type="dataset",
+            private=False,
+            exist_ok=True,
         )
 
 
@@ -1271,15 +1268,22 @@ class TestHfSpaceHappyPathExtras:
         result = runner.invoke(
             app,
             [
-                "deploy", "hf-space",
-                "--model", "user/my-model",
-                "--space", "user/my-space",
-                "--template", "gradio-chat",
+                "deploy",
+                "hf-space",
+                "--model",
+                "user/my-model",
+                "--space",
+                "user/my-space",
+                "--template",
+                "gradio-chat",
                 "--yes",
             ],
         )
         assert result.exit_code == 0, (result.output, repr(result.exception))
         fake_api.create_repo.assert_called_once_with(
-            repo_id="user/my-space", repo_type="space",
-            space_sdk="gradio", private=False, exist_ok=True,
+            repo_id="user/my-space",
+            repo_type="space",
+            space_sdk="gradio",
+            private=False,
+            exist_ok=True,
         )

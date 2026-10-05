@@ -21,7 +21,8 @@ if TYPE_CHECKING:
 
 
 def build_cross_doc_mask(
-    boundaries: list[int], seq_length: int,
+    boundaries: list[int],
+    seq_length: int,
 ) -> "np.ndarray":
     """Build a block-diagonal causal attention mask.
 
@@ -43,19 +44,16 @@ def build_cross_doc_mask(
     if not boundaries:
         raise ValueError("boundaries must be non-empty")
     if boundaries[0] != 0:
-        raise ValueError(
-            f"boundaries must start at 0, got boundaries[0]={boundaries[0]}"
-        )
+        raise ValueError(f"boundaries must start at 0, got boundaries[0]={boundaries[0]}")
     if boundaries[-1] != seq_length:
         raise ValueError(
-            f"boundaries must end at seq_length={seq_length}, "
-            f"got boundaries[-1]={boundaries[-1]}"
+            f"boundaries must end at seq_length={seq_length}, got boundaries[-1]={boundaries[-1]}"
         )
     for idx in range(len(boundaries) - 1):
         if boundaries[idx] >= boundaries[idx + 1]:
             raise ValueError(
                 f"boundaries must be strictly increasing, "
-                f"got {boundaries[idx]} >= {boundaries[idx+1]} at index {idx}"
+                f"got {boundaries[idx]} >= {boundaries[idx + 1]} at index {idx}"
             )
 
     mask = np.zeros((seq_length, seq_length), dtype=np.uint8)
@@ -65,9 +63,7 @@ def build_cross_doc_mask(
         block_size = end - start
         # Lower-triangular block (causal within this document) — vectorised to
         # avoid a pure-Python O(block_size**2) inner loop on long sequences.
-        mask[start:end, start:end] = np.tril(
-            np.ones((block_size, block_size), dtype=np.uint8)
-        )
+        mask[start:end, start:end] = np.tril(np.ones((block_size, block_size), dtype=np.uint8))
     return mask
 
 
@@ -80,9 +76,7 @@ def compute_doc_boundaries(document_lengths: list[int]) -> list[int]:
         raise ValueError("document_lengths must be non-empty")
     for length in document_lengths:
         if length <= 0:
-            raise ValueError(
-                f"document lengths must be positive, got {length}"
-            )
+            raise ValueError(f"document lengths must be positive, got {length}")
 
     boundaries = [0]
     running = 0

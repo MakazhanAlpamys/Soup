@@ -64,16 +64,16 @@ class GateThresholds:
         # Every threshold must be a finite, real number. Pydantic-style
         # bool rejection (bool is a subclass of int — Python policy).
         for fld in (
-            "task_accuracy", "refusal_rate", "format_validity",
+            "task_accuracy",
+            "refusal_rate",
+            "format_validity",
             "p95_latency_ms",
         ):
             value = getattr(self, fld)
             if isinstance(value, bool):
                 raise TypeError(f"{fld} must be float, got bool")
             if not isinstance(value, (int, float)):
-                raise TypeError(
-                    f"{fld} must be a number, got {type(value).__name__}"
-                )
+                raise TypeError(f"{fld} must be a number, got {type(value).__name__}")
             if not math.isfinite(float(value)):
                 raise ValueError(f"{fld} must be finite")
 
@@ -113,13 +113,12 @@ class RegressionVerdict:
 # Validation
 # ---------------------------------------------------------------------------
 
+
 def _require_finite(value: object, *, field_name: str) -> float:
     if isinstance(value, bool):
         raise TypeError(f"{field_name} must be float, got bool")
     if not isinstance(value, (int, float)):
-        raise TypeError(
-            f"{field_name} must be a number, got {type(value).__name__}"
-        )
+        raise TypeError(f"{field_name} must be a number, got {type(value).__name__}")
     f = float(value)
     if not math.isfinite(f):
         raise ValueError(f"{field_name} must be finite")
@@ -130,13 +129,9 @@ def _validate_run_id(value: object) -> str:
     if isinstance(value, bool):
         raise TypeError("run_id must be str, got bool")
     if not isinstance(value, str):
-        raise TypeError(
-            f"run_id must be str, got {type(value).__name__}"
-        )
+        raise TypeError(f"run_id must be str, got {type(value).__name__}")
     if not _RUN_ID_RE.match(value):
-        raise ValueError(
-            "run_id must be alphanumeric + '_-' (1-128 chars)"
-        )
+        raise ValueError("run_id must be alphanumeric + '_-' (1-128 chars)")
     return value
 
 
@@ -150,13 +145,10 @@ def _validate_bootstrap_samples(value: object) -> int:
     if isinstance(value, bool):
         raise TypeError("n_samples must be int, got bool")
     if not isinstance(value, int):
-        raise TypeError(
-            f"n_samples must be int, got {type(value).__name__}"
-        )
+        raise TypeError(f"n_samples must be int, got {type(value).__name__}")
     if value < _MIN_BOOTSTRAP_SAMPLES or value > _MAX_BOOTSTRAP_SAMPLES:
         raise ValueError(
-            f"n_samples must be in "
-            f"[{_MIN_BOOTSTRAP_SAMPLES}, {_MAX_BOOTSTRAP_SAMPLES}]"
+            f"n_samples must be in [{_MIN_BOOTSTRAP_SAMPLES}, {_MAX_BOOTSTRAP_SAMPLES}]"
         )
     return value
 
@@ -171,6 +163,7 @@ def _validate_ci_level(value: object) -> float:
 # ---------------------------------------------------------------------------
 # Paired bootstrap
 # ---------------------------------------------------------------------------
+
 
 def paired_bootstrap_ci(
     baseline: Sequence[float],
@@ -192,17 +185,12 @@ def paired_bootstrap_ci(
         raise TypeError("candidate must be a sequence of floats")
     if len(baseline) != len(candidate):
         raise ValueError(
-            f"baseline ({len(baseline)}) and candidate "
-            f"({len(candidate)}) lengths must match"
+            f"baseline ({len(baseline)}) and candidate ({len(candidate)}) lengths must match"
         )
     if len(baseline) == 0:
         raise ValueError("baseline must be non-empty")
-    base_floats = [
-        _require_finite(v, field_name="baseline[i]") for v in baseline
-    ]
-    cand_floats = [
-        _require_finite(v, field_name="candidate[i]") for v in candidate
-    ]
+    base_floats = [_require_finite(v, field_name="baseline[i]") for v in baseline]
+    cand_floats = [_require_finite(v, field_name="candidate[i]") for v in candidate]
     n_samples = _validate_bootstrap_samples(n_samples)
     ci_level = _validate_ci_level(ci_level)
     if isinstance(seed, bool) or not isinstance(seed, int):
@@ -282,18 +270,13 @@ def resolve_gate_metric(metric: str) -> GateMetricSpec:
         suffix = metric.removeprefix("benchmark:")
         if suffix in _RESERVED_TRAINING_METRICS:
             raise ValueError(
-                f"benchmark:{suffix} is a reserved training metric; "
-                "choose an eval benchmark result"
+                f"benchmark:{suffix} is a reserved training metric; choose an eval benchmark result"
             )
         source_metric = suffix
     else:
-        raise ValueError(
-            f"unknown metric {metric!r}; allowed: {_ALLOWED_METRIC_HELP}"
-        )
+        raise ValueError(f"unknown metric {metric!r}; allowed: {_ALLOWED_METRIC_HELP}")
     if not suffix:
-        raise ValueError(
-            f"unknown metric {metric!r}; allowed: {_ALLOWED_METRIC_HELP}"
-        )
+        raise ValueError(f"unknown metric {metric!r}; allowed: {_ALLOWED_METRIC_HELP}")
     if any(ord(char) < 0x20 for char in source_metric):
         raise ValueError("metric source name must not contain control characters")
     return GateMetricSpec(metric, (source_metric,), "task_accuracy", +1)
@@ -319,9 +302,7 @@ def decide_regression(
     _validate_thresholds(thresholds)
     tol = getattr(thresholds, spec.threshold_attr)
     direction = spec.direction
-    lo, hi, mean = paired_bootstrap_ci(
-        baseline, candidate, n_samples=n_samples, seed=seed
-    )
+    lo, hi, mean = paired_bootstrap_ci(baseline, candidate, n_samples=n_samples, seed=seed)
     regressed = False
     if direction > 0:
         # higher-is-better metric: regression iff the upper CI bound is
@@ -429,9 +410,7 @@ def write_pre_push_hook(
     Returns the path written. Refuses to overwrite an existing file
     unless ``overwrite=True``.
     """
-    body = render_pre_push_hook(
-        baseline_run_id=baseline_run_id, suite_path=suite_path
-    )
+    body = render_pre_push_hook(baseline_run_id=baseline_run_id, suite_path=suite_path)
     if isinstance(hook_path, bool) or not isinstance(hook_path, str):
         raise TypeError("hook_path must be str")
     if not hook_path:
@@ -452,17 +431,11 @@ def write_pre_push_hook(
         try:
             st = os.lstat(hook_path)
         except OSError as exc:
-            raise ValueError(
-                f"hook_path unreadable: {type(exc).__name__}"
-            ) from exc
+            raise ValueError(f"hook_path unreadable: {type(exc).__name__}") from exc
         if stat.S_ISLNK(st.st_mode):
-            raise ValueError(
-                "hook_path must not be a symlink (TOCTOU defence)"
-            )
+            raise ValueError("hook_path must not be a symlink (TOCTOU defence)")
         if not overwrite:
-            raise ValueError(
-                "hook already exists; pass overwrite=True to replace it"
-            )
+            raise ValueError("hook already exists; pass overwrite=True to replace it")
     if len(body.encode("utf-8")) > _MAX_FILE_BYTES:
         raise ValueError("rendered hook exceeds 64 KiB cap")
     parent = os.path.dirname(os.path.abspath(hook_path)) or "."

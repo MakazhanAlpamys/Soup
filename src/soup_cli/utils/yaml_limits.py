@@ -116,6 +116,5 @@ def check_yaml_expanded_size(obj: object, what: str, *, source_bytes: int) -> No
     limit = source_bytes + ALIAS_EXPANSION_SLACK
     if expanded_node_count(obj, limit=limit) > limit:
         raise ValueError(
-            f"{what} expands to more than {limit} nodes from {source_bytes} "
-            "bytes of YAML; refusing"
+            f"{what} expands to more than {limit} nodes from {source_bytes} bytes of YAML; refusing"
         )

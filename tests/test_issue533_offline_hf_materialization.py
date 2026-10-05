@@ -63,16 +63,12 @@ def test_complete_cached_snapshot_materializes_without_a_second_hub_call(
     assert resolved == cache_root / "weights" / "org__model"
     assert not (resolved / "model.safetensors").is_symlink()
     assert (resolved / "model.safetensors").read_bytes() == weight.read_bytes()
-    assert (resolved / "config.json").read_text(encoding="utf-8") == (
-        '{"model_type":"llama"}\n'
-    )
+    assert (resolved / "config.json").read_text(encoding="utf-8") == ('{"model_type":"llama"}\n')
     metadata = (
-        resolved
-        / ".cache"
-        / "huggingface"
-        / "download"
-        / "model.safetensors.metadata"
-    ).read_text(encoding="utf-8").splitlines()
+        (resolved / ".cache" / "huggingface" / "download" / "model.safetensors.metadata")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    )
     assert metadata[:2] == [COMMIT, WEIGHT_BLOB]
 
     index = shard_checkpoint(

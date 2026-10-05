@@ -175,7 +175,10 @@ def _cmp(
     # nonsense" must not read as "the run agreed".
     if isinstance(asked, bool) != isinstance(ran, bool):
         return AuditRow(
-            setting, asked, ran, DIVERGED,
+            setting,
+            asked,
+            ran,
+            DIVERGED,
             f"the record holds {ran!r} ({type(ran).__name__}) where the config "
             f"asks for {asked!r} ({type(asked).__name__}); Python compares "
             "bools equal to 0/1, so this is not the agreement it looks like",
@@ -195,14 +198,15 @@ def _audit_optimizer(training: Dict[str, Any], record: Dict[str, Any]) -> AuditR
     if expected == ran:
         return AuditRow("optimizer", asked, ran, OK)
     return AuditRow(
-        "optimizer", asked, ran, DIVERGED,
+        "optimizer",
+        asked,
+        ran,
+        DIVERGED,
         f"{asked!r} resolves to {expected!r} on this backend, and the run used {ran!r}",
     )
 
 
-def _audit_learning_rate(
-    training: Dict[str, Any], record: Dict[str, Any], kind: str
-) -> AuditRow:
+def _audit_learning_rate(training: Dict[str, Any], record: Dict[str, Any], kind: str) -> AuditRow:
     """Compare the configured LR with the peak the optimizer plan used.
 
     The MLX record also contains ``learning_rate``, but that value is copied
@@ -225,10 +229,7 @@ def _audit_learning_rate(
                 "or its peak learning rate on the transformers backend"
             )
         else:
-            detail = (
-                "effective learning rate was not checked because peak_lr is "
-                "not in the record"
-            )
+            detail = "effective learning rate was not checked because peak_lr is not in the record"
         return AuditRow("learning_rate", asked, None, UNKNOWN, detail)
 
     if not _is_number(asked) or not _is_number(ran):
@@ -277,7 +278,10 @@ def _audit_warmup(training: Dict[str, Any], record: Dict[str, Any]) -> AuditRow:
     # hardening, worse outcome.
     if not _is_number(ran) or not _is_number(total):
         return AuditRow(
-            "warmup_ratio", asked, ran, DIVERGED,
+            "warmup_ratio",
+            asked,
+            ran,
+            DIVERGED,
             f"the record holds warmup_updates={ran!r} and total_updates="
             f"{total!r}; both must be numbers for the warmup schedule to be "
             "checked at all",
@@ -294,7 +298,10 @@ def _audit_warmup(training: Dict[str, Any], record: Dict[str, Any]) -> AuditRow:
     # refuse, just arrived by arithmetic rather than by a missing key.
     if float(asked) > 0 and ran == 0:
         return AuditRow(
-            "warmup_ratio", asked, f"{ran} of {total} updates", DIVERGED,
+            "warmup_ratio",
+            asked,
+            f"{ran} of {total} updates",
+            DIVERGED,
             f"{asked} x {total} optimizer updates rounds to 0, so training "
             "started at the peak learning rate; raise warmup_ratio or lower "
             "gradient_accumulation_steps to produce more updates",
@@ -302,7 +309,10 @@ def _audit_warmup(training: Dict[str, Any], record: Dict[str, Any]) -> AuditRow:
     if expected == ran:
         return AuditRow("warmup_ratio", asked, f"{ran} of {total} updates", OK)
     return AuditRow(
-        "warmup_ratio", asked, f"{ran} of {total} updates", DIVERGED,
+        "warmup_ratio",
+        asked,
+        f"{ran} of {total} updates",
+        DIVERGED,
         f"expected {expected} warmup updates from {asked} x {total}",
     )
 
@@ -392,7 +402,10 @@ def _audit_masking(data: Dict[str, Any], record: Dict[str, Any]) -> AuditRow:
     if malformed:
         shown = ", ".join(f"{n}={v!r} ({type(v).__name__})" for n, v in malformed)
         return AuditRow(
-            "data.train_on_responses_only", asked, malformed[0][1], DIVERGED,
+            "data.train_on_responses_only",
+            asked,
+            malformed[0][1],
+            DIVERGED,
             f"the record holds {shown} where a bool is required; a non-empty "
             "string is truthy in Python, so this cannot be read as evidence "
             "either way",
@@ -416,7 +429,10 @@ def _audit_masking(data: Dict[str, Any], record: Dict[str, Any]) -> AuditRow:
             if value is None
         ]
         return AuditRow(
-            "data.train_on_responses_only", asked, None, UNKNOWN,
+            "data.train_on_responses_only",
+            asked,
+            None,
+            UNKNOWN,
             f"the record does not carry {' or '.join(missing)}, so it cannot "
             "say whether masking took effect"
             + (" (adapter predates #683)" if len(missing) == 2 else ""),
@@ -427,13 +443,19 @@ def _audit_masking(data: Dict[str, Any], record: Dict[str, Any]) -> AuditRow:
         return AuditRow("data.train_on_responses_only", asked, ran, OK)
     if asked and not ran:
         return AuditRow(
-            "data.train_on_responses_only", asked, ran, DIVERGED,
+            "data.train_on_responses_only",
+            asked,
+            ran,
+            DIVERGED,
             "requested, but the run masked nothing -- plain-text rows carry no "
             "role boundaries, so the loss covered prompt tokens too; use chatml "
             "or prompt/completion data",
         )
     return AuditRow(
-        "data.train_on_responses_only", asked, ran, DIVERGED,
+        "data.train_on_responses_only",
+        asked,
+        ran,
+        DIVERGED,
         "not requested, but the run masked anyway "
         f"(mask_prompt={prefix_mask!r}, response_token_mask={token_mask!r})",
     )

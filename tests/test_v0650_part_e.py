@@ -4,6 +4,7 @@
 that preserves ranking power. Profile ``full | small | tiny`` selects how
 many items to keep.
 """
+
 from __future__ import annotations
 
 import json
@@ -64,7 +65,9 @@ class TestItemDifficulty:
     def test_bool_difficulty(self):
         with pytest.raises(ValueError, match="difficulty"):
             ItemDifficulty(
-                item_id="q", difficulty=True, info=1.0,  # type: ignore[arg-type]
+                item_id="q",
+                difficulty=True,
+                info=1.0,  # type: ignore[arg-type]
             )
 
 
@@ -76,11 +79,13 @@ class TestFitDifficulty:
         # item3: mixed
         rows = []
         for i in range(5):
-            rows.extend([
-                {"item_id": "easy", "correct": True},
-                {"item_id": "hard", "correct": False},
-                {"item_id": "mixed", "correct": i % 2 == 0},
-            ])
+            rows.extend(
+                [
+                    {"item_id": "easy", "correct": True},
+                    {"item_id": "hard", "correct": False},
+                    {"item_id": "mixed", "correct": i % 2 == 0},
+                ]
+            )
         result = fit_difficulty(rows)
         by_id = {d.item_id: d for d in result}
         assert "easy" in by_id
@@ -119,10 +124,7 @@ class TestFitDifficulty:
             fit_difficulty([{"item_id": "q1", "correct": "yes"}])
 
     def test_too_many_rows(self):
-        rows = [
-            {"item_id": f"q{i % 100}", "correct": i % 2 == 0}
-            for i in range(1_000_001)
-        ]
+        rows = [{"item_id": f"q{i % 100}", "correct": i % 2 == 0} for i in range(1_000_001)]
         with pytest.raises(ValueError, match="cap"):
             fit_difficulty(rows)
 
@@ -134,8 +136,7 @@ class TestFitDifficulty:
 class TestPickIrtSubset:
     def test_full_keeps_all(self):
         difficulty = tuple(
-            ItemDifficulty(item_id=f"q{i}", difficulty=0.0, info=1.0)
-            for i in range(10)
+            ItemDifficulty(item_id=f"q{i}", difficulty=0.0, info=1.0) for i in range(10)
         )
         plan = pick_irt_subset(difficulty, size="full")
         assert len(plan.item_ids) == 10
@@ -143,8 +144,7 @@ class TestPickIrtSubset:
 
     def test_small_reduces(self):
         difficulty = tuple(
-            ItemDifficulty(item_id=f"q{i}", difficulty=float(i), info=1.0)
-            for i in range(100)
+            ItemDifficulty(item_id=f"q{i}", difficulty=float(i), info=1.0) for i in range(100)
         )
         plan = pick_irt_subset(difficulty, size="small")
         assert len(plan.item_ids) < 100
@@ -152,8 +152,7 @@ class TestPickIrtSubset:
 
     def test_tiny_smaller(self):
         difficulty = tuple(
-            ItemDifficulty(item_id=f"q{i}", difficulty=float(i), info=1.0)
-            for i in range(100)
+            ItemDifficulty(item_id=f"q{i}", difficulty=float(i), info=1.0) for i in range(100)
         )
         small = pick_irt_subset(difficulty, size="small")
         tiny = pick_irt_subset(difficulty, size="tiny")
@@ -174,8 +173,7 @@ class TestPickIrtSubset:
 
     def test_subset_returns_plan(self):
         difficulty = tuple(
-            ItemDifficulty(item_id=f"q{i}", difficulty=0.0, info=float(i + 1))
-            for i in range(10)
+            ItemDifficulty(item_id=f"q{i}", difficulty=0.0, info=float(i + 1)) for i in range(10)
         )
         plan = pick_irt_subset(difficulty, size="small")
         assert isinstance(plan, IrtSubsetPlan)
@@ -196,15 +194,20 @@ class TestPickIrtSubset:
 class TestIrtSubsetPlan:
     def test_frozen(self):
         p = IrtSubsetPlan(
-            size="small", item_ids=("q1",), total_items=10, cost_ratio=0.1,
+            size="small",
+            item_ids=("q1",),
+            total_items=10,
+            cost_ratio=0.1,
         )
         with pytest.raises(Exception):
             p.size = "tiny"  # type: ignore[misc]
 
     def test_to_dict(self):
         p = IrtSubsetPlan(
-            size="small", item_ids=("q1", "q2"),
-            total_items=10, cost_ratio=0.2,
+            size="small",
+            item_ids=("q1", "q2"),
+            total_items=10,
+            cost_ratio=0.2,
         )
         d = p.to_dict()
         assert d["size"] == "small"
@@ -214,36 +217,46 @@ class TestIrtSubsetPlan:
     def test_invalid_size(self):
         with pytest.raises(ValueError, match="size"):
             IrtSubsetPlan(
-                size="evil", item_ids=("q",),
-                total_items=1, cost_ratio=1.0,
+                size="evil",
+                item_ids=("q",),
+                total_items=1,
+                cost_ratio=1.0,
             )
 
     def test_invalid_cost(self):
         with pytest.raises(ValueError, match="cost_ratio"):
             IrtSubsetPlan(
-                size="full", item_ids=("q",),
-                total_items=1, cost_ratio=2.0,
+                size="full",
+                item_ids=("q",),
+                total_items=1,
+                cost_ratio=2.0,
             )
 
     def test_invalid_total(self):
         with pytest.raises(ValueError, match="total_items"):
             IrtSubsetPlan(
-                size="full", item_ids=("q",),
-                total_items=-1, cost_ratio=1.0,
+                size="full",
+                item_ids=("q",),
+                total_items=-1,
+                cost_ratio=1.0,
             )
 
     def test_item_ids_must_be_tuple(self):
         with pytest.raises(ValueError, match="item_ids"):
             IrtSubsetPlan(
-                size="full", item_ids=["q"],  # type: ignore[arg-type]
-                total_items=1, cost_ratio=1.0,
+                size="full",
+                item_ids=["q"],  # type: ignore[arg-type]
+                total_items=1,
+                cost_ratio=1.0,
             )
 
     def test_subset_exceeds_total(self):
         with pytest.raises(ValueError, match="total"):
             IrtSubsetPlan(
-                size="full", item_ids=("q1", "q2"),
-                total_items=1, cost_ratio=1.0,
+                size="full",
+                item_ids=("q1", "q2"),
+                total_items=1,
+                cost_ratio=1.0,
             )
 
 
@@ -251,10 +264,7 @@ class TestLoadResponseRows:
     def test_load(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         p = tmp_path / "responses.jsonl"
-        p.write_text(
-            '{"item_id": "q1", "correct": true}\n'
-            '{"item_id": "q1", "correct": false}\n'
-        )
+        p.write_text('{"item_id": "q1", "correct": true}\n{"item_id": "q1", "correct": false}\n')
         rows = load_response_rows(str(p))
         assert len(rows) == 2
 
@@ -263,7 +273,7 @@ class TestLoadResponseRows:
         p = tmp_path / "responses.jsonl"
         p.write_text(
             '{"item_id": "q1", "correct": true}\n'
-            'not valid json\n'
+            "not valid json\n"
             '{"item_id": "q2", "correct": false}\n'
         )
         rows = load_response_rows(str(p))
@@ -299,8 +309,7 @@ class TestLoadResponseRows:
         # smaller. Skip if not testable.
         # Instead test row cap:
         lines = "\n".join(
-            json.dumps({"item_id": f"q{i}", "correct": True})
-            for i in range(1_000_001)
+            json.dumps({"item_id": f"q{i}", "correct": True}) for i in range(1_000_001)
         )
         p.write_text(lines)
         with pytest.raises(ValueError, match="cap"):
@@ -320,6 +329,7 @@ class TestLoadResponseRows:
 class TestIrtCli:
     def test_help_listed(self):
         from soup_cli.commands.eval import app
+
         runner = CliRunner()
         result = runner.invoke(app, ["--help"])
         assert result.exit_code == 0
@@ -327,41 +337,60 @@ class TestIrtCli:
 
     def test_irt_help(self):
         from soup_cli.commands.eval import app
+
         runner = CliRunner()
         result = runner.invoke(app, ["irt-subset", "--help"])
         assert result.exit_code == 0
 
     def test_irt_runs(self, tmp_path, monkeypatch):
         from soup_cli.commands.eval import app
+
         monkeypatch.chdir(tmp_path)
         p = tmp_path / "responses.jsonl"
-        p.write_text("\n".join(
-            json.dumps({"item_id": f"q{i % 10}", "correct": i % 2 == 0})
-            for i in range(100)
-        ))
+        p.write_text(
+            "\n".join(
+                json.dumps({"item_id": f"q{i % 10}", "correct": i % 2 == 0}) for i in range(100)
+            )
+        )
         out = tmp_path / "plan.json"
         runner = CliRunner()
-        result = runner.invoke(app, [
-            "irt-subset", str(p), "--size", "small", "--output", str(out),
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "irt-subset",
+                str(p),
+                "--size",
+                "small",
+                "--output",
+                str(out),
+            ],
+        )
         assert result.exit_code == 0, (result.output, repr(result.exception))
         assert out.exists()
 
     def test_irt_unknown_size(self, tmp_path, monkeypatch):
         from soup_cli.commands.eval import app
+
         monkeypatch.chdir(tmp_path)
         p = tmp_path / "responses.jsonl"
         p.write_text('{"item_id": "q", "correct": true}')
         runner = CliRunner()
-        result = runner.invoke(app, [
-            "irt-subset", str(p), "--size", "evil",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "irt-subset",
+                str(p),
+                "--size",
+                "evil",
+            ],
+        )
         assert result.exit_code != 0
 
 
 class TestSourceWiring:
     def test_no_heavy_imports(self):
         from pathlib import Path
+
         src = Path(__file__).resolve().parent.parent / "src" / "soup_cli" / "utils" / "irt.py"
         text = src.read_text(encoding="utf-8")
         forbidden_imports = (

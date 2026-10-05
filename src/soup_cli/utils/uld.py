@@ -64,33 +64,34 @@ class ULDStrategySpec:
     requires_top_k: bool
 
 
-_STRATEGY_METADATA = types.MappingProxyType({
-    "wasserstein": ULDStrategySpec(
-        name="wasserstein",
-        description=(
-            "1D Wasserstein distance on sorted logit distributions. "
-            "No alignment required across vocabularies."
+_STRATEGY_METADATA = types.MappingProxyType(
+    {
+        "wasserstein": ULDStrategySpec(
+            name="wasserstein",
+            description=(
+                "1D Wasserstein distance on sorted logit distributions. "
+                "No alignment required across vocabularies."
+            ),
+            requires_top_k=False,
         ),
-        requires_top_k=False,
-    ),
-    "topk_align": ULDStrategySpec(
-        name="topk_align",
-        description=(
-            "Top-K teacher logit alignment via BPE overlap. Requires "
-            "top_k to be set."
+        "topk_align": ULDStrategySpec(
+            name="topk_align",
+            description=(
+                "Top-K teacher logit alignment via BPE overlap. Requires top_k to be set."
+            ),
+            requires_top_k=True,
         ),
-        requires_top_k=True,
-    ),
-    "wasserstein_aligned": ULDStrategySpec(
-        name="wasserstein_aligned",
-        description=(
-            "Wasserstein-1 after aligning the student/teacher token "
-            "sequences over their decoded character spans (handles fully "
-            "disjoint tokenizers, e.g. Llama -> GPT-2). No top_k required."
+        "wasserstein_aligned": ULDStrategySpec(
+            name="wasserstein_aligned",
+            description=(
+                "Wasserstein-1 after aligning the student/teacher token "
+                "sequences over their decoded character spans (handles fully "
+                "disjoint tokenizers, e.g. Llama -> GPT-2). No top_k required."
+            ),
+            requires_top_k=False,
         ),
-        requires_top_k=False,
-    ),
-})
+    }
+)
 
 
 def validate_uld_strategy(name: object) -> str:
@@ -102,22 +103,17 @@ def validate_uld_strategy(name: object) -> str:
     if isinstance(name, bool):
         raise ValueError("uld_strategy must be a string, got bool")
     if not isinstance(name, str):
-        raise ValueError(
-            f"uld_strategy must be a string, got {type(name).__name__}"
-        )
+        raise ValueError(f"uld_strategy must be a string, got {type(name).__name__}")
     if not name:
         raise ValueError("uld_strategy must be a non-empty string")
     if "\x00" in name:
         raise ValueError("uld_strategy must not contain null bytes")
     if len(name) > _MAX_STRATEGY_NAME_LEN:
-        raise ValueError(
-            f"uld_strategy exceeds {_MAX_STRATEGY_NAME_LEN} chars"
-        )
+        raise ValueError(f"uld_strategy exceeds {_MAX_STRATEGY_NAME_LEN} chars")
     normalised = name.lower()
     if normalised not in SUPPORTED_ULD_STRATEGIES:
         raise ValueError(
-            f"uld_strategy={name!r} is not supported. "
-            f"Valid: {sorted(SUPPORTED_ULD_STRATEGIES)}"
+            f"uld_strategy={name!r} is not supported. Valid: {sorted(SUPPORTED_ULD_STRATEGIES)}"
         )
     return normalised
 
@@ -141,9 +137,7 @@ def validate_uld_projection_dim(value: object) -> int:
     if value < 1:
         raise ValueError(f"dim must be >= 1, got {value}")
     if value > _MAX_VOCAB_SIZE:
-        raise ValueError(
-            f"dim={value} exceeds {_MAX_VOCAB_SIZE} cap"
-        )
+        raise ValueError(f"dim={value} exceeds {_MAX_VOCAB_SIZE} cap")
     return value
 
 
@@ -155,15 +149,11 @@ def validate_uld_top_k(value: object) -> int:
     if isinstance(value, bool):
         raise ValueError("uld_top_k must not be bool")
     if not isinstance(value, int):
-        raise ValueError(
-            f"uld_top_k must be int, got {type(value).__name__}"
-        )
+        raise ValueError(f"uld_top_k must be int, got {type(value).__name__}")
     if value < 1:
         raise ValueError(f"uld_top_k must be >= 1, got {value}")
     if value > _MAX_VOCAB_SIZE:
-        raise ValueError(
-            f"uld_top_k={value} exceeds {_MAX_VOCAB_SIZE} cap"
-        )
+        raise ValueError(f"uld_top_k={value} exceeds {_MAX_VOCAB_SIZE} cap")
     return value
 
 
@@ -192,9 +182,7 @@ class ULDConfig:
         spec = _STRATEGY_METADATA[normalised]
         if spec.requires_top_k:
             if self.top_k is None:
-                raise ValueError(
-                    f"uld_strategy='{normalised}' requires top_k to be set"
-                )
+                raise ValueError(f"uld_strategy='{normalised}' requires top_k to be set")
             validate_uld_top_k(self.top_k)
         elif self.top_k is not None:
             raise ValueError(
@@ -259,9 +247,7 @@ def uld_distill_loss(
     import torch
 
     if not isinstance(config, ULDConfig):
-        raise TypeError(
-            f"config must be ULDConfig, got {type(config).__name__}"
-        )
+        raise TypeError(f"config must be ULDConfig, got {type(config).__name__}")
 
     # Causal-LM alignment: logit position i predicts token i+1, the same
     # shift the CE term applies. Drop the final logit and shift
@@ -315,9 +301,7 @@ class ULDProjection:
 
     def __init__(self, config: ULDConfig) -> None:
         if not isinstance(config, ULDConfig):
-            raise TypeError(
-                f"config must be ULDConfig, got {type(config).__name__}"
-            )
+            raise TypeError(f"config must be ULDConfig, got {type(config).__name__}")
         self.config = config
 
     def __call__(self, student_logits, teacher_logits, *, attention_mask=None, labels=None):
@@ -339,9 +323,7 @@ def build_uld_projection(config) -> "ULDProjection":
     loss for a (student_logits, teacher_logits) pair.
     """
     if not isinstance(config, ULDConfig):
-        raise TypeError(
-            f"config must be ULDConfig, got {type(config).__name__}"
-        )
+        raise TypeError(f"config must be ULDConfig, got {type(config).__name__}")
     return ULDProjection(config)
 
 
@@ -419,17 +401,15 @@ def align_token_sequences(student_tokens, teacher_tokens):
 
     if s_text == t_text:
         result: list[list[int]] = []
-        for (s, e) in s_spans:
-            aligned = [
-                ti for ti, (t, f) in enumerate(t_spans) if s < f and t < e
-            ]
+        for s, e in s_spans:
+            aligned = [ti for ti, (t, f) in enumerate(t_spans) if s < f and t < e]
             result.append(aligned)
         return result
 
     # Different decoded text → difflib character alignment.
     cmap = _char_map(s_text, t_text)
     result = []
-    for (s, e) in s_spans:
+    for s, e in s_spans:
         tset = set()
         for c in range(s, min(e, len(cmap))):
             tc = cmap[c]
@@ -519,9 +499,7 @@ def uld_aligned_loss(
     import torch
 
     if not isinstance(config, ULDConfig):
-        raise TypeError(
-            f"config must be ULDConfig, got {type(config).__name__}"
-        )
+        raise TypeError(f"config must be ULDConfig, got {type(config).__name__}")
     batch = student_logits.shape[0]
     if len(student_tokens) < batch or len(teacher_tokens) < batch:
         raise ValueError(

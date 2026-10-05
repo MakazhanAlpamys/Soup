@@ -151,8 +151,10 @@ class TestPagination:
         assert transport.query(2)["cursor"] == "c2"
         # Every page stays on v2 (`/api/public/traces` leaves Langfuse Cloud on
         # 2026-11-16) and on the window fixed before the first request.
-        windows = {(transport.query(i)["fromStartTime"], transport.query(i)["toStartTime"])
-                   for i in range(3)}
+        windows = {
+            (transport.query(i)["fromStartTime"], transport.query(i)["toStartTime"])
+            for i in range(3)
+        }
         paths = {urlsplit(call["url"]).path for call in transport.calls}
         assert len(windows) == 1
         assert paths == {LANGFUSE_OBSERVATIONS_PATH}
@@ -981,18 +983,38 @@ class TestRecordedRealResponse:
         assert trace_of["44d5516f74ed7738"] == trace_of["09c25553e670e9a1"]
         model = {"model": "gpt-4o-mini"}
         assert records == [  # API order: newest startTime first
-            {"trace_id": "44d5516f74ed7738", "prompt": "How tall is the Eiffel Tower?\n330 m",
-             "output": "The Eiffel Tower is 330 m tall.", "source": "langfuse", "signal": "none",
-             "metadata": model},
-            {"trace_id": "09c25553e670e9a1",
-             "prompt": "How tall is the Eiffel Tower? Decide whether to search.",
-             "output": "search: Eiffel Tower height", "source": "langfuse", "signal": "none",
-             "metadata": model},
-            {"trace_id": "e83a0c5fd3d47039", "prompt": "Translate 'hello' to Spanish.",
-             "output": "hola", "source": "langfuse", "signal": "none", "metadata": model},
-            {"trace_id": "8dd24f84d2bf7735",
-             "prompt": "You are terse.\nWhat is the capital of France?",
-             "output": "Paris.", "source": "langfuse", "signal": "none", "metadata": model},
+            {
+                "trace_id": "44d5516f74ed7738",
+                "prompt": "How tall is the Eiffel Tower?\n330 m",
+                "output": "The Eiffel Tower is 330 m tall.",
+                "source": "langfuse",
+                "signal": "none",
+                "metadata": model,
+            },
+            {
+                "trace_id": "09c25553e670e9a1",
+                "prompt": "How tall is the Eiffel Tower? Decide whether to search.",
+                "output": "search: Eiffel Tower height",
+                "source": "langfuse",
+                "signal": "none",
+                "metadata": model,
+            },
+            {
+                "trace_id": "e83a0c5fd3d47039",
+                "prompt": "Translate 'hello' to Spanish.",
+                "output": "hola",
+                "source": "langfuse",
+                "signal": "none",
+                "metadata": model,
+            },
+            {
+                "trace_id": "8dd24f84d2bf7735",
+                "prompt": "You are terse.\nWhat is the capital of France?",
+                "output": "Paris.",
+                "source": "langfuse",
+                "signal": "none",
+                "metadata": model,
+            },
         ]
 
     def test_the_generation_without_output_is_pulled_but_not_written(self):
@@ -1150,9 +1172,22 @@ def test_planted_credentials_never_reach_any_artefact(name, pull_env, monkeypatc
         sys,
         "argv",
         [
-            "soup", "--verbose", "--log-level", "debug",
-            "ingest", "--source", "langfuse", "--pull", "--since", "1d", "--max-pages", "2",
-            "--output", "out.jsonl", "--slack-url", "https://hooks.slack.com/services/T0/B0/X0",
+            "soup",
+            "--verbose",
+            "--log-level",
+            "debug",
+            "ingest",
+            "--source",
+            "langfuse",
+            "--pull",
+            "--since",
+            "1d",
+            "--max-pages",
+            "2",
+            "--output",
+            "out.jsonl",
+            "--slack-url",
+            "https://hooks.slack.com/services/T0/B0/X0",
         ],
     )
     collected = _Collect()
@@ -1190,9 +1225,7 @@ def test_planted_credentials_never_reach_any_artefact(name, pull_env, monkeypatc
     if name == "unexpected_exception":  # the friendly-error console writes to stderr
         streams = _plain(captured.out + captured.err)
         assert "Full Traceback" in streams and "transport bug" in streams
-    leaks = {
-        where: found for where, text in artefacts.items() if (found := _leaked_tokens(text))
-    }
+    leaks = {where: found for where, text in artefacts.items() if (found := _leaked_tokens(text))}
     assert leaks == {}
 
 

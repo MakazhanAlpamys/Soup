@@ -34,7 +34,8 @@ AUTO_SELECTIVE_THRESHOLD_GB = 80.0
 
 
 def resolve_granularity(
-    tier: TierLike, gpu_memory_gb: float | None = None,
+    tier: TierLike,
+    gpu_memory_gb: float | None = None,
 ) -> str | None:
     """Return the granularity string the wrapper should install hooks for.
 
@@ -59,7 +60,8 @@ def resolve_granularity(
 
 
 def resolve_gradient_checkpointing(
-    tier: TierLike, gpu_memory_gb: float | None = None,
+    tier: TierLike,
+    gpu_memory_gb: float | None = None,
 ) -> dict[str, Any]:
     """Resolve a gradient_checkpointing setting into TrainingArguments kwargs.
 
@@ -131,10 +133,7 @@ def install_selective_hooks(model, granularity: str) -> int:
           is idempotent and never nests one checkpoint inside another.
     """
     if granularity not in {"selective", "medium", "full"}:
-        raise ValueError(
-            f"granularity must be one of selective/medium/full, "
-            f"got {granularity!r}"
-        )
+        raise ValueError(f"granularity must be one of selective/medium/full, got {granularity!r}")
 
     try:
         import torch.utils.checkpoint as ckpt_mod
@@ -151,7 +150,10 @@ def install_selective_hooks(model, granularity: str) -> int:
 
         def _checkpointed_forward(*args, **kwargs):
             return ckpt_mod.checkpoint(
-                original_forward, *args, use_reentrant=False, **kwargs,
+                original_forward,
+                *args,
+                use_reentrant=False,
+                **kwargs,
             )
 
         module.forward = _checkpointed_forward

@@ -124,10 +124,7 @@ class TestDecide:
 
     def test_f821_fails_even_when_inside_the_cap(self):
         """#763 is a 1-commit deletion. A lag window of 10 would still merge it."""
-        hit = (
-            "src/soup_cli/commands/adapters.py:3:12: "
-            "F821 Undefined name `_for_terminal`"
-        )
+        hit = "src/soup_cli/commands/adapters.py:3:12: F821 Undefined name `_for_terminal`"
         verdict = decide(behind=1, f821_hits=(hit,))
         assert verdict.conclusion is Conclusion.FAILURE
         assert "undefined names" in verdict.title
@@ -550,11 +547,7 @@ class TestWorkflowPins:
 
     def test_the_gate_job_fetches_origin_main_as_a_named_ref(self):
         jobs = self._loaded()["jobs"]
-        runs = [
-            step.get("run", "")
-            for step in jobs["gate"]["steps"]
-            if "run" in step
-        ]
+        runs = [step.get("run", "") for step in jobs["gate"]["steps"] if "run" in step]
         assert any("main:refs/remotes/origin/main" in run for run in runs)
 
     def test_ci_yml_concurrency_keys_prs_main_and_releases_apart(self):
@@ -631,9 +624,7 @@ class TestContributingDocumentsTheTrap:
         # every release (v0.75.1 renamed 0.75.0/ to 0.75.1/). Hardcoding it made
         # this test fail for a reason that has nothing to do with the naming rule
         # it exists to pin, so the directory is discovered instead.
-        baseline = next(
-            d for d in (ROOT / "changelog.d").iterdir() if d.is_dir()
-        )
+        baseline = next(d for d in (ROOT / "changelog.d").iterdir() if d.is_dir())
         fragment = baseline / "1071.fixed.md"
         text = fragment.read_text(encoding="utf-8")
         assert "#1017 by @jagadeepmamidi in #1071" in text

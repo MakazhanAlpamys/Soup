@@ -10,6 +10,7 @@ from soup_cli.data.formats import (
 
 # --- detect_format edge cases ---
 
+
 def test_detect_format_empty():
     """Empty dataset should raise ValueError."""
     with pytest.raises(ValueError, match="Empty"):
@@ -23,6 +24,7 @@ def test_detect_format_unknown_keys():
 
 
 # --- format_to_messages edge cases ---
+
 
 def test_format_to_messages_unknown_format():
     """Unknown format should raise ValueError."""
@@ -73,6 +75,7 @@ def test_convert_sharegpt_with_system():
 
 
 # --- reverse conversion: messages_to_format ---
+
 
 def test_messages_to_alpaca():
     """Convert messages back to alpaca format."""
@@ -148,6 +151,7 @@ def test_messages_to_format_bad_row():
 
 
 # --- round-trip tests ---
+
 
 def test_roundtrip_alpaca():
     """alpaca → messages → alpaca should preserve data."""

@@ -8,6 +8,7 @@ Mirrors the existing `eval/human.py` Elo policy (K=32, base 1500) but
 operates on a closed model registry so a single `Tournament` can host many
 models and produce a leaderboard.
 """
+
 from __future__ import annotations
 
 import math
@@ -30,16 +31,12 @@ def _validate_model_name(name: object) -> str:
     if "\x00" in name:
         raise ValueError("model name must not contain null bytes")
     if len(name) > _MAX_NAME_LEN:
-        raise ValueError(
-            f"model name length {len(name)} exceeds max {_MAX_NAME_LEN}"
-        )
+        raise ValueError(f"model name length {len(name)} exceeds max {_MAX_NAME_LEN}")
     # Reject Rich markup metacharacters at the source so any downstream
     # CLI consumer that embeds the leaderboard `model` field in markup
     # cannot be markup-injected (security review fix).
     if "[" in name or "]" in name:
-        raise ValueError(
-            "model name must not contain Rich markup metacharacters '[' or ']'"
-        )
+        raise ValueError("model name must not contain Rich markup metacharacters '[' or ']'")
     return name
 
 
@@ -109,9 +106,7 @@ class Tournament:
         if canonical in self._ratings:
             return
         if len(self._ratings) >= _MAX_MODELS:
-            raise ValueError(
-                f"tournament has reached the model cap ({_MAX_MODELS})"
-            )
+            raise ValueError(f"tournament has reached the model cap ({_MAX_MODELS})")
         self._ratings[canonical] = float(self.base_rating)
         self._wins[canonical] = 0
         self._losses[canonical] = 0
@@ -129,9 +124,7 @@ class Tournament:
         Returns the new (rating_a, rating_b).
         """
         if self._matches >= _MAX_MATCHES:
-            raise ValueError(
-                f"tournament has reached the match cap ({_MAX_MATCHES})"
-            )
+            raise ValueError(f"tournament has reached the match cap ({_MAX_MATCHES})")
         a = _validate_model_name(model_a)
         b = _validate_model_name(model_b)
         if a == b:
@@ -144,9 +137,7 @@ class Tournament:
         self.register(a)
         self.register(b)
         score_a = {"a": 1.0, "b": 0.0, "draw": 0.5}[winner_norm]
-        new_a, new_b = update_elo(
-            self._ratings[a], self._ratings[b], score_a=score_a, k=self.k
-        )
+        new_a, new_b = update_elo(self._ratings[a], self._ratings[b], score_a=score_a, k=self.k)
         self._ratings[a] = new_a
         self._ratings[b] = new_b
         if winner_norm == "a":

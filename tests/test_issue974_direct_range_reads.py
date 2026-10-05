@@ -373,9 +373,7 @@ class TestStagingIsOneRegionPerSlot:
         source = AsyncDiskSource(shard_dir, N_LAYERS, _spec(shard_dir), read_ahead=2, pin=False)
         try:
             observed = sum(
-                dst.numel() * dst.element_size()
-                for slot in source._slots
-                for dst in slot.values()
+                dst.numel() * dst.element_size() for slot in source._slots for dst in slot.values()
             )
             assert source.nbytes == observed
             assert source.staging_bytes == sum(r.numel() for r in source._regions)
@@ -440,9 +438,7 @@ class TestByteIdentityThroughTheRangeReader:
         finally:
             source.close()
 
-    def test_a_layer_whose_header_is_longer_than_its_siblings_is_placed_correctly(
-        self, tmp_path
-    ):
+    def test_a_layer_whose_header_is_longer_than_its_siblings_is_placed_correctly(self, tmp_path):
         """Views are per LAYER, not per slot: the sector pad differs when the
         header length does, and a slot reused for such a layer must re-derive
         where each tensor landed."""
@@ -472,9 +468,7 @@ class TestByteIdentityThroughTheRangeReader:
         finally:
             source.close()
 
-    def test_a_shard_spreading_the_wanted_tensors_over_a_far_larger_span_is_refused(
-        self, tmp_path
-    ):
+    def test_a_shard_spreading_the_wanted_tensors_over_a_far_larger_span_is_refused(self, tmp_path):
         """Staging is sized to the span between the first and last wanted tensor,
         so a foreign tensor BETWEEN them is staged with them. A small one is the
         cost of the design; a large one is a page-locked allocation the spec never
@@ -513,9 +507,7 @@ class TestByteIdentityThroughTheRangeReader:
         finally:
             source.close()
 
-    def test_a_tensor_offset_not_aligned_to_its_dtype_is_refused_at_construction(
-        self, tmp_path
-    ):
+    def test_a_tensor_offset_not_aligned_to_its_dtype_is_refused_at_construction(self, tmp_path):
         """A view needs its byte offset on the dtype's boundary. safetensors' own
         writer orders tensors so that holds; a hand-built shard that breaks it is
         refused by name rather than read into a view torch cannot make."""
@@ -644,9 +636,7 @@ class TestTheReadIsSplitAcrossWorkers:
         finally:
             source.close()
 
-    def test_an_error_in_one_range_surfaces_at_the_get_that_wanted_it(
-        self, tmp_path, monkeypatch
-    ):
+    def test_an_error_in_one_range_surfaces_at_the_get_that_wanted_it(self, tmp_path, monkeypatch):
         import soup_cli.utils.async_disk_source as mod
 
         real = mod.read_range_into
@@ -721,9 +711,7 @@ class TestTheArenaPlanForARealStore:
 # ==========================================================================
 @pytest.mark.gpu
 class TestOnRealHardware:
-    def test_every_region_is_a_pinned_sector_aligned_view_of_a_power_of_two_arena(
-        self, tmp_path
-    ):
+    def test_every_region_is_a_pinned_sector_aligned_view_of_a_power_of_two_arena(self, tmp_path):
         shard_dir = _shards(tmp_path, big=True)
         source = AsyncDiskSource(shard_dir, N_LAYERS, _spec(shard_dir), read_ahead=2, pin=True)
         try:

@@ -29,9 +29,7 @@ def _mixed_shard(tmp_path: Path) -> str:
         {
             "self_attn.q_proj.weight": torch.randint(0, 255, (64, 32), dtype=torch.uint8),
             "self_attn.q_proj.weight::absmax": torch.rand(16, dtype=torch.float32),
-            "self_attn.q_proj.weight::nested_offset": torch.tensor(
-                0.3125, dtype=torch.float32
-            ),
+            "self_attn.q_proj.weight::nested_offset": torch.tensor(0.3125, dtype=torch.float32),
             "input_layernorm.weight": torch.rand(64, dtype=torch.bfloat16),
         },
         str(path),
@@ -99,18 +97,14 @@ class TestHeaderRefusesRatherThanGuesses:
 
     def test_offsets_outside_the_file_are_refused(self, tmp_path):
         path = tmp_path / "bad.safetensors"
-        body = json.dumps(
-            {"w": {"dtype": "F32", "shape": [4], "data_offsets": [0, 16]}}
-        ).encode()
+        body = json.dumps({"w": {"dtype": "F32", "shape": [4], "data_offsets": [0, 16]}}).encode()
         path.write_bytes(struct.pack("<Q", len(body)) + body + b"\x00" * 4)
         with pytest.raises(ValueError, match="past the end of the file"):
             read_header(str(path))
 
     def test_a_shape_that_disagrees_with_its_byte_range_is_refused(self, tmp_path):
         path = tmp_path / "mismatch.safetensors"
-        body = json.dumps(
-            {"w": {"dtype": "F32", "shape": [4], "data_offsets": [0, 8]}}
-        ).encode()
+        body = json.dumps({"w": {"dtype": "F32", "shape": [4], "data_offsets": [0, 8]}}).encode()
         path.write_bytes(struct.pack("<Q", len(body)) + body + b"\x00" * 8)
         with pytest.raises(ValueError, match="byte range"):
             read_header(str(path))
@@ -121,9 +115,7 @@ class TestHeaderRefusesRatherThanGuesses:
         TensorRange(start=66, end=70) reading back the tail of the header
         text with no exception raised."""
         path = tmp_path / "negative_start.safetensors"
-        body = json.dumps(
-            {"w": {"dtype": "F32", "shape": [1], "data_offsets": [-4, 0]}}
-        ).encode()
+        body = json.dumps({"w": {"dtype": "F32", "shape": [1], "data_offsets": [-4, 0]}}).encode()
         path.write_bytes(struct.pack("<Q", len(body)) + body)
         with pytest.raises(ValueError, match="tensor-data region"):
             read_header(str(path))
@@ -285,9 +277,7 @@ class TestReadIntoFillsPreallocatedTensors:
             with pytest.raises(ValueError, match="must live on the CPU, got meta"):
                 read_into(handle, entry, dst)
 
-    def test_a_truncated_file_raises_and_leaves_the_destination_partially_filled(
-        self, tmp_path
-    ):
+    def test_a_truncated_file_raises_and_leaves_the_destination_partially_filled(self, tmp_path):
         """read_into's failure contract: the destination is left undefined,
         not rolled back or zeroed. A short read writes whatever prefix bytes
         DID arrive and leaves the rest exactly as the caller left it — pinned

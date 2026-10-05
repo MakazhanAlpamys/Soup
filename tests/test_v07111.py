@@ -45,9 +45,7 @@ class TestRLSignalBuffer:
         from soup_cli.utils.rl_signal_buffer import RLSignalBuffer
 
         buf = RLSignalBuffer()
-        buf.record(
-            func_name="reward", completions=["a", "b", "c", "d"], rewards=[1, 2, 3, 4]
-        )
+        buf.record(func_name="reward", completions=["a", "b", "c", "d"], rewards=[1, 2, 3, 4])
         snap = buf.snapshot()
         assert snap["completions"] == ["a", "b", "c", "d"]
         assert snap["rewards"] == [1.0, 2.0, 3.0, 4.0]
@@ -179,9 +177,7 @@ class TestRewardHackCallback:
         from soup_cli.utils.rl_signal_buffer import RLSignalBuffer
 
         buf = RLSignalBuffer()
-        cb = build_reward_hack_callback(
-            detector="info_rm", halt_on_hack=True, buffer=buf
-        )
+        cb = build_reward_hack_callback(detector="info_rm", halt_on_hack=True, buffer=buf)
         state, control = _FakeState(1), _FakeControl()
         # Step 1 — high separation = baseline.
         buf.record(func_name="r", completions=["a"] * 4, rewards=[0, 0, 9, 9])
@@ -200,9 +196,7 @@ class TestRewardHackCallback:
         # One func → None.
         assert cb.compute_signal({"rewards": [], "per_func": {"a": [1.0, 2.0]}}) is None
         # Two funcs → divergence.
-        sig = cb.compute_signal(
-            {"rewards": [], "per_func": {"a": [1.0, 2.0], "b": [3.0, 0.0]}}
-        )
+        sig = cb.compute_signal({"rewards": [], "per_func": {"a": [1.0, 2.0], "b": [3.0, 0.0]}})
         assert sig is not None and sig >= 0.0
 
     def test_on_log_fallback_without_buffer(self):
@@ -437,9 +431,7 @@ class TestULD:
 
         from soup_cli.utils.uld import ULDConfig, uld_distill_loss
 
-        cfg = ULDConfig(
-            strategy="topk_align", student_vocab_size=8, teacher_vocab_size=12, top_k=4
-        )
+        cfg = ULDConfig(strategy="topk_align", student_vocab_size=8, teacher_vocab_size=12, top_k=4)
         s = torch.randn(2, 3, 8, requires_grad=True)
         t = torch.randn(2, 3, 12)
         loss = uld_distill_loss(s, t, config=cfg)
@@ -532,17 +524,13 @@ class TestMiniLLM:
             from transformers import AutoModelForCausalLM, AutoTokenizer
 
             tok = AutoTokenizer.from_pretrained("hf-internal-testing/tiny-random-gpt2")
-            model = AutoModelForCausalLM.from_pretrained(
-                "hf-internal-testing/tiny-random-gpt2"
-            )
+            model = AutoModelForCausalLM.from_pretrained("hf-internal-testing/tiny-random-gpt2")
         except OSError as exc:  # pragma: no cover — network-dependent
             pytest.skip(f"HF model unavailable (offline / rate-limited): {exc}")
 
         monkeypatch.chdir(tmp_path)
         anchor = tmp_path / "anchor.jsonl"
-        anchor.write_text(
-            "\n".join(json.dumps({"text": f"sentence number {i}"}) for i in range(4))
-        )
+        anchor.write_text("\n".join(json.dumps({"text": f"sentence number {i}"}) for i in range(4)))
         if tok.pad_token is None:
             tok.pad_token = tok.eos_token
         cb = build_minillm_callback(
@@ -577,17 +565,19 @@ class TestMiniLLM:
 
         class _FakeTok:
             def __call__(
-                self, texts, return_tensors=None, padding=None,
-                truncation=None, max_length=None,
+                self,
+                texts,
+                return_tensors=None,
+                padding=None,
+                truncation=None,
+                max_length=None,
             ):  # noqa: ARG002
                 ids = torch.tensor([[1, 2, 3, 4] for _ in texts])
                 return {"input_ids": ids, "attention_mask": torch.ones_like(ids)}
 
         monkeypatch.chdir(tmp_path)
         anchor = tmp_path / "anchor.jsonl"
-        anchor.write_text(
-            "\n".join(json.dumps({"text": f"sentence {i}"}) for i in range(4))
-        )
+        anchor.write_text("\n".join(json.dumps({"text": f"sentence {i}"}) for i in range(4)))
         cb = build_minillm_callback(
             MiniLLMConfig(pretrain_anchor_weight=0.25, pretrain_anchor_path="anchor.jsonl"),
             tokenizer=_FakeTok(),
@@ -627,9 +617,7 @@ class TestIterativeDPO:
 
         monkeypatch.chdir(tmp_path)
         prompts = tmp_path / "prompts.jsonl"
-        prompts.write_text(
-            "\n".join(json.dumps({"prompt": f"q{i}"}) for i in range(3))
-        )
+        prompts.write_text("\n".join(json.dumps({"prompt": f"q{i}"}) for i in range(3)))
 
         plan = build_iterative_dpo_plan(
             base_model="tiny",
@@ -642,8 +630,7 @@ class TestIterativeDPO:
 
         calls = {"sample_adapters": [], "score": 0, "train": []}
 
-        def fake_sample(*, base_model, adapter_path, prompts, num_samples,
-                        max_new_tokens, device):
+        def fake_sample(*, base_model, adapter_path, prompts, num_samples, max_new_tokens, device):
             calls["sample_adapters"].append(adapter_path)
             return [[f"{p}-a", f"{p}-b"] for p in prompts]
 
@@ -688,9 +675,19 @@ class TestIterativeDPO:
         res = runner.invoke(
             app,
             [
-                "--base-model", "b", "--reward-model", "rm",
-                "--prompts", "p.jsonl", "--output-dir", "o",
-                "--rounds", "1", "--pairs-per-round", "10", "--plan-only",
+                "--base-model",
+                "b",
+                "--reward-model",
+                "rm",
+                "--prompts",
+                "p.jsonl",
+                "--output-dir",
+                "o",
+                "--rounds",
+                "1",
+                "--pairs-per-round",
+                "10",
+                "--plan-only",
             ],
         )
         assert res.exit_code == 0, res.output
@@ -707,7 +704,8 @@ class TestIterativeDPO:
 
         def fake_run(plan, **kwargs):
             return IterativeDPOResult(
-                rounds_completed=1, final_adapter="o/round-00/adapter",
+                rounds_completed=1,
+                final_adapter="o/round-00/adapter",
                 per_round_pairs=(1,),
             )
 
@@ -716,9 +714,18 @@ class TestIterativeDPO:
         res = runner.invoke(
             app,
             [
-                "--base-model", "b", "--reward-model", "rm",
-                "--prompts", "p.jsonl", "--output-dir", "o",
-                "--rounds", "1", "--pairs-per-round", "10",
+                "--base-model",
+                "b",
+                "--reward-model",
+                "rm",
+                "--prompts",
+                "p.jsonl",
+                "--output-dir",
+                "o",
+                "--rounds",
+                "1",
+                "--pairs-per-round",
+                "10",
             ],
         )
         assert res.exit_code == 0, res.output

@@ -47,6 +47,7 @@ runner = CliRunner()
 
 # --- fetch_examples ---------------------------------------------------------
 
+
 def test_catalog_non_empty():
     assert len(CATALOG) >= 2
 
@@ -126,11 +127,10 @@ def test_cli_fetch_overwrite_protection(tmp_path, monkeypatch):
 
 # --- quantize CLI -----------------------------------------------------------
 
+
 def test_cli_quantize_prints_command(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    result = runner.invoke(
-        app, ["quantize", "./out", "--to", "gguf", "--bits", "4"]
-    )
+    result = runner.invoke(app, ["quantize", "./out", "--to", "gguf", "--bits", "4"])
     assert result.exit_code == 0, (result.output, repr(result.exception))
     assert "soup export" in result.output
 
@@ -148,6 +148,7 @@ def test_cli_quantize_invalid_bits(tmp_path, monkeypatch):
 
 
 # --- fsdp_consolidate -------------------------------------------------------
+
 
 def test_discover_shards_picks_matching(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
@@ -239,6 +240,7 @@ def test_cli_merge_sharded_invalid_shard_exits_2(tmp_path, monkeypatch):
 
 # --- delinearize_llama4 ------------------------------------------------------
 
+
 def test_is_llama4_model_word_boundary():
     assert is_llama4_model("meta-llama/Llama-4-8B")
     assert is_llama4_model("LLAMA4")
@@ -302,6 +304,7 @@ def test_cli_delinearize_llama4(tmp_path, monkeypatch):
 
 
 # --- sweep_config -----------------------------------------------------------
+
 
 def test_parse_sweep_yaml_happy():
     spec = parse_sweep_yaml(
@@ -450,10 +453,14 @@ def test_cli_sweep_config_overrides_cli_strategy_and_max_runs(tmp_path, monkeypa
         app,
         [
             "sweep",
-            "--config", "soup.yaml",
-            "--sweep-config", "sweep.yaml",
-            "--strategy", "random",
-            "--max-runs", "1",
+            "--config",
+            "soup.yaml",
+            "--sweep-config",
+            "sweep.yaml",
+            "--strategy",
+            "random",
+            "--max-runs",
+            "1",
             "--dry-run",
         ],
     )
@@ -479,9 +486,12 @@ def test_cli_sweep_rejects_param_and_sweep_config_together(tmp_path, monkeypatch
         app,
         [
             "sweep",
-            "--config", "soup.yaml",
-            "--param", "lr=1e-5,2e-5",
-            "--sweep-config", "sweep.yaml",
+            "--config",
+            "soup.yaml",
+            "--param",
+            "lr=1e-5,2e-5",
+            "--sweep-config",
+            "sweep.yaml",
         ],
     )
     assert result.exit_code == 1
@@ -525,8 +535,7 @@ def test_cli_sweep_config_error_keeps_the_bracketed_key(tmp_path, monkeypatch):
 
 def test_cli_sweep_config_seed_comes_from_the_file(tmp_path, monkeypatch):
     body = (
-        "strategy: random\nn_runs: 2\n"
-        "params:\n  lr: [1, 2, 3, 4, 5]\n  epochs: [1, 2, 3, 4, 5]\n"
+        "strategy: random\nn_runs: 2\nparams:\n  lr: [1, 2, 3, 4, 5]\n  epochs: [1, 2, 3, 4, 5]\n"
     )
     plans = {
         seed: strip_ansi(_plan(tmp_path, monkeypatch, f"seed: {seed}\n" + body).output)
@@ -538,6 +547,7 @@ def test_cli_sweep_config_seed_comes_from_the_file(tmp_path, monkeypatch):
 
 
 # --- llama_proxy ------------------------------------------------------------
+
 
 def test_known_subcommands_immutable():
     subs = known_subcommands()
@@ -612,6 +622,7 @@ def test_cli_llama_help_lists_subcommands(tmp_path, monkeypatch):
 
 # --- reasoning_parser -------------------------------------------------------
 
+
 def test_known_parsers_immutable():
     parsers = known_parsers()
     with pytest.raises(TypeError):
@@ -646,6 +657,7 @@ def test_parser_description():
 
 
 # --- top-level CLI plumbing -------------------------------------------------
+
 
 def test_cli_help_lists_new_commands():
     result = runner.invoke(app, ["--help"])

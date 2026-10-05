@@ -78,14 +78,15 @@ _MAX_DISTILL_EPOCHS = 100
 # make one optimiser step, so both divide the naive ``rows // batch``. Pin that
 # shape here (equal to the schema defaults) AND emit it into the config, so the
 # builder's arithmetic and the trainer's behaviour cannot drift apart.
-_DISTILL_VAL_SPLIT = 0.1   # DataConfig.val_split default
-_DISTILL_GRAD_ACCUM = 4    # TrainingConfig.gradient_accumulation_steps default
+_DISTILL_VAL_SPLIT = 0.1  # DataConfig.val_split default
+_DISTILL_GRAD_ACCUM = 4  # TrainingConfig.gradient_accumulation_steps default
 # How much of a failed subprocess's output to surface (mirrors shrink.py).
 _SUBPROCESS_ERROR_TAIL_CHARS = 800
 # The distill trainer writes a LoRA adapter (never dense base weights), so it
 # trains into this subdirectory of -o; the merge then replaces -o with the
 # dense model.
 _ADAPTER_SUBDIR = "_adapter"
+
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -208,9 +209,7 @@ def _parse_sweep_k(value: str) -> list[int]:
             raise ValueError(f"--sweep-k values must be integers, got {part!r}")
         k = int(part)
         if not DRAFT_K_MIN <= k <= DRAFT_K_MAX:
-            raise ValueError(
-                f"--sweep-k values must be in {DRAFT_K_MIN}..{DRAFT_K_MAX}, got {k}"
-            )
+            raise ValueError(f"--sweep-k values must be in {DRAFT_K_MIN}..{DRAFT_K_MAX}, got {k}")
         if k in ks:
             raise ValueError(f"--sweep-k lists k={k} twice")
         ks.append(k)
@@ -313,9 +312,7 @@ def _load_pair_member(
     """Load one half of the (target, draft) pair. Returns (model, tokenizer, device)."""
     from soup_cli.utils.live_eval import load_model_and_tokenizer
 
-    return load_model_and_tokenizer(
-        model_id, device=device, trust_remote_code=trc, dtype="auto"
-    )
+    return load_model_and_tokenizer(model_id, device=device, trust_remote_code=trc, dtype="auto")
 
 
 # ---------------------------------------------------------------------------
@@ -525,9 +522,7 @@ def _run_distill(
             env=env,
         )
     except subprocess.TimeoutExpired as exc:
-        raise RuntimeError(
-            f"draft distill exceeded {_DISTILL_TIMEOUT_SECONDS}s timeout"
-        ) from exc
+        raise RuntimeError(f"draft distill exceeded {_DISTILL_TIMEOUT_SECONDS}s timeout") from exc
     if result.returncode != 0:
         combined = (result.stderr or b"").decode("utf-8", "replace") + (
             result.stdout or b""
@@ -537,22 +532,17 @@ def _run_distill(
 
     if not os.path.isdir(adapter_dir):
         raise RuntimeError(
-            f"distill finished but wrote no adapter to {adapter_dir} — "
-            "cannot build a dense draft"
+            f"distill finished but wrote no adapter to {adapter_dir} — cannot build a dense draft"
         )
 
     # transformers cannot use a PEFT adapter dir as an assistant_model, so merge
     # the LoRA into the base weights and write a dense model to out_dir.
-    merge_adapter_to_dense(
-        base_model=draft_base, adapter_dir=adapter_dir, out_dir=out_dir, trc=trc
-    )
+    merge_adapter_to_dense(base_model=draft_base, adapter_dir=adapter_dir, out_dir=out_dir, trc=trc)
 
 
 @app.command()
 def distill(
-    target: str = typer.Option(
-        ..., "--target", help="The tuned model to speed up (the teacher)."
-    ),
+    target: str = typer.Option(..., "--target", help="The tuned model to speed up (the teacher)."),
     draft_base: str = typer.Option(
         ...,
         "--draft-base",
@@ -662,11 +652,7 @@ def distill(
         console.print("[dim]--plan-only: nothing written.[/]")
         return
 
-    mode_note = (
-        " [cyan](cross-tokenizer ULD: wasserstein_aligned)[/]"
-        if cross_tokenizer
-        else ""
-    )
+    mode_note = " [cyan](cross-tokenizer ULD: wasserstein_aligned)[/]" if cross_tokenizer else ""
     console.print(
         f"[bold]Distilling[/] {escape(target)} -> {escape(draft_base)}{mode_note} "
         f"({len(rows)} rows, ~{steps} steps)"
@@ -758,9 +744,7 @@ def measure(
         help="Allow custom modelling code from the target / draft "
         "(required for architectures that ship an auto_map).",
     ),
-    output: Optional[str] = typer.Option(
-        None, "-o", "--output", help="Write the report as JSON."
-    ),
+    output: Optional[str] = typer.Option(None, "-o", "--output", help="Write the report as JSON."),
     sweep_k: Optional[str] = typer.Option(
         None,
         "--sweep-k",
@@ -798,9 +782,7 @@ def measure(
     # differ (e.g. Qwen2.5 large<-small). `soup draft distill` already refuses
     # such a pair up front; measure uses the SAME definition here so the two agree
     # (issue #344). same_tokenizer() below stays as an additional check.
-    target_vocab, draft_vocab = _pair_vocab_sizes_or_fail(
-        target, draft, target_trc, draft_trc
-    )
+    target_vocab, draft_vocab = _pair_vocab_sizes_or_fail(target, draft, target_trc, draft_trc)
     if target_vocab != draft_vocab:
         _fail(
             f"Draft and target must share a tokenizer, but their vocab sizes "
@@ -816,9 +798,7 @@ def measure(
             target, device=device, trc=target_trc
         )
         console.print(f"[dim]Loading draft: {escape(draft)}[/]")
-        draft_model, draft_tok, _ = _load_pair_member(
-            draft, device=resolved_device, trc=draft_trc
-        )
+        draft_model, draft_tok, _ = _load_pair_member(draft, device=resolved_device, trc=draft_trc)
     except Exception as exc:  # noqa: BLE001 — friendly CLI error
         _fail(f"could not load the model pair: {exc}")
 
@@ -849,7 +829,6 @@ def measure(
 
     rate = acceptance_rate(accepted, total)
     verdict = classify_acceptance(rate)
-
 
     tok_s_plain = measure_throughput(
         target_model, target_tok, prompt_texts, max_new_tokens=max_new_tokens
@@ -928,8 +907,7 @@ def measure(
         console.print(
             f"[yellow]Warning:[/] assisted-generation throughput could not be "
             f"measured ({escape(str(exc))}); the acceptance rate and plain "
-            f"throughput are still valid"
-            + (" and are on disk." if output is not None else ".")
+            f"throughput are still valid" + (" and are on disk." if output is not None else ".")
         )
     else:
         assisted = None if tok_s_assisted <= 0 else tok_s_assisted
@@ -947,8 +925,16 @@ def measure(
 
     if sweep_values is not None:
         report = _run_k_sweep(
-            report, output, sweep_values, plain,
-            target_model, target_tok, draft_model, draft_tok, prompt_texts, max_new_tokens,
+            report,
+            output,
+            sweep_values,
+            plain,
+            target_model,
+            target_tok,
+            draft_model,
+            draft_tok,
+            prompt_texts,
+            max_new_tokens,
         )
 
     console.print(render_draft_panel(report))
@@ -991,9 +977,7 @@ def _run_k_sweep(
         done = [row for row in rows if row["status"] == "complete"]
         # A tie goes to the smaller k, as the modelled best k does, whatever order
         # --sweep-k was typed in.
-        return (
-            max(done, key=lambda row: (row["tok_s_assisted"], -row["k"]))["k"] if done else None
-        )
+        return max(done, key=lambda row: (row["tok_s_assisted"], -row["k"]))["k"] if done else None
 
     for k in ks:
         row: dict = {"k": k, "tok_s_assisted": None, "speedup": None, "status": "pending"}
@@ -1015,8 +999,7 @@ def _run_k_sweep(
         except Exception as exc:  # noqa: BLE001 — each k is best-effort
             row["status"] = "crash"
             console.print(
-                f"[yellow]Warning:[/] --sweep-k k={k} could not be measured "
-                f"({escape(str(exc))})."
+                f"[yellow]Warning:[/] --sweep-k k={k} could not be measured ({escape(str(exc))})."
             )
         else:
             if tok_s > 0:

@@ -124,9 +124,7 @@ def resolve_tokenizer(tokenizer: object) -> object:
     if hasattr(tokenizer, "encode") and hasattr(tokenizer, "decode"):
         return tokenizer
     if not isinstance(tokenizer, str):
-        raise TypeError(
-            "tokenizer must be a model id / path string or a tokenizer object"
-        )
+        raise TypeError("tokenizer must be a model id / path string or a tokenizer object")
     if not tokenizer:
         raise ValueError("tokenizer name must be non-empty")
     try:
@@ -134,7 +132,7 @@ def resolve_tokenizer(tokenizer: object) -> object:
     except ImportError as exc:
         raise ValueError(
             "tokenizer-aware diagnose needs transformers — "
-            "install with: pip install \"soup-cli[train]\""
+            'install with: pip install "soup-cli[train]"'
         ) from exc
     try:
         return AutoTokenizer.from_pretrained(tokenizer)

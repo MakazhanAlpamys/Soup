@@ -1,4 +1,5 @@
 """Tests for v0.40.2 Part B — v0.40.1 carry-overs (H2/H3/N1-G2/N7/M5)."""
+
 from __future__ import annotations
 
 import json
@@ -34,9 +35,7 @@ class TestDataFlagAliases:
         monkeypatch.chdir(tmp_path)
         ds = tmp_path / "ds.jsonl"
         rows = [{"text": f"row {i}"} for i in range(20)]
-        ds.write_text(
-            "\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8"
-        )
+        ds.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
 
         result = runner.invoke(
             app,
@@ -90,9 +89,7 @@ class TestQuickstartOutput:
     def test_quickstart_output_routes_files(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         target = tmp_path / "myrun"
-        result = runner.invoke(
-            app, ["quickstart", "--dry-run", "--output", str(target)]
-        )
+        result = runner.invoke(app, ["quickstart", "--dry-run", "--output", str(target)])
         assert result.exit_code == 0, (result.output, repr(result.exception))
         # The actual files quickstart.py writes under --output:
         assert (target / "quickstart_data.jsonl").exists()
@@ -163,9 +160,7 @@ class TestInferHFFallback:
         assert kind == "hf"
         assert value == "user/my-model"
 
-    def test_resolve_model_source_invalid_hf_id_when_no_local(
-        self, tmp_path, monkeypatch
-    ):
+    def test_resolve_model_source_invalid_hf_id_when_no_local(self, tmp_path, monkeypatch):
         from soup_cli.commands.infer import _resolve_model_source
 
         monkeypatch.chdir(tmp_path)

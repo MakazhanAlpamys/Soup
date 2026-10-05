@@ -59,9 +59,7 @@ def _check_name(name: str) -> str:
     if "\x00" in name:
         raise ValueError("node name must not contain null bytes")
     if not _NAME_RE.match(name):
-        raise ValueError(
-            f"node name must match [a-z0-9][a-z0-9_-]{{0,{_MAX_NAME_LEN - 1}}}"
-        )
+        raise ValueError(f"node name must match [a-z0-9][a-z0-9_-]{{0,{_MAX_NAME_LEN - 1}}}")
     return name
 
 
@@ -70,15 +68,11 @@ def _check_kind(kind: str) -> str:
         raise TypeError("node kind must be a string")
     canonical = kind.strip().lower()
     if canonical not in NODE_KINDS:
-        raise ValueError(
-            f"unknown node kind: {kind!r}. supported: {sorted(NODE_KINDS)}"
-        )
+        raise ValueError(f"unknown node kind: {kind!r}. supported: {sorted(NODE_KINDS)}")
     return canonical
 
 
-def _topological_sort(
-    names: List[str], edges: List[Tuple[str, str]]
-) -> List[str]:
+def _topological_sort(names: List[str], edges: List[Tuple[str, str]]) -> List[str]:
     """Kahn's algorithm. Raises ``ValueError`` on cycle.
 
     Uses ``collections.deque`` so each pop is O(1); successors that become
@@ -90,9 +84,7 @@ def _topological_sort(
     for source, target in edges:
         in_degree[target] += 1
         successors[source].append(target)
-    queue: deque = deque(
-        sorted(name for name, deg in in_degree.items() if deg == 0)
-    )
+    queue: deque = deque(sorted(name for name, deg in in_degree.items() if deg == 0))
     order: List[str] = []
     while queue:
         current = queue.popleft()
@@ -140,9 +132,7 @@ def parse_recipe(raw: Any) -> RecipeDAG:
         config = raw_node.get("config", {})
         if not isinstance(config, dict):
             raise TypeError(f"recipe.nodes[{index}].config must be a dict")
-        nodes.append(
-            RecipeNode(name=name, kind=kind, config=MappingProxyType(dict(config)))
-        )
+        nodes.append(RecipeNode(name=name, kind=kind, config=MappingProxyType(dict(config))))
 
     raw_edges = raw.get("edges", [])
     if not isinstance(raw_edges, list):
@@ -154,9 +144,7 @@ def parse_recipe(raw: Any) -> RecipeDAG:
     name_set = {node.name for node in nodes}
     for index, raw_edge in enumerate(raw_edges):
         if not isinstance(raw_edge, (list, tuple)) or len(raw_edge) != 2:
-            raise ValueError(
-                f"recipe.edges[{index}] must be a 2-element [from, to] list"
-            )
+            raise ValueError(f"recipe.edges[{index}] must be a 2-element [from, to] list")
         source = _check_name(raw_edge[0])
         target = _check_name(raw_edge[1])
         if source == target:
@@ -213,9 +201,7 @@ def load_recipe_yaml(path: str) -> RecipeDAG:
     except FileNotFoundError as exc:
         raise FileNotFoundError(path) from exc
     if stat.S_ISLNK(lstat_result.st_mode):
-        raise ValueError(
-            f"recipe path must not be a symlink: {os.path.basename(path)}"
-        )
+        raise ValueError(f"recipe path must not be a symlink: {os.path.basename(path)}")
     real = os.path.realpath(path)
     if not is_under_cwd(real):
         raise ValueError(f"recipe path must stay under cwd: {os.path.basename(real)}")

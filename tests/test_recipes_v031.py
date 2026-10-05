@@ -6,6 +6,7 @@ specialists, and multimodal reasoning groups. Total catalog: 46 -> 80.
 Each Part group has its own test class. The final ``TestRecipeCatalog80``
 asserts overall catalog invariants and parameterised per-recipe validity.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -59,28 +60,25 @@ class TestPartAVision:
         cfg = load_config_from_string(recipe.yaml_str)
         assert cfg.data.format in ("llava", "sharegpt4v")
 
-    @pytest.mark.parametrize("query,expected_model", [
-        ("Pixtral", "mistralai/Pixtral-12B-2409"),
-        ("Qwen2-VL", "Qwen/Qwen2-VL-7B-Instruct"),
-        ("Qwen2-VL", "Qwen/Qwen2-VL-72B-Instruct"),
-        ("InternVL", "OpenGVLab/InternVL2_5-8B"),
-        ("MiniCPM", "openbmb/MiniCPM-V-2_6"),
-        ("Llama-3.2-90B", "meta-llama/Llama-3.2-90B-Vision-Instruct"),
-    ])
-    def test_vision_search_returns_each_new_recipe(
-        self, query: str, expected_model: str
-    ) -> None:
+    @pytest.mark.parametrize(
+        "query,expected_model",
+        [
+            ("Pixtral", "mistralai/Pixtral-12B-2409"),
+            ("Qwen2-VL", "Qwen/Qwen2-VL-7B-Instruct"),
+            ("Qwen2-VL", "Qwen/Qwen2-VL-72B-Instruct"),
+            ("InternVL", "OpenGVLab/InternVL2_5-8B"),
+            ("MiniCPM", "openbmb/MiniCPM-V-2_6"),
+            ("Llama-3.2-90B", "meta-llama/Llama-3.2-90B-Vision-Instruct"),
+        ],
+    )
+    def test_vision_search_returns_each_new_recipe(self, query: str, expected_model: str) -> None:
         """Each new vision model surfaces via keyword search (per-model assertion)."""
         results = search_recipes(query=query)
         models = {r.model for r in results}
-        assert expected_model in models, (
-            f"search('{query}') missed {expected_model}; got {models}"
-        )
+        assert expected_model in models, f"search('{query}') missed {expected_model}; got {models}"
 
     @pytest.mark.parametrize("name,_task,_model", PART_A_VISION)
-    def test_vision_recipe_sets_image_dir(
-        self, name: str, _task: str, _model: str
-    ) -> None:
+    def test_vision_recipe_sets_image_dir(self, name: str, _task: str, _model: str) -> None:
         """Vision recipes must declare image_dir or a non-empty fallback path."""
         cfg = load_config_from_string(get_recipe(name).yaml_str)
         assert cfg.data.image_dir, f"{name} missing image_dir for vision modality"
@@ -115,9 +113,7 @@ class TestPartBAudio:
         assert cfg.data.format == "audio"
 
     @pytest.mark.parametrize("name,_task,_model", PART_B_AUDIO)
-    def test_audio_recipe_sets_audio_dir(
-        self, name: str, _task: str, _model: str
-    ) -> None:
+    def test_audio_recipe_sets_audio_dir(self, name: str, _task: str, _model: str) -> None:
         """Audio recipes must declare audio_dir."""
         cfg = load_config_from_string(get_recipe(name).yaml_str)
         assert cfg.data.audio_dir, f"{name} missing audio_dir for audio modality"
@@ -155,16 +151,19 @@ class TestPartCReasoning:
         if task == "grpo":
             assert cfg.training.reward_fn is not None, f"{name} must define reward_fn"
 
-    @pytest.mark.parametrize("model_id", [
-        # New in v0.31.0
-        "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B",
-        "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
-        "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B",
-        "deepseek-ai/DeepSeek-R1-Distill-Llama-70B",
-        # Already in catalog from earlier releases
-        "deepseek-ai/DeepSeek-R1-Distill-Qwen-32B",
-        "deepseek-ai/DeepSeek-R1-Distill-Llama-8B",
-    ])
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            # New in v0.31.0
+            "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B",
+            "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
+            "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B",
+            "deepseek-ai/DeepSeek-R1-Distill-Llama-70B",
+            # Already in catalog from earlier releases
+            "deepseek-ai/DeepSeek-R1-Distill-Qwen-32B",
+            "deepseek-ai/DeepSeek-R1-Distill-Llama-8B",
+        ],
+    )
     def test_all_r1_distill_model_ids_registered(self, model_id: str) -> None:
         """All 6 DeepSeek-R1-Distill sizes appear somewhere in the catalog.
 
@@ -278,8 +277,12 @@ PART_F_MM_REASONING = [
 # parametrizations. If any group above is renamed, every consumer below
 # updates automatically (closes the divergence vector flagged by TDD M2).
 ALL_V031_RECIPES = (
-    PART_A_VISION + PART_B_AUDIO + PART_C_REASONING
-    + PART_D_EDGE + PART_E_DOMAIN + PART_F_MM_REASONING
+    PART_A_VISION
+    + PART_B_AUDIO
+    + PART_C_REASONING
+    + PART_D_EDGE
+    + PART_E_DOMAIN
+    + PART_F_MM_REASONING
 )
 
 
@@ -308,6 +311,7 @@ class TestPartFMultimodalReasoning:
 # ---------------------------------------------------------------------------
 # Part G: Per-recipe parameterised validation (catalog-wide)
 # ---------------------------------------------------------------------------
+
 
 class TestRecipeCatalog80:
     """Catalog-wide invariants after v0.31.0 expansion (46 -> 80 recipes)."""
@@ -382,8 +386,7 @@ class TestRecipeCatalog80:
             assert modules, f"{name} has empty lora.target_modules list"
         else:
             assert modules == "auto", (
-                f"{name} lora.target_modules must be 'auto' or a non-empty list, "
-                f"got {modules!r}"
+                f"{name} lora.target_modules must be 'auto' or a non-empty list, got {modules!r}"
             )
 
     @pytest.mark.parametrize("name", sorted(RECIPES.keys()))
@@ -394,28 +397,23 @@ class TestRecipeCatalog80:
             f"{name} max_length={cfg.data.max_length} out of [64, 1M]"
         )
 
-    @pytest.mark.parametrize("name", sorted(
-        n for n, r in RECIPES.items() if r.task == "grpo"
-    ))
-    def test_every_grpo_recipe_has_reward_fn_and_num_generations(
-        self, name: str
-    ) -> None:
+    @pytest.mark.parametrize("name", sorted(n for n, r in RECIPES.items() if r.task == "grpo"))
+    def test_every_grpo_recipe_has_reward_fn_and_num_generations(self, name: str) -> None:
         """GRPO recipes must wire reward_fn and num_generations — required for the trainer."""
         cfg = load_config_from_string(RECIPES[name].yaml_str)
-        assert cfg.training.reward_fn is not None, (
-            f"GRPO recipe '{name}' missing reward_fn"
-        )
+        assert cfg.training.reward_fn is not None, f"GRPO recipe '{name}' missing reward_fn"
         assert cfg.training.num_generations is not None, (
             f"GRPO recipe '{name}' missing num_generations"
         )
         assert cfg.training.num_generations >= 2, (
-            f"GRPO recipe '{name}' num_generations={cfg.training.num_generations} "
-            "must be >= 2"
+            f"GRPO recipe '{name}' num_generations={cfg.training.num_generations} must be >= 2"
         )
+
 
 # ---------------------------------------------------------------------------
 # Part H: Recipe verification CI workflow file present
 # ---------------------------------------------------------------------------
+
 
 class TestPartHVerificationWorkflow:
     """v0.31.0 ships a CI workflow that validates every recipe at PR time.
@@ -458,15 +456,14 @@ class TestPartHVerificationWorkflow:
 # CLI smoke (v0.31.0 recipes are reachable via `soup recipes`)
 # ---------------------------------------------------------------------------
 
+
 class TestRecipesCLIv031:
     """v0.31.0 recipes are reachable through `soup recipes show`."""
 
     @pytest.mark.parametrize("name,_task,_model", ALL_V031_RECIPES)
     def test_show_recipe(self, name: str, _task: str, _model: str) -> None:
         result = runner.invoke(app, ["recipes", "show", name])
-        assert result.exit_code == 0, (
-            f"`soup recipes show {name}` failed: {result.output!r}"
-        )
+        assert result.exit_code == 0, f"`soup recipes show {name}` failed: {result.output!r}"
         # The model id appears verbatim in the YAML output.
         assert _model in result.output
 
@@ -475,13 +472,16 @@ class TestRecipesCLIv031:
         result = runner.invoke(app, ["recipes", "list"])
         assert result.exit_code == 0, result.output
 
-    @pytest.mark.parametrize("query,expected", [
-        ("pixtral", "pixtral-12b-sft"),
-        ("smollm", "smollm2-135m-sft"),
-        ("biomistral", "biomistral-7b-sft"),
-        ("meditron", "meditron-7b-sft"),
-        ("mathstral", "mathstral-7b-sft"),
-    ])
+    @pytest.mark.parametrize(
+        "query,expected",
+        [
+            ("pixtral", "pixtral-12b-sft"),
+            ("smollm", "smollm2-135m-sft"),
+            ("biomistral", "biomistral-7b-sft"),
+            ("meditron", "meditron-7b-sft"),
+            ("mathstral", "mathstral-7b-sft"),
+        ],
+    )
     def test_search_finds_v031_recipes(self, query: str, expected: str) -> None:
         """`soup recipes search <kw>` surfaces v0.31.0 recipes by keyword."""
         result = runner.invoke(app, ["recipes", "search", query])

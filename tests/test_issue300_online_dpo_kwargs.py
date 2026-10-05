@@ -27,7 +27,6 @@ So the load-bearing test here BINDS the kwargs against the real
 `OnlineDPOTrainer.__init__` signature rather than re-asking the probe.
 """
 
-
 import pytest
 
 trl = pytest.importorskip("trl", reason="online_dpo needs the [train] extra")
@@ -96,9 +95,9 @@ class TestTheKwargsBindAgainstTheRealSignature:
         # At least one real signal kwarg must exist, or the probe is answering
         # False to everything - which is how the first version of this fix looked
         # correct while it would have broken the judge path.
-        assert any(
-            _trl_accepts(name) for name in ("judge", "reward_model", "reward_funcs")
-        ), "the probe found no reward-signal parameter at all on this trl"
+        assert any(_trl_accepts(name) for name in ("judge", "reward_model", "reward_funcs")), (
+            "the probe found no reward-signal parameter at all on this trl"
+        )
         assert _trl_accepts("judge") is True, (
             "every supported trl takes judge=; a probe that says otherwise is "
             "reading a passthrough shim instead of the real signature"

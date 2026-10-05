@@ -51,9 +51,7 @@ def _validate_model(value: object) -> str:
     if not value:
         raise ValueError("model must be non-empty")
     if "\x00" in value or "\n" in value or "\r" in value:
-        raise ValueError(
-            "model must not contain NUL / newline / carriage return"
-        )
+        raise ValueError("model must not contain NUL / newline / carriage return")
     if len(value) > _MAX_MODEL_LEN:
         raise ValueError(f"model length {len(value)} > {_MAX_MODEL_LEN}")
     return value
@@ -213,9 +211,7 @@ def render_launchd_plist(
         min_pairs=min_pairs,
         output_dir=output_dir,
     )
-    args_xml = "\n".join(
-        f"        <string>{_xml_escape(a)}</string>" for a in argv
-    )
+    args_xml = "\n".join(f"        <string>{_xml_escape(a)}</string>" for a in argv)
     label = LAUNCHD_PLIST_NAME[: -len(".plist")]
     return (
         '<?xml version="1.0" encoding="UTF-8"?>\n'

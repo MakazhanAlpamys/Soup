@@ -266,9 +266,7 @@ def run_stress(
 
     reference_accept: Optional[float] = None
     if have_golds:
-        ref_scores = _score_batch(
-            reward_fn, sampled, sampled, reference_key=reference_key
-        )
+        ref_scores = _score_batch(reward_fn, sampled, sampled, reference_key=reference_key)
         reference_accept = _accepted(ref_scores) / len(sampled)
 
     unique_kinds = list(dict.fromkeys(attacks))
@@ -288,30 +286,22 @@ def run_stress(
                 )
                 for idx in range(num_templates):
                     texts = [
-                        generate_attack_variants(
-                            "answer_spray", sentinel=sentinel, gold=g
-                        )[idx]
+                        generate_attack_variants("answer_spray", sentinel=sentinel, gold=g)[idx]
                         for g in sampled
                     ]
-                    scores = _score_batch(
-                        reward_fn, texts, sampled, reference_key=reference_key
-                    )
+                    scores = _score_batch(reward_fn, texts, sampled, reference_key=reference_key)
                     kind_accepted += _accepted(scores)
                     kind_n += len(texts)
             else:
                 variants = generate_attack_variants(kind, sentinel=sentinel, gold=None)
                 for v in variants:
                     texts = [v] * len(sampled)
-                    scores = _score_batch(
-                        reward_fn, texts, sampled, reference_key=reference_key
-                    )
+                    scores = _score_batch(reward_fn, texts, sampled, reference_key=reference_key)
                     kind_accepted += _accepted(scores)
                     kind_n += len(texts)
         else:
             texts = generate_attack_variants(kind, sentinel=sentinel, gold=None)
-            scores = _score_batch(
-                reward_fn, texts, None, reference_key=reference_key
-            )
+            scores = _score_batch(reward_fn, texts, None, reference_key=reference_key)
             kind_accepted = _accepted(scores)
             kind_n = len(texts)
 

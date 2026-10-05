@@ -145,9 +145,7 @@ class TestTheScannerCanActuallyFail:
 
     def test_a_bogus_keyword_is_reported(self, tmp_path):
         path = tmp_path / "fake.py"
-        path.write_text(
-            "x = DPOConfig(beta=0.1, definitely_not_a_field=3)\n", encoding="utf-8"
-        )
+        path.write_text("x = DPOConfig(beta=0.1, definitely_not_a_field=3)\n", encoding="utf-8")
         calls = _config_calls(path)
         assert len(calls) == 1
         symbol, fallback, keywords, _ = calls[0]
@@ -200,6 +198,7 @@ class TestTheScannerCanActuallyFail:
         for name in _SOUP_OWNED:
             assert re.search(rf"^class {name}\b", source, re.M), name
 
+
 class TestTheDriftWorkflowCanActuallyFail:
     """The workflow shipped with no test of its own, and its most actionable
     output could not fail.
@@ -220,14 +219,10 @@ class TestTheDriftWorkflowCanActuallyFail:
         import yaml
 
         root = pathlib.Path(__file__).resolve().parents[1]
-        raw = (root / ".github" / "workflows" / "dependency-drift.yml").read_text(
-            encoding="utf-8"
-        )
+        raw = (root / ".github" / "workflows" / "dependency-drift.yml").read_text(encoding="utf-8")
         workflow = yaml.safe_load(raw)
         job = next(iter(workflow["jobs"].values()))
-        step = next(
-            s for s in job["steps"] if "Report resolved versions" in s.get("name", "")
-        )
+        step = next(s for s in job["steps"] if "Report resolved versions" in s.get("name", ""))
         # `<<'PY'` is followed by a shell redirection on the SAME line
         # (`>> "$GITHUB_STEP_SUMMARY"`); the script starts on the next one.
         # The heredoc marker is followed by a shell redirection on the SAME
@@ -294,8 +289,7 @@ class TestTheDriftWorkflowCanActuallyFail:
             and node.value.func.attr == "exit"
         ]
         assert not unconditional, (
-            "the report exits at module level, so a clean weekly run would go "
-            "red too"
+            "the report exits at module level, so a clean weekly run would go red too"
         )
 
 
@@ -348,13 +342,12 @@ class TestTheDriftAlarmDoesNotCryWolf:
 
         out = io.StringIO()
         code = 0
-        with patch.object(
-            importlib.metadata, "requires", fake_requires
-        ), patch.object(importlib.metadata, "version", fake_version):
+        with (
+            patch.object(importlib.metadata, "requires", fake_requires),
+            patch.object(importlib.metadata, "version", fake_version),
+        ):
             try:
-                with contextlib.redirect_stdout(out), contextlib.redirect_stderr(
-                    io.StringIO()
-                ):
+                with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
                     exec(  # noqa: S102 - the workflow's own script, by design
                         compile(source, "<drift-report>", "exec"),
                         {"__name__": "__drift__"},
@@ -407,9 +400,7 @@ class TestTheDriftAlarmDoesNotCryWolf:
 
     def test_changing_either_side_re_arms_the_alarm(self):
         """An acknowledgement covers ONE pair, not the package forever."""
-        code, _ = self._run(
-            [self.ACK_TRAIN, 'transformers>=6.0.0; extra == "mlx"']
-        )
+        code, _ = self._run([self.ACK_TRAIN, 'transformers>=6.0.0; extra == "mlx"'])
         assert code == 1, (
             "the acknowledgement is keyed on the exact declared pair; moving "
             "either bound is a different conflict and must go red again"

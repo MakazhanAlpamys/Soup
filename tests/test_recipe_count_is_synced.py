@@ -73,9 +73,7 @@ class SyncVerdict:
             for site in self.missing_patterns:
                 lines.append(f"  * {site.rel_path} with pattern {site.pattern!r}")
         if self.mismatches:
-            lines.append(
-                f"Out-of-sync recipe counts (catalog has {self.expected_count} recipes):"
-            )
+            lines.append(f"Out-of-sync recipe counts (catalog has {self.expected_count} recipes):")
             for m in self.mismatches:
                 lines.append(
                     f"  * {m.rel_path}:{m.lineno} declares {m.count} (pattern: {m.pattern!r})"
@@ -85,20 +83,14 @@ class SyncVerdict:
 
 #: Declared documentation and module sites that state the recipe count.
 DOC_SITES: tuple[DocCountSite, ...] = (
-    DocCountSite(
-        "src/soup_cli/recipes/catalog.py", r"#\s*Recipe catalog\s*\((\d+)\s*recipes\)"
-    ),
+    DocCountSite("src/soup_cli/recipes/catalog.py", r"#\s*Recipe catalog\s*\((\d+)\s*recipes\)"),
     DocCountSite("CONTRIBUTING.md", r"\((\d+)\s+recipes\)"),
-    DocCountSite(
-        "docs/commands.md", r"List all\s+(\d+)\s+(?:ready[-\s]?made\s+)?recipes"
-    ),
+    DocCountSite("docs/commands.md", r"List all\s+(\d+)\s+(?:ready[-\s]?made\s+)?recipes"),
     DocCountSite(
         "docs/serving-and-export.md",
         r"templates or\s+(\d+)\s+(?:ready[-\s]?made\s+)?recipes",
     ),
-    DocCountSite(
-        "docs/serving-and-export.md", r"recipe dropdown\s+\((\d+)\s+recipes\)"
-    ),
+    DocCountSite("docs/serving-and-export.md", r"recipe dropdown\s+\((\d+)\s+recipes\)"),
 )
 
 #: Mandatory baseline roster pairs that must never drop out of DOC_SITES discovery.
@@ -174,9 +166,7 @@ _LITERAL_MILESTONE = re.compile(r"len\(RECIPES\)\s*==\s*\d+")
 
 #: A recipe count stated in prose: ``176 recipes``, ``176 ready-made recipes``. A
 #: preceding ``#`` is an issue or PR reference (``pre-#330 recipes``), not a count.
-_STATED_COUNT = re.compile(
-    r"(?<![#\w])(\d{2,4})\s+(?:ready[-\s]?made\s+)?recipes\b", re.IGNORECASE
-)
+_STATED_COUNT = re.compile(r"(?<![#\w])(\d{2,4})\s+(?:ready[-\s]?made\s+)?recipes\b", re.IGNORECASE)
 
 _SCANNED_SUFFIXES = frozenset(
     {".md", ".py", ".txt", ".yaml", ".yml", ".toml", ".json", ".html", ".rst", ".cfg"}
@@ -307,9 +297,7 @@ class TestRecipeCountIsSynchronised:
 class TestTheGuardHasTeeth:
     """CONTROL. Prove the auditor catches stale counts, reworded lines, and mutations."""
 
-    def test_stale_doc_count_produces_unsynced_verdict(
-        self, tmp_path: pathlib.Path
-    ) -> None:
+    def test_stale_doc_count_produces_unsynced_verdict(self, tmp_path: pathlib.Path) -> None:
         stale_file = tmp_path / "docs" / "commands.md"
         stale_file.parent.mkdir(parents=True, exist_ok=True)
         stale_file.write_text(
@@ -333,8 +321,7 @@ class TestTheGuardHasTeeth:
         """CONTROL: Multiple valid count mentions in a single file must pass without error."""
         doc_file = tmp_path / "CONTRIBUTING.md"
         doc_file.write_text(
-            "recipes/ - Ready-made models (200 recipes)\n"
-            "See full list in catalog (200 recipes)\n",
+            "recipes/ - Ready-made models (200 recipes)\nSee full list in catalog (200 recipes)\n",
             encoding="utf-8",
         )
         sites = (DocCountSite("CONTRIBUTING.md", r"\((\d+)\s+recipes\)"),)
@@ -344,14 +331,11 @@ class TestTheGuardHasTeeth:
         assert verdict.mismatches == ()
         assert verdict.missing_patterns == ()
 
-    def test_mixed_counts_in_single_file_flags_stale_line(
-        self, tmp_path: pathlib.Path
-    ) -> None:
+    def test_mixed_counts_in_single_file_flags_stale_line(self, tmp_path: pathlib.Path) -> None:
         """CONTROL: If a file has one correct count and one stale count, flag the stale line."""
         doc_file = tmp_path / "CONTRIBUTING.md"
         doc_file.write_text(
-            "Line 1: (200 recipes)\n"
-            "Line 2: (199 recipes)\n",
+            "Line 1: (200 recipes)\nLine 2: (199 recipes)\n",
             encoding="utf-8",
         )
         sites = (DocCountSite("CONTRIBUTING.md", r"\((\d+)\s+recipes\)"),)
@@ -365,9 +349,7 @@ class TestTheGuardHasTeeth:
     def test_dropped_site_from_doc_sites_fails_roster_check(self) -> None:
         """CONTROL: Dropping any mandatory site/pattern from DOC_SITES
         must fail the roster check."""
-        mutated_sites = tuple(
-            s for s in DOC_SITES if s.rel_path != "docs/commands.md"
-        )
+        mutated_sites = tuple(s for s in DOC_SITES if s.rel_path != "docs/commands.md")
         current_pairs = {(s.rel_path, s.pattern) for s in mutated_sites}
         missing_pairs = MANDATORY_SITE_PAIRS - current_pairs
         assert missing_pairs, "Expected dropped site to be identified as missing."
@@ -389,9 +371,7 @@ class TestTheGuardHasTeeth:
         assert verdict.missing_patterns[0].rel_path == "CONTRIBUTING.md"
         assert "Missing pattern matches" in verdict.format_diagnostic()
 
-    def test_missing_file_produces_missing_patterns_verdict(
-        self, tmp_path: pathlib.Path
-    ) -> None:
+    def test_missing_file_produces_missing_patterns_verdict(self, tmp_path: pathlib.Path) -> None:
         sites = (DocCountSite("non_existent.md", r"\((\d+)\s+recipes\)"),)
         verdict = audit_doc_recipe_counts(tmp_path, sites, expected_count=200)
         assert not verdict.is_synced
@@ -448,9 +428,7 @@ class TestNoUndeclaredCountSite:
             "#   165 recipes / 330 surfaces / 118 unique ids\n", encoding="utf-8"
         )
         sites = (
-            DocCountSite(
-                "docs/commands.md", r"List all\s+(\d+)\s+(?:ready[-\s]?made\s+)?recipes"
-            ),
+            DocCountSite("docs/commands.md", r"List all\s+(\d+)\s+(?:ready[-\s]?made\s+)?recipes"),
         )
         found = undeclared_count_sites(
             tmp_path,

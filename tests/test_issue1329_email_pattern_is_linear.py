@@ -23,11 +23,7 @@ def _email_pattern() -> re.Pattern[str]:
 
 
 def _email_snippets(text: str) -> list[str]:
-    return [
-        hit["snippet"]
-        for hit in data_score.detect_pii(text)
-        if hit["kind"] == "email"
-    ]
+    return [hit["snippet"] for hit in data_score.detect_pii(text) if hit["kind"] == "email"]
 
 
 def test_email_detection_growth_is_subquadratic(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -123,13 +119,9 @@ def test_soup_expect_completes_for_pathological_row(
 
     data_file = tmp_path / "pathological.jsonl"
     text = "1-" * 24_991
-    data_file.write_text(
-        '{"text": "' + text + '"}\n', encoding="utf-8"
-    )
+    data_file.write_text('{"text": "' + text + '"}\n', encoding="utf-8")
     suite_file = tmp_path / "suite.yaml"
-    suite_file.write_text(
-        "expectations:\n  - name: expect_no_pii\n", encoding="utf-8"
-    )
+    suite_file.write_text("expectations:\n  - name: expect_no_pii\n", encoding="utf-8")
 
     start = time.perf_counter()
     result = CliRunner().invoke(app, ["expect", str(data_file), str(suite_file)])

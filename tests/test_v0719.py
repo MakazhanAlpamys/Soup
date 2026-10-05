@@ -176,9 +176,13 @@ class TestApplyEditGovernor:
         monkeypatch.setattr(live_eval, "load_model_and_tokenizer", _load)
         monkeypatch.setattr(ek, "measure_target_prob", lambda *a, **k: 0.0)
         monkeypatch.setattr(
-            ek, "run_edit_kernel",
+            ek,
+            "run_edit_kernel",
             lambda *a, **k: ek.EditKernelResult(
-                method="rome", layer=5, norm_delta=norm_delta, layers_edited=(5,),
+                method="rome",
+                layer=5,
+                norm_delta=norm_delta,
+                layers_edited=(5,),
             ),
         )
         return loaded
@@ -350,10 +354,12 @@ class TestUnlearnRowLoader:
     def test_extract_messages(self):
         from soup_cli.trainer.unlearn import _extract_pair
 
-        row = {"messages": [
-            {"role": "user", "content": "Q"},
-            {"role": "assistant", "content": "A"},
-        ]}
+        row = {
+            "messages": [
+                {"role": "user", "content": "Q"},
+                {"role": "assistant", "content": "A"},
+            ]
+        }
         assert _extract_pair(row) == ("Q", "A")
 
     def test_extract_prompt_completion(self):
@@ -378,9 +384,11 @@ class TestUnlearnRowLoader:
         monkeypatch.chdir(tmp_path)
         f = tmp_path / "forget.jsonl"
         f.write_text(
-            json.dumps({"prompt": "p1", "completion": "c1"}) + "\n"
+            json.dumps({"prompt": "p1", "completion": "c1"})
+            + "\n"
             + "garbage\n"
-            + json.dumps({"text": "t2"}) + "\n",
+            + json.dumps({"text": "t2"})
+            + "\n",
             encoding="utf-8",
         )
         rows = _load_unlearn_rows("forget.jsonl")
@@ -517,8 +525,13 @@ class TestEditKernelHelpers:
 
         with pytest.raises(ValueError, match="does not handle"):
             run_edit_kernel(
-                _fake_llama(), None, method="zzz", subject="s", target="t",
-                layer=0, device="cpu",
+                _fake_llama(),
+                None,
+                method="zzz",
+                subject="s",
+                target="t",
+                layer=0,
+                device="cpu",
             )
 
     def test_edit_kernel_result_frozen(self):
@@ -534,8 +547,13 @@ class TestEditResult:
         from soup_cli.utils.knowledge_edit import EditResult
 
         r = EditResult(
-            method="rome", layer=5, norm_delta=0.1, layers_edited=(5,),
-            output_dir=None, target_prob_before=0.0, target_prob_after=0.5,
+            method="rome",
+            layer=5,
+            norm_delta=0.1,
+            layers_edited=(5,),
+            output_dir=None,
+            target_prob_before=0.0,
+            target_prob_after=0.5,
             governed=False,
         )
         with pytest.raises(dataclasses.FrozenInstanceError):
@@ -558,14 +576,19 @@ class TestEditResult:
                 saved["tok"] = d
 
         monkeypatch.setattr(
-            live_eval, "load_model_and_tokenizer",
+            live_eval,
+            "load_model_and_tokenizer",
             lambda *a, **k: (_Model(), _Tok(), "cpu"),
         )
         monkeypatch.setattr(ek, "measure_target_prob", lambda *a, **k: 0.0)
         monkeypatch.setattr(
-            ek, "run_edit_kernel",
+            ek,
+            "run_edit_kernel",
             lambda *a, **k: ek.EditKernelResult(
-                method="rome", layer=5, norm_delta=0.2, layers_edited=(5,),
+                method="rome",
+                layer=5,
+                norm_delta=0.2,
+                layers_edited=(5,),
             ),
         )
         plan = build_edit_plan(base="b", method="rome", subject="s", target="t")
@@ -580,14 +603,19 @@ class TestEditResult:
 
         monkeypatch.chdir(tmp_path)
         monkeypatch.setattr(
-            live_eval, "load_model_and_tokenizer",
+            live_eval,
+            "load_model_and_tokenizer",
             lambda *a, **k: (object(), object(), "cpu"),
         )
         monkeypatch.setattr(ek, "measure_target_prob", lambda *a, **k: 0.0)
         monkeypatch.setattr(
-            ek, "run_edit_kernel",
+            ek,
+            "run_edit_kernel",
             lambda *a, **k: ek.EditKernelResult(
-                method="rome", layer=5, norm_delta=0.2, layers_edited=(5,),
+                method="rome",
+                layer=5,
+                norm_delta=0.2,
+                layers_edited=(5,),
             ),
         )
         plan = build_edit_plan(base="b", method="rome", subject="s", target="t")
@@ -603,8 +631,10 @@ class TestEditDiffLive:
         monkeypatch.chdir(tmp_path)
         probes = tmp_path / "p.jsonl"
         probes.write_text(
-            json.dumps({"prompt": "The capital of France is"}) + "\n"
-            + json.dumps({"prompt": "2 + 2 ="}) + "\n",
+            json.dumps({"prompt": "The capital of France is"})
+            + "\n"
+            + json.dumps({"prompt": "2 + 2 ="})
+            + "\n",
             encoding="utf-8",
         )
 
@@ -636,7 +666,9 @@ class TestEditDiffLive:
         probes.write_text(json.dumps({"prompt": "x"}) + "\n", encoding="utf-8")
         with pytest.raises(ValueError, match="both --before-model and --after-model"):
             build_diff_report(
-                before_run_id="r1", after_run_id="r2", probe_file="p.jsonl",
+                before_run_id="r1",
+                after_run_id="r2",
+                probe_file="p.jsonl",
             )
 
 
@@ -846,14 +878,19 @@ class TestReviewFollowups:
         (tmp_path / "real").mkdir()
         os.symlink(tmp_path / "real", tmp_path / "out")
         monkeypatch.setattr(
-            live_eval, "load_model_and_tokenizer",
+            live_eval,
+            "load_model_and_tokenizer",
             lambda *a, **k: (object(), object(), "cpu"),
         )
         monkeypatch.setattr(ek, "measure_target_prob", lambda *a, **k: 0.0)
         monkeypatch.setattr(
-            ek, "run_edit_kernel",
+            ek,
+            "run_edit_kernel",
             lambda *a, **k: ek.EditKernelResult(
-                method="rome", layer=5, norm_delta=0.1, layers_edited=(5,),
+                method="rome",
+                layer=5,
+                norm_delta=0.1,
+                layers_edited=(5,),
             ),
         )
         plan = build_edit_plan(base="b", method="rome", subject="s", target="t")

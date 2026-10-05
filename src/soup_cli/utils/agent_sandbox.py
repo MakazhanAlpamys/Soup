@@ -77,9 +77,7 @@ _STUB_TEMPLATE = (
 # Test / advanced-operator seam: when set, the sandbox runner is replaced.
 # Signature mirrors :func:`run_eval_in_sandbox` -> ``(returncode, stdout,
 # timed_out)``. Defaults to the real sandbox executor.
-_AGENT_SANDBOX_RUN_OVERRIDE: Optional[
-    Callable[[str], "tuple[Optional[int], str, bool]"]
-] = None
+_AGENT_SANDBOX_RUN_OVERRIDE: Optional[Callable[[str], "tuple[Optional[int], str, bool]"]] = None
 
 
 @dataclass(frozen=True)
@@ -163,9 +161,7 @@ def run_eval_in_sandbox(code: str) -> "tuple[Optional[int], str, bool]":
     return result.returncode, result.stdout, result.timed_out
 
 
-def classify_sandbox_outcome(
-    returncode: "Optional[int]", stdout: str, timed_out: bool
-) -> str:
+def classify_sandbox_outcome(returncode: "Optional[int]", stdout: str, timed_out: bool) -> str:
     """Map a sandbox run to ``ok`` / ``tool_error`` / ``timeout``.
 
     ``ok`` requires returncode 0 AND non-empty parseable JSON output (the
@@ -198,9 +194,7 @@ def score_sandbox(
     ``arg_error``, handled by the caller before this). Returns one of
     ``ok`` / ``tool_error`` / ``timeout``.
     """
-    stub = build_eval_stub(
-        tool=tool, parameters=parameters, path=path, arguments=arguments
-    )
+    stub = build_eval_stub(tool=tool, parameters=parameters, path=path, arguments=arguments)
     runner = _AGENT_SANDBOX_RUN_OVERRIDE or run_eval_in_sandbox
     returncode, stdout, timed_out = runner(stub)
     return classify_sandbox_outcome(returncode, stdout, timed_out)

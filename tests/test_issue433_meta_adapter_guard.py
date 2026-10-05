@@ -24,9 +24,7 @@ def _adapter_model(*, adapter_device: str, adapter_trainable: bool = True):
     class _AdapterModel(nn.Module):
         def __init__(self):
             super().__init__()
-            self.base_weight = nn.Parameter(
-                torch.empty(1, device="meta"), requires_grad=False
-            )
+            self.base_weight = nn.Parameter(torch.empty(1, device="meta"), requires_grad=False)
             self.lora_A = nn.Parameter(
                 torch.empty(2, 2, device=adapter_device),
                 requires_grad=adapter_trainable,

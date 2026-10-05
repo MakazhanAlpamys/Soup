@@ -40,14 +40,10 @@ class TestSFTTrainerInit:
         from soup_cli.trainer.sft import SFTTrainerWrapper
 
         cfg = _make_config()
-        wrapper = SFTTrainerWrapper(
-            cfg, device="cuda", deepspeed_config="/path/to/ds.json"
-        )
+        wrapper = SFTTrainerWrapper(cfg, device="cuda", deepspeed_config="/path/to/ds.json")
         assert wrapper.deepspeed_config == "/path/to/ds.json"
 
-    def test_transformers_vocab_expansion_adds_tokens_and_resizes(
-        self, monkeypatch
-    ):
+    def test_transformers_vocab_expansion_adds_tokens_and_resizes(self, monkeypatch):
         """data.add_new_tokens/new_special_tokens must affect text trainers."""
         import sys
         import types
@@ -109,9 +105,7 @@ class TestSFTTrainerInit:
         model = _Model()
 
         fake_transformers = types.SimpleNamespace(
-            AutoTokenizer=types.SimpleNamespace(
-                from_pretrained=lambda *args, **kwargs: tokenizer
-            ),
+            AutoTokenizer=types.SimpleNamespace(from_pretrained=lambda *args, **kwargs: tokenizer),
             AutoModelForCausalLM=types.SimpleNamespace(
                 from_pretrained=lambda *args, **kwargs: model
             ),
@@ -163,6 +157,7 @@ class TestSFTTrainerInit:
         assert calls["add_tokens"] == ["<new_a>", "<old>"]
         assert calls["add_special_tokens"] == ["<special_a>"]
         assert calls["resize"] == len(tokenizer)
+
     def test_vision_vocab_expansion_adds_tokens_and_resizes(self, monkeypatch):
         """Vision SFT should apply configured vocabulary expansion."""
 
@@ -357,6 +352,7 @@ class TestSFTTrainerInit:
         assert calls["add_special_tokens"] == ["<audio_special>"]
         assert calls["resize"] == len(processor.tokenizer)
 
+
 class TestDPOTrainerInit:
     """Test DPOTrainerWrapper constructor."""
 
@@ -451,9 +447,7 @@ class TestDPOTrainerInit:
         model = _Model()
 
         fake_transformers = types.SimpleNamespace(
-            AutoTokenizer=types.SimpleNamespace(
-                from_pretrained=lambda *args, **kwargs: tokenizer
-            ),
+            AutoTokenizer=types.SimpleNamespace(from_pretrained=lambda *args, **kwargs: tokenizer),
             AutoModelForCausalLM=types.SimpleNamespace(
                 from_pretrained=lambda *args, **kwargs: model
             ),
@@ -573,9 +567,7 @@ class TestGRPOTrainerInit:
         model = _Model()
 
         fake_transformers = types.SimpleNamespace(
-            AutoTokenizer=types.SimpleNamespace(
-                from_pretrained=lambda *args, **kwargs: tokenizer
-            ),
+            AutoTokenizer=types.SimpleNamespace(from_pretrained=lambda *args, **kwargs: tokenizer),
             AutoModelForCausalLM=types.SimpleNamespace(
                 from_pretrained=lambda *args, **kwargs: model
             ),
@@ -635,6 +627,7 @@ class TestPPOTrainerInit:
         wrapper = PPOTrainerWrapper(cfg, device="cpu")
         assert wrapper.config == cfg
         assert wrapper.device == "cpu"
+
 
 class TestIPOTrainerInit:
     def test_ipo_vocab_expansion_adds_tokens_and_resizes(self, monkeypatch):
@@ -709,9 +702,7 @@ class TestIPOTrainerInit:
         model = _Model()
 
         fake_transformers = types.SimpleNamespace(
-            AutoTokenizer=types.SimpleNamespace(
-                from_pretrained=lambda *args, **kwargs: tokenizer
-            ),
+            AutoTokenizer=types.SimpleNamespace(from_pretrained=lambda *args, **kwargs: tokenizer),
             AutoModelForCausalLM=types.SimpleNamespace(
                 from_pretrained=lambda *args, **kwargs: model
             ),
@@ -744,6 +735,7 @@ class TestIPOTrainerInit:
         assert calls["add_tokens"] == ["<ipo_new>"]
         assert calls["add_special_tokens"] == ["<ipo_special>"]
         assert calls["resize"] == len(tokenizer)
+
 
 class TestKTOTrainerInit:
     def test_kto_vocab_expansion_adds_tokens_and_resizes(self, monkeypatch):
@@ -818,9 +810,7 @@ class TestKTOTrainerInit:
         model = _Model()
 
         fake_transformers = types.SimpleNamespace(
-            AutoTokenizer=types.SimpleNamespace(
-                from_pretrained=lambda *args, **kwargs: tokenizer
-            ),
+            AutoTokenizer=types.SimpleNamespace(from_pretrained=lambda *args, **kwargs: tokenizer),
             AutoModelForCausalLM=types.SimpleNamespace(
                 from_pretrained=lambda *args, **kwargs: model
             ),
@@ -853,6 +843,7 @@ class TestKTOTrainerInit:
         assert calls["add_tokens"] == ["<kto_new>"]
         assert calls["add_special_tokens"] == ["<kto_special>"]
         assert calls["resize"] == len(tokenizer)
+
 
 class TestBCOTrainerInit:
     def test_bco_vocab_expansion_adds_tokens_and_resizes(self, monkeypatch):
@@ -927,9 +918,7 @@ class TestBCOTrainerInit:
         model = _Model()
 
         fake_transformers = types.SimpleNamespace(
-            AutoTokenizer=types.SimpleNamespace(
-                from_pretrained=lambda *args, **kwargs: tokenizer
-            ),
+            AutoTokenizer=types.SimpleNamespace(from_pretrained=lambda *args, **kwargs: tokenizer),
             AutoModelForCausalLM=types.SimpleNamespace(
                 from_pretrained=lambda *args, **kwargs: model
             ),
@@ -962,6 +951,7 @@ class TestBCOTrainerInit:
         assert calls["add_tokens"] == ["<bco_new>"]
         assert calls["add_special_tokens"] == ["<bco_special>"]
         assert calls["resize"] == len(tokenizer)
+
 
 class TestORPOTrainerInit:
     def test_orpo_vocab_expansion_adds_tokens_and_resizes(self, monkeypatch):
@@ -1036,9 +1026,7 @@ class TestORPOTrainerInit:
         model = _Model()
 
         fake_transformers = types.SimpleNamespace(
-            AutoTokenizer=types.SimpleNamespace(
-                from_pretrained=lambda *args, **kwargs: tokenizer
-            ),
+            AutoTokenizer=types.SimpleNamespace(from_pretrained=lambda *args, **kwargs: tokenizer),
             AutoModelForCausalLM=types.SimpleNamespace(
                 from_pretrained=lambda *args, **kwargs: model
             ),
@@ -1071,6 +1059,7 @@ class TestORPOTrainerInit:
         assert calls["add_tokens"] == ["<orpo_new>"]
         assert calls["add_special_tokens"] == ["<orpo_special>"]
         assert calls["resize"] == len(tokenizer)
+
 
 class TestSIMPOTrainerInit:
     def test_simpo_vocab_expansion_adds_tokens_and_resizes(self, monkeypatch):
@@ -1145,9 +1134,7 @@ class TestSIMPOTrainerInit:
         model = _Model()
 
         fake_transformers = types.SimpleNamespace(
-            AutoTokenizer=types.SimpleNamespace(
-                from_pretrained=lambda *args, **kwargs: tokenizer
-            ),
+            AutoTokenizer=types.SimpleNamespace(from_pretrained=lambda *args, **kwargs: tokenizer),
             AutoModelForCausalLM=types.SimpleNamespace(
                 from_pretrained=lambda *args, **kwargs: model
             ),
@@ -1180,6 +1167,7 @@ class TestSIMPOTrainerInit:
         assert calls["add_tokens"] == ["<simpo_new>"]
         assert calls["add_special_tokens"] == ["<simpo_special>"]
         assert calls["resize"] == len(tokenizer)
+
 
 class TestTrainTaskRouting:
     """Test that train command routes to correct trainer based on task."""

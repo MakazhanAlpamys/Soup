@@ -49,7 +49,7 @@ class TestTheObservedLearningRateCurve:
     """The issue's explicit criterion: first, warmup boundary, final update."""
 
     def test_warmup_starts_at_zero_and_peaks_at_the_boundary(self):
-        plan = plan_optimizer(**BASE)          # warmup = 0.2 * 50 = 10
+        plan = plan_optimizer(**BASE)  # warmup = 0.2 * 50 = 10
         assert plan.warmup_updates == 10
         assert lr_at(plan, 0) == pytest.approx(0.0, abs=1e-9)
         assert lr_at(plan, 10) == pytest.approx(2e-4, rel=1e-6)
@@ -100,9 +100,7 @@ class TestTheObservedLearningRateCurve:
         Returning a float rather than a trivial callable keeps the change
         provably confined to configurations that requested something else.
         """
-        plan = plan_optimizer(
-            **{**BASE, "scheduler": "constant", "warmup_ratio": 0.0}
-        )
+        plan = plan_optimizer(**{**BASE, "scheduler": "constant", "warmup_ratio": 0.0})
         assert build_lr_schedule(plan) == pytest.approx(2e-4)
 
 
@@ -136,9 +134,7 @@ class TestTheStepUnitIsOptimizerUpdates:
 
     def test_warmup_is_computed_from_updates_not_iterations(self):
         """48 iterations at accum=4 is 12 updates, so 25% warmup is 3, not 12."""
-        plan = plan_optimizer(
-            **{**BASE, "warmup_ratio": 0.25, "total_updates": 48 // 4}
-        )
+        plan = plan_optimizer(**{**BASE, "warmup_ratio": 0.25, "total_updates": 48 // 4})
         assert plan.total_updates == 12
         assert plan.warmup_updates == 3, (
             "warmup was computed against iterations; at accum=4 that stretches "
@@ -220,8 +216,13 @@ class TestUnsupportedNamesAreRefusedNotSilentlyAdamW:
 
     @pytest.mark.parametrize(
         "name, expected",
-        [("adamw_torch", "AdamW"), ("ADAMW_TORCH", "AdamW"), ("  sgd  ", "SGD"),
-         ("muon", "Muon"), ("adafactor", "Adafactor")],
+        [
+            ("adamw_torch", "AdamW"),
+            ("ADAMW_TORCH", "AdamW"),
+            ("  sgd  ", "SGD"),
+            ("muon", "Muon"),
+            ("adafactor", "Adafactor"),
+        ],
     )
     def test_supported_names_map_case_and_space_insensitively(self, name, expected):
         assert resolve_optimizer_name(name) == expected
@@ -337,14 +338,17 @@ def _run_wrapper(tmp_path, rows, **training):
 
 
 class TestTheWrapperPassesUpdatesNotIterations:
-    def test_total_updates_is_iters_divided_by_accumulation(
-        self, tmp_path, monkeypatch
-    ):
+    def test_total_updates_is_iters_divided_by_accumulation(self, tmp_path, monkeypatch):
         """48 rows at accum=4 is 48 iterations but 12 optimizer updates."""
         _install_fake_mlx(monkeypatch)
         meta = _run_wrapper(
-            tmp_path, rows=48, epochs=1, batch_size=1,
-            gradient_accumulation_steps=4, scheduler="cosine", warmup_ratio=0.25,
+            tmp_path,
+            rows=48,
+            epochs=1,
+            batch_size=1,
+            gradient_accumulation_steps=4,
+            scheduler="cosine",
+            warmup_ratio=0.25,
         )
         assert meta["total_updates"] == 12, (
             "the wrapper passed iterations where the schedule counts optimizer "
@@ -359,18 +363,25 @@ class TestTheWrapperPassesUpdatesNotIterations:
         passing while the test above fails localises the bug to the divisor."""
         _install_fake_mlx(monkeypatch)
         meta = _run_wrapper(
-            tmp_path, rows=48, epochs=1, batch_size=1,
-            gradient_accumulation_steps=1, scheduler="cosine", warmup_ratio=0.25,
+            tmp_path,
+            rows=48,
+            epochs=1,
+            batch_size=1,
+            gradient_accumulation_steps=1,
+            scheduler="cosine",
+            warmup_ratio=0.25,
         )
         assert meta["total_updates"] == 48
         assert meta["warmup_updates"] == 12
 
-    def test_the_configured_weight_decay_reaches_the_metadata(
-        self, tmp_path, monkeypatch
-    ):
+    def test_the_configured_weight_decay_reaches_the_metadata(self, tmp_path, monkeypatch):
         _install_fake_mlx(monkeypatch)
         meta = _run_wrapper(
-            tmp_path, rows=8, epochs=1, batch_size=1, weight_decay=0.3,
+            tmp_path,
+            rows=8,
+            epochs=1,
+            batch_size=1,
+            weight_decay=0.3,
             gradient_accumulation_steps=1,
         )
         assert meta["weight_decay"] == pytest.approx(0.3)
@@ -381,7 +392,11 @@ class TestTheWrapperPassesUpdatesNotIterations:
         _install_fake_mlx(monkeypatch)
         with pytest.raises(MlxOptimizerError, match="no MLX equivalent"):
             _run_wrapper(
-                tmp_path, rows=8, epochs=1, batch_size=1, optimizer="adam_mini",
+                tmp_path,
+                rows=8,
+                epochs=1,
+                batch_size=1,
+                optimizer="adam_mini",
                 gradient_accumulation_steps=1,
             )
 
@@ -432,16 +447,19 @@ def _record_schedule_calls(monkeypatch):
         return _builder
 
     monkeypatch.setattr(
-        optim, "cosine_decay",
-        _make("cosine_decay", lambda init, steps: (lambda step: init)),
+        optim,
+        "cosine_decay",
+        _make("cosine_decay", lambda init, steps: lambda step: init),
     )
     monkeypatch.setattr(
-        optim, "linear_schedule",
-        _make("linear_schedule", lambda init, end, steps: (lambda step: end)),
+        optim,
+        "linear_schedule",
+        _make("linear_schedule", lambda init, end, steps: lambda step: end),
     )
     monkeypatch.setattr(
-        optim, "join_schedules",
-        _make("join_schedules", lambda scheds, bounds: (lambda step: scheds[-1](step))),
+        optim,
+        "join_schedules",
+        _make("join_schedules", lambda scheds, bounds: lambda step: scheds[-1](step)),
     )
     return calls
 
@@ -477,7 +495,11 @@ class TestThePlannedOptimizerIsTheOneConstructed:
         _install_fake_mlx(monkeypatch)
         calls = _record_optimizer_calls(monkeypatch)
         _run_wrapper(
-            tmp_path, rows=8, epochs=1, batch_size=1, weight_decay=0.3,
+            tmp_path,
+            rows=8,
+            epochs=1,
+            batch_size=1,
+            weight_decay=0.3,
             gradient_accumulation_steps=1,
         )
         assert len(calls) == 1
@@ -497,8 +519,13 @@ class TestThePlannedOptimizerIsTheOneConstructed:
         _install_fake_mlx(monkeypatch)
         calls = _record_optimizer_calls(monkeypatch)
         _run_wrapper(
-            tmp_path, rows=8, epochs=1, batch_size=1, optimizer="adagrad",
-            weight_decay=0.0, gradient_accumulation_steps=1,
+            tmp_path,
+            rows=8,
+            epochs=1,
+            batch_size=1,
+            optimizer="adagrad",
+            weight_decay=0.0,
+            gradient_accumulation_steps=1,
         )
         assert calls[0][0] == "Adagrad"
         assert "weight_decay" not in calls[0][1]
@@ -525,8 +552,13 @@ class TestThePlannedOptimizerIsTheOneConstructed:
         _install_fake_mlx(monkeypatch)
         calls = _record_optimizer_calls(monkeypatch)
         _run_wrapper(
-            tmp_path, rows=8, epochs=1, batch_size=1, optimizer=soup_name,
-            weight_decay=0.0, gradient_accumulation_steps=1,
+            tmp_path,
+            rows=8,
+            epochs=1,
+            batch_size=1,
+            optimizer=soup_name,
+            weight_decay=0.0,
+            gradient_accumulation_steps=1,
         )
         assert calls[0][0] == mlx_name, (
             f"training.optimizer={soup_name!r} was planned as {mlx_name} and "
@@ -546,8 +578,14 @@ class TestThePlannedOptimizerIsTheOneConstructed:
         _install_fake_mlx(monkeypatch)
         calls = _record_optimizer_calls(monkeypatch)
         _run_wrapper(
-            tmp_path, rows=48, epochs=1, batch_size=1, scheduler="cosine",
-            warmup_ratio=0.25, weight_decay=0.1, gradient_accumulation_steps=1,
+            tmp_path,
+            rows=48,
+            epochs=1,
+            batch_size=1,
+            scheduler="cosine",
+            warmup_ratio=0.25,
+            weight_decay=0.1,
+            gradient_accumulation_steps=1,
         )
         lr = calls[0][1]["learning_rate"]
         assert callable(lr), (
@@ -555,17 +593,21 @@ class TestThePlannedOptimizerIsTheOneConstructed:
             "asked for cosine decay with warmup -- the reverted #686 behaviour"
         )
 
-    def test_but_a_constant_schedule_still_passes_a_plain_float(
-        self, tmp_path, monkeypatch
-    ):
+    def test_but_a_constant_schedule_still_passes_a_plain_float(self, tmp_path, monkeypatch):
         """Control: `callable` above must distinguish configurations, not
         merely hold for everything. The no-warmup constant path is the one
         that must construct exactly what the old code did."""
         _install_fake_mlx(monkeypatch)
         calls = _record_optimizer_calls(monkeypatch)
         _run_wrapper(
-            tmp_path, rows=8, epochs=1, batch_size=1, scheduler="constant",
-            warmup_ratio=0.0, lr=3e-4, gradient_accumulation_steps=1,
+            tmp_path,
+            rows=8,
+            epochs=1,
+            batch_size=1,
+            scheduler="constant",
+            warmup_ratio=0.0,
+            lr=3e-4,
+            gradient_accumulation_steps=1,
         )
         assert calls[0][1]["learning_rate"] == pytest.approx(3e-4)
 
@@ -592,37 +634,24 @@ class TestTheScheduleBuiltIsTheScheduleRequested:
         _install_fake_mlx(monkeypatch)
         calls = _record_schedule_calls(monkeypatch)
         _run_wrapper(
-            tmp_path, rows=48, epochs=1, batch_size=1,
-            gradient_accumulation_steps=1, **training
+            tmp_path, rows=48, epochs=1, batch_size=1, gradient_accumulation_steps=1, **training
         )
         return calls, [name for name, _ in calls]
 
-    def test_cosine_builds_a_cosine_decay_and_not_a_linear_one(
-        self, tmp_path, monkeypatch
-    ):
-        _, names = self._builders(
-            tmp_path, monkeypatch, scheduler="cosine", warmup_ratio=0.0
-        )
+    def test_cosine_builds_a_cosine_decay_and_not_a_linear_one(self, tmp_path, monkeypatch):
+        _, names = self._builders(tmp_path, monkeypatch, scheduler="cosine", warmup_ratio=0.0)
         assert names == ["cosine_decay"], (
             f"scheduler='cosine' built {names}; the plan and the adapter "
             "metadata would still say 'cosine' either way"
         )
 
-    def test_linear_builds_a_linear_schedule_and_not_a_cosine_one(
-        self, tmp_path, monkeypatch
-    ):
+    def test_linear_builds_a_linear_schedule_and_not_a_cosine_one(self, tmp_path, monkeypatch):
         """The other half. Passing only one of these two is what a swapped
         pair of branch bodies looks like."""
-        _, names = self._builders(
-            tmp_path, monkeypatch, scheduler="linear", warmup_ratio=0.0
-        )
-        assert names == ["linear_schedule"], (
-            f"scheduler='linear' built {names}"
-        )
+        _, names = self._builders(tmp_path, monkeypatch, scheduler="linear", warmup_ratio=0.0)
+        assert names == ["linear_schedule"], f"scheduler='linear' built {names}"
 
-    def test_a_constant_schedule_with_no_warmup_builds_nothing_at_all(
-        self, tmp_path, monkeypatch
-    ):
+    def test_a_constant_schedule_with_no_warmup_builds_nothing_at_all(self, tmp_path, monkeypatch):
         """Reject-everything control for the two assertions above.
 
         Narrowly named on purpose. `warmup_ratio=0.0` returns at the early
@@ -631,9 +660,7 @@ class TestTheScheduleBuiltIsTheScheduleRequested:
         cosine/linear assertions; it says nothing about how `constant` is
         built, and the test below is what covers that.
         """
-        _, names = self._builders(
-            tmp_path, monkeypatch, scheduler="constant", warmup_ratio=0.0
-        )
+        _, names = self._builders(tmp_path, monkeypatch, scheduler="constant", warmup_ratio=0.0)
         assert names == []
 
     @pytest.mark.parametrize("sched", ["constant", "constant_with_warmup"])
@@ -654,23 +681,17 @@ class TestTheScheduleBuiltIsTheScheduleRequested:
         the same reason this whole class exists. Both spellings are checked
         because both reach that one branch.
         """
-        _, names = self._builders(
-            tmp_path, monkeypatch, scheduler=sched, warmup_ratio=0.25
-        )
+        _, names = self._builders(tmp_path, monkeypatch, scheduler=sched, warmup_ratio=0.25)
         assert "cosine_decay" not in names
         assert names.count("linear_schedule") == 1, (
             f"{sched} built {names}; exactly one linear_schedule is the warmup "
             "ramp -- a second one is a decay curve nobody asked for"
         )
 
-    def test_warmup_builds_a_ramp_joined_at_the_warmup_boundary(
-        self, tmp_path, monkeypatch
-    ):
+    def test_warmup_builds_a_ramp_joined_at_the_warmup_boundary(self, tmp_path, monkeypatch):
         """`warmup_updates` reaching the metadata does not mean a ramp was
         built. 0.25 of 48 updates is 12."""
-        calls, names = self._builders(
-            tmp_path, monkeypatch, scheduler="cosine", warmup_ratio=0.25
-        )
+        calls, names = self._builders(tmp_path, monkeypatch, scheduler="cosine", warmup_ratio=0.25)
         assert "join_schedules" in names, (
             "no ramp was joined; the run starts at the peak learning rate "
             "while adapter_config.json reports a warmup"
@@ -685,19 +706,13 @@ class TestTheScheduleBuiltIsTheScheduleRequested:
 
     def test_without_warmup_nothing_is_joined(self, tmp_path, monkeypatch):
         """Control for the test above."""
-        _, names = self._builders(
-            tmp_path, monkeypatch, scheduler="cosine", warmup_ratio=0.0
-        )
+        _, names = self._builders(tmp_path, monkeypatch, scheduler="cosine", warmup_ratio=0.0)
         assert "join_schedules" not in names
 
-    def test_the_decay_is_measured_from_the_warmup_boundary(
-        self, tmp_path, monkeypatch
-    ):
+    def test_the_decay_is_measured_from_the_warmup_boundary(self, tmp_path, monkeypatch):
         """`decay_steps = total - warmup`, asserted at the builder rather than
         by sampling: 48 updates with 12 of warmup decays over 36."""
-        calls, _ = self._builders(
-            tmp_path, monkeypatch, scheduler="cosine", warmup_ratio=0.25
-        )
+        calls, _ = self._builders(tmp_path, monkeypatch, scheduler="cosine", warmup_ratio=0.25)
         cosine = [a for n, a in calls if n == "cosine_decay"]
         assert cosine and cosine[0][1] == 36, (
             f"cosine_decay got decay_steps={cosine[0][1] if cosine else None}, "

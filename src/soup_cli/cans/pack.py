@@ -27,7 +27,10 @@ def _add_text(tar: tarfile.TarFile, name: str, content: str) -> None:
 
 
 def pack_entry(
-    *, entry_id: str, out_path: str, author: str = "unknown",
+    *,
+    entry_id: str,
+    out_path: str,
+    author: str = "unknown",
     description: Optional[str] = None,
     attestations: Optional[list[dict]] = None,
 ) -> Path:
@@ -74,18 +77,30 @@ def pack_entry(
 
     out.parent.mkdir(parents=True, exist_ok=True)
     with tarfile.open(out, mode="w:gz") as tar:
-        _add_text(tar, "manifest.yaml", yaml.safe_dump(
-            manifest.model_dump(), sort_keys=False,
-        ))
+        _add_text(
+            tar,
+            "manifest.yaml",
+            yaml.safe_dump(
+                manifest.model_dump(),
+                sort_keys=False,
+            ),
+        )
         _add_text(tar, "config.yaml", yaml.safe_dump(config, sort_keys=False))
-        _add_text(tar, "data_ref.yaml", yaml.safe_dump(
-            {"kind": "local", "note": "user must supply data locally"},
-            sort_keys=False,
-        ))
-        _add_text(tar, "recipe.md",
-                  f"# {manifest.name}\n\nBase: {entry['base_model']}\n"
-                  f"Task: {entry['task']}\n\n"
-                  f"{manifest.description or ''}\n")
+        _add_text(
+            tar,
+            "data_ref.yaml",
+            yaml.safe_dump(
+                {"kind": "local", "note": "user must supply data locally"},
+                sort_keys=False,
+            ),
+        )
+        _add_text(
+            tar,
+            "recipe.md",
+            f"# {manifest.name}\n\nBase: {entry['base_model']}\n"
+            f"Task: {entry['task']}\n\n"
+            f"{manifest.description or ''}\n",
+        )
 
     # Enforce size cap — reject anything larger than 100 MB
     if out.stat().st_size > _MAX_CAN_SIZE_BYTES:
@@ -97,26 +112,30 @@ def pack_entry(
     return out
 
 
-_FORBIDDEN_MOD_KEYS = frozenset({
-    "__class__", "__init__", "__dict__", "__globals__", "__builtins__",
-    "__import__", "__bases__", "__mro__",
-})
+_FORBIDDEN_MOD_KEYS = frozenset(
+    {
+        "__class__",
+        "__init__",
+        "__dict__",
+        "__globals__",
+        "__builtins__",
+        "__import__",
+        "__bases__",
+        "__mro__",
+    }
+)
 
 
 def _apply_modification(config: dict, mod: str) -> None:
     """Apply a single ``dotted.path=value`` modification in-place."""
     if "=" not in mod:
-        raise ValueError(
-            f"modification '{mod}' must be 'dotted.path=value'"
-        )
+        raise ValueError(f"modification '{mod}' must be 'dotted.path=value'")
     path, raw_value = mod.split("=", 1)
     if "\x00" in path:
         raise ValueError(f"modification key contains null byte: {path!r}")
     keys = path.split(".")
     if any(key in _FORBIDDEN_MOD_KEYS or key.startswith("__") for key in keys):
-        raise ValueError(
-            f"modification key '{path}' references a dunder / forbidden name"
-        )
+        raise ValueError(f"modification key '{path}' references a dunder / forbidden name")
     # Try parsing as JSON (number, bool, null, string) for proper typing.
     try:
         value = json.loads(raw_value)
@@ -126,14 +145,15 @@ def _apply_modification(config: dict, mod: str) -> None:
     for key in keys[:-1]:
         target = target.setdefault(key, {})
         if not isinstance(target, dict):
-            raise ValueError(
-                f"cannot modify '{path}': '{key}' is not a dict"
-            )
+            raise ValueError(f"cannot modify '{path}': '{key}' is not a dict")
     target[keys[-1]] = value
 
 
 def fork_can(
-    *, source: str, out_path: str, modifications: list[str],
+    *,
+    source: str,
+    out_path: str,
+    modifications: list[str],
     author: str = "unknown",
 ) -> Path:
     """Apply ``modifications`` to a can's config and re-pack."""
@@ -155,22 +175,30 @@ def fork_can(
         _apply_modification(config, mod)
 
     with tarfile.open(out, mode="w:gz") as tar:
-        _add_text(tar, "manifest.yaml", yaml.safe_dump({
-            **manifest.model_dump(),
-            "author": author,
-            "created_at": datetime.now().isoformat(timespec="seconds"),
-            "name": f"{manifest.name}-fork",
-        }, sort_keys=False))
+        _add_text(
+            tar,
+            "manifest.yaml",
+            yaml.safe_dump(
+                {
+                    **manifest.model_dump(),
+                    "author": author,
+                    "created_at": datetime.now().isoformat(timespec="seconds"),
+                    "name": f"{manifest.name}-fork",
+                },
+                sort_keys=False,
+            ),
+        )
         _add_text(tar, "config.yaml", yaml.safe_dump(config, sort_keys=False))
-        _add_text(tar, "data_ref.yaml", yaml.safe_dump(
-            {"kind": "local", "note": "forked"},
-            sort_keys=False,
-        ))
+        _add_text(
+            tar,
+            "data_ref.yaml",
+            yaml.safe_dump(
+                {"kind": "local", "note": "forked"},
+                sort_keys=False,
+            ),
+        )
 
     if out.stat().st_size > _MAX_CAN_SIZE_BYTES:
         out.unlink(missing_ok=True)
-        raise ValueError(
-            f"forked can exceeds max size "
-            f"({_MAX_CAN_SIZE_BYTES // 1024 // 1024} MB)"
-        )
+        raise ValueError(f"forked can exceeds max size ({_MAX_CAN_SIZE_BYTES // 1024 // 1024} MB)")
     return out

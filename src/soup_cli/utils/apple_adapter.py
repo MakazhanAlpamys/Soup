@@ -89,9 +89,7 @@ def validate_direction(name: object) -> str:
     if "\x00" in name:
         raise ValueError("direction must not contain null bytes")
     if len(name) > _MAX_DIRECTION_LEN:
-        raise ValueError(
-            f"direction length {len(name)} > {_MAX_DIRECTION_LEN}"
-        )
+        raise ValueError(f"direction length {len(name)} > {_MAX_DIRECTION_LEN}")
     canonical = name.lower()
     if canonical not in SUPPORTED_ADAPTER_DIRECTIONS:
         raise ValueError(
@@ -112,20 +110,14 @@ def validate_source_adapter(path: object) -> str:
     if "\x00" in path:
         raise ValueError("source_dir must not contain null bytes")
     if not is_under_cwd(path):
-        raise ValueError(
-            f"source_dir {os.path.basename(path)!r} must stay under cwd"
-        )
+        raise ValueError(f"source_dir {os.path.basename(path)!r} must stay under cwd")
     if os.path.lexists(path):
         try:
             link_stat = os.lstat(path)
         except OSError as exc:
-            raise ValueError(
-                f"source_dir unreadable: {type(exc).__name__}"
-            ) from exc
+            raise ValueError(f"source_dir unreadable: {type(exc).__name__}") from exc
         if stat.S_ISLNK(link_stat.st_mode):
-            raise ValueError(
-                "source_dir must not be a symlink (TOCTOU defence)"
-            )
+            raise ValueError("source_dir must not be a symlink (TOCTOU defence)")
         if not stat.S_ISDIR(link_stat.st_mode):
             raise ValueError("source_dir must be a directory")
     return os.path.realpath(path)
@@ -155,9 +147,7 @@ class AppleAdapterPlan:
     def __post_init__(self) -> None:
         validate_source_adapter(self.source_dir)
         _validate_output_dir(self.output_dir)
-        object.__setattr__(
-            self, "direction", validate_direction(self.direction)
-        )
+        object.__setattr__(self, "direction", validate_direction(self.direction))
         if not isinstance(self.sign, bool):
             raise TypeError("sign must be bool")
 
@@ -190,9 +180,7 @@ class ConversionReport:
 
     def __post_init__(self) -> None:
         validate_direction(self.direction)
-        if isinstance(self.converted_keys, bool) or not isinstance(
-            self.converted_keys, int
-        ):
+        if isinstance(self.converted_keys, bool) or not isinstance(self.converted_keys, int):
             raise TypeError("converted_keys must be an int")
         if self.converted_keys < 0:
             raise ValueError("converted_keys must be >= 0")
@@ -274,17 +262,14 @@ def _read_adapter_file(path: str, field: str) -> str:
     try:
         file_stat = os.lstat(path)
     except OSError as exc:
-        raise FileNotFoundError(
-            f"{field} not found: {os.path.basename(path)}"
-        ) from exc
+        raise FileNotFoundError(f"{field} not found: {os.path.basename(path)}") from exc
     if stat.S_ISLNK(file_stat.st_mode):
         raise ValueError(f"{field} must not be a symlink (TOCTOU defence)")
     if not stat.S_ISREG(file_stat.st_mode):
         raise ValueError(f"{field} must be a regular file")
     if file_stat.st_size > _MAX_ADAPTER_FILE_BYTES:
         raise ValueError(
-            f"{field} exceeds the {_MAX_ADAPTER_FILE_BYTES // 1024**3} GiB "
-            "adapter cap"
+            f"{field} exceeds the {_MAX_ADAPTER_FILE_BYTES // 1024**3} GiB adapter cap"
         )
     return path
 
@@ -303,8 +288,7 @@ def _load_safetensors_arrays(path: str, field: str) -> dict[str, Any]:
         from safetensors.numpy import load_file as np_load_file
     except ImportError as exc:  # pragma: no cover — safetensors in [train]
         raise ImportError(
-            "apple-adapter conversion requires safetensors "
-            "(pip install safetensors)"
+            "apple-adapter conversion requires safetensors (pip install safetensors)"
         ) from exc
     try:
         return dict(np_load_file(path))
@@ -318,24 +302,19 @@ def _load_safetensors_arrays(path: str, field: str) -> dict[str, Any]:
             raise ImportError(
                 "this adapter holds non-numpy dtypes (likely bf16); "
                 "converting it requires torch "
-                "(pip install \"soup-cli[train]\")"
+                '(pip install "soup-cli[train]")'
             ) from exc
         try:
             tensors = torch_load_file(path)
         except Exception as exc:  # noqa: BLE001 — corrupt file, not a dtype issue
             raise ValueError(
-                f"{field} is not a valid safetensors file: "
-                f"{type(np_exc).__name__}"
+                f"{field} is not a valid safetensors file: {type(np_exc).__name__}"
             ) from exc
         logger.warning(
-            "adapter %s holds non-numpy dtypes (likely bf16); upcasting "
-            "to float32 for conversion",
+            "adapter %s holds non-numpy dtypes (likely bf16); upcasting to float32 for conversion",
             os.path.basename(path),
         )
-        return {
-            key: tensor.float().numpy()
-            for key, tensor in tensors.items()
-        }
+        return {key: tensor.float().numpy() for key, tensor in tensors.items()}
 
 
 def _load_npz_arrays(path: str, field: str) -> dict[str, Any]:
@@ -352,14 +331,11 @@ def _load_npz_arrays(path: str, field: str) -> dict[str, Any]:
         with np.load(path, allow_pickle=False) as bundle:
             arrays = {key: bundle[key] for key in bundle.files}
     except Exception as exc:  # noqa: BLE001 — BadZipFile etc. are bare Exception
-        raise ValueError(
-            f"{field} is not a valid npz file: {type(exc).__name__}"
-        ) from exc
+        raise ValueError(f"{field} is not a valid npz file: {type(exc).__name__}") from exc
     total_bytes = sum(int(getattr(arr, "nbytes", 0)) for arr in arrays.values())
     if total_bytes > _MAX_ADAPTER_FILE_BYTES:
         raise ValueError(
-            f"{field} decompresses past the "
-            f"{_MAX_ADAPTER_FILE_BYTES // 1024**3} GiB adapter cap"
+            f"{field} decompresses past the {_MAX_ADAPTER_FILE_BYTES // 1024**3} GiB adapter cap"
         )
     return arrays
 
@@ -387,9 +363,7 @@ def _save_safetensors(arrays: dict[str, Any], output_path: str) -> None:
     import numpy as np
     from safetensors.numpy import save as st_save
 
-    contiguous = {
-        key: np.ascontiguousarray(value) for key, value in arrays.items()
-    }
+    contiguous = {key: np.ascontiguousarray(value) for key, value in arrays.items()}
     atomic_write_bytes(st_save(contiguous), output_path, field="output")
 
 
@@ -436,14 +410,10 @@ def _convert_hf_to_mlx(plan: AppleAdapterPlan) -> tuple[int, tuple[str, ...]]:
                 "adapter_model.bin (pickle) is not supported — re-save the "
                 "adapter as safetensors first (v0.57.0 policy)"
             )
-        raise FileNotFoundError(
-            "adapter_model.safetensors not found in the source adapter"
-        )
+        raise FileNotFoundError("adapter_model.safetensors not found in the source adapter")
     arrays = _load_safetensors_arrays(source_file, "adapter_model.safetensors")
     converted, skipped = convert_hf_to_mlx_arrays(arrays)
-    _save_safetensors(
-        converted, os.path.join(plan.output_dir, "adapters.safetensors")
-    )
+    _save_safetensors(converted, os.path.join(plan.output_dir, "adapters.safetensors"))
 
     source_config = _read_source_config(plan.source_dir)
     rank = source_config.get("r")
@@ -457,9 +427,7 @@ def _convert_hf_to_mlx(plan: AppleAdapterPlan) -> tuple[int, tuple[str, ...]]:
     num_layers = _infer_num_layers(converted)
     if num_layers is not None:
         mlx_config["num_layers"] = num_layers
-    lora_parameters: dict[str, Any] = {
-        "dropout": _source_dropout(source_config)
-    }
+    lora_parameters: dict[str, Any] = {"dropout": _source_dropout(source_config)}
     if isinstance(rank, int) and rank > 0:
         lora_parameters["rank"] = rank
         if isinstance(alpha, (int, float)) and not isinstance(alpha, bool):
@@ -486,17 +454,17 @@ def _convert_mlx_to_hf(plan: AppleAdapterPlan) -> tuple[int, tuple[str, ...]]:
             "adapter (expected an mlx-lm adapter directory)"
         )
     converted, skipped = convert_mlx_to_hf_arrays(arrays)
-    _save_safetensors(
-        converted, os.path.join(plan.output_dir, "adapter_model.safetensors")
-    )
+    _save_safetensors(converted, os.path.join(plan.output_dir, "adapter_model.safetensors"))
 
     source_config = _read_source_config(plan.source_dir)
     rank = _infer_rank(converted)
-    target_modules = sorted({
-        key[: -len(".lora_A.weight")].rsplit(".", 1)[-1]
-        for key in converted
-        if key.endswith(".lora_A.weight")
-    })
+    target_modules = sorted(
+        {
+            key[: -len(".lora_A.weight")].rsplit(".", 1)[-1]
+            for key in converted
+            if key.endswith(".lora_A.weight")
+        }
+    )
     hf_config: dict[str, Any] = {
         "peft_type": "LORA",
         "task_type": "CAUSAL_LM",
@@ -506,9 +474,7 @@ def _convert_mlx_to_hf(plan: AppleAdapterPlan) -> tuple[int, tuple[str, ...]]:
     if isinstance(rank, int) and rank > 0:
         hf_config["r"] = rank
         lora_params = source_config.get("lora_parameters")
-        scale = (
-            lora_params.get("scale") if isinstance(lora_params, dict) else None
-        )
+        scale = lora_params.get("scale") if isinstance(lora_params, dict) else None
         if isinstance(scale, (int, float)) and not isinstance(scale, bool):
             hf_config["lora_alpha"] = float(scale) * rank
     atomic_write_text(

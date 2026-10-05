@@ -358,16 +358,17 @@ class TestSourceWiringRegressions:
         ):
             src = (root / module).read_text(encoding="utf-8")
             head = "\n".join(
-                line for line in src.splitlines()[:50]
+                line
+                for line in src.splitlines()[:50]
                 if line.strip() and not line.strip().startswith("#")
             )
             for forbidden in (
-                "import torch", "import transformers",
-                "import peft", "import safetensors",
+                "import torch",
+                "import transformers",
+                "import peft",
+                "import safetensors",
             ):
-                assert forbidden not in head, (
-                    f"{module}: top-level {forbidden!r} forbidden"
-                )
+                assert forbidden not in head, f"{module}: top-level {forbidden!r} forbidden"
 
     def test_supported_strategies_has_cmaes(self) -> None:
         from soup_cli.utils.adapter_merge import SUPPORTED_STRATEGIES
@@ -379,9 +380,7 @@ class TestSourceWiringRegressions:
         from pathlib import Path
 
         root = Path(__file__).resolve().parent.parent
-        src = (root / "src" / "soup_cli" / "commands" / "adapters.py").read_text(
-            encoding="utf-8"
-        )
+        src = (root / "src" / "soup_cli" / "commands" / "adapters.py").read_text(encoding="utf-8")
         # The bisect subprocess call site
         # Must NOT use shell=True; must use shlex.split + shlex.quote
         assert "shell=True" not in src

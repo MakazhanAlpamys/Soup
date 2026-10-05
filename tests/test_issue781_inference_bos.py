@@ -32,14 +32,45 @@ import pytest
 _SRC = Path(__file__).resolve().parent.parent / "src" / "soup_cli"
 
 _SPECIALS = [
-    "<unk>", "<s>", "</s>",
-    "<|system|>", "<|user|>", "<|assistant|>", "<|end|>",
-    "<|start_header_id|>", "<|end_header_id|>", "<|eot_id|>",
+    "<unk>",
+    "<s>",
+    "</s>",
+    "<|system|>",
+    "<|user|>",
+    "<|assistant|>",
+    "<|end|>",
+    "<|start_header_id|>",
+    "<|end_header_id|>",
+    "<|eot_id|>",
 ]
 _WORDS = [
-    "You", "are", "terse", ".", "What", "is", "the", "capital", "of", "France", "?",
-    "Paris", "And", "Italy", "Rome", "System", "User", "Assistant", ":",
-    "system", "user", "assistant", "Generate", "1", "training", "examples", "now",
+    "You",
+    "are",
+    "terse",
+    ".",
+    "What",
+    "is",
+    "the",
+    "capital",
+    "of",
+    "France",
+    "?",
+    "Paris",
+    "And",
+    "Italy",
+    "Rome",
+    "System",
+    "User",
+    "Assistant",
+    ":",
+    "system",
+    "user",
+    "assistant",
+    "Generate",
+    "1",
+    "training",
+    "examples",
+    "now",
 ]
 _BOS_ID = _SPECIALS.index("<s>")
 _EOS_ID = _SPECIALS.index("</s>")
@@ -496,9 +527,7 @@ class TestLiveEvalGenerators:
 
     @pytest.mark.parametrize("factory_name", ["make_generator", "make_multi_generator"])
     @pytest.mark.parametrize("template", [None, _BROKEN_TEMPLATE], ids=["no-template", "broken"])
-    def test_control_an_unrendered_raw_prompt_is_tokenized_as_before(
-        self, factory_name, template
-    ):
+    def test_control_an_unrendered_raw_prompt_is_tokenized_as_before(self, factory_name, template):
         """CONTROL — with no template, or one that fails to render, these
         generators send the raw prompt; no template touched it, so the
         tokenizer's own special tokens stay."""
@@ -551,9 +580,7 @@ class TestDataGenerateLocalProvider:
         assert sent == _hf_prompt_ids(tok, messages)
         assert sent.count(_BOS_ID) == 1
 
-    def test_control_without_a_template_its_own_prompt_is_tokenized_as_before(
-        self, monkeypatch
-    ):
+    def test_control_without_a_template_its_own_prompt_is_tokenized_as_before(self, monkeypatch):
         tok = _tokenizer(None)
 
         sent = self._sent(monkeypatch, tok)
@@ -566,13 +593,15 @@ class TestDataGenerateLocalProvider:
 # ============================================================
 
 # Functions whose return value is text a chat template rendered.
-_RENDER_HELPERS = frozenset({
-    "_apply_prompt_template",
-    "_render_chat_prompt",
-    "_render_prompt_template",
-    "build_chat_prompt",
-    "render_raft_prompt",
-})
+_RENDER_HELPERS = frozenset(
+    {
+        "_apply_prompt_template",
+        "_render_chat_prompt",
+        "_render_prompt_template",
+        "build_chat_prompt",
+        "render_raft_prompt",
+    }
+)
 _TOKENIZER_NAMES = frozenset({"_tokenizer", "processor", "teacher_tokenizer", "tok", "tokenizer"})
 
 # Scopes that render and then let the tokenizer decide, each for a stated reason.
@@ -734,8 +763,14 @@ class TestNoRenderThenReTokenize:
             "    text = tok.apply_chat_template(messages, tokenize=False)\n"
             "    return tok.encode(text)\n",
         ],
-        ids=["inline-render", "shared-builder", "nested-closure", "self-tokenizer",
-             "explicit-true", "encode"],
+        ids=[
+            "inline-render",
+            "shared-builder",
+            "nested-closure",
+            "self-tokenizer",
+            "explicit-true",
+            "encode",
+        ],
     )
     def test_the_scanner_flags_each_pre_fix_shape(self, source):
         assert len(_findings(_scopes_of(source))) == 1
@@ -752,15 +787,13 @@ class TestNoRenderThenReTokenize:
             "    text, templated = _render_prompt_template(tokenizer, messages)\n"
             "    return encode_rendered_prompt(tokenizer, text, templated=templated)\n",
             # tokenizing text no template rendered is not this defect
-            "def f(tokenizer, text):\n"
-            "    return tokenizer(text, return_tensors='pt')\n",
+            "def f(tokenizer, text):\n    return tokenizer(text, return_tensors='pt')\n",
             # tokenize=True is HF's one-step encoding, not a render
             "def f(tokenizer, messages, text):\n"
             "    ids = tokenizer.apply_chat_template(messages, tokenize=True)\n"
             "    return tokenizer(text)\n",
         ],
-        ids=["explicit-false", "shared-encoder", "rendered-encoder", "no-render",
-             "tokenize-true"],
+        ids=["explicit-false", "shared-encoder", "rendered-encoder", "no-render", "tokenize-true"],
     )
     def test_the_scanner_passes_the_fixed_shapes(self, source):
         assert _findings(_scopes_of(source)) == []
@@ -774,6 +807,4 @@ class TestNoRenderThenReTokenize:
             for path in sorted(_SRC.rglob("*.py"))
         }
 
-        assert {module: count for module, count in copies.items() if count} == {
-            "utils/vllm.py": 1
-        }
+        assert {module: count for module, count in copies.items() if count} == {"utils/vllm.py": 1}

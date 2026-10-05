@@ -150,11 +150,13 @@ class TestDetectMultiGPU:
 
         mock_props = MagicMock()
         mock_props.name = "NVIDIA RTX 4090"
-        mock_props.total_memory = 24 * (1024 ** 3)  # 24GB
+        mock_props.total_memory = 24 * (1024**3)  # 24GB
 
-        with patch("torch.cuda.is_available", return_value=True), \
-             patch("torch.cuda.device_count", return_value=1), \
-             patch("torch.cuda.get_device_properties", return_value=mock_props):
+        with (
+            patch("torch.cuda.is_available", return_value=True),
+            patch("torch.cuda.device_count", return_value=1),
+            patch("torch.cuda.get_device_properties", return_value=mock_props),
+        ):
             result = detect_multi_gpu()
             assert result["gpu_count"] == 1
             assert len(result["gpus"]) == 1
@@ -167,11 +169,13 @@ class TestDetectMultiGPU:
 
         mock_props = MagicMock()
         mock_props.name = "NVIDIA A100"
-        mock_props.total_memory = 80 * (1024 ** 3)
+        mock_props.total_memory = 80 * (1024**3)
 
-        with patch("torch.cuda.is_available", return_value=True), \
-             patch("torch.cuda.device_count", return_value=4), \
-             patch("torch.cuda.get_device_properties", return_value=mock_props):
+        with (
+            patch("torch.cuda.is_available", return_value=True),
+            patch("torch.cuda.device_count", return_value=4),
+            patch("torch.cuda.get_device_properties", return_value=mock_props),
+        ):
             result = detect_multi_gpu()
             assert result["gpu_count"] == 4
             assert len(result["gpus"]) == 4

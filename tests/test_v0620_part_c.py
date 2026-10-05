@@ -23,6 +23,7 @@ class TestModuleSurface:
             install_steering_hook,  # v0.71.10 #201 — replaces apply_steering stub
             validate_steering_method,
         )
+
         assert callable(validate_steering_method)
         assert callable(get_steering_method_spec)
         assert callable(install_steering_hook)
@@ -324,14 +325,21 @@ class TestCLI:
         from soup_cli.commands.steer import app
 
         runner = CliRunner()
-        result = runner.invoke(app, [
-            "train",
-            "--base", "meta-llama/Llama-3.1-8B-Instruct",
-            "--method", "nonsense",
-            "--name", "safety-v1",
-            "--pairs", "./data/pairs.jsonl",
-            "--plan-only",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "train",
+                "--base",
+                "meta-llama/Llama-3.1-8B-Instruct",
+                "--method",
+                "nonsense",
+                "--name",
+                "safety-v1",
+                "--pairs",
+                "./data/pairs.jsonl",
+                "--plan-only",
+            ],
+        )
         # CLI either exits 2 (validation) or 1 (plan rejected); not 0.
         assert result.exit_code != 0
 
@@ -343,18 +351,23 @@ class TestCLI:
         monkeypatch.chdir(tmp_path)
         # Create a tiny pairs JSONL to pass the path-containment check.
         pairs = tmp_path / "pairs.jsonl"
-        pairs.write_text(
-            '{"positive": "be safe", "negative": "be harmful"}\n', encoding="utf-8"
-        )
+        pairs.write_text('{"positive": "be safe", "negative": "be harmful"}\n', encoding="utf-8")
         runner = CliRunner()
-        result = runner.invoke(app, [
-            "train",
-            "--base", "meta-llama/Llama-3.1-8B-Instruct",
-            "--method", "caa",
-            "--name", "safety-v1",
-            "--pairs", "pairs.jsonl",
-            "--plan-only",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "train",
+                "--base",
+                "meta-llama/Llama-3.1-8B-Instruct",
+                "--method",
+                "caa",
+                "--name",
+                "safety-v1",
+                "--pairs",
+                "pairs.jsonl",
+                "--plan-only",
+            ],
+        )
         # plan-only succeeds with friendly deferred-live panel.
         assert result.exit_code == 0
         assert "v0.62" in result.stdout or "caa" in result.stdout.lower()

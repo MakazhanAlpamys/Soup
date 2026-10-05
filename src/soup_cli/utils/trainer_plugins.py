@@ -36,9 +36,7 @@ def _make(
     required_package: Optional[str],
 ) -> TrainerPluginSpec:
     if not _PLUGIN_NAME_RE.match(name):
-        raise ValueError(
-            "trainer-plugin name must be snake_case ([a-z0-9][a-z0-9_]{0,31})"
-        )
+        raise ValueError("trainer-plugin name must be snake_case ([a-z0-9][a-z0-9_]{0,31})")
     if not isinstance(description, str) or "\x00" in description:
         raise ValueError("description must be a NUL-free string")
     if len(description) > _MAX_DESCRIPTION:
@@ -46,9 +44,7 @@ def _make(
     if required_package is not None:
         if not isinstance(required_package, str) or not required_package:
             raise ValueError("required_package must be a non-empty string")
-    return TrainerPluginSpec(
-        name=name, description=description, required_package=required_package
-    )
+    return TrainerPluginSpec(name=name, description=description, required_package=required_package)
 
 
 _BUILTIN: Mapping[str, TrainerPluginSpec] = MappingProxyType(
@@ -108,9 +104,7 @@ def validate_trainer_plugin_list(names: Sequence[str]) -> Tuple[str, ...]:
     if isinstance(names, str) or not isinstance(names, (list, tuple)):
         raise TypeError("names must be a list or tuple")
     if len(names) > _MAX_PLUGINS_PER_RUN:
-        raise ValueError(
-            f"too many trainer plugins (max {_MAX_PLUGINS_PER_RUN})"
-        )
+        raise ValueError(f"too many trainer plugins (max {_MAX_PLUGINS_PER_RUN})")
     out: list[str] = []
     seen: set[str] = set()
     for raw in names:
@@ -121,8 +115,7 @@ def validate_trainer_plugin_list(names: Sequence[str]) -> Tuple[str, ...]:
             raise ValueError("plugin name must be non-empty NUL-free")
         if canonical not in _BUILTIN:
             raise ValueError(
-                f"unknown trainer plugin: {canonical!r}. supported: "
-                f"{sorted(_BUILTIN)}"
+                f"unknown trainer plugin: {canonical!r}. supported: {sorted(_BUILTIN)}"
             )
         if canonical in seen:
             raise ValueError(f"duplicate trainer plugin: {canonical!r}")
@@ -154,9 +147,7 @@ def _instantiate_cce_plugin() -> Any:
     return _CCEAdvisoryCallback()
 
 
-def _instantiate_simple_plugin(
-    name: str, pip_package: str, attr_candidates: Sequence[str]
-) -> Any:
+def _instantiate_simple_plugin(name: str, pip_package: str, attr_candidates: Sequence[str]) -> Any:
     """Lazy-import an upstream plugin module + instantiate the first attr."""
     import importlib
 
@@ -185,7 +176,9 @@ def _instantiate_simple_plugin(
     # confusing AttributeError).
     _LOG.warning(
         "trainer plugin %r: none of %s found on module %r; skipping",
-        name, list(attr_candidates), pip_package,
+        name,
+        list(attr_candidates),
+        pip_package,
     )
     return None
 
@@ -204,13 +197,12 @@ def _instantiate_plugin(name: str) -> Any:
         )
     if name == "llmcompressor":
         return _instantiate_simple_plugin(
-            "llmcompressor", "llmcompressor",
+            "llmcompressor",
+            "llmcompressor",
             ("LLMCompressorCallback", "LLMCompressor"),
         )
     if name == "sonicmoe":
-        return _instantiate_simple_plugin(
-            "sonicmoe", "sonicmoe", ("SonicMoECallback", "SonicMoE")
-        )
+        return _instantiate_simple_plugin("sonicmoe", "sonicmoe", ("SonicMoECallback", "SonicMoE"))
     if name == "math_verify":
         return _instantiate_simple_plugin(
             "math_verify", "math-verify", ("MathVerifyCallback", "verify")

@@ -23,6 +23,7 @@ def _clean_tabs():
 
 # --- plugin registry --------------------------------------------------------
 
+
 def test_register_tab_happy():
     spec = register_tab(name="my-tab", title="My Tab", render=lambda: "hi")
     assert spec.name == "my-tab"
@@ -86,6 +87,7 @@ def test_get_tab_unknown_returns_none():
 
 
 # --- UI env knobs -----------------------------------------------------------
+
 
 def test_resolve_ui_env_empty():
     env = resolve_ui_env({})

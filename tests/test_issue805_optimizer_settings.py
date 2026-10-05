@@ -27,19 +27,29 @@ def tiny_model(tmp_path, monkeypatch):
     # lookup too, so a prior MPS probe cannot move this CPU fixture's model.
     monkeypatch.setattr("transformers.training_args.is_torch_mps_available", lambda: False)
     torch.manual_seed(42)
-    tokenizer = Tokenizer(WordLevel(
-        {"<pad>": 0, "<unk>": 1, "<eos>": 2, "one": 3, "two": 4, "three": 5},
-        unk_token="<unk>",
-    ))
+    tokenizer = Tokenizer(
+        WordLevel(
+            {"<pad>": 0, "<unk>": 1, "<eos>": 2, "one": 3, "two": 4, "three": 5},
+            unk_token="<unk>",
+        )
+    )
     tokenizer.pre_tokenizer = Whitespace()
     tokenizer = PreTrainedTokenizerFast(
         tokenizer_object=tokenizer, pad_token="<pad>", unk_token="<unk>", eos_token="<eos>"
     )
-    model = LlamaForCausalLM(LlamaConfig(
-        vocab_size=6, hidden_size=16, intermediate_size=32, num_hidden_layers=1,
-        num_attention_heads=2, num_key_value_heads=2, max_position_embeddings=64,
-        pad_token_id=0, eos_token_id=2,
-    ))
+    model = LlamaForCausalLM(
+        LlamaConfig(
+            vocab_size=6,
+            hidden_size=16,
+            intermediate_size=32,
+            num_hidden_layers=1,
+            num_attention_heads=2,
+            num_key_value_heads=2,
+            max_position_embeddings=64,
+            pad_token_id=0,
+            eos_token_id=2,
+        )
+    )
     path = tmp_path / "tiny-model"
     model.save_pretrained(path)
     tokenizer.save_pretrained(path)
@@ -51,17 +61,29 @@ def _config(tiny_model, task, **training):
     from soup_cli.config.schema import SoupConfig
 
     return SoupConfig(
-        base=str(tiny_model), task=task, output="output-" + task,
+        base=str(tiny_model),
+        task=task,
+        output="output-" + task,
         data={"train": "train.jsonl", "forget_set": "forget.jsonl", "max_length": 64},
         training={
-            "epochs": 2, "batch_size": 2, "gradient_accumulation_steps": 2,
-            "scheduler": "cosine", "warmup_ratio": 0.25, "weight_decay": 0.1,
-            "max_grad_norm": 0.3, "optimizer": "adafactor", "lr": 0.001,
-            "quantization": "none", "gradient_checkpointing": False,
-            "logging_steps": 1, "save_steps": 100,
+            "epochs": 2,
+            "batch_size": 2,
+            "gradient_accumulation_steps": 2,
+            "scheduler": "cosine",
+            "warmup_ratio": 0.25,
+            "weight_decay": 0.1,
+            "max_grad_norm": 0.3,
+            "optimizer": "adafactor",
+            "lr": 0.001,
+            "quantization": "none",
+            "gradient_checkpointing": False,
+            "logging_steps": 1,
+            "save_steps": 100,
             "lora": {
                 "r": 0 if task == "prm" else 2,
-                "alpha": 4, "dropout": 0.0, "target_modules": ["q_proj"],
+                "alpha": 4,
+                "dropout": 0.0,
+                "target_modules": ["q_proj"],
             },
             **training,
         },
@@ -221,9 +243,7 @@ def test_unlearn_reports_unscaled_loss_and_example_count(tiny_model, batch_size,
     wrapper = _unlearn_wrapper(
         tiny_model, batch_size=batch_size, gradient_accumulation_steps=accumulation
     )
-    expected = wrapper._step_preference(
-        _tokenize_pair, "one ", "two three", "simnpo", "cpu"
-    ).item()
+    expected = wrapper._step_preference(_tokenize_pair, "one ", "two three", "simnpo", "cpu").item()
     assert isinstance(wrapper._optimizer, Adafactor)
     assert wrapper._optimizer.param_groups[0]["weight_decay"] == 0.1
     updates = math.ceil(5 / (batch_size * accumulation))

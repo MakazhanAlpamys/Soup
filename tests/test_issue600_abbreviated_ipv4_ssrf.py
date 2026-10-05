@@ -7,6 +7,7 @@ Verifies that:
    trackers._resolve_posthog_target, webhooks.validate_webhook_url) reject
    non-canonical IPv4 endpoint overrides end-to-end.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -32,14 +33,14 @@ class TestHubsPrivateOrLinkLocalAbbreviated:
             "fe80::1",
             "::ffff:10.0.0.1",
             # Abbreviated / non-canonical forms (#600 bypass vectors):
-            "127.1",           # abbreviated loopback
-            "127.0.1",         # abbreviated loopback (3-octet)
-            "2130706433",      # decimal 127.0.0.1
-            "0x7f000001",      # hex 127.0.0.1
-            "0177.0.0.1",      # octal 127.0.0.1
-            "10.1",            # abbreviated 10.0.0.1
-            "167772161",       # decimal 10.0.0.1
-            "2852039166",      # decimal 169.254.169.254 (cloud metadata)
+            "127.1",  # abbreviated loopback
+            "127.0.1",  # abbreviated loopback (3-octet)
+            "2130706433",  # decimal 127.0.0.1
+            "0x7f000001",  # hex 127.0.0.1
+            "0177.0.0.1",  # octal 127.0.0.1
+            "10.1",  # abbreviated 10.0.0.1
+            "167772161",  # decimal 10.0.0.1
+            "2852039166",  # decimal 169.254.169.254 (cloud metadata)
             # Trailing-dot forms:
             "127.0.0.1.",
             "169.254.169.254.",
@@ -252,9 +253,7 @@ class TestTelemetrySSRFEndToEndPinning:
             "https://127.1./",
         ],
     )
-    def test_telemetry_endpoint_is_safe_rejects_abbreviated_forms(
-        self, endpoint: str
-    ) -> None:
+    def test_telemetry_endpoint_is_safe_rejects_abbreviated_forms(self, endpoint: str) -> None:
         from soup_cli.utils.trackers import _telemetry_endpoint_is_safe
 
         assert _telemetry_endpoint_is_safe(endpoint) is False
@@ -267,9 +266,7 @@ class TestTelemetrySSRFEndToEndPinning:
             "https://app.posthog.com/capture/",
         ],
     )
-    def test_telemetry_endpoint_is_safe_allows_public(
-        self, endpoint: str
-    ) -> None:
+    def test_telemetry_endpoint_is_safe_allows_public(self, endpoint: str) -> None:
         from soup_cli.utils.trackers import _telemetry_endpoint_is_safe
 
         assert _telemetry_endpoint_is_safe(endpoint) is True
@@ -283,9 +280,7 @@ class TestTelemetrySSRFEndToEndPinning:
             "https://10.1/",
         ],
     )
-    def test_resolve_posthog_target_rejects_abbreviated_arg(
-        self, endpoint: str
-    ) -> None:
+    def test_resolve_posthog_target_rejects_abbreviated_arg(self, endpoint: str) -> None:
         from soup_cli.utils.trackers import _resolve_posthog_target
 
         assert _resolve_posthog_target("phc_key", endpoint=endpoint) is None
@@ -299,9 +294,7 @@ class TestTelemetrySSRFEndToEndPinning:
             "https://167772161/",
         ],
     )
-    def test_resolve_posthog_target_rejects_abbreviated_env(
-        self, endpoint: str
-    ) -> None:
+    def test_resolve_posthog_target_rejects_abbreviated_env(self, endpoint: str) -> None:
         from soup_cli.utils.trackers import _resolve_posthog_target
 
         env = {"SOUP_POSTHOG_ENDPOINT": endpoint}
@@ -327,9 +320,7 @@ class TestWebhookSSRFEndToEndPinning:
             "http://10.1/hook",
         ],
     )
-    def test_validate_webhook_url_rejects_abbreviated_private_ips(
-        self, url: str
-    ) -> None:
+    def test_validate_webhook_url_rejects_abbreviated_private_ips(self, url: str) -> None:
         from soup_cli.utils.webhooks import validate_webhook_url
 
         with pytest.raises(ValueError):
@@ -339,10 +330,7 @@ class TestWebhookSSRFEndToEndPinning:
         from soup_cli.utils.webhooks import validate_webhook_url
 
         url = "https://10.1/hook"
-        assert (
-            validate_webhook_url(url, allow_private_hosts=True)
-            == "https://10.1/hook"
-        )
+        assert validate_webhook_url(url, allow_private_hosts=True) == "https://10.1/hook"
 
     def test_validate_webhook_url_allows_public(self) -> None:
         from soup_cli.utils.webhooks import validate_webhook_url

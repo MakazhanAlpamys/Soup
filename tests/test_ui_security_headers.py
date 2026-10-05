@@ -161,14 +161,16 @@ def test_middleware_forwards_each_body_chunk_without_buffering():
 
 
 def test_middleware_does_not_overwrite_an_existing_header():
-    sent = _run_middleware([
-        {
-            "type": "http.response.start",
-            "status": 200,
-            "headers": [(b"x-frame-options", b"SAMEORIGIN")],
-        },
-        {"type": "http.response.body", "body": b""},
-    ])
+    sent = _run_middleware(
+        [
+            {
+                "type": "http.response.start",
+                "status": 200,
+                "headers": [(b"x-frame-options", b"SAMEORIGIN")],
+            },
+            {"type": "http.response.body", "body": b""},
+        ]
+    )
     values = [v for k, v in sent[0]["headers"] if k.lower() == b"x-frame-options"]
     assert values == [b"SAMEORIGIN"]
 

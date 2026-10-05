@@ -50,9 +50,7 @@ def test_alphaedit_rejects_nonfinite_denominator(monkeypatch):
     monkeypatch.setattr(ek, "_optimise_residual", lambda *a, **k: torch.tensor([1.0, 1.0]))
 
     with pytest.raises(ValueError, match="zero norm"):
-        ek.apply_alphaedit_edit(
-            object(), object(), subject="s", target="t", layer=0, device="cpu"
-        )
+        ek.apply_alphaedit_edit(object(), object(), subject="s", target="t", layer=0, device="cpu")
 
 
 def test_orpo_length_normalization_restores_odds_ratio():
@@ -67,9 +65,7 @@ def test_orpo_length_normalization_restores_odds_ratio():
 
     degenerate = float(compute_orpo_term(pol_chosen, pol_rejected, 1.0))
     normalized = float(
-        compute_orpo_term(
-            pol_chosen, pol_rejected, 1.0, chosen_lens=lens, rejected_lens=lens
-        )
+        compute_orpo_term(pol_chosen, pol_rejected, 1.0, chosen_lens=lens, rejected_lens=lens)
     )
     import math as _math
 
@@ -80,9 +76,7 @@ def test_orpo_length_normalization_restores_odds_ratio():
 
 
 def test_ipo_beta_schedule_uses_ipo_tau_not_dpo_beta():
-    src = (Path(soup_cli.__file__).parent / "trainer" / "ipo.py").read_text(
-        encoding="utf-8"
-    )
+    src = (Path(soup_cli.__file__).parent / "trainer" / "ipo.py").read_text(encoding="utf-8")
     assert "beta_start=tcfg.ipo_tau" in src
     assert "beta_start=tcfg.dpo_beta" not in src
 
@@ -164,9 +158,7 @@ def test_apply_llama_pro_freeze_freezes_all_but_new_blocks():
 
     model = _M()
     apply_llama_pro_freeze(model, 2)  # keep only the last 2 blocks trainable
-    trainable = [
-        all(p.requires_grad for p in layer.parameters()) for layer in model.model.layers
-    ]
+    trainable = [all(p.requires_grad for p in layer.parameters()) for layer in model.model.layers]
     assert trainable == [False, False, True, True]
 
 
@@ -218,8 +210,15 @@ def test_longlora_wired_into_sft_train():
 
 def test_gpus_reexec_passes_run_shaping_flags():
     src = _src("utils/launcher.py")
-    for flag in ('"--gate"', '"--push-as"', '"--trust-remote-code"', '"--tracker"',
-                 '"--diagnose-gate"', '"--annex-xi"', '"--repro-receipt"'):
+    for flag in (
+        '"--gate"',
+        '"--push-as"',
+        '"--trust-remote-code"',
+        '"--tracker"',
+        '"--diagnose-gate"',
+        '"--annex-xi"',
+        '"--repro-receipt"',
+    ):
         assert "collect_reexec_passthrough" in src and flag in src, f"re-exec drops {flag}"
 
 
@@ -293,22 +292,22 @@ def test_registry_lineage_cycle_detected_beyond_depth_10(tmp_path, monkeypatch):
     with RegistryStore() as store:
         ids = [
             store.push(
-                name=f"m{i}", tag="v1", base_model="b", task="sft",
-                run_id=None, config={},
+                name=f"m{i}",
+                tag="v1",
+                base_model="b",
+                task="sft",
+                run_id=None,
+                config={},
             )
             for i in range(15)
         ]
         # Chain child->parent 14 deep: ids[0] -> ids[1] -> ... -> ids[14].
         for i in range(14):
-            store.add_lineage(
-                child_id=ids[i], parent_id=ids[i + 1], relation="forked_from"
-            )
+            store.add_lineage(child_id=ids[i], parent_id=ids[i + 1], relation="forked_from")
         # ids[14] is an ancestor of ids[0] 14 hops away — past the old depth-10
         # cap. The unbounded walk must still catch the cycle.
         with pytest.raises(ValueError, match="cycle"):
-            store.add_lineage(
-                child_id=ids[14], parent_id=ids[0], relation="forked_from"
-            )
+            store.add_lineage(child_id=ids[14], parent_id=ids[0], relation="forked_from")
 
 
 def test_gguf_calib_reads_from_nofollow_fd_no_reopen():
@@ -330,13 +329,17 @@ def test_namespace_pin_flags_forward_created_at_drift(tmp_path):
 
     store = NamespacePinStore(str(tmp_path / "pins.db"))
     first = verify_namespace(
-        store, repo_id="org/model", current_author="alice",
+        store,
+        repo_id="org/model",
+        current_author="alice",
         current_created_at="2026-01-01T00:00:00",
     )
     assert first.ok is True  # trust on first use
     # Same author, LATER created_at (repo re-created / AI-Jacking) must be flagged.
     recreated = verify_namespace(
-        store, repo_id="org/model", current_author="alice",
+        store,
+        repo_id="org/model",
+        current_author="alice",
         current_created_at="2026-06-01T00:00:00",
     )
     assert recreated.ok is False
@@ -371,9 +374,7 @@ def test_data_split_rejects_negative_val(tmp_path, monkeypatch):
     (tmp_path / "d.jsonl").write_text(
         '{"messages": [{"role": "user", "content": "x"}]}\n' * 20, encoding="utf-8"
     )
-    result = CliRunner().invoke(
-        app, ["split", "d.jsonl", "--val", "-10", "--absolute"]
-    )
+    result = CliRunner().invoke(app, ["split", "d.jsonl", "--val", "-10", "--absolute"])
     assert result.exit_code == 1, (result.output, repr(result.exception))
     assert "non-negative" in result.output
 
@@ -396,9 +397,7 @@ def test_trace_parser_reads_bom_first_record(tmp_path):
 def test_plan_estimate_handles_batch_size_auto():
     from soup_cli.utils.terraform_plan import _estimate_runtime_minutes
 
-    minutes = _estimate_runtime_minutes(
-        {"training": {"epochs": 2, "batch_size": "auto"}}
-    )
+    minutes = _estimate_runtime_minutes({"training": {"epochs": 2, "batch_size": "auto"}})
     assert minutes > 0  # float("auto") no longer crashes
 
 

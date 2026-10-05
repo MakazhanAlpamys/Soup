@@ -3,6 +3,7 @@
 Covers Parts A/B/C (25 new recipes), Part D (MULTIPACK_ARCHITECTURES extension),
 Part E (hub adapters + ``hub`` field on TrainingConfig).
 """
+
 from __future__ import annotations
 
 from types import MappingProxyType
@@ -84,8 +85,7 @@ class TestValidateHubName:
 class TestHubMetadata:
     @pytest.mark.parametrize(
         "hub,pkg",
-        [("hf", "huggingface-hub"), ("modelscope", "modelscope"),
-         ("modelers", "openmind-hub")],
+        [("hf", "huggingface-hub"), ("modelscope", "modelscope"), ("modelers", "openmind-hub")],
     )
     def test_required_package(self, hub: str, pkg: str) -> None:
         assert required_hub_package(hub) == pkg
@@ -215,10 +215,7 @@ class TestValidateHubEndpoint:
 
     def test_http_ipv6_loopback_ok(self) -> None:
         # `::1` is in `_LOOPBACK_HOSTS` so HTTP is permitted (parity with v0.29.0).
-        assert (
-            validate_hub_endpoint("http://[::1]:8080")
-            == "http://[::1]:8080"
-        )
+        assert validate_hub_endpoint("http://[::1]:8080") == "http://[::1]:8080"
 
 
 # =====================================================================
@@ -254,16 +251,12 @@ class TestResolveEndpoint:
             )
 
     def test_env_override_loopback_http_ok(self) -> None:
-        out = resolve_endpoint(
-            "hf", env={"HF_ENDPOINT": "http://localhost:9000"}
-        )
+        out = resolve_endpoint("hf", env={"HF_ENDPOINT": "http://localhost:9000"})
         assert out == "http://localhost:9000"
 
     def test_env_override_null_byte_rejected(self) -> None:
         with pytest.raises(ValueError, match="null bytes"):
-            resolve_endpoint(
-                "hf", env={"HF_ENDPOINT": "https://x\x00.com"}
-            )
+            resolve_endpoint("hf", env={"HF_ENDPOINT": "https://x\x00.com"})
 
     def test_unknown_hub_rejected(self) -> None:
         with pytest.raises(ValueError, match="not supported"):
@@ -418,36 +411,43 @@ output: ./output
 
 
 class TestMultipackArchitecturesV0510:
-    @pytest.mark.parametrize("arch", [
-        "GraniteForCausalLM",
-        "GraniteMoeForCausalLM",
-        "Glm4ForCausalLM",
-        "Glm5ForCausalLM",
-        "KimiForCausalLM",
-        "MiniMaxForCausalLM",
-        "QwQForCausalLM",
-        "QVQForCausalLM",
-        "GptOssForCausalLM",
-        "MagistralForCausalLM",
-        "DevstralForCausalLM",
-        "MinistralForCausalLM",
-        "MedGemmaForCausalLM",
-        "Lfm2ForCausalLM",
-        "CogitoForCausalLM",
-        "HunyuanForCausalLM",
-        "ErnieForCausalLM",
-        "YiForCausalLM",
-        "BaichuanForCausalLM",
-        "ChatGLMForConditionalGeneration",
-    ])
+    @pytest.mark.parametrize(
+        "arch",
+        [
+            "GraniteForCausalLM",
+            "GraniteMoeForCausalLM",
+            "Glm4ForCausalLM",
+            "Glm5ForCausalLM",
+            "KimiForCausalLM",
+            "MiniMaxForCausalLM",
+            "QwQForCausalLM",
+            "QVQForCausalLM",
+            "GptOssForCausalLM",
+            "MagistralForCausalLM",
+            "DevstralForCausalLM",
+            "MinistralForCausalLM",
+            "MedGemmaForCausalLM",
+            "Lfm2ForCausalLM",
+            "CogitoForCausalLM",
+            "HunyuanForCausalLM",
+            "ErnieForCausalLM",
+            "YiForCausalLM",
+            "BaichuanForCausalLM",
+            "ChatGLMForConditionalGeneration",
+        ],
+    )
     def test_arch_in_allowlist(self, arch: str) -> None:
         assert arch in MULTIPACK_ARCHITECTURES
         validate_multipack_architecture(arch)  # must not raise
 
     def test_legacy_arches_still_present(self) -> None:
         # Sanity — v0.37.0 entries must still be there
-        for arch in ("LlamaForCausalLM", "Qwen2ForCausalLM",
-                     "Phi3ForCausalLM", "Gemma2ForCausalLM"):
+        for arch in (
+            "LlamaForCausalLM",
+            "Qwen2ForCausalLM",
+            "Phi3ForCausalLM",
+            "Gemma2ForCausalLM",
+        ):
             assert arch in MULTIPACK_ARCHITECTURES
 
     def test_count_exactly_38(self) -> None:
@@ -467,16 +467,33 @@ class TestMultipackArchitecturesV0510:
 
 V0510_RECIPE_NAMES = [
     # Part A — reasoning / agent
-    "gpt-oss-20b-sft", "gpt-oss-120b-sft", "glm-4.6-sft", "glm-5-sft",
-    "kimi-k2-sft", "kimi-k2-thinking-grpo", "minimax-m2-sft",
-    "qwq-32b-grpo", "qvq-72b-sft",
+    "gpt-oss-20b-sft",
+    "gpt-oss-120b-sft",
+    "glm-4.6-sft",
+    "glm-5-sft",
+    "kimi-k2-sft",
+    "kimi-k2-thinking-grpo",
+    "minimax-m2-sft",
+    "qwq-32b-grpo",
+    "qvq-72b-sft",
     # Part B — small / specialist
-    "granite-4-sft", "lfm2-sft", "mistral-small-3-sft",
-    "mistral-medium-3-5-sft", "magistral-small-sft", "devstral-sft",
-    "ministral-sft", "medgemma-sft", "embedding-gemma-sft",
+    "granite-4-sft",
+    "lfm2-sft",
+    "mistral-small-3-sft",
+    "mistral-medium-3-5-sft",
+    "magistral-small-sft",
+    "devstral-sft",
+    "ministral-sft",
+    "medgemma-sft",
+    "embedding-gemma-sft",
     # Part C — vision / multimodal
-    "llava-next-sft", "internvl-3-5-sft", "voxtral-sft", "baichuan-sft",
-    "qwen-image-sft", "deepseek-ocr-sft", "paddle-ocr-sft",
+    "llava-next-sft",
+    "internvl-3-5-sft",
+    "voxtral-sft",
+    "baichuan-sft",
+    "qwen-image-sft",
+    "deepseek-ocr-sft",
+    "paddle-ocr-sft",
 ]
 
 
@@ -495,9 +512,20 @@ class TestV0510Recipes:
         meta = RECIPES[name]
         assert meta.model
         assert meta.task in {
-            "sft", "dpo", "grpo", "kto", "orpo", "simpo", "ipo",
-            "ppo", "reward_model", "pretrain", "embedding", "bco",
-            "preference", "prm",
+            "sft",
+            "dpo",
+            "grpo",
+            "kto",
+            "orpo",
+            "simpo",
+            "ipo",
+            "ppo",
+            "reward_model",
+            "pretrain",
+            "embedding",
+            "bco",
+            "preference",
+            "prm",
         }
         assert meta.size
         assert meta.tags

@@ -32,9 +32,7 @@ def _make(
     target_artifacts: Tuple[str, ...],
 ) -> IntegrationSpec:
     if not _INTEGRATION_NAME_RE.match(name):
-        raise ValueError(
-            "integration name must be kebab-case ([a-z0-9][a-z0-9-]{0,31})"
-        )
+        raise ValueError("integration name must be kebab-case ([a-z0-9][a-z0-9-]{0,31})")
     if not isinstance(description, str) or "\x00" in description:
         raise ValueError("description must be a NUL-free string")
     if len(description) > _MAX_DESCRIPTION:
@@ -44,9 +42,7 @@ def _make(
     for artifact in target_artifacts:
         if not isinstance(artifact, str) or not artifact:
             raise ValueError("target_artifacts entries must be non-empty str")
-    return IntegrationSpec(
-        name=name, description=description, target_artifacts=target_artifacts
-    )
+    return IntegrationSpec(name=name, description=description, target_artifacts=target_artifacts)
 
 
 _BUILTIN: Mapping[str, IntegrationSpec] = MappingProxyType(

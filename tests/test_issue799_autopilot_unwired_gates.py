@@ -14,8 +14,7 @@ from soup_cli.cli import app
 def _write_data(path: Path) -> Path:
     path.write_text(
         "\n".join(
-            json.dumps({"instruction": f"q{index}", "output": f"a{index}"})
-            for index in range(20)
+            json.dumps({"instruction": f"q{index}", "output": f"a{index}"}) for index in range(20)
         )
         + "\n",
         encoding="utf-8",
@@ -136,12 +135,12 @@ def test_forgetting_threshold_is_declared_unconsumed() -> None:
 def test_training_intelligence_documented_config_parses() -> None:
     from soup_cli.config.loader import load_config_from_string
 
-    docs = (
-        Path(__file__).resolve().parents[1] / "docs" / "peft-and-efficiency.md"
-    ).read_text(encoding="utf-8")
-    section = docs.split("## Training Intelligence", maxsplit=1)[1].split(
-        "## GaLore", maxsplit=1
-    )[0]
+    docs = (Path(__file__).resolve().parents[1] / "docs" / "peft-and-efficiency.md").read_text(
+        encoding="utf-8"
+    )
+    section = docs.split("## Training Intelligence", maxsplit=1)[1].split("## GaLore", maxsplit=1)[
+        0
+    ]
     match = re.search(r"```yaml\n(.*?)```", section, flags=re.DOTALL)
     assert match is not None
 

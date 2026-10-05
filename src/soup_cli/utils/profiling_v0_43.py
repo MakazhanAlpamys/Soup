@@ -12,6 +12,7 @@
 Containment, redaction, and exception-narrowing follow v0.34.0 `crash.py` /
 v0.34.0 `profiling.py` policies.
 """
+
 from __future__ import annotations
 
 import contextlib
@@ -25,16 +26,18 @@ from soup_cli.utils.paths import is_under_cwd
 
 # Reference NVLink/PCIe bandwidth ceilings (GB/s, unidirectional).
 # Source: NVIDIA published topology specs for H100/A100/V100.
-_BANDWIDTH_REFERENCE: Mapping[tuple[str, str], float] = MappingProxyType({
-    ("h100", "nvlink"): 450.0,    # NVLink 4 (18 links × 25 GB/s)
-    ("h100", "pcie"): 64.0,       # PCIe Gen5 x16
-    ("a100", "nvlink"): 300.0,    # NVLink 3 (12 links × 25 GB/s)
-    ("a100", "pcie"): 32.0,       # PCIe Gen4 x16
-    ("v100", "nvlink"): 150.0,    # NVLink 2 (6 links × 25 GB/s)
-    ("v100", "pcie"): 16.0,       # PCIe Gen3 x16
-    ("rtx4090", "pcie"): 64.0,
-    ("rtx3090", "pcie"): 32.0,
-})
+_BANDWIDTH_REFERENCE: Mapping[tuple[str, str], float] = MappingProxyType(
+    {
+        ("h100", "nvlink"): 450.0,  # NVLink 4 (18 links × 25 GB/s)
+        ("h100", "pcie"): 64.0,  # PCIe Gen5 x16
+        ("a100", "nvlink"): 300.0,  # NVLink 3 (12 links × 25 GB/s)
+        ("a100", "pcie"): 32.0,  # PCIe Gen4 x16
+        ("v100", "nvlink"): 150.0,  # NVLink 2 (6 links × 25 GB/s)
+        ("v100", "pcie"): 16.0,  # PCIe Gen3 x16
+        ("rtx4090", "pcie"): 64.0,
+        ("rtx3090", "pcie"): 32.0,
+    }
+)
 
 
 def _validate_run_id(run_id: object) -> str:
@@ -170,9 +173,7 @@ def expected_bandwidth(gpu: str, link: str) -> float | None:
     return _BANDWIDTH_REFERENCE.get((gpu.lower(), link.lower()))
 
 
-def nccl_bandwidth_check(
-    *, gpu: str, link: str, measured_gb_per_sec: float
-) -> dict:
+def nccl_bandwidth_check(*, gpu: str, link: str, measured_gb_per_sec: float) -> dict:
     """Compare measured bandwidth against the reference table.
 
     Returns a dict with `expected`, `measured`, `ratio`, and `status`.
@@ -182,10 +183,7 @@ def nccl_bandwidth_check(
       - status="MAJOR"  : ratio < 0.50  (silent degradation likely)
       - status="UNKNOWN": no reference entry for (gpu, link)
     """
-    if (
-        isinstance(measured_gb_per_sec, bool)
-        or not isinstance(measured_gb_per_sec, (int, float))
-    ):
+    if isinstance(measured_gb_per_sec, bool) or not isinstance(measured_gb_per_sec, (int, float)):
         raise ValueError("measured_gb_per_sec must be a number")
     if not math.isfinite(float(measured_gb_per_sec)):
         raise ValueError("measured_gb_per_sec must be finite")

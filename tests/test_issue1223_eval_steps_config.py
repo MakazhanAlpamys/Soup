@@ -152,9 +152,7 @@ class TestEvalStepsFootguns:
     def test_a_pre_tokenized_cache_may_carry_its_own_validation_split(self):
         cfg = _load(
             _yaml(
-                data_extra=(
-                    "  val_split: 0\n  format: pre_tokenized\n  tokenized_path: ./cache\n"
-                ),
+                data_extra=("  val_split: 0\n  format: pre_tokenized\n  tokenized_path: ./cache\n"),
                 training_extra="  eval_steps: 5\n",
             )
         )
@@ -184,9 +182,7 @@ class TestEvalStepsFootguns:
     def test_generation_based_evaluation_is_named_as_a_separate_feature(self, task):
         with pytest.raises(ValueError) as info:
             _load(_yaml(task=task, training_extra="  eval_steps: 5\n"))
-        assert f"a generation-based evaluation for {task} is a separate feature" in str(
-            info.value
-        )
+        assert f"a generation-based evaluation for {task} is a separate feature" in str(info.value)
 
     def test_grpo_accepts_it_as_the_opt_in(self):
         cfg = _load(_yaml(task="grpo", training_extra="  eval_steps: 5\n"))
@@ -387,8 +383,7 @@ class TestTheNotice:
         assert validation_notice(_load(_yaml())) is None
         assert validation_notice(_load(_yaml(task="grpo", data_extra="  val_split: 0\n"))) is None
         assert (
-            validation_notice(_load(_yaml(task="grpo", training_extra="  eval_steps: 4\n")))
-            is None
+            validation_notice(_load(_yaml(task="grpo", training_extra="  eval_steps: 4\n"))) is None
         )
 
     def test_the_module_imports_without_torch(self):
@@ -506,19 +501,19 @@ class TestSweepAndCostFollowTheSameRule:
             "output_dir": "./out",
             "duration": "0m",
         }
-        with mock_patch(
-            "soup_cli.data.loader.load_dataset", return_value={"train": [{"x": 1}]}
-        ) as mock_load, mock_patch(
-            "soup_cli.utils.gpu.detect_device", return_value=("cpu", "CPU")
-        ), mock_patch(
-            "soup_cli.utils.gpu.get_gpu_info",
-            return_value={"memory_total": "0 MB", "memory_total_bytes": 0},
-        ), mock_patch(
-            "soup_cli.experiment.tracker.ExperimentTracker"
-        ) as mock_tracker_cls, mock_patch(
-            "soup_cli.monitoring.display.TrainingDisplay"
-        ), mock_patch(f"{wrapper}.setup"), mock_patch(
-            f"{wrapper}.train", return_value=fake_result
+        with (
+            mock_patch(
+                "soup_cli.data.loader.load_dataset", return_value={"train": [{"x": 1}]}
+            ) as mock_load,
+            mock_patch("soup_cli.utils.gpu.detect_device", return_value=("cpu", "CPU")),
+            mock_patch(
+                "soup_cli.utils.gpu.get_gpu_info",
+                return_value={"memory_total": "0 MB", "memory_total_bytes": 0},
+            ),
+            mock_patch("soup_cli.experiment.tracker.ExperimentTracker") as mock_tracker_cls,
+            mock_patch("soup_cli.monitoring.display.TrainingDisplay"),
+            mock_patch(f"{wrapper}.setup"),
+            mock_patch(f"{wrapper}.train", return_value=fake_result),
         ):
             mock_tracker = MagicMock()
             mock_tracker.start_run.return_value = "run-1"

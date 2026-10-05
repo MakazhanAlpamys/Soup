@@ -45,9 +45,7 @@ def validate_ollama_url(base_url: str) -> None:
     """
     parsed = urlparse(base_url)
     if parsed.scheme not in ("http", "https"):
-        raise ValueError(
-            f"Ollama URL must use HTTP or HTTPS scheme (got {parsed.scheme}://)"
-        )
+        raise ValueError(f"Ollama URL must use HTTP or HTTPS scheme (got {parsed.scheme}://)")
     # 0.0.0.0 is the bind-any wildcard, NOT loopback — rejected to match the
     # newer SSRF validators (validate_hub_endpoint / validate_otlp_endpoint /
     # validate_webhook_url). v0.71.6 #232 hardening (now reachable via Magpie).
@@ -85,9 +83,7 @@ def generate_ollama(
     try:
         import httpx
     except ImportError:
-        raise ImportError(
-            "httpx is required for Ollama generation. Install: pip install httpx"
-        )
+        raise ImportError("httpx is required for Ollama generation. Install: pip install httpx")
 
     validate_ollama_url(base_url)
 

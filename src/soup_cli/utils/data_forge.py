@@ -139,9 +139,7 @@ def _validate_task(task: Any) -> str:
     if not isinstance(task, str):
         raise TypeError("task must be a string")
     if task not in _VALID_TASKS_SET:
-        raise ValueError(
-            f"task must be one of {sorted(_VALID_TASKS_SET)}; got {task!r}"
-        )
+        raise ValueError(f"task must be one of {sorted(_VALID_TASKS_SET)}; got {task!r}")
     return task
 
 
@@ -286,9 +284,7 @@ def build_forge_plan(
 ) -> ForgePlan:
     """Validate inputs and return an immutable plan."""
     task = _validate_task(task)
-    target_rows = _validate_int(
-        target_rows, name="target_rows", low=1, high=_MAX_TARGET_ROWS
-    )
+    target_rows = _validate_int(target_rows, name="target_rows", low=1, high=_MAX_TARGET_ROWS)
     teacher = _validate_str(teacher, name="teacher", max_len=_MAX_TEACHER_LEN)
     uncertainty_threshold = _validate_float_unit(
         uncertainty_threshold, name="uncertainty_threshold"
@@ -363,15 +359,9 @@ def _make_prompt(chunk: str, task: str) -> str:
     if task == "sft":
         return f"Read the passage and write a Q&A pair.\n\nPassage:\n{chunk}"
     if task == "preference":
-        return (
-            "Read the passage and write a preferred and a rejected answer.\n\n"
-            f"Passage:\n{chunk}"
-        )
+        return f"Read the passage and write a preferred and a rejected answer.\n\nPassage:\n{chunk}"
     if task == "tool":
-        return (
-            "Read the passage and produce a tool-call hypothesis.\n\n"
-            f"Passage:\n{chunk}"
-        )
+        return f"Read the passage and produce a tool-call hypothesis.\n\nPassage:\n{chunk}"
     raise ValueError(f"unknown task: {task!r}")  # pragma: no cover
 
 
@@ -397,9 +387,7 @@ def synthesise_forge_rows(
     report them.
     """
     task = _validate_task(task)
-    target_rows = _validate_int(
-        target_rows, name="target_rows", low=1, high=_MAX_TARGET_ROWS
-    )
+    target_rows = _validate_int(target_rows, name="target_rows", low=1, high=_MAX_TARGET_ROWS)
     teacher = _validate_str(teacher, name="teacher", max_len=_MAX_TEACHER_LEN)
     uncertainty_threshold = _validate_float_unit(
         uncertainty_threshold, name="uncertainty_threshold"
@@ -620,23 +608,18 @@ def make_judge_provider_fn(
     canonical = provider.strip().lower()
     if canonical not in JUDGE_PROVIDERS:
         raise ValueError(
-            f"unknown judge provider: {provider!r}. "
-            f"supported: {sorted(JUDGE_PROVIDERS)}"
+            f"unknown judge provider: {provider!r}. supported: {sorted(JUDGE_PROVIDERS)}"
         )
     if not isinstance(model, str) or not model or "\x00" in model:
         raise ValueError("model must be a non-empty NUL-free string")
-    if isinstance(timeout_seconds, bool) or not isinstance(
-        timeout_seconds, (int, float)
-    ):
+    if isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds, (int, float)):
         raise TypeError("timeout_seconds must be a number")
     if timeout_seconds <= 0 or timeout_seconds > 600:
         raise ValueError("timeout_seconds must be in (0, 600]")
     # v0.53.7 M-M: explicit bool rejection on ``temperature`` — Python
     # treats ``True`` as ``1`` and would silently round-trip through
     # ``float(temperature)`` further down.
-    if isinstance(temperature, bool) or not isinstance(
-        temperature, (int, float)
-    ):
+    if isinstance(temperature, bool) or not isinstance(temperature, (int, float)):
         raise TypeError("temperature must be a number")
     if temperature < 0 or temperature > 2:
         raise ValueError("temperature must be in [0, 2]")
@@ -647,8 +630,7 @@ def make_judge_provider_fn(
         import httpx
     except ImportError as exc:
         raise ImportError(
-            "httpx is required for live judge providers. "
-            "Run: pip install httpx"
+            "httpx is required for live judge providers. Run: pip install httpx"
         ) from exc
 
     def _failed(
@@ -707,9 +689,7 @@ def make_judge_provider_fn(
 
         api_key = _os.environ.get("ANTHROPIC_API_KEY")
         if not api_key:
-            raise ValueError(
-                "Anthropic judge provider requires ANTHROPIC_API_KEY env var."
-            )
+            raise ValueError("Anthropic judge provider requires ANTHROPIC_API_KEY env var.")
 
         def _anthropic_judge(prompt: str) -> Mapping[str, Any]:
             if not isinstance(prompt, str):
@@ -739,9 +719,7 @@ def make_judge_provider_fn(
             try:
                 data = resp.json()
                 blocks = data["content"]
-                text = "".join(
-                    b["text"] for b in blocks if b.get("type") == "text"
-                )
+                text = "".join(b["text"] for b in blocks if b.get("type") == "text")
             except (AttributeError, KeyError, IndexError, TypeError, ValueError) as exc:
                 _LOG.debug("anthropic judge parse error: %s", exc)
                 return _failed("anthropic provider returned a malformed response", cause=exc)

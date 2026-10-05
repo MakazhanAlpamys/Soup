@@ -40,12 +40,7 @@ def test_converters_reject_null_content():
     # A JSON null in a required content field routes the row to the drop path
     # (returns None) instead of producing literal None content.
     assert format_to_messages({"instruction": "hi", "output": None}, "alpaca") is None
-    assert (
-        format_to_messages(
-            {"prompt": "p", "chosen": None, "rejected": "r"}, "dpo"
-        )
-        is None
-    )
+    assert format_to_messages({"prompt": "p", "chosen": None, "rejected": "r"}, "dpo") is None
     # A well-formed row still converts.
     ok = format_to_messages({"instruction": "hi", "output": "yo"}, "alpaca")
     assert ok["messages"][-1]["content"] == "yo"

@@ -207,6 +207,7 @@ def test_help_shows_doctor_and_quickstart():
     assert "doctor" in result.output
     assert "quickstart" in result.output
 
+
 def test_cuda_oom_mentions_gradient_checkpointing():
     """CUDA OOM hint should mention gradient_checkpointing and 4bit."""
     buf = StringIO()
@@ -254,9 +255,7 @@ def test_trust_remote_code_error():
     test_console = Console(file=buf, stderr=False)
 
     with patch("soup_cli.utils.errors.console", test_console):
-        exc = Exception(
-            "This repository requires you to execute the configuration file"
-        )
+        exc = Exception("This repository requires you to execute the configuration file")
         format_friendly_error(exc, verbose=False)
 
     output = buf.getvalue()

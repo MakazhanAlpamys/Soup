@@ -20,8 +20,10 @@ class TestManifest:
         from soup_cli.cans.schema import Manifest
 
         m = Manifest(
-            can_format_version=1, name="my-recipe",
-            author="alice", created_at="2026-04-20",
+            can_format_version=1,
+            name="my-recipe",
+            author="alice",
+            created_at="2026-04-20",
             base_hash="abc",
         )
         assert m.name == "my-recipe"
@@ -32,8 +34,11 @@ class TestManifest:
 
         with pytest.raises(ValueError, match="version"):
             Manifest(
-                can_format_version=99, name="x",
-                author="a", created_at="2026-04-20", base_hash="abc",
+                can_format_version=99,
+                name="x",
+                author="a",
+                created_at="2026-04-20",
+                base_hash="abc",
             )
 
     def test_data_ref_http_rejected(self):
@@ -61,8 +66,11 @@ class TestManifest:
 
         with pytest.raises(ValueError):
             Manifest(
-                can_format_version=1, name="../evil",
-                author="a", created_at="2026-04-20", base_hash="abc",
+                can_format_version=1,
+                name="../evil",
+                author="a",
+                created_at="2026-04-20",
+                base_hash="abc",
             )
 
 
@@ -78,10 +86,12 @@ class TestPackUnpack:
 
         store = RegistryStore()
         eid = store.push(
-            name="recipe", tag="v1", base_model="llama-3.1-8b",
-            task="sft", run_id=None,
-            config={"base": "llama-3.1-8b", "task": "sft",
-                    "training": {"lr": 2e-5}},
+            name="recipe",
+            tag="v1",
+            base_model="llama-3.1-8b",
+            task="sft",
+            run_id=None,
+            config={"base": "llama-3.1-8b", "task": "sft", "training": {"lr": 2e-5}},
             notes="demo",
         )
         store.close()
@@ -153,8 +163,7 @@ class TestPackUnpack:
         from soup_cli.cans.pack import pack_entry
 
         with pytest.raises(ValueError, match="not found|missing"):
-            pack_entry(entry_id="nonexistent",
-                       out_path=str(tmp_path / "x.can"))
+            pack_entry(entry_id="nonexistent", out_path=str(tmp_path / "x.can"))
 
 
 # ---------------------------------------------------------------------------
@@ -170,8 +179,11 @@ class TestFork:
 
         store = RegistryStore()
         eid = store.push(
-            name="recipe", tag="v1", base_model="llama-3.1-8b",
-            task="sft", run_id=None,
+            name="recipe",
+            tag="v1",
+            base_model="llama-3.1-8b",
+            task="sft",
+            run_id=None,
             config={"base": "llama-3.1-8b", "training": {"lr": 2e-5}},
         )
         store.close()
@@ -187,7 +199,8 @@ class TestFork:
         can_path = self._make_can(tmp_path, monkeypatch)
         out = tmp_path / "fork.can"
         fork_can(
-            source=str(can_path), out_path=str(out),
+            source=str(can_path),
+            out_path=str(out),
             modifications=["training.lr=5e-5"],
         )
         assert out.exists()
@@ -213,43 +226,78 @@ class TestCanCLI:
 
         store = RegistryStore()
         eid = store.push(
-            name="demo", tag="v1", base_model="llama", task="sft",
-            run_id=None, config={"base": "llama", "task": "sft"},
+            name="demo",
+            tag="v1",
+            base_model="llama",
+            task="sft",
+            run_id=None,
+            config={"base": "llama", "task": "sft"},
         )
         store.close()
         return eid
 
     def test_pack_cli(self, tmp_path, monkeypatch):
         eid = self._setup(tmp_path, monkeypatch)
-        result = runner.invoke(app, [
-            "can", "pack", "--entry-id", eid, "--out", "demo.can",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "can",
+                "pack",
+                "--entry-id",
+                eid,
+                "--out",
+                "demo.can",
+            ],
+        )
         assert result.exit_code == 0, (result.output, repr(result.exception))
         assert (tmp_path / "demo.can").exists()
 
     def test_inspect_cli(self, tmp_path, monkeypatch):
         eid = self._setup(tmp_path, monkeypatch)
-        runner.invoke(app, [
-            "can", "pack", "--entry-id", eid, "--out", "demo.can",
-        ])
+        runner.invoke(
+            app,
+            [
+                "can",
+                "pack",
+                "--entry-id",
+                eid,
+                "--out",
+                "demo.can",
+            ],
+        )
         result = runner.invoke(app, ["can", "inspect", "demo.can"])
         assert result.exit_code == 0, (result.output, repr(result.exception))
         assert "demo" in result.output
 
     def test_verify_cli(self, tmp_path, monkeypatch):
         eid = self._setup(tmp_path, monkeypatch)
-        runner.invoke(app, [
-            "can", "pack", "--entry-id", eid, "--out", "demo.can",
-        ])
+        runner.invoke(
+            app,
+            [
+                "can",
+                "pack",
+                "--entry-id",
+                eid,
+                "--out",
+                "demo.can",
+            ],
+        )
         result = runner.invoke(app, ["can", "verify", "demo.can"])
         assert result.exit_code == 0, (result.output, repr(result.exception))
 
     def test_pack_rejects_path_traversal_out(self, tmp_path, monkeypatch):
         eid = self._setup(tmp_path, monkeypatch)
-        result = runner.invoke(app, [
-            "can", "pack", "--entry-id", eid,
-            "--out", str(tmp_path.parent / "escape.can"),
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "can",
+                "pack",
+                "--entry-id",
+                eid,
+                "--out",
+                str(tmp_path.parent / "escape.can"),
+            ],
+        )
         assert result.exit_code != 0, (result.output, repr(result.exception))
 
     def test_inspect_missing_file(self, tmp_path, monkeypatch):
@@ -266,9 +314,14 @@ class TestForkSecurity:
         from soup_cli.registry.store import RegistryStore
 
         store = RegistryStore()
-        eid = store.push(name="recipe", tag="v1", base_model="llama",
-                         task="sft", run_id=None,
-                         config={"base": "llama", "training": {"lr": 2e-5}})
+        eid = store.push(
+            name="recipe",
+            tag="v1",
+            base_model="llama",
+            task="sft",
+            run_id=None,
+            config={"base": "llama", "training": {"lr": 2e-5}},
+        )
         store.close()
         out = tmp_path / "recipe.can"
         pack_entry(entry_id=eid, out_path=str(out))
@@ -283,9 +336,7 @@ class TestForkSecurity:
         outside.write_bytes(b"dummy")
         try:
             with pytest.raises(ValueError, match="outside|cwd"):
-                fork_can(source=str(outside),
-                         out_path=str(tmp_path / "out.can"),
-                         modifications=[])
+                fork_can(source=str(outside), out_path=str(tmp_path / "out.can"), modifications=[])
         finally:
             outside.unlink(missing_ok=True)
 
@@ -294,19 +345,25 @@ class TestForkSecurity:
 
         can = self._make_can(tmp_path, monkeypatch)
         with pytest.raises(ValueError, match="dunder|forbidden"):
-            fork_can(source=str(can), out_path=str(tmp_path / "fork.can"),
-                     modifications=["__class__.__init__=evil"])
+            fork_can(
+                source=str(can),
+                out_path=str(tmp_path / "fork.can"),
+                modifications=["__class__.__init__=evil"],
+            )
 
     def test_fork_rejects_null_byte(self, tmp_path, monkeypatch):
         from soup_cli.cans.pack import fork_can
 
         can = self._make_can(tmp_path, monkeypatch)
         with pytest.raises(ValueError, match="null byte"):
-            fork_can(source=str(can), out_path=str(tmp_path / "fork.can"),
-                     modifications=["k\x00ey=1"])
+            fork_can(
+                source=str(can), out_path=str(tmp_path / "fork.can"), modifications=["k\x00ey=1"]
+            )
 
     def test_fork_with_empty_modifications_preserves_config(
-        self, tmp_path, monkeypatch,
+        self,
+        tmp_path,
+        monkeypatch,
     ):
         from soup_cli.cans.pack import fork_can
         from soup_cli.cans.unpack import read_config
@@ -324,8 +381,10 @@ class TestManifestValidation:
 
         with pytest.raises(ValueError, match="null|newline"):
             Manifest(
-                can_format_version=1, name="x",
-                author="alice\ninject", created_at="2026-04-20",
+                can_format_version=1,
+                name="x",
+                author="alice\ninject",
+                created_at="2026-04-20",
                 base_hash="abc",
             )
 
@@ -334,21 +393,30 @@ class TestManifestValidation:
 
         with pytest.raises(ValueError):
             Manifest(
-                can_format_version=1, name="x",
-                author="a" * 500, created_at="2026-04-20",
+                can_format_version=1,
+                name="x",
+                author="a" * 500,
+                created_at="2026-04-20",
                 base_hash="abc",
             )
 
     def test_created_at_parseability(self):
         from soup_cli.cans.schema import Manifest
 
-        Manifest(can_format_version=1, name="x", author="a",
-                 created_at="2026-04-20", base_hash="abc")
-        Manifest(can_format_version=1, name="x", author="a",
-                 created_at="2026-04-20T12:34:56", base_hash="abc")
+        Manifest(
+            can_format_version=1, name="x", author="a", created_at="2026-04-20", base_hash="abc"
+        )
+        Manifest(
+            can_format_version=1,
+            name="x",
+            author="a",
+            created_at="2026-04-20T12:34:56",
+            base_hash="abc",
+        )
         with pytest.raises(ValueError, match="ISO"):
-            Manifest(can_format_version=1, name="x", author="a",
-                     created_at="not-a-date", base_hash="abc")
+            Manifest(
+                can_format_version=1, name="x", author="a", created_at="not-a-date", base_hash="abc"
+            )
 
 
 class TestVerifyEdgeCases:

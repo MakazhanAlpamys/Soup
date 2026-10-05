@@ -217,10 +217,7 @@ class TestFreezeModelLayers:
         from soup_cli.utils.freeze import _detect_num_layers
 
         model = MagicMock()
-        params = [
-            (f"model.layers.{idx}.self_attn.weight", MagicMock())
-            for idx in range(32)
-        ]
+        params = [(f"model.layers.{idx}.self_attn.weight", MagicMock()) for idx in range(32)]
         model.named_parameters.return_value = params
         assert _detect_num_layers(model) == 32
 
@@ -239,10 +236,7 @@ class TestFreezeModelLayers:
         from soup_cli.utils.freeze import _detect_num_layers
 
         model = MagicMock()
-        params = [
-            (f"transformer.h.{idx}.attn.weight", MagicMock())
-            for idx in range(12)
-        ]
+        params = [(f"transformer.h.{idx}.attn.weight", MagicMock()) for idx in range(12)]
         model.named_parameters.return_value = params
         assert _detect_num_layers(model) == 12
 

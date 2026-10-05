@@ -39,9 +39,7 @@ def test_compare_gradients_counts_a_mismatch() -> None:
 
 @pytest.mark.parametrize("bad", [float("inf"), float("nan")])
 @pytest.mark.parametrize("side", ["streamed", "reference"])
-def test_compare_gradients_refuses_non_finite_on_either_side(
-    bad: float, side: str
-) -> None:
+def test_compare_gradients_refuses_non_finite_on_either_side(bad: float, side: str) -> None:
     good = {"lora_A": torch.ones(2)}
     broken = {"lora_A": torch.tensor([bad, 1.0])}
     streamed, reference = (broken, good) if side == "streamed" else (good, broken)

@@ -172,9 +172,7 @@ def test_build_plan_rejects_invalid_num_probes(tmp_path, monkeypatch, nb):
     _make_files(tmp_path, ["a.jsonl", "b.jsonl"])
     monkeypatch.chdir(tmp_path)
     with pytest.raises(ValueError, match="num_probes"):
-        build_optimization_plan(
-            ["a.jsonl", "b.jsonl"], budget="60s", num_probes=nb
-        )
+        build_optimization_plan(["a.jsonl", "b.jsonl"], budget="60s", num_probes=nb)
 
 
 def test_build_plan_rejects_bool_num_probes(tmp_path, monkeypatch):
@@ -182,7 +180,9 @@ def test_build_plan_rejects_bool_num_probes(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     with pytest.raises(ValueError, match="num_probes must be int, not bool"):
         build_optimization_plan(
-            ["a.jsonl", "b.jsonl"], budget="60s", num_probes=True  # type: ignore[arg-type]
+            ["a.jsonl", "b.jsonl"],
+            budget="60s",
+            num_probes=True,  # type: ignore[arg-type]
         )
 
 
@@ -190,9 +190,7 @@ def test_build_plan_rejects_invalid_seed(tmp_path, monkeypatch):
     _make_files(tmp_path, ["a.jsonl", "b.jsonl"])
     monkeypatch.chdir(tmp_path)
     with pytest.raises(ValueError, match="seed"):
-        build_optimization_plan(
-            ["a.jsonl", "b.jsonl"], budget="60s", seed=-1
-        )
+        build_optimization_plan(["a.jsonl", "b.jsonl"], budget="60s", seed=-1)
 
 
 # ---------- BudgetTracker -------------------------------------------------
@@ -252,38 +250,32 @@ def test_budget_tracker_elapsed_before_start_zero():
 
 
 def test_mix_candidate_happy():
-    c = MixCandidate(
-        weights=(0.5, 0.5), eval_loss=1.0, wall_clock_seconds=5.0
-    )
+    c = MixCandidate(weights=(0.5, 0.5), eval_loss=1.0, wall_clock_seconds=5.0)
     assert c.eval_loss == 1.0
 
 
 def test_mix_candidate_frozen():
-    c = MixCandidate(
-        weights=(0.5, 0.5), eval_loss=1.0, wall_clock_seconds=5.0
-    )
+    c = MixCandidate(weights=(0.5, 0.5), eval_loss=1.0, wall_clock_seconds=5.0)
     with pytest.raises(Exception):
         c.eval_loss = 2.0  # type: ignore[misc]
 
 
 def test_mix_candidate_rejects_non_simplex():
     with pytest.raises(ValueError, match="sum to 1"):
-        MixCandidate(
-            weights=(0.5, 0.3), eval_loss=1.0, wall_clock_seconds=1.0
-        )
+        MixCandidate(weights=(0.5, 0.3), eval_loss=1.0, wall_clock_seconds=1.0)
 
 
 def test_mix_candidate_rejects_negative_weight():
     with pytest.raises(ValueError, match="weight must be in"):
-        MixCandidate(
-            weights=(-0.1, 1.1), eval_loss=1.0, wall_clock_seconds=1.0
-        )
+        MixCandidate(weights=(-0.1, 1.1), eval_loss=1.0, wall_clock_seconds=1.0)
 
 
 def test_mix_candidate_rejects_bool_weight():
     with pytest.raises(ValueError, match="weight must be float, not bool"):
         MixCandidate(
-            weights=(True, False), eval_loss=1.0, wall_clock_seconds=1.0  # type: ignore[arg-type]
+            weights=(True, False),
+            eval_loss=1.0,
+            wall_clock_seconds=1.0,  # type: ignore[arg-type]
         )
 
 
@@ -295,7 +287,9 @@ def test_mix_candidate_rejects_empty_weights():
 def test_mix_candidate_rejects_non_tuple_weights():
     with pytest.raises(TypeError, match="weights must be tuple"):
         MixCandidate(
-            weights=[0.5, 0.5], eval_loss=1.0, wall_clock_seconds=1.0  # type: ignore[arg-type]
+            weights=[0.5, 0.5],
+            eval_loss=1.0,
+            wall_clock_seconds=1.0,  # type: ignore[arg-type]
         )
 
 
@@ -310,9 +304,7 @@ def test_mix_candidate_rejects_nan_loss():
 
 def test_mix_candidate_rejects_negative_wall_clock():
     with pytest.raises(ValueError, match="wall_clock_seconds must be >= 0"):
-        MixCandidate(
-            weights=(0.5, 0.5), eval_loss=1.0, wall_clock_seconds=-1.0
-        )
+        MixCandidate(weights=(0.5, 0.5), eval_loss=1.0, wall_clock_seconds=-1.0)
 
 
 def test_mix_candidate_rejects_oversize_loss():
@@ -330,9 +322,7 @@ def test_mix_candidate_rejects_oversize_loss():
 def _make_plan(tmp_path, monkeypatch, num_probes=4, budget="60s"):
     _make_files(tmp_path, ["a.jsonl", "b.jsonl"])
     monkeypatch.chdir(tmp_path)
-    return build_optimization_plan(
-        ["a.jsonl", "b.jsonl"], budget=budget, num_probes=num_probes
-    )
+    return build_optimization_plan(["a.jsonl", "b.jsonl"], budget=budget, num_probes=num_probes)
 
 
 def test_run_mix_optimizer_happy(tmp_path, monkeypatch):
@@ -504,8 +494,8 @@ def test_render_recipe_shape(tmp_path):
     # the full-list shape for >= 2 datasets — train: is now a YAML list,
     # index-aligned with interleave.probs.
     assert "  train:" in text
-    assert f'- {json.dumps(str(tmp_path / "a.jsonl"))}' in text
-    assert f'- {json.dumps(str(tmp_path / "b.jsonl"))}' in text
+    assert f"- {json.dumps(str(tmp_path / 'a.jsonl'))}" in text
+    assert f"- {json.dumps(str(tmp_path / 'b.jsonl'))}" in text
 
 
 def test_render_recipe_rejects_non_report():
@@ -666,6 +656,7 @@ def test_mix_cli_help():
     from typer.testing import CliRunner
 
     from soup_cli.cli import app
+
     runner = CliRunner()
     result = runner.invoke(app, ["data", "mix", "--help"])
     assert result.exit_code == 0
@@ -676,6 +667,7 @@ def test_mix_cli_requires_mode():
     from typer.testing import CliRunner
 
     from soup_cli.cli import app
+
     runner = CliRunner()
     result = runner.invoke(app, ["data", "mix"])
     assert result.exit_code == 2
@@ -687,6 +679,7 @@ def test_mix_cli_mutual_exclusion(tmp_path, monkeypatch):
     from typer.testing import CliRunner
 
     from soup_cli.cli import app
+
     runner = CliRunner()
     result = runner.invoke(
         app,
@@ -700,6 +693,7 @@ def test_mix_cli_optimize_requires_datasets(tmp_path, monkeypatch):
     from typer.testing import CliRunner
 
     from soup_cli.cli import app
+
     runner = CliRunner()
     result = runner.invoke(app, ["data", "mix", "--optimize"])
     assert result.exit_code == 2
@@ -711,15 +705,20 @@ def test_mix_cli_optimize_happy(tmp_path, monkeypatch):
     from typer.testing import CliRunner
 
     from soup_cli.cli import app
+
     runner = CliRunner()
     result = runner.invoke(
         app,
         [
-            "data", "mix",
+            "data",
+            "mix",
             "--optimize",
-            "--datasets", "a.jsonl,b.jsonl",
-            "--budget", "60s",
-            "--num-probes", "2",
+            "--datasets",
+            "a.jsonl,b.jsonl",
+            "--budget",
+            "60s",
+            "--num-probes",
+            "2",
         ],
     )
     assert result.exit_code == 0, (result.output, repr(result.exception))
@@ -731,13 +730,18 @@ def test_mix_cli_optimize_invalid_datasets(tmp_path, monkeypatch):
     from typer.testing import CliRunner
 
     from soup_cli.cli import app
+
     runner = CliRunner()
     result = runner.invoke(
         app,
         [
-            "data", "mix", "--optimize",
-            "--datasets", "missing-and-only-one.jsonl",
-            "--budget", "60s",
+            "data",
+            "mix",
+            "--optimize",
+            "--datasets",
+            "missing-and-only-one.jsonl",
+            "--budget",
+            "60s",
         ],
     )
     assert result.exit_code == 2
@@ -750,17 +754,23 @@ def test_mix_cli_apply_happy(tmp_path, monkeypatch):
     from typer.testing import CliRunner
 
     from soup_cli.cli import app
+
     runner = CliRunner()
     # First generate a recipe.
     result = runner.invoke(
         app,
         [
-            "data", "mix",
+            "data",
+            "mix",
             "--optimize",
-            "--datasets", "a.jsonl,b.jsonl",
-            "--budget", "60s",
-            "--num-probes", "2",
-            "--output", "rec.yaml",
+            "--datasets",
+            "a.jsonl,b.jsonl",
+            "--budget",
+            "60s",
+            "--num-probes",
+            "2",
+            "--output",
+            "rec.yaml",
         ],
     )
     assert result.exit_code == 0
@@ -779,10 +789,9 @@ def test_mix_cli_apply_outside_cwd(tmp_path, monkeypatch):
     from typer.testing import CliRunner
 
     from soup_cli.cli import app
+
     runner = CliRunner()
-    result = runner.invoke(
-        app, ["data", "mix", "--apply", str(outside)]
-    )
+    result = runner.invoke(app, ["data", "mix", "--apply", str(outside)])
     assert result.exit_code == 2
 
 
@@ -812,9 +821,7 @@ def test_build_plan_rejects_seed_at_upper_boundary(tmp_path, monkeypatch):
     _make_files(tmp_path, ["a.jsonl", "b.jsonl"])
     monkeypatch.chdir(tmp_path)
     with pytest.raises(ValueError, match="seed must be in"):
-        build_optimization_plan(
-            ["a.jsonl", "b.jsonl"], budget="60s", seed=2**31
-        )
+        build_optimization_plan(["a.jsonl", "b.jsonl"], budget="60s", seed=2**31)
 
 
 @pytest.mark.parametrize("raw", ["59s", "0s", "0m", "0h"])
@@ -849,15 +856,22 @@ def test_mix_cli_optimize_recipe_content(tmp_path, monkeypatch):
     from typer.testing import CliRunner
 
     from soup_cli.cli import app
+
     runner = CliRunner()
     result = runner.invoke(
         app,
         [
-            "data", "mix", "--optimize",
-            "--datasets", "a.jsonl,b.jsonl",
-            "--budget", "60s",
-            "--num-probes", "2",
-            "--output", "rec.yaml",
+            "data",
+            "mix",
+            "--optimize",
+            "--datasets",
+            "a.jsonl,b.jsonl",
+            "--budget",
+            "60s",
+            "--num-probes",
+            "2",
+            "--output",
+            "rec.yaml",
         ],
     )
     assert result.exit_code == 0, (result.output, repr(result.exception))

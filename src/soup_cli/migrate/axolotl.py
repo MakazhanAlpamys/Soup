@@ -69,8 +69,7 @@ def migrate_axolotl(config_path: Path) -> Dict[str, Any]:
         if rl_type not in _RL_MAP:
             supported = ", ".join(sorted(_RL_MAP))
             raise ValueError(
-                f"No Soup task matches axolotl rl: {rl_type}. Supported rl "
-                f"values are {supported}."
+                f"No Soup task matches axolotl rl: {rl_type}. Supported rl values are {supported}."
             )
         task = _RL_MAP[rl_type]
     else:
@@ -190,13 +189,10 @@ def migrate_axolotl(config_path: Path) -> Dict[str, Any]:
     # --- Unsupported features ---
     if raw.get("sample_packing"):
         warnings.append(
-            "sample_packing is not supported in Soup. "
-            "Sequences will be padded individually."
+            "sample_packing is not supported in Soup. Sequences will be padded individually."
         )
     if raw.get("wandb_project"):
-        warnings.append(
-            f"wandb_project: {raw['wandb_project']}. Use --wandb flag with soup train."
-        )
+        warnings.append(f"wandb_project: {raw['wandb_project']}. Use --wandb flag with soup train.")
 
     result: Dict[str, Any] = {
         "base": base,

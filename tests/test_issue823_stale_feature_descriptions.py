@@ -59,8 +59,7 @@ def _schema_description_is_stale(
     allowed_schema_only_fields: frozenset[str] = ALLOWED_SCHEMA_ONLY_FIELDS,
 ) -> bool:
     return _has_expired_version_promise(description) or (
-        SCHEMA_ONLY.search(description) is not None
-        and name not in allowed_schema_only_fields
+        SCHEMA_ONLY.search(description) is not None and name not in allowed_schema_only_fields
     )
 
 
@@ -167,9 +166,7 @@ def test_schema_raise_messages_have_no_expired_release_promises() -> None:
     messages = _schema_raise_messages()
     assert len(messages) >= 300
     offenders = [
-        f"schema.py:{line}: {text}"
-        for line, text in messages
-        if _has_expired_version_promise(text)
+        f"schema.py:{line}: {text}" for line, text in messages if _has_expired_version_promise(text)
     ]
     assert offenders == []
 
@@ -177,7 +174,7 @@ def test_schema_raise_messages_have_no_expired_release_promises() -> None:
 def test_the_raise_scanner_reads_f_strings(tmp_path: Path) -> None:
     sample = tmp_path / "schema.py"
     sample.write_text(
-        'def check(task):\n'
+        "def check(task):\n"
         '    raise ValueError(f"got {task!r}; " "the runtime ships in v0.62.1.")\n',
         encoding="utf-8",
     )

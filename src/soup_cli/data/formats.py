@@ -55,8 +55,18 @@ MAX_DETECT_ROWS = 100
 # BEFORE plaintext ({text}) — its signature is a superset, so plaintext
 # would otherwise win and silently drop the audio path. plaintext last.
 _CHECK_ORDER = [
-    "alpaca", "llava", "sharegpt4v", "kto", "dpo", "embedding",
-    "tool-calling", "audio", "asr", "sharegpt", "chatml", "plaintext",
+    "alpaca",
+    "llava",
+    "sharegpt4v",
+    "kto",
+    "dpo",
+    "embedding",
+    "tool-calling",
+    "audio",
+    "asr",
+    "sharegpt",
+    "chatml",
+    "plaintext",
 ]
 
 
@@ -182,9 +192,7 @@ def detect_format(data: list[dict]) -> str:
                 poorer, poorer_idx, richer_idx = fmt_b, idx_b, idx_a
             else:
                 poorer, poorer_idx, richer_idx = fmt_a, idx_a, idx_b
-            poorer_rows = [
-                row for row, fmt in zip(sampled, row_formats) if fmt == poorer
-            ]
+            poorer_rows = [row for row, fmt in zip(sampled, row_formats) if fmt == poorer]
             # The richer converter must accept EVERY poorer row, and must
             # convert it to the same messages the poorer one would: the
             # tool-calling converter rebuilds each message from role, content,
@@ -221,10 +229,23 @@ def detect_format(data: list[dict]) -> str:
 # Every format format_to_messages can convert. Kept as a module constant so
 # the plain and reason-returning entry points share one source of truth.
 VALID_FORMATS = (
-    "chatml", "alpaca", "sharegpt", "dpo", "kto", "llava", "sharegpt4v",
-    "plaintext", "embedding", "audio", "tool-calling",
+    "chatml",
+    "alpaca",
+    "sharegpt",
+    "dpo",
+    "kto",
+    "llava",
+    "sharegpt4v",
+    "plaintext",
+    "embedding",
+    "audio",
+    "tool-calling",
     # v0.42.0 Part A
-    "prm", "pre_tokenized", "input_output", "video", "multimodal",
+    "prm",
+    "pre_tokenized",
+    "input_output",
+    "video",
+    "multimodal",
     # v0.62.0 Part A — RAFT (Retrieval-Augmented Fine-Tuning).
     "raft",
     # v0.71.32 — ASR (Whisper): {"audio": path, "text": transcript}.
@@ -305,9 +326,7 @@ def format_to_messages(row: dict, fmt: str) -> Optional[dict]:
         return None
 
 
-def format_to_messages_with_reason(
-    row: dict, fmt: str
-) -> tuple[Optional[dict], Optional[str]]:
+def format_to_messages_with_reason(row: dict, fmt: str) -> tuple[Optional[dict], Optional[str]]:
     """Like :func:`format_to_messages`, but also report why a row was dropped.
 
     Returns ``(converted, None)`` for a good row, or ``(None, reason)`` for one
@@ -414,9 +433,7 @@ def _convert_kto(row: dict) -> dict:
         elif low in ("false", "0", "no"):
             label = False
         else:
-            raise ValueError(
-                f"KTO label must be true/false, got string: {raw_label!r}"
-            )
+            raise ValueError(f"KTO label must be true/false, got string: {raw_label!r}")
     elif isinstance(raw_label, bool):
         label = raw_label
     elif isinstance(raw_label, (int, float)):
@@ -578,9 +595,7 @@ def _normalize_tool_calls(tool_calls: object, field: str) -> list[dict]:
             try:
                 json.loads(args)
             except json.JSONDecodeError as exc:
-                raise ValueError(
-                    f"tool_calls 'arguments' must be JSON-parseable: {exc}"
-                ) from exc
+                raise ValueError(f"tool_calls 'arguments' must be JSON-parseable: {exc}") from exc
             args_str = args
         elif isinstance(args, dict):
             args_str = json.dumps(args)
@@ -642,9 +657,7 @@ def _convert_tool_calling(row: dict) -> dict:
         try:
             tools = json.loads(tools)
         except json.JSONDecodeError as exc:
-            raise ValueError(
-                f"tool-calling 'tools' is a string that is not JSON: {exc}"
-            ) from exc
+            raise ValueError(f"tool-calling 'tools' is a string that is not JSON: {exc}") from exc
     if tools is not None:
         if not isinstance(tools, list):
             raise ValueError("tool-calling 'tools' must be a list")
@@ -654,8 +667,7 @@ def _convert_tool_calling(row: dict) -> dict:
 
     top_level_calls = row.get("tool_calls")
     legacy_tool_calls = (
-        [] if top_level_calls is None
-        else _normalize_tool_calls(top_level_calls, "tool_calls")
+        [] if top_level_calls is None else _normalize_tool_calls(top_level_calls, "tool_calls")
     )
 
     original_messages = row["messages"]
@@ -673,14 +685,16 @@ def _convert_tool_calling(row: dict) -> dict:
             tool_schema_descriptions.append(
                 f"- {tool_name}: {description}\n  parameters: {json.dumps(params)}"
             )
-        messages.append({
-            "role": "system",
-            "content": (
-                "You have access to the following tools. When a tool call is "
-                "needed, respond with a function call in JSON.\n\n"
-                + "\n".join(tool_schema_descriptions)
-            ),
-        })
+        messages.append(
+            {
+                "role": "system",
+                "content": (
+                    "You have access to the following tools. When a tool call is "
+                    "needed, respond with a function call in JSON.\n\n"
+                    + "\n".join(tool_schema_descriptions)
+                ),
+            }
+        )
 
     has_nested_calls = False
     for msg in original_messages:
@@ -714,11 +728,13 @@ def _convert_tool_calling(row: dict) -> dict:
         messages.append(out)
 
     if legacy_tool_calls and not has_nested_calls:
-        messages.append({
-            "role": "assistant",
-            "content": "",
-            "tool_calls": legacy_tool_calls,
-        })
+        messages.append(
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": legacy_tool_calls,
+            }
+        )
 
     return {"messages": messages}
 
@@ -777,10 +793,12 @@ def _to_sharegpt(messages: list[dict]) -> dict:
     role_map = {"user": "human", "assistant": "gpt", "system": "system"}
     conversations = []
     for msg in messages:
-        conversations.append({
-            "from": role_map.get(msg["role"], msg["role"]),
-            "value": msg["content"],
-        })
+        conversations.append(
+            {
+                "from": role_map.get(msg["role"], msg["role"]),
+                "value": msg["content"],
+            }
+        )
     return {"conversations": conversations}
 
 
@@ -896,17 +914,13 @@ def _convert_multimodal(row: dict) -> dict:
         if isinstance(content, str):
             continue  # back-compat with plain strings
         if not isinstance(content, list):
-            raise ValueError(
-                "multimodal message.content must be a list of parts or a string"
-            )
+            raise ValueError("multimodal message.content must be a list of parts or a string")
         for part in content:
             if not isinstance(part, dict):
                 raise ValueError("multimodal content part must be a dict")
             ptype = part.get("type")
             if ptype not in valid_types:
-                raise ValueError(
-                    f"multimodal content part.type must be in {sorted(valid_types)}"
-                )
+                raise ValueError(f"multimodal content part.type must be in {sorted(valid_types)}")
     return {"messages": messages}
 
 
@@ -922,17 +936,13 @@ def _check_raft_string(name: str, value: object) -> str:
     paragraphs verbatim in the golden_doc field.
     """
     if not isinstance(value, str):
-        raise ValueError(
-            f"RAFT '{name}' must be a string, got {type(value).__name__}"
-        )
+        raise ValueError(f"RAFT '{name}' must be a string, got {type(value).__name__}")
     if not value:
         raise ValueError(f"RAFT '{name}' must be a non-empty string")
     if "\x00" in value:
         raise ValueError(f"RAFT '{name}' must not contain null bytes")
     if len(value) > _MAX_RAFT_FIELD_LEN:
-        raise ValueError(
-            f"RAFT '{name}' must be <= {_MAX_RAFT_FIELD_LEN} chars"
-        )
+        raise ValueError(f"RAFT '{name}' must be <= {_MAX_RAFT_FIELD_LEN} chars")
     return value
 
 
@@ -969,9 +979,7 @@ def _convert_raft(row: dict) -> dict:
         )
     cleaned_distractors: list[str] = []
     for index, doc in enumerate(raw_distractors):
-        cleaned_distractors.append(
-            _check_raft_string(f"distractor_docs[{index}]", doc)
-        )
+        cleaned_distractors.append(_check_raft_string(f"distractor_docs[{index}]", doc))
 
     return {
         "query": query,

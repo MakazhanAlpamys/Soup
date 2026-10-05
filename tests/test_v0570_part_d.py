@@ -61,8 +61,7 @@ def test_create_branch_happy(tmp_path):
 def test_create_branch_with_dataset(tmp_path):
     _make_config(tmp_path)
     (tmp_path / "data.jsonl").write_text('{"x": 1}\n', encoding="utf-8")
-    snap = create_branch("v1", config_path="soup.yaml", base_model="b",
-                          dataset_path="data.jsonl")
+    snap = create_branch("v1", config_path="soup.yaml", base_model="b", dataset_path="data.jsonl")
     assert snap.dataset_sha256 is not None
     assert len(snap.dataset_sha256) == 64
 
@@ -114,8 +113,7 @@ def test_create_branch_bool_base_model_rejected(tmp_path):
     """bool subclasses str-checks in some idioms; ensure explicit TypeError."""
     _make_config(tmp_path)
     with pytest.raises(TypeError):
-        create_branch("v1", config_path="soup.yaml",
-                       base_model=True)  # type: ignore[arg-type]
+        create_branch("v1", config_path="soup.yaml", base_model=True)  # type: ignore[arg-type]
 
 
 def test_delete_branch_traversal_rejected():
@@ -288,6 +286,7 @@ def test_write_checkout_missing_source(tmp_path):
 
 def test_branch_frozen(tmp_path):
     import dataclasses
+
     _make_config(tmp_path)
     snap = create_branch("v1", config_path="soup.yaml", base_model="m")
     with pytest.raises(dataclasses.FrozenInstanceError):
@@ -305,6 +304,7 @@ def test_branches_dir_env_override_outside_falls_back(monkeypatch, tmp_path):
     overrides ARE honoured — i.e. we test both directions of the policy here.
     """
     from soup_cli.utils.adapter_branch import _branches_dir
+
     in_bounds = tmp_path / "valid-override"
     monkeypatch.setenv("SOUP_BRANCHES_DIR", str(in_bounds))
     monkeypatch.chdir(tmp_path)
@@ -362,10 +362,18 @@ def test_branch_cli_create_and_list(tmp_path, monkeypatch):
     monkeypatch.setenv("SOUP_BRANCHES_DIR", str(tmp_path / "br"))
     monkeypatch.chdir(tmp_path)
     _make_config(tmp_path)
-    r1 = runner.invoke(soup_app, [
-        "adapters", "branch", "v1",
-        "-c", "soup.yaml", "--base", "meta/llama",
-    ])
+    r1 = runner.invoke(
+        soup_app,
+        [
+            "adapters",
+            "branch",
+            "v1",
+            "-c",
+            "soup.yaml",
+            "--base",
+            "meta/llama",
+        ],
+    )
     assert r1.exit_code == 0, (r1.output, repr(r1.exception))
     assert "v1" in r1.output
 
@@ -378,10 +386,18 @@ def test_branch_cli_invalid_name(tmp_path, monkeypatch):
     monkeypatch.setenv("SOUP_BRANCHES_DIR", str(tmp_path / "br"))
     monkeypatch.chdir(tmp_path)
     _make_config(tmp_path)
-    result = runner.invoke(soup_app, [
-        "adapters", "branch", "../etc",
-        "-c", "soup.yaml", "--base", "m",
-    ])
+    result = runner.invoke(
+        soup_app,
+        [
+            "adapters",
+            "branch",
+            "../etc",
+            "-c",
+            "soup.yaml",
+            "--base",
+            "m",
+        ],
+    )
     assert result.exit_code == 2
     assert "must match" in _strip_ansi(result.output)
 
@@ -389,10 +405,18 @@ def test_branch_cli_invalid_name(tmp_path, monkeypatch):
 def test_branch_cli_missing_config(tmp_path, monkeypatch):
     monkeypatch.setenv("SOUP_BRANCHES_DIR", str(tmp_path / "br"))
     monkeypatch.chdir(tmp_path)
-    result = runner.invoke(soup_app, [
-        "adapters", "branch", "v1",
-        "-c", "missing.yaml", "--base", "m",
-    ])
+    result = runner.invoke(
+        soup_app,
+        [
+            "adapters",
+            "branch",
+            "v1",
+            "-c",
+            "missing.yaml",
+            "--base",
+            "m",
+        ],
+    )
     assert result.exit_code == 1
     assert "not found" in _strip_ansi(result.output)
 
@@ -402,10 +426,16 @@ def test_checkout_cli_roundtrip(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     _make_config(tmp_path, content="base: x\nepochs: 1\n")
     create_branch("v1", config_path="soup.yaml", base_model="m")
-    result = runner.invoke(soup_app, [
-        "adapters", "checkout", "v1",
-        "-o", "restored.yaml",
-    ])
+    result = runner.invoke(
+        soup_app,
+        [
+            "adapters",
+            "checkout",
+            "v1",
+            "-o",
+            "restored.yaml",
+        ],
+    )
     assert result.exit_code == 0, (result.output, repr(result.exception))
     assert (tmp_path / "restored.yaml").exists()
 
@@ -413,9 +443,16 @@ def test_checkout_cli_roundtrip(tmp_path, monkeypatch):
 def test_checkout_cli_missing_branch(tmp_path, monkeypatch):
     monkeypatch.setenv("SOUP_BRANCHES_DIR", str(tmp_path / "br"))
     monkeypatch.chdir(tmp_path)
-    result = runner.invoke(soup_app, [
-        "adapters", "checkout", "nope", "-o", "out.yaml",
-    ])
+    result = runner.invoke(
+        soup_app,
+        [
+            "adapters",
+            "checkout",
+            "nope",
+            "-o",
+            "out.yaml",
+        ],
+    )
     assert result.exit_code == 1
     assert "not found" in _strip_ansi(result.output)
 

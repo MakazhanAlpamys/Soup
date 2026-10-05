@@ -12,9 +12,9 @@ from html import escape
 from soup_cli.utils.diagnose.report import FAILURE_MODES, FailureReport
 
 _VERDICT_COLOUR = {
-    "OK": "#3fb950",       # green
-    "MINOR": "#d29922",    # amber
-    "MAJOR": "#f85149",    # red
+    "OK": "#3fb950",  # green
+    "MINOR": "#d29922",  # amber
+    "MAJOR": "#f85149",  # red
     "NOT_RUN": "#8b949e",  # grey: a probe that never ran is not a pass (#1435)
 }
 
@@ -65,7 +65,7 @@ def render_badge_svg(report: FailureReport) -> str:
         f'viewBox="0 0 {width} 92">'
         '<rect width="100%" height="100%" rx="8" fill="#0d1117" />'
         f'<text x="12" y="22" font-size="13" font-family="monospace" fill="#c9d1d9">'
-        f'soup diagnose: {name}</text>'
+        f"soup diagnose: {name}</text>"
         f'<rect x="{width - 80}" y="8" width="72" height="20" rx="10" '
         f'fill="{overall_colour}" />'
         f'<text x="{width - 44}" y="22" font-size="12" font-family="monospace" '

@@ -88,7 +88,9 @@ class TestJudgeFilterPairs:
     def test_lower_threshold_keeps_borderline(self):
         judge = _FakeJudge([3, 2])  # diff 0.25
         kept, report = judge_filter_pairs(
-            [_pair()], judge=judge, min_confidence=0.2,
+            [_pair()],
+            judge=judge,
+            min_confidence=0.2,
         )
         assert len(kept) == 1
         assert report.kept == 1
@@ -100,28 +102,23 @@ class TestJudgeFilterPairs:
 
     def test_rejects_non_numeric_threshold(self):
         with pytest.raises(TypeError):
-            judge_filter_pairs([_pair()], judge=_FakeJudge([5, 1]),
-                                min_confidence="0.7")  # type: ignore[arg-type]
+            judge_filter_pairs([_pair()], judge=_FakeJudge([5, 1]), min_confidence="0.7")  # type: ignore[arg-type]
 
     def test_rejects_bool_threshold(self):
         with pytest.raises(TypeError):
-            judge_filter_pairs([_pair()], judge=_FakeJudge([5, 1]),
-                                min_confidence=True)  # type: ignore[arg-type]
+            judge_filter_pairs([_pair()], judge=_FakeJudge([5, 1]), min_confidence=True)  # type: ignore[arg-type]
 
     def test_rejects_threshold_above_one(self):
         with pytest.raises(ValueError):
-            judge_filter_pairs([_pair()], judge=_FakeJudge([5, 1]),
-                                min_confidence=1.5)
+            judge_filter_pairs([_pair()], judge=_FakeJudge([5, 1]), min_confidence=1.5)
 
     def test_rejects_threshold_below_zero(self):
         with pytest.raises(ValueError):
-            judge_filter_pairs([_pair()], judge=_FakeJudge([5, 1]),
-                                min_confidence=-0.1)
+            judge_filter_pairs([_pair()], judge=_FakeJudge([5, 1]), min_confidence=-0.1)
 
     def test_rejects_nan_threshold(self):
         with pytest.raises(ValueError):
-            judge_filter_pairs([_pair()], judge=_FakeJudge([5, 1]),
-                                min_confidence=float("nan"))
+            judge_filter_pairs([_pair()], judge=_FakeJudge([5, 1]), min_confidence=float("nan"))
 
     def test_too_many_pairs_rejected(self):
         too_many = [_pair() for _ in range(100_001)]
@@ -155,14 +152,18 @@ class TestJudgeFilterPairs:
         # scale_max == scale_min → both normalised to 0 → diff=0 → dropped at >0.
         judge = _FakeJudge([3, 3], scale=(5, 5))
         kept, report = judge_filter_pairs(
-            [_pair()], judge=judge, min_confidence=0.1,
+            [_pair()],
+            judge=judge,
+            min_confidence=0.1,
         )
         assert kept == [] and report.dropped == 1
 
     def test_degenerate_scale_keeps_all_at_zero_threshold(self):
         judge = _FakeJudge([3, 3], scale=(5, 5))
         kept, _ = judge_filter_pairs(
-            [_pair()], judge=judge, min_confidence=0.0,
+            [_pair()],
+            judge=judge,
+            min_confidence=0.0,
         )
         assert len(kept) == 1
 
@@ -176,7 +177,8 @@ class TestJudgeFilterPairs:
 
         with pytest.raises(ValueError):
             judge_filter_pairs(
-                _explode_after(100_001), judge=_FakeJudge([5, 1] * 100_000),
+                _explode_after(100_001),
+                judge=_FakeJudge([5, 1] * 100_000),
             )
 
 
@@ -218,13 +220,19 @@ class TestFromTracesJudgeCli:
         result = runner.invoke(
             soup_app,
             [
-                "data", "from-traces",
-                "--logs", str(traces),
-                "--format", "langchain",
-                "--signal", "thumbs_up",
-                "--output", str(out),
+                "data",
+                "from-traces",
+                "--logs",
+                str(traces),
+                "--format",
+                "langchain",
+                "--signal",
+                "thumbs_up",
+                "--output",
+                str(out),
                 "--judge",
-                "--min-confidence", "0.5",
+                "--min-confidence",
+                "0.5",
             ],
         )
         assert result.exit_code == 0, (result.output, repr(result.exception))
@@ -250,13 +258,19 @@ class TestFromTracesJudgeCli:
         result = runner.invoke(
             soup_app,
             [
-                "data", "from-traces",
-                "--logs", str(traces),
-                "--format", "langchain",
-                "--signal", "thumbs_up",
-                "--output", str(out),
+                "data",
+                "from-traces",
+                "--logs",
+                str(traces),
+                "--format",
+                "langchain",
+                "--signal",
+                "thumbs_up",
+                "--output",
+                str(out),
                 "--judge",
-                "--judge-provider", "evilcorp",
+                "--judge-provider",
+                "evilcorp",
             ],
         )
         assert result.exit_code == 1
@@ -278,7 +292,10 @@ class TestTraceLogWriter:
         path = tmp_path / "trace.jsonl"
         writer = TraceLogWriter(str(path))
         writer.record(
-            prompt="hello", response="world", latency_ms=12.5, tokens=3,
+            prompt="hello",
+            response="world",
+            latency_ms=12.5,
+            tokens=3,
         )
         contents = path.read_text(encoding="utf-8").strip().splitlines()
         assert len(contents) == 1
@@ -409,7 +426,10 @@ class TestTraceLogWriter:
         path = tmp_path / "log.jsonl"
         writer = TraceLogWriter(str(path))
         writer.record(
-            prompt="ok", response="ok", latency_ms=1.0, tokens=1,
+            prompt="ok",
+            response="ok",
+            latency_ms=1.0,
+            tokens=1,
             extra={"system_prompt": "Bearer abcdefghij1234567890"},
         )
         rec = json.loads(path.read_text(encoding="utf-8").strip())
@@ -456,7 +476,10 @@ class TestTraceLogWriter:
         # raise by injecting a "bad" extra value that breaks even repr.
         # Simpler: just verify the call doesn't raise on weird shapes.
         writer.record(
-            prompt="p", response="r", latency_ms=float("nan"), tokens=1,
+            prompt="p",
+            response="r",
+            latency_ms=float("nan"),
+            tokens=1,
         )
         # The file may or may not contain a line — important: no raise.
         assert path.exists()
@@ -476,7 +499,10 @@ class TestTraceLogWriter:
         path = tmp_path / "log.jsonl"
         writer = TraceLogWriter(str(path))
         writer.record(
-            prompt="p", response="r", latency_ms=1.0, tokens=1,
+            prompt="p",
+            response="r",
+            latency_ms=1.0,
+            tokens=1,
             extra={"adapter": "chat", "model": "qwen"},
         )
         rec = json.loads(path.read_text(encoding="utf-8").strip())
@@ -488,7 +514,10 @@ class TestTraceLogWriter:
         path = tmp_path / "log.jsonl"
         writer = TraceLogWriter(str(path))
         writer.record(
-            prompt="real", response="r", latency_ms=1.0, tokens=1,
+            prompt="real",
+            response="r",
+            latency_ms=1.0,
+            tokens=1,
             extra={"prompt": "spoofed"},
         )
         rec = json.loads(path.read_text(encoding="utf-8").strip())

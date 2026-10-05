@@ -259,9 +259,7 @@ class TestFP8RecipeDispatch:
 
             with patch.object(fp8_mod, "is_fp8_available", return_value=True):
                 model = MagicMock()
-                result = fp8_mod.apply_fp8_training(
-                    model, recipe="rowwise_with_gw_hp"
-                )
+                result = fp8_mod.apply_fp8_training(model, recipe="rowwise_with_gw_hp")
 
         mock_from_recipe.assert_called_once_with("rowwise_with_gw_hp")
         assert result is True
@@ -271,8 +269,9 @@ class TestFP8RecipeDispatch:
         the recipe now raise instead of returning False."""
         from soup_cli.utils.fp8 import FP8DependencyMissingError, apply_fp8_training
 
-        with patch("soup_cli.utils.fp8.is_fp8_available", return_value=False), patch(
-            "soup_cli.utils.fp8.fp8_training_supported", return_value=(True, "")
+        with (
+            patch("soup_cli.utils.fp8.is_fp8_available", return_value=False),
+            patch("soup_cli.utils.fp8.fp8_training_supported", return_value=(True, "")),
         ):
             model = MagicMock()
             with pytest.raises(FP8DependencyMissingError):

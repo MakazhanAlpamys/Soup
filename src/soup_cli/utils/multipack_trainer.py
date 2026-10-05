@@ -84,7 +84,8 @@ def lengths_from_dataset(
             "lengths_from_dataset(key=%r) returned all zeros — dataset "
             "rows have neither '%s' nor 'length' keys. Multipack sampling "
             "will not work; check tokenisation pipeline.",
-            key, key,
+            key,
+            key,
         )
     return lengths
 
@@ -182,10 +183,7 @@ def make_multipack_trainer_class(base_cls: type) -> type:
             # the explicit None check below preserves the "state never
             # attached" path while letting an empty list (lengths=[]) fall
             # through to the same fallback (the sampler would reject it).
-            if (
-                lengths is None or not lengths
-                or max_seq is None or batch_size is None
-            ):
+            if lengths is None or not lengths or max_seq is None or batch_size is None:
                 return super().get_train_dataloader()
 
             from torch.utils.data import DataLoader

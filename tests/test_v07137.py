@@ -52,9 +52,7 @@ class TestHintsAreCmdSafe:
         offenders = []
         for path in sorted(root.rglob("*.py")):
             rel = path.relative_to(root).as_posix()
-            for lineno, line in enumerate(
-                path.read_text(encoding="utf-8").splitlines(), start=1
-            ):
+            for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
                 if SINGLE_QUOTED.search(line):
                     offenders.append(f"{rel}:{lineno}: {line.strip()}")
         assert not offenders, (
@@ -84,9 +82,7 @@ class TestHintsAreCmdSafe:
                 continue
             rel = path.relative_to(repo).as_posix()
             in_fence = False
-            for lineno, line in enumerate(
-                path.read_text(encoding="utf-8").splitlines(), start=1
-            ):
+            for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
                 if line.lstrip().startswith("```"):
                     in_fence = not in_fence
                     continue
@@ -94,8 +90,7 @@ class TestHintsAreCmdSafe:
                     offenders.append(f"{rel}:{lineno}: {line.strip()}")
         assert not offenders, (
             "single-quoted soup-cli[extra] in a docs code block — a Windows "
-            "cmd.exe reader copies this and gets `Invalid requirement`:\n"
-            + "\n".join(offenders)
+            "cmd.exe reader copies this and gets `Invalid requirement`:\n" + "\n".join(offenders)
         )
 
     def test_regex_actually_matches_the_broken_spelling(self):
@@ -109,9 +104,7 @@ class TestHintsAreCmdSafe:
         # Plain (YAML template comments, plain exception text).
         assert SINGLE_QUOTED.search("pip install 'soup-cli[train]'")
         # Rich-escaped, exactly as it sits in ui.py: TWO backslash chars.
-        assert SINGLE_QUOTED.search(
-            '"Install with: [bold]pip install \'soup-cli\\\\[ui]\'[/]"'
-        )
+        assert SINGLE_QUOTED.search("\"Install with: [bold]pip install 'soup-cli\\\\[ui]'[/]\"")
         # The spellings we are migrating *to* must not be flagged.
         assert not SINGLE_QUOTED.search('pip install "soup-cli[train]"')
         assert not SINGLE_QUOTED.search('pip install "soup-cli\\\\[ui]"')
@@ -131,9 +124,9 @@ class TestDoubleQuotesSurviveRich:
             Console(file=buf, force_terminal=False, width=100).print(markup)
             return buf.getvalue().strip()
 
-        assert render('[bold]pip install "soup-cli\\[ui]"[/]') == (
-            'pip install "soup-cli[ui]"'
-        ), "escaped bracket must survive inside double quotes"
-        assert render('[bold]pip install "soup-cli[ui]"[/]') == (
-            'pip install "soup-cli"'
-        ), "unescaped bracket is still eaten — quoting does not fix escaping"
+        assert render('[bold]pip install "soup-cli\\[ui]"[/]') == ('pip install "soup-cli[ui]"'), (
+            "escaped bracket must survive inside double quotes"
+        )
+        assert render('[bold]pip install "soup-cli[ui]"[/]') == ('pip install "soup-cli"'), (
+            "unescaped bracket is still eaten — quoting does not fix escaping"
+        )

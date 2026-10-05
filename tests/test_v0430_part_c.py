@@ -1,4 +1,5 @@
 """Tests for v0.43.0 Part C — Profiling extras + VSCode setup."""
+
 from __future__ import annotations
 
 import json
@@ -18,6 +19,7 @@ from soup_cli.utils.profiling_v0_43 import (
 from soup_cli.utils.vscode_setup import build_launch_json, write_vscode_launch
 
 # ----------------- snapshot path -----------------
+
 
 class TestResolveSnapshotPath:
     def test_happy(self, tmp_path, monkeypatch):
@@ -61,6 +63,7 @@ class TestResolveSnapshotPath:
 
 
 # ----------------- memory_snapshot_context -----------------
+
 
 class TestMemorySnapshotContext:
     def test_no_torch_yields_none(self, tmp_path, monkeypatch):
@@ -122,6 +125,7 @@ class TestDetectAnomalyContext:
 
 # ----------------- nccl_bandwidth_check -----------------
 
+
 class TestExpectedBandwidth:
     @pytest.mark.parametrize(
         "gpu,link",
@@ -157,38 +161,28 @@ class TestExpectedBandwidth:
 
 class TestNcclBandwidthCheck:
     def test_ok(self):
-        result = nccl_bandwidth_check(
-            gpu="h100", link="nvlink", measured_gb_per_sec=400.0
-        )
+        result = nccl_bandwidth_check(gpu="h100", link="nvlink", measured_gb_per_sec=400.0)
         assert result["status"] == "OK"
         assert result["expected_gb_per_sec"] == 450.0
         assert 0.88 <= result["ratio"] <= 0.89
 
     def test_minor(self):
-        result = nccl_bandwidth_check(
-            gpu="h100", link="nvlink", measured_gb_per_sec=300.0
-        )
+        result = nccl_bandwidth_check(gpu="h100", link="nvlink", measured_gb_per_sec=300.0)
         assert result["status"] == "MINOR"
 
     def test_major(self):
-        result = nccl_bandwidth_check(
-            gpu="h100", link="nvlink", measured_gb_per_sec=100.0
-        )
+        result = nccl_bandwidth_check(gpu="h100", link="nvlink", measured_gb_per_sec=100.0)
         assert result["status"] == "MAJOR"
 
     def test_unknown_pair(self):
-        result = nccl_bandwidth_check(
-            gpu="evil", link="pcie", measured_gb_per_sec=5.0
-        )
+        result = nccl_bandwidth_check(gpu="evil", link="pcie", measured_gb_per_sec=5.0)
         assert result["status"] == "UNKNOWN"
         assert result["expected_gb_per_sec"] is None
         assert result["ratio"] is None
 
     def test_negative_measured_rejected(self):
         with pytest.raises(ValueError):
-            nccl_bandwidth_check(
-                gpu="h100", link="nvlink", measured_gb_per_sec=-1.0
-            )
+            nccl_bandwidth_check(gpu="h100", link="nvlink", measured_gb_per_sec=-1.0)
 
     def test_nonfinite_measured_rejected(self):
         with pytest.raises(ValueError, match="finite"):
@@ -201,11 +195,14 @@ class TestNcclBandwidthCheck:
     def test_bool_measured_rejected(self):
         with pytest.raises(ValueError):
             nccl_bandwidth_check(
-                gpu="h100", link="nvlink", measured_gb_per_sec=True  # type: ignore[arg-type]
+                gpu="h100",
+                link="nvlink",
+                measured_gb_per_sec=True,  # type: ignore[arg-type]
             )
 
 
 # ----------------- VSCode launch.json -----------------
+
 
 class TestBuildLaunchJson:
     def test_default(self):

@@ -76,9 +76,7 @@ def test_unsloth_loraplus_still_loads():
 
 def test_mlx_loraplus_without_ratio_still_loads():
     # The gate is on the ratio field, not on the backend itself.
-    cfg = load_config_from_string(
-        _MLX_LORAPLUS.replace("  loraplus_lr_ratio: 16\n", "")
-    )
+    cfg = load_config_from_string(_MLX_LORAPLUS.replace("  loraplus_lr_ratio: 16\n", ""))
     assert cfg.backend == "mlx"
 
 
@@ -87,9 +85,7 @@ def test_train_dry_run_exits_nonzero_on_mlx_loraplus(tmp_path: Path):
     cfg_file.write_text(_MLX_LORAPLUS, encoding="utf-8")
     result = CliRunner().invoke(app, ["train", "--config", str(cfg_file), "--dry-run"])
     assert result.exit_code == 1, (result.output, repr(result.exception))
-    assert "training.loraplus_lr_ratio is not implemented on backend='mlx'" in _plain(
-        result.output
-    )
+    assert "training.loraplus_lr_ratio is not implemented on backend='mlx'" in _plain(result.output)
 
 
 @pytest.mark.parametrize(

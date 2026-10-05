@@ -38,9 +38,7 @@ def _resolve_candidates(names: Optional[str]) -> tuple[CandidateBase, ...]:
     for name in requested:
         if name not in by_name:
             available = ", ".join(sorted(by_name.keys()))
-            raise typer.BadParameter(
-                f"unknown candidate {name!r}; known: {available}"
-            )
+            raise typer.BadParameter(f"unknown candidate {name!r}; known: {available}")
         resolved.append(by_name[name])
     return tuple(resolved)
 

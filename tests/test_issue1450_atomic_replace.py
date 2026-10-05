@@ -43,6 +43,7 @@ def _write_jsonl(path: Path, rows):
 class TestRewardSynthForceKeepsPreviousOnFailure:
     def _runner(self):
         from typer.testing import CliRunner
+
         return CliRunner()
 
     def test_refusal_leaves_previous_verifier_byte_identical(self, tmp_path, monkeypatch):
@@ -60,10 +61,18 @@ class TestRewardSynthForceKeepsPreviousOnFailure:
         # (gold + 9999) accept -> discrimination below the default floor ->
         # REFUSED (exit 2). This must not touch the existing --force target.
         _write_jsonl(Path("refs.jsonl"), [{"answer": str(i)} for i in range(4)])
-        res = self._runner().invoke(app, [
-            "synth", "refs.jsonl", "-o", "reward.py",
-            "--force", "--tolerance", "10000",
-        ])
+        res = self._runner().invoke(
+            app,
+            [
+                "synth",
+                "refs.jsonl",
+                "-o",
+                "reward.py",
+                "--force",
+                "--tolerance",
+                "10000",
+            ],
+        )
 
         assert res.exit_code == 2, (res.output, repr(res.exception))
         assert Path("reward.py").exists(), "the previous verifier was deleted on refusal"
@@ -73,9 +82,7 @@ class TestRewardSynthForceKeepsPreviousOnFailure:
         leftover = list(tmp_path.glob(".soup.reward-candidate.*.py"))
         assert not leftover, f"orphaned candidate file(s) left behind: {leftover}"
 
-    def test_calibration_error_leaves_previous_verifier_byte_identical(
-        self, tmp_path, monkeypatch
-    ):
+    def test_calibration_error_leaves_previous_verifier_byte_identical(self, tmp_path, monkeypatch):
         from soup_cli.commands.reward import app
 
         monkeypatch.chdir(tmp_path)
@@ -93,9 +100,16 @@ class TestRewardSynthForceKeepsPreviousOnFailure:
         monkeypatch.setattr(rs, "calibrate", _boom)
 
         _write_jsonl(Path("refs.jsonl"), [{"answer": "4"}, {"answer": "6"}])
-        res = self._runner().invoke(app, [
-            "synth", "refs.jsonl", "-o", "reward.py", "--force",
-        ])
+        res = self._runner().invoke(
+            app,
+            [
+                "synth",
+                "refs.jsonl",
+                "-o",
+                "reward.py",
+                "--force",
+            ],
+        )
 
         assert res.exit_code == 1, (res.output, repr(res.exception))
         assert Path("reward.py").exists(), (
@@ -132,9 +146,16 @@ class TestRewardSynthForceKeepsPreviousOnFailure:
         monkeypatch.setattr(rs, "calibrate", _crash)
 
         _write_jsonl(Path("refs.jsonl"), [{"answer": "4"}, {"answer": "6"}])
-        res = self._runner().invoke(app, [
-            "synth", "refs.jsonl", "-o", "reward.py", "--force",
-        ])
+        res = self._runner().invoke(
+            app,
+            [
+                "synth",
+                "refs.jsonl",
+                "-o",
+                "reward.py",
+                "--force",
+            ],
+        )
 
         assert res.exit_code == 1, (res.output, repr(res.exception))
         assert Path("reward.py").exists(), (
@@ -172,9 +193,16 @@ class TestRewardSynthForceKeepsPreviousOnFailure:
         monkeypatch.setattr(os_module, "fdopen", _boom)
 
         _write_jsonl(Path("refs.jsonl"), [{"answer": "4"}, {"answer": "6"}])
-        res = self._runner().invoke(app, [
-            "synth", "refs.jsonl", "-o", "reward.py", "--force",
-        ])
+        res = self._runner().invoke(
+            app,
+            [
+                "synth",
+                "refs.jsonl",
+                "-o",
+                "reward.py",
+                "--force",
+            ],
+        )
 
         assert res.exit_code == 1, (res.output, repr(res.exception))
         assert Path("reward.py").exists(), (
@@ -192,9 +220,16 @@ class TestRewardSynthForceKeepsPreviousOnFailure:
         Path("reward.py").write_text("# stale\n", encoding="utf-8")
         _write_jsonl(Path("refs.jsonl"), [{"answer": "4"}, {"answer": "6"}])
 
-        res = self._runner().invoke(app, [
-            "synth", "refs.jsonl", "-o", "reward.py", "--force",
-        ])
+        res = self._runner().invoke(
+            app,
+            [
+                "synth",
+                "refs.jsonl",
+                "-o",
+                "reward.py",
+                "--force",
+            ],
+        )
 
         assert res.exit_code == 0, (res.output, repr(res.exception))
         new_source = Path("reward.py").read_text(encoding="utf-8")
@@ -229,9 +264,16 @@ class TestRewardSynthForceKeepsPreviousOnFailure:
         monkeypatch.setattr(os_module, "replace", _replace_fails)
 
         _write_jsonl(Path("refs.jsonl"), [{"answer": "4"}, {"answer": "6"}])
-        res = self._runner().invoke(app, [
-            "synth", "refs.jsonl", "-o", "reward.py", "--force",
-        ])
+        res = self._runner().invoke(
+            app,
+            [
+                "synth",
+                "refs.jsonl",
+                "-o",
+                "reward.py",
+                "--force",
+            ],
+        )
 
         assert res.exit_code == 1, (res.output, repr(res.exception))
         assert res.exception is None or isinstance(res.exception, SystemExit), (
@@ -441,9 +483,7 @@ class TestMergeAdapterToDenseSurvivesAFailedSwap:
         assert (staging_dirs[0] / "model.safetensors").read_bytes() == b"NEW"
         assert not out.exists(), "out_dir should be absent — neither replace landed there"
 
-    def test_backup_rename_failure_keeps_old_model_and_new_staging(
-        self, tmp_path, monkeypatch
-    ):
+    def test_backup_rename_failure_keeps_old_model_and_new_staging(self, tmp_path, monkeypatch):
         """The rename that moves the previous model aside can hit the same
         lock as the swap. out_dir is then untouched, so the new merge in
         staging is the only copy of it and must not be deleted."""
@@ -506,4 +546,3 @@ class TestMergeAdapterToDenseSurvivesAFailedSwap:
         assert (staging_dirs[0] / "model.safetensors").read_bytes() == b"NEW"
         assert staging_dirs[0].name in str(excinfo.value)
         assert not list(tmp_path.glob(".out.old-*"))
-

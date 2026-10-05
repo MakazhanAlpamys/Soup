@@ -74,9 +74,7 @@ class CandidateBase:
         if isinstance(self.params_b, bool):
             raise TypeError("params_b must be a number, not bool")
         if not isinstance(self.params_b, (int, float)):
-            raise TypeError(
-                f"params_b must be a number, got {type(self.params_b).__name__}"
-            )
+            raise TypeError(f"params_b must be a number, got {type(self.params_b).__name__}")
         if not math.isfinite(float(self.params_b)):
             raise ValueError("params_b must be finite (no NaN / Inf)")
         if self.params_b <= 0:
@@ -109,9 +107,7 @@ class TunabilityResult:
 
     def __post_init__(self) -> None:
         if not isinstance(self.candidate, CandidateBase):
-            raise TypeError(
-                f"candidate must be CandidateBase, got {type(self.candidate).__name__}"
-            )
+            raise TypeError(f"candidate must be CandidateBase, got {type(self.candidate).__name__}")
         for field, val in (
             ("base_loss", self.base_loss),
             ("probe_loss", self.probe_loss),
@@ -122,19 +118,13 @@ class TunabilityResult:
             if isinstance(val, bool):
                 raise TypeError(f"{field} must be a number, not bool")
             if not isinstance(val, (int, float)):
-                raise TypeError(
-                    f"{field} must be a number, got {type(val).__name__}"
-                )
+                raise TypeError(f"{field} must be a number, got {type(val).__name__}")
             if not math.isfinite(float(val)):
                 raise ValueError(f"{field} must be finite (no NaN / Inf)")
         if self.wall_clock_seconds < 0:
-            raise ValueError(
-                f"wall_clock_seconds must be >= 0, got {self.wall_clock_seconds}"
-            )
+            raise ValueError(f"wall_clock_seconds must be >= 0, got {self.wall_clock_seconds}")
         if self.estimated_cost_usd < 0:
-            raise ValueError(
-                f"estimated_cost_usd must be >= 0, got {self.estimated_cost_usd}"
-            )
+            raise ValueError(f"estimated_cost_usd must be >= 0, got {self.estimated_cost_usd}")
 
 
 @dataclass(frozen=True)
@@ -222,8 +212,7 @@ def validate_probe_steps(value: object) -> int:
         raise TypeError(f"probe_steps must be int, got {type(value).__name__}")
     if not (_MIN_PROBE_STEPS <= value <= _MAX_PROBE_STEPS):
         raise ValueError(
-            f"probe_steps must be in [{_MIN_PROBE_STEPS}, {_MAX_PROBE_STEPS}], "
-            f"got {value}"
+            f"probe_steps must be in [{_MIN_PROBE_STEPS}, {_MAX_PROBE_STEPS}], got {value}"
         )
     return value
 
@@ -235,10 +224,7 @@ def validate_holdout_size(value: object) -> int:
     if not isinstance(value, int):
         raise TypeError(f"holdout_size must be int, got {type(value).__name__}")
     if not (_MIN_HOLDOUT <= value <= _MAX_HOLDOUT):
-        raise ValueError(
-            f"holdout_size must be in [{_MIN_HOLDOUT}, {_MAX_HOLDOUT}], "
-            f"got {value}"
-        )
+        raise ValueError(f"holdout_size must be in [{_MIN_HOLDOUT}, {_MAX_HOLDOUT}], got {value}")
     return value
 
 
@@ -284,9 +270,7 @@ def pareto_frontier(results: Sequence[TunabilityResult]) -> Tuple[TunabilityResu
         raise TypeError("results must be iterable") from exc
     for entry in materialised:
         if not isinstance(entry, TunabilityResult):
-            raise TypeError(
-                f"every result must be TunabilityResult, got {type(entry).__name__}"
-            )
+            raise TypeError(f"every result must be TunabilityResult, got {type(entry).__name__}")
     if not materialised:
         return ()
     frontier: list[TunabilityResult] = []
@@ -467,23 +451,16 @@ def run_tunability(
     if len(candidates) == 0:
         raise ValueError("candidates must contain at least one entry")
     if len(candidates) > _MAX_CANDIDATES:
-        raise ValueError(
-            f"too many candidates ({len(candidates)} > {_MAX_CANDIDATES})"
-        )
+        raise ValueError(f"too many candidates ({len(candidates)} > {_MAX_CANDIDATES})")
     for entry in candidates:
         if not isinstance(entry, CandidateBase):
-            raise TypeError(
-                f"every candidate must be CandidateBase, "
-                f"got {type(entry).__name__}"
-            )
+            raise TypeError(f"every candidate must be CandidateBase, got {type(entry).__name__}")
 
     steps = validate_probe_steps(probe_steps)
     holdout = validate_holdout_size(holdout_size)
 
     if not isinstance(dataset_path, str):
-        raise TypeError(
-            f"dataset_path must be str, got {type(dataset_path).__name__}"
-        )
+        raise TypeError(f"dataset_path must be str, got {type(dataset_path).__name__}")
     if not dataset_path:
         raise ValueError("dataset_path must be non-empty")
     if "\x00" in dataset_path:
@@ -494,10 +471,7 @@ def run_tunability(
     for cand in candidates:
         result = fn(cand, dataset_path, probe_steps=steps, holdout_size=holdout)
         if not isinstance(result, TunabilityResult):
-            raise TypeError(
-                f"probe_fn must return TunabilityResult, "
-                f"got {type(result).__name__}"
-            )
+            raise TypeError(f"probe_fn must return TunabilityResult, got {type(result).__name__}")
         results.append(result)
 
     frontier = pareto_frontier(results)
@@ -560,9 +534,7 @@ def write_report(report: TunabilityReport, path: str) -> None:
     v0.60.0 / v0.62.0 atomic-write policy).
     """
     if not isinstance(report, TunabilityReport):
-        raise TypeError(
-            f"report must be TunabilityReport, got {type(report).__name__}"
-        )
+        raise TypeError(f"report must be TunabilityReport, got {type(report).__name__}")
     if not isinstance(path, str):
         raise TypeError(f"path must be str, got {type(path).__name__}")
     if not path:

@@ -122,8 +122,7 @@ def _embedding_rows(n):
 
 def _prm_rows(n):
     return [
-        {"prompt": "hi", "completions": ["good", "answer"], "labels": [1.0, 0.0]}
-        for _ in range(n)
+        {"prompt": "hi", "completions": ["good", "answer"], "labels": [1.0, 0.0]} for _ in range(n)
     ]
 
 
@@ -169,11 +168,26 @@ _EVALUATING = {
 }
 
 #: The wrappers the issue lists as receiving a validation split.
-_ISSUE_TASKS = frozenset({
-    "sft", "pretrain", "dpo", "ipo", "kto", "orpo", "simpo", "bco", "grpo",
-    "distill", "classifier", "embedding", "reward_model", "prm",
-    "moe_lora_routing", "asr",
-})
+_ISSUE_TASKS = frozenset(
+    {
+        "sft",
+        "pretrain",
+        "dpo",
+        "ipo",
+        "kto",
+        "orpo",
+        "simpo",
+        "bco",
+        "grpo",
+        "distill",
+        "classifier",
+        "embedding",
+        "reward_model",
+        "prm",
+        "moe_lora_routing",
+        "asr",
+    }
+)
 
 #: These build their Trainer inside `train()`, so the schedule can only be
 #: read once the run has happened.
@@ -610,9 +624,7 @@ class TestScheduleVariants:
             pytest.param(
                 {"eval_steps": 2, "gradient_accumulation_steps": 2}, [2, 4], id="grad-accum"
             ),
-            pytest.param(
-                {"epochs": 2, "gradient_accumulation_steps": 2}, [4, 8], id="epoch-ends"
-            ),
+            pytest.param({"epochs": 2, "gradient_accumulation_steps": 2}, [4, 8], id="epoch-ends"),
             pytest.param(
                 {"epochs": 2, "eval_steps": 3}, [3, 6, 9, 12, 15, 16], id="epochs-with-steps"
             ),
@@ -761,9 +773,7 @@ class TestEveryWrapperUsesTheHelper:
 
     def test_the_derivation_found_the_wrappers(self):
         """Non-vacuity: an empty derivation would pass the test below."""
-        assert {"sft", "grpo", "prm", "asr", "embedding"} <= set(
-            self._passing_an_eval_dataset()
-        )
+        assert {"sft", "grpo", "prm", "asr", "embedding"} <= set(self._passing_an_eval_dataset())
 
     def test_each_one_threads_the_helper(self):
         sources = _trainer_sources()

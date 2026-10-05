@@ -24,6 +24,7 @@ All heavy deps (numpy / torch / safetensors / huggingface_hub) are imported
 lazily inside functions so the module — and the ``soup`` CLI — load without
 them. LISA (per-step layer sampling) is split to #267.
 """
+
 from __future__ import annotations
 
 import json
@@ -222,7 +223,7 @@ def layer_type_signature(name: str) -> str:
     ``lm_head.weight`` -> ``lm_head`` (non-layer params group by themselves).
     """
     match = _LAYER_IDX_RE.search(name)
-    base = name[match.end():] if match else name
+    base = name[match.end() :] if match else name
     for suffix in (".weight", ".bias"):
         if base.endswith(suffix):
             return base[: -len(suffix)]
@@ -251,8 +252,7 @@ def _normalize_modules(modules: ModulesArg) -> Optional[frozenset[str]]:
     for part in parts:
         if part not in _VALID_MODULE_TYPES:
             raise ValueError(
-                f"unknown module type {part!r}; choose from "
-                f"{', '.join(_VALID_MODULE_TYPES)}, all"
+                f"unknown module type {part!r}; choose from {', '.join(_VALID_MODULE_TYPES)}, all"
             )
     return frozenset(parts)
 
@@ -278,6 +278,7 @@ def _framework() -> Tuple[str, Callable[[Any], "NDArray[Any]"]]:
     except Exception:  # pragma: no cover - torch present in dev/CI
         torch = None
     if torch is not None:
+
         def to_np(tensor: Any) -> "NDArray[Any]":
             return tensor.detach().to(torch.float32).cpu().numpy()
 
@@ -343,14 +344,15 @@ def iter_weight_matrices(
                         "spectrum scan: skipping %s — %dx%d exceeds the "
                         "%d-element SVD cap (scan a subset via --modules "
                         "mlp,attn for very large models)",
-                        key, shape[0], shape[1], _MAX_MATRIX_ELEMENTS,
+                        key,
+                        shape[0],
+                        shape[1],
+                        _MAX_MATRIX_ELEMENTS,
                     )
                     continue
                 count += 1
                 if count > _MAX_TENSORS:
-                    raise ValueError(
-                        f"scan exceeded the {_MAX_TENSORS}-tensor cap"
-                    )
+                    raise ValueError(f"scan exceeded the {_MAX_TENSORS}-tensor cap")
                 try:
                     array = to_np(handle.get_tensor(key))
                 except Exception as exc:
@@ -362,9 +364,7 @@ def iter_weight_matrices(
                 yield key, array
 
 
-def scan_weights_dir(
-    weights_dir: str, *, modules: ModulesArg = "all"
-) -> Tuple[LayerSNR, ...]:
+def scan_weights_dir(weights_dir: str, *, modules: ModulesArg = "all") -> Tuple[LayerSNR, ...]:
     """Stream a local model dir and compute the SNR of every kept matrix."""
     out = []
     for name, array in iter_weight_matrices(weights_dir, modules=modules):
@@ -416,9 +416,7 @@ def select_unfrozen_parameters(
         selected.extend(param_prefix(r.name) for r in ordered[:keep_n])
 
     if len(selected) > _MAX_UNFROZEN_PATTERNS:
-        raise ValueError(
-            f"selection exceeded the {_MAX_UNFROZEN_PATTERNS}-pattern cap"
-        )
+        raise ValueError(f"selection exceeded the {_MAX_UNFROZEN_PATTERNS}-pattern cap")
     return sorted(set(selected))
 
 
@@ -578,17 +576,13 @@ def _weight_file_manifest(
             continue
         path = os.path.join(root, name)
         if os.path.islink(path) and not permit_symlinks:
-            raise FileNotFoundError(
-                f"weight cache still contains symlinked shard {name!r}"
-            )
+            raise FileNotFoundError(f"weight cache still contains symlinked shard {name!r}")
         if not os.path.isfile(path):
             continue
         stat = os.stat(path)
         files.append((name, int(stat.st_size), int(stat.st_mtime_ns)))
     if not files:
-        raise FileNotFoundError(
-            f"no .safetensors weight files found in {directory}"
-        )
+        raise FileNotFoundError(f"no .safetensors weight files found in {directory}")
     return tuple(files)
 
 
@@ -698,9 +692,7 @@ def _snapshot_materialization_entries(
     blob_roots: list[str] = []
     if source_revision is not None:
         repo_root = os.path.dirname(os.path.dirname(source))
-        expected = os.path.realpath(
-            os.path.join(repo_root, "snapshots", source_revision)
-        )
+        expected = os.path.realpath(os.path.join(repo_root, "snapshots", source_revision))
         if source != expected:
             raise ValueError("cached snapshot path does not match its resolved revision")
         blob_root = os.path.realpath(os.path.join(repo_root, "blobs"))
@@ -716,9 +708,7 @@ def _snapshot_materialization_entries(
         for dirname in dirnames:
             directory = os.path.join(root, dirname)
             if os.path.islink(directory):
-                raise ValueError(
-                    f"cached snapshot directory symlink is not allowed: {dirname!r}"
-                )
+                raise ValueError(f"cached snapshot directory symlink is not allowed: {dirname!r}")
         for filename in filenames:
             if not filename.endswith((".safetensors", ".json")):
                 continue
@@ -736,9 +726,7 @@ def _snapshot_materialization_entries(
             else:
                 resolved = snapshot_path
             if not os.path.isfile(resolved):
-                raise FileNotFoundError(
-                    f"cached snapshot file {relative!r} is missing its blob"
-                )
+                raise FileNotFoundError(f"cached snapshot file {relative!r} is missing its blob")
             entries.append((relative, resolved, blob_id))
     return entries
 
@@ -772,9 +760,7 @@ def _reject_materialized_target_link(target: str) -> None:
     if os.name == "nt":
         reparse = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
         if getattr(target_stat, "st_file_attributes", 0) & reparse:
-            raise ValueError(
-                "materialized weights path must not be a reparse point / junction"
-            )
+            raise ValueError("materialized weights path must not be a reparse point / junction")
 
 
 def _materialize_cached_snapshot(plan: ModelWeightsPlan) -> str:
@@ -782,9 +768,7 @@ def _materialize_cached_snapshot(plan: ModelWeightsPlan) -> str:
     from soup_cli.utils.paths import is_under
 
     if plan.source_revision is None:
-        raise ValueError(
-            "cannot materialize a symlinked Hub snapshot without its resolved commit"
-        )
+        raise ValueError("cannot materialize a symlinked Hub snapshot without its resolved commit")
     requested_target = os.path.abspath(os.path.expanduser(plan.weights_dir))
     _reject_materialized_target_link(requested_target)
     target = os.path.realpath(requested_target)
@@ -802,9 +786,7 @@ def _materialize_cached_snapshot(plan: ModelWeightsPlan) -> str:
         dir=os.path.dirname(target),
     )
     try:
-        metadata_root = os.path.join(
-            staging, ".cache", "huggingface", "download"
-        )
+        metadata_root = os.path.join(staging, ".cache", "huggingface", "download")
         for relative, source_path, blob_id in entries:
             destination = os.path.join(staging, relative)
             os.makedirs(os.path.dirname(destination), exist_ok=True)
@@ -813,9 +795,7 @@ def _materialize_cached_snapshot(plan: ModelWeightsPlan) -> str:
                 metadata_path = os.path.join(metadata_root, relative + ".metadata")
                 os.makedirs(os.path.dirname(metadata_path), exist_ok=True)
                 with open(metadata_path, "w", encoding="utf-8") as handle:
-                    handle.write(
-                        f"{plan.source_revision or ''}\n{blob_id}\n{time.time()}\n"
-                    )
+                    handle.write(f"{plan.source_revision or ''}\n{blob_id}\n{time.time()}\n")
 
         staged_manifest = _weight_file_manifest(staging, permit_symlinks=False)
         expected_sizes = {name: size for name, size, _mtime in plan.source_files}
@@ -885,9 +865,7 @@ def plan_model_weights(model: str) -> ModelWeightsPlan:
             source_revision=source_revision,
         )
 
-    materialized = os.path.join(
-        resolve_cache_dir(), "weights", model_slug(model)
-    )
+    materialized = os.path.join(resolve_cache_dir(), "weights", model_slug(model))
     existing = _materialized_matches_hf_snapshot(
         source,
         materialized,
@@ -901,9 +879,7 @@ def plan_model_weights(model: str) -> ModelWeightsPlan:
         weights_dir=materialized,
         source_bytes=sum(size for _name, size, _mtime in manifest),
         materialized_copy_bytes=sum(size for _name, size, _mtime in manifest),
-        materialize_bytes=(
-            sum(size for _name, size, _mtime in manifest) if needs_copy else 0
-        ),
+        materialize_bytes=(sum(size for _name, size, _mtime in manifest) if needs_copy else 0),
         source_files=manifest if existing is None else existing,
         source_revision=source_revision,
     )

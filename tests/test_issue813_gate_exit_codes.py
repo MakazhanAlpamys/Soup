@@ -6,6 +6,7 @@ Taxonomy contract:
   EXIT_USAGE_ERROR = 3    (bad flag, missing or unparseable input file, empty series)
   EXIT_RUNTIME_ERROR = 1  (unexpected runtime failure)
 """
+
 from __future__ import annotations
 
 import json
@@ -40,35 +41,39 @@ def _setup_eval_gate(tmp_path: Path) -> Tuple[list[str], list[str], list[str]]:
 
     pass_suite = tmp_path / "gate_pass.yaml"
     pass_suite.write_text(
-        yaml.safe_dump({
-            "suite": "pass-gate",
-            "tasks": [
-                {
-                    "type": "custom",
-                    "name": "t_pass",
-                    "scorer": "exact",
-                    "threshold": 0.0,
-                    "tasks": str(pass_tasks_file),
-                }
-            ],
-        }),
+        yaml.safe_dump(
+            {
+                "suite": "pass-gate",
+                "tasks": [
+                    {
+                        "type": "custom",
+                        "name": "t_pass",
+                        "scorer": "exact",
+                        "threshold": 0.0,
+                        "tasks": str(pass_tasks_file),
+                    }
+                ],
+            }
+        ),
         encoding="utf-8",
     )
 
     fail_suite = tmp_path / "gate_fail.yaml"
     fail_suite.write_text(
-        yaml.safe_dump({
-            "suite": "fail-gate",
-            "tasks": [
-                {
-                    "type": "custom",
-                    "name": "t_fail",
-                    "scorer": "exact",
-                    "threshold": 1.0,
-                    "tasks": str(fail_tasks_file),
-                }
-            ],
-        }),
+        yaml.safe_dump(
+            {
+                "suite": "fail-gate",
+                "tasks": [
+                    {
+                        "type": "custom",
+                        "name": "t_fail",
+                        "scorer": "exact",
+                        "threshold": 1.0,
+                        "tasks": str(fail_tasks_file),
+                    }
+                ],
+            }
+        ),
         encoding="utf-8",
     )
 
@@ -80,14 +85,27 @@ def _setup_eval_gate(tmp_path: Path) -> Tuple[list[str], list[str], list[str]]:
 
 def _setup_eval_against(tmp_path: Path) -> Tuple[list[str], list[str], list[str]]:
     pass_args = [
-        "eval", "against", "run-pass-base", "--candidate", "run-pass-cand",
+        "eval",
+        "against",
+        "run-pass-base",
+        "--candidate",
+        "run-pass-cand",
     ]
     fail_args = [
-        "eval", "against", "run-fail-base", "--candidate", "run-fail-cand",
+        "eval",
+        "against",
+        "run-fail-base",
+        "--candidate",
+        "run-fail-cand",
     ]
     missing_args = [
-        "eval", "against", "run-base", "--candidate", "run-cand",
-        "--suite", str(tmp_path / "nonexistent_locked.json"),
+        "eval",
+        "against",
+        "run-base",
+        "--candidate",
+        "run-cand",
+        "--suite",
+        str(tmp_path / "nonexistent_locked.json"),
     ]
     return pass_args, fail_args, missing_args
 
@@ -95,11 +113,9 @@ def _setup_eval_against(tmp_path: Path) -> Tuple[list[str], list[str], list[str]
 def _setup_eval_checklist(tmp_path: Path) -> Tuple[list[str], list[str], list[str]]:
     spec_file = tmp_path / "checklist_spec.yaml"
     spec_file.write_text(
-        yaml.safe_dump({
-            "tests": [
-                {"name": "t1", "kind": "mft", "prompts": ["hi"], "expected": ["hello"]}
-            ]
-        }),
+        yaml.safe_dump(
+            {"tests": [{"name": "t1", "kind": "mft", "prompts": ["hi"], "expected": ["hello"]}]}
+        ),
         encoding="utf-8",
     )
 
@@ -118,33 +134,54 @@ def _setup_eval_checklist(tmp_path: Path) -> Tuple[list[str], list[str], list[st
 def _setup_eval_behavior(tmp_path: Path) -> Tuple[list[str], list[str], list[str]]:
     pass_ev = tmp_path / "behavior_pass.json"
     pass_ev.write_text(
-        json.dumps({
-            "pre_responses": ["safe"] * 5,
-            "post_responses": ["safe"] * 5,
-            "oracle": ["safe"] * 5,
-        }),
+        json.dumps(
+            {
+                "pre_responses": ["safe"] * 5,
+                "post_responses": ["safe"] * 5,
+                "oracle": ["safe"] * 5,
+            }
+        ),
         encoding="utf-8",
     )
 
     fail_ev = tmp_path / "behavior_fail.json"
     fail_ev.write_text(
-        json.dumps({
-            "pre_responses": ["safe"] * 5,
-            "post_responses": ["unsafe"] * 5,
-            "oracle": ["safe"] * 5,
-        }),
+        json.dumps(
+            {
+                "pre_responses": ["safe"] * 5,
+                "post_responses": ["unsafe"] * 5,
+                "oracle": ["safe"] * 5,
+            }
+        ),
         encoding="utf-8",
     )
 
     pass_args = [
-        "eval", "behavior", "run1", "--battery", "xstest", "--evidence", str(pass_ev),
+        "eval",
+        "behavior",
+        "run1",
+        "--battery",
+        "xstest",
+        "--evidence",
+        str(pass_ev),
     ]
     fail_args = [
-        "eval", "behavior", "run1", "--battery", "xstest", "--evidence", str(fail_ev),
+        "eval",
+        "behavior",
+        "run1",
+        "--battery",
+        "xstest",
+        "--evidence",
+        str(fail_ev),
     ]
     missing_args = [
-        "eval", "behavior", "run1", "--battery", "xstest",
-        "--evidence", str(tmp_path / "nonexistent_behavior.json"),
+        "eval",
+        "behavior",
+        "run1",
+        "--battery",
+        "xstest",
+        "--evidence",
+        str(tmp_path / "nonexistent_behavior.json"),
     ]
     return pass_args, fail_args, missing_args
 
@@ -162,22 +199,34 @@ def _setup_eval_quant_check(tmp_path: Path) -> Tuple[list[str], list[str], list[
     )
 
     pass_args = [
-        "eval", "quant-check",
-        "--before", str(before_model),
-        "--after", str(after_model),
-        "--tasks", str(tasks_file),
+        "eval",
+        "quant-check",
+        "--before",
+        str(before_model),
+        "--after",
+        str(after_model),
+        "--tasks",
+        str(tasks_file),
     ]
     fail_args = [
-        "eval", "quant-check",
-        "--before", str(before_model),
-        "--after", str(after_model),
-        "--tasks", str(tasks_file),
+        "eval",
+        "quant-check",
+        "--before",
+        str(before_model),
+        "--after",
+        str(after_model),
+        "--tasks",
+        str(tasks_file),
     ]
     missing_args = [
-        "eval", "quant-check",
-        "--before", str(before_model),
-        "--after", str(after_model),
-        "--tasks", str(tmp_path / "nonexistent_tasks.jsonl"),
+        "eval",
+        "quant-check",
+        "--before",
+        str(before_model),
+        "--after",
+        str(after_model),
+        "--tasks",
+        str(tmp_path / "nonexistent_tasks.jsonl"),
     ]
     return pass_args, fail_args, missing_args
 
@@ -204,25 +253,43 @@ def _setup_lock_check(tmp_path: Path) -> Tuple[list[str], list[str], list[str]]:
     write_lock(lock, str(lock_file))
 
     pass_args = [
-        "lock", "check", str(lock_file),
-        "--base-model", "test-model",
-        "--base-sha", base_sha,
-        "--dataset-sha", dataset_sha,
-        "--env-hash", env_hash,
+        "lock",
+        "check",
+        str(lock_file),
+        "--base-model",
+        "test-model",
+        "--base-sha",
+        base_sha,
+        "--dataset-sha",
+        dataset_sha,
+        "--env-hash",
+        env_hash,
     ]
     fail_args = [
-        "lock", "check", str(lock_file),
-        "--base-model", "test-model",
-        "--base-sha", "d" * 64,  # causes drift
-        "--dataset-sha", dataset_sha,
-        "--env-hash", env_hash,
+        "lock",
+        "check",
+        str(lock_file),
+        "--base-model",
+        "test-model",
+        "--base-sha",
+        "d" * 64,  # causes drift
+        "--dataset-sha",
+        dataset_sha,
+        "--env-hash",
+        env_hash,
     ]
     missing_args = [
-        "lock", "check", str(tmp_path / "nonexistent.lock"),
-        "--base-model", "test-model",
-        "--base-sha", base_sha,
-        "--dataset-sha", dataset_sha,
-        "--env-hash", env_hash,
+        "lock",
+        "check",
+        str(tmp_path / "nonexistent.lock"),
+        "--base-model",
+        "test-model",
+        "--base-sha",
+        base_sha,
+        "--dataset-sha",
+        dataset_sha,
+        "--env-hash",
+        env_hash,
     ]
     return pass_args, fail_args, missing_args
 
@@ -249,21 +316,27 @@ def _setup_data_validate(tmp_path: Path) -> Tuple[list[str], list[str], list[str
 def _setup_data_lint(tmp_path: Path) -> Tuple[list[str], list[str], list[str]]:
     pass_file = tmp_path / "dpo_pass.jsonl"
     pass_file.write_text(
-        json.dumps({
-            "prompt": "hello",
-            "chosen": "good morning how are you",
-            "rejected": "good night see you tomorrow",
-        }) + "\n",
+        json.dumps(
+            {
+                "prompt": "hello",
+                "chosen": "good morning how are you",
+                "rejected": "good night see you tomorrow",
+            }
+        )
+        + "\n",
         encoding="utf-8",
     )
 
     fail_file = tmp_path / "dpo_fail.jsonl"
     fail_file.write_text(
-        json.dumps({
-            "prompt": "hello",
-            "chosen": "good morning how are you",
-            "rejected": "good morning how are you",  # chosen == rejected triggers MAJOR
-        }) + "\n",
+        json.dumps(
+            {
+                "prompt": "hello",
+                "chosen": "good morning how are you",
+                "rejected": "good morning how are you",  # chosen == rejected triggers MAJOR
+            }
+        )
+        + "\n",
         encoding="utf-8",
     )
 
@@ -276,19 +349,23 @@ def _setup_data_lint(tmp_path: Path) -> Tuple[list[str], list[str], list[str]]:
 def _setup_ship(tmp_path: Path) -> Tuple[list[str], list[str], list[str]]:
     pass_file = tmp_path / "ship_pass.json"
     pass_file.write_text(
-        json.dumps({
-            "task": {"mode": "metric", "base": 0.4, "tuned": 0.8},
-            "benchmarks": {"mini_mmlu": {"base": 0.8, "tuned": 0.8}},
-        }),
+        json.dumps(
+            {
+                "task": {"mode": "metric", "base": 0.4, "tuned": 0.8},
+                "benchmarks": {"mini_mmlu": {"base": 0.8, "tuned": 0.8}},
+            }
+        ),
         encoding="utf-8",
     )
 
     fail_file = tmp_path / "ship_fail.json"
     fail_file.write_text(
-        json.dumps({
-            "task": {"mode": "metric", "base": 0.8, "tuned": 0.2},
-            "benchmarks": {"mini_mmlu": {"base": 0.8, "tuned": 0.8}},
-        }),
+        json.dumps(
+            {
+                "task": {"mode": "metric", "base": 0.8, "tuned": 0.2},
+                "benchmarks": {"mini_mmlu": {"base": 0.8, "tuned": 0.8}},
+            }
+        ),
         encoding="utf-8",
     )
 
@@ -351,14 +428,15 @@ def test_gate_commands_follow_unified_exit_code_taxonomy(
 ) -> None:
     """Every gate command must exit:
 
-      0 = EXIT_OK on passing input
-      2 = EXIT_GATE_FAILED on failing input / regression / drift
-      3 = EXIT_USAGE_ERROR on missing input file
+    0 = EXIT_OK on passing input
+    2 = EXIT_GATE_FAILED on failing input / regression / drift
+    3 = EXIT_USAGE_ERROR on missing input file
     """
     monkeypatch.chdir(tmp_path)
 
     # Command-specific mocks for isolated execution without GPU or network
     if command_name == "eval against":
+
         def fake_get_metric_series(self, run_id: str, metric: str):
             if "pass" in run_id:
                 return [0.8, 0.8, 0.8] if "cand" in run_id else [0.4, 0.4, 0.4]
@@ -370,6 +448,7 @@ def test_gate_commands_follow_unified_exit_code_taxonomy(
         )
 
     if command_name == "eval quant-check":
+
         class _MockState:
             is_fail = False
 
@@ -422,11 +501,9 @@ def test_eval_checklist_missing_evidence_exits_3(
     monkeypatch.chdir(tmp_path)
     spec_file = tmp_path / "checklist_spec.yaml"
     spec_file.write_text(
-        yaml.safe_dump({
-            "tests": [
-                {"name": "t1", "kind": "mft", "prompts": ["hi"], "expected": ["hello"]}
-            ]
-        }),
+        yaml.safe_dump(
+            {"tests": [{"name": "t1", "kind": "mft", "prompts": ["hi"], "expected": ["hello"]}]}
+        ),
         encoding="utf-8",
     )
     runner = CliRunner()
@@ -464,18 +541,20 @@ def test_eval_quant_check_missing_model_exits_3(
     res = runner.invoke(
         app,
         [
-            "eval", "quant-check",
-            "--before", "nonexistent_before",
-            "--after", "nonexistent_after",
-            "--tasks", str(tasks_file),
+            "eval",
+            "quant-check",
+            "--before",
+            "nonexistent_before",
+            "--after",
+            "nonexistent_after",
+            "--tasks",
+            str(tasks_file),
         ],
     )
     assert res.exit_code == EXIT_USAGE_ERROR
 
 
-def test_ci_workflow_exit_code_dispatch(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_ci_workflow_exit_code_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from soup_cli.utils.ci_workflow import render_soup_gate_workflow
 
     monkeypatch.chdir(tmp_path)
@@ -500,32 +579,30 @@ def test_ci_workflow_exit_code_dispatch(
 
     # Validate data step has 0/2/3 rc dispatch
     data_step = [r for r in step_runs if "soup data validate" in r][0]
-    assert 'set +e' in data_step and 'set -e' in data_step
+    assert "set +e" in data_step and "set -e" in data_step
     assert '[ "$rc" -eq 2 ]' in data_step
-    assert 'exit 2' in data_step
+    assert "exit 2" in data_step
     assert '[ "$rc" -ne 0 ]' in data_step
     assert 'exit "$rc"' in data_step
 
     # Expect step has 0/2/3 rc dispatch
     expect_step = [r for r in step_runs if "soup expect" in r][0]
-    assert 'set +e' in expect_step and 'set -e' in expect_step
+    assert "set +e" in expect_step and "set -e" in expect_step
     assert '[ "$rc" -eq 2 ]' in expect_step
-    assert 'exit 2' in expect_step
+    assert "exit 2" in expect_step
     assert '[ "$rc" -ne 0 ]' in expect_step
     assert 'exit "$rc"' in expect_step
 
     # Ship step has 0/2/3 rc dispatch
     ship_step = [r for r in step_runs if "soup ship" in r][0]
-    assert 'set +e' in ship_step and 'set -e' in ship_step
+    assert "set +e" in ship_step and "set -e" in ship_step
     assert '[ "$rc" -eq 2 ]' in ship_step
-    assert 'exit 2' in ship_step
+    assert "exit 2" in ship_step
     assert '[ "$rc" -ne 0 ]' in ship_step
     assert 'exit "$rc"' in ship_step
 
 
-def test_eval_gate_hook_exit_code_dispatch(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_eval_gate_hook_exit_code_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from soup_cli.utils.eval_gate_hook import render_pre_push_hook
 
     monkeypatch.chdir(tmp_path)

@@ -62,9 +62,7 @@ def _validate_name(name: object) -> str:
     if "\x00" in name:
         raise ValueError("name must not contain null bytes")
     if not _NAME_RE.match(name):
-        raise ValueError(
-            "name must match [A-Za-z0-9][A-Za-z0-9._-]{0,127}"
-        )
+        raise ValueError("name must match [A-Za-z0-9][A-Za-z0-9._-]{0,127}")
     return name
 
 
@@ -141,9 +139,7 @@ def create_branch(
     enforce_under_cwd_and_no_symlink(config_path, "config_path")
     _validate_str_field(base_model, "base_model", max_len=512)
     if registry_entry_id is not None:
-        registry_entry_id = _validate_str_field(
-            registry_entry_id, "registry_entry_id", max_len=128
-        )
+        registry_entry_id = _validate_str_field(registry_entry_id, "registry_entry_id", max_len=128)
     if dataset_path is not None and dataset_sha256 is not None:
         raise ValueError("pass dataset_path OR dataset_sha256, not both")
 
@@ -151,9 +147,7 @@ def create_branch(
     if not config_full.is_file():
         raise FileNotFoundError(f"config not found: {config_full.name}")
     if config_full.stat().st_size > _MAX_CONFIG_BYTES:
-        raise ValueError(
-            f"config exceeds {_MAX_CONFIG_BYTES} byte cap"
-        )
+        raise ValueError(f"config exceeds {_MAX_CONFIG_BYTES} byte cap")
 
     config_sha = _hash_file(config_full)
 
@@ -165,9 +159,7 @@ def create_branch(
             raise FileNotFoundError(f"dataset not found: {ds_full.name}")
         dataset_sha = _hash_file(ds_full)
     elif dataset_sha256 is not None:
-        dataset_sha = _validate_str_field(
-            dataset_sha256, "dataset_sha256", max_len=128
-        )
+        dataset_sha = _validate_str_field(dataset_sha256, "dataset_sha256", max_len=128)
 
     branches_dir = _branches_dir()
     existing = sorted(p for p in branches_dir.glob("*.json"))
@@ -244,9 +236,7 @@ def load_branch(name: str) -> Branch:
         soup_version=_validate_str_field(raw["soup_version"], "soup_version", max_len=64),
         # ``.get`` so v0.57.0 pointers (no registry_entry_id key) load cleanly.
         registry_entry_id=(
-            _validate_str_field(
-                raw["registry_entry_id"], "registry_entry_id", max_len=128
-            )
+            _validate_str_field(raw["registry_entry_id"], "registry_entry_id", max_len=128)
             if raw.get("registry_entry_id") is not None
             else None
         ),
@@ -343,9 +333,7 @@ def branch_from_registry(
     enforce_under_cwd_and_no_symlink(out_name, "config_out")
     out_path = Path(out_name)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(
-        yaml.safe_dump(config, sort_keys=False), encoding="utf-8"
-    )
+    out_path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
 
     return create_branch(
         name,
@@ -364,9 +352,7 @@ def write_checkout(branch: Branch, target_path: str) -> Path:
 
     source = Path(branch.config_path)
     if not source.is_file():
-        raise FileNotFoundError(
-            f"branch config no longer exists: {source.name}"
-        )
+        raise FileNotFoundError(f"branch config no longer exists: {source.name}")
 
     actual_sha = _hash_file(source)
     if actual_sha != branch.config_sha256:

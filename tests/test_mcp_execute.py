@@ -379,9 +379,7 @@ class TestConfigSnapshottingAndPlanning:
         token = out["confirmation_token"]
 
         plan = manager._plans[token]
-        expected_snapshot = str(
-            Path(tmp_path) / ".soup" / "mcp-runs" / plan.run_id / "config.yaml"
-        )
+        expected_snapshot = str(Path(tmp_path) / ".soup" / "mcp-runs" / plan.run_id / "config.yaml")
         assert "--config" in plan.argv
         cfg_arg_idx = plan.argv.index("--config") + 1
         assert os.path.realpath(plan.argv[cfg_arg_idx]) == os.path.realpath(expected_snapshot)

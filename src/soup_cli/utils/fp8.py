@@ -180,9 +180,7 @@ def _rowwise_refusal(recipe: str, capability: "tuple[int, int] | None") -> "str 
             "Use fp8_recipe: tensorwise."
         )
     cuda_build = getattr(torch.version, "cuda", None)
-    if not _torch_at_least(_ROWWISE_ANY_CUDA_TORCH) and not _version_at_least(
-        cuda_build, (12, 0)
-    ):
+    if not _torch_at_least(_ROWWISE_ANY_CUDA_TORCH) and not _version_at_least(cuda_build, (12, 0)):
         return (
             f"fp8_recipe '{recipe}' needs a torch built against CUDA >= 12 before "
             f"torch 2.11 (installed: torch {torch.__version__}, CUDA {cuda_build}); "

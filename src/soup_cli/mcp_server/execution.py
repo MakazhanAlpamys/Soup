@@ -193,10 +193,7 @@ def digest_file(
 def _snapshot_refusal(exc: OSError) -> str:
     """The path-free reason a plan-time config snapshot could not be written."""
     if exc.errno == errno.ELOOP:
-        return (
-            "cannot plan: config snapshot directory or file is a "
-            "symbolic link or junction"
-        )
+        return "cannot plan: config snapshot directory or file is a symbolic link or junction"
     if exc.errno == errno.EEXIST:
         return "cannot plan: config snapshot directory or file already exists"
     return f"cannot plan: could not write the config snapshot ({type(exc).__name__})"
@@ -377,9 +374,7 @@ class ExecutionManager:
                             "symbolic link or junction"
                         ) from exc
                     if exc.errno == errno.EMLINK:
-                        raise ExecutionError(
-                            "cannot execute: run log path is a hard link"
-                        ) from exc
+                        raise ExecutionError("cannot execute: run log path is a hard link") from exc
                     raise
                 process = subprocess.Popen(  # noqa: S603 - internal argv, no shell
                     list(plan.argv),
@@ -465,9 +460,7 @@ class ExecutionManager:
         try:
             process.kill()
         except Exception:
-            logger.debug(
-                "mcp execution %s: kill() failed for pid %s", run_id, pid, exc_info=True
-            )
+            logger.debug("mcp execution %s: kill() failed for pid %s", run_id, pid, exc_info=True)
         try:
             process.wait(timeout=10)
         except Exception:
@@ -517,8 +510,7 @@ class ExecutionManager:
             refuse_linked_dirs(root, stop_at=self.cwd)
         except OSError as exc:
             raise ExecutionError(
-                "cannot execute: run log directory or file is a "
-                "symbolic link or junction"
+                "cannot execute: run log directory or file is a symbolic link or junction"
             ) from exc
         root.mkdir(parents=True, exist_ok=True)
         return str(root / f"{run_id}.log")

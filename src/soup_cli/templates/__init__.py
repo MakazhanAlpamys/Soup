@@ -53,6 +53,7 @@ def list_templates() -> list[str]:
     # Fold in inline templates for back-compat.
     try:
         from soup_cli.config.schema import TEMPLATES as _INLINE
+
         names.update(_INLINE.keys())
     except ImportError:
         pass

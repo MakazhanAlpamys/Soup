@@ -160,9 +160,7 @@ class TestStreamedPreferenceLossesDisableHfGradientCheckpointing:
     def test_streaming_turns_hf_gradient_checkpointing_off(self, task, tmp_path, monkeypatch):
         from test_v07204 import _build_streamed_wrapper
 
-        wrapper, _, _ = _build_streamed_wrapper(
-            tmp_path, monkeypatch, task=task, device="cpu"
-        )
+        wrapper, _, _ = _build_streamed_wrapper(tmp_path, monkeypatch, task=task, device="cpu")
         assert wrapper.trainer.args.gradient_checkpointing is False, (
             f"{task}: HF gradient checkpointing reached the Trainer switched ON for a "
             "streamed run, so HF checkpoints the inner decoder layer as well as the "
@@ -171,9 +169,7 @@ class TestStreamedPreferenceLossesDisableHfGradientCheckpointing:
         )
 
     @pytest.mark.parametrize("asked", [True, False])
-    def test_a_non_streaming_run_gets_what_the_config_asked_for(
-        self, asked, tmp_path, monkeypatch
-    ):
+    def test_a_non_streaming_run_gets_what_the_config_asked_for(self, asked, tmp_path, monkeypatch):
         """CONTROL, and the second half of the same defect.
 
         Two things have to be true at once, and only asserting one of them would
@@ -266,9 +262,7 @@ class TestBitsandbytesDispatchAtTrainingShape:
             counts["total"] += 1
             return real_matmul(*args, **kwargs)
 
-        ids = torch.randint(
-            0, 64, (1, 128), generator=torch.Generator().manual_seed(11)
-        ).cuda()
+        ids = torch.randint(0, 64, (1, 128), generator=torch.Generator().manual_seed(11)).cuda()
         bnb_ops._dequant_linear_fallback = counting_fb
         bnb.matmul_4bit = counting_matmul
         try:
@@ -338,10 +332,19 @@ def _sft_wrapper(tmp_path, monkeypatch, **training):
         )
     )
     wrapper = SFTTrainerWrapper(cfg, device="cpu")
-    wrapper.setup({"train": [{"messages": [
-        {"role": "user", "content": "hi"},
-        {"role": "assistant", "content": "yo"},
-    ]}] * 4})
+    wrapper.setup(
+        {
+            "train": [
+                {
+                    "messages": [
+                        {"role": "user", "content": "hi"},
+                        {"role": "assistant", "content": "yo"},
+                    ]
+                }
+            ]
+            * 4
+        }
+    )
     return wrapper
 
 
@@ -518,10 +521,10 @@ def _write_adapter(directory, prefix=""):
 
     directory.mkdir(parents=True, exist_ok=True)
     tensors = {
-        f"{prefix}base_model.model.model.layers.0.self_attn.q_proj.lora_A.weight":
-            torch.ones(4, 8),
-        f"{prefix}base_model.model.model.layers.0.self_attn.q_proj.lora_B.weight":
-            torch.full((8, 4), 0.007),
+        f"{prefix}base_model.model.model.layers.0.self_attn.q_proj.lora_A.weight": torch.ones(4, 8),
+        f"{prefix}base_model.model.model.layers.0.self_attn.q_proj.lora_B.weight": torch.full(
+            (8, 4), 0.007
+        ),
     }
     path = directory / "adapter_model.safetensors"
     save_file(tensors, str(path))
@@ -664,9 +667,7 @@ class TestCheckpointAdaptersAreCanonicalToo:
         b = loaded["base_model.model.model.layers.0.self_attn.q_proj.lora_B.weight"]
         assert float(b.abs().max()) == pytest.approx(0.007), "trained values lost"
 
-    def test_a_repaired_checkpoint_is_byte_identical_to_an_uncompiled_one(
-        self, tmp_path
-    ):
+    def test_a_repaired_checkpoint_is_byte_identical_to_an_uncompiled_one(self, tmp_path):
         """What ``resume_from_checkpoint`` actually needs.
 
         A real resume needs FSDP2 and several GPUs, but the thing being resumed
@@ -739,9 +740,7 @@ class TestCheckpointAdaptersAreCanonicalToo:
         (tmp_path / "checkpoint-100").mkdir()
         _fire_on_save(build_compile_prefix_callback(), tmp_path, 100)
 
-    def test_a_rewrite_that_fails_warns_and_keeps_training(
-        self, tmp_path, monkeypatch, caplog
-    ):
+    def test_a_rewrite_that_fails_warns_and_keeps_training(self, tmp_path, monkeypatch, caplog):
         """A broken rewrite must not kill a multi-hour run, but it must not pass
         in silence either, because a checkpoint left with the prefix is a dead
         adapter and that is the whole bug."""
@@ -786,15 +785,19 @@ class TestCheckpointAdaptersAreCanonicalToo:
                 self.callbacks.append(callback)
 
         off = FakeTrainer()
-        assert attach_compile_prefix_callback(
-            off, types.SimpleNamespace(use_fsdp2_compile=False), "out"
-        ) is False
+        assert (
+            attach_compile_prefix_callback(
+                off, types.SimpleNamespace(use_fsdp2_compile=False), "out"
+            )
+            is False
+        )
         assert off.callbacks == []
 
         on = FakeTrainer()
-        assert attach_compile_prefix_callback(
-            on, types.SimpleNamespace(use_fsdp2_compile=True), "out"
-        ) is True
+        assert (
+            attach_compile_prefix_callback(on, types.SimpleNamespace(use_fsdp2_compile=True), "out")
+            is True
+        )
         assert len(on.callbacks) == 1
 
 
@@ -828,23 +831,21 @@ class TestNoReexecHintKeepsTheUsersFlags:
             encoding="utf-8",
         )
         monkeypatch.setattr(
-            topo_mod, "detect_topology",
+            topo_mod,
+            "detect_topology",
             lambda: {"gpu_count": 4, "interconnect": "PCIe"},
         )
         monkeypatch.setattr(topo_mod, "resolve_num_gpus", lambda spec: 4)
         result = CliRunner().invoke(
             app,
-            ["train", "--config", "soup.yaml", "--gpus", "4", "--no-reexec", "--yes",
-             *extra_args],
+            ["train", "--config", "soup.yaml", "--gpus", "4", "--no-reexec", "--yes", *extra_args],
         )
         # Rich wraps and may inject ANSI; strip both before matching, the way
         # every other CLI-output assertion in this repo has had to since v0.71.26.
         return re.sub(r"\x1b\[[0-9;]*m", "", result.output).replace("\n", " ")
 
     def test_the_hint_repeats_the_flags_the_user_passed(self, tmp_path, monkeypatch):
-        out = self._advice(
-            tmp_path, monkeypatch, ["--fsdp", "full_shard", "--trust-remote-code"]
-        )
+        out = self._advice(tmp_path, monkeypatch, ["--fsdp", "full_shard", "--trust-remote-code"])
         if "Multi-GPU launch required" not in out:
             pytest.skip("did not reach the advisory (config/data validation ran first)")
         assert "--fsdp" in out, out
@@ -997,9 +998,7 @@ class TestTheNormalisationRunsBeforeAnythingThatPublishes:
         # `setup()` has run.
         trainer.add_callback(Spy())
 
-        _write_adapter(
-            Path(trainer.args.output_dir) / "checkpoint-100", prefix="_orig_mod."
-        )
+        _write_adapter(Path(trainer.args.output_dir) / "checkpoint-100", prefix="_orig_mod.")
         trainer.state.global_step = 100
         trainer.control = trainer.callback_handler.on_save(
             trainer.args, trainer.state, trainer.control
@@ -1015,7 +1014,5 @@ class TestTheNormalisationRunsBeforeAnythingThatPublishes:
         """The position itself, so a move back into ``train()`` fails here rather
         than only in the subtler assertion above."""
         wrapper = _sft_wrapper(tmp_path, monkeypatch, use_fsdp2_compile=True)
-        names = [
-            type(cb).__name__ for cb in wrapper.trainer.callback_handler.callbacks
-        ]
+        names = [type(cb).__name__ for cb in wrapper.trainer.callback_handler.callbacks]
         assert "CompilePrefixCallback" in names, names

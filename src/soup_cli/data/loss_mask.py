@@ -45,9 +45,7 @@ class NoCausalLossTargetError(ValueError):
     """Raised when truncation leaves a row with no shifted causal-LM target."""
 
 
-def _coerce_int_list(
-    values: Any, *, field: str, allow_bool: bool = False
-) -> list[int]:
+def _coerce_int_list(values: Any, *, field: str, allow_bool: bool = False) -> list[int]:
     """Return a one-dimensional tokenizer sequence as Python ``int`` values."""
     try:
         items = list(values)
@@ -59,9 +57,7 @@ def _coerce_int_list(
     result: list[int] = []
     for position, item in enumerate(items):
         if isinstance(item, bool) and not allow_bool:
-            raise ValueError(
-                f"tokenizer returned non-integer {field}[{position}]={item!r}"
-            )
+            raise ValueError(f"tokenizer returned non-integer {field}[{position}]={item!r}")
         try:
             item = index(item)
         except TypeError as exc:
@@ -136,9 +132,7 @@ def _apply_template_with_mask(
         return None
     try:
         ids = coerce_token_ids(out)
-        mask = _coerce_int_list(
-            masks, field="assistant_masks", allow_bool=True
-        )
+        mask = _coerce_int_list(masks, field="assistant_masks", allow_bool=True)
     except ValueError:
         return None
     if len(mask) != len(ids):
@@ -217,9 +211,7 @@ def _unmask_aligned_render(
         labels[b1:end] = full_ids[b1:end]
 
 
-def _truncate(
-    input_ids: list[int], labels: list[int], max_length: int
-) -> dict[str, list[int]]:
+def _truncate(input_ids: list[int], labels: list[int], max_length: int) -> dict[str, list[int]]:
     input_ids = input_ids[:max_length]
     labels = labels[:max_length]
     attention_mask = [1] * len(input_ids)
@@ -267,7 +259,7 @@ def keep_only_the_last_assistant_turn(labels: list[int]) -> list[int]:
         return labels
     while index >= 0 and labels[index] != IGNORE_INDEX:
         index -= 1
-    return [IGNORE_INDEX] * (index + 1) + labels[index + 1:]
+    return [IGNORE_INDEX] * (index + 1) + labels[index + 1 :]
 
 
 def build_assistant_only_labels(
@@ -307,13 +299,9 @@ def build_assistant_only_labels(
         TypeError: ``include_eot`` not bool.
     """
     if not isinstance(include_eot, bool):
-        raise TypeError(
-            f"include_eot must be bool, got {type(include_eot).__name__}"
-        )
+        raise TypeError(f"include_eot must be bool, got {type(include_eot).__name__}")
     if not isinstance(mask_history, bool):
-        raise TypeError(
-            f"mask_history must be bool, got {type(mask_history).__name__}"
-        )
+        raise TypeError(f"mask_history must be bool, got {type(mask_history).__name__}")
     _check_messages(messages)
     _validate_max_length(max_length)
 
@@ -324,10 +312,7 @@ def build_assistant_only_labels(
         input_ids, mask = preferred
         if include_eot and eos_token_id is not None:
             mask = _extend_mask_to_eot(input_ids, mask, eos_token_id)
-        labels = [
-            tok if flag else IGNORE_INDEX
-            for tok, flag in zip(input_ids, mask)
-        ]
+        labels = [tok if flag else IGNORE_INDEX for tok, flag in zip(input_ids, mask)]
         if mask_history:
             labels = keep_only_the_last_assistant_turn(labels)
         return _truncate(input_ids, labels, max_length)
@@ -657,9 +642,7 @@ def build_per_message_train_labels(
             for deferred_msg, deferred_train_flag in deferred:
                 if not deferred_train_flag:
                     continue
-                without_message = [
-                    item for item in cumulative if item is not deferred_msg
-                ]
+                without_message = [item for item in cumulative if item is not deferred_msg]
                 _unmask_render_insertions(
                     labels,
                     full_ids,

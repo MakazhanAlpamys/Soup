@@ -150,11 +150,13 @@ class TestSFTPackingLossMask:
         # Create dummy pretokenized dataset with input_ids and labels
         input_ids = [1, 5, 6, 7, 2]
         labels = [-100, -100, -100, 7, 2]
-        ds = Dataset.from_dict({
-            "input_ids": [input_ids] * 8,
-            "labels": [labels] * 8,
-            "attention_mask": [[1] * 5] * 8,
-        })
+        ds = Dataset.from_dict(
+            {
+                "input_ids": [input_ids] * 8,
+                "labels": [labels] * 8,
+                "attention_mask": [[1] * 5] * 8,
+            }
+        )
         cache_f = tmp_path / "f" / "pretok_cache"
         cache_f.parent.mkdir(parents=True, exist_ok=True)
         ds.save_to_disk(str(cache_f))
@@ -164,21 +166,15 @@ class TestSFTPackingLossMask:
             tmp_path / "f", monkeypatch, data_extra=d_extra_f, packing=False
         )
         w_false.setup({})
-        sup_false, _ = _count_supervised_and_real_tokens(
-            w_false.trainer.get_train_dataloader()
-        )
+        sup_false, _ = _count_supervised_and_real_tokens(w_false.trainer.get_train_dataloader())
 
         cache_t = tmp_path / "t" / "pretok_cache"
         cache_t.parent.mkdir(parents=True, exist_ok=True)
         ds.save_to_disk(str(cache_t))
         d_extra_t = {"format": "pre_tokenized", "tokenized_path": "./pretok_cache"}
-        w_true = _build_sft_wrapper(
-            tmp_path / "t", monkeypatch, data_extra=d_extra_t, packing=True
-        )
+        w_true = _build_sft_wrapper(tmp_path / "t", monkeypatch, data_extra=d_extra_t, packing=True)
         w_true.setup({})
-        sup_true, _ = _count_supervised_and_real_tokens(
-            w_true.trainer.get_train_dataloader()
-        )
+        sup_true, _ = _count_supervised_and_real_tokens(w_true.trainer.get_train_dataloader())
 
         assert sup_true == sup_false
 

@@ -91,8 +91,7 @@ def _run(subcommand: str, raw_args: list[str]) -> None:
         )
     except OSError as exc:
         console.print(
-            f"[red]Failed to launch {escape(invocation.binary)}: "
-            f"{escape(type(exc).__name__)}[/]"
+            f"[red]Failed to launch {escape(invocation.binary)}: {escape(type(exc).__name__)}[/]"
         )
         raise typer.Exit(code=1) from exc
     if result.returncode != 0:
@@ -110,9 +109,7 @@ def _make_proxy(subcommand: str) -> Callable[..., None]:
         _run(subcommand, list(args or []) + list(ctx.args or []))
 
     _proxy.__name__ = f"_{subcommand.replace('-', '_')}_proxy"
-    _proxy.__doc__ = (
-        f"Forward args to llama.cpp binary {known_subcommands()[subcommand]}."
-    )
+    _proxy.__doc__ = f"Forward args to llama.cpp binary {known_subcommands()[subcommand]}."
     return _proxy
 
 

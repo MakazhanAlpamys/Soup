@@ -13,6 +13,7 @@ runner = CliRunner()
 
 # --- _format_size ---
 
+
 def test_format_size_bytes():
     assert _format_size(512) == "512.0 B"
 
@@ -31,11 +32,16 @@ def test_format_size_gb():
 
 # --- _detect_base_model ---
 
+
 def test_detect_base_model(tmp_path: Path):
     config = tmp_path / "adapter_config.json"
-    config.write_text(json.dumps({
-        "base_model_name_or_path": "meta-llama/Llama-3.1-8B",
-    }))
+    config.write_text(
+        json.dumps(
+            {
+                "base_model_name_or_path": "meta-llama/Llama-3.1-8B",
+            }
+        )
+    )
     assert _detect_base_model(config) == "meta-llama/Llama-3.1-8B"
 
 
@@ -57,6 +63,7 @@ def test_detect_base_model_missing_file(tmp_path: Path):
 
 
 # --- CLI validation ---
+
 
 def test_merge_missing_adapter():
     result = runner.invoke(app, ["merge", "--adapter", "/nonexistent"])
@@ -87,12 +94,14 @@ def test_merge_invalid_dtype(tmp_path: Path):
     """Invalid dtype should fail."""
     adapter_dir = tmp_path / "adapter"
     adapter_dir.mkdir()
-    (adapter_dir / "adapter_config.json").write_text(json.dumps({
-        "base_model_name_or_path": "meta-llama/Llama-3.1-8B",
-    }))
-    result = runner.invoke(
-        app, ["merge", "--adapter", str(adapter_dir), "--dtype", "int8"]
+    (adapter_dir / "adapter_config.json").write_text(
+        json.dumps(
+            {
+                "base_model_name_or_path": "meta-llama/Llama-3.1-8B",
+            }
+        )
     )
+    result = runner.invoke(app, ["merge", "--adapter", str(adapter_dir), "--dtype", "int8"])
     assert result.exit_code == 1
     assert "invalid dtype" in result.output.lower()
 

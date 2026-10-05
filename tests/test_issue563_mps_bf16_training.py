@@ -89,9 +89,7 @@ class TestPrecisionPolicy:
         assert bf16_fp16_flags("cpu", allow_mps_bf16=True) == (False, False)
 
     @pytest.mark.parametrize("auto_mixed_precision", [False, True])
-    def test_sft_requests_the_verified_mps_policy(
-        self, monkeypatch, auto_mixed_precision
-    ):
+    def test_sft_requests_the_verified_mps_policy(self, monkeypatch, auto_mixed_precision):
         from soup_cli.trainer import sft
 
         calls = []

@@ -96,13 +96,9 @@ def parse_budget(spec: str) -> int:
     multiplier = {"s": 1, "m": 60, "h": 3600}[unit]
     seconds = value * multiplier
     if seconds < _MIN_BUDGET_SECONDS:
-        raise ValueError(
-            f"budget {seconds}s below floor {_MIN_BUDGET_SECONDS}s"
-        )
+        raise ValueError(f"budget {seconds}s below floor {_MIN_BUDGET_SECONDS}s")
     if seconds > _MAX_BUDGET_SECONDS:
-        raise ValueError(
-            f"budget {seconds}s above cap {_MAX_BUDGET_SECONDS}s"
-        )
+        raise ValueError(f"budget {seconds}s above cap {_MAX_BUDGET_SECONDS}s")
     return seconds
 
 
@@ -140,16 +136,11 @@ def _count_dataset_rows(dataset_path: str) -> int:
     try:
         fd = os.open(dataset_path, os.O_RDONLY | no_follow)
     except FileNotFoundError as exc:
-        raise FileNotFoundError(
-            f"dataset not found: {os.path.basename(dataset_path)}"
-        ) from exc
+        raise FileNotFoundError(f"dataset not found: {os.path.basename(dataset_path)}") from exc
     except OSError as exc:
         # ELOOP on Linux when O_NOFOLLOW hits a symlink; map to a clear
         # error so operators see what tripped.
-        raise ValueError(
-            f"dataset cannot be opened (symlink?): "
-            f"{type(exc).__name__}"
-        ) from exc
+        raise ValueError(f"dataset cannot be opened (symlink?): {type(exc).__name__}") from exc
     count = 0
     with os.fdopen(fd, "rb") as fh:
         for _ in fh:
@@ -158,8 +149,7 @@ def _count_dataset_rows(dataset_path: str) -> int:
             # planning over the wrong row count would produce a bad plan.
             if count > 10_000_000:
                 raise ValueError(
-                    "dataset has >10M rows; subsample before blame "
-                    "(use `soup data sample`)"
+                    "dataset has >10M rows; subsample before blame (use `soup data sample`)"
                 )
     return count
 
@@ -181,8 +171,7 @@ def plan_blame(
     enforce_under_cwd_and_no_symlink(adapter_dir, "adapter_dir")
     enforce_under_cwd_and_no_symlink(dataset_path, "dataset_path")
     _validate_str(layer, "layer", max_len=256)
-    _validate_int(budget_seconds, "budget_seconds",
-                  _MIN_BUDGET_SECONDS, _MAX_BUDGET_SECONDS)
+    _validate_int(budget_seconds, "budget_seconds", _MIN_BUDGET_SECONDS, _MAX_BUDGET_SECONDS)
     _validate_int(num_shards, "num_shards", _MIN_SHARDS, _MAX_SHARDS)
 
     row_count = _count_dataset_rows(dataset_path)
@@ -196,7 +185,7 @@ def plan_blame(
         "ok"
         if feasible
         else f"budget {budget_seconds}s gives only {per_shard}s/shard "
-             f"(need ≥{_MIN_PER_SHARD_SECONDS}s)"
+        f"(need ≥{_MIN_PER_SHARD_SECONDS}s)"
     )
 
     shard_size = math.ceil(row_count / num_shards)
@@ -246,9 +235,7 @@ class RowInfluence:
                 raise TypeError(f"{name} must be int")
             if val < 0:
                 raise ValueError(f"{name} must be non-negative")
-        if isinstance(self.score, bool) or not isinstance(
-            self.score, (int, float)
-        ):
+        if isinstance(self.score, bool) or not isinstance(self.score, (int, float)):
             raise TypeError("score must be float")
         if not math.isfinite(float(self.score)):
             raise ValueError("score must be finite")
@@ -270,13 +257,8 @@ class BlameResult:
             raise TypeError("top_influencers must be tuple")
         for r in self.top_influencers:
             if not isinstance(r, RowInfluence):
-                raise TypeError(
-                    "top_influencers entries must be RowInfluence"
-                )
-        if (
-            isinstance(self.num_rows_scored, bool)
-            or not isinstance(self.num_rows_scored, int)
-        ):
+                raise TypeError("top_influencers entries must be RowInfluence")
+        if isinstance(self.num_rows_scored, bool) or not isinstance(self.num_rows_scored, int):
             raise TypeError("num_rows_scored must be int")
         if self.num_rows_scored < 0:
             raise ValueError("num_rows_scored must be non-negative")
@@ -412,17 +394,12 @@ def run_blame(
         raise TypeError("probe_fn outputs must be array-like") from exc
 
     if row_grads.ndim != 2:
-        raise ValueError(
-            f"row_grads must be 2D [N, D], got {row_grads.shape}"
-        )
+        raise ValueError(f"row_grads must be 2D [N, D], got {row_grads.shape}")
     if probe_grad.ndim != 1:
-        raise ValueError(
-            f"probe_grad must be 1D [D], got {probe_grad.shape}"
-        )
+        raise ValueError(f"probe_grad must be 1D [D], got {probe_grad.shape}")
     if row_grads.shape[1] != probe_grad.shape[0]:
         raise ValueError(
-            f"shape mismatch: row_grads[{row_grads.shape}] vs probe_grad"
-            f"[{probe_grad.shape}]"
+            f"shape mismatch: row_grads[{row_grads.shape}] vs probe_grad[{probe_grad.shape}]"
         )
 
     n_rows = int(row_grads.shape[0])
@@ -515,12 +492,8 @@ def render_blame_markdown(result: BlameResult) -> str:
     """Human-readable markdown for PR comments."""
     if not isinstance(result, BlameResult):
         raise TypeError("result must be BlameResult")
-    adapter_label = _md_escape(
-        os.path.basename(os.path.normpath(result.adapter_dir))
-    )
-    dataset_label = _md_escape(
-        os.path.basename(os.path.normpath(result.dataset_path))
-    )
+    adapter_label = _md_escape(os.path.basename(os.path.normpath(result.adapter_dir)))
+    dataset_label = _md_escape(os.path.basename(os.path.normpath(result.dataset_path)))
     layer_label = _md_escape(result.layer)
     lines = [
         f"# Blame: {adapter_label}",
@@ -534,12 +507,14 @@ def render_blame_markdown(result: BlameResult) -> str:
     if not result.top_influencers:
         lines.append("_no influencers (empty result)_")
         return "\n".join(lines) + "\n"
-    lines.extend([
-        "## Top influencers",
-        "",
-        "| row_id | shard_id | influence |",
-        "| --- | --- | --- |",
-    ])
+    lines.extend(
+        [
+            "## Top influencers",
+            "",
+            "| row_id | shard_id | influence |",
+            "| --- | --- | --- |",
+        ]
+    )
     for r in result.top_influencers:
         lines.append(f"| {r.row_id} | {r.shard_id} | {r.score:+.4f} |")
     return "\n".join(lines) + "\n"

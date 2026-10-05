@@ -64,6 +64,7 @@ def _torch_without_mem_get_info(*, peak_allocated: int, raises: bool = True):
     cuda.memory_allocated = lambda *a, **k: 0
 
     if raises:
+
         def mem_get_info(*a, **k):
             # What a driver that cannot answer actually does.
             raise RuntimeError("CUDA driver error: cannot query memory info")

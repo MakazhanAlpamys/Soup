@@ -41,18 +41,14 @@ _NON_MEAN_POOLING_KEYS = (
 
 def _require_model_id(model_id: object) -> str:
     if isinstance(model_id, bool) or not isinstance(model_id, str):
-        raise TypeError(
-            f"model_id must be str, got {type(model_id).__name__}"
-        )
+        raise TypeError(f"model_id must be str, got {type(model_id).__name__}")
     cleaned = model_id.strip()
     if not cleaned:
         raise ValueError("model_id must be a non-empty string")
     if "\x00" in cleaned:
         raise ValueError("model_id must not contain null bytes")
     if len(cleaned) > _MAX_MODEL_ID_CHARS:
-        raise ValueError(
-            f"model_id too long (max {_MAX_MODEL_ID_CHARS} chars)"
-        )
+        raise ValueError(f"model_id too long (max {_MAX_MODEL_ID_CHARS} chars)")
     return cleaned
 
 
@@ -68,9 +64,7 @@ def _fetch_pooling_config(model_id: str) -> Optional[dict]:
     try:
         from huggingface_hub import hf_hub_download
 
-        path = hf_hub_download(
-            repo_id=model_id, filename="1_Pooling/config.json"
-        )
+        path = hf_hub_download(repo_id=model_id, filename="1_Pooling/config.json")
         with open(path, "r", encoding="utf-8") as handle:
             data = json.load(handle)
         return data if isinstance(data, dict) else None
@@ -112,9 +106,7 @@ def resolve_pooling(model_id: str) -> str:
                 "wrong vectors."
             )
     if not config.get("pooling_mode_mean_tokens"):
-        raise ValueError(
-            f"{cleaned!r} does not declare mean-token pooling; refusing."
-        )
+        raise ValueError(f"{cleaned!r} does not declare mean-token pooling; refusing.")
     return "mean"
 
 
@@ -168,21 +160,15 @@ def _validate_texts(texts: object) -> list:
         )
     for idx, item in enumerate(items):
         if not isinstance(item, str):
-            raise TypeError(
-                f"texts[{idx}] must be str, got {type(item).__name__}"
-            )
+            raise TypeError(f"texts[{idx}] must be str, got {type(item).__name__}")
     return [item[:_MAX_CHARS_PER_ROW] for item in items]
 
 
 def _require_batch_size(batch_size: object) -> int:
     if isinstance(batch_size, bool) or not isinstance(batch_size, int):
-        raise TypeError(
-            f"batch_size must be int, got {type(batch_size).__name__}"
-        )
+        raise TypeError(f"batch_size must be int, got {type(batch_size).__name__}")
     if batch_size < 1 or batch_size > _MAX_BATCH_SIZE:
-        raise ValueError(
-            f"batch_size must be in [1, {_MAX_BATCH_SIZE}], got {batch_size}"
-        )
+        raise ValueError(f"batch_size must be in [1, {_MAX_BATCH_SIZE}], got {batch_size}")
     return batch_size
 
 
@@ -219,7 +205,7 @@ def embed_texts(
     with torch.no_grad():
         for start in range(0, len(items), batch):
             encoded = tokenizer(
-                items[start: start + batch],
+                items[start : start + batch],
                 padding=True,
                 truncation=True,
                 max_length=_MAX_SEQ_TOKENS,

@@ -192,7 +192,7 @@ def resolve_tokenizer(tokenizer: Any, *, trust_remote_code: bool = False) -> Any
     except ImportError as exc:
         raise ValueError(
             "soup data doctor needs transformers to load a tokenizer — "
-            "install with: pip install \"soup-cli[train]\""
+            'install with: pip install "soup-cli[train]"'
         ) from exc
     try:
         return AutoTokenizer.from_pretrained(tokenizer, trust_remote_code=trust_remote_code)
@@ -269,7 +269,10 @@ def _build_row_labels(
         return build_per_message_train_labels(messages, tokenizer, max_length=max_length)
     if train_on_responses_only:
         return build_assistant_only_labels(
-            messages, tokenizer, max_length=max_length, include_eot=include_eot,
+            messages,
+            tokenizer,
+            max_length=max_length,
+            include_eot=include_eot,
             mask_history=mask_history,
         )
     # #788: legacy full-sequence path — call the SAME builder the trainer uses
@@ -310,7 +313,9 @@ def check_chat_template(tokenizer: Any) -> DoctorCheck:
             ),
         )
     return DoctorCheck(
-        name="chat_template", verdict="OK", message="tokenizer has a chat_template",
+        name="chat_template",
+        verdict="OK",
+        message="tokenizer has a chat_template",
         evidence=f"{len(template)} chars",
     )
 
@@ -360,17 +365,23 @@ def check_generation_markers(tokenizer: Any) -> DoctorCheck:
     probe = [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello"}]
     try:
         out = tokenizer.apply_chat_template(
-            probe, tokenize=True, add_generation_prompt=False,
-            return_assistant_tokens_mask=True, return_dict=True,
+            probe,
+            tokenize=True,
+            add_generation_prompt=False,
+            return_assistant_tokens_mask=True,
+            return_dict=True,
         )
-        has_markers = isinstance(out, Mapping) and bool(out.get("assistant_masks")) and any(
-            out["assistant_masks"]
+        has_markers = (
+            isinstance(out, Mapping)
+            and bool(out.get("assistant_masks"))
+            and any(out["assistant_masks"])
         )
     except Exception:  # noqa: BLE001 — any failure means no usable markers
         has_markers = False
     if has_markers:
         return DoctorCheck(
-            name="generation_markers", verdict="OK",
+            name="generation_markers",
+            verdict="OK",
             message="template supports return_assistant_tokens_mask (exact assistant-only masking)",
         )
     return DoctorCheck(
@@ -400,13 +411,12 @@ def check_eos_in_labels(
     model to run turns together. Uses the SAME masking strategy as
     ``--show-mask`` (default: answer-only) so the two never disagree."""
     if not getattr(tokenizer, "chat_template", None):
-        return DoctorCheck(
-            name="eos_in_labels", verdict="OK", message="skipped (no chat_template)"
-        )
+        return DoctorCheck(name="eos_in_labels", verdict="OK", message="skipped (no chat_template)")
     eos_ids = _eos_token_ids(tokenizer)
     if not eos_ids:
         return DoctorCheck(
-            name="eos_in_labels", verdict="MINOR",
+            name="eos_in_labels",
+            verdict="MINOR",
             message="tokenizer has no eos_token_id — cannot verify the model is taught to stop",
         )
 
@@ -556,7 +566,8 @@ def check_system_role(tokenizer: Any, rows: Sequence[Mapping]) -> DoctorCheck:
         supported = False
     if supported:
         return DoctorCheck(
-            name="system_role", verdict="OK",
+            name="system_role",
+            verdict="OK",
             message=f"template supports the system role ({system_rows} rows use one)",
         )
     return DoctorCheck(
@@ -625,9 +636,7 @@ def check_truncation_risk(
             continue
         try:
             ids = coerce_token_ids(
-                tokenizer.apply_chat_template(
-                    messages, tokenize=True, add_generation_prompt=False
-                )
+                tokenizer.apply_chat_template(messages, tokenize=True, add_generation_prompt=False)
             )
         except Exception:  # noqa: BLE001 — render failures are reported by template_render
             continue
@@ -699,9 +708,7 @@ def run_doctor(
         raise TypeError("train_on_messages_with_train_field must be bool")
     if not isinstance(mask_history, bool):
         raise TypeError("mask_history must be bool")
-    if mask_history and (
-        train_on_messages_with_train_field or not train_on_responses_only
-    ):
+    if mask_history and (train_on_messages_with_train_field or not train_on_responses_only):
         raise ValueError(
             "mask_history requires train_on_responses_only and cannot combine "
             "with train_on_messages_with_train_field — data.mask_history "
@@ -732,13 +739,18 @@ def run_doctor(
         check_template_render(tokenizer, normalized),
         check_generation_markers(tokenizer),
         check_eos_in_labels(
-            tokenizer, normalized, max_length=max_length, include_eot=include_eot,
+            tokenizer,
+            normalized,
+            max_length=max_length,
+            include_eot=include_eot,
             train_on_responses_only=train_on_responses_only,
             train_on_messages_with_train_field=train_on_messages_with_train_field,
             mask_history=mask_history,
         ),
         check_bos_duplication(
-            tokenizer, normalized, max_length=max_length,
+            tokenizer,
+            normalized,
+            max_length=max_length,
             train_on_responses_only=train_on_responses_only,
             train_on_messages_with_train_field=train_on_messages_with_train_field,
             mask_history=mask_history,
@@ -905,9 +917,7 @@ def render_mask_preview(
         raise ValueError(f"n must be <= {_MAX_PREVIEW_ROWS}")
     if not isinstance(mask_history, bool):
         raise TypeError("mask_history must be bool")
-    if mask_history and (
-        train_on_messages_with_train_field or not train_on_responses_only
-    ):
+    if mask_history and (train_on_messages_with_train_field or not train_on_responses_only):
         raise ValueError(
             "mask_history requires train_on_responses_only and cannot combine "
             "with train_on_messages_with_train_field — it narrows the "

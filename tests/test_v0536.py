@@ -28,6 +28,7 @@ _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 def _strip_ansi(text: str) -> str:
     return _ANSI_RE.sub("", text)
 
+
 # ----------------------------------------------------------------------
 # #101 — SoupPluginCallback + attach_plugin_callback
 # ----------------------------------------------------------------------
@@ -116,9 +117,7 @@ def test_plugin_callback_dispatches_to_implemented_hooks(
     assert plugin.events == ["pre_train", "post_step"]
 
 
-def test_plugin_callback_swallows_hook_exceptions(
-    clear_plugins_fixture, caplog
-):
+def test_plugin_callback_swallows_hook_exceptions(clear_plugins_fixture, caplog):
     """One misbehaving plugin must not crash training."""
     pytest.importorskip("transformers")
     from soup_cli.monitoring.plugin_callback import build_plugin_callback
@@ -132,9 +131,7 @@ def test_plugin_callback_swallows_hook_exceptions(
         callback.on_train_begin(MagicMock(), MagicMock(), MagicMock())
     # Did not raise; recorded a WARNING for this specific plugin.
     matching = [
-        rec
-        for rec in caplog.records
-        if rec.levelname == "WARNING" and "bad-plugin" in rec.message
+        rec for rec in caplog.records if rec.levelname == "WARNING" and "bad-plugin" in rec.message
     ]
     assert matching, "expected WARNING for bad-plugin hook failure"
 
@@ -240,8 +237,7 @@ def test_every_trainer_wires_attach_plugin_callback(trainer_file: str):
     )
     # Direct import from canonical peft_wiring module (no re-export shim).
     assert "attach_plugin_callback," in src or (
-        "from soup_cli.utils.peft_wiring import" in src
-        and "attach_plugin_callback" in src
+        "from soup_cli.utils.peft_wiring import" in src and "attach_plugin_callback" in src
     ), f"{trainer_file} must import attach_plugin_callback from peft_wiring"
     # Sanity: imported AND called on self.trainer.
     assert "attach_plugin_callback(self.trainer" in src, (
@@ -564,10 +560,7 @@ def test_data_recipe_execute_requires_output(tmp_path: Path, monkeypatch):
 
     monkeypatch.chdir(tmp_path)
     Path("recipe.yaml").write_text(
-        "nodes:\n"
-        "  - name: a\n"
-        "    kind: seed\n"
-        "edges: []\n",
+        "nodes:\n  - name: a\n    kind: seed\nedges: []\n",
         encoding="utf-8",
     )
     runner = CliRunner()
@@ -590,10 +583,7 @@ def test_data_recipe_execute_surfaces_v0537_marker(tmp_path: Path, monkeypatch):
 
     monkeypatch.chdir(tmp_path)
     Path("recipe.yaml").write_text(
-        "nodes:\n"
-        "  - name: a\n"
-        "    kind: seed\n"
-        "edges: []\n",
+        "nodes:\n  - name: a\n    kind: seed\nedges: []\n",
         encoding="utf-8",
     )
     runner = CliRunner()

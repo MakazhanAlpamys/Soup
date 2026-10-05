@@ -59,7 +59,7 @@ def create_mii_pipeline(
     if not is_mii_available():
         raise ImportError(
             "deepspeed-mii is not installed. "
-            "Install with: pip install \"soup-cli[mii]\" "
+            'Install with: pip install "soup-cli[mii]" '
             "or pip install deepspeed-mii"
         )
 
@@ -268,10 +268,14 @@ def build_mii_app(
     def _list_models() -> dict:
         return {
             "object": "list",
-            "data": [{
-                "id": model_name, "object": "model",
-                "created": 0, "owned_by": "soup-cli-mii",
-            }],
+            "data": [
+                {
+                    "id": model_name,
+                    "object": "model",
+                    "created": 0,
+                    "owned_by": "soup-cli-mii",
+                }
+            ],
         }
 
     @app.post("/v1/chat/completions")
@@ -288,7 +292,8 @@ def build_mii_app(
             request.max_tokens < 1 or request.max_tokens > 16384
         ):
             raise HTTPException(
-                status_code=400, detail="max_tokens must be in [1, 16384]",
+                status_code=400,
+                detail="max_tokens must be in [1, 16384]",
             )
         # #785: MII tokenizes the string itself with add_special_tokens=True,
         # which put a second BOS in front of the one the template rendered.
@@ -323,11 +328,13 @@ def build_mii_app(
             "object": "chat.completion",
             "created": int(time.time()),
             "model": model_name,
-            "choices": [{
-                "index": 0,
-                "message": {"role": "assistant", "content": text},
-                "finish_reason": resolve_finish_reason(first, max_tokens),
-            }],
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": text},
+                    "finish_reason": resolve_finish_reason(first, max_tokens),
+                }
+            ],
             "usage": {
                 "prompt_tokens": -1,
                 "completion_tokens": -1,

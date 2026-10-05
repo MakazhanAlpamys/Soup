@@ -52,9 +52,7 @@ def _check_text_field(value: object, field: str, max_len: int) -> str:
     if "\x00" in value:
         raise ValueError(f"{field} must not contain null bytes")
     if len(value) > max_len:
-        raise ValueError(
-            f"{field} length {len(value)} > {max_len}"
-        )
+        raise ValueError(f"{field} length {len(value)} > {max_len}")
     return value
 
 
@@ -126,12 +124,8 @@ class SampleDiff:
 
     def __post_init__(self) -> None:
         _check_required_text(self.prompt, "prompt", MAX_OUTPUT_LEN)
-        _check_text_field(
-            self.baseline_output, "baseline_output", MAX_OUTPUT_LEN
-        )
-        _check_text_field(
-            self.candidate_output, "candidate_output", MAX_OUTPUT_LEN
-        )
+        _check_text_field(self.baseline_output, "baseline_output", MAX_OUTPUT_LEN)
+        _check_text_field(self.candidate_output, "candidate_output", MAX_OUTPUT_LEN)
 
 
 @dataclass(frozen=True)
@@ -150,24 +144,18 @@ class AdapterPR:
         _check_required_text(self.title, "title", MAX_TITLE_LEN)
         _check_sha256(self.base_sha, "base_sha")
         _check_required_text(self.adapter_path, "adapter_path", MAX_OUTPUT_LEN)
-        _check_text_field(
-            self.dataset_diff, "dataset_diff", MAX_DATASET_DIFF_LEN
-        )
+        _check_text_field(self.dataset_diff, "dataset_diff", MAX_DATASET_DIFF_LEN)
         if not isinstance(self.deltas, tuple):
             raise TypeError("deltas must be tuple")
         if len(self.deltas) > MAX_DELTAS:
-            raise ValueError(
-                f"too many deltas ({len(self.deltas)} > {MAX_DELTAS})"
-            )
+            raise ValueError(f"too many deltas ({len(self.deltas)} > {MAX_DELTAS})")
         for d in self.deltas:
             if not isinstance(d, EvalDelta):
                 raise TypeError("deltas entries must be EvalDelta")
         if not isinstance(self.samples, tuple):
             raise TypeError("samples must be tuple")
         if len(self.samples) > MAX_SAMPLES:
-            raise ValueError(
-                f"too many samples ({len(self.samples)} > {MAX_SAMPLES})"
-            )
+            raise ValueError(f"too many samples ({len(self.samples)} > {MAX_SAMPLES})")
         for s in self.samples:
             if not isinstance(s, SampleDiff):
                 raise TypeError("samples entries must be SampleDiff")
@@ -272,8 +260,7 @@ def render_pr_markdown(pr: AdapterPR) -> str:
             metric = _md_table_escape(d.metric)
             sign = "+" if d.delta >= 0 else ""
             lines.append(
-                f"| {metric} | {d.baseline:.4f} | {d.candidate:.4f} | "
-                f"{sign}{d.delta:.4f} |"
+                f"| {metric} | {d.baseline:.4f} | {d.candidate:.4f} | {sign}{d.delta:.4f} |"
             )
         lines.append("")
 
@@ -352,9 +339,7 @@ def write_pr_markdown(pr: AdapterPR, path: str) -> str:
 
 # owner/repo#<number> — owner + repo are GitHub name-safe (alnum + ._-),
 # number is a positive integer.
-_PR_TARGET_RE = re.compile(
-    r"^([A-Za-z0-9][A-Za-z0-9._-]*)/([A-Za-z0-9][A-Za-z0-9._-]*)#([0-9]+)$"
-)
+_PR_TARGET_RE = re.compile(r"^([A-Za-z0-9][A-Za-z0-9._-]*)/([A-Za-z0-9][A-Za-z0-9._-]*)#([0-9]+)$")
 _MAX_PR_BODY_BYTES = 60_000  # GitHub caps issue-comment bodies at 65_536 bytes
 
 # Env keys passed through to the `gh` child — everything else (HF_TOKEN /
@@ -363,12 +348,29 @@ _MAX_PR_BODY_BYTES = 60_000  # GitHub caps issue-comment bodies at 65_536 bytes
 # mirrors v0.44.0 _LLAMA_ENV_ALLOWLIST).
 _GH_ENV_ALLOWLIST = frozenset(
     {
-        "PATH", "HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA",
-        "SYSTEMROOT", "SystemRoot", "TEMP", "TMP", "TMPDIR",
-        "GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_API_URL",
-        "GH_HOST", "GH_CONFIG_DIR",
-        "XDG_CONFIG_HOME", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
-        "http_proxy", "https_proxy", "no_proxy",
+        "PATH",
+        "HOME",
+        "USERPROFILE",
+        "APPDATA",
+        "LOCALAPPDATA",
+        "SYSTEMROOT",
+        "SystemRoot",
+        "TEMP",
+        "TMP",
+        "TMPDIR",
+        "GH_TOKEN",
+        "GITHUB_TOKEN",
+        "GH_ENTERPRISE_TOKEN",
+        "GITHUB_API_URL",
+        "GH_HOST",
+        "GH_CONFIG_DIR",
+        "XDG_CONFIG_HOME",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "NO_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "no_proxy",
     }
 )
 
@@ -383,10 +385,7 @@ def parse_pr_target(target: object) -> Tuple[str, str, int]:
         raise TypeError("target must be str")
     match = _PR_TARGET_RE.match(target.strip())
     if not match:
-        raise ValueError(
-            "target must be 'owner/repo#<number>' "
-            "(e.g. MakazhanAlpamys/Soup#42)"
-        )
+        raise ValueError("target must be 'owner/repo#<number>' (e.g. MakazhanAlpamys/Soup#42)")
     num = int(match.group(3))
     if num < 1:
         raise ValueError("PR number must be >= 1")
@@ -406,8 +405,7 @@ def resolve_github_token(env: Optional[Mapping[str, str]] = None) -> str:
         if val and val.strip():
             return val.strip()
     raise RuntimeError(
-        "no GitHub token found; set GITHUB_TOKEN (or GH_TOKEN) "
-        "to publish a PR comment"
+        "no GitHub token found; set GITHUB_TOKEN (or GH_TOKEN) to publish a PR comment"
     )
 
 
@@ -434,9 +432,7 @@ def post_pr_comment(
     if "\x00" in body:
         raise ValueError("body must not contain null bytes")
     if len(body.encode("utf-8")) > _MAX_PR_BODY_BYTES:
-        raise ValueError(
-            f"body exceeds {_MAX_PR_BODY_BYTES} byte GitHub comment cap"
-        )
+        raise ValueError(f"body exceeds {_MAX_PR_BODY_BYTES} byte GitHub comment cap")
     # Fail fast if no token before spawning the subprocess.
     token = resolve_github_token(env)
 
@@ -460,9 +456,7 @@ def post_pr_comment(
     if env is not None:
         base_env = dict(env)
     else:
-        base_env = {
-            k: v for k, v in os.environ.items() if k in _GH_ENV_ALLOWLIST
-        }
+        base_env = {k: v for k, v in os.environ.items() if k in _GH_ENV_ALLOWLIST}
     base_env.setdefault("GH_TOKEN", token)
     run = runner if runner is not None else subprocess.run
     try:
@@ -485,9 +479,7 @@ def post_pr_comment(
 
     if getattr(result, "returncode", 1) != 0:
         stderr = (getattr(result, "stderr", "") or "").strip()[:512]
-        raise RuntimeError(
-            f"gh api failed (rc={result.returncode}): {stderr or 'no detail'}"
-        )
+        raise RuntimeError(f"gh api failed (rc={result.returncode}): {stderr or 'no detail'}")
     try:
         data = json.loads(getattr(result, "stdout", "") or "{}")
         return str(data.get("html_url") or "")

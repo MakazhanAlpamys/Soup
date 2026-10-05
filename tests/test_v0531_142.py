@@ -122,9 +122,7 @@ class TestMerge4bitWiring:
         monkeypatch.chdir(tmp_path)
         src = tmp_path / "merged"
         src.mkdir()
-        (src / "config.json").write_text(
-            '{"model_type": "llama"}', encoding="utf-8"
-        )
+        (src / "config.json").write_text('{"model_type": "llama"}', encoding="utf-8")
 
         # Patch the from_pretrained class methods on the real transformers
         # module — this avoids the `patch.dict(sys.modules, ...)` approach
@@ -133,16 +131,21 @@ class TestMerge4bitWiring:
         fake_tokenizer = MagicMock()
 
         import transformers  # noqa: F401 — needed before patching attrs
+
         out_dir = tmp_path / "out_4bit"
-        with patch(
-            "transformers.AutoModelForCausalLM.from_pretrained",
-            return_value=fake_model,
-        ), patch(
-            "transformers.AutoTokenizer.from_pretrained",
-            return_value=fake_tokenizer,
-        ), patch(
-            "transformers.BitsAndBytesConfig",
-            MagicMock(return_value=MagicMock()),
+        with (
+            patch(
+                "transformers.AutoModelForCausalLM.from_pretrained",
+                return_value=fake_model,
+            ),
+            patch(
+                "transformers.AutoTokenizer.from_pretrained",
+                return_value=fake_tokenizer,
+            ),
+            patch(
+                "transformers.BitsAndBytesConfig",
+                MagicMock(return_value=MagicMock()),
+            ),
         ):
             save_formats.merge_4bit(
                 merged_dir=str(src),
@@ -228,12 +231,15 @@ class TestExportTorchAOWiring:
         sys.modules["torchao"] = fake_torchao
         sys.modules["torchao.quantization"] = fake_torchao.quantization
         try:
-            with patch(
-                "transformers.AutoModelForCausalLM.from_pretrained",
-                return_value=fake_model,
-            ), patch(
-                "transformers.AutoTokenizer.from_pretrained",
-                return_value=fake_tokenizer,
+            with (
+                patch(
+                    "transformers.AutoModelForCausalLM.from_pretrained",
+                    return_value=fake_model,
+                ),
+                patch(
+                    "transformers.AutoTokenizer.from_pretrained",
+                    return_value=fake_tokenizer,
+                ),
             ):
                 out_dir = tmp_path / "out_torchao"
                 save_formats.export_torchao(
@@ -267,9 +273,7 @@ class TestMergeSaveFormatCLI:
         # in narrow CI terminals splits option names across lines.
         click_cmd = typer.main.get_command(app)
         registered = {
-            opt
-            for param in click_cmd.params
-            for opt in (param.opts + param.secondary_opts)
+            opt for param in click_cmd.params for opt in (param.opts + param.secondary_opts)
         }
         assert "--save-format" in registered, registered
 
@@ -288,9 +292,12 @@ class TestMergeSaveFormatCLI:
         result = runner.invoke(
             app,
             [
-                "--adapter", str(adapter),
-                "--save-format", "weird",
-                "--output", str(tmp_path / "out"),
+                "--adapter",
+                str(adapter),
+                "--save-format",
+                "weird",
+                "--output",
+                str(tmp_path / "out"),
             ],
         )
         assert result.exit_code != 0
@@ -326,23 +333,26 @@ class TestMergeSaveFormatCLI:
 
         app = typer.Typer()
         app.command()(merge)
-        with patch(
-            "transformers.AutoModelForCausalLM.from_pretrained", return_value=fake_model
-        ), patch(
-            "peft.PeftModel.from_pretrained", return_value=fake_model
-        ), patch(
-            "transformers.AutoTokenizer.from_pretrained", return_value=MagicMock()
-        ), patch(
-            "soup_cli.utils.save_formats.merge_4bit",
-            side_effect=lambda **k: captured.update(k),
+        with (
+            patch("transformers.AutoModelForCausalLM.from_pretrained", return_value=fake_model),
+            patch("peft.PeftModel.from_pretrained", return_value=fake_model),
+            patch("transformers.AutoTokenizer.from_pretrained", return_value=MagicMock()),
+            patch(
+                "soup_cli.utils.save_formats.merge_4bit",
+                side_effect=lambda **k: captured.update(k),
+            ),
         ):
             result = runner.invoke(
                 app,
                 [
-                    "--adapter", str(adapter),
-                    "--base", "some/base",
-                    "--save-format", "4bit",
-                    "--output", str(tmp_path / "out"),
+                    "--adapter",
+                    str(adapter),
+                    "--base",
+                    "some/base",
+                    "--save-format",
+                    "4bit",
+                    "--output",
+                    str(tmp_path / "out"),
                     "--no-double-quant",
                 ],
             )
@@ -366,9 +376,7 @@ class TestExportTorchaoCLI:
         app.command()(export)
         click_cmd = typer.main.get_command(app)
         registered = {
-            opt
-            for param in click_cmd.params
-            for opt in (param.opts + param.secondary_opts)
+            opt for param in click_cmd.params for opt in (param.opts + param.secondary_opts)
         }
         assert "--quant-config" in registered, registered
         assert "--gguf-flavour" in registered, registered
@@ -386,9 +394,12 @@ class TestExportTorchaoCLI:
         result = runner.invoke(
             app,
             [
-                "--model", str(model),
-                "--format", "torchao",
-                "--output", str(tmp_path / "out"),
+                "--model",
+                str(model),
+                "--format",
+                "torchao",
+                "--output",
+                str(tmp_path / "out"),
             ],
         )
         assert result.exit_code != 0
@@ -410,10 +421,14 @@ class TestExportTorchaoCLI:
         result = runner.invoke(
             app,
             [
-                "--model", str(model),
-                "--format", "torchao",
-                "--quant-config", str(outside_yaml),
-                "--output", str(tmp_path / "out"),
+                "--model",
+                str(model),
+                "--format",
+                "torchao",
+                "--quant-config",
+                str(outside_yaml),
+                "--output",
+                str(tmp_path / "out"),
             ],
         )
         assert result.exit_code != 0
@@ -516,12 +531,15 @@ class TestTorchAOKwargAllowlist:
         sys.modules["torchao"] = fake_torchao
         sys.modules["torchao.quantization"] = fake_torchao.quantization
         try:
-            with patch(
-                "transformers.AutoModelForCausalLM.from_pretrained",
-                return_value=fake_model,
-            ), patch(
-                "transformers.AutoTokenizer.from_pretrained",
-                return_value=fake_tokenizer,
+            with (
+                patch(
+                    "transformers.AutoModelForCausalLM.from_pretrained",
+                    return_value=fake_model,
+                ),
+                patch(
+                    "transformers.AutoTokenizer.from_pretrained",
+                    return_value=fake_tokenizer,
+                ),
             ):
                 save_formats.export_torchao(
                     model_dir=str(src),

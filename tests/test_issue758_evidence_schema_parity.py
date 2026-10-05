@@ -58,9 +58,7 @@ def test_corpus_covers_every_registered_evidence_field():
     """Every current optional field has a non-default parity example."""
     observed = {
         "root": set().union(*(evidence.keys() for evidence in EVIDENCE_CORPUS)),
-        "task": set().union(
-            *(evidence["task"].keys() for evidence in EVIDENCE_CORPUS)
-        ),
+        "task": set().union(*(evidence["task"].keys() for evidence in EVIDENCE_CORPUS)),
         "benchmark": set().union(
             *(
                 entry.keys()
@@ -122,9 +120,7 @@ MALFORMED_CORPUS = (
     },
     {
         "task": {"mode": "metric", "base": 0.50, "tuned": 0.60},
-        "benchmarks": {
-            "mini_mmlu": {"base": 0.70, "tuned": 0.71, "future_optional": True}
-        },
+        "benchmarks": {"mini_mmlu": {"base": 0.70, "tuned": 0.71, "future_optional": True}},
     },
     {
         "task": {"mode": "metric", "base": 0.50, "tuned": 0.60},
@@ -140,9 +136,7 @@ MALFORMED_CORPUS = (
 
 
 def _write_evidence(tmp_path, payload: object) -> None:
-    (tmp_path / EVIDENCE_FILENAME).write_text(
-        json.dumps(payload), encoding="utf-8"
-    )
+    (tmp_path / EVIDENCE_FILENAME).write_text(json.dumps(payload), encoding="utf-8")
 
 
 def _mcp_verdict(tmp_path, monkeypatch, payload: object) -> dict:
@@ -171,27 +165,17 @@ def _cli_verdict(tmp_path, monkeypatch, payload: object):
         ],
     )
     output_path = tmp_path / CLI_OUTPUT_FILENAME
-    output = (
-        json.loads(output_path.read_text(encoding="utf-8"))
-        if output_path.exists()
-        else None
-    )
+    output = json.loads(output_path.read_text(encoding="utf-8")) if output_path.exists() else None
     return result, output
 
 
 @pytest.mark.parametrize("evidence", EVIDENCE_CORPUS)
-def test_all_readers_report_every_verdict_field_identically(
-    tmp_path, monkeypatch, evidence
-):
+def test_all_readers_report_every_verdict_field_identically(tmp_path, monkeypatch, evidence):
     """Both public surfaces must be projections of one canonical decoder."""
     from soup_cli.utils.ship_verdict import verdict_from_evidence
 
-    canonical = verdict_from_evidence(
-        evidence, forgetting_threshold=FORGETTING_THRESHOLD
-    )
-    cli_result, cli = _cli_verdict(
-        tmp_path, monkeypatch, copy.deepcopy(evidence)
-    )
+    canonical = verdict_from_evidence(evidence, forgetting_threshold=FORGETTING_THRESHOLD)
+    cli_result, cli = _cli_verdict(tmp_path, monkeypatch, copy.deepcopy(evidence))
     mcp = _mcp_verdict(tmp_path, monkeypatch, copy.deepcopy(evidence))
     mcp_warnings = mcp.pop("warnings")
 
@@ -204,9 +188,7 @@ def test_all_readers_report_every_verdict_field_identically(
     assert cli == expected
     assert mcp == expected
 
-    widened = floor_exceeds_threshold(
-        canonical.noise_floor, canonical.forgetting_threshold
-    )
+    widened = floor_exceeds_threshold(canonical.noise_floor, canonical.forgetting_threshold)
     assert bool(mcp_warnings) == bool(widened)
     assert ("LOOSER" in cli_result.output) == bool(widened)
     for name, value in widened:
@@ -235,29 +217,21 @@ def test_schema_keys_are_derived_from_the_canonical_serializer(evidence):
     """
     from soup_cli.utils.ship_verdict import verdict_from_evidence
 
-    canonical = verdict_from_evidence(
-        evidence, forgetting_threshold=FORGETTING_THRESHOLD
-    )
-    replay = verdict_to_evidence(
-        canonical, provenance=evidence.get(PROVENANCE_FIELD)
-    )
+    canonical = verdict_from_evidence(evidence, forgetting_threshold=FORGETTING_THRESHOLD)
+    replay = verdict_to_evidence(canonical, provenance=evidence.get(PROVENANCE_FIELD))
 
     assert replay == evidence
 
 
 @pytest.mark.parametrize("evidence", MALFORMED_CORPUS)
-def test_all_readers_refuse_the_same_malformed_corpus(
-    tmp_path, monkeypatch, evidence
-):
+def test_all_readers_refuse_the_same_malformed_corpus(tmp_path, monkeypatch, evidence):
     """Malformed evidence is a refusal everywhere, never a partial verdict."""
     from soup_cli.utils.ship_verdict import verdict_from_evidence
 
     with pytest.raises((TypeError, ValueError)):
         verdict_from_evidence(evidence, forgetting_threshold=FORGETTING_THRESHOLD)
 
-    cli_result, cli_output = _cli_verdict(
-        tmp_path, monkeypatch, copy.deepcopy(evidence)
-    )
+    cli_result, cli_output = _cli_verdict(tmp_path, monkeypatch, copy.deepcopy(evidence))
     assert cli_result.exit_code == 3, (
         cli_result.output,
         repr(cli_result.exception),
@@ -368,9 +342,7 @@ def test_mcp_refusal_still_names_the_schema_block_it_refused(tmp_path, monkeypat
 
 
 @pytest.mark.parametrize("threshold", (True, -0.01, 1.01, float("nan")))
-def test_all_readers_refuse_the_same_invalid_threshold(
-    tmp_path, monkeypatch, threshold
-):
+def test_all_readers_refuse_the_same_invalid_threshold(tmp_path, monkeypatch, threshold):
     """Threshold validation is part of the shared evidence-reader contract."""
     from soup_cli.utils.ship_verdict import verdict_from_evidence
 
@@ -385,9 +357,7 @@ def test_all_readers_refuse_the_same_invalid_threshold(
     monkeypatch.chdir(tmp_path)
     _write_evidence(tmp_path, evidence)
     with pytest.raises(McpToolError):
-        tool_ship_evidence(
-            {"evidence": EVIDENCE_FILENAME, "forgetting_threshold": threshold}
-        )
+        tool_ship_evidence({"evidence": EVIDENCE_FILENAME, "forgetting_threshold": threshold})
 
 
 def test_mcp_omitted_threshold_uses_canonical_default(tmp_path, monkeypatch):

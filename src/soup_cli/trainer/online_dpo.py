@@ -115,17 +115,10 @@ def _trl_accepts(param: str) -> bool:
             params = inspect.signature(init).parameters
         except (TypeError, ValueError):  # pragma: no cover - C-level __init__
             continue
-        named = {
-            name: spec
-            for name, spec in params.items()
-            if name != "self"
-        }
+        named = {name: spec for name, spec in params.items() if name != "self"}
         if not named:
             continue
-        if all(
-            spec.kind in (spec.VAR_POSITIONAL, spec.VAR_KEYWORD)
-            for spec in named.values()
-        ):
+        if all(spec.kind in (spec.VAR_POSITIONAL, spec.VAR_KEYWORD) for spec in named.values()):
             continue  # a passthrough shim - it forwards everything, so it says nothing
         return param in named
     return False
@@ -217,8 +210,7 @@ class OnlineDPOTrainerWrapper:
                     prompt_msgs = [
                         m
                         for m in msgs[: last_user + 1]
-                        if isinstance(m, dict)
-                        and m.get("role") in ("system", "user", "assistant")
+                        if isinstance(m, dict) and m.get("role") in ("system", "user", "assistant")
                     ]
                     out.append({"prompt": prompt_msgs})
         return out
@@ -229,9 +221,7 @@ class OnlineDPOTrainerWrapper:
 
         from soup_cli.trainer._trl_compat import resolve_trl_symbol
 
-        online_dpo_config_cls = resolve_trl_symbol(
-            "OnlineDPOConfig", "trl.experimental.online_dpo"
-        )
+        online_dpo_config_cls = resolve_trl_symbol("OnlineDPOConfig", "trl.experimental.online_dpo")
         online_dpo_trainer_cls = resolve_trl_symbol(
             "OnlineDPOTrainer", "trl.experimental.online_dpo"
         )
@@ -284,8 +274,7 @@ class OnlineDPOTrainerWrapper:
         import math
 
         total_steps = (
-            math.ceil(len(train_ds) / batch_size / tcfg.gradient_accumulation_steps)
-            * tcfg.epochs
+            math.ceil(len(train_ds) / batch_size / tcfg.gradient_accumulation_steps) * tcfg.epochs
         )
         warmup_steps = int(total_steps * tcfg.warmup_ratio)
 
@@ -381,9 +370,7 @@ class OnlineDPOTrainerWrapper:
         )
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
-        apply_chat_template_override(
-            self.tokenizer, cfg.data.chat_template, console=console
-        )
+        apply_chat_template_override(self.tokenizer, cfg.data.chat_template, console=console)
         # Online DPO renders conversational prompts -> a chat template is
         # required. Fall back to a template WITH a generation cue when the model
         # ships none (so add_generation_prompt actually opens the assistant turn).
@@ -393,13 +380,16 @@ class OnlineDPOTrainerWrapper:
         from soup_cli.utils.quant_menu import build_quantization_config_for_loader
 
         quant_config_obj = build_quantization_config_for_loader(
-            tcfg=tcfg, base=cfg.base, console=console,
+            tcfg=tcfg,
+            base=cfg.base,
+            console=console,
         )
 
         console.print(f"[dim]Loading model: {cfg.base}[/]")
         dev_map = resolve_device_map(self.device)
         model_kwargs = {
-            "trust_remote_code": self._trust_remote_code, "device_map": dev_map,
+            "trust_remote_code": self._trust_remote_code,
+            "device_map": dev_map,
             "torch_dtype": resolve_frozen_base_load_dtype(self.device),
         }
         if quant_config_obj is not None:
@@ -437,9 +427,7 @@ class OnlineDPOTrainerWrapper:
         # this is where the flag has to act.
         from soup_cli.utils.moe import resolve_moe_lora_targets
 
-        target_modules = resolve_moe_lora_targets(
-            self.model, tcfg, target_modules, console
-        )
+        target_modules = resolve_moe_lora_targets(self.model, tcfg, target_modules, console)
 
         self.peft_config = build_lora_config(
             tcfg.lora,
@@ -508,9 +496,7 @@ class OnlineDPOTrainerWrapper:
                 "reward_funcs": [reward],
                 "reward_processing_classes": [reward_tok],
             }
-        raise ValueError(
-            "online_dpo needs training.online_dpo_judge or training.reward_model"
-        )
+        raise ValueError("online_dpo needs training.online_dpo_judge or training.reward_model")
 
     def train(
         self,

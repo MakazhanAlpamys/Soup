@@ -53,16 +53,12 @@ def validate_offload_config(
 
     if backend == "mlx":
         errors.append(
-            "Activation offloading is not supported on the mlx backend. "
-            "Use backend: transformers."
+            "Activation offloading is not supported on the mlx backend. Use backend: transformers."
         )
         return errors
 
     if device != "cuda":
-        errors.append(
-            "Activation offloading requires CUDA training. "
-            f"Current device: {device}."
-        )
+        errors.append(f"Activation offloading requires CUDA training. Current device: {device}.")
 
     if target == "disk" and not save_dir:
         errors.append(
@@ -75,7 +71,8 @@ def validate_offload_config(
 
 @contextlib.contextmanager
 def offload_context(
-    target: Optional[str], save_dir: Optional[str] = None,
+    target: Optional[str],
+    save_dir: Optional[str] = None,
 ) -> Generator[None, None, None]:
     """Install saved-tensor hooks for activation offloading; remove on exit.
 
@@ -107,14 +104,11 @@ def offload_context(
         pack_hook, unpack_hook = _make_cpu_hooks(torch)
     elif target == "disk":
         if not save_dir:
-            raise ValueError(
-                "activation_offloading='disk' requires save_dir"
-            )
+            raise ValueError("activation_offloading='disk' requires save_dir")
         pack_hook, unpack_hook = _make_disk_hooks(torch, save_dir, created_files)
     else:
         raise ValueError(
-            f"Unknown activation_offloading target: {target!r}. "
-            "Expected None, 'cpu', or 'disk'."
+            f"Unknown activation_offloading target: {target!r}. Expected None, 'cpu', or 'disk'."
         )
 
     # saved_tensors_hooks is the public API (torch>=1.11). Older torch: no-op.
@@ -131,6 +125,7 @@ def offload_context(
         # so cleanup is never itself a crash source.
         if target == "disk":
             import os
+
             for path in created_files:
                 try:
                     os.unlink(path)
@@ -199,7 +194,9 @@ def _make_disk_hooks(
         if kind == "disk":
             try:
                 loaded = torch_module.load(
-                    path, map_location="cpu", weights_only=True,
+                    path,
+                    map_location="cpu",
+                    weights_only=True,
                 )
             except FileNotFoundError:
                 # File already gone (e.g. GC'd by crash + cleanup); return a

@@ -6,6 +6,7 @@ import pytest
 # Config validation
 # ---------------------------------------------------------------------------
 
+
 class TestForgettingConfig:
     def test_defaults(self):
         from soup_cli.config.schema import TrainingConfig
@@ -81,6 +82,7 @@ class TestCheckpointIntelConfig:
 # ForgettingDetector
 # ---------------------------------------------------------------------------
 
+
 class TestForgettingDetector:
     def test_built_in_benchmarks_exist(self):
         from soup_cli.eval.forgetting import MINI_BENCHMARKS
@@ -110,7 +112,8 @@ class TestForgettingDetector:
             return "A"
 
         detector = ForgettingDetector(
-            generate_fn=fake_gen, benchmark="mini_mmlu",
+            generate_fn=fake_gen,
+            benchmark="mini_mmlu",
         )
         baseline = detector.run_baseline()
         assert 0.0 <= baseline <= 1.0
@@ -119,7 +122,8 @@ class TestForgettingDetector:
         from soup_cli.eval.forgetting import ForgettingDetector
 
         detector = ForgettingDetector(
-            generate_fn=lambda p: "dummy", benchmark="mini_mmlu",
+            generate_fn=lambda p: "dummy",
+            benchmark="mini_mmlu",
             threshold=0.10,
         )
         # Manually set baseline and current accuracy
@@ -131,7 +135,8 @@ class TestForgettingDetector:
         from soup_cli.eval.forgetting import ForgettingDetector
 
         detector = ForgettingDetector(
-            generate_fn=lambda p: "dummy", threshold=0.10,
+            generate_fn=lambda p: "dummy",
+            threshold=0.10,
         )
         detector._baseline_accuracy = 0.9
         result = detector._build_result(step=100, accuracy=0.75)
@@ -141,7 +146,8 @@ class TestForgettingDetector:
         from soup_cli.eval.forgetting import ForgettingDetector
 
         detector = ForgettingDetector(
-            generate_fn=lambda p: "dummy", threshold=0.10,
+            generate_fn=lambda p: "dummy",
+            threshold=0.10,
         )
         detector._baseline_accuracy = 0.9
         result = detector._build_result(step=100, accuracy=0.60)
@@ -159,7 +165,9 @@ class TestForgettingDetector:
             return "A" if calls["n"] <= 3 else "Z"
 
         detector = ForgettingDetector(
-            generate_fn=gen, benchmark="mini_mmlu", threshold=0.10,
+            generate_fn=gen,
+            benchmark="mini_mmlu",
+            threshold=0.10,
         )
         # First call implicitly computes baseline then re-evaluates
         result = detector.check_forgetting(step=100)
@@ -190,6 +198,7 @@ class TestForgettingDetector:
 # ---------------------------------------------------------------------------
 # CheckpointTracker
 # ---------------------------------------------------------------------------
+
 
 class TestCheckpointTracker:
     def test_initial_best_none(self):
@@ -257,9 +266,7 @@ class TestCheckpointTracker:
 
         removed = tracker.prune_checkpoints(tmp_path)
 
-        surviving = sorted(
-            p.name for p in tmp_path.iterdir() if p.name.startswith("checkpoint-")
-        )
+        surviving = sorted(p.name for p in tmp_path.iterdir() if p.name.startswith("checkpoint-"))
         # Top 2 by score: 200 (0.9) and 300 (0.75)
         assert surviving == ["checkpoint-200", "checkpoint-300"]
         # Deleted the other two and reported them
@@ -319,6 +326,7 @@ class TestCheckpointTracker:
 # SQLite tracker extension
 # ---------------------------------------------------------------------------
 
+
 class TestTrackerSchema:
     def test_checkpoint_quality_table_created(self, tmp_path):
         from soup_cli.experiment.tracker import ExperimentTracker
@@ -331,8 +339,7 @@ class TestTrackerSchema:
 
         conn = sqlite3.connect(db_path)
         cursor = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' "
-            "AND name='checkpoint_quality'"
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='checkpoint_quality'"
         )
         assert cursor.fetchone() is not None
         conn.close()
@@ -348,8 +355,7 @@ class TestTrackerSchema:
 
         conn = sqlite3.connect(db_path)
         cursor = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' "
-            "AND name='forgetting_eval'"
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='forgetting_eval'"
         )
         assert cursor.fetchone() is not None
         conn.close()

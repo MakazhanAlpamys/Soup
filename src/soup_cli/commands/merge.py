@@ -90,6 +90,7 @@ def merge(
 
     # v0.53.1 #142 — validate save_format up front
     from soup_cli.utils.save_formats import validate_merge_save_format
+
     try:
         save_format_canonical = validate_merge_save_format(save_format)
     except (TypeError, ValueError) as exc:
@@ -100,10 +101,9 @@ def merge(
     # Mirrors v0.20.0 / v0.40.2 policy: containment check fires at the CLI
     # boundary, not deferred to the deeper helper.
     from soup_cli.utils.paths import is_under_cwd as _is_under_cwd
+
     if not _is_under_cwd(output):
-        console.print(
-            f"[red]--output {output!r} must stay under cwd[/]"
-        )
+        console.print(f"[red]--output {output!r} must stay under cwd[/]")
         raise typer.Exit(2)
     adapter_path = Path(adapter)
 
@@ -194,9 +194,7 @@ def merge(
             model.save_pretrained(str(output_path))
 
             console.print("[dim]Saving tokenizer...[/]")
-            tokenizer = AutoTokenizer.from_pretrained(
-                str(adapter_path), trust_remote_code=trc
-            )
+            tokenizer = AutoTokenizer.from_pretrained(str(adapter_path), trust_remote_code=trc)
             tokenizer.save_pretrained(str(output_path))
         else:
             # v0.53.1 #142 — 4bit / 4bit_forced merged checkpoint.
@@ -207,16 +205,13 @@ def merge(
             from soup_cli.utils.save_formats import merge_4bit
 
             with tempfile.TemporaryDirectory(
-                prefix=".soup_4bit_merge_", dir=str(Path.cwd()),
+                prefix=".soup_4bit_merge_",
+                dir=str(Path.cwd()),
             ) as staged:
                 staged_path = Path(staged)
-                console.print(
-                    f"[dim]Staging fp16 merge in {staged_path.name}...[/]"
-                )
+                console.print(f"[dim]Staging fp16 merge in {staged_path.name}...[/]")
                 model.save_pretrained(str(staged_path))
-                tokenizer = AutoTokenizer.from_pretrained(
-                    str(adapter_path), trust_remote_code=trc
-                )
+                tokenizer = AutoTokenizer.from_pretrained(str(adapter_path), trust_remote_code=trc)
                 tokenizer.save_pretrained(str(staged_path))
 
                 # Free the in-memory fp16 model before reloading 4bit

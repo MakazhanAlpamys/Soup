@@ -71,8 +71,14 @@ def _strip_ansi(text: str) -> str:
 class TestClassifyScore:
     @pytest.mark.parametrize(
         "score,expected",
-        [(1.0, "OK"), (0.85, "OK"), (0.84, "MINOR"), (0.60, "MINOR"),
-         (0.59, "MAJOR"), (0.0, "MAJOR")],
+        [
+            (1.0, "OK"),
+            (0.85, "OK"),
+            (0.84, "MINOR"),
+            (0.60, "MINOR"),
+            (0.59, "MAJOR"),
+            (0.0, "MAJOR"),
+        ],
     )
     def test_thresholds(self, score: float, expected: str) -> None:
         assert classify_score(score) == expected
@@ -119,26 +125,23 @@ class TestFailureScore:
 
     def test_verdict_must_match_score(self) -> None:
         with pytest.raises(ValueError, match="disagrees"):
-            FailureScore(
-                mode="forgetting", score=0.10, verdict="OK", evidence="x"
-            )
+            FailureScore(mode="forgetting", score=0.10, verdict="OK", evidence="x")
 
     def test_evidence_null_byte(self) -> None:
         with pytest.raises(ValueError, match="null"):
-            FailureScore(
-                mode="forgetting", score=1.0, verdict="OK", evidence="x\x00y"
-            )
+            FailureScore(mode="forgetting", score=1.0, verdict="OK", evidence="x\x00y")
 
     def test_evidence_oversize(self) -> None:
         with pytest.raises(ValueError, match="too long"):
-            FailureScore(
-                mode="forgetting", score=1.0, verdict="OK", evidence="a" * 5000
-            )
+            FailureScore(mode="forgetting", score=1.0, verdict="OK", evidence="a" * 5000)
 
     def test_evidence_must_be_str(self) -> None:
         with pytest.raises(TypeError):
             FailureScore(
-                mode="forgetting", score=1.0, verdict="OK", evidence=123  # type: ignore[arg-type]
+                mode="forgetting",
+                score=1.0,
+                verdict="OK",
+                evidence=123,  # type: ignore[arg-type]
             )
 
 
@@ -150,9 +153,7 @@ class TestFailureReport:
         }
 
     def test_compose_and_overall(self) -> None:
-        report = compose_report(
-            run_id="r1", base="b", adapter="a", scores=self._scores()
-        )
+        report = compose_report(run_id="r1", base="b", adapter="a", scores=self._scores())
         assert report.overall == "OK"
         assert set(report.scores.keys()) == set(FAILURE_MODES)
 
@@ -166,9 +167,7 @@ class TestFailureReport:
 
     def test_overall_minor_promotes(self) -> None:
         scores = self._scores()
-        scores["format"] = FailureScore(
-            mode="format", score=0.70, verdict="MINOR", evidence="meh"
-        )
+        scores["format"] = FailureScore(mode="format", score=0.70, verdict="MINOR", evidence="meh")
         report = compose_report(run_id="r1", base="b", adapter="a", scores=scores)
         assert report.overall == "MINOR"
 
@@ -183,9 +182,7 @@ class TestFailureReport:
 
     def test_score_mode_mismatch_rejected(self) -> None:
         scores = self._scores()
-        scores["forgetting"] = FailureScore(
-            mode="refusal", score=1.0, verdict="OK", evidence="x"
-        )
+        scores["forgetting"] = FailureScore(mode="refusal", score=1.0, verdict="OK", evidence="x")
         with pytest.raises(ValueError, match="mismatch"):
             compose_report(run_id="r1", base="b", adapter="a", scores=scores)
 
@@ -195,21 +192,15 @@ class TestFailureReport:
 
     def test_oversize_base_rejected(self) -> None:
         with pytest.raises(ValueError, match="too long"):
-            compose_report(
-                run_id="r1", base="x" * 1000, adapter="a", scores=self._scores()
-            )
+            compose_report(run_id="r1", base="x" * 1000, adapter="a", scores=self._scores())
 
     def test_frozen(self) -> None:
-        report = compose_report(
-            run_id="r1", base="b", adapter="a", scores=self._scores()
-        )
+        report = compose_report(run_id="r1", base="b", adapter="a", scores=self._scores())
         with pytest.raises(dataclasses.FrozenInstanceError):
             report.overall = "MAJOR"  # type: ignore[misc]
 
     def test_to_dict_serialisable(self) -> None:
-        report = compose_report(
-            run_id="r1", base="b", adapter="a", scores=self._scores()
-        )
+        report = compose_report(run_id="r1", base="b", adapter="a", scores=self._scores())
         payload = report.to_dict()
         # Round-trip through json + allow_nan=False.
         json.dumps(payload, allow_nan=False)
@@ -217,9 +208,7 @@ class TestFailureReport:
         assert set(payload["scores"]) == set(FAILURE_MODES)
 
     def test_scores_immutable(self) -> None:
-        report = compose_report(
-            run_id="r1", base="b", adapter="a", scores=self._scores()
-        )
+        report = compose_report(run_id="r1", base="b", adapter="a", scores=self._scores())
         with pytest.raises(TypeError):
             report.scores["forgetting"] = "evil"  # type: ignore[index]
 
@@ -377,9 +366,7 @@ class TestModeCollapse:
 
     def test_generator_must_return_sequence(self) -> None:
         with pytest.raises(TypeError):
-            score_mode_collapse(
-                ["p"], lambda p, k: "string_not_seq"
-            )  # type: ignore[return-value]
+            score_mode_collapse(["p"], lambda p, k: "string_not_seq")  # type: ignore[return-value]
 
     def test_empty_prompts(self) -> None:
         score = score_mode_collapse([], lambda p, k: ["x", "y"], k=2)
@@ -439,9 +426,7 @@ class TestContamination:
 
     def test_benchmark_dict_rows(self) -> None:
         text = "alpha beta gamma delta epsilon zeta eta theta iota kappa"
-        score = score_contamination(
-            [{"text": text}], [{"text": text}], n=3, threshold=0.5
-        )
+        score = score_contamination([{"text": text}], [{"text": text}], n=3, threshold=0.5)
         assert score.verdict == "MAJOR"
 
     def test_bool_n_rejected(self) -> None:
@@ -463,13 +448,9 @@ class TestContamination:
 class TestRunner:
     def test_build_report_fills_missing(self) -> None:
         scores = {
-            "forgetting": FailureScore(
-                mode="forgetting", score=1.0, verdict="OK", evidence="x"
-            )
+            "forgetting": FailureScore(mode="forgetting", score=1.0, verdict="OK", evidence="x")
         }
-        report = build_report(
-            run_id="r1", base="b", adapter="a", scores=scores
-        )
+        report = build_report(run_id="r1", base="b", adapter="a", scores=scores)
         assert set(report.scores.keys()) == set(FAILURE_MODES)
         for mode in FAILURE_MODES:
             if mode != "forgetting":
@@ -478,7 +459,9 @@ class TestRunner:
     def test_scores_type_validated(self) -> None:
         with pytest.raises(TypeError):
             build_report(
-                run_id="r1", base="b", adapter="a",
+                run_id="r1",
+                base="b",
+                adapter="a",
                 scores={"forgetting": "not a score"},  # type: ignore[dict-item]
             )
 
@@ -533,7 +516,9 @@ class TestBadge:
 
     def test_escapes_user_text(self) -> None:
         report = compose_report(
-            run_id="r1", base="b", adapter='<script>alert(1)</script>',
+            run_id="r1",
+            base="b",
+            adapter="<script>alert(1)</script>",
             scores={
                 mode: FailureScore(mode=mode, score=1.0, verdict="OK", evidence="x")
                 for mode in FAILURE_MODES
@@ -584,9 +569,7 @@ class TestCli:
     def test_diagnose_writes_output(self, tmp_path: Path) -> None:
         os.chdir(tmp_path)
         out = tmp_path / "diag.json"
-        result = runner.invoke(
-            app, ["diagnose", "myrun", "--output", str(out)]
-        )
+        result = runner.invoke(app, ["diagnose", "myrun", "--output", str(out)])
         assert result.exit_code == 0, (result.output, repr(result.exception))
         with open(out, encoding="utf-8") as handle:
             payload = json.load(handle)
@@ -595,9 +578,7 @@ class TestCli:
     def test_diagnose_badge_svg(self, tmp_path: Path) -> None:
         os.chdir(tmp_path)
         badge = tmp_path / "diag.svg"
-        result = runner.invoke(
-            app, ["diagnose", "myrun", "--badge", str(badge)]
-        )
+        result = runner.invoke(app, ["diagnose", "myrun", "--badge", str(badge)])
         assert result.exit_code == 0, (result.output, repr(result.exception))
         svg = badge.read_text(encoding="utf-8")
         assert svg.startswith("<svg")
@@ -619,9 +600,7 @@ class TestCli:
             ),
             encoding="utf-8",
         )
-        result = runner.invoke(
-            app, ["diagnose", "myrun", "--evidence", str(evidence)]
-        )
+        result = runner.invoke(app, ["diagnose", "myrun", "--evidence", str(evidence)])
         # Exit 2 on MAJOR overall.
         assert result.exit_code == 2, (result.output, repr(result.exception))
         assert "MAJOR" in _strip_ansi(result.output)
@@ -629,18 +608,12 @@ class TestCli:
     def test_diagnose_evidence_outside_cwd(self, tmp_path: Path) -> None:
         os.chdir(tmp_path)
         outside = os.path.realpath(os.path.join(tmp_path, "..", "evil.json"))
-        result = runner.invoke(
-            app, ["diagnose", "myrun", "--evidence", outside]
-        )
+        result = runner.invoke(app, ["diagnose", "myrun", "--evidence", outside])
         assert result.exit_code == 1
 
-    def test_diagnose_attach_to_registry_without_output_warns(
-        self, tmp_path: Path
-    ) -> None:
+    def test_diagnose_attach_to_registry_without_output_warns(self, tmp_path: Path) -> None:
         os.chdir(tmp_path)
-        result = runner.invoke(
-            app, ["diagnose", "myrun", "--attach-to-registry", "abc"]
-        )
+        result = runner.invoke(app, ["diagnose", "myrun", "--attach-to-registry", "abc"])
         assert result.exit_code == 0
         assert "needs --output" in _strip_ansi(result.output)
 
@@ -707,6 +680,7 @@ class TestTrainDiagnoseGate:
             encoding="utf-8",
         )
         from soup_cli.commands.train import _run_diagnose_gate
+
         _run_diagnose_gate(str(evidence), "run1", "base", "adapter")
 
     def test_run_diagnose_gate_helper_not_run_exits_3(self, tmp_path: Path) -> None:
@@ -758,9 +732,7 @@ class TestTrainDiagnoseGate:
         assert excinfo.value.exit_code == 2
 
     @pytest.mark.parametrize("verdict", ["NOT_RUN", "MAJOR"])
-    def test_run_diagnose_gate_escapes_evidence_markup(
-        self, tmp_path: Path, verdict: str
-    ) -> None:
+    def test_run_diagnose_gate_escapes_evidence_markup(self, tmp_path: Path, verdict: str) -> None:
         import typer
 
         os.chdir(tmp_path)
@@ -768,8 +740,11 @@ class TestTrainDiagnoseGate:
         score = 0.0 if verdict == "NOT_RUN" else 0.1
         evidence.write_text(
             json.dumps(
-                {"scores": {"format": {"score": score, "verdict": verdict,
-                                       "evidence": "[/bad] [red]x"}}}
+                {
+                    "scores": {
+                        "format": {"score": score, "verdict": verdict, "evidence": "[/bad] [red]x"}
+                    }
+                }
             ),
             encoding="utf-8",
         )
@@ -807,7 +782,8 @@ class TestTrainDiagnoseGate:
         assert _should_run_diagnose_gate_on_rank() is True
 
     def test_diagnose_gate_handles_malformed_local_rank(
-        self, monkeypatch: pytest.MonkeyPatch,
+        self,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Garbage LOCAL_RANK falls back to True -- safer to over-run than skip."""
         from soup_cli.commands.train import _should_run_diagnose_gate_on_rank
@@ -815,9 +791,7 @@ class TestTrainDiagnoseGate:
         monkeypatch.setenv("LOCAL_RANK", "not-an-int")
         assert _should_run_diagnose_gate_on_rank() is True
 
-    def test_run_diagnose_gate_rejects_non_dict_payload(
-        self, tmp_path: Path
-    ) -> None:
+    def test_run_diagnose_gate_rejects_non_dict_payload(self, tmp_path: Path) -> None:
         os.chdir(tmp_path)
         evidence = tmp_path / "ev.json"
         evidence.write_text("[]", encoding="utf-8")
@@ -855,8 +829,12 @@ class TestSourceWiring:
         ]
         for relative in probe_modules:
             source = (_PROJECT_ROOT / relative).read_text(encoding="utf-8")
-            for forbidden in ("\nimport torch", "\nimport transformers",
-                              "\nfrom torch ", "\nfrom transformers "):
+            for forbidden in (
+                "\nimport torch",
+                "\nimport transformers",
+                "\nfrom torch ",
+                "\nfrom transformers ",
+            ):
                 assert forbidden not in source, (
                     f"{relative} carries a top-level {forbidden!r} import"
                 )
@@ -890,9 +868,7 @@ class TestReviewFixCoverage:
     def test_write_report_uses_realpath(self) -> None:
         source = (
             _PROJECT_ROOT / "src" / "soup_cli" / "utils" / "diagnose" / "runner.py"
-        ).read_text(
-            encoding="utf-8"
-        )
+        ).read_text(encoding="utf-8")
         assert "os.path.realpath(path)" in source
         assert "os.path.abspath" not in source
 
@@ -974,9 +950,7 @@ class TestReviewFixCoverage:
         # Source-grep — confirm the structural guard replaced the risky probe.
         source = (
             _PROJECT_ROOT / "src" / "soup_cli" / "utils" / "diagnose" / "format.py"
-        ).read_text(
-            encoding="utf-8"
-        )
+        ).read_text(encoding="utf-8")
         assert 'check_config_regex(pattern, "diagnose.regex_pattern")' in source
         assert 'compiled.search("a" * 128)' not in source
 
@@ -997,9 +971,7 @@ class TestReviewFixCoverage:
             json.dumps({"extras": {"key": "value\x00bad"}}),
             encoding="utf-8",
         )
-        result = runner.invoke(
-            app, ["diagnose", "myrun", "--evidence", str(ev)]
-        )
+        result = runner.invoke(app, ["diagnose", "myrun", "--evidence", str(ev)])
         assert result.exit_code == 1
         assert "null bytes" in _strip_ansi(result.output)
 
@@ -1028,9 +1000,7 @@ class TestReviewFixCoverage:
         # Simpler: just verify the cap exists in source.
         source = (
             _PROJECT_ROOT / "src" / "soup_cli" / "utils" / "diagnose" / "contamination.py"
-        ).read_text(
-            encoding="utf-8"
-        )
+        ).read_text(encoding="utf-8")
         assert "combined-complexity cap" in source
         assert "1_000_000_000" in source
 
@@ -1089,18 +1059,14 @@ class TestReviewFixCoverage:
     def test_cli_output_outside_cwd(self, tmp_path: Path) -> None:
         os.chdir(tmp_path)
         outside = os.path.realpath(os.path.join(tmp_path, "..", "evil.json"))
-        result = runner.invoke(
-            app, ["diagnose", "myrun", "--output", outside]
-        )
+        result = runner.invoke(app, ["diagnose", "myrun", "--output", outside])
         assert result.exit_code == 1
 
     # tdd-review MEDIUM — CLI --badge outside-cwd rejected.
     def test_cli_badge_outside_cwd(self, tmp_path: Path) -> None:
         os.chdir(tmp_path)
         outside = os.path.realpath(os.path.join(tmp_path, "..", "evil.svg"))
-        result = runner.invoke(
-            app, ["diagnose", "myrun", "--badge", outside]
-        )
+        result = runner.invoke(app, ["diagnose", "myrun", "--badge", outside])
         assert result.exit_code == 1
 
     # tdd-review MEDIUM — MINOR overall exits 0, not 2.
@@ -1121,16 +1087,17 @@ class TestReviewFixCoverage:
             ),
             encoding="utf-8",
         )
-        result = runner.invoke(
-            app, ["diagnose", "myrun", "--evidence", str(ev)]
-        )
+        result = runner.invoke(app, ["diagnose", "myrun", "--evidence", str(ev)])
         assert result.exit_code == 0, (result.output, repr(result.exception))
 
     # tdd-review LOW — build_report forwards soup_version + extras.
     def test_build_report_forwards_soup_version(self) -> None:
         report = build_report(
-            run_id="r1", base="b", adapter="a",
-            scores={}, soup_version="0.56.0",
+            run_id="r1",
+            base="b",
+            adapter="a",
+            scores={},
+            soup_version="0.56.0",
             extras={"k": "v"},
         )
         assert report.soup_version == "0.56.0"

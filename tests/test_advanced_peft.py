@@ -235,7 +235,9 @@ class TestGaLoreValidation:
         from soup_cli.utils.galore import validate_galore_config
 
         errors = validate_galore_config(
-            use_galore=True, quantization="4bit", backend="transformers",
+            use_galore=True,
+            quantization="4bit",
+            backend="transformers",
         )
         assert len(errors) == 1
         assert "quantization" in errors[0].lower()
@@ -244,7 +246,9 @@ class TestGaLoreValidation:
         from soup_cli.utils.galore import validate_galore_config
 
         errors = validate_galore_config(
-            use_galore=True, quantization="8bit", backend="transformers",
+            use_galore=True,
+            quantization="8bit",
+            backend="transformers",
         )
         assert len(errors) == 1
 
@@ -252,7 +256,9 @@ class TestGaLoreValidation:
         from soup_cli.utils.galore import validate_galore_config
 
         errors = validate_galore_config(
-            use_galore=True, quantization="none", backend="unsloth",
+            use_galore=True,
+            quantization="none",
+            backend="unsloth",
         )
         assert len(errors) == 1
         assert "unsloth" in errors[0].lower()
@@ -261,7 +267,9 @@ class TestGaLoreValidation:
         from soup_cli.utils.galore import validate_galore_config
 
         errors = validate_galore_config(
-            use_galore=True, quantization="none", backend="transformers",
+            use_galore=True,
+            quantization="none",
+            backend="transformers",
         )
         assert len(errors) == 0
 
@@ -269,7 +277,9 @@ class TestGaLoreValidation:
         from soup_cli.utils.galore import validate_galore_config
 
         errors = validate_galore_config(
-            use_galore=False, quantization="4bit", backend="unsloth",
+            use_galore=False,
+            quantization="4bit",
+            backend="unsloth",
         )
         assert len(errors) == 0
 
@@ -278,7 +288,9 @@ class TestGaLoreValidation:
         from soup_cli.utils.galore import validate_galore_config
 
         errors = validate_galore_config(
-            use_galore=True, quantization="4bit", backend="unsloth",
+            use_galore=True,
+            quantization="4bit",
+            backend="unsloth",
         )
         assert len(errors) == 2
 
@@ -292,15 +304,13 @@ class TestGaLoreOptimizerHelper:
     def test_returns_galore_optimizer_name(self):
         from soup_cli.utils.galore import get_galore_optimizer_and_params
 
-        result = get_galore_optimizer_and_params(
-        )
+        result = get_galore_optimizer_and_params()
         assert result["optim"] == "galore_adamw"
 
     def test_returns_target_modules(self):
         from soup_cli.utils.galore import get_galore_optimizer_and_params
 
-        result = get_galore_optimizer_and_params(
-        )
+        result = get_galore_optimizer_and_params()
         assert "optim_target_modules" in result
         assert isinstance(result["optim_target_modules"], list)
 

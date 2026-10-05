@@ -59,15 +59,17 @@ SUPPORTED_CLOUDS: frozenset[str] = frozenset({"modal"})
 
 # Modal GPU types (https://modal.com/docs/reference/modal.gpu). Canonical
 # lower-case keys; the stub emits Modal's expected upper-case name.
-_GPU_MODAL_NAME: Mapping[str, str] = types.MappingProxyType({
-    "t4": "T4",
-    "l4": "L4",
-    "a10g": "A10G",
-    "a100": "A100",
-    "a100-80gb": "A100-80GB",
-    "l40s": "L40S",
-    "h100": "H100",
-})
+_GPU_MODAL_NAME: Mapping[str, str] = types.MappingProxyType(
+    {
+        "t4": "T4",
+        "l4": "L4",
+        "a10g": "A10G",
+        "a100": "A100",
+        "a100-80gb": "A100-80GB",
+        "l40s": "L40S",
+        "h100": "H100",
+    }
+)
 SUPPORTED_GPUS: frozenset[str] = frozenset(_GPU_MODAL_NAME)
 
 # Named Modal volume the rendered app writes run outputs to. Each run gets its
@@ -119,8 +121,7 @@ def render_modal_stub(
     encoded = config_yaml.encode("utf-8")
     if len(encoded) > _MAX_CONFIG_BYTES:
         raise ValueError(
-            f"config exceeds {_MAX_CONFIG_BYTES} bytes "
-            "(too large to embed in the Modal stub)"
+            f"config exceeds {_MAX_CONFIG_BYTES} bytes (too large to embed in the Modal stub)"
         )
     gpu_key = validate_gpu(gpu)
     modal_gpu = _GPU_MODAL_NAME[gpu_key]
@@ -129,8 +130,7 @@ def render_modal_stub(
         raise ValueError("soup_version must be a NUL-free string")
     if len(soup_version) > _MAX_VERSION_LEN or not _VERSION_RE.match(soup_version):
         raise ValueError(
-            f"soup_version must match {_VERSION_RE.pattern} "
-            f"and be <= {_MAX_VERSION_LEN} chars"
+            f"soup_version must match {_VERSION_RE.pattern} and be <= {_MAX_VERSION_LEN} chars"
         )
     cfg_b64 = base64.b64encode(encoded).decode("ascii")
     # repr()-embed so a stray quote / backslash cannot break out of the literal
@@ -313,9 +313,7 @@ def submit_modal_run(plan: CloudPlan, *, env: Optional[Mapping] = None) -> int:
     if _MODAL_SUBMIT_OVERRIDE is not None:
         return _MODAL_SUBMIT_OVERRIDE(plan)
     environ = env if env is not None else os.environ
-    has_token = bool(
-        environ.get("MODAL_TOKEN_ID") and environ.get("MODAL_TOKEN_SECRET")
-    )
+    has_token = bool(environ.get("MODAL_TOKEN_ID") and environ.get("MODAL_TOKEN_SECRET"))
     has_config = os.path.exists(os.path.expanduser("~/.modal.toml"))
     if not (has_token or has_config):
         raise RuntimeError(
@@ -326,9 +324,7 @@ def submit_modal_run(plan: CloudPlan, *, env: Optional[Mapping] = None) -> int:
     try:
         import modal  # noqa: F401 — presence check only
     except ImportError as exc:
-        raise RuntimeError(
-            "Modal SDK not installed. Run `pip install \"soup-cli[modal]\"`."
-        ) from exc
+        raise RuntimeError('Modal SDK not installed. Run `pip install "soup-cli[modal]"`.') from exc
     import subprocess
 
     proc = subprocess.run(  # noqa: S603 — argv list, no shell

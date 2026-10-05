@@ -68,10 +68,18 @@ def test_ingest_thumbs_survive_the_round_trip_into_one_pair(tmp_path, monkeypatc
             {"id": "2", "input": "Q", "output": "Bad", "rating": "down"},
         ],
     )
-    ingest = runner.invoke(app, [
-        "ingest", "--source", "langfuse", "--logs", "export.jsonl",
-        "--output", "traces/traces.jsonl",
-    ])
+    ingest = runner.invoke(
+        app,
+        [
+            "ingest",
+            "--source",
+            "langfuse",
+            "--logs",
+            "export.jsonl",
+            "--output",
+            "traces/traces.jsonl",
+        ],
+    )
     assert ingest.exit_code == 0, strip_ansi(ingest.output)
 
     # `soup ingest` writes the canonical signal the parsers used to ignore.
@@ -83,10 +91,21 @@ def test_ingest_thumbs_survive_the_round_trip_into_one_pair(tmp_path, monkeypatc
         "thumbs_down",
     ]
 
-    result = runner.invoke(app, [
-        "data", "from-traces", "--logs", "traces", "--format", "soup-serve",
-        "--signal", "thumbs_up", "-o", "prefs.jsonl",
-    ])
+    result = runner.invoke(
+        app,
+        [
+            "data",
+            "from-traces",
+            "--logs",
+            "traces",
+            "--format",
+            "soup-serve",
+            "--signal",
+            "thumbs_up",
+            "-o",
+            "prefs.jsonl",
+        ],
+    )
     text = " ".join(strip_ansi(result.output).split())
     assert result.exit_code == 0, text
     assert "Wrote 1 preference pair(s)" in text, text
@@ -113,7 +132,9 @@ def test_loop_harvest_reads_the_same_ingest_records(tmp_path, monkeypatch):
     # The resolver honours SOUP_LOOP_TRACE_DIR before any model path.
     monkeypatch.setenv("SOUP_LOOP_TRACE_DIR", str(tmp_path / "traces"))
     state = LoopState(
-        served_model="registry://dummy", eval_suite="e", baseline="b",
+        served_model="registry://dummy",
+        eval_suite="e",
+        baseline="b",
     )
 
     result = harvest_from_traces(state)
@@ -158,8 +179,15 @@ def test_user_edit_is_not_reported_when_nothing_was_edited(tmp_path, monkeypatch
     _runner(tmp_path, monkeypatch)
     _write_jsonl(
         tmp_path / "edits" / "t.jsonl",
-        [{"id": "4", "prompt": "Q", "response": "Same",
-          "signal": "user_edit", "edited_output": "Same"}],
+        [
+            {
+                "id": "4",
+                "prompt": "Q",
+                "response": "Same",
+                "signal": "user_edit",
+                "edited_output": "Same",
+            }
+        ],
     )
     traces = list(parse_soup_serve("edits"))
     assert list(build_pairs(traces, signal="user_edit")) == []
@@ -178,10 +206,8 @@ def test_feedback_rating_still_pairs(tmp_path, monkeypatch):
     _write_jsonl(
         tmp_path / "traces" / "t.jsonl",
         [
-            {"id": "1", "prompt": "Q", "response": "Good",
-             "feedback": {"rating": "up"}},
-            {"id": "2", "prompt": "Q", "response": "Bad",
-             "feedback": {"rating": "down"}},
+            {"id": "1", "prompt": "Q", "response": "Good", "feedback": {"rating": "up"}},
+            {"id": "2", "prompt": "Q", "response": "Bad", "feedback": {"rating": "down"}},
         ],
     )
     pairs = list(build_pairs(list(parse_soup_serve("traces")), signal="thumbs_up"))
@@ -196,8 +222,15 @@ def test_top_level_signal_wins_over_a_stale_feedback_block(tmp_path, monkeypatch
     _runner(tmp_path, monkeypatch)
     _write_jsonl(
         tmp_path / "traces" / "t.jsonl",
-        [{"id": "1", "prompt": "Q", "response": "A",
-          "signal": "thumbs_up", "feedback": {"note": "no rating here"}}],
+        [
+            {
+                "id": "1",
+                "prompt": "Q",
+                "response": "A",
+                "signal": "thumbs_up",
+                "feedback": {"note": "no rating here"},
+            }
+        ],
     )
     assert [t.signal for t in parse_soup_serve("traces")] == ["thumbs_up"]
 
@@ -226,10 +259,21 @@ def test_reading_traces_that_pair_nothing_says_so(tmp_path, monkeypatch):
         tmp_path / "traces" / "t.jsonl",
         [{"id": "1", "prompt": "Q", "response": "A", "signal": "thumbs_up"}],
     )
-    result = runner.invoke(app, [
-        "data", "from-traces", "--logs", "traces", "--format", "soup-serve",
-        "--signal", "user_edit", "-o", "prefs.jsonl",
-    ])
+    result = runner.invoke(
+        app,
+        [
+            "data",
+            "from-traces",
+            "--logs",
+            "traces",
+            "--format",
+            "soup-serve",
+            "--signal",
+            "user_edit",
+            "-o",
+            "prefs.jsonl",
+        ],
+    )
     text = " ".join(strip_ansi(result.output).split())
     assert "Read 1 trace(s) but built no pairs" in text, text
     assert "--signal user_edit" in text, text
@@ -242,10 +286,21 @@ def test_an_empty_directory_is_not_reported_as_a_failed_harvest(tmp_path, monkey
 
     runner = _runner(tmp_path, monkeypatch)
     (tmp_path / "traces").mkdir()
-    result = runner.invoke(app, [
-        "data", "from-traces", "--logs", "traces", "--format", "soup-serve",
-        "--signal", "thumbs_up", "-o", "prefs.jsonl",
-    ])
+    result = runner.invoke(
+        app,
+        [
+            "data",
+            "from-traces",
+            "--logs",
+            "traces",
+            "--format",
+            "soup-serve",
+            "--signal",
+            "thumbs_up",
+            "-o",
+            "prefs.jsonl",
+        ],
+    )
     text = " ".join(strip_ansi(result.output).split())
     assert result.exit_code == 0, text
     assert "built no pairs" not in text, text
@@ -263,10 +318,21 @@ def test_a_serve_trace_log_with_no_signal_says_no_trace_carried_one(tmp_path, mo
             {"ts": 2, "prompt": "Q2", "response": "B", "latency_ms": 9, "tokens": 2},
         ],
     )
-    result = runner.invoke(app, [
-        "data", "from-traces", "--logs", "serve", "--format", "soup-serve",
-        "--signal", "thumbs_up", "-o", "prefs.jsonl",
-    ])
+    result = runner.invoke(
+        app,
+        [
+            "data",
+            "from-traces",
+            "--logs",
+            "serve",
+            "--format",
+            "soup-serve",
+            "--signal",
+            "thumbs_up",
+            "-o",
+            "prefs.jsonl",
+        ],
+    )
     text = " ".join(strip_ansi(result.output).split())
     assert "Read 2 trace(s) but built no pairs for --signal thumbs_up" in text, text
     assert "No trace carried a signal" in text, text
@@ -284,16 +350,28 @@ def test_the_present_signals_list_never_names_none(tmp_path, monkeypatch):
             {"id": "2", "prompt": "Q2", "response": "B"},
         ],
     )
-    result = runner.invoke(app, [
-        "data", "from-traces", "--logs", "traces", "--format", "soup-serve",
-        "--signal", "user_edit", "-o", "prefs.jsonl",
-    ])
+    result = runner.invoke(
+        app,
+        [
+            "data",
+            "from-traces",
+            "--logs",
+            "traces",
+            "--format",
+            "soup-serve",
+            "--signal",
+            "user_edit",
+            "-o",
+            "prefs.jsonl",
+        ],
+    )
     text = " ".join(strip_ansi(result.output).split())
     assert "Signals present: thumbs_up." in text, text
 
 
 def test_a_canonical_top_level_signal_beats_a_conflicting_feedback_rating(
-    tmp_path, monkeypatch,
+    tmp_path,
+    monkeypatch,
 ):
     """Documented precedence: the top-level `signal` wins; feedback.rating is a fallback."""
     from soup_cli.data.traces import parse_soup_serve
@@ -301,8 +379,15 @@ def test_a_canonical_top_level_signal_beats_a_conflicting_feedback_rating(
     _runner(tmp_path, monkeypatch)
     _write_jsonl(
         tmp_path / "traces" / "t.jsonl",
-        [{"id": "1", "prompt": "Q", "response": "A",
-          "signal": "thumbs_up", "feedback": {"rating": "down"}}],
+        [
+            {
+                "id": "1",
+                "prompt": "Q",
+                "response": "A",
+                "signal": "thumbs_up",
+                "feedback": {"rating": "down"},
+            }
+        ],
     )
     assert [t.signal for t in parse_soup_serve("traces")] == ["thumbs_up"]
 
@@ -313,8 +398,15 @@ def test_a_whitespace_only_edit_is_not_an_edit(tmp_path, monkeypatch):
     _runner(tmp_path, monkeypatch)
     _write_jsonl(
         tmp_path / "edits" / "t.jsonl",
-        [{"id": "5", "prompt": "Q", "response": "Raw",
-          "signal": "user_edit", "edited_output": "   "}],
+        [
+            {
+                "id": "5",
+                "prompt": "Q",
+                "response": "Raw",
+                "signal": "user_edit",
+                "edited_output": "   ",
+            }
+        ],
     )
     traces = list(parse_soup_serve("edits"))
     assert traces[0].edited_output is None, traces
@@ -338,19 +430,36 @@ def test_the_issue_reproducer_runs_offline_in_a_fresh_cwd():
             )
             Path(tmp, "traces").mkdir()
             runner = CliRunner()
-            ingest = runner.invoke(app, [
-                "ingest", "--source", "langfuse", "--logs", "export.jsonl",
-                "--output", "traces/traces.jsonl",
-            ])
+            ingest = runner.invoke(
+                app,
+                [
+                    "ingest",
+                    "--source",
+                    "langfuse",
+                    "--logs",
+                    "export.jsonl",
+                    "--output",
+                    "traces/traces.jsonl",
+                ],
+            )
             assert ingest.exit_code == 0, strip_ansi(ingest.output)
-            result = runner.invoke(app, [
-                "data", "from-traces", "--logs", "traces",
-                "--format", "soup-serve", "--signal", "thumbs_up",
-                "-o", "prefs.jsonl",
-            ])
-            assert "Wrote 1 preference pair(s)" in " ".join(
-                strip_ansi(result.output).split()
-            ), strip_ansi(result.output)
+            result = runner.invoke(
+                app,
+                [
+                    "data",
+                    "from-traces",
+                    "--logs",
+                    "traces",
+                    "--format",
+                    "soup-serve",
+                    "--signal",
+                    "thumbs_up",
+                    "-o",
+                    "prefs.jsonl",
+                ],
+            )
+            assert "Wrote 1 preference pair(s)" in " ".join(strip_ansi(result.output).split()), (
+                strip_ansi(result.output)
+            )
         finally:
             os.chdir(previous)
-

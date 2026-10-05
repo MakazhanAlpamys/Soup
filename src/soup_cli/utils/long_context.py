@@ -276,9 +276,7 @@ def scale_inv_freq_llama3(
     if wavelen > low_freq_wavelen:
         return inv_freq_f / scale_factor
     # Smooth blend between the two regions.
-    smooth = (old_context_len / wavelen - low_freq_factor) / (
-        high_freq_factor - low_freq_factor
-    )
+    smooth = (old_context_len / wavelen - low_freq_factor) / (high_freq_factor - low_freq_factor)
     return (1.0 - smooth) * (inv_freq_f / scale_factor) + smooth * inv_freq_f
 
 
@@ -431,8 +429,7 @@ def get_rope_scaling_config(
     """
     if scaling_type not in ROPE_SCALING_TYPES:
         raise ValueError(
-            f"Unknown RoPE scaling type: {scaling_type}. "
-            f"Options: {', '.join(ROPE_SCALING_TYPES)}"
+            f"Unknown RoPE scaling type: {scaling_type}. Options: {', '.join(ROPE_SCALING_TYPES)}"
         )
 
     # Security review fix — validate numeric inputs at the public boundary.

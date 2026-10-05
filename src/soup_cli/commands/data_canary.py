@@ -43,9 +43,7 @@ if TYPE_CHECKING:  # static types only — transformers stays a lazy import
     from transformers import PreTrainedModel, PreTrainedTokenizerBase
 
 console = Console()
-app = typer.Typer(
-    no_args_is_help=True, help="Dataset canaries (memorization probe)."
-)
+app = typer.Typer(no_args_is_help=True, help="Dataset canaries (memorization probe).")
 
 # Fixed seed for the control draw: controls are a null distribution, not a
 # secret, so reproducibility is the useful property here.
@@ -65,8 +63,7 @@ def _load_pair(
 def _guard_under_cwd(target: str, label: str) -> None:
     if not is_under_cwd(Path(target)):
         console.print(
-            f"[red]{label} path is outside the working directory: "
-            f"{escape(str(target))}[/]"
+            f"[red]{label} path is outside the working directory: {escape(str(target))}[/]"
         )
         raise typer.Exit(1)
 
@@ -104,15 +101,11 @@ def _resolve_format(rows: list, requested: str, path: str) -> str:
     """
     supported = ", ".join(CANARY_FORMATS)
     if requested != "auto" and requested not in CANARY_FORMATS:
-        _refuse(
-            f"canary insert cannot write '{requested}' rows. "
-            f"Supported: {supported}"
-        )
+        _refuse(f"canary insert cannot write '{requested}' rows. Supported: {supported}")
     if not rows:
         if requested == "auto":
             _refuse(
-                f"{path} is empty, so its format cannot be detected; "
-                f"pass --format ({supported})"
+                f"{path} is empty, so its format cannot be detected; pass --format ({supported})"
             )
         return requested
     if not isinstance(rows[0], dict):
@@ -135,10 +128,7 @@ def _resolve_format(rows: list, requested: str, path: str) -> str:
             "as the other"
         )
     if detected not in CANARY_FORMATS:
-        _refuse(
-            f"{path} is '{detected}', which canary insert cannot write. "
-            f"Supported: {supported}"
-        )
+        _refuse(f"{path} is '{detected}', which canary insert cannot write. Supported: {supported}")
     return detected
 
 
@@ -146,19 +136,22 @@ def _resolve_format(rows: list, requested: str, path: str) -> str:
 def insert(
     path: str = typer.Argument(..., help="Path to dataset file"),
     output: str = typer.Option(
-        ..., "--output", "-o",
+        ...,
+        "--output",
+        "-o",
         help="Output file: .jsonl, or .json for a JSON array",
     ),
     manifest: str = typer.Option(
-        ..., "--manifest",
+        ...,
+        "--manifest",
         help="Where to write the canary manifest (CONTAINS THE SECRETS)",
     ),
     count: int = typer.Option(16, "--count", "-k", help="Number of canaries"),
     seed: int = typer.Option(0, "--seed", help="Seed for the canaries and the rows they go to"),
     data_format: str = typer.Option(
-        "auto", "--format",
-        help="Dataset format to write the canaries in: auto (detect), "
-        + ", ".join(CANARY_FORMATS),
+        "auto",
+        "--format",
+        help="Dataset format to write the canaries in: auto (detect), " + ", ".join(CANARY_FORMATS),
     ),
 ):
     """Insert K unique canaries into a dataset and record them."""
@@ -170,10 +163,7 @@ def insert(
     _guard_under_cwd(manifest, "Manifest")
     suffix = Path(output).suffix.lower()
     if suffix not in _OUTPUT_SUFFIXES:
-        _refuse(
-            f"--output must end in {' or '.join(_OUTPUT_SUFFIXES)}, "
-            f"got {output!r}"
-        )
+        _refuse(f"--output must end in {' or '.join(_OUTPUT_SUFFIXES)}, got {output!r}")
 
     rows = load_raw_data(file_path)
     fmt = _resolve_format(rows, data_format, path)
@@ -185,9 +175,7 @@ def insert(
 
     # Spread through the file, not appended: the loader holds out the file's
     # tail as validation, which would have held every canary (#1331).
-    mixed, positions = interleave_canary_rows(
-        rows, canary_rows(canaries, fmt), seed=seed
-    )
+    mixed, positions = interleave_canary_rows(rows, canary_rows(canaries, fmt), seed=seed)
     # Manifest FIRST. If the dataset were written first and the manifest
     # then failed (disk full, permissions), a canary-poisoned dataset would
     # survive on disk with nothing left to identify the secrets in it — a
@@ -195,8 +183,11 @@ def insert(
     # was inserted. Failing before the data is written leaves no artifact.
     try:
         write_manifest(
-            canaries, manifest, fmt,
-            positions=positions, total_rows=len(mixed),
+            canaries,
+            manifest,
+            fmt,
+            positions=positions,
+            total_rows=len(mixed),
         )
     except (ValueError, OSError) as exc:
         console.print(f"[red]{escape(str(exc))}[/]")
@@ -245,16 +236,10 @@ def insert(
 def check(
     manifest: str = typer.Option(..., "--manifest", help="Canary manifest"),
     base: str = typer.Option(..., "--base", help="Base model id or path"),
-    adapter: Optional[str] = typer.Option(
-        None, "--adapter", help="LoRA adapter to check"
-    ),
-    controls: int = typer.Option(
-        128, "--controls", help="Never-inserted controls to rank against"
-    ),
+    adapter: Optional[str] = typer.Option(None, "--adapter", help="LoRA adapter to check"),
+    controls: int = typer.Option(128, "--controls", help="Never-inserted controls to rank against"),
     device: str = typer.Option("auto", "--device", help="auto/cpu/cuda"),
-    output: Optional[str] = typer.Option(
-        None, "--output", "-o", help="Write the report as JSON"
-    ),
+    output: Optional[str] = typer.Option(None, "--output", "-o", help="Write the report as JSON"),
 ):
     """Check a model for memorization of the manifest's canaries."""
     if output is not None:
@@ -270,7 +255,8 @@ def check(
 
     try:
         control_set = generate_controls(
-            count=controls, seed=_CONTROL_SEED,
+            count=controls,
+            seed=_CONTROL_SEED,
             exclude={canary.secret for canary in canaries},
         )
     except (ValueError, TypeError) as exc:
@@ -284,7 +270,7 @@ def check(
             "[red]soup data canary check needs PyTorch + transformers.[/]\n"
             # \[train] escaped: Rich would eat the bracket and print a
             # command that installs WITHOUT the extra.
-            "Install with: [bold]pip install \"soup-cli\\[train]\"[/]"
+            'Install with: [bold]pip install "soup-cli\\[train]"[/]'
         )
         raise typer.Exit(1)
     except (ValueError, OSError, RuntimeError) as exc:
@@ -296,11 +282,12 @@ def check(
     losses = compute_pair_losses(model, tokenizer, pairs, device=dev)
     # compute_pair_losses is index-aligned, so the split follows the counts.
     canary_losses = losses[: len(canaries)]
-    control_losses = losses[len(canaries):]
+    control_losses = losses[len(canaries) :]
 
     try:
         report = build_canary_report(
-            canary_losses, control_losses,
+            canary_losses,
+            control_losses,
             [canary.secret for canary in canaries],
         )
     except ValueError as exc:
@@ -308,17 +295,14 @@ def check(
         raise typer.Exit(1)
 
     table = Table(
-        title=f"Canary exposure — {len(canaries)} canaries vs "
-              f"{report.n_controls} controls"
+        title=f"Canary exposure — {len(canaries)} canaries vs {report.n_controls} controls"
     )
     table.add_column("Canary")
     table.add_column("Loss", justify="right")
     table.add_column("Percentile", justify="right")
     table.add_column("Memorized", justify="right")
     for exposure in report.exposures:
-        loss_text = (
-            "nan" if math.isnan(exposure.loss) else f"{exposure.loss:.4f}"
-        )
+        loss_text = "nan" if math.isnan(exposure.loss) else f"{exposure.loss:.4f}"
         table.add_row(
             for_terminal(exposure.secret.strip()),
             loss_text,
@@ -333,9 +317,7 @@ def check(
         # The report embeds every secret, so it is as sensitive as the
         # manifest and gets the same 0600 + warning. `insert` warns about
         # the manifest; without this the report would be the quiet leak.
-        atomic_write_text(
-            json.dumps(canary_report_to_dict(report), indent=2), output
-        )
+        atomic_write_text(json.dumps(canary_report_to_dict(report), indent=2), output)
         _harden_permissions(output)
         console.print(f"[green]Report written:[/] [bold]{escape(output)}[/]")
         console.print(

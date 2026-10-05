@@ -38,7 +38,9 @@ def _save_tiny(directory, vocab):
     backend.pre_tokenizer = pre_tokenizers.Whitespace()
     tokenizer = PreTrainedTokenizerFast(
         tokenizer_object=backend,
-        unk_token="<unk>", bos_token="<s>", eos_token="</s>",
+        unk_token="<unk>",
+        bos_token="<s>",
+        eos_token="</s>",
         chat_template=(
             "{% for message in messages %}{{ message['role'] }} "
             "{{ message['content'] }} {% endfor %}"
@@ -46,11 +48,18 @@ def _save_tiny(directory, vocab):
         ),
     )
     tokenizer.save_pretrained(str(directory))
-    model = LlamaForCausalLM(LlamaConfig(
-        vocab_size=len(vocab), hidden_size=16, intermediate_size=32,
-        num_hidden_layers=1, num_attention_heads=2, num_key_value_heads=2,
-        max_position_embeddings=256, tie_word_embeddings=True,
-    ))
+    model = LlamaForCausalLM(
+        LlamaConfig(
+            vocab_size=len(vocab),
+            hidden_size=16,
+            intermediate_size=32,
+            num_hidden_layers=1,
+            num_attention_heads=2,
+            num_key_value_heads=2,
+            max_position_embeddings=256,
+            tie_word_embeddings=True,
+        )
+    )
     model.save_pretrained(str(directory))
 
 
@@ -66,10 +75,15 @@ class TestDistillMode:
         assert SUPPORTED_DISTILL_MODES == frozenset({"token", "sequence"})
         assert isinstance(SUPPORTED_DISTILL_MODES, frozenset)
 
-    @pytest.mark.parametrize("value,expected", [
-        ("token", "token"), ("sequence", "sequence"),
-        ("TOKEN", "token"), ("Sequence", "sequence"),
-    ])
+    @pytest.mark.parametrize(
+        "value,expected",
+        [
+            ("token", "token"),
+            ("sequence", "sequence"),
+            ("TOKEN", "token"),
+            ("Sequence", "sequence"),
+        ],
+    )
     def test_validate_happy(self, value, expected):
         from soup_cli.utils.distill import validate_distill_mode
 
@@ -131,10 +145,14 @@ class TestDistillMode:
 
                 return torch.device("cpu")
 
-        rows = [{"messages": [
-            {"role": "user", "content": "Hi"},
-            {"role": "assistant", "content": "OLD"},
-        ]}]
+        rows = [
+            {
+                "messages": [
+                    {"role": "user", "content": "Hi"},
+                    {"role": "assistant", "content": "OLD"},
+                ]
+            }
+        ]
         out = build_sequence_distill_rows(
             rows, _FakeTeacher(), _FakeTok(), max_new_tokens=4, device="cpu"
         )
@@ -178,18 +196,22 @@ class TestDistillMode:
         )
         assert tokenizer.pad_token_id is None
 
-        teacher = LlamaForCausalLM(
-            LlamaConfig(
-                vocab_size=len(vocab),
-                hidden_size=16,
-                intermediate_size=32,
-                num_hidden_layers=1,
-                num_attention_heads=2,
-                num_key_value_heads=2,
-                max_position_embeddings=32,
-                tie_word_embeddings=True,
+        teacher = (
+            LlamaForCausalLM(
+                LlamaConfig(
+                    vocab_size=len(vocab),
+                    hidden_size=16,
+                    intermediate_size=32,
+                    num_hidden_layers=1,
+                    num_attention_heads=2,
+                    num_key_value_heads=2,
+                    max_position_embeddings=32,
+                    tie_word_embeddings=True,
+                )
             )
-        ).to(torch.float32).eval()
+            .to(torch.float32)
+            .eval()
+        )
 
         encoded = tokenizer.apply_chat_template(
             [{"role": "user", "content": "hello"}],
@@ -204,14 +226,14 @@ class TestDistillMode:
 
         rows = [
             {"messages": [{"role": "user", "content": "hello"}]},
-            {"messages": [
-                {"role": "user", "content": "hello"},
-                {"role": "assistant", "content": "old"},
-            ]},
+            {
+                "messages": [
+                    {"role": "user", "content": "hello"},
+                    {"role": "assistant", "content": "old"},
+                ]
+            },
         ]
-        out = build_sequence_distill_rows(
-            rows, teacher, tokenizer, max_new_tokens=1, device="cpu"
-        )
+        out = build_sequence_distill_rows(rows, teacher, tokenizer, max_new_tokens=1, device="cpu")
         assert len(out) == 2
         assert all(item["messages"][-1]["role"] == "assistant" for item in out)
         assert all(item["messages"][0]["role"] == "user" for item in out)
@@ -238,19 +260,26 @@ class TestDistillMode:
             f"output: {(tmp_path / 'out').as_posix()}\n"
         )
         rows = [
-            {"messages": [{"role": "user", "content": "hello world"},
-                          {"role": "assistant", "content": "hi there"}]},
-            {"messages": [{"role": "user", "content": "what is soup"},
-                          {"role": "assistant", "content": "soup is good"}]},
+            {
+                "messages": [
+                    {"role": "user", "content": "hello world"},
+                    {"role": "assistant", "content": "hi there"},
+                ]
+            },
+            {
+                "messages": [
+                    {"role": "user", "content": "what is soup"},
+                    {"role": "assistant", "content": "soup is good"},
+                ]
+            },
         ]
         wrapper = DistillTrainerWrapper(cfg, device="cpu")
         wrapper.setup({"train": rows, "val": rows[:1]})
         assert len(wrapper.trainer.train_dataset) == 2
         assert len(wrapper.trainer.eval_dataset) == 1
+
     @pytest.mark.parametrize("return_value", ["tensor", "list"])
-    def test_build_sequence_distill_rows_normalizes_tokenizer_return_types(
-        self, return_value
-    ):
+    def test_build_sequence_distill_rows_normalizes_tokenizer_return_types(self, return_value):
         from soup_cli.utils.distill import build_sequence_distill_rows
 
         class _FakeTok:
@@ -305,8 +334,7 @@ class TestDistillMode:
 
     def test_schema_distill_mode_outside_distill_rejected(self):
         _yaml_rejects(
-            "base: m\ntask: sft\ndata: {train: d.jsonl}\n"
-            "training: {distill_mode: sequence}\n",
+            "base: m\ntask: sft\ndata: {train: d.jsonl}\ntraining: {distill_mode: sequence}\n",
             "distill",
         )
 
@@ -344,8 +372,7 @@ class TestClassifierLora:
 
     def test_schema_reject_outside_classifier_family(self):
         _yaml_rejects(
-            "base: m\ntask: sft\ndata: {train: d.jsonl}\n"
-            "training: {classifier_lora: true}\n",
+            "base: m\ntask: sft\ndata: {train: d.jsonl}\ntraining: {classifier_lora: true}\n",
             "classifier_lora",
         )
 
@@ -398,8 +425,10 @@ class TestBlockExpansionPerArch:
         from soup_cli.utils.block_expansion import _ARCH_RESIDUAL_PATHS
 
         for arch in (
-            "LlamaForCausalLM", "MistralForCausalLM",
-            "FalconForCausalLM", "GPT2LMHeadModel",
+            "LlamaForCausalLM",
+            "MistralForCausalLM",
+            "FalconForCausalLM",
+            "GPT2LMHeadModel",
         ):
             assert arch in _ARCH_RESIDUAL_PATHS
 
@@ -442,7 +471,8 @@ class TestBlockExpansionPerArch:
 
         # Falcon-shaped projections but reported as an unknown class name.
         model = _make_fake_llama(
-            num_layers=1, hidden=8,
+            num_layers=1,
+            hidden=8,
             paths=(("mlp", "weird_proj"), ("attn", "weird2")),
         )
         type(model).__name__ = "TotallyUnknownArch"
@@ -576,13 +606,16 @@ class TestMixtureOfDepths:
         with pytest.raises(TypeError):
             mod_capacity(True, 0.5)
 
-    @pytest.mark.parametrize("name,ok", [
-        ("meta-llama/Llama-3.2-1B", True),
-        ("Qwen/Qwen2.5-0.5B", True),
-        ("mistralai/Mistral-7B", True),
-        ("openai-community/gpt2", False),
-        ("", False),
-    ])
+    @pytest.mark.parametrize(
+        "name,ok",
+        [
+            ("meta-llama/Llama-3.2-1B", True),
+            ("Qwen/Qwen2.5-0.5B", True),
+            ("mistralai/Mistral-7B", True),
+            ("openai-community/gpt2", False),
+            ("", False),
+        ],
+    )
     def test_is_mod_supported_arch(self, name, ok):
         from soup_cli.utils.mod import is_mod_supported_arch
 
@@ -651,8 +684,7 @@ class TestMixtureOfDepths:
 
     def test_schema_mod_capacity_factor_bounds(self):
         _yaml_rejects(
-            "base: m\ntask: sft\ndata: {train: d.jsonl}\n"
-            "training: {mod_capacity_factor: 2.0}\n",
+            "base: m\ntask: sft\ndata: {train: d.jsonl}\ntraining: {mod_capacity_factor: 2.0}\n",
             "mod_capacity_factor",
         )
 
@@ -671,8 +703,7 @@ def _make_bank(dim=8, users=("alice", "bob")):
         projection_seed=42,
         vector_dim=dim,
         entries=tuple(
-            BankEntry(user_id=u, scaling=tuple([0.5 + 0.1 * i] * dim))
-            for i, u in enumerate(users)
+            BankEntry(user_id=u, scaling=tuple([0.5 + 0.1 * i] * dim)) for i, u in enumerate(users)
         ),
     )
 
@@ -876,16 +907,19 @@ class TestMoleTaskAdapters:
         out = validate_mole_task_adapters(["./a", "./b", "./c"])
         assert out == ["./a", "./b", "./c"]
 
-    @pytest.mark.parametrize("bad", [
-        ["./a"],                 # < 2
-        "not-a-list",            # non-list
-        ["./a", "./a"],          # duplicate
-        ["./a", ""],             # empty entry
-        ["./a", "b\x00c"],       # null byte
-        ["./a", 5],              # non-string
-        ["./a", True],           # bool
-        ["./a", "x" * 5000],     # oversize
-    ])
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            ["./a"],  # < 2
+            "not-a-list",  # non-list
+            ["./a", "./a"],  # duplicate
+            ["./a", ""],  # empty entry
+            ["./a", "b\x00c"],  # null byte
+            ["./a", 5],  # non-string
+            ["./a", True],  # bool
+            ["./a", "x" * 5000],  # oversize
+        ],
+    )
     def test_rejects(self, bad):
         from soup_cli.utils.mole_routing import validate_mole_task_adapters
 
@@ -951,9 +985,17 @@ class TestMoleTrainer:
         from soup_cli.trainer.mole_routing import _row_to_text
 
         assert _row_to_text({"text": "hi"}) == "hi"
-        assert _row_to_text(
-            {"messages": [{"role": "user", "content": "a"}, {"role": "assistant", "content": "b"}]}
-        ) == "a\nb"
+        assert (
+            _row_to_text(
+                {
+                    "messages": [
+                        {"role": "user", "content": "a"},
+                        {"role": "assistant", "content": "b"},
+                    ]
+                }
+            )
+            == "a\nb"
+        )
         assert _row_to_text({"prompt": "p", "completion": "c"}) == "pc"
         assert _row_to_text({}) == ""
         assert _row_to_text("not-a-dict") == ""
@@ -1021,14 +1063,20 @@ class TestPatchInvariants:
         assert "moe_lora_routing" in src
         assert "MoleRoutingTrainerWrapper" in src
 
-    @pytest.mark.parametrize("module", [
-        "soup_cli.utils.mole_routing",
-        "soup_cli.utils.mod",
-    ])
+    @pytest.mark.parametrize(
+        "module",
+        [
+            "soup_cli.utils.mole_routing",
+            "soup_cli.utils.mod",
+        ],
+    )
     def test_no_top_level_torch_import(self, module):
         src_path = os.path.join(
             os.path.dirname(os.path.dirname(__file__)),
-            "src", "soup_cli", "utils", module.rsplit(".", 1)[-1] + ".py",
+            "src",
+            "soup_cli",
+            "utils",
+            module.rsplit(".", 1)[-1] + ".py",
         )
         with open(src_path, encoding="utf-8") as fh:
             text = fh.read()

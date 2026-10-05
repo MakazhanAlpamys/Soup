@@ -180,9 +180,7 @@ class TestValidateProgramPath:
         prog.write_text("# dspy program\n", encoding="utf-8")
         assert validate_program_path(str(prog)).endswith("program.py")
 
-    def test_outside_cwd_rejected(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_outside_cwd_rejected(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from soup_cli.utils.prompt_compile import validate_program_path
 
         outside = tmp_path / "outside"
@@ -195,9 +193,7 @@ class TestValidateProgramPath:
         with pytest.raises(ValueError):
             validate_program_path(str(prog))
 
-    def test_extension_rejected(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_extension_rejected(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from soup_cli.utils.prompt_compile import validate_program_path
 
         monkeypatch.chdir(tmp_path)
@@ -213,9 +209,7 @@ class TestValidateProgramPath:
             validate_program_path("a\x00b.py")
 
     @pytest.mark.requires_symlink
-    def test_symlink_rejected(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_symlink_rejected(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         import os
 
         from soup_cli.utils.prompt_compile import validate_program_path
@@ -238,9 +232,7 @@ class TestValidateEvalSuitePath:
         suite.write_text("[]", encoding="utf-8")
         assert validate_eval_suite_path(str(suite)).endswith("eval.json")
 
-    def test_outside_cwd_rejected(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_outside_cwd_rejected(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from soup_cli.utils.prompt_compile import validate_eval_suite_path
 
         outside = tmp_path / "outside"
@@ -279,9 +271,7 @@ class TestCompilePlan:
         with pytest.raises(dataclasses.FrozenInstanceError):
             plan.optimizer = "gepa"  # type: ignore[misc]
 
-    def test_invalid_optimizer(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_invalid_optimizer(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from soup_cli.utils.prompt_compile import CompilePlan
 
         monkeypatch.chdir(tmp_path)
@@ -317,17 +307,13 @@ class TestCompileResult:
         from soup_cli.utils.prompt_compile import CompileResult
 
         with pytest.raises(ValueError):
-            CompileResult(
-                program_text="# x", score=float("nan"), iterations=1, converged=True
-            )
+            CompileResult(program_text="# x", score=float("nan"), iterations=1, converged=True)
 
     def test_negative_iterations_rejected(self) -> None:
         from soup_cli.utils.prompt_compile import CompileResult
 
         with pytest.raises(ValueError):
-            CompileResult(
-                program_text="# x", score=0.5, iterations=-1, converged=True
-            )
+            CompileResult(program_text="# x", score=0.5, iterations=-1, converged=True)
 
     def test_bool_iterations_rejected(self) -> None:
         from soup_cli.utils.prompt_compile import CompileResult
@@ -510,7 +496,10 @@ class TestSourceWiring:
     def test_no_top_level_heavy_imports(self) -> None:
         path = (
             Path(__file__).resolve().parent.parent
-            / "src" / "soup_cli" / "utils" / "prompt_compile.py"
+            / "src"
+            / "soup_cli"
+            / "utils"
+            / "prompt_compile.py"
         )
         text = path.read_text(encoding="utf-8")
         # Heavy / optional deps must be lazy-imported.
@@ -530,7 +519,10 @@ class TestSourceWiring:
     def test_uses_atomic_write_helper(self) -> None:
         path = (
             Path(__file__).resolve().parent.parent
-            / "src" / "soup_cli" / "commands" / "compile_cmd.py"
+            / "src"
+            / "soup_cli"
+            / "commands"
+            / "compile_cmd.py"
         )
         # If this file is missing the test must fail loudly — Part A CLI is a
         # shipped artefact, not optional. Skipping would hide a regression.
@@ -538,7 +530,10 @@ class TestSourceWiring:
         text = path.read_text(encoding="utf-8")
         util = (
             Path(__file__).resolve().parent.parent
-            / "src" / "soup_cli" / "utils" / "prompt_compile.py"
+            / "src"
+            / "soup_cli"
+            / "utils"
+            / "prompt_compile.py"
         )
         combined = text + util.read_text(encoding="utf-8")
         assert "atomic_write_text" in combined

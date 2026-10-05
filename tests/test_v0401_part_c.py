@@ -224,10 +224,7 @@ def test_nvidia_smi_invoked_by_absolute_path():
 def test_parse_cuda_version_from_nvidia_smi_header():
     from soup_cli.commands.doctor import _parse_cuda_version
 
-    header = (
-        "NVIDIA-SMI 596.49                 Driver Version: 596.49"
-        "         CUDA Version: 13.2"
-    )
+    header = "NVIDIA-SMI 596.49                 Driver Version: 596.49         CUDA Version: 13.2"
     assert _parse_cuda_version(header) == (13, 2)
     assert _parse_cuda_version("CUDA Version:13.2") == (13, 2)
     assert _parse_cuda_version("CUDA UMD Version: 13.4") == (13, 4)

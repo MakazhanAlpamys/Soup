@@ -79,9 +79,7 @@ def test_target_parameters_rejects_unsupported_peft_combinations(lora, message):
         ({"modality": "vision"}, "modality='text'"),
     ],
 )
-def test_target_parameters_is_scoped_to_resident_text_sft_and_pretrain(
-    overrides, message
-):
+def test_target_parameters_is_scoped_to_resident_text_sft_and_pretrain(overrides, message):
     kwargs = {
         "task": "sft",
         "backend": "transformers",
@@ -234,8 +232,7 @@ def test_qwen4_exp_expert_adapters_backward_save_and_reload(tmp_path):
     assert any("experts.lora_A" in name for name in expert_adapter_params)
     assert all(parameter.grad is not None for parameter in expert_adapter_params.values())
     assert all(
-        torch.isfinite(parameter.grad).all().item()
-        for parameter in expert_adapter_params.values()
+        torch.isfinite(parameter.grad).all().item() for parameter in expert_adapter_params.values()
     )
 
     optimizer = torch.optim.SGD(

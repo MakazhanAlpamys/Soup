@@ -67,9 +67,7 @@ TORCHAO_CLASSES: dict[str, Tuple[Tuple[str, str], ...]] = {
             "Int8DynamicActivationInt4WeightConfig",
         ),
     ),
-    "Float8DynActFloat8": (
-        ("torchao.quantization", "Float8DynamicActivationFloat8WeightConfig"),
-    ),
+    "Float8DynActFloat8": (("torchao.quantization", "Float8DynamicActivationFloat8WeightConfig"),),
     "NVFP4": (
         ("torchao.quantization", "NVFP4DynamicActivationNVFP4WeightConfig"),
         (
@@ -119,8 +117,7 @@ def resolve_torchao_class(key: str) -> Any:
         importlib.import_module("torchao")
     except ImportError as exc:
         raise RuntimeError(
-            f"{torchao_install_hint(key)} Could not import torchao "
-            f"({type(exc).__name__}: {exc})."
+            f"{torchao_install_hint(key)} Could not import torchao ({type(exc).__name__}: {exc})."
         ) from exc
 
     candidates = TORCHAO_CLASSES[key]

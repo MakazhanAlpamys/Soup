@@ -55,9 +55,7 @@ def discover_shards(shard_dir: str) -> List[str]:
     if not isinstance(shard_dir, str):
         raise TypeError("shard_dir must be str")
     if not is_under_cwd(shard_dir):
-        raise ValueError(
-            f"shard_dir is outside cwd: {os.path.basename(shard_dir)}"
-        )
+        raise ValueError(f"shard_dir is outside cwd: {os.path.basename(shard_dir)}")
     real = os.path.realpath(shard_dir)
     if not os.path.isdir(real):
         raise FileNotFoundError(f"shard_dir not found: {os.path.basename(real)}")
@@ -66,9 +64,7 @@ def discover_shards(shard_dir: str) -> List[str]:
         if _SHARD_RE.match(entry):
             shards.append(entry)
         if len(shards) > _MAX_SHARDS:
-            raise RuntimeError(
-                f"too many shards (>{_MAX_SHARDS}); refuse to plan"
-            )
+            raise RuntimeError(f"too many shards (>{_MAX_SHARDS}); refuse to plan")
     return shards
 
 
@@ -81,14 +77,10 @@ def plan_consolidation(shard_dir: str, output_path: str) -> ConsolidationPlan:
     if not output_path.endswith(".safetensors"):
         raise ValueError("output_path must end in .safetensors")
     if not is_under_cwd(output_path):
-        raise ValueError(
-            f"output_path is outside cwd: {os.path.basename(output_path)}"
-        )
+        raise ValueError(f"output_path is outside cwd: {os.path.basename(output_path)}")
     shards = discover_shards(shard_dir)
     if not shards:
-        raise FileNotFoundError(
-            "no FSDP shard files (pytorch_model_fsdp_*.bin) found in shard_dir"
-        )
+        raise FileNotFoundError("no FSDP shard files (pytorch_model_fsdp_*.bin) found in shard_dir")
     return ConsolidationPlan(
         shard_dir=os.path.realpath(shard_dir),
         shard_files=tuple(shards),
@@ -125,9 +117,7 @@ def consolidate_shards(plan: ConsolidationPlan) -> ConsolidationResult:
     from safetensors.torch import save as st_save
 
     if not isinstance(plan, ConsolidationPlan):
-        raise TypeError(
-            f"plan must be ConsolidationPlan, got {type(plan).__name__}"
-        )
+        raise TypeError(f"plan must be ConsolidationPlan, got {type(plan).__name__}")
     # Re-validate the output path (symlink rejection + cwd containment) at
     # write time — TOCTOU defence, mirrors v0.59.0 atomic_write policy.
     enforce_under_cwd_and_no_symlink(plan.output_path, "output_path")
@@ -143,41 +133,29 @@ def consolidate_shards(plan: ConsolidationPlan) -> ConsolidationResult:
         try:
             size = os.path.getsize(shard_path)
         except OSError as exc:
-            raise ValueError(
-                f"shard {shard_name} unreadable: {type(exc).__name__}"
-            ) from exc
+            raise ValueError(f"shard {shard_name} unreadable: {type(exc).__name__}") from exc
         if size > _MAX_SHARD_BYTES:
             raise ValueError(
-                f"shard {shard_name} too large (>{_MAX_SHARD_BYTES} bytes); "
-                "refuse to load"
+                f"shard {shard_name} too large (>{_MAX_SHARD_BYTES} bytes); refuse to load"
             )
         try:
-            state = torch.load(
-                shard_path, map_location="cpu", weights_only=True
-            )
+            state = torch.load(shard_path, map_location="cpu", weights_only=True)
         except Exception as exc:  # noqa: BLE001 — corrupt/non-torch shard
             # torch.load raises UnpicklingError / RuntimeError / EOFError /
             # BadZipFile on a corrupt or non-torch .bin. Surface a clean
             # ValueError (the CLI maps it to exit 2) instead of leaking the
             # raw pickle internals as a crash.
             raise ValueError(
-                f"shard {shard_name} is not a valid torch checkpoint: "
-                f"{type(exc).__name__}"
+                f"shard {shard_name} is not a valid torch checkpoint: {type(exc).__name__}"
             ) from exc
         if not isinstance(state, dict):
-            raise ValueError(
-                f"shard {shard_name} is not a state-dict "
-                f"(got {type(state).__name__})"
-            )
+            raise ValueError(f"shard {shard_name} is not a state-dict (got {type(state).__name__})")
         for key, tensor in state.items():
             if not isinstance(key, str):
-                raise ValueError(
-                    f"shard {shard_name} has a non-string key {key!r}"
-                )
+                raise ValueError(f"shard {shard_name} has a non-string key {key!r}")
             if not isinstance(tensor, torch.Tensor):
                 raise ValueError(
-                    f"shard {shard_name} key {key!r} is not a tensor "
-                    f"(got {type(tensor).__name__})"
+                    f"shard {shard_name} key {key!r} is not a tensor (got {type(tensor).__name__})"
                 )
             if key in merged:
                 if tuple(merged[key].shape) != tuple(tensor.shape):

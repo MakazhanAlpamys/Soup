@@ -113,8 +113,10 @@ class TestComputeDtype:
 
         from soup_cli.utils.gpu import get_compute_dtype
 
-        with patch("torch.cuda.is_available", return_value=True), \
-             patch("torch.cuda.is_bf16_supported", return_value=True):
+        with (
+            patch("torch.cuda.is_available", return_value=True),
+            patch("torch.cuda.is_bf16_supported", return_value=True),
+        ):
             dtype = get_compute_dtype()
             assert dtype == torch.bfloat16
 
@@ -124,8 +126,10 @@ class TestComputeDtype:
 
         from soup_cli.utils.gpu import get_compute_dtype
 
-        with patch("torch.cuda.is_available", return_value=True), \
-             patch("torch.cuda.is_bf16_supported", return_value=False):
+        with (
+            patch("torch.cuda.is_available", return_value=True),
+            patch("torch.cuda.is_bf16_supported", return_value=False),
+        ):
             dtype = get_compute_dtype()
             assert dtype == torch.float16
 
@@ -183,17 +187,13 @@ class TestCPUQuantWarning:
         assert "quantization is not" in source
 
         # Behavioral assertions on pure resolve_quantization function
-        resolved, warning = resolve_quantization(
-            device="cpu", backend=None, quantization="4bit"
-        )
+        resolved, warning = resolve_quantization(device="cpu", backend=None, quantization="4bit")
         assert resolved == "none"
         assert warning is not None
         assert "quantization is not supported on CPU" in warning
 
         # MLX preserves 4bit without downgrade
-        assert resolve_quantization(
-            device="cpu", backend="mlx", quantization="4bit"
-        )[0] == "4bit"
+        assert resolve_quantization(device="cpu", backend="mlx", quantization="4bit")[0] == "4bit"
 
 
 # --- v0.10.2: Display progress bar uses ASCII ---
@@ -437,8 +437,7 @@ class TestPPODatasetCompat:
 
         # Real class whose __init__ does NOT accept dataset/train_dataset
         class FakePPOTrainer:
-            def __init__(self, *, model=None, args=None,
-                         processing_class=None, reward_funcs=None):
+            def __init__(self, *, model=None, args=None, processing_class=None, reward_funcs=None):
                 pass
 
         class FakePPOConfig:
@@ -451,13 +450,14 @@ class TestPPODatasetCompat:
             ]
         }
 
-        with mock_patch("soup_cli.trainer.ppo.PPOTrainerWrapper._setup_reward"), \
-             mock_patch(
-                 "soup_cli.trainer.ppo.PPOTrainerWrapper._setup_transformers"
-             ), mock_patch(
-                 "soup_cli.trainer.ppo._import_ppo_classes",
-                 return_value=(FakePPOTrainer, FakePPOConfig, False),
-             ):
+        with (
+            mock_patch("soup_cli.trainer.ppo.PPOTrainerWrapper._setup_reward"),
+            mock_patch("soup_cli.trainer.ppo.PPOTrainerWrapper._setup_transformers"),
+            mock_patch(
+                "soup_cli.trainer.ppo._import_ppo_classes",
+                return_value=(FakePPOTrainer, FakePPOConfig, False),
+            ),
+        ):
             wrapper.model = MagicMock()
             wrapper.model.get_nb_trainable_parameters.return_value = (100, 1000)
             mock_tokenizer = MagicMock()
@@ -507,9 +507,15 @@ class TestPPODatasetCompat:
         captured = {}
 
         class FakePPOTrainer:
-            def __init__(self, *, model=None, args=None,
-                         processing_class=None, train_dataset=None,
-                         reward_funcs=None):
+            def __init__(
+                self,
+                *,
+                model=None,
+                args=None,
+                processing_class=None,
+                train_dataset=None,
+                reward_funcs=None,
+            ):
                 captured["train_dataset"] = train_dataset
 
         class FakePPOConfig:
@@ -522,13 +528,14 @@ class TestPPODatasetCompat:
             ]
         }
 
-        with mock_patch("soup_cli.trainer.ppo.PPOTrainerWrapper._setup_reward"), \
-             mock_patch(
-                 "soup_cli.trainer.ppo.PPOTrainerWrapper._setup_transformers"
-             ), mock_patch(
-                 "soup_cli.trainer.ppo._import_ppo_classes",
-                 return_value=(FakePPOTrainer, FakePPOConfig, False),
-             ):
+        with (
+            mock_patch("soup_cli.trainer.ppo.PPOTrainerWrapper._setup_reward"),
+            mock_patch("soup_cli.trainer.ppo.PPOTrainerWrapper._setup_transformers"),
+            mock_patch(
+                "soup_cli.trainer.ppo._import_ppo_classes",
+                return_value=(FakePPOTrainer, FakePPOConfig, False),
+            ),
+        ):
             wrapper.model = MagicMock()
             wrapper.model.get_nb_trainable_parameters.return_value = (100, 1000)
             mock_tokenizer = MagicMock()
@@ -609,20 +616,22 @@ class TestPPOExperimentalSetup:
         fake_reward_model = MagicMock()
         fake_value_model = MagicMock()
 
-        with mock_patch("soup_cli.trainer.ppo.PPOTrainerWrapper._setup_reward"), \
-             mock_patch("soup_cli.trainer.ppo.PPOTrainerWrapper._setup_transformers"), \
-             mock_patch(
-                 "soup_cli.trainer.ppo._import_ppo_classes",
-                 return_value=(FakePPOTrainer, FakePPOConfig, True),
-             ), \
-             mock_patch(
-                 "soup_cli.trainer.ppo.PPOTrainerWrapper._get_or_create_reward_model",
-                 return_value=fake_reward_model,
-             ), \
-             mock_patch(
-                 "soup_cli.trainer.ppo.PPOTrainerWrapper._create_value_model",
-                 return_value=fake_value_model,
-             ):
+        with (
+            mock_patch("soup_cli.trainer.ppo.PPOTrainerWrapper._setup_reward"),
+            mock_patch("soup_cli.trainer.ppo.PPOTrainerWrapper._setup_transformers"),
+            mock_patch(
+                "soup_cli.trainer.ppo._import_ppo_classes",
+                return_value=(FakePPOTrainer, FakePPOConfig, True),
+            ),
+            mock_patch(
+                "soup_cli.trainer.ppo.PPOTrainerWrapper._get_or_create_reward_model",
+                return_value=fake_reward_model,
+            ),
+            mock_patch(
+                "soup_cli.trainer.ppo.PPOTrainerWrapper._create_value_model",
+                return_value=fake_value_model,
+            ),
+        ):
             wrapper.model = MagicMock()
             wrapper.model.get_nb_trainable_parameters.return_value = (100, 1000)
             mock_tokenizer = MagicMock()
@@ -673,12 +682,14 @@ class TestPPOExperimentalSetup:
             def __init__(self, **kwargs):
                 pass
 
-        with mock_patch("soup_cli.trainer.ppo.PPOTrainerWrapper._setup_reward"), \
-             mock_patch("soup_cli.trainer.ppo.PPOTrainerWrapper._setup_transformers"), \
-             mock_patch(
-                 "soup_cli.trainer.ppo._import_ppo_classes",
-                 return_value=(FakePPOTrainer, FakePPOConfig, False),
-             ):
+        with (
+            mock_patch("soup_cli.trainer.ppo.PPOTrainerWrapper._setup_reward"),
+            mock_patch("soup_cli.trainer.ppo.PPOTrainerWrapper._setup_transformers"),
+            mock_patch(
+                "soup_cli.trainer.ppo._import_ppo_classes",
+                return_value=(FakePPOTrainer, FakePPOConfig, False),
+            ),
+        ):
             wrapper.model = MagicMock()
             wrapper.model.get_nb_trainable_parameters.return_value = (100, 1000)
             mock_tokenizer = MagicMock()
@@ -762,9 +773,11 @@ class TestGRPOCPUMinNewTokens:
                 self.model = kwargs.get("model")
                 self.args = kwargs.get("args")
 
-        with mock_patch("soup_cli.trainer.grpo.GRPOTrainerWrapper._setup_transformers"), \
-             mock_patch("trl.GRPOConfig", FakeGRPOConfig), \
-             mock_patch("trl.GRPOTrainer", FakeGRPOTrainer):
+        with (
+            mock_patch("soup_cli.trainer.grpo.GRPOTrainerWrapper._setup_transformers"),
+            mock_patch("trl.GRPOConfig", FakeGRPOConfig),
+            mock_patch("trl.GRPOTrainer", FakeGRPOTrainer),
+        ):
             wrapper.model = MagicMock()
             wrapper.model.get_nb_trainable_parameters.return_value = (100, 1000)
             wrapper.tokenizer = MagicMock()
@@ -815,9 +828,11 @@ class TestGRPOCPUMinNewTokens:
                 self.model = kwargs.get("model")
                 self.args = kwargs.get("args")
 
-        with mock_patch("soup_cli.trainer.grpo.GRPOTrainerWrapper._setup_transformers"), \
-             mock_patch("trl.GRPOConfig", FakeGRPOConfig), \
-             mock_patch("trl.GRPOTrainer", FakeGRPOTrainer):
+        with (
+            mock_patch("soup_cli.trainer.grpo.GRPOTrainerWrapper._setup_transformers"),
+            mock_patch("trl.GRPOConfig", FakeGRPOConfig),
+            mock_patch("trl.GRPOTrainer", FakeGRPOTrainer),
+        ):
             wrapper.model = MagicMock()
             wrapper.model.get_nb_trainable_parameters.return_value = (100, 1000)
             wrapper.tokenizer = MagicMock()
@@ -866,7 +881,9 @@ class TestPPOResumeCheckpoint:
         wrapper.tokenizer = MagicMock()
 
         result = wrapper._train_builtin(
-            display=None, tracker=None, run_id="",
+            display=None,
+            tracker=None,
+            run_id="",
             resume_from_checkpoint="/tmp/ckpt",
         )
 
@@ -904,7 +921,9 @@ class TestPPOResumeCheckpoint:
         wrapper.tokenizer = MagicMock()
 
         wrapper._train_builtin(
-            display=None, tracker=None, run_id="",
+            display=None,
+            tracker=None,
+            run_id="",
             resume_from_checkpoint="/tmp/ckpt",
         )
 
@@ -939,7 +958,9 @@ class TestPPOResumeCheckpoint:
         wrapper.tokenizer = MagicMock()
 
         wrapper._train_builtin(
-            display=None, tracker=None, run_id="",
+            display=None,
+            tracker=None,
+            run_id="",
             resume_from_checkpoint=None,
         )
 
@@ -971,20 +992,22 @@ class TestPPOResumeCheckpoint:
         # #1391: one rollout batch is batch_size (1 here) x gradient_accumulation_steps (4)
         dataset = {"train": [{"prompt": "Q?", "answer": "A"}] * 4}
 
-        with mock_patch("soup_cli.trainer.ppo.PPOTrainerWrapper._setup_reward"), \
-             mock_patch("soup_cli.trainer.ppo.PPOTrainerWrapper._setup_transformers"), \
-             mock_patch(
-                 "soup_cli.trainer.ppo._import_ppo_classes",
-                 return_value=(FakePPOTrainer, FakePPOConfig, True),
-             ), \
-             mock_patch(
-                 "soup_cli.trainer.ppo.PPOTrainerWrapper._get_or_create_reward_model",
-                 return_value=MagicMock(),
-             ), \
-             mock_patch(
-                 "soup_cli.trainer.ppo.PPOTrainerWrapper._create_value_model",
-                 return_value=MagicMock(),
-             ):
+        with (
+            mock_patch("soup_cli.trainer.ppo.PPOTrainerWrapper._setup_reward"),
+            mock_patch("soup_cli.trainer.ppo.PPOTrainerWrapper._setup_transformers"),
+            mock_patch(
+                "soup_cli.trainer.ppo._import_ppo_classes",
+                return_value=(FakePPOTrainer, FakePPOConfig, True),
+            ),
+            mock_patch(
+                "soup_cli.trainer.ppo.PPOTrainerWrapper._get_or_create_reward_model",
+                return_value=MagicMock(),
+            ),
+            mock_patch(
+                "soup_cli.trainer.ppo.PPOTrainerWrapper._create_value_model",
+                return_value=MagicMock(),
+            ),
+        ):
             wrapper.model = MagicMock()
             wrapper.model.get_nb_trainable_parameters.return_value = (100, 1000)
             mock_tokenizer = MagicMock()
@@ -1081,6 +1104,7 @@ class TestGRPOChatTemplate:
         import inspect
 
         from soup_cli.trainer.grpo import GRPOTrainerWrapper
+
         source = inspect.getsource(GRPOTrainerWrapper.setup)
         assert "chat_template" in source
 
@@ -1089,6 +1113,7 @@ class TestGRPOChatTemplate:
         import inspect
 
         from soup_cli.trainer.grpo import GRPOTrainerWrapper
+
         source = inspect.getsource(GRPOTrainerWrapper.setup)
         # Should check with getattr before setting
         assert "getattr" in source
@@ -1098,6 +1123,7 @@ class TestGRPOChatTemplate:
         import inspect
 
         from soup_cli.trainer.grpo import GRPOTrainerWrapper
+
         source = inspect.getsource(GRPOTrainerWrapper.setup)
         assert "batch_size < num_gen" in source or "num_gen" in source
 
@@ -1113,6 +1139,7 @@ class TestPPOTokenization:
         import inspect
 
         from soup_cli.trainer.ppo import PPOTrainerWrapper
+
         source = inspect.getsource(PPOTrainerWrapper.setup)
         assert "_tokenize_ppo" in source
         assert ".map(" in source
@@ -1198,9 +1225,7 @@ class TestValidateAutoDetect:
             for row in data:
                 f.write(json.dumps(row) + "\n")
 
-        result = runner.invoke(
-            app, ["data", "validate", str(filepath), "--format", "alpaca"]
-        )
+        result = runner.invoke(app, ["data", "validate", str(filepath), "--format", "alpaca"])
         assert result.exit_code == 0
         assert "Auto-detected" not in result.output
         assert "1/1 rows valid" in strip_ansi(result.output)
@@ -1280,7 +1305,9 @@ class TestStatsHistogramWindows:
         assert needs_redirect, "Should detect cp1251 needs redirect"
 
         sys.stdout = io.TextIOWrapper(
-            sys.stdout.buffer, encoding="utf-8", errors="replace",
+            sys.stdout.buffer,
+            encoding="utf-8",
+            errors="replace",
         )
 
         try:

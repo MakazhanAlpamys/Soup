@@ -19,7 +19,6 @@ def _strip_ansi(s: str) -> str:
 
 
 class TestValidateLambdaLabs:
-
     def test_lambda_validate_cloud(self):
         from soup_cli.cloud.lambda_labs import validate_cloud
 
@@ -288,5 +287,3 @@ class TestCloudNoSecrets:
         assert secret not in stub_modal
         assert hf_token not in stub_modal
         assert wandb_key not in stub_modal
-
-

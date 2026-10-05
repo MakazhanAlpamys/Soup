@@ -276,13 +276,17 @@ def test_check_abi_compat_no_drift():
     from soup_cli.utils.env_lock import EnvEntry, EnvLock, check_abi_compat
 
     a = EnvLock(
-        soup_version="0.64.0", python_version="3.10.0", platform="linux",
+        soup_version="0.64.0",
+        python_version="3.10.0",
+        platform="linux",
         cuda_version="12.1",
         entries=(EnvEntry(name="torch", version="2.0", source="pip"),),
         created_at="2026-05-20T00:00:00+00:00",
     )
     b = EnvLock(
-        soup_version="0.64.0", python_version="3.10.0", platform="linux",
+        soup_version="0.64.0",
+        python_version="3.10.0",
+        platform="linux",
         cuda_version="12.1",
         entries=(EnvEntry(name="torch", version="2.0", source="pip"),),
         created_at="2026-05-21T00:00:00+00:00",  # timestamp differs but ABI same
@@ -296,13 +300,17 @@ def test_check_abi_compat_torch_change():
     from soup_cli.utils.env_lock import EnvEntry, EnvLock, check_abi_compat
 
     a = EnvLock(
-        soup_version="0.64.0", python_version="3.10.0", platform="linux",
+        soup_version="0.64.0",
+        python_version="3.10.0",
+        platform="linux",
         cuda_version="12.1",
         entries=(EnvEntry(name="torch", version="2.0", source="pip"),),
         created_at="2026-05-20T00:00:00+00:00",
     )
     b = EnvLock(
-        soup_version="0.64.0", python_version="3.10.0", platform="linux",
+        soup_version="0.64.0",
+        python_version="3.10.0",
+        platform="linux",
         cuda_version="12.1",
         entries=(EnvEntry(name="torch", version="2.1", source="pip"),),
         created_at="2026-05-20T00:00:00+00:00",
@@ -316,13 +324,19 @@ def test_check_abi_compat_cuda_change():
     from soup_cli.utils.env_lock import EnvLock, check_abi_compat
 
     a = EnvLock(
-        soup_version="0.64.0", python_version="3.10.0", platform="linux",
-        cuda_version="12.1", entries=(),
+        soup_version="0.64.0",
+        python_version="3.10.0",
+        platform="linux",
+        cuda_version="12.1",
+        entries=(),
         created_at="2026-05-20T00:00:00+00:00",
     )
     b = EnvLock(
-        soup_version="0.64.0", python_version="3.10.0", platform="linux",
-        cuda_version="11.8", entries=(),
+        soup_version="0.64.0",
+        python_version="3.10.0",
+        platform="linux",
+        cuda_version="11.8",
+        entries=(),
         created_at="2026-05-20T00:00:00+00:00",
     )
     report = check_abi_compat(a, b)
@@ -334,13 +348,19 @@ def test_check_abi_compat_python_change():
     from soup_cli.utils.env_lock import EnvLock, check_abi_compat
 
     a = EnvLock(
-        soup_version="0.64.0", python_version="3.10.0", platform="linux",
-        cuda_version=None, entries=(),
+        soup_version="0.64.0",
+        python_version="3.10.0",
+        platform="linux",
+        cuda_version=None,
+        entries=(),
         created_at="2026-05-20T00:00:00+00:00",
     )
     b = EnvLock(
-        soup_version="0.64.0", python_version="3.11.0", platform="linux",
-        cuda_version=None, entries=(),
+        soup_version="0.64.0",
+        python_version="3.11.0",
+        platform="linux",
+        cuda_version=None,
+        entries=(),
         created_at="2026-05-20T00:00:00+00:00",
     )
     report = check_abi_compat(a, b)
@@ -423,6 +443,7 @@ def test_no_heavy_top_level_imports():
     src = Path(__file__).resolve().parent.parent / "src" / "soup_cli" / "utils" / "env_lock.py"
     text = src.read_text(encoding="utf-8")
     import re
+
     for bad in ["^import torch", "^from torch", "^import transformers", "^from transformers"]:
         assert not re.search(bad, text, re.MULTILINE)
 
@@ -640,9 +661,7 @@ def test_cli_env_fix_output_outside_cwd_rejected(tmp_path, monkeypatch):
     sub.mkdir()
     monkeypatch.chdir(sub)
     assert runner.invoke(app, ["env", "lock"]).exit_code == 0
-    result = runner.invoke(
-        app, ["env", "fix", "--output", str(tmp_path / "req.txt")]
-    )
+    result = runner.invoke(app, ["env", "fix", "--output", str(tmp_path / "req.txt")])
     assert result.exit_code == 2
 
 

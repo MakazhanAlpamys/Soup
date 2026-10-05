@@ -270,6 +270,7 @@ def test_merge_adapters_unknown_strategy(tmp_path, monkeypatch):
 
 def test_merge_adapters_output_outside_cwd(tmp_path, monkeypatch):
     import os
+
     monkeypatch.chdir(tmp_path)
     _write_adapter(tmp_path / "a", {"w": np.zeros((2, 2), dtype=np.float32)})
     _write_adapter(tmp_path / "b", {"w": np.zeros((2, 2), dtype=np.float32)})
@@ -284,6 +285,7 @@ def test_supported_strategies_immutable():
     # v0.67.0 Part A: floor-check widened to include "cmaes" (mirrors
     # v0.51.0 / v0.54.0 / v0.66.0 floor-check policy).
     from soup_cli.utils.adapter_merge import STRATEGY_ORDER
+
     assert {"linear", "ties", "dare", "svd"} <= SUPPORTED_STRATEGIES
     assert isinstance(SUPPORTED_STRATEGIES, frozenset)
     for entry in ("linear", "ties", "dare", "svd"):
@@ -293,6 +295,7 @@ def test_supported_strategies_immutable():
 def test_merge_ties_density_one_keeps_everything():
     """density=1.0 is the inclusive upper bound — must not raise."""
     import numpy as np  # noqa: F811
+
     a = {"w": np.ones((4,), dtype=np.float32)}
     b = {"w": np.ones((4,), dtype=np.float32)}
     merged, _ = merge_ties([a, b], [1.0, 1.0], density=1.0)
@@ -302,6 +305,7 @@ def test_merge_ties_density_one_keeps_everything():
 def test_merge_linear_inf_weight_rejected():
     """math.isfinite must reject +inf as well as NaN."""
     import numpy as np  # noqa: F811
+
     a = {"w": np.zeros(1, dtype=np.float32)}
     b = {"w": np.zeros(1, dtype=np.float32)}
     with pytest.raises(ValueError, match="finite"):
@@ -311,6 +315,7 @@ def test_merge_linear_inf_weight_rejected():
 def test_merge_ties_tied_sign_defaults_positive():
     """Sign-sum == 0 (tied vote) must elect +1, not silently zero parameters."""
     import numpy as np  # noqa: F811
+
     a = {"w": np.array([2.0], dtype=np.float32)}
     b = {"w": np.array([-2.0], dtype=np.float32)}
     merged, _ = merge_ties([a, b], [1.0, 1.0], density=1.0)
@@ -322,6 +327,7 @@ def test_merge_ties_tied_sign_defaults_positive():
 def test_merge_adapters_rejects_symlink_at_output_safetensors(tmp_path, monkeypatch):
     """Pre-placed symlink at output safetensors path must be rejected (TOCTOU)."""
     import os
+
     monkeypatch.chdir(tmp_path)
     _write_adapter(tmp_path / "a", {"w": np.ones((2, 2), dtype=np.float32)})
     _write_adapter(tmp_path / "b", {"w": np.zeros((2, 2), dtype=np.float32)})
@@ -337,8 +343,9 @@ def test_merge_adapters_rejects_symlink_at_output_safetensors(tmp_path, monkeypa
 
 
 def test_no_top_level_torch_import_in_merge():
-    src = (Path(__file__).parent.parent / "src" / "soup_cli" / "utils" / "adapter_merge.py"
-           ).read_text(encoding="utf-8")
+    src = (
+        Path(__file__).parent.parent / "src" / "soup_cli" / "utils" / "adapter_merge.py"
+    ).read_text(encoding="utf-8")
     for line in src.splitlines():
         stripped = line.lstrip()
         if stripped.startswith("import torch") or stripped.startswith("from torch"):
@@ -348,8 +355,13 @@ def test_no_top_level_torch_import_in_merge():
 
 def test_predict_merged_verdict_stub():
     report = MergeReport(
-        strategy="linear", adapters=("a", "b"), weights=(0.5, 0.5),
-        merged_layers=1, skipped_layers=(), output_dir="out", verdict="UNKNOWN",
+        strategy="linear",
+        adapters=("a", "b"),
+        weights=(0.5, 0.5),
+        merged_layers=1,
+        skipped_layers=(),
+        output_dir="out",
+        verdict="UNKNOWN",
     )
     assert predict_merged_verdict(report) == "UNKNOWN"
 
@@ -361,8 +373,13 @@ def test_predict_merged_verdict_rejects_non_report():
 
 def test_predict_merged_verdict_canary_must_be_str():
     report = MergeReport(
-        strategy="linear", adapters=("a", "b"), weights=(0.5, 0.5),
-        merged_layers=1, skipped_layers=(), output_dir="out", verdict="OK",
+        strategy="linear",
+        adapters=("a", "b"),
+        weights=(0.5, 0.5),
+        merged_layers=1,
+        skipped_layers=(),
+        output_dir="out",
+        verdict="OK",
     )
     with pytest.raises(TypeError):
         predict_merged_verdict(report, canary_suite=123)  # type: ignore[arg-type]
@@ -370,9 +387,15 @@ def test_predict_merged_verdict_canary_must_be_str():
 
 def test_merge_report_frozen():
     import dataclasses
+
     report = MergeReport(
-        strategy="linear", adapters=("a", "b"), weights=(0.5, 0.5),
-        merged_layers=1, skipped_layers=(), output_dir="out", verdict="OK",
+        strategy="linear",
+        adapters=("a", "b"),
+        weights=(0.5, 0.5),
+        merged_layers=1,
+        skipped_layers=(),
+        output_dir="out",
+        verdict="OK",
     )
     with pytest.raises(dataclasses.FrozenInstanceError):
         report.strategy = "ties"  # type: ignore[misc]
@@ -392,10 +415,20 @@ def test_adapters_merge_cli_linear(tmp_path, monkeypatch):
     # --allow-unscanned: the toy `ones((2,2))` fixture is genuinely rank-1, so
     # the v0.71.2 #192 backdoor-scan gate (correctly) flags it FAIL. This test
     # exercises the merge MATH, not the scan gate.
-    result = runner.invoke(soup_app, [
-        "adapters", "merge", "a", "b", "-o", "out", "--strategy", "linear",
-        "--allow-unscanned",
-    ])
+    result = runner.invoke(
+        soup_app,
+        [
+            "adapters",
+            "merge",
+            "a",
+            "b",
+            "-o",
+            "out",
+            "--strategy",
+            "linear",
+            "--allow-unscanned",
+        ],
+    )
     assert result.exit_code == 0, (result.output, repr(result.exception))
     assert (tmp_path / "out" / "adapter_model.safetensors").exists()
 
@@ -404,9 +437,19 @@ def test_adapters_merge_cli_unknown_strategy(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     _write_adapter(tmp_path / "a", {"w": np.zeros((2, 2), dtype=np.float32)})
     _write_adapter(tmp_path / "b", {"w": np.zeros((2, 2), dtype=np.float32)})
-    result = runner.invoke(soup_app, [
-        "adapters", "merge", "a", "b", "-o", "out", "--strategy", "bogus",
-    ])
+    result = runner.invoke(
+        soup_app,
+        [
+            "adapters",
+            "merge",
+            "a",
+            "b",
+            "-o",
+            "out",
+            "--strategy",
+            "bogus",
+        ],
+    )
     assert result.exit_code == 2
     assert "Unknown --strategy" in _strip_ansi(result.output)
 
@@ -415,18 +458,38 @@ def test_adapters_merge_cli_invalid_weights(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     _write_adapter(tmp_path / "a", {"w": np.zeros((2, 2), dtype=np.float32)})
     _write_adapter(tmp_path / "b", {"w": np.zeros((2, 2), dtype=np.float32)})
-    result = runner.invoke(soup_app, [
-        "adapters", "merge", "a", "b", "-o", "out",
-        "--strategy", "linear", "--weights", "1.0,abc",
-    ])
+    result = runner.invoke(
+        soup_app,
+        [
+            "adapters",
+            "merge",
+            "a",
+            "b",
+            "-o",
+            "out",
+            "--strategy",
+            "linear",
+            "--weights",
+            "1.0,abc",
+        ],
+    )
     assert result.exit_code == 2
 
 
 def test_adapters_merge_cli_single_adapter_rejected(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     _write_adapter(tmp_path / "a", {"w": np.zeros((2, 2), dtype=np.float32)})
-    result = runner.invoke(soup_app, [
-        "adapters", "merge", "a", "-o", "out", "--strategy", "linear",
-    ])
+    result = runner.invoke(
+        soup_app,
+        [
+            "adapters",
+            "merge",
+            "a",
+            "-o",
+            "out",
+            "--strategy",
+            "linear",
+        ],
+    )
     assert result.exit_code == 2
     assert "at least 2" in _strip_ansi(result.output)

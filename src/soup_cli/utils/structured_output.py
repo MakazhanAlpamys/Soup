@@ -23,10 +23,7 @@ def validate_mode(mode: Optional[str]) -> Mode:
         return "off"
     normalised = mode.strip().lower()
     if normalised not in _VALID_MODES:
-        raise ValueError(
-            f"Unknown structured-output mode: {mode!r}. "
-            f"Valid: {sorted(_VALID_MODES)}"
-        )
+        raise ValueError(f"Unknown structured-output mode: {mode!r}. Valid: {sorted(_VALID_MODES)}")
     return normalised  # type: ignore[return-value]
 
 
@@ -42,9 +39,7 @@ def validate_regex_pattern(pattern: str) -> str:
     if "\x00" in pattern:
         raise ValueError("regex pattern contains null byte")
     if len(pattern) > _MAX_REGEX_LEN:
-        raise ValueError(
-            f"regex pattern length {len(pattern)} exceeds max {_MAX_REGEX_LEN}"
-        )
+        raise ValueError(f"regex pattern length {len(pattern)} exceeds max {_MAX_REGEX_LEN}")
     try:
         re.compile(pattern)
     except re.error as exc:
@@ -65,9 +60,7 @@ def validate_json_schema(schema: Any) -> dict:
     except (TypeError, ValueError) as exc:
         raise ValueError(f"JSON schema is not serialisable: {exc}") from exc
     if len(serialised) > _MAX_SCHEMA_STR_LEN:
-        raise ValueError(
-            f"JSON schema size {len(serialised)} exceeds max {_MAX_SCHEMA_STR_LEN}"
-        )
+        raise ValueError(f"JSON schema size {len(serialised)} exceeds max {_MAX_SCHEMA_STR_LEN}")
     # Minimum viable shape
     if "type" not in schema:
         raise ValueError("JSON schema must declare a 'type' field")
@@ -93,7 +86,8 @@ def is_lmfe_available() -> bool:
 
 
 def build_logits_processors(
-    constraint: Optional[dict], tokenizer: Any,
+    constraint: Optional[dict],
+    tokenizer: Any,
 ) -> list:
     """Build a list of HF ``LogitsProcessor`` instances for ``constraint``.
 
@@ -137,16 +131,14 @@ def _build_outlines_processors(constraint: dict, tokenizer: Any) -> list:
 
     kind = constraint["kind"]
     if kind == "json_schema":
-        builder = (
-            getattr(outlines, "JsonSchema", None)
-            or getattr(outlines, "regex", None)
-        )
+        builder = getattr(outlines, "JsonSchema", None) or getattr(outlines, "regex", None)
         if builder is None:
             return []
         # outlines >= 0.1: outlines.processors.JSONLogitsProcessor
         proc_factory = getattr(
             __import__("outlines.processors", fromlist=["JSONLogitsProcessor"]),
-            "JSONLogitsProcessor", None,
+            "JSONLogitsProcessor",
+            None,
         )
         if proc_factory is None:
             return []
@@ -154,7 +146,8 @@ def _build_outlines_processors(constraint: dict, tokenizer: Any) -> list:
     if kind == "regex":
         proc_factory = getattr(
             __import__("outlines.processors", fromlist=["RegexLogitsProcessor"]),
-            "RegexLogitsProcessor", None,
+            "RegexLogitsProcessor",
+            None,
         )
         if proc_factory is None:
             return []

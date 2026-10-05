@@ -141,8 +141,8 @@ def test_row_losses_matches_hand_computed_cross_entropy():
     ).view(2, 2)
     mask = shift_labels != -100
     expected = [
-        float(ce[0][0]),                      # one supervised token
-        float((ce[1][0] + ce[1][1]) / 2.0),   # two supervised tokens
+        float(ce[0][0]),  # one supervised token
+        float((ce[1][0] + ce[1][1]) / 2.0),  # two supervised tokens
     ]
 
     assert row_tokens == [int(mask[0].sum()), int(mask[1].sum())] == [1, 2]
@@ -279,7 +279,7 @@ def test_rows_recorded_with_dataloader_workers(tmp_path, monkeypatch, aten_half_
 
 def test_factory_is_cached_and_unattached_trainer_records_nothing(
     tmp_path, monkeypatch, aten_half_matmuls
-    ):
+):
     from trl import SFTTrainer
 
     cls = rewind_hf.make_rewind_trainer_class(SFTTrainer)

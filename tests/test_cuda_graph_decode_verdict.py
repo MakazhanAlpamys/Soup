@@ -22,14 +22,23 @@ def _load(name):
 verdict = _load("cuda_graph_decode_verdict")
 prompt_maker = _load("cuda_graph_decode_prompts")
 
-_OK = {"completed": True, "same_workload": True, "same_token_ids": True,
-       "all_requests_identical": True, "same_gpu": True}
+_OK = {
+    "completed": True,
+    "same_workload": True,
+    "same_token_ids": True,
+    "all_requests_identical": True,
+    "same_gpu": True,
+}
 
 
 def _report(variant, rate, reserved):
-    return {"variant": variant, "summary": {
-        "aggregate_tokens_per_second": rate,
-        "peak_reserved_bytes_including_load_and_warmup": reserved}}
+    return {
+        "variant": variant,
+        "summary": {
+            "aggregate_tokens_per_second": rate,
+            "peak_reserved_bytes_including_load_and_warmup": reserved,
+        },
+    }
 
 
 def _comparison(checks=None):
@@ -75,15 +84,23 @@ def test_c_fails_past_256_mib_of_extra_reserved():
 def test_a_fails_on_any_mismatched_run(broken):
     checks = dict(_OK, **{broken: False})
     reports = [_report("baseline", 30.0, GIB), _report("production_cuda_graphs", 60.0, GIB)]
-    assert verdict.harness_verdict(_comparison(checks), reports)[
-        "a_identical_ids_and_matched_conditions"] is False
+    assert (
+        verdict.harness_verdict(_comparison(checks), reports)[
+            "a_identical_ids_and_matched_conditions"
+        ]
+        is False
+    )
 
 
 def test_a_strict_check_that_is_missing_counts_as_a_failure():
     checks = {name: value for name, value in _OK.items() if name != "same_token_ids"}
     reports = [_report("baseline", 30.0, GIB), _report("production_cuda_graphs", 60.0, GIB)]
-    assert verdict.harness_verdict(_comparison(checks), reports)[
-        "a_identical_ids_and_matched_conditions"] is False
+    assert (
+        verdict.harness_verdict(_comparison(checks), reports)[
+            "a_identical_ids_and_matched_conditions"
+        ]
+        is False
+    )
 
 
 def test_a_report_set_without_both_variants_is_refused():
@@ -95,7 +112,8 @@ def _cli_dir(tmp_path, wall, responses):
     (tmp_path / "cli-wall-seconds.json").write_text("﻿" + json.dumps(wall), encoding="utf-8")
     for arm, texts in responses.items():
         (tmp_path / f"out-{arm}.jsonl").write_text(
-            "".join(json.dumps({"response": text}) + "\n" for text in texts), encoding="utf-8")
+            "".join(json.dumps({"response": text}) + "\n" for text in texts), encoding="utf-8"
+        )
     return tmp_path
 
 

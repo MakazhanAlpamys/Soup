@@ -125,9 +125,7 @@ class TestMistral3TableResolution:
 
     def test_wrapper_wins_over_inner_text_config(self) -> None:
         """When outer is mistral3 and inner is ministral3, outer wrapper entry wins."""
-        resolved = resolve_lora_target_modules(
-            _model("mistral3", text_type="ministral3"), "auto"
-        )
+        resolved = resolve_lora_target_modules(_model("mistral3", text_type="ministral3"), "auto")
         assert resolved == _EXPECTED_REGEX
 
     def test_unseen_wrapper_resolves_from_text_config(self) -> None:
@@ -173,8 +171,7 @@ class TestMistral3TargetDiscrimination:
         _, keys = mistral3_model_and_keys
         pattern = MOE_TEXT_LORA_TARGETS["mistral3"]
         lang_attn = [
-            k for k in keys
-            if "language_model" in k and re.search(r"self_attn\.(q|k|v|o)_proj$", k)
+            k for k in keys if "language_model" in k and re.search(r"self_attn\.(q|k|v|o)_proj$", k)
         ]
         matched = [k for k in keys if re.fullmatch(pattern, k)]
 
@@ -182,16 +179,11 @@ class TestMistral3TargetDiscrimination:
         assert sorted(matched) == sorted(lang_attn)
 
     @pytest.mark.parametrize("proj", _PROJECTIONS)
-    def test_regex_matches_each_projection_name(
-        self, mistral3_model_and_keys, proj: str
-    ) -> None:
+    def test_regex_matches_each_projection_name(self, mistral3_model_and_keys, proj: str) -> None:
         """Pin completeness: every one of q_proj, k_proj, v_proj, o_proj is matched."""
         _, keys = mistral3_model_and_keys
         pattern = MOE_TEXT_LORA_TARGETS["mistral3"]
-        matched_proj = [
-            k for k in keys
-            if re.fullmatch(pattern, k) and k.endswith(f".{proj}")
-        ]
+        matched_proj = [k for k in keys if re.fullmatch(pattern, k) and k.endswith(f".{proj}")]
         assert len(matched_proj) == 2, f"Expected 2 layers for {proj}, got {matched_proj}"
 
     def test_regex_matches_nothing_in_vision_tower(self, mistral3_model_and_keys) -> None:
@@ -202,9 +194,7 @@ class TestMistral3TargetDiscrimination:
         assert vision_keys, "Sanity: vision keys exist"
         assert matched_vision == [], f"Vision tower keys matched: {matched_vision}"
 
-    def test_regex_matches_nothing_in_multimodal_projector(
-        self, mistral3_model_and_keys
-    ) -> None:
+    def test_regex_matches_nothing_in_multimodal_projector(self, mistral3_model_and_keys) -> None:
         _, keys = mistral3_model_and_keys
         pattern = MOE_TEXT_LORA_TARGETS["mistral3"]
         proj_keys = [k for k in keys if "multi_modal_projector" in k]
@@ -257,12 +247,11 @@ class TestCounterfactualRegexBehaviors:
         """If target_modules were plain suffixes ('q_proj', ...), vision tower would be hit."""
         _, keys = mistral3_model_and_keys
         vision_hits = [
-            k for k in keys
+            k
+            for k in keys
             if "vision_tower" in k and any(k.endswith(f".{p}") for p in _PROJECTIONS)
         ]
-        assert len(vision_hits) == 8, (
-            "Plain suffix matching would adapt 8 vision tower linears"
-        )
+        assert len(vision_hits) == 8, "Plain suffix matching would adapt 8 vision tower linears"
 
     def test_mutation_unscoped_attention_regex_hits_vision_tower(
         self, mistral3_model_and_keys
@@ -271,8 +260,7 @@ class TestCounterfactualRegexBehaviors:
         _, keys = mistral3_model_and_keys
         mutated_pattern = r".*attention\.(q_proj|k_proj|v_proj|o_proj)"
         vision_matched = [
-            k for k in keys
-            if "vision_tower" in k and re.fullmatch(mutated_pattern, k)
+            k for k in keys if "vision_tower" in k and re.fullmatch(mutated_pattern, k)
         ]
         assert len(vision_matched) == 8
 
@@ -296,9 +284,7 @@ class TestRealPeftAttachOnMetaDevice:
 
         model = _standin_mistral3_model(num_layers=2)
         pattern = MOE_TEXT_LORA_TARGETS["mistral3"]
-        attached = get_peft_model(
-            model, LoraConfig(r=4, lora_alpha=8, target_modules=pattern)
-        )
+        attached = get_peft_model(model, LoraConfig(r=4, lora_alpha=8, target_modules=pattern))
         adapted = [name for name, _ in attached.named_modules() if name.endswith(".lora_A")]
 
         assert len(adapted) == 8, f"Expected 8 adapted modules, got {len(adapted)}"
@@ -405,4 +391,3 @@ class TestPreflightAttach:
         assert check.verdict == Verdict.CANNOT_ATTACH
         assert check.stage == "resolve"
         assert "target_modules" in check.detail
-

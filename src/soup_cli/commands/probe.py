@@ -10,6 +10,7 @@ Sub-commands:
 Composes with ``soup diagnose`` (v0.56.0) — the four probes here are
 the v0.66.0 "Post-train X-rays" extension to the v0.56 diagnose surface.
 """
+
 from __future__ import annotations
 
 import json
@@ -50,13 +51,9 @@ def _read_json_evidence(path: str, *, field: str) -> Mapping[str, Any]:
     try:
         size = os.path.getsize(real)
     except OSError as exc:
-        raise typer.BadParameter(
-            f"{field}: cannot read — {type(exc).__name__}"
-        ) from exc
+        raise typer.BadParameter(f"{field}: cannot read — {type(exc).__name__}") from exc
     if size > _MAX_EVIDENCE_BYTES:
-        raise typer.BadParameter(
-            f"{field}: file too large ({size} > {_MAX_EVIDENCE_BYTES} bytes)"
-        )
+        raise typer.BadParameter(f"{field}: file too large ({size} > {_MAX_EVIDENCE_BYTES} bytes)")
     try:
         with open(real, encoding="utf-8") as fh:
             data = json.load(fh)
@@ -74,12 +71,8 @@ def _read_json_evidence(path: str, *, field: str) -> Mapping[str, Any]:
 
 @app.command(name="pack")
 def pack(
-    base: Optional[str] = typer.Argument(
-        None, help="Base model id (e.g. meta-llama/Llama-3-8B)"
-    ),
-    list_bases: bool = typer.Option(
-        False, "--list", help="List all bases that ship a probe pack"
-    ),
+    base: Optional[str] = typer.Argument(None, help="Base model id (e.g. meta-llama/Llama-3-8B)"),
+    list_bases: bool = typer.Option(False, "--list", help="List all bases that ship a probe pack"),
     output: Optional[str] = typer.Option(
         None, "--output", "-o", help="Write pack manifest JSON to path"
     ),
@@ -102,9 +95,7 @@ def pack(
         return
 
     if base is None:
-        console.print(
-            "[red]Pass <base> or --list (see `soup probe pack --help`).[/]"
-        )
+        console.print("[red]Pass <base> or --list (see `soup probe pack --help`).[/]")
         raise typer.Exit(2)
 
     try:
@@ -117,8 +108,7 @@ def pack(
 
     if output is not None:
         try:
-            atomic_write_text(render_pack_json(result), output,
-                              field="--output")
+            atomic_write_text(render_pack_json(result), output, field="--output")
         except (TypeError, ValueError) as exc:
             console.print(f"[red]Cannot write --output: {escape(str(exc))}[/]")
             raise typer.Exit(2) from exc
@@ -134,11 +124,13 @@ def pack(
 def sleeper(
     base: str = typer.Argument(..., help="Base model id (must have a bundled probe)"),
     evidence: Optional[str] = typer.Option(
-        None, "--evidence",
+        None,
+        "--evidence",
         help="JSON with 'activations': [[...], ...] (2D float matrix)",
     ),
     weights: Optional[str] = typer.Option(
-        None, "--weights",
+        None,
+        "--weights",
         help=(
             "Operator-supplied calibrated probe weights (.npz / .npy / "
             ".safetensors). When set, replaces the synthetic seed fallback "
@@ -187,14 +179,16 @@ def sleeper(
         spec = BUNDLED_PROBES[canonical]
 
     if evidence is None and spec is not None:
-        console.print(Panel(
-            f"Base: [bold]{escape(canonical)}[/]\n"
-            f"Hidden dim: {spec.hidden_dim}\n"
-            f"Threshold: {spec.threshold:.3f}\n"
-            f"Description: {escape(spec.description)}\n\n"
-            "[dim]Pass --evidence <activations.json> to run the probe.[/]",
-            title="Sleeper probe (no evidence)",
-        ))
+        console.print(
+            Panel(
+                f"Base: [bold]{escape(canonical)}[/]\n"
+                f"Hidden dim: {spec.hidden_dim}\n"
+                f"Threshold: {spec.threshold:.3f}\n"
+                f"Description: {escape(spec.description)}\n\n"
+                "[dim]Pass --evidence <activations.json> to run the probe.[/]",
+                title="Sleeper probe (no evidence)",
+            )
+        )
         # Emit neutral OK report — composes with v0.56 diagnose policy.
         neutral = SleeperProbeResult(
             base=canonical,
@@ -205,9 +199,7 @@ def sleeper(
         )
         if output is not None:
             try:
-                atomic_write_text(
-                    render_sleeper_json(neutral), output, field="--output"
-                )
+                atomic_write_text(render_sleeper_json(neutral), output, field="--output")
             except (TypeError, ValueError) as exc:
                 console.print(f"[red]{escape(str(exc))}[/]")
                 raise typer.Exit(2) from exc
@@ -216,9 +208,7 @@ def sleeper(
 
     if evidence is None:
         # Reachable only with --weights set (the metadata panel needs a spec).
-        console.print(
-            "[red]--weights requires --evidence <activations.json> to run.[/]"
-        )
+        console.print("[red]--weights requires --evidence <activations.json> to run.[/]")
         raise typer.Exit(2)
 
     try:
@@ -247,8 +237,7 @@ def sleeper(
 
     if output is not None:
         try:
-            atomic_write_text(render_sleeper_json(result), output,
-                              field="--output")
+            atomic_write_text(render_sleeper_json(result), output, field="--output")
         except (TypeError, ValueError) as exc:
             console.print(f"[red]{escape(str(exc))}[/]")
             raise typer.Exit(2) from exc
@@ -304,18 +293,24 @@ def _run_kind_probe_cli(
         spec = bundled[canonical]
 
     if evidence is None and spec is not None:
-        console.print(Panel(
-            f"Base: [bold]{escape(canonical)}[/]\n"
-            f"Hidden dim: {spec.hidden_dim}\n"
-            f"Threshold: {spec.threshold:.3f}\n"
-            f"Bands: 5% / 20% (OK / MINOR / MAJOR)\n"
-            f"Description: {escape(spec.description)}\n\n"
-            "[dim]Pass --evidence <activations.json> to run the probe.[/]",
-            title=f"{kind.capitalize()} probe (no evidence)",
-        ))
+        console.print(
+            Panel(
+                f"Base: [bold]{escape(canonical)}[/]\n"
+                f"Hidden dim: {spec.hidden_dim}\n"
+                f"Threshold: {spec.threshold:.3f}\n"
+                f"Bands: 5% / 20% (OK / MINOR / MAJOR)\n"
+                f"Description: {escape(spec.description)}\n\n"
+                "[dim]Pass --evidence <activations.json> to run the probe.[/]",
+                title=f"{kind.capitalize()} probe (no evidence)",
+            )
+        )
         neutral = ProbeResult(
-            kind=kind, base=canonical, num_tokens=0, flag_rate=0.0,
-            max_score=0.0, verdict="OK",
+            kind=kind,
+            base=canonical,
+            num_tokens=0,
+            flag_rate=0.0,
+            max_score=0.0,
+            verdict="OK",
         )
         if output is not None:
             try:
@@ -327,9 +322,7 @@ def _run_kind_probe_cli(
         return
 
     if evidence is None:
-        console.print(
-            "[red]--weights requires --evidence <activations.json> to run.[/]"
-        )
+        console.print("[red]--weights requires --evidence <activations.json> to run.[/]")
         raise typer.Exit(2)
 
     try:
@@ -372,11 +365,13 @@ def _run_kind_probe_cli(
 def truth(
     base: str = typer.Argument(..., help="Base model id (must have a bundled probe)"),
     evidence: Optional[str] = typer.Option(
-        None, "--evidence",
+        None,
+        "--evidence",
         help="JSON with 'activations': [[...], ...] (2D float matrix)",
     ),
     weights: Optional[str] = typer.Option(
-        None, "--weights",
+        None,
+        "--weights",
         help="Operator-supplied calibrated probe weights (.npz / .npy / .safetensors)",
     ),
     output: Optional[str] = typer.Option(
@@ -393,9 +388,15 @@ def truth(
     )
 
     _run_kind_probe_cli(
-        base, evidence, weights, output, kind="truth",
-        bundled=BUNDLED_TRUTH_PROBES, validate_base=validate_base_for_truth,
-        run_probe=run_truth_probe, render_json=render_truth_json,
+        base,
+        evidence,
+        weights,
+        output,
+        kind="truth",
+        bundled=BUNDLED_TRUTH_PROBES,
+        validate_base=validate_base_for_truth,
+        run_probe=run_truth_probe,
+        render_json=render_truth_json,
         render_markdown=render_truth_markdown,
     )
 
@@ -404,11 +405,13 @@ def truth(
 def harm(
     base: str = typer.Argument(..., help="Base model id (must have a bundled probe)"),
     evidence: Optional[str] = typer.Option(
-        None, "--evidence",
+        None,
+        "--evidence",
         help="JSON with 'activations': [[...], ...] (2D float matrix)",
     ),
     weights: Optional[str] = typer.Option(
-        None, "--weights",
+        None,
+        "--weights",
         help="Operator-supplied calibrated probe weights (.npz / .npy / .safetensors)",
     ),
     output: Optional[str] = typer.Option(
@@ -425,9 +428,15 @@ def harm(
     )
 
     _run_kind_probe_cli(
-        base, evidence, weights, output, kind="harm",
-        bundled=BUNDLED_HARM_PROBES, validate_base=validate_base_for_harm,
-        run_probe=run_harm_probe, render_json=render_harm_json,
+        base,
+        evidence,
+        weights,
+        output,
+        kind="harm",
+        bundled=BUNDLED_HARM_PROBES,
+        validate_base=validate_base_for_harm,
+        run_probe=run_harm_probe,
+        render_json=render_harm_json,
         render_markdown=render_harm_markdown,
     )
 
@@ -470,15 +479,11 @@ def _parse_adapter_specs(specs: Optional[list[str]]) -> dict[str, str]:
     from soup_cli.utils.paths import is_under_cwd
 
     if not specs:
-        raise typer.BadParameter(
-            "--measure requires ≥2 --adapter name=path specs"
-        )
+        raise typer.BadParameter("--measure requires ≥2 --adapter name=path specs")
     out: dict[str, str] = {}
     for spec in specs:
         if not isinstance(spec, str) or "=" not in spec:
-            raise typer.BadParameter(
-                f"--adapter {spec!r}: expected name=path"
-            )
+            raise typer.BadParameter(f"--adapter {spec!r}: expected name=path")
         name, path = spec.split("=", 1)
         name = name.strip()
         path = path.strip()
@@ -487,9 +492,7 @@ def _parse_adapter_specs(specs: Optional[list[str]]) -> dict[str, str]:
         if name in out:
             raise typer.BadParameter(f"--adapter: duplicate name {name!r}")
         if not is_under_cwd(path):
-            raise typer.BadParameter(
-                f"--adapter {name!r}: path must stay under the cwd"
-            )
+            raise typer.BadParameter(f"--adapter {name!r}: path must stay under the cwd")
         out[name] = path
     return out
 
@@ -545,9 +548,7 @@ def _run_interference_measure(
         f"{escape(base_model)} and measuring {len(eval_rows)} eval rows ..."
     )
     try:
-        losses = measure_interference_losses(
-            base_model, adapters, eval_rows, device=device
-        )
+        losses = measure_interference_losses(base_model, adapters, eval_rows, device=device)
     except (TypeError, ValueError, RuntimeError, ImportError) as exc:
         console.print(f"[red]--measure failed: {escape(str(exc))}[/]")
         raise typer.Exit(2) from exc
@@ -566,7 +567,8 @@ def interference(
         None, help="JSON: {adapters: [...], losses: {'a|b': loss_value, ...}}"
     ),
     measure: Optional[str] = typer.Option(
-        None, "--measure",
+        None,
+        "--measure",
         help=(
             "Auto-measure losses against this eval-suite JSONL instead of "
             "supplying a losses JSON. Requires --base-model + ≥2 --adapter "
@@ -577,15 +579,14 @@ def interference(
         None, "--base-model", help="Base model id for --measure"
     ),
     adapter: Optional[list[str]] = typer.Option(
-        None, "--adapter",
+        None,
+        "--adapter",
         help="name=path adapter spec for --measure (repeatable)",
     ),
     device: Optional[str] = typer.Option(
         None, "--device", help="Device for --measure (cpu / cuda)"
     ),
-    output: Optional[str] = typer.Option(
-        None, "--output", "-o", help="Write matrix JSON to path"
-    ),
+    output: Optional[str] = typer.Option(None, "--output", "-o", help="Write matrix JSON to path"),
 ):
     """Pairwise N×N adapter interference matrix (v0.66.0; --measure v0.71.8 #218).
 
@@ -620,9 +621,7 @@ def interference(
     adapters_raw = payload.get("adapters")
     losses_raw = payload.get("losses")
     if not isinstance(adapters_raw, list) or not isinstance(losses_raw, dict):
-        console.print(
-            "[red]JSON must have 'adapters' (list) and 'losses' (dict).[/]"
-        )
+        console.print("[red]JSON must have 'adapters' (list) and 'losses' (dict).[/]")
         raise typer.Exit(2)
 
     # Parse "a|b" keys
@@ -630,8 +629,7 @@ def interference(
     for key, value in losses_raw.items():
         if not isinstance(key, str) or "|" not in key:
             console.print(
-                f"[red]Invalid losses key {for_terminal(repr(key))}; "
-                "expected 'a|b' shape.[/]"
+                f"[red]Invalid losses key {for_terminal(repr(key))}; expected 'a|b' shape.[/]"
             )
             raise typer.Exit(2)
         # H3 review fix (v0.66.0): validate the value is numeric BEFORE
@@ -668,10 +666,12 @@ def sae_diff(
     ),
     pre_acts: str = typer.Argument(..., help="JSON: {'activations': [[...]]}"),
     post_acts: str = typer.Argument(..., help="JSON: {'activations': [[...]]}"),
-    top_k: int = typer.Option(20, "--top-k", min=1, max=10_000,
-                              help="Top-K changed features to report"),
+    top_k: int = typer.Option(
+        20, "--top-k", min=1, max=10_000, help="Top-K changed features to report"
+    ),
     auto_download: bool = typer.Option(
-        False, "--auto-download",
+        False,
+        "--auto-download",
         help=(
             "Treat <sae> as an HF Hub repo id and download it into "
             "~/.soup/sae-cache/ first (must be in HF_HUB_ALLOWLIST; v0.71.8 #216)."
@@ -695,8 +695,7 @@ def sae_diff(
     try:
         if auto_download:
             console.print(
-                f"[cyan]--auto-download:[/] fetching SAE {escape(sae)} "
-                "into ~/.soup/sae-cache/ ..."
+                f"[cyan]--auto-download:[/] fetching SAE {escape(sae)} into ~/.soup/sae-cache/ ..."
             )
             sae_weights = download_sae(sae)
         else:
@@ -732,8 +731,7 @@ def sae_diff(
 
     if output is not None:
         try:
-            atomic_write_text(render_report_json(report), output,
-                              field="--output")
+            atomic_write_text(render_report_json(report), output, field="--output")
         except (TypeError, ValueError) as exc:
             console.print(f"[red]{escape(str(exc))}[/]")
             raise typer.Exit(2) from exc

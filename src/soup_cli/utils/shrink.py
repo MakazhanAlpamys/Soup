@@ -14,6 +14,7 @@ This module has two halves:
   ``select_drop_block``, ``prune_model_layers``, arch allowlist) whose heavy
   imports happen inside the functions.
 """
+
 from __future__ import annotations
 
 import math
@@ -362,9 +363,7 @@ def compute_layer_importance(
             out = model(**inputs, output_hidden_states=True)  # type: ignore[operator]
             hidden = out.hidden_states
             if len(hidden) != n_layers + 1:
-                raise ValueError(
-                    f"expected {n_layers + 1} hidden states, got {len(hidden)}"
-                )
+                raise ValueError(f"expected {n_layers + 1} hidden states, got {len(hidden)}")
             mask = inputs.get("attention_mask")
             for start in valid_starts:
                 h_in = hidden[start][0].to(torch.float32)  # [seq, D]

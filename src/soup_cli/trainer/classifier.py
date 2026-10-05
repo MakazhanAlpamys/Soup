@@ -148,33 +148,23 @@ def _normalise_label(
     return _label_index(raw, label_names, num_labels)
 
 
-def _label_index(
-    raw: object, label_names: List[str] | None, num_labels: int
-) -> int:
+def _label_index(raw: object, label_names: List[str] | None, num_labels: int) -> int:
     if isinstance(raw, bool):
         # Project policy (v0.30.0 Candidate / v0.39.0 ReLoRAPolicy / v0.41.0
         # Part B): bool-as-int violations raise TypeError, not ValueError.
         raise TypeError(f"label must not be bool, got {raw!r}")
     if isinstance(raw, int):
         if raw < 0 or raw >= num_labels:
-            raise ValueError(
-                f"label index {raw} out of range [0, {num_labels})"
-            )
+            raise ValueError(f"label index {raw} out of range [0, {num_labels})")
         return raw
     if isinstance(raw, str):
         if label_names is None:
-            raise ValueError(
-                f"label is str {raw!r} but training.label_names is unset"
-            )
+            raise ValueError(f"label is str {raw!r} but training.label_names is unset")
         try:
             return label_names.index(raw)
         except ValueError as exc:
-            raise ValueError(
-                f"label {raw!r} not in training.label_names={label_names!r}"
-            ) from exc
-    raise TypeError(
-        f"label must be int / str / list, got {type(raw).__name__}"
-    )
+            raise ValueError(f"label {raw!r} not in training.label_names={label_names!r}") from exc
+    raise TypeError(f"label must be int / str / list, got {type(raw).__name__}")
 
 
 def validate_classification_dataset(cfg: SoupConfig, dataset: dict) -> None:
@@ -186,26 +176,20 @@ def validate_classification_dataset(cfg: SoupConfig, dataset: dict) -> None:
     if cfg.task not in CLASSIFICATION_TASKS:
         return
 
-    is_paired = (cfg.task == "cross_encoder")
+    is_paired = cfg.task == "cross_encoder"
     tcfg = cfg.training
     if tcfg.num_labels is None:
-        raise ValueError(
-            f"task={cfg.task!r} requires training.num_labels to be set"
-        )
+        raise ValueError(f"task={cfg.task!r} requires training.num_labels to be set")
     num_labels = int(tcfg.num_labels)
-    multi_label = (tcfg.classifier_kind == "multi_label")
-    label_names = (
-        list(tcfg.label_names) if tcfg.label_names is not None else None
-    )
+    multi_label = tcfg.classifier_kind == "multi_label"
+    label_names = list(tcfg.label_names) if tcfg.label_names is not None else None
 
     for split in ("train", "val"):
         if split not in dataset or not dataset[split]:
             continue
         for idx, row in enumerate(dataset[split]):
             if not isinstance(row, dict):
-                raise TypeError(
-                    f"{split} row {idx}: expected dict row, got {type(row).__name__}"
-                )
+                raise TypeError(f"{split} row {idx}: expected dict row, got {type(row).__name__}")
             if is_paired:
                 try:
                     _row_to_pair(row)
@@ -282,11 +266,9 @@ class ClassifierTrainerWrapper:
         apply_training_seed(tcfg)
 
         if tcfg.num_labels is None:
-            raise ValueError(
-                f"task={cfg.task!r} requires training.num_labels to be set"
-            )
+            raise ValueError(f"task={cfg.task!r} requires training.num_labels to be set")
         num_labels = int(tcfg.num_labels)
-        multi_label = (tcfg.classifier_kind == "multi_label")
+        multi_label = tcfg.classifier_kind == "multi_label"
         problem_type = (
             "multi_label_classification" if multi_label else "single_label_classification"
         )
@@ -306,9 +288,7 @@ class ClassifierTrainerWrapper:
             problem_type=problem_type,
             trust_remote_code=self._trust_remote_code,
         )
-        label_names = (
-            list(tcfg.label_names) if tcfg.label_names is not None else None
-        )
+        label_names = list(tcfg.label_names) if tcfg.label_names is not None else None
         if label_names is not None:
             self.model.config.id2label = {i: name for i, name in enumerate(label_names)}
             self.model.config.label2id = {name: i for i, name in enumerate(label_names)}
@@ -319,9 +299,7 @@ class ClassifierTrainerWrapper:
         # only the adapter (+ classification head) trains. ``lora.r`` defaults
         # to 64, so the gate is the explicit ``classifier_lora`` flag AND a
         # positive rank (a rank of 0 would be a no-op LoRA).
-        self._lora_active = bool(getattr(tcfg, "classifier_lora", False)) and (
-            tcfg.lora.r > 0
-        )
+        self._lora_active = bool(getattr(tcfg, "classifier_lora", False)) and (tcfg.lora.r > 0)
         if self._lora_active:
             from peft import TaskType, get_peft_model
 
@@ -338,9 +316,7 @@ class ClassifierTrainerWrapper:
             # #1151: moe_lora picks the expert-FFN targets; see sft.py.
             from soup_cli.utils.moe import resolve_moe_lora_targets
 
-            target_modules = resolve_moe_lora_targets(
-                self.model, tcfg, target_modules, console
-            )
+            target_modules = resolve_moe_lora_targets(self.model, tcfg, target_modules, console)
             lora_config = build_lora_config(
                 tcfg.lora,
                 target_modules=target_modules,
@@ -350,17 +326,17 @@ class ClassifierTrainerWrapper:
             self.model = get_peft_model(self.model, lora_config)
             apply_post_lora_patches(self.model)
             console.print(
-                f"[green]Classifier LoRA enabled[/] "
-                f"(r={tcfg.lora.r}, alpha={tcfg.lora.alpha})"
+                f"[green]Classifier LoRA enabled[/] (r={tcfg.lora.r}, alpha={tcfg.lora.alpha})"
             )
 
-        is_paired = (cfg.task == "cross_encoder")
+        is_paired = cfg.task == "cross_encoder"
 
         def encode(row: dict) -> dict:
             if is_paired:
                 a, b = _row_to_pair(row)
                 enc = self.tokenizer(
-                    a, b,
+                    a,
+                    b,
                     truncation=True,
                     max_length=cfg.data.max_length,
                 )
@@ -371,9 +347,7 @@ class ClassifierTrainerWrapper:
                     truncation=True,
                     max_length=cfg.data.max_length,
                 )
-            label = _normalise_label(
-                row.get("label"), label_names, num_labels, multi_label
-            )
+            label = _normalise_label(row.get("label"), label_names, num_labels, multi_label)
             enc["labels"] = label
             return enc
 
@@ -393,8 +367,7 @@ class ClassifierTrainerWrapper:
 
         batch_size = tcfg.batch_size if tcfg.batch_size != "auto" else 8
         total_steps = (
-            math.ceil(len(train_ds) / batch_size / tcfg.gradient_accumulation_steps)
-            * tcfg.epochs
+            math.ceil(len(train_ds) / batch_size / tcfg.gradient_accumulation_steps) * tcfg.epochs
         )
         warmup_steps = int(total_steps * tcfg.warmup_ratio)
 
@@ -459,8 +432,7 @@ class ClassifierTrainerWrapper:
     ) -> dict:
         if self.trainer is None:
             raise RuntimeError(
-                "ClassifierTrainerWrapper.train() called before setup(). "
-                "Call setup(dataset) first."
+                "ClassifierTrainerWrapper.train() called before setup(). Call setup(dataset) first."
             )
         start = time.time()
         if display is not None:

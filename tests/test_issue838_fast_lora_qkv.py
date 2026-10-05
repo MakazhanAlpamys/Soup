@@ -122,15 +122,29 @@ class TestMath:
                     pairs.append((a, b))
             (aq_, bq_), (ak_, bk_), (av_, bv_) = pairs
             q, k, v = fn.apply(
-                x_, wq, bq, wk, bk, wv, bv,
-                aq_, bq_, ak_, bk_, av_, bv_,
-                1.2, 0.8, 1.7, None, None, None,
+                x_,
+                wq,
+                bq,
+                wk,
+                bk,
+                wv,
+                bv,
+                aq_,
+                bq_,
+                ak_,
+                bk_,
+                av_,
+                bv_,
+                1.2,
+                0.8,
+                1.7,
+                None,
+                None,
+                None,
             )
             return torch.cat((q, k, v), dim=-1)
 
-        assert torch.autograd.gradcheck(
-            call, tuple(variables), eps=1e-6, atol=1e-5, rtol=1e-4
-        )
+        assert torch.autograd.gradcheck(call, tuple(variables), eps=1e-6, atol=1e-5, rtol=1e-4)
 
     @pytest.mark.parametrize(
         "targets",
@@ -264,9 +278,7 @@ class TestCoordinator:
             pytest.skip("Apple MPS is required")
         from soup_cli.utils.fast_lora_qkv import patch_fast_lora_qkv
 
-        model = _make_model(("q_proj", "v_proj")).to(
-            device="mps", dtype=torch.bfloat16
-        )
+        model = _make_model(("q_proj", "v_proj")).to(device="mps", dtype=torch.bfloat16)
         assert patch_fast_lora_qkv(model) == 1
         x = torch.randn(4, 8, device="mps", dtype=torch.bfloat16, requires_grad=True)
         q, k, v = model(x)
@@ -345,9 +357,7 @@ class TestCoordinator:
         _deps()
         from soup_cli.utils.fast_lora_qkv import patch_fast_lora_qkv
 
-        model = _make_model(
-            ("q_proj", "v_proj"), modules_to_save=["k_proj"]
-        )
+        model = _make_model(("q_proj", "v_proj"), modules_to_save=["k_proj"])
         assert hasattr(model.attn.k_proj, "modules_to_save")
         assert patch_fast_lora_qkv(model) == 0
 
@@ -359,10 +369,7 @@ class TestCoordinator:
         model.train()
         assert patch_fast_lora_qkv(model) == 1
         output = model(torch.randn(2, 3, 8, requires_grad=True))
-        assert all(
-            type(part.grad_fn).__name__ != "_FastLoraQKVBackward"
-            for part in output
-        )
+        assert all(type(part.grad_fn).__name__ != "_FastLoraQKVBackward" for part in output)
 
     def test_qkv_owns_projections_until_unpatched(self):
         torch = _deps()
@@ -403,9 +410,7 @@ class TestCoordinator:
             def __init__(self):
                 super().__init__()
                 self.q_proj = bnb.nn.Linear8bitLt(8, 8, bias=False)
-                self.k_proj = bnb.nn.Linear8bitLt(
-                    8, 4, bias=False, has_fp16_weights=False
-                )
+                self.k_proj = bnb.nn.Linear8bitLt(8, 4, bias=False, has_fp16_weights=False)
                 self.v_proj = bnb.nn.Linear8bitLt(8, 4, bias=False)
 
         class Model(nn.Module):
@@ -441,9 +446,7 @@ class TestCoordinator:
             def __init__(self):
                 super().__init__()
                 self.q_proj = nn.Linear(8, 8, bias=False)
-                self.k_proj = bnb.nn.Linear8bitLt(
-                    8, 4, bias=False, has_fp16_weights=False
-                )
+                self.k_proj = bnb.nn.Linear8bitLt(8, 4, bias=False, has_fp16_weights=False)
                 self.v_proj = nn.Linear(8, 4, bias=False)
 
             def forward(self, x):
@@ -472,10 +475,7 @@ class TestCoordinator:
         assert not model.attn.k_proj.weight.is_floating_point()
         assert patch_fast_lora_qkv(model) == 1
         output = model(x)
-        assert all(
-            type(part.grad_fn).__name__ != "_FastLoraQKVBackward"
-            for part in output
-        )
+        assert all(type(part.grad_fn).__name__ != "_FastLoraQKVBackward" for part in output)
         for got, want in zip(output, reference):
             torch.testing.assert_close(got, want)
 
@@ -538,9 +538,7 @@ class TestFastPathIsActuallyTaken:
         with torch.autocast("cpu", dtype=torch.bfloat16):
             output = model(x)
         assert all(part.dtype == torch.bfloat16 for part in output)
-        assert all(
-            type(part.grad_fn).__name__ == "_FastLoraQKVBackward" for part in output
-        )
+        assert all(type(part.grad_fn).__name__ == "_FastLoraQKVBackward" for part in output)
 
     def test_non_contiguous_three_dimensional_input_stays_on_fast_path(self):
         torch = _deps()
@@ -557,9 +555,7 @@ class TestFastPathIsActuallyTaken:
             torch.testing.assert_close(actual, expected)
         assert all(type(part.grad_fn).__name__ == "_FastLoraQKVBackward" for part in got)
 
-    @pytest.mark.parametrize(
-        "device", ["cpu", pytest.param("cuda", marks=pytest.mark.gpu)]
-    )
+    @pytest.mark.parametrize("device", ["cpu", pytest.param("cuda", marks=pytest.mark.gpu)])
     @pytest.mark.parametrize("seed", [3, 7, 11])
     def test_nf4_qkv_forward_backward_matches_unpatched_peft(self, seed, device):
         torch = _deps()
@@ -614,9 +610,7 @@ class TestFastPathIsActuallyTaken:
             for name in ("q_proj", "k_proj", "v_proj")
         )
         reference = copy.deepcopy(model)
-        x_ref = torch.randn(
-            2, 3, 8, device=device, dtype=torch.bfloat16, requires_grad=True
-        )
+        x_ref = torch.randn(2, 3, 8, device=device, dtype=torch.bfloat16, requires_grad=True)
         expected = reference(x_ref)
         sum(part.float().square().mean() for part in expected).backward()
         expected_x_grad = x_ref.grad.detach().clone()
@@ -635,15 +629,11 @@ class TestFastPathIsActuallyTaken:
         got_grads = _adapter_grads(model)
         assert got_grads.keys() == expected_grads.keys()
         for name, grad in got_grads.items():
-            torch.testing.assert_close(
-                grad, expected_grads[name], rtol=1e-2, atol=1e-2, msg=name
-            )
+            torch.testing.assert_close(grad, expected_grads[name], rtol=1e-2, atol=1e-2, msg=name)
 
 
 @pytest.mark.parametrize("seed", range(12))
-def test_bf16_qkv_stays_within_twice_pefts_error_against_float64(
-    seed, aten_half_matmuls
-):
+def test_bf16_qkv_stays_within_twice_pefts_error_against_float64(seed, aten_half_matmuls):
     torch = _deps()
     import torch.nn as nn
     from peft import LoraConfig, inject_adapter_in_model
@@ -691,15 +681,8 @@ def test_bf16_qkv_stays_within_twice_pefts_error_against_float64(
         x = x.clone().requires_grad_(True)
         outputs = module(x)
         sum(output.double().square().mean() for output in outputs).backward()
-        grads = [
-            param.grad
-            for name, param in sorted(module.named_parameters())
-            if "lora_" in name
-        ]
-        result = [
-            tensor.detach().double().clone()
-            for tensor in (*outputs, x.grad, *grads)
-        ]
+        grads = [param.grad for name, param in sorted(module.named_parameters()) if "lora_" in name]
+        result = [tensor.detach().double().clone() for tensor in (*outputs, x.grad, *grads)]
         module.zero_grad(set_to_none=True)
         return result
 
@@ -712,9 +695,7 @@ def test_bf16_qkv_stays_within_twice_pefts_error_against_float64(
 
 
 class TestStreamedModel:
-    def test_qkv_kernel_matches_resident_peft_across_reused_stream_buffers(
-        self, tmp_path
-    ):
+    def test_qkv_kernel_matches_resident_peft_across_reused_stream_buffers(self, tmp_path):
         torch = _deps()
         pytest.importorskip("transformers")
         pytest.importorskip("safetensors")

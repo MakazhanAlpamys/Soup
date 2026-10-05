@@ -64,51 +64,30 @@ class TestTelemetrySSRFRejection:
 
     def test_rejects_cloud_metadata(self) -> None:
         """169.254.169.254 is the cloud metadata service endpoint."""
-        assert (
-            _telemetry_endpoint_is_safe("https://169.254.169.254/")
-            is False
-        )
+        assert _telemetry_endpoint_is_safe("https://169.254.169.254/") is False
 
     def test_rejects_ipv6_loopback_bracketed(self) -> None:
         """urlparse('https://[::1]/').hostname strips brackets."""
-        assert (
-            _telemetry_endpoint_is_safe("https://[::1]/") is False
-        )
+        assert _telemetry_endpoint_is_safe("https://[::1]/") is False
 
     def test_rejects_ipv4_mapped_ipv6(self) -> None:
         """IPv4-mapped IPv6 (::ffff:10.0.0.1) must not bypass the guard."""
-        assert (
-            _telemetry_endpoint_is_safe(
-                "https://[::ffff:10.0.0.1]/"
-            )
-            is False
-        )
+        assert _telemetry_endpoint_is_safe("https://[::ffff:10.0.0.1]/") is False
 
     def test_rejects_localhost(self) -> None:
-        assert (
-            _telemetry_endpoint_is_safe("https://localhost/") is False
-        )
+        assert _telemetry_endpoint_is_safe("https://localhost/") is False
 
     def test_rejects_localhost_uppercase(self) -> None:
         """Hostname normalisation must be case-insensitive."""
-        assert (
-            _telemetry_endpoint_is_safe("https://LOCALHOST/") is False
-        )
+        assert _telemetry_endpoint_is_safe("https://LOCALHOST/") is False
 
     def test_rejects_localhost_trailing_dot(self) -> None:
         """FQDN trailing dot: 'LOCALHOST.' -> 'localhost' after strip."""
-        assert (
-            _telemetry_endpoint_is_safe("https://LOCALHOST./") is False
-        )
+        assert _telemetry_endpoint_is_safe("https://LOCALHOST./") is False
 
     def test_rejects_http_any(self) -> None:
         """HTTP is rejected before either layer runs."""
-        assert (
-            _telemetry_endpoint_is_safe(
-                "http://us.i.posthog.com/capture/"
-            )
-            is False
-        )
+        assert _telemetry_endpoint_is_safe("http://us.i.posthog.com/capture/") is False
 
     def test_rejects_non_string(self) -> None:
         assert _telemetry_endpoint_is_safe(42) is False  # type: ignore[arg-type]
@@ -128,36 +107,19 @@ class TestTelemetrySSRFAcceptance:
     """
 
     def test_accepts_public_posthog(self) -> None:
-        assert (
-            _telemetry_endpoint_is_safe(
-                "https://us.i.posthog.com/capture/"
-            )
-            is True
-        )
+        assert _telemetry_endpoint_is_safe("https://us.i.posthog.com/capture/") is True
 
     def test_accepts_eu_posthog(self) -> None:
-        assert (
-            _telemetry_endpoint_is_safe(
-                "https://eu.i.posthog.com/capture/"
-            )
-            is True
-        )
+        assert _telemetry_endpoint_is_safe("https://eu.i.posthog.com/capture/") is True
 
     def test_accepts_custom_posthog_host(self) -> None:
         """A company's self-hosted public PostHog must pass when resolving to public IP."""
         import socket
         from unittest.mock import patch
 
-        fake_addrinfo = [
-            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))
-        ]
+        fake_addrinfo = [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))]
         with patch("socket.getaddrinfo", return_value=fake_addrinfo):
-            assert (
-                _telemetry_endpoint_is_safe(
-                    "https://posthog.mycompany.com/capture/"
-                )
-                is True
-            )
+            assert _telemetry_endpoint_is_safe("https://posthog.mycompany.com/capture/") is True
 
     def test_accepts_default_posthog_endpoint(self) -> None:
         """The hardcoded default must always be accepted."""
@@ -229,9 +191,7 @@ class TestTelemetrySSRFMutationControl:
         assert _is_private_or_link_local("localhost") is False
 
         # But the real guard catches it via _LOOPBACK_HOSTS.
-        assert (
-            _telemetry_endpoint_is_safe("https://localhost/") is False
-        )
+        assert _telemetry_endpoint_is_safe("https://localhost/") is False
 
 
 # --- Integration: _resolve_posthog_target respects the guard -------------
@@ -286,8 +246,7 @@ class TestResolvePosthogTargetSSRF:
         result = _resolve_posthog_target(
             None,
             env={
-                "SOUP_POSTHOG_ENDPOINT":
-                    "https://eu.i.posthog.com/capture/",
+                "SOUP_POSTHOG_ENDPOINT": "https://eu.i.posthog.com/capture/",
             },
         )
         assert result is not None

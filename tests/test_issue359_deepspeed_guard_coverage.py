@@ -63,9 +63,7 @@ class TestGuardCoverage:
         # and builds no trainer itself, so the guard belongs in those, not here.
         assert "preference.py" not in needing
 
-    @pytest.mark.parametrize(
-        "path", _TRAINER_SOURCES, ids=[p.stem for p in _TRAINER_SOURCES]
-    )
+    @pytest.mark.parametrize("path", _TRAINER_SOURCES, ids=[p.stem for p in _TRAINER_SOURCES])
     def test_every_deepspeed_capable_wrapper_attaches_the_guard(self, path):
         code = _code_without_comments(path.read_text(encoding="utf-8"))
         if not _needs_guard(path):
@@ -179,7 +177,7 @@ class TestGuardCoverage:
     def test_a_comment_mentioning_the_guard_does_not_satisfy_it(self):
         """The positive check reads code, not prose -- otherwise the note that
         explains the guard would be enough to pass without calling it."""
-        source = 'self.trainer = DPOTrainer()  # attach_empty_param_group_guard(x)\n'
+        source = "self.trainer = DPOTrainer()  # attach_empty_param_group_guard(x)\n"
         assert not _GUARD_CALL.search(_code_without_comments(source))
 
 
@@ -213,9 +211,7 @@ class TestGuardToleratesTrainersWithoutCreateOptimizer:
 
             def create_optimizer(self):
                 self.calls += 1
-                return types.SimpleNamespace(
-                    param_groups=[{"params": [1, 2]}, {"params": []}]
-                )
+                return types.SimpleNamespace(param_groups=[{"params": [1, 2]}, {"params": []}])
 
         trainer = _Trainer()
         assert attach_empty_param_group_guard(trainer) is True
@@ -297,9 +293,7 @@ class TestGuardForwardsModelParameter:
 
             def create_optimizer(self, model=None):
                 self.received_model = model
-                return types.SimpleNamespace(
-                    param_groups=[{"params": [1, 2]}, {"params": []}]
-                )
+                return types.SimpleNamespace(param_groups=[{"params": [1, 2]}, {"params": []}])
 
         trainer = _Trainer()
         attach_empty_param_group_guard(trainer)
@@ -364,9 +358,7 @@ class TestUserSuppliedDeepspeedFileIsResolved:
         path = self._write(tmp_path, self._PLAIN)
         assert resolve_user_deepspeed_file(str(path)) == str(path)
 
-    def test_a_file_copying_the_zero_pp_placeholders_is_repaired_into_a_copy(
-        self, tmp_path
-    ):
+    def test_a_file_copying_the_zero_pp_placeholders_is_repaired_into_a_copy(self, tmp_path):
         import json
 
         from soup_cli.utils.deepspeed import resolve_user_deepspeed_file

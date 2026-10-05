@@ -3,7 +3,6 @@
 These tests mock MLX entirely so they run on CI (Linux / Windows / macOS).
 """
 
-
 import pytest
 
 from tests.conftest import strip_ansi
@@ -11,6 +10,7 @@ from tests.conftest import strip_ansi
 # ---------------------------------------------------------------------------
 # MLX detection
 # ---------------------------------------------------------------------------
+
 
 class TestMLXDetection:
     def test_detect_mlx_not_installed(self, monkeypatch):
@@ -132,6 +132,7 @@ class TestMLXDetection:
 # Backend enum
 # ---------------------------------------------------------------------------
 
+
 class TestMLXBackendConfig:
     def test_backend_mlx_accepted(self):
         from soup_cli.config.loader import load_config_from_string
@@ -155,6 +156,7 @@ output: ./output
 # ---------------------------------------------------------------------------
 # MLX SFT trainer wrapper (mocked)
 # ---------------------------------------------------------------------------
+
 
 class TestMLXSFTTrainer:
     def test_trainer_import(self):
@@ -211,6 +213,7 @@ class TestMLXSFTTrainer:
 # MLX DPO + GRPO trainers — smoke import
 # ---------------------------------------------------------------------------
 
+
 class TestMLXOtherTrainers:
     def test_mlx_dpo_import(self):
         from soup_cli.trainer.mlx_dpo import MLXDPOTrainerWrapper
@@ -226,6 +229,7 @@ class TestMLXOtherTrainers:
 # ---------------------------------------------------------------------------
 # train command routing
 # ---------------------------------------------------------------------------
+
 
 class TestMLXRouting:
     def test_mlx_routing_map(self):
@@ -247,6 +251,7 @@ class TestMLXRouting:
 # ---------------------------------------------------------------------------
 # Recipes
 # ---------------------------------------------------------------------------
+
 
 class TestMLXRecipes:
     def test_llama3_1_8b_sft_mlx(self):

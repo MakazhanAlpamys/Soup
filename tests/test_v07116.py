@@ -91,9 +91,7 @@ def _lm_forward(hidden, lm_head, input_ids, labels):
     if labels is not None:
         shift_logits = logits[:, :-1, :].reshape(-1, logits.shape[-1])
         shift_labels = labels[:, 1:].reshape(-1)
-        out.loss = nn.functional.cross_entropy(
-            shift_logits, shift_labels, ignore_index=-100
-        )
+        out.loss = nn.functional.cross_entropy(shift_logits, shift_labels, ignore_index=-100)
     return out
 
 
@@ -120,9 +118,7 @@ class _LlamaInner(nn.Module):
     def __init__(self, vocab, hidden, inter, layers):
         super().__init__()
         self.embed_tokens = nn.Embedding(vocab, hidden)
-        self.layers = nn.ModuleList(
-            [_LlamaBlock(hidden, inter) for _ in range(layers)]
-        )
+        self.layers = nn.ModuleList([_LlamaBlock(hidden, inter) for _ in range(layers)])
 
     def forward(self, input_ids):
         x = self.embed_tokens(input_ids)
@@ -180,9 +176,7 @@ class _FakeGPT2LM(nn.Module):
         self.lm_head = nn.Linear(hidden, vocab, bias=False)
 
     def forward(self, input_ids=None, labels=None, **_kw):
-        return _lm_forward(
-            self.transformer(input_ids), self.lm_head, input_ids, labels
-        )
+        return _lm_forward(self.transformer(input_ids), self.lm_head, input_ids, labels)
 
 
 def _peft_wrap(base):
@@ -401,16 +395,17 @@ class TestApplyKernelsGpt2EndToEnd:
         from soup_cli.utils.edit_kernels import measure_target_prob, run_edit_kernel
 
         tok = _FakeTok()
-        before = measure_target_prob(
-            model, tok, subject=_SUBJECT, target=_TARGET, device="cpu"
-        )
+        before = measure_target_prob(model, tok, subject=_SUBJECT, target=_TARGET, device="cpu")
         result = run_edit_kernel(
-            model, tok, method=method, subject=_SUBJECT, target=_TARGET,
-            layer=1, device="cpu",
+            model,
+            tok,
+            method=method,
+            subject=_SUBJECT,
+            target=_TARGET,
+            layer=1,
+            device="cpu",
         )
-        after = measure_target_prob(
-            model, tok, subject=_SUBJECT, target=_TARGET, device="cpu"
-        )
+        after = measure_target_prob(model, tok, subject=_SUBJECT, target=_TARGET, device="cpu")
         return before, result, after
 
     def test_rome_gpt2_changes_target(self):
@@ -451,8 +446,12 @@ class TestApplyKernelsGpt2EndToEnd:
 
         torch.manual_seed(1)
         result = apply_memit_edit(
-            _FakeGPT2LM(layers=3), _FakeTok(),
-            subject=_SUBJECT, target=_TARGET, layer=2, device="cpu",
+            _FakeGPT2LM(layers=3),
+            _FakeTok(),
+            subject=_SUBJECT,
+            target=_TARGET,
+            layer=2,
+            device="cpu",
         )
         # _MEMIT_BAND=3, layer=2 → band [0, 1, 2]; all same width → all edited.
         assert result.layers_edited == (0, 1, 2)
@@ -476,8 +475,12 @@ class TestApplyKernelsGpt2EndToEnd:
         monkeypatch.setattr(ek, "_proj_out_dim", fake)
         with pytest.raises(ValueError, match="could not edit any layer"):
             ek.apply_memit_edit(
-                _FakeGPT2LM(layers=1), _FakeTok(),
-                subject=_SUBJECT, target=_TARGET, layer=0, device="cpu",
+                _FakeGPT2LM(layers=1),
+                _FakeTok(),
+                subject=_SUBJECT,
+                target=_TARGET,
+                layer=0,
+                device="cpu",
             )
 
     def test_alphaedit_conv1d_weight_orientation(self):
@@ -495,8 +498,12 @@ class TestApplyKernelsGpt2EndToEnd:
         down = _down_proj(_locate_decoder_layers(model), 1)
         w0 = down.weight.detach().clone()  # [in, out] = [16, 8]
         apply_alphaedit_edit(
-            model, _FakeTok(),
-            subject=_SUBJECT, target=_TARGET, layer=1, device="cpu",
+            model,
+            _FakeTok(),
+            subject=_SUBJECT,
+            target=_TARGET,
+            layer=1,
+            device="cpu",
         )
         delta_w = down.weight.detach() - w0
         assert tuple(delta_w.shape) == (16, 8)
@@ -511,8 +518,13 @@ class TestApplyKernelsGpt2EndToEnd:
         torch.manual_seed(0)
         model = _PeftCallable(_FakeGPT2LM(layers=3))
         result = run_edit_kernel(
-            model, _FakeTok(), method="rome",
-            subject=_SUBJECT, target=_TARGET, layer=1, device="cpu",
+            model,
+            _FakeTok(),
+            method="rome",
+            subject=_SUBJECT,
+            target=_TARGET,
+            layer=1,
+            device="cpu",
         )
         assert result.method == "rome"
         assert result.norm_delta > 0
@@ -671,7 +683,11 @@ class TestEstimateKeyCovariance:
         model = _FakeGPT2LM()
         down = _down_proj(_locate_decoder_layers(model), 1)
         cov = estimate_key_covariance(
-            model, _FakeTok(), down, _CORPUS, device="cpu",
+            model,
+            _FakeTok(),
+            down,
+            _CORPUS,
+            device="cpu",
         )
         # Covariance dim = down-proj INPUT dim (intermediate) = 16.
         assert tuple(cov.shape) == (16, 16)
@@ -703,17 +719,11 @@ class TestEstimateKeyCovariance:
         model = _FakeGPT2LM()
         down = _down_proj(_locate_decoder_layers(model), 0)
         with pytest.raises(ValueError, match="max_prompts"):
-            estimate_key_covariance(
-                model, _FakeTok(), down, _CORPUS, device="cpu", max_prompts=0
-            )
+            estimate_key_covariance(model, _FakeTok(), down, _CORPUS, device="cpu", max_prompts=0)
         with pytest.raises(ValueError, match="max_tokens"):
-            estimate_key_covariance(
-                model, _FakeTok(), down, _CORPUS, device="cpu", max_tokens=-1
-            )
+            estimate_key_covariance(model, _FakeTok(), down, _CORPUS, device="cpu", max_tokens=-1)
         with pytest.raises(ValueError, match="ridge"):
-            estimate_key_covariance(
-                model, _FakeTok(), down, _CORPUS, device="cpu", ridge=-1.0
-            )
+            estimate_key_covariance(model, _FakeTok(), down, _CORPUS, device="cpu", ridge=-1.0)
 
     def test_all_blank_corpus_rejected(self):
         """A corpus where every entry is blank / non-str captures no keys →
@@ -727,9 +737,7 @@ class TestEstimateKeyCovariance:
         model = _FakeGPT2LM()
         down = _down_proj(_locate_decoder_layers(model), 0)
         with pytest.raises(ValueError, match="no key vectors"):
-            estimate_key_covariance(
-                model, _FakeTok(), down, ["", "   ", 123], device="cpu"
-            )
+            estimate_key_covariance(model, _FakeTok(), down, ["", "   ", 123], device="cpu")
 
 
 class TestRank1UpdatePreconditioned:
@@ -783,9 +791,7 @@ class TestRank1UpdatePreconditioned:
 
         lin = nn.Linear(16, 8, bias=False)
         with pytest.raises(ValueError, match="covariance solve failed|degenerate"):
-            _rank1_update(
-                lin, torch.ones(16), torch.ones(8), cov=torch.zeros(16, 16)
-            )
+            _rank1_update(lin, torch.ones(16), torch.ones(8), cov=torch.zeros(16, 16))
 
     def test_cov_changes_update_direction(self):
         """A non-identity covariance produces a different update than C=I."""
@@ -819,11 +825,16 @@ class TestApplyRomeWithCovCorpus:
         model = _FakeGPT2LM(layers=3)
         tok = _FakeTok()
         monkeypatch.setattr(
-            live_eval, "load_model_and_tokenizer",
+            live_eval,
+            "load_model_and_tokenizer",
             lambda *a, **k: (model, tok, "cpu"),
         )
         plan = build_edit_plan(
-            base="b", method="rome", subject=_SUBJECT, target=_TARGET, layer=1,
+            base="b",
+            method="rome",
+            subject=_SUBJECT,
+            target=_TARGET,
+            layer=1,
         )
         result = apply_edit(plan, cov_corpus=_CORPUS)
         assert result.method == "rome"
@@ -836,11 +847,15 @@ class TestApplyRomeWithCovCorpus:
 
         # load_model_and_tokenizer must NOT be reached — the reject is before it.
         monkeypatch.setattr(
-            live_eval, "load_model_and_tokenizer",
+            live_eval,
+            "load_model_and_tokenizer",
             lambda *a, **k: (_ for _ in ()).throw(AssertionError("loaded")),
         )
         plan = build_edit_plan(
-            base="b", method="memit", subject="s", target="t",
+            base="b",
+            method="memit",
+            subject="s",
+            target="t",
         )
         with pytest.raises(ValueError, match="cov-corpus"):
             apply_edit(plan, cov_corpus=_CORPUS)
@@ -850,11 +865,15 @@ class TestApplyRomeWithCovCorpus:
         from soup_cli.utils.knowledge_edit import apply_edit, build_edit_plan
 
         monkeypatch.setattr(
-            live_eval, "load_model_and_tokenizer",
+            live_eval,
+            "load_model_and_tokenizer",
             lambda *a, **k: (_ for _ in ()).throw(AssertionError("loaded")),
         )
         plan = build_edit_plan(
-            base="b", method="alphaedit", subject="s", target="t",
+            base="b",
+            method="alphaedit",
+            subject="s",
+            target="t",
         )
         with pytest.raises(ValueError, match="cov-corpus"):
             apply_edit(plan, cov_corpus=_CORPUS)
@@ -877,7 +896,8 @@ class TestApplyRomeWithCovCorpus:
         from soup_cli.utils.knowledge_edit import apply_edit, build_edit_plan
 
         monkeypatch.setattr(
-            live_eval, "load_model_and_tokenizer",
+            live_eval,
+            "load_model_and_tokenizer",
             lambda *a, **k: (_ for _ in ()).throw(AssertionError("loaded")),
         )
         gov = EditGovernor(base_model="b")
@@ -894,9 +914,12 @@ class TestLoadCovCorpus:
         monkeypatch.chdir(tmp_path)
         f = tmp_path / "corpus.jsonl"
         f.write_text(
-            json.dumps({"text": "row one"}) + "\n"
-            + json.dumps({"prompt": "row two"}) + "\n"
-            + json.dumps({"content": "row three"}) + "\n",
+            json.dumps({"text": "row one"})
+            + "\n"
+            + json.dumps({"prompt": "row two"})
+            + "\n"
+            + json.dumps({"content": "row three"})
+            + "\n",
             encoding="utf-8",
         )
         rows = _load_cov_corpus("corpus.jsonl")
@@ -1052,10 +1075,7 @@ class TestMixtralInAllowlist:
         from soup_cli.utils.longlora import is_supported_longlora_arch
 
         assert is_supported_longlora_arch("mistralai/Mixtral-8x7B-v0.1") is True
-        assert (
-            is_supported_longlora_arch("mistralai/Mixtral-8x22B-Instruct-v0.1")
-            is True
-        )
+        assert is_supported_longlora_arch("mistralai/Mixtral-8x22B-Instruct-v0.1") is True
 
     def test_unsupported_unchanged(self):
         from soup_cli.utils.longlora import is_supported_longlora_arch
@@ -1082,9 +1102,7 @@ class TestValidateLongloraCompatMixtral:
     def test_accepts_mixtral(self, monkeypatch):
         from soup_cli.utils import longlora
 
-        monkeypatch.setattr(
-            "soup_cli.utils.flash_attn.is_flash_attn_v3_available", lambda: False
-        )
+        monkeypatch.setattr("soup_cli.utils.flash_attn.is_flash_attn_v3_available", lambda: False)
         # Should not raise.
         longlora.validate_longlora_compat(
             model_name="mistralai/Mixtral-8x7B-v0.1",
@@ -1096,9 +1114,7 @@ class TestValidateLongloraCompatMixtral:
     def test_error_message_lists_mixtral(self, monkeypatch):
         from soup_cli.utils import longlora
 
-        monkeypatch.setattr(
-            "soup_cli.utils.flash_attn.is_flash_attn_v3_available", lambda: False
-        )
+        monkeypatch.setattr("soup_cli.utils.flash_attn.is_flash_attn_v3_available", lambda: False)
         with pytest.raises(ValueError) as exc:
             longlora.validate_longlora_compat(
                 model_name="google/gemma-2-9b",
@@ -1113,9 +1129,7 @@ class TestValidateLongloraCompatMixtral:
         exclusivity becomes reachable for it — confirm it still fires (M6)."""
         from soup_cli.utils import longlora
 
-        monkeypatch.setattr(
-            "soup_cli.utils.flash_attn.is_flash_attn_v3_available", lambda: False
-        )
+        monkeypatch.setattr("soup_cli.utils.flash_attn.is_flash_attn_v3_available", lambda: False)
         with pytest.raises(ValueError, match="ring"):
             longlora.validate_longlora_compat(
                 model_name="mistralai/Mixtral-8x7B-v0.1",
@@ -1148,25 +1162,17 @@ class TestMixtralForwardOverride:
 
         model = self._fake_attn_model("MixtralAttention")
         with LongLoRAForwardOverride(model, group_size=4):
-            assert getattr(
-                model.attn.q_proj.forward, "_soup_longlora_patched", False
-            )
-            assert getattr(
-                model.attn.k_proj.forward, "_soup_longlora_patched", False
-            )
+            assert getattr(model.attn.q_proj.forward, "_soup_longlora_patched", False)
+            assert getattr(model.attn.k_proj.forward, "_soup_longlora_patched", False)
         # Restored on exit.
-        assert not getattr(
-            model.attn.q_proj.forward, "_soup_longlora_patched", False
-        )
+        assert not getattr(model.attn.q_proj.forward, "_soup_longlora_patched", False)
 
     def test_llama_attention_still_patched(self):
         from soup_cli.utils.longlora import LongLoRAForwardOverride
 
         model = self._fake_attn_model("LlamaAttention")
         with LongLoRAForwardOverride(model, group_size=4):
-            assert getattr(
-                model.attn.q_proj.forward, "_soup_longlora_patched", False
-            )
+            assert getattr(model.attn.q_proj.forward, "_soup_longlora_patched", False)
 
 
 class TestMixtralSchemaGate:
@@ -1176,9 +1182,7 @@ class TestMixtralSchemaGate:
         pinned directly in ``TestValidateLongloraCompatMixtral``."""
         from soup_cli.config.loader import load_config_from_string
 
-        monkeypatch.setattr(
-            "soup_cli.utils.flash_attn.is_flash_attn_v3_available", lambda: False
-        )
+        monkeypatch.setattr("soup_cli.utils.flash_attn.is_flash_attn_v3_available", lambda: False)
         with pytest.raises(ValueError, match="#1240"):
             load_config_from_string(
                 "base: mistralai/Mixtral-8x7B-v0.1\n"

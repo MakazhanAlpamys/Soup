@@ -58,11 +58,9 @@ def _install_fake_mlx(monkeypatch):
     # AdamW raises AttributeError from `mlx_optim.build_lr_schedule`. Recording
     # stubs; the real curve is asserted against the real library in
     # tests/test_issue686_mlx_optimizer_schedule.py.
-    mlx_optimizers.linear_schedule = lambda init, end, steps: (lambda step: end)
-    mlx_optimizers.cosine_decay = lambda init, steps: (lambda step: init)
-    mlx_optimizers.join_schedules = lambda scheds, boundaries: (
-        lambda step: scheds[-1](step)
-    )
+    mlx_optimizers.linear_schedule = lambda init, end, steps: lambda step: end
+    mlx_optimizers.cosine_decay = lambda init, steps: lambda step: init
+    mlx_optimizers.join_schedules = lambda scheds, boundaries: lambda step: scheds[-1](step)
 
     mlx_lm = types.ModuleType("mlx_lm")
     mlx_lm_tuner = types.ModuleType("mlx_lm.tuner")
@@ -157,9 +155,7 @@ def _mlx_wrapper(tmp_path, **training):
         ("auto", True),
     ],
 )
-def test_grad_checkpoint_reaches_training_args(
-    tmp_path, monkeypatch, requested, expected
-):
+def test_grad_checkpoint_reaches_training_args(tmp_path, monkeypatch, requested, expected):
     """The value mlx-lm's TrainingArgs actually receives, for every value the
     schema accepts. Before the fix this kwarg was never passed at all, so
     mlx-lm's own dataclass default (False) applied every time, and a test
@@ -193,9 +189,7 @@ def test_grad_checkpoint_reaches_training_args(
         ("auto", True),
     ],
 )
-def test_grad_checkpoint_is_recorded_in_adapter_config(
-    tmp_path, monkeypatch, requested, expected
-):
+def test_grad_checkpoint_is_recorded_in_adapter_config(tmp_path, monkeypatch, requested, expected):
     """The value recorded in adapter_config.json, for every value the schema
     accepts. Kept separate from the TrainingArgs assertion above so the two
     halves have distinct kill-sets: reverting only the metadata write while

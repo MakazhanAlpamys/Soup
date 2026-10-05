@@ -30,9 +30,7 @@ _WIRED_METHODS = {
     "simpo": ("soup_cli.trainer.simpo", "SimPOTrainerWrapper", "setup"),
 }
 
-_RUNTIME_WRAPPERS = {
-    task: spec for task, spec in _WIRED_METHODS.items() if task != "online_dpo"
-}
+_RUNTIME_WRAPPERS = {task: spec for task, spec in _WIRED_METHODS.items() if task != "online_dpo"}
 
 
 def _requires_train_extra() -> None:
@@ -110,7 +108,7 @@ def _dpo_config(weights, output):
         "data:\n"
         "  train: train.jsonl\n"
         "  max_length: 64\n"
-        f"  chat_template: \"{marker_template}\"\n"
+        f'  chat_template: "{marker_template}"\n'
         "training:\n"
         "  batch_size: 1\n"
         "  quantization: none\n"
@@ -178,7 +176,7 @@ class TestPpoUsesTheOverrideForLiveRendering:
             "data:\n"
             "  train: train.jsonl\n"
             "  max_length: 64\n"
-            f"  chat_template: \"{marker_template}\"\n"
+            f'  chat_template: "{marker_template}"\n'
             "training:\n"
             "  batch_size: 1\n"
             "  quantization: none\n"
@@ -244,9 +242,7 @@ class TestEveryConversationalTrainerIsWired:
         assert "apply_chat_template_override" in source, task
 
     @pytest.mark.parametrize("task", tuple(_RUNTIME_WRAPPERS))
-    def test_setup_applies_the_override_to_the_loaded_tokenizer(
-        self, task, monkeypatch
-    ):
+    def test_setup_applies_the_override_to_the_loaded_tokenizer(self, task, monkeypatch):
         from soup_cli.config.schema import SoupConfig
         from soup_cli.utils import trust_remote
 
@@ -268,9 +264,7 @@ class TestEveryConversationalTrainerIsWired:
             training=training,
         )
 
-        monkeypatch.setattr(
-            trust_remote, "model_requires_trust_remote_code", lambda _base: False
-        )
+        monkeypatch.setattr(trust_remote, "model_requires_trust_remote_code", lambda _base: False)
         monkeypatch.setattr(
             trust_remote,
             "resolve_trust_remote_code",

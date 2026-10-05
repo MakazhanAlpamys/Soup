@@ -47,8 +47,7 @@ def _validate_threshold(value: float) -> float:
         raise ValueError("min_confidence must not be NaN")
     if not (_MIN_THRESHOLD <= out <= _MAX_THRESHOLD):
         raise ValueError(
-            f"min_confidence must be in [{_MIN_THRESHOLD}, {_MAX_THRESHOLD}], "
-            f"got {out}"
+            f"min_confidence must be in [{_MIN_THRESHOLD}, {_MAX_THRESHOLD}], got {out}"
         )
     return out
 
@@ -79,9 +78,7 @@ def judge_filter_pairs(
     # eagerly buffering a malicious / pathologically large generator.
     pair_list = list(itertools.islice(pairs, _MAX_BATCH + 1))
     if len(pair_list) > _MAX_BATCH:
-        raise ValueError(
-            f"Too many pairs to judge in one call: > {_MAX_BATCH}"
-        )
+        raise ValueError(f"Too many pairs to judge in one call: > {_MAX_BATCH}")
 
     scale = (getattr(judge, "rubric", None) or {}).get("scale", {"min": 1, "max": 5})
     scale_min = int(scale.get("min", 1))
@@ -93,9 +90,7 @@ def judge_filter_pairs(
     for pair in pair_list:
         try:
             chosen_score = float(judge.evaluate(pair.prompt, pair.chosen).weighted_score)
-            rejected_score = float(
-                judge.evaluate(pair.prompt, pair.rejected).weighted_score
-            )
+            rejected_score = float(judge.evaluate(pair.prompt, pair.rejected).weighted_score)
         except Exception as exc:  # noqa: BLE001 — judge backends raise many shapes
             # Mirror v0.33.0 #47 / v0.35.0 policy: log at DEBUG so production
             # silent-degradation is inspectable, but do not crash the harvest.
@@ -104,7 +99,9 @@ def judge_filter_pairs(
             continue
         c_norm = _normalise_score(chosen_score, scale_min=scale_min, scale_max=scale_max)
         r_norm = _normalise_score(
-            rejected_score, scale_min=scale_min, scale_max=scale_max,
+            rejected_score,
+            scale_min=scale_min,
+            scale_max=scale_max,
         )
         if (c_norm - r_norm) >= threshold:
             kept.append(pair)

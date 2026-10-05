@@ -51,9 +51,7 @@ def _runtime(shape="json_string"):
     runtime = MagicMock()
     runtime.url = "http://127.0.0.1:30000"
     payload = {"text": "Paris.", "meta_info": dict(_META)}
-    runtime.generate = MagicMock(
-        return_value=payload if shape == "dict" else json.dumps(payload)
-    )
+    runtime.generate = MagicMock(return_value=payload if shape == "dict" else json.dumps(payload))
     return runtime
 
 
@@ -237,9 +235,7 @@ class TestSglangBackend:
         assert _engine_would_send(tok, sent_before)[:2] == [_BOS_ID, _BOS_ID]
 
     @pytest.mark.parametrize("stream", [False, True], ids=["non-streaming", "streaming"])
-    @pytest.mark.parametrize(
-        "tokenizer_kind", ["none", "no_template", "broken_template"]
-    )
+    @pytest.mark.parametrize("tokenizer_kind", ["none", "no_template", "broken_template"])
     def test_control_no_template_still_sends_the_legacy_string(self, tokenizer_kind, stream):
         """CONTROL: nothing rendered special tokens, so the engine keeps
         tokenizing the string exactly as it always has."""

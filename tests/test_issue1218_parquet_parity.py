@@ -36,10 +36,8 @@ def _messages(i: int) -> list[dict]:
 
 
 def _alpaca(count: int) -> list[dict]:
-    return [
-        {"instruction": f"i{n}", "input": "", "output": f"o{n}"}
-        for n in range(count)
-    ]
+    return [{"instruction": f"i{n}", "input": "", "output": f"o{n}"} for n in range(count)]
+
 
 _BUILDERS = {
     "chatml": lambda i: {"messages": _messages(i)},
@@ -124,17 +122,9 @@ def _ndarray_paths(value: object, path: str = "row") -> list[str]:
     if isinstance(value, np.ndarray):
         return [path]
     if isinstance(value, dict):
-        return [
-            p
-            for k, v in value.items()
-            for p in _ndarray_paths(v, f"{path}[{k!r}]")
-        ]
+        return [p for k, v in value.items() for p in _ndarray_paths(v, f"{path}[{k!r}]")]
     if isinstance(value, (list, tuple)):
-        return [
-            p
-            for i, v in enumerate(value)
-            for p in _ndarray_paths(v, f"{path}[{i}]")
-        ]
+        return [p for i, v in enumerate(value) for p in _ndarray_paths(v, f"{path}[{i}]")]
     return []
 
 
@@ -238,9 +228,7 @@ def test_hidden_pandas_index_is_not_a_column(tmp_path: Path) -> None:
 
     rows = load_raw_data(path)
 
-    assert [sorted(row) for row in rows] == [
-        ["input", "instruction", "output"]
-    ] * 6
+    assert [sorted(row) for row in rows] == [["input", "instruction", "output"]] * 6
     assert rows == frame.to_dict(orient="records")
 
 

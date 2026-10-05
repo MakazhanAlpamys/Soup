@@ -10,9 +10,13 @@ from soup_cli.cli import app
 runner = CliRunner()
 
 
-def _create_adapter(path: Path, base_model: str = "meta-llama/Llama-3.1-8B",
-                    lora_r: int = 16, lora_alpha: int = 32,
-                    task_type: str = "CAUSAL_LM") -> Path:
+def _create_adapter(
+    path: Path,
+    base_model: str = "meta-llama/Llama-3.1-8B",
+    lora_r: int = 16,
+    lora_alpha: int = 32,
+    task_type: str = "CAUSAL_LM",
+) -> Path:
     """Create a fake adapter directory with adapter_config.json."""
     path.mkdir(parents=True, exist_ok=True)
     config = {
@@ -116,17 +120,24 @@ class TestAdaptersCompare:
         adapter1 = _create_adapter(
             tmp_path / "adapter1",
             base_model="meta-llama/Llama-3.1-8B",
-            lora_r=16, lora_alpha=32,
+            lora_r=16,
+            lora_alpha=32,
         )
         adapter2 = _create_adapter(
             tmp_path / "adapter2",
             base_model="meta-llama/Llama-3.1-8B",
-            lora_r=64, lora_alpha=128,
+            lora_r=64,
+            lora_alpha=128,
         )
-        result = runner.invoke(app, [
-            "adapters", "compare",
-            str(adapter1), str(adapter2),
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "adapters",
+                "compare",
+                str(adapter1),
+                str(adapter2),
+            ],
+        )
         assert result.exit_code == 0
         assert "16" in result.output  # adapter1 r
         assert "64" in result.output  # adapter2 r
@@ -134,14 +145,22 @@ class TestAdaptersCompare:
     def test_compare_different_base_models(self, tmp_path):
         """Compare highlights different base models."""
         adapter1 = _create_adapter(
-            tmp_path / "a1", base_model="meta-llama/Llama-3.1-8B",
+            tmp_path / "a1",
+            base_model="meta-llama/Llama-3.1-8B",
         )
         adapter2 = _create_adapter(
-            tmp_path / "a2", base_model="Qwen/Qwen2.5-7B",
+            tmp_path / "a2",
+            base_model="Qwen/Qwen2.5-7B",
         )
-        result = runner.invoke(app, [
-            "adapters", "compare", str(adapter1), str(adapter2),
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "adapters",
+                "compare",
+                str(adapter1),
+                str(adapter2),
+            ],
+        )
         assert result.exit_code == 0
         assert "Llama-3.1-8B" in result.output
         assert "Qwen2.5-7B" in result.output
@@ -149,10 +168,15 @@ class TestAdaptersCompare:
     def test_compare_nonexistent_adapter(self, tmp_path):
         """Compare should fail if one adapter doesn't exist."""
         adapter1 = _create_adapter(tmp_path / "adapter1")
-        result = runner.invoke(app, [
-            "adapters", "compare",
-            str(adapter1), "/nonexistent",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "adapters",
+                "compare",
+                str(adapter1),
+                "/nonexistent",
+            ],
+        )
         assert result.exit_code != 0
 
 

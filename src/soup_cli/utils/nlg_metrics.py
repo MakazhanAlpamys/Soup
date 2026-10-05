@@ -7,6 +7,7 @@ so `soup eval custom --metric bleu` / `--metric rouge_l` works on a vanilla
 install. The closed metric allowlist `NLG_METRICS` is shared with the schema
 field validator on `EvalConfig.nlg_metrics`.
 """
+
 from __future__ import annotations
 
 import math
@@ -31,9 +32,7 @@ def _tokenize(text: str) -> list[str]:
     if "\x00" in text:
         raise ValueError("text must not contain null bytes")
     if len(text) > _MAX_INPUT_CHARS:
-        raise ValueError(
-            f"text length {len(text)} exceeds max {_MAX_INPUT_CHARS}"
-        )
+        raise ValueError(f"text length {len(text)} exceeds max {_MAX_INPUT_CHARS}")
     # Word-piece-style tokenizer: lowercase + non-alphanumeric split.
     return [tok for tok in re.findall(r"[A-Za-z0-9]+", text.lower()) if tok]
 
@@ -158,9 +157,7 @@ def rouge_n_score(
     pred_list = list(predictions)
     ref_list = list(references)
     if len(pred_list) != len(ref_list):
-        raise ValueError(
-            "predictions and references must have the same length"
-        )
+        raise ValueError("predictions and references must have the same length")
     if not pred_list:
         return 0.0
 
@@ -190,9 +187,7 @@ def rouge_l_score(
     pred_list = list(predictions)
     ref_list = list(references)
     if len(pred_list) != len(ref_list):
-        raise ValueError(
-            "predictions and references must have the same length"
-        )
+        raise ValueError("predictions and references must have the same length")
     if not pred_list:
         return 0.0
     f1_sum = 0.0
@@ -248,9 +243,7 @@ def effective_tokens_per_second(
         raise ValueError("unmasked_tokens must be an int")
     if unmasked_tokens < 0:
         raise ValueError("unmasked_tokens must be >= 0")
-    if isinstance(wall_clock_seconds, bool) or not isinstance(
-        wall_clock_seconds, (int, float)
-    ):
+    if isinstance(wall_clock_seconds, bool) or not isinstance(wall_clock_seconds, (int, float)):
         raise ValueError("wall_clock_seconds must be a number")
     if not math.isfinite(float(wall_clock_seconds)):
         raise ValueError("wall_clock_seconds must be finite")

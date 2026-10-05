@@ -30,6 +30,7 @@ class TestModuleSurface:
             parse_edit_subject_target,
             validate_edit_method,
         )
+
         assert callable(validate_edit_method)
         assert callable(parse_edit_subject_target)
         assert callable(build_edit_plan)
@@ -42,9 +43,7 @@ class TestModuleSurface:
         from soup_cli.utils.knowledge_edit import SUPPORTED_EDIT_METHODS
 
         # v0.62.0 Part E added "grace" to the allowlist (codebook edit).
-        assert SUPPORTED_EDIT_METHODS == frozenset(
-            {"rome", "memit", "alphaedit", "grace"}
-        )
+        assert SUPPORTED_EDIT_METHODS == frozenset({"rome", "memit", "alphaedit", "grace"})
 
 
 class TestValidateEditMethod:
@@ -169,7 +168,10 @@ class TestBuildEditPlan:
 
         with pytest.raises(TypeError):
             build_edit_plan(
-                base="b", method="rome", subject="s", target="t",
+                base="b",
+                method="rome",
+                subject="s",
+                target="t",
                 layer=True,  # type: ignore
             )
 
@@ -178,7 +180,10 @@ class TestBuildEditPlan:
 
         with pytest.raises(ValueError):
             build_edit_plan(
-                base="b", method="rome", subject="s", target="t",
+                base="b",
+                method="rome",
+                subject="s",
+                target="t",
                 layer=-1,
             )
 
@@ -187,7 +192,10 @@ class TestBuildEditPlan:
 
         with pytest.raises(ValueError):
             build_edit_plan(
-                base="b", method="rome", subject="s", target="t",
+                base="b",
+                method="rome",
+                subject="s",
+                target="t",
                 layer=10000,
             )
 
@@ -196,7 +204,10 @@ class TestBuildEditPlan:
 
         with pytest.raises(ValueError):
             build_edit_plan(
-                base="b", method="zzz", subject="s", target="t",
+                base="b",
+                method="zzz",
+                subject="s",
+                target="t",
             )
 
     def test_empty_base_rejected(self):
@@ -204,7 +215,10 @@ class TestBuildEditPlan:
 
         with pytest.raises(ValueError):
             build_edit_plan(
-                base="", method="rome", subject="s", target="t",
+                base="",
+                method="rome",
+                subject="s",
+                target="t",
             )
 
     def test_null_byte_base_rejected(self):
@@ -212,7 +226,10 @@ class TestBuildEditPlan:
 
         with pytest.raises(ValueError):
             build_edit_plan(
-                base="b\x00", method="rome", subject="s", target="t",
+                base="b\x00",
+                method="rome",
+                subject="s",
+                target="t",
             )
 
 
@@ -221,7 +238,10 @@ class TestEditPlanFrozen:
         from soup_cli.utils.knowledge_edit import build_edit_plan
 
         plan = build_edit_plan(
-            base="b", method="rome", subject="s", target="t",
+            base="b",
+            method="rome",
+            subject="s",
+            target="t",
         )
         with pytest.raises(dataclasses.FrozenInstanceError):
             plan.method = "memit"  # type: ignore
@@ -235,17 +255,25 @@ class TestApplyEdit:
         from soup_cli.utils.knowledge_edit import EditResult, apply_edit, build_edit_plan
 
         plan = build_edit_plan(
-            base="b", method="rome", subject="s", target="t",
+            base="b",
+            method="rome",
+            subject="s",
+            target="t",
         )
         monkeypatch.setattr(
-            live_eval, "load_model_and_tokenizer",
+            live_eval,
+            "load_model_and_tokenizer",
             lambda *a, **k: ("M", "T", "cpu"),
         )
         monkeypatch.setattr(ek, "measure_target_prob", lambda *a, **k: 0.0)
         monkeypatch.setattr(
-            ek, "run_edit_kernel",
+            ek,
+            "run_edit_kernel",
             lambda *a, **k: ek.EditKernelResult(
-                method="rome", layer=5, norm_delta=0.3, layers_edited=(5,),
+                method="rome",
+                layer=5,
+                norm_delta=0.3,
+                layers_edited=(5,),
             ),
         )
         result = apply_edit(plan)
@@ -281,14 +309,22 @@ class TestCli:
 
     def test_edit_set_plan_only(self):
         runner = CliRunner()
-        result = runner.invoke(app, [
-            "edit", "set",
-            "--base", "meta-llama/Llama-3.1-8B-Instruct",
-            "--method", "rome",
-            "--subject", "Paris is the capital of France",
-            "--target", "Lyon",
-            "--plan-only",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "edit",
+                "set",
+                "--base",
+                "meta-llama/Llama-3.1-8B-Instruct",
+                "--method",
+                "rome",
+                "--subject",
+                "Paris is the capital of France",
+                "--target",
+                "Lyon",
+                "--plan-only",
+            ],
+        )
         # Plan-only mode prints the plan and exits 0 without invoking
         # the deferred apply_edit kernel.
         assert result.exit_code == 0, result.output
@@ -297,14 +333,22 @@ class TestCli:
 
     def test_edit_set_unknown_method_rejected(self):
         runner = CliRunner()
-        result = runner.invoke(app, [
-            "edit", "set",
-            "--base", "test",
-            "--method", "zzz",
-            "--subject", "s",
-            "--target", "t",
-            "--plan-only",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "edit",
+                "set",
+                "--base",
+                "test",
+                "--method",
+                "zzz",
+                "--subject",
+                "s",
+                "--target",
+                "t",
+                "--plan-only",
+            ],
+        )
         assert result.exit_code != 0
 
     def test_edit_set_apply_failure_exit2(self, monkeypatch):
@@ -313,19 +357,29 @@ class TestCli:
         import soup_cli.utils.knowledge_edit as ke
 
         monkeypatch.setattr(
-            ke, "apply_edit",
+            ke,
+            "apply_edit",
             lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom-load")),
         )
         runner = CliRunner()
-        result = runner.invoke(app, [
-            "edit", "set",
-            "--base", "test",
-            "--method", "rome",
-            "--subject", "Paris is the capital",
-            "--target", "Lyon",
-            "--no-governor",
-            "--device", "cpu",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "edit",
+                "set",
+                "--base",
+                "test",
+                "--method",
+                "rome",
+                "--subject",
+                "Paris is the capital",
+                "--target",
+                "Lyon",
+                "--no-governor",
+                "--device",
+                "cpu",
+            ],
+        )
         assert result.exit_code == 2, result.output
         assert "failed" in result.output.lower()
 
@@ -335,50 +389,82 @@ class TestCli:
         from soup_cli.utils.knowledge_edit import EditResult
 
         monkeypatch.setattr(
-            ke, "apply_edit",
+            ke,
+            "apply_edit",
             lambda *a, **k: EditResult(
-                method="rome", layer=5, norm_delta=0.42, layers_edited=(5,),
-                output_dir=None, target_prob_before=0.01, target_prob_after=0.9,
+                method="rome",
+                layer=5,
+                norm_delta=0.42,
+                layers_edited=(5,),
+                output_dir=None,
+                target_prob_before=0.01,
+                target_prob_after=0.9,
                 governed=False,
             ),
         )
         runner = CliRunner()
-        result = runner.invoke(app, [
-            "edit", "set",
-            "--base", "test",
-            "--method", "rome",
-            "--subject", "Paris is the capital",
-            "--target", "Lyon",
-            "--no-governor",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "edit",
+                "set",
+                "--base",
+                "test",
+                "--method",
+                "rome",
+                "--subject",
+                "Paris is the capital",
+                "--target",
+                "Lyon",
+                "--no-governor",
+            ],
+        )
         assert result.exit_code == 0, result.output
         assert "applied" in result.output.lower()
 
     def test_edit_set_registry_id_null_byte_rejected(self):
         """Review HIGH H4 — null-byte in --registry-id."""
         runner = CliRunner()
-        result = runner.invoke(app, [
-            "edit", "set",
-            "--base", "test",
-            "--method", "rome",
-            "--subject", "Paris is the capital",
-            "--target", "Lyon",
-            "--registry-id", "evil\x00id",
-            "--plan-only",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "edit",
+                "set",
+                "--base",
+                "test",
+                "--method",
+                "rome",
+                "--subject",
+                "Paris is the capital",
+                "--target",
+                "Lyon",
+                "--registry-id",
+                "evil\x00id",
+                "--plan-only",
+            ],
+        )
         assert result.exit_code == 2
         assert "null" in result.output.lower() or "registry-id" in result.output.lower()
 
     def test_edit_set_registry_id_oversize_rejected(self):
         """Review HIGH H4 — oversized --registry-id."""
         runner = CliRunner()
-        result = runner.invoke(app, [
-            "edit", "set",
-            "--base", "test",
-            "--method", "rome",
-            "--subject", "Paris is the capital",
-            "--target", "Lyon",
-            "--registry-id", "x" * 300,
-            "--plan-only",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "edit",
+                "set",
+                "--base",
+                "test",
+                "--method",
+                "rome",
+                "--subject",
+                "Paris is the capital",
+                "--target",
+                "Lyon",
+                "--registry-id",
+                "x" * 300,
+                "--plan-only",
+            ],
+        )
         assert result.exit_code == 2

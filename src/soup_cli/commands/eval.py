@@ -54,27 +54,36 @@ def _reject_lm_eval_injection(value: str, field: str) -> None:
 @app.command()
 def benchmark(
     model: str = typer.Option(
-        ..., "--model", "-m",
+        ...,
+        "--model",
+        "-m",
         help="Path to model or LoRA adapter directory",
     ),
     benchmarks: str = typer.Option(
-        "mmlu", "--benchmarks", "-b",
+        "mmlu",
+        "--benchmarks",
+        "-b",
         help="Comma-separated benchmark names (mmlu, gsm8k, hellaswag, etc.)",
     ),
     num_fewshot: Optional[int] = typer.Option(
-        None, "--fewshot", "-f",
+        None,
+        "--fewshot",
+        "-f",
         help="Number of few-shot examples (benchmark default if not set)",
     ),
     batch_size: int = typer.Option(
-        8, "--batch-size",
+        8,
+        "--batch-size",
         help="Batch size for evaluation",
     ),
     run_id: Optional[str] = typer.Option(
-        None, "--run-id",
+        None,
+        "--run-id",
         help="Link results to an existing training run",
     ),
     device: Optional[str] = typer.Option(
-        None, "--device",
+        None,
+        "--device",
         help="Device: cuda, mps, cpu. Auto-detected if not set.",
     ),
     trust_remote_code: bool = typer.Option(
@@ -108,9 +117,7 @@ def benchmark(
                 base_model, "base_model_name_or_path (from adapter_config.json)"
             )
             model_arg = f"pretrained={base_model},peft={model_path}"
-            console.print(
-                f"[dim]LoRA adapter detected. Base model: {for_terminal(base_model)}[/]"
-            )
+            console.print(f"[dim]LoRA adapter detected. Base model: {for_terminal(base_model)}[/]")
         else:
             model_arg = f"pretrained={model_path}"
     else:
@@ -130,14 +137,14 @@ def benchmark(
         import lm_eval  # noqa: F401
     except ImportError:
         console.print(
-            "[red]lm-eval not installed.[/]\n"
-            "Install with: [bold]pip install \"soup-cli\\[eval]\"[/]"
+            '[red]lm-eval not installed.[/]\nInstall with: [bold]pip install "soup-cli\\[eval]"[/]'
         )
         raise typer.Exit(1)
 
     # Detect device
     if not device:
         from soup_cli.utils.gpu import detect_device
+
         device, _ = detect_device()
 
     console.print("[dim]Running evaluation (this may take a while)...[/]")
@@ -160,39 +167,56 @@ def benchmark(
 @app.command()
 def aider(
     model: str = typer.Option(
-        ..., "--model", "-m",
+        ...,
+        "--model",
+        "-m",
         help="Aider model identifier (for example, openai/gpt-4.1)",
     ),
     output: str = typer.Option(
-        ..., "--output", "-o",
+        ...,
+        "--output",
+        "-o",
         help="Contained directory for upstream and Soup result files",
     ),
     exercises_dir: str = typer.Option(
-        "tmp.benchmarks/polyglot-benchmark", "--exercises-dir",
+        "tmp.benchmarks/polyglot-benchmark",
+        "--exercises-dir",
         help="Prepared Aider-AI/polyglot-benchmark checkout",
     ),
     image: str = typer.Option(
-        "aider-benchmark", "--image",
+        "aider-benchmark",
+        "--image",
         help="Locally built upstream Aider benchmark image",
     ),
     threads: int = typer.Option(
-        1, "--threads", "-t", min=1, max=64,
+        1,
+        "--threads",
+        "-t",
+        min=1,
+        max=64,
         help="Number of benchmark exercises to run concurrently",
     ),
     num_tests: int = typer.Option(
-        -1, "--num-tests", "-n",
+        -1,
+        "--num-tests",
+        "-n",
         help="Number of exercises to run (-1 runs all exercises)",
     ),
     timeout: int = typer.Option(
-        86_400, "--timeout", min=60, max=86_400,
+        86_400,
+        "--timeout",
+        min=60,
+        max=86_400,
         help="Maximum benchmark runtime in seconds",
     ),
     run_id: Optional[str] = typer.Option(
-        None, "--run-id",
+        None,
+        "--run-id",
         help="Save the aggregate score under an existing Soup run ID",
     ),
     allow_host_services: bool = typer.Option(
-        False, "--allow-host-services",
+        False,
+        "--allow-host-services",
         help="Let the benchmark container reach services on the host",
     ),
 ):
@@ -258,9 +282,7 @@ def aider(
             border_style="blue",
         )
     )
-    console.print(
-        "[yellow]The benchmark executes untrusted model-generated code inside Docker.[/]"
-    )
+    console.print("[yellow]The benchmark executes untrusted model-generated code inside Docker.[/]")
 
     import subprocess
 
@@ -279,9 +301,7 @@ def aider(
     except OSError as exc:
         if tracker is not None:
             tracker.close()
-        console.print(
-            f"[red]Could not start the Aider benchmark:[/] {type(exc).__name__}"
-        )
+        console.print(f"[red]Could not start the Aider benchmark:[/] {type(exc).__name__}")
         raise typer.Exit(1) from exc
 
     if process.returncode != 0:
@@ -316,8 +336,7 @@ def aider(
     completed = row["details"]["completed_tests"]
     passed = row["details"]["passed_tests"]
     console.print(
-        f"[green]Aider Polyglot complete:[/] {passed}/{completed} passed "
-        f"(score {row['score']:.4f})"
+        f"[green]Aider Polyglot complete:[/] {passed}/{completed} passed (score {row['score']:.4f})"
     )
     console.print(f"[green]Soup result written to:[/] {escape(str(result_path))}")
 
@@ -328,23 +347,31 @@ def aider(
 @app.command()
 def custom(
     tasks: str = typer.Option(
-        ..., "--tasks", "-t",
+        ...,
+        "--tasks",
+        "-t",
         help="Path to eval tasks JSONL file",
     ),
     model: str = typer.Option(
-        ..., "--model", "-m",
+        ...,
+        "--model",
+        "-m",
         help="Path to model directory",
     ),
     run_id: Optional[str] = typer.Option(
-        None, "--run-id",
+        None,
+        "--run-id",
         help="Link results to an existing training run",
     ),
     attach_to_registry: Optional[str] = typer.Option(
-        None, "--attach-to-registry",
+        None,
+        "--attach-to-registry",
         help="Attach the eval JSON to a registry entry as kind=eval_results",
     ),
     output: Optional[str] = typer.Option(
-        None, "--output", "-o",
+        None,
+        "--output",
+        "-o",
         help=(
             "Path to write the eval JSON output. Honored independently of "
             "--attach-to-registry (v0.40.1 / G10)."
@@ -376,9 +403,7 @@ def custom(
         console.print(f"[red]{exc}[/]")
         raise typer.Exit(1)
 
-    console.print(
-        f"[dim]Loaded {len(eval_tasks)} eval tasks from {tasks_path}[/]"
-    )
+    console.print(f"[dim]Loaded {len(eval_tasks)} eval tasks from {tasks_path}[/]")
 
     # Run evaluation with progress
     from rich.progress import (
@@ -402,12 +427,14 @@ def custom(
 
     console.print("[dim]Loading model...[/]")
     generate_fn = _create_default_generator(
-        str(model_path), trust_remote_code=trust_remote_code,
+        str(model_path),
+        trust_remote_code=trust_remote_code,
     )
 
     with progress:
         task_bar = progress.add_task(
-            "Evaluating...", total=len(eval_tasks),
+            "Evaluating...",
+            total=len(eval_tasks),
         )
         # v0.40.1 Part D / G10 — keep the CLI ``--output`` path separate
         # from the per-task model response (was previously shadowed by the
@@ -457,7 +484,9 @@ def custom(
     if attach_to_registry:
         try:
             attach_artifact(
-                attach_to_registry, path=str(json_path), kind="eval_results",
+                attach_to_registry,
+                path=str(json_path),
+                kind="eval_results",
             )
         except (ValueError, FileNotFoundError) as exc:
             console.print(f"[red]Registry attach failed:[/] {exc}")
@@ -474,27 +503,35 @@ def custom(
 @app.command()
 def judge(
     target: str = typer.Option(
-        ..., "--target",
+        ...,
+        "--target",
         help="Path to JSONL with prompt+response pairs to evaluate",
     ),
     judge_model: str = typer.Option(
-        "gpt-4o-mini", "--model", "-m",
+        "gpt-4o-mini",
+        "--model",
+        "-m",
         help="Judge model name",
     ),
     provider: str = typer.Option(
-        "openai", "--provider",
+        "openai",
+        "--provider",
         help="Judge provider: openai, server, ollama",
     ),
     rubric: Optional[str] = typer.Option(
-        None, "--rubric", "-r",
+        None,
+        "--rubric",
+        "-r",
         help="Path to rubric YAML file",
     ),
     api_base: Optional[str] = typer.Option(
-        None, "--api-base",
+        None,
+        "--api-base",
         help="API base URL for judge model",
     ),
     run_id: Optional[str] = typer.Option(
-        None, "--run-id",
+        None,
+        "--run-id",
         help="Link results to an existing training run",
     ),
 ):
@@ -528,14 +565,10 @@ def judge(
             try:
                 row = json.loads(line)
             except json.JSONDecodeError as exc:
-                console.print(
-                    f"[red]Invalid JSON on line {line_num}: {exc}[/]"
-                )
+                console.print(f"[red]Invalid JSON on line {line_num}: {exc}[/]")
                 raise typer.Exit(1)
             if "prompt" not in row or "response" not in row:
-                console.print(
-                    f"[red]Line {line_num}: missing 'prompt' or 'response'[/]"
-                )
+                console.print(f"[red]Line {line_num}: missing 'prompt' or 'response'[/]")
                 raise typer.Exit(1)
             items.append(row)
 
@@ -549,8 +582,7 @@ def judge(
             raise typer.Exit(1)
 
     console.print(
-        f"[dim]Judging {len(items)} responses with {judge_model} "
-        f"(provider: {provider})...[/]"
+        f"[dim]Judging {len(items)} responses with {judge_model} (provider: {provider})...[/]"
     )
 
     # Run judge evaluation
@@ -596,16 +628,11 @@ def judge(
                 judge_scores.append(score)
             except (ValueError, OSError, KeyError, JudgeUnavailableError) as exc:
                 skipped_count += 1
-                console.print(
-                    f"[yellow]Warning: judge failed for prompt: {for_terminal(exc)}[/]"
-                )
+                console.print(f"[yellow]Warning: judge failed for prompt: {for_terminal(exc)}[/]")
             progress.advance(task_bar)
 
     if skipped_count > 0:
-        console.print(
-            f"[yellow]{skipped_count}/{len(items)} items skipped "
-            f"due to judge errors.[/]"
-        )
+        console.print(f"[yellow]{skipped_count}/{len(items)} items skipped due to judge errors.[/]")
 
     if not judge_scores:
         console.print("[red]All items failed. Check judge configuration.[/]")
@@ -619,6 +646,7 @@ def judge(
     # Save to tracker
     if run_id:
         from soup_cli.experiment.tracker import ExperimentTracker
+
         tracker = ExperimentTracker()
         tracker.save_eval_result(
             model_path=target,
@@ -640,15 +668,21 @@ def judge(
 @app.command()
 def auto(
     config: str = typer.Option(
-        "soup.yaml", "--config", "-c",
+        "soup.yaml",
+        "--config",
+        "-c",
         help="Path to soup.yaml config file",
     ),
     benchmarks: Optional[str] = typer.Option(
-        None, "--benchmarks", "-b",
+        None,
+        "--benchmarks",
+        "-b",
         help="Comma-separated benchmarks (overrides config)",
     ),
     custom_tasks: Optional[str] = typer.Option(
-        None, "--tasks", "-t",
+        None,
+        "--tasks",
+        "-t",
         help="Path to custom eval JSONL (overrides config)",
     ),
     trust_remote_code: bool = typer.Option(
@@ -697,14 +731,16 @@ def auto(
         )
         raise typer.Exit(1)
 
-    console.print(Panel(
-        f"[bold]Auto-Eval[/]\n"
-        f"Model: {output_dir}\n"
-        f"Benchmarks: {', '.join(bench_list) if bench_list else 'none'}\n"
-        f"Custom tasks: {tasks_file or 'none'}",
-        title="Evaluation",
-        border_style="blue",
-    ))
+    console.print(
+        Panel(
+            f"[bold]Auto-Eval[/]\n"
+            f"Model: {output_dir}\n"
+            f"Benchmarks: {', '.join(bench_list) if bench_list else 'none'}\n"
+            f"Custom tasks: {tasks_file or 'none'}",
+            title="Evaluation",
+            border_style="blue",
+        )
+    )
 
     # Run standard benchmarks if specified
     if bench_list:
@@ -785,14 +821,8 @@ def compare(
     table.add_column("Delta", justify="right")
 
     for comp in comparison["comparisons"]:
-        score_a = (
-            f"{comp['run_1_score']:.4f}" if comp["run_1_score"] is not None
-            else "-"
-        )
-        score_b = (
-            f"{comp['run_2_score']:.4f}" if comp["run_2_score"] is not None
-            else "-"
-        )
+        score_a = f"{comp['run_1_score']:.4f}" if comp["run_1_score"] is not None else "-"
+        score_b = f"{comp['run_2_score']:.4f}" if comp["run_2_score"] is not None else "-"
         if comp["delta"] is not None:
             delta_val = comp["delta"]
             if delta_val > 0.01:
@@ -810,8 +840,7 @@ def compare(
 
     if comparison["has_regressions"]:
         console.print(
-            f"\n[red bold]Regressions detected:[/] "
-            f"{', '.join(comparison['regressions'])}"
+            f"\n[red bold]Regressions detected:[/] {', '.join(comparison['regressions'])}"
         )
 
 
@@ -821,11 +850,15 @@ def compare(
 @app.command()
 def leaderboard(
     sort_by: Optional[str] = typer.Option(
-        None, "--sort-by", "-s",
+        None,
+        "--sort-by",
+        "-s",
         help="Sort by specific benchmark (default: average)",
     ),
     fmt: str = typer.Option(
-        "table", "--format", "-f",
+        "table",
+        "--format",
+        "-f",
         help="Output format: table, json, csv",
     ),
 ):
@@ -841,9 +874,7 @@ def leaderboard(
 
     if not lb.entries:
         console.print("[yellow]No eval results found.[/]")
-        console.print(
-            "[dim]Run soup eval benchmark or soup eval custom first.[/]"
-        )
+        console.print("[dim]Run soup eval benchmark or soup eval custom first.[/]")
         raise typer.Exit(1)
 
     if fmt in ("json", "csv"):
@@ -889,19 +920,27 @@ def leaderboard(
 @app.command()
 def human(
     prompts_file: str = typer.Option(
-        ..., "--input", "-i",
+        ...,
+        "--input",
+        "-i",
         help="Path to JSONL file with evaluation prompts",
     ),
     model_a: str = typer.Option(
-        ..., "--model-a", "-a",
+        ...,
+        "--model-a",
+        "-a",
         help="Path to first model",
     ),
     model_b: str = typer.Option(
-        ..., "--model-b", "-b",
+        ...,
+        "--model-b",
+        "-b",
         help="Path to second model",
     ),
     output: str = typer.Option(
-        "human_eval_results.json", "--output", "-o",
+        "human_eval_results.json",
+        "--output",
+        "-o",
         help="Output file for results",
     ),
 ):
@@ -926,14 +965,16 @@ def human(
             console.print(f"[red]Model not found: {mpath}[/]")
             raise typer.Exit(1)
 
-    console.print(Panel(
-        f"[bold]Human Evaluation[/]\n"
-        f"Prompts: {len(prompts)}\n"
-        f"Model A: {model_a}\n"
-        f"Model B: {model_b}",
-        title="A/B Comparison",
-        border_style="blue",
-    ))
+    console.print(
+        Panel(
+            f"[bold]Human Evaluation[/]\n"
+            f"Prompts: {len(prompts)}\n"
+            f"Model A: {model_a}\n"
+            f"Model B: {model_b}",
+            title="A/B Comparison",
+            border_style="blue",
+        )
+    )
 
     # Generate responses
     console.print("[dim]Loading models and generating responses...[/]")
@@ -957,9 +998,7 @@ def human(
 
         # Get human choice
         while True:
-            choice = console.input(
-                "[bold]Winner? (a/b/tie/q to quit): [/]"
-            ).strip().lower()
+            choice = console.input("[bold]Winner? (a/b/tie/q to quit): [/]").strip().lower()
             if choice in ("a", "b", "tie", "q"):
                 break
             console.print("[yellow]Enter a, b, tie, or q[/]")
@@ -968,14 +1007,16 @@ def human(
             console.print("[dim]Session ended early.[/]")
             break
 
-        results.judgments.append(HumanJudgment(
-            prompt=prompt_text,
-            response_a=resp_a,
-            response_b=resp_b,
-            model_a=model_a,
-            model_b=model_b,
-            winner=choice,
-        ))
+        results.judgments.append(
+            HumanJudgment(
+                prompt=prompt_text,
+                response_a=resp_a,
+                response_b=resp_b,
+                model_a=model_a,
+                model_b=model_b,
+                winner=choice,
+            )
+        )
 
     results.compute_ratings()
 
@@ -1026,7 +1067,10 @@ def _display_benchmark_results(results: dict, benchmarks: list[str]) -> None:
             continue
 
         for metric_key in [
-            "acc,none", "acc_norm,none", "exact_match,none", "em,none",
+            "acc,none",
+            "acc_norm,none",
+            "exact_match,none",
+            "em,none",
         ]:
             if metric_key in bench_data:
                 metric_name = metric_key.split(",")[0]
@@ -1061,7 +1105,10 @@ def _save_benchmark_results(
         bench_data = task_results.get(bench, {})
         score = 0.0
         for metric_key in [
-            "acc,none", "acc_norm,none", "exact_match,none", "em,none",
+            "acc,none",
+            "acc_norm,none",
+            "exact_match,none",
+            "em,none",
         ]:
             if metric_key in bench_data:
                 score = bench_data[metric_key]
@@ -1201,19 +1248,26 @@ def _short_model_name(path: str) -> str:
 @app.command(name="gate", cls=GateCommand)
 def gate_cmd(
     suite: str = typer.Option(
-        ..., "--suite", "-s",
+        ...,
+        "--suite",
+        "-s",
         help="Path to eval suite YAML (see evals/gate.yaml example)",
     ),
     baseline: Optional[str] = typer.Option(
-        None, "--baseline", "-b",
+        None,
+        "--baseline",
+        "-b",
         help="Baseline: registry://<id> or path to stamped/flat score JSON",
     ),
     regression_threshold: float = typer.Option(
-        0.05, "--regression-threshold",
+        0.05,
+        "--regression-threshold",
         help="Max absolute drop vs baseline before regression fires (0.0-1.0)",
     ),
     model: Optional[str] = typer.Option(
-        None, "--model", "-m",
+        None,
+        "--model",
+        "-m",
         help="Model path or HF id to evaluate (required for live scoring)",
     ),
     write_baseline: Optional[str] = typer.Option(
@@ -1227,9 +1281,7 @@ def gate_cmd(
 ) -> None:
     """Run an eval-gate suite standalone (post-hoc verdict)."""
     if not 0.0 <= regression_threshold <= 1.0:
-        console.print(
-            "[red]--regression-threshold must be between 0.0 and 1.0[/]"
-        )
+        console.print("[red]--regression-threshold must be between 0.0 and 1.0[/]")
         raise typer.Exit(EXIT_USAGE_ERROR)
 
     if write_baseline and not model:
@@ -1277,13 +1329,13 @@ def gate_cmd(
         try:
             generate_fn = make_model_generator(model)
         except (OSError, ValueError, ImportError) as exc:
-            console.print(
-                f"[red]Failed to load --model '{model}':[/] {exc}"
-            )
+            console.print(f"[red]Failed to load --model '{model}':[/] {exc}")
             raise typer.Exit(1) from exc
 
     result = run_gate(
-        eval_suite, generate_fn=generate_fn, baseline=baseline_scores,
+        eval_suite,
+        generate_fn=generate_fn,
+        baseline=baseline_scores,
         regression_threshold=regression_threshold,
     )
 
@@ -1291,16 +1343,12 @@ def gate_cmd(
 
     if write_baseline:
         scores = {
-            row.name: float(row.score)
-            for row in result.task_results
-            if row.score is not None
+            row.name: float(row.score) for row in result.task_results if row.score is not None
         }
         try:
             written = write_baseline_file(write_baseline, scores)
         except (OSError, ValueError, TypeError) as exc:
-            console.print(
-                f"[red]Cannot write --write-baseline:[/] {exc}"
-            )
+            console.print(f"[red]Cannot write --write-baseline:[/] {exc}")
             raise typer.Exit(EXIT_RUNTIME_ERROR) from exc
         console.print(f"[green]Wrote stamped baseline[/] {written}")
 
@@ -1313,23 +1361,28 @@ def gate_cmd(
 @app.command(name="quant-check", cls=GateCommand)
 def quant_check_cmd(
     before: str = typer.Option(
-        ..., "--before",
+        ...,
+        "--before",
         help="Before-quantization model path or registry://<id>",
     ),
     after: str = typer.Option(
-        ..., "--after",
+        ...,
+        "--after",
         help="After-quantization model path or registry://<id>",
     ),
     tasks: str = typer.Option(
-        ..., "--tasks",
+        ...,
+        "--tasks",
         help="JSONL eval tasks file (see 'soup eval custom')",
     ),
     fmt: str = typer.Option(
-        "table", "--format",
+        "table",
+        "--format",
         help="Output format: table | json | markdown",
     ),
     allow_stub: bool = typer.Option(
-        False, "--allow-stub",
+        False,
+        "--allow-stub",
         help="Allow deterministic stub generators if live model loading fails.",
     ),
 ) -> None:
@@ -1364,14 +1417,14 @@ def quant_check_cmd(
         console.print(f"[red]Cannot resolve --after: {after}[/]")
         raise typer.Exit(EXIT_USAGE_ERROR)
 
-    for label, path_str in (("--before", resolved_before),
-                            ("--after", resolved_after),
-                            ("--tasks", tasks)):
+    for label, path_str in (
+        ("--before", resolved_before),
+        ("--after", resolved_after),
+        ("--tasks", tasks),
+    ):
         path_obj = Path(path_str)
         if not is_under_cwd(path_obj):
-            console.print(
-                f"[red]{label} '{path_str}' is outside cwd - refusing[/]"
-            )
+            console.print(f"[red]{label} '{path_str}' is outside cwd - refusing[/]")
             raise typer.Exit(EXIT_USAGE_ERROR)
         if not path_obj.exists() and label == "--tasks":
             console.print(f"[red]{label} not found: {path_str}[/]")
@@ -1464,12 +1517,10 @@ def _print_gate_result(result) -> None:
     table.add_column("Delta", justify="right")
     table.add_column("Verdict")
     for row in result.task_results:
-        score_text = (
-            f"{row.score:.3f}" if row.score is not None
-            else "[red]ERROR[/]"
-        )
+        score_text = f"{row.score:.3f}" if row.score is not None else "[red]ERROR[/]"
         verdict = (
-            "[green]PASS[/]" if row.passed
+            "[green]PASS[/]"
+            if row.passed
             else (f"[red]FAIL ({row.error})[/]" if row.error else "[red]FAIL[/]")
         )
         table.add_row(

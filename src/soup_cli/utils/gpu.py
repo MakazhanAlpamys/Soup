@@ -149,9 +149,7 @@ def resolve_inference_device_map_and_dtype(
 
     normalized = str(device).strip().lower()
     if not re.fullmatch(r"cpu|mlx|mps|cuda(:\d+)?", normalized):
-        raise ValueError(
-            f"Unsupported --device {device!r}: use cpu, cuda, cuda:<index> or mps."
-        )
+        raise ValueError(f"Unsupported --device {device!r}: use cpu, cuda, cuda:<index> or mps.")
 
     if normalized in ("cpu", "mlx"):
         return {"": "cpu"}, torch.float32
@@ -370,7 +368,7 @@ def estimate_batch_size(
 
     # Rough activation memory per sample per token
     # ~2 bytes per hidden dim per layer per token for a transformer
-    activation_per_sample_gb = (seq_length * model_params_b * 0.001)  # very rough
+    activation_per_sample_gb = seq_length * model_params_b * 0.001  # very rough
     activation_per_sample_gb = max(activation_per_sample_gb, 0.5)  # minimum 0.5 GB
 
     batch_size = max(1, int(available_gb / activation_per_sample_gb))
@@ -402,8 +400,10 @@ def model_size_from_name(model_name: str) -> float:
     # 7B default (v0.71.32: the default guess blocked ASR training on the
     # hardware-fit gate).
     whisper_markers = [
-        ("whisper-large", 1.55), ("whisper-medium", 0.769),
-        ("whisper-small", 0.244), ("whisper-base", 0.074),
+        ("whisper-large", 1.55),
+        ("whisper-medium", 0.769),
+        ("whisper-small", 0.244),
+        ("whisper-base", 0.074),
         ("whisper-tiny", 0.039),
     ]
     for marker, size in whisper_markers:
@@ -555,9 +555,7 @@ def mps_supports_bf16() -> bool:
         return False
 
 
-def bf16_fp16_flags(
-    device: str, *, allow_mps_bf16: bool = False
-) -> tuple[bool, bool]:
+def bf16_fp16_flags(device: str, *, allow_mps_bf16: bool = False) -> tuple[bool, bool]:
     """``(bf16, fp16)`` for ``TrainingArguments`` on ``device``.
 
     bf16 where the card has it, fp16 where CUDA requires it, neither on CPU.

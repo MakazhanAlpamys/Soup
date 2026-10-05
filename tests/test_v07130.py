@@ -4,6 +4,7 @@ Tests the pure PRM reward kernels (split_steps / aggregate_step_scores), the
 schema fields + cross-validators, the torch-lazy PRMScorer (safetensors head
 load + scoring), the GRPO wiring, the bundled rollout envs, and the recipes.
 """
+
 import ast
 import inspect
 
@@ -158,17 +159,13 @@ class TestPrmSchema:
         from soup_cli.config.loader import load_config_from_string
 
         with pytest.raises(ValueError, match="prm_reward"):
-            load_config_from_string(
-                _prm_yaml(prm_reward=None, prm_aggregate="prod")
-            )
+            load_config_from_string(_prm_yaml(prm_reward=None, prm_aggregate="prod"))
 
     def test_default_aggregate_without_prm_reward_ok(self):
         from soup_cli.config.loader import load_config_from_string
 
         # prm_aggregate at its default is fine even without prm_reward.
-        cfg = load_config_from_string(
-            _prm_yaml(task="sft", prm_reward=None, prm_aggregate="min")
-        )
+        cfg = load_config_from_string(_prm_yaml(task="sft", prm_reward=None, prm_aggregate="min"))
         assert cfg.training.prm_reward is None
 
     def test_rejects_empty_string(self):
@@ -375,6 +372,7 @@ class TestPRMScorer:
         assert abs(both[0] - short[0]) < 1e-5
         assert abs(both[1] - long_[0]) < 1e-5
 
+
 def _make_capped_scorer(max_pos, aggregate="min"):
     """PRMScorer whose fake model advertises a tiny max_position_embeddings."""
     from types import SimpleNamespace
@@ -413,6 +411,7 @@ def _make_capped_scorer(max_pos, aggregate="min"):
     scorer._model = _FakeModelCapped()
     scorer._tokenizer = _FakeTok()
     return scorer
+
 
 class TestPRMScorerInputCap:
     def test_truncates_to_max_position_embeddings(self):
@@ -489,9 +488,7 @@ class TestResolveTrust:
         from soup_cli.utils.prm_reward import _resolve_trust
 
         captured = {}
-        monkeypatch.setattr(
-            trust_mod, "model_requires_trust_remote_code", lambda base: True
-        )
+        monkeypatch.setattr(trust_mod, "model_requires_trust_remote_code", lambda base: True)
 
         def _fake_resolve(base, requested, console, requires_remote_code):
             captured["requires"] = requires_remote_code

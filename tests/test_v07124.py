@@ -6,6 +6,7 @@ Kimi-K2.5/K2.6 / MiniMax-M3 / Mistral-Large-3), plus a stale-repo-ID fix for
 ``glm-5-sft`` (``THUDM/glm-5`` -> ``zai-org/GLM-5``). CI validates each recipe by
 ``load_config_from_string`` parse only (no network).
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -143,7 +144,7 @@ class TestV07124Recipes:
         assert " " not in meta.model
         # No path-traversal segments or shell metacharacters in a repo id.
         assert ".." not in meta.model, f"path-traversal segment in {meta.model!r}"
-        assert not any(c in meta.model for c in ';|&$`<>(){}*?!\\\n\t'), (
+        assert not any(c in meta.model for c in ";|&$`<>(){}*?!\\\n\t"), (
             f"shell metacharacter in {meta.model!r}"
         )
         parts = meta.model.split("/")
@@ -166,8 +167,7 @@ class TestV07124Recipes:
         # the whole batch is uniformly self-documenting (review HIGH-1).
         cfg = load_config_from_string(RECIPES[name].yaml_str)
         assert abs(cfg.training.moe_aux_loss_coeff - 0.01) < 1e-9, (
-            f"{name} should set moe_aux_loss_coeff: 0.01, got "
-            f"{cfg.training.moe_aux_loss_coeff}"
+            f"{name} should set moe_aux_loss_coeff: 0.01, got {cfg.training.moe_aux_loss_coeff}"
         )
 
     @pytest.mark.parametrize(
@@ -178,9 +178,7 @@ class TestV07124Recipes:
         # The complement of the MoE list: a dense recipe must NOT enable moe_lora
         # (guards against pasting a MoE block into a dense recipe).
         cfg = load_config_from_string(RECIPES[name].yaml_str)
-        assert cfg.training.moe_lora is not True, (
-            f"{name} is a dense recipe but has moe_lora: true"
-        )
+        assert cfg.training.moe_lora is not True, f"{name} is a dense recipe but has moe_lora: true"
 
     @pytest.mark.parametrize("name", V07124_VL_MOE_RECIPES)
     def test_vl_moe_recipes_load_through_the_vision_path(self, name: str) -> None:
@@ -193,9 +191,7 @@ class TestV07124Recipes:
 
     @pytest.mark.parametrize("name", V07124_MOE_RECIPES)
     def test_moe_recipes_tagged_moe(self, name: str) -> None:
-        assert "moe" in RECIPES[name].tags, (
-            f"{name} is a MoE recipe but lacks the 'moe' tag"
-        )
+        assert "moe" in RECIPES[name].tags, f"{name} is a MoE recipe but lacks the 'moe' tag"
 
     @pytest.mark.parametrize("name", [n for n in V07124_RECIPE_NAMES if n.startswith("qwen")])
     def test_qwen_recipes_tagged_qwen(self, name: str) -> None:
@@ -271,9 +267,7 @@ class TestGlm5RepoIdFix:
 
     def test_no_recipe_references_thudm_glm5(self) -> None:
         for name, meta in RECIPES.items():
-            assert "THUDM/glm-5" not in meta.model, (
-                f"{name}: model still references THUDM/glm-5"
-            )
+            assert "THUDM/glm-5" not in meta.model, f"{name}: model still references THUDM/glm-5"
             assert "THUDM/glm-5" not in meta.yaml_str, (
                 f"{name}: yaml_str still references THUDM/glm-5"
             )

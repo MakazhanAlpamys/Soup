@@ -24,21 +24,14 @@ console = Console()
 
 def compile_cmd(
     program: str = typer.Argument(..., help="Path to DSPy / GEPA program (.py)"),
-    eval_suite: str = typer.Option(
-        ..., "--eval", help="Path to eval-suite JSON / JSONL file"
-    ),
+    eval_suite: str = typer.Option(..., "--eval", help="Path to eval-suite JSON / JSONL file"),
     optimizer: str = typer.Option(
         "mipro",
         "--optimizer",
-        help=(
-            "Optimizer name. Allowed: "
-            + ", ".join(sorted(SUPPORTED_PROMPT_OPTIMIZERS))
-        ),
+        help=("Optimizer name. Allowed: " + ", ".join(sorted(SUPPORTED_PROMPT_OPTIMIZERS))),
     ),
     max_iters: int = typer.Option(10, "--max-iters", help="Maximum optimizer iterations"),
-    output: str = typer.Option(
-        "compiled_program.py", "--output", "-o", help="Output program path"
-    ),
+    output: str = typer.Option("compiled_program.py", "--output", "-o", help="Output program path"),
     plan_only: bool = typer.Option(
         False,
         "--plan-only",

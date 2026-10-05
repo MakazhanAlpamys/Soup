@@ -490,7 +490,9 @@ class TestLongContextUtils:
         model_config.rope_parameters = None
 
         rope_config = apply_long_context_config(
-            model_config, target_length=131072, rope_scaling_type="dynamic",
+            model_config,
+            target_length=131072,
+            rope_scaling_type="dynamic",
             model_name="meta-llama/Llama-3.1-8B",
         )
         assert rope_config is not None
@@ -504,7 +506,9 @@ class TestLongContextUtils:
         model_config.max_position_embeddings = 131072
 
         result = apply_long_context_config(
-            model_config, target_length=8192, rope_scaling_type="dynamic",
+            model_config,
+            target_length=8192,
+            rope_scaling_type="dynamic",
             model_name="test/model",
         )
         assert result is None
@@ -652,7 +656,8 @@ class TestTrainerFSDPParam:
         from soup_cli.trainer.pretrain import PretrainTrainerWrapper
 
         cfg = SoupConfig(
-            base="test/model", task="pretrain",
+            base="test/model",
+            task="pretrain",
             data={"train": "./data.jsonl", "format": "plaintext"},
         )
         wrapper = PretrainTrainerWrapper(cfg, fsdp_config={"fsdp": "full_shard"})
@@ -662,7 +667,8 @@ class TestTrainerFSDPParam:
         from soup_cli.trainer.reward_model import RewardModelTrainerWrapper
 
         cfg = SoupConfig(
-            base="test/model", task="reward_model",
+            base="test/model",
+            task="reward_model",
             data={"train": "./data.jsonl"},
         )
         wrapper = RewardModelTrainerWrapper(cfg, fsdp_config={"fsdp": "full_shard"})

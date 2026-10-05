@@ -113,11 +113,7 @@ def test_guard_actually_fails_on_a_reintroduced_minillm_flag():
     reintroduced = "soup train --config soup.yaml --minillm-enabled\n"
     live = _train_command_options()
     documented = _documented_train_flags(reintroduced)
-    offending = [
-        flag
-        for flag in documented
-        if flag not in live
-    ]
+    offending = [flag for flag in documented if flag not in live]
     assert offending == ["--minillm-enabled"]
 
 
@@ -126,11 +122,7 @@ def test_a_real_flag_does_not_trip_the_guard():
     real = "soup train --config soup.yaml --minillm-on-policy --tensorboard\n"
     live = _train_command_options()
     documented = _documented_train_flags(real)
-    offending = [
-        flag
-        for flag in documented
-        if flag not in live
-    ]
+    offending = [flag for flag in documented if flag not in live]
     assert offending == []
 
 

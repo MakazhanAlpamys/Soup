@@ -76,9 +76,7 @@ class TestItIsRefusedWhereItCannotTakeEffect:
 
     def test_a_non_default_depth_beside_ram_is_refused(self):
         with pytest.raises(ValueError) as excinfo:
-            load_config_from_string(
-                self._yaml(source="ram", depth="  stream_read_ahead: 4\n")
-            )
+            load_config_from_string(self._yaml(source="ram", depth="  stream_read_ahead: 4\n"))
         message = str(excinfo.value)
         # BOTH names: the user set one field and is being refused because of
         # the other, so a message naming only one leaves them guessing.
@@ -146,9 +144,7 @@ class TestTheStagingIsCharged:
     _NO_RAM = 10**9  # store is ~39 GB, so this forces the disk tier
 
     @pytest.mark.parametrize("read_ahead", [1, 2, 4, 8])
-    def test_the_arithmetic_is_depth_times_a_layer_plus_the_vocabulary_once(
-        self, read_ahead
-    ):
+    def test_the_arithmetic_is_depth_times_a_layer_plus_the_vocabulary_once(self, read_ahead):
         plan = _plan(read_ahead=read_ahead, available_ram_bytes=self._NO_RAM)
         assert plan.tier == "disk"
         assert plan.read_ahead == read_ahead
@@ -167,9 +163,10 @@ class TestTheStagingIsCharged:
     def test_depth_beyond_the_layer_count_buys_nothing(self):
         from soup_cli.utils.layer_stream import staging_bytes_for
 
-        assert staging_bytes_for(
-            read_ahead=8, n_layers=3, layer_bytes=_LAYER_BYTES
-        ) == 3 * _LAYER_BYTES
+        assert (
+            staging_bytes_for(read_ahead=8, n_layers=3, layer_bytes=_LAYER_BYTES)
+            == 3 * _LAYER_BYTES
+        )
 
     def test_the_ram_tier_charges_none_of_it(self):
         """The control. There is no reader on the RAM tier — the whole base is
@@ -205,9 +202,7 @@ class TestThePanelSaysWhatTheStagingCosts:
     def test_the_depth_printed_is_the_depth_configured(self):
         """Two depths, each asserting the other's figure is absent: a panel that
         hardcoded one would satisfy a single case."""
-        shallow = _plan(
-            read_ahead=1, available_ram_bytes=TestTheStagingIsCharged._NO_RAM
-        )
+        shallow = _plan(read_ahead=1, available_ram_bytes=TestTheStagingIsCharged._NO_RAM)
         deep = _plan(read_ahead=8, available_ram_bytes=TestTheStagingIsCharged._NO_RAM)
         shallow_out, deep_out = self._render(shallow), self._render(deep)
         # Present-AND-absent. Absence alone passes vacuously against a panel
@@ -221,9 +216,7 @@ class TestThePanelSaysWhatTheStagingCosts:
         assert f"{deep.staging_bytes / 1e6:.0f} MB" not in shallow_out, shallow_out
 
     def test_the_ram_tier_does_not_print_it(self):
-        out = self._render(
-            _plan(read_ahead=8, available_ram_bytes=TestTheStagingIsCharged._RAM)
-        )
+        out = self._render(_plan(read_ahead=8, available_ram_bytes=TestTheStagingIsCharged._RAM))
         assert "host staging" not in out, out
 
 
@@ -256,9 +249,7 @@ class TestTheStagingMustFitFreeRam:
         refusal would come one allocation too late."""
         self._validate(staging=10**9, read_ahead=2, free_ram=2 * 10**9)
         with pytest.raises(ValueError, match="stream_read_ahead"):
-            self._validate(
-                staging=10**9, read_ahead=2, free_ram=2 * 10**9, resident=5 * 10**8
-            )
+            self._validate(staging=10**9, read_ahead=2, free_ram=2 * 10**9, resident=5 * 10**8)
 
     def test_a_run_that_fits_is_not_refused(self):
         """The control: a check that refused everything would pass the case

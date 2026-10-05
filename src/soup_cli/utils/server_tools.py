@@ -67,9 +67,7 @@ def validate_tool_name(name: str) -> str:
     if "\x00" in canonical:
         raise ValueError("tool name must not contain null bytes")
     if canonical not in SUPPORTED_TOOLS:
-        raise ValueError(
-            f"unknown tool: {canonical!r}. supported: {sorted(SUPPORTED_TOOLS)}"
-        )
+        raise ValueError(f"unknown tool: {canonical!r}. supported: {sorted(SUPPORTED_TOOLS)}")
     return canonical
 
 
@@ -77,9 +75,7 @@ def validate_rate_limit(rpm: int) -> int:
     if isinstance(rpm, bool) or not isinstance(rpm, int):
         raise TypeError("rate_limit_per_minute must be an int")
     if rpm < _MIN_RPM or rpm > _MAX_RPM:
-        raise ValueError(
-            f"rate_limit_per_minute must be in [{_MIN_RPM}, {_MAX_RPM}]"
-        )
+        raise ValueError(f"rate_limit_per_minute must be in [{_MIN_RPM}, {_MAX_RPM}]")
     return rpm
 
 

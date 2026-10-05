@@ -275,9 +275,7 @@ class TestOtherErrorsAreReportedAsThemselves:
         assert "symbolic link" not in out
         assert not (tmp_path / "missing").exists()
 
-    def test_an_error_inspecting_the_target_is_not_reported_as_a_link(
-        self, tmp_path, monkeypatch
-    ):
+    def test_an_error_inspecting_the_target_is_not_reported_as_a_link(self, tmp_path, monkeypatch):
         import soup_cli.commands.init as init_module
 
         def unreadable(path, *, stop_at=None):

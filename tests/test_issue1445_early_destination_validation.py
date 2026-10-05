@@ -55,9 +55,7 @@ def _stub_optimizer(monkeypatch, ran):
 class TestCompileRefusesBeforeRunningTheOptimizer:
     @pytest.mark.parametrize("bad", ["../out.py", "link.py"])
     @pytest.mark.requires_symlink
-    def test_the_optimizer_is_never_called_and_exit_is_2(
-        self, tmp_path, monkeypatch, bad
-    ):
+    def test_the_optimizer_is_never_called_and_exit_is_2(self, tmp_path, monkeypatch, bad):
         from typer.testing import CliRunner
 
         from soup_cli.cli import app
@@ -78,14 +76,13 @@ class TestCompileRefusesBeforeRunningTheOptimizer:
 
         assert ran == [], "the optimizer ran before the destination was refused"
         assert result.exit_code == 2
-        assert "must stay under cwd" in result.output or (
-            result.exception is not None
-            and "must stay under cwd" in str(result.exception)
-        ) or "symlink" in result.output
+        assert (
+            "must stay under cwd" in result.output
+            or (result.exception is not None and "must stay under cwd" in str(result.exception))
+            or "symlink" in result.output
+        )
 
-    def test_control_an_in_cwd_destination_still_compiles(
-        self, tmp_path, monkeypatch
-    ):
+    def test_control_an_in_cwd_destination_still_compiles(self, tmp_path, monkeypatch):
         from typer.testing import CliRunner
 
         from soup_cli.cli import app
@@ -159,15 +156,14 @@ def _stub_export_backend(monkeypatch, tmp_path, merges):
 
     monkeypatch.setattr(export_mod, "_run_convert", fake_convert)
     monkeypatch.setattr(
-        export_mod, "_run_quantize",
+        export_mod,
+        "_run_quantize",
         lambda ldir, f16, out, quant: out.write_bytes(b"GGUF"),
     )
 
 
 class TestQuantisedExportIntoAMissingDirectory:
-    def test_the_parent_is_created_and_the_merge_is_kept(
-        self, tmp_path, monkeypatch
-    ):
+    def test_the_parent_is_created_and_the_merge_is_kept(self, tmp_path, monkeypatch):
         from typer.testing import CliRunner
 
         from soup_cli.cli import app
@@ -181,17 +177,14 @@ class TestQuantisedExportIntoAMissingDirectory:
         assert not out.parent.exists()  # the parent really is missing
         result = CliRunner().invoke(
             app,
-            ["export", "--model", str(adapter), "--quant", "q4_k_m",
-             "--output", str(out)],
+            ["export", "--model", str(adapter), "--quant", "q4_k_m", "--output", str(out)],
         )
 
         assert result.exit_code == 0, (result.output, repr(result.exception))
         assert merges, "the merge ran"
         assert out.read_bytes() == b"GGUF"
 
-    def test_control_an_existing_directory_still_exports(
-        self, tmp_path, monkeypatch
-    ):
+    def test_control_an_existing_directory_still_exports(self, tmp_path, monkeypatch):
         from typer.testing import CliRunner
 
         from soup_cli.cli import app
@@ -204,8 +197,7 @@ class TestQuantisedExportIntoAMissingDirectory:
         out = tmp_path / "model.gguf"
         result = CliRunner().invoke(
             app,
-            ["export", "--model", str(adapter), "--quant", "q4_k_m",
-             "--output", str(out)],
+            ["export", "--model", str(adapter), "--quant", "q4_k_m", "--output", str(out)],
         )
 
         assert result.exit_code == 0, (result.output, repr(result.exception))
@@ -242,9 +234,7 @@ class TestUnlearnRefusesTheOutputBeforeLoadingAnything:
 
         def guard(name, *args, **kwargs):
             if name in ("torch", "peft", "transformers"):
-                raise AssertionError(
-                    f"setup() imported {name!r} before refusing the output dir"
-                )
+                raise AssertionError(f"setup() imported {name!r} before refusing the output dir")
             return real_import(name, *args, **kwargs)
 
         with mock.patch("builtins.__import__", side_effect=guard):
@@ -262,9 +252,7 @@ class TestUnlearnRefusesTheOutputBeforeLoadingAnything:
         with pytest.raises(ValueError, match="symlink"):
             wrapper.setup()
 
-    def test_control_a_plain_in_cwd_output_passes_the_early_check(
-        self, tmp_path, monkeypatch
-    ):
+    def test_control_a_plain_in_cwd_output_passes_the_early_check(self, tmp_path, monkeypatch):
         from soup_cli.trainer.unlearn import _validated_output_dir
 
         monkeypatch.chdir(tmp_path)

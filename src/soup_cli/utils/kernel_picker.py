@@ -23,7 +23,8 @@ from typing import Any
 
 
 def enumerate_kernel_combos(
-    backend: str, device: str,
+    backend: str,
+    device: str,
 ) -> list[dict[str, Any]]:
     """Enumerate candidate kernel combinations for the current environment.
 
@@ -77,44 +78,54 @@ def enumerate_kernel_combos(
         cce_ok = False
 
     if liger_ok:
-        combos.append({
-            "name": "liger",
-            "use_liger": True,
-            "use_flash_attn": False,
-            "use_cut_ce": False,
-        })
+        combos.append(
+            {
+                "name": "liger",
+                "use_liger": True,
+                "use_flash_attn": False,
+                "use_cut_ce": False,
+            }
+        )
 
     if flash_ok:
-        combos.append({
-            "name": "flash",
-            "use_liger": False,
-            "use_flash_attn": True,
-            "use_cut_ce": False,
-        })
+        combos.append(
+            {
+                "name": "flash",
+                "use_liger": False,
+                "use_flash_attn": True,
+                "use_cut_ce": False,
+            }
+        )
 
     if liger_ok and flash_ok:
-        combos.append({
-            "name": "liger+flash",
-            "use_liger": True,
-            "use_flash_attn": True,
-            "use_cut_ce": False,
-        })
+        combos.append(
+            {
+                "name": "liger+flash",
+                "use_liger": True,
+                "use_flash_attn": True,
+                "use_cut_ce": False,
+            }
+        )
 
     if cce_ok:
-        combos.append({
-            "name": "cut_ce",
-            "use_liger": False,
-            "use_flash_attn": False,
-            "use_cut_ce": True,
-        })
+        combos.append(
+            {
+                "name": "cut_ce",
+                "use_liger": False,
+                "use_flash_attn": False,
+                "use_cut_ce": True,
+            }
+        )
 
     if liger_ok and flash_ok and cce_ok:
-        combos.append({
-            "name": "liger+flash+cut_ce",
-            "use_liger": True,
-            "use_flash_attn": True,
-            "use_cut_ce": True,
-        })
+        combos.append(
+            {
+                "name": "liger+flash+cut_ce",
+                "use_liger": True,
+                "use_flash_attn": True,
+                "use_cut_ce": True,
+            }
+        )
 
     return combos
 
@@ -148,8 +159,10 @@ def benchmark_kernel_combos(
     # don't sneak in as 1 / 0 (matches v0.30.0 Candidate / v0.34.0 cost
     # estimator policy).
     for arg_name, arg_val in (
-        ("batch_size", batch_size), ("seq_len", seq_len),
-        ("num_steps", num_steps), ("vocab_size", vocab_size),
+        ("batch_size", batch_size),
+        ("seq_len", seq_len),
+        ("num_steps", num_steps),
+        ("vocab_size", vocab_size),
     ):
         if isinstance(arg_val, bool):
             raise TypeError(f"{arg_name} must be int, not bool")
@@ -187,7 +200,11 @@ def benchmark_kernel_combos(
 
     try:
         input_ids = torch.randint(
-            0, vs, (bs, sl), device="cuda", dtype=torch.long,
+            0,
+            vs,
+            (bs, sl),
+            device="cuda",
+            dtype=torch.long,
         )
     except (RuntimeError, OSError):
         for entry in out:
@@ -200,7 +217,10 @@ def benchmark_kernel_combos(
 
 
 def _time_one_combo(
-    model: Any, input_ids: Any, *, steps: int,
+    model: Any,
+    input_ids: Any,
+    *,
+    steps: int,
 ) -> "float | None":
     """Run ``steps`` forward passes on ``model`` and return mean ms per step.
 

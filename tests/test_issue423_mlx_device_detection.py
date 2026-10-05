@@ -27,9 +27,7 @@ class TestMLXDeviceDetection:
     @patch("soup_cli.utils.mlx.is_apple_silicon", return_value=True)
     @patch("soup_cli.utils.mlx.detect_mlx", return_value=True)
     @patch("soup_cli.utils.mlx.get_chip_info", return_value={"chip": "Apple M2 Max"})
-    def test_detect_device_pure_apple_silicon_mlx(
-        self, mock_chip, mock_detect, mock_apple
-    ):
+    def test_detect_device_pure_apple_silicon_mlx(self, mock_chip, mock_detect, mock_apple):
         """Pure Apple Silicon with MLX returns 'mlx' device."""
         device, name = gpu_utils.detect_device(backend="mlx")
         assert device == "mlx"
@@ -38,9 +36,7 @@ class TestMLXDeviceDetection:
     @patch("soup_cli.utils.mlx.is_apple_silicon", return_value=True)
     @patch("soup_cli.utils.mlx.detect_mlx", return_value=True)
     @patch("soup_cli.utils.mlx.get_chip_info", return_value={"chip": "Apple M3 Pro"})
-    def test_detect_device_dual_stack_mlx_requested(
-        self, mock_chip, mock_detect, mock_apple
-    ):
+    def test_detect_device_dual_stack_mlx_requested(self, mock_chip, mock_detect, mock_apple):
         """When backend='mlx', prioritizes MLX even if PyTorch MPS is available."""
         mock_torch = MagicMock()
         mock_torch.cuda.is_available.return_value = False
@@ -53,9 +49,7 @@ class TestMLXDeviceDetection:
 
     @patch("soup_cli.utils.mlx.is_apple_silicon", return_value=True)
     @patch("soup_cli.utils.mlx.detect_mlx", return_value=True)
-    def test_detect_device_dual_stack_transformers_requested(
-        self, mock_detect, mock_apple
-    ):
+    def test_detect_device_dual_stack_transformers_requested(self, mock_detect, mock_apple):
         """When backend='transformers' on Mac, PyTorch MPS is preserved."""
         mock_torch = MagicMock()
         mock_torch.cuda.is_available.return_value = False
@@ -68,12 +62,8 @@ class TestMLXDeviceDetection:
 
     @patch("soup_cli.utils.mlx.is_apple_silicon", return_value=True)
     @patch("soup_cli.utils.mlx.detect_mlx", return_value=True)
-    @patch(
-        "soup_cli.utils.mlx.get_unified_memory_bytes", return_value=68719476736
-    )  # 64 GB
-    def test_get_gpu_info_apple_silicon_unified_memory(
-        self, mock_mem, mock_detect, mock_apple
-    ):
+    @patch("soup_cli.utils.mlx.get_unified_memory_bytes", return_value=68719476736)  # 64 GB
+    def test_get_gpu_info_apple_silicon_unified_memory(self, mock_mem, mock_detect, mock_apple):
         """Unified memory calculation accurately formats memory string and byte counts."""
         info = gpu_utils.get_gpu_info(backend="mlx")
         assert "64.0 GB (unified)" in info["memory_total"]
@@ -160,9 +150,7 @@ class TestIssue423QuantizationDecision:
         This is the core #423 fix: the explicit decision that MLX 4-bit is a
         different mechanism from bitsandbytes NF4 and must not be downgraded.
         """
-        resolved, warning = resolve_quantization(
-            device="mlx", backend="mlx", quantization="4bit"
-        )
+        resolved, warning = resolve_quantization(device="mlx", backend="mlx", quantization="4bit")
         assert resolved == "4bit"
         assert warning is None
 
@@ -172,9 +160,7 @@ class TestIssue423QuantizationDecision:
         The guard checks backend first, so a hypothetical edge case where the
         device string doesn't match still preserves the MLX decision.
         """
-        resolved, warning = resolve_quantization(
-            device="cpu", backend="mlx", quantization="4bit"
-        )
+        resolved, warning = resolve_quantization(device="cpu", backend="mlx", quantization="4bit")
         assert resolved == "4bit"
         assert warning is None
 
@@ -236,7 +222,9 @@ class TestHardwareFitGateIsMlxAware:
         gpu = {"memory_total_bytes": 4 * 10**9}
         with pytest.raises(typer.Exit):
             _hardware_fit_preflight(
-                self._cfg("transformers"), gpu, allow_oom_attempt=False,
+                self._cfg("transformers"),
+                gpu,
+                allow_oom_attempt=False,
             )
 
     def test_mlx_run_is_not_blocked_by_the_resident_prediction(self):
@@ -247,5 +235,7 @@ class TestHardwareFitGateIsMlxAware:
         gpu = {"memory_total_bytes": 4 * 10**9}  # real bytes, not zero
         # Must not raise typer.Exit.
         _hardware_fit_preflight(
-            self._cfg("mlx"), gpu, allow_oom_attempt=False,
+            self._cfg("mlx"),
+            gpu,
+            allow_oom_attempt=False,
         )

@@ -142,9 +142,7 @@ class WatchConfig:
         if self.served_model is not None:
             sm = self.served_model
             if not isinstance(sm, str) or "\x00" in sm or len(sm) > 512:
-                raise ValueError(
-                    "served_model must be a NUL-free str <= 512 chars or None"
-                )
+                raise ValueError("served_model must be a NUL-free str <= 512 chars or None")
         bm = self.base_model
         if not isinstance(bm, str) or not bm or "\x00" in bm or len(bm) > 512:
             raise ValueError("base_model must be a non-empty NUL-free str <= 512 chars")
@@ -159,9 +157,7 @@ def run_once(
         raise TypeError("state must be LoopState")
     if not isinstance(config, WatchConfig):
         raise TypeError("config must be WatchConfig")
-    runs_today, today = reset_daily_counter_if_new_day(
-        state.runs_today, state.last_run_date
-    )
+    runs_today, today = reset_daily_counter_if_new_day(state.runs_today, state.last_run_date)
     state = _state_with(state, runs_today=runs_today, last_run_date=today)
     canary_verdict, rollback_policy = _evaluate_active_canary(state, config)
     rolled_back = rollback_policy is not None
@@ -218,9 +214,7 @@ def run_once(
         run_id=(str(train_out["run_id"]) if train_out.get("run_id") else None),
         gate_verdict=gate_verdict if gate_verdict in ("OK", "MAJOR", "SKIPPED") else "SKIPPED",
         canary_verdict=(
-            canary_verdict
-            if canary_verdict in (None, "OK", "MAJOR", "UNKNOWN")
-            else None
+            canary_verdict if canary_verdict in (None, "OK", "MAJOR", "UNKNOWN") else None
         ),
         shipped=shipped,
         rolled_back=rolled_back,
@@ -335,18 +329,14 @@ def watch(config: WatchConfig) -> "tuple[LoopState, int]":
                 except (OSError, ValueError) as exc:
                     _LOG.warning("iteration write failed: %s", type(exc).__name__)
                 if wrote and config.pack_iterations:
-                    prev_registry_id = _pack_iteration_safely(
-                        record, config, prev_registry_id
-                    )
+                    prev_registry_id = _pack_iteration_safely(record, config, prev_registry_id)
                 if config.on_iteration is not None:
                     try:
                         config.on_iteration(record)
                     except Exception:  # noqa: BLE001 — daemon must not crash
                         _LOG.warning("on_iteration callback raised", exc_info=True)
             iterations += 1
-            if iterations and (
-                config.max_iterations is None or iterations < config.max_iterations
-            ):
+            if iterations and (config.max_iterations is None or iterations < config.max_iterations):
                 if stop.wait(config.poll_interval_sec):
                     break
     finally:
@@ -431,9 +421,7 @@ def evaluate_canary_verdict(stats: BucketStats) -> str:
     return stats.verdict()
 
 
-def maybe_rollback(
-    policy: CanaryPolicy, verdict: str, *, sticky: bool = True
-) -> CanaryPolicy:
+def maybe_rollback(policy: CanaryPolicy, verdict: str, *, sticky: bool = True) -> CanaryPolicy:
     """Roll back the canary if ``verdict == "MAJOR"``.
 
     Non-MAJOR verdicts pass through unchanged so a flaky re-eval cannot
