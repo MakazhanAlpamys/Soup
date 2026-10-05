@@ -14,15 +14,21 @@ Protocol
 - 3 repeats per arm
 - CUDA synchronization around every timed step
 - correctness checked against a resident NF4 reference in the same process
-  before timing either arm
+  before timing either arm: both arms require finite, bit-exact losses and
+  canonical gradient sets; pageable gradients must be exact on all three
+  backwards, while the historical pinned arm may be timed when WRONG
 
 Historical reference:
-- pin=True: 425.07 tok/s
+- pin=True: 425.07 tok/s, WRONG 8/256 gradients on all three repetitions
 - pin=False: 64.79 tok/s
 - pinned/pageable ratio: 6.56x
 
 Those values are historical reference values only. This harness reports new
 measurements when run on a suitable CUDA machine.
+
+Historical requirements: H100 80 GB, torch 2.13.0+cu130, bitsandbytes 0.50.0;
+26,713 MiB recorded with resident and streamed NF4 models live at seq 256.
+Pinning cost scales with bytes per layer. Real CUDA validation is required.
 
 No model download is required when ``--weights`` points to a local checkpoint
 or an already-resolved local cache.
@@ -609,7 +615,8 @@ def run_measurement(args: argparse.Namespace) -> int:
                 print(
                     f"timing        pin={pin} "
                     f"{rate:.2f} tok/s, "
-                    f"median_step={median_step:.4f} s"
+                    f"median_step={median_step:.4f} s, "
+                    f"gradients={'OK' if all_exact else 'WRONG'} ({exact_summary})"
                 )
 
             finally:
@@ -652,7 +659,7 @@ def run_measurement(args: argparse.Namespace) -> int:
     print(f"run-to-run spread       {spread:.2%}")
     print(
         "Historical reference:    "
-        "425.07 tok/s vs 64.79 tok/s, 6.56x"
+        "425.07 tok/s (pinned WRONG 8/256) vs 64.79 tok/s, 6.56x"
     )
     if reproduced:
         print("RESULT: historical-control pinning cost relationship reproduced")

@@ -34,6 +34,8 @@ class _Layer(nn.Module):
         self.lora_B = nn.Linear(2, HIDDEN, bias=False)
     def forward(self, x, factor=None):
         delta = self.lora_B(self.lora_A(x))
+        if hasattr(self, "lora_extra"):
+            delta = delta + self.lora_extra(x).sum() * 0.0
         if factor is not None:
             delta = _GradScale.apply(delta, factor)
         return torch.tanh(self.base(x) + delta)
@@ -53,7 +55,12 @@ class _Toy(nn.Module):
         self.head = nn.Linear(HIDDEN, VOCAB, bias=False).requires_grad_(False)
         self.scenario, self.clock, self.pin = scenario, clock, pin
         self.streamed_calls = 0
-        if scenario == "inf_grads":
+        streamed = pin is not None
+        if scenario == "extra_lora" and streamed:
+            self.model.layers[0].lora_extra = nn.Linear(HIDDEN, 2, bias=False)
+        if scenario == "inf_grads" or (
+            scenario == "inf_grads_streamed" and streamed
+        ) or (scenario == "inf_grads_reference" and not streamed):
             for name, parameter in self.named_parameters():
                 if "lora_" in name:
                     parameter.register_hook(lambda g: torch.full_like(g, float("inf")))
@@ -71,6 +78,8 @@ class _Toy(nn.Module):
             self.clock.now += -step if self.scenario == "clock_backwards" else step
             if self.scenario == "wrong_first":
                 factor = 3.0
+            elif self.scenario == "pinned_wrong_all" and self.pin:
+                factor = 3.0
             elif (
                 self.scenario in {"wrong_after_first", "pinned_wrong_after_first"}
                 and self.streamed_calls > 1
@@ -84,7 +93,9 @@ class _Toy(nn.Module):
         loss = nn.functional.cross_entropy(self.head(x).view(-1, VOCAB), labels.view(-1))
         if streamed and self.scenario == "loss_offset":
             loss = loss + 1e-3
-        if self.scenario == "inf_loss":
+        if self.scenario == "inf_loss" or (
+            self.scenario == "inf_loss_streamed" and streamed
+        ) or (self.scenario == "inf_loss_reference" and not streamed):
             loss = loss + torch.tensor(float("inf"))
         return SimpleNamespace(loss=loss)
 
@@ -103,7 +114,10 @@ def _run(monkeypatch, capsys, tmp_path, scenario: str) -> tuple[int, str]:
     def build_streamed(*args, **kwargs):
         pin = kwargs["pin"]
         reported = True if scenario == "lying_pinned" else pin
-        return _Toy(scenario, clock, pin=pin), _Runtime(reported)
+        runtime = _Runtime(reported)
+        if scenario == "empty_store":
+            runtime.source.nbytes = 0
+        return _Toy(scenario, clock, pin=pin), runtime
     def cpu_non_vacuous(model) -> None:
         generator = torch.Generator(device="cpu").manual_seed(23)
         with torch.no_grad():
@@ -158,9 +172,7 @@ def test_no_cost_or_an_inverted_cost_fails(monkeypatch, capsys, tmp_path, scenar
         ("loss_offset", "loss is not bit-exact before timing"),
         ("inf_loss", "produced a non-finite loss before timing"),
         ("inf_grads", "gradient is non-finite"),
-        ("wrong_first", "pin=False failed gradient correctness across all repetitions"),
         ("lying_pinned", "requested pin=False, but runtime reports pinned=True"),
-        ("wrong_after_first", "pin=False failed gradient correctness across all repetitions"),
     ],
 )
 def test_an_arm_that_fails_its_gate_is_never_reported(
@@ -196,3 +208,62 @@ def test_historical_control_is_restored_after_measurement(monkeypatch, capsys, t
     original = layer_runtime.install_dequant_forward
     _run(monkeypatch, capsys, tmp_path, scenario)
     assert layer_runtime.install_dequant_forward is original
+
+
+@pytest.mark.parametrize("scenario", ["wrong_first", "wrong_after_first"])
+def test_wrong_pageable_arm_refuses_timing_result(monkeypatch, capsys, tmp_path, scenario):
+    code, out = _run(monkeypatch, capsys, tmp_path, scenario)
+    assert code == 1, out
+    assert "pin=False failed gradient correctness across all repetitions:" in out
+    assert "median pin=True" not in out
+    assert "RESULT:" not in out
+
+
+def test_historical_pinned_arm_wrong_on_every_backward_can_be_timed(monkeypatch, capsys, tmp_path):
+    code, out = _run(monkeypatch, capsys, tmp_path, "pinned_wrong_all")
+    assert code == 0, out
+    assert "gradients pin=True 0/4,0/4,0/4 WRONG" in out
+    assert "gradients pin=False 4/4,4/4,4/4 OK" in out
+    assert "median pin=True 4.00 tok/s" in out
+    assert "pin=True/pin=False ratio 4.00x" in out
+    assert "timing pin=True 4.00 tok/s, median_step=1.0000 s, gradients=WRONG" in out
+
+
+@pytest.mark.parametrize(
+    "scenario, message",
+    [
+        ("inf_loss_streamed", "produced a non-finite loss before timing"),
+        ("inf_loss_reference", "produced a non-finite loss before timing"),
+        ("inf_grads_streamed", "streamed gradient is non-finite"),
+        ("inf_grads_reference", "reference gradient is non-finite"),
+        ("empty_store", "reported an empty streaming store"),
+        ("extra_lora", "gradient sets differ"),
+    ],
+)
+def test_independent_measurement_guards(monkeypatch, capsys, tmp_path, scenario, message):
+    code, out = _run(monkeypatch, capsys, tmp_path, scenario)
+    assert code == 1, out
+    assert message in out
+    assert "RESULT:" not in out
+
+
+def test_historical_control_is_installed_for_every_arm(monkeypatch, capsys, tmp_path):
+    import soup_cli.utils.layer_stream_runtime as layer_runtime
+
+    installed = []
+    monkeypatch.setattr(pincost, "install_historical_control", installed.append)
+    code, out = _run(monkeypatch, capsys, tmp_path, "cost")
+    assert code == 0, out
+    assert installed == [layer_runtime] * 4
+
+
+def test_self_test_runs():
+    assert pincost.run_self_test() == 0
+
+
+def test_correctness_rejects_empty_canonical_intersection():
+    streamed, reference = nn.Module(), nn.Module()
+    streamed.register_parameter("streamed_only", nn.Parameter(torch.ones(1)))
+    reference.register_parameter("reference_only", nn.Parameter(torch.ones(1)))
+    with pytest.raises(ValueError, match="no canonical parameter name is shared"):
+        pincost.run_correctness(streamed, reference, torch.ones(1), pin=True)
