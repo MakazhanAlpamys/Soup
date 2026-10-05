@@ -216,6 +216,41 @@ def test_unpatching_a_group_kernel_does_not_bring_the_single_one_back(group, tak
     assert fast_lora.unpatch_fast_lora_single_projection(model) == 4
 
 
+@pytest.mark.parametrize(
+    "group, saved, kept",
+    [
+        ("qkv", "k_proj", ("self_attn.q_proj", "self_attn.v_proj")),
+        ("mlp", "down_proj", ("mlp.gate_proj", "mlp.up_proj")),
+    ],
+)
+def test_a_group_kernel_that_refuses_leaves_the_single_kernel_in_place(group, saved, kept):
+    from peft import LoraConfig, get_peft_model
+    from transformers import LlamaConfig, LlamaForCausalLM
+
+    torch.manual_seed(0)
+    config = LlamaConfig(
+        vocab_size=64,
+        hidden_size=32,
+        intermediate_size=64,
+        num_hidden_layers=1,
+        num_attention_heads=4,
+        num_key_value_heads=4,
+        max_position_embeddings=64,
+    )
+    targets = [path.rsplit(".", 1)[-1] for path in kept]
+    lora = LoraConfig(r=4, lora_alpha=8, target_modules=targets, modules_to_save=[saved])
+    model = get_peft_model(LlamaForCausalLM(config), lora)
+    assert fast_lora.patch_fast_lora_single_projection(model) == 2
+    # The modules_to_save copy makes the group kernel refuse the block ...
+    assert PATCHERS[group][0](model) == 0
+    # ... and a block it refused keeps the single-projection kernel.
+    x = torch.randn(1, 3, 32, requires_grad=True)
+    for path in kept:
+        out = _layer(model).get_submodule(path)(x)
+        assert type(out.grad_fn).__name__ == "_FastLoraSingleProjectionBackward", path
+    assert fast_lora.unpatch_fast_lora_single_projection(model) == 2
+
+
 def test_the_single_projection_kernel_skips_what_a_group_kernel_owns():
     model = _model()
     fast_lora_qkv.patch_fast_lora_qkv(model)

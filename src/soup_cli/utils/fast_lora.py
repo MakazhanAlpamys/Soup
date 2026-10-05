@@ -20,9 +20,9 @@ What this module establishes for the sibling paths:
   (DoRA/VeRA and friends produce tuple results the hand-written backward does
   not model), dropout is non-zero, or the call shape is not a plain ``(x)``.
 
-The patch covers only the single-projection path. When the QKV and MLP
-patchers land they have to run first (or mark their modules) so those shapes
-do not fall into this path.
+The patch covers only the single-projection path. Which kernel a projection
+gets when the QKV or MLP patcher also wants it is written once, in the comment
+above ``_GROUP_PATCH_OWNER_MARKER`` below.
 
 The patched forward reads the base weight at call time on purpose: streamed
 layers substitute weights via ``functional_call`` only for the duration of a
