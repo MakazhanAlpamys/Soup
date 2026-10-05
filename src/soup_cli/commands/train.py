@@ -246,7 +246,9 @@ def _build_hardware_fit_input(cfg):
     seq_len = getattr(cfg.data, "max_length", None)
     if not isinstance(seq_len, int) or isinstance(seq_len, bool):
         return None
-    quant = {"none": "none", "4bit": "4bit", "8bit": "8bit"}.get(
+    # #1631: mxfp4 is dequantized on load and trains in bf16, so it is priced
+    # (and gated) like "none". The formats that stay packed are still skipped.
+    quant = {"none": "none", "4bit": "4bit", "8bit": "8bit", "mxfp4": "mxfp4"}.get(
         str(getattr(tcfg, "quantization", "none") or "none")
     )
     if quant is None:
