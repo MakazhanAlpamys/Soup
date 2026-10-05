@@ -18,7 +18,10 @@ from soup_cli.utils.gpu import (
     resolve_device_map,
     resolve_frozen_base_load_dtype,
 )
-from soup_cli.utils.mixed_precision import align_trainable_dtype_for_fp16
+from soup_cli.utils.mixed_precision import (
+    align_trainable_dtype_for_fp16,
+    keep_trainable_dtype_on_resume,
+)
 from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
 
 console = Console()
@@ -441,6 +444,8 @@ class DPOTrainerWrapper(StreamingSetupMixin):
                 fp16=getattr(self.trainer.args, "fp16", False),
                 bf16=getattr(self.trainer.args, "bf16", False),
             )
+            if resume_from_checkpoint is not None:
+                keep_trainable_dtype_on_resume(self.trainer)
             self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
         duration = time.time() - start
 
