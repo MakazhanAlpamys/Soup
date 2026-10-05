@@ -1236,27 +1236,12 @@
       "training.lora.r": 16,
       "training.lr": 0.0002
     },
-    "minimax-m3-dpo": {
-      "base": "MiniMaxAI/MiniMax-M3",
-      "data.format": "dpo",
-      "data.max_length": 4096,
-      "data.train": "./data/preference_train.jsonl",
-      "task": "dpo",
-      "training.batch_size": 1,
-      "training.epochs": 1,
-      "training.gradient_accumulation_steps": 16,
-      "training.gradient_checkpointing": true,
-      "training.lora.alpha": 64,
-      "training.lora.dropout": 0.0,
-      "training.lora.r": 32,
-      "training.lr": 5e-06,
-      "training.moe_lora": true
-    },
     "minimax-m3-sft": {
       "base": "MiniMaxAI/MiniMax-M3",
       "data.format": "auto",
       "data.max_length": 4096,
       "data.train": "./data/train.jsonl",
+      "modality": "vision",
       "training.batch_size": 1,
       "training.epochs": 1,
       "training.gradient_accumulation_steps": 16,
@@ -1264,8 +1249,7 @@
       "training.lora.alpha": 64,
       "training.lora.dropout": 0.0,
       "training.lora.r": 32,
-      "training.lr": 1e-05,
-      "training.moe_lora": true
+      "training.lr": 1e-05
     },
     "ministral-sft": {
       "base": "mistralai/Ministral-8B-Instruct-2410",
@@ -1293,42 +1277,12 @@
       "training.lora.r": 16,
       "training.lr": 0.0002
     },
-    "mistral-large-3-dpo": {
-      "base": "mistralai/Mistral-Large-3-675B-Instruct-2512",
-      "data.format": "dpo",
-      "data.max_length": 4096,
-      "data.train": "./data/preference_train.jsonl",
-      "task": "dpo",
-      "training.batch_size": 1,
-      "training.epochs": 1,
-      "training.gradient_accumulation_steps": 32,
-      "training.gradient_checkpointing": true,
-      "training.lora.alpha": 64,
-      "training.lora.dropout": 0.0,
-      "training.lora.r": 32,
-      "training.lr": 5e-06,
-      "training.moe_lora": true
-    },
-    "mistral-large-3-sft": {
-      "base": "mistralai/Mistral-Large-3-675B-Instruct-2512",
-      "data.format": "auto",
-      "data.max_length": 4096,
-      "data.train": "./data/train.jsonl",
-      "training.batch_size": 1,
-      "training.epochs": 1,
-      "training.gradient_accumulation_steps": 32,
-      "training.gradient_checkpointing": true,
-      "training.lora.alpha": 64,
-      "training.lora.dropout": 0.0,
-      "training.lora.r": 32,
-      "training.lr": 5e-06,
-      "training.moe_lora": true
-    },
     "mistral-medium-3-5-sft": {
       "base": "mistralai/Mistral-Medium-3.5-128B",
       "data.format": "auto",
       "data.max_length": 4096,
       "data.train": "./data/train.jsonl",
+      "modality": "vision",
       "training.epochs": 2,
       "training.gradient_checkpointing": true,
       "training.lora.alpha": 32,

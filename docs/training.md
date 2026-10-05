@@ -442,7 +442,9 @@ soup train --config soup.yaml
 # Cross-tokenizer distillation for DIFFERENT tokenizers, e.g. Llama -> Mistral,
 # no shared vocab needed (v0.71.18). Aligns student/teacher token sequences
 # over decoded character spans, so you can distill a GPT-2 BPE student from a
-# Llama SentencePiece teacher.
+# Llama SentencePiece teacher. A student token with no teacher counterpart
+# (a byte-fallback piece, an empty piece, a student-only special token) has
+# no target and is left out of the loss.
 #   training:
 #     uld_strategy: wasserstein_aligned
 
@@ -502,14 +504,14 @@ tokenizer-specific rather than vocabulary-agnostic.
 
 ### Closed-loop reward-hacking auto-mitigation (v0.71.26)
 
-The detectors above *halt*; `training.reward_hack_mitigation` (or the `--reward-hack-mitigation` flag) makes the trainer *self-correct* mid-run. It requires `reward_hack_detector` on a `grpo`/`ppo` transformers run, and has four modes:
+The detectors above *halt*; `training.reward_hack_mitigation` (or the `--reward-hack-mitigation` flag) makes the trainer *self-correct* mid-run. It requires `reward_hack_detector` on a `grpo` transformers run, and has four modes:
 
 - **`log_only`** — observe only. Appends a per-step `mitigation_log.jsonl` under the run's output dir (the InfoRM/ensemble drop, the OK/WARN/HACK verdict, reward mean/std, completion-length trend, repetition) and provably never mutates β. Run this first to *see* hacking before you let a controller act on it.
 - **`kl_control`** — a reversible **bang-bang + hysteresis** controller. When a multi-signal vote (`reward_hack_signals`: the detector drop + `length_trend` + `repetition`) stays above `reward_hack_trip_band` for `reward_hack_dwell_steps`, it multiplies β by `reward_hack_kl_gain` (clamped to `[reward_hack_beta_floor > 0, reward_hack_beta_ceil]`, never crossing 0); after `reward_hack_release_patience` below-band steps it relaxes β back toward the floor. Dwell + release-patience stop it flapping. β is written to **both** `trainer.beta` and `trainer.args.beta` so it takes effect on stock GRPO *and* Soup's GRPO variants (and `trainer.args.kl_coef` on PPO).
 - **`pid_lagrangian`** — a **PID-Lagrangian** controller (Stooke et al. 2020) that holds the hacking signal at `reward_hack_signal_target` (Kp/Ki/Kd with integral anti-windup via `reward_hack_integral_clamp`), plus an **escalation ladder**: raise β → after `reward_hack_rollback_patience` persistent-HACK steps roll back to the last-good RL checkpoint (needs `rl_checkpoint_save_every_steps`) → after `reward_hack_max_recovery_attempts` rollbacks, early-stop with a plain-English give-up explanation.
 - **Anti-gaming hardening** (any control mode): `reward_hack_signal_smoothing` (`ema`/`median` over `reward_hack_smoothing_window`), `reward_hack_conservative_on_disagreement` (when detectors disagree, keep KL high + guard against a bimodal reward-distribution collapse), and `reward_hack_reward_shaping` (subtract a bounded `reward_hack_shaping_strength` penalty on the gamed proxy — `length`/`repetition`/`sentinel` — over the reward-fn seam).
 
-**Scope:** proof-of-mechanism only. Validated on SmolLM2-135M + a synthetic length-hacking task on a single RTX 3050 (all four modes live, including a real mid-run rollback). PPO ships **BETA** — the buffer + `kl_coef` mutation are wired and unit-tested, but the on-GPU proof is GRPO-only. Whether the loop suppresses hacking without collapsing true reward on 7B+ with a real reward model is an open, community-validatable question. `reward_hack_mitigation ∈ {kl_control, pid_lagrangian}` is mutually exclusive with `ref_model_ema_alpha` (both drive the KL/ref dynamics).
+**Scope:** proof-of-mechanism only. Validated on SmolLM2-135M + a synthetic length-hacking task on a single RTX 3050 (all four modes live, including a real mid-run rollback). The on-GPU proof is GRPO-only. **On `task: ppo` the reward-hacking and echo-trap flags are refused** (`reward_hack_detector`, `reward_hack_mitigation`, `echo_trap_enabled`): the trl PPO trainer this build supports takes no reward functions, so the reward/completion signal those callbacks read is never captured, and a run carrying them would be announced and then inert. Whether the loop suppresses hacking without collapsing true reward on 7B+ with a real reward model is an open, community-validatable question. `reward_hack_mitigation ∈ {kl_control, pid_lagrangian}` is mutually exclusive with `ref_model_ema_alpha` (both drive the KL/ref dynamics).
 
 Every detector composes with v0.34 `soup why` (anomaly explainer), v0.32 spike recovery, and the v0.53.11 #127 `GRPOStabilityCallback` so a single GRPO run can have InfoRM + echo-trap + spike-recovery + in-place ref-model EMA all active simultaneously without duplicating trajectory / state collection. The reward-hack and echo-trap callbacks read the per-step rewards through a shared, thread-safe capture buffer (Soup wraps your reward functions so it never has to monkeypatch TRL); `rm_ensemble` needs ≥2 reward functions to compute a divergence. The MiniLLM teacher-mix is an offline distribution-blend analog of the paper's on-policy teacher-mixed *sampling*, and ULD compares the distributions after clamping teacher ids to the teacher vocab (correct for same-family / extended-vocab pairs; a genuinely different tokenization needs a sequence-alignment step). The reference-model EMA (`--ref-model-ema-alpha`) updates in place — no full `state_dict` round-trip — so it is cheap at 70B+ scale.
 
@@ -544,6 +546,21 @@ soup eval unlearning <run-id> --benchmark tofu --evidence evidence.json --output
 ```
 
 `task: unlearn` is live (v0.71.9): it loads a LoRA-wrapped policy, a frozen reference copy (NPO / RMU), and the forget / retain JSONL sets, then optimises the per-method loss — NPO's `(2/β)·mean(-logσ(-β·(π_logp − ref_logp)))` drives the policy's forget-set log-prob below the reference (= forgetting), while the retain set anchors capability. Run NPO/SimNPO **with** a `retain_set` — without one the policy has no utility anchor and Soup warns loudly.
+
+Unlearning honors `training.optimizer`, `scheduler`, `warmup_ratio`, `weight_decay`,
+`max_grad_norm`, `batch_size` and `gradient_accumulation_steps`. The default
+`batch_size: auto` resolves to 1 for unlearning rather than to the memory estimate
+the other trainers use, so a config makes the same number of updates on any card. This
+memory-constrained loop processes one example at a time and accumulates gradients
+for `batch_size * gradient_accumulation_steps` examples per optimizer update;
+a final partial group is averaged by its actual size. `initial_loss` and
+`final_loss` remain unscaled per-example losses, and `total_steps` and the 2,000-step
+budget continue to count examples rather than optimizer updates.
+
+`data.max_length` now controls forget and retain tokenization instead of the old
+256-token cap. Its default is 2,048, so existing configurations can use more memory
+and take longer. Set `data.max_length: 256` to retain the old sequence-length limit,
+or explicitly choose a value that fits the model and device.
 
 Three orthogonal axes: **Forget Quality** (pre/post forget-loss delta), **Model Utility** (retain-accuracy preserved), **PrivLeak** (membership-inference AUC distance from 0.5). Bundled mini-fixtures for all three benchmarks ship in the box (v0.71.1 added MUSE + WMDP alongside the existing TOFU set), so `--benchmark muse|wmdp` runs without supplying evidence. The WMDP forget-set probes ship **redacted** (placeholder prompts + `REFUSED` responses) — Soup never bundles verbatim hazardous-knowledge content.
 
@@ -665,7 +682,7 @@ modality: text
 backend: transformers
 
 data:
-  train: ./data/labelled.jsonl   # rows: {"text": "...", "label": "spam"} or {"text": "...", "label": [0, 1, 0]}
+  train: ./data/labelled.jsonl   # rows: {"text": "...", "label": "spam"} or {"text": "...", "label": [0, 2]}
   max_length: 256
 
 training:
@@ -676,6 +693,11 @@ training:
   lr: 2e-5
   batch_size: 32
 ```
+
+**Row shapes by task:**
+- `task: classifier`: Single-input sequences via `{"text": "sample", "label": 1}` or `{"text": "sample", "label": "spam"}` (also accepts ChatML rows carrying `label`). Multi-label datasets pass lists of active label indices or names: `{"text": "sample", "label": [0, 2]}` or `{"text": "sample", "label": ["ham", "promo"]}`.
+- `task: reranker`: Query and document text via `{"text": "query doc", "label": "relevant"}` (or an integer class index).
+- `task: cross_encoder`: Paired inputs via `{"text_a": "query", "text_b": "doc", "label": 1}` or `{"question": "query", "answer": "doc", "label": 1}`.
 
 Routes `classifier` / `reranker` / `cross_encoder` through
 `AutoModelForSequenceClassification`. Multi-label heads cap at 1024 entries per
@@ -900,7 +922,9 @@ The judge is Soup's own OpenAI-compatible `JudgeEvaluator` adapted to TRL's
 B,A orders agree). Recipe: `online-dpo-smollm2-135m`. Proof-of-mechanism was
 validated on SmolLM2-135M with a synthetic judge (not a production RLHF claim; #286).
 An `https://` judge URL uses `OPENAI_API_KEY` only when its host is `api.openai.com`; other
-hosts are called as an OpenAI-compatible server without that key.
+hosts are called as an OpenAI-compatible server without that key. An `online_dpo_judge` whose
+host is a private, link-local or reserved IP literal is refused when soup.yaml loads (loopback
+stays allowed); address an internal judge by its hostname.
 
 A pair the judge cannot rank is left out of the loss: a tie, a failed or unreadable judge
 call, or a verdict that changes when the two completions are swapped. Such a pair adds no
@@ -929,10 +953,14 @@ training:
     simpo: 0.4
 ```
 
-The combine wrapper reads policy + reference summed log-probs from the inner
-TRL trainer's per-batch inputs and computes a true weighted sum via the
-in-tree `compute_dpo_term` / `compute_simpo_term` / `compute_orpo_term` /
-`compute_ipo_term` kernels. BCO cannot be mixed with paired losses (data
+The combine wrapper computes a weighted sum via the in-tree
+`compute_dpo_term` / `compute_simpo_term` / `compute_orpo_term` /
+`compute_ipo_term` kernels. **On trl 0.29 no preference trainer puts the
+per-sequence log-probs those kernels need on the batch**, so a blend currently
+stops at the first step and names the terms it could not compute. Until the
+wrapper reads the logits from the trainer's own forward pass, do not configure
+`preference_loss_weights`: remove it and set `training.preference_loss` to the
+single loss you want. BCO cannot be mixed with paired losses (data
 format incompatible — rejected at config load).
 
 
@@ -1004,6 +1032,11 @@ training:
 ```json
 {"image": "chart.png", "conversations": [{"from": "human", "value": "<image>\nWhat does this show?"}, {"from": "gpt", "value": "Quarterly revenue."}]}
 ```
+
+A relative `image` path resolves against `data.image_dir`, or against the data file's
+directory when it is unset. A Hub dataset or a remote URI has no data file directory, so set
+`data.image_dir` when its rows hold image paths; see
+[Data Pipeline Pro](data.md#data-pipeline-pro).
 
 `soup data inspect` automatically shows image statistics (count, formats, missing files) for vision datasets.
 
@@ -1240,11 +1273,11 @@ training:
   preference_loss_weights: {dpo: 0.7, bco: 0.3}
 ```
 
-Schema validates 2–5 entries summing to 1. Live runtime weighted-loss
-combination is wired in v0.40.1; v0.40.0 fails fast with an actionable
-`NotImplementedError` if you actually try to train (same stub-then-live
-pattern as v0.27.0 MII / v0.37.0 multipack / v0.38.0 quant menu /
-v0.39.0 ReLoRA).
+Schema validates 2–5 entries summing to 1, and rejects `bco` mixed with a
+paired loss at config load. The runtime blend is **not** live on trl 0.29: the
+config loads, then training stops at the first step naming the terms it could
+not compute (see [Weighted Multi-Objective Preference Loss](#weighted-multi-objective-preference-loss)).
+Set `training.preference_loss` for a single loss.
 
 
 ## GRPO Training (Reasoning)
@@ -1594,6 +1627,8 @@ training:
   quantization: 4bit
 ```
 
+**Batch size.** KTO needs a per-device `batch_size` of at least 2: TRL's KL term is degenerate at batch 1, so `batch_size: 1` is refused when the config is loaded. `batch_size: auto` never resolves below 2, and `soup local-rl train --train-method kto` writes `batch_size: 2`. Raise `gradient_accumulation_steps` for a larger effective batch.
+
 **KTO data format:**
 ```json
 {"prompt": "What is 2+2?", "completion": "4", "label": true}
@@ -1644,6 +1679,15 @@ training:
     alpha: 16
   quantization: 4bit
 ```
+
+**Rows whose completion trl truncates away are refused.** trl's CPO trainer
+truncates each answer to `data.max_length` minus the **longer** answer's length,
+so a long `chosen` beside a short `rejected` leaves the short side with zero
+trainable tokens — SimPO's length-normalised log-probability is then 0/0, every
+adapter tensor trains to NaN, and transformers' nan-inf filter reports the loss
+as `0.0`. `soup train` stops before the first step, naming how many rows and
+which, with the `data.max_length` involved. Raise `data.max_length`, balance the
+pair, or drop the row.
 
 
 ## IPO Training (Regularized Preference)
@@ -1942,7 +1986,7 @@ training:
   mod_capacity_factor: 0.125
 
   # LLaMA Pro: append zero-initialised identity decoder blocks and train only the new
-  # ones (freeze_trainable_layers freezes the originals).
+  # ones (freeze_trainable_layers freezes the originals). Needs quantization: none.
   expand_layers: 4
   freeze_trainable_layers: 4
 ```

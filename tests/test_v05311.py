@@ -525,6 +525,8 @@ class TestWeightedCombineHook:
             )
 
     def test_blended_loss_scales_with_weight(self):
+        """#1425: this asserted `2.0 * 0.7`, i.e. the silent primary-only
+        fallback. It now refuses; `inputs=None` is the shape it exercised."""
         from soup_cli.utils.preference_combine import (
             attach_weighted_preference_combine,
         )
@@ -537,9 +539,9 @@ class TestWeightedCombineHook:
         attach_weighted_preference_combine(
             trainer, {"dpo": 0.7, "simpo": 0.3}
         )
-        # Primary is dpo (highest weight). Loss = 2.0 * 0.7 = 1.4
-        out = trainer.compute_loss(None, None)
-        assert float(out) == pytest.approx(1.4)
+        with pytest.raises(ValueError) as excinfo:
+            trainer.compute_loss(None, None)
+        assert "cannot compute" in str(excinfo.value)
 
 
 # ---------------------------------------------------------------------------
@@ -756,23 +758,30 @@ class TestGRPOVariantRuntimeContract:
     def test_real_trl_grpotrainer_end_to_end_step(self, tmp_path, aten_half_matmuls):
         """End-to-end single step with real trl.GRPOTrainer and tiny model."""
         from datasets import Dataset
-        from transformers import AutoTokenizer, GPT2Config, GPT2LMHeadModel
+        from transformers import GPT2Config, GPT2LMHeadModel
         from trl import GRPOConfig, GRPOTrainer
 
         from soup_cli.trainer.grpo import make_grpo_trainer_variant
+        from tests._tiny_hf_models import build_tokenizer
 
+        # #1356: a tokenizer built locally (no download) stands in for the
+        # real "gpt2" tokenizer -- vocab_size matches it rather than a
+        # hardcoded 50257, since nothing here depends on real BPE merges.
+        # Dropout 0 and a 1-layer/1-head shape are specific to this test
+        # (deterministic, minimal), so the model stays file-local.
+        tokenizer = build_tokenizer(
+            ("Hello", "World", "hello world"), eos="<|endoftext|>"
+        )
         config = GPT2Config(
             n_layer=1,
             n_head=1,
             n_embd=32,
-            vocab_size=50257,
+            vocab_size=len(tokenizer),
             attn_pdrop=0.0,
             resid_pdrop=0.0,
             embd_pdrop=0.0,
         )
         model = GPT2LMHeadModel(config)
-        tokenizer = AutoTokenizer.from_pretrained("gpt2")
-        tokenizer.pad_token = tokenizer.eos_token
         dataset = Dataset.from_dict({"prompt": ["Hello", "World"]})
 
         training_args = GRPOConfig(
@@ -882,7 +891,12 @@ class TestTrueWeightedCombine:
         assert float(out) != 99.0
         assert math.isfinite(float(out))
 
-    def test_falls_back_when_logps_missing(self):
+    def test_refuses_when_logps_missing(self):
+        """#1425: no trl 0.29 trainer puts log-probs on the batch.
+
+        This used to return `primary * primary_weight` — training only the
+        highest-weighted loss while reporting a blended number, silently.
+        """
         from soup_cli.utils.preference_combine import (
             attach_weighted_preference_combine,
         )
@@ -895,9 +909,120 @@ class TestTrueWeightedCombine:
         attach_weighted_preference_combine(
             trainer, {"dpo": 0.7, "simpo": 0.3}
         )
-        # No logps → fallback to primary scaling.
-        out = trainer.compute_loss(model=None, inputs={})
-        assert float(out) == pytest.approx(2.0 * 0.7)
+        # No logps -> refuse, naming the terms, instead of scaling silently.
+        with pytest.raises(ValueError) as excinfo:
+            trainer.compute_loss(model=None, inputs={})
+        message = str(excinfo.value)
+        assert "dpo" in message and "simpo" in message, message
+        assert "preference_loss_weights" in message, message
+
+    def test_refusal_names_only_the_terms_it_could_not_compute(self):
+        """Policy logps present, reference ones absent: `simpo` computes and
+        only `dpo` is named as missing."""
+        from soup_cli.utils.preference_combine import (
+            attach_weighted_preference_combine,
+        )
+
+        class _Trainer:
+            def compute_loss(self, model, inputs, return_outputs=False):
+                return torch.tensor(2.0)
+
+        trainer = _Trainer()
+        attach_weighted_preference_combine(
+            trainer, {"dpo": 0.7, "simpo": 0.3}
+        )
+        inputs = {
+            "policy_chosen_logps": torch.tensor([0.0, 0.1]),
+            "policy_rejected_logps": torch.tensor([-0.5, -0.6]),
+        }
+        with pytest.raises(ValueError) as excinfo:
+            trainer.compute_loss(model=None, inputs=inputs)
+        message = str(excinfo.value)
+        # Pinned whole, not "cannot compute dpo": that substring also occurs in
+        # "cannot compute dpo, simpo", so a mutation that named every requested
+        # term as missing would survive a looser assertion (#1425 review).
+        assert "cannot compute dpo on this step (computed: simpo)" in message, message
+
+
+class TestOnARealTrlTrainer:
+    """The stub trainer above is why this passed: it is the only way the wrapper
+    sees log-probs. On a real trl 0.29 trainer the batch carries none, so a blend
+    must stop instead of training the primary loss alone (#1425 review).
+
+    On `main` these fail, because training completes: the loss is
+    `0.7 * DPO` and the run reports success.
+    """
+
+    _WORDS = [
+        "<pad>", "<s>", "</s>", "<unk>", "what", "is", "one", "plus", "?",
+        "two", "three", "hello", "there", "hi", "no",
+    ]
+
+    def _tiny_model_dir(self, tmp_path):
+        """A random-init 2-layer Llama plus a WordLevel tokenizer (#1425 repro)."""
+        try:
+            from soup_cli.trainer._trl_compat import resolve_trl_symbol
+
+            resolve_trl_symbol("DPOConfig")
+        except Exception as exc:  # noqa: BLE001 — a broken trl is not a failure
+            pytest.skip(f"this environment cannot import a trl DPO config: {exc}")
+
+        import torch
+        from tokenizers import Tokenizer, models, pre_tokenizers
+        from transformers import (
+            LlamaConfig,
+            LlamaForCausalLM,
+            PreTrainedTokenizerFast,
+        )
+
+        base = tmp_path / "tiny"
+        words = list(self._WORDS)
+        raw = Tokenizer(
+            models.WordLevel(vocab={w: i for i, w in enumerate(words)}, unk_token="<unk>"),
+        )
+        raw.pre_tokenizer = pre_tokenizers.Whitespace()
+        tok = PreTrainedTokenizerFast(
+            tokenizer_object=raw, bos_token="<s>", eos_token="</s>",
+            pad_token="<pad>", unk_token="<unk>",
+        )
+        torch.manual_seed(0)
+        LlamaForCausalLM(LlamaConfig(
+            vocab_size=len(words), hidden_size=32, intermediate_size=64,
+            num_hidden_layers=2, num_attention_heads=2, num_key_value_heads=2,
+            pad_token_id=0, bos_token_id=1, eos_token_id=2,
+        )).save_pretrained(base)
+        tok.save_pretrained(base)
+        return base
+
+    @pytest.mark.parametrize(
+        "weights", ["{dpo: 0.7, simpo: 0.3}", "{simpo: 0.6, dpo: 0.4}"],
+    )
+    def test_a_blend_on_a_real_trainer_refuses_instead_of_training_one_loss(
+        self, tmp_path, monkeypatch, weights,
+    ):
+        from soup_cli.config.loader import load_config_from_string
+        from soup_cli.trainer.preference import PreferenceTrainerWrapper
+
+        monkeypatch.chdir(tmp_path)
+        base = self._tiny_model_dir(tmp_path)
+        cfg = load_config_from_string(
+            f"base: {base.as_posix()}\ntask: preference\n"
+            "data: {train: ./unused.jsonl, format: dpo, max_length: 64}\n"
+            "training:\n  epochs: 1\n  batch_size: 2\n  quantization: none\n"
+            f"  preference_loss_weights: {weights}\n"
+            "  lora: {r: 4, alpha: 8, dropout: 0.0}\noutput: ./out\n"
+        )
+        rows = [
+            {"prompt": "what is one plus one ?", "chosen": "two", "rejected": "three"},
+            {"prompt": "hello there", "chosen": "hi", "rejected": "no"},
+        ] * 2
+        wrapper = PreferenceTrainerWrapper(cfg, device="cpu")
+        wrapper.setup({"train": rows})
+        with pytest.raises(ValueError, match="cannot compute") as excinfo:
+            wrapper.train()
+        message = str(excinfo.value)
+        assert "dpo" in message and "simpo" in message, message
+        assert "preference_loss_weights" in message, message
 
 
 # ---------------------------------------------------------------------------

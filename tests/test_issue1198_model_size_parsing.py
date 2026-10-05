@@ -34,6 +34,7 @@ _UNRESOLVABLE_CATALOG_REASONS = {
     "microsoft/phi-4": "Model ID specifies release 'phi-4' without parameter count (14B).",
     "mistralai/Devstral-Small-2507": "Uses 'Small-2507' descriptor rather than param count (24B).",
     "mistralai/Magistral-Small": "Uses 'Small' descriptor rather than param count (24B).",
+    "mistralai/Voxtral-Mini-3B-2507": "Model ID specifies '3B' but multimodal weights total 4.7B.",
     "moonshotai/Kimi-K2-Base": "Version 'K2-Base' carries no parameter count (size N/A).",
     "moonshotai/Kimi-K2-Thinking": "Reasoning variant of K2 with no parameter count (size N/A).",
     "moonshotai/Kimi-K2.5": "Model ID specifies version 'K2.5' without parameter count (1T).",
@@ -45,15 +46,6 @@ _UNRESOLVABLE_CATALOG_REASONS = {
     "zai-org/GLM-5.1": "Model ID specifies release '5.1' without parameter count (754B).",
 }
 
-# Hub safetensors totals for catalog bases whose recipe label is NOT the total
-# parameter count (#1161 / #1168), so the label cannot be the yardstick for them.
-_KNOWN_TOTAL_B = {
-    "meta-llama/Llama-4-Scout-17B-16E-Instruct": 108.6,  # label 17B is the active count
-    "deepseek-ai/DeepSeek-V3-0324": 684.5,  # deepseek-v3-7b-sft, label 7B
-    "zai-org/GLM-5": 753.9,  # label 9B
-    "MiniMaxAI/MiniMax-M2": 228.7,  # label 9B
-    "zai-org/GLM-4.6": 356.8,  # label 9B
-}
 
 
 
@@ -178,9 +170,9 @@ class TestIssue1198HubModelSizeParsing:
         assert model_size_from_name("ise-uiuc/Magicoder-S-DS-6.7B") == 6.7
 
     def test_every_allowlisted_base_is_still_used(self) -> None:
-        """Ensure every base in allowlist and _KNOWN_TOTAL_B is actually used in RECIPES."""
+        """Ensure every base in allowlist is actually used in RECIPES."""
         used = {recipe.model for recipe in RECIPES.values()}
-        stale = sorted((set(_UNRESOLVABLE_CATALOG_REASONS) | set(_KNOWN_TOTAL_B)) - used)
+        stale = sorted(set(_UNRESOLVABLE_CATALOG_REASONS) - used)
         assert not stale, f"allowlist names bases no recipe uses: {stale}"
 
     def test_recipe_catalog_resolution_or_allowlist(self) -> None:
@@ -200,7 +192,6 @@ class TestIssue1198HubModelSizeParsing:
                 val = float(size_match.group(1))
                 unit = size_match.group(2)
                 expected_b = val if unit == "B" else val / 1000.0
-                expected_b = _KNOWN_TOTAL_B.get(model, expected_b)
                 rel_diff = abs(parsed - expected_b) / expected_b
 
                 if rel_diff > 0.10:

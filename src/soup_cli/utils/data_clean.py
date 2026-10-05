@@ -239,6 +239,12 @@ def _clean_tool_calls(
     return cleaned_calls
 
 
+def _has_tool_calls(msg: Dict[str, Any]) -> bool:
+    """True when a turn carries at least one tool call (a non-empty list)."""
+    calls = msg.get("tool_calls")
+    return isinstance(calls, list) and len(calls) > 0
+
+
 def _clean_turn_tool_calls(
     msg: Dict[str, Any], applied_rules: List[str], repair_json: bool, drop_invalid_json: bool
 ) -> bool:
@@ -345,7 +351,13 @@ def clean_row(
                         if was_cr:
                             applied_rules.append("Markdown Code Fence Repair")
 
-                    if len(sanitized_content.strip()) < min_tokens:
+                    # #1477 - a call-only turn carries its payload in tool_calls,
+                    # and "" is what the unified tool-calling format writes there;
+                    # keep it as the same turn with content null is kept.
+                    if (
+                        not _has_tool_calls(msg)
+                        and len(sanitized_content.strip()) < min_tokens
+                    ):
                         return None, ["Empty / Whitespace Turns"]
 
                     msg["content"] = sanitized_content

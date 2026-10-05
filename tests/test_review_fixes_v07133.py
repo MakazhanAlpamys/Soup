@@ -177,6 +177,11 @@ class TestAdapterScope:
         model = self._run(None, None, {"chat"})
         assert model.disable_calls == 1
 
+    def test_empty_selection_overrides_active_with_base(self):
+        model = self._run("", "chat", {"chat"})
+        assert model.set_calls == []
+        assert model.disable_calls == 1
+
     def test_no_adapters_is_noop(self):
         model = self._run("chat", "chat", set())
         assert model.set_calls == []

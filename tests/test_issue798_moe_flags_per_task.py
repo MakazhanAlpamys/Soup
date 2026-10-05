@@ -354,7 +354,9 @@ class TestShippedConfigs:
             training = cfg.get("training") or {}
             if training.get("moe_lora") and cfg.get("task") in _MOE_TASKS:
                 tasks.append(cfg["task"])
-        assert sorted(tasks) == ["dpo"] * 9 + ["grpo"] * 8, sorted(tasks)
+        # #1145 removed mistral-large-3-dpo (its repo has no config.json) and
+        # minimax-m3-dpo (DPO cannot build its VL wrapper): 9 -> 7 dpo.
+        assert sorted(tasks) == ["dpo"] * 7 + ["grpo"] * 8, sorted(tasks)
 
 
 
@@ -654,16 +656,17 @@ class TestPerArchitectureCoverage:
         assert bool(experts) is self.EXPECTED[arch], (arch, experts)
 
     def test_the_uncovered_families_are_named_in_the_docs(self):
-        """MiniMax gets zero expert adapters, so `minimax-m3-sft` and
-        `minimax-m3-dpo` still train attention-only after this PR. That has to be
-        written down where a user looks, not only in a test."""
+        """MiniMax gets zero expert adapters, so `minimax-m3-sft` trains
+        attention-only. That has to be written down where a user looks, not only
+        in a test. (`minimax-m3-dpo` was removed in #1145: DPO cannot build the
+        `minimax_m3_vl` wrapper.)"""
         from pathlib import Path
 
         docs = (Path(__file__).resolve().parents[1]
                 / "docs" / "performance-and-quantization.md").read_text(encoding="utf-8")
         lowered = docs.lower()
-        assert "minimax-m3-sft" in lowered and "minimax-m3-dpo" in lowered, (
-            "the two recipes the wiring does not reach must be named in the docs"
+        assert "minimax-m3-sft" in lowered, (
+            "the recipe the wiring does not reach must be named in the docs"
         )
         assert "attention-only" in lowered, "and what they do instead"
 
@@ -737,4 +740,6 @@ class TestEveryMoeRecipeCanAttach:
             1 for r in RECIPES.values()
             if (yaml.safe_load(r.yaml_str).get("training") or {}).get("moe_lora")
         )
-        assert counted >= 31, counted
+        # 33 until #1145 removed mistral-large-3-sft/-dpo and minimax-m3-dpo, and took
+        # moe_lora off minimax-m3-sft (SFT's vision path never reads it).
+        assert counted >= 29, counted

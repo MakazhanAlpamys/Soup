@@ -7,7 +7,7 @@ import json
 import os
 import re
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated
+from typing import TYPE_CHECKING, Annotated, Any
 
 import typer
 from rich.console import Console
@@ -15,8 +15,13 @@ from rich.markup import escape as markup_escape
 from rich.panel import Panel
 
 from soup_cli.config.loader import load_config
-from soup_cli.data.loader import load_dataset
+from soup_cli.data.loader import (
+    data_config_for_task,
+    load_dataset,
+    task_preserves_source_columns,
+)
 from soup_cli.monitoring.display import TrainingDisplay
+from soup_cli.trainer.classifier import CLASSIFICATION_TASKS
 from soup_cli.utils.gpu import detect_device, get_gpu_info, resolve_quantization
 
 if TYPE_CHECKING:  # pragma: no cover - type hints only, no runtime import
@@ -73,11 +78,13 @@ def _format_training_complete_loss(result: dict) -> str:
     summary_kind = result.get("loss_summary_kind")
     if summary_kind == "unavailable":
         return "Loss: [bold]unavailable[/]"
+    loss_key = result.get("loss_key")
+    label = f" [dim]({loss_key})[/]" if isinstance(loss_key, str) else ""
     if summary_kind in {"mean", "single"} or (
         summary_kind is None and result["initial_loss"] == result["final_loss"]
     ):
-        return f"Loss: [bold]{result['final_loss']:.4f}[/]"
-    return f"Loss: [bold]{result['initial_loss']:.4f} -> {result['final_loss']:.4f}[/]"
+        return f"Loss: [bold]{result['final_loss']:.4f}[/]{label}"
+    return f"Loss: [bold]{result['initial_loss']:.4f} -> {result['final_loss']:.4f}[/]{label}"
 
 
 def _train_sample_count(dcfg, dataset) -> int:
@@ -104,6 +111,22 @@ def _train_sample_count(dcfg, dataset) -> int:
         return rows
     valid = isinstance(count, int) and not isinstance(count, bool) and count >= 0
     return count if valid else rows
+
+
+def _validate_classification_dataset_if_applicable(cfg: Any, dataset: dict) -> None:
+    """Validate sequence classification rows upfront if task is in CLASSIFICATION_TASKS."""
+    if cfg.task in CLASSIFICATION_TASKS:
+        from rich.markup import escape
+
+        from soup_cli.trainer.classifier import validate_classification_dataset
+
+        try:
+            validate_classification_dataset(cfg, dataset)
+        except (ValueError, TypeError) as exc:
+            console.print(
+                f"[red]Error validating {cfg.task} dataset:[/] {escape(str(exc))}"
+            )
+            raise typer.Exit(1) from exc
 
 
 def _refuse_empty_train(dcfg, dataset) -> None:
@@ -175,7 +198,7 @@ def _build_hardware_fit_input(cfg):
     if quant == "4bit":
         peft = "qlora"
     elif task == "prm" or (
-        task in ("classifier", "reranker", "cross_encoder")
+        task in CLASSIFICATION_TASKS
         and not (tcfg.classifier_lora and tcfg.lora.r > 0)
     ) or (task == "asr" and not (tcfg.asr_lora and tcfg.lora.r > 0)):
         # #795: these trainers decide full fine-tuning themselves -- PRM always,
@@ -575,7 +598,7 @@ def train(
         help=(
             "After training, run `soup diagnose` against the supplied evidence "
             "JSON (or scratch evidence). Refuses to mark the run successful "
-            "if any of the 6 v0.56.0 failure modes returns MAJOR."
+            "if any failure mode returns MAJOR (exit 2) or NOT_RUN (exit 3)."
         ),
     ),
     annex_xi: str = typer.Option(
@@ -1292,8 +1315,7 @@ def train(
 
     # v0.53.2 review-fix: classifier-family tasks train a sequence-classification
     # head, not a causal-LM LoRA — render "head" instead of LoRA r/alpha.
-    classifier_family = ("classifier", "reranker", "cross_encoder")
-    if cfg.task in classifier_family:
+    if cfg.task in CLASSIFICATION_TASKS:
         # v0.71.12 #146 — render BOTH the head line AND a LoRA line when the
         # opt-in classifier LoRA path is active.
         head_line = (
@@ -1517,10 +1539,11 @@ def train(
         if val_notice:
             console.print(f"[yellow]Note:[/] {val_notice}")
         dataset = load_dataset(
-            run_data_config,
-            preserve_source_columns=cfg.task == "grpo",
+            data_config_for_task(run_data_config, cfg.task),
+            preserve_source_columns=task_preserves_source_columns(cfg.task),
         )
         _refuse_empty_train(cfg.data, dataset)
+        _validate_classification_dataset_if_applicable(cfg, dataset)
         console.print(
             f"[green]Data OK:[/] {_train_sample_count(cfg.data, dataset)} train samples"
         )
@@ -1534,10 +1557,11 @@ def train(
     if val_notice:
         console.print(f"[yellow]Note:[/] {val_notice}")
     dataset = load_dataset(
-        run_data_config,
-        preserve_source_columns=cfg.task == "grpo",
+        data_config_for_task(run_data_config, cfg.task),
+        preserve_source_columns=task_preserves_source_columns(cfg.task),
     )
     _refuse_empty_train(cfg.data, dataset)
+    _validate_classification_dataset_if_applicable(cfg, dataset)
     console.print(
         f"[green]Loaded:[/] {_train_sample_count(cfg.data, dataset)} train samples"
     )
@@ -2112,8 +2136,8 @@ def _run_diagnose_gate(
     """Post-training failure-mode gate (v0.56.0).
 
     Loads a JSON ``evidence`` file with optional per-mode scores and
-    refuses to mark the run successful if any mode comes back MAJOR.
-    Missing modes fall back to a neutral OK score so partial evidence
+    refuses to mark the run successful if any mode comes back MAJOR (exit 2)
+    or NOT_RUN (exit 3, #1435). Missing modes fall back to a neutral OK score so partial evidence
     still produces a useful report card. The train command only calls
     this helper on the chief worker (RANK==0 in a multi-node launch, else
     LOCAL_RANK==0) so distributed runs execute the gate once per cluster,
@@ -2141,7 +2165,8 @@ def _run_diagnose_gate(
     if not isinstance(raw_scores, dict):
         raise ValueError("evidence.scores must be an object")
 
-    from soup_cli.utils.diagnose.report import classify_score
+    from soup_cli.utils.diagnose.report import classify_score, evidence_default_score
+    from soup_cli.utils.exit_codes import EXIT_USAGE_ERROR
 
     scores: dict = {}
     for mode in FAILURE_MODES:
@@ -2150,7 +2175,9 @@ def _run_diagnose_gate(
             continue
         if not isinstance(entry, dict):
             raise ValueError(f"scores.{mode} must be an object")
-        score = entry.get("score", 1.0)
+        score = entry.get("score", evidence_default_score(entry))
+        if isinstance(score, bool) or not isinstance(score, (int, float)):
+            raise ValueError(f"scores.{mode}.score must be a number")
         verdict = entry.get("verdict") or classify_score(score)
         scores[mode] = FailureScore(
             mode=mode,
@@ -2169,8 +2196,19 @@ def _run_diagnose_gate(
         for mode in FAILURE_MODES:
             sc = report.scores[mode]
             if sc.verdict == "MAJOR":
-                console.print(f"  [red]MAJOR[/] {mode}: {sc.evidence}")
+                console.print(f"  [red]MAJOR[/] {mode}: {markup_escape(sc.evidence)}")
         raise typer.Exit(2)
+    if report.overall == "NOT_RUN":
+        # An unmeasured mode is not a pass (#1435); same exit as `soup diagnose`.
+        console.print(
+            "[yellow]--diagnose-gate: one or more modes did not run (NOT_RUN); "
+            "the run is not verified.[/]"
+        )
+        for mode in FAILURE_MODES:
+            sc = report.scores[mode]
+            if sc.verdict == "NOT_RUN":
+                console.print(f"  [yellow]NOT_RUN[/] {mode}: {markup_escape(sc.evidence)}")
+        raise typer.Exit(EXIT_USAGE_ERROR)
     console.print(
         f"[green]--diagnose-gate: {report.overall}[/] across "
         f"{len(FAILURE_MODES)} modes."

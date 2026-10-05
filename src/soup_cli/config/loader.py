@@ -163,7 +163,8 @@ def load_config(
         console.print("[red bold]Config validation error:[/]\n")
         for err in e.errors():
             loc = " -> ".join(str(part) for part in err["loc"])
-            console.print(f"  [red]{loc}:[/] {err['msg']}")
+            # Both can quote config keys or values from the file.
+            console.print(f"  [red]{for_terminal(loc)}:[/] {for_terminal(err['msg'])}")
         raise SystemExit(1)
 
     staged_error = _report_staged_fields(raw, config=config)

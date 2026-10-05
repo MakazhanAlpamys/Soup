@@ -26,6 +26,7 @@ logger = logging.getLogger(__name__)
 console = Console()
 
 
+
 def _validate_adapter_name(name: str) -> bool:
     """Validate adapter name: alphanumeric + hyphens only."""
     if not name:
@@ -99,7 +100,13 @@ def serve(
     device: Optional[str] = typer.Option(
         None,
         "--device",
-        help="Device: cuda, mps, cpu. Auto-detected if not set.",
+        help=(
+            "Device: cuda, cuda:<index>, mps or cpu. Auto-detected if not set. "
+            "With the transformers backend, cpu loads on the CPU in float32 "
+            "(unless --kv-cache-type bf16/f16 picks the dtype); cuda:<index> "
+            "and mps are pinned to that device; cuda uses device_map=auto, "
+            "all in float16."
+        ),
     ),
     max_tokens_default: int = typer.Option(
         512,
@@ -454,6 +461,18 @@ def serve(
             )
             raise typer.Exit(code=2)
 
+    if device:
+        from rich.markup import escape as _rich_escape
+
+        from soup_cli.utils.gpu import resolve_inference_device_map_and_dtype
+
+        device = device.strip().lower()
+        try:
+            resolve_inference_device_map_and_dtype(device)
+        except ValueError as exc:
+            console.print(f"[red]--device:[/] {_rich_escape(str(exc))}")
+            raise typer.Exit(code=2) from exc
+
     # v0.53.10 #152 — pre-fetch base from a non-HF hub before serve starts.
     if hub and hub != "hf":
         from soup_cli.utils.hubs import apply_hub_to_cli_model
@@ -695,7 +714,7 @@ def serve(
     console.print(
         Panel(
             f"Model:   [bold]{model_path}[/]\n"
-            + (f"Base:    [bold]{base_model}[/]\n" if is_adapter else "")
+            + (f"Base:    [bold]{for_terminal(base_model)}[/]\n" if is_adapter else "")
             + f"Device:  [bold]{device}[/]\n"
             f"Type:    [bold]{'LoRA adapter' if is_adapter else 'Full model'}[/]\n"
             f"Backend: [bold]{backend_label}[/]"
@@ -1343,16 +1362,23 @@ def _load_model(
     """Load model and tokenizer.
 
     ``kv_cache_dtype`` (v0.71.14 #140) selects the model compute dtype so the
-    transformers DynamicCache runs in it: ``"bfloat16"`` → bf16, else the
-    default float16. The bf16/f16 ``kv_cache_type`` values map here; q8_0 uses
+    transformers DynamicCache runs in it: ``"bfloat16"`` → bf16, ``"float16"``
+    → fp16, else the default (float16; float32 on ``device="cpu"``). The
+    bf16/f16 ``kv_cache_type`` values map here; q8_0 uses
     a quantized cache via generate kwargs and leaves the model dtype unchanged.
     """
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
-    load_dtype = (
-        torch.bfloat16 if kv_cache_dtype == "bfloat16" else torch.float16
-    )
+    from soup_cli.utils.gpu import resolve_inference_device_map_and_dtype
+
+    device_map, default_dtype = resolve_inference_device_map_and_dtype(device)
+    if kv_cache_dtype == "bfloat16":
+        load_dtype = torch.bfloat16
+    elif kv_cache_dtype == "float16":
+        load_dtype = torch.float16
+    else:
+        load_dtype = default_dtype
 
     console.print("[dim]Loading tokenizer...[/]")
     tokenizer = AutoTokenizer.from_pretrained(
@@ -1364,11 +1390,11 @@ def _load_model(
     if is_adapter:
         from peft import PeftModel
 
-        console.print(f"[dim]Loading base model: {base_model}...[/]")
+        console.print(f"[dim]Loading base model: {for_terminal(base_model)}...[/]")
         base = AutoModelForCausalLM.from_pretrained(
             base_model,
             trust_remote_code=trust_remote_code,
-            device_map="auto",
+            device_map=device_map,
             torch_dtype=load_dtype,
         )
         console.print(f"[dim]Loading LoRA adapter: {model_path}...[/]")
@@ -1378,7 +1404,7 @@ def _load_model(
         model_obj = AutoModelForCausalLM.from_pretrained(
             model_path,
             trust_remote_code=trust_remote_code,
-            device_map="auto",
+            device_map=device_map,
             torch_dtype=load_dtype,
         )
 
@@ -1434,7 +1460,9 @@ def _adapter_scope(model, lock, names, requested, active):
     if not names or lock is None:
         yield
         return
-    name = requested or active
+    # An explicit empty string is the internal sentinel for the unadapted base.
+    # Test identity rather than truthiness so it overrides a manual full cutover.
+    name = active if requested is None else requested
     with lock:
         if name and name in names and hasattr(model, "set_adapter"):
             model.set_adapter(name)
@@ -1452,9 +1480,10 @@ def _load_draft_model(speculative_model: str, device: str):
     import os
     import re
 
-    import torch
     from rich.markup import escape
     from transformers import AutoModelForCausalLM
+
+    from soup_cli.utils.gpu import resolve_inference_device_map_and_dtype
 
     # SSRF protection: block URL-based model paths
     if re.match(r'^https?://', speculative_model):
@@ -1473,11 +1502,12 @@ def _load_draft_model(speculative_model: str, device: str):
 
         assert_safe_top_level_weights(speculative_model)
 
+    device_map, dtype = resolve_inference_device_map_and_dtype(device)
     console.print(f"[dim]Loading draft model: {escape(speculative_model)}...[/]")
     draft = AutoModelForCausalLM.from_pretrained(
         speculative_model,
-        device_map="auto" if device != "cpu" else "cpu",
-        torch_dtype=torch.float16 if device != "cpu" else torch.float32,
+        device_map=device_map,
+        torch_dtype=dtype,
     )
     draft.eval()
     return draft
@@ -1635,6 +1665,8 @@ def _create_app(
     loaded_bank: Any = None,
     mole_runtime: Any = None,
     kv_cache_generate_kwargs: Optional[Dict[str, Any]] = None,
+    canary_state_path: Optional[str] = None,
+    canary_stats_path: Optional[str] = None,
 ):
     """Create the FastAPI application with OpenAI-compatible endpoints.
 
@@ -1752,6 +1784,12 @@ def _create_app(
             default=None,
             description="Adapter name to use (from --adapters flag).",
         )
+        conversation_id: Optional[str] = Field(
+            default=None,
+            min_length=1,
+            max_length=512,
+            description="Stable key used by the soup loop canary router.",
+        )
 
     # Resolved adapter map (name → path)
     _adapter_map = adapter_map or {}
@@ -1772,6 +1810,55 @@ def _create_app(
     def _active_snapshot() -> Optional[str]:
         with active_lock:
             return active_state["active"]
+
+    def _canary_adapter(conversation_id: Optional[str]):
+        """Resolve one automatic canary route, or preserve normal activation."""
+        if not conversation_id or _mole_runtime is not None or not _peft_adapter_names:
+            return None, None
+        from soup_cli.utils.canary_router import CanaryPolicy, route
+        from soup_cli.utils.loop_state import read_state
+
+        try:
+            state = read_state(canary_state_path)
+            if state.canary_active is None or not state.canary_traffic_pct:
+                return None, None
+            policy = CanaryPolicy(
+                stable=state.served_model,
+                canary=state.canary_active,
+                traffic_pct=float(state.canary_traffic_pct),
+            )
+            decision = route(policy, conversation_id)
+        except (FileNotFoundError, OSError, TypeError, ValueError):
+            logger.debug("canary policy unavailable", exc_info=True)
+            return None, None
+        if decision.bucket == "canary":
+            if decision.adapter not in _peft_adapter_names:
+                logger.warning("canary adapter %r is not loaded", decision.adapter)
+                return None, None
+            return decision.adapter, (policy, decision.bucket, state.canary_rollout_id)
+        if decision.adapter in _peft_adapter_names:
+            return decision.adapter, (policy, decision.bucket, state.canary_rollout_id)
+        # The stable model normally is the unadapted base. An empty explicit
+        # selection makes _adapter_scope disable adapters even if a manual
+        # full-cutover adapter is active.
+        return "", (policy, decision.bucket, state.canary_rollout_id)
+
+    def _record_canary_outcome(tracking, ok: bool) -> None:
+        if tracking is None:
+            return
+        from soup_cli.utils.canary_router import record_bucket_outcome
+
+        policy, bucket, rollout_id = tracking
+        try:
+            record_bucket_outcome(
+                policy,
+                bucket,
+                ok,
+                rollout_id=rollout_id,
+                path=canary_stats_path,
+            )
+        except (OSError, TypeError, ValueError):
+            logger.warning("canary outcome write failed", exc_info=True)
 
     @app.get("/health")
     def health():
@@ -1847,9 +1934,15 @@ def _create_app(
     def chat_completions(
         request: ChatCompletionRequest,
         x_user_id: Optional[str] = Header(default=None, alias="X-User-Id"),
+        x_conversation_id: Optional[str] = Header(
+            default=None, alias="X-Conversation-Id"
+        ),
     ):
         # Check adapter selection (from request body)
-        requested_adapter = request.adapter
+        # Treat an empty public request value like an omitted adapter. The
+        # empty string is reserved internally as the explicit base-model
+        # sentinel used by keyed stable canary traffic.
+        requested_adapter = request.adapter or None
         if requested_adapter and _adapter_map:
             if requested_adapter not in _adapter_map:
                 raise HTTPException(
@@ -1861,6 +1954,13 @@ def _create_app(
                 status_code=404,
                 detail="No adapters loaded.",
             )
+        canary_tracking = None
+        if requested_adapter is None:
+            routed_adapter, canary_tracking = _canary_adapter(
+                request.conversation_id or x_conversation_id
+            )
+            if canary_tracking is not None:
+                requested_adapter = routed_adapter
 
         # v0.71.12 #221 — select the active VeRA / VB-LoRA user for this
         # request. set_active_user(None) (or an unknown id) self-clears, so
@@ -1894,6 +1994,9 @@ def _create_app(
                     adapter_names=_peft_adapter_names,
                     requested_adapter=requested_adapter,
                     active_adapter=_active_snapshot(),
+                    canary_outcome=(
+                        lambda ok: _record_canary_outcome(canary_tracking, ok)
+                    ),
                 ),
                 media_type="text/event-stream",
             )
@@ -1956,6 +2059,7 @@ def _create_app(
                                 kv_cache_generate_kwargs=kv_cache_generate_kwargs,
                             )
                 except Exception:
+                    _record_canary_outcome(canary_tracking, False)
                     logger.exception("Generation error")
                     raise HTTPException(status_code=500, detail="Internal server error")
 
@@ -1990,7 +2094,7 @@ def _create_app(
                         tokens=completion_tokens,
                     )
 
-                return {
+                result = {
                     "id": f"chatcmpl-{uuid.uuid4().hex[:8]}",
                     "object": "chat.completion",
                     "created": int(time.time()),
@@ -2011,6 +2115,8 @@ def _create_app(
                         "total_tokens": prompt_tokens + completion_tokens,
                     },
                 }
+                _record_canary_outcome(canary_tracking, True)
+                return result
             finally:
                 # Always record latency so tail-latency percentiles include
                 # error paths (prevents blind spots on the dashboard).
@@ -2397,6 +2503,7 @@ def _stream_response(
     loaded_bank=None, x_user_id=None,
     adapter_lock=None, adapter_names=None,
     requested_adapter=None, active_adapter=None,
+    canary_outcome=None,
 ):
     """Generator that yields SSE chunks for streaming responses."""
     chat_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
@@ -2441,9 +2548,14 @@ def _stream_response(
                     kv_cache_generate_kwargs=kv_cache_generate_kwargs,
                 )
     except Exception:
+        if canary_outcome is not None:
+            canary_outcome(False)
         logger.exception("Stream generation error")
         yield 'data: {"error": "Internal server error"}\n\n'
         return
+
+    if canary_outcome is not None:
+        canary_outcome(True)
 
     # Simulate streaming by sending word-by-word
     words = response_text.split(" ")

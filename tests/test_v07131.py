@@ -19,6 +19,19 @@ def _plain(text: str) -> str:
     """Return ANSI-stripped, whitespace-collapsed CLI output."""
     return " ".join(_ANSI_RE.sub("", text).split())
 
+
+def _local_base_model_dir() -> str:
+    """A tiny GPT-2 + tokenizer built locally (no download), standing in for
+    hf-internal-testing/tiny-random-gpt2 -- #1356 found the one test here
+    that actually calls wrapper.setup() (building a real trainer) pulling it
+    from the Hub for nothing that test checks depends on real pretrained
+    weights. Shared and cached across every file that needs one
+    (tests/_tiny_hf_models.py)."""
+    from tests._tiny_hf_models import tiny_model_dir
+
+    return tiny_model_dir("gpt2")
+
+
 # ---------------------------------------------------------------------------
 # Shared test doubles
 # ---------------------------------------------------------------------------
@@ -171,16 +184,19 @@ class TestCompareePairMethod:
         monkeypatch.setattr(ev, "_call_llm", lambda prompt: '{"winner": "B"}')
         assert ev.compare_pair("p", "x", "y") == 1
 
-    def test_compare_pair_llm_failure_is_tie(self, monkeypatch):
-        from soup_cli.eval.judge import JudgeEvaluator
+    def test_compare_pair_llm_failure_propagates(self, monkeypatch):
+        # #1447: a failed judge call is not a tie. It used to return -1 here,
+        # which scored a dead judge as a measured 0.5 win-rate downstream.
+        from soup_cli.eval.judge import JudgeEvaluator, JudgeUnavailableError
 
         ev = JudgeEvaluator(provider="ollama", model="m")
 
         def _boom(prompt):
-            raise RuntimeError("network down")
+            raise JudgeUnavailableError("network down", url="http://localhost:11434")
 
         monkeypatch.setattr(ev, "_call_llm", _boom)
-        assert ev.compare_pair("p", "x", "y") == -1
+        with pytest.raises(JudgeUnavailableError):
+            ev.compare_pair("p", "x", "y")
 
 
 # ---------------------------------------------------------------------------
@@ -595,12 +611,14 @@ class TestOnlineDpoWrapper:
         # Parametrized over trl version by the wrapper itself: the seam evaluator
         # is adapted to judge= (trl 0.19.x) or reward_funcs= (trl 1.x). Builds a
         # real trainer on either.
+        from pathlib import Path
+
         import soup_cli.trainer.online_dpo as od
         from soup_cli.config.loader import load_config_from_string
         from soup_cli.trainer.online_dpo import OnlineDPOTrainerWrapper
 
         cfg = load_config_from_string(
-            "base: hf-internal-testing/tiny-random-gpt2\ntask: online_dpo\n"
+            f"base: {Path(_local_base_model_dir()).as_posix()}\ntask: online_dpo\n"
             "data:\n  train: x.jsonl\n  max_length: 64\n"
             "training:\n  online_dpo_judge: \"ollama://m\"\n"
             "  epochs: 1\n  batch_size: 2\n  online_dpo_max_new_tokens: 8\n"

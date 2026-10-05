@@ -286,9 +286,10 @@ def _resolve_trust(model_id: str, requested: bool = False) -> bool:
 def _guard_output_target(output: str, *, force: bool) -> None:
     """Refuse a destructive ``-o`` that would delete cwd or unrelated content.
 
-    ``merge_adapter_to_dense`` does ``rmtree(out_dir)`` then ``os.replace``, so
-    ``-o`` must not be cwd itself and must not be a pre-existing directory that
-    isn't already a Soup draft (contains ``config.json``) unless ``--force``.
+    ``merge_adapter_to_dense`` renames an existing ``out_dir`` aside and swaps
+    the merged model in, so ``-o`` must not be cwd itself and must not be a
+    pre-existing directory that isn't already a Soup draft (contains
+    ``config.json``) unless ``--force``.
     """
     resolved = os.path.realpath(output)
     if resolved == os.path.realpath(os.getcwd()):

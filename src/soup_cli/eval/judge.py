@@ -7,6 +7,7 @@ import logging
 import math
 import os
 import re
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional, Protocol
@@ -16,6 +17,48 @@ if TYPE_CHECKING:
     from trl import BasePairwiseJudge
 
 logger = logging.getLogger(__name__)
+
+# #1447: one bounded retry policy for every judge request.
+JUDGE_MAX_RETRIES = 2
+JUDGE_MAX_BACKOFF_SECONDS = 30.0
+_sleep = time.sleep  # patched by tests
+
+
+def _redact_url(url: str) -> str:
+    """``url`` without userinfo, query or fragment, safe to print and log."""
+    from urllib.parse import urlsplit, urlunsplit
+
+    try:
+        parts = urlsplit(str(url))
+        host = parts.hostname or ""
+        if ":" in host:
+            host = f"[{host}]"
+        netloc = host + (f":{parts.port}" if parts.port else "")
+        return urlunsplit((parts.scheme, netloc, parts.path, "", ""))
+    except ValueError:
+        return "<unparseable judge url>"
+
+
+class JudgeUnavailableError(RuntimeError):
+    """The judge could not be reached, kept failing, or answered in an unusable shape.
+
+    ``url`` is the request URL with any userinfo, query or fragment removed: the
+    message is printed per skipped row, stored in ``GateTaskResult.error`` and
+    logged by the training callback, and ``validate_judge_api_base`` accepts
+    ``https://user:pass@host`` and ``?api_key=`` bases.
+    """
+
+    def __init__(self, detail: str, *, url: str) -> None:
+        self.detail = detail
+        self.url = _redact_url(url)
+        super().__init__(f"judge unavailable at {self.url}: {detail}")
+
+    def __reduce__(self):  # keyword-only ``url`` otherwise breaks pickle / copy
+        return (_rebuild_unavailable, (self.detail, self.url))
+
+
+def _rebuild_unavailable(detail: str, url: str) -> "JudgeUnavailableError":
+    return JudgeUnavailableError(detail, url=url)
 
 
 class PairwiseJudge(Protocol):
@@ -128,9 +171,16 @@ def load_rubric(path: Path) -> dict:
 
 
 def validate_judge_api_base(api_base: Optional[str]) -> None:
-    """SSRF protection for judge API base URL."""
+    """SSRF protection for judge API base URL.
+
+    ``JudgeEvaluator`` calls this when it is constructed, so every judge it
+    builds is checked, whether the URL came from ``--api-base`` or from a
+    config file.
+    """
     if api_base is None:
         return
+
+    from soup_cli.utils.net_guard import refuse_private_ip_literal
 
     parsed = urlparse(api_base)
     if parsed.scheme not in ("http", "https"):
@@ -147,6 +197,8 @@ def validate_judge_api_base(api_base: Optional[str]) -> None:
                 "HTTP is only allowed for localhost. "
                 "Use HTTPS for remote URLs."
             )
+    # ...and no private / link-local / reserved IP literal on either scheme.
+    refuse_private_ip_literal(parsed.hostname, label="judge URL")
 
 
 def _build_judge_prompt(
@@ -370,21 +422,19 @@ class JudgeEvaluator:
         return results
 
     def compare_pair(self, prompt: str, resp_a: str, resp_b: str) -> int:
-        """One pairwise A/B judgment -> 0 (A) / 1 (B) / -1 (tie / parse fail)."""
+        """One pairwise A/B judgment -> 0 (A) / 1 (B) / -1 (tie / unparseable reply).
+
+        A judge that cannot be reached raises :class:`JudgeUnavailableError`
+        (#1447). A failed call is not a tie: scoring it as one turned a dead
+        judge into a measured 0.5 win-rate and a DON'T SHIP verdict.
+        """
         judge_prompt = _PAIRWISE_INSTRUCTIONS.format(
             prompt=prompt, resp_a=resp_a, resp_b=resp_b
         )
-        try:
-            reply = self._call_llm(judge_prompt)
-        except Exception as exc:  # noqa: BLE001 — network/parse variety -> tie
-            logger.debug("pairwise judge call failed: %s", exc)
-            return -1
-        return _parse_pairwise(reply)
+        return _parse_pairwise(self._call_llm(judge_prompt))
 
     def _call_llm(self, prompt: str) -> str:
         """Call the judge LLM. Uses OpenAI-compatible API for all providers."""
-        import httpx
-
         if self.provider == "ollama":
             base = self.api_base or "http://localhost:11434"
             url = f"{base}/v1/chat/completions"
@@ -406,11 +456,74 @@ class JudgeEvaluator:
             "max_tokens": 1024,
         }
 
-        resp = httpx.post(url, json=payload, headers=headers, timeout=120.0)
-        resp.raise_for_status()
+        return _judge_request(url, payload, headers)
 
+
+def _retry_delay(retry_after: Optional[str], attempt: int) -> float:
+    """Seconds to pause before retry ``attempt`` (0-based), capped.
+
+    A numeric ``Retry-After`` wins; an HTTP-date one, or none, falls back to
+    exponential backoff.
+    """
+    if retry_after:
+        try:
+            seconds = float(retry_after)
+        except ValueError:
+            seconds = math.nan
+        if math.isfinite(seconds):  # nan and inf would reach time.sleep
+            return min(max(seconds, 0.0), JUDGE_MAX_BACKOFF_SECONDS)
+    return min(float(2 ** attempt), JUDGE_MAX_BACKOFF_SECONDS)
+
+
+def _reply_content(resp, url: str) -> str:
+    """The judge's text from an OpenAI-shaped reply, or ``JudgeUnavailableError``."""
+    try:
         data = resp.json()
-        return data["choices"][0]["message"]["content"]
+    except ValueError as exc:
+        raise JudgeUnavailableError(f"reply is not JSON: {exc}", url=url) from exc
+    choices = data.get("choices") if isinstance(data, dict) else None
+    first = choices[0] if isinstance(choices, list) and choices else None
+    message = first.get("message") if isinstance(first, dict) else None
+    content = message.get("content") if isinstance(message, dict) else None
+    if not isinstance(content, str):
+        raise JudgeUnavailableError("reply has no choices[0].message.content", url=url)
+    return content
+
+
+def _judge_request(url: str, payload: dict, headers: dict, *, timeout: float = 120.0) -> str:
+    """POST one judge request; retry 429 / 5xx / transport errors within a bound (#1447).
+
+    Every judge call goes through here, so every caller sees one failure shape:
+    ``JudgeUnavailableError`` naming the URL, raised once the retries are spent,
+    at once for a 4xx that will not heal or an undecodable reply, and for a 200
+    with no usable content.
+    """
+    import httpx
+
+    failure = ""
+    for attempt in range(JUDGE_MAX_RETRIES + 1):
+        retry_after: Optional[str] = None
+        try:
+            resp = httpx.post(url, json=payload, headers=headers, timeout=timeout)
+        except httpx.TransportError as exc:
+            failure = f"{type(exc).__name__}: {exc}"
+        except httpx.RequestError as exc:  # e.g. DecodingError: not transient, no retry
+            raise JudgeUnavailableError(f"{type(exc).__name__}: {exc}", url=url) from exc
+        else:
+            if resp.status_code < 400:
+                return _reply_content(resp, url)
+            failure = f"HTTP {resp.status_code}"
+            if resp.status_code != 429 and resp.status_code < 500:
+                raise JudgeUnavailableError(failure, url=url)
+            retry_after = resp.headers.get("Retry-After")
+        if attempt < JUDGE_MAX_RETRIES:
+            delay = _retry_delay(retry_after, attempt)
+            logger.debug(
+                "judge request failed (%s); retry %d/%d in %.1fs",
+                failure, attempt + 1, JUDGE_MAX_RETRIES, delay,
+            )
+            _sleep(delay)
+    raise JudgeUnavailableError(f"{failure} ({JUDGE_MAX_RETRIES + 1} attempts)", url=url)
 
 
 # ---------------------------------------------------------------------------
@@ -465,8 +578,8 @@ def pairwise_compare(
     When ``swap`` is True the pair is judged in BOTH orders (A,B and B,A) and a
     winner is returned ONLY if the two runs produce the same definite verdict —
     the standard defence against a judge's positional bias. Anything else — a
-    tie, a failure (``compare_pair`` returns -1 for both), or a disagreement —
-    yields -1, so a single un-cross-checked verdict is never trusted. This
+    tie or a disagreement — yields -1, so a single un-cross-checked verdict is
+    never trusted; a judge that cannot be reached raises instead (#1447). This
     doubles the judge calls per pair vs a one-shot random-flip; the stronger
     guarantee is intentional.
     """
@@ -607,6 +720,12 @@ def make_soup_pairwise_judge(evaluator: "PairwiseJudge") -> "BasePairwiseJudge":
     (:func:`soup_cli.trainer.online_dpo_ranking.make_ranked_pairs_trainer`)
     leaves those pairs out of the loss; any other caller must handle ``-1``
     itself.
+
+    This is the one caller that keeps mapping a failed judge call to ``-1``
+    (#1447): the ranking trainer leaves ``-1`` pairs out of the loss, logs
+    ``judge/invalid_rate`` and stops the run with an error naming the judge once
+    it has ranked nothing for too long (#1225), so a judge that is down ends the
+    run through that accounting, not a traceback.
     """
     base_cls = _base_pairwise_judge_cls()
 
@@ -625,12 +744,15 @@ def make_soup_pairwise_judge(evaluator: "PairwiseJudge") -> "BasePairwiseJudge":
                 if not isinstance(pair, (list, tuple)) or len(pair) != 2:
                     out.append(-1)
                     continue
-                out.append(
-                    pairwise_compare(
+                try:
+                    rank = pairwise_compare(
                         prompt, pair[0], pair[1], self.evaluator,
                         swap=shuffle_order,
                     )
-                )
+                except Exception as exc:  # noqa: BLE001 — unranked; #1225 stops the run
+                    logger.warning("online DPO judge call failed, pair left unranked: %s", exc)
+                    rank = -1
+                out.append(rank)
             return out
 
     return _SoupPairwiseJudge(evaluator)

@@ -9,6 +9,16 @@ on:
     branches: [main, 'release/**']
   pull_request:
     branches: [main]
+    # The first three are GitHub's defaults. `labeled` is what starts the full
+    # matrix when a maintainer adds `ci:full` (see the comment above the `plan`
+    # job); it stays a plain pull_request run -- never pull_request_target.
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
+  # The full matrix on `main`, once a night: a push to `main` itself runs only the
+  # quick set (see the comment above the `plan` job). `workflow_dispatch` lets a
+  # maintainer start the same full run by hand.
+  schedule:
+    - cron: '23 3 * * *'
+  workflow_dispatch:
 
 # Supersede, do not queue.
 #
@@ -34,7 +44,15 @@ on:
 # already discards -- merge requires green on the CURRENT head -- which is why
 # it is the right thing to trade.
 #
-# 2026-09-28: pushes to `main` now share ONE group, keyed 'main-push'. Measured
+# 2026-10-01: every push is alone in its own group again -- keyed on the event and
+# the commit -- because a push to `main` now runs only the QUICK set (about three
+# jobs, not fifteen). The shared 'main-push' group below traded a result per commit
+# for runner capacity; with a cheap per-commit run and the full matrix once a night
+# the same capacity buys a green or red mark on every `main` commit, where the
+# shared group left 'cancelled' on all but the last of a burst of merges (seen
+# 2026-10-01: 22 merges in two hours, red crosses on every commit but two).
+#
+# 2026-09-28 (superseded by the paragraph above): pushes to `main` shared ONE group, keyed 'main-push'. Measured
 # that morning: 24 of 70 queued runs were full matrices for main commits (about
 # 15 merges plus credit commits in a day), each alone in its per-commit group,
 # so main's own history consumed roughly a third of the queue while every
@@ -47,7 +65,12 @@ on:
 # commit. `release/**` keeps the per-commit key, because the release checklist
 # needs a green matrix on the exact commit being tagged.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || (github.ref == 'refs/heads/main' && 'main-push' || github.sha) }}
+  # A run started by adding any label other than `ci:full` keys on its run id, so
+  # nothing shares its group: it cannot cancel a full matrix already running on
+  # the pull request, and no later push cancels it. Adding `ci:full` keys on the
+  # ref like every other pull-request event, so the full run supersedes the quick
+  # one. The whole policy is in the comment above the `plan` job.
+  group: ${{ github.workflow }}-${{ github.event.action == 'labeled' && github.event.label.name != 'ci:full' && format('labeled-{0}', github.run_id) || github.event_name == 'pull_request' && github.ref || format('{0}-{1}', github.event_name, github.sha) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Bound every job explicitly.
@@ -96,6 +119,115 @@ concurrency:
 # save runner-minutes that are only ever spent when a job is already hung.
 
 jobs:
+  # Quick runs, the full matrix at approval, and every cell on a release branch.
+  #
+  # Measured 2026-09-28 07:30Z: the Actions account sat at its free-plan cap of
+  # 20 concurrent jobs (8 ubuntu, 8 windows, 4 macos running) with 301 jobs
+  # queued, and every push to a pull request cost 15 jobs of this workflow: the
+  # nine test cells plus lint, type-check, mlx-smoke, torchao-contract,
+  # pytorch-smoke and transformers-floor.
+  #
+  # So `plan` picks one of three matrices, and every job except `lint` follows it:
+  #
+  #   push to release/**               RELEASE: all nine test cells + the five gated jobs
+  #   nightly run on main, a manual    FULL: seven test cells (no Windows or macOS
+  #     dispatch, or a pull request      on 3.11) + the five gated jobs
+  #     labelled ci:full
+  #   push to main, any other pull     QUICK: lint + test (ubuntu-latest, 3.12)
+  #     request run
+  #
+  # 3.11 runs on ubuntu in every full run, and on Windows and macOS only for
+  # release/**, where the release checklist needs every cell green on the tagged
+  # commit. Measured basis (soup-97): macOS was the binding limit 63% of the
+  # time, and dropping the two cells takes a full run from 4 macOS jobs to 3
+  # (x1.33 on that limit). What it gives up: 3 of 64 failing attempts failed on
+  # windows-3.11 alone, and a failure like that now surfaces on the release
+  # branch instead of before merge. Branch protection requires neither cell.
+  #
+  # A quick push costs 3 jobs (lint, plan, one ubuntu cell) instead of 15, and
+  # none of them on Windows or macOS. A maintainer adds `ci:full` at approval.
+  # The pull request's current labels decide, not the event, so every run on a
+  # labelled pull request is full -- including each later push, which a merge on
+  # the current head needs anyway. Remove the label to go back to quick runs. A
+  # labelled run is an ordinary pull_request run, with the token and secrets a
+  # push to that pull request already gets.
+  #
+  # What this costs, and why the merge gate still holds:
+  #
+  # - Contributors see only ubuntu / Python 3.12 until approval. A failure that
+  #   exists only on Windows, macOS, 3.10 or 3.11 surfaces at approval (on the
+  #   release branch, for Windows and macOS on 3.11), so that round trip starts
+  #   later than it used to.
+  # - The required smokes (mlx-smoke, pytorch-smoke, transformers-floor) read as
+  #   SKIPPED on a quick run, and branch protection counts a job skipped by its
+  #   `if:` as passing. So the smokes are not what blocks a merge; the test cells
+  #   are. `test` takes its matrix from `plan`, so a quick run never CREATES the
+  #   other six required `test (...)` contexts, and a required context nothing
+  #   reported stays "Expected" and keeps the merge button locked. Do not turn the
+  #   matrix back into a static list with a per-cell `if:`: a skipped cell passes.
+  #   For the same reason FULL and branch protection must name the same cells: a
+  #   required cell FULL drops is never reported and locks every merge, and a FULL
+  #   cell that is not required gates nothing.
+  # - Maintainers merge only when all 11 required checks read SUCCESS on the
+  #   current head. Skipped is not success: a quick run after a full one on the
+  #   same head (say the label was removed and another one added) replaces the
+  #   smokes' results, a failure included, with skipped -- which the merge button
+  #   accepts.
+  # - Adding any other label to a pull request that already carries `ci:full`
+  #   starts a second full run, in a concurrency group of its own so it cannot
+  #   cancel the first, and no later push cancels it either. Add other labels
+  #   before `ci:full`.
+  # - Coverage uploads from the ubuntu / 3.11 cell only, so a pull request's
+  #   Codecov report arrives at approval.
+  #
+  # `timeout-minutes: 5` is not a measurement: one shell step, no checkout, no
+  # install.
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      # The three matrices, each declared once as a JSON literal the tests parse.
+      # RELEASE is the support matrix, every cell: tests/test_requires_python_bound.py
+      # derives requires-python from it. FULL is RELEASE minus Windows and macOS on
+      # 3.11, and tests/test_ci_full_matrix_on_approval.py pins it to exactly the
+      # required `test (...)` contexts. QUICK is one required cell. Keep the key
+      # order (it names the checks) and the versions as strings (a JSON 3.10 is 3.1).
+      RELEASE_MATRIX: >-
+        {"os": ["ubuntu-latest", "windows-latest", "macos-latest"],
+        "python-version": ["3.10", "3.11", "3.12"]}
+      FULL_MATRIX: >-
+        {"os": ["ubuntu-latest", "windows-latest", "macos-latest"],
+        "python-version": ["3.10", "3.11", "3.12"],
+        "exclude": [{"os": "windows-latest", "python-version": "3.11"},
+        {"os": "macos-latest", "python-version": "3.11"}]}
+      QUICK_MATRIX: '{"os": ["ubuntu-latest"], "python-version": ["3.12"]}'
+    outputs:
+      full: ${{ steps.decide.outputs.full }}
+      matrix: ${{ steps.decide.outputs.matrix }}
+    steps:
+      - name: Choose the release, full or quick matrix
+        id: decide
+        env:
+          RELEASE: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/heads/release/') }}
+          FULL: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/release/')) || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'ci:full')) }}
+        run: |
+          set -euo pipefail
+          if [ "$RELEASE" = "true" ]; then
+            full=true
+            matrix="$RELEASE_MATRIX"
+          elif [ "$FULL" = "true" ]; then
+            full=true
+            matrix="$FULL_MATRIX"
+          else
+            full=false
+            matrix="$QUICK_MATRIX"
+            echo "::notice title=Quick CI run::lint and test (ubuntu-latest, 3.12) only. A pull request gets the other required test cells and the smoke jobs when a maintainer adds the ci:full label; main gets the full matrix every night."
+          fi
+          {
+            echo "full=$full"
+            echo "matrix=$matrix"
+          } >> "$GITHUB_OUTPUT"
+
   lint:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -142,6 +274,8 @@ jobs:
           "${RUNNER_TEMP}/actionlint" -color
 
   type-check:
+    needs: plan
+    if: needs.plan.outputs.full == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     # Non-blocking type-check baseline. The codebase adopts annotations
@@ -161,6 +295,8 @@ jobs:
           mypy || echo "::warning title=mypy::Type issues reported (non-blocking baseline — see the log above)"
 
   mlx-smoke:
+    needs: plan
+    if: needs.plan.outputs.full == 'true'
     # #394: prove the documented standalone install on an Apple Silicon runner.
     # Keep this separate from the main matrix because `.[dev]` deliberately
     # installs the PyTorch/TRL stack and would hide an accidental MLX dependency.
@@ -186,6 +322,8 @@ jobs:
         # with a constant 0.0 left the suite green (#1018 review).
         run: pytest -o addopts= -q tests/test_rewind_mlx.py
   torchao-contract:
+    needs: plan
+    if: needs.plan.outputs.full == 'true'
     # #826: every torchao class Soup names is resolved against the REAL package
     # here. The 3x3 matrix cannot do it -- `torchao` is not in `[dev]`, so those
     # cells skip these tests, which is how three names torchao never exported
@@ -217,6 +355,8 @@ jobs:
             tests/test_issue835_fp8_gate.py \
             tests/test_v07121.py
   pytorch-smoke:
+    needs: plan
+    if: needs.plan.outputs.full == 'true'
     # #596: exercise the real PyTorch SFT + DPO training pipeline on every PR.
     # Keep this separate from the 3x3 matrix so the expensive model-backed
     # smoke tests run once, not nine times.
@@ -276,6 +416,8 @@ jobs:
   # trl 0.29 / PEFT 0.20 support stack and Plotext 6.0.0 so pip cannot silently
   # upgrade the cell, then assert every pinned compatibility boundary.
   transformers-floor:
+    needs: plan
+    if: needs.plan.outputs.full == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -349,11 +491,14 @@ jobs:
           tests/test_issue265_xcodec2_audio_contract.py
 
   test:
+    needs: plan
     strategy:
       fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-        python-version: ["3.10", "3.11", "3.12"]
+      # From `plan`: all nine cells on a push to release/**, seven on a full run
+      # (no Windows or macOS 3.11), test (ubuntu-latest, 3.12) alone on a quick
+      # one. The cells a run leaves out are MISSING, not skipped, and that is what
+      # keeps a required one blocking a merge.
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     env:
@@ -501,7 +646,7 @@ jobs:
           files: coverage.xml
           fail_ci_if_error: false
       - name: Update test count badge
-        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11' && github.ref == 'refs/heads/main' && github.event_name == 'push' && github.repository == 'MakazhanAlpamys/Soup'
+        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11' && github.ref == 'refs/heads/main' && github.event_name == 'schedule' && github.repository == 'MakazhanAlpamys/Soup'
         run: |
           TESTS=$(python -c "
           import xml.etree.ElementTree as ET

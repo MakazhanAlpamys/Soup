@@ -123,7 +123,7 @@ src/soup_cli/
   experiment/         - SQLite experiment tracking
   eval/               - Eval platform (custom tasks, LLM judge, human eval, leaderboard)
   migrate/            - Config migration (LLaMA-Factory, Axolotl, Unsloth)
-  recipes/            - Ready-made configs for popular models (173 recipes)
+  recipes/            - Ready-made configs for popular models (170 recipes)
   autopilot/          - Zero-config decision engine (v0.25.0)
   registry/           - Model Registry (hashing, store, diff, attach) (v0.26.0 + v0.33.0)
   cans/               - Shareable .can artifact format + run/publish orchestrator (v0.26.0 + v0.33.0)
@@ -521,6 +521,16 @@ GitHub Actions runs on every push and PR:
   fork an OIDC token, so the upload could not authenticate. Since most
   contributions here are fork PRs, expect "skipped" on yours; it is not a
   required check and blocks nothing.
+
+**Pull requests run a quick subset first.** A push to a pull request runs `lint`
+and the tests on Ubuntu / Python 3.12 only. The full matrix (Windows and macOS
+as well as Ubuntu, Python 3.10 to 3.12 with 3.11 on Ubuntu only, plus the smoke
+jobs) runs when a maintainer adds the `ci:full` label at approval, and on every
+later push while the label stays. Until then the other `test (...)` checks show
+as *Expected* and the smoke jobs as *skipped*; neither is a failure on your side.
+A PR is merged only when the full matrix is green on its current head. After the
+merge, `main` runs the same quick set on every commit and the full matrix once a
+night (and on every push to a `release/**` branch).
 
 See `.github/workflows/ci.yml`.
 

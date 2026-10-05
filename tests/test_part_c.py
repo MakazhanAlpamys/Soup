@@ -110,7 +110,14 @@ class TestSchemaGateExpanded:
             "data": {"train": "data.jsonl", "format": "alpaca"}
             if task != "pretrain"
             else {"train": "data.jsonl", "format": "plaintext"},
-            "training": {"epochs": 1, "lr": 1e-4, "batch_size": 1, **training_extra},
+            "training": {
+                "epochs": 1,
+                "lr": 1e-4,
+                # #1420: KTO refuses batch 1 at parse time (TRL's KL term);
+                # these tests exercise unrelated training knobs.
+                "batch_size": 2 if task == "kto" else 1,
+                **training_extra,
+            },
         }
         if task in ("dpo", "kto", "orpo", "simpo", "ipo", "grpo"):
             body["data"]["format"] = "dpo"

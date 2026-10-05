@@ -395,6 +395,8 @@ class DataConfig(BaseModel):
         "raft",
         # v0.71.32 — ASR (Whisper): rows are {"audio": path, "text": transcript}
         "asr",
+        # Issue #1219 — Cross-encoder paired sequence classification
+        "cross_encoder",
     ] = Field(
         default="auto",
         description="Data format",
@@ -980,11 +982,26 @@ class DataConfig(BaseModel):
         # tokenized_path is meaningful regardless of format (Axolotl `empty`
         # type expects the cache to be the source of truth). But the
         # pre_tokenized format implies the path must be set.
-        if self.format == "pre_tokenized" and not self.tokenized_path:
-            raise ValueError(
-                "format='pre_tokenized' requires data.tokenized_path to point "
-                "at a cache directory produced by `soup data preprocess`."
-            )
+        if self.format == "pre_tokenized":
+            if not self.tokenized_path:
+                raise ValueError(
+                    "format='pre_tokenized' requires data.tokenized_path to point "
+                    "at a cache directory produced by `soup data preprocess`."
+                )
+            conflicts = []
+            if self.add_new_tokens:
+                conflicts.append("data.add_new_tokens")
+            if self.new_special_tokens:
+                conflicts.append("data.new_special_tokens")
+            if self.prompt_strategy:
+                conflicts.append("data.prompt_strategy")
+            if conflicts:
+                raise ValueError(
+                    "format='pre_tokenized' cannot be combined with "
+                    + ", ".join(conflicts)
+                    + "; soup data preprocess never applies it, so the cached ids "
+                    "do not contain it. Remove it, or train from the source format."
+                )
         return self
 
     @field_validator("remove_unused_columns", mode="after")
@@ -1544,7 +1561,12 @@ class TrainingConfig(BaseModel):
     @field_validator("online_dpo_judge", mode="before")
     @classmethod
     def _validate_online_dpo_judge_field(cls, value: Any) -> Optional[str]:
-        """v0.71.31 — shape-only validation (SSRF enforced at trainer setup)."""
+        """v0.71.31 — shape validation; the full SSRF policy runs at trainer setup.
+
+        A private / link-local / reserved IP literal in an http(s) judge URL is
+        refused here as well, so a shared soup.yaml naming one fails at load
+        instead of after the model download.
+        """
         if value is None:
             return None
         if isinstance(value, bool) or not isinstance(value, str):
@@ -1557,6 +1579,16 @@ class TrainingConfig(BaseModel):
             raise ValueError("online_dpo_judge must not contain null bytes")
         if len(value) > 512:
             raise ValueError("online_dpo_judge must be <= 512 chars")
+        from urllib.parse import urlparse
+
+        from soup_cli.utils.net_guard import refuse_private_ip_literal
+
+        try:
+            parsed = urlparse(value)
+        except ValueError as exc:
+            raise ValueError("online_dpo_judge is not a valid URL") from exc
+        if parsed.scheme in ("http", "https"):
+            refuse_private_ip_literal(parsed.hostname, label="online_dpo_judge")
         return value
 
     # v0.71.32 — ASR (Whisper) fine-tuning knobs.
@@ -4145,6 +4177,11 @@ class TrainingConfig(BaseModel):
                 "nothing reads it, so the run trains as if it were unset. "
                 "Remove it, or set expand_layers: <int> to append new blocks."
             )
+        # The expand_layers + quantization rule is enforced by
+        # SoupConfig._validate_expand_layers_quantization, which runs after
+        # _resolve_quantization_for_unhonouring_tasks so it reads the resolved
+        # value (an unset quantization on a #795 task has resolved to none by
+        # then and must not be refused here on its unresolved 4bit default).
         return self
 
     @model_validator(mode="after")
@@ -4179,6 +4216,34 @@ class TrainingConfig(BaseModel):
                 f"training.use_lorafa uses an AdamW-based gradient projection and is "
                 f"incompatible with training.optimizer={self.optimizer!r}. Leave optimizer "
                 f"unset (defaulting to adamw) or use 'adamw_torch'."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_loraplus_compat(self) -> "TrainingConfig":
+        """#1210 — refuse LoRA+ combinations that could only fail after the model loads.
+
+        build_loraplus_optimizer (called by attach_loraplus_optimizer and by PPO's
+        constructor injection) asks Trainer.get_optimizer_cls_and_kwargs(args) for the
+        optimizer without a model, and transformers builds these three only from one.
+        """
+        if self.loraplus_lr_ratio is None:
+            return self
+        if self.optimizer in ("apollo_adamw", "lomo", "adalomo"):
+            raise ValueError(
+                f"training.loraplus_lr_ratio cannot be combined with "
+                f"training.optimizer={self.optimizer!r}: LoRA+ builds its optimizer "
+                f"without the model, and transformers can only build {self.optimizer} "
+                f"from the model. Use an optimizer transformers can build without the "
+                f"model (for example adamw_torch) or remove loraplus_lr_ratio."
+            )
+        # build_loraplus_optimizer also refuses this at runtime; here it fails
+        # before the model is downloaded.
+        if self.use_galore:
+            raise ValueError(
+                "training.loraplus_lr_ratio and training.use_galore are mutually exclusive: "
+                "LoRA+ tunes LoRA A/B matrices while GaLore projects full-parameter "
+                "gradients. Enable one, not both."
             )
         return self
 
@@ -4870,7 +4935,7 @@ class SoupConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_expand_layers_scope(self) -> "SoupConfig":
-        """#1325 — ``training.expand_layers`` (LLaMA Pro) is wired only in the
+        """#1325 - ``training.expand_layers`` (LLaMA Pro) is wired only in the
         transformers text SFT/pretrain ``_setup_transformers`` paths. Every
         other task/backend/modality accepts the fields and then silently
         trains the unexpanded model, so refuse at load with the actual
@@ -4889,6 +4954,37 @@ class SoupConfig(BaseModel):
                 f"task={self.task!r}, backend={self.backend!r}, "
                 f"modality={self.modality!r}. Remove expand_layers and "
                 "freeze_trainable_layers."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_expand_layers_quantization(self) -> "SoupConfig":
+        """v0.41.0 Part C — expand_layers requires an unquantized base.
+
+        Runs after ``_resolve_quantization_for_unhonouring_tasks`` so it reads the
+        RESOLVED quantization. For the #795 unhonoured tasks an unset
+        ``quantization`` has resolved to ``none`` by now, so a minimal config for
+        those tasks (which defaults the field to ``4bit``) is not wrongly refused;
+        the check fires only when the base actually trains quantised.
+        """
+        tcfg = self.training
+        if tcfg.expand_layers is not None and tcfg.quantization != "none":
+            raise ValueError(
+                "training.expand_layers (LLaMA Pro block expansion) requires "
+                f"training.quantization: none, but it is {tcfg.quantization!r}. "
+                "The appended blocks are zero-initialised and trained, which the "
+                "block-expansion path only supports on an unquantized base. "
+                "Set quantization: none."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_v042_pre_tokenized_modality(self) -> "SoupConfig":
+        if self.data.format == "pre_tokenized" and self.modality != "text":
+            raise ValueError(
+                "data.format='pre_tokenized' cannot be combined with "
+                f"modality={self.modality!r}; soup data preprocessing does not "
+                "apply modality transforms to cached ids"
             )
         return self
 
@@ -5546,6 +5642,16 @@ class SoupConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def _validate_cross_encoder_format(self) -> "SoupConfig":
+        """#1219 - only the cross_encoder trainer reads pair rows."""
+        if self.data.format == "cross_encoder" and self.task != "cross_encoder":
+            raise ValueError(
+                "data.format='cross_encoder' requires task='cross_encoder'; "
+                f"got task={self.task!r}"
+            )
+        return self
+
+    @model_validator(mode="after")
     def _validate_distill_compat(self) -> "SoupConfig":
         """v0.52.0 Part C — ``task='distill'`` gate."""
         tcfg = self.training
@@ -6141,6 +6247,35 @@ class SoupConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def _validate_kto_batch_compat(self) -> "SoupConfig":
+        """#1420 — a per-device KTO batch of 1 is invalid, streaming or not.
+
+        TRL's ``KTOTrainer`` refuses ``per_device_train_batch_size=1``
+        ("Actual (not effective) batch size must be > 1") because the KL
+        term degenerates. Soup used to catch this at parse time only for
+        ``stream_layers`` runs (see the note kept in
+        ``_validate_stream_layers_compat``), so a resident KTO config loaded,
+        loaded its model, and only then died inside TRL — after minutes of
+        I/O on a real base. The same refusal now applies to every
+        ``task='kto'`` config, resident or streamed, before anything loads.
+        """
+        if self.backend == "mlx":
+            return self  # _validate_mlx_task_support gives the more basic answer
+        tcfg = self.training
+        if (
+            self.task == "kto"
+            and isinstance(tcfg.batch_size, int)
+            and tcfg.batch_size < 2
+        ):
+            raise ValueError(
+                "task='kto' requires training.batch_size >= 2: TRL's KL term is "
+                "degenerate at a per-device batch of 1. Set batch_size to 2 or "
+                "more and raise gradient_accumulation_steps to keep the "
+                "effective batch size."
+            )
+        return self
+
+    @model_validator(mode="after")
     def _validate_stream_layers_compat(self) -> "SoupConfig":
         """v0.72.0 BETA — layer-streaming compatibility gates.
 
@@ -6272,21 +6407,10 @@ class SoupConfig(BaseModel):
         # budget is exhausted (peak moved 0.842 -> 0.846 GB across accum 1->4).
         # v0.72.4 — KTO's KL term is degenerate at a per-device batch of 1, so
         # TRL refuses it outright ("Actual (not effective) batch size must be
-        # > 1"). Under streaming that ValueError arrives only AFTER the RAM
-        # pre-flight, the checkpoint sharding and — at quantization='4bit' —
-        # the NF4 quantisation pass: minutes of disk I/O on a real base, to
-        # fail on a config that was already invalid. Refuse it at parse time.
-        if (
-            self.task == "kto"
-            and isinstance(tcfg.batch_size, int)
-            and tcfg.batch_size < 2
-        ):
-            raise ValueError(
-                "task='kto' requires training.batch_size >= 2 (TRL's KL term is "
-                "degenerate at batch 1). Checked here rather than in the "
-                "trainer so a streaming run fails before sharding the "
-                "checkpoint, not minutes into it."
-            )
+        # > 1"). Refused at parse time for EVERY task='kto'
+        # config — streaming or resident — by ``_validate_kto_batch_compat``
+        # (#1420); a streaming run therefore still fails before sharding the
+        # checkpoint, not minutes into it.
         if tcfg.lora.r < 1:
             raise ValueError(
                 "training.stream_layers requires LoRA (training.lora.r >= 1) — "

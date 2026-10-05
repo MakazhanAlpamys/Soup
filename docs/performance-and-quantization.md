@@ -654,7 +654,7 @@ prints this advice when it sees you accumulating.
 - `quantization` other than `none` or `4bit` → other formats cannot be streamed into a pooled buffer
 - `backend: unsloth` / `backend: mlx` → streaming replaces the model-load path those backends own
 - `task` other than `sft` / `dpo` / `orpo` / `simpo` / `kto` → named explicitly. `grpo` and `ppo` are refused **permanently**, not pending: generation rollouts re-read every layer once per generated token, which destroys the amortisation streaming depends on
-- `task: kto` with `batch_size: 1` → TRL's KL term is degenerate at batch 1; refused when the config is read rather than minutes later after sharding
+- `task: kto` with `batch_size: 1` → TRL's KL term is degenerate at batch 1; refused when the config is read (this applies to every KTO run, not only to streaming) rather than minutes later after sharding
 - `lora.use_dora` / `lora.use_vera` / `lora.init_strategy` other than `random` → these initialise from the real base weight, which is on the meta device under streaming
 - `moe_expert_quant` → expert quantization runs only in the resident model-construction path and would otherwise be silently ignored
 - `unfrozen_parameters`, `lisa_enabled`, `packing`, `multipack`, `use_fsdp2_compile`, `train_router_only`, `expand_layers` → each independently rewrites or re-freezes the same layers
@@ -805,6 +805,50 @@ the run refuses before either write when that volume lacks free space. Override 
 roots with `SOUP_SPECTRUM_CACHE_DIR` and `SOUP_LAYER_STREAM_CACHE_DIR`; both retain Soup's
 home/cwd/tmp containment policy.
 
+**Two or more NVMe drives.** On a cold store larger than RAM the disk-tier step can wait on the
+read (measured for a 70B-shaped store), and then one drive is the ceiling. Set
+`SOUP_LAYER_STREAM_STRIPE_DIRS` to extra folders on OTHER NVMe drives (`os.pathsep`-separated:
+`;` on Windows, `:` elsewhere) and the layer cache is striped over N roots, where N is the primary
+cache root plus the folders listed: decoder layer `i` lives on root `i mod N`, the index, the
+extras and the embedding/head files stay on the primary root, and the reader keeps one layer in
+flight per drive. The cache is laid out this way whichever tier the run picks; only the disk tier
+reads the drives in parallel. Every entry is checked, and any failure refuses the run and names
+the entry and the rule: it must be an absolute path (on Windows, with a drive letter or UNC share;
+no `\\?\` or `\\.\` spelling, no control characters), already exist as a folder (a drive that is
+not mounted is never mistaken for an empty one), not be a symlink, not lie inside or contain the
+primary cache root or another entry, sit on a different volume from the primary root and from
+every other entry, and classify as NVMe (`training.stream_disk_kind` overrides a wrong probe); the
+list holds at most 6 folders. The bytes are exactly the ones the single-drive cache holds, so
+striping changes the speed, not the result.
+
+Stripe folders are outside the home/cwd/tmp containment the primary cache has, by design — a
+second drive is never under `$HOME`. What that containment gave is enforced directly instead.
+Inside each entry Soup writes only its own folder, named after the model plus a hash of the
+primary cache's path, so two primary caches (two users, or two `SOUP_LAYER_STREAM_CACHE_DIR`
+values) sharing one stripe drive never touch each other's files. That folder is made private to
+the account running Soup (mode 0700 on POSIX; on Windows a protected ACL for that account and
+SYSTEM, replacing the inherited one, which on a data drive typically lets every signed-in
+account modify files), checked again on every reuse, and never followed if it is a link or
+junction; a folder Soup cannot make private refuses the run by name. Soup never deletes anything
+inside a stripe folder. Soup makes only its own folder owner-only, so also make the stripe ROOT
+itself writable only by your own account (on a default Windows data drive other accounts can
+modify it).
+
+It costs one more layer of host staging per extra drive: `stream_read_ahead` defaults to N + 1.
+A configured value of 2 counts as the default and is raised the same way; any other value is
+kept as set (with a warning if it leaves drives idle), and a refusal that asks for a lower depth
+names a value that is not raised back up. Changing the list re-shards the cache; unsetting it
+re-shards to one root and names the folder left behind. Measured on two PM9B1 drives, with no
+formal verdict: 7.65-9.15 GB/s together against ~4 for one
+([record](../benchmarks/probe-rtx5070-two-drive-read.md)). Gated: on a cold 70B-shaped NF4 store
+at seq 512 the training step went from 17.4 s to 9.97 s, 1.75x
+([gate](../benchmarks/gate-two-drive-striping.md)). That is a burst from a rested box. Under
+sustained back-to-back reading both drives of this laptop throttle to about 2.5 GB/s each, and
+the late-window speed-up measured 1.28x and 1.41x; a single drive throttles later and less
+([sustained probe](../benchmarks/probe-rtx5070-two-drive-sustained.md),
+[per-drive check](../benchmarks/probe-rtx5070-drive-throttle.md); neither has a formal verdict
+yet). Plan a long run on roughly 1.3-1.4x, and on drives with good cooling.
+
 Hugging Face snapshots normally expose symlinks into their blob cache, which the sharder
 deliberately does not follow. Soup materialises those weights under its Spectrum cache. If the
 HF cache already exposes real files, Soup now reads them in place instead of creating a second
@@ -817,7 +861,8 @@ snapshot is complete. Soup pins the commit resolved by the initial cache lookup 
 only verified snapshot files from that commit's blob store; it does not perform a second Hub
 metadata request for the regular-file directory. A missing blob or an escaping symlink aborts
 before the destination is published, rather than leaving a partial checkpoint that the sharder
-could consume.
+could consume. With huggingface_hub 1.32 or later, links into its marked cache-wide store
+(`<cache>/blobs`) are followed too, and any other target is still refused.
 
 
 ## Correctness First (v0.36.0)
@@ -1171,7 +1216,7 @@ Both reject silently-no-op combinations: setting either flag without `moe_lora=t
 
 **`moe_lora` on the remaining LoRA tasks (#1099).** #798 left it loading but unread on `ipo`, `bco`, `reward_model`, `ppo` and `embedding`, and `online_dpo` had the same gap. All six build their adapter through the same `build_lora_config` path, so they were wired to the same helper rather than refused. On `embedding` it applies only with `lora.r >= 1`; at `r: 0` that trainer full-fine-tunes and builds no adapter for the flag to select. #1151 closed the remainder: `distill` and `unlearn` build their adapter the same way and are wired to the same helper, and so is `classifier` / `reranker` / `cross_encoder` (one trainer) on its opt-in adapter path. Without `classifier_lora: true` and `lora.r > 0` that trainer full-fine-tunes and builds no adapter, so there the flag is refused at config load; `asr`, which trains only Whisper (no experts), `moe_lora_routing`, which builds no LoRA adapter, and `prm`, which fine-tunes every base parameter, refuse the flag at config load. Two paths refuse it whatever the task: `task: sft` with `modality: vision` or `audio`, whose setup builds its adapter without the MoE step, and `backend: unsloth`. On unsloth the reason depends on the task (#1264): the thirteen tasks with an unsloth setup attach its fixed attention list and never read the flag, while the rest have no unsloth setup at all, so there it is the backend that goes unapplied. Both messages point to `backend: transformers`, where the flag is read. The other `moe_lora` refusals in the same check come first, so `asr`, `prm`, `moe_lora_routing` and SFT vision/audio get one refusal whatever the backend. Every path now either reads `moe_lora` or refuses it, except `backend: mlx`, where it loads and `soup doctor --config` reports it as ignored; a source ratchet keeps a new adapter-building trainer from missing it. `train_router_only` and `moe_expert_quant` require `moe_lora: true`, so on `backend: unsloth` they now fail to load with the same message. `preference` is covered through the trainers it dispatches to, and `tts` through the SFT trainer it subclasses.
 
-**`moe_lora` requires `lora.dropout: 0.0` on a fused-expert MoE.** transformers 5.x keeps a Qwen3-MoE's experts as fused 3-D parameters (`mlp.experts.gate_up_proj`), which peft adapts through `lora.ParamWrapper`, and that wrapper raises `lora.ParamWrapper does not work with lora_dropout != 0.` With the schema default of `0.05` the LoRA attach failed outright, so `moe_lora` did not work on any task - including `sft`. Soup now stops at the attach with a message naming the flag, instead of letting peft's reach the user, and all 33 shipped MoE recipes pin `lora.dropout: 0.0`. The check is made against the loaded model, not at config load: whether the experts are fused depends on the checkpoint and the transformers version, and a model with one module per expert takes dropout normally. A dense base is untouched - there the flag is a no-op.
+**`moe_lora` requires `lora.dropout: 0.0` on a fused-expert MoE.** transformers 5.x keeps a Qwen3-MoE's experts as fused 3-D parameters (`mlp.experts.gate_up_proj`), which peft adapts through `lora.ParamWrapper`, and that wrapper raises `lora.ParamWrapper does not work with lora_dropout != 0.` With the schema default of `0.05` the LoRA attach failed outright, so `moe_lora` did not work on any task - including `sft`. Soup now stops at the attach with a message naming the flag, instead of letting peft's reach the user, and all 29 shipped recipes that set `moe_lora` pin `lora.dropout: 0.0`. The check is made against the loaded model, not at config load: whether the experts are fused depends on the checkpoint and the transformers version, and a model with one module per expert takes dropout normally. A dense base is untouched - there the flag is a no-op.
 
 **`moe_lora` does not reach every MoE family (measured, v0.75.0).** `get_moe_target_modules` picks module names, and whether peft turns those into adapters on the fused expert parameters depends on the architecture. On tiny stand-ins with transformers 5.16.1 / peft 0.20.0:
 
@@ -1180,11 +1225,11 @@ Both reject silently-no-op combinations: setting either flag without `moe_lora=t
 | `qwen3_moe` | yes | 11 |
 | `deepseek_v3` | yes | 8 |
 | `glm4_moe` | yes | 3 |
-| `minimax` | **no — attention-only** | 2 (`minimax-m3-sft`, `minimax-m3-dpo`) |
+| `minimax` | **no — attention-only** | 0 |
 | `mixtral` | **no — attention-only** | — |
-| `kimi_k2`, `mistral-large-3` | **not measured** (no stand-in builds here) | 9 |
+| `kimi_k2` | **not measured** (no stand-in builds here) | 7 |
 
-So `minimax-m3-sft` and `minimax-m3-dpo` still train attention-only LoRA: peft has no v4→v5 conversion mapping for those model types, so their experts are never targeted and the attach succeeds quietly. Extending target resolution per architecture is #1070. The nine `kimi-k2.x` and `mistral-large-3` recipes are untested rather than known-good — no tiny stand-in for those configs exists in the installed transformers.
+So `minimax-m3-sft` trains attention-only LoRA: it sets no `moe_lora`, since it loads through SFT's vision path, which never runs the MoE step, and `minimax-m3-dpo` was removed because DPO cannot build the `minimax_m3_vl` wrapper (#1145). Neither could have reached the experts anyway: peft has no v4→v5 conversion mapping for the MiniMax model types, so their experts are never targeted and the attach succeeds quietly. Extending target resolution per architecture is #1070. The seven `kimi-k2.x` recipes that set `moe_lora` are untested rather than known-good — no tiny stand-in for those configs exists in the installed transformers.
 
 **`target_modules: auto` on a MoE base.** Until #1070 `resolve_lora_target_modules` had no mapping for any MoE architecture Soup ships, so `auto` resolved to `None` and peft refused with `No target_modules passed but also no target_parameters found`. Those architectures now resolve to their attention projections (see `docs/peft-and-efficiency.md`); a MoE architecture neither Soup nor peft maps is refused at setup, naming it. With `moe_lora: true` the targets come from the model scan instead, and that is applied *before* the refusal is decided, so `moe_lora` still works on an unmapped MoE such as `qwen2_moe`.
 

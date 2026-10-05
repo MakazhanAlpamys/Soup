@@ -42,7 +42,7 @@ def _reject_lm_eval_injection(value: str, field: str) -> None:
     if "," in value or "=" in value:
         console.print(
             f"[red]Refusing to evaluate:[/] {field} contains ',' or '=' "
-            f"({value!r}); these are lm-eval model_args delimiters and could "
+            f"({for_terminal(repr(value))}); these are lm-eval model_args delimiters and could "
             "smuggle trust_remote_code=True (arbitrary code execution)."
         )
         raise typer.Exit(1)
@@ -109,7 +109,7 @@ def benchmark(
             )
             model_arg = f"pretrained={base_model},peft={model_path}"
             console.print(
-                f"[dim]LoRA adapter detected. Base model: {base_model}[/]"
+                f"[dim]LoRA adapter detected. Base model: {for_terminal(base_model)}[/]"
             )
         else:
             model_arg = f"pretrained={model_path}"
@@ -501,6 +501,7 @@ def judge(
     """Evaluate model outputs using LLM-as-a-judge."""
     from soup_cli.eval.judge import (
         JudgeEvaluator,
+        JudgeUnavailableError,
         load_rubric,
         validate_judge_api_base,
     )
@@ -593,10 +594,10 @@ def judge(
                     category=item.get("category", "default"),
                 )
                 judge_scores.append(score)
-            except (ValueError, OSError, KeyError) as exc:
+            except (ValueError, OSError, KeyError, JudgeUnavailableError) as exc:
                 skipped_count += 1
                 console.print(
-                    f"[yellow]Warning: judge failed for prompt: {exc}[/]"
+                    f"[yellow]Warning: judge failed for prompt: {for_terminal(exc)}[/]"
                 )
             progress.advance(task_bar)
 

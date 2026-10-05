@@ -17,7 +17,7 @@ from soup_cli.data.loader import load_raw_data
 from soup_cli.data.validator import validate_and_stats
 from soup_cli.utils.embed import DEFAULT_EMBED_MODEL, embed_texts
 from soup_cli.utils.exit_codes import EXIT_GATE_FAILED, EXIT_USAGE_ERROR, GateCommand
-from soup_cli.utils.paths import is_under_cwd
+from soup_cli.utils.paths import is_network_or_device_path, is_under_cwd
 from soup_cli.utils.semdedup import DedupReport, greedy_semdedup
 from soup_cli.utils.terminal import for_terminal
 
@@ -693,10 +693,13 @@ def _show_vision_stats(data: list[dict]) -> None:
     existing = 0
     for row in data:
         img_path = row.get("image", "")
-        if not img_path:
+        if not img_path or not isinstance(img_path, str):
             continue
         ext = Path(img_path).suffix.lower()
         extensions[ext] = extensions.get(ext, 0) + 1
+        # A network share or a device path is never looked up, nor counted as found.
+        if is_network_or_device_path(img_path):
+            continue
         if Path(img_path).exists():
             existing += 1
 
@@ -1725,6 +1728,10 @@ def augment_data(
         console.print(f"[red]{exc}[/]")
         raise typer.Exit(2) from exc
 
+    from soup_cli.utils.data_forge import ForgeJudgeStats
+
+    stats = ForgeJudgeStats()
+
     max_entries = 10
     max_entry_len = 32
 
@@ -1748,17 +1755,38 @@ def augment_data(
             target_langs = _bounded_list(lang, "lang")
             augmented = augment_fn(
                 data, provider=provider_instance,
-                languages=target_langs or None,
+                languages=target_langs or None, stats=stats,
             )
         elif strategy == "style":
             target_styles = _bounded_list(styles, "styles")
             augmented = augment_fn(
                 data, provider=provider_instance, styles=target_styles or None,
+                stats=stats,
             )
         else:
-            augmented = augment_fn(data, provider=provider_instance, count=count)
+            augmented = augment_fn(
+                data, provider=provider_instance, count=count, stats=stats,
+            )
     except ValueError as exc:
         console.print(f"[red]{exc}[/]")
+        raise typer.Exit(1)
+
+    failure_summary = ""
+    if stats.failures:
+        from soup_cli.utils.recipe_run import _provider_endpoint_label
+
+        endpoint = _provider_endpoint_label(provider, base_url or None)
+        failure_summary = (
+            f"{stats.failures} of {stats.calls} provider calls failed for "
+            f"--provider {provider} ({endpoint}); first error: {stats.first_error}"
+        )
+
+    if not augmented and stats.failures:
+        from rich.markup import escape
+
+        console.print(
+            f"[red]No usable rows produced:[/] {escape(failure_summary)}"
+        )
         raise typer.Exit(1)
 
     # Optional dedup
@@ -1783,11 +1811,21 @@ def augment_data(
     )
     written = atomic_write_text(payload, output_path, field="--output")
 
-    console.print(
-        f"[green]Augmentation complete:[/] {len(data)} → {len(final_rows)} "
-        f"({strategy} via {provider})\n"
-        f"  Output: {written}"
-    )
+    if stats.failures:
+        from rich.markup import escape
+
+        console.print(
+            f"[yellow]Augmentation complete with provider failures:[/] "
+            f"{len(data)} → {len(final_rows)} ({strategy} via {provider})\n"
+            f"  Output: {written}"
+        )
+        console.print(f"[yellow]Warning:[/] {escape(failure_summary)}")
+    else:
+        console.print(
+            f"[green]Augmentation complete:[/] {len(data)} → {len(final_rows)} "
+            f"({strategy} via {provider})\n"
+            f"  Output: {written}"
+        )
 
 
 class _AugmentProvider:
@@ -1841,6 +1879,7 @@ def _load_augment_provider(
         canonical,
         model=model or _AUGMENT_DEFAULT_MODELS[canonical],
         base_url=base_url or None,
+        raise_on_error=True,
     )
     return _AugmentProvider(fn)
 
@@ -2063,7 +2102,31 @@ def from_traces_cmd(
         else:  # openai
             trace_iter = parse_openai(events)
 
-    pairs = list(build_pairs(trace_iter, signal=signal))
+    trace_list = list(trace_iter)
+    pairs = list(build_pairs(trace_list, signal=signal))
+    if not pairs and trace_list:
+        # #1440: reading traces that match no pair mode used to print a normal
+        # green "Wrote 0 preference pair(s)" and exit 0, so an empty output file
+        # read as a completed harvest. Name what was read and what was wanted.
+        signals = sorted({t.signal for t in trace_list if t.signal != "none"})
+        console.print(
+            f"[yellow]Read {len(trace_list)} trace(s) but built no pairs for "
+            f"--signal {signal}. "
+            + (
+                f"Signals present: {', '.join(signals)}. "
+                if signals
+                else "No trace carried a signal. "
+            )
+            # The top-level `signal` is a soup-serve-parser fact. The openai and
+            # langchain parsers key on `choices` / `feedback` and never read it,
+            # so naming it there would be advice the reader cannot act on.
+            + (
+                "Check the record shape: `soup ingest` writes a top-level "
+                "`signal`, and `feedback.rating` is still read as a fallback.[/]"
+                if format == "soup-serve"
+                else "Check the record shape against the format's parser.[/]"
+            )
+        )
 
     if judge:
         # v0.40.3 (#33 (a)) — LLM-judge confidence filter.

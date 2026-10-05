@@ -144,3 +144,41 @@ def align_trainable_dtype_for_fsdp_qlora(
             param.data = param.data.to(compute_dtype)
             casted += 1
     return casted
+
+
+def keep_trainable_dtype_on_resume(trainer) -> None:
+    """Restore each trainable parameter's dtype after a checkpoint resume reloads it.
+
+    TRL's ``SFTTrainer`` casts the trainable adapter of a 4/8-bit base to bf16 when
+    it is built. On ``train(resume_from_checkpoint=...)``, ``Trainer._load_from_checkpoint``
+    reloads the adapter through ``model.load_adapter``, whose default
+    ``autocast_adapter_dtype=True`` upcasts it to fp32. The resumed run then trains
+    and saves in a different dtype from the uninterrupted one, so it cannot
+    reproduce it. Record the dtypes before the load and cast back right after it:
+    the reload runs before the optimizer is created, so the optimizer only ever sees
+    the original dtype.
+
+    Only parameters that were trainable before the load are touched; frozen
+    (including quantized) base weights keep whatever the loader gives them.
+    """
+    model = getattr(trainer, "model", None)
+    if model is None:
+        return
+    before = {
+        name: param.dtype
+        for name, param in model.named_parameters()
+        if param.requires_grad and param.is_floating_point()
+    }
+    if not before:
+        return
+    original_load = trainer._load_from_checkpoint
+
+    def _load_then_restore(resume_from_checkpoint, model=None):
+        original_load(resume_from_checkpoint, model)
+        target = model if model is not None else trainer.model
+        for name, param in target.named_parameters():
+            dtype = before.get(name)
+            if dtype is not None and param.requires_grad and param.dtype != dtype:
+                param.data = param.data.to(dtype)
+
+    trainer._load_from_checkpoint = _load_then_restore
