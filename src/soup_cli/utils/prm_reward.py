@@ -438,10 +438,9 @@ def build_prm_reward_fn(
     )
 
 
-# org/name[@revision]; each segment starts alphanumerically, so a relative path such as
-# ./my-prm or ../x is never mistaken for a repo id.
-# `org/name`, optionally `@revision`. ASCII only (`\w` would admit non-ASCII letters
-# and `$` a trailing newline); a git ref never contains `..`.
+# `org/name`, optionally `@revision`. Each segment starts alphanumerically, so a relative
+# path such as ./my-prm or ../x is never mistaken for a repo id; ASCII only (`\w` would
+# admit non-ASCII letters, `$` a trailing newline); a git ref never contains `..`.
 _HUB_ID_RE = re.compile(
     r"[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*(@(?!.*\.\.)[A-Za-z0-9_./-]+)?"
 )

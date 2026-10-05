@@ -102,6 +102,25 @@ class TestHubIdResolution:
         assert "*.py" in patterns  # a trust_remote_code base ships its modules as .py
         assert not any(p.endswith(".bin") or p.endswith(".pt") for p in patterns)
 
+    def test_the_download_goes_through_the_namespace_pin_gate(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, no_hub_probe, snapshot
+    ) -> None:
+        """The move to ``utils.hubs.snapshot_download`` (review of #1580): the wrapper
+        consults the namespace-pin metadata before downloading, so a direct
+        ``huggingface_hub`` import, or ``namespace_check=False``, fails this."""
+        from soup_cli.utils import hubs
+
+        asked: list[str] = []
+
+        def metadata(repo_id: str):
+            asked.append(repo_id)
+            return None  # fail open: the pin store is not touched
+
+        monkeypatch.setattr(hubs, "_hf_repo_metadata", metadata)
+        monkeypatch.chdir(tmp_path)
+        prm_reward.build_prm_reward_fn(_tcfg(f"{_HUB_ID}@main"), "cpu", False)
+        assert asked == [_HUB_ID]
+
     def test_a_hub_repo_without_a_reward_head_is_refused_at_build_time(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, no_hub_probe
     ) -> None:
