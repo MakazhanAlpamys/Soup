@@ -87,7 +87,6 @@ def build_soup_trainer_callback(
         display=display,
         tracker=tracker,
         run_id=run_id,
-        eval_config=getattr(config, "eval", None),
         **soup_callback_kwargs(
             training_config,
             batch_size=batch_size,
@@ -135,7 +134,6 @@ class _SoupTrainerCallback_body:  # noqa: N801
         display: TrainingDisplay,
         tracker: Optional[object] = None,
         run_id: str = "",
-        eval_config: Optional[object] = None,
         output_dir: str = "",
         loss_watchdog: bool = False,
         loss_watchdog_threshold: float = 3.0,
@@ -153,7 +151,6 @@ class _SoupTrainerCallback_body:  # noqa: N801
         self.display = display
         self.tracker = tracker
         self.run_id = run_id
-        self.eval_config = eval_config
         self.output_dir = output_dir
         # HF emits a summary-only ``on_log`` event after the final optimizer
         # step. It has runtime/throughput fields but no loss/LR/grad norm. Keep

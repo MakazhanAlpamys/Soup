@@ -158,7 +158,6 @@ class TestBuildSoupTrainerCallback:
             output_dir="/tmp/output",
         )
 
-        assert callback.eval_config is config.eval
         assert callback.run_id == "test-run"
         assert callback.output_dir == "/tmp/output"
 
@@ -509,9 +508,11 @@ class TestTrainerWrapperBehaviouralCallbackWiring:
             base="sshleifer/tiny-gpt2",
             task="grpo",
             data={"train": "train.jsonl", "format": "chatml"},
-            eval={
-                "auto_eval": True,
-                "benchmarks": ["mmlu"],
+            training={
+                "eval_gate": {
+                    "enabled": True,
+                    "suite": "evals/gate.yaml",
+                }
             },
         )
         wrapper._batch_size = 4
@@ -528,6 +529,5 @@ class TestTrainerWrapperBehaviouralCallbackWiring:
         ]
         assert len(soup_cbs) == 1
         cb = soup_cbs[0]
-        assert cb.eval_config is wrapper.config.eval
-        assert cb.eval_config.auto_eval is True
-        assert cb.eval_config.benchmarks == ["mmlu"]
+        assert cb.output_dir == str(tmp_path)
+        assert cb.eval_gate_config is wrapper.config.training.eval_gate
