@@ -244,6 +244,27 @@ def _refuse_dropout_on_fused_experts(model, tcfg, target_modules, fused_paramete
     )
 
 
+def _refuse_vera_on_fused_experts(tcfg, fused_parameters) -> None:
+    """``moe_lora`` + ``lora.use_vera`` can reach no fused expert (#1197).
+
+    VeRA (peft ``VeraConfig``) wraps ``nn.Linear`` modules only and has no
+    ``target_parameters`` path, so on a model whose routed experts are fused 3-D
+    tensors the flag would adapt attention (and a shared expert) exactly as VeRA
+    without it, while announcing expert targets. Refused on every such family,
+    Mixtral and MiniMax included, as ruled on the issue; a checkpoint with one
+    ``nn.Linear`` per expert is not refused, VeRA wraps those.
+    """
+    if not fused_parameters or not getattr(getattr(tcfg, "lora", None), "use_vera", False):
+        return
+    raise ValueError(
+        "training.moe_lora=true does nothing with lora.use_vera: true on this model: its "
+        f"routed experts are fused 3-D parameters ({', '.join(fused_parameters)}), and VeRA "
+        "wraps nn.Linear modules only, so the experts would get no adapter and only the "
+        "attention projections would train. Set lora.use_vera: false to adapt the experts "
+        "with LoRA, or remove moe_lora to keep VeRA on the attention projections."
+    )
+
+
 def resolve_moe_lora_targets(model, tcfg, target_modules, console=None):
     """Return MoE-aware LoRA targets when ``training.moe_lora`` asks for them.
 
@@ -266,10 +287,11 @@ def resolve_moe_lora_targets(model, tcfg, target_modules, console=None):
     (#1421: Mixtral, MiniMax, Qwen2-MoE and Qwen3.5-MoE got attention-only LoRA).
 
     Raises:
-        ValueError: fused expert parameters will be targeted AND ``lora.dropout``
-            is non-zero. peft adapts those through ``lora.ParamWrapper``, which
-            refuses any dropout; letting the attach proceed gets the user peft's
-            message with no mention of the flag that caused it.
+        ValueError: fused expert parameters will be targeted AND ``lora.use_vera``
+            is set (VeRA cannot reach them, #1197), or AND ``lora.dropout`` is
+            non-zero (peft adapts them through ``lora.ParamWrapper``, which refuses
+            any dropout). Either way the user gets the flag named, not peft's
+            message or a quiet attention-only adapter.
     """
     if not getattr(tcfg, "moe_lora", False):
         return target_modules
@@ -281,6 +303,7 @@ def resolve_moe_lora_targets(model, tcfg, target_modules, console=None):
     fused = find_fused_expert_parameters(model)
     modules = list(target_modules) if isinstance(target_modules, list) else []
     modules.extend(name for name in moe_targets if name not in modules)
+    _refuse_vera_on_fused_experts(tcfg, fused)
     _refuse_dropout_on_fused_experts(model, tcfg, modules, fused)
     if console is not None:
         line = f"[green]ScatterMoE LoRA:[/] targeting {len(modules)} module patterns"
