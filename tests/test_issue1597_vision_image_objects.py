@@ -190,3 +190,27 @@ def test_prepare_vision_dataset_never_opens_a_non_regular_struct_path(tmp_path, 
     assert opened == []
     assert [len(images) for images in train_ds["images"]] == [0]
 
+
+def test_struct_with_undecodable_bytes_never_opens_its_path(tmp_path, monkeypatch):
+    from soup_cli.trainer import sft
+
+    monkeypatch.setattr(sft, "console", Console(file=io.StringIO(), width=400))
+    media_dir = tmp_path / "media"
+    media_dir.mkdir()
+    outside = tmp_path / "outside.png"
+    Image.new("RGB", (3, 9), "red").save(outside)
+    rows = [
+        {
+            "image": {"bytes": b"not an image", "path": str(outside)},
+            "messages": [{"role": "user", "content": "hi"}],
+        }
+    ]
+
+    kept = _validate_vision_images(rows, media_dir)
+    assert len(kept) == 1  # kept for its bytes; its path is never checked
+    wrapper = SFTTrainerWrapper.__new__(SFTTrainerWrapper)
+    train_ds, _ = wrapper._prepare_vision_dataset({"train": kept})
+    # The path is outside data.image_dir: it must not be read instead.
+    assert [len(images) for images in train_ds["images"]] == [0]
+
+
