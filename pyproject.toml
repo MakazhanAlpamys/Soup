@@ -110,6 +110,12 @@ train = [
     # end-to-end preference tests are what surfaced it.
     #
     "trl>=0.29.0,<1.0.0",
+    # trl 0.29 imports `requests` at module level (generation/vllm_client.py, reached
+    # from trainer/grpo_trainer.py) but declares it only under its `vllm` extra;
+    # datasets 5.1.0 stopped pulling it in, so a fresh [train] install could not
+    # import the GRPO or online-DPO trainers (#1634). Drop this line once trl
+    # declares the dependency itself.
+    "requests>=2.32.2",
     "datasets>=2.14.0",
     "bitsandbytes>=0.41.0",
     # #352: 0.27.0 added `adapter_only` to `save_fsdp_model`/`load_fsdp_model`, which
