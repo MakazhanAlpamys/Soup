@@ -1889,17 +1889,9 @@ def train(
 
     # --- v0.56.0 --diagnose-gate: post-training failure-mode check ---
     if diagnose_gate and _should_run_diagnose_gate_on_rank():
-        try:
-            _run_diagnose_gate(
-                diagnose_gate, run_id, cfg.base, result["output_dir"]
-            )
-        except typer.Exit:
-            raise
-        except (OSError, ValueError) as exc:
-            console.print(
-                f"[red]--diagnose-gate failed:[/] {type(exc).__name__}: {exc}"
-            )
-            raise typer.Exit(1) from exc
+        _run_diagnose_gate_or_exit(
+            diagnose_gate, run_id, cfg.base, result["output_dir"]
+        )
 
     # --- v0.71.3 #180 --track-energy: print the measured energy/CO2 -------
     energy_measurement = (
@@ -2211,6 +2203,7 @@ def _run_diagnose_gate(
     from soup_cli.utils.diagnose.report import FAILURE_MODES, FailureScore
     from soup_cli.utils.diagnose.runner import build_report
     from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
+    from soup_cli.utils.terminal import for_terminal
 
     enforce_under_cwd_and_no_symlink(evidence_path, "--diagnose-gate evidence")
     # 16 MiB cap on evidence JSON (security review HIGH — symmetric with
@@ -2259,7 +2252,7 @@ def _run_diagnose_gate(
         for mode in FAILURE_MODES:
             sc = report.scores[mode]
             if sc.verdict == "MAJOR":
-                console.print(f"  [red]MAJOR[/] {mode}: {markup_escape(sc.evidence)}")
+                console.print(f"  [red]MAJOR[/] {mode}: {for_terminal(sc.evidence)}")
         raise typer.Exit(2)
     if report.overall == "NOT_RUN":
         # An unmeasured mode is not a pass (#1435); same exit as `soup diagnose`.
@@ -2270,12 +2263,29 @@ def _run_diagnose_gate(
         for mode in FAILURE_MODES:
             sc = report.scores[mode]
             if sc.verdict == "NOT_RUN":
-                console.print(f"  [yellow]NOT_RUN[/] {mode}: {markup_escape(sc.evidence)}")
+                console.print(f"  [yellow]NOT_RUN[/] {mode}: {for_terminal(sc.evidence)}")
         raise typer.Exit(EXIT_USAGE_ERROR)
     console.print(
         f"[green]--diagnose-gate: {report.overall}[/] across "
         f"{len(FAILURE_MODES)} modes."
     )
+
+
+def _run_diagnose_gate_or_exit(
+    evidence_path: str, run_id: str, base: str, adapter: str
+) -> None:
+    """Run the gate; an unreadable or refused evidence file is reported and exits 1."""
+    from soup_cli.utils.terminal import for_terminal
+
+    try:
+        _run_diagnose_gate(evidence_path, run_id, base, adapter)
+    except typer.Exit:
+        raise
+    except (OSError, ValueError) as exc:
+        console.print(
+            f"[red]--diagnose-gate failed:[/] {type(exc).__name__}: {for_terminal(exc)}"
+        )
+        raise typer.Exit(1) from exc
 
 
 def _resolve_deepspeed(deepspeed: str) -> str:
