@@ -230,9 +230,18 @@ def test_a_hub_id_is_returned_unchanged(hashed_paths):
     assert hashed_paths == []
 
 
-def test_the_pre_hash_and_post_load_refusals_share_one_message():
-    """One constant feeds both gates so the two messages cannot drift."""
-    source = Path(quest.__file__).read_text(encoding="utf-8")
-    assert quest.LAYER_COUNT_REFUSAL == "QuEST first slice requires the measured 24 blocks"
-    assert quest.LAYER_COUNT_REFUSAL in source
-    assert source.count('"QuEST first slice requires the measured 24 blocks"') == 1
+def test_both_layer_count_refusals_are_the_constant_verbatim(tmp_path: Path):
+    """`match="24 blocks"` would also accept a drifted message; compare the whole text."""
+    torch = pytest.importorskip("torch")
+
+    model = torch.nn.Module()
+    model.model = torch.nn.Module()
+    model.model.layers = torch.nn.ModuleList(torch.nn.Identity() for _ in range(30))
+    with pytest.raises(ValueError) as post_load:
+        quest._validate_raw_topology(model)
+
+    root = _base(tmp_path / "base", _config(layers=30))
+    with pytest.raises(ValueError) as pre_hash:
+        resolve_base_model_identity(str(root))
+
+    assert str(post_load.value) == str(pre_hash.value) == quest.LAYER_COUNT_REFUSAL

@@ -175,8 +175,11 @@ format-v2 metadata records a `local-sha256:` identity derived from the
 Transformers selects (or its index and referenced shards). The identity uses
 relative file names and content, so moving the same base keeps resume valid;
 changing a selected file refuses resume. Soup checks the identity before and
-after loading the model. The sidecar and `config.json["soup_quest"]` contain
-the identity, not the source directory.
+after loading the model. A local base whose `config.json` declares another
+layer count or an incompatible width is refused before any file is hashed; a
+value that is missing or not an integer is left to the post-load gate. The
+sidecar and `config.json["soup_quest"]` contain the identity, not the source
+directory.
 Local models or tokenizers using custom `auto_map` code are refused by this
 fingerprint route because code loaded from elsewhere would not be covered.
 Local tokenizers declaring `fast_tokenizer_files` are also refused because

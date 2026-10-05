@@ -262,15 +262,11 @@ def _local_topology_widths(config_data: dict[str, Any]) -> list[tuple[str, int]]
         if type(value) is int:
             widths.append((field, value))
     heads = config.get("num_attention_heads")
-    # ``o_proj`` takes num_attention_heads * head_dim. A config may pin head_dim
-    # explicitly; otherwise transformers derives it from the hidden size.
+    # ``o_proj`` takes num_attention_heads * head_dim, which a config may pin; with no
+    # explicit head_dim it is as wide as hidden_size, which the loop above already checked.
     head_dim = config.get("head_dim")
     if type(heads) is int and type(head_dim) is int:
         widths.append(("num_attention_heads * head_dim", heads * head_dim))
-    elif type(heads) is int and heads > 0:
-        hidden = config.get("hidden_size")
-        if type(hidden) is int and hidden % heads == 0:
-            widths.append(("num_attention_heads * head_dim", hidden))
     return widths
 
 
