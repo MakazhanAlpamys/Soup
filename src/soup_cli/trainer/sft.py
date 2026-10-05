@@ -2004,21 +2004,15 @@ class SFTTrainerWrapper(StreamingSetupMixin):
                 return None
             if isinstance(image_raw, PILImage.Image):
                 try:
-                    try:
-                        img = PILImage.open(image_raw)
-                        if isinstance(img, PILImage.Image):
-                            return img.convert("RGB")
-                    except (AttributeError, TypeError, OSError):
-                        pass
                     return image_raw.convert("RGB")
-                except Exception:
+                except (OSError, ValueError):
                     return None
             if isinstance(image_raw, dict):
                 img_bytes = image_raw.get("bytes")
                 if img_bytes:
                     try:
                         return PILImage.open(io.BytesIO(img_bytes)).convert("RGB")
-                    except Exception:
+                    except (OSError, ValueError):
                         return None
                 img_path = image_raw.get("path")
                 if img_path:

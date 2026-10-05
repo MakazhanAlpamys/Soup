@@ -4,10 +4,16 @@ import io
 import tempfile
 from pathlib import Path
 
+import pytest
 from PIL import Image
+from rich.console import Console
 
 from soup_cli.config.schema import DataConfig
-from soup_cli.data.loader import _validate_vision_images, load_dataset
+from soup_cli.data.loader import (
+    _resolve_media_entries,
+    _validate_vision_images,
+    load_dataset,
+)
 from soup_cli.trainer.sft import SFTTrainerWrapper
 
 
@@ -134,4 +140,53 @@ def test_prepare_vision_dataset_opens_path_only_struct(tmp_path):
     wrapper = SFTTrainerWrapper.__new__(SFTTrainerWrapper)
     train_ds, _ = wrapper._prepare_vision_dataset(dataset)
     assert [im.size for im in train_ds[0]["images"]] == [(6, 4)]
+
+
+def test_struct_path_refusals_count_as_outside(tmp_path):
+    rows = [
+        {"image": {"bytes": None, "path": "bad\x00name.png"}},
+        {"image": {"bytes": None, "path": tmp_path / "valid.png"}},
+    ]
+    entries, missing, outside = _resolve_media_entries(rows, "image", tmp_path)
+    assert entries == [None, None]
+    assert (missing, outside) == (0, 2)
+
+
+def test_struct_path_without_image_dir_names_the_setting():
+    rows = [{"image": {"bytes": None, "path": "pic.png"}}]
+    with pytest.raises(ValueError, match="data.image_dir"):
+        _resolve_media_entries(rows, "image", None, source="Hub dataset 'org/x'")
+
+
+def test_struct_with_bytes_is_kept_whatever_its_path(tmp_path):
+    elsewhere = str(tmp_path.parent / "elsewhere" / "pic.png")
+    rows = [{"image": {"bytes": b"\x89PNG", "path": elsewhere}}]
+    entries, missing, outside = _resolve_media_entries(rows, "image", tmp_path)
+    assert entries == rows
+    assert (missing, outside) == (0, 0)
+
+
+def test_prepare_vision_dataset_never_opens_a_non_regular_struct_path(tmp_path, monkeypatch):
+    from soup_cli.trainer import sft
+
+    monkeypatch.setattr(sft, "console", Console(file=io.StringIO(), width=400))
+    opened = []
+    real_open = Image.open
+
+    def spy(fp, *args, **kwargs):
+        opened.append(fp)
+        return real_open(fp, *args, **kwargs)
+
+    rows = [
+        {
+            "image": {"bytes": None, "path": str(tmp_path)},
+            "messages": [{"role": "user", "content": "hi"}],
+        }
+    ]
+    wrapper = SFTTrainerWrapper.__new__(SFTTrainerWrapper)
+    with monkeypatch.context() as patched:
+        patched.setattr(Image, "open", spy)
+        train_ds, _ = wrapper._prepare_vision_dataset({"train": rows})
+    assert opened == []
+    assert [len(images) for images in train_ds["images"]] == [0]
 
