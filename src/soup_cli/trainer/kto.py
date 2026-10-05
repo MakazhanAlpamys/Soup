@@ -221,6 +221,8 @@ class KTOTrainerWrapper(StreamingSetupMixin):
                 "max_length": cfg.data.max_length,
                 "max_prompt_length": cfg.data.max_length // 2,
                 "truncation_mode": DEFAULT_PROMPT_TRUNCATION_MODE,
+                "only_when_overflow": True,
+                "kl_chunk_size": batch_size,
             }
             self.trainer.train_dataset = enforce_preference_sequence_limit(
                 self.trainer.train_dataset, **cap_kwargs

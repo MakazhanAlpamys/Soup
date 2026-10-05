@@ -481,3 +481,172 @@ class TestKtoTruncatesThePromptFromTheEnd:
             if label == _IGNORE_LABEL
         ]
         assert masked == tail
+
+
+#: 41 words: longer than max_length // 2, yet prompt + completion is 45 of 64 tokens.
+_FITTING_PROMPT = " ".join(["hi"] * 40 + ["world"])
+#: An over-long prompt whose end is visible, so the kept side of the cut can be asserted.
+_OVERLONG_PROMPT_WITH_TAIL = " ".join(["hello"] * (_OVERLONG_PROMPT_WORDS - 1) + ["world"])
+
+
+def _setup_rows(tmp_path, monkeypatch, task, rows, val_rows=None):
+    import importlib
+
+    module, cls_name, _ = _WRAPPERS[task]
+    weights = _tiny_llama_dir(tmp_path)
+    _write_tiny_tokenizer(weights)
+    monkeypatch.chdir(tmp_path)
+    cfg = _cfg(weights, tmp_path / "out", task)
+    wrapper = getattr(importlib.import_module(module), cls_name)(cfg, device="cpu")
+    dataset = {"train": rows}
+    if val_rows is not None:
+        dataset["val"] = val_rows
+    wrapper.setup(dataset)
+    return wrapper
+
+
+def _rows_with(task, prompt, completion, n=8):
+    if task == "kto":
+        return [
+            {"prompt": prompt, "completion": completion, "label": i % 2 == 0}
+            for i in range(n)
+        ]
+    return [{"prompt": prompt, "chosen": completion, "rejected": " bad"} for _ in range(n)]
+
+
+class TestTheCapTouchesOnlyRowsThatOverflow:
+    @pytest.mark.parametrize("task", ("bco", "ipo", "kto", "simpo"))
+    def test_a_row_that_fits_reaches_the_trainer_uncut(self, tmp_path, monkeypatch, task):
+        rows = _rows_with(task, _FITTING_PROMPT, " good answer")
+        wrapper = _setup_rows(tmp_path, monkeypatch, task, rows)
+        row = wrapper.trainer.train_dataset[0]
+        prompt = list(row["prompt_ids"] if "prompt_ids" in row else row["prompt_input_ids"])
+        words = wrapper.tokenizer.convert_ids_to_tokens(prompt)
+        assert len(prompt) > _MAX_PROMPT_LENGTH, (task, len(prompt), words[:2], words[-2:])
+        assert words[-1] == "world", (task, words[-3:])
+
+    @pytest.mark.parametrize("task", ("bco", "ipo", "kto", "simpo"))
+    def test_a_validation_row_that_fits_reaches_the_trainer_uncut(
+        self, tmp_path, monkeypatch, task
+    ):
+        rows = _rows_with(task, "hi", " good answer")
+        val_rows = _rows_with(task, _FITTING_PROMPT, " good answer")
+        wrapper = _setup_rows(tmp_path, monkeypatch, task, rows, val_rows=val_rows)
+        row = wrapper.trainer.eval_dataset[0]
+        prompt = list(row["prompt_ids"] if "prompt_ids" in row else row["prompt_input_ids"])
+        words = wrapper.tokenizer.convert_ids_to_tokens(prompt)
+        assert len(prompt) > _MAX_PROMPT_LENGTH, (task, len(prompt), words[:2], words[-2:])
+        assert words[-1] == "world", (task, words[-3:])
+
+    @pytest.mark.parametrize("task", ("bco", "kto"))
+    def test_a_row_trl_already_fit_keeps_its_eos(self, tmp_path, monkeypatch, task):
+        rows = _rows_with(task, "hi", _LONG_COMPLETION)
+        wrapper = _setup_rows(tmp_path, monkeypatch, task, rows)
+        eos_id = wrapper.tokenizer.eos_token_id
+        for index, row in enumerate(wrapper.trainer.train_dataset):
+            if task == "bco" and len(row["answer_input_ids"]) < 10:
+                continue  # BCO's rejected half (" bad") is not the long row
+            ids = list(row["completion_input_ids"])
+            assert len(ids) <= _MAX_SEQUENCE_LENGTH, (task, index, len(ids))
+            assert ids[-1] == eos_id, (task, index, "EOS dropped from a row trl already fit")
+
+    @pytest.mark.parametrize("task", ("bco", "kto"))
+    def test_an_overlong_prompt_keeps_its_end_and_the_completion_its_eos(
+        self, tmp_path, monkeypatch, task
+    ):
+        rows = _rows_with(task, _OVERLONG_PROMPT_WITH_TAIL, " good answer")
+        wrapper = _setup_rows(tmp_path, monkeypatch, task, rows)
+        tok = wrapper.tokenizer
+        for index, row in enumerate(wrapper.trainer.train_dataset):
+            ids = list(row["completion_input_ids"])
+            labels = list(row["completion_labels"])
+            assert len(ids) <= _MAX_SEQUENCE_LENGTH, (task, index, len(ids))
+            masked = [tok for tok, label in zip(ids, labels) if label == _IGNORE_LABEL]
+            assert tok.convert_ids_to_tokens(masked[-1:]) == ["world"], (task, index)
+            assert ids[-1] == tok.eos_token_id, (task, index, "the completion lost its EOS")
+
+    def test_the_kto_kl_completion_keeps_its_answer(self, tmp_path, monkeypatch):
+        wrapper = _setup_rows(tmp_path, monkeypatch, "kto", _long_kto_rows(8))
+        eos_id = wrapper.tokenizer.eos_token_id
+        for index, row in enumerate(wrapper.trainer.train_dataset):
+            ids = list(row["KL_completion_input_ids"])
+            labels = list(row["KL_completion_labels"])
+            assert len(ids) <= _MAX_SEQUENCE_LENGTH, (index, len(ids))
+            non_eos = [
+                token
+                for token, label in zip(ids, labels)
+                if label != _IGNORE_LABEL and token != eos_id
+            ]
+            assert non_eos, f"kto row {index}: the KL completion is EOS-only"
+
+    def test_the_kto_kl_rebuild_matches_trl_on_rows_that_fit(self, tmp_path, monkeypatch):
+        """The KL reconstruction reproduces TRL's own rotated KL rows exactly.
+
+        Rows that fit reach the trainer untouched, so they are TRL's own output;
+        rebuilding the KL completion from answer_input_ids with the same
+        per-device-batch rotation must give the identical ids, mask and labels.
+        """
+        from soup_cli.trainer._trl_compat import (
+            _rebuild_unpaired_sequence,
+            _rotated_answer_index,
+        )
+
+        completions = [" good answer", " fine", " a much longer answer with words", " no"]
+        rows = [
+            {"prompt": "hi there", "completion": completions[index % 4], "label": index % 2 == 0}
+            for index in range(9)
+        ]
+        wrapper = _setup_rows(tmp_path, monkeypatch, "kto", rows)
+        dataset = wrapper.trainer.train_dataset
+        answers = list(dataset["answer_input_ids"])
+        masks = list(dataset["answer_attention_mask"])
+        chunk = wrapper.trainer.args.per_device_train_batch_size
+        eos_id = wrapper.tokenizer.eos_token_id
+        for index, row in enumerate(dataset):
+            lender = _rotated_answer_index(index, len(answers), chunk)
+            rebuilt = _rebuild_unpaired_sequence(
+                row["KL_prompt_input_ids"],
+                row["KL_prompt_attention_mask"],
+                answers[lender],
+                masks[lender],
+                eos_id,
+                max_length=_MAX_SEQUENCE_LENGTH,
+                max_prompt_length=_MAX_SEQUENCE_LENGTH,
+                truncation_mode="keep_end",
+            )
+            assert rebuilt["input_ids"] == list(row["KL_completion_input_ids"]), index
+            assert rebuilt["labels"] == list(row["KL_completion_labels"]), index
+            assert rebuilt["attention_mask"] == list(row["KL_completion_attention_mask"]), index
+
+    def test_the_kto_kl_completion_of_an_overlong_prompt_borrows_the_rotated_answer(
+        self, tmp_path, monkeypatch
+    ):
+        """An over-long row's KL completion is its prompt plus the neighbour's answer.
+
+        TRL pairs each row with another row's answer inside every
+        per_device_train_batch_size chunk; the rebuild has to follow the same
+        rotation, or the KL estimate compares the wrong text.
+        """
+        from soup_cli.trainer._trl_compat import _rotated_answer_index
+
+        completions = [" alpha beta", " gamma", " delta epsilon zeta", " eta"]
+        rows = [
+            {
+                "prompt": _OVERLONG_PROMPT_WITH_TAIL,
+                "completion": completions[index % 4],
+                "label": index % 2 == 0,
+            }
+            for index in range(8)
+        ]
+        wrapper = _setup_rows(tmp_path, monkeypatch, "kto", rows)
+        eos_id = wrapper.tokenizer.eos_token_id
+        dataset = wrapper.trainer.train_dataset
+        answers = list(dataset["answer_input_ids"])
+        chunk = wrapper.trainer.args.per_device_train_batch_size
+        for index, row in enumerate(dataset):
+            lender = _rotated_answer_index(index, len(answers), chunk)
+            ids = list(row["KL_completion_input_ids"])
+            labels = list(row["KL_completion_labels"])
+            trained = [token for token, label in zip(ids, labels) if label != _IGNORE_LABEL]
+            assert len(ids) <= _MAX_SEQUENCE_LENGTH, (index, len(ids))
+            assert trained == list(answers[lender]) + [eos_id], index

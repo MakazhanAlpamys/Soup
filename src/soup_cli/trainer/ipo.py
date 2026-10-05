@@ -189,6 +189,7 @@ class IPOTrainerWrapper:
                 "max_length": cfg.data.max_length,
                 "max_prompt_length": cfg.data.max_length // 2,
                 "truncation_mode": dpo_config.truncation_mode,
+                "only_when_overflow": True,
             }
             self.trainer.train_dataset = enforce_preference_sequence_limit(
                 self.trainer.train_dataset, **cap_kwargs
