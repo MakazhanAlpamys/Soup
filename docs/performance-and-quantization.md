@@ -817,7 +817,10 @@ flight per drive. The cache is laid out this way whichever tier the run picks; o
 reads the drives in parallel. Every entry is checked, and any failure refuses the run and names
 the entry and the rule: it must be an absolute path (on Windows, with a drive letter or UNC share;
 no `\\?\` or `\\.\` spelling, no control characters), already exist as a folder (a drive that is
-not mounted is never mistaken for an empty one), not be a symlink, not lie inside or contain the
+not mounted is never mistaken for an empty one), not be a symlink or a directory junction (a
+genuine Windows volume mount point is accepted — a junction and a mount point carry the same
+reparse tag, but only a junction's target names a drive-letter folder that can be repointed at
+any time; a mount point's names the volume itself), not lie inside or contain the
 primary cache root or another entry, sit on a different volume from the primary root and from
 every other entry, and classify as NVMe (`training.stream_disk_kind` overrides a wrong probe); the
 list holds at most 6 folders. The bytes are exactly the ones the single-drive cache holds, so
@@ -830,8 +833,10 @@ primary cache's path, so two primary caches (two users, or two `SOUP_LAYER_STREA
 values) sharing one stripe drive never touch each other's files. That folder is made private to
 the account running Soup (mode 0700 on POSIX; on Windows a protected ACL for that account and
 SYSTEM, replacing the inherited one, which on a data drive typically lets every signed-in
-account modify files), checked again on every reuse, and never followed if it is a link or
-junction; a folder Soup cannot make private refuses the run by name. Soup never deletes anything
+account modify files), checked again on every reuse and again before every per-layer write and
+the marker write of a shard — so a root renamed out from under a running shard and replaced
+with a link is caught at the next write, not just at the start — and never followed if it is a
+link or junction; a folder Soup cannot make private refuses the run by name. Soup never deletes anything
 inside a stripe folder. Soup makes only its own folder owner-only, so also make the stripe ROOT
 itself writable only by your own account (on a default Windows data drive other accounts can
 modify it).

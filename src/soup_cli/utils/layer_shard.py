@@ -1204,9 +1204,11 @@ def shard_checkpoint(
 
     from soup_cli.utils.stripe_roots import (
         STRIPE_DIRS_ENV,
+        StripeRootError,
         layer_roots_for,
         primary_cache_identity,
         secure_stripe_folder,
+        stripe_folder_problem,
         validate_stripe_root,
     )
 
@@ -1620,6 +1622,19 @@ def shard_checkpoint(
                     )
                 shared_specs.setdefault(name, spec)
             root = layer_roots[idx] if layer_roots else 0
+            if root:
+                # secure_stripe_folder ran once, before the loop started. Between then and
+                # now the root could have been renamed and a link substituted in its place
+                # (the folder itself still looks fine to a plain stat), so the same
+                # real-path check is repeated right before every write that would otherwise
+                # silently follow it.
+                problem = stripe_folder_problem(shard_dirs[root], stripe[root - 1])
+                if problem is not None:
+                    raise StripeRootError(
+                        f"{STRIPE_DIRS_ENV}: writing decoder layer {idx} to the stripe root "
+                        f"{stripe[root - 1]} refused: {problem}. The existing cache index is "
+                        f"unchanged."
+                    )
             try:
                 _atomic_save(blob, layer_shard_path(shard_dirs[root], idx))
             except OSError as exc:
@@ -1687,6 +1702,12 @@ def shard_checkpoint(
 
     primary = primary_cache_identity(resolved_out)
     for position, directory in enumerate(shard_dirs[1:], start=1):
+        problem = stripe_folder_problem(directory, stripe[position - 1])
+        if problem is not None:
+            raise StripeRootError(
+                f"{STRIPE_DIRS_ENV}: writing the stripe marker to {stripe[position - 1]} "
+                f"refused: {problem}. The existing cache index is unchanged."
+            )
         _write_stripe_marker(
             directory,
             fingerprint=fingerprint,

@@ -133,6 +133,33 @@ def volume_of(path: str) -> int:
     return int(os.stat(_nearest_existing(path)).st_dev)
 
 
+def _is_link(info: os.stat_result) -> bool:
+    """A symlink, or on Windows any reparse point: a junction does not report S_ISLNK (and
+    ``os.path.islink`` misses it before 3.12), but it redirects exactly as a symlink does."""
+    if stat.S_ISLNK(info.st_mode):
+        return True
+    reparse = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+    return os.name == "nt" and bool(getattr(info, "st_file_attributes", 0) & reparse)
+
+
+def is_volume_mount_point(path: str) -> bool:
+    """Whether the reparse point at ``path`` is a genuine Windows volume mount point.
+
+    A directory junction and a volume mount point carry the identical
+    ``IO_REPARSE_TAG_MOUNT_POINT`` tag (``_is_link`` cannot tell them apart), so the two are
+    distinguished by their target instead: ``mountvol`` names a volume mount point's target
+    ``\\\\?\\Volume{<guid>}\\``, never a drive-letter or UNC folder path, which is what a
+    junction always targets. Refusing every reparse point would also refuse a legitimate
+    volume-mount-point stripe root; this is the narrower rule that does not.
+    """
+    try:
+        target = os.readlink(path)
+    except OSError:
+        return False
+    stripped = target.removeprefix("\\\\?\\").removeprefix("\\??\\")
+    return stripped.startswith("Volume{")
+
+
 def validate_stripe_root(entry: str, *, primary_root: str, accepted: Sequence[str] = ()) -> str:
     """Syntax, existence, symlink and overlap rules; returns the entry's realpath.
 
@@ -160,6 +187,22 @@ def validate_stripe_root(entry: str, *, primary_root: str, accepted: Sequence[st
         raise StripeRootError(f"{where}: must name a drive letter or a UNC share")
     if os.path.islink(expanded):
         raise StripeRootError(f"{where}: must not be a symlink")
+    if os.name == "nt":
+        try:
+            entry_info = os.lstat(expanded)
+        except OSError:
+            entry_info = None
+        if (
+            entry_info is not None
+            and _is_link(entry_info)
+            and not is_volume_mount_point(expanded)
+        ):
+            raise StripeRootError(
+                f"{where}: is a directory junction, not a real folder or a genuine Windows "
+                f"volume mount point; Soup would stripe layer writes through it to wherever "
+                f"it currently points, which a junction (unlike a mounted volume) can be "
+                f"repointed to at any time"
+            )
     if not os.path.isdir(expanded):
         raise StripeRootError(
             f"{where}: must be an existing directory. Soup creates only its per-model folder "
@@ -245,15 +288,6 @@ def stripe_folder_name(shard_dir: str) -> str:
     slug = os.path.basename(os.path.normpath(shard_dir))
     digest = hashlib.sha256(os.fsencode(primary_cache_identity(shard_dir))).hexdigest()[:12]
     return f"{slug}-{digest}"
-
-
-def _is_link(info: os.stat_result) -> bool:
-    """A symlink, or on Windows any reparse point: a junction does not report S_ISLNK (and
-    ``os.path.islink`` misses it before 3.12), but it redirects exactly as a symlink does."""
-    if stat.S_ISLNK(info.st_mode):
-        return True
-    reparse = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
-    return os.name == "nt" and bool(getattr(info, "st_file_attributes", 0) & reparse)
 
 
 def stripe_folder_problem(folder: str, root: str) -> Optional[str]:
