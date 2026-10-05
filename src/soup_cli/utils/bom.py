@@ -200,7 +200,14 @@ def _spdx_expression(value: str) -> Optional[str]:
     ``Apache 2.0 with Commons Clause`` is a name, not an expression (#1569 review).
     """
     tokens = _SPDX_TOKEN_RE.findall(value)
-    if not any(token in _SPDX_OPERATORS for token in tokens):
+    # A lone ``LicenseRef-`` or a lone ``id+`` that is not itself a listed id
+    # (``Apache-2.0+``; ``GPL-2.0+`` is listed) is a simple expression; a lone
+    # listed id stays on the ``license.id`` path.
+    simple = len(tokens) == 1 and (
+        _LICENSE_REF_RE.fullmatch(tokens[0]) is not None
+        or (tokens[0].endswith("+") and canonical_spdx_id(tokens[0]) is None)
+    )
+    if not simple and not any(token in _SPDX_OPERATORS for token in tokens):
         return None
     out: list[str] = []
     depth, want_operand = 0, True

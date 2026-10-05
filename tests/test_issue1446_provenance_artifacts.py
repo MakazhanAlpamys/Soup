@@ -260,6 +260,7 @@ class TestCycloneDx:
         ("apache-2.0", [{"license": {"id": "Apache-2.0"}}]),
         ("Apache-2.0", [{"license": {"id": "Apache-2.0"}}]),
         ("mit", [{"license": {"id": "MIT"}}]),
+        ("GPL-2.0+", [{"license": {"id": "GPL-2.0+"}}]),  # listed itself, so an id
         ("Llama 3.1 Community", [{"license": {"name": "Llama 3.1 Community"}}]),
         ("Apache-2.0 OR MIT", [{"expression": "Apache-2.0 OR MIT"}]),
     ])
@@ -280,6 +281,7 @@ class TestSpdxLicenseFields:
     @pytest.mark.parametrize("given,expected", [
         ("apache-2.0", "Apache-2.0"),
         ("MIT", "MIT"),
+        ("GPL-2.0+", "GPL-2.0+"),  # listed as an id itself, so not an expression
         ("Apache-2.0 OR MIT", "Apache-2.0 OR MIT"),
         (None, "NOASSERTION"),
     ])
@@ -333,6 +335,8 @@ class TestLicenseNamesThatOnlyLookLikeExpressions:
         ("GPL-2.0-only WITH Classpath-exception-2.0", "GPL-2.0-only WITH Classpath-exception-2.0"),
         ("Apache-2.0 OR LicenseRef-Llama-Community", "Apache-2.0 OR LicenseRef-Llama-Community"),
         ("apache-2.0+ OR mit", "Apache-2.0+ OR MIT"),  # the `+` suffix survives canonicalisation
+        ("apache-2.0+", "Apache-2.0+"),  # a lone `id+` is a simple expression
+        ("LicenseRef-Llama-Community", "LicenseRef-Llama-Community"),  # so is a lone ref
     ])
     def test_a_real_expression_is_kept_with_canonical_ids(self, given, expected) -> None:
         licenses = build_cyclonedx_bom(_entry(given))["metadata"]["component"]["licenses"]
