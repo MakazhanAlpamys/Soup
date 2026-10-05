@@ -380,7 +380,7 @@ model + parent adapters + per-artifact files appear as components with SHA-256 h
 `Apache-2.0`) goes in CycloneDX `license.id` and in SPDX `licenseConcluded` /
 `licenseDeclared`; a valid SPDX expression (`Apache-2.0 OR MIT`, upper-case operators,
 every operand a listed id or a `LicenseRef-`) goes in CycloneDX `expression` and in those
-SPDX fields as written; anything else, including a name that merely contains "and" or
+SPDX fields with its ids canonicalised; anything else, including a name that merely contains "and" or
 "with" (`Gemma Terms of Use and Prohibited Use Policy`), is CycloneDX `license.name` and an
 SPDX `LicenseRef-` with its text in `hasExtractedLicensingInfos`. The CycloneDX
 `serialNumber` is an RFC 4122 `urn:uuid:` (#1446).

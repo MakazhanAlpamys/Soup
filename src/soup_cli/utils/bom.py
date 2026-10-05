@@ -244,7 +244,8 @@ _LICENSE_REF_SAFE_RE = re.compile(r"[^A-Za-z0-9.-]+")
 
 def _spdx_license_expression(value: Optional[str]) -> tuple[str, Optional[dict]]:
     """SPDX 2.3 ``licenseConcluded`` / ``licenseDeclared``: a canonical id, an expression
-    as written, or a ``LicenseRef-`` with its ``hasExtractedLicensingInfos`` entry (#1446)."""
+    with its ids canonicalised, or a ``LicenseRef-`` with its ``hasExtractedLicensingInfos``
+    entry (#1446)."""
     if not value:
         return "NOASSERTION", None
     expression = _spdx_expression(value)

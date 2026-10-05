@@ -318,6 +318,7 @@ class TestLicenseNamesThatOnlyLookLikeExpressions:
         "MIT OR",
         "OR MIT",
         "(MIT OR Apache-2.0",
+        "MIT) OR (Apache-2.0",  # a close before any open: the depth guard
     ])
     def test_a_name_that_only_looks_like_an_expression_is_a_name(self, given) -> None:
         licenses = build_cyclonedx_bom(_entry(given))["metadata"]["component"]["licenses"]
@@ -331,6 +332,7 @@ class TestLicenseNamesThatOnlyLookLikeExpressions:
         ("(MIT OR Apache-2.0) AND BSD-3-Clause", "(MIT OR Apache-2.0) AND BSD-3-Clause"),
         ("GPL-2.0-only WITH Classpath-exception-2.0", "GPL-2.0-only WITH Classpath-exception-2.0"),
         ("Apache-2.0 OR LicenseRef-Llama-Community", "Apache-2.0 OR LicenseRef-Llama-Community"),
+        ("apache-2.0+ OR mit", "Apache-2.0+ OR MIT"),  # the `+` suffix survives canonicalisation
     ])
     def test_a_real_expression_is_kept_with_canonical_ids(self, given, expected) -> None:
         licenses = build_cyclonedx_bom(_entry(given))["metadata"]["component"]["licenses"]
