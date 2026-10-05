@@ -924,7 +924,7 @@ all-masked sequence or saving a non-finite adapter.
 Every command that loads a model now requires `--trust-remote-code` to execute custom Python from a model repo (`auto_map` in `config.json`). First-party orgs (Meta, Mistral, Qwen, Google, etc.) suppress the warning panel; everything else prints a `REMOTE CODE WARNING` panel before loading. Unknown-org local checkpoints with `auto_map` raise a friendly `ValueError` at construction time instead of silently exec'ing inside `from_pretrained`.
 
 Coverage:
-- `soup train` (every task — SFT, DPO, GRPO, KTO, ORPO, SimPO, IPO, PPO, Reward Model, Pretrain, Embedding, BCO, and the unified Preference dispatcher)
+- `soup train` (every task — SFT, DPO, GRPO, KTO, ORPO, SimPO, IPO, PPO, Reward Model, Pretrain, Embedding, BCO, and the unified Preference dispatcher; automatic evaluation after training keeps the flag disabled, see `docs/evaluation.md`)
 - `soup chat`, `soup serve`, `soup data download`, `soup eval auto`
 - `soup diff`, `soup export`, `soup merge`, `soup infer`, `soup data generate`
 - `soup eval benchmark`, `soup eval custom`, `soup train --find-lr`, `soup draft distill`, `soup shrink`

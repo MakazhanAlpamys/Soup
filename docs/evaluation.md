@@ -856,6 +856,9 @@ baseline scorer stamp covers the bundled suites only and will not warn: re-measu
 baselines, or compare new runs only with runs made on this version.
 
 ### Auto-Eval Config (soup.yaml)
+
+Benchmarks need the `eval` extra:
+
 ```bash
 pip install "soup-cli[eval]"
 ```
@@ -872,10 +875,10 @@ eval:
 
 When `eval.auto_eval: true`, Soup runs the configured evaluation once after `soup train` finishes and the trained model/adapter has been saved. The evaluation uses the output artifact produced by that training run.
 
-- `benchmarks` runs the configured `lm-eval-harness` benchmarks. Install the benchmark dependencies required by your environment before enabling them.
+- `benchmarks` runs the configured `lm-eval-harness` benchmarks. Install the `soup-cli[eval]` extra above before enabling them.
 - `custom_tasks` runs the configured custom evaluation tasks against the trained model.
 - `judge` is not part of auto-evaluation; configure and run judge evaluation separately.
-- Auto-evaluation keeps `trust_remote_code` disabled.
+- Auto-evaluation keeps `trust_remote_code` disabled even when `soup train --trust-remote-code` was passed, so for a base that ships custom code the evaluation is skipped with a message (`Auto-eval custom failed: ... Please pass the argument trust_remote_code=True`); run `soup eval custom ... --trust-remote-code` yourself for that case.
 - If auto-evaluation fails, Soup reports the failure but does not fail an otherwise successful training run.
 - Auto-evaluation can take a significant amount of time. For example, MMLU evaluates multiple subtasks.
 
