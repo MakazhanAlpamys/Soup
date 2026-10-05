@@ -721,7 +721,7 @@ training:
   grad_accum_pressure_threshold: 0.92
 ```
 
-Records peak memory each step. When pressure crosses the threshold, recommends a new `(batch, accum)` pair preserving effective batch (capped at `accum=1024`).
+Records peak memory each step. Pressure is peak allocated memory divided by the total memory of the CUDA device the run uses (#1620), so the threshold means the same thing on a 4 GB laptop card and on an 80 GB accelerator. When pressure crosses the threshold, recommends a new `(batch, accum)` pair preserving effective batch (capped at `accum=1024`), together with the measured peak and total.
 
 > **Backend Note:** Setting `grad_accum_auto_tune: true` is refused on `backend: mlx` at config validation (there is no VRAM total to measure pressure against on unified memory).
 
