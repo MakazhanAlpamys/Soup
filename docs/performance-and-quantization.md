@@ -820,8 +820,9 @@ no `\\?\` or `\\.\` spelling, no control characters), already exist as a folder 
 not mounted is never mistaken for an empty one), not be a symlink, not lie inside or contain the
 primary cache root or another entry, sit on a different volume from the primary root and from
 every other entry, and classify as NVMe (`training.stream_disk_kind` overrides a wrong probe); the
-list holds at most 6 folders. The bytes are exactly the ones the single-drive cache holds, so
-striping changes the speed, not the result.
+list holds at most 6 folders. The checks that need no disk probe run when `soup train` or
+`--dry-run` starts, and `soup doctor` lists each entry, with `--disk` for the NVMe rule. The bytes
+are exactly the ones the single-drive cache holds, so striping changes the speed, not the result.
 
 Stripe folders are outside the home/cwd/tmp containment the primary cache has, by design — a
 second drive is never under `$HOME`. What that containment gave is enforced directly instead.

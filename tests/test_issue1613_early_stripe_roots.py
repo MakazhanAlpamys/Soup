@@ -7,10 +7,13 @@ Pinned by this suite:
   was not called.
 - The same config with --dry-run: the same refusal, and no "Config valid" line.
 - A same-volume entry is refused at the same early point.
+- When stream_layers is off/unset in config, the variable is not checked.
 - soup doctor with the variable set to a missing folder prints a row that names
   the entry and the rule; with the variable unset the output is unchanged.
-- With the variable unset, soup train behaves exactly as before (no new output,
-  no new call).
+- soup doctor with --disk probes each stripe root and reports NVMe.
+- soup doctor never prints raw control characters from an entry.
+- soup doctor count cap reports MAX_STREAM_READ_AHEAD.
+- soup doctor refuses a stripe root on the same volume as the primary cache root.
 - Output assertions go through ANSI-strip and whitespace-collapse helper, and pass
   with FORCE_COLOR=1.
 """
@@ -18,24 +21,39 @@ Pinned by this suite:
 from __future__ import annotations
 
 import os
+import re
+from io import StringIO
 from unittest.mock import MagicMock
 
 import pytest
+from rich.console import Console
 from typer.testing import CliRunner
 
 from soup_cli.cli import app
+from soup_cli.utils.config_bounds import MAX_STREAM_READ_AHEAD
 from soup_cli.utils.stripe_roots import (
     MAX_STRIPE_DIRS,
     STRIPE_DIRS_ENV,
     StripeRootError,
+    iter_early_stripe_roots,
     validate_early_stripe_roots,
 )
-from tests.conftest import strip_ansi
+
+_ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 
 
 def _plain(text: str | None) -> str:
     """Rich colours per character and wraps, so compare stripped + collapsed."""
-    return " ".join(strip_ansi(text or "").replace("│", " ").split())
+    return " ".join(_ANSI.sub("", text or "").replace("│", " ").split())
+
+
+def _doctor_resources_raw(monkeypatch, *, probe_disk: bool = False) -> str:
+    from soup_cli.commands import doctor
+
+    out = StringIO()
+    monkeypatch.setattr(doctor, "console", Console(file=out, width=400, color_system=None))
+    doctor._check_resources(probe_disk=probe_disk)
+    return out.getvalue()
 
 
 def _write_streaming_config(tmp_path, **kwargs) -> str:
@@ -91,6 +109,10 @@ class TestCliRunnerEarlyRefusal:
         start_run_mock = MagicMock()
         monkeypatch.setattr(ExperimentTracker, "start_run", start_run_mock)
 
+        cache_dir = tmp_path / "cache_dir"
+        cache_dir.mkdir()
+        monkeypatch.setenv("SOUP_LAYER_STREAM_CACHE_DIR", str(cache_dir))
+
         stripe_dir = tmp_path / "stripe_same_vol"
         stripe_dir.mkdir()
         monkeypatch.setenv(STRIPE_DIRS_ENV, str(stripe_dir))
@@ -111,53 +133,79 @@ class TestCliRunnerEarlyRefusal:
         monkeypatch.delenv(STRIPE_DIRS_ENV, raising=False)
         cfg_file = _write_streaming_config(tmp_path)
 
-        # In dry-run mode, without the variable set, it passes the early check
-        # and proceeds to dry-run data validation.
         result = CliRunner().invoke(app, ["train", "--config", cfg_file, "--dry-run"])
         output = _plain(result.output)
 
-        # It did not fail on stripe roots
         assert "must be an existing directory" not in output
         assert "same volume as the primary" not in output
 
+    def test_variable_is_not_checked_when_stream_layers_is_off(self, tmp_path, monkeypatch):
+        missing = str(tmp_path / "does-not-exist-xyz")
+        monkeypatch.setenv(STRIPE_DIRS_ENV, missing)
+        cfg = tmp_path / "soup.yaml"
+        cfg.write_text(
+            "base: smollm2-135m\ntask: sft\nbackend: transformers\n"
+            "data:\n  train: /dev/null\ntraining:\n  batch_size: 1\n"
+        )
+        result = CliRunner().invoke(app, ["train", "--config", str(cfg), "--dry-run"])
+        output = _plain(result.output)
+        assert "Dry run" in output, (output, repr(result.exception))
+        assert "must be an existing directory" not in output, output
+
 
 class TestDoctorStripeOutput:
-    def test_doctor_prints_row_naming_entry_and_rule_when_missing(self, monkeypatch):
-        missing_dir = "/tmp/doctor_missing_dir"
-        monkeypatch.setenv(STRIPE_DIRS_ENV, missing_dir)
-        monkeypatch.setenv("FORCE_COLOR", "1")
-
-        result = CliRunner().invoke(app, ["doctor"])
-        output = _plain(result.output)
-
-        assert missing_dir in output, output
+    def test_doctor_names_a_missing_stripe_folder_and_the_rule(self, tmp_path, monkeypatch):
+        missing = str(tmp_path / "does-not-exist-xyz")
+        monkeypatch.setenv(STRIPE_DIRS_ENV, missing)
+        output = _plain(_doctor_resources_raw(monkeypatch))
+        assert missing in output, output
         assert "must be an existing directory" in output, output
 
     def test_doctor_output_unchanged_when_variable_unset(self, monkeypatch):
         monkeypatch.delenv(STRIPE_DIRS_ENV, raising=False)
-        result_unset = CliRunner().invoke(app, ["doctor"])
-        output_unset = _plain(result_unset.output)
-
+        output_unset = _plain(_doctor_resources_raw(monkeypatch))
         assert "Stripe root" not in output_unset
 
-    def test_doctor_with_disk_flag_probes_stripe_roots(self, tmp_path, monkeypatch):
-        folder = tmp_path / "valid"
+    def test_doctor_disk_flag_probes_each_stripe_root(self, tmp_path, monkeypatch):
+        import soup_cli.utils.stripe_roots as stripe_roots
+
+        folder = tmp_path / "stripe"
         folder.mkdir()
         monkeypatch.setenv(STRIPE_DIRS_ENV, str(folder))
+        real = os.path.realpath(str(folder))
+        monkeypatch.setattr(
+            stripe_roots, "volume_of", lambda p: 2 if os.path.realpath(p) == real else 1
+        )
+        probed = []
 
-        import soup_cli.utils.stripe_roots as mod
+        def fake_kind(path):
+            probed.append(path)
+            return "nvme"
 
-        ids = {os.path.realpath(str(folder)): 999}
-        monkeypatch.setattr(mod, "volume_of", lambda p: ids.get(os.path.realpath(p), 1))
+        monkeypatch.setattr("soup_cli.utils.layer_stream.detect_disk_kind", fake_kind)
+        output = _plain(_doctor_resources_raw(monkeypatch, probe_disk=True))
+        assert real in probed, probed
+        assert f"Stripe root {folder} — NVMe" in output, output
 
-        # Mock detect_disk_kind to return nvme
-        monkeypatch.setattr("soup_cli.utils.layer_stream.detect_disk_kind", lambda p: "nvme")
+    def test_doctor_never_prints_a_control_character_of_an_entry(self, tmp_path, monkeypatch):
+        monkeypatch.setenv(STRIPE_DIRS_ENV, str(tmp_path / "stripe\x1b[31mred"))
+        raw = _doctor_resources_raw(monkeypatch)
+        assert "\x1b" not in raw, ascii(raw)
+        assert "contains control characters" in _plain(raw), raw
 
-        result = CliRunner().invoke(app, ["doctor", "--disk"])
-        output = _plain(result.output)
+    def test_doctor_count_cap_names_the_real_read_ahead_limit(self, tmp_path, monkeypatch):
+        entries = [str(tmp_path / f"s{n}") for n in range(MAX_STRIPE_DIRS + 1)]
+        monkeypatch.setenv(STRIPE_DIRS_ENV, os.pathsep.join(entries))
+        output = _plain(_doctor_resources_raw(monkeypatch))
+        assert f"stops at {MAX_STREAM_READ_AHEAD}," in output, output
 
-        assert "valid" in output, output
-        assert "NVMe" in output, output
+    def test_doctor_refuses_a_stripe_folder_on_the_primary_volume(self, tmp_path, monkeypatch):
+        (tmp_path / "cache").mkdir()
+        (tmp_path / "stripe").mkdir()
+        monkeypatch.setenv("SOUP_LAYER_STREAM_CACHE_DIR", str(tmp_path / "cache"))
+        monkeypatch.setenv(STRIPE_DIRS_ENV, str(tmp_path / "stripe"))
+        output = _plain(_doctor_resources_raw(monkeypatch))
+        assert "on the same volume as the primary cache root" in output, output
 
 
 class TestValidateEarlyStripeRootsUnit:
@@ -207,3 +255,25 @@ class TestValidateEarlyStripeRootsUnit:
             environ={STRIPE_DIRS_ENV: f"{stripe1}{os.pathsep}{stripe2}"},
         )
         assert result == (os.path.realpath(str(stripe1)), os.path.realpath(str(stripe2)))
+
+    def test_iter_early_stripe_roots_helper(self, tmp_path):
+        cache = tmp_path / "cache"
+        cache.mkdir()
+        stripe = tmp_path / "stripe"
+        stripe.mkdir()
+
+        results = list(
+            iter_early_stripe_roots(
+                str(cache), [str(stripe), str(tmp_path / "nonexistent")]
+            )
+        )
+        assert len(results) == 2
+        # stripe on same volume
+        assert results[0][0] == str(stripe)
+        assert results[0][1] is None
+        assert "on the same volume" in results[0][2]
+
+        # nonexistent
+        assert results[1][0] == str(tmp_path / "nonexistent")
+        assert results[1][1] is None
+        assert "must be an existing directory" in results[1][2]
