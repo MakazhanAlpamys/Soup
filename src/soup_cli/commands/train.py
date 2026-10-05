@@ -1819,20 +1819,13 @@ def train(
     try:
         with profiler_ctx as profiler, energy_ctx:
             if profile_run and profiler is not None:
-                from soup_cli.utils.profiling import build_profile_callback
+                from soup_cli.utils.profiling import attach_profile_callback
 
-                prof_cb = build_profile_callback(profiler)
-                if prof_cb is not None:
-                    hf_trainer = getattr(trainer_wrapper, "trainer", None)
-                    if hf_trainer is not None and hasattr(hf_trainer, "add_callback"):
-                        hf_trainer.add_callback(prof_cb)
-                    elif hasattr(trainer_wrapper, "add_callback"):
-                        trainer_wrapper.add_callback(prof_cb)
-                    else:
-                        console.print(
-                            "[yellow]--profile: trainer does not expose add_callback; "
-                            "profiling step callback disabled for this run[/]"
-                        )
+                if not attach_profile_callback(trainer_wrapper, profiler):
+                    console.print(
+                        "[yellow]--profile:[/] this trainer has no step hook, "
+                        "so no trace will be written"
+                    )
             result = trainer_wrapper.train(
                 display=display, tracker=tracker, run_id=run_id,
                 resume_from_checkpoint=resume_from,

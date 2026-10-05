@@ -168,6 +168,7 @@ class _ProfileStepCallback_body:  # type: ignore[misc]  # noqa: N801
 
     def __init__(self, profiler: Optional[object]) -> None:
         self.profiler = profiler
+        self._step_warned: bool = False
 
     def on_step_end(
         self,
@@ -179,9 +180,17 @@ class _ProfileStepCallback_body:  # type: ignore[misc]  # noqa: N801
         if self.profiler is not None and hasattr(self.profiler, "step"):
             try:
                 self.profiler.step()
-            except Exception:
+            except Exception as exc:
                 # Profiling must never crash a real training run.
-                pass
+                if not getattr(self, "_step_warned", False):
+                    import logging
+
+                    logging.getLogger(__name__).warning(
+                        "--profile: stepping profiler failed (%s); "
+                        "trace may be incomplete or empty",
+                        exc,
+                    )
+                    self._step_warned = True
         return control
 
 
@@ -192,6 +201,16 @@ def build_profile_callback(profiler: Optional[object]) -> Optional[object]:
     from soup_cli.utils.profiling import ProfileStepCallback
 
     return ProfileStepCallback(profiler)
+
+
+def attach_profile_callback(trainer_wrapper: Any, profiler: Optional[object]) -> bool:
+    """Register a ProfileStepCallback on the wrapper's HF trainer; False if impossible."""
+    callback = build_profile_callback(profiler)
+    hf_trainer = getattr(trainer_wrapper, "trainer", None)
+    if callback is None or not hasattr(hf_trainer, "add_callback"):
+        return False
+    hf_trainer.add_callback(callback)
+    return True
 
 
 _LAZY_CALLBACKS = {
@@ -221,6 +240,7 @@ __all__ = [
     "MAX_ACTIVE_STEPS",
     "ProfileStepCallback",
     "ProfilerSchedule",
+    "attach_profile_callback",
     "build_profile_callback",
     "profile_training",
     "resolve_trace_path",

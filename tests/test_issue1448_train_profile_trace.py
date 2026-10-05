@@ -106,6 +106,39 @@ class TestProfileStepCallback:
         assert isinstance(cb, ProfileStepCallback)
         assert cb.profiler is profiler
 
+    def test_attach_registers_on_the_hf_trainer(self):
+        from types import SimpleNamespace
+
+        from soup_cli.utils.profiling import attach_profile_callback
+
+        hf_trainer, profiler = MagicMock(), MagicMock()
+        assert attach_profile_callback(SimpleNamespace(trainer=hf_trainer), profiler) is True
+        (callback,), _ = hf_trainer.add_callback.call_args
+        assert isinstance(callback, ProfileStepCallback)
+        assert callback.profiler is profiler
+
+    def test_attach_reports_a_wrapper_without_a_trainer(self):
+        from types import SimpleNamespace
+
+        from soup_cli.utils.profiling import attach_profile_callback
+
+        assert attach_profile_callback(SimpleNamespace(trainer=None), MagicMock()) is False
+
+    def test_callback_logs_warning_on_step_failure(self, caplog: pytest.LogCaptureFixture):
+        import logging
+
+        profiler = MagicMock()
+        profiler.step.side_effect = RuntimeError("step failure")
+        cb = ProfileStepCallback(profiler)
+        control = MagicMock()
+
+        with caplog.at_level(logging.WARNING):
+            cb.on_step_end(args=None, state=None, control=control)
+            cb.on_step_end(args=None, state=None, control=control)
+
+        assert "stepping profiler failed" in caplog.text
+        assert caplog.text.count("stepping profiler failed") == 1
+
 
 class TestTrainProfileCLI:
     def _setup_run(
@@ -197,3 +230,17 @@ class TestTrainProfileCLI:
         profiles_dir = tmp_path / "out" / "profiles"
         trace_files = list(profiles_dir.glob("*.trace.json")) if profiles_dir.exists() else []
         assert len(trace_files) == 0, "trace should not be written when callback is dropped"
+
+    def test_train_says_no_trace_when_the_trainer_has_no_hook(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        import re
+
+        import soup_cli.utils.profiling as profiling_mod
+
+        cfg_path = self._setup_run(tmp_path, monkeypatch, num_rows=4)
+        monkeypatch.setattr(profiling_mod, "attach_profile_callback", lambda *a: False)
+        result = CliRunner().invoke(app, ["train", "--config", str(cfg_path), "--profile", "--yes"])
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        plain = " ".join(re.sub(r"\x1b\[[0-9;]*m", "", result.output).split())
+        assert "no trace will be written" in plain
