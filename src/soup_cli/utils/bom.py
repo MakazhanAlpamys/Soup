@@ -186,7 +186,9 @@ def _energy_annotations(entry: BomEntry, annotation_date: str) -> list[dict]:
 
 _SPDX_OPERATORS = frozenset({"AND", "OR", "WITH"})
 _SPDX_TOKEN_RE = re.compile(r"[()]|[^\s()]+")
-_LICENSE_REF_RE = re.compile(r"(?:DocumentRef-[A-Za-z0-9.-]+:)?LicenseRef-[A-Za-z0-9.-]+")
+# A ``DocumentRef-`` qualified ref is not accepted: it points into another SPDX document
+# and this builder emits no ``externalDocumentRefs``, so the value stays a name.
+_LICENSE_REF_RE = re.compile(r"LicenseRef-[A-Za-z0-9.-]+")
 
 
 def _spdx_expression(value: str) -> Optional[str]:
@@ -242,23 +244,25 @@ def _license_choice(value: Optional[str]) -> list[dict]:
 _LICENSE_REF_SAFE_RE = re.compile(r"[^A-Za-z0-9.-]+")
 
 
-def _spdx_license_expression(value: Optional[str]) -> tuple[str, Optional[dict]]:
+def _spdx_license_expression(value: Optional[str]) -> tuple[str, list[dict]]:
     """SPDX 2.3 ``licenseConcluded`` / ``licenseDeclared``: a canonical id, an expression
     with its ids canonicalised, or a ``LicenseRef-`` with its ``hasExtractedLicensingInfos``
-    entry (#1446)."""
+    entry (#1446). Every ``LicenseRef-`` the field uses, including an operand inside an
+    expression, gets an entry: SPDX requires each one to be defined in the document."""
     if not value:
-        return "NOASSERTION", None
+        return "NOASSERTION", []
     expression = _spdx_expression(value)
     if expression is not None:
-        return expression, None
+        refs = list(dict.fromkeys(_LICENSE_REF_RE.findall(expression)))
+        return expression, [{"licenseId": ref, "name": ref, "extractedText": ref} for ref in refs]
     canonical = canonical_spdx_id(value)
     if canonical is not None:
-        return canonical, None
+        return canonical, []
     suffix = _LICENSE_REF_SAFE_RE.sub("-", value).strip("-")
     if not suffix:  # nothing idstring-safe survived: name it by content instead
         suffix = hashlib.sha256(value.encode("utf-8")).hexdigest()[:12]
     ref = f"LicenseRef-{suffix}"
-    return ref, {"licenseId": ref, "name": value, "extractedText": value}
+    return ref, [{"licenseId": ref, "name": value, "extractedText": value}]
 
 
 def build_cyclonedx_bom(entry: BomEntry) -> dict:
@@ -344,7 +348,7 @@ def build_spdx_bom(entry: BomEntry) -> dict:
     if not isinstance(entry, BomEntry):
         raise TypeError(f"entry must be BomEntry, got {type(entry).__name__}")
     spdx_id_main = "SPDXRef-Model"
-    license_expression, extracted_license = _spdx_license_expression(entry.license)
+    license_expression, extracted_licenses = _spdx_license_expression(entry.license)
     pkg = {
         "SPDXID": spdx_id_main,
         "name": entry.name,
@@ -398,8 +402,8 @@ def build_spdx_bom(entry: BomEntry) -> dict:
         "packages": [pkg, pkg_base],
         "relationships": relationships,
     }
-    if extracted_license is not None:
-        doc["hasExtractedLicensingInfos"] = [extracted_license]
+    if extracted_licenses:
+        doc["hasExtractedLicensingInfos"] = extracted_licenses
     if entry.data_sha:
         doc["packages"].append({
             "SPDXID": "SPDXRef-Data",

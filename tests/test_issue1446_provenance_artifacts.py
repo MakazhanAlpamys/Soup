@@ -339,6 +339,28 @@ class TestLicenseNamesThatOnlyLookLikeExpressions:
         assert licenses == [{"expression": expected}]
         assert build_spdx_bom(_entry(given))["packages"][0]["licenseConcluded"] == expected
 
+    def test_a_license_ref_operand_is_defined_in_the_document(self) -> None:
+        """SPDX requires every ``LicenseRef-`` a field uses to have an
+        ``hasExtractedLicensingInfos`` entry, operands inside an expression included."""
+        given = "LicenseRef-Llama OR Apache-2.0 OR LicenseRef-Llama"  # one entry per ref
+        doc = build_spdx_bom(_entry(given))
+        assert doc["packages"][0]["licenseConcluded"] == given
+        ref = "LicenseRef-Llama"
+        assert doc["hasExtractedLicensingInfos"] == [
+            {"licenseId": ref, "name": ref, "extractedText": ref}
+        ]
+
+    def test_a_document_ref_qualified_operand_makes_the_value_a_name(self) -> None:
+        """The document emits no ``externalDocumentRefs``, so a ref into another document
+        cannot be honoured; the value is kept verbatim as a name instead."""
+        given = "MIT OR DocumentRef-other:LicenseRef-Custom"
+        licenses = build_cyclonedx_bom(_entry(given))["metadata"]["component"]["licenses"]
+        assert licenses == [{"license": {"name": given}}]
+        doc = build_spdx_bom(_entry(given))
+        concluded = doc["packages"][0]["licenseConcluded"]
+        assert re.fullmatch(r"LicenseRef-[A-Za-z0-9.-]+", concluded), concluded
+        assert doc["hasExtractedLicensingInfos"][0]["extractedText"] == given
+
 
 class TestSpdxRelationship:
     def test_data_is_the_build_dependency_of_the_model(self) -> None:
