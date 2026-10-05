@@ -137,6 +137,11 @@ def _run_auto_eval_after_training(eval_config, output_dir: str, run_id: str) -> 
                 output=None,
                 trust_remote_code=False,
             )
+        except typer.Exit:
+            logger.debug("Auto-eval custom skipped", exc_info=True)
+            console.print(
+                "[yellow]Auto-eval custom skipped (see the message above)[/]"
+            )
         except Exception as exc:
             logger.exception("Auto-eval custom failed")
             console.print(
