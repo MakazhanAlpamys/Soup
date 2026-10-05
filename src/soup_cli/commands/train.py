@@ -601,6 +601,14 @@ def train(
             "if any failure mode returns MAJOR (exit 2) or NOT_RUN (exit 3)."
         ),
     ),
+    diagnose_gate_require_all_modes: bool = typer.Option(
+        False,
+        "--diagnose-gate-require-all-modes",
+        help=(
+            "With --diagnose-gate: a mode missing from the evidence JSON counts as "
+            "NOT_RUN (exit 3) instead of a neutral OK, so the gate proves coverage."
+        ),
+    ),
     annex_xi: str = typer.Option(
         None,
         "--annex-xi",
@@ -965,6 +973,9 @@ def train(
     if hf_resume and not push_as:
         console.print("[red]--hf-resume requires --push-as <repo>[/]")
         raise typer.Exit(1)
+    if diagnose_gate_require_all_modes and not diagnose_gate:
+        console.print("[red]--diagnose-gate-require-all-modes requires --diagnose-gate[/]")
+        raise typer.Exit(1)
     if hf_resume and cfg.task in UNSUPPORTED_RESUME_TASKS:
         console.print(f"[red]--hf-resume is not supported for task {cfg.task!r}[/]")
         raise typer.Exit(1)
@@ -1186,6 +1197,7 @@ def train(
                         trust_remote_code=trust_remote_code,
                         tracker=tracker,
                         diagnose_gate=diagnose_gate,
+                        diagnose_gate_require_all_modes=diagnose_gate_require_all_modes,
                         annex_xi=annex_xi,
                         repro_receipt=repro_receipt,
                         profile_run=profile_run,
@@ -1828,7 +1840,11 @@ def train(
     if diagnose_gate and _should_run_diagnose_gate_on_rank():
         try:
             _run_diagnose_gate(
-                diagnose_gate, run_id, cfg.base, result["output_dir"]
+                diagnose_gate,
+                run_id,
+                cfg.base,
+                result["output_dir"],
+                require_all_modes=diagnose_gate_require_all_modes,
             )
         except typer.Exit:
             raise
@@ -2131,17 +2147,21 @@ def _should_run_diagnose_gate_on_rank() -> bool:
 
 
 def _run_diagnose_gate(
-    evidence_path: str, run_id: str, base: str, adapter: str
+    evidence_path: str,
+    run_id: str,
+    base: str,
+    adapter: str,
+    require_all_modes: bool = False,
 ) -> None:
     """Post-training failure-mode gate (v0.56.0).
 
     Loads a JSON ``evidence`` file with optional per-mode scores and
     refuses to mark the run successful if any mode comes back MAJOR (exit 2)
     or NOT_RUN (exit 3, #1435). Missing modes fall back to a neutral OK score so partial evidence
-    still produces a useful report card. The train command only calls
-    this helper on the chief worker (RANK==0 in a multi-node launch, else
-    LOCAL_RANK==0) so distributed runs execute the gate once per cluster,
-    not once per worker (v0.71.15 #170).
+    still produces a useful report card, unless ``require_all_modes`` (#1525) makes
+    them NOT_RUN. The train command only calls this helper on the chief worker
+    (RANK==0 in a multi-node launch, else LOCAL_RANK==0) so distributed runs
+    execute the gate once per cluster, not once per worker (v0.71.15 #170).
     """
     import json
 
@@ -2187,7 +2207,11 @@ def _run_diagnose_gate(
         )
 
     report = build_report(
-        run_id=run_id, base=base, adapter=adapter, scores=scores
+        run_id=run_id,
+        base=base,
+        adapter=adapter,
+        scores=scores,
+        missing_as_not_run=require_all_modes,
     )
     if report.overall == "MAJOR":
         console.print(

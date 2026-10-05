@@ -177,6 +177,13 @@ def _opt_int(args: dict, key: str, default: int, *, lo: int, hi: int) -> int:
     return val
 
 
+def _opt_bool(args: dict, key: str) -> bool:
+    val = args.get(key, False)
+    if not isinstance(val, bool):
+        raise McpToolError(f"'{key}' must be a boolean")
+    return val
+
+
 def _enforce_data_path(path: str, field: str = "data") -> None:
     try:
         enforce_under_cwd_and_no_symlink(path, field)
@@ -526,6 +533,7 @@ def tool_diagnose_evidence(args: dict) -> dict:
     payload = _read_json_under_cwd(_require_str(args, "evidence"), "evidence")
     base = _opt_str(args, "base") or ""
     adapter = _opt_str(args, "adapter") or ""
+    require_all_modes = _opt_bool(args, "require_all_modes")
 
     raw_scores = payload.get("scores", {})
     if not isinstance(raw_scores, dict):
@@ -555,7 +563,12 @@ def tool_diagnose_evidence(args: dict) -> dict:
             raise McpToolError(f"evidence.scores.{mode} is invalid ({type(exc).__name__})") from exc
     try:
         report = build_report(
-            run_id=run_id, base=base, adapter=adapter, scores=scores, soup_version=__version__
+            run_id=run_id,
+            base=base,
+            adapter=adapter,
+            scores=scores,
+            soup_version=__version__,
+            missing_as_not_run=require_all_modes,
         )
     except (ValueError, TypeError) as exc:
         raise McpToolError(f"diagnose failed ({type(exc).__name__})") from exc
@@ -1082,6 +1095,13 @@ def _readonly_specs() -> list[ToolSpec]:
                     },
                     "base": {"type": "string"},
                     "adapter": {"type": "string"},
+                    "require_all_modes": {
+                        "type": "boolean",
+                        "description": (
+                            "A mode missing from the evidence is NOT_RUN instead of a "
+                            "neutral OK (default false)."
+                        ),
+                    },
                 },
                 "required": ["run_id", "evidence"],
                 "additionalProperties": False,
