@@ -61,7 +61,8 @@ class TestCliRunnerEarlyRefusal:
         start_run_mock = MagicMock()
         monkeypatch.setattr(ExperimentTracker, "start_run", start_run_mock)
 
-        missing_dir = str(tmp_path / "does-not-exist-xyz")
+        missing_name = "missing_stripe_folder"
+        missing_dir = str(tmp_path / missing_name)
         monkeypatch.setenv(STRIPE_DIRS_ENV, missing_dir)
         monkeypatch.setenv("FORCE_COLOR", "1")
 
@@ -77,7 +78,7 @@ class TestCliRunnerEarlyRefusal:
 
         assert result.exit_code == 1, (result.output, repr(result.exception))
         assert "must be an existing directory" in output, output
-        assert "does-not-exist-xyz" in output, output
+        assert missing_name in output.replace(" ", ""), output
         assert "Loaded:" not in output, output
         assert "Run ID" not in output, output
         assert "Config valid" not in output, output
