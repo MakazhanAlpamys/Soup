@@ -1817,7 +1817,22 @@ def train(
         raise
 
     try:
-        with profiler_ctx, energy_ctx:
+        with profiler_ctx as profiler, energy_ctx:
+            if profile_run and profiler is not None:
+                from soup_cli.utils.profiling import build_profile_callback
+
+                prof_cb = build_profile_callback(profiler)
+                if prof_cb is not None:
+                    hf_trainer = getattr(trainer_wrapper, "trainer", None)
+                    if hf_trainer is not None and hasattr(hf_trainer, "add_callback"):
+                        hf_trainer.add_callback(prof_cb)
+                    elif hasattr(trainer_wrapper, "add_callback"):
+                        trainer_wrapper.add_callback(prof_cb)
+                    else:
+                        console.print(
+                            "[yellow]--profile: trainer does not expose add_callback; "
+                            "profiling step callback disabled for this run[/]"
+                        )
             result = trainer_wrapper.train(
                 display=display, tracker=tracker, run_id=run_id,
                 resume_from_checkpoint=resume_from,
