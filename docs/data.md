@@ -1042,7 +1042,7 @@ soup data from-traces \
   --min-confidence 0.7
 ```
 
-The judge scores `chosen` and `rejected` independently against its rubric (default helpfulness/accuracy/safety on a 1-5 scale). Pairs whose normalised `(chosen - rejected)` confidence falls below `--min-confidence` are dropped. Per-pair backend exceptions are counted (not crashed) and reported. Provider allowlist `{openai, server, ollama}` validated at the CLI boundary; SSRF protection on `--judge-api-base` carries over from `soup eval judge`.
+The judge scores `chosen` and `rejected` independently against its rubric (default helpfulness/accuracy/safety on a 1-5 scale). Pairs whose normalised `(chosen - rejected)` confidence falls below `--min-confidence` are dropped. Per-pair backend exceptions are counted (not crashed) and reported. A judge that stops answering is not counted that way: once 3 requests in a row have spent their retries unanswered, the command stops with exit 1, names the judge and how many pairs were not judged, and writes no output file (#1522). Provider allowlist `{openai, server, ollama}` validated at the CLI boundary; SSRF protection on `--judge-api-base` carries over from `soup eval judge`.
 
 
 ## Synthetic Data Forge
