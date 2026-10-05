@@ -20,6 +20,7 @@ Pinned by this suite:
 
 from __future__ import annotations
 
+import json
 import os
 import re
 from io import StringIO
@@ -151,6 +152,33 @@ class TestCliRunnerEarlyRefusal:
         output = _plain(result.output)
         assert "Dry run" in output, (output, repr(result.exception))
         assert "must be an existing directory" not in output, output
+
+    def test_dry_run_with_a_real_dataset_stops_at_the_refusal(self, tmp_path, monkeypatch):
+        data = tmp_path / "train.jsonl"
+        data.write_text(
+            "".join(
+                json.dumps({"instruction": f"q{idx}", "input": "", "output": f"a{idx}"}) + "\n"
+                for idx in range(4)
+            ),
+            encoding="utf-8",
+        )
+        cfg = tmp_path / "soup.yaml"
+        cfg.write_text(
+            "base: smollm2-135m\ntask: sft\nbackend: transformers\n"
+            f"data:\n  train: {data.as_posix()}\n"
+            "training:\n  stream_layers: true\n  batch_size: 1\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setenv(STRIPE_DIRS_ENV, str(tmp_path / "missing_stripe_folder"))
+        monkeypatch.chdir(tmp_path)
+
+        result = CliRunner().invoke(app, ["train", "--config", str(cfg), "--dry-run"])
+        output = _plain(result.output)
+
+        assert result.exit_code == 1, (result.output, repr(result.exception))
+        assert "must be an existing directory" in output, output
+        assert "validating data" not in output, output
+        assert "Config valid" not in output, output
 
 
 class TestDoctorStripeOutput:
