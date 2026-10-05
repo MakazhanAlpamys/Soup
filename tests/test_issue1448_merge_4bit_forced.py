@@ -69,6 +69,9 @@ def test_merge_4bit_forced_passes_llm_int8_skip_modules_to_transformers(tmp_path
     mock_bnb_cls.assert_called_once()
     _, kwargs = mock_bnb_cls.call_args
     assert kwargs.get("llm_int8_skip_modules") == []
+    fake_transformers.AutoConfig.from_pretrained.assert_called_once_with(
+        str(src), trust_remote_code=False
+    )
 
 
 def test_merge_4bit_forced_refuses_tied_embeddings(tmp_path, monkeypatch):
@@ -88,4 +91,27 @@ def test_merge_4bit_forced_refuses_tied_embeddings(tmp_path, monkeypatch):
             merge_4bit(merged_dir="merged", output_dir="out", forced=True)
     assert "tie_word_embeddings" in str(err.value)
     load.assert_not_called()
+
+
+def test_merge_4bit_plain_still_merges_tied_embeddings(tmp_path, monkeypatch):
+    """The refusal belongs to 4bit_forced only: plain 4bit keeps BNB's default
+    lm_head skip, so a tied model must still reach the weight load."""
+    pytest.importorskip("transformers")
+    from transformers import LlamaConfig
+
+    monkeypatch.chdir(tmp_path)
+    LlamaConfig(
+        vocab_size=64,
+        hidden_size=64,
+        intermediate_size=128,
+        num_hidden_layers=1,
+        num_attention_heads=2,
+        num_key_value_heads=2,
+        tie_word_embeddings=True,
+    ).save_pretrained("merged")
+    with patch("transformers.AutoModelForCausalLM.from_pretrained") as load, \
+            patch("transformers.AutoTokenizer.from_pretrained"), \
+            patch("transformers.BitsAndBytesConfig"):
+        merge_4bit(merged_dir="merged", output_dir="out", forced=False)
+    load.assert_called_once()
 

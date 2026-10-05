@@ -346,7 +346,8 @@ def merge_4bit(
         if getattr(cfg, "tie_word_embeddings", False):
             raise ValueError(
                 "4bit_forced cannot quantize models with tie_word_embeddings=True: "
-                "a tied lm_head shares embedding weights which 4-bit Linear cannot hold."
+                "a tied lm_head shares embedding weights which 4-bit Linear cannot hold; "
+                "use --save-format 4bit instead."
             )
 
     dtype_map = {
