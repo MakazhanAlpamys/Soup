@@ -128,9 +128,12 @@ def resolve_trust_remote_code(
         # in environments that don't otherwise pull in rich.
         from rich.panel import Panel
 
+        from soup_cli.utils.terminal import for_terminal
+
         console.print(
             Panel.fit(
-                f"[yellow]--trust-remote-code is enabled for[/] [bold]{model_name}[/]\n"
+                f"[yellow]--trust-remote-code is enabled for[/] "
+                f"[bold]{for_terminal(model_name)}[/]\n"
                 f"This will execute Python code shipped in the model repo. "
                 f"Only proceed if you trust the source.",
                 title="[red]REMOTE CODE WARNING[/]",

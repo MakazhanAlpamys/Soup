@@ -550,8 +550,9 @@ soup data from-traces --logs ./logs/openai.jsonl \
   --format openai --signal regenerations --output prefs.jsonl
 
 # Soup-serve logs + user-edit signal (edited response wins over original).
-# `--logs` is a DIRECTORY of *.jsonl: the soup-serve parser reads a directory,
-# and returns nothing for a single file (#1440).
+# `--logs` is a DIRECTORY of *.jsonl (one per `soup serve` session): the
+# soup-serve format reads a directory; a single file is refused at the
+# CLI — read a single JSONL with --format langchain or openai instead (#1530).
 soup data from-traces --logs ./traces \
   --format soup-serve --signal user_edit --output prefs.jsonl
 
@@ -613,6 +614,17 @@ soup migrate --from llamafactory config.yaml --dry-run
 Automatically maps model, LoRA, training params, quantization, and task type. Warns about unsupported features.
 
 An axolotl `rl:` value with no Soup task (for example `rl: ebft`) stops the migration: `soup migrate` exits 1 and names the value instead of writing a `task: sft` config.
+
+The same rule holds for the other two sources. A LLaMA-Factory `stage: dpo` with
+a `pref_loss` that has no Soup task (`hinge`, `kto_pair`, anything else) stops
+the migration with exit 1 naming the value; `ipo` migrates to `task: ipo`, and
+`pref_loss` is read only under `stage: dpo`, as LLaMA-Factory does. In an Unsloth
+notebook `RewardTrainer` migrates to `reward_model`, `BCOTrainer` to `bco`,
+`OnlineDPOTrainer` to `online_dpo` (with a placeholder `training.online_dpo_judge`
+to replace), and `CPOTrainer` to `simpo` only when `loss_type="simpo"` is set on
+its own call or its `args=` config; any other CPO loss, or an `args=` that cannot
+be read statically, stops the migration naming the value. `SFTConfig` and the
+other TRL `*Config` classes are read for hyperparameters.
 
 
 ## Data Formats
@@ -742,6 +754,28 @@ data:
 is forwarded to `datasets.load_dataset(..., streaming=True)` and `buffer_size` shuffles
 that stream, then Soup materialises up to 1M rows — the same shape as remote (#689).
 An all-hub *list* with `streaming: true` is still refused (#459). `buffer_size` shuffles the train split only; a capped validation split takes the first N rows unshuffled.
+
+**Image and audio paths** in `llava` / `sharegpt4v` / `audio` / `asr` rows resolve the same
+way on every load path: a local file, a local or streaming interleave, a remote URI, a Hub
+dataset (both splits) and the `data.replay` file. A relative path resolves against
+`data.image_dir` / `data.audio_dir` when it is set, otherwise against the directory of the
+local file the row came from, and a row whose file lies outside that directory is skipped
+with a warning. A remote URI or a Hub dataset has no such directory, so when its rows hold
+file paths the setting is required: once the rows are read, the load stops with a message
+naming it. `data.image_dir: .` resolves them under the working directory. An image that a
+Hub dataset has already decoded carries no path and is passed on as it is.
+
+A value that names a network share, a device or an extended-length path (`\\host\share\...`,
+`//host/share/...`, `\\?\...`, `\\.\...`, `\??\...`), or that holds a NUL byte, is skipped
+without being looked up, and `soup data inspect` does not look it up either. That includes
+a value beginning with two slashes on Linux and macOS, where `//srv/x.png` would otherwise
+read as `/srv/x.png`, and, on Windows, a DOS device name such as `nul` or `com1`. Write such
+rows relative to the media directory instead, even when the directory itself is on a share.
+
+Before reading a file, the SFT vision and audio paths and the ASR / TTS audio loader check
+that it is a regular file. A directory, FIFO or device gets the SFT path's "cannot open"
+warning, and stops the ASR / TTS loader with an error, as a symlink does. The check is made
+before the file is opened, so a file replaced in between is not caught.
 
 **Multi-dataset interleave** (v0.42.0 schema, wired into training-time loading in #443;
 extended to streaming and HF-hub dataset names in #459):
@@ -894,7 +928,6 @@ reports them as ignored.
 
 
 **AOT preprocessing:**
-
 ```bash
 # Tokenize once, reuse the cache across runs.
 soup data preprocess soup.yaml --output ./.soup-tokenized
@@ -904,6 +937,12 @@ soup data preprocess soup.yaml --output ./.soup-tokenized
 #     format: pre_tokenized
 #     tokenized_path: ./.soup-tokenized/<16-char-cache-key>
 ```
+
+Pre-tokenized caches contain the ids produced by soup data preprocessing.
+Because preprocessing does not apply a non-text modality (`vision`, `audio`,
+or `audio_out`), `data.add_new_tokens`, `data.new_special_tokens`, or
+`data.prompt_strategy`, those combinations are refused at config load instead
+of being silently skipped.
 
 **Document ingestion (PDF / DOCX / MD / TXT → JSONL):**
 
@@ -1036,6 +1075,9 @@ Composite, lightweight data-quality triage — no GPU, no 200 MB Presidio model:
 # Single-shot composite scorecard
 soup data score --input training.jsonl
 
+# Include real operator-supplied comparison texts (no benchmark corpora are bundled)
+soup data score --input training.jsonl --benchmark-file benchmark.jsonl --threshold 0.8
+
 # Standalone subcommands — JSONL-in, enriched JSONL-out
 soup data pii          --input training.jsonl --output pii_flagged.jsonl
 soup data toxicity     --input training.jsonl --output tox_flagged.jsonl --threshold 0.1
@@ -1044,7 +1086,24 @@ soup data educational  --input training.jsonl --output scored.jsonl
 soup data decontaminate --input training.jsonl --benchmarks mmlu,gsm8k,humaneval --output clean.jsonl
 ```
 
-The scorecard reports PII matches, abuse-keyword matches, language distribution, mean heuristic educational value, and decontamination removals. PII detection uses a narrow ReDoS-hardened regex set (email / phone / SSN / credit-card) with a 50 KB pre-cap on every input. Language detection is a stopword heuristic across six languages. `soup data toxicity` is retained as a compatible command name, but its output is explicitly an abuse-keyword heuristic, not a toxicity classifier. Ambiguous technical and medical terms such as process `kill`, thread `die`, and heart `attack` are not treated as standalone safety signals. This trades one known failure mode for explicit limitations: in maintainer review, 9 of 10 held-out abusive examples scored zero and 10 of 12 benign technical or editorial examples were flagged at the default threshold. Use it only for keyword triage, never as a safety decision. The default Magpie quality filter therefore applies only non-empty and educational heuristics; provide an explicit model-backed policy outside Soup when safety classification is required. The `[data-pro]` extra currently adds `langdetect` and Presidio only; it does not install Llama Guard or FineWeb-Edu. Decontamination uses n-gram containment against benchmark corpora: use `--benchmarks mmlu,gsm8k` for built-in allowlist, or `--benchmark-file custom_benchmark.jsonl` for your own corpus.
+`data score` shows decontamination as **not run**, not a measured zero, unless
+`--benchmark-file` supplies actual comparison texts. `--benchmarks` / `-b`
+contains allowlisted labels only and now requires that file; names alone do not
+download or bundle benchmark corpora. This is a breaking refusal for the formerly
+silent `data score -b ...` path (#1448). Use `--benchmark-file` with or without
+labels. With a file, labels are **validated only**: they do not select or filter
+its rows, and the command prints a note saying so. All supplied file texts enter
+the same comparison corpus, so omitting labels or changing one valid label to
+another does not change the removal count. The file's JSONL is bounded and
+cwd-contained by the shared loader, with strict
+parsing: malformed/non-object rows, empty files and rows without usable 8-gram
+text are refused before the scorecard is printed. Text comes from `text`,
+`content`, or `messages[].content`, via the shared extractor. The fixed 8-gram
+heuristic uses `--threshold`; a resulting zero describes only those supplied
+texts, not absence of contamination against every public benchmark. The other
+input/standalone loader paths keep their previous tolerant behavior.
+
+The scorecard reports PII matches, abuse-keyword matches, language distribution, mean heuristic educational value, and decontamination removals. PII detection uses a narrow ReDoS-hardened regex set (email / phone / SSN / credit-card) with a 50 KB pre-cap on every input. Language detection is a stopword heuristic across six languages. `soup data toxicity` is retained as a compatible command name, but its output is explicitly an abuse-keyword heuristic, not a toxicity classifier. Ambiguous technical and medical terms such as process `kill`, thread `die`, and heart `attack` are not treated as standalone safety signals. This trades one known failure mode for explicit limitations: in maintainer review, 9 of 10 held-out abusive examples scored zero and 10 of 12 benign technical or editorial examples were flagged at the default threshold. Use it only for keyword triage, never as a safety decision. The default Magpie quality filter therefore applies only non-empty and educational heuristics; provide an explicit model-backed policy outside Soup when safety classification is required. The `[data-pro]` extra currently adds `langdetect` and Presidio only; it does not install Llama Guard or FineWeb-Edu. Decontamination uses n-gram containment against caller-supplied texts: `--benchmarks mmlu,gsm8k` selects allowlisted labels only; use `--benchmark-file custom_benchmark.jsonl` for actual comparison data.
 
 
 ## Remote Datasets (S3 / GCS / Azure / OCI)

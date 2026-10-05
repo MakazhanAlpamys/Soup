@@ -15,6 +15,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from soup_cli.utils.paths import is_under_cwd
+from soup_cli.utils.terminal import for_terminal
 from soup_cli.utils.tunability import (
     DEFAULT_CANDIDATES,
     CandidateBase,
@@ -126,7 +127,7 @@ def tunability_cmd(
         console.print("[red]dataset path must not contain null bytes[/]")
         raise typer.Exit(2)
     if not is_under_cwd(dataset):
-        console.print(f"[red]dataset {escape(dataset)!r} is outside cwd[/]")
+        console.print(f"[red]dataset {for_terminal(repr(dataset))} is outside cwd[/]")
         raise typer.Exit(2)
 
     try:
@@ -217,7 +218,7 @@ def tunability_cmd(
             console.print("[red]output path must not contain null bytes[/]")
             raise typer.Exit(2)
         if not is_under_cwd(output):
-            console.print(f"[red]output {escape(output)!r} is outside cwd[/]")
+            console.print(f"[red]output {for_terminal(repr(output))} is outside cwd[/]")
             raise typer.Exit(2)
         try:
             write_report(report, output)

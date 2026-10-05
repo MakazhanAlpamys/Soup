@@ -553,6 +553,21 @@ soup eval unlearning <run-id> --benchmark tofu --evidence evidence.json --output
 
 `task: unlearn` is live (v0.71.9): it loads a LoRA-wrapped policy, a frozen reference copy (NPO / RMU), and the forget / retain JSONL sets, then optimises the per-method loss — NPO's `(2/β)·mean(-logσ(-β·(π_logp − ref_logp)))` drives the policy's forget-set log-prob below the reference (= forgetting), while the retain set anchors capability. Run NPO/SimNPO **with** a `retain_set` — without one the policy has no utility anchor and Soup warns loudly.
 
+Unlearning honors `training.optimizer`, `scheduler`, `warmup_ratio`, `weight_decay`,
+`max_grad_norm`, `batch_size` and `gradient_accumulation_steps`. The default
+`batch_size: auto` resolves to 1 for unlearning rather than to the memory estimate
+the other trainers use, so a config makes the same number of updates on any card. This
+memory-constrained loop processes one example at a time and accumulates gradients
+for `batch_size * gradient_accumulation_steps` examples per optimizer update;
+a final partial group is averaged by its actual size. `initial_loss` and
+`final_loss` remain unscaled per-example losses, and `total_steps` and the 2,000-step
+budget continue to count examples rather than optimizer updates.
+
+`data.max_length` now controls forget and retain tokenization instead of the old
+256-token cap. Its default is 2,048, so existing configurations can use more memory
+and take longer. Set `data.max_length: 256` to retain the old sequence-length limit,
+or explicitly choose a value that fits the model and device.
+
 Three orthogonal axes: **Forget Quality** (pre/post forget-loss delta), **Model Utility** (retain-accuracy preserved), **PrivLeak** (membership-inference AUC distance from 0.5). Bundled mini-fixtures for all three benchmarks ship in the box (v0.71.1 added MUSE + WMDP alongside the existing TOFU set), so `--benchmark muse|wmdp` runs without supplying evidence. The WMDP forget-set probes ship **redacted** (placeholder prompts + `REFUSED` responses) — Soup never bundles verbatim hazardous-knowledge content.
 
 
@@ -655,10 +670,12 @@ Soup provides two controls to bound activation memory:
 
 
 Set `distill_mode: sequence` (default `token`) to train on the teacher's **generated
-continuations** instead of per-token logit matching — a hard-label, cross-tokenizer-friendly
+continuations** instead of per-token logit matching - a hard-label, cross-tokenizer-friendly
 KD that works when student and teacher do not share a vocabulary. `sequence` mode is mutually
 exclusive with the cross-tokenizer `uld_strategy` logit path (they are different objectives over
-the same task; the trainer rejects the combination at setup). (v0.71.12)
+the same task; the trainer rejects the combination at setup). Rows with no prompt turn are
+skipped, the count and first positions are printed at setup, a split left with no usable row is
+refused before training, and a refusal names the row's position in your data. (v0.71.12)
 
 
 ## Sequence Classification
@@ -727,17 +744,20 @@ masking it out. Both are gated to the SFT-family of tasks.
 
 ## EBFT / GDPO Loss Variants
 
-Generalised DPO (`gdpo_variant: standard | length_normalized | margin`) loads for
-`task: dpo` and `task: preference`, but on the trl versions Soup supports (0.29 and
-later) it is not applied: the run trains exactly as it would without the field, and
-nothing says so ([#1309](https://github.com/MakazhanAlpamys/Soup/issues/1309)).
-The config shape:
+**`training.gdpo_variant` is refused at config load**
+([#1309](https://github.com/MakazhanAlpamys/Soup/issues/1309)). This breaks configs
+that set `standard`, `length_normalized`, or `margin`: previously they loaded but
+silently trained the default loss, because supported TRL versions (0.29 and later)
+do not expose the `DPOTrainer.dpo_loss` hook. Every non-null value is refused;
+unset and null still load. No shipped recipe, template or example sets the field.
+
+Remove `gdpo_variant` to train plain `task: dpo` for `standard`. For
+`length_normalized`, `task: simpo` is the nearest objective, **not an identical
+replacement**. `margin` has no equivalent. Plain DPO, without a GDPO setting:
 
 ```yaml
-# DPO with GDPO length_normalized
 task: dpo
 training:
-  gdpo_variant: length_normalized
   dpo_beta: 0.1
 ```
 
@@ -940,19 +960,36 @@ Mix DPO / SimPO / ORPO / IPO terms in one training run by setting
 task: preference
 training:
   preference_loss_weights:
-    dpo: 0.6
-    simpo: 0.4
+    simpo: 0.6
+    orpo: 0.4
 ```
 
 The combine wrapper computes a weighted sum via the in-tree
 `compute_dpo_term` / `compute_simpo_term` / `compute_orpo_term` /
-`compute_ipo_term` kernels. **On trl 0.29 no preference trainer puts the
-per-sequence log-probs those kernels need on the batch**, so a blend currently
-stops at the first step and names the terms it could not compute. Until the
-wrapper reads the logits from the trainer's own forward pass, do not configure
-`preference_loss_weights`: remove it and set `training.preference_loss` to the
-single loss you want. BCO cannot be mixed with paired losses (data
-format incompatible — rejected at config load).
+`compute_ipo_term` kernels. On trl 0.29 it reads the per-sequence log-probs
+those kernels need out of the primary trainer's own forward pass
+(`concatenated_forward`), so which blends train depends on which trainer is
+built:
+
+| Blend | Result on trl 0.29 |
+| --- | --- |
+| `simpo` + `orpo` | Trains. The CPO (SimPO) and ORPO trainers both return their per-sequence log-probs. |
+| anything naming `dpo` or `ipo` | Stops at the first step and names the terms. They need a frozen reference model this path does not build, so there are no reference log-probs to read — and their own trainers compute log-probs inline, publishing only means. |
+| `bco` mixed with anything | Rejected at config load (data format incompatible). |
+
+**What a term is.** In a blend, `simpo` and `orpo` are their *preference terms
+only* — the margin / odds-ratio objective — without the likelihood (NLL) term
+the standalone `preference_loss: simpo` / `preference_loss: orpo` runs carry. A
+`{simpo: 1.0}` blend is therefore not the same number as a `preference_loss:
+simpo` run, and `training.cpo_alpha` does not affect it. Use
+`training.preference_loss` when you want the full standalone loss. Each term
+does honour its own config field: `training.simpo_gamma` for SimPO,
+`training.orpo_beta` for ORPO, whichever loss has the larger weight or not.
+
+**Evaluation.** With `val_split` set, trl's `prediction_step` calls
+`get_batch_loss_metrics` directly, so the eval loss is the primary loss's own
+trl loss — not the blend's value. Training and evaluation therefore report
+different numbers for the same batch.
 
 
 ## MoE Model Support
@@ -1023,6 +1060,11 @@ training:
 ```json
 {"image": "chart.png", "conversations": [{"from": "human", "value": "<image>\nWhat does this show?"}, {"from": "gpt", "value": "Quarterly revenue."}]}
 ```
+
+A relative `image` path resolves against `data.image_dir`, or against the data file's
+directory when it is unset. A Hub dataset or a remote URI has no data file directory, so set
+`data.image_dir` when its rows hold image paths; see
+[Data Pipeline Pro](data.md#data-pipeline-pro).
 
 `soup data inspect` automatically shows image statistics (count, formats, missing files) for vision datasets.
 
@@ -1251,18 +1293,19 @@ training:
 
 Gated to DPO-family tasks (`dpo`, `ipo`, or `preference` with `preference_loss in {dpo, ipo}`); transformers backend only. `dpo_ref_regen_epochs` is refused at config load: it never regenerated the reference. With LoRA there is no separate reference model to copy into, and the DPO-family trainers cannot run with `lora.r: 0`. The wiring is tracked in [#1345](https://github.com/MakazhanAlpamys/Soup/issues/1345).
 
-### Multi-objective preference loss (schema-only in v0.40.0)
+### Multi-objective preference loss
 
 ```yaml
 task: preference
 training:
-  preference_loss_weights: {dpo: 0.7, bco: 0.3}
+  preference_loss_weights: {simpo: 0.7, orpo: 0.3}
 ```
 
 Schema validates 2–5 entries summing to 1, and rejects `bco` mixed with a
-paired loss at config load. The runtime blend is **not** live on trl 0.29: the
-config loads, then training stops at the first step naming the terms it could
-not compute (see [Weighted Multi-Objective Preference Loss](#weighted-multi-objective-preference-loss)).
+paired loss at config load. On trl 0.29 a `simpo` + `orpo` blend trains; any
+blend naming `dpo` or `ipo` stops at the first step naming the terms it could
+not compute, because those trainers publish no per-sequence log-probs to read
+(see [Weighted Multi-Objective Preference Loss](#weighted-multi-objective-preference-loss)).
 Set `training.preference_loss` for a single loss.
 
 
@@ -1317,10 +1360,11 @@ answer is, in this order of precedence:
 2. the content of the last `\boxed{}` (a space before the brace and nested braces such as
    `\boxed{\frac{1}{2}}` are fine);
 3. what follows the last `The answer is` or `Answer:` (also `**Answer**:`, and the answer may be
-   on the next line), up to the end of its clause: a `. `, `, ` or `; ` outside brackets. A comma
-   or semicolon that a number follows continues a list instead (`41, 42 or 43`), and a
-   parenthetical aside belongs to the clause. So `The answer is Washington, D.C.` reads
-   `Washington`, `The answer is 42 (six times seven).` reads `42`, and `The answer is (3, 4).`
+   on the next line), up to the end of its clause: a `. `, `, ` or `; ` outside brackets, or at
+   the connective `because` or `since` (case-insensitive, requiring whitespace on both sides; not `as`).
+   A comma or semicolon that a number follows continues a list instead (`41, 42 or 43`), and a
+   parenthetical aside belongs to the clause. So `The answer is Washington, D.C.`
+   reads `Washington`, `The answer is 42 (six times seven).` reads `42`, and `The answer is (3, 4).`
    reads `(3, 4)`.
 
 A box outranks a phrase, and a `\boxed{}` or phrase that comes after a `####` line outranks it (the
@@ -1334,8 +1378,9 @@ An answer phrase's number is read from its own clause: `The answer is 41 apples,
 41, because the clause ends at the comma. A clause that names **more than one distinct value** is
 a hedge and states no answer: `The answer is either 41 or 42.`, `Answer: 41 or 42`,
 `The answer is 42 (or 43).` and `the answer is 41, 42 or 43` score 0.0 against every gold, and a
-gold written that way is refused. Every number in the clause counts, a justification's too:
-`The answer is 42 because 6*7=42.` is a hedge, while `The answer is 42, because 6*7=42.` reads 42.
+gold written that way is refused. A `because` / `since` inline or after punctuation ends the clause
+(`The answer is 42 because 6*7=42.` and `The answer is 42, because 6*7=42.` both read 42),
+while parenthetical justifications belong to the clause and hedge it (`The answer is 42 (6*7=42).`).
 The same value twice is not a hedge (`42 (i.e. 42.0)`), and the digits of one bracketed or LaTeX
 answer (`(3, 4)`, `\begin{pmatrix} 3 \\ 4 \end{pmatrix}`, `\frac{14}{3}`, `2^{10}`) or of a time
 or a ratio (`3:45`, `1:1,000`) are not separate values; such an answer is compared as text.
@@ -1425,7 +1470,23 @@ References are a JSONL where each row's gold answer is in an `answer` field (ove
 `--field`) or the last assistant turn of a `messages` list. `--min-discrimination` sets how
 strongly the verifier must separate references from perturbed negatives before it's emitted.
 v1 is deterministic families only — a `\boxed{}`/`####` marker helps the numeric verifier, and
-completions are prompted to mark their answer (standard RLVR practice).
+completions are prompted to mark their answer (standard RLVR practice). The numeric verifier
+reads both the gold and the completion with the parser the built-in `math` / `accuracy` rewards
+use (`soup_cli.utils.final_answer`), so `#### 1,000`, `\boxed {42}` and a `6*7=42\n#### 42` gold
+score the same under both; references written `1,000` count as numeric. The calibration report
+names every reference the emitted verifier rejects (`rejected_references` in `--output-report`).
+
+**Changed:** a `reward.py` synthesized before this version pulled the last number with a local
+regex; ones synthesized now read both sides with the shared answer parser, so `1,000`-style
+golds and `The answer is …` completions score where they scored 0 before — regenerate old
+verifiers before comparing runs. Regeneration also stops paying some completions the old regex
+paid: a `####` or `\boxed{}` answer carrying units, `%` or a non-dollar currency symbol or
+code (`#### 42 apples`, `\boxed{42\%}`, `#### €42`, `#### 42 USD`), a hedged or justified answer phrase (`The answer is either 41 or
+42`, `The answer is 42 because 6*7=42`), and a completion whose last `\boxed{}` is wrong after
+a right first one now score 0 — matching the built-ins. A bare `42%` or `The answer is 42%.`
+still pays, as under the built-ins; only marker-delimited answers refuse suffixes. The emitted
+file imports `soup_cli`, so it runs where Soup is installed rather than being fully
+self-contained.
 
 ### Stress-test a verifier for gameability (`soup reward stress`)
 
@@ -1613,6 +1674,8 @@ training:
   quantization: 4bit
 ```
 
+**Batch size.** KTO needs a per-device `batch_size` of at least 2: TRL's KL term is degenerate at batch 1, so `batch_size: 1` is refused when the config is loaded. `batch_size: auto` never resolves below 2, and `soup local-rl train --train-method kto` writes `batch_size: 2`. Raise `gradient_accumulation_steps` for a larger effective batch.
+
 **KTO data format:**
 ```json
 {"prompt": "What is 2+2?", "completion": "4", "label": true}
@@ -1663,6 +1726,15 @@ training:
     alpha: 16
   quantization: 4bit
 ```
+
+**Rows whose completion trl truncates away are refused.** trl's CPO trainer
+truncates each answer to `data.max_length` minus the **longer** answer's length,
+so a long `chosen` beside a short `rejected` leaves the short side with zero
+trainable tokens — SimPO's length-normalised log-probability is then 0/0, every
+adapter tensor trains to NaN, and transformers' nan-inf filter reports the loss
+as `0.0`. `soup train` stops before the first step, naming how many rows and
+which, with the `data.max_length` involved. Raise `data.max_length`, balance the
+pair, or drop the row.
 
 
 ## IPO Training (Regularized Preference)
@@ -1902,7 +1974,15 @@ The cross-validator rejects `task='distill'` without `teacher_model`, and reject
 
 ## EBFT + GDPO (BETA, v0.52.0)
 
-Generalized DPO lands as `training.gdpo_variant ∈ {standard, length_normalized, margin}` — gated to `task ∈ {dpo, preference}`; on trl 0.29 and later it is not applied ([#1309](https://github.com/MakazhanAlpamys/Soup/issues/1309)). Energy-Based Fine-Tuning (`training.ebft_variant ∈ {structured, strided}` + `training.ebft_temperature`) is refused at config load ([#1230](https://github.com/MakazhanAlpamys/Soup/issues/1230)): its term had no causal shift, so it rewarded copying the input, and shifted it would duplicate the cross-entropy. See [EBFT / GDPO Loss Variants](#ebft--gdpo-loss-variants).
+Both fields are refused at config load. `training.gdpo_variant` silently did
+nothing on supported TRL versions because the DPO loss hook no longer exists
+([#1309](https://github.com/MakazhanAlpamys/Soup/issues/1309)); remove it and use
+plain DPO for `standard`, or SimPO as the nearest (not identical) objective for
+`length_normalized`. `margin` has no equivalent. Energy-Based Fine-Tuning
+(`training.ebft_variant` + `training.ebft_temperature`) remains refused
+([#1230](https://github.com/MakazhanAlpamys/Soup/issues/1230)): its term had no
+causal shift, so it rewarded copying the input, and shifted it would duplicate
+the cross-entropy. See [EBFT / GDPO Loss Variants](#ebft--gdpo-loss-variants).
 
 
 ## gpt-oss `reasoning_effort` + `train_on_eot` (v0.52.0)

@@ -982,11 +982,26 @@ class DataConfig(BaseModel):
         # tokenized_path is meaningful regardless of format (Axolotl `empty`
         # type expects the cache to be the source of truth). But the
         # pre_tokenized format implies the path must be set.
-        if self.format == "pre_tokenized" and not self.tokenized_path:
-            raise ValueError(
-                "format='pre_tokenized' requires data.tokenized_path to point "
-                "at a cache directory produced by `soup data preprocess`."
-            )
+        if self.format == "pre_tokenized":
+            if not self.tokenized_path:
+                raise ValueError(
+                    "format='pre_tokenized' requires data.tokenized_path to point "
+                    "at a cache directory produced by `soup data preprocess`."
+                )
+            conflicts = []
+            if self.add_new_tokens:
+                conflicts.append("data.add_new_tokens")
+            if self.new_special_tokens:
+                conflicts.append("data.new_special_tokens")
+            if self.prompt_strategy:
+                conflicts.append("data.prompt_strategy")
+            if conflicts:
+                raise ValueError(
+                    "format='pre_tokenized' cannot be combined with "
+                    + ", ".join(conflicts)
+                    + "; soup data preprocess never applies it, so the cached ids "
+                    "do not contain it. Remove it, or train from the source format."
+                )
         return self
 
     @field_validator("remove_unused_columns", mode="after")
@@ -1949,8 +1964,9 @@ class TrainingConfig(BaseModel):
     ]] = Field(
         default=None,
         description=(
-            "Generalized DPO variant. DPO-family-task-only; replaces the "
-            "trainer's preference loss with the selected objective."
+            "Refused at config load (#1309): supported TRL versions lack the "
+            "DPO loss hook. Remove this field; use plain task: dpo for standard, "
+            "or task: simpo as the nearest (not identical) length-normalized objective."
         ),
     )
     # Part F — MoE expert quantization + router-only training
@@ -2770,7 +2786,7 @@ class TrainingConfig(BaseModel):
         that every non-null value -- not only the two the ``Literal`` accepts --
         gets this message instead of one pointing at a refused value. The
         kernel and the hook in ``utils/ebft_gdpo.py`` stay in place,
-        unreachable; GDPO, which shares that module, is unaffected.
+        unreachable; GDPO is separately refused by #1309.
         """
         if v is not None:
             raise ValueError(
@@ -2786,6 +2802,20 @@ class TrainingConfig(BaseModel):
                 "plain SFT."
             )
         return v
+
+    @field_validator("gdpo_variant", mode="before")
+    @classmethod
+    def _refuse_gdpo_variant(cls, value: Any) -> Any:
+        """#1309 — refuse every non-null value before the Literal/task/backend gates."""
+        if value is not None:
+            raise ValueError(
+                "training.gdpo_variant is refused (#1309): supported TRL versions "
+                "do not expose the dpo_loss hook, so this setting was accepted but "
+                "ignored. Remove gdpo_variant to use plain task: dpo for standard; "
+                "task: simpo is the nearest (not identical) length-normalized "
+                "objective; margin has no equivalent."
+            )
+        return value
 
     @field_validator("label_names")
     @classmethod
@@ -3321,13 +3351,21 @@ class TrainingConfig(BaseModel):
         default=None,
         ge=1,
         le=1000,
-        description="Freeze first N layers (from bottom). Train only remaining layers.",
+        description=(
+            "Freeze first N layers (from bottom). Train only remaining layers. "
+            "Applied by tasks sft and tts (on the transformers text path); "
+            "refused on the other tasks."
+        ),
     )
     freeze_ratio: Optional[float] = Field(
         default=None,
         gt=0.0,
         lt=1.0,
-        description="Freeze this fraction of layers (0.75 = freeze 75% from bottom).",
+        description=(
+            "Freeze this fraction of layers (0.75 = freeze 75% from bottom). "
+            "Applied by tasks sft and tts (on the transformers text path); "
+            "refused on the other tasks."
+        ),
     )
     # v0.71.23 #266 — Spectrum targeted training: full FT of selected params
     unfrozen_parameters: Optional[List[str]] = Field(
@@ -4739,6 +4777,11 @@ UNSLOTH_SETUP_TASKS: frozenset[str] = frozenset({
     "pretrain", "embedding", "tts",
 })
 
+#: #1497 — the tasks whose trainer reads ``training.freeze_layers`` /
+#: ``training.freeze_ratio``: ``SFTTrainerWrapper._setup_transformers``, which
+#: ``tts`` inherits. Every other trainer ignores both, so they are refused there.
+FREEZE_APPLYING_TASKS: frozenset[str] = frozenset({"sft", "tts"})
+
 #: The bitsandbytes values: ``4bit`` was the default, so every config Soup dumped
 #: for these tasks carries one of them literally (#795 review).
 _BNB_QUANTIZATION_VALUES = frozenset({"4bit", "8bit"})
@@ -4960,6 +5003,16 @@ class SoupConfig(BaseModel):
                 "The appended blocks are zero-initialised and trained, which the "
                 "block-expansion path only supports on an unquantized base. "
                 "Set quantization: none."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_v042_pre_tokenized_modality(self) -> "SoupConfig":
+        if self.data.format == "pre_tokenized" and self.modality != "text":
+            raise ValueError(
+                "data.format='pre_tokenized' cannot be combined with "
+                f"modality={self.modality!r}; soup data preprocessing does not "
+                "apply modality transforms to cached ids"
             )
         return self
 
@@ -5744,7 +5797,7 @@ class SoupConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_gdpo_compat(self) -> "SoupConfig":
-        """v0.52.0 Part E — ``gdpo_variant`` requires DPO/preference, non-MLX."""
+        """Legacy task/backend gate; #1309 refuses non-null values at the field first."""
         if self.training.gdpo_variant is None:
             return self
         from soup_cli.utils.ebft_gdpo import validate_gdpo_compat
@@ -6222,6 +6275,35 @@ class SoupConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def _validate_kto_batch_compat(self) -> "SoupConfig":
+        """#1420 — a per-device KTO batch of 1 is invalid, streaming or not.
+
+        TRL's ``KTOTrainer`` refuses ``per_device_train_batch_size=1``
+        ("Actual (not effective) batch size must be > 1") because the KL
+        term degenerates. Soup used to catch this at parse time only for
+        ``stream_layers`` runs (see the note kept in
+        ``_validate_stream_layers_compat``), so a resident KTO config loaded,
+        loaded its model, and only then died inside TRL — after minutes of
+        I/O on a real base. The same refusal now applies to every
+        ``task='kto'`` config, resident or streamed, before anything loads.
+        """
+        if self.backend == "mlx":
+            return self  # _validate_mlx_task_support gives the more basic answer
+        tcfg = self.training
+        if (
+            self.task == "kto"
+            and isinstance(tcfg.batch_size, int)
+            and tcfg.batch_size < 2
+        ):
+            raise ValueError(
+                "task='kto' requires training.batch_size >= 2: TRL's KL term is "
+                "degenerate at a per-device batch of 1. Set batch_size to 2 or "
+                "more and raise gradient_accumulation_steps to keep the "
+                "effective batch size."
+            )
+        return self
+
+    @model_validator(mode="after")
     def _validate_stream_layers_compat(self) -> "SoupConfig":
         """v0.72.0 BETA — layer-streaming compatibility gates.
 
@@ -6353,21 +6435,10 @@ class SoupConfig(BaseModel):
         # budget is exhausted (peak moved 0.842 -> 0.846 GB across accum 1->4).
         # v0.72.4 — KTO's KL term is degenerate at a per-device batch of 1, so
         # TRL refuses it outright ("Actual (not effective) batch size must be
-        # > 1"). Under streaming that ValueError arrives only AFTER the RAM
-        # pre-flight, the checkpoint sharding and — at quantization='4bit' —
-        # the NF4 quantisation pass: minutes of disk I/O on a real base, to
-        # fail on a config that was already invalid. Refuse it at parse time.
-        if (
-            self.task == "kto"
-            and isinstance(tcfg.batch_size, int)
-            and tcfg.batch_size < 2
-        ):
-            raise ValueError(
-                "task='kto' requires training.batch_size >= 2 (TRL's KL term is "
-                "degenerate at batch 1). Checked here rather than in the "
-                "trainer so a streaming run fails before sharding the "
-                "checkpoint, not minutes into it."
-            )
+        # > 1"). Refused at parse time for EVERY task='kto'
+        # config — streaming or resident — by ``_validate_kto_batch_compat``
+        # (#1420); a streaming run therefore still fails before sharding the
+        # checkpoint, not minutes into it.
         if tcfg.lora.r < 1:
             raise ValueError(
                 "training.stream_layers requires LoRA (training.lora.r >= 1) — "
@@ -7884,6 +7955,30 @@ class SoupConfig(BaseModel):
                 "(#1223)"
             )
         return self
+
+    @model_validator(mode="after")
+    def _validate_freeze_is_applied(self) -> "SoupConfig":
+        """#1497 — ``freeze_layers`` / ``freeze_ratio`` loaded on every task, but
+        only the trainers in :data:`FREEZE_APPLYING_TASKS` freeze anything: on the
+        others the run trained every layer without a word. Placed after the #795
+        resolver and before the #1357 backend refusal, which stays last."""
+        if self.task in FREEZE_APPLYING_TASKS:
+            return self
+        tcfg = self.training
+        fields = [
+            f"training.{name}"
+            for name in ("freeze_layers", "freeze_ratio")
+            if getattr(tcfg, name) is not None
+        ]
+        if not fields:
+            return self
+        named = " and ".join(fields)
+        verb, keys = ("are", "both keys") if len(fields) > 1 else ("is", "the key")
+        raise ValueError(
+            f"{named} {verb} not applied by task={self.task!r}: only task='sft' (and "
+            "'tts', which trains through the SFT trainer) freezes layers, so this run "
+            f"would train every layer. Use task: sft, or remove {keys}."
+        )
 
     @model_validator(mode="after")
     def _validate_unsloth_has_a_setup(self) -> "SoupConfig":

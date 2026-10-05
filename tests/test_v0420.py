@@ -153,6 +153,44 @@ class TestPartANewFormats:
         with pytest.raises(Exception, match="tokenized_path"):
             DataConfig(train="data.jsonl", format="pre_tokenized")
 
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            ("add_new_tokens", ["<x>"]),
+            ("new_special_tokens", ["<x>"]),
+            ("prompt_strategy", "pkg:fn"),
+        ],
+    )
+    def test_pre_tokenized_rejects_live_text_transform(self, field, value):
+        with pytest.raises(
+            Exception,
+            match=fr"pre_tokenized.*data\.{field}.*cached ids do not contain it",
+        ):
+            DataConfig(
+                train="data.jsonl",
+                format="pre_tokenized",
+                tokenized_path="./cache",
+                **{field: value},
+            )
+
+    @pytest.mark.parametrize("modality", ["vision", "audio", "audio_out"])
+    def test_pre_tokenized_rejects_non_text_modality(self, modality):
+        with pytest.raises(
+            Exception,
+            match=fr"pre_tokenized.*modality='{modality}'",
+        ):
+            load_config_from_string(
+                f"""
+base: x/y
+task: sft
+modality: {modality}
+data:
+  train: ./data.jsonl
+  format: pre_tokenized
+  tokenized_path: ./cache
+"""
+            )
+
 
 # ---------------------------------------------------------------------------
 # Part B — Remote loading allowlist + streaming + sharding

@@ -612,7 +612,7 @@ def _materialized_matches_hf_snapshot(
         source_path = os.path.join(source_dir, name)
         if not os.path.islink(source_path):
             return None
-        blob_id = os.path.basename(os.path.realpath(source_path))
+        blob_id = _hf_blob_id(source_path)
         metadata_path = os.path.join(
             materialized_dir,
             ".cache",
@@ -635,6 +635,77 @@ def _materialized_matches_hf_snapshot(
     return existing
 
 
+def _hf_blob_id(snapshot_path: str) -> str:
+    """The per-repo ``blobs/<etag>`` name a snapshot link points at.
+
+    Not the final target: huggingface_hub >= 1.32 may chain that entry to its
+    cache-wide Xet store, whose file is named by the Xet hash instead.
+    """
+    return os.path.basename(os.readlink(snapshot_path))
+
+
+def _hf_shared_blob_root(repo_root: str) -> Optional[str]:
+    """The cache-wide ``<cache>/blobs`` store of huggingface_hub >= 1.32, if marked.
+
+    Per-repo ``blobs/<etag>`` entries of Xet downloads are relative symlinks into
+    it; huggingface_hub writes the ``.huggingface-shared-blobs`` marker file.
+    Like huggingface_hub's ``is_shared_blobs_dir``, neither the directory nor the
+    marker may be a link: a linked store points somewhere else.
+    """
+    store = os.path.join(os.path.dirname(repo_root), "blobs")
+    marker = os.path.join(store, ".huggingface-shared-blobs")
+    try:
+        store_stat = os.lstat(store)
+        marker_stat = os.lstat(marker)
+    except OSError:
+        return None
+    if not stat.S_ISDIR(store_stat.st_mode) or not stat.S_ISREG(marker_stat.st_mode):
+        return None
+    reparse = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+    if getattr(store_stat, "st_file_attributes", 0) & reparse:
+        return None
+    return os.path.realpath(store)
+
+
+def _is_junction(path: str) -> bool:
+    """Whether ``path`` is a Windows junction.
+
+    ``os.path.islink`` is false for a junction and ``os.walk`` descends into
+    one, so a junction needs its own check wherever a linked directory is
+    refused. This is the comparison ``os.path.isjunction`` makes (that function
+    needs Python 3.12), except that an ``OSError`` from ``lstat`` is not turned
+    into "not a junction": an entry that cannot be inspected is not waved on.
+    The tag is compared, not the reparse-point attribute, so a directory that
+    carries some other reparse point is not taken for a link.
+    """
+    mount_point = getattr(stat, "IO_REPARSE_TAG_MOUNT_POINT", 0xA0000003)
+    return getattr(os.lstat(path), "st_reparse_tag", 0) == mount_point
+
+
+def _hf_repo_blob_root(repo_root: str) -> str:
+    """The repo's own ``blobs`` store, which has to be a real directory.
+
+    huggingface_hub creates it with ``os.makedirs``. Like the shared store, a
+    linked one (a symlink, or a junction on Windows) points somewhere else, and
+    it is refused without being resolved. The link's target is not compared
+    with any directory: for a local snapshot path the folder around the
+    snapshot is wherever it was put, so there is no limit to hold a target to.
+    """
+    store = os.path.join(repo_root, "blobs")
+    if not os.path.lexists(store):
+        raise FileNotFoundError("cached Hugging Face blob store is missing")
+    if os.path.islink(store) or _is_junction(store):
+        raise ValueError(
+            f"cached Hugging Face blob store {store!r} is a link and is not followed: "
+            "Soup copies weights only from inside the Hugging Face cache; make blobs a "
+            "real directory (to keep the files elsewhere, link the whole repository "
+            "folder instead), or pass a directory of regular files"
+        )
+    if not os.path.isdir(store):
+        raise FileNotFoundError("cached Hugging Face blob store is missing")
+    return os.path.realpath(store)
+
+
 def _hf_snapshot_revision(source_dir: str) -> Optional[str]:
     """Commit carried by a canonical ``snapshots/<sha>`` cache directory."""
     source = os.path.realpath(os.path.expanduser(source_dir))
@@ -652,8 +723,10 @@ def _snapshot_materialization_entries(
     """Validate and list cached files before any destination is created.
 
     Canonical Hugging Face snapshots contain symlinks into their sibling
-    ``blobs`` directory.  Only those links are followed: a crafted snapshot
-    cannot turn Soup's regular-file copy into an arbitrary-file disclosure.
+    ``blobs`` directory, whose Xet entries may in turn link into the
+    cache-wide shared blob store.  Only links resolving into one of those two
+    stores are followed: a crafted snapshot cannot turn Soup's regular-file
+    copy into an arbitrary-file disclosure.
     """
     from soup_cli.utils.paths import is_under
 
@@ -661,7 +734,7 @@ def _snapshot_materialization_entries(
     if not os.path.isdir(source):
         raise FileNotFoundError(f"cached snapshot directory not found: {source_dir}")
 
-    blob_root = None
+    blob_roots: list[str] = []
     if source_revision is not None:
         repo_root = os.path.dirname(os.path.dirname(source))
         expected = os.path.realpath(
@@ -669,9 +742,10 @@ def _snapshot_materialization_entries(
         )
         if source != expected:
             raise ValueError("cached snapshot path does not match its resolved revision")
-        blob_root = os.path.realpath(os.path.join(repo_root, "blobs"))
-        if not os.path.isdir(blob_root):
-            raise FileNotFoundError("cached Hugging Face blob store is missing")
+        blob_roots.append(_hf_repo_blob_root(repo_root))
+        shared_root = _hf_shared_blob_root(repo_root)
+        if shared_root is not None:
+            blob_roots.append(shared_root)
 
     entries: list[Tuple[str, str, Optional[str]]] = []
     for root, dirnames, filenames in os.walk(source, followlinks=False):
@@ -681,6 +755,10 @@ def _snapshot_materialization_entries(
                 raise ValueError(
                     f"cached snapshot directory symlink is not allowed: {dirname!r}"
                 )
+            if _is_junction(directory):
+                raise ValueError(
+                    f"cached snapshot directory junction is not allowed: {dirname!r}"
+                )
         for filename in filenames:
             if not filename.endswith((".safetensors", ".json")):
                 continue
@@ -689,12 +767,12 @@ def _snapshot_materialization_entries(
             blob_id = None
             if os.path.islink(snapshot_path):
                 resolved = os.path.realpath(snapshot_path)
-                if blob_root is not None and not is_under(resolved, blob_root):
+                if blob_roots and not any(is_under(resolved, r) for r in blob_roots):
                     raise ValueError(
                         f"cached snapshot file {relative!r} points outside the "
                         "Hugging Face blob store"
                     )
-                blob_id = os.path.basename(resolved)
+                blob_id = _hf_blob_id(snapshot_path)
             else:
                 resolved = snapshot_path
             if not os.path.isfile(resolved):

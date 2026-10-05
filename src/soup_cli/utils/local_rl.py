@@ -458,12 +458,15 @@ def _default_train_fn(
     import yaml
 
     data_format = _METHOD_FORMAT[train_method]
+    # KTO needs a per-device batch >= 2 (TRL refuses batch 1: degenerate KL
+    # term, #1420); batch 1 stays for dpo/orpo, which accept it.
+    batch_size = 2 if train_method == "kto" else 1
     yaml_text = yaml.safe_dump(
         {
             "base": base_model,
             "task": train_method,
             "data": {"train": pairs_path, "format": data_format, "max_length": 256},
-            "training": {"epochs": 1, "batch_size": 1},
+            "training": {"epochs": 1, "batch_size": batch_size},
             "output": output_dir,
         },
         default_flow_style=False,

@@ -179,6 +179,20 @@ class TestTheCallbackRoutesTheTasksMetric:
         source = inspect.getsource(grpo)
         assert "task=self.config.task" in source
 
+    def test_the_builder_forwards_the_task(self):
+        """``build_soup_trainer_callback`` (#1546) is the only path a trainer has to
+        the shared kwargs now, so the task must survive it."""
+        from soup_cli.monitoring.callback import build_soup_trainer_callback
+
+        def built(task):
+            config = SimpleNamespace(training=SimpleNamespace(), eval=None)
+            return build_soup_trainer_callback(
+                TrainingDisplay(_display_config()), config=config, task=task
+            )
+
+        assert built("grpo")._val_metric == VALIDATION_METRICS["grpo"]
+        assert built(None)._val_metric is DEFAULT_VALIDATION_METRIC
+
     def test_the_kwargs_carry_the_spec(self):
         from soup_cli.monitoring.callback import soup_callback_kwargs
 
