@@ -514,8 +514,10 @@ training:
 Freeze bottom layers of the model — train only the top layers (like LLaMA-Factory's `finetuning_type: freeze`).
 Only `task: sft` (and `tts`, which trains through the SFT trainer) applies these two fields; on any
 other task the config is refused at load, because that trainer would train every layer (#1497).
-Within `sft` they are applied on the transformers text path only: `backend: mlx`, `backend: unsloth`,
-`modality: vision`, `modality: audio` and `stream_layers: true` still load them and train every layer.
+Within `sft` and `tts` they are applied on the text path with `backend: transformers` only:
+`backend: mlx`, `backend: unsloth`, `modality: vision`, `modality: audio` and `stream_layers: true`
+are refused at load too: those setups never read the fields and always attach an adapter, so the run
+would train every layer (#1581).
 
 ```yaml
 training:
