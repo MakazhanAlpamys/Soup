@@ -6,6 +6,7 @@ import sys
 
 import pytest
 
+from soup_cli.utils.paths import quote_path
 from soup_cli.utils.stripe_roots import (
     MAX_STRIPE_DIRS,
     STRIPE_DIRS_ENV,
@@ -182,6 +183,106 @@ class TestPlacement:
     def test_zero_roots_is_a_programming_error(self):
         with pytest.raises(ValueError, match="at least 1"):
             layer_roots_for(3, 0)
+
+
+class TestQuotePath:
+    """#1611 — a path in a refusal message reads as it was typed."""
+
+    @pytest.mark.parametrize("typed", [
+        "D:\\folder\\sub",            # a drive-letter path
+        "\\\\server\\share\\dir",     # a UNC path
+        "my dir",                     # a space survives, quoted
+        "trailing\\",                 # a trailing separator
+        "/posix/path",                # a POSIX path comes out unchanged
+        "relative\\path",             # a relative path with backslashes
+    ])
+    def test_shown_as_typed_inside_single_quotes(self, typed):
+        assert quote_path(typed) == f"'{typed}'"
+
+    @pytest.mark.parametrize("code", [0x00, 0x07, 0x1B, 0x7F, 0x9B, 0x9F])
+    def test_control_characters_are_escaped_not_raw(self, code):
+        assert quote_path(f"a{chr(code)}b") == f"'a\\x{code:02x}b'"
+
+
+class TestRefusalSpellings:
+    """#1611 — every refusal names the entry as typed, not in repr's doubled form."""
+
+    def test_a_backslash_entry_is_not_doubled(self, layout):
+        primary, _ = layout
+        with pytest.raises(StripeRootError) as err:
+            validate_stripe_root("folder\\sub", primary_root=primary)
+        message = str(err.value)
+        assert "'folder\\sub'" in message
+        assert "'folder\\\\sub'" not in message
+
+    @pytest.mark.parametrize("typed", ["folder\\sub", "\\\\server\\share\\dir"])
+    def test_the_relative_path_refusal_names_the_entry_as_typed(self, layout, typed):
+        primary, _ = layout
+        with pytest.raises(StripeRootError) as err:
+            validate_stripe_root(typed, primary_root=primary)
+        assert f"'{typed}'" in str(err.value)
+
+    @pytest.mark.parametrize("code", [0x1B, 0x7F, 0x9B])
+    def test_control_characters_are_shown_as_escapes(self, layout, code):
+        primary, _ = layout
+        entry = f"stripe{chr(code)}"
+        with pytest.raises(StripeRootError) as err:
+            validate_stripe_root(entry, primary_root=primary)
+        message = str(err.value)
+        assert chr(code) not in message, "a raw control character reached the message"
+        assert f"\\x{code:02x}" in message, "the message does not show which character it was"
+
+    @pytest.mark.skipif(os.name != "nt", reason="needs a drive-letter spelling")
+    def test_a_missing_drive_letter_folder_is_shown_as_typed(self, tmp_path):
+        primary = tmp_path / "cache"
+        primary.mkdir()
+        with pytest.raises(StripeRootError) as err:
+            validate_stripe_root("D:\\does-not-exist-xyz", primary_root=str(primary))
+        message = str(err.value)
+        assert "'D:\\does-not-exist-xyz'" in message
+        assert "'D:\\\\does-not-exist-xyz'" not in message
+
+    @pytest.mark.skipif(os.name != "nt", reason="needs two folders on one drive")
+    def test_the_same_volume_refusal_names_the_entry_as_typed(self, layout):
+        primary, stripe = layout
+        with pytest.raises(StripeRootError) as err:
+            resolve_stripe_roots(primary, disk_kind=lambda path: "nvme", environ=_env(stripe))
+        message = str(err.value)
+        assert f"'{stripe}'" in message
+        assert repr(stripe) not in message
+
+    def test_the_nvme_refusal_names_the_entry_as_typed(self, layout, monkeypatch):
+        import soup_cli.utils.stripe_roots as mod
+
+        primary, stripe = layout
+        ids = {os.path.realpath(primary): 1, os.path.realpath(stripe): 2}
+        monkeypatch.setattr(mod, "volume_of", lambda path: ids[os.path.realpath(path)])
+        with pytest.raises(StripeRootError) as err:
+            resolve_stripe_roots(
+                primary, disk_kind=lambda path: "ssd", environ=_env(stripe),
+            )
+        # A POSIX path has no spelling for repr to change, so as-typed is all
+        # there is to pin here; the doubled form is covered on Windows above.
+        assert f"'{stripe}'" in str(err.value)
+
+
+def test_the_other_message_sites_use_quote_path():
+    """#1611 — the Windows API refusals and the disk pre-flight quote paths too."""
+    import pathlib
+
+    import soup_cli
+
+    root = pathlib.Path(soup_cli.__file__).parent
+    owner = (root / "utils" / "owner_only_dir.py").read_text(encoding="utf-8")
+    setup = (root / "trainer" / "stream_setup.py").read_text(encoding="utf-8")
+    roots = (root / "utils" / "stripe_roots.py").read_text(encoding="utf-8")
+    assert "path!r" not in owner, "owner_only_dir still renders a path with repr"
+    assert "path!r" not in setup, "stream_setup still renders a path with repr"
+    assert "entry!r" not in roots and "path!r" not in roots, (
+        "stripe_roots still renders an entry or path with repr"
+    )
+    assert owner.count("quote_path(path)") == 4
+    assert "quote_path(path)" in setup
 
 
 def test_the_module_does_not_import_torch():

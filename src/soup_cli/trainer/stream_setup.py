@@ -30,6 +30,7 @@ from rich.console import Console
 from rich.panel import Panel
 
 from soup_cli.utils.config_bounds import DEFAULT_STREAM_READ_AHEAD, MAX_STREAM_READ_AHEAD
+from soup_cli.utils.paths import quote_path
 from soup_cli.utils.stripe_roots import ReadAheadDecision, effective_read_ahead
 
 console = Console()
@@ -294,7 +295,7 @@ def _existing_disk_anchor(path: str) -> str:
     while not os.path.exists(anchor):
         parent = os.path.dirname(anchor)
         if parent == anchor:
-            raise OSError(f"cannot locate an existing filesystem ancestor for {path!r}")
+            raise OSError(f"cannot locate an existing filesystem ancestor for {quote_path(path)}")
         anchor = parent
     return anchor
 

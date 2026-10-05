@@ -23,7 +23,7 @@ from soup_cli.utils.config_bounds import (
     MAX_STREAM_READ_AHEAD,
     MIN_STREAM_READ_AHEAD,
 )
-from soup_cli.utils.paths import is_under
+from soup_cli.utils.paths import is_under, quote_path
 
 STRIPE_DIRS_ENV = "SOUP_LAYER_STREAM_STRIPE_DIRS"
 
@@ -123,7 +123,7 @@ def _nearest_existing(path: str) -> str:
     while not os.path.exists(anchor):
         parent = os.path.dirname(anchor)
         if parent == anchor:
-            raise StripeRootError(f"cannot find an existing folder above {path!r}")
+            raise StripeRootError(f"cannot find an existing folder above {quote_path(path)}")
         anchor = parent
     return anchor
 
@@ -185,7 +185,7 @@ def validate_stripe_root(entry: str, *, primary_root: str, accepted: Sequence[st
     """
     resolved, reason = check_stripe_root(entry, primary_root=primary_root, accepted=accepted)
     if reason is not None:
-        raise StripeRootError(f"{STRIPE_DIRS_ENV} entry {entry!r}: {reason}")
+        raise StripeRootError(f"{STRIPE_DIRS_ENV} entry {quote_path(entry)}: {reason}")
     assert resolved is not None
     return resolved
 
@@ -266,7 +266,7 @@ def validate_early_stripe_roots(
     accepted: List[str] = []
     for entry, resolved, reason in iter_early_stripe_roots(primary_root, entries):
         if reason is not None:
-            raise StripeRootError(f"{STRIPE_DIRS_ENV} entry {entry!r}: {reason}")
+            raise StripeRootError(f"{STRIPE_DIRS_ENV} entry {quote_path(entry)}: {reason}")
         assert resolved is not None
         accepted.append(resolved)
     return tuple(accepted)
@@ -293,9 +293,9 @@ def resolve_stripe_roots(
         kind = disk_kind(resolved)
         if kind != "nvme":
             raise StripeRootError(
-                f"{STRIPE_DIRS_ENV} entry {entry!r}: the disk tier streams from NVMe only, and "
-                f"this volume classifies as {kind!r}. If the probe is wrong, "
-                f"training.stream_disk_kind overrides it."
+                f"{STRIPE_DIRS_ENV} entry {quote_path(entry)}: the disk tier streams "
+                f"from NVMe only, and this volume classifies as {kind!r}. If the probe "
+                f"is wrong, training.stream_disk_kind overrides it."
             )
     return accepted
 
