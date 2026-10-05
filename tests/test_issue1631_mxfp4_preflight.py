@@ -96,11 +96,33 @@ class TestTheGate:
         assert console.printed == []
 
 
+MXFP4_NOTE = "An MXFP4 base is dequantized on load, so this estimate prices the bf16 model.\n"
+
+
+def _refusal(console, quant: str, *, allow_oom_attempt: bool = False) -> str:
+    try:
+        _hardware_fit_preflight(_cfg(quant), SMALL_CARD, allow_oom_attempt=allow_oom_attempt)
+    except typer.Exit:
+        pass
+    return console.printed[-1].renderable
+
+
 def test_mxfp4_and_none_are_refused_at_the_same_prediction(console):
-    panels = []
-    for quant in ("mxfp4", "none"):
-        with pytest.raises(typer.Exit):
-            _hardware_fit_preflight(_cfg(quant), SMALL_CARD, allow_oom_attempt=False)
-        panels.append(console.printed[-1].renderable)
-    assert panels[0] == panels[1]
-    assert "Predicted peak VRAM" in panels[0]
+    mxfp4, none = _refusal(console, "mxfp4"), _refusal(console, "none")
+    assert "Predicted peak VRAM" in none
+    # The same numbers and the same advice; mxfp4 adds its one sentence.
+    assert mxfp4.replace(MXFP4_NOTE, "") == none
+
+
+@pytest.mark.parametrize("allow_oom_attempt", [False, True])
+def test_the_mxfp4_panel_says_the_base_is_dequantized(console, allow_oom_attempt):
+    panel = _refusal(console, "mxfp4", allow_oom_attempt=allow_oom_attempt)
+    assert panel.count(MXFP4_NOTE) == 1
+
+
+@pytest.mark.parametrize("quant", ["none", "8bit"])
+def test_no_other_quantization_gets_the_sentence(console, quant):
+    # 8bit on a 20B base is about 20 GB of weights: refused on the 24 GB card too.
+    panel = _refusal(console, quant)
+    assert "Predicted peak VRAM" in panel
+    assert "MXFP4" not in panel and "dequantized" not in panel
