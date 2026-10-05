@@ -3353,8 +3353,8 @@ class TrainingConfig(BaseModel):
         le=1000,
         description=(
             "Freeze first N layers (from bottom). Train only remaining layers. "
-            "Applied by tasks sft and tts (on the transformers text path); "
-            "refused on the other tasks."
+            "Applied by tasks sft and tts on the text path with backend "
+            "transformers and no layer streaming; refused everywhere else."
         ),
     )
     freeze_ratio: Optional[float] = Field(
@@ -3363,8 +3363,8 @@ class TrainingConfig(BaseModel):
         lt=1.0,
         description=(
             "Freeze this fraction of layers (0.75 = freeze 75% from bottom). "
-            "Applied by tasks sft and tts (on the transformers text path); "
-            "refused on the other tasks."
+            "Applied by tasks sft and tts on the text path with backend "
+            "transformers and no layer streaming; refused everywhere else."
         ),
     )
     # v0.71.23 #266 — Spectrum targeted training: full FT of selected params
@@ -4780,6 +4780,8 @@ UNSLOTH_SETUP_TASKS: frozenset[str] = frozenset({
 #: #1497 — the tasks whose trainer reads ``training.freeze_layers`` /
 #: ``training.freeze_ratio``: ``SFTTrainerWrapper._setup_transformers``, which
 #: ``tts`` inherits. Every other trainer ignores both, so they are refused there.
+#: Within these tasks only the text path on ``backend: transformers`` without
+#: layer streaming reaches that method; the other paths are refused too (#1581).
 FREEZE_APPLYING_TASKS: frozenset[str] = frozenset({"sft", "tts"})
 
 #: The bitsandbytes values: ``4bit`` was the default, so every config Soup dumped
@@ -7961,9 +7963,13 @@ class SoupConfig(BaseModel):
         """#1497 — ``freeze_layers`` / ``freeze_ratio`` loaded on every task, but
         only the trainers in :data:`FREEZE_APPLYING_TASKS` freeze anything: on the
         others the run trained every layer without a word. Placed after the #795
-        resolver and before the #1357 backend refusal, which stays last."""
-        if self.task in FREEZE_APPLYING_TASKS:
-            return self
+        resolver and before the #1357 backend refusal, which stays last.
+
+        #1581 — within those tasks only ``_setup_transformers`` reads them. The MLX
+        trainer and the vision, audio, streaming and unsloth setups never do, and
+        each of them always attaches an adapter, so those runs trained every
+        layer too. Each setting that sends the run there is named, in the order
+        ``resolve_trainer`` and ``SFTTrainerWrapper.setup`` check them."""
         tcfg = self.training
         fields = [
             f"training.{name}"
@@ -7974,10 +7980,30 @@ class SoupConfig(BaseModel):
             return self
         named = " and ".join(fields)
         verb, keys = ("are", "both keys") if len(fields) > 1 else ("is", "the key")
+        if self.task not in FREEZE_APPLYING_TASKS:
+            raise ValueError(
+                f"{named} {verb} not applied by task={self.task!r}: only task='sft' "
+                "(and 'tts', which trains through the SFT trainer) freezes layers, so "
+                f"this run would train every layer. Use task: sft, or remove {keys}."
+            )
+        off_path = []
+        if self.backend == "mlx":
+            off_path.append(("backend='mlx'", "backend: transformers"))
+        if self.modality in ("vision", "audio"):
+            off_path.append((f"modality={self.modality!r}", "modality: text"))
+        if tcfg.stream_layers:
+            off_path.append(("training.stream_layers=true", "stream_layers: false"))
+        if self.backend == "unsloth":
+            off_path.append(("backend='unsloth'", "backend: transformers"))
+        if not off_path:
+            return self
+        settings = " and ".join(setting for setting, _ in off_path)
+        changes = " and ".join(change for _, change in off_path)
         raise ValueError(
-            f"{named} {verb} not applied by task={self.task!r}: only task='sft' (and "
-            "'tts', which trains through the SFT trainer) freezes layers, so this run "
-            f"would train every layer. Use task: sft, or remove {keys}."
+            f"{named} {verb} not applied by task={self.task!r} with {settings}: "
+            "layers are frozen only on the text path with backend: transformers and "
+            "no layer streaming, so this run would train every layer. "
+            f"Use {changes}, or remove {keys}."
         )
 
     @model_validator(mode="after")
