@@ -346,12 +346,13 @@ class TestLicenseNamesThatOnlyLookLikeExpressions:
     def test_a_license_ref_operand_is_defined_in_the_document(self) -> None:
         """SPDX requires every ``LicenseRef-`` a field uses to have an
         ``hasExtractedLicensingInfos`` entry, operands inside an expression included."""
-        given = "LicenseRef-Llama OR Apache-2.0 OR LicenseRef-Llama"  # one entry per ref
+        # two distinct refs, one of them repeated: one entry per distinct ref, in order
+        given = "LicenseRef-Llama OR MIT OR LicenseRef-Llama OR LicenseRef-Gemma"
         doc = build_spdx_bom(_entry(given))
         assert doc["packages"][0]["licenseConcluded"] == given
-        ref = "LicenseRef-Llama"
         assert doc["hasExtractedLicensingInfos"] == [
             {"licenseId": ref, "name": ref, "extractedText": ref}
+            for ref in ("LicenseRef-Llama", "LicenseRef-Gemma")
         ]
 
     def test_a_document_ref_qualified_operand_makes_the_value_a_name(self) -> None:
