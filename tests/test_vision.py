@@ -714,14 +714,11 @@ class TestDataInspectVision:
 
         monkeypatch.chdir(tmp_path)
 
-        assert (
-            self._images_found(
-                self._inspect(
-                    str(tmp_path / "proj" / "data" / "train.jsonl")
-                )
-            )
-            == 1
-        )
+        output = self._inspect(str(tmp_path / "proj" / "data" / "train.jsonl"))
+
+        assert self._images_found(output) == 1
+        plain = " ".join(re.sub(r"\x1b\[[0-9;]*m", "", output).split())
+        assert re.search(r"Images outside image directory\W+1\b", plain), plain
 
 # ─── Doctor Tests ──────────────────────────────────────────────────────────
 
