@@ -22,9 +22,11 @@ pyproject is parsed with regex rather than ``tomllib`` because ``tomllib`` is
 
 from __future__ import annotations
 
+import importlib
 import pathlib
 import re
 
+import pytest
 from packaging.requirements import Requirement
 from packaging.version import Version
 
@@ -106,3 +108,10 @@ class TestTrainExtraDeclaresRequests:
         # and ConnectionError, and trl's own metadata leaves requests unbounded.
         ceilings = [spec for spec in requirement.specifier if spec.operator in ("<", "<=")]
         assert not ceilings, f"requests must not be capped in [train]: {requirement}"
+
+
+def test_requests_is_importable_wherever_trl_is() -> None:
+    """The symptom itself, from the report in #1634: with trl installed, ``requests``
+    must be present, whichever package used to bring it in."""
+    pytest.importorskip("trl")
+    importlib.import_module("requests")
