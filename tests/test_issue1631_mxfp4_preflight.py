@@ -126,3 +126,16 @@ def test_no_other_quantization_gets_the_sentence(console, quant):
     panel = _refusal(console, quant)
     assert "Predicted peak VRAM" in panel
     assert "MXFP4" not in panel and "dequantized" not in panel
+
+
+def test_the_other_panels_keep_their_blank_line(console):
+    # Only mxfp4 gains a line; every other panel keeps the gap before the advice.
+    assert " GB\n\nReduce batch_size" in _refusal(console, "none")
+    assert "bf16 model.\n\nReduce batch_size" in _refusal(console, "mxfp4")
+
+
+def test_the_warning_panels_keep_their_blank_line_too(console):
+    # The same gap when --allow-oom-attempt turns the refusal into a warning.
+    advice = "\n\n[yellow]--allow-oom-attempt set"
+    assert " GB" + advice in _refusal(console, "none", allow_oom_attempt=True)
+    assert "bf16 model." + advice in _refusal(console, "mxfp4", allow_oom_attempt=True)
