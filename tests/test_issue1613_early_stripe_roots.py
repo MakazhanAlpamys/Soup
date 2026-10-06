@@ -256,6 +256,18 @@ class TestDoctorStripeOutput:
         assert "classifies as 'ssd'" in output, output
         assert len(issues) == 1 and STRIPE_DIRS_ENV in issues[0], issues
 
+    def test_doctor_records_an_issue_for_a_refused_entry_without_disk(self, tmp_path, monkeypatch):
+        from soup_cli.commands import doctor
+
+        missing = str(tmp_path / "does-not-exist-xyz")
+        monkeypatch.setenv(STRIPE_DIRS_ENV, missing)
+        out = StringIO()
+        monkeypatch.setattr(doctor, "console", Console(file=out, width=400, color_system=None))
+        issues = []
+        doctor._check_resources(probe_disk=False, issues=issues)
+        assert "must be an existing directory" in _plain(out.getvalue()), out.getvalue()
+        assert len(issues) == 1 and STRIPE_DIRS_ENV in issues[0], issues
+
 
 class TestValidateEarlyStripeRootsUnit:
     def test_unset_and_empty_return_empty_tuple(self):
