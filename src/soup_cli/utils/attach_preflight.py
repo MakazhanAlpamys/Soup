@@ -427,9 +427,11 @@ _TASK_AUTO_CLASS = {
     # trainer/asr.py loads the Whisper seq2seq class by name, not an auto-class.
     "asr": ("WhisperForConditionalGeneration",),
 }
-#: Only SFT reads ``modality`` (#1117 review): every other trainer loads its one
-#: class whatever the config says, so a vision DPO config is a causal LM there.
-_MODALITY_TASKS = frozenset({"sft"})
+#: The trainers that read ``modality``: SFT (#1117 review) and, since #1393, DPO,
+#: which loads ``AutoModelForImageTextToText`` for ``vision`` the way SFT does.
+#: Every other trainer loads its one class whatever the config says, so a vision
+#: config for them is a causal LM here too.
+_MODALITY_TASKS = frozenset({"sft", "dpo"})
 #: ONE class per path, with no fallback, because no trainer has one. My first
 #: version fell back from ``AutoModelForCausalLM`` to ``AutoModel``, so a config
 #: the causal-LM class refuses -- MiniMax-M3 with no ``modality``, which cannot load
@@ -442,14 +444,19 @@ _DEFAULT_AUTO_CLASS = ("AutoModelForCausalLM",)
 def loader_for(cfg: Any) -> tuple[str, ...]:
     """The auto-classes to try, in the order the config's trainer would.
 
-    A task with its own class wins. After that only SFT lets ``modality`` choose
-    (``trainer/sft.py`` is the one trainer that reads it); every other task loads
-    a causal LM, so answering by modality there reported a vision DPO config as
-    attaching while DPO's own ``AutoModelForCausalLM`` refused it (#1117 review).
+    A task with its own class wins. After that only the trainers that read
+    ``modality`` let it choose: SFT, and DPO since #1393 (``task: preference``
+    with ``preference_loss: dpo`` runs the DPO wrapper, so it answers the same
+    way). Every other task loads a causal LM, so answering by modality there
+    reported a vision config as attaching while the trainer's own
+    ``AutoModelForCausalLM`` refused it (#1117 review).
     """
     task = getattr(cfg, "task", "")
     if task in _TASK_AUTO_CLASS:
         return _TASK_AUTO_CLASS[task]
+    if task == "preference":
+        loss = getattr(getattr(cfg, "training", None), "preference_loss", None)
+        task = loss if loss in _MODALITY_TASKS else task
     if task not in _MODALITY_TASKS:
         return _DEFAULT_AUTO_CLASS
     return _MODALITY_AUTO_CLASS.get(getattr(cfg, "modality", "text"), _DEFAULT_AUTO_CLASS)

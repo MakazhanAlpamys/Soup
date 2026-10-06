@@ -1235,6 +1235,13 @@ training:
   quantization: 4bit
 ```
 
+A base published as a vision-language wrapper (MiniMax-M3, `model_type: minimax_m3_vl`) is not
+registered under `AutoModelForCausalLM`, so a plain DPO config cannot load it. Set `modality: vision`
+and DPO loads it the way SFT's vision path does, through `AutoModelForImageTextToText` with the
+model's processor, and trains the language tower; the LoRA targets resolve to that tower as before.
+Preference rows carry no images, and `soup recipes verify` builds the same class the trainer loads.
+`backend: unsloth` does not read `modality` for DPO and is refused at config load for it (#1393).
+
 
 ## Preference Variety — BCO + Unified Dispatcher + KL Variants
 

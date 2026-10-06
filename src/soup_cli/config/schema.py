@@ -6638,6 +6638,24 @@ class SoupConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def _validate_dpo_vision_backend(self) -> "SoupConfig":
+        """#1393 — DPO reads ``modality`` only on the transformers backend: its
+        unsloth setup loads ``FastLanguageModel`` and never looks at it, so a
+        vision-language checkpoint there would load as a plain causal LM or not
+        at all. Refuse at config load with the backend that does read it. (MLX
+        refuses ``task: dpo`` itself.)"""
+        runs_dpo = self.task == "dpo" or (
+            self.task == "preference" and self.training.preference_loss == "dpo"
+        )
+        if runs_dpo and self.modality == "vision" and self.backend == "unsloth":
+            raise ValueError(
+                f"task={self.task!r} with modality='vision' requires backend='transformers': "
+                "the unsloth DPO setup loads FastLanguageModel and does not read modality, so "
+                "a vision-language checkpoint cannot be trained there; got backend='unsloth'"
+            )
+        return self
+
+    @model_validator(mode="after")
     def _validate_online_dpo_compat(self) -> "SoupConfig":
         """v0.71.31 — Online DPO gate.
 
