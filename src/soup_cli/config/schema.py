@@ -5177,7 +5177,7 @@ class SoupConfig(BaseModel):
         if self.backend != "transformers":
             from soup_cli.utils.quant_menu import is_quant_menu_format
 
-            # mlx refuses Quant Menu formats in _validate_quant_menu_supported_tasks.
+            # mlx refuses Quant Menu formats in the quant-menu task validator below.
             if self.backend == "mlx" and is_quant_menu_format(self.training.quantization):
                 return self
             raise ValueError(
