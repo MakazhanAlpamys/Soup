@@ -382,6 +382,13 @@ released as a penalty.
 - **Full CI.** The full test matrix runs when a maintainer adds the `ci:full` label to a
   pull request that is ready to merge, not on every push; other pushes run a quick subset.
 
+### Issue difficulty
+
+Maintainers rate every triaged issue from 1 to 10 with a `difficulty:N` label, so you can pick
+something that fits your time and experience. How the number is chosen and what each level
+means is in [docs/issue-difficulty.md](docs/issue-difficulty.md). When you open an issue you
+can suggest a difficulty in the form; the maintainer sets the final one.
+
 ## Making Changes
 
 ### 1. Create a Branch
