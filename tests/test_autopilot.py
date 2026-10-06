@@ -139,6 +139,8 @@ class TestDecisionEngine:
             decide_quantization(20.0, 39.9, prequantized="mxfp4")
         assert decide_quantization(20.0, 40.0, prequantized="mxfp4") == "mxfp4"
         assert decide_quantization(20.0, 40.0, prequantized="MXFP4") == "mxfp4"
+        with pytest.raises(ValueError, match=r"dequantized on load.*40\.0GB in bf16"):
+            decide_quantization(20.0, 39.9, prequantized="MXFP4")
 
     def test_decide_quantization_8bit_tier(self):
         from soup_cli.autopilot.decisions import decide_quantization
