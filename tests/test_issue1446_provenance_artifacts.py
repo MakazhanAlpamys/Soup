@@ -321,6 +321,7 @@ class TestLicenseNamesThatOnlyLookLikeExpressions:
         "OR MIT",
         "(MIT OR Apache-2.0",
         "MIT) OR (Apache-2.0",  # a close before any open: the depth guard
+        "MIT OR Apache-2.0 and BSD-3-Clause",  # one lower-case operator among upper-case ones
     ])
     def test_a_name_that_only_looks_like_an_expression_is_a_name(self, given) -> None:
         licenses = build_cyclonedx_bom(_entry(given))["metadata"]["component"]["licenses"]
