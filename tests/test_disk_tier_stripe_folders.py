@@ -552,6 +552,7 @@ class TestStripeRootRecheckedBeforeEachWrite:
 # #1614 — a directory junction is refused as a stripe root, a volume mount point is not
 # --------------------------------------------------------------------------------------------
 class TestJunctionVersusVolumeMountPoint:
+    @pytest.mark.skipif(not WINDOWS, reason="junctions are a Windows reparse point")
     def test_a_directory_junction_target_is_not_a_volume_mount_point(self, tmp_path):
         from soup_cli.utils.stripe_roots import is_volume_mount_point
 
@@ -592,6 +593,7 @@ class TestJunctionVersusVolumeMountPoint:
             validate_stripe_root(str(link), primary_root=str(primary))
         assert repr(str(link)) in str(caught.value)
 
+    @pytest.mark.skipif(not WINDOWS, reason="junctions are a Windows reparse point")
     def test_a_volume_mount_point_stripe_root_is_accepted(self, tmp_path, monkeypatch):
         """Same reparse tag as a junction; the classifier is what tells them apart, so this
         patches the classifier itself rather than the unavailable (needs elevation) real
