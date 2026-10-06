@@ -549,6 +549,8 @@ class TestJunctionVersusVolumeMountPoint:
             (r"\\?\Volume{1be1e677-9257-45ec-936f-712a49d3af54}\Users\nanda", False),
             (r"\\?\C:\Users\nanda", False),
             (r"\\?\UNC\server\share\folder", False),
+            (r"\\?\Volume{1be1e677-9257-45ec-936f-712a49d3af54}\data\{cache}", False),
+            (r"\\?\Volume{1be1e677-9257-45ec-936f-712a49d3af54}x", False),
         ],
         ids=[
             "volume-root-trailing-sep-devicepath",
@@ -558,6 +560,8 @@ class TestJunctionVersusVolumeMountPoint:
             "folder-below-volume-path",
             "drive-letter-folder",
             "unc-folder",
+            "folder-below-volume-path-name-ends-with-a-brace",
+            "text-after-the-volume-name",
         ],
     )
     def test_the_classifier_distinguishes_a_volume_root_from_a_folder_beneath_one(
@@ -575,6 +579,22 @@ class TestJunctionVersusVolumeMountPoint:
         link.mkdir()
         monkeypatch.setattr(os, "readlink", lambda path: target)
         assert stripe_roots_module.is_volume_mount_point(str(link)) is expected
+
+    def test_a_reparse_point_that_is_not_a_link_is_not_a_volume_mount_point(
+        self, tmp_path, monkeypatch
+    ):
+        """On Windows ``os.readlink`` raises ``ValueError``, not ``OSError``, for a reparse
+        point that is neither a symlink nor a junction/mount point, so the classifier has to
+        expect both -- only catching ``OSError`` let such a folder through as "not a mount
+        point, so must be a junction", when ``validate_stripe_root`` should refuse it by name
+        instead of letting a bare ``ValueError`` escape."""
+        from soup_cli.utils import stripe_roots as stripe_roots_module
+
+        def not_a_link(path):
+            raise ValueError("not a symbolic link")
+
+        monkeypatch.setattr(os, "readlink", not_a_link)
+        assert stripe_roots_module.is_volume_mount_point(str(tmp_path)) is False
 
     def test_a_non_reparse_folder_is_not_a_volume_mount_point(self, tmp_path):
         from soup_cli.utils.stripe_roots import is_volume_mount_point

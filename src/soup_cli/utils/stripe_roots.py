@@ -155,7 +155,9 @@ def is_volume_mount_point(path: str) -> bool:
     """
     try:
         target = os.readlink(path)
-    except OSError:
+    except (OSError, ValueError):
+        # On Windows, os.readlink raises ValueError ("not a symbolic link"), not OSError,
+        # for a reparse point that is neither a symlink nor a junction/mount point.
         return False
     stripped = target.removeprefix("\\\\?\\").removeprefix("\\??\\")
     volume = stripped.rstrip("\\")
