@@ -58,7 +58,9 @@ class TestDoRAConfig:
     def test_use_dora_is_refused_off_the_transformers_backend(self, backend: str):
         from soup_cli.config.loader import load_config_from_string
 
-        with pytest.raises(ValueError, match="use_dora|dora"):
+        with pytest.raises(
+            ValueError, match="variant 'dora' requires backend='transformers'"
+        ):
             load_config_from_string(
                 f"base: org/model\ntask: sft\nbackend: {backend}\n"
                 "data: {train: ./x.jsonl}\n"
