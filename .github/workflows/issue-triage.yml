@@ -1,0 +1,40 @@
+# Keep the triage labels of an issue consistent:
+#   - a new issue without a `difficulty:N` label gets `needs-triage`;
+#   - `needs-triage` is removed as soon as a `difficulty:N` label is set;
+#   - more than one `difficulty:N` label (or an unknown one) fails the run, so whoever added
+#     the second label sees it.
+# The rules live in scripts/issue_triage_labels.py (tests/test_issue_triage_labels.py).
+#
+# Security: this runs on the `issues` event in the base repository with a write token, so it
+# never reads what an issue author wrote. It takes the issue number, the repository and the
+# event action, hands them to the script as environment variables, and never puts an
+# expression into a shell command. Checkout is the default branch; the token is not kept.
+name: issue triage labels
+
+on:
+  issues:
+    types: [opened, labeled, unlabeled]
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  labels:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Apply the triage label rules
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          NUMBER: ${{ github.event.issue.number }}
+          EVENT_ACTION: ${{ github.event.action }}
+        run: python3 -m scripts.issue_triage_labels
