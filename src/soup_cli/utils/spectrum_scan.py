@@ -599,7 +599,15 @@ def _materialized_matches_hf_snapshot(
     *,
     source_revision: Optional[str] = None,
 ) -> Optional[Tuple[Tuple[str, int, int], ...]]:
-    """Return the real-file manifest when HF metadata proves blob identity."""
+    """Return the real-file manifest when HF metadata proves blob identity.
+
+    The comparison reads link names and sizes only, so the layout is checked
+    last, by the copy step's own listing: a copy is reused only for a snapshot
+    that would be copied now. A layout that listing refuses (a linked blob
+    store, a linked directory inside the snapshot, a file that leaves the blob
+    store or has no blob) answers "no match": the plan then asks for a copy,
+    and the copy step raises its refusal before it touches the earlier copy.
+    """
     try:
         existing = _weight_file_manifest(materialized_dir, permit_symlinks=False)
     except FileNotFoundError:
@@ -632,6 +640,10 @@ def _materialized_matches_hf_snapshot(
             return None
         if source_revision is not None and lines[0].strip() != source_revision:
             return None
+    try:
+        _snapshot_materialization_entries(source_dir, source_revision=source_revision)
+    except (ValueError, OSError):
+        return None
     return existing
 
 

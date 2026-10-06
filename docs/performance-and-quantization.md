@@ -878,7 +878,9 @@ When it is itself a link (a symlink, or a junction on Windows), Soup stops with 
 naming it instead of following it, so a link in the cache that points outside the cache is
 never followed. To keep a model's files on another disk, move the whole cache or the whole
 repo folder and link that: the snapshot path is resolved first. A junction inside a snapshot
-directory is refused like a directory symlink.
+directory is refused like a directory symlink. A copy made earlier is reused only while the
+snapshot still passes these checks: when its layout changes into a refused one afterwards,
+the next run stops with the same message and leaves the copy in place.
 
 
 ## Correctness First (v0.36.0)
