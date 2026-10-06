@@ -244,7 +244,10 @@ def decide_quantization(
     if prequantized is not None:
         canonical = _validate_prequantized(prequantized)
         if canonical == "mxfp4":
-            model_gb_dequant = model_params_b * 2.0
+            from soup_cli.utils.hardware_fit import _BYTES_PER_PARAM_BY_QUANT
+
+            bytes_per_param = _BYTES_PER_PARAM_BY_QUANT.get("mxfp4", 2.0)
+            model_gb_dequant = model_params_b * bytes_per_param
             if vram_gb < model_gb_dequant:
                 raise ValueError(
                     f"Model too large for VRAM budget: {model_params_b}B model "
