@@ -7,6 +7,7 @@ number, the repository and the event action; it never reads issue text.
 
 from __future__ import annotations
 
+import json
 import re
 import subprocess
 from pathlib import Path
@@ -98,16 +99,23 @@ class TestTheOneLevelGuard:
 
 
 class FakeGh:
-    """Stands in for `subprocess.run(["gh", ...])` and records every call."""
+    """Stands in for `subprocess.run(["gh", ...])` and records every call.
 
-    def __init__(self, labels: list[str]) -> None:
-        self.labels = labels
+    `labels` is what the first `gh issue view` returns; each entry of `later` is what the next
+    view returns (the last one repeats), so a test can change the issue between two reads.
+    """
+
+    def __init__(self, labels: list[str], later: list[list[str]] | None = None) -> None:
+        self.states = [labels, *(later or [])]
+        self.views = 0
         self.calls: list[list[str]] = []
 
     def __call__(self, command: list[str], **_kwargs: object) -> subprocess.CompletedProcess:
         self.calls.append(command)
         if command[:3] == ["gh", "issue", "view"]:
-            stdout = '{"labels": [' + ",".join(f'{{"name": "{n}"}}' for n in self.labels) + "]}"
+            names = self.states[min(self.views, len(self.states) - 1)]
+            self.views += 1
+            stdout = json.dumps({"labels": [{"name": name} for name in names]})
             return subprocess.CompletedProcess(command, 0, stdout=stdout, stderr="")
         return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
@@ -186,7 +194,13 @@ class TestMain:
         assert triage.main() == 2
         assert fake.calls == []
 
-    @pytest.mark.parametrize("repo", ["", "Soup", "a/b/c", "owner/rep o", "--repo=x/y", "o/r;id"])
+    @pytest.mark.parametrize(
+        "repo",
+        [
+            "", "Soup", "a/b/c", "owner/rep o", "--repo=x/y", "o/r;id", "../..", "a/..", "./x",
+            "x/.", "..", "a/b\n", "-a/b", "a/-b",
+        ],
+    )
     def test_a_bad_repository_never_reaches_gh(
         self, monkeypatch: pytest.MonkeyPatch, repo: str
     ) -> None:
@@ -241,6 +255,138 @@ class TestMain:
         assert "403" in capsys.readouterr().out
 
 
+class TestMoreOfMain:
+    @pytest.mark.parametrize("repo", ["MakazhanAlpamys/Soup", "a/.github", "a.b/c-d_e", "A1/b2"])
+    def test_ordinary_repository_names_are_accepted(
+        self, monkeypatch: pytest.MonkeyPatch, repo: str
+    ) -> None:
+        fake = FakeGh(["difficulty:2"])
+        _env(monkeypatch, REPO=repo, EVENT_ACTION="labeled")
+        monkeypatch.setattr(triage.subprocess, "run", fake)
+        assert triage.main() == 0
+        first = fake.calls[0]
+        assert first[first.index("--repo") + 1] == repo
+
+    @pytest.mark.parametrize("action", ["", "edited", "closed", "OPENED", "opened\n", "labeled "])
+    def test_an_unknown_event_action_is_refused_before_any_gh_call(
+        self, monkeypatch: pytest.MonkeyPatch, action: str
+    ) -> None:
+        fake = FakeGh([])
+        _env(monkeypatch, EVENT_ACTION=action)
+        monkeypatch.setattr(triage.subprocess, "run", fake)
+        assert triage.main() == 2
+        assert fake.calls == []
+
+    @pytest.mark.parametrize("action", sorted(triage.ACTIONS))
+    def test_every_action_the_workflow_listens_for_is_accepted(
+        self, monkeypatch: pytest.MonkeyPatch, action: str
+    ) -> None:
+        fake = FakeGh(["difficulty:2"])
+        _env(monkeypatch, EVENT_ACTION=action)
+        monkeypatch.setattr(triage.subprocess, "run", fake)
+        assert triage.main() == 0
+
+    def test_the_actions_match_the_workflow_triggers(self, workflow: dict) -> None:
+        assert set(workflow[True]["issues"]["types"]) == set(triage.ACTIONS)
+
+    def test_a_level_set_while_the_opened_run_was_working_clears_needs_triage_again(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        fake = FakeGh(["bug"], later=[["bug", "difficulty:3", "needs-triage"]])
+        _env(monkeypatch)
+        monkeypatch.setattr(triage.subprocess, "run", fake)
+        assert triage.main() == 0
+        assert [edit[-2:] for edit in fake.edits] == [
+            ["--add-label", "needs-triage"],
+            ["--remove-label", "needs-triage"],
+        ]
+
+    def test_without_a_late_level_the_opened_run_edits_once_and_reads_twice(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        fake = FakeGh(["bug"], later=[["bug", "needs-triage"]])
+        _env(monkeypatch)
+        monkeypatch.setattr(triage.subprocess, "run", fake)
+        assert triage.main() == 0
+        assert len(fake.edits) == 1
+        assert fake.views == 2
+
+    def test_a_labels_run_that_adds_nothing_does_not_read_twice(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        fake = FakeGh(["needs-triage", "difficulty:3"])
+        _env(monkeypatch, EVENT_ACTION="labeled")
+        monkeypatch.setattr(triage.subprocess, "run", fake)
+        assert triage.main() == 0
+        assert fake.views == 1
+
+    def test_a_failing_second_read_is_reported(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        reads = {"count": 0}
+
+        def second_read_fails(
+            command: list[str], **_kwargs: object
+        ) -> subprocess.CompletedProcess:
+            if command[:3] == ["gh", "issue", "view"]:
+                reads["count"] += 1
+                if reads["count"] == 2:
+                    return subprocess.CompletedProcess(command, 1, stdout="", stderr="HTTP 502")
+                return subprocess.CompletedProcess(
+                    command, 0, stdout='{"labels": []}', stderr=""
+                )
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+        _env(monkeypatch)
+        monkeypatch.setattr(triage.subprocess, "run", second_read_fails)
+        assert triage.main() == 1
+        assert "502" in capsys.readouterr().out
+
+    def test_a_label_name_cannot_start_a_second_workflow_command(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        nasty = "difficulty:7\n::add-mask::secret\r::error::forged"
+        fake = FakeGh([nasty, "difficulty:3"])
+        _env(monkeypatch, EVENT_ACTION="labeled")
+        monkeypatch.setattr(triage.subprocess, "run", fake)
+        assert triage.main() == 1
+        lines = capsys.readouterr().out.splitlines()
+        commands = [line for line in lines if line.startswith("::")]
+        assert len(commands) == 1 and commands[0].startswith("::error::")
+        assert "%0A" in commands[0] and "%0D" in commands[0]
+        assert "\r" not in commands[0]
+
+    def test_a_percent_sign_in_a_label_name_is_escaped(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        fake = FakeGh(["difficulty:5%0A::add-mask::x"])
+        _env(monkeypatch, EVENT_ACTION="labeled")
+        monkeypatch.setattr(triage.subprocess, "run", fake)
+        assert triage.main() == 1
+        output = capsys.readouterr().out
+        assert "%250A" in output
+        assert [line for line in output.splitlines() if line.startswith("::")] == [
+            line for line in output.splitlines() if line.startswith("::error::")
+        ]
+
+    def test_gh_error_text_with_a_line_break_cannot_start_a_command(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        def broken(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess:
+            return subprocess.CompletedProcess(
+                command, 1, stdout="", stderr="HTTP 500%\r::add-mask::x"
+            )
+
+        _env(monkeypatch)
+        monkeypatch.setattr(triage.subprocess, "run", broken)
+        assert triage.main() == 1
+        lines = capsys.readouterr().out.splitlines()
+        assert [line for line in lines if line.startswith("::")] == [
+            line for line in lines if line.startswith("::error::")
+        ]
+        assert len(lines) == 1
+
+
 @pytest.fixture(scope="module")
 def text() -> str:
     return WORKFLOW.read_text(encoding="utf-8")
@@ -281,4 +427,43 @@ class TestTheWorkflowFile:
     def test_it_is_bounded(self, workflow: dict) -> None:
         job = next(iter(workflow["jobs"].values()))
         assert job["timeout-minutes"] <= 10
-        assert workflow["concurrency"]["cancel-in-progress"] is False
+
+    def test_no_job_widens_the_permissions(self, workflow: dict) -> None:
+        for name, job in workflow["jobs"].items():
+            assert "permissions" not in job, name
+
+    def test_checkout_is_the_default_branch_with_no_token_left_behind(
+        self, workflow: dict
+    ) -> None:
+        steps = [step for job in workflow["jobs"].values() for step in job["steps"]]
+        checkouts = [step for step in steps if str(step.get("uses", "")).startswith("actions/")]
+        assert len(checkouts) == 1
+        assert checkouts[0]["with"] == {"persist-credentials": False}
+        assert "ref" not in checkouts[0]["with"]
+
+    def test_the_concurrency_is_per_issue_on_the_job_and_never_cancels(
+        self, workflow: dict
+    ) -> None:
+        assert "concurrency" not in workflow
+        job = next(iter(workflow["jobs"].values()))
+        assert "github.event.issue.number" in job["concurrency"]["group"]
+        assert job["concurrency"]["cancel-in-progress"] is False
+
+    def test_the_opened_run_has_a_group_no_label_event_can_share(self, workflow: dict) -> None:
+        group = next(iter(workflow["jobs"].values()))["concurrency"]["group"]
+        assert "github.event.action == 'opened' && 'opened' || 'labels'" in group
+
+    def test_only_the_events_that_can_change_the_outcome_take_a_runner(
+        self, workflow: dict
+    ) -> None:
+        condition = " ".join(next(iter(workflow["jobs"].values()))["if"].split())
+        assert condition == (
+            "github.event.action == 'opened' || "
+            "startsWith(github.event.label.name, 'difficulty:') || "
+            "github.event.label.name == 'needs-triage'"
+        )
+
+    def test_the_label_prefix_in_the_condition_matches_the_script(self, workflow: dict) -> None:
+        condition = next(iter(workflow["jobs"].values()))["if"]
+        assert "'difficulty:'" in condition
+        assert f"'{NEEDS_TRIAGE}'" in condition
