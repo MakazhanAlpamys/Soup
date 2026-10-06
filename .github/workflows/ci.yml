@@ -663,3 +663,191 @@ jobs:
             -H "Authorization: token ${{ secrets.GIST_TOKEN }}" \
             -d "{\"files\":{\"soup_tests.json\":{\"content\":\"{\\\"schemaVersion\\\":1,\\\"label\\\":\\\"tests\\\",\\\"message\\\":\\\"$TESTS passed\\\",\\\"color\\\":\\\"brightgreen\\\"}\"}}}" \
             "https://api.github.com/gists/65fdc943f85f3b2c46ecddb415c2b779"
+
+  # EXPERIMENT, never merged (second half of #1380): pytest-xdist on Windows and
+  # macOS. The steps are the `test` job's own, so a cell here differs from
+  # today's cell only by `-n logical --dist loadfile` (and, in one arm, by
+  # Defender real-time scanning being off). Runs only for the pull request of
+  # the branch ci/xdist-trial-2.
+  xdist-trial:
+    if: github.event_name == 'pull_request' && github.head_ref == 'ci/xdist-trial-2'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {os: windows-latest, python-version: "3.12", arm: loadfile}
+          - {os: macos-latest, python-version: "3.12", arm: loadfile}
+          - {os: windows-latest, python-version: "3.12", arm: loadfile-defender-off}
+    name: xdist-trial (${{ matrix.os }}, ${{ matrix.python-version }}, ${{ matrix.arm }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    env:
+      # Force UTF-8 mode on all platforms. Without this, Windows defaults to
+      # cp1252 ('charmap'), which fails when importing upstream packages that
+      # read their own source / data files without an explicit encoding
+      # (seen with trl.trainer.grpo_trainer on windows-latest / py3.11).
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: "utf-8"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      # The Web UI escaping tests run `safe_html.js` under node, and skip when
+      # node is absent. Runner images happen to ship one, so the skip would be
+      # silent: pin it, or the only tests that execute the real escaping logic
+      # can disappear without anything turning red.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Pin the HF cache to a deterministic path
+        # Set here and not in the job-level `env:` block: the `runner` context
+        # is not available there (only github / needs / strategy / matrix /
+        # vars / secrets / inputs are), and referencing it makes GitHub reject
+        # the whole workflow file before any job starts.
+        #
+        # Why a fixed path at all: the default ~/.cache/huggingface sits under
+        # a different user on each runner OS, so actions/cache cannot restore
+        # it by one key. Kept OUTSIDE the checkout because it lands ~0.5 GB,
+        # which the tests that walk cwd for containment would otherwise scan.
+        shell: bash
+        run: echo "HF_HOME=$RUNNER_TEMP/hf-cache" >> "$GITHUB_ENV"
+      - name: Restore HF Hub cache
+        id: hf-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/hf-cache
+          # Keyed on this file, so editing the model list below re-warms.
+          key: hf-${{ runner.os }}-${{ hashFiles('.github/workflows/ci.yml') }}
+          restore-keys: hf-${{ runner.os }}-
+      - name: Turn Defender real-time scanning off (this arm only)
+        if: matrix.arm == 'loadfile-defender-off'
+        shell: pwsh
+        run: |
+          Set-MpPreference -DisableRealtimeMonitoring $true
+          Get-MpPreference | Select-Object DisableRealtimeMonitoring
+      - name: Install dependencies
+        run: pip install -e ".[dev]" "pytest-xdist[psutil]"
+      - name: Warm HF Hub cache (models the tests load)
+        # Pre-download the models the unit tests load, with retries, so a
+        # transient HF Hub 429 (Too Many Requests) on a single matrix cell does
+        # not red the whole run. Never fails the job: if warming can't complete
+        # it emits a ::warning:: and lets the test step run as before.
+        #
+        # The list is EMPIRICAL — it is what a full local run actually leaves in
+        # ~/.cache/huggingface, not what greps for repo-shaped strings in
+        # tests/ suggest (most of those are config fixtures that never
+        # download). The list grew because run 30942028585 reddened
+        # windows/3.10 on a 429 for SmolLM2-135M-Instruct/config.json — a repo
+        # this step did not warm, so the retry loop above never protected it.
+        #
+        # "gpt2" is deliberately unqualified: tests ask for the bare id, which
+        # caches as models--gpt2. Warming "openai-community/gpt2" instead would
+        # fill a different directory and every test would still miss.
+        id: warm
+        shell: python
+        run: |
+          import os
+          import time
+          from huggingface_hub import snapshot_download
+
+          # Per-repo file sets, also empirical: these are the files a populated
+          # local cache actually holds after running the suite. Downloading
+          # whole snapshots instead costs 1.6 GB per cell — mostly the TF /
+          # Flax copies and the pytorch_model.bin twin of a safetensors file
+          # that transformers never opens when safetensors is present.
+          TEXT_ONLY = ["*.json", "*.txt", "*.model"]      # config + tokenizer
+          SAFETENSORS = TEXT_ONLY + ["*.safetensors"]
+          # Two of the fixture repos predate safetensors and ship weights ONLY
+          # as pytorch_model.bin. Both are a few MB, so pulling the .bin costs
+          # nothing here — but excluding it left the ASR test unable to build a
+          # model offline, which a full offline run of the suite caught.
+          LEGACY_BIN = TEXT_ONLY + ["*.bin"]
+
+          models = [
+              ("sshleifer/tiny-gpt2", LEGACY_BIN),
+              ("hf-internal-testing/tiny-random-gpt2", SAFETENSORS),
+              ("hf-internal-testing/tiny-random-LlamaForCausalLM", SAFETENSORS),
+              ("hf-internal-testing/tiny-random-WhisperForConditionalGeneration", LEGACY_BIN),
+              # Weights are never loaded for these two — only the config the
+              # 429 above was raised on.
+              ("HuggingFaceTB/SmolLM2-135M", TEXT_ONLY),
+              ("HuggingFaceTB/SmolLM2-135M-Instruct", TEXT_ONLY),
+              ("gpt2", SAFETENSORS),
+          ]
+
+          # One budget for the whole list, not per repo. Run 30947949103
+          # showed why: on windows/3.11 ALL SIX repos failed EVERY attempt,
+          # including the tiny fixtures every other cell fetched in under a
+          # second. The Hub had cut that runner off for the duration — so
+          # burning a fresh retry ladder on repo #2 the moment repo #1 gave up
+          # just spends the budget faster without ever waiting out the block.
+          deadline = time.monotonic() + 360
+          pending = list(models)
+          delay = 10
+
+          while pending and time.monotonic() < deadline:
+              still_pending = []
+              for repo, allow in pending:
+                  try:
+                      snapshot_download(repo, allow_patterns=allow)
+                      print(f"warmed {repo}")
+                  except Exception as exc:  # noqa: BLE001 — best effort, never fail the job
+                      print(f"{repo}: {type(exc).__name__}: {exc}")
+                      still_pending.append((repo, allow))
+              pending = still_pending
+              if pending:
+                  print(f"{len(pending)} repo(s) left; retrying in {delay}s")
+                  time.sleep(delay)
+                  delay = min(delay * 2, 60)
+
+          for repo, _ in pending:
+              print(f"::warning title=HF cache::could not warm {repo} within the retry budget")
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
+              fh.write(f"warmed={'partial' if pending else 'all'}\n")
+      - name: Show the CPU counts xdist sees
+        run: python -c "import os, psutil; print('logical', psutil.cpu_count(logical=True), 'physical', psutil.cpu_count(logical=False), 'os.cpu_count', os.cpu_count())"
+      - name: Run unit tests with coverage (${{ matrix.arm }})
+        # The one deselected test pins the list of jobs in this file, so it fails
+        # for as long as this experiment job exists; nothing else is left out.
+        shell: bash
+        run: |
+          start=$(date +%s)
+          rc=0
+          pytest tests/ -v --tb=short --durations=40 --junitxml=report.xml --cov=soup_cli --cov-report=xml:coverage.xml --cov-report=term-missing:skip-covered -n logical --dist loadfile --deselect tests/test_ci_full_matrix_on_approval.py::TestGatedJobs::test_every_job_is_classified || rc=$?
+          end=$(date +%s)
+          echo "ARM=${{ matrix.os }}/${{ matrix.arm }} TEST_STEP_SECONDS=$((end-start)) EXIT=$rc"
+          exit $rc
+      - name: Summarize the arm (counts and coverage)
+        if: always()
+        shell: python
+        run: |
+          import os
+          import xml.etree.ElementTree as ET
+
+          lines = []
+          try:
+              root = ET.parse('report.xml').getroot()
+              suite = root.find('testsuite') if root.tag == 'testsuites' else root
+              lines.append('tests=%s failures=%s errors=%s skipped=%s time=%ss' % (
+                  suite.attrib.get('tests'), suite.attrib.get('failures'), suite.attrib.get('errors'),
+                  suite.attrib.get('skipped'), suite.attrib.get('time')))
+          except Exception as exc:  # noqa: BLE001
+              lines.append('report.xml unreadable: %r' % (exc,))
+          try:
+              cov = ET.parse('coverage.xml').getroot()
+              lines.append('line-rate=%s branch-rate=%s' % (cov.attrib.get('line-rate'), cov.attrib.get('branch-rate')))
+          except Exception as exc:  # noqa: BLE001
+              lines.append('coverage.xml unreadable: %r' % (exc,))
+          text = 'ARM ${{ matrix.os }}/${{ matrix.arm }}: ' + '; '.join(lines)
+          print(text)
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as fh:
+              fh.write(text + '\n')
+      - name: Upload the junit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: junit-${{ matrix.os }}-${{ matrix.arm }}
+          path: report.xml
+          if-no-files-found: warn
