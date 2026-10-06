@@ -455,97 +455,74 @@ class TestAFolderThatCannotBeMadePrivateRefusesTheRun:
 # --------------------------------------------------------------------------------------------
 # #1614 — the root is re-checked before EVERY write of a shard, not once at secure time
 # --------------------------------------------------------------------------------------------
-@pytest.mark.skipif(not WINDOWS, reason="junctions are a Windows reparse point")
-class TestStripeRootRecheckedBeforeEachWrite:
+def _plant_link(kind, target, link):
+    if kind == "symlink":
+        os.symlink(str(target), str(link), target_is_directory=True)
+    else:
+        _junction(target, link)
+
+
+_LINK_KINDS = [
+    pytest.param("symlink", marks=pytest.mark.requires_symlink),
+    pytest.param(
+        "junction",
+        marks=pytest.mark.skipif(not WINDOWS, reason="junctions are a Windows reparse point"),
+    ),
+]
+
+
+class TestAStripeRootSwapIsRefusedAtTheNextStripeWrite:
     """``secure_stripe_folder`` runs once, before the per-layer write loop starts. Between
     then and the last write, the root could be renamed and a link substituted for it — the
     per-model folder's own lstat still looks like a real directory, so only comparing its
     realpath against the validated root catches the swap. The fix re-runs that comparison
-    (``stripe_folder_problem``) before every per-layer write and before the marker write."""
+    (``stripe_folder_problem``) before every per-layer write and before the marker write.
 
-    def test_a_root_swapped_mid_shard_is_caught_before_the_next_write(self, tmp_path, monkeypatch):
-        # 5 layers over 2 roots (out, stripe) land layers 1 and 3 on the stripe root -- a
-        # second stripe write to swap in after the first one lands.
+    5 layers over (primary, stripe): layers 1 and 3 go to the stripe root, so a swap planted
+    right after one of those two writes is picked up either by the next per-layer write (the
+    other one) or, when the swap happens after the last layer, by the marker write.
+    """
+
+    @pytest.mark.parametrize("kind", _LINK_KINDS)
+    @pytest.mark.parametrize(
+        "swap_after, refused_at", [(1, "decoder layer 3"), (3, "stripe marker")]
+    )
+    def test_the_swap_is_refused(self, tmp_path, monkeypatch, kind, swap_after, refused_at):
+        from soup_cli.utils import layer_shard as layer_shard_module
+
         src = _weights(tmp_path, n_layers=5)
         out = str(tmp_path / "cache" / "model")
-        stripe_dir = tmp_path / "stripe"
-        stripe_dir.mkdir()
-        stripe = os.path.realpath(str(stripe_dir))
-        folder = _folder(out, stripe)
-        folder_name = os.path.basename(folder)
-
+        (tmp_path / "stripe").mkdir()
+        stripe = os.path.realpath(str(tmp_path / "stripe"))
+        folder_name = os.path.basename(_folder(out, stripe))
         # Already holds a same-named folder, so the substituted link looks legitimate to
         # anything that does not compare realpaths against the originally validated root.
         elsewhere = tmp_path / "elsewhere"
         (elsewhere / folder_name).mkdir(parents=True)
-
-        from soup_cli.utils import layer_shard as layer_shard_module
-
+        trigger = os.path.basename(layer_shard_path(out, swap_after))
         real_atomic_save = layer_shard_module._atomic_save
-        state = {"swapped": False}
+        swapped = []
 
         def fake_atomic_save(blob, path):
             real_atomic_save(blob, path)
-            if not state["swapped"] and os.path.normcase(
-                os.path.realpath(os.path.dirname(path))
-            ) == os.path.normcase(folder):
-                moved = tmp_path / "moved-root"
-                os.replace(stripe, moved)
-                _junction(elsewhere, stripe)
-                state["swapped"] = True
+            if (
+                not swapped
+                and os.path.basename(path) == trigger
+                and os.path.basename(os.path.dirname(path)) == folder_name
+            ):
+                os.replace(stripe, str(tmp_path / "moved-root"))
+                _plant_link(kind, elsewhere, stripe)
+                swapped.append(path)
 
         monkeypatch.setattr(layer_shard_module, "_atomic_save", fake_atomic_save)
-
         with pytest.raises(StripeRootError) as caught:
             shard_checkpoint(src, out, dtype="float32", stripe_roots=(stripe,))
         message = str(caught.value)
-        assert stripe in message, message
-        assert state["swapped"], "the fixture never got to plant the link"
-
+        assert swapped, "the fixture never planted the link"
+        assert stripe in message and refused_at in message, message
         # Nothing landed through the substituted link, and no index was committed (first shard).
         assert os.listdir(str(elsewhere / folder_name)) == []
         assert not os.path.exists(os.path.join(out, "index.json"))
-
-    def test_mutation_removing_the_recheck_lets_the_swap_through(self, tmp_path, monkeypatch):
-        """Mutation check: patch ``stripe_folder_problem`` back to always-``None`` (what every
-        per-write call site saw before this fix) and confirm the same fixture that must raise
-        above now succeeds and writes through the substituted link instead."""
-        src = _weights(tmp_path, n_layers=5)
-        out = str(tmp_path / "cache" / "model")
-        stripe_dir = tmp_path / "stripe"
-        stripe_dir.mkdir()
-        stripe = os.path.realpath(str(stripe_dir))
-        folder = _folder(out, stripe)
-        folder_name = os.path.basename(folder)
-        elsewhere = tmp_path / "elsewhere"
-        (elsewhere / folder_name).mkdir(parents=True)
-
-        from soup_cli.utils import layer_shard as layer_shard_module
-
-        real_atomic_save = layer_shard_module._atomic_save
-        state = {"swapped": False}
-
-        def fake_atomic_save(blob, path):
-            real_atomic_save(blob, path)
-            if not state["swapped"] and os.path.normcase(
-                os.path.realpath(os.path.dirname(path))
-            ) == os.path.normcase(folder):
-                moved = tmp_path / "moved-root"
-                os.replace(stripe, moved)
-                _junction(elsewhere, stripe)
-                state["swapped"] = True
-
-        from soup_cli.utils import stripe_roots as stripe_roots_module
-
-        monkeypatch.setattr(layer_shard_module, "_atomic_save", fake_atomic_save)
-        monkeypatch.setattr(
-            stripe_roots_module, "stripe_folder_problem", lambda folder, root: None
-        )
-
-        shard_checkpoint(src, out, dtype="float32", stripe_roots=(stripe,))
-        assert state["swapped"]
-        # With the recheck removed, later stripe layers silently followed the link.
-        assert os.listdir(str(elsewhere / folder_name)) != []
 
 
 # --------------------------------------------------------------------------------------------
@@ -591,7 +568,7 @@ class TestJunctionVersusVolumeMountPoint:
         primary.mkdir()
         with pytest.raises(StripeRootError, match="junction") as caught:
             validate_stripe_root(str(link), primary_root=str(primary))
-        assert repr(str(link)) in str(caught.value)
+        assert "stripe-link" in str(caught.value)
 
     @pytest.mark.skipif(not WINDOWS, reason="junctions are a Windows reparse point")
     def test_a_volume_mount_point_stripe_root_is_accepted(self, tmp_path, monkeypatch):

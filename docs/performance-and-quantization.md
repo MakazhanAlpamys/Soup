@@ -834,9 +834,11 @@ values) sharing one stripe drive never touch each other's files. That folder is 
 the account running Soup (mode 0700 on POSIX; on Windows a protected ACL for that account and
 SYSTEM, replacing the inherited one, which on a data drive typically lets every signed-in
 account modify files), checked again on every reuse and again before every per-layer write and
-the marker write of a shard — so a root renamed out from under a running shard and replaced
-with a link is caught at the next write, not just at the start — and never followed if it is a
-link or junction; a folder Soup cannot make private refuses the run by name. Soup never deletes anything
+the marker write of a shard, and never followed if it is a link or junction; a folder Soup
+cannot make private refuses the run by name. A root renamed out from under a running shard and
+replaced with a link is refused at the next write, not just at the start — but that only
+narrows the window to a single write, it does not close it, which would need writes relative
+to an open directory handle (the standard library has none on Windows). Soup never deletes anything
 inside a stripe folder. Soup makes only its own folder owner-only, so also make the stripe ROOT
 itself writable only by your own account (on a default Windows data drive other accounts can
 modify it).
