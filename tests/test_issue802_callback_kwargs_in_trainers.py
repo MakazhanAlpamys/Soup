@@ -160,6 +160,7 @@ class TestBuildSoupTrainerCallback:
 
         assert callback.run_id == "test-run"
         assert callback.output_dir == "/tmp/output"
+        assert not hasattr(callback, "eval_config")
 
     def test_builder_passes_eval_gate_to_callback(self) -> None:
         config = SoupConfig(
@@ -531,3 +532,4 @@ class TestTrainerWrapperBehaviouralCallbackWiring:
         cb = soup_cbs[0]
         assert cb.output_dir == str(tmp_path)
         assert cb.eval_gate_config is wrapper.config.training.eval_gate
+        assert not hasattr(cb, "eval_config")
