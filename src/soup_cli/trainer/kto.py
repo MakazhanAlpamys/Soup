@@ -1,6 +1,5 @@
 """KTO (Kahneman-Tversky Optimization) trainer — wraps trl.KTOTrainer."""
 
-import math
 import time
 from pathlib import Path
 from typing import Optional
@@ -137,8 +136,11 @@ class KTOTrainerWrapper(StreamingSetupMixin):
                 quantization=tcfg.quantization,
                 lora_r=tcfg.lora.r,
             )
-            # KTO processes unpaired samples — similar memory to DPO
-            batch_size = max(1, batch_size // 2)
+            # KTO processes unpaired samples — similar memory to DPO. The
+            # floor is 2, not 1: TRL's KTOTrainer refuses a per-device batch
+            # of 1 (degenerate KL term), so handing it 1 just moves the
+            # failure after the model has loaded (#1420).
+            batch_size = max(2, batch_size // 2)
             console.print(f"[green]Auto batch size (KTO):[/] {batch_size}")
 
         # --- Dataset ---
@@ -154,12 +156,10 @@ class KTOTrainerWrapper(StreamingSetupMixin):
             output_dir = output_dir / cfg.experiment_name
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        # --- Calculate warmup steps from ratio ---
-        total_steps = (
-            math.ceil(len(train_ds) / batch_size / tcfg.gradient_accumulation_steps)
-            * tcfg.epochs
-        )
-        warmup_steps = int(total_steps * tcfg.warmup_ratio)
+        # --- Calculate warmup steps from ratio (#1431) ---
+        from soup_cli.utils.warmup import resolve_trainer_warmup_steps
+
+        warmup_steps = resolve_trainer_warmup_steps(tcfg.warmup_ratio)
 
         # --- KTO config ---
         from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
@@ -283,7 +283,7 @@ class KTOTrainerWrapper(StreamingSetupMixin):
             self.model,
             cfg.data,
         )
-        if tcfg.quantization in ("4bit", "8bit", "mxfp4"):
+        if tcfg.quantization in ("4bit", "8bit"):
             from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
 
             self.model = prepare_model_for_kbit_training(
@@ -370,23 +370,15 @@ class KTOTrainerWrapper(StreamingSetupMixin):
 
         # Add callback for live display and experiment tracking
         if display:
-            from soup_cli.monitoring.callback import (
-                SoupTrainerCallback,
-                soup_callback_kwargs,
-            )
-
+            from soup_cli.monitoring.callback import build_soup_trainer_callback
             self.trainer.add_callback(
-                SoupTrainerCallback(
+               build_soup_trainer_callback(
                     display,
+                    config=self.config,
                     tracker=tracker,
                     run_id=run_id,
-                    eval_gate_config=self.config.training.eval_gate,
-                    **soup_callback_kwargs(
-                        self.config.training,
-                        batch_size=self._batch_size,
-                        output_dir=self._output_dir,
-                        include_eval_gate=False,
-                    ),
+                    batch_size=self._batch_size,
+                    output_dir=self._output_dir,
                 )
             )
 

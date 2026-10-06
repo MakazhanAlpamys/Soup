@@ -44,6 +44,7 @@ import os
 import stat
 from typing import Any, Callable, Optional
 
+from soup_cli.utils.paths import is_device_namespace_path
 from soup_cli.utils.tts import validate_tts_family
 
 # SNAC checkpoint for the Orpheus family (24 kHz, 3 codebooks).
@@ -156,19 +157,29 @@ def load_audio_mono(path: str, *, target_sr: int = SNAC_SAMPLE_RATE):
     Off-rate audio is resampled with basic linear interpolation — adequate
     for codec encoding of speech; operators wanting studio-grade resampling
     should resample offline. Returns a 1-D ``np.float32`` array.
+
+    Only a regular file is read: a directory, a FIFO or a device raises
+    ``ValueError`` before ``soundfile`` sees it. The check is made before
+    ``soundfile`` opens the path, so a path replaced in between is not caught.
     """
     if not isinstance(path, str) or not path:
         raise ValueError("audio path must be a non-empty string")
     if "\x00" in path:
         raise ValueError("audio path must not contain null bytes")
+    if is_device_namespace_path(path):
+        raise ValueError("audio path must not be a device path")
     if not os.path.exists(path):
         raise FileNotFoundError(
             f"audio file not found: {os.path.basename(path)!r}"
         )
     # Symlink rejection — defence-in-depth; the loader already containment-
     # checks rows under data.audio_dir (v0.17.0 policy).
-    if stat.S_ISLNK(os.lstat(path).st_mode):
+    mode = os.lstat(path).st_mode
+    if stat.S_ISLNK(mode):
         raise ValueError("audio path must not be a symlink")
+    # A FIFO would block soundfile, and a device would never end.
+    if not stat.S_ISREG(mode):
+        raise ValueError("audio path must be a regular file")
     # Byte-size cap before any read — defends against a runaway file.
     if os.path.getsize(path) > _MAX_AUDIO_BYTES:
         raise ValueError(

@@ -161,3 +161,29 @@ def test_the_draft_model_is_placed_like_the_main_model(device):
     assert (draft["device_map"], draft["torch_dtype"]) == (
         main["device_map"], main["torch_dtype"],
     )
+
+
+@pytest.mark.parametrize("backend", ["vllm", "sglang"])
+def test_cli_refuses_an_unknown_device_on_every_backend(tmp_path, backend):
+    """The refusal is not a transformers-only check: ``--device tpu`` stops vLLM/SGLang too.
+
+    A mutation that validated ``--device`` only for ``--backend transformers`` survived the
+    tests above, which exercise the refusal on the default backend only.
+    """
+    pytest.importorskip("fastapi")
+    pytest.importorskip("uvicorn")
+    from soup_cli.cli import app
+
+    with patch("soup_cli.utils.vllm.is_vllm_available", return_value=True), patch(
+        "soup_cli.utils.sglang.check_sglang_available", return_value=True
+    ), patch(
+        "soup_cli.commands.serve._serve_vllm", return_value=MagicMock()
+    ) as serve_vllm, patch(
+        "soup_cli.commands.serve._serve_sglang", return_value=MagicMock()
+    ) as serve_sglang, patch("uvicorn.run") as run:
+        result = runner.invoke(
+            app, ["serve", "--model", str(tmp_path), "--backend", backend, "--device", "tpu"]
+        )
+    assert result.exit_code == 2, (result.output, repr(result.exception))
+    assert not (serve_vllm.called or serve_sglang.called or run.called)
+    assert "cpu, cuda, cuda:<index> or mps" in _collapse(result.output)

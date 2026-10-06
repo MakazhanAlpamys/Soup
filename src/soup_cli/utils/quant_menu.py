@@ -18,6 +18,7 @@ project-wide input-hardening policy.
 
 from __future__ import annotations
 
+import json
 import os
 from typing import TYPE_CHECKING, Any
 
@@ -31,6 +32,11 @@ if TYPE_CHECKING:
 PREQUANTIZED_FORMATS: frozenset[str] = frozenset(
     {"gptq", "awq", "aqlm", "eetq", "mxfp4", "fp8"}
 )
+
+# peft's LoRA layers for these formats raise "<Layer> does not support DoRA yet"
+# when the adapter is attached, after the model load. bitsandbytes, HQQ and
+# unquantised layers have a DoRA variant. Read by Autopilot and the schema (#1466).
+DORA_UNSUPPORTED_FORMATS: frozenset[str] = frozenset({"gptq", "awq", "aqlm", "eetq"})
 
 
 def is_quant_menu_format(quantization: str) -> bool:
@@ -226,13 +232,46 @@ def build_eetq_config() -> dict[str, Any]:
 
 
 def build_mxfp4_config() -> dict[str, Any]:
-    """BNB 4-bit MXFP4 quant_type — newer-than-NF4 4-bit format with better
-    activation distribution. Requires bitsandbytes >= 0.45 + CUDA.
+    """Dequantize-on-load for MXFP4 checkpoints (transformers ``Mxfp4Config``).
+
+    MXFP4 is not a bitsandbytes ``quant_type`` (bitsandbytes accepts ``nf4``
+    and ``fp4`` only), and transformers will not train an MXFP4 model as
+    loaded: its quantizer points at ``Mxfp4Config(dequantize=True)``. The
+    model then trains in bf16 (#1466).
     """
-    return {
-        "load_in_4bit": True,
-        "bnb_4bit_quant_type": "mxfp4",
-    }
+    return {"dequantize": True}
+
+
+def validate_mxfp4_checkpoint(ref: str) -> None:
+    """Best-effort check that ``ref`` resolves to an MXFP4-quantized model.
+
+    A local path must say so in ``config.json``; HF repo IDs are accepted on
+    faith, as for GPTQ and AWQ. Dequantizing a base that was never MXFP4
+    loads it unchanged, so without this a plain local base would train
+    unquantized under a config that says otherwise. Raises ``ValueError``.
+    """
+    if not isinstance(ref, str):
+        raise TypeError(f"MXFP4 ref must be str, got {type(ref).__name__}")
+    _reject_null_bytes(ref, "MXFP4 ref")
+    if not _looks_like_local_path(ref):
+        return
+    method = None
+    try:
+        with open(os.path.join(ref, "config.json"), encoding="utf-8") as handle:
+            quant = json.load(handle).get("quantization_config")
+        if isinstance(quant, dict):
+            method = quant.get("quant_method")
+    except (OSError, ValueError, AttributeError):
+        method = None
+    if method != "mxfp4":
+        # Basename only, matching _check_local_marker.
+        displayed = os.path.basename(os.path.normpath(ref)) or ref
+        raise ValueError(
+            f"quantization: mxfp4 needs an MXFP4 pre-quantized base, but "
+            f"{displayed!r} does not declare quant_method 'mxfp4' in its "
+            "config.json. Point at an MXFP4 checkpoint, or pick another "
+            "quantization (4bit quantizes a plain base at load time)."
+        )
 
 
 def build_fp8_dequant_config() -> dict[str, Any]:
@@ -462,15 +501,14 @@ def build_quantization_config_for_loader(
             )
         return EetqConfig()
     if quantization == "mxfp4":
-        from transformers import BitsAndBytesConfig
+        from transformers import Mxfp4Config
 
-        kwargs = build_mxfp4_config()
-        storage = getattr(tcfg, "bnb_4bit_quant_storage", None)
-        if storage:
-            kwargs["bnb_4bit_quant_storage"] = _resolve_torch_dtype(storage)
+        validate_mxfp4_checkpoint(base)
         if console is not None:
-            console.print("[green]MXFP4:[/] BNB 4-bit quant_type='mxfp4'")
-        return BitsAndBytesConfig(**kwargs)
+            console.print(
+                "[green]MXFP4:[/] pre-quantized checkpoint, dequantize-on-load"
+            )
+        return Mxfp4Config(**build_mxfp4_config())
     if quantization == "fp8":
         try:
             from transformers import FineGrainedFP8Config as _FP8Cfg

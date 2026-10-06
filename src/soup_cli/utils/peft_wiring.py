@@ -157,6 +157,15 @@ MOE_TEXT_LORA_TARGETS: dict[str, Any] = {
     # text tower MiniMax-M3's wrapper exposes, and a config loaded without the
     # wrapper reaches the resolver as this type instead of ``minimax_m3_vl``.
     "minimax_m3_vl_text": ("q_proj", "k_proj", "v_proj", "o_proj"),
+    # Mistral 3.5 (``mistralai/Mistral-Medium-3.5-128B``, shipped in
+    # ``mistral-medium-3-5-sft``): a vision-language wrapper (model_type
+    # "mistral3") containing a Pixtral vision encoder and a Mistral text tower.
+    # The vision tower defines its own attention projections under
+    # ``model.vision_tower.transformer.layers.<N>.attention.(q|k|v|o)_proj``,
+    # so target_modules: auto must be scoped to ``language_model`` via regex.
+    # Measured on the meta device: adapts 8 modules on a 2-layer skeleton,
+    # 0 in the vision tower (#1395).
+    "mistral3": r".*language_model\..*\.self_attn\.(q_proj|k_proj|v_proj|o_proj)",
 }
 
 #: Entries of :data:`MOE_TEXT_LORA_TARGETS` that cover only PART of the decoder,

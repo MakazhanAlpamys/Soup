@@ -28,8 +28,9 @@ def _run_ready_unlearn_wrapper(tmp_path, monkeypatch) -> UnlearnTrainerWrapper:
     setup() itself refuses an empty forget set, so this bypasses it and
     arranges exactly what a real call leaves behind: ``_setup_called`` set,
     mock model/tokenizer, and an output dir under the (tmp) cwd that the
-    ``_validated_output_dir`` gate accepts. ``train()`` then skips the
-    step loop (``n_steps == 0``) and exercises the save + result path.
+    ``_validated_output_dir`` gate accepts. ``train()`` then clears the
+    optimizer's gradients, finds no forget row to step over, and exercises
+    the save + result path.
     """
     monkeypatch.chdir(tmp_path)
     cfg = MagicMock()
@@ -39,6 +40,7 @@ def _run_ready_unlearn_wrapper(tmp_path, monkeypatch) -> UnlearnTrainerWrapper:
     wrapper._setup_called = True
     wrapper.model = MagicMock()
     wrapper.tokenizer = MagicMock()
+    wrapper._optimizer = MagicMock()  # #1564: train() touches it even at zero steps
     return wrapper
 
 

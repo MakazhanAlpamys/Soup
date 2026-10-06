@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import logging
 import os
 import re
 from pathlib import Path
@@ -28,6 +29,7 @@ if TYPE_CHECKING:  # pragma: no cover - type hints only, no runtime import
     from soup_cli.config.schema import SoupConfig
     from soup_cli.utils.energy import EnergyMeasurement
 
+logger = logging.getLogger(__name__)
 console = Console()
 
 # Optimizers the analytical hardware-fit predictor understands (mirror of
@@ -108,6 +110,61 @@ def _format_duration_display(result: dict) -> str:
     hours = int(duration_secs // 3600)
     minutes = int((duration_secs % 3600) // 60)
     return f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
+
+
+def _run_auto_eval_after_training(eval_config, output_dir: str, run_id: str) -> None:
+    """Run configured evaluation once after the trained model is saved."""
+    if not eval_config or not getattr(eval_config, "auto_eval", False):
+        return
+    if not output_dir or not _should_run_diagnose_gate_on_rank():
+        return
+
+    console.print("\n[bold blue]Running auto-eval...[/]")
+
+    benchmarks = getattr(eval_config, "benchmarks", None) or []
+    custom_tasks = getattr(eval_config, "custom_tasks", None)
+
+    if benchmarks:
+        try:
+            from soup_cli.commands.eval import benchmark
+
+            benchmark(
+                model=output_dir,
+                benchmarks=",".join(benchmarks),
+                num_fewshot=None,
+                batch_size=8,
+                run_id=run_id,
+                device=None,
+                trust_remote_code=False,
+            )
+        except typer.Exit:
+            logger.debug("Auto-eval benchmark skipped", exc_info=True)
+            console.print(
+                "[yellow]Auto-eval benchmark skipped (see the message above)[/]"
+            )
+        except Exception as exc:
+            logger.exception("Auto-eval benchmark failed")
+            console.print(
+                f"[yellow]Auto-eval benchmark failed: {markup_escape(str(exc))}[/]"
+            )
+
+    if custom_tasks:
+        try:
+            from soup_cli.commands.eval import custom
+
+            custom(
+                tasks=custom_tasks,
+                model=output_dir,
+                run_id=run_id,
+                attach_to_registry=None,
+                output=None,
+                trust_remote_code=False,
+            )
+        except Exception as exc:
+            logger.exception("Auto-eval custom failed")
+            console.print(
+                f"[yellow]Auto-eval custom failed: {markup_escape(str(exc))}[/]"
+            )
 
 
 def _train_sample_count(dcfg, dataset) -> int:
@@ -1797,6 +1854,12 @@ def train(
             total_steps=result["total_steps"],
             duration_secs=result["duration_secs"],
             output_dir=result["output_dir"],
+        )
+
+        _run_auto_eval_after_training(
+            cfg.eval,
+            result["output_dir"],
+            run_id,
         )
     except Exception as exc:
         tracker.fail_run(run_id, error=_describe_exception_for_tracker(exc))

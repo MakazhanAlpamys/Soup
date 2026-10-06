@@ -17,7 +17,7 @@ from soup_cli.data.loader import load_raw_data
 from soup_cli.data.validator import validate_and_stats
 from soup_cli.utils.embed import DEFAULT_EMBED_MODEL, embed_texts
 from soup_cli.utils.exit_codes import EXIT_GATE_FAILED, EXIT_USAGE_ERROR, GateCommand
-from soup_cli.utils.paths import is_under_cwd
+from soup_cli.utils.paths import is_network_or_device_path, is_under_cwd
 from soup_cli.utils.semdedup import DedupReport, greedy_semdedup
 from soup_cli.utils.terminal import for_terminal
 
@@ -693,10 +693,13 @@ def _show_vision_stats(data: list[dict]) -> None:
     existing = 0
     for row in data:
         img_path = row.get("image", "")
-        if not img_path:
+        if not img_path or not isinstance(img_path, str):
             continue
         ext = Path(img_path).suffix.lower()
         extensions[ext] = extensions.get(ext, 0) + 1
+        # A network share or a device path is never looked up, nor counted as found.
+        if is_network_or_device_path(img_path):
+            continue
         if Path(img_path).exists():
             existing += 1
 
@@ -1987,7 +1990,12 @@ def unregister_data(
 @app.command(name="from-traces")
 def from_traces_cmd(
     logs: str = typer.Option(
-        ..., "--logs", help="Path to JSONL trace log (or directory for soup-serve)",
+        ..., "--logs",
+        help=(
+            "Trace source: a JSONL file for langchain/openai, or the directory "
+            "`soup serve --trace-log` writes for soup-serve (a single file is "
+            "refused)"
+        ),
     ),
     format: str = typer.Option(
         ..., "--format", help="Trace format: langchain | openai | soup-serve",
@@ -2061,6 +2069,21 @@ def from_traces_cmd(
     if not logs_path.exists():
         console.print(f"[red]--logs not found: {logs}[/]")
         raise typer.Exit(1)
+    if format == "soup-serve" and not logs_path.is_dir():
+        # #1530: the soup-serve reader walks a directory of *.jsonl logs (one
+        # per `soup serve` session); pointed at a single file it silently read
+        # nothing and the run ended in a green "Wrote 0 preference pair(s)",
+        # exit 0, and an empty output file a pipeline would train from.
+        # Refuse — the smaller of the two fixes the issue proposed — and name
+        # the option and the shape the reader expects.
+        console.print(
+            f"[red]--logs '{_escape(logs)}' is not a directory: --format "
+            "soup-serve reads the directory `soup serve --trace-log` writes "
+            "(one *.jsonl per session), not a single file. Point --logs at "
+            "that directory, or read a single JSONL with --format langchain "
+            "or openai.[/]"
+        )
+        raise typer.Exit(1)
 
     output_path = Path(output)
     if not _under_cwd(output_path):
@@ -2101,6 +2124,27 @@ def from_traces_cmd(
 
     trace_list = list(trace_iter)
     pairs = list(build_pairs(trace_list, signal=signal))
+    if not pairs and not trace_list:
+        # #1530: reading zero traces used to fall straight through to the same
+        # green "Wrote 0 preference pair(s)" as a completed harvest. Say so and
+        # name the path. The zero-pair EXIT CODE is a design question the
+        # maintainer has left open, so it is deliberately unchanged here.
+        if format == "soup-serve":
+            reason = "the directory holds no readable *.jsonl trace files"
+        elif logs_path.is_dir():
+            # The file readers never opened anything here, so "no line
+            # parsed" would misreport a shape problem as a content problem.
+            reason = (
+                f"--logs is a directory; --format {format} reads a "
+                "single JSONL file"
+            )
+        else:
+            article = "an" if format == "openai" else "a"
+            reason = f"no line parsed as {article} {format} record"
+        console.print(
+            f"[yellow]Read 0 trace(s) from --logs '{_escape(logs)}' as format "
+            f"{format}: {reason}. The output file will be empty.[/]"
+        )
     if not pairs and trace_list:
         # #1440: reading traces that match no pair mode used to print a normal
         # green "Wrote 0 preference pair(s)" and exit 0, so an empty output file
@@ -2128,7 +2172,7 @@ def from_traces_cmd(
     if judge:
         # v0.40.3 (#33 (a)) — LLM-judge confidence filter.
         from soup_cli.data.traces.quality import judge_filter_pairs
-        from soup_cli.eval.judge import VALID_PROVIDERS, JudgeEvaluator
+        from soup_cli.eval.judge import VALID_PROVIDERS, JudgeDownError, JudgeEvaluator
 
         # Friendly early validation matches the existing CLI conventions —
         # fall through to the constructor only after the obvious typo is caught.
@@ -2161,6 +2205,9 @@ def from_traces_cmd(
             filtered, report = judge_filter_pairs(
                 pairs, judge=judge_evaluator, min_confidence=min_confidence,
             )
+        except JudgeDownError as exc:
+            console.print(f"[red]--judge stopped:[/] {for_terminal(exc)}")
+            raise typer.Exit(1) from exc
         except (TypeError, ValueError) as exc:
             console.print(f"[red]--judge runtime error:[/] {_escape(str(exc))}")
             raise typer.Exit(1) from exc
@@ -3951,6 +3998,13 @@ def best_of_n(
                 checkpoint_path, index=index, sft=row, dpo=pair
             )
         except bon.BestOfNRuntimeError as exc:
+            from soup_cli.eval.judge import JudgeUnavailableError
+
+            if isinstance(exc.__cause__, JudgeUnavailableError):
+                lost = exc.__cause__.for_rows(
+                    len(prompt_list) - index, len(prompt_list), "prompts"
+                )
+                console.print(f"[red]{for_terminal(lost)}[/]")
             console.print(
                 f"[red]Best-of-N stopped after {index}/{len(prompt_list)} prompts.[/]\n"
                 f"Resume with [bold]--resume[/]; checkpoint: "

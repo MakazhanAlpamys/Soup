@@ -234,11 +234,15 @@ an explicit target list always wins unchanged:
    and `out_proj` in the fused linear-attention layers, because PEFT does not map
    `qwen3_5_text`. The MoE architectures Soup ships recipes for (`qwen3_moe`,
    `deepseek_v3`, `deepseek_v4`, `glm4_moe`, `glm_moe_dsa`, `granitemoehybrid`,
-   `kimi_k2`/`kimi_k25`, `gpt_oss`, `minimax_m2`, `minimax_m3_vl`) target their
-   attention projections; PEFT maps none of them (#1070). MiniMax-M3 uses a regex
+   `kimi_k2`/`kimi_k25`, `gpt_oss`, `minimax_m2`, `minimax_m3_vl`, `mistral3`) target
+   their attention projections; PEFT maps none of them (#1070). MiniMax-M3 uses a regex
    scoped to its language tower, so a text fine-tune does not adapt the vision
-   encoder. `glm4_moe` is GLM-4.6 and is *not* `glm_moe_dsa` (GLM-5 / GLM-5.1):
-   the two have different attention shapes.
+   encoder. `mistral3` (the vision-language wrapper behind `mistral-medium-3-5-sft`,
+   which therefore sets `modality: vision` so SFT loads the image-text class) uses the
+   same kind of language-tower regex: `q_proj`, `k_proj`, `v_proj` and `o_proj` under
+   `language_model...self_attn` only, so the Pixtral vision tower, the multimodal
+   projector and the MLP projections stay unadapted (#1395). `glm4_moe` is GLM-4.6 and
+   is *not* `glm_moe_dsa` (GLM-5 / GLM-5.1): the two have different attention shapes.
 3. **Anything else fails closed.** `auto` on an architecture neither PEFT nor Soup
    maps is refused at setup, naming the `model_type`, rather than reaching PEFT's
    `No target_modules passed`. This is not new behaviour — PEFT refused those too —
@@ -387,7 +391,14 @@ training:
     use_dora: true  # Enable DoRA
 ```
 
-Works with all training tasks and backends.
+Works with all training tasks on the transformers backend (see the note on
+quantized bases below).
+
+> **Not on GPTQ / AWQ / AQLM / EETQ bases.** peft has no DoRA variant for those
+> layers and raises when the adapter is attached, so `use_dora: true` with
+> `quantization: gptq`, `awq`, `aqlm` or `eetq` is refused when the config is
+> loaded. Use plain LoRA on those bases, or a `4bit` / `8bit` / `hqq:Nbit` /
+> unquantised base to keep DoRA.
 
 
 ## LoRA+ (Differentiated Learning Rates)
@@ -404,6 +415,7 @@ training:
 ```
 
 - **Compatibility:** Wired on every Trainer-based task that trains a LoRA adapter, including the preference and RL tasks (`dpo`, `kto`, `orpo`, `simpo`, `ipo`, `bco`, `grpo`, `online_dpo`, `ppo`, `reward_model`, `distill`). Most attach the LoRA+ optimizer once the trainer is built; `ppo` passes it to the trainer's constructor instead, because trl's PPO trainer builds its optimizer and LR scheduler eagerly, and adds the value model to it at the base learning rate, as trl's default optimizer does. `classifier`, `reranker`, `cross_encoder` and `asr` full fine-tune by default, so LoRA+ applies there only with `classifier_lora: true` / `asr_lora: true` and `lora.r > 0`. Refused at config parse on tasks with no trainable LoRA $B$ matrix: `prm` (full fine-tune), `moe_lora_routing` (only the routing gate trains), and `classifier` / `reranker` / `cross_encoder` / `asr` without their LoRA flag. Also refused on `unlearn`, which runs its own optimizer loop rather than a Trainer. Refused with `lora.use_vera` (VeRA trains scaling vectors, not $A$/$B$ matrices, so every trainable tensor would run at `lr * ratio`). Also refused on the `mlx` backend (#1324): the MLX optimizer Soup builds (`trainer/mlx_optim.py`) runs every LoRA tensor at one learning rate (no parameter groups), so the ratio would be silently ignored; remove it or use `backend: transformers`. `backend: unsloth` gets the same LoRA+ optimizer as `transformers`. Mutually exclusive with `use_lorafa`.
+- **Optimizers:** LoRA+ builds its optimizer without the model, so it is refused at config load with `optimizer: apollo_adamw`, `lomo` or `adalomo` (transformers can only build those from the model) and with `use_galore`.
 
 
 ## LoRA-FA (Frozen-A LoRA)
@@ -506,7 +518,11 @@ training:
 
 ## Freeze Training
 
-Freeze bottom layers of the model — train only the top layers (like LLaMA-Factory's `finetuning_type: freeze`):
+Freeze bottom layers of the model — train only the top layers (like LLaMA-Factory's `finetuning_type: freeze`).
+Only `task: sft` (and `tts`, which trains through the SFT trainer) applies these two fields; on any
+other task the config is refused at load, because that trainer would train every layer (#1497).
+Within `sft` they are applied on the transformers text path only: `backend: mlx`, `backend: unsloth`,
+`modality: vision`, `modality: audio` and `stream_layers: true` still load them and train every layer.
 
 ```yaml
 training:

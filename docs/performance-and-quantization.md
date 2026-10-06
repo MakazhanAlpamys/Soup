@@ -350,7 +350,7 @@ training:
 | `hqq:Nbit` | 1, 2, 3, 4, 5, 6, 8 | Wide bit range; compose with LoRA. | hqq |
 | `aqlm` | 2 | Extreme compression. | aqlm |
 | `eetq` | 8 | Fast 8-bit kernel for SM75+. | eetq |
-| `mxfp4` | 4 | Newer 4-bit type with better activation distribution. | bitsandbytes ≥ 0.45 |
+| `mxfp4` | 4 (stored) | Train LoRA on top of an MXFP4 pre-quantized checkpoint (for example GPT-OSS). Loaded with `Mxfp4Config(dequantize=True)`, so it trains in bf16: transformers does not train MXFP4 weights as loaded. Budget memory for the bf16 model, about 2 bytes per parameter (roughly 42 GB for a 20B base); the `soup train` pre-flight does not check `mxfp4` runs. | — |
 | `fp8` | — | Train fp16/bf16 on top of FP8-released checkpoints. | transformers ≥ 4.45 |
 
 **Compatibility matrix.** `soup train` runs `check_quant_distributed_compat()` at
@@ -503,6 +503,8 @@ The base is quantised **once, offline**, one tensor at a time, and cached. The s
 
 Correctness is not a tradeoff here either: a streamed NF4 run is **bit-exact** against a *resident* NF4 run (the same quantised bytes through the same bitsandbytes kernels), and that is a regression test, not a one-off measurement.
 
+**Scope of that comparison.** The resident control is a plain NF4 model *without* PEFT's `prepare_model_for_kbit_training`. The default resident 4-bit/8-bit SFT path calls it (`trainer/sft.py`), and it casts every non-quantised parameter to float32 — `embed_tokens`, the norms and an untied `lm_head` (checked on `trl-internal-testing/tiny-Qwen2ForCausalLM-2.5`: all bfloat16 before, all float32 after). Streaming keeps those tensors in the store dtype (bf16 on Ampere and newer, fp16 before), so a default resident run and a streamed run start from a different numerical setup even with identical quantised blocks. One contributor-reported case (`Qwen/Qwen3-8B` at `b968826d`, RTX 4070 SUPER, bitsandbytes 0.50.2, transformers 5.17.0, peft 0.21.1, torch 2.14.0+cu126; not part of the benchmark record), with an NF4 Qwen3-8B, one 73-token text and a forward pass at step 0: the resident control without the upcast equals streaming bit for bit, while the default resident path differs (max |Δlogit| 0.52, mean 0.054). It is one forward on one text: it says nothing about backward, resume or the whole training trajectory, and the LoRA `A` initialisation also differs by construction (streaming materialises the adapters from a seeded CPU generator, `materialize_meta_adapters`; the resident path uses PEFT's own initialisation from the global RNG).
+
 **Measured numbers (RTX 3050 Laptop 4 GB, Windows 11, LoRA, batch 1, 50 steps after 10 warmup):**
 
 | Model | Quant | Seq | Throughput | GPU Util | Peak VRAM | RAM store |
@@ -654,7 +656,7 @@ prints this advice when it sees you accumulating.
 - `quantization` other than `none` or `4bit` → other formats cannot be streamed into a pooled buffer
 - `backend: unsloth` / `backend: mlx` → streaming replaces the model-load path those backends own
 - `task` other than `sft` / `dpo` / `orpo` / `simpo` / `kto` → named explicitly. `grpo` and `ppo` are refused **permanently**, not pending: generation rollouts re-read every layer once per generated token, which destroys the amortisation streaming depends on
-- `task: kto` with `batch_size: 1` → TRL's KL term is degenerate at batch 1; refused when the config is read rather than minutes later after sharding
+- `task: kto` with `batch_size: 1` → TRL's KL term is degenerate at batch 1; refused when the config is read (this applies to every KTO run, not only to streaming) rather than minutes later after sharding
 - `lora.use_dora` / `lora.use_vera` / `lora.init_strategy` other than `random` → these initialise from the real base weight, which is on the meta device under streaming
 - `moe_expert_quant` → expert quantization runs only in the resident model-construction path and would otherwise be silently ignored
 - `unfrozen_parameters`, `lisa_enabled`, `packing`, `multipack`, `use_fsdp2_compile`, `train_router_only`, `expand_layers` → each independently rewrites or re-freezes the same layers
@@ -698,7 +700,7 @@ output: ./output
 **Performance notes:**
 - 1.43× slower than resident training, measured at 0.5B (the only size on the reference box where a resident baseline genuinely fits in 4 GB and is therefore a fair comparison).
 - The 1.5B runs sit at ~97% GPU utilisation, i.e. compute-bound: with a page-locked store the layer loads hide almost completely behind compute. The 3B run's 79.3% is **not** a model-size effect — it is the cost of the pageable-store fallback on that particular box.
-- Correctness is not a tradeoff: streamed and resident forward passes were verified **bit-exact**, and a 100-step streamed loss curve matched resident exactly. Streaming substitutes the same weight bytes into the same kernels.
+- Correctness is not a tradeoff: streamed and resident forward passes were verified **bit-exact**, and a 100-step streamed loss curve matched resident exactly. Streaming substitutes the same weight bytes into the same kernels. (The resident control is the plain NF4 one described in the scope note under *Correctness* above.)
 
 > **v0.72.0 adapters are unloadable — re-run them on v0.72.1.** In v0.72.0 a streamed run saved every adapter tensor under a key carrying an extra `.inner.` segment, so `soup merge`, `soup serve`, `soup chat` and `PeftModel.from_pretrained` loaded **zero** tensors and silently returned the untuned base (PEFT emitted only a `UserWarning`). The training itself was correct — only the saved file was affected. Check with:
 >
@@ -769,7 +771,7 @@ byte-identical between the SFT and DPO arms.
 the same way DPO does, so it gets the same treatment. ORPO and SimPO genuinely are
 reference-free. All four are verified **bit-exact** against a resident run of the same
 loss on a tied checkpoint; on an untied one, that check covers `dpo`
-(`tests/test_issue1049_untied_streamed_preference.py`).
+(`tests/test_issue1049_untied_streamed_preference.py`). Same resident-control scope as the note under *Correctness* above.
 
 **The cost is time, not memory.** DPO runs the layer stack three times per step (policy
 forward, reference forward, checkpoint recompute) against SFT's two — measured **1.52×**
@@ -805,6 +807,50 @@ the run refuses before either write when that volume lacks free space. Override 
 roots with `SOUP_SPECTRUM_CACHE_DIR` and `SOUP_LAYER_STREAM_CACHE_DIR`; both retain Soup's
 home/cwd/tmp containment policy.
 
+**Two or more NVMe drives.** On a cold store larger than RAM the disk-tier step can wait on the
+read (measured for a 70B-shaped store), and then one drive is the ceiling. Set
+`SOUP_LAYER_STREAM_STRIPE_DIRS` to extra folders on OTHER NVMe drives (`os.pathsep`-separated:
+`;` on Windows, `:` elsewhere) and the layer cache is striped over N roots, where N is the primary
+cache root plus the folders listed: decoder layer `i` lives on root `i mod N`, the index, the
+extras and the embedding/head files stay on the primary root, and the reader keeps one layer in
+flight per drive. The cache is laid out this way whichever tier the run picks; only the disk tier
+reads the drives in parallel. Every entry is checked, and any failure refuses the run and names
+the entry and the rule: it must be an absolute path (on Windows, with a drive letter or UNC share;
+no `\\?\` or `\\.\` spelling, no control characters), already exist as a folder (a drive that is
+not mounted is never mistaken for an empty one), not be a symlink, not lie inside or contain the
+primary cache root or another entry, sit on a different volume from the primary root and from
+every other entry, and classify as NVMe (`training.stream_disk_kind` overrides a wrong probe); the
+list holds at most 6 folders. The bytes are exactly the ones the single-drive cache holds, so
+striping changes the speed, not the result.
+
+Stripe folders are outside the home/cwd/tmp containment the primary cache has, by design — a
+second drive is never under `$HOME`. What that containment gave is enforced directly instead.
+Inside each entry Soup writes only its own folder, named after the model plus a hash of the
+primary cache's path, so two primary caches (two users, or two `SOUP_LAYER_STREAM_CACHE_DIR`
+values) sharing one stripe drive never touch each other's files. That folder is made private to
+the account running Soup (mode 0700 on POSIX; on Windows a protected ACL for that account and
+SYSTEM, replacing the inherited one, which on a data drive typically lets every signed-in
+account modify files), checked again on every reuse, and never followed if it is a link or
+junction; a folder Soup cannot make private refuses the run by name. Soup never deletes anything
+inside a stripe folder. Soup makes only its own folder owner-only, so also make the stripe ROOT
+itself writable only by your own account (on a default Windows data drive other accounts can
+modify it).
+
+It costs one more layer of host staging per extra drive: `stream_read_ahead` defaults to N + 1.
+A configured value of 2 counts as the default and is raised the same way; any other value is
+kept as set (with a warning if it leaves drives idle), and a refusal that asks for a lower depth
+names a value that is not raised back up. Changing the list re-shards the cache; unsetting it
+re-shards to one root and names the folder left behind. Measured on two PM9B1 drives, with no
+formal verdict: 7.65-9.15 GB/s together against ~4 for one
+([record](../benchmarks/probe-rtx5070-two-drive-read.md)). Gated: on a cold 70B-shaped NF4 store
+at seq 512 the training step went from 17.4 s to 9.97 s, 1.75x
+([gate](../benchmarks/gate-two-drive-striping.md)). That is a burst from a rested box. Under
+sustained back-to-back reading both drives of this laptop throttle to about 2.5 GB/s each, and
+the late-window speed-up measured 1.28x and 1.41x; a single drive throttles later and less
+([sustained probe](../benchmarks/probe-rtx5070-two-drive-sustained.md),
+[per-drive check](../benchmarks/probe-rtx5070-drive-throttle.md); neither has a formal verdict
+yet). Plan a long run on roughly 1.3-1.4x, and on drives with good cooling.
+
 Hugging Face snapshots normally expose symlinks into their blob cache, which the sharder
 deliberately does not follow. Soup materialises those weights under its Spectrum cache. If the
 HF cache already exposes real files, Soup now reads them in place instead of creating a second
@@ -812,12 +858,27 @@ copy. The layer shards remain under `~/.soup/layer-stream/`. Their index records
 filename, size, and `mtime_ns`, so a necessary re-shard says which component changed instead
 of silently spending minutes rebuilding the cache.
 
+`base:` may also be a local path to a Hugging Face cache snapshot
+(`.../models--org--name/snapshots/<commit>`). Soup copies it to regular files in the same
+Spectrum cache slot as the Hub id `org/name` and reuses that copy while the commit and blob
+ids match. A directory whose `.safetensors` files are symlinks but which is not such a
+snapshot (including a regular directory that also holds an alias symlink to a shard) is
+refused with a message naming the accepted layouts: pass the Hub id, the snapshot directory,
+or a directory of regular files.
+
 This materialisation also works with `HF_HUB_OFFLINE=1` when the standard Hugging Face
 snapshot is complete. Soup pins the commit resolved by the initial cache lookup and copies
 only verified snapshot files from that commit's blob store; it does not perform a second Hub
 metadata request for the regular-file directory. A missing blob or an escaping symlink aborts
 before the destination is published, rather than leaving a partial checkpoint that the sharder
-could consume.
+could consume. With huggingface_hub 1.32 or later, links into its marked cache-wide store
+(`<cache>/blobs`) are followed too, and any other target is still refused.
+The repo's own `blobs` directory is treated like that store: it has to be a real directory.
+When it is itself a link (a symlink, or a junction on Windows), Soup stops with a message
+naming it instead of following it, so a link in the cache that points outside the cache is
+never followed. To keep a model's files on another disk, move the whole cache or the whole
+repo folder and link that: the snapshot path is resolved first. A junction inside a snapshot
+directory is refused like a directory symlink.
 
 
 ## Correctness First (v0.36.0)
