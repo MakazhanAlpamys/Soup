@@ -539,17 +539,42 @@ class TestJunctionVersusVolumeMountPoint:
         _junction(target, link)
         assert is_volume_mount_point(str(link)) is False
 
-    def test_a_target_naming_a_volume_is_a_volume_mount_point(self, tmp_path, monkeypatch):
-        """No elevation is available to mount a real volume, so the link-target resolution is
-        patched directly -- the thing the classifier actually branches on."""
+    @pytest.mark.parametrize(
+        "target, expected",
+        [
+            (r"\\?\Volume{1be1e677-9257-45ec-936f-712a49d3af54}\\", True),
+            (r"\\?\Volume{1be1e677-9257-45ec-936f-712a49d3af54}", True),
+            (r"\??\Volume{1be1e677-9257-45ec-936f-712a49d3af54}\\", True),
+            (r"\??\Volume{1be1e677-9257-45ec-936f-712a49d3af54}", True),
+            (r"\\?\Volume{1be1e677-9257-45ec-936f-712a49d3af54}\Users\nanda", False),
+            (r"\\?\C:\Users\nanda", False),
+            (r"\\?\UNC\server\share\folder", False),
+        ],
+        ids=[
+            "volume-root-trailing-sep-devicepath",
+            "volume-root-no-trailing-sep",
+            "volume-root-trailing-sep-ntpath",
+            "volume-root-no-trailing-sep-ntpath",
+            "folder-below-volume-path",
+            "drive-letter-folder",
+            "unc-folder",
+        ],
+    )
+    def test_the_classifier_distinguishes_a_volume_root_from_a_folder_beneath_one(
+        self, tmp_path, monkeypatch, target, expected
+    ):
+        r"""No elevation is available to mount a real volume, so the link-target resolution is
+        patched directly -- the thing the classifier actually branches on. A junction can
+        target a folder beneath a volume GUID path exactly as it can beneath a drive letter or
+        a UNC share (reproduced for real with ``mklink /J`` against
+        ``\\?\Volume{...}\Users\...``), so the rule has to be "names the whole volume", not
+        "starts with Volume{"."""
         from soup_cli.utils import stripe_roots as stripe_roots_module
 
-        link = tmp_path / "mounted-volume"
+        link = tmp_path / "reparse-point"
         link.mkdir()
-        monkeypatch.setattr(
-            os, "readlink", lambda path: r"\\?\Volume{1be1e677-9257-45ec-936f-712a49d3af54}\\"
-        )
-        assert stripe_roots_module.is_volume_mount_point(str(link)) is True
+        monkeypatch.setattr(os, "readlink", lambda path: target)
+        assert stripe_roots_module.is_volume_mount_point(str(link)) is expected
 
     def test_a_non_reparse_folder_is_not_a_volume_mount_point(self, tmp_path):
         from soup_cli.utils.stripe_roots import is_volume_mount_point

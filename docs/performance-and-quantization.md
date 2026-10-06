@@ -819,8 +819,9 @@ the entry and the rule: it must be an absolute path (on Windows, with a drive le
 no `\\?\` or `\\.\` spelling, no control characters), already exist as a folder (a drive that is
 not mounted is never mistaken for an empty one), not be a symlink or a directory junction (a
 genuine Windows volume mount point is accepted — a junction and a mount point carry the same
-reparse tag, but only a junction's target names a drive-letter folder that can be repointed at
-any time; a mount point's names the volume itself), not lie inside or contain the
+reparse tag, but only a junction's target names a folder, under a drive letter, a UNC share or
+even a volume GUID path, that can be repointed at any time; a mount point's target names a
+whole volume rather than a folder), not lie inside or contain the
 primary cache root or another entry, sit on a different volume from the primary root and from
 every other entry, and classify as NVMe (`training.stream_disk_kind` overrides a wrong probe); the
 list holds at most 6 folders. The bytes are exactly the ones the single-drive cache holds, so

@@ -148,16 +148,18 @@ def is_volume_mount_point(path: str) -> bool:
     A directory junction and a volume mount point carry the identical
     ``IO_REPARSE_TAG_MOUNT_POINT`` tag (``_is_link`` cannot tell them apart), so the two are
     distinguished by their target instead: ``mountvol`` names a volume mount point's target
-    ``\\\\?\\Volume{<guid>}\\``, never a drive-letter or UNC folder path, which is what a
-    junction always targets. Refusing every reparse point would also refuse a legitimate
-    volume-mount-point stripe root; this is the narrower rule that does not.
+    ``\\\\?\\Volume{<guid>}\\`` with nothing after it -- it names a whole volume rather than a
+    folder, where a junction can target a folder BENEATH a volume GUID path just as easily as
+    one beneath a drive letter or UNC share. Refusing every reparse point would also refuse a
+    legitimate volume-mount-point stripe root; this is the narrower rule that does not.
     """
     try:
         target = os.readlink(path)
     except OSError:
         return False
     stripped = target.removeprefix("\\\\?\\").removeprefix("\\??\\")
-    return stripped.startswith("Volume{")
+    volume = stripped.rstrip("\\")
+    return volume.startswith("Volume{") and volume.endswith("}") and "\\" not in volume
 
 
 def validate_stripe_root(entry: str, *, primary_root: str, accepted: Sequence[str] = ()) -> str:
