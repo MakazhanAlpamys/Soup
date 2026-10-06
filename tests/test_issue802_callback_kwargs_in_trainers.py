@@ -136,7 +136,7 @@ class TestTrainerCallbackKwargsUsage:
 class TestBuildSoupTrainerCallback:
     """Tests for the shared trainer callback builder."""
 
-    def test_passes_eval_config_to_callback(self) -> None:
+    def test_builder_passes_core_fields_to_callback(self) -> None:
         config = SoupConfig(
             base="sshleifer/tiny-gpt2",
             task="grpo",
@@ -499,7 +499,7 @@ class TestTrainerWrapperBehaviouralCallbackWiring:
         assert cb._grad_accum_enabled is True
         assert cb._grad_accum_batch == 8
 
-    def test_grpo_wrapper_train_wires_eval_config(
+    def test_grpo_wrapper_train_wires_eval_gate_config(
         self, tmp_path: Path
     ) -> None:
         from soup_cli.trainer.grpo import GRPOTrainerWrapper
