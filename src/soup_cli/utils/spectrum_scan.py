@@ -26,6 +26,7 @@ them. LISA (per-step layer sampling) is split to #267.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import math
@@ -72,6 +73,9 @@ _VALID_MODULE_TYPES = ("mlp", "attn", "other")
 _LAYER_IDX_RE = re.compile(r"(?:^|\.)(?:layers|h)\.\d+\.")
 _SLUG_RE = re.compile(r"[^A-Za-z0-9._-]+")
 _HF_COMMIT_RE = re.compile(r"^[A-Fa-f0-9]{40}$")
+# A local snapshot folder's own cache slot: ``<folder name>@<digest of its location>``.
+_LOCAL_SLOT_LABEL_CHARS = 64
+_LOCAL_SLOT_DIGEST_CHARS = 32
 
 ModulesArg = Union[str, Sequence[str], None]
 
@@ -896,7 +900,8 @@ def plan_model_weights(model: str) -> ModelWeightsPlan:
         if any(os.path.islink(os.path.join(source, name)) for name, _s, _m in manifest):
             # A local path to an HF cache snapshot: its weights are symlinks into
             # blobs/, which the sharder and the scanner skip. Copy it like the
-            # snapshot a Hub id resolves to, sharing that copy's cache slot.
+            # snapshot a Hub id resolves to. It shares that copy's cache slot only
+            # when it is that snapshot's own repo folder (_local_snapshot_slot).
             source_revision = _hf_snapshot_revision(source)
             if source_revision is None:
                 raise ValueError(
@@ -906,7 +911,11 @@ def plan_model_weights(model: str) -> ModelWeightsPlan:
                     "directory, or a directory of regular files"
                 )
             return _hf_snapshot_plan(
-                _hf_cache_repo_id(source) or model, source, manifest, source_revision
+                _hf_cache_repo_id(source) or model,
+                source,
+                manifest,
+                source_revision,
+                slot=_local_snapshot_slot(source),
             )
         return ModelWeightsPlan(
             model=model,
@@ -950,15 +959,49 @@ def _hf_cache_repo_id(source_dir: str) -> Optional[str]:
     return repo_dir[len("models--"):].replace("--", "/") or None
 
 
+def _location_key(path: str) -> str:
+    """One spelling per directory: links resolved, letter case folded where the OS does."""
+    return os.path.normcase(os.path.realpath(path))
+
+
+def _local_snapshot_slot(source: str) -> str:
+    """Cache slot for the regular-file copy of a local ``snapshots/<commit>`` directory.
+
+    The slot of the Hub id ``org/name`` when the snapshot's repo folder is the directory
+    that id resolves to in the active Hugging Face cache. A folder anywhere else gets a
+    slot of its own, ``<folder name>@<digest of its resolved location>``: a copy is
+    reused on matching names and sizes, so two requests may share one only when they
+    name the same place. ``@`` cannot occur in a :func:`model_slug`, which keeps a
+    folder's slot apart from every slot named after a model.
+    """
+    repo_root = os.path.dirname(os.path.dirname(source))
+    location = _location_key(repo_root)
+    repo_id = _hf_cache_repo_id(source)
+    if repo_id is not None:
+        from soup_cli.utils.hubs import hf_cache_dir
+
+        cache = hf_cache_dir()
+        if cache is not None:
+            in_cache = os.path.join(cache, os.path.basename(repo_root))
+            if _location_key(in_cache) == location:
+                return model_slug(repo_id)
+    name = os.path.basename(location)
+    label = model_slug(name)[:_LOCAL_SLOT_LABEL_CHARS] if name.strip() else "local"
+    digest = hashlib.sha256(os.fsencode(location)).hexdigest()
+    return f"{label}@{digest[:_LOCAL_SLOT_DIGEST_CHARS]}"
+
+
 def _hf_snapshot_plan(
     model: str,
     source: str,
     manifest: Tuple[Tuple[str, int, int], ...],
     source_revision: Optional[str],
+    *,
+    slot: Optional[str] = None,
 ) -> ModelWeightsPlan:
     """Plan the regular-file copy of a symlinked HF snapshot (reused when current)."""
     materialized = os.path.join(
-        resolve_cache_dir(), "weights", model_slug(model)
+        resolve_cache_dir(), "weights", slot or model_slug(model)
     )
     existing = _materialized_matches_hf_snapshot(
         source,

@@ -416,6 +416,21 @@ def _validate_cache_dir(cache_dir: str, *, field: str = "cache_dir") -> str:
     )
 
 
+def hf_cache_dir() -> str | None:
+    """The cache directory :func:`snapshot_download` uses when ``cache_dir`` is ``None``.
+
+    That call leaves the choice to huggingface_hub (``HF_HUB_CACHE``, ``HF_HOME``, or
+    the default under the home directory). This returns huggingface_hub's own answer
+    instead of reading the environment a second time. ``None`` when huggingface_hub
+    is not installed.
+    """
+    try:
+        from huggingface_hub import constants
+    except ImportError:  # pragma: no cover - HF present in CI
+        return None
+    return str(constants.HF_HUB_CACHE)
+
+
 def snapshot_download(
     repo_id: str,
     *,

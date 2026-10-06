@@ -859,9 +859,14 @@ filename, size, and `mtime_ns`, so a necessary re-shard says which component cha
 of silently spending minutes rebuilding the cache.
 
 `base:` may also be a local path to a Hugging Face cache snapshot
-(`.../models--org--name/snapshots/<commit>`). Soup copies it to regular files in the same
-Spectrum cache slot as the Hub id `org/name` and reuses that copy while the commit and blob
-ids match. A directory whose `.safetensors` files are symlinks but which is not such a
+(`.../models--org--name/snapshots/<commit>`). Soup copies it to regular files and reuses that
+copy while the commit and blob ids match. When the path is the folder the Hub id `org/name`
+resolves to in the active Hugging Face cache (`HF_HUB_CACHE` / `HF_HOME`; a cache that was
+moved and linked is the same folder), the copy lives in the Spectrum cache slot of that Hub
+id, `weights/org__name`, so the two ways of naming the model share one copy. A snapshot
+folder anywhere else gets a slot of its own, `weights/<folder name>@<digest of its resolved
+location>`: a copy taken from one folder is never used for another folder or for the Hub id,
+and such a folder costs one more copy on disk. A directory whose `.safetensors` files are symlinks but which is not such a
 snapshot (including a regular directory that also holds an alias symlink to a shard) is
 refused with a message naming the accepted layouts: pass the Hub id, the snapshot directory,
 or a directory of regular files.
