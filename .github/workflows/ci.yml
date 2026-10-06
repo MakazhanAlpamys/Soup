@@ -666,7 +666,7 @@ jobs:
 
   # EXPERIMENT, never merged (second half of #1380): pytest-xdist on Windows and
   # macOS. The steps are the `test` job's own, so a cell here differs from
-  # today's cell only by `-n logical --dist loadfile` (and, in one arm, by
+  # today's cell only by `-n logical --dist <mode>` (and, in one arm, by
   # Defender real-time scanning being off). Runs only for the pull request of
   # the branch ci/xdist-trial-2.
   xdist-trial:
@@ -675,9 +675,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - {os: windows-latest, python-version: "3.12", arm: loadfile}
-          - {os: macos-latest, python-version: "3.12", arm: loadfile}
-          - {os: windows-latest, python-version: "3.12", arm: loadfile-defender-off}
+          - {os: ubuntu-latest, python-version: "3.12", arm: loadfile, dist: loadfile}
+          - {os: ubuntu-latest, python-version: "3.12", arm: load, dist: load}
+          - {os: windows-latest, python-version: "3.12", arm: loadfile, dist: loadfile}
+          - {os: macos-latest, python-version: "3.12", arm: loadfile, dist: loadfile}
+          - {os: windows-latest, python-version: "3.12", arm: loadfile-defender-off, dist: loadfile}
     name: xdist-trial (${{ matrix.os }}, ${{ matrix.python-version }}, ${{ matrix.arm }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
@@ -727,7 +729,9 @@ jobs:
           Set-MpPreference -DisableRealtimeMonitoring $true
           Get-MpPreference | Select-Object DisableRealtimeMonitoring
       - name: Install dependencies
-        run: pip install -e ".[dev]" "pytest-xdist[psutil]"
+        # transformers 5.19.0 (2026-10-06) breaks one PPO test on every cell, serial or not.
+        # The serial cells this trial is compared with ran on 5.18.0, so the trial stays there.
+        run: pip install -e ".[dev]" "pytest-xdist[psutil]" "transformers<5.19"
       - name: Warm HF Hub cache (models the tests load)
         # Pre-download the models the unit tests load, with retries, so a
         # transient HF Hub 429 (Too Many Requests) on a single matrix cell does
@@ -815,7 +819,7 @@ jobs:
         run: |
           start=$(date +%s)
           rc=0
-          pytest tests/ -v --tb=short --durations=40 --junitxml=report.xml --cov=soup_cli --cov-report=xml:coverage.xml --cov-report=term-missing:skip-covered -n logical --dist loadfile --deselect tests/test_ci_full_matrix_on_approval.py::TestGatedJobs::test_every_job_is_classified || rc=$?
+          pytest tests/ -v --tb=short --durations=40 --junitxml=report.xml --cov=soup_cli --cov-report=xml:coverage.xml --cov-report=term-missing:skip-covered -n logical --dist ${{ matrix.dist }} --deselect tests/test_ci_full_matrix_on_approval.py::TestGatedJobs::test_every_job_is_classified || rc=$?
           end=$(date +%s)
           echo "ARM=${{ matrix.os }}/${{ matrix.arm }} TEST_STEP_SECONDS=$((end-start)) EXIT=$rc"
           exit $rc
