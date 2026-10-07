@@ -1236,14 +1236,16 @@ def train(
                 format_advice,
                 hint_argv_from_reexec,
                 is_in_distributed,
+                run_launcher,
             )
 
             num_processes = num_gpus * nodes
             if not is_in_distributed():
                 # v0.33.0 #37 — auto-reexec under accelerate launch unless
-                # --no-reexec was passed. Reexec uses os.execvp so the new
-                # accelerate process replaces this process; no leftover PID
-                # tree, stdio passes through unchanged.
+                # --no-reexec was passed. On POSIX the accelerate process
+                # replaces this one (os.execvp): no leftover PID tree, stdio
+                # passes through unchanged. Windows cannot do that, so there
+                # this process waits for the launcher (see run_launcher).
                 # #372 — one argv builder for both the re-exec and the printed
                 # hint, so they cannot drift. collect_reexec_passthrough is the
                 # only list of "flags the user typed" that survive a launch.
@@ -1333,15 +1335,19 @@ def train(
                         f"({num_processes} GPUs, {topo['interconnect']})[/]"
                     )
                     console.print(f"[dim]argv: {markup_escape(' '.join(argv))}[/]")
-                    # execvp replaces this process; the child carries --no-reexec.
+                    # The launcher takes over; the child carries --no-reexec. On
+                    # POSIX run_launcher execs and never returns. On Windows,
+                    # where exec would return 0 at once and leave the launcher
+                    # running, it waits and returns the launcher's exit code.
                     try:
-                        os.execvp(argv[0], argv)
+                        launcher_code = run_launcher(argv)
                     except OSError as exc:
                         console.print(
                             f"[red]accelerate launch failed:[/] {markup_escape(str(exc))}\n"
                             "Use [bold]--no-reexec[/] to print the launch command."
                         )
                         raise typer.Exit(1) from exc
+                    raise typer.Exit(launcher_code)
             elif not dry_run:
                 # Already a launched rank — announce + apply NCCL hints. (The
                 # dry_run branch above intentionally does neither.)
