@@ -3222,6 +3222,17 @@ def _require_stripe_folders(shard_dir: str, index: Any) -> None:
             )
 
 
+def _say_unaligned_staging(source: Any, console: Any) -> None:
+    """Put the disk tier's page-cache fallback where a `soup train` user reads it (#1531).
+
+    The source logs it; the logger is not what the Rich output shows.
+    """
+    if console is not None and not getattr(source, "staging_aligned", True):
+        from soup_cli.utils.async_disk_source import UNALIGNED_STAGING_MESSAGE
+
+        console.print(f"[yellow]{UNALIGNED_STAGING_MESSAGE}[/]")
+
+
 def _build_source(
     shard_dir,
     n_layers,
@@ -3323,8 +3334,10 @@ def _build_source(
                 # otherwise report as an out-of-memory it never had.
                 recover_from_failed_page_lock(console=console)
             else:
+                _say_unaligned_staging(source, console)
                 return source, source.pinned
         source = AsyncDiskSource(shard_dir, n_layers, spec, pin=False, **open_kwargs)
+        _say_unaligned_staging(source, console)
         return source, source.pinned
     # `source.pinned` on both branches rather than the literal, so the tuple's
     # second element has ONE meaning to read off: what the source says about

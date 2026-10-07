@@ -12,11 +12,13 @@ from rich.panel import Panel
 from rich.table import Table
 
 from soup_cli.commands._webhook_cli import emit_webhooks, validate_webhook_flags
+from soup_cli.config.deprecation import deadline_clause
 from soup_cli.utils.ab_test import (
     ACCEPT_HOLD_SPREAD_RATIO,
     HIGHER_IS_BETTER,
     PRIOR_SCALE_ROWS,
     MsprtConfig,
+    retired_beta_message,
     run_msprt,
     validate_metric_name,
 )
@@ -35,16 +37,17 @@ def ab(
     alpha: float = typer.Option(
         0.05, "--alpha",
         help=(
-            "Type-I error (false positive) rate (0, 1) of the two-sided test, kept for a "
-            "test re-run after every new row, at any number of rows."
+            "Error rate (0, 1) of both verdicts, kept for a test re-run after every "
+            "new row, at any number of rows: with no difference the test ends in "
+            "reject_h0, and with a true difference of --effect-size or more in "
+            "accept_h0, each in at most this share of runs."
         ),
     ),
-    beta: float = typer.Option(
-        0.20, "--beta",
+    beta: Optional[float] = typer.Option(
+        None, "--beta",
         help=(
-            "Type-II error (false negative) rate (0, 1). Not the power: a power "
-            "of 0.95 is --beta 0.05. alpha + beta must stay below 1, or the "
-            "test accepts H0 on no evidence either way."
+            "Retired (#1418): ignored, with a warning. --alpha now bounds wrong "
+            "accept_h0 verdicts too."
         ),
     ),
     effect_size: float = typer.Option(
@@ -77,9 +80,17 @@ def ab(
         slack_url, discord_url, console=console
     )
 
+    # #1418: --beta is retired. Say so rather than drop it silently, and do not
+    # pass it on (MsprtConfig would warn a second time).
+    if beta is not None:
+        console.print(
+            "[yellow]Warning: "
+            f"{escape(retired_beta_message('--beta', '--alpha'))} {deadline_clause()}[/]"
+        )
+
     try:
         cfg = MsprtConfig(
-            metric=canonical, alpha=alpha, beta=beta, effect_size=effect_size,
+            metric=canonical, alpha=alpha, effect_size=effect_size,
         )
     except (TypeError, ValueError) as exc:
         console.print(f"[red]{escape(str(exc))}[/]")
@@ -117,7 +128,7 @@ def ab(
     table.add_row("mean_treatment", f"{verdict.mean_treatment:.4f}")
     # #1524 - the two spreads behind the hold, when it is what kept the verdict
     # at `continue`. Shown next to the statistic so the reader can see that the
-    # accept boundary was already crossed.
+    # accept rule was already satisfied.
     if verdict.accept_held:
         table.add_row("accept_held", "[bold]true[/]")
         table.add_row("held_out_rows", str(verdict.held_out_rows))
@@ -126,8 +137,9 @@ def ab(
     console.print(table)
 
     if verdict.accept_held:
-        # #1524 - the accept boundary is already crossed; the only thing keeping
-        # this at `continue` is the 3x spread rule. The held-out rows are fixed,
+        # #1524 - the accept rule is already satisfied (the confidence sequence
+        # lies inside the effect-size band); the only thing keeping this at
+        # `continue` is the 3x spread rule. The held-out rows are fixed,
         # so "collect more samples" cannot help here — name the ratio and point
         # at the rows that actually set it.
         ratio = (
@@ -142,7 +154,8 @@ def ab(
                 f"(held_out_spread {verdict.held_out_spread:.4g}, "
                 f"tested_spread {verdict.tested_spread:.4g}, "
                 f"limit {ACCEPT_HOLD_SPREAD_RATIO:g}x), so accept_h0 is "
-                f"withheld at log_likelihood_ratio {verdict.log_likelihood_ratio:.4f}. "
+                "withheld even though the confidence sequence for the "
+                f"difference is already inside +-{cfg.effect_size:g}. "
                 f"The first {verdict.held_out_rows} rows of each arm set the scale of "
                 "--effect-size and barely vary (a warm cache, or a judge that gives "
                 "the same score early). Those rows are fixed, so more samples of the "
@@ -172,8 +185,9 @@ def ab(
     elif verdict.decision == "accept_h0":
         console.print(
             Panel(
-                "[yellow]No significant difference. Treatment is not "
-                "distinguishable from control at the configured effect size.[/]",
+                "[yellow]No significant difference: any difference between treatment "
+                f"and control on {escape(canonical)} is smaller than --effect-size "
+                f"{cfg.effect_size:g}, at confidence {1.0 - cfg.alpha:g}.[/]",
                 border_style="yellow",
             )
         )
@@ -211,8 +225,9 @@ def ab(
                 "n_treatment": verdict.n_treatment,
                 "mean_control": verdict.mean_control,
                 "mean_treatment": verdict.mean_treatment,
-                # #1524 - added keys, nothing renamed: a consumer reading the
-                # old payload still finds every field it had.
+                # #1524 - a held run is a `continue`, so it never reaches a
+                # webhook: these keys are here so the payload schema stays
+                # stable, and they are always false / null on what is sent.
                 "accept_held": verdict.accept_held,
                 "held_out_spread": verdict.held_out_spread,
                 "tested_spread": verdict.tested_spread,

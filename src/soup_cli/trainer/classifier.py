@@ -24,7 +24,6 @@ trust_remote_code threaded through the v0.36.0 resolver.
 
 from __future__ import annotations
 
-import math
 import time
 from pathlib import Path
 from typing import Any, List, Union
@@ -392,11 +391,10 @@ class ClassifierTrainerWrapper:
         output_dir.mkdir(parents=True, exist_ok=True)
 
         batch_size = tcfg.batch_size if tcfg.batch_size != "auto" else 8
-        total_steps = (
-            math.ceil(len(train_ds) / batch_size / tcfg.gradient_accumulation_steps)
-            * tcfg.epochs
-        )
-        warmup_steps = int(total_steps * tcfg.warmup_ratio)
+        # --- Calculate warmup steps from ratio (#1431) ---
+        from soup_cli.utils.warmup import resolve_trainer_warmup_steps
+
+        warmup_steps = resolve_trainer_warmup_steps(tcfg.warmup_ratio)
 
         _bf16, _fp16 = bf16_fp16_flags(self.device)
         args = TrainingArguments(
@@ -464,23 +462,16 @@ class ClassifierTrainerWrapper:
             )
         start = time.time()
         if display is not None:
-            from soup_cli.monitoring.callback import (
-                SoupTrainerCallback,
-                soup_callback_kwargs,
-            )
+            from soup_cli.monitoring.callback import build_soup_trainer_callback
 
             self.trainer.add_callback(
-                SoupTrainerCallback(
+                build_soup_trainer_callback(
                     display,
+                    config=self.config,
                     tracker=tracker,
                     run_id=run_id,
-                    eval_gate_config=self.config.training.eval_gate,
-                    **soup_callback_kwargs(
-                        self.config.training,
-                        batch_size=self._batch_size,
-                        output_dir=self._output_dir,
-                        include_eval_gate=False,
-                    ),
+                    batch_size=self._batch_size,
+                    output_dir=self._output_dir,
                 )
             )
         align_trainable_dtype_for_fp16(

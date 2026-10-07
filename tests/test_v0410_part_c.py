@@ -183,7 +183,14 @@ class TestSchemaBlockExpansion:
     def test_expand_layers_refused_on_quantized_base(self, quantization, freeze):
         # The refusal lives on SoupConfig now (it reads the resolved
         # quantization), so build a full config rather than a bare TrainingConfig.
-        with pytest.raises(ValidationError, match="requires training.quantization: none"):
+        # #1409's equality check runs first (TrainingConfig before SoupConfig),
+        # so -4 and 0 are refused for not matching expand_layers instead.
+        match = (
+            "requires training.quantization: none"
+            if freeze == 4
+            else r"freeze_trainable_layers: -?\d+ does not match expand_layers: 4"
+        )
+        with pytest.raises(ValidationError, match=match):
             _sft(
                 expand_layers=4,
                 freeze_trainable_layers=freeze,

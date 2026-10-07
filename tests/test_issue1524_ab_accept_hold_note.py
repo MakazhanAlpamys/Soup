@@ -338,45 +338,51 @@ def _write_jsonl(path, control, treatment, metric="judge_score"):
 def test_the_panel_names_the_hold_and_its_ratio(tmp_path, monkeypatch):
     """One actionable line: the ratio, and what to do about it."""
     from soup_cli.cli import app
+    from soup_cli.utils.ab_test import MsprtConfig, run_msprt
 
     monkeypatch.chdir(tmp_path)
     control, treatment = _saturated_warm_up(40, seed=2)
     inp = tmp_path / "ab.jsonl"
     _write_jsonl(inp, control, treatment)
+    verdict = run_msprt(str(inp), config=MsprtConfig(metric="judge_score"))
+    assert verdict.accept_held is True, verdict  # the premise
 
-    result = runner.invoke(
-        app,
-        ["ab", "--input", str(inp), "--metric", "judge_score"],
-    )
+    result = runner.invoke(app, ["ab", "--input", str(inp), "--metric", "judge_score"])
     assert result.exit_code == 0, (result.output, repr(result.exception))
 
-    out = _plain(result.output)
-    assert "held back" in out.lower(), out
-    # The two spreads are in the panel, not just in the field.
-    assert "accept_held" in out.lower(), out
-    # It says what to do, and it does not fall back on the useless advice.
-    assert "in sufficient evidence" not in out.lower(), out
+    out = _plain(result.output).lower()
+    ratio = verdict.tested_spread / verdict.held_out_spread
+    assert f"held back: the tested rows spread {ratio:.3g} times" in out, out
+    assert (
+        f"(held_out_spread {verdict.held_out_spread:.4g}, "
+        f"tested_spread {verdict.tested_spread:.4g}, limit 3x)"
+    ) in out, out
+    # It must not ALSO print the advice it replaces.
+    assert "insufficient evidence" not in out, out
 
 
 def test_the_panel_of_an_unheld_continue_is_unchanged(tmp_path, monkeypatch):
-    """The control: a run with nothing to report prints the old line."""
+    """The control: an unheld continue past the warm-up still prints the old line."""
     from soup_cli.cli import app
+    from soup_cli.utils.ab_test import MsprtConfig, run_msprt
 
     monkeypatch.chdir(tmp_path)
+    rng = random.Random(0)
+    control = [round(rng.gauss(0.80, 0.05), 3) for _ in range(10)]
+    treatment = [round(rng.gauss(0.80, 0.05), 3) for _ in range(10)]
     inp = tmp_path / "ab.jsonl"
-    inp.write_text(
-        '{"arm":"control","judge_score":1.0}\n{"arm":"treatment","judge_score":1.0}\n',
-        encoding="utf-8",
-    )
+    _write_jsonl(inp, control, treatment)
+    verdict = run_msprt(str(inp), config=MsprtConfig(metric="judge_score"))
+    # The premise: past the warm-up, undecided, and not held.
+    assert (verdict.decision, verdict.accept_held) == ("continue", False), verdict
 
-    result = runner.invoke(
-        app,
-        ["ab", "--input", str(inp), "--metric", "judge_score"],
-    )
+    result = runner.invoke(app, ["ab", "--input", str(inp), "--metric", "judge_score"])
     assert result.exit_code == 0, (result.output, repr(result.exception))
 
-    out = _plain(result.output)
-    assert "held back" not in out.lower(), out
+    out = _plain(result.output).lower()
+    assert "insufficient evidence. collect more samples and re-run." in out, out
+    assert "held back" not in out, out
+    assert "accept_held" not in out, out
 
 
 # ---------------------------------------------------------------------------

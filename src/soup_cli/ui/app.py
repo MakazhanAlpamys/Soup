@@ -10,9 +10,11 @@ import sys
 import tempfile
 import threading
 import time
+from collections import OrderedDict
 from pathlib import Path
 from types import MappingProxyType
 from typing import Mapping, Optional
+from urllib.parse import urlencode
 
 from pydantic import BaseModel as PydanticBaseModel
 from pydantic import Field
@@ -23,6 +25,9 @@ STATIC_DIR = Path(__file__).parent / "static"
 
 # Max file read size to prevent memory exhaustion
 _MAX_INSPECT_LIMIT = 500
+
+# #1191: live session ids per app; the oldest is dropped past this.
+_MAX_UI_SESSIONS = 64
 
 # #939: cap the body before FastAPI parses it, sized per route (chat/send
 # forwards upstream; inspect only ever needs a path and an int). #897 extends
@@ -389,7 +394,7 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
 
     from fastapi import Depends, FastAPI, HTTPException, Query, Request
     from fastapi.middleware.cors import CORSMiddleware
-    from fastapi.responses import HTMLResponse
+    from fastapi.responses import HTMLResponse, RedirectResponse
     from fastapi.staticfiles import StaticFiles
 
     # #731: FastAPI's interactive docs describe every route, parameter and
@@ -453,18 +458,71 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
         policy_exempt_paths=_POLICY_EXEMPT_PATHS if _docs_enabled else frozenset(),
     )
 
+    # #1191: `/?token=` swaps the token for an HttpOnly session cookie, so a
+    # reload keeps the session without page script ever reading a credential.
+    # The ids live only in this app's memory: a restart ends every session.
+    # Loopback binds only -- `--public` over LAN HTTP keeps the closure flow.
+    # The port is in the name because cookies are not isolated by port.
+    _session_cookie = f"soup_ui_session_{port}"
+    _session_ids: "OrderedDict[str, None]" = OrderedDict()
+    _session_lock = threading.Lock()
+    _session_enabled = _is_loopback(host)
+
+    def _new_session() -> str:
+        session_id = secrets.token_urlsafe(32)
+        with _session_lock:
+            _session_ids[session_id] = None
+            while len(_session_ids) > _MAX_UI_SESSIONS:
+                _session_ids.popitem(last=False)
+        return session_id
+
+    def _session_matches(request: Request) -> bool:
+        """True for a live session cookie; 403 on a cross-origin state change.
+
+        SameSite=Strict does not help here: every port of 127.0.0.1 is one site,
+        so a page on another local port gets the cookie attached. Browsers always
+        send `Origin` on a fetch POST/DELETE, so anything but GET/HEAD must name
+        exactly this server -- scheme, host and port. `check_local_request`
+        cannot do this: it compares hostnames without ports on purpose.
+        """
+        # Defence in depth: `_new_session` only runs behind the same check in
+        # `index()`, so a non-loopback app never holds an id to match.
+        if not _session_enabled:
+            return False
+        value = request.cookies.get(_session_cookie, "").encode("utf-8")
+        if not value:
+            return False
+        with _session_lock:
+            live = list(_session_ids)
+        # Constant-time against every live id, like `_bearer_matches`.
+        matched = False
+        for session_id in live:
+            matched |= secrets.compare_digest(value, session_id.encode("utf-8"))
+        if not matched:
+            return False
+        if request.method not in ("GET", "HEAD"):
+            origin = request.headers.get("Origin", "").lower()
+            expected = f"{request.url.scheme}://{request.headers.get('Host', '')}".lower()
+            if not origin or origin != expected:
+                raise HTTPException(status_code=403, detail="Origin not allowed")
+        return True
+
     def _verify_token(request: Request):
-        """Verify Bearer token on API endpoints."""
+        """Verify Bearer token (or the #1191 session cookie) on API endpoints."""
         auth = request.headers.get("Authorization", "")
         # Constant-time compare — a plain != leaks the token byte-by-byte via
         # response timing when `soup ui --public` is exposed on a LAN.
-        if not _bearer_matches(auth):
-            raise HTTPException(status_code=401, detail="Unauthorized")
+        if _bearer_matches(auth) or _session_matches(request):
+            return
+        raise HTTPException(status_code=401, detail="Unauthorized")
 
     def _verify_token_or_ticket(request: Request):
-        """Verify Bearer token or consume a single-use ticket for SSE streaming."""
+        """Verify Bearer token, session cookie, or a single-use SSE ticket."""
         auth = request.headers.get("Authorization", "")
         if auth and _bearer_matches(auth):
+            return
+
+        if _session_matches(request):
             return
 
         ticket = request.query_params.get("ticket", "")
@@ -483,7 +541,24 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
     # --- Static files ---
 
     @app.get("/", response_class=HTMLResponse)
-    def index():
+    def index(request: Request):
+        token = request.query_params.get("token")
+        # A wrong token sets nothing: the page loads as before and its prompt
+        # recovers. On a non-loopback bind the page's script still needs
+        # `?token=` from the URL, so there is no redirect either.
+        if _session_enabled and token and _bearer_matches(f"Bearer {token}"):
+            query = urlencode(
+                [(k, v) for k, v in request.query_params.multi_items() if k != "token"]
+            )
+            response = RedirectResponse(
+                request.url.path + (f"?{query}" if query else ""), status_code=303
+            )
+            # No Max-Age/Expires: it ends with the browser session. No Secure:
+            # `soup ui` serves plain HTTP.
+            response.set_cookie(
+                _session_cookie, _new_session(), httponly=True, samesite="strict", path="/"
+            )
+            return response
         index_path = STATIC_DIR / "index.html"
         return HTMLResponse(content=index_path.read_text(encoding="utf-8"))
 
@@ -1055,7 +1130,7 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
 
         from fastapi.responses import StreamingResponse
 
-        from soup_cli.utils.net_guard import refuse_private_ip_literal
+        from soup_cli.utils.net_guard import UNSPECIFIED_HOST_HINT, refuse_private_ip_literal
 
         # Validate messages
         if not req.messages:
@@ -1081,6 +1156,10 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
                     is_local = addr.is_loopback
                 except ValueError:
                     is_local = False
+            if not is_local and host == "0.0.0.0":
+                raise HTTPException(
+                    status_code=400, detail=f"endpoint {UNSPECIFIED_HOST_HINT}"
+                )
             if not is_local:
                 raise HTTPException(
                     status_code=400,

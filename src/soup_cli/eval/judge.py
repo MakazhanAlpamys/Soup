@@ -21,6 +21,10 @@ logger = logging.getLogger(__name__)
 # #1447: one bounded retry policy for every judge request.
 JUDGE_MAX_RETRIES = 2
 JUDGE_MAX_BACKOFF_SECONDS = 30.0
+# #1522: this many requests in a row with their retries spent, and the judge is
+# down. The evaluator says so, and a caller working through rows stops there
+# instead of backing off again for every row.
+JUDGE_DOWN_AFTER = 3
 _sleep = time.sleep  # patched by tests
 
 
@@ -46,19 +50,45 @@ class JudgeUnavailableError(RuntimeError):
     message is printed per skipped row, stored in ``GateTaskResult.error`` and
     logged by the training callback, and ``validate_judge_api_base`` accepts
     ``https://user:pass@host`` and ``?api_key=`` bases.
+
+    ``retries_spent`` is True when the request was retried to the bound and never
+    answered usefully (a transport error, 429 or 5xx every time), which is what a
+    judge that is down looks like. A 4xx or an unusable reply is an answer.
     """
 
-    def __init__(self, detail: str, *, url: str) -> None:
+    def __init__(self, detail: str, *, url: str, retries_spent: bool = False) -> None:
         self.detail = detail
         self.url = _redact_url(url)
+        self.retries_spent = retries_spent
         super().__init__(f"judge unavailable at {self.url}: {detail}")
 
+    def for_rows(self, lost: int, total: int, unit: str = "rows") -> "JudgeUnavailableError":
+        """The same error, saying how much of the caller's work it ended."""
+        return type(self)(
+            f"{self.detail}; {lost} of {total} {unit} not judged",
+            url=self.url,
+            retries_spent=self.retries_spent,
+        )
+
     def __reduce__(self):  # keyword-only ``url`` otherwise breaks pickle / copy
-        return (_rebuild_unavailable, (self.detail, self.url))
+        return (_rebuild_unavailable, (type(self), self.detail, self.url, self.retries_spent))
 
 
-def _rebuild_unavailable(detail: str, url: str) -> "JudgeUnavailableError":
-    return JudgeUnavailableError(detail, url=url)
+class JudgeDownError(JudgeUnavailableError):
+    """``JUDGE_DOWN_AFTER`` requests in a row went unanswered: stop the run (#1522).
+
+    Raised by the request that completes the run of failures and by each
+    unanswered one after it. The evaluator keeps asking, so a caller that
+    skips a failed row and carries on must let this one through; a caller that
+    maps a failure to a score (the Online DPO adapters) resumes on the first
+    reply.
+    """
+
+
+def _rebuild_unavailable(
+    cls: type, detail: str, url: str, retries_spent: bool
+) -> "JudgeUnavailableError":
+    return cls(detail, url=url, retries_spent=retries_spent)
 
 
 class PairwiseJudge(Protocol):
@@ -180,7 +210,7 @@ def validate_judge_api_base(api_base: Optional[str]) -> None:
     if api_base is None:
         return
 
-    from soup_cli.utils.net_guard import refuse_private_ip_literal
+    from soup_cli.utils.net_guard import LOOPBACK_HOSTS, refuse_private_ip_literal
 
     parsed = urlparse(api_base)
     if parsed.scheme not in ("http", "https"):
@@ -192,7 +222,7 @@ def validate_judge_api_base(api_base: Optional[str]) -> None:
     # Block non-HTTPS for remote URLs (allow HTTP only for localhost)
     if parsed.scheme == "http":
         hostname = parsed.hostname or ""
-        if hostname not in ("localhost", "127.0.0.1", "::1"):
+        if hostname not in LOOPBACK_HOSTS:
             raise ValueError(
                 "HTTP is only allowed for localhost. "
                 "Use HTTPS for remote URLs."
@@ -348,6 +378,9 @@ def _compute_weighted_score(scores: dict[str, float], rubric: dict) -> float:
 class JudgeEvaluator:
     """Configurable LLM-as-a-judge evaluator."""
 
+    # #1522: requests in a row whose retries were spent.
+    _spent_in_a_row = 0
+
     def __init__(
         self,
         rubric: Optional[dict] = None,
@@ -456,7 +489,23 @@ class JudgeEvaluator:
             "max_tokens": 1024,
         }
 
-        return _judge_request(url, payload, headers)
+        try:
+            reply = _judge_request(url, payload, headers)
+        except JudgeUnavailableError as exc:
+            if not exc.retries_spent:
+                self._spent_in_a_row = 0  # a refusal or a bad reply is an answer
+                raise
+            self._spent_in_a_row += 1
+            if self._spent_in_a_row >= JUDGE_DOWN_AFTER:
+                raise JudgeDownError(
+                    f"{self._spent_in_a_row} requests in a row failed, the last with "
+                    f"{exc.detail}",
+                    url=url,
+                    retries_spent=True,
+                ) from exc
+            raise
+        self._spent_in_a_row = 0
+        return reply
 
 
 def _retry_delay(retry_after: Optional[str], attempt: int) -> float:
@@ -523,7 +572,9 @@ def _judge_request(url: str, payload: dict, headers: dict, *, timeout: float = 1
                 failure, attempt + 1, JUDGE_MAX_RETRIES, delay,
             )
             _sleep(delay)
-    raise JudgeUnavailableError(f"{failure} ({JUDGE_MAX_RETRIES + 1} attempts)", url=url)
+    raise JudgeUnavailableError(
+        f"{failure} ({JUDGE_MAX_RETRIES + 1} attempts)", url=url, retries_spent=True
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -611,8 +662,11 @@ def pairwise_winrate(
     if not pairs:
         return 0.5
     total = 0.0
-    for prompt, base_resp, tuned_resp in pairs:
-        verdict = pairwise_compare(prompt, base_resp, tuned_resp, evaluator, swap=True)
+    for index, (prompt, base_resp, tuned_resp) in enumerate(pairs):
+        try:
+            verdict = pairwise_compare(prompt, base_resp, tuned_resp, evaluator, swap=True)
+        except JudgeUnavailableError as exc:
+            raise exc.for_rows(len(pairs) - index, len(pairs), "pairs") from exc
         if verdict == 1:
             total += 1.0
         elif verdict == -1:

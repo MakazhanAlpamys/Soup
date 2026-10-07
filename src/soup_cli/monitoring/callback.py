@@ -68,6 +68,34 @@ def soup_callback_kwargs(
     return kwargs
 
 
+def build_soup_trainer_callback(
+    display: TrainingDisplay,
+    *,
+    config: Any,
+    tracker: Optional[object] = None,
+    run_id: str = "",
+    batch_size: Optional[int] = None,
+    output_dir: Optional[str] = None,
+) -> Any:
+    """Build a trainer callback with shared training and evaluation config."""
+    training_config = config.training
+    callback_cls = globals().get("SoupTrainerCallback")
+    if callback_cls is None:
+        callback_cls = __getattr__("SoupTrainerCallback")
+
+    return callback_cls(
+        display=display,
+        tracker=tracker,
+        run_id=run_id,
+        eval_config=getattr(config, "eval", None),
+        **soup_callback_kwargs(
+            training_config,
+            batch_size=batch_size,
+            output_dir=output_dir,
+        ),
+    )
+
+
 def _get_trainer_callback_base():
     """Lazy-resolve ``transformers.TrainerCallback``."""
     try:
@@ -569,58 +597,6 @@ class _SoupTrainerCallback_body:  # noqa: N801
         control: TrainerControl, **kwargs,
     ):
         self.display.stop()
-        self._run_auto_eval()
-
-    def _run_auto_eval(self) -> None:
-        """Run automatic evaluation if configured."""
-        if self.eval_config is None:
-            return
-        if not getattr(self.eval_config, "auto_eval", False):
-            return
-        if not self.output_dir:
-            return
-
-        from rich.console import Console
-
-        console = Console()
-        console.print("\n[bold blue]Running auto-eval...[/]")
-
-        benchmarks = getattr(self.eval_config, "benchmarks", None) or []
-        custom_tasks = getattr(self.eval_config, "custom_tasks", None)
-
-        # Run standard benchmarks
-        if benchmarks:
-            try:
-                from soup_cli.commands.eval import benchmark
-                benchmark(
-                    model=self.output_dir,
-                    benchmarks=",".join(benchmarks),
-                    num_fewshot=None,
-                    batch_size=8,
-                    run_id=self.run_id,
-                    device=None,
-                    trust_remote_code=False,
-                )
-            except Exception as exc:
-                logger.exception("Auto-eval benchmark failed")
-                console.print(f"[yellow]Auto-eval benchmark failed: {exc}[/]")
-
-        # Run custom eval
-        if custom_tasks:
-            try:
-                from soup_cli.commands.eval import custom
-                # #752 — pass every typer parameter; see commands/eval.py.
-                custom(
-                    tasks=custom_tasks,
-                    model=self.output_dir,
-                    run_id=self.run_id,
-                    attach_to_registry=None,
-                    output=None,
-                    trust_remote_code=False,
-                )
-            except Exception as exc:
-                logger.exception("Auto-eval custom failed")
-                console.print(f"[yellow]Auto-eval custom failed: {exc}[/]")
 
     # ------------------------------------------------------------------
     # v0.33.0 #57 — spike recovery hint

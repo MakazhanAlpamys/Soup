@@ -256,20 +256,21 @@ tasks:
     judge_model: ollama://llama3.1        # SSRF-allowlisted scheme
 ```
 
-`judge_model` accepts `ollama://<model>`, `http://localhost:<port>/<model>` or `https://<host>/<model>`. An `https://` judge URL uses `OPENAI_API_KEY` only when its host is `api.openai.com`; other hosts are called as an OpenAI-compatible server without that key. A judge URL whose host is a private, link-local or reserved IP literal is refused when the suite loads (loopback stays allowed): `soup eval gate` and `soup train --gate` stop with the error, and a suite named in `training.eval_gate` is skipped with a warning. Address an internal judge by its hostname.
+`judge_model` accepts `ollama://<model>`, `http://localhost:<port>/<model>` or `https://<host>/<model>`. An `https://` judge URL uses `OPENAI_API_KEY` only when its host is `api.openai.com`; other hosts are called as an OpenAI-compatible server without that key. A judge URL whose host is a private, link-local or reserved IP literal is refused when the suite loads (loopback stays allowed): `soup eval gate` and `soup train --gate` stop with the error, and a suite named in `training.eval_gate` is skipped with a warning. Address an internal judge by its hostname. A host written only as numbers that is not a valid IPv4 address (`10.0.0.256`, `4294967296`) is refused the same way.
 
 Baselines may be a registry reference (`registry://<name-or-id>`), a file path, or omitted for the first run. A registry baseline uses the newest eval row for each benchmark — re-measuring a benchmark replaces its baseline score — and warns, per benchmark, when that row's scorer stamp is missing or from a different scorer revision. A task whose evaluation raises (`ValueError`, `FileNotFoundError`, `OSError`, or a judge that stays unreachable) gets no score and fails the gate closed under `on_regression: stop`; the log line lists it as a task that could not be scored, with the error, rather than as a regression (#1447).
 
 
 ## Sequential A/B Harness (`soup ab`)
 
-Proper sequential testing with early-stop guarantees on `latency` / `judge_score` / `retry_rate`. You can re-run `soup ab` after every new row and stop at the first `reject_h0` or `accept_h0`: the chance of a false `reject_h0` stays at most `--alpha` however often you look and however many rows you collect, unlike a naive repeated t-test, which inflates it. The guarantee assumes roughly Gaussian rows: for a 0/1 metric such as a per-request `retry_rate`, pre-aggregate it into per-prompt rates first.
+Proper sequential testing with early-stop guarantees on `latency` / `judge_score` / `retry_rate`. You can re-run `soup ab` after every new row and stop at the first `reject_h0` or `accept_h0`: the chance of a false `reject_h0`, and of a false `accept_h0`, each stays at most `--alpha` however often you look and however many rows you collect, unlike a naive repeated t-test, which inflates it. The guarantee assumes roughly Gaussian rows: for a 0/1 metric such as a per-request `retry_rate`, pre-aggregate it into per-prompt rates first.
 
-The statistic is a Bayes factor that averages over both the size of the difference and the unknown row-to-row spread (a normal-inverse-gamma mixture). It depends on the rows only through the two-sample t statistic, so its false-positive guarantee does not rely on estimating the spread well, and there is no burn-in: a clear difference can be decided from 7 rows per arm. The test is two-sided, and a difference of either sign is equal evidence. It rejects H0 once the Bayes factor reaches `1 / --alpha`, and accepts H0 once it falls to `--beta / (1 - --alpha)`.
+The statistic is a Bayes factor that averages over both the size of the difference and the unknown row-to-row spread (a normal-inverse-gamma mixture). It depends on the rows only through the two-sample t statistic, so its false-positive guarantee does not rely on estimating the spread well, and there is no burn-in: a clear difference can be decided from 7 rows per arm. The test is two-sided, and a difference of either sign is equal evidence. It rejects H0 once the Bayes factor reaches `1 / --alpha`. It accepts H0 from the same mixture read the other way: the differences the rows do not reject at `1 / --alpha` form a confidence sequence for the difference, valid however often you look, and `accept_h0` comes once that sequence lies inside `(-effect_size, +effect_size)`. That reads as "any difference is smaller than `--effect-size`", and a true difference of `--effect-size` or more ends in `accept_h0` in at most an `--alpha` share of runs. The `log_likelihood_ratio` in the verdict is still the statistic of the reject rule, not of the accept rule, so next to an `accept_h0` it can be anything below `log(1 / --alpha)`, positive included: the rows may lean toward a difference, as long as it is smaller than `--effect-size`.
 
-`--effect-size` is in the metric's units, but the statistic needs it in standard deviations. So the first 5 rows of each arm set that scale (their pooled standard deviation) and are not otherwise tested; the verdict table shows this as `prior_scale`, and the reported means and row counts still cover every row. If an arm's first rows are all identical, more rows are held out until one differs. If they barely vary (a warm cache, or a judge that gives 1.0 early), `accept_h0` waits as `continue` while the tested rows' standard deviation is more than 3 times theirs: that start makes the prior far too wide, and an `accept_h0` would come out whether or not there is a difference. A `reject_h0` is never held back.
+`--effect-size` is in the metric's units, but the statistic needs it in standard deviations. So the first 5 rows of each arm set that scale (their pooled standard deviation) and are not otherwise tested; the verdict table shows this as `prior_scale`, and the reported means and row counts still cover every row. If an arm's first rows are all identical, more rows are held out until one differs. If they barely vary (a warm cache, or a judge that gives 1.0 early), `accept_h0` waits as `continue` while the tested rows' standard deviation is more than 3 times theirs: that start makes the prior far too wide. A `reject_h0` is never held back.
 
-That wait is worth reading, because the held-out rows are fixed: once the hold fires, **more rows of the same kind never release it**. A run in that state has a `log_likelihood_ratio` already past the accept boundary, so the verdict reports it rather than leaving you to guess — the panel prints one line naming the ratio and what to do about it:
+<<<<<<< HEAD
+That wait is worth reading, because the held-out rows are fixed: once the hold fires, **more rows of the same kind never release it**. A run in that state is stuck at `continue` with the accept rule already satisfied — the confidence sequence for the difference lies inside `(-effect_size, +effect_size)` — so the verdict reports the hold rather than leaving you to guess, and the panel prints one line naming the ratio and what to do about it:
 
 ```text
 Held back: the tested rows spread 25.7 times the held-out ones (held_out_spread
@@ -281,24 +282,25 @@ release the hold: drop them, or reorder the input so the first rows vary, and
 re-run.
 ```
 
-In the JSON verdict the same three facts are `accept_held` (bool), `held_out_spread` and `tested_spread` (the two pooled standard deviations, both `null` when nothing is held — a `continue` with no hold carries no explanation). The held-out rows' spread is measured over however many rows were actually held out, which is more than 5 when an arm's first rows are all identical. The real fix belongs with the statistic: a confidence sequence has no held-out prior to go stale.
+The same three facts are on the verdict returned by `run_msprt` / `msprt_step`: `accept_held` (bool), `held_out_spread` and `tested_spread` (the two pooled standard deviations, both `null` when nothing is held — a `continue` with no hold carries no explanation). The held-out rows' spread is measured over however many rows were actually held out, which is more than 5 when an arm's first rows are all identical. A webhook is never sent for a held run: `accept_held=True` is only legal on a `continue`, and the webhook fires only on a terminal decision.
 
-A simulation of the re-run-after-every-pair procedure (`--effect-size` from 0.1 to 5 standard deviations, 100,000 runs each, up to 1000 rows per arm) gives a worst false-positive rate of 0.033 at `--alpha 0.05` and 0.0066 at `--alpha 0.01`. The burn-in design this replaced (#1227) sat at 0.051 and 0.011. Against a true difference of exactly `--effect-size`, the test finds it with probability above 0.99 when `--effect-size` is at least 0.3 standard deviations (1000 rows per arm). There are two costs. When `--effect-size` is below about 0.2 standard deviations, 1000 rows are too few for either design to be reliable, and this one detects less often (0.31 against 0.45 at 0.1 standard deviations, `--alpha 0.05`). And when there is no difference, reaching `accept_h0` takes longer. Mean pairs at stop when the two arms are the same, `--alpha 0.05`, runs of up to 1000 rows per arm, by `--effect-size` in standard deviations:
+A simulation of the re-run-after-every-pair procedure (`--effect-size` from 0.1 to 5 standard deviations, 100,000 runs each, up to 1000 rows per arm) gives a worst false-positive rate of 0.033 at `--alpha 0.05` and 0.0066 at `--alpha 0.01`. The burn-in design this replaced (#1227) sat at 0.051 and 0.011. Against a true difference of exactly `--effect-size`, the test finds it with probability above 0.99 at `--alpha 0.05` or below when `--effect-size` is at least 0.3 standard deviations (1000 rows per arm; 0.984 at `--alpha 0.1`). There are two costs. When `--effect-size` is below about 0.2 standard deviations, 1000 rows are too few for either design to be reliable, and this one detects less often (0.31 against 0.45 at 0.1 standard deviations, `--alpha 0.05`). And when there is no difference, reaching `accept_h0` takes longer than under the burn-in design at small effect sizes. Mean pairs at stop when the two arms are the same, `--alpha 0.05`, runs of up to 1000 rows per arm, by `--effect-size` in standard deviations:
 
 | `--effect-size` / sd | 0.2 | 0.3 | 0.4 | 0.5 | 0.7 | 1 | 1.5 | 2 | 5 |
 |---|---|---|---|---|---|---|---|---|---|
-| this statistic | 889 | 621 | 406 | 281 | 155 | 82 | 41 | 26 | 10 |
+| this test | 661 | 307 | 177 | 117 | 64 | 35 | 20 | 15 | 9 |
+| the first accept rule of this statistic (#1265, `--beta 0.20`) | 890 | 621 | 407 | 281 | 155 | 83 | 42 | 27 | 10 |
 | the burn-in design it replaced | 235 | 107 | 62 | 43 | 34 | 31 | 30 | 30 | 30 |
 
-So a test that is waiting to hear "no difference" can take several times as many rows as before, and at small effect sizes may not get there within 1000. Part of the old design's speed was not free: when there was a real difference of 0.3 standard deviations, it wrongly ended about 18% of runs in `accept_h0`, against under 0.4% here (on simulated Gaussian rows). The record, script and results are in [`benchmarks/gate-1265-ab-nig.md`](../benchmarks/gate-1265-ab-nig.md).
+Part of the burn-in design's speed was not free: when there was a real difference of `--effect-size`, it wrongly ended about 18% of runs in `accept_h0`. Here that is at most 0.0083 at `--alpha 0.05` and 0.0019 at `--alpha 0.01`, against 0.0042 and 0.0032 under #1265's accept rule (on simulated Gaussian rows). At small effect sizes the test may still not decide within 1000 rows, and on runs capped at 200 rows it accepts at 0.3 standard deviations or below a little less often than #1265's rule did. The records, scripts and results are in [`benchmarks/gate-1265-ab-nig.md`](../benchmarks/gate-1265-ab-nig.md) (the statistic) and [`benchmarks/gate-1418-ab-cs-accept.md`](../benchmarks/gate-1418-ab-cs-accept.md) (the accept rule).
 
 ```bash
 soup ab --input ab.jsonl --metric latency --effect-size 0.5
-# Or with custom alpha / beta
-soup ab --input ab.jsonl --metric judge_score --alpha 0.01 --beta 0.10 --effect-size 0.1
+# Or with a stricter alpha (both verdicts)
+soup ab --input ab.jsonl --metric judge_score --alpha 0.01 --effect-size 0.1
 ```
 
-`--alpha` and `--beta` are each in (0, 1), and their sum must stay below 1. At or above 1 the accept boundary `beta / (1 - alpha)` is a Bayes factor of 1 or more, so the test accepts H0 when the rows show no evidence either way, and even when they point to a difference: at `--alpha 0.05 --beta 0.95`, a true difference of `--effect-size` ends in `accept_h0` in 96% of simulated runs at 0.3 standard deviations, and still 36% at 2. `soup ab` exits `2` naming both values. `--beta` is the Type-II error rate, not the power: a power of 0.95 is `--beta 0.05`, not `--beta 0.95`.
+`--alpha` is in (0, 1). `--beta` is retired (#1418): `--alpha` now sets the accept rule's level too, so there is no separate Type-II rate to set. For one release `soup ab` still takes `--beta`, prints that it no longer does anything and that a stricter `accept_h0` means a lower `--alpha`, and then runs exactly as without it; the release after refuses it. The `--alpha` + `--beta` < 1 check went with it.
 
 A `--effect-size` that is more than about 1.9e151 standard deviations of the rows that set the prior scale overflows the test statistic at the largest input `soup ab` accepts (1,000,000 rows per arm), so it is refused at every row count; `soup ab` exits `1` naming the flag and the standard deviation it measured, from the first run (before those rows are all in, it checks the rows so far). Because it is the ratio that overflows, a near-constant metric column reaches it at the default `--effect-size` too.
 
@@ -358,7 +360,8 @@ soup diagnose my-run-id --output diag.json --attach-to-registry abc123
 ```
 
 **Live runners (v0.71.7).** With `--base-model` the six probes run against the loaded model
-(+ optional `--adapter` LoRA path, `--dataset` for the forgetting / format / memorization probes,
+(+ optional `--adapter` LoRA path, `--dataset` for format / memorization / citation probes,
+`--holdout` for the forgetting probe using the first 12 usable rows and falling back to built-in general prompts if unset,
 `--tokenizer` for a sub-word bigram memorization variant) instead of emitting neutral OK. `refusal` uses
 a built-in probe set; `format` only fires when the dataset's own targets look like JSON;
 `contamination` stays neutral unless a benchmark corpus is supplied. Validated on SmolLM2-135M.
@@ -373,7 +376,7 @@ directly comparable.
 
 | Mode | What it catches | Score range |
 |------|-----------------|-------------|
-| `forgetting` | Catastrophic forgetting on MMLU / HellaSwag / domain hold-outs | Δ accuracy vs base, tolerance band |
+| `forgetting` | Catastrophic forgetting on domain hold-out prompts or built-in general-knowledge prompts | Δ accuracy vs base, tolerance band |
 | `refusal` | Refusal-rate regression on harmful / benign probe sets | abs(Δ harmful) + abs(Δ benign) |
 | `format` | JSON / regex / tool-call validity drift | fraction of valid outputs |
 | `mode_collapse` | Diversity collapse at T=0 and T=1 | pairwise n-gram Jaccard distance |
@@ -381,9 +384,9 @@ directly comparable.
 | `contamination` | Training data overlapping public benchmarks | 1 − contamination_rate |
 | `citation` | RAFT model stopped citing the supporting `[doc-N]` (v0.71.10) | fraction of answers citing the golden doc |
 
-**Verdict pill colours:** OK (≥ 0.85) green / MINOR (≥ 0.60) amber / MAJOR (< 0.60) red. `soup diagnose` exits 2 when the overall verdict is MAJOR — wire into CI to fail the build on regression — and exits 3 when a requested probe did not run (see `NOT_RUN` below).
+**Verdict pill colours:** OK (≥ 0.85) green / MINOR (≥ 0.60) amber / MAJOR (< 0.60) red. `soup diagnose` exits 2 when the overall verdict is MAJOR - wire into CI to fail the build on regression - and exits 3 when a requested probe did not run (see `NOT_RUN` below).
 
-**`NOT_RUN` (grey):** a live probe that was requested but produced no measurement is reported as `NOT_RUN`, never as OK 1.00. That covers a `--dataset` with no usable prompt/answer rows and a probe that raised; the evidence column keeps the reason, including the exception text. `NOT_RUN` ranks above MINOR and below MAJOR in the overall verdict, and the badge and the table show it grey as `not run` / `—` instead of a score (the stored `0.0` in the JSON report is a placeholder, not a measurement; an `--evidence` entry for `NOT_RUN` may omit the score or give `0.0`). `soup diagnose` exits 3 when the overall verdict is `NOT_RUN`; pass `--allow-not-run` to keep exit 0 for runs that knowingly skip probes. MAJOR still exits 2. Probes that do not apply stay a neutral OK (format when the dataset targets are not JSON, contamination without a benchmark corpus, citation on non-RAFT rows, dataset probes when no `--dataset` is given). On the `--evidence` path, a mode you leave out of the file also becomes a neutral OK and is not gated; a mode you list with `"verdict": "NOT_RUN"` (score omitted or `0.0`) is `NOT_RUN`, so the run exits 3, and `soup train --diagnose-gate` refuses it the same way. A bad `--tokenizer` is an input error (exit 3) raised before any model loads. For `--dataset`, the live probes currently read rows with a prompt key (`prompt`, `instruction`, `input`, `question` or `query`) plus an answer key (`response`, `completion`, `output`, `answer`, `chosen` or `text`), or a `messages` list; other shapes (ShareGPT `conversations`, LLaVA, plaintext) make the dataset probes `NOT_RUN`. Memorization additionally needs a `text`, `content`, `prompt`, `instruction` or `messages` field, and is `NOT_RUN` when none of the first rows has one.
+**`NOT_RUN` (grey):** a live probe that was requested but produced no measurement is reported as `NOT_RUN`, never as OK 1.00. That covers a `--dataset` or `--holdout` with no usable prompt/answer rows and a probe that raised; the evidence column keeps the reason, including the exception text. `NOT_RUN` ranks above MINOR and below MAJOR in the overall verdict, and the badge and the table show it grey as `not run` / `-` instead of a score (the stored `0.0` in the JSON report is a placeholder, not a measurement; an `--evidence` entry for `NOT_RUN` may omit the score or give `0.0`). `soup diagnose` exits 3 when the overall verdict is `NOT_RUN`; pass `--allow-not-run` to keep exit 0 for runs that knowingly skip probes. MAJOR still exits 2. Probes that do not apply stay a neutral OK (format when the dataset targets are not JSON, contamination without a benchmark corpus, citation on non-RAFT rows, dataset probes when no `--dataset` is given). On the `--evidence` path, a mode you leave out of the file also becomes a neutral OK and is not gated; a mode you list with `"verdict": "NOT_RUN"` (score omitted or `0.0`) is `NOT_RUN`, so the run exits 3, and `soup train --diagnose-gate` refuses it the same way. A bad `--tokenizer` is an input error (exit 3) raised before any model loads. For `--dataset` and `--holdout`, the live probes currently read rows with a prompt key (`prompt`, `instruction`, `input`, `question` or `query`) plus an answer key (`response`, `completion`, `output`, `answer`, `chosen` or `text`), or a `messages` list; other shapes (ShareGPT `conversations`, LLaVA, plaintext) make the corresponding probes `NOT_RUN`. Memorization additionally needs a `text`, `content`, `prompt`, `instruction` or `messages` field, and is `NOT_RUN` when none of the first rows has one.
 
 **Post-training gate:** `soup train --diagnose-gate <evidence.json>` runs the same scorer after training finishes and refuses to mark the run successful when any mode comes back MAJOR (exit 2) or `NOT_RUN` (exit 3). Composes with `--gate <eval-suite>` (v0.26) — the eval gate catches accuracy regressions vs a baseline; the diagnose gate catches behaviour regressions the eval suite is blind to.
 
@@ -423,7 +426,7 @@ soup ship --base <m> --adapter ./out --task-eval tasks.jsonl \
 # A judge that cannot be reached is a runtime error (exit 1, naming the judge URL), not a
 # verdict: each judge request is retried twice (3 attempts) on 429 / 5xx / transport errors
 # (honouring Retry-After) and a spent retry never scores as a 0.5 tie (#1447). A judge
-# that answers "tie" still scores 0.5.
+# that answers "tie" still scores 0.5. The error says how many pairs were not judged (#1522).
 
 # Leg-2 via lm-eval benchmarks, base scores supplied by --baseline
 soup ship --base <m> --tuned ./out --task-eval tasks.jsonl \
@@ -716,6 +719,15 @@ soup eval judge --target responses.jsonl --model gpt-4o-mini --provider openai
 soup eval judge --target responses.jsonl --model llama3.1 --provider ollama
 # A row whose judge call keeps failing (429 after the retries, a timeout, a reply with no
 # choices) is skipped and counted; the other rows are still scored, shown and saved (#1447).
+# A judge that is down stops the run: once 3 requests in a row have spent their retries
+# unanswered, `soup eval judge` prints one message naming the judge URL and how many items
+# were not judged, shows the scores from before the outage without saving them, and exits 1,
+# so a long run costs 9 s of backoff, not 3 s per row. One reply resets the count, and a 4xx
+# or an unusable reply counts as a reply. `soup data from-traces --judge` stops the same way
+# and writes no output; `soup data best-of-n` and `soup ship --task-mode pairwise`, which
+# already stopped at the first unanswered request, now say how many prompts or pairs were
+# left. A judge-ranked training run is unchanged: it keeps asking, and resumes on the first
+# reply (#1522).
 
 # Auto-eval after training (configure in soup.yaml)
 soup eval auto --config soup.yaml
@@ -860,6 +872,9 @@ baseline scorer stamp covers the bundled suites only and will not warn: re-measu
 baselines, or compare new runs only with runs made on this version.
 
 ### Auto-Eval Config (soup.yaml)
+```bash
+pip install "soup-cli[eval]"
+```
 
 ```yaml
 eval:
@@ -870,6 +885,15 @@ eval:
     model: gpt-4o-mini
     provider: openai
 ```
+
+When `eval.auto_eval: true`, Soup runs the configured evaluation once after `soup train` finishes and the trained model/adapter has been saved. The evaluation uses the output artifact produced by that training run.
+
+- `benchmarks` runs the configured `lm-eval-harness` benchmarks. Install the benchmark dependencies required by your environment before enabling them.
+- `custom_tasks` runs the configured custom evaluation tasks against the trained model.
+- `judge` is not part of auto-evaluation; configure and run judge evaluation separately.
+- Auto-evaluation keeps `trust_remote_code` disabled.
+- If auto-evaluation fails, Soup reports the failure but does not fail an otherwise successful training run.
+- Auto-evaluation can take a significant amount of time. For example, MMLU evaluates multiple subtasks.
 
 
 ## Tunability Probe (`soup tunability`)

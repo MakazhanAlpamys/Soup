@@ -16,7 +16,6 @@
 - [Soup Quantize — Ergonomic Export Alias](#soup-quantize--ergonomic-export-alias)
 - [Llama.cpp Proxy](#llamacpp-proxy)
 - [Tail-Latency Stats + Tool-Call Timer](#tail-latency-stats--tool-call-timer)
-- [Web UI Plugin Registry + Env Knobs](#web-ui-plugin-registry--env-knobs)
 - [Deploy Autopilot](#deploy-autopilot)
 - [Agent Forge](#agent-forge)
 - [HF Space SDK Auto-Pick](#hf-space-sdk-auto-pick)
@@ -625,7 +624,7 @@ soup serve --model ./output \
   --trace-endpoint http://localhost:4317
 ```
 
-The OTLP endpoint is SSRF-hardened: only http/https schemes, plain HTTP only for loopback (`localhost`/`127.0.0.1`/`::1`), and RFC1918 / link-local / shared `100.64.0.0/10` / site-local `fec0::/10` / `0.0.0.0` all rejected via `ipaddress.ip_address`. When the SDK is missing the flag is a no-op with a warning — the server starts fine without spans.
+The OTLP endpoint is SSRF-hardened: only http/https schemes, plain HTTP only for loopback (`localhost`/`127.0.0.1`/`::1`), and RFC1918 / link-local / shared `100.64.0.0/10` / site-local `fec0::/10` / `0.0.0.0` all rejected via `ipaddress.ip_address`; a host written only as numbers that is not a valid IPv4 address is rejected too. When the SDK is missing the flag is a no-op with a warning — the server starts fine without spans.
 
 > **Note:** `max_tokens` is capped at 16,384 per request. Error details are never exposed in HTTP responses.
 
@@ -649,7 +648,9 @@ soup ui
 > keeps the token for that tab, so a reload works, and removes it from the
 > address bar; your browser's history still records the URL. A new tab or
 > another browser needs the URL again, and the token changes every time
-> `soup ui` starts unless you pass `--auth-token`.
+> `soup ui` starts unless you pass `--auth-token`. Releases with the session
+> cookie keep a new tab signed in as well; see "Session cookie on a loopback
+> bind" below.
 
 **Pages:**
 - **Dashboard** — view all experiment runs, loss charts, system info, multi-run comparison
@@ -671,7 +672,9 @@ terminal panel.
 
 **Security:** The Web UI generates a random auth token at startup (printed to console). Every private endpoint — mutating (start/stop training, delete runs, inspect data, validate config) and reading (runs, metrics, system, recipes, SSE streams) — requires an `Authorization: Bearer <token>` header. `/` and `/api/health` stay open so the dashboard can load. CORS is restricted to the served origin. Data inspection is sandboxed to the working directory.
 
-**The token is not kept across reloads.** The page reads the token from `?token=…` (the `--public` phone URL) or asks for it the first time a request is refused, then holds it in page memory only: never `sessionStorage`, `localStorage`, a cookie or a `window` property. A reload or a new tab therefore asks for it again; paste the token `soup ui` printed (the whole `Authorization: Bearer …` line works too). If you cancel the prompt, the page stays signed out until your next click, which asks again. That is deliberate: a token persisted where page script can read it would turn a future rendering mistake into a token disclosure. It does not protect against script already running in the page; the content policy below is the defence there.
+**The page never stores the token.** The page reads the token from `?token=…` (the `--public` phone URL) or asks for it the first time a request is refused, then holds it in page memory only: never `sessionStorage`, `localStorage`, a cookie or a `window` property. Without the session cookie below, a reload or a new tab therefore asks for it again; paste the token `soup ui` printed (the whole `Authorization: Bearer …` line works too). If you cancel the prompt, the page stays signed out until your next click, which asks again. That is deliberate: a token persisted where page script can read it would turn a future rendering mistake into a token disclosure. It does not protect against script already running in the page; the content policy below is the defence there.
+
+**Session cookie on a loopback bind (#1191).** Opening `http://127.0.0.1:<PORT>/?token=<TOKEN>` checks the token, sets an `HttpOnly; SameSite=Strict; Path=/` cookie named `soup_ui_session_<PORT>` and redirects to the same URL without `token`. The cookie holds a random session id, never the token, so page script cannot read a credential, and a reload or a new tab in that browser stays signed in. The cookie belongs to the hostname you opened: signing in at `127.0.0.1` does not sign in `localhost`, so keep using the same one. It has no expiry, so it ends when the browser session does, and the server keeps the ids only in memory, so every `soup ui` restart ends every session; open the `?token=` URL again to sign back in. A request authenticated by the cookie that is not a `GET` or `HEAD` must carry an `Origin` naming this exact server (scheme, host and port) or it is refused with 403: every port of `127.0.0.1` counts as one site, so `SameSite=Strict` alone would let a page served by another local app on a different port use the cookie. The `Authorization: Bearer` header works exactly as before and needs no `Origin`, so scripts and API clients are unchanged. A wrong token sets nothing and loads the page as before. A browser that blocks cookies for `127.0.0.1` gets the token prompt after the redirect, because the token has already left the URL; paste the token there. With `--public` (or any non-loopback `--host`) no cookie is set or accepted: the phone page keeps the token in page memory, and a reload asks for it again or you re-scan the QR code. **What this does not cover:** cookies are not isolated by port, so any other server on `127.0.0.1` that your browser sends a same-site request to also receives the session cookie. Such a server can replay it outside a browser with any `Origin`, since the `Origin` check only stops browsers, and act as you in the UI, including starting training, until `soup ui` restarts.
 
 YAML-entry request bodies are capped at 1 MiB on `/api/config/validate`,
 `/api/train/start`, and `/api/config/from-form`. Larger bodies return HTTP 413
@@ -745,21 +748,6 @@ with ToolCallTimer(buffer, name="fetch_url") as timer:
 ```
 
 Pure-Python EMA + linear-interp percentiles (DoS cap: `MAX_SAMPLES=1_000_000`). `ToolOutputsBuffer` is a thread-safe `collections.deque(maxlen=1000)` ring with truncated previews; `ToolCallTimer` records duration / output / error per invocation for tool-calling SFT runs.
-
-
-## Web UI Plugin Registry + Env Knobs
-
-```python
-# src/soup_cli/ui/plugins/my_tab.py
-from soup_cli.ui.plugins import register_tab
-
-def render_my_tab(request) -> str:
-    return "<div>my tab body</div>"
-
-register_tab(name="my-tab", title="My Tab", render=render_my_tab)
-```
-
-Drop-in plugin registry with kebab-case name allowlist, 32-tab cap, idempotent re-register. Plus `API_HOST` / `API_PORT` / `API_KEY` / `GRADIO_HOST` / `GRADIO_PORT` env knobs for FastAPI + Gradio surfaces.
 
 
 ## Deploy Autopilot

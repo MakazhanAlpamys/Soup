@@ -26,6 +26,7 @@ them. LISA (per-step layer sampling) is split to #267.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import math
@@ -72,6 +73,9 @@ _VALID_MODULE_TYPES = ("mlp", "attn", "other")
 _LAYER_IDX_RE = re.compile(r"(?:^|\.)(?:layers|h)\.\d+\.")
 _SLUG_RE = re.compile(r"[^A-Za-z0-9._-]+")
 _HF_COMMIT_RE = re.compile(r"^[A-Fa-f0-9]{40}$")
+# A local snapshot folder's own cache slot: ``<folder name>@<digest of its location>``.
+_LOCAL_SLOT_LABEL_CHARS = 64
+_LOCAL_SLOT_DIGEST_CHARS = 32
 
 ModulesArg = Union[str, Sequence[str], None]
 
@@ -599,7 +603,15 @@ def _materialized_matches_hf_snapshot(
     *,
     source_revision: Optional[str] = None,
 ) -> Optional[Tuple[Tuple[str, int, int], ...]]:
-    """Return the real-file manifest when HF metadata proves blob identity."""
+    """Return the real-file manifest when HF metadata proves blob identity.
+
+    The comparison reads link names and sizes only, so the layout is checked
+    last, by the copy step's own listing: a copy is reused only for a snapshot
+    that would be copied now. A layout that listing refuses (a linked blob
+    store, a linked directory inside the snapshot, a file that leaves the blob
+    store or has no blob) answers "no match": the plan then asks for a copy,
+    and the copy step raises its refusal before it touches the earlier copy.
+    """
     try:
         existing = _weight_file_manifest(materialized_dir, permit_symlinks=False)
     except FileNotFoundError:
@@ -632,6 +644,10 @@ def _materialized_matches_hf_snapshot(
             return None
         if source_revision is not None and lines[0].strip() != source_revision:
             return None
+    try:
+        _snapshot_materialization_entries(source_dir, source_revision=source_revision)
+    except (ValueError, OSError):
+        return None
     return existing
 
 
@@ -664,6 +680,45 @@ def _hf_shared_blob_root(repo_root: str) -> Optional[str]:
     reparse = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
     if getattr(store_stat, "st_file_attributes", 0) & reparse:
         return None
+    return os.path.realpath(store)
+
+
+def _is_junction(path: str) -> bool:
+    """Whether ``path`` is a Windows junction.
+
+    ``os.path.islink`` is false for a junction and ``os.walk`` descends into
+    one, so a junction needs its own check wherever a linked directory is
+    refused. This is the comparison ``os.path.isjunction`` makes (that function
+    needs Python 3.12), except that an ``OSError`` from ``lstat`` is not turned
+    into "not a junction": an entry that cannot be inspected is not waved on.
+    The tag is compared, not the reparse-point attribute, so a directory that
+    carries some other reparse point is not taken for a link.
+    """
+    mount_point = getattr(stat, "IO_REPARSE_TAG_MOUNT_POINT", 0xA0000003)
+    return getattr(os.lstat(path), "st_reparse_tag", 0) == mount_point
+
+
+def _hf_repo_blob_root(repo_root: str) -> str:
+    """The repo's own ``blobs`` store, which has to be a real directory.
+
+    huggingface_hub creates it with ``os.makedirs``. Like the shared store, a
+    linked one (a symlink, or a junction on Windows) points somewhere else, and
+    it is refused without being resolved. The link's target is not compared
+    with any directory: for a local snapshot path the folder around the
+    snapshot is wherever it was put, so there is no limit to hold a target to.
+    """
+    store = os.path.join(repo_root, "blobs")
+    if not os.path.lexists(store):
+        raise FileNotFoundError("cached Hugging Face blob store is missing")
+    if os.path.islink(store) or _is_junction(store):
+        raise ValueError(
+            f"cached Hugging Face blob store {store!r} is a link and is not followed: "
+            "Soup copies weights only from inside the Hugging Face cache; make blobs a "
+            "real directory (to keep the files elsewhere, link the whole repository "
+            "folder instead), or pass a directory of regular files"
+        )
+    if not os.path.isdir(store):
+        raise FileNotFoundError("cached Hugging Face blob store is missing")
     return os.path.realpath(store)
 
 
@@ -703,10 +758,7 @@ def _snapshot_materialization_entries(
         )
         if source != expected:
             raise ValueError("cached snapshot path does not match its resolved revision")
-        blob_root = os.path.realpath(os.path.join(repo_root, "blobs"))
-        if not os.path.isdir(blob_root):
-            raise FileNotFoundError("cached Hugging Face blob store is missing")
-        blob_roots.append(blob_root)
+        blob_roots.append(_hf_repo_blob_root(repo_root))
         shared_root = _hf_shared_blob_root(repo_root)
         if shared_root is not None:
             blob_roots.append(shared_root)
@@ -718,6 +770,10 @@ def _snapshot_materialization_entries(
             if os.path.islink(directory):
                 raise ValueError(
                     f"cached snapshot directory symlink is not allowed: {dirname!r}"
+                )
+            if _is_junction(directory):
+                raise ValueError(
+                    f"cached snapshot directory junction is not allowed: {dirname!r}"
                 )
         for filename in filenames:
             if not filename.endswith((".safetensors", ".json")):
@@ -853,6 +909,26 @@ def plan_model_weights(model: str) -> ModelWeightsPlan:
     if os.path.isdir(model):
         source = os.path.realpath(model)
         manifest = _weight_file_manifest(source, permit_symlinks=True)
+        if any(os.path.islink(os.path.join(source, name)) for name, _s, _m in manifest):
+            # A local path to an HF cache snapshot: its weights are symlinks into
+            # blobs/, which the sharder and the scanner skip. Copy it like the
+            # snapshot a Hub id resolves to. It shares that copy's cache slot only
+            # when it is that snapshot's own repo folder (_local_snapshot_slot).
+            source_revision = _hf_snapshot_revision(source)
+            if source_revision is None:
+                raise ValueError(
+                    f"{model} holds symlinked .safetensors files outside a Hugging "
+                    "Face snapshots/<commit> directory; Soup reads weights only "
+                    "from regular files: pass the Hub id, the HF snapshot "
+                    "directory, or a directory of regular files"
+                )
+            return _hf_snapshot_plan(
+                _hf_cache_repo_id(source) or model,
+                source,
+                manifest,
+                source_revision,
+                slot=_local_snapshot_slot(source),
+            )
         return ModelWeightsPlan(
             model=model,
             source_dir=source,
@@ -884,9 +960,60 @@ def plan_model_weights(model: str) -> ModelWeightsPlan:
             source_files=manifest,
             source_revision=source_revision,
         )
+    return _hf_snapshot_plan(model, source, manifest, source_revision)
 
+
+def _hf_cache_repo_id(source_dir: str) -> Optional[str]:
+    """``org/name`` for a ``models--org--name/snapshots/<sha>`` directory."""
+    repo_dir = os.path.basename(os.path.dirname(os.path.dirname(source_dir)))
+    if not repo_dir.startswith("models--"):
+        return None
+    return repo_dir[len("models--"):].replace("--", "/") or None
+
+
+def _location_key(path: str) -> str:
+    """One spelling per directory: links resolved, letter case folded where the OS does."""
+    return os.path.normcase(os.path.realpath(path))
+
+
+def _local_snapshot_slot(source: str) -> str:
+    """Cache slot for the regular-file copy of a local ``snapshots/<commit>`` directory.
+
+    The slot of the Hub id ``org/name`` when the snapshot's repo folder is the directory
+    that id resolves to in the active Hugging Face cache. A folder anywhere else gets a
+    slot of its own, ``<folder name>@<digest of its resolved location>``: a copy is
+    reused on matching names and sizes, so two requests may share one only when they
+    name the same place. ``@`` cannot occur in a :func:`model_slug`, which keeps a
+    folder's slot apart from every slot named after a model.
+    """
+    repo_root = os.path.dirname(os.path.dirname(source))
+    location = _location_key(repo_root)
+    repo_id = _hf_cache_repo_id(source)
+    if repo_id is not None:
+        from soup_cli.utils.hubs import hf_cache_dir
+
+        cache = hf_cache_dir()
+        if cache is not None:
+            in_cache = os.path.join(cache, os.path.basename(repo_root))
+            if _location_key(in_cache) == location:
+                return model_slug(repo_id)
+    name = os.path.basename(location)
+    label = model_slug(name)[:_LOCAL_SLOT_LABEL_CHARS] if name.strip() else "local"
+    digest = hashlib.sha256(os.fsencode(location)).hexdigest()
+    return f"{label}@{digest[:_LOCAL_SLOT_DIGEST_CHARS]}"
+
+
+def _hf_snapshot_plan(
+    model: str,
+    source: str,
+    manifest: Tuple[Tuple[str, int, int], ...],
+    source_revision: Optional[str],
+    *,
+    slot: Optional[str] = None,
+) -> ModelWeightsPlan:
+    """Plan the regular-file copy of a symlinked HF snapshot (reused when current)."""
     materialized = os.path.join(
-        resolve_cache_dir(), "weights", model_slug(model)
+        resolve_cache_dir(), "weights", slot or model_slug(model)
     )
     existing = _materialized_matches_hf_snapshot(
         source,

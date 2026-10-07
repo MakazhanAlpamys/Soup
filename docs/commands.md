@@ -151,6 +151,8 @@ soup data mix                                 BETA mixture-weight optimiser (pro
 soup data forge --docs ./docs --task sft --target-rows 1000  Synthetic data pipeline + provenance
 soup data forge --docs ./docs --hub modelscope --teacher owner/name  Pre-fetch the teacher from an alternative hub
 soup data score --input rows.jsonl            Composite quality scorecard (PII + keyword triage + lang + edu)
+soup data score --input rows.jsonl --benchmark-file benchmark.jsonl --threshold 0.8  Score with real n-gram comparison texts
+soup data score ... -b gsm8k --benchmark-file benchmark.jsonl  Labels are validated only, not corpus selectors; all file texts are compared
 soup data decontaminate --input rows.jsonl --benchmarks mmlu,gsm8k  Drop benchmark-overlap rows
 soup data toxicity --input rows.jsonl -o tox.jsonl  Flag abuse-keyword matches (heuristic)
 soup data langdetect --input rows.jsonl -o tagged.jsonl  Tag each row with language code
@@ -349,7 +351,7 @@ soup local-rl harvest --db <path> -o <pairs.jsonl>  Harvest DPO pairs from thumb
 soup local-rl train --db <path> --model <id> --once [--train-method dpo|kto|orpo] [--min-pairs N] [-o <dir>]  Ad-hoc DPO/KTO/ORPO train from harvested thumbs — live (v0.71.13)
 soup local-rl train --db <path> --model <id> [--scheduler-dir <dir>] [--hour H] [--minute M] [--train-method dpo|kto|orpo] [--min-pairs N] [-o <dir>]  Render a systemd/launchd nightly-train scaffold (no --once) that runs `--once` with the same flags (v0.71.13)
 soup build <manifest.yaml> [--dry-run] [--output-dir <dir>]  dbt-for-SFT DAG: validate + plan + live materialise (v0.69.0; live v0.71.6)
-soup expect <data.jsonl> <suite.yaml>         Expectations suite: PII / token-length / refusal / judge (v0.69.0)
+soup expect <data.jsonl> <suite.yaml> [--judge URL]  Expectations suite: PII / token-length / refusal / judge (v0.69.0)
 soup data gen-magpie --base <m> --provider ollama|vllm --target N --output <jsonl> [--base-url <url>] [--quality-filter]  Magpie synthetic generator — live (v0.69.0; live v0.71.6)
 soup data best-of-n (--base <m> | --provider ollama|vllm --model <m> [--base-url <url>]) --prompts <jsonl> --n 8 --judge <url> -o <sft.jsonl> [--emit-pairs <dpo.jsonl>] [--resume] [--checkpoint <journal.jsonl>] [--manifest <manifest.json>]  Best-of-N rejection sampling with durable per-prompt recovery and manifest-last publication
 soup data best-of-n (--base <m> [--revision <rev>] | --provider ollama|vllm --model <m>) --prompts <jsonl> --n 8 --export-candidates <jsonl> [--checkpoint <jsonl>] [--resume]  Resumable sampling-only phase; no judge is constructed
