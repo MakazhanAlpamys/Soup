@@ -87,6 +87,8 @@ def test_a_hub_dataset_id_is_left_alone(chat_config, cloud):
     stub = Path(f"soup_{cloud}_app.py")
     assert stub.exists()
     assert _shipped_configs(stub), "no config was embedded"
+
+
 @pytest.mark.parametrize("cloud", CLOUDS)
 def test_an_override_reaches_the_remote_config(chat_config, cloud):
     """The override is printed locally, so it has to be in the stub too."""
@@ -108,6 +110,44 @@ def test_an_override_reaches_the_remote_config(chat_config, cloud):
     assert shipped != chat_config.read_text(encoding="utf-8"), (
         "the stub embedded the file text again, so the override was dropped"
     )
+
+
+@pytest.mark.parametrize("cloud", CLOUDS)
+def test_echo_trap_tokenizer_aware_reaches_the_remote_config(chat_config, cloud):
+    cfg = load_config(chat_config)
+    cfg.data.train = "teknium/OpenHermes-2.5"
+    cfg.task = "grpo"
+    cfg.training.reward_fn = "accuracy"
+    cfg.training.echo_trap_enabled = True
+    chat_config.write_text(
+        yaml.safe_dump(cfg.model_dump(mode="json"), sort_keys=False), encoding="utf-8"
+    )
+
+    result = _plan(cloud, "--echo-trap-tokenizer-aware")
+
+    assert result.exit_code == 0, result.output
+    shipped = "\n".join(_shipped_configs(Path(f"soup_{cloud}_app.py")))
+    assert "echo_trap_tokenizer_aware: true" in shipped, shipped
+
+
+@pytest.mark.parametrize("cloud", CLOUDS)
+def test_minillm_on_policy_reaches_the_remote_config(chat_config, cloud):
+    cfg = load_config(chat_config)
+    cfg.data.train = "teknium/OpenHermes-2.5"
+    cfg.task = "distill"
+    cfg.training.teacher_model = "HuggingFaceTB/SmolLM2-360M"
+    cfg.training.minillm_enabled = True
+    cfg.training.minillm_teacher_mix_ratio = 0.5
+    chat_config.write_text(
+        yaml.safe_dump(cfg.model_dump(mode="json"), sort_keys=False), encoding="utf-8"
+    )
+
+    result = _plan(cloud, "--minillm-on-policy")
+
+    assert result.exit_code == 0, result.output
+    shipped = "\n".join(_shipped_configs(Path(f"soup_{cloud}_app.py")))
+    assert "minillm_on_policy: true" in shipped, shipped
+    assert "minillm_teacher_mix_ratio: 0.5" in shipped, shipped
 
 
 @pytest.mark.parametrize("cloud", CLOUDS)
@@ -178,6 +218,39 @@ class TestUnshippedInputs:
         from soup_cli.cloud._shipped import unshipped_inputs
 
         assert unshipped_inputs(self._cfg()) == []
+
+    def test_a_hub_model_id_is_not_unshipped(self):
+        from soup_cli.cloud._shipped import unshipped_inputs
+
+        cfg = self._cfg()
+        cfg.training.ra_dit_retriever_model = "sentence-transformers/all-mpnet-base-v2"
+        assert unshipped_inputs(cfg) == []
+        cfg.training.prm_reward = "someuser/soup-prm-135m"
+        assert unshipped_inputs(cfg) == []
+
+    def test_a_local_model_path_is_unshipped(self, tmp_path, monkeypatch):
+        from soup_cli.cloud._shipped import unshipped_inputs
+
+        monkeypatch.chdir(tmp_path)
+        for path in (
+            "./models/merged",
+            "./models/teacher",
+            "./models/rm",
+            "./adapters/a",
+            "./adapters/b",
+        ):
+            (tmp_path / path).mkdir(parents=True, exist_ok=True)
+        cfg = self._cfg()
+        cfg.base = "./models/merged"
+        cfg.training.teacher_model = "./models/teacher"
+        cfg.training.reward_model = "./models/rm"
+        cfg.training.mole_task_adapters = ["./adapters/a", "./adapters/b"]
+        assert unshipped_inputs(cfg) == [
+            "base",
+            "training.mole_task_adapters",
+            "training.reward_model",
+            "training.teacher_model",
+        ]
 
     def test_the_message_names_the_escape_hatch(self):
         from soup_cli.cloud._shipped import refuse_unshipped_inputs

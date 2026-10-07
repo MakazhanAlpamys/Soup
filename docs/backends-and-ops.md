@@ -205,8 +205,16 @@ Works with the tasks that have an unsloth setup: SFT (text; SFT vision and audio
 ## Cloud GPU Training
 
 No local GPU? `soup train --cloud modal|lambda` renders a provider-specific controller
-from your `soup.yaml`. The config YAML is base64-embedded as **data**; credentials are read from
-the environment only when a live submission starts.
+from your `soup.yaml`. The **effective** config — the loaded object with every CLI override
+already applied — is base64-embedded as **data**; credentials are read from the environment only
+when a live submission starts.
+
+`--push-as` and `--gate` are refused with `--cloud`: they run locally against local files and a
+local HF repo, so a cloud run would silently ignore them.
+
+A local `data.train` is refused at plan time too, naming the field and pointing at a Hub dataset
+id (every built-in template sets one, so users hit this first). Uploading local input files is the
+remaining half of #1430 and is not done yet.
 
 ```bash
 pip install "soup-cli[modal]"   # only needed for live submit
