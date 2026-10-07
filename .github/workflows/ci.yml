@@ -581,7 +581,11 @@ jobs:
           key: hf-${{ runner.os }}-${{ hashFiles('.github/workflows/ci.yml') }}
           restore-keys: hf-${{ runner.os }}-
       - name: Install dependencies
-        run: pip install -e ".[dev]"
+        # pytest-xdist runs the suite in parallel (see the test step below); its
+        # psutil extra is what `-n logical` counts the CPUs with. Installed here
+        # and not in the dev extra: a local run stays serial unless a contributor
+        # asks for workers.
+        run: pip install -e ".[dev]" "pytest-xdist[psutil]"
       - name: Warm HF Hub cache (models the tests load)
         # Pre-download the models the unit tests load, with retries, so a
         # transient HF Hub 429 (Too Many Requests) on a single matrix cell does
@@ -678,7 +682,14 @@ jobs:
           path: ${{ runner.temp }}/hf-cache
           key: hf-${{ runner.os }}-${{ hashFiles('.github/workflows/ci.yml') }}
       - name: Run unit tests with coverage
-        run: pytest tests/ -v --tb=short --junitxml=report.xml --cov=soup_cli --cov-report=xml:coverage.xml --cov-report=term-missing:skip-covered
+        # One worker per logical CPU and one test FILE per worker (`loadfile`):
+        # the tests of a file keep their order and their module-level state, and
+        # two files may run at the same moment. Measured 2026-10-07 on Python
+        # 3.12 (run 37577416935): ubuntu 2520 s -> 1133 s, Windows 4492 s ->
+        # 1390 s, macOS 2003 s -> 992 s, with the same tests passing and coverage
+        # unchanged. `--dist load` hands the tests of one file to several workers
+        # and is not used: it was no faster, and one timing test failed under it.
+        run: pytest tests/ -n logical --dist loadfile -v --tb=short --junitxml=report.xml --cov=soup_cli --cov-report=xml:coverage.xml --cov-report=term-missing:skip-covered
       - name: Upload coverage to Codecov
         # ubuntu / 3.10 is the ubuntu cell every gated run has (release, full,
         # approval) and a quick run does not. It was 3.11 until the approval run

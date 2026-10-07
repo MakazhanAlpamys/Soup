@@ -561,6 +561,16 @@ branch runs every cell.
 draft, whatever is pushed to it. Mark it ready for review and the quick set
 starts on its current head.
 
+**CI runs the tests in parallel.** Every `test (...)` cell runs the suite with
+`pytest-xdist`, one test file per worker process (`-n logical --dist loadfile`).
+The tests of one file still run in order in one process, but two files can run
+at the same moment and in any order. So a test must not depend on another file
+having run first, on the working directory another test left behind, or on the
+terminal width of the process: give the console an explicit width in the test
+instead of setting `COLUMNS`. To reproduce a failure that shows only in CI,
+install the plugin (`pip install "pytest-xdist[psutil]"`) and run
+`pytest tests/ -n logical --dist loadfile`.
+
 See `.github/workflows/ci.yml`.
 
 ### Stale CI marks (#1017)
