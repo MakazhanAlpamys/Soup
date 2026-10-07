@@ -22,6 +22,7 @@ from tests.conftest import strip_ansi
         ({"acc,none": 0.0, "acc_norm,none": 0.9}, 0.0),
         ({"acc,none": 0.75}, 0.75),
         ({"other": 0.25}, 0.25),
+        ({"other": 0.25, "acc,none": 0.5}, 0.5),
         ({"other": True}, None),
         ({"acc,none": False}, None),
         ({"acc,none": "unavailable", "other": 0.25}, 0.25),
@@ -81,7 +82,7 @@ def test_cli_nothing_measured_is_failure(benchmark_cli, data, reason):
 
     assert result.exit_code == 1, output
     assert rows == []
-    assert "Skipped requested" in output and reason in output
+    assert f"Skipped requested: {reason}" in output
     assert "Nothing measured; nothing saved" in output
     assert "Results saved to experiment tracker" not in output
     assert "1.0000" not in output and "0.0000" not in output
