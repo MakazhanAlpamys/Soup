@@ -31,7 +31,8 @@ arm.
 
 **Status: rule committed 2026-10-01, BEFORE the run. Attempt 1 (2026-10-01 23:35) ended in NO
 VERDICT, see §5; no round arm was judged, so the rule's rows 3-6 have not been applied to any
-number.** Before the run the only executions were two `--dry-run`s of the driver into a scratch
+number.** **Attempt 2 (2026-10-07 10:15Z, `--run-prefix batch2`) completed; rows 1-3
+did not fire, and the verdict is in §6.** Before the run the only executions were two `--dry-run`s of the driver into a scratch
 folder (stamps, the cache check, a 4-s sampler self-test, the plan; no arm), a synthetic check
 of the rule code on fake arm files, and a mocked run of the driver's arm flow (fake arm
 processes that only write JSON). None of them wrote anything under `results/`.
@@ -524,6 +525,149 @@ readable without elevation on this box), a power state or something else is the 
 rule's row 1 (a SINGLE batch-1 step outside 15.0-21.5 s) is exactly the check that would fire on
 this, and attempt 2 is bound by it as written.
 
+### 5.2 Attempt 2 — 2026-10-07 10:15:46Z, `batch_control_probe.py --plan all --run-prefix batch2`, COMPLETE
+
+Run from `aef2d31a` (attempt 1's records commit; `src/` and `benchmarks/harness/` clean,
+`soup_cli.__file__` under `Soup-r2\src`). `src/` is byte-identical to `2c6ed087` and also to the
+head PR #1536 merged at (`0130e025`, 2026-10-04): the PR's later commits touch only benchmarks and
+docs (`git diff --stat 2c6ed087 0130e025 -- src/` is empty). Run by session measure-28 for soup-28
+inside the owner's machine window (10:07Z), with a hold listed in `.claude/SESSIONS.md`. Times
+below are UTC; the box-state log stamps local time (UTC+5).
+
+**Box.** AC online and battery 100% at every stamp; GPU 0 MiB before every arm; commit headroom
+21.3-28.1 GiB. Two preconditions of the runbook were not met, and the run went ahead under the
+ruling recorded on 2026-10-04 (handoff, R2 section, UPDATE item 3: run once anyway after
+SearchIndexer.exe has read ~0 MB/s for 5 minutes in a row):
+
+- **Windows Search was RUNNING** (no session is elevated; the owner had not stopped it).
+  SearchIndexer.exe's cumulative read count stayed flat at 1,150.789 GB from 10:10:10 to
+  10:15:26Z (10-s samples), and the run started at 10:15:46Z. SearchIndexer.exe is not among the
+  eight largest readers of any arm of this attempt.
+- **ChatGPT.exe was open.** Its on-device-model process (PID 17064) is listed as a GPU compute app
+  at every stamp, with 0 MiB in use, so the driver's pre-arm check (0 MiB) held.
+
+Both caches hit; the STRIPED build arm was one cold step (wall 46.1 s, step 26.949 s,
+`shard_seconds` 0.025 s), then the 300-s settle. The sequence ran 30.1 min against the 25.4-min
+estimate (one void re-run, below).
+
+**One void, re-run once in the same position, as §4 prescribes.** Round 0, position 4 (SINGLE b3),
+try 1: foreign reader `BackgroundDownload.exe` (PID 3716, started during the arm) read 3.10 GB;
+`MoUsoCoreWorker.exe` (Windows Update's orchestrator) also started inside it (45.4 MB). Its steps,
+20.455 / 20.791 / 20.736 s (mean 20.661), are kept under `batch2_r0_single_b3_void.*` and are not
+read by the rule. The re-run was valid. The largest foreign reader in any valid arm was
+`svchost.exe` (PID 16716) at 376.3 MB, in round 1 SINGLE b1.
+
+**Every valid arm:** `direct_io` and `pinned` true, `AsyncDiskSource`, read-ahead 2 (SINGLE) or 3
+(STRIPED), 157 + 2 loads per timed step, 0 allocator retries, `shard_seconds` 0.004-0.008 s (cache
+hits).
+
+| round | pos | arm | timed steps (s) | `step` | tok/s | peak alloc / reserved (GB) | in use (MiB) | B read-free (s) |
+|---|---|---|---|---|---|---|---|---|
+| 0 | 0 | SINGLE b1 | 18.712 / 19.179 / 19.547 | 19.146 | 26.74 | 4.378 / 4.798 | 4,750 | 6.511 |
+| 0 | 1 | STRIPED b1 | 9.149 / 9.144 / 9.030 | 9.108 | 56.22 | 4.378 / 4.798 | 4,750 | — |
+| 0 | 2 | SINGLE b2 | 17.781 / 18.077 / 17.910 | 17.923 | 57.13 | 5.345 / 5.545 | 5,462 | 12.074 |
+| 0 | 3 | STRIPED b2 | 12.391 / 12.588 / 12.413 | 12.464 | 82.16 | 5.345 / 5.545 | 5,462 | — |
+| 0 | 4 | SINGLE b3 (re-run) | 20.487 / 20.615 / 20.162 | 20.422 | 75.21 | 6.312 / 7.028 | 6,876 | 17.567 |
+| 0 | 5 | STRIPED b3 | 17.748 / 17.842 / 17.760 | 17.784 | 86.37 | 6.312 / 7.028 | 6,876 | — |
+| 1 | 0 | STRIPED b3 | 17.793 / 17.763 / 17.767 | 17.774 | 86.42 | 6.312 / 7.028 | 6,876 | — |
+| 1 | 1 | SINGLE b3 | 20.322 / 20.274 / 20.405 | 20.334 | 75.54 | 6.312 / 7.028 | 6,876 | 17.503 |
+| 1 | 2 | STRIPED b2 | 12.268 / 12.436 / 12.232 | 12.312 | 83.17 | 5.345 / 5.545 | 5,462 | — |
+| 1 | 3 | SINGLE b2 | 17.640 / 17.948 / 17.743 | 17.777 | 57.60 | 5.345 / 5.545 | 5,462 | 11.913 |
+| 1 | 4 | STRIPED b1 | 8.515 / 8.650 / 8.548 | 8.571 | 59.74 | 4.378 / 4.798 | 4,750 | — |
+| 1 | 5 | SINGLE b1 | 17.491 / 17.626 / 17.408 | 17.508 | 29.24 | 4.378 / 4.798 | 4,750 | 6.490 |
+
+**What §2 note 5 asks for, for every batch-2 and batch-3 arm** (the card is 8.518 GB; both rounds
+read the same): process dedicated / shared GPU memory 5.731 / 2.229 GB (SINGLE b2), 7.214 / 2.229
+(SINGLE b3), 5.733 / 3.303 (STRIPED b2), 7.216 / 3.303 (STRIPED b3); `peak_reserved_gb` 5.545 at
+batch 2 and 7.028 at batch 3; `num_alloc_retries` 0 everywhere. The process's shared memory is the
+same at batch 1 (2.229 GB SINGLE, 3.303 GB STRIPED), so it does not grow with the batch.
+
+**Power and SM clock over the timed steps of every batch-3 arm** (median / minimum; utilisation
+100% in all four): SINGLE b3 round 0 96.6 / 76.5 W, 2141 / 1620 MHz; round 1 106.7 / 11.3 W,
+2362 / 1230 MHz. STRIPED b3 round 0 110.1 / 82.0 W, 2415 / 2340 MHz; round 1 112.8 / 79.3 W,
+2422 / 2130 MHz.
+
+**The read-free floor, in session** (mean of the two rounds' B): 6.500 s at 512 tokens (model
+6.425 s), 11.993 s at 1024 (model 11.609 s), 17.535 s at 1536 (model 16.792 s). The least-squares
+line through them: 0.975 s + 0.010776 s x tokens (largest residual 0.016 s). Its crossover with
+this session's R: SINGLE 1,610 tokens, STRIPED 730 tokens.
+
+**The ids:** row 0 of the batch-2 draw and row 0 of the batch-3 draw both equal the batch-1 draw.
+
+**The peak VRAM arithmetic of §2** (judged by nothing) predicted 5.345 GB allocated at batch 2 and
+6.312 GB at batch 3; the arms read 5.345 and 6.312.
+
+**The rule's output**, `python benchmarks/harness/batch_control_probe.py --summarize --run-prefix
+batch2`, recomputed from the committed files. It is identical to the table the driver printed at
+the end of the run:
+
+```
+row 1 SINGLE b1 outside 15.0-21.5 s: no fire
+row 2 off the path, or the protocol stopped: no fire
+row 3 STRIPED b1 outside 7.69-12.0 s: no fire
+row 4 SINGLE b2: fits
+row 4 SINGLE b3: fits
+row 5 SINGLE b2: NEAR-FREE: e 1.027 (r0 1.068, r1 0.985), tok/s ratio 2.053
+row 5 SINGLE b3: PARTIAL: e 0.899 (r0 0.938, r1 0.861), tok/s ratio 2.698
+row 6 SINGLE b2: AGREES: measured NEAR-FREE, model NEAR-FREE (e_pred 1.000)
+row 6 SINGLE b3: DISAGREES AT b3: measured PARTIAL, model NEAR-FREE (e_pred 1.000)
+row 6 SINGLE crossover: measured (1024, 1536] tokens; model 1688 tokens at R 18.327 s
+row 4 STRIPED b2: fits
+row 4 STRIPED b3: fits
+row 5 STRIPED b2: PARTIAL: e 0.713 (r0 0.731, r1 0.696), tok/s ratio 1.427
+row 5 STRIPED b3: PARTIAL: e 0.497 (r0 0.512, r1 0.482), tok/s ratio 1.492
+row 6 STRIPED b2: AGREES: measured PARTIAL, model PARTIAL (e_pred 0.761)
+row 6 STRIPED b3: AGREES: measured PARTIAL, model PARTIAL (e_pred 0.526)
+row 6 STRIPED crossover: measured (512, 1024] tokens; model 750 tokens at R 8.839 s
+row VERDICT: per layout: rows 4-6 above
+```
+
+**Also recorded, not judged.**
+
+- Round 0's SINGLE b1 (19.146 s, steps rising 18.71 -> 19.55 s) is 9.4% slower than round 1's
+  (17.508 s). The reversed second round cancels a linear drift only in the mean, which is what row
+  5 reads (§2, note 1); both rounds' `e` are quoted beside each class above. Attempt 1's half-rate
+  C: read did not recur: every SINGLE batch-1 step of this attempt was 17.41-19.55 s, against
+  30.1-34.0 s for five of attempt 1's six (the sixth, try 2's first step, read 18.22 s). Why
+  round 0's first arm was slower is not established.
+- The second drive at batch 3: SINGLE b3 20.378 s against STRIPED b3 17.779 s (two-round means),
+  1.146x, against 2.073x at batch 1 (18.327 / 8.839 s). §0's arithmetic expected about 4% at
+  batch 3 (17.44 / 16.79 s). The STRIPED batch-3 step sits 1.4% above the in-session floor at 1536
+  tokens.
+
 ## 6. Verdict
 
-Pending.
+From attempt 2 (§5.2), by the rule of §2 as committed, applied by `batch_control_rule.py`:
+
+**Rows 1-3 do not fire.** SINGLE batch 1 read 19.146 and 17.508 s (band 15.0-21.5 s), no arm was
+off the path and the protocol completed, and STRIPED batch 1 read 9.108 and 8.571 s (band
+7.69-12.0 s). Both layouts are judged.
+
+**SINGLE, the L2L control** (R = 18.327 s; the code caveat of §1 applies):
+
+| b | row 4 | row 5 class | `ē` (r0, r1) | `r̄` | tok/s r0 / r1 | peak alloc | in use | labels | row 6 |
+|---|---|---|---|---|---|---|---|---|---|
+| 1 | — | (NEAR-FREE by definition) | — | 1 | 26.74 / 29.24 | 4.378 GB | 4,750 MiB | — | — |
+| 2 | fits | **NEAR-FREE** | 1.027 (1.068, 0.985) | 2.053 | 57.13 / 57.60 | 5.345 GB | 5,462 MiB | none | **AGREES** (model NEAR-FREE, `e_pred` 1.000) |
+| 3 | fits | **PARTIAL** | 0.899 (0.938, 0.861) | 2.698 | 75.21 / 75.54 | 6.312 GB | 6,876 MiB | none | **DISAGREES AT b3** (model NEAR-FREE, `e_pred` 1.000) |
+
+Measured crossover bracket **(1024, 1536] tokens**; the model's crossover at this session's R is
+1,688 tokens, and the in-session floor line's is 1,610 tokens (§2 note 7). Neither label fires at
+batch 3: 6,876 MiB in use is below 7,620 MiB, and the steps (20.422 / 20.334 s) are below read plus
+compute in series (35.938 / 34.300 s). **The largest batch that fits is 3**, the largest one run.
+§2 note 4 named this outcome before the run: batch 3 sits on the model's edge, and a PARTIAL there
+is a DISAGREES that this record reports as such. In this session the floor at 1536 tokens (17.535 s)
+is 4.3% under R, and the step exceeds both.
+
+**STRIPED, an extra** (R = 8.839 s):
+
+| b | row 4 | row 5 class | `ē` (r0, r1) | `r̄` | tok/s r0 / r1 | peak alloc | in use | labels | row 6 |
+|---|---|---|---|---|---|---|---|---|---|
+| 1 | — | (NEAR-FREE by definition) | — | 1 | 56.22 / 59.74 | 4.378 GB | 4,750 MiB | — | — |
+| 2 | fits | **PARTIAL** | 0.713 (0.731, 0.696) | 1.427 | 82.16 / 83.17 | 5.345 GB | 5,462 MiB | none | **AGREES** (model PARTIAL, `e_pred` 0.761) |
+| 3 | fits | **PARTIAL** | 0.497 (0.512, 0.482) | 1.492 | 86.37 / 86.42 | 6.312 GB | 6,876 MiB | none | **AGREES** (model PARTIAL, `e_pred` 0.526) |
+
+Measured crossover bracket **(512, 1024] tokens**; the model's is 750 tokens at this session's R,
+and the in-session line's is 730 tokens.
+
+Nothing in §2 was edited. The records are local, on `probe/batch-control`, and not pushed.
