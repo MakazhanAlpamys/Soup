@@ -269,17 +269,16 @@ The statistic is a Bayes factor that averages over both the size of the differen
 
 `--effect-size` is in the metric's units, but the statistic needs it in standard deviations. So the first 5 rows of each arm set that scale (their pooled standard deviation) and are not otherwise tested; the verdict table shows this as `prior_scale`, and the reported means and row counts still cover every row. If an arm's first rows are all identical, more rows are held out until one differs. If they barely vary (a warm cache, or a judge that gives 1.0 early), `accept_h0` waits as `continue` while the tested rows' standard deviation is more than 3 times theirs: that start makes the prior far too wide. A `reject_h0` is never held back.
 
-<<<<<<< HEAD
 That wait is worth reading, because the held-out rows are fixed: once the hold fires, **more rows of the same kind never release it**. A run in that state is stuck at `continue` with the accept rule already satisfied — the confidence sequence for the difference lies inside `(-effect_size, +effect_size)` — so the verdict reports the hold rather than leaving you to guess, and the panel prints one line naming the ratio and what to do about it:
 
 ```text
 Held back: the tested rows spread 25.7 times the held-out ones (held_out_spread
-0.002218, tested_spread 0.05706, limit 3x), so accept_h0 is withheld at
-log_likelihood_ratio -5.3065. The first 5 rows of each arm set the scale of
---effect-size and barely vary (a warm cache, or a judge that gives the same
-score early). Those rows are fixed, so more samples of the same kind will not
-release the hold: drop them, or reorder the input so the first rows vary, and
-re-run.
+0.002218, tested_spread 0.05706, limit 3x), so accept_h0 is withheld even though
+the confidence sequence for the difference is already inside +-0.1. The first 5
+rows of each arm set the scale of --effect-size and barely vary (a warm cache, or
+a judge that gives the same score early). Those rows are fixed, so more samples of
+the same kind will not release the hold: drop them, or reorder the input so the
+first rows vary, and re-run.
 ```
 
 The same three facts are on the verdict returned by `run_msprt` / `msprt_step`: `accept_held` (bool), `held_out_spread` and `tested_spread` (the two pooled standard deviations, both `null` when nothing is held — a `continue` with no hold carries no explanation). The held-out rows' spread is measured over however many rows were actually held out, which is more than 5 when an arm's first rows are all identical. A webhook is never sent for a held run: `accept_held=True` is only legal on a `continue`, and the webhook fires only on a terminal decision.

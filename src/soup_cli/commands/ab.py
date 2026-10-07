@@ -211,6 +211,10 @@ def ab(
 
     # Webhook only fires on a terminal decision (reject_h0 / accept_h0) —
     # a `continue` verdict carries no actionable signal (issue #207).
+    # #1524 - a held run is a `continue` by construction (`accept_held` is only
+    # legal on one), so it never reaches this payload: the hold is reported on
+    # the panel and on the `MsprtVerdict` returned by `run_msprt` / `msprt_step`,
+    # and nothing about it belongs here as a key that is always false.
     if verdict.decision != "continue":
         emit_webhooks(
             slack_url,
@@ -225,13 +229,6 @@ def ab(
                 "n_treatment": verdict.n_treatment,
                 "mean_control": verdict.mean_control,
                 "mean_treatment": verdict.mean_treatment,
-                # #1524 - a held run is a `continue`, so it never reaches a
-                # webhook: these keys are here so the payload schema stays
-                # stable, and they are always false / null on what is sent.
-                "accept_held": verdict.accept_held,
-                "held_out_spread": verdict.held_out_spread,
-                "tested_spread": verdict.tested_spread,
-                "held_out_rows": verdict.held_out_rows,
             },
             console=console,
         )

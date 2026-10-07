@@ -442,7 +442,9 @@ def test_the_webhook_payload_gains_the_keys_without_losing_any(tmp_path, monkeyp
     assert len(sent) == 1, sent
 
     payload = sent[0]
-    # Every key that was there before, and the three new ones.
+    # Every key that was there before, unchanged. The four #1524 keys are NOT
+    # here on purpose: a held run is a `continue` and the webhook only fires on
+    # a terminal decision, so they could only ever be false / null.
     assert set(payload) >= {
         "command",
         "metric",
@@ -453,17 +455,12 @@ def test_the_webhook_payload_gains_the_keys_without_losing_any(tmp_path, monkeyp
         "n_treatment",
         "mean_control",
         "mean_treatment",
-        "accept_held",
-        "held_out_spread",
-        "tested_spread",
     }
     # Nothing renamed: the old names must not have become aliases.
     assert not {"spread_ratio", "held", "held_back"} & set(payload)
-    # A reject is not held, so it reports that rather than inventing spreads.
+    # No hold keys: there is nothing to hold back on a terminal decision.
+    assert not {"accept_held", "held_out_spread", "tested_spread", "held_out_rows"} & set(payload)
     assert payload["decision"] == "reject_h0"
-    assert payload["accept_held"] is False
-    assert payload["held_out_spread"] is None
-    assert payload["tested_spread"] is None
     # Still JSON-serialisable end to end.
     json.dumps(payload)
 
