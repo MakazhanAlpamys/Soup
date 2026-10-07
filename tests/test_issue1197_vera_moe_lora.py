@@ -124,6 +124,7 @@ class TestVeraOnFusedExpertsIsRefused:
         assert "mlp.experts.gate_up_proj" in message and "mlp.experts.down_proj" in message
         assert "nn.Linear" in message
         assert "use_vera: false" in message
+        assert "remove moe_lora" in message
 
     def test_refused_before_the_dropout_rule_speaks(self):
         """With both problems present the VeRA one is named: fixing dropout alone
