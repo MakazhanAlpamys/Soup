@@ -383,6 +383,13 @@ released as a penalty.
   pull request that is ready to merge, not on every push; other pushes run a quick subset.
   A draft pull request runs no CI at all until you mark it ready for review.
 
+### Issue difficulty
+
+Maintainers rate every triaged issue from 1 to 10 with a `difficulty:N` label, so you can pick
+something that fits your time and experience. How the number is chosen and what each level
+means is in [docs/issue-difficulty.md](docs/issue-difficulty.md). When you open an issue you
+can suggest a difficulty in the form; the maintainer sets the final one.
+
 ## Making Changes
 
 ### 1. Create a Branch
