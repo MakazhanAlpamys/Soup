@@ -249,14 +249,15 @@ class TestTheDriver:
             "module = importlib.util.module_from_spec(spec)\n"
             "spec.loader.exec_module(module)\n"
             "code = module.main([])\n"
-            "print('TORCH' if 'torch' in sys.modules else 'LIGHT', code)\n"
+            "print('TORCH' if 'torch' in sys.modules else 'LIGHT')\n"
+            "sys.exit(code)\n"
         )
         done = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
         assert done.returncode == 0, done.stderr
-        lines = done.stdout.strip().splitlines()
-        assert lines[-1] == "LIGHT 0"
-        assert len(lines) == 41
-        assert lines[0].split() == ["1", "seed03-ram-0-in-order"]
+        # "<position> <name>" per run, then the marker: every second token is a run name.
+        *listed, marker = done.stdout.split()
+        assert marker == "LIGHT"
+        assert listed[1::2] == [run["name"] for run in gate.schedule()]
 
     @pytest.mark.parametrize("mode", ["series", "strict", "trial"])
     def test_a_run_mode_without_weights_is_refused_by_name(self, mode, capsys):
