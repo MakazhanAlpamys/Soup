@@ -212,7 +212,7 @@ training setup, live metrics, dataset exploration and model chat.
 ```bash
 pip install "soup-cli[ui]"
 soup ui
-# Opens http://127.0.0.1:7860
+# Opens http://127.0.0.1:7860/?token=<token> and prints the same URL
 ```
 
 ![Soup Web UI — New Training](docs/assets/web-ui-new-training.png)

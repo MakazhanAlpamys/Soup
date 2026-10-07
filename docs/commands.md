@@ -9,7 +9,7 @@
 ```
 soup init [--template chat|code|...|audio]       Create config
 soup init --template hipaa|soc2|eu-ai-act|sr-11-7  Compliance-shaped starting config + the commands for that regime (v0.71.35)
-soup autopilot --model <id> --data d.jsonl --goal <g>  Zero-config: pick task/quant/LR/epochs from data + model + goal
+soup autopilot [--model <id>] [--data d.jsonl] [--goal <g>]  Zero-config: pick task/quant/LR/epochs (prompts when omitted)
 soup advise <data> --goal "..."               Pre-flight decision: PROMPT_ENG / RAG / SFT / DPO / GRPO — run BEFORE spending GPU hours
 soup advise compare                           Show prior verdicts from advise history
 soup advise explain                           Rubric + evidence trail of the last verdict
@@ -46,8 +46,8 @@ soup export --model ./output --format gguf    Export to GGUF (Ollama)
 soup export --model ./output --deploy ollama  Export GGUF + auto-deploy to Ollama
 soup export --model ./output --format onnx    Export to ONNX
 soup export --model ./output --format tensorrt  Export to TensorRT-LLM
-soup export --model ./output --format awq --calibration-data cal.jsonl  Export to AWQ (4-bit)
-soup export --model ./output --format gptq --calibration-data cal.jsonl  Export to GPTQ (4-bit)
+soup export --model ./output --format awq --calibration-data cal.jsonl  Export to AWQ (4-bit; deprecated, removed in the next release)
+soup export --model ./output --format gptq --calibration-data cal.jsonl  Export to GPTQ (4-bit; deprecated, removed in the next release)
 soup deploy ollama --model m.gguf --name x    Deploy GGUF to Ollama
 soup deploy ollama --list                     List Soup-deployed models
 soup deploy ollama --remove <name>            Remove model from Ollama
@@ -396,6 +396,20 @@ also covers `soup bench`, which loads through the `soup infer` path).
 
 Values are case-insensitive. Any other value (`gpu`, `auto`, `cuda:0,1`, ...)
 is refused with an error instead of being ignored.
+
+### Interactive Autopilot (`soup autopilot`)
+
+When standard input is an interactive terminal and any of `--model`, `--data`, or `--goal`
+are omitted, `soup autopilot` prompts for the missing values:
+
+- **Model**: Base model Hugging Face repository ID (or local path). Blank entries are refused.
+- **Data**: Local training dataset path (JSONL). Must exist under current working directory.
+- **Goal**: One of `chat`, `reasoning`, `code`, `classification`, `tool-calling`, `alignment`,
+  or `domain-adapt`.
+
+When run with all three options supplied, or when standard input is not a terminal (e.g. CI,
+scripts, or pipelines), `soup autopilot` never prompts: complete flags execute directly,
+and omitted required flags exit with code 2 and the standard `Missing option` error.
 
 ### Best-of-N recovery and publication
 

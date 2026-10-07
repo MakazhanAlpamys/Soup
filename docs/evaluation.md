@@ -344,6 +344,12 @@ soup diagnose my-run-id --base-model HuggingFaceTB/SmolLM2-135M --allow-not-run
 soup diagnose my-run-id --output diag.json --attach-to-registry abc123
 ```
 
+**Registry attach.** `--attach-to-registry <id>` links the `--output` file to that entry as a
+`diagnose_report` artifact; `<id>` is an entry id, a unique id prefix, `name:tag` or
+`registry://<id>`. A requested attach is part of the command's success: `soup diagnose` exits 1
+when it fails (unknown or ambiguous entry, unreadable registry), with the report left on disk,
+and exits 3 before anything runs when the flag is given without `--output`.
+
 **Live runners (v0.71.7).** With `--base-model` the six probes run against the loaded model
 (+ optional `--adapter` LoRA path, `--dataset` for format / memorization / citation probes,
 `--holdout` for the forgetting probe using the first 12 usable rows and falling back to built-in general prompts if unset,

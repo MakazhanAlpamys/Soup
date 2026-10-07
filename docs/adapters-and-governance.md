@@ -187,7 +187,7 @@ The kernels run a real rank-1 weight update at an MLP down-projection. They supp
 
 By default ROME uses the covariance-free `C = I` form. Pass `--cov-corpus <jsonl|txt>` to estimate the key covariance `C = E[k kᵀ] + λI` over a stats corpus and apply the genuine ROME closed form `u = C⁻¹ k*` — this spreads the rank-1 update mass per the closed form and reduces collateral interference with other facts (the exact post-condition is preserved either way). The corpus loader is cwd-contained, symlink-rejected, and size/line-capped; `--cov-corpus` is rejected for any method other than `rome`.
 
-The sequential edit governor is persisted (SQLite, cross-process-locked, `SOUP_EDIT_GOVERNOR_DB` override) so the per-base-model edit count + norm-blowup verdict survive across separate `soup edit set` runs. The count increment is atomic — two concurrent `soup edit set` runs on the same base are merged under the cross-process lock (no lost increment). `soup edit set` consults the governor automatically: it refuses BEFORE the model load past the per-base cap or after a BLOWUP verdict, and records the measured `||ΔW||_F` after each edit. Pass `--no-governor` to opt out. `--registry-id <id>` attaches the edited model (or GRACE codebook) into the Registry lineage.
+The sequential edit governor is persisted (SQLite, cross-process-locked, `SOUP_EDIT_GOVERNOR_DB` override) so the per-base-model edit count + norm-blowup verdict survive across separate `soup edit set` runs. The count increment is atomic — two concurrent `soup edit set` runs on the same base are merged under the cross-process lock (no lost increment). `soup edit set` consults the governor automatically: it refuses BEFORE the model load past the per-base cap or after a BLOWUP verdict, and records the measured `||ΔW||_F` after each edit. Pass `--no-governor` to opt out. `--registry-id <id>` (needs `--output`) records the saved result on that Registry entry: the weight file(s) `save_pretrained` wrote (`model.safetensors`, its numbered shards, or `pytorch_model*.bin`) as `edited_model` artifacts, or `grace_codebook.json` as a `grace_codebook` artifact. The Registry stores one hashed file per artifact, never a directory. A requested attach is part of the command's success: `soup edit set` exits 1 when it fails (unknown or ambiguous entry, unreadable registry, no weight file), with the edited model left on disk, and exits 2 before the model is loaded when the flag is given without `--output`.
 
 
 ## Activation Steering (`soup steer`)
@@ -211,7 +211,7 @@ soup serve --model ./adapter --steer safety-v1 --steer-strength 1.5
 soup steer list
 ```
 
-Steering names are validated against a strict regex (`^[A-Za-z0-9][A-Za-z0-9._\-]{0,127}$` — no path separators, no shell metacharacters); strength is bounded `|s| <= 10.0`. The trained vectors land in the Soup Registry under the `steering_vector` artifact kind so lineage is preserved.
+Steering names are validated against a strict regex (`^[A-Za-z0-9][A-Za-z0-9._\-]{0,127}$` — no path separators, no shell metacharacters); strength is bounded `|s| <= 10.0`. With `--registry-id <id>` the trained vector file (`steering_vector.safetensors`) is recorded on that Registry entry as a `steering_vector` artifact, so lineage is preserved and `soup steer list` shows it; `<id>` is an entry id, a unique id prefix, `name:tag` or `registry://<id>`. A vector saved outside `./steering/<name>` with `--output` is then found by name through an entry called `<name>`. A requested attach is part of the command's success: `soup steer train` exits 1 when it fails, with the vector left on disk. Without the flag nothing is written to the Registry.
 
 As of v0.71.10 the fit and the decode hook are **live** (validated on SmolLM2-135M): `soup steer train` captures residual-stream activations (CAA / RepE) or per-head `o_proj`-input activations (ITI) on the contrastive pairs, computes the control vector, and persists `steering_vector.safetensors` + `steering_config.json`. `soup serve --steer <name>` installs a forward hook on the loaded model that adds `strength × vector` at decode time (transformers backend; `--steer` is rejected with a clear error on vLLM/SGLang). RepE / ITI need at least two contrastive pairs; CAA works from one.
 
@@ -390,14 +390,23 @@ soup bom emit \
   --base-model meta-llama/Llama-3.1-8B \
   --base-sha aaaa...64hex \
   --config-sha bbbb...64hex \
-  --task sft --license apache-2.0 \
+  --task sft --license Apache-2.0 \
   --format both --output bom
 # writes bom.cdx.json + bom.spdx.json
 ```
 
 Root component is `type=machine-learning-model` (per CycloneDX ML-BOM extension). Base
 model + parent adapters + per-artifact files appear as components with SHA-256 hashes.
-License chain uses SPDX identifiers.
+`--license` is written by what it is: a listed SPDX id (any case, `apache-2.0` becomes
+`Apache-2.0`) goes in CycloneDX `license.id` and in SPDX `licenseConcluded` /
+`licenseDeclared`; a valid SPDX expression (`Apache-2.0 OR MIT`, upper-case operators,
+every operand a listed id or a `LicenseRef-`) goes in CycloneDX `expression` and in those
+SPDX fields with its ids canonicalised, each `LicenseRef-` operand defined in
+`hasExtractedLicensingInfos` (a `DocumentRef-` qualified operand makes the value a name, since
+the document carries no external references); anything else, including a name that merely contains "and" or
+"with" (`Gemma Terms of Use and Prohibited Use Policy`), is CycloneDX `license.name` and an
+SPDX `LicenseRef-` with its text in `hasExtractedLicensingInfos`. The CycloneDX
+`serialNumber` is an RFC 4122 `urn:uuid:` (#1446).
 
 ### Attaching energy + CO₂ (`--energy`)
 
@@ -434,7 +443,10 @@ soup attest emit \
 ```
 
 Stages are a closed allowlist: `extract` / `train` / `eval` / `export` / `publish`.
-Subject SHA must be 64-hex (sha256). The default `--sign unsigned` backend
+Subject SHA must be 64-hex (sha256). `--invocation "<command line>"` is recorded at
+`predicate.buildDefinition.externalParameters.invocation` (up to 4096 characters; a
+longer one is refused, not cut), beside the stage; the statement printed without
+`--output` is the same JSON, verbatim (#1446). The default `--sign unsigned` backend
 remains offline-only tamper metadata. The **`ed25519` backend is live** with
 `pip install soup-cli[sign]`; **Sigstore is live** with
 `pip install soup-cli[sigstore]`:
@@ -483,7 +495,9 @@ Top-10 domains by share, modality breakdown, training compute / kWh / CO₂, mod
 description, base model, run id. A `.pdf` output path renders a reportlab PDF (a `.md`
 path renders markdown). The **top crawled domains** are auto-extracted from the training
 JSONL (`cfg.data.train`). With `--track-energy`, the measured energy is recorded in the
-doc. Operator-controlled fields are escape-neutralised (`|[](){}!<>` + newline / CR / tab)
+doc; without it, the energy and CO₂ rows read "not measured" rather than 0, and the
+training-compute (FLOPs) row always reads "not measured", because nothing estimates it
+yet (#1446). Operator-controlled fields are escape-neutralised (`|[](){}!<>` + newline / CR / tab)
 so a malicious model name can't inject a forged heading into downstream renderers.
 
 ### Energy & CO₂ measurement (`--track-energy`)

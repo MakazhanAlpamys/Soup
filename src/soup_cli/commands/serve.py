@@ -92,9 +92,9 @@ def serve(
         "127.0.0.1",
         "--host",
         help=(
-            "Host to bind to. Defaults to loopback (127.0.0.1); the server "
-            "exposes an unauthenticated code-exec tool endpoint, so binding a "
-            "public interface (0.0.0.0) should be paired with --tool-auth-token."
+            "Host to bind to. Defaults to loopback (127.0.0.1). Any other host "
+            "needs --tool-auth-token, which is checked on the tool, thumbs and "
+            "adapter routes only: the generation routes take no token."
         ),
     ),
     device: Optional[str] = typer.Option(
@@ -329,6 +329,9 @@ def serve(
             "tool endpoints (/v1/tools/bash, /v1/tools/python)."
         )
         raise typer.Exit(code=2)
+    # The token that check asks for does not cover every route: say which.
+    for _notice in _non_loopback_notices(host, backend):
+        console.print(f"[yellow]Note:[/] {_notice}")
     # v0.71.12 #221 — validate `--bank` up front (path containment + backend)
     # so a typo / bad path surfaces before backend init.
     if bank is not None:
@@ -1239,6 +1242,54 @@ def _load_serve_tokenizer(
 # Backends whose FastAPI app actually serves /metrics (#333). ``--dashboard``
 # on anything else used to no-op in silence.
 _METRICS_BACKENDS = frozenset({"transformers", "vllm"})
+# The binds `soup serve` accepts without --tool-auth-token (the same three
+# spellings the refusal in serve() and _check_tool_auth compare against).
+_LOOPBACK_BINDS = frozenset({"127.0.0.1", "localhost", "::1"})
+
+
+def _non_loopback_notices(host: str, backend: str) -> list[str]:
+    """What an operator binding beyond loopback should know about the token.
+
+    Empty for a loopback bind. The lines describe the server as it is: a
+    non-loopback bind is refused without ``--tool-auth-token``, which reads as
+    if the token covered every route, and it does not.
+
+    * transformers: the token is checked on the tool, thumbs and adapter
+      routes only. On a wildcard bind those routes cannot compare ``Host``
+      with a bound name either, which is the second line.
+    * vLLM / SGLang / MII: their apps have no such routes and are never handed
+      the token, so no route checks it.
+
+    The host is user input printed before anything validates it, so it goes
+    through ``for_terminal``.
+    """
+    if host in _LOOPBACK_BINDS:
+        return []
+    from soup_cli.utils.local_request_guard import is_wildcard_bind
+
+    where = f"bound to '{for_terminal(host)}', not loopback"
+    backend_name = backend.lower()
+    if backend_name != "transformers":
+        return [
+            f"{where}, and the {for_terminal(backend_name)} backend has no tool or "
+            "adapter routes, so no route checks --tool-auth-token: every route "
+            "(generation included) will answer every client that can reach this port "
+            "without a token. Put a proxy that authenticates in front if that is not "
+            "intended."
+        ]
+    notices = [
+        f"{where}. --tool-auth-token is checked on the tool, thumbs and adapter routes "
+        "only: /v1/chat/completions, /v1/messages, /v1/models, /health and /metrics "
+        "answer every client that can reach this port without a token. Put a proxy "
+        "that authenticates in front if that is not intended."
+    ]
+    if is_wildcard_bind(host):
+        notices.append(
+            "a wildcard bind has no single name, so the Host header is not compared: "
+            "the tool, thumbs and adapter routes check only that an Origin header, "
+            "when sent, names the same host as Host."
+        )
+    return notices
 
 
 def _dashboard_warning(backend: str) -> Optional[str]:

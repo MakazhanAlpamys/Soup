@@ -1,4 +1,4 @@
-<!-- synced-from: README.md sha256:ec88771fbfed8c92bfc4c260d73cb6502d9585744333724cc7938d825c707b02 -->
+<!-- synced-from: README.md sha256:ad8f9dd91ca5fd56ff6bda0b6b1c1efe26b4ab7e464bbf5bb8dca4faab55b810 -->
 <p align="center">🌍 <a href="README.md">English</a> | <a href="README.tr.md">Türkçe</a> | <strong>العربية</strong> | <a href="README.ja.md">日本語</a></p>
 
 <p align="center">
@@ -207,7 +207,7 @@ soup export --model ./output --format gguf --quant q4_k_m   # GGUF لـ Ollama /
 ```bash
 pip install "soup-cli[ui]"
 soup ui
-# يفتح http://127.0.0.1:7860
+# يفتح http://127.0.0.1:7860/?token=<token>
 ```
 
 ![واجهة ويب Soup — تدريب جديد](docs/assets/web-ui-new-training.png)

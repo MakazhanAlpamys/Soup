@@ -1,4 +1,4 @@
-<!-- synced-from: README.md sha256:ec88771fbfed8c92bfc4c260d73cb6502d9585744333724cc7938d825c707b02 -->
+<!-- synced-from: README.md sha256:ad8f9dd91ca5fd56ff6bda0b6b1c1efe26b4ab7e464bbf5bb8dca4faab55b810 -->
 <p align="center">🌍 <a href="README.md">English</a> | <strong>Türkçe</strong> | <a href="README.ar.md">العربية</a> | <a href="README.ja.md">日本語</a></p>
 
 <p align="center">
@@ -214,7 +214,7 @@ keşfi ve modelle sohbet için yerel bir pano sunar.
 ```bash
 pip install "soup-cli[ui]"
 soup ui
-# http://127.0.0.1:7860 adresini açar
+# http://127.0.0.1:7860/?token=<token> adresini açar
 ```
 
 ![Soup Web Arayüzü — Yeni Eğitim](docs/assets/web-ui-new-training.png)

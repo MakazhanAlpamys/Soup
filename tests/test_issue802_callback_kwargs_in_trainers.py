@@ -322,7 +322,10 @@ class TestCallbackIntegrationWithKwargs:
         assert cb._spike_strategy.max_attempts == 4
         assert cb._spike_strategy.lr_decay == pytest.approx(0.35)
         assert cb._grad_accum_enabled is True
-        assert cb._grad_accum_monitor.threshold == pytest.approx(0.88)
+        # #1620: the monitor is built lazily on the first advisory call, so
+        # construction stores the threshold instead of a GradAccumMonitor.
+        assert cb._grad_accum_monitor is None
+        assert cb._grad_accum_threshold == pytest.approx(0.88)
         assert cb._grad_accum_current == 2
         assert cb._grad_accum_batch == 4
 

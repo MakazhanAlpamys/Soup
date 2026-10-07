@@ -221,6 +221,11 @@ class GraceCodebook:
 _CODEBOOK_FILENAME = "grace_codebook.json"
 
 
+def codebook_path(output_dir: str) -> str:
+    """Path of the codebook JSON inside ``output_dir`` (what :func:`save_codebook` writes)."""
+    return os.path.join(output_dir, _CODEBOOK_FILENAME)
+
+
 def save_codebook(codebook: GraceCodebook, output_dir: str) -> str:
     """Atomically write the codebook JSON under a cwd-contained ``output_dir``.
 
