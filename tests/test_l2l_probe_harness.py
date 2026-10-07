@@ -17,6 +17,21 @@ from pathlib import Path
 
 import pytest
 
+
+def _psutil_has_io_counters() -> bool:
+    """macOS psutil has no per-process io_counters; the two tests that read it skip there."""
+    try:
+        import psutil
+    except ImportError:
+        return False
+    return hasattr(psutil.Process(), "io_counters")
+
+
+_NEEDS_IO_COUNTERS = pytest.mark.skipif(
+    not _psutil_has_io_counters(),
+    reason="psutil exposes no per-process io_counters on this platform",
+)
+
 HARNESS = Path(__file__).resolve().parent.parent / "benchmarks" / "harness"
 
 
@@ -189,8 +204,13 @@ def test_spill_layers_without_a_factory_is_refused(acts):
 
     with pytest.raises(ValueError, match="spill_factory"):
         acts.ActivationStore(
-            n_layers=4, k=2, chunk_shape=(1, 8, 128), dtype=torch.float32,
-            device="cpu", pin=False, spill_layers=1,
+            n_layers=4,
+            k=2,
+            chunk_shape=(1, 8, 128),
+            dtype=torch.float32,
+            device="cpu",
+            pin=False,
+            spill_layers=1,
         )
 
 
@@ -261,19 +281,34 @@ def test_thread_start_stop_takes_samples(box):
 
 def test_box_stamp_has_the_keys(box):
     stamp = box.box_stamp()
-    for key in ("unix", "avail_phys_gb", "commit_avail_gb", "ac", "gpu_pids",
-                "gpu_mem_used_mib", "python_processes"):
+    for key in (
+        "unix",
+        "avail_phys_gb",
+        "commit_avail_gb",
+        "ac",
+        "gpu_pids",
+        "gpu_mem_used_mib",
+        "python_processes",
+    ):
         assert key in stamp
 
+
 def test_foreign_readers_flags_heavy_other_processes(box):
-    before = {10: {"name": "a.exe", "read": 0}, 11: {"name": "b.exe", "read": 5},
-              99: {"name": "python.exe", "read": 0}}
-    after = {10: {"name": "a.exe", "read": 2_000_000_000}, 11: {"name": "b.exe", "read": 6},
-             99: {"name": "python.exe", "read": 3_000_000_000},
-             12: {"name": "SearchIndexer.exe", "read": 1_500_000_000}}
+    before = {
+        10: {"name": "a.exe", "read": 0},
+        11: {"name": "b.exe", "read": 5},
+        99: {"name": "python.exe", "read": 0},
+    }
+    after = {
+        10: {"name": "a.exe", "read": 2_000_000_000},
+        11: {"name": "b.exe", "read": 6},
+        99: {"name": "python.exe", "read": 3_000_000_000},
+        12: {"name": "SearchIndexer.exe", "read": 1_500_000_000},
+    }
     heavy = box.foreign_readers(before, after, own_pids={99}, threshold=1_000_000_000)
     assert [(row["pid"], row["name"]) for row in heavy] == [
-        (10, "a.exe"), (12, "SearchIndexer.exe"),
+        (10, "a.exe"),
+        (12, "SearchIndexer.exe"),
     ]
     assert heavy[0]["read_bytes"] == 2_000_000_000
 
@@ -282,6 +317,7 @@ def test_foreign_readers_is_none_without_snapshots(box):
     assert box.foreign_readers(None, {}, own_pids=set()) is None
 
 
+@_NEEDS_IO_COUNTERS
 def test_process_read_bytes_sees_this_process(box):
     import os
 
@@ -322,12 +358,23 @@ def streamed(tmp_path):
     shards = str(tmp_path / "shards")
     index = shard_checkpoint(weights, shards, dtype="float32", arch="llama")
     lora = LoraConfig(
-        r=4, lora_alpha=8, lora_dropout=0.0, bias="none",
-        target_modules=["q_proj", "k_proj", "v_proj", "o_proj"], task_type=TaskType.CAUSAL_LM,
+        r=4,
+        lora_alpha=8,
+        lora_dropout=0.0,
+        bias="none",
+        target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
+        task_type=TaskType.CAUSAL_LM,
     )
     model, runtime = build_streamed_model(
-        model_id=weights, shard_dir=shards, index=index, lora_config=lora,
-        device="cpu", dtype="float32", buffers=2, pin=False, seed=3,
+        model_id=weights,
+        shard_dir=shards,
+        index=index,
+        lora_config=lora,
+        device="cpu",
+        dtype="float32",
+        buffers=2,
+        pin=False,
+        seed=3,
     )
     yield model, runtime
     runtime.close()
@@ -344,8 +391,12 @@ def _cpu_store(acts, k, n_layers=3, hidden=64):
     import torch
 
     return acts.ActivationStore(
-        n_layers=n_layers, k=k, chunk_shape=(1, SEQ, hidden), dtype=torch.float32,
-        device="cpu", pin=False,
+        n_layers=n_layers,
+        k=k,
+        chunk_shape=(1, SEQ, hidden),
+        dtype=torch.float32,
+        device="cpu",
+        pin=False,
     )
 
 
@@ -469,41 +520,75 @@ def rule():
 
 
 def _cmp(equal=True, zero=()):
-    return {"tensors": 4, "unequal": [] if equal else ["x"], "max_abs": 0.0 if equal else 1e-3,
-            "worst": [], "all_zero": list(zero), "equal": equal}
+    return {
+        "tensors": 4,
+        "unequal": [] if equal else ["x"],
+        "max_abs": 0.0 if equal else 1e-3,
+        "worst": [],
+        "all_zero": list(zero),
+        "equal": equal,
+    }
 
 
 def _corr(fixture, *, a_vs_a=True, l2l=True, det=False, error=None):
-    rec = {"kind": "correctness", "fixture": fixture, "k": 2, "deterministic": det,
-           "a_vs_a": _cmp(a_vs_a), "a_vs_a_losses_equal": a_vs_a,
-           "l2l": _cmp(l2l), "l2l_losses_equal": l2l}
+    rec = {
+        "kind": "correctness",
+        "fixture": fixture,
+        "k": 2,
+        "deterministic": det,
+        "a_vs_a": _cmp(a_vs_a),
+        "a_vs_a_losses_equal": a_vs_a,
+        "l2l": _cmp(l2l),
+        "l2l_losses_equal": l2l,
+    }
     if error:
         rec["deterministic_error"] = error
     return {"meta": {}, "records": [rec]}
 
 
-def _arm(mode, arm, k, rnd, step_s, *, peak=4.4, void=False, variant=None, skipped=None,
-         loads=157.0):
-    return {"kind": "arm", "mode": mode, "arm": arm, "k": k, "round": rnd, "variant": variant,
-            "step_s_mean": step_s, "tokens_per_step": 512 * k, "peak_alloc_gb": peak,
-            "layer_loads_per_step": loads, "large_loads_per_step": 2.0,
-            "bytes_moved_per_step": loads * 441e6 + 2 * 525e6,
-            "suspend": {"void": void}, "store": None, "skipped": skipped}
+def _arm(
+    mode, arm, k, rnd, step_s, *, peak=4.4, void=False, variant=None, skipped=None, loads=157.0
+):
+    return {
+        "kind": "arm",
+        "mode": mode,
+        "arm": arm,
+        "k": k,
+        "round": rnd,
+        "variant": variant,
+        "step_s_mean": step_s,
+        "tokens_per_step": 512 * k,
+        "peak_alloc_gb": peak,
+        "layer_loads_per_step": loads,
+        "large_loads_per_step": 2.0,
+        "bytes_moved_per_step": loads * 441e6 + 2 * 525e6,
+        "suspend": {"void": void},
+        "store": None,
+        "skipped": skipped,
+    }
 
 
 def _timing(**over):
     """Predicted-shape numbers that pass every gate."""
-    times = {("plain", "A", 1): 17.1, ("plain", "B", 1): 6.43,
-             ("l2l", "A", 1): 17.2, ("l2l", "B", 1): 6.5,
-             ("l2l", "A", 16): 104.0, ("l2l", "B", 16): 103.0,
-             ("l2l", "C", 4): 26.0, ("l2l", "D", 4): 20.0,
-             ("l2l", "A", 4): 26.5, ("l2l", "B", 4): 26.0}
+    times = {
+        ("plain", "A", 1): 17.1,
+        ("plain", "B", 1): 6.43,
+        ("l2l", "A", 1): 17.2,
+        ("l2l", "B", 1): 6.5,
+        ("l2l", "A", 16): 104.0,
+        ("l2l", "B", 16): 103.0,
+        ("l2l", "C", 4): 26.0,
+        ("l2l", "D", 4): 20.0,
+        ("l2l", "A", 4): 26.5,
+        ("l2l", "B", 4): 26.0,
+    }
     times.update(over.pop("times", {}))
     records = []
     for (mode, arm, k), step_s in times.items():
         for rnd in (0, 1):
-            records.append(_arm(mode, arm, k, rnd, step_s,
-                                peak=over.get("peak16", 4.6) if k == 16 else 4.4))
+            records.append(
+                _arm(mode, arm, k, rnd, step_s, peak=over.get("peak16", 4.6) if k == 16 else 4.4)
+            )
     for patch in over.pop("patch", []):
         patch(records)
     meta = {"direct_io": over.get("direct_io", True), "v3": {"ok": over.get("v3", True)}}
@@ -511,9 +596,11 @@ def _timing(**over):
 
 
 def _write(tmp_path, timing=None, f1=None, f2=None, f1_det=None, spill=None):
-    files = {"timing.json": timing or _timing(),
-             "correctness_f1.json": f1 or _corr("F1"),
-             "correctness_f2.json": f2 or _corr("F2")}
+    files = {
+        "timing.json": timing or _timing(),
+        "correctness_f1.json": f1 or _corr("F1"),
+        "correctness_f2.json": f2 or _corr("F2"),
+    }
     if f1_det:
         files["correctness_f1_det.json"] = f1_det
     if spill:
@@ -546,6 +633,7 @@ def test_round_spread_over_5pct_removes_the_gates_using_that_arm(rule, tmp_path)
         for rec in records:
             if (rec["mode"], rec["arm"], rec["k"], rec["round"]) == ("l2l", "A", 16, 1):
                 rec["step_s_mean"] = 104.0 * 1.12
+
     out = rule.evaluate(_write(tmp_path, timing=_timing(patch=[widen])))
     for gate in ("G2", "G3", "G4"):
         assert out["gates"][gate]["status"] == "no verdict", gate
@@ -557,6 +645,7 @@ def test_suspend_void_on_b16_removes_g2_only(rule, tmp_path):
         for rec in records:
             if (rec["mode"], rec["arm"], rec["k"]) == ("l2l", "B", 16):
                 rec["suspend"]["void"] = True
+
     out = rule.evaluate(_write(tmp_path, timing=_timing(patch=[void])))
     assert out["gates"]["G2"]["status"] == "no verdict"
     assert out["gates"]["G3"]["status"] == "pass"
@@ -578,6 +667,7 @@ def test_v2_fails_when_l2l_k1_loads_differ_from_the_shipped_step(rule, tmp_path)
         for rec in records:
             if (rec["mode"], rec["k"]) == ("l2l", 1):
                 rec["layer_loads_per_step"] = 80.0
+
     out = rule.evaluate(_write(tmp_path, timing=_timing(patch=[fewer])))
     assert out["validity"]["V2"]["ok"] is False
     for gate in ("G2", "G3", "G4"):
@@ -596,20 +686,23 @@ def test_skipped_k16_removes_g2_to_g4(rule, tmp_path):
             if rec["k"] == 16:
                 rec["skipped"] = "V3: free 12.0 GB < need 10.7 + 4.0 GB"
                 rec["step_s_mean"] = None
+
     out = rule.evaluate(_write(tmp_path, timing=_timing(patch=[skip])))
     for gate in ("G2", "G3", "G4"):
         assert out["gates"][gate]["status"] == "no verdict"
 
 
 def test_g1_uses_the_deterministic_rerun_when_a_vs_a_is_inexact(rule, tmp_path):
-    out = rule.evaluate(_write(tmp_path, f1=_corr("F1", a_vs_a=False, l2l=False),
-                               f1_det=_corr("F1", det=True)))
+    out = rule.evaluate(
+        _write(tmp_path, f1=_corr("F1", a_vs_a=False, l2l=False), f1_det=_corr("F1", det=True))
+    )
     assert out["gates"]["G1"]["status"] == "pass"
 
 
 def test_g1_no_verdict_when_even_deterministic_is_inexact(rule, tmp_path):
-    out = rule.evaluate(_write(tmp_path, f1=_corr("F1", a_vs_a=False),
-                               f1_det=_corr("F1", a_vs_a=False, det=True)))
+    out = rule.evaluate(
+        _write(tmp_path, f1=_corr("F1", a_vs_a=False), f1_det=_corr("F1", a_vs_a=False, det=True))
+    )
     assert out["gates"]["G1"]["status"] == "no verdict"
 
 
@@ -626,15 +719,19 @@ def test_g1_fails_on_an_all_zero_gradient(rule, tmp_path):
 
 
 def test_spill_ratio_is_informational(rule, tmp_path):
-    spill = {"meta": {"direct_io": True}, "records": [
-        _arm("l2l", "A", 16, 0, 104.0, variant="pinned"),
-        _arm("l2l", "A", 16, 1, 104.0, variant="pinned"),
-        _arm("l2l", "A", 16, 0, 106.0, variant="spill"),
-        _arm("l2l", "A", 16, 1, 106.0, variant="spill"),
-    ]}
+    spill = {
+        "meta": {"direct_io": True},
+        "records": [
+            _arm("l2l", "A", 16, 0, 104.0, variant="pinned"),
+            _arm("l2l", "A", 16, 1, 104.0, variant="pinned"),
+            _arm("l2l", "A", 16, 0, 106.0, variant="spill"),
+            _arm("l2l", "A", 16, 1, 106.0, variant="spill"),
+        ],
+    }
     out = rule.evaluate(_write(tmp_path, spill=spill))
     assert out["info"]["I4"]["ratio"] == pytest.approx(104.0 / 106.0)
     assert out["verdict"] == "BUILD STEP 1"
+
 
 def test_foreign_reader_on_a16_removes_g2_to_g4(rule, tmp_path):
     def heavy(records):
@@ -643,6 +740,7 @@ def test_foreign_reader_on_a16_removes_g2_to_g4(rule, tmp_path):
                 rec["foreign_readers"] = [
                     {"pid": 4, "name": "SearchIndexer.exe", "read_bytes": 4_940_000_000}
                 ]
+
     out = rule.evaluate(_write(tmp_path, timing=_timing(patch=[heavy])))
     for gate in ("G2", "G3", "G4"):
         assert out["gates"][gate]["status"] == "no verdict", gate
@@ -653,6 +751,7 @@ def test_unknown_foreign_readers_do_not_void(rule, tmp_path):
     def unknown(records):
         for rec in records:
             rec["foreign_readers"] = None
+
     out = rule.evaluate(_write(tmp_path, timing=_timing(patch=[unknown])))
     assert out["verdict"] == "BUILD STEP 1"
 
@@ -707,11 +806,14 @@ def test_store_allocation_failure_becomes_a_skipped_arm(probe, monkeypatch):
     assert "out of memory" in reason
     assert calls == ["recovered"]  # drain the stale error AND release the cached pinned blocks
 
+
 def test_observe_attaches_stamps_watch_and_foreign_readers(probe, monkeypatch):
-    snaps = iter([
-        {1: {"name": "a.exe", "read": 0}},
-        {1: {"name": "a.exe", "read": 2_000_000_000}},
-    ])
+    snaps = iter(
+        [
+            {1: {"name": "a.exe", "read": 0}},
+            {1: {"name": "a.exe", "read": 2_000_000_000}},
+        ]
+    )
     monkeypatch.setattr(probe.l2l_box, "process_read_bytes", lambda: next(snaps))
     monkeypatch.setattr(probe.l2l_box, "box_stamp", lambda: {"unix": 0.0})
     result = probe.observe(lambda: {"step_s_mean": 1.0}, interval=0.01)
@@ -721,6 +823,7 @@ def test_observe_attaches_stamps_watch_and_foreign_readers(probe, monkeypatch):
     assert result["foreign_readers"] == [{"pid": 1, "name": "a.exe", "read_bytes": 2_000_000_000}]
 
 
+@_NEEDS_IO_COUNTERS
 def test_observe_stops_the_watch_when_the_body_raises(probe):
     with pytest.raises(ValueError, match="boom"):
         probe.observe(lambda: (_ for _ in ()).throw(ValueError("boom")), interval=0.01)
@@ -740,10 +843,12 @@ def test_fits_in_ram_keeps_the_margin(probe):
 def test_v2_ignores_timing_validity_of_the_k1_arms(rule, tmp_path):
     """I1: V2 is a loads/bytes identity. A 10% round spread on the shipped step
     voids that arm's time (V4), but no gate reads P1's time, so G2-G4 stand."""
+
     def spread(records):
         for rec in records:
             if (rec["mode"], rec["arm"], rec["round"]) == ("plain", "A", 1):
                 rec["step_s_mean"] = 17.1 * 1.10
+
     out = rule.evaluate(_write(tmp_path, timing=_timing(patch=[spread])))
     assert out["validity"]["V2"]["ok"] is True
     assert out["verdict"] == "BUILD STEP 1"
@@ -755,6 +860,7 @@ def test_v2_fails_when_the_shipped_step_never_ran(rule, tmp_path):
             if rec["mode"] == "plain":
                 rec["skipped"] = "never ran"
                 rec["step_s_mean"] = None
+
     out = rule.evaluate(_write(tmp_path, timing=_timing(patch=[skip])))
     assert out["validity"]["V2"]["ok"] is False
     assert out["gates"]["G2"]["status"] == "no verdict"
@@ -766,8 +872,15 @@ def _rec_file(*records):
 
 def test_g1_no_verdict_when_the_deterministic_rerun_raised(rule, tmp_path):
     """I2: the probe writes no a_vs_a when deterministic mode raises."""
-    det = _rec_file({"kind": "correctness", "fixture": "F1", "k": 4, "deterministic": True,
-                     "deterministic_error": "an op does not have a deterministic implementation"})
+    det = _rec_file(
+        {
+            "kind": "correctness",
+            "fixture": "F1",
+            "k": 4,
+            "deterministic": True,
+            "deterministic_error": "an op does not have a deterministic implementation",
+        }
+    )
     out = rule.evaluate(_write(tmp_path, f1=_corr("F1", a_vs_a=False), f1_det=det))
     assert out["gates"]["G1"]["status"] == "no verdict"
     assert "deterministic" in out["gates"]["G1"]["detail"]
@@ -781,8 +894,9 @@ def test_g1_no_verdict_on_an_empty_correctness_file(rule, tmp_path):
 
 def test_g1_no_verdict_on_a_skipped_correctness_record(rule, tmp_path):
     reason = "activation store allocation failed: CUDA error: out of memory"
-    skipped = _rec_file({"kind": "correctness", "fixture": "F2", "k": 2, "deterministic": False,
-                         "skipped": reason})
+    skipped = _rec_file(
+        {"kind": "correctness", "fixture": "F2", "k": 2, "deterministic": False, "skipped": reason}
+    )
     out = rule.evaluate(_write(tmp_path, f2=skipped))
     assert out["gates"]["G1"]["status"] == "no verdict"
     assert "skipped" in out["gates"]["G1"]["detail"]
@@ -813,6 +927,7 @@ def test_close_survives_a_spill_file_held_by_another_process(acts, tmp_path, mon
 def test_release_arm_state_drops_the_zero_weight_cache_after_c_and_d(probe):
     """M3: the nodequant arms cache a zero weight per shape on the GPU (~1.1 GB on
     the 70B shape); later arms must not carry it."""
+
     class Inst:
         def __init__(self):
             self._zero_cache = {(1, 2): object()}
