@@ -123,7 +123,7 @@ def benchmark(
         model_arg = f"{model_arg},trust_remote_code=True"
 
     benchmark_list = [b.strip() for b in benchmarks.split(",")]
-    console.print(f"[dim]Evaluating on: {', '.join(benchmark_list)}[/]")
+    console.print(f"[dim]Evaluating on: {', '.join(for_terminal(b) for b in benchmark_list)}[/]")
 
     # Lazy import lm_eval
     try:
@@ -150,8 +150,13 @@ def benchmark(
     )
 
     _display_benchmark_results(results, benchmark_list)
-    _save_benchmark_results(results, str(model_path), benchmark_list, run_id)
-    console.print("\n[green]Results saved to experiment tracker.[/]")
+    saved = _save_benchmark_results(results, str(model_path), benchmark_list, run_id)
+    if not saved:
+        console.print("[red]Nothing measured; nothing saved to experiment tracker.[/]")
+        raise typer.Exit(1)
+    console.print(
+        f"\n[green]Results saved to experiment tracker: {saved} of {len(benchmark_list)}.[/]"
+    )
 
 
 # ─── soup eval aider ───
@@ -1029,6 +1034,17 @@ def _run_lm_eval(
     return results
 
 
+def _benchmark_metric(bench_data: dict) -> Optional[tuple[str, int | float]]:
+    """Use the same measured-score selection for the table and tracker."""
+    preferred = ["acc,none", "acc_norm,none", "exact_match,none", "em,none"]
+    for key in [*preferred, *(key for key in bench_data if key not in preferred)]:
+        value = bench_data.get(key)
+        if (isinstance(value, (int, float)) and not isinstance(value, bool)
+                and not key.startswith("alias")):
+            return key.split(",")[0], value
+    return None
+
+
 def _display_benchmark_results(results: dict, benchmarks: list[str]) -> None:
     """Display benchmark results as a rich table."""
     table = Table(title="Evaluation Results")
@@ -1039,26 +1055,15 @@ def _display_benchmark_results(results: dict, benchmarks: list[str]) -> None:
     task_results = results.get("results", {})
     for bench in benchmarks:
         bench_data = task_results.get(bench, {})
-        if not bench_data:
-            table.add_row(bench, "-", "[red]not found[/]")
+        if bench not in task_results:
+            table.add_row(for_terminal(bench), "-", "[red]not found[/]")
             continue
-
-        for metric_key in [
-            "acc,none", "acc_norm,none", "exact_match,none", "em,none",
-        ]:
-            if metric_key in bench_data:
-                metric_name = metric_key.split(",")[0]
-                score = bench_data[metric_key]
-                table.add_row(bench, metric_name, f"{score:.4f}")
-                break
+        metric = _benchmark_metric(bench_data)
+        if metric is not None:
+            metric_name, score = metric
+            table.add_row(for_terminal(bench), for_terminal(metric_name), f"{score:.4f}")
         else:
-            for key, val in bench_data.items():
-                if isinstance(val, (int, float)) and not key.startswith("alias"):
-                    metric_name = key.split(",")[0] if "," in key else key
-                    table.add_row(bench, metric_name, f"{val:.4f}")
-                    break
-            else:
-                table.add_row(bench, "-", "[yellow]no numeric result[/]")
+            table.add_row(for_terminal(bench), "-", "[yellow]no numeric result[/]")
 
     console.print(table)
 
@@ -1068,35 +1073,36 @@ def _save_benchmark_results(
     model_path: str,
     benchmarks: list[str],
     run_id: Optional[str],
-) -> None:
-    """Save benchmark results to the experiment tracker."""
+) -> int:
+    """Save measured requested results, reporting skipped names and returning the count."""
     from soup_cli.experiment.tracker import ExperimentTracker
 
     tracker = ExperimentTracker()
     task_results = results.get("results", {})
-
-    for bench in benchmarks:
-        bench_data = task_results.get(bench, {})
-        score = 0.0
-        for metric_key in [
-            "acc,none", "acc_norm,none", "exact_match,none", "em,none",
-        ]:
-            if metric_key in bench_data:
-                score = bench_data[metric_key]
-                break
-        else:
-            for val in bench_data.values():
-                if isinstance(val, (int, float)):
-                    score = val
-                    break
-
-        tracker.save_eval_result(
-            model_path=model_path,
-            benchmark=bench,
-            score=score,
-            details=bench_data,
-            run_id=run_id,
-        )
+    saved = 0
+    try:
+        for bench in benchmarks:
+            bench_data = task_results.get(bench, {})
+            metric = _benchmark_metric(bench_data)
+            if metric is None:
+                reason = "not found" if bench not in task_results else "no numeric result"
+                console.print(f"[yellow]Skipped {for_terminal(bench)}: {reason}[/]")
+                continue
+            _, score = metric
+            tracker.save_eval_result(
+                model_path=model_path,
+                benchmark=bench,
+                score=score,
+                details=bench_data,
+                run_id=run_id,
+            )
+            saved += 1
+    finally:
+        tracker.close()
+    skipped = len(benchmarks) - saved
+    if skipped:
+        console.print(f"[yellow]Skipped {skipped} of {len(benchmarks)} requested benchmarks.[/]")
+    return saved
 
 
 def _display_custom_results(eval_results: object) -> None:

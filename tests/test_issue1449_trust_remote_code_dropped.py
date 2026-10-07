@@ -157,7 +157,7 @@ class TestEvalAutoTrust:
             eval_cmd, "_run_lm_eval",
             lambda model_arg, *a, **k: seen_model_args.append(model_arg) or {"results": {}},
         )
-        monkeypatch.setattr(eval_cmd, "_save_benchmark_results", lambda *a, **k: None)
+        monkeypatch.setattr(eval_cmd, "_save_benchmark_results", lambda *a, **k: 1)
         monkeypatch.setattr(eval_cmd, "_save_custom_results", lambda *a, **k: None)
         monkeypatch.setattr(
             custom, "_create_default_generator",
