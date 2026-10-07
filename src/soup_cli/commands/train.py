@@ -89,6 +89,29 @@ def _format_training_complete_loss(result: dict) -> str:
     return f"Loss: [bold]{result['initial_loss']:.4f} -> {result['final_loss']:.4f}[/]{label}"
 
 
+def _format_duration_display(result: dict) -> str:
+    """Duration line for the completion panel (#1529).
+
+    Every trainer wrapper returns both a pre-formatted ``duration`` string and
+    the raw ``duration_secs`` — except unlearn, which until #1529 returned only
+    the seconds, so the panel's ``result['duration']`` raised ``KeyError``
+    AFTER the adapter was saved and the run was otherwise complete. Read the
+    string when present and fall back to formatting the seconds (``unknown``
+    when both are missing — a measured ``0m`` stays ``0m``, but an absent
+    measurement should not read as a zero) so no wrapper can lose a finished
+    run's summary.
+    """
+    duration = result.get("duration")
+    if duration:
+        return duration
+    duration_secs = result.get("duration_secs")
+    if duration_secs is None:
+        return "unknown"
+    hours = int(duration_secs // 3600)
+    minutes = int((duration_secs % 3600) // 60)
+    return f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
+
+
 def _run_auto_eval_after_training(eval_config, output_dir: str, run_id: str) -> None:
     """Run configured evaluation once after the trained model is saved."""
     if not eval_config or not getattr(eval_config, "auto_eval", False):
@@ -1579,6 +1602,23 @@ def train(
                 "[dim] to soup.yaml for 2-5x faster training.[/]"
             )
 
+    # #1613: cheap stripe roots validation ahead of confirmation, --dry-run,
+    # dataset loading, and run creation.
+    from soup_cli.utils.stripe_roots import STRIPE_DIRS_ENV
+
+    if getattr(getattr(cfg, "training", None), "stream_layers", False) and os.environ.get(
+        STRIPE_DIRS_ENV
+    ):
+        from soup_cli.utils.errors import format_friendly_error
+        from soup_cli.utils.layer_shard import resolve_cache_root
+        from soup_cli.utils.stripe_roots import StripeRootError, validate_early_stripe_roots
+
+        try:
+            validate_early_stripe_roots(resolve_cache_root())
+        except StripeRootError as exc:
+            format_friendly_error(exc)
+            raise typer.Exit(1) from exc
+
     if not dry_run and not yes:
         if not typer.confirm("Start training?", default=True):
             console.print("[yellow]Cancelled.[/]")
@@ -1875,7 +1915,7 @@ def train(
     console.print(
         Panel(
             f"{_format_training_complete_loss(result)}\n"
-            f"Duration: [bold]{result['duration']}[/]\n"
+            f"Duration: [bold]{_format_duration_display(result)}[/]\n"
             f"Output: [bold]{result['output_dir']}[/]\n"
             f"Run ID: [bold]{run_id}[/]\n\n"
             f"Quick test:  [bold]soup chat --model {result['output_dir']}[/]\n"

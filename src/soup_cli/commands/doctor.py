@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import platform
 import re
 import sys
@@ -119,8 +120,10 @@ def doctor(
     # MLX (Apple Silicon) check
     _check_mlx()
 
+    issues: list[str] = []
+
     # Resources check
-    _check_resources(probe_disk=disk)
+    _check_resources(probe_disk=disk, issues=issues)
 
     # Dependencies table
     table = Table(title="Dependencies")
@@ -129,8 +132,6 @@ def doctor(
     table.add_column("Installed", justify="center")
     table.add_column("Min Version")
     table.add_column("Status")
-
-    issues: list[str] = []
     # Actionable install specs for the trailing "Fix all" line. Only entries
     # that are actually missing or out of range land here — never the full
     # required set, and never a bare per-package floor for an extra group.
@@ -916,13 +917,13 @@ def _get_ram_gb() -> str:
     return "Unknown"
 
 
-def _check_resources(probe_disk: bool = False):
+def _check_resources(probe_disk: bool = False, issues: list[str] | None = None):
     """Check RAM and Disk space and display info."""
     import shutil
 
     table = Table(title="System Resources")
     table.add_column("Resource", style="bold")
-    table.add_column("Value")
+    table.add_column("Value", overflow="fold")
 
     table.add_row("RAM", _get_ram_gb())
 
@@ -958,6 +959,53 @@ def _check_resources(probe_disk: bool = False):
             "hdd": "[red]HDD[/] — layer streaming refuses the disk tier (RAM only)",
         }.get(kind, "[yellow]Unknown[/] — layer streaming will refuse the disk tier")
         table.add_row("Disk type", verdict)
+
+    stripe_var = os.environ.get("SOUP_LAYER_STREAM_STRIPE_DIRS")
+    if stripe_var:
+        from soup_cli.utils.layer_shard import resolve_cache_root
+        from soup_cli.utils.stripe_roots import (
+            STRIPE_DIRS_ENV,
+            iter_early_stripe_roots,
+            parse_stripe_dirs,
+        )
+        from soup_cli.utils.terminal import for_terminal
+
+        stripe_entries = parse_stripe_dirs(stripe_var)
+        primary = resolve_cache_root()
+        has_refused = False
+
+        for entry, resolved, reason in iter_early_stripe_roots(primary, stripe_entries):
+            row_label = "Stripe root"
+            if reason is not None:
+                has_refused = True
+                row_val = f"{for_terminal(entry)} — [red]Refused[/]: {for_terminal(reason)}"
+            elif probe_disk:
+                from soup_cli.utils.layer_stream import detect_disk_kind
+
+                try:
+                    kind = detect_disk_kind(resolved)
+                except Exception:  # noqa: BLE001
+                    kind = "unknown"
+                if kind != "nvme":
+                    has_refused = True
+                    reason_disk = (
+                        "the disk tier streams from NVMe only, and this volume classifies "
+                        f"as {kind!r}. If the probe is wrong, "
+                        "training.stream_disk_kind overrides it."
+                    )
+                    refused_msg = for_terminal(reason_disk)
+                    row_val = f"{for_terminal(entry)} — [red]Refused[/]: {refused_msg}"
+                else:
+                    row_val = f"{for_terminal(entry)} — [green]NVMe[/]"
+            else:
+                row_val = f"{for_terminal(entry)} — [green]OK[/]"
+            table.add_row(row_label, row_val)
+
+        if has_refused and issues is not None:
+            issues.append(
+                f"{STRIPE_DIRS_ENV}: one or more stripe roots are refused "
+                "(see System Resources above)"
+            )
 
     console.print(table)
     console.print()
