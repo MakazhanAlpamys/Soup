@@ -1760,9 +1760,20 @@ def _folder_bytes(folder: str) -> int:
     return total
 
 
-def shard_cache_disk_bytes(shard_dir: str, index: ShardIndex) -> int:
-    """Bytes a reusable cache holds on disk: its primary folder plus every stripe folder."""
-    return sum(_folder_bytes(path) for path in stripe_dirs(shard_dir, index.stripe_roots))
+def shard_cache_disk_bytes(shard_dir: str, index: ShardIndex) -> Optional[int]:
+    """Bytes of the files a reusable cache is made of, or ``None`` if one cannot be measured.
+
+    Only what the cache check requires is counted: the index, the extras shard, each large
+    shard and each layer file wherever it is placed. A stray or stale file in the folder is
+    not part of the cache, and a file that cannot be read makes the caller keep its estimate.
+    """
+    paths = [os.path.join(shard_dir, _INDEX_NAME), extras_shard_path(shard_dir)]
+    paths.extend(large_shard_path(shard_dir, key) for key in index.large_keys)
+    paths.extend(layer_paths(shard_dir, index))
+    try:
+        return sum(os.path.getsize(path) for path in paths)
+    except (OSError, ValueError):
+        return None
 
 
 def _notify_orphaned_stripes(
