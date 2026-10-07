@@ -427,11 +427,12 @@ _TASK_AUTO_CLASS = {
     # trainer/asr.py loads the Whisper seq2seq class by name, not an auto-class.
     "asr": ("WhisperForConditionalGeneration",),
 }
-#: The trainers that read ``modality``: SFT (#1117 review) and, since #1393, DPO,
-#: which loads ``AutoModelForImageTextToText`` for ``vision`` the way SFT does.
-#: Every other trainer loads its one class whatever the config says, so a vision
-#: config for them is a causal LM here too.
-_MODALITY_TASKS = frozenset({"sft", "dpo"})
+#: The trainers that read ``modality``, and which values they read: SFT (#1117
+#: review) for vision and audio, and since #1393 DPO for vision only (its audio
+#: config still loads a causal LM, so answering by modality there would report a
+#: green verdict for a config the trainer cannot load). Every other trainer loads
+#: its one class whatever the config says.
+_MODALITY_TASKS = {"sft": frozenset({"vision", "audio"}), "dpo": frozenset({"vision"})}
 #: ONE class per path, with no fallback, because no trainer has one. My first
 #: version fell back from ``AutoModelForCausalLM`` to ``AutoModel``, so a config
 #: the causal-LM class refuses -- MiniMax-M3 with no ``modality``, which cannot load
@@ -455,11 +456,16 @@ def loader_for(cfg: Any) -> tuple[str, ...]:
     if task in _TASK_AUTO_CLASS:
         return _TASK_AUTO_CLASS[task]
     if task == "preference":
-        loss = getattr(getattr(cfg, "training", None), "preference_loss", None)
+        training = getattr(cfg, "training", None)
+        loss = getattr(training, "preference_loss", None)
+        weights = getattr(training, "preference_loss_weights", None)
+        if loss is None and weights:
+            loss = max(weights, key=weights.get)  # a blend runs its largest weight's wrapper
         task = loss if loss in _MODALITY_TASKS else task
-    if task not in _MODALITY_TASKS:
-        return _DEFAULT_AUTO_CLASS
-    return _MODALITY_AUTO_CLASS.get(getattr(cfg, "modality", "text"), _DEFAULT_AUTO_CLASS)
+    modality = getattr(cfg, "modality", "text")
+    if modality in _MODALITY_TASKS.get(task, ()):
+        return _MODALITY_AUTO_CLASS[modality]
+    return _DEFAULT_AUTO_CLASS
 
 
 def load_hf_config(base: str) -> Any:

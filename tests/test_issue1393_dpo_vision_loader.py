@@ -122,6 +122,20 @@ class TestTheLoaderMapFollowsTheTrainer:
         assert loader_for(_cfg()) == ("AutoModelForCausalLM",)
         assert loader_for(_cfg(modality="text")) == ("AutoModelForCausalLM",)
 
+    def test_only_vision_changes_the_dpo_class(self):
+        """DPO reads ``vision`` only; its audio config still loads a causal LM, so the
+        preflight must say so too (review of #1707)."""
+        assert loader_for(_cfg(modality="audio")) == ("AutoModelForCausalLM",)
+
+    def test_a_blend_follows_its_highest_weighted_loss(self):
+        """``preference_loss_weights`` builds the wrapper of the largest weight."""
+        dpo_led = _cfg(task="preference", modality="vision",
+                       preference_loss_weights="{dpo: 0.7, ipo: 0.3}")
+        ipo_led = _cfg(task="preference", modality="vision",
+                       preference_loss_weights="{dpo: 0.3, ipo: 0.7}")
+        assert loader_for(dpo_led) == ("AutoModelForImageTextToText",)
+        assert loader_for(ipo_led) == ("AutoModelForCausalLM",)
+
     def test_the_preference_alias_with_the_dpo_loss_follows_dpo(self):
         """``task: preference`` with ``preference_loss: dpo`` runs the DPO wrapper, so
         the preflight must answer for it the same way; the other losses keep their
@@ -152,6 +166,10 @@ class TestTheRealAttach:
 
     def test_the_same_config_without_modality_still_cannot_load(self):
         check = self._check(_cfg())
+        assert check.verdict is Verdict.CANNOT_ATTACH, check.detail
+
+    def test_a_dpo_audio_config_still_cannot_load(self):
+        check = self._check(_cfg(modality="audio"))
         assert check.verdict is Verdict.CANNOT_ATTACH, check.detail
 
 
@@ -259,6 +277,20 @@ class TestABackendWhoseDpoIgnoresModalityIsRefused:
         assert "task='preference'" in message and "backend='transformers'" in message
         alias = _cfg(task="preference", modality="vision", preference_loss="dpo")
         assert alias.backend == "transformers"
+
+    def test_a_blend_led_by_dpo_is_refused_the_same_way(self):
+        with pytest.raises(ValueError) as excinfo:
+            _cfg(task="preference", modality="vision", backend="unsloth",
+                 preference_loss_weights="{dpo: 0.7, ipo: 0.3}")
+        assert "backend='transformers'" in " ".join(str(excinfo.value).split())
+        led_by_ipo = _cfg(task="preference", modality="vision", backend="unsloth",
+                          preference_loss_weights="{dpo: 0.3, ipo: 0.7}")
+        assert led_by_ipo.backend == "unsloth"
+
+    def test_unsloth_audio_dpo_is_not_refused(self):
+        """The refusal is about vision; widening it to every non-text modality would
+        survive every other test here."""
+        assert _cfg(modality="audio", backend="unsloth").backend == "unsloth"
 
     def test_unsloth_text_dpo_and_transformers_vision_dpo_still_load(self):
         assert _cfg(backend="unsloth").backend == "unsloth"

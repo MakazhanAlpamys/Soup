@@ -6644,9 +6644,11 @@ class SoupConfig(BaseModel):
         vision-language checkpoint there would load as a plain causal LM or not
         at all. Refuse at config load with the backend that does read it. (MLX
         refuses ``task: dpo`` itself.)"""
-        runs_dpo = self.task == "dpo" or (
-            self.task == "preference" and self.training.preference_loss == "dpo"
-        )
+        loss = self.training.preference_loss
+        weights = self.training.preference_loss_weights
+        if loss is None and weights:
+            loss = max(weights, key=weights.get)  # a blend runs its largest weight's wrapper
+        runs_dpo = self.task == "dpo" or (self.task == "preference" and loss == "dpo")
         if runs_dpo and self.modality == "vision" and self.backend == "unsloth":
             raise ValueError(
                 f"task={self.task!r} with modality='vision' requires backend='transformers': "
