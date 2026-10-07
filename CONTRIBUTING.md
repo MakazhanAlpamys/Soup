@@ -379,8 +379,9 @@ released as a penalty.
 - **A quiet pull request.** A pull request waiting on its author for 14 days gets a ping
   in the thread. If another 7 days pass, we close it with a note that it can be reopened
   at any time.
-- **Full CI.** The full test matrix runs when a maintainer adds the `ci:full` label to a
+- **Full CI.** The required test cells run when a maintainer adds the `ci:full` label to a
   pull request that is ready to merge, not on every push; other pushes run a quick subset.
+  A draft pull request runs no CI at all until you mark it ready for review.
 
 ## Making Changes
 
@@ -546,14 +547,19 @@ GitHub Actions runs on every push and PR:
   required check and blocks nothing.
 
 **Pull requests run a quick subset first.** A push to a pull request runs `lint`
-and the tests on Ubuntu / Python 3.12 only. The full matrix (Windows and macOS
-as well as Ubuntu, Python 3.10 to 3.12 with 3.11 on Ubuntu only, plus the smoke
-jobs) runs when a maintainer adds the `ci:full` label at approval, and on every
-later push while the label stays. Until then the other `test (...)` checks show
-as *Expected* and the smoke jobs as *skipped*; neither is a failure on your side.
-A PR is merged only when the full matrix is green on its current head. After the
-merge, `main` runs the same quick set on every commit and the full matrix once a
-night (and on every push to a `release/**` branch).
+and the tests on Ubuntu / Python 3.12 only. The required cells (Ubuntu on Python
+3.10 and 3.12, Windows and macOS on 3.12, plus the smoke jobs) run when a
+maintainer adds the `ci:full` label at approval, and on every later push while
+the label stays. Until then the other `test (...)` checks show as *Expected* and
+the smoke jobs as *skipped*; neither is a failure on your side. A PR is merged
+only when those checks are green on its current head. After the merge, `main`
+runs the same quick set on every commit and the full matrix (every Python from
+3.10 to 3.12, with 3.11 on Ubuntu only) once a night; a push to a `release/**`
+branch runs every cell.
+
+**A draft pull request runs no CI.** Nothing starts while a pull request is a
+draft, whatever is pushed to it. Mark it ready for review and the quick set
+starts on its current head.
 
 See `.github/workflows/ci.yml`.
 

@@ -12,8 +12,9 @@ exists to catch. Widening the matrix and widening the bound must happen together
 
 The matrix is read from the `plan` job's `RELEASE_MATRIX` literal: the support
 matrix, every cell, which pushes to `release/**` run. The `test` job's own matrix
-is whatever `plan` outputs -- FULL (the same minus Windows and macOS on 3.11) or
-a single QUICK cell -- which is a run-time choice, not the support statement.
+is whatever `plan` outputs -- FULL (the same minus Windows and macOS on 3.11), the
+four APPROVAL cells or a single QUICK cell -- which is a run-time choice, not the
+support statement.
 """
 
 import json
