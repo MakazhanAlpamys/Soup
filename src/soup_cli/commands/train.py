@@ -1602,6 +1602,23 @@ def train(
                 "[dim] to soup.yaml for 2-5x faster training.[/]"
             )
 
+    # #1613: cheap stripe roots validation ahead of confirmation, --dry-run,
+    # dataset loading, and run creation.
+    from soup_cli.utils.stripe_roots import STRIPE_DIRS_ENV
+
+    if getattr(getattr(cfg, "training", None), "stream_layers", False) and os.environ.get(
+        STRIPE_DIRS_ENV
+    ):
+        from soup_cli.utils.errors import format_friendly_error
+        from soup_cli.utils.layer_shard import resolve_cache_root
+        from soup_cli.utils.stripe_roots import StripeRootError, validate_early_stripe_roots
+
+        try:
+            validate_early_stripe_roots(resolve_cache_root())
+        except StripeRootError as exc:
+            format_friendly_error(exc)
+            raise typer.Exit(1) from exc
+
     if not dry_run and not yes:
         if not typer.confirm("Start training?", default=True):
             console.print("[yellow]Cancelled.[/]")
