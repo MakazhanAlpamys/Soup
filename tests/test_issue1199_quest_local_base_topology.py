@@ -54,8 +54,16 @@ def hashed_paths(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     return reads
 
 
-def test_wrong_layer_count_is_refused_before_a_weight_is_read(tmp_path: Path, hashed_paths):
-    root = _base(tmp_path / "base", _config(layers=30))
+@pytest.mark.parametrize("layers", [16, 22, 30])
+def test_wrong_layer_count_is_refused_before_a_weight_is_read(
+    tmp_path: Path, hashed_paths, layers: int
+):
+    """Any other block count is refused, not only a larger one.
+
+    A smaller base is the likelier mistake, so ``layers > len(BLOCKS)`` must not
+    pass here: 16 and 22 would then hash a base that is refused later.
+    """
+    root = _base(tmp_path / "base", _config(layers=layers))
 
     with pytest.raises(ValueError, match="24 blocks"):
         resolve_base_model_identity(str(root))
@@ -123,11 +131,16 @@ def test_a_below_group_width_is_refused_before_a_weight_is_read(tmp_path: Path, 
 
 
 def test_nested_text_config_widths_are_gated(tmp_path: Path, hashed_paths):
-    """A multimodal config carries the text stack under ``text_config``."""
+    """A multimodal config carries the text stack under ``text_config``.
+
+    The top-level ``hidden_size`` is compatible on purpose: the nested stack
+    must win the merge, or the gate would read the wrong width.
+    """
     root = _base(
         tmp_path / "base",
         {
             "model_type": "qwen3_vl",
+            "hidden_size": 1024,
             "text_config": {"num_hidden_layers": 24, **COMPATIBLE_WIDTHS, "hidden_size": 896},
         },
     )
@@ -193,6 +206,10 @@ def test_a_sharded_compatible_base_is_still_fingerprinted(tmp_path: Path, hashed
         pytest.param(
             {"model_type": "llama", "num_hidden_layers": 24, "hidden_size": "1024"},
             id="string-width",
+        ),
+        pytest.param(
+            {"model_type": "llama", "num_hidden_layers": 24, "hidden_size": True},
+            id="bool-is-not-a-width",
         ),
     ],
 )
