@@ -297,10 +297,11 @@ class GRPOTrainerWrapper:
           #387; ``grpo_fp16`` was the only way to run GRPO there and nothing
           said so.
 
-        ``auto_mixed_precision`` is mutually exclusive with ``grpo_fp16``
-        (rejected at schema load via ``_validate_grpo_fp16_amp_exclusive``);
-        when only ``auto_mixed_precision`` is set, the v0.32.0 picker runs
-        elsewhere in the training loop and overrides this default.
+        ``auto_mixed_precision`` is refused on ``task='grpo'`` at schema
+        load (#1618 — this wrapper never reads the field, so it would train
+        at whatever precision these lines pick); ``grpo_fp16`` is the only
+        way to choose the dtype here, and the grpo_fp16 + auto_mixed_precision
+        combo is rejected by ``_validate_grpo_fp16_amp_exclusive``.
         """
         device_name = str(self.device).lower()
         if device_name.startswith("mps"):

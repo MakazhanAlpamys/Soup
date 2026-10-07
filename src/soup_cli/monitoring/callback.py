@@ -146,7 +146,7 @@ class _SoupTrainerCallback_body:  # noqa: N801
         spike_recovery_lr_decay: float = 0.5,
         grad_accum_auto_tune: bool = False,
         grad_accum_pressure_threshold: float = 0.9,
-        grad_accum_total_vram_gb: float = 24.0,
+        grad_accum_total_vram_gb: Optional[float] = None,
         grad_accum_current_steps: int = 1,
         grad_accum_current_batch: int = 1,
     ):
@@ -194,14 +194,13 @@ class _SoupTrainerCallback_body:  # noqa: N801
         self._grad_accum_current = max(1, int(grad_accum_current_steps))
         self._grad_accum_batch = max(1, int(grad_accum_current_batch))
         self._grad_accum_advised = False
-        if grad_accum_auto_tune:
-            from soup_cli.utils.grad_accum import GradAccumMonitor
-            self._grad_accum_monitor = GradAccumMonitor(
-                total_vram_gb=grad_accum_total_vram_gb,
-                threshold=grad_accum_pressure_threshold,
-            )
-        else:
-            self._grad_accum_monitor = None
+        self._grad_accum_threshold = grad_accum_pressure_threshold
+        #: None = measure the total memory of the CUDA device the run uses on
+        #: the first advisory call (#1620); an explicit value overrides that.
+        self._grad_accum_total_vram_gb = grad_accum_total_vram_gb
+        #: Built lazily on the first advisory call: construction must not
+        #: probe torch, and the card total is only known once CUDA is up.
+        self._grad_accum_monitor = None
         # Eval gate state (Part B of v0.26.0)
         self.eval_gate_config = eval_gate_config
         # Tests inject these; prod wiring sets them at on_train_begin time.
@@ -289,8 +288,9 @@ class _SoupTrainerCallback_body:  # noqa: N801
             import torch
 
             if torch.cuda.is_available():
-                used = torch.cuda.max_memory_allocated() / (1024**3)
-                total = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+                device = torch.cuda.current_device()
+                used = torch.cuda.max_memory_allocated(device) / (1024**3)
+                total = torch.cuda.get_device_properties(device).total_memory / (1024**3)
                 gpu_mem = f"{used:.1f}/{total:.1f} GB"
         except Exception:
             pass
@@ -435,12 +435,9 @@ class _SoupTrainerCallback_body:  # noqa: N801
             else:
                 self._watchdog_counter = 0
 
-        # v0.33.0 #59 — grad-accum advisory (one-shot per run)
-        if (
-            self._grad_accum_enabled
-            and not self._grad_accum_advised
-            and self._grad_accum_monitor is not None
-        ):
+        # v0.33.0 #59 — grad-accum advisory (one-shot per run). The monitor
+        # is built lazily inside the method on its first call (#1620).
+        if self._grad_accum_enabled and not self._grad_accum_advised:
             self._maybe_advise_grad_accum()
 
         # Log to experiment tracker
@@ -661,18 +658,38 @@ class _SoupTrainerCallback_body:  # noqa: N801
         Phase 1 is advisory-only. Phase 2 (live DataLoader rebuild) requires
         a small upstream TRL change tracked as a known limitation.
         """
-        if self._grad_accum_advised:
+        if self._grad_accum_advised or not self._grad_accum_enabled:
             return
         try:
             import torch
             if not torch.cuda.is_available():
                 return
-            used_gb = torch.cuda.max_memory_allocated() / (1024**3)
+            # The advisory must measure against the card the run actually
+            # uses (#1620): against the old fixed 24 GB total it could never
+            # fire on a smaller card and fired early on larger ones. The peak
+            # and the total are read from the same device.
+            device = torch.cuda.current_device()
+            used_gb = torch.cuda.max_memory_allocated(device) / (1024**3)
         except Exception:  # noqa: BLE001 — VRAM probe is best-effort
             return
 
         if self._grad_accum_monitor is None:
-            return
+            try:
+                if self._grad_accum_total_vram_gb is None:
+                    total_gb = (
+                        torch.cuda.get_device_properties(device).total_memory
+                        / (1024**3)
+                    )
+                else:
+                    total_gb = float(self._grad_accum_total_vram_gb)
+                from soup_cli.utils.grad_accum import GradAccumMonitor
+                self._grad_accum_monitor = GradAccumMonitor(
+                    total_vram_gb=total_gb,
+                    threshold=self._grad_accum_threshold,
+                )
+            except Exception:  # noqa: BLE001 — card probe is best-effort
+                return
+
         self._grad_accum_monitor.observe(used_gb)
         if not self._grad_accum_monitor.should_adjust(used_gb):
             return
@@ -682,11 +699,13 @@ class _SoupTrainerCallback_body:  # noqa: N801
         if new_accum == self._grad_accum_current:
             return
         self._grad_accum_advised = True
+        monitor_gb = self._grad_accum_monitor.total_vram_gb
         console.print(
-            f"[yellow]Grad-accum advisory:[/] VRAM pressure crossed "
-            f"threshold; recommend (batch_size, grad_accum_steps) "
-            f"({self._grad_accum_batch}, {self._grad_accum_current}) -> "
-            f"({new_batch}, {new_accum}). "
+            f"[yellow]Grad-accum advisory:[/] peak {used_gb:.1f} of "
+            f"{monitor_gb:.1f} GB ({used_gb / monitor_gb:.0%}) crossed "
+            f"the pressure threshold; recommend (batch_size, "
+            f"grad_accum_steps) ({self._grad_accum_batch}, "
+            f"{self._grad_accum_current}) -> ({new_batch}, {new_accum}). "
             f"Restart training with the new pair to take effect."
         )
 

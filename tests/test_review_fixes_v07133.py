@@ -263,17 +263,17 @@ class TestDryRunNoReexec:
 
         called = {"execvp": False}
 
-        def _fake_execvp(file, argv):
+        def _fake_run_launcher(argv):
             called["execvp"] = True
             raise SystemExit(99)
 
-        monkeypatch.setattr("os.execvp", _fake_execvp)
+        monkeypatch.setattr("soup_cli.utils.launcher.run_launcher", _fake_run_launcher)
 
         CliRunner().invoke(
             app, ["train", "--config", "soup.yaml", "--gpus", "2", "--dry-run"]
         )
         assert called["execvp"] is False, (
-            "os.execvp was called on a --dry-run multi-GPU invocation"
+            "the launcher was run on a --dry-run multi-GPU invocation"
         )
 
 
@@ -287,11 +287,11 @@ class TestReexecForwardsFlags:
 
         captured: dict = {}
 
-        def _fake_execvp(file, argv):
+        def _fake_run_launcher(argv):
             captured["argv"] = list(argv)
             raise SystemExit(99)
 
-        monkeypatch.setattr("os.execvp", _fake_execvp)
+        monkeypatch.setattr("soup_cli.utils.launcher.run_launcher", _fake_run_launcher)
 
         CliRunner().invoke(
             app,

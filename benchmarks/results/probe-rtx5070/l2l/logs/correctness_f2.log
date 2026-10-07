@@ -1,0 +1,17 @@
+[transformers] Model config: bos_token_id must be `None` or an integer within the vocabulary (between 0 and 32767), got 128000. This may result in unexpected behavior.
+[transformers] Model config: eos_token_id must be `None` or an integer within the vocabulary (between 0 and 32767), got 128001. This may result in unexpected behavior.
+[transformers] `torch_dtype` is deprecated! Use `dtype` instead!
+W1007 16:30:09.529000 25536 site-packages\torch\utils\flop_counter.py:113] triton not found; flop counting will not work for triton kernels
+RUN: L2L step-0 probe, mode correctness
+gpu             NVIDIA GeForce RTX 5070 Laptop GPU
+torch           2.14.0+cu130
+vram_total_gb   8.518
+soup_cli_file   C:\Users\user\projects\Soup-l2l\src\soup_cli\__init__.py
+driver          616.92
+pcie_gen        5
+pcie_width      8
+shard_dir       C:\Users\user\.soup\layer-stream\D___synth__llama-70b-shape-v32k-f4
+direct_io       True
+v3              {'free_gb': 15.41421056, 'commit_avail_gb': 26.362851328, 'need_gb': 1.34217728, 'margin_gb': 4.0, 'gpu_used_before_build_mib': 0, 'gpu_pids': [25536], 'foreign_gpu_pids': [], 'ram_ok': True, 'gpu_ok': True, 'ok': True}
+correctness F2 k=2: A-vs-A False, L2L False (max |d| 6.616e-03), losses True
+wrote         benchmarks/results/probe-rtx5070/l2l/correctness_f2.json

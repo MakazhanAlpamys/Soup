@@ -1236,14 +1236,16 @@ def train(
                 format_advice,
                 hint_argv_from_reexec,
                 is_in_distributed,
+                run_launcher,
             )
 
             num_processes = num_gpus * nodes
             if not is_in_distributed():
                 # v0.33.0 #37 — auto-reexec under accelerate launch unless
-                # --no-reexec was passed. Reexec uses os.execvp so the new
-                # accelerate process replaces this process; no leftover PID
-                # tree, stdio passes through unchanged.
+                # --no-reexec was passed. On POSIX the accelerate process
+                # replaces this one (os.execvp): no leftover PID tree, stdio
+                # passes through unchanged. Windows cannot do that, so there
+                # this process waits for the launcher (see run_launcher).
                 # #372 — one argv builder for both the re-exec and the printed
                 # hint, so they cannot drift. collect_reexec_passthrough is the
                 # only list of "flags the user typed" that survive a launch.
@@ -1333,15 +1335,19 @@ def train(
                         f"({num_processes} GPUs, {topo['interconnect']})[/]"
                     )
                     console.print(f"[dim]argv: {markup_escape(' '.join(argv))}[/]")
-                    # execvp replaces this process; the child carries --no-reexec.
+                    # The launcher takes over; the child carries --no-reexec. On
+                    # POSIX run_launcher execs and never returns. On Windows,
+                    # where exec would return 0 at once and leave the launcher
+                    # running, it waits and returns the launcher's exit code.
                     try:
-                        os.execvp(argv[0], argv)
+                        launcher_code = run_launcher(argv)
                     except OSError as exc:
                         console.print(
                             f"[red]accelerate launch failed:[/] {markup_escape(str(exc))}\n"
                             "Use [bold]--no-reexec[/] to print the launch command."
                         )
                         raise typer.Exit(1) from exc
+                    raise typer.Exit(launcher_code)
             elif not dry_run:
                 # Already a launched rank — announce + apply NCCL hints. (The
                 # dry_run branch above intentionally does neither.)
@@ -2028,8 +2034,9 @@ def _write_annex_xi(out_path: str, run_id: str, cfg, *, energy=None) -> None:
     )
 
     modality = getattr(cfg, "modality", "text") or "text"
-    energy_kwh = float(getattr(energy, "energy_kwh", 0.0)) if energy is not None else 0.0
-    co2_kg = float(getattr(energy, "co2_kg", 0.0)) if energy is not None else 0.0
+    # #1446: without --track-energy nothing was measured; say so instead of 0.000.
+    energy_kwh = float(getattr(energy, "energy_kwh", 0.0)) if energy is not None else None
+    co2_kg = float(getattr(energy, "co2_kg", 0.0)) if energy is not None else None
     raw_train = getattr(cfg.data, "train", "") or ""
     # #443 — pass the raw str|list through so top-domain extraction
     # aggregates across every interleaved dataset, instead of stringifying
@@ -2047,7 +2054,7 @@ def _write_annex_xi(out_path: str, run_id: str, cfg, *, energy=None) -> None:
         task=str(cfg.task),
         dataset_summary=train_display,
         modalities=(modality,),
-        train_compute_flops=0.0,
+        train_compute_flops=None,  # #1446: Soup does not measure FLOPs; never claim 0
         train_energy_kwh=energy_kwh,
         train_co2_kg=co2_kg,
         top_domains=top_domains,
