@@ -1320,7 +1320,7 @@ group_size: 32
 EOF
 soup export --model ./merged --format torchao --quant-config ./q.yaml --output ./out
 
-# AWQ/GPTQ export — an explicit local calibration set is required
+# AWQ/GPTQ export (deprecated, removed in the next release) — an explicit local calibration set is required
 soup export --model ./merged --format awq \
     --calibration-data ./calib.jsonl --output ./out-awq
 soup export --model ./merged --format gptq \
@@ -1340,6 +1340,8 @@ soup deploy autopilot --target rtx-4090-24gb \
 ```
 
 Autopilot also detects pre-quantized bases automatically — `TheBloke/Llama-2-7B-Chat-GPTQ` is recommended `gptq` instead of stacking 4-bit on top. Detection runs against the base-model name regex AND any local `config.json`'s `quantization_config.quant_method`. Out-of-cwd model paths are silently skipped (soft-probe semantics).
+
+AWQ and GPTQ export are deprecated and will be removed in the next release: both upstream projects (AutoAWQ and AutoGPTQ) are archived and neither extra can be installed next to `[train]`. Until then `soup export --format awq` and `--format gptq` work as before and start with a `Deprecated:` notice that names the formats to move to (`gguf`, `onnx`, `tensorrt`, `bitnet`, `tq1_0`).
 
 Direct AWQ and GPTQ exports require `--calibration-data`. Soup refuses a missing or unusable JSONL before importing the quantizer or loading the model. This keeps calibration inputs explicit and prevents AutoAWQ from silently downloading its large default dataset. Use `--calibration-samples` to cap the number of usable JSONL rows (default: 128).
 

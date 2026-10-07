@@ -46,8 +46,8 @@ soup export --model ./output --format gguf    Export to GGUF (Ollama)
 soup export --model ./output --deploy ollama  Export GGUF + auto-deploy to Ollama
 soup export --model ./output --format onnx    Export to ONNX
 soup export --model ./output --format tensorrt  Export to TensorRT-LLM
-soup export --model ./output --format awq --calibration-data cal.jsonl  Export to AWQ (4-bit)
-soup export --model ./output --format gptq --calibration-data cal.jsonl  Export to GPTQ (4-bit)
+soup export --model ./output --format awq --calibration-data cal.jsonl  Export to AWQ (4-bit; deprecated, removed in the next release)
+soup export --model ./output --format gptq --calibration-data cal.jsonl  Export to GPTQ (4-bit; deprecated, removed in the next release)
 soup deploy ollama --model m.gguf --name x    Deploy GGUF to Ollama
 soup deploy ollama --list                     List Soup-deployed models
 soup deploy ollama --remove <name>            Remove model from Ollama
