@@ -96,8 +96,13 @@ divided by the sum of the 10 CUDA-synchronized step times).
 - **Validity.** A RAM run that does not show 8,589,934,592 page-locked bytes in the
   in-order arm or 6,442,450,944 in the packed arm, or a control whose arms page-lock
   different amounts, is a harness fault and voids the series. A run whose staging is
-  not page-locked, or a control run that is not reading with direct I/O, is a failed
-  run.
+  not page-locked, a control run that is not reading with direct I/O, and a run with
+  no result after 15 minutes (it is stopped) are failed runs.
+- **Power** (added 2026-10-07, before any run of the series). A rehearsal of the driver
+  on Qwen2.5-1.5B found the laptop on battery: a step took 0.83 s there against 0.31 s
+  on AC. The driver does not start a series on battery power and stops one when the
+  box goes on battery; a series with any run stamped on battery, before or after, is
+  INCONCLUSIVE and counts as the one allowed repeat.
 - **The box.** Nothing else runs for the whole series: no test suite, no other GPU job.
   RAM in use, commit charge and AC power are stamped before and after every run.
 

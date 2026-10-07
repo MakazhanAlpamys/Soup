@@ -134,6 +134,20 @@ def arena_faults(
     return faults
 
 
+def runs_on_battery(rows: Sequence[Dict[str, Any]]) -> List[str]:
+    """Runs whose stamp before or after says the box was not on AC power.
+
+    Measured on this laptop: a Qwen2.5-1.5B step takes 0.31 s on AC and 0.83 s on battery.
+    A stamp that could not be read (None, or no stamp at all) accuses nobody.
+    """
+    stamps = ("box_before", "box_after")
+    return [
+        row["name"]
+        for row in rows
+        if any((row.get(key) or {}).get("on_ac_power") is False for key in stamps)
+    ]
+
+
 def decide(
     rows: Sequence[Dict[str, Any]],
     *,
@@ -157,6 +171,16 @@ def decide(
     faults = arena_faults(rows, expected)
     if faults:
         return {**out, "verdict": "VOID", "reason": "harness fault: " + "; ".join(faults)}
+    on_battery = runs_on_battery(rows)
+    if on_battery:
+        return {
+            **out,
+            "verdict": "INCONCLUSIVE",
+            "reason": (
+                f"{len(on_battery)} run(s) started or ended on battery power, first "
+                f"{on_battery[0]}: the GPU is power-limited there, so the box was not quiet"
+            ),
+        }
     subject_d = [value for value in subject.values() if value is not None]
     control_d = [value for value in control.values() if value is not None]
     for label, values in (("control", control_d), ("RAM tier", subject_d)):
@@ -509,15 +533,31 @@ def _spawn(args: argparse.Namespace, run: Dict[str, Any], *, strict: bool) -> Di
         command.append("--strict")
         environment["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
     before = box_stamp()
+    # A result left by an earlier run of the same name must never be read as this one's.
+    target.unlink(missing_ok=True)
+    code: Optional[int] = None
+    timed_out = False
     with open(target.with_suffix(".log"), "w", encoding="utf-8") as log:
-        code = subprocess.run(
-            command, stdout=log, stderr=subprocess.STDOUT, env=environment
-        ).returncode
+        try:
+            code = subprocess.run(
+                command,
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                env=environment,
+                timeout=args.run_timeout_s,
+            ).returncode
+        except subprocess.TimeoutExpired:
+            # subprocess.run has already killed the child; the run is a failed run.
+            timed_out = True
     try:
         row = json.loads(target.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
         row = {"status": "failed", "error": f"no result file: {exc!r}"}
-    if row.get("status") == "started":
+    if timed_out:
+        row.update(
+            status="failed", error=f"stopped after {args.run_timeout_s:.0f} s without a result"
+        )
+    elif row.get("status") == "started":
         row["status"] = "failed"
         row.setdefault("error", "the process ended without a result")
     row.update(run, returncode=code, box_before=before, box_after=box_stamp())
@@ -534,6 +574,12 @@ def run_series(args: argparse.Namespace) -> int:
     rows = []
     runs = schedule()
     for position, run in enumerate(runs, start=1):
+        if box_stamp().get("on_ac_power") is False:
+            # Power-limited steps are not the steps the plan measures: do not time them.
+            print(f"the box is on battery power before run {position}: the series stops here")
+            if not rows:
+                return 2
+            break
         row = _spawn(args, run, strict=False)
         rows.append(row)
         with open(journal, "a", encoding="utf-8") as handle:
@@ -630,6 +676,12 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--seq", type=int, default=512)
     parser.add_argument("--cap-bytes", type=int, default=ALLOCATOR_CAP_BYTES)
     parser.add_argument("--settle-s", type=float, default=5.0, help="pause between runs")
+    parser.add_argument(
+        "--run-timeout-s",
+        type=float,
+        default=900.0,
+        help="a run with no result after this long is stopped and counted as failed",
+    )
     parser.add_argument(
         "--expect-in-order-bytes",
         type=int,

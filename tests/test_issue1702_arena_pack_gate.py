@@ -191,6 +191,26 @@ class TestTheRule:
     def test_the_verdict_is_json(self):
         json.dumps(gate.decide(_rows((0.0,) * 5, QUIET)))
 
+    @pytest.mark.parametrize("stamp", ["box_before", "box_after"])
+    def test_one_run_on_battery_makes_the_series_inconclusive(self, stamp):
+        """Measured on this laptop: a step is 2.6x slower on battery (0.83 s against 0.31 s)."""
+        rows = _rows((-0.2,) * 5, QUIET)
+        for row in rows:
+            row["box_before"] = {"on_ac_power": True}
+            row["box_after"] = {"on_ac_power": True}
+        assert gate.decide(rows)["verdict"] == "SLOWER"
+        rows[7][stamp] = {"on_ac_power": False}
+        verdict = gate.decide(rows)
+        assert verdict["verdict"] == "INCONCLUSIVE"
+        assert "battery power, first seed03-disk-3-in-order" in verdict["reason"]
+
+    def test_a_stamp_that_could_not_be_read_accuses_nobody(self):
+        rows = _rows((-0.2,) * 5, QUIET)
+        rows[0]["box_before"] = {"on_ac_power": None}
+        rows[1]["box_before"] = {}
+        assert gate.runs_on_battery(rows) == []
+        assert gate.decide(rows)["verdict"] == "SLOWER"
+
 
 class TestTheStrictComparison:
     @staticmethod
@@ -277,6 +297,37 @@ class TestTheDriver:
         assert "never appended to" in capsys.readouterr().out
         assert (tmp_path / "series.jsonl").read_text(encoding="utf-8") == "{}\n"
 
+    def test_a_series_is_not_started_on_battery_power(self, tmp_path, capsys, monkeypatch):
+        def no_spawn(*_args, **_kwargs):
+            raise AssertionError("a run was timed on battery power")
+
+        monkeypatch.setattr(gate, "_spawn", no_spawn)
+        monkeypatch.setattr(gate, "box_stamp", lambda: {"on_ac_power": False})
+        args = gate.parse_args(["--mode", "series", "--weights", "x", "--out", str(tmp_path)])
+        assert gate.run_series(args) == 2
+        assert "the box is on battery power before run" in capsys.readouterr().out
+        assert not (tmp_path / "series.jsonl").exists()
+
+    def test_a_series_stops_when_the_box_goes_on_battery(self, tmp_path, capsys, monkeypatch):
+        power = iter([True, True, False])
+        monkeypatch.setattr(gate, "box_stamp", lambda: {"on_ac_power": next(power)})
+        def canned(_args, run, *, strict):
+            pinned = gate.EXPECTED_SUBJECT_PINNED[run["arm"]]
+            return dict(run, status="ok", tok_per_s=400.0, pinned_bytes=pinned)
+
+        monkeypatch.setattr(gate, "_spawn", canned)
+        args = gate.parse_args(
+            ["--mode", "series", "--weights", "x", "--out", str(tmp_path), "--settle-s", "0"]
+        )
+        assert gate.run_series(args) == 0
+        out = capsys.readouterr().out
+        assert "the series stops here" in out
+        assert "VERDICT   INCONCLUSIVE" in out
+        journal = (tmp_path / "series.jsonl").read_text(encoding="utf-8").splitlines()
+        assert [json.loads(line)["name"] for line in journal] == [
+            run["name"] for run in gate.schedule()[:2]
+        ]
+
     def test_the_verdict_mode_re_applies_the_rule_to_a_saved_series(self, tmp_path, capsys):
         rows = _rows((-0.05,) * 5, QUIET)
         (tmp_path / "series.jsonl").write_text(
@@ -340,3 +391,83 @@ class TestTheStrictDriver:
         assert summary["ram"]["exact"] is False
         assert summary["disk"]["exact"] is True
         assert "STRICT    ram: DIFFERENT" in capsys.readouterr().out
+
+
+class TestOneSpawnedRun:
+    """``_spawn`` with the child process replaced: what the driver makes of each ending."""
+
+    RUN = {"name": "seed03-ram-0-in-order", "seed": 3, "mode": "ram", "arm": "in-order"}
+
+    @staticmethod
+    def _args(tmp_path, *extra):
+        return gate.parse_args(
+            ["--mode", "series", "--weights", "w", "--out", str(tmp_path), *extra]
+        )
+
+    @staticmethod
+    def _child(monkeypatch, *, write=None, returncode=0, raises=None):
+        seen = {}
+
+        def fake_run(command, *, stdout, stderr, env, timeout):
+            seen.update(command=command, env=env, timeout=timeout)
+            if raises is not None:
+                raise raises
+            if write is not None:
+                target = Path(command[command.index("--out") + 1])
+                target.write_text(json.dumps(write), encoding="utf-8")
+            return subprocess.CompletedProcess(command, returncode)
+
+        monkeypatch.setattr(gate.subprocess, "run", fake_run)
+        return seen
+
+    def test_a_finished_run_keeps_its_result_and_gains_the_schedule_fields(
+        self, tmp_path, monkeypatch
+    ):
+        seen = self._child(monkeypatch, write={"status": "ok", "tok_per_s": 400.0})
+        row = gate._spawn(self._args(tmp_path), self.RUN, strict=False)
+        assert row["status"] == "ok" and row["tok_per_s"] == 400.0
+        assert (row["seed"], row["mode"], row["arm"]) == (3, "ram", "in-order")
+        assert row["returncode"] == 0
+        assert "unix" in row["box_before"] and "unix" in row["box_after"]
+        command = seen["command"]
+        assert command[command.index("--arm") + 1] == "in-order"
+        assert command[command.index("--tier") + 1] == "ram"
+        assert "--strict" not in command
+        assert seen["timeout"] == 900.0
+
+    def test_a_strict_run_is_three_steps_no_warm_up_and_deterministic_cublas(
+        self, tmp_path, monkeypatch
+    ):
+        seen = self._child(monkeypatch, write={"status": "ok"})
+        gate._spawn(self._args(tmp_path), self.RUN, strict=True)
+        command = seen["command"]
+        assert "--strict" in command
+        assert command[command.index("--warmup") + 1] == "0"
+        assert command[command.index("--steps") + 1] == "3"
+        assert seen["env"]["CUBLAS_WORKSPACE_CONFIG"] == ":4096:8"
+
+    def test_a_run_that_hangs_is_stopped_and_counted_as_failed(self, tmp_path, monkeypatch):
+        hang = subprocess.TimeoutExpired(cmd="trial", timeout=30)
+        self._child(monkeypatch, raises=hang)
+        row = gate._spawn(self._args(tmp_path, "--run-timeout-s", "30"), self.RUN, strict=False)
+        assert row["status"] == "failed"
+        assert row["error"] == "stopped after 30 s without a result"
+        assert row["returncode"] is None
+
+    def test_a_child_that_dies_mid_run_is_failed_not_started(self, tmp_path, monkeypatch):
+        self._child(monkeypatch, write={"status": "started"}, returncode=1)
+        row = gate._spawn(self._args(tmp_path), self.RUN, strict=False)
+        assert row["status"] == "failed"
+        assert row["error"] == "the process ended without a result"
+        assert row["returncode"] == 1
+
+    def test_an_earlier_result_of_the_same_name_is_never_read_as_this_run(
+        self, tmp_path, monkeypatch
+    ):
+        stale = tmp_path / "seed03-ram-0-in-order.json"
+        stale.write_text(json.dumps({"status": "ok", "tok_per_s": 999.0}), encoding="utf-8")
+        self._child(monkeypatch, returncode=1)  # the child writes nothing this time
+        row = gate._spawn(self._args(tmp_path), self.RUN, strict=False)
+        assert row["status"] == "failed"
+        assert "no result file" in row["error"]
+        assert "tok_per_s" not in row
