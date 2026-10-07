@@ -226,6 +226,16 @@ ERROR_MAP = [
             "if you trust the model source."
         ),
     ),
+    # Layer streaming stripe roots
+    (
+        "StripeRootError",
+        None,
+        (
+            "Fix or remove the invalid entry in SOUP_LAYER_STREAM_STRIPE_DIRS, "
+            "reconnect the drive, or unset the variable to train using the primary "
+            "cache root only."
+        ),
+    ),
 ]
 
 

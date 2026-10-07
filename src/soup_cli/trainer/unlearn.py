@@ -420,9 +420,13 @@ class UnlearnTrainerWrapper:
             else [loss for loss in (initial_loss, final_loss) if loss is not None]
         )
         loss_summary = summarize_training_loss([{"loss": loss} for loss in losses])
+        hours = int(duration // 3600)
+        minutes = int((duration % 3600) // 60)
+        duration_str = f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
         return {
             **loss_summary,
             "total_steps": step,
+            "duration": duration_str,
             "duration_secs": duration,
             "output_dir": output_dir,
         }
