@@ -478,12 +478,7 @@ def run_live_diagnose(
     # --- forgetting (base vs adapter F1 on holdout or built-in probe set, #1436) ---
     forgetting_pairs: List[Tuple[str, str]] = []
     if holdout_path:
-        raw_holdout = [
-            (_row_input(r), _row_output(r))
-            for r in holdout_rows
-            if isinstance(r, Mapping)
-        ]
-        forgetting_pairs = [(p, t) for p, t in raw_holdout if p and t]
+        forgetting_pairs = [p for p in map(_pair_for_row, holdout_rows) if p]
     else:
         forgetting_pairs = list(_DEFAULT_FORGETTING_PROBES)
 

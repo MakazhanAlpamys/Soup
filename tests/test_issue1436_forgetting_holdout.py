@@ -256,6 +256,34 @@ class TestForgettingProbeHoldout:
         assert {r["prompt"] for r in rows} <= set(asked)
         assert not builtin & set(asked)
 
+    def test_sharegpt_holdout_rows_are_read_like_training_rows(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        holdout = tmp_path / "holdout.jsonl"
+        rows = [
+            {
+                "conversations": [
+                    {"from": "human", "value": f"Held out {i}"},
+                    {"from": "gpt", "value": f"Ref {i}"},
+                ]
+            }
+            for i in range(5)
+        ]
+        _write_jsonl(holdout, rows)
+        asked: list = []
+
+        def adapter_gen(prompt):
+            asked.append(prompt)
+            return "x"
+
+        self._stub_pair(monkeypatch, adapter_gen)
+        report = live.run_live_diagnose(
+            run_id="r", base="b", adapter="a", holdout_path=str(holdout)
+        )
+        assert {f"Held out {i}" for i in range(5)} <= set(asked)
+        assert report.scores["forgetting"].verdict != "NOT_RUN"
+
     @pytest.mark.parametrize("content", [[], [{"foo": "bar"}]])
     def test_unusable_holdout_is_not_run_not_ok(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, content: list
