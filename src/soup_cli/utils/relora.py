@@ -60,6 +60,22 @@ class ReLoRAPolicy:
         return min(100, max(1, self.steps // 10))
 
 
+def _magnitude_keep_mask(tensor: Any, prune_ratio: float) -> Any:
+    import torch  # lazy
+
+    flat = tensor.detach().abs().reshape(-1)
+    if flat.numel() <= 1:
+        return torch.ones_like(tensor, dtype=torch.bool)
+    num_prune = max(1, int(flat.numel() * prune_ratio))
+    if num_prune >= flat.numel():
+        num_prune = flat.numel() - 1
+    num_keep = flat.numel() - num_prune
+    keep_idx = torch.argsort(flat, descending=True, stable=True)[:num_keep]
+    mask = torch.zeros_like(flat, dtype=torch.bool)
+    mask[keep_idx] = True
+    return mask.reshape(tensor.shape)
+
+
 def magnitude_prune_tensor(tensor: Any, prune_ratio: float) -> Any:
     """Zero the smallest-magnitude entries in place with an exact keep-count."""
     if not (0.0 < prune_ratio < 1.0):
@@ -71,32 +87,37 @@ def magnitude_prune_tensor(tensor: Any, prune_ratio: float) -> Any:
     if not isinstance(tensor, torch.Tensor):
         raise TypeError(f"magnitude_prune_tensor expects torch.Tensor, got {type(tensor)}")
 
-    flat = tensor.detach().abs().reshape(-1)
-    if flat.numel() <= 1:
-        return tensor
-    num_prune = max(1, int(flat.numel() * prune_ratio))
-    if num_prune >= flat.numel():
-        num_prune = flat.numel() - 1
-    num_keep = flat.numel() - num_prune
-    keep_idx = torch.argsort(flat, descending=True, stable=True)[:num_keep]
-    mask = torch.zeros_like(flat, dtype=torch.bool)
-    mask[keep_idx] = True
-    tensor.detach().mul_(mask.reshape(tensor.shape).to(tensor.dtype))
+    tensor.detach().mul_(_magnitude_keep_mask(tensor, prune_ratio).to(tensor.dtype))
     return tensor
 
 
 def _prune_optimizer_moments(
     optimizer: Any, lora_params: list[Any], prune_ratio: float
 ) -> None:
-    """Prune shape-matched tensor moments, retaining scalar optimizer metadata."""
+    """Prune floating-point moments with one shared, deterministic keep-set."""
+    import torch  # lazy
+
     for param in lora_params:
         state = optimizer.state.get(param)
         if not state:
             continue
-        for value in state.values():
-            if not hasattr(value, "shape") or value.shape != param.shape:
-                continue
-            magnitude_prune_tensor(value, prune_ratio)
+        matching_values = [
+            value
+            for value in state.values()
+            if isinstance(value, torch.Tensor) and value.shape == param.shape
+        ]
+        if not matching_values:
+            continue
+        if any(not value.is_floating_point() for value in matching_values):
+            state.clear()
+            continue
+
+        score = state.get("exp_avg_sq")
+        if not isinstance(score, torch.Tensor) or score.shape != param.shape:
+            score = matching_values[0]
+        keep_mask = _magnitude_keep_mask(score, prune_ratio)
+        for value in matching_values:
+            value.detach().mul_(keep_mask.to(value.dtype))
 
 
 def _is_sharded_or_quantized_tensor(tensor: Any) -> bool:
