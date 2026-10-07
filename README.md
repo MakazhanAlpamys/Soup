@@ -60,11 +60,14 @@ soup train
 
 **Fine-tune an 8B model on a 4 GB laptop GPU.** Layer streaming keeps the frozen base out of
 VRAM and feeds it to the GPU one decoder layer at a time. Measured on an RTX 3050 Laptop 4 GB:
-Llama-3.1-8B-Instruct + NF4 at **119.6 tok/s, 3.32 GB peak** — bit-exact against a normal
-resident run, and reproduced independently on an H100 at 113.00 tok/s in the same 3.32 GB.
-(Both figures were measured on v0.72.2, before the v0.73.0 correctness repair that cost
-−4.8% at 32B; neither has been re-run on a 4 GB card since — re-measurement pending in
-issue [#361](https://github.com/MakazhanAlpamys/Soup/issues/361).) Opt-in (`stream_layers: true`)
+Llama-3.1-8B-Instruct + NF4 at **119.6 tok/s at 952 MHz, 3.32 GB peak** (pre-repair) — bit-exact
+against a normal resident run, and reproduced independently on an H100 at 113.00 tok/s in the same
+3.32 GB. (Both figures were measured on v0.72.2, before the v0.73.0 correctness repair that cost
+−4.8% at 32B. The post-repair run, on another RTX 3050 Laptop 4 GB (@umran666, #1103), reads
+**208.6 tok/s at 1935–1957 MHz in a 2.40 GB peak**. That is 59% of its same-session GEMM ceiling
+against 68%: about 14% slower per unit clock, so the raw 1.74x gain is the clock, not a speedup.
+Large-layer streaming also changed the memory pattern between the two rows, so even the fraction
+is not like-for-like — [the record](benchmarks/gate-v0.72.2-nf4.md).) Opt-in (`stream_layers: true`)
 and still BETA —
 [how it works](docs/performance-and-quantization.md#layer-streaming-beta-v0720-nf4-v0722-disk--wider-archs-v0723-preference-losses-v0724) ·
 [all measurements](benchmarks/) · [paper](https://doi.org/10.5281/zenodo.21771064) ·
@@ -72,8 +75,8 @@ and still BETA —
 4 GB, then asserts a streamed model is bit-identical to a normal one)
 
 <p align="center">
-  <a href="https://youtu.be/T1LCErE943E"><img src="docs/assets/layer-streaming.gif" alt="soup train pre-flight for Llama-3.1-8B on a 4 GB card: a 3.60 GB base store pinned in RAM across 32 layers and two 113 MB VRAM buffers, then a measured peak of 3.32 GB at 119.6 tok/s, stopping short of the 4 GB line (measured on v0.72.2, before the #331 repair; re-measurement pending in issue #361)"></a><br>
-  <sub>Llama-3.1-8B-Instruct + NF4, LoRA, batch 1, seq 512 on an RTX 3050 Laptop 4 GB — <b>3.32 GB peak, 119.6 tok/s</b> (measured on v0.72.2, before the #331 repair; re-measurement pending in issue #361). <a href="https://youtu.be/T1LCErE943E">Full video (90s)</a></sub>
+  <a href="https://youtu.be/T1LCErE943E"><img src="docs/assets/layer-streaming.gif" alt="soup train pre-flight for Llama-3.1-8B on a 4 GB card: a 3.60 GB base store pinned in RAM across 32 layers and two 113 MB VRAM buffers, then a measured peak of 3.32 GB at 119.6 tok/s, stopping short of the 4 GB line (pre-repair row, measured on v0.72.2 at 952 MHz; the post-#331 row is in the caption below)"></a><br>
+  <sub>Llama-3.1-8B-Instruct + NF4, LoRA, batch 1, seq 512 on an RTX 3050 Laptop 4 GB — <b>3.32 GB peak, 119.6 tok/s</b> at 952 MHz (pre-repair, v0.72.2; post-#331: 208.6 tok/s at 1935 MHz in 2.40 GB, not directly comparable, @umran666, #1103). <a href="https://youtu.be/T1LCErE943E">Full video (90s)</a></sub>
 </p>
 
 ## Why Soup?
@@ -439,8 +442,12 @@ published**, which is also the shortest way to describe what the paper is for:
   the replication survives in a weaker form — the constraint is common to both machines and is
   not the GPU's compute.
 - **Replication on hardware nothing like the original** (added in v2): 119.6 tok/s on the RTX
-  3050 against a median 113.00 on an H100, at the same 3.32 GB peak. Both pre-date the #331
-  repair; the 4 GB re-measurement is pending in issue #361.
+  3050 (at 952 MHz) against a median 113.00 on an H100, at the same 3.32 GB peak. Both pre-date
+  the #331 repair and are the figures the paper reports. The post-#331 row (@umran666, #1103) is
+  208.6 tok/s at 1935–1957 MHz in a 2.40 GB peak, 59% against 68% of the same-session GEMM
+  ceiling: the raw 1.74x gain is the clock, not a speedup, and the memory pattern changed between
+  the rows, so even the fraction is not like-for-like
+  ([the record](benchmarks/gate-v0.72.2-nf4.md)).
 - **A silent wrong-gradient defect, found and repaired.** On NF4 above ~165 MiB per layer the
   forward stayed bit-exact and the loss curve looked healthy while the gradients were wrong. The
   cause is named in the upstream library and reported there; the repair is gated against controls
