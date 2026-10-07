@@ -353,7 +353,7 @@ training:
 | `hqq:Nbit` | 1, 2, 3, 4, 5, 6, 8 | Wide bit range; compose with LoRA. | hqq |
 | `aqlm` | 2 | Extreme compression. | aqlm |
 | `eetq` | 8 | Fast 8-bit kernel for SM75+. | eetq |
-| `mxfp4` | 4 | Newer 4-bit type with better activation distribution. | bitsandbytes ≥ 0.45 |
+| `mxfp4` | 4 (stored) | Train LoRA on top of an MXFP4 pre-quantized checkpoint (for example GPT-OSS). Loaded with `Mxfp4Config(dequantize=True)`, so it trains in bf16: transformers does not train MXFP4 weights as loaded. Budget memory for the bf16 model, about 2 bytes per parameter (roughly 42 GB for a 20B base); the `soup train` pre-flight does not check `mxfp4` runs. | — |
 | `fp8` | — | Train fp16/bf16 on top of FP8-released checkpoints. | transformers ≥ 4.45 |
 
 **Compatibility matrix.** `soup train` runs `check_quant_distributed_compat()` at
@@ -505,6 +505,8 @@ Quantising the streamed base to NF4 makes the RAM store ~4× smaller. That matte
 The base is quantised **once, offline**, one tensor at a time, and cached. The shard cache is keyed to the quantisation, the dtype, the quantisation device and a fingerprint of the source checkpoint, so switching `none` ⇄ `4bit` — or retraining a base in place — re-shards rather than silently streaming the wrong bytes.
 
 Correctness is not a tradeoff here either: a streamed NF4 run is **bit-exact** against a *resident* NF4 run (the same quantised bytes through the same bitsandbytes kernels), and that is a regression test, not a one-off measurement.
+
+**Scope of that comparison.** The resident control is a plain NF4 model *without* PEFT's `prepare_model_for_kbit_training`. The default resident 4-bit/8-bit SFT path calls it (`trainer/sft.py`), and it casts every non-quantised parameter to float32 — `embed_tokens`, the norms and an untied `lm_head` (checked on `trl-internal-testing/tiny-Qwen2ForCausalLM-2.5`: all bfloat16 before, all float32 after). Streaming keeps those tensors in the store dtype (bf16 on Ampere and newer, fp16 before), so a default resident run and a streamed run start from a different numerical setup even with identical quantised blocks. One contributor-reported case (`Qwen/Qwen3-8B` at `b968826d`, RTX 4070 SUPER, bitsandbytes 0.50.2, transformers 5.17.0, peft 0.21.1, torch 2.14.0+cu126; not part of the benchmark record), with an NF4 Qwen3-8B, one 73-token text and a forward pass at step 0: the resident control without the upcast equals streaming bit for bit, while the default resident path differs (max |Δlogit| 0.52, mean 0.054). It is one forward on one text: it says nothing about backward, resume or the whole training trajectory, and the LoRA `A` initialisation also differs by construction (streaming materialises the adapters from a seeded CPU generator, `materialize_meta_adapters`; the resident path uses PEFT's own initialisation from the global RNG).
 
 **Measured numbers (RTX 3050 Laptop 4 GB, Windows 11, LoRA, batch 1, 50 steps after 10 warmup):**
 
@@ -701,7 +703,7 @@ output: ./output
 **Performance notes:**
 - 1.43× slower than resident training, measured at 0.5B (the only size on the reference box where a resident baseline genuinely fits in 4 GB and is therefore a fair comparison).
 - The 1.5B runs sit at ~97% GPU utilisation, i.e. compute-bound: with a page-locked store the layer loads hide almost completely behind compute. The 3B run's 79.3% is **not** a model-size effect — it is the cost of the pageable-store fallback on that particular box.
-- Correctness is not a tradeoff: streamed and resident forward passes were verified **bit-exact**, and a 100-step streamed loss curve matched resident exactly. Streaming substitutes the same weight bytes into the same kernels.
+- Correctness is not a tradeoff: streamed and resident forward passes were verified **bit-exact**, and a 100-step streamed loss curve matched resident exactly. Streaming substitutes the same weight bytes into the same kernels. (The resident control is the plain NF4 one described in the scope note under *Correctness* above.)
 
 > **v0.72.0 adapters are unloadable — re-run them on v0.72.1.** In v0.72.0 a streamed run saved every adapter tensor under a key carrying an extra `.inner.` segment, so `soup merge`, `soup serve`, `soup chat` and `PeftModel.from_pretrained` loaded **zero** tensors and silently returned the untuned base (PEFT emitted only a `UserWarning`). The training itself was correct — only the saved file was affected. Check with:
 >
@@ -772,7 +774,7 @@ byte-identical between the SFT and DPO arms.
 the same way DPO does, so it gets the same treatment. ORPO and SimPO genuinely are
 reference-free. All four are verified **bit-exact** against a resident run of the same
 loss on a tied checkpoint; on an untied one, that check covers `dpo`
-(`tests/test_issue1049_untied_streamed_preference.py`).
+(`tests/test_issue1049_untied_streamed_preference.py`). Same resident-control scope as the note under *Correctness* above.
 
 **The cost is time, not memory.** DPO runs the layer stack three times per step (policy
 forward, reference forward, checkpoint recompute) against SFT's two — measured **1.52×**
@@ -859,6 +861,19 @@ copy. The layer shards remain under `~/.soup/layer-stream/`. Their index records
 filename, size, and `mtime_ns`, so a necessary re-shard says which component changed instead
 of silently spending minutes rebuilding the cache.
 
+`base:` may also be a local path to a Hugging Face cache snapshot
+(`.../models--org--name/snapshots/<commit>`). Soup copies it to regular files and reuses that
+copy while the commit and blob ids match. When the path is the folder the Hub id `org/name`
+resolves to in the active Hugging Face cache (`HF_HUB_CACHE` / `HF_HOME`; a cache that was
+moved and linked is the same folder), the copy lives in the Spectrum cache slot of that Hub
+id, `weights/org__name`, so the two ways of naming the model share one copy. A snapshot
+folder anywhere else gets a slot of its own, `weights/<folder name>@<digest of its resolved
+location>`: a copy taken from one folder is never used for another folder or for the Hub id,
+and such a folder costs one more copy on disk. A directory whose `.safetensors` files are symlinks but which is not such a
+snapshot (including a regular directory that also holds an alias symlink to a shard) is
+refused with a message naming the accepted layouts: pass the Hub id, the snapshot directory,
+or a directory of regular files.
+
 This materialisation also works with `HF_HUB_OFFLINE=1` when the standard Hugging Face
 snapshot is complete. Soup pins the commit resolved by the initial cache lookup and copies
 only verified snapshot files from that commit's blob store; it does not perform a second Hub
@@ -866,6 +881,14 @@ metadata request for the regular-file directory. A missing blob or an escaping s
 before the destination is published, rather than leaving a partial checkpoint that the sharder
 could consume. With huggingface_hub 1.32 or later, links into its marked cache-wide store
 (`<cache>/blobs`) are followed too, and any other target is still refused.
+The repo's own `blobs` directory is treated like that store: it has to be a real directory.
+When it is itself a link (a symlink, or a junction on Windows), Soup stops with a message
+naming it instead of following it, so a link in the cache that points outside the cache is
+never followed. To keep a model's files on another disk, move the whole cache or the whole
+repo folder and link that: the snapshot path is resolved first. A junction inside a snapshot
+directory is refused like a directory symlink. A copy made earlier is reused only while the
+snapshot still passes these checks: when its layout changes into a refused one afterwards,
+the next run stops with the same message and leaves the copy in place.
 
 
 ## Correctness First (v0.36.0)
@@ -1280,7 +1303,7 @@ Cross-validator ordering picks the most actionable error: `quantization_aware='f
 
 ## Advanced Save Formats (v0.53.0)
 
-`soup merge --save-format 4bit` and `--save-format 4bit_forced` will write a single BNB-4bit-quantized merged checkpoint without the wasteful dequant → merge → requant cycle (unsloth `merged_4bit` recipe). v0.53.0 ships the closed allowlist + spec metadata; the live writer lands in v0.53.1.
+`soup merge --save-format 4bit` and `--save-format 4bit_forced` will write a single BNB-4bit-quantized merged checkpoint without the wasteful dequant → merge → requant cycle (unsloth `merged_4bit` recipe). `4bit_forced` quantizes all linear layers including `lm_head`; models with tied embeddings (`tie_word_embeddings: true`) cannot hold a 4-bit `lm_head` sharing weights with embeddings and are explicitly refused by name with `ValueError`. v0.53.0 ships the closed allowlist + spec metadata; the live writer lands in v0.53.1.
 
 `soup export --format torchao --quant-config <yaml>` is the planned PTQ export surface for `torchao.quantize_` + `save_pretrained`. Four schemes are allowlisted: `Int4WeightOnly`, `Int8DynActInt4`, `Float8DynActFloat8`, `NVFP4`. CASE-SENSITIVE — these are Soup's scheme names, mapped to the torchao class that implements each one in `utils/torchao_compat.py` (three of the four names Soup used to look up by `hasattr` do not exist in torchao; #826). `Int4WeightOnly` accepts `group_size`; `inner_k_tiles` was removed, because `Int4WeightOnlyConfig` raises `TypeError` for it. Diverges from `--save-format` (lowercase-normalised) on purpose; documented at both validators.
 

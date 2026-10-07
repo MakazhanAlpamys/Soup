@@ -17,6 +17,8 @@ from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
 
+from soup_cli.utils.terminal import for_terminal
+
 
 def register(app: typer.Typer, console: Console) -> None:
     """Attach v0.61.0 subcommands to ``app``."""
@@ -63,7 +65,7 @@ def register(app: typer.Typer, console: Console) -> None:
         try:
             bench = validate_benchmark_name(benchmark)
         except (TypeError, ValueError) as exc:
-            console.print(f"[red]Invalid benchmark:[/] {escape(str(exc))}")
+            console.print(f"[red]Invalid benchmark:[/] {for_terminal(exc)}")
             raise typer.Exit(2) from exc
 
         evidence_data = None
@@ -75,11 +77,11 @@ def register(app: typer.Typer, console: Console) -> None:
                 # FIRST so we can label the message specifically (review
                 # MEDIUM M10 — was unreachable after the broader except).
                 console.print(
-                    f"[red]Evidence file is not valid JSON:[/] {escape(str(exc))}"
+                    f"[red]Evidence file is not valid JSON:[/] {for_terminal(exc)}"
                 )
                 raise typer.Exit(2) from exc
             except (FileNotFoundError, ValueError, TypeError, OSError) as exc:
-                console.print(f"[red]Cannot read evidence:[/] {escape(str(exc))}")
+                console.print(f"[red]Cannot read evidence:[/] {for_terminal(exc)}")
                 raise typer.Exit(2) from exc
 
         try:
@@ -89,11 +91,11 @@ def register(app: typer.Typer, console: Console) -> None:
                 evidence=evidence_data,
             )
         except (TypeError, ValueError) as exc:
-            console.print(f"[red]Eval failed:[/] {escape(str(exc))}")
+            console.print(f"[red]Eval failed:[/] {for_terminal(exc)}")
             raise typer.Exit(2) from exc
 
         # Render the table.
-        table = Table(title=f"Unlearn eval — {escape(bench)} — {escape(run_id)}")
+        table = Table(title=f"Unlearn eval — {escape(bench)} — {for_terminal(run_id)}")
         table.add_column("metric", style="bold")
         table.add_column("score", justify="right")
         table.add_column("verdict")
@@ -108,7 +110,7 @@ def register(app: typer.Typer, console: Console) -> None:
                 escape(m.name),
                 f"{m.score:.3f}",
                 f"[{colour}]{escape(m.verdict)}[/]",
-                escape(m.evidence),
+                for_terminal(m.evidence),
             )
         console.print(table)
         overall_colour = {
@@ -125,9 +127,9 @@ def register(app: typer.Typer, console: Console) -> None:
             try:
                 write_unlearn_report(report, output)
             except (TypeError, ValueError, OSError) as exc:
-                console.print(f"[red]Cannot write report:[/] {escape(str(exc))}")
+                console.print(f"[red]Cannot write report:[/] {for_terminal(exc)}")
                 raise typer.Exit(2) from exc
-            console.print(f"Wrote report -> {escape(output)}")
+            console.print(f"Wrote report -> {for_terminal(output)}")
 
         # Optional registry attach.
         if attach_to_registry is not None:
@@ -144,11 +146,11 @@ def register(app: typer.Typer, console: Console) -> None:
                         kind="eval_results",
                     )
                     console.print(
-                        f"Attached eval_results -> registry {escape(attach_to_registry)}"
+                        f"Attached eval_results -> registry {for_terminal(attach_to_registry)}"
                     )
                 except Exception as exc:  # noqa: BLE001
                     console.print(
-                        f"[yellow]Registry attach failed:[/] {escape(str(exc))}"
+                        f"[yellow]Registry attach failed:[/] {for_terminal(exc)}"
                     )
 
         # Exit code: 0 on OK / MINOR; 2 on MAJOR (matches v0.56.0 diagnose

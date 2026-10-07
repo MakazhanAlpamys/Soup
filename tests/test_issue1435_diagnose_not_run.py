@@ -24,7 +24,7 @@ from soup_cli.utils.diagnose.report import (
 )
 from tests.conftest import strip_ansi
 
-DATASET_MODES = ("forgetting", "format", "mode_collapse", "memorization")
+DATASET_MODES = ("format", "mode_collapse", "memorization")
 
 RECOGNISED = [
     {"prompt": f"Write story number {i}.", "completion": f"Once upon a time {i}."}
@@ -268,11 +268,11 @@ class TestCli:
         svg = (tmp_path / "b.svg").read_text(encoding="utf-8")
         assert "NOT_RUN" in svg  # the overall pill
         assert "#8b949e" in svg
-        # The four dataset probes show "not run", never a stored 0.00 placeholder.
-        assert svg.count("not run") == 4
+        # The three dataset probes show "not run", never a stored 0.00 placeholder.
+        assert svg.count("not run") == 3
         assert "0.00" not in svg
-        # Only refusal, contamination and citation are OK (green); the pill is grey.
-        assert svg.count("#3fb950") == 3
+        # Refusal, forgetting, contamination and citation are OK (green); the pill is grey.
+        assert svg.count("#3fb950") == 4
 
     def test_bad_tokenizer_exits_3_before_model_load(self, tmp_path, monkeypatch):
         with mock.patch(
@@ -425,12 +425,12 @@ class TestReviewFollowUps:
             tmp_path, monkeypatch, UNRECOGNISED, _gens(), "--allow-not-run"
         )
         assert result.exit_code == 0
-        modes = ("forgetting", "format", "mode_collapse", "memorization")
+        modes = ("format", "mode_collapse", "memorization")
         rows = [
             line for line in out.splitlines()
             if "NOT_RUN" in line and any(mode in line for mode in modes)
         ]
-        assert len(rows) == 4  # one table row per NOT_RUN probe, not the overall panel
+        assert len(rows) == 3  # one table row per NOT_RUN probe, not the overall panel
         for line in rows:
             assert "\u2014" in line
             assert "0.000" not in line

@@ -149,6 +149,7 @@ class PreferenceTrainerWrapper:
         from rich.console import Console as _Console
 
         from soup_cli.utils.preference_combine import (
+            REF_FREE_LOSSES,
             describe_blend,
             validate_weight_compat,
         )
@@ -179,7 +180,13 @@ class PreferenceTrainerWrapper:
             raise ValueError(f"unknown primary preference loss: {primary!r}")
         _Console().print(
             f"[cyan]Multi-objective preference loss:[/] {describe_blend(weights)} "
-            f"(primary: {primary})"
+            f"(primary: {primary}"
+            + (
+                "; simpo/orpo are preference terms only, without the NLL term"
+                if set(weights) <= REF_FREE_LOSSES
+                else ""
+            )
+            + ")"
         )
         self._active_weights = dict(weights)
         return PrimaryWrapper(inner_cfg, **kwargs)
@@ -213,7 +220,19 @@ class PreferenceTrainerWrapper:
                 inner_trainer = getattr(self._inner, "trainer", None)
                 if inner_trainer is not None:
                     try:
-                        attach_weighted_preference_combine(inner_trainer, weights)
+                        # #1425: capture the policy log-probs the primary
+                        # trainer already computes (CPO / ORPO), then wrap
+                        # compute_loss over them. A dpo/ipo primary has no
+                        # such hook, and its blend still refuses.
+                        from soup_cli.utils.preference_combine import (
+                            attach_policy_logp_capture,
+                            blend_loss_params,
+                        )
+
+                        attach_policy_logp_capture(inner_trainer)
+                        attach_weighted_preference_combine(
+                            inner_trainer, weights, blend_loss_params(self.config)
+                        )
                     except (TypeError, ValueError) as exc:
                         # Schema validates weights at config load; runtime
                         # rejection should be loud — but fall through to the

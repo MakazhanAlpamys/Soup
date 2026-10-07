@@ -49,6 +49,12 @@ WHITESPACE_RUNS = {
     ),
     "comma-dollar-spaces": lambda k: "The answer is 42, $" + " " * k + "x",
     "comma-math-delimiter-spaces": lambda k: "The answer is 42, \\(" + " " * k + "x",
+    "because-spaces": lambda k: "The answer is 42 because" + " " * k + "x",
+    "since-spaces": lambda k: "The answer is 42 since" + " " * k + "x",
+    "because-tokens": lambda k: "The answer is 42 " + "because " * k + "x",
+    "since-tokens": lambda k: "The answer is 42 " + "since " * k + "x",
+    "paren-because-tokens": lambda k: "The answer is 42 (" + "because " * k + "x",
+    "glued-because": lambda k: "The answer is 42 " + "x-because " * k + "x",
 }
 
 _SCALE_N = 1_000
@@ -107,6 +113,8 @@ ENDED_CLAUSES = [
     "The answer is 41, \\(x\\) is 42.",
     "The answer is 41, -x is 42.",
     "The answer is 41, . 42",
+    "The answer is 41 because 6*7=42.",
+    "The answer is 41 since 6*7=42.",
 ]
 
 

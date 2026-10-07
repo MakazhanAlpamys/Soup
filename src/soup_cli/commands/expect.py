@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import os
-from typing import List, Mapping
+from typing import List, Mapping, Optional
 
 import typer
 from rich.console import Console
@@ -17,7 +17,7 @@ from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 
-from soup_cli.utils.exit_codes import EXIT_GATE_FAILED, EXIT_USAGE_ERROR
+from soup_cli.utils.exit_codes import EXIT_GATE_FAILED, EXIT_RUNTIME_ERROR, EXIT_USAGE_ERROR
 
 console = Console()
 
@@ -79,12 +79,22 @@ def _load_jsonl_rows(data_path: str) -> List[Mapping[str, object]]:
 def expect_cmd(
     data: str = typer.Argument(..., help="Path to JSONL dataset"),
     suite: str = typer.Argument(..., help="Path to expectations suite YAML"),
+    judge: Optional[str] = typer.Option(
+        None,
+        "--judge",
+        help="Judge model URL (e.g. ollama://llama3.1, https://api.openai.com/gpt-4o-mini)",
+    ),
 ) -> None:
     """Run an expectations suite against a JSONL dataset.
 
-    Exit 0 = suite passed. Exit 2 = gate failed. Exit 3 = usage/input error.
+    Exit 0 = suite passed. Exit 1 = judge unreachable.
+    Exit 2 = gate failed. Exit 3 = usage/input error.
     """
-    from soup_cli.utils.expectations import load_suite_yaml, run_suite
+    from soup_cli.utils.expectations import (
+        build_pairwise_judge_fn,
+        load_suite_yaml,
+        run_suite,
+    )
 
     try:
         spec = load_suite_yaml(suite)
@@ -98,11 +108,34 @@ def expect_cmd(
         console.print(f"[red]{escape(str(exc))}[/]")
         raise typer.Exit(EXIT_USAGE_ERROR) from exc
 
+    cli_judge_fn = None
+    if judge is not None:
+        try:
+            cli_judge_fn = build_pairwise_judge_fn(judge)
+        except (ValueError, TypeError) as exc:
+            console.print(f"[red]{escape(str(exc))}[/]")
+            raise typer.Exit(EXIT_USAGE_ERROR) from exc
+        if not any(
+            e.name == "expect_chosen_preferred_over_rejected_by_judge"
+            for e in spec.expectations
+        ):
+            console.print(
+                "[yellow]note: --judge was specified, but the suite contains "
+                "no judge expectation[/]"
+            )
+
     try:
-        report = run_suite(rows, spec)
+        report = run_suite(rows, spec, judge_fn=cli_judge_fn)
     except (TypeError, ValueError) as exc:
         console.print(f"[red]{escape(str(exc))}[/]")
         raise typer.Exit(EXIT_USAGE_ERROR) from exc
+    except Exception as exc:
+        from soup_cli.eval.judge import JudgeUnavailableError
+
+        if isinstance(exc, JudgeUnavailableError):
+            console.print(f"[red]{escape(str(exc))}[/]")
+            raise typer.Exit(EXIT_RUNTIME_ERROR) from exc
+        raise
 
     table = Table(title=f"soup expect — {escape(data)}")
     table.add_column("Expectation")
@@ -118,6 +151,11 @@ def expect_cmd(
             str(result.num_violations),
         )
     console.print(table)
+
+    for result in report.results:
+        if result.passed and result.details:
+            for d in result.details:
+                console.print(f"[yellow]{escape(d)}[/]")
 
     if not report.passed:
         for result in report.results:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import logging
 import os
 import re
 from pathlib import Path
@@ -28,6 +29,7 @@ if TYPE_CHECKING:  # pragma: no cover - type hints only, no runtime import
     from soup_cli.config.schema import SoupConfig
     from soup_cli.utils.energy import EnergyMeasurement
 
+logger = logging.getLogger(__name__)
 console = Console()
 
 # Optimizers the analytical hardware-fit predictor understands (mirror of
@@ -85,6 +87,61 @@ def _format_training_complete_loss(result: dict) -> str:
     ):
         return f"Loss: [bold]{result['final_loss']:.4f}[/]{label}"
     return f"Loss: [bold]{result['initial_loss']:.4f} -> {result['final_loss']:.4f}[/]{label}"
+
+
+def _run_auto_eval_after_training(eval_config, output_dir: str, run_id: str) -> None:
+    """Run configured evaluation once after the trained model is saved."""
+    if not eval_config or not getattr(eval_config, "auto_eval", False):
+        return
+    if not output_dir or not _should_run_diagnose_gate_on_rank():
+        return
+
+    console.print("\n[bold blue]Running auto-eval...[/]")
+
+    benchmarks = getattr(eval_config, "benchmarks", None) or []
+    custom_tasks = getattr(eval_config, "custom_tasks", None)
+
+    if benchmarks:
+        try:
+            from soup_cli.commands.eval import benchmark
+
+            benchmark(
+                model=output_dir,
+                benchmarks=",".join(benchmarks),
+                num_fewshot=None,
+                batch_size=8,
+                run_id=run_id,
+                device=None,
+                trust_remote_code=False,
+            )
+        except typer.Exit:
+            logger.debug("Auto-eval benchmark skipped", exc_info=True)
+            console.print(
+                "[yellow]Auto-eval benchmark skipped (see the message above)[/]"
+            )
+        except Exception as exc:
+            logger.exception("Auto-eval benchmark failed")
+            console.print(
+                f"[yellow]Auto-eval benchmark failed: {markup_escape(str(exc))}[/]"
+            )
+
+    if custom_tasks:
+        try:
+            from soup_cli.commands.eval import custom
+
+            custom(
+                tasks=custom_tasks,
+                model=output_dir,
+                run_id=run_id,
+                attach_to_registry=None,
+                output=None,
+                trust_remote_code=False,
+            )
+        except Exception as exc:
+            logger.exception("Auto-eval custom failed")
+            console.print(
+                f"[yellow]Auto-eval custom failed: {markup_escape(str(exc))}[/]"
+            )
 
 
 def _train_sample_count(dcfg, dataset) -> int:
@@ -1775,6 +1832,12 @@ def train(
             duration_secs=result["duration_secs"],
             output_dir=result["output_dir"],
         )
+
+        _run_auto_eval_after_training(
+            cfg.eval,
+            result["output_dir"],
+            run_id,
+        )
     except Exception as exc:
         tracker.fail_run(run_id, error=_describe_exception_for_tracker(exc))
         # v0.34.0 Part D — write a .crash bundle next to the run for triage.
@@ -1826,17 +1889,9 @@ def train(
 
     # --- v0.56.0 --diagnose-gate: post-training failure-mode check ---
     if diagnose_gate and _should_run_diagnose_gate_on_rank():
-        try:
-            _run_diagnose_gate(
-                diagnose_gate, run_id, cfg.base, result["output_dir"]
-            )
-        except typer.Exit:
-            raise
-        except (OSError, ValueError) as exc:
-            console.print(
-                f"[red]--diagnose-gate failed:[/] {type(exc).__name__}: {exc}"
-            )
-            raise typer.Exit(1) from exc
+        _run_diagnose_gate_or_exit(
+            diagnose_gate, run_id, cfg.base, result["output_dir"]
+        )
 
     # --- v0.71.3 #180 --track-energy: print the measured energy/CO2 -------
     energy_measurement = (
@@ -2148,6 +2203,7 @@ def _run_diagnose_gate(
     from soup_cli.utils.diagnose.report import FAILURE_MODES, FailureScore
     from soup_cli.utils.diagnose.runner import build_report
     from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
+    from soup_cli.utils.terminal import for_terminal
 
     enforce_under_cwd_and_no_symlink(evidence_path, "--diagnose-gate evidence")
     # 16 MiB cap on evidence JSON (security review HIGH — symmetric with
@@ -2196,7 +2252,7 @@ def _run_diagnose_gate(
         for mode in FAILURE_MODES:
             sc = report.scores[mode]
             if sc.verdict == "MAJOR":
-                console.print(f"  [red]MAJOR[/] {mode}: {markup_escape(sc.evidence)}")
+                console.print(f"  [red]MAJOR[/] {mode}: {for_terminal(sc.evidence)}")
         raise typer.Exit(2)
     if report.overall == "NOT_RUN":
         # An unmeasured mode is not a pass (#1435); same exit as `soup diagnose`.
@@ -2207,12 +2263,29 @@ def _run_diagnose_gate(
         for mode in FAILURE_MODES:
             sc = report.scores[mode]
             if sc.verdict == "NOT_RUN":
-                console.print(f"  [yellow]NOT_RUN[/] {mode}: {markup_escape(sc.evidence)}")
+                console.print(f"  [yellow]NOT_RUN[/] {mode}: {for_terminal(sc.evidence)}")
         raise typer.Exit(EXIT_USAGE_ERROR)
     console.print(
         f"[green]--diagnose-gate: {report.overall}[/] across "
         f"{len(FAILURE_MODES)} modes."
     )
+
+
+def _run_diagnose_gate_or_exit(
+    evidence_path: str, run_id: str, base: str, adapter: str
+) -> None:
+    """Run the gate; an unreadable or refused evidence file is reported and exits 1."""
+    from soup_cli.utils.terminal import for_terminal
+
+    try:
+        _run_diagnose_gate(evidence_path, run_id, base, adapter)
+    except typer.Exit:
+        raise
+    except (OSError, ValueError) as exc:
+        console.print(
+            f"[red]--diagnose-gate failed:[/] {type(exc).__name__}: {for_terminal(exc)}"
+        )
+        raise typer.Exit(1) from exc
 
 
 def _resolve_deepspeed(deepspeed: str) -> str:

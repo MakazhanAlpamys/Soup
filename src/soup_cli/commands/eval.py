@@ -500,6 +500,7 @@ def judge(
 ):
     """Evaluate model outputs using LLM-as-a-judge."""
     from soup_cli.eval.judge import (
+        JudgeDownError,
         JudgeEvaluator,
         JudgeUnavailableError,
         load_rubric,
@@ -577,6 +578,7 @@ def judge(
 
     judge_scores = []
     skipped_count = 0
+    down = None
     progress = Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
@@ -594,12 +596,28 @@ def judge(
                     category=item.get("category", "default"),
                 )
                 judge_scores.append(score)
+            except JudgeDownError as exc:
+                # #1522: it has stopped answering, so the rest would fail alike.
+                down = exc.for_rows(len(items) - len(judge_scores), len(items), "items")
+                break
             except (ValueError, OSError, KeyError, JudgeUnavailableError) as exc:
                 skipped_count += 1
                 console.print(
                     f"[yellow]Warning: judge failed for prompt: {for_terminal(exc)}[/]"
                 )
             progress.advance(task_bar)
+
+    if down is not None:
+        console.print(f"[red]Judging stopped: {for_terminal(down)}[/]")
+        if judge_scores:
+            # Not saved to the tracker: a mean over the rows before the outage
+            # is not this benchmark's score.
+            results = JudgeResults(scores=judge_scores)
+            results.compute()
+            _display_judge_results(results)
+        else:
+            console.print("[red]All items failed. Check judge configuration.[/]")
+        raise typer.Exit(1)
 
     if skipped_count > 0:
         console.print(
