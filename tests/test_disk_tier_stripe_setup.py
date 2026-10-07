@@ -226,3 +226,38 @@ class TestTheSetupPathUsesTheRoots:
         _captured, said, _second_drive = _drive_setup(tmp_path, monkeypatch, striped=True)
         assert "(reusable)" in said
         assert "layer-shard stripe 1" not in said  # no write is planned for a cache we keep
+
+
+def _spy_preflight(monkeypatch):
+    """Record what the pre-flight is asked to print, then run the real thing."""
+    seen = []
+    real = stream_setup._render_stream_disk_preflight
+
+    def spy(**kwargs):
+        seen.append(kwargs)
+        return real(**kwargs)
+
+    monkeypatch.setattr(stream_setup, "_render_stream_disk_preflight", spy)
+    return seen
+
+
+def _cache_files_bytes(tmp_path):
+    """Every file of the cache(s) on disk, primary folder and stripe folders alike."""
+    total = 0
+    for top in (tmp_path / "cache", tmp_path / "second-drive"):
+        for folder, _dirs, names in os.walk(top):
+            total += sum(os.path.getsize(os.path.join(folder, name)) for name in names)
+    return total
+
+
+class TestAReusableCacheIsReportedAtItsRealSize:
+    @pytest.mark.parametrize("striped", [False, True])
+    def test_reusable_cache_reports_its_files_not_the_estimate(
+        self, tmp_path, monkeypatch, striped
+    ):
+        _drive_setup(tmp_path, monkeypatch, striped=striped)  # builds the cache
+        seen = _spy_preflight(monkeypatch)
+        _captured, said, _second_drive = _drive_setup(tmp_path, monkeypatch, striped=striped)
+        assert "(reusable)" in said
+        assert seen[-1]["shard_write_bytes"] == 0
+        assert seen[-1]["shard_bytes"] == _cache_files_bytes(tmp_path)

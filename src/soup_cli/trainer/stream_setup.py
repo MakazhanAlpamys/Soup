@@ -598,6 +598,7 @@ class StreamingSetupMixin:
             inspect_shard_cache,
             layer_paths,
             resolve_shard_dir,
+            shard_cache_disk_bytes,
             shard_checkpoint,
             source_weight_bytes,
             stripe_dirs,
@@ -718,6 +719,8 @@ class StreamingSetupMixin:
                     "qwen4_ple" if arch == "qwen4_exp" else "",
                     stripe_roots=stripe_roots,
                 )
+            if cached is not None:
+                shard_estimate = shard_cache_disk_bytes(shard_dir, cached)
             write_total = 0 if cached is not None else shard_estimate
             shares = _stripe_write_shares(write_total, 1 + len(stripe_roots))
             dirs = stripe_dirs(shard_dir, stripe_roots)

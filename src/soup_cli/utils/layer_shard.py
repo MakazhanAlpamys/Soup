@@ -1760,6 +1760,11 @@ def _folder_bytes(folder: str) -> int:
     return total
 
 
+def shard_cache_disk_bytes(shard_dir: str, index: ShardIndex) -> int:
+    """Bytes a reusable cache holds on disk: its primary folder plus every stripe folder."""
+    return sum(_folder_bytes(path) for path in stripe_dirs(shard_dir, index.stripe_roots))
+
+
 def _notify_orphaned_stripes(
     out_dir: str, keep: Sequence[str], notify: Callable[[str], None]
 ) -> None:
