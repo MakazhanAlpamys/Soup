@@ -7,6 +7,10 @@ has to be a real directory: when it is a link (a symlink, or a junction on Windo
 refused by name, wherever it points. A junction inside a snapshot is refused like a
 directory symlink, because ``os.walk`` descends into one.
 
+A copy made earlier is reused only while its snapshot would still be copied: when the
+layout changes into one of the refused ones after the first copy, the next run is refused
+the same way and the copy is left as it is.
+
 A test that needs no symlink builds its snapshot from regular files and a hand-made copy
 plan, so it also runs on a Windows account that cannot create symlinks. The junction check
 is also tested with a supplied answer, so that it is covered on every OS.
@@ -386,3 +390,304 @@ def test_junction_check_reads_the_mount_point_tag(monkeypatch, reparse_tag, expe
     monkeypatch.setattr(spectrum_scan, "os", SimpleNamespace(lstat=lambda _path: info))
 
     assert spectrum_scan._is_junction("snapshots/extra") is expected
+
+
+# --- the same rule for a local path to a snapshot (#1511) ---------------------------
+#
+# A local snapshot path is copied only when its weights are symlinks, so these need one.
+
+
+@pytest.mark.requires_symlink
+@pytest.mark.parametrize("where", LINK_TARGETS)
+def test_local_snapshot_path_with_a_linked_blob_store_is_refused(
+    tmp_path, monkeypatch, where
+) -> None:
+    from soup_cli.utils.spectrum_scan import resolve_model_weights
+
+    repo = _repo(tmp_path)
+    target = _link_target(tmp_path, repo, where)
+    _link_blob_store(repo, target)
+    (target / "notes.json").write_text(OUTSIDE, encoding="utf-8")
+    snapshot = _link_snapshot(repo, config="notes.json")
+    monkeypatch.setenv("SOUP_SPECTRUM_CACHE_DIR", str(tmp_path / "soup-cache"))
+
+    with pytest.raises(ValueError, match=IS_A_LINK) as refusal:
+        resolve_model_weights(str(snapshot))
+
+    _assert_refused_as_a_link(refusal, repo, tmp_path)
+
+
+@pytest.mark.requires_symlink
+def test_local_snapshot_in_a_plain_folder_cannot_reach_that_folder(tmp_path, monkeypatch) -> None:
+    """No repo folder at all: ``snapshots`` sits in a folder that holds other files."""
+    from soup_cli.utils.spectrum_scan import resolve_model_weights
+
+    folder = tmp_path / "downloads"
+    (folder / "snapshots" / COMMIT).mkdir(parents=True)
+    (folder / WEIGHT_BLOB).write_bytes(WEIGHTS)
+    (folder / "notes.json").write_text(OUTSIDE, encoding="utf-8")
+    (folder / "blobs").symlink_to(folder, target_is_directory=True)
+    snapshot = _link_snapshot(folder, config="notes.json")
+    monkeypatch.setenv("SOUP_SPECTRUM_CACHE_DIR", str(tmp_path / "soup-cache"))
+
+    with pytest.raises(ValueError, match=IS_A_LINK) as refusal:
+        resolve_model_weights(str(snapshot))
+
+    _assert_refused_as_a_link(refusal, folder, tmp_path)
+
+
+@needs_junction
+@pytest.mark.requires_symlink
+def test_local_snapshot_path_with_a_junction_inside_is_refused(tmp_path, monkeypatch) -> None:
+    import _winapi
+
+    from soup_cli.utils.spectrum_scan import resolve_model_weights
+
+    snapshot = _link_snapshot(_repo(tmp_path))
+    _winapi.CreateJunction(str(_outside_directory(tmp_path)), str(snapshot / "extra"))
+    monkeypatch.setenv("SOUP_SPECTRUM_CACHE_DIR", str(tmp_path / "soup-cache"))
+
+    with pytest.raises(ValueError, match="directory junction is not allowed: 'extra'"):
+        resolve_model_weights(str(snapshot))
+
+    assert not _weights_root(tmp_path).exists()
+
+
+# --- a copy made earlier is reused only while its snapshot would still be copied ----
+#
+# The reuse answer compares link names and sizes, so these need a snapshot of symlinks.
+
+
+def _copy_once(monkeypatch, tmp_path: Path, snapshot: Path) -> Path:
+    """Copy a snapshot whose layout is accepted and return the copy's directory."""
+    from soup_cli.utils.spectrum_scan import materialize_model_weights
+
+    resolved = Path(materialize_model_weights(_plan(monkeypatch, tmp_path, snapshot)))
+    _assert_copied(resolved)
+    return resolved
+
+
+def _record_copies(monkeypatch) -> list[str]:
+    """Every file the copy step writes from now on."""
+    from soup_cli.utils import spectrum_scan
+
+    copied: list[str] = []
+    copy_file = spectrum_scan._copy_regular_file
+
+    def _recording(source: str, destination: str) -> None:
+        copied.append(os.path.basename(destination))
+        copy_file(source, destination)
+
+    monkeypatch.setattr(spectrum_scan, "_copy_regular_file", _recording)
+    return copied
+
+
+def _refusal_of_the_second_call(monkeypatch, resolved: Path, error, match: str, model="org/model"):
+    """Plan and copy again: the copy is planned afresh, refused, and the old one is kept."""
+    from soup_cli.utils.spectrum_scan import materialize_model_weights, plan_model_weights
+
+    stamp = (resolved / "model.safetensors").stat().st_mtime_ns
+    copied = _record_copies(monkeypatch)
+    plan = plan_model_weights(model)
+    assert plan.materialize_bytes == len(WEIGHTS), "the earlier copy was planned for reuse"
+
+    with pytest.raises(error, match=match) as refusal:
+        materialize_model_weights(plan)
+
+    assert copied == []
+    _assert_copied(resolved)
+    assert (resolved / "model.safetensors").stat().st_mtime_ns == stamp
+    return refusal
+
+
+@pytest.mark.requires_symlink
+@pytest.mark.parametrize("layout", ["repo-blob-store", "shared-blob-store", "real-subdirectory"])
+def test_copy_of_an_unchanged_snapshot_is_reused_without_copying(
+    tmp_path, monkeypatch, layout
+) -> None:
+    from soup_cli.utils.spectrum_scan import materialize_model_weights
+
+    repo = _repo(tmp_path)
+    if layout == "shared-blob-store":
+        _use_shared_store(repo, repo.parent / "blobs")
+        (repo / "blobs" / WEIGHT_BLOB).symlink_to(
+            Path("../../blobs") / XET_HASH[:2] / XET_HASH
+        )
+    snapshot = _link_snapshot(repo)
+    if layout == "real-subdirectory":
+        (snapshot / "onnx").mkdir()
+        (snapshot / "onnx" / "config.json").write_text(CONFIG, encoding="utf-8")
+    resolved = _copy_once(monkeypatch, tmp_path, snapshot)
+    stamp = (resolved / "model.safetensors").stat().st_mtime_ns
+    copied = _record_copies(monkeypatch)
+
+    plan = _plan(monkeypatch, tmp_path, snapshot)
+
+    assert plan.materialize_bytes == 0
+    assert plan.materialized_copy_bytes == len(WEIGHTS)
+    assert Path(materialize_model_weights(plan)) == resolved
+    assert copied == []
+    assert (resolved / "model.safetensors").stat().st_mtime_ns == stamp
+
+
+@pytest.mark.requires_symlink
+def test_copy_is_replaced_when_a_weight_links_to_another_blob(tmp_path, monkeypatch) -> None:
+    """Same size, another blob name: the name is what the reuse answer compares."""
+    from soup_cli.utils.spectrum_scan import materialize_model_weights
+
+    repo = _repo(tmp_path)
+    snapshot = _link_snapshot(repo)
+    resolved = _copy_once(monkeypatch, tmp_path, snapshot)
+    other = WEIGHTS[::-1]
+    (repo / "blobs" / ("f" * 64)).write_bytes(other)
+    (snapshot / "model.safetensors").unlink()
+    (snapshot / "model.safetensors").symlink_to(Path("../../blobs") / ("f" * 64))
+    copied = _record_copies(monkeypatch)
+
+    plan = _plan(monkeypatch, tmp_path, snapshot)
+
+    assert plan.materialize_bytes == len(other)
+    assert Path(materialize_model_weights(plan)) == resolved
+    assert sorted(copied) == ["config.json", "model.safetensors"]
+    assert (resolved / "model.safetensors").read_bytes() == other
+
+
+@pytest.mark.requires_symlink
+@pytest.mark.parametrize("where", LINK_TARGETS)
+def test_copy_is_not_reused_once_the_blob_store_is_a_symlink(tmp_path, monkeypatch, where) -> None:
+    repo = _repo(tmp_path)
+    resolved = _copy_once(monkeypatch, tmp_path, _link_snapshot(repo))
+    _link_blob_store(repo, _link_target(tmp_path, repo, where))
+
+    refusal = _refusal_of_the_second_call(monkeypatch, resolved, ValueError, IS_A_LINK)
+
+    assert repr(_blob_store_link(repo)) in str(refusal.value)
+
+
+@needs_junction
+@pytest.mark.requires_symlink
+@pytest.mark.parametrize("where", LINK_TARGETS)
+def test_copy_is_not_reused_once_the_blob_store_is_a_junction(tmp_path, monkeypatch, where) -> None:
+    repo = _repo(tmp_path)
+    resolved = _copy_once(monkeypatch, tmp_path, _link_snapshot(repo))
+    _link_blob_store(repo, _link_target(tmp_path, repo, where), junction=True)
+
+    refusal = _refusal_of_the_second_call(monkeypatch, resolved, ValueError, IS_A_LINK)
+
+    assert repr(_blob_store_link(repo)) in str(refusal.value)
+
+
+@pytest.mark.requires_symlink
+def test_copy_is_not_reused_once_the_blob_store_is_reported_as_a_junction(
+    tmp_path, monkeypatch
+) -> None:
+    """The junction half of the reuse answer on every OS: a supplied answer."""
+    from soup_cli.utils import spectrum_scan
+
+    repo = _repo(tmp_path)
+    resolved = _copy_once(monkeypatch, tmp_path, _link_snapshot(repo))
+    monkeypatch.setattr(
+        spectrum_scan, "_is_junction", lambda path: os.path.basename(path) == "blobs"
+    )
+
+    refusal = _refusal_of_the_second_call(monkeypatch, resolved, ValueError, IS_A_LINK)
+
+    assert repr(_blob_store_link(repo)) in str(refusal.value)
+
+
+@pytest.mark.requires_symlink
+def test_copy_is_not_reused_once_the_snapshot_holds_a_directory_symlink(
+    tmp_path, monkeypatch
+) -> None:
+    snapshot = _link_snapshot(_repo(tmp_path))
+    resolved = _copy_once(monkeypatch, tmp_path, snapshot)
+    (snapshot / "extra").symlink_to(_outside_directory(tmp_path), target_is_directory=True)
+
+    _refusal_of_the_second_call(
+        monkeypatch, resolved, ValueError, "directory symlink is not allowed: 'extra'"
+    )
+
+
+@needs_junction
+@pytest.mark.requires_symlink
+def test_copy_is_not_reused_once_the_snapshot_holds_a_junction(tmp_path, monkeypatch) -> None:
+    import _winapi
+
+    snapshot = _link_snapshot(_repo(tmp_path))
+    resolved = _copy_once(monkeypatch, tmp_path, snapshot)
+    _winapi.CreateJunction(str(_outside_directory(tmp_path)), str(snapshot / "extra"))
+
+    _refusal_of_the_second_call(
+        monkeypatch, resolved, ValueError, "directory junction is not allowed: 'extra'"
+    )
+
+
+@pytest.mark.requires_symlink
+def test_copy_is_not_reused_once_a_snapshot_directory_is_reported_as_a_junction(
+    tmp_path, monkeypatch
+) -> None:
+    """The snapshot walk's half of the reuse answer on every OS: a supplied answer."""
+    from soup_cli.utils import spectrum_scan
+
+    snapshot = _link_snapshot(_repo(tmp_path))
+    resolved = _copy_once(monkeypatch, tmp_path, snapshot)
+    (snapshot / "extra").mkdir()
+    monkeypatch.setattr(
+        spectrum_scan, "_is_junction", lambda path: os.path.basename(path) == "extra"
+    )
+
+    _refusal_of_the_second_call(
+        monkeypatch, resolved, ValueError, "directory junction is not allowed: 'extra'"
+    )
+
+
+@pytest.mark.requires_symlink
+def test_copy_is_not_reused_once_a_weight_links_outside_the_blob_store(
+    tmp_path, monkeypatch
+) -> None:
+    """Same link name and size as the recorded blob, kept in another directory."""
+    repo = _repo(tmp_path)
+    snapshot = _link_snapshot(repo)
+    resolved = _copy_once(monkeypatch, tmp_path, snapshot)
+    (repo / "elsewhere").mkdir()
+    (repo / "elsewhere" / WEIGHT_BLOB).write_bytes(WEIGHTS[::-1])
+    (snapshot / "model.safetensors").unlink()
+    (snapshot / "model.safetensors").symlink_to(Path("../../elsewhere") / WEIGHT_BLOB)
+
+    _refusal_of_the_second_call(
+        monkeypatch, resolved, ValueError, "points outside the Hugging Face blob store"
+    )
+
+
+@pytest.mark.requires_symlink
+def test_copy_is_not_reused_once_a_snapshot_file_has_no_blob(tmp_path, monkeypatch) -> None:
+    """A layout the copy step reports as incomplete is planned afresh, not refused early."""
+    repo = _repo(tmp_path)
+    resolved = _copy_once(monkeypatch, tmp_path, _link_snapshot(repo))
+    (repo / "blobs" / CONFIG_BLOB).unlink()
+
+    _refusal_of_the_second_call(
+        monkeypatch, resolved, FileNotFoundError, "'config.json' is missing its blob"
+    )
+
+
+@pytest.mark.requires_symlink
+@pytest.mark.parametrize("change", ["blob-store-symlink", "directory-symlink-in-the-snapshot"])
+def test_local_snapshot_path_copy_is_not_reused_once_a_link_appears(
+    tmp_path, monkeypatch, change
+) -> None:
+    from soup_cli.utils.spectrum_scan import resolve_model_weights
+
+    repo = _repo(tmp_path)
+    snapshot = _link_snapshot(repo)
+    monkeypatch.setenv("SOUP_SPECTRUM_CACHE_DIR", str(tmp_path / "soup-cache"))
+    resolved = Path(resolve_model_weights(str(snapshot)))
+    _assert_copied(resolved)
+    if change == "blob-store-symlink":
+        _link_blob_store(repo, _link_target(tmp_path, repo, "outside-the-cache"))
+        match = IS_A_LINK
+    else:
+        (snapshot / "extra").symlink_to(_outside_directory(tmp_path), target_is_directory=True)
+        match = "directory symlink is not allowed: 'extra'"
+
+    _refusal_of_the_second_call(monkeypatch, resolved, ValueError, match, model=str(snapshot))

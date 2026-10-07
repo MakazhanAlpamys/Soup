@@ -508,6 +508,17 @@ class PPOTrainerWrapper:
             self._dataset_in_constructor = True
             self.trainer = ppo_trainer_cls(**trainer_kwargs)
 
+        # #1675 - trl.experimental's PPOTrainer subclasses transformers.Trainer
+        # but never runs Trainer.__init__, and its save_model / _save_checkpoint
+        # delegate to Trainer's. An attribute Trainer.__init__ assigns and those
+        # methods read is then missing: transformers 5.19.0 added one
+        # (is_distributed_loading_by_transformers) and the first checkpoint save
+        # raised AttributeError. Fill in what is absent, whichever branch built
+        # the trainer.
+        from soup_cli.trainer._trl_compat import ensure_trainer_init_attrs
+
+        ensure_trainer_init_attrs(self.trainer)
+
         # #359 - the same exposure #336 fixed in sft.py: with LoRA the
         # no-decay optimizer group is empty, DeepSpeed drops it, and the LR
         # scheduler keeps two base_lrs until torch's strict zip raises at the

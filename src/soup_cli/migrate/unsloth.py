@@ -5,6 +5,7 @@ Uses AST parsing only — never exec/eval on notebook code.
 
 import ast
 import json
+import warnings
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -53,6 +54,84 @@ _TASK_FORMAT_MAP = {
 }
 
 
+def _parses(source: str) -> bool:
+    # Only the real parse reports an invalid escape in the notebook; the probes
+    # would repeat each SyntaxWarning with a cell-local line number (#1583 review).
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", SyntaxWarning)
+        try:
+            ast.parse(source)
+        except SyntaxError:
+            return False
+    return True
+
+
+# Cell magics whose body is Python that IPython goes on to execute; the header goes,
+# the body stays. Any other cell magic (%%bash, %%writefile, %%html, ...) is not Python.
+_PYTHON_BODY_CELL_MAGICS = ("%%capture", "%%time", "%%timeit", "%%prun")
+
+
+def _blank(line: str) -> str:
+    return "\n" if line.endswith("\n") else ""
+
+
+def _neutralise_magic(line: str, prefix: str) -> Optional[str]:
+    """What replaces a ``!`` / ``%`` line at statement level, or ``None`` when it is not
+    one. After complete statements the line is blanked. After a header waiting for its
+    suite (``if x:``, or nested headers) it becomes a ``pass`` at the magic's own
+    indentation, which is what makes the probe parse, so a suite whose only statements
+    were magics stays a valid block. Inside an open bracket or after a backslash neither
+    parses, so the line is Python and stays."""
+    if _parses(prefix):
+        return _blank(line)
+    indent = line[: len(line) - len(line.lstrip())]
+    if _parses(prefix + indent + "pass\n"):
+        return indent + "pass" + _blank(line)
+    return None
+
+
+def _strip_ipython_magics(cell_source: str) -> str:
+    """Blank the IPython-only lines of one cell so the Python in it parses (#1579).
+
+    A cell that already parses is returned unchanged. A ``%%`` cell magic whose body
+    IPython executes as Python (``%%capture``, ``%%time``, ...) loses only its header
+    line; any other cell magic is not Python and is blanked whole. A line whose first
+    non-blank character is ``!`` or ``%`` is a magic only at statement level, decided by
+    whether the lines before it already form complete statements (a complete header
+    such as ``if x:`` counts, and the magic under it becomes an indented ``pass`` so the
+    block stays valid), so a ``%`` operator or a ``!=`` at the start of a continuation
+    line is left alone. Replaced lines keep their newline, so line numbers (which the
+    source-order logic relies on) do not move.
+    """
+    if _parses(cell_source):
+        return cell_source
+    lines = cell_source.splitlines(keepends=True)
+    first_index = next((i for i, line in enumerate(lines) if line.strip()), None)
+    out: list[str] = []
+    if first_index is not None and lines[first_index].lstrip().startswith("%%"):
+        header = lines[first_index].lstrip()
+        if not header.startswith(_PYTHON_BODY_CELL_MAGICS):
+            return "".join(_blank(line) for line in lines)
+        out = [_blank(line) for line in lines[: first_index + 1]]
+        lines = lines[first_index + 1 :]
+    continued = False
+    for line in lines:
+        if continued:
+            # IPython joins a magic line ending in a backslash with the next line
+            # (18 of the 82 public Unsloth GRPO notebooks install that way).
+            out.append(_blank(line))
+            continued = line.rstrip("\r\n").endswith("\\")
+            continue
+        replacement = None
+        if line.lstrip().startswith(("!", "%")):
+            # ponytail: re-parsing the prefix per magic line is O(n^2) in a cell's
+            # lines; notebook cells are short. Track bracket depth if that ever matters.
+            replacement = _neutralise_magic(line, "".join(out))
+            continued = replacement is not None and line.rstrip("\r\n").endswith("\\")
+        out.append(line if replacement is None else replacement)
+    return "".join(out)
+
+
 def migrate_unsloth(notebook_path: Path) -> Dict[str, Any]:
     """Parse an Unsloth .ipynb notebook and return a Soup config dict.
 
@@ -75,20 +154,27 @@ def migrate_unsloth(notebook_path: Path) -> Dict[str, Any]:
     if not code_cells:
         raise ValueError("No code cells found in notebook")
 
-    # Combine all code cell sources for AST parsing
+    # Combine all code cell sources for AST parsing, remembering where each cell
+    # starts so a syntax error can name its cell and line (#1579).
     all_source = ""
+    cell_starts: list[int] = []
     for cell in code_cells:
         source = cell.get("source", [])
         if isinstance(source, list):
-            all_source += "".join(source) + "\n"
-        else:
-            all_source += source + "\n"
+            source = "".join(source)
+        cell_starts.append(all_source.count("\n") + 1)
+        all_source += _strip_ipython_magics(source) + "\n"
 
     # Parse AST - safe, no execution
     try:
         tree = ast.parse(all_source)
-    except SyntaxError:
-        raise ValueError("Could not parse notebook code (SyntaxError)")
+    except SyntaxError as exc:
+        lineno = exc.lineno or 1
+        cell_index = max(i for i, start in enumerate(cell_starts) if start <= lineno)
+        raise ValueError(
+            f"Could not parse notebook code: {exc.msg} (code cell {cell_index + 1}, "
+            f"line {lineno - cell_starts[cell_index] + 1})"
+        ) from exc
 
     warnings: List[str] = []
     base: Optional[str] = None

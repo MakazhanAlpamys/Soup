@@ -45,6 +45,7 @@ from soup_cli.utils.diagnose.runner import (
 )
 from soup_cli.utils.exit_codes import EXIT_USAGE_ERROR
 from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
+from soup_cli.utils.terminal import for_terminal
 
 console = Console()
 
@@ -79,7 +80,7 @@ def _exit_for(report: FailureReport, allow_not_run: bool) -> None:
 
 
 def _render_report(report: FailureReport) -> None:
-    table = Table(title=f"soup diagnose: {escape(report.adapter or report.run_id)}")
+    table = Table(title=f"soup diagnose: {for_terminal(report.adapter or report.run_id)}")
     table.add_column("Mode", style="bold")
     table.add_column("Score", justify="right")
     table.add_column("Verdict")
@@ -93,13 +94,13 @@ def _render_report(report: FailureReport) -> None:
             # A NOT_RUN score is a stored 0.0 placeholder, not a measurement.
             "\u2014" if score.verdict == "NOT_RUN" else f"{score.score:.3f}",
             f"[{_verdict_style(score.verdict)}]{score.verdict}[/]",
-            escape(score.evidence),
+            for_terminal(score.evidence),
         )
     console.print(table)
     console.print(
         Panel.fit(
             f"[bold {_verdict_style(report.overall)}]{report.overall}[/] — "
-            f"run [bold]{escape(report.run_id)}[/]",
+            f"run [bold]{for_terminal(report.run_id)}[/]",
             title="overall",
         )
     )
@@ -208,12 +209,12 @@ def _attach_to_registry(report: FailureReport, registry_id: str, output: str) ->
         attach_artifact(registry_id, "diagnose_report", output)
         console.print(
             f"[green]Attached[/] diagnose_report to registry entry "
-            f"[bold]{escape(registry_id)}[/]"
+            f"[bold]{for_terminal(registry_id)}[/]"
         )
     except Exception as exc:  # noqa: BLE001
         console.print(
             f"[yellow]Warning:[/] could not attach to registry: "
-            f"{escape(type(exc).__name__)}: {escape(str(exc))}"
+            f"{escape(type(exc).__name__)}: {for_terminal(exc)}"
         )
 
 
@@ -230,11 +231,11 @@ def _emit_report(
     if output:
         try:
             write_report(report, output)
-            console.print(f"[green]Wrote[/] {escape(output)}")
+            console.print(f"[green]Wrote[/] {for_terminal(output)}")
         except (OSError, ValueError) as exc:
             console.print(
                 f"[red]Error:[/] cannot write --output: "
-                f"{escape(type(exc).__name__)}: {escape(str(exc))}"
+                f"{escape(type(exc).__name__)}: {for_terminal(exc)}"
             )
             raise typer.Exit(code=1) from exc
 
@@ -242,11 +243,11 @@ def _emit_report(
         try:
             svg = render_badge_svg(report)
             _write_badge(badge, svg)
-            console.print(f"[green]Badge written[/] to {escape(badge)}")
+            console.print(f"[green]Badge written[/] to {for_terminal(badge)}")
         except (OSError, ValueError, TypeError) as exc:
             console.print(
                 f"[red]Error:[/] cannot write --badge: "
-                f"{escape(type(exc).__name__)}: {escape(str(exc))}"
+                f"{escape(type(exc).__name__)}: {for_terminal(exc)}"
             )
             raise typer.Exit(code=1) from exc
 
@@ -350,7 +351,7 @@ def diagnose(
         resolved_citation_style = validate_citation_style(citation_style)
     except (TypeError, ValueError) as exc:
         console.print(
-            f"[red]Invalid --citation-style:[/] {escape(str(exc))}"
+            f"[red]Invalid --citation-style:[/] {for_terminal(exc)}"
         )
         raise typer.Exit(code=2) from exc
 
@@ -364,7 +365,7 @@ def diagnose(
             try:
                 tokenizer_arg = _common.resolve_tokenizer(tokenizer)
             except (TypeError, ValueError) as exc:
-                console.print(f"[red]Error:[/] {escape(str(exc))}")
+                console.print(f"[red]Error:[/] {for_terminal(exc)}")
                 raise typer.Exit(code=EXIT_USAGE_ERROR) from exc
 
         try:
@@ -383,7 +384,7 @@ def diagnose(
         except (ValueError, TypeError, OSError, RuntimeError) as exc:
             console.print(
                 f"[red]Error:[/] live diagnose failed: "
-                f"{escape(type(exc).__name__)}: {escape(str(exc))}"
+                f"{escape(type(exc).__name__)}: {for_terminal(exc)}"
             )
             raise typer.Exit(code=1) from exc
         _emit_report(report, output=output, badge=badge, attach_to_registry=attach_to_registry)

@@ -693,6 +693,13 @@ def _resolve_cache_root(cache_dir: Optional[str], is_under: Any) -> str:
     return default_layer_stream_cache_dir()
 
 
+def resolve_cache_root(cache_dir: Optional[str] = None) -> str:
+    """Cache ROOT only (explicit arg > env override > default). No side effects."""
+    from soup_cli.utils.paths import is_under
+
+    return _resolve_cache_root(cache_dir, is_under)
+
+
 def resolve_shard_dir(model: str, cache_dir: Optional[str] = None) -> str:
     """Per-model shard dir (explicit arg > env override > default).
 

@@ -929,7 +929,8 @@ validated on SmolLM2-135M with a synthetic judge (not a production RLHF claim; #
 An `https://` judge URL uses `OPENAI_API_KEY` only when its host is `api.openai.com`; other
 hosts are called as an OpenAI-compatible server without that key. An `online_dpo_judge` whose
 host is a private, link-local or reserved IP literal is refused when soup.yaml loads (loopback
-stays allowed); address an internal judge by its hostname.
+stays allowed); address an internal judge by its hostname. A host written only as numbers that
+is not a valid IPv4 address (`10.0.0.256`, `4294967296`) is refused as well.
 
 A pair the judge cannot rank is left out of the loss: a tie, a failed or unreadable judge
 call, or a verdict that changes when the two completions are swapped. Such a pair adds no
@@ -2035,7 +2036,8 @@ training:
   mod_capacity_factor: 0.125
 
   # LLaMA Pro: append zero-initialised identity decoder blocks and train only the new
-  # ones (freeze_trainable_layers freezes the originals). Needs quantization: none.
+  # ones (freeze_trainable_layers must equal expand_layers and freezes the
+  # originals). Needs quantization: none.
   expand_layers: 4
   freeze_trainable_layers: 4
 ```

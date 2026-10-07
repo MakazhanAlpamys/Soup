@@ -824,8 +824,9 @@ even a volume GUID path, that can be repointed at any time; a mount point's targ
 whole volume rather than a folder), not lie inside or contain the
 primary cache root or another entry, sit on a different volume from the primary root and from
 every other entry, and classify as NVMe (`training.stream_disk_kind` overrides a wrong probe); the
-list holds at most 6 folders. The bytes are exactly the ones the single-drive cache holds, so
-striping changes the speed, not the result.
+list holds at most 6 folders. The checks that need no disk probe run when `soup train` or
+`--dry-run` starts, and `soup doctor` lists each entry, with `--disk` for the NVMe rule. The bytes
+are exactly the ones the single-drive cache holds, so striping changes the speed, not the result.
 
 Stripe folders are outside the home/cwd/tmp containment the primary cache has, by design — a
 second drive is never under `$HOME`. What that containment gave is enforced directly instead.
@@ -867,9 +868,14 @@ filename, size, and `mtime_ns`, so a necessary re-shard says which component cha
 of silently spending minutes rebuilding the cache.
 
 `base:` may also be a local path to a Hugging Face cache snapshot
-(`.../models--org--name/snapshots/<commit>`). Soup copies it to regular files in the same
-Spectrum cache slot as the Hub id `org/name` and reuses that copy while the commit and blob
-ids match. A directory whose `.safetensors` files are symlinks but which is not such a
+(`.../models--org--name/snapshots/<commit>`). Soup copies it to regular files and reuses that
+copy while the commit and blob ids match. When the path is the folder the Hub id `org/name`
+resolves to in the active Hugging Face cache (`HF_HUB_CACHE` / `HF_HOME`; a cache that was
+moved and linked is the same folder), the copy lives in the Spectrum cache slot of that Hub
+id, `weights/org__name`, so the two ways of naming the model share one copy. A snapshot
+folder anywhere else gets a slot of its own, `weights/<folder name>@<digest of its resolved
+location>`: a copy taken from one folder is never used for another folder or for the Hub id,
+and such a folder costs one more copy on disk. A directory whose `.safetensors` files are symlinks but which is not such a
 snapshot (including a regular directory that also holds an alias symlink to a shard) is
 refused with a message naming the accepted layouts: pass the Hub id, the snapshot directory,
 or a directory of regular files.
@@ -886,7 +892,9 @@ When it is itself a link (a symlink, or a junction on Windows), Soup stops with 
 naming it instead of following it, so a link in the cache that points outside the cache is
 never followed. To keep a model's files on another disk, move the whole cache or the whole
 repo folder and link that: the snapshot path is resolved first. A junction inside a snapshot
-directory is refused like a directory symlink.
+directory is refused like a directory symlink. A copy made earlier is reused only while the
+snapshot still passes these checks: when its layout changes into a refused one afterwards,
+the next run stops with the same message and leaves the copy in place.
 
 
 ## Correctness First (v0.36.0)
@@ -1301,7 +1309,7 @@ Cross-validator ordering picks the most actionable error: `quantization_aware='f
 
 ## Advanced Save Formats (v0.53.0)
 
-`soup merge --save-format 4bit` and `--save-format 4bit_forced` will write a single BNB-4bit-quantized merged checkpoint without the wasteful dequant → merge → requant cycle (unsloth `merged_4bit` recipe). v0.53.0 ships the closed allowlist + spec metadata; the live writer lands in v0.53.1.
+`soup merge --save-format 4bit` and `--save-format 4bit_forced` will write a single BNB-4bit-quantized merged checkpoint without the wasteful dequant → merge → requant cycle (unsloth `merged_4bit` recipe). `4bit_forced` quantizes all linear layers including `lm_head`; models with tied embeddings (`tie_word_embeddings: true`) cannot hold a 4-bit `lm_head` sharing weights with embeddings and are explicitly refused by name with `ValueError`. v0.53.0 ships the closed allowlist + spec metadata; the live writer lands in v0.53.1.
 
 `soup export --format torchao --quant-config <yaml>` is the planned PTQ export surface for `torchao.quantize_` + `save_pretrained`. Four schemes are allowlisted: `Int4WeightOnly`, `Int8DynActInt4`, `Float8DynActFloat8`, `NVFP4`. CASE-SENSITIVE — these are Soup's scheme names, mapped to the torchao class that implements each one in `utils/torchao_compat.py` (three of the four names Soup used to look up by `hasattr` do not exist in torchao; #826). `Int4WeightOnly` accepts `group_size`; `inner_k_tiles` was removed, because `Int4WeightOnlyConfig` raises `TypeError` for it. Diverges from `--save-format` (lowercase-normalised) on purpose; documented at both validators.
 

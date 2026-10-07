@@ -817,6 +817,17 @@ def _key_repr(key: object) -> str:
     return repr(str(key)[:_MAX_NAME_LEN])
 
 
+_MAX_KEYS_NAMED = 10
+
+
+def _key_list(keys: Sequence[object]) -> str:
+    # Ten keys and a count: a 1 MiB suite can carry tens of thousands of unknown keys,
+    # and naming them all made the message nearly as large as the file.
+    shown = ", ".join(map(_key_repr, keys[:_MAX_KEYS_NAMED]))
+    rest = len(keys) - _MAX_KEYS_NAMED
+    return f"{shown} and {rest} more" if rest > 0 else shown
+
+
 def _validate_entry_keys(index: int, name: str, entry: Mapping[str, Any]) -> None:
     extra = [key for key in entry if key not in _ENTRY_KEYS]
     if not extra:
@@ -824,11 +835,11 @@ def _validate_entry_keys(index: int, name: str, entry: Mapping[str, Any]) -> Non
     misplaced = [key for key in extra if key in _EXPECTATION_ARGS[name]]
     if misplaced:
         raise ValueError(
-            f"expectations[{index}]: {', '.join(map(_key_repr, misplaced))} "
+            f"expectations[{index}]: {_key_list(misplaced)} "
             f"must go under 'args:' for {name}, not beside 'name'"
         )
     raise ValueError(
-        f"expectations[{index}]: unknown key(s) {', '.join(map(_key_repr, extra))}; "
+        f"expectations[{index}]: unknown key(s) {_key_list(extra)}; "
         "an entry takes only 'name' and 'args'"
     )
 
@@ -873,7 +884,7 @@ def parse_suite_spec(raw: Any) -> SuiteSpec:
     extra = [key for key in raw if key != "expectations"]
     if extra:  # #1483: a top-level key is a typo or an option that does not exist
         raise ValueError(
-            f"unknown top-level key(s) {', '.join(map(_key_repr, extra))}; "
+            f"unknown top-level key(s) {_key_list(extra)}; "
             "a suite takes only 'expectations'"
         )
     raw_expectations = raw.get("expectations")

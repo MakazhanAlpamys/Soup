@@ -177,12 +177,12 @@ data:
 training:
   quantization: none            # block expansion needs an unquantized base
   expand_layers: 4              # append 4 zero-init decoder blocks
-  freeze_trainable_layers: 4    # train only the appended blocks (requires expand_layers)
+  freeze_trainable_layers: 4    # must equal expand_layers: freeze the original model, train only the appended blocks
   lr: 5e-5
   epochs: 1
 ```
 
-**What happens at trainer start.** Soup deep-copies the last `expand_layers` decoder blocks, zero-inits each clone's residual projections (`mlp.down_proj` + `self_attn.o_proj`) so the appended block initially acts as identity, appends them to `model.model.layers`, and updates `config.num_hidden_layers`. When `freeze_trainable_layers > 0` is set, every parameter except the appended blocks is frozen — this is the canonical LLaMA Pro "train only new blocks" recipe.
+**What happens at trainer start.** Soup deep-copies the last `expand_layers` decoder blocks, zero-inits each clone's residual projections (`mlp.down_proj` + `self_attn.o_proj`) so the appended block initially acts as identity, appends them to `model.model.layers`, and updates `config.num_hidden_layers`. `freeze_trainable_layers` must equal `expand_layers`: it freezes every parameter except the appended blocks, the canonical LLaMA Pro "train only new blocks" recipe. It does not select the top-N or bottom-N layers, and any other value, including `0` or a negative one, is refused at config load.
 
 **Scope.** Works on `task: sft` and `task: pretrain` with `backend: transformers`, `modality: text` and `quantization: none`; any other combination is refused at config load. No other trainer applies the expansion, and the appended blocks are only supported on an unquantized base. Bounds: `expand_layers ∈ [1, 64]`. Over-expansion (more new blocks than the base has layers) silently clamps to the base layer count. Non-Llama-shaped architectures (e.g. Falcon's `dense_4h_to_h`) emit a `warnings.warn` because the residual zero-init heuristic only matches the standard `down_proj` / `o_proj` names — the appended blocks are still appended + trainable, but lose the identity-init guarantee.
 
@@ -208,7 +208,7 @@ training:
     loftq_iter: 1
     loftq_bits: 4
 
-  # LLaMA Pro block expansion (schema only in v0.41.0; live wiring in v0.41.1)
+  # LLaMA Pro block expansion (freeze_trainable_layers must equal expand_layers)
   expand_layers: 4
   freeze_trainable_layers: 4
 ```

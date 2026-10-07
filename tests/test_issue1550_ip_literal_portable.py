@@ -231,3 +231,56 @@ def test_refuse_parses_once(monkeypatch: pytest.MonkeyPatch) -> None:
     with pytest.raises(ValueError):
         net_guard.refuse_private_ip_literal("10.0.0.1", label="x")
     assert calls == ["10.0.0.1"]
+
+
+# --- hosts ending in a character the stdlib IDNA codec folds to a space ------
+
+# The stdlib ``idna`` codec (nameprep, NFKC) turns U+00A0 NO-BREAK SPACE and
+# U+3000 IDEOGRAPHIC SPACE into an ASCII space, so such a host is read like the
+# same host ending in " ": the address before the space, as the C parsers do.
+IDNA_FOLDED_SPACE = [
+    pytest.param("10.0.0.1\u00a0", "10.0.0.1", id="nbsp"),
+    pytest.param("10.0.0.1\u3000", "10.0.0.1", id="ideographic-space"),
+    pytest.param("10.1\u00a0", "10.0.0.1", id="nbsp-short-form"),
+    pytest.param("167772161\u3000", "10.0.0.1", id="ideographic-space-decimal"),
+    pytest.param("10.0.0.1\u00a0x", "10.0.0.1", id="nbsp-then-text"),
+    pytest.param("10.0.0.1\u3000x", "10.0.0.1", id="ideographic-space-then-text"),
+]
+
+
+@pytest.mark.parametrize(("host", "prefix"), IDNA_FOLDED_SPACE)
+def test_idna_folded_trailing_space_reads_as_prefix(host: str, prefix: str) -> None:
+    """A host ending in U+00A0 / U+3000 reads as the address before it."""
+    # The premise: the codec a client encodes the host with turns each of the
+    # two characters into an ASCII space and changes nothing else.
+    folded = host.replace("\u00a0", " ").replace("\u3000", " ")
+    assert host.encode("idna").decode("ascii") == folded
+    assert parse_ip_literal(host) == ipaddress.IPv4Address(prefix)
+    assert is_private_or_link_local(host)
+    with pytest.raises(ValueError, match="SSRF"):
+        refuse_private_ip_literal(host, label="x")
+
+
+@pytest.mark.parametrize("host", ["127.0.0.1\u00a0", "127.0.0.1\u3000x"])
+def test_idna_folded_trailing_space_keeps_loopback(host: str) -> None:
+    """The same reading keeps a loopback address allowed."""
+    assert parse_ip_literal(host) == ipaddress.IPv4Address("127.0.0.1")
+    refuse_private_ip_literal(host, label="x")
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "10.0.0.1\x1cx",  # str.isspace() says yes; C isspace() says no
+        "10.0.0.1\x1fx",
+        "10.0.0.1\x85",
+        "10.0.0.1\u00a0",  # folded to a space by the codec, not by the parser
+        "10.0.0.1\u3000",
+        "10.0.0.1\u2028",
+    ],
+)
+def test_only_c_whitespace_ends_the_text(text: str) -> None:
+    """Only the six C whitespace characters end the text; after any other, it is no address."""
+    from soup_cli.utils.net_guard import inet_aton
+
+    assert inet_aton(text) is None

@@ -2,7 +2,9 @@
 
 ``snapshots/<commit>/*.safetensors`` are symlinks into ``blobs/``. The sharder and the
 scanner skip symlinks, so a local snapshot path must be copied to regular files the same
-way the snapshot behind a Hub id is, and share that copy's cache slot.
+way the snapshot behind a Hub id is. It shares that copy's cache slot when it is the
+active cache's own repo folder; a snapshot folder anywhere else gets a slot of its own
+(``tests/test_hf_cache_slot_key.py``).
 """
 
 from __future__ import annotations
@@ -42,7 +44,8 @@ def test_local_snapshot_path_is_materialized(tmp_path, monkeypatch) -> None:
 
     resolved = Path(resolve_model_weights(str(snapshot)))
 
-    assert resolved == cache_root / "weights" / "org__model"
+    assert resolved.parent == cache_root / "weights"
+    assert resolved.name.startswith("models--org--model@")
     assert not (resolved / "model.safetensors").is_symlink()
     index = shard_checkpoint(
         str(resolved), str(tmp_path / "shards"), dtype="float32", arch="llama"
@@ -52,11 +55,14 @@ def test_local_snapshot_path_is_materialized(tmp_path, monkeypatch) -> None:
 
 @pytest.mark.requires_symlink
 def test_local_path_reuses_the_hub_id_copy(tmp_path, monkeypatch) -> None:
+    from huggingface_hub import constants
+
     from soup_cli.utils import hubs
     from soup_cli.utils.spectrum_scan import plan_model_weights, resolve_model_weights
 
     snapshot = _snapshot(tmp_path)
     monkeypatch.setenv("SOUP_SPECTRUM_CACHE_DIR", str(tmp_path / "soup-cache"))
+    monkeypatch.setattr(constants, "HF_HUB_CACHE", str(tmp_path))
     monkeypatch.setattr(hubs, "snapshot_download", lambda *_a, **_k: str(snapshot))
     resolve_model_weights("org/model")
 
@@ -82,12 +88,12 @@ def test_symlinked_weights_outside_a_snapshot_layout_are_refused(tmp_path, monke
 
 @pytest.mark.requires_symlink
 def test_snapshot_outside_an_hf_cache_name_keeps_a_path_derived_slot(tmp_path, monkeypatch) -> None:
-    from soup_cli.utils.spectrum_scan import model_slug, plan_model_weights
+    from soup_cli.utils.spectrum_scan import plan_model_weights
 
     snapshot = _snapshot(tmp_path, repo="my-model-cache")
     monkeypatch.setenv("SOUP_SPECTRUM_CACHE_DIR", str(tmp_path / "soup-cache"))
 
     plan = plan_model_weights(str(snapshot))
 
-    assert Path(plan.weights_dir).name == model_slug(str(snapshot))
+    assert Path(plan.weights_dir).name.startswith("my-model-cache@")
     assert Path(plan.weights_dir).name != "org__model"

@@ -321,11 +321,10 @@ def generate(
 
             # Validate and dedup
             for example in batch:
-                if not _validate_example(example, fmt):
-                    # For preference templates, validate against preference format
-                    if template == "preference" and _validate_preference(example):
-                        all_examples.append(example)
-                        continue
+                is_valid = _validate_example(example, fmt)
+                if not is_valid and template == "preference" and _validate_preference(example):
+                    is_valid = True
+                if not is_valid:
                     continue
                 text = _row_to_text(example)
                 if text in existing_texts:
@@ -970,4 +969,14 @@ def _path_within_cwd(path: Path, cwd: Path) -> bool:
 
 def _row_to_text(row: dict) -> str:
     """Convert a row to a text string for dedup comparison."""
+    if "prompt" in row and "chosen" in row and "rejected" in row:
+        p = row.get("prompt") or ""
+        c = row.get("chosen") or ""
+        r = row.get("rejected") or ""
+        return f"{p} {c} {r}".strip()
+    if "prompt" in row and "completion" in row and "label" in row:
+        p = row.get("prompt") or ""
+        c = row.get("completion") or ""
+        lbl = row.get("label") or ""
+        return f"{p} {c} {lbl}".strip()
     return " ".join(str(v) for v in row.values() if v)

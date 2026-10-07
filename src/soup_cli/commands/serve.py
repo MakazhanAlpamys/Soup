@@ -1974,6 +1974,12 @@ def _create_app(
 
         if request.stream:
             stream_started = time.perf_counter()
+            from soup_cli.utils.structured_output import (
+                build_logits_processors,
+            )
+            processors = build_logits_processors(
+                output_constraint, tokenizer,
+            )
             return StreamingResponse(
                 _stream_response(
                     model_obj, tokenizer, messages,
@@ -1997,6 +2003,9 @@ def _create_app(
                     canary_outcome=(
                         lambda ok: _record_canary_outcome(canary_tracking, ok)
                     ),
+                    logits_processor=processors or None,
+                    ngram_config=ngram_config,
+                    reasoning_parser=reasoning_parser,
                 ),
                 media_type="text/event-stream",
             )
@@ -2504,6 +2513,9 @@ def _stream_response(
     adapter_lock=None, adapter_names=None,
     requested_adapter=None, active_adapter=None,
     canary_outcome=None,
+    logits_processor=None,
+    ngram_config=None,
+    reasoning_parser=None,
 ):
     """Generator that yields SSE chunks for streaming responses."""
     chat_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
@@ -2545,6 +2557,8 @@ def _stream_response(
                     assistant_model=assistant_model,
                     assistant_tokenizer=assistant_tokenizer,
                     num_assistant_tokens=num_assistant_tokens,
+                    logits_processor=logits_processor,
+                    ngram_config=ngram_config,
                     kv_cache_generate_kwargs=kv_cache_generate_kwargs,
                 )
     except Exception:
@@ -2556,6 +2570,14 @@ def _stream_response(
 
     if canary_outcome is not None:
         canary_outcome(True)
+
+    # Strip reasoning blocks if configured
+    if reasoning_parser is not None:
+        from soup_cli.utils.reasoning_parser import strip_reasoning
+
+        response_text = strip_reasoning(
+            response_text, reasoning_parser,
+        )
 
     # Simulate streaming by sending word-by-word
     words = response_text.split(" ")
