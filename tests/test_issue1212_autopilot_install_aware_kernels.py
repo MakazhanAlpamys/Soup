@@ -8,6 +8,7 @@ non-SFT goal, or a pre-Ampere card.
 import json
 
 import pytest
+from rich.console import Console
 from typer.testing import CliRunner
 
 from soup_cli.cli import app
@@ -46,8 +47,11 @@ def _run_autopilot(tmp_path, monkeypatch, goal, compute_capability):
     monkeypatch.setattr(autopilot_cmd, "analyze_hardware", lambda: profile)
     monkeypatch.setattr(decisions, "check_liger_available", lambda: False)
     monkeypatch.setattr(decisions, "check_flash_attn_available", lambda: None)
-    # A fixed, wide terminal so the hint cannot wrap inside the panel border.
-    monkeypatch.setenv("COLUMNS", "200")
+    # A fixed, wide console so the hint cannot wrap inside the panel border.
+    # Setting COLUMNS here is not enough: the module built its console at
+    # import, and Rich keeps the width a console was built with when COLUMNS
+    # was set at that moment (80 in a pytest-xdist worker on Linux).
+    monkeypatch.setattr(autopilot_cmd, "console", Console(width=200))
     monkeypatch.chdir(tmp_path)
     _write_data(tmp_path / "ap.jsonl")
     result = runner.invoke(
