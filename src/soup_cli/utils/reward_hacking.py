@@ -501,8 +501,14 @@ class _RewardHackCallback_body:  # type: ignore[misc, valid-type]  # noqa: N801
         # a function of the success rate alone, not of reward-model
         # health; a first step at exactly 50% would otherwise record a
         # ~31623 baseline and classify every later, healthier step as
-        # HACK. Skip the step instead of voting.
+        # HACK. Skip the step instead of voting — unless every reward in
+        # the step is identical AND a baseline already exists: a 0/1 run
+        # never records one (every step is silent), so reaching the check
+        # means a continuous reward collapsed to a constant, which is a
+        # genuine HACK signal (main reported 0.0 there too).
         if _variance(bad) == 0.0 or _variance(good) == 0.0:
+            if self._baseline_health is not None and ordered[0] == ordered[-1]:
+                return 0.0
             self._warn_discrete_reward()
             return None
         return compute_cluster_separation(good, bad)

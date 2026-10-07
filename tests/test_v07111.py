@@ -185,12 +185,14 @@ class TestRewardHackCallback:
             detector="info_rm", halt_on_hack=True, buffer=buf
         )
         state, control = _FakeState(1), _FakeControl()
-        # Step 1 — high separation = baseline. (Continuous rewards; #1438
-        # makes a two-valued reward produce no signal at all.)
+        # Step 1 — high separation = baseline. (Continuous rewards with both
+        # median halves varying; #1438 makes a two-valued reward produce no
+        # signal at all.)
         buf.record(func_name="r", completions=["a"] * 4, rewards=[0, 0.2, 8.8, 9])
         cb.on_step_end(None, state, control)
-        # Step 2 — bunched rewards = HACK.
-        buf.record(func_name="r", completions=["a"] * 4, rewards=[4.9, 5.0, 5.1, 5.2])
+        # Step 2 — a fully constant step with a baseline reads as a total
+        # collapse = HACK (see test_issue1438_info_rm_discrete_reward.py).
+        buf.record(func_name="r", completions=["a"] * 4, rewards=[5, 5, 5, 5])
         state.global_step = 2
         cb.on_step_end(None, state, control)
         assert control.should_training_stop is True

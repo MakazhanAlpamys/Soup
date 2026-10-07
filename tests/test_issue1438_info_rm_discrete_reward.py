@@ -85,6 +85,15 @@ class TestDiscreteRewardSilence:
         cb = build_reward_hack_callback(detector="info_rm")
         assert cb.compute_signal(_snapshot([0.5] * 8)) is None
 
+    def test_binary_run_reaching_full_accuracy_stays_silent(self):
+        # 0/1 rewards never record a baseline, so a run converging to all-1.0
+        # keeps producing no signal rather than a late "collapse" verdict.
+        cb = build_reward_hack_callback(detector="info_rm", halt_on_hack=True)
+        cb.buffer = _SeqBuffer([_snapshot(_binary_rewards(k)) for k in (3, 5, 8)])
+        state, control = _run_steps(cb, cb.buffer, 3)
+        assert control.should_training_stop is False
+        assert not any("reward_hack_verdict" in e for e in state.log_history)
+
     def test_warns_once_per_run(self, caplog):
         cb = build_reward_hack_callback(detector="info_rm")
         buf = _SeqBuffer([_snapshot(_binary_rewards(k)) for k in (3, 5, 6)])
@@ -118,6 +127,28 @@ class TestContinuousRewardControl:
         assert any(
             e.get("reward_hack_verdict") == "HACK" for e in state.log_history
         )
+
+    def test_total_collapse_after_a_varying_baseline_still_halts(self):
+        # A fully constant step votes 0.0 once a baseline exists: a 0/1 run
+        # never records one, so reaching it means a continuous reward
+        # collapsed — a real HACK signal, as on main.
+        cb = build_reward_hack_callback(detector="info_rm", halt_on_hack=True)
+        cb.buffer = _SeqBuffer([self._WIDE, _snapshot([1.0] * 8)])
+        state, control = _run_steps(cb, cb.buffer, 2)
+        assert control.should_training_stop is True
+        assert state.log_history[-1]["reward_hack_verdict"] == "HACK"
+
+    def test_a_constant_half_with_a_baseline_stays_silent(self):
+        # The 0.0 vote is only for a step where EVERY reward is identical.
+        # A continuous reward clipped at 0 leaves one constant half but still
+        # varies across the split — it carries no separation signal either.
+        cb = build_reward_hack_callback(detector="info_rm", halt_on_hack=True)
+        cb.buffer = _SeqBuffer(
+            [self._WIDE, _snapshot([0.0, 0.0, 0.0, 0.0, 0.2, 0.5, 0.8, 1.0])]
+        )
+        state, control = _run_steps(cb, cb.buffer, 2)
+        assert control.should_training_stop is False
+        assert state.log_history[-1].get("reward_hack_verdict") != "HACK"
 
     def test_three_distinct_values_still_signal(self):
         cb = build_reward_hack_callback(detector="info_rm")
