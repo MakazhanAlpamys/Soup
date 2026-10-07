@@ -630,6 +630,12 @@ to replace), and `CPOTrainer` to `simpo` only when `loss_type="simpo"` is set on
 its own call or its `args=` config; any other CPO loss, or an `args=` that cannot
 be read statically, stops the migration naming the value. `SFTConfig` and the
 other TRL `*Config` classes are read for hyperparameters.
+The final trainer determines the task; its inline or named config, passed as `args=`
+or positionally, supplies output and hyperparameters using the latest module-level
+binding before that trainer (including annotated assignments).
+Earlier stages retain warnings but cannot supply settings, and unused configs are ignored.
+Aliases, conditional rebindings and unresolved `**kwargs` are not evaluated: migration
+reports "Could not read the final trainer's args statically" and uses Soup defaults.
 
 
 ## Data Formats

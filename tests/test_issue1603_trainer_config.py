@@ -63,12 +63,57 @@ def test_warmup_first_control_is_unchanged(tmp_path: Path) -> None:
     assert _migrate(tmp_path, _stage(first=False)) == _migrate(tmp_path, _stage())
 
 
-@pytest.mark.parametrize("args", ["args=cfg", "cfg", "args=GRPOConfig(learning_rate=5e-6)"])
-def test_inline_named_and_positional_configs(tmp_path: Path, args: str) -> None:
-    source = ("cfg = GRPOConfig(learning_rate=5e-6)\n"
+@pytest.mark.parametrize("trainer,arguments", [
+    ("GRPO", "args=cfg"),
+    ("GRPO", "args=GRPOConfig(learning_rate=5e-6)"),
+    ("GRPO", "reward_fn, cfg"),
+    ("GRPO", "[a, b], cfg"),
+    ("DPO", "None, cfg"),
+    ("DPO", "ref_model, cfg"),
+    ("SFT", "cfg"),
+    ("Reward", "cfg"),
+])
+def test_inline_named_and_positional_configs(tmp_path: Path, trainer: str,
+                                             arguments: str) -> None:
+    source = (f"cfg = {trainer}Config(learning_rate=5e-6)\n"
               "unused = SFTConfig(learning_rate=0.1)\n"
-              f"trainer = GRPOTrainer(model, {args})\n")
+              f"trainer = {trainer}Trainer(model, {arguments})\n")
     assert _migrate(tmp_path, source)["training"]["lr"] == 5e-6
+
+
+@pytest.mark.parametrize("task", ["DPO", "KTO"])
+def test_beta_mapping_uses_final_trainer_task_before_config(tmp_path: Path, task: str) -> None:
+    source = f"cfg = {task}Config(beta=0.3)\ntrainer = {task}Trainer(model, args=cfg)"
+    assert _migrate(tmp_path, source)["training"][f"{task.lower()}_beta"] == 0.3
+
+
+def test_final_trainer_task_wins_over_config_class(tmp_path: Path) -> None:
+    source = "trainer = GRPOTrainer(model, args=SFTConfig(learning_rate=1e-4))"
+    result = _migrate(tmp_path, source)
+    assert result["task"] == "grpo"
+    assert result["training"]["lr"] == 1e-4
+
+
+def test_annotated_config_binding_is_resolved(tmp_path: Path) -> None:
+    source = "cfg: GRPOConfig = GRPOConfig(learning_rate=5e-6)\nGRPOTrainer(model, args=cfg)"
+    assert _migrate(tmp_path, source)["training"]["lr"] == 5e-6
+
+
+@pytest.mark.parametrize("statement", [
+    "if flag:\n    cfg = GRPOConfig(learning_rate=0.1)",
+    "try:\n    cfg = GRPOConfig(learning_rate=0.1)\nexcept Exception:\n    pass",
+    "with context:\n    cfg = GRPOConfig(learning_rate=0.1)",
+])
+def test_conditional_rebinding_is_not_silently_reused(tmp_path: Path, statement: str) -> None:
+    source = f"cfg = GRPOConfig(learning_rate=5e-6)\n{statement}\nGRPOTrainer(model, args=cfg)"
+    result = _migrate(tmp_path, source)
+    assert "lr" not in result["training"]
+    assert any("Could not read" in note for note in result["_warnings"])
+
+
+def test_expanded_trainer_keywords_report_unreadable_args(tmp_path: Path) -> None:
+    result = _migrate(tmp_path, "GRPOTrainer(model, **opts)")
+    assert any("Could not read" in note for note in result["_warnings"])
 
 
 def test_binding_at_trainer_and_no_settings_leak_from_warmup(tmp_path: Path) -> None:

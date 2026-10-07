@@ -198,10 +198,17 @@ def migrate_unsloth(notebook_path: Path) -> Dict[str, Any]:
     # `cfg = CPOConfig(...)`, and then the loss cannot be read.
     name_bindings: Dict[str, List[ast.AST]] = {}
     for stmt in tree.body:
-        if not isinstance(stmt, ast.Assign):
+        if isinstance(stmt, (ast.If, ast.Try, ast.With, ast.For, ast.While)):
+            # Conditional writes cannot be resolved without executing notebook code.
+            for node in ast.walk(stmt):
+                if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+                    name_bindings.setdefault(node.id, []).append(node)
+            continue
+        if not isinstance(stmt, (ast.Assign, ast.AnnAssign)) or stmt.value is None:
             continue
         val = _ast_to_value(stmt.value)
-        for target in stmt.targets:
+        targets = stmt.targets if isinstance(stmt, ast.Assign) else [stmt.target]
+        for target in targets:
             if not isinstance(target, ast.Name):
                 continue
             name_bindings.setdefault(target.id, []).append(stmt.value)
@@ -428,16 +435,27 @@ _ONLINE_DPO_JUDGE_PLACEHOLDER = "ollama://REPLACE-ME"
 def _trainer_config(
     trainer_call: ast.Call, name_bindings: Dict[str, List[ast.AST]],
 ) -> Optional[ast.AST]:
-    """Resolve args= / the second positional argument at the trainer's binding."""
-    config = next((kw.value for kw in trainer_call.keywords if kw.arg == "args"), None)
-    if config is None and len(trainer_call.args) >= 2:
-        config = trainer_call.args[1]
-    if isinstance(config, ast.Name):
-        preceding = [value for value in name_bindings.get(config.id, [])
-                     if (value.lineno, value.col_offset)
-                     < (trainer_call.lineno, trainer_call.col_offset)]
-        config = preceding[-1] if preceding else config
-    return config
+    """Resolve explicit args, else the first positional config after the model."""
+    def resolve(config: ast.AST) -> ast.AST:
+        if isinstance(config, ast.Name):
+            preceding = [value for value in name_bindings.get(config.id, [])
+                         if (value.lineno, value.col_offset)
+                         < (trainer_call.lineno, trainer_call.col_offset)]
+            return max(preceding, key=lambda value: (value.lineno, value.col_offset)) \
+                if preceding else config
+        return config
+
+    for keyword in trainer_call.keywords:
+        if keyword.arg == "args":
+            return resolve(keyword.value)
+    for argument in trainer_call.args[1:]:
+        config = resolve(argument)
+        if isinstance(config, ast.Call) and (
+            _get_func_name(config) == "TrainingArguments" or _get_func_name(config) in _CONFIG_MAP
+        ):
+            return config
+    # Expanded keywords may contain args; do not silently claim defaults were requested.
+    return next((kw.value for kw in trainer_call.keywords if kw.arg is None), None)
 
 
 def _cpo_loss_type(
