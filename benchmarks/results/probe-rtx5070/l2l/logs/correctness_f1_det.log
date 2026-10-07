@@ -1,0 +1,15 @@
+[transformers] `torch_dtype` is deprecated! Use `dtype` instead!
+W1007 16:29:31.201000 33748 site-packages\torch\utils\flop_counter.py:113] triton not found; flop counting will not work for triton kernels
+RUN: L2L step-0 probe, mode correctness
+gpu             NVIDIA GeForce RTX 5070 Laptop GPU
+torch           2.14.0+cu130
+vram_total_gb   8.518
+soup_cli_file   C:\Users\user\projects\Soup-l2l\src\soup_cli\__init__.py
+driver          616.92
+pcie_gen        5
+pcie_width      8
+shard_dir       C:\Users\user\.soup\layer-stream\unsloth__mistral-7b-instruct-v0.3
+direct_io       None
+v3              {'free_gb': 13.150769152, 'commit_avail_gb': 25.098878976, 'need_gb': 0.536870912, 'margin_gb': 4.0, 'gpu_used_before_build_mib': 0, 'gpu_pids': [33748], 'foreign_gpu_pids': [], 'ram_ok': True, 'gpu_ok': True, 'ok': True}
+correctness F1 k=4: A-vs-A True, L2L True (max |d| 0.000e+00), losses True
+wrote         benchmarks/results/probe-rtx5070/l2l/correctness_f1_det.json
