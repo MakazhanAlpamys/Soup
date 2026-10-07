@@ -1832,12 +1832,12 @@ def _create_app(
     _canary_warnings: set[str] = set()
     _canary_warning_lock = threading.Lock()
 
-    def _warn_canary_once(message: str) -> None:
+    def _warn_canary_once(message: str, *, exc_info: bool = False) -> None:
         with _canary_warning_lock:
             if message in _canary_warnings:
                 return
             _canary_warnings.add(message)
-        logger.warning(message, exc_info=True)
+        logger.warning(message, exc_info=exc_info)
 
     def _canary_adapter(conversation_id: Optional[str]):
         """Resolve one automatic canary route, or preserve normal activation."""
@@ -1847,6 +1847,8 @@ def _create_app(
 
         try:
             state = canary_state.get()
+            with _canary_warning_lock:
+                _canary_warnings.discard("canary policy unavailable")
             if state is None or state.canary_active is None or not state.canary_traffic_pct:
                 return None, None
             policy = CanaryPolicy(
@@ -1856,7 +1858,7 @@ def _create_app(
             )
             decision = route(policy, conversation_id)
         except (FileNotFoundError, OSError, TypeError, ValueError):
-            _warn_canary_once("canary policy unavailable")
+            _warn_canary_once("canary policy unavailable", exc_info=True)
             return None, None
         if decision.bucket == "canary":
             if decision.adapter not in _peft_adapter_names:
@@ -1883,7 +1885,7 @@ def _create_app(
                 rollout_id=rollout_id,
             )
         except (OSError, TypeError, ValueError):
-            _warn_canary_once("canary outcome write failed")
+            _warn_canary_once("canary outcome write failed", exc_info=True)
 
     @app.get("/health")
     def health():

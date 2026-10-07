@@ -2,6 +2,7 @@
 
 import os
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
@@ -255,3 +256,101 @@ def test_pending_superseded_batch_does_not_replace_current_stats(buffers, tmp_pa
     stats = canary_router.read_bucket_stats(stable="base", canary="candidate", rollout_id="new",
                                            path=buffer.path)
     assert stats.canary_ok == 1 and stats.canary_major == 0
+
+
+def test_in_place_edit_with_same_size_and_inode_invalidates_policy(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    path = tmp_path / "loop.yaml"
+    state = LoopState(served_model="base", eval_suite="e", baseline="b",
+                      canary_active="candidate", canary_traffic_pct=50.0)
+    write_state(state, str(path))
+    cache = CanaryStateCache(str(path))
+    assert cache.get().canary_traffic_pct == 50.0
+    before = path.stat()
+    text = path.read_text(encoding="utf-8")
+    with open(path, "r+", encoding="utf-8", newline="") as handle:
+        handle.write(text.replace("50.0", "10.0"))
+    after = path.stat()
+    assert (after.st_ino, after.st_size) == (before.st_ino, before.st_size)
+    if after.st_mtime_ns == before.st_mtime_ns:
+        pytest.skip("filesystem timestamp too coarse for this check")
+    assert cache.get().canary_traffic_pct == 10.0
+
+
+def test_exactly_one_batch_is_persisted_without_waiting_for_the_next_outcome(buffers):
+    buffer = buffers(batch_size=64, interval=60.0)
+    policy = CanaryPolicy("base", "candidate", 50.0)
+    for _ in range(63):
+        buffer.record(policy, "stable", True, rollout_id="r")
+    assert not os.path.exists(buffer.path)
+    buffer.record(policy, "stable", True, rollout_id="r")
+    stats = canary_router.read_bucket_stats(stable="base", canary="candidate", rollout_id="r",
+                                           path=buffer.path)
+    assert stats.stable_ok == 64
+
+
+def test_the_interval_runs_from_the_first_pending_outcome(buffers, monkeypatch):
+    created = []
+
+    class FakeTimer:
+        def __init__(self, interval, function):
+            created.append(interval)
+            self.daemon = False
+
+        def start(self):
+            pass
+
+        def cancel(self):
+            pass
+
+    monkeypatch.setattr(canary_router.threading, "Timer", FakeTimer)
+    buffer = buffers(interval=2.0)
+    policy = CanaryPolicy("base", "candidate", 50.0)
+    for _ in range(3):
+        buffer.record(policy, "stable", True, rollout_id="r")
+    assert created == [2.0]
+
+
+def test_timed_flush_retries_after_a_transient_write_error(buffers, monkeypatch):
+    original = canary_router.atomic_write_text
+    calls = []
+
+    def flaky(*args, **kwargs):
+        calls.append(1)
+        if len(calls) == 1:
+            raise PermissionError("target locked")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(canary_router, "atomic_write_text", flaky)
+    buffer = buffers(interval=0.05)
+    buffer.record(CanaryPolicy("base", "candidate", 50.0), "canary", False, rollout_id="r")
+    deadline = time.monotonic() + 3.0
+    while time.monotonic() < deadline and not os.path.exists(buffer.path):
+        time.sleep(0.02)
+    stats = canary_router.read_bucket_stats(stable="base", canary="candidate", rollout_id="r",
+                                           path=buffer.path)
+    assert len(calls) >= 2 and stats.canary_major == 1
+
+
+def test_policy_warning_returns_after_recovery(tmp_path, monkeypatch, caplog):
+    monkeypatch.chdir(tmp_path)
+    state_path, stats_path = _write_canary_state(tmp_path, traffic_pct=100.0, rollout_id="r")
+    valid = state_path.read_text(encoding="utf-8")
+    client, _ = _serve_with_canary(monkeypatch, state_path, stats_path, adapters=("candidate",))
+    request = {"messages": [{"role": "user", "content": "hi"}], "conversation_id": "k"}
+    with client:
+        for text in ("invalid json", valid, "invalid again"):
+            state_path.write_text(text, encoding="utf-8")
+            assert client.post("/v1/chat/completions", json=request).status_code == 200
+    assert sum(record.message == "canary policy unavailable" for record in caplog.records) == 2
+
+
+def test_unloaded_adapter_warning_has_no_exception_traceback(tmp_path, monkeypatch, caplog):
+    monkeypatch.chdir(tmp_path)
+    state_path, stats_path = _write_canary_state(tmp_path, traffic_pct=100.0, rollout_id="r")
+    client, _ = _serve_with_canary(monkeypatch, state_path, stats_path, adapters=("other",))
+    with client:
+        assert client.post("/v1/chat/completions", json={"messages": [{"role": "user",
+                           "content": "hi"}], "conversation_id": "k"}).status_code == 200
+    warning = next(record for record in caplog.records if "is not loaded" in record.message)
+    assert not warning.exc_info
