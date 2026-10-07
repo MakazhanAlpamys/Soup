@@ -7,7 +7,10 @@
 > **Training a model bigger than your GPU?** `training.stream_layers: true` streams the
 > frozen base from CPU RAM (with NVMe disk overflow) one decoder layer at a time, so peak
 > VRAM is bounded by one layer instead of the whole model. Add `quantization: 4bit` and an
-> 8B base fits a 4 GB card. Works for `sft` and, from v0.72.4, for `dpo` / `orpo` /
+> 8B base fits a 4 GB card at batch 1 and 512 tokens per step; on a 128k-vocabulary model
+> every further 512 tokens costs about 1 GB more (see
+> [Sizing a streaming run](performance-and-quantization.md#sizing-a-streaming-run-v0723)).
+> Works for `sft` and, from v0.72.4, for `dpo` / `orpo` /
 > `simpo` / `kto` — DPO's reference model is the same streamed base with its adapters
 > switched off, so it needs no second copy of the model (on an untied checkpoint `dpo` and
 > `kto` still hold one copy of the output head per step) — see

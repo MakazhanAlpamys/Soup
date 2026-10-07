@@ -615,6 +615,12 @@ dominates everything else: measured on Qwen2.5-0.5B (vocab 151 936) at batch 8, 
 the logits alone are **8.71 GB — 146× the entire layer-buffer pool (0.060 GB)**. A
 pre-flight that budgeted only weights and buffers would wave that configuration through.
 
+The same term decides what an 8B base needs on a 4 GB card. Llama-3.1-8B NF4 (vocab
+128 256), streamed, LoRA r=8: **3.448 GB at batch 1, S=512**, then **1.063 GB for every
+further 512 tokens per step** — 4.512 GB at 1024, already above the 4.294 GB card
+([probe v0.73.0, section 9](../benchmarks/probe-v0.73.0-what-bounds-streaming.md#9-peak-vram-and-the-microbatch-sweep)).
+`data.max_length` defaults to 2048, so the "8B on 4 GB" setup needs `data.max_length: 512`.
+
 So `soup train` predicts peak VRAM before building the model, and **refuses a run it
 expects not to fit**:
 
