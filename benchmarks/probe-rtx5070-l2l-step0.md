@@ -27,7 +27,8 @@ shipped step instead of their times, and I6 reports the time ratio. Reason: a sm
 `HuggingFaceTB/SmolLM2-135M` (not a fixture) showed L2L at k = 1 10-20% FASTER than the
 shipped step with identical loads (57/step), identical bytes and bit-identical gradients:
 the ±5% time band would have voided G2-G4 for a difference that is not a harness error.
-Results pending.**
+Run 2026-10-07 11:28-13:22Z (§5): G1 and G2 PASS, G3 and G4 NO VERDICT (V4 on L2L arm A
+at k = 1); §6.**
 
 ---
 
@@ -244,8 +245,169 @@ owner's call (`--allow-invalid`). A failed page-lock releases the blocks it left
 
 ## 5. Results
 
-Pending.
+### 5.1 The run — 2026-10-07, 11:28:29-13:21:58Z
+
+Run from `23d567c6` (clean tree; `src/` byte-identical to `6879f323`), with the base interpreter,
+`PYTHONPATH=Soup-l2l/src` and `HF_HUB_OFFLINE=1`; `soup_cli.__file__` resolved under
+`Soup-l2l\src` (`logs/soup_cli_file.txt`, and every block's `meta`). Session measure-28, for
+soup-28, inside the owner's machine window, right after R2 attempt 2 (10:15-10:46Z). The four blocks
+ran one process each, as separate commands in `l2l_session.sh`'s order, including its
+deterministic re-run rule. Start and end times are in `logs/session.txt`:
+
+| block | what | UTC |
+|---|---|---|
+| 1 | correctness F1, k = 4 | 11:28:29-11:28:56 |
+| 1 det | the same, `--deterministic` (A-vs-A not exact) | 11:29:20-11:29:49 |
+| 2 | correctness F2, k = 2 | 11:30:01-11:31:51 |
+| 2 det | the same, `--deterministic` (A-vs-A not exact) | 11:31:58-11:34:03 |
+| 3 | timing F2 | 11:34:24-12:50:58 |
+| 4 | spill F2 | 12:51:13-13:21:58 |
+
+**Box.** AC online for every sample of every arm; no arm is V5-void. Before the run the owner
+stopped Windows Search (Stopped at 11:22Z) and closed ChatGPT, whose on-device-model process had
+sat in `nvidia-smi`'s compute-apps list, which V3 refuses. `wsl --shutdown` ran at 11:27Z. Every
+block started with 0 MiB in use and no other compute PID. An optional timing `--dry-run` at 11:28Z
+(output in a scratch folder, no arm) met V3 with 14.913 GB free after the build against 14.737 GB
+needed, and allocated the k = 16 store. Each block's own V3 then read 13.15-15.73 GB free; the
+timing and spill blocks read 15.649 and 15.726 GB against 14.737 needed.
+
+**Windows Search came back during block 3.** `SearchIndexer.exe` was restarted at 11:40:34Z. The
+service is trigger-started, so a `Stop-Service` lasts only until the next trigger, and no elevated
+shell was available to stop it again. By 12:14Z it had read 8.88 GB (8.27 GiB), and nothing more
+up to 13:19Z. 8.52 GB of that fell inside three round-0 timing arms, which V6 voids (V6 lists
+readers of 1 GB or more in an arm):
+
+| arm | SearchIndexer.exe read in the arm |
+|---|---|
+| l2l A k = 3, round 0 | 1.85 GB |
+| l2l B k = 3, round 0 | 5.56 GB |
+| l2l A k = 4, round 0 | 1.12 GB |
+
+No other process read 1 GB or more in any arm of blocks 1-4. No gate reads k = 3 or k = 4; I1 and
+I2 do, and the rule's output below says how they lose those rounds.
+
+### 5.2 Correctness (blocks 1-2)
+
+| run | fixture, k | A-vs-A (GA twice) | L2L against GA | per-micro-batch losses |
+|---|---|---|---|---|
+| block 1, default | F1 Mistral-7B NF4, RAM tier, k = 4 | **not exact**: 250 of 256 tensors differ, max abs diff 0.2133 | 250 of 256 differ, max abs diff 0.2639 | equal in both comparisons |
+| block 1, deterministic | the same | exact, 256 of 256 | **exact**, 256 of 256, max abs diff 0 | equal |
+| block 2, default | F2 70B shape NF4, disk tier, k = 2 | **not exact**: 634 of 640 differ, max abs diff 6.292e-03 | 634 of 640 differ, max abs diff 6.616e-03 | equal in both comparisons |
+| block 2, deterministic | the same | exact, 640 of 640 | **exact**, 640 of 640, max abs diff 0 | equal |
+
+Losses, identical for GA and L2L in all four runs: F1 3.257613 / 3.105495 / 3.219895 / 3.134643;
+F2 6.035345 / 5.996969. In the default mode the GA reference does not reproduce itself, and L2L
+differs from it by the same order of magnitude. Under `torch.use_deterministic_algorithms(True)`
+with `CUBLAS_WORKSPACE_CONFIG=:4096:8` all three agree bit for bit, which is G1's pre-registered
+fallback.
+
+### 5.3 Timing (block 3)
+
+Each arm: 1 warm-up and 3 timed steps; the value is the mean of the two rounds. Every arm loaded
+157 + 2 layers and moved 70,378,258,732 bytes per step.
+
+| arm | k | round 0 (s) | round 1 (s) | value (s) | tok/s | round spread | peak alloc (GB) | validity |
+|---|---|---|---|---|---|---|---|---|
+| plain A | 1 | 17.373 | 17.419 | 17.396 | 29.4 | 0.3% | 4.509 | ok |
+| plain B | 1 | 6.397 | 6.436 | 6.417 | 79.8 | 0.6% | 4.509 | ok |
+| l2l A | 1 | 17.166 | 19.765 | 18.465 | 27.7 | **14.1%** | 4.018 | **V4 fails** |
+| l2l B | 1 | 6.949 | 7.002 | 6.975 | 73.4 | 0.8% | 4.018 | ok |
+| l2l A | 2 | 17.907 | 18.114 | 18.010 | 56.9 | 1.1% | 4.028 | ok |
+| l2l B | 2 | 13.870 | 13.930 | 13.900 | 73.7 | 0.4% | 4.028 | ok |
+| l2l A | 3 | 22.688 | 22.559 | 22.624 | 67.9 | 0.6% | 4.036 | **V6, round 0** |
+| l2l B | 3 | 20.895 | 20.906 | 20.901 | 73.5 | 0.1% | 4.036 | **V6, round 0** |
+| l2l A | 4 | 28.051 | 28.078 | 28.064 | 73.0 | 0.1% | 4.044 | **V6, round 0** |
+| l2l B | 4 | 27.748 | 27.836 | 27.792 | 73.7 | 0.3% | 4.044 | ok |
+| l2l A | 8 | 55.819 | 55.966 | 55.893 | 73.3 | 0.3% | 4.078 | ok |
+| l2l B | 8 | 55.604 | 55.696 | 55.650 | 73.6 | 0.2% | 4.078 | ok |
+| l2l A | 16 | 111.752 | 111.839 | 111.796 | 73.3 | 0.1% | 4.145 | ok |
+| l2l B | 16 | 111.654 | 111.434 | 111.544 | 73.4 | 0.2% | 4.145 | ok |
+| l2l C | 4 | 23.881 | 23.848 | 23.864 | 85.8 | 0.1% | 3.443 | ok |
+| l2l D | 4 | 22.064 | 21.846 | 21.955 | 93.3 | 1.0% | 3.443 | ok |
+
+**The arm that fails V4.** l2l A at k = 1 read 17.128 / 17.196 / 17.173 s in round 0 and
+17.157 / 17.150 / **24.989** s in round 1: two steps as in round 0, and one 7.8 s longer. Its
+implied host-to-device rate is 4.10 GB/s in round 0 and 3.56 GB/s in round 1. It is the last A arm
+of round 1, after about 70 minutes of reading C:. §1's arm order puts the k = 1 arms there so that
+a drive throttle would show up as a V4 "no verdict" rather than a bias, and that is the row that
+fired. The files do not establish the cause.
+
+### 5.4 Spill (block 4)
+
+| arm | round 0 (s) | round 1 (s) | value (s) | tok/s | peak alloc (GB) |
+|---|---|---|---|---|---|
+| pinned, k = 16 | 111.466 | 112.245 | 111.856 | 73.2 | 4.145 |
+| spill (layers 0-39 through `D:\soup-l2l-spill`, unbuffered), k = 16 | 111.932 | 112.150 | 112.041 | 73.1 | 4.145 |
+
+### 5.5 The rule's output
+
+`python benchmarks/harness/l2l_rule.py benchmarks/results/probe-rtx5070/l2l`, committed as
+`verdict.md` with the raw files, and recomputed identically from the committed files:
+
+| gate | status | detail |
+|---|---|---|
+| G1 | pass | F1: 256 tensors + losses equal (deterministic); F2: 640 tensors + losses equal (deterministic) |
+| G2 | pass | T_A(16) 73.3 vs 0.8 x T_B(16) 58.8 tok/s |
+| G3 | no verdict | ('l2l', 'A', 1): V4: round spread 14.1% > 5% |
+| G4 | no verdict | ('l2l', 'A', 1): V4: round spread 14.1% > 5% |
+
+| row | ok | detail |
+|---|---|---|
+| V1 | True | direct_io=True |
+| V2 | True | A: loads 159.0 vs 159.0, bytes 70.378 vs 70.378 GB; B: loads 159.0 vs 159.0, bytes 70.378 vs 70.378 GB |
+| V3 | True | free 15.649 GB, commit available 26.480 GB, need 10.737 GB + 4.0 GB margin; 0 MiB before the build; no foreign GPU PID |
+
+| arm | valid | step s | tok/s | peak GB | why |
+|---|---|---|---|---|---|
+| plain/A/k1 | True | 17.396 | 29.4 | 4.509 |  |
+| plain/B/k1 | True | 6.417 | 79.8 | 4.509 |  |
+| l2l/A/k1 | False | 18.465 | 27.7 | 4.018 | V4: round spread 14.1% > 5% |
+| l2l/B/k1 | True | 6.975 | 73.4 | 4.018 |  |
+| l2l/A/k16 | True | 111.796 | 73.3 | 4.145 |  |
+| l2l/B/k16 | True | 111.544 | 73.4 | 4.145 |  |
+| l2l/A/k4 | False | 28.064 | 73.0 | 4.044 | V6: round 0 foreign reader SearchIndexer.exe 1.12 GB |
+| l2l/B/k4 | True | 27.792 | 73.7 | 4.044 |  |
+| l2l/C/k4 | True | 23.864 | 85.8 | 3.443 |  |
+| l2l/D/k4 | True | 21.955 | 93.3 | 3.443 |  |
+| l2l/A/k2 | True | 18.010 | 56.9 | 4.028 |  |
+| l2l/A/k3 | False | 22.624 | 67.9 | 4.036 | V6: round 0 foreign reader SearchIndexer.exe 1.85 GB |
+
+I2: dequant_share 0.210, c4_over_a4 None (A_4 is V6-void). I3: overhead 1.086. I4: ratio 0.998,
+free True, direct True. I6 (B): 1.087.
+
+**Verdict line: NO VERDICT: G3, G4.**
+
+(The V3 row is the rule's dictionary, written out; its values are unchanged.)
 
 ## 6. Verdict
 
-Pending.
+By the rule of §2 as committed (`7a2127c1`, amended before any run in `ec95e48`), applied by
+`l2l_rule.py` to the committed JSON:
+
+- **G1 (correctness): PASS**, through its pre-registered fallback. In the default mode the GA
+  reference was not exact against itself on either fixture (§5.2), so each block re-ran in a fresh
+  process with deterministic algorithms. There A-vs-A is exact, and the L2L step's LoRA gradients
+  (256 tensors on F1 at k = 4, 640 on F2 at k = 2) and per-micro-batch losses are `torch.equal`
+  to GA.
+- **G2 (the read hides): PASS.** T_A(16) = 73.3 tok/s against 0.8 x T_B(16) = 58.8 tok/s.
+- **G3 (it pays): NO VERDICT.** It reads T_A(1), and l2l A at k = 1 fails V4 (round spread 14.1%,
+  §5.3).
+- **G4 (VRAM flat in k): NO VERDICT**, by the same row on the same arm.
+- **Validity:** V1, V2 and V3 hold. V4 fails on l2l A k = 1 only. V5 holds for every arm. V6 voids
+  round 0 of l2l A k = 3, B k = 3 and A k = 4, arms no gate reads.
+
+The outcome table of §2 has no row for G1 and G2 passing with G3 and G4 undecided, so this record
+does not choose a next step; that is the owner's call. The numbers G3 and G4 would have read are
+recorded above and are **not** judged here: T_A(16) / T_A(1) = 73.3 / 27.7 tok/s, where round 0
+alone gives 29.8; peak allocated 4.145 GB at k = 16 against 4.018 GB at k = 1.
+
+**I1 (the R2 control), cited from R2's own §6** (`probe-rtx5070-batch-control.md` on
+`probe/batch-control`, attempt 2, commit `91b070c4`; R2 ran the PR #1536 head `2c6ed087` with its
+per-drive dispatcher on one drive, which is not byte-for-byte this branch's reader). SINGLE
+batch 2 is **NEAR-FREE** (`ē` 1.027, no label; 57.13 / 57.60 tok/s). SINGLE batch 3 is **PARTIAL**
+(`ē` 0.899, no label, DISAGREES AT b3; 75.21 / 75.54 tok/s). The largest batch that fits is 3
+(6.312 GB allocated). Against them: T_A(2) = 56.9 tok/s, and T_A(3) = 67.9 tok/s, whose round 0 is
+V6-void (round 1 alone: 68.1).
+
+Nothing in §2 was edited after the run. The records are local, on `probe/l2l-step0`, and not
+pushed.
