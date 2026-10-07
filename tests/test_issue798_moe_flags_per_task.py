@@ -443,13 +443,19 @@ class TestTheDropoutConstraint:
         )
 
     @pytest.mark.parametrize("arch", ["mixtral", "minimax"])
-    def test_an_architecture_peft_does_not_route_is_not_refused(self, arch):
-        """The over-refusal this replaced: peft accepts these at dropout 0.05,
-        so Soup must not refuse them. Verified against the real attach below."""
+    def test_an_architecture_peft_does_not_route_is_refused_since_1421(self, arch):
+        """Until #1421 these two were NOT refused: peft's conversion never routed
+        their targets onto the fused experts, so the attach at dropout 0.05
+        succeeded -- and adapted no experts. Now ``moe_lora`` names the fused
+        parameters itself, so the experts are reached on these families too, and
+        peft's ``ParamWrapper`` refuses dropout there exactly as on Qwen3-MoE.
+        ``test_peft_really_accepts_those_two_at_dropout`` below still holds for a
+        module-only attach, which is what it measures."""
         from soup_cli.utils.moe import resolve_moe_lora_targets
 
         model = _MOE_STAND_INS[arch]()
-        assert resolve_moe_lora_targets(model, self._tcfg(0.05), ["q_proj"]) is not None
+        with pytest.raises(ValueError, match="ParamWrapper"):
+            resolve_moe_lora_targets(model, self._tcfg(0.05), ["q_proj"])
 
     @pytest.mark.parametrize("arch", ["mixtral", "minimax"])
     def test_peft_really_accepts_those_two_at_dropout(self, arch):
@@ -631,9 +637,11 @@ class TestPerArchitectureCoverage:
     a recipe that looks fixed and is not is worse than one that visibly fails.
     """
 
-    #: What `get_moe_target_modules` + a real peft attach does per family, on
-    #: tiny stand-ins. `expert adapters > 0` is the thing `moe_lora` promises.
-    EXPECTED = {
+    #: What the module names alone (`get_moe_target_modules` + a real peft
+    #: attach) reach per family, on tiny stand-ins: peft's own name conversion
+    #: decides it. Since #1421 the trainer path below adds the fused parameters
+    #: as `target_parameters`, and every family here gets its expert adapters.
+    MODULE_NAMES_ALONE = {
         "qwen3_moe": True,
         "deepseek_v3": True,
         "glm4_moe": True,
@@ -641,24 +649,47 @@ class TestPerArchitectureCoverage:
         "minimax": False,
     }
 
-    @pytest.mark.parametrize("arch", sorted(EXPECTED))
-    def test_expert_coverage_is_what_the_pr_claims(self, arch):
+    @pytest.mark.parametrize("arch", sorted(MODULE_NAMES_ALONE))
+    def test_expert_coverage_by_module_names_alone(self, arch):
         from peft import LoraConfig, TaskType, get_peft_model
 
         from soup_cli.utils.moe import get_moe_target_modules
 
         model = _MOE_STAND_INS[arch]()
         attached = get_peft_model(model, LoraConfig(
-            r=4, lora_dropout=0.0, target_modules=get_moe_target_modules(model),
+            r=4, lora_dropout=0.0, target_modules=list(get_moe_target_modules(model)),
             task_type=TaskType.CAUSAL_LM,
         ))
         experts = [name for name in _adapted(attached) if "expert" in name.lower()]
-        assert bool(experts) is self.EXPECTED[arch], (arch, experts)
+        assert bool(experts) is self.MODULE_NAMES_ALONE[arch], (arch, experts)
+
+    @pytest.mark.parametrize("arch", sorted(MODULE_NAMES_ALONE))
+    def test_the_trainer_path_reaches_the_experts_on_every_family(self, arch):
+        """#1421: the two calls every MoE-wired trainer makes, then peft's attach.
+        The fused parameters travel on the resolved targets into the LoraConfig,
+        so Mixtral and MiniMax are no longer attention-only."""
+        from peft import get_peft_model
+
+        from soup_cli.utils.moe import resolve_moe_lora_targets
+        from soup_cli.utils.peft_wiring import build_lora_config
+
+        model = _MOE_STAND_INS[arch]()
+        tcfg = SimpleNamespace(moe_lora=True, lora=SimpleNamespace(
+            r=4, alpha=8, dropout=0.0, use_dora=False, use_rslora=False, use_vera=False,
+            rank_pattern=None, alpha_pattern=None, init_strategy="random",
+        ))
+        targets = resolve_moe_lora_targets(model, tcfg, ["q_proj"], None)
+        attached = get_peft_model(
+            model, build_lora_config(tcfg.lora, target_modules=targets, task_type="CAUSAL_LM")
+        )
+        experts = [name for name in _adapted(attached) if "expert" in name.lower()]
+        assert experts, (arch, _adapted(attached))
 
     def test_the_uncovered_families_are_named_in_the_docs(self):
-        """MiniMax gets zero expert adapters, so `minimax-m3-sft` trains
-        attention-only. That has to be written down where a user looks, not only
-        in a test. (`minimax-m3-dpo` was removed in #1145: DPO cannot build the
+        """`minimax-m3-sft` sets no `moe_lora` (it loads through SFT's vision
+        path, which never runs the MoE step), so it trains attention-only. That
+        has to be written down where a user looks, not only in a test.
+        (`minimax-m3-dpo` was removed in #1145: DPO cannot build the
         `minimax_m3_vl` wrapper.)"""
         from pathlib import Path
 

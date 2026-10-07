@@ -9,7 +9,7 @@
 ```
 soup init [--template chat|code|...|audio]       Create config
 soup init --template hipaa|soc2|eu-ai-act|sr-11-7  Compliance-shaped starting config + the commands for that regime (v0.71.35)
-soup autopilot --model <id> --data d.jsonl --goal <g>  Zero-config: pick task/quant/LR/epochs from data + model + goal
+soup autopilot [--model <id>] [--data d.jsonl] [--goal <g>]  Zero-config: pick task/quant/LR/epochs (prompts when omitted)
 soup advise <data> --goal "..."               Pre-flight decision: PROMPT_ENG / RAG / SFT / DPO / GRPO — run BEFORE spending GPU hours
 soup advise compare                           Show prior verdicts from advise history
 soup advise explain                           Rubric + evidence trail of the last verdict
@@ -28,8 +28,8 @@ soup train --config soup.yaml --push-as user/repo  Auto-push each checkpoint to 
 soup train --config soup.yaml --push-as user/repo --hf-resume  Resume from latest HF checkpoint branch (not with training.relora_steps)
 soup train --config soup.yaml --find-lr        LR range finder: write recommended LR JSON
 soup train --config soup.yaml --cloud modal|lambda --gpu a100  Render a cloud GPU controller (plan-only; --cloud-submit submits live)
-soup infer --model ./output --input p.jsonl   Batch inference
-soup infer --model ./output --input p.jsonl --cuda-graphs   Experimental CUDA graph decode (Qwen2/Llama, one GPU, PyTorch >= 2.14)
+soup infer --model ./output --input p.jsonl [--batch-size N]   Batch inference; default batch size is 1; fp16/bf16 batching may not be bit-exact with batch size 1
+soup infer --model ./output --input p.jsonl --cuda-graphs   Experimental CUDA graph decode (Qwen2/Llama, one GPU, PyTorch >= 2.14; batch size 1 only)
 soup infer --task asr --model <whisper|adapter> --input a.jsonl --output o.jsonl [--audio-dir d --asr-language en --asr-task transcribe|translate]  Whisper transcription + WER/CER
 soup chat --model ./output                    Interactive chat
 soup infer|chat|diff ... --device cpu|cuda|cuda:N|mps  Pick where the model loads (see below)
@@ -46,8 +46,8 @@ soup export --model ./output --format gguf    Export to GGUF (Ollama)
 soup export --model ./output --deploy ollama  Export GGUF + auto-deploy to Ollama
 soup export --model ./output --format onnx    Export to ONNX
 soup export --model ./output --format tensorrt  Export to TensorRT-LLM
-soup export --model ./output --format awq --calibration-data cal.jsonl  Export to AWQ (4-bit)
-soup export --model ./output --format gptq --calibration-data cal.jsonl  Export to GPTQ (4-bit)
+soup export --model ./output --format awq --calibration-data cal.jsonl  Export to AWQ (4-bit; deprecated, removed in the next release)
+soup export --model ./output --format gptq --calibration-data cal.jsonl  Export to GPTQ (4-bit; deprecated, removed in the next release)
 soup deploy ollama --model m.gguf --name x    Deploy GGUF to Ollama
 soup deploy ollama --list                     List Soup-deployed models
 soup deploy ollama --remove <name>            Remove model from Ollama
@@ -396,6 +396,20 @@ also covers `soup bench`, which loads through the `soup infer` path).
 
 Values are case-insensitive. Any other value (`gpu`, `auto`, `cuda:0,1`, ...)
 is refused with an error instead of being ignored.
+
+### Interactive Autopilot (`soup autopilot`)
+
+When standard input is an interactive terminal and any of `--model`, `--data`, or `--goal`
+are omitted, `soup autopilot` prompts for the missing values:
+
+- **Model**: Base model Hugging Face repository ID (or local path). Blank entries are refused.
+- **Data**: Local training dataset path (JSONL). Must exist under current working directory.
+- **Goal**: One of `chat`, `reasoning`, `code`, `classification`, `tool-calling`, `alignment`,
+  or `domain-adapt`.
+
+When run with all three options supplied, or when standard input is not a terminal (e.g. CI,
+scripts, or pipelines), `soup autopilot` never prompts: complete flags execute directly,
+and omitted required flags exit with code 2 and the standard `Missing option` error.
 
 ### Best-of-N recovery and publication
 

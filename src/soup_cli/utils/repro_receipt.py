@@ -129,6 +129,13 @@ def _detect_mps_metadata(torch_module) -> dict:
     return out
 
 
+def _driver_version() -> Optional[str]:
+    """The NVIDIA driver version via the same query ``soup bench train`` records (#1446)."""
+    from soup_cli.bench.train_run import _driver_version as bench_driver_version
+
+    return bench_driver_version()
+
+
 def _detect_torch_kernel_versions() -> dict:
     """Best-effort torch / CUDA / cuDNN / NCCL detection.
 
@@ -181,6 +188,11 @@ def _detect_torch_kernel_versions() -> dict:
             out["gpu_models"] = tuple(names)
     except Exception as exc:  # noqa: BLE001
         _LOG.debug("repro_receipt torch probe failed: %s", exc)
+    if out["accelerator_backend"] == "cuda":
+        try:
+            out["driver_version"] = _driver_version()
+        except Exception as exc:  # noqa: BLE001
+            _LOG.debug("repro_receipt driver probe failed: %s", exc)
     if out["accelerator_backend"] is None:
         out.update(_detect_mps_metadata(torch))
     return out

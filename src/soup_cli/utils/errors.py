@@ -261,10 +261,10 @@ _AUTH_HINTS = {
 # size, path component, or hash slice cannot match.
 _AUTH_STATUS_TEXT = (
     (re.compile(r"401\s+(?:Unauthorized|Client Error)"), 401),
-    (re.compile(r"HTTP\s+(?:Error\s+)?[:=]?\s*401\b"), 401),
+    (re.compile(r"HTTP\s+(?:Error\s+)?(?:[:=]\s*)?401\b"), 401),
     (re.compile(r"Error code:\s*401\b"), 401),
     (re.compile(r"403\s+(?:Forbidden|Client Error)"), 403),
-    (re.compile(r"HTTP\s+(?:Error\s+)?[:=]?\s*403\b"), 403),
+    (re.compile(r"HTTP\s+(?:Error\s+)?(?:[:=]\s*)?403\b"), 403),
     (re.compile(r"Error code:\s*403\b"), 403),
 )
 
