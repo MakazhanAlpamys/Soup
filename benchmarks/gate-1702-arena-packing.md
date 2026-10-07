@@ -18,11 +18,14 @@ path). Its schedule and rule are held by tests/test_issue1702_arena_pack_gate.py
 
 # Gate record — largest-first packing of the pinned arenas (#1702)
 
-**Status (2026-10-07): memory saving confirmed, strict control passed, SPEED SERIES NOT RUN YET.**
+**Status (2026-10-07): memory saving confirmed, strict control passed, speed series run:
+NO DIFFERENCE measurable at +/-15.1%.**
 On `main` plus the change, the Qwen3-8B NF4 RAM tier page-locks 6,442,450,944 bytes
 where the in-order plan page-locks 8,589,934,592, and three deterministic optimizer
-steps are byte-identical between the two plans (§4). Nothing in this record says
-anything about speed until §5 is filled in. No speed-up and no slow-down is claimed.
+steps are byte-identical between the two plans (§4). The speed series (§5) completed 40
+of 40 runs: the RAM tier's mean difference is +1.96%, inside the band of +/-15.13% the
+control set, so by the rule written beforehand no speed-up and no slow-down is claimed.
+The band is wide; the series cannot exclude a change smaller than that.
 
 ---
 
@@ -138,10 +141,49 @@ This is a statement about three steps under deterministic execution. It shows th
 layouts hand the same bytes to the same computation. It is not a claim about default
 (non-deterministic) execution or about a long run.
 
-## 5. Speed series
+## 5. Speed series: NO DIFFERENCE measurable at +/-15.1% (2026-10-07)
 
-Not run yet. It needs the box to itself for about an hour. The results
-(`series.jsonl`, `verdict.json`) and the verdict by §2 go here.
+One series, 16:40Z-17:16Z (35.6 minutes), at `4e692d31`, in a declared window with no
+test suite and no other GPU job on the box. 40 of 40 runs completed; no failed run and
+no harness fault. Every stamp shows AC power; before the runs 13.3-16.5 GB of RAM was
+available and the commit charge was 52.6-56.8%. The Windows Search service was running.
+Files: `benchmarks/results/probe-rtx5070/issue1702/series.jsonl` (one line per run, in
+run order) and `verdict.json`.
+
+| seed | RAM tier `d` | control `d` |
+|---:|---:|---:|
+| 3 | -2.71% | +3.03% |
+| 17 | +4.75% | -0.39% |
+| 29 | -1.41% | +9.69% |
+| 43 | +3.58% | -0.34% |
+| 59 | +5.61% | -15.13% |
+| mean (sample SD) | **+1.96%** (3.77%) | -0.63% (9.09%) |
+
+By §2: the control's mean is -0.63%, inside +/-3%, so the series stands (rule 3). The
+noise band `b` is 15.13%, the largest `|d|` in the control (rule 2). The RAM tier's mean
+`d` of +1.96% is inside +/-15.13% (rule 4): **no difference measurable at +/-15.13%.
+The PR claims memory only.** No repeat is due: the rule allows one only after an
+inconclusive series.
+
+| mode, arm (10 runs each) | tokens/s, mean (SD) | median step | store build | peak RSS | page-locked bytes |
+|---|---:|---:|---:|---:|---:|
+| RAM, in-order | 515.8 (30.7) | 0.972 s | 11.5 s | 10.84 GB | 8,589,934,592 |
+| RAM, packed | 525.5 (31.5) | 0.963 s | 9.0 s | 8.69 GB | 6,442,450,944 |
+| disk, in-order | 273.1 (24.2) | 1.866 s | 1.7 s | 6.13 GB | 4,294,967,296 |
+| disk, packed | 270.6 (22.2) | 1.882 s | 1.5 s | 6.12 GB | 4,294,967,296 |
+
+Peak VRAM was 2.807 GB allocated and 3.047 GB reserved in every run.
+
+**What this resolution means.** The band is wide because the control ran in two
+regimes. 15 of its 20 runs have a median step of 1.86-2.01 s and 5 have 1.62-1.64 s:
+the first three runs of seed 29 (one in-order, two packed) and the first and last runs
+of seed 59 (both in-order). A block split between the two regimes gives +9.69% and
+-15.13%; the other three blocks are within about 3%. The plan is the same in both arms
+on the disk tier, so this is the box and not the change, which is what a control is
+for. The RAM tier shows no such split (its median steps span 0.875-1.102 s, and its
+five `d` span -2.71% to +5.61%), but the rule takes the band from the control and the
+rule was written first. So: this series cannot exclude a change of less than 15% in
+either direction, and it shows none.
 
 ## 6. What this record does not show
 
