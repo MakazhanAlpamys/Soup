@@ -11,6 +11,8 @@ from soup_cli.config.loader import load_config_from_string
 from soup_cli.migrate.common import config_to_yaml
 from soup_cli.migrate.unsloth import migrate_unsloth
 
+from .conftest import strip_ansi
+
 
 def _notebook(tmp_path: Path, source: str) -> Path:
     path = tmp_path / "stage.ipynb"
@@ -96,18 +98,22 @@ def test_later_trainer_without_args_uses_defaults(tmp_path: Path) -> None:
     assert "lr" not in result["training"]
 
 
+@pytest.mark.parametrize("force_color", [False, True])
 def test_cli_dry_run_emits_the_final_stage_config(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, force_color: bool,
 ) -> None:
     monkeypatch.chdir(tmp_path)
     _notebook(tmp_path, _stage())
-    result = CliRunner().invoke(app, ["migrate", "--from", "unsloth", "stage.ipynb", "--dry-run"])
+    runner = CliRunner(env={"FORCE_COLOR": str(int(force_color)), "COLUMNS": "300"})
+    result = runner.invoke(
+        app, ["migrate", "--from", "unsloth", "stage.ipynb", "--dry-run"], color=force_color,
+    )
     assert result.exit_code == 0, result.output
     # The CLI preview includes notes around the YAML; pin the emitted values.
-    assert "task: grpo" in result.output
-    assert "output: stage_out" in result.output
-    assert "lr: 5.0e-06" in result.output
-    assert "batch_size: 4" in result.output
+    assert "task: grpo" in strip_ansi(result.output)
+    assert "output: stage_out" in strip_ansi(result.output)
+    assert "lr: 5.0e-06" in strip_ansi(result.output)
+    assert "batch_size: 4" in strip_ansi(result.output)
     assert not (tmp_path / "soup.yaml").exists()
 
 
