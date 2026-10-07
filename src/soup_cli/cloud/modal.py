@@ -254,7 +254,7 @@ def plan_modal_run(
     output_dir: str,
     soup_version: str,
     stub_path: str = "soup_modal_app.py",
-config_yaml: str | None = None,
+    config_yaml: str | None = None,
 ) -> CloudPlan:
     """Build a :class:`CloudPlan` from a cwd-contained ``soup.yaml``.
 

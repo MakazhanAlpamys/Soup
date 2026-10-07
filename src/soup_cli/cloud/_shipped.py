@@ -27,30 +27,61 @@ succeed is worse than a plan-time error naming the field.
 from __future__ import annotations
 
 import os
-from pathlib import Path
 from typing import TYPE_CHECKING, List, Tuple
+
+from soup_cli.mcp_server.registry import PLAN_INPUT_FIELDS
 
 if TYPE_CHECKING:  # pragma: no cover — typing only
     from soup_cli.config.schema import SoupConfig
 
-#: Fields whose value is a path the remote run reads. Mirrors the subset of
-#: `mcp_server.registry.PLAN_INPUT_FIELDS` that is a file the loader opens
-#: rather than a model or suite id.
-_PATH_FIELDS: Tuple[Tuple[str, ...], ...] = (
-    ("data", "image_dir"),
-    ("data", "audio_dir"),
-    ("data", "video_dir"),
-    ("data", "replay"),
-    ("data", "tokenized_path"),
-    ("data", "forget_set"),
-    ("data", "retain_set"),
-    ("training", "reward_fn"),
-    ("training", "prm_reward"),
-    ("training", "minillm_pretrain_anchor_path"),
-    ("training", "mole_task_adapters"),
-    ("training", "ra_dit_retriever_model"),
-    ("eval", "custom_tasks"),
+#: Dotted paths the remote run reads. Sourced from
+#: ``mcp_server.registry.PLAN_INPUT_FIELDS`` so the two lists cannot drift, with
+#: ``data.train`` (handled entry by entry through the schema's own classifier)
+#: and ``training.checkpoint_eval_tasks``, which ``soup train`` never reads,
+#: removed.
+_PATH_FIELDS: Tuple[str, ...] = tuple(
+    field
+    for field in PLAN_INPUT_FIELDS
+    if field not in {"data.train", "training.checkpoint_eval_tasks"}
 )
+
+
+_LOCAL_ESCAPE_PREFIXES: Tuple[str, ...] = (
+    "./",
+    "../",
+    "~/",        # home
+    "/",         # absolute path
+    "\\\\",      # Windows UNC
+    "\\",        # Windows root-relative
+)
+
+_COMMA_SEPARATED_PLAN_INPUTS: frozenset[str] = frozenset(
+    {"training.reward_fn"}
+)
+
+
+def _resolve_plan_input(cfg: "SoupConfig", dotted: str) -> object:
+    """Read a dotted schema path; a missing intermediate model yields None."""
+    value: object = cfg
+    for part in dotted.split("."):
+        value = getattr(value, part, None)
+        if value is None:
+            return None
+    return value
+
+
+def _entries_for_plan_input(value: object, dotted: str) -> List[str]:
+    """Normalise a field value into the list of strings the loader opens.
+
+    ``data.train`` and ``data.replay`` already arrive as a list, and
+    ``training.reward_fn`` accepts a comma-separated ensemble. Every other
+    field is a single string.
+    """
+    if isinstance(value, (list, tuple)):
+        return [str(entry) for entry in value]
+    if dotted in _COMMA_SEPARATED_PLAN_INPUTS and isinstance(value, str):
+        return [part.strip() for part in value.split(",") if part.strip()]
+    return [str(value)]
 
 
 def _is_remote(value: str) -> bool:
@@ -73,28 +104,42 @@ def _train_entry_is_local(entry: str) -> bool:
 
 
 def _path_field_is_local(value: str) -> bool:
-    """True for a directory/file field whose value names a local path.
+    """True when a directory/file field points at a local file the stub cannot
+    carry.
 
-    ponytail: shape-based, not existence-based. A bare name with no separator
-    and no suffix (``images``) is not detected — it is genuinely ambiguous
-    with a Hub id, and the escape hatch is to write ``./images``. Upgrade path:
-    walk the fields the loader opens and check each with its own rule, as
-    ``_train_entry_is_local`` does for train.
+    The rule is existence or escape-hatch, not shape. A Hugging Face hub id
+    (owner/name, with a slash) is never a local path, so a model id such as
+    sentence-transformers/all-mpnet-base-v2 (the schema's own example) now
+    plans fine instead of being refused at exit 2. A plain name such as
+    teacher is left alone on purpose: without a separator or a leading slash
+    there is nothing to distinguish it from a dataset id, and writing ./teacher
+    is the safe way to say this is local.
+
+    ponytail: existence checked at plan time, not real-path-checked. A value
+    whose parent directory was deleted falls through and reaches the remote
+    run, which then fails; fixing that properly is walking every field the
+    loader opens and giving each its own rule, as _train_entry_is_local does
+    for data.train. Upgrade path: the os.path.exists call is the only part that
+    can be wrong tonight, and it can be guarded with the field type once that
+    rule is written once.
     """
-    text = value.strip()
-    if _is_remote(text):
+    if _is_remote(value):
         return False
-    if text.startswith(("./", "../", ".\\", "..\\", "~", "/", "\\")):
+    if value.startswith(_LOCAL_ESCAPE_PREFIXES):
         return True
-    return bool(os.sep in text or "/" in text or "\\" in text or Path(text).suffix)
+    if len(value) >= 2 and value[1] == ":" and value[0].isalpha():
+        return True
+    return os.path.exists(value)
 
 
 def unshipped_inputs(cfg: "SoupConfig") -> List[str]:
     """Dotted paths whose local file the stub would not carry, sorted.
 
-    ``data.train`` may be a single entry or a list, and each is classified
-    separately: a Hub id in the list is fine and a ``./data`` file beside it is
-    not, so the whole field cannot be judged by its first entry.
+    data.train may be a single entry or a list, and each is classified
+    separately: a Hub id in the list is fine and a ./data file beside it is
+    not, so the whole field cannot be judged by its first entry. Every other
+    field is walked as a dotted schema path so a list or a comma-separated
+    value is judged entry by entry.
     """
     found: List[str] = []
     train = getattr(getattr(cfg, "data", None), "train", None)
@@ -102,16 +147,14 @@ def unshipped_inputs(cfg: "SoupConfig") -> List[str]:
         entries = [train] if isinstance(train, str) else list(train or [])
         if any(_train_entry_is_local(e) for e in entries if isinstance(e, str)):
             found.append("data.train")
-    for section, field in _PATH_FIELDS:
-        value = getattr(getattr(cfg, section, None), field, None)
-        if isinstance(value, str) and _path_field_is_local(value):
-            found.append(f"{section}.{field}")
-    # `training.eval_gate.suite` is a nested path, walked explicitly.
-    gate = getattr(getattr(cfg, "training", None), "eval_gate", None)
-    for field in ("suite", "baseline"):
-        value = getattr(gate, field, None)
-        if isinstance(value, str) and _path_field_is_local(value):
-            found.append(f"training.eval_gate.{field}")
+
+    for dotted in _PATH_FIELDS:
+        value = _resolve_plan_input(cfg, dotted)
+        if value is None:
+            continue
+        entries = _entries_for_plan_input(value, dotted)
+        if any(_path_field_is_local(str(entry)) for entry in entries):
+            found.append(dotted)
     return sorted(set(found))
 
 
