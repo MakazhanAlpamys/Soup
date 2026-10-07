@@ -25,7 +25,7 @@
 - [Semantic dedup (`soup data dedup --semantic`)](#semantic-dedup-soup-data-dedup---semantic)
 - [Dataset Sanitization & Repair (`soup data clean`)](#dataset-sanitization--repair-soup-data-clean)
 - [Topic map (`soup data topics`)](#topic-map-soup-data-topics)
-- [Canaries (`soup data canary insertcheck`)](#canaries-soup-data-canary-insertcheck)
+- [Canaries (`soup data canary insert|check`)](#canaries-soup-data-canary-insertcheck)
 - [Data Recipe DAG](#data-recipe-dag)
 - [Data Mixing Optimizer (BETA)](#data-mixing-optimizer-beta)
 - [AOT Tokenization with `soup data preprocess`](#aot-tokenization-with-soup-data-preprocess)
@@ -515,19 +515,19 @@ Augment an existing dataset using an LLM — rephrase for diversity, translate f
 
 ```bash
 # Rephrase each example N times for more diversity
-soup data augment ./data/train.jsonl --strategy rephrase --count 3 \
+soup data augment --input ./data/train.jsonl --strategy rephrase --count 3 \
   --output ./data/train_augmented.jsonl
 
 # Translate into multiple languages
-soup data augment ./data/train.jsonl --strategy translate --lang es,fr,de \
+soup data augment --input ./data/train.jsonl --strategy translate --lang es,fr,de \
   --output ./data/train_multilingual.jsonl
 
 # Style transfer (formal / casual / technical / etc.)
-soup data augment ./data/train.jsonl --strategy style --styles formal,casual \
+soup data augment --input ./data/train.jsonl --strategy style --styles formal,casual \
   --output ./data/train_styled.jsonl
 
 # Local provider (Ollama, loopback-only) — pick the model + base URL
-soup data augment ./data/train.jsonl --strategy rephrase --count 2 \
+soup data augment --input ./data/train.jsonl --strategy rephrase --count 2 \
   --provider ollama --model qwen2.5:0.5b --output ./data/train_local.jsonl
 ```
 
@@ -1088,7 +1088,7 @@ soup data pii          --input training.jsonl --output pii_flagged.jsonl
 soup data toxicity     --input training.jsonl --output tox_flagged.jsonl --threshold 0.1
 soup data langdetect   --input training.jsonl --output tagged.jsonl
 soup data educational  --input training.jsonl --output scored.jsonl
-soup data decontaminate --input training.jsonl --benchmarks mmlu,gsm8k,humaneval --output clean.jsonl
+soup data decontaminate --input training.jsonl --benchmark-file benchmarks.jsonl --benchmarks mmlu,gsm8k,humaneval --output clean.jsonl
 ```
 
 `data score` shows decontamination as **not run**, not a measured zero, unless

@@ -1,4 +1,4 @@
-<!-- synced-from: README.md sha256:4dfed787f12e9d2a94ba6cf97d76b25aa4151095125c9eae65628bfe63e86d0f -->
+<!-- synced-from: README.md sha256:ec88771fbfed8c92bfc4c260d73cb6502d9585744333724cc7938d825c707b02 -->
 <p align="center">🌍 <a href="README.md">English</a> | <strong>Türkçe</strong> | <a href="README.ar.md">العربية</a> | <a href="README.ja.md">日本語</a></p>
 
 <p align="center">
@@ -289,7 +289,7 @@ akış, parçalama, iç içe geçirme, sözcük dağarcığı genişletme, belge
 
 ```bash
 soup train  --config soup.yaml        # eğitin (SFT/DPO/GRPO/PPO/KTO/ORPO/SimPO/IPO/...)
-soup infer  --model ./output --input prompts.jsonl   # toplu çıkarım
+soup infer  --model ./output --input prompts.jsonl --output results.jsonl   # toplu çıkarım
 soup chat   --model ./output          # etkileşimli sohbet
 soup serve  --model ./output          # OpenAI uyumlu API sunucusu
 soup ui                               # yerel tarayıcı panosu

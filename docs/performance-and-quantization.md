@@ -941,7 +941,7 @@ Coverage:
 
 ```bash
 soup train --config soup.yaml --trust-remote-code
-soup infer --model my-org/custom-arch-model --input prompts.jsonl --trust-remote-code
+soup infer --model my-org/custom-arch-model --input prompts.jsonl --output out.jsonl --trust-remote-code
 soup export --model ./adapter --format gguf --trust-remote-code
 ```
 

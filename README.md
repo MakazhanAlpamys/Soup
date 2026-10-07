@@ -286,7 +286,7 @@ interleaving, vocab expansion, document ingestion), are in
 
 ```bash
 soup train  --config soup.yaml        # train (SFT/DPO/GRPO/PPO/KTO/ORPO/SimPO/IPO/...)
-soup infer  --model ./output --input prompts.jsonl   # batch inference
+soup infer  --model ./output --input prompts.jsonl --output results.jsonl   # batch inference
 soup chat   --model ./output          # interactive chat
 soup serve  --model ./output          # OpenAI-compatible API server
 soup ui                               # local browser dashboard

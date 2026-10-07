@@ -6,7 +6,7 @@
 
 **Contents:**
 
-- [Post-train X-rays (`soup probe`, `soup adapters blame --live`)](#post-train-x-rays-soup-probe-soup-adapters-blame---live)
+- [Post-train X-rays (`soup probe`, `soup adapters blame`)](#post-train-x-rays-soup-probe-soup-adapters-blame)
 - [Pre-flight Decision (`soup advise`)](#pre-flight-decision-soup-advise)
 - [Eval Design Pipeline (`soup eval design / discover / lock / coverage`)](#eval-design-pipeline-soup-eval-design--discover--lock--coverage)
 - [Run-vs-run Regression (`soup eval against`)](#run-vs-run-regression-soup-eval-against)
@@ -25,7 +25,7 @@
 
 ---
 
-## Post-train X-rays (`soup probe`, `soup adapters blame --live`)
+## Post-train X-rays (`soup probe`, `soup adapters blame`)
 
 Five surfaces that extend `soup diagnose` from 6 failure modes to 10. Mechanistic interpretability has been research-grade for years; v0.66.0 ships the wiring CLI-first so anyone can probe their FT without the SaaS unit-economics tax.
 
