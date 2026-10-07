@@ -66,6 +66,15 @@ def _normalise_bind(bind_host: str) -> str:
     return bind
 
 
+def is_wildcard_bind(bind_host: str) -> bool:
+    """True when ``bind_host`` names every interface rather than one address.
+
+    For such a bind there is no single name to compare ``Host`` against, which
+    is why :func:`check_local_request` falls back to ``Origin`` alone.
+    """
+    return _normalise_bind(bind_host) in WILDCARD_HOSTS
+
+
 def _allowed_hostnames(bind: str) -> frozenset[str]:
     """The hostnames that name an already-normalised, non-wildcard bind."""
     return LOOPBACK_HOSTNAMES if bind in LOOPBACK_HOSTNAMES else frozenset({bind})

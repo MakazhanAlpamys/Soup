@@ -896,3 +896,14 @@ generation on their server or enumerate the loaded adapters — CORS alone would
 that page *reading* the reply, not sending the request. Requests that carry no `Origin` at
 all — curl, the OpenAI/Anthropic SDKs, a reverse proxy — are unaffected, and `Host` is not
 checked on these routes, so a proxy can still front them under its own hostname.
+
+**What `--tool-auth-token` does not cover.** `soup serve` refuses a non-loopback `--host`
+without `--tool-auth-token`, but the token is checked on the tool routes, `/v1/thumbs` and
+the adapter routes only. `/v1/chat/completions`, `/v1/messages`, `/v1/models`, `/health` and
+`/metrics` take no token on any bind, so they answer every client that can reach the port;
+put a proxy that authenticates in front of the server if that is not intended. With
+`--backend vllm`, `sglang` or `mii` there are no tool or adapter routes, so no route checks
+the token. On a wildcard bind (`0.0.0.0`, `::`) there is no single name to compare `Host`
+against, so the routes that otherwise compare it check only that an `Origin` header, when
+sent, names the same host as `Host`. `soup serve` prints these points at startup whenever
+it binds beyond loopback.
