@@ -3273,7 +3273,8 @@ class TrainingConfig(BaseModel):
         description=(
             "Fire a paper-faithful ReLoRA restart every N global steps: merge the "
             "LoRA update into the base weight, reinitialize lora_A/lora_B, and "
-            "optionally clear optimizer state. None disables. Requires float LoRA "
+            "optionally prune shape-matched optimizer moments. None disables. "
+            "Requires float LoRA "
             "(training.quantization defaults to '4bit' and must be set to 'none'; "
             "incompatible with VeRA, DoRA, layer streaming, and FSDP2 compile)."
         ),
@@ -3285,16 +3286,15 @@ class TrainingConfig(BaseModel):
     relora_reset_optimizer: bool = Field(
         default=True,
         description=(
-            "Clear optimizer state for lora_A/lora_B parameters after each "
-            "ReLoRA merge+reinit restart"
+            "Prune shape-matched optimizer moments for lora_A/lora_B parameters "
+            "after each ReLoRA merge+reinit restart"
         ),
     )
     relora_prune_ratio: float = Field(
         default=0.9, gt=0.0, lt=1.0,
         description=(
-            "Deprecated: kept so older YAML still loads. Restarts no longer "
-            "magnitude-prune adapter weights; relora_reset_optimizer controls "
-            "optimizer clearing instead."
+            "Fraction of each shape-matched optimizer moment to prune after a "
+            "ReLoRA restart; ties use a deterministic exact keep-count"
         ),
     )
     # Convergence detection (v0.32.0 Part F)

@@ -132,7 +132,8 @@ class TestMagnitudePrune:
 
         x = torch.ones(10)
         out = magnitude_prune_tensor(x.clone(), prune_ratio=0.9)
-        assert (out != 0).sum().item() == 1
+        expected = torch.tensor([1.0] + [0.0] * 9)
+        assert torch.equal(out, expected)
 
     def test_magnitude_prune_single_element_no_crash(self):
         try:
@@ -496,7 +497,7 @@ class TestMergeReinitAndReset:
         assert not torch.all(model.lora_A.weight == 0)
         assert torch.all(model.lora_B.weight == 0)
 
-    def test_merge_reinit_clears_real_optimizer_state(self):
+    def test_merge_reinit_prunes_real_optimizer_state(self):
         try:
             import torch
         except ImportError:
@@ -510,13 +511,45 @@ class TestMergeReinitAndReset:
         opt.step()
         params = [model.lora_A.weight, model.lora_B.weight]
         for param in params:
-            assert param in opt.state
-            assert len(opt.state[param]) > 0
-
+            state = opt.state[param]
+            state["exp_avg"].fill_(1.0)
+            state["exp_avg_sq"].fill_(1.0)
         cb = ReLoRACallback(policy=ReLoRAPolicy(steps=10, prune_ratio=0.9))
         cb._merge_reinit_and_reset(model, opt)
         for param in params:
-            assert len(opt.state[param]) == 0
+            state = opt.state[param]
+            assert "step" in state
+            assert "exp_avg" in state
+            assert "exp_avg_sq" in state
+
+    def test_merge_reinit_prunes_optimizer_moments_with_exact_tie_count(self):
+        try:
+            import torch
+        except ImportError:
+            pytest.skip("torch not available")
+        from soup_cli.utils.relora import ReLoRACallback, ReLoRAPolicy
+
+        model = _make_fake_lora_module()
+        optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
+        loss = model(torch.randn(2, 4)).sum()
+        loss.backward()
+        optimizer.step()
+        params = [model.lora_A.weight, model.lora_B.weight]
+        for param in params:
+            state = optimizer.state[param]
+            state["exp_avg"].fill_(1.0)
+            state["exp_avg_sq"].fill_(1.0)
+            state["step"] = torch.tensor(7.0)
+
+        callback = ReLoRACallback(policy=ReLoRAPolicy(steps=10, prune_ratio=0.75))
+        callback._merge_reinit_and_reset(model, optimizer)
+
+        for param in params:
+            state = optimizer.state[param]
+            assert state["step"].item() == 7.0
+            assert (state["exp_avg"] != 0).sum().item() == 2
+            assert (state["exp_avg_sq"] != 0).sum().item() == 2
+
 
     def test_optimizer_reset_rejected_before_merge(self):
         try:
@@ -663,30 +696,27 @@ class TestMergeReinitAndReset:
         assert torch.equal(model.base.weight, before_base)
 
 
-def test_attach_relora_callback_warns_prune_ratio_ignored(caplog):
-    import logging
-
+def test_attach_relora_callback_uses_prune_ratio():
     from soup_cli.utils.peft_wiring import attach_relora_callback
 
     trainer = _single_process_trainer()
-    tcfg = TrainingConfig(relora_steps=100, relora_prune_ratio=0.9)
-    with caplog.at_level(logging.WARNING, logger="soup_cli.utils.peft_wiring"):
-        attach_relora_callback(trainer, tcfg)
-    assert "relora_prune_ratio" in caplog.text
-    assert "ignored" in caplog.text.lower()
+    tcfg = TrainingConfig(relora_steps=100, relora_prune_ratio=0.75)
+    attach_relora_callback(trainer, tcfg)
+
+    callback = trainer.add_callback.call_args.args[0]
+    assert callback.policy.prune_ratio == 0.75
 
 
-def test_attach_relora_callback_default_prune_ratio_does_not_warn(caplog):
-    import logging
-
+def test_attach_relora_callback_defaults_prune_ratio():
     from soup_cli.utils.peft_wiring import attach_relora_callback
 
     trainer = _single_process_trainer()
     tcfg = TrainingConfig(relora_steps=100)
     assert "relora_prune_ratio" not in tcfg.model_fields_set
-    with caplog.at_level(logging.WARNING, logger="soup_cli.utils.peft_wiring"):
-        attach_relora_callback(trainer, tcfg)
-    assert "relora_prune_ratio" not in caplog.text
+    attach_relora_callback(trainer, tcfg)
+
+    callback = trainer.add_callback.call_args.args[0]
+    assert callback.policy.prune_ratio == 0.9
 
 
 def test_attach_relora_refuses_world_size_gt_1():
