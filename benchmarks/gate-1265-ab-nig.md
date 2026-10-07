@@ -135,11 +135,12 @@ scale. k = 5 keeps almost all of k = 8's power for 3 fewer rows.
   instead of accepting, which is the safe direction — and the conclusions here carry over. The
   timing figures in particular were not measured with it on.
 - **A hold that fires on a saturated warm-up is never released by more rows.** The held-out
-  rows are fixed, so a run can sit at `continue` for the whole dataset with its
-  `log_likelihood_ratio` already past the accept boundary. `soup ab` now reports that state
-  (`accept_held` plus the two spreads, in the panel and in the JSON verdict) instead of only
-  advising more samples (#1524). The real fix belongs with the statistic — a confidence
-  sequence has no held-out prior to go stale (#1418).
+  rows are fixed, so a run can sit at `continue` for the whole dataset while the confidence
+  sequence for the difference is already inside `+-effect_size`. `soup ab` now reports that
+  state (`accept_held` plus the two spreads) in the panel and on the `MsprtVerdict` that
+  `run_msprt` / `msprt_step` return, instead of only advising more samples (#1524). It has
+  no JSON output, and a held run sends no webhook. #1418 replaced the accept rule and kept
+  this hold, so the hold still applies.
 
 ## Environment
 

@@ -5,13 +5,15 @@ standard deviation is more than `ACCEPT_HOLD_SPREAD_RATIO` (3) times the
 held-out rows'. That fixed the wrong accepts after a saturated start, and left
 the other side open: the held-out rows are FIXED, so once the hold fires, more
 rows of the same kind never release it. A run that sits there prints "Insufficient
-evidence. Collect more samples and re-run." with a `log_likelihood_ratio`
-already below the accept boundary, and that advice cannot help — the held-out
-spread does not move.
+evidence. Collect more samples and re-run." with the confidence sequence for the
+difference already inside `+-effect_size`, and that advice cannot help — the
+held-out spread does not move.
 
 So the verdict now carries `accept_held` plus the two spreads, and the panel
-prints one line that names the ratio and what to do about it. The JSON gains
-keys only: nothing renamed, nothing removed.
+prints one line that names the ratio and what to do about it. There is no JSON
+to gain keys in — `soup ab` has none, and a held run sends no webhook (the
+webhook fires only on a terminal decision, and a hold is only legal on a
+`continue`) — so the facts live on the panel and on the `MsprtVerdict`.
 
 The two tests that matter are the pair below. `test_a_held_accept_says_why`
 fails if the hold is removed (it asserts the field AND that the hold is what
@@ -86,9 +88,7 @@ class TestAcceptHoldNote:
 
         verdict = _step(control, treatment)
 
-        # The accept boundary is crossed: log(beta / (1 - alpha)).
         assert verdict.decision == "continue", verdict.decision
-        assert verdict.log_likelihood_ratio <= math.log(0.20 / (1.0 - 0.05))
         assert verdict.accept_held is True
         # Both spreads are present, finite, and the tested rows really are the
         # wider ones — that is the whole content of the note.
@@ -357,6 +357,13 @@ def test_the_panel_names_the_hold_and_its_ratio(tmp_path, monkeypatch):
         f"(held_out_spread {verdict.held_out_spread:.4g}, "
         f"tested_spread {verdict.tested_spread:.4g}, limit 3x)"
     ) in out, out
+    # The three details the note's advice rests on, pinned.
+    assert "already inside +-0.1." in out, out
+    assert "accept_held true" in out, out
+    # Each spread appears exactly twice: once as a table row, once in the panel
+    # prose. A count of 1 means one of the two was dropped.
+    assert out.count(f"held_out_spread {verdict.held_out_spread:.4g}") == 2, out
+    assert out.count(f"tested_spread {verdict.tested_spread:.4g}") == 2, out
     # It must not ALSO print the advice it replaces.
     assert "insufficient evidence" not in out, out
 
@@ -383,6 +390,35 @@ def test_the_panel_of_an_unheld_continue_is_unchanged(tmp_path, monkeypatch):
     assert "insufficient evidence. collect more samples and re-run." in out, out
     assert "held back" not in out, out
     assert "accept_held" not in out, out
+
+
+def test_the_panel_names_the_rows_that_actually_set_the_scale(tmp_path, monkeypatch):
+    """A bit-equal warm-up holds out more than ``PRIOR_SCALE_ROWS`` rows.
+
+    ``PRIOR_SCALE_ROWS`` is 5, so a panel that printed the constant would be
+    right on every input but this one. ``_held_out_rows`` keeps holding rows out
+    while both arms are still bit-equal, so the count is only knowable per run
+    and the panel has to name the real one.
+    """
+    from soup_cli.cli import app
+    from soup_cli.utils.ab_test import MsprtConfig, run_msprt
+
+    monkeypatch.chdir(tmp_path)
+    rng = random.Random(7)
+    control = [1.0] * 7 + [0.999] + [round(rng.gauss(0.82, 0.05), 3) for _ in range(60)]
+    treatment = [1.0] * 7 + [0.9991] + [round(rng.gauss(0.82, 0.05), 3) for _ in range(60)]
+    inp = tmp_path / "ab.jsonl"
+    _write_jsonl(inp, control, treatment)
+    verdict = run_msprt(str(inp), config=MsprtConfig(metric="judge_score"))
+    assert verdict.accept_held is True, verdict  # the premise
+    assert verdict.held_out_rows != 5, verdict.held_out_rows  # the premise
+
+    result = runner.invoke(app, ["ab", "--input", str(inp), "--metric", "judge_score"])
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+
+    out = _plain(result.output).lower()
+    assert f"held_out_rows {verdict.held_out_rows}" in out, out
+    assert f"the first {verdict.held_out_rows} rows of each arm set the scale" in out, out
 
 
 # ---------------------------------------------------------------------------

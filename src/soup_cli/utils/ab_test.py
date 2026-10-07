@@ -39,12 +39,14 @@ is retired. Record: benchmarks/gate-1418-ab-cs-accept.md.
 
 #1419 added a hold on `accept_h0` (see ACCEPT_HOLD_SPREAD_RATIO) which fixes the
 wrong accepts after a saturated start but, because the held-out rows are fixed,
-can leave a run at `continue` for the whole dataset with its statistic already
-past the accept boundary. That state is reported, not fixed, here (#1524): the
-verdict carries `accept_held` and the two spreads, so the panel can advise
-dropping or reordering the saturated rows rather than collecting more samples
-that provably cannot help. The accept rule itself is unchanged; a real fix
-belongs with the statistic (#1418), which has no held-out prior to go stale.
+can leave a run at `continue` for the whole dataset with the confidence sequence
+for the difference already inside (-effect_size, +effect_size). That state is
+reported, not fixed, here (#1524): the verdict carries `accept_held` and the two
+spreads, so the panel can advise dropping or reordering the saturated rows rather
+than collecting more samples that provably cannot help. The accept rule itself is
+unchanged. #1418's confidence sequence covers at its level for any prior scale
+fixed before the tested rows, so it does not need the hold for its guarantee;
+whether the hold stays is #1524's question, and until then it is unchanged.
 
 Two known limitations:
 1. Single metric per pass — multi-metric correction (Bonferroni / Holm)
@@ -555,9 +557,11 @@ def msprt_step(
     A ``continue`` may carry ``accept_held`` (#1524): when the 3x spread rule is
     what is keeping the accept back, the verdict reports it and names both
     spreads. That case is reported rather than fixed here — the held-out rows
-    are fixed, so a saturated warm-up is never released by more rows — because
-    a real fix belongs with the statistic (#1418), which has no held-out prior to
-    go stale.
+    are fixed, so a saturated warm-up is never released by more rows — and the
+    accept rule itself is unchanged. #1418's confidence sequence covers at its
+    level for any prior scale fixed before the tested rows, so it does not need
+    the hold for its guarantee; whether the hold stays is #1524's question, and
+    until then it is unchanged.
     """
     ctrl = _validate_sample_list(control, arm="control")
     treat = _validate_sample_list(treatment, arm="treatment")
@@ -655,10 +659,11 @@ def msprt_step(
         if tested_sd > ACCEPT_HOLD_SPREAD_RATIO * held_out_sd:
             # #1524 - the held-out rows are fixed, so once the hold fires no
             # amount of extra data of the same kind releases it: the run stays
-            # at `continue` however many rows arrive, with a log_likelihood_ratio
-            # already below the accept boundary. Say so on the verdict, with the
-            # two spreads that decided it, so the panel can advise something the
-            # operator can act on instead of "collect more samples".
+            # at `continue` however many rows arrive, with the confidence
+            # sequence for the difference already inside +-effect_size. Say so
+            # on the verdict, with the two spreads that decided it, so the panel
+            # can advise something the operator can act on instead of "collect
+            # more samples".
             return verdict(
                 llr,
                 accept_held=True,
