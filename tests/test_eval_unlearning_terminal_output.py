@@ -283,7 +283,12 @@ def test_write_error_shows_the_exception_text_literally(monkeypatch, tmp_path):
 
 
 def test_attached_line_shows_the_registry_id_literally(monkeypatch, tmp_path):
-    monkeypatch.setattr(attach_mod, "attach_artifact", lambda **kwargs: None)
+    # The stand-ins take the helper's own keyword-only signature, so a call the
+    # real attach_artifact would refuse fails here too.
+    def _attached(entry_id, *, path, kind, enforce_cwd=True):
+        return 1
+
+    monkeypatch.setattr(attach_mod, "attach_artifact", _attached)
     result, out = _run(
         monkeypatch, tmp_path, "run1", "--output", "report.json", "--attach-to-registry", FILE_TEXT
     )
@@ -293,14 +298,14 @@ def test_attached_line_shows_the_registry_id_literally(monkeypatch, tmp_path):
 
 
 def test_attach_failure_shows_the_exception_text_literally(monkeypatch, tmp_path):
-    def _missing(**kwargs):
-        raise ValueError(f"registry entry not found: {kwargs['entry_id']}")
+    def _missing(entry_id, *, path, kind, enforce_cwd=True):
+        raise ValueError(f"registry entry not found: {entry_id}")
 
     monkeypatch.setattr(attach_mod, "attach_artifact", _missing)
     result, out = _run(
         monkeypatch, tmp_path, "run1", "--output", "report.json", "--attach-to-registry", FILE_TEXT
     )
-    _exit(result, 0)
+    _exit(result, 1)
     assert "Registry attach failed: registry entry not found:" in out
     _assert_shown_literally(out)
 
