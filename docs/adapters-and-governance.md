@@ -155,6 +155,27 @@ directory containing `.soup/`, because the loop state and canary statistics path
 resolved from the working directory. Clients choose their own stable key, so a client
 can deliberately select a key that hashes into the canary bucket.
 
+The serving process caches the parsed policy using the state file's
+`(st_mtime_ns, st_size, st_ino)` identity. Atomic replacement invalidates it,
+so a rollback written by `soup loop watch` affects the next keyed request.
+State-path failures are warned about once per serving app rather than on every request.
+
+Outcome counters are buffered per serving app and persisted after 64 completed
+outcomes or two seconds from the first pending outcome, whichever comes first.
+Orderly shutdown flushes the remaining counters. With a healthy writable filesystem,
+an abrupt crash can lose the unflushed window (at most one 64-outcome batch, including
+a flush in progress, normally at most two seconds); scheduling delays or disk errors
+can delay persistence. A failed write
+retains the pending counters for retry. Rollout IDs prevent promotions from sharing
+samples. Pending samples and late completions from superseded promotions are discarded
+rather than replacing the new rollout's file. The existing stats lock protects threads
+in one process, not multiple server
+processes writing the same file.
+
+A canary that kills the serving process never reaches outcome recording: recording
+happens only after generation returns or raises. Such crashes remain invisible to
+the canary verdict unless external restart monitoring detects them.
+
 
 ## Knowledge Editing (`soup edit set`, ROME / MEMIT / AlphaEdit)
 
