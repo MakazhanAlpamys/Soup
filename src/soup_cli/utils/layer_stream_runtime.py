@@ -557,8 +557,20 @@ def plan_pinned_arenas(
 ) -> ArenaPlan:
     """Pack ``sizes`` (bytes, allocation order) into power-of-two arenas.
 
-    First-fit into the current arena, else open the next; a tensor never
-    straddles two arenas, because it has to be one contiguous view.
+    Two layouts are planned. The in-order walk puts each tensor into the arena
+    opened last, else opens the next. The largest-first walk (stable first-fit
+    decreasing) is returned ONLY when it page-locks strictly fewer bytes; on a
+    tie the in-order plan comes back, placement for placement. Either way
+    ``placements`` is indexed in the order the sizes were given, and a tensor
+    never straddles two arenas, because it has to be one contiguous view.
+
+    The in-order walk alone strands the space in front of a large tensor that
+    arrives late (#1702). A Qwen3-8B NF4 store is 3.58 GB of decoder tensors
+    followed by two 1.24 GB vocabulary matrices; neither fits behind the
+    decoder, so each opened a 2 GiB arena of its own: 8 GiB page-locked for a
+    6.07 GB store. Largest-first puts the two matrices down first and the
+    decoder fills in around them: 6 GiB. The test is bytes, not arena count —
+    after the trim a sorted layout can hold as many arenas and MORE bytes.
 
     The arena capacity is the power of two above FOUR times the store's largest
     tensor, floored at ``arena_bytes`` and capped at
@@ -591,6 +603,13 @@ def plan_pinned_arenas(
         return ArenaPlan(arena_sizes=(), placements=(), requested_bytes=0)
     ceiling = max(arena_bytes, PINNED_ARENA_MAX_BYTES)
     capacity = min(max(arena_bytes, _next_power_of_two(4 * max(sizes))), ceiling)
+    in_order = _plan_in_order(sizes, capacity, align)
+    largest_first = _plan_largest_first(sizes, capacity, align)
+    return largest_first if largest_first.pinned_bytes < in_order.pinned_bytes else in_order
+
+
+def _plan_in_order(sizes: Sequence[int], capacity: int, align: int) -> ArenaPlan:
+    """Allocation order: each tensor into the arena opened last, else a new one."""
     fills: List[int] = []
     capacities: List[int] = []
     placements: List[Tuple[int, int]] = []
@@ -605,6 +624,34 @@ def plan_pinned_arenas(
         # Only a tensor beyond the ceiling opens an arena wider than the rest.
         capacities.append(max(capacity, _next_power_of_two(size)))
         placements.append((len(fills) - 1, 0))
+    return ArenaPlan(
+        arena_sizes=tuple(max(align, _next_power_of_two(fill)) for fill in fills),
+        placements=tuple(placements),
+        requested_bytes=sum(sizes),
+    )
+
+
+def _plan_largest_first(sizes: Sequence[int], capacity: int, align: int) -> ArenaPlan:
+    """Largest tensor first, each into the FIRST arena with room, else a new one.
+
+    The sort is stable, so equal sizes keep their allocation order. Each
+    placement is written back at the tensor's ORIGINAL index: both sources read
+    the plan in allocation order, whatever order the arenas were filled in.
+    """
+    fills: List[int] = []
+    capacities: List[int] = []
+    placements: List[Tuple[int, int]] = [(0, 0)] * len(sizes)
+    for original, size in sorted(enumerate(sizes), key=lambda item: -item[1]):
+        for arena, fill in enumerate(fills):
+            start = -(-fill // align) * align
+            if start + size <= capacities[arena]:
+                placements[original] = (arena, start)
+                fills[arena] = start + size
+                break
+        else:
+            placements[original] = (len(fills), 0)
+            fills.append(size)
+            capacities.append(max(capacity, _next_power_of_two(size)))
     return ArenaPlan(
         arena_sizes=tuple(max(align, _next_power_of_two(fill)) for fill in fills),
         placements=tuple(placements),
