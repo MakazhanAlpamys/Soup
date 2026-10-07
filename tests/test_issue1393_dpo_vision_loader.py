@@ -146,6 +146,17 @@ class TestTheLoaderMapFollowsTheTrainer:
         assert loader_for(vision_simpo) == ("AutoModelForCausalLM",)
 
 
+    def test_a_tied_blend_follows_the_first_listed_loss(self):
+        """Equal weights pick the first-listed loss, as ``trainer/preference.py`` does
+        (review of #1707, round 2)."""
+        dpo_first = _cfg(task="preference", modality="vision",
+                         preference_loss_weights="{dpo: 0.5, ipo: 0.5}")
+        ipo_first = _cfg(task="preference", modality="vision",
+                         preference_loss_weights="{ipo: 0.5, dpo: 0.5}")
+        assert loader_for(dpo_first) == ("AutoModelForImageTextToText",)
+        assert loader_for(ipo_first) == ("AutoModelForCausalLM",)
+
+
 class TestTheRealAttach:
     """The acceptance row of the issue, on the real resolution and the real
     ``get_peft_model``: a DPO config with ``modality: vision`` attaches to the
@@ -295,3 +306,12 @@ class TestABackendWhoseDpoIgnoresModalityIsRefused:
     def test_unsloth_text_dpo_and_transformers_vision_dpo_still_load(self):
         assert _cfg(backend="unsloth").backend == "unsloth"
         assert _cfg(modality="vision").modality == "vision"
+
+    def test_a_tied_blend_is_refused_only_when_dpo_is_listed_first(self):
+        """The refusal breaks a tie the same way the preflight and the trainer do."""
+        with pytest.raises(ValueError):
+            _cfg(task="preference", modality="vision", backend="unsloth",
+                 preference_loss_weights="{dpo: 0.5, ipo: 0.5}")
+        ipo_first = _cfg(task="preference", modality="vision", backend="unsloth",
+                         preference_loss_weights="{ipo: 0.5, dpo: 0.5}")
+        assert ipo_first.backend == "unsloth"
