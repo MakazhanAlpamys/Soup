@@ -170,8 +170,7 @@ def refuse_unshipped_inputs(cfg: "SoupConfig") -> None:
         return
     listed = ", ".join(fields)
     raise ValueError(
-        f"--cloud ships only the config: {listed} point at local files that "
-        "are not uploaded, so the remote run would fail after the instance "
-        "boots. Use a Hugging Face Hub dataset id instead, or run locally. "
-        "See issue #1430."
+        f"--cloud ships only the config: {listed} would leave local files behind, "
+        "so the remote run would fail after the instance boots. Use a Hugging Face "
+        "Hub dataset id instead, or run locally. See issue #1430."
     )

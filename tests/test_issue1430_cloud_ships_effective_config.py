@@ -23,6 +23,7 @@ from typer.testing import CliRunner
 
 from soup_cli.cli import app
 from soup_cli.config.loader import load_config
+from tests.conftest import strip_ansi
 
 runner = CliRunner()
 
@@ -72,7 +73,7 @@ def test_a_local_data_file_stops_the_plan_instead_of_the_paid_run(chat_config, c
     result = _plan(cloud)
 
     assert result.exit_code != 0, result.output
-    assert "data.train" in result.output, result.output
+    assert "data.train" in strip_ansi(result.output), strip_ansi(result.output)
     assert not Path(f"soup_{cloud}_app.py").exists(), "a stub was rendered anyway"
 
 
@@ -151,6 +152,29 @@ def test_minillm_on_policy_reaches_the_remote_config(chat_config, cloud):
 
 
 @pytest.mark.parametrize("cloud", CLOUDS)
+def test_reward_hack_mitigation_reaches_the_remote_config(chat_config, cloud):
+    cfg = load_config(chat_config)
+    cfg.data.train = "teknium/OpenHermes-2.5"
+    cfg.task = "grpo"
+    cfg.training.reward_fn = "accuracy"
+    chat_config.write_text(
+        yaml.safe_dump(cfg.model_dump(mode="json"), sort_keys=False), encoding="utf-8"
+    )
+
+    result = _plan(
+        cloud,
+        "--reward-hack-detector",
+        "info_rm",
+        "--reward-hack-mitigation",
+        "kl_control",
+    )
+
+    assert result.exit_code == 0, " ".join(strip_ansi(result.output).split())
+    shipped = "\n".join(_shipped_configs(Path(f"soup_{cloud}_app.py")))
+    assert "reward_hack_mitigation: kl_control" in shipped, shipped
+
+
+@pytest.mark.parametrize("cloud", CLOUDS)
 def test_an_unsupported_local_field_is_named_too(chat_config, cloud):
     """Not just data.train: anything the loader opens locally is named."""
     _rewrite(load_config(chat_config), chat_config,
@@ -159,7 +183,7 @@ def test_an_unsupported_local_field_is_named_too(chat_config, cloud):
     result = _plan(cloud)
 
     assert result.exit_code != 0, result.output
-    assert "data.image_dir" in result.output, result.output
+    assert "data.image_dir" in strip_ansi(result.output), strip_ansi(result.output)
 
 
 @pytest.mark.parametrize("argv", [["--push-as", "me/soup"], ["--gate", "suite.yaml"]])
@@ -171,7 +195,7 @@ def test_flags_handled_after_the_cloud_branch_are_refused(chat_config, argv, tmp
     result = _plan("lambda", *argv)
 
     assert result.exit_code != 0, result.output
-    assert argv[0] in result.output, result.output
+    assert argv[0] in strip_ansi(result.output), strip_ansi(result.output)
     assert not Path("soup_lambda_app.py").exists(), "a stub was rendered anyway"
 
 
@@ -257,3 +281,4 @@ class TestUnshippedInputs:
 
         with pytest.raises(ValueError, match="Hub dataset id"):
             refuse_unshipped_inputs(self._cfg("./data/train.jsonl"))
+
