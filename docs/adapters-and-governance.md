@@ -719,6 +719,7 @@ soup adapters check path/to/adapter/ --json
 Outputs human diagnostics ending in a single verdict line: `alive` (exit code 0) or `inactive: <reason>` (exit code 2 for inactive/silent failure, distinct from usage error 1). Possible inactivity reasons include:
 - `all lora_B layers are zero (n/n)`
 - `lora_B layers are zero (k/n)`
+- `total ||ΔW||_F is 0.0`
 - `leaked .inner. keys detected (<n> tensors)`
 - `incomplete LoRA pairs detected (<n> orphans)`
 - `shape mismatch in LoRA projections (<n> layers)`

@@ -28,7 +28,11 @@ import pytest
 from typer.testing import CliRunner
 
 from soup_cli.cli import app as soup_app
-from soup_cli.utils.adapter_check import check_adapter
+from soup_cli.utils.adapter_check import (
+    AdapterCheckReport,
+    check_adapter,
+    render_check_terminal,
+)
 from tests.conftest import strip_ansi
 
 runner = CliRunner()
@@ -667,3 +671,147 @@ def test_terminal_injection_control_bytes_stripped(
     assert "\x1b" not in res.stdout
 
 
+def test_zero_lora_a_inactive_verdict_regression(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """When lora_A is all zeros, adapter is inactive with reason 'total ||ΔW||_F is 0.0'."""
+    pytest.importorskip("safetensors")
+    monkeypatch.chdir(tmp_path)
+    adapter_dir = tmp_path / "zero_a_adapter"
+
+    weights = {
+        Q_LORA_A: np.zeros((8, 16), dtype=np.float32),
+        Q_LORA_B: np.ones((16, 8), dtype=np.float32),
+    }
+    _write_synthetic_adapter(adapter_dir, weights, r=8, alpha=16.0)
+
+    report = check_adapter("zero_a_adapter")
+    assert report.verdict == "inactive"
+    assert report.reason == "total ||ΔW||_F is 0.0"
+    assert report.verdict_line == "inactive: total ||ΔW||_F is 0.0"
+    assert report.total_frobenius == 0.0
+    assert report.live_fraction == 0.0
+    assert report.live_layers == 0
+    assert len(report.all_zero_lora_b_layers) == 0
+
+    res = runner.invoke(soup_app, ["adapters", "check", "zero_a_adapter"])
+    assert res.exit_code == 2
+    out = strip_ansi(res.stdout)
+    assert "inactive: total ||ΔW||_F is 0.0" in out
+    assert "Total ||ΔW||_F: 0.000000" in out
+    assert "Live fraction: 0.0% (0/1 layers)" in out
+
+
+def test_terminal_sanitization_adapter_path():
+    """Adapter path carrying escape bytes in terminal report must be stripped."""
+    report = AdapterCheckReport(
+        adapter="models/\x1b[2Jmalicious_run\x1b[0m",
+        verdict="alive",
+        reason=None,
+        total_frobenius=1.0,
+        live_fraction=1.0,
+        live_layers=1,
+        total_layers=1,
+        all_zero_lora_b_layers=(),
+        inner_keys=(),
+        per_layer=(),
+    )
+    rendered = render_check_terminal(report)
+    assert chr(27) not in rendered
+    assert "\x1b" not in rendered
+    assert "malicious_run" in rendered
+
+
+def test_terminal_sanitization_shape_mismatches(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Shape-mismatched projection names with control bytes must be sanitized."""
+    pytest.importorskip("safetensors")
+    monkeypatch.chdir(tmp_path)
+    adapter_dir = tmp_path / "mismatch_esc"
+
+    esc_shape_a = "base_model.model.layers.0.self_attn.\x1b[31mmismatch_layer\x1b[0m.lora_A.weight"
+    esc_shape_b = "base_model.model.layers.0.self_attn.\x1b[31mmismatch_layer\x1b[0m.lora_B.weight"
+    weights = {
+        esc_shape_a: np.ones((16, 8), dtype=np.float32),
+        esc_shape_b: np.ones((16, 8), dtype=np.float32),
+    }
+    _write_synthetic_adapter(adapter_dir, weights, r=4, alpha=16.0)
+
+    res = runner.invoke(soup_app, ["adapters", "check", "mismatch_esc"])
+    assert res.exit_code == 2
+    assert chr(27) not in res.stdout
+    assert "\x1b" not in res.stdout
+    assert "Shape-mismatched LoRA pairs:" in res.stdout
+    assert "mismatch_layer" in res.stdout
+
+
+def test_terminal_sanitization_zero_b_names(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Zero-B layer names carrying control bytes must be sanitized in terminal output."""
+    pytest.importorskip("safetensors")
+    monkeypatch.chdir(tmp_path)
+    adapter_dir = tmp_path / "zero_b_esc"
+
+    esc_b_name = "base_model.model.layers.0.self_attn.\x1b[2Jzero_b_layer\x1b[0m.lora_B.weight"
+    esc_a_name = "base_model.model.layers.0.self_attn.\x1b[2Jzero_b_layer\x1b[0m.lora_A.weight"
+    weights = {
+        esc_a_name: np.ones((8, 16), dtype=np.float32),
+        esc_b_name: np.zeros((16, 8), dtype=np.float32),
+    }
+    _write_synthetic_adapter(adapter_dir, weights, r=8, alpha=16.0)
+
+    res = runner.invoke(soup_app, ["adapters", "check", "zero_b_esc"])
+    assert res.exit_code == 2
+    assert chr(27) not in res.stdout
+    assert "\x1b" not in res.stdout
+    assert "Zero lora_B projections:" in res.stdout
+    assert "zero_b_layer" in res.stdout
+
+
+def test_terminal_sanitization_cli_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """CLI errors and invalid JSON messages with control characters must be stripped on stderr."""
+    pytest.importorskip("safetensors")
+    monkeypatch.chdir(tmp_path)
+
+    # 1. Non-existent path argument with escape bytes
+    res_path = runner.invoke(soup_app, ["adapters", "check", "nonexistent_\x1b[2J_dir"])
+    assert res_path.exit_code == 1
+    assert chr(27) not in res_path.output
+    assert "\x1b" not in res_path.output
+
+    # 2. Corrupt adapter_config.json with escape bytes
+    corrupt_dir = tmp_path / "corrupt_esc"
+    corrupt_dir.mkdir()
+    (corrupt_dir / "adapter_config.json").write_text(
+        "{\x1b[2J\"invalid_json\":", encoding="utf-8"
+    )
+    (corrupt_dir / "adapter_model.safetensors").write_bytes(b"empty")
+
+    res_cfg = runner.invoke(soup_app, ["adapters", "check", "corrupt_esc"])
+    assert res_cfg.exit_code == 1
+    assert chr(27) not in res_cfg.output
+    assert "\x1b" not in res_cfg.output
+
+
+def test_terminal_sanitization_verdict_line():
+    """Verdict line carrying control bytes in reason must be sanitized by verdict_line."""
+    report = AdapterCheckReport(
+        adapter="models/run",
+        verdict="inactive",
+        reason="injected\x1b[2Jreason\x1b[0m",
+        total_frobenius=0.0,
+        live_fraction=0.0,
+        live_layers=0,
+        total_layers=1,
+        all_zero_lora_b_layers=(),
+        inner_keys=(),
+        per_layer=(),
+    )
+    line = report.verdict_line
+    assert chr(27) not in line
+    assert "\x1b" not in line
+    assert line == "inactive: injected[2Jreason[0m"

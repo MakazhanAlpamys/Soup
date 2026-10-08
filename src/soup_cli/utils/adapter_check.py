@@ -63,7 +63,7 @@ class AdapterCheckReport:
         """The single final line required by contract."""
         if self.verdict == "alive":
             return "alive"
-        return f"inactive: {self.reason}" if self.reason else "inactive"
+        return f"inactive: {strip_control(self.reason)}" if self.reason else "inactive"
 
 
 def _read_config(adapter_dir: Path) -> dict[str, Any]:
@@ -454,7 +454,7 @@ def render_check_terminal(report: AdapterCheckReport) -> str:
         if len(report.shape_mismatches) > 5:
             lines.append(f"  ... and {len(report.shape_mismatches) - 5} more")
 
-    if report.all_zero_lora_b_layers and len(report.all_zero_lora_b_layers) < report.total_layers:
+    if report.all_zero_lora_b_layers:
         lines.append("Zero lora_B projections:")
         for name in report.all_zero_lora_b_layers[:5]:
             lines.append(f"  - {strip_control(name)}")
