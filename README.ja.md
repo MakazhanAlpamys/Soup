@@ -1,4 +1,4 @@
-<!-- synced-from: README.md sha256:ad8f9dd91ca5fd56ff6bda0b6b1c1efe26b4ab7e464bbf5bb8dca4faab55b810 -->
+<!-- synced-from: README.md sha256:f74127a9057738b5e059e83ea068f51241fca31280ed319ba1d20c5174c5aed4 -->
 <p align="center">🌍 <a href="README.md">English</a> | <a href="README.tr.md">Türkçe</a> | <a href="README.ar.md">العربية</a> | <strong>日本語</strong></p>
 
 <p align="center">
@@ -467,4 +467,4 @@ Soup に関するあらゆる件の正しい連絡先です。**makazanalpamys@g
 
 ## ライセンス
 
-[Apache-2.0](LICENSE)。Copyright © Soup コントリビューター。
+[Apache-2.0](LICENSE)。Copyright 2026 Makazhan Alpamys and the Soup contributors。Soup またはその改変コピーを再配布する場合は、ライセンスの第4条と第6条が適用されます。コピーごとに `LICENSE` と `NOTICE` を保持し、変更したファイルにその旨を明記し、作品の出所を述べる範囲を超えて Soup の名称を使用しないでください。

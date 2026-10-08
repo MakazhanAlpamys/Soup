@@ -16,3 +16,4 @@
 - [ ] `pytest tests/ -v` passes
 - [ ] Updated relevant docs (`README.md` and the matching page under `docs/`) if needed
 - [ ] Added a changelog fragment, or this change has no user-visible impact
+- [ ] My contribution is licensed under Apache-2.0, the project's own terms (see `CONTRIBUTING.md`)

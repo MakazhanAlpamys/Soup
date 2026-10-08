@@ -1,0 +1,13 @@
+- **`LICENSE` is the published Apache-2.0 text again, the holder line is spelled once, and `license-files` is pinned (#1677 in #PRNUM).**
+  `LICENSE` had drifted from the text on apache.org: section 6 lacked "reasonable and customary
+  use in" and section 9 read "Warranty or Support" where the published wording is "Warranty or
+  Additional Liability". It is now byte-identical to the published file, with the appendix left
+  as the standard template. `NOTICE`, the four READMEs, the package `authors` and one stray test
+  header now carry the same holder line, `Copyright 2026 Makazhan Alpamys and the Soup
+  contributors`, and `NOTICE` is reduced to the product name and that line. `pyproject.toml`
+  names `license-files = ["LICENSE", "NOTICE"]` instead of relying on hatchling's default globs;
+  `tests/test_issue1677_licence_files.py` fails if the key, either file, the two restored
+  passages or the holder line goes. The README points redistributors to sections 4 and 6 of the
+  licence, `CONTRIBUTING.md` and the PR template say that contributions are accepted under
+  Apache-2.0 (no CLA, no DCO), and `tests/fixtures/cyclonedx/README.md` records the sha256 of the
+  three vendored CycloneDX schemas.

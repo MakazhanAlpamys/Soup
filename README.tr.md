@@ -1,4 +1,4 @@
-<!-- synced-from: README.md sha256:ad8f9dd91ca5fd56ff6bda0b6b1c1efe26b4ab7e464bbf5bb8dca4faab55b810 -->
+<!-- synced-from: README.md sha256:f74127a9057738b5e059e83ea068f51241fca31280ed319ba1d20c5174c5aed4 -->
 <p align="center">🌍 <a href="README.md">English</a> | <strong>Türkçe</strong> | <a href="README.ar.md">العربية</a> | <a href="README.ja.md">日本語</a></p>
 
 <p align="center">
@@ -480,4 +480,4 @@ dahil.
 
 ## Lisans
 
-[Apache-2.0](LICENSE). Telif hakkı © Soup katkıda bulunanları.
+[Apache-2.0](LICENSE). Copyright 2026 Makazhan Alpamys and the Soup contributors. Soup'u veya değiştirilmiş bir kopyasını yeniden dağıtırsanız lisansın 4. ve 6. maddeleri sizin için geçerlidir: her kopyayla birlikte `LICENSE` ve `NOTICE` dosyalarını koruyun, değiştirdiğiniz dosyaları işaretleyin ve Soup adını eserin kaynağını belirtmenin ötesinde kullanmayın.

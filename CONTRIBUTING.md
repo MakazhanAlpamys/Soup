@@ -459,6 +459,8 @@ When you open a PR, the GitHub template will show this checklist:
 - [ ] New tests added for new functionality
 - [ ] No breaking changes (or documented in PR description)
 
+Contributions are accepted under the Apache License, Version 2.0, the project's own terms (section 5 of the license): by opening a pull request you agree that your contribution is licensed that way and you keep your copyright; there is no CLA and no DCO sign-off for now.
+
 ## Architecture & Design Decisions
 
 ### Lazy Imports for Speed
