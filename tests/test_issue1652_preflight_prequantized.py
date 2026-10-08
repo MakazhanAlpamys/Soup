@@ -163,31 +163,52 @@ def _fp8_checkpoint(path: Path) -> tuple[str, int]:
     return str(path), params
 
 
+@pytest.fixture(scope="module")
+def fp8_checkpoint(tmp_path_factory) -> tuple[str, int]:
+    """One checkpoint for both tests below: neither writes to it."""
+    return _fp8_checkpoint(tmp_path_factory.mktemp("fp8") / "base")
+
+
+def _skip_below_the_fp8_minimum() -> None:
+    """#1731: below this version transformers cannot load a dense base with an
+    FP8 config (its quantizer raises in ``update_tp_plan``), and Soup refuses
+    ``fp8`` when it builds the config."""
+    import transformers
+    from packaging.version import Version
+
+    from soup_cli.utils.quant_menu import FP8_MIN_TRANSFORMERS
+
+    if Version(transformers.__version__) < Version(FP8_MIN_TRANSFORMERS):
+        pytest.skip(f"quantization: fp8 needs transformers >= {FP8_MIN_TRANSFORMERS}")
+
+
 class TestAnFp8BaseOnceLoaded:
     """The figure in the table is what a load through the real config holds."""
 
-    def test_the_loader_s_config_dequantizes(self, tmp_path):
+    def test_the_loader_s_config_dequantizes(self, fp8_checkpoint):
         import transformers
 
         from soup_cli.utils.quant_menu import build_quantization_config_for_loader
 
-        base, _ = _fp8_checkpoint(tmp_path / "base")
+        _skip_below_the_fp8_minimum()
+        base, _ = fp8_checkpoint
         quant = build_quantization_config_for_loader(tcfg=_cfg("fp8").training, base=base)
         assert isinstance(quant, transformers.FineGrainedFP8Config)
         assert quant.dequantize is True
 
-    def test_a_loaded_fp8_base_holds_the_bytes_per_parameter_the_table_charges(self, tmp_path):
+    def test_a_loaded_fp8_base_holds_the_bytes_per_parameter_the_table_charges(
+        self, fp8_checkpoint
+    ):
+        """Without a GPU transformers dequantizes an FP8 load whatever the flag
+        says, so on a CPU box this test alone cannot tell the flag's value; the
+        test above pins it."""
         import torch
         import transformers
-        from packaging.version import Version
 
         from soup_cli.utils.quant_menu import build_quantization_config_for_loader
 
-        if Version(transformers.__version__) < Version("5.17.0"):
-            # 5.16.1 raises AttributeError in the FP8 quantizer's update_tp_plan
-            # for any model without MoE experts, before a weight is read.
-            pytest.skip("transformers < 5.17.0 cannot load a dense model with an FP8 config")
-        base, params = _fp8_checkpoint(tmp_path / "base")
+        _skip_below_the_fp8_minimum()
+        base, params = fp8_checkpoint
         model = transformers.AutoModelForCausalLM.from_pretrained(
             base,
             torch_dtype="auto",  # what Soup passes for a frozen base
