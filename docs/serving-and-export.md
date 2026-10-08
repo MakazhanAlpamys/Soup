@@ -373,6 +373,10 @@ soup serve --model ./output --backend sglang
 soup serve --model ./output --backend sglang --tensor-parallel 2
 ```
 
+The backend needs SGLang 0.5.1 or later, which the `[sglang]` extra installs: older
+releases refuse to start an engine with a LoRA adapter unless its radix cache is turned
+off, and Soup leaves it on.
+
 Like the transformers and vLLM backends, the SGLang backend applies the
 **model's own chat template** via the same shared prompt builder (falling back
 to a generic `User:` / `Assistant:` prompt for template-less models). When the
