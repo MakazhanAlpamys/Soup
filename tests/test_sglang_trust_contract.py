@@ -106,7 +106,7 @@ class TestServeSglangThreadsTheResolvedValue:
 
         def _runtime(**kwargs):
             seen["runtime"] = kwargs
-            return MagicMock(), "runtime-model"
+            return MagicMock(), "runtime-model", None
 
         def _tokenizer(**kwargs):
             seen["tokenizer"] = kwargs

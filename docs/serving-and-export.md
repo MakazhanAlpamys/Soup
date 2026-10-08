@@ -384,6 +384,15 @@ reports `"length"` when a response hits `max_tokens` and `"stop"` otherwise, so
 a client doing continue-on-length can tell a truncated answer from a completed
 one (#360).
 
+A LoRA adapter passed as `--model` is served on its base model (read from
+`adapter_config.json`, or `--base`), with the adapter registered in the engine
+under the name `adapter`. SGLang applies an adapter only to the requests that
+name it and runs every other request on the base weights, so the backend names
+it in every request, streaming or not. **This changed:** the adapter used to be
+registered but never named, so every answer came from the base model while the
+response reported the adapter's name (#1724). A full model's requests name no
+adapter.
+
 It also honours `--trust-remote-code` like every other backend. **This changed:**
 the SGLang runtime and its tokenizer previously loaded with `trust_remote_code`
 hardcoded on, so a model's custom repo code executed whether or not you opted in

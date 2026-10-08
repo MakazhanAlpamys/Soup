@@ -76,7 +76,7 @@ class TestSGLangRuntimeCreation:
         with mock_patch.dict("sys.modules", {"sglang": mock_sgl}):
             from soup_cli.utils.sglang import create_sglang_runtime
 
-            runtime, model_name = create_sglang_runtime(
+            runtime, model_name, _ = create_sglang_runtime(
                 model_path="/path/to/model",
             )
 
@@ -101,7 +101,7 @@ class TestSGLangRuntimeCreation:
         with mock_patch.dict("sys.modules", {"sglang": mock_sgl}):
             from soup_cli.utils.sglang import create_sglang_runtime
 
-            runtime, model_name = create_sglang_runtime(
+            runtime, model_name, lora_name = create_sglang_runtime(
                 model_path="/path/to/adapter",
                 base_model="meta-llama/Llama-3.1-8B",
                 is_adapter=True,
@@ -109,7 +109,7 @@ class TestSGLangRuntimeCreation:
 
         call_kwargs = mock_sgl.Runtime.call_args[1]
         assert call_kwargs["model_path"] == "meta-llama/Llama-3.1-8B"
-        assert call_kwargs["lora_paths"] == ["/path/to/adapter"]
+        assert call_kwargs["lora_paths"] == [f"{lora_name}=/path/to/adapter"]
         assert model_name == "meta-llama/Llama-3.1-8B"
 
     def test_create_sglang_runtime_tensor_parallel(self):
@@ -317,7 +317,7 @@ class TestSGLangSSRF:
         with mock_patch.dict("sys.modules", {"sglang": mock_sgl}):
             from soup_cli.utils.sglang import create_sglang_runtime
 
-            runtime, name = create_sglang_runtime(
+            runtime, name, _ = create_sglang_runtime(
                 model_path="meta-llama/Llama-3.1-8B",
             )
         assert name == "meta-llama/Llama-3.1-8B"
