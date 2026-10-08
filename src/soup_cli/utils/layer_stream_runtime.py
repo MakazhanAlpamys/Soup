@@ -1313,7 +1313,8 @@ class StreamPrefetcher:
         self.primes += 1
         self.backward_tail_prefetched = False
         self.tail_prefetched = False
-        self.pool.load_async(0, self.source, self.stream)
+        if self.pool.owner[self.pool.slot_for(0)] != 0:
+            self.pool.load_async(0, self.source, self.stream)
 
     def advance(self, idx: int) -> None:
         # Direction is explicit state, not re-derived per call. It only ever
