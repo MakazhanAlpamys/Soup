@@ -772,6 +772,13 @@ def test_terminal_sanitization_cli_errors(
 ):
     """CLI errors and invalid JSON messages with control characters must be stripped on stderr."""
     pytest.importorskip("safetensors")
+    from rich.console import Console
+
+    import soup_cli.commands.adapters as adapters_cmd
+
+    monkeypatch.setattr(
+        adapters_cmd, "_err_console", Console(stderr=True, force_terminal=False)
+    )
     monkeypatch.chdir(tmp_path)
 
     # 1. Non-existent path argument with escape bytes
@@ -818,6 +825,13 @@ def test_every_rendered_name_is_stripped(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     """Every rendered name and CLI error path must have control bytes stripped."""
+    from rich.console import Console
+
+    import soup_cli.commands.adapters as adapters_cmd
+
+    monkeypatch.setattr(
+        adapters_cmd, "_err_console", Console(stderr=True, force_terminal=False)
+    )
     evil = "x\x1b[2Jy\x9bz"
     report = AdapterCheckReport(
         adapter=evil,
