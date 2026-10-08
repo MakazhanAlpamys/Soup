@@ -114,6 +114,23 @@ def test_transformers_backend_refuses_mlx_only_optimizers(tmp_path):
         )
 
 
+@pytest.mark.parametrize("backend", ["transformers", "unsloth"])
+@pytest.mark.parametrize("optimizer", sorted(MLX_ONLY_OPTIMIZERS))
+def test_every_non_mlx_backend_refuses_mlx_only_optimizers(backend, optimizer):
+    """#1283: both TrainingArguments backends refuse `muon` / `adamw_hf` at load."""
+    from soup_cli.config.loader import load_config_from_string
+
+    text = (
+        "base: some-org/some-model\n"
+        "task: sft\n"
+        f"backend: {backend}\n"
+        "data:\n  train: ./train.jsonl\n"
+        f"training:\n  optimizer: {optimizer}\n"
+    )
+    with pytest.raises(ValueError, match="only works on backend: mlx"):
+        load_config_from_string(text)
+
+
 def test_lorafa_config_with_adamw_hf_is_refused_at_load():
     """The LoRA-FA compat tuple must not accept a non-AdamW-projection name."""
     from soup_cli.config.schema import TrainingConfig

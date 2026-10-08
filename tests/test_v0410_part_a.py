@@ -7,6 +7,7 @@ from pydantic import ValidationError
 
 from soup_cli.config.schema import TrainingConfig
 from soup_cli.utils.optimizer_zoo import (
+    MLX_ONLY_OPTIMIZERS,
     SUPPORTED_OPTIMIZERS,
     is_new_v0_41_optimizer,
     required_package,
@@ -33,23 +34,31 @@ class TestSupportedOptimizers:
             assert is_new_v0_41_optimizer(name)
 
     def test_torch_rejected_entries_retired(self):
-        # #1269: these ten used to be here but transformers 5.x refuses them
+        # #1269: these eight used to be here but transformers 5.x refuses them
         # in TrainingArguments, so they are refused at config load instead.
+        # (`muon` and `adamw_hf` are rejected by transformers too, but the MLX
+        # backend builds them itself, so they stay allowlisted:
+        # test_mlx_only_entries_stay_allowlisted.)
         for name in (
             "badam",
             "adam_mini",
-            "muon",
             "dion",
             "came_pytorch",
             "ao_adamw_fp8",
             "ao_adamw_4bit",
             "ao_adamw_8bit",
             "adamw_apex_fused",
-            "adamw_hf",
         ):
             assert name not in SUPPORTED_OPTIMIZERS, name
             with pytest.raises(ValueError, match="no longer supported"):
                 validate_optimizer_name(name)
+
+    def test_mlx_only_entries_stay_allowlisted(self):
+        # #1283: refused per backend by SoupConfig, not by name.
+        assert MLX_ONLY_OPTIMIZERS == {"adamw_hf", "muon"}
+        for name in sorted(MLX_ONLY_OPTIMIZERS):
+            assert name in SUPPORTED_OPTIMIZERS, name
+            assert validate_optimizer_name(name) == name
 
     def test_bnb_entries_present(self):
         assert "adamw_bnb_8bit" in SUPPORTED_OPTIMIZERS
