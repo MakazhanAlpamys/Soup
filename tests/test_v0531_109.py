@@ -104,6 +104,49 @@ def _write_tasks(tmp_path: Path) -> Path:
 
 
 class TestMeasureCandidate:
+    @pytest.mark.parametrize("cached_baseline", [False, True])
+    @pytest.mark.parametrize(
+        "total,before_count,after_count,expected",
+        [
+            (20, 19, 18, "MAJOR"),
+            (100, 57, 55, "MINOR"),
+            (100, 95, 94, "OK"),
+            (100, 95, 92, "MINOR"),
+            (100, 95, 89, "MAJOR"),
+            (20, 18, 19, "OK"),
+        ],
+    )
+    def test_count_derived_verdict_boundaries(
+        self, tmp_path, total, before_count, after_count, expected, cached_baseline,
+    ):
+        import json
+
+        from soup_cli.utils.deploy_measure import measure_candidate
+
+        tasks = tmp_path / "boundary_tasks.jsonl"
+        tasks.write_text(
+            "\n".join(
+                json.dumps({"prompt": str(index), "expected": "ok", "scoring": "exact"})
+                for index in range(total)
+            ),
+            encoding="utf-8",
+        )
+        baseline = (
+            {"before_score": before_count / total}
+            if cached_baseline
+            else {"before_gen": lambda prompt: "ok" if int(prompt) < before_count else "wrong"}
+        )
+        result = measure_candidate(
+            candidate="4bit", tasks_file=str(tasks),
+            after_gen=lambda prompt: "ok" if int(prompt) < after_count else "wrong",
+            **baseline,
+        )
+
+        assert result.before == before_count / total
+        assert result.after == after_count / total
+        assert result.delta == after_count / total - before_count / total
+        assert result.verdict == expected
+
     def test_ok_when_after_matches(self, tmp_path):
         from soup_cli.utils.deploy_measure import measure_candidate
 
