@@ -439,3 +439,35 @@ def test_a_null_byte_prompt_is_skipped_not_fatal(tmp_path, monkeypatch):
     report, _ = _run_live(tmp_path, monkeypatch, rows, collapsed)
     assert report.scores["mode_collapse"].verdict == "MAJOR", report.scores["mode_collapse"]
     assert report.extras["rows_skipped"] == "1 unreadable"
+
+
+def test_rows_skipped_from_an_evidence_file_has_no_control_bytes(tmp_path, monkeypatch):
+    from typer.testing import CliRunner
+
+    from soup_cli.cli import app
+
+    monkeypatch.chdir(tmp_path)
+    esc, csi = chr(0x1B), chr(0x9B)
+    (tmp_path / "ev.json").write_text(
+        json.dumps(
+            {
+                "scores": {"forgetting": {"score": 1.0, "verdict": "OK", "evidence": "fine"}},
+                "extras": {"rows_skipped": f"{esc}]0;T{esc}[2J{csi}31m3 unreadable [bold red]x[/]"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    result = CliRunner().invoke(app, ["diagnose", "r1", "--evidence", "ev.json"])
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert f"{esc}]0;T" not in result.output
+    assert f"{esc}[2J" not in result.output
+    assert csi not in result.output
+    flat = "".join(strip_ansi(result.output).split())
+    assert "3unreadable[boldred]x[/]" in flat, result.output
+
+
+def test_an_assistant_only_row_is_not_a_pair(tmp_path, monkeypatch):
+    rows = [{"messages": [{"role": "assistant", "content": f"greeting {i}"}]} for i in range(12)]
+    report, _ = _run_live(tmp_path, monkeypatch, rows, _gens())
+    assert report.scores["mode_collapse"].verdict == "NOT_RUN"
+    assert report.extras["rows_skipped"] == "12 without an answer"

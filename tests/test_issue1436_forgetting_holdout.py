@@ -221,6 +221,64 @@ class TestForgettingProbeHoldout:
             },
         )
 
+    def test_llava_holdout_rows_are_not_a_text_only_measurement(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        holdout = tmp_path / "holdout.jsonl"
+        rows = [
+            {
+                "image": f"img{i}.png",
+                "conversations": [
+                    {"from": "human", "value": f"<image>\nWhat is in picture {i}?"},
+                    {"from": "gpt", "value": f"A cat {i}."},
+                ],
+            }
+            for i in range(5)
+        ]
+        _write_jsonl(holdout, rows)
+        asked: list = []
+
+        def adapter_gen(prompt):
+            asked.append(prompt)
+            return "x"
+
+        self._stub_pair(monkeypatch, adapter_gen)
+        report = live.run_live_diagnose(
+            run_id="r", base="b", adapter="a", holdout_path=str(holdout)
+        )
+        assert report.scores["forgetting"].verdict == "NOT_RUN", report.scores["forgetting"]
+        assert not any("picture" in prompt for prompt in asked)
+
+    def test_audio_holdout_rows_are_not_a_text_only_measurement(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        holdout = tmp_path / "holdout.jsonl"
+        rows = [
+            {
+                "audio": f"a{i}.wav",
+                "messages": [
+                    {"role": "user", "content": f"Transcribe clip {i}"},
+                    {"role": "assistant", "content": f"Hello {i}"},
+                ],
+            }
+            for i in range(5)
+        ]
+        _write_jsonl(holdout, rows)
+        asked: list = []
+
+        def adapter_gen(prompt):
+            asked.append(prompt)
+            return "x"
+
+        self._stub_pair(monkeypatch, adapter_gen)
+        report = live.run_live_diagnose(
+            run_id="r", base="b", adapter="a", holdout_path=str(holdout)
+        )
+        assert report.scores["forgetting"].verdict == "NOT_RUN", report.scores["forgetting"]
+        assert not any("clip" in prompt for prompt in asked)
+
     def test_bad_holdout_path_fails_before_the_model_loads(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

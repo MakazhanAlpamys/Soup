@@ -180,7 +180,11 @@ def _pair_for_row(row: object) -> Optional[Tuple[str, str]]:
     """Prompt/target for one row: training converters first, flat-key lookup as fallback."""
     if not isinstance(row, Mapping):
         return None
-    _fmt, converted = _convert_row(row)
+    from soup_cli.data.formats import is_audio_format, is_vision_format
+
+    fmt, converted = _convert_row(row)
+    if fmt is not None and (is_vision_format(fmt) or is_audio_format(fmt)):
+        return None  # the probes are text-only: the prompt refers to media they cannot send
     return _pair_with_fallback(row, converted)
 
 
