@@ -6051,6 +6051,24 @@ class SoupConfig(BaseModel):
                     "that setup never applies the MoE auxiliary loss. Remove it, "
                     "or train with modality: text."
                 )
+        if self.backend == "unsloth":
+            # #1412: unsloth loader never applies the MoE auxiliary loss coefficient.
+            default = type(tcfg).model_fields["moe_aux_loss_coeff"].default
+            if tcfg.moe_aux_loss_coeff != default:
+                raise ValueError(
+                    f"training.moe_aux_loss_coeff={tcfg.moe_aux_loss_coeff!r} is "
+                    "not applied on backend='unsloth': that setup never applies "
+                    "the MoE auxiliary loss. Remove it, or train with backend: transformers."
+                )
+        if tcfg.stream_layers:
+            # #1412: layer streaming setup never sets the router coefficient.
+            default = type(tcfg).model_fields["moe_aux_loss_coeff"].default
+            if tcfg.moe_aux_loss_coeff != default:
+                raise ValueError(
+                    f"training.moe_aux_loss_coeff={tcfg.moe_aux_loss_coeff!r} is "
+                    "not applied with training.stream_layers: that setup never "
+                    "applies the MoE auxiliary loss. Remove it, or train without stream_layers."
+                )
         return self
 
     @model_validator(mode="after")
