@@ -591,10 +591,7 @@ def test_symlinked_components_refused(
 
     # 1. Symlinked directory
     symlink_dir = tmp_path / "symlink_dir"
-    try:
-        symlink_dir.symlink_to(real_dir, target_is_directory=True)
-    except OSError:
-        pytest.skip("Symlink creation not permitted on this filesystem")
+    symlink_dir.symlink_to(real_dir, target_is_directory=True)
     res1 = runner.invoke(soup_app, ["adapters", "check", "symlink_dir"])
     assert res1.exit_code == 1
     assert "must not be a symlink" in strip_ansi(res1.output)
