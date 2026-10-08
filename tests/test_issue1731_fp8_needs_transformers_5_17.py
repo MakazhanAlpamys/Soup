@@ -139,6 +139,25 @@ class TestTheOtherModesOnTheFloor:
         assert isinstance(_build("eetq"), transformers.EetqConfig)
 
 
+@pytest.mark.parametrize("quantization", ["gptq", "awq", "aqlm", "mxfp4"])
+def test_the_checkpoint_formats_never_reach_the_fp8_gate(monkeypatch, quantization):
+    """On 5.16.1 only fp8 is refused: the gate must not be called for another
+    mode. These four need a checkpoint to validate, so the class above cannot
+    build them; here the validation is stubbed and the gate is a tripwire."""
+    _installed(monkeypatch, "5.16.1")
+    for name in (
+        "validate_gptq_checkpoint", "validate_awq_checkpoint", "validate_mxfp4_checkpoint",
+    ):
+        monkeypatch.setattr(quant_menu, name, lambda base: None)
+
+    def _fail():
+        raise AssertionError("the fp8 gate ran for " + quantization)
+
+    monkeypatch.setattr(quant_menu, "_refuse_fp8_on_old_transformers", _fail)
+
+    assert _build(quantization) is not None
+
+
 def test_a_transformers_without_the_class_names_the_same_minimum(monkeypatch):
     """The old message said ">= 4.45", which no supported install can be below."""
     fake = types.ModuleType("transformers")
