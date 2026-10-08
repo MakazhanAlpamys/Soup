@@ -109,13 +109,13 @@ def _on_unsloth(yaml: str) -> str:
 
 @pytest.mark.parametrize("quantization", NO_DORA)
 def test_the_unsloth_backend_gets_the_dora_refusal(quantization):
-    """The early return is for mlx alone: on unsloth the pairing is refused
-    with the same message as on transformers."""
+    """The early return is for mlx alone: on unsloth the pairing is refused.
+
+    Which refusal answers is not pinned: today it is this one, and a refusal of
+    DoRA on the unsloth backend itself (#1651) would fire first. Both name DoRA."""
     with pytest.raises(ValueError) as excinfo:
         load_config_from_string(_on_unsloth(_yaml(quantization, use_dora=True)))
-    message = str(excinfo.value)
-    assert repr(quantization) in message
-    assert "use_dora: false" in message
+    assert "dora" in str(excinfo.value).lower()
 
 
 @pytest.mark.parametrize("quantization", NO_DORA)
