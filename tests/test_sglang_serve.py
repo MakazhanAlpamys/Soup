@@ -1,9 +1,14 @@
 """Tests for SGLang backend — detection, runtime creation, serve --backend flag, FastAPI app."""
 
+import json
+import sys
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 from unittest.mock import patch as mock_patch
 
 import pytest
+
+from tests.test_issue360_sglang_prompt_finish_reason import _FakeTokenizer
 
 
 def _has_fastapi():
@@ -316,3 +321,127 @@ class TestSGLangSSRF:
                 model_path="meta-llama/Llama-3.1-8B",
             )
         assert name == "meta-llama/Llama-3.1-8B"
+
+
+# ─── Adapter Selected On Every Request (#1724) ───────────────────────────
+
+
+class _RecordingEngine:
+    """The SGLang engine as the backend reaches it, with nothing behind it.
+
+    ``sglang.Runtime(...)`` starts it; ``Runtime.generate`` is the string route
+    and a POST to ``<url>/generate`` is the token-ids route (#995). Each request
+    is recorded as the fields the engine would receive.
+    """
+
+    url = "http://127.0.0.1:30000"
+
+    def __init__(self):
+        self.started_with = None
+        self.requests = []
+
+    def start(self, **kwargs):  # sglang.Runtime(...)
+        self.started_with = kwargs
+        return self
+
+    def generate(self, prompt, **kwargs):  # Runtime.generate
+        self.requests.append({"route": "string", "text": prompt, **kwargs})
+        return json.dumps({"text": "ok", "meta_info": {}})
+
+    def post(self, url, **kwargs):  # httpx.post(<url>/generate, json=...)
+        import httpx
+
+        self.requests.append({"route": "ids", **kwargs["json"]})
+        return httpx.Response(
+            200, json={"text": "ok", "meta_info": {}}, request=httpx.Request("POST", url)
+        )
+
+
+def _tokenizer_for(route):
+    """A rendered chat template sends token ids; no template sends the string."""
+    return _FakeTokenizer() if route == "ids" else None
+
+
+def _serve(monkeypatch, model_dir, *, adapter, tokenizer):
+    """``_serve_sglang`` as ``soup serve --backend sglang`` runs it, on a recording engine."""
+    import soup_cli.commands.serve as serve_mod
+
+    engine = _RecordingEngine()
+    monkeypatch.setitem(sys.modules, "sglang", SimpleNamespace(Runtime=engine.start))
+    monkeypatch.setattr("httpx.post", engine.post)
+    monkeypatch.setattr(serve_mod, "_load_serve_tokenizer", lambda **kwargs: tokenizer)
+    app = serve_mod._serve_sglang(
+        model_path=model_dir,
+        base_model="org/base-model" if adapter else None,
+        is_adapter=adapter,
+        max_tokens_default=16,
+        tensor_parallel=1,
+        gpu_memory_utilization=0.9,
+    )
+    return app, engine
+
+
+def _chat(app, *, stream):
+    from fastapi.testclient import TestClient
+
+    response = TestClient(app).post(
+        "/v1/chat/completions",
+        json={"messages": [{"role": "user", "content": "hi"}], "stream": stream},
+    )
+    assert response.status_code == 200, response.text
+
+
+def _name_sglang_gives(entry):
+    """The name SGLang registers a ``lora_paths`` entry under: ``name=path`` is
+    split on its first ``=``, any other string names itself (sglang 0.5.21
+    ``srt/arg_groups/lora_hook.py:60-75``)."""
+    return entry.split("=", 1)[0] if "=" in entry else entry
+
+
+@pytest.mark.skipif(not _has_fastapi(), reason="fastapi not installed")
+class TestAdapterIsSelectedOnEveryRequest:
+    """SGLang applies a LoRA only to a request whose ``lora_path`` names it; a
+    request without one runs on the base weights. The backend registered the
+    adapter at startup and never named it, so every answer came from the base
+    model while the response reported the adapter's name (#1724)."""
+
+    @pytest.mark.parametrize("stream", [False, True], ids=["non-streaming", "streaming"])
+    @pytest.mark.parametrize("route", ["ids", "string"])
+    def test_every_request_names_the_registered_adapter(
+        self, monkeypatch, tmp_path, route, stream
+    ):
+        app, engine = _serve(
+            monkeypatch, tmp_path / "lora", adapter=True, tokenizer=_tokenizer_for(route)
+        )
+
+        _chat(app, stream=stream)
+
+        (entry,) = engine.started_with["lora_paths"]
+        assert [request["route"] for request in engine.requests] == [route]
+        assert engine.requests[0].get("lora_path") == _name_sglang_gives(entry)
+
+    def test_the_adapter_is_registered_under_a_name_of_its_own(self, monkeypatch, tmp_path):
+        """With the path doubling as the name, SGLang splits a path that holds
+        ``=`` and loads what follows it; an explicit name keeps the whole path."""
+        adapter_dir = tmp_path / "lora-r=16"
+        _, engine = _serve(monkeypatch, adapter_dir, adapter=True, tokenizer=None)
+
+        (entry,) = engine.started_with["lora_paths"]
+        name, path = entry.split("=", 1)  # what SGLang does with the entry
+
+        assert path == str(adapter_dir)
+        assert name
+
+    @pytest.mark.parametrize("stream", [False, True], ids=["non-streaming", "streaming"])
+    @pytest.mark.parametrize("route", ["ids", "string"])
+    def test_control_a_full_model_sends_no_lora_path(self, monkeypatch, tmp_path, route, stream):
+        """CONTROL: a full model registers no adapter, so its requests carry no
+        ``lora_path``; naming one SGLang has not loaded makes it refuse them."""
+        app, engine = _serve(
+            monkeypatch, tmp_path / "model", adapter=False, tokenizer=_tokenizer_for(route)
+        )
+
+        _chat(app, stream=stream)
+
+        assert [request["route"] for request in engine.requests] == [route]
+        assert "lora_path" not in engine.requests[0]
