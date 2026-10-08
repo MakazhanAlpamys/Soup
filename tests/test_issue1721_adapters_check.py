@@ -29,6 +29,7 @@ from typer.testing import CliRunner
 
 from soup_cli.cli import app as soup_app
 from soup_cli.utils.adapter_check import check_adapter
+from tests.conftest import strip_ansi
 
 runner = CliRunner()
 
@@ -95,7 +96,7 @@ def test_healthy_adapter_is_alive(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     assert res.exit_code == 0
     lines = res.stdout.strip().splitlines()
     assert lines[-1] == "alive"
-    assert "Live fraction: 100.0%" in res.stdout
+    assert "Live fraction: 100.0%" in strip_ansi(res.stdout)
 
 
 def test_all_zero_lora_b_reports_inactive(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -224,6 +225,9 @@ def test_json_output_mode(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     assert doc["live_layers"] == 1
     assert doc["total_layers"] == 1
     assert doc["total_frobenius"] > 0.0
+    assert "inner_keys" in doc and doc["inner_keys"] == []
+    assert "all_zero_lora_b_layers" in doc and doc["all_zero_lora_b_layers"] == []
+    assert "reason" in doc and doc["reason"] is None
     assert len(doc["per_layer"]) == 1
 
 
@@ -258,47 +262,52 @@ def test_missing_adapter_rejected(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     assert "does_not_exist" in res.output or "not found" in res.output.lower()
 
 
-# ---------- Mathematical Identity Invariant ----------
+# ---------- Multi-Layer RSS & Conv1D Transposed Contraction ----------
 
 
-def test_frobenius_trace_identity_exact():
-    """Verify trace identity ||B @ A||_F^2 == sum((B.T @ B) * (A @ A.T)) matches exact matmul."""
-    rng = np.random.default_rng(42)
-    dim_m, dim_r, dim_n = 64, 8, 128
-    mat_b = rng.standard_normal((dim_m, dim_r)).astype(np.float64)
-    mat_a = rng.standard_normal((dim_r, dim_n)).astype(np.float64)
-    scaling = 2.0
+def test_two_layer_and_conv1d_transposed_adapter(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Assert total_frobenius == sqrt(sum of squares) and Conv1D transposed contraction."""
+    pytest.importorskip("safetensors")
+    monkeypatch.chdir(tmp_path)
+    adapter_dir = tmp_path / "two_layer_conv1d"
 
-    # Direct computation
-    delta = scaling * np.matmul(mat_b, mat_a)
-    direct_fro = float(np.sqrt(np.sum(delta * delta)))
+    # Layer 0: standard Linear (q_proj), r=8, out=16, in=32 -> B is (16, 8), A is (8, 32)
+    rng = np.random.default_rng(123)
+    q_b = rng.standard_normal((16, 8)).astype(np.float32)
+    q_a = rng.standard_normal((8, 32)).astype(np.float32)
 
-    # Trace identity
-    btb = np.matmul(mat_b.T, mat_b)
-    aat = np.matmul(mat_a, mat_a.T)
-    trace_fro = float(scaling * np.sqrt(np.sum(btb * aat)))
+    # Layer 1: transposed Conv1D (v_proj), r=8, in=32, out=16 -> B is (8, 16), A is (32, 8)
+    v_b = rng.standard_normal((8, 16)).astype(np.float32)
+    v_a = rng.standard_normal((32, 8)).astype(np.float32)
 
-    assert math.isclose(direct_fro, trace_fro, rel_tol=1e-12, abs_tol=1e-12)
+    weights = {
+        Q_LORA_A: q_a,
+        Q_LORA_B: q_b,
+        V_LORA_A: v_a,
+        V_LORA_B: v_b,
+    }
+    _write_synthetic_adapter(adapter_dir, weights, r=8, alpha=16.0)
 
+    report = check_adapter("two_layer_conv1d")
+    assert report.verdict == "alive"
+    assert report.total_layers == 2
+    assert report.live_layers == 2
 
-def test_conv1d_transposed_trace_identity():
-    """Verify trace identity for Conv1D transposed shapes: ΔW = A @ B."""
-    rng = np.random.default_rng(42)
-    dim_in, dim_r, dim_out = 128, 8, 64
-    mat_a = rng.standard_normal((dim_in, dim_r)).astype(np.float64)
-    mat_b = rng.standard_normal((dim_r, dim_out)).astype(np.float64)
-    scaling = 2.5
+    # Direct computation: scaling = 16.0 / 8 = 2.0
+    delta0 = 2.0 * np.matmul(q_b.astype(np.float64), q_a.astype(np.float64))
+    expected_fro0 = float(np.linalg.norm(delta0))
 
-    # Direct computation: ΔW = scaling * (A @ B)
-    delta = scaling * np.matmul(mat_a, mat_b)
-    direct_fro = float(np.sqrt(np.sum(delta * delta)))
+    delta1 = 2.0 * np.matmul(v_a.astype(np.float64), v_b.astype(np.float64))
+    expected_fro1 = float(np.linalg.norm(delta1))
 
-    # Transposed trace identity: sum((B @ B.T) * (A.T @ A))
-    bbt = np.matmul(mat_b, mat_b.T)
-    ata = np.matmul(mat_a.T, mat_a)
-    trace_fro = float(scaling * np.sqrt(np.sum(bbt * ata)))
+    assert math.isclose(report.per_layer[0].frobenius, expected_fro0, rel_tol=1e-12)
+    assert math.isclose(report.per_layer[1].frobenius, expected_fro1, rel_tol=1e-12)
 
-    assert math.isclose(direct_fro, trace_fro, rel_tol=1e-12, abs_tol=1e-12)
+    # Total frobenius must equal Root-Sum-of-Squares (RSS), not simple linear sum
+    expected_total = math.sqrt(expected_fro0**2 + expected_fro1**2)
+    assert math.isclose(report.total_frobenius, expected_total, rel_tol=1e-12)
 
 
 # ---------- Hardening & Invariant Defenses ----------
@@ -373,6 +382,7 @@ def test_standalone_tensor_not_flagged_as_lora_b(
     assert report.verdict == "alive"
     assert len(report.all_zero_lora_b_layers) == 0
     assert report.total_layers == 1
+    assert report.live_fraction == 1.0
     assert len(report.standalone_tensors) == 1
 
 
@@ -419,8 +429,11 @@ def test_json_mode_rfc8259_strict_under_nan(
 
     doc = json.loads(res.stdout, parse_constant=reject_constant)
     assert doc["verdict"] == "inactive"
+    assert doc["reason"] == "non-finite weights detected (NaN/Inf)"
     assert doc["total_frobenius"] is None
-    assert '"total_frobenius": null' in res.stdout
+    assert "inner_keys" in doc
+    assert "all_zero_lora_b_layers" in doc
+    assert '"total_frobenius": null' in strip_ansi(res.stdout)
 
 
 def test_boolean_rank_in_config_not_coerced(
@@ -532,4 +545,128 @@ def test_non_dict_adapter_config_json_raises(tmp_path: Path, monkeypatch: pytest
 
     res = runner.invoke(soup_app, ["adapters", "check", "nondict_cfg"])
     assert res.exit_code == 1
+
+
+def test_fp16_float64_accumulation_precision(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """FP16 inputs must accumulate in float64 without float32 precision loss (rel_tol=1e-12)."""
+    pytest.importorskip("safetensors")
+    monkeypatch.chdir(tmp_path)
+    adapter_dir = tmp_path / "fp16_prec"
+
+    rng = np.random.default_rng(42)
+    b_fp16 = (rng.standard_normal((512, 16)) * 1000.0).astype(np.float16)
+    a_fp16 = (rng.standard_normal((16, 512)) * 1000.0).astype(np.float16)
+    weights = {
+        Q_LORA_A: a_fp16,
+        Q_LORA_B: b_fp16,
+    }
+    _write_synthetic_adapter(adapter_dir, weights, r=16, alpha=16.0)
+
+    report = check_adapter("fp16_prec")
+    assert report.verdict == "alive"
+
+    b64 = b_fp16.astype(np.float64)
+    a64 = a_fp16.astype(np.float64)
+    expected_fro = float(np.linalg.norm(b64 @ a64))
+
+    assert math.isclose(report.total_frobenius, expected_fro, rel_tol=1e-12)
+
+
+@pytest.mark.requires_symlink
+def test_symlinked_components_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Symlinked adapter dir, adapter_model.safetensors, and adapter_config.json each exit 1."""
+    pytest.importorskip("safetensors")
+    monkeypatch.chdir(tmp_path)
+
+    real_dir = tmp_path / "real_adapter"
+    weights = {
+        Q_LORA_A: np.ones((8, 16), dtype=np.float32),
+        Q_LORA_B: np.ones((16, 8), dtype=np.float32),
+    }
+    _write_synthetic_adapter(real_dir, weights, r=8, alpha=16.0)
+
+    # 1. Symlinked directory
+    symlink_dir = tmp_path / "symlink_dir"
+    try:
+        symlink_dir.symlink_to(real_dir, target_is_directory=True)
+    except OSError:
+        pytest.skip("Symlink creation not permitted on this filesystem")
+    res1 = runner.invoke(soup_app, ["adapters", "check", "symlink_dir"])
+    assert res1.exit_code == 1
+    assert "must not be a symlink" in strip_ansi(res1.output)
+
+    # 2. Symlinked adapter_model.safetensors
+    adapter_symlink_weights = tmp_path / "symlink_weights"
+    adapter_symlink_weights.mkdir()
+    (adapter_symlink_weights / "adapter_config.json").write_text(
+        (real_dir / "adapter_config.json").read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    (adapter_symlink_weights / "adapter_model.safetensors").symlink_to(
+        real_dir / "adapter_model.safetensors"
+    )
+    res2 = runner.invoke(soup_app, ["adapters", "check", "symlink_weights"])
+    assert res2.exit_code == 1
+    assert "must not be a symlink" in strip_ansi(res2.output)
+
+    # 3. Symlinked adapter_config.json
+    adapter_symlink_cfg = tmp_path / "symlink_cfg"
+    adapter_symlink_cfg.mkdir()
+    (adapter_symlink_cfg / "adapter_model.safetensors").write_bytes(
+        (real_dir / "adapter_model.safetensors").read_bytes()
+    )
+    (adapter_symlink_cfg / "adapter_config.json").symlink_to(
+        real_dir / "adapter_config.json"
+    )
+    res3 = runner.invoke(soup_app, ["adapters", "check", "symlink_cfg"])
+    assert res3.exit_code == 1
+    assert "must not be a symlink" in strip_ansi(res3.output)
+
+
+def test_standard_lora_scaling_factor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Standard LoRA scaling must compute scaling = alpha / r (e.g. 32 / 8 = 4.0)."""
+    pytest.importorskip("safetensors")
+    monkeypatch.chdir(tmp_path)
+    adapter_dir = tmp_path / "standard_scaling"
+
+    r = 8
+    alpha = 32.0
+    weights = {
+        Q_LORA_A: np.ones((8, 16), dtype=np.float32),
+        Q_LORA_B: np.ones((16, 8), dtype=np.float32),
+    }
+    _write_synthetic_adapter(adapter_dir, weights, r=r, alpha=alpha)
+
+    report = check_adapter("standard_scaling")
+    assert report.verdict == "alive"
+
+    b_mat = np.ones((16, 8), dtype=np.float64)
+    a_mat = np.ones((8, 16), dtype=np.float64)
+    expected_fro = 4.0 * float(np.linalg.norm(b_mat @ a_mat))
+    assert math.isclose(report.total_frobenius, expected_fro, rel_tol=1e-6)
+
+
+def test_terminal_injection_control_bytes_stripped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Control and ANSI escape sequences in tensor names must be stripped in terminal output."""
+    pytest.importorskip("safetensors")
+    monkeypatch.chdir(tmp_path)
+    adapter_dir = tmp_path / "esc_adapter"
+
+    esc_key = "base_model.model.layers.0.inner.\x1b[2Jself_attn.q_proj.lora_A.weight"
+    weights = {
+        esc_key: np.ones((8, 16), dtype=np.float32),
+    }
+    _write_synthetic_adapter(adapter_dir, weights, r=8, alpha=16.0)
+
+    res = runner.invoke(soup_app, ["adapters", "check", "esc_adapter"])
+    assert chr(27) not in res.stdout
+    assert "\x1b" not in res.stdout
+
 

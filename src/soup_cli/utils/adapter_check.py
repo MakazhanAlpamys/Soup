@@ -22,6 +22,7 @@ from typing import Any, Optional, Tuple
 
 from soup_cli.utils.adapter_diff import _adapter_weights_path, _require_str
 from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink, is_under_cwd
+from soup_cli.utils.terminal import strip_control
 
 INNER_NAMESPACE_MARKER = ".inner."
 _MAX_LAYERS = 10_000
@@ -426,7 +427,7 @@ def check_adapter(adapter_dir: str | Path) -> AdapterCheckReport:
 def render_check_terminal(report: AdapterCheckReport) -> str:
     """Format human-readable terminal output ending with the exact verdict line."""
     lines = [
-        f"Adapter: {report.adapter}",
+        f"Adapter: {strip_control(report.adapter)}",
         f"Total ||ΔW||_F: {report.total_frobenius:.6f}",
         (
             f"Live fraction: {report.live_fraction:.1%} "
@@ -442,28 +443,28 @@ def render_check_terminal(report: AdapterCheckReport) -> str:
     if report.orphaned_layers:
         lines.append(f"Incomplete LoRA pairs: {len(report.orphaned_layers)}")
         for name in report.orphaned_layers[:5]:
-            lines.append(f"  - {name}")
+            lines.append(f"  - {strip_control(name)}")
         if len(report.orphaned_layers) > 5:
             lines.append(f"  ... and {len(report.orphaned_layers) - 5} more")
 
     if report.shape_mismatches:
         lines.append(f"Shape-mismatched LoRA pairs: {len(report.shape_mismatches)}")
         for name in report.shape_mismatches[:5]:
-            lines.append(f"  - {name}")
+            lines.append(f"  - {strip_control(name)}")
         if len(report.shape_mismatches) > 5:
             lines.append(f"  ... and {len(report.shape_mismatches) - 5} more")
 
     if report.all_zero_lora_b_layers and len(report.all_zero_lora_b_layers) < report.total_layers:
         lines.append("Zero lora_B projections:")
         for name in report.all_zero_lora_b_layers[:5]:
-            lines.append(f"  - {name}")
+            lines.append(f"  - {strip_control(name)}")
         if len(report.all_zero_lora_b_layers) > 5:
             lines.append(f"  ... and {len(report.all_zero_lora_b_layers) - 5} more")
 
     if report.inner_keys:
         lines.append("Leaked wrapper keys:")
         for key in report.inner_keys[:5]:
-            lines.append(f"  - {key}")
+            lines.append(f"  - {strip_control(key)}")
         if len(report.inner_keys) > 5:
             lines.append(f"  ... and {len(report.inner_keys) - 5} more")
 

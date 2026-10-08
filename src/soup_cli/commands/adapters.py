@@ -14,7 +14,6 @@ from rich.table import Table
 from soup_cli.utils.terminal import for_terminal
 
 console = Console()
-err_console = Console(stderr=True)
 
 app = typer.Typer(no_args_is_help=True)
 
@@ -1907,6 +1906,9 @@ def audit(
     raise typer.Exit(result.exit_code)
 
 
+_err_console = Console(stderr=True)
+
+
 @app.command(name="check")
 def check_cmd(
     adapter: str = typer.Argument(..., help="Path to adapter directory"),
@@ -1923,14 +1925,14 @@ def check_cmd(
     try:
         enforce_under_cwd_and_no_symlink(adapter, "adapter directory")
     except (ValueError, OSError) as exc:
-        err_console.print(f"[red]Path refused: {escape(str(exc))}[/]")
+        _err_console.print(f"[red]Path refused: {for_terminal(str(exc))}[/]")
         raise typer.Exit(1) from exc
 
     try:
         report = check_adapter(adapter)
         rendered = render_check_json(report) if json_out else render_check_terminal(report)
     except (FileNotFoundError, OSError, ValueError, TypeError, RuntimeError) as exc:
-        err_console.print(f"[red]{escape(str(exc))}[/]")
+        _err_console.print(f"[red]{for_terminal(str(exc))}[/]")
         raise typer.Exit(1) from exc
 
     print(rendered)
