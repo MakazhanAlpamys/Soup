@@ -671,21 +671,17 @@ def test_terminal_injection_control_bytes_stripped(
     assert "\x1b" not in res.stdout
 
 
-def test_zero_lora_a_inactive_verdict_regression(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
+def test_zero_lora_a_is_inactive(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """When lora_A is all zeros, adapter is inactive with reason 'total ||ΔW||_F is 0.0'."""
     pytest.importorskip("safetensors")
     monkeypatch.chdir(tmp_path)
-    adapter_dir = tmp_path / "zero_a_adapter"
-
     weights = {
         Q_LORA_A: np.zeros((8, 16), dtype=np.float32),
         Q_LORA_B: np.ones((16, 8), dtype=np.float32),
     }
-    _write_synthetic_adapter(adapter_dir, weights, r=8, alpha=16.0)
+    _write_synthetic_adapter(tmp_path / "za", weights, r=8, alpha=16.0)
 
-    report = check_adapter("zero_a_adapter")
+    report = check_adapter("za")
     assert report.verdict == "inactive"
     assert report.reason == "total ||ΔW||_F is 0.0"
     assert report.verdict_line == "inactive: total ||ΔW||_F is 0.0"
@@ -694,9 +690,10 @@ def test_zero_lora_a_inactive_verdict_regression(
     assert report.live_layers == 0
     assert len(report.all_zero_lora_b_layers) == 0
 
-    res = runner.invoke(soup_app, ["adapters", "check", "zero_a_adapter"])
+    res = runner.invoke(soup_app, ["adapters", "check", "za"])
     assert res.exit_code == 2
     out = strip_ansi(res.stdout)
+    assert out.strip().splitlines()[-1].startswith("inactive: total ||")
     assert "inactive: total ||ΔW||_F is 0.0" in out
     assert "Total ||ΔW||_F: 0.000000" in out
     assert "Live fraction: 0.0% (0/1 layers)" in out
@@ -815,3 +812,30 @@ def test_terminal_sanitization_verdict_line():
     assert chr(27) not in line
     assert "\x1b" not in line
     assert line == "inactive: injected[2Jreason[0m"
+
+
+def test_every_rendered_name_is_stripped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Every rendered name and CLI error path must have control bytes stripped."""
+    evil = "x\x1b[2Jy\x9bz"
+    report = AdapterCheckReport(
+        adapter=evil,
+        verdict="inactive",
+        reason="r",
+        total_frobenius=0.0,
+        live_fraction=0.0,
+        live_layers=0,
+        total_layers=2,
+        all_zero_lora_b_layers=(evil,),
+        inner_keys=(evil,),
+        per_layer=(),
+        orphaned_layers=(evil,),
+        shape_mismatches=(evil,),
+    )
+    out = render_check_terminal(report)
+    assert chr(27) not in out and "\x9b" not in out
+    assert out.count("x[2Jyz") == 5
+    monkeypatch.chdir(tmp_path)
+    res = runner.invoke(soup_app, ["adapters", "check", "no\x1b[2Jdir"])
+    assert res.exit_code == 1 and chr(27) not in res.output
