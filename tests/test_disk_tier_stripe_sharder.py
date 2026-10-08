@@ -147,6 +147,82 @@ def test_an_interrupted_reshard_leaves_the_old_index_consistent(layout, monkeypa
     assert not os.path.exists(layer_shard_path(out, 1))
 
 
+def test_content_reshard_quarantines_index_before_layer_writes(layout, monkeypatch):
+    import soup_cli.utils.layer_shard as layer_shard_mod
+
+    src, out, _ = layout
+    shard_checkpoint(src, out, dtype="float32")
+    real_save = layer_shard_mod._atomic_save
+    layer_writes = 0
+
+    def _stop_after_two_layers(blob, path):
+        nonlocal layer_writes
+        if os.path.basename(path).startswith("layer_"):
+            layer_writes += 1
+            if layer_writes > 2:
+                raise RuntimeError("interrupted")
+        return real_save(blob, path)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(layer_shard_mod, "_atomic_save", _stop_after_two_layers)
+        with pytest.raises(RuntimeError, match="interrupted"):
+            shard_checkpoint(src, out, dtype="bfloat16")
+
+    assert not os.path.exists(os.path.join(out, "index.json"))
+    assert os.path.exists(os.path.join(out, "index.json.resharding"))
+
+    said = []
+    repaired = shard_checkpoint(src, out, dtype="float32", notify=said.append)
+
+    assert repaired.dtype == "float32"
+    assert any("previous re-shard did not finish" in line for line in said), said
+    assert not os.path.exists(os.path.join(out, "index.json.resharding"))
+    for path in layer_paths(out, repaired):
+        tensors = load_file(path)
+        assert all(tensor.dtype == torch.float32 for tensor in tensors.values())
+
+
+def test_index_write_interrupt_leaves_a_miss_for_the_next_run(layout, monkeypatch):
+    import soup_cli.utils.layer_shard as layer_shard_mod
+
+    src, out, _ = layout
+    shard_checkpoint(src, out, dtype="float32")
+
+    def _stop_index(*_args, **_kwargs):
+        raise RuntimeError("interrupted")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(layer_shard_mod, "_atomic_write_index", _stop_index)
+        with pytest.raises(RuntimeError, match="interrupted"):
+            shard_checkpoint(src, out, dtype="bfloat16")
+
+    assert not os.path.exists(os.path.join(out, "index.json"))
+    assert os.path.exists(os.path.join(out, "index.json.resharding"))
+
+    repaired = shard_checkpoint(src, out, dtype="float32")
+    assert repaired.dtype == "float32"
+    assert not os.path.exists(os.path.join(out, "index.json.resharding"))
+
+
+def test_cache_hit_reports_unindexed_layer_and_temp_files(layout):
+    src, out, stripe = layout
+    index = shard_checkpoint(src, out, dtype="float32", stripe_roots=(stripe,))
+    orphan_layer = layer_shard_path(out, 999)
+    orphan_temp = os.path.join(_folder(out, stripe), ".soup.leftover.tmp")
+    save_file({"orphan.weight": torch.zeros(1)}, orphan_layer)
+    with open(orphan_temp, "w", encoding="utf-8") as handle:
+        handle.write("incomplete")
+
+    said = []
+    shard_checkpoint(src, out, dtype="float32", stripe_roots=(stripe,), notify=said.append)
+
+    assert index.dtype == "float32"
+    assert any(orphan_layer in line for line in said), said
+    assert any(orphan_temp in line for line in said), said
+    assert os.path.exists(orphan_layer)
+    assert os.path.exists(orphan_temp)
+
+
 def test_a_stale_copy_that_will_not_delete_still_returns_the_committed_index(layout, monkeypatch):
     """Fix round 2, Important finding: the deferred delete runs AFTER the index is already
     committed, so a failure to delete (a leftover handle holding the file open, most plausibly
