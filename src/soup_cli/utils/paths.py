@@ -21,6 +21,23 @@ from pathlib import Path
 from typing import Iterable, Optional, Union
 
 
+def quote_path(path: str) -> str:
+    """Quote a path for an error message as it was typed, not as ``repr`` renders it.
+
+    ``repr`` doubles every backslash of a Windows path, and an operator who copies the
+    entry out of the message copies the doubled, non-working spelling back into the
+    variable (#1611). The path is shown inside single quotes so leading and trailing
+    spaces stay visible, backslashes stay single, and the control characters the
+    validation rules refuse (C0, DEL, C1) are escaped as ``\\xNN`` so they never reach
+    the terminal as raw bytes.
+    """
+    escaped = "".join(
+        f"\\x{ord(ch):02x}" if (ord(ch) < 0x20 or 0x7F <= ord(ch) <= 0x9F) else ch
+        for ch in path
+    )
+    return f"'{escaped}'"
+
+
 def is_under(path: Union[str, Path], base: Union[str, Path]) -> bool:
     """Return True when ``path`` resolves inside ``base``."""
     try:

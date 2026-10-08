@@ -12,7 +12,13 @@ import contextlib
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator, Optional
+from typing import TYPE_CHECKING, Any, Iterator, Optional
+
+if TYPE_CHECKING:
+    from transformers import TrainerCallback
+
+    class ProfileStepCallback(TrainerCallback):
+        pass
 
 from soup_cli.utils.paths import is_under_cwd
 
@@ -136,3 +142,107 @@ def profile_training(
         with_stack=False,
     ) as profiler:
         yield profiler
+
+
+def _try_import_callback_base():
+    """Return HF ``TrainerCallback`` (or ``object`` when transformers is absent).
+
+    Imported inside the function so the module has no top-level transformers
+    dependency; the class below still inherits every no-op event stub the HF
+    dispatch loop requires.
+    """
+    try:
+        from transformers import TrainerCallback  # noqa: PLC0415
+
+        return TrainerCallback
+    except Exception:  # noqa: BLE001
+        return object
+
+
+class _ProfileStepCallback_body:  # type: ignore[misc]  # noqa: N801
+    """HF TrainerCallback that steps the torch profiler on each training step.
+
+    Subclasses the lazily-resolved ``TrainerCallback`` so it inherits the no-op
+    default for every Trainer event. Only ``on_step_end`` is overridden.
+    """
+
+    def __init__(self, profiler: Optional[object]) -> None:
+        self.profiler = profiler
+        self._step_warned: bool = False
+
+    def on_step_end(
+        self,
+        args: Any = None,
+        state: Any = None,
+        control: Any = None,
+        **kwargs: Any,
+    ) -> Any:
+        if self.profiler is not None and hasattr(self.profiler, "step"):
+            try:
+                self.profiler.step()
+            except Exception as exc:
+                # Profiling must never crash a real training run.
+                if not getattr(self, "_step_warned", False):
+                    import logging
+
+                    logging.getLogger(__name__).warning(
+                        "--profile: stepping profiler failed (%s); "
+                        "trace may be incomplete or empty",
+                        exc,
+                    )
+                    self._step_warned = True
+        return control
+
+
+def build_profile_callback(profiler: Optional[object]) -> Optional[object]:
+    """Return a ProfileStepCallback for ``profiler``, or None if profiler is None."""
+    if profiler is None:
+        return None
+    from soup_cli.utils.profiling import ProfileStepCallback
+
+    return ProfileStepCallback(profiler)
+
+
+def attach_profile_callback(trainer_wrapper: Any, profiler: Optional[object]) -> bool:
+    """Register a ProfileStepCallback on the wrapper's HF trainer; False if impossible."""
+    callback = build_profile_callback(profiler)
+    hf_trainer = getattr(trainer_wrapper, "trainer", None)
+    if callback is None or not hasattr(hf_trainer, "add_callback"):
+        return False
+    hf_trainer.add_callback(callback)
+    return True
+
+
+_LAZY_CALLBACKS = {
+    "ProfileStepCallback": _ProfileStepCallback_body,
+}
+_BODY_SKIP = frozenset(("__dict__", "__weakref__"))
+
+
+def __getattr__(name: str):  # PEP 562
+    body = _LAZY_CALLBACKS.get(name)
+    if body is not None:
+        base = _try_import_callback_base()
+        ns = {k: v for k, v in vars(body).items() if k not in _BODY_SKIP}
+        cls = type(name, (base,), ns)
+        cls.__module__ = __name__
+        cls.__qualname__ = name
+        globals()[name] = cls
+        return cls
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+__all__ = [
+    "DEFAULT_ACTIVE_STEPS",
+    "DEFAULT_REPEAT",
+    "DEFAULT_WAIT_STEPS",
+    "DEFAULT_WARMUP_STEPS",
+    "MAX_ACTIVE_STEPS",
+    "ProfileStepCallback",
+    "ProfilerSchedule",
+    "attach_profile_callback",
+    "build_profile_callback",
+    "profile_training",
+    "resolve_trace_path",
+]
+

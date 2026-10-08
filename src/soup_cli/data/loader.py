@@ -1019,7 +1019,8 @@ def _load_interleaved_streaming_datasets(
 def _validate_vision_images(data: list[dict], image_dir: Path) -> list[dict]:
     """Validate and resolve image paths in vision dataset rows.
 
-    Each row must have an 'image' key with a filename or path. Resolves
+    Each row must have an 'image' key with a filename or path, a decoded PIL
+    image, or a datasets Image struct ({'bytes': ..., 'path': ...}). Resolves
     relative paths against image_dir and rejects path traversal — a crafted
     llava/sharegpt4v row like ``{"image": "/etc/passwd"}`` must not be handed
     to ``PIL.Image.open``. Mirrors :func:`_validate_audio_files` (the sibling
@@ -1125,6 +1126,36 @@ def _resolve_media_entries(
             entries.append(None)
             continue
         if not isinstance(value, str):
+            if isinstance(value, dict):
+                # Struct with embedded bytes passes through unchanged
+                if value.get("bytes"):
+                    entries.append(row)
+                    continue
+                path_val = value.get("path")
+                if path_val:
+                    if isinstance(path_val, (bytes, os.PathLike)):
+                        outside += 1
+                        entries.append(None)
+                        continue
+                    if not isinstance(path_val, str):
+                        missing += 1
+                        entries.append(None)
+                        continue
+                    if media_dir is None:
+                        raise _media_dir_required(source, key, plural=plural)
+                    if "\x00" in path_val or is_network_or_device_path(path_val):
+                        outside += 1
+                        entries.append(None)
+                        continue
+                    media_path = Path(path_val)
+                    if not media_path.is_absolute():
+                        media_path = media_dir / media_path
+                    if not is_under(media_path, media_dir):
+                        outside += 1
+                        entries.append(None)
+                        continue
+                    entries.append({**row, key: {**value, "path": str(media_path.resolve())}})
+                    continue
             entries.append(row)
             continue
         if media_dir is None:

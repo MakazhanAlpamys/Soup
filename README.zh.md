@@ -1,4 +1,4 @@
-<!-- synced-from: README.md sha256:1a2424fba31690757c6b8ac9c4c1effa5dcb0ac17f5cf61517bf5a694e9d7395 -->
+<!-- synced-from: README.md sha256:c9c7951dd7658982504c832ca9f07f70c2c18a8b9976cdc86d765bc49790a4a2 -->
 <p align="center">🌍 <a href="README.md">English</a> | <a href="README.tr.md">Türkçe</a> | <a href="README.ar.md">العربية</a> | <a href="README.ja.md">日本語</a> | <strong>中文</strong></p>
 
 <p align="center">
@@ -206,7 +206,7 @@ soup export --model ./output --format gguf --quant q4_k_m   # 导出 GGUF 给 Ol
 ```bash
 pip install "soup-cli[ui]"
 soup ui
-# 打开 http://127.0.0.1:7860
+# 打开 http://127.0.0.1:7860/?token=<token>，终端也会显示同一 URL
 ```
 
 ![Soup Web UI——新建训练](docs/assets/web-ui-new-training.png)

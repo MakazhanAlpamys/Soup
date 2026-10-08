@@ -301,6 +301,25 @@ class TestPairFilter:
         assert JUDGE_BASE in str(excinfo.value)
         assert "1000 of 1000 pairs not judged" in str(excinfo.value)
 
+    def test_the_count_leaves_out_the_pairs_already_judged(self, evaluator, no_sleep):
+        from soup_cli.data.traces.quality import judge_filter_pairs
+
+        def scored(value):
+            content = json.dumps({
+                "scores": {"helpfulness": value, "accuracy": value, "safety": value},
+                "reasoning": "ok",
+            })
+            return _reply(200, {"choices": [{"message": {"content": content}}]})
+
+        # Pair 1 is kept (chosen 5, rejected 1), pairs 2-4 are dropped (a tie
+        # is below the 0.7 default), then nothing answers.
+        steps = [scored(5), scored(1)] + [_reply(200, SCORED)] * 6
+        with mock.patch("httpx.post", side_effect=_script(*steps)):
+            with pytest.raises(JudgeDownError) as excinfo:
+                judge_filter_pairs(self._pairs(10), judge=evaluator)
+
+        assert "6 of 10 pairs not judged" in str(excinfo.value)
+
     def test_one_failing_pair_is_still_only_counted(self, evaluator, no_sleep):
         from soup_cli.data.traces.quality import judge_filter_pairs
 
@@ -410,3 +429,29 @@ class TestBestOfNCli:
         assert "http://localhost:11434/v1/chat/completions" in out
         assert "4 of 4 prompts not judged" in out
         assert "--resume" in out
+
+    def test_the_count_leaves_out_the_prompts_already_done(self, tmp_path, monkeypatch, no_sleep):
+        from soup_cli.commands.data import app
+
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "prompts.jsonl").write_text(
+            "".join(json.dumps({"prompt": f"prompt {i}"}) + "\n" for i in range(4)),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(
+            "soup_cli.utils.magpie.make_magpie_generate_fn",
+            lambda *a, **k: (lambda prompt: "a candidate"),
+        )
+        # The first prompt's three candidates are scored, then nothing answers.
+        steps = [_reply(200, SCORED)] * 3
+        with mock.patch("httpx.post", side_effect=_script(*steps)):
+            result = CliRunner().invoke(
+                app,
+                ["best-of-n", "--provider", "ollama", "--model", "sampler",
+                 "--prompts", "prompts.jsonl", "--n", "3", "--judge", "ollama://judge",
+                 "--output", "sft.jsonl"],
+            )
+        out = " ".join(strip_ansi(result.output).split())
+        assert result.exit_code == 1, (out, repr(result.exception))
+        assert "3 of 4 prompts not judged" in out
+        assert "stopped after 1/4 prompts" in out

@@ -160,6 +160,11 @@ def _run_auto_eval_after_training(eval_config, output_dir: str, run_id: str) -> 
                 output=None,
                 trust_remote_code=False,
             )
+        except typer.Exit:
+            logger.debug("Auto-eval custom skipped", exc_info=True)
+            console.print(
+                "[yellow]Auto-eval custom skipped (see the message above)[/]"
+            )
         except Exception as exc:
             logger.exception("Auto-eval custom failed")
             console.print(
@@ -269,7 +274,9 @@ def _build_hardware_fit_input(cfg):
     seq_len = getattr(cfg.data, "max_length", None)
     if not isinstance(seq_len, int) or isinstance(seq_len, bool):
         return None
-    quant = {"none": "none", "4bit": "4bit", "8bit": "8bit"}.get(
+    # #1631: mxfp4 is dequantized on load and trains in bf16, so it is priced
+    # (and gated) like "none". The formats that stay packed are still skipped.
+    quant = {"none": "none", "4bit": "4bit", "8bit": "8bit", "mxfp4": "mxfp4"}.get(
         str(getattr(tcfg, "quantization", "none") or "none")
     )
     if quant is None:
@@ -365,6 +372,13 @@ def _hardware_fit_preflight(cfg, gpu_info, *, allow_oom_attempt: bool) -> None:
     if report.ok:
         return
     b = report.breakdown
+    # #1631: a "quantized" run priced like an unquantized one needs a word why.
+    note = (
+        "An MXFP4 base is dequantized on load, so this estimate prices the "
+        "bf16 model.\n"
+        if inp.quant == "mxfp4"
+        else ""
+    )
     tail = (
         "[yellow]--allow-oom-attempt set: launching anyway.[/]"
         if allow_oom_attempt
@@ -379,7 +393,7 @@ def _hardware_fit_preflight(cfg, gpu_info, *, allow_oom_attempt: bool) -> None:
             f"{report.available_vram_gb:.1f} GB available.\n"
             f"weights {b.weights_gb:.1f} | optim {b.optimizer_gb:.1f} | "
             f"grads {b.gradients_gb:.1f} | activations {b.activations_gb:.1f} "
-            f"| overhead {b.overhead_gb:.1f} GB\n\n" + tail,
+            f"| overhead {b.overhead_gb:.1f} GB\n" + note + "\n" + tail,
             title=(
                 "[yellow]Hardware-fit warning[/]"
                 if allow_oom_attempt
@@ -1236,14 +1250,16 @@ def train(
                 format_advice,
                 hint_argv_from_reexec,
                 is_in_distributed,
+                run_launcher,
             )
 
             num_processes = num_gpus * nodes
             if not is_in_distributed():
                 # v0.33.0 #37 — auto-reexec under accelerate launch unless
-                # --no-reexec was passed. Reexec uses os.execvp so the new
-                # accelerate process replaces this process; no leftover PID
-                # tree, stdio passes through unchanged.
+                # --no-reexec was passed. On POSIX the accelerate process
+                # replaces this one (os.execvp): no leftover PID tree, stdio
+                # passes through unchanged. Windows cannot do that, so there
+                # this process waits for the launcher (see run_launcher).
                 # #372 — one argv builder for both the re-exec and the printed
                 # hint, so they cannot drift. collect_reexec_passthrough is the
                 # only list of "flags the user typed" that survive a launch.
@@ -1333,15 +1349,19 @@ def train(
                         f"({num_processes} GPUs, {topo['interconnect']})[/]"
                     )
                     console.print(f"[dim]argv: {markup_escape(' '.join(argv))}[/]")
-                    # execvp replaces this process; the child carries --no-reexec.
+                    # The launcher takes over; the child carries --no-reexec. On
+                    # POSIX run_launcher execs and never returns. On Windows,
+                    # where exec would return 0 at once and leave the launcher
+                    # running, it waits and returns the launcher's exit code.
                     try:
-                        os.execvp(argv[0], argv)
+                        launcher_code = run_launcher(argv)
                     except OSError as exc:
                         console.print(
                             f"[red]accelerate launch failed:[/] {markup_escape(str(exc))}\n"
                             "Use [bold]--no-reexec[/] to print the launch command."
                         )
                         raise typer.Exit(1) from exc
+                    raise typer.Exit(launcher_code)
             elif not dry_run:
                 # Already a launched rank — announce + apply NCCL hints. (The
                 # dry_run branch above intentionally does neither.)
@@ -1602,6 +1622,23 @@ def train(
                 "[dim] to soup.yaml for 2-5x faster training.[/]"
             )
 
+    # #1613: cheap stripe roots validation ahead of confirmation, --dry-run,
+    # dataset loading, and run creation.
+    from soup_cli.utils.stripe_roots import STRIPE_DIRS_ENV
+
+    if getattr(getattr(cfg, "training", None), "stream_layers", False) and os.environ.get(
+        STRIPE_DIRS_ENV
+    ):
+        from soup_cli.utils.errors import format_friendly_error
+        from soup_cli.utils.layer_shard import resolve_cache_root
+        from soup_cli.utils.stripe_roots import StripeRootError, validate_early_stripe_roots
+
+        try:
+            validate_early_stripe_roots(resolve_cache_root())
+        except StripeRootError as exc:
+            format_friendly_error(exc)
+            raise typer.Exit(1) from exc
+
     if not dry_run and not yes:
         if not typer.confirm("Start training?", default=True):
             console.print("[yellow]Cancelled.[/]")
@@ -1840,7 +1877,15 @@ def train(
         raise
 
     try:
-        with profiler_ctx, energy_ctx:
+        with profiler_ctx as profiler, energy_ctx:
+            if profile_run and profiler is not None:
+                from soup_cli.utils.profiling import attach_profile_callback
+
+                if not attach_profile_callback(trainer_wrapper, profiler):
+                    console.print(
+                        "[yellow]--profile:[/] this trainer has no step hook, "
+                        "so no trace will be written"
+                    )
             result = trainer_wrapper.train(
                 display=display, tracker=tracker, run_id=run_id,
                 resume_from_checkpoint=resume_from,
@@ -2011,8 +2056,9 @@ def _write_annex_xi(out_path: str, run_id: str, cfg, *, energy=None) -> None:
     )
 
     modality = getattr(cfg, "modality", "text") or "text"
-    energy_kwh = float(getattr(energy, "energy_kwh", 0.0)) if energy is not None else 0.0
-    co2_kg = float(getattr(energy, "co2_kg", 0.0)) if energy is not None else 0.0
+    # #1446: without --track-energy nothing was measured; say so instead of 0.000.
+    energy_kwh = float(getattr(energy, "energy_kwh", 0.0)) if energy is not None else None
+    co2_kg = float(getattr(energy, "co2_kg", 0.0)) if energy is not None else None
     raw_train = getattr(cfg.data, "train", "") or ""
     # #443 — pass the raw str|list through so top-domain extraction
     # aggregates across every interleaved dataset, instead of stringifying
@@ -2030,7 +2076,7 @@ def _write_annex_xi(out_path: str, run_id: str, cfg, *, energy=None) -> None:
         task=str(cfg.task),
         dataset_summary=train_display,
         modalities=(modality,),
-        train_compute_flops=0.0,
+        train_compute_flops=None,  # #1446: Soup does not measure FLOPs; never claim 0
         train_energy_kwh=energy_kwh,
         train_co2_kg=co2_kg,
         top_domains=top_domains,

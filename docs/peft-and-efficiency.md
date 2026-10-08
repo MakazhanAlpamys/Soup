@@ -521,8 +521,10 @@ training:
 Freeze bottom layers of the model — train only the top layers (like LLaMA-Factory's `finetuning_type: freeze`).
 Only `task: sft` (and `tts`, which trains through the SFT trainer) applies these two fields; on any
 other task the config is refused at load, because that trainer would train every layer (#1497).
-Within `sft` they are applied on the transformers text path only: `backend: mlx`, `backend: unsloth`,
-`modality: vision`, `modality: audio` and `stream_layers: true` still load them and train every layer.
+Within `sft` and `tts` they are applied on the text path with `backend: transformers` only:
+`backend: mlx`, `backend: unsloth`, `modality: vision`, `modality: audio` and `stream_layers: true`
+are refused at load too: those setups never read the fields and always attach an adapter, so the run
+would train every layer (#1581).
 
 ```yaml
 training:
@@ -681,6 +683,8 @@ training:
 
 Picks `bf16` on Ampere+, `fp16` on Turing or known fp16-stable models (Qwen2 / Qwen2.5 / Phi-3 / Phi-3.5), `no` on pre-Pascal. Multi-version pairs (`qwen2.5` vs `qwen2`, `phi-3.5` vs `phi-3`) match the longest substring deterministically.
 
+Only `task: sft` reads the field (and `task: tts`, which trains through the SFT trainer); since #1618, setting it on any other task is refused at config load, because those trainers pick bf16/fp16 on their own and would train at their default precision regardless of this key.
+
 The experimental QuEST route (`quantization_aware: quest`) refuses this flag at
 config load because its evidence covers BF16, not FP16; see the
 [QuEST evidence boundary](performance-and-quantization.md#evidence-boundary).
@@ -721,7 +725,7 @@ training:
   grad_accum_pressure_threshold: 0.92
 ```
 
-Records peak memory each step. When pressure crosses the threshold, recommends a new `(batch, accum)` pair preserving effective batch (capped at `accum=1024`).
+Records peak memory each step. Pressure is peak allocated memory divided by the total memory of the CUDA device the run uses (#1620), so the threshold means the same thing on a 4 GB laptop card and on an 80 GB accelerator. When pressure crosses the threshold, recommends a new `(batch, accum)` pair preserving effective batch (capped at `accum=1024`), together with the measured peak and total.
 
 > **Backend Note:** Setting `grad_accum_auto_tune: true` is refused on `backend: mlx` at config validation (there is no VRAM total to measure pressure against on unified memory).
 

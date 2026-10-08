@@ -1282,6 +1282,8 @@ class SFTTrainerWrapper(StreamingSetupMixin):
 
     def _setup_quest(self, train_ds: Any) -> None:
         """Calibrate and install #674's explicit mixed fake-quant route."""
+        from pathlib import Path
+
         from soup_cli.trainer.stream_setup import _distributed_launch
 
         if self.deepspeed_config or self.fsdp_config or _distributed_launch():
@@ -1291,14 +1293,38 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             )
         from soup_cli.utils.quest import (
             CALIBRATION_EXAMPLES,
+            METADATA_NAME,
             calibrate_activation_scales,
             calibration_rows_sha256,
             install_mixed_quest,
+            load_metadata,
             resolve_base_model_identity,
+            restore_mixed_quest,
             validate_cuda_hardware,
         )
 
         gpu_name, capability = validate_cuda_hardware()
+        declaration = getattr(self.model.config, "soup_quest", None)
+        source = Path(self.config.base)
+        if declaration is not None or (source / METADATA_NAME).is_file():
+            if not source.is_dir():
+                raise ValueError(
+                    "QuEST continuation requires a local artifact with its metadata sidecar"
+                )
+            base_identity = resolve_base_model_identity(self.config.base)
+            before = getattr(self, "_quest_base_identity_before", None)
+            if before is not None and before != base_identity:
+                raise ValueError("QuEST local base changed while the model was loading")
+            metadata = load_metadata(source)
+            if declaration != metadata:
+                raise ValueError("QuEST config declaration does not match the mandatory sidecar")
+            restore_mixed_quest(self.model, metadata)
+            self._quest_metadata = metadata
+            console.print(
+                "[green]QuEST continuation:[/] restored the artifact's fixed calibration "
+                "and 168 W4 / 161 A4 + 7 A16 route"
+            )
+            return
         console.print(
             "[cyan]QuEST calibration:[/] selecting fixed activation clips on "
             "the first 32 tokenized training rows"
@@ -1993,27 +2019,60 @@ class SFTTrainerWrapper(StreamingSetupMixin):
 
     def _prepare_vision_dataset(self, dataset: dict):
         """Keep messages + PIL images raw for processor-aware collation."""
+        import io
+        import os
+
         from datasets import Dataset
+        from PIL import Image as PILImage
+
+        def _to_rgb_image(image_raw):
+            if image_raw is None or image_raw == "":
+                return None
+            if isinstance(image_raw, PILImage.Image):
+                try:
+                    return image_raw.convert("RGB")
+                except (OSError, ValueError):
+                    return None
+            if isinstance(image_raw, dict):
+                img_bytes = image_raw.get("bytes")
+                if img_bytes:
+                    try:
+                        return PILImage.open(io.BytesIO(img_bytes)).convert("RGB")
+                    except (OSError, ValueError):
+                        return None
+                img_path = image_raw.get("path")
+                if img_path:
+                    try:
+                        if isinstance(img_path, (str, bytes, os.PathLike)):
+                            require_regular_file(os.fsdecode(img_path))
+                        return PILImage.open(img_path).convert("RGB")
+                    except (FileNotFoundError, OSError, ValueError):
+                        return None
+                return None
+            if isinstance(image_raw, (str, bytes, os.PathLike)):
+                try:
+                    require_regular_file(os.fsdecode(image_raw))
+                    return PILImage.open(image_raw).convert("RGB")
+                except (FileNotFoundError, OSError, ValueError):
+                    return None
+            return None
 
         from soup_cli.utils.paths import require_regular_file
 
         def load_and_format_vision(example):
-            from PIL import Image as PILImage
-
-            image_path = example.get("image", "")
-            image = None
-            if image_path:
-                try:
-                    # Open a file name only when it is a regular file: a FIFO
-                    # or a device would stall the reader.
-                    if isinstance(image_path, (str, bytes, os.PathLike)):
-                        require_regular_file(os.fsdecode(image_path))
-                    image = PILImage.open(image_path).convert("RGB")
-                except (FileNotFoundError, OSError):
-                    console.print(
-                        "[yellow]Warning: cannot open image: "
-                        f"{for_terminal(image_path)}[/]"
-                    )
+            image_raw = example.get("image")
+            image = _to_rgb_image(image_raw)
+            if image is None and image_raw:
+                if isinstance(image_raw, (str, bytes, os.PathLike)):
+                    err_label = str(image_raw)
+                elif isinstance(image_raw, dict) and image_raw.get("path"):
+                    err_label = str(image_raw["path"])
+                else:
+                    err_label = type(image_raw).__name__
+                console.print(
+                    "[yellow]Warning: cannot open image: "
+                    f"{for_terminal(err_label)}[/]"
+                )
 
             result = {"images": []}
             if image is not None:

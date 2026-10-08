@@ -1,4 +1,4 @@
-<!-- synced-from: README.md sha256:1a2424fba31690757c6b8ac9c4c1effa5dcb0ac17f5cf61517bf5a694e9d7395 -->
+<!-- synced-from: README.md sha256:c9c7951dd7658982504c832ca9f07f70c2c18a8b9976cdc86d765bc49790a4a2 -->
 <p align="center">🌍 <a href="README.md">English</a> | <a href="README.tr.md">Türkçe</a> | <a href="README.ar.md">العربية</a> | <strong>日本語</strong> | <a href="README.zh.md">中文</a></p>
 
 <p align="center">
@@ -209,7 +209,7 @@ soup export --model ./output --format gguf --quant q4_k_m   # Ollama / llama.cpp
 ```bash
 pip install "soup-cli[ui]"
 soup ui
-# http://127.0.0.1:7860 を開きます
+# http://127.0.0.1:7860/?token=<token> を開きます
 ```
 
 ![Soup Web UI — 新規学習](docs/assets/web-ui-new-training.png)

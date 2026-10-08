@@ -895,6 +895,14 @@ data:
   # video_dir: ./videos
 ```
 
+`add_new_tokens` / `new_special_tokens` are added to the tokenizer, with the embeddings
+resized, on `backend: transformers` for `sft` (text, vision and audio), `dpo`, `kto`,
+`orpo`, `ipo`, `simpo`, `bco`, `grpo`, `online_dpo`, `preference` and `tts`, and on SFT's
+vision and audio paths whatever the backend (they run their transformers setup before the
+backend is read). Any other task, `backend: unsloth` (text SFT and every other task) or
+`mlx`, and `training.stream_layers` never add them, so a config setting them there is
+refused at load, naming which of those applies (#1358).
+
 `mask_history: true` keeps only the **last** assistant turn in the loss: every
 earlier assistant turn is masked alongside the user and system turns the
 assistant-only path already excludes. It never adds tokens to the loss.
@@ -1047,7 +1055,7 @@ soup data from-traces \
   --min-confidence 0.7
 ```
 
-The judge scores `chosen` and `rejected` independently against its rubric (default helpfulness/accuracy/safety on a 1-5 scale). Pairs whose normalised `(chosen - rejected)` confidence falls below `--min-confidence` are dropped. Per-pair backend exceptions are counted (not crashed) and reported. Provider allowlist `{openai, server, ollama}` validated at the CLI boundary; SSRF protection on `--judge-api-base` carries over from `soup eval judge`.
+The judge scores `chosen` and `rejected` independently against its rubric (default helpfulness/accuracy/safety on a 1-5 scale). Pairs whose normalised `(chosen - rejected)` confidence falls below `--min-confidence` are dropped. Per-pair backend exceptions are counted (not crashed) and reported. A judge that stops answering is not counted that way: once 3 requests in a row have spent their retries unanswered, the command stops with exit 1, names the judge and how many pairs were not judged, and writes no output file (#1522). Provider allowlist `{openai, server, ollama}` validated at the CLI boundary; SSRF protection on `--judge-api-base` carries over from `soup eval judge`.
 
 
 ## Synthetic Data Forge

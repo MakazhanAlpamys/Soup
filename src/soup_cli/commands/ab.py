@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Optional
 
 import typer
@@ -13,6 +14,7 @@ from rich.table import Table
 from soup_cli.commands._webhook_cli import emit_webhooks, validate_webhook_flags
 from soup_cli.config.deprecation import deadline_clause
 from soup_cli.utils.ab_test import (
+    ACCEPT_HOLD_SPREAD_RATIO,
     HIGHER_IS_BETTER,
     PRIOR_SCALE_ROWS,
     MsprtConfig,
@@ -124,9 +126,45 @@ def ab(
     table.add_row("n_treatment", str(verdict.n_treatment))
     table.add_row("mean_control", f"{verdict.mean_control:.4f}")
     table.add_row("mean_treatment", f"{verdict.mean_treatment:.4f}")
+    # #1524 - the two spreads behind the hold, when it is what kept the verdict
+    # at `continue`. Shown next to the statistic so the reader can see that the
+    # accept rule was already satisfied.
+    if verdict.accept_held:
+        table.add_row("accept_held", "[bold]true[/]")
+        table.add_row("held_out_rows", str(verdict.held_out_rows))
+        table.add_row("held_out_spread", f"{verdict.held_out_spread:.4g}")
+        table.add_row("tested_spread", f"{verdict.tested_spread:.4g}")
     console.print(table)
 
-    if verdict.decision == "reject_h0" and worse:
+    if verdict.accept_held:
+        # #1524 - the accept rule is already satisfied (the confidence sequence
+        # lies inside the effect-size band); the only thing keeping this at
+        # `continue` is the 3x spread rule. The held-out rows are fixed,
+        # so "collect more samples" cannot help here — name the ratio and point
+        # at the rows that actually set it.
+        ratio = (
+            verdict.tested_spread / verdict.held_out_spread
+            if verdict.held_out_spread
+            else math.inf
+        )
+        console.print(
+            Panel(
+                "[cyan]Held back: the tested rows spread "
+                f"{ratio:.3g} times the held-out ones "
+                f"(held_out_spread {verdict.held_out_spread:.4g}, "
+                f"tested_spread {verdict.tested_spread:.4g}, "
+                f"limit {ACCEPT_HOLD_SPREAD_RATIO:g}x), so accept_h0 is "
+                "withheld even though the confidence sequence for the "
+                f"difference is already inside +-{cfg.effect_size:g}. "
+                f"The first {verdict.held_out_rows} rows of each arm set the scale of "
+                "--effect-size and barely vary (a warm cache, or a judge that gives "
+                "the same score early). Those rows are fixed, so more samples of the "
+                "same kind will not release the hold: drop them, or reorder the input "
+                "so the first rows vary, and re-run.[/]",
+                border_style="cyan",
+            )
+        )
+    elif verdict.decision == "reject_h0" and worse:
         console.print(
             Panel(
                 "[red]Significant difference detected: the treatment is worse than "
@@ -173,6 +211,10 @@ def ab(
 
     # Webhook only fires on a terminal decision (reject_h0 / accept_h0) —
     # a `continue` verdict carries no actionable signal (issue #207).
+    # #1524 - a held run is a `continue` by construction (`accept_held` is only
+    # legal on one), so it never reaches this payload: the hold is reported on
+    # the panel and on the `MsprtVerdict` returned by `run_msprt` / `msprt_step`,
+    # and nothing about it belongs here as a key that is always false.
     if verdict.decision != "continue":
         emit_webhooks(
             slack_url,

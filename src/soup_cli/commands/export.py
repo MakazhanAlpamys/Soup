@@ -28,10 +28,40 @@ SUPPORTED_FORMATS = (
     # v0.53.1 #139 — UD/IQ/Apple-ARM GGUFs via llama.cpp imatrix.
     "gguf-ud",
 )
+# #338 — AWQ and GPTQ export are deprecated: both upstream projects are archived
+# and neither extra installs next to the train extra. The two formats still run
+# for one more release; the notice names the formats to move to. Maps the format
+# to the upstream project the notice names.
+DEPRECATED_FORMATS = {"awq": "AutoAWQ", "gptq": "AutoGPTQ"}
+REPLACEMENT_FORMATS = ("gguf", "onnx", "tensorrt", "bitnet", "tq1_0")
 GGUF_QUANT_TYPES = ("q4_0", "q4_k_m", "q5_k_m", "q8_0", "f16", "f32")
 LLAMA_CPP_DIR_NAME = "llama.cpp"
 # Pin to a known release tag for supply-chain safety
 LLAMA_CPP_TAG = "b5270"
+
+
+def deprecated_format_notice(fmt: str) -> Optional[str]:
+    """The deprecation line for an export format, or ``None`` when it stays.
+
+    Plain text with no console markup: ``soup export`` and ``soup quantize``
+    both print it behind a ``Deprecated:`` label.
+    """
+    upstream = DEPRECATED_FORMATS.get(fmt)
+    if upstream is None:
+        return None
+    replacements = ", ".join(REPLACEMENT_FORMATS[:-1]) + f" or {REPLACEMENT_FORMATS[-1]}"
+    return (
+        f"--format {fmt} is deprecated and will be removed in the next release: "
+        f"{upstream} is archived upstream and the {fmt} extra cannot be installed "
+        f"next to the train extra. Use --format {replacements} instead."
+    )
+
+
+def _warn_deprecated_format(fmt: str) -> None:
+    """Print the deprecation notice for ``fmt``, if it has one."""
+    notice = deprecated_format_notice(fmt)
+    if notice is not None:
+        console.print(f"[yellow]Deprecated:[/] {notice}")
 
 
 def export(
@@ -45,7 +75,10 @@ def export(
         "gguf",
         "--format",
         "-f",
-        help="Export format: gguf, onnx, tensorrt, awq, gptq, bitnet, tq1_0",
+        help=(
+            "Export format: gguf, onnx, tensorrt, awq, gptq, bitnet, tq1_0 "
+            "(awq and gptq are deprecated and will be removed in the next release)"
+        ),
     ),
     quant: str = typer.Option(
         "q4_k_m",
@@ -928,6 +961,8 @@ def _export_awq(
     trust_remote_code: bool = False,
 ) -> None:
     """Export model to AWQ format via autoawq."""
+    # First, so it is there whatever stops the run (most stop at the extra).
+    _warn_deprecated_format("awq")
     # Validate bits
     valid_bits = {4, 8}
     if bits not in valid_bits:
@@ -1069,6 +1104,8 @@ def _export_gptq(
     trust_remote_code: bool = False,
 ) -> None:
     """Export model to GPTQ format via auto-gptq."""
+    # First, so it is there whatever stops the run (most stop at the extra).
+    _warn_deprecated_format("gptq")
     # Validate bits
     valid_bits = {4, 8}
     if bits not in valid_bits:

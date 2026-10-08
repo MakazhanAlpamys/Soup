@@ -1412,8 +1412,9 @@ class TrainingConfig(BaseModel):
         ge=1,
         le=1000,
         description=(
-            "Replace the frozen ref model with the current student every N "
-            "epochs. Refused at load (#1345) - not wired yet."
+            "Replace the frozen ref adapter with the current active adapter every "
+            "N epochs. Copies .default. adapter weights into .ref. under torch.no_grad(). "
+            "Requires LoRA (lora.r >= 1); full fine-tuning is not supported."
         ),
     )
     # Multi-objective preference loss (v0.40.0 Part D).
@@ -3326,12 +3327,14 @@ class TrainingConfig(BaseModel):
             "Overrides any manual warmup_steps in the trainer."
         ),
     )
-    # Auto mixed-precision (v0.32.0 Part C)
+    # Auto mixed-precision (v0.32.0 Part C); refused on every task outside
+    # AMP_APPLYING_TASKS since #1618 — only the SFT trainer reads it.
     auto_mixed_precision: bool = Field(
         default=False,
         description=(
-            "Pick bf16/fp16 based on model + GPU compute capability. "
-            "Overrides manual --bf16 / --fp16 trainer flags."
+            "Pick bf16/fp16 based on model + GPU compute capability. Applied by "
+            "task='sft' (and 'tts', which trains through the SFT trainer); refused "
+            "on every other task, whose trainers pick their own precision."
         ),
     )
     # Live grad-accum monitoring (v0.32.0 Part B)
@@ -3354,8 +3357,8 @@ class TrainingConfig(BaseModel):
         le=1000,
         description=(
             "Freeze first N layers (from bottom). Train only remaining layers. "
-            "Applied by tasks sft and tts (on the transformers text path); "
-            "refused on the other tasks."
+            "Applied by tasks sft and tts on the text path with backend "
+            "transformers and no layer streaming; refused everywhere else."
         ),
     )
     freeze_ratio: Optional[float] = Field(
@@ -3364,8 +3367,8 @@ class TrainingConfig(BaseModel):
         lt=1.0,
         description=(
             "Freeze this fraction of layers (0.75 = freeze 75% from bottom). "
-            "Applied by tasks sft and tts (on the transformers text path); "
-            "refused on the other tasks."
+            "Applied by tasks sft and tts on the text path with backend "
+            "transformers and no layer streaming; refused everywhere else."
         ),
     )
     # v0.71.23 #266 — Spectrum targeted training: full FT of selected params
@@ -4763,10 +4766,28 @@ def remap_root_level_misplaced_keys(values):
     return new_values
 
 
+#: #1358 — the tasks whose transformers setup adds ``data.add_new_tokens`` /
+#: ``data.new_special_tokens`` to the tokenizer (``apply_vocab_expansion``):
+#: SFT's text / vision / audio paths and the DPO/GRPO family, ``preference``
+#: through the trainers it delegates to and ``tts`` through SFT's text path.
+VOCAB_EXPANSION_TASKS: frozenset[str] = frozenset({
+    "sft", "dpo", "kto", "orpo", "ipo", "simpo", "bco", "grpo", "online_dpo",
+    "preference", "tts",
+})
+
+
 # task values whose trainer wrapper subclasses SFTTrainerWrapper and so reads
 # training.use_flash_attn / training.use_liger (sft.py:_setup_transformers,
 # inherited by tts.py via super()). Every other task ignores both fields.
 SFT_KERNEL_AWARE_TASKS: frozenset[str] = frozenset({"sft", "tts"})
+
+# #1618: task values whose trainer reads training.auto_mixed_precision
+# (sft.py:_resolve_mixed_precision, inherited by tts.py through super()).
+# Every other task's trainer picks bf16/fp16 on its own and never looks at
+# the field. Its own name, not SFT_KERNEL_AWARE_TASKS, so that the two sets
+# cannot become coupled by accident (the #1532 FREEZE_APPLYING_TASKS
+# precedent).
+AMP_APPLYING_TASKS: frozenset[str] = frozenset({"sft", "tts"})
 
 
 # #795: trainers that load the base unquantised and never read
@@ -4797,6 +4818,8 @@ UNSLOTH_SETUP_TASKS: frozenset[str] = frozenset({
 #: #1497 — the tasks whose trainer reads ``training.freeze_layers`` /
 #: ``training.freeze_ratio``: ``SFTTrainerWrapper._setup_transformers``, which
 #: ``tts`` inherits. Every other trainer ignores both, so they are refused there.
+#: Within these tasks only the text path on ``backend: transformers`` without
+#: layer streaming reaches that method; the other paths are refused too (#1581).
 FREEZE_APPLYING_TASKS: frozenset[str] = frozenset({"sft", "tts"})
 
 #: The bitsandbytes values: ``4bit`` was the default, so every config Soup dumped
@@ -5114,6 +5137,52 @@ class SoupConfig(BaseModel):
             "task='prm' does not apply training.lora: the PRM trainer fine-tunes "
             "every base parameter. Remove the lora block (or set lora.r: 0)."
         )
+
+    @model_validator(mode="after")
+    def _validate_vocab_expansion_is_applied(self) -> "SoupConfig":
+        """#1358 — ``data.add_new_tokens`` / ``data.new_special_tokens`` are added
+        only by ``apply_vocab_expansion``, which only transformers setups call.
+        Anywhere else they loaded and were dropped. The task check comes first:
+        it holds on every backend, so switching backend never meets a second
+        refusal from this check."""
+        data = self.data
+        fields = [f"data.{name}" for name in ("add_new_tokens", "new_special_tokens")
+                  if getattr(data, name)]
+        if not fields:
+            return self
+        field = fields[0]
+        if self.task not in VOCAB_EXPANSION_TASKS:
+            raise ValueError(
+                f"{field} is not applied by task={self.task!r}: that trainer never adds "
+                "tokens to its tokenizer or resizes its embeddings. Remove it."
+            )
+        if self.training.stream_layers:
+            raise ValueError(
+                f"{field} is not applied with training.stream_layers: the streamed "
+                "model is built without the step that adds tokens and resizes the "
+                "embeddings. Remove it, or turn off stream_layers."
+            )
+        if (self.backend == "unsloth" and self.task == "sft"
+                and self.modality in ("vision", "audio")):
+            # SFT's setup() sends vision / audio to their transformers setups before
+            # it reads the backend, and both of those call apply_vocab_expansion
+            # (review of #1622); the unsloth reason below would be the wrong one.
+            return self
+        if self.backend == "unsloth" and self.task not in UNSLOTH_SETUP_TASKS:
+            return self  # that task's own backend refusal names the real problem
+        if self.backend == "mlx" and self.task != "sft":
+            return self  # _validate_mlx_task_support refuses the task itself
+        why = {
+            "unsloth": "its setup loads the model and attaches LoRA in one call, with "
+            "no step that adds tokens",
+            "mlx": "the MLX trainer never adds tokens to its tokenizer",
+        }.get(self.backend)
+        if why is not None:
+            raise ValueError(
+                f"{field} is not applied on backend={self.backend!r}: {why}. Use "
+                "backend: transformers, or remove it."
+            )
+        return self
 
     @model_validator(mode="after")
     def _validate_moe_lora_task(self) -> "SoupConfig":
@@ -5537,16 +5606,13 @@ class SoupConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_grpo_fp16_amp_exclusive(self) -> "SoupConfig":
-        """v0.53.3 #128 — ``grpo_fp16`` and ``auto_mixed_precision`` are
-        mutually exclusive.
-
-        Both flags pick the mixed-precision dtype but go through different
-        codepaths (``grpo_fp16`` forces ``fp16=True, bf16=False`` on
-        GRPOConfig directly; ``auto_mixed_precision`` runs the v0.32.0
-        per-model + per-GPU picker). Combining them is a footgun where the
-        downstream behaviour depends on order-of-evaluation — fail fast at
-        config-load with a friendly message naming both flags so the user
-        picks one.
+        """v0.53.3 #128 — ``grpo_fp16`` and ``auto_mixed_precision`` do not
+        combine; #1618 sharpens why: the GRPO trainer never reads
+        ``auto_mixed_precision`` at all (``_validate_auto_mixed_precision_task_gate``
+        refuses the field on ``task='grpo'`` outright), so ``grpo_fp16`` is
+        the only way to pick the dtype there. The combo is refused here first
+        so a config carrying both flags is told to drop
+        ``auto_mixed_precision`` rather than just handed the task-gate error.
         """
         # Short-circuit when task is not 'grpo' so the v0.50.0 stability
         # task-gate error fires first (code-review HIGH fix — keeps a
@@ -5556,11 +5622,10 @@ class SoupConfig(BaseModel):
             return self
         if self.training.grpo_fp16 and self.training.auto_mixed_precision:
             raise ValueError(
-                "grpo_fp16=True and auto_mixed_precision=True are mutually "
-                "exclusive — both pick the mixed-precision dtype but go "
-                "through different codepaths. Pick one: grpo_fp16 forces "
-                "FP16 (unsloth parity), auto_mixed_precision uses the "
-                "v0.32.0 per-GPU picker."
+                "grpo_fp16=True and auto_mixed_precision=true cannot be "
+                "combined on task='grpo': the GRPO trainer never reads "
+                "auto_mixed_precision, so grpo_fp16 is the only way to pick "
+                "the dtype there. Remove auto_mixed_precision."
             )
         return self
 
@@ -5897,6 +5962,26 @@ class SoupConfig(BaseModel):
             raise ValueError(
                 f"training.use_flash_attn=true requires task in "
                 f"{sorted(SFT_KERNEL_AWARE_TASKS)}; got task={self.task!r}"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_auto_mixed_precision_task_gate(self) -> "SoupConfig":
+        """#1618: auto_mixed_precision is read only by the SFT trainer
+        (sft.py:_resolve_mixed_precision, inherited by tts.py through
+        super()); every other trainer picks bf16/fp16 on its own and never
+        looks at the field, so refuse rather than silently run at the
+        trainer's default precision. Only ``true`` is refused: dumped configs
+        and recipe snapshots write the ``false`` default, and those must keep
+        loading.
+        """
+        if self.training.auto_mixed_precision and self.task not in AMP_APPLYING_TASKS:
+            raise ValueError(
+                f"training.auto_mixed_precision=true is not applied by "
+                f"task={self.task!r}: only task in {sorted(AMP_APPLYING_TASKS)} "
+                f"picks bf16/fp16 from the model and GPU ('tts' trains through "
+                f"the SFT trainer), so this run would train at the trainer's "
+                f"default precision. Use task='sft', or remove the key."
             )
         return self
 
@@ -7215,12 +7300,12 @@ class SoupConfig(BaseModel):
                 f"preference_loss in {{dpo, ipo}}; got task={self.task!r}, "
                 f"preference_loss={tcfg.preference_loss!r}."
             )
-        # dpo_ref_regen_epochs refusal (#1345).
-        if regen is not None:
+        # dpo_ref_regen_epochs requires LoRA (full fine-tuning unsupported, #1345).
+        if regen is not None and tcfg.lora.r == 0:
             raise ValueError(
-                "dpo_ref_regen_epochs is not wired yet (#1345): with LoRA TRL builds "
-                "no separate reference model, and full fine-tuning is not supported on "
-                f"task={self.task!r}. Remove dpo_ref_regen_epochs."
+                "dpo_ref_regen_epochs requires LoRA (lora.r >= 1): full fine-tuning "
+                f"(lora.r: 0) is not supported for DPO-family reference "
+                f"regeneration on task={self.task!r}."
             )
         return self
 
@@ -8001,9 +8086,13 @@ class SoupConfig(BaseModel):
         """#1497 — ``freeze_layers`` / ``freeze_ratio`` loaded on every task, but
         only the trainers in :data:`FREEZE_APPLYING_TASKS` freeze anything: on the
         others the run trained every layer without a word. Placed after the #795
-        resolver and before the #1357 backend refusal, which stays last."""
-        if self.task in FREEZE_APPLYING_TASKS:
-            return self
+        resolver and before the #1357 backend refusal, which stays last.
+
+        #1581 — within those tasks only ``_setup_transformers`` reads them. The MLX
+        trainer and the vision, audio, streaming and unsloth setups never do, and
+        each of them always attaches an adapter, so those runs trained every
+        layer too. Each setting that sends the run there is named, in the order
+        ``resolve_trainer`` and ``SFTTrainerWrapper.setup`` check them."""
         tcfg = self.training
         fields = [
             f"training.{name}"
@@ -8014,10 +8103,30 @@ class SoupConfig(BaseModel):
             return self
         named = " and ".join(fields)
         verb, keys = ("are", "both keys") if len(fields) > 1 else ("is", "the key")
+        if self.task not in FREEZE_APPLYING_TASKS:
+            raise ValueError(
+                f"{named} {verb} not applied by task={self.task!r}: only task='sft' "
+                "(and 'tts', which trains through the SFT trainer) freezes layers, so "
+                f"this run would train every layer. Use task: sft, or remove {keys}."
+            )
+        off_path = []
+        if self.backend == "mlx":
+            off_path.append(("backend='mlx'", "backend: transformers"))
+        if self.modality in ("vision", "audio"):
+            off_path.append((f"modality={self.modality!r}", "modality: text"))
+        if tcfg.stream_layers:
+            off_path.append(("training.stream_layers=true", "stream_layers: false"))
+        if self.backend == "unsloth":
+            off_path.append(("backend='unsloth'", "backend: transformers"))
+        if not off_path:
+            return self
+        settings = " and ".join(setting for setting, _ in off_path)
+        changes = " and ".join(change for _, change in off_path)
         raise ValueError(
-            f"{named} {verb} not applied by task={self.task!r}: only task='sft' (and "
-            "'tts', which trains through the SFT trainer) freezes layers, so this run "
-            f"would train every layer. Use task: sft, or remove {keys}."
+            f"{named} {verb} not applied by task={self.task!r} with {settings}: "
+            "layers are frozen only on the text path with backend: transformers and "
+            "no layer streaming, so this run would train every layer. "
+            f"Use {changes}, or remove {keys}."
         )
 
     @model_validator(mode="after")
