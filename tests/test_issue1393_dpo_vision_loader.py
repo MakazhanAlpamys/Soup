@@ -309,9 +309,10 @@ class TestABackendWhoseDpoIgnoresModalityIsRefused:
 
     def test_a_tied_blend_is_refused_only_when_dpo_is_listed_first(self):
         """The refusal breaks a tie the same way the preflight and the trainer do."""
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError) as excinfo:
             _cfg(task="preference", modality="vision", backend="unsloth",
                  preference_loss_weights="{dpo: 0.5, ipo: 0.5}")
+        assert "requires backend='transformers'" in str(excinfo.value)
         ipo_first = _cfg(task="preference", modality="vision", backend="unsloth",
                          preference_loss_weights="{ipo: 0.5, dpo: 0.5}")
         assert ipo_first.backend == "unsloth"
