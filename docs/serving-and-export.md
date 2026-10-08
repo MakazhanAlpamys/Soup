@@ -403,7 +403,7 @@ forward pass; on a small target it is frequently a *slowdown*.
 
 ```bash
 # Transformers backend — uses HF assisted generation
-soup serve --model ./output --speculative-decoding small-draft-model --spec-tokens 5
+soup serve --model ./output --speculative-decoding small-draft-model --num-speculative-tokens 5
 
 # vLLM backend — uses vLLM native speculative decoding
 soup serve --model ./output --backend vllm --speculative-decoding small-draft-model
@@ -504,7 +504,7 @@ The first request with a given prefix warms the cache; subsequent requests skip 
 Switch the active adapter at runtime without restarting the server:
 
 ```bash
-soup serve --model base-model --adapters chat=./chat-adapter code=./code-adapter
+soup serve --model base-model --adapters chat=./chat-adapter --adapters code=./code-adapter
 ```
 
 ```bash

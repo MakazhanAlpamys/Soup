@@ -1,4 +1,4 @@
-<!-- synced-from: README.md sha256:c9c7951dd7658982504c832ca9f07f70c2c18a8b9976cdc86d765bc49790a4a2 -->
+<!-- synced-from: README.md sha256:a6789c2877515d5ac707160a55ab94cd84b390e2e31168b69d4f954a47c5562a -->
 <p align="center">🌍 <a href="README.md">English</a> | <a href="README.tr.md">Türkçe</a> | <a href="README.ar.md">العربية</a> | <a href="README.ja.md">日本語</a> | <strong>中文</strong></p>
 
 <p align="center">
@@ -278,7 +278,7 @@ ASR、纯文本、embedding、RAFT 等等——全部从 JSONL、JSON、CSV、Pa
 
 ```bash
 soup train  --config soup.yaml        # 训练（SFT/DPO/GRPO/PPO/KTO/ORPO/SimPO/IPO/...）
-soup infer  --model ./output --input prompts.jsonl   # 批量推理
+soup infer  --model ./output --input prompts.jsonl --output results.jsonl   # 批量推理
 soup chat   --model ./output          # 交互式对话
 soup serve  --model ./output          # OpenAI 兼容 API 服务
 soup ui                               # 本地浏览器仪表盘

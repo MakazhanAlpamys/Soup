@@ -63,6 +63,13 @@ class TestOneEntry:
         with pytest.raises(StripeRootError, match="existing directory"):
             validate_stripe_root(str(tmp_path / "gone"), primary_root=primary)
 
+    def test_an_existing_file_is_refused_as_not_a_directory(self, layout, tmp_path):
+        primary, _ = layout
+        entry = tmp_path / "not-a-folder.txt"
+        entry.write_text("x")
+        with pytest.raises(StripeRootError, match="existing directory"):
+            validate_stripe_root(str(entry), primary_root=primary)
+
     def test_a_missing_folder_names_both_ways_out(self, layout, tmp_path):
         """Final review Recommendation 5: reconnect it, or drop it and re-shard to one root."""
         primary, _ = layout

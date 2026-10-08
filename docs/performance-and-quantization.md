@@ -834,7 +834,11 @@ flight per drive. The cache is laid out this way whichever tier the run picks; o
 reads the drives in parallel. Every entry is checked, and any failure refuses the run and names
 the entry and the rule: it must be an absolute path (on Windows, with a drive letter or UNC share;
 no `\\?\` or `\\.\` spelling, no control characters), already exist as a folder (a drive that is
-not mounted is never mistaken for an empty one), not be a symlink, not lie inside or contain the
+not mounted is never mistaken for an empty one), not be a symlink or a directory junction (a
+genuine Windows volume mount point is accepted — a junction and a mount point carry the same
+reparse tag, but only a junction's target names a folder, under a drive letter, a UNC share or
+even a volume GUID path, that can be repointed at any time; a mount point's target names a
+whole volume rather than a folder), not lie inside or contain the
 primary cache root or another entry, sit on a different volume from the primary root and from
 every other entry, and classify as NVMe (`training.stream_disk_kind` overrides a wrong probe); the
 list holds at most 6 folders. The checks that need no disk probe run when `soup train` or
@@ -848,8 +852,12 @@ primary cache's path, so two primary caches (two users, or two `SOUP_LAYER_STREA
 values) sharing one stripe drive never touch each other's files. That folder is made private to
 the account running Soup (mode 0700 on POSIX; on Windows a protected ACL for that account and
 SYSTEM, replacing the inherited one, which on a data drive typically lets every signed-in
-account modify files), checked again on every reuse, and never followed if it is a link or
-junction; a folder Soup cannot make private refuses the run by name. Soup never deletes anything
+account modify files), checked again on every reuse and again before every per-layer write and
+the marker write of a shard, and never followed if it is a link or junction; a folder Soup
+cannot make private refuses the run by name. A root renamed out from under a running shard and
+replaced with a link is refused at the next write, not just at the start — but that only
+narrows the window to a single write, it does not close it, which would need writes relative
+to an open directory handle (the standard library has none on Windows). Soup never deletes anything
 inside a stripe folder. Soup makes only its own folder owner-only, so also make the stripe ROOT
 itself writable only by your own account (on a default Windows data drive other accounts can
 modify it).
@@ -958,7 +966,7 @@ Coverage:
 
 ```bash
 soup train --config soup.yaml --trust-remote-code
-soup infer --model my-org/custom-arch-model --input prompts.jsonl --trust-remote-code
+soup infer --model my-org/custom-arch-model --input prompts.jsonl --output out.jsonl --trust-remote-code
 soup export --model ./adapter --format gguf --trust-remote-code
 ```
 
@@ -1367,7 +1375,7 @@ soup deploy autopilot --target rtx-4090-24gb \
     --measure-candidates 4bit,gptq,awq
 ```
 
-Autopilot also detects pre-quantized bases automatically — `TheBloke/Llama-2-7B-Chat-GPTQ` is recommended `gptq` instead of stacking 4-bit on top. Detection runs against the base-model name regex AND any local `config.json`'s `quantization_config.quant_method`. Out-of-cwd model paths are silently skipped (soft-probe semantics).
+Autopilot also detects pre-quantized bases automatically - `TheBloke/Llama-2-7B-Chat-GPTQ` is recommended `gptq` instead of stacking 4-bit on top. Detection runs against the base-model name regex AND any local `config.json`'s `quantization_config.quant_method`. Out-of-cwd model paths are silently skipped (soft-probe semantics). A detected `mxfp4` base is budgeted as the bf16 model it loads (2 bytes per parameter), and Autopilot refuses a `--gpu-budget` below that.
 
 AWQ and GPTQ export are deprecated and will be removed in the next release: both upstream projects (AutoAWQ and AutoGPTQ) are archived and neither extra can be installed next to `[train]`. Until then `soup export --format awq` and `--format gptq` work as before and start with a `Deprecated:` notice that names the formats to move to (`gguf`, `onnx`, `tensorrt`, `bitnet`, `tq1_0`).
 

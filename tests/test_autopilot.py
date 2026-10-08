@@ -130,6 +130,25 @@ class TestDecisionEngine:
         with pytest.raises(ValueError):
             decide_quantization(model_params_b=70.0, vram_gb=4.0)
 
+    def test_mxfp4_base_is_budgeted_as_bf16(self):
+        from soup_cli.autopilot.decisions import decide_quantization
+
+        with pytest.raises(ValueError, match="Model too large for VRAM budget"):
+            decide_quantization(20.0, 16.0, prequantized="mxfp4")
+        assert decide_quantization(20.0, 48.0, prequantized="mxfp4") == "mxfp4"
+        assert decide_quantization(20.0, 16.0, prequantized="gptq") == "gptq"
+
+    def test_mxfp4_budget_is_two_bytes_per_parameter(self):
+        from soup_cli.autopilot.decisions import decide_quantization
+
+        # 20B x 2 bytes = 40 GB: just under it refuses, exactly at it passes.
+        with pytest.raises(ValueError, match=r"dequantized on load.*40\.0GB in bf16"):
+            decide_quantization(20.0, 39.9, prequantized="mxfp4")
+        assert decide_quantization(20.0, 40.0, prequantized="mxfp4") == "mxfp4"
+        assert decide_quantization(20.0, 40.0, prequantized="MXFP4") == "mxfp4"
+        with pytest.raises(ValueError, match=r"dequantized on load.*40\.0GB in bf16"):
+            decide_quantization(20.0, 39.9, prequantized="MXFP4")
+
     def test_decide_quantization_8bit_tier(self):
         from soup_cli.autopilot.decisions import decide_quantization
 

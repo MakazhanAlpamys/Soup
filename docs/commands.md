@@ -28,8 +28,8 @@ soup train --config soup.yaml --push-as user/repo  Auto-push each checkpoint to 
 soup train --config soup.yaml --push-as user/repo --hf-resume  Resume from latest HF checkpoint branch (not with training.relora_steps)
 soup train --config soup.yaml --find-lr        LR range finder: write recommended LR JSON
 soup train --config soup.yaml --cloud modal|lambda --gpu a100  Render a cloud GPU controller (plan-only; --cloud-submit submits live)
-soup infer --model ./output --input p.jsonl [--batch-size N]   Batch inference; default batch size is 1; fp16/bf16 batching may not be bit-exact with batch size 1
-soup infer --model ./output --input p.jsonl --cuda-graphs   Experimental CUDA graph decode (Qwen2/Llama, one GPU, PyTorch >= 2.14; batch size 1 only)
+soup infer --model ./output --input p.jsonl --output out.jsonl [--batch-size N]   Batch inference; default batch size is 1; fp16/bf16 batching may not be bit-exact with batch size 1
+soup infer --model ./output --input p.jsonl --output out.jsonl --cuda-graphs   Experimental CUDA graph decode (Qwen2/Llama, one GPU, PyTorch >= 2.14; batch size 1 only)
 soup infer --task asr --model <whisper|adapter> --input a.jsonl --output o.jsonl [--audio-dir d --asr-language en --asr-task transcribe|translate]  Whisper transcription + WER/CER
 soup chat --model ./output                    Interactive chat
 soup infer|chat|diff ... --device cpu|cuda|cuda:N|mps  Pick where the model loads (see below)
@@ -60,12 +60,12 @@ soup agent eval --spec api.yaml --predictions p.jsonl  Score predicted tool-call
 soup agent eval --spec api.yaml --predictions p.jsonl --sandbox  Execute each tool-call in the RLVR sandbox: ok/tool_error/timeout/arg_error
 soup eval benchmark --model ./output          Evaluate on standard benchmarks
 soup eval aider --model openai/gpt-4.1 --output ./aider-results --exercises-dir ./polyglot-benchmark  Run Aider Polyglot in Docker
-soup eval custom --tasks eval.jsonl           Custom eval tasks from JSONL
+soup eval custom --model ./output --tasks eval.jsonl   Custom eval tasks from JSONL
 soup eval judge --target resp.jsonl           LLM-as-a-judge evaluation
 soup eval auto --config soup.yaml             Auto-eval from config
 soup eval compare <run1> <run2>               Compare eval results
 soup eval leaderboard                         Local model leaderboard
-soup eval human --input p.jsonl               Human A/B evaluation
+soup eval human --model-a ./a --model-b ./b --input p.jsonl   Human A/B evaluation
 soup eval gate --suite gate.yaml              Run eval-gate suite standalone
 soup eval quant-check --before X --after Y --tasks t.jsonl  Before/after quantization eval (OK/MINOR/MAJOR verdict)
 soup eval design <data> --goal "..."          Draft an eval suite from training data + goal
@@ -153,7 +153,7 @@ soup data forge --docs ./docs --hub modelscope --teacher owner/name  Pre-fetch t
 soup data score --input rows.jsonl            Composite quality scorecard (PII + keyword triage + lang + edu)
 soup data score --input rows.jsonl --benchmark-file benchmark.jsonl --threshold 0.8  Score with real n-gram comparison texts
 soup data score ... -b gsm8k --benchmark-file benchmark.jsonl  Labels are validated only, not corpus selectors; all file texts are compared
-soup data decontaminate --input rows.jsonl --benchmarks mmlu,gsm8k  Drop benchmark-overlap rows
+soup data decontaminate --input rows.jsonl --benchmark-file benchmarks.jsonl  Drop rows overlapping the benchmark texts in that file
 soup data toxicity --input rows.jsonl -o tox.jsonl  Flag abuse-keyword matches (heuristic)
 soup data langdetect --input rows.jsonl -o tagged.jsonl  Tag each row with language code
 soup data pii --input rows.jsonl -o pii.jsonl  Flag rows containing email/phone/SSN/credit-card
@@ -173,12 +173,12 @@ soup adapters checkout <name>                   Restore a snapshotted branch's c
 soup adapters diff <a> <b>                      Per-layer ΔW Frobenius diff + effective-rank drift
 soup loop init <model> --eval <s> --baseline <b> [--pre-wired]  Create .soup/loop.yaml (data flywheel; --pre-wired = real stages)
 soup loop status                              Counters + status + pre_wired flag
-soup loop watch [--detach] [--max-iter N] [--pre-wired] [--pack-cans]  Harvest → train → gate → deploy daemon (pre-wired stages + Soup Can packing)
+soup loop watch [--detach] [--max-iterations N] [--pre-wired] [--pack-cans]  Harvest → train → gate → deploy daemon (pre-wired stages + Soup Can packing)
 soup loop pause                              Atomic status flip: pause watch daemon at next iteration boundary
 soup loop resume                             Atomic status flip: resume a paused loop
 soup loop canary <adapter> --traffic 5%      Route keyed serve traffic to a loaded adapter; watch auto-rolls back on MAJOR
 soup loop replay [<iter-id>] [--extract <dir>]  Replay / unpack a recorded iteration manifest
-soup serve --model m --adapters chat=./c code=./d  Multi-adapter serving
+soup serve --model m --adapters chat=./c --adapters code=./d  Multi-adapter serving
 soup migrate --from llamafactory config.yaml  Import config from LLaMA-Factory
 soup migrate --from axolotl config.yml        Import config from Axolotl
 soup migrate --from unsloth notebook.ipynb    Import config from Unsloth notebook
@@ -262,7 +262,7 @@ soup bench infer <model> --p50 --p95          Bench with tail-latency percentile
 soup bench infer <model> --cuda-graphs         Bench with experimental CUDA graph decode
 soup bench train --config soup.yaml --steps 20 --warmup 3 -o bench-train.json  Timed SFT steps; exits 1 when the model was not training (#836)
 soup bench <model> --backend auto             Auto-detect transformers/mlx backend (v0.53.9)
-soup serve --reasoning-parser deepseek-r1     Strip <think> blocks from responses (v0.53.9)
+soup serve --model ./output --reasoning-parser deepseek-r1   Strip <think> blocks from responses (v0.53.9)
 soup doctor [--nccl] [--disk] [--config F]    Check environment (optionally check NCCL bandwidth, media type; --disk ~9s cold / ~2.4s warm).
                                               --config also reports which settings that config switches on (a `false` or unset value is not reported; `seed: 0` is) that its task/backend does not read (#755, #1330); exits 2 if it cannot be read, and exits 1 when a required core dependency is missing, or when any installed package is beyond its declared ceiling — core or [train] (#828, #874).
 soup monitor                                  NVIDIA / Apple Silicon GPU monitor: util / temp / VRAM / power
