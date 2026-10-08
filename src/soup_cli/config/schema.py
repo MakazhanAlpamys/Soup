@@ -3036,7 +3036,10 @@ class TrainingConfig(BaseModel):
         default=None,
         description=(
             "RoPE scaling method for long-context: linear, dynamic, yarn or llama3 "
-            "(v0.49.0). 'longrope' is refused at config load (#1239)."
+            "(v0.49.0). 'longrope' is refused at config load (#1239). Applied by "
+            "task sft, tts and pretrain on backend: transformers (sft: the text "
+            "path without layer streaming); refused at config load anywhere else "
+            "(#1697)."
         ),
     )
     # v0.49.0 Part A — YaRN-specific tunables (only meaningful when
@@ -4821,6 +4824,13 @@ UNSLOTH_SETUP_TASKS: frozenset[str] = frozenset({
 #: Within these tasks only the text path on ``backend: transformers`` without
 #: layer streaming reaches that method; the other paths are refused too (#1581).
 FREEZE_APPLYING_TASKS: frozenset[str] = frozenset({"sft", "tts"})
+
+#: #1697 — the tasks whose trainer reads ``training.rope_scaling_type``:
+#: ``SFTTrainerWrapper._setup_transformers`` (inherited by ``tts``) and
+#: ``PretrainTrainerWrapper._setup_transformers``. Every other trainer builds
+#: the model with the checkpoint's own RoPE, so the field is refused there, and
+#: within these tasks on every path that does not reach those two methods.
+ROPE_SCALING_APPLYING_TASKS: frozenset[str] = frozenset({"sft", "tts", "pretrain"})
 
 #: The bitsandbytes values: ``4bit`` was the default, so every config Soup dumped
 #: for these tasks carries one of them literally (#795 review).
@@ -8130,6 +8140,60 @@ class SoupConfig(BaseModel):
         )
 
     @model_validator(mode="after")
+    def _validate_rope_scaling_is_applied(self) -> "SoupConfig":
+        """#1697 — ``rope_scaling_type`` loaded on every task and path, but only
+        the ``_setup_transformers`` of the SFT and pretrain wrappers reads it.
+        Everywhere else the run trained on the checkpoint's own RoPE without a
+        word. The ``yarn_*`` keys are named with it: they are legal only beside
+        ``rope_scaling_type: yarn``, so removing one key alone would be refused
+        next. Settings are named in the order ``resolve_trainer`` and the
+        wrapper's ``setup`` check them, as in :meth:`_validate_freeze_is_applied`."""
+        tcfg = self.training
+        if tcfg.rope_scaling_type is None:
+            return self
+        fields = ["training.rope_scaling_type"] + [
+            f"training.{name}"
+            for name in ("yarn_factor", "yarn_attn_factor", "yarn_beta_fast", "yarn_beta_slow")
+            if getattr(tcfg, name) is not None
+        ]
+        named = fields[0] if len(fields) == 1 else f"{', '.join(fields[:-1])} and {fields[-1]}"
+        verb = "is" if len(fields) == 1 else "are"
+        keys = {1: "the key", 2: "both keys"}.get(len(fields), f"the {len(fields)} keys")
+        if self.task not in ROPE_SCALING_APPLYING_TASKS:
+            raise ValueError(
+                f"{named} {verb} not applied by task={self.task!r}: only task='sft', "
+                "'tts' and 'pretrain' rescale RoPE, so this run would train on the "
+                f"checkpoint's own RoPE. Use one of those tasks, or remove {keys}."
+            )
+        off_path = []
+        # PretrainTrainerWrapper.setup branches on the backend only; sft and tts
+        # share SFTTrainerWrapper.setup.
+        if self.task != "pretrain":
+            if self.backend == "mlx":
+                off_path.append(("backend='mlx'", "backend: transformers"))
+            if self.modality in ("vision", "audio"):
+                off_path.append((f"modality={self.modality!r}", "modality: text"))
+            if tcfg.stream_layers:
+                off_path.append(("training.stream_layers=true", "stream_layers: false"))
+        if self.backend == "unsloth":
+            off_path.append(("backend='unsloth'", "backend: transformers"))
+        if not off_path:
+            return self
+        settings = " and ".join(setting for setting, _ in off_path)
+        changes = " and ".join(change for _, change in off_path)
+        # Only sft has a modality or a streaming setup to leave.
+        where = (
+            "on the text path with backend: transformers and no layer streaming"
+            if self.task == "sft"
+            else "with backend: transformers"
+        )
+        raise ValueError(
+            f"{named} {verb} not applied by task={self.task!r} with {settings}: "
+            f"RoPE is rescaled only {where}, so this run would train on the "
+            f"checkpoint's own RoPE. Use {changes}, or remove {keys}."
+        )
+
+    @model_validator(mode="after")
     def _validate_unsloth_has_a_setup(self) -> "SoupConfig":
         """#1357 — ``backend: unsloth`` on a task outside
         :data:`UNSLOTH_SETUP_TASKS` was accepted and never applied: that trainer
@@ -8515,7 +8579,6 @@ output: ./output
 
 base: meta-llama/Llama-3.1-8B-Instruct
 task: sft
-# backend: unsloth  # 2-5x faster, pip install "soup-cli[fast]"
 
 data:
   train: ./data/long_context_train.jsonl
