@@ -31,6 +31,10 @@ wandb/
 # Soup local data
 .soup/
 *.db
+soup.yaml
+data/
+models/
+wheelhouse/
 
 # Test reports
 report.xml
