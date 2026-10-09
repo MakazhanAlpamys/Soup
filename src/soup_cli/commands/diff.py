@@ -105,8 +105,8 @@ def diff(
 
     console.print(
         Panel(
-            f"Model A:  [bold]{path_a}[/]\n"
-            f"Model B:  [bold]{path_b}[/]\n"
+            f"Model A:  [bold]{for_terminal(path_a)}[/]\n"
+            f"Model B:  [bold]{for_terminal(path_b)}[/]\n"
             f"Prompts:  [bold]{len(prompt_list)}[/]\n"
             f"Device:   [bold]{device}[/]",
             title="Diff Plan",
@@ -333,8 +333,8 @@ def _display_summary(results: list[dict], name_a: str, name_b: str):
 
     table = Table(title="Comparison Summary")
     table.add_column("Metric", style="bold")
-    table.add_column(f"Model A ({name_a})", justify="right", style="blue")
-    table.add_column(f"Model B ({name_b})", justify="right", style="green")
+    table.add_column(f"Model A ({for_terminal(name_a)})", justify="right", style="blue")
+    table.add_column(f"Model B ({for_terminal(name_b)})", justify="right", style="green")
 
     avg_len_a = sum(r["metrics"]["len_a"] for r in results) / len(results)
     avg_len_b = sum(r["metrics"]["len_b"] for r in results) / len(results)
