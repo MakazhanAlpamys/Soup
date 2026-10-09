@@ -1340,7 +1340,7 @@ def _serve_sglang(
             )
         )
     console.print("[dim]Initializing SGLang runtime...[/]")
-    runtime, runtime_model_name = create_sglang_runtime(
+    runtime, runtime_model_name, lora_name = create_sglang_runtime(
         model_path=str(model_path),
         base_model=base_model,
         is_adapter=is_adapter,
@@ -1387,6 +1387,9 @@ def _serve_sglang(
         model_name=str(model_path.name),
         max_tokens_default=max_tokens_default,
         tokenizer=tokenizer,
+        # The name the adapter was registered under; every request has to name
+        # it, or SGLang answers from the base model (#1724).
+        lora_name=lora_name,
     )
 
     return app

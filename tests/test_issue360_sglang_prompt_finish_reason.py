@@ -308,7 +308,7 @@ class TestServeSglangWiring:
         monkeypatch.setattr(
             sglang_mod,
             "create_sglang_runtime",
-            lambda **kwargs: (MagicMock(), "runtime-model"),
+            lambda **kwargs: (MagicMock(), "runtime-model", None),
             raising=False,
         )
         monkeypatch.setattr(

@@ -380,6 +380,10 @@ soup serve --model ./output --backend sglang
 soup serve --model ./output --backend sglang --tensor-parallel 2
 ```
 
+The backend needs SGLang 0.5.1 or later, which the `[sglang]` extra installs: older
+releases refuse to start an engine with a LoRA adapter unless its radix cache is turned
+off, and Soup leaves it on.
+
 Like the transformers and vLLM backends, the SGLang backend applies the
 **model's own chat template** via the same shared prompt builder (falling back
 to a generic `User:` / `Assistant:` prompt for template-less models). When the
@@ -390,6 +394,15 @@ still sent as a string and tokenized by the engine as before. `finish_reason`
 reports `"length"` when a response hits `max_tokens` and `"stop"` otherwise, so
 a client doing continue-on-length can tell a truncated answer from a completed
 one (#360).
+
+A LoRA adapter passed as `--model` is served on its base model (read from
+`adapter_config.json`, or `--base`), with the adapter registered in the engine
+under the name `adapter`. SGLang applies an adapter only to the requests that
+name it and runs every other request on the base weights, so the backend names
+it in every request, streaming or not. **This changed:** the adapter used to be
+registered but never named, so every answer came from the base model while the
+response reported the adapter's name (#1724). A full model's requests name no
+adapter.
 
 It also honours `--trust-remote-code` like every other backend. **This changed:**
 the SGLang runtime and its tokenizer previously loaded with `trust_remote_code`
