@@ -147,9 +147,9 @@ def copy_bundle_to(
 
     When `root` is provided, `output_path` must resolve under `root`.
     When `root` is omitted (or None), `output_path` must resolve under the
-    current working directory. Passing ``root=Path("")`` resolves to cwd
-    (``"."``); nonexistent parent directories of ``output_path`` (including
-    ``root``) are created on demand.
+    current working directory. Passing ``root=""`` is rejected as empty,
+    while ``root=Path("")`` resolves to cwd (``"."``); nonexistent parent
+    directories of ``output_path`` (including ``root``) are created on demand.
     """
     bundle = get_bundle(name)
     if not isinstance(output_path, str) or not output_path:
