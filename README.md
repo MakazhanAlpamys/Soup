@@ -476,4 +476,4 @@ were measured and then discarded.
 
 ## License
 
-[Apache-2.0](LICENSE). Copyright © the Soup contributors.
+[Apache-2.0](LICENSE). Copyright 2026 Makazhan Alpamys and the Soup contributors. If you redistribute Soup or a modified copy of it, sections 4 and 6 of the license apply to you: keep `LICENSE` and `NOTICE` with every copy, mark the files you changed, and do not use the Soup name beyond saying where the work comes from.

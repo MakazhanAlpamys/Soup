@@ -8,6 +8,9 @@ version = "0.75.0"
 description = "Fine-tune and post-train LLMs in one command. No SSH, no config hell."
 readme = "README.md"
 license = "Apache-2.0"
+# Explicit, so the files that ship do not depend on hatchling's default globs (#1677).
+# An explicit list replaces the default: a file added later must be named here too.
+license-files = ["LICENSE", "NOTICE"]
 # Upper-bounded on purpose (#358). CI tests 3.10 / 3.11 / 3.12 and nothing above.
 # Without a ceiling, pip on 3.13+ resolves torch wheels nobody here has run, and
 # the failure is not a Soup error message — it is a loader crash inside c10.dll /
@@ -16,7 +19,7 @@ license = "Apache-2.0"
 # widening one without the other fails the suite.
 requires-python = ">=3.10,<3.13"
 authors = [
-    { name = "Soup Team", email = "team@trysoup.dev" },
+    { name = "Makazhan Alpamys and the Soup contributors", email = "team@trysoup.dev" },
 ]
 keywords = ["llm", "fine-tuning", "lora", "qlora", "machine-learning"]
 classifiers = [

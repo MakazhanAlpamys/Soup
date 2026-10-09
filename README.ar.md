@@ -1,4 +1,4 @@
-<!-- synced-from: README.md sha256:ad8f9dd91ca5fd56ff6bda0b6b1c1efe26b4ab7e464bbf5bb8dca4faab55b810 -->
+<!-- synced-from: README.md sha256:f74127a9057738b5e059e83ea068f51241fca31280ed319ba1d20c5174c5aed4 -->
 <p align="center">🌍 <a href="README.md">English</a> | <a href="README.tr.md">Türkçe</a> | <strong>العربية</strong> | <a href="README.ja.md">日本語</a></p>
 
 <p align="center">
@@ -465,4 +465,4 @@ Soup مرخَّص بـ Apache-2.0 ومجاني — وسيبقى كذلك. يُب
 
 ## الترخيص
 
-[Apache-2.0](LICENSE). حقوق النشر © مساهمو Soup.
+[Apache-2.0](LICENSE). Copyright 2026 Makazhan Alpamys and the Soup contributors. إذا أعدتَ توزيع Soup أو نسخة معدَّلة منه، فإن البندين 4 و6 من الترخيص ينطبقان عليك: احتفظ بالملفين `LICENSE` و`NOTICE` مع كل نسخة، وضع علامة على الملفات التي غيّرتها، ولا تستخدم اسم Soup إلا لبيان مصدر العمل.
