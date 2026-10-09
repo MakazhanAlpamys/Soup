@@ -278,3 +278,203 @@ def test_a_full_stripe_drive_names_the_root_and_the_variable(layout, monkeypatch
     assert STRIPE_DIRS_ENV in message and os.path.realpath(stripe) in message, message
     assert "No space left" in message, message
     assert read_shard_index(out).layer_roots == ()
+
+
+def test_content_quarantine_covers_quant_and_source_fingerprint(layout):
+    import soup_cli.utils.layer_shard as layer_shard_mod
+
+    src, out, _ = layout
+    index = shard_checkpoint(src, out, dtype="float32")
+    common = {
+        "out_dir": out,
+        "dtype": index.dtype,
+        "double_quant": index.double_quant,
+        "quant_device": index.quant_device,
+        "external_mode": index.external_mode,
+    }
+
+    assert layer_shard_mod._content_change_requires_index_quarantine(
+        **common, fingerprint=index.source_fingerprint, quant="nf4"
+    )
+    assert layer_shard_mod._content_change_requires_index_quarantine(
+        **common, fingerprint="different-source", quant=index.quant
+    )
+
+
+def test_previous_index_reader_falls_back_to_resharding_marker(layout):
+    import soup_cli.utils.layer_shard as layer_shard_mod
+
+    src, out, _ = layout
+    original = shard_checkpoint(src, out, dtype="float32")
+    layer_shard_mod._quarantine_shard_index(out)
+
+    previous = layer_shard_mod._read_previous_shard_index(out)
+
+    assert previous is not None
+    assert previous.dtype == original.dtype
+    assert previous.source_fingerprint == original.source_fingerprint
+
+
+def test_successful_reshard_scans_for_unindexed_files_after_commit(layout, monkeypatch):
+    import soup_cli.utils.layer_shard as layer_shard_mod
+    from soup_cli.utils.layer_shard import read_shard_index
+
+    src, out, stripe = layout
+    shard_checkpoint(src, out, dtype="float32")
+    observed = []
+    real_notify = layer_shard_mod._notify_unindexed_cache_files
+
+    def _observe(directory, index, notify):
+        committed = read_shard_index(directory)
+        observed.append((committed.layer_roots, index.layer_roots))
+        return real_notify(directory, index, notify)
+
+    monkeypatch.setattr(layer_shard_mod, "_notify_unindexed_cache_files", _observe)
+    index = shard_checkpoint(
+        src, out, dtype="float32", stripe_roots=(stripe,), notify=lambda _line: None
+    )
+
+    assert observed == [(index.layer_roots, index.layer_roots)]
+
+
+@pytest.mark.parametrize("stop_at", ["layers", "index"])
+def test_content_reshard_interrupt_is_a_miss_with_striping(layout, monkeypatch, stop_at):
+    import soup_cli.utils.layer_shard as layer_shard_mod
+
+    src, out, stripe = layout
+    shard_checkpoint(src, out, dtype="float32", stripe_roots=(stripe,))
+    real_save = layer_shard_mod._atomic_save
+    layer_writes = 0
+
+    def _stop_after_two_layers(blob, path):
+        nonlocal layer_writes
+        if os.path.basename(path).startswith("layer_"):
+            layer_writes += 1
+            if layer_writes > 2:
+                raise RuntimeError("interrupted")
+        return real_save(blob, path)
+
+    def _stop_index(*_args, **_kwargs):
+        raise RuntimeError("interrupted")
+
+    with monkeypatch.context() as patch:
+        if stop_at == "layers":
+            patch.setattr(layer_shard_mod, "_atomic_save", _stop_after_two_layers)
+        else:
+            patch.setattr(layer_shard_mod, "_atomic_write_index", _stop_index)
+        with pytest.raises(RuntimeError, match="interrupted"):
+            shard_checkpoint(src, out, dtype="bfloat16", stripe_roots=(stripe,))
+
+    said = []
+    repaired = shard_checkpoint(
+        src, out, dtype="float32", stripe_roots=(stripe,), notify=said.append
+    )
+    assert any("previous re-shard did not finish" in line for line in said), said
+    for path in layer_paths(out, repaired):
+        tensors = load_file(path)
+        assert all(tensor.dtype == torch.float32 for tensor in tensors.values())
+
+
+def test_three_root_layout_reports_files_left_on_a_kept_stripe(tmp_path):
+    src = _weights(tmp_path, n_layers=6)
+    out = str(tmp_path / "cache" / "model")
+    first = tmp_path / "stripe-one"
+    second = tmp_path / "stripe-two"
+    first.mkdir()
+    second.mkdir()
+    first_root = str(first)
+    second_root = str(second)
+
+    shard_checkpoint(src, out, dtype="float32", stripe_roots=(first_root,))
+    first_folder = _folder(out, first_root)
+    leftovers = [layer_shard_path(first_folder, idx) for idx in (3, 5)]
+    assert all(os.path.exists(path) for path in leftovers)
+
+    said = []
+    shard_checkpoint(
+        src,
+        out,
+        dtype="float32",
+        stripe_roots=(first_root, second_root),
+        notify=said.append,
+    )
+
+    assert all(os.path.exists(path) for path in leftovers)
+    for path in leftovers:
+        assert any(path in line and "bytes" in line for line in said), (path, said)
+
+
+def test_interrupt_before_deferred_delete_is_reported_on_next_hit(layout, monkeypatch):
+    import soup_cli.utils.layer_shard as layer_shard_mod
+
+    src, out, stripe = layout
+    shard_checkpoint(src, out, dtype="float32")
+    stale = layer_shard_path(out, 1)
+    real_remove = layer_shard_mod.os.remove
+
+    def _interrupt(path, *args, **kwargs):
+        if os.path.normcase(os.path.normpath(str(path))) == os.path.normcase(
+            os.path.normpath(stale)
+        ):
+            raise KeyboardInterrupt
+        return real_remove(path, *args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(layer_shard_mod.os, "remove", _interrupt)
+        with pytest.raises(KeyboardInterrupt):
+            shard_checkpoint(src, out, dtype="float32", stripe_roots=(stripe,))
+
+    said = []
+    shard_checkpoint(src, out, dtype="float32", stripe_roots=(stripe,), notify=said.append)
+    assert any(stale in line and "Unindexed" in line for line in said), said
+
+
+def test_notice_escapes_rich_markup_in_cache_paths(tmp_path):
+    from io import StringIO
+
+    from rich.console import Console
+
+    src = _weights(tmp_path)
+    out = str(tmp_path / "cache" / "model")
+    stripe = tmp_path / "stripe-[bold]"
+    stripe.mkdir()
+    stripe_root = str(stripe)
+    shard_checkpoint(src, out, dtype="float32", stripe_roots=(stripe_root,))
+    orphan = os.path.join(_folder(out, stripe_root), ".soup.leftover.tmp")
+    with open(orphan, "w", encoding="utf-8") as handle:
+        handle.write("incomplete")
+
+    stream = StringIO()
+    console = Console(file=stream, force_terminal=False, color_system=None, width=1000)
+    shard_checkpoint(
+        src, out, dtype="float32", stripe_roots=(stripe_root,), notify=console.print
+    )
+
+    rendered = stream.getvalue()
+    assert "stripe-[bold]" in rendered
+    assert orphan in rendered
+
+
+def test_completed_marker_delete_failure_is_non_fatal(layout, monkeypatch):
+    import soup_cli.utils.layer_shard as layer_shard_mod
+    from soup_cli.utils.layer_shard import read_shard_index
+
+    src, out, _ = layout
+    shard_checkpoint(src, out, dtype="float32")
+    marker = os.path.join(out, "index.json.resharding")
+    real_remove = layer_shard_mod.os.remove
+
+    def _deny_marker(path, *args, **kwargs):
+        if os.path.normcase(os.path.normpath(str(path))) == os.path.normcase(
+            os.path.normpath(marker)
+        ):
+            raise PermissionError("in use")
+        return real_remove(path, *args, **kwargs)
+
+    monkeypatch.setattr(layer_shard_mod.os, "remove", _deny_marker)
+    said = []
+    index = shard_checkpoint(src, out, dtype="bfloat16", notify=said.append)
+
+    assert index.dtype == "bfloat16"
+    assert read_shard_index(out).dtype == "bfloat16"
+    assert any(marker in line and "Could not delete" in line for line in said), said

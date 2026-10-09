@@ -1795,10 +1795,20 @@ def shard_checkpoint(
         layer_roots=layer_roots,
     )
     _atomic_write_index(index, resolved_out)
+    resharding_index = os.path.join(resolved_out, _RESHARDING_INDEX_NAME)
     try:
-        os.remove(os.path.join(resolved_out, _RESHARDING_INDEX_NAME))
+        os.remove(resharding_index)
     except FileNotFoundError:
         pass
+    except OSError as exc:
+        if notify is not None:
+            from soup_cli.utils.terminal import for_terminal
+
+            notify(
+                f"[yellow]Could not delete the completed re-shard marker "
+                f"{for_terminal(resharding_index)} ({for_terminal(exc)}); the new cache "
+                f"index is committed — delete the marker when it is no longer in use.[/]"
+            )
     # Only now: the new index above no longer names these paths, so removing them cannot
     # leave any on-disk index (old or new) describing a file that does not exist. Best-effort
     # from here on: the shard is already correct and fully committed, so a failed delete (a
