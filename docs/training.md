@@ -2076,8 +2076,32 @@ the trained router, see `soup serve --mole` in [Serving and Export](serving-and-
 
 ## Architecture Knobs — Mixture-of-Depths, LLaMA Pro, LongLoRA
 
-Two architecture transforms that were schema-only are now live for SFT / Pretrain on
-Llama / Qwen / Mistral. Both apply at trainer setup:
+Mixture-of-Depths (`use_mod`) and LLaMA Pro (`expand_layers`) were schema-only
+and are live on Llama / Qwen / Mistral. Both apply at trainer setup.
+Unsupported MoD architectures warn and skip.
+
+`training.use_mod: true` installs a per-layer top-k token router
+(`mod_capacity_factor`, default 0.125). It is applied only on the routes
+below. Every other active request is refused at config load, naming
+`training.use_mod`, the task, the settings that leave the applying path, and
+what to change or `use_mod: false` (#1752).
+
+| Config | `use_mod: true` |
+| --- | --- |
+| `task: sft`, `backend: transformers`, `modality: text`, no layer streaming, `lora.r` >= 1, LISA off, no `unfrozen_parameters` | applied |
+| `task: tts`, `modality: audio_out`, `backend: transformers`, `lora.r` >= 1 | applied (`tts` trains through that SFT LoRA arm) |
+| `task: pretrain`, `backend: transformers`, LoRA or LISA | applied |
+| `task: sft` with `modality: vision` or `audio`, `stream_layers: true`, LISA, nonempty `unfrozen_parameters`, or `lora.r: 0` | refused |
+| `task: sft` or `tts` with `backend: unsloth`, or `task: sft` with `backend: mlx` | refused |
+| `task: tts` with `lora.r: 0` | refused |
+| `task: pretrain` with `backend: unsloth` | refused |
+| any other task | refused |
+
+Pretrain follows its own dispatch. Modality and streaming are not MoD
+refusals there, and a pretrain LISA run still installs the router. A config
+that is already invalid — `backend: mlx` on `tts` or `pretrain`, or
+`stream_layers` outside its task list — keeps that earlier error instead of
+this one.
 
 ```yaml
 training:
@@ -2093,8 +2117,10 @@ training:
   freeze_trainable_layers: 4
 ```
 
-`use_mod` / `expand_layers` attach AFTER `get_peft_model` so the new routers / blocks are
-trainable. Unsupported architectures warn + skip. Pick one of MoD / LLaMA Pro per run. (v0.71.12)
+`use_mod` attaches after `get_peft_model` on the SFT/TTS LoRA arm, and after
+the LISA/LoRA split on pretrain, so the new routers are trainable.
+`expand_layers` attaches in that same setup. Unsupported architectures warn
+and skip. Pick one of MoD / LLaMA Pro per run. (v0.71.12, route gate #1752)
 
 LongLoRA S² (`use_longlora: true`) is refused at config load
 ([#1240](https://github.com/MakazhanAlpamys/Soup/issues/1240)). Its override rolled the
