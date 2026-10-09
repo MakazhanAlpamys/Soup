@@ -1299,9 +1299,13 @@ class TrainingConfig(BaseModel):
         default=False,
         description=(
             "Enable Mixture-of-Depths selective-token routing (arXiv:2404.02258). "
-            "Live in v0.71.12 #84 for SFT + Pretrain on Llama / Qwen / Mistral; "
-            "each decoder layer gets a router that passes only the top-k tokens "
-            "(k = floor(seq_len * mod_capacity_factor)) through the block."
+            "Each decoder layer gets a router that passes only the top-k tokens "
+            "(k = floor(seq_len * mod_capacity_factor)) through the block. Applied "
+            "on the resident transformers LoRA path for sft and tts (not vision, "
+            "audio, layer streaming, LISA, Spectrum, lora.r=0, unsloth, or mlx) "
+            "and on transformers pretrain including LISA; refused at config load "
+            "anywhere else (#1752). Unsupported architectures warn and skip. "
+            "(v0.71.12 #84)"
         ),
     )
     mod_capacity_factor: float = Field(
@@ -4832,6 +4836,16 @@ FREEZE_APPLYING_TASKS: frozenset[str] = frozenset({"sft", "tts"})
 #: within these tasks on every path that does not reach those two methods.
 ROPE_SCALING_APPLYING_TASKS: frozenset[str] = frozenset({"sft", "tts", "pretrain"})
 
+#: #1752 — the tasks whose trainer installs a Mixture-of-Depths router. The
+#: call sits in the LoRA arm of ``SFTTrainerWrapper._setup_transformers``
+#: (``tts`` reaches it through ``super()``) and in
+#: ``PretrainTrainerWrapper._setup_transformers`` after the LISA/LoRA split,
+#: so pretrain LISA is included. Every other task is refused. Within sft and
+#: tts, vision, audio, layer streaming, unsloth, MLX, LISA, Spectrum and
+#: ``lora.r == 0`` never reach that arm and are refused too. Pretrain branches
+#: on the backend only, so those SFT gates are not applied to it.
+MOD_APPLYING_TASKS: frozenset[str] = frozenset({"sft", "tts", "pretrain"})
+
 #: The bitsandbytes values: ``4bit`` was the default, so every config Soup dumped
 #: for these tasks carries one of them literally (#795 review).
 _BNB_QUANTIZATION_VALUES = frozenset({"4bit", "8bit"})
@@ -8252,6 +8266,72 @@ class SoupConfig(BaseModel):
             f"{named} {verb} not applied by task={self.task!r} with {settings}: "
             f"RoPE is rescaled only {where}, so this run would train on the "
             f"checkpoint's own RoPE. Use {changes}, or remove {keys}."
+        )
+
+    @model_validator(mode="after")
+    def _validate_use_mod_is_applied(self) -> "SoupConfig":
+        """#1752 — ``use_mod`` loaded on every task, but a router is installed
+        only by the LoRA arm of ``SFTTrainerWrapper._setup_transformers`` (which
+        ``tts`` reaches through ``super()``) and by
+        ``PretrainTrainerWrapper._setup_transformers`` after its LISA/LoRA
+        split. Everywhere else the run trained without the router that was
+        requested. Placed with the freeze / RoPE route checks, before the
+        #1357 backend refusal, which stays last. Combinations an earlier
+        validator already rejects keep that error."""
+        tcfg = self.training
+        if not tcfg.use_mod:
+            return self
+        if self.task not in MOD_APPLYING_TASKS:
+            raise ValueError(
+                f"training.use_mod is not applied by task={self.task!r}: only "
+                "task='sft', 'tts' and 'pretrain' install a Mixture-of-Depths "
+                "router, so this run would train without one. Use one of those "
+                "tasks, or set use_mod: false."
+            )
+        off_path = []
+        # PretrainTrainerWrapper.setup branches on the backend only and applies
+        # MoD after the LISA/LoRA split, so LISA is included and SFT's modality,
+        # streaming and parameter-selection gates are not. sft and tts share
+        # SFTTrainerWrapper.setup, which reaches the call only on the resident
+        # LoRA arm. Settings are named in the order resolve_trainer and that
+        # setup check them, then the LoRA-arm chain inside _setup_transformers.
+        if self.task == "pretrain":
+            if self.backend == "unsloth":
+                off_path.append(("backend='unsloth'", "backend: transformers"))
+            where = "on backend: transformers, including a LISA run"
+        else:
+            if self.backend == "mlx":
+                off_path.append(("backend='mlx'", "backend: transformers"))
+            if self.modality in ("vision", "audio"):
+                off_path.append((f"modality={self.modality!r}", "modality: text"))
+            if tcfg.stream_layers:
+                off_path.append(("training.stream_layers=true", "stream_layers: false"))
+            if self.backend == "unsloth":
+                off_path.append(("backend='unsloth'", "backend: transformers"))
+            if tcfg.unfrozen_parameters:
+                off_path.append(("training.unfrozen_parameters", "unfrozen_parameters: null"))
+            if tcfg.lisa_enabled:
+                off_path.append(("training.lisa_enabled=true", "lisa_enabled: false"))
+            if tcfg.lora.r == 0:
+                off_path.append(("training.lora.r=0", "lora.r >= 1"))
+            where = (
+                "on the resident text LoRA path with backend: transformers, "
+                "no layer streaming, lora.r >= 1, and neither LISA nor Spectrum"
+                if self.task == "sft"
+                else (
+                    "on the transformers LoRA path tts reaches through the SFT "
+                    "trainer (lora.r >= 1, not unsloth)"
+                )
+            )
+        if not off_path:
+            return self
+        settings = " and ".join(setting for setting, _ in off_path)
+        changes = " and ".join(change for _, change in off_path)
+        raise ValueError(
+            f"training.use_mod is not applied by task={self.task!r} with {settings}: "
+            f"a Mixture-of-Depths router is installed only {where}, so this run "
+            "would train without one. "
+            f"Use {changes}, or set use_mod: false."
         )
 
     @model_validator(mode="after")

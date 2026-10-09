@@ -164,10 +164,13 @@ _MLX_SFT: tuple[SupportEntry, ...] = (
         "NEFT noise is applied on the transformers training path, not MLX",
         trainer_reads=True,
     ),
+    # #1752 — refused at config load. The trainer still reads the field only
+    # to warn, so trainer_reads stays and mlx_sft.py is unchanged.
     SupportEntry(
         "training.use_mod",
-        IGNORED,
+        REJECTED,
         "Mixture-of-Depths routing is wired on the transformers path, not MLX",
+        issue=1752,
         trainer_reads=True,
     ),
     SupportEntry(
