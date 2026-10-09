@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -11,6 +12,10 @@ from typer.testing import CliRunner
 from soup_cli.cli import app
 from soup_cli.utils import deploy_measure
 from soup_cli.utils.deploy_measure import measure_candidate
+
+
+def _strip_ansi(text: str) -> str:
+    return re.sub(r"\x1b\[[0-9;]*m", "", text)
 
 
 @pytest.mark.parametrize("before, after, total, expected", [
@@ -131,8 +136,9 @@ def test_count_derived_five_point_drop_through_deploy_autopilot_cli(
         ],
     )
     assert result.exit_code == 0, (result.output, repr(result.exception))
-    assert "MAJOR" in result.output
-    assert "Recommended: 4bit (verdict=MAJOR" in result.output
+    clean_output = _strip_ansi(result.output)
+    assert "MAJOR" in clean_output
+    assert "Recommended: 4bit (verdict=MAJOR" in clean_output
 
 
 def test_count_derived_two_point_drop_through_deploy_autopilot_cli(
@@ -173,5 +179,6 @@ def test_count_derived_two_point_drop_through_deploy_autopilot_cli(
         ],
     )
     assert result.exit_code == 0, (result.output, repr(result.exception))
-    assert "MINOR" in result.output
-    assert "Recommended: 4bit (verdict=MINOR" in result.output
+    clean_output = _strip_ansi(result.output)
+    assert "MINOR" in clean_output
+    assert "Recommended: 4bit (verdict=MINOR" in clean_output
