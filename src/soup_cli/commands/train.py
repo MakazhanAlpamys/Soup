@@ -442,6 +442,39 @@ def _hardware_fit_preflight(cfg, gpu_info, *, allow_oom_attempt: bool) -> None:
         raise typer.Exit(1)
 
 
+def _loads_on_unsloth(cfg) -> bool:
+    """#1736 — would this config still load with ``backend: unsloth``?
+
+    The tip that suggests the backend used to look at the backend alone, so it
+    was also printed for configs the schema refuses on unsloth (a task with no
+    unsloth setup, ``freeze_layers``, ``moe_lora``...). The schema is asked
+    instead of a list kept here: the dumped config is validated again with the
+    backend changed. Only that pass's ``ValidationError`` means no; anything
+    else is a bug and must surface.
+    """
+    from pydantic import ValidationError
+
+    from soup_cli.config.schema import SoupConfig
+
+    try:
+        SoupConfig.model_validate({**cfg.model_dump(), "backend": "unsloth"})
+    except ValidationError:
+        return False
+    return True
+
+
+def _unsloth_tip_applies(cfg) -> bool:
+    """Whether to suggest ``backend: unsloth``: only to a run on transformers,
+    with unsloth installed, whose config would load with it (#1736). The
+    installed check comes before the second validation, so a machine without
+    unsloth validates nothing twice."""
+    if cfg.backend != "transformers":
+        return False
+    from soup_cli.utils.unsloth import is_unsloth_available
+
+    return is_unsloth_available() and _loads_on_unsloth(cfg)
+
+
 def _apply_replay_overrides(cfg, *, replay, replay_ratio, replay_seed=None):
     """Apply the ``--replay*`` flags, then RE-VALIDATE.
 
@@ -1649,15 +1682,13 @@ def train(
         for err in ctx_errors:
             console.print(f"[yellow]Long-context warning:[/] {err}")
 
-    # Suggest unsloth if available but not being used
-    if cfg.backend == "transformers":
-        from soup_cli.utils.unsloth import is_unsloth_available
-
-        if is_unsloth_available():
-            console.print(
-                "[dim]Tip: unsloth is installed. Add [bold]backend: unsloth[/dim]"
-                "[dim] to soup.yaml for 2-5x faster training.[/]"
-            )
+    # Suggest unsloth if available but not being used, and only to a config the
+    # loader would take with it (#1736).
+    if _unsloth_tip_applies(cfg):
+        console.print(
+            "[dim]Tip: unsloth is installed. Add [bold]backend: unsloth[/dim]"
+            "[dim] to soup.yaml for 2-5x faster training.[/]"
+        )
 
     # #1613: cheap stripe roots validation ahead of confirmation, --dry-run,
     # dataset loading, and run creation.
