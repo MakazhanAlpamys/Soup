@@ -121,30 +121,17 @@ def test_removing_rounding_fails_two_point_boundary(tmp_path: Path) -> None:
     ],
 )
 def test_real_near_boundary_differences(
-    tmp_path: Path, before_score: float, after_score: float, expected: str
+    before_score: float, after_score: float, expected: str
 ) -> None:
-    tasks = _make_tasks(tmp_path, 1)
-    _ = deploy_measure.measure_candidate(
-        candidate="4bit",
-        tasks_file=str(tasks),
-        after_gen=lambda _: "ok",
-        before_score=before_score,
-    )
-    # Override after score directly for numerical boundary checks
     delta = after_score - before_score
-    drop = round(-delta, 9)
-    if drop < deploy_measure.DEFAULT_MINOR_THRESHOLD:
-        verdict = "OK"
-    elif drop < deploy_measure.DEFAULT_MAJOR_THRESHOLD:
-        verdict = "MINOR"
-    else:
-        verdict = "MAJOR"
-    assert verdict == expected
+    assert deploy_measure.classify_delta(delta) == expected
 
 
 def test_deploy_measure_cli_verdict(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Exercise deploy autopilot --measure through CLI with count-derived boundaries."""
     monkeypatch.chdir(tmp_path)
+    cache_file = tmp_path / "deploy_autopilot_cache.json"
+    monkeypatch.setenv("SOUP_DEPLOY_AUTOPILOT_CACHE", str(cache_file))
     tasks = _make_tasks(tmp_path, 20)
     before_gen = _make_generator(19)
     after_gen = _make_generator(18)
@@ -173,3 +160,4 @@ def test_deploy_measure_cli_verdict(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     assert result.exit_code == 0, result.output
     clean_out = strip_ansi(result.output)
     assert "verdict=MAJOR" in clean_out
+
