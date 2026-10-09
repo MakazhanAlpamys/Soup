@@ -3,7 +3,7 @@
 With unsloth installed, every run on ``backend: transformers`` was told to add
 ``backend: unsloth``. The check looked at the backend alone, so the tip was also
 printed for configs the loader refuses the moment that line is added: a task
-with no unsloth setup, ``freeze_layers`` on sft, ``moe_lora`` recipes. 35 of
+with no unsloth setup, ``freeze_layers`` on sft, ``moe_lora`` recipes. 38 of
 the 184 shipped templates and recipes on transformers were among them.
 
 The tip now asks the schema: the dumped config is validated again with
@@ -16,6 +16,7 @@ unsloth is not installed here; ``is_unsloth_available`` is stubbed.
 from __future__ import annotations
 
 import builtins
+import json
 import logging
 import os
 import warnings
@@ -27,7 +28,7 @@ from typer.testing import CliRunner
 
 import soup_cli.utils.unsloth as unsloth_mod
 from soup_cli.cli import app
-from soup_cli.commands.train import _loads_on_unsloth
+from soup_cli.commands.train import _loads_on_unsloth, _unsloth_tip_applies
 from soup_cli.config.loader import load_config_from_string
 from soup_cli.config.schema import TEMPLATES, SoupConfig
 from soup_cli.recipes.catalog import RECIPES
@@ -168,14 +169,24 @@ def test_some_shipped_configs_are_on_each_side():
 def _dry_run(tmp_path, monkeypatch, raw, *, installed=True) -> str:
     monkeypatch.setattr(unsloth_mod, "is_unsloth_available", lambda: installed)
     monkeypatch.chdir(tmp_path)
-    (tmp_path / "x.jsonl").write_text('{"instruction": "q", "output": "a"}\n', encoding="utf-8")
+    rows = [
+        {"instruction": f"q{n}", "output": f"a{n}", "text": f"t{n}", "label": n % 2}
+        for n in range(20)
+    ]
+    (tmp_path / "x.jsonl").write_text(
+        "".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8"
+    )
     (tmp_path / "soup.yaml").write_text(yaml.safe_dump(raw), encoding="utf-8")
 
     result = CliRunner().invoke(app, ["train", "--config", "soup.yaml", "--dry-run"])
 
-    # A crash would also leave the tip out; it must not pass for that reason.
-    assert result.exception is None or isinstance(result.exception, SystemExit), result.exception
-    return " ".join(strip_ansi(result.output).split())
+    out = " ".join(strip_ansi(result.output).split())
+    # A run that stopped early would also print no tip, and must not pass for
+    # that reason: every case here has to get through the whole dry run, whose
+    # last line comes after the place the tip is printed.
+    assert result.exit_code == 0, out
+    assert out.endswith("Config valid. Ready to train!"), out
+    return out
 
 
 class TestSoupTrain:
@@ -202,7 +213,29 @@ class TestSoupTrain:
 
         assert TIP not in _dry_run(tmp_path, monkeypatch, _raw(), installed=False)
 
-    def test_a_run_already_on_unsloth_gets_no_tip(self, tmp_path, monkeypatch):
-        out = _dry_run(tmp_path, monkeypatch, {**_raw(), "backend": "unsloth"})
 
-        assert TIP not in out
+class TestOnAnotherBackend:
+    """The tip is for a run on transformers. A run already on unsloth, or on
+    mlx, is asked nothing: not whether unsloth is installed, and not whether its
+    config would load with it. Asked of the function, not through a dry run,
+    which gets a different distance on each of these backends per platform."""
+
+    @pytest.mark.parametrize("backend", ["unsloth", "mlx"])
+    def test_no_tip_and_no_questions(self, monkeypatch, backend):
+        import soup_cli.commands.train as train_mod
+
+        def unexpected(*args):
+            raise AssertionError(f"asked on backend: {backend}")
+
+        monkeypatch.setattr(unsloth_mod, "is_unsloth_available", unexpected)
+        monkeypatch.setattr(train_mod, "_loads_on_unsloth", unexpected)
+        cfg = load_config_from_string(yaml.safe_dump({**_raw(), "backend": backend}))
+
+        assert _unsloth_tip_applies(cfg) is False
+
+    def test_on_transformers_it_is_asked_and_answered(self, monkeypatch):
+        """Guard on the test above: the same function says yes on transformers."""
+        monkeypatch.setattr(unsloth_mod, "is_unsloth_available", lambda: True)
+        cfg = load_config_from_string(yaml.safe_dump(_raw()))
+
+        assert _unsloth_tip_applies(cfg) is True

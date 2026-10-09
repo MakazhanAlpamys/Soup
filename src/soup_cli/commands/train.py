@@ -463,6 +463,18 @@ def _loads_on_unsloth(cfg) -> bool:
     return True
 
 
+def _unsloth_tip_applies(cfg) -> bool:
+    """Whether to suggest ``backend: unsloth``: only to a run on transformers,
+    with unsloth installed, whose config would load with it (#1736). The
+    installed check comes before the second validation, so a machine without
+    unsloth validates nothing twice."""
+    if cfg.backend != "transformers":
+        return False
+    from soup_cli.utils.unsloth import is_unsloth_available
+
+    return is_unsloth_available() and _loads_on_unsloth(cfg)
+
+
 def _apply_replay_overrides(cfg, *, replay, replay_ratio, replay_seed=None):
     """Apply the ``--replay*`` flags, then RE-VALIDATE.
 
@@ -1672,14 +1684,11 @@ def train(
 
     # Suggest unsloth if available but not being used, and only to a config the
     # loader would take with it (#1736).
-    if cfg.backend == "transformers":
-        from soup_cli.utils.unsloth import is_unsloth_available
-
-        if is_unsloth_available() and _loads_on_unsloth(cfg):
-            console.print(
-                "[dim]Tip: unsloth is installed. Add [bold]backend: unsloth[/dim]"
-                "[dim] to soup.yaml for 2-5x faster training.[/]"
-            )
+    if _unsloth_tip_applies(cfg):
+        console.print(
+            "[dim]Tip: unsloth is installed. Add [bold]backend: unsloth[/dim]"
+            "[dim] to soup.yaml for 2-5x faster training.[/]"
+        )
 
     # #1613: cheap stripe roots validation ahead of confirmation, --dry-run,
     # dataset loading, and run creation.
