@@ -5,6 +5,7 @@ with their own workspace (such as Soup Zero) to copy demo bundles safely
 under their workspace root without needing cwd chdir or reading the private
 _bundle_source_path.
 """
+
 from __future__ import annotations
 
 import json
@@ -135,3 +136,51 @@ class TestCopyBundleToContainmentRoot:
 
         with pytest.raises(ValueError, match="symlink"):
             copy_bundle_to("alpaca_demo", str(target), root=workspace)
+
+    def test_explicit_root_rejects_parent_traversal(self, tmp_path):
+        root = tmp_path / "workspace"
+        root.mkdir()
+        target = str(root / ".." / "outside" / "x.jsonl")
+        with pytest.raises(ValueError, match="output_path must stay under root"):
+            copy_bundle_to("alpaca_demo", target, root=root)
+
+    def test_explicit_root_rejects_sibling_prefix_directory(self, tmp_path):
+        root = tmp_path / "root"
+        root.mkdir()
+        sibling = tmp_path / "root2"
+        sibling.mkdir()
+        target = str(sibling / "x.jsonl")
+        with pytest.raises(ValueError, match="output_path must stay under root"):
+            copy_bundle_to("alpaca_demo", target, root=root)
+
+    @pytest.mark.requires_symlink
+    def test_explicit_root_rejects_directory_symlink_pointing_outside(self, tmp_path):
+        root = tmp_path / "root"
+        root.mkdir()
+        outside = tmp_path / "outside_dir"
+        outside.mkdir()
+
+        link_inside = root / "symlink_dir"
+        os.symlink(str(outside), str(link_inside))
+
+        target = str(link_inside / "escaped.jsonl")
+        with pytest.raises(ValueError, match="output_path must stay under root"):
+            copy_bundle_to("alpaca_demo", target, root=root)
+
+        assert not (outside / "escaped.jsonl").exists()
+
+    def test_explicit_root_empty_path_object_resolves_to_cwd(self, tmp_path, monkeypatch):
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        monkeypatch.chdir(workspace)
+
+        out = copy_bundle_to("alpaca_demo", "alpaca.jsonl", root=Path(""))
+        assert Path(out).is_file()
+        assert Path(out).parent == workspace
+
+    def test_explicit_root_nonexistent_root_is_created(self, tmp_path):
+        nonexistent_root = tmp_path / "new_root" / "sub"
+        target = str(nonexistent_root / "bundle.jsonl")
+        written = copy_bundle_to("alpaca_demo", target, root=nonexistent_root)
+        assert Path(written).is_file()
+        assert Path(written).parent == nonexistent_root
