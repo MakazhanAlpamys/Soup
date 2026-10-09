@@ -133,6 +133,38 @@ def test_diff_prompts_and_replies_with_markup(monkeypatch):
         assert "B1 closes with [/code]" in out
 
 
+def test_diff_model_paths_and_names_with_markup(monkeypatch):
+    """Diff plan panel and summary table with brackets in model paths/names render literally."""
+    buffer = io.StringIO()
+    monkeypatch.setattr(diff, "console", Console(file=buffer, color_system=None, width=400))
+
+    monkeypatch.setattr(diff, "_load_model", lambda *a, **kw: (None, None))
+    monkeypatch.setattr(diff, "_generate", lambda *a, **kw: "reply")
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        fake_a = Path(tmpdir) / "ckpt[" / "]model[b]"
+        fake_b = Path(tmpdir) / "model[v1]"
+        fake_a.mkdir(parents=True)
+        fake_b.mkdir()
+
+        result = runner.invoke(
+            cli_app,
+            [
+                "diff",
+                "-a", str(fake_a),
+                "-b", str(fake_b),
+                "--device", "cpu",
+                "--prompt", "test",
+            ],
+        )
+        assert result.exit_code == 0
+        out = buffer.getvalue()
+        assert "ckpt[/]model[b]" in out
+        assert "model[v1]" in out
+        assert "Model A (]model[b])" in out
+        assert "Model B (model[v1])" in out
+
+
 def test_eval_human_with_markup(monkeypatch):
     """Human eval with markup in prompt and responses should render without crash and save."""
     from soup_cli.eval import custom
