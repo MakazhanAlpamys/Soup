@@ -88,15 +88,13 @@ def test_unpatched_main_behavior_produces_three_loads_per_subsequent_step(tmp_pa
     """Unpatched prime() reproducing main yields [4, 3, 3] loads, failing [4, 2, 2]."""
     model, runtime, _ = _tiny_stream(tmp_path, name="shards_unpatched", seed=3)
 
+    real_prime = runtime.prefetcher.prime
+
     def unpatched_prime():
-        runtime.prefetcher.prev = None
-        runtime.prefetcher.direction = 1
-        runtime.prefetcher.primes += 1
-        runtime.prefetcher.backward_tail_prefetched = False
-        runtime.prefetcher.tail_prefetched = False
-        runtime.prefetcher.pool.load_async(
-            0, runtime.prefetcher.source, runtime.prefetcher.stream
-        )
+        # Clear slot residency to force the real prime() to issue load_async(0)
+        slot = runtime.pool.slot_for(0)
+        runtime.pool.owner[slot] = -1
+        real_prime()
 
     runtime.prefetcher.prime = unpatched_prime
     ids = torch.randint(0, 64, (1, 12))
@@ -147,6 +145,8 @@ def test_gradients_and_adapters_are_torch_equal(
     """Gradients and adapters are bit-exact torch.equal between unpatched and patched prime.
 
     Covers SFT, DPO, and KTO under both tied and untied architectures.
+    Note: DPO and KTO here evaluate hand-rolled loss helpers over paired micro-batches
+    to assert bit-exact numerical gradients under layer streaming without trainer overhead.
     """
     p1 = tmp_path / ("m1_tied" if tie_word_embeddings else "m1_untied")
     p2 = tmp_path / ("m2_tied" if tie_word_embeddings else "m2_untied")
@@ -157,16 +157,15 @@ def test_gradients_and_adapters_are_torch_equal(
     _randomise_lora_b(model1, seed=42)
     _randomise_lora_b(model2, seed=42)
 
-    # In model1, unpatch prime to simulate main's unconditional load_async(0)
-    def unpatched_prime():
-        rt1.prefetcher.prev = None
-        rt1.prefetcher.direction = 1
-        rt1.prefetcher.primes += 1
-        rt1.prefetcher.backward_tail_prefetched = False
-        rt1.prefetcher.tail_prefetched = False
-        rt1.prefetcher.pool.load_async(0, rt1.prefetcher.source, rt1.prefetcher.stream)
+    # In model1, hook prime to simulate main's unconditional reload of layer 0
+    real_prime1 = rt1.prefetcher.prime
 
-    rt1.prefetcher.prime = unpatched_prime
+    def forced_prime1():
+        slot = rt1.pool.slot_for(0)
+        rt1.pool.owner[slot] = -1
+        real_prime1()
+
+    rt1.prefetcher.prime = forced_prime1
 
     opt1 = torch.optim.AdamW([p for p in model1.parameters() if p.requires_grad], lr=1e-3)
     opt2 = torch.optim.AdamW([p for p in model2.parameters() if p.requires_grad], lr=1e-3)
@@ -235,19 +234,21 @@ def test_gradients_and_adapters_are_torch_equal(
 
 @pytest.mark.parametrize("read_ahead", [2, 3])
 def test_async_disk_source_no_new_demand_misses(tmp_path: Path, read_ahead: int) -> None:
-    """AsyncDiskSource at read-ahead 2 and 3 shows high hit rate without reload."""
+    """AsyncDiskSource at read-ahead 2 and 3 shows high hit rate and zero steady-state misses.
+    """
     model, runtime, _ = _tiny_stream(
         tmp_path, name=f"disk_ra{read_ahead}", seed=3, tier="disk", read_ahead=read_ahead
     )
     source = runtime.source
 
-    hits = []
+    step_hits: list[list[bool]] = []
+    current_step_hits: list[bool] = []
     orig_get = source.get
 
     def logging_get(idx: int, name: str):
         with source._ready:
             hit = idx in source._slot_of
-        hits.append(hit)
+        current_step_hits.append(hit)
         return orig_get(idx, name)
 
     source.get = logging_get
@@ -255,9 +256,25 @@ def test_async_disk_source_no_new_demand_misses(tmp_path: Path, read_ahead: int)
     ids = torch.randint(0, 64, (1, 12))
     model.train()
     for _ in range(3):
+        current_step_hits = []
         model(input_ids=ids, labels=ids).loss.backward()
+        step_hits.append(current_step_hits)
         # After each step backward completes, slot 0 holds layer 0
         assert runtime.pool.owner[runtime.pool.slot_for(0)] == 0
 
-    # Cold start on step 0 produces a few initial reads; overall hits dominate (>= 60 of 72)
-    assert sum(hits) >= (65 if read_ahead == 3 else 60)
+    all_hits = [h for step in step_hits for h in step]
+    # Skipping redundant layer 0 reload makes total gets 72 (step 0: 36, step 1: 18, step 2: 18)
+    assert len(all_hits) == 72
+    assert len(step_hits[0]) == 36
+    assert len(step_hits[1]) == 18
+    assert len(step_hits[2]) == 18
+
+    # Overall hit rate is high (>= 66 of 72 for ra=2, >= 70 of 72 for ra=3)
+    assert sum(all_hits) >= (70 if read_ahead == 3 else 66)
+
+    # In steady state (steps 1 and 2), read-ahead 3 achieves 0 demand misses
+    if read_ahead == 3:
+        assert sum(step_hits[1]) == 18
+        assert sum(step_hits[2]) == 18
+
+
