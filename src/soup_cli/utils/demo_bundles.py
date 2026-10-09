@@ -13,10 +13,11 @@ import os
 import stat
 from dataclasses import dataclass
 from importlib.resources import files
+from pathlib import Path
 from types import MappingProxyType
-from typing import Mapping
+from typing import Mapping, Optional, Union
 
-from soup_cli.utils.paths import is_under_cwd
+from soup_cli.utils.paths import is_under, is_under_cwd
 
 _MAX_NAME_LEN = 32
 _MAX_OUTPUT_BYTES = 50 * 1024 * 1024  # 50 MB defence
@@ -132,21 +133,39 @@ def _bundle_source_path(bundle: DemoBundle) -> str:
     )
 
 
-def copy_bundle_to(name: str, output_path: str) -> str:
+def copy_bundle_to(
+    name: str,
+    output_path: str,
+    *,
+    root: Optional[Union[str, Path]] = None,
+) -> str:
     """Copy bundle's JSONL into `output_path`. Containment-checked.
 
     Returns the absolute path written. Refuses to overwrite existing files
     (caller must remove first). Validates that every line of the bundle is
     valid JSON to avoid silently shipping a malformed fixture.
+
+    When `root` is provided, `output_path` must resolve under `root`.
+    When `root` is omitted (or None), `output_path` must resolve under the
+    current working directory.
     """
     bundle = get_bundle(name)
     if not isinstance(output_path, str) or not output_path:
         raise ValueError("output_path must be a non-empty string")
     if "\x00" in output_path:
         raise ValueError("output_path must not contain null bytes")
+    if root is not None:
+        if not isinstance(root, (str, Path)) or not str(root):
+            raise ValueError("root must be a non-empty string or Path")
+        if "\x00" in str(root):
+            raise ValueError("root must not contain null bytes")
     real_out = os.path.realpath(output_path)
-    if not is_under_cwd(real_out):
-        raise ValueError("output_path must stay under cwd")
+    if root is None:
+        if not is_under_cwd(real_out):
+            raise ValueError("output_path must stay under cwd")
+    else:
+        if not is_under(real_out, root):
+            raise ValueError("output_path must stay under root")
     if os.path.exists(real_out):
         raise FileExistsError(
             f"{output_path} already exists; remove it before re-running"
