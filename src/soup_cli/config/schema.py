@@ -6057,9 +6057,9 @@ class SoupConfig(BaseModel):
                         f"(trainer/sft.py), so it would be stored and never take "
                         f"effect. Remove it, or use one of those tasks."
                     )
+        default_aux = type(tcfg).model_fields["moe_aux_loss_coeff"].default
         if self.task not in _MOE_AUX_LOSS_TASKS:
-            default = type(tcfg).model_fields["moe_aux_loss_coeff"].default
-            if tcfg.moe_aux_loss_coeff != default:
+            if tcfg.moe_aux_loss_coeff != default_aux:
                 raise ValueError(
                     f"training.moe_aux_loss_coeff={tcfg.moe_aux_loss_coeff!r} is "
                     f"not applied by task={self.task!r}: only "
@@ -6071,13 +6071,28 @@ class SoupConfig(BaseModel):
             # #1394: only SFT's text setup reads it. The vision and audio setups
             # build their model without the MoE step, the same gap #1179 closed
             # for moe_lora on these paths.
-            default = type(tcfg).model_fields["moe_aux_loss_coeff"].default
-            if tcfg.moe_aux_loss_coeff != default:
+            if tcfg.moe_aux_loss_coeff != default_aux:
                 raise ValueError(
                     f"training.moe_aux_loss_coeff={tcfg.moe_aux_loss_coeff!r} is "
                     f"not applied by task='sft' with modality={self.modality!r}: "
                     "that setup never applies the MoE auxiliary loss. Remove it, "
                     "or train with modality: text."
+                )
+        if self.backend == "unsloth":
+            # #1412: unsloth loader never applies the MoE auxiliary loss coefficient.
+            if tcfg.moe_aux_loss_coeff != default_aux:
+                raise ValueError(
+                    f"training.moe_aux_loss_coeff={tcfg.moe_aux_loss_coeff!r} is "
+                    "not applied on backend='unsloth': that setup never applies "
+                    "the MoE auxiliary loss. Remove it, or train with backend: transformers."
+                )
+        if tcfg.stream_layers:
+            # #1412: layer streaming setup never sets the router coefficient.
+            if tcfg.moe_aux_loss_coeff != default_aux:
+                raise ValueError(
+                    f"training.moe_aux_loss_coeff={tcfg.moe_aux_loss_coeff!r} is "
+                    "not applied with training.stream_layers: that setup never "
+                    "applies the MoE auxiliary loss. Remove it, or train without stream_layers."
                 )
         return self
 
