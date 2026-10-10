@@ -110,13 +110,7 @@ def _path_field_is_local(value: str) -> bool:
     The rule is existence or escape-hatch, not shape. A Hugging Face hub id
     (owner/name, with a slash) is never a local path, so a model id such as
     sentence-transformers/all-mpnet-base-v2 (the schema's own example) now
-    plans fine instead of being refused at exit 2. A plain name such as
-    teacher is left alone on purpose: without a separator or a leading slash
-    there is nothing to distinguish it from a dataset id, and writing ./teacher
-    is the safe way to say this is local.
-
-    ponytail: existence checked at plan time, not real-path-checked. A value
-    whose parent directory was deleted falls through and reaches the remote
+    plans fine instead of being refused at exit 2. A plain name such as teacher is not singled out as local by shape: without a separator or a leading slash there is nothing to distinguish it from a dataset id, so a bare name that exists on disk is refused and a bare name that does not exist is treated as a Hub id. Writing ./teacher is the safe way to say this is local.  whose parent directory was deleted falls through and reaches the remote
     run, which then fails; fixing that properly is walking every field the
     loader opens and giving each its own rule, as _train_entry_is_local does
     for data.train. Upgrade path: the os.path.exists call is the only part that
