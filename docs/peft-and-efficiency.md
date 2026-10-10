@@ -538,7 +538,14 @@ training:
   freeze_ratio: 0.75   # Freeze 75% of layers from the bottom
 ```
 
-Works with and without LoRA. When used with LoRA, LoRA is applied only to unfrozen layers.
+Works with and without LoRA. When used with LoRA, the adapter is attached only to the unfrozen
+layers, so a frozen layer stays frozen rather than training through a fresh adapter.
+
+`freeze_layers`/`freeze_ratio` cannot currently be combined with LoRA when
+`training.lora.target_modules` is a regex string (an explicit one, or an `auto`-resolved
+architecture table entry such as Mistral 3.5's), when `training.lora.target_parameters` is
+set (per-parameter LoRA, e.g. fused MoE experts), or with `training.lora.use_vera`: all three
+refuse when the model is built rather than silently drop the freeze plan (#1432).
 
 ## LISA — Layerwise Importance Sampling (v0.71.34)
 
