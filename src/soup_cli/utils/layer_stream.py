@@ -18,6 +18,7 @@ stay resident.
 """
 
 import math
+import re
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Optional, Sequence, Tuple, Union
 
@@ -167,7 +168,167 @@ OPTIMIZER_BYTES_PER_PARAM = 16
 #: Constant offset measured across both GATE 2 models (RoPE caches, allocator
 #: rounding, small per-run buffers). It came out at ~13.3 MB for a 135M model
 #: and a 0.5B model alike, so it is charged as a constant rather than scaled.
+#:
+#: It cannot cover a cuBLAS workspace on a modern card, which is why #1407 is a
+#: missing term rather than a mis-fitted one: at 13,500,000 B it is smaller than a
+#: single 32 MiB workspace. The workspace is charged separately by
+#: :func:`estimate_cublas_workspace_bytes`.
 STREAM_FIXED_SLACK_BYTES = 13_500_000
+
+# --- cuBLAS workspaces (#1407) ----------------------------------------------
+#: The variable PyTorch reads, once per process, in
+#: ``parseChosenWorkspaceSize`` (``aten/src/ATen/cuda/CublasHandlePool.cpp``).
+#: The estimate reads the same one rather than carrying a second knob that could
+#: disagree with the library that allocates the memory.
+CUBLAS_WORKSPACE_CONFIG_ENV = "CUBLAS_WORKSPACE_CONFIG"
+
+#: PyTorch's default below Hopper: ``4096 * 1024 * 2 + 16 * 1024 * 8``, i.e. the
+#: documented ``:4096:2:16:8``. 8,320 KiB.
+CUBLAS_WORKSPACE_BYTES_PRE_HOPPER = 4096 * 1024 * 2 + 16 * 1024 * 8
+
+#: The same number under a name that says what it is. The GATE 2 grid was measured
+#: on an RTX 3050 (compute capability 8.6), where this is the size, so those
+#: measured ``max_memory_allocated`` peaks already CONTAIN two of these workspaces.
+CUBLAS_WORKSPACE_BYTES_LEGACY = CUBLAS_WORKSPACE_BYTES_PRE_HOPPER
+
+#: On Hopper and Blackwell PyTorch uses ``4096 * 8 * 1024`` = 32 MiB. This is a list
+#: of compute capability MAJORS, not a threshold: PyTorch's source tests
+#: ``major == 9 || 10 || 11 || 12`` explicitly, and a threshold like ``major >= 9``
+#: would silently mis-size whatever card appears next.
+CUBLAS_WORKSPACE_BYTES_BY_MAJOR: Dict[int, int] = {
+    major: 32 * 1024 * 1024 for major in (9, 10, 11, 12)
+}
+
+#: cuBLAS handle and stream pairs one streamed step uses. The forward runs on the
+#: caller's thread and the backward on autograd's CUDA thread, which draws its own
+#: handle from PyTorch's ``thread_local`` pool -- so a step holds two workspaces,
+#: and the caching allocator counts both. Measured: the reporter's step held exactly
+#: two 32 MiB blocks and nothing else, which is why this is 2 and not an estimate.
+#: cuBLASLt does not add a third: on CUDA ``getCurrentCUDABlasLtHandle`` aliases
+#: ``getCurrentCUDABlasHandle`` rather than drawing its own. (#1407)
+CUBLAS_WORKSPACE_HANDLES_PER_STREAMED_STEP = 2
+
+_CUBLAS_WORKSPACE_CONFIG_PAIR = re.compile(r":(\d+):(\d+)")
+
+
+def parse_cublas_workspace_config(config: Optional[str]) -> Optional[int]:
+    """Bytes named by a ``CUBLAS_WORKSPACE_CONFIG`` value, or ``None``.
+
+    Mirrors ``parseChosenWorkspaceSize``, which matches ``:([0-9]+):([0-9]+)`` and
+    sums ``SIZE * 1024 * COUNT`` over **every** match -- it uses
+    ``std::sregex_iterator``, which scans rather than anchoring at the start.
+    ``:4096:2:16:8`` is therefore 8,320 KiB and ``:0:0`` is zero, PyTorch's way of
+    removing the workspaces.
+
+    ``None`` means "unreadable": unset, or set to something the regex does not
+    match. PyTorch ``TORCH_WARN``s and falls back to the device default in that
+    case, and so does this; a pre-flight must not die here, and must not budget a
+    size invented out of a string it could not parse.
+    """
+    if not config:
+        return None
+    pairs = _CUBLAS_WORKSPACE_CONFIG_PAIR.findall(config)
+    if not pairs:
+        return None
+    return sum(int(size) * 1024 * int(count) for size, count in pairs)
+
+
+def cublas_workspace_size_bytes(
+    compute_capability_major: Optional[int], *, config: Optional[str] = None
+) -> int:
+    """Bytes in ONE cuBLAS workspace on this device. (#1407)
+
+    ``CUBLAS_WORKSPACE_CONFIG`` wins when it parses -- an operator who shrinks the
+    workspace must not be charged 32 MiB for memory that is never allocated.
+    Otherwise PyTorch's own rule: 32 MiB on compute capability major 9, 10, 11 or
+    12, and ``4096 * 1024 * 2 + 16 * 1024 * 8`` below that.
+
+    ``compute_capability_major`` of ``None`` or ``0`` means the device properties
+    could not be read. That must not refuse a run -- the pre-flight exists to budget
+    one, not to block one on a missing number -- so it takes the below-Hopper size,
+    which is what PyTorch uses on every card whose capability it could not
+    determine.
+    """
+    override = parse_cublas_workspace_config(config)
+    if override is not None:
+        return override
+    if not compute_capability_major:
+        return CUBLAS_WORKSPACE_BYTES_PRE_HOPPER
+    return CUBLAS_WORKSPACE_BYTES_BY_MAJOR.get(
+        compute_capability_major, CUBLAS_WORKSPACE_BYTES_PRE_HOPPER
+    )
+
+
+def estimate_cublas_workspace_bytes(
+    compute_capability_major: Optional[int],
+    *,
+    handles: int = CUBLAS_WORKSPACE_HANDLES_PER_STREAMED_STEP,
+    config: Optional[str] = None,
+) -> int:
+    """Total cuBLAS workspace bytes a streamed step holds on this device.
+
+    The number of handle and stream pairs times the per-pair size for the device.
+    ``torch.cuda.max_memory_allocated()`` counts these, and the docstring of
+    :func:`estimate_stream_peak_vram` claims to predict that quantity, so the
+    formula charges them. (#1407)
+
+    Measured on an RTX 5070 Laptop (cc 12.0, torch 2.14.0+cu130): a DPO step was
+    predicted at 13,934,816 B against a real 67,734,016 B peak, and
+    ``CUBLAS_WORKSPACE_CONFIG=:4096:1`` moved the peak to 9,013,760 B -- a
+    difference of 58,720,256 B, which is exactly 2 x (32 - 4) MiB, and this function
+    reproduces that movement exactly rather than approximately.
+    """
+    if handles < 0:
+        raise ValueError(f"handles must be non-negative; got {handles}")
+    return handles * cublas_workspace_size_bytes(compute_capability_major, config=config)
+
+
+def _device_compute_capability_major(device: Any) -> Optional[int]:
+    """Compute capability major of ``device``, or ``None`` if unreadable.
+
+    torch is imported inside the function: it is a heavy optional dependency and
+    this module is on the light CLI import path (#780). A probe that raises must
+    not take a run down with it, which is why this is a blanket ``except``.
+    """
+    try:
+        import torch
+
+        if not torch.cuda.is_available():
+            return None
+        return int(torch.cuda.get_device_properties(device).major)
+    except Exception:  # noqa: BLE001 - a budget must not die on a probe
+        return None
+
+
+def measure_cublas_workspace_bytes(
+    device: Any = None, *, handles: int = CUBLAS_WORKSPACE_HANDLES_PER_STREAMED_STEP
+) -> int:
+    """Workspace bytes a step on ``device`` holds, read live. (#1407)
+
+    Asks the card for its compute capability, then sizes the workspace with the same
+    rule PyTorch's ``parseChosenWorkspaceSize`` uses. The capability is read from the
+    device because only the device knows it; the SIZE is still the mirrored table,
+    and a card whose major is not in it takes the below-Hopper default exactly as it
+    would inside PyTorch. Reading a major of 13 therefore does NOT mean "32 MiB
+    because it is newer" -- it means 8,320 KiB, which is what the library allocates
+    there too. Deliberately not widened to "unknown majors above 12 get 32 MiB": that
+    would over-charge relative to the allocator this estimate exists to predict, and
+    the table is the thing it is faithful to.
+
+    **Zero without a CUDA device.** There is no cuBLAS workspace off-GPU, and a
+    budget that charged one would refuse CPU runs over memory that does not exist.
+    The mirrored rule is the fallback for a card whose properties cannot be read,
+    not for a machine that has none.
+    """
+    import os
+
+    major = _device_compute_capability_major(device)
+    if major is None:
+        return 0
+    return estimate_cublas_workspace_bytes(
+        major, handles=handles, config=os.environ.get(CUBLAS_WORKSPACE_CONFIG_ENV)
+    )
+
 
 #: Fraction of the *measured same-session GEMM ceiling* that real streamed
 #: training actually reached on the dev box: 68% (Llama-3.1-8B NF4, 5.26 of
@@ -1187,6 +1348,7 @@ def estimate_stream_peak_vram(
     dtype: str = "bfloat16",
     logits_bytes_per_element: Optional[float] = None,
     large_layer_bytes: int = 0,
+    cublas_workspace_bytes: Optional[int] = None,
 ) -> int:
     """Predicted ``torch.cuda.max_memory_allocated()`` for a streaming step.
 
@@ -1212,13 +1374,43 @@ def estimate_stream_peak_vram(
     ``logits_bytes_per_element`` forwards a stack measurement from
     :func:`calibrated_logits_bytes_per_element`; it is floored at the shipped
     constant, so passing it can only raise the prediction.
+
+    ``cublas_workspace_bytes`` charges the cuBLAS workspaces a step holds, which the
+    caching allocator counts and this formula therefore has to predict (#1407). It
+    defaults to ``0`` -- no workspace -- because the pre-flight is its only
+    production caller and that caller resolves the charge from the run's own device
+    and passes it. A default that probed the live card instead would charge a
+    workspace to any CPU-side caller on a machine that merely has a card visible:
+    ``torch.cuda.get_device_properties(None)`` reads the CURRENT card, so a caller
+    that names no device would be billed for memory it never allocates. Pass the
+    charge explicitly to include it; ``tests/test_issue1407_cublas_workspace.py``
+    pins both directions.
+
+    SCOPE of the 0.85% / never-under-predicts claim (#1407). The GATE 2 grid was
+    measured on an RTX 3050, compute capability 8.6, and those
+    ``max_memory_allocated`` peaks already CONTAIN two 8,320 KiB workspaces, so
+    naming the term double counts 16.3 MB there and moves every row of that grid to
+    +1.04%..+6.57% over-prediction (worst row SmolLM2-135M B1 S256). That is the safe
+    direction for a gate that refuses runs, and ``tests/test_v07203.py`` asserts that
+    band explicitly rather than pretending the term was free. What the grid never saw
+    is a card that makes the workspace larger: on compute capability 9 and up it is
+    32 MiB each, which :data:`STREAM_FIXED_SLACK_BYTES` -- at 13,500,000 B, smaller
+    than ONE such workspace -- cannot have been paying for. Measured on an RTX 5070
+    (cc 12.0), a DPO step was predicted at 13,934,816 B against a real 67,734,016 B
+    peak.
     """
+    if cublas_workspace_bytes is not None and cublas_workspace_bytes < 0:
+        raise ValueError(
+            f"cublas_workspace_bytes must be non-negative; got {cublas_workspace_bytes}"
+        )
+    workspace = 0 if cublas_workspace_bytes is None else cublas_workspace_bytes
     return (
         layer_bytes * buffers
         + large_layer_bytes
         + extras_bytes
         + estimate_optimizer_bytes(adapter_params)
         + STREAM_FIXED_SLACK_BYTES
+        + workspace
         + estimate_activation_bytes(
             hidden_size=hidden_size,
             intermediate_size=intermediate_size,
