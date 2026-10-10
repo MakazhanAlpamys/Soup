@@ -230,9 +230,12 @@ class PreferenceTrainerWrapper:
                             attach_policy_logp_capture,
                             attach_reference_logp_capture,
                             blend_loss_params,
+                            needs_reference_model,
                         )
 
-                        attach_policy_logp_capture(inner_trainer)
+                        attach_policy_logp_capture(
+                            inner_trainer, reference=needs_reference_model(weights)
+                        )
                         attach_reference_logp_capture(inner_trainer)
                         attach_weighted_preference_combine(
                             inner_trainer, weights, blend_loss_params(self.config)

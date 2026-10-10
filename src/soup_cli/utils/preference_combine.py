@@ -439,10 +439,11 @@ def attach_weighted_preference_combine(
             ):
                 # The policy log-probs are there; only the reference is not.
                 reason = (
-                    "dpo and ipo compare the policy with a frozen reference, and "
-                    "the primary trainer of this blend (the loss with the largest "
-                    "weight) runs none. Give dpo or ipo the largest weight, or "
-                    "remove"
+                    "dpo and ipo compare the policy with a frozen reference. The "
+                    "primary trainer of this blend (the loss with the largest "
+                    "weight) runs none, and the model has no LoRA adapter to "
+                    "switch off to make one. Give dpo or ipo the largest weight, "
+                    "or remove"
                 )
             else:
                 reason = (
@@ -467,7 +468,7 @@ def attach_weighted_preference_combine(
     return True
 
 
-def attach_policy_logp_capture(trainer: object) -> bool:
+def attach_policy_logp_capture(trainer: object, reference: bool = False) -> bool:
     """Record the policy log-probs trl already computes (#1425).
 
     trl 0.29's CPO (the SimPO path) and ORPO trainers compute per-sequence
@@ -490,6 +491,13 @@ def attach_policy_logp_capture(trainer: object) -> bool:
     wrapper using ``sigmoid`` or ``hinge`` would return sums and this would
     double-count the lengths.
 
+    ``reference=True`` is for a blend that also names ``dpo`` or ``ipo``. The
+    CPO and ORPO trainers have no frozen reference, so the capture makes one:
+    the same ``concatenated_forward`` once more, without gradients and with
+    the LoRA adapter switched off, which is the base model the adapter started
+    from. With full fine-tuning there is no adapter to switch off, nothing is
+    recorded, and the blend refuses.
+
     Returns True when the capture is in place.
     """
     if not hasattr(trainer, "concatenated_forward"):
@@ -508,11 +516,44 @@ def attach_policy_logp_capture(trainer: object) -> bool:
             # through to the blend's refusal rather than raise out of a forward.
             return out
         _record_policy_logps(trainer, batch, chosen_logps, rejected_logps)
+        if reference:
+            _record_adapter_free_reference(trainer, original, model, batch, args, kwargs)
         return out
 
     capturing._soup_logp_capture = True
     trainer.concatenated_forward = capturing
     return True
+
+
+def _record_adapter_free_reference(trainer, forward, model, batch, args, kwargs) -> None:
+    """Add reference log-probs to the capture: ``forward`` with the adapter off.
+
+    PEFT's ``disable_adapter()`` turns ``requires_grad`` off on every adapter
+    weight and, on the way out, on for all of the active adapter's, whatever
+    they were. The flags are put back as they were found, so a weight the run
+    froze on purpose stays frozen.
+    """
+    import torch
+
+    accelerator = getattr(trainer, "accelerator", None)
+    peft_model = accelerator.unwrap_model(model) if accelerator is not None else model
+    if not hasattr(peft_model, "disable_adapter"):
+        return
+    flags = [(param, param.requires_grad) for param in peft_model.parameters()]
+    try:
+        with torch.no_grad(), peft_model.disable_adapter():
+            out = forward(model, batch, *args, **kwargs)
+    finally:
+        for param, flag in flags:
+            param.requires_grad_(flag)
+    stored = trainer._soup_policy_logps
+    ref_chosen, ref_rejected = out[0], out[1]
+    if stored["chosen_lens"] is not None:
+        # trl averaged these too; back to sums, like the policy's.
+        ref_chosen = ref_chosen * stored["chosen_lens"].to(ref_chosen.dtype)
+        ref_rejected = ref_rejected * stored["rejected_lens"].to(ref_rejected.dtype)
+    stored["ref_chosen_logps"] = ref_chosen
+    stored["ref_rejected_logps"] = ref_rejected
 
 
 def attach_reference_logp_capture(trainer: object) -> bool:
