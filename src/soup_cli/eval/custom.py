@@ -302,10 +302,13 @@ def tool_call_args_subset(output: str, expected: str) -> float:
 
     name_score = 0.5 if out_func.get("name") == exp_func.get("name") else 0.0
 
-    out_args = _parse_args(out_func) or {}
+    raw_out_args = _parse_args(out_func)
+    out_args = raw_out_args or {}
     exp_args = _parse_args(exp_func) or {}
 
-    if not exp_args:
+    if raw_out_args is None and "arguments" in out_func:
+        args_score = 0.0
+    elif not exp_args:
         # No args expected: full credit only if the model also produced none.
         # Hallucinated args must NOT score full (the old `0.5 if ... else 0.5`
         # dead ternary gave them full credit).

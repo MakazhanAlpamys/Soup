@@ -41,6 +41,26 @@ _HW_FIT_OPTIMIZERS = frozenset({
     "lomo", "adalomo", "schedule_free_adamw",
 })
 
+# training.quantization -> the hardware-fit predictor's name for it. A value
+# that is not here (``hqq:*``) has no memory model, and the pre-flight says it
+# skipped the run (#1652).
+_HW_FIT_QUANT = {
+    "none": "none",
+    "4bit": "4bit",
+    "8bit": "8bit",
+    # Stay packed on the card.
+    "gptq": "gptq",
+    "awq": "awq",
+    "aqlm": "aqlm",
+    "eetq": "eetq",
+    # Dequantized on load, so priced (and gated) like "none" (#1631, #1652).
+    "mxfp4": "mxfp4",
+    "fp8": "fp8",
+}
+
+# The formats above that train in bf16, and how the gate's panel names them.
+_HW_FIT_DEQUANTIZED_ON_LOAD = {"mxfp4": "MXFP4", "fp8": "FP8"}
+
 _UNWIRED_TRAINING_TUNABLES = (
     # Group B tunables (forgetting_eval_steps, forgetting_benchmark, forgetting_stop,
     # checkpoint_eval_steps, checkpoint_eval_metric, checkpoint_eval_tasks,
@@ -112,8 +132,19 @@ def _format_duration_display(result: dict) -> str:
     return f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
 
 
-def _run_auto_eval_after_training(eval_config, output_dir: str, run_id: str) -> None:
-    """Run configured evaluation once after the trained model is saved."""
+def _run_auto_eval_after_training(
+    eval_config,
+    output_dir: str,
+    run_id: str,
+    *,
+    trust_remote_code: bool = False,
+) -> None:
+    """Run configured evaluation once after the trained model is saved.
+
+    ``trust_remote_code`` is the run's own ``--trust-remote-code`` flag (CLI only;
+    there is no soup.yaml field). It reaches only the loads of the trained output
+    and its base: ``benchmark`` and ``custom``.
+    """
     if not eval_config or not getattr(eval_config, "auto_eval", False):
         return
     if not output_dir or not _should_run_diagnose_gate_on_rank():
@@ -135,7 +166,7 @@ def _run_auto_eval_after_training(eval_config, output_dir: str, run_id: str) -> 
                 batch_size=8,
                 run_id=run_id,
                 device=None,
-                trust_remote_code=False,
+                trust_remote_code=trust_remote_code,
             )
         except typer.Exit:
             logger.debug("Auto-eval benchmark skipped", exc_info=True)
@@ -158,7 +189,7 @@ def _run_auto_eval_after_training(eval_config, output_dir: str, run_id: str) -> 
                 run_id=run_id,
                 attach_to_registry=None,
                 output=None,
-                trust_remote_code=False,
+                trust_remote_code=trust_remote_code,
             )
         except typer.Exit:
             logger.debug("Auto-eval custom skipped", exc_info=True)
@@ -274,11 +305,7 @@ def _build_hardware_fit_input(cfg):
     seq_len = getattr(cfg.data, "max_length", None)
     if not isinstance(seq_len, int) or isinstance(seq_len, bool):
         return None
-    # #1631: mxfp4 is dequantized on load and trains in bf16, so it is priced
-    # (and gated) like "none". The formats that stay packed are still skipped.
-    quant = {"none": "none", "4bit": "4bit", "8bit": "8bit", "mxfp4": "mxfp4"}.get(
-        str(getattr(tcfg, "quantization", "none") or "none")
-    )
+    quant = _HW_FIT_QUANT.get(str(getattr(tcfg, "quantization", "none") or "none"))
     if quant is None:
         return None
     task = getattr(cfg, "task", None)
@@ -338,8 +365,9 @@ def _hardware_fit_preflight(cfg, gpu_info, *, allow_oom_attempt: bool) -> None:
     """Refuse (or warn) before launch when the predicted peak VRAM won't fit.
 
     Skips silently on CPU / when VRAM is unknown / when the run isn't
-    statically predictable, so CI and small runs are unaffected. Honors the
-    documented ``--allow-oom-attempt`` opt-out.
+    statically predictable, so CI and small runs are unaffected. A quantization
+    the predictor has no figure for is skipped with one line (#1652). Honors
+    the documented ``--allow-oom-attempt`` opt-out.
     """
     # v0.72.0 — layer streaming bounds peak VRAM by ONE decoder layer, so the
     # resident prediction (full weights + optimizer + grads on the card) is the
@@ -365,6 +393,13 @@ def _hardware_fit_preflight(cfg, gpu_info, *, allow_oom_attempt: bool) -> None:
         return  # no CUDA VRAM to predict against
     inp = _build_hardware_fit_input(cfg)
     if inp is None:
+        quantization = str(getattr(cfg.training, "quantization", "none") or "none")
+        if quantization not in _HW_FIT_QUANT:
+            # #1652: silence here read as "fits".
+            console.print(
+                "[yellow]Pre-flight skipped:[/] no memory model for "
+                f"quantization: {quantization}"
+            )
         return
     from soup_cli.utils.hardware_fit import VRAM_SAFETY_MARGIN, decide_hardware_fit
 
@@ -373,10 +408,11 @@ def _hardware_fit_preflight(cfg, gpu_info, *, allow_oom_attempt: bool) -> None:
         return
     b = report.breakdown
     # #1631: a "quantized" run priced like an unquantized one needs a word why.
+    dequantized = _HW_FIT_DEQUANTIZED_ON_LOAD.get(inp.quant)
     note = (
-        "An MXFP4 base is dequantized on load, so this estimate prices the "
-        "bf16 model.\n"
-        if inp.quant == "mxfp4"
+        f"An {dequantized} base is dequantized on load, so this estimate prices "
+        "the bf16 model.\n"
+        if dequantized
         else ""
     )
     tail = (
@@ -1400,7 +1436,8 @@ def train(
 
     # Hardware-fit preflight: refuse (unless --allow-oom-attempt) when the
     # analytical VRAM predictor says the run won't fit. Skips silently on CPU
-    # or when the config isn't statically predictable (e.g. batch_size='auto').
+    # or when the config isn't statically predictable (e.g. batch_size='auto');
+    # says so when the quantization has no memory model (hqq:*).
     _hardware_fit_preflight(cfg, gpu_info, allow_oom_attempt=allow_oom_attempt)
 
     backend_label = cfg.backend
@@ -1905,6 +1942,7 @@ def train(
             cfg.eval,
             result["output_dir"],
             run_id,
+            trust_remote_code=trust_remote_code,
         )
     except Exception as exc:
         tracker.fail_run(run_id, error=_describe_exception_for_tracker(exc))

@@ -14,7 +14,10 @@ This file pins:
   with the same ``min_pairs`` and ``output_dir`` that ``--once`` would pass;
 * a ``--min-pairs`` the nightly run would refuse is refused when the scaffold
   is rendered, before any unit file is written;
-* the defaults are rendered explicitly, so the nightly job matches ``--once``.
+* the defaults are rendered explicitly, so the nightly job matches ``--once``;
+* passing ``--backend`` prints a note that it has no effect on training, while
+  invoking without ``--backend`` omits the note;
+* ``--backend`` is validated on CLI but not rendered into the scheduled unit files.
 """
 
 from __future__ import annotations
@@ -99,13 +102,25 @@ class TestTheRenderedJobCarriesTheOptions:
         assert _value_after(_service_argv(workdir), "--output") == "my adapters/nightly"
         assert _value_after(_plist_argv(workdir), "--output") == "my adapters/nightly"
 
+    def test_backend_option_prints_notice_and_is_not_rendered(self, workdir):
+        """--backend is accepted on CLI, prints a note that it has no effect,
+        and is NOT rendered into the scheduled service or plist."""
+        result = _schedule("--backend", "mlx")
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        assert "Note: --backend has no effect on training." in strip_ansi(result.output)
+
+        for argv in (_service_argv(workdir), _plist_argv(workdir)):
+            assert "--backend" not in argv
+
     def test_the_defaults_are_rendered_too(self, workdir):
         """The nightly job must do what ``--once`` with the same flags does,
         including when the user left both at their defaults."""
         result = _schedule()
         assert result.exit_code == 0, (result.output, repr(result.exception))
+        assert "Note: --backend has no effect on training." not in strip_ansi(result.output)
 
         for argv in (_service_argv(workdir), _plist_argv(workdir)):
+            assert "--backend" not in argv
             assert _value_after(argv, "--min-pairs") == "10"
             assert _value_after(argv, "--output") == "local_rl_adapter"
 
@@ -121,7 +136,7 @@ def test_the_rendered_command_reaches_the_runner_with_the_same_values(
     seen = {}
 
     def fake_run(cfg, *, once, min_pairs, output_dir):
-        seen.update(once=once, min_pairs=min_pairs, output_dir=output_dir)
+        seen.update(once=once, min_pairs=min_pairs, output_dir=output_dir, backend=cfg.backend)
         return NightlyTrainResult(
             status="skipped_insufficient_pairs", num_pairs=0, output_dir=None,
             reason="test",
@@ -141,7 +156,58 @@ def test_the_rendered_command_reaches_the_runner_with_the_same_values(
     result = runner.invoke(app, argv[3:])
 
     assert result.exit_code == 0, (result.output, repr(result.exception))
-    assert seen == {"once": True, "min_pairs": 200, "output_dir": "adapters/nightly"}
+    assert seen == {
+        "once": True,
+        "min_pairs": 200,
+        "output_dir": "adapters/nightly",
+        "backend": "ollama",
+    }
+
+
+def test_backend_option_prints_notice_on_once_train(monkeypatch):
+    """--backend prints the notice on --once train as well."""
+    import soup_cli.commands.local_rl as local_rl_cmd
+    from soup_cli.utils.local_rl import NightlyTrainResult
+
+    def fake_run(cfg, *, once, min_pairs, output_dir):
+        return NightlyTrainResult(
+            status="skipped_insufficient_pairs", num_pairs=0, output_dir=None,
+            reason="test",
+        )
+
+    monkeypatch.setattr(local_rl_cmd, "run_nightly_train", fake_run)
+    result = runner.invoke(
+        app,
+        [
+            "local-rl", "train", "--model", "org/base", "--db", "test.db",
+            "--once", "--backend", "mlx",
+        ],
+    )
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert "Note: --backend has no effect on training." in strip_ansi(result.output)
+
+
+def test_once_train_without_backend_does_not_print_notice(monkeypatch):
+    """Running --once without --backend does not print the note."""
+    import soup_cli.commands.local_rl as local_rl_cmd
+    from soup_cli.utils.local_rl import NightlyTrainResult
+
+    def fake_run(cfg, *, once, min_pairs, output_dir):
+        return NightlyTrainResult(
+            status="skipped_insufficient_pairs", num_pairs=0, output_dir=None,
+            reason="test",
+        )
+
+    monkeypatch.setattr(local_rl_cmd, "run_nightly_train", fake_run)
+    result = runner.invoke(
+        app,
+        [
+            "local-rl", "train", "--model", "org/base", "--db", "test.db",
+            "--once",
+        ],
+    )
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert "Note: --backend has no effect on training." not in strip_ansi(result.output)
 
 
 @pytest.mark.parametrize("min_pairs", ["0", "-5", "1000001"])
@@ -151,6 +217,15 @@ def test_a_min_pairs_the_nightly_run_would_refuse_is_refused_now(workdir, min_pa
 
     assert result.exit_code == 2, (result.output, repr(result.exception))
     assert "min_pairs must be in [1, 1000000]" in " ".join(strip_ansi(result.output).split())
+    assert not os.path.exists(workdir / "sched")
+
+
+def test_an_invalid_backend_is_refused_now(workdir):
+    """Refuse unknown backend before any unit file is written."""
+    result = _schedule("--backend", "unsupported")
+
+    assert result.exit_code == 2, (result.output, repr(result.exception))
+    assert "unknown backend 'unsupported'" in " ".join(strip_ansi(result.output).split())
     assert not os.path.exists(workdir / "sched")
 
 

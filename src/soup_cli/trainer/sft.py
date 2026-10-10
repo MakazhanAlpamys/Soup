@@ -2317,10 +2317,31 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             from soup_cli.utils.quest import validate_resume_metadata, write_metadata
 
             if resume_from_checkpoint is not None:
+                # #1199 fix 2 — `validate_resume_metadata` re-resolved
+                # `legacy_base_model` (= `self.config.base`) to compare against
+                # `current["base_model"]`, re-reading and re-hashing the base a third
+                # time. `_quest_base_identity_before` IS that identity: resolved from
+                # `cfg.base` before the load, and both setup paths already refuse when
+                # it disagrees with a fresh resolve after the load, so at resume time it
+                # is the hash the extra pass would recompute.
+                #
+                # NOT `self._quest_metadata["base_model"]`. Those two are equal only on
+                # the calibration path. On the continuation path the metadata is the
+                # artifact's sidecar, whose `base_model` is the ORIGINAL base recorded
+                # at calibration, while `self.config.base` is the artifact directory —
+                # so passing it would make the check compare `current["base_model"]`
+                # with itself, which can never refuse, turning the keyword from
+                # "compared" into "trusted" and silently accepting a resume that is
+                # refused today.
+                #
+                # Read with `getattr`, the same way the two setup paths read it, so a
+                # wrapper that never resolved one falls back to resolving instead of
+                # raising. `None` means "resolve as before".
                 validate_resume_metadata(
                     resume_from_checkpoint,
                     self._quest_metadata,
                     legacy_base_model=self.config.base,
+                    legacy_base_identity=getattr(self, "_quest_base_identity_before", None),
                 )
             # Write only after a resumed checkpoint has proved compatible. A
             # rejected resume must not overwrite the root artifact's previous

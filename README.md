@@ -1,4 +1,4 @@
-<p align="center">🌍 <strong>English</strong> | <a href="README.tr.md">Türkçe</a> | <a href="README.ar.md">العربية</a> | <a href="README.ja.md">日本語</a></p>
+<p align="center">🌍 <strong>English</strong> | <a href="README.tr.md">Türkçe</a> | <a href="README.ar.md">العربية</a> | <a href="README.ja.md">日本語</a> | <a href="README.zh.md">中文</a></p>
 
 <p align="center">
   <img src="soup.png" alt="Soup" width="280">
@@ -286,7 +286,7 @@ interleaving, vocab expansion, document ingestion), are in
 
 ```bash
 soup train  --config soup.yaml        # train (SFT/DPO/GRPO/PPO/KTO/ORPO/SimPO/IPO/...)
-soup infer  --model ./output --input prompts.jsonl   # batch inference
+soup infer  --model ./output --input prompts.jsonl --output results.jsonl   # batch inference
 soup chat   --model ./output          # interactive chat
 soup serve  --model ./output          # OpenAI-compatible API server
 soup ui                               # local browser dashboard

@@ -1,5 +1,5 @@
-<!-- synced-from: README.md sha256:2c81448b707086960939bd1512e493ea4a0248aac5d073ad388f6260c1352537 -->
-<p align="center">🌍 <a href="README.md">English</a> | <a href="README.tr.md">Türkçe</a> | <a href="README.ar.md">العربية</a> | <strong>日本語</strong></p>
+<!-- synced-from: README.md sha256:a6789c2877515d5ac707160a55ab94cd84b390e2e31168b69d4f954a47c5562a -->
+<p align="center">🌍 <a href="README.md">English</a> | <a href="README.tr.md">Türkçe</a> | <a href="README.ar.md">العربية</a> | <strong>日本語</strong> | <a href="README.zh.md">中文</a></p>
 
 <p align="center">
   <img src="soup.png" alt="Soup" width="280">
@@ -282,7 +282,7 @@ Alpaca、ShareGPT、ChatML、選好ペア（DPO / ORPO / SimPO / IPO / KTO）、
 
 ```bash
 soup train  --config soup.yaml        # 学習（SFT/DPO/GRPO/PPO/KTO/ORPO/SimPO/IPO/...）
-soup infer  --model ./output --input prompts.jsonl   # バッチ推論
+soup infer  --model ./output --input prompts.jsonl --output results.jsonl   # バッチ推論
 soup chat   --model ./output          # 対話型チャット
 soup serve  --model ./output          # OpenAI 互換 API サーバー
 soup ui                               # ローカルのブラウザダッシュボード

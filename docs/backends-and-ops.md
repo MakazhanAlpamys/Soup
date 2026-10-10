@@ -115,7 +115,7 @@ training:
     alpha: 32
 ```
 
-MLX backend supports SFT. `backend: mlx` with `task: dpo` or `task: grpo` is refused when the config is loaded, with an error naming the task — upstream `mlx-lm` ships no DPO/GRPO training helper, so those wrappers exist only as a backstop for callers that bypass config validation. Requires `mlx-lm >= 0.31.3`. Use `soup recipes search --tag mlx` for ready-made Apple Silicon configs.
+MLX backend supports SFT. `backend: mlx` with `task: dpo` or `task: grpo` is refused when the config is loaded, with an error naming the task — upstream `mlx-lm` ships no DPO/GRPO training helper, so those wrappers exist only as a backstop for callers that bypass config validation. Requires `mlx-lm >= 0.31.3`. Use `soup recipes search mlx` for ready-made Apple Silicon configs.
 
 #### Optimizers and schedules
 
@@ -377,7 +377,7 @@ LLM training generates massive checkpoint files. Soup automatically manages an S
 
 ```bash
 # List all historical training runs
-soup runs list
+soup runs
 
 # Compare two differing experiments side-by-side
 soup runs compare run_202611... run_202612...
@@ -596,7 +596,7 @@ Soup shows friendly error messages by default (2-3 lines with a fix suggestion).
 soup --verbose train --config soup.yaml
 
 # Works with any command
-soup --verbose eval --model ./output --benchmarks mmlu
+soup --verbose eval benchmark --model ./output --benchmarks mmlu
 ```
 
 > **Note:** `--verbose` is a global flag — it must go **before** the command name, not after.
@@ -724,7 +724,7 @@ zero telemetry network requests.
 You can also explicitly disable telemetry for a specific invocation using the `--no-telemetry` flag:
 
 ```bash
-soup train --config soup.yaml --no-telemetry
+soup --no-telemetry train --config soup.yaml
 ```
 
 When enabled, telemetry performs a synchronous fire-and-forget HTTP POST with a 1-second connect and read timeout (DNS resolution excluded) on command exit. The anonymous identifier is stored at `~/.soup/telemetry_id`; deleting `~/.soup/telemetry_id` regenerates it on the next opt-in. See [Privacy Policy](#privacy-policy) for details.
@@ -1173,6 +1173,8 @@ print(report.ok, report.reason)
 When it doesn't fit, the report names actionable knobs: `--batch-size halve`, `--quantization 4bit`, `--gradient-checkpointing auto`. Composes with v0.40.3 live CUDA OOM probe (`make_cuda_probe_fn`) which still runs when `auto_batch_size_strategy: probe`.
 
 The weights bucket assumes 2 bytes/param under `quant="none"` (a frozen base now really does load at the checkpoint's own dtype, typically bf16/fp16 — #339), except `peft="full"` (full fine-tuning), which explicitly loads fp32 master weights and so assumes 4 bytes/param instead.
+
+`mxfp4` and `fp8` are dequantized on load, so they take the same 2 bytes/param. `gptq`, `awq`, `aqlm` and `eetq` stay packed and are priced at their own figures. `soup train` has no figure for `hqq:*` and says it skipped the check ([Quant Menu](performance-and-quantization.md#quant-menu--9-quantization-formats)).
 
 
 ## Shell Completions (`soup completions`)

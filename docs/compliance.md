@@ -35,8 +35,8 @@ template header documents which ones apply. The steps below are the common path.
 ## 2. Clean the data before training
 
 ```bash
-soup data pii ./data/train.jsonl            # flag emails / phones / SSNs / MRNs
-soup data decontaminate ./data/train.jsonl  # drop public-benchmark overlap
+soup data pii --input ./data/train.jsonl    # flag emails / phones / SSNs / MRNs
+soup data decontaminate --input ./data/train.jsonl --benchmark-file benchmarks.jsonl  # drop benchmark overlap
 ```
 
 ## 3. Train with a reproducibility receipt (+ Annex XI / energy for the EU)

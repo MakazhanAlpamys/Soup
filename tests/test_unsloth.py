@@ -326,6 +326,11 @@ class TestTemplatesHaveUnslothHint:
     def test_templates_default_backend_commented(self):
         """Templates should have unsloth commented out (not active by default)."""
         for name, template in TEMPLATES.items():
+            if name == "longcontext":
+                # #1697: it sets rope_scaling_type, which unsloth's setup does not
+                # read, so the hint would suggest a line the loader refuses.
+                assert "unsloth" not in template
+                continue
             assert "# backend: unsloth" in template, f"{name} template missing unsloth hint"
 
 

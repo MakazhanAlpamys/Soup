@@ -22,6 +22,7 @@
 - [Adapter Backdoor Scanner (`soup adapters scan`)](#adapter-backdoor-scanner-soup-adapters-scan)
 - [Adapter Sign + Verify (`soup adapters sign` / `verify`)](#adapter-sign--verify-soup-adapters-sign--verify)
 - [Strict Safetensors Mode (`soup adapters check-safetensors`)](#strict-safetensors-mode-soup-adapters-check-safetensors)
+- [Pre-Flight Adapter Health Audit (`soup adapters check`)](#pre-flight-adapter-health-audit-soup-adapters-check)
 - [Namespace Pinning (Anti-AI-Jacking)](#namespace-pinning-anti-ai-jacking)
 - [License-Conflict Matrix at Merge](#license-conflict-matrix-at-merge)
 - [Airgap Bundle (`soup airgap-bundle`)](#airgap-bundle-soup-airgap-bundle)
@@ -154,6 +155,30 @@ model, even when another adapter was activated manually. Start `soup serve` from
 directory containing `.soup/`, because the loop state and canary statistics paths are
 resolved from the working directory. Clients choose their own stable key, so a client
 can deliberately select a key that hashes into the canary bucket.
+
+The serving process caches the parsed policy using the state file's
+`(st_mtime_ns, st_size, st_ino)` identity. Atomic replacement invalidates it,
+so a rollback written by `soup loop watch` affects the next keyed request.
+State-path failures are warned about once per failure episode rather than on every request;
+a successful policy read allows a later failure to warn again.
+
+Outcome counters are buffered per serving app and persisted after 64 completed
+outcomes or two seconds from the first pending outcome, whichever comes first.
+Orderly shutdown flushes the remaining counters. With a healthy writable filesystem,
+an abrupt crash can lose the unflushed window (at most one 64-outcome batch, including
+a flush in progress, normally at most two seconds); scheduling delays or disk errors
+can delay persistence. A failed write retains the pending counters for retry.
+While that batch is full, additional outcomes are refused until persistence recovers;
+a disk outage can therefore lose more outcomes than the normal one-batch crash window.
+The on-disk `canary-stats.json` and watch verdicts lag traffic by the buffered window
+(normally up to 64 outcomes or two seconds). Rollout IDs prevent promotions from sharing
+samples. Pending samples and late completions from superseded promotions are discarded
+rather than replacing the new rollout's file. The existing stats lock protects threads
+in one process, not multiple server processes writing the same file.
+
+A canary that kills the serving process never reaches outcome recording: recording
+happens only after generation returns or raises. Such crashes remain invisible to
+the canary verdict unless external restart monitoring detects them.
 
 
 ## Knowledge Editing (`soup edit set`, ROME / MEMIT / AlphaEdit)
@@ -698,6 +723,32 @@ right to execute arbitrary code on load; refusing the file at the
 boundary is the only sound mitigation. Friendly advisory names the
 offending file and the canonical `from safetensors.torch import save_file`
 recipe. Exit code 3 under `--strict` for CI gating.
+
+
+## Pre-Flight Adapter Health Audit (`soup adapters check`)
+
+Pre-flight scan auditing single LoRA adapters for silent training failures (#1721):
+- **Total and per-layer ||dW||_F**: Frobenius norm of LoRA parameter updates (dW = scaling * (B @ A), with alpha / r for standard LoRA and alpha / sqrt(r) for rsLoRA) with float64 accumulation via matrix trace contraction.
+- **Live fraction**: Proportion of adapter layers with active, non-zero updates.
+- **All-zero lora_B layers**: Flags un-trained or zero-initialized layers that failed to move during training.
+- **Incomplete LoRA pairs**: Flags orphaned or partially-saved projections missing either A or B.
+- **Leaked .inner. keys**: Flags legacy wrapper namespaces for adapters saved prior to the #1011 save-time guard.
+
+```bash
+soup adapters check path/to/adapter/
+# Machine-readable output
+soup adapters check path/to/adapter/ --json
+```
+
+Outputs human diagnostics ending in a single verdict line: `alive` (exit code 0) or `inactive: <reason>` (exit code 2 for inactive/silent failure, distinct from usage error 1). Possible inactivity reasons include:
+- `all lora_B layers are zero (n/n)`
+- `lora_B layers are zero (k/n)`
+- `total ||ΔW||_F is 0.0`
+- `leaked .inner. keys detected (<n> tensors)`
+- `incomplete LoRA pairs detected (<n> orphans)`
+- `shape mismatch in LoRA projections (<n> layers)`
+- `non-finite weights detected (NaN/Inf)`
+- `no lora weights found`
 
 
 ## Namespace Pinning (Anti-AI-Jacking)

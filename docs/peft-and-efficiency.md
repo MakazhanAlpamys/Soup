@@ -149,7 +149,7 @@ training:
 
 **Llama 3.1 NTK-aware.** Use `rope_scaling_type: llama3` for Llama 3.1-style frequency-band scaling. On a checkpoint without RoPE scaling it emits `factor = data.max_length / max_position_embeddings` over `original_max_position_embeddings = max_position_embeddings`, with `low_freq_factor` 1 and `high_freq_factor` 4, so an 8k checkpoint extended to 64k gets Llama 3.1's own factor 8 over 8192. `detect_llama3_rope_in_config` can identify the block in an HF model config dict, but `soup train` changes RoPE only when `rope_scaling_type` is explicit; omitting it preserves the checkpoint's native RoPE configuration. On a checkpoint that already ships a `llama3` block (Llama 3.1, 3.2 and 3.3 do), `rope_scaling_type: llama3` composes with it instead of replacing it: the checkpoint's `original_max_position_embeddings`, `low_freq_factor` and `high_freq_factor` are kept, and its `factor` is multiplied by `data.max_length / max_position_embeddings`. Llama-3.1-8B extended from 131072 to 262144 tokens trains with factor 16 over 8192, so no frequency pair rotates faster than it did in pretraining.
 
-RoPE scaling is applied before model construction for the Transformers text paths of `task: sft` and `task: pretrain`. Vision, audio, layer-streaming and Unsloth setup paths do not consume these fields, nor do other training tasks. Existing type-independent model parameters such as `rope_theta` are preserved; tunables belonging to a previous RoPE algorithm are removed when the type changes. A checkpoint whose RoPE block is already scaled (any `rope_type` other than `default`, for example `yarn`, `longrope` or `llama3`) is never replaced: apart from `llama3` on a `llama3` block, extending it is refused before the model is built, and the error names the checkpoint's `rope_type` and `factor`. A `data.max_length` at or below the checkpoint's `max_position_embeddings` extends nothing, so none of these refusals applies to it. Models such as Gemma 3 that use nested per-layer RoPE sections are refused rather than partially modified. `rope_scaling_type: longrope` is refused at config load, whatever `data.max_length` is. Its per-dimension `short_factor` and `long_factor` vectors exist only on checkpoints already scaled with LongRoPE, and extending those is refused, so it cannot extend any checkpoint. To extend a checkpoint without RoPE scaling, use `linear`, `dynamic`, `yarn` or `llama3`. To fine-tune a LongRoPE checkpoint such as Phi-3-mini-128k at its native length, leave `rope_scaling_type` unset: the checkpoint's own RoPE block is used as shipped.
+RoPE scaling is applied before model construction on `task: sft` (the text path with `backend: transformers` and no layer streaming) and on `task: tts` and `task: pretrain` with `backend: transformers`. Everywhere else `rope_scaling_type` is refused at config load ([#1697](https://github.com/MakazhanAlpamys/Soup/issues/1697)): on the other 20 tasks, on `sft` with `backend: mlx`, `modality: vision`, `modality: audio` or `training.stream_layers: true`, and on any of the three with `backend: unsloth`. Those setups build the model with the checkpoint's own RoPE; the message names each setting to change, and the `yarn_*` keys set beside it. Existing type-independent model parameters such as `rope_theta` are preserved; tunables belonging to a previous RoPE algorithm are removed when the type changes. A checkpoint whose RoPE block is already scaled (any `rope_type` other than `default`, for example `yarn`, `longrope` or `llama3`) is never replaced: apart from `llama3` on a `llama3` block, extending it is refused before the model is built, and the error names the checkpoint's `rope_type` and `factor`. A `data.max_length` at or below the checkpoint's `max_position_embeddings` extends nothing, so none of these refusals applies to it. Models such as Gemma 3 that use nested per-layer RoPE sections are refused rather than partially modified. `rope_scaling_type: longrope` is refused at config load, whatever `data.max_length` is. Its per-dimension `short_factor` and `long_factor` vectors exist only on checkpoints already scaled with LongRoPE, and extending those is refused, so it cannot extend any checkpoint. To extend a checkpoint without RoPE scaling, use `linear`, `dynamic`, `yarn` or `llama3`. To fine-tune a LongRoPE checkpoint such as Phi-3-mini-128k at its native length, leave `rope_scaling_type` unset: the checkpoint's own RoPE block is used as shipped.
 
 **LongLoRA S².** `training.use_longlora: true` is refused at config load ([#1240](https://github.com/MakazhanAlpamys/Soup/issues/1240)): the override it installed leaked future tokens into earlier positions and applied no S² grouping (see [LongLoRA Forward Override](#longlora-forward-override)). Use one of the RoPE-scaling strategies above with plain LoRA instead.
 
@@ -193,9 +193,12 @@ Pick from a wider catalogue of optimizers and use quantization-aware LoRA initia
 
 ```yaml
 training:
-  # 30+ optimizers — HF-native, bnb, BAdam, APOLLO, Adam-mini, lomo,
-  # grokadamw, schedule_free, muon, dion, came_pytorch, ao_adamw_{fp8,4bit,8bit}
-  optimizer: badam
+  # HF-native, bnb-8bit and v0.41.0 additions (lomo, apollo_adamw,
+  # grokadamw, schedule_free). Ten retired names (badam, adam_mini, muon,
+  # dion, came_pytorch, ao_adamw_{fp8,4bit,8bit}, ...) are refused at
+  # config load because transformers 5.x rejects them (#1269);
+  # muon and adamw_hf still work on backend: mlx.
+  optimizer: adafactor
 
   # Friendly aliases for users coming from LlamaFactory / Axolotl
   # load_in_8bit: true      # equivalent to quantization: 8bit
@@ -392,7 +395,9 @@ training:
 ```
 
 Works with all training tasks on the transformers backend (see the note on
-quantized bases below).
+quantized bases below). On `backend: unsloth` and `backend: mlx`, `use_dora: true`
+is refused when the config is loaded: neither backend builds a DoRA adapter, so
+it would silently train plain LoRA.
 
 > **Not on GPTQ / AWQ / AQLM / EETQ bases.** peft has no DoRA variant for those
 > layers and raises when the adapter is attached, so `use_dora: true` with

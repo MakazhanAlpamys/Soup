@@ -175,7 +175,10 @@ format-v2 metadata records a `local-sha256:` identity derived from the
 Transformers selects (or its index and referenced shards). The identity uses
 relative file names and content, so moving the same base keeps resume valid;
 changing a selected file refuses resume. Soup checks the identity before and
-after loading the model. A local base whose `config.json` declares another
+after loading the model. A first resume from a format-v1 checkpoint reuses the
+identity the run already computed instead of reading the base a third time
+(#1199).
+A local base whose `config.json` declares another
 layer count or an incompatible width is refused before any file is hashed; a
 value that is missing or not an integer is left to the post-load gate. The
 sidecar and `config.json["soup_quest"]` contain the identity, not the source
@@ -368,7 +371,16 @@ training:
 | `aqlm` | 2 | Extreme compression. | aqlm |
 | `eetq` | 8 | Fast 8-bit kernel for SM75+. | eetq |
 | `mxfp4` | 4 (stored) | Train LoRA on top of an MXFP4 pre-quantized checkpoint (for example GPT-OSS). Loaded with `Mxfp4Config(dequantize=True)`, so it trains in bf16: transformers does not train MXFP4 weights as loaded. Budget memory for the bf16 model, an estimated 2 bytes per parameter (roughly 42 GB for a 20B base). The `soup train` VRAM pre-flight checks an `mxfp4` run against that estimate, as it does a `quantization: none` run, and `--allow-oom-attempt` launches one it refuses. | — |
-| `fp8` | — | Train fp16/bf16 on top of FP8-released checkpoints. | transformers ≥ 4.45 |
+| `fp8` | — | Train LoRA on top of an FP8-released checkpoint. Loaded with `FineGrainedFP8Config(dequantize=True)`, so it trains in bf16: budget memory for the bf16 model, an estimated 2 bytes per parameter, not for the FP8 file. | transformers ≥ 5.17.0 |
+
+**VRAM pre-flight.** Before the model loads, `soup train` prices the weights
+of the chosen format and refuses a run that does not fit the card
+(`--allow-oom-attempt` launches it anyway). The figures are estimates, in bytes
+per parameter: `4bit` 0.5, `8bit` 1.0, `none` 2.0, `gptq` and `awq` 0.55,
+`aqlm` 0.5, `eetq` 1.0, and 2.0 for `mxfp4` and `fp8`, which are dequantized on
+load. `hqq:*` has no figure yet, so the run starts and the pre-flight prints
+`Pre-flight skipped: no memory model for quantization: hqq:4bit` (with the
+format you set). No refusal there does not mean the run fits.
 
 **Compatibility matrix.** `soup train` runs `check_quant_distributed_compat()` at
 startup. HQQ / EETQ / AQLM hard-fail with FSDP and ZeRO-3 (sourced from
@@ -618,6 +630,12 @@ dominates everything else: measured on Qwen2.5-0.5B (vocab 151 936) at batch 8, 
 the logits alone are **8.71 GB — 146× the entire layer-buffer pool (0.060 GB)**. A
 pre-flight that budgeted only weights and buffers would wave that configuration through.
 
+The same term decides what an 8B base needs on a 4 GB card. Llama-3.1-8B NF4 (vocab
+128 256), streamed, LoRA r=8: **3.448 GB at batch 1, S=512**, then **1.063 GB for every
+further 512 tokens per step** — 4.512 GB at 1024, already above the 4.294 GB card
+([probe v0.73.0, section 9](../benchmarks/probe-v0.73.0-what-bounds-streaming.md#9-peak-vram-and-the-microbatch-sweep)).
+`data.max_length` defaults to 2048, so the "8B on 4 GB" setup needs `data.max_length: 512`.
+
 So `soup train` predicts peak VRAM before building the model, and **refuses a run it
 expects not to fit**:
 
@@ -677,6 +695,7 @@ prints this advice when it sees you accumulating.
 - `lora.use_dora` / `lora.use_vera` / `lora.init_strategy` other than `random` → these initialise from the real base weight, which is on the meta device under streaming
 - `moe_expert_quant` → expert quantization runs only in the resident model-construction path and would otherwise be silently ignored
 - `unfrozen_parameters`, `lisa_enabled`, `packing`, `multipack`, `use_fsdp2_compile`, `train_router_only`, `expand_layers` → each independently rewrites or re-freezes the same layers
+- `use_liger` / `use_flash_attn` → **not reached at all** under streaming (#1692). Both are read by the *resident* setup: Liger patches the MLP forward there, and flash-attn is handed to `from_pretrained` as `attn_implementation`. A streamed model is built by `from_config` with no attention argument and no Liger patch, and `_liger_applied` is never set, so `use_liger_kernel` misses `TrainingArguments` too. These are the switches you reach for when a streamed run will not fit, so they are refused rather than dropped; each is offered again once it is wired and shown to engage on a streamed model. On every task outside `{sft, tts}` they are already refused at config load (#806)
 - `stream_source` / `stream_ngram_source` / `stream_buffers` / `stream_read_ahead` / `stream_vram_override` / `stream_vram_probe` / `stream_disk_kind` / `stream_pin` set while `stream_layers: false` → a footgun, refused
 - a non-default `stream_read_ahead` beside `stream_source: ram` → refused. The read-ahead reader belongs to the NVMe disk tier and `ram` never falls back to it, so the setting would validate, be documented, and reach nothing. The default is accepted, because a default is not a decision
 - a disk-tier run whose host staging (`stream_read_ahead` layers, plus one slot each for the embedding and an untied `lm_head`) plus the resident extras will not fit the free-RAM headroom → refused by name, naming the depth to lower. Refused rather than clamped: a depth you set is a decision, and silently lowering it would hand back a slower run than the one you configured
@@ -820,8 +839,12 @@ above); it does not make the reference free.
 **Disk pre-flight and shard cache.** Before Soup materialises or shards a checkpoint, it
 reports the complete projected footprint: the HF/local source, any regular-file copy Soup
 still needs, and the per-layer shard cache. Required writes are grouped by target volume and
-the run refuses before either write when that volume lacks free space. Override the two cache
-roots with `SOUP_SPECTRUM_CACHE_DIR` and `SOUP_LAYER_STREAM_CACHE_DIR`; both retain Soup's
+the run refuses before either write when that volume lacks free space. With
+`SOUP_LAYER_STREAM_STRIPE_DIRS` set, each root is charged the bytes it will receive,
+read from the source safetensors headers (the primary root also holds the embedding,
+head and extras); when a header cannot be read or the model is qwen4_exp the split is
+even and the panel says approximately. Override the two cache roots with
+`SOUP_SPECTRUM_CACHE_DIR` and `SOUP_LAYER_STREAM_CACHE_DIR`; both retain Soup's
 home/cwd/tmp containment policy.
 
 **Two or more NVMe drives.** On a cold store larger than RAM the disk-tier step can wait on the
@@ -834,7 +857,11 @@ flight per drive. The cache is laid out this way whichever tier the run picks; o
 reads the drives in parallel. Every entry is checked, and any failure refuses the run and names
 the entry and the rule: it must be an absolute path (on Windows, with a drive letter or UNC share;
 no `\\?\` or `\\.\` spelling, no control characters), already exist as a folder (a drive that is
-not mounted is never mistaken for an empty one), not be a symlink, not lie inside or contain the
+not mounted is never mistaken for an empty one), not be a symlink or a directory junction (a
+genuine Windows volume mount point is accepted — a junction and a mount point carry the same
+reparse tag, but only a junction's target names a folder, under a drive letter, a UNC share or
+even a volume GUID path, that can be repointed at any time; a mount point's target names a
+whole volume rather than a folder), not lie inside or contain the
 primary cache root or another entry, sit on a different volume from the primary root and from
 every other entry, and classify as NVMe (`training.stream_disk_kind` overrides a wrong probe); the
 list holds at most 6 folders. The checks that need no disk probe run when `soup train` or
@@ -848,8 +875,12 @@ primary cache's path, so two primary caches (two users, or two `SOUP_LAYER_STREA
 values) sharing one stripe drive never touch each other's files. That folder is made private to
 the account running Soup (mode 0700 on POSIX; on Windows a protected ACL for that account and
 SYSTEM, replacing the inherited one, which on a data drive typically lets every signed-in
-account modify files), checked again on every reuse, and never followed if it is a link or
-junction; a folder Soup cannot make private refuses the run by name. Soup never deletes anything
+account modify files), checked again on every reuse and again before every per-layer write and
+the marker write of a shard, and never followed if it is a link or junction; a folder Soup
+cannot make private refuses the run by name. A root renamed out from under a running shard and
+replaced with a link is refused at the next write, not just at the start — but that only
+narrows the window to a single write, it does not close it, which would need writes relative
+to an open directory handle (the standard library has none on Windows). Soup never deletes anything
 inside a stripe folder. Soup makes only its own folder owner-only, so also make the stripe ROOT
 itself writable only by your own account (on a default Windows data drive other accounts can
 modify it).
@@ -949,7 +980,7 @@ all-masked sequence or saving a non-finite adapter.
 Every command that loads a model now requires `--trust-remote-code` to execute custom Python from a model repo (`auto_map` in `config.json`). First-party orgs (Meta, Mistral, Qwen, Google, etc.) suppress the warning panel; everything else prints a `REMOTE CODE WARNING` panel before loading. Unknown-org local checkpoints with `auto_map` raise a friendly `ValueError` at construction time instead of silently exec'ing inside `from_pretrained`.
 
 Coverage:
-- `soup train` (every task - SFT, DPO, GRPO, KTO, ORPO, SimPO, IPO, PPO, Reward Model, Pretrain, Embedding, BCO, and the unified Preference dispatcher; automatic evaluation after training keeps the flag disabled, see `docs/evaluation.md`)
+- `soup train` (every task - SFT, DPO, GRPO, KTO, ORPO, SimPO, IPO, PPO, Reward Model, Pretrain, Embedding, BCO, and the unified Preference dispatcher; automatic evaluation after training follows the run's flag, see `docs/evaluation.md`)
 - `soup chat`, `soup serve`, `soup data download`, `soup eval auto`
 - `soup diff`, `soup export`, `soup merge`, `soup infer`, `soup data generate`
 - `soup eval benchmark`, `soup eval custom`, `soup train --find-lr`, `soup draft distill`, `soup shrink`
@@ -958,7 +989,7 @@ Coverage:
 
 ```bash
 soup train --config soup.yaml --trust-remote-code
-soup infer --model my-org/custom-arch-model --input prompts.jsonl --trust-remote-code
+soup infer --model my-org/custom-arch-model --input prompts.jsonl --output out.jsonl --trust-remote-code
 soup export --model ./adapter --format gguf --trust-remote-code
 ```
 
@@ -1168,7 +1199,7 @@ training:
   gradient_checkpointing: true  # Required for long sequences
 
   # Long-context (128k+ tokens)
-  rope_scaling_type: dynamic  # RoPE scaling: linear, dynamic, yarn, llama3
+  rope_scaling_type: dynamic  # RoPE scaling: linear, dynamic, yarn, llama3; sft/tts/pretrain on backend: transformers only
   # use_ring_attention: true  # Sequence parallelism across GPUs
 
 data:
@@ -1280,7 +1311,7 @@ Both reject silently-no-op combinations: setting either flag without `moe_lora=t
 | `mixtral` | **no — attention-only** | yes |
 | `kimi_k2` | **not measured** (no stand-in builds here) | not measured |
 
-`minimax-m3-sft` still trains attention-only LoRA: it sets no `moe_lora`, since it loads through SFT's vision path, which never runs the MoE step, and `minimax-m3-dpo` was removed because DPO cannot build the `minimax_m3_vl` wrapper (#1145). The seven `kimi-k2.x` recipes that set `moe_lora` are untested rather than known-good — no tiny stand-in for those configs exists in the installed transformers. A checkpoint that still keeps one `nn.Linear` per expert (the transformers-4 layout) is handled as before: the projections are named as modules and no `target_parameters` are added.
+`minimax-m3-sft` still trains attention-only LoRA: it sets no `moe_lora`, since it loads through SFT's vision path, which never runs the MoE step, and `minimax-m3-dpo` was removed because DPO cannot build the `minimax_m3_vl` wrapper (#1145). The seven `kimi-k2.x` recipes that set `moe_lora` are untested rather than known-good — no tiny stand-in for those configs exists in the installed transformers. A checkpoint that still keeps one `nn.Linear` per expert (the transformers-4 layout) is handled as before: the projections are named as modules and no `target_parameters` are added. `moe_lora` together with `lora.use_vera: true` is refused on a fused-expert model (#1197): VeRA wraps `nn.Linear` modules only and has no `target_parameters` path, so the flag would adapt attention (and a shared expert) exactly as VeRA without it; set `use_vera: false` to adapt the experts with LoRA, or drop `moe_lora`. The per-expert-Linear layout is not refused, VeRA wraps those.
 
 **`target_modules: auto` on a MoE base.** Until #1070 `resolve_lora_target_modules` had no mapping for any MoE architecture Soup ships, so `auto` resolved to `None` and peft refused with `No target_modules passed but also no target_parameters found`. Those architectures now resolve to their attention projections (see `docs/peft-and-efficiency.md`); a MoE architecture neither Soup nor peft maps is refused at setup, naming it. With `moe_lora: true` the targets come from the model scan instead, and that is applied *before* the refusal is decided, so `moe_lora` still works on an unmapped MoE such as `qwen2_moe`.
 
@@ -1367,7 +1398,7 @@ soup deploy autopilot --target rtx-4090-24gb \
     --measure-candidates 4bit,gptq,awq
 ```
 
-Autopilot also detects pre-quantized bases automatically — `TheBloke/Llama-2-7B-Chat-GPTQ` is recommended `gptq` instead of stacking 4-bit on top. Detection runs against the base-model name regex AND any local `config.json`'s `quantization_config.quant_method`. Out-of-cwd model paths are silently skipped (soft-probe semantics).
+Autopilot also detects pre-quantized bases automatically - `TheBloke/Llama-2-7B-Chat-GPTQ` is recommended `gptq` instead of stacking 4-bit on top. Detection runs against the base-model name regex AND any local `config.json`'s `quantization_config.quant_method`. Out-of-cwd model paths are silently skipped (soft-probe semantics). A detected `mxfp4` base is budgeted as the bf16 model it loads (2 bytes per parameter), and Autopilot refuses a `--gpu-budget` below that.
 
 AWQ and GPTQ export are deprecated and will be removed in the next release: both upstream projects (AutoAWQ and AutoGPTQ) are archived and neither extra can be installed next to `[train]`. Until then `soup export --format awq` and `--format gptq` work as before and start with a `Deprecated:` notice that names the formats to move to (`gguf`, `onnx`, `tensorrt`, `bitnet`, `tq1_0`).
 

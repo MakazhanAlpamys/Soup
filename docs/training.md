@@ -7,7 +7,10 @@
 > **Training a model bigger than your GPU?** `training.stream_layers: true` streams the
 > frozen base from CPU RAM (with NVMe disk overflow) one decoder layer at a time, so peak
 > VRAM is bounded by one layer instead of the whole model. Add `quantization: 4bit` and an
-> 8B base fits a 4 GB card. Works for `sft` and, from v0.72.4, for `dpo` / `orpo` /
+> 8B base fits a 4 GB card at batch 1 and 512 tokens per step; on a 128k-vocabulary model
+> every further 512 tokens costs about 1 GB more (see
+> [Sizing a streaming run](performance-and-quantization.md#sizing-a-streaming-run-v0723)).
+> Works for `sft` and, from v0.72.4, for `dpo` / `orpo` /
 > `simpo` / `kto` — DPO's reference model is the same streamed base with its adapters
 > switched off, so it needs no second copy of the model (on an untied checkpoint `dpo` and
 > `kto` still hold one copy of the output head per step) — see
@@ -507,6 +510,22 @@ soup train --config grpo.yaml
 whitespace tokens to the active tokenizer's integer ids. This catches subword
 repetition that punctuation-heavy decoded text can hide, but the score becomes
 tokenizer-specific rather than vocabulary-agnostic.
+
+The `info_rm` detector stays silent on any step whose median split leaves
+either half constant — a two-valued reward (e.g. `reward_fn: accuracy`'s 0/1)
+always does, and so does a continuous reward where half the batch lands on
+the same value (e.g. rewards clipped at 0). The separation index there would
+measure the success rate rather than reward-model health, so the step casts
+no vote: no baseline is recorded and nothing halts or mutates β (one warning
+is logged per run). The single exception: once a baseline exists, a step
+where *every* reward is identical still votes 0.0 — a 0/1 run never records
+a baseline and stays silent, while a genuinely collapsed continuous reward
+reads HACK as before. For two-valued rewards use
+`reward_hack_detector: rm_ensemble` or the length/repetition signals instead.
+**Changed:** before this version a constant-half split could record an
+inflated separation (~3×10⁴ at a 50% first step) as the baseline and classify
+later, healthier steps as HACK — detector logs and `mitigation_log.jsonl`
+files from runs before this version are not comparable.
 
 ### Closed-loop reward-hacking auto-mitigation (v0.71.26)
 
@@ -1073,7 +1092,7 @@ Decoded in-memory PIL images (such as from a Hugging Face Hub `Image()` column) 
 image structs (`{"bytes": ..., "path": ...}`) written by `datasets` are also accepted; a struct's
 `path` follows the same directory resolution and path containment rules as a plain path string.
 
-`soup data inspect` automatically shows image statistics (count, formats, missing files) for vision datasets.
+`soup data inspect` resolves image paths the same way, or uses `--image-dir` when provided, and automatically shows image statistics (count, formats, missing files) for vision datasets.
 
 
 ## Audio / Speech Fine-tuning
@@ -1246,6 +1265,13 @@ training:
     alpha: 16
   quantization: 4bit
 ```
+
+A base published as a vision-language wrapper (MiniMax-M3, `model_type: minimax_m3_vl`) is not
+registered under `AutoModelForCausalLM`, so a plain DPO config cannot load it. Set `modality: vision`
+and DPO loads it the way SFT's vision path does, through `AutoModelForImageTextToText` with the
+model's processor, and trains the language tower; the LoRA targets resolve to that tower as before.
+Preference rows carry no images, and `soup recipes verify` builds the same class the trainer loads.
+`backend: unsloth` does not read `modality` for DPO and is refused at config load for it (#1393).
 
 
 ## Preference Variety — BCO + Unified Dispatcher + KL Variants

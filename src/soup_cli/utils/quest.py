@@ -942,8 +942,25 @@ def validate_resume_metadata(
     current: dict[str, Any],
     *,
     legacy_base_model: str | None = None,
+    legacy_base_identity: str | None = None,
 ) -> None:
-    """Refuse resume when calibration or routing differs from the checkpoint."""
+    """Refuse resume when calibration or routing differs from the checkpoint.
+
+    ``legacy_base_identity`` is a caller-supplied content identity for
+    ``legacy_base_model``, used instead of resolving it here. #1199 fix 2: resolving it
+    here re-read and re-hashed every selected file of the local base, which the caller
+    had already done in the same run. Passing it removes that third pass on a first v1
+    resume.
+
+    It is compared, never trusted, and it is NOT interchangeable with
+    ``current["base_model"]``: a caller that passes that field instead would make the
+    check below compare ``current["base_model"]`` with itself, which can never refuse.
+    The value to pass is the identity of ``legacy_base_model`` resolved earlier in the
+    run — ``SFTTrainerWrapper._quest_base_identity_before``, which is resolved from
+    ``config.base`` before the load. Passing anything else is caught by the comparison
+    here, not accommodated: a wrong identity still gets the same refusal it would have
+    got by resolving it.
+    """
     stored = load_metadata(checkpoint)
     if (
         stored["format_version"] == LEGACY_FORMAT_VERSION
@@ -958,7 +975,12 @@ def validate_resume_metadata(
                 "QuEST v1 resume requires the original base model reference; "
                 "set base: to the exact path or Hub ID recorded in the checkpoint"
             )
-        if current["base_model"] != resolve_base_model_identity(legacy_base_model):
+        identity = (
+            legacy_base_identity
+            if legacy_base_identity is not None
+            else resolve_base_model_identity(legacy_base_model)
+        )
+        if current["base_model"] != identity:
             raise ValueError("QuEST original base model reference does not match current identity")
         current = {
             **current,

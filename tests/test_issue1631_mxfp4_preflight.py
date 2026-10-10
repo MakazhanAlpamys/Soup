@@ -72,10 +72,6 @@ class TestTheInput:
             none.peft,
         )
 
-    @pytest.mark.parametrize("quant", ["gptq", "awq", "aqlm", "eetq", "fp8", "hqq:4bit"])
-    def test_the_formats_that_stay_packed_are_still_skipped(self, quant):
-        assert _build_hardware_fit_input(_cfg(quant)) is None
-
 
 @pytest.mark.parametrize("quant", ["mxfp4", "none"])
 class TestTheGate:

@@ -891,7 +891,6 @@ def attach_lorafa_optimizer(trainer: Any, tcfg: Any) -> bool:
     if opt_name is not None and opt_name not in (
         "adamw_torch",
         "adamw",
-        "adamw_hf",
         "adamw_torch_fused",
     ):
         raise ValueError(

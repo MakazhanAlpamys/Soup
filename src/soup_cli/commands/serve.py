@@ -1785,9 +1785,27 @@ def _create_app(
                 status_code=401, detail="Invalid or missing bearer token"
             )
 
+    from collections.abc import AsyncIterator
+    from contextlib import asynccontextmanager
+
+    from soup_cli.utils.canary_router import BufferedCanaryOutcomes, CanaryStateCache
     from soup_cli.utils.metrics import ServerMetrics
 
-    app = FastAPI(title="Soup Inference Server", version="1.0.0")
+    canary_state = CanaryStateCache(canary_state_path)
+    canary_outcomes = BufferedCanaryOutcomes(canary_stats_path, state_cache=canary_state)
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        try:
+            yield
+        finally:
+            try:
+                canary_outcomes.close()
+            except (OSError, TypeError, ValueError):
+                logger.warning("canary shutdown flush failed", exc_info=True)
+
+    app = FastAPI(title="Soup Inference Server", version="1.0.0", lifespan=lifespan)
+    app.state.canary_outcomes = canary_outcomes
 
     # Loopback-only CORS, and three layers behind it:
     #   * CORS limits which browser pages may READ a response. It does not stop
@@ -1862,16 +1880,27 @@ def _create_app(
         with active_lock:
             return active_state["active"]
 
+    _canary_warnings: set[str] = set()
+    _canary_warning_lock = threading.Lock()
+
+    def _warn_canary_once(message: str, *, exc_info: bool = False) -> None:
+        with _canary_warning_lock:
+            if message in _canary_warnings:
+                return
+            _canary_warnings.add(message)
+        logger.warning(message, exc_info=exc_info)
+
     def _canary_adapter(conversation_id: Optional[str]):
         """Resolve one automatic canary route, or preserve normal activation."""
         if not conversation_id or _mole_runtime is not None or not _peft_adapter_names:
             return None, None
         from soup_cli.utils.canary_router import CanaryPolicy, route
-        from soup_cli.utils.loop_state import read_state
 
         try:
-            state = read_state(canary_state_path)
-            if state.canary_active is None or not state.canary_traffic_pct:
+            state = canary_state.get()
+            with _canary_warning_lock:
+                _canary_warnings.discard("canary policy unavailable")
+            if state is None or state.canary_active is None or not state.canary_traffic_pct:
                 return None, None
             policy = CanaryPolicy(
                 stable=state.served_model,
@@ -1880,11 +1909,11 @@ def _create_app(
             )
             decision = route(policy, conversation_id)
         except (FileNotFoundError, OSError, TypeError, ValueError):
-            logger.debug("canary policy unavailable", exc_info=True)
+            _warn_canary_once("canary policy unavailable", exc_info=True)
             return None, None
         if decision.bucket == "canary":
             if decision.adapter not in _peft_adapter_names:
-                logger.warning("canary adapter %r is not loaded", decision.adapter)
+                _warn_canary_once(f"canary adapter {decision.adapter!r} is not loaded")
                 return None, None
             return decision.adapter, (policy, decision.bucket, state.canary_rollout_id)
         if decision.adapter in _peft_adapter_names:
@@ -1897,19 +1926,17 @@ def _create_app(
     def _record_canary_outcome(tracking, ok: bool) -> None:
         if tracking is None:
             return
-        from soup_cli.utils.canary_router import record_bucket_outcome
 
         policy, bucket, rollout_id = tracking
         try:
-            record_bucket_outcome(
+            canary_outcomes.record(
                 policy,
                 bucket,
                 ok,
                 rollout_id=rollout_id,
-                path=canary_stats_path,
             )
         except (OSError, TypeError, ValueError):
-            logger.warning("canary outcome write failed", exc_info=True)
+            _warn_canary_once("canary outcome write failed", exc_info=True)
 
     @app.get("/health")
     def health():

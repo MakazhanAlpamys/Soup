@@ -1904,3 +1904,41 @@ def audit(
             f"{f', {result.unknown_count} unchecked' if result.unknown_count else ''}"
         )
     raise typer.Exit(result.exit_code)
+
+
+_err_console = Console(stderr=True)
+
+
+@app.command(name="check")
+def check_cmd(
+    adapter: str = typer.Argument(..., help="Path to adapter directory"),
+    json_out: bool = typer.Option(False, "--json", help="Emit machine-readable JSON document"),
+):
+    """Audit whether an adapter is trained: Frobenius delta, zero B, inner keys (#1721)."""
+    from soup_cli.utils.adapter_check import (
+        check_adapter,
+        render_check_json,
+        render_check_terminal,
+    )
+    from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
+
+    try:
+        enforce_under_cwd_and_no_symlink(adapter, "adapter directory")
+    except (ValueError, OSError) as exc:
+        _err_console.print(f"[red]Path refused: {for_terminal(str(exc))}[/]")
+        raise typer.Exit(1) from exc
+
+    try:
+        report = check_adapter(adapter)
+        rendered = render_check_json(report) if json_out else render_check_terminal(report)
+    except (FileNotFoundError, OSError, ValueError, TypeError, RuntimeError) as exc:
+        _err_console.print(f"[red]{for_terminal(str(exc))}[/]")
+        raise typer.Exit(1) from exc
+
+    print(rendered)
+
+    if report.verdict == "alive":
+        raise typer.Exit(0)
+    else:
+        raise typer.Exit(2)
+
