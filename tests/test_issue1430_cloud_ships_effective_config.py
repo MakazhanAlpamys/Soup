@@ -255,6 +255,7 @@ class TestUnshippedInputs:
         cfg.base = "C:\\models\\merged"
         assert unshipped_inputs(cfg) == ["base"]
 
+    @pytest.mark.parametrize("value", ["./rewards.py", "accuracy, ./rewards.py"])
     def test_a_local_reward_file_is_unshipped(self, value):
         from soup_cli.cloud._shipped import unshipped_inputs
 
@@ -276,6 +277,17 @@ class TestUnshippedInputs:
         cfg.training.checkpoint_eval_tasks = "./tasks.jsonl"
         assert unshipped_inputs(cfg) == []
 
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "./nowhere/model",
+            "../nowhere/model",
+            "/nowhere/model",
+            "~/nowhere/model",
+            "\\\\nowhere\\share\\model",
+            "\\nowhere\\model",
+        ],
+    )
     def test_every_local_spelling_is_unshipped_even_when_absent(self, value):
         """None of these exists on disk, so only the spelling can say 'local'."""
         from soup_cli.cloud._shipped import unshipped_inputs
