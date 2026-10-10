@@ -79,6 +79,8 @@ class SimPOTrainerWrapper(StreamingSetupMixin):
         from datasets import Dataset
 
         from soup_cli.trainer._trl_compat import (
+            config_accepts,
+            enforce_preference_sequence_limit,
             prompt_length_kwargs,
             resolve_trl_symbol,
         )
@@ -221,6 +223,20 @@ class SimPOTrainerWrapper(StreamingSetupMixin):
             eval_dataset=eval_ds,
             processing_class=self.tokenizer,
         )
+        if not config_accepts(cpo_config_cls, "max_prompt_length"):
+            cap_kwargs = {
+                "max_length": cfg.data.max_length,
+                "max_prompt_length": cfg.data.max_length // 2,
+                "truncation_mode": cpo_config.truncation_mode,
+                "only_when_overflow": True,
+            }
+            self.trainer.train_dataset = enforce_preference_sequence_limit(
+                self.trainer.train_dataset, **cap_kwargs
+            )
+            if self.trainer.eval_dataset is not None:
+                self.trainer.eval_dataset = enforce_preference_sequence_limit(
+                    self.trainer.eval_dataset, **cap_kwargs
+                )
 
         # #1208 — trl 0.29 slices each answer to `max_length -
         # longer_response_length`, so a long `chosen` beside a short `rejected`
