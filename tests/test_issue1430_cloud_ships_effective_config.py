@@ -237,13 +237,52 @@ class TestUnshippedInputs:
 
         assert unshipped_inputs(self._cfg("s3://bucket/train.jsonl")) == []
 
-    def test_a_model_id_is_not_mistaken_for_a_path(self):
-        """`owner/name` has a slash but is fetched from the Hub."""
+    def test_a_bare_existing_path_is_unshipped(self, tmp_path, monkeypatch):
         from soup_cli.cloud._shipped import unshipped_inputs
 
-        assert unshipped_inputs(self._cfg()) == []
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "merged").mkdir()
+        cfg = self._cfg()
+        cfg.base = "merged"
+        assert unshipped_inputs(cfg) == ["base"]
+        cfg.base = "HuggingFaceTB/SmolLM2-135M"  # same shape, nothing on disk: a Hub id
+        assert unshipped_inputs(cfg) == []
 
-    def test_a_hub_model_id_is_not_unshipped(self):
+    def test_a_drive_letter_path_is_unshipped_even_when_absent(self):
+        from soup_cli.cloud._shipped import unshipped_inputs
+
+        cfg = self._cfg()
+        cfg.base = "C:\\models\\merged"
+        assert unshipped_inputs(cfg) == ["base"]
+
+    def test_a_local_reward_file_is_unshipped(self, value):
+        from soup_cli.cloud._shipped import unshipped_inputs
+
+        cfg = self._cfg()
+        cfg.training.reward_fn = value
+        assert unshipped_inputs(cfg) == ["training.reward_fn"]
+
+    def test_builtin_reward_names_are_not_unshipped(self):
+        from soup_cli.cloud._shipped import unshipped_inputs
+
+        cfg = self._cfg()
+        cfg.training.reward_fn = "accuracy, format"
+        assert unshipped_inputs(cfg) == []
+
+    def test_a_field_soup_train_never_reads_is_not_refused(self):
+        from soup_cli.cloud._shipped import unshipped_inputs
+
+        cfg = self._cfg()
+        cfg.training.checkpoint_eval_tasks = "./tasks.jsonl"
+        assert unshipped_inputs(cfg) == []
+
+    def test_every_local_spelling_is_unshipped_even_when_absent(self, value):
+        """None of these exists on disk, so only the spelling can say 'local'."""
+        from soup_cli.cloud._shipped import unshipped_inputs
+
+        cfg = self._cfg()
+        cfg.base = value
+        assert unshipped_inputs(cfg) == ["base"]
         from soup_cli.cloud._shipped import unshipped_inputs
 
         cfg = self._cfg()

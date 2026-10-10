@@ -913,7 +913,7 @@ def train(
         dropped = [name for name, on in (("--push-as", push_as), ("--gate", gate)) if on]
         if dropped:
             console.print(
-                f"[red]{markup_escape(', '.join(dropped))} is not supported with "
+                f"[red]{markup_escape(', '.join(dropped))} are not supported with "
                 f"--cloud:[/] both run locally, against local files and a local "
                 "HF repo, and a cloud run would silently ignore them. Run "
                 "without --cloud, or drop the flag."
