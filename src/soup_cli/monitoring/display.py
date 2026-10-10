@@ -72,6 +72,9 @@ class TrainingDisplay:
         #: None until an evaluation actually runs. Its own series --
         #: never folded into `self.loss`, which is the training curve.
         self.val_loss = None
+        #: grpo's validation number: the mean reward on the held-out
+        #: completions, higher is better (#1389). Its own row, never a "loss".
+        self.val_reward = None
         self._live: Optional[Live] = None
 
     def start(self, total_steps: int):
@@ -94,6 +97,8 @@ class TrainingDisplay:
         # than blinking out on every training step.
         if kwargs.get("val_loss") is not None:
             self.val_loss = kwargs["val_loss"]
+        if kwargs.get("val_reward") is not None:
+            self.val_reward = kwargs["val_reward"]
 
         if self._live:
             self._live.update(self._render())
@@ -125,6 +130,8 @@ class TrainingDisplay:
 
         if self.val_loss is not None:
             lines.append(f"Val loss: {self.val_loss:.4f}")
+        if self.val_reward is not None:
+            lines.append(f"Val reward: {self.val_reward:.4f}")
         if self.speed > 0:
             lines.append(f"Speed: {self.speed:.2f} it/s")
         if self.gpu_mem:

@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import ast
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -181,40 +182,34 @@ class TestTheScannerCanActuallyFail:
         assert _module_level_assigned_names(text) & BANNED_NAMES == BANNED_NAMES
         assert _control_strip_shape_lines(text)
 
-    def test_an_unparseable_file_in_the_tree_fails_the_guard(self):
-        """A file under ``src/soup_cli`` that does not parse must fail this
-        guard, not be skipped: the walk is over ``git ls-files``, so the
-        probe is registered with ``git add -N`` to be part of the real walk,
-        and removed afterwards. No monkeypatching of ``ast.parse``.
+    def test_an_unparseable_file_in_the_tree_fails_the_guard(self, tmp_path, monkeypatch):
+        """A tracked file under ``src/soup_cli`` that does not parse must fail
+        this guard, not be skipped. The walk is over ``git ls-files``, so the
+        probe lives in a git repository of its own, registered with
+        ``git add -N`` to be part of a real walk, and the guard is pointed at
+        that repository. Nothing is written into the tree the other tests
+        read: a probe in the real ``src/soup_cli`` is seen, and then missed,
+        by every scan that runs at the same moment in another pytest-xdist
+        worker. No monkeypatching of ``ast.parse``.
         """
-        probe = SRC_ROOT / "zz_unparseable_guard_probe.py"
-        relpath = probe.relative_to(REPO_ROOT).as_posix()
-        try:
-            # Both the write and the registration live inside the try: if
-            # ``git add -N`` fails, the probe is already on disk and the
-            # cleanup below must still run.
-            probe.write_text("def broken(:\n", encoding="utf-8")
-            subprocess.run(
-                ["git", "add", "-N", "--", relpath],
-                cwd=REPO_ROOT,
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-            assert relpath in {
-                p.relative_to(REPO_ROOT).as_posix() for p in _tracked_python_files()
-            }, "the probe must really be part of the scanned tree"
-            with pytest.raises(pytest.fail.Exception) as failure:
-                _offenders()
-        finally:
-            subprocess.run(
-                ["git", "rm", "--cached", "--force", "-q", "--", relpath],
-                cwd=REPO_ROOT,
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            probe.unlink(missing_ok=True)
+        repo = tmp_path / "repo"
+        src = repo / "src" / "soup_cli"
+        definer = src / "utils" / "terminal.py"
+        definer.parent.mkdir(parents=True)
+        definer.write_text(ALLOWED_DEFINER.read_text(encoding="utf-8"), encoding="utf-8")
+        probe = src / "zz_unparseable_guard_probe.py"
+        probe.write_text("def broken(:\n", encoding="utf-8")
+        for command in (["git", "init", "-q"], ["git", "add", "-N", "--", "src"]):
+            subprocess.run(command, cwd=repo, capture_output=True, text=True, check=True)
+        this_module = sys.modules[__name__]
+        monkeypatch.setattr(this_module, "REPO_ROOT", repo)
+        monkeypatch.setattr(this_module, "SRC_ROOT", src)
+        monkeypatch.setattr(this_module, "ALLOWED_DEFINER", definer)
+        assert probe.relative_to(repo).as_posix() in {
+            p.relative_to(repo).as_posix() for p in _tracked_python_files()
+        }, "the probe must really be part of the scanned tree"
+        with pytest.raises(pytest.fail.Exception) as failure:
+            _offenders()
         assert "zz_unparseable_guard_probe.py" in str(failure.value)
         assert "does not parse" in str(failure.value)
 

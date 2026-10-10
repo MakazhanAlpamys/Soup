@@ -197,7 +197,7 @@ training:
     alpha: 16
 ```
 
-Works with all training tasks: SFT, DPO, GRPO, PPO, KTO, ORPO, SimPO, IPO, and Pretrain. If unsloth is installed but not enabled, Soup will suggest it automatically.
+Works with the tasks that have an unsloth setup: SFT (text; SFT vision and audio still run the transformers setup), DPO, GRPO, PPO, KTO, ORPO, SimPO, IPO, BCO, preference, Pretrain, Embedding and TTS. The others (`reward_model`, `prm`, `classifier`, `reranker`, `cross_encoder`, `distill`, `unlearn`, `moe_lora_routing`, `online_dpo` and `asr`) have no unsloth setup, so `backend: unsloth` is refused at config load for them (#1357). If unsloth is installed but not enabled, Soup will suggest it automatically.
 
 > **Tip:** Soup auto-detects unsloth. When installed, you'll see a hint during `soup train` if you haven't enabled it yet.
 
@@ -239,7 +239,10 @@ RunPod is not yet live and points to active cloud backends (`--cloud modal` and 
 
 Lambda uses an instance rather than a serverless function. The generated local controller sends a
 secret-free cloud-init script as API `user_data`, waits for it over SSH, copies the configured
-output back, and requests instance termination in a `finally` block. Keep the controller running
+output back, and requests instance termination in a `finally` block. The controller polls training
+status over short SSH connections with keepalive probes rather than holding a single persistent
+session open. It tolerates transient network drops and disconnects for up to 15 minutes with exponential
+backoff before terminating the instance to prevent runaway billing. Keep the controller running
 until it reports that termination succeeded; shutting down the guest does not terminate billing.
 Pressing Ctrl+C during `--cloud-submit` interrupts the controller, which still runs that `finally`
 block, and `soup` waits for it to terminate the instance and exit rather than killing it; the only
@@ -364,6 +367,8 @@ both work; `--resume ./output/checkpoint-500` does not, because MLX never
 writes that shape. This is a weights-only warm start — mlx-lm's LoRA trainer
 exposes no optimizer state or step count, so the resumed run starts counting
 from step 0 regardless of how far the checkpoint got.
+
+`task: unlearn` refuses `--resume` / `--hf-resume`, because it writes no checkpoints.
 
 
 ## Run Management & Cleanup
@@ -504,6 +509,10 @@ soup sweep --config soup.yaml --param lr=1e-5,2e-5 --param epochs=2,3 --dry-run
 soup sweep --config soup.yaml --param lr=1e-5,2e-5,5e-5 --early-stop 1.5
 ```
 
+Every arm builds the trainer `soup train` builds for the config's `task` and
+`backend`, so an arm on a `task: distill` config distills, and an arm on
+`backend: mlx` uses the MLX wrapper.
+
 
 ## Model Comparison
 
@@ -546,6 +555,16 @@ soup doctor [--nccl]
 ```
 
 Shows: Python version, GPU availability, system resources (RAM/Disk), all dependency versions, and fix suggestions. Use `--nccl` to measure and check multi-GPU communication bandwidth against expected hardware ceilings.
+
+### GPU diagnostics
+
+When an NVIDIA GPU is available, `soup doctor` reports its compute capability
+and architecture family, whether the installed PyTorch build contains native
+or PTX support for that architecture, and the hardware/software gates for
+BF16, FP8, and NVFP4. A missing architecture warning includes a CUDA-enabled
+PyTorch reinstall hint based on the CUDA version reported by the driver. When
+the driver version cannot be mapped to a supported wheel, the hint remains
+actionable without constructing a `whl/None` URL.
 
 
 ## Version Info
@@ -879,8 +898,12 @@ Five-question wizard input → fully-validated `soup.yaml`. Literal allowlists o
 
 ## Standalone Sweep Config
 
+`--config` stays the base `soup.yaml` to train against; `--sweep-config` points at a
+separate file holding the strategy, run count, seed and swept parameters, in place of
+repeating `--param` on the command line.
+
 ```bash
-soup sweep --config sweep.yaml
+soup sweep --config soup.yaml --sweep-config sweep.yaml
 ```
 
 ```yaml
@@ -894,6 +917,17 @@ params:
 ```
 
 Strict scalar allowlist on values (`str` / `int` / `float` / `bool`); `_MAX_FILE_BYTES=256KB`, `_MAX_PARAM_KEYS=32`, `_MAX_VALUES_PER_KEY=64`; `SweepSpec.params` is `MappingProxyType[str, Tuple[Any, ...]]` for genuine immutability.
+
+`--param` and `--sweep-config` are mutually exclusive. With `--sweep-config`:
+
+- The file's `strategy` and `seed` win over `--strategy`.
+- A non-zero `n_runs` wins over `--max-runs`; `0` or absent falls back to `--max-runs`.
+- `n_runs` only caps the run count, so a grid smaller than `n_runs` runs every combination
+  (the example above is 3 x 3 = 9, so it runs 9 trials, not 20).
+- `seed` seeds the random sampler.
+
+A file that omits `strategy`, combined with `--strategy random --max-runs 2` on the command
+line, silently runs grid, because the file's default `grid` wins over both flags.
 
 
 ## Alternative Model Hubs (ModelScope / Modelers)

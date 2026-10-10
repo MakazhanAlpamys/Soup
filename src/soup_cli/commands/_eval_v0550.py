@@ -382,7 +382,9 @@ def register(app: typer.Typer, console: Console) -> None:
         sample_count = len(baseline_series)
         ci_degenerate = sample_count < 2
         if json_only:
-            console.print(_json.dumps({
+            # Plain stdout, not console.print: Rich folds a document wider than
+            # the console and reads "[...]" in a string as markup (#1468).
+            typer.echo(_json.dumps({
                 "metric": metric,
                 "source_metric": source_metric,
                 "regressed": verdict.regressed,

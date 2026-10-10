@@ -42,7 +42,9 @@ def emit_cmd(
     ),
     task: str = typer.Option("sft", "--task", help="Training task (sft / dpo / grpo / ...)."),
     license_id: Optional[str] = typer.Option(
-        None, "--license", help="SPDX license id (e.g. apache-2.0, mit).",
+        None, "--license",
+        help="License: an SPDX id (e.g. Apache-2.0, MIT; case-insensitive), an SPDX "
+             "expression (Apache-2.0 OR MIT), or any other name.",
     ),
     fmt: str = typer.Option(
         "cyclonedx", "--format", "-f",
@@ -148,7 +150,9 @@ def emit_cmd(
                 "(nothing written to attach).[/]"
             )
             raise typer.Exit(_EXIT_USAGE)
-        console.print(render_bom(entry, fmt_lc))
+        # Machine-readable BOM JSON: raw stdout, not console.print — Rich
+        # folds long lines and parses ``[...]`` as markup when piped (issue #1468).
+        typer.echo(render_bom(entry, fmt_lc))
         return
 
     try:

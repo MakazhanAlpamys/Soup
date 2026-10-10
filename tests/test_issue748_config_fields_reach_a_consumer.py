@@ -382,19 +382,26 @@ KNOWN_UNCONSUMED = {
     "training.llm_int8": "no issue needed: schema assertion alias",
     "training.quantize_ref_model": "#808 -- warns at load from v0.76, refused as of v0.77 "
                                    "(reference-model quantisation staging)",
-    "training.convergence_window": "#808 group B -- soup train reports it as not enforced "
+    "training.convergence_window": "#808 -- warns at load from v0.76, refused as of v0.77 "
                                    "(convergence-detector staging)",
-    "training.convergence_rel_tol": "#808 group B -- soup train reports it as not enforced "
+    "training.convergence_rel_tol": "#808 -- warns at load from v0.76, refused as of v0.77 "
                                     "(convergence-detector staging)",
-    "training.forgetting_eval_steps": "#799 -- catastrophic-forgetting probe staging",
+    "training.forgetting_eval_steps": "#808 -- warns at load from v0.76, refused as of v0.77 "
+                                      "(catastrophic-forgetting probe staging)",
     "training.forgetting_threshold": "#799 -- staged catastrophic-forgetting threshold; "
                                      "the same name in ship.py is unrelated",
-    "training.forgetting_benchmark": "#799 -- catastrophic-forgetting probe staging",
-    "training.forgetting_stop": "#799 -- catastrophic-forgetting probe staging",
-    "training.checkpoint_eval_steps": "#799 -- checkpoint-eval staging",
-    "training.checkpoint_eval_metric": "#799 -- checkpoint-eval staging",
-    "training.checkpoint_eval_tasks": "#799 -- checkpoint-eval staging",
-    "training.checkpoint_keep_top": "#799 -- checkpoint-eval staging",
+    "training.forgetting_benchmark": "#808 -- warns at load from v0.76, refused as of v0.77 "
+                                     "(catastrophic-forgetting probe staging)",
+    "training.forgetting_stop": "#808 -- warns at load from v0.76, refused as of v0.77 "
+                                "(catastrophic-forgetting probe staging)",
+    "training.checkpoint_eval_steps": "#808 -- warns at load from v0.76, refused as of v0.77 "
+                                      "(checkpoint-eval staging)",
+    "training.checkpoint_eval_metric": "#808 -- warns at load from v0.76, refused as of v0.77 "
+                                       "(checkpoint-eval staging)",
+    "training.checkpoint_eval_tasks": "#808 -- warns at load from v0.76, refused as of v0.77 "
+                                      "(checkpoint-eval staging)",
+    "training.checkpoint_keep_top": "#808 -- warns at load from v0.76, refused as of v0.77 "
+                                    "(checkpoint-eval staging)",
     "training.grace_codebook_size": "#808 -- warns at load from v0.76, refused as of v0.77 "
                                     "(GRACE codebook staging)",
     "training.grace_codebook_dim": "#808 -- warns at load from v0.76, refused as of v0.77 "

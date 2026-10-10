@@ -7,41 +7,26 @@ across the ACCEPT boundary: the larger the regression, the more confidently the
 command said "No significant difference". On ``latency`` and ``retry_rate``
 (lower is better) that made a real improvement look like no difference too.
 
-The fix is the symmetric two-point mixture: average the likelihood RATIOS for
-``+effect_size`` and ``-effect_size`` (in log space, with logsumexp). With a
-known variance each point ratio has expectation 1 under H0 at every step, and so
-does their average, which is why the ``log((1 - beta) / alpha)`` boundary keeps
-its meaning. Neither is exactly a martingale (the ``n_eff / (n_eff + 1)`` shrink
-moves the alternative with n), so the Type-I rate under peeking is measured, not
-derived. Averaging the log-ratios, or substituting ``|z|``, does not keep that
-expectation at 1; the peeking simulations below are what catch the ``|z|``
-shortcut.
-
-That argument needs a known variance, and ``soup ab`` estimates it from the rows.
-From a handful of rows the estimate is too noisy: without a burn-in, re-running
-after every pair would reject a true H0 up to 0.164 of the time at alpha 0.05. So
-no verdict is given until each arm has ``min_rows_per_arm(alpha)`` rows: 30 at
-alpha >= 0.05, 40 below (not calibrated below alpha 0.01). Each is the smallest
-burn-in that the sweep in benchmarks/gate-1227-ab-burn-in.md (effect_size / sigma
-0.1 to 5, runs followed to 1000 rows per arm) found to keep Type-I within alpha
-plus Monte-Carlo error at every ratio: worst 0.0512 at alpha 0.05, 0.0109 at
-alpha 0.01. The simulations here stop at 200 rows per arm to stay CI-sized.
+The #1227 fix was a symmetric two-point mixture with a plug-in variance and a
+burn-in. #1265 replaced that statistic with the normal-inverse-gamma mixture,
+whose prior on the standardised difference is symmetric too, so both signs of
+a difference are equal evidence; its own tests (the Bayes factor, Type-I under
+peeking, power) are in test_issue1265_ab_nig.py. What this file pins is the
+#1227 contract, whatever the statistic: a shift either way is rejected, the
+direction is read through the metric's polarity, and the CLI panel, table and
+webhook payload carry it.
 """
 
 from __future__ import annotations
 
-import inspect
 import json
 import math
 import re
-import statistics
-from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
 
 runner = CliRunner()
-_REPO_ROOT = Path(__file__).resolve().parents[1]
 
 # Rich colours per character on Linux CI, and wraps; compare on plain text.
 # Box-drawing characters go too, so a table row reads "direction worse" and a
@@ -55,8 +40,8 @@ def _plain(text: str) -> str:
 
 
 # The reproduction data from the issue, rows around 0.80, repeated to 40 rows per
-# arm: the issue's own 20 rows are now inside the burn-in (30 rows at alpha 0.05,
-# 40 below), so they would only ever give `continue`.
+# arm (the #1227 burn-in needed that many; since #1265 the first 5 set the prior
+# scale and the rest are tested).
 _JUDGE_CONTROL = [0.80, 0.82, 0.78, 0.81, 0.79] * 8
 _LATENCY_CONTROL = [1.20, 1.25, 1.18, 1.22, 1.21] * 8
 _RETRY_CONTROL = [0.20, 0.22, 0.18, 0.21, 0.19] * 8
@@ -72,8 +57,8 @@ def _step(metric, control, treatment, **kwargs):
     return msprt_step(MsprtConfig(metric=metric, **kwargs), control=control, treatment=treatment)
 
 
-def _upper(alpha=0.05, beta=0.20):
-    return math.log((1.0 - beta) / alpha)
+def _upper(alpha=0.05):
+    return math.log(1.0 / alpha)  # the reject boundary since #1265
 
 
 # ---------------------------------------------------------------------------
@@ -188,218 +173,6 @@ class TestNoDifference:
 
 
 # ---------------------------------------------------------------------------
-# Burn-in: no verdict until each arm has min_rows_per_arm(alpha) rows
-# ---------------------------------------------------------------------------
-
-
-def _judge_rows(count):
-    """``count`` judge_score rows around 0.80 (the issue's pattern, extended)."""
-    return ([0.80, 0.82, 0.78, 0.81, 0.79] * 20)[:count]
-
-
-def _min_rows(alpha=0.05):
-    from soup_cli.utils.ab_test import min_rows_per_arm
-
-    return min_rows_per_arm(alpha)
-
-
-class TestBurnIn:
-    @pytest.mark.parametrize(
-        ("alpha", "rows"),
-        [(0.5, 30), (0.10, 30), (0.05, 30), (0.0499, 40), (0.025, 40), (0.01, 40),
-         (0.0099, 40), (0.001, 40)],
-    )
-    def test_burn_in_table_is_the_calibrated_one(self, alpha, rows):
-        """alpha >= 0.05: 30 rows; 0.01 <= alpha < 0.05: 40; below 0.01: 40, uncalibrated.
-
-        Each is the smallest N in {20, 30, 40, 50, 60} whose Type-I rate under
-        peeking stays within alpha + 3 binomial SE at every effect_size / sigma
-        from 0.1 to 5, with runs followed to 1000 rows per arm and to 200
-        (benchmarks/gate-1227-ab-burn-in.md). Changing one means re-running
-        benchmarks/harness/ab_burn_in_sweep.py, not editing this table.
-        """
-        assert _min_rows(alpha) == rows
-
-    @pytest.mark.parametrize(
-        ("alpha", "calibrated"), [(0.5, True), (0.05, True), (0.01, True), (0.0099, False),
-                                  (0.001, False)],
-    )
-    def test_calibration_stops_below_alpha_0_01(self, alpha, calibrated):
-        from soup_cli.utils.ab_test import burn_in_is_calibrated
-
-        assert burn_in_is_calibrated(alpha) is calibrated
-
-    def test_calibrated_horizon_is_1000_rows_per_arm(self):
-        """The sweep followed runs to 1000 rows per arm; past that `soup ab` warns."""
-        from soup_cli.utils.ab_test import CALIBRATED_HORIZON_ROWS
-
-        assert CALIBRATED_HORIZON_ROWS == 1000
-
-    @pytest.mark.parametrize(
-        ("bad", "message"),
-        [
-            (0.0, "alpha must be in"),
-            (1.0, "alpha must be in"),
-            (float("nan"), "alpha must be finite"),
-            (True, "alpha must be a number, not bool"),
-            ("0.05", "alpha must be a number"),
-        ],
-    )
-    def test_burn_in_refuses_an_invalid_alpha(self, bad, message):
-        from soup_cli.utils.ab_test import burn_in_is_calibrated, min_rows_per_arm
-
-        with pytest.raises((TypeError, ValueError), match=message):
-            min_rows_per_arm(bad)
-        with pytest.raises((TypeError, ValueError), match=message):
-            burn_in_is_calibrated(bad)
-
-    @pytest.mark.parametrize("shift", [-0.30, 0.30])
-    def test_alpha_0_01_needs_40_rows(self, shift):
-        below = _judge_rows(_min_rows(0.01) - 1)
-        verdict = _step("judge_score", below, _shifted(below, shift), alpha=0.01)
-        assert verdict.decision == "continue", verdict
-        assert verdict.log_likelihood_ratio >= _upper(alpha=0.01)
-
-        at = _judge_rows(_min_rows(0.01))
-        verdict = _step("judge_score", at, _shifted(at, shift), alpha=0.01)
-        assert verdict.decision == "reject_h0", verdict
-
-    @pytest.mark.parametrize("shift", [-0.30, 0.30])
-    def test_no_rejection_below_the_burn_in(self, shift):
-        control = _judge_rows(_min_rows() - 1)
-        verdict = _step("judge_score", control, _shifted(control, shift))
-        assert verdict.decision == "continue", verdict
-        assert verdict.direction is None
-        # The evidence is computed and reported; only the verdict is withheld.
-        assert verdict.log_likelihood_ratio >= _upper()
-
-    def test_no_acceptance_below_the_burn_in(self):
-        control = _judge_rows(_min_rows() - 1)
-        verdict = _step("judge_score", control, list(control))
-        assert verdict.decision == "continue", verdict
-        assert verdict.log_likelihood_ratio <= math.log(0.20 / 0.95)
-
-    @pytest.mark.parametrize(
-        ("shift", "decision", "direction"),
-        [(-0.30, "reject_h0", "worse"), (0.0, "accept_h0", None), (0.30, "reject_h0", "better")],
-    )
-    def test_verdicts_resume_at_the_burn_in(self, shift, decision, direction):
-        control = _judge_rows(_min_rows())
-        verdict = _step("judge_score", control, _shifted(control, shift))
-        assert verdict.decision == decision, verdict
-        assert verdict.direction == direction
-
-    @pytest.mark.parametrize(("short_control", "short_treatment"), [(True, False), (False, True)])
-    def test_both_arms_must_reach_the_burn_in(self, short_control, short_treatment):
-        full = _judge_rows(_min_rows())
-        short = full[:-1]
-        control = short if short_control else full
-        treatment = _shifted(short if short_treatment else full, -0.30)
-        verdict = _step("judge_score", control, treatment)
-        assert verdict.decision == "continue", verdict
-        assert verdict.log_likelihood_ratio >= _upper()
-
-
-class TestTheBurnInTextFollowsTheTable:
-    """The `--alpha` help and two docs pages state the burn-in in words.
-
-    Nothing else ties that text to ``BURN_IN_ROWS_BY_ALPHA``: change a value there (after
-    re-running the sweep) and these fail until the help and the docs say it too.
-    """
-
-    @staticmethod
-    def _tiers():
-        from soup_cli.utils.ab_test import BURN_IN_ROWS_BY_ALPHA, min_rows_per_arm
-
-        # The text names two calibrated tiers, and one "N below" covers both the lower tier
-        # and the uncalibrated range, so it is right only while those share a value.
-        assert len(BURN_IN_ROWS_BY_ALPHA) == 2, BURN_IN_ROWS_BY_ALPHA
-        (high_alpha, high_rows), (low_alpha, low_rows) = BURN_IN_ROWS_BY_ALPHA
-        assert min_rows_per_arm(low_alpha / 2) == low_rows
-        return f"{high_alpha:g}", high_rows, f"{low_alpha:g}", low_rows
-
-    def test_the_alpha_help_states_the_table(self):
-        from soup_cli.commands.ab import ab
-
-        high_alpha, high_rows, low_alpha, low_rows = self._tiers()
-        help_text = " ".join(inspect.signature(ab).parameters["alpha"].default.help.split())
-        expected = (
-            f"no verdict before {high_rows} rows per arm at {high_alpha} and above, "
-            f"{low_rows} below (not calibrated below {low_alpha})"
-        )
-        assert expected in help_text, help_text
-
-    def test_docs_commands_md_states_the_table(self):
-        high_alpha, high_rows, _, low_rows = self._tiers()
-        text = (_REPO_ROOT / "docs" / "commands.md").read_text(encoding="utf-8")
-        expected = (
-            f"continue until {high_rows} rows per arm, {low_rows} when --alpha < {high_alpha}"
-        )
-        assert expected in text
-
-    def test_docs_evaluation_md_table_states_the_table(self):
-        high_alpha, high_rows, low_alpha, low_rows = self._tiers()
-        text = (_REPO_ROOT / "docs" / "evaluation.md").read_text(encoding="utf-8")
-        for row in (
-            f"| {high_alpha} and above | {high_rows} |",
-            f"| from {low_alpha} to below {high_alpha} | {low_rows} |",
-            f"| below {low_alpha} | {low_rows}, **not calibrated** |",
-        ):
-            assert row in text, row
-
-
-# ---------------------------------------------------------------------------
-# The statistic itself: log of the AVERAGE of the two likelihood ratios
-# ---------------------------------------------------------------------------
-
-
-def _documented_point_llrs(control, treatment, effect_size):
-    """Wald's point-alternative log-ratios for +effect_size and -effect_size.
-
-    Written from the formula in the module docstring, not from the code.
-    """
-    n_c, n_t = len(control), len(treatment)
-    pooled = ((n_c - 1) * statistics.variance(control)
-              + (n_t - 1) * statistics.variance(treatment)) / (n_c + n_t - 2)
-    se = math.sqrt(pooled * (1.0 / n_c + 1.0 / n_t))
-    z = (statistics.fmean(treatment) - statistics.fmean(control)) / se
-    mu = effect_size / se
-    n_eff = n_c * n_t / (n_c + n_t)
-    ratio = n_eff / (n_eff + 1.0)
-    shift = z * mu * math.sqrt(ratio)
-    drift = 0.5 * mu**2 * ratio
-    return shift - drift, -shift - drift
-
-
-class TestStatistic:
-    # Moderate evidence, so exp() of either point log-ratio is representable.
-    _CONTROL = [1.00, 1.30, 0.80, 1.10, 0.90, 1.20, 0.95, 1.05]
-    _TREATMENT = [1.10, 1.45, 0.85, 1.25, 1.00, 1.30, 1.00, 1.20]
-
-    def test_llr_is_log_of_the_average_likelihood_ratio(self):
-        plus, minus = _documented_point_llrs(self._CONTROL, self._TREATMENT, 0.1)
-        expected = math.log((math.exp(plus) + math.exp(minus)) / 2.0)
-        # Discriminates the tempting wrong answers at this operating point:
-        assert abs(expected - max(plus, minus)) > 0.1  # |z| / max of the two
-        assert abs(expected - (plus + minus) / 2.0) > 0.1  # mean of the log-ratios
-        assert abs(expected - plus) > 0.1  # the old one-sided statistic
-
-        verdict = _step("judge_score", self._CONTROL, self._TREATMENT, effect_size=0.1)
-        assert verdict.log_likelihood_ratio == pytest.approx(expected, rel=1e-9, abs=1e-12)
-
-    def test_huge_evidence_stays_finite(self):
-        """exp(1142) overflows; the average must be taken in log space."""
-        verdict = _step("judge_score", _JUDGE_CONTROL, _shifted(_JUDGE_CONTROL, -0.30))
-        plus, minus = _documented_point_llrs(
-            _JUDGE_CONTROL, _shifted(_JUDGE_CONTROL, -0.30), 0.1
-        )
-        assert max(plus, minus) > 710  # math.exp overflows above ~709.78
-        assert verdict.log_likelihood_ratio == pytest.approx(
-            max(plus, minus) - math.log(2.0), rel=1e-9
-        )
-
-
-# ---------------------------------------------------------------------------
 # MsprtVerdict: the direction field
 # ---------------------------------------------------------------------------
 
@@ -495,12 +268,11 @@ class TestCli:
         out = _plain(result.output)
         assert "reject_h0" in out
         assert "direction worse" in out
-        assert "burn_in 30 rows per arm (alpha 0.05)" in out
+        assert "prior_scale first 5 rows per arm" in out
         assert "rollback" in out.lower()
         assert "No significant difference" not in out
         assert "promote" not in out.lower()
-        assert "not calibrated" not in out
-        assert "calibrated up to" not in out
+        assert "Warning" not in out
 
         assert len(captured) == 1
         payload = captured[0]["payload"]
@@ -551,8 +323,8 @@ class TestCli:
         assert "direction" in payload
         assert payload["direction"] is None
 
-    def test_burn_in_file_says_why_there_is_no_verdict(self, tmp_path, monkeypatch):
-        control = _judge_rows(5)
+    def test_too_few_rows_file_says_why_there_is_no_verdict(self, tmp_path, monkeypatch):
+        control = _JUDGE_CONTROL[:6]  # the 5 prior-scale rows and 1 more: 2 are needed
         result, captured = _run_cli(
             tmp_path, monkeypatch, "judge_score", control, _shifted(control, -0.30),
         )
@@ -560,316 +332,7 @@ class TestCli:
         out = _plain(result.output)
         assert "decision continue" in out
         assert "direction n/a" in out
-        assert "Burn-in: no verdict before 30 rows per arm at alpha 0.05" in out
-        assert "control has 5, treatment 5" in out
+        assert "Not enough rows yet: the first 5 rows of each arm set the scale" in out
+        assert "control has 6, treatment 6" in out
         assert "rollback" not in out.lower()
         assert captured == []  # a `continue` never pages anyone
-
-    def test_alpha_0_01_states_its_40_row_burn_in(self, tmp_path, monkeypatch):
-        control = _judge_rows(30)  # enough at alpha 0.05, short of alpha 0.01's 40 rows
-        result, captured = _run_cli(
-            tmp_path, monkeypatch, "judge_score", control, _shifted(control, -0.30),
-            extra=("--alpha", "0.01"),
-        )
-        assert result.exit_code == 0, (result.output, repr(result.exception))
-        out = _plain(result.output)
-        assert "decision continue" in out
-        assert "burn_in 40 rows per arm (alpha 0.01)" in out
-        assert "Burn-in: no verdict before 40 rows per arm at alpha 0.01" in out
-        assert "control has 30, treatment 30" in out
-        assert "not calibrated" not in out
-        assert captured == []
-
-    def test_alpha_below_0_01_warns_that_it_is_not_calibrated(self, tmp_path, monkeypatch):
-        control = _judge_rows(40)
-        result, captured = _run_cli(
-            tmp_path, monkeypatch, "judge_score", control, _shifted(control, -0.30),
-            extra=("--alpha", "0.005"),
-        )
-        assert result.exit_code == 0, (result.output, repr(result.exception))
-        out = _plain(result.output)
-        assert (
-            "Warning: Type-I control under peeking is not calibrated below alpha 0.01" in out
-        )
-        assert "At --alpha 0.005 the burn-in is 40 rows per arm" in out
-        assert "burn_in 40 rows per arm (alpha 0.005)" in out
-        # The warning qualifies the verdict; it does not suppress it.
-        assert "direction worse" in out
-        assert captured[0]["payload"]["direction"] == "worse"
-
-    @pytest.mark.parametrize(
-        ("n_control", "n_treatment", "warned"),
-        [(1000, 1000, False), (1001, 1001, True), (1001, 40, True)],
-    )
-    def test_past_1000_rows_per_arm_warns_that_the_calibration_ends(
-        self, tmp_path, monkeypatch, n_control, n_treatment, warned
-    ):
-        pattern = [0.80, 0.82, 0.78, 0.81, 0.79] * 201
-        result, captured = _run_cli(
-            tmp_path, monkeypatch, "judge_score",
-            pattern[:n_control], _shifted(pattern[:n_treatment], -0.30),
-        )
-        assert result.exit_code == 0, (result.output, repr(result.exception))
-        out = _plain(result.output)
-        warning = "Warning: Type-I control under peeking is calibrated up to 1000 rows per arm"
-        assert (warning in out) is warned, out
-        if warned:
-            assert f"This input has {max(n_control, n_treatment)} rows in an arm" in out
-        # The warning qualifies the verdict; it does not suppress it.
-        assert "direction worse" in out
-        assert captured[0]["payload"]["direction"] == "worse"
-
-
-# ---------------------------------------------------------------------------
-# Type-I error under peeking (seeded Monte-Carlo, vectorised with numpy)
-# ---------------------------------------------------------------------------
-#
-# The operator re-runs `soup ab` after every new (control, treatment) pair,
-# n = 2..200 rows per arm, and stops at the first terminal verdict. (The
-# calibration in benchmarks/gate-1227-ab-burn-in.md follows runs to 1000 rows;
-# these stop at 200 to stay CI-sized, with the same burn-in.) Calling
-# `msprt_step` on the raw rows at every peek is O(n) per call (about 45 s for
-# a few thousand runs), so the rows' running means and Bessel-corrected
-# variances are computed with numpy and handed to `_verdict_from_summary`,
-# the decision code `msprt_step` itself delegates to. Two checks tie that back
-# to `msprt_step`: the anchor at the end of the first simulation compares
-# single peeks, and `test_msprt_step_replays_the_simulated_runs` replays whole
-# runs through it, one peek at a time.
-
-_REPS = 3000
-_ALPHA = 0.05
-# Monte-Carlo tolerance: a one-sided 3-sigma binomial allowance on the rate,
-# 3 * sqrt(0.05 * 0.95 / 3000) = 0.0119, so the bound is 0.0619.
-_MC_TOLERANCE = 3.0 * math.sqrt(_ALPHA * (1.0 - _ALPHA) / _REPS)
-
-
-def _peek_until_decided(np, config, *, sigma, reps, seed, n_max=200, known_variance=False):
-    """Peek after every pair; return the terminal verdict (or None) per run.
-
-    Also returns the raw rows and the running summaries that were fed to the
-    decision code, so a caller can check them against ``msprt_step``.
-    """
-    from soup_cli.utils.ab_test import _verdict_from_summary
-
-    rng = np.random.default_rng(seed)
-    # H0: both arms from the same distribution. The statistic is
-    # location-invariant, so the common mean is 0 (no cancellation in the
-    # one-pass variance below).
-    control = rng.normal(0.0, sigma, size=(reps, n_max))
-    treatment = rng.normal(0.0, sigma, size=(reps, n_max))
-    rows = np.arange(1, n_max + 1, dtype=float)
-    mean_c = np.cumsum(control, axis=1) / rows
-    mean_t = np.cumsum(treatment, axis=1) / rows
-    if known_variance:
-        pooled = np.full_like(mean_c, sigma * sigma)
-    else:
-        dof = np.maximum(rows - 1.0, 1.0)
-        var_c = (np.cumsum(control * control, axis=1) - rows * mean_c * mean_c) / dof
-        var_t = (np.cumsum(treatment * treatment, axis=1) - rows * mean_t * mean_t) / dof
-        pooled = (var_c + var_t) / 2.0  # equal arms: the Bessel-pooled variance
-
-    mean_c_rows, mean_t_rows, pooled_rows = mean_c.tolist(), mean_t.tolist(), pooled.tolist()
-    outcomes = []
-    for row_c, row_t, row_v in zip(mean_c_rows, mean_t_rows, pooled_rows):
-        verdict = None
-        for idx in range(1, n_max):  # idx + 1 = 2..n_max rows per arm
-            candidate = _verdict_from_summary(
-                config,
-                n_control=idx + 1,
-                n_treatment=idx + 1,
-                mean_control=row_c[idx],
-                mean_treatment=row_t[idx],
-                pooled_variance=row_v[idx],
-            )
-            if candidate.decision != "continue":
-                verdict = candidate
-                break
-        outcomes.append(verdict)
-    return {
-        "outcomes": outcomes,
-        "control": control,
-        "treatment": treatment,
-        "summaries": (mean_c_rows, mean_t_rows, pooled_rows),
-    }
-
-
-def _rejection_rate(outcomes):
-    return sum(1 for v in outcomes if v is not None and v.decision == "reject_h0") / len(outcomes)
-
-
-class TestTypeOneErrorUnderPeeking:
-    def test_rejects_at_most_alpha_when_the_effect_is_small_against_noise(self):
-        """Acceptance: H0, a peek after every pair, rejection rate <= alpha.
-
-        effect_size / sigma = 0.25: the effect you look for is small next to the
-        row-to-row noise, the usual A/B regime. Measured over 100,000 runs with
-        the 30-row burn-in and a 200-row horizon (benchmarks/gate-1227-ab-burn-in.md):
-        0.0358 for the mixture, 0.0850 for a |z| substitution, 0.0412 for the old
-        one-sided test. 3000 runs put the bound at 0.0619.
-        """
-        np = pytest.importorskip("numpy")
-        from soup_cli.utils.ab_test import MsprtConfig, _verdict_from_summary, msprt_step
-
-        config = MsprtConfig(metric="latency", alpha=_ALPHA, beta=0.20, effect_size=0.1)
-        sim = _peek_until_decided(np, config, sigma=0.1 / 0.25, reps=_REPS, seed=1227)
-        outcomes = sim["outcomes"]
-        rate = _rejection_rate(outcomes)
-        assert rate <= _ALPHA + _MC_TOLERANCE, (
-            f"Type-I rate {rate:.4f} under peeking exceeds alpha {_ALPHA} "
-            f"+ tolerance {_MC_TOLERANCE:.4f}"
-        )
-
-        # Two-sided under H0: false rejections fall on both sides.
-        directions = [v.direction for v in outcomes if v is not None and v.decision == "reject_h0"]
-        assert len(directions) >= 50, directions
-        for side in ("better", "worse"):
-            share = directions.count(side) / len(directions)
-            assert 0.25 <= share <= 0.75, (side, share, len(directions))
-
-        # Anchor: the summaries the simulation decided on give msprt_step's own
-        # verdict on the raw rows.
-        mean_c_rows, mean_t_rows, pooled_rows = sim["summaries"]
-        rng = np.random.default_rng(7)
-        for run, idx in zip(rng.integers(0, _REPS, 150).tolist(),
-                            rng.integers(1, 200, 150).tolist()):
-            from_rows = msprt_step(
-                config,
-                control=sim["control"][run, : idx + 1].tolist(),
-                treatment=sim["treatment"][run, : idx + 1].tolist(),
-            )
-            from_summary = _verdict_from_summary(
-                config,
-                n_control=idx + 1,
-                n_treatment=idx + 1,
-                mean_control=mean_c_rows[run][idx],
-                mean_treatment=mean_t_rows[run][idx],
-                pooled_variance=pooled_rows[run][idx],
-            )
-            assert from_rows.decision == from_summary.decision, (run, idx)
-            assert from_rows.direction == from_summary.direction, (run, idx)
-            assert from_rows.log_likelihood_ratio == pytest.approx(
-                from_summary.log_likelihood_ratio, rel=1e-9, abs=1e-9
-            ), (run, idx)
-
-    def test_mixture_keeps_the_wald_boundary_with_a_known_variance(self):
-        """The martingale argument itself, with the variance estimate taken out.
-
-        effect_size / sigma = 0.4. Measured over 100,000 runs with the true
-        variance, the 30-row burn-in and a 200-row horizon: 0.0406 for the
-        mixture, 0.0862 for |z|. 3000 runs put the bound at 0.0619.
-        """
-        np = pytest.importorskip("numpy")
-        from soup_cli.utils.ab_test import MsprtConfig
-
-        config = MsprtConfig(metric="judge_score", alpha=_ALPHA, beta=0.20, effect_size=0.1)
-        sim = _peek_until_decided(
-            np, config, sigma=0.1 / 0.4, reps=_REPS, seed=2027, known_variance=True
-        )
-        rate = _rejection_rate(sim["outcomes"])
-        assert rate <= _ALPHA + _MC_TOLERANCE, (rate, _ALPHA + _MC_TOLERANCE)
-
-    @pytest.mark.parametrize(
-        ("ratio", "seed"),
-        [(0.35, 2028), (1.0, 2029), (2.0, 2030)],
-    )
-    def test_burn_in_keeps_type_one_error_within_alpha_with_few_rows(self, ratio, seed):
-        """The small-sample case: the variance estimated from as few as 2 rows.
-
-        Measured over 100,000 runs with a 200-row horizon, Type-I with the
-        30-row burn-in / without any: 0.0492 / 0.1066 at effect_size / sigma
-        0.35 (the worst ratio for the burn-in at this horizon), 0.0114 / 0.1637
-        at 1.0, 0.0001 / 0.1349 at 2.0. 2000 runs put the bound at 0.0646, so
-        removing the burn-in fails every case, and no verdict may come before 30
-        rows per arm, so the old 20-row burn-in fails too.
-        """
-        np = pytest.importorskip("numpy")
-        from soup_cli.utils.ab_test import MsprtConfig
-
-        reps = 2000
-        tolerance = 3.0 * math.sqrt(_ALPHA * (1.0 - _ALPHA) / reps)
-        config = MsprtConfig(metric="judge_score", alpha=_ALPHA, beta=0.20, effect_size=0.1)
-        sim = _peek_until_decided(np, config, sigma=0.1 / ratio, reps=reps, seed=seed)
-        rate = _rejection_rate(sim["outcomes"])
-        assert rate <= _ALPHA + tolerance, (
-            f"Type-I rate {rate:.4f} at effect_size / sigma {ratio} exceeds alpha "
-            f"{_ALPHA} + tolerance {tolerance:.4f}"
-        )
-        _assert_no_verdict_before(sim["outcomes"], 30)
-
-    @pytest.mark.parametrize(
-        ("ratio", "seed"),
-        [(0.45, 2031), (0.7, 2032)],
-    )
-    def test_alpha_0_01_burn_in_keeps_type_one_error_within_alpha(self, ratio, seed):
-        """alpha 0.01 uses the 40-row burn-in.
-
-        Measured over 100,000 runs with a 200-row horizon, Type-I at alpha 0.01
-        with 40 / 20 rows: 0.01045 / 0.01164 at effect_size / sigma 0.45 (the
-        worst ratio for 40 rows at this horizon) and 0.00748 / 0.01224 at 0.7
-        (the worst for 20 rows). At CI size the rate alone cannot tell 40 rows
-        from 20: 2000 runs put the bound at 0.0167. So the test also checks
-        where the verdicts start, never before 40 rows per arm. Forcing 20 rows
-        at alpha 0.01 fails that check.
-        """
-        np = pytest.importorskip("numpy")
-        from soup_cli.utils.ab_test import MsprtConfig
-
-        alpha, reps = 0.01, 2000
-        tolerance = 3.0 * math.sqrt(alpha * (1.0 - alpha) / reps)
-        config = MsprtConfig(metric="judge_score", alpha=alpha, beta=0.20, effect_size=0.1)
-        sim = _peek_until_decided(np, config, sigma=0.1 / ratio, reps=reps, seed=seed)
-        _assert_no_verdict_before(sim["outcomes"], 40)
-        rate = _rejection_rate(sim["outcomes"])
-        assert rate <= alpha + tolerance, (
-            f"Type-I rate {rate:.4f} at effect_size / sigma {ratio} exceeds alpha "
-            f"{alpha} + tolerance {tolerance:.4f}"
-        )
-
-    def test_msprt_step_replays_the_simulated_runs(self):
-        """Whole runs through the real `msprt_step` give the simulation's first verdicts.
-
-        The simulations drive `_verdict_from_summary`. This replays 30 seeded runs
-        of the ratio-0.4 simulation through `msprt_step` on the raw rows, one
-        peek at a time, and requires the same first verdict: decision, direction
-        and row count. A decision rule living in `msprt_step` alone (an accept
-        turned into continue between 21 and 59 rows, say) changes the stopping
-        behaviour the Type-I rate is computed from, and only this sees it.
-        """
-        np = pytest.importorskip("numpy")
-        from soup_cli.utils.ab_test import MsprtConfig, msprt_step
-
-        config = MsprtConfig(metric="judge_score", alpha=_ALPHA, beta=0.20, effect_size=0.1)
-        sim = _peek_until_decided(np, config, sigma=0.1 / 0.4, reps=400, seed=2033)
-        picked = np.random.default_rng(3).choice(400, 30, replace=False).tolist()
-        expected = [sim["outcomes"][run] for run in picked]
-        # Not vacuous: most replayed runs decide, and some decide inside the window
-        # between the burn-in and 60 rows where such a rule would act.
-        assert sum(v is not None for v in expected) >= 25
-        assert sum(v is not None and v.n_control < 60 for v in expected) >= 10
-
-        for run, want in zip(picked, expected):
-            replayed = None
-            for idx in range(1, 200):  # idx + 1 = 2..200 rows per arm
-                verdict = msprt_step(
-                    config,
-                    control=sim["control"][run, : idx + 1].tolist(),
-                    treatment=sim["treatment"][run, : idx + 1].tolist(),
-                )
-                if verdict.decision != "continue":
-                    replayed = verdict
-                    break
-            assert _first_verdict_key(replayed) == _first_verdict_key(want), run
-
-
-def _first_verdict_key(verdict):
-    if verdict is None:
-        return None
-    return verdict.decision, verdict.direction, verdict.n_control
-
-
-def _assert_no_verdict_before(outcomes, rows):
-    """Every run's first verdict came with at least ``rows`` rows per arm."""
-    decided = [v for v in outcomes if v is not None]
-    assert decided, "no run reached a verdict"
-    earliest = min(v.n_control for v in decided)
-    assert earliest >= rows, f"a run was decided at {earliest} rows per arm (burn-in {rows})"

@@ -175,16 +175,25 @@ format-v2 metadata records a `local-sha256:` identity derived from the
 Transformers selects (or its index and referenced shards). The identity uses
 relative file names and content, so moving the same base keeps resume valid;
 changing a selected file refuses resume. Soup checks the identity before and
-after loading the model. The sidecar and `config.json["soup_quest"]` contain
-the identity, not the source directory.
+after loading the model. A local base whose `config.json` declares another
+layer count or an incompatible width is refused before any file is hashed; a
+value that is missing or not an integer is left to the post-load gate. The
+sidecar and `config.json["soup_quest"]` contain the identity, not the source
+directory.
 Local models or tokenizers using custom `auto_map` code are refused by this
 fingerprint route because code loaded from elsewhere would not be covered.
 Local tokenizers declaring `fast_tokenizer_files` are also refused because
 their versioned tokenizer JSON files are not covered by this fingerprint.
 
+To continue training from a local QuEST artifact, set `base` to its directory
+and keep `training.quantization_aware: quest`. Soup restores the artifact's
+clipping table and route instead of recalibrating on the new training rows.
+The sidecar must match the declaration in `config.json`; missing or inconsistent
+metadata is refused. This preserves the inherited metadata format and provenance.
+
 Format-v1 sidecars remain readable. Since they did not record a content hash,
-their first resume still compares the original base path string; a successful
-resume writes v2 metadata for subsequent checkpoints. A v1 artifact cannot
+resuming from the original base still compares its path string; that route
+writes v2 metadata for subsequent checkpoints. A v1 artifact cannot
 prove that a relocated base is the same one, and existing v1 sidecars may
 already disclose the old local path.
 Because generic Transformers cannot infer fake-quant execution from the master
@@ -208,6 +217,14 @@ measured a 0.086344 nat/target gap to fixed FP, with a paired 95% interval of
 - not evidence of mixed-route training quality or cross-model generality;
 - not upstream QuEST numerical parity;
 - not packed INT4, and not a speed or memory-efficiency claim.
+
+The [post-fit development record](../benchmarks/quest-674-postfit-development-results.md)
+preserves a selected research continuation with a Q/strongest-FP response-NLL
+ratio of 1.038367 and paired gap of +0.078519 nat/target on the same, now
+selection-spent, 704-row panel. It uses a research CE/KL adapter around native
+SFT; this objective is not exposed as a public QuEST CLI recipe. The gap's paired
+95% interval remains above zero, so `training_quality_validated` stays false.
+The record also retains unsuccessful follow-ups and checkpoint hash bindings.
 
 The implementation keeps FP32 masters. The Hadamard and fake-quant grid arithmetic
 run under the trainer's CUDA autocast: BF16 by default on the Ampere-or-newer GPUs
@@ -350,7 +367,7 @@ training:
 | `hqq:Nbit` | 1, 2, 3, 4, 5, 6, 8 | Wide bit range; compose with LoRA. | hqq |
 | `aqlm` | 2 | Extreme compression. | aqlm |
 | `eetq` | 8 | Fast 8-bit kernel for SM75+. | eetq |
-| `mxfp4` | 4 | Newer 4-bit type with better activation distribution. | bitsandbytes ≥ 0.45 |
+| `mxfp4` | 4 (stored) | Train LoRA on top of an MXFP4 pre-quantized checkpoint (for example GPT-OSS). Loaded with `Mxfp4Config(dequantize=True)`, so it trains in bf16: transformers does not train MXFP4 weights as loaded. Budget memory for the bf16 model, an estimated 2 bytes per parameter (roughly 42 GB for a 20B base). The `soup train` VRAM pre-flight checks an `mxfp4` run against that estimate, as it does a `quantization: none` run, and `--allow-oom-attempt` launches one it refuses. | — |
 | `fp8` | — | Train fp16/bf16 on top of FP8-released checkpoints. | transformers ≥ 4.45 |
 
 **Compatibility matrix.** `soup train` runs `check_quant_distributed_compat()` at
@@ -425,6 +442,15 @@ soup train --config soup.yaml
 
 **How it works.** LoRA adapters + their gradients + optimizer state stay resident in VRAM (they are small). The frozen base lives in CPU RAM, page-locked when the machine allows it, and is streamed: each decoder layer is copied into one of two pre-allocated VRAM buffers on a dedicated CUDA stream while the previous layer is still computing, so the load overlaps the compute. Vocabulary-sized `embed_tokens` and an untied `lm_head` use one additional shared slot: the embedding is loaded for the model input, then the same allocation is reused for the output head, whose copy is issued right after the embedding lookup (`StreamPrefetcher.head_prefetch_layer`, default `0`) rather than at the last decoder layer, and the embedding is reloaded into it at the tail of that step's backward pass so the copy overlaps the remaining compute instead of blocking the next step's first lookup. Each decoder layer is read **twice** per step — once in the forward pass and once when the backward pass recomputes it — because `dL/dx = Wᵀ · dL/dy` needs the weights to reach the layers below. That is physics, not an implementation detail, and it is why streaming costs time.
 
+For streamed NF4 on CUDA, Soup follows bitsandbytes' own 4-bit dispatch. When
+bitsandbytes selects its custom fused GEMM, Soup executes that GEMM through a
+checkpoint-visible autograd Function so pooled packed weights cannot outlive their
+slot ownership. When bitsandbytes selects dequantisation plus `F.linear` at larger
+training shapes, Soup keeps that path and avoids adding a third dequantisation to a
+checkpointed step. The fused arm reduces saved-weight VRAM but its backward still
+dequantises because bitsandbytes exposes no transposed 4-bit GEMM; it is therefore a
+bounded memory/time trade, not a claim that #842's full kernel ceiling is complete.
+
 **Qwen3.8-Flash-Next / Qwen4-Exp PLE.** The frozen PLE N-gram table is not a
 decoder-layer weight for storage purposes: putting it in the PLE layer's shard
 would make the shared layer buffer as large as the whole table. Soup keeps the
@@ -488,11 +514,13 @@ The tradeoff: **1.43× slower than resident training**, measured at 0.5B — the
 Quantising the streamed base to NF4 makes the RAM store ~4× smaller. That matters for two reasons, and the second is the bigger one:
 
 1. A bigger model fits in host RAM at all — an 8B base is ~3.6 GB of NF4 instead of ~16 GB of bf16.
-2. **The store fits under the machine's page-locked memory ceiling.** Pinned host memory is what lets `copy_(non_blocking=True)` actually overlap with compute. The reference box topped out at ~7.1 GB of page-locked memory, so a 5.55 GB bf16 3B base fell back to pageable and lost overlap; the 1.43 GB NF4 store pins, and utilisation goes from 79.3% to 100%. **That ceiling was mostly Soup's own accounting, not the box's** (#901): torch's caching host allocator rounds every pinned request *up to the next power of two*, and the store used to be pinned one tensor at a time, so a store cost 1.7–1.9× its size in page-locked memory (measured: 6.82 GB of Qwen2.5-14B NF4 decoder tensors cost 11.83 GB). The store is now pinned in a few power-of-two arenas with every tensor a view — the 9.93 GB 14B NF4 store page-locks as exactly 10 GiB — and the ready line prints the real figure (`9.93 GB pinned RAM store (10.74 GB page-locked)`).
+2. **The store fits under the machine's page-locked memory ceiling.** Pinned host memory is what lets `copy_(non_blocking=True)` actually overlap with compute. The reference box topped out at ~7.1 GB of page-locked memory, so a 5.55 GB bf16 3B base fell back to pageable and lost overlap; the 1.43 GB NF4 store pins, and utilisation goes from 79.3% to 100%. **That ceiling was mostly Soup's own accounting, not the box's** (#901): torch's caching host allocator rounds every pinned request *up to the next power of two*, and the store used to be pinned one tensor at a time, so a store cost 1.7–1.9× its size in page-locked memory (measured: 6.82 GB of Qwen2.5-14B NF4 decoder tensors cost 11.83 GB). The store is now pinned in a few power-of-two arenas with every tensor a view — the 9.93 GB 14B NF4 store page-locks as exactly 10 GiB — and the ready line prints the real figure (`9.93 GB pinned RAM store (10.74 GB page-locked)`). Since #1702 the arenas are filled largest tensor first whenever that page-locks fewer bytes: a 6.07 GB Qwen3-8B NF4 store, whose two 1.24 GB vocabulary matrices each used to open a 2 GiB arena of their own behind the decoder, page-locks 6 GiB where it took 8 GiB. A store that gains nothing is laid out exactly as before.
 
 The base is quantised **once, offline**, one tensor at a time, and cached. The shard cache is keyed to the quantisation, the dtype, the quantisation device and a fingerprint of the source checkpoint, so switching `none` ⇄ `4bit` — or retraining a base in place — re-shards rather than silently streaming the wrong bytes.
 
 Correctness is not a tradeoff here either: a streamed NF4 run is **bit-exact** against a *resident* NF4 run (the same quantised bytes through the same bitsandbytes kernels), and that is a regression test, not a one-off measurement.
+
+**Scope of that comparison.** The resident control is a plain NF4 model *without* PEFT's `prepare_model_for_kbit_training`. The default resident 4-bit/8-bit SFT path calls it (`trainer/sft.py`), and it casts every non-quantised parameter to float32 — `embed_tokens`, the norms and an untied `lm_head` (checked on `trl-internal-testing/tiny-Qwen2ForCausalLM-2.5`: all bfloat16 before, all float32 after). Streaming keeps those tensors in the store dtype (bf16 on Ampere and newer, fp16 before), so a default resident run and a streamed run start from a different numerical setup even with identical quantised blocks. One contributor-reported case (`Qwen/Qwen3-8B` at `b968826d`, RTX 4070 SUPER, bitsandbytes 0.50.2, transformers 5.17.0, peft 0.21.1, torch 2.14.0+cu126; not part of the benchmark record), with an NF4 Qwen3-8B, one 73-token text and a forward pass at step 0: the resident control without the upcast equals streaming bit for bit, while the default resident path differs (max |Δlogit| 0.52, mean 0.054). It is one forward on one text: it says nothing about backward, resume or the whole training trajectory, and the LoRA `A` initialisation also differs by construction (streaming materialises the adapters from a seeded CPU generator, `materialize_meta_adapters`; the resident path uses PEFT's own initialisation from the global RNG).
 
 **Measured numbers (RTX 3050 Laptop 4 GB, Windows 11, LoRA, batch 1, 50 steps after 10 warmup):**
 
@@ -509,7 +537,7 @@ Correctness is not a tradeoff here either: a streamed NF4 run is **bit-exact** a
 
 The 3B NF4-vs-bf16 rows differ by 1.85×, but attribute that to **pinning, not arithmetic** — see point 2 above. The two rows also come from different sessions, and this card's boost clock varies ~13% between sessions, so treat the factor as indicative and the mechanism as the claim.
 
-The 3.32 GB 8B row above predates large-layer streaming: its untied, unquantised `embed_tokens` + `lm_head` both stayed resident and occupied 2.10 GB. Current code writes them as separate large-layer shards and reuses one device slot sized to the larger matrix, so an equally shaped untied pair should reclaim one matrix while a tied model keeps the same one-matrix requirement. CPU CI pins bit-exact logits for both controls. The updated CUDA peak remains to be measured on the reference RTX 3050; the historical 3.32 GB figure is not relabelled as a new measurement.
+The 3.32 GB 8B row above predates large-layer streaming: its untied, unquantised `embed_tokens` + `lm_head` both stayed resident and occupied 2.10 GB. Current code writes them as separate large-layer shards and reuses one device slot sized to the larger matrix, so an equally shaped untied pair should reclaim one matrix while a tied model keeps the same one-matrix requirement. Under `dpo` and `kto` that saving is spent again: the output head's forward keeps a private copy of the matrix for its backward every step (about 1.05 GB for Llama-3.1-8B in bf16, charged by the pre-flight, #1049). CPU CI pins bit-exact logits for both controls. The updated CUDA peak remains to be measured on the reference RTX 3050; the historical 3.32 GB figure is not relabelled as a new measurement.
 
 **Honest scope:**
 - **RAM tier + disk overflow (v0.72.3).** `stream_source: auto` picks RAM when the store fits both dynamic free-RAM headroom and a physical-host ceiling, falls back to NVMe disk when not; SATA/HDD rejected. Correctness verified. **The read is off the compute thread**: a background reader parses each shard's header itself (no memory map) and stages `training.stream_read_ahead` layers in host RAM (page-locked where the box allows — see `stream_pin` below), so the GPU is fed while the next layer is still arriving. **Measured cold and warm against a same-day control of the source it replaces** (RTX 5070 Laptop, 2026-09-14, [record](../benchmarks/gate-971-async-nvme-source.md)).
@@ -645,7 +673,7 @@ prints this advice when it sees you accumulating.
 - `quantization` other than `none` or `4bit` → other formats cannot be streamed into a pooled buffer
 - `backend: unsloth` / `backend: mlx` → streaming replaces the model-load path those backends own
 - `task` other than `sft` / `dpo` / `orpo` / `simpo` / `kto` → named explicitly. `grpo` and `ppo` are refused **permanently**, not pending: generation rollouts re-read every layer once per generated token, which destroys the amortisation streaming depends on
-- `task: kto` with `batch_size: 1` → TRL's KL term is degenerate at batch 1; refused when the config is read rather than minutes later after sharding
+- `task: kto` with `batch_size: 1` → TRL's KL term is degenerate at batch 1; refused when the config is read (this applies to every KTO run, not only to streaming) rather than minutes later after sharding
 - `lora.use_dora` / `lora.use_vera` / `lora.init_strategy` other than `random` → these initialise from the real base weight, which is on the meta device under streaming
 - `moe_expert_quant` → expert quantization runs only in the resident model-construction path and would otherwise be silently ignored
 - `unfrozen_parameters`, `lisa_enabled`, `packing`, `multipack`, `use_fsdp2_compile`, `train_router_only`, `expand_layers` → each independently rewrites or re-freezes the same layers
@@ -689,7 +717,7 @@ output: ./output
 **Performance notes:**
 - 1.43× slower than resident training, measured at 0.5B (the only size on the reference box where a resident baseline genuinely fits in 4 GB and is therefore a fair comparison).
 - The 1.5B runs sit at ~97% GPU utilisation, i.e. compute-bound: with a page-locked store the layer loads hide almost completely behind compute. The 3B run's 79.3% is **not** a model-size effect — it is the cost of the pageable-store fallback on that particular box.
-- Correctness is not a tradeoff: streamed and resident forward passes were verified **bit-exact**, and a 100-step streamed loss curve matched resident exactly. Streaming substitutes the same weight bytes into the same kernels.
+- Correctness is not a tradeoff: streamed and resident forward passes were verified **bit-exact**, and a 100-step streamed loss curve matched resident exactly. Streaming substitutes the same weight bytes into the same kernels. (The resident control is the plain NF4 one described in the scope note under *Correctness* above.)
 
 > **v0.72.0 adapters are unloadable — re-run them on v0.72.1.** In v0.72.0 a streamed run saved every adapter tensor under a key carrying an extra `.inner.` segment, so `soup merge`, `soup serve`, `soup chat` and `PeftModel.from_pretrained` loaded **zero** tensors and silently returned the untuned base (PEFT emitted only a `UserWarning`). The training itself was correct — only the saved file was affected. Check with:
 >
@@ -741,7 +769,10 @@ pre-flight, same refusals. The interesting part is DPO's reference model.
 **DPO compares the model being trained against a frozen reference.** Implemented as a
 second model instance that doubles memory and there is no point streaming at all. Soup
 instead uses *the same streamed base with its LoRA adapters switched off*, so the
-reference costs no extra weights. Measured on an RTX 3050 4 GB with a 730 MB model:
+reference costs no extra weights. On an untied checkpoint, `dpo` and `kto` also hold
+one copy of the output head per step (about 1.05 GB for Llama-3.1-8B in bf16), which
+the VRAM pre-flight charges (#1049); tied checkpoints and `sft`/`orpo`/`simpo` pay
+nothing. Measured on an RTX 3050 4 GB with a 730 MB model:
 
 | arm | peak VRAM | vs SFT |
 |---|---|---|
@@ -756,12 +787,14 @@ byte-identical between the SFT and DPO arms.
 **KTO is not reference-free**, however it is usually described — it selects a reference
 the same way DPO does, so it gets the same treatment. ORPO and SimPO genuinely are
 reference-free. All four are verified **bit-exact** against a resident run of the same
-loss.
+loss on a tied checkpoint; on an untied one, that check covers `dpo`
+(`tests/test_issue1049_untied_streamed_preference.py`). Same resident-control scope as the note under *Correctness* above.
 
 **The cost is time, not memory.** DPO runs the layer stack three times per step (policy
 forward, reference forward, checkpoint recompute) against SFT's two — measured **1.52×**
-the layer reads on a 24-layer model. Streaming makes the reference free in memory; it
-does not make it free.
+the layer reads on a 24-layer model. Streaming adds no second copy of the weights for the
+reference (on an untied checkpoint `dpo` and `kto` still hold one output-head copy, see
+above); it does not make the reference free.
 
 **Two things to know before you configure it:**
 
@@ -791,6 +824,51 @@ the run refuses before either write when that volume lacks free space. Override 
 roots with `SOUP_SPECTRUM_CACHE_DIR` and `SOUP_LAYER_STREAM_CACHE_DIR`; both retain Soup's
 home/cwd/tmp containment policy.
 
+**Two or more NVMe drives.** On a cold store larger than RAM the disk-tier step can wait on the
+read (measured for a 70B-shaped store), and then one drive is the ceiling. Set
+`SOUP_LAYER_STREAM_STRIPE_DIRS` to extra folders on OTHER NVMe drives (`os.pathsep`-separated:
+`;` on Windows, `:` elsewhere) and the layer cache is striped over N roots, where N is the primary
+cache root plus the folders listed: decoder layer `i` lives on root `i mod N`, the index, the
+extras and the embedding/head files stay on the primary root, and the reader keeps one layer in
+flight per drive. The cache is laid out this way whichever tier the run picks; only the disk tier
+reads the drives in parallel. Every entry is checked, and any failure refuses the run and names
+the entry and the rule: it must be an absolute path (on Windows, with a drive letter or UNC share;
+no `\\?\` or `\\.\` spelling, no control characters), already exist as a folder (a drive that is
+not mounted is never mistaken for an empty one), not be a symlink, not lie inside or contain the
+primary cache root or another entry, sit on a different volume from the primary root and from
+every other entry, and classify as NVMe (`training.stream_disk_kind` overrides a wrong probe); the
+list holds at most 6 folders. The checks that need no disk probe run when `soup train` or
+`--dry-run` starts, and `soup doctor` lists each entry, with `--disk` for the NVMe rule. The bytes
+are exactly the ones the single-drive cache holds, so striping changes the speed, not the result.
+
+Stripe folders are outside the home/cwd/tmp containment the primary cache has, by design — a
+second drive is never under `$HOME`. What that containment gave is enforced directly instead.
+Inside each entry Soup writes only its own folder, named after the model plus a hash of the
+primary cache's path, so two primary caches (two users, or two `SOUP_LAYER_STREAM_CACHE_DIR`
+values) sharing one stripe drive never touch each other's files. That folder is made private to
+the account running Soup (mode 0700 on POSIX; on Windows a protected ACL for that account and
+SYSTEM, replacing the inherited one, which on a data drive typically lets every signed-in
+account modify files), checked again on every reuse, and never followed if it is a link or
+junction; a folder Soup cannot make private refuses the run by name. Soup never deletes anything
+inside a stripe folder. Soup makes only its own folder owner-only, so also make the stripe ROOT
+itself writable only by your own account (on a default Windows data drive other accounts can
+modify it).
+
+It costs one more layer of host staging per extra drive: `stream_read_ahead` defaults to N + 1.
+A configured value of 2 counts as the default and is raised the same way; any other value is
+kept as set (with a warning if it leaves drives idle), and a refusal that asks for a lower depth
+names a value that is not raised back up. Changing the list re-shards the cache; unsetting it
+re-shards to one root and names the folder left behind. Measured on two PM9B1 drives, with no
+formal verdict: 7.65-9.15 GB/s together against ~4 for one
+([record](../benchmarks/probe-rtx5070-two-drive-read.md)). Gated: on a cold 70B-shaped NF4 store
+at seq 512 the training step went from 17.4 s to 9.97 s, 1.75x
+([gate](../benchmarks/gate-two-drive-striping.md)). That is a burst from a rested box. Under
+sustained back-to-back reading both drives of this laptop throttle to about 2.5 GB/s each, and
+the late-window speed-up measured 1.28x and 1.41x; a single drive throttles later and less
+([sustained probe](../benchmarks/probe-rtx5070-two-drive-sustained.md),
+[per-drive check](../benchmarks/probe-rtx5070-drive-throttle.md); neither has a formal verdict
+yet). Plan a long run on roughly 1.3-1.4x, and on drives with good cooling.
+
 Hugging Face snapshots normally expose symlinks into their blob cache, which the sharder
 deliberately does not follow. Soup materialises those weights under its Spectrum cache. If the
 HF cache already exposes real files, Soup now reads them in place instead of creating a second
@@ -798,12 +876,34 @@ copy. The layer shards remain under `~/.soup/layer-stream/`. Their index records
 filename, size, and `mtime_ns`, so a necessary re-shard says which component changed instead
 of silently spending minutes rebuilding the cache.
 
+`base:` may also be a local path to a Hugging Face cache snapshot
+(`.../models--org--name/snapshots/<commit>`). Soup copies it to regular files and reuses that
+copy while the commit and blob ids match. When the path is the folder the Hub id `org/name`
+resolves to in the active Hugging Face cache (`HF_HUB_CACHE` / `HF_HOME`; a cache that was
+moved and linked is the same folder), the copy lives in the Spectrum cache slot of that Hub
+id, `weights/org__name`, so the two ways of naming the model share one copy. A snapshot
+folder anywhere else gets a slot of its own, `weights/<folder name>@<digest of its resolved
+location>`: a copy taken from one folder is never used for another folder or for the Hub id,
+and such a folder costs one more copy on disk. A directory whose `.safetensors` files are symlinks but which is not such a
+snapshot (including a regular directory that also holds an alias symlink to a shard) is
+refused with a message naming the accepted layouts: pass the Hub id, the snapshot directory,
+or a directory of regular files.
+
 This materialisation also works with `HF_HUB_OFFLINE=1` when the standard Hugging Face
 snapshot is complete. Soup pins the commit resolved by the initial cache lookup and copies
 only verified snapshot files from that commit's blob store; it does not perform a second Hub
 metadata request for the regular-file directory. A missing blob or an escaping symlink aborts
 before the destination is published, rather than leaving a partial checkpoint that the sharder
-could consume.
+could consume. With huggingface_hub 1.32 or later, links into its marked cache-wide store
+(`<cache>/blobs`) are followed too, and any other target is still refused.
+The repo's own `blobs` directory is treated like that store: it has to be a real directory.
+When it is itself a link (a symlink, or a junction on Windows), Soup stops with a message
+naming it instead of following it, so a link in the cache that points outside the cache is
+never followed. To keep a model's files on another disk, move the whole cache or the whole
+repo folder and link that: the snapshot path is resolved first. A junction inside a snapshot
+directory is refused like a directory symlink. A copy made earlier is reused only while the
+snapshot still passes these checks: when its layout changes into a refused one afterwards,
+the next run stops with the same message and leaves the copy in place.
 
 
 ## Correctness First (v0.36.0)
@@ -849,9 +949,12 @@ all-masked sequence or saving a non-finite adapter.
 Every command that loads a model now requires `--trust-remote-code` to execute custom Python from a model repo (`auto_map` in `config.json`). First-party orgs (Meta, Mistral, Qwen, Google, etc.) suppress the warning panel; everything else prints a `REMOTE CODE WARNING` panel before loading. Unknown-org local checkpoints with `auto_map` raise a friendly `ValueError` at construction time instead of silently exec'ing inside `from_pretrained`.
 
 Coverage:
-- `soup train` (every task — SFT, DPO, GRPO, KTO, ORPO, SimPO, IPO, PPO, Reward Model, Pretrain, Embedding, BCO, and the unified Preference dispatcher)
+- `soup train` (every task - SFT, DPO, GRPO, KTO, ORPO, SimPO, IPO, PPO, Reward Model, Pretrain, Embedding, BCO, and the unified Preference dispatcher; automatic evaluation after training keeps the flag disabled, see `docs/evaluation.md`)
 - `soup chat`, `soup serve`, `soup data download`, `soup eval auto`
 - `soup diff`, `soup export`, `soup merge`, `soup infer`, `soup data generate`
+- `soup eval benchmark`, `soup eval custom`, `soup train --find-lr`, `soup draft distill`, `soup shrink`
+
+`soup data download --trust-remote-code` is refused when the installed `datasets` is 4 or newer, because those versions no longer support remote dataset code and would silently ignore the flag.
 
 ```bash
 soup train --config soup.yaml --trust-remote-code
@@ -1138,7 +1241,14 @@ For fused-MoE models trained with `moe_lora: true`, two live toggles:
   (QLoRA-on-experts), so PEFT attaches its adapters to the quantized base. The
   source weights are genuinely carried into the quantized layer (validated
   dequant error 0.0155 vs source on an RTX 3050). CUDA + bitsandbytes are
-  required — a friendly `RuntimeError` fires on CPU / without bnb.
+  required — a friendly `RuntimeError` fires on CPU / without bnb. It needs the
+  one-`nn.Linear`-per-expert layout: on a transformers-5 model whose routed
+  experts are fused 3-D parameters (`mlp.experts.gate_up_proj`, which is every
+  in-library MoE family on the declared stack) there is no expert `nn.Linear` to
+  wrap, and the run is refused at setup naming the architecture and the fused
+  parameters, before the CUDA check (#1421; it used to print `applied to 0
+  expert Linear block(s)` and train in full precision). Matching no expert at all
+  is refused the same way.
 - `training.train_router_only: true` — freeze every expert parameter and train
   only the gating router (applied after LoRA, on the final parameter set).
 
@@ -1150,24 +1260,27 @@ Both reject silently-no-op combinations: setting either flag without `moe_lora=t
 |---|---|---|
 | `moe_lora` | `sft`, `pretrain`, `tts`, (since #798) `dpo`, `kto`, `orpo`, `simpo`, `grpo`, (since #1099) `ipo`, `bco`, `reward_model`, `ppo`, `embedding`, `online_dpo`, and (since #1151) `distill`, `unlearn`, and `classifier`, `reranker`, `cross_encoder` with `classifier_lora: true` | refused at config load, naming the reason, on `asr`, `moe_lora_routing`, `prm`, the classifier family without `classifier_lora: true` and `lora.r > 0`, `backend: unsloth` (any task), and `task: sft` with `modality: vision` or `audio` |
 | `moe_expert_quant`, `train_router_only` | `sft`, `tts` | refused at config load, naming the task |
-| `moe_aux_loss_coeff` | `sft`, `tts`, `pretrain` | a **non-default** value is refused; the default `0.01` still loads, because every stored config and eleven shipped recipes write it |
+| `moe_aux_loss_coeff` | `sft` (text), `tts`, `pretrain` | a **non-default** value is refused, including on `task: sft` with `modality: vision` or `audio` (#1394), whose setup never applies the auxiliary loss; the default `0.01` still loads, because every stored config and the shipped MoE recipes on those tasks write it |
 
 **`moe_lora` on the remaining LoRA tasks (#1099).** #798 left it loading but unread on `ipo`, `bco`, `reward_model`, `ppo` and `embedding`, and `online_dpo` had the same gap. All six build their adapter through the same `build_lora_config` path, so they were wired to the same helper rather than refused. On `embedding` it applies only with `lora.r >= 1`; at `r: 0` that trainer full-fine-tunes and builds no adapter for the flag to select. #1151 closed the remainder: `distill` and `unlearn` build their adapter the same way and are wired to the same helper, and so is `classifier` / `reranker` / `cross_encoder` (one trainer) on its opt-in adapter path. Without `classifier_lora: true` and `lora.r > 0` that trainer full-fine-tunes and builds no adapter, so there the flag is refused at config load; `asr`, which trains only Whisper (no experts), `moe_lora_routing`, which builds no LoRA adapter, and `prm`, which fine-tunes every base parameter, refuse the flag at config load. Two paths refuse it whatever the task: `task: sft` with `modality: vision` or `audio`, whose setup builds its adapter without the MoE step, and `backend: unsloth`. On unsloth the reason depends on the task (#1264): the thirteen tasks with an unsloth setup attach its fixed attention list and never read the flag, while the rest have no unsloth setup at all, so there it is the backend that goes unapplied. Both messages point to `backend: transformers`, where the flag is read. The other `moe_lora` refusals in the same check come first, so `asr`, `prm`, `moe_lora_routing` and SFT vision/audio get one refusal whatever the backend. Every path now either reads `moe_lora` or refuses it, except `backend: mlx`, where it loads and `soup doctor --config` reports it as ignored; a source ratchet keeps a new adapter-building trainer from missing it. `train_router_only` and `moe_expert_quant` require `moe_lora: true`, so on `backend: unsloth` they now fail to load with the same message. `preference` is covered through the trainers it dispatches to, and `tts` through the SFT trainer it subclasses.
 
-**`moe_lora` requires `lora.dropout: 0.0` on a fused-expert MoE.** transformers 5.x keeps a Qwen3-MoE's experts as fused 3-D parameters (`mlp.experts.gate_up_proj`), which peft adapts through `lora.ParamWrapper`, and that wrapper raises `lora.ParamWrapper does not work with lora_dropout != 0.` With the schema default of `0.05` the LoRA attach failed outright, so `moe_lora` did not work on any task - including `sft`. Soup now stops at the attach with a message naming the flag, instead of letting peft's reach the user, and all 33 shipped MoE recipes pin `lora.dropout: 0.0`. The check is made against the loaded model, not at config load: whether the experts are fused depends on the checkpoint and the transformers version, and a model with one module per expert takes dropout normally. A dense base is untouched - there the flag is a no-op.
+**`moe_lora` requires `lora.dropout: 0.0` on a fused-expert MoE.** transformers 5.x keeps a Qwen3-MoE's experts as fused 3-D parameters (`mlp.experts.gate_up_proj`), which peft adapts through `lora.ParamWrapper`, and that wrapper raises `lora.ParamWrapper does not work with lora_dropout != 0.` With the schema default of `0.05` the LoRA attach failed outright, so `moe_lora` did not work on any task - including `sft`. Soup now stops at the attach with a message naming the flag, instead of letting peft's reach the user, and all 29 shipped recipes that set `moe_lora` pin `lora.dropout: 0.0`. The check is made against the loaded model, not at config load: whether the experts are fused depends on the checkpoint and the transformers version, and a model with one module per expert takes dropout normally. A dense base is untouched - there the flag is a no-op. Since #1421 the refusal covers every fused-expert family, Mixtral and MiniMax included: their experts are now targeted (next paragraph), so peft's wrapper refuses dropout on them too, where before it attached quietly and adapted no experts.
 
-**`moe_lora` does not reach every MoE family (measured, v0.75.0).** `get_moe_target_modules` picks module names, and whether peft turns those into adapters on the fused expert parameters depends on the architecture. On tiny stand-ins with transformers 5.16.1 / peft 0.20.0:
+**`moe_lora` reaches the fused experts on every family (#1421).** On transformers 5 an MoE layer keeps all its routed experts as two 3-D parameters on one module (`mlp.experts.gate_up_proj` and `down_proj`), not as one `nn.Linear` per expert, so module names cannot address them. Until #1421 `moe_lora` named modules only, and whether those names reached the experts depended on peft's own v4→v5 name conversion, which exists for some architectures and not others. Now `resolve_moe_lora_targets` finds the fused parameters on the loaded model and hands them to peft as `target_parameters`, beside the module targets it already resolved (an `auto` list is kept, so Qwen3.5's `in_proj_qkv` / `out_proj` stay adapted; not under `stream_layers`, whose setup resolves the targets on a meta skeleton and replaces the list). Measured on tiny stand-ins with transformers 5.16.1 / peft 0.20.0, routed-expert adapters per family, by module names alone and through the trainer path:
 
-| family | expert adapters attach | recipes |
+| family | module names alone (before #1421) | trainer path (now) |
 |---|---|---|
-| `qwen3_moe` | yes | 11 |
-| `deepseek_v3` | yes | 8 |
-| `glm4_moe` | yes | 3 |
-| `minimax` | **no — attention-only** | 2 (`minimax-m3-sft`, `minimax-m3-dpo`) |
-| `mixtral` | **no — attention-only** | — |
-| `kimi_k2`, `mistral-large-3` | **not measured** (no stand-in builds here) | 9 |
+| `qwen3_moe` | yes | yes |
+| `deepseek_v3` | yes | yes |
+| `glm4_moe` | yes | yes |
+| `olmoe` | yes | yes |
+| `qwen2_moe` | **no — attention + shared expert** | yes |
+| `qwen3_5_moe_text` | **no — shared expert only** | yes |
+| `minimax` | **no — attention-only** | yes |
+| `mixtral` | **no — attention-only** | yes |
+| `kimi_k2` | **not measured** (no stand-in builds here) | not measured |
 
-So `minimax-m3-sft` and `minimax-m3-dpo` still train attention-only LoRA: peft has no v4→v5 conversion mapping for those model types, so their experts are never targeted and the attach succeeds quietly. Extending target resolution per architecture is #1070. The nine `kimi-k2.x` and `mistral-large-3` recipes are untested rather than known-good — no tiny stand-in for those configs exists in the installed transformers.
+`minimax-m3-sft` still trains attention-only LoRA: it sets no `moe_lora`, since it loads through SFT's vision path, which never runs the MoE step, and `minimax-m3-dpo` was removed because DPO cannot build the `minimax_m3_vl` wrapper (#1145). The seven `kimi-k2.x` recipes that set `moe_lora` are untested rather than known-good — no tiny stand-in for those configs exists in the installed transformers. A checkpoint that still keeps one `nn.Linear` per expert (the transformers-4 layout) is handled as before: the projections are named as modules and no `target_parameters` are added.
 
 **`target_modules: auto` on a MoE base.** Until #1070 `resolve_lora_target_modules` had no mapping for any MoE architecture Soup ships, so `auto` resolved to `None` and peft refused with `No target_modules passed but also no target_parameters found`. Those architectures now resolve to their attention projections (see `docs/peft-and-efficiency.md`); a MoE architecture neither Soup nor peft maps is refused at setup, naming it. With `moe_lora: true` the targets come from the model scan instead, and that is applied *before* the refusal is decided, so `moe_lora` still works on an unmapped MoE such as `qwen2_moe`.
 
@@ -1215,7 +1328,7 @@ Cross-validator ordering picks the most actionable error: `quantization_aware='f
 
 ## Advanced Save Formats (v0.53.0)
 
-`soup merge --save-format 4bit` and `--save-format 4bit_forced` will write a single BNB-4bit-quantized merged checkpoint without the wasteful dequant → merge → requant cycle (unsloth `merged_4bit` recipe). v0.53.0 ships the closed allowlist + spec metadata; the live writer lands in v0.53.1.
+`soup merge --save-format 4bit` and `--save-format 4bit_forced` will write a single BNB-4bit-quantized merged checkpoint without the wasteful dequant → merge → requant cycle (unsloth `merged_4bit` recipe). `4bit_forced` quantizes all linear layers including `lm_head`; models with tied embeddings (`tie_word_embeddings: true`) cannot hold a 4-bit `lm_head` sharing weights with embeddings and are explicitly refused by name with `ValueError`. v0.53.0 ships the closed allowlist + spec metadata; the live writer lands in v0.53.1.
 
 `soup export --format torchao --quant-config <yaml>` is the planned PTQ export surface for `torchao.quantize_` + `save_pretrained`. Four schemes are allowlisted: `Int4WeightOnly`, `Int8DynActInt4`, `Float8DynActFloat8`, `NVFP4`. CASE-SENSITIVE — these are Soup's scheme names, mapped to the torchao class that implements each one in `utils/torchao_compat.py` (three of the four names Soup used to look up by `hasattr` do not exist in torchao; #826). `Int4WeightOnly` accepts `group_size`; `inner_k_tiles` was removed, because `Int4WeightOnlyConfig` raises `TypeError` for it. Diverges from `--save-format` (lowercase-normalised) on purpose; documented at both validators.
 
@@ -1235,7 +1348,7 @@ group_size: 32
 EOF
 soup export --model ./merged --format torchao --quant-config ./q.yaml --output ./out
 
-# AWQ/GPTQ export — an explicit local calibration set is required
+# AWQ/GPTQ export (deprecated, removed in the next release) — an explicit local calibration set is required
 soup export --model ./merged --format awq \
     --calibration-data ./calib.jsonl --output ./out-awq
 soup export --model ./merged --format gptq \
@@ -1255,6 +1368,8 @@ soup deploy autopilot --target rtx-4090-24gb \
 ```
 
 Autopilot also detects pre-quantized bases automatically — `TheBloke/Llama-2-7B-Chat-GPTQ` is recommended `gptq` instead of stacking 4-bit on top. Detection runs against the base-model name regex AND any local `config.json`'s `quantization_config.quant_method`. Out-of-cwd model paths are silently skipped (soft-probe semantics).
+
+AWQ and GPTQ export are deprecated and will be removed in the next release: both upstream projects (AutoAWQ and AutoGPTQ) are archived and neither extra can be installed next to `[train]`. Until then `soup export --format awq` and `--format gptq` work as before and start with a `Deprecated:` notice that names the formats to move to (`gguf`, `onnx`, `tensorrt`, `bitnet`, `tq1_0`).
 
 Direct AWQ and GPTQ exports require `--calibration-data`. Soup refuses a missing or unusable JSONL before importing the quantizer or loading the model. This keeps calibration inputs explicit and prevents AutoAWQ from silently downloading its large default dataset. Use `--calibration-samples` to cap the number of usable JSONL rows (default: 128).
 

@@ -226,6 +226,16 @@ ERROR_MAP = [
             "if you trust the model source."
         ),
     ),
+    # Layer streaming stripe roots
+    (
+        "StripeRootError",
+        None,
+        (
+            "Fix or remove the invalid entry in SOUP_LAYER_STREAM_STRIPE_DIRS, "
+            "reconnect the drive, or unset the variable to train using the primary "
+            "cache root only."
+        ),
+    ),
 ]
 
 
@@ -251,10 +261,10 @@ _AUTH_HINTS = {
 # size, path component, or hash slice cannot match.
 _AUTH_STATUS_TEXT = (
     (re.compile(r"401\s+(?:Unauthorized|Client Error)"), 401),
-    (re.compile(r"HTTP\s+(?:Error\s+)?[:=]?\s*401\b"), 401),
+    (re.compile(r"HTTP\s+(?:Error\s+)?(?:[:=]\s*)?401\b"), 401),
     (re.compile(r"Error code:\s*401\b"), 401),
     (re.compile(r"403\s+(?:Forbidden|Client Error)"), 403),
-    (re.compile(r"HTTP\s+(?:Error\s+)?[:=]?\s*403\b"), 403),
+    (re.compile(r"HTTP\s+(?:Error\s+)?(?:[:=]\s*)?403\b"), 403),
     (re.compile(r"Error code:\s*403\b"), 403),
 )
 
@@ -275,6 +285,19 @@ def _exception_chain(exc: Exception):
         current = current.__cause__ or current.__context__
 
 
+def _safe_str(exc: BaseException) -> str:
+    """`str(exc)`, or an empty string when the exception's own `__str__` raises.
+
+    The text fallback below runs over every exception in the chain, so one class
+    with a broken `__str__` would otherwise turn the friendly error into a second
+    traceback. Same guard CPython's `traceback` module applies.
+    """
+    try:
+        return str(exc)
+    except Exception:
+        return ""
+
+
 def _auth_status(exc: Exception) -> int | None:
     """Return 401/403 when the exception is genuinely an auth failure.
 
@@ -285,6 +308,13 @@ def _auth_status(exc: Exception) -> int | None:
     401/403 status does the HTTP-phrasing text fallback apply; an object
     carrying some other status (a 404, say) still falls through to the text
     check.
+
+    The fallback walks the chain the same way, exception-major: the outermost
+    exception that carries a status phrase decides, so a wrapper that says
+    nothing about status does not hide the failure it wraps, and a 403 wrapper
+    of a 401 is still read as the 403 it says. Pattern-major (every pattern
+    across the chain before the next pattern) would let the 401 entries, which
+    come first in `_AUTH_STATUS_TEXT`, beat an outer 403.
     """
     chain = list(_exception_chain(exc))
     if any(type(e).__name__ in _STATUS_DECLINE_TYPES for e in chain):
@@ -297,9 +327,10 @@ def _auth_status(exc: Exception) -> int | None:
             status = getattr(e, attr, None)
             if isinstance(status, int) and status in _AUTH_HINTS:
                 return status
-    for pattern, status in _AUTH_STATUS_TEXT:
-        if pattern.search(str(exc)):
-            return status
+    for e in chain:
+        for pattern, status in _AUTH_STATUS_TEXT:
+            if pattern.search(_safe_str(e)):
+                return status
     return None
 
 

@@ -157,6 +157,15 @@ MOE_TEXT_LORA_TARGETS: dict[str, Any] = {
     # text tower MiniMax-M3's wrapper exposes, and a config loaded without the
     # wrapper reaches the resolver as this type instead of ``minimax_m3_vl``.
     "minimax_m3_vl_text": ("q_proj", "k_proj", "v_proj", "o_proj"),
+    # Mistral 3.5 (``mistralai/Mistral-Medium-3.5-128B``, shipped in
+    # ``mistral-medium-3-5-sft``): a vision-language wrapper (model_type
+    # "mistral3") containing a Pixtral vision encoder and a Mistral text tower.
+    # The vision tower defines its own attention projections under
+    # ``model.vision_tower.transformer.layers.<N>.attention.(q|k|v|o)_proj``,
+    # so target_modules: auto must be scoped to ``language_model`` via regex.
+    # Measured on the meta device: adapts 8 modules on a 2-layer skeleton,
+    # 0 in the vision tower (#1395).
+    "mistral3": r".*language_model\..*\.self_attn\.(q_proj|k_proj|v_proj|o_proj)",
 }
 
 #: Entries of :data:`MOE_TEXT_LORA_TARGETS` that cover only PART of the decoder,
@@ -459,6 +468,22 @@ def build_peft_config_spec(
     }
 
 
+def _with_moe_parameters(target_modules: Any, target_parameters: Any) -> Any:
+    """Add the fused expert parameters ``moe_lora`` resolved (#1421).
+
+    ``resolve_moe_lora_targets`` returns a ``MoeLoraTargets`` list that carries
+    them as ``target_parameters``; merging here, rather than at each call site,
+    is what makes every MoE-wired trainer adapt the experts without passing a new
+    argument. An explicit ``lora.target_parameters`` list is kept and extended.
+    """
+    extra = getattr(target_modules, "target_parameters", None)
+    if not extra:
+        return target_parameters
+    merged = list(target_parameters) if isinstance(target_parameters, (list, tuple)) else []
+    merged.extend(name for name in extra if name not in merged)
+    return merged
+
+
 def _settle_unmapped(target_modules: Any, target_parameters: Any) -> Any:
     """Refuse an unmappable ``auto`` here, where the final targets are known.
 
@@ -498,6 +523,7 @@ def build_lora_config(
     """
     import peft
 
+    target_parameters = _with_moe_parameters(target_modules, target_parameters)
     target_modules = _settle_unmapped(target_modules, target_parameters)
     spec = build_peft_config_spec(
         lora_cfg,
@@ -544,6 +570,32 @@ def apply_post_lora_patches(model: Any) -> None:
         logger.debug("strip_lora_dropout_for_3d_experts skipped: %s", exc)
 
 
+def _relora_merge_target(trainer: Any) -> tuple[Any, Any, str | None, Any]:
+    """Return the save owner, model holder, optional policy attr, and PEFT model."""
+    owner = getattr(trainer, "__dict__", {}).get("_trainer", trainer)
+    holder = getattr(owner, "model", None)
+    policy = getattr(holder, "policy", None)
+    if policy is not None and callable(getattr(policy, "merge_and_unload", None)):
+        return owner, holder, "policy", policy
+    return owner, holder, None, holder
+
+
+def _validate_relora_save_capability(trainer: Any) -> None:
+    """Reject ReLoRA trainers whose final model cannot be merged into a dense model."""
+    try:
+        import torch.nn as nn
+    except ImportError:
+        return
+
+    _owner, _holder, _policy_attr, model = _relora_merge_target(trainer)
+    if isinstance(model, nn.Module) and not callable(
+        getattr(model, "merge_and_unload", None)
+    ):
+        raise RuntimeError(
+            "ReLoRA requires a PEFT model with merge_and_unload() for dense final saving."
+        )
+
+
 def attach_relora_callback(trainer: Any, tcfg: Any) -> bool:
     """Attach :class:`ReLoRACallback` when ``training.relora_steps`` is set.
 
@@ -558,9 +610,49 @@ def attach_relora_callback(trainer: Any, tcfg: Any) -> bool:
     # rather than a silent skip. Matches project policy (v0.34.0 / v0.39.0).
     if relora_steps is None:
         return False
+
+    args = getattr(trainer, "args", None)
+    try:
+        world_size = int(getattr(args, "world_size", 1)) if args is not None else 1
+    except (TypeError, ValueError):
+        world_size = 1
+    if world_size > 1:
+        raise ValueError(
+            "ReLoRA is not supported with world_size > 1 "
+            f"(got world_size={world_size}): restarts are single-process only. "
+            "Run with one process or remove training.relora_steps."
+        )
+    # `is True` is intentional: MagicMock trainers expose unset flags as
+    # truthy mocks, but only an actual Trainer flag should refuse the run.
+    if getattr(trainer, "is_deepspeed_enabled", False) is True:
+        raise ValueError(
+            "ReLoRA is not supported with DeepSpeed "
+            "(is_deepspeed_enabled=True): restarts cannot merge sharded bases. "
+            "Run without DeepSpeed or remove training.relora_steps."
+        )
+    if getattr(trainer, "is_fsdp_enabled", False) is True:
+        raise ValueError(
+            "ReLoRA is not supported with FSDP "
+            "(is_fsdp_enabled=True): restarts cannot merge sharded bases. "
+            "Run without FSDP or remove training.relora_steps."
+        )
+
     # Pydantic schema guarantees these fields exist on `TrainingConfig`. Read
     # them directly so a misnamed attr fails loudly with `AttributeError`.
-    from soup_cli.utils.relora import ReLoRACallback, ReLoRAPolicy
+    from soup_cli.utils.relora import (
+        ReLoRACallback,
+        ReLoRAPolicy,
+        _preflight_writable_bases,
+    )
+
+    model = getattr(trainer, "model", None)
+    try:
+        import torch.nn as nn
+    except ImportError:
+        nn = None
+    if nn is not None and isinstance(model, nn.Module):
+        _preflight_writable_bases(model)
+    _validate_relora_save_capability(trainer)
 
     policy = ReLoRAPolicy(
         steps=int(relora_steps),
@@ -568,8 +660,40 @@ def attach_relora_callback(trainer: Any, tcfg: Any) -> bool:
         reset_optimizer=bool(tcfg.relora_reset_optimizer),
         prune_ratio=float(tcfg.relora_prune_ratio),
     )
+    if "relora_prune_ratio" in getattr(tcfg, "model_fields_set", ()):
+        logger.warning(
+            "training.relora_prune_ratio is ignored: ReLoRA restarts no longer prune "
+            "adapter weights"
+        )
     trainer.add_callback(ReLoRACallback(policy=policy))
     return True
+
+
+def save_model_with_relora(
+    trainer: Any,
+    output_dir: str,
+    relora_steps: int | None,
+) -> None:
+    """Save a dense final model when ReLoRA has been configured."""
+    if relora_steps is None:
+        trainer.save_model(output_dir)
+        return
+
+    owner, holder, policy_attr, model = _relora_merge_target(trainer)
+    merge_and_unload = getattr(model, "merge_and_unload", None)
+    if merge_and_unload is None:
+        raise RuntimeError(
+            "ReLoRA final save requires a PEFT model with merge_and_unload()."
+        )
+
+    merged_model = merge_and_unload()
+    if policy_attr is not None:
+        setattr(holder, policy_attr, merged_model)
+    else:
+        owner.model = merged_model
+        if getattr(owner, "model_wrapped", None) is not None:
+            owner.model_wrapped = merged_model
+    trainer.save_model(output_dir)
 
 
 def build_loraplus_optimizer(model: Any, args: Any, tcfg: Any) -> Any:
@@ -1046,6 +1170,49 @@ def attach_grpo_stability_callback(trainer: Any, tcfg: Any) -> bool:
         logger.debug("attach_grpo_stability_callback rejected: %s", exc)
         return False
     trainer.add_callback(callback)
+    return True
+
+
+def ensure_grpo_stability_callback(trainer: Any) -> bool:
+    """Ensure the stability callback is attached for the gradient watchdog.
+
+    #342 — ``on_pre_optimizer_step`` in ``GRPOStabilityCallback`` must run
+    unconditionally.  ``attach_grpo_stability_callback`` only attaches when
+    stability knobs are set.  This function is a no-op if the callback is
+    already attached; otherwise it attaches with all stability knobs at
+    their defaults (inactive) so only the gradient watchdog hooks fire.
+
+    The public ``add_callback`` API is the primary capability gate.
+    ``callback_handler`` is treated as optional because it is an internal
+    ``Trainer`` implementation detail and may be absent on test doubles or
+    future TRL versions.
+    """
+    from soup_cli.monitoring.grpo_stability_callback import (
+        GRPOStabilityCallback,
+    )
+
+    add_callback = getattr(trainer, "add_callback", None)
+    if not callable(add_callback):
+        return False
+
+    # Optional duplicate-detection via the private callback list.
+    handler = getattr(trainer, "callback_handler", None)
+    callbacks = getattr(handler, "callbacks", None) if handler is not None else None
+    if callbacks is not None:
+        try:
+            for cb in callbacks:
+                if isinstance(cb, GRPOStabilityCallback):
+                    return False  # already wired — watchdog will fire
+        except TypeError:
+            pass
+
+    # Attach with defaults: all stability knobs inactive, watchdog active.
+    callback = GRPOStabilityCallback()
+    try:
+        add_callback(callback)
+    except Exception as exc:  # noqa: BLE001 — best-effort callback attachment
+        logger.debug("ensure_grpo_stability_callback add_callback failed: %s", exc)
+        return False
     return True
 
 

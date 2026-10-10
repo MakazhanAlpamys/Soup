@@ -22,7 +22,10 @@ from soup_cli.utils.gpu import (
     resolve_device_map,
     resolve_frozen_base_load_dtype,
 )
-from soup_cli.utils.mixed_precision import align_trainable_dtype_for_fp16
+from soup_cli.utils.mixed_precision import (
+    align_trainable_dtype_for_fp16,
+    keep_trainable_dtype_on_resume,
+)
 from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
 
 console = Console()
@@ -297,10 +300,11 @@ class GRPOTrainerWrapper:
           #387; ``grpo_fp16`` was the only way to run GRPO there and nothing
           said so.
 
-        ``auto_mixed_precision`` is mutually exclusive with ``grpo_fp16``
-        (rejected at schema load via ``_validate_grpo_fp16_amp_exclusive``);
-        when only ``auto_mixed_precision`` is set, the v0.32.0 picker runs
-        elsewhere in the training loop and overrides this default.
+        ``auto_mixed_precision`` is refused on ``task='grpo'`` at schema
+        load (#1618 — this wrapper never reads the field, so it would train
+        at whatever precision these lines pick); ``grpo_fp16`` is the only
+        way to choose the dtype here, and the grpo_fp16 + auto_mixed_precision
+        combo is rejected by ``_validate_grpo_fp16_amp_exclusive``.
         """
         device_name = str(self.device).lower()
         if device_name.startswith("mps"):
@@ -460,13 +464,10 @@ class GRPOTrainerWrapper:
             output_dir = output_dir / cfg.experiment_name
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        # --- Calculate warmup steps from ratio ---
-        import math
+        # --- Calculate warmup steps from ratio (#1431) ---
+        from soup_cli.utils.warmup import resolve_trainer_warmup_steps
 
-        total_steps = (
-            math.ceil(len(train_ds) / batch_size / tcfg.gradient_accumulation_steps) * tcfg.epochs
-        )
-        warmup_steps = int(total_steps * tcfg.warmup_ratio)
+        warmup_steps = resolve_trainer_warmup_steps(tcfg.warmup_ratio)
 
         # --- Warn if running on CPU (trl GRPO has known CPU issues) ---
         if self.device == "cpu":
@@ -591,6 +592,16 @@ class GRPOTrainerWrapper:
 
         attach_grpo_stability_callback(self.trainer, tcfg)
 
+        # #342 — gradient watchdog (on_pre_optimizer_step) must be always-on.
+        # attach_grpo_stability_callback only fires when stability knobs
+        # are set.  ensure_grpo_stability_callback is a no-op if already
+        # attached, otherwise attaches with defaults (only watchdog fires).
+        from soup_cli.utils.peft_wiring import (
+            ensure_grpo_stability_callback,
+        )
+
+        ensure_grpo_stability_callback(self.trainer)
+
         # v0.71.11 #235/#238/#240 — wire the live RL callbacks (reward-hack,
         # echo-trap, mid-epoch RL checkpoint).
         from soup_cli.utils.peft_wiring import attach_rl_callbacks
@@ -604,7 +615,7 @@ class GRPOTrainerWrapper:
             task="grpo",
         )
 
-        # v0.40.6 #67 — ReLoRA callback (magnitude-prune LoRA every N steps).
+        # v0.40.6 #67 — ReLoRA merge-and-reinitialize restart callback.
         from soup_cli.utils.peft_wiring import (
             attach_curriculum_callback,
             attach_loraplus_optimizer,
@@ -663,7 +674,7 @@ class GRPOTrainerWrapper:
             self.model,
             cfg.data,
         )
-        if tcfg.quantization in ("4bit", "8bit", "mxfp4"):
+        if tcfg.quantization in ("4bit", "8bit"):
             from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
 
             self.model = prepare_model_for_kbit_training(
@@ -752,23 +763,19 @@ class GRPOTrainerWrapper:
 
         # Add callback for live display and experiment tracking
         if display:
-            from soup_cli.monitoring.callback import (
-                SoupTrainerCallback,
-                soup_callback_kwargs,
-            )
+            from soup_cli.monitoring.callback import build_soup_trainer_callback
 
             self.trainer.add_callback(
-                SoupTrainerCallback(
+                build_soup_trainer_callback(
                     display,
+                    config=self.config,
                     tracker=tracker,
+                    batch_size=self._batch_size,
                     run_id=run_id,
-                    eval_gate_config=self.config.training.eval_gate,
-                    **soup_callback_kwargs(
-                        self.config.training,
-                        batch_size=self._batch_size,
-                        output_dir=self._output_dir,
-                        include_eval_gate=False,
-                    ),
+                    output_dir=self._output_dir,
+                    # #1389: grpo's validation number is the held-out
+                    # reward, not TRL's policy objective in `eval_loss`.
+                    task=self.config.task,
                 )
             )
 
@@ -783,12 +790,24 @@ class GRPOTrainerWrapper:
                 fp16=getattr(self.trainer.args, "fp16", False),
                 bf16=getattr(self.trainer.args, "bf16", False),
             )
+            if resume_from_checkpoint is not None:
+                keep_trainable_dtype_on_resume(self.trainer)
             self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
         duration = time.time() - start
 
-        # Save final model (LoRA adapter)
-        self.trainer.save_model(self._output_dir)
+        if self.config.training.relora_steps is None:
+            self.trainer.save_model(self._output_dir)
+        else:
+            from soup_cli.utils.peft_wiring import save_model_with_relora
+
+            save_model_with_relora(
+                self.trainer, self._output_dir, self.config.training.relora_steps
+            )
         self.tokenizer.save_pretrained(self._output_dir)
+        # #342 — persist trainer_state.json (including nan_skip_count
+        # from the stability callback) next to adapter_config.json so
+        # ``soup adapters audit`` can read the skipped-step fraction.
+        self.trainer.save_state()
 
         # Extract metrics
         logs = self.trainer.state.log_history

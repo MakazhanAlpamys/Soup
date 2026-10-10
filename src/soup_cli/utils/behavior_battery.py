@@ -230,17 +230,30 @@ class BehaviorDiffReport:
         }
 
 
+def contains_whole_word(text: str, word: str) -> bool:
+    """``word`` appears in ``text`` with no word character right before or after it.
+
+    The whole-word rule shared by ``_agreement_rate`` and the CheckList
+    matchers (#1467): ``"and"`` does not match ``"sand"``, and a keyword whose
+    edge is not a word character (``-5``, ``(B)``, ``C++``, ``100%``) still
+    matches, which ``\\b`` cannot do because it needs a word character at the
+    keyword's edge. Callers pass both strings lower-cased.
+    """
+    return re.search(rf"(?<!\w){re.escape(word)}(?!\w)", text) is not None
+
+
 def _agreement_rate(
     responses: Sequence[object],
     oracle: Sequence[object],
 ) -> float:
-    """Word-boundary agreement.
+    """Whole-word agreement.
 
     The oracle label must appear as a standalone word (not substring) in the
     response — defends against ``"safe" in "unsafe"`` false positives.
     Punctuation-aware: ``"safe."`` is recognised as the word ``"safe"``
     (review H4 fix — whitespace-tokenised version dropped trailing-punct rows).
-    Case-insensitive.
+    A label with a punctuation edge such as ``(B)`` or ``-5`` matches too
+    (#1467, see ``contains_whole_word``). Case-insensitive.
     """
     if len(responses) != len(oracle):
         raise ValueError(
@@ -258,10 +271,7 @@ def _agreement_rate(
         target = o.strip().lower()
         if not target:
             continue
-        # Word-boundary regex; oracle as a whole word in the response.
-        if re.search(
-            rf"\b{re.escape(target)}\b", r.lower()
-        ):
+        if contains_whole_word(r.lower(), target):
             correct += 1
     return correct / len(responses)
 

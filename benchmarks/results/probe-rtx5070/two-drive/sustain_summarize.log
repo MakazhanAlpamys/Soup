@@ -1,0 +1,8 @@
+sequence 'sustain' in C:\Users\user\projects\Soup-sustain\benchmarks\results\probe-rtx5070\two-drive: outcome not finished
+  r0 SINGLE  early 17.519 s  late 17.398 s  d 0.993  C: 3.933->3.958 D: 0.000->0.000 GB/s  problems none
+  r0 STRIPED early 8.376 s  late 8.426 s  d 1.006  C: 4.029->3.591 D: 4.040->3.593 GB/s  problems none  C: slowed > 1.1x, D: slowed > 1.1x
+  r1 STRIPED early 9.295 s  late 8.983 s  d 0.966  C: 3.650->3.331 D: 3.655->3.331 GB/s  problems none
+  round 0: u_early 2.092  u_late 2.065
+  row 1 SINGLE early median outside 15.0-21.5 s: does not fire
+  row 2 off the path under test, or the protocol stopped: fires: no valid arm: ['r1 SINGLE', 'r2 SINGLE', 'r2 STRIPED']; protocol: not finished
+  row VERDICT: NO VERDICT (row 2): the arms did not measure what the rule reads

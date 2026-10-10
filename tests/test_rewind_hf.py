@@ -1,8 +1,9 @@
 """HF/TRL flight-recorder tests: row identity, per-row loss, and the eval guard.
 
-Every test runs a real (tiny-random, CPU) TRL ``SFTTrainer`` -- the whole point of
-the module is that it hooks HF internals correctly, and a mocked trainer would
-assert nothing about ``_get_train_sampler`` / ``compute_loss`` call order.
+Every test runs a real (tiny, randomly-initialised, CPU) TRL ``SFTTrainer`` --
+the whole point of the module is that it hooks HF internals correctly, and a
+mocked trainer would assert nothing about ``_get_train_sampler`` /
+``compute_loss`` call order.
 """
 
 from __future__ import annotations
@@ -12,9 +13,6 @@ import pytest
 pytest.importorskip("trl")
 
 from soup_cli.trainer import rewind_hf  # noqa: E402
-from tests._windows_ci import skip_on_windows_ci  # noqa: E402
-
-MODEL_ID = "hf-internal-testing/tiny-random-LlamaForCausalLM"
 
 
 class FakeSink:
@@ -54,12 +52,14 @@ def _uniform_dataset(n: int = 8):
 
 
 def _model_and_tokenizer():
-    from transformers import AutoModelForCausalLM, AutoTokenizer
+    """A real, randomly-initialised tiny Llama + a locally-trained tokenizer
+    (no download) -- #1356 found this pulling both from the Hub every run for
+    nothing these tests check depends on real weights or vocabulary. Shared
+    builders live in tests/_tiny_hf_models.py."""
+    from tests._tiny_hf_models import build_llama, build_tokenizer
 
-    tok = AutoTokenizer.from_pretrained(MODEL_ID)
-    if tok.pad_token is None:
-        tok.pad_token = tok.eos_token
-    model = AutoModelForCausalLM.from_pretrained(MODEL_ID)
+    tok = build_tokenizer()
+    model = build_llama(tok)
     return model, tok
 
 
@@ -185,8 +185,7 @@ def test_row_losses_mean_equals_trl_scalar(tmp_path):
 # --------------------------------------------------------------------------
 
 
-@skip_on_windows_ci
-def test_recorded_rows_match_sampler_order(tmp_path, monkeypatch):
+def test_recorded_rows_match_sampler_order(tmp_path, monkeypatch, aten_half_matmuls):
     sink = FakeSink()
     trainer = _trainer(tmp_path)
     state = _attach_spy(monkeypatch, trainer, sink)
@@ -207,8 +206,7 @@ def test_recorded_rows_match_sampler_order(tmp_path, monkeypatch):
 # --------------------------------------------------------------------------
 
 
-@skip_on_windows_ci
-def test_grad_accum_step_and_micro_sequence(tmp_path, monkeypatch):
+def test_grad_accum_step_and_micro_sequence(tmp_path, monkeypatch, aten_half_matmuls):
     sink = FakeSink()
     trainer = _trainer(
         tmp_path,
@@ -228,8 +226,7 @@ def test_grad_accum_step_and_micro_sequence(tmp_path, monkeypatch):
 # --------------------------------------------------------------------------
 
 
-@skip_on_windows_ci
-def test_eval_passes_record_nothing(tmp_path, monkeypatch):
+def test_eval_passes_record_nothing(tmp_path, monkeypatch, aten_half_matmuls):
     sink = FakeSink()
     trainer = _trainer(
         tmp_path,
@@ -261,8 +258,7 @@ def test_eval_passes_record_nothing(tmp_path, monkeypatch):
 # --------------------------------------------------------------------------
 
 
-@skip_on_windows_ci
-def test_rows_recorded_with_dataloader_workers(tmp_path, monkeypatch):
+def test_rows_recorded_with_dataloader_workers(tmp_path, monkeypatch, aten_half_matmuls):
     sink = FakeSink()
     trainer = _trainer(tmp_path, dataloader_num_workers=2)
     state = _attach_spy(monkeypatch, trainer, sink)
@@ -281,8 +277,9 @@ def test_rows_recorded_with_dataloader_workers(tmp_path, monkeypatch):
 # --------------------------------------------------------------------------
 
 
-@skip_on_windows_ci
-def test_factory_is_cached_and_unattached_trainer_records_nothing(tmp_path, monkeypatch):
+def test_factory_is_cached_and_unattached_trainer_records_nothing(
+    tmp_path, monkeypatch, aten_half_matmuls
+    ):
     from trl import SFTTrainer
 
     cls = rewind_hf.make_rewind_trainer_class(SFTTrainer)
@@ -309,9 +306,8 @@ def test_factory_is_cached_and_unattached_trainer_records_nothing(tmp_path, monk
 # --------------------------------------------------------------------------
 
 
-@skip_on_windows_ci
 def test_row_losses_failure_disables_recorder_without_stopping_training(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, aten_half_matmuls
 ):
     recording_console = _recording_console(monkeypatch)
 
@@ -368,8 +364,7 @@ def test_disable_reason_is_escaped_not_parsed_as_markup(monkeypatch, reason):
     assert reason in console.export_text()
 
 
-@skip_on_windows_ci
-def test_resumed_run_disables_the_recorder(tmp_path, monkeypatch):
+def test_resumed_run_disables_the_recorder(tmp_path, monkeypatch, aten_half_matmuls):
     """Accelerate's SkipBatchSampler enumerates the wrapped sampler on resume, so
     skipped rows would reach the FIFO while compute_loss never runs for them."""
     first = _trainer(tmp_path, wrap=False, save_strategy="steps", save_steps=1)
@@ -389,8 +384,7 @@ def test_resumed_run_disables_the_recorder(tmp_path, monkeypatch):
     assert "resumed runs" in console.export_text()
 
 
-@skip_on_windows_ci
-def test_packing_is_refused_and_unpacked_control_records(tmp_path, monkeypatch):
+def test_packing_is_refused_and_unpacked_control_records(tmp_path, monkeypatch, aten_half_matmuls):
     """packing=True turns on TRL's padding_free: B=1 micro-batches, one id popped
     each, the rest leaking forever."""
     console = _recording_console(monkeypatch)

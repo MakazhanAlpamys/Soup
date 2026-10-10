@@ -24,7 +24,10 @@ Modes, combinable::
              weight); they run LAST because they corrupt the adapters.
 
 Every point is appended to ``--out`` the moment it exists: a 20-minute sweep
-once died with an empty log, and that is how the data was lost.
+once died with an empty log, and that is how the data was lost. An
+out-of-memory error inside a --step or --ablate block is written as a point of
+kind ``oom`` (the peak, the error, the traceback's tail) and the run exits 3:
+at a larger batch it is a result, not a crash (the R2 batch control).
 
 Typical invocation::
 
@@ -72,6 +75,16 @@ def parse_args() -> argparse.Namespace:
         "--shards",
         default=None,
         help="shard cache dir (default: the same ~/.soup/layer-stream/<slug> soup train uses)",
+    )
+    # The sharder validates each root's own syntax/existence/symlink/overlap rules; it does
+    # NOT re-run the distinct-volume or NVMe-kind checks resolve_stripe_roots does at setup
+    # time (that ~9 s probe is deliberately not repeated here). Pointing two --stripe-dir
+    # entries at the same physical drive is on the operator running this harness.
+    parser.add_argument(
+        "--stripe-dir",
+        action="append",
+        default=[],
+        help="extra cache root on another NVMe drive (repeatable); the cache is striped over it",
     )
     parser.add_argument("--quant", choices=("none", "nf4"), default="nf4")
     parser.add_argument("--tier", choices=("ram", "disk"), default="ram")
@@ -403,6 +416,12 @@ def build(args: argparse.Namespace, device: str, dtype: str) -> Tuple[Any, ...]:
             double_quant=True,
             quant_device=device if args.quant == "nf4" else None,
             notify=print,
+            # getattr, not args.stripe_dir: head_prefetch_ab.py, issue901_stream_step_probe.py,
+            # issue974_warm_stages.py and layer0_wait.py each hand-build their own bare
+            # argparse.Namespace and call this build() directly, none of them spelling a
+            # stripe_dir field, and build() reading it unconditionally would raise
+            # AttributeError in all four the next time they run.
+            stripe_roots=tuple(getattr(args, "stripe_dir", [])),
         )
     shard_seconds = time.perf_counter() - started
 
@@ -717,6 +736,102 @@ def evict_page_cache(gigabytes: float) -> None:
     del buffer
 
 
+#: Exit code of a run that stopped on an out-of-memory error after recording it (R2). 2 stays
+#: "refused before measuring"; anything else non-zero is a crash the JSON says nothing about.
+OOM_EXIT = 3
+
+
+def is_out_of_memory(exc: BaseException) -> bool:
+    """True for a device allocation failure: torch's own class, or the text CUDA and cuBLAS use.
+
+    Added for the R2 batch control, where an out-of-memory error at a larger batch is a RESULT
+    to record and not a crash. The text match also catches a stale CUDA error that only SAYS
+    out of memory (#901: a failed page-lock surfaced at the next launch); the record quotes the
+    message and the traceback, so the two can be told apart after the fact.
+    """
+    import torch
+
+    if isinstance(exc, torch.OutOfMemoryError):
+        return True
+    text = str(exc)
+    return "out of memory" in text.lower() or "ALLOC_FAILED" in text
+
+
+def memory_facts() -> Dict[str, Any]:
+    """The allocator's counters and the device's free memory, read after a block (R2).
+
+    ``num_alloc_retries`` and ``num_ooms`` are cumulative over the process. ``free_gb`` is
+    ``cudaMemGetInfo`` at the end of the block. None of it is a fit verdict on Windows, where an
+    over-allocation spills into shared host memory without an error.
+    """
+    import torch
+
+    stats = torch.cuda.memory_stats()
+    free, total = torch.cuda.mem_get_info()
+    return {
+        "num_alloc_retries": stats.get("num_alloc_retries"),
+        "num_ooms": stats.get("num_ooms"),
+        "free_gb": free / 1e9,
+        "total_gb": total / 1e9,
+    }
+
+
+def oom_record(label: str, exc: BaseException) -> Dict[str, Any]:
+    """What an out-of-memory stop leaves in the JSON: the peak, the error and where it came from.
+
+    The peak counters were reset at the block's first timed step, so an error inside a warm-up
+    step reports the peak since the previous reset or, in the first block, since process start.
+    """
+    import traceback
+
+    import torch
+
+    frames = traceback.format_exception(type(exc), exc, exc.__traceback__)
+    return {
+        "label": label,
+        "error_type": type(exc).__name__,
+        "error": " ".join(str(exc).split())[:2000],
+        "traceback_tail": "".join(frames[-8:])[-4000:],
+        "peak_alloc_gb": torch.cuda.max_memory_allocated() / 1e9,
+        "peak_reserved_gb": torch.cuda.max_memory_reserved() / 1e9,
+        "memory": memory_facts(),
+    }
+
+
+def ids_fingerprint(ids: Any) -> Dict[str, Any]:
+    """A SHA-256 per row of the token ids a block trains on, read outside the timed region (R2).
+
+    A later layer-major (L2L) arm that runs k micro-batches of 1 x seq has to train on the same
+    rows as the batch-k arm it is compared with; these hashes are how it shows that. Whether
+    row i of a (b, seq) draw equals the i-th (1, seq) draw is not assumed either way: the
+    hashes record which it is.
+    """
+    import hashlib
+
+    rows = ids.detach().to("cpu").contiguous()
+    return {
+        "shape": [int(dim) for dim in rows.shape],
+        "dtype": str(rows.dtype).replace("torch.", ""),
+        "row_sha256": [hashlib.sha256(row.numpy().tobytes()).hexdigest() for row in rows],
+    }
+
+
+def stop_on_oom(sink: "Sink", runtime: Any, label: str, exc: BaseException) -> int:
+    """Record an out-of-memory stop as a point of its own, close the source, return OOM_EXIT."""
+    record = oom_record(label, exc)
+    sink.add("oom", record)
+    print(
+        f"OOM           {label}: {record['error_type']}: {record['error'][:300]} "
+        f"(peak {record['peak_alloc_gb']:.3f} GB allocated / "
+        f"{record['peak_reserved_gb']:.3f} GB reserved)"
+    )
+    try:
+        runtime.close()
+    except Exception as close_exc:  # the OOM is the result; a failed close must not hide it
+        print(f"OOM           runtime.close() also failed: {type(close_exc).__name__}: {close_exc}")
+    return OOM_EXIT
+
+
 def run_steps(
     model: Any,
     optimizer: Any,
@@ -743,6 +858,9 @@ def run_steps(
         torch.cuda.synchronize()
         if index == warmup:
             torch.cuda.reset_peak_memory_stats()
+        # Wall-clock start, read outside the timed region: the sustained two-drive probe lines
+        # each step up with its driver's 1-s drive counters. perf_counter stays the step timer.
+        started_unix = time.time()
         wall_start = time.perf_counter()
         out = model(input_ids=ids, labels=ids)
         out.loss.backward()
@@ -755,6 +873,7 @@ def run_steps(
             records.append(
                 {
                     "step_s": wall,
+                    "started_unix": started_unix,
                     "loss": finite(float(out.loss.detach())),
                     "layer_loads": pool.loads - loads_before,
                     "large_loads": (large.loads - large_before) if large is not None else 0,
@@ -955,6 +1074,19 @@ def main() -> int:
         f"{'pinned' if stats['pinned'] else 'pageable'}"
         + ("  [CONTROL: the pre-#971 synchronous read path]" if is_control else "")
     )
+    # direct_io and _open_of exist only on the disk-tier source; getattr reads as None/{} on
+    # the RAM tier. A pinned staging region that is not sector-aligned silently turns direct
+    # I/O off for every drive (see async_disk_source.py), so this line is what lets the
+    # operator catch that live instead of inferring it from throughput after the fact.
+    stripe_roots_seen = list(getattr(index, "stripe_roots", ()) or ())
+    layer_roots_seen = list(getattr(index, "layer_roots", ()) or ())
+    layer_roots_text = ",".join(str(root) for root in layer_roots_seen[:12])
+    if len(layer_roots_seen) > 12:
+        layer_roots_text += ",..."
+    print(
+        f"{'stripe':<16}direct_io {getattr(runtime.source, 'direct_io', None)}  "
+        f"stripe roots {stripe_roots_seen}  layer roots {layer_roots_text}"
+    )
     per_buffer_mb = stats["buffer_bytes"] / stats["buffers"] / 1e6
     print(f"{'buffers':<16}{stats['buffers']} x {per_buffer_mb:.1f} MB")
 
@@ -979,6 +1111,14 @@ def main() -> int:
         "source_class": source_class,
         "control_sync_source": bool(args.control_sync_source),
         "read_ahead": stats["read_ahead"],
+        "stripe_dirs": list(args.stripe_dir),
+        "stripe_roots": list(getattr(index, "stripe_roots", ()) or ()),
+        "layer_roots": list(getattr(index, "layer_roots", ()) or ()),
+        "direct_io": getattr(runtime.source, "direct_io", None),
+        "open_per_root": {
+            str(root): getattr(opener, "__name__", repr(opener))
+            for root, opener in getattr(runtime.source, "_open_of", {}).items()
+        },
         "store_gb": stats["store_bytes"] / 1e9,
         "disk_gb": stats["disk_bytes"] / 1e9,
         "buffers": stats["buffers"],
@@ -1024,26 +1164,47 @@ def main() -> int:
 
     if args.step:
         ids = make_ids(args.seq)
+        fingerprint = ids_fingerprint(ids)
         evict_page_cache(args.evict_gb)
         inst.events_on = False
-        plain = run_steps(
-            model, optimizer, inst, ids, steps=args.steps, warmup=args.warmup, label="step_plain"
-        )
-        sink.add("step", plain)
-        print(describe(plain, flop_per_token, ceiling_tflops))
-        if not args.skip_events:
-            inst.events_on = True
-            evict_page_cache(args.evict_gb)
-            timed = run_steps(
+        try:
+            plain = run_steps(
                 model,
                 optimizer,
                 inst,
                 ids,
                 steps=args.steps,
                 warmup=args.warmup,
-                label="step_events",
+                label="step_plain",
             )
+        except Exception as exc:  # re-raised unless it is an out-of-memory error
+            if not is_out_of_memory(exc):
+                raise
+            return stop_on_oom(sink, runtime, "step_plain", exc)
+        plain["ids"] = fingerprint
+        plain["memory"] = memory_facts()
+        sink.add("step", plain)
+        print(describe(plain, flop_per_token, ceiling_tflops))
+        if not args.skip_events:
+            inst.events_on = True
+            evict_page_cache(args.evict_gb)
+            try:
+                timed = run_steps(
+                    model,
+                    optimizer,
+                    inst,
+                    ids,
+                    steps=args.steps,
+                    warmup=args.warmup,
+                    label="step_events",
+                )
+            except Exception as exc:  # re-raised unless it is an out-of-memory error
+                if not is_out_of_memory(exc):
+                    raise
+                return stop_on_oom(sink, runtime, "step_events", exc)
             inst.events_on = False
+            timed["ids"] = fingerprint
+            timed["memory"] = memory_facts()
             sink.add("step", timed)
             print(describe(timed, flop_per_token, ceiling_tflops))
 
@@ -1087,17 +1248,23 @@ def main() -> int:
                 inst.nocopy = nocopy
                 inst.nodequant = nodequant
                 evict_page_cache(args.evict_gb)
-                point = run_steps(
-                    model,
-                    optimizer,
-                    inst,
-                    ids,
-                    steps=args.steps,
-                    warmup=max(1, args.warmup),
-                    label=f"{name}_r{round_index}",
-                )
+                try:
+                    point = run_steps(
+                        model,
+                        optimizer,
+                        inst,
+                        ids,
+                        steps=args.steps,
+                        warmup=max(1, args.warmup),
+                        label=f"{name}_r{round_index}",
+                    )
+                except Exception as exc:  # re-raised unless it is an out-of-memory error
+                    if not is_out_of_memory(exc):
+                        raise
+                    return stop_on_oom(sink, runtime, f"{name}_r{round_index}", exc)
                 point["arm"] = name
                 point["round"] = round_index
+                point["memory"] = memory_facts()
                 sink.add("ablate", point)
                 print(describe(point, flop_per_token, ceiling_tflops))
         inst.nocopy = False

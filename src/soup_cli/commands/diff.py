@@ -218,13 +218,15 @@ def _load_model(
     trust_remote_code: bool = False,
 ):
     """Load a model and tokenizer."""
-    import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
+    from soup_cli.utils.gpu import resolve_inference_device_map_and_dtype
     from soup_cli.utils.trust_remote import (
         model_requires_trust_remote_code,
         resolve_trust_remote_code,
     )
+
+    device_map, torch_dtype = resolve_inference_device_map_and_dtype(device)
 
     path = Path(model_path)
     adapter_config_path = path / "adapter_config.json"
@@ -261,16 +263,16 @@ def _load_model(
         base = AutoModelForCausalLM.from_pretrained(
             base_model,
             trust_remote_code=trc,
-            device_map="auto",
-            torch_dtype=torch.float16,
+            device_map=device_map,
+            torch_dtype=torch_dtype,
         )
         model_obj = PeftModel.from_pretrained(base, model_path)
     else:
         model_obj = AutoModelForCausalLM.from_pretrained(
             model_path,
             trust_remote_code=trc,
-            device_map="auto",
-            torch_dtype=torch.float16,
+            device_map=device_map,
+            torch_dtype=torch_dtype,
         )
 
     model_obj.eval()

@@ -91,6 +91,16 @@ def infer(
         "-t",
         help="Sampling temperature (0 = greedy)",
     ),
+    batch_size: int = typer.Option(
+        1,
+        "--batch-size",
+        min=1,
+        help=(
+            "Number of causal-LM prompts to generate together "
+            "(default: 1; batching is opt-in; fp16/bf16 batching "
+            "may not be bit-exact with batch size 1)"
+        ),
+    ),
     device: Optional[str] = typer.Option(
         None,
         "--device",
@@ -197,6 +207,12 @@ def infer(
             audio_dir=audio_dir,
         )
         return
+    if cuda_graphs is True and batch_size > 1:
+        raise typer.BadParameter(
+            "--cuda-graphs records a batch of 1 and cannot be combined with "
+            "--batch-size above 1. Omit --cuda-graphs, or use --batch-size 1"
+        )
+
     if task != "text":
         console.print(f"[red]Unknown --task {task!r}; expected 'text' or 'asr'.[/]")
         raise typer.Exit(2)
@@ -215,7 +231,6 @@ def infer(
         console.print(
             f"[dim]Local path not found; treating {model_ref!r} as a HF repo id.[/]"
         )
-    model_target = model_ref
 
     # Read prompts
     prompts = _read_prompts(input_path)
@@ -232,7 +247,7 @@ def infer(
 
     console.print(
         Panel(
-            f"Model:    [bold]{model_target}[/]\n"
+            f"Model:    [bold]{model_ref}[/]\n"
             f"Input:    [bold]{input_path}[/] ({len(prompts)} prompts)\n"
             f"Output:   [bold]{output_file}[/]\n"
             f"Device:   [bold]{device}[/]\n"
@@ -245,7 +260,11 @@ def infer(
     # Load model — gate trust_remote_code via the v0.36.0 helper.
     console.print("[dim]Loading model...[/]")
     model_obj, tokenizer = _load_model(
-        model_target, base, device, trust_remote_code, is_local=(model_kind == "local"),
+        model_ref,
+        base,
+        device,
+        trust_remote_code,
+        is_local=(model_kind == "local"),
     )
     if cuda_graphs is True:
         from soup_cli.utils.cuda_graphs import cuda_graph_generation_kwargs
@@ -289,29 +308,54 @@ def infer(
     ):
         progress_task = progress.add_task("Generating...", total=len(prompts))
 
-        for prompt_text in prompts:
-            messages = [{"role": "user", "content": prompt_text}]
-            try:
-                response, token_count = _generate(
-                    model_obj, tokenizer, messages,
-                    max_tokens=max_tokens, temperature=temperature,
-                    **({"cuda_graphs": True} if cuda_graphs is True else {}),
-                )
-            except Exception as exc:
-                if cuda_graphs is not True:
-                    raise
-                raise _cuda_graph_failure(exc) from exc
+        if batch_size == 1:
+            prompt_batches = [[prompt] for prompt in prompts]
+        else:
+            prompt_batches = [
+                prompts[start : start + batch_size]
+                for start in range(0, len(prompts), batch_size)
+            ]
 
-            result = {
-                "prompt": prompt_text,
-                "response": response,
-                "tokens_generated": token_count,
-            }
-            out_f.write(json.dumps(result, ensure_ascii=False) + "\n")
-            out_f.flush()
-            total_tokens += token_count
-            num_results += 1
-            progress.update(progress_task, advance=1)
+        for prompt_batch in prompt_batches:
+            if batch_size == 1:
+                messages = [{"role": "user", "content": prompt_batch[0]}]
+                try:
+                    generated = [
+                        _generate(
+                            model_obj,
+                            tokenizer,
+                            messages,
+                            max_tokens=max_tokens,
+                            temperature=temperature,
+                            **({"cuda_graphs": True} if cuda_graphs is True else {}),
+                        )
+                    ]
+                except Exception as exc:
+                    if cuda_graphs is not True:
+                        raise
+                    raise _cuda_graph_failure(exc) from exc
+            else:
+                generated = _generate_batch(
+                    model_obj,
+                    tokenizer,
+                    prompt_batch,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                )
+
+            for prompt_text, (response, token_count) in zip(
+                prompt_batch, generated, strict=True
+            ):
+                result = {
+                    "prompt": prompt_text,
+                    "response": response,
+                    "tokens_generated": token_count,
+                }
+                out_f.write(json.dumps(result, ensure_ascii=False) + "\n")
+                out_f.flush()
+                total_tokens += token_count
+                num_results += 1
+                progress.update(progress_task, advance=1)
 
     elapsed = time.time() - start_time
     tokens_per_sec = total_tokens / elapsed if elapsed > 0 else 0
@@ -381,19 +425,20 @@ def _read_asr_rows(path: Path) -> list[dict]:
 def _resolve_asr_audio(audio: str, base_dir: Path) -> str:
     """Resolve a row's audio path against ``base_dir`` with containment.
 
-    Rejects UNC / network paths and anything that resolves outside
+    Rejects UNC / network / device paths (the same check the training loader
+    runs) and anything that resolves outside
     ``base_dir`` (realpath + commonpath) — the infer path is fed JSONL the
     operator may not have authored (the training path already enforces this
     via ``_validate_audio_files``). Raises ``ValueError`` on rejection.
     """
-    from soup_cli.utils.paths import is_under
+    from soup_cli.utils.paths import is_network_or_device_path, is_under
 
     if "\x00" in audio:
         raise ValueError("audio path must not contain null bytes")
     # UNC (\\host\share) / network (//host) paths trigger outbound SMB on
     # Windows — reject before any filesystem touch.
-    if audio.startswith(("\\\\", "//")):
-        raise ValueError("audio path must not be a UNC / network path")
+    if is_network_or_device_path(audio):
+        raise ValueError("audio path must not be a UNC / network / device path")
     candidate = Path(audio)
     if not candidate.is_absolute():
         candidate = base_dir / candidate
@@ -585,11 +630,13 @@ def _infer_asr(
             hyp = transcribe(resolved)
         except (ValueError, OSError, ImportError) as exc:
             skipped += 1
-            # Escape + control-strip the dataset-derived filename AND the
-            # exception (whose message embeds that filename) before printing.
-            name = for_terminal(Path(str(audio)).name)
+            # Quote the dataset-derived filename first, then escape and
+            # control-strip it (repr() after the escape would double the
+            # escape's backslash and make a tag live again); the exception,
+            # whose message embeds that filename, is escaped too.
+            name = for_terminal(repr(Path(str(audio)).name))
             console.print(
-                f"[yellow]Skipped {name!r}: {for_terminal(str(exc))}[/]"
+                f"[yellow]Skipped {name}: {for_terminal(str(exc))}[/]"
             )
             continue
         rec = {"audio": audio, "transcription": hyp}
@@ -603,9 +650,9 @@ def _infer_asr(
                 row_wer = wer(ref, hyp)
                 row_cer = cer(ref, hyp)
             except ValueError as exc:
-                name = for_terminal(Path(str(audio)).name)
+                name = for_terminal(repr(Path(str(audio)).name))
                 console.print(
-                    f"[yellow]Metric skipped for {name!r}: "
+                    f"[yellow]Metric skipped for {name}: "
                     f"{for_terminal(str(exc))}[/]"
                 )
             else:
@@ -664,13 +711,15 @@ def _load_model(
     is_local: Optional[bool] = None,
 ) -> tuple:
     """Load a model and tokenizer (reuses diff.py pattern)."""
-    import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
+    from soup_cli.utils.gpu import resolve_inference_device_map_and_dtype
     from soup_cli.utils.trust_remote import (
         model_requires_trust_remote_code,
         resolve_trust_remote_code,
     )
+
+    device_map, torch_dtype = resolve_inference_device_map_and_dtype(device)
 
     if is_local is None:
         try:
@@ -717,16 +766,16 @@ def _load_model(
         base_obj = AutoModelForCausalLM.from_pretrained(
             base_model,
             trust_remote_code=trc,
-            device_map="auto",
-            torch_dtype=torch.float16,
+            device_map=device_map,
+            torch_dtype=torch_dtype,
         )
         model_obj = PeftModel.from_pretrained(base_obj, model_path)
     else:
         model_obj = AutoModelForCausalLM.from_pretrained(
             model_path,
             trust_remote_code=trc,
-            device_map="auto",
-            torch_dtype=torch.float16,
+            device_map=device_map,
+            torch_dtype=torch_dtype,
         )
 
     model_obj.eval()
@@ -771,6 +820,92 @@ def _generate(
     token_count = new_tokens.shape[0]
     response_text = tokenizer.decode(new_tokens, skip_special_tokens=True).strip()
     return response_text, token_count
+
+
+def _generate_batch(
+    model, tokenizer, prompts, max_tokens=256, temperature=0.7,
+) -> list[tuple[str, int]]:
+    """Generate responses for a causal-LM prompt batch in input order."""
+    from soup_cli.utils.vllm import _render_chat_prompt, encode_rendered_prompt
+
+    rendered = []
+    templated = None
+    for prompt in prompts:
+        text, row_templated = _render_chat_prompt(
+            [{"role": "user", "content": prompt}],
+            tokenizer,
+            fallback_on_error=False,
+        )
+        if templated is None:
+            templated = row_templated
+        elif templated != row_templated:
+            raise ValueError("mixed chat-template rendering modes in one batch")
+        rendered.append(text)
+
+    original_padding_side = tokenizer.padding_side
+    tokenizer.padding_side = "left"
+    try:
+        inputs = encode_rendered_prompt(
+            tokenizer,
+            rendered,
+            templated=bool(templated),
+            padding=True,
+            return_tensors="pt",
+        )
+        input_ids = inputs["input_ids"].to(model.device)
+        attention_mask = inputs["attention_mask"].to(model.device)
+        input_width = input_ids.shape[1]
+
+        import torch
+
+        with torch.no_grad():
+            gen_kwargs = {
+                "input_ids": input_ids,
+                "attention_mask": attention_mask,
+                "max_new_tokens": max_tokens,
+                "do_sample": temperature > 0,
+                "pad_token_id": tokenizer.pad_token_id,
+            }
+            if temperature > 0:
+                gen_kwargs["temperature"] = temperature
+                gen_kwargs["top_p"] = 0.9
+            outputs = model.generate(**gen_kwargs)
+
+        results = []
+        eos_token_ids = getattr(tokenizer, "eos_token_id", None)
+        if eos_token_ids is None:
+            eos_token_ids = set()
+        elif isinstance(eos_token_ids, (list, tuple, set)):
+            eos_token_ids = set(eos_token_ids)
+        else:
+            eos_token_ids = {int(eos_token_ids)}
+
+        for output in outputs:
+            new_tokens = output[input_width:]
+            token_count = new_tokens.shape[0]
+            pad_token_id = tokenizer.pad_token_id
+
+            for index, token in enumerate(new_tokens):
+                token_id = int(token)
+                if token_id in eos_token_ids:
+                    token_count = index + 1
+                    break
+                if token_id == pad_token_id:
+                    token_count = index
+                    break
+
+            actual_tokens = new_tokens[:token_count]
+            results.append(
+                (
+                    tokenizer.decode(
+                        actual_tokens, skip_special_tokens=True
+                    ).strip(),
+                    token_count,
+                )
+            )
+        return results
+    finally:
+        tokenizer.padding_side = original_padding_side
 
 
 def _count_prompt_tokens(tokenizer, prompt_text: str) -> int:
@@ -820,7 +955,12 @@ def _warm_cuda_graphs(model, tokenizer, prompts: list[str], max_tokens: int) -> 
     messages = [{"role": "user", "content": _longest_prompt(tokenizer, prompts)}]
     try:
         _generate(
-            model, tokenizer, messages, max_tokens=max_tokens, temperature=0.0, cuda_graphs=True,
+            model,
+            tokenizer,
+            messages,
+            max_tokens=max_tokens,
+            temperature=0.0,
+            cuda_graphs=True,
             min_tokens=min(max_tokens, _CUDA_GRAPH_WARMUP_TOKENS),
         )
     except Exception as exc:

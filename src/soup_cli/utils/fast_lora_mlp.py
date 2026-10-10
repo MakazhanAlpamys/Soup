@@ -11,11 +11,13 @@ import types
 from typing import Any
 
 from soup_cli.utils.fast_lora import (
+    _GROUP_PATCH_OWNER_MARKER,
     _as_dtype,
     _dense_weight,
     _flatten,
     _is_supported_lora_projection,
     _projection_state,
+    _release_single_projection,
     _scaled_lora_add,
 )
 
@@ -23,6 +25,7 @@ logger = logging.getLogger(__name__)
 _PATCH_MARKER = "_soup_fast_lora_mlp"
 _ORIGINAL_FORWARD_MARKER = "_soup_fast_lora_mlp_original_forward"
 _HAD_INSTANCE_FORWARD_MARKER = "_soup_fast_lora_mlp_had_instance_forward"
+_OWNER = "mlp"
 _FUNCTION: Any = None
 
 __all__ = ["patch_fast_lora_mlp", "unpatch_fast_lora_mlp"]
@@ -304,6 +307,11 @@ def patch_fast_lora_mlp(model: Any) -> int:
             for proj in projections
         ):
             continue
+        if any(getattr(proj, _GROUP_PATCH_OWNER_MARKER, None) is not None for proj in projections):
+            continue
+        for proj in projections:
+            _release_single_projection(proj)
+            setattr(proj, _GROUP_PATCH_OWNER_MARKER, _OWNER)
         setattr(module, _ORIGINAL_FORWARD_MARKER, module.forward)
         setattr(module, _HAD_INSTANCE_FORWARD_MARKER, "forward" in vars(module))
         setattr(module, _PATCH_MARKER, True)
@@ -326,5 +334,9 @@ def unpatch_fast_lora_mlp(model: Any) -> int:
         delattr(module, _ORIGINAL_FORWARD_MARKER)
         delattr(module, _HAD_INSTANCE_FORWARD_MARKER)
         delattr(module, _PATCH_MARKER)
+        for name in ("gate_proj", "up_proj", "down_proj"):
+            proj = getattr(module, name)
+            if getattr(proj, _GROUP_PATCH_OWNER_MARKER, None) == _OWNER:
+                delattr(proj, _GROUP_PATCH_OWNER_MARKER)
         restored += 1
     return restored

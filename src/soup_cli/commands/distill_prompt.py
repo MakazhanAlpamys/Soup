@@ -78,6 +78,9 @@ def distill_prompt_cmd(
     if plan_only:
         return
 
+    from soup_cli.utils.data_forge import ForgeJudgeStats, ProviderCallError
+
+    stats = ForgeJudgeStats()
     try:
         n = prepare_distill_dataset(
             plan,
@@ -85,7 +88,13 @@ def distill_prompt_cmd(
             base_url=base_url,
             temperature=temperature,
             max_rows=max_rows,
+            stats=stats,
         )
+    except ProviderCallError as exc:
+        # #1274: every teacher/student call failed — fail loudly instead of
+        # writing an empty dataset and reporting "done" (mirrors #1221).
+        console.print(f"[red]No usable rows produced:[/] {escape(str(exc))}")
+        raise typer.Exit(1) from exc
     except (TypeError, ValueError) as exc:
         console.print(f"[red]{escape(str(exc))}[/]")
         raise typer.Exit(2) from exc
@@ -98,10 +107,19 @@ def distill_prompt_cmd(
         )
         raise typer.Exit(2) from exc
 
+    call_line = ""
+    title = "soup distill-prompt — done"
+    if stats.failures:
+        call_line = (
+            f"Provider calls: [bold yellow]{stats.failures} of "
+            f"{stats.calls} failed[/]\n"
+        )
+        title = "soup distill-prompt — done with provider failures"
     console.print(
         Panel(
+            f"{call_line}"
             f"Rows:   [bold]{n}[/]\n"
             f"Output: [bold]{escape(plan.output_path)}[/]",
-            title="soup distill-prompt — done",
+            title=title,
         )
     )

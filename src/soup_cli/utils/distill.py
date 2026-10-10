@@ -302,7 +302,7 @@ def build_sequence_distill_rows(
         device: optional device override; defaults to the teacher's device.
 
     Returns:
-        A list of student ``{"messages": [...]}`` rows.
+        A list of student ``{"messages": [...], "_source_index": int}`` rows.
     """
     import torch
 
@@ -316,7 +316,7 @@ def build_sequence_distill_rows(
         pad_id = getattr(teacher_tokenizer, "eos_token_id", None)
 
     out_rows: list = []
-    for row in rows:
+    for idx, row in enumerate(rows):
         if not isinstance(row, dict):
             continue
         messages = row.get("messages")
@@ -373,7 +373,8 @@ def build_sequence_distill_rows(
         out_rows.append(
             {
                 "messages": list(prompt_msgs)
-                + [{"role": "assistant", "content": teacher_text}]
+                + [{"role": "assistant", "content": teacher_text}],
+                "_source_index": idx,
             }
         )
     return out_rows

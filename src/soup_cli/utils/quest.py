@@ -65,6 +65,7 @@ SUFFIXES = (
 EXPECTED_MODULES = tuple(
     f"model.layers.{block}.{suffix}" for block in BLOCKS for suffix in SUFFIXES
 )
+LAYER_COUNT_REFUSAL = "QuEST first slice requires the measured 24 blocks"
 A16_MODULES = tuple(f"model.layers.23.{suffix}" for suffix in SUFFIXES)
 ROUTE_PROVENANCE = {
     "schema_version": 1,
@@ -113,14 +114,8 @@ _METADATA_KEYS = frozenset(
 )
 
 
-def _selected_local_model_files(root: Path) -> list[tuple[str, Path]]:
-    """Mirror the default local weight choice in AutoModelForCausalLM.from_pretrained.
-
-    QuEST supplies no variant, subfolder, or use_safetensors override. A single
-    safetensors file takes precedence over its index, then PyTorch files. The
-    selected weights, their index, model configuration, and tokenizer inputs
-    bind the base.
-    """
+def _read_local_config(root: Path) -> dict[str, Any]:
+    """Read the base ``config.json`` and check the fingerprint's own contract."""
     config = root / "config.json"
     if not config.is_file():
         raise ValueError("QuEST local base requires config.json")
@@ -130,7 +125,20 @@ def _selected_local_model_files(root: Path) -> list[tuple[str, Path]]:
         raise ValueError("QuEST local base config.json is unreadable") from exc
     if not isinstance(config_data, dict) or config_data.get("auto_map"):
         raise ValueError("QuEST local base fingerprint requires a standard model config")
+    return config_data
 
+
+def _selected_local_model_files(root: Path) -> list[tuple[str, Path]]:
+    """Mirror the default local weight choice in AutoModelForCausalLM.from_pretrained.
+
+    QuEST supplies no variant, subfolder, or use_safetensors override. A single
+    safetensors file takes precedence over its index, then PyTorch files. The
+    selected weights, their index, model configuration, and tokenizer inputs
+    bind the base.
+    """
+    _read_local_config(root)
+
+    config = root / "config.json"
     files: list[tuple[str, Path]] = [("config.json", config)]
     generation_config = root / "generation_config.json"
     if generation_config.is_file():
@@ -229,6 +237,58 @@ def _hash_local_file(path: Path) -> tuple[int, str]:
     return before.st_size, digest.hexdigest()
 
 
+def _config_topology(config_data: dict[str, Any]) -> dict[str, Any]:
+    """Return the QuEST topology the local ``config.json`` already declares.
+
+    A multimodal config keeps the text stack under ``text_config``; the route
+    only ever adapts that stack, so prefer it when it is present.
+    """
+    nested = config_data.get("text_config")
+    if isinstance(nested, dict):
+        return {**config_data, **nested}
+    return config_data
+
+
+def _local_topology_widths(config_data: dict[str, Any]) -> list[tuple[str, int]]:
+    """Collect the input widths ``_validate_raw_topology`` will later measure.
+
+    Only values present as real ints are returned. A width we cannot read is
+    left to the post-load gate rather than guessed at here.
+    """
+    config = _config_topology(config_data)
+    widths: list[tuple[str, int]] = []
+    for field in ("hidden_size", "intermediate_size"):
+        value = config.get(field)
+        if type(value) is int:
+            widths.append((field, value))
+    heads = config.get("num_attention_heads")
+    # ``o_proj`` takes num_attention_heads * head_dim, which a config may pin; with no
+    # explicit head_dim it is as wide as hidden_size, which the loop above already checked.
+    head_dim = config.get("head_dim")
+    if type(heads) is int and type(head_dim) is int:
+        widths.append(("num_attention_heads * head_dim", heads * head_dim))
+    return widths
+
+
+def _refuse_disqualifying_local_topology(config_data: dict[str, Any]) -> None:
+    """Gate a local base on the cheap parts of the topology before hashing it.
+
+    ``_validate_raw_topology`` runs inside calibration, so on ``main`` a base
+    that can never satisfy the route had every byte of its weights read and
+    SHA-256-hashed first. This repeats the two checks that ``config.json``
+    answers on its own — the block count and the group-128 / power-of-two
+    widths — with the same refusal text the post-load gate uses. The module
+    coverage, the dtype check and the topology that only a loaded model can
+    show stay where they are; this narrows nothing, it only refuses earlier.
+    """
+    config = _config_topology(config_data)
+    layers = config.get("num_hidden_layers")
+    if type(layers) is int and layers != len(BLOCKS):
+        raise ValueError(LAYER_COUNT_REFUSAL)
+    for _field, width in _local_topology_widths(config_data):
+        validate_group(width)
+
+
 def resolve_base_model_identity(source: str) -> str:
     """Keep Hub IDs intact; replace a local directory with its loaded-file digest."""
     if not isinstance(source, str) or not source:
@@ -236,6 +296,7 @@ def resolve_base_model_identity(source: str) -> str:
     if not os.path.isdir(source):
         return source
     root = Path(os.path.realpath(source))
+    _refuse_disqualifying_local_topology(_read_local_config(root))
     files = _selected_local_model_files(root)
     digest = hashlib.sha256(b"soup.quest.local-base.v2\0")
     for name, path in files:
@@ -336,8 +397,8 @@ def _validate_raw_topology(model: Any) -> dict[str, Any]:
 
     targets = _target_linears(model)
     layers = getattr(getattr(model, "model", None), "layers", None)
-    if layers is None or len(layers) != 24:
-        raise ValueError("QuEST first slice requires the measured 24 blocks")
+    if layers is None or len(layers) != len(BLOCKS):
+        raise ValueError(LAYER_COUNT_REFUSAL)
     if set(targets) != set(EXPECTED_MODULES) or len(targets) != 168:
         raise ValueError(
             "QuEST calibration must cover exactly all 168 measured Llama transformer linears"

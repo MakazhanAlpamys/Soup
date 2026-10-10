@@ -42,7 +42,7 @@ def _reject_lm_eval_injection(value: str, field: str) -> None:
     if "," in value or "=" in value:
         console.print(
             f"[red]Refusing to evaluate:[/] {field} contains ',' or '=' "
-            f"({value!r}); these are lm-eval model_args delimiters and could "
+            f"({for_terminal(repr(value))}); these are lm-eval model_args delimiters and could "
             "smuggle trust_remote_code=True (arbitrary code execution)."
         )
         raise typer.Exit(1)
@@ -77,6 +77,14 @@ def benchmark(
         None, "--device",
         help="Device: cuda, mps, cpu. Auto-detected if not set.",
     ),
+    trust_remote_code: bool = typer.Option(
+        False,
+        "--trust-remote-code",
+        help=(
+            "Allow loading models that ship custom Python via auto_map. "
+            "Default deny (v0.36.0). Only enable if you trust the source."
+        ),
+    ),
 ):
     """Evaluate on standard benchmarks (wraps lm-evaluation-harness)."""
     model_path = Path(model)
@@ -101,12 +109,18 @@ def benchmark(
             )
             model_arg = f"pretrained={base_model},peft={model_path}"
             console.print(
-                f"[dim]LoRA adapter detected. Base model: {base_model}[/]"
+                f"[dim]LoRA adapter detected. Base model: {for_terminal(base_model)}[/]"
             )
         else:
             model_arg = f"pretrained={model_path}"
     else:
         model_arg = f"pretrained={model_path}"
+
+    if trust_remote_code:
+        # Appended only from the resolved --trust-remote-code flag, never
+        # from adapter_config.json: _reject_lm_eval_injection above already
+        # refused a base_model_name_or_path smuggling its own ','/'=' pair.
+        model_arg = f"{model_arg},trust_remote_code=True"
 
     benchmark_list = [b.strip() for b in benchmarks.split(",")]
     console.print(f"[dim]Evaluating on: {', '.join(benchmark_list)}[/]")
@@ -336,6 +350,14 @@ def custom(
             "--attach-to-registry (v0.40.1 / G10)."
         ),
     ),
+    trust_remote_code: bool = typer.Option(
+        False,
+        "--trust-remote-code",
+        help=(
+            "Allow loading models that ship custom Python via auto_map. "
+            "Default deny (v0.36.0). Only enable if you trust the source."
+        ),
+    ),
 ):
     """Run custom evaluation tasks from a JSONL file."""
     from soup_cli.eval.custom import load_eval_tasks
@@ -379,7 +401,9 @@ def custom(
     from soup_cli.eval.custom import _create_default_generator, score_task
 
     console.print("[dim]Loading model...[/]")
-    generate_fn = _create_default_generator(str(model_path))
+    generate_fn = _create_default_generator(
+        str(model_path), trust_remote_code=trust_remote_code,
+    )
 
     with progress:
         task_bar = progress.add_task(
@@ -476,7 +500,9 @@ def judge(
 ):
     """Evaluate model outputs using LLM-as-a-judge."""
     from soup_cli.eval.judge import (
+        JudgeDownError,
         JudgeEvaluator,
+        JudgeUnavailableError,
         load_rubric,
         validate_judge_api_base,
     )
@@ -552,6 +578,7 @@ def judge(
 
     judge_scores = []
     skipped_count = 0
+    down = None
     progress = Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
@@ -569,12 +596,28 @@ def judge(
                     category=item.get("category", "default"),
                 )
                 judge_scores.append(score)
-            except (ValueError, OSError, KeyError) as exc:
+            except JudgeDownError as exc:
+                # #1522: it has stopped answering, so the rest would fail alike.
+                down = exc.for_rows(len(items) - len(judge_scores), len(items), "items")
+                break
+            except (ValueError, OSError, KeyError, JudgeUnavailableError) as exc:
                 skipped_count += 1
                 console.print(
-                    f"[yellow]Warning: judge failed for prompt: {exc}[/]"
+                    f"[yellow]Warning: judge failed for prompt: {for_terminal(exc)}[/]"
                 )
             progress.advance(task_bar)
+
+    if down is not None:
+        console.print(f"[red]Judging stopped: {for_terminal(down)}[/]")
+        if judge_scores:
+            # Not saved to the tracker: a mean over the rows before the outage
+            # is not this benchmark's score.
+            results = JudgeResults(scores=judge_scores)
+            results.compute()
+            _display_judge_results(results)
+        else:
+            console.print("[red]All items failed. Check judge configuration.[/]")
+        raise typer.Exit(1)
 
     if skipped_count > 0:
         console.print(
@@ -692,6 +735,7 @@ def auto(
                 batch_size=8,
                 run_id=None,
                 device=None,
+                trust_remote_code=trust_remote_code,
             )
         except (typer.Exit, SystemExit):
             # benchmark() signals failure with typer.Exit (a RuntimeError, NOT
@@ -715,6 +759,7 @@ def auto(
                 run_id=None,
                 attach_to_registry=None,
                 output=None,
+                trust_remote_code=trust_remote_code,
             )
         except SystemExit:
             console.print("[yellow]Custom eval skipped (see above).[/]")
@@ -821,7 +866,10 @@ def leaderboard(
 
     if fmt in ("json", "csv"):
         output = export_leaderboard(lb, fmt=fmt)
-        console.print(output)
+        # Machine-readable JSON/CSV: raw stdout, not console.print — Rich folds
+        # rows/lines at the console width and parses ``[...]`` as markup when
+        # piped, corrupting the output (issue #1468).
+        typer.echo(output)
         return
 
     # Table format

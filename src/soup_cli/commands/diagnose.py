@@ -5,7 +5,7 @@ Top-level CLI command (NOT a sub-group) — operators type:
     soup diagnose <run-id>
     soup diagnose <run-id> --output diagnose.json
     soup diagnose <run-id> --badge diagnose.svg
-    soup diagnose <run-id> --attach-to-registry <id>
+    soup diagnose <run-id> --output diagnose.json --attach-to-registry <id>
 
 Since v0.71.7 (#165) the six probe runners (forgetting / refusal / format /
 mode_collapse / memorization / contamination) run LIVE when ``--base-model``
@@ -32,13 +32,20 @@ from rich.table import Table
 from soup_cli import __version__
 from soup_cli.utils.diagnose import FailureReport, compose_report
 from soup_cli.utils.diagnose.badge import render_badge_svg
-from soup_cli.utils.diagnose.report import FAILURE_MODES, FailureScore, classify_score
+from soup_cli.utils.diagnose.report import (
+    FAILURE_MODES,
+    FailureScore,
+    classify_score,
+    evidence_default_score,
+)
 from soup_cli.utils.diagnose.runner import (
     build_report,
     neutral_score,
     write_report,
 )
+from soup_cli.utils.exit_codes import EXIT_USAGE_ERROR
 from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
+from soup_cli.utils.terminal import for_terminal
 
 console = Console()
 
@@ -48,13 +55,32 @@ _MAX_EVIDENCE_BYTES = 16 * 1024 * 1024
 
 
 def _verdict_style(verdict: str) -> str:
-    return {"OK": "green", "MINOR": "yellow", "MAJOR": "red"}.get(
-        verdict, "white"
-    )
+    return {
+        "OK": "green",
+        "MINOR": "yellow",
+        "MAJOR": "red",
+        "NOT_RUN": "bright_black",
+    }.get(verdict, "white")
+
+
+def _exit_for(report: FailureReport, allow_not_run: bool) -> None:
+    """Exit 2 on MAJOR; exit 3 when a requested probe did not run (#1435).
+
+    MAJOR wins: a known regression is reported as such even if another probe did
+    not run. ``--allow-not-run`` keeps exit 0 for runs that knowingly skip probes.
+    """
+    if report.overall == "MAJOR":
+        raise typer.Exit(code=2)
+    if report.overall == "NOT_RUN" and not allow_not_run:
+        console.print(
+            "[yellow]One or more requested probes did not run, so the verdict is "
+            "not a pass. Fix the input, or pass --allow-not-run to accept it.[/]"
+        )
+        raise typer.Exit(code=EXIT_USAGE_ERROR)
 
 
 def _render_report(report: FailureReport) -> None:
-    table = Table(title=f"soup diagnose: {escape(report.adapter or report.run_id)}")
+    table = Table(title=f"soup diagnose: {for_terminal(report.adapter or report.run_id)}")
     table.add_column("Mode", style="bold")
     table.add_column("Score", justify="right")
     table.add_column("Verdict")
@@ -65,15 +91,16 @@ def _render_report(report: FailureReport) -> None:
             continue
         table.add_row(
             escape(mode),
-            f"{score.score:.3f}",
+            # A NOT_RUN score is a stored 0.0 placeholder, not a measurement.
+            "\u2014" if score.verdict == "NOT_RUN" else f"{score.score:.3f}",
             f"[{_verdict_style(score.verdict)}]{score.verdict}[/]",
-            escape(score.evidence),
+            for_terminal(score.evidence),
         )
     console.print(table)
     console.print(
         Panel.fit(
             f"[bold {_verdict_style(report.overall)}]{report.overall}[/] — "
-            f"run [bold]{escape(report.run_id)}[/]",
+            f"run [bold]{for_terminal(report.run_id)}[/]",
             title="overall",
         )
     )
@@ -116,7 +143,7 @@ def _scores_from_evidence(payload: dict) -> dict:
             continue
         if not isinstance(entry, dict):
             raise typer.BadParameter(f"scores.{mode} must be an object")
-        score = entry.get("score", 1.0)
+        score = entry.get("score", evidence_default_score(entry))
         # Validate numeric before float() — a non-numeric score otherwise raised
         # ValueError that exited 1 with zero output. BadParameter prints a clear
         # message.
@@ -126,12 +153,15 @@ def _scores_from_evidence(payload: dict) -> dict:
             )
         evidence = entry.get("evidence", "supplied by --evidence")
         verdict = entry.get("verdict") or classify_score(score)
-        out[mode] = FailureScore(
-            mode=mode,
-            score=float(score),
-            verdict=verdict,
-            evidence=str(evidence),
-        )
+        try:
+            out[mode] = FailureScore(
+                mode=mode,
+                score=float(score),
+                verdict=verdict,
+                evidence=str(evidence),
+            )
+        except (ValueError, TypeError) as exc:
+            raise typer.BadParameter(f"scores.{mode} is invalid: {exc}") from exc
     return out
 
 
@@ -167,25 +197,25 @@ def _write_badge(badge_path: str, svg: str) -> None:
 
 
 def _attach_to_registry(report: FailureReport, registry_id: str, output: str) -> None:
+    """Attach the written report to a registry entry as ``diagnose_report``.
+
+    A requested attach is part of the command's success: when it does not
+    happen the command exits 1, with the report already on disk.
+    """
     try:
         from soup_cli.registry.attach import attach_artifact
-    except Exception as exc:  # noqa: BLE001 — registry is optional
-        console.print(
-            f"[yellow]Warning:[/] could not import registry attach helper: "
-            f"{escape(type(exc).__name__)}"
-        )
-        return
-    try:
-        attach_artifact(registry_id, "diagnose_report", output)
-        console.print(
-            f"[green]Attached[/] diagnose_report to registry entry "
-            f"[bold]{escape(registry_id)}[/]"
-        )
+
+        attach_artifact(registry_id, path=output, kind="diagnose_report")
     except Exception as exc:  # noqa: BLE001
         console.print(
-            f"[yellow]Warning:[/] could not attach to registry: "
-            f"{escape(type(exc).__name__)}: {escape(str(exc))}"
+            f"[red]Error:[/] could not attach to registry: "
+            f"{escape(type(exc).__name__)}: {for_terminal(exc)}"
         )
+        raise typer.Exit(code=1) from exc
+    console.print(
+        f"[green]Attached[/] diagnose_report to registry entry "
+        f"[bold]{for_terminal(registry_id)}[/]"
+    )
 
 
 def _emit_report(
@@ -201,11 +231,11 @@ def _emit_report(
     if output:
         try:
             write_report(report, output)
-            console.print(f"[green]Wrote[/] {escape(output)}")
+            console.print(f"[green]Wrote[/] {for_terminal(output)}")
         except (OSError, ValueError) as exc:
             console.print(
                 f"[red]Error:[/] cannot write --output: "
-                f"{escape(type(exc).__name__)}: {escape(str(exc))}"
+                f"{escape(type(exc).__name__)}: {for_terminal(exc)}"
             )
             raise typer.Exit(code=1) from exc
 
@@ -213,20 +243,17 @@ def _emit_report(
         try:
             svg = render_badge_svg(report)
             _write_badge(badge, svg)
-            console.print(f"[green]Badge written[/] to {escape(badge)}")
+            console.print(f"[green]Badge written[/] to {for_terminal(badge)}")
         except (OSError, ValueError, TypeError) as exc:
             console.print(
                 f"[red]Error:[/] cannot write --badge: "
-                f"{escape(type(exc).__name__)}: {escape(str(exc))}"
+                f"{escape(type(exc).__name__)}: {for_terminal(exc)}"
             )
             raise typer.Exit(code=1) from exc
 
-    if attach_to_registry and output:
+    if attach_to_registry is not None:
+        assert output  # narrowed by the early arg-check in diagnose()
         _attach_to_registry(report, attach_to_registry, output)
-    elif attach_to_registry and not output:
-        console.print(
-            "[yellow]Warning:[/] --attach-to-registry needs --output (skipped)."
-        )
 
 
 def diagnose(
@@ -245,7 +272,12 @@ def diagnose(
         None, "--badge", help="Write an SVG badge to this path."
     ),
     attach_to_registry: Optional[str] = typer.Option(
-        None, "--attach-to-registry", help="Attach the report to a registry entry id."
+        None,
+        "--attach-to-registry",
+        help=(
+            "Attach the --output report to a registry entry id (needs --output). "
+            "Exits 1 when the attach fails."
+        ),
     ),
     base_model: Optional[str] = typer.Option(
         None,
@@ -259,8 +291,14 @@ def diagnose(
     dataset: Optional[str] = typer.Option(
         None,
         "--dataset",
-        help="Training JSONL for the live forgetting / format / memorization "
+        help="Training JSONL for live format / memorization / citation "
         "probes (must stay under cwd).",
+    ),
+    holdout: Optional[str] = typer.Option(
+        None,
+        "--holdout",
+        help="Held-out evaluation JSONL for the live forgetting probe "
+        "(must stay under cwd; falls back to built-in general prompts if unset).",
     ),
     tokenizer: Optional[str] = typer.Option(
         None,
@@ -279,6 +317,14 @@ def diagnose(
             "style the model was trained to emit. (v0.71.17 #254)"
         ),
     ),
+    allow_not_run: bool = typer.Option(
+        False,
+        "--allow-not-run",
+        help=(
+            "Exit 0 even when a requested probe did not run (verdict NOT_RUN). "
+            "Without it such a run exits 3."
+        ),
+    ),
     shuffle_seed: Optional[int] = typer.Option(
         None,
         "--shuffle-seed",
@@ -291,7 +337,7 @@ def diagnose(
     """Compute a 6-mode FailureReport for a completed run.
 
     With ``--base-model`` the six probes run LIVE against the loaded model
-    (+ optional ``--adapter`` LoRA path, ``--dataset``, ``--tokenizer``).
+    (+ optional ``--adapter`` LoRA path, ``--dataset``, ``--holdout``, ``--tokenizer``).
     Without it, scores come from ``--evidence`` JSON or default to neutral OK.
     """
     if not isinstance(run_id, str) or not run_id.strip():
@@ -307,12 +353,31 @@ def diagnose(
         resolved_citation_style = validate_citation_style(citation_style)
     except (TypeError, ValueError) as exc:
         console.print(
-            f"[red]Invalid --citation-style:[/] {escape(str(exc))}"
+            f"[red]Invalid --citation-style:[/] {for_terminal(exc)}"
         )
         raise typer.Exit(code=2) from exc
 
+    # The attach links the --output file, so without one nothing can be
+    # attached: say so before a live run loads a model.
+    if attach_to_registry is not None and not output:
+        console.print(
+            "[red]Error:[/] --attach-to-registry needs --output "
+            "(nothing written to attach)."
+        )
+        raise typer.Exit(code=EXIT_USAGE_ERROR)
+
     if base_model is not None:
+        from soup_cli.utils.diagnose import _common
         from soup_cli.utils.diagnose.live import run_live_diagnose
+
+        # Resolve --tokenizer before any model loads; a bad id is an input error.
+        tokenizer_arg: object = tokenizer
+        if tokenizer is not None:
+            try:
+                tokenizer_arg = _common.resolve_tokenizer(tokenizer)
+            except (TypeError, ValueError) as exc:
+                console.print(f"[red]Error:[/] {for_terminal(exc)}")
+                raise typer.Exit(code=EXIT_USAGE_ERROR) from exc
 
         try:
             report = run_live_diagnose(
@@ -320,8 +385,9 @@ def diagnose(
                 base=base_model,
                 adapter=adapter or None,
                 dataset_path=dataset,
+                holdout_path=holdout,
                 device=device,
-                tokenizer=tokenizer,
+                tokenizer=tokenizer_arg,
                 soup_version=__version__,
                 citation_style=resolved_citation_style,
                 shuffle_seed=shuffle_seed,
@@ -329,12 +395,11 @@ def diagnose(
         except (ValueError, TypeError, OSError, RuntimeError) as exc:
             console.print(
                 f"[red]Error:[/] live diagnose failed: "
-                f"{escape(type(exc).__name__)}: {escape(str(exc))}"
+                f"{escape(type(exc).__name__)}: {for_terminal(exc)}"
             )
             raise typer.Exit(code=1) from exc
         _emit_report(report, output=output, badge=badge, attach_to_registry=attach_to_registry)
-        if report.overall == "MAJOR":
-            raise typer.Exit(code=2)
+        _exit_for(report, allow_not_run)
         return
 
     scores = {}
@@ -375,9 +440,7 @@ def diagnose(
         extras=extras,
     )
     _emit_report(report, output=output, badge=badge, attach_to_registry=attach_to_registry)
-
-    if report.overall == "MAJOR":
-        raise typer.Exit(code=2)
+    _exit_for(report, allow_not_run)
 
 
 # Compose a tiny helper so the CLI module is callable from tests.

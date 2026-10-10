@@ -321,11 +321,10 @@ def generate(
 
             # Validate and dedup
             for example in batch:
-                if not _validate_example(example, fmt):
-                    # For preference templates, validate against preference format
-                    if template == "preference" and _validate_preference(example):
-                        all_examples.append(example)
-                        continue
+                is_valid = _validate_example(example, fmt)
+                if not is_valid and template == "preference" and _validate_preference(example):
+                    is_valid = True
+                if not is_valid:
                     continue
                 text = _row_to_text(example)
                 if text in existing_texts:
@@ -710,17 +709,27 @@ def _generate_openai(
 
     base_url = api_base or "https://api.openai.com/v1"
 
-    # Validate api_base to prevent SSRF (block non-HTTPS remote URLs)
+    # Validate api_base to prevent SSRF (block non-HTTPS remote URLs and
+    # private / link-local / reserved IP literals; 0.0.0.0 is not loopback)
     if api_base:
         from urllib.parse import urlparse
 
+        from soup_cli.utils.net_guard import (
+            LOOPBACK_HOSTS,
+            UNSPECIFIED_HOST_HINT,
+            refuse_private_ip_literal,
+        )
+
         parsed = urlparse(api_base)
-        is_local = parsed.hostname in ("localhost", "127.0.0.1", "::1", "0.0.0.0")
+        is_local = parsed.hostname in LOOPBACK_HOSTS
         if not is_local and parsed.scheme != "https":
+            if parsed.hostname == "0.0.0.0":
+                raise ValueError(f"api_base {UNSPECIFIED_HOST_HINT}")
             raise ValueError(
                 f"api_base must use HTTPS for remote APIs (got {parsed.scheme}://). "
                 "HTTP is only allowed for localhost."
             )
+        refuse_private_ip_literal(parsed.hostname, label="api_base")
 
     if generation_prompt is None:
         generation_prompt = _build_generation_prompt(prompt, count, fmt, seed_examples)
@@ -849,21 +858,31 @@ def _generate_server(
 
     base_url = api_base or "http://localhost:8000/v1"
 
-    # Validate api_base to prevent SSRF — only allow http/https, block remote non-HTTPS
+    # Validate api_base to prevent SSRF — only allow http/https, block remote
+    # non-HTTPS and private / link-local / reserved IP literals
     if api_base:
         from urllib.parse import urlparse
+
+        from soup_cli.utils.net_guard import (
+            LOOPBACK_HOSTS,
+            UNSPECIFIED_HOST_HINT,
+            refuse_private_ip_literal,
+        )
 
         parsed = urlparse(api_base)
         if parsed.scheme not in ("http", "https"):
             raise ValueError(
                 f"api_base must use HTTP or HTTPS scheme (got {parsed.scheme}://)"
             )
-        is_local = parsed.hostname in ("localhost", "127.0.0.1", "::1", "0.0.0.0")
+        is_local = parsed.hostname in LOOPBACK_HOSTS
         if not is_local and parsed.scheme != "https":
+            if parsed.hostname == "0.0.0.0":
+                raise ValueError(f"api_base {UNSPECIFIED_HOST_HINT}")
             raise ValueError(
                 f"api_base must use HTTPS for remote APIs (got {parsed.scheme}://). "
                 "HTTP is only allowed for localhost."
             )
+        refuse_private_ip_literal(parsed.hostname, label="api_base")
 
     # Strip trailing /v1 if present (we add it to the endpoint path)
     base_url = base_url.rstrip("/")
@@ -950,4 +969,14 @@ def _path_within_cwd(path: Path, cwd: Path) -> bool:
 
 def _row_to_text(row: dict) -> str:
     """Convert a row to a text string for dedup comparison."""
+    if "prompt" in row and "chosen" in row and "rejected" in row:
+        p = row.get("prompt") or ""
+        c = row.get("chosen") or ""
+        r = row.get("rejected") or ""
+        return f"{p} {c} {r}".strip()
+    if "prompt" in row and "completion" in row and "label" in row:
+        p = row.get("prompt") or ""
+        c = row.get("completion") or ""
+        lbl = row.get("label") or ""
+        return f"{p} {c} {lbl}".strip()
     return " ".join(str(v) for v in row.values() if v)

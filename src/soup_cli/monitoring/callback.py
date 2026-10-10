@@ -22,12 +22,20 @@ def soup_callback_kwargs(
     batch_size: Optional[int] = None,
     output_dir: Optional[str] = None,
     include_eval_gate: bool = True,
+    task: Optional[str] = None,
 ) -> dict[str, Any]:
     """Shared kwargs for :class:`SoupTrainerCallback` across all trainers (#802).
 
     Unifies watchdog, spike recovery, and grad-accum parameters so they cannot
     drift across trainer implementations.
+
+    ``task`` picks the run's validation metric from
+    :data:`soup_cli.utils.eval_schedule.VALIDATION_METRICS` (#1389): every task
+    records ``eval_loss`` as ``val_loss`` unless the table says otherwise, so only
+    a trainer whose evaluation is scored differently (``grpo``: the held-out
+    reward) needs to pass it.
     """
+    from soup_cli.utils.eval_schedule import validation_metric
     resolved_batch = 1
     if batch_size is not None and not isinstance(batch_size, bool):
         try:
@@ -60,12 +68,45 @@ def soup_callback_kwargs(
             tcfg, "gradient_accumulation_steps", 1
         ),
         "grad_accum_current_batch": resolved_batch,
+        "val_metric": validation_metric(task),
     }
     if include_eval_gate:
         kwargs["eval_gate_config"] = getattr(tcfg, "eval_gate", None)
     if output_dir is not None:
         kwargs["output_dir"] = output_dir
     return kwargs
+
+
+def build_soup_trainer_callback(
+    display: TrainingDisplay,
+    *,
+    config: Any,
+    tracker: Optional[object] = None,
+    run_id: str = "",
+    batch_size: Optional[int] = None,
+    output_dir: Optional[str] = None,
+    task: Optional[str] = None,
+) -> Any:
+    """Build a trainer callback with shared training and evaluation config.
+
+    ``task`` picks the run's validation metric (#1389); only a trainer whose
+    evaluation is scored differently (``grpo``) needs to pass it."""
+    training_config = config.training
+    callback_cls = globals().get("SoupTrainerCallback")
+    if callback_cls is None:
+        callback_cls = __getattr__("SoupTrainerCallback")
+
+    return callback_cls(
+        display=display,
+        tracker=tracker,
+        run_id=run_id,
+        **soup_callback_kwargs(
+            training_config,
+            batch_size=batch_size,
+            output_dir=output_dir,
+            task=task,
+        ),
+    )
 
 
 def _get_trainer_callback_base():
@@ -78,6 +119,27 @@ def _get_trainer_callback_base():
         return object
 
 
+def _gate_failure_summary(result) -> str:
+    """Name what failed the gate: regressions, and tasks that could not be scored.
+
+    A task with ``error`` set never ran to a score (a judge that was down, a
+    missing prompts file); it fails the gate closed, but it is not a regression
+    and the log must not call it one (#1447).
+    """
+    failed = [r for r in result.task_results if not r.passed]
+    unscored = [r for r in failed if r.error]
+    regressed = len(failed) - len(unscored)
+    parts = []
+    if regressed or not unscored:
+        parts.append(f"{regressed} task(s) regressed")
+    if unscored:
+        parts.append(
+            f"{len(unscored)} task(s) could not be scored: "
+            + "; ".join(f"{r.name}: {r.error}" for r in unscored)
+        )
+    return ", ".join(parts)
+
+
 class _SoupTrainerCallback_body:  # noqa: N801
     """Bridges HF Trainer events to Soup's Rich live display and experiment tracker."""
 
@@ -86,7 +148,6 @@ class _SoupTrainerCallback_body:  # noqa: N801
         display: TrainingDisplay,
         tracker: Optional[object] = None,
         run_id: str = "",
-        eval_config: Optional[object] = None,
         output_dir: str = "",
         loss_watchdog: bool = False,
         loss_watchdog_threshold: float = 3.0,
@@ -97,15 +158,23 @@ class _SoupTrainerCallback_body:  # noqa: N801
         spike_recovery_lr_decay: float = 0.5,
         grad_accum_auto_tune: bool = False,
         grad_accum_pressure_threshold: float = 0.9,
-        grad_accum_total_vram_gb: float = 24.0,
+        grad_accum_total_vram_gb: Optional[float] = None,
         grad_accum_current_steps: int = 1,
         grad_accum_current_batch: int = 1,
+        val_metric: Optional[object] = None,
     ):
+        from soup_cli.utils.eval_schedule import DEFAULT_VALIDATION_METRIC
+
         self.display = display
         self.tracker = tracker
         self.run_id = run_id
-        self.eval_config = eval_config
         self.output_dir = output_dir
+        #: Which evaluation entry is this run's validation number, and under
+        #: what name it is recorded (#1389). ``eval_loss`` -> ``val_loss`` for
+        #: every task but the generation-scored ones; grpo records
+        #: ``eval_reward`` as ``val_reward`` and its ``eval_loss``, the policy
+        #: objective, reaches no sink.
+        self._val_metric = val_metric or DEFAULT_VALIDATION_METRIC
         # HF emits a summary-only ``on_log`` event after the final optimizer
         # step. It has runtime/throughput fields but no loss/LR/grad norm. Keep
         # the last real values so that event cannot reset the dashboards and
@@ -145,14 +214,13 @@ class _SoupTrainerCallback_body:  # noqa: N801
         self._grad_accum_current = max(1, int(grad_accum_current_steps))
         self._grad_accum_batch = max(1, int(grad_accum_current_batch))
         self._grad_accum_advised = False
-        if grad_accum_auto_tune:
-            from soup_cli.utils.grad_accum import GradAccumMonitor
-            self._grad_accum_monitor = GradAccumMonitor(
-                total_vram_gb=grad_accum_total_vram_gb,
-                threshold=grad_accum_pressure_threshold,
-            )
-        else:
-            self._grad_accum_monitor = None
+        self._grad_accum_threshold = grad_accum_pressure_threshold
+        #: None = measure the total memory of the CUDA device the run uses on
+        #: the first advisory call (#1620); an explicit value overrides that.
+        self._grad_accum_total_vram_gb = grad_accum_total_vram_gb
+        #: Built lazily on the first advisory call: construction must not
+        #: probe torch, and the card total is only known once CUDA is up.
+        self._grad_accum_monitor = None
         # Eval gate state (Part B of v0.26.0)
         self.eval_gate_config = eval_gate_config
         # Tests inject these; prod wiring sets them at on_train_begin time.
@@ -240,8 +308,9 @@ class _SoupTrainerCallback_body:  # noqa: N801
             import torch
 
             if torch.cuda.is_available():
-                used = torch.cuda.max_memory_allocated() / (1024**3)
-                total = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+                device = torch.cuda.current_device()
+                used = torch.cuda.max_memory_allocated(device) / (1024**3)
+                total = torch.cuda.get_device_properties(device).total_memory / (1024**3)
                 gpu_mem = f"{used:.1f}/{total:.1f} GB"
         except Exception:
             pass
@@ -259,8 +328,12 @@ class _SoupTrainerCallback_body:  # noqa: N801
         # `_last_loss` untouched and re-reported the stale training number to
         # every sink at the same step, so the evaluated value existed nowhere.
         # It is kept as a separate series and never folded into `loss`.
-        if logs.get("eval_loss") is not None:
-            self._last_val_loss = logs["eval_loss"]
+        # Which entry that is depends on the task (#1389): `eval_loss` for a
+        # likelihood-scored task, `eval_reward` for grpo, where `eval_loss` is
+        # the policy objective and is deliberately not read.
+        val_key, val_field = self._val_metric.log_key, self._val_metric.field
+        if logs.get(val_key) is not None:
+            self._last_val_loss = logs[val_key]
         loss = self._last_loss
         lr = self._last_lr
         display_grad_norm = self._last_grad_norm
@@ -279,18 +352,18 @@ class _SoupTrainerCallback_body:  # noqa: N801
         # would be inconsistent to reject 0.0 there and accept a carried value
         # here.
         display_val_loss = self._last_val_loss
-        measured_val_loss = logs.get("eval_loss")
+        measured_val_loss = logs.get(val_key)
         speed = logs.get("train_steps_per_second", 0.0)
 
         self.display.update(
             step=step,
             epoch=epoch,
             loss=loss,
-            val_loss=display_val_loss,
             lr=lr,
             grad_norm=display_grad_norm,
             speed=speed,
             gpu_mem=gpu_mem,
+            **{val_field: display_val_loss},
         )
 
         # v0.53.9 #94 — push to the global SSE buffer so the live Web UI
@@ -308,17 +381,19 @@ class _SoupTrainerCallback_body:  # noqa: N801
                     # `is not None`, not truthiness — a real 0.0 loss / lr (e.g.
                     # end of an LR schedule) must not be reported as None.
                     loss=float(loss) if loss is not None else None,
-                    val_loss=(
-                        float(measured_val_loss)
-                        if measured_val_loss is not None
-                        else None
-                    ),
                     lr=float(lr) if lr is not None else None,
                     grad_norm=(
                         float(measured_grad_norm)
                         if measured_grad_norm is not None
                         else None
                     ),
+                    **{
+                        val_field: (
+                            float(measured_val_loss)
+                            if measured_val_loss is not None
+                            else None
+                        )
+                    },
                 )
             )
         except Exception:
@@ -386,12 +461,9 @@ class _SoupTrainerCallback_body:  # noqa: N801
             else:
                 self._watchdog_counter = 0
 
-        # v0.33.0 #59 — grad-accum advisory (one-shot per run)
-        if (
-            self._grad_accum_enabled
-            and not self._grad_accum_advised
-            and self._grad_accum_monitor is not None
-        ):
+        # v0.33.0 #59 — grad-accum advisory (one-shot per run). The monitor
+        # is built lazily inside the method on its first call (#1620).
+        if self._grad_accum_enabled and not self._grad_accum_advised:
             self._maybe_advise_grad_accum()
 
         # Log to experiment tracker
@@ -401,11 +473,11 @@ class _SoupTrainerCallback_body:  # noqa: N801
                 step=step,
                 epoch=epoch,
                 loss=loss,
-                val_loss=measured_val_loss,
                 lr=lr,
                 grad_norm=measured_grad_norm,
                 speed=speed,
                 gpu_mem=gpu_mem,
+                **{val_field: measured_val_loss},
             )
 
     def on_epoch_end(
@@ -533,13 +605,13 @@ class _SoupTrainerCallback_body:  # noqa: N801
             if on_reg == "stop":
                 control.should_training_stop = True
                 logger.warning(
-                    "eval gate FAILED (%d task(s) regressed); stopping training",
-                    sum(1 for r in result.task_results if not r.passed),
+                    "eval gate FAILED (%s); stopping training",
+                    _gate_failure_summary(result),
                 )
             elif on_reg == "warn":
                 logger.warning(
-                    "eval gate FAILED (%d task(s) regressed); continuing per policy",
-                    sum(1 for r in result.task_results if not r.passed),
+                    "eval gate FAILED (%s); continuing per policy",
+                    _gate_failure_summary(result),
                 )
             # on_reg == "continue": silent per user policy
 
@@ -548,56 +620,6 @@ class _SoupTrainerCallback_body:  # noqa: N801
         control: TrainerControl, **kwargs,
     ):
         self.display.stop()
-        self._run_auto_eval()
-
-    def _run_auto_eval(self) -> None:
-        """Run automatic evaluation if configured."""
-        if self.eval_config is None:
-            return
-        if not getattr(self.eval_config, "auto_eval", False):
-            return
-        if not self.output_dir:
-            return
-
-        from rich.console import Console
-
-        console = Console()
-        console.print("\n[bold blue]Running auto-eval...[/]")
-
-        benchmarks = getattr(self.eval_config, "benchmarks", None) or []
-        custom_tasks = getattr(self.eval_config, "custom_tasks", None)
-
-        # Run standard benchmarks
-        if benchmarks:
-            try:
-                from soup_cli.commands.eval import benchmark
-                benchmark(
-                    model=self.output_dir,
-                    benchmarks=",".join(benchmarks),
-                    num_fewshot=None,
-                    batch_size=8,
-                    run_id=self.run_id,
-                    device=None,
-                )
-            except Exception as exc:
-                logger.exception("Auto-eval benchmark failed")
-                console.print(f"[yellow]Auto-eval benchmark failed: {exc}[/]")
-
-        # Run custom eval
-        if custom_tasks:
-            try:
-                from soup_cli.commands.eval import custom
-                # #752 — pass every typer parameter; see commands/eval.py.
-                custom(
-                    tasks=custom_tasks,
-                    model=self.output_dir,
-                    run_id=self.run_id,
-                    attach_to_registry=None,
-                    output=None,
-                )
-            except Exception as exc:
-                logger.exception("Auto-eval custom failed")
-                console.print(f"[yellow]Auto-eval custom failed: {exc}[/]")
 
     # ------------------------------------------------------------------
     # v0.33.0 #57 — spike recovery hint
@@ -662,18 +684,38 @@ class _SoupTrainerCallback_body:  # noqa: N801
         Phase 1 is advisory-only. Phase 2 (live DataLoader rebuild) requires
         a small upstream TRL change tracked as a known limitation.
         """
-        if self._grad_accum_advised:
+        if self._grad_accum_advised or not self._grad_accum_enabled:
             return
         try:
             import torch
             if not torch.cuda.is_available():
                 return
-            used_gb = torch.cuda.max_memory_allocated() / (1024**3)
+            # The advisory must measure against the card the run actually
+            # uses (#1620): against the old fixed 24 GB total it could never
+            # fire on a smaller card and fired early on larger ones. The peak
+            # and the total are read from the same device.
+            device = torch.cuda.current_device()
+            used_gb = torch.cuda.max_memory_allocated(device) / (1024**3)
         except Exception:  # noqa: BLE001 — VRAM probe is best-effort
             return
 
         if self._grad_accum_monitor is None:
-            return
+            try:
+                if self._grad_accum_total_vram_gb is None:
+                    total_gb = (
+                        torch.cuda.get_device_properties(device).total_memory
+                        / (1024**3)
+                    )
+                else:
+                    total_gb = float(self._grad_accum_total_vram_gb)
+                from soup_cli.utils.grad_accum import GradAccumMonitor
+                self._grad_accum_monitor = GradAccumMonitor(
+                    total_vram_gb=total_gb,
+                    threshold=self._grad_accum_threshold,
+                )
+            except Exception:  # noqa: BLE001 — card probe is best-effort
+                return
+
         self._grad_accum_monitor.observe(used_gb)
         if not self._grad_accum_monitor.should_adjust(used_gb):
             return
@@ -683,11 +725,13 @@ class _SoupTrainerCallback_body:  # noqa: N801
         if new_accum == self._grad_accum_current:
             return
         self._grad_accum_advised = True
+        monitor_gb = self._grad_accum_monitor.total_vram_gb
         console.print(
-            f"[yellow]Grad-accum advisory:[/] VRAM pressure crossed "
-            f"threshold; recommend (batch_size, grad_accum_steps) "
-            f"({self._grad_accum_batch}, {self._grad_accum_current}) -> "
-            f"({new_batch}, {new_accum}). "
+            f"[yellow]Grad-accum advisory:[/] peak {used_gb:.1f} of "
+            f"{monitor_gb:.1f} GB ({used_gb / monitor_gb:.0%}) crossed "
+            f"the pressure threshold; recommend (batch_size, "
+            f"grad_accum_steps) ({self._grad_accum_batch}, "
+            f"{self._grad_accum_current}) -> ({new_batch}, {new_accum}). "
             f"Restart training with the new pair to take effect."
         )
 

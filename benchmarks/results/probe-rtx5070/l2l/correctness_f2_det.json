@@ -1,0 +1,115 @@
+{
+ "meta": {
+  "gpu": "NVIDIA GeForce RTX 5070 Laptop GPU",
+  "torch": "2.14.0+cu130",
+  "vram_total_gb": 8.518,
+  "soup_cli_file": "C:\\Users\\user\\projects\\Soup-l2l\\src\\soup_cli\\__init__.py",
+  "driver": "616.92",
+  "pcie_gen": "5",
+  "pcie_width": "8",
+  "mode": "correctness",
+  "weights": "D:/synth/llama-70b-shape-v32k-f4",
+  "shards": null,
+  "quant": "nf4",
+  "tier": "disk",
+  "buffers": 2,
+  "read_ahead": 2,
+  "seq": 512,
+  "lora_r": 8,
+  "lora_targets": "q_proj,k_proj,v_proj,o_proj",
+  "seed": 3,
+  "input_seed": 17,
+  "k": 2,
+  "ks": "1,2,3,4,8,16",
+  "cd_k": 4,
+  "steps": 3,
+  "warmup": 1,
+  "rounds": 2,
+  "spill_k": 16,
+  "spill_budget_k": 8,
+  "spill_dir": "D:/soup-l2l-spill",
+  "deterministic": true,
+  "dry_run": false,
+  "allow_invalid": false,
+  "out": "benchmarks/results/probe-rtx5070/l2l/correctness_f2_det.json",
+  "label": "F2",
+  "lazy_shard_handles": false,
+  "control_sync_source": false,
+  "no_pin": false,
+  "weights_dir": "D:\\synth\\llama-70b-shape-v32k-f4",
+  "shard_dir": "C:\\Users\\user\\.soup\\layer-stream\\D___synth__llama-70b-shape-v32k-f4",
+  "dtype": "bfloat16",
+  "arch": "llama",
+  "n_layers": 80,
+  "hidden": 8192,
+  "pinned": true,
+  "source_class": "AsyncDiskSource",
+  "direct_io": true,
+  "store_gb": 1.956601912,
+  "shard_seconds": 0.0023195999674499035,
+  "build_seconds": 9.69501509994734,
+  "chunk_bytes": 8388608,
+  "v3": {
+   "free_gb": 15.31465728,
+   "commit_avail_gb": 26.407010304,
+   "need_gb": 1.34217728,
+   "margin_gb": 4.0,
+   "gpu_used_before_build_mib": 0,
+   "gpu_pids": [
+    9444
+   ],
+   "foreign_gpu_pids": [],
+   "ram_ok": true,
+   "gpu_ok": true,
+   "ok": true
+  },
+  "box": {
+   "unix": 1791372743.046226,
+   "total_phys_gb": 34.070192128,
+   "avail_phys_gb": 15.315591168,
+   "commit_limit_gb": 60.913737728,
+   "commit_avail_gb": 26.406375424,
+   "ac": true,
+   "gpu_pids": [
+    9444
+   ],
+   "gpu_mem_used_mib": 1636,
+   "python_processes": 6
+  },
+  "started": "2026-10-07T16:32:23"
+ },
+ "records": [
+  {
+   "kind": "correctness",
+   "fixture": "F2",
+   "k": 2,
+   "deterministic": true,
+   "a_vs_a": {
+    "tensors": 640,
+    "unequal": [],
+    "max_abs": 0.0,
+    "worst": [],
+    "all_zero": [],
+    "equal": true
+   },
+   "a_vs_a_losses_equal": true,
+   "l2l": {
+    "tensors": 640,
+    "unequal": [],
+    "max_abs": 0.0,
+    "worst": [],
+    "all_zero": [],
+    "equal": true
+   },
+   "l2l_losses_equal": true,
+   "losses_ga": [
+    6.035345077514648,
+    5.996968746185303
+   ],
+   "losses_l2l": [
+    6.035345077514648,
+    5.996968746185303
+   ]
+  }
+ ]
+}

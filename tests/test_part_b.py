@@ -195,8 +195,8 @@ class TestAutoReexec:
             assert "accelerate" in result.output
 
     def test_reexec_calls_execvp_with_accelerate_argv(self, tmp_path, monkeypatch):
-        """With --gpus 2 and no --no-reexec, the train command should call
-        os.execvp with an argv starting with 'accelerate'."""
+        """With --gpus 2 and no --no-reexec, the train command should run
+        the launcher with an argv starting with 'accelerate'."""
         from typer.testing import CliRunner
 
         from soup_cli.cli import app
@@ -244,13 +244,13 @@ class TestAutoReexec:
 
         captured: dict = {}
 
-        def _fake_execvp(file, argv):
-            captured["file"] = file
+        def _fake_run_launcher(argv):
+            captured["file"] = argv[0]
             captured["argv"] = list(argv)
             # Raise SystemExit so Typer treats it as a clean exit.
             raise SystemExit(99)
 
-        monkeypatch.setattr("os.execvp", _fake_execvp)
+        monkeypatch.setattr("soup_cli.utils.launcher.run_launcher", _fake_run_launcher)
 
         runner = CliRunner()
         runner.invoke(
@@ -265,7 +265,7 @@ class TestAutoReexec:
         # Force assertion — a bypass would have left captured empty and we'd
         # silently accept a regression.
         assert captured.get("file") == "accelerate", (
-            f"os.execvp was not called with 'accelerate'; captured={captured!r}"
+            f"the launcher was not run with 'accelerate'; captured={captured!r}"
         )
         assert "launch" in captured["argv"]
         assert "--num_processes" in captured["argv"]

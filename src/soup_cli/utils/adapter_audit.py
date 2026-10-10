@@ -515,6 +515,18 @@ def audit_adapter(config: Dict[str, Any], record: Dict[str, Any]) -> AuditResult
     if "alpha" in lora:
         rows.append(_cmp("lora.alpha", lora["alpha"], _ran_alpha(record)))
 
+    # #342 — gradient watchdog skip fraction.  Only GRPO runs carry the
+    # watchdog; elsewhere the row could never be known.
+    if config.get("task") == "grpo":
+        nan_skip = record.get("nan_skip_count")
+        if nan_skip is None:
+            rows.append(AuditRow("nan_skip_fraction", 0, None, UNKNOWN, "not in the record"))
+        else:
+            nan_frac = record.get("nan_skip_fraction", 0.0)
+            rows.append(
+                AuditRow("nan_skip_fraction", 0, nan_frac, OK if nan_frac == 0 else DIVERGED)
+            )
+
     return AuditResult(rows=rows, record_kind=kind)
 
 

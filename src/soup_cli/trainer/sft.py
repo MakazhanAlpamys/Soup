@@ -21,8 +21,12 @@ from soup_cli.utils.gpu import (
     resolve_base_load_dtype,
     resolve_device_map,
 )
-from soup_cli.utils.mixed_precision import align_trainable_dtype_for_fp16
+from soup_cli.utils.mixed_precision import (
+    align_trainable_dtype_for_fp16,
+    keep_trainable_dtype_on_resume,
+)
 from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
+from soup_cli.utils.terminal import for_terminal
 
 logger = logging.getLogger(__name__)
 
@@ -931,14 +935,10 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         if tcfg.quantization_aware == "quest":
             self._setup_quest(train_ds)
 
-        # --- Calculate warmup steps from ratio ---
-        import math
+        # --- Calculate warmup steps from ratio (#1431) ---
+        from soup_cli.utils.warmup import resolve_trainer_warmup_steps
 
-        total_steps = (
-            math.ceil(len(train_ds) / batch_size / tcfg.gradient_accumulation_steps)
-            * tcfg.epochs
-        )
-        warmup_steps = int(total_steps * tcfg.warmup_ratio)
+        warmup_steps = resolve_trainer_warmup_steps(tcfg.warmup_ratio)
 
         # --- Training args ---
         # v0.33.0 #58: auto_mixed_precision wires pick_mixed_precision()
@@ -1282,6 +1282,8 @@ class SFTTrainerWrapper(StreamingSetupMixin):
 
     def _setup_quest(self, train_ds: Any) -> None:
         """Calibrate and install #674's explicit mixed fake-quant route."""
+        from pathlib import Path
+
         from soup_cli.trainer.stream_setup import _distributed_launch
 
         if self.deepspeed_config or self.fsdp_config or _distributed_launch():
@@ -1291,14 +1293,38 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             )
         from soup_cli.utils.quest import (
             CALIBRATION_EXAMPLES,
+            METADATA_NAME,
             calibrate_activation_scales,
             calibration_rows_sha256,
             install_mixed_quest,
+            load_metadata,
             resolve_base_model_identity,
+            restore_mixed_quest,
             validate_cuda_hardware,
         )
 
         gpu_name, capability = validate_cuda_hardware()
+        declaration = getattr(self.model.config, "soup_quest", None)
+        source = Path(self.config.base)
+        if declaration is not None or (source / METADATA_NAME).is_file():
+            if not source.is_dir():
+                raise ValueError(
+                    "QuEST continuation requires a local artifact with its metadata sidecar"
+                )
+            base_identity = resolve_base_model_identity(self.config.base)
+            before = getattr(self, "_quest_base_identity_before", None)
+            if before is not None and before != base_identity:
+                raise ValueError("QuEST local base changed while the model was loading")
+            metadata = load_metadata(source)
+            if declaration != metadata:
+                raise ValueError("QuEST config declaration does not match the mandatory sidecar")
+            restore_mixed_quest(self.model, metadata)
+            self._quest_metadata = metadata
+            console.print(
+                "[green]QuEST continuation:[/] restored the artifact's fixed calibration "
+                "and 168 W4 / 161 A4 + 7 A16 route"
+            )
+            return
         console.print(
             "[cyan]QuEST calibration:[/] selecting fixed activation clips on "
             "the first 32 tokenized training rows"
@@ -1698,7 +1724,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
                 f"[green]MoE detected:[/] aux_loss_coeff={tcfg.moe_aux_loss_coeff}"
             )
 
-        if tcfg.quantization in ("4bit", "8bit", "mxfp4"):
+        if tcfg.quantization in ("4bit", "8bit"):
             from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
 
             self.model = prepare_model_for_kbit_training(
@@ -1964,7 +1990,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             self.model,
             cfg.data,
         )
-        if tcfg.quantization in ("4bit", "8bit", "mxfp4"):
+        if tcfg.quantization in ("4bit", "8bit"):
             from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
 
             self.model = prepare_model_for_kbit_training(
@@ -1993,18 +2019,60 @@ class SFTTrainerWrapper(StreamingSetupMixin):
 
     def _prepare_vision_dataset(self, dataset: dict):
         """Keep messages + PIL images raw for processor-aware collation."""
+        import io
+        import os
+
         from datasets import Dataset
+        from PIL import Image as PILImage
+
+        def _to_rgb_image(image_raw):
+            if image_raw is None or image_raw == "":
+                return None
+            if isinstance(image_raw, PILImage.Image):
+                try:
+                    return image_raw.convert("RGB")
+                except (OSError, ValueError):
+                    return None
+            if isinstance(image_raw, dict):
+                img_bytes = image_raw.get("bytes")
+                if img_bytes:
+                    try:
+                        return PILImage.open(io.BytesIO(img_bytes)).convert("RGB")
+                    except (OSError, ValueError):
+                        return None
+                img_path = image_raw.get("path")
+                if img_path:
+                    try:
+                        if isinstance(img_path, (str, bytes, os.PathLike)):
+                            require_regular_file(os.fsdecode(img_path))
+                        return PILImage.open(img_path).convert("RGB")
+                    except (FileNotFoundError, OSError, ValueError):
+                        return None
+                return None
+            if isinstance(image_raw, (str, bytes, os.PathLike)):
+                try:
+                    require_regular_file(os.fsdecode(image_raw))
+                    return PILImage.open(image_raw).convert("RGB")
+                except (FileNotFoundError, OSError, ValueError):
+                    return None
+            return None
+
+        from soup_cli.utils.paths import require_regular_file
 
         def load_and_format_vision(example):
-            from PIL import Image as PILImage
-
-            image_path = example.get("image", "")
-            image = None
-            if image_path:
-                try:
-                    image = PILImage.open(image_path).convert("RGB")
-                except (FileNotFoundError, OSError):
-                    console.print(f"[yellow]Warning: cannot open image: {image_path}[/]")
+            image_raw = example.get("image")
+            image = _to_rgb_image(image_raw)
+            if image is None and image_raw:
+                if isinstance(image_raw, (str, bytes, os.PathLike)):
+                    err_label = str(image_raw)
+                elif isinstance(image_raw, dict) and image_raw.get("path"):
+                    err_label = str(image_raw["path"])
+                else:
+                    err_label = type(image_raw).__name__
+                console.print(
+                    "[yellow]Warning: cannot open image: "
+                    f"{for_terminal(err_label)}[/]"
+                )
 
             result = {"images": []}
             if image is not None:
@@ -2086,7 +2154,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             self.model,
             cfg.data,
         )
-        if tcfg.quantization in ("4bit", "8bit", "mxfp4"):
+        if tcfg.quantization in ("4bit", "8bit"):
             from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
 
             self.model = prepare_model_for_kbit_training(
@@ -2117,6 +2185,8 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         """Prepare dataset for audio fine-tuning with audio loading."""
         from datasets import Dataset
 
+        from soup_cli.utils.paths import require_regular_file
+
         try:
             import librosa  # noqa: F401
         except ImportError:
@@ -2133,11 +2203,17 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             sampling_rate = 16000
             if audio_path:
                 try:
+                    # Same rule as the vision path: only a regular file is read.
+                    if isinstance(audio_path, (str, bytes, os.PathLike)):
+                        require_regular_file(os.fsdecode(audio_path))
                     audio_array, sampling_rate = librosa.load(
                         audio_path, sr=16000, mono=True,
                     )
                 except (FileNotFoundError, OSError):
-                    console.print(f"[yellow]Warning: cannot open audio: {audio_path}[/]")
+                    console.print(
+                        "[yellow]Warning: cannot open audio: "
+                        f"{for_terminal(audio_path)}[/]"
+                    )
 
             messages = example["messages"]
             if hasattr(self.processor, "apply_chat_template"):
@@ -2191,24 +2267,15 @@ class SFTTrainerWrapper(StreamingSetupMixin):
 
         # Add callback for live display and experiment tracking
         if display:
-            from soup_cli.monitoring.callback import (
-                SoupTrainerCallback,
-                soup_callback_kwargs,
-            )
-
-            tcfg_local = self.config.training
+            from soup_cli.monitoring.callback import build_soup_trainer_callback
             self.trainer.add_callback(
-                SoupTrainerCallback(
+                build_soup_trainer_callback(
                     display,
+                    config=self.config,
                     tracker=tracker,
                     run_id=run_id,
-                    eval_gate_config=tcfg_local.eval_gate,
-                    **soup_callback_kwargs(
-                        tcfg_local,
-                        batch_size=self._batch_size,
-                        output_dir=self._output_dir,
-                        include_eval_gate=False,
-                    ),
+                    batch_size=self._batch_size,
+                    output_dir=self._output_dir,
                 )
             )
 
@@ -2303,6 +2370,8 @@ class SFTTrainerWrapper(StreamingSetupMixin):
                 fp16=getattr(self.trainer.args, "fp16", False),
                 bf16=getattr(self.trainer.args, "bf16", False),
             )
+            if resume_from_checkpoint is not None:
+                keep_trainable_dtype_on_resume(self.trainer)
             self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
         duration = time.time() - start
         self._report_rewind()
@@ -2311,13 +2380,20 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             self.trainer.state.log_history, model=self.trainer.model
         )
 
-        # Save final model (LoRA adapter)
-        self.trainer.save_model(self._output_dir)
+        if self.config.training.relora_steps is None:
+            self.trainer.save_model(self._output_dir)
+        else:
+            from soup_cli.utils.peft_wiring import save_model_with_relora
+
+            save_model_with_relora(
+                self.trainer, self._output_dir, self.config.training.relora_steps
+            )
         if self._quest_metadata is not None:
             from soup_cli.utils.quest import write_metadata
 
             write_metadata(self._output_dir, self._quest_metadata)
-        self._assert_streamed_adapter_saved(self._output_dir)
+        if self.config.training.relora_steps is None:
+            self._assert_streamed_adapter_saved(self._output_dir)
         # #335 — under torch.compile the Trainer saves THROUGH the wrapper, so
         # every key gains `_orig_mod.` and PeftModel.from_pretrained then matches
         # none of them: it warns and leaves lora_B at zero init, i.e. the run
