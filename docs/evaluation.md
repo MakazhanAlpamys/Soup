@@ -869,6 +869,19 @@ How the string scorers read an output:
 | `contains` | `expected` as a whole alphanumeric-bounded token, case-insensitive via `str.lower()` on both sides (so `istanbul` does not match `İstanbul`, nor `s` match `ſ`) | match | no match |
 | `exact` | The whole stripped output, case-insensitive | no match | no match |
 
+The two tool-call scorers parse the call and compare `arguments` as **JSON**, not as
+strings, and `1` is not `true` there: JSON has one boolean type and one number type, and a
+boolean compared with `==` against a number would be equal in Python (`True == 1`). So
+
+| `scoring` | Scores | gold `{"enabled": true}` vs `{"enabled": true}` | vs `{"enabled": 1}` |
+|---|---|---|---|
+| `tool_call_match` | the parsed `arguments` objects must be equal, JSON types included; the function name must match too | match | no match |
+| `tool_call_args_subset` | `0.5` for the function name plus `0.5` for the fraction of expected arguments present with a matching value | `1.0` | `0.5` — the name matched, the argument did not |
+
+Numbers still compare equal across forms, so gold `{"n": 1}` matches `{"n": 1.0}`; that is
+existing behaviour and not a rounding of the policy. The rule applies inside nested objects
+and lists, and whether `arguments` is an object or a JSON string does not change it.
+
 `answer` refuses, at load time, an `expected` that states no single answer (a multi-line
 worked solution with no `####`, an empty `\boxed{}`, a hedge between values), naming the line.
 `contains` cannot read negation: `It is not 4, so 5.` still contains `4`. Its bound is an

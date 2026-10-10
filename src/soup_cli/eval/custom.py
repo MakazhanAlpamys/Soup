@@ -250,6 +250,43 @@ def _parse_args(func: dict) -> Optional[dict]:
     return None
 
 
+def _json_equal(expected: Any, actual: Any) -> bool:
+    """Compare two parsed-JSON values the way JSON does, not the way Python does.
+
+    JSON has one boolean type and one number type; Python has ``bool`` as a subclass of
+    ``int``, so ``True == 1`` and ``False == 0`` — including inside dicts and lists.
+    Comparing parsed tool-call arguments with ``==`` therefore gives a model that
+    answered ``1`` the full credit owed to one that answered ``true``, and a model that
+    answered ``false`` the credit for ``0``. Both are valid JSON, and they are different
+    arguments (#1755).
+
+    Numbers are deliberately left equal across forms: ``1 == 1.0`` still compares equal,
+    which is an existing control and not a policy change. A ``type(a) == type(b)`` guard
+    would separate them, which is why this rules on ``bool`` first and then defers to
+    ``==``.
+
+    ``expected`` here is the gold side of a user's eval task file, so both arguments are
+    user-supplied; neither is a Soup config field.
+    """
+    # bool before everything: it is a subclass of int, so every other branch below would
+    # otherwise treat True as 1.
+    if isinstance(expected, bool) or isinstance(actual, bool):
+        return (
+            isinstance(expected, bool)
+            and isinstance(actual, bool)
+            and expected is actual
+        )
+    if isinstance(expected, dict) and isinstance(actual, dict):
+        return expected.keys() == actual.keys() and all(
+            _json_equal(expected[key], actual[key]) for key in expected
+        )
+    if isinstance(expected, list) and isinstance(actual, list):
+        return len(expected) == len(actual) and all(
+            _json_equal(want, got) for want, got in zip(expected, actual)
+        )
+    return bool(expected == actual)
+
+
 def tool_call_match(output: str, expected: str) -> bool:
     """Exact tool-call match: function name and arguments must match."""
     out = _parse_tool_call(output)
@@ -266,7 +303,7 @@ def tool_call_match(output: str, expected: str) -> bool:
     exp_args = _parse_args(exp_func)
     if out_args is None or exp_args is None:
         return False
-    return out_args == exp_args
+    return _json_equal(exp_args, out_args)
 
 
 def tool_call_name_match(output: str, expected: str) -> bool:
@@ -315,7 +352,9 @@ def tool_call_args_subset(output: str, expected: str) -> float:
         args_score = 0.5 if not out_args else 0.0
     else:
         matched = sum(
-            1 for k, v in exp_args.items() if k in out_args and out_args[k] == v
+            1
+            for k, v in exp_args.items()
+            if k in out_args and _json_equal(v, out_args[k])
         )
         args_score = 0.5 * (matched / len(exp_args))
 
