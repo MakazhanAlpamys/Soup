@@ -103,16 +103,36 @@ def compute_dpo_term(pol_chosen, pol_rejected, ref_chosen, ref_rejected, beta: f
     return -_logsigmoid(logits).mean()
 
 
-def compute_ipo_term(pol_chosen, pol_rejected, ref_chosen, ref_rejected, beta: float):
-    """IPO loss: squared-hinge regularised ``(Δπ - Δπ_ref - 1/(2β))²``."""
+def compute_ipo_term(
+    pol_chosen,
+    pol_rejected,
+    ref_chosen,
+    ref_rejected,
+    beta: float,
+    chosen_lens=None,
+    rejected_lens=None,
+):
+    """IPO loss: squared-hinge regularised ``(Δπ - Δπ_ref - 1/(2β))²``.
+
+    With ``chosen_lens`` / ``rejected_lens`` (response token counts) each side's
+    policy-minus-reference log-ratio is divided by its own length first. That
+    is the loss ``task: ipo`` trains: trl's ``loss_type="ipo"`` averages per
+    completion token, so a blend's ``ipo`` term has to as well (#1425). Without
+    lengths the summed form above is kept.
+    """
     if ref_chosen is None or ref_rejected is None:
         raise ValueError("IPO requires reference-model log-probs")
     if beta <= 0:
         raise ValueError(f"IPO beta must be > 0, got {beta}")
-    pi_logratio = pol_chosen - pol_rejected
-    ref_logratio = ref_chosen - ref_rejected
+    chosen_logratio = pol_chosen - ref_chosen
+    rejected_logratio = pol_rejected - ref_rejected
+    if chosen_lens is not None and rejected_lens is not None:
+        import torch
+
+        chosen_logratio = chosen_logratio / torch.clamp(chosen_lens.float(), min=1.0)
+        rejected_logratio = rejected_logratio / torch.clamp(rejected_lens.float(), min=1.0)
     target = 1.0 / (2.0 * beta)
-    return ((pi_logratio - ref_logratio - target) ** 2).mean()
+    return ((chosen_logratio - rejected_logratio - target) ** 2).mean()
 
 
 def compute_simpo_term(
@@ -272,10 +292,12 @@ def attach_weighted_preference_combine(
        matching ``compute_*_term`` helper.
     3. Combine via :func:`combine_losses` and return the blended scalar.
 
-    When the TRL trainer does not expose the per-batch log-probs (which is every
-    trl 0.29 trainer — #1425), this raises, naming the terms it could not
-    compute. It used to fall back to the v0.40.1 primary-loss scaling, which
-    trained only the highest-weighted loss while reporting a blended number.
+    trl 0.29 puts no log-probs on the batch (#1425), so they come from the
+    captures below: :func:`attach_policy_logp_capture` for the CPO / ORPO
+    trainers, :func:`attach_reference_logp_capture` for the ``DPOTrainer``.
+    When a term still cannot be computed, this raises, naming the terms. It
+    used to fall back to the v0.40.1 primary-loss scaling, which trained only
+    the highest-weighted loss while reporting a blended number.
 
     ``params`` supplies each loss's own hyperparameters, keyed by loss name
     (``{"simpo": {"beta": ..., "gamma": ...}, "orpo": {"alpha": ...}}``). It
@@ -316,10 +338,14 @@ def attach_weighted_preference_combine(
             pol_rejected = _read_logps(inputs, "policy_rejected_logps")
         if pol_rejected is None:
             pol_rejected = _read_logps(inputs, "rejected_logps")
-        ref_chosen = _read_logps(inputs, "reference_chosen_logps")
+        ref_chosen = captured.get("ref_chosen_logps")
+        if ref_chosen is None:
+            ref_chosen = _read_logps(inputs, "reference_chosen_logps")
         if ref_chosen is None:
             ref_chosen = _read_logps(inputs, "ref_chosen_logps")
-        ref_rejected = _read_logps(inputs, "reference_rejected_logps")
+        ref_rejected = captured.get("ref_rejected_logps")
+        if ref_rejected is None:
+            ref_rejected = _read_logps(inputs, "reference_rejected_logps")
         if ref_rejected is None:
             ref_rejected = _read_logps(inputs, "ref_rejected_logps")
         # Lengths come from the capture when it ran, else from the batch.
@@ -364,6 +390,8 @@ def attach_weighted_preference_combine(
                             ref_chosen,
                             ref_rejected,
                             float(cfg_for_loss.get("beta", DEFAULT_BETA)),
+                            chosen_lens=chosen_lens,
+                            rejected_lens=rejected_lens,
                         )
                     elif name == "simpo":
                         terms["simpo"] = compute_simpo_term(
@@ -406,15 +434,29 @@ def attach_weighted_preference_combine(
             # "0.70·dpo + 0.30·simpo". Refuse instead, naming the terms.
             missing = sorted(set(snapshot) - set(terms))
             computed = sorted(terms)
+            if pol_chosen is not None and pol_rejected is not None and (
+                ref_chosen is None or ref_rejected is None
+            ):
+                # The policy log-probs are there; only the reference is not.
+                reason = (
+                    "dpo and ipo compare the policy with a frozen reference, and "
+                    "the primary trainer of this blend (the loss with the largest "
+                    "weight) runs none. Give dpo or ipo the largest weight, or "
+                    "remove"
+                )
+            else:
+                reason = (
+                    "The underlying trl exposes no per-sequence log-probs on the "
+                    "batch, so the blend cannot be evaluated; training would "
+                    "silently use the primary loss alone. Remove"
+                )
             raise ValueError(
                 "preference_loss_weights: cannot compute "
                 f"{', '.join(missing)} on this step"
                 + (f" (computed: {', '.join(computed)})" if computed else "")
-                + f". Weights requested: {', '.join(sorted(snapshot))}. The "
-                "underlying trl exposes no per-sequence log-probs on the batch, "
-                "so the blend cannot be evaluated; training would silently use "
-                "the primary loss alone. Remove training.preference_loss_weights "
-                "and set training.preference_loss to the single loss you want."
+                + f". Weights requested: {', '.join(sorted(snapshot))}. {reason} "
+                "training.preference_loss_weights and set "
+                "training.preference_loss to the single loss you want."
             )
         if return_outputs:
             return blended, outputs
@@ -434,7 +476,8 @@ def attach_policy_logp_capture(trainer: object) -> bool:
     weighted blend can read them, which is why every blend on trl 0.29 fell
     through to the primary loss alone. trl's DPO/IPO trainers compute theirs
     inline in ``compute_loss`` and publish only means, so they have no such
-    hook and return ``False`` here — their blends keep refusing.
+    hook and return ``False`` here; :func:`attach_reference_logp_capture` is
+    the capture for them.
 
     The captured values are converted to **summed** log-probs using the batch's
     own per-side ``chosen_labels`` / ``rejected_labels``, because the kernels in
@@ -470,6 +513,98 @@ def attach_policy_logp_capture(trainer: object) -> bool:
     capturing._soup_logp_capture = True
     trainer.concatenated_forward = capturing
     return True
+
+
+def attach_reference_logp_capture(trainer: object) -> bool:
+    """Record policy and reference log-probs on a trl ``DPOTrainer`` (#1425).
+
+    The ``dpo`` and ``ipo`` wrappers both build trl's ``DPOTrainer``. It has no
+    ``concatenated_forward``: it computes the policy and the reference
+    log-probs inline in ``compute_loss`` and keeps only their means, so
+    :func:`attach_policy_logp_capture` returns ``False`` for it and a blend
+    naming ``dpo`` or ``ipo`` had nothing to read.
+
+    This wraps ``compute_loss`` instead:
+
+    * the policy sums come from the logits of the trainer's own forward pass
+      (``return_outputs=True``), so there is no second policy forward and the
+      gradient flows through the graph trl built;
+    * the reference sums come from the batch when ``precompute_ref_log_probs``
+      put them there, else from the trainer's ``compute_ref_log_probs``, which
+      runs the reference the way the trainer itself does (the ``ref`` adapter,
+      the adapter switched off, or a separate ``ref_model``). That is one more
+      no-grad forward per step than a single-loss run.
+
+    The sums and lengths follow trl: the batch is ``[chosen, rejected]``, a
+    token counts when ``completion_mask`` marks it, and the inputs are cut by
+    the trainer's own ``_truncate_inputs`` first.
+
+    Returns True when the capture is in place. trl's Liger path returns no
+    logits, so it gets no capture and its blend keeps refusing.
+    """
+    if not hasattr(trainer, "compute_ref_log_probs") or not hasattr(trainer, "compute_loss"):
+        return False
+    if getattr(trainer, "use_liger_kernel", False):
+        return False
+    original = trainer.compute_loss
+    if getattr(original, "_soup_logp_capture", False):
+        return True
+
+    def capturing(model, inputs, return_outputs=False, **kwargs):
+        loss, outputs = original(model, inputs, return_outputs=True, **kwargs)
+        _record_reference_logps(trainer, inputs, outputs)
+        return (loss, outputs) if return_outputs else loss
+
+    capturing._soup_logp_capture = True
+    trainer.compute_loss = capturing
+    return True
+
+
+def _selected_log_probs(logits, labels):
+    """``log_softmax(logits)[label]`` per token, one row of the batch at a time.
+
+    The same two forms as trl's ``selective_log_softmax``, which the trainer's
+    own loss uses, so the captured numbers are the trainer's: ``logit -
+    logsumexp`` for float32 / float64, which keeps no second ``[seq, vocab]``
+    tensor, and a plain ``log_softmax`` for every other type (in float16 the
+    two forms round differently).
+    """
+    import torch
+
+    index = labels.unsqueeze(-1)
+    if logits.dtype in (torch.float32, torch.float64):
+        picked = logits.gather(-1, index).squeeze(-1)
+        return picked - torch.stack([torch.logsumexp(row, dim=-1) for row in logits])
+    return torch.stack([
+        torch.log_softmax(row, dim=-1).gather(-1, row_index).squeeze(-1)
+        for row, row_index in zip(logits, index)
+    ])
+
+
+def _record_reference_logps(trainer, inputs, outputs) -> None:
+    """Store summed policy and reference log-probs for a ``DPOTrainer`` batch."""
+    input_ids, _, completion_mask = trainer._truncate_inputs(
+        inputs["input_ids"], inputs["attention_mask"], inputs["completion_mask"]
+    )
+    labels = input_ids[..., 1:]
+    mask = completion_mask[..., 1:]
+    per_token = _selected_log_probs(outputs.logits[..., :-1, :], labels)
+    sums = per_token.masked_fill(mask == 0, 0.0).sum(dim=1)
+    chosen_logps, rejected_logps = sums.chunk(2, dim=0)
+    chosen_lens, rejected_lens = mask.sum(dim=1).chunk(2, dim=0)
+
+    ref_chosen = _read_logps(inputs, "ref_chosen_logps")
+    ref_rejected = _read_logps(inputs, "ref_rejected_logps")
+    if ref_chosen is None or ref_rejected is None:
+        ref_chosen, ref_rejected = trainer.compute_ref_log_probs(inputs)
+    trainer._soup_policy_logps = {
+        "policy_chosen_logps": chosen_logps,
+        "policy_rejected_logps": rejected_logps,
+        "ref_chosen_logps": ref_chosen,
+        "ref_rejected_logps": ref_rejected,
+        "chosen_lens": chosen_lens,
+        "rejected_lens": rejected_lens,
+    }
 
 
 def _response_lengths(batch: Any, side: str) -> Any:

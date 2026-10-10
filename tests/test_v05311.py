@@ -1266,9 +1266,10 @@ class TestOnARealTrlTrainer:
         tok.save_pretrained(base)
         return base
 
-    @pytest.mark.parametrize(
-        "weights", ["{dpo: 0.7, simpo: 0.3}", "{simpo: 0.6, dpo: 0.4}"],
-    )
+    # A dpo / ipo primary trains since #1425's DPOTrainer capture
+    # (tests/test_issue1425_dpo_ipo_blend.py); under a simpo / orpo primary the
+    # dpo term still has no reference to read.
+    @pytest.mark.parametrize("weights", ["{simpo: 0.6, dpo: 0.4}"])
     def test_a_blend_on_a_real_trainer_refuses_instead_of_training_one_loss(
         self, tmp_path, monkeypatch, weights,
     ):

@@ -989,15 +989,16 @@ training:
 
 The combine wrapper computes a weighted sum via the in-tree
 `compute_dpo_term` / `compute_simpo_term` / `compute_orpo_term` /
-`compute_ipo_term` kernels. On trl 0.29 it reads the per-sequence log-probs
-those kernels need out of the primary trainer's own forward pass
-(`concatenated_forward`), so which blends train depends on which trainer is
-built:
+`compute_ipo_term` kernels. The loss with the largest weight is the *primary*:
+its trl trainer is the one that is built, and on trl 0.29 the per-sequence
+log-probs the kernels need are read out of that trainer's own forward pass. So
+which blends train depends on which trainer is built:
 
 | Blend | Result on trl 0.29 |
 | --- | --- |
-| `simpo` + `orpo` | Trains. The CPO (SimPO) and ORPO trainers both return their per-sequence log-probs. |
-| anything naming `dpo` or `ipo` | Stops at the first step and names the terms. They need a frozen reference model this path does not build, so there are no reference log-probs to read — and their own trainers compute log-probs inline, publishing only means. |
+| `simpo` + `orpo` | Trains. The CPO (SimPO) and ORPO trainers both return their per-sequence log-probs (`concatenated_forward`). |
+| `dpo` or `ipo` has the largest weight, with any of `dpo`, `ipo`, `simpo`, `orpo` beside it | Trains. Both build trl's `DPOTrainer`: the policy log-probs are taken from the logits of its own forward pass, the reference log-probs from its `compute_ref_log_probs`. |
+| `simpo` or `orpo` has the largest weight, and the blend names `dpo` or `ipo` | Stops at the first step and names the terms. `dpo` and `ipo` compare the policy with a frozen reference, and the CPO / ORPO trainers run none. Give `dpo` or `ipo` the largest weight instead. |
 | `bco` mixed with anything | Rejected at config load (data format incompatible). |
 
 **What a term is.** In a blend, `simpo` and `orpo` are their *preference terms
@@ -1009,10 +1010,25 @@ simpo` run, and `training.cpo_alpha` does not affect it. Use
 does honour its own config field: `training.simpo_gamma` for SimPO,
 `training.orpo_beta` for ORPO, whichever loss has the larger weight or not.
 
-**Evaluation.** With `val_split` set, trl's `prediction_step` calls
-`get_batch_loss_metrics` directly, so the eval loss is the primary loss's own
-trl loss — not the blend's value. Training and evaluation therefore report
-different numbers for the same batch.
+The `dpo` and `ipo` terms are the losses `preference_loss: dpo` and
+`preference_loss: ipo` train: DPO's sigmoid loss with `training.dpo_beta`, and
+IPO's squared loss with `training.ipo_tau`, where each side's log-ratio is
+divided by its response length, as trl does. They read those two fields
+whichever of them is the primary, so `{dpo: 0.5, ipo: 0.5}` and
+`{ipo: 0.5, dpo: 0.5}` are the same loss. `dpo_beta_schedule` is not available
+with a blend.
+
+**Cost of a `dpo` / `ipo` primary.** The policy is run once, as in a
+single-loss run. The reference is run twice per step: trl computes its own
+reference log-probs inline and keeps only their means, so the blend asks the
+trainer for them again (`compute_ref_log_probs`, without gradients).
+
+**Evaluation.** With `val_split` set and a `simpo` / `orpo` primary, trl's
+`prediction_step` calls `get_batch_loss_metrics` directly, so the eval loss is
+the primary loss's own trl loss — not the blend's value. Training and
+evaluation therefore report different numbers for the same batch. With a `dpo`
+/ `ipo` primary, trl's `prediction_step` goes through `compute_loss`, so the
+eval loss is the blend's value.
 
 
 ## MoE Model Support
@@ -1346,9 +1362,10 @@ training:
 ```
 
 Schema validates 2–5 entries summing to 1, and rejects `bco` mixed with a
-paired loss at config load. On trl 0.29 a `simpo` + `orpo` blend trains; any
-blend naming `dpo` or `ipo` stops at the first step naming the terms it could
-not compute, because those trainers publish no per-sequence log-probs to read
+paired loss at config load. On trl 0.29 a `simpo` + `orpo` blend trains, and
+so does a blend whose largest weight is `dpo` or `ipo`. A `dpo` or `ipo` term
+under a `simpo` / `orpo` primary stops at the first step naming the terms it
+could not compute, because those trainers run no frozen reference
 (see [Weighted Multi-Objective Preference Loss](#weighted-multi-objective-preference-loss)).
 Set `training.preference_loss` for a single loss.
 

@@ -220,16 +220,20 @@ class PreferenceTrainerWrapper:
                 inner_trainer = getattr(self._inner, "trainer", None)
                 if inner_trainer is not None:
                     try:
-                        # #1425: capture the policy log-probs the primary
-                        # trainer already computes (CPO / ORPO), then wrap
-                        # compute_loss over them. A dpo/ipo primary has no
-                        # such hook, and its blend still refuses.
+                        # #1425: capture the log-probs of the primary
+                        # trainer's own forward pass, then wrap compute_loss
+                        # over them. CPO / ORPO hand over policy log-probs;
+                        # a dpo / ipo primary (trl's DPOTrainer) also gives
+                        # the reference ones. A dpo / ipo term under a
+                        # simpo / orpo primary has no reference and refuses.
                         from soup_cli.utils.preference_combine import (
                             attach_policy_logp_capture,
+                            attach_reference_logp_capture,
                             blend_loss_params,
                         )
 
                         attach_policy_logp_capture(inner_trainer)
+                        attach_reference_logp_capture(inner_trainer)
                         attach_weighted_preference_combine(
                             inner_trainer, weights, blend_loss_params(self.config)
                         )
