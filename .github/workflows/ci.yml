@@ -528,6 +528,7 @@ jobs:
           tests/test_bugfixes.py::TestDiffModelLoading
           tests/test_issue636_torch_floor.py
           tests/test_issue265_xcodec2_audio_contract.py
+          tests/test_issue265_native_csm.py
 
   test:
     needs: plan

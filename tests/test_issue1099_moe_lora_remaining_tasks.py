@@ -400,7 +400,7 @@ class TestEveryAdapterBuildingTrainerReadsTheFlag:
     declared here as one whose task refuses ``moe_lora`` at config load."""
 
     #: Trainer modules whose task refuses the flag (schema ``_validate_moe_lora_task``).
-    REFUSED_MODULES = frozenset({"asr.py"})
+    REFUSED_MODULES = frozenset({"asr.py", "csm.py"})
 
     @staticmethod
     def _calls(path):
@@ -436,6 +436,18 @@ class TestEveryAdapterBuildingTrainerReadsTheFlag:
         """The exemption list must not drift from the schema's refusal."""
         with pytest.raises(ValueError, match="moe_lora.*task='asr'"):
             _config("asr", moe_lora=True)
+        from soup_cli.config.schema import SoupConfig
+
+        assert self.REFUSED_MODULES == {"asr.py", "csm.py"}
+        values = dict(
+            base="sesame/csm-1b", task="tts", modality="audio_out",
+            data={"train": "speech.jsonl", "format": "audio"},
+        )
+        training = {"tts_family": "sesame_csm", "quantization": "none",
+                    "lora": {"dropout": 0.0}}
+        SoupConfig(**values, training=training)
+        with pytest.raises(ValueError, match="moe_lora"):
+            SoupConfig(**values, training={**training, "moe_lora": True})
 
 
 class TestThePathsThatNeverReadIt:

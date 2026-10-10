@@ -32,6 +32,8 @@ _BUILDS_TRAINER = re.compile(r"self\.trainer\s*=\s*(?!None\b)[A-Za-z_][\w.]*\s*\
 _GUARD_CALL = re.compile(r"attach_empty_param_group_guard\s*\(")
 #: DeepSpeed reachability: the wrapper takes a config it can be launched with.
 _DEEPSPEED_CAPABLE = re.compile(r"\bdeepspeed_config\b")
+# Unlike forwarding exemptions, these trainers reject DeepSpeed before setup.
+_DEEPSPEED_REFUSING = {"csm.py"}
 
 
 def _code_without_comments(text: str) -> str:
@@ -40,6 +42,8 @@ def _code_without_comments(text: str) -> str:
 
 
 def _needs_guard(path: pathlib.Path) -> bool:
+    if path.name in _DEEPSPEED_REFUSING:
+        return False
     code = _code_without_comments(path.read_text(encoding="utf-8"))
     return bool(_DEEPSPEED_CAPABLE.search(code)) and bool(_BUILDS_TRAINER.search(code))
 
@@ -96,7 +100,7 @@ class TestGuardCoverage:
             code = _code_without_comments(path.read_text(encoding="utf-8"))
             if not _DEEPSPEED_CAPABLE.search(code):
                 continue
-            if path.name in self._GUARD_EXEMPT:
+            if path.name in self._GUARD_EXEMPT or path.name in _DEEPSPEED_REFUSING:
                 continue
             if not _GUARD_CALL.search(code):
                 offenders.append(path.name)
@@ -440,3 +444,19 @@ class TestUserSuppliedDeepspeedFileIsResolved:
             ds, "resolve_user_deepspeed_file", lambda *a, **k: pytest.fail("not a file")
         )
         assert _resolve_deepspeed("zero2") == "preset:zero2"
+
+
+def test_deepspeed_refusing_exemption_is_earned():
+    from soup_cli.config.schema import SoupConfig
+    from soup_cli.trainer.csm import CSMTrainerWrapper
+
+    assert _DEEPSPEED_REFUSING == {"csm.py"}
+    config = SoupConfig(
+        base="sesame/csm-1b", task="tts", modality="audio_out",
+        data={"train": "speech.jsonl", "format": "audio"},
+        training={"tts_family": "sesame_csm", "quantization": "none"},
+    )
+    wrapper = CSMTrainerWrapper(config, device="cpu", deepspeed_config="ds.json")
+    with pytest.raises(ValueError, match="single-device"):
+        wrapper.setup({})
+    assert wrapper.model is None and wrapper.trainer is None

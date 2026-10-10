@@ -109,11 +109,12 @@ class TestPrecisionPolicy:
         ) == (True, False)
         assert calls == [("mps", True)]
 
-    def test_only_hardware_validated_text_trainers_opt_in(self):
+    def test_only_hardware_validated_trainers_opt_in(self):
         import soup_cli.trainer as trainer_package
 
         root = Path(trainer_package.__file__).parent
-        expected = {"sft.py", "dpo.py", "grpo.py", "reward_model.py", "prm.py"}
+        # CSM's real MPS training proof lives in test_issue265_native_csm.py.
+        expected = {"sft.py", "dpo.py", "grpo.py", "reward_model.py", "prm.py", "csm.py"}
         opted_in = {
             path.name
             for path in root.glob("*.py")

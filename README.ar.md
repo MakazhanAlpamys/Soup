@@ -1,4 +1,4 @@
-<!-- synced-from: README.md sha256:a6789c2877515d5ac707160a55ab94cd84b390e2e31168b69d4f954a47c5562a -->
+<!-- synced-from: README.md sha256:4ca93d27b5036696b6310f552a6be84216c3c72eae59bb2d37dc4f03bd4c4505 -->
 <p align="center">🌍 <a href="README.md">English</a> | <a href="README.tr.md">Türkçe</a> | <strong>العربية</strong> | <a href="README.ja.md">日本語</a> | <a href="README.zh.md">中文</a></p>
 
 <p align="center">
@@ -272,6 +272,9 @@ output: ./output
 </div>
 
 ## صيغ البيانات
+
+يدعم Sesame CSM [مسار تدريب صوتي أصلي](docs/training.md#native-sesame-csm)
+لأزواج النص والمقطع الصوتي ولجميع دفاتر رموز Mimi البالغ عددها 32، بشكل منفصل عن SFT لسلاسل رموز الصوت.
 
 Alpaca وShareGPT وChatML وأزواج التفضيلات (DPO / ORPO / SimPO / IPO / KTO) والرؤية والصوت وASR والنص
 العادي والتضمين (embedding) وRAFT وغيرها — كلها تُكتشف تلقائيًا من JSONL أو JSON أو CSV أو Parquet أو TXT،

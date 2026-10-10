@@ -126,6 +126,10 @@ def build_trainer(cfg: Any, **trainer_kwargs: Any):
 
         return MoleRoutingTrainerWrapper(cfg, **trainer_kwargs)
     if task == "tts":
+        if getattr(getattr(cfg, "training", None), "tts_family", None) == "sesame_csm":
+            from soup_cli.trainer.csm import CSMTrainerWrapper
+
+            return CSMTrainerWrapper(cfg, **trainer_kwargs)
         # v0.71.20 #131 — TTS fine-tuning (SFT-style next-token CE over text +
         # audio-codec-token sequences; per-family templating).
         from soup_cli.trainer.tts import TTSTrainerWrapper

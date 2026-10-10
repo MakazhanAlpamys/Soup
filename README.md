@@ -275,6 +275,9 @@ The full feature reference lives in [`docs/`](docs/). Start here:
 
 ## Data Formats
 
+Sesame CSM has a [native audio-training path](docs/training.md#native-sesame-csm)
+for transcript/clip pairs and all 32 Mimi codebooks, separate from codec-string TTS SFT.
+
 Alpaca, ShareGPT, ChatML, preference pairs (DPO / ORPO / SimPO / IPO / KTO), vision, audio,
 ASR, plaintext, embedding, RAFT and more — all auto-detected from JSONL, JSON, CSV, Parquet or
 TXT, so in most cases you point `data.train` at a file and nothing else changes. Schemas with a

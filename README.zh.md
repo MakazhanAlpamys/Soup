@@ -1,4 +1,4 @@
-<!-- synced-from: README.md sha256:a6789c2877515d5ac707160a55ab94cd84b390e2e31168b69d4f954a47c5562a -->
+<!-- synced-from: README.md sha256:4ca93d27b5036696b6310f552a6be84216c3c72eae59bb2d37dc4f03bd4c4505 -->
 <p align="center">🌍 <a href="README.md">English</a> | <a href="README.tr.md">Türkçe</a> | <a href="README.ar.md">العربية</a> | <a href="README.ja.md">日本語</a> | <strong>中文</strong></p>
 
 <p align="center">
@@ -267,6 +267,9 @@ output: ./output
 | [支持的模型与 extras](docs/models.md) | 推荐模型家族、VRAM 容量指南、pip extras 矩阵 |
 
 ## 数据格式
+
+Sesame CSM 提供[原生音频训练路径](docs/training.md#native-sesame-csm)，
+用于转录文本与音频片段配对以及全部 32 个 Mimi 码本，与基于编解码器字符串的 TTS SFT 分开。
 
 Alpaca、ShareGPT、ChatML、偏好对（DPO / ORPO / SimPO / IPO / KTO）、视觉、音频、
 ASR、纯文本、embedding、RAFT 等等——全部从 JSONL、JSON、CSV、Parquet 或 TXT 自动检测，

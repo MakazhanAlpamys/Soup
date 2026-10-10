@@ -1918,9 +1918,8 @@ cross-entropy over interleaved `[text][audio-codec-token]` chat sequences**,
 so `TTSTrainerWrapper` reuses the SFT model/tokenizer/LoRA/CE machinery and
 adds per-family emotion templating plus codec-token registration. `sesame_csm`
 is different: current CSM training uses text plus 32 Mimi codebooks as parallel
-multimodal frames. Soup therefore refuses CSM on this text-SFT codec-string
-path rather than silently training the wrong objective; a dedicated CSM trainer
-is still required.
+multimodal frames. Soup routes it to a dedicated native trainer (see below),
+and continues to refuse pre-encoded CSM codec-string chat.
 
 There are two workflows:
 
@@ -1971,15 +1970,72 @@ Spark-TTS has no installable `sparktts` package and its official environment pin
 Torch/Transformers below Soup's supported stack; current `outetts` pins
 Transformers 4.52.3 and Oute preparation also needs transcript/word alignment.
 For those two families, pre-encode in the upstream environment and train the
-resulting codec-token chat with `data.format: chatml`. Sesame CSM fails earlier
-with an architecture-specific message because
-its 32 parallel Mimi codebooks require a native multimodal trainer, not a
-codec-string adapter.
+resulting codec-token chat with `data.format: chatml`. Sesame CSM uses the native
+multimodal path below, rather than this codec-string adapter.
 
 Three ready-made codec-string recipes ship: `orpheus-tts-sft`, `llasa-tts`,
 `oute-tts` — copy with `soup recipes use <name>`. Cross-validators
 reject the `mlx` backend, `modality != audio_out`, and emotion tags outside the
 per-family allowlist.
+
+### Native Sesame CSM
+
+`training.tts_family: sesame_csm` selects `CsmForConditionalGeneration` and
+`CsmProcessor` from Transformers, with no separate Moshi installation. The
+processor builds text conditioning and audio-frame labels; the model encodes
+audio with its frozen Mimi codec and optimizes the sum of the backbone loss
+(first codebook) and depth-decoder loss (the other 31 codebooks). Text and padding
+are excluded from the audio targets. Mimi stays in evaluation mode during training.
+This follows the [Transformers CSM training contract](https://huggingface.co/docs/transformers/model_doc/csm#training).
+
+Install `pip install 'soup-cli[train,audio]'`, then prepare one local clip and
+its exact transcript per JSONL row. `role` is the native speaker id `"0"` or `"1"`:
+
+```json
+{"audio": "hello.wav", "messages": [{"role": "0", "content": "Hello, how are you?"}]}
+```
+
+```yaml
+base: sesame/csm-1b
+backend: transformers
+task: tts
+modality: audio_out
+output: ./output/csm
+data:
+  train: ./data/speech.jsonl
+  format: audio
+  audio_dir: ./data/audio
+  max_length: 2048
+training:
+  tts_family: sesame_csm
+  quantization: none
+  epochs: 3
+  batch_size: 1
+  gradient_accumulation_steps: 4
+  lr: 0.00002
+  lora:
+    r: 16
+    alpha: 32
+```
+
+Run `soup train -c csm.yaml`. The checkpoint may require Hugging Face access;
+obtain that access and authenticate before running. Local Transformers-format
+CSM checkpoints are also accepted. Audio is loaded through Soup's local-file
+safety checks and resampled to mono 24 kHz. Sequences longer than `max_length`
+are refused rather than truncating audio markers and breaking codec alignment.
+
+The initial native path supports one device, single-clip rows, standard LoRA
+on the backbone and depth decoder (excluding Mimi), or full fine-tuning with
+`lora.r: 0` (Mimi remains frozen). `batch_size: auto` conservatively selects 1.
+Validation loss, boolean gradient checkpointing, seeds, checkpoint resume and
+processor saving are supported. Multi-turn rows, quantization, packing,
+distributed training and additional SFT optimization knobs are refused explicitly.
+The MLX backend remains unsupported for TTS; on Apple Silicon this path uses PyTorch/MPS.
+
+Offline tests construct a tiny real CSM model with all 32 Mimi codebooks and
+exercise forward/backward, training, evaluation, save/reload and resume. These
+tests validate the integration; they do not establish speech quality or a full
+training run on the pretrained `sesame/csm-1b` checkpoint.
 
 
 ## Classifier / Reranker / Cross-Encoder Training (BETA, v0.52.0)

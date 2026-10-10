@@ -1820,9 +1820,8 @@ class TrainingConfig(BaseModel):
         default=None,
         description=(
             "TTS model family — required when task='tts'. Runnable choices are "
-            "orpheus, llasa, spark, and oute. sesame_csm is retained only so "
-            "legacy configs receive an explicit refusal until Soup has a native "
-            "CSM multimodal trainer."
+            "orpheus, llasa, spark, and oute use codec-string SFT. sesame_csm uses "
+            "a native multimodal trainer with raw audio and 32 parallel Mimi codebooks."
         ),
     )
     tts_emotion: Optional[str] = Field(
@@ -5716,17 +5715,12 @@ class SoupConfig(BaseModel):
             if tcfg.tts_family is None:
                 raise ValueError(
                     "task='tts' requires a runnable training.tts_family in "
-                    "(orpheus, llasa, spark, oute); sesame_csm is currently refused"
+                    "(orpheus, llasa, sesame_csm, spark, oute)"
                 )
             if tcfg.tts_family == "sesame_csm":
-                raise ValueError(
-                    "training.tts_family='sesame_csm' is not supported by Soup yet: "
-                    "CSM trains text plus 32 Mimi codebooks as parallel multimodal "
-                    "frames, so neither raw data.format='audio' nor pre-encoded "
-                    "data.format='chatml' is a valid text-SFT substitute. Use the "
-                    "model's native CSM/AutoProcessor training path until Soup has "
-                    "a dedicated CSM trainer."
-                )
+                from soup_cli.utils.csm import validate_csm_config
+
+                validate_csm_config(self)
             if self.data.format == "audio" and tcfg.tts_family in {"spark", "oute"}:
                 from soup_cli.utils.tts_codec import incompatible_live_codec_error
 

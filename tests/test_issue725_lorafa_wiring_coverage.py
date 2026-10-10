@@ -30,6 +30,7 @@ _LORAFA_NOT_IMPLEMENTED = {
     "asr.py",
     "bco.py",
     "classifier.py",
+    "csm.py",  # Native config refuses use_lorafa; test_issue265_native_csm.py pins it.
     "distill.py",
     "dpo.py",
     "grpo.py",

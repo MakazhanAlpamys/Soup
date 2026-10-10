@@ -24,6 +24,10 @@ _WRAPPERS = (
 )
 
 
+# Native CSM limits its initial adapter contract and refuses patterns at parse.
+_PATTERN_REFUSING = {"csm"}
+
+
 def _config(task: str):
     from soup_cli.config.schema import SoupConfig
 
@@ -395,6 +399,7 @@ def test_every_build_lora_config_caller_is_covered_by_a_pattern_test() -> None:
         {name for name, _ in _WRAPPERS}
         | {name for name, _ in _SETUP_DRIVERS}
         | {"online_dpo", "stream_setup"}
+        | _PATTERN_REFUSING
     )
     assert callers - covered == set(), f"no LoRA pattern test for: {sorted(callers - covered)}"
 
@@ -457,3 +462,19 @@ def test_trainers_cannot_construct_lora_config_outside_shared_builder() -> None:
         "trainer modules must use soup_cli.utils.peft_wiring.build_lora_config; "
         f"direct LoraConfig construction found in: {offenders}"
     )
+
+
+@pytest.mark.parametrize("field", ["rank_pattern", "alpha_pattern"])
+def test_native_csm_pattern_refusal_is_earned(field):
+    from soup_cli.config.schema import SoupConfig
+
+    assert _PATTERN_REFUSING == {"csm"}
+    values = dict(
+        base="sesame/csm-1b", task="tts", modality="audio_out",
+        data={"train": "speech.jsonl", "format": "audio"},
+    )
+    # Control: the same native configuration parses without the pattern.
+    training = {"tts_family": "sesame_csm", "quantization": "none"}
+    SoupConfig(**values, training=training)
+    with pytest.raises(ValueError, match=field):
+        SoupConfig(**values, training={**training, "lora": {field: {"q_proj": 4}}})

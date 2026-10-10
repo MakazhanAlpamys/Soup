@@ -1,4 +1,4 @@
-<!-- synced-from: README.md sha256:a6789c2877515d5ac707160a55ab94cd84b390e2e31168b69d4f954a47c5562a -->
+<!-- synced-from: README.md sha256:4ca93d27b5036696b6310f552a6be84216c3c72eae59bb2d37dc4f03bd4c4505 -->
 <p align="center">🌍 <a href="README.md">English</a> | <strong>Türkçe</strong> | <a href="README.ar.md">العربية</a> | <a href="README.ja.md">日本語</a> | <a href="README.zh.md">中文</a></p>
 
 <p align="center">
@@ -277,6 +277,9 @@ Tam özellik başvurusu [`docs/`](docs/) içinde. Buradan başlayın:
 | [Desteklenen modeller ve ekler](docs/models.md) | Önerilen model aileleri, VRAM boyut rehberi, pip isteğe bağlı bağımlılık grupları (extras) matrisi |
 
 ## Veri Biçimleri
+
+Sesame CSM, metin/ses klibi çiftleri ve 32 Mimi kod kitabının tamamı için
+[yerel ses eğitimi yolunu](docs/training.md#native-sesame-csm) destekler; bu yol codec dizeleriyle TTS SFT eğitiminden ayrıdır.
 
 Alpaca, ShareGPT, ChatML, tercih çiftleri (DPO / ORPO / SimPO / IPO / KTO), görü, ses, ASR, düz
 metin, gömme (embedding), RAFT ve daha fazlası — hepsi JSONL, JSON, CSV, Parquet veya TXT'den

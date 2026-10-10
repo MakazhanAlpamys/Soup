@@ -1,4 +1,4 @@
-<!-- synced-from: README.md sha256:a6789c2877515d5ac707160a55ab94cd84b390e2e31168b69d4f954a47c5562a -->
+<!-- synced-from: README.md sha256:4ca93d27b5036696b6310f552a6be84216c3c72eae59bb2d37dc4f03bd4c4505 -->
 <p align="center">🌍 <a href="README.md">English</a> | <a href="README.tr.md">Türkçe</a> | <a href="README.ar.md">العربية</a> | <strong>日本語</strong> | <a href="README.zh.md">中文</a></p>
 
 <p align="center">
@@ -271,6 +271,9 @@ output: ./output
 | [対応モデルとエクストラ](docs/models.md) | 推奨モデルファミリー、VRAM サイズの目安、pip エクストラの一覧表 |
 
 ## データ形式
+
+Sesame CSM は、文字起こしと音声クリップのペアおよび Mimi の全 32 コードブックを扱う
+[ネイティブ音声学習パス](docs/training.md#native-sesame-csm)を提供します。コーデック文字列による TTS SFT とは別の学習方式です。
 
 Alpaca、ShareGPT、ChatML、選好ペア（DPO / ORPO / SimPO / IPO / KTO）、ビジョン、音声、ASR、プレーンテキスト、
 埋め込み、RAFT など — すべて JSONL、JSON、CSV、Parquet、TXT から自動検出されるため、ほとんどの場合は

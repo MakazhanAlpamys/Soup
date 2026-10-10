@@ -245,6 +245,20 @@ def _validate_classification_dataset_if_applicable(cfg: Any, dataset: dict) -> N
             raise typer.Exit(1) from exc
 
 
+def _validate_csm_dataset_if_applicable(cfg: Any, dataset: dict) -> None:
+    if cfg.task != "tts" or cfg.training.tts_family != "sesame_csm":
+        return
+    from rich.markup import escape
+
+    from soup_cli.utils.csm import validate_csm_dataset
+
+    try:
+        validate_csm_dataset(dataset)
+    except ValueError as exc:
+        console.print(f"[red]Error validating CSM dataset:[/] {escape(str(exc))}")
+        raise typer.Exit(1) from exc
+
+
 def _refuse_empty_train(dcfg, dataset) -> None:
     """Stop a run whose data loaded zero training rows (#1217).
 
@@ -1698,6 +1712,7 @@ def train(
         )
         _refuse_empty_train(cfg.data, dataset)
         _validate_classification_dataset_if_applicable(cfg, dataset)
+        _validate_csm_dataset_if_applicable(cfg, dataset)
         console.print(
             f"[green]Data OK:[/] {_train_sample_count(cfg.data, dataset)} train samples"
         )
@@ -1716,6 +1731,7 @@ def train(
     )
     _refuse_empty_train(cfg.data, dataset)
     _validate_classification_dataset_if_applicable(cfg, dataset)
+    _validate_csm_dataset_if_applicable(cfg, dataset)
     console.print(
         f"[green]Loaded:[/] {_train_sample_count(cfg.data, dataset)} train samples"
     )

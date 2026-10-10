@@ -181,8 +181,8 @@ class TestTrainerContract:
 
 
 class TestCsmParseTimeRefusal:
-    @pytest.mark.parametrize("data_format", ["audio", "chatml"])
-    def test_csm_is_refused_at_config_parse_for_both_input_shapes(self, data_format):
+    @pytest.mark.parametrize("data_format", ["chatml"])
+    def test_csm_codec_string_shape_is_still_refused(self, data_format):
         from soup_cli.config.loader import load_config_from_string
 
         yaml = f"""base: sesame/csm-1b
@@ -193,8 +193,9 @@ data:
   format: {data_format}
 training:
   tts_family: sesame_csm
+  quantization: none
 """
-        with pytest.raises(ValueError, match="dedicated CSM trainer"):
+        with pytest.raises(ValueError, match="data.format='audio'"):
             load_config_from_string(yaml)
 
     def test_unrunnable_csm_recipe_is_not_advertised(self):
