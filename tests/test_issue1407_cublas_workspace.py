@@ -141,6 +141,17 @@ class TestCublasWorkspaceSizeForTheDevice:
         for major, size in CUBLAS_WORKSPACE_BYTES_BY_MAJOR.items():
             assert cublas_workspace_size_bytes(major) == size == 32 * 1024 * 1024
 
+    @pytest.mark.parametrize("major", [13, 14, 20])
+    def test_a_major_above_the_table_gets_the_legacy_size_not_32_mib(self, major):
+        """CONTROL for the test above, and the one that separates the list from a
+        threshold. ``major >= 9`` passes every assertion about majors 9..12 and
+        reads as the same rule, but it charges 32 MiB to a card PyTorch has not put
+        in its list -- over-predicting relative to the allocator this estimate
+        exists to predict. The table is what the estimate is faithful to, so a
+        major outside it takes the below-Hopper default."""
+        assert cublas_workspace_size_bytes(major) == CUBLAS_WORKSPACE_BYTES_PRE_HOPPER
+        assert cublas_workspace_size_bytes(major) != 32 * 1024 * 1024
+
 
 class TestTheHandleCount:
     """One workspace per (handle, stream) pair. A streamed step uses two: the
@@ -268,12 +279,21 @@ class TestTheFormulaChargesIt:
         over the legacy workspace -- the under-predicting shape #1407 is about."""
         assert self._peak(cublas_workspace_bytes=0) == 13_934_816
 
-    def test_the_default_is_no_workspace(self):
+    def test_the_default_is_no_workspace(self, monkeypatch):
         """The pre-flight is this parameter's only production caller and it passes
         the charge from the run's own device. A default that probed the live card
         would bill a CPU-side caller on a machine that merely has a card visible,
         because ``torch.cuda.get_device_properties(None)`` reads the CURRENT card.
-        The caller is responsible for naming the charge."""
+        The caller is responsible for naming the charge.
+
+        The probe is patched to a NON-zero charge on purpose: on a GPU-less box the
+        real probe returns 0, so asserting the default against an unpatched probe
+        would pass for a probing default too and cover nothing."""
+        from soup_cli.utils import layer_stream
+
+        monkeypatch.setattr(
+            layer_stream, "measure_cublas_workspace_bytes", lambda *a, **k: 64 * 1024 * 1024
+        )
         assert self._peak() == self._peak(cublas_workspace_bytes=0)
 
     def test_a_negative_charge_is_refused(self):
