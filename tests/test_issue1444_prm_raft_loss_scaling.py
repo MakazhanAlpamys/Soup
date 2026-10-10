@@ -185,6 +185,9 @@ def _hide_mps(monkeypatch):
     call sites run _tiny_llama_dir first."""
     monkeypatch.setattr(torch.backends.mps, "is_available", lambda: False)
     monkeypatch.setattr(torch.mps, "is_available", lambda: False)
+    # Transformers caches MPS availability across tests. Override the Trainer's
+    # lookup too, so a prior MPS probe cannot move this CPU fixture's model.
+    monkeypatch.setattr("transformers.training_args.is_torch_mps_available", lambda: False)
 
 
 def _requires_train_extra():
