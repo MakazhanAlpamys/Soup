@@ -17,6 +17,7 @@ import os
 import re
 import shlex
 import sys
+from contextlib import redirect_stdout
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Iterable, Mapping
@@ -69,19 +70,29 @@ class ToolSpec:
     annotations: dict | None = None
 
 
-def _sanitize(obj: Any) -> Any:
+def sanitize(obj: Any) -> Any:
     """Recursively strip C0/ESC/DEL bytes from every string in ``obj``.
 
     Leaves non-string scalars (int/float/bool/None) untouched; recurses into
     dicts and lists. Applied to every handler result as defence-in-depth.
+
+    Public since #1761: ``server.py`` and out-of-process callers both need it, and the
+    same shape as #896, which moved the private ``_for_terminal`` copies onto
+    ``utils.terminal.for_terminal``.
     """
     if isinstance(obj, str):
         return strip_control(obj)
     if isinstance(obj, Mapping):
-        return {_sanitize(k): _sanitize(v) for k, v in obj.items()}
+        return {sanitize(k): sanitize(v) for k, v in obj.items()}
     if isinstance(obj, (list, tuple)):
-        return [_sanitize(v) for v in obj]
+        return [sanitize(v) for v in obj]
     return obj
+
+
+#: Retained so an existing ``from ... import _sanitize`` keeps working. Nothing in
+#: ``src/soup_cli`` uses it; it exists only so a downstream import is not broken by the
+#: rename in #1761.
+_sanitize = sanitize
 
 
 def _read_text_under_cwd(path: str, field: str, *, max_bytes: int = _MAX_JSON_BYTES) -> str:
@@ -1240,3 +1251,55 @@ def build_registry(
         allow_execute=allow_execute,
         execution=execution,
     )
+
+
+def call_tool(
+    name: str,
+    arguments: dict | None = None,
+    *,
+    allow_mutating: bool = False,
+    registry: list[ToolSpec] | None = None,
+) -> Any:
+    """Run one registry tool and return its sanitized result.
+
+    The public entry point for callers that use the registry tools without speaking MCP
+    (#1761). It gives the same three guarantees the MCP server gave, because the server
+    now calls this: stray stdout goes to stderr for the duration of the handler so it
+    cannot corrupt a JSON-RPC channel, the result is passed through :func:`sanitize`, and
+    every failure becomes an :class:`McpToolError` whose message is already sanitized.
+
+    A handler that raises :class:`McpToolError` is passed through with its message
+    sanitized; any other exception becomes ``internal error (<type>)``, which carries
+    neither a path nor a traceback.
+
+    Returns the Python value, not the pretty-printed JSON text, so a caller does not have
+    to parse what it just called. Serialization stays the transport's business.
+
+    ``allow_mutating`` mirrors ``build_registry``'s own flag. It is a second gate rather
+    than a duplicate of it: a caller that built its table with ``allow_mutating=True``
+    still has to ask for mutating tools by name here, so one permissive table cannot be
+    used to run a mutating tool by accident.
+    """
+    specs = build_registry(allow_mutating=allow_mutating) if registry is None else registry
+    by_name = {spec.name: spec for spec in specs}
+    spec = by_name.get(name)
+    if spec is None:
+        raise McpToolError(f"unknown tool: {sanitize(name)}")
+    if getattr(spec, "mutating", False) and not allow_mutating:
+        raise McpToolError(
+            f"'{sanitize(name)}' can change state and is disabled; pass "
+            "allow_mutating=True to enable it."
+        )
+    try:
+        # Any core that prints (e.g. a Rich warning) must not corrupt the caller's
+        # stdout. Serialization stays inside the try in the server so a
+        # non-serializable result also becomes a sanitized error.
+        with redirect_stdout(sys.stderr):
+            result = spec.handler(arguments or {})
+        return sanitize(result)
+    except McpToolError as exc:
+        # sanitize the message too, so the C0/ESC guarantee is structural rather than a
+        # convention every handler has to remember.
+        raise McpToolError(sanitize(str(exc))) from None
+    except Exception as exc:  # never leak a stack trace or a path to the caller
+        raise McpToolError(f"internal error ({type(exc).__name__})") from None
