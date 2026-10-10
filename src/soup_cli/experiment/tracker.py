@@ -79,6 +79,7 @@ CREATE TABLE IF NOT EXISTS metrics (
     epoch     REAL,
     loss      REAL,
     val_loss  REAL,
+    val_reward REAL,
     lr        REAL,
     grad_norm REAL,
     speed     REAL,
@@ -190,6 +191,9 @@ class ExperimentTracker:
             # column existed has no evaluation loss, and NULL says so. A 0.0
             # would read as a measurement nobody took.
             ("metrics", "val_loss", "ALTER TABLE metrics ADD COLUMN val_loss REAL"),
+            # grpo's held-out reward (#1389): its own column, because a reward
+            # is higher-is-better and must not be read as a loss.
+            ("metrics", "val_reward", "ALTER TABLE metrics ADD COLUMN val_reward REAL"),
         ):
             existing = {
                 row[1]
@@ -349,21 +353,25 @@ class ExperimentTracker:
         speed: float = 0.0,
         gpu_mem: str = "",
         val_loss: Optional[float] = None,
+        val_reward: Optional[float] = None,
     ) -> None:
         """Log a single metrics row for the given run.
 
-        ``val_loss`` and ``grad_norm`` default to ``None`` rather than ``0.0``:
-        an omitted measurement must not look like a genuinely measured zero.
-        ``loss`` is None for a training log that carried no loss (#1225).
+        ``val_loss``, ``val_reward`` and ``grad_norm`` default to ``None`` rather
+        than ``0.0``: an omitted measurement must not look like a genuinely
+        measured zero. ``loss`` is None for a training log that carried no loss
+        (#1225). ``val_reward`` is grpo's held-out reward (#1389); every other
+        task leaves it NULL.
         """
         now = datetime.now().isoformat()
         conn = self._get_conn()
         conn.execute(
             """INSERT INTO metrics
-               (run_id, step, epoch, loss, val_loss, lr, grad_norm, speed,
+               (run_id, step, epoch, loss, val_loss, val_reward, lr, grad_norm, speed,
                 gpu_mem, timestamp)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (run_id, step, epoch, loss, val_loss, lr, grad_norm, speed, gpu_mem, now),
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (run_id, step, epoch, loss, val_loss, val_reward, lr, grad_norm, speed,
+             gpu_mem, now),
         )
         conn.commit()
 

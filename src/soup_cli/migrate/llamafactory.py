@@ -17,9 +17,11 @@ _STAGE_MAP = {
     "ppo": "ppo",
 }
 
-# LLaMA-Factory pref_loss → Soup task override (when stage=dpo)
+# LLaMA-Factory pref_loss → Soup task override (when stage=dpo). #1214: a value
+# with no Soup task (hinge, kto_pair) is refused by name, never defaulted to dpo.
 _PREF_LOSS_MAP = {
     "sigmoid": "dpo",
+    "ipo": "ipo",
     "orpo": "orpo",
     "simpo": "simpo",
 }
@@ -61,9 +63,21 @@ def migrate_llamafactory(config_path: Path) -> Dict[str, Any]:
     stage = raw.get("stage", "sft")
     task = _STAGE_MAP.get(stage, "sft")
 
-    # Override task if pref_loss is specified (LF unifies under stage:dpo)
+    # Override task if pref_loss is specified (LF unifies under stage:dpo, and
+    # reads pref_loss only there).
     pref_loss = raw.get("pref_loss")
-    if pref_loss and pref_loss in _PREF_LOSS_MAP:
+    if stage == "dpo" and pref_loss is not None:
+        if not isinstance(pref_loss, str):
+            raise ValueError(
+                f"LLaMA-Factory pref_loss must name one loss as a string, got "
+                f"{type(pref_loss).__name__}: {pref_loss!r}."
+            )
+        if pref_loss not in _PREF_LOSS_MAP:
+            supported = ", ".join(sorted(_PREF_LOSS_MAP))
+            raise ValueError(
+                f"No Soup task matches LLaMA-Factory pref_loss: {pref_loss}. "
+                f"Supported pref_loss values are {supported}."
+            )
         task = _PREF_LOSS_MAP[pref_loss]
 
     data_format = _TASK_FORMAT_MAP.get(task, "auto")

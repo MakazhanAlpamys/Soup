@@ -512,16 +512,16 @@ def _run_single(base_cfg, params: dict, run_name: str, config_path: Path) -> dic
         experiment_name=run_name,
     )
 
-    # Build trainer — the same dispatch `soup train` uses (#1213). This used to
-    # be a second, shorter chain that never grew past v0.40.0, so ten task
-    # values and every `backend: mlx` config were trained as plain SFT here
-    # while the tracker recorded the configured task.
-    trainer_wrapper = build_trainer(cfg, device=device)
-    trainer_wrapper.setup(dataset)
-
-    # Train
-    display = TrainingDisplay(cfg, device_name=device_name)
     try:
+        # Build trainer — the same dispatch `soup train` uses (#1213). This used to
+        # be a second, shorter chain that never grew past v0.40.0, so ten task
+        # values and every `backend: mlx` config were trained as plain SFT here
+        # while the tracker recorded the configured task.
+        trainer_wrapper = build_trainer(cfg, device=device)
+        trainer_wrapper.setup(dataset)
+
+        # Train
+        display = TrainingDisplay(cfg, device_name=device_name)
         result = trainer_wrapper.train(display=display, tracker=tracker, run_id=run_id)
         tracker.finish_run(
             run_id=run_id,
@@ -533,8 +533,10 @@ def _run_single(base_cfg, params: dict, run_name: str, config_path: Path) -> dic
         )
         result["run_id"] = run_id
         return result
-    except Exception:
-        tracker.fail_run(run_id)
+    except Exception as exc:
+        from soup_cli.commands.train import _describe_exception_for_tracker
+
+        tracker.fail_run(run_id, error=_describe_exception_for_tracker(exc))
         raise
 
 

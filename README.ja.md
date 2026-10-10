@@ -1,5 +1,5 @@
-<!-- synced-from: README.md sha256:4dfed787f12e9d2a94ba6cf97d76b25aa4151095125c9eae65628bfe63e86d0f -->
-<p align="center">🌍 <a href="README.md">English</a> | <a href="README.tr.md">Türkçe</a> | <a href="README.ar.md">العربية</a> | <strong>日本語</strong></p>
+<!-- synced-from: README.md sha256:a6789c2877515d5ac707160a55ab94cd84b390e2e31168b69d4f954a47c5562a -->
+<p align="center">🌍 <a href="README.md">English</a> | <a href="README.tr.md">Türkçe</a> | <a href="README.ar.md">العربية</a> | <strong>日本語</strong> | <a href="README.zh.md">中文</a></p>
 
 <p align="center">
   <img src="soup.png" alt="Soup" width="280">
@@ -209,7 +209,7 @@ soup export --model ./output --format gguf --quant q4_k_m   # Ollama / llama.cpp
 ```bash
 pip install "soup-cli[ui]"
 soup ui
-# http://127.0.0.1:7860 を開きます
+# http://127.0.0.1:7860/?token=<token> を開きます
 ```
 
 ![Soup Web UI — 新規学習](docs/assets/web-ui-new-training.png)
@@ -282,7 +282,7 @@ Alpaca、ShareGPT、ChatML、選好ペア（DPO / ORPO / SimPO / IPO / KTO）、
 
 ```bash
 soup train  --config soup.yaml        # 学習（SFT/DPO/GRPO/PPO/KTO/ORPO/SimPO/IPO/...）
-soup infer  --model ./output --input prompts.jsonl   # バッチ推論
+soup infer  --model ./output --input prompts.jsonl --output results.jsonl   # バッチ推論
 soup chat   --model ./output          # 対話型チャット
 soup serve  --model ./output          # OpenAI 互換 API サーバー
 soup ui                               # ローカルのブラウザダッシュボード

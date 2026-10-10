@@ -8,6 +8,7 @@ nltk).
 
 from __future__ import annotations
 
+import unicodedata
 from typing import Callable, Sequence
 
 from soup_cli.utils.diagnose._common import (
@@ -24,21 +25,48 @@ from soup_cli.utils.diagnose.report import FailureScore, classify_score
 MultiGen = Callable[[str, int], Sequence[str]]
 
 
-def _pairwise_diversity(samples: Sequence[str], *, n: int = 3) -> float:
+def _pairwise_diversity(samples: Sequence[str], *, n: int = 3) -> float | None:
     """1 - average pairwise n-gram-set Jaccard; 1.0 = fully diverse."""
-    cleaned = [tokenize(sample) for sample in samples if isinstance(sample, str)]
+    cleaned = []
+    evidence = []
+
+    for sample in samples:
+        if not isinstance(sample, str):
+            continue
+
+        tokens = tokenize(sample)
+        has_word = any(unicodedata.category(ch)[0] in "LN" for ch in sample)
+
+        if not tokens and not has_word:
+            tokens = [
+                ch
+                for ch in sample
+                if unicodedata.category(ch)[0] in "SP"
+            ]
+
+        cleaned.append(tokens)
+        evidence.append(bool(tokens) or has_word)
+
     if len(cleaned) < 2:
-        return 1.0
+        return None
+
     pairs = 0
     overlap = 0.0
+
     for i in range(len(cleaned)):
         for j in range(i + 1, len(cleaned)):
+            if not evidence[i] and not evidence[j]:
+                continue
+
             a = ngrams(cleaned[i], n) or [tuple(cleaned[i])]
             b = ngrams(cleaned[j], n) or [tuple(cleaned[j])]
+
             overlap += jaccard(a, b)
             pairs += 1
+
     if pairs == 0:
-        return 1.0
+        return None
+
     return max(0.0, 1.0 - overlap / pairs)
 
 
@@ -75,7 +103,19 @@ def score_mode_collapse(
         samples = adapter_multi_gen(prompt, k)
         if not isinstance(samples, Sequence) or isinstance(samples, (str, bytes)):
             raise TypeError("adapter_multi_gen must return a sequence of str")
-        diversities.append(_pairwise_diversity(samples, n=ngram_n))
+        div = _pairwise_diversity(samples, n=ngram_n)
+        if div is not None:
+            diversities.append(div)
+
+    # Neutral score with reason if all pairs were skipped across all prompts
+    if not diversities:
+        return FailureScore(
+            mode="mode_collapse",
+            score=1.0,
+            verdict="OK",
+            evidence="no token evidence in any answer pair; nothing to check",
+        )
+
     score = sum(diversities) / len(diversities)
     score = max(0.0, min(1.0, score))
     verdict = classify_score(score)

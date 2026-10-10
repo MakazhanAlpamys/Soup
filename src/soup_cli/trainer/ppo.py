@@ -508,6 +508,17 @@ class PPOTrainerWrapper:
             self._dataset_in_constructor = True
             self.trainer = ppo_trainer_cls(**trainer_kwargs)
 
+        # #1675 - trl.experimental's PPOTrainer subclasses transformers.Trainer
+        # but never runs Trainer.__init__, and its save_model / _save_checkpoint
+        # delegate to Trainer's. An attribute Trainer.__init__ assigns and those
+        # methods read is then missing: transformers 5.19.0 added one
+        # (is_distributed_loading_by_transformers) and the first checkpoint save
+        # raised AttributeError. Fill in what is absent, whichever branch built
+        # the trainer.
+        from soup_cli.trainer._trl_compat import ensure_trainer_init_attrs
+
+        ensure_trainer_init_attrs(self.trainer)
+
         # #359 - the same exposure #336 fixed in sft.py: with LoRA the
         # no-decay optimizer group is empty, DeepSpeed drops it, and the LR
         # scheduler keeps two base_lrs until torch's strict zip raises at the
@@ -709,7 +720,7 @@ class PPOTrainerWrapper:
 
         self.model = AutoModelForCausalLM.from_pretrained(cfg.base, **model_kwargs)
 
-        if tcfg.quantization in ("4bit", "8bit", "mxfp4"):
+        if tcfg.quantization in ("4bit", "8bit"):
             from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
 
             self.model = prepare_model_for_kbit_training(
@@ -814,23 +825,15 @@ class PPOTrainerWrapper:
                 self.trainer.dataset = self._trl_train_ds
 
         if display:
-            from soup_cli.monitoring.callback import (
-                SoupTrainerCallback,
-                soup_callback_kwargs,
-            )
-
+            from soup_cli.monitoring.callback import build_soup_trainer_callback
             self.trainer.add_callback(
-                SoupTrainerCallback(
+               build_soup_trainer_callback(
                     display,
+                    config=self.config,
                     tracker=tracker,
                     run_id=run_id,
-                    eval_gate_config=self.config.training.eval_gate,
-                    **soup_callback_kwargs(
-                        self.config.training,
-                        batch_size=self._batch_size,
-                        output_dir=self._output_dir,
-                        include_eval_gate=False,
-                    ),
+                    batch_size=self._batch_size,
+                    output_dir=self._output_dir,
                 )
             )
 

@@ -18,7 +18,10 @@ from soup_cli.utils.gpu import (
     resolve_device_map,
     resolve_frozen_base_load_dtype,
 )
-from soup_cli.utils.mixed_precision import align_trainable_dtype_for_fp16
+from soup_cli.utils.mixed_precision import (
+    align_trainable_dtype_for_fp16,
+    keep_trainable_dtype_on_resume,
+)
 from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
 
 console = Console()
@@ -161,14 +164,10 @@ class DPOTrainerWrapper(StreamingSetupMixin):
             output_dir = output_dir / cfg.experiment_name
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        # --- Calculate warmup steps from ratio ---
-        import math
+        # --- Calculate warmup steps from ratio (#1431) ---
+        from soup_cli.utils.warmup import resolve_trainer_warmup_steps
 
-        total_steps = (
-            math.ceil(len(train_ds) / batch_size / tcfg.gradient_accumulation_steps)
-            * tcfg.epochs
-        )
-        warmup_steps = int(total_steps * tcfg.warmup_ratio)
+        warmup_steps = resolve_trainer_warmup_steps(tcfg.warmup_ratio)
 
         # --- DPO config ---
         from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
@@ -290,12 +289,36 @@ class DPOTrainerWrapper(StreamingSetupMixin):
         from peft import TaskType, get_peft_model, prepare_model_for_kbit_training
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
-        console.print(f"[dim]Loading tokenizer: {cfg.base}[/]")
-        self.tokenizer = AutoTokenizer.from_pretrained(
-            cfg.base, trust_remote_code=self._trust_remote_code
-        )
-        if self.tokenizer.pad_token is None:
-            self.tokenizer.pad_token = self.tokenizer.eos_token
+        if cfg.modality == "vision":
+            # #1393 — a checkpoint published as a vision-language wrapper
+            # (MiniMax-M3, ``model_type: minimax_m3_vl``) is not registered under
+            # AutoModelForCausalLM, so DPO could not load it at all while SFT's
+            # vision path trained its language tower. Load it the way SFT does:
+            # the processor stands in for the tokenizer (trl's DPOTrainer takes a
+            # ProcessorMixin as processing_class and tokenizes text-only
+            # preference rows through it), and the LoRA targets stay on the
+            # language tower through the usual resolver.
+            from transformers import AutoModelForImageTextToText, AutoProcessor
+
+            from soup_cli.trainer.sft import _ensure_vision_processor_pad_token
+
+            console.print(f"[dim]Loading vision processor: {cfg.base}[/]")
+            self.processor = AutoProcessor.from_pretrained(
+                cfg.base, trust_remote_code=self._trust_remote_code
+            )
+            _ensure_vision_processor_pad_token(self.processor)
+            self.tokenizer = self.processor
+            loader = AutoModelForImageTextToText
+            text_tokenizer = self.processor.tokenizer
+        else:
+            console.print(f"[dim]Loading tokenizer: {cfg.base}[/]")
+            self.tokenizer = AutoTokenizer.from_pretrained(
+                cfg.base, trust_remote_code=self._trust_remote_code
+            )
+            if self.tokenizer.pad_token is None:
+                self.tokenizer.pad_token = self.tokenizer.eos_token
+            loader = AutoModelForCausalLM
+            text_tokenizer = self.tokenizer
 
         # Quantization (v0.38.0 Quant Menu — see soup_cli.utils.quant_menu)
         from soup_cli.utils.quant_menu import build_quantization_config_for_loader
@@ -314,15 +337,15 @@ class DPOTrainerWrapper(StreamingSetupMixin):
         if quant_config_obj is not None:
             model_kwargs["quantization_config"] = quant_config_obj
 
-        self.model = AutoModelForCausalLM.from_pretrained(cfg.base, **model_kwargs)
+        self.model = loader.from_pretrained(cfg.base, **model_kwargs)
         from soup_cli.utils.data_pipeline import apply_vocab_expansion
 
         apply_vocab_expansion(
-            self.tokenizer,
+            text_tokenizer,
             self.model,
             cfg.data,
         )
-        if tcfg.quantization in ("4bit", "8bit", "mxfp4"):
+        if tcfg.quantization in ("4bit", "8bit"):
             from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
 
             self.model = prepare_model_for_kbit_training(
@@ -403,23 +426,15 @@ class DPOTrainerWrapper(StreamingSetupMixin):
 
         # Add callback for live display and experiment tracking
         if display:
-            from soup_cli.monitoring.callback import (
-                SoupTrainerCallback,
-                soup_callback_kwargs,
-            )
-
+            from soup_cli.monitoring.callback import build_soup_trainer_callback
             self.trainer.add_callback(
-                SoupTrainerCallback(
+                build_soup_trainer_callback(
                     display,
+                    config=self.config,
                     tracker=tracker,
                     run_id=run_id,
-                    eval_gate_config=self.config.training.eval_gate,
-                    **soup_callback_kwargs(
-                        self.config.training,
-                        batch_size=self._batch_size,
-                        output_dir=self._output_dir,
-                        include_eval_gate=False,
-                    ),
+                    batch_size=self._batch_size,
+                    output_dir=self._output_dir,
                 )
             )
 
@@ -453,6 +468,8 @@ class DPOTrainerWrapper(StreamingSetupMixin):
                 fp16=getattr(self.trainer.args, "fp16", False),
                 bf16=getattr(self.trainer.args, "bf16", False),
             )
+            if resume_from_checkpoint is not None:
+                keep_trainable_dtype_on_resume(self.trainer)
             self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
         duration = time.time() - start
 

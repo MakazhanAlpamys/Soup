@@ -20,6 +20,11 @@ from soup_cli.utils.final_answer import BoxedAnswer, iter_boxed_answers, parse_c
 
 # Long enough that the scan's own cost dominates the interpreter's.
 _GROWTH_INPUT = 20_000
+# An absolute ceiling only a scan that is not linear can reach. The growth ratio next to it
+# is what pins linearity; this catches a scan that is slow at every size. It was 3.0, and a
+# linear scan measured 3.01 on a four-core runner with coverage on and every core busy with
+# another test file, so it leaves ten times that.
+_CEILING_SECONDS = 30.0
 
 
 def _best_seconds(text: str, repeats: int = 3) -> float:
@@ -78,7 +83,7 @@ class TestIssue1347TheScanGrowsLinearly:
         small_seconds = _best_seconds(small)
         large_seconds = _best_seconds(large)
         assert large_seconds < small_seconds * 20, (small_seconds, large_seconds)
-        assert large_seconds < 3.0, large_seconds
+        assert large_seconds < _CEILING_SECONDS, large_seconds
 
     def test_closed_boxes_cost_linear_time_too(self):
         small = r"\boxed{B} " * _GROWTH_INPUT
@@ -89,7 +94,7 @@ class TestIssue1347TheScanGrowsLinearly:
         small_seconds = _best_seconds(small)
         large_seconds = _best_seconds(large)
         assert large_seconds < small_seconds * 20, (small_seconds, large_seconds)
-        assert large_seconds < 3.0, large_seconds
+        assert large_seconds < _CEILING_SECONDS, large_seconds
 
 
 class TestIssue1347NestedBoxes:

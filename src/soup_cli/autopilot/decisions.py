@@ -9,6 +9,7 @@ from typing import Any, Literal, Mapping, Optional
 
 from soup_cli.utils.flash_attn import check_flash_attn_available
 from soup_cli.utils.liger import check_liger_available
+from soup_cli.utils.quant_menu import DORA_UNSUPPORTED_FORMATS
 
 GOAL_TO_TASK: dict[str, str] = {
     "chat": "sft",
@@ -241,7 +242,20 @@ def decide_quantization(
     don't silently stack a fresh BNB 4-bit on top of an already-quantized base.
     """
     if prequantized is not None:
-        return _validate_prequantized(prequantized)
+        canonical = _validate_prequantized(prequantized)
+        if canonical == "mxfp4":
+            from soup_cli.utils.hardware_fit import _BYTES_PER_PARAM_BY_QUANT
+
+            bytes_per_param = _BYTES_PER_PARAM_BY_QUANT.get("mxfp4", 2.0)
+            model_gb_dequant = model_params_b * bytes_per_param
+            if vram_gb < model_gb_dequant:
+                raise ValueError(
+                    f"Model too large for VRAM budget: {model_params_b}B model "
+                    f"in mxfp4 is dequantized on load and needs at least "
+                    f"{model_gb_dequant:.1f}GB in bf16, got {vram_gb:.1f}GB. "
+                    "Try a smaller model or increase --gpu-budget."
+                )
+        return canonical
 
     # Rough: 1 param byte each in 8bit, 0.5 in 4bit, 2 in fp16
     model_gb_fp16 = model_params_b * 2.0
@@ -278,7 +292,7 @@ def decide_peft(
         rank = 32
     alpha = rank * 2
     use_dora = data_size > 100_000 and vram_gb >= 2.0 * model_size_b
-    if quantization in ("gptq", "awq", "aqlm", "eetq"):
+    if quantization in DORA_UNSUPPORTED_FORMATS:
         use_dora = False
     return {
         "r": rank,

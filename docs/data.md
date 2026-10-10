@@ -25,7 +25,7 @@
 - [Semantic dedup (`soup data dedup --semantic`)](#semantic-dedup-soup-data-dedup---semantic)
 - [Dataset Sanitization & Repair (`soup data clean`)](#dataset-sanitization--repair-soup-data-clean)
 - [Topic map (`soup data topics`)](#topic-map-soup-data-topics)
-- [Canaries (`soup data canary insertcheck`)](#canaries-soup-data-canary-insertcheck)
+- [Canaries (`soup data canary insert|check`)](#canaries-soup-data-canary-insertcheck)
 - [Data Recipe DAG](#data-recipe-dag)
 - [Data Mixing Optimizer (BETA)](#data-mixing-optimizer-beta)
 - [AOT Tokenization with `soup data preprocess`](#aot-tokenization-with-soup-data-preprocess)
@@ -427,7 +427,7 @@ soup data active-sample --input traces.jsonl --output for-review.jsonl --budget 
 
 The output JSONL is a drop-in prompt set for `soup eval human` (v0.19). Budget is bounded `[1, 100 000]`.
 
-**Webhooks (v0.71.5).** `soup ingest`, `soup prune-prompt`, `soup ab`, and `soup data active-sample` all accept `--slack-url` / `--discord-url` and POST a one-line summary on completion through the same SSRF-hardened validator as `soup drift-alarm` (scheme allowlist, loopback-only HTTP, RFC1918 / link-local / shared `100.64.0.0/10` / site-local `fec0::/10` / reserved / multicast rejected; the post never raises, so a flaky webhook can't fail the command). `soup ab` only fires when the sequential test actually decides (`reject_h0` / `accept_h0`), not while it's still `continue`-ing.
+**Webhooks (v0.71.5).** `soup ingest`, `soup prune-prompt`, `soup ab`, and `soup data active-sample` all accept `--slack-url` / `--discord-url` and POST a one-line summary on completion through the same SSRF-hardened validator as `soup drift-alarm` (scheme allowlist, loopback-only HTTP, RFC1918 / link-local / shared `100.64.0.0/10` / site-local `fec0::/10` / reserved / multicast rejected, as is a host written only as numbers that is not a valid IPv4 address; the post never raises, so a flaky webhook can't fail the command). `soup ab` only fires when the sequential test actually decides (`reject_h0` / `accept_h0`), not while it's still `continue`-ing.
 
 
 ## Synthetic Data Generation
@@ -454,7 +454,8 @@ soup data generate --prompt "..." --provider server --api-base http://localhost:
 With `--provider server`, `openai` or `vllm`, `--api-base` takes plain HTTP only for loopback
 (`localhost`, `127.0.0.1`, `::1`) and HTTPS for any other host; `--provider ollama` stays
 loopback-only. A private, link-local or reserved IP literal is refused on either scheme, so
-address a server on your network by its hostname.
+address a server on your network by its hostname. A host written only as numbers that is not a
+valid IPv4 address (`10.0.0.256`, `4294967296`) is refused as well.
 
 ### Multi-Provider Support
 
@@ -514,23 +515,23 @@ Augment an existing dataset using an LLM — rephrase for diversity, translate f
 
 ```bash
 # Rephrase each example N times for more diversity
-soup data augment ./data/train.jsonl --strategy rephrase --count 3 \
+soup data augment --input ./data/train.jsonl --strategy rephrase --count 3 \
   --output ./data/train_augmented.jsonl
 
 # Translate into multiple languages
-soup data augment ./data/train.jsonl --strategy translate --lang es,fr,de \
+soup data augment --input ./data/train.jsonl --strategy translate --lang es,fr,de \
   --output ./data/train_multilingual.jsonl
 
 # Style transfer (formal / casual / technical / etc.)
-soup data augment ./data/train.jsonl --strategy style --styles formal,casual \
+soup data augment --input ./data/train.jsonl --strategy style --styles formal,casual \
   --output ./data/train_styled.jsonl
 
 # Local provider (Ollama, loopback-only) — pick the model + base URL
-soup data augment ./data/train.jsonl --strategy rephrase --count 2 \
+soup data augment --input ./data/train.jsonl --strategy rephrase --count 2 \
   --provider ollama --model qwen2.5:0.5b --output ./data/train_local.jsonl
 ```
 
-Works with `--provider ollama` (the default), `anthropic` or `vllm`. `--model` and `--base-url` select a specific model/endpoint. The Ollama path is loopback-only; the vLLM path takes plain HTTP only for loopback and HTTPS for a remote server, and refuses a private, link-local or reserved IP literal (SSRF-hardened). `--count` is capped at 10; `--lang` and `--styles` each capped at 10 entries × 32 chars.
+Works with `--provider ollama` (the default), `anthropic` or `vllm`. `--model` and `--base-url` select a specific model/endpoint. The Ollama path is loopback-only; the vLLM path takes plain HTTP only for loopback and HTTPS for a remote server, and refuses a private, link-local or reserved IP literal and a host written only as numbers that is not a valid IPv4 address (SSRF-hardened). `--count` is capped at 10; `--lang` and `--styles` each capped at 10 entries × 32 chars.
 
 A provider call that fails (transport error, non-200 status, malformed response) or returns an empty reply never becomes a row: that variant is dropped. The summary reports `N of M provider calls failed` with the first error, and the command exits 1 without writing the output file when no call produced a usable row.
 
@@ -550,8 +551,9 @@ soup data from-traces --logs ./logs/openai.jsonl \
   --format openai --signal regenerations --output prefs.jsonl
 
 # Soup-serve logs + user-edit signal (edited response wins over original).
-# `--logs` is a DIRECTORY of *.jsonl: the soup-serve parser reads a directory,
-# and returns nothing for a single file (#1440).
+# `--logs` is a DIRECTORY of *.jsonl (one per `soup serve` session): the
+# soup-serve format reads a directory; a single file is refused at the
+# CLI — read a single JSONL with --format langchain or openai instead (#1530).
 soup data from-traces --logs ./traces \
   --format soup-serve --signal user_edit --output prefs.jsonl
 
@@ -611,8 +613,29 @@ soup migrate --from llamafactory config.yaml --dry-run
 ```
 
 Automatically maps model, LoRA, training params, quantization, and task type. Warns about unsupported features.
+IPython lines in a notebook are skipped, so an unmodified Unsloth notebook reads as the Python it
+contains: `!pip install ...` and `%env ...` lines (a `!` line continued with a trailing backslash counts
+as one line), a `%%capture` header (its body is still read), and a `%%bash` cell whole; a real syntax
+error is reported with its code cell and line.
 
 An axolotl `rl:` value with no Soup task (for example `rl: ebft`) stops the migration: `soup migrate` exits 1 and names the value instead of writing a `task: sft` config.
+
+The same rule holds for the other two sources. A LLaMA-Factory `stage: dpo` with
+a `pref_loss` that has no Soup task (`hinge`, `kto_pair`, anything else) stops
+the migration with exit 1 naming the value; `ipo` migrates to `task: ipo`, and
+`pref_loss` is read only under `stage: dpo`, as LLaMA-Factory does. In an Unsloth
+notebook `RewardTrainer` migrates to `reward_model`, `BCOTrainer` to `bco`,
+`OnlineDPOTrainer` to `online_dpo` (with a placeholder `training.online_dpo_judge`
+to replace), and `CPOTrainer` to `simpo` only when `loss_type="simpo"` is set on
+its own call or its `args=` config; any other CPO loss, or an `args=` that cannot
+be read statically, stops the migration naming the value. `SFTConfig` and the
+other TRL `*Config` classes are read for hyperparameters.
+The final trainer determines the task; its inline or named config, passed as `args=`
+or positionally, supplies output and hyperparameters using the latest module-level
+binding before that trainer (including annotated assignments).
+Earlier stages retain warnings but cannot supply settings, and unused configs are ignored.
+Aliases, conditional rebindings and unresolved `**kwargs` are not evaluated: migration
+reports "Could not read the final trainer's args statically" and uses Soup defaults.
 
 
 ## Data Formats
@@ -878,6 +901,14 @@ data:
   # video_dir: ./videos
 ```
 
+`add_new_tokens` / `new_special_tokens` are added to the tokenizer, with the embeddings
+resized, on `backend: transformers` for `sft` (text, vision and audio), `dpo`, `kto`,
+`orpo`, `ipo`, `simpo`, `bco`, `grpo`, `online_dpo`, `preference` and `tts`, and on SFT's
+vision and audio paths whatever the backend (they run their transformers setup before the
+backend is read). Any other task, `backend: unsloth` (text SFT and every other task) or
+`mlx`, and `training.stream_layers` never add them, so a config setting them there is
+refused at load, naming which of those applies (#1358).
+
 `mask_history: true` keeps only the **last** assistant turn in the loss: every
 earlier assistant turn is masked alongside the user and system turns the
 assistant-only path already excludes. It never adds tokens to the loss.
@@ -1030,7 +1061,7 @@ soup data from-traces \
   --min-confidence 0.7
 ```
 
-The judge scores `chosen` and `rejected` independently against its rubric (default helpfulness/accuracy/safety on a 1-5 scale). Pairs whose normalised `(chosen - rejected)` confidence falls below `--min-confidence` are dropped. Per-pair backend exceptions are counted (not crashed) and reported. Provider allowlist `{openai, server, ollama}` validated at the CLI boundary; SSRF protection on `--judge-api-base` carries over from `soup eval judge`.
+The judge scores `chosen` and `rejected` independently against its rubric (default helpfulness/accuracy/safety on a 1-5 scale). Pairs whose normalised `(chosen - rejected)` confidence falls below `--min-confidence` are dropped. Per-pair backend exceptions are counted (not crashed) and reported. A judge that stops answering is not counted that way: once 3 requests in a row have spent their retries unanswered, the command stops with exit 1, names the judge and how many pairs were not judged, and writes no output file (#1522). Provider allowlist `{openai, server, ollama}` validated at the CLI boundary; SSRF protection on `--judge-api-base` carries over from `soup eval judge`.
 
 
 ## Synthetic Data Forge
@@ -1063,15 +1094,35 @@ Composite, lightweight data-quality triage — no GPU, no 200 MB Presidio model:
 # Single-shot composite scorecard
 soup data score --input training.jsonl
 
+# Include real operator-supplied comparison texts (no benchmark corpora are bundled)
+soup data score --input training.jsonl --benchmark-file benchmark.jsonl --threshold 0.8
+
 # Standalone subcommands — JSONL-in, enriched JSONL-out
 soup data pii          --input training.jsonl --output pii_flagged.jsonl
 soup data toxicity     --input training.jsonl --output tox_flagged.jsonl --threshold 0.1
 soup data langdetect   --input training.jsonl --output tagged.jsonl
 soup data educational  --input training.jsonl --output scored.jsonl
-soup data decontaminate --input training.jsonl --benchmarks mmlu,gsm8k,humaneval --output clean.jsonl
+soup data decontaminate --input training.jsonl --benchmark-file benchmarks.jsonl --benchmarks mmlu,gsm8k,humaneval --output clean.jsonl
 ```
 
-The scorecard reports PII matches, abuse-keyword matches, language distribution, mean heuristic educational value, and decontamination removals. PII detection uses a narrow ReDoS-hardened regex set (email / phone / SSN / credit-card) with a 50 KB pre-cap on every input. Language detection is a stopword heuristic across six languages. `soup data toxicity` is retained as a compatible command name, but its output is explicitly an abuse-keyword heuristic, not a toxicity classifier. Ambiguous technical and medical terms such as process `kill`, thread `die`, and heart `attack` are not treated as standalone safety signals. This trades one known failure mode for explicit limitations: in maintainer review, 9 of 10 held-out abusive examples scored zero and 10 of 12 benign technical or editorial examples were flagged at the default threshold. Use it only for keyword triage, never as a safety decision. The default Magpie quality filter therefore applies only non-empty and educational heuristics; provide an explicit model-backed policy outside Soup when safety classification is required. The `[data-pro]` extra currently adds `langdetect` and Presidio only; it does not install Llama Guard or FineWeb-Edu. Decontamination uses n-gram containment against benchmark corpora: use `--benchmarks mmlu,gsm8k` for built-in allowlist, or `--benchmark-file custom_benchmark.jsonl` for your own corpus.
+`data score` shows decontamination as **not run**, not a measured zero, unless
+`--benchmark-file` supplies actual comparison texts. `--benchmarks` / `-b`
+contains allowlisted labels only and now requires that file; names alone do not
+download or bundle benchmark corpora. This is a breaking refusal for the formerly
+silent `data score -b ...` path (#1448). Use `--benchmark-file` with or without
+labels. With a file, labels are **validated only**: they do not select or filter
+its rows, and the command prints a note saying so. All supplied file texts enter
+the same comparison corpus, so omitting labels or changing one valid label to
+another does not change the removal count. The file's JSONL is bounded and
+cwd-contained by the shared loader, with strict
+parsing: malformed/non-object rows, empty files and rows without usable 8-gram
+text are refused before the scorecard is printed. Text comes from `text`,
+`content`, or `messages[].content`, via the shared extractor. The fixed 8-gram
+heuristic uses `--threshold`; a resulting zero describes only those supplied
+texts, not absence of contamination against every public benchmark. The other
+input/standalone loader paths keep their previous tolerant behavior.
+
+The scorecard reports PII matches, abuse-keyword matches, language distribution, mean heuristic educational value, and decontamination removals. PII detection uses a narrow ReDoS-hardened regex set (email / phone / SSN / credit-card) with a 50 KB pre-cap on every input. Language detection is a stopword heuristic across six languages. `soup data toxicity` is retained as a compatible command name, but its output is explicitly an abuse-keyword heuristic, not a toxicity classifier. Ambiguous technical and medical terms such as process `kill`, thread `die`, and heart `attack` are not treated as standalone safety signals. This trades one known failure mode for explicit limitations: in maintainer review, 9 of 10 held-out abusive examples scored zero and 10 of 12 benign technical or editorial examples were flagged at the default threshold. Use it only for keyword triage, never as a safety decision. The default Magpie quality filter therefore applies only non-empty and educational heuristics; provide an explicit model-backed policy outside Soup when safety classification is required. The `[data-pro]` extra currently adds `langdetect` and Presidio only; it does not install Llama Guard or FineWeb-Edu. Decontamination uses n-gram containment against caller-supplied texts: `--benchmarks mmlu,gsm8k` selects allowlisted labels only; use `--benchmark-file custom_benchmark.jsonl` for actual comparison data.
 
 
 ## Remote Datasets (S3 / GCS / Azure / OCI)

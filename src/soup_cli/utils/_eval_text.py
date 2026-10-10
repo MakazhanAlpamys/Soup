@@ -24,15 +24,24 @@ STOPWORDS = frozenset(
 )
 
 
-def _is_no_space(c: str) -> bool:
-    cp = ord(c)
+def _is_no_space(char: str) -> bool:
+    cp = ord(char)
     return (
-        (0x4E00 <= cp <= 0x9FFF)
-        or (0x3400 <= cp <= 0x4DBF)
-        or (0x20000 <= cp <= 0x2A6DF)
-        or (0x3040 <= cp <= 0x309F)
-        or (0x30A0 <= cp <= 0x30FF)
-        or (0x0E00 <= cp <= 0x0E7F)
+        # CJK Unified and Extensions A/B
+        0x4E00 <= cp <= 0x9FFF or
+        0x3400 <= cp <= 0x4DBF or
+        0x20000 <= cp <= 0x2A6DF or
+        # CJK Extension C onward (covers Ext C through Ext H)
+        0x2A700 <= cp <= 0x323AF or
+        # Kana and Halfwidth Katakana
+        0x3040 <= cp <= 0x309F or
+        0x30A0 <= cp <= 0x30FF or
+        0xFF65 <= cp <= 0xFF9F or
+        # Southeast Asian scripts
+        0x0E00 <= cp <= 0x0E7F or  # Thai
+        0x0E80 <= cp <= 0x0EFF or  # Lao
+        0x1000 <= cp <= 0x109F or  # Myanmar
+        0x1780 <= cp <= 0x17FF     # Khmer
     )
 
 

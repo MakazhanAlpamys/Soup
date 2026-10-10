@@ -30,6 +30,7 @@ from rich.console import Console
 from rich.panel import Panel
 
 from soup_cli.utils.config_bounds import DEFAULT_STREAM_READ_AHEAD, MAX_STREAM_READ_AHEAD
+from soup_cli.utils.paths import quote_path
 from soup_cli.utils.stripe_roots import ReadAheadDecision, effective_read_ahead
 
 console = Console()
@@ -294,7 +295,7 @@ def _existing_disk_anchor(path: str) -> str:
     while not os.path.exists(anchor):
         parent = os.path.dirname(anchor)
         if parent == anchor:
-            raise OSError(f"cannot locate an existing filesystem ancestor for {path!r}")
+            raise OSError(f"cannot locate an existing filesystem ancestor for {quote_path(path)}")
         anchor = parent
     return anchor
 
@@ -345,16 +346,124 @@ def _effective_read_ahead(tcfg: Any, n_roots: int, console: Any) -> ReadAheadDec
 
 
 def _stripe_write_shares(total: int, n_roots: int) -> list[int]:
-    """The shard estimate split evenly across roots, summing to it (layers alternate).
+    """Fallback even split across roots when source safetensors headers cannot be read.
 
-    APPROXIMATE, and biased against root 0: root 0 also holds ``extras.safetensors``, the
-    ``large_*`` embedding/head files and, when the layer count does not divide by the roots,
-    the odd layer, so it is under-charged and the stripe drives over-charged by about that
-    much (~1-3% of the store on a 70B). An exact split needs the per-root placement and the
-    large tensors' stored sizes, which the estimate does not have here.
+    Used when source headers are unreadable or for architectures like qwen4_exp.
+    Evenly divides total across roots with divmod remainder distribution.
     """
     base, extra = divmod(int(total), n_roots)
     return [base + (1 if position < extra else 0) for position in range(n_roots)]
+
+
+def estimate_stripe_write_shares(
+    weights_dir: Optional[str],
+    *,
+    total_bytes: int,
+    n_roots: int,
+    dtype: str = "bfloat16",
+    quant: str = "none",
+    double_quant: bool = True,
+    arch: str = "",
+) -> tuple[list[int], bool]:
+    """Calculate per-root shard write shares, charging root 0 non-decoder bytes (#1612).
+
+    Returns ``(shares, approximate)``:
+    - When source safetensors headers can be parsed without tensor loads:
+      calculates the parameter count per decoder layer and for non-decoder weights.
+      Root k is charged decoder bytes for layers placed on root k according to
+      ``layer_roots_for(n_layers, n_roots)``.
+      Root 0 is charged its decoder layers plus all non-decoder weights at the
+      streaming dtype rate.
+      ``approximate`` is False.
+    - When headers cannot be read, or n_roots == 1, or total_bytes <= 0, or arch == "qwen4_exp":
+      falls back to ``_stripe_write_shares(total_bytes, n_roots)``, with
+      ``approximate`` True (when n_roots > 1 and total_bytes > 0).
+    """
+    if arch == "qwen4_exp":
+        return _stripe_write_shares(total_bytes, n_roots), n_roots > 1
+    if n_roots <= 1 or total_bytes <= 0:
+        return _stripe_write_shares(total_bytes, n_roots), False
+    if not weights_dir:
+        return _stripe_write_shares(total_bytes, n_roots), True
+
+    try:
+        resolved_dir = os.path.realpath(os.path.expanduser(str(weights_dir)))
+        if not os.path.isdir(resolved_dir):
+            return _stripe_write_shares(total_bytes, n_roots), True
+
+        from soup_cli.utils.layer_shard import (
+            _LAYER_RE,
+            QUANT_NF4,
+            _canonical_stream_key,
+            _discover_safetensors,
+        )
+        from soup_cli.utils.layer_stream import (
+            NF4_BYTES_PER_PARAM,
+            NF4_BYTES_PER_PARAM_SINGLE,
+        )
+        from soup_cli.utils.safetensors_reader import _ITEMSIZE, read_header
+        from soup_cli.utils.stripe_roots import layer_roots_for
+
+        shards = _discover_safetensors(resolved_dir)
+        itemsize = _ITEMSIZE.get(dtype, 2)
+
+        decoder_layer_bytes: dict[int, float] = {}
+        non_decoder_bytes: float = 0.0
+
+        for shard_path in shards:
+            header = read_header(shard_path)
+            for source_key, tensor_range in header.items():
+                canonical = _canonical_stream_key(source_key)
+                if canonical.endswith((".scales", ".biases")):
+                    continue
+                match = _LAYER_RE.match(canonical)
+                numel = math.prod(tensor_range.shape)
+                if match:
+                    layer_idx = int(match.group(1))
+                    if quant == QUANT_NF4:
+                        if len(tensor_range.shape) >= 2:
+                            rate = (
+                                NF4_BYTES_PER_PARAM
+                                if double_quant
+                                else NF4_BYTES_PER_PARAM_SINGLE
+                            )
+                        else:
+                            rate = itemsize
+                    else:
+                        rate = itemsize
+                    decoder_layer_bytes[layer_idx] = (
+                        decoder_layer_bytes.get(layer_idx, 0.0) + numel * rate
+                    )
+                else:
+                    non_decoder_bytes += numel * itemsize
+
+        if not decoder_layer_bytes:
+            return _stripe_write_shares(total_bytes, n_roots), True
+
+        n_layers = max(decoder_layer_bytes.keys()) + 1
+        layer_roots = layer_roots_for(n_layers, n_roots)
+        raw_root_shares = [0.0] * n_roots
+        for layer_idx in range(n_layers):
+            raw_root_shares[layer_roots[layer_idx]] += decoder_layer_bytes.get(layer_idx, 0.0)
+        raw_root_shares[0] += non_decoder_bytes
+
+        raw_total = sum(raw_root_shares)
+        if raw_total <= 0:
+            return _stripe_write_shares(total_bytes, n_roots), True
+
+        effective_total = max(int(total_bytes), int(math.ceil(raw_total)))
+        raw_scaled = [effective_total * (s / raw_total) for s in raw_root_shares]
+        shares = [int(v) for v in raw_scaled]
+        remainder = effective_total - sum(shares)
+        fractions = sorted(
+            range(n_roots), key=lambda i: raw_scaled[i] - shares[i], reverse=True
+        )
+        for i in range(remainder):
+            shares[fractions[i]] += 1
+
+        return shares, False
+    except Exception:
+        return _stripe_write_shares(total_bytes, n_roots), True
 
 
 def _render_stream_disk_preflight(
@@ -367,6 +476,7 @@ def _render_stream_disk_preflight(
     shard_write_bytes: int,
     shard_path: str,
     stripe_writes: Sequence[tuple[str, int]] = (),
+    approximate: bool = False,
 ) -> None:
     """Print and enforce the complete on-disk cost before either cache writes.
 
@@ -402,7 +512,8 @@ def _render_stream_disk_preflight(
             f"({'write required' if materialize_bytes else 'no write required'})"
         ),
         (
-            f"Layer-shard cache: {shard_bytes / 1e9:.2f} GB "
+            f"Layer-shard cache: {'approximately ' if approximate else ''}"
+            f"{shard_bytes / 1e9:.2f} GB "
             f"({'write required' if shard_write_bytes else 'reusable'})"
         ),
         f"Projected total on disk: {projected_total / 1e9:.2f} GB",
@@ -719,17 +830,27 @@ class StreamingSetupMixin:
                     stripe_roots=stripe_roots,
                 )
             write_total = 0 if cached is not None else shard_estimate
-            shares = _stripe_write_shares(write_total, 1 + len(stripe_roots))
+            shares, approximate = estimate_stripe_write_shares(
+                weights_plan.weights_dir,
+                total_bytes=write_total,
+                n_roots=1 + len(stripe_roots),
+                dtype=dtype,
+                quant=quant,
+                double_quant=double_quant,
+                arch=arch,
+            )
             dirs = stripe_dirs(shard_dir, stripe_roots)
+            effective_shard_bytes = max(shard_estimate, sum(shares))
             _render_stream_disk_preflight(
                 source_bytes=weights_plan.source_bytes,
                 materialized_copy_bytes=weights_plan.materialized_copy_bytes,
                 materialize_bytes=weights_plan.materialize_bytes,
                 materialized_path=weights_plan.weights_dir,
-                shard_bytes=shard_estimate,
+                shard_bytes=effective_shard_bytes,
                 shard_write_bytes=shares[0],
                 shard_path=shard_dir,
                 stripe_writes=tuple(zip(dirs[1:], shares[1:])),
+                approximate=approximate,
             )
 
         weights_dir = resolve_model_weights(

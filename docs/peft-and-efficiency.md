@@ -149,7 +149,7 @@ training:
 
 **Llama 3.1 NTK-aware.** Use `rope_scaling_type: llama3` for Llama 3.1-style frequency-band scaling. On a checkpoint without RoPE scaling it emits `factor = data.max_length / max_position_embeddings` over `original_max_position_embeddings = max_position_embeddings`, with `low_freq_factor` 1 and `high_freq_factor` 4, so an 8k checkpoint extended to 64k gets Llama 3.1's own factor 8 over 8192. `detect_llama3_rope_in_config` can identify the block in an HF model config dict, but `soup train` changes RoPE only when `rope_scaling_type` is explicit; omitting it preserves the checkpoint's native RoPE configuration. On a checkpoint that already ships a `llama3` block (Llama 3.1, 3.2 and 3.3 do), `rope_scaling_type: llama3` composes with it instead of replacing it: the checkpoint's `original_max_position_embeddings`, `low_freq_factor` and `high_freq_factor` are kept, and its `factor` is multiplied by `data.max_length / max_position_embeddings`. Llama-3.1-8B extended from 131072 to 262144 tokens trains with factor 16 over 8192, so no frequency pair rotates faster than it did in pretraining.
 
-RoPE scaling is applied before model construction for the Transformers text paths of `task: sft` and `task: pretrain`. Vision, audio, layer-streaming and Unsloth setup paths do not consume these fields, nor do other training tasks. Existing type-independent model parameters such as `rope_theta` are preserved; tunables belonging to a previous RoPE algorithm are removed when the type changes. A checkpoint whose RoPE block is already scaled (any `rope_type` other than `default`, for example `yarn`, `longrope` or `llama3`) is never replaced: apart from `llama3` on a `llama3` block, extending it is refused before the model is built, and the error names the checkpoint's `rope_type` and `factor`. A `data.max_length` at or below the checkpoint's `max_position_embeddings` extends nothing, so none of these refusals applies to it. Models such as Gemma 3 that use nested per-layer RoPE sections are refused rather than partially modified. `rope_scaling_type: longrope` is refused at config load, whatever `data.max_length` is. Its per-dimension `short_factor` and `long_factor` vectors exist only on checkpoints already scaled with LongRoPE, and extending those is refused, so it cannot extend any checkpoint. To extend a checkpoint without RoPE scaling, use `linear`, `dynamic`, `yarn` or `llama3`. To fine-tune a LongRoPE checkpoint such as Phi-3-mini-128k at its native length, leave `rope_scaling_type` unset: the checkpoint's own RoPE block is used as shipped.
+RoPE scaling is applied before model construction on `task: sft` (the text path with `backend: transformers` and no layer streaming) and on `task: tts` and `task: pretrain` with `backend: transformers`. Everywhere else `rope_scaling_type` is refused at config load ([#1697](https://github.com/MakazhanAlpamys/Soup/issues/1697)): on the other 20 tasks, on `sft` with `backend: mlx`, `modality: vision`, `modality: audio` or `training.stream_layers: true`, and on any of the three with `backend: unsloth`. Those setups build the model with the checkpoint's own RoPE; the message names each setting to change, and the `yarn_*` keys set beside it. Existing type-independent model parameters such as `rope_theta` are preserved; tunables belonging to a previous RoPE algorithm are removed when the type changes. A checkpoint whose RoPE block is already scaled (any `rope_type` other than `default`, for example `yarn`, `longrope` or `llama3`) is never replaced: apart from `llama3` on a `llama3` block, extending it is refused before the model is built, and the error names the checkpoint's `rope_type` and `factor`. A `data.max_length` at or below the checkpoint's `max_position_embeddings` extends nothing, so none of these refusals applies to it. Models such as Gemma 3 that use nested per-layer RoPE sections are refused rather than partially modified. `rope_scaling_type: longrope` is refused at config load, whatever `data.max_length` is. Its per-dimension `short_factor` and `long_factor` vectors exist only on checkpoints already scaled with LongRoPE, and extending those is refused, so it cannot extend any checkpoint. To extend a checkpoint without RoPE scaling, use `linear`, `dynamic`, `yarn` or `llama3`. To fine-tune a LongRoPE checkpoint such as Phi-3-mini-128k at its native length, leave `rope_scaling_type` unset: the checkpoint's own RoPE block is used as shipped.
 
 **LongLoRA S².** `training.use_longlora: true` is refused at config load ([#1240](https://github.com/MakazhanAlpamys/Soup/issues/1240)): the override it installed leaked future tokens into earlier positions and applied no S² grouping (see [LongLoRA Forward Override](#longlora-forward-override)). Use one of the RoPE-scaling strategies above with plain LoRA instead.
 
@@ -177,12 +177,12 @@ data:
 training:
   quantization: none            # block expansion needs an unquantized base
   expand_layers: 4              # append 4 zero-init decoder blocks
-  freeze_trainable_layers: 4    # train only the appended blocks (requires expand_layers)
+  freeze_trainable_layers: 4    # must equal expand_layers: freeze the original model, train only the appended blocks
   lr: 5e-5
   epochs: 1
 ```
 
-**What happens at trainer start.** Soup deep-copies the last `expand_layers` decoder blocks, zero-inits each clone's residual projections (`mlp.down_proj` + `self_attn.o_proj`) so the appended block initially acts as identity, appends them to `model.model.layers`, and updates `config.num_hidden_layers`. When `freeze_trainable_layers > 0` is set, every parameter except the appended blocks is frozen — this is the canonical LLaMA Pro "train only new blocks" recipe.
+**What happens at trainer start.** Soup deep-copies the last `expand_layers` decoder blocks, zero-inits each clone's residual projections (`mlp.down_proj` + `self_attn.o_proj`) so the appended block initially acts as identity, appends them to `model.model.layers`, and updates `config.num_hidden_layers`. `freeze_trainable_layers` must equal `expand_layers`: it freezes every parameter except the appended blocks, the canonical LLaMA Pro "train only new blocks" recipe. It does not select the top-N or bottom-N layers, and any other value, including `0` or a negative one, is refused at config load.
 
 **Scope.** Works on `task: sft` and `task: pretrain` with `backend: transformers`, `modality: text` and `quantization: none`; any other combination is refused at config load. No other trainer applies the expansion, and the appended blocks are only supported on an unquantized base. Bounds: `expand_layers ∈ [1, 64]`. Over-expansion (more new blocks than the base has layers) silently clamps to the base layer count. Non-Llama-shaped architectures (e.g. Falcon's `dense_4h_to_h`) emit a `warnings.warn` because the residual zero-init heuristic only matches the standard `down_proj` / `o_proj` names — the appended blocks are still appended + trainable, but lose the identity-init guarantee.
 
@@ -193,9 +193,12 @@ Pick from a wider catalogue of optimizers and use quantization-aware LoRA initia
 
 ```yaml
 training:
-  # 30+ optimizers — HF-native, bnb, BAdam, APOLLO, Adam-mini, lomo,
-  # grokadamw, schedule_free, muon, dion, came_pytorch, ao_adamw_{fp8,4bit,8bit}
-  optimizer: badam
+  # HF-native, bnb-8bit and v0.41.0 additions (lomo, apollo_adamw,
+  # grokadamw, schedule_free). Ten retired names (badam, adam_mini, muon,
+  # dion, came_pytorch, ao_adamw_{fp8,4bit,8bit}, ...) are refused at
+  # config load because transformers 5.x rejects them (#1269);
+  # muon and adamw_hf still work on backend: mlx.
+  optimizer: adafactor
 
   # Friendly aliases for users coming from LlamaFactory / Axolotl
   # load_in_8bit: true      # equivalent to quantization: 8bit
@@ -208,7 +211,7 @@ training:
     loftq_iter: 1
     loftq_bits: 4
 
-  # LLaMA Pro block expansion (schema only in v0.41.0; live wiring in v0.41.1)
+  # LLaMA Pro block expansion (freeze_trainable_layers must equal expand_layers)
   expand_layers: 4
   freeze_trainable_layers: 4
 ```
@@ -391,7 +394,16 @@ training:
     use_dora: true  # Enable DoRA
 ```
 
-Works with all training tasks and backends.
+Works with all training tasks on the transformers backend (see the note on
+quantized bases below). On `backend: unsloth` and `backend: mlx`, `use_dora: true`
+is refused when the config is loaded: neither backend builds a DoRA adapter, so
+it would silently train plain LoRA.
+
+> **Not on GPTQ / AWQ / AQLM / EETQ bases.** peft has no DoRA variant for those
+> layers and raises when the adapter is attached, so `use_dora: true` with
+> `quantization: gptq`, `awq`, `aqlm` or `eetq` is refused when the config is
+> loaded. Use plain LoRA on those bases, or a `4bit` / `8bit` / `hqq:Nbit` /
+> unquantised base to keep DoRA.
 
 
 ## LoRA+ (Differentiated Learning Rates)
@@ -511,7 +523,13 @@ training:
 
 ## Freeze Training
 
-Freeze bottom layers of the model — train only the top layers (like LLaMA-Factory's `finetuning_type: freeze`):
+Freeze bottom layers of the model — train only the top layers (like LLaMA-Factory's `finetuning_type: freeze`).
+Only `task: sft` (and `tts`, which trains through the SFT trainer) applies these two fields; on any
+other task the config is refused at load, because that trainer would train every layer (#1497).
+Within `sft` and `tts` they are applied on the text path with `backend: transformers` only:
+`backend: mlx`, `backend: unsloth`, `modality: vision`, `modality: audio` and `stream_layers: true`
+are refused at load too: those setups never read the fields and always attach an adapter, so the run
+would train every layer (#1581).
 
 ```yaml
 training:
@@ -670,6 +688,8 @@ training:
 
 Picks `bf16` on Ampere+, `fp16` on Turing or known fp16-stable models (Qwen2 / Qwen2.5 / Phi-3 / Phi-3.5), `no` on pre-Pascal. Multi-version pairs (`qwen2.5` vs `qwen2`, `phi-3.5` vs `phi-3`) match the longest substring deterministically.
 
+Only `task: sft` reads the field (and `task: tts`, which trains through the SFT trainer); since #1618, setting it on any other task is refused at config load, because those trainers pick bf16/fp16 on their own and would train at their default precision regardless of this key.
+
 The experimental QuEST route (`quantization_aware: quest`) refuses this flag at
 config load because its evidence covers BF16, not FP16; see the
 [QuEST evidence boundary](performance-and-quantization.md#evidence-boundary).
@@ -710,7 +730,7 @@ training:
   grad_accum_pressure_threshold: 0.92
 ```
 
-Records peak memory each step. When pressure crosses the threshold, recommends a new `(batch, accum)` pair preserving effective batch (capped at `accum=1024`).
+Records peak memory each step. Pressure is peak allocated memory divided by the total memory of the CUDA device the run uses (#1620), so the threshold means the same thing on a 4 GB laptop card and on an 80 GB accelerator. When pressure crosses the threshold, recommends a new `(batch, accum)` pair preserving effective batch (capped at `accum=1024`), together with the measured peak and total.
 
 > **Backend Note:** Setting `grad_accum_auto_tune: true` is refused on `backend: mlx` at config validation (there is no VRAM total to measure pressure against on unified memory).
 

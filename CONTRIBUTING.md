@@ -359,6 +359,37 @@ If an issue needs hardware you do not have, say so in the claim. Several open
 issues are labelled `infra-blocked` for exactly that reason, and knowing early
 is more useful than a stalled branch.
 
+### How work is queued
+
+Review time and hosted CI are the scarce resources here, so a few rules keep the line
+moving. They are applied with judgment, not mechanically, and nothing is closed or
+released as a penalty.
+
+- **Reviews go in issue-number order.** A pull request that is green and whose review
+  rounds are answered moves up; one that waits on its author does not hold the others back.
+- **Open pull requests per author.** A contributor with fewer than 3 merged pull requests
+  can have 2 open at a time; with 3 to 9 merged, 3; with 10 or more, 5. Extra pull
+  requests are not closed: a comment says what they wait behind, and they may be
+  converted to drafts. Mark one ready for review when another lands.
+- **Claims.** Hold at most 2 claims whose pull request is not open yet. A comment without
+  a plan is read as a question, not as a claim.
+- **A quiet claim.** With no pull request and no word from you for 7 days, you get a
+  friendly check-in in the thread. If another 7 days pass without an answer, the claim is
+  released with a comment. Nothing you wrote is lost, and you can take it back.
+- **A quiet pull request.** A pull request waiting on its author for 14 days gets a ping
+  in the thread. If another 7 days pass, we close it with a note that it can be reopened
+  at any time.
+- **Full CI.** The required test cells run when a maintainer adds the `ci:full` label to a
+  pull request that is ready to merge, not on every push; other pushes run a quick subset.
+  A draft pull request runs no CI at all until you mark it ready for review.
+
+### Issue difficulty
+
+Maintainers rate every triaged issue from 1 to 10 with a `difficulty:N` label, so you can pick
+something that fits your time and experience. How the number is chosen and what each level
+means is in [docs/issue-difficulty.md](docs/issue-difficulty.md). When you open an issue you
+can suggest a difficulty in the form; the maintainer sets the final one.
+
 ## Making Changes
 
 ### 1. Create a Branch
@@ -523,14 +554,29 @@ GitHub Actions runs on every push and PR:
   required check and blocks nothing.
 
 **Pull requests run a quick subset first.** A push to a pull request runs `lint`
-and the tests on Ubuntu / Python 3.12 only. The full matrix (Windows and macOS
-as well as Ubuntu, Python 3.10 to 3.12 with 3.11 on Ubuntu only, plus the smoke
-jobs) runs when a maintainer adds the `ci:full` label at approval, and on every
-later push while the label stays. Until then the other `test (...)` checks show
-as *Expected* and the smoke jobs as *skipped*; neither is a failure on your side.
-A PR is merged only when the full matrix is green on its current head. After the
-merge, `main` runs the same quick set on every commit and the full matrix once a
-night (and on every push to a `release/**` branch).
+and the tests on Ubuntu / Python 3.12 only. The required cells (Ubuntu on Python
+3.10 and 3.12, Windows and macOS on 3.12, plus the smoke jobs) run when a
+maintainer adds the `ci:full` label at approval, and on every later push while
+the label stays. Until then the other `test (...)` checks show as *Expected* and
+the smoke jobs as *skipped*; neither is a failure on your side. A PR is merged
+only when those checks are green on its current head. After the merge, `main`
+runs the same quick set on every commit and the full matrix (every Python from
+3.10 to 3.12, with 3.11 on Ubuntu only) once a night; a push to a `release/**`
+branch runs every cell.
+
+**A draft pull request runs no CI.** Nothing starts while a pull request is a
+draft, whatever is pushed to it. Mark it ready for review and the quick set
+starts on its current head.
+
+**CI runs the tests in parallel.** Every `test (...)` cell runs the suite with
+`pytest-xdist`, one test file per worker process (`-n logical --dist loadfile`).
+The tests of one file still run in order in one process, but two files can run
+at the same moment and in any order. So a test must not depend on another file
+having run first, on the working directory another test left behind, or on the
+terminal width of the process: give the console an explicit width in the test
+instead of setting `COLUMNS`. To reproduce a failure that shows only in CI,
+install the plugin (`pip install "pytest-xdist[psutil]"`) and run
+`pytest tests/ -n logical --dist loadfile`.
 
 See `.github/workflows/ci.yml`.
 
