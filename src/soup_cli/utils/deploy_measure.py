@@ -301,7 +301,8 @@ def measure_candidate(
     if delta >= 0:
         verdict = "OK"
     else:
-        drop = -delta
+        # Count-derived scores can subtract to just below an exact threshold (#1744).
+        drop = round(-delta, 9)
         if drop < DEFAULT_MINOR_THRESHOLD:
             verdict = "OK"
         elif drop < DEFAULT_MAJOR_THRESHOLD:
