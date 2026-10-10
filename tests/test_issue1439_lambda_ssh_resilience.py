@@ -280,7 +280,8 @@ class TestLambdaSshResilience:
 
         rc, terminations = _exec_controller(stub, fake_run, captured_prints=prints)
         assert rc == 1
-        assert ssh_attempts == 1
+        # 1 poll check + 1 log tail fetch; does not retry polling
+        assert ssh_attempts == 2
         assert len(terminations) == 1
         failed_lines = [p for p in prints if "Lambda training failed" in p]
         assert len(failed_lines) == 1

@@ -247,7 +247,10 @@ until it reports that termination succeeded; shutting down the guest does not te
 Pressing Ctrl+C during `--cloud-submit` interrupts the controller, which still runs that `finally`
 block, and `soup` waits for it to terminate the instance and exit rather than killing it; the only
 way to skip that cleanup is to kill the controller process itself (for example with `kill` from
-another terminal), which can leave the instance running.
+another terminal), which can leave the instance running. If remote training fails with a non-zero exit
+code, the controller fetches the last 50 lines of `/home/ubuntu/soup/train.log` over SSH (capped at 50 KB
+and sanitized of terminal control sequences) and prints them before terminating the instance so
+the root cause is immediately visible.
 
 Register the public half of an SSH key with Lambda first, then set:
 
