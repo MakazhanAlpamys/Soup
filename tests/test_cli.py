@@ -91,7 +91,7 @@ def test_version_json():
     import platform
     result = runner.invoke(app, ["version", "--json"])
     assert result.exit_code == 0
-    data = json.loads(result.output)
+    data = json.loads(result.stdout)
     assert data["version"] == __version__
     assert data["python"] == platform.python_version()
     assert data["platform"] == platform.system().lower()
@@ -102,7 +102,7 @@ def test_version_full_json():
     import platform
     result = runner.invoke(app, ["version", "--full", "--json"])
     assert result.exit_code == 0
-    data = json.loads(result.output)
+    data = json.loads(result.stdout)
     assert data["version"] == __version__
     assert data["python"] == platform.python_version()
     assert "platform" in data
