@@ -63,6 +63,16 @@ def make_prm_trainer_class(base_cls: type) -> type:
     class _PRMTrainer(base_cls):  # type: ignore[misc, valid-type]
         """HF Trainer subclass for PRM stepwise reward training."""
 
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            # #1444 — Trainer derives ``num_items_in_batch`` by counting
+            # ``labels[..., 1:] != -100``, which means nothing for PRM's
+            # per-step float rewards, so compute_loss cannot honour the
+            # window total. Declining the loss kwargs makes training_step
+            # apply its ``1 / gradient_accumulation_steps`` normalisation;
+            # left True, logged loss and the clipped gradient came out Gx.
+            self.model_accepts_loss_kwargs = False
+
         def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
             # ``inputs`` carries input_ids, attention_mask, step_positions
             # (the indices of the per-step boundary tokens), and labels (the
