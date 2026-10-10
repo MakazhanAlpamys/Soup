@@ -2,8 +2,8 @@
 
 Implements the restart loop from the ReLoRA paper (arXiv:2307.05695):
 every N steps, merge the low-rank update into the frozen base weight,
-reinitialize ``lora_A`` / ``lora_B``, clear optimizer state for those
-adapters, and run a short learning-rate warm-up.
+reinitialize ``lora_A`` / ``lora_B``, prune their shape-matched optimizer
+moments, and run a short learning-rate warm-up.
 
 The callback is a no-op when ``policy`` is ``None``. Pass a
 :class:`ReLoRAPolicy` to enable it. Lazy imports keep the module CLI-fast.
@@ -60,12 +60,24 @@ class ReLoRAPolicy:
         return min(100, max(1, self.steps // 10))
 
 
-def magnitude_prune_tensor(tensor: Any, prune_ratio: float) -> Any:
-    """Zero smallest-magnitude entries in place with exact keep-count (#693).
+def _magnitude_keep_mask(tensor: Any, prune_ratio: float) -> Any:
+    import torch  # lazy
 
-    Unused by the restart callback (optimizer moments are fully cleared, not
-    pruned); retained so the exact keep-count under ties stays tested.
-    """
+    flat = tensor.detach().abs().reshape(-1)
+    if flat.numel() <= 1:
+        return torch.ones_like(tensor, dtype=torch.bool)
+    num_prune = max(1, int(flat.numel() * prune_ratio))
+    if num_prune >= flat.numel():
+        num_prune = flat.numel() - 1
+    num_keep = flat.numel() - num_prune
+    keep_idx = torch.argsort(flat, descending=True, stable=True)[:num_keep]
+    mask = torch.zeros_like(flat, dtype=torch.bool)
+    mask[keep_idx] = True
+    return mask.reshape(tensor.shape)
+
+
+def magnitude_prune_tensor(tensor: Any, prune_ratio: float) -> Any:
+    """Zero the smallest-magnitude entries in place with an exact keep-count."""
     if not (0.0 < prune_ratio < 1.0):
         raise ValueError(
             f"magnitude_prune_tensor prune_ratio must be in (0, 1), got {prune_ratio}"
@@ -75,18 +87,37 @@ def magnitude_prune_tensor(tensor: Any, prune_ratio: float) -> Any:
     if not isinstance(tensor, torch.Tensor):
         raise TypeError(f"magnitude_prune_tensor expects torch.Tensor, got {type(tensor)}")
 
-    flat = tensor.detach().abs().reshape(-1)
-    if flat.numel() <= 1:
-        return tensor
-    num_prune = max(1, int(flat.numel() * prune_ratio))
-    if num_prune >= flat.numel():
-        num_prune = flat.numel() - 1
-    num_keep = flat.numel() - num_prune
-    _, keep_idx = torch.topk(flat, num_keep, largest=True, sorted=False)
-    mask = torch.zeros_like(flat, dtype=torch.bool)
-    mask[keep_idx] = True
-    tensor.detach().mul_(mask.reshape(tensor.shape).to(tensor.dtype))
+    tensor.detach().mul_(_magnitude_keep_mask(tensor, prune_ratio).to(tensor.dtype))
     return tensor
+
+
+def _prune_optimizer_moments(
+    optimizer: Any, lora_params: list[Any], prune_ratio: float
+) -> None:
+    """Prune floating-point moments with one shared, deterministic keep-set."""
+    import torch  # lazy
+
+    for param in lora_params:
+        state = optimizer.state.get(param)
+        if not state:
+            continue
+        matching_values = [
+            value
+            for value in state.values()
+            if isinstance(value, torch.Tensor) and value.shape == param.shape
+        ]
+        if not matching_values:
+            continue
+        if any(not value.is_floating_point() for value in matching_values):
+            state.clear()
+            continue
+
+        score = state.get("exp_avg_sq")
+        if not isinstance(score, torch.Tensor) or score.shape != param.shape:
+            score = matching_values[0]
+        keep_mask = _magnitude_keep_mask(score, prune_ratio)
+        for value in matching_values:
+            value.detach().mul_(keep_mask.to(value.dtype))
 
 
 def _is_sharded_or_quantized_tensor(tensor: Any) -> bool:
@@ -235,20 +266,13 @@ def _preflight_writable_bases(model: Any) -> None:
         _require_writable_base(_resolve_base_weight(module))
 
 
-def _assert_optimizer_resettable(optimizer: Any) -> None:
+def _assert_optimizer_state_accessible(optimizer: Any) -> None:
     state = getattr(optimizer, "state", None)
     if state is None:
         raise RuntimeError(
-            "ReLoRA restart could not clear optimizer state: optimizer has no "
+            "ReLoRA restart could not prune optimizer state: optimizer has no "
             "`.state` dict (wrapped DeepSpeed/FSDP optimizers are unsupported)."
         )
-
-
-def _clear_optimizer_state(optimizer: Any, lora_params: list[Any]) -> None:
-    state = optimizer.state
-    for param in lora_params:
-        if param in state:
-            state[param] = type(state[param])() if state[param] else {}
 
 
 def _merge_reinit_and_reset(
@@ -256,10 +280,11 @@ def _merge_reinit_and_reset(
     optimizer: Any,
     *,
     reset_optimizer: bool,
+    prune_ratio: float = 0.9,
     merge: bool = True,
 ) -> None:
     if optimizer is not None:
-        _assert_optimizer_resettable(optimizer)
+        _assert_optimizer_state_accessible(optimizer)
 
     _preflight_writable_bases(model)
 
@@ -274,7 +299,7 @@ def _merge_reinit_and_reset(
     if optimizer is None or not reset_optimizer or not lora_params:
         return
 
-    _clear_optimizer_state(optimizer, lora_params)
+    _prune_optimizer_moments(optimizer, lora_params, prune_ratio)
 
 
 def _try_import_callback_base():
@@ -348,6 +373,7 @@ class _ReLoRACallback_body:  # type: ignore[misc]  # noqa: N801
             model,
             optimizer,
             reset_optimizer=self.policy.reset_optimizer,
+            prune_ratio=self.policy.prune_ratio,
         )
 
     def _start_lr_warmup(self, optimizer: Any) -> None:

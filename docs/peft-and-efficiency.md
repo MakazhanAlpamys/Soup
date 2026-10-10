@@ -327,8 +327,8 @@ training:
       q_proj: 16
   relora_steps: 500               # merge+reinit restart every 500 steps
   relora_warmup_ratio: 0.1        # skip first 10% of training
-  relora_prune_ratio: 0.9         # deprecated; kept for old YAML (ignored)
-  relora_reset_optimizer: true    # clear optimizer state after each restart
+  relora_prune_ratio: 0.9         # prune int(numel * ratio) entries; keep at least one
+  relora_reset_optimizer: true    # prune floating-point moments after restart
 ```
 
 **PiSSA** initializes the LoRA pair from the SVD of the base weight, giving faster
@@ -344,15 +344,20 @@ sets `relora_steps`.
 
 ReLoRA fires every N global steps, merges the LoRA update (B @ A, with PEFT
 scaling) into the frozen base weight, reinitializes `lora_A` (Kaiming) and
-`lora_B` (zeros), optionally clears optimizer state for those adapter parameters,
-and runs a short learning-rate re-warmup. The first post-restart step uses
-`1/(W+1)` of the target LR, then advances by that same increment to full LR.
+`lora_B` (zeros), and optionally prunes shape-matched floating-point optimizer
+moments for those adapter parameters. `relora_prune_ratio` prunes exactly
+`int(numel * ratio)` entries, keeping at least one. The shared keep-set is
+selected from `exp_avg_sq`; ties retain the lowest flattened index. Every
+shape-matched floating-point moment uses that same keep-set, while a
+non-floating shape-matched state clears that parameter's optimizer state.
+Scalar optimizer metadata such as `step` is preserved. The restart also runs a
+short learning-rate re-warmup. The first post-restart step uses `1/(W+1)` of
+the target LR, then advances by that same increment to full LR.
 Restarts accumulate faithfully only on an fp32 base; bf16/fp16 bases lose merge
 delta to rounding. Embedding adapters (empty `lora_A`, typically `embed_tokens`)
 are skipped; Linear LoRA is merged even though peft puts empty
 `lora_embedding_A`/`lora_embedding_B` dicts on every `LoraLayer`. Useful for very
-long training runs where adapter capacity saturates. `relora_prune_ratio` is
-retained for backward-compatible YAML but no longer prunes adapter weights.
+long training runs where adapter capacity saturates.
 
 After training, Soup merges the active adapter into the already-accumulated
 in-memory base and saves the final output as a standalone dense model. Load or

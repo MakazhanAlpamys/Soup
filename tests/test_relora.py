@@ -132,7 +132,21 @@ class TestMagnitudePrune:
 
         x = torch.ones(10)
         out = magnitude_prune_tensor(x.clone(), prune_ratio=0.9)
-        assert (out != 0).sum().item() == 1
+        expected = torch.tensor([1.0] + [0.0] * 9)
+        assert torch.equal(out, expected)
+
+    def test_magnitude_prune_ties_keep_lowest_flat_indices(self):
+        try:
+            import torch
+        except ImportError:
+            pytest.skip("torch not available")
+        from soup_cli.utils.relora import magnitude_prune_tensor
+
+        x = torch.ones(33)
+        x[16] = 2.0
+        out = magnitude_prune_tensor(x.clone(), prune_ratio=0.9)
+
+        assert (out != 0).nonzero().flatten().tolist() == [0, 1, 2, 16]
 
     def test_magnitude_prune_single_element_no_crash(self):
         try:
@@ -496,7 +510,7 @@ class TestMergeReinitAndReset:
         assert not torch.all(model.lora_A.weight == 0)
         assert torch.all(model.lora_B.weight == 0)
 
-    def test_merge_reinit_clears_real_optimizer_state(self):
+    def test_merge_reinit_prunes_real_optimizer_state(self):
         try:
             import torch
         except ImportError:
@@ -510,13 +524,139 @@ class TestMergeReinitAndReset:
         opt.step()
         params = [model.lora_A.weight, model.lora_B.weight]
         for param in params:
-            assert param in opt.state
-            assert len(opt.state[param]) > 0
+            state = opt.state[param]
+            state["exp_avg"].fill_(1.0)
+            state["exp_avg_sq"].fill_(1.0)
 
         cb = ReLoRACallback(policy=ReLoRAPolicy(steps=10, prune_ratio=0.9))
         cb._merge_reinit_and_reset(model, opt)
+
         for param in params:
-            assert len(opt.state[param]) == 0
+            state = opt.state[param]
+            keep = param.numel() - max(1, int(param.numel() * 0.9))
+            assert int((state["exp_avg"] != 0).sum()) == keep
+            assert int((state["exp_avg_sq"] != 0).sum()) == keep
+
+    def test_merge_reinit_prunes_optimizer_moments_with_exact_tie_count(self):
+        try:
+            import torch
+        except ImportError:
+            pytest.skip("torch not available")
+        from soup_cli.utils.relora import ReLoRACallback, ReLoRAPolicy
+
+        model = _make_fake_lora_module()
+        optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
+        loss = model(torch.randn(2, 4)).sum()
+        loss.backward()
+        optimizer.step()
+        params = [model.lora_A.weight, model.lora_B.weight]
+        for param in params:
+            state = optimizer.state[param]
+            state["exp_avg"].fill_(1.0)
+            state["exp_avg_sq"].fill_(1.0)
+            state["step"] = torch.tensor(7.0)
+
+        callback = ReLoRACallback(policy=ReLoRAPolicy(steps=10, prune_ratio=0.75))
+        callback._merge_reinit_and_reset(model, optimizer)
+
+        for param in params:
+            state = optimizer.state[param]
+            assert state["step"].item() == 7.0
+            assert (state["exp_avg"] != 0).sum().item() == 2
+            assert (state["exp_avg_sq"] != 0).sum().item() == 2
+
+    def test_reset_optimizer_false_leaves_moments_alone(self):
+        try:
+            import torch
+        except ImportError:
+            pytest.skip("torch not available")
+        from soup_cli.utils.relora import ReLoRACallback, ReLoRAPolicy
+
+        model = _make_fake_lora_module()
+        optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
+        model(torch.randn(2, 4)).sum().backward()
+        optimizer.step()
+        params = [model.lora_A.weight, model.lora_B.weight]
+        for param in params:
+            optimizer.state[param]["exp_avg"].fill_(1.0)
+            optimizer.state[param]["exp_avg_sq"].fill_(1.0)
+
+        policy = ReLoRAPolicy(steps=10, prune_ratio=0.75, reset_optimizer=False)
+        ReLoRACallback(policy=policy)._merge_reinit_and_reset(model, optimizer)
+
+        for param in params:
+            state = optimizer.state[param]
+            assert bool((state["exp_avg"] == 1).all())
+            assert bool((state["exp_avg_sq"] == 1).all())
+
+    def test_state_that_does_not_match_parameter_shape_is_left_alone(self):
+        try:
+            import torch
+        except ImportError:
+            pytest.skip("torch not available")
+        from soup_cli.utils.relora import ReLoRACallback, ReLoRAPolicy
+
+        model = _make_fake_lora_module()
+        optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
+        model(torch.randn(2, 4)).sum().backward()
+        optimizer.step()
+        params = [model.lora_A.weight, model.lora_B.weight]
+        for param in params:
+            optimizer.state[param]["aux"] = torch.ones(param.shape[0] + 3)
+
+        callback = ReLoRACallback(policy=ReLoRAPolicy(steps=10, prune_ratio=0.75))
+        callback._merge_reinit_and_reset(model, optimizer)
+
+        for param in params:
+            assert bool((optimizer.state[param]["aux"] == 1).all())
+
+    def test_moment_pruning_uses_one_keep_set_for_all_moments(self):
+        try:
+            import torch
+        except ImportError:
+            pytest.skip("torch not available")
+        from soup_cli.utils.relora import ReLoRACallback, ReLoRAPolicy
+
+        model = _make_fake_lora_module()
+        optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
+        model(torch.randn(2, 4)).sum().backward()
+        optimizer.step()
+        params = [model.lora_A.weight, model.lora_B.weight]
+        for param in params:
+            score = torch.arange(1, param.numel() + 1, dtype=param.dtype).reshape_as(param)
+            optimizer.state[param]["exp_avg_sq"].copy_(score)
+            flipped = torch.flip(score.reshape(-1), dims=[0]).reshape_as(param)
+            optimizer.state[param]["exp_avg"].copy_(flipped)
+
+        callback = ReLoRACallback(policy=ReLoRAPolicy(steps=10, prune_ratio=0.5))
+        callback._merge_reinit_and_reset(model, optimizer)
+
+        for param in params:
+            state = optimizer.state[param]
+            avg_nonzero = state["exp_avg"] != 0
+            variance_nonzero = state["exp_avg_sq"] != 0
+            assert torch.equal(avg_nonzero, variance_nonzero)
+            assert not bool((avg_nonzero & ~variance_nonzero).any())
+
+    def test_non_floating_shape_matched_state_is_cleared(self):
+        try:
+            import torch
+        except ImportError:
+            pytest.skip("torch not available")
+        from soup_cli.utils.relora import ReLoRACallback, ReLoRAPolicy
+
+        model = _make_fake_lora_module()
+        optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
+        model(torch.randn(2, 4)).sum().backward()
+        optimizer.step()
+        param = model.lora_A.weight
+        optimizer.state[param]["uint8_code"] = torch.ones_like(param, dtype=torch.uint8)
+
+        callback = ReLoRACallback(policy=ReLoRAPolicy(steps=10, prune_ratio=0.5))
+        callback._merge_reinit_and_reset(model, optimizer)
+
+        assert optimizer.state[param] == {}
+
 
     def test_optimizer_reset_rejected_before_merge(self):
         try:
@@ -663,30 +803,27 @@ class TestMergeReinitAndReset:
         assert torch.equal(model.base.weight, before_base)
 
 
-def test_attach_relora_callback_warns_prune_ratio_ignored(caplog):
-    import logging
-
+def test_attach_relora_callback_uses_prune_ratio():
     from soup_cli.utils.peft_wiring import attach_relora_callback
 
     trainer = _single_process_trainer()
-    tcfg = TrainingConfig(relora_steps=100, relora_prune_ratio=0.9)
-    with caplog.at_level(logging.WARNING, logger="soup_cli.utils.peft_wiring"):
-        attach_relora_callback(trainer, tcfg)
-    assert "relora_prune_ratio" in caplog.text
-    assert "ignored" in caplog.text.lower()
+    tcfg = TrainingConfig(relora_steps=100, relora_prune_ratio=0.75)
+    attach_relora_callback(trainer, tcfg)
+
+    callback = trainer.add_callback.call_args.args[0]
+    assert callback.policy.prune_ratio == 0.75
 
 
-def test_attach_relora_callback_default_prune_ratio_does_not_warn(caplog):
-    import logging
-
+def test_attach_relora_callback_defaults_prune_ratio():
     from soup_cli.utils.peft_wiring import attach_relora_callback
 
     trainer = _single_process_trainer()
     tcfg = TrainingConfig(relora_steps=100)
     assert "relora_prune_ratio" not in tcfg.model_fields_set
-    with caplog.at_level(logging.WARNING, logger="soup_cli.utils.peft_wiring"):
-        attach_relora_callback(trainer, tcfg)
-    assert "relora_prune_ratio" not in caplog.text
+    attach_relora_callback(trainer, tcfg)
+
+    callback = trainer.add_callback.call_args.args[0]
+    assert callback.policy.prune_ratio == 0.9
 
 
 def test_attach_relora_refuses_world_size_gt_1():
@@ -852,7 +989,10 @@ class TestReLoRARealPeft:
             assert torch.all(weight_b == 0)
             assert not torch.equal(weight_a, old_a)
         for param in lora_params:
-            assert len(opt.state[param]) == 0
+            state = opt.state[param]
+            keep = param.numel() - max(1, int(param.numel() * 0.9))
+            assert int((state["exp_avg"] != 0).sum()) == keep
+            assert int((state["exp_avg_sq"] != 0).sum()) == keep
 
         with torch.no_grad():
             after_logits = model(input_ids=input_ids).logits
