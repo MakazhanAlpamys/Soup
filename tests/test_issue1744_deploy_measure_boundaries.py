@@ -114,6 +114,8 @@ def test_removing_rounding_fails_two_point_boundary(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     "before_score, after_score, expected",
     [
+        (19 / 20, 18 / 20, "MAJOR"),
+        (47 / 50, 46 / 50, "MINOR"),
         (1.0, 0.9500001, "MINOR"),
         (1.0, 0.9499999, "MAJOR"),
         (1.0, 0.9800001, "OK"),
@@ -160,4 +162,3 @@ def test_deploy_measure_cli_verdict(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     assert result.exit_code == 0, result.output
     clean_out = strip_ansi(result.output)
     assert "verdict=MAJOR" in clean_out
-
