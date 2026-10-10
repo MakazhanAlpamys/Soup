@@ -198,10 +198,17 @@ def migrate_unsloth(notebook_path: Path) -> Dict[str, Any]:
     # `cfg = CPOConfig(...)`, and then the loss cannot be read.
     name_bindings: Dict[str, List[ast.AST]] = {}
     for stmt in tree.body:
-        if not isinstance(stmt, ast.Assign):
+        if isinstance(stmt, (ast.If, ast.Try, ast.With, ast.For, ast.While)):
+            # Conditional writes cannot be resolved without executing notebook code.
+            for node in ast.walk(stmt):
+                if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+                    name_bindings.setdefault(node.id, []).append(node)
+            continue
+        if not isinstance(stmt, (ast.Assign, ast.AnnAssign)) or stmt.value is None:
             continue
         val = _ast_to_value(stmt.value)
-        for target in stmt.targets:
+        targets = stmt.targets if isinstance(stmt, ast.Assign) else [stmt.target]
+        for target in targets:
             if not isinstance(target, ast.Name):
                 continue
             name_bindings.setdefault(target.id, []).append(stmt.value)
@@ -220,6 +227,25 @@ def migrate_unsloth(notebook_path: Path) -> Dict[str, Any]:
         (n for n in ast.walk(tree) if isinstance(n, ast.Call)),
         key=lambda n: (n.lineno, n.col_offset),
     )
+    trainers = [node for node in calls if _get_func_name(node) in _TRAINER_MAP]
+    trainer_configs = {_trainer_config(node, name_bindings) for node in trainers}
+    last_trainer = trainers[-1] if trainers else None
+    if last_trainer is not None:
+        task = _TRAINER_MAP[_get_func_name(last_trainer)]
+        stage_config = _trainer_config(last_trainer, name_bindings)
+        if stage_config is not None and not (
+            isinstance(stage_config, ast.Call)
+            and (_get_func_name(stage_config) == "TrainingArguments"
+                 or _get_func_name(stage_config) in _CONFIG_MAP)
+        ):
+            warnings.append(
+                "Could not read the final trainer's args statically; "
+                "training settings use Soup defaults."
+            )
+    else:
+        # Preserve config-only notebooks, but never borrow an unrelated config
+        # when a trainer exists (including a trainer using its defaults).
+        stage_config = None
     for node in calls:
 
         func_name = _get_func_name(node)
@@ -271,10 +297,11 @@ def migrate_unsloth(notebook_path: Path) -> Dict[str, Any]:
 
         elif func_name in _TRAINER_MAP:
             # SFTTrainer(...), DPOTrainer(...), etc.
-            task = _TRAINER_MAP[func_name]
             kwargs = _extract_kwargs(node, scope=assignments)
-            if func_name == "CPOTrainer":
-                cpo_loss_type = _cpo_loss_type(node, kwargs, assignments, name_bindings)
+            if node is last_trainer:
+                task = _TRAINER_MAP[func_name]
+                if func_name == "CPOTrainer":
+                    cpo_loss_type = _cpo_loss_type(node, kwargs, assignments, name_bindings)
             if kwargs.get("packing"):
                 warnings.append(
                     "packing=True is not supported in Soup. "
@@ -282,10 +309,21 @@ def migrate_unsloth(notebook_path: Path) -> Dict[str, Any]:
                 )
 
         elif func_name == "TrainingArguments" or func_name in _CONFIG_MAP:
-            # TrainingArguments(...), DPOConfig(...), etc.
-            if func_name in _CONFIG_MAP:
-                task = _CONFIG_MAP[func_name]
+            if last_trainer is not None and node not in trainer_configs:
+                continue
             kwargs = _extract_kwargs(node, scope=assignments)
+            # Keep notes about real earlier stages, while unused configs have
+            # no effect on the result. Only the final stage supplies settings.
+            if "max_steps" in kwargs:
+                warnings.append(
+                    f"max_steps={kwargs['max_steps']}. "
+                    "Soup uses epochs; set training.epochs instead."
+                )
+            if last_trainer is not None and node is not stage_config:
+                continue
+            # TrainingArguments(...), DPOConfig(...), etc.
+            if last_trainer is None and func_name in _CONFIG_MAP:
+                task = _CONFIG_MAP[func_name]
             if "per_device_train_batch_size" in kwargs:
                 training_params["batch_size"] = kwargs["per_device_train_batch_size"]
             if "num_train_epochs" in kwargs:
@@ -303,11 +341,6 @@ def migrate_unsloth(notebook_path: Path) -> Dict[str, Any]:
                     training_params["dpo_beta"] = kwargs["beta"]
                 elif task == "kto":
                     training_params["kto_beta"] = kwargs["beta"]
-            if "max_steps" in kwargs:
-                warnings.append(
-                    f"max_steps={kwargs['max_steps']}. "
-                    "Soup uses epochs; set training.epochs instead."
-                )
 
     if base is None:
         raise ValueError("No FastLanguageModel.from_pretrained() call found in notebook")
@@ -399,6 +432,32 @@ _UNREAD = _UnreadType()
 _ONLINE_DPO_JUDGE_PLACEHOLDER = "ollama://REPLACE-ME"
 
 
+def _trainer_config(
+    trainer_call: ast.Call, name_bindings: Dict[str, List[ast.AST]],
+) -> Optional[ast.AST]:
+    """Resolve explicit args, else the first positional config after the model."""
+    def resolve(config: ast.AST) -> ast.AST:
+        if isinstance(config, ast.Name):
+            preceding = [value for value in name_bindings.get(config.id, [])
+                         if (value.lineno, value.col_offset)
+                         < (trainer_call.lineno, trainer_call.col_offset)]
+            return max(preceding, key=lambda value: (value.lineno, value.col_offset)) \
+                if preceding else config
+        return config
+
+    for keyword in trainer_call.keywords:
+        if keyword.arg == "args":
+            return resolve(keyword.value)
+    for argument in trainer_call.args[1:]:
+        config = resolve(argument)
+        if isinstance(config, ast.Call) and (
+            _get_func_name(config) == "TrainingArguments" or _get_func_name(config) in _CONFIG_MAP
+        ):
+            return config
+    # Expanded keywords may contain args; do not silently claim defaults were requested.
+    return next((kw.value for kw in trainer_call.keywords if kw.arg is None), None)
+
+
 def _cpo_loss_type(
     trainer_call: ast.Call,
     trainer_kwargs: Dict[str, Any],
@@ -414,19 +473,9 @@ def _cpo_loss_type(
     passed that cannot be read statically."""
     if "loss_type" in trainer_kwargs:
         return trainer_kwargs["loss_type"]
-    config: Optional[ast.AST] = next(
-        (kw.value for kw in trainer_call.keywords if kw.arg == "args"), None
-    )
-    if config is None and len(trainer_call.args) >= 2:
-        config = trainer_call.args[1]
+    config = _trainer_config(trainer_call, name_bindings)
     if config is None:
         return None
-    if isinstance(config, ast.Name):
-        preceding = [
-            value for value in name_bindings.get(config.id, [])
-            if value.lineno < trainer_call.lineno
-        ]
-        config = preceding[-1] if preceding else None
     if not (isinstance(config, ast.Call) and _get_func_name(config) == "CPOConfig"):
         return _UNREAD
     if any(k.arg is None for k in config.keywords):  # CPOConfig(**kw)

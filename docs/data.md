@@ -25,7 +25,7 @@
 - [Semantic dedup (`soup data dedup --semantic`)](#semantic-dedup-soup-data-dedup---semantic)
 - [Dataset Sanitization & Repair (`soup data clean`)](#dataset-sanitization--repair-soup-data-clean)
 - [Topic map (`soup data topics`)](#topic-map-soup-data-topics)
-- [Canaries (`soup data canary insertcheck`)](#canaries-soup-data-canary-insertcheck)
+- [Canaries (`soup data canary insert|check`)](#canaries-soup-data-canary-insertcheck)
 - [Data Recipe DAG](#data-recipe-dag)
 - [Data Mixing Optimizer (BETA)](#data-mixing-optimizer-beta)
 - [AOT Tokenization with `soup data preprocess`](#aot-tokenization-with-soup-data-preprocess)
@@ -515,19 +515,19 @@ Augment an existing dataset using an LLM — rephrase for diversity, translate f
 
 ```bash
 # Rephrase each example N times for more diversity
-soup data augment ./data/train.jsonl --strategy rephrase --count 3 \
+soup data augment --input ./data/train.jsonl --strategy rephrase --count 3 \
   --output ./data/train_augmented.jsonl
 
 # Translate into multiple languages
-soup data augment ./data/train.jsonl --strategy translate --lang es,fr,de \
+soup data augment --input ./data/train.jsonl --strategy translate --lang es,fr,de \
   --output ./data/train_multilingual.jsonl
 
 # Style transfer (formal / casual / technical / etc.)
-soup data augment ./data/train.jsonl --strategy style --styles formal,casual \
+soup data augment --input ./data/train.jsonl --strategy style --styles formal,casual \
   --output ./data/train_styled.jsonl
 
 # Local provider (Ollama, loopback-only) — pick the model + base URL
-soup data augment ./data/train.jsonl --strategy rephrase --count 2 \
+soup data augment --input ./data/train.jsonl --strategy rephrase --count 2 \
   --provider ollama --model qwen2.5:0.5b --output ./data/train_local.jsonl
 ```
 
@@ -630,6 +630,12 @@ to replace), and `CPOTrainer` to `simpo` only when `loss_type="simpo"` is set on
 its own call or its `args=` config; any other CPO loss, or an `args=` that cannot
 be read statically, stops the migration naming the value. `SFTConfig` and the
 other TRL `*Config` classes are read for hyperparameters.
+The final trainer determines the task; its inline or named config, passed as `args=`
+or positionally, supplies output and hyperparameters using the latest module-level
+binding before that trainer (including annotated assignments).
+Earlier stages retain warnings but cannot supply settings, and unused configs are ignored.
+Aliases, conditional rebindings and unresolved `**kwargs` are not evaluated: migration
+reports "Could not read the final trainer's args statically" and uses Soup defaults.
 
 
 ## Data Formats
@@ -895,6 +901,14 @@ data:
   # video_dir: ./videos
 ```
 
+`add_new_tokens` / `new_special_tokens` are added to the tokenizer, with the embeddings
+resized, on `backend: transformers` for `sft` (text, vision and audio), `dpo`, `kto`,
+`orpo`, `ipo`, `simpo`, `bco`, `grpo`, `online_dpo`, `preference` and `tts`, and on SFT's
+vision and audio paths whatever the backend (they run their transformers setup before the
+backend is read). Any other task, `backend: unsloth` (text SFT and every other task) or
+`mlx`, and `training.stream_layers` never add them, so a config setting them there is
+refused at load, naming which of those applies (#1358).
+
 `mask_history: true` keeps only the **last** assistant turn in the loss: every
 earlier assistant turn is masked alongside the user and system turns the
 assistant-only path already excludes. It never adds tokens to the loss.
@@ -1047,7 +1061,7 @@ soup data from-traces \
   --min-confidence 0.7
 ```
 
-The judge scores `chosen` and `rejected` independently against its rubric (default helpfulness/accuracy/safety on a 1-5 scale). Pairs whose normalised `(chosen - rejected)` confidence falls below `--min-confidence` are dropped. Per-pair backend exceptions are counted (not crashed) and reported. Provider allowlist `{openai, server, ollama}` validated at the CLI boundary; SSRF protection on `--judge-api-base` carries over from `soup eval judge`.
+The judge scores `chosen` and `rejected` independently against its rubric (default helpfulness/accuracy/safety on a 1-5 scale). Pairs whose normalised `(chosen - rejected)` confidence falls below `--min-confidence` are dropped. Per-pair backend exceptions are counted (not crashed) and reported. A judge that stops answering is not counted that way: once 3 requests in a row have spent their retries unanswered, the command stops with exit 1, names the judge and how many pairs were not judged, and writes no output file (#1522). Provider allowlist `{openai, server, ollama}` validated at the CLI boundary; SSRF protection on `--judge-api-base` carries over from `soup eval judge`.
 
 
 ## Synthetic Data Forge
@@ -1088,7 +1102,7 @@ soup data pii          --input training.jsonl --output pii_flagged.jsonl
 soup data toxicity     --input training.jsonl --output tox_flagged.jsonl --threshold 0.1
 soup data langdetect   --input training.jsonl --output tagged.jsonl
 soup data educational  --input training.jsonl --output scored.jsonl
-soup data decontaminate --input training.jsonl --benchmarks mmlu,gsm8k,humaneval --output clean.jsonl
+soup data decontaminate --input training.jsonl --benchmark-file benchmarks.jsonl --benchmarks mmlu,gsm8k,humaneval --output clean.jsonl
 ```
 
 `data score` shows decontamination as **not run**, not a measured zero, unless

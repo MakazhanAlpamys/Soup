@@ -1,5 +1,5 @@
-<!-- synced-from: README.md sha256:86ecadbae6dce6b1fdf2dbe1ce53ecf1f1b4c53152739ca0669fcaa6236ff1e1 -->
-<p align="center">🌍 <a href="README.md">English</a> | <a href="README.tr.md">Türkçe</a> | <a href="README.ar.md">العربية</a> | <a href="README.ja.md">日本語</a> | <strong>Русский</strong></p>
+<!-- synced-from: README.md sha256:ec1dafd943f745bda3caed2f8e2719be574711b084c5e99c91ca62715ab7d2da -->
+<p align="center">🌍 <a href="README.md">English</a> | <a href="README.tr.md">Türkçe</a> | <a href="README.ar.md">العربية</a> | <a href="README.ja.md">日本語</a> | <a href="README.zh.md">中文</a> | <strong>Русский</strong></p>
 
 <p align="center">
   <img src="soup.png" alt="Soup" width="280">
@@ -290,7 +290,7 @@ TXT, поэтому в большинстве случаев достаточн�
 
 ```bash
 soup train  --config soup.yaml        # train (SFT/DPO/GRPO/PPO/KTO/ORPO/SimPO/IPO/...)
-soup infer  --model ./output --input prompts.jsonl   # batch inference
+soup infer  --model ./output --input prompts.jsonl --output results.jsonl   # batch inference
 soup chat   --model ./output          # interactive chat
 soup serve  --model ./output          # OpenAI-compatible API server
 soup ui                               # local browser dashboard

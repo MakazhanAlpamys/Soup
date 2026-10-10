@@ -169,6 +169,21 @@ def _isolate_experiments_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
     monkeypatch.setenv("SOUP_DB_PATH", str(tmp_path / "experiments.db"))
 
 
+@pytest.fixture(autouse=True)
+def _restore_working_directory():
+    """Put the working directory back after every test.
+
+    Some tests call ``os.chdir(tmp_path)`` and never return, and others open
+    ``src/soup_cli/...`` by a path relative to the repository root. In file
+    order the first kind happens to run after the second, so nothing fails.
+    A pytest-xdist worker can run them the other way round, and the relative
+    opens then raise ``FileNotFoundError``.
+    """
+    before = os.getcwd()
+    yield
+    os.chdir(before)
+
+
 @pytest.fixture
 def aten_half_matmuls(monkeypatch: pytest.MonkeyPatch):
     """Keep a CPU bf16/fp16 step off oneDNN and off MKL's half-precision GEMMs.

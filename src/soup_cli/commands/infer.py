@@ -91,6 +91,16 @@ def infer(
         "-t",
         help="Sampling temperature (0 = greedy)",
     ),
+    batch_size: int = typer.Option(
+        1,
+        "--batch-size",
+        min=1,
+        help=(
+            "Number of causal-LM prompts to generate together "
+            "(default: 1; batching is opt-in; fp16/bf16 batching "
+            "may not be bit-exact with batch size 1)"
+        ),
+    ),
     device: Optional[str] = typer.Option(
         None,
         "--device",
@@ -197,6 +207,12 @@ def infer(
             audio_dir=audio_dir,
         )
         return
+    if cuda_graphs is True and batch_size > 1:
+        raise typer.BadParameter(
+            "--cuda-graphs records a batch of 1 and cannot be combined with "
+            "--batch-size above 1. Omit --cuda-graphs, or use --batch-size 1"
+        )
+
     if task != "text":
         console.print(f"[red]Unknown --task {task!r}; expected 'text' or 'asr'.[/]")
         raise typer.Exit(2)
@@ -215,7 +231,6 @@ def infer(
         console.print(
             f"[dim]Local path not found; treating {model_ref!r} as a HF repo id.[/]"
         )
-    model_target = model_ref
 
     # Read prompts
     prompts = _read_prompts(input_path)
@@ -232,7 +247,7 @@ def infer(
 
     console.print(
         Panel(
-            f"Model:    [bold]{model_target}[/]\n"
+            f"Model:    [bold]{model_ref}[/]\n"
             f"Input:    [bold]{input_path}[/] ({len(prompts)} prompts)\n"
             f"Output:   [bold]{output_file}[/]\n"
             f"Device:   [bold]{device}[/]\n"
@@ -245,7 +260,11 @@ def infer(
     # Load model — gate trust_remote_code via the v0.36.0 helper.
     console.print("[dim]Loading model...[/]")
     model_obj, tokenizer = _load_model(
-        model_target, base, device, trust_remote_code, is_local=(model_kind == "local"),
+        model_ref,
+        base,
+        device,
+        trust_remote_code,
+        is_local=(model_kind == "local"),
     )
     if cuda_graphs is True:
         from soup_cli.utils.cuda_graphs import cuda_graph_generation_kwargs
@@ -289,29 +308,54 @@ def infer(
     ):
         progress_task = progress.add_task("Generating...", total=len(prompts))
 
-        for prompt_text in prompts:
-            messages = [{"role": "user", "content": prompt_text}]
-            try:
-                response, token_count = _generate(
-                    model_obj, tokenizer, messages,
-                    max_tokens=max_tokens, temperature=temperature,
-                    **({"cuda_graphs": True} if cuda_graphs is True else {}),
-                )
-            except Exception as exc:
-                if cuda_graphs is not True:
-                    raise
-                raise _cuda_graph_failure(exc) from exc
+        if batch_size == 1:
+            prompt_batches = [[prompt] for prompt in prompts]
+        else:
+            prompt_batches = [
+                prompts[start : start + batch_size]
+                for start in range(0, len(prompts), batch_size)
+            ]
 
-            result = {
-                "prompt": prompt_text,
-                "response": response,
-                "tokens_generated": token_count,
-            }
-            out_f.write(json.dumps(result, ensure_ascii=False) + "\n")
-            out_f.flush()
-            total_tokens += token_count
-            num_results += 1
-            progress.update(progress_task, advance=1)
+        for prompt_batch in prompt_batches:
+            if batch_size == 1:
+                messages = [{"role": "user", "content": prompt_batch[0]}]
+                try:
+                    generated = [
+                        _generate(
+                            model_obj,
+                            tokenizer,
+                            messages,
+                            max_tokens=max_tokens,
+                            temperature=temperature,
+                            **({"cuda_graphs": True} if cuda_graphs is True else {}),
+                        )
+                    ]
+                except Exception as exc:
+                    if cuda_graphs is not True:
+                        raise
+                    raise _cuda_graph_failure(exc) from exc
+            else:
+                generated = _generate_batch(
+                    model_obj,
+                    tokenizer,
+                    prompt_batch,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                )
+
+            for prompt_text, (response, token_count) in zip(
+                prompt_batch, generated, strict=True
+            ):
+                result = {
+                    "prompt": prompt_text,
+                    "response": response,
+                    "tokens_generated": token_count,
+                }
+                out_f.write(json.dumps(result, ensure_ascii=False) + "\n")
+                out_f.flush()
+                total_tokens += token_count
+                num_results += 1
+                progress.update(progress_task, advance=1)
 
     elapsed = time.time() - start_time
     tokens_per_sec = total_tokens / elapsed if elapsed > 0 else 0
@@ -778,6 +822,92 @@ def _generate(
     return response_text, token_count
 
 
+def _generate_batch(
+    model, tokenizer, prompts, max_tokens=256, temperature=0.7,
+) -> list[tuple[str, int]]:
+    """Generate responses for a causal-LM prompt batch in input order."""
+    from soup_cli.utils.vllm import _render_chat_prompt, encode_rendered_prompt
+
+    rendered = []
+    templated = None
+    for prompt in prompts:
+        text, row_templated = _render_chat_prompt(
+            [{"role": "user", "content": prompt}],
+            tokenizer,
+            fallback_on_error=False,
+        )
+        if templated is None:
+            templated = row_templated
+        elif templated != row_templated:
+            raise ValueError("mixed chat-template rendering modes in one batch")
+        rendered.append(text)
+
+    original_padding_side = tokenizer.padding_side
+    tokenizer.padding_side = "left"
+    try:
+        inputs = encode_rendered_prompt(
+            tokenizer,
+            rendered,
+            templated=bool(templated),
+            padding=True,
+            return_tensors="pt",
+        )
+        input_ids = inputs["input_ids"].to(model.device)
+        attention_mask = inputs["attention_mask"].to(model.device)
+        input_width = input_ids.shape[1]
+
+        import torch
+
+        with torch.no_grad():
+            gen_kwargs = {
+                "input_ids": input_ids,
+                "attention_mask": attention_mask,
+                "max_new_tokens": max_tokens,
+                "do_sample": temperature > 0,
+                "pad_token_id": tokenizer.pad_token_id,
+            }
+            if temperature > 0:
+                gen_kwargs["temperature"] = temperature
+                gen_kwargs["top_p"] = 0.9
+            outputs = model.generate(**gen_kwargs)
+
+        results = []
+        eos_token_ids = getattr(tokenizer, "eos_token_id", None)
+        if eos_token_ids is None:
+            eos_token_ids = set()
+        elif isinstance(eos_token_ids, (list, tuple, set)):
+            eos_token_ids = set(eos_token_ids)
+        else:
+            eos_token_ids = {int(eos_token_ids)}
+
+        for output in outputs:
+            new_tokens = output[input_width:]
+            token_count = new_tokens.shape[0]
+            pad_token_id = tokenizer.pad_token_id
+
+            for index, token in enumerate(new_tokens):
+                token_id = int(token)
+                if token_id in eos_token_ids:
+                    token_count = index + 1
+                    break
+                if token_id == pad_token_id:
+                    token_count = index
+                    break
+
+            actual_tokens = new_tokens[:token_count]
+            results.append(
+                (
+                    tokenizer.decode(
+                        actual_tokens, skip_special_tokens=True
+                    ).strip(),
+                    token_count,
+                )
+            )
+        return results
+    finally:
+        tokenizer.padding_side = original_padding_side
+
+
 def _count_prompt_tokens(tokenizer, prompt_text: str) -> int:
     """Tokens in the chat-templated prompt: the length the static cache must hold."""
     from soup_cli.utils.vllm import encode_chat_prompt
@@ -825,7 +955,12 @@ def _warm_cuda_graphs(model, tokenizer, prompts: list[str], max_tokens: int) -> 
     messages = [{"role": "user", "content": _longest_prompt(tokenizer, prompts)}]
     try:
         _generate(
-            model, tokenizer, messages, max_tokens=max_tokens, temperature=0.0, cuda_graphs=True,
+            model,
+            tokenizer,
+            messages,
+            max_tokens=max_tokens,
+            temperature=0.0,
+            cuda_graphs=True,
             min_tokens=min(max_tokens, _CUDA_GRAPH_WARMUP_TOKENS),
         )
     except Exception as exc:

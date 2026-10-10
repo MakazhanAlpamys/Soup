@@ -175,6 +175,13 @@ soup deploy ollama --remove soup-my-model
 
 Auto-detected chat templates: `chatml`, `llama`, `mistral`, `vicuna`, `zephyr` (or `auto` to infer from soup.yaml).
 
+### Registry Attachment and Deploy Options
+
+`soup export` integrates with Soup's local artifact registry and deployment workflows:
+
+- **Deploying on export (`--deploy`)**: `--deploy ollama` is supported for GGUF-family formats (`gguf`, `gguf-ud`, `bitnet`, `tq1_0`). For non-GGUF formats (`onnx`, `tensorrt`, `awq`, `gptq`, `torchao`), `--deploy` fails fast with an informative error because Ollama cannot load non-GGUF weight files. Use `--deploy-name` to assign a custom model name in Ollama.
+- **Registering exports (`--registry-id`)**: Pass `--registry-id <id>` to record and attach exported artifacts to a local registry entry across all export formats (`gguf`, `gguf-ud`, `bitnet`, `tq1_0`, `onnx`, `tensorrt`, `awq`, `gptq`, `torchao`). When an export produces a directory (such as multi-shard safetensors, ONNX data, or TensorRT engine files in `<output>/engine/*.engine`), all produced weight and engine files are discovered and attached to the registry entry.
+
 
 ## Batch Inference
 
@@ -403,7 +410,7 @@ forward pass; on a small target it is frequently a *slowdown*.
 
 ```bash
 # Transformers backend — uses HF assisted generation
-soup serve --model ./output --speculative-decoding small-draft-model --spec-tokens 5
+soup serve --model ./output --speculative-decoding small-draft-model --num-speculative-tokens 5
 
 # vLLM backend — uses vLLM native speculative decoding
 soup serve --model ./output --backend vllm --speculative-decoding small-draft-model
@@ -504,7 +511,7 @@ The first request with a given prefix warms the cache; subsequent requests skip 
 Switch the active adapter at runtime without restarting the server:
 
 ```bash
-soup serve --model base-model --adapters chat=./chat-adapter code=./code-adapter
+soup serve --model base-model --adapters chat=./chat-adapter --adapters code=./code-adapter
 ```
 
 ```bash
@@ -636,9 +643,15 @@ Launch a local web interface to manage experiments, start training, explore data
 ```bash
 pip install "soup-cli[ui]"
 soup ui
-# -> opens http://127.0.0.1:7860 in your browser
-# -> prints auth token to console
+# -> opens http://127.0.0.1:7860/?token=<token> in your browser
+# -> prints the same URL and the token in the startup panel (also with --no-browser)
 ```
+
+The URL `soup ui` opens and prints already carries the token, so the first tab
+authenticates on its own. On a loopback bind the server swaps that token for an
+HttpOnly session cookie and redirects, as described below, so the address bar
+ends up clean and a reload or a new tab stays signed in. Your browser's history
+still records the URL it was given.
 
 > **v0.75.0 and v0.75.1: add the token to the URL yourself.** In these two
 > releases the tab `soup ui` opens carries no token, so it shows
@@ -650,7 +663,7 @@ soup ui
 > another browser needs the URL again, and the token changes every time
 > `soup ui` starts unless you pass `--auth-token`. Releases with the session
 > cookie keep a new tab signed in as well; see "Session cookie on a loopback
-> bind" below.
+> bind" below. Later versions open and print that URL themselves.
 
 **Pages:**
 - **Dashboard** — view all experiment runs, loss charts, system info, multi-run comparison
@@ -672,7 +685,7 @@ terminal panel.
 
 **Security:** The Web UI generates a random auth token at startup (printed to console). Every private endpoint — mutating (start/stop training, delete runs, inspect data, validate config) and reading (runs, metrics, system, recipes, SSE streams) — requires an `Authorization: Bearer <token>` header. `/` and `/api/health` stay open so the dashboard can load. CORS is restricted to the served origin. Data inspection is sandboxed to the working directory.
 
-**The page never stores the token.** The page reads the token from `?token=…` (the `--public` phone URL) or asks for it the first time a request is refused, then holds it in page memory only: never `sessionStorage`, `localStorage`, a cookie or a `window` property. Without the session cookie below, a reload or a new tab therefore asks for it again; paste the token `soup ui` printed (the whole `Authorization: Bearer …` line works too). If you cancel the prompt, the page stays signed out until your next click, which asks again. That is deliberate: a token persisted where page script can read it would turn a future rendering mistake into a token disclosure. It does not protect against script already running in the page; the content policy below is the defence there.
+**The page never stores the token.** The page reads the token from `?token=…` — the URL `soup ui` opens and prints, and the `--public` phone URL — whenever a non-loopback bind leaves that parameter in the URL; on a loopback bind the cookie below has already consumed it. Otherwise it asks for the token the first time a request is refused, then holds it in page memory only: never `sessionStorage`, `localStorage`, a cookie or a `window` property. Without the session cookie below, a reload or a new tab therefore asks for it again; paste the token `soup ui` printed (the whole `Authorization: Bearer …` line works too). If you cancel the prompt, the page stays signed out until your next click, which asks again. That is deliberate: a token persisted where page script can read it would turn a future rendering mistake into a token disclosure. It does not protect against script already running in the page; the content policy below is the defence there.
 
 **Session cookie on a loopback bind (#1191).** Opening `http://127.0.0.1:<PORT>/?token=<TOKEN>` checks the token, sets an `HttpOnly; SameSite=Strict; Path=/` cookie named `soup_ui_session_<PORT>` and redirects to the same URL without `token`. The cookie holds a random session id, never the token, so page script cannot read a credential, and a reload or a new tab in that browser stays signed in. The cookie belongs to the hostname you opened: signing in at `127.0.0.1` does not sign in `localhost`, so keep using the same one. It has no expiry, so it ends when the browser session does, and the server keeps the ids only in memory, so every `soup ui` restart ends every session; open the `?token=` URL again to sign back in. A request authenticated by the cookie that is not a `GET` or `HEAD` must carry an `Origin` naming this exact server (scheme, host and port) or it is refused with 403: every port of `127.0.0.1` counts as one site, so `SameSite=Strict` alone would let a page served by another local app on a different port use the cookie. The `Authorization: Bearer` header works exactly as before and needs no `Origin`, so scripts and API clients are unchanged. A wrong token sets nothing and loads the page as before. A browser that blocks cookies for `127.0.0.1` gets the token prompt after the redirect, because the token has already left the URL; paste the token there. With `--public` (or any non-loopback `--host`) no cookie is set or accepted: the phone page keeps the token in page memory, and a reload asks for it again or you re-scan the QR code. **What this does not cover:** cookies are not isolated by port, so any other server on `127.0.0.1` that your browser sends a same-site request to also receives the session cookie. Such a server can replay it outside a browser with any `Origin`, since the `Origin` check only stops browsers, and act as you in the UI, including starting training, until `soup ui` restarts.
 
@@ -707,10 +720,10 @@ Each line: `{"ts": ..., "prompt": ..., "response": ..., "latency_ms": ..., "toke
 
 ```bash
 soup quantize ./out --to gguf --bits 4
-soup quantize ./out --to gptq --bits 4 -o ./out-gptq
+soup quantize ./out --to onnx -o ./out-onnx
 ```
 
-Prints the equivalent `soup export …` invocation (escaped via `shlex.quote`) for copy-paste. Intentionally does NOT in-process call `soup export` — Typer commands aren't safe to re-enter.
+Prints the equivalent `soup export …` invocation (escaped via `shlex.quote`) for copy-paste. Intentionally does NOT in-process call `soup export` — Typer commands aren't safe to re-enter. `--to awq` and `--to gptq` still print their command, followed by a notice that the two formats are deprecated and will be removed in the next release.
 
 
 ## Llama.cpp Proxy
@@ -896,3 +909,14 @@ generation on their server or enumerate the loaded adapters — CORS alone would
 that page *reading* the reply, not sending the request. Requests that carry no `Origin` at
 all — curl, the OpenAI/Anthropic SDKs, a reverse proxy — are unaffected, and `Host` is not
 checked on these routes, so a proxy can still front them under its own hostname.
+
+**What `--tool-auth-token` does not cover.** `soup serve` refuses a non-loopback `--host`
+without `--tool-auth-token`, but the token is checked on the tool routes, `/v1/thumbs` and
+the adapter routes only. `/v1/chat/completions`, `/v1/messages`, `/v1/models`, `/health` and
+`/metrics` take no token on any bind, so they answer every client that can reach the port;
+put a proxy that authenticates in front of the server if that is not intended. With
+`--backend vllm`, `sglang` or `mii` there are no tool or adapter routes, so no route checks
+the token. On a wildcard bind (`0.0.0.0`, `::`) there is no single name to compare `Host`
+against, so the routes that otherwise compare it check only that an `Origin` header, when
+sent, names the same host as `Host`. `soup serve` prints these points at startup whenever
+it binds beyond loopback.

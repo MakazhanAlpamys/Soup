@@ -9,9 +9,10 @@ on:
     branches: [main, 'release/**']
   pull_request:
     branches: [main]
-    # The first three are GitHub's defaults. `labeled` is what starts the full
-    # matrix when a maintainer adds `ci:full` (see the comment above the `plan`
-    # job); it stays a plain pull_request run -- never pull_request_target.
+    # The first three are GitHub's defaults. `ready_for_review` is a draft's first
+    # run: a draft pull request runs nothing. `labeled` is what starts the approval
+    # run when a maintainer adds `ci:full`. Both are in the comment above the
+    # `plan` job. It stays a plain pull_request run -- never pull_request_target.
     types: [opened, synchronize, reopened, ready_for_review, labeled]
   # The full matrix on `main`, once a night: a push to `main` itself runs only the
   # quick set (see the comment above the `plan` job). `workflow_dispatch` lets a
@@ -119,7 +120,8 @@ concurrency:
 # save runner-minutes that are only ever spent when a job is already hung.
 
 jobs:
-  # Quick runs, the full matrix at approval, and every cell on a release branch.
+  # Quick runs, the required cells at approval, the full matrix every night, and
+  # every cell on a release branch.
   #
   # Measured 2026-09-28 07:30Z: the Actions account sat at its free-plan cap of
   # 20 concurrent jobs (8 ubuntu, 8 windows, 4 macos running) with 301 jobs
@@ -127,16 +129,19 @@ jobs:
   # nine test cells plus lint, type-check, mlx-smoke, torchao-contract,
   # pytorch-smoke and transformers-floor.
   #
-  # So `plan` picks one of three matrices, and every job except `lint` follows it:
+  # So `plan` picks one of four matrices, and every job except `lint` follows it:
   #
   #   push to release/**               RELEASE: all nine test cells + the five gated jobs
   #   nightly run on main, a manual    FULL: seven test cells (no Windows or macOS
-  #     dispatch, or a pull request      on 3.11) + the five gated jobs
-  #     labelled ci:full
+  #     dispatch                         on 3.11) + the five gated jobs
+  #   pull request labelled ci:full    APPROVAL: the four required test cells (ubuntu
+  #                                      on 3.10 and 3.12, Windows and macOS on
+  #                                      3.12) + the five gated jobs
   #   push to main, any other pull     QUICK: lint + test (ubuntu-latest, 3.12)
   #     request run
+  #   draft pull request               nothing: no job starts
   #
-  # 3.11 runs on ubuntu in every full run, and on Windows and macOS only for
+  # 3.11 runs on ubuntu in every FULL run, and on Windows and macOS only for
   # release/**, where the release checklist needs every cell green on the tagged
   # commit. Measured basis (soup-97): macOS was the binding limit 63% of the
   # time, and dropping the two cells takes a full run from 4 macOS jobs to 3
@@ -144,52 +149,75 @@ jobs:
   # windows-3.11 alone, and a failure like that now surfaces on the release
   # branch instead of before merge. Branch protection requires neither cell.
   #
+  # 2026-10-07: a labelled pull request runs APPROVAL, no longer FULL. An approval
+  # run was seven test cells, two of them on macOS, the binding limit above; it is
+  # four, one on macOS. What it gives up: a failure that exists only on ubuntu
+  # 3.11, Windows 3.10 or macOS 3.10 is not caught before merge and shows on
+  # `main` in the next nightly run instead. Branch protection must not require
+  # any of the three: they come off it together with this change.
+  #
   # A quick push costs 3 jobs (lint, plan, one ubuntu cell) instead of 15, and
   # none of them on Windows or macOS. A maintainer adds `ci:full` at approval.
   # The pull request's current labels decide, not the event, so every run on a
-  # labelled pull request is full -- including each later push, which a merge on
-  # the current head needs anyway. Remove the label to go back to quick runs. A
+  # labelled pull request is an approval run -- including each later push, which
+  # a merge on the current head needs anyway. Remove the label to go back to
+  # quick runs. A
   # labelled run is an ordinary pull_request run, with the token and secrets a
   # push to that pull request already gets.
   #
   # What this costs, and why the merge gate still holds:
   #
   # - Contributors see only ubuntu / Python 3.12 until approval. A failure that
-  #   exists only on Windows, macOS, 3.10 or 3.11 surfaces at approval (on the
-  #   release branch, for Windows and macOS on 3.11), so that round trip starts
-  #   later than it used to.
+  #   exists only on Windows, macOS or 3.10 surfaces at approval, so that round
+  #   trip starts later than it used to. One that needs ubuntu on 3.11, or Windows
+  #   or macOS on 3.10, surfaces after the merge, in the nightly run; one that
+  #   needs Windows or macOS on 3.11, on the release branch.
   # - The required smokes (mlx-smoke, pytorch-smoke, transformers-floor) read as
   #   SKIPPED on a quick run, and branch protection counts a job skipped by its
   #   `if:` as passing. So the smokes are not what blocks a merge; the test cells
   #   are. `test` takes its matrix from `plan`, so a quick run never CREATES the
-  #   other six required `test (...)` contexts, and a required context nothing
+  #   other three required `test (...)` contexts, and a required context nothing
   #   reported stays "Expected" and keeps the merge button locked. Do not turn the
   #   matrix back into a static list with a per-cell `if:`: a skipped cell passes.
-  #   For the same reason FULL and branch protection must name the same cells: a
-  #   required cell FULL drops is never reported and locks every merge, and a FULL
-  #   cell that is not required gates nothing.
-  # - Maintainers merge only when all 11 required checks read SUCCESS on the
-  #   current head. Skipped is not success: a quick run after a full one on the
+  #   For the same reason APPROVAL and branch protection must name the same
+  #   cells: a required cell APPROVAL drops is never reported and locks every
+  #   merge, and an APPROVAL cell that is not required gates nothing.
+  # - Maintainers merge only when all 8 required checks read SUCCESS on the
+  #   current head. Skipped is not success: a quick run after an approval run on the
   #   same head (say the label was removed and another one added) replaces the
   #   smokes' results, a failure included, with skipped -- which the merge button
   #   accepts.
   # - Adding any other label to a pull request that already carries `ci:full`
-  #   starts a second full run, in a concurrency group of its own so it cannot
+  #   starts a second approval run, in a concurrency group of its own so it cannot
   #   cancel the first, and no later push cancels it either. Add other labels
   #   before `ci:full`.
-  # - Coverage uploads from the ubuntu / 3.11 cell only, so a pull request's
-  #   Codecov report arrives at approval.
+  # - Coverage uploads from the ubuntu / 3.10 cell only -- the ubuntu cell every
+  #   gated run has and a quick run does not -- so a pull request's Codecov report
+  #   arrives at approval.
+  # - A draft pull request runs nothing: `plan` and `lint` are skipped by their
+  #   own `if:`, and every other job needs `plan`. The merge gate holds for the
+  #   reason above -- the required `test (...)` contexts are never created -- and
+  #   GitHub does not merge a draft in any case. Marking it ready
+  #   (`ready_for_review`) starts the quick run, or the approval run if it already
+  #   carries the label. Converting a pull request back to a draft does not stop a
+  #   run in progress. A job added here must need `plan` and must not call a
+  #   status function (`always()`, `failure()`, ...) in its `if:`, or it runs on
+  #   drafts.
   #
   # `timeout-minutes: 5` is not a measurement: one shell step, no checkout, no
   # install.
   plan:
+    # Everything but a draft pull request. `lint` carries the same condition, and
+    # every other job needs `plan`, so it is skipped with it.
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
-      # The three matrices, each declared once as a JSON literal the tests parse.
+      # The four matrices, each declared once as a JSON literal the tests parse.
       # RELEASE is the support matrix, every cell: tests/test_requires_python_bound.py
       # derives requires-python from it. FULL is RELEASE minus Windows and macOS on
-      # 3.11, and tests/test_ci_full_matrix_on_approval.py pins it to exactly the
+      # 3.11. APPROVAL is the oldest and the newest Python, the oldest on ubuntu
+      # only, and tests/test_ci_full_matrix_on_approval.py pins it to exactly the
       # required `test (...)` contexts. QUICK is one required cell. Keep the key
       # order (it names the checks) and the versions as strings (a JSON 3.10 is 3.1).
       RELEASE_MATRIX: >-
@@ -200,16 +228,22 @@ jobs:
         "python-version": ["3.10", "3.11", "3.12"],
         "exclude": [{"os": "windows-latest", "python-version": "3.11"},
         {"os": "macos-latest", "python-version": "3.11"}]}
+      APPROVAL_MATRIX: >-
+        {"os": ["ubuntu-latest", "windows-latest", "macos-latest"],
+        "python-version": ["3.10", "3.12"],
+        "exclude": [{"os": "windows-latest", "python-version": "3.10"},
+        {"os": "macos-latest", "python-version": "3.10"}]}
       QUICK_MATRIX: '{"os": ["ubuntu-latest"], "python-version": ["3.12"]}'
     outputs:
       full: ${{ steps.decide.outputs.full }}
       matrix: ${{ steps.decide.outputs.matrix }}
     steps:
-      - name: Choose the release, full or quick matrix
+      - name: Choose the release, full, approval or quick matrix
         id: decide
         env:
           RELEASE: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/heads/release/') }}
-          FULL: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/release/')) || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'ci:full')) }}
+          FULL: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/release/')) }}
+          APPROVAL: ${{ github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'ci:full') }}
         run: |
           set -euo pipefail
           if [ "$RELEASE" = "true" ]; then
@@ -218,6 +252,9 @@ jobs:
           elif [ "$FULL" = "true" ]; then
             full=true
             matrix="$FULL_MATRIX"
+          elif [ "$APPROVAL" = "true" ]; then
+            full=true
+            matrix="$APPROVAL_MATRIX"
           else
             full=false
             matrix="$QUICK_MATRIX"
@@ -229,6 +266,8 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
   lint:
+    # Skipped on a draft pull request, like `plan`: see the comment above `plan`.
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -494,10 +533,11 @@ jobs:
     needs: plan
     strategy:
       fail-fast: false
-      # From `plan`: all nine cells on a push to release/**, seven on a full run
-      # (no Windows or macOS 3.11), test (ubuntu-latest, 3.12) alone on a quick
-      # one. The cells a run leaves out are MISSING, not skipped, and that is what
-      # keeps a required one blocking a merge.
+      # From `plan`: all nine cells on a push to release/**, seven on the nightly
+      # run and a manual dispatch (no Windows or macOS 3.11), the four required
+      # ones on a labelled pull request, test (ubuntu-latest, 3.12) alone on a
+      # quick one. The cells a run leaves out are MISSING, not skipped, and that
+      # is what keeps a required one blocking a merge.
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
@@ -541,7 +581,11 @@ jobs:
           key: hf-${{ runner.os }}-${{ hashFiles('.github/workflows/ci.yml') }}
           restore-keys: hf-${{ runner.os }}-
       - name: Install dependencies
-        run: pip install -e ".[dev]"
+        # pytest-xdist runs the suite in parallel (see the test step below); its
+        # psutil extra is what `-n logical` counts the CPUs with. Installed here
+        # and not in the dev extra: a local run stays serial unless a contributor
+        # asks for workers.
+        run: pip install -e ".[dev]" "pytest-xdist[psutil]"
       - name: Warm HF Hub cache (models the tests load)
         # Pre-download the models the unit tests load, with retries, so a
         # transient HF Hub 429 (Too Many Requests) on a single matrix cell does
@@ -638,9 +682,19 @@ jobs:
           path: ${{ runner.temp }}/hf-cache
           key: hf-${{ runner.os }}-${{ hashFiles('.github/workflows/ci.yml') }}
       - name: Run unit tests with coverage
-        run: pytest tests/ -v --tb=short --junitxml=report.xml --cov=soup_cli --cov-report=xml:coverage.xml --cov-report=term-missing:skip-covered
+        # One worker per logical CPU and one test FILE per worker (`loadfile`):
+        # the tests of a file keep their order and their module-level state, and
+        # two files may run at the same moment. Measured 2026-10-07 on Python
+        # 3.12 (run 37577416935): ubuntu 2520 s -> 1133 s, Windows 4492 s ->
+        # 1390 s, macOS 2003 s -> 992 s, with the same tests passing and coverage
+        # unchanged. `--dist load` hands the tests of one file to several workers
+        # and is not used: it was no faster, and one timing test failed under it.
+        run: pytest tests/ -n logical --dist loadfile -v --tb=short --junitxml=report.xml --cov=soup_cli --cov-report=xml:coverage.xml --cov-report=term-missing:skip-covered
       - name: Upload coverage to Codecov
-        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11'
+        # ubuntu / 3.10 is the ubuntu cell every gated run has (release, full,
+        # approval) and a quick run does not. It was 3.11 until the approval run
+        # stopped having that cell.
+        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.10'
         uses: codecov/codecov-action@v4
         with:
           files: coverage.xml

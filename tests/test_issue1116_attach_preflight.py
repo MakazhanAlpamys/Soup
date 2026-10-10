@@ -859,9 +859,11 @@ class TestReviewFollowUps:
 
 class TestOnlySftReadsModality:
     """#1117 review, round 3: ``loader_for`` chose the class from ``modality`` for
-    every task, but only ``trainer/sft.py`` reads it. A vision DPO config was
+    every task, but only ``trainer/sft.py`` read it. A vision DPO config was
     reported ATTACHES (8 modules, 4 of them in the vision tower) while DPO's own
-    ``AutoModelForCausalLM`` refuses the base outright."""
+    ``AutoModelForCausalLM`` refused the base outright. Since #1393 DPO reads
+    ``modality`` too and is pinned in ``test_issue1393_dpo_vision_loader.py``; the
+    trainers here are the ones that still load one class whatever it says."""
 
     @staticmethod
     def _cfg(task, modality="text", **training):
@@ -879,7 +881,7 @@ class TestOnlySftReadsModality:
         }
         return load_config_from_string(yaml.safe_dump(raw))
 
-    @pytest.mark.parametrize("task", ["dpo", "grpo"])
+    @pytest.mark.parametrize("task", ["grpo"])
     def test_a_vision_config_on_a_text_trainer_is_a_causal_lm(self, task):
         from soup_cli.utils.attach_preflight import loader_for
 

@@ -6,7 +6,7 @@
 
 **Contents:**
 
-- [Post-train X-rays (`soup probe`, `soup adapters blame --live`)](#post-train-x-rays-soup-probe-soup-adapters-blame---live)
+- [Post-train X-rays (`soup probe`, `soup adapters blame`)](#post-train-x-rays-soup-probe-soup-adapters-blame)
 - [Pre-flight Decision (`soup advise`)](#pre-flight-decision-soup-advise)
 - [Eval Design Pipeline (`soup eval design / discover / lock / coverage`)](#eval-design-pipeline-soup-eval-design--discover--lock--coverage)
 - [Run-vs-run Regression (`soup eval against`)](#run-vs-run-regression-soup-eval-against)
@@ -25,7 +25,7 @@
 
 ---
 
-## Post-train X-rays (`soup probe`, `soup adapters blame --live`)
+## Post-train X-rays (`soup probe`, `soup adapters blame`)
 
 Five surfaces that extend `soup diagnose` from 6 failure modes to 10. Mechanistic interpretability has been research-grade for years; v0.66.0 ships the wiring CLI-first so anyone can probe their FT without the SaaS unit-economics tax.
 
@@ -269,6 +269,20 @@ The statistic is a Bayes factor that averages over both the size of the differen
 
 `--effect-size` is in the metric's units, but the statistic needs it in standard deviations. So the first 5 rows of each arm set that scale (their pooled standard deviation) and are not otherwise tested; the verdict table shows this as `prior_scale`, and the reported means and row counts still cover every row. If an arm's first rows are all identical, more rows are held out until one differs. If they barely vary (a warm cache, or a judge that gives 1.0 early), `accept_h0` waits as `continue` while the tested rows' standard deviation is more than 3 times theirs: that start makes the prior far too wide. A `reject_h0` is never held back.
 
+That wait is worth reading, because the held-out rows are fixed: once the hold fires, **more rows of the same kind never release it**. A run in that state is stuck at `continue` with the accept rule already satisfied — the confidence sequence for the difference lies inside `(-effect_size, +effect_size)` — so the verdict reports the hold rather than leaving you to guess, and the panel prints one line naming the ratio and what to do about it:
+
+```text
+Held back: the tested rows spread 25.7 times the held-out ones (held_out_spread
+0.002218, tested_spread 0.05706, limit 3x), so accept_h0 is withheld even though
+the confidence sequence for the difference is already inside +-0.1. The first 5
+rows of each arm set the scale of --effect-size and barely vary (a warm cache, or
+a judge that gives the same score early). Those rows are fixed, so more samples of
+the same kind will not release the hold: drop them, or reorder the input so the
+first rows vary, and re-run.
+```
+
+The same three facts are on the verdict returned by `run_msprt` / `msprt_step`: `accept_held` (bool), `held_out_spread` and `tested_spread` (the two pooled standard deviations, both `null` when nothing is held — a `continue` with no hold carries no explanation). The held-out rows' spread is measured over however many rows were actually held out, which is more than 5 when an arm's first rows are all identical. A webhook is never sent for a held run: `accept_held=True` is only legal on a `continue`, and the webhook fires only on a terminal decision.
+
 A simulation of the re-run-after-every-pair procedure (`--effect-size` from 0.1 to 5 standard deviations, 100,000 runs each, up to 1000 rows per arm) gives a worst false-positive rate of 0.033 at `--alpha 0.05` and 0.0066 at `--alpha 0.01`. The burn-in design this replaced (#1227) sat at 0.051 and 0.011. Against a true difference of exactly `--effect-size`, the test finds it with probability above 0.99 at `--alpha 0.05` or below when `--effect-size` is at least 0.3 standard deviations (1000 rows per arm; 0.984 at `--alpha 0.1`). There are two costs. When `--effect-size` is below about 0.2 standard deviations, 1000 rows are too few for either design to be reliable, and this one detects less often (0.31 against 0.45 at 0.1 standard deviations, `--alpha 0.05`). And when there is no difference, reaching `accept_h0` takes longer than under the burn-in design at small effect sizes. Mean pairs at stop when the two arms are the same, `--alpha 0.05`, runs of up to 1000 rows per arm, by `--effect-size` in standard deviations:
 
 | `--effect-size` / sd | 0.2 | 0.3 | 0.4 | 0.5 | 0.7 | 1 | 1.5 | 2 | 5 |
@@ -344,6 +358,12 @@ soup diagnose my-run-id --base-model HuggingFaceTB/SmolLM2-135M --allow-not-run
 soup diagnose my-run-id --output diag.json --attach-to-registry abc123
 ```
 
+**Registry attach.** `--attach-to-registry <id>` links the `--output` file to that entry as a
+`diagnose_report` artifact; `<id>` is an entry id, a unique id prefix, `name:tag` or
+`registry://<id>`. A requested attach is part of the command's success: `soup diagnose` exits 1
+when it fails (unknown or ambiguous entry, unreadable registry), with the report left on disk,
+and exits 3 before anything runs when the flag is given without `--output`.
+
 **Live runners (v0.71.7).** With `--base-model` the six probes run against the loaded model
 (+ optional `--adapter` LoRA path, `--dataset` for format / memorization / citation probes,
 `--holdout` for the forgetting probe using the first 12 usable rows and falling back to built-in general prompts if unset,
@@ -355,7 +375,7 @@ so its 64-token live generation limit does not dilute the overlap score for long
 Without `--tokenizer`, it compares adjacent normalized words after ignoring stopwords and words of
 two letters or fewer; with `--tokenizer`, it compares adjacent sub-word tokens. This replaces the
 earlier set-Jaccard threshold semantics, so saved memorization results from older releases are not
-directly comparable.
+directly comparable. Unspaced scripts (like Lao, Khmer, Myanmar, and halfwidth katakana) are scored per character pair, like Thai. Symbol-only answers are compared by their symbols. Rows whose suffix has no tokens, such as whitespace-only or only stopwords, are skipped and counted as `skipped_no_tokens` in the evidence.
 
 **Seven failure-mode probes:**
 
@@ -371,7 +391,9 @@ directly comparable.
 
 **Verdict pill colours:** OK (≥ 0.85) green / MINOR (≥ 0.60) amber / MAJOR (< 0.60) red. `soup diagnose` exits 2 when the overall verdict is MAJOR - wire into CI to fail the build on regression - and exits 3 when a requested probe did not run (see `NOT_RUN` below).
 
-**`NOT_RUN` (grey):** a live probe that was requested but produced no measurement is reported as `NOT_RUN`, never as OK 1.00. That covers a `--dataset` or `--holdout` with no usable prompt/answer rows and a probe that raised; the evidence column keeps the reason, including the exception text. `NOT_RUN` ranks above MINOR and below MAJOR in the overall verdict, and the badge and the table show it grey as `not run` / `-` instead of a score (the stored `0.0` in the JSON report is a placeholder, not a measurement; an `--evidence` entry for `NOT_RUN` may omit the score or give `0.0`). `soup diagnose` exits 3 when the overall verdict is `NOT_RUN`; pass `--allow-not-run` to keep exit 0 for runs that knowingly skip probes. MAJOR still exits 2. Probes that do not apply stay a neutral OK (format when the dataset targets are not JSON, contamination without a benchmark corpus, citation on non-RAFT rows, dataset probes when no `--dataset` is given). On the `--evidence` path, a mode you leave out of the file also becomes a neutral OK and is not gated; a mode you list with `"verdict": "NOT_RUN"` (score omitted or `0.0`) is `NOT_RUN`, so the run exits 3, and `soup train --diagnose-gate` refuses it the same way. A bad `--tokenizer` is an input error (exit 3) raised before any model loads. For `--dataset` and `--holdout`, the live probes currently read rows with a prompt key (`prompt`, `instruction`, `input`, `question` or `query`) plus an answer key (`response`, `completion`, `output`, `answer`, `chosen` or `text`), or a `messages` list; other shapes (ShareGPT `conversations`, LLaVA, plaintext) make the corresponding probes `NOT_RUN`. Memorization additionally needs a `text`, `content`, `prompt`, `instruction` or `messages` field, and is `NOT_RUN` when none of the first rows has one.
+**`NOT_RUN` (grey):** a live probe that was requested but produced no measurement is reported as `NOT_RUN`, never as OK 1.00. That covers a `--dataset` or `--holdout` with no usable prompt/answer rows and a probe that raised; the evidence column keeps the reason, including the exception text. `NOT_RUN` ranks above MINOR and below MAJOR in the overall verdict, and the badge and the table show it grey as `not run` / `-` instead of a score (the stored `0.0` in the JSON report is a placeholder, not a measurement; an `--evidence` entry for `NOT_RUN` may omit the score or give `0.0`). `soup diagnose` exits 3 when the overall verdict is `NOT_RUN`; pass `--allow-not-run` to keep exit 0 for runs that knowingly skip probes. MAJOR still exits 2. Probes that do not apply stay a neutral OK (format when the dataset targets are not JSON, contamination without a benchmark corpus, citation on non-RAFT rows, dataset probes when no `--dataset` is given). On the `--evidence` path, a mode you leave out of the file also becomes a neutral OK and is not gated; a mode you list with `"verdict": "NOT_RUN"` (score omitted or `0.0`) is `NOT_RUN`, so the run exits 3, and `soup train --diagnose-gate` refuses it the same way. A bad `--tokenizer` is an input error (exit 3) raised before any model loads.
+
+**Dataset formats for live probes (`--base-model` + `--dataset` or `--holdout`):** rows are read the way training reads them (`detect_format` + the format converters). ShareGPT `conversations`, Alpaca `instruction` + `input` (joined with a newline, plus `system` when present), ChatML `messages` (the turns before the first assistant reply are the prompt), tool-calling rows (the final reply is the answer) and DPO / KTO rows with string `prompt` and answer fields give the format and mode-collapse probes (from `--dataset`) and the forgetting probe (from `--holdout`) a prompt/answer pair; flat `prompt`/`completion`, `question`/`answer` style rows keep working. Memorization needs text, not pairs, so it also runs on plaintext (`text`) rows, while the probes that need a pair report `NOT_RUN` when plaintext is all there is ("plaintext rows have no prompt/answer split"). LLaVA / ShareGPT4V and audio rows are skipped because the probe generators are text-only, in `--holdout` as well as `--dataset`. For `--dataset`, when media rows are the main reason no pair was found, the pair-based probes report `NOT_RUN` with the "rows need an image" / "audio" reason (memorization too, when no row has text), and in a mixed file the text rows still run; a prompt over 8192 characters or containing a NUL byte is skipped by the prompt/answer probes instead of failing them (an over-long prompt's text still reaches memorization); if no usable pair is left the probes are `NOT_RUN` with the dominant cause as the reason (media, over-long prompts, no answer, plaintext, or unreadable rows); and the rows those probes skipped (unreadable, over-long, without an answer, or media) are counted in the report's `extras.rows_skipped` and printed as `Rows skipped: ...`. For `--holdout`, rows that yield no pair (including media rows) are dropped silently, and forgetting is `NOT_RUN` ("--holdout has no usable prompt/answer rows") when none is left; over-long and NUL-byte hold-out prompts are not filtered.
 
 **Post-training gate:** `soup train --diagnose-gate <evidence.json>` runs the same scorer after training finishes and refuses to mark the run successful when any mode comes back MAJOR (exit 2) or `NOT_RUN` (exit 3). Composes with `--gate <eval-suite>` (v0.26) — the eval gate catches accuracy regressions vs a baseline; the diagnose gate catches behaviour regressions the eval suite is blind to.
 
@@ -729,6 +751,12 @@ soup eval leaderboard --format csv
 soup eval human --input prompts.jsonl --model-a ./model_a --model-b ./model_b
 ```
 
+`soup eval benchmark` saves only requested names with numeric metrics, including a real
+`0.0` (not a boolean). Missing or scoreless results are skipped, named and counted;
+the saved banner reports the saved count. It exits `0` when at least one result was
+saved, or `1` when nothing was measured or saved. A requested group needs its own
+numeric entry in `results`; this command does not save its sub-task rows automatically.
+
 `soup eval judge` asks the judge for one JSON object, `{"scores": {"<criterion>": <number>, ...}, "reasoning": "..."}`, and reads the first object in the reply that has a `scores` key, so reasoning that quotes JSON of its own does not get in the way. Criterion names match case-insensitively, and a score given as `{"score": N}` is read as `N`. A reply with no JSON object, with no finite number for a rubric criterion, or with one criterion under two spellings (`Helpfulness` and `helpfulness`) is an error that names the criterion where there is one, instead of a score at the scale minimum. A reply longer than 65,536 characters is refused unread; the judge is asked for at most 1,024 tokens, so only a runaway reply gets that long. `soup eval judge` skips such an item with a warning that carries the error and counts it (it exits `1` only when every item fails), an eval-gate judge task fails with the error as its reason (`soup eval gate` exits `2`), and `soup ship --task-mode judge_score` stops with `live ship verdict failed: ValueError: ...` and exits `1` without a verdict.
 
 soup eval compare and soup eval leaderboard use the newest eval row for each benchmark (on the leaderboard, for each model and benchmark), so re-running a benchmark replaces its score; rows with the same created_at resolve to the later insert. soup registry diff compares eval scores the same way.
@@ -857,6 +885,9 @@ baseline scorer stamp covers the bundled suites only and will not warn: re-measu
 baselines, or compare new runs only with runs made on this version.
 
 ### Auto-Eval Config (soup.yaml)
+
+Benchmarks need the `eval` extra:
+
 ```bash
 pip install "soup-cli[eval]"
 ```
@@ -873,10 +904,10 @@ eval:
 
 When `eval.auto_eval: true`, Soup runs the configured evaluation once after `soup train` finishes and the trained model/adapter has been saved. The evaluation uses the output artifact produced by that training run.
 
-- `benchmarks` runs the configured `lm-eval-harness` benchmarks. Install the benchmark dependencies required by your environment before enabling them.
+- `benchmarks` runs the configured `lm-eval-harness` benchmarks. Install the `soup-cli[eval]` extra above before enabling them.
 - `custom_tasks` runs the configured custom evaluation tasks against the trained model.
 - `judge` is not part of auto-evaluation; configure and run judge evaluation separately.
-- Auto-evaluation keeps `trust_remote_code` disabled.
+- Auto-evaluation follows the run's `--trust-remote-code` flag: `soup train --trust-remote-code` passes it to the evaluation of the trained model (benchmarks and custom tasks); without the flag it stays off. There is no `soup.yaml` key for it.
 - If auto-evaluation fails, Soup reports the failure but does not fail an otherwise successful training run.
 - Auto-evaluation can take a significant amount of time. For example, MMLU evaluates multiple subtasks.
 

@@ -81,16 +81,22 @@ class TestGRPOFP16:
         assert cfg.training.grpo_fp16 is True
         assert cfg.training.auto_mixed_precision is False
 
-    def test_amp_alone_passes(self) -> None:
-        cfg = load_config_from_string(_minimal_grpo_yaml(
+    def test_amp_alone_is_refused_on_grpo(self) -> None:
+        """#1618 — the GRPO trainer never reads auto_mixed_precision, so a
+        GRPO config carrying the field alone is refused, not silently run at
+        the trainer's default precision."""
+        yml = _minimal_grpo_yaml(
             training={
                 "reward_fn": "accuracy",
                 "num_generations": 2,
                 "auto_mixed_precision": True,
             },
-        ))
-        assert cfg.training.grpo_fp16 is False
-        assert cfg.training.auto_mixed_precision is True
+        )
+        with pytest.raises((ValidationError, ValueError)) as exc:
+            load_config_from_string(yml)
+        msg = str(exc.value)
+        assert "auto_mixed_precision" in msg
+        assert "grpo" in msg
 
 
 class TestGRPOFP16Routing:

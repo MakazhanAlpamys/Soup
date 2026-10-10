@@ -626,6 +626,9 @@ async function loadTrainingPage() {
     ]);
     window._recipes = recipesResp.recipes || [];
     renderTrainingPage(templatesResp.templates, statusResp);
+    // A run started earlier (another tab, before a reload) is still streaming
+    // its log: open the panel for it unless this page is already following it.
+    if (statusResp.running && !trainingStreamOpen) connectTrainingSSE();
   } catch (err) {
     setHtml(document.getElementById('training-content'),
       html`<div class="empty-state"><div class="empty-state-text">Error: ${err.message}</div></div>`);
@@ -752,6 +755,9 @@ async function startTraining() {
     });
     setHtml(document.getElementById('config-status'),
       html`<span style="color:var(--accent)">Training started! PID: ${String(result.pid)}</span>`);
+    // Follow the log from here, not from the status refresh below: a run that
+    // exits at once reports "not running", and its output is the error to read.
+    connectTrainingSSE();
     // Refresh status
     loadTrainingPage();
   } catch (err) {
@@ -1001,21 +1007,35 @@ function handleChatKey(event) {
 let logEventSource = null;
 let metricsEventSource = null;
 const LOG_MAX_LINES = 500;
+// True from a connect until the stream ends, fails or is disconnected, so the
+// status refresh does not open a second stream next to the one just started.
+let trainingStreamOpen = false;
+// Bumped by every connect and disconnect: a connect that was waiting for its
+// ticket when a newer one began must not open its EventSource.
+let trainingStreamSeq = 0;
 
+// Opens the log panel and follows /api/train/logs. Called when a run is
+// started from this page and when the page loads while a run is in progress.
+// The progress card (#train-progress) stays hidden: no route reports a total
+// step count for the run this server started, so nothing could move its bar.
 async function connectTrainingSSE() {
   disconnectTrainingSSE();
 
   const logPanel = document.getElementById('train-log-panel');
-  const progressPanel = document.getElementById('train-progress');
   const liveBadge = document.getElementById('live-badge');
   if (!logPanel) return;
 
+  trainingStreamOpen = true;
+  const seq = trainingStreamSeq;
+  // The server replays the run's log from its first line on a new connection.
+  const output = document.getElementById('log-output');
+  if (output) output.textContent = '';
   logPanel.style.display = 'block';
-  progressPanel.style.display = 'block';
   if (liveBadge) liveBadge.style.display = 'inline-flex';
 
   let url = API + '/api/train/logs';
   const ticket = await getAuthTicket();
+  if (seq !== trainingStreamSeq) return;
   if (ticket) {
     url += '?ticket=' + encodeURIComponent(ticket);
   }
@@ -1040,6 +1060,8 @@ async function connectTrainingSSE() {
 }
 
 function disconnectTrainingSSE() {
+  trainingStreamOpen = false;
+  trainingStreamSeq += 1;
   if (logEventSource) { logEventSource.close(); logEventSource = null; }
   if (metricsEventSource) { metricsEventSource.close(); metricsEventSource = null; }
   const liveBadge = document.getElementById('live-badge');

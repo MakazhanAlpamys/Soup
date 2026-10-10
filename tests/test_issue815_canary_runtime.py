@@ -84,6 +84,7 @@ def test_five_percent_policy_routes_live_serve_requests(tmp_path, monkeypatch):
     canary_count = observed.count("candidate")
     assert 10 <= canary_count <= 30
     assert observed.count(None) == request_count - canary_count
+    client.app.state.canary_outcomes.close()
 
 
 def test_failing_live_canary_requests_reach_the_rollout_stats(tmp_path, monkeypatch):
@@ -140,6 +141,7 @@ def test_failing_live_canary_requests_reach_the_rollout_stats(tmp_path, monkeypa
 
     canary_count = observed.count("candidate")
     stable_count = observed.count(None)
+    client.app.state.canary_outcomes.close()
     stats = read_bucket_stats(
         stable="base",
         canary="candidate",
@@ -400,6 +402,7 @@ def test_keyed_stable_traffic_is_the_base_even_after_a_manual_cutover(
 
     assert "other" not in observed
     assert 0 < observed.count("candidate") < 100
+    client.app.state.canary_outcomes.close()
     stats = read_bucket_stats(
         stable="base", canary="candidate", rollout_id="rollout-cutover", path=str(stats_path)
     )
@@ -430,6 +433,7 @@ def test_failing_live_canary_stream_requests_reach_the_rollout_stats(
         assert response.status_code == 200
 
     canary_count = observed.count("candidate")
+    client.app.state.canary_outcomes.close()
     stats = read_bucket_stats(
         stable="base", canary="candidate", rollout_id="rollout-stream", path=str(stats_path)
     )

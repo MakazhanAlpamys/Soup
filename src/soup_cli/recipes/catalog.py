@@ -2128,7 +2128,7 @@ output: ./output
         size="135M",
         tags=("smollm", "smollm2", "online_dpo", "judge", "rlhf", "tiny", "edge"),
         description="SmolLM2 135M Online DPO — on-policy generation judged by a "
-        "pairwise LLM judge (point --online-dpo-judge at a local ollama model)",
+        "pairwise LLM judge (point training.online_dpo_judge at a local ollama model)",
         yaml_str="""\
 base: HuggingFaceTB/SmolLM2-135M-Instruct
 task: online_dpo

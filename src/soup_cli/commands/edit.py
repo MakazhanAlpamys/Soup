@@ -7,12 +7,16 @@
 
 from __future__ import annotations
 
+import os
+import re
 from typing import Optional
 
 import typer
 from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
+
+from soup_cli.utils.terminal import for_terminal
 
 console = Console()
 
@@ -170,7 +174,11 @@ def set_edit(
     ),
     registry_id: Optional[str] = typer.Option(
         None, "--registry-id",
-        help="Optional Registry entry id to attach the edited model as a child.",
+        help=(
+            "Registry entry id to attach the saved result to (needs --output): "
+            "the weight file(s) as edited_model, or the GRACE codebook as "
+            "grace_codebook. Exits 1 when the attach fails."
+        ),
     ),
 ) -> None:
     """Apply a single surgical knowledge edit."""
@@ -187,6 +195,13 @@ def set_edit(
             raise typer.Exit(2)
         if len(registry_id) > 256:
             console.print("[red]Invalid --registry-id:[/] >256 chars")
+            raise typer.Exit(2)
+        # The attach links what --output saves, so without one nothing can be
+        # attached: say so before the model is loaded.
+        if output is None:
+            console.print(
+                "[red]--registry-id needs --output[/] (nothing saved to attach)."
+            )
             raise typer.Exit(2)
 
     try:
@@ -306,20 +321,56 @@ def set_edit(
         )
     )
 
-    if registry_id is not None and result.output_dir is not None:
+    if registry_id is not None:
+        assert result.output_dir is not None  # narrowed by the early arg-check
+        _attach_result(registry_id, result.output_dir, result.method)
+
+
+# What ``save_pretrained`` names the weights: one file, or numbered shards.
+_WEIGHT_FILE_RE = re.compile(
+    r"^(?:model(?:-\d+-of-\d+)?\.safetensors|pytorch_model(?:-\d+-of-\d+)?\.bin)$"
+)
+
+
+def _result_files(output_dir: str, method: str) -> tuple[str, list[str]]:
+    """The registry kind and the saved file(s) that make up an edit's result.
+
+    The registry stores one hashed file per artifact and refuses a directory,
+    so an edited model is recorded as its weight file(s) and a GRACE edit as
+    its codebook JSON.
+    """
+    if method == "grace":
+        from soup_cli.utils.grace_codebook import codebook_path
+
+        return "grace_codebook", [codebook_path(output_dir)]
+    names = sorted(name for name in os.listdir(output_dir) if _WEIGHT_FILE_RE.match(name))
+    if not names:
+        raise FileNotFoundError(
+            f"no model weight file (model*.safetensors / pytorch_model*.bin) in {output_dir}"
+        )
+    return "edited_model", [os.path.join(output_dir, name) for name in names]
+
+
+def _attach_result(registry_id: str, output_dir: str, method: str) -> None:
+    """Attach the saved edit to a registry entry.
+
+    A requested attach is part of the command's success: when it does not
+    happen the command exits 1, with the edited model already on disk.
+    """
+    try:
         from soup_cli.registry.attach import attach_artifact
 
-        kind = "grace_codebook" if result.method == "grace" else "edited_model"
-        try:
-            attach_artifact(registry_id, path=result.output_dir, kind=kind)
-            console.print(
-                f"[green]Attached {kind} to Registry entry "
-                f"{escape(registry_id)}.[/]"
-            )
-        except (ValueError, FileNotFoundError) as exc:
-            console.print(
-                f"[yellow]Could not attach to Registry:[/] {escape(str(exc))}"
-            )
+        kind, paths = _result_files(output_dir, method)
+        for path in paths:
+            attach_artifact(registry_id, path=path, kind=kind)
+    except Exception as exc:  # noqa: BLE001
+        console.print(f"[red]Error:[/] could not attach to registry: {for_terminal(exc)}")
+        raise typer.Exit(1) from exc
+    for path in paths:
+        console.print(
+            f"[green]Attached[/] {kind} to registry entry "
+            f"[bold]{for_terminal(registry_id)}[/] [dim]({for_terminal(path)})[/]"
+        )
 
 
 @app.command(name="diff")

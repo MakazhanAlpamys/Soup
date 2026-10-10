@@ -37,6 +37,7 @@ Security:
 from __future__ import annotations
 
 import math
+import re
 from typing import TYPE_CHECKING, Any, Union
 
 if TYPE_CHECKING:  # pragma: no cover — type-only, keeps the module torch-free
@@ -369,10 +370,13 @@ def build_prm_reward_fn(
 ) -> PRMScorer:
     """Build the :class:`PRMScorer` for GRPO from a ``TrainingConfig``.
 
-    Validates local-path containment (realpath + commonpath under cwd) and
-    surfaces a ``trust_remote_code`` probe/warning, then returns the scorer.
-    A non-existent local path is treated as a Hugging Face repo id (loaded via
-    ``from_pretrained``); only *existing local paths* are containment-checked.
+    An existing local path is containment-checked (realpath + commonpath under
+    cwd) and used in place. Anything else that is shaped like a Hub repo id,
+    ``org/name`` or ``org/name@revision``, is downloaded to a local snapshot
+    first (#1466), so the tokenizer, the model and the reward head all load from
+    the same directory; a value that is neither is refused by name. The reward
+    head is read here, before any model loads, and the ``trust_remote_code``
+    probe/warning runs on the resolved directory.
     """
     import os
 
@@ -386,10 +390,10 @@ def build_prm_reward_fn(
     if prm_path is None:
         raise ValueError("build_prm_reward_fn called with prm_reward=None")
 
-    # Containment: only enforce for a path that exists on disk (a bare repo id
-    # with no local existence is handled by from_pretrained). Reuse the shared
-    # is_under_cwd helper (realpath + commonpath, Windows-safe) so future
-    # hardening applies here too (security-review LOW).
+    configured = prm_path
+    # An existing path wins over the repo-id shape (`checkpoints/prm` is a
+    # directory here before it is an org/name), and is containment-checked with
+    # the shared is_under_cwd helper (realpath + commonpath, Windows-safe).
     if os.path.exists(prm_path):
         if not is_under_cwd(prm_path):
             raise ValueError(
@@ -397,6 +401,24 @@ def build_prm_reward_fn(
                 f"directory; got {prm_path!r}"
             )
         prm_path = os.path.realpath(prm_path)
+    elif _HUB_ID_RE.fullmatch(prm_path):
+        # #1466: a Hub id used to pass here and die at the first reward call, because
+        # the head is read from a directory. Download it now, before training starts.
+        prm_path = _download_prm_snapshot(prm_path)
+    else:
+        raise ValueError(
+            f"prm_reward {prm_path!r} is neither an existing directory nor a Hub repo id "
+            "(org/name, optionally @revision)."
+        )
+    # Refuse a checkpoint without a reward head here, before the model loads (#1466).
+    # Named by the configured value: for a Hub id the snapshot path says nothing a
+    # user would recognise.
+    try:
+        load_reward_head_weights(prm_path)
+    except ValueError as exc:
+        if prm_path != configured:
+            raise ValueError(f"prm_reward {configured!r}: {exc}") from exc
+        raise
 
     resolved_trust = _resolve_trust(prm_path, trust_remote_code, console)
     # Announce that the PRM reward is active AND replaces the configured
@@ -404,7 +426,7 @@ def build_prm_reward_fn(
     # no signal those are being ignored (code-review MEDIUM/LOW). escape() the
     # path so a crafted config value cannot inject Rich markup (security MEDIUM).
     console.print(
-        f"[dim]Using PRM reward: prm_reward={escape(repr(prm_path))}, "
+        f"[dim]Using PRM reward: prm_reward={escape(repr(configured))}, "
         f"aggregate={escape(repr(tcfg.prm_aggregate))} "
         "(this replaces reward_fn/verifiable_domain).[/]"
     )
@@ -414,6 +436,39 @@ def build_prm_reward_fn(
         device=device,
         trust_remote_code=resolved_trust,
     )
+
+
+# `org/name`, optionally `@revision`. Each segment starts alphanumerically, so a relative
+# path such as ./my-prm or ../x is never mistaken for a repo id; ASCII only (`\w` would
+# admit non-ASCII letters, `$` a trailing newline); a git ref never contains `..`.
+_HUB_ID_RE = re.compile(
+    r"[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*(@(?!.*\.\.)[A-Za-z0-9_./-]+)?"
+)
+# Weights, tokenizer files, and the custom-code modules a trust_remote_code base needs
+# (inert unless the trust probe says to execute them); never *.bin / *.pt.
+_PRM_SNAPSHOT_PATTERNS = ("*.safetensors", "*.json", "*.txt", "*.model", "*.tiktoken", "*.py")
+
+
+def _download_prm_snapshot(spec: str) -> str:
+    """Local snapshot of a Hub PRM, ``org/name`` or ``org/name@revision``: weights and
+    tokenizer files only. Goes through ``utils.hubs.snapshot_download``, the wrapper
+    every download Soup starts itself uses (repo-id shape, revision and namespace-pin
+    checks, #186), with ``cache_dir=None`` for the Hub's own cache snapshot. A failure
+    is a refusal that names the configured value, not a traceback."""
+    from soup_cli.utils.hubs import snapshot_download
+
+    repo_id, _, revision = spec.partition("@")
+    try:
+        return snapshot_download(
+            repo_id,
+            cache_dir=None,
+            revision=revision or None,
+            allow_patterns=list(_PRM_SNAPSHOT_PATTERNS),
+        )
+    except Exception as exc:  # noqa: BLE001 - every Hub / network error is one refusal
+        raise ValueError(
+            f"prm_reward {spec!r}: could not download the PRM from the Hub ({exc})"
+        ) from exc
 
 
 def _resolve_trust(base: str, requested: bool, console: Any) -> bool:

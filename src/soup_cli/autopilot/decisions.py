@@ -242,7 +242,20 @@ def decide_quantization(
     don't silently stack a fresh BNB 4-bit on top of an already-quantized base.
     """
     if prequantized is not None:
-        return _validate_prequantized(prequantized)
+        canonical = _validate_prequantized(prequantized)
+        if canonical == "mxfp4":
+            from soup_cli.utils.hardware_fit import _BYTES_PER_PARAM_BY_QUANT
+
+            bytes_per_param = _BYTES_PER_PARAM_BY_QUANT.get("mxfp4", 2.0)
+            model_gb_dequant = model_params_b * bytes_per_param
+            if vram_gb < model_gb_dequant:
+                raise ValueError(
+                    f"Model too large for VRAM budget: {model_params_b}B model "
+                    f"in mxfp4 is dequantized on load and needs at least "
+                    f"{model_gb_dequant:.1f}GB in bf16, got {vram_gb:.1f}GB. "
+                    "Try a smaller model or increase --gpu-budget."
+                )
+        return canonical
 
     # Rough: 1 param byte each in 8bit, 0.5 in 4bit, 2 in fp16
     model_gb_fp16 = model_params_b * 2.0

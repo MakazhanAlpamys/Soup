@@ -5,7 +5,7 @@ Top-level CLI command (NOT a sub-group) — operators type:
     soup diagnose <run-id>
     soup diagnose <run-id> --output diagnose.json
     soup diagnose <run-id> --badge diagnose.svg
-    soup diagnose <run-id> --attach-to-registry <id>
+    soup diagnose <run-id> --output diagnose.json --attach-to-registry <id>
 
 Since v0.71.7 (#165) the six probe runners (forgetting / refusal / format /
 mode_collapse / memorization / contamination) run LIVE when ``--base-model``
@@ -104,6 +104,9 @@ def _render_report(report: FailureReport) -> None:
             title="overall",
         )
     )
+    skipped = report.extras.get("rows_skipped")
+    if skipped:
+        console.print(f"[dim]Rows skipped: {for_terminal(skipped)}[/]")
 
 
 def _load_evidence(path: str) -> dict:
@@ -197,25 +200,25 @@ def _write_badge(badge_path: str, svg: str) -> None:
 
 
 def _attach_to_registry(report: FailureReport, registry_id: str, output: str) -> None:
+    """Attach the written report to a registry entry as ``diagnose_report``.
+
+    A requested attach is part of the command's success: when it does not
+    happen the command exits 1, with the report already on disk.
+    """
     try:
         from soup_cli.registry.attach import attach_artifact
-    except Exception as exc:  # noqa: BLE001 — registry is optional
-        console.print(
-            f"[yellow]Warning:[/] could not import registry attach helper: "
-            f"{escape(type(exc).__name__)}"
-        )
-        return
-    try:
-        attach_artifact(registry_id, "diagnose_report", output)
-        console.print(
-            f"[green]Attached[/] diagnose_report to registry entry "
-            f"[bold]{for_terminal(registry_id)}[/]"
-        )
+
+        attach_artifact(registry_id, path=output, kind="diagnose_report")
     except Exception as exc:  # noqa: BLE001
         console.print(
-            f"[yellow]Warning:[/] could not attach to registry: "
+            f"[red]Error:[/] could not attach to registry: "
             f"{escape(type(exc).__name__)}: {for_terminal(exc)}"
         )
+        raise typer.Exit(code=1) from exc
+    console.print(
+        f"[green]Attached[/] diagnose_report to registry entry "
+        f"[bold]{for_terminal(registry_id)}[/]"
+    )
 
 
 def _emit_report(
@@ -251,12 +254,9 @@ def _emit_report(
             )
             raise typer.Exit(code=1) from exc
 
-    if attach_to_registry and output:
+    if attach_to_registry is not None:
+        assert output  # narrowed by the early arg-check in diagnose()
         _attach_to_registry(report, attach_to_registry, output)
-    elif attach_to_registry and not output:
-        console.print(
-            "[yellow]Warning:[/] --attach-to-registry needs --output (skipped)."
-        )
 
 
 def diagnose(
@@ -275,7 +275,12 @@ def diagnose(
         None, "--badge", help="Write an SVG badge to this path."
     ),
     attach_to_registry: Optional[str] = typer.Option(
-        None, "--attach-to-registry", help="Attach the report to a registry entry id."
+        None,
+        "--attach-to-registry",
+        help=(
+            "Attach the --output report to a registry entry id (needs --output). "
+            "Exits 1 when the attach fails."
+        ),
     ),
     base_model: Optional[str] = typer.Option(
         None,
@@ -354,6 +359,15 @@ def diagnose(
             f"[red]Invalid --citation-style:[/] {for_terminal(exc)}"
         )
         raise typer.Exit(code=2) from exc
+
+    # The attach links the --output file, so without one nothing can be
+    # attached: say so before a live run loads a model.
+    if attach_to_registry is not None and not output:
+        console.print(
+            "[red]Error:[/] --attach-to-registry needs --output "
+            "(nothing written to attach)."
+        )
+        raise typer.Exit(code=EXIT_USAGE_ERROR)
 
     if base_model is not None:
         from soup_cli.utils.diagnose import _common

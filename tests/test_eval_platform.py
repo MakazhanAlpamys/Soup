@@ -1106,6 +1106,34 @@ class TestAutoEvalAfterTraining:
         assert custom.call_args.kwargs["model"] == "/tmp/saved-adapter"
         assert custom.call_args.kwargs["tasks"] == "tasks.jsonl"
 
+    def test_a_benchmark_that_exits_is_reported_as_skipped(self, capsys):
+        import typer
+
+        from soup_cli.commands.train import _run_auto_eval_after_training
+        from soup_cli.config.schema import EvalConfig
+
+        with patch("soup_cli.commands.eval.benchmark", side_effect=typer.Exit(1)):
+            _run_auto_eval_after_training(
+                EvalConfig(auto_eval=True, benchmarks=["mmlu"]), "out", "run-1"
+            )
+        out = " ".join(_strip_ansi(capsys.readouterr().out).split())
+        assert "Auto-eval benchmark skipped" in out
+        assert "Auto-eval benchmark failed" not in out
+
+    def test_a_custom_eval_that_exits_is_reported_as_skipped(self, capsys):
+        import typer
+
+        from soup_cli.commands.train import _run_auto_eval_after_training
+        from soup_cli.config.schema import EvalConfig
+
+        with patch("soup_cli.commands.eval.custom", side_effect=typer.Exit(1)):
+            _run_auto_eval_after_training(
+                EvalConfig(auto_eval=True, custom_tasks="tasks.jsonl"), "out", "run-1"
+            )
+        out = " ".join(_strip_ansi(capsys.readouterr().out).split())
+        assert "Auto-eval custom skipped" in out
+        assert "Auto-eval custom failed" not in out
+
     def test_auto_eval_runs_on_the_adapter_this_run_saved(
         self, tmp_path, monkeypatch
     ):

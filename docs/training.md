@@ -7,7 +7,10 @@
 > **Training a model bigger than your GPU?** `training.stream_layers: true` streams the
 > frozen base from CPU RAM (with NVMe disk overflow) one decoder layer at a time, so peak
 > VRAM is bounded by one layer instead of the whole model. Add `quantization: 4bit` and an
-> 8B base fits a 4 GB card. Works for `sft` and, from v0.72.4, for `dpo` / `orpo` /
+> 8B base fits a 4 GB card at batch 1 and 512 tokens per step; on a 128k-vocabulary model
+> every further 512 tokens costs about 1 GB more (see
+> [Sizing a streaming run](performance-and-quantization.md#sizing-a-streaming-run-v0723)).
+> Works for `sft` and, from v0.72.4, for `dpo` / `orpo` /
 > `simpo` / `kto` — DPO's reference model is the same streamed base with its adapters
 > switched off, so it needs no second copy of the model (on an untied checkpoint `dpo` and
 > `kto` still hold one copy of the output head per step) — see
@@ -92,12 +95,18 @@ they do not evaluate by default, and they do not withhold rows either:
 `data.val_split` is ignored, every row trains, and the run prints a one-line note
 saying so. On `grpo`, set `training.eval_steps` to hold the split out and
 evaluate it; TRL generates completions for the held-out prompts and logs
-`eval_loss` with the evaluation rewards. On `grpo` that `eval_loss` (the Val
-loss row and the tracker's `val_loss`) is TRL's policy objective on the
-held-out completions, not a likelihood: advantages are normalised within each
-group, so it stays near zero, can be negative, and does not measure held-out
-quality. The held-out reward is `eval_reward`, in the `log_history` of each
-checkpoint's `trainer_state.json`. TRL needs whole groups of
+`eval_loss` with the evaluation rewards. On `grpo` the run's validation number
+is the held-out reward, `eval_reward` (the mean reward over the held-out
+completions, higher is better): the live panel shows it as `Val reward`, the
+tracker stores it in the `val_reward` column of the metrics table, and the
+training event stream carries it as `val_reward` (#1389). TRL's `eval_loss` on
+`grpo` is its policy objective at importance ratio 1, not a likelihood:
+advantages are normalised within each group, so it stays near zero, can be
+negative, and does not measure held-out quality. It is not recorded or shown as
+a loss: a `grpo` run's `val_loss` series is empty, and `Val loss` does not
+appear. The per-task choice lives in `VALIDATION_METRICS` in
+`utils/eval_schedule.py`; every other task records `eval_loss` as `val_loss`.
+TRL needs whole groups of
 `num_generations` completions in an evaluation batch, so `grpo` evaluates at the
 largest multiple of `num_generations` that fits in the train batch, and says so
 when that differs from the train batch. The evaluation's rewards never reach the
@@ -502,6 +511,22 @@ whitespace tokens to the active tokenizer's integer ids. This catches subword
 repetition that punctuation-heavy decoded text can hide, but the score becomes
 tokenizer-specific rather than vocabulary-agnostic.
 
+The `info_rm` detector stays silent on any step whose median split leaves
+either half constant — a two-valued reward (e.g. `reward_fn: accuracy`'s 0/1)
+always does, and so does a continuous reward where half the batch lands on
+the same value (e.g. rewards clipped at 0). The separation index there would
+measure the success rate rather than reward-model health, so the step casts
+no vote: no baseline is recorded and nothing halts or mutates β (one warning
+is logged per run). The single exception: once a baseline exists, a step
+where *every* reward is identical still votes 0.0 — a 0/1 run never records
+a baseline and stays silent, while a genuinely collapsed continuous reward
+reads HACK as before. For two-valued rewards use
+`reward_hack_detector: rm_ensemble` or the length/repetition signals instead.
+**Changed:** before this version a constant-half split could record an
+inflated separation (~3×10⁴ at a 50% first step) as the baseline and classify
+later, healthier steps as HACK — detector logs and `mitigation_log.jsonl`
+files from runs before this version are not comparable.
+
 ### Closed-loop reward-hacking auto-mitigation (v0.71.26)
 
 The detectors above *halt*; `training.reward_hack_mitigation` (or the `--reward-hack-mitigation` flag) makes the trainer *self-correct* mid-run. It requires `reward_hack_detector` on a `grpo` transformers run, and has four modes:
@@ -852,7 +877,10 @@ weights would round most updates away at these learning rates (#1235).
 
 Use a trained PRM as the **per-step reward** inside GRPO — the o1-era
 process-supervision signal. Set `training.prm_reward` to a PRM directory (a
-`task=prm` checkpoint) or HF id; the PRM splits each generated completion into
+`task=prm` checkpoint) or a Hub id, `org/name` or `org/name@revision`; a Hub id is
+downloaded (weights, tokenizer and custom-code files) when the reward is built,
+before training, and a repo that is not a Soup-trained PRM (no reward head) is
+refused there, naming the configured value (#1466). The PRM splits each generated completion into
 reasoning steps (newline heuristic), scores every step with its reward head, and
 folds the per-step scores into one scalar reward that GRPO optimises. It
 **replaces** `reward_fn` and rides the existing reward-shaping +
@@ -1060,8 +1088,11 @@ A relative `image` path resolves against `data.image_dir`, or against the data f
 directory when it is unset. A Hub dataset or a remote URI has no data file directory, so set
 `data.image_dir` when its rows hold image paths; see
 [Data Pipeline Pro](data.md#data-pipeline-pro).
+Decoded in-memory PIL images (such as from a Hugging Face Hub `Image()` column) and Parquet
+image structs (`{"bytes": ..., "path": ...}`) written by `datasets` are also accepted; a struct's
+`path` follows the same directory resolution and path containment rules as a plain path string.
 
-`soup data inspect` automatically shows image statistics (count, formats, missing files) for vision datasets.
+`soup data inspect` resolves image paths the same way, or uses `--image-dir` when provided, and automatically shows image statistics (count, formats, missing files) for vision datasets.
 
 
 ## Audio / Speech Fine-tuning
@@ -1235,6 +1266,13 @@ training:
   quantization: 4bit
 ```
 
+A base published as a vision-language wrapper (MiniMax-M3, `model_type: minimax_m3_vl`) is not
+registered under `AutoModelForCausalLM`, so a plain DPO config cannot load it. Set `modality: vision`
+and DPO loads it the way SFT's vision path does, through `AutoModelForImageTextToText` with the
+model's processor, and trains the language tower; the LoRA targets resolve to that tower as before.
+Preference rows carry no images, and `soup recipes verify` builds the same class the trainer loads.
+`backend: unsloth` does not read `modality` for DPO and is refused at config load for it (#1393).
+
 
 ## Preference Variety — BCO + Unified Dispatcher + KL Variants
 
@@ -1286,7 +1324,18 @@ training:
   dpo_beta_end: 0.01
 ```
 
-Gated to DPO-family tasks (`dpo`, `ipo`, or `preference` with `preference_loss in {dpo, ipo}`); transformers backend only. `dpo_ref_regen_epochs` is refused at config load: it never regenerated the reference. With LoRA there is no separate reference model to copy into, and the DPO-family trainers cannot run with `lora.r: 0`. The wiring is tracked in [#1345](https://github.com/MakazhanAlpamys/Soup/issues/1345).
+Gated to DPO-family tasks (`dpo`, `ipo`, or `preference` with `preference_loss in {dpo, ipo}`); transformers backend only.
+
+Periodically sync the frozen reference model with the active student using `dpo_ref_regen_epochs`:
+
+```yaml
+training:
+  epochs: 4
+  dpo_beta: 0.1
+  dpo_ref_regen_epochs: 2  # copies .default. adapter weights into .ref. every 2 epochs
+```
+
+With LoRA, TRL creates a frozen `.ref.` adapter on the model. On every Nth epoch (1-indexed, skipping epoch 0), parameters from the active `.default.` adapter are copied into the frozen `.ref.` adapter under `torch.no_grad()`. Requires LoRA (`lora.r >= 1`); full fine-tuning (`lora.r: 0`) is refused at config load (#1345).
 
 ### Multi-objective preference loss
 
@@ -1900,7 +1949,9 @@ training:
 
 Operator-supplied `data.new_special_tokens` are registered (deduplicated, only
 tokens not already in the vocab) and the embedding matrix is resized through the
-(possibly PEFT-wrapped) model so the codec-token ids have rows. Orpheus + Oute
+(possibly PEFT-wrapped) model so the codec-token ids have rows. That happens on
+`backend: transformers` only: the unsloth setup has no step that adds tokens, so
+`backend: unsloth` with `new_special_tokens` is refused at load (#1358). Orpheus + Oute
 support emotion conditioning via `training.tts_emotion` from a per-family
 allowlist (Orpheus: neutral / happy / sad / angry / excited / calm / whisper /
 laugh; Oute: neutral / happy / sad / angry / calm / excited) — the wrapper

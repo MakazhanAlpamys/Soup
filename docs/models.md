@@ -162,6 +162,6 @@ spelling is unchanged. See [the README's install section](../README.md#1-install
 | `remote` | `pip install "soup-cli[remote]"` | Remote datasets (s3 / gs / az / oci) |
 | `dev` | `pip install "soup-cli[dev]"` | Tests + lint + types (pytest, ruff, mypy, pre-commit) |
 
-**`[awq]` and `[gptq]` cannot be installed alongside `[train]`.** AWQ export was measured working only with `transformers` 4.52.4 or older, while `[train]` requires `transformers>=5.16.1`; `auto-gptq` publishes no Python 3.12 wheel; and both upstream projects (AutoAWQ and AutoGPTQ) are archived. Run AWQ or GPTQ export from a separate environment. Whether these two export formats stay is tracked in [#338](https://github.com/MakazhanAlpamys/Soup/issues/338).
+**`[awq]` and `[gptq]` cannot be installed alongside `[train]`.** AWQ export was measured working only with `transformers` 4.52.4 or older, while `[train]` requires `transformers>=5.16.1`; `auto-gptq` publishes no Python 3.12 wheel; and both upstream projects (AutoAWQ and AutoGPTQ) are archived. Run AWQ or GPTQ export from a separate environment. Both export formats are deprecated and will be removed in the next release ([#338](https://github.com/MakazhanAlpamys/Soup/issues/338)); until then `soup export --format awq` and `--format gptq` start with a notice that names the formats to move to (`gguf`, `onnx`, `tensorrt`, `bitnet`, `tq1_0`).
 
 The complete, authoritative extras list is in [`pyproject.toml`](../pyproject.toml).

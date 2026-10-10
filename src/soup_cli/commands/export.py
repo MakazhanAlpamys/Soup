@@ -28,10 +28,40 @@ SUPPORTED_FORMATS = (
     # v0.53.1 #139 — UD/IQ/Apple-ARM GGUFs via llama.cpp imatrix.
     "gguf-ud",
 )
+# #338 — AWQ and GPTQ export are deprecated: both upstream projects are archived
+# and neither extra installs next to the train extra. The two formats still run
+# for one more release; the notice names the formats to move to. Maps the format
+# to the upstream project the notice names.
+DEPRECATED_FORMATS = {"awq": "AutoAWQ", "gptq": "AutoGPTQ"}
+REPLACEMENT_FORMATS = ("gguf", "onnx", "tensorrt", "bitnet", "tq1_0")
 GGUF_QUANT_TYPES = ("q4_0", "q4_k_m", "q5_k_m", "q8_0", "f16", "f32")
 LLAMA_CPP_DIR_NAME = "llama.cpp"
 # Pin to a known release tag for supply-chain safety
 LLAMA_CPP_TAG = "b5270"
+
+
+def deprecated_format_notice(fmt: str) -> Optional[str]:
+    """The deprecation line for an export format, or ``None`` when it stays.
+
+    Plain text with no console markup: ``soup export`` and ``soup quantize``
+    both print it behind a ``Deprecated:`` label.
+    """
+    upstream = DEPRECATED_FORMATS.get(fmt)
+    if upstream is None:
+        return None
+    replacements = ", ".join(REPLACEMENT_FORMATS[:-1]) + f" or {REPLACEMENT_FORMATS[-1]}"
+    return (
+        f"--format {fmt} is deprecated and will be removed in the next release: "
+        f"{upstream} is archived upstream and the {fmt} extra cannot be installed "
+        f"next to the train extra. Use --format {replacements} instead."
+    )
+
+
+def _warn_deprecated_format(fmt: str) -> None:
+    """Print the deprecation notice for ``fmt``, if it has one."""
+    notice = deprecated_format_notice(fmt)
+    if notice is not None:
+        console.print(f"[yellow]Deprecated:[/] {notice}")
 
 
 def export(
@@ -45,7 +75,10 @@ def export(
         "gguf",
         "--format",
         "-f",
-        help="Export format: gguf, onnx, tensorrt, awq, gptq, bitnet, tq1_0",
+        help=(
+            "Export format: gguf, onnx, tensorrt, awq, gptq, bitnet, tq1_0 "
+            "(awq and gptq are deprecated and will be removed in the next release)"
+        ),
     ),
     quant: str = typer.Option(
         "q4_k_m",
@@ -173,42 +206,84 @@ def export(
         )
         raise typer.Exit(1)
 
+    model_name = Path(model).name
+
+    # --- Deploy target validation ---
+    if deploy:
+        if fmt not in ("gguf", "gguf-ud", "bitnet", "tq1_0"):
+            console.print(
+                f"[red]--deploy is not supported for format '{fmt}'. "
+                "Supported formats for deploy: gguf, gguf-ud, bitnet, tq1_0[/]"
+            )
+            raise typer.Exit(1)
+        if deploy != "ollama":
+            console.print(
+                f"[red]Unsupported deploy target: {deploy}[/]\n"
+                "Supported: ollama"
+            )
+            raise typer.Exit(1)
+
     # --- ONNX export path ---
     if fmt == "onnx":
-        _export_onnx(model_path, output, base, onnx_task, trust_remote_code)
+        output_path = _export_onnx(model_path, output, base, onnx_task, trust_remote_code)
+        if output_path is not None:
+            _maybe_attach_export(
+                artifact_path=str(output_path), kind="onnx",
+                explicit_id=registry_id, source_model=str(Path(model)),
+            )
         return
 
     # --- TensorRT-LLM export path ---
     if fmt == "tensorrt":
-        _export_tensorrt(model_path, output, base, trust_remote_code)
+        output_path = _export_tensorrt(model_path, output, base, trust_remote_code)
+        if output_path is not None:
+            _maybe_attach_export(
+                artifact_path=str(output_path), kind="tensorrt",
+                explicit_id=registry_id, source_model=str(Path(model)),
+            )
         return
 
     # --- AWQ export path ---
     if fmt == "awq":
-        _export_awq(
+        output_path = _export_awq(
             model_path, output, base, bits, group_size,
             calibration_data, calibration_samples, trust_remote_code,
         )
+        if output_path is not None:
+            _maybe_attach_export(
+                artifact_path=str(output_path), kind="awq",
+                explicit_id=registry_id, source_model=str(Path(model)),
+            )
         return
 
     # --- GPTQ export path ---
     if fmt == "gptq":
-        _export_gptq(
+        output_path = _export_gptq(
             model_path, output, base, bits, group_size,
             calibration_data, calibration_samples, trust_remote_code,
         )
+        if output_path is not None:
+            _maybe_attach_export(
+                artifact_path=str(output_path), kind="gptq",
+                explicit_id=registry_id, source_model=str(Path(model)),
+            )
         return
 
     # --- TorchAO PTQ export path (v0.53.1 #142) ---
     if fmt == "torchao":
-        _export_torchao_cli(
+        output_path = _export_torchao_cli(
             model_path, output, quant_config, trust_remote_code,
         )
+        if output_path is not None:
+            _maybe_attach_export(
+                artifact_path=str(output_path), kind="torchao",
+                explicit_id=registry_id, source_model=str(Path(model)),
+            )
         return
 
     # --- Advanced GGUF export path (UD / IQ / Apple-ARM, v0.53.1 #139) ---
     if fmt == "gguf-ud":
-        _export_gguf_advanced(
+        output_path = _export_gguf_advanced(
             model_path=model_path,
             output=output,
             base=base,
@@ -217,6 +292,13 @@ def export(
             llama_cpp_path=llama_cpp_path,
             trust_remote_code=trust_remote_code,
         )
+        if output_path is not None:
+            _maybe_attach_export(
+                artifact_path=str(output_path), kind="gguf",
+                explicit_id=registry_id, source_model=str(Path(model)),
+            )
+            if deploy:
+                _auto_deploy_ollama(output_path, model_name, deploy, deploy_name)
         return
 
     # --- BitNet 1.58-bit / TQ1_0 GGUF (v0.71.20 #134) ---
@@ -224,7 +306,7 @@ def export(
     # toolchain; the convert/quantize binaries surface a friendly
     # FileNotFoundError when absent (infra-blocked, mirrors gguf-ud).
     if fmt in ("bitnet", "tq1_0"):
-        _export_bitnet_gguf(
+        output_path = _export_bitnet_gguf(
             model_path=model_path,
             output=output,
             base=base,
@@ -232,6 +314,13 @@ def export(
             llama_cpp_path=llama_cpp_path,
             trust_remote_code=trust_remote_code,
         )
+        if output_path is not None:
+            _maybe_attach_export(
+                artifact_path=str(output_path), kind="gguf",
+                explicit_id=registry_id, source_model=str(Path(model)),
+            )
+            if deploy:
+                _auto_deploy_ollama(output_path, model_name, deploy, deploy_name)
         return
 
     if quant not in GGUF_QUANT_TYPES:
@@ -246,7 +335,6 @@ def export(
     # from mkdtemp AFTER an adapter was merged, and the cleanup then deleted
     # the merged model. Create the parent up front (what ``_run_convert``
     # already did for the f16 path) so no finished work is discarded.
-    model_name = Path(model).name
     if output:
         output_path = Path(output)
     else:
@@ -620,7 +708,7 @@ def _export_onnx(
     model_path: Path, output: Optional[str], base: Optional[str],
     task: str = "text-generation",
     trust_remote_code: bool = False,
-):
+) -> Optional[Path]:
     """Export model to ONNX format via optimum."""
     try:
         from optimum.exporters.onnx import main_export
@@ -691,6 +779,7 @@ def _export_onnx(
             title="[bold green]ONNX Export Complete![/]",
         )
     )
+    return output_path
 
 
 def _export_tensorrt(
@@ -698,7 +787,7 @@ def _export_tensorrt(
     output: Optional[str],
     base: Optional[str],
     trust_remote_code: bool = False,
-):
+) -> Optional[Path]:
     """Export model to TensorRT-LLM format."""
     # TensorRT-LLM uses trtllm-build CLI from the tensorrt_llm package
     trtllm_available = False
@@ -832,6 +921,7 @@ def _export_tensorrt(
             title="[bold green]TensorRT-LLM Export Complete![/]",
         )
     )
+    return output_path
 
 
 def _validate_output_path(output: Optional[str]) -> Optional[Path]:
@@ -926,8 +1016,10 @@ def _export_awq(
     calibration_data: Optional[str] = None,
     calibration_samples: int = 128,
     trust_remote_code: bool = False,
-) -> None:
+) -> Optional[Path]:
     """Export model to AWQ format via autoawq."""
+    # First, so it is there whatever stops the run (most stop at the extra).
+    _warn_deprecated_format("awq")
     # Validate bits
     valid_bits = {4, 8}
     if bits not in valid_bits:
@@ -1056,6 +1148,7 @@ def _export_awq(
             title="[bold green]AWQ Export Complete![/]",
         )
     )
+    return output_path
 
 
 def _export_gptq(
@@ -1067,8 +1160,10 @@ def _export_gptq(
     calibration_data: Optional[str] = None,
     calibration_samples: int = 128,
     trust_remote_code: bool = False,
-) -> None:
+) -> Optional[Path]:
     """Export model to GPTQ format via auto-gptq."""
+    # First, so it is there whatever stops the run (most stop at the extra).
+    _warn_deprecated_format("gptq")
     # Validate bits
     valid_bits = {4, 8}
     if bits not in valid_bits:
@@ -1205,6 +1300,7 @@ def _export_gptq(
             title="[bold green]GPTQ Export Complete![/]",
         )
     )
+    return output_path
 
 
 def _auto_deploy_ollama(
@@ -1293,16 +1389,39 @@ def _maybe_attach_export(
         entry_id = lookup_entry_by_output_dir(source_model)
     if entry_id is None:
         return
+
+    target = Path(artifact_path)
+    files_to_attach: list[Path] = []
+    if target.is_file():
+        files_to_attach = [target]
+    elif target.is_dir():
+        engine_dir = target / "engine"
+        if engine_dir.is_dir():
+            files_to_attach.extend(sorted(engine_dir.glob("*.engine")))
+
+        for ext in ("*.safetensors", "*.onnx", "*.onnx_data", "*.pt", "*.bin", "*.engine"):
+            for f in sorted(target.glob(ext)):
+                if f not in files_to_attach:
+                    files_to_attach.append(f)
+
+    if not files_to_attach:
+        files_to_attach = [target]
+
+    attached_names: list[str] = []
     try:
-        attach_artifact(entry_id, path=artifact_path, kind=kind)
+        for f in files_to_attach:
+            attach_artifact(entry_id, path=str(f), kind=kind)
+            attached_names.append(for_terminal(f.name))
     except (ValueError, FileNotFoundError) as exc:
         console.print(
             f"[yellow]Could not attach export to registry "
             f"'{entry_id}':[/] {exc}"
         )
         return
+
+    names_str = ", ".join(attached_names)
     console.print(
-        f"[green]Attached export to registry entry '{entry_id}' as {kind}.[/]"
+        f"[green]Attached export to registry entry '{entry_id}' as {kind} ({names_str}).[/]"
     )
 
 
@@ -1314,7 +1433,7 @@ def _export_torchao_cli(
     output: Optional[str],
     quant_config: Optional[str],
     trust_remote_code: bool,
-) -> None:
+) -> Optional[Path]:
     """Dispatch ``soup export --format torchao``.
 
     Per v0.53.0 ``validate_quant_config_path`` docstring contract:
@@ -1390,6 +1509,7 @@ def _export_torchao_cli(
         f"Scheme: [bold]{scheme}[/]",
         title="[bold green]TorchAO Export Complete[/]",
     ))
+    return output_path
 
 
 # --- v0.53.1 #139 — Advanced GGUF export CLI dispatch -----------------------
@@ -1403,7 +1523,7 @@ def _export_bitnet_gguf(
     export_format: str,
     llama_cpp_path: Optional[str],
     trust_remote_code: bool,
-) -> None:
+) -> Optional[Path]:
     """Dispatch ``soup export --format bitnet | tq1_0`` (v0.71.20 #134).
 
     Reuses the v0.53.1 gguf convert→quantize pipeline with the TQ1_0 ternary
@@ -1467,6 +1587,7 @@ def _export_bitnet_gguf(
         f"Format: [bold]{canonical}[/]",
         title="[bold green]BitNet GGUF Export Complete[/]",
     ))
+    return output_path
 
 
 def _export_gguf_advanced(
@@ -1478,7 +1599,7 @@ def _export_gguf_advanced(
     calibration_data: Optional[str],
     llama_cpp_path: Optional[str],
     trust_remote_code: bool,
-) -> None:
+) -> Optional[Path]:
     """Dispatch ``soup export --format gguf-ud --gguf-flavour <...>``.
 
     Routes through llama.cpp's ``imatrix`` + ``quantize`` binaries. Supports
@@ -1575,3 +1696,4 @@ def _export_gguf_advanced(
         f"Flavour: [bold]{gguf_flavour}[/]",
         title="[bold green]Advanced GGUF Export Complete[/]",
     ))
+    return output_path
