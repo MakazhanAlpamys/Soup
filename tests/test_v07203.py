@@ -296,7 +296,8 @@ class TestPeakVramReproducesTheMeasuredGrid:
     with ``torch.cuda.max_memory_allocated()``, which COUNTS the two 8,320 KiB
     cuBLAS workspaces a step holds (16.3 MB). The formula named no workspace, so
     that 16.3 MB sat inside ``STREAM_FIXED_SLACK_BYTES`` implicitly. #1407 names
-    it, which moves every row to +1.04%..+6.99% over-prediction.
+    it, which moves every row to +1.04%..+6.57% over-prediction (worst row
+    SmolLM2-135M B1 S256).
 
     So the accuracy claim is split in two rather than deleted: the <1% band is
     kept against the formula WITHOUT the term, and a second assertion pins the

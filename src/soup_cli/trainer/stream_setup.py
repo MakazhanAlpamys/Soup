@@ -1250,9 +1250,14 @@ class StreamingSetupMixin:
         #
         # getattr, not self.device: this mixin is also driven by harnesses that
         # call the budget path without a device, and a pre-flight must not raise
-        # on one (#348 drives it that way). Off-CUDA the probe returns 0 anyway,
-        # because there is no workspace without a device.
-        cublas_workspace = measure_cublas_workspace_bytes(getattr(self, "device", None))
+        # on one (#348 drives it that way). Gated on on_cuda rather than left to
+        # the probe, because a mixin with no `device` attribute passes None and
+        # torch.cuda.get_device_properties(None) reads the CURRENT card -- so a
+        # CPU run on a machine that merely HAS a card visible would be charged
+        # for a workspace it never allocates.
+        cublas_workspace = (
+            measure_cublas_workspace_bytes(getattr(self, "device", None)) if on_cuda else 0
+        )
         predicted = estimate_stream_peak_vram(
             layer_bytes=layer_bytes,
             buffers=tcfg.stream_buffers,

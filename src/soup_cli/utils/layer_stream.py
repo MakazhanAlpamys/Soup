@@ -305,9 +305,15 @@ def measure_cublas_workspace_bytes(
 ) -> int:
     """Workspace bytes a step on ``device`` holds, read live. (#1407)
 
-    Asks the card for its compute capability rather than mirroring PyTorch's rule
-    alone, so a card released after this was written is sized by the library instead
-    of by a table that has to be updated in step with it.
+    Asks the card for its compute capability, then sizes the workspace with the same
+    rule PyTorch's ``parseChosenWorkspaceSize`` uses. The capability is read from the
+    device because only the device knows it; the SIZE is still the mirrored table,
+    and a card whose major is not in it takes the below-Hopper default exactly as it
+    would inside PyTorch. Reading a major of 13 therefore does NOT mean "32 MiB
+    because it is newer" -- it means 8,320 KiB, which is what the library allocates
+    there too. Deliberately not widened to "unknown majors above 12 get 32 MiB": that
+    would over-charge relative to the allocator this estimate exists to predict, and
+    the table is the thing it is faithful to.
 
     **Zero without a CUDA device.** There is no cuBLAS workspace off-GPU, and a
     budget that charged one would refuse CPU runs over memory that does not exist.
@@ -1371,35 +1377,33 @@ def estimate_stream_peak_vram(
 
     ``cublas_workspace_bytes`` charges the cuBLAS workspaces a step holds, which the
     caching allocator counts and this formula therefore has to predict (#1407). It
-    defaults to ``None``, which resolves the charge for the device the process is
-    on, honouring ``CUBLAS_WORKSPACE_CONFIG``: 16.3 MB below Hopper, 64 MiB on
-    compute capability 9 and up. The default is deliberately not zero -- a caller
-    that forgets the argument would otherwise get the under-predicting formula this
-    issue is about. Pass ``0`` explicitly to charge no workspace.
+    defaults to ``0`` -- no workspace -- because the pre-flight is its only
+    production caller and that caller resolves the charge from the run's own device
+    and passes it. A default that probed the live card instead would charge a
+    workspace to any CPU-side caller on a machine that merely has a card visible:
+    ``torch.cuda.get_device_properties(None)`` reads the CURRENT card, so a caller
+    that names no device would be billed for memory it never allocates. Pass the
+    charge explicitly to include it; ``tests/test_issue1407_cublas_workspace.py``
+    pins both directions.
 
     SCOPE of the 0.85% / never-under-predicts claim (#1407). The GATE 2 grid was
     measured on an RTX 3050, compute capability 8.6, and those
     ``max_memory_allocated`` peaks already CONTAIN two 8,320 KiB workspaces, so
     naming the term double counts 16.3 MB there and moves every row of that grid to
-    +1.04%..+6.99% over-prediction. That is the safe direction for a gate that
-    refuses runs, and ``tests/test_v07203.py`` asserts that band explicitly rather
-    than pretending the term was free. What the grid never saw is a card that makes
-    the workspace larger: on compute capability 9 and up it is 32 MiB each, which
-    :data:`STREAM_FIXED_SLACK_BYTES` -- at 13,500,000 B, smaller than ONE such
-    workspace -- cannot have been paying for. Measured on an RTX 5070 (cc 12.0), a
-    DPO step was predicted at 13,934,816 B against a real 67,734,016 B peak.
+    +1.04%..+6.57% over-prediction (worst row SmolLM2-135M B1 S256). That is the safe
+    direction for a gate that refuses runs, and ``tests/test_v07203.py`` asserts that
+    band explicitly rather than pretending the term was free. What the grid never saw
+    is a card that makes the workspace larger: on compute capability 9 and up it is
+    32 MiB each, which :data:`STREAM_FIXED_SLACK_BYTES` -- at 13,500,000 B, smaller
+    than ONE such workspace -- cannot have been paying for. Measured on an RTX 5070
+    (cc 12.0), a DPO step was predicted at 13,934,816 B against a real 67,734,016 B
+    peak.
     """
     if cublas_workspace_bytes is not None and cublas_workspace_bytes < 0:
         raise ValueError(
             f"cublas_workspace_bytes must be non-negative; got {cublas_workspace_bytes}"
         )
-    # Resolved once, and only when the caller did not name a size: the default
-    # asks the live device, which is a probe that costs a CUDA initialisation.
-    workspace = (
-        measure_cublas_workspace_bytes()
-        if cublas_workspace_bytes is None
-        else cublas_workspace_bytes
-    )
+    workspace = 0 if cublas_workspace_bytes is None else cublas_workspace_bytes
     return (
         layer_bytes * buffers
         + large_layer_bytes

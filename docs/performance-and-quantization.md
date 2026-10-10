@@ -614,6 +614,26 @@ batch 1–8 and two sequence lengths: **worst error 0.85%, and it never under-pr
 the only safe direction for a number allowed to stop a run. The refusal names the two
 knobs that actually scale it (`training.batch_size`, `data.max_length`).
 
+That 0.85% is the accuracy of the formula **without** the cuBLAS workspace term added in
+#1407, and the pre-flight now shows that term as its own `cuBLAS` line so you can see
+which one moved a prediction:
+
+```
+peak VRAM    ~0.48 GB at batch 2 x seq 256 (logits 0.35 GB)
+cuBLAS       64.00 MB of workspaces (2 handles)
+```
+
+A streamed step holds two cuBLAS workspaces — one for the forward's thread and one for
+autograd's CUDA thread — and `torch.cuda.max_memory_allocated()`, the quantity this
+estimate predicts, counts both. On compute capability 9 and up each is 32 MiB, so a step
+carries 64 MiB the old formula did not name. On the RTX 3050 the grid above was measured
+on, each is 8,320 KiB, and those measured peaks **already contained** two of them, so
+naming the term double counts 16.3 MB there and moves every grid row to **+1.04% to
++6.57%** over-prediction (worst row SmolLM2-135M B1 S256). That is the safe direction for
+a gate that refuses runs; the `<1%` figure above is a claim about the pre-#1407 formula,
+and both bands are asserted in `tests/test_v07203.py`. Off CUDA the charge is 0, because
+there is no workspace without a device.
+
 Refusing rather than warning is deliberate. On Linux an over-budget step is a hard OOM.
 On Windows it is worse: WDDM silently spills to host memory and the run merely becomes an
 order of magnitude slower — measured here as a 9.27 GB peak on a 4.29 GB card with **no

@@ -2,100 +2,147 @@
 
 Every name used here exists on ``main``. That is deliberate: a RED that fails on a
 newly-added symbol proves only that the symbol is new, not that the estimate was
-wrong. So this file monkeypatches the device probe with ``raising=False`` and
-reads the environment variable by its literal name, which means against the
-unfixed formula it reaches the assertion below and fails there -- naming the
-under-prediction -- and against the fixed one it passes.
+wrong. So this file drives ``_stream_budget_lines`` -- the pre-flight that actually
+refuses runs -- and monkeypatches the device probe with ``raising=False``, which
+means against the unfixed module there is nothing to override and the prediction
+stays at whatever the formula always said. It reaches the assertion and fails
+there, naming the under-prediction.
 
 Checked by reverting only ``src/``::
 
     git checkout <base> -- src/soup_cli/
     PYTHONPATH=src pytest tests/test_issue1407_red_proof.py -q --no-cov
-    # 3 failed -- all three on the assertion, none on an AttributeError
+    # 1 failed, 1 passed -- the failure is on the assertion, not an AttributeError
+
+This is also the only file that covers the WIRING, and the wiring is where the
+surviving mutations live: passing ``cublas_workspace_bytes=0`` at the call site, or
+skipping the panel line, leaves every arithmetic test in the sibling file passing
+(408 passed, 41 skipped with either applied). Both fail the first test here.
+
+The arithmetic lives in ``tests/test_issue1407_cublas_workspace.py`` instead of
+here, and that split is deliberate. Those tests name the charge explicitly, because
+the parameter's default is ``0``: the pre-flight resolves the charge from the run's
+own device and passes it, since a default that probed the live card would bill a
+CPU-side caller on a machine that merely has a card visible
+(``torch.cuda.get_device_properties(None)`` reads the CURRENT card). A test here
+that passed the new keyword would fail on ``main`` with a ``TypeError`` rather than
+an assertion, which is an environment error dressed up as a RED.
 """
 
+from types import SimpleNamespace
+
 from soup_cli.utils import layer_stream
-from soup_cli.utils.layer_stream import estimate_stream_peak_vram
+from soup_cli.utils.layer_stream import STREAM_FIXED_SLACK_BYTES
+
+GB, MIB = 1_000_000_000, 1024 * 1024
 
 #: The 2-layer streamed fixture of ``tests/test_v07204.py`` at 2 rows x seq 64,
-#: built through the real ``setup()``.
-_FIXTURE = dict(
-    layer_bytes=14_160_384 // 2,
-    buffers=2,
-    extras_bytes=0,
-    adapter_params=0,
-    vocab_size=64,
-    hidden_size=64,
-    intermediate_size=160,
-    n_layers=2,
-    seq_len=64,
-    batch_size=2,
-)
-
-#: Compute capability major of the RTX 5070 Laptop the peaks below were measured
-#: on. Injected because the charge is a function of the device and CI has no GPU:
-#: a budget that cannot name its device cannot size its workspace.
-CC_BLACKWELL = 12
-
-#: Measured on that card (8151 MiB, driver 616.92, Windows 11, torch 2.14.0+cu130,
-#: transformers 5.17.0, trl 0.29.1), one DPO step, forward and backward.
-MEASURED_PEAK = 67_734_016
-
-#: The same step with ``CUBLAS_WORKSPACE_CONFIG=:4096:1``, shrinking each
-#: workspace from 32 MiB to 4 MiB.
-MEASURED_PEAK_4MIB = 9_013_760
-
-#: Difference between the two readings: 58,720,256 B = 2 x (32 - 4) MiB. This is
-#: what the term is derived from, and on the reporter's card it was the whole miss.
-MEASURED_WORKSPACE_DELTA = 58_720_256
+#: built through the real ``setup()``. The numbers are the issue's: this shape
+#: predicted 13,934,816 B against a measured peak of 67,734,016 B on an RTX 5070
+#: (cc 12.0), so the fixture reproduces the first number exactly.
+LAYER_BYTES = 94_528
+INTERMEDIATE_SIZE = 128
 
 #: The variable PyTorch reads, by name. Read literally rather than through a
 #: constant so this file imports nothing the unfixed module lacks.
 ENV_NAME = "CUBLAS_WORKSPACE_CONFIG"
 
 
-def _pretend_blackwell(monkeypatch):
-    """Make the formula believe the process is on an RTX 5070.
+class _FakeCuda:
+    """The two CUDA facts the CUDA branch of ``_stream_budget_lines`` reads."""
 
-    ``raising=False`` because the probe itself is part of the fix: against the
-    unfixed module there is nothing to override, and the prediction stays at
-    whatever the formula always said -- which is the point.
+    @staticmethod
+    def mem_get_info():
+        return (8 * GB, 8 * GB)
+
+
+def _fake_torch(monkeypatch):
+    """A ``torch`` module carrying only what this path touches.
+
+    The pre-flight's CUDA branch is worth driving without the ML stack: torch is a
+    multi-gigabyte install, and this test needs exactly one call from it. Injecting
+    the module keeps the wiring proof runnable in the minimal dev environment (and
+    on any CPU-only checkout), instead of being skipped for a dependency whose only
+    role here is to report free VRAM.
     """
+    import sys
+    from types import ModuleType
+
+    stub = ModuleType("torch")
+    stub.cuda = _FakeCuda()
+    monkeypatch.setitem(sys.modules, "torch", stub)
+
+
+def _budget(monkeypatch, *, on_cuda):
+    """Drive the real ``_stream_budget_lines`` and return its panel and prediction.
+
+    torch is stubbed only for the CUDA path, which is the only one that reaches it:
+    ``_stream_budget_lines`` returns before ``import torch`` when ``on_cuda`` is
+    False. The off-CUDA control test therefore needs no stub at all.
+    """
+    from soup_cli.trainer.stream_setup import StreamingSetupMixin
+
     monkeypatch.delenv(ENV_NAME, raising=False)
+    monkeypatch.setattr(  # a compute-capability-12 card, as in the issue
+        layer_stream, "_device_compute_capability_major", lambda device=None: 12, raising=False
+    )
+    monkeypatch.setattr(layer_stream, "calibrated_logits_bytes_per_element", lambda: 14.0)
     monkeypatch.setattr(
-        layer_stream, "_device_compute_capability_major", lambda device: CC_BLACKWELL, raising=False
+        "soup_cli.utils.layer_stream_runtime.measure_gemm_tflops", lambda *_a, **_k: None
     )
+    if on_cuda:
+        _fake_torch(monkeypatch)
+    seen = []
+    real = layer_stream.estimate_stream_peak_vram
 
+    def spy(**kwargs):
+        seen.append(real(**kwargs))
+        return seen[-1]
 
-def test_the_pre_flight_does_not_under_predict_the_reported_peak(monkeypatch):
-    _pretend_blackwell(monkeypatch)
-    predicted = estimate_stream_peak_vram(**_FIXTURE)
-    assert predicted >= MEASURED_PEAK, (
-        f"predicted {predicted} is below the measured {MEASURED_PEAK} peak "
-        f"({predicted / MEASURED_PEAK:.2f}x) -- the formula charges nothing for "
-        f"the two cuBLAS workspaces a streamed step holds"
+    monkeypatch.setattr(layer_stream, "estimate_stream_peak_vram", spy)
+    tcfg = SimpleNamespace(
+        batch_size=1,
+        stream_buffers=2,
+        stream_vram_probe=False,
+        stream_vram_override=None,
+        gradient_accumulation_steps=1,
+        lora=SimpleNamespace(r=8, target_modules=["q_proj", "v_proj"]),
     )
-
-
-def test_the_charge_tracks_the_workspace_the_operator_asks_for(monkeypatch):
-    """PyTorch reads ``CUBLAS_WORKSPACE_CONFIG`` once per process for the same
-    allocation, so the estimate must move by exactly what the allocator moved:
-    58,720,256 B, i.e. 2 x (32 - 4) MiB."""
-    _pretend_blackwell(monkeypatch)
-    default = estimate_stream_peak_vram(**_FIXTURE)
-
-    monkeypatch.setenv(ENV_NAME, ":4096:1")
-    shrunk = estimate_stream_peak_vram(**_FIXTURE)
-
-    assert default - shrunk == MEASURED_WORKSPACE_DELTA, (
-        f"the prediction moved {default - shrunk} bytes when the workspace went "
-        f"from 32 MiB to 4 MiB; the allocator moved {MEASURED_WORKSPACE_DELTA}"
+    mixin = StreamingSetupMixin()
+    if on_cuda:  # off CUDA there is no device attribute, as the #348 harness drives it
+        mixin.device = "cuda"
+    lines, _plan = mixin._stream_budget_lines(
+        SimpleNamespace(data=SimpleNamespace(max_length=64)),
+        tcfg,
+        model_config=SimpleNamespace(
+            vocab_size=64, hidden_size=64, intermediate_size=INTERMEDIATE_SIZE
+        ),
+        layer_bytes=LAYER_BYTES,
+        embed_bytes=0,
+        index=SimpleNamespace(n_layers=2, total_params=0),
+        on_cuda=on_cuda,
     )
+    return lines, seen[-1]
 
 
-def test_it_still_covers_the_step_with_the_workspace_removed(monkeypatch):
-    """``CUBLAS_WORKSPACE_CONFIG=:0:0`` removes the workspaces outright. The fix must
-    not depend on them being large."""
-    _pretend_blackwell(monkeypatch)
-    monkeypatch.setenv(ENV_NAME, ":0:0")
-    assert estimate_stream_peak_vram(**_FIXTURE) >= MEASURED_PEAK_4MIB
+def test_a_cuda_run_charges_both_workspaces_and_says_so(monkeypatch):
+    """The pre-flight, not the formula: a charge that never reaches the caller
+    refuses no run. On ``main`` this predicts 13,934,816 B against a real peak of
+    67,734,016 B and fails here -- and it fails under either wiring mutation the
+    sibling file's arithmetic cannot see (a ``0`` at the call site, or no panel
+    line)."""
+    lines, predicted = _budget(monkeypatch, on_cuda=True)
+    assert predicted >= STREAM_FIXED_SLACK_BYTES + 64 * MIB, predicted
+    assert any("cuBLAS" in line for line in lines), lines
+
+
+def test_off_cuda_nothing_is_charged_even_with_a_card_visible(monkeypatch):
+    """CONTROL for the test above, and the reason the pre-flight gates on ``on_cuda``
+    rather than on the probe. A CPU run must not be billed for a workspace it never
+    allocates, even on a machine that has a card: ``get_device_properties(None)``
+    reads the CURRENT card, so a pre-flight that charged on the probe alone would
+    refuse CPU runs over GPU memory they never touch. Passes on ``main`` too -- it
+    is the assertion that stops the fix from over-charging."""
+    lines, predicted = _budget(monkeypatch, on_cuda=False)
+    assert predicted < STREAM_FIXED_SLACK_BYTES + 64 * MIB, predicted
+    assert not any("cuBLAS" in line for line in lines), lines

@@ -178,15 +178,20 @@ class TestTheFormulaChargesIt:
     what the allocator does rather than merely grow."""
 
     #: The 2-layer fixture of ``test_v07204`` at 2 rows x seq 64 -- the shape whose
-    #: prediction was 13,934,816 against a measured 67,734,016.
+    #: prediction was 13,934,816 against a measured 67,734,016. Those two numbers
+    #: are the issue's, so the fixture has to reproduce the first one exactly; a
+    #: fixture that over-predicted by 14 MB would let the "reported peak" assertions
+    #: below pass even under a mutation that charged only the excess over the legacy
+    #: workspace, which is the shape this issue exists to rule out. Pinned by
+    #: ``test_the_fixture_is_the_reported_shape``.
     _FIXTURE = dict(
-        layer_bytes=14_160_384 // 2,
+        layer_bytes=94_528,
         buffers=2,
         extras_bytes=0,
         adapter_params=0,
         vocab_size=64,
         hidden_size=64,
-        intermediate_size=160,
+        intermediate_size=128,
         n_layers=2,
         seq_len=64,
         batch_size=2,
@@ -255,12 +260,21 @@ class TestTheFormulaChargesIt:
         cover it, or the term is sized for the wrong step."""
         assert self._peak(cublas_workspace_bytes=32 * 1024 * 1024) >= 34_060_288
 
-    def test_the_default_is_the_device_charge_not_zero(self):
-        """A caller that omits the term must not silently get the
-        under-predicting formula this issue is about."""
-        assert self._peak() == self._peak(
-            cublas_workspace_bytes=measure_cublas_workspace_bytes()
-        )
+    def test_the_fixture_is_the_reported_shape(self):
+        """The issue's two numbers are the evidence, so the shape has to reproduce
+        the first one exactly. At the original ``layer_bytes``/``intermediate_size``
+        this predicted 27,922,528 B, and the 14 MB of headroom let both "reported
+        peak" assertions above pass under a mutation that charged only the excess
+        over the legacy workspace -- the under-predicting shape #1407 is about."""
+        assert self._peak(cublas_workspace_bytes=0) == 13_934_816
+
+    def test_the_default_is_no_workspace(self):
+        """The pre-flight is this parameter's only production caller and it passes
+        the charge from the run's own device. A default that probed the live card
+        would bill a CPU-side caller on a machine that merely has a card visible,
+        because ``torch.cuda.get_device_properties(None)`` reads the CURRENT card.
+        The caller is responsible for naming the charge."""
+        assert self._peak() == self._peak(cublas_workspace_bytes=0)
 
     def test_a_negative_charge_is_refused(self):
         with pytest.raises(ValueError, match="non-negative"):
@@ -366,6 +380,13 @@ class TestTheRealDeviceIsAsked:
         streamed step uses, and the allocator must grow by the workspace."""
         import torch
 
+        # PyTorch does not free the workspaces until it is told to, and it keeps
+        # them in the caching allocator. If any earlier GPU test in this pytest run
+        # already ran a matmul and its backward, the handles exist and this test
+        # would measure only the tensors -- so release them first, then sync, so the
+        # reading below starts from a pool that really holds neither workspace.
+        torch._C._cuda_clearCublasWorkspaces()
+        torch.cuda.synchronize()
         torch.cuda.empty_cache()
         torch.cuda.reset_peak_memory_stats()
         before = torch.cuda.memory_allocated()
