@@ -2510,8 +2510,8 @@ class TestRequirePinSurvivesEveryHop:
 
         Subclasses the REAL RamSource rather than replacing it with a stub: the
         pageable construction has to actually work (the control below streams
-        through it), and `install_streaming` calls `RamSource.spec_from_shard`
-        before ever building a source."""
+        through it), and `install_streaming` reads every layer's spec from its shard
+        header (`RamSource.layer_specs_from_paths`) before ever building a source."""
         import soup_cli.utils.layer_stream_runtime as rt
 
         class _FailsWhenPinned(rt.RamSource):

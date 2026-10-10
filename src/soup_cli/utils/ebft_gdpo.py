@@ -57,17 +57,17 @@ _GDPO_METADATA: Mapping[str, GDPOSpec] = MappingProxyType({
     "standard": GDPOSpec(
         name="standard",
         description="Standard GDPO (general preference objective)",
-        live_wired=True,  # v0.53.2 #135 — kernel + DPO attach hook shipped.
+        live_wired=False,  # #1309 — supported TRL versions lack the dpo_loss hook.
     ),
     "length_normalized": GDPOSpec(
         name="length_normalized",
         description="Length-normalized GDPO (SimPO-style normalisation)",
-        live_wired=True,  # v0.53.2 #135
+        live_wired=False,  # #1309 — refused at config load.
     ),
     "margin": GDPOSpec(
         name="margin",
         description="Margin-augmented GDPO (DPO + margin term)",
-        live_wired=True,  # v0.53.2 #135
+        live_wired=False,  # #1309 — refused at config load.
     ),
 })
 
@@ -227,10 +227,11 @@ def attach_ebft_compute_loss(trainer: object, tcfg: object) -> bool:
 
 
 def attach_gdpo_compute_loss(trainer: object, tcfg: object) -> bool:
-    """Wrap TRL's ``DPOTrainer.dpo_loss`` so a GDPO variant is used (v0.53.2 #135).
+    """Wrap a legacy ``dpo_loss`` hook (v0.53.2 #135), not supported TRL trainers.
 
-    No-op when ``tcfg.gdpo_variant`` is None. Replaces the trainer's
-    ``dpo_loss`` method (the stable TRL hook returning losses, chosen rewards,
+    Config load refuses every non-null ``gdpo_variant`` (#1309); this legacy
+    helper and kernel remain for isolated tests. No-op when the variant is None.
+    Replaces a trainer's ``dpo_loss`` method (returning losses, chosen rewards,
     rejected rewards) with a thin wrapper that calls :func:`apply_gdpo_loss`.
 
     Returns:
@@ -248,7 +249,10 @@ def attach_gdpo_compute_loss(trainer: object, tcfg: object) -> bool:
     margin = float(raw_margin) if raw_margin is not None else 0.0
     original = getattr(trainer, "dpo_loss", None)
     if original is None:
-        return False
+        raise ValueError(
+            "cannot attach GDPO: the trainer lacks dpo_loss (#1309); "
+            "training.gdpo_variant is refused at config load"
+        )
 
     def wrapped(
         policy_chosen_logps,

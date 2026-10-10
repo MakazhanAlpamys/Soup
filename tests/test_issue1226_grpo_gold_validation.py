@@ -164,7 +164,9 @@ class TestMixedMathDataset:
         prepared = _load_prepared(tmp_path, _mixed_rows(), "alpaca")
         tcfg = TrainingConfig(reward_fn=reward_fn, verifiable_domain=domain)
         _validate_grpo_reward_metadata(prepared, tcfg, split="train")  # no refusal
-        assert f"GRPO train: 5 of 8 {_SUMMARY}" in _plain(capsys.readouterr().out)
+        # #1346: normalize_answer now drops ^\circ, so the "The angle?" row's gold (90^\circ)
+        # reads as the number 90 and is no longer one of the non-numeric golds.
+        assert f"GRPO train: 4 of 8 {_SUMMARY}" in _plain(capsys.readouterr().out)
 
     def test_every_row_pays_its_right_answer_and_not_its_wrong_one(self, tmp_path):
         prepared = _load_prepared(tmp_path, _mixed_rows(), "alpaca")
@@ -331,13 +333,8 @@ class TestSeedRowsBeforeARollout:
 
 
 class TestShippedDataStillValidates:
-    @pytest.mark.parametrize(
-        ("reward_fn", "domain", "summary"),
-        [("accuracy", None, "2 of 5"), ("verifiable", "math", "2 of 5")],
-    )
-    def test_the_grpo_reasoning_example_data_validates(
-        self, capsys, reward_fn, domain, summary
-    ):
+    @pytest.mark.parametrize(("reward_fn", "domain"), [("accuracy", None), ("verifiable", "math")])
+    def test_the_grpo_reasoning_example_data_validates(self, capsys, reward_fn, domain):
         from soup_cli.utils.final_answer import parse_reference
 
         example = _REPO / "examples" / "configs" / "grpo_reasoning.yaml"
@@ -351,11 +348,19 @@ class TestShippedDataStillValidates:
         prepared = _prepare_grpo_dataset(load_dataset(data, preserve_source_columns=True)["train"])
         tcfg = TrainingConfig(reward_fn=reward_fn, verifiable_domain=domain)
         _validate_grpo_reward_metadata(prepared, tcfg, split="train")
-        assert f"GRPO train: {summary} {_SUMMARY}" in _plain(capsys.readouterr().out)
+        # #1346: normalize_answer now reads a one-letter variable prefix, so "c = 5" and
+        # "x = 7" (rows 1 and 3) read as numbers too and no row is left non-numeric.
+        assert _SUMMARY not in _plain(capsys.readouterr().out)
 
         parsed = [parse_reference(row["answer"]) for row in prepared]
-        assert [p.text for p in parsed] == ["17", "c = 5", "6", "x = 7", "30"]
-        assert [p.number for p in parsed] == [Decimal(17), None, Decimal(6), None, Decimal(30)]
+        assert [p.text for p in parsed] == ["17", "5", "6", "7", "30"]
+        assert [p.number for p in parsed] == [
+            Decimal(17),
+            Decimal(5),
+            Decimal(6),
+            Decimal(7),
+            Decimal(30),
+        ]
 
     @pytest.mark.parametrize(
         ("module", "reward_fn", "domain"),

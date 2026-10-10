@@ -114,15 +114,17 @@ class TestPlanPinnedArenas:
         the alternative, an arena sized by whatever tensor opened it, packed a
         bf16 14B store one projection per arena. Hand-derived on the reviewer's
         shape at a size where the last arena's tail does not dominate: 1000 x
-        8 MiB plus one 300 MiB outlier -> 2 GiB capacity; arenas 0-2 take 256
-        tensors each, arena 3 takes the remaining 232 (1856 MiB) and cannot fit
-        the outlier, which opens arena 4 alone and is trimmed to 512 MiB."""
+        8 MiB plus one 300 MiB outlier -> 2 GiB capacity. In allocation order
+        arenas 0-2 took 256 tensors each, arena 3 the remaining 232 (1856 MiB),
+        and the outlier opened arena 4 alone, trimmed to 512 MiB. Largest-first
+        (#1702) puts the outlier down first: 218 tensors fill arena 0 behind it,
+        arenas 1-3 take 256 each, and the last 14 (112 MiB) trim to 128 MiB."""
         from soup_cli.utils.layer_stream_runtime import plan_pinned_arenas
 
         sizes = [8 * MiB] * 1000 + [300 * MiB]
         plan = plan_pinned_arenas(sizes)
-        assert plan.arena_sizes == (2**31, 2**31, 2**31, 2**31, 2**29)
-        assert plan.placements[-1] == (4, 0)
+        assert plan.arena_sizes == (2**31, 2**31, 2**31, 2**31, 2**27)
+        assert plan.placements[-1] == (0, 0)
         assert plan.pinned_bytes <= 1.10 * sum(sizes), plan.pinned_bytes / sum(sizes)
 
     def test_the_last_arena_is_trimmed_to_what_it_holds(self):

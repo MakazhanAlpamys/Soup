@@ -225,7 +225,8 @@ def test_activation_offloading_context_missing_attr_safe(tmp_path) -> None:
 
 def _build_yaml_config(task: str, **training_extra) -> dict:
     """Helper: build a minimal config dict accepted by load_config_from_string."""
-    default_bs = 2 if task == "embedding" else 1
+    # #1420: KTO refuses batch 1 (TRL KL term)
+    default_bs = 2 if task in ("embedding", "kto") else 1
     body = {
         "base": "meta-llama/Llama-3.2-1B",
         "task": task,

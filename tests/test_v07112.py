@@ -1012,8 +1012,12 @@ class TestPatchInvariants:
         import inspect
 
         from soup_cli.commands import train
+        from soup_cli.trainer import dispatch
 
-        src = inspect.getsource(train)
+        # #1213 moved the chain into the dispatch both commands call, so the
+        # branch is read there and the command is checked to still reach it.
+        assert "build_trainer(" in inspect.getsource(train)
+        src = inspect.getsource(dispatch)
         assert "moe_lora_routing" in src
         assert "MoleRoutingTrainerWrapper" in src
 

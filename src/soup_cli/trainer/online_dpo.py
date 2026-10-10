@@ -280,14 +280,10 @@ class OnlineDPOTrainerWrapper:
             output_dir = output_dir / cfg.experiment_name
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        # --- Warmup from ratio ---
-        import math
+        # --- Warmup from ratio (#1431) ---
+        from soup_cli.utils.warmup import resolve_trainer_warmup_steps
 
-        total_steps = (
-            math.ceil(len(train_ds) / batch_size / tcfg.gradient_accumulation_steps)
-            * tcfg.epochs
-        )
-        warmup_steps = int(total_steps * tcfg.warmup_ratio)
+        warmup_steps = resolve_trainer_warmup_steps(tcfg.warmup_ratio)
 
         _bf16, _fp16 = bf16_fp16_flags(self.device)
         odpo_config = online_dpo_config_cls(
@@ -307,6 +303,9 @@ class OnlineDPOTrainerWrapper:
             bf16=_bf16,
             fp16=_fp16,
             report_to=self.report_to,
+            # #1204: both were stored on the wrapper and never reached the config
+            deepspeed=self.deepspeed_config,
+            **(self.fsdp_config or {}),
             **training_seed_kwargs(tcfg),
             beta=tcfg.dpo_beta,
             loss_type=tcfg.online_dpo_loss_type,
@@ -411,7 +410,7 @@ class OnlineDPOTrainerWrapper:
         # QLoRA stabilization: k-bit-loaded models need fp32 layer-norm casting +
         # input-grad enabling BEFORE LoRA. OnlineDPOTrainer's peft_config path
         # does NOT do this internally (unlike DPOTrainer), so do it here.
-        if tcfg.quantization in ("4bit", "8bit", "mxfp4"):
+        if tcfg.quantization in ("4bit", "8bit"):
             from peft import prepare_model_for_kbit_training
 
             from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
@@ -520,23 +519,15 @@ class OnlineDPOTrainerWrapper:
         start = time.time()
 
         if display:
-            from soup_cli.monitoring.callback import (
-                SoupTrainerCallback,
-                soup_callback_kwargs,
-            )
-
+            from soup_cli.monitoring.callback import build_soup_trainer_callback
             self.trainer.add_callback(
-                SoupTrainerCallback(
+               build_soup_trainer_callback(
                     display,
+                    config=self.config,
                     tracker=tracker,
                     run_id=run_id,
-                    eval_gate_config=self.config.training.eval_gate,
-                    **soup_callback_kwargs(
-                        self.config.training,
-                        batch_size=self._batch_size,
-                        output_dir=self._output_dir,
-                        include_eval_gate=False,
-                    ),
+                    batch_size=self._batch_size,
+                    output_dir=self._output_dir,
                 )
             )
 

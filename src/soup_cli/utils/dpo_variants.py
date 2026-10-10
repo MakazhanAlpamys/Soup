@@ -3,14 +3,14 @@
 
 Two opt-in controls for DPO-family preference training:
 
-1. **β schedule** — anneal the DPO ``beta`` coefficient over training.
+1. **β schedule** - anneal the DPO ``beta`` coefficient over training.
    Three shapes: linear, cosine (1/2 (1 + cos(pi t)) ramp), exponential
    (geometric decay between ``beta_start`` and ``beta_end``).
 
-2. **Reference-model regeneration** — refused at config load: with LoRA
-   there is no separate reference model to copy into, and the DPO-family
-   trainers cannot run with ``lora.r: 0``. The wiring is tracked in
-   [#1345](https://github.com/MakazhanAlpamys/Soup/issues/1345).
+2. **Reference-model regeneration** - periodically sync reference model weights
+   with the student. With LoRA, copies the active ``.default.`` adapter weights
+   into the frozen ``.ref.`` adapter under ``torch.no_grad()`` on every Nth epoch.
+   Full fine-tuning (``lora.r: 0``) is refused at config load (#1345).
 
 Both helpers are lazily-subclassed TrainerCallbacks (no ``transformers`` import at
 module scope) so they cost nothing on a torch-less interpreter and stay
@@ -172,12 +172,15 @@ class _BetaScheduleCallback_body:  # type: ignore[misc]  # noqa: N801
 
 
 class _RefModelRegenCallback_body:  # type: ignore[misc]  # noqa: N801
-    """HF ``TrainerCallback``: deep-copy student weights into ref_model on epoch.
+    """HF ``TrainerCallback``: deep-copy student weights into ref adapter/model on epoch.
 
     On every Nth epoch (1-indexed; epoch 0 is skipped to avoid copying
-    untrained weights), copies the current ``trainer.model`` state_dict
-    into ``trainer.ref_model``. Falls back to a no-op when ``ref_model``
-    is missing (some preference trainers, e.g. ORPO, are reference-free).
+    untrained weights), copies the current student weights into the reference.
+    With LoRA (where TRL creates a frozen ``ref`` adapter and leaves
+    ``trainer.ref_model`` as None), in-place copies all matching ``.default.``
+    parameters into ``.ref.`` parameters under ``torch.no_grad()``.
+    If ``trainer.ref_model`` is present, loads ``student.state_dict()`` into
+    ``ref_model``.
     """
 
     def __init__(self, every_n_epochs: int) -> None:
@@ -200,7 +203,7 @@ class _RefModelRegenCallback_body:  # type: ignore[misc]  # noqa: N801
         if self._trainer is None:
             return
         epoch = float(getattr(state, "epoch", 0.0))
-        # Skip epoch 0 entirely — copying untrained student is a footgun.
+        # Skip epoch 0 entirely - copying untrained student is a footgun.
         # round() handles HF Trainer's float epoch counters (e.g. 1.999...).
         epoch_int = int(round(epoch))
         if epoch_int < 1:
@@ -215,8 +218,48 @@ class _RefModelRegenCallback_body:  # type: ignore[misc]  # noqa: N801
             return
         ref_model = getattr(trainer, "ref_model", None)
         student = getattr(trainer, "model", None)
-        if ref_model is None or student is None:
+        if student is None:
             return
+
+        import logging
+
+        import torch
+
+        logger = logging.getLogger(__name__)
+
+        # LoRA path: TRL creates a frozen `ref` adapter on student; ref_model is None.
+        if ref_model is None:
+            named_params = dict(student.named_parameters())
+            ref_params = {k: v for k, v in named_params.items() if ".ref." in k}
+            if not ref_params:
+                logger.warning(
+                    "RefModelRegenCallback: trainer.ref_model is None and no "
+                    "'.ref.' adapter parameters found on model; ref model not updated."
+                )
+                return
+
+            copied = 0
+            with torch.no_grad():
+                for ref_name, ref_param in ref_params.items():
+                    default_name = ref_name.replace(".ref.", ".default.", 1)
+                    default_param = named_params.get(default_name)
+                    if default_param is None:
+                        logger.warning(
+                            "RefModelRegenCallback: matching source parameter '%s' "
+                            "not found for '%s'; skipping.",
+                            default_name,
+                            ref_name,
+                        )
+                        continue
+                    ref_param.copy_(default_param)
+                    ref_param.requires_grad = False
+                    copied += 1
+
+            if copied > 0:
+                self.regen_count += 1
+            return
+
+        # Non-LoRA path (if ref_model is a separate model instance)
         try:
             state_dict = student.state_dict()
         except AttributeError:
@@ -224,17 +267,16 @@ class _RefModelRegenCallback_body:  # type: ignore[misc]  # noqa: N801
         # strict=True so a key/shape mismatch (e.g. PEFT-wrapped student vs
         # bare ref) surfaces loudly instead of silently producing a
         # half-copied reference. The except below logs at WARNING and the
-        # callback continues — this is an optimisation, not a safety gate,
+        # callback continues - this is an optimisation, not a safety gate,
         # but operators should know when it failed.
         try:
             ref_model.load_state_dict(state_dict, strict=True)
             self.regen_count += 1
         except (RuntimeError, TypeError) as exc:
-            import logging
-
-            logging.getLogger(__name__).warning(
+            logger.warning(
                 "RefModelRegenCallback: load_state_dict failed (%s); ref "
-                "model not updated this epoch.", type(exc).__name__,
+                "model not updated this epoch.",
+                type(exc).__name__,
             )
             return
 

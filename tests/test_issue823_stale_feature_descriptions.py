@@ -100,6 +100,34 @@ def _schema_descriptions(path: Path = SCHEMA_PATH) -> list[tuple[str, int, str]]
     return descriptions
 
 
+def _constant_text(node: ast.AST) -> str | None:
+    """The literal text of a string, f-string included (its constant parts)."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.JoinedStr):
+        return "".join(
+            part.value
+            for part in node.values
+            if isinstance(part, ast.Constant) and isinstance(part.value, str)
+        )
+    return None
+
+
+def _schema_raise_messages(path: Path = SCHEMA_PATH) -> list[tuple[int, str]]:
+    """Every string handed to an exception raised in ``schema.py`` (#1353):
+    these reach the user when a config is refused, same as a description."""
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    messages: list[tuple[int, str]] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Raise) or not isinstance(node.exc, ast.Call):
+            continue
+        for arg in node.exc.args:
+            text = _constant_text(arg)
+            if text:
+                messages.append((node.lineno, text))
+    return messages
+
+
 def _cli_help_strings() -> list[tuple[Path, int, str]]:
     strings: list[tuple[Path, int, str]] = []
     for path in COMMAND_PATHS:
@@ -133,6 +161,31 @@ def test_schema_descriptions_have_no_expired_release_promises() -> None:
         if _schema_description_is_stale(name, description)
     ]
     assert offenders == []
+
+
+def test_schema_raise_messages_have_no_expired_release_promises() -> None:
+    messages = _schema_raise_messages()
+    assert len(messages) >= 300
+    offenders = [
+        f"schema.py:{line}: {text}"
+        for line, text in messages
+        if _has_expired_version_promise(text)
+    ]
+    assert offenders == []
+
+
+def test_the_raise_scanner_reads_f_strings(tmp_path: Path) -> None:
+    sample = tmp_path / "schema.py"
+    sample.write_text(
+        'def check(task):\n'
+        '    raise ValueError(f"got {task!r}; " "the runtime ships in v0.62.1.")\n',
+        encoding="utf-8",
+    )
+
+    ((line, text),) = _schema_raise_messages(sample)
+
+    assert line == 2
+    assert _has_expired_version_promise(text)
 
 
 def test_cli_help_has_no_expired_promises_or_internal_phase_labels() -> None:

@@ -169,8 +169,42 @@ def canary_rows(canaries: Sequence[Canary], fmt: str = "chatml") -> list[dict]:
     return [_canary_row(canary, fmt) for canary in canaries]
 
 
+def interleave_canary_rows(
+    rows: Sequence[Any], inserted: Sequence[dict], *, seed: int
+) -> tuple[list, tuple[int, ...]]:
+    """Spread ``inserted`` through ``rows``; return the mix and their positions.
+
+    ``positions[i]`` is the 0-based row of ``inserted[i]`` in the mix. The mix
+    is cut into ``len(inserted)`` equal stretches and each canary goes to a
+    seeded random row of its own stretch, so the canaries cannot sit together
+    at either end (#1331). Appending them put every one in the tail that
+    ``data.val_split`` holds out for validation, where no model trains on
+    them and ``check`` can only report OK. Spread evenly, a tail of fraction
+    ``v`` holds about ``v`` of them, whatever the seed.
+    """
+    count = len(inserted)
+    total = len(rows) + count
+    rng = random.Random(seed)
+    positions = tuple(
+        rng.randrange(i * total // count, (i + 1) * total // count)
+        for i in range(count)
+    )
+    slots = dict(zip(positions, inserted))
+    source = iter(rows)
+    mixed = [
+        slots[index] if index in slots else next(source)
+        for index in range(total)
+    ]
+    return mixed, positions
+
+
 def write_manifest(
-    canaries: Sequence[Canary], path: str, fmt: str = "chatml"
+    canaries: Sequence[Canary],
+    path: str,
+    fmt: str = "chatml",
+    *,
+    positions: Sequence[int] | None = None,
+    total_rows: int | None = None,
 ) -> str:
     """Persist the secrets. THIS FILE IS THE SENSITIVE ARTIFACT.
 
@@ -179,19 +213,29 @@ def write_manifest(
     POSIX: under the usual 022 umask a generic write lands 0644, letting
     any local user on a shared box read every canary without ever running
     ``check``. Mirrors registry/store.py, adapter_sign.py, audit_log.py.
+
+    ``positions`` (from :func:`interleave_canary_rows`) and ``total_rows``
+    record where each canary sits in the written dataset, so which canaries a
+    given ``data.val_split`` trains on can be worked out later (#1331).
     """
     _require_canary_format(fmt)
     safe = enforce_under_cwd_and_no_symlink(str(path), "manifest")
+    entries = [
+        {"carrier": canary.carrier, "secret": canary.secret}
+        for canary in canaries
+    ]
+    if positions is not None:
+        for entry, position in zip(entries, positions):
+            entry["row"] = position
     payload = {
         "version": 1,
         "carrier_template": CARRIER_TEMPLATE,
         "slug": _SLUG,
         "format": fmt,
-        "canaries": [
-            {"carrier": canary.carrier, "secret": canary.secret}
-            for canary in canaries
-        ],
+        "canaries": entries,
     }
+    if total_rows is not None:
+        payload["rows"] = total_rows
     atomic_write_text(json.dumps(payload, indent=2), safe)
     _harden_permissions(safe)
     return safe

@@ -30,7 +30,7 @@ here may pull torch, transformers or the data stack.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, NamedTuple, Optional
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from soup_cli.config.schema import DataConfig, SoupConfig
@@ -38,6 +38,45 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 #: Tasks where an evaluation pass means generating completions, so it costs as
 #: much per row as training does. They evaluate only when asked to.
 GENERATION_EVAL_TASKS: frozenset[str] = frozenset({"grpo", "ppo", "online_dpo"})
+
+
+class ValidationMetric(NamedTuple):
+    """Which number an evaluation produces for a task, and what it means (#1389).
+
+    ``log_key`` is the entry in the trainer's ``on_log`` dict; ``field`` is the
+    name Soup records it under -- the tracker column, the ``TrainEvent`` field and
+    the display's attribute, which all spell it the same way; ``label`` is the
+    live panel's row; ``direction`` says how to read the series.
+    """
+
+    log_key: str
+    field: str
+    label: str
+    direction: str
+
+
+#: Every task's evaluation logs a held-out loss, lower is better ...
+DEFAULT_VALIDATION_METRIC = ValidationMetric(
+    "eval_loss", "val_loss", "Val loss", "lower is better"
+)
+
+#: ... except the generation-scored ones. On ``grpo`` TRL's ``eval_loss`` is the
+#: policy objective at importance ratio 1 with group-normalised advantages: it
+#: sits near zero, is often negative and does not measure held-out quality. The
+#: held-out reward, ``eval_reward``, is the run's validation number, and it is
+#: recorded under its own name so nothing reads it as a loss (#1389). A task
+#: that later gains a generation-based evaluation (``ppo``, ``online_dpo``, which
+#: refuse ``eval_steps`` today) adds a row here, not a special case downstream.
+VALIDATION_METRICS: dict[str, ValidationMetric] = {
+    "grpo": ValidationMetric("eval_reward", "val_reward", "Val reward", "higher is better"),
+}
+
+
+def validation_metric(task: Optional[str]) -> ValidationMetric:
+    """The validation metric a task records; the loss for any task not in the table."""
+    if isinstance(task, str):
+        return VALIDATION_METRICS.get(task, DEFAULT_VALIDATION_METRIC)
+    return DEFAULT_VALIDATION_METRIC
 
 #: Tasks that refuse ``training.eval_steps`` at config load, each with the
 #: reason. The setting would be read by nothing on them (ppo, unlearn) or would

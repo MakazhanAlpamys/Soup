@@ -27,6 +27,8 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pytest
+
 _UTILS_DIR = Path(__file__).resolve().parent.parent / "src" / "soup_cli" / "utils"
 _SRC_ROOT = _UTILS_DIR.parent
 _HOME = _UTILS_DIR / "net_guard.py"
@@ -206,3 +208,229 @@ class TestMutationsThatUsedToSurvive:
         rogue.write_text('LOOPBACK_HOSTS: frozenset = frozenset({"localhost"})\n')
         found = _builders(rogue)
         assert found == ["LOOPBACK_HOSTS"]
+
+
+# ---------------------------------------------------------------------------
+# Outbound endpoint checks refuse non-public IP literals through ONE helper.
+# ---------------------------------------------------------------------------
+
+_REFUSAL = "refuse_private_ip_literal"
+
+# Every check in front of an outbound request whose URL comes from a flag, a
+# config file or a request body. Each must call the shared refusal, so deleting
+# the call fails here as well as in tests/test_outbound_endpoint_ip_literals.py.
+_OUTBOUND_GATES = (
+    ("data/providers/vllm.py", "validate_vllm_url"),
+    ("commands/generate.py", "_generate_openai"),
+    ("commands/generate.py", "_generate_server"),
+    ("eval/judge.py", "validate_judge_api_base"),
+    ("eval/gate.py", "_valid_judge_url"),
+    ("commands/ship.py", "_validate_judge_model_url"),
+    ("ui/app.py", "chat_send"),
+    ("config/schema.py", "_validate_online_dpo_judge_field"),
+)
+
+# Every OTHER function that reads a URL's hostname next to a loopback allowlist
+# -- the shape every copy of the http-only check had -- and does not call the
+# shared refusal, each with the reason. A NEW function of that shape fails
+# test_every_hostname_check_is_accounted_for until it calls the refusal or is
+# declared here. Calling is_private_or_link_local does not qualify a function
+# on its own: a call made only on the plain-HTTP branch looks the same to an
+# AST walk, so each entry is a statement that someone read the function.
+_HOSTNAME_CHECKS_WITHOUT_THE_REFUSAL = {
+    ("data/providers/ollama.py", "validate_ollama_url"): (
+        "loopback only: any other host is refused outright"
+    ),
+    ("eval/gate.py", "_parse_judge_url"): (
+        "a classifier; JudgeEvaluator enforces the policy via validate_judge_api_base"
+    ),
+    ("utils/loop_stages.py", "_endpoint_is_local"): (
+        "the deploy-canary policy REQUIRES a local or LAN endpoint, on purpose"
+    ),
+    ("utils/qr_url.py", "build_phone_url"): "builds a URL to display; makes no request",
+    ("utils/webhooks.py", "validate_webhook_url"): (
+        "applies is_private_or_link_local itself, on every scheme"
+    ),
+    ("utils/tracing.py", "validate_otlp_endpoint"): (
+        "applies is_private_or_link_local itself, on every scheme"
+    ),
+    ("utils/trackers.py", "_telemetry_endpoint_is_safe"): (
+        "https only; applies is_private_or_link_local itself, before and after DNS"
+    ),
+    ("utils/hf.py", "resolve_endpoint"): (
+        "HF_ENDPOINT is read only from the operator's own environment"
+    ),
+    ("utils/hubs.py", "validate_hub_endpoint"): (
+        "hub endpoints are read only from the operator's own environment"
+    ),
+}
+
+
+def _functions(path: Path) -> list[ast.FunctionDef | ast.AsyncFunctionDef]:
+    return [
+        node
+        for node in ast.walk(_parse(path))
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    ]
+
+
+def _own_nodes(func: ast.AST) -> list[ast.AST]:
+    """Nodes of ``func``'s own body, excluding nested defs, classes and lambdas."""
+    found: list[ast.AST] = []
+    stack = list(getattr(func, "body", []))
+    while stack:
+        node = stack.pop()
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+            continue
+        found.append(node)
+        stack.extend(ast.iter_child_nodes(node))
+    return found
+
+
+def _called_names(func: ast.AST) -> set[str]:
+    names: set[str] = set()
+    for node in _own_nodes(func):
+        if isinstance(node, ast.Call):
+            if isinstance(node.func, ast.Name):
+                names.add(node.func.id)
+            elif isinstance(node.func, ast.Attribute):
+                names.add(node.func.attr)
+    return names
+
+
+def _is_hostname_check(func: ast.AST) -> bool:
+    """Reads ``<url>.hostname`` and holds a loopback allowlist in its own body."""
+    nodes = _own_nodes(func)
+    reads_hostname = any(isinstance(n, ast.Attribute) and n.attr == "hostname" for n in nodes)
+    has_allowlist = any(
+        (isinstance(n, ast.Constant) and n.value == "localhost")
+        or (isinstance(n, ast.Name) and _normalised(n.id).endswith(_normalised(_SET_SUFFIX)))
+        for n in nodes
+    )
+    return reads_hostname and has_allowlist
+
+
+def _unguarded_hostname_checks(path: Path) -> list[str]:
+    """THE discovery matcher, shared by the real-tree scan and its self-tests."""
+    return [
+        func.name
+        for func in _functions(path)
+        if _is_hostname_check(func) and _REFUSAL not in _called_names(func)
+    ]
+
+
+def _imports_the_refusal(path: Path) -> bool:
+    return any(
+        isinstance(node, ast.ImportFrom)
+        and node.module == "soup_cli.utils.net_guard"
+        and any(alias.name == _REFUSAL for alias in node.names)
+        for node in ast.walk(_parse(path))
+    )
+
+
+class TestOutboundGatesShareTheRefusal:
+    def test_the_refusal_is_defined_only_in_the_shared_module(self) -> None:
+        definers = [
+            f"{path.relative_to(_SRC_ROOT).as_posix()}::{func.name}"
+            for path in sorted(_SRC_ROOT.rglob("*.py"))
+            for func in _functions(path)
+            if func.name.endswith(_REFUSAL)
+        ]
+        assert definers == [f"{_HOME.relative_to(_SRC_ROOT).as_posix()}::{_REFUSAL}"]
+
+    @pytest.mark.parametrize(("relpath", "func_name"), _OUTBOUND_GATES)
+    def test_each_gate_calls_it(self, relpath: str, func_name: str) -> None:
+        path = _SRC_ROOT / relpath
+        funcs = [func for func in _functions(path) if func.name == func_name]
+        assert len(funcs) == 1, f"{relpath}::{func_name} not found exactly once"
+        assert _REFUSAL in _called_names(funcs[0]), (
+            f"{relpath}::{func_name} must call net_guard.{_REFUSAL}"
+        )
+        assert _imports_the_refusal(path), f"{relpath} must import {_REFUSAL} from net_guard"
+
+    def test_every_hostname_check_is_accounted_for(self) -> None:
+        unaccounted = [
+            f"{rel}::{name}"
+            for path in sorted(_SRC_ROOT.rglob("*.py"))
+            for rel in [path.relative_to(_SRC_ROOT).as_posix()]
+            for name in _unguarded_hostname_checks(path)
+            if (rel, name) not in _HOSTNAME_CHECKS_WITHOUT_THE_REFUSAL
+        ]
+        assert unaccounted == [], (
+            "these read a URL's hostname next to a loopback allowlist without calling "
+            f"net_guard.{_REFUSAL}; call it, or declare them in "
+            f"_HOSTNAME_CHECKS_WITHOUT_THE_REFUSAL with the reason: {unaccounted}"
+        )
+
+    @pytest.mark.parametrize(
+        ("relpath", "func_name"), sorted(_HOSTNAME_CHECKS_WITHOUT_THE_REFUSAL)
+    )
+    def test_every_declared_exemption_is_still_needed(
+        self, relpath: str, func_name: str
+    ) -> None:
+        """A renamed, rewritten or since-fixed entry must leave the table, not rot in it."""
+        funcs = [func for func in _functions(_SRC_ROOT / relpath) if func.name == func_name]
+        assert len(funcs) == 1 and _is_hostname_check(funcs[0]), (
+            f"{relpath}::{func_name} is no longer a hostname check; drop its entry"
+        )
+        assert _REFUSAL not in _called_names(funcs[0]), (
+            f"{relpath}::{func_name} calls {_REFUSAL} now; drop its entry"
+        )
+
+
+class TestTheDiscoveryCatchesANewCopy:
+    """Demonstrates, not just asserts: both spellings of the old check are caught."""
+
+    _BODY = (
+        "from urllib.parse import urlparse\n"
+        "{imports}"
+        "\n\ndef validate_new_url(url):\n"
+        "    parsed = urlparse(url)\n"
+        "    if parsed.hostname not in {allowlist} and parsed.scheme != 'https':\n"
+        "        raise ValueError('HTTPS for remote')\n"
+        "{extra}"
+    )
+
+    def _write(self, tmp_path: Path, **parts: str) -> Path:
+        values = {"imports": "", "allowlist": "('localhost', '127.0.0.1')", "extra": ""}
+        values.update(parts)
+        rogue = tmp_path / "rogue_gate.py"
+        rogue.write_text(self._BODY.format(**values), encoding="utf-8")
+        return rogue
+
+    def test_a_literal_allowlist_copy_is_caught(self, tmp_path: Path) -> None:
+        assert _unguarded_hostname_checks(self._write(tmp_path)) == ["validate_new_url"]
+
+    def test_a_shared_set_copy_is_caught(self, tmp_path: Path) -> None:
+        rogue = self._write(
+            tmp_path,
+            imports="from soup_cli.utils.net_guard import LOOPBACK_HOSTS\n",
+            allowlist="LOOPBACK_HOSTS",
+        )
+        assert _unguarded_hostname_checks(rogue) == ["validate_new_url"]
+
+    def test_a_copy_that_calls_the_refusal_is_not(self, tmp_path: Path) -> None:
+        rogue = self._write(
+            tmp_path,
+            imports="from soup_cli.utils.net_guard import refuse_private_ip_literal\n",
+            extra="    refuse_private_ip_literal(parsed.hostname, label='x')\n",
+        )
+        assert _unguarded_hostname_checks(rogue) == []
+
+    def test_a_predicate_call_on_the_http_branch_alone_is_still_caught(
+        self, tmp_path: Path
+    ) -> None:
+        """Why a call to the predicate does not exempt a function by itself."""
+        rogue = tmp_path / "rogue_http_branch.py"
+        rogue.write_text(
+            "from urllib.parse import urlparse\n"
+            "from soup_cli.utils.net_guard import LOOPBACK_HOSTS, is_private_or_link_local\n"
+            "\n\ndef validate_new_url(url):\n"
+            "    parsed = urlparse(url)\n"
+            "    if parsed.scheme == 'http' and parsed.hostname not in LOOPBACK_HOSTS:\n"
+            "        if is_private_or_link_local(parsed.hostname):\n"
+            "            raise ValueError('private hosts require HTTPS')\n"
+            "        raise ValueError('HTTPS for remote')\n",
+            encoding="utf-8",
+        )
+        assert _unguarded_hostname_checks(rogue) == ["validate_new_url"]

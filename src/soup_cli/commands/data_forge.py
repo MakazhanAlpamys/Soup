@@ -9,6 +9,8 @@ from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
 
+from soup_cli.utils.terminal import for_terminal
+
 console = Console()
 
 
@@ -137,7 +139,7 @@ def forge(
             # (code-review MEDIUM fix v0.71.5 #157).
             console.print(
                 f"[yellow]--hub {escape(hub_canonical)} ignored:[/] --teacher "
-                f"{escape(teacher)!r} is not a repo id (owner/name), so there "
+                f"{for_terminal(repr(teacher))} is not a repo id (owner/name), so there "
                 "is nothing to pre-fetch."
             )
 

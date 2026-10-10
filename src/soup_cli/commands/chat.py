@@ -8,6 +8,8 @@ import typer
 from rich.console import Console
 from rich.panel import Panel
 
+from soup_cli.utils.terminal import for_terminal
+
 console = Console()
 
 
@@ -110,7 +112,7 @@ def chat(
     console.print(
         Panel(
             f"Model:  [bold]{model_path}[/]\n"
-            + (f"Base:   [bold]{base_model}[/]\n" if is_adapter else "")
+            + (f"Base:   [bold]{for_terminal(base_model)}[/]\n" if is_adapter else "")
             + f"Device: [bold]{device}[/]\n"
             f"Type:   [bold]{'LoRA adapter' if is_adapter else 'Full model'}[/]",
             title="Loading model",
@@ -191,7 +193,6 @@ def chat(
             model_obj, tokenizer, history,
             max_tokens=max_tokens,
             temperature=temperature,
-            device=device,
         )
 
         history.append({"role": "assistant", "content": response})
@@ -216,8 +217,11 @@ def _load_model(
     trust_remote_code: bool = False,
 ):
     """Load model and tokenizer. Supports LoRA adapters and full models."""
-    import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    from soup_cli.utils.gpu import resolve_inference_device_map_and_dtype
+
+    device_map, torch_dtype = resolve_inference_device_map_and_dtype(device)
 
     console.print("[dim]Loading tokenizer...[/]")
     tokenizer = AutoTokenizer.from_pretrained(
@@ -229,12 +233,12 @@ def _load_model(
     if is_adapter:
         from peft import PeftModel
 
-        console.print(f"[dim]Loading base model: {base_model}...[/]")
+        console.print(f"[dim]Loading base model: {for_terminal(base_model)}...[/]")
         base = AutoModelForCausalLM.from_pretrained(
             base_model,
             trust_remote_code=trust_remote_code,
-            device_map="auto",
-            torch_dtype=torch.float16,
+            device_map=device_map,
+            torch_dtype=torch_dtype,
         )
         console.print(f"[dim]Loading LoRA adapter: {model_path}...[/]")
         model_obj = PeftModel.from_pretrained(base, model_path)
@@ -243,8 +247,8 @@ def _load_model(
         model_obj = AutoModelForCausalLM.from_pretrained(
             model_path,
             trust_remote_code=trust_remote_code,
-            device_map="auto",
-            torch_dtype=torch.float16,
+            device_map=device_map,
+            torch_dtype=torch_dtype,
         )
 
     model_obj.eval()
@@ -257,7 +261,6 @@ def _generate(
     messages: list[dict],
     max_tokens: int = 512,
     temperature: float = 0.7,
-    device: str = "cuda",
 ) -> str:
     """Generate a response from the model given message history."""
     import torch

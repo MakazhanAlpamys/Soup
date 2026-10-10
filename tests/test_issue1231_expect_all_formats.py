@@ -340,7 +340,6 @@ def test_cli_expect_flags_pii_and_refusal_and_exits_2(
 
     suite_file = tmp_path / "suite.yaml"
     suite_yaml = """
-name: test_all_formats_suite
 expectations:
   - name: expect_no_pii
   - name: expect_no_refusal_pattern

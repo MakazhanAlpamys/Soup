@@ -572,6 +572,11 @@ JUDGE_PROVIDERS: frozenset[str] = frozenset({"ollama", "anthropic", "vllm"})
 _OLLAMA_DEFAULT_URL = "http://localhost:11434"
 _VLLM_DEFAULT_URL = "http://localhost:8000"
 
+# Anthropic ignores --judge-base-url / --base-url (API key from env var
+# only); this is the one and only endpoint ever called, so failure messages
+# must name it rather than whatever base_url the caller happened to pass.
+_ANTHROPIC_MESSAGES_URL = "https://api.anthropic.com/v1/messages"
+
 
 class ProviderCallError(RuntimeError):
     """A live provider request failed before producing a valid completion."""
@@ -711,7 +716,7 @@ def make_judge_provider_fn(
                 return _failed("anthropic provider prompt must be a string")
             try:
                 resp = httpx.post(
-                    "https://api.anthropic.com/v1/messages",
+                    _ANTHROPIC_MESSAGES_URL,
                     headers={
                         "x-api-key": api_key,
                         "anthropic-version": "2023-06-01",

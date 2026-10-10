@@ -71,8 +71,12 @@ def judge_filter_pairs(
     weighted score is normalised to ``[0, 1]`` against the rubric scale;
     pairs with ``chosen_norm - rejected_norm >= min_confidence`` are kept.
     Any per-pair exception from the judge backend (network error, parse
-    failure) drops the pair and increments the report's ``errors`` field.
+    failure) drops the pair and increments the report's ``errors`` field,
+    except ``JudgeDownError``: a judge that has stopped answering ends the
+    filter, and the error says how many pairs were not judged (#1522).
     """
+    from soup_cli.eval.judge import JudgeDownError
+
     threshold = _validate_threshold(min_confidence)
 
     # Lazy materialise: peek at most _MAX_BATCH+1 to detect overflow without
@@ -96,6 +100,12 @@ def judge_filter_pairs(
             rejected_score = float(
                 judge.evaluate(pair.prompt, pair.rejected).weighted_score
             )
+        except JudgeDownError as exc:
+            # #1522: it has stopped answering, so every later pair would only
+            # add to ``errors``. Stop, and say how much was left.
+            raise exc.for_rows(
+                len(pair_list) - len(kept) - dropped, len(pair_list), "pairs"
+            ) from exc
         except Exception as exc:  # noqa: BLE001 — judge backends raise many shapes
             # Mirror v0.33.0 #47 / v0.35.0 policy: log at DEBUG so production
             # silent-degradation is inspectable, but do not crash the harvest.

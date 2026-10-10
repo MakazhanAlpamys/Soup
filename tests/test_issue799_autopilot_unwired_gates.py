@@ -71,7 +71,9 @@ def test_train_warns_for_nondefault_unwired_sibling_settings(
     monkeypatch,
 ) -> None:
     import soup_cli.commands.train as train_mod
+    import soup_cli.config.loader as loader
 
+    monkeypatch.setattr(loader, "STAGED_FIELD_SEVERITY", "warn")
     data_path = _write_data(tmp_path / "data.jsonl")
     config_path = tmp_path / "soup.yaml"
     config_path.write_text(

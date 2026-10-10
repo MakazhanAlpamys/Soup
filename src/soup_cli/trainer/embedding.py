@@ -1,6 +1,5 @@
 """Embedding model trainer — contrastive/triplet loss for sentence embeddings."""
 
-import math
 import time
 from pathlib import Path
 from typing import Optional
@@ -168,12 +167,10 @@ class EmbeddingTrainerWrapper:
             f"pooling={tcfg.embedding_pooling}"
         )
 
-        # --- Calculate warmup steps from ratio ---
-        total_steps = (
-            math.ceil(len(train_ds) / batch_size / tcfg.gradient_accumulation_steps)
-            * tcfg.epochs
-        )
-        warmup_steps = int(total_steps * tcfg.warmup_ratio)
+        # --- Calculate warmup steps from ratio (#1431) ---
+        from soup_cli.utils.warmup import resolve_trainer_warmup_steps
+
+        warmup_steps = resolve_trainer_warmup_steps(tcfg.warmup_ratio)
 
         # --- Training args ---
         _bf16, _fp16 = bf16_fp16_flags(self.device)
@@ -295,7 +292,7 @@ class EmbeddingTrainerWrapper:
         # Use AutoModel (not AutoModelForCausalLM) for embedding models
         self.model = AutoModel.from_pretrained(cfg.base, **model_kwargs)
 
-        if tcfg.quantization in ("4bit", "8bit", "mxfp4"):
+        if tcfg.quantization in ("4bit", "8bit"):
             from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
 
             self.model = prepare_model_for_kbit_training(
@@ -392,23 +389,16 @@ class EmbeddingTrainerWrapper:
         start = time.time()
 
         if display:
-            from soup_cli.monitoring.callback import (
-                SoupTrainerCallback,
-                soup_callback_kwargs,
-            )
+            from soup_cli.monitoring.callback import build_soup_trainer_callback
 
             self.trainer.add_callback(
-                SoupTrainerCallback(
+                build_soup_trainer_callback(
                     display,
+                    config=self.config,
                     tracker=tracker,
                     run_id=run_id,
-                    eval_gate_config=self.config.training.eval_gate,
-                    **soup_callback_kwargs(
-                        self.config.training,
-                        batch_size=self._batch_size,
-                        output_dir=self._output_dir,
-                        include_eval_gate=False,
-                    ),
+                    batch_size=self._batch_size,
+                    output_dir=self._output_dir,
                 )
             )
 
@@ -425,7 +415,14 @@ class EmbeddingTrainerWrapper:
             self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
         duration = time.time() - start
 
-        self.trainer.save_model(self._output_dir)
+        if self.config.training.relora_steps is None:
+            self.trainer.save_model(self._output_dir)
+        else:
+            from soup_cli.utils.peft_wiring import save_model_with_relora
+
+            save_model_with_relora(
+                self.trainer, self._output_dir, self.config.training.relora_steps
+            )
         self.tokenizer.save_pretrained(self._output_dir)
 
         logs = self.trainer.state.log_history

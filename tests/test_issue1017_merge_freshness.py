@@ -558,16 +558,19 @@ class TestWorkflowPins:
         assert any("main:refs/remotes/origin/main" in run for run in runs)
 
     def test_ci_yml_concurrency_keys_prs_main_and_releases_apart(self):
-        """A PR supersedes itself, main pushes share one group, a release keeps its commit.
+        """A PR supersedes itself; every push, nightly or manual run is alone in its group.
 
         The key is the enforcement, not ``cancel-in-progress``: a pending run is
-        superseded by a newer one in the same group whatever that flag says.
+        superseded by a newer one in the same group whatever that flag says. Main pushes
+        shared one group until 2026-10-01 and left 'cancelled' on all but two of a burst of
+        22 merges; a push now runs only the quick set, so it can afford its own group.
         """
         text = CI.read_text(encoding="utf-8")
         assert (
             "github.event_name == 'pull_request' && github.ref"
-            " || (github.ref == 'refs/heads/main' && 'main-push' || github.sha)"
+            " || format('{0}-{1}', github.event_name, github.sha)"
         ) in text
+        assert "main-push" not in yaml.safe_load(text)["concurrency"]["group"]
         assert "cancel-in-progress: ${{ github.event_name == 'pull_request' }}" in text
 
     def test_the_script_uses_merge_tree_not_git_merge(self):

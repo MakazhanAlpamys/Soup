@@ -21,6 +21,7 @@ _ALLOWED_KEYS = frozenset(
         "epoch",
         "loss",
         "val_loss",
+        "val_reward",
         "lr",
         "grad_norm",
         "tokens_per_s",
@@ -51,6 +52,10 @@ class TrainEvent:
     #: training series would replace one curve with another at the same
     #: step, which looks correct and is not.
     val_loss: Optional[float] = None
+    #: grpo's held-out reward at an evaluation step, higher is better (#1389).
+    #: Its own field for the same reason ``val_loss`` is: a reward written into
+    #: the loss curve would read as a loss.
+    val_reward: Optional[float] = None
     lr: Optional[float] = None
     grad_norm: Optional[float] = None
     tokens_per_s: Optional[float] = None
@@ -91,6 +96,7 @@ def to_payload(event: TrainEvent) -> Dict[str, Any]:
         "epoch",
         "loss",
         "val_loss",
+        "val_reward",
         "lr",
         "grad_norm",
         "tokens_per_s",

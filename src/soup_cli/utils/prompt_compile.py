@@ -226,6 +226,10 @@ def build_compile_plan(
 ) -> CompilePlan:
     """Validate every input and build a frozen ``CompilePlan``."""
     canonical_opt = validate_prompt_optimizer(optimizer)
+    # #1445 — refuse a destination outside cwd or a symlinked one at plan
+    # time, BEFORE the optimizer runs and spends its LLM calls. The
+    # write-time check in ``atomic_write_text`` stays as the TOCTOU guard.
+    enforce_under_cwd_and_no_symlink(output_path, field="output_path")
     return CompilePlan(
         program_path=program_path,
         eval_suite_path=eval_suite_path,

@@ -1,0 +1,11 @@
+sequence 'sustain2' in C:\Users\user\projects\Soup-sustain\benchmarks\results\probe-rtx5070\two-drive: outcome stopped: sustain2_r2_striped void twice; no verdict
+  r0 SINGLE  early 17.388 s  late 17.298 s  d 0.995  C: 3.953->3.977 D: 0.000->0.000 GB/s  problems none
+  r0 STRIPED early 8.353 s  late 13.525 s  d 1.619  C: 4.015->2.506 D: 4.021->2.505 GB/s  problems none  arm drift > 1.08, C: slowed > 1.1x, D: slowed > 1.1x
+  r1 SINGLE  early 17.303 s  late 19.185 s  d 1.109  C: 3.960->3.557 D: 0.000->0.000 GB/s  problems none  arm drift > 1.08, C: slowed > 1.1x
+  r1 STRIPED early 13.580 s  late 13.590 s  d 1.001  C: 2.932->2.191 D: 2.934->2.191 GB/s  problems none  C: slowed > 1.1x, D: slowed > 1.1x
+  r2 SINGLE  early 17.711 s  late 19.779 s  d 1.117  C: 3.741->3.409 D: 0.000->0.000 GB/s  problems none  arm drift > 1.08
+  round 0: u_early 2.082  u_late 1.279
+  round 1: u_early 1.274  u_late 1.412
+  row 1 SINGLE early median outside 15.0-21.5 s: does not fire
+  row 2 off the path under test, or the protocol stopped: fires: no valid arm: ['r2 STRIPED']; protocol: stopped: sustain2_r2_striped void twice; no verdict
+  row VERDICT: NO VERDICT (row 2): the arms did not measure what the rule reads

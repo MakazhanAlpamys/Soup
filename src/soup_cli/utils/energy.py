@@ -12,7 +12,6 @@ char / oversize rejection.
 
 from __future__ import annotations
 
-import ipaddress
 import logging
 import math
 import re
@@ -21,11 +20,12 @@ from types import TracebackType
 from typing import Optional
 from urllib.parse import urlsplit
 
+from soup_cli.utils.net_guard import LOOPBACK_HOSTS, refuse_private_ip_literal
+
 _LOG = logging.getLogger(__name__)
 
 _MAX_ENDPOINT_LEN = 2048
 _CTRL_RE = re.compile(r"[\x00-\x1f\x7f]")
-_LOOPBACK = frozenset({"localhost", "127.0.0.1", "::1"})
 _SCHEMES = frozenset({"http", "https"})
 _COUNTRY_RE = re.compile(r"^[A-Za-z]{3}$")
 _DEFAULT_COUNTRY = "USA"
@@ -93,23 +93,13 @@ def validate_electricity_map_endpoint(endpoint: str) -> str:
         raise ValueError("endpoint must have a host")
     if host == "0.0.0.0":
         raise ValueError("0.0.0.0 endpoints are rejected")
-    is_loopback = host in _LOOPBACK
+    is_loopback = host in LOOPBACK_HOSTS
     if scheme == "http" and not is_loopback:
         # Reject plain HTTP except for loopback.
         raise ValueError(
             "http:// only permitted for loopback hosts; use https:// for remote"
         )
-    # Reject private / link-local / cloud-metadata IPs explicitly.
-    # ``parts.hostname`` already strips IPv6 brackets, so feed it directly.
-    try:
-        ip = ipaddress.ip_address(host)
-    except ValueError:
-        ip = None
-    if ip is not None and not is_loopback:
-        if ip.is_private or ip.is_link_local or ip.is_reserved or ip.is_multicast:
-            raise ValueError(
-                f"endpoint host {host!r} resolves to a private/link-local IP"
-            )
+    refuse_private_ip_literal(host, label="electricityMap endpoint")
     return endpoint
 
 

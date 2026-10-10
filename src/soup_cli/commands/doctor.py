@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import platform
 import re
 import sys
@@ -119,8 +120,10 @@ def doctor(
     # MLX (Apple Silicon) check
     _check_mlx()
 
+    issues: list[str] = []
+
     # Resources check
-    _check_resources(probe_disk=disk)
+    _check_resources(probe_disk=disk, issues=issues)
 
     # Dependencies table
     table = Table(title="Dependencies")
@@ -129,8 +132,6 @@ def doctor(
     table.add_column("Installed", justify="center")
     table.add_column("Min Version")
     table.add_column("Status")
-
-    issues: list[str] = []
     # Actionable install specs for the trailing "Fix all" line. Only entries
     # that are actually missing or out of range land here — never the full
     # required set, and never a bare per-package floor for an extra group.
@@ -473,6 +474,100 @@ def _check_mlx():
         )
 
 
+def _gpu_architecture_name(major: int, minor: int) -> str:
+    """Return the NVIDIA architecture family for a compute capability."""
+    if major >= 12 or major in (10,):
+        return "Blackwell"
+    if major == 9:
+        return "Hopper"
+    if major == 8 and minor == 9:
+        return "Ada"
+    if major == 8:
+        return "Ampere"
+    if major == 7 and minor in (5,):
+        return "Turing"
+    if major == 7 and minor in (0, 2):
+        return "Volta"
+    if major == 6 and minor in (0, 1):
+        return "Pascal"
+    return "Unknown"
+
+
+def _torch_gpu_arch_supported(torch, major: int, minor: int) -> bool:
+    """Return whether Torch has native or PTX coverage for this GPU."""
+    try:
+        arch_list = torch.cuda.get_arch_list()
+    except (AttributeError, RuntimeError):
+        return False
+
+    target = major * 10 + minor
+    for arch in arch_list:
+        if arch.startswith("sm_"):
+            sm_target = arch.removeprefix("sm_")
+            suffixed = sm_target.endswith("a")
+            sm_target = sm_target.rstrip("a")
+            try:
+                target_major = int(sm_target) // 10
+                target_minor = int(sm_target) % 10
+            except ValueError:
+                continue
+            if suffixed and sm_target == f"{major}{minor}":
+                return True
+            if (
+                not suffixed
+                and target_major == major
+                and target_minor <= minor
+            ):
+                return True
+        if arch.startswith("compute_"):
+            try:
+                ptx_target = int(arch.removeprefix("compute_").rstrip("a"))
+            except ValueError:
+                continue
+            if ptx_target <= target:
+                return True
+
+    return False
+
+
+def _format_gpu_capability(torch, idx: int) -> tuple[str, bool]:
+    """Return ``(capability_text, supported_by_torch)`` for one GPU."""
+    try:
+        major, minor = torch.cuda.get_device_capability(idx)
+    except (AttributeError, RuntimeError, AssertionError):
+        return "unknown", False
+
+    architecture = _gpu_architecture_name(major, minor)
+    supported = _torch_gpu_arch_supported(torch, major, minor)
+    return f"sm_{major}{minor} ({architecture})", supported
+
+
+def _get_precision_capabilities(torch) -> dict[str, tuple[bool, bool | None]]:
+    """Return hardware/software support for the reported precision features."""
+    from soup_cli.utils.advanced_precision import (
+        _torchao_available,
+        is_blackwell_gpu,
+        is_nvfp4_software_supported,
+    )
+    from soup_cli.utils.fp8 import is_fp8_gpu_supported
+
+    try:
+        from soup_cli.utils.gpu import cuda_supports_bf16
+
+        bf16_supported = bool(cuda_supports_bf16())
+    except (AttributeError, RuntimeError, AssertionError):
+        bf16_supported = False
+
+    torchao_available = bool(_torchao_available())
+    nvfp4_software = bool(is_nvfp4_software_supported())
+
+    return {
+        "BF16": (bf16_supported, None),
+        "FP8": (bool(is_fp8_gpu_supported()), torchao_available),
+        "NVFP4": (bool(is_blackwell_gpu()), nvfp4_software),
+    }
+
+
 def _check_gpu():
     """Check GPU availability and display info."""
     try:
@@ -486,13 +581,45 @@ def _check_gpu():
                 mem = torch.cuda.get_device_properties(idx)
                 total_gb = getattr(mem, "total_memory", getattr(mem, "total_mem", 0))
                 total_gb = total_gb / (1024**3)
-                gpus.append(f"  GPU {idx}: [bold]{name}[/] ({total_gb:.1f} GB)")
+
+                capability, torch_arch_supported = _format_gpu_capability(torch, idx)
+                arch_warning = ""
+                if not torch_arch_supported:
+                    advisory = _detect_gpu_arch_mismatch_advisory()
+                    arch_warning = (
+                        " [bold red]Torch build does not include this GPU "
+                        "architecture[/]"
+                    )
+                    if advisory:
+                        arch_warning += f" [dim]{advisory}[/]"
+
+                gpus.append(
+                    f"  GPU {idx}: [bold]{name}[/] "
+                    f"({total_gb:.1f} GB) — {capability}{arch_warning}"
+                )
             gpu_info = "\n".join(gpus)
             cuda_ver = torch.version.cuda or "N/A"
+
+            precision = _get_precision_capabilities(torch)
+            precision_lines = []
+            for feature, (hardware, software) in precision.items():
+                hw_status = "[green]yes[/]" if hardware else "[red]no[/]"
+                if software is None:
+                    precision_lines.append(f"  {feature}: hardware={hw_status}")
+                else:
+                    sw_status = "[green]yes[/]" if software else "[yellow]no[/]"
+                    precision_lines.append(
+                        f"  {feature}: hardware={hw_status}, software={sw_status}"
+                    )
+
+            precision_info = "\n".join(precision_lines)
+
             console.print(
                 Panel(
                     f"CUDA:     [bold green]available[/] (v{cuda_ver})\n"
-                    f"GPUs:     [bold]{gpu_count}[/]\n{gpu_info}",
+                    f"GPUs:     [bold]{gpu_count}[/]\n{gpu_info}\n\n"
+                    "[bold]Precision features[/]\n"
+                    f"{precision_info}",
                     title="GPU",
                 )
             )
@@ -600,6 +727,30 @@ def _nvidia_smi_cuda_version() -> tuple[int, int] | None:
     if completed.returncode != 0:
         return None
     return _parse_cuda_version((completed.stdout or "") + (completed.stderr or ""))
+
+
+def _detect_gpu_arch_mismatch_advisory() -> str:
+    """Return a CUDA wheel reinstall hint for an unsupported GPU architecture."""
+    driver_cuda = _nvidia_smi_cuda_version()
+    if driver_cuda is None:
+        return (
+            "Try reinstalling a CUDA-enabled PyTorch build that supports "
+            "your GPU architecture."
+        )
+
+    wheel = _torch_cuda_wheel_tag(driver_cuda)
+    if wheel is None:
+        return (
+            "Try reinstalling a CUDA-enabled PyTorch build that supports "
+            "your GPU architecture. Run `nvidia-smi` and install a PyTorch "
+            "CUDA wheel compatible with the reported driver."
+        )
+
+    index_url = f"https://download.pytorch.org/whl/{wheel}"
+    return (
+        "Reinstall a CUDA-enabled PyTorch build for your driver: "
+        f"`pip install torch --index-url {index_url}`"
+    )
 
 
 def _detect_gpu_hw_without_torch_cuda() -> str:
@@ -766,13 +917,13 @@ def _get_ram_gb() -> str:
     return "Unknown"
 
 
-def _check_resources(probe_disk: bool = False):
+def _check_resources(probe_disk: bool = False, issues: list[str] | None = None):
     """Check RAM and Disk space and display info."""
     import shutil
 
     table = Table(title="System Resources")
     table.add_column("Resource", style="bold")
-    table.add_column("Value")
+    table.add_column("Value", overflow="fold")
 
     table.add_row("RAM", _get_ram_gb())
 
@@ -808,6 +959,53 @@ def _check_resources(probe_disk: bool = False):
             "hdd": "[red]HDD[/] — layer streaming refuses the disk tier (RAM only)",
         }.get(kind, "[yellow]Unknown[/] — layer streaming will refuse the disk tier")
         table.add_row("Disk type", verdict)
+
+    stripe_var = os.environ.get("SOUP_LAYER_STREAM_STRIPE_DIRS")
+    if stripe_var:
+        from soup_cli.utils.layer_shard import resolve_cache_root
+        from soup_cli.utils.stripe_roots import (
+            STRIPE_DIRS_ENV,
+            iter_early_stripe_roots,
+            parse_stripe_dirs,
+        )
+        from soup_cli.utils.terminal import for_terminal
+
+        stripe_entries = parse_stripe_dirs(stripe_var)
+        primary = resolve_cache_root()
+        has_refused = False
+
+        for entry, resolved, reason in iter_early_stripe_roots(primary, stripe_entries):
+            row_label = "Stripe root"
+            if reason is not None:
+                has_refused = True
+                row_val = f"{for_terminal(entry)} — [red]Refused[/]: {for_terminal(reason)}"
+            elif probe_disk:
+                from soup_cli.utils.layer_stream import detect_disk_kind
+
+                try:
+                    kind = detect_disk_kind(resolved)
+                except Exception:  # noqa: BLE001
+                    kind = "unknown"
+                if kind != "nvme":
+                    has_refused = True
+                    reason_disk = (
+                        "the disk tier streams from NVMe only, and this volume classifies "
+                        f"as {kind!r}. If the probe is wrong, "
+                        "training.stream_disk_kind overrides it."
+                    )
+                    refused_msg = for_terminal(reason_disk)
+                    row_val = f"{for_terminal(entry)} — [red]Refused[/]: {refused_msg}"
+                else:
+                    row_val = f"{for_terminal(entry)} — [green]NVMe[/]"
+            else:
+                row_val = f"{for_terminal(entry)} — [green]OK[/]"
+            table.add_row(row_label, row_val)
+
+        if has_refused and issues is not None:
+            issues.append(
+                f"{STRIPE_DIRS_ENV}: one or more stripe roots are refused "
+                "(see System Resources above)"
+            )
 
     console.print(table)
     console.print()

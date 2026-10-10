@@ -514,7 +514,12 @@ def tool_profile(args: dict) -> dict:
 def tool_diagnose_evidence(args: dict) -> dict:
     """`soup diagnose --evidence` — failure-mode report card from pre-computed scores."""
     from soup_cli import __version__
-    from soup_cli.utils.diagnose.report import FAILURE_MODES, FailureScore, classify_score
+    from soup_cli.utils.diagnose.report import (
+        FAILURE_MODES,
+        FailureScore,
+        classify_score,
+        evidence_default_score,
+    )
     from soup_cli.utils.diagnose.runner import build_report
 
     run_id = _require_str(args, "run_id")
@@ -532,7 +537,7 @@ def tool_diagnose_evidence(args: dict) -> dict:
             continue
         if not isinstance(entry, dict):
             raise McpToolError(f"evidence.scores.{mode} must be an object")
-        score = entry.get("score", 1.0)
+        score = entry.get("score", evidence_default_score(entry))
         if isinstance(score, bool) or not isinstance(score, (int, float)):
             raise McpToolError(f"evidence.scores.{mode}.score must be a number")
         # classify_score rejects a score outside [0, 1] / non-finite, and
@@ -1063,7 +1068,9 @@ def _readonly_specs() -> list[ToolSpec]:
             title="Diagnose (evidence)",
             description=(
                 "Post-training failure-mode report card from a pre-computed "
-                "evidence JSON (no model load)."
+                "evidence JSON (no model load). `overall` is OK / MINOR / MAJOR / "
+                "NOT_RUN; only OK or MINOR is a pass (NOT_RUN means a probe did "
+                "not run)."
             ),
             input_schema={
                 "type": "object",

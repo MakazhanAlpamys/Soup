@@ -21,6 +21,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import uuid
 from dataclasses import replace
 from typing import Optional
 
@@ -295,7 +296,6 @@ def canary_cmd(
             stable=state.served_model,
             canary=new_adapter,
             traffic_pct=pct,
-            sticky_on_rollback=autoroll_on_regress,
         )
     except (TypeError, ValueError) as exc:
         console.print(f"[red]invalid canary policy:[/] {escape(str(exc))}")
@@ -307,6 +307,7 @@ def canary_cmd(
         canary_active=policy.canary,
         canary_traffic_pct=policy.traffic_pct,
         canary_autoroll_on_regress=autoroll_on_regress,
+        canary_rollout_id=uuid.uuid4().hex,
     )
     write_state(new_state)
     # Reload so the in-memory value reflects the persisted updated_at.

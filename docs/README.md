@@ -19,6 +19,7 @@ feature reference — every `soup` capability, grouped by area.
 | [Backends, platform & ops](backends-and-ops.md) | MLX/Unsloth backends, Modal cloud GPU training, alternative hubs, HF Hub integration, autopilot, experiment tracking, plan/apply, env lockfiles, hardware-fit, completions, plugins, utility commands |
 | [Command reference](commands.md) | The full `soup` command list |
 | [Supported models & extras](models.md) | Recommended model families, the VRAM size guide, the pip extras matrix |
+| [Issue difficulty](issue-difficulty.md) | How issues are rated 1-10 and what each level means |
 
 > Per-release notes live on the [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases)
 > page; see also the repo-root [CHANGELOG.md](../CHANGELOG.md).

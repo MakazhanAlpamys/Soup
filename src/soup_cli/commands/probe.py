@@ -24,6 +24,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from soup_cli.utils.paths import atomic_write_text, enforce_under_cwd_and_no_symlink
+from soup_cli.utils.terminal import for_terminal
 
 console = Console()
 
@@ -629,7 +630,8 @@ def interference(
     for key, value in losses_raw.items():
         if not isinstance(key, str) or "|" not in key:
             console.print(
-                f"[red]Invalid losses key {key!r}; expected 'a|b' shape.[/]"
+                f"[red]Invalid losses key {for_terminal(repr(key))}; "
+                "expected 'a|b' shape.[/]"
             )
             raise typer.Exit(2)
         # H3 review fix (v0.66.0): validate the value is numeric BEFORE
@@ -638,7 +640,7 @@ def interference(
         # with a confusing message.
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             console.print(
-                f"[red]losses[{escape(key)!r}] must be numeric, "
+                f"[red]losses[{for_terminal(repr(key))}] must be numeric, "
                 f"got {type(value).__name__}[/]"
             )
             raise typer.Exit(2)

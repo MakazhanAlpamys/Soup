@@ -145,7 +145,9 @@ def emit_cmd(
         raise typer.Exit(1)
 
     if output is None:
-        console.print(text)
+        # Verbatim: Rich would parse `[...]` in the invocation as markup and fold
+        # long lines, so the JSON on stdout no longer parsed (#1569 review; #1470).
+        typer.echo(text)
         console.print(f"[dim]signature backend: {escape(sig['backend'])}[/]")
         if sig.get("signature"):
             console.print(f"[dim]signature: {escape(sig['signature'][:32])}...[/]")
@@ -343,7 +345,7 @@ def verify_cmd(
 
     if backend != "ed25519" or not sig_hex:
         console.print(
-            f"[yellow]Signature backend {escape(backend or 'unsigned')!r} "
+            f"[yellow]Signature backend {for_terminal(repr(backend or 'unsigned'))} "
             "is not cryptographically verifiable.[/]"
         )
         raise typer.Exit(3)

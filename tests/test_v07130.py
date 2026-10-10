@@ -429,11 +429,35 @@ class TestPRMScorerInputCap:
         assert out == [0.0]
 
 
+def _write_prm_dir(path):
+    """A directory that passes the build-time reward-head check (#1466)."""
+    import torch
+    from safetensors.torch import save_file
+
+    path.mkdir(parents=True, exist_ok=True)
+    save_file(
+        {"reward_head.weight": torch.ones(1, 8), "reward_head.bias": torch.zeros(1)},
+        str(path / "model.safetensors"),
+    )
+    return path
+
+
 class TestBuildPrmRewardFn:
-    def test_returns_named_scorer(self, monkeypatch):
+    def test_returns_named_scorer(self, tmp_path, monkeypatch):
+        import huggingface_hub
+
         import soup_cli.utils.prm_reward as mod
 
         monkeypatch.setattr(mod, "_resolve_trust", lambda *a, **k: False)
+        # #1466: a Hub id is downloaded when the reward is built; stub the download and
+        # the namespace-pin metadata query it goes through (utils.hubs, #186).
+        from soup_cli.utils import hubs
+
+        snapshot = _write_prm_dir(tmp_path / "snapshot")
+        monkeypatch.setattr(
+            huggingface_hub, "snapshot_download", lambda repo_id, **kw: str(snapshot)
+        )
+        monkeypatch.setattr(hubs, "_hf_repo_metadata", lambda repo_id: None)
 
         class _T:
             prm_reward = "some/hf-id-not-on-disk"
@@ -473,7 +497,7 @@ class TestBuildPrmRewardFn:
 
         monkeypatch.setattr(mod, "_resolve_trust", lambda *a, **k: False)
         monkeypatch.chdir(tmp_path)
-        (tmp_path / "my_prm").mkdir()
+        _write_prm_dir(tmp_path / "my_prm")  # #1466: the head is checked at build time
 
         class _T:
             prm_reward = "./my_prm"

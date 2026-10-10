@@ -229,6 +229,9 @@ class _StubSavedObject:
     def save_pretrained(self, output_dir):
         pass
 
+    def parameters(self):
+        return []
+
 
 class _StubLoss:
     def __init__(self, value):
@@ -242,7 +245,11 @@ class _StubLoss:
 
 
 def _run_unlearn_loss_result(tmp_path, monkeypatch, losses):
-    monkeypatch.setitem(sys.modules, "torch", types.ModuleType("torch"))
+    torch = types.ModuleType("torch")
+    torch.nn = types.SimpleNamespace(
+        utils=types.SimpleNamespace(clip_grad_norm_=lambda *args: None)
+    )
+    monkeypatch.setitem(sys.modules, "torch", torch)
 
     from soup_cli.config.schema import SoupConfig
     from soup_cli.trainer.unlearn import UnlearnTrainerWrapper
@@ -261,7 +268,9 @@ def _run_unlearn_loss_result(tmp_path, monkeypatch, losses):
     wrapper.tokenizer = _StubSavedObject()
     wrapper._dev = "cpu"
     wrapper._optimizer = _StubOptimizer()
+    wrapper._scheduler = types.SimpleNamespace(step=lambda: None)
     wrapper._forget = [("prompt", "target")] * max(1, len(losses))
+    wrapper._max_examples = len(wrapper._forget)
     wrapper._retain = []
     remaining = iter(losses)
     monkeypatch.setattr(

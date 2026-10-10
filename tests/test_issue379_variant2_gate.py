@@ -9,6 +9,7 @@ the non-vacuous contract on CPU; real 32B/72B numbers still require CUDA.
 from __future__ import annotations
 
 import importlib.util
+import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -304,11 +305,12 @@ class TestSourceCommit:
             return SimpleNamespace(stdout=status)
 
         monkeypatch.chdir(tmp_path)
-        monkeypatch.setattr(_harness.subprocess, "run", fake_run)
+        monkeypatch.setattr(subprocess, "run", fake_run)
 
         assert _harness._source_sha() == expected_sha + ("-dirty" if status else "")
         assert calls == [
             (["git", "rev-parse", "--show-toplevel"], package_dir),
+            (["git", "ls-files", "--error-unmatch", str(Path(package_file).resolve())], tmp_path),
             (["git", "rev-parse", "HEAD"], tmp_path),
             (["git", "status", "--porcelain", "--untracked-files=normal"], tmp_path),
         ]

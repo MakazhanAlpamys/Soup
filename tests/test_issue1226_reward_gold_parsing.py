@@ -68,6 +68,11 @@ GOLDS_42 = {
     "G30 marker, then a box": r"#### \boxed{42}",
     "G31 phrase, answer on the next line": "The answer is\n42",
     "G32 dollars around the bare answer": "$42$",
+    # #1346: spelling-matrix coverage for the new rewrites, each tested against every completion
+    # below.
+    "G33 text-wrapped": r"\text{42}",
+    "G34 degree": r"42^\circ",
+    "G35 variable prefix": "x = 42",
 }
 
 # Completions that state the correct answer (42). C1-C10 are the table in #1226.
@@ -113,6 +118,10 @@ CORRECT_42 = {
     "C38 dollars around the bare answer": "$42$",
     "C39 italic label": "*Answer*: 42",
     "C40 a later box supersedes a marker": "#### 41\n" + r"\boxed{42}",
+    # #1346: spelling-matrix coverage for the new rewrites, each tested against every gold above.
+    "C41 text-wrapped box": r"\boxed{\text{42}}",
+    "C42 degree box": r"\boxed{42^\circ}",
+    "C43 variable prefix box": r"\boxed{x = 42}",
 }
 
 # Completions that state a WRONG answer (gold 42). W1-W2 are from #1226. None may score above 0.
@@ -231,9 +240,47 @@ STRING_GOLD_CASES = [
     (r"\(p - q\)", r"\boxed{p - q}", 1.0),
     ("p - q", r"\boxed{q-p}", 0.0),
     (r"90^\circ", r"\boxed{90^\circ}", 1.0),
-    (r"90^\circ", r"\boxed{90}", 0.0),  # no unit or degree stripping
+    (r"90^\circ", r"\boxed{90}", 1.0),  # #1346: ^\circ is dropped, so both read 90
+    (r"90^\circ", r"\boxed{45}", 0.0),
+    (r"90", r"\boxed{90^\circ}", 1.0),  # #1346: degree stripping is symmetric
+    (r"90^{\circ}", r"\boxed{90}", 1.0),  # #1346: the braced spelling too
+    ("90\N{DEGREE SIGN}", r"\boxed{90}", 1.0),  # #1346: and the bare degree sign
     (r"x \leftarrow y", r"\boxed{x \leftarrow y}", 1.0),  # \left is not stripped from \leftarrow
     (r"x \leftarrow y", r"\boxed{x arrow y}", 0.0),
+    # #1346: \text{}/\textbf{}/\mathrm{}/\mbox{} wrap what IS the answer.
+    ("Paris", r"\boxed{\text{Paris}}", 1.0),
+    ("Paris", r"\boxed{\text{Lyon}}", 0.0),
+    ("Paris", r"\boxed{\textbf{Paris}}", 1.0),
+    ("Paris", r"\boxed{\mathrm{Paris}}", 1.0),
+    ("Paris", r"\boxed{\mbox{Paris}}", 1.0),
+    ("42", r"\boxed{42 \text{ apples}}", 0.0),  # a unit inside \text{} is still a unit
+    # #1346: a compact \frac argument (a single bare or braced character) reads \frac{N}{D}.
+    (r"\frac{1}{2}", r"\boxed{\frac12}", 1.0),
+    (r"\frac{1}{2}", r"\boxed{\frac1{2}}", 1.0),
+    (r"\frac{1}{2}", r"\boxed{\frac{1}2}", 1.0),
+    (r"\frac{1}{2}", r"\boxed{\frac13}", 0.0),
+    (r"\frac{14}{3}", r"\boxed{\frac{14}{3}}", 1.0),  # multi-digit args are untouched
+    # #1346: a one-letter variable prefix reads its right-hand side, on either side.
+    ("7", r"\boxed{x = 7}", 1.0),
+    ("x = 7", r"\boxed{7}", 1.0),
+    ("x = 7", r"\boxed{8}", 0.0),
+    ("x = 7", "Answer: x = 7", 1.0),
+    # review: both sides name a variable, and the names differ, so the pair conflicts even
+    # though the right-hand sides are equal (a vertical line is not a horizontal one).
+    ("x = 3", r"\boxed{y = 3}", 0.0),  # a vertical line is not a horizontal one
+    ("y = 7", r"\boxed{x = 7}", 0.0),
+    (r"y = -\frac{47}{8}", r"\boxed{x = -\frac{47}{8}}", 0.0),  # a directrix names its axis
+    ("7", r"\boxed{2x + 1 = 7}", 0.0),  # an equation is not its solution
+    ("7", r"\boxed{ab = 7}", 0.0),  # only a one-letter left-hand side is a prefix
+    ("x = 5", r"\boxed{X = 5}", 0.0),  # a variable's case is part of its name
+    # review: a compact \frac argument may be preceded by a space, or already be a braced
+    # group longer than one character; both spellings still read \frac{N}{D}.
+    (r"\frac 34", r"\boxed{\frac34}", 1.0),  # MATH-500; 1.0 on main, 0.0 before this fix
+    (r"\frac 59", r"\boxed{\frac{5}{9}}", 1.0),  # MATH-500
+    (r"\frac9{19}", r"\boxed{\frac{9}{19}}", 1.0),  # MATH-500
+    (r"\frac{270}7\text{ degrees}", r"\boxed{\frac{270}{7}\text{ degrees}}", 1.0),  # MATH-500
+    (r"\frac{1}{10}", r"\boxed{\frac1{10}}", 1.0),
+    (r"\frac{180^\circ}{3}", r"\boxed{\frac{180}{3}}", 1.0),  # needs the _DEGREE_RE brace fix
 ]
 
 # Hedges (ruling): an answer clause that names more than one DISTINCT value states no answer.
@@ -257,6 +304,10 @@ HEDGES = [
     ("The answer is 6 times 7 which is 42.", ["6", "7", "42"]),  # boundary: every number counts
     ("The answer is 42 (6 times 7).", ["42", "6", "7"]),  # boundary: so does an aside's
     ("The answer is 3, 4.", ["3", "4"]),  # boundary: a bare list in a phrase is a hedge
+    # #1346 (accepted, undocumented before this row): dropping ^\circ and unwrapping \text{}
+    # runs before the hedge scan, so digits that used to be glued to a unit now stand alone.
+    ("The answer is 30^\\circ, 60^\\circ.", ["30", "60"]),
+    (r"The answer is \text{2 and 3}.", ["2", "3"]),
 ]
 
 # Not hedges: ONE value, maybe repeated or respelled; a tuple or an expression is one answer.
@@ -290,6 +341,9 @@ HEDGED_GOLDS = [
     "The answer is 42 (or 43).",
     "6*7 is 42.\nThe answer is 42 or 43.",
     "#### Final Answer\n41 or 42",
+    # #1346 (accepted): a degree-marked pair now hedges as a gold too, since the ^\circ is
+    # dropped before the clause's values are scanned.
+    "The answer is 30^\\circ, 60^\\circ.",
 ]
 
 # The partial-credit policy, pinned: (completion, gold, accuracy before #1226, accuracy now).
@@ -397,6 +451,73 @@ class TestIssueRepro:
         text = r"so x = \boxed{\frac{1}{2}}"
         assert _extract_answer(text) == r"\frac{1}{2}"
         assert accuracy_reward(_msg(text), answer=[r"\frac{1}{2}"]) == [1.0]
+
+
+class TestIssue1346:
+    """#1346: a spelling normalised on one side must be normalised the same way on the other."""
+
+    @pytest.mark.parametrize(
+        ("gold", "completion"),
+        [
+            (r"90^\circ", r"\boxed{90}"),
+            ("90", r"\boxed{90^\circ}"),
+            ("Paris", r"\boxed{\text{Paris}}"),
+            ("7", r"\boxed{x = 7}"),
+            ("x = 7", r"\boxed{7}"),
+            (r"\frac{1}{2}", r"\boxed{\frac12}"),
+        ],
+    )
+    def test_each_pair_from_the_issue_scores_one(self, gold, completion):
+        assert accuracy_reward(_msg(completion), answer=[gold]) == [1.0]
+        assert math_verify_reward(_msg(completion), answer=[gold]) == [1.0]
+
+    @pytest.mark.parametrize(
+        ("gold", "completion"),
+        [
+            (r"90^\circ", r"\boxed{45}"),
+            ("Paris", r"\boxed{\text{Lyon}}"),
+            ("x = 7", r"\boxed{8}"),
+        ],
+    )
+    def test_a_wrong_neighbour_still_scores_zero(self, gold, completion):
+        assert accuracy_reward(_msg(completion), answer=[gold]) == [0.0]
+        assert math_verify_reward(_msg(completion), answer=[gold]) == [0.0]
+
+    def test_the_same_phrase_reads_the_same_number_on_both_sides(self):
+        from soup_cli.utils.final_answer import parse_completion, parse_reference
+
+        text = "Answer: x = 7"
+        assert parse_completion(text) == parse_reference(text)
+        assert parse_reference(text).number == Decimal(7)
+
+    def test_a_unit_is_still_not_stripped(self):
+        # Units stay unstripped; the ruling is recorded on #1346.
+        assert accuracy_reward(_msg("#### 42 apples"), answer=["42"]) == [0.0]
+        assert accuracy_reward(_msg(r"\boxed{42 \text{ apples}}"), answer=["42"]) == [0.0]
+        assert math_verify_reward(_msg("#### 42 apples"), answer=["42"]) == [0.0]
+        assert math_verify_reward(_msg(r"\boxed{42 \text{ apples}}"), answer=["42"]) == [0.0]
+
+    def test_the_answer_is_42_apples_as_a_gold_reads_42_as_a_completion(self):
+        from soup_cli.utils.final_answer import parse_completion, parse_reference
+
+        gold = parse_reference("The answer is 42 apples.")
+        assert (gold.text, gold.number) == ("42 apples", None)
+        completion = parse_completion("The answer is 42 apples.")
+        assert (completion.text, completion.number) == ("42 apples", Decimal(42))
+
+    @pytest.mark.parametrize("gold", [r"\boxed{x =}", "Answer: x =", "#### x =", "x ="])
+    def test_a_variable_with_nothing_after_it_is_not_a_reference(self, gold):
+        from soup_cli.utils.final_answer import parse_reference
+
+        assert parse_reference(gold) is None
+        tcfg = TrainingConfig(reward_fn="accuracy")
+        with pytest.raises(ValueError, match="states no single final answer"):
+            _validate_grpo_reward_metadata([{"prompt": "p", "answer": gold}], tcfg, split="train")
+
+    def test_a_control_sequence_is_not_split_as_a_frac_argument(self):
+        from soup_cli.utils.final_answer import normalize_answer
+
+        assert normalize_answer(r"\frac\pi2") == r"\frac\pi2"
 
 
 # ===========================================================================
@@ -680,6 +801,13 @@ class TestSharedHelper:
         assert (unit.text, unit.number) == ("42 apples", None)
         latex = parse_reference(r"\left( 3, \dfrac{\pi}{2} \right)")
         assert (latex.text, latex.number) == (r"( 3, \frac{\pi}{2} )", None)
+        # #1346: a text-wrapper, a degree mark and a variable prefix are read on the bare path.
+        wrapped = parse_reference(r"\text{Paris}")
+        assert (wrapped.text, wrapped.number) == ("Paris", None)
+        degree = parse_reference(r"90^\circ")
+        assert (degree.text, degree.number) == ("90", Decimal(90))
+        prefixed = parse_reference("x = 7")
+        assert (prefixed.text, prefixed.number) == ("7", Decimal(7))
 
     @pytest.mark.parametrize(
         "text",
@@ -719,6 +847,8 @@ class TestSharedHelper:
             (r"\left( 3, \frac{\pi}{2} \right)", r"(3,\frac{\pi}{2})"),
             (r"\(p - q\)", "p-q"),
             ("New York", "new york"),
+            (r"\text{Paris}", "Paris"),  # #1346
+            (r"\frac12", r"\frac{1}{2}"),  # #1346
         ],
     )
     def test_text_answers_compare_ignoring_whitespace_case_and_latex_wrappers(self, left, right):

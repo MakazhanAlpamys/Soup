@@ -207,7 +207,10 @@ def _stub_eval_internals(monkeypatch):
     import soup_cli.commands.eval as ce
     import soup_cli.eval.custom as ec
 
-    monkeypatch.setattr(ec, "_create_default_generator", lambda path: (lambda p: "4"))
+    monkeypatch.setattr(
+        ec, "_create_default_generator",
+        lambda path, trust_remote_code=False: (lambda p: "4"),
+    )
     monkeypatch.setattr(ce, "_save_custom_results", lambda *a, **k: None)
 
 
@@ -295,18 +298,19 @@ def test_training_callback_passes_every_typer_parameter_of_custom(monkeypatch):
     recorded: dict = {}
     monkeypatch.setattr(ce, "custom", _recording_custom(recorded))
 
-    from soup_cli.monitoring.callback import SoupTrainerCallback
+    import soup_cli.commands.train as train_cmd
 
-    callback = SoupTrainerCallback.__new__(SoupTrainerCallback)
-    callback.eval_config = type(
+    monkeypatch.setattr(
+        train_cmd, "_should_run_diagnose_gate_on_rank", lambda: True
+    )
+
+    eval_config = type(
         "EvalCfg",
         (),
         {"auto_eval": True, "benchmarks": [], "custom_tasks": "tasks.jsonl"},
     )()
-    callback.output_dir = "out"
-    callback.run_id = "run-1"
 
-    callback._run_auto_eval()
+    train_cmd._run_auto_eval_after_training(eval_config, "out", "run-1")
 
     assert set(recorded) == expected, (
         f"the callback left {sorted(expected - set(recorded))} to typer's default"

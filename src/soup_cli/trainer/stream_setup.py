@@ -24,9 +24,14 @@ import math
 import os
 import shutil
 from dataclasses import dataclass
+from typing import Any, Optional, Sequence
 
 from rich.console import Console
 from rich.panel import Panel
+
+from soup_cli.utils.config_bounds import DEFAULT_STREAM_READ_AHEAD, MAX_STREAM_READ_AHEAD
+from soup_cli.utils.paths import quote_path
+from soup_cli.utils.stripe_roots import ReadAheadDecision, effective_read_ahead
 
 console = Console()
 
@@ -208,6 +213,7 @@ def _validate_stream_staging_ram_fit(
     read_ahead: int,
     free_ram: int,
     resident_ram: int = 0,
+    read_ahead_decision: Optional[ReadAheadDecision] = None,
 ) -> None:
     """Refuse a disk-tier run whose host staging will not fit free RAM.
 
@@ -225,23 +231,23 @@ def _validate_stream_staging_ram_fit(
     Refusing beats clamping ``read_ahead``: a depth the operator set is a
     decision, and silently lowering it would hand back a slower run than the
     one they configured with no line saying why.
+
+    ``read_ahead_decision`` (R4) says how the depth came about. On a striped
+    cache the default is raised to drives + 1, so a bare "lower it" loops: the
+    operator writes the default back and it is raised again. The advice then
+    names a value that is not re-raised.
     """
-    from soup_cli.utils.layer_stream import (
-        MIN_STREAM_READ_AHEAD,
-        RAM_TIER_HEADROOM,
-    )
+    from soup_cli.utils.layer_stream import RAM_TIER_HEADROOM
 
     required = int(staging_bytes) + int(resident_ram)
     budget = free_ram * RAM_TIER_HEADROOM
     if required < budget:
         return
+    decision = read_ahead_decision or ReadAheadDecision(depth=read_ahead, configured=read_ahead)
     # At the floor there is no lower depth to suggest, and an impossible remedy
     # is worse than none: it reads as "you did not try hard enough".
-    lower = (
-        ""
-        if read_ahead <= MIN_STREAM_READ_AHEAD
-        else f"Lower training.stream_read_ahead (currently {read_ahead}), "
-    )
+    advice = decision.lowering_advice()
+    lower = f"{advice}, " if advice else ""
     raise ValueError(
         f"layer streaming's disk tier would hold "
         f"{staging_bytes / 1e9:.2f} GB of host staging (page-locked when the "
@@ -289,7 +295,7 @@ def _existing_disk_anchor(path: str) -> str:
     while not os.path.exists(anchor):
         parent = os.path.dirname(anchor)
         if parent == anchor:
-            raise OSError(f"cannot locate an existing filesystem ancestor for {path!r}")
+            raise OSError(f"cannot locate an existing filesystem ancestor for {quote_path(path)}")
         anchor = parent
     return anchor
 
@@ -298,6 +304,166 @@ def _disk_volume(path: str) -> tuple[int, int]:
     """Filesystem identity and currently free bytes for a prospective write."""
     anchor = _existing_disk_anchor(path)
     return int(os.stat(anchor).st_dev), int(shutil.disk_usage(anchor).free)
+
+
+def _effective_read_ahead(tcfg: Any, n_roots: int, console: Any) -> ReadAheadDecision:
+    """The async reader's depth with ``n_roots`` drives (R4), and how it came about.
+
+    Every drive needs a read in flight beside the slot the consumer holds, so the DEFAULT depth
+    becomes ``n_roots + 1`` — one more layer of host staging per extra drive. "Default" is read
+    the way the schema's own read-ahead check reads it ("a default is not a decision",
+    ``config/schema.py``): the configured value equals DEFAULT_STREAM_READ_AHEAD. That also
+    holds for a config round-tripped through ``model_dump`` (``train --replay``, ``soup
+    sweep``), where every field looks explicitly set. Any other value is the operator's call:
+    kept, with a warning naming the drives it leaves idle — a speed setting, not a correctness
+    one, so never a refusal. The rule itself is ``stripe_roots.effective_read_ahead``.
+
+    Returns the whole decision, not just the depth: every message that advises lowering the
+    depth needs to know whether Soup raised it, or its advice loops (the operator writes the
+    default back and it is raised again).
+    """
+    configured = int(tcfg.stream_read_ahead)
+    decision = ReadAheadDecision(
+        depth=effective_read_ahead(configured, n_roots), configured=configured, n_roots=n_roots
+    )
+    if n_roots <= 1:
+        return decision
+    wanted = min(n_roots + 1, MAX_STREAM_READ_AHEAD)
+    if decision.raised:
+        console.print(
+            f"[dim]training.stream_read_ahead {configured} -> {decision.depth}: the layer "
+            f"cache spans {n_roots} drives, and each needs a read in flight "
+            f"({DEFAULT_STREAM_READ_AHEAD} counts as the default; any other value is kept as "
+            f"set).[/]"
+        )
+    elif configured < wanted:
+        console.print(
+            f"[yellow]training.stream_read_ahead={configured} with {n_roots} stripe drives "
+            f"keeps {wanted - configured} of them idle between layers; {wanted} lets every "
+            f"drive read at once (one more layer of host staging each).[/]"
+        )
+    return decision
+
+
+def _stripe_write_shares(total: int, n_roots: int) -> list[int]:
+    """Fallback even split across roots when source safetensors headers cannot be read.
+
+    Used when source headers are unreadable or for architectures like qwen4_exp.
+    Evenly divides total across roots with divmod remainder distribution.
+    """
+    base, extra = divmod(int(total), n_roots)
+    return [base + (1 if position < extra else 0) for position in range(n_roots)]
+
+
+def estimate_stripe_write_shares(
+    weights_dir: Optional[str],
+    *,
+    total_bytes: int,
+    n_roots: int,
+    dtype: str = "bfloat16",
+    quant: str = "none",
+    double_quant: bool = True,
+    arch: str = "",
+) -> tuple[list[int], bool]:
+    """Calculate per-root shard write shares, charging root 0 non-decoder bytes (#1612).
+
+    Returns ``(shares, approximate)``:
+    - When source safetensors headers can be parsed without tensor loads:
+      calculates the parameter count per decoder layer and for non-decoder weights.
+      Root k is charged decoder bytes for layers placed on root k according to
+      ``layer_roots_for(n_layers, n_roots)``.
+      Root 0 is charged its decoder layers plus all non-decoder weights at the
+      streaming dtype rate.
+      ``approximate`` is False.
+    - When headers cannot be read, or n_roots == 1, or total_bytes <= 0, or arch == "qwen4_exp":
+      falls back to ``_stripe_write_shares(total_bytes, n_roots)``, with
+      ``approximate`` True (when n_roots > 1 and total_bytes > 0).
+    """
+    if arch == "qwen4_exp":
+        return _stripe_write_shares(total_bytes, n_roots), n_roots > 1
+    if n_roots <= 1 or total_bytes <= 0:
+        return _stripe_write_shares(total_bytes, n_roots), False
+    if not weights_dir:
+        return _stripe_write_shares(total_bytes, n_roots), True
+
+    try:
+        resolved_dir = os.path.realpath(os.path.expanduser(str(weights_dir)))
+        if not os.path.isdir(resolved_dir):
+            return _stripe_write_shares(total_bytes, n_roots), True
+
+        from soup_cli.utils.layer_shard import (
+            _LAYER_RE,
+            QUANT_NF4,
+            _canonical_stream_key,
+            _discover_safetensors,
+        )
+        from soup_cli.utils.layer_stream import (
+            NF4_BYTES_PER_PARAM,
+            NF4_BYTES_PER_PARAM_SINGLE,
+        )
+        from soup_cli.utils.safetensors_reader import _ITEMSIZE, read_header
+        from soup_cli.utils.stripe_roots import layer_roots_for
+
+        shards = _discover_safetensors(resolved_dir)
+        itemsize = _ITEMSIZE.get(dtype, 2)
+
+        decoder_layer_bytes: dict[int, float] = {}
+        non_decoder_bytes: float = 0.0
+
+        for shard_path in shards:
+            header = read_header(shard_path)
+            for source_key, tensor_range in header.items():
+                canonical = _canonical_stream_key(source_key)
+                if canonical.endswith((".scales", ".biases")):
+                    continue
+                match = _LAYER_RE.match(canonical)
+                numel = math.prod(tensor_range.shape)
+                if match:
+                    layer_idx = int(match.group(1))
+                    if quant == QUANT_NF4:
+                        if len(tensor_range.shape) >= 2:
+                            rate = (
+                                NF4_BYTES_PER_PARAM
+                                if double_quant
+                                else NF4_BYTES_PER_PARAM_SINGLE
+                            )
+                        else:
+                            rate = itemsize
+                    else:
+                        rate = itemsize
+                    decoder_layer_bytes[layer_idx] = (
+                        decoder_layer_bytes.get(layer_idx, 0.0) + numel * rate
+                    )
+                else:
+                    non_decoder_bytes += numel * itemsize
+
+        if not decoder_layer_bytes:
+            return _stripe_write_shares(total_bytes, n_roots), True
+
+        n_layers = max(decoder_layer_bytes.keys()) + 1
+        layer_roots = layer_roots_for(n_layers, n_roots)
+        raw_root_shares = [0.0] * n_roots
+        for layer_idx in range(n_layers):
+            raw_root_shares[layer_roots[layer_idx]] += decoder_layer_bytes.get(layer_idx, 0.0)
+        raw_root_shares[0] += non_decoder_bytes
+
+        raw_total = sum(raw_root_shares)
+        if raw_total <= 0:
+            return _stripe_write_shares(total_bytes, n_roots), True
+
+        effective_total = max(int(total_bytes), int(math.ceil(raw_total)))
+        raw_scaled = [effective_total * (s / raw_total) for s in raw_root_shares]
+        shares = [int(v) for v in raw_scaled]
+        remainder = effective_total - sum(shares)
+        fractions = sorted(
+            range(n_roots), key=lambda i: raw_scaled[i] - shares[i], reverse=True
+        )
+        for i in range(remainder):
+            shares[fractions[i]] += 1
+
+        return shares, False
+    except Exception:
+        return _stripe_write_shares(total_bytes, n_roots), True
 
 
 def _render_stream_disk_preflight(
@@ -309,11 +475,20 @@ def _render_stream_disk_preflight(
     shard_bytes: int,
     shard_write_bytes: int,
     shard_path: str,
+    stripe_writes: Sequence[tuple[str, int]] = (),
+    approximate: bool = False,
 ) -> None:
-    """Print and enforce the complete on-disk cost before either cache writes."""
+    """Print and enforce the complete on-disk cost before either cache writes.
+
+    ``stripe_writes`` are the (folder, bytes) writes bound for each extra stripe drive (R4);
+    each is charged to its own volume and refused by name when that drive cannot hold it.
+    """
     writes = (
         ("materialized weight copy", materialized_path, materialize_bytes),
         ("layer-shard cache", shard_path, shard_write_bytes),
+    ) + tuple(
+        (f"layer-shard stripe {position}", path, required)
+        for position, (path, required) in enumerate(stripe_writes, start=1)
     )
     required_by_device: dict[int, int] = {}
     free_by_device: dict[int, int] = {}
@@ -327,7 +502,9 @@ def _render_stream_disk_preflight(
         labels_by_device.setdefault(device, []).append(label)
 
     projected_total = source_bytes + materialized_copy_bytes + shard_bytes
-    additional = materialize_bytes + shard_write_bytes
+    additional = (
+        materialize_bytes + shard_write_bytes + sum(required for _path, required in stripe_writes)
+    )
     lines = [
         f"HF/local source: {source_bytes / 1e9:.2f} GB",
         (
@@ -335,7 +512,8 @@ def _render_stream_disk_preflight(
             f"({'write required' if materialize_bytes else 'no write required'})"
         ),
         (
-            f"Layer-shard cache: {shard_bytes / 1e9:.2f} GB "
+            f"Layer-shard cache: {'approximately ' if approximate else ''}"
+            f"{shard_bytes / 1e9:.2f} GB "
             f"({'write required' if shard_write_bytes else 'reusable'})"
         ),
         f"Projected total on disk: {projected_total / 1e9:.2f} GB",
@@ -348,12 +526,21 @@ def _render_stream_disk_preflight(
         lines.append(f"Free on target volume ({labels}): {free / 1e9:.2f} GB")
         if required > free:
             console.print(Panel("\n".join(lines), title="Layer streaming disk pre-flight"))
+            from soup_cli.utils.stripe_roots import STRIPE_DIRS_ENV
+
+            # R4: a full stripe drive is fixed through the stripe variable, which the
+            # containment policy does not cover — name it when a stripe write is on this volume.
+            remedy = "SOUP_SPECTRUM_CACHE_DIR / SOUP_LAYER_STREAM_CACHE_DIR at a larger contained"
+            if any(label.startswith("layer-shard stripe") for label in labels_by_device[device]):
+                remedy = (
+                    "SOUP_SPECTRUM_CACHE_DIR / SOUP_LAYER_STREAM_CACHE_DIR / "
+                    f"{STRIPE_DIRS_ENV} at a larger"
+                )
             raise ValueError(
                 f"layer streaming needs {required / 1e9:.2f} GB of additional "
                 f"disk space for {labels}, but only {free / 1e9:.2f} GB is free. "
                 f"Refusing before copying or sharding. Free disk space, point "
-                f"SOUP_SPECTRUM_CACHE_DIR / SOUP_LAYER_STREAM_CACHE_DIR at a "
-                f"larger contained volume, or choose a smaller base."
+                f"{remedy} volume, or choose a smaller base."
             )
     console.print(Panel("\n".join(lines), title="Layer streaming disk pre-flight"))
 
@@ -520,9 +707,11 @@ class StreamingSetupMixin:
             estimate_oq_stream_cache_bytes,
             fingerprint_source_files,
             inspect_shard_cache,
+            layer_paths,
             resolve_shard_dir,
             shard_checkpoint,
             source_weight_bytes,
+            stripe_dirs,
         )
         from soup_cli.utils.layer_stream import (
             RAM_TIER_HEADROOM,
@@ -552,6 +741,8 @@ class StreamingSetupMixin:
         from soup_cli.utils.moe import resolve_moe_lora_targets
         from soup_cli.utils.qwen4_ple import external_tensor_bytes
         from soup_cli.utils.spectrum_scan import resolve_model_weights
+        from soup_cli.utils.stripe_roots import resolve_stripe_roots
+        from soup_cli.utils.terminal import for_terminal
 
         console.print(f"[dim]Loading tokenizer: {cfg.base}[/]")
         self.tokenizer = AutoTokenizer.from_pretrained(
@@ -588,6 +779,22 @@ class StreamingSetupMixin:
         double_quant = tcfg.double_quant_on
 
         shard_dir = resolve_shard_dir(cfg.base)
+        # R4: extra NVMe roots, validated once here (the ~9 s disk probe runs per volume only
+        # when the variable is set). A bad entry refuses the run by name.
+        stripe_roots = resolve_stripe_roots(
+            os.path.dirname(shard_dir),
+            disk_kind=lambda path: resolve_disk_kind(
+                path, tcfg.stream_disk_kind, notify=console.print
+            ).kind,
+        )
+        if stripe_roots:
+            console.print(
+                "[dim]Layer cache striped over "
+                + ", ".join(
+                    for_terminal(root) for root in (os.path.dirname(shard_dir), *stripe_roots)
+                )
+                + "[/]"
+            )
         quant_device_kind = str(self.device).split(":", 1)[0] if quant == QUANT_NF4 else ""
 
         def _disk_preflight(weights_plan) -> None:
@@ -620,15 +827,30 @@ class StreamingSetupMixin:
                     double_quant,
                     quant_device_kind,
                     "qwen4_ple" if arch == "qwen4_exp" else "",
+                    stripe_roots=stripe_roots,
                 )
+            write_total = 0 if cached is not None else shard_estimate
+            shares, approximate = estimate_stripe_write_shares(
+                weights_plan.weights_dir,
+                total_bytes=write_total,
+                n_roots=1 + len(stripe_roots),
+                dtype=dtype,
+                quant=quant,
+                double_quant=double_quant,
+                arch=arch,
+            )
+            dirs = stripe_dirs(shard_dir, stripe_roots)
+            effective_shard_bytes = max(shard_estimate, sum(shares))
             _render_stream_disk_preflight(
                 source_bytes=weights_plan.source_bytes,
                 materialized_copy_bytes=weights_plan.materialized_copy_bytes,
                 materialize_bytes=weights_plan.materialize_bytes,
                 materialized_path=weights_plan.weights_dir,
-                shard_bytes=shard_estimate,
-                shard_write_bytes=0 if cached is not None else shard_estimate,
+                shard_bytes=effective_shard_bytes,
+                shard_write_bytes=shares[0],
                 shard_path=shard_dir,
+                stripe_writes=tuple(zip(dirs[1:], shares[1:])),
+                approximate=approximate,
             )
 
         weights_dir = resolve_model_weights(
@@ -717,10 +939,19 @@ class StreamingSetupMixin:
             # Quantise on the device that will run the model: CPU and CUDA agree
             # on the packed nibbles but not on every float32 nested statistic.
             quant_device=str(self.device),
+            stripe_roots=stripe_roots,
             notify=console.print,
         )
+        # R4: decided once, from the roots the index actually carries (a reused cache keeps its
+        # own), so the plan's staging figure, the host pre-flight and the reader all agree. Read
+        # with getattr like `external_tensors` below: an index without the field is one root.
+        # The whole decision travels to every message that advises lowering the depth.
+        read_ahead_decision = _effective_read_ahead(
+            tcfg, 1 + len(getattr(index, "stripe_roots", None) or ()), console
+        )
+        read_ahead = read_ahead_decision.depth
 
-        layer_specs = RamSource.layer_specs_from_shards(shard_dir, index.n_layers)
+        layer_specs = RamSource.layer_specs_from_paths(layer_paths(shard_dir, index))
         # Measured from the shard headers, not derived from `total_params`:
         # under NF4 a layer holds packed uint8 alongside float32 statistics, so
         # element counts no longer convert to bytes at a single rate.
@@ -828,7 +1059,7 @@ class StreamingSetupMixin:
             # #971: the depth decides how much host memory the async reader
             # page-locks, so the plan has to carry it or the pre-flight is
             # predicting zero residency for a tier that holds GBs of it.
-            read_ahead=tcfg.stream_read_ahead,
+            read_ahead=read_ahead,
         )
         # v0.72.3 — the disk overflow tier is live, so a base that does not fit
         # in RAM is no longer fatal. `stream_source` decides: 'ram' insists,
@@ -862,7 +1093,7 @@ class StreamingSetupMixin:
                 # _bytes` is read off the PRE-replace plan, since the line above
                 # has just zeroed it.
                 staging_bytes=staging_bytes_for(
-                    read_ahead=tcfg.stream_read_ahead,
+                    read_ahead=read_ahead,
                     n_layers=plan.n_layers,
                     layer_bytes=plan.layer_bytes,
                     large_store_bytes=plan.large_store_bytes,
@@ -886,9 +1117,10 @@ class StreamingSetupMixin:
         if plan.tier == TIER_DISK:
             _validate_stream_staging_ram_fit(
                 staging_bytes=plan.staging_bytes,
-                read_ahead=tcfg.stream_read_ahead,
+                read_ahead=read_ahead,
                 free_ram=free_ram,
                 resident_ram=embed_bytes,
+                read_ahead_decision=read_ahead_decision,
             )
         # v0.72.3 — VRAM pre-flight. Streaming bounds the WEIGHTS; activations
         # and the logits tensor are untouched by it and both scale with batch x
@@ -954,7 +1186,9 @@ class StreamingSetupMixin:
             # #971: the depth the async reader stages to on the disk tier.
             # Ignored on the RAM tier, which holds every layer and reads
             # nothing ahead.
-            read_ahead=tcfg.stream_read_ahead,
+            read_ahead=read_ahead,
+            # R4: how that depth came about, for the page-lock refusal and fallback advice.
+            read_ahead_decision=read_ahead_decision,
             pin=plan.pinned and on_cuda,
             # #366: stream_pin=true refuses rather than silently falling back to
             # pageable memory — on the RAM tier that is the store, and since

@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass, replace
+from functools import partial
+from itertools import islice
 from pathlib import Path
 
 from rich.console import Console
 
 from soup_cli.config.schema import DataConfig
 from soup_cli.data.formats import (
+    MAX_DETECT_ROWS,
     detect_format,
     format_to_messages_with_reason,
     is_audio_format,
@@ -194,12 +198,41 @@ def last_load_outcome() -> LoadOutcome:
     return _last_load
 
 
+# Tasks that require source columns preserved across dataset format normalisation (#1219).
+# GRPO uses raw columns for custom reward functions (answer, expected, etc.).
+# The classifier family (classifier, reranker, cross_encoder) uses source columns
+# to retain label, paired text (text_a, text_b, question, answer), and metadata.
+PRESERVE_SOURCE_TASKS: frozenset[str] = frozenset({
+    "grpo",
+    "classifier",
+    "reranker",
+    "cross_encoder",
+})
+
+
+def task_preserves_source_columns(task: str) -> bool:
+    """Return whether task requires source dataset columns to be preserved."""
+    return task in PRESERVE_SOURCE_TASKS
+
+
+def data_config_for_task(data_config: DataConfig, task: str) -> DataConfig:
+    """Resolve ``format: auto`` for task: cross_encoder (#1219).
+
+    ``detect_format`` cannot see the task, and ``{question, answer}`` is also
+    GSM8K's shape, so pair rows are recognised only when the task reads them.
+    """
+    if task == "cross_encoder" and data_config.format == "auto":
+        return data_config.model_copy(update={"format": "cross_encoder"})
+    return data_config
+
+
 def _format_rows(
     raw_data: list[dict],
     fmt: str,
     *,
     preserve_source_columns: bool = False,
     source: str | None = None,
+    kept_indices: list[int] | None = None,
 ) -> list[dict]:
     """Normalize rows, optionally retaining columns used by GRPO rewards.
 
@@ -209,6 +242,10 @@ def _format_rows(
     references such as ``answer``, ``expected``, ``schema``, or custom
     metadata.  The opt-in keeps the default loader contract byte-for-byte
     unchanged for every other task.
+
+    ``kept_indices``, when given, receives the ``raw_data`` index of every row
+    that converted, in order, so a caller can map a formatted row back to the
+    raw row it came from.
     """
     formatted: list[dict] = []
     dropped = 0
@@ -225,6 +262,8 @@ def _format_rows(
         if preserve_source_columns:
             normalized = {**raw_row, **normalized}
         formatted.append(normalized)
+        if kept_indices is not None:
+            kept_indices.append(index)
     global _last_load
     if dropped and first_drop is not None:
         _report_dropped_rows(dropped, len(raw_data), fmt, first_drop, source)
@@ -870,6 +909,13 @@ def _load_interleaved_streaming_datasets(
     ``s3://bucket/key.jsonl?endpoint=http://169.254.169.254`` would reach
     hf_load unvalidated, and a non-allowlisted-scheme entry like
     ``https://example.com/data.jsonl`` would reach it unvalidated too.
+
+    Media paths (vision / audio formats) resolve per entry, as on the eager
+    path: against ``data.image_dir`` / ``data.audio_dir`` when set, else the
+    entry's own directory (a remote entry has none). When the entries do not
+    share that directory, each stream is tagged with its entry's index before
+    the streams are combined -- lazily, through ``IterableDataset.map`` -- and
+    the tag is popped as the rows materialise (:func:`_streams_need_source_tags`).
     """
     try:
         from datasets import concatenate_datasets, interleave_datasets
@@ -892,6 +938,10 @@ def _load_interleaved_streaming_datasets(
             ds = ds.shuffle(buffer_size=buf)
         streams.append(ds)
 
+    tag_sources = _streams_need_source_tags(streams, data_config, train_paths)
+    if tag_sources:
+        streams = _tag_streams(streams)
+
     if spec.strategy == "concat":
         combined_stream = concatenate_datasets(streams)
     elif spec.strategy == "under":
@@ -906,6 +956,7 @@ def _load_interleaved_streaming_datasets(
         raise AssertionError(f"unreachable interleave strategy {spec.strategy!r}")
 
     raw_data: list[dict] = []
+    row_sources: list[int] = []
     for i, row in enumerate(combined_stream):
         if i >= MAX_REMOTE_ROWS:
             console.print(
@@ -914,17 +965,29 @@ def _load_interleaved_streaming_datasets(
                 "for larger jobs).[/]"
             )
             break
-        raw_data.append(dict(row))
+        raw_row = dict(row)
+        if tag_sources:
+            row_sources.append(raw_row.pop(_SOURCE_INDEX_KEY))
+        raw_data.append(raw_row)
 
     fmt = data_config.format
     if fmt == "auto":
         fmt = detect_format(raw_data)
         console.print(f"[dim]Auto-detected format: {fmt}[/]")
 
+    kept: list[int] = []
     formatted = _format_rows(
         raw_data,
         fmt,
         preserve_source_columns=preserve_source_columns,
+        kept_indices=kept,
+    )
+    formatted = _resolve_streamed_media(
+        formatted,
+        [row_sources[position] for position in kept] if tag_sources else None,
+        fmt,
+        data_config,
+        train_paths,
     )
 
     console.print(
@@ -956,40 +1019,14 @@ def _load_interleaved_streaming_datasets(
 def _validate_vision_images(data: list[dict], image_dir: Path) -> list[dict]:
     """Validate and resolve image paths in vision dataset rows.
 
-    Each row must have an 'image' key with a filename or path. Resolves
+    Each row must have an 'image' key with a filename or path, a decoded PIL
+    image, or a datasets Image struct ({'bytes': ..., 'path': ...}). Resolves
     relative paths against image_dir and rejects path traversal — a crafted
     llava/sharegpt4v row like ``{"image": "/etc/passwd"}`` must not be handed
     to ``PIL.Image.open``. Mirrors :func:`_validate_audio_files` (the sibling
     audio path got this fix in v0.71.32; the vision path was missed).
     """
-    from soup_cli.utils.paths import is_under
-
-    valid = []
-    missing = 0
-    traversal = 0
-    for row in data:
-        if "image" not in row or not row["image"]:
-            missing += 1
-            continue
-        image_path = Path(row["image"])
-        if not image_path.is_absolute():
-            image_path = image_dir / image_path
-        # Path traversal protection: resolved path must stay under image_dir.
-        # realpath + commonpath (is_under) — Path.is_relative_to() breaks on
-        # Windows 8.3 short names.
-        if not is_under(image_path, image_dir):
-            traversal += 1
-            continue
-        valid.append({**row, "image": str(image_path.resolve())})
-
-    if missing > 0:
-        console.print(f"[yellow]Warning: {missing} rows skipped (missing image path)[/]")
-    if traversal > 0:
-        console.print(
-            f"[yellow]Warning: {traversal} rows skipped "
-            f"(image path outside {image_dir})[/]"
-        )
-    return valid
+    return _resolve_media_column(data, "image", image_dir)
 
 
 def _validate_audio_files(data: list[dict], audio_dir: Path) -> list[dict]:
@@ -998,34 +1035,310 @@ def _validate_audio_files(data: list[dict], audio_dir: Path) -> list[dict]:
     Each row must have an 'audio' key with a filename or path.
     Resolves relative paths against audio_dir. Rejects path traversal.
     """
-    valid = []
-    from soup_cli.utils.paths import is_under
+    return _resolve_media_column(data, "audio", audio_dir)
 
+
+# Row key of a media format -> the setting that names its base directory.
+_MEDIA_DIR_SETTINGS = {"image": "data.image_dir", "audio": "data.audio_dir"}
+
+# Set on streamed rows by _tag_source_index and popped as the rows
+# materialise: the data.train index the row was read from.
+_SOURCE_INDEX_KEY = "__soup_source_index__"
+
+
+def _media_key(fmt: str) -> str | None:
+    """The row key that holds a media path in ``fmt``; None for a text format."""
+    if is_vision_format(fmt):
+        return "image"
+    if is_audio_format(fmt):
+        return "audio"
+    return None
+
+
+def _media_dir_for(key: str, data_config: DataConfig, data_dir: Path | None) -> Path | None:
+    """``data.image_dir`` / ``data.audio_dir`` when set, else ``data_dir``."""
+    configured = data_config.image_dir if key == "image" else data_config.audio_dir
+    return Path(configured) if configured else data_dir
+
+
+def _entry_media_dir(key: str, data_config: DataConfig, entry: str) -> Path | None:
+    """The base directory of one data.train entry's media; None for a remote
+    entry when no directory is configured."""
+    data_dir = None if _looks_like_remote_uri(entry) else Path(entry).parent
+    return _media_dir_for(key, data_config, data_dir)
+
+
+def _media_dir_required(source: str, key: str, *, plural: bool = False) -> ValueError:
+    """The error for media paths that have no local directory to resolve against."""
+    setting = _MEDIA_DIR_SETTINGS[key]
+    if plural:
+        subject = f"{source} are not local files, so their"
+    else:
+        subject = f"{source} is not a local file, so its"
+    return ValueError(
+        f"{subject} {key!r} paths have no directory to resolve against. "
+        f"Set {setting} to the local directory that holds the {key} files: "
+        f"relative paths resolve under it, and rows whose {key} is outside it "
+        "are skipped."
+    )
+
+
+def _resolve_media_entries(
+    rows: list[dict],
+    key: str,
+    media_dir: Path | None,
+    *,
+    source: str = "data.train",
+    plural: bool = False,
+) -> tuple[list[dict | None], int, int]:
+    """Resolve each row's ``key`` media path against ``media_dir``.
+
+    Returns one entry per row, in order -- the row with its path resolved,
+    the row unchanged when its value is not a path at all (an image a Hub
+    dataset has already decoded), or None for a skipped row -- plus how many
+    rows were skipped for a missing path and for a path outside
+    ``media_dir``. Every load path goes through here, so a row is treated
+    the same way wherever it was read from.
+
+    A relative path resolves against ``media_dir``. A network-share or
+    device form (:func:`~soup_cli.utils.paths.is_network_or_device_path`), a
+    value holding a NUL byte, and a ``bytes`` or path-object value count as
+    outside and are refused before any filesystem call. ``media_dir`` is
+    None for a remote URI or Hub dataset with no ``data.image_dir`` /
+    ``data.audio_dir``: a string path there has nothing to resolve against,
+    so the load stops and names the setting (``source``, ``plural``).
+    """
+    from soup_cli.utils.paths import is_network_or_device_path, is_under
+
+    entries: list[dict | None] = []
     missing = 0
-    traversal = 0
-    for row in data:
-        if "audio" not in row or not row["audio"]:
+    outside = 0
+    for row in rows:
+        value = row.get(key)
+        if not value:
             missing += 1
+            entries.append(None)
             continue
-        audio_path = Path(row["audio"])
-        if not audio_path.is_absolute():
-            audio_path = audio_dir / audio_path
-        # Path traversal protection: resolved path must stay under audio_dir.
-        # realpath + commonpath (is_under) — Path.is_relative_to() breaks on
+        if isinstance(value, (bytes, os.PathLike)):
+            # A reader takes these as a file name too, but they are not path
+            # strings: skipped like a path outside, never handed on unchecked.
+            outside += 1
+            entries.append(None)
+            continue
+        if not isinstance(value, str):
+            if isinstance(value, dict):
+                # Struct with embedded bytes passes through unchanged
+                if value.get("bytes"):
+                    entries.append(row)
+                    continue
+                path_val = value.get("path")
+                if path_val:
+                    if isinstance(path_val, (bytes, os.PathLike)):
+                        outside += 1
+                        entries.append(None)
+                        continue
+                    if not isinstance(path_val, str):
+                        missing += 1
+                        entries.append(None)
+                        continue
+                    if media_dir is None:
+                        raise _media_dir_required(source, key, plural=plural)
+                    if "\x00" in path_val or is_network_or_device_path(path_val):
+                        outside += 1
+                        entries.append(None)
+                        continue
+                    media_path = Path(path_val)
+                    if not media_path.is_absolute():
+                        media_path = media_dir / media_path
+                    if not is_under(media_path, media_dir):
+                        outside += 1
+                        entries.append(None)
+                        continue
+                    entries.append({**row, key: {**value, "path": str(media_path.resolve())}})
+                    continue
+            entries.append(row)
+            continue
+        if media_dir is None:
+            raise _media_dir_required(source, key, plural=plural)
+        if "\x00" in value or is_network_or_device_path(value):
+            outside += 1
+            entries.append(None)
+            continue
+        media_path = Path(value)
+        if not media_path.is_absolute():
+            media_path = media_dir / media_path
+        # realpath + commonpath (is_under) -- Path.is_relative_to() breaks on
         # Windows 8.3 short names.
-        resolved = audio_path.resolve()
-        if not is_under(audio_path, audio_dir):
-            traversal += 1
+        if not is_under(media_path, media_dir):
+            outside += 1
+            entries.append(None)
             continue
-        valid.append({**row, "audio": str(resolved)})
+        entries.append({**row, key: str(media_path.resolve())})
+    return entries, missing, outside
 
+
+def _warn_media_skips(key: str, missing: int, outside: int, media_dir: Path | None) -> None:
+    """The "rows skipped" warnings of one media pass, worded as they always were.
+
+    ``media_dir`` is None only for rows with no local directory, where the
+    one value counted as outside without a string path is a ``bytes`` or
+    path object.
+    """
     if missing > 0:
-        console.print(f"[yellow]Warning: {missing} rows skipped (missing audio path)[/]")
-    if traversal > 0:
+        console.print(f"[yellow]Warning: {missing} rows skipped (missing {key} path)[/]")
+    if outside > 0 and key == "image":
+        if media_dir is None:
+            reason = "image value is not a path string"
+        else:
+            reason = f"image path outside {media_dir}"
+        console.print(f"[yellow]Warning: {outside} rows skipped ({reason})[/]")
+    elif outside > 0:
         console.print(
-            f"[red]Warning: {traversal} rows skipped (audio path traversal blocked)[/]"
+            f"[red]Warning: {outside} rows skipped (audio path traversal blocked)[/]"
         )
-    return valid
+
+
+def _resolve_media_column(
+    rows: list[dict],
+    key: str,
+    media_dir: Path | None,
+    *,
+    source: str = "data.train",
+    plural: bool = False,
+) -> list[dict]:
+    """:func:`_resolve_media_entries` plus its warnings; returns the rows kept."""
+    entries, missing, outside = _resolve_media_entries(
+        rows, key, media_dir, source=source, plural=plural
+    )
+    _warn_media_skips(key, missing, outside, media_dir)
+    return [row for row in entries if row is not None]
+
+
+def _resolve_remote_media(
+    rows: list[dict], fmt: str, data_config: DataConfig, *, source: str
+) -> list[dict]:
+    """Media pass for rows that did not come from a local file.
+
+    A remote URI or a Hub dataset has no local directory to stand in for the
+    data file's, so a string media path resolves only against
+    ``data.image_dir`` / ``data.audio_dir``. Rows of a text format are
+    returned unchanged.
+    """
+    key = _media_key(fmt)
+    if key is None:
+        return rows
+    return _resolve_media_column(rows, key, _media_dir_for(key, data_config, None), source=source)
+
+
+def _streams_need_source_tags(
+    streams: list, data_config: DataConfig, train_paths: list[str]
+) -> bool:
+    """Whether streamed rows must carry the index of the entry they came from.
+
+    Only a media row needs it, and only when the entries do not share one base
+    directory for its key: otherwise every row resolves against that base.
+    ``format: auto`` is resolved after the rows materialise, from the first
+    rows of the combined stream, which are among the first rows of each
+    stream; the format found can only be a media format if one of those rows
+    carries its key, so the streams are tagged when one does.
+    """
+    keys = [
+        key
+        for key in _MEDIA_DIR_SETTINGS
+        if len({_entry_media_dir(key, data_config, entry) for entry in train_paths}) > 1
+    ]
+    if not keys:
+        return False
+    if data_config.format != "auto":
+        return _media_key(data_config.format) in keys
+    return any(
+        key in row
+        for stream in streams
+        for row in islice(stream, MAX_DETECT_ROWS)
+        for key in keys
+    )
+
+
+def _tag_source_index(row: dict, index: int, columns: tuple[str, ...] = ()) -> dict:
+    """``IterableDataset.map`` callback: the data.train index of ``row``, plus
+    None for each of ``columns`` the row lacks."""
+    tag: dict = {name: None for name in columns if name not in row}
+    tag[_SOURCE_INDEX_KEY] = index
+    return tag
+
+
+def _tag_streams(streams: list) -> list:
+    """Tag every stream's rows with its data.train index.
+
+    A stream whose features are known keeps them, plus the int64 tag, so
+    ``datasets`` does not re-infer its types from the first rows. A row gets
+    each column another stream declares and it lacks, as None: combining
+    untagged streams fills those in the same way.
+    """
+    columns = tuple(
+        dict.fromkeys(
+            name for stream in streams if stream.features is not None for name in stream.features
+        )
+    )
+    tagged = []
+    for index, stream in enumerate(streams):
+        tag = partial(_tag_source_index, index=index, columns=columns)
+        if stream.features is None:
+            tagged.append(stream.map(tag))
+            continue
+        from datasets import Features, Value
+
+        features = Features({**stream.features, _SOURCE_INDEX_KEY: Value("int64")})
+        tagged.append(stream.map(tag, features=features))
+    return tagged
+
+
+def _resolve_streamed_media(
+    rows: list[dict],
+    row_sources: list[int] | None,
+    fmt: str,
+    data_config: DataConfig,
+    train_paths: list[str],
+) -> list[dict]:
+    """Media pass of the streaming interleave path: each row against its own entry.
+
+    ``row_sources[i]`` is the data.train index ``rows[i]`` was streamed from.
+    A local entry's default directory is its file's parent, as on the eager
+    path; a remote entry has none. Each entry is resolved and warned about
+    on its own, like the eager path's per-file warnings, and the rows keep
+    their stream order. ``row_sources`` is None when the streams were not
+    tagged: every entry then has the same base for this format's key.
+    """
+    key = _media_key(fmt)
+    if key is None:
+        return rows
+    if row_sources is None:
+        names = ", ".join(repr(entry) for entry in train_paths)
+        return _resolve_media_column(
+            rows,
+            key,
+            _entry_media_dir(key, data_config, train_paths[0]),
+            source=f"data.train entries {names}",
+            plural=True,
+        )
+    positions: dict[int, list[int]] = {}
+    for position, source_index in enumerate(row_sources):
+        positions.setdefault(source_index, []).append(position)
+    resolved: list[dict | None] = list(rows)
+    for source_index in sorted(positions):
+        entry = train_paths[source_index]
+        media_dir = _entry_media_dir(key, data_config, entry)
+        group = positions[source_index]
+        entries, missing, outside = _resolve_media_entries(
+            [rows[position] for position in group],
+            key,
+            media_dir,
+            source=f"data.train[{source_index}] {entry!r}",
+        )
+        _warn_media_skips(key, missing, outside, media_dir)
+        for position, entry_row in zip(group, entries):
+            resolved[position] = entry_row
+    return [row for row in resolved if row is not None]
 
 
 def _looks_like_remote_uri(value: str) -> bool:
@@ -1059,6 +1372,10 @@ def _load_remote_dataset(
     Streaming knobs (``data_config.streaming`` + ``buffer_size`` + ``shards``)
     are honoured via :func:`datasets.load_dataset` when present; otherwise
     the file is streamed as JSONL through :func:`fsspec.open`.
+
+    Image / audio paths resolve against ``data.image_dir`` /
+    ``data.audio_dir`` (:func:`_resolve_remote_media`): a remote object has
+    no local directory of its own.
     """
     from soup_cli.utils.data_pipeline import (
         required_remote_package,
@@ -1149,6 +1466,9 @@ def _load_remote_dataset(
         fmt,
         preserve_source_columns=preserve_source_columns,
     )
+    formatted = _resolve_remote_media(
+        formatted, fmt, data_config, source=f"Remote dataset {canonical!r}"
+    )
 
     return _finalize(
         formatted,
@@ -1193,6 +1513,10 @@ def _load_one_hub_dataset(
     path below reuses this rather than re-deriving it. _load_hf_dataset's
     own single-name behaviour is left byte-identical by construction: it
     now just calls this and forwards straight to _finalize, same as before.
+
+    Image / audio paths in both splits resolve against ``data.image_dir`` /
+    ``data.audio_dir`` (:func:`_resolve_remote_media`): a Hub dataset has
+    no local directory of its own.
     """
     try:
         from datasets import load_dataset as hf_load
@@ -1218,6 +1542,9 @@ def _load_one_hub_dataset(
         fmt,
         preserve_source_columns=preserve_source_columns,
     )
+    formatted = _resolve_remote_media(
+        formatted, fmt, data_config, source=f"Hub dataset {name!r}"
+    )
 
     if "validation" in ds:
         val_data = _rows_from_hub_split(
@@ -1227,6 +1554,9 @@ def _load_one_hub_dataset(
             val_data,
             fmt,
             preserve_source_columns=preserve_source_columns,
+        )
+        val_formatted = _resolve_remote_media(
+            val_formatted, fmt, data_config, source=f"Hub dataset {name!r}"
         )
         return formatted, val_formatted
 

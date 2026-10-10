@@ -375,6 +375,7 @@ def _wrapper(tmp_path, monkeypatch, base=None, **training_over):
         "quantization": "none",
         "epochs": 1,
         "lr": 1e-3,
+        "warmup_ratio": 0.0,
         "logging_steps": 100,
         "save_steps": 10_000,
         "lora": {"r": 4, "alpha": 8, "dropout": 0.0, "target_modules": ["q_proj", "v_proj"]},

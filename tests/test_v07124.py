@@ -8,6 +8,8 @@ Kimi-K2.5/K2.6 / MiniMax-M3 / Mistral-Large-3), plus a stale-repo-ID fix for
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 import yaml
 
@@ -42,8 +44,7 @@ V07124_RECIPE_NAMES = [
     "kimi-k2.6-sft",
     # MiniMax (MiniMax Community License)
     "minimax-m3-sft",
-    # Mistral Large 3 (Apache-2.0)
-    "mistral-large-3-sft",
+    # Mistral Large 3 was removed in #1145: its repo has no config.json.
 ]
 
 # name -> expected base repo-ID (the verified Hugging Face repo)
@@ -64,7 +65,6 @@ V07124_RECIPE_BASES = {
     "kimi-k2.5-sft": "moonshotai/Kimi-K2.5",
     "kimi-k2.6-sft": "moonshotai/Kimi-K2.6",
     "minimax-m3-sft": "MiniMaxAI/MiniMax-M3",
-    "mistral-large-3-sft": "mistralai/Mistral-Large-3-675B-Instruct-2512",
 }
 
 # The MoE bases added in v0.71.24 — each recipe must enable moe_lora + aux loss.
@@ -80,14 +80,23 @@ V07124_MOE_RECIPES = [
     "glm-5.1-sft",
     "kimi-k2.5-sft",
     "kimi-k2.6-sft",
-    "minimax-m3-sft",
-    "mistral-large-3-sft",
 ]
+
+# A MoE checkpoint published as a vision-language wrapper (minimax_m3_vl): it loads
+# only through SFT's vision path, which never runs the MoE target step, so it
+# declares modality: vision and no moe_lora (#1145; #1179 refuses the pair).
+V07124_VL_MOE_RECIPES = ["minimax-m3-sft"]
 
 
 class TestV07124Recipes:
     def test_recipe_count_target(self) -> None:
-        assert len(V07124_RECIPE_NAMES) == 17
+        # 17 shipped in v0.71.24; #1145 removed mistral-large-3-sft (no config.json).
+        assert len(V07124_RECIPE_NAMES) == 16
+
+    def test_docs_models_md_says_why_mistral_large_3_is_not_shipped(self) -> None:
+        # #1145: the paragraph is the one place the reason is written down for users.
+        docs = Path(__file__).resolve().parents[1] / "docs" / "models.md"
+        assert "**Mistral-Large-3 is not shipped as a recipe.**" in docs.read_text(encoding="utf-8")
 
     @pytest.mark.parametrize("name", V07124_RECIPE_NAMES)
     def test_recipe_registered(self, name: str) -> None:
@@ -161,7 +170,10 @@ class TestV07124Recipes:
             f"{cfg.training.moe_aux_loss_coeff}"
         )
 
-    @pytest.mark.parametrize("name", sorted(set(V07124_RECIPE_NAMES) - set(V07124_MOE_RECIPES)))
+    @pytest.mark.parametrize(
+        "name",
+        sorted(set(V07124_RECIPE_NAMES) - set(V07124_MOE_RECIPES) - set(V07124_VL_MOE_RECIPES)),
+    )
     def test_dense_recipes_do_not_set_moe_lora(self, name: str) -> None:
         # The complement of the MoE list: a dense recipe must NOT enable moe_lora
         # (guards against pasting a MoE block into a dense recipe).
@@ -169,6 +181,15 @@ class TestV07124Recipes:
         assert cfg.training.moe_lora is not True, (
             f"{name} is a dense recipe but has moe_lora: true"
         )
+
+    @pytest.mark.parametrize("name", V07124_VL_MOE_RECIPES)
+    def test_vl_moe_recipes_load_through_the_vision_path(self, name: str) -> None:
+        cfg = load_config_from_string(RECIPES[name].yaml_str)
+        assert cfg.modality == "vision"
+        assert cfg.training.moe_lora is not True
+        assert "moe" in RECIPES[name].tags
+        # the vision path loads AutoProcessor, which is remote code for this base
+        assert "--trust-remote-code" in RECIPES[name].description
 
     @pytest.mark.parametrize("name", V07124_MOE_RECIPES)
     def test_moe_recipes_tagged_moe(self, name: str) -> None:
@@ -201,11 +222,6 @@ class TestV07124Recipes:
         assert "license" in desc
         # commercial-use caveat must be surfaced
         assert "commercial" in desc
-
-    def test_mistral_large_3_notes_apache_license(self) -> None:
-        # Plan guessed MRL; the published card is Apache-2.0 — describe accurately.
-        desc = RECIPES["mistral-large-3-sft"].description.lower()
-        assert "apache" in desc
 
     @pytest.mark.parametrize("name", ["kimi-k2.5-sft", "kimi-k2.6-sft"])
     def test_kimi_recipes_note_modified_mit(self, name: str) -> None:

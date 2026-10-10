@@ -194,12 +194,12 @@ _BYTES_PER_PARAM_BY_QUANT = {
     "none": 2.0,    # bf16/fp16
     "4bit": 0.5,
     "8bit": 1.0,
-    "fp8": 1.0,
+    "fp8": 2.0,     # #1652: FineGrainedFP8Config(dequantize=True), so bf16 too
     "gptq": 0.55,
     "awq": 0.55,
     "aqlm": 0.5,
     "eetq": 1.0,
-    "mxfp4": 0.55,
+    "mxfp4": 2.0,   # #1466: loaded with Mxfp4Config(dequantize=True), so bf16
 }
 
 # Optimiser-state bytes per trainable parameter. AdamW = 8 (m + v fp32),

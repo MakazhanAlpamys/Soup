@@ -64,7 +64,11 @@ def test_selected_safetensors_matches_real_transformers_loader(tmp_path):
         LlamaConfig(
             hidden_size=128,
             intermediate_size=256,
-            num_hidden_layers=1,
+            # 24, not 1: #1199 refuses a local base whose config.json declares
+            # a layer count the measured route cannot cover, so a 1-layer toy
+            # is no longer a legal local QuEST base. These two tests pin which
+            # files are selected, for which the layer count is irrelevant.
+            num_hidden_layers=24,
             num_attention_heads=4,
             vocab_size=256,
         )
@@ -84,7 +88,8 @@ def test_sharded_safetensors_matches_real_transformers_loader(tmp_path):
         LlamaConfig(
             hidden_size=128,
             intermediate_size=256,
-            num_hidden_layers=1,
+            # 24, not 1: see the note in the safetensors test above.
+            num_hidden_layers=24,
             num_attention_heads=4,
             vocab_size=256,
         )

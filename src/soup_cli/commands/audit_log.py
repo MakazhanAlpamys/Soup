@@ -40,7 +40,10 @@ def tail_cmd(
         raise typer.Exit(2)
     if json_out:
         for r in records:
-            console.print(json.dumps(r))
+            # Machine-readable JSONL: raw stdout, not console.print — Rich
+            # folds lines at the console width when piped and parses ``[...]``
+            # as markup, corrupting/breaking the output (issue #1468).
+            typer.echo(json.dumps(r))
         return
     if not records:
         console.print("[dim]No audit records.[/]")

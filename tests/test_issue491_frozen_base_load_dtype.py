@@ -24,6 +24,17 @@ import pytest
 from soup_cli.config.schema import SoupConfig
 
 
+def _local_base_model_dir() -> str:
+    """A tiny GPT-2 + tokenizer built locally (no download), standing in for
+    hf-internal-testing/tiny-random-gpt2 -- #1356 found this real-model test
+    pulling it from the Hub for nothing it checks depends on real pretrained
+    weights. Shared and cached across every file that needs one
+    (tests/_tiny_hf_models.py)."""
+    from tests._tiny_hf_models import tiny_model_dir
+
+    return tiny_model_dir("gpt2")
+
+
 class _FakeCuda:
     """Stands in for ``torch.cuda`` (mirrors tests/test_issue385_stream_dtype.py's
     fixture of the same shape)."""
@@ -193,7 +204,7 @@ class TestRewardModelHeadUpcastToFp32:
         from soup_cli.trainer.reward_model import RewardModelTrainerWrapper
 
         cfg = SoupConfig(
-            base="hf-internal-testing/tiny-random-gpt2",
+            base=_local_base_model_dir(),
             task="reward_model",
             data={"train": "./data.jsonl"},
             training={"quantization": "none"},

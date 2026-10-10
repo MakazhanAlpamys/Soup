@@ -28,6 +28,7 @@ from soup_cli.utils.env_lock import (
     write_requirements_txt,
 )
 from soup_cli.utils.paths import is_under_cwd
+from soup_cli.utils.terminal import for_terminal
 
 console = Console()
 
@@ -56,7 +57,7 @@ def env_lock_cmd(
         console.print("[red]output path must not contain null bytes[/]")
         raise typer.Exit(2)
     if not is_under_cwd(output):
-        console.print(f"[red]output {escape(output)!r} is outside cwd[/]")
+        console.print(f"[red]output {for_terminal(repr(output))} is outside cwd[/]")
         raise typer.Exit(2)
 
     try:
@@ -253,7 +254,7 @@ def env_fix_cmd(
             console.print("[red]output path must not contain null bytes[/]")
             raise typer.Exit(2)
         if not is_under_cwd(output):
-            console.print(f"[red]output {escape(output)!r} is outside cwd[/]")
+            console.print(f"[red]output {for_terminal(repr(output))} is outside cwd[/]")
             raise typer.Exit(2)
         try:
             write_requirements_txt(lock, output)

@@ -907,7 +907,7 @@ class TestQwen35StreamingSetup:
             lambda *_a, **_k: types.SimpleNamespace(),
         )
         monkeypatch.setattr(
-            "soup_cli.utils.layer_stream_runtime.RamSource.layer_specs_from_shards",
+            "soup_cli.utils.layer_stream_runtime.RamSource.layer_specs_from_paths",
             lambda *_a, **_k: layer_specs,
         )
         monkeypatch.setattr(

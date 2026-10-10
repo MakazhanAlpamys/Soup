@@ -98,7 +98,9 @@ def profile(
     result["gpu_memory_source"] = gpu_memory_source
 
     if json_output:
-        console.print(json.dumps(result, indent=2))
+        # Machine-readable JSON: raw stdout, not console.print — Rich folds
+        # long lines and parses ``[...]`` as markup when piped (issue #1468).
+        typer.echo(json.dumps(result, indent=2))
         return
 
     _render_profile(result, cfg, gpu_memory_gb, gpu_memory_source)

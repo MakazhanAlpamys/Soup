@@ -76,12 +76,13 @@ class TestGuardCoverage:
             "with LoRA it dies at the first lr_scheduler.step() (#359)."
         )
 
-    #: preference.py forwards ``deepspeed_config`` into five wrappers that each
-    #: carry the guard, and builds no trainer of its own. It is the ONLY module
-    #: allowed to hold a deepspeed_config without calling the guard, and it is
-    #: named here so that the next such module has to be argued for rather than
+    #: Modules that forward a ``deepspeed_config`` without calling the guard,
+    #: because they build no trainer of their own. Today: ``preference.py``
+    #: forwards it into five wrappers that each carry the guard, and
+    #: ``dispatch.py`` (#1213) forwards it to whichever wrapper it resolves.
+    #: Named here so that the next such module has to be argued for rather than
     #: slipping through a regex that stopped matching.
-    _GUARD_EXEMPT = {"preference.py"}
+    _GUARD_EXEMPT = {"preference.py", "dispatch.py"}
 
     def test_no_deepspeed_capable_module_quietly_loses_the_guard(self):
         """Closes the rebind evasion: ``_BUILDS_TRAINER`` requires the

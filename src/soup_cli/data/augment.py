@@ -11,7 +11,9 @@ method and returns a list of augmented dict rows in the same format as input.
 
 from __future__ import annotations
 
-from typing import Callable, Protocol
+from typing import Callable, Optional, Protocol
+
+from soup_cli.utils.data_forge import ForgeJudgeStats, _describe_judge_error
 
 MAX_AUGMENT_COUNT = 10
 DEFAULT_LANGUAGES = ("ru", "zh", "es")
@@ -45,16 +47,35 @@ def _apply_rewrite(
     return new_row
 
 
+def _call_provider(provider: Provider, prompt: str, stats: ForgeJudgeStats) -> str:
+    """Call ``provider.generate`` and count it in ``stats``.
+
+    An empty/whitespace-only reply is a failure too (#1274, mirrors forge's
+    #1221 "an empty answer is no answer" rule) — never rewrite a field to "".
+    """
+    stats.calls += 1
+    result = provider.generate(prompt)
+    if not isinstance(result, str) or not result.strip():
+        raise ValueError("provider returned an empty reply")
+    return result
+
+
 def augment_rephrase(
     examples: list[dict],
     provider: Provider,
     count: int = 2,
+    *,
+    stats: Optional[ForgeJudgeStats] = None,
 ) -> list[dict]:
     """Rephrase each example ``count`` times preserving meaning.
 
-    Returns ``len(examples) * count`` rows.
+    Returns up to ``len(examples) * count`` rows — a variant whose provider
+    call fails is dropped (never written with an unrewritten/empty field);
+    pass ``stats`` to see the call/failure counts (#1274).
     """
     _validate_count(count)
+    if stats is None:
+        stats = ForgeJudgeStats()
     augmented: list[dict] = []
     for row in examples:
         for i in range(count):
@@ -63,8 +84,11 @@ def augment_rephrase(
                     f"Rewrite the following text preserving its meaning but using "
                     f"different wording (variant {_i + 1}):\n\n{text}"
                 )
-                return provider.generate(prompt)
-            augmented.append(_apply_rewrite(row, _rewrite))
+                return _call_provider(provider, prompt, stats)
+            try:
+                augmented.append(_apply_rewrite(row, _rewrite))
+            except Exception as exc:  # noqa: BLE001 — provider backends vary
+                stats.record_failure(_describe_judge_error(exc))
     return augmented
 
 
@@ -72,8 +96,14 @@ def augment_translate(
     examples: list[dict],
     provider: Provider,
     languages: list[str] | None = None,
+    *,
+    stats: Optional[ForgeJudgeStats] = None,
 ) -> list[dict]:
-    """Translate each example into every target language."""
+    """Translate each example into every target language.
+
+    A language variant whose provider call fails is dropped; pass ``stats``
+    to see the call/failure counts (#1274).
+    """
     if languages is None:
         langs = list(DEFAULT_LANGUAGES)
     else:
@@ -84,6 +114,8 @@ def augment_translate(
         raise ValueError(
             f"too many languages: {len(langs)} > {MAX_AUGMENT_COUNT}"
         )
+    if stats is None:
+        stats = ForgeJudgeStats()
     augmented: list[dict] = []
     for row in examples:
         for lang in langs:
@@ -92,8 +124,11 @@ def augment_translate(
                     f"Translate the following text into {_lang}, preserving the "
                     f"meaning exactly. Do not add commentary:\n\n{text}"
                 )
-                return provider.generate(prompt)
-            augmented.append(_apply_rewrite(row, _rewrite))
+                return _call_provider(provider, prompt, stats)
+            try:
+                augmented.append(_apply_rewrite(row, _rewrite))
+            except Exception as exc:  # noqa: BLE001 — provider backends vary
+                stats.record_failure(_describe_judge_error(exc))
     return augmented
 
 
@@ -101,8 +136,14 @@ def augment_style(
     examples: list[dict],
     provider: Provider,
     styles: list[str] | None = None,
+    *,
+    stats: Optional[ForgeJudgeStats] = None,
 ) -> list[dict]:
-    """Rewrite each example in multiple tonal styles."""
+    """Rewrite each example in multiple tonal styles.
+
+    A style variant whose provider call fails is dropped; pass ``stats`` to
+    see the call/failure counts (#1274).
+    """
     if styles is None:
         target_styles = list(DEFAULT_STYLES)
     else:
@@ -113,6 +154,8 @@ def augment_style(
         raise ValueError(
             f"too many styles: {len(target_styles)} > {MAX_AUGMENT_COUNT}"
         )
+    if stats is None:
+        stats = ForgeJudgeStats()
     augmented: list[dict] = []
     for row in examples:
         for style in target_styles:
@@ -121,8 +164,11 @@ def augment_style(
                     f"Rewrite the following in a {_style} tone, preserving "
                     f"meaning:\n\n{text}"
                 )
-                return provider.generate(prompt)
-            augmented.append(_apply_rewrite(row, _rewrite))
+                return _call_provider(provider, prompt, stats)
+            try:
+                augmented.append(_apply_rewrite(row, _rewrite))
+            except Exception as exc:  # noqa: BLE001 — provider backends vary
+                stats.record_failure(_describe_judge_error(exc))
     return augmented
 
 

@@ -41,6 +41,12 @@ def build_prompt(
     }
 
     domain_desc = domain_descriptions.get(domain, domain_descriptions["math"])
+    # GRPO's accuracy / verifiable-math rewards read the gold with
+    # soup_cli.utils.final_answer, so each solution must end on a marker it parses.
+    if domain in ("logic", "code"):
+        answer_rule = "End the solution with a final line of the form 'Answer: <answer>'."
+    else:
+        answer_rule = "Put the single numeric answer after '####' on its own line."
 
     return (
         f"You are a training data generator. Generate exactly {count} diverse "
@@ -48,7 +54,7 @@ def build_prompt(
         f"Domain: {domain_desc}\n\n"
         f"Each solution must show detailed chain-of-thought reasoning. "
         f"Use <think>...</think> tags to wrap the reasoning steps, then provide "
-        f"the final answer.\n\n"
+        f"the final answer. {answer_rule}\n\n"
         f"Format: {format_spec}\n\n"
         f"Return ONLY a JSON array of {count} examples. No markdown, no explanation."
     )

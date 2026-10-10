@@ -110,6 +110,19 @@ train = [
     # end-to-end preference tests are what surfaced it.
     #
     "trl>=0.29.0,<1.0.0",
+    # trl imports `requests` at module scope in trl/generation/vllm_client.py,
+    # and trl.trainer.grpo_trainer and trl.experimental.online_dpo import that
+    # module unconditionally — but trl declares `requests` only under its
+    # optional `vllm` extra (true of 0.29.1 and of 1.14.1). A training install
+    # got it by accident through datasets (`requests>=2.32.2`) until datasets
+    # 5.1.0 (2026-10-05) dropped the dependency; from then on a fresh
+    # `pip install 'soup-cli[train]'` could not import GRPOTrainer or the
+    # online-DPO trainer (`ModuleNotFoundError: No module named 'requests'`).
+    # Soup now declares what its trainers need instead of inheriting it. The
+    # floor is the one datasets carried, so the resolved set does not change.
+    # No ceiling: trl leaves it unbounded. Pinned by
+    # tests/test_train_extra_declares_requests.py.
+    "requests>=2.32.2",
     "datasets>=2.14.0",
     "bitsandbytes>=0.41.0",
     # #352: 0.27.0 added `adapter_only` to `save_fsdp_model`/`load_fsdp_model`, which
@@ -129,7 +142,7 @@ wandb = ["wandb>=0.15.0,<0.18.0"]
 # Self-references `[train]` so CI / contributors get the full training stack
 # (CI runs `pip install -e ".[dev]"`; without this every test would fail at
 # `import torch`).
-dev = ["soup-cli[train,mcp,data]", "cryptography>=41.0.0", "reportlab>=4.0.0", "pytest>=7.0", "ruff>=0.1.0", "pytest-cov>=4.0", "httpx>=0.24.0", "mypy>=1.8.0", "pre-commit>=3.5.0", "fastapi>=0.104.0"]
+dev = ["soup-cli[train,mcp,data]", "jsonschema>=4.18", "cryptography>=41.0.0", "reportlab>=4.0.0", "pytest>=7.0", "ruff>=0.1.0", "pytest-cov>=4.0", "httpx>=0.24.0", "mypy>=1.8.0", "pre-commit>=3.5.0", "fastapi>=0.104.0"]
 ui = ["fastapi>=0.104.0", "uvicorn>=0.24.0"]
 serve = ["fastapi>=0.104.0", "uvicorn>=0.24.0"]
 serve-fast = ["vllm>=0.4.3", "fastapi>=0.104.0", "uvicorn>=0.24.0"]

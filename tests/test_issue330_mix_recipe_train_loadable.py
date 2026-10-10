@@ -214,14 +214,20 @@ def test_apply_handles_new_multi_dataset_recipe(tmp_path, monkeypatch):
     # data.interleave.probs stays index-aligned with it.
     _make_files(tmp_path, ["a.jsonl", "b.jsonl", "c.jsonl"])
     monkeypatch.chdir(tmp_path)
+    from rich.console import Console
     from typer.testing import CliRunner
 
     from soup_cli.cli import app
+    from soup_cli.commands import data_mix as data_mix_cmd
 
-    # Force a wide terminal — tmp_path is long enough on this OS that Rich's
+    # Force a wide console — tmp_path is long enough on this OS that Rich's
     # default-width line wrapping would otherwise break the path across
-    # lines mid-token, which yaml.safe_load below can't parse.
-    runner = CliRunner(env={"COLUMNS": "300"})
+    # lines mid-token, which yaml.safe_load below can't parse. COLUMNS in the
+    # runner's env is not enough: the module built its console at import, and
+    # Rich keeps the width a console was built with when COLUMNS was set at
+    # that moment (80 in a pytest-xdist worker on Linux).
+    monkeypatch.setattr(data_mix_cmd, "console", Console(width=300))
+    runner = CliRunner()
     result = runner.invoke(
         app,
         [

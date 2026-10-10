@@ -24,8 +24,11 @@ import os
 from typing import Dict, List
 
 from soup_cli.utils.local_rl import (
+    MIN_PAIRS_DEFAULT,
     validate_db_path,
     validate_local_rl_train_method,
+    validate_min_pairs,
+    validate_output_dir,
 )
 from soup_cli.utils.paths import atomic_write_text
 
@@ -89,12 +92,24 @@ def build_train_argv(
     db_path: str,
     model: str,
     train_method: str,
+    min_pairs: int = MIN_PAIRS_DEFAULT,
+    output_dir: str = "local_rl_adapter",
 ) -> List[str]:
-    """Return the argv list the scheduler invokes (no shell)."""
+    """Return the argv list the scheduler invokes (no shell).
+
+    ``min_pairs`` and ``output_dir`` are always rendered, so the scheduled run
+    does what ``soup local-rl train --once`` with the same flags does (#1448).
+    They are validated here with the runner's own checks, so a value the
+    nightly run would refuse is refused before the unit is written.
+    """
     soup_python = _validate_soup_python(soup_python)
     validate_db_path(db_path)
     model = _validate_model(model)
     method = validate_local_rl_train_method(train_method)
+    min_pairs = validate_min_pairs(min_pairs)
+    output_dir = validate_output_dir(output_dir)
+    if "\n" in output_dir or "\r" in output_dir:
+        raise ValueError("output_dir must not contain newline / carriage return")
     return [
         soup_python,
         "-m",
@@ -108,6 +123,10 @@ def build_train_argv(
         model,
         "--train-method",
         method,
+        "--min-pairs",
+        str(min_pairs),
+        "--output",
+        output_dir,
     ]
 
 
@@ -131,6 +150,8 @@ def render_systemd_service(
     db_path: str,
     model: str,
     train_method: str,
+    min_pairs: int = MIN_PAIRS_DEFAULT,
+    output_dir: str = "local_rl_adapter",
 ) -> str:
     """Render the systemd-user ``.service`` unit."""
     argv = build_train_argv(
@@ -138,6 +159,8 @@ def render_systemd_service(
         db_path=db_path,
         model=model,
         train_method=train_method,
+        min_pairs=min_pairs,
+        output_dir=output_dir,
     )
     exec_start = " ".join(_systemd_quote(a) for a in argv)
     return (
@@ -175,6 +198,8 @@ def render_launchd_plist(
     train_method: str,
     hour: int = 3,
     minute: int = 0,
+    min_pairs: int = MIN_PAIRS_DEFAULT,
+    output_dir: str = "local_rl_adapter",
 ) -> str:
     """Render a macOS launchd ``.plist`` (daily ``StartCalendarInterval``)."""
     from xml.sax.saxutils import escape as _xml_escape
@@ -185,6 +210,8 @@ def render_launchd_plist(
         db_path=db_path,
         model=model,
         train_method=train_method,
+        min_pairs=min_pairs,
+        output_dir=output_dir,
     )
     args_xml = "\n".join(
         f"        <string>{_xml_escape(a)}</string>" for a in argv
@@ -225,6 +252,8 @@ def write_scheduler_files(
     train_method: str,
     hour: int = 3,
     minute: int = 0,
+    min_pairs: int = MIN_PAIRS_DEFAULT,
+    output_dir: str = "local_rl_adapter",
 ) -> Dict[str, str]:
     """Render both the systemd units and the launchd plist into ``target_dir``.
 
@@ -234,13 +263,14 @@ def write_scheduler_files(
     """
     if not isinstance(target_dir, str) or not target_dir or "\x00" in target_dir:
         raise ValueError("target_dir must be a non-empty NUL-free string")
-    os.makedirs(target_dir, exist_ok=True)
 
     service = render_systemd_service(
         soup_python=soup_python,
         db_path=db_path,
         model=model,
         train_method=train_method,
+        min_pairs=min_pairs,
+        output_dir=output_dir,
     )
     timer = render_systemd_timer(hour=hour, minute=minute)
     plist = render_launchd_plist(
@@ -250,8 +280,12 @@ def write_scheduler_files(
         train_method=train_method,
         hour=hour,
         minute=minute,
+        min_pairs=min_pairs,
+        output_dir=output_dir,
     )
 
+    # Render (and so validate) everything before creating the directory.
+    os.makedirs(target_dir, exist_ok=True)
     written: Dict[str, str] = {}
     for name, body in (
         (SYSTEMD_SERVICE_NAME, service),

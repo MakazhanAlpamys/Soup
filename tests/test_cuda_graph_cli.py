@@ -135,6 +135,25 @@ def test_cuda_graphs_reject_asr_before_loading(monkeypatch, tmp_path):
     load.assert_not_called()
 
 
+def test_cuda_graphs_reject_batch_size_above_one_before_loading(monkeypatch, tmp_path):
+    from soup_cli.cli import app
+    from soup_cli.commands import infer
+
+    model_dir = _infer_env(monkeypatch, tmp_path, ["question"], MagicMock())
+    load = MagicMock(return_value=(object(), object()))
+    monkeypatch.setattr(infer, "_load_model", load)
+
+    result = CliRunner().invoke(
+        app,
+        _infer_args(model_dir, "--cuda-graphs", "--batch-size", "2"),
+    )
+
+    assert result.exit_code == 2
+    assert "--batch-size above 1" in _plain(result.output)
+    assert "Omit --cuda-graphs" in _plain(result.output)
+    load.assert_not_called()
+
+
 def test_unsupported_graph_model_preserves_existing_output(monkeypatch, tmp_path):
     from soup_cli.cli import app
     from soup_cli.commands import infer

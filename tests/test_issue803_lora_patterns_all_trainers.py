@@ -360,7 +360,7 @@ def test_layer_streaming_builds_the_lora_config_with_its_patterns(monkeypatch, t
         "soup_cli.utils.layer_stream_runtime.build_meta_skeleton": (
             lambda *_a, **_k: SimpleNamespace()
         ),
-        "soup_cli.utils.layer_stream_runtime.RamSource.layer_specs_from_shards": lambda *_a, **_k: [
+        "soup_cli.utils.layer_stream_runtime.RamSource.layer_specs_from_paths": lambda *_a, **_k: [
             {"self_attn.q_proj.weight": ((4, 4), "float32")},
             {"self_attn.q_proj.weight": ((4, 4), "float32")},
         ],

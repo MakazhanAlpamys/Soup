@@ -175,6 +175,200 @@ def rebuild_params4bit(key: str, buffers: Mapping[str, Any], spec: Any, codes: M
     )
 
 
+_CHECKPOINT_VISIBLE_NF4_FUNCTION = None
+
+
+def _checkpoint_visible_nf4_function():
+    """Lazy custom autograd Function whose saved state is visible to checkpoint (#842)."""
+    global _CHECKPOINT_VISIBLE_NF4_FUNCTION
+    if _CHECKPOINT_VISIBLE_NF4_FUNCTION is not None:
+        return _CHECKPOINT_VISIBLE_NF4_FUNCTION
+
+    import bitsandbytes.functional as bnb_functional
+    import torch
+
+    class CheckpointVisibleNF4Matmul(torch.autograd.Function):
+        @staticmethod
+        @torch.amp.custom_fwd(device_type="cuda")
+        def forward(
+            ctx,
+            x,
+            packed,
+            absmax,
+            state2_absmax,
+            state2_code,
+            offset,
+            bias,
+            shape,
+            weight_dtype,
+            blocksize,
+            quant_type,
+            nested,
+            state2_blocksize,
+        ):
+            # #331/#842: every tensor the backward needs goes through
+            # save_for_backward. Non-reentrant checkpoint can therefore discard
+            # these references and recreate them after the streaming slot has
+            # been refilled with the correct layer during recompute.
+            ctx.save_for_backward(packed, absmax, state2_absmax, state2_code, offset)
+            ctx.shape = tuple(int(dim) for dim in shape)
+            ctx.weight_dtype = weight_dtype
+            ctx.blocksize = int(blocksize)
+            ctx.quant_type = str(quant_type)
+            ctx.nested = bool(nested)
+            ctx.state2_blocksize = int(state2_blocksize)
+            ctx.bias_dtype = None if bias is None else bias.dtype
+            ctx.owner_check = getattr(packed, "_soup_stream_owner_check", None)
+
+            if ctx.nested:
+                return torch.ops.bitsandbytes.gemm_4bit.default(
+                    x,
+                    packed,
+                    ctx.shape,
+                    state2_absmax,
+                    ctx.blocksize,
+                    ctx.quant_type,
+                    bias=bias,
+                    absmax_8bit=absmax,
+                    absmax_code=state2_code,
+                    absmax_offset=offset,
+                )
+            return torch.ops.bitsandbytes.gemm_4bit.default(
+                x, packed, ctx.shape, absmax, ctx.blocksize, ctx.quant_type, bias=bias
+            )
+
+        @staticmethod
+        @torch.amp.custom_bwd(device_type="cuda")
+        def backward(ctx, grad_output):
+            # Recompute must have reloaded this layer into its slot, and the
+            # one-ahead prefetcher must not recycle that slot before its
+            # backward finishes. A deeper lookahead would otherwise make the
+            # aliases below silently describe another layer (#842).
+            if ctx.owner_check is not None:
+                ctx.owner_check()
+            packed, absmax, state2_absmax, state2_code, offset = ctx.saved_tensors
+            state2 = None
+            q_offset = None
+            if ctx.nested:
+                state2 = bnb_functional.QuantState(
+                    absmax=state2_absmax,
+                    code=state2_code,
+                    blocksize=ctx.state2_blocksize,
+                    dtype=torch.float32,
+                )
+                q_offset = offset
+            quant_state = bnb_functional.QuantState(
+                absmax=absmax,
+                shape=torch.Size(ctx.shape),
+                dtype=ctx.weight_dtype,
+                blocksize=ctx.blocksize,
+                quant_type=ctx.quant_type,
+                offset=q_offset,
+                state2=state2,
+            )
+            # bitsandbytes 0.50.x exposes a fused forward GEMM but no transposed
+            # 4-bit GEMM for dX. Keep this fallback explicit: it is correct and
+            # checkpoint-visible, but #842 remains open until this dense
+            # dequantisation is replaced by a real transposed kernel.
+            grad_x = None
+            if ctx.needs_input_grad[0]:
+                weight = bnb_functional.dequantize_4bit(packed, quant_state).to(
+                    grad_output.dtype
+                )
+                grad_x = torch.matmul(grad_output, weight)
+            grad_bias = None
+            if ctx.needs_input_grad[6] and ctx.bias_dtype is not None:
+                grad_bias = grad_output.reshape(-1, grad_output.shape[-1]).sum(
+                    dim=0, dtype=ctx.bias_dtype
+                )
+            return (
+                grad_x,
+                None,
+                None,
+                None,
+                None,
+                None,
+                grad_bias,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+
+    _CHECKPOINT_VISIBLE_NF4_FUNCTION = CheckpointVisibleNF4Matmul
+    return CheckpointVisibleNF4Matmul
+
+
+def checkpoint_visible_nf4_linear(
+    x: Any, packed: Any, quant_state: Any, bias: Any = None
+) -> Any:
+    """Fused NF4 forward with checkpoint-visible packed state (#842)."""
+    empty = packed.new_empty((0,))
+    state2_absmax = empty
+    state2_code = empty
+    offset = empty
+    state2_blocksize = 0
+    if quant_state.nested:
+        state2_absmax = quant_state.state2.absmax
+        state2_code = quant_state.state2.code
+        offset = quant_state.offset
+        state2_blocksize = int(quant_state.state2.blocksize)
+    return _checkpoint_visible_nf4_function().apply(
+        x,
+        packed,
+        quant_state.absmax,
+        state2_absmax,
+        state2_code,
+        offset,
+        bias,
+        tuple(quant_state.shape),
+        quant_state.dtype,
+        int(quant_state.blocksize),
+        str(quant_state.quant_type),
+        bool(quant_state.nested),
+        state2_blocksize,
+    )
+
+
+def _can_use_checkpoint_visible_nf4_gemm(x: Any, quant_state: Any) -> bool:
+    """Match bitsandbytes' own decision to use its custom 4-bit CUDA GEMM.
+
+    The private dispatch names are intentionally read from bitsandbytes rather
+    than copying a card-specific M window. If those private names move, prefer
+    the checkpoint-visible Function: it remains exact, though potentially
+    slower, and the compatibility test makes the upstream change visible.
+    """
+    if getattr(getattr(x, "device", None), "type", None) != "cuda":
+        return False
+    if bool(getattr(quant_state, "nested", False)):
+        state2 = getattr(quant_state, "state2", None)
+        if state2 is None or int(getattr(state2, "blocksize", 0)) != 256:
+            return False
+    try:
+        import torch
+
+        torch.ops.bitsandbytes.gemm_4bit.default
+    except (ImportError, AttributeError, RuntimeError):
+        return False
+    try:
+        from bitsandbytes.backends.cuda import ops as bnb_cuda_ops
+
+        custom_max_m = bnb_cuda_ops._gemm_4bit_custom_max_m
+        use_custom_fn = bnb_cuda_ops._gemm_4bit_use_custom_fn
+    except (ImportError, AttributeError, RuntimeError):
+        return True
+
+    k = int(x.shape[-1])
+    m = int(x.numel() // k)
+    n = int(quant_state.shape[0])
+    blocksize = int(quant_state.blocksize)
+    if m > int(custom_max_m) or k % blocksize != 0:
+        return False
+    return bool(use_custom_fn(x.device.index, x.dtype, m, n, k))
+
+
 def install_dequant_forward(module: Any) -> int:
     """#331 — keep a STREAMED NF4 weight out of ``bitsandbytes``' ``MatMul4Bit``.
 
@@ -195,17 +389,21 @@ def install_dequant_forward(module: Any) -> int:
     forward-to-backward span, so any copy keeps one layer alive for that span and
     costs O(model). On real 32B, peak VRAM 4 220 -> 19 720 MiB.
 
-    So the weight never enters that autograd Function. It is dequantised inside the
-    checkpointed region and multiplied natively; ``F.linear`` saves the dequantised
-    tensor through the ordinary mechanism, which checkpointing DOES discard and
-    recompute, and the transient lives only inside the recomputed block — O(window).
+    The streamed weight still never enters bitsandbytes' ``MatMul4Bit`` Function.
+    When bitsandbytes' own CUDA dispatch selects its custom 4-bit GEMM, #842 routes
+    that same operation through Soup's autograd Function: packed bytes and every
+    quantisation tensor go through ``save_for_backward``, so non-reentrant
+    checkpointing can discard and recompute them after the pool refills the correct
+    layer. Whenever bitsandbytes selects its dequantise + linear fallback, Soup
+    keeps the v0.73.0 path rather than paying a third dequantisation in backward.
+    Missing private dispatch symbols fail toward the Function: exact but possibly
+    slower, never toward an alias-unsafe ``MatMul4Bit``.
 
-    This changes the computation path used by the patched NF4 module. With
-    bitsandbytes 0.50.2, the native fused ``MatMul4Bit`` path and explicit
-    ``dequantize_4bit`` + ``F.linear`` can differ depending on the CUDA
-    architecture and projection shape. The dequantise + linear path is retained
-    for correctness under checkpointing (#331); this path choice is not assumed
-    to be numerically free.
+    The #842 Function is deliberately only the first half of the intended kernel.
+    bitsandbytes exposes a fused forward GEMM but no transposed 4-bit GEMM for
+    ``grad_x = grad_y @ W``; its backward also dequantises. Soup therefore keeps
+    that dense-dequant backward explicitly until a transposed kernel exists. Do
+    not claim the full #842 throughput ceiling from the fused-forward path alone.
 
     Returns the number of modules patched, so a caller can assert it patched
     something. Zero would mean the model carries no 4-bit linears at all.
@@ -233,8 +431,16 @@ def install_dequant_forward(module: Any) -> int:
         if bias is not None:
             bias = bias.to(x.dtype)
 
-        # THE repair: dequantise here, inside whatever checkpointed region this
-        # forward is running in, and let F.linear save the dense weight properly.
+        # Match bnb's own private dispatch. Only the custom-GEMM arm needs
+        # Soup's Function; on bnb's dequant+linear arm the old path below has
+        # identical arithmetic and avoids an extra backward dequantisation.
+        if _can_use_checkpoint_visible_nf4_gemm(x, quant_state):
+            return checkpoint_visible_nf4_linear(
+                x, self.weight, quant_state, bias
+            ).to(inp_dtype)
+
+        # Compatibility path: dequantise inside the checkpointed region and let
+        # F.linear save the dense weight properly.
         weight = dequantize_4bit(self.weight, quant_state).to(x.dtype)
         return functional.linear(x, weight, bias).to(inp_dtype)
 
@@ -351,8 +557,20 @@ def plan_pinned_arenas(
 ) -> ArenaPlan:
     """Pack ``sizes`` (bytes, allocation order) into power-of-two arenas.
 
-    First-fit into the current arena, else open the next; a tensor never
-    straddles two arenas, because it has to be one contiguous view.
+    Two layouts are planned. The in-order walk puts each tensor into the arena
+    opened last, else opens the next. The largest-first walk (stable first-fit
+    decreasing) is returned ONLY when it page-locks strictly fewer bytes; on a
+    tie the in-order plan comes back, placement for placement. Either way
+    ``placements`` is indexed in the order the sizes were given, and a tensor
+    never straddles two arenas, because it has to be one contiguous view.
+
+    The in-order walk alone strands the space in front of a large tensor that
+    arrives late (#1702). A Qwen3-8B NF4 store is 3.58 GB of decoder tensors
+    followed by two 1.24 GB vocabulary matrices; neither fits behind the
+    decoder, so each opened a 2 GiB arena of its own: 8 GiB page-locked for a
+    6.07 GB store. Largest-first puts the two matrices down first and the
+    decoder fills in around them: 6 GiB. The test is bytes, not arena count —
+    after the trim a sorted layout can hold as many arenas and MORE bytes.
 
     The arena capacity is the power of two above FOUR times the store's largest
     tensor, floored at ``arena_bytes`` and capped at
@@ -385,6 +603,13 @@ def plan_pinned_arenas(
         return ArenaPlan(arena_sizes=(), placements=(), requested_bytes=0)
     ceiling = max(arena_bytes, PINNED_ARENA_MAX_BYTES)
     capacity = min(max(arena_bytes, _next_power_of_two(4 * max(sizes))), ceiling)
+    in_order = _plan_in_order(sizes, capacity, align)
+    largest_first = _plan_largest_first(sizes, capacity, align)
+    return largest_first if largest_first.pinned_bytes < in_order.pinned_bytes else in_order
+
+
+def _plan_in_order(sizes: Sequence[int], capacity: int, align: int) -> ArenaPlan:
+    """Allocation order: each tensor into the arena opened last, else a new one."""
     fills: List[int] = []
     capacities: List[int] = []
     placements: List[Tuple[int, int]] = []
@@ -399,6 +624,34 @@ def plan_pinned_arenas(
         # Only a tensor beyond the ceiling opens an arena wider than the rest.
         capacities.append(max(capacity, _next_power_of_two(size)))
         placements.append((len(fills) - 1, 0))
+    return ArenaPlan(
+        arena_sizes=tuple(max(align, _next_power_of_two(fill)) for fill in fills),
+        placements=tuple(placements),
+        requested_bytes=sum(sizes),
+    )
+
+
+def _plan_largest_first(sizes: Sequence[int], capacity: int, align: int) -> ArenaPlan:
+    """Largest tensor first, each into the FIRST arena with room, else a new one.
+
+    The sort is stable, so equal sizes keep their allocation order. Each
+    placement is written back at the tensor's ORIGINAL index: both sources read
+    the plan in allocation order, whatever order the arenas were filled in.
+    """
+    fills: List[int] = []
+    capacities: List[int] = []
+    placements: List[Tuple[int, int]] = [(0, 0)] * len(sizes)
+    for original, size in sorted(enumerate(sizes), key=lambda item: -item[1]):
+        for arena, fill in enumerate(fills):
+            start = -(-fill // align) * align
+            if start + size <= capacities[arena]:
+                placements[original] = (arena, start)
+                fills[arena] = start + size
+                break
+        else:
+            placements[original] = (len(fills), 0)
+            fills.append(size)
+            capacities.append(max(capacity, _next_power_of_two(size)))
     return ArenaPlan(
         arena_sizes=tuple(max(align, _next_power_of_two(fill)) for fill in fills),
         placements=tuple(placements),
@@ -517,21 +770,18 @@ class RamSource:
             )
 
     @staticmethod
-    def spec_from_shard(shard_dir: str, idx: int = 0) -> Dict[str, Tuple[Tuple[int, ...], str]]:
-        """Shape AND dtype for ONE decoder layer, read from the shard header.
+    def spec_from_path(path: str) -> Dict[str, Tuple[Tuple[int, ...], str]]:
+        """Shape AND dtype for the decoder-layer shard at ``path``, read from its header.
 
-        The dtype is read per tensor rather than taken from ``index.dtype``: an
-        NF4 shard is deliberately mixed — packed nibbles and (under double
-        quant) absmax are ``uint8`` while the nested absmax, the offset and the
-        layernorms are floats. Allocating one dtype across the pool would
-        reinterpret packed bytes as floats.
+        The dtype is read per tensor rather than taken from ``index.dtype``: an NF4 shard is
+        deliberately mixed — packed nibbles and (under double quant) absmax are ``uint8``
+        while the nested absmax, the offset and the layernorms are floats. Allocating one
+        dtype across the pool would reinterpret packed bytes as floats.
         """
         from safetensors import safe_open
 
-        from soup_cli.utils.layer_shard import layer_shard_path
-
         spec: Dict[str, Tuple[Tuple[int, ...], str]] = {}
-        with safe_open(layer_shard_path(shard_dir, idx), framework="pt") as handle:
+        with safe_open(path, framework="pt") as handle:
             for name in handle.keys():
                 sliced = handle.get_slice(name)
                 shape = tuple(int(d) for d in sliced.get_shape())
@@ -544,10 +794,34 @@ class RamSource:
                 spec[name] = (shape, _SAFETENSORS_DTYPES[raw])
         return spec
 
+    @staticmethod
+    def spec_from_shard(shard_dir: str, idx: int = 0) -> Dict[str, Tuple[Tuple[int, ...], str]]:
+        """``spec_from_path`` for layer ``idx`` of a ONE-root cache."""
+        from soup_cli.utils.layer_shard import layer_shard_path
+
+        return RamSource.spec_from_path(layer_shard_path(shard_dir, idx))
+
+    @classmethod
+    def layer_specs_from_paths(
+        cls, paths: Sequence[str]
+    ) -> list[Dict[str, Tuple[Tuple[int, ...], str]]]:
+        """Every decoder layer's spec, one shard path per layer, wherever each file lives.
+
+        The form the setup and ``install_streaming`` use, with ``layer_paths(shard_dir,
+        index)``: on a striped cache (R4) the layers sit on several roots.
+        """
+        return [cls.spec_from_path(path) for path in paths]
+
     @classmethod
     def layer_specs_from_shards(
         cls, shard_dir: str, n_layers: int
     ) -> list[Dict[str, Tuple[Tuple[int, ...], str]]]:
+        """The ONE-root form: every layer under ``shard_dir``. Wrong for a striped cache.
+
+        Kept for one-root callers (tests, the #974 harnesses). The setup goes through
+        :meth:`layer_specs_from_paths` with ``layer_paths(shard_dir, index)``, which knows
+        which root holds each layer.
+        """
         return [cls.spec_from_shard(shard_dir, idx) for idx in range(n_layers)]
 
     @staticmethod
@@ -1131,6 +1405,13 @@ def _build_streamed_layer_class():
             self.use_checkpoint = bool(use_checkpoint)
             self.quant_specs = dict(quant_specs or {})
             self.codes = dict(codes or {})
+            # #841 — each wrapper returns to the same pool slot on every visit.
+            # Cache the tensor/Params4bit substitution views for that slot rather
+            # than reconstructing Python wrappers and QuantState objects on every
+            # forward and checkpoint recompute. The views share storage with the
+            # pool tensors, so later layer loads update their contents in place.
+            self._cached_substitution_buffers = None
+            self._cached_substitution_weights = None
             # v0.72.5 (#331) — a streamed NF4 weight must not reach MatMul4Bit,
             # which captures it outside save_for_backward and so aliases the pool
             # across the checkpoint boundary. See install_dequant_forward.
@@ -1355,19 +1636,41 @@ def _build_streamed_layer_class():
             # Weights arrive with requires_grad=False, so autograd allocates no
             # grad buffers for them — but W STAYS IN THE GRAPH for W^T . dL/dy,
             # which is how the lower adapters receive gradient at all.
-            if not self.quant_specs:
-                return {meta: buffers[ckpt] for meta, ckpt in self.name_map.items()}
-            # NF4: a Params4bit VIEW is rebuilt over the pooled buffer on every
-            # call (plan P3). The packed bytes are never copied or re-quantised
-            # — only the small Python wrapper is reconstructed.
+            #
+            # #841 — a wrapper revisits the same pool-slot mapping every forward
+            # and checkpoint recompute. Only the tensors' CONTENTS change when a
+            # layer is loaded. Reuse the mapping and Params4bit/QuantState views
+            # while the mapping object is identical; rebuilding them is pure
+            # Python/object churn and does not create fresher storage.
+            if (
+                self._cached_substitution_buffers is buffers
+                and self._cached_substitution_weights is not None
+            ):
+                return self._cached_substitution_weights
+
             weights = {}
             for meta, ckpt in self.name_map.items():
                 spec = self.quant_specs.get(ckpt)
                 if spec is None:
                     weights[meta] = buffers[ckpt]
                 else:
-                    weights[meta] = rebuild_params4bit(ckpt, buffers, spec, self.codes)
+                    weight = rebuild_params4bit(ckpt, buffers, spec, self.codes)
+                    weight._soup_stream_owner_check = self._assert_nf4_slot_owner
+                    weights[meta] = weight
+            self._cached_substitution_buffers = buffers
+            self._cached_substitution_weights = weights
             return weights
+
+        def _assert_nf4_slot_owner(self) -> None:
+            slot = self.pool.slot_for(self.idx)
+            owner = self.pool.owner[slot]
+            if owner != self.idx:
+                raise RuntimeError(
+                    "streamed NF4 backward found a recycled weight slot: "
+                    f"slot {slot} holds layer {owner}, expected layer {self.idx}. "
+                    "The prefetch lookahead exceeded the checkpoint-visible "
+                    "alias lifetime."
+                )
 
         def _body(self, hidden_states: Any, *args: Any, **kwargs: Any) -> Any:
             buffers = self.pool.wait(self.idx)
@@ -1591,7 +1894,7 @@ def _build_streamed_large_layer_class():
             loss. SFT, ORPO and SimPO run one forward per step, and nothing
             refills the slot between it and its backward, so they never need the
             copy (``refill_before_backward``, set by the trainer). The slot must
-            be SHARED: a tied checkpoint streams one key, so its buffer is never
+            be SHARED: a tied checkpoint streams no large key, so its buffer is never
             refilled within a step. And the weight must be one autograd can save,
             which an embedding's is not -- ``embedding_backward`` works from the
             indices and the vocabulary size, never from the weight values, so
@@ -2555,12 +2858,17 @@ def install_streaming(
     tier: str = "ram",
     read_ahead: int = DEFAULT_STREAM_READ_AHEAD,
     refill_before_backward: bool = False,
+    read_ahead_decision: Any = None,
 ) -> StreamRuntime:
     """Wrap every decoder layer and wire the buffer pool + prefetch scheduler.
 
     ``refill_before_backward`` says the loss runs a second forward before each
     step's backward; an untied output head then hands autograd a private copy
     of its weight (#1049).
+
+    ``read_ahead_decision`` (a ``stripe_roots.ReadAheadDecision``, R4) says how
+    ``read_ahead`` came about, so the page-lock messages advise a depth that is
+    not raised straight back up on a striped cache.
     """
     import torch
 
@@ -2568,7 +2876,7 @@ def install_streaming(
         QUANT_NF4,
         large_shard_path,
         large_weight_role,
-        layer_shard_path,
+        layer_paths,
     )
 
     # PyTorch 2.7+ on Apple Silicon can turn
@@ -2617,7 +2925,9 @@ def install_streaming(
             "no meta decoder weights found — the base was materialised, which "
             "defeats layer streaming entirely"
         )
-    layer_specs = RamSource.layer_specs_from_shards(shard_dir, n_layers)
+    _require_stripe_folders(shard_dir, index)
+    decoder_paths = layer_paths(shard_dir, index)
+    layer_specs = RamSource.layer_specs_from_paths(decoder_paths)
     large_specs = large_layer_specs(shard_dir, index)
     large_keys = tuple(large_specs)
     role_keys = {large_weight_role(key): key for key in large_keys}
@@ -2661,9 +2971,9 @@ def install_streaming(
 
     large_source_indices = {key: n_layers + offset for offset, key in enumerate(large_keys)}
     source_specs = needed_specs_by_layer + [{key: large_specs[key]} for key in large_keys]
-    source_paths = [layer_shard_path(shard_dir, idx) for idx in range(n_layers)] + [
-        large_shard_path(shard_dir, key) for key in large_keys
-    ]
+    source_paths = list(decoder_paths) + [large_shard_path(shard_dir, key) for key in large_keys]
+    placement = tuple(getattr(index, "layer_roots", ()) or ())
+    source_roots = placement + (0,) * len(large_keys) if placement else None
     source, pinned = _build_source(
         shard_dir,
         len(source_specs),
@@ -2674,6 +2984,8 @@ def install_streaming(
         require_pin=require_pin,
         shard_paths=source_paths,
         read_ahead=read_ahead,
+        layer_roots=source_roots,
+        read_ahead_decision=read_ahead_decision,
     )
     pool = LayerBufferPool(
         spec,
@@ -2922,6 +3234,52 @@ def _recover_before_refusing(console: Any) -> None:
         logger.warning("page-lock recovery failed before the refusal: %r", exc)
 
 
+def _require_stripe_folders(shard_dir: str, index: Any) -> None:
+    """Every stripe folder a striped cache reads from is there and is a real folder.
+
+    Refused by name before any header is read: a missing root (an unmounted drive), a missing
+    per-model folder under a present root, and a link or junction at the folder, which would
+    send every read somewhere the cache check never looked.
+    """
+    from soup_cli.utils.layer_shard import stripe_dirs
+    from soup_cli.utils.stripe_roots import STRIPE_DIRS_ENV, stripe_folder_problem
+
+    placement = tuple(getattr(index, "layer_roots", ()) or ())
+    roots = tuple(getattr(index, "stripe_roots", ()) or ())
+    folders = stripe_dirs(shard_dir, roots)[1:]
+    for position, (root, folder) in enumerate(zip(roots, folders), start=1):
+        layers = [idx for idx, owner in enumerate(placement) if owner == position]
+        shown = f"{layers[:8]}{' ...' if len(layers) > 8 else ''}"
+        if not os.path.isdir(root):
+            raise RuntimeError(
+                f"layer streaming's cache keeps decoder layers {shown} on the stripe root "
+                f"{root} (from {STRIPE_DIRS_ENV}), and that folder is not there — a drive "
+                f"that is not mounted, or a drive letter that changed. Reconnect it, or unset "
+                f"{STRIPE_DIRS_ENV} and let Soup re-shard to one root."
+            )
+        problem = stripe_folder_problem(folder, root)
+        if problem is not None:
+            raise RuntimeError(f"layer streaming's cache: {problem}.")
+        if not os.path.isdir(folder):
+            raise RuntimeError(
+                f"layer streaming's cache keeps decoder layers {shown} in {folder} (on a "
+                f"{STRIPE_DIRS_ENV} root), and that folder is gone although its root is there. "
+                f"Let Soup re-shard (the cache check will rebuild it), or unset "
+                f"{STRIPE_DIRS_ENV} to re-shard to one root."
+            )
+
+
+def _say_unaligned_staging(source: Any, console: Any) -> None:
+    """Put the disk tier's page-cache fallback where a `soup train` user reads it (#1531).
+
+    The source logs it; the logger is not what the Rich output shows.
+    """
+    if console is not None and not getattr(source, "staging_aligned", True):
+        from soup_cli.utils.async_disk_source import UNALIGNED_STAGING_MESSAGE
+
+        console.print(f"[yellow]{UNALIGNED_STAGING_MESSAGE}[/]")
+
+
 def _build_source(
     shard_dir,
     n_layers,
@@ -2932,6 +3290,8 @@ def _build_source(
     require_pin=False,
     shard_paths=None,
     read_ahead=DEFAULT_STREAM_READ_AHEAD,
+    layer_roots=None,
+    read_ahead_decision=None,
 ):
     """Build the weight source for the chosen tier.
 
@@ -2957,7 +3317,10 @@ def _build_source(
 
     ``read_ahead`` (``training.stream_read_ahead``) is the reader's depth and
     therefore the multiplier on how much host memory is page-locked, which makes
-    lowering it a remedy the RAM tier cannot offer.
+    lowering it a remedy the RAM tier cannot offer. ``read_ahead_decision`` (R4)
+    says how that depth came about; without it the depth is taken as set, over
+    the drives ``layer_roots`` names. Either way the advice names a depth that
+    the N + 1 rule does not raise straight back up.
 
     The second element of the returned tuple means the same thing on both tiers:
     the host-side source memory is page-locked.
@@ -2965,8 +3328,19 @@ def _build_source(
     source_kwargs = {} if shard_paths is None else {"shard_paths": shard_paths}
     if tier == "disk":
         from soup_cli.utils.async_disk_source import AsyncDiskSource
+        from soup_cli.utils.stripe_roots import ReadAheadDecision
 
+        decision = read_ahead_decision or ReadAheadDecision(
+            depth=read_ahead,
+            configured=read_ahead,
+            n_roots=(max(layer_roots) + 1) if layer_roots else 1,
+        )
+        advice = decision.lowering_advice()
         open_kwargs = dict(read_ahead=read_ahead, **source_kwargs)
+        if layer_roots is not None:
+            # R4: which drive each source index lives on. Only the async reader uses it; the
+            # RAM tier reads every file once whatever drive it is on.
+            open_kwargs["layer_roots"] = layer_roots
         if pin:
             try:
                 source = AsyncDiskSource(shard_dir, n_layers, spec, pin=True, **open_kwargs)
@@ -2985,18 +3359,18 @@ def _build_source(
                         "how much gets page-locked. Refusing rather than silently "
                         "degrading to pageable staging, which makes host-to-device "
                         "copies synchronous and costs the ~97% -> ~79% "
-                        "GPU-utilisation overlap pinning buys. Lower "
-                        "training.stream_read_ahead, free RAM, or unset "
-                        "training.stream_pin to allow the pageable fallback."
+                        "GPU-utilisation overlap pinning buys. "
+                        + (f"{advice}, free RAM, " if advice else "Free RAM, ")
+                        + "or unset training.stream_pin to allow the pageable fallback."
                     ) from exc
                 message = (
                     "layer streaming could not page-lock the disk tier's host "
                     f"staging ({type(exc).__name__}); falling back to PAGEABLE "
                     "staging. Host-to-device copies become synchronous, which "
                     "costs overlap — measured GPU utilisation drops from ~97% to "
-                    "~79%. Lower training.stream_read_ahead (its depth is what "
-                    "decides how much is page-locked) or free RAM to keep the "
-                    "pinned staging."
+                    "~79%. The read-ahead depth decides how much is page-locked. "
+                    + (f"{advice}, or free RAM" if advice else "Free RAM")
+                    + " to keep the pinned staging."
                 )
                 if console is not None:
                     console.print(f"[yellow]{message}[/]")
@@ -3007,8 +3381,10 @@ def _build_source(
                 # otherwise report as an out-of-memory it never had.
                 recover_from_failed_page_lock(console=console)
             else:
+                _say_unaligned_staging(source, console)
                 return source, source.pinned
         source = AsyncDiskSource(shard_dir, n_layers, spec, pin=False, **open_kwargs)
+        _say_unaligned_staging(source, console)
         return source, source.pinned
     # `source.pinned` on both branches rather than the literal, so the tuple's
     # second element has ONE meaning to read off: what the source says about
@@ -3100,8 +3476,13 @@ def build_streamed_model(
     weights_dir: Optional[str] = None,
     ngram_source: str = "disk",
     refill_before_backward: bool = False,
+    read_ahead_decision: Any = None,
 ) -> Tuple[Any, StreamRuntime]:
-    """Meta skeleton -> extras -> LoRA -> streaming. No resident base load."""
+    """Meta skeleton -> extras -> LoRA -> streaming. No resident base load.
+
+    ``read_ahead_decision`` (R4) is the setup's ``ReadAheadDecision`` for ``read_ahead``,
+    handed to ``install_streaming`` for its page-lock advice.
+    """
     from peft import get_peft_model
 
     model = build_meta_skeleton(
@@ -3147,6 +3528,7 @@ def build_streamed_model(
             tier=tier,
             read_ahead=read_ahead,
             refill_before_backward=refill_before_backward,
+            read_ahead_decision=read_ahead_decision,
         )
     except BaseException:
         for external in external_sources:

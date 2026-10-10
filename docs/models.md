@@ -4,6 +4,8 @@
 
 > Recommended model families, the VRAM size guide, and the pip extras matrix.
 
+> Model sizes across recipes represent the total parameter count (all resident parameters for MoE models, answering card VRAM requirements).
+
 ## Supported Models
 
 Soup works with **any** of the **340,000+** text-generation models on [HuggingFace Hub](https://huggingface.co/models?pipeline_tag=text-generation). If a model supports `AutoModelForCausalLM`, it works with Soup — zero config changes needed.
@@ -12,7 +14,7 @@ Soup works with **any** of the **340,000+** text-generation models on [HuggingFa
 
 | Model Family | Models | Sizes | Best For |
 |---|---|---|---|
-| **Llama 4** | Llama-4-Scout-17B, Llama-4-Maverick-17B | 17B | General, multilingual |
+| **Llama 4** | Llama-4-Scout-17B, Llama-4-Maverick-17B | 109B-400B | General, multilingual |
 | **Llama 3.x** | Llama-3.1-8B-Instruct, Llama-3.3-70B-Instruct | 1B–70B | Chat, instruction following |
 | **Llama 3.2 Vision** | Llama-3.2-11B-Vision-Instruct, Llama-3.2-90B-Vision | 11B–90B | Image understanding |
 | **Gemma 3** | Gemma-3-4B-IT, Gemma-3-9B-IT, Gemma-3-27B-IT | 4B–27B | Efficient, multilingual |
@@ -20,17 +22,19 @@ Soup works with **any** of the **340,000+** text-generation models on [HuggingFa
 | **Qwen 3** | Qwen3-8B, Qwen3-14B, Qwen3-32B, Qwen3-235B-A22B | 0.6B–235B | Reasoning, code, MoE |
 | **Qwen 2.5** | Qwen2.5-7B-Instruct, Qwen2.5-Coder-32B-Instruct, Qwen2.5-Math-7B-Instruct | 0.5B–72B | Code, math |
 | **DeepSeek** | DeepSeek-R1-Distill-Llama-8B, DeepSeek-V3-0324, DeepSeek-V4-Flash/Pro | 1.5B–1.6T | Reasoning (GRPO), code, MoE |
-| **GLM** | GLM-5, GLM-5.1 | 9B–754B | Chinese + English, MoE |
+| **GLM** | GLM-4.6, GLM-5, GLM-5.1 | 357B-754B | Chinese + English, MoE |
 | **Kimi** | Kimi-K2, Kimi-K2.5, Kimi-K2.6 | ~1T (MoE) | Long-context agentic, MoE |
 | **MiniMax** | MiniMax-M2, MiniMax-M3 | 230B–428B | Agentic, MoE (community license) |
 | **Phi-4** | Phi-4-14B, Phi-4-mini-reasoning | 3.8B–14B | Compact reasoning |
-| **Mistral** | Mistral-7B-Instruct-v0.3, Mistral-Small-24B, Mistral-Large-3 | 7B–675B | Fast, efficient, MoE |
+| **Mistral** | Mistral-7B-Instruct-v0.3, Mistral-Small-24B | 7B–24B | Fast, efficient |
 | **Mixtral** | Mixtral-8x7B-Instruct-v0.1, Mixtral-8x22B | 47B–141B | MoE architecture |
 | **CodeLlama** | CodeLlama-7b-Instruct-hf, CodeLlama-34b-Instruct | 7B–34B | Code generation |
 | **StarCoder 2** | StarCoder2-15B, StarCoder2-7B | 3B–15B | Code completion |
 | **Yi** | Yi-1.5-34B-Chat, Yi-1.5-9B-Chat | 6B–34B | Multilingual chat |
 | **InternLM 3** | InternLM3-8B-Instruct | 8B | Chinese + English |
 | **Falcon** | Falcon-11B, Falcon-40B-Instruct | 7B–180B | Open-weight |
+
+**Mistral-Large-3 is not shipped as a recipe.** `mistralai` publishes it in Mistral's native layout (`params.json` + `consolidated-*.safetensors`), with no `config.json`, which `AutoConfig` cannot read, and no flag changes that. A Hugging Face-format conversion exists on the Hub as `FriendliAI/Mistral-Large-3-675B-Instruct-2512-BF16`; it is a third party's re-upload, so Soup does not point a recipe at it (#1145).
 
 Qwen3.5, Qwen3.6, and Qwen3.8 checkpoints advertise a multimodal conditional-generation
 architecture on the Hub, but Soup's catalog recipes are deliberately text-only.
@@ -158,6 +162,6 @@ spelling is unchanged. See [the README's install section](../README.md#1-install
 | `remote` | `pip install "soup-cli[remote]"` | Remote datasets (s3 / gs / az / oci) |
 | `dev` | `pip install "soup-cli[dev]"` | Tests + lint + types (pytest, ruff, mypy, pre-commit) |
 
-**`[awq]` and `[gptq]` cannot be installed alongside `[train]`.** AWQ export was measured working only with `transformers` 4.52.4 or older, while `[train]` requires `transformers>=5.16.1`; `auto-gptq` publishes no Python 3.12 wheel; and both upstream projects (AutoAWQ and AutoGPTQ) are archived. Run AWQ or GPTQ export from a separate environment. Whether these two export formats stay is tracked in [#338](https://github.com/MakazhanAlpamys/Soup/issues/338).
+**`[awq]` and `[gptq]` cannot be installed alongside `[train]`.** AWQ export was measured working only with `transformers` 4.52.4 or older, while `[train]` requires `transformers>=5.16.1`; `auto-gptq` publishes no Python 3.12 wheel; and both upstream projects (AutoAWQ and AutoGPTQ) are archived. Run AWQ or GPTQ export from a separate environment. Both export formats are deprecated and will be removed in the next release ([#338](https://github.com/MakazhanAlpamys/Soup/issues/338)); until then `soup export --format awq` and `--format gptq` start with a notice that names the formats to move to (`gguf`, `onnx`, `tensorrt`, `bitnet`, `tq1_0`).
 
 The complete, authoritative extras list is in [`pyproject.toml`](../pyproject.toml).

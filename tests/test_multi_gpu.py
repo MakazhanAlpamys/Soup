@@ -377,13 +377,13 @@ class TestMultiNodeLauncher:
         monkeypatch.setattr(train_cmd, "load_dataset", loader)
         captured = []
 
-        def fake_execvp(file, argv):
-            captured.append((file, list(argv), {
+        def fake_run_launcher(argv):
+            captured.append((argv[0], list(argv), {
                 key: value for key, value in os.environ.items() if key.startswith("NCCL_")
             }))
             raise SystemExit(99)
 
-        monkeypatch.setattr(os, "execvp", fake_execvp)
+        monkeypatch.setattr("soup_cli.utils.launcher.run_launcher", fake_run_launcher)
 
         def invoke(args):
             return CliRunner().invoke(

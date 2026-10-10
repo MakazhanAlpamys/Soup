@@ -6,6 +6,11 @@ arm has `min_rows_per_arm(alpha)` rows (the burn-in). This script measures the f
 rate that burn-in leaves, and it is how the values in `soup_cli.utils.ab_test.
 BURN_IN_ROWS_BY_ALPHA` were chosen.
 
+Superseded by #1265 (`ab_nig_sweep.py`, benchmarks/gate-1265-ab-nig.md), which replaced the
+statistic and removed the burn-in; that sweep imports this one's functions as its baseline.
+The self-check below compares against the pre-#1265 `_verdict_from_summary`, so on current
+code it reports itself skipped.
+
 Procedure, per effect_size / sigma ratio:
 - H0: control and treatment rows both N(0, sigma^2), sigma = effect_size / ratio,
   effect_size 0.1 (only the ratio matters), beta 0.20.

@@ -1,6 +1,5 @@
 """SimPO (Simple Preference Optimization) trainer — wraps trl.CPOTrainer."""
 
-import math
 import time
 from pathlib import Path
 from typing import Optional
@@ -161,12 +160,10 @@ class SimPOTrainerWrapper(StreamingSetupMixin):
             output_dir = output_dir / cfg.experiment_name
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        # --- Calculate warmup steps from ratio ---
-        total_steps = (
-            math.ceil(len(train_ds) / batch_size / tcfg.gradient_accumulation_steps)
-            * tcfg.epochs
-        )
-        warmup_steps = int(total_steps * tcfg.warmup_ratio)
+        # --- Calculate warmup steps from ratio (#1431) ---
+        from soup_cli.utils.warmup import resolve_trainer_warmup_steps
+
+        warmup_steps = resolve_trainer_warmup_steps(tcfg.warmup_ratio)
 
         # --- SimPO config (via CPOTrainer with loss_type='simpo') ---
         from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
@@ -224,6 +221,16 @@ class SimPOTrainerWrapper(StreamingSetupMixin):
             eval_dataset=eval_ds,
             processing_class=self.tokenizer,
         )
+
+        # #1208 — trl 0.29 slices each answer to `max_length -
+        # longer_response_length`, so a long `chosen` beside a short `rejected`
+        # leaves the short one with zero tokens; SimPO's length-normalised
+        # log-probability is then 0/0, every LoRA tensor goes NaN, and
+        # transformers' nan-inf filter logs the loss as 0.0. Refuse before the
+        # first step instead of training to NaN behind a plausible number.
+        self._refuse_empty_completion_rows(self.trainer, split="train")
+        if self.trainer.eval_dataset is not None:
+            self._refuse_empty_completion_rows(self.trainer, split="eval")
 
         # #359 - the same exposure #336 fixed in sft.py: with LoRA the
         # no-decay optimizer group is empty, DeepSpeed drops it, and the LR
@@ -290,7 +297,7 @@ class SimPOTrainerWrapper(StreamingSetupMixin):
             self.model,
             cfg.data,
         )
-        if tcfg.quantization in ("4bit", "8bit", "mxfp4"):
+        if tcfg.quantization in ("4bit", "8bit"):
             from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
 
             self.model = prepare_model_for_kbit_training(
@@ -359,6 +366,35 @@ class SimPOTrainerWrapper(StreamingSetupMixin):
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
 
+    def _refuse_empty_completion_rows(self, trainer, *, split: str) -> None:
+        """Raise when a row's completion has no trainable token left (#1208).
+
+        Runs against the prepared, tokenised dataset trl itself will read, so it
+        sees the same answers the trainer does rather than the raw strings.
+        """
+        from soup_cli.trainer._trl_compat import (
+            preference_rows_with_empty_completion,
+        )
+
+        dataset = trainer.train_dataset if split == "train" else trainer.eval_dataset
+        affected = preference_rows_with_empty_completion(dataset)
+        if not affected:
+            return
+
+        shown = ", ".join(str(index) for index in affected[:5])
+        if len(affected) > 5:
+            shown += f", ... (+{len(affected) - 5} more)"
+        raise ValueError(
+            f"SimPO: {len(affected)} {split} row(s) would train on zero completion "
+            f"tokens at data.max_length={self.config.data.max_length} "
+            f"(rows: {shown}). trl truncates each answer to max_length minus "
+            "the LONGER answer's length, so the shorter side of a lopsided "
+            "pair is emptied and SimPO's length-normalised log-probability "
+            "becomes 0/0 — the run trains every LoRA tensor to NaN while the "
+            "logged loss reads 0.0. Raise data.max_length, balance the pair, "
+            "or drop the row."
+        )
+
     def train(
         self,
         display: Optional[object] = None,
@@ -375,23 +411,15 @@ class SimPOTrainerWrapper(StreamingSetupMixin):
         start = time.time()
 
         if display:
-            from soup_cli.monitoring.callback import (
-                SoupTrainerCallback,
-                soup_callback_kwargs,
-            )
-
+            from soup_cli.monitoring.callback import build_soup_trainer_callback
             self.trainer.add_callback(
-                SoupTrainerCallback(
+               build_soup_trainer_callback(
                     display,
+                    config=self.config,
                     tracker=tracker,
                     run_id=run_id,
-                    eval_gate_config=self.config.training.eval_gate,
-                    **soup_callback_kwargs(
-                        self.config.training,
-                        batch_size=self._batch_size,
-                        output_dir=self._output_dir,
-                        include_eval_gate=False,
-                    ),
+                    batch_size=self._batch_size,
+                    output_dir=self._output_dir,
                 )
             )
 
@@ -411,8 +439,16 @@ class SimPOTrainerWrapper(StreamingSetupMixin):
             self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
         duration = time.time() - start
 
-        self.trainer.save_model(self._output_dir)
-        self._assert_streamed_adapter_saved(self._output_dir)
+        if self.config.training.relora_steps is None:
+            self.trainer.save_model(self._output_dir)
+        else:
+            from soup_cli.utils.peft_wiring import save_model_with_relora
+
+            save_model_with_relora(
+                self.trainer, self._output_dir, self.config.training.relora_steps
+            )
+        if self.config.training.relora_steps is None:
+            self._assert_streamed_adapter_saved(self._output_dir)
         self.tokenizer.save_pretrained(self._output_dir)
 
         logs = self.trainer.state.log_history

@@ -38,6 +38,21 @@ def neutral_score(mode: str, reason: str = "skipped") -> FailureScore:
     )
 
 
+def not_run_score(mode: str, reason: str) -> FailureScore:
+    """Score for a probe that was requested but produced no measurement (#1435).
+
+    Unlike :func:`neutral_score` (by-design "not applicable", reads OK), this is
+    ``NOT_RUN``: it never passes a gate. ``reason`` should say why, including the
+    exception text when a probe raised.
+    """
+    return FailureScore(
+        mode=mode,
+        score=0.0,
+        verdict="NOT_RUN",
+        evidence=f"probe not run ({reason})",
+    )
+
+
 def build_report(
     *,
     run_id: str,

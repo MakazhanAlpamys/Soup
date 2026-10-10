@@ -825,7 +825,7 @@ def _drive_qwen4_streaming_setup(tmp_path, monkeypatch, resolve_weights=None):
         "soup_cli.utils.layer_stream.total_ram_bytes", lambda: harness_total_ram
     )
     monkeypatch.setattr(
-        "soup_cli.utils.layer_stream_runtime.RamSource.layer_specs_from_shards",
+        "soup_cli.utils.layer_stream_runtime.RamSource.layer_specs_from_paths",
         lambda *_a, **_k: layer_specs,
     )
     monkeypatch.setattr(

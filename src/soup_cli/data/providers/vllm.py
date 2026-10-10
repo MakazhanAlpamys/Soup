@@ -18,9 +18,12 @@ def validate_vllm_url(base_url: str) -> None:
     Reuses the same validation as the server provider:
     - Scheme must be http or https
     - HTTP is only allowed for localhost
+    - A private / link-local / reserved IP literal is refused on any scheme
 
     Raises ValueError if validation fails.
     """
+    from soup_cli.utils.net_guard import LOOPBACK_HOSTS, refuse_private_ip_literal
+
     parsed = urlparse(base_url)
     if parsed.scheme not in ("http", "https"):
         raise ValueError(
@@ -29,13 +32,13 @@ def validate_vllm_url(base_url: str) -> None:
     # 0.0.0.0 is the bind-any wildcard, NOT loopback (v0.71.6 #232 hardening,
     # matching the newer SSRF validators). It drops out of the local set, so
     # http://0.0.0.0 is now rejected (remote needs HTTPS).
-    local_hosts = ("localhost", "127.0.0.1", "::1")
-    is_local = parsed.hostname in local_hosts
+    is_local = parsed.hostname in LOOPBACK_HOSTS
     if not is_local and parsed.scheme != "https":
         raise ValueError(
             f"vLLM URL must use HTTPS for remote servers (got {parsed.scheme}://). "
             "HTTP is only allowed for localhost."
         )
+    refuse_private_ip_literal(parsed.hostname, label="vLLM URL")
 
 
 def generate_vllm(

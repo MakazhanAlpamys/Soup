@@ -1,0 +1,3 @@
+# 2026-10-02T21:12:37 C:\Users\user\AppData\Local\Programs\Python\Python312\python.exe benchmarks/harness/two_drive_throttle_read.py --arm c --seconds 300.0 --c-dir C:/Users/user/.soup/layer-stream/D___synth__llama-70b-shape-v32k-f4 --d-dir D:/soup-stripe/D___synth__llama-70b-shape-v32k-f4-cba3360a9c80 --span-mib 400 --label "throttle round 0 C-ALONE" --out benchmarks/results/probe-rtx5070/two-drive/throttle_r0_c.json
+C: 2786 spans, 1168.5 GB, 3.895 GB/s, 34.0 passes, byte check OK
+wrote benchmarks/results/probe-rtx5070/two-drive/throttle_r0_c.json

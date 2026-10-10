@@ -24,7 +24,9 @@ def _finite_loss(value: object) -> float | None:
 
 
 def summarize_training_loss(
-    log_history: Sequence[Any], final_metrics: Mapping[str, Any] | None = None
+    log_history: Sequence[Any],
+    final_metrics: Mapping[str, Any] | None = None,
+    loss_key: str = "loss",
 ) -> dict[str, float | str]:
     """Return result fields without inventing a loss delta.
 
@@ -33,27 +35,42 @@ def summarize_training_loss(
     therefore have only the mean. Keep the existing numeric result fields for
     trackers and sweep ranking, while recording whether the live summary owns
     a real two-point delta.
+
+    Trainers whose framework logs per-step losses under a different key pass
+    it explicitly via ``loss_key`` -- trl's PPO trainer (0.29) logs
+    ``loss/policy_avg``. The key is chosen by the caller, never guessed, and
+    a non-default key is recorded in the result so a PPO policy loss is not
+    mistaken for an SFT cross-entropy.
     """
     per_step: list[float] = []
     for entry in log_history:
-        if not isinstance(entry, Mapping) or "loss" not in entry:
+        if not isinstance(entry, Mapping) or loss_key not in entry:
             continue
-        loss = _numeric_loss(entry["loss"])
+        loss = _numeric_loss(entry[loss_key])
         if loss is not None:
             per_step.append(loss)
 
+    def _tag(result: dict[str, float | str]) -> dict[str, float | str]:
+        if loss_key != "loss":
+            result["loss_key"] = loss_key
+        return result
+
     if len(per_step) >= 2:
-        return {
-            "initial_loss": per_step[0],
-            "final_loss": per_step[-1],
-            "loss_summary_kind": "delta",
-        }
+        return _tag(
+            {
+                "initial_loss": per_step[0],
+                "final_loss": per_step[-1],
+                "loss_summary_kind": "delta",
+            }
+        )
     if len(per_step) == 1:
-        return {
-            "initial_loss": per_step[0],
-            "final_loss": per_step[0],
-            "loss_summary_kind": "single",
-        }
+        return _tag(
+            {
+                "initial_loss": per_step[0],
+                "final_loss": per_step[0],
+                "loss_summary_kind": "single",
+            }
+        )
 
     for entry in reversed(log_history):
         if not isinstance(entry, Mapping) or "train_loss" not in entry:

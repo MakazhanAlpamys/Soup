@@ -455,10 +455,25 @@ class TestRunSuite:
             }
         )
         rows = [{"prompt": "Q", "chosen": "good", "rejected": "bad"}]
-        # No judge fn supplied = neutral pass (operator must inject for live).
+        # No judge fn supplied and advisory=False -> fails (#1433)
         report = expectations.run_suite(rows, spec)
-        # Default judge returns 1.0 (no judge → assume chosen wins).
-        assert report.passed is True
+        assert report.passed is False
+        assert report.results[0].num_violations == 1
+        assert "no judge configured" in report.results[0].details[0]
+
+        # Explicit advisory=True passes without a judge
+        advisory_spec = expectations.parse_suite_spec(
+            {
+                "expectations": [
+                    {
+                        "name": "expect_chosen_preferred_over_rejected_by_judge",
+                        "args": {"threshold": 0.5, "advisory": True},
+                    }
+                ]
+            }
+        )
+        advisory_report = expectations.run_suite(rows, advisory_spec)
+        assert advisory_report.passed is True
 
     def test_report_frozen(self) -> None:
         spec = expectations.parse_suite_spec(

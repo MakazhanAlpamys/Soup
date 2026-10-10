@@ -54,6 +54,31 @@ class TestDoRAConfig:
         assert cfg.training.lora.r == 128
         assert cfg.training.lora.alpha == 32
 
+    @pytest.mark.parametrize("backend", ["unsloth", "mlx"])
+    def test_use_dora_is_refused_off_the_transformers_backend(self, backend: str):
+        from soup_cli.config.loader import load_config_from_string
+
+        with pytest.raises(
+            ValueError, match="variant 'dora' requires backend='transformers'"
+        ):
+            load_config_from_string(
+                f"base: org/model\ntask: sft\nbackend: {backend}\n"
+                "data: {train: ./x.jsonl}\n"
+                "training:\n  quantization: 4bit\n  lora: {r: 8, alpha: 16, use_dora: true}\n"
+                "output: ./out\n"
+            )
+
+    def test_use_dora_is_accepted_on_transformers_backend(self):
+        from soup_cli.config.loader import load_config_from_string
+
+        cfg = load_config_from_string(
+            "base: org/model\ntask: sft\nbackend: transformers\n"
+            "data: {train: ./x.jsonl}\n"
+            "training:\n  quantization: 4bit\n  lora: {r: 8, alpha: 16, use_dora: true}\n"
+            "output: ./out\n"
+        )
+        assert cfg.training.lora.use_dora is True
+
     def test_dora_yaml_round_trip(self):
         from soup_cli.config.loader import load_config_from_string
 

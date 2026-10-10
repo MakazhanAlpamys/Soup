@@ -256,7 +256,10 @@ _ALLOWED_METRIC_HELP = (
     "task_accuracy, judge:<model>, benchmark:<name>"
 )
 _RESERVED_TRAINING_METRICS = frozenset(
-    {"loss", "val_loss", "lr", "grad_norm", "speed", "gpu_mem", "epoch"}
+    # every column of the metrics table a run writes, so `benchmark:<name>` can
+    # never gate on a training-time series; `val_reward` is grpo's held-out
+    # reward (#1389), a training-time measurement like `val_loss`
+    {"loss", "val_loss", "val_reward", "lr", "grad_norm", "speed", "gpu_mem", "epoch"}
 )
 
 

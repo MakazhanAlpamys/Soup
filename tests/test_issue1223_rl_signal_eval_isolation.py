@@ -351,12 +351,16 @@ class TestEvaluationLeavesTheSignalUntouched:
 # ==========================================================================
 _PROMPT_LENGTH_REWARD = '''
 def reward_fn(prompts=None, completions=None, **kwargs):
-    """The prompt's word count: deterministic whatever the model samples."""
+    """Prompt word count plus a per-index jitter: deterministic whatever the
+    model samples (a completion-derived term would make the two runs of
+    test_the_detector_state_is_bit_identical diverge), and continuous enough
+    that a step's median split has two varying halves (#1438 makes info_rm
+    stay silent on a two-valued reward)."""
     out = []
-    for prompt in prompts:
+    for i, prompt in enumerate(prompts):
         if isinstance(prompt, list):
             prompt = " ".join(str(m.get("content", "")) for m in prompt)
-        out.append(float(len(str(prompt).split())))
+        out.append(float(len(str(prompt).split())) + 0.001 * i)
     return out
 '''
 

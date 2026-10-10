@@ -26,35 +26,14 @@ import sys
 
 import pytest
 
-from tests.conftest import cuda_available
+from tests.conftest import accelerator_device, mps_is_the_accelerator
 
 pytestmark = pytest.mark.filterwarnings("ignore::UserWarning")
 
 
-def _mps_is_the_accelerator() -> bool:
-    """True on an Apple-Silicon runner with no CUDA.
-
-    ``TrainingArguments`` picks ``mps`` as its device there, while this suite
-    builds the streamed model on ``cpu``; a real training step then moves the
-    batch to MPS and hits "Placeholder storage has not been allocated on MPS
-    device". NF4 streaming is measured on CUDA and CPU only — bitsandbytes'
-    4-bit kernels are not supported on MPS at all — so the step is skipped
-    rather than making an unverified claim about it. Mirrors the identical
-    guard in tests/test_v07200.py.
-    """
-    try:
-        import torch
-
-        if cuda_available():
-            return False
-        backend = getattr(torch.backends, "mps", None)
-        return bool(backend is not None and backend.is_available())
-    except Exception:
-        return False
-
-
+# Not one of the #1355 "untested" skips: bitsandbytes has no 4-bit MPS kernels.
 skip_on_mps = pytest.mark.skipif(
-    _mps_is_the_accelerator(),
+    mps_is_the_accelerator(),
     reason="MPS is untested for NF4 streaming (measured on CUDA + CPU only)",
 )
 
@@ -1829,7 +1808,7 @@ class TestNF4EndToEndSetup:
                 for _ in range(4)
             ]
         }
-        device = "cuda" if cuda_available() else "cpu"
+        device = accelerator_device()
         return SFTTrainerWrapper(cfg, device=device), dataset
 
     def test_setup_builds_a_real_trl_trainer_under_nf4(self, tmp_path, monkeypatch):
@@ -1911,14 +1890,11 @@ class TestNF4ParityOnCuda:
         _randomise_lora_b(resident)
         assert _sync_adapters(model, resident) > 0, "vacuous: no adapters copied"
 
-        # 128 tokens, NOT 16: below 64 this fixture's [64x64] projections are
-        # served by bitsandbytes' FUSED gemm_4bit kernel, while the streamed path
-        # always dequantises (#331), so the two arms run different kernels and
-        # differ by exactly one bf16 ulp — measured 3.906250e-03 = 2^-8 at 16
-        # tokens. At 64 all 14 4-bit linears take _dequant_linear_fallback and
-        # parity returns to 0.0; the window boundary and the exactness boundary
-        # were measured to coincide exactly. 128 is that boundary with margin.
-        # TestFixtureIsOutsideTheFusedKernelWindow in test_v07300.py pins it.
+        # 128 tokens exercises bitsandbytes' dequant+linear dispatch. Since
+        # #842 the streamed arm follows the same native dispatch at every M:
+        # Soup's checkpoint-visible Function owns the fused arm, while this
+        # larger shape keeps #331's dequant+linear arm without a third
+        # dequantisation. The #842 GPU matrix also pins the fused shape.
         ids = torch.randint(
             0, 64, (1, 128), generator=torch.Generator().manual_seed(11)
         ).cuda()

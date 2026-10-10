@@ -761,10 +761,11 @@ def _run_deploy_autopilot_measure(
         run_measure,
     )
     from soup_cli.utils.paths import is_under_cwd
+    from soup_cli.utils.terminal import for_terminal
 
     if not is_under_cwd(tasks_file):
         console.print(
-            f"[red]--tasks {escape(tasks_file)!r} must stay under cwd[/]"
+            f"[red]--tasks {for_terminal(repr(tasks_file))} must stay under cwd[/]"
         )
         raise typer.Exit(2)
     if not Path(tasks_file).is_file():

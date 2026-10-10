@@ -1,0 +1,29 @@
+{
+ "faults": [],
+ "ram": {
+  "exact": true,
+  "steps": 3,
+  "digests_per_step": 290,
+  "pinned_bytes": {
+   "in-order": 8589934592,
+   "packed": 6442450944
+  },
+  "sha256_of_digests": {
+   "in-order": "1b127f4880e4f35d07609a1c503728e17ac22e2f0ea0f69f81ba62f023e04140",
+   "packed": "1b127f4880e4f35d07609a1c503728e17ac22e2f0ea0f69f81ba62f023e04140"
+  }
+ },
+ "disk": {
+  "exact": true,
+  "steps": 3,
+  "digests_per_step": 290,
+  "pinned_bytes": {
+   "in-order": 4294967296,
+   "packed": 4294967296
+  },
+  "sha256_of_digests": {
+   "in-order": "1b127f4880e4f35d07609a1c503728e17ac22e2f0ea0f69f81ba62f023e04140",
+   "packed": "1b127f4880e4f35d07609a1c503728e17ac22e2f0ea0f69f81ba62f023e04140"
+  }
+ }
+}

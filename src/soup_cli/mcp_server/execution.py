@@ -7,6 +7,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import secrets
 import stat
 import subprocess
@@ -17,7 +18,6 @@ from pathlib import Path
 
 from soup_cli.experiment.tracker import ExperimentTracker, generate_run_id
 from soup_cli.utils.paths import (
-    atomic_write_text,
     enforce_under_cwd_and_no_symlink,
     open_no_follow,
     refuse_linked_dirs,
@@ -40,6 +40,10 @@ _STATUS_RUNNING = "running"
 # only upgrades to _STATUS_RUNNING (with a pid) once Popen() returns. A crash
 # in between leaves a row stuck here with no pid to check liveness against.
 _STATUS_LAUNCHING = "launching"
+
+# A run id names one directory under .soup/mcp-runs: no separator, no "." or
+# "..", no NUL. generate_run_id() always matches (run_YYYYMMDD_HHMMSS_<hex>).
+_SNAPSHOT_RUN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}")
 
 
 class ExecutionError(ValueError):
@@ -186,6 +190,18 @@ def digest_file(
     return ProtectedFile(path=real, digest=digest)
 
 
+def _snapshot_refusal(exc: OSError) -> str:
+    """The path-free reason a plan-time config snapshot could not be written."""
+    if exc.errno == errno.ELOOP:
+        return (
+            "cannot plan: config snapshot directory or file is a "
+            "symbolic link or junction"
+        )
+    if exc.errno == errno.EEXIST:
+        return "cannot plan: config snapshot directory or file already exists"
+    return f"cannot plan: could not write the config snapshot ({type(exc).__name__})"
+
+
 class ExecutionManager:
     """Per-stdio-server plan store, one-job cap, and subprocess watcher."""
 
@@ -200,11 +216,40 @@ class ExecutionManager:
         return generate_run_id()
 
     def snapshot_config(self, run_id: str, content: str) -> str:
-        """Write the exact validated config content to .soup/mcp-runs/<run_id>/config.yaml."""
-        run_dir = Path(self.cwd) / ".soup" / "mcp-runs" / run_id
-        run_dir.mkdir(parents=True, exist_ok=True)
-        snapshot_file = str(run_dir / "config.yaml")
-        atomic_write_text(content, snapshot_file, field="config snapshot")
+        """Write the exact validated config content to .soup/mcp-runs/<run_id>/config.yaml.
+
+        Nothing is written through a link or into a directory this call did not
+        create. ``.soup``, ``.soup/mcp-runs`` and the run directory itself are
+        refused when one of them is a symbolic link or junction (#1211); the run
+        directory must not exist yet and is created here; and ``config.yaml`` is
+        created with ``O_EXCL`` through :func:`open_no_follow`, which inspects the
+        parent directories again at open time. Every refusal is a path-free
+        :class:`ExecutionError`. A process with concurrent write access inside
+        ``.soup`` can still race these checks; that is the same window the run
+        log open in :meth:`execute` accepts.
+        """
+        if not isinstance(run_id, str) or not _SNAPSHOT_RUN_ID.fullmatch(run_id):
+            raise ExecutionError("cannot plan: invalid run id for the config snapshot")
+        runs_root = Path(self.cwd) / ".soup" / "mcp-runs"
+        run_dir = runs_root / run_id
+        snapshot_file = run_dir / "config.yaml"
+        try:
+            refuse_linked_dirs(run_dir, stop_at=self.cwd)
+            runs_root.mkdir(parents=True, exist_ok=True)
+            # Check again now that the parents exist, so the run directory is
+            # never created through a link that replaced one of them meanwhile.
+            refuse_linked_dirs(runs_root, stop_at=self.cwd)
+            run_dir.mkdir()
+            snapshot_fd = open_no_follow(
+                snapshot_file,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0),
+                0o600,
+                check_parent=True,
+            )
+            with os.fdopen(snapshot_fd, "w", encoding="utf-8") as handle:
+                handle.write(content)
+        except OSError as exc:
+            raise ExecutionError(_snapshot_refusal(exc)) from exc
         return os.path.realpath(snapshot_file)
 
     def issue(

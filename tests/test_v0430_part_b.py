@@ -149,7 +149,7 @@ class TestRougeLScore:
 
 
 class TestComputeNlgMetric:
-    @pytest.mark.parametrize("metric", list(NLG_METRICS))
+    @pytest.mark.parametrize("metric", sorted(NLG_METRICS))
     def test_dispatch(self, metric):
         score = compute_nlg_metric(metric, ["a b c"], ["a b c"])
         assert 0.0 <= score <= 1.0
@@ -461,7 +461,7 @@ class TestTournament:
 # ----------------- Benchmarks v0.43 -----------------
 
 class TestBenchmarksV043:
-    @pytest.mark.parametrize("name", list(NEW_BENCHMARKS_V0_43))
+    @pytest.mark.parametrize("name", sorted(NEW_BENCHMARKS_V0_43))
     def test_recognised(self, name):
         assert is_v0_43_benchmark(name) is True
         meta = benchmark_metadata(name)

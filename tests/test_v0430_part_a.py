@@ -82,7 +82,7 @@ class TestRequiredTrackerPackage:
 
 
 class TestIsNewV043Tracker:
-    @pytest.mark.parametrize("name", list(NEW_TRACKERS_V0_43))
+    @pytest.mark.parametrize("name", sorted(NEW_TRACKERS_V0_43))
     def test_true_for_v043(self, name):
         assert is_new_v0_43_tracker(name) is True
 

@@ -20,7 +20,7 @@ import os
 
 import pytest
 
-from tests.conftest import cuda_available
+from tests.conftest import accelerator_device, cuda_available, mps_is_the_accelerator
 
 # ==========================================================================
 # fixtures (mirroring tests/test_v07200.py so the two cannot drift)
@@ -36,19 +36,6 @@ def _torch_version():
         return torch.__version__
     except Exception:  # pragma: no cover - torch always present in CI
         return "unknown"
-
-
-def _mps_is_the_accelerator():
-    try:
-        import torch
-
-        return (
-            hasattr(torch.backends, "mps")
-            and torch.backends.mps.is_available()
-            and not cuda_available()
-        )
-    except Exception:  # pragma: no cover
-        return False
 
 
 def _tiny_llama_dir(tmp_path, n_layers=2, tie=True, vocab=64, hidden=64):
@@ -248,7 +235,8 @@ def _loss_of(trainer, model, batch):
 def _match_streamed_dtype(resident, streamed):
     """Put the resident reference on the streamed model's device AND dtype.
 
-    Streaming picks bf16 on CUDA and float32 on CPU. Comparing a float32
+    Streaming picks bf16 on CUDA, bf16 on MPS when the runtime accepts it
+    (float32 otherwise), and float32 on CPU. Comparing a float32
     resident model against a bf16 streamed one measures the dtype gap, not the
     streaming path — that mistake produced a 9.96e-04 "failure" that was
     entirely the test's own.
@@ -360,10 +348,11 @@ def _build_streamed_wrapper(
     """Build a task wrapper through the REAL `setup()` path, streaming.
 
     ``device`` defaults to the real accelerator, because `TrainingArguments`
-    picks CUDA when it is available and forcing CPU there would only produce a
-    device mismatch no user would ever hit. Numerical-equality tests pass
-    ``device='cpu'`` deliberately: the streaming path uses float32 on CPU and
-    bf16 on CUDA, and "bit-exact" is only a meaningful assertion in the former
+    picks CUDA or MPS when one is available and forcing CPU there would only
+    produce a device mismatch no user would ever hit. Numerical-equality tests pass
+    ``device='cpu'`` deliberately: the streaming path uses float32 on CPU, bf16
+    on CUDA, and bf16 on MPS when the runtime accepts it (float32 otherwise),
+    and "bit-exact" is only a meaningful assertion in float32
     (a bf16 logp of -12.75 cannot represent a change smaller than ~0.05).
     """
     weights, resident, _ = _tiny_llama_dir(
@@ -375,7 +364,7 @@ def _build_streamed_wrapper(
     training.setdefault("batch_size", _MIN_BATCH.get(task, 1))
     cfg = _stream_cfg(weights, tmp_path / "out", task=task, **training)
     if device is None:
-        device = "cuda" if cuda_available() else "cpu"
+        device = accelerator_device()
     wrapper = _wrapper_for(task)(cfg, device=device)
     wrapper.setup({"train": _TASK_ROWS[task](8)})
     return wrapper, resident, weights
@@ -682,10 +671,6 @@ class TestBitExactVsResident:
         assert next(matched.parameters()).device.type == "cpu"
         assert next(matched.parameters()).dtype is torch.float64
 
-    @pytest.mark.skipif(
-        _mps_is_the_accelerator(),
-        reason="MPS is untested for layer streaming (CUDA + CPU only)",
-    )
     @pytest.mark.parametrize("task", _ALL_PREFERENCE)
     def test_loss_matches_a_resident_run_of_the_same_loss(self, tmp_path, monkeypatch, task):
         import torch
@@ -726,10 +711,6 @@ class TestBitExactVsResident:
         diff = (streamed_loss - resident_loss).abs().max().item()
         assert diff == 0.0, f"{task}: streamed vs resident loss differs by {diff}"
 
-    @pytest.mark.skipif(
-        _mps_is_the_accelerator(),
-        reason="MPS is untested for layer streaming (CUDA + CPU only)",
-    )
     @pytest.mark.parametrize("task", _ALL_PREFERENCE)
     def test_layer_zero_adapter_receives_gradient(self, tmp_path, monkeypatch, task):
         """plan P2: a `detach()`/`no_grad()` anywhere in the base forward severs
@@ -990,10 +971,6 @@ class TestKtoNeedsMoreThanOneRow:
         cfg = _stream_cfg(str(tmp_path / "m"), tmp_path / "o", task="kto", batch_size=2)
         assert cfg.training.batch_size == 2
 
-    @pytest.mark.skipif(
-        _mps_is_the_accelerator(),
-        reason="MPS is untested for layer streaming (CUDA + CPU only)",
-    )
     def test_kto_streams_at_batch_two(self, tmp_path, monkeypatch):
         """Runs EVERYWHERE, and tolerates exactly one known failure signature.
 
@@ -1015,7 +992,7 @@ class TestKtoNeedsMoreThanOneRow:
         more ops, which is why only the newer stack surfaces it. Tracked as #328
         rather than absorbed into a device rule.
 
-        So: tolerate that one signature on CPU and nothing else. Any other
+        So: tolerate that one signature without CUDA (CPU or MPS) and nothing else. Any other
         exception, and the same signature on CUDA, is a hard failure — and when
         the leak is fixed this XPASSes instead of quietly staying skipped.
         """
@@ -1045,10 +1022,6 @@ class TestTheReferenceForwardActuallyHappens:
     model. Pinned so an "optimisation" that silently drops or caches the
     reference forward cannot pass unnoticed."""
 
-    @pytest.mark.skipif(
-        _mps_is_the_accelerator(),
-        reason="MPS is untested for layer streaming (CUDA + CPU only)",
-    )
     @pytest.mark.parametrize("task", _REFERENCE_USING)
     def test_a_reference_using_loss_reads_more_layers_than_sft(self, tmp_path, monkeypatch, task):
         def reads_for(task, root):
@@ -1119,10 +1092,55 @@ class TestKtoBatchIsRefusedEarly:
             cfg = _stream_cfg(str(tmp_path / "m"), tmp_path / "o", task=task, batch_size=1)
             assert cfg.training.batch_size == 1
 
-    def test_non_streaming_kto_is_left_alone(self, tmp_path):
-        """Scoped to streaming deliberately: resident KTO at batch 1 fails the
-        same way, but that is pre-existing behaviour outside this slot, and
-        widening the gate here could reject configs that parse today."""
+    def test_non_streaming_kto_batch_one_is_refused(self, tmp_path):
+        """#1420 widened this gate to resident runs: TRL's KTOTrainer refuses
+        a per-device batch of 1 with the same error, but only AFTER the model
+        has loaded. Refusing at parse time everywhere (streaming or not)
+        fails fast with Soup's own message instead. This test used to assert
+        the opposite — that resident KTO at batch 1 was left alone —
+        which just relocated the crash to `KTOTrainer.__init__`."""
+        import yaml
+
+        from soup_cli.config.loader import load_config_from_string
+
+        with pytest.raises(ValueError) as excinfo:
+            load_config_from_string(
+                yaml.safe_dump(
+                    {
+                        "base": "sshleifer/tiny-gpt2",
+                        "task": "kto",
+                        "data": {"train": "t.jsonl"},
+                        "training": {"batch_size": 1, "quantization": "none"},
+                        "output": str(tmp_path / "o"),
+                    }
+                )
+            )
+        message = str(excinfo.value)
+        assert "kto" in message.lower()
+        assert "batch_size" in message
+        assert "KL term" in message and "gradient_accumulation_steps" in message
+        assert "streaming" not in message
+
+    def test_mlx_kto_reports_the_backend_refusal_first(self):
+        import yaml
+
+        from soup_cli.config.loader import load_config_from_string
+
+        with pytest.raises(ValueError, match="MLX backend only ships SFT"):
+            load_config_from_string(
+                yaml.safe_dump(
+                    {
+                        "base": "org/model",
+                        "task": "kto",
+                        "backend": "mlx",
+                        "data": {"train": "t.jsonl", "format": "kto"},
+                        "training": {"batch_size": 1, "quantization": "none"},
+                    }
+                )
+            )
+
+    def test_non_streaming_kto_batch_two_still_parses(self, tmp_path):
+        """Control: the #1420 gate refuses only batch 1, not KTO outright."""
         import yaml
 
         from soup_cli.config.loader import load_config_from_string
@@ -1133,12 +1151,33 @@ class TestKtoBatchIsRefusedEarly:
                     "base": "sshleifer/tiny-gpt2",
                     "task": "kto",
                     "data": {"train": "t.jsonl"},
-                    "training": {"batch_size": 1, "quantization": "none"},
+                    "training": {"batch_size": 2, "quantization": "none"},
                     "output": str(tmp_path / "o"),
                 }
             )
         )
-        assert cfg.training.batch_size == 1
+        assert cfg.training.batch_size == 2
+
+    def test_non_streaming_other_tasks_still_accept_batch_one(self, tmp_path):
+        """The #1420 widening is KTO-only: batch 1 stays valid for dpo/orpo
+        resident runs, which TRL accepts."""
+        import yaml
+
+        from soup_cli.config.loader import load_config_from_string
+
+        for task in ("dpo", "orpo"):
+            cfg = load_config_from_string(
+                yaml.safe_dump(
+                    {
+                        "base": "sshleifer/tiny-gpt2",
+                        "task": task,
+                        "data": {"train": "t.jsonl", "format": "dpo"},
+                        "training": {"batch_size": 1, "quantization": "none"},
+                        "output": str(tmp_path / "o"),
+                    }
+                )
+            )
+            assert cfg.training.batch_size == 1
 
     def test_trl_itself_still_refuses_batch_one(self, tmp_path):
         """Pins the UPSTREAM behaviour our schema gate mirrors.
@@ -1238,7 +1277,7 @@ class TestNf4CombinesWithEveryPreferenceLoss:
     SmolLM2-135M). A name drift in any one copy is otherwise invisible."""
 
     @pytest.mark.skipif(
-        _mps_is_the_accelerator(),
+        mps_is_the_accelerator(),
         reason="bitsandbytes has no 4-bit MPS kernels",
     )
     @pytest.mark.parametrize("task", _ALL_PREFERENCE)
@@ -1268,3 +1307,162 @@ class TestNf4CombinesWithEveryPreferenceLoss:
         message = str(excinfo.value)
         assert "auto" in message
         assert "RESIDENT" in message or "probe" in message
+
+
+class TestIssue1420KtoBatchAutoAndLocalRl:
+    """#1420 — two more ways KTO reached TRL with a per-device batch of 1:
+
+    `batch_size: auto` floored its estimate at 1, and `soup local-rl train
+    --train-method kto` hard-wrote `batch_size: 1`. Both must now land at >= 2
+    (or refuse), so TRL never sees batch 1 for KTO at all."""
+
+    @pytest.mark.parametrize("estimate", [1, 2, 3])
+    def test_auto_floors_at_two(self, tmp_path, monkeypatch, estimate):
+        """The estimator's result is halved (unpaired samples), but the floor
+        is 2, not 1 — TRL refuses 1 outright. A real wrapper.setup() on a tiny
+        random-init CPU model with a patched estimator; mutation check:
+        restoring `max(1, batch_size // 2)` fails this at estimate 1."""
+        from tokenizers import Tokenizer, models, pre_tokenizers
+        from transformers import LlamaConfig, LlamaForCausalLM, PreTrainedTokenizerFast
+
+        words = ["<unk>", "<s>", "</s>", "<pad>", "hi", "good", "bad", "answer"]
+        raw = Tokenizer(
+            models.WordLevel(vocab={w: i for i, w in enumerate(words)}, unk_token="<unk>")
+        )
+        raw.pre_tokenizer = pre_tokenizers.Whitespace()
+        PreTrainedTokenizerFast(
+            tokenizer_object=raw, unk_token="<unk>", bos_token="<s>",
+            eos_token="</s>", pad_token="<pad>",
+        ).save_pretrained(str(tmp_path / "tiny"))
+        LlamaForCausalLM(
+            LlamaConfig(
+                vocab_size=len(words), hidden_size=32, intermediate_size=64,
+                num_hidden_layers=2, num_attention_heads=2, num_key_value_heads=2,
+                pad_token_id=3,
+            )
+        ).save_pretrained(str(tmp_path / "tiny"))
+
+        import yaml
+
+        from soup_cli.config.loader import load_config_from_string
+        from soup_cli.trainer import kto as kto_mod
+        from soup_cli.trainer.kto import KTOTrainerWrapper
+
+        monkeypatch.setattr(kto_mod, "estimate_batch_size", lambda **kwargs: estimate)
+        import soup_cli.utils.gpu as gpu_mod
+
+        monkeypatch.setattr(
+            gpu_mod, "get_gpu_info", lambda: {"memory_total_bytes": 24 * 1024**3}
+        )
+
+        cfg = load_config_from_string(
+            yaml.safe_dump(
+                {
+                    "base": str(tmp_path / "tiny"),
+                    "task": "kto",
+                    "data": {"train": "unused.jsonl", "format": "kto", "max_length": 64},
+                    "training": {
+                        "batch_size": "auto", "quantization": "none", "epochs": 1,
+                        "lora": {"r": 4, "alpha": 8},
+                    },
+                    "output": str(tmp_path / "out"),
+                }
+            )
+        )
+        wrapper = KTOTrainerWrapper(cfg, device="cpu")
+        wrapper.setup(
+            {"train": [
+                {"prompt": "hi", "completion": " good answer", "label": i % 2 == 0}
+                for i in range(8)
+            ]}
+        )
+        assert wrapper.trainer.args.per_device_train_batch_size >= 2
+
+    def test_local_rl_default_yaml_builds_a_kto_trainer(self, tmp_path, monkeypatch):
+        """The YAML `_default_train_fn` renders for `train_method='kto'` must
+        itself clear the widened schema gate: batch 2, loads, and (on a tiny
+        random-init model) builds a real KTOTrainer on CPU."""
+        import os
+
+        from tokenizers import Tokenizer, models, pre_tokenizers
+        from transformers import LlamaConfig, LlamaForCausalLM, PreTrainedTokenizerFast
+
+        words = ["<unk>", "<s>", "</s>", "<pad>", "hi", "good", "bad", "answer"]
+        raw = Tokenizer(
+            models.WordLevel(vocab={w: i for i, w in enumerate(words)}, unk_token="<unk>")
+        )
+        raw.pre_tokenizer = pre_tokenizers.Whitespace()
+        PreTrainedTokenizerFast(
+            tokenizer_object=raw, unk_token="<unk>", bos_token="<s>",
+            eos_token="</s>", pad_token="<pad>",
+        ).save_pretrained(str(tmp_path / "tiny"))
+        LlamaForCausalLM(
+            LlamaConfig(
+                vocab_size=len(words), hidden_size=32, intermediate_size=64,
+                num_hidden_layers=2, num_attention_heads=2, num_key_value_heads=2,
+                pad_token_id=3,
+            )
+        ).save_pretrained(str(tmp_path / "tiny"))
+
+        import yaml
+
+        from soup_cli.utils.local_rl import _default_train_fn
+
+        pairs_path = str(tmp_path / "pairs.jsonl")
+        with open(pairs_path, "w") as fh:
+            for i in range(8):
+                label = "true" if i % 2 == 0 else "false"
+                fh.write('{"prompt": "hi", "completion": " good answer", "label": %s}\n' % label)
+        out_dir = str(tmp_path / "out")
+
+        # Capture the rendered YAML instead of spawning `soup train`.
+        rendered = {}
+
+        def fake_run(argv, *a, **k):
+            rendered["yaml"] = open(argv[argv.index("--config") + 1]).read()
+
+            class _R:
+                returncode = 0
+
+            return _R()
+
+        import subprocess as _sp
+
+        monkeypatch.setattr(_sp, "run", fake_run)
+        cwd = os.getcwd()
+        os.chdir(tmp_path)
+        try:
+            _default_train_fn(
+                base_model=str(tmp_path / "tiny"),
+                pairs_path=pairs_path,
+                output_dir=out_dir,
+                train_method="kto",
+            )
+        finally:
+            os.chdir(cwd)
+
+        cfg_dict = yaml.safe_load(rendered["yaml"])
+        assert cfg_dict["task"] == "kto"
+        assert cfg_dict["training"]["batch_size"] == 2, rendered["yaml"]
+
+        from soup_cli.config.loader import load_config_from_string
+        from soup_cli.trainer.kto import KTOTrainerWrapper
+
+        cfg = load_config_from_string(rendered["yaml"])
+        assert cfg.training.batch_size == 2
+        # The rendered YAML defaults quantization to 4bit; the point here is
+        # the batch size, so run the tiny CPU model unquantised.
+        cfg = cfg.model_copy(
+            update={"training": cfg.training.model_copy(update={"quantization": "none"})}
+        )
+
+        wrapper = KTOTrainerWrapper(cfg, device="cpu")
+        wrapper.setup(
+            {
+                "train": [
+                    {"prompt": "hi", "completion": " good answer", "label": i % 2 == 0}
+                    for i in range(8)
+                ]
+            }
+        )
+        assert wrapper.trainer.args.per_device_train_batch_size == 2

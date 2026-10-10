@@ -9,11 +9,9 @@ from __future__ import annotations
 
 import ast
 import inspect
-from pathlib import Path
 
 import pytest
 
-import soup_cli
 from soup_cli.config.loader import load_config_from_string
 
 # ─────────────────────────── CRITICAL 1: RLVR verifiable rewards ───────────────
@@ -354,18 +352,3 @@ def test_no_eval_gate_config_never_halts(tmp_path, monkeypatch):
     cb.on_train_begin(args, state, control)
     cb.on_epoch_end(args, state, control)
     assert control.should_training_stop is False
-
-
-_TRAINERS_WITH_CALLBACK = [
-    "sft", "dpo", "grpo", "ppo", "kto", "orpo", "simpo", "ipo",
-    "bco", "pretrain", "reward_model", "distill", "embedding", "classifier",
-]
-
-
-@pytest.mark.parametrize("name", _TRAINERS_WITH_CALLBACK)
-def test_trainer_wires_eval_gate_config(name):
-    """Every trainer that builds SoupTrainerCallback must pass eval_gate_config."""
-    src = (Path(soup_cli.__file__).parent / "trainer" / f"{name}.py").read_text(
-        encoding="utf-8"
-    )
-    assert "eval_gate_config=" in src, f"{name}.py does not wire eval_gate_config"

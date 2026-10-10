@@ -7,6 +7,14 @@ body:
       value: |
         Thanks for reporting a bug! Please fill out the sections below.
 
+  - type: markdown
+    attributes:
+      value: |
+        Maintainers rate every confirmed issue from 1 to 10 (`difficulty:N`) to help contributors
+        choose. How it works: [docs/issue-difficulty.md](https://github.com/MakazhanAlpamys/Soup/blob/main/docs/issue-difficulty.md).
+        Please search first, and keep to one defect per issue. Security problems: do NOT open an
+        issue; see [SECURITY.md](https://github.com/MakazhanAlpamys/Soup/blob/main/SECURITY.md).
+
   - type: textarea
     id: description
     attributes:
@@ -49,3 +57,22 @@ body:
       render: shell
     validations:
       required: true
+
+  - type: dropdown
+    id: suggested_difficulty
+    attributes:
+      label: Suggested difficulty (optional)
+      description: Your guess at how hard the fix is. A maintainer sets the final number.
+      options:
+        - "Not sure"
+        - "1 - wording or one-line fix"
+        - "2 - one file, fix is clear"
+        - "3 - one module, small change"
+        - "4 - a few files, existing pattern"
+        - "5 - needs understanding a pipeline"
+        - "6 - several tasks or backends"
+        - "7 - new mechanism, needs a measurement"
+        - "8 - cause unknown or hard to reproduce"
+        - "9 - new subsystem or needs special hardware"
+        - "10 - research-grade"
+      default: 0

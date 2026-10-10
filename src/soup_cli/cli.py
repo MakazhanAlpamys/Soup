@@ -356,8 +356,8 @@ app.command(
     name="ab",
     help=(
         "Two-sided mSPRT sequential A/B harness on latency / judge_score / retry_rate: "
-        "reports whether the treatment is better or worse, after an alpha-dependent "
-        "burn-in (v0.63.0)."
+        "reports whether the treatment is better or worse, valid under re-running after "
+        "every new row (v0.63.0)."
     ),
 )(_ab_cmd.ab)
 
@@ -649,7 +649,7 @@ def version(
                 except ImportError:
                     pass
 
-        console.print(json.dumps(info), highlight=False)
+        typer.echo(json.dumps(info))
         return
 
     if not full:

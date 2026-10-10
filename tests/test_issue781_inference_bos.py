@@ -362,7 +362,7 @@ def _via_chat(tok, messages):
     from soup_cli.commands.chat import _generate
 
     model = _RecordingModel()
-    _generate(model, tok, list(messages), max_tokens=1, temperature=0.0, device="cpu")
+    _generate(model, tok, list(messages), max_tokens=1, temperature=0.0)
     return model.sent
 
 

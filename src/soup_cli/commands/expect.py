@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import os
-from typing import List, Mapping
+from typing import List, Mapping, Optional
 
 import typer
 from rich.console import Console
@@ -17,7 +17,7 @@ from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 
-from soup_cli.utils.exit_codes import EXIT_GATE_FAILED, EXIT_USAGE_ERROR
+from soup_cli.utils.exit_codes import EXIT_GATE_FAILED, EXIT_RUNTIME_ERROR, EXIT_USAGE_ERROR
 
 console = Console()
 
@@ -44,8 +44,8 @@ def _load_jsonl_rows(data_path: str) -> List[Mapping[str, object]]:
     if os.path.getsize(real) > _MAX_DATA_BYTES:
         raise ValueError(f"data file exceeds {_MAX_DATA_BYTES} bytes")
     rows: List[Mapping[str, object]] = []
-    skipped = 0
-    with open(real, "r", encoding="utf-8") as handle:
+    uncheckable: List[str] = []
+    with open(real, "r", encoding="utf-8-sig") as handle:
         for line_no, line in enumerate(handle, start=1):
             if not line.strip():
                 continue
@@ -54,13 +54,24 @@ def _load_jsonl_rows(data_path: str) -> List[Mapping[str, object]]:
             try:
                 row = json.loads(line)
             except json.JSONDecodeError:
-                skipped += 1
+                uncheckable.append(f"line {line_no}: malformed JSON")
                 continue
             if isinstance(row, dict):
                 rows.append(row)
-    if skipped:
-        console.print(
-            f"[yellow]Note: skipped {skipped} malformed JSONL line(s)[/]"
+            else:
+                uncheckable.append(f"line {line_no}: not a JSON object")
+    if uncheckable:
+        shown = uncheckable[:10]
+        more = f" (+{len(uncheckable) - 10} more)" if len(uncheckable) > 10 else ""
+        raise ValueError(
+            f"refusing {data_path}: {len(uncheckable)} line(s) could not be checked: "
+            + "; ".join(shown)
+            + more
+        )
+    if not rows:
+        raise ValueError(
+            f"refusing {data_path}: no checkable rows were found; "
+            "a run that checked zero rows cannot pass"
         )
     return rows
 
@@ -68,12 +79,22 @@ def _load_jsonl_rows(data_path: str) -> List[Mapping[str, object]]:
 def expect_cmd(
     data: str = typer.Argument(..., help="Path to JSONL dataset"),
     suite: str = typer.Argument(..., help="Path to expectations suite YAML"),
+    judge: Optional[str] = typer.Option(
+        None,
+        "--judge",
+        help="Judge model URL (e.g. ollama://llama3.1, https://api.openai.com/gpt-4o-mini)",
+    ),
 ) -> None:
     """Run an expectations suite against a JSONL dataset.
 
-    Exit 0 = suite passed. Exit 2 = gate failed. Exit 3 = usage/input error.
+    Exit 0 = suite passed. Exit 1 = judge unreachable.
+    Exit 2 = gate failed. Exit 3 = usage/input error.
     """
-    from soup_cli.utils.expectations import load_suite_yaml, run_suite
+    from soup_cli.utils.expectations import (
+        build_pairwise_judge_fn,
+        load_suite_yaml,
+        run_suite,
+    )
 
     try:
         spec = load_suite_yaml(suite)
@@ -87,11 +108,34 @@ def expect_cmd(
         console.print(f"[red]{escape(str(exc))}[/]")
         raise typer.Exit(EXIT_USAGE_ERROR) from exc
 
+    cli_judge_fn = None
+    if judge is not None:
+        try:
+            cli_judge_fn = build_pairwise_judge_fn(judge)
+        except (ValueError, TypeError) as exc:
+            console.print(f"[red]{escape(str(exc))}[/]")
+            raise typer.Exit(EXIT_USAGE_ERROR) from exc
+        if not any(
+            e.name == "expect_chosen_preferred_over_rejected_by_judge"
+            for e in spec.expectations
+        ):
+            console.print(
+                "[yellow]note: --judge was specified, but the suite contains "
+                "no judge expectation[/]"
+            )
+
     try:
-        report = run_suite(rows, spec)
+        report = run_suite(rows, spec, judge_fn=cli_judge_fn)
     except (TypeError, ValueError) as exc:
         console.print(f"[red]{escape(str(exc))}[/]")
         raise typer.Exit(EXIT_USAGE_ERROR) from exc
+    except Exception as exc:
+        from soup_cli.eval.judge import JudgeUnavailableError
+
+        if isinstance(exc, JudgeUnavailableError):
+            console.print(f"[red]{escape(str(exc))}[/]")
+            raise typer.Exit(EXIT_RUNTIME_ERROR) from exc
+        raise
 
     table = Table(title=f"soup expect — {escape(data)}")
     table.add_column("Expectation")
@@ -107,6 +151,11 @@ def expect_cmd(
             str(result.num_violations),
         )
     console.print(table)
+
+    for result in report.results:
+        if result.passed and result.details:
+            for d in result.details:
+                console.print(f"[yellow]{escape(d)}[/]")
 
     if not report.passed:
         for result in report.results:

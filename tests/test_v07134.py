@@ -679,7 +679,7 @@ training:
             ("  loraplus_lr_ratio: 4.0\n", "loraplus_lr_ratio"),
             ("  unfrozen_parameters: ['model.layers.0.mlp']\n", "unfrozen_parameters"),
             ("  expand_layers: 2\n", "expand_layers"),
-            ("  freeze_trainable_layers: 3\n", "freeze_trainable_layers"),
+            ("  expand_layers: 2\n  freeze_trainable_layers: 2\n", "freeze_trainable_layers"),
         ],
     )
     def test_mutual_exclusion(self, extra, kw):

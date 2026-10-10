@@ -58,6 +58,31 @@ def cuda_available() -> bool:
         return False
 
 
+@functools.lru_cache(maxsize=None)
+def mps_is_the_accelerator() -> bool:
+    """True on Apple Silicon with no CUDA, where ``TrainingArguments`` picks ``mps`` (#1355)."""
+    if cuda_available():
+        return False
+    try:
+        import torch
+
+        backend = getattr(torch.backends, "mps", None)
+        return bool(backend is not None and backend.is_available())
+    except Exception:  # noqa: BLE001 — a broken torch install counts as no MPS
+        return False
+
+
+def accelerator_device() -> str:
+    """The device ``TrainingArguments`` picks by itself: cuda, else mps, else cpu (#1355).
+
+    A streamed-model test that runs a trainer step builds on it, so model and batches agree;
+    building on ``cpu`` on an MPS host fails the first step on a device mismatch.
+    """
+    if cuda_available():
+        return "cuda"
+    return "mps" if mps_is_the_accelerator() else "cpu"
+
+
 #: Rich/Pygments emit SGR escapes *between* the tokens of one logical line, so a
 #: multi-token substring like "modality: text" is absent from raw output and
 #: yaml.safe_load rejects \x1b outright (#633). 38 test files had grown their
@@ -142,6 +167,21 @@ def _isolate_experiments_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
     provides a clean, isolated default.
     """
     monkeypatch.setenv("SOUP_DB_PATH", str(tmp_path / "experiments.db"))
+
+
+@pytest.fixture(autouse=True)
+def _restore_working_directory():
+    """Put the working directory back after every test.
+
+    Some tests call ``os.chdir(tmp_path)`` and never return, and others open
+    ``src/soup_cli/...`` by a path relative to the repository root. In file
+    order the first kind happens to run after the second, so nothing fails.
+    A pytest-xdist worker can run them the other way round, and the relative
+    opens then raise ``FileNotFoundError``.
+    """
+    before = os.getcwd()
+    yield
+    os.chdir(before)
 
 
 @pytest.fixture

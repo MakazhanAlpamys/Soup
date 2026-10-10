@@ -251,19 +251,19 @@ MINI_COMMON_SENSE: MiniBenchmark = [
     {"question": "Fish live in: (A) trees (B) water (C) sand", "answer": "B"},
     {"question": "The sun rises in the: (A) west (B) south (C) east", "answer": "C"},
     {"question": "Ice melts when: (A) heated (B) frozen (C) pressed", "answer": "A"},
-    {"question": "To unlock a door you usually need a: (A) spoon (B) key (C) pillow",
-     "answer": "B"},
+    {"question": "To unlock a door you usually need a: (A) spoon (B) pillow (C) key",
+     "answer": "C"},
     {"question": "Before crossing a busy street you should: (A) close your eyes "
                  "(B) look both ways (C) run fast", "answer": "B"},
-    {"question": "If a glass falls on tile it will likely: (A) bounce (B) break (C) float",
-     "answer": "B"},
+    {"question": "If a glass falls on tile it will likely: (A) bounce (B) float (C) break",
+     "answer": "C"},
     {"question": "To write on paper you use a: (A) hammer (B) pen (C) plate", "answer": "B"},
     {"question": "A wet towel is best dried by: (A) folding it (B) hanging it in the sun "
                  "(C) burying it", "answer": "B"},
     {"question": "You feel cold, so you put on a: (A) swimsuit (B) coat (C) sandal",
      "answer": "B"},
-    {"question": "Plants need this to grow: (A) darkness (B) sunlight (C) television",
-     "answer": "B"},
+    {"question": "Plants need this to grow: (A) darkness (B) television (C) sunlight",
+     "answer": "C"},
     {"question": "To call a friend far away you use a: (A) phone (B) fork (C) broom",
      "answer": "A"},
     {"question": "After you finish eating, dirty dishes should be: (A) washed (B) painted "
@@ -272,8 +272,8 @@ MINI_COMMON_SENSE: MiniBenchmark = [
      "answer": "B"},
     {"question": "A baby is younger than a: (A) grandparent (B) newborn (C) egg", "answer": "A"},
     {"question": "To cut paper you use: (A) scissors (B) a magnet (C) glue", "answer": "A"},
-    {"question": "Bread that is very old may become: (A) fresh (B) moldy (C) cold",
-     "answer": "B"},
+    {"question": "Bread that is very old may become: (A) fresh (B) cold (C) moldy",
+     "answer": "C"},
     {"question": "If you are thirsty you should drink: (A) sand (B) water (C) paper",
      "answer": "B"},
     {"question": "A car needs this to run: (A) fuel (B) music (C) paint", "answer": "A"},
@@ -283,6 +283,72 @@ MINI_COMMON_SENSE: MiniBenchmark = [
     {"question": "If you are tired at night you should: (A) sleep (B) exercise hard (C) shout",
      "answer": "A"},
     {"question": "Rain falls from the: (A) ground (B) clouds (C) ocean floor", "answer": "B"},
+    # #1192 — the 24 rows above put a capable model at 1.000 (Qwen2.5-7B-Instruct,
+    # 24/24 in the #1111 tool-call discrimination record). The rows below are
+    # 4-option physical, temporal and relational reasoning, measured as a
+    # candidate pool on two models before selection. Four rows above had their
+    # B and C options swapped so no one letter answers more than 30% of the suite.
+    {"question": "You put a completely full, tightly sealed glass bottle of water in the freezer "
+                 "overnight. In the morning the bottle is most likely: (A) unchanged (B) warm "
+                 "(C) half empty (D) cracked",
+     "answer": "D"},
+    {"question": "A candle is burning inside a glass jar and you screw the lid on. The flame "
+                 "will: (A) grow brighter (B) burn for weeks (C) go out soon (D) turn the jar to "
+                 "water",
+     "answer": "C"},
+    {"question": "Your flight leaves at 7:00, the airport is 1 hour away, and you must arrive 2 "
+                 "hours before the flight. The latest time you can leave home is: (A) 4:00 (B) "
+                 "3:00 (C) 5:00 (D) 6:00",
+     "answer": "A"},
+    {"question": "Which would NOT help a phone battery last longer? (A) lowering the screen "
+                 "brightness (B) closing unused apps (C) turning on airplane mode (D) turning "
+                 "the volume up to maximum",
+     "answer": "D"},
+    {"question": "A heavy box and a light box of the same size are pushed across the same floor "
+                 "with the same force. Compared with the heavy box, the light box will: (A) move "
+                 "faster (B) move slower (C) not move at all (D) move at exactly the same speed",
+     "answer": "A"},
+    {"question": "A metal spoon and a wooden spoon are left standing in a pot of boiling soup "
+                 "for a few minutes. Which handle is hotter to touch? (A) the wooden one (B) "
+                 "neither is warm (C) both the same (D) the metal one",
+     "answer": "D"},
+    {"question": "Maria is taller than Ben, and Ben is taller than Chen. Who is the shortest? "
+                 "(A) Maria (B) Ben (C) Chen (D) it cannot be told",
+     "answer": "C"},
+    {"question": "Maria is taller than Ben, and Chen is taller than Ben. Who is the tallest? (A) "
+                 "Maria (B) Ben (C) Chen (D) it cannot be told",
+     "answer": "D"},
+    {"question": "You wash a wool sweater in very hot water and then tumble-dry it on high heat. "
+                 "It will most likely: (A) get bigger (B) turn white (C) shrink (D) become "
+                 "waterproof",
+     "answer": "C"},
+    {"question": "Ignoring air resistance, you drop a rubber ball and a stone of the same size "
+                 "from the same window at the same moment. Which lands first? (A) the ball (B) "
+                 "the stone (C) both at the same time (D) neither ever lands",
+     "answer": "C"},
+    {"question": "Where would you see the stars most clearly? (A) a city centre at noon (B) a "
+                 "countryside field on a clear, moonless night (C) a brightly lit stadium at "
+                 "night (D) a countryside field on a cloudy night",
+     "answer": "B"},
+    {"question": "It is 3 p.m. where you take off. You fly for 2 hours and land in a time zone 1 "
+                 "hour ahead. What is the local time when you land? (A) 3 p.m. (B) 5 p.m. (C) 6 "
+                 "p.m. (D) 4 p.m.",
+     "answer": "C"},
+    {"question": "It is raining and the wind is blowing hard from your left. To stay as dry as "
+                 "possible you tilt your umbrella: (A) to the left (B) to the right (C) straight "
+                 "behind you (D) you must keep it perfectly upright",
+     "answer": "A"},
+    {"question": "A fish tank has no lid and nobody adds water to it for a month. The water "
+                 "level will: (A) rise (B) freeze (C) stay exactly the same (D) fall",
+     "answer": "D"},
+    {"question": "You borrowed a friend's book and spilled coffee on it. The most considerate "
+                 "thing to do is: (A) return it without mentioning it (B) keep it and say you "
+                 "lost it (C) tell them and offer to replace it (D) say it was like that already",
+     "answer": "C"},
+    {"question": "A clock's hour hand points at 3 and its minute hand points at 12. What time "
+                 "did the clock show five hours earlier? (A) 8 o'clock (B) 7 o'clock (C) 2 "
+                 "o'clock (D) 10 o'clock",
+     "answer": "D"},
 ]
 
 MINI_INSTRUCTION: MiniBenchmark = [
@@ -339,18 +405,31 @@ MINI_ARITHMETIC: MiniBenchmark = [
     {"question": "What is 10 percent of 200?", "answer": "20"},
     {"question": "What is 16 + 25?", "answer": "41"},
     {"question": "What is 90 divided by 3?", "answer": "30"},
-    {"question": "What is 7 times 6?", "answer": "42"},
-    {"question": "What is 50 + 50?", "answer": "100"},
-    {"question": "What is 13 - 7?", "answer": "6"},
-    {"question": "What is 4 times 25?", "answer": "100"},
-    {"question": "What is 18 + 24?", "answer": "42"},
-    {"question": "What is 64 divided by 8?", "answer": "8"},
-    {"question": "What is 9 times 8?", "answer": "72"},
-    {"question": "What is 1000 - 1?", "answer": "999"},
-    {"question": "What is 3 cubed?", "answer": "27"},
-    {"question": "What is 40 + 60?", "answer": "100"},
-    {"question": "What is 21 divided by 7?", "answer": "3"},
-    {"question": "What is 12 times 12?", "answer": "144"},
+    # #1192 — the 24 single-step rows above put a capable model at 1.000
+    # (Qwen2.5-7B-Instruct, 36/36 in the #1111 gate record),
+    # so the suite could not see a numeracy regression. The rows below are
+    # multi-step or large-operand; no answer appears as a token in its own
+    # question, so echoing the prompt cannot score.
+    {"question": "What is 47 times 38?", "answer": "1786"},
+    {"question": "What is 1234 times 56?", "answer": "69104"},
+    {"question": "What is 7 + 3 times 4 - 6 divided by 2?", "answer": "16"},
+    {"question": "A shirt costs 80 dollars. It is discounted by 25 percent, then the "
+                 "discounted price is raised by 25 percent. What is the final price "
+                 "in dollars?", "answer": "75"},
+    {"question": "What is 2 to the power of 15?", "answer": "32768"},
+    {"question": "What is the remainder when 2024 is divided by 37?", "answer": "26"},
+    {"question": "How many seconds are in 3 days?", "answer": "259200"},
+    {"question": "What is 999 times 999?", "answer": "998001"},
+    {"question": "What is the sum of all the whole numbers from 1 to 250?", "answer": "31375"},
+    {"question": "What is 17 squared minus 13 squared?", "answer": "120"},
+    {"question": "A train leaves at 9:47 and arrives at 14:12 the same day. How many "
+                 "minutes long is the trip?", "answer": "265"},
+    {"question": "What is 15 percent of 15 percent of 4000?", "answer": "90"},
+    {"question": "What is 123456789 divided by 9?", "answer": "13717421"},
+    {"question": "What is the least common multiple of 18, 24 and 40?", "answer": "360"},
+    {"question": "What is 3/8 plus 5/12, as a fraction in lowest terms?", "answer": "19/24"},
+    {"question": "How many times is the digit 7 written when you write out every whole "
+                 "number from 1 to 100?", "answer": "20"},
 ]
 
 MINI_BENCHMARKS: dict[str, MiniBenchmark] = {

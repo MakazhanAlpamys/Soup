@@ -26,13 +26,7 @@ import pytest
 from tests.test_v07204 import (
     _batch_on,
     _build_streamed_wrapper,
-    _mps_is_the_accelerator,
     _randomise_lora_b,
-)
-
-_NO_MPS = pytest.mark.skipif(
-    _mps_is_the_accelerator(),
-    reason="MPS is untested for layer streaming (CUDA + CPU only)",
 )
 
 
@@ -225,7 +219,6 @@ def _assert_identical(arm_a, arm_b):
         assert torch.equal(weights_a[name], weights_b[name]), f"final weight {name} differs"
 
 
-@_NO_MPS
 class TestBothTimingsAreBitIdentical:
     """Moving the head's load must change WHEN the copy is issued, never what the
     step computes. The arms differ only in `head_prefetch_layer`."""
@@ -261,7 +254,6 @@ class TestBothTimingsAreBitIdentical:
         _assert_identical(arm_a, arm_b)
 
 
-@_NO_MPS
 class TestTheInstalledDefault:
     """The arms above set `head_prefetch_layer` themselves, so nothing there covers
     what `install_streaming` wires when nobody touches it."""
@@ -293,7 +285,6 @@ def _real(events, needle):
     return [prev for key, prev, real in events if real and needle in key]
 
 
-@_NO_MPS
 class TestTheLoadsMoveButDoNotMultiply:
     def test_the_head_load_comes_at_the_configured_layer(self, tmp_path, monkeypatch):
         _, _, _, events_last = _run_arm(tmp_path / "a", monkeypatch, head_layer=None)

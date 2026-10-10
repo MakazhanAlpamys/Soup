@@ -220,8 +220,6 @@ def validate_tts_compat(*, task: str, modality: str, backend: str) -> None:
 TTS_CODEC_PACKAGES: Mapping[str, str] = MappingProxyType({
     "orpheus": "snac",
     "llasa": "torchaudio",
-    "spark": "sparktts",
-    "oute": "outetts",
 })
 
 # Per-family emotion control templating. Emotion-conditioned families

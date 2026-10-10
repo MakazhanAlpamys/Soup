@@ -14,19 +14,11 @@ Composes with:
 
 from __future__ import annotations
 
+import difflib
 import math
 import os
 from dataclasses import dataclass
 from typing import Any, Callable, List, Mapping, Optional, Sequence, Tuple
-
-# Closed allowlist — the 4 expectation kinds the v0.69.0 plan calls out.
-_SUPPORTED_EXPECTATIONS = (
-    "expect_no_pii",
-    "expect_token_length_between",
-    "expect_no_refusal_pattern",
-    "expect_chosen_preferred_over_rejected_by_judge",
-)
-SUPPORTED_EXPECTATIONS: frozenset = frozenset(_SUPPORTED_EXPECTATIONS)
 
 # DoS caps + bounds for validators.
 _MAX_NAME_LEN = 128
@@ -37,8 +29,76 @@ _MAX_FILE_BYTES = 1_048_576  # 1 MiB
 _MIN_TOKEN_BOUND = 1
 _MAX_TOKEN_BOUND = 1_048_576
 
+# Closed allowlist — the 4 expectation kinds the v0.69.0 plan calls out — mapped to
+# the arguments each one takes and their defaults. #1428: a suite key outside this
+# table is refused at parse time instead of running the expectation on its defaults.
+_EXPECTATION_ARGS: dict[str, dict[str, Any]] = {
+    "expect_no_pii": {},
+    "expect_token_length_between": {"min_tokens": 1, "max_tokens": _MAX_TOKEN_BOUND},
+    "expect_no_refusal_pattern": {},
+    "expect_chosen_preferred_over_rejected_by_judge": {
+        "threshold": 0.7,
+        "judge": None,
+        "advisory": False,
+    },
+}
+_SUPPORTED_EXPECTATIONS = tuple(_EXPECTATION_ARGS)
+SUPPORTED_EXPECTATIONS: frozenset = frozenset(_SUPPORTED_EXPECTATIONS)
+_ENTRY_KEYS = ("name", "args")
+
 # JudgeFn signature: row mapping in, [0,1] score out (1.0 = chosen wins).
 JudgeFn = Callable[[Mapping[str, Any]], float]
+
+
+def _extract_row_text_for_judge(val: Any) -> str:
+    if isinstance(val, str):
+        return val
+    if isinstance(val, list):
+        parts = []
+        for item in val:
+            if isinstance(item, Mapping) and "content" in item:
+                parts.append(str(item["content"]))
+            elif isinstance(item, str):
+                parts.append(item)
+        return "\n".join(parts)
+    return str(val) if val is not None else ""
+
+
+def build_pairwise_judge_fn(judge: Any) -> JudgeFn:
+    """Build a JudgeFn from a judge URL string, PairwiseJudge instance, or callable."""
+    if callable(judge) and not hasattr(judge, "compare_pair"):
+        return judge
+    if isinstance(judge, str):
+        if not judge.strip():
+            raise ValueError("judge URL must be non-empty")
+        from soup_cli.eval.gate import _parse_judge_url
+        from soup_cli.eval.judge import JudgeEvaluator
+
+        provider, model, api_base = _parse_judge_url(judge)
+        evaluator = JudgeEvaluator(
+            provider=provider,
+            model=model,
+            api_base=api_base,
+        )
+    elif hasattr(judge, "compare_pair"):
+        evaluator = judge
+    else:
+        raise TypeError("judge must be a URL string, PairwiseJudge instance, or callable")
+
+    from soup_cli.eval.judge import pairwise_compare
+
+    def pairwise_judge_fn(row: Mapping[str, Any]) -> float:
+        prompt = _extract_row_text_for_judge(row.get("prompt"))
+        resp_a = _extract_row_text_for_judge(row.get("chosen"))
+        resp_b = _extract_row_text_for_judge(row.get("rejected"))
+        verdict = pairwise_compare(prompt, resp_a, resp_b, evaluator, swap=True)
+        if verdict == 0:
+            return 1.0
+        if verdict == 1:
+            return 0.0
+        return 0.5
+
+    return pairwise_judge_fn
 
 
 @dataclass(frozen=True)
@@ -146,6 +206,16 @@ def _check_token_bound(value: object, *, field: str) -> int:
             f"{field} must be in [{_MIN_TOKEN_BOUND}, {_MAX_TOKEN_BOUND}]"
         )
     return value
+
+
+def _check_token_bounds(min_tokens: object, max_tokens: object) -> Tuple[int, int]:
+    low = _check_token_bound(min_tokens, field="min_tokens")
+    high = _check_token_bound(max_tokens, field="max_tokens")
+    if low > high:
+        raise ValueError(
+            f"min_tokens ({low}) must be <= max_tokens ({high})"
+        )
+    return low, high
 
 
 # -----------------------------------------------------------------------------
@@ -563,12 +633,7 @@ def expect_token_length_between(
     max_tokens: int,
 ) -> ExpectationResult:
     """Fail when any row's token count (whitespace-split) is out of bounds."""
-    low = _check_token_bound(min_tokens, field="min_tokens")
-    high = _check_token_bound(max_tokens, field="max_tokens")
-    if low > high:
-        raise ValueError(
-            f"min_tokens ({low}) must be <= max_tokens ({high})"
-        )
+    low, high = _check_token_bounds(min_tokens, max_tokens)
     materialised = _check_rows(rows)
     num_violations = 0
     details: List[str] = []
@@ -648,17 +713,21 @@ def expect_chosen_preferred_over_rejected_by_judge(
     *,
     judge_fn: Optional[JudgeFn] = None,
     threshold: float = 0.7,
+    advisory: bool = False,
 ) -> ExpectationResult:
     """Fail when ``judge_fn(row) < threshold`` on a preference row.
 
     Rows must carry both ``chosen`` and ``rejected``. ``judge_fn`` returns a
     score in [0, 1]; 1.0 means the judge fully prefers chosen over rejected.
 
-    When ``judge_fn`` is omitted the suite runs in *advisory* mode (every row
-    gets the default score 1.0, i.e. trust the labelling); production callers
-    should always supply a real judge.
+    When ``judge_fn`` is omitted and ``advisory=False``, every preference row
+    is flagged as a violation for missing judge configuration (#1433).
+    To explicitly trust existing labels without running a judge, set
+    ``advisory=True``.
     """
     t = _check_threshold(threshold, field="threshold")
+    if not isinstance(advisory, bool):
+        raise TypeError("advisory must be bool")
     if judge_fn is not None and not callable(judge_fn):
         raise TypeError("judge_fn must be callable or None")
     materialised = _check_rows(rows)
@@ -680,12 +749,26 @@ def expect_chosen_preferred_over_rejected_by_judge(
                 )
             continue
         if judge_fn is None:
-            # No judge supplied — assume chosen wins (advisory pass).
-            score: float = 1.0
+            if advisory:
+                score: float = 1.0
+            else:
+                num_violations += 1
+                if len(details) < _MAX_DETAILS_PER_RESULT:
+                    details.append(
+                        _truncate_detail(
+                            f"rows[{index}]: no judge configured: set args.judge "
+                            "(e.g. ollama://llama3.1) or pass --judge, or remove this expectation"
+                        )
+                    )
+                continue
         else:
             try:
                 raw = judge_fn(row)
-            except Exception:  # noqa: BLE001 — one bad row mustn't crash the suite
+            except Exception as exc:  # noqa: BLE001 - one bad row mustn't crash the suite
+                from soup_cli.eval.judge import JudgeUnavailableError
+
+                if isinstance(exc, JudgeUnavailableError):
+                    raise
                 num_violations += 1
                 if len(details) < _MAX_DETAILS_PER_RESULT:
                     details.append(
@@ -713,6 +796,8 @@ def expect_chosen_preferred_over_rejected_by_judge(
                         f"rows[{index}]: judge score {score:.3f} < {t:.3f}"
                     )
                 )
+    if judge_fn is None and advisory and not details:
+        details.append(f"advisory: no judge ran; {len(materialised)} rows not scored")
     return ExpectationResult(
         name="expect_chosen_preferred_over_rejected_by_judge",
         passed=num_violations == 0,
@@ -727,10 +812,81 @@ def expect_chosen_preferred_over_rejected_by_judge(
 # -----------------------------------------------------------------------------
 
 
+def _key_repr(key: object) -> str:
+    # repr() spells control bytes out, so a hostile key cannot reach the terminal raw.
+    return repr(str(key)[:_MAX_NAME_LEN])
+
+
+_MAX_KEYS_NAMED = 10
+
+
+def _key_list(keys: Sequence[object]) -> str:
+    # Ten keys and a count: a 1 MiB suite can carry tens of thousands of unknown keys,
+    # and naming them all made the message nearly as large as the file.
+    shown = ", ".join(map(_key_repr, keys[:_MAX_KEYS_NAMED]))
+    rest = len(keys) - _MAX_KEYS_NAMED
+    return f"{shown} and {rest} more" if rest > 0 else shown
+
+
+def _validate_entry_keys(index: int, name: str, entry: Mapping[str, Any]) -> None:
+    extra = [key for key in entry if key not in _ENTRY_KEYS]
+    if not extra:
+        return
+    misplaced = [key for key in extra if key in _EXPECTATION_ARGS[name]]
+    if misplaced:
+        raise ValueError(
+            f"expectations[{index}]: {_key_list(misplaced)} "
+            f"must go under 'args:' for {name}, not beside 'name'"
+        )
+    raise ValueError(
+        f"expectations[{index}]: unknown key(s) {_key_list(extra)}; "
+        "an entry takes only 'name' and 'args'"
+    )
+
+
+def _validate_args(index: int, name: str, args: Mapping[str, Any]) -> None:
+    accepted = _EXPECTATION_ARGS[name]
+    unknown = [key for key in args if key not in accepted]
+    if unknown:
+        shown = _key_repr(unknown[0])
+        if not accepted:
+            raise ValueError(f"expectations[{index}]: {name} takes no arguments, got {shown}")
+        close = difflib.get_close_matches(str(unknown[0]), sorted(accepted), n=1)
+        hint = f" (did you mean {close[0]!r}?)" if close else ""
+        raise ValueError(
+            f"expectations[{index}]: {name} takes no argument {shown}{hint}; "
+            f"accepted: {', '.join(sorted(accepted))}"
+        )
+    merged = {**accepted, **args}
+    if name == "expect_token_length_between":
+        _check_token_bounds(merged["min_tokens"], merged["max_tokens"])
+    elif name == "expect_chosen_preferred_over_rejected_by_judge":
+        _check_threshold(merged["threshold"], field="threshold")
+        if merged.get("judge") is not None:
+            if not isinstance(merged["judge"], str):
+                raise TypeError(f"expectations[{index}]: judge must be a string")
+            if not merged["judge"].strip():
+                raise ValueError(f"expectations[{index}]: judge must be non-empty")
+            from soup_cli.eval.gate import _parse_judge_url
+
+            try:
+                _parse_judge_url(merged["judge"])
+            except ValueError as exc:
+                raise ValueError(f"expectations[{index}]: {exc}") from exc
+        if not isinstance(merged.get("advisory", False), bool):
+            raise TypeError(f"expectations[{index}]: advisory must be a boolean")
+
+
 def parse_suite_spec(raw: Any) -> SuiteSpec:
     """Validate a suite dict and return a ``SuiteSpec``."""
     if not isinstance(raw, dict):
         raise TypeError("suite spec must be a dict")
+    extra = [key for key in raw if key != "expectations"]
+    if extra:  # #1483: a top-level key is a typo or an option that does not exist
+        raise ValueError(
+            f"unknown top-level key(s) {_key_list(extra)}; "
+            "a suite takes only 'expectations'"
+        )
     raw_expectations = raw.get("expectations")
     if raw_expectations is None:
         raise ValueError("suite must define 'expectations' key")
@@ -748,9 +904,11 @@ def parse_suite_spec(raw: Any) -> SuiteSpec:
         if not isinstance(entry, dict):
             raise TypeError(f"expectations[{index}] must be a dict")
         name = validate_expectation_name(entry.get("name", ""))
+        _validate_entry_keys(index, name, entry)
         args = entry.get("args", {})
         if not isinstance(args, dict):
             raise TypeError(f"expectations[{index}].args must be a dict")
+        _validate_args(index, name, args)
         items.append(ExpectationSpec(name=name, args=dict(args)))
     return SuiteSpec(expectations=tuple(items))
 
@@ -808,22 +966,26 @@ def _dispatch_expectation(
     bypassing ``_check_token_bound`` bool-rejection.
     """
     name = spec.name
-    args = dict(spec.args)
+    args = {**_EXPECTATION_ARGS.get(name, {}), **spec.args}
     if name == "expect_no_pii":
         return expect_no_pii(rows)
     if name == "expect_token_length_between":
         return expect_token_length_between(
             rows,
-            min_tokens=args.get("min_tokens", 1),
-            max_tokens=args.get("max_tokens", _MAX_TOKEN_BOUND),
+            min_tokens=args["min_tokens"],
+            max_tokens=args["max_tokens"],
         )
     if name == "expect_no_refusal_pattern":
         return expect_no_refusal_pattern(rows)
     if name == "expect_chosen_preferred_over_rejected_by_judge":
+        effective_judge = judge_fn
+        if effective_judge is None and args.get("judge"):
+            effective_judge = build_pairwise_judge_fn(args["judge"])
         return expect_chosen_preferred_over_rejected_by_judge(
             rows,
-            judge_fn=judge_fn,
-            threshold=args.get("threshold", 0.7),
+            judge_fn=effective_judge,
+            threshold=args["threshold"],
+            advisory=args["advisory"],
         )
     raise ValueError(f"unhandled expectation: {name!r}")  # pragma: no cover
 
@@ -855,6 +1017,7 @@ __all__ = [
     "SUPPORTED_EXPECTATIONS",
     "SuiteReport",
     "SuiteSpec",
+    "build_pairwise_judge_fn",
     "expect_chosen_preferred_over_rejected_by_judge",
     "expect_no_pii",
     "expect_no_refusal_pattern",

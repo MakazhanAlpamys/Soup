@@ -1,0 +1,3537 @@
+{
+ "meta": {
+  "gpu": "NVIDIA GeForce RTX 5070 Laptop GPU",
+  "torch": "2.14.0+cu130",
+  "vram_total_gb": 8.518,
+  "soup_cli_file": "C:\\Users\\user\\projects\\Soup-l2l\\src\\soup_cli\\__init__.py",
+  "driver": "616.92",
+  "pcie_gen": "5",
+  "pcie_width": "8",
+  "mode": "timing",
+  "weights": "D:/synth/llama-70b-shape-v32k-f4",
+  "shards": null,
+  "quant": "nf4",
+  "tier": "disk",
+  "buffers": 2,
+  "read_ahead": 2,
+  "seq": 512,
+  "lora_r": 8,
+  "lora_targets": "q_proj,k_proj,v_proj,o_proj",
+  "seed": 3,
+  "input_seed": 17,
+  "k": 2,
+  "ks": "1,2,3,4,8,16",
+  "cd_k": 4,
+  "steps": 3,
+  "warmup": 1,
+  "rounds": 2,
+  "spill_k": 16,
+  "spill_budget_k": 8,
+  "spill_dir": "D:/soup-l2l-spill",
+  "deterministic": false,
+  "dry_run": false,
+  "allow_invalid": false,
+  "out": "benchmarks/results/probe-rtx5070/l2l/timing.json",
+  "label": "F2",
+  "lazy_shard_handles": false,
+  "control_sync_source": false,
+  "no_pin": false,
+  "weights_dir": "D:\\synth\\llama-70b-shape-v32k-f4",
+  "shard_dir": "C:\\Users\\user\\.soup\\layer-stream\\D___synth__llama-70b-shape-v32k-f4",
+  "dtype": "bfloat16",
+  "arch": "llama",
+  "n_layers": 80,
+  "hidden": 8192,
+  "pinned": true,
+  "source_class": "AsyncDiskSource",
+  "direct_io": true,
+  "store_gb": 1.956601912,
+  "shard_seconds": 0.00223280000500381,
+  "build_seconds": 1.9567762999795377,
+  "chunk_bytes": 8388608,
+  "v3": {
+   "free_gb": 15.648956416,
+   "commit_avail_gb": 26.47990272,
+   "need_gb": 10.73741824,
+   "margin_gb": 4.0,
+   "gpu_used_before_build_mib": 0,
+   "gpu_pids": [
+    13448
+   ],
+   "foreign_gpu_pids": [],
+   "ram_ok": true,
+   "gpu_ok": true,
+   "ok": true
+  },
+  "box": {
+   "unix": 1791372875.2560782,
+   "total_phys_gb": 34.070192128,
+   "avail_phys_gb": 15.654588416,
+   "commit_limit_gb": 60.913737728,
+   "commit_avail_gb": 26.53229056,
+   "ac": true,
+   "gpu_pids": [
+    13448
+   ],
+   "gpu_mem_used_mib": 1608,
+   "python_processes": 6
+  },
+  "started": "2026-10-07T16:34:35"
+ },
+ "records": [
+  {
+   "kind": "arm",
+   "mode": "plain",
+   "arm": "A",
+   "k": 1,
+   "round": 0,
+   "variant": null,
+   "skipped": null,
+   "store": null,
+   "label": "plain_A_k1_r0",
+   "tokens_per_step": 512,
+   "steps": 3,
+   "warmup": 1,
+   "events_on": false,
+   "nocopy": false,
+   "nodequant": false,
+   "step_s_mean": 17.373456300003454,
+   "step_s_min": 17.095856999978423,
+   "step_s_max": 17.59280049998779,
+   "tok_per_s": 29.470244213864238,
+   "layer_loads_per_step": 157.0,
+   "large_loads_per_step": 2.0,
+   "bytes_moved_per_step": 70378258732.0,
+   "implied_h2d_gb_per_s": 4.050907172223757,
+   "copy_s_per_step": 0.0,
+   "copy_stream_gb_per_s": null,
+   "stall_s_per_step": 0.0,
+   "stall_share": 0.0,
+   "peak_alloc_gb": 4.509238784,
+   "peak_reserved_gb": 4.930404352,
+   "sm_clock_mhz_start": 225,
+   "sm_clock_mhz_end": 1335,
+   "records": [
+    {
+     "step_s": 17.095856999978423,
+     "loss": 11.942952156066895,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    },
+    {
+     "step_s": 17.59280049998779,
+     "loss": 11.841716766357422,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    },
+    {
+     "step_s": 17.43171140004415,
+     "loss": 11.594221115112305,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    }
+   ],
+   "suspend": {
+    "samples": 36,
+    "max_gap_s": 2.0152363777160645,
+    "battery_samples": 0,
+    "unknown_power_samples": 0,
+    "void": false
+   },
+   "box_before": {
+    "unix": 1791372885.2768068,
+    "total_phys_gb": 34.070192128,
+    "avail_phys_gb": 14.95576576,
+    "commit_limit_gb": 60.913737728,
+    "commit_avail_gb": 24.95049728,
+    "ac": true,
+    "gpu_pids": [
+     13448
+    ],
+    "gpu_mem_used_mib": 2438,
+    "python_processes": 6
+   },
+   "box_after": {
+    "unix": 1791372956.4945025,
+    "total_phys_gb": 34.070192128,
+    "avail_phys_gb": 14.975967232,
+    "commit_limit_gb": 60.913737728,
+    "commit_avail_gb": 22.19667456,
+    "ac": true,
+    "gpu_pids": [
+     13448
+    ],
+    "gpu_mem_used_mib": 4876,
+    "python_processes": 6
+   },
+   "foreign_readers": []
+  },
+  {
+   "kind": "arm",
+   "mode": "plain",
+   "arm": "B",
+   "k": 1,
+   "round": 0,
+   "variant": null,
+   "skipped": null,
+   "store": null,
+   "label": "plain_B_k1_r0",
+   "tokens_per_step": 512,
+   "steps": 3,
+   "warmup": 1,
+   "events_on": false,
+   "nocopy": true,
+   "nodequant": false,
+   "step_s_mean": 6.396784066688269,
+   "step_s_min": 6.390719500021078,
+   "step_s_max": 6.407078100019135,
+   "tok_per_s": 80.0402193762141,
+   "layer_loads_per_step": 157.0,
+   "large_loads_per_step": 2.0,
+   "bytes_moved_per_step": 70378258732.0,
+   "implied_h2d_gb_per_s": 11.002131383252413,
+   "copy_s_per_step": 0.0,
+   "copy_stream_gb_per_s": null,
+   "stall_s_per_step": 0.0,
+   "stall_share": 0.0,
+   "peak_alloc_gb": 4.509238784,
+   "peak_reserved_gb": 4.930404352,
+   "sm_clock_mhz_start": 180,
+   "sm_clock_mhz_end": 2445,
+   "records": [
+    {
+     "step_s": 6.407078100019135,
+     "loss": 12.061163902282715,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    },
+    {
+     "step_s": 6.392554600024596,
+     "loss": 11.979798316955566,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    },
+    {
+     "step_s": 6.390719500021078,
+     "loss": 11.830114364624023,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    }
+   ],
+   "suspend": {
+    "samples": 14,
+    "max_gap_s": 2.014932155609131,
+    "battery_samples": 0,
+    "unknown_power_samples": 0,
+    "void": false
+   },
+   "box_before": {
+    "unix": 1791372956.8719814,
+    "total_phys_gb": 34.070192128,
+    "avail_phys_gb": 14.9830656,
+    "commit_limit_gb": 60.913737728,
+    "commit_avail_gb": 22.220189696,
+    "ac": true,
+    "gpu_pids": [
+     13448
+    ],
+    "gpu_mem_used_mib": 4876,
+    "python_processes": 6
+   },
+   "box_after": {
+    "unix": 1791372984.2017305,
+    "total_phys_gb": 34.070192128,
+    "avail_phys_gb": 14.966943744,
+    "commit_limit_gb": 60.913737728,
+    "commit_avail_gb": 22.261559296,
+    "ac": true,
+    "gpu_pids": [
+     13448
+    ],
+    "gpu_mem_used_mib": 4876,
+    "python_processes": 6
+   },
+   "foreign_readers": []
+  },
+  {
+   "kind": "arm",
+   "mode": "l2l",
+   "arm": "A",
+   "k": 1,
+   "round": 0,
+   "variant": null,
+   "skipped": null,
+   "store": {
+    "chunk_bytes": 8388608,
+    "resident_chunks": 80,
+    "spilled_chunks": 0,
+    "spill_layers": 0,
+    "pinned": true,
+    "direct": null,
+    "bytes_written": 0,
+    "bytes_read": 0,
+    "put_wait_s": 0.0,
+    "get_wait_s": 0.0,
+    "spill_left_behind": null
+   },
+   "label": "l2l_A_k1_r0",
+   "tokens_per_step": 512,
+   "steps": 3,
+   "warmup": 1,
+   "nocopy": false,
+   "nodequant": false,
+   "step_s_mean": 17.165634333350074,
+   "step_s_min": 17.12833249999676,
+   "step_s_max": 17.196051700040698,
+   "tok_per_s": 29.82703639476149,
+   "layer_loads_per_step": 157.0,
+   "large_loads_per_step": 2.0,
+   "bytes_moved_per_step": 70378258732.0,
+   "implied_h2d_gb_per_s": 4.099950946483016,
+   "peak_alloc_gb": 4.017649152,
+   "peak_reserved_gb": 4.930404352,
+   "sm_clock_mhz_start": 180,
+   "sm_clock_mhz_end": 195,
+   "records": [
+    {
+     "step_s": 17.12833249999676,
+     "started_unix": 1791373002.9224126,
+     "loss": 11.931461334228516,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "spill_written": 0,
+     "spill_read": 0,
+     "put_wait_s": 0.0,
+     "get_wait_s": 0.0
+    },
+    {
+     "step_s": 17.196051700040698,
+     "started_unix": 1791373020.050969,
+     "loss": 11.83263874053955,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "spill_written": 0,
+     "spill_read": 0,
+     "put_wait_s": 0.0,
+     "get_wait_s": 0.0
+    },
+    {
+     "step_s": 17.172518800012767,
+     "started_unix": 1791373037.246922,
+     "loss": 11.595738410949707,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "spill_written": 0,
+     "spill_read": 0,
+     "put_wait_s": 0.0,
+     "get_wait_s": 0.0
+    }
+   ],
+   "suspend": {
+    "samples": 36,
+    "max_gap_s": 2.015411138534546,
+    "battery_samples": 0,
+    "unknown_power_samples": 0,
+    "void": false
+   },
+   "box_before": {
+    "unix": 1791372984.5851893,
+    "total_phys_gb": 34.070192128,
+    "avail_phys_gb": 14.295097344,
+    "commit_limit_gb": 60.913737728,
+    "commit_avail_gb": 21.58092288,
+    "ac": true,
+    "gpu_pids": [
+     13448
+    ],
+    "gpu_mem_used_mib": 4876,
+    "python_processes": 6
+   },
+   "box_after": {
+    "unix": 1791373055.3558154,
+    "total_phys_gb": 34.070192128,
+    "avail_phys_gb": 14.2639104,
+    "commit_limit_gb": 60.913737728,
+    "commit_avail_gb": 21.580480512,
+    "ac": true,
+    "gpu_pids": [
+     13448
+    ],
+    "gpu_mem_used_mib": 4876,
+    "python_processes": 6
+   },
+   "foreign_readers": []
+  },
+  {
+   "kind": "arm",
+   "mode": "l2l",
+   "arm": "B",
+   "k": 1,
+   "round": 0,
+   "variant": null,
+   "skipped": null,
+   "store": {
+    "chunk_bytes": 8388608,
+    "resident_chunks": 80,
+    "spilled_chunks": 0,
+    "spill_layers": 0,
+    "pinned": true,
+    "direct": null,
+    "bytes_written": 0,
+    "bytes_read": 0,
+    "put_wait_s": 0.0,
+    "get_wait_s": 0.0,
+    "spill_left_behind": null
+   },
+   "label": "l2l_B_k1_r0",
+   "tokens_per_step": 512,
+   "steps": 3,
+   "warmup": 1,
+   "nocopy": true,
+   "nodequant": false,
+   "step_s_mean": 6.949280099982086,
+   "step_s_min": 6.932685000007041,
+   "step_s_max": 6.975518999970518,
+   "tok_per_s": 73.6766963820209,
+   "layer_loads_per_step": 157.0,
+   "large_loads_per_step": 2.0,
+   "bytes_moved_per_step": 70378258732.0,
+   "implied_h2d_gb_per_s": 10.127417188462648,
+   "peak_alloc_gb": 4.017649152,
+   "peak_reserved_gb": 4.930404352,
+   "sm_clock_mhz_start": 180,
+   "sm_clock_mhz_end": 2415,
+   "records": [
+    {
+     "step_s": 6.975518999970518,
+     "started_unix": 1791373064.1085384,
+     "loss": 12.072898864746094,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "spill_written": 0,
+     "spill_read": 0,
+     "put_wait_s": 0.0,
+     "get_wait_s": 0.0
+    },
+    {
+     "step_s": 6.939636299968697,
+     "started_unix": 1791373071.0840309,
+     "loss": 11.980339050292969,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "spill_written": 0,
+     "spill_read": 0,
+     "put_wait_s": 0.0,
+     "get_wait_s": 0.0
+    },
+    {
+     "step_s": 6.932685000007041,
+     "started_unix": 1791373078.0245028,
+     "loss": 11.821993827819824,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "spill_written": 0,
+     "spill_read": 0,
+     "put_wait_s": 0.0,
+     "get_wait_s": 0.0
+    }
+   ],
+   "suspend": {
+    "samples": 16,
+    "max_gap_s": 2.014538288116455,
+    "battery_samples": 0,
+    "unknown_power_samples": 0,
+    "void": false
+   },
+   "box_before": {
+    "unix": 1791373055.6671379,
+    "total_phys_gb": 34.070192128,
+    "avail_phys_gb": 14.232395776,
+    "commit_limit_gb": 60.913737728,
+    "commit_avail_gb": 21.499867136,
+    "ac": true,
+    "gpu_pids": [
+     13448
+    ],
+    "gpu_mem_used_mib": 4876,
+    "python_processes": 6
+   },
+   "box_after": {
+    "unix": 1791373085.7182133,
+    "total_phys_gb": 34.070192128,
+    "avail_phys_gb": 14.156541952,
+    "commit_limit_gb": 60.913737728,
+    "commit_avail_gb": 21.401776128,
+    "ac": true,
+    "gpu_pids": [
+     13448
+    ],
+    "gpu_mem_used_mib": 4876,
+    "python_processes": 8
+   },
+   "foreign_readers": []
+  },
+  {
+   "kind": "arm",
+   "mode": "l2l",
+   "arm": "A",
+   "k": 2,
+   "round": 0,
+   "variant": null,
+   "skipped": null,
+   "store": {
+    "chunk_bytes": 8388608,
+    "resident_chunks": 160,
+    "spilled_chunks": 0,
+    "spill_layers": 0,
+    "pinned": true,
+    "direct": null,
+    "bytes_written": 0,
+    "bytes_read": 0,
+    "put_wait_s": 0.0,
+    "get_wait_s": 0.0,
+    "spill_left_behind": null
+   },
+   "label": "l2l_A_k2_r0",
+   "tokens_per_step": 1024,
+   "steps": 3,
+   "warmup": 1,
+   "nocopy": false,
+   "nodequant": false,
+   "step_s_mean": 17.906545000034384,
+   "step_s_min": 17.88642690004781,
+   "step_s_max": 17.929202600033022,
+   "tok_per_s": 57.18579435608788,
+   "layer_loads_per_step": 157.0,
+   "large_loads_per_step": 2.0,
+   "bytes_moved_per_step": 70378258732.0,
+   "implied_h2d_gb_per_s": 3.930309209948924,
+   "peak_alloc_gb": 4.027677184,
+   "peak_reserved_gb": 4.930404352,
+   "sm_clock_mhz_start": 187,
+   "sm_clock_mhz_end": 277,
+   "records": [
+    {
+     "step_s": 17.904005500022322,
+     "started_unix": 1791373105.3842187,
+     "loss": 11.957906723022461,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "spill_written": 0,
+     "spill_read": 0,
+     "put_wait_s": 0.0,
+     "get_wait_s": 0.0
+    },
+    {
+     "step_s": 17.88642690004781,
+     "started_unix": 1791373123.288192,
+     "loss": 11.865777492523193,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "spill_written": 0,
+     "spill_read": 0,
+     "put_wait_s": 0.0,
+     "get_wait_s": 0.0
+    },
+    {
+     "step_s": 17.929202600033022,
+     "started_unix": 1791373141.1745467,
+     "loss": 11.716234683990479,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "spill_written": 0,
+     "spill_read": 0,
+     "put_wait_s": 0.0,
+     "get_wait_s": 0.0
+    }
+   ],
+   "suspend": {
+    "samples": 38,
+    "max_gap_s": 2.0153913497924805,
+    "battery_samples": 0,
+    "unknown_power_samples": 0,
+    "void": false
+   },
+   "box_before": {
+    "unix": 1791373086.551261,
+    "total_phys_gb": 34.070192128,
+    "avail_phys_gb": 13.503864832,
+    "commit_limit_gb": 60.913737728,
+    "commit_avail_gb": 20.806443008,
+    "ac": true,
+    "gpu_pids": [
+     13448
+    ],
+    "gpu_mem_used_mib": 4876,
+    "python_processes": 8
+   },
+   "box_after": {
+    "unix": 1791373160.2051008,
+    "total_phys_gb": 34.070192128,
+    "avail_phys_gb": 13.526728704,
+    "commit_limit_gb": 60.913737728,
+    "commit_avail_gb": 20.882239488,
+    "ac": true,
+    "gpu_pids": [
+     13448
+    ],
+    "gpu_mem_used_mib": 4876,
+    "python_processes": 6
+   },
+   "foreign_readers": []
+  },
+  {
+   "kind": "arm",
+   "mode": "l2l",
+   "arm": "B",
+   "k": 2,
+   "round": 0,
+   "variant": null,
+   "skipped": null,
+   "store": {
+    "chunk_bytes": 8388608,
+    "resident_chunks": 160,
+    "spilled_chunks": 0,
+    "spill_layers": 0,
+    "pinned": true,
+    "direct": null,
+    "bytes_written": 0,
+    "bytes_read": 0,
+    "put_wait_s": 0.0,
+    "get_wait_s": 0.0,
+    "spill_left_behind": null
+   },
+   "label": "l2l_B_k2_r0",
+   "tokens_per_step": 1024,
+   "steps": 3,
+   "warmup": 1,
+   "nocopy": true,
+   "nodequant": false,
+   "step_s_mean": 13.869924966711551,
+   "step_s_min": 13.851505600032397,
+   "step_s_max": 13.880277900025249,
+   "tok_per_s": 73.82880602870213,
+   "layer_loads_per_step": 157.0,
+   "large_loads_per_step": 2.0,
+   "bytes_moved_per_step": 70378258732.0,
+   "implied_h2d_gb_per_s": 5.074162902893204,
+   "peak_alloc_gb": 4.027677184,
+   "peak_reserved_gb": 4.930404352,
+   "sm_clock_mhz_start": 180,
+   "sm_clock_mhz_end": 2422,
+   "records": [
+    {
+     "step_s": 13.877991400077008,
+     "started_unix": 1791373176.5642703,
+     "loss": 12.019615173339844,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "spill_written": 0,
+     "spill_read": 0,
+     "put_wait_s": 0.0,
+     "get_wait_s": 0.0
+    },
+    {
+     "step_s": 13.851505600032397,
+     "started_unix": 1791373190.4428644,
+     "loss": 11.96085500717163,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "spill_written": 0,
+     "spill_read": 0,
+     "put_wait_s": 0.0,
+     "get_wait_s": 0.0
+    },
+    {
+     "step_s": 13.880277900025249,
+     "started_unix": 1791373204.2944267,
+     "loss": 11.861358642578125,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "spill_written": 0,
+     "spill_read": 0,
+     "put_wait_s": 0.0,
+     "get_wait_s": 0.0
+    }
+   ],
+   "suspend": {
+    "samples": 30,
+    "max_gap_s": 2.0149357318878174,
+    "battery_samples": 0,
+    "unknown_power_samples": 0,
+    "void": false
+   },
+   "box_before": {
+    "unix": 1791373161.3587952,
+    "total_phys_gb": 34.070192128,
+    "avail_phys_gb": 13.522767872,
+    "commit_limit_gb": 60.913737728,
+    "commit_avail_gb": 20.836257792,
+    "ac": true,
+    "gpu_pids": [
+     13448
+    ],
+    "gpu_mem_used_mib": 4876,
+    "python_processes": 6
+   },
+   "box_after": {
+    "unix": 1791373218.7955744,
+    "total_phys_gb": 34.070192128,
+    "avail_phys_gb": 13.517631488,
+    "commit_limit_gb": 60.913737728,
+    "commit_avail_gb": 20.843184128,
+    "ac": true,
+    "gpu_pids": [
+     13448
+    ],
+    "gpu_mem_used_mib": 4876,
+    "python_processes": 7
+   },
+   "foreign_readers": []
+  },
+  {
+   "kind": "arm",
+   "mode": "l2l",
+   "arm": "A",
+   "k": 3,
+   "round": 0,
+   "variant": null,
+   "skipped": null,
+   "store": {
+    "chunk_bytes": 8388608,
+    "resident_chunks": 240,
+    "spilled_chunks": 0,
+    "spill_layers": 0,
+    "pinned": true,
+    "direct": null,
+    "bytes_written": 0,
+    "bytes_read": 0,
+    "put_wait_s": 0.0,
+    "get_wait_s": 0.0,
+    "spill_left_behind": null
+   },
+   "label": "l2l_A_k3_r0",
+   "tokens_per_step": 1536,
+   "steps": 3,
+   "warmup": 1,
+   "nocopy": false,
+   "nodequant": false,
+   "step_s_mean": 22.688316533342004,
+   "step_s_min": 22.626728000002913,
+   "step_s_max": 22.740574400057085,
+   "tok_per_s": 67.7000427838154,
+   "layer_loads_per_step": 157.0,
+   "large_loads_per_step": 2.0,
+   "bytes_moved_per_step": 70378258732.0,
+   "implied_h2d_gb_per_s": 3.10196036927528,
+   "peak_alloc_gb": 4.036066816,
+   "peak_reserved_gb": 4.930404352,
+   "sm_clock_mhz_start": 277,
+   "sm_clock_mhz_end": 2407,
+   "records": [
+    {
+     "step_s": 22.697647199966013,
+     "started_unix": 1791373243.0415921,
+     "loss": 11.939269781112671,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "spill_written": 0,
+     "spill_read": 0,
+     "put_wait_s": 0.0,
+     "get_wait_s": 0.0
+    },
+    {
+     "step_s": 22.626728000002913,
+     "started_unix": 1791373265.7397027,
+     "loss": 11.874354124069214,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "spill_written": 0,
+     "spill_read": 0,
+     "put_wait_s": 0.0,
+     "get_wait_s": 0.0
+    },
+    {
+     "step_s": 22.740574400057085,
+     "started_unix": 1791373288.3669546,
+     "loss": 11.764002561569214,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "spill_written": 0,
+     "spill_read": 0,
+     "put_wait_s": 0.0,
+     "get_wait_s": 0.0
+    }
+   ],
+   "suspend": {
+    "samples": 47,
+    "max_gap_s": 2.0152852535247803,
+    "battery_samples": 0,
+    "unknown_power_samples": 0,
+    "void": false
+   },
+   "box_before": {
+    "unix": 1791373219.2020085,
+    "total_phys_gb": 34.070192128,
+    "avail_phys_gb": 12.840603648,
+    "commit_limit_gb": 60.913737728,
+    "commit_avail_gb": 20.168896512,
+    "ac": true,
+    "gpu_pids": [
+     13448
+    ],
+    "gpu_mem_used_mib": 4876,
+    "python_processes": 7
+   },
+   "box_after": {
+    "unix": 1791373311.6813293,
+    "total_phys_gb": 34.070192128,
+    "avail_phys_gb": 12.776808448,
+    "commit_limit_gb": 60.913737728,
+    "commit_avail_gb": 20.153790464,
+    "ac": true,
+    "gpu_pids": [
+     13448
+    ],
+    "gpu_mem_used_mib": 4876,
+    "python_processes": 6
+   },
+   "foreign_readers": [
+    {
+     "pid": 49760,
+     "name": "SearchIndexer.exe",
+     "read_bytes": 1845409364
+    }
+   ]
+  },
+  {
+   "kind": "arm",
+   "mode": "l2l",
+   "arm": "B",
+   "k": 3,
+   "round": 0,
+   "variant": null,
+   "skipped": null,
+   "store": {
+    "chunk_bytes": 8388608,
+    "resident_chunks": 240,
+    "spilled_chunks": 0,
+    "spill_layers": 0,
+    "pinned": true,
+    "direct": null,
+    "bytes_written": 0,
+    "bytes_read": 0,
+    "put_wait_s": 0.0,
+    "get_wait_s": 0.0,
+    "spill_left_behind": null
+   },
+   "label": "l2l_B_k3_r0",
+   "tokens_per_step": 1536,
+   "steps": 3,
+   "warmup": 1,
+   "nocopy": true,
+   "nodequant": false,
+   "step_s_mean": 20.894858533322502,
+   "step_s_min": 20.851175499963574,
+   "step_s_max": 20.947985999984667,
+   "tok_per_s": 73.51090688412332,
+   "layer_loads_per_step": 157.0,
+   "large_loads_per_step": 2.0,
+   "bytes_moved_per_step": 70378258732.0,
+   "implied_h2d_gb_per_s": 3.3682093908299424,
+   "peak_alloc_gb": 4.036066816,
+   "peak_reserved_gb": 4.930404352,
+   "sm_clock_mhz_start": 262,
+   "sm_clock_mhz_end": 2385,
+   "records": [
+    {
+     "step_s": 20.851175499963574,
+     "started_unix": 1791373333.916938,
+     "loss": 12.034217357635498,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "spill_written": 0,
+     "spill_read": 0,
+     "put_wait_s": 0.0,
+     "get_wait_s": 0.0
+    },
+    {
+     "step_s": 20.88541410001926,
+     "started_unix": 1791373354.768251,
+     "loss": 11.996000528335571,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "spill_written": 0,
+     "spill_read": 0,
+     "put_wait_s": 0.0,
+     "get_wait_s": 0.0
+    },
+    {
+     "step_s": 20.947985999984667,
+     "started_unix": 1791373375.6546295,
+     "loss": 11.918840408325195,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "spill_written": 0,
+     "spill_read": 0,
+     "put_wait_s": 0.0,
+     "get_wait_s": 0.0
+    }
+   ],
+   "suspend": {
+    "samples": 43,
+    "max_gap_s": 2.0152578353881836,
+    "battery_samples": 0,
+    "unknown_power_samples": 0,
+    "void": false
+   },
+   "box_before": {
+    "unix": 1791373312.0811112,
+    "total_phys_gb": 34.070192128,
+    "avail_phys_gb": 12.77425664,
+    "commit_limit_gb": 60.913737728,
+    "commit_avail_gb": 20.144021504,
+    "ac": true,
+    "gpu_pids": [
+     13448
+    ],
+    "gpu_mem_used_mib": 4876,
+    "python_processes": 6
+   },
+   "box_after": {
+    "unix": 1791373397.3605027,
+    "total_phys_gb": 34.070192128,
+    "avail_phys_gb": 12.634996736,
+    "commit_limit_gb": 60.913737728,
+    "commit_avail_gb": 19.761528832,
+    "ac": true,
+    "gpu_pids": [
+     13448
+    ],
+    "gpu_mem_used_mib": 4876,
+    "python_processes": 7
+   },
+   "foreign_readers": [
+    {
+     "pid": 49760,
+     "name": "SearchIndexer.exe",
+     "read_bytes": 5561085587
+    }
+   ]
+  },
+  {
+   "kind": "arm",
+   "mode": "l2l",
+   "arm": "A",
+   "k": 4,
+   "round": 0,
+   "variant": null,
+   "skipped": null,
+   "store": {
+    "chunk_bytes": 8388608,
+    "resident_chunks": 320,
+    "spilled_chunks": 0,
+    "spill_layers": 0,
+    "pinned": true,
+    "direct": null,
+    "bytes_written": 0,
+    "bytes_read": 0,
+    "put_wait_s": 0.0,
+    "get_wait_s": 0.0,
+    "spill_left_behind": null
+   },
+   "label": "l2l_A_k4_r0",
+   "tokens_per_step": 2048,
+   "steps": 3,
+   "warmup": 1,
+   "nocopy": false,
+   "nodequant": false,
+   "step_s_mean": 28.050763633296203,
+   "step_s_min": 28.022480799932964,
+   "step_s_max": 28.10706760000903,
+   "tok_per_s": 73.01049008052772,
+   "layer_loads_per_step": 157.0,
+   "large_loads_per_step": 2.0,
+   "bytes_moved_per_step": 70378258732.0,
+   "implied_h2d_gb_per_s": 2.5089605278503413,
+   "peak_alloc_gb": 4.044456448,
+   "peak_reserved_gb": 4.930404352,
+   "sm_clock_mhz_start": 277,
+   "sm_clock_mhz_end": 2415,
+   "records": [
+    {
+     "step_s": 28.022480799932964,
+     "started_unix": 1791373433.2538688,
+     "loss": 11.96772050857544,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "spill_written": 0,
+     "spill_read": 0,
+     "put_wait_s": 0.0,
+     "get_wait_s": 0.0
+    },
+    {
+     "step_s": 28.10706760000903,
+     "started_unix": 1791373461.2764096,
+     "loss": 11.91158676147461,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "spill_written": 0,
+     "spill_read": 0,
+     "put_wait_s": 0.0,
+     "get_wait_s": 0.0
+    },
+    {
+     "step_s": 28.022742499946617,
+     "started_unix": 1791373489.3839512,
+     "loss": 11.81738805770874,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "spill_written": 0,
+     "spill_read": 0,
+     "put_wait_s": 0.0,
+     "get_wait_s": 0.0
+    }
+   ],
+   "suspend": {
+    "samples": 61,
+    "max_gap_s": 2.0155043601989746,
+    "battery_samples": 0,
+    "unknown_power_samples": 0,
+    "void": false
+   },
+   "box_before": {
+    "unix": 1791373397.864193,
+    "total_phys_gb": 34.070192128,
+    "avail_phys_gb": 11.884515328,
+    "commit_limit_gb": 60.913737728,
+    "commit_avail_gb": 19.113930752,
+    "ac": true,
+    "gpu_pids": [
+     13448
+    ],
+    "gpu_mem_used_mib": 4876,
+    "python_processes": 7
+   },
+   "box_after": {
+    "unix": 1791373517.9216864,
+    "total_phys_gb": 34.070192128,
+    "avail_phys_gb": 12.196216832,
+    "commit_limit_gb": 60.913737728,
+    "commit_avail_gb": 19.496382464,
+    "ac": true,
+    "gpu_pids": [
+     13448
+    ],
+    "gpu_mem_used_mib": 4876,
+    "python_processes": 6
+   },
+   "foreign_readers": [
+    {
+     "pid": 49760,
+     "name": "SearchIndexer.exe",
+     "read_bytes": 1116335950
+    }
+   ]
+  },
+  {
+   "kind": "arm",
+   "mode": "l2l",
+   "arm": "B",
+   "k": 4,
+   "round": 0,
+   "variant": null,
+   "skipped": null,
+   "store": {
+    "chunk_bytes": 8388608,
+    "resident_chunks": 320,
+    "spilled_chunks": 0,
+    "spill_layers": 0,
+    "pinned": true,
+    "direct": null,
+    "bytes_written": 0,
+    "bytes_read": 0,
+    "put_wait_s": 0.0,
+    "get_wait_s": 0.0,
+    "spill_left_behind": null
+   },
+   "label": "l2l_B_k4_r0",
+   "tokens_per_step": 2048,
+   "steps": 3,
+   "warmup": 1,
+   "nocopy": true,
+   "nodequant": false,
+   "step_s_mean": 27.748297900000278,
+   "step_s_min": 27.736921000061557,
+   "step_s_max": 27.7590610999614,
+   "tok_per_s": 73.80632885593964,
+   "layer_loads_per_step": 157.0,
+   "large_loads_per_step": 2.0,
+   "bytes_moved_per_step": 70378258732.0,
+   "implied_h2d_gb_per_s": 2.536309037247265,
+   "peak_alloc_gb": 4.044456448,
+   "peak_reserved_gb": 4.930404352,
+   "sm_clock_mhz_start": 187,
+   "sm_clock_mhz_end": 2415,
+   "records": [
+    {
+     "step_s": 27.736921000061557,
+     "started_unix": 1791373548.2454944,
+     "loss": 12.033821105957031,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "spill_written": 0,
+     "spill_read": 0,
+     "put_wait_s": 0.0,
+     "get_wait_s": 0.0
+    },
+    {
+     "step_s": 27.7590610999614,
+     "started_unix": 1791373575.983267,
+     "loss": 11.996756792068481,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "spill_written": 0,
+     "spill_read": 0,
+     "put_wait_s": 0.0,
+     "get_wait_s": 0.0
+    },
+    {
+     "step_s": 27.748911599977873,
+     "started_unix": 1791373603.7423415,
+     "loss": 11.92532753944397,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "spill_written": 0,
+     "spill_read": 0,
+     "put_wait_s": 0.0,
+     "get_wait_s": 0.0
+    }
+   ],
+   "suspend": {
+    "samples": 57,
+    "max_gap_s": 2.015843391418457,
+    "battery_samples": 0,
+    "unknown_power_samples": 0,
+    "void": false
+   },
+   "box_before": {
+    "unix": 1791373519.3085034,
+    "total_phys_gb": 34.070192128,
+    "avail_phys_gb": 12.208562176,
+    "commit_limit_gb": 60.913737728,
+    "commit_avail_gb": 19.505942528,
+    "ac": true,
+    "gpu_pids": [
+     13448
+    ],
+    "gpu_mem_used_mib": 4876,
+    "python_processes": 6
+   },
+   "box_after": {
+    "unix": 1791373632.0231478,
+    "total_phys_gb": 34.070192128,
+    "avail_phys_gb": 12.211396608,
+    "commit_limit_gb": 60.913737728,
+    "commit_avail_gb": 19.517575168,
+    "ac": true,
+    "gpu_pids": [
+     13448
+    ],
+    "gpu_mem_used_mib": 4876,
+    "python_processes": 6
+   },
+   "foreign_readers": []
+  },
+  {
+   "kind": "arm",
+   "mode": "l2l",
+   "arm": "A",
+   "k": 8,
+   "round": 0,
+   "variant": null,
+   "skipped": null,
+   "store": {
+    "chunk_bytes": 8388608,
+    "resident_chunks": 640,
+    "spilled_chunks": 0,
+    "spill_layers": 0,
+    "pinned": true,
+    "direct": null,
+    "bytes_written": 0,
+    "bytes_read": 0,
+    "put_wait_s": 0.0,
+    "get_wait_s": 0.0,
+    "spill_left_behind": null
+   },
+   "label": "l2l_A_k8_r0",
+   "tokens_per_step": 4096,
+   "steps": 3,
+   "warmup": 1,
+   "nocopy": false,
+   "nodequant": false,
+   "step_s_mean": 55.81933726669134,
+   "step_s_min": 55.7733255000785,
+   "step_s_max": 55.85147620004136,
+   "tok_per_s": 73.37958851840715,
+   "layer_loads_per_step": 157.0,
+   "large_loads_per_step": 2.0,
+   "bytes_moved_per_step": 70378258732.0,
+   "implied_h2d_gb_per_s": 1.2608221841787486,
+   "peak_alloc_gb": 4.078014976,
+   "peak_reserved_gb": 4.930404352,
+   "sm_clock_mhz_start": 225,
+   "sm_clock_mhz_end": 2407,
+   "records": [
+    {
+     "step_s": 55.7733255000785,
+     "started_unix": 1791373689.9434867,
+     "loss": 11.999968528747559,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "spill_written": 0,
+     "spill_read": 0,
+     "put_wait_s": 0.0,
+     "get_wait_s": 0.0
+    },
+    {
+     "step_s": 55.85147620004136,
+     "started_unix": 1791373745.716985,
+     "loss": 11.963299870491028,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "spill_written": 0,
+     "spill_read": 0,
+     "put_wait_s": 0.0,
+     "get_wait_s": 0.0
+    },
+    {
+     "step_s": 55.83321009995416,
+     "started_unix": 1791373801.5696146,
+     "loss": 11.893709778785706,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "spill_written": 0,
+     "spill_read": 0,
+     "put_wait_s": 0.0,
+     "get_wait_s": 0.0
+    }
+   ],
+   "suspend": {
+    "samples": 113,
+    "max_gap_s": 2.0157997608184814,
+    "battery_samples": 0,
+    "unknown_power_samples": 0,
+    "void": false
+   },
+   "box_before": {
+    "unix": 1791373632.9673877,
+    "total_phys_gb": 34.070192128,
+    "avail_phys_gb": 9.52694784,
+    "commit_limit_gb": 60.913737728,
+    "commit_avail_gb": 16.809979904,
+    "ac": true,
+    "gpu_pids": [
+     13448
+    ],
+    "gpu_mem_used_mib": 4876,
+    "python_processes": 6
+   },
+   "box_after": {
+    "unix": 1791373857.9493258,
+    "total_phys_gb": 34.070192128,
+    "avail_phys_gb": 9.620963328,
+    "commit_limit_gb": 60.913737728,
+    "commit_avail_gb": 16.740909056,
+    "ac": true,
+    "gpu_pids": [
+     13448
+    ],
+    "gpu_mem_used_mib": 4876,
+    "python_processes": 6
+   },
+   "foreign_readers": []
+  },
+  {
+   "kind": "arm",
+   "mode": "l2l",
+   "arm": "B",
+   "k": 8,
+   "round": 0,
+   "variant": null,
+   "skipped": null,
+   "store": {
+    "chunk_bytes": 8388608,
+    "resident_chunks": 640,
+    "spilled_chunks": 0,
+    "spill_layers": 0,
+    "pinned": true,
+    "direct": null,
+    "bytes_written": 0,
+    "bytes_read": 0,
+    "put_wait_s": 0.0,
+    "get_wait_s": 0.0,
+    "spill_left_behind": null
+   },
+   "label": "l2l_B_k8_r0",
+   "tokens_per_step": 4096,
+   "steps": 3,
+   "warmup": 1,
+   "nocopy": true,
+   "nodequant": false,
+   "step_s_mean": 55.603995866607875,
+   "step_s_min": 55.551631000009365,
+   "step_s_max": 55.6883591999067,
+   "tok_per_s": 73.66377067263595,
+   "layer_loads_per_step": 157.0,
+   "large_loads_per_step": 2.0,
+   "bytes_moved_per_step": 70378258732.0,
+   "implied_h2d_gb_per_s": 1.265705056536496,
+   "peak_alloc_gb": 4.078014976,
+   "peak_reserved_gb": 4.930404352,
+   "sm_clock_mhz_start": 277,
+   "sm_clock_mhz_end": 2407,
+   "records": [
+    {
+     "step_s": 55.57199739990756,
+     "started_unix": 1791373915.0878272,
+     "loss": 12.04066812992096,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "spill_written": 0,
+     "spill_read": 0,
+     "put_wait_s": 0.0,
+     "get_wait_s": 0.0
+    },
+    {
+     "step_s": 55.6883591999067,
+     "started_unix": 1791373970.6596942,
+     "loss": 12.018084287643433,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "spill_written": 0,
+     "spill_read": 0,
+     "put_wait_s": 0.0,
+     "get_wait_s": 0.0
+    },
+    {
+     "step_s": 55.551631000009365,
+     "started_unix": 1791374026.3486557,
+     "loss": 11.968307614326477,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "spill_written": 0,
+     "spill_read": 0,
+     "put_wait_s": 0.0,
+     "get_wait_s": 0.0
+    }
+   ],
+   "suspend": {
+    "samples": 112,
+    "max_gap_s": 2.0156147480010986,
+    "battery_samples": 0,
+    "unknown_power_samples": 0,
+    "void": false
+   },
+   "box_before": {
+    "unix": 1791373858.2602432,
+    "total_phys_gb": 34.070192128,
+    "avail_phys_gb": 9.633697792,
+    "commit_limit_gb": 60.913737728,
+    "commit_avail_gb": 16.79546368,
+    "ac": true,
+    "gpu_pids": [
+     13448
+    ],
+    "gpu_mem_used_mib": 4876,
+    "python_processes": 6
+   },
+   "box_after": {
+    "unix": 1791374082.4567301,
+    "total_phys_gb": 34.070192128,
+    "avail_phys_gb": 9.496682496,
+    "commit_limit_gb": 60.913737728,
+    "commit_avail_gb": 16.5369856,
+    "ac": true,
+    "gpu_pids": [
+     13448
+    ],
+    "gpu_mem_used_mib": 4876,
+    "python_processes": 6
+   },
+   "foreign_readers": []
+  },
+  {
+   "kind": "arm",
+   "mode": "l2l",
+   "arm": "A",
+   "k": 16,
+   "round": 0,
+   "variant": null,
+   "skipped": null,
+   "store": {
+    "chunk_bytes": 8388608,
+    "resident_chunks": 1280,
+    "spilled_chunks": 0,
+    "spill_layers": 0,
+    "pinned": true,
+    "direct": null,
+    "bytes_written": 0,
+    "bytes_read": 0,
+    "put_wait_s": 0.0,
+    "get_wait_s": 0.0,
+    "spill_left_behind": null
+   },
+   "label": "l2l_A_k16_r0",
+   "tokens_per_step": 8192,
+   "steps": 3,
+   "warmup": 1,
+   "nocopy": false,
+   "nodequant": false,
+   "step_s_mean": 111.75244253334434,
+   "step_s_min": 111.62803490005899,
+   "step_s_max": 111.83213110000361,
+   "tok_per_s": 73.30488546195039,
+   "layer_loads_per_step": 157.0,
+   "large_loads_per_step": 2.0,
+   "bytes_moved_per_step": 70378258732.0,
+   "implied_h2d_gb_per_s": 0.6297693109571253,
+   "peak_alloc_gb": 4.145132032,
+   "peak_reserved_gb": 4.930404352,
+   "sm_clock_mhz_start": 180,
+   "sm_clock_mhz_end": 1020,
+   "records": [
+    {
+     "step_s": 111.83213110000361,
+     "started_unix": 1791374197.697558,
+     "loss": 12.013925909996033,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "spill_written": 0,
+     "spill_read": 0,
+     "put_wait_s": 0.0,
+     "get_wait_s": 0.0
+    },
+    {
+     "step_s": 111.79716159997042,
+     "started_unix": 1791374309.5306642,
+     "loss": 11.990225434303284,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "spill_written": 0,
+     "spill_read": 0,
+     "put_wait_s": 0.0,
+     "get_wait_s": 0.0
+    },
+    {
+     "step_s": 111.62803490005899,
+     "started_unix": 1791374421.3286238,
+     "loss": 11.95073264837265,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "spill_written": 0,
+     "spill_read": 0,
+     "put_wait_s": 0.0,
+     "get_wait_s": 0.0
+    }
+   ],
+   "suspend": {
+    "samples": 224,
+    "max_gap_s": 2.0160226821899414,
+    "battery_samples": 0,
+    "unknown_power_samples": 0,
+    "void": false
+   },
+   "box_before": {
+    "unix": 1791374084.8657587,
+    "total_phys_gb": 34.070192128,
+    "avail_phys_gb": 4.154855424,
+    "commit_limit_gb": 60.913737728,
+    "commit_avail_gb": 11.171074048,
+    "ac": true,
+    "gpu_pids": [
+     13448
+    ],
+    "gpu_mem_used_mib": 4876,
+    "python_processes": 6
+   },
+   "box_after": {
+    "unix": 1791374533.8934352,
+    "total_phys_gb": 34.070192128,
+    "avail_phys_gb": 4.193452032,
+    "commit_limit_gb": 60.913737728,
+    "commit_avail_gb": 11.205599232,
+    "ac": true,
+    "gpu_pids": [
+     13448
+    ],
+    "gpu_mem_used_mib": 4876,
+    "python_processes": 6
+   },
+   "foreign_readers": []
+  },
+  {
+   "kind": "arm",
+   "mode": "l2l",
+   "arm": "B",
+   "k": 16,
+   "round": 0,
+   "variant": null,
+   "skipped": null,
+   "store": {
+    "chunk_bytes": 8388608,
+    "resident_chunks": 1280,
+    "spilled_chunks": 0,
+    "spill_layers": 0,
+    "pinned": true,
+    "direct": null,
+    "bytes_written": 0,
+    "bytes_read": 0,
+    "put_wait_s": 0.0,
+    "get_wait_s": 0.0,
+    "spill_left_behind": null
+   },
+   "label": "l2l_B_k16_r0",
+   "tokens_per_step": 8192,
+   "steps": 3,
+   "warmup": 1,
+   "nocopy": true,
+   "nodequant": false,
+   "step_s_mean": 111.65401293333464,
+   "step_s_min": 111.57521310006268,
+   "step_s_max": 111.69833379995544,
+   "tok_per_s": 73.36950804348791,
+   "layer_loads_per_step": 157.0,
+   "large_loads_per_step": 2.0,
+   "bytes_moved_per_step": 70378258732.0,
+   "implied_h2d_gb_per_s": 0.6303244897612484,
+   "peak_alloc_gb": 4.145132032,
+   "peak_reserved_gb": 4.930404352,
+   "sm_clock_mhz_start": 187,
+   "sm_clock_mhz_end": 2415,
+   "records": [
+    {
+     "step_s": 111.69833379995544,
+     "started_unix": 1791374646.9031372,
+     "loss": 12.016310632228851,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "spill_written": 0,
+     "spill_read": 0,
+     "put_wait_s": 0.0,
+     "get_wait_s": 0.0
+    },
+    {
+     "step_s": 111.57521310006268,
+     "started_unix": 1791374758.6031842,
+     "loss": 11.998394250869751,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "spill_written": 0,
+     "spill_read": 0,
+     "put_wait_s": 0.0,
+     "get_wait_s": 0.0
+    },
+    {
+     "step_s": 111.68849189998582,
+     "started_unix": 1791374870.1789303,
+     "loss": 11.965834617614746,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "spill_written": 0,
+     "spill_read": 0,
+     "put_wait_s": 0.0,
+     "get_wait_s": 0.0
+    }
+   ],
+   "suspend": {
+    "samples": 224,
+    "max_gap_s": 2.015503168106079,
+    "battery_samples": 0,
+    "unknown_power_samples": 0,
+    "void": false
+   },
+   "box_before": {
+    "unix": 1791374534.2167,
+    "total_phys_gb": 34.070192128,
+    "avail_phys_gb": 4.19155968,
+    "commit_limit_gb": 60.913737728,
+    "commit_avail_gb": 11.20251904,
+    "ac": true,
+    "gpu_pids": [
+     13448
+    ],
+    "gpu_mem_used_mib": 4876,
+    "python_processes": 6
+   },
+   "box_after": {
+    "unix": 1791374982.400463,
+    "total_phys_gb": 34.070192128,
+    "avail_phys_gb": 4.14148608,
+    "commit_limit_gb": 60.913737728,
+    "commit_avail_gb": 11.179556864,
+    "ac": true,
+    "gpu_pids": [
+     13448
+    ],
+    "gpu_mem_used_mib": 4876,
+    "python_processes": 6
+   },
+   "foreign_readers": []
+  },
+  {
+   "kind": "arm",
+   "mode": "l2l",
+   "arm": "C",
+   "k": 4,
+   "round": 0,
+   "variant": null,
+   "skipped": null,
+   "store": {
+    "chunk_bytes": 8388608,
+    "resident_chunks": 320,
+    "spilled_chunks": 0,
+    "spill_layers": 0,
+    "pinned": true,
+    "direct": null,
+    "bytes_written": 0,
+    "bytes_read": 0,
+    "put_wait_s": 0.0,
+    "get_wait_s": 0.0,
+    "spill_left_behind": null
+   },
+   "label": "l2l_C_k4_r0",
+   "tokens_per_step": 2048,
+   "steps": 3,
+   "warmup": 1,
+   "nocopy": false,
+   "nodequant": true,
+   "step_s_mean": 23.8812492666378,
+   "step_s_min": 23.854243500041775,
+   "step_s_max": 23.89621289994102,
+   "tok_per_s": 85.75765769762573,
+   "layer_loads_per_step": 157.0,
+   "large_loads_per_step": 2.0,
+   "bytes_moved_per_step": 70378258732.0,
+   "implied_h2d_gb_per_s": 2.9470090926239236,
+   "peak_alloc_gb": 3.442573824,
+   "peak_reserved_gb": 4.930404352,
+   "sm_clock_mhz_start": 277,
+   "sm_clock_mhz_end": 2715,
+   "records": [
+    {
+     "step_s": 23.89621289994102,
+     "started_unix": 1791375007.6025274,
+     "loss": 12.051763772964478,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "spill_written": 0,
+     "spill_read": 0,
+     "put_wait_s": 0.0,
+     "get_wait_s": 0.0
+    },
+    {
+     "step_s": 23.854243500041775,
+     "started_unix": 1791375031.4985354,
+     "loss": 12.051763772964478,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "spill_written": 0,
+     "spill_read": 0,
+     "put_wait_s": 0.0,
+     "get_wait_s": 0.0
+    },
+    {
+     "step_s": 23.893291399930604,
+     "started_unix": 1791375055.3535619,
+     "loss": 12.051763772964478,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "spill_written": 0,
+     "spill_read": 0,
+     "put_wait_s": 0.0,
+     "get_wait_s": 0.0
+    }
+   ],
+   "suspend": {
+    "samples": 49,
+    "max_gap_s": 2.0149900913238525,
+    "battery_samples": 0,
+    "unknown_power_samples": 0,
+    "void": false
+   },
+   "box_before": {
+    "unix": 1791374982.7359867,
+    "total_phys_gb": 34.070192128,
+    "avail_phys_gb": 4.138582016,
+    "commit_limit_gb": 60.913737728,
+    "commit_avail_gb": 11.175358464,
+    "ac": true,
+    "gpu_pids": [
+     13448
+    ],
+    "gpu_mem_used_mib": 4876,
+    "python_processes": 6
+   },
+   "box_after": {
+    "unix": 1791375080.2481647,
+    "total_phys_gb": 34.070192128,
+    "avail_phys_gb": 4.060557312,
+    "commit_limit_gb": 60.913737728,
+    "commit_avail_gb": 10.98149888,
+    "ac": true,
+    "gpu_pids": [
+     13448
+    ],
+    "gpu_mem_used_mib": 4876,
+    "python_processes": 7
+   },
+   "foreign_readers": []
+  },
+  {
+   "kind": "arm",
+   "mode": "l2l",
+   "arm": "D",
+   "k": 4,
+   "round": 0,
+   "variant": null,
+   "skipped": null,
+   "store": {
+    "chunk_bytes": 8388608,
+    "resident_chunks": 320,
+    "spilled_chunks": 0,
+    "spill_layers": 0,
+    "pinned": true,
+    "direct": null,
+    "bytes_written": 0,
+    "bytes_read": 0,
+    "put_wait_s": 0.0,
+    "get_wait_s": 0.0,
+    "spill_left_behind": null
+   },
+   "label": "l2l_D_k4_r0",
+   "tokens_per_step": 2048,
+   "steps": 3,
+   "warmup": 1,
+   "nocopy": true,
+   "nodequant": true,
+   "step_s_mean": 22.06428363333301,
+   "step_s_min": 21.891105499933474,
+   "step_s_max": 22.258789099985734,
+   "tok_per_s": 92.81969149934423,
+   "layer_loads_per_step": 157.0,
+   "large_loads_per_step": 2.0,
+   "bytes_moved_per_step": 70378258732.0,
+   "implied_h2d_gb_per_s": 3.1896915350416357,
+   "peak_alloc_gb": 3.442573824,
+   "peak_reserved_gb": 3.525312512,
+   "sm_clock_mhz_start": 180,
+   "sm_clock_mhz_end": 2655,
+   "records": [
+    {
+     "step_s": 21.891105499933474,
+     "started_unix": 1791375104.4025075,
+     "loss": 161.7244644165039,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "spill_written": 0,
+     "spill_read": 0,
+     "put_wait_s": 0.0,
+     "get_wait_s": 0.0
+    },
+    {
+     "step_s": 22.042956300079823,
+     "started_unix": 1791375126.2939925,
+     "loss": 161.7244644165039,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "spill_written": 0,
+     "spill_read": 0,
+     "put_wait_s": 0.0,
+     "get_wait_s": 0.0
+    },
+    {
+     "step_s": 22.258789099985734,
+     "started_unix": 1791375148.337469,
+     "loss": 161.7244644165039,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "spill_written": 0,
+     "spill_read": 0,
+     "put_wait_s": 0.0,
+     "get_wait_s": 0.0
+    }
+   ],
+   "suspend": {
+    "samples": 46,
+    "max_gap_s": 2.015249729156494,
+    "battery_samples": 0,
+    "unknown_power_samples": 0,
+    "void": false
+   },
+   "box_before": {
+    "unix": 1791375081.526011,
+    "total_phys_gb": 34.070192128,
+    "avail_phys_gb": 4.074262528,
+    "commit_limit_gb": 60.913737728,
+    "commit_avail_gb": 13.5737344,
+    "ac": true,
+    "gpu_pids": [
+     13448
+    ],
+    "gpu_mem_used_mib": 2262,
+    "python_processes": 7
+   },
+   "box_after": {
+    "unix": 1791375171.2577088,
+    "total_phys_gb": 34.070192128,
+    "avail_phys_gb": 4.154814464,
+    "commit_limit_gb": 60.913737728,
+    "commit_avail_gb": 12.480741376,
+    "ac": true,
+    "gpu_pids": [
+     13448
+    ],
+    "gpu_mem_used_mib": 3536,
+    "python_processes": 6
+   },
+   "foreign_readers": []
+  },
+  {
+   "kind": "arm",
+   "mode": "plain",
+   "arm": "B",
+   "k": 1,
+   "round": 1,
+   "variant": null,
+   "skipped": null,
+   "store": null,
+   "label": "plain_B_k1_r1",
+   "tokens_per_step": 512,
+   "steps": 3,
+   "warmup": 1,
+   "events_on": false,
+   "nocopy": true,
+   "nodequant": false,
+   "step_s_mean": 6.436437099939212,
+   "step_s_min": 6.427490899921395,
+   "step_s_max": 6.450927599915303,
+   "tok_per_s": 79.54711466143831,
+   "layer_loads_per_step": 157.0,
+   "large_loads_per_step": 2.0,
+   "bytes_moved_per_step": 70378258732.0,
+   "implied_h2d_gb_per_s": 10.934350423880423,
+   "copy_s_per_step": 0.0,
+   "copy_stream_gb_per_s": null,
+   "stall_s_per_step": 0.0,
+   "stall_share": 0.0,
+   "peak_alloc_gb": 4.509238784,
+   "peak_reserved_gb": 4.741660672,
+   "sm_clock_mhz_start": 180,
+   "sm_clock_mhz_end": 2415,
+   "records": [
+    {
+     "step_s": 6.450927599915303,
+     "loss": 12.06550121307373,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    },
+    {
+     "step_s": 6.427490899921395,
+     "loss": 11.989322662353516,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    },
+    {
+     "step_s": 6.430892799980938,
+     "loss": 11.836019515991211,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    }
+   ],
+   "suspend": {
+    "samples": 14,
+    "max_gap_s": 2.015428066253662,
+    "battery_samples": 0,
+    "unknown_power_samples": 0,
+    "void": false
+   },
+   "box_before": {
+    "unix": 1791375172.5179644,
+    "total_phys_gb": 34.070192128,
+    "avail_phys_gb": 4.132110336,
+    "commit_limit_gb": 60.913737728,
+    "commit_avail_gb": 13.61092608,
+    "ac": true,
+    "gpu_pids": [
+     13448
+    ],
+    "gpu_mem_used_mib": 2262,
+    "python_processes": 6
+   },
+   "box_after": {
+    "unix": 1791375199.9253418,
+    "total_phys_gb": 34.070192128,
+    "avail_phys_gb": 4.0835072,
+    "commit_limit_gb": 60.913737728,
+    "commit_avail_gb": 11.181576192,
+    "ac": true,
+    "gpu_pids": [
+     13448
+    ],
+    "gpu_mem_used_mib": 4696,
+    "python_processes": 6
+   },
+   "foreign_readers": []
+  },
+  {
+   "kind": "arm",
+   "mode": "plain",
+   "arm": "A",
+   "k": 1,
+   "round": 1,
+   "variant": null,
+   "skipped": null,
+   "store": null,
+   "label": "plain_A_k1_r1",
+   "tokens_per_step": 512,
+   "steps": 3,
+   "warmup": 1,
+   "events_on": false,
+   "nocopy": false,
+   "nodequant": false,
+   "step_s_mean": 17.419271366709534,
+   "step_s_min": 17.235320200095885,
+   "step_s_max": 17.741394500015303,
+   "tok_per_s": 29.392733439958793,
+   "layer_loads_per_step": 157.0,
+   "large_loads_per_step": 2.0,
+   "bytes_moved_per_step": 70378258732.0,
+   "implied_h2d_gb_per_s": 4.040252732183844,
+   "copy_s_per_step": 0.0,
+   "copy_stream_gb_per_s": null,
+   "stall_s_per_step": 0.0,
+   "stall_share": 0.0,
+   "peak_alloc_gb": 4.509238784,
+   "peak_reserved_gb": 4.741660672,
+   "sm_clock_mhz_start": 277,
+   "sm_clock_mhz_end": 1500,
+   "records": [
+    {
+     "step_s": 17.235320200095885,
+     "loss": 11.936078071594238,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    },
+    {
+     "step_s": 17.741394500015303,
+     "loss": 11.818867683410645,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    },
+    {
+     "step_s": 17.28109940001741,
+     "loss": 11.5946626663208,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    }
+   ],
+   "suspend": {
+    "samples": 36,
+    "max_gap_s": 2.0155045986175537,
+    "battery_samples": 0,
+    "unknown_power_samples": 0,
+    "void": false
+   },
+   "box_before": {
+    "unix": 1791375200.2228894,
+    "total_phys_gb": 34.070192128,
+    "avail_phys_gb": 4.0885248,
+    "commit_limit_gb": 60.913737728,
+    "commit_avail_gb": 11.177271296,
+    "ac": true,
+    "gpu_pids": [
+     13448
+    ],
+    "gpu_mem_used_mib": 4696,
+    "python_processes": 6
+   },
+   "box_after": {
+    "unix": 1791375271.718614,
+    "total_phys_gb": 34.070192128,
+    "avail_phys_gb": 4.34481152,
+    "commit_limit_gb": 60.913737728,
+    "commit_avail_gb": 11.355062272,
+    "ac": true,
+    "gpu_pids": [
+     13448
+    ],
+    "gpu_mem_used_mib": 4696,
+    "python_processes": 6
+   },
+   "foreign_readers": []
+  },
+  {
+   "kind": "arm",
+   "mode": "l2l",
+   "arm": "B",
+   "k": 16,
+   "round": 1,
+   "variant": null,
+   "skipped": null,
+   "store": {
+    "chunk_bytes": 8388608,
+    "resident_chunks": 1280,
+    "spilled_chunks": 0,
+    "spill_layers": 0,
+    "pinned": true,
+    "direct": null,
+    "bytes_written": 0,
+    "bytes_read": 0,
+    "put_wait_s": 0.0,
+    "get_wait_s": 0.0,
+    "spill_left_behind": null
+   },
+   "label": "l2l_B_k16_r1",
+   "tokens_per_step": 8192,
+   "steps": 3,
+   "warmup": 1,
+   "nocopy": true,
+   "nodequant": false,
+   "step_s_mean": 111.43403976666741,
+   "step_s_min": 111.33354459994007,
+   "step_s_max": 111.52186660002917,
+   "tok_per_s": 73.5143410142295,
+   "layer_loads_per_step": 157.0,
+   "large_loads_per_step": 2.0,
+   "bytes_moved_per_step": 70378258732.0,
+   "implied_h2d_gb_per_s": 0.6315687637221586,
+   "peak_alloc_gb": 4.145132032,
+   "peak_reserved_gb": 4.741660672,
+   "sm_clock_mhz_start": 180,
+   "sm_clock_mhz_end": 2407,
+   "records": [
+    {
+     "step_s": 111.44670810003299,
+     "started_unix": 1791375384.6070743,
+     "loss": 12.014267206192017,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "spill_written": 0,
+     "spill_read": 0,
+     "put_wait_s": 0.0,
+     "get_wait_s": 0.0
+    },
+    {
+     "step_s": 111.33354459994007,
+     "started_unix": 1791375496.0538533,
+     "loss": 11.996575772762299,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "spill_written": 0,
+     "spill_read": 0,
+     "put_wait_s": 0.0,
+     "get_wait_s": 0.0
+    },
+    {
+     "step_s": 111.52186660002917,
+     "started_unix": 1791375607.3880064,
+     "loss": 11.964532315731049,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "spill_written": 0,
+     "spill_read": 0,
+     "put_wait_s": 0.0,
+     "get_wait_s": 0.0
+    }
+   ],
+   "suspend": {
+    "samples": 224,
+    "max_gap_s": 2.015528917312622,
+    "battery_samples": 0,
+    "unknown_power_samples": 0,
+    "void": false
+   },
+   "box_before": {
+    "unix": 1791375272.0533514,
+    "total_phys_gb": 34.070192128,
+    "avail_phys_gb": 4.3389952,
+    "commit_limit_gb": 60.913737728,
+    "commit_avail_gb": 11.350929408,
+    "ac": true,
+    "gpu_pids": [
+     13448
+    ],
+    "gpu_mem_used_mib": 4696,
+    "python_processes": 6
+   },
+   "box_after": {
+    "unix": 1791375719.4194775,
+    "total_phys_gb": 34.070192128,
+    "avail_phys_gb": 4.189622272,
+    "commit_limit_gb": 60.913737728,
+    "commit_avail_gb": 11.361796096,
+    "ac": true,
+    "gpu_pids": [
+     13448
+    ],
+    "gpu_mem_used_mib": 4696,
+    "python_processes": 6
+   },
+   "foreign_readers": []
+  },
+  {
+   "kind": "arm",
+   "mode": "l2l",
+   "arm": "A",
+   "k": 16,
+   "round": 1,
+   "variant": null,
+   "skipped": null,
+   "store": {
+    "chunk_bytes": 8388608,
+    "resident_chunks": 1280,
+    "spilled_chunks": 0,
+    "spill_layers": 0,
+    "pinned": true,
+    "direct": null,
+    "bytes_written": 0,
+    "bytes_read": 0,
+    "put_wait_s": 0.0,
+    "get_wait_s": 0.0,
+    "spill_left_behind": null
+   },
+   "label": "l2l_A_k16_r1",
+   "tokens_per_step": 8192,
+   "steps": 3,
+   "warmup": 1,
+   "nocopy": false,
+   "nodequant": false,
+   "step_s_mean": 111.83856109999276,
+   "step_s_min": 111.71340560005046,
+   "step_s_max": 111.92550559993833,
+   "tok_per_s": 73.24843881597945,
+   "layer_loads_per_step": 157.0,
+   "large_loads_per_step": 2.0,
+   "bytes_moved_per_step": 70378258732.0,
+   "implied_h2d_gb_per_s": 0.6292843724006438,
+   "peak_alloc_gb": 4.145132032,
+   "peak_reserved_gb": 4.741660672,
+   "sm_clock_mhz_start": 277,
+   "sm_clock_mhz_end": 2422,
+   "records": [
+    {
+     "step_s": 111.71340560005046,
+     "started_unix": 1791375833.0346522,
+     "loss": 12.02020812034607,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "spill_written": 0,
+     "spill_read": 0,
+     "put_wait_s": 0.0,
+     "get_wait_s": 0.0
+    },
+    {
+     "step_s": 111.87677209998947,
+     "started_unix": 1791375944.7488458,
+     "loss": 11.995202243328094,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "spill_written": 0,
+     "spill_read": 0,
+     "put_wait_s": 0.0,
+     "get_wait_s": 0.0
+    },
+    {
+     "step_s": 111.92550559993833,
+     "started_unix": 1791376056.6263876,
+     "loss": 11.94804072380066,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "spill_written": 0,
+     "spill_read": 0,
+     "put_wait_s": 0.0,
+     "get_wait_s": 0.0
+    }
+   ],
+   "suspend": {
+    "samples": 224,
+    "max_gap_s": 2.015631675720215,
+    "battery_samples": 0,
+    "unknown_power_samples": 0,
+    "void": false
+   },
+   "box_before": {
+    "unix": 1791375720.2054918,
+    "total_phys_gb": 34.070192128,
+    "avail_phys_gb": 4.192550912,
+    "commit_limit_gb": 60.913737728,
+    "commit_avail_gb": 11.363037184,
+    "ac": true,
+    "gpu_pids": [
+     13448
+    ],
+    "gpu_mem_used_mib": 4696,
+    "python_processes": 6
+   },
+   "box_after": {
+    "unix": 1791376169.1047602,
+    "total_phys_gb": 34.070192128,
+    "avail_phys_gb": 4.19526656,
+    "commit_limit_gb": 60.913737728,
+    "commit_avail_gb": 11.233456128,
+    "ac": true,
+    "gpu_pids": [
+     13448
+    ],
+    "gpu_mem_used_mib": 4696,
+    "python_processes": 8
+   },
+   "foreign_readers": []
+  },
+  {
+   "kind": "arm",
+   "mode": "l2l",
+   "arm": "B",
+   "k": 8,
+   "round": 1,
+   "variant": null,
+   "skipped": null,
+   "store": {
+    "chunk_bytes": 8388608,
+    "resident_chunks": 640,
+    "spilled_chunks": 0,
+    "spill_layers": 0,
+    "pinned": true,
+    "direct": null,
+    "bytes_written": 0,
+    "bytes_read": 0,
+    "put_wait_s": 0.0,
+    "get_wait_s": 0.0,
+    "spill_left_behind": null
+   },
+   "label": "l2l_B_k8_r1",
+   "tokens_per_step": 4096,
+   "steps": 3,
+   "warmup": 1,
+   "nocopy": true,
+   "nodequant": false,
+   "step_s_mean": 55.69617053330876,
+   "step_s_min": 55.63487760000862,
+   "step_s_max": 55.757732999976724,
+   "tok_per_s": 73.54186043276371,
+   "layer_loads_per_step": 157.0,
+   "large_loads_per_step": 2.0,
+   "bytes_moved_per_step": 70378258732.0,
+   "implied_h2d_gb_per_s": 1.263610371379316,
+   "peak_alloc_gb": 4.078014976,
+   "peak_reserved_gb": 4.741660672,
+   "sm_clock_mhz_start": 225,
+   "sm_clock_mhz_end": 2400,
+   "records": [
+    {
+     "step_s": 55.63487760000862,
+     "started_unix": 1791376226.4768968,
+     "loss": 12.043737292289734,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "spill_written": 0,
+     "spill_read": 0,
+     "put_wait_s": 0.0,
+     "get_wait_s": 0.0
+    },
+    {
+     "step_s": 55.757732999976724,
+     "started_unix": 1791376282.1122713,
+     "loss": 12.019227266311646,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "spill_written": 0,
+     "spill_read": 0,
+     "put_wait_s": 0.0,
+     "get_wait_s": 0.0
+    },
+    {
+     "step_s": 55.69590099994093,
+     "started_unix": 1791376337.8699923,
+     "loss": 11.97040569782257,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "spill_written": 0,
+     "spill_read": 0,
+     "put_wait_s": 0.0,
+     "get_wait_s": 0.0
+    }
+   ],
+   "suspend": {
+    "samples": 113,
+    "max_gap_s": 2.0156874656677246,
+    "battery_samples": 0,
+    "unknown_power_samples": 0,
+    "void": false
+   },
+   "box_before": {
+    "unix": 1791376169.472365,
+    "total_phys_gb": 34.070192128,
+    "avail_phys_gb": 4.155142144,
+    "commit_limit_gb": 60.913737728,
+    "commit_avail_gb": 11.13096192,
+    "ac": true,
+    "gpu_pids": [
+     13448
+    ],
+    "gpu_mem_used_mib": 4696,
+    "python_processes": 8
+   },
+   "box_after": {
+    "unix": 1791376394.1318116,
+    "total_phys_gb": 34.070192128,
+    "avail_phys_gb": 4.30675968,
+    "commit_limit_gb": 60.913737728,
+    "commit_avail_gb": 11.381907456,
+    "ac": true,
+    "gpu_pids": [
+     13448
+    ],
+    "gpu_mem_used_mib": 4696,
+    "python_processes": 6
+   },
+   "foreign_readers": []
+  },
+  {
+   "kind": "arm",
+   "mode": "l2l",
+   "arm": "A",
+   "k": 8,
+   "round": 1,
+   "variant": null,
+   "skipped": null,
+   "store": {
+    "chunk_bytes": 8388608,
+    "resident_chunks": 640,
+    "spilled_chunks": 0,
+    "spill_layers": 0,
+    "pinned": true,
+    "direct": null,
+    "bytes_written": 0,
+    "bytes_read": 0,
+    "put_wait_s": 0.0,
+    "get_wait_s": 0.0,
+    "spill_left_behind": null
+   },
+   "label": "l2l_A_k8_r1",
+   "tokens_per_step": 4096,
+   "steps": 3,
+   "warmup": 1,
+   "nocopy": false,
+   "nodequant": false,
+   "step_s_mean": 55.96562213334255,
+   "step_s_min": 55.87992470001336,
+   "step_s_max": 56.01785160007421,
+   "tok_per_s": 73.18778642790666,
+   "layer_loads_per_step": 157.0,
+   "large_loads_per_step": 2.0,
+   "bytes_moved_per_step": 70378258732.0,
+   "implied_h2d_gb_per_s": 1.2575266038197197,
+   "peak_alloc_gb": 4.078014976,
+   "peak_reserved_gb": 4.741660672,
+   "sm_clock_mhz_start": 277,
+   "sm_clock_mhz_end": 2422,
+   "records": [
+    {
+     "step_s": 55.99909009994008,
+     "started_unix": 1791376451.484939,
+     "loss": 12.002978086471558,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "spill_written": 0,
+     "spill_read": 0,
+     "put_wait_s": 0.0,
+     "get_wait_s": 0.0
+    },
+    {
+     "step_s": 56.01785160007421,
+     "started_unix": 1791376507.483894,
+     "loss": 11.958962321281433,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "spill_written": 0,
+     "spill_read": 0,
+     "put_wait_s": 0.0,
+     "get_wait_s": 0.0
+    },
+    {
+     "step_s": 55.87992470001336,
+     "started_unix": 1791376563.5027516,
+     "loss": 11.891011118888855,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "spill_written": 0,
+     "spill_read": 0,
+     "put_wait_s": 0.0,
+     "get_wait_s": 0.0
+    }
+   ],
+   "suspend": {
+    "samples": 113,
+    "max_gap_s": 2.016364574432373,
+    "battery_samples": 0,
+    "unknown_power_samples": 0,
+    "void": false
+   },
+   "box_before": {
+    "unix": 1791376394.4075649,
+    "total_phys_gb": 34.070192128,
+    "avail_phys_gb": 4.313837568,
+    "commit_limit_gb": 60.913737728,
+    "commit_avail_gb": 11.379965952,
+    "ac": true,
+    "gpu_pids": [
+     13448
+    ],
+    "gpu_mem_used_mib": 4696,
+    "python_processes": 6
+   },
+   "box_after": {
+    "unix": 1791376619.9412348,
+    "total_phys_gb": 34.070192128,
+    "avail_phys_gb": 4.218650624,
+    "commit_limit_gb": 60.913737728,
+    "commit_avail_gb": 11.321503744,
+    "ac": true,
+    "gpu_pids": [
+     13448
+    ],
+    "gpu_mem_used_mib": 4696,
+    "python_processes": 7
+   },
+   "foreign_readers": []
+  },
+  {
+   "kind": "arm",
+   "mode": "l2l",
+   "arm": "B",
+   "k": 4,
+   "round": 1,
+   "variant": null,
+   "skipped": null,
+   "store": {
+    "chunk_bytes": 8388608,
+    "resident_chunks": 320,
+    "spilled_chunks": 0,
+    "spill_layers": 0,
+    "pinned": true,
+    "direct": null,
+    "bytes_written": 0,
+    "bytes_read": 0,
+    "put_wait_s": 0.0,
+    "get_wait_s": 0.0,
+    "spill_left_behind": null
+   },
+   "label": "l2l_B_k4_r1",
+   "tokens_per_step": 2048,
+   "steps": 3,
+   "warmup": 1,
+   "nocopy": true,
+   "nodequant": false,
+   "step_s_mean": 27.835526566719636,
+   "step_s_min": 27.823041500058025,
+   "step_s_max": 27.851766800042242,
+   "tok_per_s": 73.57504069812008,
+   "layer_loads_per_step": 157.0,
+   "large_loads_per_step": 2.0,
+   "bytes_moved_per_step": 70378258732.0,
+   "implied_h2d_gb_per_s": 2.52836096214342,
+   "peak_alloc_gb": 4.044456448,
+   "peak_reserved_gb": 4.741660672,
+   "sm_clock_mhz_start": 277,
+   "sm_clock_mhz_end": 2400,
+   "records": [
+    {
+     "step_s": 27.823041500058025,
+     "started_unix": 1791376649.2279837,
+     "loss": 12.03201675415039,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "spill_written": 0,
+     "spill_read": 0,
+     "put_wait_s": 0.0,
+     "get_wait_s": 0.0
+    },
+    {
+     "step_s": 27.831771400058642,
+     "started_unix": 1791376677.0519342,
+     "loss": 11.994887590408325,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "spill_written": 0,
+     "spill_read": 0,
+     "put_wait_s": 0.0,
+     "get_wait_s": 0.0
+    },
+    {
+     "step_s": 27.851766800042242,
+     "started_unix": 1791376704.8838134,
+     "loss": 11.926698923110962,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "spill_written": 0,
+     "spill_read": 0,
+     "put_wait_s": 0.0,
+     "get_wait_s": 0.0
+    }
+   ],
+   "suspend": {
+    "samples": 57,
+    "max_gap_s": 2.014916181564331,
+    "battery_samples": 0,
+    "unknown_power_samples": 0,
+    "void": false
+   },
+   "box_before": {
+    "unix": 1791376620.2234569,
+    "total_phys_gb": 34.070192128,
+    "avail_phys_gb": 4.211785728,
+    "commit_limit_gb": 60.913737728,
+    "commit_avail_gb": 11.308695552,
+    "ac": true,
+    "gpu_pids": [
+     13448
+    ],
+    "gpu_mem_used_mib": 4696,
+    "python_processes": 7
+   },
+   "box_after": {
+    "unix": 1791376733.2927573,
+    "total_phys_gb": 34.070192128,
+    "avail_phys_gb": 4.093980672,
+    "commit_limit_gb": 60.913737728,
+    "commit_avail_gb": 11.23616768,
+    "ac": true,
+    "gpu_pids": [
+     13448
+    ],
+    "gpu_mem_used_mib": 4696,
+    "python_processes": 7
+   },
+   "foreign_readers": []
+  },
+  {
+   "kind": "arm",
+   "mode": "l2l",
+   "arm": "A",
+   "k": 4,
+   "round": 1,
+   "variant": null,
+   "skipped": null,
+   "store": {
+    "chunk_bytes": 8388608,
+    "resident_chunks": 320,
+    "spilled_chunks": 0,
+    "spill_layers": 0,
+    "pinned": true,
+    "direct": null,
+    "bytes_written": 0,
+    "bytes_read": 0,
+    "put_wait_s": 0.0,
+    "get_wait_s": 0.0,
+    "spill_left_behind": null
+   },
+   "label": "l2l_A_k4_r1",
+   "tokens_per_step": 2048,
+   "steps": 3,
+   "warmup": 1,
+   "nocopy": false,
+   "nodequant": false,
+   "step_s_mean": 28.078210033359937,
+   "step_s_min": 28.0617823000066,
+   "step_s_max": 28.10768170002848,
+   "tok_per_s": 72.93912245712086,
+   "layer_loads_per_step": 157.0,
+   "large_loads_per_step": 2.0,
+   "bytes_moved_per_step": 70378258732.0,
+   "implied_h2d_gb_per_s": 2.5065080234239665,
+   "peak_alloc_gb": 4.044456448,
+   "peak_reserved_gb": 4.741660672,
+   "sm_clock_mhz_start": 277,
+   "sm_clock_mhz_end": 2340,
+   "records": [
+    {
+     "step_s": 28.10768170002848,
+     "started_unix": 1791376762.9512036,
+     "loss": 11.968996286392212,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "spill_written": 0,
+     "spill_read": 0,
+     "put_wait_s": 0.0,
+     "get_wait_s": 0.0
+    },
+    {
+     "step_s": 28.065166100044735,
+     "started_unix": 1791376791.058711,
+     "loss": 11.918269157409668,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "spill_written": 0,
+     "spill_read": 0,
+     "put_wait_s": 0.0,
+     "get_wait_s": 0.0
+    },
+    {
+     "step_s": 28.0617823000066,
+     "started_unix": 1791376819.1242032,
+     "loss": 11.817315101623535,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "spill_written": 0,
+     "spill_read": 0,
+     "put_wait_s": 0.0,
+     "get_wait_s": 0.0
+    }
+   ],
+   "suspend": {
+    "samples": 58,
+    "max_gap_s": 2.015434503555298,
+    "battery_samples": 0,
+    "unknown_power_samples": 0,
+    "void": false
+   },
+   "box_before": {
+    "unix": 1791376733.598065,
+    "total_phys_gb": 34.070192128,
+    "avail_phys_gb": 4.09653248,
+    "commit_limit_gb": 60.913737728,
+    "commit_avail_gb": 11.237875712,
+    "ac": true,
+    "gpu_pids": [
+     13448
+    ],
+    "gpu_mem_used_mib": 4696,
+    "python_processes": 7
+   },
+   "box_after": {
+    "unix": 1791376847.8641548,
+    "total_phys_gb": 34.070192128,
+    "avail_phys_gb": 4.074749952,
+    "commit_limit_gb": 60.913737728,
+    "commit_avail_gb": 11.172122624,
+    "ac": true,
+    "gpu_pids": [
+     13448
+    ],
+    "gpu_mem_used_mib": 4696,
+    "python_processes": 7
+   },
+   "foreign_readers": []
+  },
+  {
+   "kind": "arm",
+   "mode": "l2l",
+   "arm": "B",
+   "k": 3,
+   "round": 1,
+   "variant": null,
+   "skipped": null,
+   "store": {
+    "chunk_bytes": 8388608,
+    "resident_chunks": 240,
+    "spilled_chunks": 0,
+    "spill_layers": 0,
+    "pinned": true,
+    "direct": null,
+    "bytes_written": 0,
+    "bytes_read": 0,
+    "put_wait_s": 0.0,
+    "get_wait_s": 0.0,
+    "spill_left_behind": null
+   },
+   "label": "l2l_B_k3_r1",
+   "tokens_per_step": 1536,
+   "steps": 3,
+   "warmup": 1,
+   "nocopy": true,
+   "nodequant": false,
+   "step_s_mean": 20.90562986667889,
+   "step_s_min": 20.87575340003241,
+   "step_s_max": 20.95603779994417,
+   "tok_per_s": 73.47303141763756,
+   "layer_loads_per_step": 157.0,
+   "large_loads_per_step": 2.0,
+   "bytes_moved_per_step": 70378258732.0,
+   "implied_h2d_gb_per_s": 3.3664739680565496,
+   "peak_alloc_gb": 4.036066816,
+   "peak_reserved_gb": 4.741660672,
+   "sm_clock_mhz_start": 180,
+   "sm_clock_mhz_end": 2415,
+   "records": [
+    {
+     "step_s": 20.95603779994417,
+     "started_unix": 1791376871.2088761,
+     "loss": 12.0325186252594,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "spill_written": 0,
+     "spill_read": 0,
+     "put_wait_s": 0.0,
+     "get_wait_s": 0.0
+    },
+    {
+     "step_s": 20.87575340003241,
+     "started_unix": 1791376892.1649597,
+     "loss": 11.99225640296936,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "spill_written": 0,
+     "spill_read": 0,
+     "put_wait_s": 0.0,
+     "get_wait_s": 0.0
+    },
+    {
+     "step_s": 20.885098400060087,
+     "started_unix": 1791376913.0403926,
+     "loss": 11.912530183792114,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "spill_written": 0,
+     "spill_read": 0,
+     "put_wait_s": 0.0,
+     "get_wait_s": 0.0
+    }
+   ],
+   "suspend": {
+    "samples": 43,
+    "max_gap_s": 2.016688585281372,
+    "battery_samples": 0,
+    "unknown_power_samples": 0,
+    "void": false
+   },
+   "box_before": {
+    "unix": 1791376848.6326673,
+    "total_phys_gb": 34.070192128,
+    "avail_phys_gb": 4.093448192,
+    "commit_limit_gb": 60.913737728,
+    "commit_avail_gb": 11.210616832,
+    "ac": true,
+    "gpu_pids": [
+     13448
+    ],
+    "gpu_mem_used_mib": 4696,
+    "python_processes": 7
+   },
+   "box_after": {
+    "unix": 1791376934.6299293,
+    "total_phys_gb": 34.070192128,
+    "avail_phys_gb": 4.140691456,
+    "commit_limit_gb": 60.913737728,
+    "commit_avail_gb": 11.064610816,
+    "ac": true,
+    "gpu_pids": [
+     13448
+    ],
+    "gpu_mem_used_mib": 4696,
+    "python_processes": 6
+   },
+   "foreign_readers": []
+  },
+  {
+   "kind": "arm",
+   "mode": "l2l",
+   "arm": "A",
+   "k": 3,
+   "round": 1,
+   "variant": null,
+   "skipped": null,
+   "store": {
+    "chunk_bytes": 8388608,
+    "resident_chunks": 240,
+    "spilled_chunks": 0,
+    "spill_layers": 0,
+    "pinned": true,
+    "direct": null,
+    "bytes_written": 0,
+    "bytes_read": 0,
+    "put_wait_s": 0.0,
+    "get_wait_s": 0.0,
+    "spill_left_behind": null
+   },
+   "label": "l2l_A_k3_r1",
+   "tokens_per_step": 1536,
+   "steps": 3,
+   "warmup": 1,
+   "nocopy": false,
+   "nodequant": false,
+   "step_s_mean": 22.55896676669363,
+   "step_s_min": 22.51071950001642,
+   "step_s_max": 22.594357699970715,
+   "tok_per_s": 68.08822477932685,
+   "layer_loads_per_step": 157.0,
+   "large_loads_per_step": 2.0,
+   "bytes_moved_per_step": 70378258732.0,
+   "implied_h2d_gb_per_s": 3.1197465495586187,
+   "peak_alloc_gb": 4.036066816,
+   "peak_reserved_gb": 4.741660672,
+   "sm_clock_mhz_start": 180,
+   "sm_clock_mhz_end": 2407,
+   "records": [
+    {
+     "step_s": 22.571823100093752,
+     "started_unix": 1791376960.0033238,
+     "loss": 11.933749437332153,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "spill_written": 0,
+     "spill_read": 0,
+     "put_wait_s": 0.0,
+     "get_wait_s": 0.0
+    },
+    {
+     "step_s": 22.594357699970715,
+     "started_unix": 1791376982.5755394,
+     "loss": 11.875595808029175,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "spill_written": 0,
+     "spill_read": 0,
+     "put_wait_s": 0.0,
+     "get_wait_s": 0.0
+    },
+    {
+     "step_s": 22.51071950001642,
+     "started_unix": 1791377005.1695635,
+     "loss": 11.746559619903564,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "spill_written": 0,
+     "spill_read": 0,
+     "put_wait_s": 0.0,
+     "get_wait_s": 0.0
+    }
+   ],
+   "suspend": {
+    "samples": 47,
+    "max_gap_s": 2.015963554382324,
+    "battery_samples": 0,
+    "unknown_power_samples": 0,
+    "void": false
+   },
+   "box_before": {
+    "unix": 1791376935.7650373,
+    "total_phys_gb": 34.070192128,
+    "avail_phys_gb": 4.136722432,
+    "commit_limit_gb": 60.913737728,
+    "commit_avail_gb": 11.048656896,
+    "ac": true,
+    "gpu_pids": [
+     13448
+    ],
+    "gpu_mem_used_mib": 4696,
+    "python_processes": 6
+   },
+   "box_after": {
+    "unix": 1791377028.4303997,
+    "total_phys_gb": 34.070192128,
+    "avail_phys_gb": 4.190691328,
+    "commit_limit_gb": 60.913737728,
+    "commit_avail_gb": 10.844090368,
+    "ac": true,
+    "gpu_pids": [
+     13448
+    ],
+    "gpu_mem_used_mib": 4696,
+    "python_processes": 7
+   },
+   "foreign_readers": []
+  },
+  {
+   "kind": "arm",
+   "mode": "l2l",
+   "arm": "B",
+   "k": 2,
+   "round": 1,
+   "variant": null,
+   "skipped": null,
+   "store": {
+    "chunk_bytes": 8388608,
+    "resident_chunks": 160,
+    "spilled_chunks": 0,
+    "spill_layers": 0,
+    "pinned": true,
+    "direct": null,
+    "bytes_written": 0,
+    "bytes_read": 0,
+    "put_wait_s": 0.0,
+    "get_wait_s": 0.0,
+    "spill_left_behind": null
+   },
+   "label": "l2l_B_k2_r1",
+   "tokens_per_step": 1024,
+   "steps": 3,
+   "warmup": 1,
+   "nocopy": true,
+   "nodequant": false,
+   "step_s_mean": 13.930444799984494,
+   "step_s_min": 13.908478199969977,
+   "step_s_max": 13.948701199959032,
+   "tok_per_s": 73.50806199678131,
+   "layer_loads_per_step": 157.0,
+   "large_loads_per_step": 2.0,
+   "bytes_moved_per_step": 70378258732.0,
+   "implied_h2d_gb_per_s": 5.052118560641964,
+   "peak_alloc_gb": 4.027677184,
+   "peak_reserved_gb": 4.741660672,
+   "sm_clock_mhz_start": 277,
+   "sm_clock_mhz_end": 2400,
+   "records": [
+    {
+     "step_s": 13.934155000024475,
+     "started_unix": 1791377043.609695,
+     "loss": 12.02073335647583,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "spill_written": 0,
+     "spill_read": 0,
+     "put_wait_s": 0.0,
+     "get_wait_s": 0.0
+    },
+    {
+     "step_s": 13.908478199969977,
+     "started_unix": 1791377057.5439842,
+     "loss": 11.964844703674316,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "spill_written": 0,
+     "spill_read": 0,
+     "put_wait_s": 0.0,
+     "get_wait_s": 0.0
+    },
+    {
+     "step_s": 13.948701199959032,
+     "started_unix": 1791377071.4512231,
+     "loss": 11.858201503753662,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "spill_written": 0,
+     "spill_read": 0,
+     "put_wait_s": 0.0,
+     "get_wait_s": 0.0
+    }
+   ],
+   "suspend": {
+    "samples": 30,
+    "max_gap_s": 2.0146265029907227,
+    "battery_samples": 0,
+    "unknown_power_samples": 0,
+    "void": false
+   },
+   "box_before": {
+    "unix": 1791377028.7273717,
+    "total_phys_gb": 34.070192128,
+    "avail_phys_gb": 4.187521024,
+    "commit_limit_gb": 60.913737728,
+    "commit_avail_gb": 10.842320896,
+    "ac": true,
+    "gpu_pids": [
+     13448
+    ],
+    "gpu_mem_used_mib": 4696,
+    "python_processes": 7
+   },
+   "box_after": {
+    "unix": 1791377086.2650552,
+    "total_phys_gb": 34.070192128,
+    "avail_phys_gb": 4.312879104,
+    "commit_limit_gb": 60.913737728,
+    "commit_avail_gb": 11.186876416,
+    "ac": true,
+    "gpu_pids": [
+     13448
+    ],
+    "gpu_mem_used_mib": 4696,
+    "python_processes": 6
+   },
+   "foreign_readers": []
+  },
+  {
+   "kind": "arm",
+   "mode": "l2l",
+   "arm": "A",
+   "k": 2,
+   "round": 1,
+   "variant": null,
+   "skipped": null,
+   "store": {
+    "chunk_bytes": 8388608,
+    "resident_chunks": 160,
+    "spilled_chunks": 0,
+    "spill_layers": 0,
+    "pinned": true,
+    "direct": null,
+    "bytes_written": 0,
+    "bytes_read": 0,
+    "put_wait_s": 0.0,
+    "get_wait_s": 0.0,
+    "spill_left_behind": null
+   },
+   "label": "l2l_A_k2_r1",
+   "tokens_per_step": 1024,
+   "steps": 3,
+   "warmup": 1,
+   "nocopy": false,
+   "nodequant": false,
+   "step_s_mean": 18.113556899984058,
+   "step_s_min": 17.963730599964038,
+   "step_s_max": 18.28025609999895,
+   "tok_per_s": 56.532242985412836,
+   "layer_loads_per_step": 157.0,
+   "large_loads_per_step": 2.0,
+   "bytes_moved_per_step": 70378258732.0,
+   "implied_h2d_gb_per_s": 3.885391429226247,
+   "peak_alloc_gb": 4.027677184,
+   "peak_reserved_gb": 4.741660672,
+   "sm_clock_mhz_start": 225,
+   "sm_clock_mhz_end": 2392,
+   "records": [
+    {
+     "step_s": 18.28025609999895,
+     "started_unix": 1791377105.8414624,
+     "loss": 11.953634262084961,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "spill_written": 0,
+     "spill_read": 0,
+     "put_wait_s": 0.0,
+     "get_wait_s": 0.0
+    },
+    {
+     "step_s": 18.09668399998918,
+     "started_unix": 1791377124.1222987,
+     "loss": 11.864302158355713,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "spill_written": 0,
+     "spill_read": 0,
+     "put_wait_s": 0.0,
+     "get_wait_s": 0.0
+    },
+    {
+     "step_s": 17.963730599964038,
+     "started_unix": 1791377142.2186306,
+     "loss": 11.724989891052246,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "spill_written": 0,
+     "spill_read": 0,
+     "put_wait_s": 0.0,
+     "get_wait_s": 0.0
+    }
+   ],
+   "suspend": {
+    "samples": 38,
+    "max_gap_s": 2.0149099826812744,
+    "battery_samples": 0,
+    "unknown_power_samples": 0,
+    "void": false
+   },
+   "box_before": {
+    "unix": 1791377086.5627034,
+    "total_phys_gb": 34.070192128,
+    "avail_phys_gb": 4.324089856,
+    "commit_limit_gb": 60.913737728,
+    "commit_avail_gb": 11.254501376,
+    "ac": true,
+    "gpu_pids": [
+     13448
+    ],
+    "gpu_mem_used_mib": 4696,
+    "python_processes": 6
+   },
+   "box_after": {
+    "unix": 1791377160.7587328,
+    "total_phys_gb": 34.070192128,
+    "avail_phys_gb": 4.225097728,
+    "commit_limit_gb": 60.913737728,
+    "commit_avail_gb": 11.107848192,
+    "ac": true,
+    "gpu_pids": [
+     13448
+    ],
+    "gpu_mem_used_mib": 4696,
+    "python_processes": 5
+   },
+   "foreign_readers": []
+  },
+  {
+   "kind": "arm",
+   "mode": "l2l",
+   "arm": "B",
+   "k": 1,
+   "round": 1,
+   "variant": null,
+   "skipped": null,
+   "store": {
+    "chunk_bytes": 8388608,
+    "resident_chunks": 80,
+    "spilled_chunks": 0,
+    "spill_layers": 0,
+    "pinned": true,
+    "direct": null,
+    "bytes_written": 0,
+    "bytes_read": 0,
+    "put_wait_s": 0.0,
+    "get_wait_s": 0.0,
+    "spill_left_behind": null
+   },
+   "label": "l2l_B_k1_r1",
+   "tokens_per_step": 512,
+   "steps": 3,
+   "warmup": 1,
+   "nocopy": true,
+   "nodequant": false,
+   "step_s_mean": 7.0015031999985995,
+   "step_s_min": 6.978830399923027,
+   "step_s_max": 7.031577000045218,
+   "tok_per_s": 73.12715360897106,
+   "layer_loads_per_step": 157.0,
+   "large_loads_per_step": 2.0,
+   "bytes_moved_per_step": 70378258732.0,
+   "implied_h2d_gb_per_s": 10.051878392630611,
+   "peak_alloc_gb": 4.017649152,
+   "peak_reserved_gb": 4.741660672,
+   "sm_clock_mhz_start": 270,
+   "sm_clock_mhz_end": 2422,
+   "records": [
+    {
+     "step_s": 6.994102200027555,
+     "started_unix": 1791377169.1853075,
+     "loss": 12.059452056884766,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "spill_written": 0,
+     "spill_read": 0,
+     "put_wait_s": 0.0,
+     "get_wait_s": 0.0
+    },
+    {
+     "step_s": 6.978830399923027,
+     "started_unix": 1791377176.179685,
+     "loss": 11.980813980102539,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "spill_written": 0,
+     "spill_read": 0,
+     "put_wait_s": 0.0,
+     "get_wait_s": 0.0
+    },
+    {
+     "step_s": 7.031577000045218,
+     "started_unix": 1791377183.157967,
+     "loss": 11.823354721069336,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "spill_written": 0,
+     "spill_read": 0,
+     "put_wait_s": 0.0,
+     "get_wait_s": 0.0
+    }
+   ],
+   "suspend": {
+    "samples": 16,
+    "max_gap_s": 2.0155274868011475,
+    "battery_samples": 0,
+    "unknown_power_samples": 0,
+    "void": false
+   },
+   "box_before": {
+    "unix": 1791377161.2065005,
+    "total_phys_gb": 34.070192128,
+    "avail_phys_gb": 4.247621632,
+    "commit_limit_gb": 60.913737728,
+    "commit_avail_gb": 11.157970944,
+    "ac": true,
+    "gpu_pids": [
+     13448
+    ],
+    "gpu_mem_used_mib": 4696,
+    "python_processes": 5
+   },
+   "box_after": {
+    "unix": 1791377190.8455076,
+    "total_phys_gb": 34.070192128,
+    "avail_phys_gb": 4.121223168,
+    "commit_limit_gb": 60.913737728,
+    "commit_avail_gb": 10.812096512,
+    "ac": true,
+    "gpu_pids": [
+     13448
+    ],
+    "gpu_mem_used_mib": 4696,
+    "python_processes": 6
+   },
+   "foreign_readers": []
+  },
+  {
+   "kind": "arm",
+   "mode": "l2l",
+   "arm": "A",
+   "k": 1,
+   "round": 1,
+   "variant": null,
+   "skipped": null,
+   "store": {
+    "chunk_bytes": 8388608,
+    "resident_chunks": 80,
+    "spilled_chunks": 0,
+    "spill_layers": 0,
+    "pinned": true,
+    "direct": null,
+    "bytes_written": 0,
+    "bytes_read": 0,
+    "put_wait_s": 0.0,
+    "get_wait_s": 0.0,
+    "spill_left_behind": null
+   },
+   "label": "l2l_A_k1_r1",
+   "tokens_per_step": 512,
+   "steps": 3,
+   "warmup": 1,
+   "nocopy": false,
+   "nodequant": false,
+   "step_s_mean": 19.76519680003791,
+   "step_s_min": 17.149525000015274,
+   "step_s_max": 24.9894833000144,
+   "tok_per_s": 25.904118495749962,
+   "layer_loads_per_step": 157.0,
+   "large_loads_per_step": 2.0,
+   "bytes_moved_per_step": 70378258732.0,
+   "implied_h2d_gb_per_s": 3.560716315856011,
+   "peak_alloc_gb": 4.017649152,
+   "peak_reserved_gb": 4.741660672,
+   "sm_clock_mhz_start": 330,
+   "sm_clock_mhz_end": 1327,
+   "records": [
+    {
+     "step_s": 17.15658210008405,
+     "started_unix": 1791377209.306366,
+     "loss": 11.941356658935547,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "spill_written": 0,
+     "spill_read": 0,
+     "put_wait_s": 0.0,
+     "get_wait_s": 0.0
+    },
+    {
+     "step_s": 17.149525000015274,
+     "started_unix": 1791377226.4634209,
+     "loss": 11.830880165100098,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "spill_written": 0,
+     "spill_read": 0,
+     "put_wait_s": 0.0,
+     "get_wait_s": 0.0
+    },
+    {
+     "step_s": 24.9894833000144,
+     "started_unix": 1791377243.6132355,
+     "loss": 11.594077110290527,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "spill_written": 0,
+     "spill_read": 0,
+     "put_wait_s": 0.0,
+     "get_wait_s": 0.0
+    }
+   ],
+   "suspend": {
+    "samples": 40,
+    "max_gap_s": 2.0171825885772705,
+    "battery_samples": 0,
+    "unknown_power_samples": 0,
+    "void": false
+   },
+   "box_before": {
+    "unix": 1791377191.1167948,
+    "total_phys_gb": 34.070192128,
+    "avail_phys_gb": 4.118061056,
+    "commit_limit_gb": 60.913737728,
+    "commit_avail_gb": 10.80651776,
+    "ac": true,
+    "gpu_pids": [
+     13448
+    ],
+    "gpu_mem_used_mib": 4696,
+    "python_processes": 6
+   },
+   "box_after": {
+    "unix": 1791377269.1551588,
+    "total_phys_gb": 34.070192128,
+    "avail_phys_gb": 4.238368768,
+    "commit_limit_gb": 60.913737728,
+    "commit_avail_gb": 11.266490368,
+    "ac": true,
+    "gpu_pids": [
+     13448
+    ],
+    "gpu_mem_used_mib": 4696,
+    "python_processes": 4
+   },
+   "foreign_readers": []
+  },
+  {
+   "kind": "arm",
+   "mode": "l2l",
+   "arm": "D",
+   "k": 4,
+   "round": 1,
+   "variant": null,
+   "skipped": null,
+   "store": {
+    "chunk_bytes": 8388608,
+    "resident_chunks": 320,
+    "spilled_chunks": 0,
+    "spill_layers": 0,
+    "pinned": true,
+    "direct": null,
+    "bytes_written": 0,
+    "bytes_read": 0,
+    "put_wait_s": 0.0,
+    "get_wait_s": 0.0,
+    "spill_left_behind": null
+   },
+   "label": "l2l_D_k4_r1",
+   "tokens_per_step": 2048,
+   "steps": 3,
+   "warmup": 1,
+   "nocopy": true,
+   "nodequant": true,
+   "step_s_mean": 21.84589106667166,
+   "step_s_min": 21.78457629994955,
+   "step_s_max": 21.89994899998419,
+   "tok_per_s": 93.74760652928698,
+   "layer_loads_per_step": 157.0,
+   "large_loads_per_step": 2.0,
+   "bytes_moved_per_step": 70378258732.0,
+   "implied_h2d_gb_per_s": 3.2215787635858844,
+   "peak_alloc_gb": 3.442573824,
+   "peak_reserved_gb": 4.741660672,
+   "sm_clock_mhz_start": 285,
+   "sm_clock_mhz_end": 472,
+   "records": [
+    {
+     "step_s": 21.85314790008124,
+     "started_unix": 1791377292.3306618,
+     "loss": 161.7244644165039,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "spill_written": 0,
+     "spill_read": 0,
+     "put_wait_s": 0.0,
+     "get_wait_s": 0.0
+    },
+    {
+     "step_s": 21.78457629994955,
+     "started_unix": 1791377314.183909,
+     "loss": 161.7244644165039,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "spill_written": 0,
+     "spill_read": 0,
+     "put_wait_s": 0.0,
+     "get_wait_s": 0.0
+    },
+    {
+     "step_s": 21.89994899998419,
+     "started_unix": 1791377335.9694662,
+     "loss": 161.7244644165039,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "spill_written": 0,
+     "spill_read": 0,
+     "put_wait_s": 0.0,
+     "get_wait_s": 0.0
+    }
+   ],
+   "suspend": {
+    "samples": 45,
+    "max_gap_s": 2.0156004428863525,
+    "battery_samples": 0,
+    "unknown_power_samples": 0,
+    "void": false
+   },
+   "box_before": {
+    "unix": 1791377269.729771,
+    "total_phys_gb": 34.070192128,
+    "avail_phys_gb": 4.266520576,
+    "commit_limit_gb": 60.913737728,
+    "commit_avail_gb": 11.298803712,
+    "ac": true,
+    "gpu_pids": [
+     13448
+    ],
+    "gpu_mem_used_mib": 4696,
+    "python_processes": 4
+   },
+   "box_after": {
+    "unix": 1791377358.7161129,
+    "total_phys_gb": 34.070192128,
+    "avail_phys_gb": 4.242935808,
+    "commit_limit_gb": 60.913737728,
+    "commit_avail_gb": 11.269373952,
+    "ac": true,
+    "gpu_pids": [
+     13448
+    ],
+    "gpu_mem_used_mib": 4696,
+    "python_processes": 5
+   },
+   "foreign_readers": []
+  },
+  {
+   "kind": "arm",
+   "mode": "l2l",
+   "arm": "C",
+   "k": 4,
+   "round": 1,
+   "variant": null,
+   "skipped": null,
+   "store": {
+    "chunk_bytes": 8388608,
+    "resident_chunks": 320,
+    "spilled_chunks": 0,
+    "spill_layers": 0,
+    "pinned": true,
+    "direct": null,
+    "bytes_written": 0,
+    "bytes_read": 0,
+    "put_wait_s": 0.0,
+    "get_wait_s": 0.0,
+    "spill_left_behind": null
+   },
+   "label": "l2l_C_k4_r1",
+   "tokens_per_step": 2048,
+   "steps": 3,
+   "warmup": 1,
+   "nocopy": false,
+   "nodequant": true,
+   "step_s_mean": 23.847738066649374,
+   "step_s_min": 23.783034699968994,
+   "step_s_max": 23.923059899942018,
+   "tok_per_s": 85.87816564725233,
+   "layer_loads_per_step": 157.0,
+   "large_loads_per_step": 2.0,
+   "bytes_moved_per_step": 70378258732.0,
+   "implied_h2d_gb_per_s": 2.9511502740975972,
+   "peak_alloc_gb": 3.442573824,
+   "peak_reserved_gb": 3.525312512,
+   "sm_clock_mhz_start": 277,
+   "sm_clock_mhz_end": 2662,
+   "records": [
+    {
+     "step_s": 23.837119600037113,
+     "started_unix": 1791377383.659948,
+     "loss": 12.051763772964478,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "spill_written": 0,
+     "spill_read": 0,
+     "put_wait_s": 0.0,
+     "get_wait_s": 0.0
+    },
+    {
+     "step_s": 23.923059899942018,
+     "started_unix": 1791377407.4969223,
+     "loss": 12.051763772964478,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "spill_written": 0,
+     "spill_read": 0,
+     "put_wait_s": 0.0,
+     "get_wait_s": 0.0
+    },
+    {
+     "step_s": 23.783034699968994,
+     "started_unix": 1791377431.4197004,
+     "loss": 12.051763772964478,
+     "layer_loads": 157,
+     "large_loads": 2,
+     "spill_written": 0,
+     "spill_read": 0,
+     "put_wait_s": 0.0,
+     "get_wait_s": 0.0
+    }
+   ],
+   "suspend": {
+    "samples": 49,
+    "max_gap_s": 2.0151660442352295,
+    "battery_samples": 0,
+    "unknown_power_samples": 0,
+    "void": false
+   },
+   "box_before": {
+    "unix": 1791377359.0416865,
+    "total_phys_gb": 34.070192128,
+    "avail_phys_gb": 4.239814656,
+    "commit_limit_gb": 60.913737728,
+    "commit_avail_gb": 13.616226304,
+    "ac": true,
+    "gpu_pids": [
+     13448
+    ],
+    "gpu_mem_used_mib": 2262,
+    "python_processes": 5
+   },
+   "box_after": {
+    "unix": 1791377455.7592804,
+    "total_phys_gb": 34.070192128,
+    "avail_phys_gb": 4.272074752,
+    "commit_limit_gb": 60.913737728,
+    "commit_avail_gb": 12.514287616,
+    "ac": true,
+    "gpu_pids": [
+     13448
+    ],
+    "gpu_mem_used_mib": 3536,
+    "python_processes": 5
+   },
+   "foreign_readers": []
+  }
+ ]
+}
