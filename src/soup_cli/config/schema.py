@@ -4795,6 +4795,15 @@ SFT_KERNEL_AWARE_TASKS: frozenset[str] = frozenset({"sft", "tts"})
 AMP_APPLYING_TASKS: frozenset[str] = frozenset({"sft", "tts"})
 
 
+# #806: tasks whose trainers build rows with ``data.sft_format.build_format_row``
+# (sft's text path, inherited by tts, and distill), the only reader of
+# ``training.reasoning_effort``.
+REASONING_EFFORT_AWARE_TASKS: frozenset[str] = frozenset({"sft", "tts", "distill"})
+# #806: ``training.train_on_eot`` is also read on pretrain, where it keys the
+# pre-tokenized cache (#1054).
+TRAIN_ON_EOT_AWARE_TASKS: frozenset[str] = REASONING_EFFORT_AWARE_TASKS | {"pretrain"}
+
+
 # #795: trainers that load the base unquantised and never read
 # ``training.quantization``.
 _QUANTIZATION_UNHONOURED_TASKS = frozenset({
@@ -5958,34 +5967,33 @@ class SoupConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_reasoning_effort_task_gate(self) -> "SoupConfig":
-        """v0.52.0 Part G (code-review fix) — surface the silent-no-op
-        footgun when ``reasoning_effort`` / ``train_on_eot`` is set on a
-        task they cannot influence.
+        """Refuse ``reasoning_effort`` / ``train_on_eot`` on a task that never reads them.
 
-        Mirrors v0.50.0 ``_validate_grpo_stability_task_gate`` policy.
-        ``reasoning_effort`` only makes sense on SFT-family training
-        (sft / pretrain / distill / classifier-family) because the SFT
-        formatter injects it as a system-prefix token. The other
-        tasks (DPO / GRPO / KTO / ORPO / SimPO / IPO / BCO / preference /
-        PPO / reward_model / embedding / prm / tts) do not consume it.
-
-        ``train_on_eot`` is an SFT loss-mask flag; setting it on
-        DPO/GRPO/etc. is a silent no-op.
+        Both are applied by ``data.sft_format.build_format_row``, whose trainer
+        callers are sft (its text path, inherited by tts's
+        ``TTSTrainerWrapper.setup``) and distill (#806). pretrain, classifier,
+        reranker and cross_encoder never call it, so the flags loaded there and
+        changed nothing. ``train_on_eot`` has one more reader: pretrain passes
+        it to ``_maybe_load_pretokenized``, where ``preprocess_mask_mode`` keys
+        the ``soup data preprocess`` cache on it (#1054), so pretrain keeps it.
         """
         tcfg = self.training
-        sft_family_tasks = {
-            "sft", "pretrain", "distill",
-            "classifier", "reranker", "cross_encoder",
-        }
-        if tcfg.reasoning_effort is not None and self.task not in sft_family_tasks:
+        if (
+            tcfg.reasoning_effort is not None
+            and self.task not in REASONING_EFFORT_AWARE_TASKS
+        ):
             raise ValueError(
                 f"training.reasoning_effort={tcfg.reasoning_effort!r} requires "
-                f"task in {sorted(sft_family_tasks)}; got task={self.task!r}"
+                f"task in {sorted(REASONING_EFFORT_AWARE_TASKS)}; got task={self.task!r}. "
+                "Only those tasks build their rows with the SFT formatter that "
+                "injects it, so elsewhere it would be ignored."
             )
-        if tcfg.train_on_eot and self.task not in sft_family_tasks:
+        if tcfg.train_on_eot and self.task not in TRAIN_ON_EOT_AWARE_TASKS:
             raise ValueError(
                 f"training.train_on_eot=true requires task in "
-                f"{sorted(sft_family_tasks)}; got task={self.task!r}"
+                f"{sorted(TRAIN_ON_EOT_AWARE_TASKS)}; got task={self.task!r}. "
+                "Only those tasks build or load an assistant-only loss mask, "
+                "so elsewhere it would be ignored."
             )
         return self
 
