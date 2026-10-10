@@ -1145,11 +1145,11 @@ class AsyncDiskSource:
 
         The edge rule is the other half. A walk that has reached the end of its
         group's span can only continue the other way, and the index it arrives
-        on is often a REPEAT (``prime()`` re-reads layer 0; the backward pass
-        re-reads the last forward layer), which carries no direction of its own.
-        Without this the first layer after every turnaround and every step
-        boundary is demanded before it is staged. A group of one has no walk, so
-        it is left alone.
+        on is often a REPEAT (the backward pass re-reads the last forward layer;
+        before #1354 prime() also re-read layer 0 at every step boundary),
+        which carries no direction of its own. Without this the first layer
+        after every turnaround and every step boundary is demanded before it is
+        staged. A group of one has no walk, so it is left alone.
         """
         group = self._group_of[idx]
         last = self._last_get.get(group)
