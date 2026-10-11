@@ -487,8 +487,10 @@ class TestRunner:
         assert isinstance(report, FailureReport)
         assert report.overall == "OK"
 
-    def test_write_report_atomic(self, tmp_path: Path) -> None:
-        os.chdir(tmp_path)
+    def test_write_report_atomic(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
         report = diagnose_sdk(run_id="r1", base="b", adapter="a")
         path = tmp_path / "diagnose.json"
         result = write_report(report, str(path))
@@ -498,16 +500,20 @@ class TestRunner:
         assert payload["run_id"] == "r1"
         assert set(payload["scores"]) == set(FAILURE_MODES)
 
-    def test_write_report_outside_cwd_rejected(self, tmp_path: Path) -> None:
-        os.chdir(tmp_path)
+    def test_write_report_outside_cwd_rejected(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
         report = diagnose_sdk(run_id="r1", base="b", adapter="a")
         outside = os.path.realpath(os.path.join(tmp_path, "..", "evil.json"))
         with pytest.raises(ValueError, match="cwd"):
             write_report(report, outside)
 
     @pytest.mark.requires_symlink
-    def test_write_report_symlink_rejected(self, tmp_path: Path) -> None:
-        os.chdir(tmp_path)
+    def test_write_report_symlink_rejected(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
         target = tmp_path / "real.json"
         target.write_text("{}", encoding="utf-8")
         link = tmp_path / "link.json"
@@ -574,15 +580,19 @@ class TestCli:
         assert "--output" in _strip_ansi(result.output)
         assert "--evidence" in _strip_ansi(result.output)
 
-    def test_diagnose_neutral_run(self, tmp_path: Path) -> None:
-        os.chdir(tmp_path)
+    def test_diagnose_neutral_run(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
         result = runner.invoke(app, ["diagnose", "myrun"])
         assert result.exit_code == 0, (result.output, repr(result.exception))
         for mode in FAILURE_MODES:
             assert mode in _strip_ansi(result.output)
 
-    def test_diagnose_writes_output(self, tmp_path: Path) -> None:
-        os.chdir(tmp_path)
+    def test_diagnose_writes_output(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
         out = tmp_path / "diag.json"
         result = runner.invoke(
             app, ["diagnose", "myrun", "--output", str(out)]
@@ -592,8 +602,10 @@ class TestCli:
             payload = json.load(handle)
         assert payload["overall"] == "OK"
 
-    def test_diagnose_badge_svg(self, tmp_path: Path) -> None:
-        os.chdir(tmp_path)
+    def test_diagnose_badge_svg(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
         badge = tmp_path / "diag.svg"
         result = runner.invoke(
             app, ["diagnose", "myrun", "--badge", str(badge)]
@@ -602,8 +614,10 @@ class TestCli:
         svg = badge.read_text(encoding="utf-8")
         assert svg.startswith("<svg")
 
-    def test_diagnose_evidence_with_major_exit_2(self, tmp_path: Path) -> None:
-        os.chdir(tmp_path)
+    def test_diagnose_evidence_with_major_exit_2(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
         evidence = tmp_path / "ev.json"
         evidence.write_text(
             json.dumps(
@@ -626,8 +640,10 @@ class TestCli:
         assert result.exit_code == 2, (result.output, repr(result.exception))
         assert "MAJOR" in _strip_ansi(result.output)
 
-    def test_diagnose_evidence_outside_cwd(self, tmp_path: Path) -> None:
-        os.chdir(tmp_path)
+    def test_diagnose_evidence_outside_cwd(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
         outside = os.path.realpath(os.path.join(tmp_path, "..", "evil.json"))
         result = runner.invoke(
             app, ["diagnose", "myrun", "--evidence", outside]
@@ -635,22 +651,26 @@ class TestCli:
         assert result.exit_code == 1
 
     def test_diagnose_attach_to_registry_without_output_warns(
-        self, tmp_path: Path
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        os.chdir(tmp_path)
+        monkeypatch.chdir(tmp_path)
         result = runner.invoke(
             app, ["diagnose", "myrun", "--attach-to-registry", "abc"]
         )
         assert result.exit_code == 0
         assert "needs --output" in _strip_ansi(result.output)
 
-    def test_diagnose_run_id_oversize(self, tmp_path: Path) -> None:
-        os.chdir(tmp_path)
+    def test_diagnose_run_id_oversize(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
         result = runner.invoke(app, ["diagnose", "x" * 600])
         assert result.exit_code != 0
 
-    def test_diagnose_run_id_null_byte(self, tmp_path: Path) -> None:
-        os.chdir(tmp_path)
+    def test_diagnose_run_id_null_byte(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
         result = runner.invoke(app, ["diagnose", "x\x00y"])
         assert result.exit_code != 0
 
@@ -664,8 +684,10 @@ class TestTrainDiagnoseGate:
         assert result.exit_code == 0
         assert "--diagnose-gate" in _strip_ansi(result.output)
 
-    def test_run_diagnose_gate_helper_major_exits(self, tmp_path: Path) -> None:
-        os.chdir(tmp_path)
+    def test_run_diagnose_gate_helper_major_exits(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
         evidence = tmp_path / "ev.json"
         evidence.write_text(
             json.dumps(
@@ -689,8 +711,10 @@ class TestTrainDiagnoseGate:
             _run_diagnose_gate(str(evidence), "run1", "base", "adapter")
         assert excinfo.value.exit_code == 2
 
-    def test_run_diagnose_gate_helper_ok_passes(self, tmp_path: Path) -> None:
-        os.chdir(tmp_path)
+    def test_run_diagnose_gate_helper_ok_passes(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
         evidence = tmp_path / "ev.json"
         evidence.write_text(
             json.dumps(
@@ -709,11 +733,13 @@ class TestTrainDiagnoseGate:
         from soup_cli.commands.train import _run_diagnose_gate
         _run_diagnose_gate(str(evidence), "run1", "base", "adapter")
 
-    def test_run_diagnose_gate_helper_not_run_exits_3(self, tmp_path: Path) -> None:
+    def test_run_diagnose_gate_helper_not_run_exits_3(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         import typer
 
         # #1435: an unmeasured mode must not pass the gate.
-        os.chdir(tmp_path)
+        monkeypatch.chdir(tmp_path)
         evidence = tmp_path / "ev.json"
         evidence.write_text(
             json.dumps(
@@ -735,10 +761,12 @@ class TestTrainDiagnoseGate:
             _run_diagnose_gate(str(evidence), "run1", "base", "adapter")
         assert excinfo.value.exit_code == 3
 
-    def test_run_diagnose_gate_major_beats_not_run(self, tmp_path: Path) -> None:
+    def test_run_diagnose_gate_major_beats_not_run(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         import typer
 
-        os.chdir(tmp_path)
+        monkeypatch.chdir(tmp_path)
         evidence = tmp_path / "ev.json"
         evidence.write_text(
             json.dumps(
@@ -759,11 +787,11 @@ class TestTrainDiagnoseGate:
 
     @pytest.mark.parametrize("verdict", ["NOT_RUN", "MAJOR"])
     def test_run_diagnose_gate_escapes_evidence_markup(
-        self, tmp_path: Path, verdict: str
+        self, tmp_path: Path, verdict: str, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         import typer
 
-        os.chdir(tmp_path)
+        monkeypatch.chdir(tmp_path)
         evidence = tmp_path / "ev.json"
         score = 0.0 if verdict == "NOT_RUN" else 0.1
         evidence.write_text(
@@ -781,9 +809,9 @@ class TestTrainDiagnoseGate:
 
     @pytest.mark.parametrize("bad_score", [None, True, "0.5"])
     def test_run_diagnose_gate_rejects_non_numeric_score(
-        self, tmp_path: Path, bad_score: object
+        self, tmp_path: Path, bad_score: object, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        os.chdir(tmp_path)
+        monkeypatch.chdir(tmp_path)
         evidence = tmp_path / "ev.json"
         evidence.write_text(
             json.dumps({"scores": {"format": {"score": bad_score, "verdict": "OK"}}}),
@@ -816,9 +844,9 @@ class TestTrainDiagnoseGate:
         assert _should_run_diagnose_gate_on_rank() is True
 
     def test_run_diagnose_gate_rejects_non_dict_payload(
-        self, tmp_path: Path
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        os.chdir(tmp_path)
+        monkeypatch.chdir(tmp_path)
         evidence = tmp_path / "ev.json"
         evidence.write_text("[]", encoding="utf-8")
         from soup_cli.commands.train import _run_diagnose_gate
@@ -923,8 +951,10 @@ class TestReviewFixCoverage:
         assert "os.replace" in source
 
     @pytest.mark.requires_symlink
-    def test_badge_symlink_rejected(self, tmp_path: Path) -> None:
-        os.chdir(tmp_path)
+    def test_badge_symlink_rejected(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
         target = tmp_path / "real.svg"
         target.write_text("<svg/>", encoding="utf-8")
         link = tmp_path / "link.svg"
@@ -939,8 +969,10 @@ class TestReviewFixCoverage:
     # `soup ship`'s loader) so the size check now reads via os.fstat on the
     # OPEN fd rather than os.path.getsize on the path (closes the TOCTOU
     # window a symlink swap could exploit between check and open).
-    def test_evidence_size_cap(self, tmp_path: Path) -> None:
-        os.chdir(tmp_path)
+    def test_evidence_size_cap(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
         # Use a tiny file but monkeypatch fstat to report an oversize length.
         ev = tmp_path / "ev.json"
         ev.write_text("{}", encoding="utf-8")
@@ -953,8 +985,10 @@ class TestReviewFixCoverage:
             with pytest.raises(Exception, match="exceeds"):
                 _load_evidence(str(ev))
 
-    def test_train_diagnose_gate_size_cap(self, tmp_path: Path) -> None:
-        os.chdir(tmp_path)
+    def test_train_diagnose_gate_size_cap(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
         ev = tmp_path / "ev.json"
         ev.write_text("{}", encoding="utf-8")
         from unittest.mock import patch
@@ -990,8 +1024,10 @@ class TestReviewFixCoverage:
         assert isinstance(looks_like_refusal(huge), bool)
 
     # security-review MEDIUM — extras null-byte rejected.
-    def test_evidence_extras_null_byte_rejected(self, tmp_path: Path) -> None:
-        os.chdir(tmp_path)
+    def test_evidence_extras_null_byte_rejected(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
         ev = tmp_path / "ev.json"
         ev.write_text(
             json.dumps({"extras": {"key": "value\x00bad"}}),
@@ -1062,8 +1098,10 @@ class TestReviewFixCoverage:
         assert extract_row_text("not_dict") == ""
 
     # tdd-review HIGH — write_report TypeError on non-FailureReport.
-    def test_write_report_rejects_non_report(self, tmp_path: Path) -> None:
-        os.chdir(tmp_path)
+    def test_write_report_rejects_non_report(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
         with pytest.raises(TypeError, match="FailureReport"):
             write_report({"not": "a report"}, str(tmp_path / "x.json"))  # type: ignore[arg-type]
 
@@ -1077,8 +1115,10 @@ class TestReviewFixCoverage:
             split_prefix("hello", fraction=True)
 
     # tdd-review HIGH — _run_diagnose_gate outside-cwd evidence rejected.
-    def test_run_diagnose_gate_outside_cwd(self, tmp_path: Path) -> None:
-        os.chdir(tmp_path)
+    def test_run_diagnose_gate_outside_cwd(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
         outside = os.path.realpath(os.path.join(tmp_path, "..", "evil.json"))
         from soup_cli.commands.train import _run_diagnose_gate
 
@@ -1086,8 +1126,10 @@ class TestReviewFixCoverage:
             _run_diagnose_gate(outside, "r1", "base", "adapter")
 
     # tdd-review MEDIUM — CLI --output outside-cwd rejected.
-    def test_cli_output_outside_cwd(self, tmp_path: Path) -> None:
-        os.chdir(tmp_path)
+    def test_cli_output_outside_cwd(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
         outside = os.path.realpath(os.path.join(tmp_path, "..", "evil.json"))
         result = runner.invoke(
             app, ["diagnose", "myrun", "--output", outside]
@@ -1095,8 +1137,10 @@ class TestReviewFixCoverage:
         assert result.exit_code == 1
 
     # tdd-review MEDIUM — CLI --badge outside-cwd rejected.
-    def test_cli_badge_outside_cwd(self, tmp_path: Path) -> None:
-        os.chdir(tmp_path)
+    def test_cli_badge_outside_cwd(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
         outside = os.path.realpath(os.path.join(tmp_path, "..", "evil.svg"))
         result = runner.invoke(
             app, ["diagnose", "myrun", "--badge", outside]
@@ -1104,8 +1148,10 @@ class TestReviewFixCoverage:
         assert result.exit_code == 1
 
     # tdd-review MEDIUM — MINOR overall exits 0, not 2.
-    def test_minor_exits_zero(self, tmp_path: Path) -> None:
-        os.chdir(tmp_path)
+    def test_minor_exits_zero(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
         ev = tmp_path / "ev.json"
         ev.write_text(
             json.dumps(

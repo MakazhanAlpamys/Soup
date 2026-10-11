@@ -1,0 +1,876 @@
+{
+  "scope": "Source capture and published artifact identities. Numerical values, verdicts, control flags, digests and binary fingerprints are retained. Evidence extracts name their full sources and selected line ranges.",
+  "source_archives": [
+    {
+      "file": "review-originals-20261009T032909Z.zip",
+      "sha256": "dcf3b558dcacb14d66c240f5507e0afea42dba9d13e66a140f594e54a385700b",
+      "location": "outside repository",
+      "members": 58
+    },
+    {
+      "file": "research-capture-input.zip",
+      "sha256": "d0692965bfb7da0fc5a26fbfb9a9196fe2bca6bc97211526fde3e92b3f39228e",
+      "location": "outside repository"
+    },
+    {
+      "file": "moe-holdout-a6000.tgz",
+      "sha256": "dd5c491a2e996324bab0f45fe60c168e730acd7b711afdb8d39a6680b4625c7c",
+      "location": "outside repository"
+    },
+    {
+      "file": "run3-evidence.tgz",
+      "sha256": "2100922f0f85951392f8d8bb746673942d5fe35fd773a3b320207615652fa68e",
+      "bytes": 330921646,
+      "members": 37,
+      "location": "outside repository"
+    }
+  ],
+  "external_capture_location": "Full control, verification and lifecycle captures are retained outside the repository. Extract source hashes identify those complete captures, not the extracts.",
+  "files": [
+    {
+      "file": "benchmarks/results/probe-lora-hook-engines/.gitattributes",
+      "published_sha256": "37f54b6ae51afab8c14a2232a730fc91a9361ff8b37d07e58649185dca242439",
+      "source_file": "benchmarks/results/probe-lora-hook-engines/.gitattributes",
+      "source_archive": "review-originals-20261009T032909Z.zip",
+      "source_sha256": "37f54b6ae51afab8c14a2232a730fc91a9361ff8b37d07e58649185dca242439"
+    },
+    {
+      "file": "benchmarks/results/probe-lora-hook-engines/LICENSE-llama.cpp.txt",
+      "published_sha256": "bcd8ec749126d45cb06737d0690295d73df4b6e7e194205bcf91190368f27285",
+      "source_file": "benchmarks/results/probe-lora-hook-engines/LICENSE-llama.cpp.txt",
+      "source_archive": "review-originals-20261009T032909Z.zip",
+      "source_sha256": "bcd8ec749126d45cb06737d0690295d73df4b6e7e194205bcf91190368f27285"
+    },
+    {
+      "file": "benchmarks/results/probe-lora-hook-engines/baseline-cases-after.json",
+      "source_file": "failure-comparison-after.json",
+      "source_location": "external verification capture",
+      "source_sha256": "516b938805acc99b799b85812ca854944aa2c1519f057802d5436debda8b70cd",
+      "published_sha256": "ce3fd99e4628532ec1afd83432990dbbc83b6565a8492063502a0975b38fd8db"
+    },
+    {
+      "file": "benchmarks/results/probe-lora-hook-engines/baseline-comparison.json",
+      "source_file": "failure-comparison-originals.json",
+      "source_location": "external verification capture",
+      "source_sha256": "83f14e7802bee8511b4c729ff730b907ad8369336b2002fee76b9b36eb66c8c0",
+      "published_sha256": "af1d92f6d29ef6d0c1e5cf5d39e18e2a35f1dbfdc14bcb39684cacb08b120056"
+    },
+    {
+      "file": "benchmarks/results/probe-lora-hook-engines/harness-smoke.json",
+      "source_file": "harness-real-smoke.json",
+      "source_location": "external verification capture",
+      "source_sha256": "cc88ed91a3d20df25056c73eceac53488c43f34c66f3b04d2ee456c074d30de0",
+      "published_sha256": "04c9e72652ad22f791131f70d88a80e3c1606afbabc11fa495642ec0826205dd"
+    },
+    {
+      "file": "benchmarks/results/probe-lora-hook-engines/mla-lora-hook-draft.patch",
+      "published_sha256": "80851e0bcb5ac775e7918799333eb6e0210948132e9f8d18238caec0d5fe1c09",
+      "source_file": "benchmarks/results/probe-lora-hook-engines/mla-lora-hook-draft.patch",
+      "source_archive": "review-originals-20261009T032909Z.zip",
+      "source_sha256": "80851e0bcb5ac775e7918799333eb6e0210948132e9f8d18238caec0d5fe1c09"
+    },
+    {
+      "file": "benchmarks/results/probe-lora-hook-engines/part-a-controls-hook.json",
+      "published_sha256": "129bb3d6738c4c84808646d28a4997be9adcecbde95a6eb0e252892c3daa54c5",
+      "source_sha256": "fff419e18909a5ef1c5339e7b3f3de5a6f5c6b8b936714b83bbf8d207fd8fe28",
+      "source_file": "review-control-hook.json",
+      "source_location": "external control capture"
+    },
+    {
+      "file": "benchmarks/results/probe-lora-hook-engines/part-a-controls-hook.log",
+      "published_sha256": "40553041697bf6b865c3b1ee087ef7bd2548e61f430c88880d54c10674044993",
+      "source_sha256": "40553041697bf6b865c3b1ee087ef7bd2548e61f430c88880d54c10674044993",
+      "source_file": "review-control-hook.log",
+      "source_location": "external control capture"
+    },
+    {
+      "file": "benchmarks/results/probe-lora-hook-engines/part-a-controls-stock.json",
+      "published_sha256": "9a78aee2d1c643df911d44afdc1332283c1bd4e3899edec81b84698058b9a827",
+      "source_sha256": "4c12f0fa9091698ad1e810ca04a8d937f41731ff0abaed563531cbbc30224bbd",
+      "source_file": "review-control-stock.json",
+      "source_location": "external control capture"
+    },
+    {
+      "file": "benchmarks/results/probe-lora-hook-engines/part-a-controls-stock.log",
+      "published_sha256": "5ee8a58cfc6cb5cec0471bd09971ce9f041f5598850cad23bccce56229457b06",
+      "source_sha256": "5ee8a58cfc6cb5cec0471bd09971ce9f041f5598850cad23bccce56229457b06",
+      "source_file": "review-control-stock.log",
+      "source_location": "external control capture"
+    },
+    {
+      "file": "benchmarks/results/probe-lora-hook-engines/part-a-cpu-run1.evidence.log",
+      "kind": "evidence_extract",
+      "sources": [
+        {
+          "file": "benchmarks/results/probe-lora-hook-engines/part-a-cpu-run1.log",
+          "sha256": "d1e0ca280e1036aea55e50a07d127bde4dce5a1d718e0deff052135b65363bfe",
+          "line_ranges": [
+            [
+              1,
+              1
+            ],
+            [
+              13,
+              16
+            ],
+            [
+              22,
+              25
+            ]
+          ]
+        }
+      ],
+      "published_sha256": "6066c92c1724977e9820fb8fe171626bab031ef2c52efba974216f93b8ea7973"
+    },
+    {
+      "file": "benchmarks/results/probe-lora-hook-engines/part-a-cpu-run1.json",
+      "published_sha256": "3dd622fdf76170c29040446ead38cb7ece8ca4d0ea5be0c67b8744c9c6a524bd",
+      "source_sha256": "ba33dbe96dbfc4381e158afd1a0bcb46cfb8134ec825c194f9e70a0b3ea7ba5a",
+      "source_file": "benchmarks/results/probe-lora-hook-engines/part-a-cpu-run1.json",
+      "source_archive": "review-originals-20261009T032909Z.zip"
+    },
+    {
+      "file": "benchmarks/results/probe-lora-hook-engines/part-a-cpu-run2.json",
+      "published_sha256": "210e6c92a0b6b356da003340f905d133c37d21942dd50cf3c6aaed7d859a4eac",
+      "source_sha256": "b98a2fc19fb9c67d6e93018ef1da3cda13b31d0dd3c8562ee4248373a198a482",
+      "source_file": "benchmarks/results/probe-lora-hook-engines/part-a-cpu-run2.json",
+      "source_archive": "review-originals-20261009T032909Z.zip"
+    },
+    {
+      "file": "benchmarks/results/probe-lora-hook-engines/part-a-cpu-run2.log",
+      "published_sha256": "9c037ecde87b09e4d827c8f8632180063edbda2e562e9915a6901a63fdd18388",
+      "source_file": "benchmarks/results/probe-lora-hook-engines/part-a-cpu-run2.log",
+      "source_archive": "review-originals-20261009T032909Z.zip",
+      "source_sha256": "9c037ecde87b09e4d827c8f8632180063edbda2e562e9915a6901a63fdd18388"
+    },
+    {
+      "file": "benchmarks/results/probe-lora-hook-engines/part-a-cpu-run3.json",
+      "published_sha256": "50fe9a975274bbb978645eac855bb55fecee18019f6decf965116857185fafdb",
+      "source_sha256": "4ef31fa92ca28f7601230299dec7d16e59ccf7375cf5e8ce0d200377c8182c61",
+      "source_file": "benchmarks/results/probe-lora-hook-engines/part-a-cpu-run3.json",
+      "source_archive": "review-originals-20261009T032909Z.zip"
+    },
+    {
+      "file": "benchmarks/results/probe-lora-hook-engines/part-a-cpu-run3.log",
+      "published_sha256": "c46976c19d9a8e92abd7a0c03471ae92aa6106516b22eb8b37906b27d0d4bce2",
+      "source_file": "benchmarks/results/probe-lora-hook-engines/part-a-cpu-run3.log",
+      "source_archive": "review-originals-20261009T032909Z.zip",
+      "source_sha256": "c46976c19d9a8e92abd7a0c03471ae92aa6106516b22eb8b37906b27d0d4bce2"
+    },
+    {
+      "file": "benchmarks/results/probe-lora-hook-engines/part-a2-hook-local-fa-on.json",
+      "published_sha256": "28b6cfcd67f97e28c90fe6176aceefc0e07d82edefa037818d5d6e66f5674bfd",
+      "source_sha256": "c5a0fb4ace89dabc1b8ad94fe5bc2c20dbe174f0d30d0729c284b362468f3ddb",
+      "source_file": "benchmarks/results/probe-lora-hook-engines/part-a2-hook-local-fa-on.json",
+      "source_archive": "review-originals-20261009T032909Z.zip"
+    },
+    {
+      "file": "benchmarks/results/probe-lora-hook-engines/part-a2-hook-local-fa-on.log",
+      "published_sha256": "896dba699733f78c91c643a94e8287e31d21229b7a3e4f5b258317d0880abded",
+      "source_file": "benchmarks/results/probe-lora-hook-engines/part-a2-hook-local-fa-on.log",
+      "source_archive": "review-originals-20261009T032909Z.zip",
+      "source_sha256": "896dba699733f78c91c643a94e8287e31d21229b7a3e4f5b258317d0880abded"
+    },
+    {
+      "file": "benchmarks/results/probe-lora-hook-engines/part-a2-hook-local.json",
+      "published_sha256": "45a1b46c6ad8a9786afa1a3fb1716e28a117db84b77170a5ab929eea31bb271f",
+      "source_sha256": "c66622b37ec1015210ba5b1fc1a2814c437a5706a5241ef8c7e98e9e4aba355c",
+      "source_file": "benchmarks/results/probe-lora-hook-engines/part-a2-hook-local.json",
+      "source_archive": "review-originals-20261009T032909Z.zip"
+    },
+    {
+      "file": "benchmarks/results/probe-lora-hook-engines/part-a2-hook-local.log",
+      "published_sha256": "40553041697bf6b865c3b1ee087ef7bd2548e61f430c88880d54c10674044993",
+      "source_file": "benchmarks/results/probe-lora-hook-engines/part-a2-hook-local.log",
+      "source_archive": "review-originals-20261009T032909Z.zip",
+      "source_sha256": "40553041697bf6b865c3b1ee087ef7bd2548e61f430c88880d54c10674044993"
+    },
+    {
+      "file": "benchmarks/results/probe-lora-hook-engines/part-a2-stock-local.json",
+      "published_sha256": "b50f5c31f519d83625365192dd319d8995c8d2c0b5f926799ce31ed2e60351b1",
+      "source_sha256": "01c5be8f4527d714a88c475712fec09ccc83e3b0cd32bbfad6b858f28131df63",
+      "source_file": "benchmarks/results/probe-lora-hook-engines/part-a2-stock-local.json",
+      "source_archive": "review-originals-20261009T032909Z.zip"
+    },
+    {
+      "file": "benchmarks/results/probe-lora-hook-engines/part-a2-stock-local.log",
+      "published_sha256": "5ee8a58cfc6cb5cec0471bd09971ce9f041f5598850cad23bccce56229457b06",
+      "source_file": "benchmarks/results/probe-lora-hook-engines/part-a2-stock-local.log",
+      "source_archive": "review-originals-20261009T032909Z.zip",
+      "source_sha256": "5ee8a58cfc6cb5cec0471bd09971ce9f041f5598850cad23bccce56229457b06"
+    },
+    {
+      "file": "benchmarks/results/probe-lora-hook-engines/part-b-access-attempts.evidence.log",
+      "kind": "evidence_extract",
+      "sources": [
+        {
+          "file": "benchmarks/results/probe-lora-hook-engines/part-b-access-attempts.log",
+          "sha256": "3e9882e04da6c7b5be05be2189dc37d78b6ca556706ac28db57cd87cc33925d7",
+          "line_ranges": [
+            [
+              11,
+              22
+            ],
+            [
+              66,
+              85
+            ],
+            [
+              158,
+              162
+            ],
+            [
+              225,
+              243
+            ],
+            [
+              245,
+              270
+            ],
+            [
+              283,
+              293
+            ],
+            [
+              307,
+              320
+            ],
+            [
+              334,
+              356
+            ],
+            [
+              364,
+              384
+            ],
+            [
+              390,
+              412
+            ],
+            [
+              417,
+              437
+            ],
+            [
+              446,
+              451
+            ]
+          ]
+        }
+      ],
+      "published_sha256": "5b40308e49834dbc5665ad387f220cc38191849389a38e6dbf35f913398850f9"
+    },
+    {
+      "file": "benchmarks/results/probe-lora-hook-engines/part-b-cloud-run.evidence.log",
+      "kind": "evidence_extract",
+      "sources": [
+        {
+          "file": "benchmarks/results/probe-lora-hook-engines/part-b-cloud-run.log",
+          "sha256": "d9bdaf10802a018ef155e898d8dd577917a7efb64af8670a833058f798a90137",
+          "line_ranges": [
+            [
+              8,
+              43
+            ],
+            [
+              50,
+              109
+            ],
+            [
+              121,
+              133
+            ],
+            [
+              200,
+              214
+            ],
+            [
+              258,
+              292
+            ]
+          ]
+        }
+      ],
+      "published_sha256": "2330f1bf734b0cda77ca8fd8adfa7567f7c1dbdedaf38bf99be9e6d85e3704c6"
+    },
+    {
+      "file": "benchmarks/results/probe-lora-hook-engines/part-b-cloud-run2.evidence.log",
+      "kind": "evidence_extract",
+      "sources": [
+        {
+          "file": "benchmarks/results/probe-lora-hook-engines/part-b-cloud-run2.log",
+          "sha256": "e8df82222b1426c70fa9d159d965fb9d1bc31149edd6b5b91b4f29302e20e81b",
+          "line_ranges": [
+            [
+              8,
+              29
+            ],
+            [
+              39,
+              57
+            ],
+            [
+              64,
+              80
+            ],
+            [
+              125,
+              131
+            ],
+            [
+              146,
+              186
+            ]
+          ]
+        }
+      ],
+      "published_sha256": "8d014ac07aac41a87e91977490e53078114ff616ea606c776af164fe9c72926c"
+    },
+    {
+      "file": "benchmarks/results/probe-lora-hook-engines/part-b-controls-tiny-run2.json",
+      "published_sha256": "933cade1ab13617e336fb6b0532354207e4ac8e45a2711006e2c897f4b992537",
+      "source_sha256": "a440d7bf057061a0f8f378ddd593cff3c79bf96ce4af1768dc883718defec185",
+      "source_file": "review-control-part-b-tiny-run2.json",
+      "source_location": "external control capture"
+    },
+    {
+      "file": "benchmarks/results/probe-lora-hook-engines/part-b-controls-tiny-run2.log",
+      "published_sha256": "9ee5574f8206e19949b01383434bfb41bdd645b95ffced2e969397c8ddba5e63",
+      "source_sha256": "9ee5574f8206e19949b01383434bfb41bdd645b95ffced2e969397c8ddba5e63",
+      "source_file": "review-control-part-b-tiny-run2.log",
+      "source_location": "external control capture"
+    },
+    {
+      "file": "benchmarks/results/probe-lora-hook-engines/part-b-real-model-run1.evidence.log",
+      "kind": "evidence_extract",
+      "sources": [
+        {
+          "file": "benchmarks/results/probe-lora-hook-engines/part-b-real-model-run1.log",
+          "sha256": "57f1b5febc3c4a28f6bdd0a99e1a6e1a451096cf88d30c9f3a46f51eee4deea0",
+          "line_ranges": [
+            [
+              35,
+              44
+            ]
+          ]
+        },
+        {
+          "file": "benchmarks/results/probe-lora-hook-engines/part-b-real-model-run1.out",
+          "sha256": "e2a67ee170be7b33467109fd45c0e6f13707e83bc82b9542af273ebcc200f5f2",
+          "line_ranges": [
+            [
+              41,
+              42
+            ]
+          ]
+        }
+      ],
+      "published_sha256": "f9bc9ad97a02246a34b6fcc4e083bea6c4b1252d0f63f1c3e0907e5a127ce15c"
+    },
+    {
+      "file": "benchmarks/results/probe-lora-hook-engines/part-b-real-model-run1.json",
+      "published_sha256": "0f12e016e05342081b07c94c4b4d586b6713dd670b95c6368e0c821195238f5e",
+      "source_sha256": "c43a12a22f46cb6fc78f22abcde1214bce6c0565d223df3eb4f13969ef0649ca",
+      "source_file": "benchmarks/results/probe-lora-hook-engines/part-b-real-model-run1.json",
+      "source_archive": "review-originals-20261009T032909Z.zip"
+    },
+    {
+      "file": "benchmarks/results/probe-lora-hook-engines/part-b-real-model-run2.evidence.log",
+      "kind": "evidence_extract",
+      "sources": [
+        {
+          "file": "benchmarks/results/probe-lora-hook-engines/part-b-real-model-run2.log",
+          "sha256": "ef9cc93b347773f1c8c8b94d24730f4c57f6e0668f7fcf7d341590653d0c36ee",
+          "line_ranges": [
+            [
+              35,
+              44
+            ]
+          ]
+        },
+        {
+          "file": "benchmarks/results/probe-lora-hook-engines/part-b-real-model-run2.out",
+          "sha256": "90c6ece59064ed9353bfa0a3b3bd963a64a90ba7d254c028c64b6bbd8705067d",
+          "line_ranges": [
+            [
+              41,
+              42
+            ]
+          ]
+        }
+      ],
+      "published_sha256": "c1b582c36cdb4d89ff6f06cabb8212b4cbb7244db019dd25b52dbd29d3dc9e6a"
+    },
+    {
+      "file": "benchmarks/results/probe-lora-hook-engines/part-b-real-model-run2.json",
+      "published_sha256": "d3a51a79fb2be0a3bf9f21fda5ef0ba7e56c670c45d151e0d0fd76be9116db66",
+      "source_sha256": "842ddfbdb47dffc0f4312ad827748b3008d9e5c6276ea3e0fc5cd9c1ae702589",
+      "source_file": "benchmarks/results/probe-lora-hook-engines/part-b-real-model-run2.json",
+      "source_archive": "review-originals-20261009T032909Z.zip"
+    },
+    {
+      "file": "benchmarks/results/probe-lora-hook-engines/part-b-run3-protocol.json",
+      "source_revision": "3e75c3af1d7aab7431c5ca9785dbf1fe0808bb30",
+      "source_sha256": "4cc18d98c43a7efb204a6fe6c5840ff711d71ec6a847cb1116cb98a3034a90ae",
+      "published_sha256": "4cc18d98c43a7efb204a6fe6c5840ff711d71ec6a847cb1116cb98a3034a90ae"
+    },
+    {
+      "file": "benchmarks/results/probe-lora-hook-engines/part-b-setup-run1.evidence.log",
+      "kind": "evidence_extract",
+      "sources": [
+        {
+          "file": "benchmarks/results/probe-lora-hook-engines/part-b-setup-run1.log",
+          "sha256": "30657386a0e7c0d9d0013df83abf5fcfdea7013aa846c0e0df25cd5ba99ce7b4",
+          "line_ranges": [
+            [
+              364,
+              364
+            ],
+            [
+              374,
+              376
+            ],
+            [
+              392,
+              396
+            ],
+            [
+              407,
+              438
+            ],
+            [
+              577,
+              585
+            ],
+            [
+              610,
+              648
+            ],
+            [
+              664,
+              672
+            ],
+            [
+              684,
+              714
+            ],
+            [
+              724,
+              735
+            ]
+          ]
+        }
+      ],
+      "published_sha256": "bcb5ccefca1207fa9128556d1a36eb670d428026163811ef5f8bd43416040a13"
+    },
+    {
+      "file": "benchmarks/results/probe-lora-hook-engines/part-b-setup-run2.evidence.log",
+      "kind": "evidence_extract",
+      "sources": [
+        {
+          "file": "benchmarks/results/probe-lora-hook-engines/part-b-setup-run2.log",
+          "sha256": "dcd67109b139150cd1c469bfdda8ccbcb0205441162cf058e92dc67fcbf8006c",
+          "line_ranges": [
+            [
+              364,
+              364
+            ],
+            [
+              374,
+              376
+            ],
+            [
+              392,
+              396
+            ],
+            [
+              407,
+              438
+            ],
+            [
+              577,
+              585
+            ],
+            [
+              610,
+              648
+            ],
+            [
+              664,
+              672
+            ],
+            [
+              684,
+              714
+            ],
+            [
+              724,
+              735
+            ]
+          ]
+        }
+      ],
+      "published_sha256": "c379df33e30eecff86eca33d742d7bb569eb46390578abc1db3d4ee64acd0e53"
+    },
+    {
+      "file": "benchmarks/results/probe-lora-hook-engines/part-b0-export-real-configs-run2.json",
+      "published_sha256": "6021950ae1c655bceb8cea1c61eb94af6a1b3abca098775ea0cede0622dc12e3",
+      "source_sha256": "6e4a86e78a025d56e0cc3cfb8d1697441a0269039c73c9a77120c4cf0238baeb",
+      "source_file": "benchmarks/results/probe-lora-hook-engines/part-b0-export-real-configs-run2.json",
+      "source_archive": "review-originals-20261009T032909Z.zip"
+    },
+    {
+      "file": "benchmarks/results/probe-lora-hook-engines/part-b0-export-real-configs-run2.log",
+      "published_sha256": "f964400330901a542f972afea144365431a5d2d5aed0f1558cfb6a37b2900026",
+      "source_file": "benchmarks/results/probe-lora-hook-engines/part-b0-export-real-configs-run2.log",
+      "source_archive": "review-originals-20261009T032909Z.zip",
+      "source_sha256": "f964400330901a542f972afea144365431a5d2d5aed0f1558cfb6a37b2900026"
+    },
+    {
+      "file": "benchmarks/results/probe-lora-hook-engines/part-b0-export-real-configs-run3.json",
+      "published_sha256": "cd0c74fd043a565a8de8598f1c167f6d7057473c36c5e46eed4627e7abdbbd3e",
+      "source_sha256": "37cdc67f4a6dd798878a74290bbf89ebe8a90a0cfc0044f8de2404183e5133a5",
+      "source_file": "benchmarks/results/probe-lora-hook-engines/part-b0-export-real-configs-run3.json",
+      "source_archive": "review-originals-20261009T032909Z.zip"
+    },
+    {
+      "file": "benchmarks/results/probe-lora-hook-engines/part-b0-export-real-configs-run3.log",
+      "published_sha256": "f964400330901a542f972afea144365431a5d2d5aed0f1558cfb6a37b2900026",
+      "source_file": "benchmarks/results/probe-lora-hook-engines/part-b0-export-real-configs-run3.log",
+      "source_archive": "review-originals-20261009T032909Z.zip",
+      "source_sha256": "f964400330901a542f972afea144365431a5d2d5aed0f1558cfb6a37b2900026"
+    },
+    {
+      "file": "benchmarks/results/probe-lora-hook-engines/ppo-cli-smoke.json",
+      "source_file": "ppo-cli-smoke.json",
+      "source_location": "external verification capture",
+      "source_sha256": "2cc807abab14885232504827aa72a52ddaee21acd06a09d9eefa5c2968d5e21f",
+      "published_sha256": "90cba76b145b9793cb0ed32cc49c9bf8ba5f93b820b187bb2a0956c2f9b47e5d"
+    },
+    {
+      "file": "benchmarks/results/probe-moe-expert-holdout/cloud-repeat.evidence.log",
+      "kind": "evidence_extract",
+      "sources": [
+        {
+          "file": "benchmarks/results/probe-moe-expert-holdout/cloud-repeat.log",
+          "sha256": "75ac51410a53e82c2b6b1c4d504dd61277c6c07c30e21482a086fa32f15900bc",
+          "line_ranges": [
+            [
+              1,
+              19
+            ],
+            [
+              49,
+              83
+            ],
+            [
+              505,
+              517
+            ],
+            [
+              523,
+              524
+            ],
+            [
+              659,
+              712
+            ],
+            [
+              799,
+              846
+            ]
+          ]
+        }
+      ],
+      "published_sha256": "2303b81e60a7889c0857014e08893cbbcaa8888883478e2af1aec776ba8a5dd0"
+    },
+    {
+      "file": "benchmarks/results/probe-moe-expert-holdout/cloud-run.evidence.log",
+      "kind": "evidence_extract",
+      "sources": [
+        {
+          "file": "benchmarks/results/probe-moe-expert-holdout/cloud-run.log",
+          "sha256": "e5f1fc32f2071b41056491f1a6ae108ab7f212847fdc98ceec6db268bebddcd3",
+          "line_ranges": [
+            [
+              1,
+              38
+            ],
+            [
+              55,
+              81
+            ],
+            [
+              145,
+              178
+            ],
+            [
+              548,
+              549
+            ],
+            [
+              562,
+              567
+            ],
+            [
+              849,
+              858
+            ],
+            [
+              957,
+              998
+            ],
+            [
+              1000,
+              1015
+            ],
+            [
+              1468,
+              1511
+            ]
+          ]
+        }
+      ],
+      "published_sha256": "14d8f9ef05bdd8d101950b4dd7f599ade73e2d6c60af304b24235d575ae5eb01"
+    },
+    {
+      "file": "benchmarks/results/probe-moe-expert-holdout/collection-commands.log",
+      "published_sha256": "5de230595959ed00624fd72518d637f182ead2bb5da73b558940fb5d28fde113",
+      "source_file": "benchmarks/results/probe-moe-expert-holdout/collection-commands.log",
+      "source_archive": "review-originals-20261009T032909Z.zip",
+      "source_sha256": "5de230595959ed00624fd72518d637f182ead2bb5da73b558940fb5d28fde113"
+    },
+    {
+      "file": "benchmarks/results/probe-moe-expert-holdout/copy-guard.log",
+      "published_sha256": "2a4464421852579982f7d9fd0b9984bcb53c664eb03fa4b7827b1b8e544addb4",
+      "source_file": "benchmarks/results/probe-moe-expert-holdout/copy-guard.log",
+      "source_archive": "review-originals-20261009T032909Z.zip",
+      "source_sha256": "2a4464421852579982f7d9fd0b9984bcb53c664eb03fa4b7827b1b8e544addb4"
+    },
+    {
+      "file": "benchmarks/results/probe-moe-expert-holdout/granite-bf16-cuda.json",
+      "published_sha256": "03efbc13845902e55b4d5a3da95e9f3f7ff6b9828373b1a86a0782f50de6b528",
+      "source_file": "benchmarks/results/probe-moe-expert-holdout/granite-bf16-cuda.json",
+      "source_archive": "review-originals-20261009T032909Z.zip",
+      "source_sha256": "03efbc13845902e55b4d5a3da95e9f3f7ff6b9828373b1a86a0782f50de6b528"
+    },
+    {
+      "file": "benchmarks/results/probe-moe-expert-holdout/granite-bf16-cuda.log",
+      "published_sha256": "acb399b9acf668e82ab1ed055a0a4354d207c5c612783ef30702545428c99391",
+      "source_file": "benchmarks/results/probe-moe-expert-holdout/granite-bf16-cuda.log",
+      "source_archive": "review-originals-20261009T032909Z.zip",
+      "source_sha256": "acb399b9acf668e82ab1ed055a0a4354d207c5c612783ef30702545428c99391"
+    },
+    {
+      "file": "benchmarks/results/probe-moe-expert-holdout/granite-replay.json",
+      "published_sha256": "19de39453f003e67504619ed0f27c6e5988db1092279fb6941bb83ea2c26d4b3",
+      "source_file": "benchmarks/results/probe-moe-expert-holdout/granite-replay.json",
+      "source_archive": "review-originals-20261009T032909Z.zip",
+      "source_sha256": "19de39453f003e67504619ed0f27c6e5988db1092279fb6941bb83ea2c26d4b3"
+    },
+    {
+      "file": "benchmarks/results/probe-moe-expert-holdout/holdout-verification.json",
+      "published_sha256": "959e9f90016e4351282e8f7dce3c193a6ae9e26a0c6df91afd4596030ff01a83",
+      "source_file": "benchmarks/results/probe-moe-expert-holdout/holdout-verification.json",
+      "source_archive": "review-originals-20261009T032909Z.zip",
+      "source_sha256": "959e9f90016e4351282e8f7dce3c193a6ae9e26a0c6df91afd4596030ff01a83"
+    },
+    {
+      "file": "benchmarks/results/probe-moe-expert-holdout/olmoe-bf16-cuda.json",
+      "published_sha256": "0f81247afc7f6796ab1645bc83e44d7a163581a62c30bb3f48a84c1676c89f5a",
+      "source_file": "benchmarks/results/probe-moe-expert-holdout/olmoe-bf16-cuda.json",
+      "source_archive": "review-originals-20261009T032909Z.zip",
+      "source_sha256": "0f81247afc7f6796ab1645bc83e44d7a163581a62c30bb3f48a84c1676c89f5a"
+    },
+    {
+      "file": "benchmarks/results/probe-moe-expert-holdout/olmoe-bf16-cuda.log",
+      "published_sha256": "a0a5f1d7e2dc5de761df4251f180cf27dec7928bc3177506458b48c6da43a90c",
+      "source_file": "benchmarks/results/probe-moe-expert-holdout/olmoe-bf16-cuda.log",
+      "source_archive": "review-originals-20261009T032909Z.zip",
+      "source_sha256": "a0a5f1d7e2dc5de761df4251f180cf27dec7928bc3177506458b48c6da43a90c"
+    },
+    {
+      "file": "benchmarks/results/probe-moe-expert-holdout/olmoe-replay.json",
+      "published_sha256": "2d0ec745643abf9e6a770ee5be6672106003a9d878641683efa8c908504b02a4",
+      "source_file": "benchmarks/results/probe-moe-expert-holdout/olmoe-replay.json",
+      "source_archive": "review-originals-20261009T032909Z.zip",
+      "source_sha256": "2d0ec745643abf9e6a770ee5be6672106003a9d878641683efa8c908504b02a4"
+    },
+    {
+      "file": "benchmarks/results/probe-moe-expert-holdout/preflight.log",
+      "published_sha256": "ff712eda6c0f0ba6147a2ba3ecea4f497b1ee70506fbf448e59e39e4b5e9a99e",
+      "source_file": "benchmarks/results/probe-moe-expert-holdout/preflight.log",
+      "source_archive": "review-originals-20261009T032909Z.zip",
+      "source_sha256": "ff712eda6c0f0ba6147a2ba3ecea4f497b1ee70506fbf448e59e39e4b5e9a99e"
+    },
+    {
+      "file": "benchmarks/results/probe-moe-expert-holdout/price-catalog-2026-10-09.json",
+      "published_sha256": "6dd7a7281829a8daf780508f5a54e5a31bd4386ace6dff1cc263e7f7ae41fa30",
+      "source_file": "benchmarks/results/probe-moe-expert-holdout/price-catalog-2026-10-09.json",
+      "source_archive": "review-originals-20261009T032909Z.zip",
+      "source_sha256": "6dd7a7281829a8daf780508f5a54e5a31bd4386ace6dff1cc263e7f7ae41fa30"
+    },
+    {
+      "file": "benchmarks/results/probe-moe-expert-holdout/published-audit.json",
+      "published_sha256": "8b89ac6d4464c857d5724ed2c5abfd7377f92f29abaa4c1589946ca6f39984b6",
+      "source_file": "benchmarks/results/probe-moe-expert-holdout/published-audit.json",
+      "source_archive": "review-originals-20261009T032909Z.zip",
+      "source_sha256": "8b89ac6d4464c857d5724ed2c5abfd7377f92f29abaa4c1589946ca6f39984b6"
+    },
+    {
+      "file": "benchmarks/results/probe-moe-expert-holdout/pytest-full-xdist.evidence.log",
+      "kind": "evidence_extract",
+      "sources": [
+        {
+          "file": "benchmarks/results/probe-moe-expert-holdout/pytest-full-xdist.log",
+          "sha256": "b9fe08b0c9ea6d83e4662f61b6e47c43a9cd386b3daf7ec16a7bf8e7a9c2c1a2",
+          "line_ranges": [
+            [
+              487,
+              645
+            ],
+            [
+              646,
+              695
+            ],
+            [
+              1339,
+              1343
+            ],
+            [
+              1801,
+              1818
+            ]
+          ]
+        }
+      ],
+      "published_sha256": "d1cb85ef91b669efda5627c373f0ba60ac4c51088b33c348169ccc00c6cdaf74"
+    },
+    {
+      "file": "benchmarks/results/probe-moe-expert-holdout/pytest-plugin-utf8.log",
+      "published_sha256": "ebad95583d3c359a665d968340667b133c706a8a9a75e086aeb8a9b7994e1a78",
+      "source_file": "benchmarks/results/probe-moe-expert-holdout/pytest-plugin-utf8.log",
+      "source_archive": "review-originals-20261009T032909Z.zip",
+      "source_sha256": "ebad95583d3c359a665d968340667b133c706a8a9a75e086aeb8a9b7994e1a78"
+    },
+    {
+      "file": "benchmarks/results/probe-moe-expert-holdout/pytest-sequential.log",
+      "published_sha256": "774f38767083a4dc9e77499189dc007bc6a41861fee00614f7ef03dae3437bf1",
+      "source_file": "benchmarks/results/probe-moe-expert-holdout/pytest-sequential.log",
+      "source_archive": "review-originals-20261009T032909Z.zip",
+      "source_sha256": "774f38767083a4dc9e77499189dc007bc6a41861fee00614f7ef03dae3437bf1"
+    },
+    {
+      "file": "benchmarks/results/probe-moe-expert-holdout/run-status.txt",
+      "published_sha256": "280f562457b500ea49dfedbf72cfd9a89f61d59d8d5e61f7d2294f33c0a489ae",
+      "source_file": "benchmarks/results/probe-moe-expert-holdout/run-status.txt",
+      "source_archive": "review-originals-20261009T032909Z.zip",
+      "source_sha256": "280f562457b500ea49dfedbf72cfd9a89f61d59d8d5e61f7d2294f33c0a489ae"
+    },
+    {
+      "file": "benchmarks/results/probe-moe-expert-holdout/runtime-freeze.txt",
+      "published_sha256": "d6ceb27eba06f3d914d9b87a39f7a1c0140f4d0aa892195411088535dfceec95",
+      "source_file": "holdout-results/runtime-freeze.txt",
+      "source_archive": "moe-holdout-a6000.tgz",
+      "source_sha256": "d6ceb27eba06f3d914d9b87a39f7a1c0140f4d0aa892195411088535dfceec95"
+    },
+    {
+      "file": "benchmarks/results/probe-moe-expert-holdout/setup-commands.log",
+      "published_sha256": "646dfd3567987af9e12f89843442fda76dbaab8912903985b1dda6a2e2f97001",
+      "source_file": "benchmarks/results/probe-moe-expert-holdout/setup-commands.log",
+      "source_archive": "review-originals-20261009T032909Z.zip",
+      "source_sha256": "646dfd3567987af9e12f89843442fda76dbaab8912903985b1dda6a2e2f97001"
+    },
+    {
+      "file": "benchmarks/results/probe-moe-expert-holdout/setup.evidence.log",
+      "kind": "evidence_extract",
+      "sources": [
+        {
+          "file": "benchmarks/results/probe-moe-expert-holdout/setup.log",
+          "sha256": "d1bcd28dcdc584000971934c6690b780b88b2c60fc7200bb414ebc383a660b08",
+          "line_ranges": [
+            [
+              6,
+              7
+            ],
+            [
+              142,
+              182
+            ]
+          ]
+        }
+      ],
+      "published_sha256": "8fc636e95ceeeba93b0f3203d5fd4a5f356b2d482c95699ad39c62f561c652c1"
+    },
+    {
+      "file": "benchmarks/results/probe-lora-hook-engines/part-b-real-model-run3.json",
+      "source_file": "run/part-b-real-model-run3.json",
+      "source_sha256": "2c0a35dfc39da67b387fea8bff434bdc36a7b4e1a487d1a9355cfd34a6a14d07",
+      "published_sha256": "2c0a35dfc39da67b387fea8bff434bdc36a7b4e1a487d1a9355cfd34a6a14d07",
+      "source_archive": "run3-evidence.tgz"
+    },
+    {
+      "file": "benchmarks/results/probe-lora-hook-engines/part-b-run3-artifacts.json",
+      "source_file": "run/artifact-audit.json",
+      "source_sha256": "8d67a679bf8b7609b3a67d2de168d3c22788015144ff5cc59fa005af69b26d79",
+      "published_sha256": "8d67a679bf8b7609b3a67d2de168d3c22788015144ff5cc59fa005af69b26d79",
+      "source_archive": "run3-evidence.tgz"
+    },
+    {
+      "file": "benchmarks/results/probe-lora-hook-engines/part-b-run3-reference-freeze.txt",
+      "source_file": "run/reference-freeze.txt",
+      "source_sha256": "6c3611c42ed867cc47b645338e53847b31a3284df4c1500468179aece70945b1",
+      "published_sha256": "6c3611c42ed867cc47b645338e53847b31a3284df4c1500468179aece70945b1",
+      "source_archive": "run3-evidence.tgz"
+    },
+    {
+      "file": "benchmarks/results/probe-lora-hook-engines/part-b-run3-converter-freeze.txt",
+      "source_file": "run/converter-freeze.txt",
+      "source_sha256": "fb47abb22c140d221c7bc464174335cf1fb3ec28f4411cac277e1b90ca04bd39",
+      "published_sha256": "fb47abb22c140d221c7bc464174335cf1fb3ec28f4411cac277e1b90ca04bd39",
+      "source_archive": "run3-evidence.tgz"
+    },
+    {
+      "file": "benchmarks/results/probe-lora-hook-engines/part-b-run3-verification.json",
+      "source_file": "cloud-local-verification.json",
+      "source_sha256": "472bb36a3f0e2fb9be870d268d0fafaf3545ab4488bbf6cc0af3cd683529093f",
+      "published_sha256": "472bb36a3f0e2fb9be870d268d0fafaf3545ab4488bbf6cc0af3cd683529093f",
+      "source_location": "external verification capture"
+    },
+    {
+      "file": "benchmarks/results/probe-lora-hook-engines/part-b-run3-lifecycle.json",
+      "source_file": "part-b-run3-lifecycle-source.json",
+      "source_sha256": "5d5b0f2a9945638441e8f8672e751b997dbc0cad86f48c3c3df30ffd08cb95e6",
+      "published_sha256": "5d5b0f2a9945638441e8f8672e751b997dbc0cad86f48c3c3df30ffd08cb95e6",
+      "source_location": "external verification capture"
+    },
+    {
+      "file": "benchmarks/results/probe-lora-hook-engines/isolation-verification.json",
+      "source_file": "isolation-targeted.json",
+      "source_sha256": "a918b721e9f5aa92bebfa1bc1f3d2eed00e75a8a1e5c6a1e830e86e55eae4da4",
+      "published_sha256": "111fb193d0339ffa121eae5fa839fe967c362dc7629b6e053fb976ef472ac20d",
+      "source_location": "external verification capture"
+    },
+    {
+      "file": "benchmarks/results/probe-lora-hook-engines/pre-isolation-suite.json",
+      "source_file": "verification-history/first-full-suite/verification-final.json",
+      "source_sha256": "a661ce76384ab625d418bd7072f06826da6773d45c572b18b602337fab9e9683",
+      "published_sha256": "e5a720cdbd3b10c3f9064a51c47ab8f135e37223fe33fc3d850deb01c0d27dab",
+      "source_location": "external verification capture"
+    },
+    {
+      "file": "benchmarks/results/probe-moe-expert-holdout/replay-final-verification.json",
+      "source_file": "replay-final-verification.json",
+      "source_sha256": "96bed53e05bcbece1d0beff99c9c25e7b4d69eb4c97d3c4c415c7188480ef555",
+      "published_sha256": "96bed53e05bcbece1d0beff99c9c25e7b4d69eb4c97d3c4c415c7188480ef555",
+      "source_location": "external verification capture"
+    },
+    {
+      "file": "benchmarks/results/probe-lora-hook-engines/full-suite-verification.json",
+      "source_file": "full-suite-evidence-source.json",
+      "source_location": "external verification capture",
+      "source_sha256": "b2a2e7aa34d5157e4b99a11bf2c5029b27b55d4ff39857030f6555cb3a0b274d",
+      "published_sha256": "aceacca1ce73f27d3fa7e480ed4882015c7f10a38f3c9d79a034a8ac95431a4e"
+    }
+  ]
+}

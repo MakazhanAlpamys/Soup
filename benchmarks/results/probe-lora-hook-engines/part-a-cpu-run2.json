@@ -1,0 +1,747 @@
+{
+ "meta": {
+  "harness_sha256_16": "b603d17bf887bfdd",
+  "host": {
+   "platform": "Windows-11-10.0.26200-SP0",
+   "processor": "AMD64 Family 25 Model 117 Stepping 2, AuthenticAMD",
+   "cpu_count": 12,
+   "python": "3.12.10",
+   "ram_total_gb": 16.39,
+   "ram_available_gb": 1.8
+  },
+  "reference_env": {
+   "torch": "2.14.1",
+   "transformers": "5.19.0",
+   "peft": "0.21.2",
+   "numpy": "2.5.3"
+  },
+  "converter_env": "2.11.0+cpu 4.57.6 2.2.6 0.19.0",
+  "llama_src_head": "988190680d5a89fce97de3c20df2c2813731fd61",
+  "llama_version": "version: 0.6.0-dev (build 11476, commit 988190680)\nbuilt with Clang 20.1.8 for Windows x86_64",
+  "llama_binaries_sha256": {
+   "ggml-base.dll": "3549242c22b139ad0441cb28b10121f110f2e6821604df01460b1f7b8684a4b1",
+   "ggml-cpu-alderlake.dll": "f9bad4dc298400c55943a51a6a74367cb5cbceab9b65f1d7f05c2268be4b0c6f",
+   "ggml-cpu-cannonlake.dll": "02485b4ec3ba73553863f648f08c8462a5e9889af8b34985d2be35e6c655d42b",
+   "ggml-cpu-cascadelake.dll": "232fdde739e16f039d7c07191e54fc2e0f3d63162b71dee92c1582c638e239fb",
+   "ggml-cpu-cooperlake.dll": "bfa5a642b0cbd9efb14b1c61b752ac5a967e85b9f08afd9f8de1a8000a2e95f9",
+   "ggml-cpu-haswell.dll": "a8660ead15b5b3ee2dee865c790970772351686dc6b6521ba60dc82662982958",
+   "ggml-cpu-icelake.dll": "05f5bd153e3f902fc7286a8261070c16666373a3e4b668a4f3cdc19bb7a1db51",
+   "ggml-cpu-ivybridge.dll": "de4c270bb741a2a3164acd50a10e1850ac76615fb30834da13b6a8b16ca43506",
+   "ggml-cpu-piledriver.dll": "bb575dd47d8454bc5b79781ad95e8b871ae84dcd3232747c6d122b986cc535cc",
+   "ggml-cpu-sandybridge.dll": "226e9a3e9032c513c59eefcd01f3f4f4c9cc373b26462149b25811ebcfb2b2ce",
+   "ggml-cpu-sapphirerapids.dll": "7259405a7988dfe1f4370a1bcf01659aa4f8dee08575f90b2ab62426da71b34a",
+   "ggml-cpu-skylakex.dll": "953c1c31420b833a484275dd57cb165850da1ae6f804bf80ba4dd31b6496f2ee",
+   "ggml-cpu-sse42.dll": "278c15c3ec132e64a724d83318f9511bbde307278cbe158063ffc7e1dca676dc",
+   "ggml-cpu-x64.dll": "acc804755777db8f19316df5040815be00681ea65429b223ef331ea9e9526db7",
+   "ggml-cpu-zen4.dll": "149a63c335e2fa482358edccc2e21b24b083ae9a2321863ce08e5ba93af1d75d",
+   "ggml-rpc-server.exe": "da429f973af1a00878d2f95c4951cdd5ab35a6bfdf2a7f41f3b8b5910bf2e9dd",
+   "ggml-rpc.dll": "9c887e53de43951b080e406d9d12fc5cf6d5def7e855e20ac4292db12422601d",
+   "ggml.dll": "2a35f3c7f0d6f2cf2772b188c507423810dd50f59d9a6e3ec3eb5f7510abe2fe",
+   "libomp.dll": "a12116ba72d1d6820407cf30be23da04ce79d6bb8a71a5ee71759c5a1faa6f1c",
+   "LICENSE-LLVM-OpenMP": "fdad1758a9e1f9d5a81e18879b3406772115edc92c24bfa36b70c654f325e8e4",
+   "llama-batched-bench-impl.dll": "7c9edb38af581ab11c3715424f3ef49cdba10b9004656324d495d1c5cfc5e5a2",
+   "llama-batched-bench.exe": "d4ea4fe24556dc2cffd53755c5553056c5dddd97de0d2a08412e3afcf20fc51f",
+   "llama-bench-impl.dll": "123a699099ddd4ebacb20e3385328e9c4c222c55ac3629c4c99db2d4383055d2",
+   "llama-bench.exe": "61a6aa7d4f6c91e8da83b51a7795038f8864add1a35314e5df1176219561c3f9",
+   "llama-cli-impl.dll": "08745e616dd8e329c8c8d653bfefc8b4b94e47694c8cf418f5bd60b9a0116fa4",
+   "llama-cli.exe": "c920cbc2ff0af781471c7e547fc4abad4fdc357743fc55994ae796d4c9edd651",
+   "llama-common.dll": "2cd4bb6e12045455d5d6cd36ceb7ffc2fe95a78935c347266fcc74148c0fea14",
+   "llama-completion-impl.dll": "3f3a293f579df76cdb151f6533a6c7a45ff17736462691884a649caa6e5de117",
+   "llama-completion.exe": "da934a87545d6c43e68f9415f81284798455bb0421262daebd5b481e101e7513",
+   "llama-fit-params-impl.dll": "09e788bbc8ca4e7e4c2d67b76d8a2d877f59a443ee0b3c9bcdc827d3967605ae",
+   "llama-fit-params.exe": "f7db6af5546fa933cde28d959647f34ea1cedcc804a54905a1e76d138c006163",
+   "llama-gemma3-cli.exe": "0d5fd16b847ced52649e3bf8edd0082cd4226178e27b9d944f88dcdbba9281f9",
+   "llama-gguf-split.exe": "9d52c100fd68fc78df71b8a90dc3589f7416fba375aebaab662e2bdf5911260e",
+   "llama-imatrix.exe": "56a5d8305b4433d67cc5a19d1e2c5a07f706dc78bd4a322a4bb9bf61fa7c9da8",
+   "llama-llava-cli.exe": "0d5fd16b847ced52649e3bf8edd0082cd4226178e27b9d944f88dcdbba9281f9",
+   "llama-minicpmv-cli.exe": "0d5fd16b847ced52649e3bf8edd0082cd4226178e27b9d944f88dcdbba9281f9",
+   "llama-mtmd-cli.exe": "b5d24071b769fd16a8017e83043b338e512699ddb84bba1f22ca8e5ff7639509",
+   "llama-mtmd-debug.exe": "60877ac5fa813c526320bd07e33712f0fcbe73fa8b63537891ffd394766962f9",
+   "llama-perplexity-impl.dll": "5f2268edfa87ba7ccfb909ce15c15d83da955179cbfa1a7635bc67d4e76cc0b3",
+   "llama-perplexity.exe": "6caa9a1d8876b1d0140506a747c9094dc9e317a97de9764d7da97b2707793313",
+   "llama-quantize-impl.dll": "e1114aca151660041edd8c74fb1a234ab5634c8f647f71b48293e50b925f8abb",
+   "llama-quantize.exe": "d10ce5b598bcda115b8065c93e3cb0c3e4b0671375cf634411e4c6501b65645e",
+   "llama-qwen2vl-cli.exe": "0d5fd16b847ced52649e3bf8edd0082cd4226178e27b9d944f88dcdbba9281f9",
+   "llama-results.exe": "b7607a9524cf9153277e9763d51a62b18154abb062c72c9578d02ab0c383d6d3",
+   "llama-server-impl.dll": "9b1610036e7afb84ac48dac134c0e622d534af2ffe1456ac6095fef21c78b781",
+   "llama-server.exe": "f78215d0ed0b62789f136f1dd576de8ceb968dabfb5c3ff2b22543fef0e09408",
+   "llama-tokenize.exe": "f1f53528f352b1f9df47489fdb4587e9af7e34ca7b813415ea51ff45c286a2a8",
+   "llama-tts.exe": "7932e56c91097b37e21800d85740f43f65cde94cea719ade474bbe797e5d5a76",
+   "llama.dll": "8eab7aa67605314de41c8eaa169a700731c628f88acf285bcff2588cb829f592",
+   "llama.exe": "02cf4eebb7438eaa34f9e98e77df96c91adaa58c534d9d7a39339f1ae5806d0c",
+   "mtmd.dll": "0e69677b566d6d0cd5a12543c89016739aac3eb1322827e90fe0bfbedae560cf"
+  },
+  "prompt": "Soup trains the adapter on a laptop; the engine has to apply it to every projection it was trained on.",
+  "threads": 4,
+  "rule": {
+   "E_BASE_MAX": 0.001,
+   "S_REF_MIN": 0.01,
+   "R_APPLIED_MAX": 0.01,
+   "RHO_DROPPED_MAX": 0.01,
+   "LORA_RANK": 8,
+   "LORA_ALPHA": 16,
+   "B_STD": 0.02
+  }
+ },
+ "models": {
+  "qwen35moe-tiny": {
+   "attempts": [
+    {
+     "seed": 17,
+     "model_dir": "qwen35moe-tiny-seed17",
+     "convert_base": {
+      "ok": true,
+      "returncode": 0,
+      "stderr_tail": "%}\n            {{- '<|im_start|>' + message.role + '\\n<think>\\n' + reasoning_content + '\\n</think>\\n\\n' + content }}\n        {%- else %}\n            {{- '<|im_start|>' + message.role + '\\n' + content }}\n        {%- endif %}\n        {%- if message.tool_calls and message.tool_calls is iterable and message.tool_calls is not mapping %}\n            {%- for tool_call in message.tool_calls %}\n                {%- if tool_call.function is defined %}\n                    {%- set tool_call = tool_call.function %}\n                {%- endif %}\n                {%- if loop.first %}\n                    {%- if content|trim %}\n                        {{- '\\n\\n<tool_call>\\n<function=' + tool_call.name + '>\\n' }}\n                    {%- else %}\n                        {{- '<tool_call>\\n<function=' + tool_call.name + '>\\n' }}\n                    {%- endif %}\n                {%- else %}\n                    {{- '\\n<tool_call>\\n<function=' + tool_call.name + '>\\n' }}\n                {%- endif %}\n                {%- if tool_call.arguments is defined %}\n                    {%- for args_name, args_value in tool_call.arguments|items %}\n                        {{- '<parameter=' + args_name + '>\\n' }}\n                        {%- set args_value = args_value | tojson | safe if args_value is mapping or (args_value is sequence and args_value is not string) else args_value | string %}\n                        {{- args_value }}\n                        {{- '\\n</parameter>\\n' }}\n                    {%- endfor %}\n                {%- endif %}\n                {{- '</function>\\n</tool_call>' }}\n            {%- endfor %}\n        {%- endif %}\n        {{- '<|im_end|>\\n' }}\n    {%- elif message.role == \"tool\" %}\n        {%- if loop.previtem and loop.previtem.role != \"tool\" %}\n            {{- '<|im_start|>user' }}\n        {%- endif %}\n        {{- '\\n<tool_response>\\n' }}\n        {{- content }}\n        {{- '\\n</tool_response>' }}\n        {%- if not loop.last and loop.nextitem.role != \"tool\" %}\n            {{- '<|im_end|>\\n' }}\n        {%- elif loop.last %}\n            {{- '<|im_end|>\\n' }}\n        {%- endif %}\n    {%- else %}\n        {{- raise_exception('Unexpected message role.') }}\n    {%- endif %}\n{%- endfor %}\n{%- if add_generation_prompt %}\n    {{- '<|im_start|>assistant\\n' }}\n    {%- if enable_thinking is defined and enable_thinking is false %}\n        {{- '<think>\\n\\n</think>\\n\\n' }}\n    {%- else %}\n        {{- '<think>\\n' }}\n    {%- endif %}\n{%- endif %}\nINFO:gguf.gguf_writer:Writing the following files:\nINFO:gguf.gguf_writer:<work-dir>\\run-a2\\qwen35moe-tiny-seed17.f32.gguf: n_tensors = 76, total_size = 128.5M\n\nWriting:   0%|          | 0.00/129M [00:00<?, ?byte/s]\nWriting:  49%|\u2588\u2588\u2588\u2588\u2589     | 63.6M/129M [00:00<00:00, 531Mbyte/s]\nWriting:  99%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2589| 127M/129M [00:00<00:00, 134Mbyte/s] \nWriting: 100%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588| 129M/129M [00:01<00:00, 128Mbyte/s]\nINFO:hf-to-gguf:Model successfully exported to <work-dir>\\run-a2\\qwen35moe-tiny-seed17.f32.gguf\n"
+     },
+     "engine_base": {
+      "ok": true,
+      "returncode": 0,
+      "stderr_tail": "0.01.769.918 I cmn          init: llama threadpool init, n_threads = 4\n0.01.967.441 I main: writing results to <work-dir>\\run-a2\\qwen35moe-tiny-seed17.base1.gguf...\n"
+     },
+     "tokens": [
+      31469,
+      26791,
+      279,
+      12584,
+      383,
+      264,
+      20012,
+      26,
+      279,
+      4560,
+      682,
+      310,
+      3668,
+      424,
+      310,
+      1396,
+      20952,
+      424,
+      557,
+      15700,
+      383,
+      13
+     ],
+     "e_base": 4.837195880312295e-07,
+     "engine_deterministic": true,
+     "engine_tokens_stable": true,
+     "reference_deterministic": true,
+     "digests": {
+      "z_ref0": "ab8c1982250ac890",
+      "z_eng0": "3b3a836af6f1cc94"
+     },
+     "status": "OK"
+    }
+   ],
+   "variants": {
+    "soup-auto": {
+     "targets": [
+      "q_proj",
+      "v_proj",
+      "in_proj_qkv",
+      "out_proj"
+     ],
+     "adapted_modules": [
+      "model.layers.0.linear_attn.in_proj_qkv",
+      "model.layers.0.linear_attn.out_proj",
+      "model.layers.1.linear_attn.in_proj_qkv",
+      "model.layers.1.linear_attn.out_proj",
+      "model.layers.2.linear_attn.in_proj_qkv",
+      "model.layers.2.linear_attn.out_proj",
+      "model.layers.3.self_attn.q_proj",
+      "model.layers.3.self_attn.v_proj"
+     ],
+     "lora_b_std": 0.02,
+     "reference_disabled_is_base": true,
+     "s_ref": 0.22582669371771308,
+     "convert": {
+      "ok": false,
+      "returncode": 1,
+      "stderr_tail": "INFO:lora-to-gguf:Loading base model: qwen35moe-tiny-seed17\nWARNING:hf-to-gguf:Failed to load model config from <work-dir>\\run-a2\\qwen35moe-tiny-seed17: The checkpoint you are trying to load has model type `qwen3_5_moe_text` but Transformers does not recognize this architecture. This could be because of an issue with the checkpoint, or because your version of Transformers is out of date.\n\nYou can update Transformers with the command `pip install --upgrade transformers`. If this does not work, and the checkpoint is very new, then there may not be a release version that supports this model yet. In this case, you can get the most up-to-date code by installing Transformers from source with the command `pip install git+https://github.com/huggingface/transformers.git`\nWARNING:hf-to-gguf:Trying to load config.json instead\nINFO:lora-to-gguf:Using model architecture: Qwen3_5MoeForCausalLM\nINFO:hf-to-gguf:gguf: indexing model part 'model.safetensors'\nINFO:gguf.gguf_writer:gguf: This GGUF file is for Little Endian only\nTraceback (most recent call last):\n  File \"<work-dir>\\llama.cpp-b11476\\convert_lora_to_gguf.py\", line 530, in <module>\n    model_instance = LoraModel(\n                     ^^^^^^^^^^\n  File \"<work-dir>\\llama.cpp-b11476\\convert_lora_to_gguf.py\", line 414, in __init__\n    super().__init__(*args, **kwargs)\n  File \"<work-dir>\\llama.cpp-b11476\\conversion\\qwen.py\", line 304, in __init__\n    assert self.opt_num_mtp_layers != 0\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError\n"
+     },
+     "verdict": "CONVERT-FAILED"
+    },
+    "all": {
+     "targets": [
+      "q_proj",
+      "k_proj",
+      "v_proj",
+      "o_proj",
+      "in_proj_qkv",
+      "in_proj_z",
+      "in_proj_a",
+      "in_proj_b",
+      "out_proj",
+      "shared_expert.gate_proj",
+      "shared_expert.up_proj",
+      "shared_expert.down_proj"
+     ],
+     "adapted_modules": [
+      "model.layers.0.linear_attn.in_proj_a",
+      "model.layers.0.linear_attn.in_proj_b",
+      "model.layers.0.linear_attn.in_proj_qkv",
+      "model.layers.0.linear_attn.in_proj_z",
+      "model.layers.0.linear_attn.out_proj",
+      "model.layers.0.mlp.shared_expert.down_proj",
+      "model.layers.0.mlp.shared_expert.gate_proj",
+      "model.layers.0.mlp.shared_expert.up_proj",
+      "model.layers.1.linear_attn.in_proj_a",
+      "model.layers.1.linear_attn.in_proj_b",
+      "model.layers.1.linear_attn.in_proj_qkv",
+      "model.layers.1.linear_attn.in_proj_z",
+      "model.layers.1.linear_attn.out_proj",
+      "model.layers.1.mlp.shared_expert.down_proj",
+      "model.layers.1.mlp.shared_expert.gate_proj",
+      "model.layers.1.mlp.shared_expert.up_proj",
+      "model.layers.2.linear_attn.in_proj_a",
+      "model.layers.2.linear_attn.in_proj_b",
+      "model.layers.2.linear_attn.in_proj_qkv",
+      "model.layers.2.linear_attn.in_proj_z",
+      "model.layers.2.linear_attn.out_proj",
+      "model.layers.2.mlp.shared_expert.down_proj",
+      "model.layers.2.mlp.shared_expert.gate_proj",
+      "model.layers.2.mlp.shared_expert.up_proj",
+      "model.layers.3.mlp.shared_expert.down_proj",
+      "model.layers.3.mlp.shared_expert.gate_proj",
+      "model.layers.3.mlp.shared_expert.up_proj",
+      "model.layers.3.self_attn.k_proj",
+      "model.layers.3.self_attn.o_proj",
+      "model.layers.3.self_attn.q_proj",
+      "model.layers.3.self_attn.v_proj"
+     ],
+     "lora_b_std": 0.02,
+     "reference_disabled_is_base": true,
+     "s_ref": 0.3050759297650161,
+     "convert": {
+      "ok": false,
+      "returncode": 1,
+      "stderr_tail": "INFO:lora-to-gguf:Loading base model: qwen35moe-tiny-seed17\nWARNING:hf-to-gguf:Failed to load model config from <work-dir>\\run-a2\\qwen35moe-tiny-seed17: The checkpoint you are trying to load has model type `qwen3_5_moe_text` but Transformers does not recognize this architecture. This could be because of an issue with the checkpoint, or because your version of Transformers is out of date.\n\nYou can update Transformers with the command `pip install --upgrade transformers`. If this does not work, and the checkpoint is very new, then there may not be a release version that supports this model yet. In this case, you can get the most up-to-date code by installing Transformers from source with the command `pip install git+https://github.com/huggingface/transformers.git`\nWARNING:hf-to-gguf:Trying to load config.json instead\nINFO:lora-to-gguf:Using model architecture: Qwen3_5MoeForCausalLM\nINFO:hf-to-gguf:gguf: indexing model part 'model.safetensors'\nINFO:gguf.gguf_writer:gguf: This GGUF file is for Little Endian only\nTraceback (most recent call last):\n  File \"<work-dir>\\llama.cpp-b11476\\convert_lora_to_gguf.py\", line 530, in <module>\n    model_instance = LoraModel(\n                     ^^^^^^^^^^\n  File \"<work-dir>\\llama.cpp-b11476\\convert_lora_to_gguf.py\", line 414, in __init__\n    super().__init__(*args, **kwargs)\n  File \"<work-dir>\\llama.cpp-b11476\\conversion\\qwen.py\", line 304, in __init__\n    assert self.opt_num_mtp_layers != 0\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError\n"
+     },
+     "verdict": "CONVERT-FAILED"
+    },
+    "q_proj": {
+     "targets": [
+      "q_proj"
+     ],
+     "adapted_modules": [
+      "model.layers.3.self_attn.q_proj"
+     ],
+     "lora_b_std": 0.02,
+     "reference_disabled_is_base": true,
+     "s_ref": 0.12075330047807054,
+     "convert": {
+      "ok": false,
+      "returncode": 1,
+      "stderr_tail": "INFO:lora-to-gguf:Loading base model: qwen35moe-tiny-seed17\nWARNING:hf-to-gguf:Failed to load model config from <work-dir>\\run-a2\\qwen35moe-tiny-seed17: The checkpoint you are trying to load has model type `qwen3_5_moe_text` but Transformers does not recognize this architecture. This could be because of an issue with the checkpoint, or because your version of Transformers is out of date.\n\nYou can update Transformers with the command `pip install --upgrade transformers`. If this does not work, and the checkpoint is very new, then there may not be a release version that supports this model yet. In this case, you can get the most up-to-date code by installing Transformers from source with the command `pip install git+https://github.com/huggingface/transformers.git`\nWARNING:hf-to-gguf:Trying to load config.json instead\nINFO:lora-to-gguf:Using model architecture: Qwen3_5MoeForCausalLM\nINFO:hf-to-gguf:gguf: indexing model part 'model.safetensors'\nINFO:gguf.gguf_writer:gguf: This GGUF file is for Little Endian only\nTraceback (most recent call last):\n  File \"<work-dir>\\llama.cpp-b11476\\convert_lora_to_gguf.py\", line 530, in <module>\n    model_instance = LoraModel(\n                     ^^^^^^^^^^\n  File \"<work-dir>\\llama.cpp-b11476\\convert_lora_to_gguf.py\", line 414, in __init__\n    super().__init__(*args, **kwargs)\n  File \"<work-dir>\\llama.cpp-b11476\\conversion\\qwen.py\", line 304, in __init__\n    assert self.opt_num_mtp_layers != 0\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError\n"
+     },
+     "verdict": "CONVERT-FAILED"
+    },
+    "k_proj": {
+     "targets": [
+      "k_proj"
+     ],
+     "adapted_modules": [
+      "model.layers.3.self_attn.k_proj"
+     ],
+     "lora_b_std": 0.02,
+     "reference_disabled_is_base": true,
+     "s_ref": 0.12440946719227805,
+     "convert": {
+      "ok": false,
+      "returncode": 1,
+      "stderr_tail": "INFO:lora-to-gguf:Loading base model: qwen35moe-tiny-seed17\nWARNING:hf-to-gguf:Failed to load model config from <work-dir>\\run-a2\\qwen35moe-tiny-seed17: The checkpoint you are trying to load has model type `qwen3_5_moe_text` but Transformers does not recognize this architecture. This could be because of an issue with the checkpoint, or because your version of Transformers is out of date.\n\nYou can update Transformers with the command `pip install --upgrade transformers`. If this does not work, and the checkpoint is very new, then there may not be a release version that supports this model yet. In this case, you can get the most up-to-date code by installing Transformers from source with the command `pip install git+https://github.com/huggingface/transformers.git`\nWARNING:hf-to-gguf:Trying to load config.json instead\nINFO:lora-to-gguf:Using model architecture: Qwen3_5MoeForCausalLM\nINFO:hf-to-gguf:gguf: indexing model part 'model.safetensors'\nINFO:gguf.gguf_writer:gguf: This GGUF file is for Little Endian only\nTraceback (most recent call last):\n  File \"<work-dir>\\llama.cpp-b11476\\convert_lora_to_gguf.py\", line 530, in <module>\n    model_instance = LoraModel(\n                     ^^^^^^^^^^\n  File \"<work-dir>\\llama.cpp-b11476\\convert_lora_to_gguf.py\", line 414, in __init__\n    super().__init__(*args, **kwargs)\n  File \"<work-dir>\\llama.cpp-b11476\\conversion\\qwen.py\", line 304, in __init__\n    assert self.opt_num_mtp_layers != 0\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError\n"
+     },
+     "verdict": "CONVERT-FAILED"
+    },
+    "v_proj": {
+     "targets": [
+      "v_proj"
+     ],
+     "adapted_modules": [
+      "model.layers.3.self_attn.v_proj"
+     ],
+     "lora_b_std": 0.02,
+     "reference_disabled_is_base": true,
+     "s_ref": 0.21513866204137472,
+     "convert": {
+      "ok": false,
+      "returncode": 1,
+      "stderr_tail": "INFO:lora-to-gguf:Loading base model: qwen35moe-tiny-seed17\nWARNING:hf-to-gguf:Failed to load model config from <work-dir>\\run-a2\\qwen35moe-tiny-seed17: The checkpoint you are trying to load has model type `qwen3_5_moe_text` but Transformers does not recognize this architecture. This could be because of an issue with the checkpoint, or because your version of Transformers is out of date.\n\nYou can update Transformers with the command `pip install --upgrade transformers`. If this does not work, and the checkpoint is very new, then there may not be a release version that supports this model yet. In this case, you can get the most up-to-date code by installing Transformers from source with the command `pip install git+https://github.com/huggingface/transformers.git`\nWARNING:hf-to-gguf:Trying to load config.json instead\nINFO:lora-to-gguf:Using model architecture: Qwen3_5MoeForCausalLM\nINFO:hf-to-gguf:gguf: indexing model part 'model.safetensors'\nINFO:gguf.gguf_writer:gguf: This GGUF file is for Little Endian only\nTraceback (most recent call last):\n  File \"<work-dir>\\llama.cpp-b11476\\convert_lora_to_gguf.py\", line 530, in <module>\n    model_instance = LoraModel(\n                     ^^^^^^^^^^\n  File \"<work-dir>\\llama.cpp-b11476\\convert_lora_to_gguf.py\", line 414, in __init__\n    super().__init__(*args, **kwargs)\n  File \"<work-dir>\\llama.cpp-b11476\\conversion\\qwen.py\", line 304, in __init__\n    assert self.opt_num_mtp_layers != 0\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError\n"
+     },
+     "verdict": "CONVERT-FAILED"
+    },
+    "o_proj": {
+     "targets": [
+      "o_proj"
+     ],
+     "adapted_modules": [
+      "model.layers.3.self_attn.o_proj"
+     ],
+     "lora_b_std": 0.02,
+     "reference_disabled_is_base": true,
+     "s_ref": 0.11489420574861332,
+     "convert": {
+      "ok": false,
+      "returncode": 1,
+      "stderr_tail": "INFO:lora-to-gguf:Loading base model: qwen35moe-tiny-seed17\nWARNING:hf-to-gguf:Failed to load model config from <work-dir>\\run-a2\\qwen35moe-tiny-seed17: The checkpoint you are trying to load has model type `qwen3_5_moe_text` but Transformers does not recognize this architecture. This could be because of an issue with the checkpoint, or because your version of Transformers is out of date.\n\nYou can update Transformers with the command `pip install --upgrade transformers`. If this does not work, and the checkpoint is very new, then there may not be a release version that supports this model yet. In this case, you can get the most up-to-date code by installing Transformers from source with the command `pip install git+https://github.com/huggingface/transformers.git`\nWARNING:hf-to-gguf:Trying to load config.json instead\nINFO:lora-to-gguf:Using model architecture: Qwen3_5MoeForCausalLM\nINFO:hf-to-gguf:gguf: indexing model part 'model.safetensors'\nINFO:gguf.gguf_writer:gguf: This GGUF file is for Little Endian only\nTraceback (most recent call last):\n  File \"<work-dir>\\llama.cpp-b11476\\convert_lora_to_gguf.py\", line 530, in <module>\n    model_instance = LoraModel(\n                     ^^^^^^^^^^\n  File \"<work-dir>\\llama.cpp-b11476\\convert_lora_to_gguf.py\", line 414, in __init__\n    super().__init__(*args, **kwargs)\n  File \"<work-dir>\\llama.cpp-b11476\\conversion\\qwen.py\", line 304, in __init__\n    assert self.opt_num_mtp_layers != 0\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError\n"
+     },
+     "verdict": "CONVERT-FAILED"
+    },
+    "in_proj_qkv": {
+     "targets": [
+      "in_proj_qkv"
+     ],
+     "adapted_modules": [
+      "model.layers.0.linear_attn.in_proj_qkv",
+      "model.layers.1.linear_attn.in_proj_qkv",
+      "model.layers.2.linear_attn.in_proj_qkv"
+     ],
+     "lora_b_std": 0.02,
+     "reference_disabled_is_base": true,
+     "s_ref": 0.07584495987107219,
+     "convert": {
+      "ok": false,
+      "returncode": 1,
+      "stderr_tail": "INFO:lora-to-gguf:Loading base model: qwen35moe-tiny-seed17\nWARNING:hf-to-gguf:Failed to load model config from <work-dir>\\run-a2\\qwen35moe-tiny-seed17: The checkpoint you are trying to load has model type `qwen3_5_moe_text` but Transformers does not recognize this architecture. This could be because of an issue with the checkpoint, or because your version of Transformers is out of date.\n\nYou can update Transformers with the command `pip install --upgrade transformers`. If this does not work, and the checkpoint is very new, then there may not be a release version that supports this model yet. In this case, you can get the most up-to-date code by installing Transformers from source with the command `pip install git+https://github.com/huggingface/transformers.git`\nWARNING:hf-to-gguf:Trying to load config.json instead\nINFO:lora-to-gguf:Using model architecture: Qwen3_5MoeForCausalLM\nINFO:hf-to-gguf:gguf: indexing model part 'model.safetensors'\nINFO:gguf.gguf_writer:gguf: This GGUF file is for Little Endian only\nTraceback (most recent call last):\n  File \"<work-dir>\\llama.cpp-b11476\\convert_lora_to_gguf.py\", line 530, in <module>\n    model_instance = LoraModel(\n                     ^^^^^^^^^^\n  File \"<work-dir>\\llama.cpp-b11476\\convert_lora_to_gguf.py\", line 414, in __init__\n    super().__init__(*args, **kwargs)\n  File \"<work-dir>\\llama.cpp-b11476\\conversion\\qwen.py\", line 304, in __init__\n    assert self.opt_num_mtp_layers != 0\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError\n"
+     },
+     "verdict": "CONVERT-FAILED"
+    },
+    "in_proj_z": {
+     "targets": [
+      "in_proj_z"
+     ],
+     "adapted_modules": [
+      "model.layers.0.linear_attn.in_proj_z",
+      "model.layers.1.linear_attn.in_proj_z",
+      "model.layers.2.linear_attn.in_proj_z"
+     ],
+     "lora_b_std": 0.02,
+     "reference_disabled_is_base": true,
+     "s_ref": 0.04142849510019113,
+     "convert": {
+      "ok": false,
+      "returncode": 1,
+      "stderr_tail": "INFO:lora-to-gguf:Loading base model: qwen35moe-tiny-seed17\nWARNING:hf-to-gguf:Failed to load model config from <work-dir>\\run-a2\\qwen35moe-tiny-seed17: The checkpoint you are trying to load has model type `qwen3_5_moe_text` but Transformers does not recognize this architecture. This could be because of an issue with the checkpoint, or because your version of Transformers is out of date.\n\nYou can update Transformers with the command `pip install --upgrade transformers`. If this does not work, and the checkpoint is very new, then there may not be a release version that supports this model yet. In this case, you can get the most up-to-date code by installing Transformers from source with the command `pip install git+https://github.com/huggingface/transformers.git`\nWARNING:hf-to-gguf:Trying to load config.json instead\nINFO:lora-to-gguf:Using model architecture: Qwen3_5MoeForCausalLM\nINFO:hf-to-gguf:gguf: indexing model part 'model.safetensors'\nINFO:gguf.gguf_writer:gguf: This GGUF file is for Little Endian only\nTraceback (most recent call last):\n  File \"<work-dir>\\llama.cpp-b11476\\convert_lora_to_gguf.py\", line 530, in <module>\n    model_instance = LoraModel(\n                     ^^^^^^^^^^\n  File \"<work-dir>\\llama.cpp-b11476\\convert_lora_to_gguf.py\", line 414, in __init__\n    super().__init__(*args, **kwargs)\n  File \"<work-dir>\\llama.cpp-b11476\\conversion\\qwen.py\", line 304, in __init__\n    assert self.opt_num_mtp_layers != 0\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError\n"
+     },
+     "verdict": "CONVERT-FAILED"
+    },
+    "in_proj_a": {
+     "targets": [
+      "in_proj_a"
+     ],
+     "adapted_modules": [
+      "model.layers.0.linear_attn.in_proj_a",
+      "model.layers.1.linear_attn.in_proj_a",
+      "model.layers.2.linear_attn.in_proj_a"
+     ],
+     "lora_b_std": 0.08,
+     "reference_disabled_is_base": true,
+     "s_ref": 0.00014720086100113026,
+     "convert": {
+      "ok": false,
+      "returncode": 1,
+      "stderr_tail": "INFO:lora-to-gguf:Loading base model: qwen35moe-tiny-seed17\nWARNING:hf-to-gguf:Failed to load model config from <work-dir>\\run-a2\\qwen35moe-tiny-seed17: The checkpoint you are trying to load has model type `qwen3_5_moe_text` but Transformers does not recognize this architecture. This could be because of an issue with the checkpoint, or because your version of Transformers is out of date.\n\nYou can update Transformers with the command `pip install --upgrade transformers`. If this does not work, and the checkpoint is very new, then there may not be a release version that supports this model yet. In this case, you can get the most up-to-date code by installing Transformers from source with the command `pip install git+https://github.com/huggingface/transformers.git`\nWARNING:hf-to-gguf:Trying to load config.json instead\nINFO:lora-to-gguf:Using model architecture: Qwen3_5MoeForCausalLM\nINFO:hf-to-gguf:gguf: indexing model part 'model.safetensors'\nINFO:gguf.gguf_writer:gguf: This GGUF file is for Little Endian only\nTraceback (most recent call last):\n  File \"<work-dir>\\llama.cpp-b11476\\convert_lora_to_gguf.py\", line 530, in <module>\n    model_instance = LoraModel(\n                     ^^^^^^^^^^\n  File \"<work-dir>\\llama.cpp-b11476\\convert_lora_to_gguf.py\", line 414, in __init__\n    super().__init__(*args, **kwargs)\n  File \"<work-dir>\\llama.cpp-b11476\\conversion\\qwen.py\", line 304, in __init__\n    assert self.opt_num_mtp_layers != 0\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError\n"
+     },
+     "verdict": "TOO WEAK"
+    },
+    "in_proj_b": {
+     "targets": [
+      "in_proj_b"
+     ],
+     "adapted_modules": [
+      "model.layers.0.linear_attn.in_proj_b",
+      "model.layers.1.linear_attn.in_proj_b",
+      "model.layers.2.linear_attn.in_proj_b"
+     ],
+     "lora_b_std": 0.08,
+     "reference_disabled_is_base": true,
+     "s_ref": 0.012866090143601738,
+     "convert": {
+      "ok": false,
+      "returncode": 1,
+      "stderr_tail": "INFO:lora-to-gguf:Loading base model: qwen35moe-tiny-seed17\nWARNING:hf-to-gguf:Failed to load model config from <work-dir>\\run-a2\\qwen35moe-tiny-seed17: The checkpoint you are trying to load has model type `qwen3_5_moe_text` but Transformers does not recognize this architecture. This could be because of an issue with the checkpoint, or because your version of Transformers is out of date.\n\nYou can update Transformers with the command `pip install --upgrade transformers`. If this does not work, and the checkpoint is very new, then there may not be a release version that supports this model yet. In this case, you can get the most up-to-date code by installing Transformers from source with the command `pip install git+https://github.com/huggingface/transformers.git`\nWARNING:hf-to-gguf:Trying to load config.json instead\nINFO:lora-to-gguf:Using model architecture: Qwen3_5MoeForCausalLM\nINFO:hf-to-gguf:gguf: indexing model part 'model.safetensors'\nINFO:gguf.gguf_writer:gguf: This GGUF file is for Little Endian only\nTraceback (most recent call last):\n  File \"<work-dir>\\llama.cpp-b11476\\convert_lora_to_gguf.py\", line 530, in <module>\n    model_instance = LoraModel(\n                     ^^^^^^^^^^\n  File \"<work-dir>\\llama.cpp-b11476\\convert_lora_to_gguf.py\", line 414, in __init__\n    super().__init__(*args, **kwargs)\n  File \"<work-dir>\\llama.cpp-b11476\\conversion\\qwen.py\", line 304, in __init__\n    assert self.opt_num_mtp_layers != 0\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError\n"
+     },
+     "verdict": "CONVERT-FAILED"
+    },
+    "out_proj": {
+     "targets": [
+      "out_proj"
+     ],
+     "adapted_modules": [
+      "model.layers.0.linear_attn.out_proj",
+      "model.layers.1.linear_attn.out_proj",
+      "model.layers.2.linear_attn.out_proj"
+     ],
+     "lora_b_std": 0.02,
+     "reference_disabled_is_base": true,
+     "s_ref": 0.04208798692780485,
+     "convert": {
+      "ok": false,
+      "returncode": 1,
+      "stderr_tail": "INFO:lora-to-gguf:Loading base model: qwen35moe-tiny-seed17\nWARNING:hf-to-gguf:Failed to load model config from <work-dir>\\run-a2\\qwen35moe-tiny-seed17: The checkpoint you are trying to load has model type `qwen3_5_moe_text` but Transformers does not recognize this architecture. This could be because of an issue with the checkpoint, or because your version of Transformers is out of date.\n\nYou can update Transformers with the command `pip install --upgrade transformers`. If this does not work, and the checkpoint is very new, then there may not be a release version that supports this model yet. In this case, you can get the most up-to-date code by installing Transformers from source with the command `pip install git+https://github.com/huggingface/transformers.git`\nWARNING:hf-to-gguf:Trying to load config.json instead\nINFO:lora-to-gguf:Using model architecture: Qwen3_5MoeForCausalLM\nINFO:hf-to-gguf:gguf: indexing model part 'model.safetensors'\nINFO:gguf.gguf_writer:gguf: This GGUF file is for Little Endian only\nTraceback (most recent call last):\n  File \"<work-dir>\\llama.cpp-b11476\\convert_lora_to_gguf.py\", line 530, in <module>\n    model_instance = LoraModel(\n                     ^^^^^^^^^^\n  File \"<work-dir>\\llama.cpp-b11476\\convert_lora_to_gguf.py\", line 414, in __init__\n    super().__init__(*args, **kwargs)\n  File \"<work-dir>\\llama.cpp-b11476\\conversion\\qwen.py\", line 304, in __init__\n    assert self.opt_num_mtp_layers != 0\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError\n"
+     },
+     "verdict": "CONVERT-FAILED"
+    },
+    "shared": {
+     "targets": [
+      "shared_expert.gate_proj",
+      "shared_expert.up_proj",
+      "shared_expert.down_proj"
+     ],
+     "adapted_modules": [
+      "model.layers.0.mlp.shared_expert.down_proj",
+      "model.layers.0.mlp.shared_expert.gate_proj",
+      "model.layers.0.mlp.shared_expert.up_proj",
+      "model.layers.1.mlp.shared_expert.down_proj",
+      "model.layers.1.mlp.shared_expert.gate_proj",
+      "model.layers.1.mlp.shared_expert.up_proj",
+      "model.layers.2.mlp.shared_expert.down_proj",
+      "model.layers.2.mlp.shared_expert.gate_proj",
+      "model.layers.2.mlp.shared_expert.up_proj",
+      "model.layers.3.mlp.shared_expert.down_proj",
+      "model.layers.3.mlp.shared_expert.gate_proj",
+      "model.layers.3.mlp.shared_expert.up_proj"
+     ],
+     "lora_b_std": 0.02,
+     "reference_disabled_is_base": true,
+     "s_ref": 0.07223009015294833,
+     "convert": {
+      "ok": false,
+      "returncode": 1,
+      "stderr_tail": "INFO:lora-to-gguf:Loading base model: qwen35moe-tiny-seed17\nWARNING:hf-to-gguf:Failed to load model config from <work-dir>\\run-a2\\qwen35moe-tiny-seed17: The checkpoint you are trying to load has model type `qwen3_5_moe_text` but Transformers does not recognize this architecture. This could be because of an issue with the checkpoint, or because your version of Transformers is out of date.\n\nYou can update Transformers with the command `pip install --upgrade transformers`. If this does not work, and the checkpoint is very new, then there may not be a release version that supports this model yet. In this case, you can get the most up-to-date code by installing Transformers from source with the command `pip install git+https://github.com/huggingface/transformers.git`\nWARNING:hf-to-gguf:Trying to load config.json instead\nINFO:lora-to-gguf:Using model architecture: Qwen3_5MoeForCausalLM\nINFO:hf-to-gguf:gguf: indexing model part 'model.safetensors'\nINFO:gguf.gguf_writer:gguf: This GGUF file is for Little Endian only\nTraceback (most recent call last):\n  File \"<work-dir>\\llama.cpp-b11476\\convert_lora_to_gguf.py\", line 530, in <module>\n    model_instance = LoraModel(\n                     ^^^^^^^^^^\n  File \"<work-dir>\\llama.cpp-b11476\\convert_lora_to_gguf.py\", line 414, in __init__\n    super().__init__(*args, **kwargs)\n  File \"<work-dir>\\llama.cpp-b11476\\conversion\\qwen.py\", line 304, in __init__\n    assert self.opt_num_mtp_layers != 0\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError\n"
+     },
+     "verdict": "CONVERT-FAILED"
+    }
+   }
+  },
+  "dsv3-tiny": {
+   "attempts": [
+    {
+     "seed": 17,
+     "model_dir": "dsv3-tiny-seed17",
+     "convert_base": {
+      "ok": true,
+      "returncode": 0,
+      "stderr_tail": "Adding 127741 merge(s).\nINFO:gguf.vocab:Setting special token type bos to 0\nINFO:gguf.vocab:Setting special token type eos to 1\nINFO:gguf.vocab:Setting special token type pad to 1\nINFO:gguf.vocab:Setting add_bos_token to False\nINFO:gguf.vocab:Setting add_eos_token to False\nINFO:gguf.vocab:Setting chat_template to {% if not add_generation_prompt is defined %}{% set add_generation_prompt = false %}{% endif %}{% set ns = namespace(is_first=false, is_tool=false, is_output_first=true, system_prompt='', is_first_sp=true) %}{%- for message in messages %}{%- if message['role'] == 'system' %}{%- if ns.is_first_sp %}{% set ns.system_prompt = ns.system_prompt + message['content'] %}{% set ns.is_first_sp = false %}{%- else %}{% set ns.system_prompt = ns.system_prompt + '\n\n' + message['content'] %}{%- endif %}{%- endif %}{%- endfor %}{{bos_token}}{{ns.system_prompt}}{%- for message in messages %}{%- if message['role'] == 'user' %}{%- set ns.is_tool = false -%}{{'<\uff5cUser\uff5c>' + message['content']}}{%- endif %}{%- if message['role'] == 'assistant' and message['content'] is none %}{%- set ns.is_tool = false -%}{%- for tool in message['tool_calls']%}{%- if not ns.is_first %}{{'<\uff5cAssistant\uff5c><\uff5ctool\u2581calls\u2581begin\uff5c><\uff5ctool\u2581call\u2581begin\uff5c>' + tool['type'] + '<\uff5ctool\u2581sep\uff5c>' + tool['function']['name'] + '\n' + '```json' + '\n' + tool['function']['arguments'] + '\n' + '```' + '<\uff5ctool\u2581call\u2581end\uff5c>'}}{%- set ns.is_first = true -%}{%- else %}{{'\n' + '<\uff5ctool\u2581call\u2581begin\uff5c>' + tool['type'] + '<\uff5ctool\u2581sep\uff5c>' + tool['function']['name'] + '\n' + '```json' + '\n' + tool['function']['arguments'] + '\n' + '```' + '<\uff5ctool\u2581call\u2581end\uff5c>'}}{{'<\uff5ctool\u2581calls\u2581end\uff5c><\uff5cend\u2581of\u2581sentence\uff5c>'}}{%- endif %}{%- endfor %}{%- endif %}{%- if message['role'] == 'assistant' and message['content'] is not none %}{%- if ns.is_tool %}{{'<\uff5ctool\u2581outputs\u2581end\uff5c>' + message['content'] + '<\uff5cend\u2581of\u2581sentence\uff5c>'}}{%- set ns.is_tool = false -%}{%- else %}{{'<\uff5cAssistant\uff5c>' + message['content'] + '<\uff5cend\u2581of\u2581sentence\uff5c>'}}{%- endif %}{%- endif %}{%- if message['role'] == 'tool' %}{%- set ns.is_tool = true -%}{%- if ns.is_output_first %}{{'<\uff5ctool\u2581outputs\u2581begin\uff5c><\uff5ctool\u2581output\u2581begin\uff5c>' + message['content'] + '<\uff5ctool\u2581output\u2581end\uff5c>'}}{%- set ns.is_output_first = false %}{%- else %}{{'\n<\uff5ctool\u2581output\u2581begin\uff5c>' + message['content'] + '<\uff5ctool\u2581output\u2581end\uff5c>'}}{%- endif %}{%- endif %}{%- endfor -%}{% if ns.is_tool %}{{'<\uff5ctool\u2581outputs\u2581end\uff5c>'}}{% endif %}{% if add_generation_prompt and not ns.is_tool %}{{'<\uff5cAssistant\uff5c>'}}{% endif %}\nINFO:gguf.gguf_writer:Writing the following files:\nINFO:gguf.gguf_writer:<work-dir>\\run-a2\\dsv3-tiny-seed17.f32.gguf: n_tensors = 52, total_size = 66.9M\n\nWriting:   0%|          | 0.00/66.9M [00:00<?, ?byte/s]\nWriting:  49%|\u2588\u2588\u2588\u2588\u2589     | 33.1M/66.9M [00:00<00:00, 91.2Mbyte/s]\nWriting:  99%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2589| 66.2M/66.9M [00:00<00:00, 158Mbyte/s] \nWriting: 100%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588| 66.9M/66.9M [00:00<00:00, 125Mbyte/s]\nINFO:hf-to-gguf:Model successfully exported to <work-dir>\\run-a2\\dsv3-tiny-seed17.f32.gguf\n"
+     },
+     "engine_base": {
+      "ok": true,
+      "returncode": 0,
+      "stderr_tail": "0.00.856.769 I cmn          init: llama threadpool init, n_threads = 4\n0.00.942.072 I main: writing results to <work-dir>\\run-a2\\dsv3-tiny-seed17.base1.gguf...\n"
+     },
+     "tokens": [
+      117952,
+      34274,
+      270,
+      52144,
+      377,
+      260,
+      35993,
+      29,
+      270,
+      5466,
+      769,
+      304,
+      7263,
+      436,
+      304,
+      1750,
+      28801,
+      436,
+      515,
+      17024,
+      377,
+      16
+     ],
+     "e_base": 5.207986134257716e-07,
+     "engine_deterministic": true,
+     "engine_tokens_stable": true,
+     "reference_deterministic": true,
+     "digests": {
+      "z_ref0": "bd528b431c3c865f",
+      "z_eng0": "335cb195482f1d64"
+     },
+     "status": "OK"
+    }
+   ],
+   "variants": {
+    "soup-auto": {
+     "targets": [
+      "q_a_proj",
+      "q_b_proj",
+      "kv_a_proj_with_mqa",
+      "kv_b_proj",
+      "o_proj"
+     ],
+     "adapted_modules": [
+      "model.layers.0.self_attn.kv_a_proj_with_mqa",
+      "model.layers.0.self_attn.kv_b_proj",
+      "model.layers.0.self_attn.o_proj",
+      "model.layers.0.self_attn.q_a_proj",
+      "model.layers.0.self_attn.q_b_proj",
+      "model.layers.1.self_attn.kv_a_proj_with_mqa",
+      "model.layers.1.self_attn.kv_b_proj",
+      "model.layers.1.self_attn.o_proj",
+      "model.layers.1.self_attn.q_a_proj",
+      "model.layers.1.self_attn.q_b_proj",
+      "model.layers.2.self_attn.kv_a_proj_with_mqa",
+      "model.layers.2.self_attn.kv_b_proj",
+      "model.layers.2.self_attn.o_proj",
+      "model.layers.2.self_attn.q_a_proj",
+      "model.layers.2.self_attn.q_b_proj"
+     ],
+     "lora_b_std": 0.02,
+     "reference_disabled_is_base": true,
+     "s_ref": 0.5592908432903463,
+     "convert": {
+      "ok": false,
+      "returncode": 1,
+      "stderr_tail": "INFO:lora-to-gguf:Loading base model: dsv3-tiny-seed17\nINFO:lora-to-gguf:Using model architecture: DeepseekV3ForCausalLM\nINFO:hf-to-gguf:gguf: indexing model part 'model.safetensors'\nINFO:gguf.gguf_writer:gguf: This GGUF file is for Little Endian only\nINFO:lora-to-gguf:Exporting model...\nINFO:hf-to-gguf:blk.0.attn_kv_a_mqa.weight.lora_a,   torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.0.attn_kv_a_mqa.weight.lora_b,   torch.float32 --> F32, shape = {8, 24}\nTraceback (most recent call last):\n  File \"<work-dir>\\llama.cpp-b11476\\convert_lora_to_gguf.py\", line 545, in <module>\n    model_instance.write()\n  File \"<work-dir>\\llama.cpp-b11476\\conversion\\base.py\", line 1234, in write\n    self.prepare_tensors()\n  File \"<work-dir>\\llama.cpp-b11476\\conversion\\deepseek.py\", line 455, in prepare_tensors\n    super().prepare_tensors()\n  File \"<work-dir>\\llama.cpp-b11476\\conversion\\base.py\", line 1075, in prepare_tensors\n    for new_name, data_torch in (self.modify_tensors(data_torch, name, bid)):\n                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"<work-dir>\\llama.cpp-b11476\\convert_lora_to_gguf.py\", line 502, in modify_tensors\n    dest = list(super().modify_tensors(data_torch, name, bid))\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"<work-dir>\\llama.cpp-b11476\\conversion\\deepseek.py\", line 446, in modify_tensors\n    k_b = k_b.transpose(1, 2)\n          ^^^^^^^^^^^^^^^^^^^\n  File \"<work-dir>\\llama.cpp-b11476\\convert_lora_to_gguf.py\", line 185, in transpose\n    return self.permute(*dims)\n           ^^^^^^^^^^^^^^^^^^^\n  File \"<work-dir>\\llama.cpp-b11476\\convert_lora_to_gguf.py\", line 179, in permute\n    raise NotImplementedError\nNotImplementedError\n"
+     },
+     "verdict": "CONVERT-FAILED"
+    },
+    "all": {
+     "targets": [
+      "q_a_proj",
+      "q_b_proj",
+      "kv_a_proj_with_mqa",
+      "kv_b_proj",
+      "o_proj",
+      "shared_experts.gate_proj",
+      "shared_experts.up_proj",
+      "shared_experts.down_proj"
+     ],
+     "adapted_modules": [
+      "model.layers.0.self_attn.kv_a_proj_with_mqa",
+      "model.layers.0.self_attn.kv_b_proj",
+      "model.layers.0.self_attn.o_proj",
+      "model.layers.0.self_attn.q_a_proj",
+      "model.layers.0.self_attn.q_b_proj",
+      "model.layers.1.self_attn.kv_a_proj_with_mqa",
+      "model.layers.1.self_attn.kv_b_proj",
+      "model.layers.1.self_attn.o_proj",
+      "model.layers.1.self_attn.q_a_proj",
+      "model.layers.1.self_attn.q_b_proj",
+      "model.layers.2.self_attn.kv_a_proj_with_mqa",
+      "model.layers.2.self_attn.kv_b_proj",
+      "model.layers.2.self_attn.o_proj",
+      "model.layers.2.self_attn.q_a_proj",
+      "model.layers.2.self_attn.q_b_proj"
+     ],
+     "lora_b_std": 0.02,
+     "reference_disabled_is_base": true,
+     "s_ref": 0.4745059967885069,
+     "convert": {
+      "ok": false,
+      "returncode": 1,
+      "stderr_tail": "INFO:lora-to-gguf:Loading base model: dsv3-tiny-seed17\nINFO:lora-to-gguf:Using model architecture: DeepseekV3ForCausalLM\nINFO:hf-to-gguf:gguf: indexing model part 'model.safetensors'\nINFO:gguf.gguf_writer:gguf: This GGUF file is for Little Endian only\nINFO:lora-to-gguf:Exporting model...\nINFO:hf-to-gguf:blk.0.attn_kv_a_mqa.weight.lora_a,   torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.0.attn_kv_a_mqa.weight.lora_b,   torch.float32 --> F32, shape = {8, 24}\nTraceback (most recent call last):\n  File \"<work-dir>\\llama.cpp-b11476\\convert_lora_to_gguf.py\", line 545, in <module>\n    model_instance.write()\n  File \"<work-dir>\\llama.cpp-b11476\\conversion\\base.py\", line 1234, in write\n    self.prepare_tensors()\n  File \"<work-dir>\\llama.cpp-b11476\\conversion\\deepseek.py\", line 455, in prepare_tensors\n    super().prepare_tensors()\n  File \"<work-dir>\\llama.cpp-b11476\\conversion\\base.py\", line 1075, in prepare_tensors\n    for new_name, data_torch in (self.modify_tensors(data_torch, name, bid)):\n                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"<work-dir>\\llama.cpp-b11476\\convert_lora_to_gguf.py\", line 502, in modify_tensors\n    dest = list(super().modify_tensors(data_torch, name, bid))\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"<work-dir>\\llama.cpp-b11476\\conversion\\deepseek.py\", line 446, in modify_tensors\n    k_b = k_b.transpose(1, 2)\n          ^^^^^^^^^^^^^^^^^^^\n  File \"<work-dir>\\llama.cpp-b11476\\convert_lora_to_gguf.py\", line 185, in transpose\n    return self.permute(*dims)\n           ^^^^^^^^^^^^^^^^^^^\n  File \"<work-dir>\\llama.cpp-b11476\\convert_lora_to_gguf.py\", line 179, in permute\n    raise NotImplementedError\nNotImplementedError\n"
+     },
+     "verdict": "CONVERT-FAILED"
+    },
+    "all-but-kv_b": {
+     "targets": [
+      "q_a_proj",
+      "q_b_proj",
+      "kv_a_proj_with_mqa",
+      "o_proj",
+      "shared_experts.gate_proj",
+      "shared_experts.up_proj",
+      "shared_experts.down_proj"
+     ],
+     "adapted_modules": [
+      "model.layers.0.self_attn.kv_a_proj_with_mqa",
+      "model.layers.0.self_attn.o_proj",
+      "model.layers.0.self_attn.q_a_proj",
+      "model.layers.0.self_attn.q_b_proj",
+      "model.layers.1.self_attn.kv_a_proj_with_mqa",
+      "model.layers.1.self_attn.o_proj",
+      "model.layers.1.self_attn.q_a_proj",
+      "model.layers.1.self_attn.q_b_proj",
+      "model.layers.2.self_attn.kv_a_proj_with_mqa",
+      "model.layers.2.self_attn.o_proj",
+      "model.layers.2.self_attn.q_a_proj",
+      "model.layers.2.self_attn.q_b_proj"
+     ],
+     "lora_b_std": 0.02,
+     "reference_disabled_is_base": true,
+     "s_ref": 0.3588474755435487,
+     "convert": {
+      "ok": false,
+      "returncode": 1,
+      "stderr_tail": "'model.safetensors'\nINFO:gguf.gguf_writer:gguf: This GGUF file is for Little Endian only\nINFO:lora-to-gguf:Exporting model...\nINFO:hf-to-gguf:blk.0.attn_kv_a_mqa.weight.lora_a,   torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.0.attn_kv_a_mqa.weight.lora_b,   torch.float32 --> F32, shape = {8, 24}\nINFO:hf-to-gguf:blk.0.attn_output.weight.lora_a,     torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.0.attn_output.weight.lora_b,     torch.float32 --> F32, shape = {8, 64}\nINFO:hf-to-gguf:blk.0.attn_q_a.weight.lora_a,        torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.0.attn_q_a.weight.lora_b,        torch.float32 --> F32, shape = {8, 32}\nINFO:hf-to-gguf:blk.0.attn_q_b.weight.lora_a,        torch.float32 --> F32, shape = {32, 8}\nINFO:hf-to-gguf:blk.0.attn_q_b.weight.lora_b,        torch.float32 --> F32, shape = {8, 96}\nINFO:hf-to-gguf:blk.1.attn_kv_a_mqa.weight.lora_a,   torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.1.attn_kv_a_mqa.weight.lora_b,   torch.float32 --> F32, shape = {8, 24}\nINFO:hf-to-gguf:blk.1.attn_output.weight.lora_a,     torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.1.attn_output.weight.lora_b,     torch.float32 --> F32, shape = {8, 64}\nINFO:hf-to-gguf:blk.1.attn_q_a.weight.lora_a,        torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.1.attn_q_a.weight.lora_b,        torch.float32 --> F32, shape = {8, 32}\nINFO:hf-to-gguf:blk.1.attn_q_b.weight.lora_a,        torch.float32 --> F32, shape = {32, 8}\nINFO:hf-to-gguf:blk.1.attn_q_b.weight.lora_b,        torch.float32 --> F32, shape = {8, 96}\nINFO:hf-to-gguf:blk.2.attn_kv_a_mqa.weight.lora_a,   torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.2.attn_kv_a_mqa.weight.lora_b,   torch.float32 --> F32, shape = {8, 24}\nINFO:hf-to-gguf:blk.2.attn_output.weight.lora_a,     torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.2.attn_output.weight.lora_b,     torch.float32 --> F32, shape = {8, 64}\nINFO:hf-to-gguf:blk.2.attn_q_a.weight.lora_a,        torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.2.attn_q_a.weight.lora_b,        torch.float32 --> F32, shape = {8, 32}\nINFO:hf-to-gguf:blk.2.attn_q_b.weight.lora_a,        torch.float32 --> F32, shape = {32, 8}\nINFO:hf-to-gguf:blk.2.attn_q_b.weight.lora_b,        torch.float32 --> F32, shape = {8, 96}\nTraceback (most recent call last):\n  File \"<work-dir>\\llama.cpp-b11476\\convert_lora_to_gguf.py\", line 545, in <module>\n    model_instance.write()\n  File \"<work-dir>\\llama.cpp-b11476\\conversion\\base.py\", line 1234, in write\n    self.prepare_tensors()\n  File \"<work-dir>\\llama.cpp-b11476\\conversion\\deepseek.py\", line 461, in prepare_tensors\n    raise ValueError(f\"Unprocessed experts: {experts}\")\nValueError: Unprocessed experts: ['model.layers.1.mlp.experts.base_layer.weight', 'model.layers.1.mlp.experts.weight', 'model.layers.2.mlp.experts.base_layer.weight', 'model.layers.2.mlp.experts.weight']\n"
+     },
+     "verdict": "CONVERT-FAILED"
+    },
+    "q_a_proj": {
+     "targets": [
+      "q_a_proj"
+     ],
+     "adapted_modules": [
+      "model.layers.0.self_attn.q_a_proj",
+      "model.layers.1.self_attn.q_a_proj",
+      "model.layers.2.self_attn.q_a_proj"
+     ],
+     "lora_b_std": 0.08,
+     "reference_disabled_is_base": true,
+     "s_ref": 0.022471006212483657,
+     "convert": {
+      "ok": true,
+      "returncode": 0,
+      "stderr_tail": "INFO:lora-to-gguf:Loading base model: dsv3-tiny-seed17\nINFO:lora-to-gguf:Using model architecture: DeepseekV3ForCausalLM\nINFO:hf-to-gguf:gguf: indexing model part 'model.safetensors'\nINFO:gguf.gguf_writer:gguf: This GGUF file is for Little Endian only\nINFO:lora-to-gguf:Exporting model...\nINFO:hf-to-gguf:blk.0.attn_q_a.weight.lora_a,        torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.0.attn_q_a.weight.lora_b,        torch.float32 --> F32, shape = {8, 32}\nINFO:hf-to-gguf:blk.1.attn_q_a.weight.lora_a,        torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.1.attn_q_a.weight.lora_b,        torch.float32 --> F32, shape = {8, 32}\nINFO:hf-to-gguf:blk.2.attn_q_a.weight.lora_a,        torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.2.attn_q_a.weight.lora_b,        torch.float32 --> F32, shape = {8, 32}\nINFO:hf-to-gguf:Set meta model\nINFO:hf-to-gguf:Set model parameters\nINFO:hf-to-gguf:Set model quantization version\nINFO:hf-to-gguf:Set model tokenizer\nINFO:gguf.gguf_writer:Writing the following files:\nINFO:gguf.gguf_writer:<work-dir>\\run-a2\\dsv3-tiny-seed17-adapters\\q_a_proj-b1.gguf: n_tensors = 6, total_size = 9.2K\n\nWriting:   0%|          | 0.00/9.22k [00:00<?, ?byte/s]\nWriting: 100%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588| 9.22k/9.22k [00:00<00:00, 9.29Mbyte/s]\nINFO:lora-to-gguf:Model successfully exported to <work-dir>\\run-a2\\dsv3-tiny-seed17-adapters\\q_a_proj-b1.gguf\n"
+     },
+     "engine": {
+      "ok": true,
+      "returncode": 0,
+      "stderr_tail": "0.00.826.054 I cmn          init: llama threadpool init, n_threads = 4\n0.00.928.196 I main: writing results to <work-dir>\\run-a2\\dsv3-tiny-seed17-adapters\\q_a_proj.out.gguf...\n"
+     },
+     "tokens_match": true,
+     "rho": 0.0,
+     "r": 1.0,
+     "cos": 0.0,
+     "digests": {
+      "z_ref1": "d2e58837ccce062d",
+      "z_eng1": "335cb195482f1d64"
+     },
+     "verdict": "DROPPED"
+    },
+    "q_b_proj": {
+     "targets": [
+      "q_b_proj"
+     ],
+     "adapted_modules": [
+      "model.layers.0.self_attn.q_b_proj",
+      "model.layers.1.self_attn.q_b_proj",
+      "model.layers.2.self_attn.q_b_proj"
+     ],
+     "lora_b_std": 0.08,
+     "reference_disabled_is_base": true,
+     "s_ref": 0.025263327859692805,
+     "convert": {
+      "ok": true,
+      "returncode": 0,
+      "stderr_tail": "INFO:lora-to-gguf:Loading base model: dsv3-tiny-seed17\nINFO:lora-to-gguf:Using model architecture: DeepseekV3ForCausalLM\nINFO:hf-to-gguf:gguf: indexing model part 'model.safetensors'\nINFO:gguf.gguf_writer:gguf: This GGUF file is for Little Endian only\nINFO:lora-to-gguf:Exporting model...\nINFO:hf-to-gguf:blk.0.attn_q_b.weight.lora_a,        torch.float32 --> F32, shape = {32, 8}\nINFO:hf-to-gguf:blk.0.attn_q_b.weight.lora_b,        torch.float32 --> F32, shape = {8, 96}\nINFO:hf-to-gguf:blk.1.attn_q_b.weight.lora_a,        torch.float32 --> F32, shape = {32, 8}\nINFO:hf-to-gguf:blk.1.attn_q_b.weight.lora_b,        torch.float32 --> F32, shape = {8, 96}\nINFO:hf-to-gguf:blk.2.attn_q_b.weight.lora_a,        torch.float32 --> F32, shape = {32, 8}\nINFO:hf-to-gguf:blk.2.attn_q_b.weight.lora_b,        torch.float32 --> F32, shape = {8, 96}\nINFO:hf-to-gguf:Set meta model\nINFO:hf-to-gguf:Set model parameters\nINFO:hf-to-gguf:Set model quantization version\nINFO:hf-to-gguf:Set model tokenizer\nINFO:gguf.gguf_writer:Writing the following files:\nINFO:gguf.gguf_writer:<work-dir>\\run-a2\\dsv3-tiny-seed17-adapters\\q_b_proj-b1.gguf: n_tensors = 6, total_size = 12.3K\n\nWriting:   0%|          | 0.00/12.3k [00:00<?, ?byte/s]\nWriting: 100%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588| 12.3k/12.3k [00:00<?, ?byte/s]\nINFO:lora-to-gguf:Model successfully exported to <work-dir>\\run-a2\\dsv3-tiny-seed17-adapters\\q_b_proj-b1.gguf\n"
+     },
+     "engine": {
+      "ok": true,
+      "returncode": 0,
+      "stderr_tail": "0.00.852.083 I cmn          init: llama threadpool init, n_threads = 4\n0.00.948.256 I main: writing results to <work-dir>\\run-a2\\dsv3-tiny-seed17-adapters\\q_b_proj.out.gguf...\n"
+     },
+     "tokens_match": true,
+     "rho": 0.0,
+     "r": 1.0,
+     "cos": 0.0,
+     "digests": {
+      "z_ref1": "acbf64fcf6be9b59",
+      "z_eng1": "335cb195482f1d64"
+     },
+     "verdict": "DROPPED"
+    },
+    "kv_a_proj_with_mqa": {
+     "targets": [
+      "kv_a_proj_with_mqa"
+     ],
+     "adapted_modules": [
+      "model.layers.0.self_attn.kv_a_proj_with_mqa",
+      "model.layers.1.self_attn.kv_a_proj_with_mqa",
+      "model.layers.2.self_attn.kv_a_proj_with_mqa"
+     ],
+     "lora_b_std": 0.02,
+     "reference_disabled_is_base": true,
+     "s_ref": 0.24099829209112614,
+     "convert": {
+      "ok": true,
+      "returncode": 0,
+      "stderr_tail": "INFO:lora-to-gguf:Loading base model: dsv3-tiny-seed17\nINFO:lora-to-gguf:Using model architecture: DeepseekV3ForCausalLM\nINFO:hf-to-gguf:gguf: indexing model part 'model.safetensors'\nINFO:gguf.gguf_writer:gguf: This GGUF file is for Little Endian only\nINFO:lora-to-gguf:Exporting model...\nINFO:hf-to-gguf:blk.0.attn_kv_a_mqa.weight.lora_a,   torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.0.attn_kv_a_mqa.weight.lora_b,   torch.float32 --> F32, shape = {8, 24}\nINFO:hf-to-gguf:blk.1.attn_kv_a_mqa.weight.lora_a,   torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.1.attn_kv_a_mqa.weight.lora_b,   torch.float32 --> F32, shape = {8, 24}\nINFO:hf-to-gguf:blk.2.attn_kv_a_mqa.weight.lora_a,   torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.2.attn_kv_a_mqa.weight.lora_b,   torch.float32 --> F32, shape = {8, 24}\nINFO:hf-to-gguf:Set meta model\nINFO:hf-to-gguf:Set model parameters\nINFO:hf-to-gguf:Set model quantization version\nINFO:hf-to-gguf:Set model tokenizer\nINFO:gguf.gguf_writer:Writing the following files:\nINFO:gguf.gguf_writer:<work-dir>\\run-a2\\dsv3-tiny-seed17-adapters\\kv_a_proj_with_mqa-b0.gguf: n_tensors = 6, total_size = 8.4K\n\nWriting:   0%|          | 0.00/8.45k [00:00<?, ?byte/s]\nWriting: 100%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588| 8.45k/8.45k [00:00<?, ?byte/s]\nINFO:lora-to-gguf:Model successfully exported to <work-dir>\\run-a2\\dsv3-tiny-seed17-adapters\\kv_a_proj_with_mqa-b0.gguf\n"
+     },
+     "engine": {
+      "ok": true,
+      "returncode": 0,
+      "stderr_tail": "0.00.840.750 I cmn          init: llama threadpool init, n_threads = 4\n0.00.932.459 I main: writing results to <work-dir>\\run-a2\\dsv3-tiny-seed17-adapters\\kv_a_proj_with_mqa.out.gguf...\n"
+     },
+     "tokens_match": true,
+     "rho": 0.0,
+     "r": 1.0,
+     "cos": 0.0,
+     "digests": {
+      "z_ref1": "f68197ae2f6b50cc",
+      "z_eng1": "335cb195482f1d64"
+     },
+     "verdict": "DROPPED"
+    },
+    "kv_b_proj": {
+     "targets": [
+      "kv_b_proj"
+     ],
+     "adapted_modules": [
+      "model.layers.0.self_attn.kv_b_proj",
+      "model.layers.1.self_attn.kv_b_proj",
+      "model.layers.2.self_attn.kv_b_proj"
+     ],
+     "lora_b_std": 0.02,
+     "reference_disabled_is_base": true,
+     "s_ref": 0.4683741161840769,
+     "convert": {
+      "ok": false,
+      "returncode": 1,
+      "stderr_tail": "INFO:lora-to-gguf:Loading base model: dsv3-tiny-seed17\nINFO:lora-to-gguf:Using model architecture: DeepseekV3ForCausalLM\nINFO:hf-to-gguf:gguf: indexing model part 'model.safetensors'\nINFO:gguf.gguf_writer:gguf: This GGUF file is for Little Endian only\nINFO:lora-to-gguf:Exporting model...\nTraceback (most recent call last):\n  File \"<work-dir>\\llama.cpp-b11476\\convert_lora_to_gguf.py\", line 545, in <module>\n    model_instance.write()\n  File \"<work-dir>\\llama.cpp-b11476\\conversion\\base.py\", line 1234, in write\n    self.prepare_tensors()\n  File \"<work-dir>\\llama.cpp-b11476\\conversion\\deepseek.py\", line 455, in prepare_tensors\n    super().prepare_tensors()\n  File \"<work-dir>\\llama.cpp-b11476\\conversion\\base.py\", line 1075, in prepare_tensors\n    for new_name, data_torch in (self.modify_tensors(data_torch, name, bid)):\n                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"<work-dir>\\llama.cpp-b11476\\convert_lora_to_gguf.py\", line 502, in modify_tensors\n    dest = list(super().modify_tensors(data_torch, name, bid))\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"<work-dir>\\llama.cpp-b11476\\conversion\\deepseek.py\", line 446, in modify_tensors\n    k_b = k_b.transpose(1, 2)\n          ^^^^^^^^^^^^^^^^^^^\n  File \"<work-dir>\\llama.cpp-b11476\\convert_lora_to_gguf.py\", line 185, in transpose\n    return self.permute(*dims)\n           ^^^^^^^^^^^^^^^^^^^\n  File \"<work-dir>\\llama.cpp-b11476\\convert_lora_to_gguf.py\", line 179, in permute\n    raise NotImplementedError\nNotImplementedError\n"
+     },
+     "verdict": "CONVERT-FAILED"
+    },
+    "o_proj": {
+     "targets": [
+      "o_proj"
+     ],
+     "adapted_modules": [
+      "model.layers.0.self_attn.o_proj",
+      "model.layers.1.self_attn.o_proj",
+      "model.layers.2.self_attn.o_proj"
+     ],
+     "lora_b_std": 0.02,
+     "reference_disabled_is_base": true,
+     "s_ref": 0.20526176099006643,
+     "convert": {
+      "ok": true,
+      "returncode": 0,
+      "stderr_tail": "INFO:lora-to-gguf:Loading base model: dsv3-tiny-seed17\nINFO:lora-to-gguf:Using model architecture: DeepseekV3ForCausalLM\nINFO:hf-to-gguf:gguf: indexing model part 'model.safetensors'\nINFO:gguf.gguf_writer:gguf: This GGUF file is for Little Endian only\nINFO:lora-to-gguf:Exporting model...\nINFO:hf-to-gguf:blk.0.attn_output.weight.lora_a,     torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.0.attn_output.weight.lora_b,     torch.float32 --> F32, shape = {8, 64}\nINFO:hf-to-gguf:blk.1.attn_output.weight.lora_a,     torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.1.attn_output.weight.lora_b,     torch.float32 --> F32, shape = {8, 64}\nINFO:hf-to-gguf:blk.2.attn_output.weight.lora_a,     torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.2.attn_output.weight.lora_b,     torch.float32 --> F32, shape = {8, 64}\nINFO:hf-to-gguf:Set meta model\nINFO:hf-to-gguf:Set model parameters\nINFO:hf-to-gguf:Set model quantization version\nINFO:hf-to-gguf:Set model tokenizer\nINFO:gguf.gguf_writer:Writing the following files:\nINFO:gguf.gguf_writer:<work-dir>\\run-a2\\dsv3-tiny-seed17-adapters\\o_proj-b0.gguf: n_tensors = 6, total_size = 12.3K\n\nWriting:   0%|          | 0.00/12.3k [00:00<?, ?byte/s]\nWriting: 100%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588| 12.3k/12.3k [00:00<00:00, 12.1Mbyte/s]\nINFO:lora-to-gguf:Model successfully exported to <work-dir>\\run-a2\\dsv3-tiny-seed17-adapters\\o_proj-b0.gguf\n"
+     },
+     "engine": {
+      "ok": true,
+      "returncode": 0,
+      "stderr_tail": "0.00.821.912 I cmn          init: llama threadpool init, n_threads = 4\n0.00.912.055 I main: writing results to <work-dir>\\run-a2\\dsv3-tiny-seed17-adapters\\o_proj.out.gguf...\n"
+     },
+     "tokens_match": true,
+     "rho": 1.000000009628937,
+     "r": 1.485292171265747e-06,
+     "cos": 0.999999999998916,
+     "digests": {
+      "z_ref1": "83fe9ee33e0e2358",
+      "z_eng1": "be9f61357db74ad7"
+     },
+     "verdict": "APPLIED"
+    },
+    "shared": {
+     "targets": [
+      "shared_experts.gate_proj",
+      "shared_experts.up_proj",
+      "shared_experts.down_proj"
+     ],
+     "adapted_modules": [],
+     "lora_b_std": 0.02,
+     "reference_disabled_is_base": true,
+     "s_ref": 0.20543185960954083,
+     "convert": {
+      "ok": false,
+      "returncode": 1,
+      "stderr_tail": "INFO:lora-to-gguf:Loading base model: dsv3-tiny-seed17\nINFO:lora-to-gguf:Using model architecture: DeepseekV3ForCausalLM\nINFO:hf-to-gguf:gguf: indexing model part 'model.safetensors'\nINFO:gguf.gguf_writer:gguf: This GGUF file is for Little Endian only\nINFO:lora-to-gguf:Exporting model...\nTraceback (most recent call last):\n  File \"<work-dir>\\llama.cpp-b11476\\convert_lora_to_gguf.py\", line 545, in <module>\n    model_instance.write()\n  File \"<work-dir>\\llama.cpp-b11476\\conversion\\base.py\", line 1234, in write\n    self.prepare_tensors()\n  File \"<work-dir>\\llama.cpp-b11476\\conversion\\deepseek.py\", line 461, in prepare_tensors\n    raise ValueError(f\"Unprocessed experts: {experts}\")\nValueError: Unprocessed experts: ['model.layers.1.mlp.experts.base_layer.weight', 'model.layers.1.mlp.experts.weight', 'model.layers.2.mlp.experts.base_layer.weight', 'model.layers.2.mlp.experts.weight']\n"
+     },
+     "verdict": "CONVERT-FAILED"
+    }
+   }
+  }
+ },
+ "probe": {
+  "verdict": "NO VERDICT",
+  "why": "positive control not APPLIED: ['q_proj', 'v_proj', 'shared']"
+ }
+}

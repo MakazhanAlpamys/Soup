@@ -1,0 +1,53 @@
+=== 2026-10-08T16:32:35.993815980Z
+$ cp '/tmp/tmp.Xf1AUQdxQv/does-not-exist' '/tmp/tmp.Xf1AUQdxQv/destination' | cat
+cp: cannot stat '/tmp/tmp.Xf1AUQdxQv/does-not-exist': No such file or directory
+
+=== 2026-10-08T16:32:36.106353357Z
+$ timeout 300 brev exec 'guard-test' 'tar czf ~/holdout-out.tgz -C ~ holdout-results holdout-setup.log && sha256sum ~/holdout-out.tgz'
+c8a8506b05e942752e602d1ae39ccd32717289bd6f9e62ac70d15bbf9ebbf6b5  /home/ubuntu/holdout-out.tgz
+
+=== 2026-10-08T16:32:36.272608652Z
+$ timeout 600 brev copy 'guard-test:/home/ubuntu/holdout-out.tgz' './holdout-out/guard-test.tgz'
+cp: cannot stat '/tmp/tmp.Xf1AUQdxQv/does-not-exist': No such file or directory
+
+=== 2026-10-08T17:04:26.841961162Z
+$ cp '/tmp/tmp.3hks7uO3Gd/does-not-exist' '/tmp/tmp.3hks7uO3Gd/destination' | cat
+cp: cannot stat '/tmp/tmp.3hks7uO3Gd/does-not-exist': No such file or directory
+
+=== 2026-10-08T17:04:27.721466121Z
+$ timeout 300 brev exec 'guard-test' 'tar czf ~/holdout-out.tgz -C ~ holdout-results holdout-setup.log && sha256sum ~/holdout-out.tgz'
+c8a8506b05e942752e602d1ae39ccd32717289bd6f9e62ac70d15bbf9ebbf6b5  /home/ubuntu/holdout-out.tgz
+
+=== 2026-10-08T17:04:28.351487821Z
+$ timeout 600 brev copy 'guard-test:/home/ubuntu/holdout-out.tgz' './holdout-out/guard-test.tgz'
+cp: cannot stat '/tmp/tmp.3hks7uO3Gd/does-not-exist': No such file or directory
+
+=== 2026-10-08T17:09:09.938293846Z
+$ cp '/tmp/tmp.pcBc8YEpZ7/does-not-exist' '/tmp/tmp.pcBc8YEpZ7/destination' | cat
+cp: cannot stat '/tmp/tmp.pcBc8YEpZ7/does-not-exist': No such file or directory
+
+=== 2026-10-08T17:09:10.229112382Z
+$ timeout 300 brev exec 'guard-test' 'tar czf ~/holdout-out.tgz -C ~ holdout-results holdout-setup.log && sha256sum ~/holdout-out.tgz && printf "HOLDOUT_HOME=%s\n" "$HOME"'
+c8a8506b05e942752e602d1ae39ccd32717289bd6f9e62ac70d15bbf9ebbf6b5  /home/cloud-test/holdout-out.tgz
+HOLDOUT_HOME=/home/cloud-test
+
+=== 2026-10-08T17:09:10.567640345Z
+$ timeout 600 brev copy 'guard-test:/home/cloud-test/holdout-out.tgz' './holdout-out/guard-test.tgz'
+cp: cannot stat '/tmp/tmp.pcBc8YEpZ7/does-not-exist': No such file or directory
+
+=== 2026-10-09T02:20:10.560477281Z
+$ cp '/tmp/tmp.1Gf928r6Fd/does-not-exist' '/tmp/tmp.1Gf928r6Fd/destination' | cat
+cp: cannot stat '/tmp/tmp.1Gf928r6Fd/does-not-exist': No such file or directory
+EXIT_STATUS=1
+
+=== 2026-10-09T02:20:10.650197473Z
+$ timeout 300 brev exec 'guard-test' 'tar czf ~/holdout-out.tgz -C ~ holdout-results holdout-setup.log && sha256sum ~/holdout-out.tgz && printf "HOLDOUT_HOME=%s\n" "$HOME"'
+c8a8506b05e942752e602d1ae39ccd32717289bd6f9e62ac70d15bbf9ebbf6b5  /home/cloud-test/holdout-out.tgz
+HOLDOUT_HOME=/home/cloud-test
+EXIT_STATUS=0
+
+=== 2026-10-09T02:20:10.805394745Z
+$ timeout 600 brev copy 'guard-test:/home/cloud-test/holdout-out.tgz' './holdout-out/guard-test.tgz'
+cp: cannot stat '/tmp/tmp.1Gf928r6Fd/does-not-exist': No such file or directory
+EXIT_STATUS=1
+

@@ -1,0 +1,119 @@
+{
+ "harness_sha256_16": "f38f10f090c03add",
+ "parity_sha256_16": "fef0de9e9bcad8e4",
+ "reference_env": {
+  "torch": "2.14.1",
+  "transformers": "5.19.0",
+  "peft": "0.21.2",
+  "numpy": "2.5.3"
+ },
+ "configs": {
+  "qwen3.5-35b-a3b": {
+   "model": "Qwen/Qwen3.5-35B-A3B@59d61f3ce65a6d9863b86d2e96597125219dc754",
+   "targets": [
+    "q_proj",
+    "v_proj",
+    "in_proj_qkv",
+    "out_proj",
+    "shared_expert.gate_proj",
+    "shared_expert.up_proj",
+    "shared_expert.down_proj"
+   ],
+   "adapted_modules": 200,
+   "stock": {
+    "convert": {
+     "ok": true,
+     "returncode": 0,
+     "stderr_tail": "exp.weight.lora_a,     torch.float32 --> F32, shape = {2048, 8}\nINFO:hf-to-gguf:blk.7.ffn_up_shexp.weight.lora_b,     torch.float32 --> F32, shape = {8, 512}\nINFO:hf-to-gguf:blk.7.attn_q.weight.lora_a,           torch.float32 --> F32, shape = {2048, 8}\nINFO:hf-to-gguf:blk.7.attn_q.weight.lora_b,           torch.float32 --> F32, shape = {8, 8192}\nINFO:hf-to-gguf:blk.7.attn_v.weight.lora_a,           torch.float32 --> F32, shape = {2048, 8}\nINFO:hf-to-gguf:blk.7.attn_v.weight.lora_b,           torch.float32 --> F32, shape = {8, 512}\nINFO:hf-to-gguf:blk.8.attn_qkv.weight.lora_a,         torch.float32 --> F32, shape = {2048, 8}\nINFO:hf-to-gguf:blk.8.attn_qkv.weight.lora_b,         torch.float32 --> F32, shape = {8, 8192}\nINFO:hf-to-gguf:blk.8.ssm_out.weight.lora_a,          torch.float32 --> F32, shape = {4096, 8}\nINFO:hf-to-gguf:blk.8.ssm_out.weight.lora_b,          torch.float32 --> F32, shape = {8, 2048}\nINFO:hf-to-gguf:blk.8.ffn_down_shexp.weight.lora_a,   torch.float32 --> F32, shape = {512, 8}\nINFO:hf-to-gguf:blk.8.ffn_down_shexp.weight.lora_b,   torch.float32 --> F32, shape = {8, 2048}\nINFO:hf-to-gguf:blk.8.ffn_gate_shexp.weight.lora_a,   torch.float32 --> F32, shape = {2048, 8}\nINFO:hf-to-gguf:blk.8.ffn_gate_shexp.weight.lora_b,   torch.float32 --> F32, shape = {8, 512}\nINFO:hf-to-gguf:blk.8.ffn_up_shexp.weight.lora_a,     torch.float32 --> F32, shape = {2048, 8}\nINFO:hf-to-gguf:blk.8.ffn_up_shexp.weight.lora_b,     torch.float32 --> F32, shape = {8, 512}\nINFO:hf-to-gguf:blk.9.attn_qkv.weight.lora_a,         torch.float32 --> F32, shape = {2048, 8}\nINFO:hf-to-gguf:blk.9.attn_qkv.weight.lora_b,         torch.float32 --> F32, shape = {8, 8192}\nINFO:hf-to-gguf:blk.9.ssm_out.weight.lora_a,          torch.float32 --> F32, shape = {4096, 8}\nINFO:hf-to-gguf:blk.9.ssm_out.weight.lora_b,          torch.float32 --> F32, shape = {8, 2048}\nINFO:hf-to-gguf:blk.9.ffn_down_shexp.weight.lora_a,   torch.float32 --> F32, shape = {512, 8}\nINFO:hf-to-gguf:blk.9.ffn_down_shexp.weight.lora_b,   torch.float32 --> F32, shape = {8, 2048}\nINFO:hf-to-gguf:blk.9.ffn_gate_shexp.weight.lora_a,   torch.float32 --> F32, shape = {2048, 8}\nINFO:hf-to-gguf:blk.9.ffn_gate_shexp.weight.lora_b,   torch.float32 --> F32, shape = {8, 512}\nINFO:hf-to-gguf:blk.9.ffn_up_shexp.weight.lora_a,     torch.float32 --> F32, shape = {2048, 8}\nINFO:hf-to-gguf:blk.9.ffn_up_shexp.weight.lora_b,     torch.float32 --> F32, shape = {8, 512}\nINFO:hf-to-gguf:Set meta model\nINFO:hf-to-gguf:Set model parameters\nINFO:hf-to-gguf:Set model quantization version\nINFO:hf-to-gguf:Set model tokenizer\nINFO:gguf.gguf_writer:Writing the following files:\nINFO:gguf.gguf_writer:<work-dir>\\run-b0-3\\qwen3.5-35b-a3b.stock.gguf: n_tensors = 400, total_size = 29.7M\n\nWriting:   0%|          | 0.00/29.7M [00:00<?, ?byte/s]\nWriting: 100%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588| 29.7M/29.7M [00:00<00:00, 456Mbyte/s]\nINFO:lora-to-gguf:Model successfully exported to <work-dir>\\run-b0-3\\qwen3.5-35b-a3b.stock.gguf\n"
+    },
+    "pairs": 200,
+    "problems": [],
+    "problem_count": 0,
+    "verdict": "PASS",
+    "llama_src_head": "988190680d5a89fce97de3c20df2c2813731fd61"
+   },
+   "hook": {
+    "convert": {
+     "ok": true,
+     "returncode": 0,
+     "stderr_tail": "shexp.weight.lora_a,     torch.float32 --> F32, shape = {2048, 8}\nINFO:hf-to-gguf:blk.7.ffn_up_shexp.weight.lora_b,     torch.float32 --> F32, shape = {8, 512}\nINFO:hf-to-gguf:blk.7.attn_q.weight.lora_a,           torch.float32 --> F32, shape = {2048, 8}\nINFO:hf-to-gguf:blk.7.attn_q.weight.lora_b,           torch.float32 --> F32, shape = {8, 8192}\nINFO:hf-to-gguf:blk.7.attn_v.weight.lora_a,           torch.float32 --> F32, shape = {2048, 8}\nINFO:hf-to-gguf:blk.7.attn_v.weight.lora_b,           torch.float32 --> F32, shape = {8, 512}\nINFO:hf-to-gguf:blk.8.attn_qkv.weight.lora_a,         torch.float32 --> F32, shape = {2048, 8}\nINFO:hf-to-gguf:blk.8.attn_qkv.weight.lora_b,         torch.float32 --> F32, shape = {8, 8192}\nINFO:hf-to-gguf:blk.8.ssm_out.weight.lora_a,          torch.float32 --> F32, shape = {4096, 8}\nINFO:hf-to-gguf:blk.8.ssm_out.weight.lora_b,          torch.float32 --> F32, shape = {8, 2048}\nINFO:hf-to-gguf:blk.8.ffn_down_shexp.weight.lora_a,   torch.float32 --> F32, shape = {512, 8}\nINFO:hf-to-gguf:blk.8.ffn_down_shexp.weight.lora_b,   torch.float32 --> F32, shape = {8, 2048}\nINFO:hf-to-gguf:blk.8.ffn_gate_shexp.weight.lora_a,   torch.float32 --> F32, shape = {2048, 8}\nINFO:hf-to-gguf:blk.8.ffn_gate_shexp.weight.lora_b,   torch.float32 --> F32, shape = {8, 512}\nINFO:hf-to-gguf:blk.8.ffn_up_shexp.weight.lora_a,     torch.float32 --> F32, shape = {2048, 8}\nINFO:hf-to-gguf:blk.8.ffn_up_shexp.weight.lora_b,     torch.float32 --> F32, shape = {8, 512}\nINFO:hf-to-gguf:blk.9.attn_qkv.weight.lora_a,         torch.float32 --> F32, shape = {2048, 8}\nINFO:hf-to-gguf:blk.9.attn_qkv.weight.lora_b,         torch.float32 --> F32, shape = {8, 8192}\nINFO:hf-to-gguf:blk.9.ssm_out.weight.lora_a,          torch.float32 --> F32, shape = {4096, 8}\nINFO:hf-to-gguf:blk.9.ssm_out.weight.lora_b,          torch.float32 --> F32, shape = {8, 2048}\nINFO:hf-to-gguf:blk.9.ffn_down_shexp.weight.lora_a,   torch.float32 --> F32, shape = {512, 8}\nINFO:hf-to-gguf:blk.9.ffn_down_shexp.weight.lora_b,   torch.float32 --> F32, shape = {8, 2048}\nINFO:hf-to-gguf:blk.9.ffn_gate_shexp.weight.lora_a,   torch.float32 --> F32, shape = {2048, 8}\nINFO:hf-to-gguf:blk.9.ffn_gate_shexp.weight.lora_b,   torch.float32 --> F32, shape = {8, 512}\nINFO:hf-to-gguf:blk.9.ffn_up_shexp.weight.lora_a,     torch.float32 --> F32, shape = {2048, 8}\nINFO:hf-to-gguf:blk.9.ffn_up_shexp.weight.lora_b,     torch.float32 --> F32, shape = {8, 512}\nINFO:hf-to-gguf:Set meta model\nINFO:hf-to-gguf:Set model parameters\nINFO:hf-to-gguf:Set model quantization version\nINFO:hf-to-gguf:Set model tokenizer\nINFO:gguf.gguf_writer:Writing the following files:\nINFO:gguf.gguf_writer:<work-dir>\\run-b0-3\\qwen3.5-35b-a3b.hook.gguf: n_tensors = 400, total_size = 29.7M\n\nWriting:   0%|          | 0.00/29.7M [00:00<?, ?byte/s]\nWriting: 100%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588| 29.7M/29.7M [00:00<00:00, 449Mbyte/s]\nINFO:lora-to-gguf:Model successfully exported to <work-dir>\\run-b0-3\\qwen3.5-35b-a3b.hook.gguf\n"
+    },
+    "pairs": 200,
+    "problems": [],
+    "problem_count": 0,
+    "verdict": "PASS",
+    "llama_src_head": "988190680d5a89fce97de3c20df2c2813731fd61"
+   }
+  },
+  "deepseek-v3": {
+   "model": "deepseek-ai/DeepSeek-V3@e815299b0bcbac849fa540c768ef21845365c9eb",
+   "targets": [
+    "q_a_proj",
+    "q_b_proj",
+    "kv_a_proj_with_mqa",
+    "kv_b_proj",
+    "o_proj",
+    "shared_experts.gate_proj",
+    "shared_experts.up_proj",
+    "shared_experts.down_proj"
+   ],
+   "adapted_modules": 479,
+   "stock": {
+    "convert": {
+     "ok": false,
+     "returncode": 1,
+     "stderr_tail": "INFO:lora-to-gguf:Loading base model: deepseek-v3-config\nINFO:lora-to-gguf:Using model architecture: DeepseekV3ForCausalLM\nINFO:gguf.gguf_writer:gguf: This GGUF file is for Little Endian only\nINFO:lora-to-gguf:Exporting model...\nINFO:hf-to-gguf:blk.0.attn_kv_a_mqa.weight.lora_a,    torch.float32 --> F32, shape = {7168, 8}\nINFO:hf-to-gguf:blk.0.attn_kv_a_mqa.weight.lora_b,    torch.float32 --> F32, shape = {8, 576}\nTraceback (most recent call last):\n  File \"<work-dir>\\llama.cpp-b11476\\convert_lora_to_gguf.py\", line 545, in <module>\n    model_instance.write()\n  File \"<work-dir>\\llama.cpp-b11476\\conversion\\base.py\", line 1234, in write\n    self.prepare_tensors()\n  File \"<work-dir>\\llama.cpp-b11476\\conversion\\deepseek.py\", line 455, in prepare_tensors\n    super().prepare_tensors()\n  File \"<work-dir>\\llama.cpp-b11476\\conversion\\base.py\", line 1075, in prepare_tensors\n    for new_name, data_torch in (self.modify_tensors(data_torch, name, bid)):\n                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"<work-dir>\\llama.cpp-b11476\\convert_lora_to_gguf.py\", line 502, in modify_tensors\n    dest = list(super().modify_tensors(data_torch, name, bid))\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"<work-dir>\\llama.cpp-b11476\\conversion\\deepseek.py\", line 446, in modify_tensors\n    k_b = k_b.transpose(1, 2)\n          ^^^^^^^^^^^^^^^^^^^\n  File \"<work-dir>\\llama.cpp-b11476\\convert_lora_to_gguf.py\", line 185, in transpose\n    return self.permute(*dims)\n           ^^^^^^^^^^^^^^^^^^^\n  File \"<work-dir>\\llama.cpp-b11476\\convert_lora_to_gguf.py\", line 179, in permute\n    raise NotImplementedError\nNotImplementedError\n"
+    },
+    "verdict": "FAIL",
+    "llama_src_head": "988190680d5a89fce97de3c20df2c2813731fd61"
+   },
+   "hook": {
+    "convert": {
+     "ok": true,
+     "returncode": 0,
+     "stderr_tail": "}\nINFO:hf-to-gguf:blk.9.ffn_down_shexp.weight.lora_b,   torch.float32 --> F32, shape = {8, 7168}\nINFO:hf-to-gguf:blk.9.ffn_gate_shexp.weight.lora_a,   torch.float32 --> F32, shape = {7168, 8}\nINFO:hf-to-gguf:blk.9.ffn_gate_shexp.weight.lora_b,   torch.float32 --> F32, shape = {8, 2048}\nINFO:hf-to-gguf:blk.9.ffn_up_shexp.weight.lora_a,     torch.float32 --> F32, shape = {7168, 8}\nINFO:hf-to-gguf:blk.9.ffn_up_shexp.weight.lora_b,     torch.float32 --> F32, shape = {8, 2048}\nINFO:hf-to-gguf:blk.9.attn_kv_a_mqa.weight.lora_a,    torch.float32 --> F32, shape = {7168, 8}\nINFO:hf-to-gguf:blk.9.attn_kv_a_mqa.weight.lora_b,    torch.float32 --> F32, shape = {8, 576}\nINFO:hf-to-gguf:blk.9.attn_k_b.weight.lora_a,         torch.float32 --> F32, shape = {128, 8, 128}\nINFO:hf-to-gguf:blk.9.attn_k_b.weight.lora_b,         torch.float32 --> F32, shape = {8, 512, 128}\nINFO:hf-to-gguf:blk.9.attn_v_b.weight.lora_a,         torch.float32 --> F32, shape = {512, 8, 1}\nINFO:hf-to-gguf:blk.9.attn_v_b.weight.lora_b,         torch.float32 --> F32, shape = {8, 128, 128}\nINFO:hf-to-gguf:blk.9.attn_output.weight.lora_a,      torch.float32 --> F32, shape = {16384, 8}\nINFO:hf-to-gguf:blk.9.attn_output.weight.lora_b,      torch.float32 --> F32, shape = {8, 7168}\nINFO:hf-to-gguf:blk.9.attn_q_a.weight.lora_a,         torch.float32 --> F32, shape = {7168, 8}\nINFO:hf-to-gguf:blk.9.attn_q_a.weight.lora_b,         torch.float32 --> F32, shape = {8, 1536}\nINFO:hf-to-gguf:blk.9.attn_q_b.weight.lora_a,         torch.float32 --> F32, shape = {1536, 8}\nINFO:hf-to-gguf:blk.9.attn_q_b.weight.lora_b,         torch.float32 --> F32, shape = {8, 24576}\nINFO:hf-to-gguf:Set meta model\nINFO:hf-to-gguf:Set model parameters\nINFO:hf-to-gguf:Set model quantization version\nINFO:hf-to-gguf:Set model tokenizer\nINFO:gguf.gguf_writer:Writing the following files:\nINFO:gguf.gguf_writer:<work-dir>\\run-b0-3\\deepseek-v3.hook.gguf: n_tensors = 1080, total_size = 373.3M\n\nWriting:   0%|          | 0.00/373M [00:00<?, ?byte/s]\nWriting:   5%|\u258c         | 20.5M/373M [00:00<00:01, 200Mbyte/s]\nWriting:  13%|\u2588\u258e        | 49.2M/373M [00:00<00:01, 238Mbyte/s]\nWriting:  20%|\u2588\u2588        | 75.6M/373M [00:00<00:01, 249Mbyte/s]\nWriting:  28%|\u2588\u2588\u258a       | 104M/373M [00:00<00:01, 257Mbyte/s] \nWriting:  35%|\u2588\u2588\u2588\u258d      | 131M/373M [00:00<00:00, 260Mbyte/s]\nWriting:  42%|\u2588\u2588\u2588\u2588\u258f     | 157M/373M [00:00<00:00, 256Mbyte/s]\nWriting:  49%|\u2588\u2588\u2588\u2588\u2589     | 183M/373M [00:00<00:00, 244Mbyte/s]\nWriting:  56%|\u2588\u2588\u2588\u2588\u2588\u258c    | 209M/373M [00:00<00:00, 245Mbyte/s]\nWriting:  63%|\u2588\u2588\u2588\u2588\u2588\u2588\u258e   | 236M/373M [00:00<00:00, 250Mbyte/s]\nWriting:  70%|\u2588\u2588\u2588\u2588\u2588\u2588\u2589   | 261M/373M [00:01<00:00, 250Mbyte/s]\nWriting:  77%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u258b  | 289M/373M [00:01<00:00, 252Mbyte/s]\nWriting:  86%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u258c | 319M/373M [00:01<00:00, 266Mbyte/s]\nWriting:  93%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u258e| 347M/373M [00:01<00:00, 265Mbyte/s]\nWriting: 100%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588| 373M/373M [00:01<00:00, 256Mbyte/s]\nINFO:lora-to-gguf:Model successfully exported to <work-dir>\\run-b0-3\\deepseek-v3.hook.gguf\n"
+    },
+    "pairs": 540,
+    "problems": [],
+    "problem_count": 0,
+    "verdict": "PASS",
+    "llama_src_head": "988190680d5a89fce97de3c20df2c2813731fd61"
+   }
+  },
+  "kimi-k2": {
+   "model": "moonshotai/Kimi-K2-Instruct@fd1984e2b7a3350dbf7305fe73a4ede25c14de50",
+   "targets": [
+    "q_a_proj",
+    "q_b_proj",
+    "kv_a_proj_with_mqa",
+    "kv_b_proj",
+    "o_proj",
+    "shared_experts.gate_proj",
+    "shared_experts.up_proj",
+    "shared_experts.down_proj"
+   ],
+   "adapted_modules": 485,
+   "stock": {
+    "convert": {
+     "ok": false,
+     "returncode": 1,
+     "stderr_tail": ":hf-to-gguf:Failed to load model config from <work-dir>\\run-b0-3\\kimi-k2-config: The repository <work-dir>\\run-b0-3\\kimi-k2-config contains custom code which must be executed to correctly load the model. You can inspect the repository content at <work-dir>\\run-b0-3\\kimi-k2-config .\n You can inspect the repository content at https://hf.co/<work-dir>\\run-b0-3\\kimi-k2-config.\nPlease pass the argument `trust_remote_code=True` to allow custom code to be run.\nWARNING:hf-to-gguf:Trying to load config.json instead\nINFO:lora-to-gguf:Using model architecture: DeepseekV3ForCausalLM\nINFO:gguf.gguf_writer:gguf: This GGUF file is for Little Endian only\nWARNING:hf-to-gguf:Failed to load model config from <work-dir>\\run-b0-3\\kimi-k2-config: The repository <work-dir>\\run-b0-3\\kimi-k2-config contains custom code which must be executed to correctly load the model. You can inspect the repository content at <work-dir>\\run-b0-3\\kimi-k2-config .\n You can inspect the repository content at https://hf.co/<work-dir>\\run-b0-3\\kimi-k2-config.\nPlease pass the argument `trust_remote_code=True` to allow custom code to be run.\nWARNING:hf-to-gguf:Trying to load config.json instead\nINFO:lora-to-gguf:Exporting model...\nINFO:hf-to-gguf:blk.0.attn_kv_a_mqa.weight.lora_a,    torch.float32 --> F32, shape = {7168, 8}\nINFO:hf-to-gguf:blk.0.attn_kv_a_mqa.weight.lora_b,    torch.float32 --> F32, shape = {8, 576}\nTraceback (most recent call last):\n  File \"<work-dir>\\llama.cpp-b11476\\convert_lora_to_gguf.py\", line 545, in <module>\n    model_instance.write()\n  File \"<work-dir>\\llama.cpp-b11476\\conversion\\base.py\", line 1234, in write\n    self.prepare_tensors()\n  File \"<work-dir>\\llama.cpp-b11476\\conversion\\deepseek.py\", line 455, in prepare_tensors\n    super().prepare_tensors()\n  File \"<work-dir>\\llama.cpp-b11476\\conversion\\base.py\", line 1075, in prepare_tensors\n    for new_name, data_torch in (self.modify_tensors(data_torch, name, bid)):\n                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"<work-dir>\\llama.cpp-b11476\\convert_lora_to_gguf.py\", line 502, in modify_tensors\n    dest = list(super().modify_tensors(data_torch, name, bid))\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"<work-dir>\\llama.cpp-b11476\\conversion\\deepseek.py\", line 446, in modify_tensors\n    k_b = k_b.transpose(1, 2)\n          ^^^^^^^^^^^^^^^^^^^\n  File \"<work-dir>\\llama.cpp-b11476\\convert_lora_to_gguf.py\", line 185, in transpose\n    return self.permute(*dims)\n           ^^^^^^^^^^^^^^^^^^^\n  File \"<work-dir>\\llama.cpp-b11476\\convert_lora_to_gguf.py\", line 179, in permute\n    raise NotImplementedError\nNotImplementedError\n"
+    },
+    "verdict": "FAIL",
+    "llama_src_head": "988190680d5a89fce97de3c20df2c2813731fd61"
+   },
+   "hook": {
+    "convert": {
+     "ok": true,
+     "returncode": 0,
+     "stderr_tail": ", 8}\nINFO:hf-to-gguf:blk.8.attn_q_a.weight.lora_b,         torch.float32 --> F32, shape = {8, 1536}\nINFO:hf-to-gguf:blk.8.attn_q_b.weight.lora_a,         torch.float32 --> F32, shape = {1536, 8}\nINFO:hf-to-gguf:blk.8.attn_q_b.weight.lora_b,         torch.float32 --> F32, shape = {8, 12288}\nINFO:hf-to-gguf:blk.9.ffn_down_shexp.weight.lora_a,   torch.float32 --> F32, shape = {2048, 8}\nINFO:hf-to-gguf:blk.9.ffn_down_shexp.weight.lora_b,   torch.float32 --> F32, shape = {8, 7168}\nINFO:hf-to-gguf:blk.9.ffn_gate_shexp.weight.lora_a,   torch.float32 --> F32, shape = {7168, 8}\nINFO:hf-to-gguf:blk.9.ffn_gate_shexp.weight.lora_b,   torch.float32 --> F32, shape = {8, 2048}\nINFO:hf-to-gguf:blk.9.ffn_up_shexp.weight.lora_a,     torch.float32 --> F32, shape = {7168, 8}\nINFO:hf-to-gguf:blk.9.ffn_up_shexp.weight.lora_b,     torch.float32 --> F32, shape = {8, 2048}\nINFO:hf-to-gguf:blk.9.attn_kv_a_mqa.weight.lora_a,    torch.float32 --> F32, shape = {7168, 8}\nINFO:hf-to-gguf:blk.9.attn_kv_a_mqa.weight.lora_b,    torch.float32 --> F32, shape = {8, 576}\nINFO:hf-to-gguf:blk.9.attn_k_b.weight.lora_a,         torch.float32 --> F32, shape = {128, 8, 64}\nINFO:hf-to-gguf:blk.9.attn_k_b.weight.lora_b,         torch.float32 --> F32, shape = {8, 512, 64}\nINFO:hf-to-gguf:blk.9.attn_v_b.weight.lora_a,         torch.float32 --> F32, shape = {512, 8, 1}\nINFO:hf-to-gguf:blk.9.attn_v_b.weight.lora_b,         torch.float32 --> F32, shape = {8, 128, 64}\nINFO:hf-to-gguf:blk.9.attn_output.weight.lora_a,      torch.float32 --> F32, shape = {8192, 8}\nINFO:hf-to-gguf:blk.9.attn_output.weight.lora_b,      torch.float32 --> F32, shape = {8, 7168}\nINFO:hf-to-gguf:blk.9.attn_q_a.weight.lora_a,         torch.float32 --> F32, shape = {7168, 8}\nINFO:hf-to-gguf:blk.9.attn_q_a.weight.lora_b,         torch.float32 --> F32, shape = {8, 1536}\nINFO:hf-to-gguf:blk.9.attn_q_b.weight.lora_a,         torch.float32 --> F32, shape = {1536, 8}\nINFO:hf-to-gguf:blk.9.attn_q_b.weight.lora_b,         torch.float32 --> F32, shape = {8, 12288}\nINFO:hf-to-gguf:Set meta model\nINFO:hf-to-gguf:Set model parameters\nINFO:hf-to-gguf:Set model quantization version\nINFO:hf-to-gguf:Set model tokenizer\nINFO:gguf.gguf_writer:Writing the following files:\nINFO:gguf.gguf_writer:<work-dir>\\run-b0-3\\kimi-k2.hook.gguf: n_tensors = 1092, total_size = 239.1M\n\nWriting:   0%|          | 0.00/239M [00:00<?, ?byte/s]\nWriting:  12%|\u2588\u258f        | 28.0M/239M [00:00<00:00, 274Mbyte/s]\nWriting:  24%|\u2588\u2588\u258d       | 56.9M/239M [00:00<00:00, 279Mbyte/s]\nWriting:  36%|\u2588\u2588\u2588\u258c      | 86.5M/239M [00:00<00:00, 285Mbyte/s]\nWriting:  49%|\u2588\u2588\u2588\u2588\u2589     | 118M/239M [00:00<00:00, 296Mbyte/s] \nWriting:  62%|\u2588\u2588\u2588\u2588\u2588\u2588\u258f   | 148M/239M [00:00<00:00, 293Mbyte/s]\nWriting:  75%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u258d  | 179M/239M [00:00<00:00, 298Mbyte/s]\nWriting:  87%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u258b | 209M/239M [00:00<00:00, 297Mbyte/s]\nWriting: 100%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588| 239M/239M [00:00<00:00, 295Mbyte/s]\nINFO:lora-to-gguf:Model successfully exported to <work-dir>\\run-b0-3\\kimi-k2.hook.gguf\n"
+    },
+    "pairs": 546,
+    "problems": [],
+    "problem_count": 0,
+    "verdict": "PASS",
+    "llama_src_head": "988190680d5a89fce97de3c20df2c2813731fd61"
+   }
+  }
+ }
+}

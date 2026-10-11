@@ -1,0 +1,1103 @@
+{
+ "meta": {
+  "harness_sha256_16": "7e1378a789ce32b1",
+  "host": {
+   "platform": "Windows-11-10.0.26300-SP0",
+   "processor": "AMD64 Family 25 Model 117 Stepping 2, AuthenticAMD",
+   "cpu_count": 12,
+   "python": "3.12.10",
+   "ram_total_gb": 16.39,
+   "ram_available_gb": 4.29
+  },
+  "reference_env": {
+   "torch": "2.14.1",
+   "transformers": "5.19.0",
+   "peft": "0.21.2",
+   "numpy": "2.5.3"
+  },
+  "converter_env": "2.11.0+cpu 4.57.6 2.2.6 0.19.0",
+  "llama_src_head": "988190680d5a89fce97de3c20df2c2813731fd61",
+  "llama_version": "version: 0.6.0-dev (build 1, commit 9881906)\nbuilt with GNU 15.2.0 for Windows AMD64",
+  "llama_binaries_sha256": {
+   "llama-results.exe": "729fb70bc9daa73141f8e8a04a7df7775c5598b4ae0d6ec835194a632b49593f"
+  },
+  "prompt": "Soup trains the adapter on a laptop; the engine has to apply it to every projection it was trained on.",
+  "threads": 4,
+  "rule": {
+   "E_BASE_MAX": 0.001,
+   "S_REF_MIN": 0.01,
+   "R_APPLIED_MAX": 0.01,
+   "RHO_DROPPED_MAX": 0.01,
+   "LORA_RANK": 8,
+   "LORA_ALPHA": 16,
+   "B_STD": 0.02
+  }
+ },
+ "models": {
+  "qwen35moe-tiny": {
+   "attempts": [
+    {
+     "seed": 17,
+     "model_dir": "qwen35moe-tiny-seed17",
+     "convert_base": {
+      "ok": true,
+      "returncode": 0,
+      "stderr_tail": "rt|>' + message.role + '\\n<think>\\n' + reasoning_content + '\\n</think>\\n\\n' + content }}\n        {%- else %}\n            {{- '<|im_start|>' + message.role + '\\n' + content }}\n        {%- endif %}\n        {%- if message.tool_calls and message.tool_calls is iterable and message.tool_calls is not mapping %}\n            {%- for tool_call in message.tool_calls %}\n                {%- if tool_call.function is defined %}\n                    {%- set tool_call = tool_call.function %}\n                {%- endif %}\n                {%- if loop.first %}\n                    {%- if content|trim %}\n                        {{- '\\n\\n<tool_call>\\n<function=' + tool_call.name + '>\\n' }}\n                    {%- else %}\n                        {{- '<tool_call>\\n<function=' + tool_call.name + '>\\n' }}\n                    {%- endif %}\n                {%- else %}\n                    {{- '\\n<tool_call>\\n<function=' + tool_call.name + '>\\n' }}\n                {%- endif %}\n                {%- if tool_call.arguments is defined %}\n                    {%- for args_name, args_value in tool_call.arguments|items %}\n                        {{- '<parameter=' + args_name + '>\\n' }}\n                        {%- set args_value = args_value | tojson | safe if args_value is mapping or (args_value is sequence and args_value is not string) else args_value | string %}\n                        {{- args_value }}\n                        {{- '\\n</parameter>\\n' }}\n                    {%- endfor %}\n                {%- endif %}\n                {{- '</function>\\n</tool_call>' }}\n            {%- endfor %}\n        {%- endif %}\n        {{- '<|im_end|>\\n' }}\n    {%- elif message.role == \"tool\" %}\n        {%- if loop.previtem and loop.previtem.role != \"tool\" %}\n            {{- '<|im_start|>user' }}\n        {%- endif %}\n        {{- '\\n<tool_response>\\n' }}\n        {{- content }}\n        {{- '\\n</tool_response>' }}\n        {%- if not loop.last and loop.nextitem.role != \"tool\" %}\n            {{- '<|im_end|>\\n' }}\n        {%- elif loop.last %}\n            {{- '<|im_end|>\\n' }}\n        {%- endif %}\n    {%- else %}\n        {{- raise_exception('Unexpected message role.') }}\n    {%- endif %}\n{%- endfor %}\n{%- if add_generation_prompt %}\n    {{- '<|im_start|>assistant\\n' }}\n    {%- if enable_thinking is defined and enable_thinking is false %}\n        {{- '<think>\\n\\n</think>\\n\\n' }}\n    {%- else %}\n        {{- '<think>\\n' }}\n    {%- endif %}\n{%- endif %}\nINFO:gguf.gguf_writer:Writing the following files:\nINFO:gguf.gguf_writer:<work-dir>\\review-control-stock\\qwen35moe-tiny-seed17.f32.gguf: n_tensors = 76, total_size = 128.5M\n\nWriting:   0%|          | 0.00/129M [00:00<?, ?byte/s]\nWriting:  49%|\u2588\u2588\u2588\u2588\u2589     | 63.6M/129M [00:00<00:00, 572Mbyte/s]\nWriting:  99%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2589| 127M/129M [00:00<00:00, 584Mbyte/s] \nWriting: 100%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588| 129M/129M [00:00<00:00, 369Mbyte/s]\nINFO:hf-to-gguf:Model successfully exported to <work-dir>\\review-control-stock\\qwen35moe-tiny-seed17.f32.gguf\n"
+     },
+     "engine_base": {
+      "ok": true,
+      "returncode": 0,
+      "stderr_tail": "0.01.687.559 I cmn          init: llama threadpool init, n_threads = 4\n0.01.866.682 I main: writing results to <work-dir>\\review-control-stock\\qwen35moe-tiny-seed17.base1.gguf...\n"
+     },
+     "tokens": [
+      31469,
+      26791,
+      279,
+      12584,
+      383,
+      264,
+      20012,
+      26,
+      279,
+      4560,
+      682,
+      310,
+      3668,
+      424,
+      310,
+      1396,
+      20952,
+      424,
+      557,
+      15700,
+      383,
+      13
+     ],
+     "e_base": 4.837195880312295e-07,
+     "engine_deterministic": true,
+     "engine_tokens_stable": true,
+     "reference_deterministic": true,
+     "digests": {
+      "z_ref0": "ab8c1982250ac890",
+      "z_eng0": "fca2459f41d56d7d"
+     },
+     "status": "OK"
+    }
+   ],
+   "variants": {
+    "soup-auto": {
+     "targets": [
+      "q_proj",
+      "v_proj",
+      "in_proj_qkv",
+      "out_proj"
+     ],
+     "adapted_modules": [
+      "model.layers.0.linear_attn.in_proj_qkv",
+      "model.layers.0.linear_attn.out_proj",
+      "model.layers.1.linear_attn.in_proj_qkv",
+      "model.layers.1.linear_attn.out_proj",
+      "model.layers.2.linear_attn.in_proj_qkv",
+      "model.layers.2.linear_attn.out_proj",
+      "model.layers.3.self_attn.q_proj",
+      "model.layers.3.self_attn.v_proj"
+     ],
+     "touches_routed_experts": false,
+     "lora_b_std": 0.02,
+     "reference_disabled_is_base": true,
+     "s_ref": 0.22582669371771308,
+     "reference_deterministic": true,
+     "digests": {
+      "z_ref1": "7ccc35b4acbc96f6",
+      "z_ref1_repeat": "7ccc35b4acbc96f6",
+      "z_eng1": "cdaa0212731ff68f",
+      "z_eng1_repeat": "cdaa0212731ff68f"
+     },
+     "convert": {
+      "ok": true,
+      "returncode": 0,
+      "stderr_tail": " trying to load has model type `qwen3_5_moe_text` but Transformers does not recognize this architecture. This could be because of an issue with the checkpoint, or because your version of Transformers is out of date.\n\nYou can update Transformers with the command `pip install --upgrade transformers`. If this does not work, and the checkpoint is very new, then there may not be a release version that supports this model yet. In this case, you can get the most up-to-date code by installing Transformers from source with the command `pip install git+https://github.com/huggingface/transformers.git`\nWARNING:hf-to-gguf:Trying to load config.json instead\nINFO:lora-to-gguf:Using model architecture: Qwen3_5MoeForCausalLM\nINFO:hf-to-gguf:gguf: indexing model part 'model.safetensors'\nINFO:gguf.gguf_writer:gguf: This GGUF file is for Little Endian only\nINFO:lora-to-gguf:Exporting model...\nINFO:hf-to-gguf:blk.0.attn_qkv.weight.lora_a,        torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.0.attn_qkv.weight.lora_b,        torch.float32 --> F32, shape = {8, 128}\nINFO:hf-to-gguf:blk.0.ssm_out.weight.lora_a,         torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.0.ssm_out.weight.lora_b,         torch.float32 --> F32, shape = {8, 64}\nINFO:hf-to-gguf:blk.1.attn_qkv.weight.lora_a,        torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.1.attn_qkv.weight.lora_b,        torch.float32 --> F32, shape = {8, 128}\nINFO:hf-to-gguf:blk.1.ssm_out.weight.lora_a,         torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.1.ssm_out.weight.lora_b,         torch.float32 --> F32, shape = {8, 64}\nINFO:hf-to-gguf:blk.2.attn_qkv.weight.lora_a,        torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.2.attn_qkv.weight.lora_b,        torch.float32 --> F32, shape = {8, 128}\nINFO:hf-to-gguf:blk.2.ssm_out.weight.lora_a,         torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.2.ssm_out.weight.lora_b,         torch.float32 --> F32, shape = {8, 64}\nINFO:hf-to-gguf:blk.3.attn_q.weight.lora_a,          torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.3.attn_q.weight.lora_b,          torch.float32 --> F32, shape = {8, 512}\nINFO:hf-to-gguf:blk.3.attn_v.weight.lora_a,          torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.3.attn_v.weight.lora_b,          torch.float32 --> F32, shape = {8, 128}\nINFO:hf-to-gguf:Set meta model\nINFO:hf-to-gguf:Set model parameters\nINFO:hf-to-gguf:Set model quantization version\nINFO:hf-to-gguf:Set model tokenizer\nINFO:gguf.gguf_writer:Writing the following files:\nINFO:gguf.gguf_writer:<work-dir>\\review-control-stock\\qwen35moe-tiny-seed17-adapters\\soup-auto-b0.gguf: n_tensors = 16, total_size = 55.3K\n\nWriting:   0%|          | 0.00/55.3k [00:00<?, ?byte/s]\nWriting: 100%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588| 55.3k/55.3k [00:00<00:00, 8.59Mbyte/s]\nINFO:lora-to-gguf:Model successfully exported to <work-dir>\\review-control-stock\\qwen35moe-tiny-seed17-adapters\\soup-auto-b0.gguf\n"
+     },
+     "engine": {
+      "ok": true,
+      "returncode": 0,
+      "stderr_tail": "0.01.570.665 I cmn          init: llama threadpool init, n_threads = 4\n0.01.775.313 I main: writing results to <work-dir>\\review-control-stock\\qwen35moe-tiny-seed17-adapters\\soup-auto.out.gguf...\n"
+     },
+     "engine_repeat": {
+      "ok": true,
+      "returncode": 0,
+      "stderr_tail": "0.01.657.515 I cmn          init: llama threadpool init, n_threads = 4\n0.01.856.384 I main: writing results to <work-dir>\\review-control-stock\\qwen35moe-tiny-seed17-adapters\\soup-auto.repeat.gguf...\n"
+     },
+     "engine_deterministic": true,
+     "tokens_match": true,
+     "rho": 1.0000000248740921,
+     "r": 1.8357667556328084e-06,
+     "cos": 0.9999999999983341,
+     "verdict": "APPLIED"
+    },
+    "all": {
+     "targets": [
+      "q_proj",
+      "k_proj",
+      "v_proj",
+      "o_proj",
+      "in_proj_qkv",
+      "in_proj_z",
+      "in_proj_a",
+      "in_proj_b",
+      "out_proj",
+      "shared_expert.gate_proj",
+      "shared_expert.up_proj",
+      "shared_expert.down_proj"
+     ],
+     "adapted_modules": [
+      "model.layers.0.linear_attn.in_proj_a",
+      "model.layers.0.linear_attn.in_proj_b",
+      "model.layers.0.linear_attn.in_proj_qkv",
+      "model.layers.0.linear_attn.in_proj_z",
+      "model.layers.0.linear_attn.out_proj",
+      "model.layers.0.mlp.shared_expert.down_proj",
+      "model.layers.0.mlp.shared_expert.gate_proj",
+      "model.layers.0.mlp.shared_expert.up_proj",
+      "model.layers.1.linear_attn.in_proj_a",
+      "model.layers.1.linear_attn.in_proj_b",
+      "model.layers.1.linear_attn.in_proj_qkv",
+      "model.layers.1.linear_attn.in_proj_z",
+      "model.layers.1.linear_attn.out_proj",
+      "model.layers.1.mlp.shared_expert.down_proj",
+      "model.layers.1.mlp.shared_expert.gate_proj",
+      "model.layers.1.mlp.shared_expert.up_proj",
+      "model.layers.2.linear_attn.in_proj_a",
+      "model.layers.2.linear_attn.in_proj_b",
+      "model.layers.2.linear_attn.in_proj_qkv",
+      "model.layers.2.linear_attn.in_proj_z",
+      "model.layers.2.linear_attn.out_proj",
+      "model.layers.2.mlp.shared_expert.down_proj",
+      "model.layers.2.mlp.shared_expert.gate_proj",
+      "model.layers.2.mlp.shared_expert.up_proj",
+      "model.layers.3.mlp.shared_expert.down_proj",
+      "model.layers.3.mlp.shared_expert.gate_proj",
+      "model.layers.3.mlp.shared_expert.up_proj",
+      "model.layers.3.self_attn.k_proj",
+      "model.layers.3.self_attn.o_proj",
+      "model.layers.3.self_attn.q_proj",
+      "model.layers.3.self_attn.v_proj"
+     ],
+     "touches_routed_experts": false,
+     "lora_b_std": 0.02,
+     "reference_disabled_is_base": true,
+     "s_ref": 0.3050759297650161,
+     "reference_deterministic": true,
+     "digests": {
+      "z_ref1": "5a1618b76911e64c",
+      "z_ref1_repeat": "5a1618b76911e64c",
+      "z_eng1": "b6de7c77db5171ee",
+      "z_eng1_repeat": "b6de7c77db5171ee"
+     },
+     "convert": {
+      "ok": true,
+      "returncode": 0,
+      "stderr_tail": "2.attn_qkv.weight.lora_a,        torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.2.attn_qkv.weight.lora_b,        torch.float32 --> F32, shape = {8, 128}\nINFO:hf-to-gguf:blk.2.attn_gate.weight.lora_a,       torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.2.attn_gate.weight.lora_b,       torch.float32 --> F32, shape = {8, 64}\nINFO:hf-to-gguf:blk.2.ssm_out.weight.lora_a,         torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.2.ssm_out.weight.lora_b,         torch.float32 --> F32, shape = {8, 64}\nINFO:hf-to-gguf:blk.2.ffn_down_shexp.weight.lora_a,  torch.float32 --> F32, shape = {32, 8}\nINFO:hf-to-gguf:blk.2.ffn_down_shexp.weight.lora_b,  torch.float32 --> F32, shape = {8, 64}\nINFO:hf-to-gguf:blk.2.ffn_gate_shexp.weight.lora_a,  torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.2.ffn_gate_shexp.weight.lora_b,  torch.float32 --> F32, shape = {8, 32}\nINFO:hf-to-gguf:blk.2.ffn_up_shexp.weight.lora_a,    torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.2.ffn_up_shexp.weight.lora_b,    torch.float32 --> F32, shape = {8, 32}\nINFO:hf-to-gguf:blk.3.ffn_down_shexp.weight.lora_a,  torch.float32 --> F32, shape = {32, 8}\nINFO:hf-to-gguf:blk.3.ffn_down_shexp.weight.lora_b,  torch.float32 --> F32, shape = {8, 64}\nINFO:hf-to-gguf:blk.3.ffn_gate_shexp.weight.lora_a,  torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.3.ffn_gate_shexp.weight.lora_b,  torch.float32 --> F32, shape = {8, 32}\nINFO:hf-to-gguf:blk.3.ffn_up_shexp.weight.lora_a,    torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.3.ffn_up_shexp.weight.lora_b,    torch.float32 --> F32, shape = {8, 32}\nINFO:hf-to-gguf:blk.3.attn_k.weight.lora_a,          torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.3.attn_k.weight.lora_b,          torch.float32 --> F32, shape = {8, 128}\nINFO:hf-to-gguf:blk.3.attn_output.weight.lora_a,     torch.float32 --> F32, shape = {256, 8}\nINFO:hf-to-gguf:blk.3.attn_output.weight.lora_b,     torch.float32 --> F32, shape = {8, 64}\nINFO:hf-to-gguf:blk.3.attn_q.weight.lora_a,          torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.3.attn_q.weight.lora_b,          torch.float32 --> F32, shape = {8, 512}\nINFO:hf-to-gguf:blk.3.attn_v.weight.lora_a,          torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.3.attn_v.weight.lora_b,          torch.float32 --> F32, shape = {8, 128}\nINFO:hf-to-gguf:Set meta model\nINFO:hf-to-gguf:Set model parameters\nINFO:hf-to-gguf:Set model quantization version\nINFO:hf-to-gguf:Set model tokenizer\nINFO:gguf.gguf_writer:Writing the following files:\nINFO:gguf.gguf_writer:<work-dir>\\review-control-stock\\qwen35moe-tiny-seed17-adapters\\all-b0.gguf: n_tensors = 62, total_size = 133.9K\n\nWriting:   0%|          | 0.00/134k [00:00<?, ?byte/s]\nWriting: 100%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588| 134k/134k [00:00<00:00, 22.9Mbyte/s]\nINFO:lora-to-gguf:Model successfully exported to <work-dir>\\review-control-stock\\qwen35moe-tiny-seed17-adapters\\all-b0.gguf\n"
+     },
+     "engine": {
+      "ok": true,
+      "returncode": 0,
+      "stderr_tail": "0.01.603.446 I cmn          init: llama threadpool init, n_threads = 4\n0.01.864.813 I main: writing results to <work-dir>\\review-control-stock\\qwen35moe-tiny-seed17-adapters\\all.out.gguf...\n"
+     },
+     "engine_repeat": {
+      "ok": true,
+      "returncode": 0,
+      "stderr_tail": "0.01.537.655 I cmn          init: llama threadpool init, n_threads = 4\n0.01.740.054 I main: writing results to <work-dir>\\review-control-stock\\qwen35moe-tiny-seed17-adapters\\all.repeat.gguf...\n"
+     },
+     "engine_deterministic": true,
+     "tokens_match": true,
+     "rho": 1.0000000204579897,
+     "r": 1.341651390253454e-06,
+     "cos": 0.9999999999990987,
+     "verdict": "APPLIED"
+    },
+    "q_proj": {
+     "targets": [
+      "q_proj"
+     ],
+     "adapted_modules": [
+      "model.layers.3.self_attn.q_proj"
+     ],
+     "touches_routed_experts": false,
+     "lora_b_std": 0.02,
+     "reference_disabled_is_base": true,
+     "s_ref": 0.12075330047807054,
+     "reference_deterministic": true,
+     "digests": {
+      "z_ref1": "ad072e0fd78cb4c9",
+      "z_ref1_repeat": "ad072e0fd78cb4c9",
+      "z_eng1": "f7cdb1335f70e112",
+      "z_eng1_repeat": "f7cdb1335f70e112"
+     },
+     "convert": {
+      "ok": true,
+      "returncode": 0,
+      "stderr_tail": "INFO:lora-to-gguf:Loading base model: qwen35moe-tiny-seed17\nWARNING:hf-to-gguf:Failed to load model config from <work-dir>\\review-control-stock\\qwen35moe-tiny-seed17: The checkpoint you are trying to load has model type `qwen3_5_moe_text` but Transformers does not recognize this architecture. This could be because of an issue with the checkpoint, or because your version of Transformers is out of date.\n\nYou can update Transformers with the command `pip install --upgrade transformers`. If this does not work, and the checkpoint is very new, then there may not be a release version that supports this model yet. In this case, you can get the most up-to-date code by installing Transformers from source with the command `pip install git+https://github.com/huggingface/transformers.git`\nWARNING:hf-to-gguf:Trying to load config.json instead\nINFO:lora-to-gguf:Using model architecture: Qwen3_5MoeForCausalLM\nINFO:hf-to-gguf:gguf: indexing model part 'model.safetensors'\nINFO:gguf.gguf_writer:gguf: This GGUF file is for Little Endian only\nINFO:lora-to-gguf:Exporting model...\nINFO:hf-to-gguf:blk.3.attn_q.weight.lora_a,          torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.3.attn_q.weight.lora_b,          torch.float32 --> F32, shape = {8, 512}\nINFO:hf-to-gguf:Set meta model\nINFO:hf-to-gguf:Set model parameters\nINFO:hf-to-gguf:Set model quantization version\nINFO:hf-to-gguf:Set model tokenizer\nINFO:gguf.gguf_writer:Writing the following files:\nINFO:gguf.gguf_writer:<work-dir>\\review-control-stock\\qwen35moe-tiny-seed17-adapters\\q_proj-b0.gguf: n_tensors = 2, total_size = 18.4K\n\nWriting:   0%|          | 0.00/18.4k [00:00<?, ?byte/s]\nWriting: 100%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588| 18.4k/18.4k [00:00<00:00, 18.3Mbyte/s]\nINFO:lora-to-gguf:Model successfully exported to <work-dir>\\review-control-stock\\qwen35moe-tiny-seed17-adapters\\q_proj-b0.gguf\n"
+     },
+     "engine": {
+      "ok": true,
+      "returncode": 0,
+      "stderr_tail": "0.01.547.193 I cmn          init: llama threadpool init, n_threads = 4\n0.01.764.502 I main: writing results to <work-dir>\\review-control-stock\\qwen35moe-tiny-seed17-adapters\\q_proj.out.gguf...\n"
+     },
+     "engine_repeat": {
+      "ok": true,
+      "returncode": 0,
+      "stderr_tail": "0.01.758.458 I cmn          init: llama threadpool init, n_threads = 4\n0.01.968.118 I main: writing results to <work-dir>\\review-control-stock\\qwen35moe-tiny-seed17-adapters\\q_proj.repeat.gguf...\n"
+     },
+     "engine_deterministic": true,
+     "tokens_match": true,
+     "rho": 1.0000000810204543,
+     "r": 2.7962329194747883e-06,
+     "cos": 0.9999999999961371,
+     "verdict": "APPLIED"
+    },
+    "k_proj": {
+     "targets": [
+      "k_proj"
+     ],
+     "adapted_modules": [
+      "model.layers.3.self_attn.k_proj"
+     ],
+     "touches_routed_experts": false,
+     "lora_b_std": 0.02,
+     "reference_disabled_is_base": true,
+     "s_ref": 0.12440946719227805,
+     "reference_deterministic": true,
+     "digests": {
+      "z_ref1": "656901a204a132e5",
+      "z_ref1_repeat": "656901a204a132e5",
+      "z_eng1": "3e8bcbac9a2ac7af",
+      "z_eng1_repeat": "3e8bcbac9a2ac7af"
+     },
+     "convert": {
+      "ok": true,
+      "returncode": 0,
+      "stderr_tail": "INFO:lora-to-gguf:Loading base model: qwen35moe-tiny-seed17\nWARNING:hf-to-gguf:Failed to load model config from <work-dir>\\review-control-stock\\qwen35moe-tiny-seed17: The checkpoint you are trying to load has model type `qwen3_5_moe_text` but Transformers does not recognize this architecture. This could be because of an issue with the checkpoint, or because your version of Transformers is out of date.\n\nYou can update Transformers with the command `pip install --upgrade transformers`. If this does not work, and the checkpoint is very new, then there may not be a release version that supports this model yet. In this case, you can get the most up-to-date code by installing Transformers from source with the command `pip install git+https://github.com/huggingface/transformers.git`\nWARNING:hf-to-gguf:Trying to load config.json instead\nINFO:lora-to-gguf:Using model architecture: Qwen3_5MoeForCausalLM\nINFO:hf-to-gguf:gguf: indexing model part 'model.safetensors'\nINFO:gguf.gguf_writer:gguf: This GGUF file is for Little Endian only\nINFO:lora-to-gguf:Exporting model...\nINFO:hf-to-gguf:blk.3.attn_k.weight.lora_a,          torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.3.attn_k.weight.lora_b,          torch.float32 --> F32, shape = {8, 128}\nINFO:hf-to-gguf:Set meta model\nINFO:hf-to-gguf:Set model parameters\nINFO:hf-to-gguf:Set model quantization version\nINFO:hf-to-gguf:Set model tokenizer\nINFO:gguf.gguf_writer:Writing the following files:\nINFO:gguf.gguf_writer:<work-dir>\\review-control-stock\\qwen35moe-tiny-seed17-adapters\\k_proj-b0.gguf: n_tensors = 2, total_size = 6.1K\n\nWriting:   0%|          | 0.00/6.14k [00:00<?, ?byte/s]\nWriting: 100%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588| 6.14k/6.14k [00:00<?, ?byte/s]\nINFO:lora-to-gguf:Model successfully exported to <work-dir>\\review-control-stock\\qwen35moe-tiny-seed17-adapters\\k_proj-b0.gguf\n"
+     },
+     "engine": {
+      "ok": true,
+      "returncode": 0,
+      "stderr_tail": "0.01.597.446 I cmn          init: llama threadpool init, n_threads = 4\n0.01.794.922 I main: writing results to <work-dir>\\review-control-stock\\qwen35moe-tiny-seed17-adapters\\k_proj.out.gguf...\n"
+     },
+     "engine_repeat": {
+      "ok": true,
+      "returncode": 0,
+      "stderr_tail": "0.01.550.965 I cmn          init: llama threadpool init, n_threads = 4\n0.01.740.569 I main: writing results to <work-dir>\\review-control-stock\\qwen35moe-tiny-seed17-adapters\\k_proj.repeat.gguf...\n"
+     },
+     "engine_deterministic": true,
+     "tokens_match": true,
+     "rho": 1.0000000622074354,
+     "r": 2.653558349273677e-06,
+     "cos": 0.9999999999965237,
+     "verdict": "APPLIED"
+    },
+    "v_proj": {
+     "targets": [
+      "v_proj"
+     ],
+     "adapted_modules": [
+      "model.layers.3.self_attn.v_proj"
+     ],
+     "touches_routed_experts": false,
+     "lora_b_std": 0.02,
+     "reference_disabled_is_base": true,
+     "s_ref": 0.21513866204137472,
+     "reference_deterministic": true,
+     "digests": {
+      "z_ref1": "f43c8ae8342e733f",
+      "z_ref1_repeat": "f43c8ae8342e733f",
+      "z_eng1": "555c03393878f23f",
+      "z_eng1_repeat": "555c03393878f23f"
+     },
+     "convert": {
+      "ok": true,
+      "returncode": 0,
+      "stderr_tail": "INFO:lora-to-gguf:Loading base model: qwen35moe-tiny-seed17\nWARNING:hf-to-gguf:Failed to load model config from <work-dir>\\review-control-stock\\qwen35moe-tiny-seed17: The checkpoint you are trying to load has model type `qwen3_5_moe_text` but Transformers does not recognize this architecture. This could be because of an issue with the checkpoint, or because your version of Transformers is out of date.\n\nYou can update Transformers with the command `pip install --upgrade transformers`. If this does not work, and the checkpoint is very new, then there may not be a release version that supports this model yet. In this case, you can get the most up-to-date code by installing Transformers from source with the command `pip install git+https://github.com/huggingface/transformers.git`\nWARNING:hf-to-gguf:Trying to load config.json instead\nINFO:lora-to-gguf:Using model architecture: Qwen3_5MoeForCausalLM\nINFO:hf-to-gguf:gguf: indexing model part 'model.safetensors'\nINFO:gguf.gguf_writer:gguf: This GGUF file is for Little Endian only\nINFO:lora-to-gguf:Exporting model...\nINFO:hf-to-gguf:blk.3.attn_v.weight.lora_a,          torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.3.attn_v.weight.lora_b,          torch.float32 --> F32, shape = {8, 128}\nINFO:hf-to-gguf:Set meta model\nINFO:hf-to-gguf:Set model parameters\nINFO:hf-to-gguf:Set model quantization version\nINFO:hf-to-gguf:Set model tokenizer\nINFO:gguf.gguf_writer:Writing the following files:\nINFO:gguf.gguf_writer:<work-dir>\\review-control-stock\\qwen35moe-tiny-seed17-adapters\\v_proj-b0.gguf: n_tensors = 2, total_size = 6.1K\n\nWriting:   0%|          | 0.00/6.14k [00:00<?, ?byte/s]\nWriting: 100%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588| 6.14k/6.14k [00:00<?, ?byte/s]\nINFO:lora-to-gguf:Model successfully exported to <work-dir>\\review-control-stock\\qwen35moe-tiny-seed17-adapters\\v_proj-b0.gguf\n"
+     },
+     "engine": {
+      "ok": true,
+      "returncode": 0,
+      "stderr_tail": "0.01.547.925 I cmn          init: llama threadpool init, n_threads = 4\n0.01.756.993 I main: writing results to <work-dir>\\review-control-stock\\qwen35moe-tiny-seed17-adapters\\v_proj.out.gguf...\n"
+     },
+     "engine_repeat": {
+      "ok": true,
+      "returncode": 0,
+      "stderr_tail": "0.01.635.394 I cmn          init: llama threadpool init, n_threads = 4\n0.01.840.033 I main: writing results to <work-dir>\\review-control-stock\\qwen35moe-tiny-seed17-adapters\\v_proj.repeat.gguf...\n"
+     },
+     "engine_deterministic": true,
+     "tokens_match": true,
+     "rho": 1.0000000728130978,
+     "r": 1.5162167019909838e-06,
+     "cos": 0.9999999999988788,
+     "verdict": "APPLIED"
+    },
+    "o_proj": {
+     "targets": [
+      "o_proj"
+     ],
+     "adapted_modules": [
+      "model.layers.3.self_attn.o_proj"
+     ],
+     "touches_routed_experts": false,
+     "lora_b_std": 0.02,
+     "reference_disabled_is_base": true,
+     "s_ref": 0.11489420574861332,
+     "reference_deterministic": true,
+     "digests": {
+      "z_ref1": "dc1012e0bd7fe1bf",
+      "z_ref1_repeat": "dc1012e0bd7fe1bf",
+      "z_eng1": "4ca5b327c59185ea",
+      "z_eng1_repeat": "4ca5b327c59185ea"
+     },
+     "convert": {
+      "ok": true,
+      "returncode": 0,
+      "stderr_tail": "INFO:lora-to-gguf:Loading base model: qwen35moe-tiny-seed17\nWARNING:hf-to-gguf:Failed to load model config from <work-dir>\\review-control-stock\\qwen35moe-tiny-seed17: The checkpoint you are trying to load has model type `qwen3_5_moe_text` but Transformers does not recognize this architecture. This could be because of an issue with the checkpoint, or because your version of Transformers is out of date.\n\nYou can update Transformers with the command `pip install --upgrade transformers`. If this does not work, and the checkpoint is very new, then there may not be a release version that supports this model yet. In this case, you can get the most up-to-date code by installing Transformers from source with the command `pip install git+https://github.com/huggingface/transformers.git`\nWARNING:hf-to-gguf:Trying to load config.json instead\nINFO:lora-to-gguf:Using model architecture: Qwen3_5MoeForCausalLM\nINFO:hf-to-gguf:gguf: indexing model part 'model.safetensors'\nINFO:gguf.gguf_writer:gguf: This GGUF file is for Little Endian only\nINFO:lora-to-gguf:Exporting model...\nINFO:hf-to-gguf:blk.3.attn_output.weight.lora_a,     torch.float32 --> F32, shape = {256, 8}\nINFO:hf-to-gguf:blk.3.attn_output.weight.lora_b,     torch.float32 --> F32, shape = {8, 64}\nINFO:hf-to-gguf:Set meta model\nINFO:hf-to-gguf:Set model parameters\nINFO:hf-to-gguf:Set model quantization version\nINFO:hf-to-gguf:Set model tokenizer\nINFO:gguf.gguf_writer:Writing the following files:\nINFO:gguf.gguf_writer:<work-dir>\\review-control-stock\\qwen35moe-tiny-seed17-adapters\\o_proj-b0.gguf: n_tensors = 2, total_size = 10.2K\n\nWriting:   0%|          | 0.00/10.2k [00:00<?, ?byte/s]\nWriting: 100%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588| 10.2k/10.2k [00:00<00:00, 10.3Mbyte/s]\nINFO:lora-to-gguf:Model successfully exported to <work-dir>\\review-control-stock\\qwen35moe-tiny-seed17-adapters\\o_proj-b0.gguf\n"
+     },
+     "engine": {
+      "ok": true,
+      "returncode": 0,
+      "stderr_tail": "0.01.656.483 I cmn          init: llama threadpool init, n_threads = 4\n0.01.865.520 I main: writing results to <work-dir>\\review-control-stock\\qwen35moe-tiny-seed17-adapters\\o_proj.out.gguf...\n"
+     },
+     "engine_repeat": {
+      "ok": true,
+      "returncode": 0,
+      "stderr_tail": "0.01.624.210 I cmn          init: llama threadpool init, n_threads = 4\n0.01.837.951 I main: writing results to <work-dir>\\review-control-stock\\qwen35moe-tiny-seed17-adapters\\o_proj.repeat.gguf...\n"
+     },
+     "engine_deterministic": true,
+     "tokens_match": true,
+     "rho": 1.000000025625492,
+     "r": 2.2803054140704998e-06,
+     "cos": 0.9999999999974518,
+     "verdict": "APPLIED"
+    },
+    "in_proj_qkv": {
+     "targets": [
+      "in_proj_qkv"
+     ],
+     "adapted_modules": [
+      "model.layers.0.linear_attn.in_proj_qkv",
+      "model.layers.1.linear_attn.in_proj_qkv",
+      "model.layers.2.linear_attn.in_proj_qkv"
+     ],
+     "touches_routed_experts": false,
+     "lora_b_std": 0.02,
+     "reference_disabled_is_base": true,
+     "s_ref": 0.07584495987107219,
+     "reference_deterministic": true,
+     "digests": {
+      "z_ref1": "f7d48ab099bec49e",
+      "z_ref1_repeat": "f7d48ab099bec49e",
+      "z_eng1": "96329393783da7ec",
+      "z_eng1_repeat": "96329393783da7ec"
+     },
+     "convert": {
+      "ok": true,
+      "returncode": 0,
+      "stderr_tail": "INFO:lora-to-gguf:Loading base model: qwen35moe-tiny-seed17\nWARNING:hf-to-gguf:Failed to load model config from <work-dir>\\review-control-stock\\qwen35moe-tiny-seed17: The checkpoint you are trying to load has model type `qwen3_5_moe_text` but Transformers does not recognize this architecture. This could be because of an issue with the checkpoint, or because your version of Transformers is out of date.\n\nYou can update Transformers with the command `pip install --upgrade transformers`. If this does not work, and the checkpoint is very new, then there may not be a release version that supports this model yet. In this case, you can get the most up-to-date code by installing Transformers from source with the command `pip install git+https://github.com/huggingface/transformers.git`\nWARNING:hf-to-gguf:Trying to load config.json instead\nINFO:lora-to-gguf:Using model architecture: Qwen3_5MoeForCausalLM\nINFO:hf-to-gguf:gguf: indexing model part 'model.safetensors'\nINFO:gguf.gguf_writer:gguf: This GGUF file is for Little Endian only\nINFO:lora-to-gguf:Exporting model...\nINFO:hf-to-gguf:blk.0.attn_qkv.weight.lora_a,        torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.0.attn_qkv.weight.lora_b,        torch.float32 --> F32, shape = {8, 128}\nINFO:hf-to-gguf:blk.1.attn_qkv.weight.lora_a,        torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.1.attn_qkv.weight.lora_b,        torch.float32 --> F32, shape = {8, 128}\nINFO:hf-to-gguf:blk.2.attn_qkv.weight.lora_a,        torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.2.attn_qkv.weight.lora_b,        torch.float32 --> F32, shape = {8, 128}\nINFO:hf-to-gguf:Set meta model\nINFO:hf-to-gguf:Set model parameters\nINFO:hf-to-gguf:Set model quantization version\nINFO:hf-to-gguf:Set model tokenizer\nINFO:gguf.gguf_writer:Writing the following files:\nINFO:gguf.gguf_writer:<work-dir>\\review-control-stock\\qwen35moe-tiny-seed17-adapters\\in_proj_qkv-b0.gguf: n_tensors = 6, total_size = 18.4K\n\nWriting:   0%|          | 0.00/18.4k [00:00<?, ?byte/s]\nWriting: 100%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588| 18.4k/18.4k [00:00<00:00, 18.5Mbyte/s]\nINFO:lora-to-gguf:Model successfully exported to <work-dir>\\review-control-stock\\qwen35moe-tiny-seed17-adapters\\in_proj_qkv-b0.gguf\n"
+     },
+     "engine": {
+      "ok": true,
+      "returncode": 0,
+      "stderr_tail": "0.01.610.795 I cmn          init: llama threadpool init, n_threads = 4\n0.01.792.136 I main: writing results to <work-dir>\\review-control-stock\\qwen35moe-tiny-seed17-adapters\\in_proj_qkv.out.gguf...\n"
+     },
+     "engine_repeat": {
+      "ok": true,
+      "returncode": 0,
+      "stderr_tail": "0.01.686.759 I cmn          init: llama threadpool init, n_threads = 4\n0.01.880.944 I main: writing results to <work-dir>\\review-control-stock\\qwen35moe-tiny-seed17-adapters\\in_proj_qkv.repeat.gguf...\n"
+     },
+     "engine_deterministic": true,
+     "tokens_match": true,
+     "rho": 0.9999999284807888,
+     "r": 5.344240099730908e-06,
+     "cos": 0.9999999999857753,
+     "verdict": "APPLIED"
+    },
+    "in_proj_z": {
+     "targets": [
+      "in_proj_z"
+     ],
+     "adapted_modules": [
+      "model.layers.0.linear_attn.in_proj_z",
+      "model.layers.1.linear_attn.in_proj_z",
+      "model.layers.2.linear_attn.in_proj_z"
+     ],
+     "touches_routed_experts": false,
+     "lora_b_std": 0.02,
+     "reference_disabled_is_base": true,
+     "s_ref": 0.04142849510019113,
+     "reference_deterministic": true,
+     "digests": {
+      "z_ref1": "1d644cf0312018ec",
+      "z_ref1_repeat": "1d644cf0312018ec",
+      "z_eng1": "11065b8985218748",
+      "z_eng1_repeat": "11065b8985218748"
+     },
+     "convert": {
+      "ok": true,
+      "returncode": 0,
+      "stderr_tail": "INFO:lora-to-gguf:Loading base model: qwen35moe-tiny-seed17\nWARNING:hf-to-gguf:Failed to load model config from <work-dir>\\review-control-stock\\qwen35moe-tiny-seed17: The checkpoint you are trying to load has model type `qwen3_5_moe_text` but Transformers does not recognize this architecture. This could be because of an issue with the checkpoint, or because your version of Transformers is out of date.\n\nYou can update Transformers with the command `pip install --upgrade transformers`. If this does not work, and the checkpoint is very new, then there may not be a release version that supports this model yet. In this case, you can get the most up-to-date code by installing Transformers from source with the command `pip install git+https://github.com/huggingface/transformers.git`\nWARNING:hf-to-gguf:Trying to load config.json instead\nINFO:lora-to-gguf:Using model architecture: Qwen3_5MoeForCausalLM\nINFO:hf-to-gguf:gguf: indexing model part 'model.safetensors'\nINFO:gguf.gguf_writer:gguf: This GGUF file is for Little Endian only\nINFO:lora-to-gguf:Exporting model...\nINFO:hf-to-gguf:blk.0.attn_gate.weight.lora_a,       torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.0.attn_gate.weight.lora_b,       torch.float32 --> F32, shape = {8, 64}\nINFO:hf-to-gguf:blk.1.attn_gate.weight.lora_a,       torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.1.attn_gate.weight.lora_b,       torch.float32 --> F32, shape = {8, 64}\nINFO:hf-to-gguf:blk.2.attn_gate.weight.lora_a,       torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.2.attn_gate.weight.lora_b,       torch.float32 --> F32, shape = {8, 64}\nINFO:hf-to-gguf:Set meta model\nINFO:hf-to-gguf:Set model parameters\nINFO:hf-to-gguf:Set model quantization version\nINFO:hf-to-gguf:Set model tokenizer\nINFO:gguf.gguf_writer:Writing the following files:\nINFO:gguf.gguf_writer:<work-dir>\\review-control-stock\\qwen35moe-tiny-seed17-adapters\\in_proj_z-b0.gguf: n_tensors = 6, total_size = 12.3K\n\nWriting:   0%|          | 0.00/12.3k [00:00<?, ?byte/s]\nWriting: 100%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588| 12.3k/12.3k [00:00<00:00, 12.3Mbyte/s]\nINFO:lora-to-gguf:Model successfully exported to <work-dir>\\review-control-stock\\qwen35moe-tiny-seed17-adapters\\in_proj_z-b0.gguf\n"
+     },
+     "engine": {
+      "ok": true,
+      "returncode": 0,
+      "stderr_tail": "0.01.559.763 I cmn          init: llama threadpool init, n_threads = 4\n0.01.762.490 I main: writing results to <work-dir>\\review-control-stock\\qwen35moe-tiny-seed17-adapters\\in_proj_z.out.gguf...\n"
+     },
+     "engine_repeat": {
+      "ok": true,
+      "returncode": 0,
+      "stderr_tail": "0.01.608.717 I cmn          init: llama threadpool init, n_threads = 4\n0.01.818.921 I main: writing results to <work-dir>\\review-control-stock\\qwen35moe-tiny-seed17-adapters\\in_proj_z.repeat.gguf...\n"
+     },
+     "engine_deterministic": true,
+     "tokens_match": true,
+     "rho": 1.0000000950581627,
+     "r": 9.943482755564239e-06,
+     "cos": 0.9999999999506112,
+     "verdict": "APPLIED"
+    },
+    "in_proj_a": {
+     "targets": [
+      "in_proj_a"
+     ],
+     "adapted_modules": [
+      "model.layers.0.linear_attn.in_proj_a",
+      "model.layers.1.linear_attn.in_proj_a",
+      "model.layers.2.linear_attn.in_proj_a"
+     ],
+     "touches_routed_experts": false,
+     "lora_b_std": 0.08,
+     "reference_disabled_is_base": true,
+     "s_ref": 0.00014720086100113026,
+     "reference_deterministic": true,
+     "digests": {
+      "z_ref1": "4b22460c13eafa7e",
+      "z_ref1_repeat": "4b22460c13eafa7e",
+      "z_eng1": "9b4dd4edbf4187f7",
+      "z_eng1_repeat": "9b4dd4edbf4187f7"
+     },
+     "convert": {
+      "ok": true,
+      "returncode": 0,
+      "stderr_tail": "INFO:lora-to-gguf:Loading base model: qwen35moe-tiny-seed17\nWARNING:hf-to-gguf:Failed to load model config from <work-dir>\\review-control-stock\\qwen35moe-tiny-seed17: The checkpoint you are trying to load has model type `qwen3_5_moe_text` but Transformers does not recognize this architecture. This could be because of an issue with the checkpoint, or because your version of Transformers is out of date.\n\nYou can update Transformers with the command `pip install --upgrade transformers`. If this does not work, and the checkpoint is very new, then there may not be a release version that supports this model yet. In this case, you can get the most up-to-date code by installing Transformers from source with the command `pip install git+https://github.com/huggingface/transformers.git`\nWARNING:hf-to-gguf:Trying to load config.json instead\nINFO:lora-to-gguf:Using model architecture: Qwen3_5MoeForCausalLM\nINFO:hf-to-gguf:gguf: indexing model part 'model.safetensors'\nINFO:gguf.gguf_writer:gguf: This GGUF file is for Little Endian only\nINFO:lora-to-gguf:Exporting model...\nINFO:hf-to-gguf:blk.0.ssm_alpha.weight.lora_a,       torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.0.ssm_alpha.weight.lora_b,       torch.float32 --> F32, shape = {8, 4}\nINFO:hf-to-gguf:blk.1.ssm_alpha.weight.lora_a,       torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.1.ssm_alpha.weight.lora_b,       torch.float32 --> F32, shape = {8, 4}\nINFO:hf-to-gguf:blk.2.ssm_alpha.weight.lora_a,       torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.2.ssm_alpha.weight.lora_b,       torch.float32 --> F32, shape = {8, 4}\nINFO:hf-to-gguf:Set meta model\nINFO:hf-to-gguf:Set model parameters\nINFO:hf-to-gguf:Set model quantization version\nINFO:hf-to-gguf:Set model tokenizer\nINFO:gguf.gguf_writer:Writing the following files:\nINFO:gguf.gguf_writer:<work-dir>\\review-control-stock\\qwen35moe-tiny-seed17-adapters\\in_proj_a-b1.gguf: n_tensors = 6, total_size = 6.5K\n\nWriting:   0%|          | 0.00/6.53k [00:00<?, ?byte/s]\nWriting: 100%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588| 6.53k/6.53k [00:00<00:00, 6.55Mbyte/s]\nINFO:lora-to-gguf:Model successfully exported to <work-dir>\\review-control-stock\\qwen35moe-tiny-seed17-adapters\\in_proj_a-b1.gguf\n"
+     },
+     "engine": {
+      "ok": true,
+      "returncode": 0,
+      "stderr_tail": "0.01.579.052 I cmn          init: llama threadpool init, n_threads = 4\n0.01.772.206 I main: writing results to <work-dir>\\review-control-stock\\qwen35moe-tiny-seed17-adapters\\in_proj_a.out.gguf...\n"
+     },
+     "engine_repeat": {
+      "ok": true,
+      "returncode": 0,
+      "stderr_tail": "0.01.556.398 I cmn          init: llama threadpool init, n_threads = 4\n0.01.760.135 I main: writing results to <work-dir>\\review-control-stock\\qwen35moe-tiny-seed17-adapters\\in_proj_a.repeat.gguf...\n"
+     },
+     "engine_deterministic": true,
+     "tokens_match": true,
+     "rho": 1.00001191253846,
+     "r": 0.0026429241739565697,
+     "cos": 0.9999965075884633,
+     "verdict": "TOO WEAK"
+    },
+    "in_proj_b": {
+     "targets": [
+      "in_proj_b"
+     ],
+     "adapted_modules": [
+      "model.layers.0.linear_attn.in_proj_b",
+      "model.layers.1.linear_attn.in_proj_b",
+      "model.layers.2.linear_attn.in_proj_b"
+     ],
+     "touches_routed_experts": false,
+     "lora_b_std": 0.08,
+     "reference_disabled_is_base": true,
+     "s_ref": 0.012866090143601738,
+     "reference_deterministic": true,
+     "digests": {
+      "z_ref1": "397aa013fd5d48bc",
+      "z_ref1_repeat": "397aa013fd5d48bc",
+      "z_eng1": "2f9c6af5ed51e4db",
+      "z_eng1_repeat": "2f9c6af5ed51e4db"
+     },
+     "convert": {
+      "ok": true,
+      "returncode": 0,
+      "stderr_tail": "INFO:lora-to-gguf:Loading base model: qwen35moe-tiny-seed17\nWARNING:hf-to-gguf:Failed to load model config from <work-dir>\\review-control-stock\\qwen35moe-tiny-seed17: The checkpoint you are trying to load has model type `qwen3_5_moe_text` but Transformers does not recognize this architecture. This could be because of an issue with the checkpoint, or because your version of Transformers is out of date.\n\nYou can update Transformers with the command `pip install --upgrade transformers`. If this does not work, and the checkpoint is very new, then there may not be a release version that supports this model yet. In this case, you can get the most up-to-date code by installing Transformers from source with the command `pip install git+https://github.com/huggingface/transformers.git`\nWARNING:hf-to-gguf:Trying to load config.json instead\nINFO:lora-to-gguf:Using model architecture: Qwen3_5MoeForCausalLM\nINFO:hf-to-gguf:gguf: indexing model part 'model.safetensors'\nINFO:gguf.gguf_writer:gguf: This GGUF file is for Little Endian only\nINFO:lora-to-gguf:Exporting model...\nINFO:hf-to-gguf:blk.0.ssm_beta.weight.lora_a,        torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.0.ssm_beta.weight.lora_b,        torch.float32 --> F32, shape = {8, 4}\nINFO:hf-to-gguf:blk.1.ssm_beta.weight.lora_a,        torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.1.ssm_beta.weight.lora_b,        torch.float32 --> F32, shape = {8, 4}\nINFO:hf-to-gguf:blk.2.ssm_beta.weight.lora_a,        torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.2.ssm_beta.weight.lora_b,        torch.float32 --> F32, shape = {8, 4}\nINFO:hf-to-gguf:Set meta model\nINFO:hf-to-gguf:Set model parameters\nINFO:hf-to-gguf:Set model quantization version\nINFO:hf-to-gguf:Set model tokenizer\nINFO:gguf.gguf_writer:Writing the following files:\nINFO:gguf.gguf_writer:<work-dir>\\review-control-stock\\qwen35moe-tiny-seed17-adapters\\in_proj_b-b1.gguf: n_tensors = 6, total_size = 6.5K\n\nWriting:   0%|          | 0.00/6.53k [00:00<?, ?byte/s]\nWriting: 100%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588| 6.53k/6.53k [00:00<?, ?byte/s]\nINFO:lora-to-gguf:Model successfully exported to <work-dir>\\review-control-stock\\qwen35moe-tiny-seed17-adapters\\in_proj_b-b1.gguf\n"
+     },
+     "engine": {
+      "ok": true,
+      "returncode": 0,
+      "stderr_tail": "0.01.601.401 I cmn          init: llama threadpool init, n_threads = 4\n0.01.810.991 I main: writing results to <work-dir>\\review-control-stock\\qwen35moe-tiny-seed17-adapters\\in_proj_b.out.gguf...\n"
+     },
+     "engine_repeat": {
+      "ok": true,
+      "returncode": 0,
+      "stderr_tail": "0.01.599.273 I cmn          init: llama threadpool init, n_threads = 4\n0.01.793.173 I main: writing results to <work-dir>\\review-control-stock\\qwen35moe-tiny-seed17-adapters\\in_proj_b.repeat.gguf...\n"
+     },
+     "engine_deterministic": true,
+     "tokens_match": true,
+     "rho": 0.9999999601272536,
+     "r": 3.1409559576603285e-05,
+     "cos": 0.9999999995067365,
+     "verdict": "APPLIED"
+    },
+    "out_proj": {
+     "targets": [
+      "out_proj"
+     ],
+     "adapted_modules": [
+      "model.layers.0.linear_attn.out_proj",
+      "model.layers.1.linear_attn.out_proj",
+      "model.layers.2.linear_attn.out_proj"
+     ],
+     "touches_routed_experts": false,
+     "lora_b_std": 0.02,
+     "reference_disabled_is_base": true,
+     "s_ref": 0.04208798692780485,
+     "reference_deterministic": true,
+     "digests": {
+      "z_ref1": "61f60bc9a3c15e4a",
+      "z_ref1_repeat": "61f60bc9a3c15e4a",
+      "z_eng1": "60df785642903fc5",
+      "z_eng1_repeat": "60df785642903fc5"
+     },
+     "convert": {
+      "ok": true,
+      "returncode": 0,
+      "stderr_tail": "INFO:lora-to-gguf:Loading base model: qwen35moe-tiny-seed17\nWARNING:hf-to-gguf:Failed to load model config from <work-dir>\\review-control-stock\\qwen35moe-tiny-seed17: The checkpoint you are trying to load has model type `qwen3_5_moe_text` but Transformers does not recognize this architecture. This could be because of an issue with the checkpoint, or because your version of Transformers is out of date.\n\nYou can update Transformers with the command `pip install --upgrade transformers`. If this does not work, and the checkpoint is very new, then there may not be a release version that supports this model yet. In this case, you can get the most up-to-date code by installing Transformers from source with the command `pip install git+https://github.com/huggingface/transformers.git`\nWARNING:hf-to-gguf:Trying to load config.json instead\nINFO:lora-to-gguf:Using model architecture: Qwen3_5MoeForCausalLM\nINFO:hf-to-gguf:gguf: indexing model part 'model.safetensors'\nINFO:gguf.gguf_writer:gguf: This GGUF file is for Little Endian only\nINFO:lora-to-gguf:Exporting model...\nINFO:hf-to-gguf:blk.0.ssm_out.weight.lora_a,         torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.0.ssm_out.weight.lora_b,         torch.float32 --> F32, shape = {8, 64}\nINFO:hf-to-gguf:blk.1.ssm_out.weight.lora_a,         torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.1.ssm_out.weight.lora_b,         torch.float32 --> F32, shape = {8, 64}\nINFO:hf-to-gguf:blk.2.ssm_out.weight.lora_a,         torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.2.ssm_out.weight.lora_b,         torch.float32 --> F32, shape = {8, 64}\nINFO:hf-to-gguf:Set meta model\nINFO:hf-to-gguf:Set model parameters\nINFO:hf-to-gguf:Set model quantization version\nINFO:hf-to-gguf:Set model tokenizer\nINFO:gguf.gguf_writer:Writing the following files:\nINFO:gguf.gguf_writer:<work-dir>\\review-control-stock\\qwen35moe-tiny-seed17-adapters\\out_proj-b0.gguf: n_tensors = 6, total_size = 12.3K\n\nWriting:   0%|          | 0.00/12.3k [00:00<?, ?byte/s]\nWriting: 100%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588| 12.3k/12.3k [00:00<00:00, 12.3Mbyte/s]\nINFO:lora-to-gguf:Model successfully exported to <work-dir>\\review-control-stock\\qwen35moe-tiny-seed17-adapters\\out_proj-b0.gguf\n"
+     },
+     "engine": {
+      "ok": true,
+      "returncode": 0,
+      "stderr_tail": "0.01.533.488 I cmn          init: llama threadpool init, n_threads = 4\n0.01.725.868 I main: writing results to <work-dir>\\review-control-stock\\qwen35moe-tiny-seed17-adapters\\out_proj.out.gguf...\n"
+     },
+     "engine_repeat": {
+      "ok": true,
+      "returncode": 0,
+      "stderr_tail": "0.01.566.980 I cmn          init: llama threadpool init, n_threads = 4\n0.01.750.879 I main: writing results to <work-dir>\\review-control-stock\\qwen35moe-tiny-seed17-adapters\\out_proj.repeat.gguf...\n"
+     },
+     "engine_deterministic": true,
+     "tokens_match": true,
+     "rho": 0.9999999876397799,
+     "r": 9.303451944209347e-06,
+     "cos": 0.9999999999567648,
+     "verdict": "APPLIED"
+    },
+    "shared": {
+     "targets": [
+      "shared_expert.gate_proj",
+      "shared_expert.up_proj",
+      "shared_expert.down_proj"
+     ],
+     "adapted_modules": [
+      "model.layers.0.mlp.shared_expert.down_proj",
+      "model.layers.0.mlp.shared_expert.gate_proj",
+      "model.layers.0.mlp.shared_expert.up_proj",
+      "model.layers.1.mlp.shared_expert.down_proj",
+      "model.layers.1.mlp.shared_expert.gate_proj",
+      "model.layers.1.mlp.shared_expert.up_proj",
+      "model.layers.2.mlp.shared_expert.down_proj",
+      "model.layers.2.mlp.shared_expert.gate_proj",
+      "model.layers.2.mlp.shared_expert.up_proj",
+      "model.layers.3.mlp.shared_expert.down_proj",
+      "model.layers.3.mlp.shared_expert.gate_proj",
+      "model.layers.3.mlp.shared_expert.up_proj"
+     ],
+     "touches_routed_experts": false,
+     "lora_b_std": 0.02,
+     "reference_disabled_is_base": true,
+     "s_ref": 0.07223009015294833,
+     "reference_deterministic": true,
+     "digests": {
+      "z_ref1": "1774fa906aa10327",
+      "z_ref1_repeat": "1774fa906aa10327",
+      "z_eng1": "d6884727f62b063c",
+      "z_eng1_repeat": "d6884727f62b063c"
+     },
+     "convert": {
+      "ok": true,
+      "returncode": 0,
+      "stderr_tail": "-to-gguf:gguf: indexing model part 'model.safetensors'\nINFO:gguf.gguf_writer:gguf: This GGUF file is for Little Endian only\nINFO:lora-to-gguf:Exporting model...\nINFO:hf-to-gguf:blk.0.ffn_down_shexp.weight.lora_a,  torch.float32 --> F32, shape = {32, 8}\nINFO:hf-to-gguf:blk.0.ffn_down_shexp.weight.lora_b,  torch.float32 --> F32, shape = {8, 64}\nINFO:hf-to-gguf:blk.0.ffn_gate_shexp.weight.lora_a,  torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.0.ffn_gate_shexp.weight.lora_b,  torch.float32 --> F32, shape = {8, 32}\nINFO:hf-to-gguf:blk.0.ffn_up_shexp.weight.lora_a,    torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.0.ffn_up_shexp.weight.lora_b,    torch.float32 --> F32, shape = {8, 32}\nINFO:hf-to-gguf:blk.1.ffn_down_shexp.weight.lora_a,  torch.float32 --> F32, shape = {32, 8}\nINFO:hf-to-gguf:blk.1.ffn_down_shexp.weight.lora_b,  torch.float32 --> F32, shape = {8, 64}\nINFO:hf-to-gguf:blk.1.ffn_gate_shexp.weight.lora_a,  torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.1.ffn_gate_shexp.weight.lora_b,  torch.float32 --> F32, shape = {8, 32}\nINFO:hf-to-gguf:blk.1.ffn_up_shexp.weight.lora_a,    torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.1.ffn_up_shexp.weight.lora_b,    torch.float32 --> F32, shape = {8, 32}\nINFO:hf-to-gguf:blk.2.ffn_down_shexp.weight.lora_a,  torch.float32 --> F32, shape = {32, 8}\nINFO:hf-to-gguf:blk.2.ffn_down_shexp.weight.lora_b,  torch.float32 --> F32, shape = {8, 64}\nINFO:hf-to-gguf:blk.2.ffn_gate_shexp.weight.lora_a,  torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.2.ffn_gate_shexp.weight.lora_b,  torch.float32 --> F32, shape = {8, 32}\nINFO:hf-to-gguf:blk.2.ffn_up_shexp.weight.lora_a,    torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.2.ffn_up_shexp.weight.lora_b,    torch.float32 --> F32, shape = {8, 32}\nINFO:hf-to-gguf:blk.3.ffn_down_shexp.weight.lora_a,  torch.float32 --> F32, shape = {32, 8}\nINFO:hf-to-gguf:blk.3.ffn_down_shexp.weight.lora_b,  torch.float32 --> F32, shape = {8, 64}\nINFO:hf-to-gguf:blk.3.ffn_gate_shexp.weight.lora_a,  torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.3.ffn_gate_shexp.weight.lora_b,  torch.float32 --> F32, shape = {8, 32}\nINFO:hf-to-gguf:blk.3.ffn_up_shexp.weight.lora_a,    torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.3.ffn_up_shexp.weight.lora_b,    torch.float32 --> F32, shape = {8, 32}\nINFO:hf-to-gguf:Set meta model\nINFO:hf-to-gguf:Set model parameters\nINFO:hf-to-gguf:Set model quantization version\nINFO:hf-to-gguf:Set model tokenizer\nINFO:gguf.gguf_writer:Writing the following files:\nINFO:gguf.gguf_writer:<work-dir>\\review-control-stock\\qwen35moe-tiny-seed17-adapters\\shared-b0.gguf: n_tensors = 24, total_size = 36.9K\n\nWriting:   0%|          | 0.00/36.9k [00:00<?, ?byte/s]\nWriting: 100%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588| 36.9k/36.9k [00:00<00:00, 24.4Mbyte/s]\nINFO:lora-to-gguf:Model successfully exported to <work-dir>\\review-control-stock\\qwen35moe-tiny-seed17-adapters\\shared-b0.gguf\n"
+     },
+     "engine": {
+      "ok": true,
+      "returncode": 0,
+      "stderr_tail": "0.01.548.898 I cmn          init: llama threadpool init, n_threads = 4\n0.01.757.321 I main: writing results to <work-dir>\\review-control-stock\\qwen35moe-tiny-seed17-adapters\\shared.out.gguf...\n"
+     },
+     "engine_repeat": {
+      "ok": true,
+      "returncode": 0,
+      "stderr_tail": "0.01.710.882 I cmn          init: llama threadpool init, n_threads = 4\n0.01.921.379 I main: writing results to <work-dir>\\review-control-stock\\qwen35moe-tiny-seed17-adapters\\shared.repeat.gguf...\n"
+     },
+     "engine_deterministic": true,
+     "tokens_match": true,
+     "rho": 1.0000000999576464,
+     "r": 5.631519128233354e-06,
+     "cos": 0.9999999999841906,
+     "verdict": "APPLIED"
+    }
+   },
+   "status": "OK"
+  },
+  "dsv3-tiny": {
+   "attempts": [
+    {
+     "seed": 17,
+     "model_dir": "dsv3-tiny-seed17",
+     "convert_base": {
+      "ok": true,
+      "returncode": 0,
+      "stderr_tail": "opting for the latter\nINFO:gguf.vocab:Adding 127741 merge(s).\nINFO:gguf.vocab:Setting special token type bos to 0\nINFO:gguf.vocab:Setting special token type eos to 1\nINFO:gguf.vocab:Setting special token type pad to 1\nINFO:gguf.vocab:Setting add_bos_token to False\nINFO:gguf.vocab:Setting add_eos_token to False\nINFO:gguf.vocab:Setting chat_template to {% if not add_generation_prompt is defined %}{% set add_generation_prompt = false %}{% endif %}{% set ns = namespace(is_first=false, is_tool=false, is_output_first=true, system_prompt='', is_first_sp=true) %}{%- for message in messages %}{%- if message['role'] == 'system' %}{%- if ns.is_first_sp %}{% set ns.system_prompt = ns.system_prompt + message['content'] %}{% set ns.is_first_sp = false %}{%- else %}{% set ns.system_prompt = ns.system_prompt + '\n\n' + message['content'] %}{%- endif %}{%- endif %}{%- endfor %}{{bos_token}}{{ns.system_prompt}}{%- for message in messages %}{%- if message['role'] == 'user' %}{%- set ns.is_tool = false -%}{{'<\uff5cUser\uff5c>' + message['content']}}{%- endif %}{%- if message['role'] == 'assistant' and message['content'] is none %}{%- set ns.is_tool = false -%}{%- for tool in message['tool_calls']%}{%- if not ns.is_first %}{{'<\uff5cAssistant\uff5c><\uff5ctool\u2581calls\u2581begin\uff5c><\uff5ctool\u2581call\u2581begin\uff5c>' + tool['type'] + '<\uff5ctool\u2581sep\uff5c>' + tool['function']['name'] + '\n' + '```json' + '\n' + tool['function']['arguments'] + '\n' + '```' + '<\uff5ctool\u2581call\u2581end\uff5c>'}}{%- set ns.is_first = true -%}{%- else %}{{'\n' + '<\uff5ctool\u2581call\u2581begin\uff5c>' + tool['type'] + '<\uff5ctool\u2581sep\uff5c>' + tool['function']['name'] + '\n' + '```json' + '\n' + tool['function']['arguments'] + '\n' + '```' + '<\uff5ctool\u2581call\u2581end\uff5c>'}}{{'<\uff5ctool\u2581calls\u2581end\uff5c><\uff5cend\u2581of\u2581sentence\uff5c>'}}{%- endif %}{%- endfor %}{%- endif %}{%- if message['role'] == 'assistant' and message['content'] is not none %}{%- if ns.is_tool %}{{'<\uff5ctool\u2581outputs\u2581end\uff5c>' + message['content'] + '<\uff5cend\u2581of\u2581sentence\uff5c>'}}{%- set ns.is_tool = false -%}{%- else %}{{'<\uff5cAssistant\uff5c>' + message['content'] + '<\uff5cend\u2581of\u2581sentence\uff5c>'}}{%- endif %}{%- endif %}{%- if message['role'] == 'tool' %}{%- set ns.is_tool = true -%}{%- if ns.is_output_first %}{{'<\uff5ctool\u2581outputs\u2581begin\uff5c><\uff5ctool\u2581output\u2581begin\uff5c>' + message['content'] + '<\uff5ctool\u2581output\u2581end\uff5c>'}}{%- set ns.is_output_first = false %}{%- else %}{{'\n<\uff5ctool\u2581output\u2581begin\uff5c>' + message['content'] + '<\uff5ctool\u2581output\u2581end\uff5c>'}}{%- endif %}{%- endif %}{%- endfor -%}{% if ns.is_tool %}{{'<\uff5ctool\u2581outputs\u2581end\uff5c>'}}{% endif %}{% if add_generation_prompt and not ns.is_tool %}{{'<\uff5cAssistant\uff5c>'}}{% endif %}\nINFO:gguf.gguf_writer:Writing the following files:\nINFO:gguf.gguf_writer:<work-dir>\\review-control-stock\\dsv3-tiny-seed17.f32.gguf: n_tensors = 52, total_size = 66.9M\n\nWriting:   0%|          | 0.00/66.9M [00:00<?, ?byte/s]\nWriting:  99%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2589| 66.2M/66.9M [00:00<00:00, 621Mbyte/s]\nWriting: 100%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588| 66.9M/66.9M [00:00<00:00, 381Mbyte/s]\nINFO:hf-to-gguf:Model successfully exported to <work-dir>\\review-control-stock\\dsv3-tiny-seed17.f32.gguf\n"
+     },
+     "engine_base": {
+      "ok": true,
+      "returncode": 0,
+      "stderr_tail": "0.00.845.232 I cmn          init: llama threadpool init, n_threads = 4\n0.00.945.165 I main: writing results to <work-dir>\\review-control-stock\\dsv3-tiny-seed17.base1.gguf...\n"
+     },
+     "tokens": [
+      117952,
+      34274,
+      270,
+      52144,
+      377,
+      260,
+      35993,
+      29,
+      270,
+      5466,
+      769,
+      304,
+      7263,
+      436,
+      304,
+      1750,
+      28801,
+      436,
+      515,
+      17024,
+      377,
+      16
+     ],
+     "e_base": 4.4639881150780425e-07,
+     "engine_deterministic": true,
+     "engine_tokens_stable": true,
+     "reference_deterministic": true,
+     "digests": {
+      "z_ref0": "bd528b431c3c865f",
+      "z_eng0": "4d42e25a52335567"
+     },
+     "status": "OK"
+    }
+   ],
+   "variants": {
+    "soup-auto": {
+     "targets": [
+      "q_a_proj",
+      "q_b_proj",
+      "kv_a_proj_with_mqa",
+      "kv_b_proj",
+      "o_proj"
+     ],
+     "adapted_modules": [
+      "model.layers.0.self_attn.kv_a_proj_with_mqa",
+      "model.layers.0.self_attn.kv_b_proj",
+      "model.layers.0.self_attn.o_proj",
+      "model.layers.0.self_attn.q_a_proj",
+      "model.layers.0.self_attn.q_b_proj",
+      "model.layers.1.self_attn.kv_a_proj_with_mqa",
+      "model.layers.1.self_attn.kv_b_proj",
+      "model.layers.1.self_attn.o_proj",
+      "model.layers.1.self_attn.q_a_proj",
+      "model.layers.1.self_attn.q_b_proj",
+      "model.layers.2.self_attn.kv_a_proj_with_mqa",
+      "model.layers.2.self_attn.kv_b_proj",
+      "model.layers.2.self_attn.o_proj",
+      "model.layers.2.self_attn.q_a_proj",
+      "model.layers.2.self_attn.q_b_proj"
+     ],
+     "touches_routed_experts": false,
+     "lora_b_std": 0.02,
+     "reference_disabled_is_base": true,
+     "s_ref": 0.5592908432903463,
+     "reference_deterministic": true,
+     "digests": {
+      "z_ref1": "fe7b06cbb2fd77f2",
+      "z_ref1_repeat": "fe7b06cbb2fd77f2"
+     },
+     "convert": {
+      "ok": false,
+      "returncode": 1,
+      "stderr_tail": "INFO:lora-to-gguf:Loading base model: dsv3-tiny-seed17\nINFO:lora-to-gguf:Using model architecture: DeepseekV3ForCausalLM\nINFO:hf-to-gguf:gguf: indexing model part 'model.safetensors'\nINFO:gguf.gguf_writer:gguf: This GGUF file is for Little Endian only\nINFO:lora-to-gguf:Exporting model...\nINFO:hf-to-gguf:blk.0.attn_kv_a_mqa.weight.lora_a,   torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.0.attn_kv_a_mqa.weight.lora_b,   torch.float32 --> F32, shape = {8, 24}\nTraceback (most recent call last):\n  File \"<work-dir>\\llama.cpp-b11476\\convert_lora_to_gguf.py\", line 545, in <module>\n    model_instance.write()\n  File \"<work-dir>\\llama.cpp-b11476\\conversion\\base.py\", line 1234, in write\n    self.prepare_tensors()\n  File \"<work-dir>\\llama.cpp-b11476\\conversion\\deepseek.py\", line 455, in prepare_tensors\n    super().prepare_tensors()\n  File \"<work-dir>\\llama.cpp-b11476\\conversion\\base.py\", line 1075, in prepare_tensors\n    for new_name, data_torch in (self.modify_tensors(data_torch, name, bid)):\n                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"<work-dir>\\llama.cpp-b11476\\convert_lora_to_gguf.py\", line 502, in modify_tensors\n    dest = list(super().modify_tensors(data_torch, name, bid))\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"<work-dir>\\llama.cpp-b11476\\conversion\\deepseek.py\", line 446, in modify_tensors\n    k_b = k_b.transpose(1, 2)\n          ^^^^^^^^^^^^^^^^^^^\n  File \"<work-dir>\\llama.cpp-b11476\\convert_lora_to_gguf.py\", line 185, in transpose\n    return self.permute(*dims)\n           ^^^^^^^^^^^^^^^^^^^\n  File \"<work-dir>\\llama.cpp-b11476\\convert_lora_to_gguf.py\", line 179, in permute\n    raise NotImplementedError\nNotImplementedError\n"
+     },
+     "verdict": "CONVERT-FAILED"
+    },
+    "all": {
+     "targets": [
+      "q_a_proj",
+      "q_b_proj",
+      "kv_a_proj_with_mqa",
+      "kv_b_proj",
+      "o_proj",
+      "shared_experts.gate_proj",
+      "shared_experts.up_proj",
+      "shared_experts.down_proj"
+     ],
+     "adapted_modules": [
+      "model.layers.0.self_attn.kv_a_proj_with_mqa",
+      "model.layers.0.self_attn.kv_b_proj",
+      "model.layers.0.self_attn.o_proj",
+      "model.layers.0.self_attn.q_a_proj",
+      "model.layers.0.self_attn.q_b_proj",
+      "model.layers.1.mlp.shared_experts.down_proj",
+      "model.layers.1.mlp.shared_experts.gate_proj",
+      "model.layers.1.mlp.shared_experts.up_proj",
+      "model.layers.1.self_attn.kv_a_proj_with_mqa",
+      "model.layers.1.self_attn.kv_b_proj",
+      "model.layers.1.self_attn.o_proj",
+      "model.layers.1.self_attn.q_a_proj",
+      "model.layers.1.self_attn.q_b_proj",
+      "model.layers.2.mlp.shared_experts.down_proj",
+      "model.layers.2.mlp.shared_experts.gate_proj",
+      "model.layers.2.mlp.shared_experts.up_proj",
+      "model.layers.2.self_attn.kv_a_proj_with_mqa",
+      "model.layers.2.self_attn.kv_b_proj",
+      "model.layers.2.self_attn.o_proj",
+      "model.layers.2.self_attn.q_a_proj",
+      "model.layers.2.self_attn.q_b_proj"
+     ],
+     "touches_routed_experts": false,
+     "lora_b_std": 0.02,
+     "reference_disabled_is_base": true,
+     "s_ref": 0.4500553015597126,
+     "reference_deterministic": true,
+     "digests": {
+      "z_ref1": "79177d12e3259805",
+      "z_ref1_repeat": "79177d12e3259805"
+     },
+     "convert": {
+      "ok": false,
+      "returncode": 1,
+      "stderr_tail": "INFO:lora-to-gguf:Loading base model: dsv3-tiny-seed17\nINFO:lora-to-gguf:Using model architecture: DeepseekV3ForCausalLM\nINFO:hf-to-gguf:gguf: indexing model part 'model.safetensors'\nINFO:gguf.gguf_writer:gguf: This GGUF file is for Little Endian only\nINFO:lora-to-gguf:Exporting model...\nINFO:hf-to-gguf:blk.0.attn_kv_a_mqa.weight.lora_a,   torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.0.attn_kv_a_mqa.weight.lora_b,   torch.float32 --> F32, shape = {8, 24}\nTraceback (most recent call last):\n  File \"<work-dir>\\llama.cpp-b11476\\convert_lora_to_gguf.py\", line 545, in <module>\n    model_instance.write()\n  File \"<work-dir>\\llama.cpp-b11476\\conversion\\base.py\", line 1234, in write\n    self.prepare_tensors()\n  File \"<work-dir>\\llama.cpp-b11476\\conversion\\deepseek.py\", line 455, in prepare_tensors\n    super().prepare_tensors()\n  File \"<work-dir>\\llama.cpp-b11476\\conversion\\base.py\", line 1075, in prepare_tensors\n    for new_name, data_torch in (self.modify_tensors(data_torch, name, bid)):\n                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"<work-dir>\\llama.cpp-b11476\\convert_lora_to_gguf.py\", line 502, in modify_tensors\n    dest = list(super().modify_tensors(data_torch, name, bid))\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"<work-dir>\\llama.cpp-b11476\\conversion\\deepseek.py\", line 446, in modify_tensors\n    k_b = k_b.transpose(1, 2)\n          ^^^^^^^^^^^^^^^^^^^\n  File \"<work-dir>\\llama.cpp-b11476\\convert_lora_to_gguf.py\", line 185, in transpose\n    return self.permute(*dims)\n           ^^^^^^^^^^^^^^^^^^^\n  File \"<work-dir>\\llama.cpp-b11476\\convert_lora_to_gguf.py\", line 179, in permute\n    raise NotImplementedError\nNotImplementedError\n"
+     },
+     "verdict": "CONVERT-FAILED"
+    },
+    "all-but-kv_b": {
+     "targets": [
+      "q_a_proj",
+      "q_b_proj",
+      "kv_a_proj_with_mqa",
+      "o_proj",
+      "shared_experts.gate_proj",
+      "shared_experts.up_proj",
+      "shared_experts.down_proj"
+     ],
+     "adapted_modules": [
+      "model.layers.0.self_attn.kv_a_proj_with_mqa",
+      "model.layers.0.self_attn.o_proj",
+      "model.layers.0.self_attn.q_a_proj",
+      "model.layers.0.self_attn.q_b_proj",
+      "model.layers.1.mlp.shared_experts.down_proj",
+      "model.layers.1.mlp.shared_experts.gate_proj",
+      "model.layers.1.mlp.shared_experts.up_proj",
+      "model.layers.1.self_attn.kv_a_proj_with_mqa",
+      "model.layers.1.self_attn.o_proj",
+      "model.layers.1.self_attn.q_a_proj",
+      "model.layers.1.self_attn.q_b_proj",
+      "model.layers.2.mlp.shared_experts.down_proj",
+      "model.layers.2.mlp.shared_experts.gate_proj",
+      "model.layers.2.mlp.shared_experts.up_proj",
+      "model.layers.2.self_attn.kv_a_proj_with_mqa",
+      "model.layers.2.self_attn.o_proj",
+      "model.layers.2.self_attn.q_a_proj",
+      "model.layers.2.self_attn.q_b_proj"
+     ],
+     "touches_routed_experts": false,
+     "lora_b_std": 0.02,
+     "reference_disabled_is_base": true,
+     "s_ref": 0.2825220903681214,
+     "reference_deterministic": true,
+     "digests": {
+      "z_ref1": "fdafa8f1150a10c1",
+      "z_ref1_repeat": "fdafa8f1150a10c1",
+      "z_eng1": "9e204c4f9b4b0944",
+      "z_eng1_repeat": "9e204c4f9b4b0944"
+     },
+     "convert": {
+      "ok": true,
+      "returncode": 0,
+      "stderr_tail": "_gate_shexp.weight.lora_a,  torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.1.ffn_gate_shexp.weight.lora_b,  torch.float32 --> F32, shape = {8, 32}\nINFO:hf-to-gguf:blk.1.ffn_up_shexp.weight.lora_a,    torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.1.ffn_up_shexp.weight.lora_b,    torch.float32 --> F32, shape = {8, 32}\nINFO:hf-to-gguf:blk.1.attn_kv_a_mqa.weight.lora_a,   torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.1.attn_kv_a_mqa.weight.lora_b,   torch.float32 --> F32, shape = {8, 24}\nINFO:hf-to-gguf:blk.1.attn_output.weight.lora_a,     torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.1.attn_output.weight.lora_b,     torch.float32 --> F32, shape = {8, 64}\nINFO:hf-to-gguf:blk.1.attn_q_a.weight.lora_a,        torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.1.attn_q_a.weight.lora_b,        torch.float32 --> F32, shape = {8, 32}\nINFO:hf-to-gguf:blk.1.attn_q_b.weight.lora_a,        torch.float32 --> F32, shape = {32, 8}\nINFO:hf-to-gguf:blk.1.attn_q_b.weight.lora_b,        torch.float32 --> F32, shape = {8, 96}\nINFO:hf-to-gguf:blk.2.ffn_down_shexp.weight.lora_a,  torch.float32 --> F32, shape = {32, 8}\nINFO:hf-to-gguf:blk.2.ffn_down_shexp.weight.lora_b,  torch.float32 --> F32, shape = {8, 64}\nINFO:hf-to-gguf:blk.2.ffn_gate_shexp.weight.lora_a,  torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.2.ffn_gate_shexp.weight.lora_b,  torch.float32 --> F32, shape = {8, 32}\nINFO:hf-to-gguf:blk.2.ffn_up_shexp.weight.lora_a,    torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.2.ffn_up_shexp.weight.lora_b,    torch.float32 --> F32, shape = {8, 32}\nINFO:hf-to-gguf:blk.2.attn_kv_a_mqa.weight.lora_a,   torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.2.attn_kv_a_mqa.weight.lora_b,   torch.float32 --> F32, shape = {8, 24}\nINFO:hf-to-gguf:blk.2.attn_output.weight.lora_a,     torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.2.attn_output.weight.lora_b,     torch.float32 --> F32, shape = {8, 64}\nINFO:hf-to-gguf:blk.2.attn_q_a.weight.lora_a,        torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.2.attn_q_a.weight.lora_b,        torch.float32 --> F32, shape = {8, 32}\nINFO:hf-to-gguf:blk.2.attn_q_b.weight.lora_a,        torch.float32 --> F32, shape = {32, 8}\nINFO:hf-to-gguf:blk.2.attn_q_b.weight.lora_b,        torch.float32 --> F32, shape = {8, 96}\nINFO:hf-to-gguf:Set meta model\nINFO:hf-to-gguf:Set model parameters\nINFO:hf-to-gguf:Set model quantization version\nINFO:hf-to-gguf:Set model tokenizer\nINFO:gguf.gguf_writer:Writing the following files:\nINFO:gguf.gguf_writer:<work-dir>\\review-control-stock\\dsv3-tiny-seed17-adapters\\all-but-kv_b-b0.gguf: n_tensors = 36, total_size = 60.7K\n\nWriting:   0%|          | 0.00/60.7k [00:00<?, ?byte/s]\nWriting: 100%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588| 60.7k/60.7k [00:00<00:00, 17.2Mbyte/s]\nINFO:lora-to-gguf:Model successfully exported to <work-dir>\\review-control-stock\\dsv3-tiny-seed17-adapters\\all-but-kv_b-b0.gguf\n"
+     },
+     "engine": {
+      "ok": true,
+      "returncode": 0,
+      "stderr_tail": "0.00.780.002 I cmn          init: llama threadpool init, n_threads = 4\n0.00.896.096 I main: writing results to <work-dir>\\review-control-stock\\dsv3-tiny-seed17-adapters\\all-but-kv_b.out.gguf...\n"
+     },
+     "engine_repeat": {
+      "ok": true,
+      "returncode": 0,
+      "stderr_tail": "0.00.735.363 I cmn          init: llama threadpool init, n_threads = 4\n0.00.843.741 I main: writing results to <work-dir>\\review-control-stock\\dsv3-tiny-seed17-adapters\\all-but-kv_b.repeat.gguf...\n"
+     },
+     "engine_deterministic": true,
+     "tokens_match": true,
+     "rho": 0.8074893161705712,
+     "r": 0.7186000016427775,
+     "cos": 0.7032000365988352,
+     "verdict": "WRONG"
+    },
+    "q_a_proj": {
+     "targets": [
+      "q_a_proj"
+     ],
+     "adapted_modules": [
+      "model.layers.0.self_attn.q_a_proj",
+      "model.layers.1.self_attn.q_a_proj",
+      "model.layers.2.self_attn.q_a_proj"
+     ],
+     "touches_routed_experts": false,
+     "lora_b_std": 0.08,
+     "reference_disabled_is_base": true,
+     "s_ref": 0.022471006212483657,
+     "reference_deterministic": true,
+     "digests": {
+      "z_ref1": "d2e58837ccce062d",
+      "z_ref1_repeat": "d2e58837ccce062d",
+      "z_eng1": "4d42e25a52335567",
+      "z_eng1_repeat": "4d42e25a52335567"
+     },
+     "convert": {
+      "ok": true,
+      "returncode": 0,
+      "stderr_tail": "INFO:lora-to-gguf:Loading base model: dsv3-tiny-seed17\nINFO:lora-to-gguf:Using model architecture: DeepseekV3ForCausalLM\nINFO:hf-to-gguf:gguf: indexing model part 'model.safetensors'\nINFO:gguf.gguf_writer:gguf: This GGUF file is for Little Endian only\nINFO:lora-to-gguf:Exporting model...\nINFO:hf-to-gguf:blk.0.attn_q_a.weight.lora_a,        torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.0.attn_q_a.weight.lora_b,        torch.float32 --> F32, shape = {8, 32}\nINFO:hf-to-gguf:blk.1.attn_q_a.weight.lora_a,        torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.1.attn_q_a.weight.lora_b,        torch.float32 --> F32, shape = {8, 32}\nINFO:hf-to-gguf:blk.2.attn_q_a.weight.lora_a,        torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.2.attn_q_a.weight.lora_b,        torch.float32 --> F32, shape = {8, 32}\nINFO:hf-to-gguf:Set meta model\nINFO:hf-to-gguf:Set model parameters\nINFO:hf-to-gguf:Set model quantization version\nINFO:hf-to-gguf:Set model tokenizer\nINFO:gguf.gguf_writer:Writing the following files:\nINFO:gguf.gguf_writer:<work-dir>\\review-control-stock\\dsv3-tiny-seed17-adapters\\q_a_proj-b1.gguf: n_tensors = 6, total_size = 9.2K\n\nWriting:   0%|          | 0.00/9.22k [00:00<?, ?byte/s]\nWriting: 100%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588| 9.22k/9.22k [00:00<00:00, 9.07Mbyte/s]\nINFO:lora-to-gguf:Model successfully exported to <work-dir>\\review-control-stock\\dsv3-tiny-seed17-adapters\\q_a_proj-b1.gguf\n"
+     },
+     "engine": {
+      "ok": true,
+      "returncode": 0,
+      "stderr_tail": "0.00.782.321 I cmn          init: llama threadpool init, n_threads = 4\n0.00.882.206 I main: writing results to <work-dir>\\review-control-stock\\dsv3-tiny-seed17-adapters\\q_a_proj.out.gguf...\n"
+     },
+     "engine_repeat": {
+      "ok": true,
+      "returncode": 0,
+      "stderr_tail": "0.00.785.486 I cmn          init: llama threadpool init, n_threads = 4\n0.00.886.280 I main: writing results to <work-dir>\\review-control-stock\\dsv3-tiny-seed17-adapters\\q_a_proj.repeat.gguf...\n"
+     },
+     "engine_deterministic": true,
+     "tokens_match": true,
+     "rho": 0.0,
+     "r": 1.0,
+     "cos": 0.0,
+     "verdict": "DROPPED"
+    },
+    "q_b_proj": {
+     "targets": [
+      "q_b_proj"
+     ],
+     "adapted_modules": [
+      "model.layers.0.self_attn.q_b_proj",
+      "model.layers.1.self_attn.q_b_proj",
+      "model.layers.2.self_attn.q_b_proj"
+     ],
+     "touches_routed_experts": false,
+     "lora_b_std": 0.08,
+     "reference_disabled_is_base": true,
+     "s_ref": 0.025263327859692805,
+     "reference_deterministic": true,
+     "digests": {
+      "z_ref1": "acbf64fcf6be9b59",
+      "z_ref1_repeat": "acbf64fcf6be9b59",
+      "z_eng1": "4d42e25a52335567",
+      "z_eng1_repeat": "4d42e25a52335567"
+     },
+     "convert": {
+      "ok": true,
+      "returncode": 0,
+      "stderr_tail": "INFO:lora-to-gguf:Loading base model: dsv3-tiny-seed17\nINFO:lora-to-gguf:Using model architecture: DeepseekV3ForCausalLM\nINFO:hf-to-gguf:gguf: indexing model part 'model.safetensors'\nINFO:gguf.gguf_writer:gguf: This GGUF file is for Little Endian only\nINFO:lora-to-gguf:Exporting model...\nINFO:hf-to-gguf:blk.0.attn_q_b.weight.lora_a,        torch.float32 --> F32, shape = {32, 8}\nINFO:hf-to-gguf:blk.0.attn_q_b.weight.lora_b,        torch.float32 --> F32, shape = {8, 96}\nINFO:hf-to-gguf:blk.1.attn_q_b.weight.lora_a,        torch.float32 --> F32, shape = {32, 8}\nINFO:hf-to-gguf:blk.1.attn_q_b.weight.lora_b,        torch.float32 --> F32, shape = {8, 96}\nINFO:hf-to-gguf:blk.2.attn_q_b.weight.lora_a,        torch.float32 --> F32, shape = {32, 8}\nINFO:hf-to-gguf:blk.2.attn_q_b.weight.lora_b,        torch.float32 --> F32, shape = {8, 96}\nINFO:hf-to-gguf:Set meta model\nINFO:hf-to-gguf:Set model parameters\nINFO:hf-to-gguf:Set model quantization version\nINFO:hf-to-gguf:Set model tokenizer\nINFO:gguf.gguf_writer:Writing the following files:\nINFO:gguf.gguf_writer:<work-dir>\\review-control-stock\\dsv3-tiny-seed17-adapters\\q_b_proj-b1.gguf: n_tensors = 6, total_size = 12.3K\n\nWriting:   0%|          | 0.00/12.3k [00:00<?, ?byte/s]\nWriting: 100%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588| 12.3k/12.3k [00:00<00:00, 12.3Mbyte/s]\nINFO:lora-to-gguf:Model successfully exported to <work-dir>\\review-control-stock\\dsv3-tiny-seed17-adapters\\q_b_proj-b1.gguf\n"
+     },
+     "engine": {
+      "ok": true,
+      "returncode": 0,
+      "stderr_tail": "0.00.740.811 I cmn          init: llama threadpool init, n_threads = 4\n0.00.844.458 I main: writing results to <work-dir>\\review-control-stock\\dsv3-tiny-seed17-adapters\\q_b_proj.out.gguf...\n"
+     },
+     "engine_repeat": {
+      "ok": true,
+      "returncode": 0,
+      "stderr_tail": "0.00.789.919 I cmn          init: llama threadpool init, n_threads = 4\n0.00.889.050 I main: writing results to <work-dir>\\review-control-stock\\dsv3-tiny-seed17-adapters\\q_b_proj.repeat.gguf...\n"
+     },
+     "engine_deterministic": true,
+     "tokens_match": true,
+     "rho": 0.0,
+     "r": 1.0,
+     "cos": 0.0,
+     "verdict": "DROPPED"
+    },
+    "kv_a_proj_with_mqa": {
+     "targets": [
+      "kv_a_proj_with_mqa"
+     ],
+     "adapted_modules": [
+      "model.layers.0.self_attn.kv_a_proj_with_mqa",
+      "model.layers.1.self_attn.kv_a_proj_with_mqa",
+      "model.layers.2.self_attn.kv_a_proj_with_mqa"
+     ],
+     "touches_routed_experts": false,
+     "lora_b_std": 0.02,
+     "reference_disabled_is_base": true,
+     "s_ref": 0.24099829209112614,
+     "reference_deterministic": true,
+     "digests": {
+      "z_ref1": "f68197ae2f6b50cc",
+      "z_ref1_repeat": "f68197ae2f6b50cc",
+      "z_eng1": "4d42e25a52335567",
+      "z_eng1_repeat": "4d42e25a52335567"
+     },
+     "convert": {
+      "ok": true,
+      "returncode": 0,
+      "stderr_tail": "INFO:lora-to-gguf:Loading base model: dsv3-tiny-seed17\nINFO:lora-to-gguf:Using model architecture: DeepseekV3ForCausalLM\nINFO:hf-to-gguf:gguf: indexing model part 'model.safetensors'\nINFO:gguf.gguf_writer:gguf: This GGUF file is for Little Endian only\nINFO:lora-to-gguf:Exporting model...\nINFO:hf-to-gguf:blk.0.attn_kv_a_mqa.weight.lora_a,   torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.0.attn_kv_a_mqa.weight.lora_b,   torch.float32 --> F32, shape = {8, 24}\nINFO:hf-to-gguf:blk.1.attn_kv_a_mqa.weight.lora_a,   torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.1.attn_kv_a_mqa.weight.lora_b,   torch.float32 --> F32, shape = {8, 24}\nINFO:hf-to-gguf:blk.2.attn_kv_a_mqa.weight.lora_a,   torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.2.attn_kv_a_mqa.weight.lora_b,   torch.float32 --> F32, shape = {8, 24}\nINFO:hf-to-gguf:Set meta model\nINFO:hf-to-gguf:Set model parameters\nINFO:hf-to-gguf:Set model quantization version\nINFO:hf-to-gguf:Set model tokenizer\nINFO:gguf.gguf_writer:Writing the following files:\nINFO:gguf.gguf_writer:<work-dir>\\review-control-stock\\dsv3-tiny-seed17-adapters\\kv_a_proj_with_mqa-b0.gguf: n_tensors = 6, total_size = 8.4K\n\nWriting:   0%|          | 0.00/8.45k [00:00<?, ?byte/s]\nWriting: 100%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588| 8.45k/8.45k [00:00<00:00, 8.46Mbyte/s]\nINFO:lora-to-gguf:Model successfully exported to <work-dir>\\review-control-stock\\dsv3-tiny-seed17-adapters\\kv_a_proj_with_mqa-b0.gguf\n"
+     },
+     "engine": {
+      "ok": true,
+      "returncode": 0,
+      "stderr_tail": "0.00.744.828 I cmn          init: llama threadpool init, n_threads = 4\n0.00.840.201 I main: writing results to <work-dir>\\review-control-stock\\dsv3-tiny-seed17-adapters\\kv_a_proj_with_mqa.out.gguf...\n"
+     },
+     "engine_repeat": {
+      "ok": true,
+      "returncode": 0,
+      "stderr_tail": "0.00.747.651 I cmn          init: llama threadpool init, n_threads = 4\n0.00.861.191 I main: writing results to <work-dir>\\review-control-stock\\dsv3-tiny-seed17-adapters\\kv_a_proj_with_mqa.repeat.gguf...\n"
+     },
+     "engine_deterministic": true,
+     "tokens_match": true,
+     "rho": 0.0,
+     "r": 1.0,
+     "cos": 0.0,
+     "verdict": "DROPPED"
+    },
+    "kv_b_proj": {
+     "targets": [
+      "kv_b_proj"
+     ],
+     "adapted_modules": [
+      "model.layers.0.self_attn.kv_b_proj",
+      "model.layers.1.self_attn.kv_b_proj",
+      "model.layers.2.self_attn.kv_b_proj"
+     ],
+     "touches_routed_experts": false,
+     "lora_b_std": 0.02,
+     "reference_disabled_is_base": true,
+     "s_ref": 0.4683741161840769,
+     "reference_deterministic": true,
+     "digests": {
+      "z_ref1": "6c93ba2a4b015045",
+      "z_ref1_repeat": "6c93ba2a4b015045"
+     },
+     "convert": {
+      "ok": false,
+      "returncode": 1,
+      "stderr_tail": "INFO:lora-to-gguf:Loading base model: dsv3-tiny-seed17\nINFO:lora-to-gguf:Using model architecture: DeepseekV3ForCausalLM\nINFO:hf-to-gguf:gguf: indexing model part 'model.safetensors'\nINFO:gguf.gguf_writer:gguf: This GGUF file is for Little Endian only\nINFO:lora-to-gguf:Exporting model...\nTraceback (most recent call last):\n  File \"<work-dir>\\llama.cpp-b11476\\convert_lora_to_gguf.py\", line 545, in <module>\n    model_instance.write()\n  File \"<work-dir>\\llama.cpp-b11476\\conversion\\base.py\", line 1234, in write\n    self.prepare_tensors()\n  File \"<work-dir>\\llama.cpp-b11476\\conversion\\deepseek.py\", line 455, in prepare_tensors\n    super().prepare_tensors()\n  File \"<work-dir>\\llama.cpp-b11476\\conversion\\base.py\", line 1075, in prepare_tensors\n    for new_name, data_torch in (self.modify_tensors(data_torch, name, bid)):\n                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"<work-dir>\\llama.cpp-b11476\\convert_lora_to_gguf.py\", line 502, in modify_tensors\n    dest = list(super().modify_tensors(data_torch, name, bid))\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"<work-dir>\\llama.cpp-b11476\\conversion\\deepseek.py\", line 446, in modify_tensors\n    k_b = k_b.transpose(1, 2)\n          ^^^^^^^^^^^^^^^^^^^\n  File \"<work-dir>\\llama.cpp-b11476\\convert_lora_to_gguf.py\", line 185, in transpose\n    return self.permute(*dims)\n           ^^^^^^^^^^^^^^^^^^^\n  File \"<work-dir>\\llama.cpp-b11476\\convert_lora_to_gguf.py\", line 179, in permute\n    raise NotImplementedError\nNotImplementedError\n"
+     },
+     "verdict": "CONVERT-FAILED"
+    },
+    "o_proj": {
+     "targets": [
+      "o_proj"
+     ],
+     "adapted_modules": [
+      "model.layers.0.self_attn.o_proj",
+      "model.layers.1.self_attn.o_proj",
+      "model.layers.2.self_attn.o_proj"
+     ],
+     "touches_routed_experts": false,
+     "lora_b_std": 0.02,
+     "reference_disabled_is_base": true,
+     "s_ref": 0.20526176099006643,
+     "reference_deterministic": true,
+     "digests": {
+      "z_ref1": "83fe9ee33e0e2358",
+      "z_ref1_repeat": "83fe9ee33e0e2358",
+      "z_eng1": "c27d331913bd4490",
+      "z_eng1_repeat": "c27d331913bd4490"
+     },
+     "convert": {
+      "ok": true,
+      "returncode": 0,
+      "stderr_tail": "INFO:lora-to-gguf:Loading base model: dsv3-tiny-seed17\nINFO:lora-to-gguf:Using model architecture: DeepseekV3ForCausalLM\nINFO:hf-to-gguf:gguf: indexing model part 'model.safetensors'\nINFO:gguf.gguf_writer:gguf: This GGUF file is for Little Endian only\nINFO:lora-to-gguf:Exporting model...\nINFO:hf-to-gguf:blk.0.attn_output.weight.lora_a,     torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.0.attn_output.weight.lora_b,     torch.float32 --> F32, shape = {8, 64}\nINFO:hf-to-gguf:blk.1.attn_output.weight.lora_a,     torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.1.attn_output.weight.lora_b,     torch.float32 --> F32, shape = {8, 64}\nINFO:hf-to-gguf:blk.2.attn_output.weight.lora_a,     torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.2.attn_output.weight.lora_b,     torch.float32 --> F32, shape = {8, 64}\nINFO:hf-to-gguf:Set meta model\nINFO:hf-to-gguf:Set model parameters\nINFO:hf-to-gguf:Set model quantization version\nINFO:hf-to-gguf:Set model tokenizer\nINFO:gguf.gguf_writer:Writing the following files:\nINFO:gguf.gguf_writer:<work-dir>\\review-control-stock\\dsv3-tiny-seed17-adapters\\o_proj-b0.gguf: n_tensors = 6, total_size = 12.3K\n\nWriting:   0%|          | 0.00/12.3k [00:00<?, ?byte/s]\nWriting: 100%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588| 12.3k/12.3k [00:00<00:00, 12.3Mbyte/s]\nINFO:lora-to-gguf:Model successfully exported to <work-dir>\\review-control-stock\\dsv3-tiny-seed17-adapters\\o_proj-b0.gguf\n"
+     },
+     "engine": {
+      "ok": true,
+      "returncode": 0,
+      "stderr_tail": "0.00.803.697 I cmn          init: llama threadpool init, n_threads = 4\n0.00.917.365 I main: writing results to <work-dir>\\review-control-stock\\dsv3-tiny-seed17-adapters\\o_proj.out.gguf...\n"
+     },
+     "engine_repeat": {
+      "ok": true,
+      "returncode": 0,
+      "stderr_tail": "0.00.710.663 I cmn          init: llama threadpool init, n_threads = 4\n0.00.812.463 I main: writing results to <work-dir>\\review-control-stock\\dsv3-tiny-seed17-adapters\\o_proj.repeat.gguf...\n"
+     },
+     "engine_deterministic": true,
+     "tokens_match": true,
+     "rho": 1.0000000174426293,
+     "r": 1.492217994157736e-06,
+     "cos": 0.9999999999989057,
+     "verdict": "APPLIED"
+    },
+    "shared": {
+     "targets": [
+      "shared_experts.gate_proj",
+      "shared_experts.up_proj",
+      "shared_experts.down_proj"
+     ],
+     "adapted_modules": [
+      "model.layers.1.mlp.shared_experts.down_proj",
+      "model.layers.1.mlp.shared_experts.gate_proj",
+      "model.layers.1.mlp.shared_experts.up_proj",
+      "model.layers.2.mlp.shared_experts.down_proj",
+      "model.layers.2.mlp.shared_experts.gate_proj",
+      "model.layers.2.mlp.shared_experts.up_proj"
+     ],
+     "touches_routed_experts": false,
+     "lora_b_std": 0.02,
+     "reference_disabled_is_base": true,
+     "s_ref": 0.10447132911217329,
+     "reference_deterministic": true,
+     "digests": {
+      "z_ref1": "7d0263ec5733c555",
+      "z_ref1_repeat": "7d0263ec5733c555",
+      "z_eng1": "d73935e4136a8b38",
+      "z_eng1_repeat": "d73935e4136a8b38"
+     },
+     "convert": {
+      "ok": true,
+      "returncode": 0,
+      "stderr_tail": "INFO:lora-to-gguf:Loading base model: dsv3-tiny-seed17\nINFO:lora-to-gguf:Using model architecture: DeepseekV3ForCausalLM\nINFO:hf-to-gguf:gguf: indexing model part 'model.safetensors'\nINFO:gguf.gguf_writer:gguf: This GGUF file is for Little Endian only\nINFO:lora-to-gguf:Exporting model...\nINFO:hf-to-gguf:blk.1.ffn_down_shexp.weight.lora_a,  torch.float32 --> F32, shape = {32, 8}\nINFO:hf-to-gguf:blk.1.ffn_down_shexp.weight.lora_b,  torch.float32 --> F32, shape = {8, 64}\nINFO:hf-to-gguf:blk.1.ffn_gate_shexp.weight.lora_a,  torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.1.ffn_gate_shexp.weight.lora_b,  torch.float32 --> F32, shape = {8, 32}\nINFO:hf-to-gguf:blk.1.ffn_up_shexp.weight.lora_a,    torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.1.ffn_up_shexp.weight.lora_b,    torch.float32 --> F32, shape = {8, 32}\nINFO:hf-to-gguf:blk.2.ffn_down_shexp.weight.lora_a,  torch.float32 --> F32, shape = {32, 8}\nINFO:hf-to-gguf:blk.2.ffn_down_shexp.weight.lora_b,  torch.float32 --> F32, shape = {8, 64}\nINFO:hf-to-gguf:blk.2.ffn_gate_shexp.weight.lora_a,  torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.2.ffn_gate_shexp.weight.lora_b,  torch.float32 --> F32, shape = {8, 32}\nINFO:hf-to-gguf:blk.2.ffn_up_shexp.weight.lora_a,    torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.2.ffn_up_shexp.weight.lora_b,    torch.float32 --> F32, shape = {8, 32}\nINFO:hf-to-gguf:Set meta model\nINFO:hf-to-gguf:Set model parameters\nINFO:hf-to-gguf:Set model quantization version\nINFO:hf-to-gguf:Set model tokenizer\nINFO:gguf.gguf_writer:Writing the following files:\nINFO:gguf.gguf_writer:<work-dir>\\review-control-stock\\dsv3-tiny-seed17-adapters\\shared-b0.gguf: n_tensors = 12, total_size = 18.4K\n\nWriting:   0%|          | 0.00/18.4k [00:00<?, ?byte/s]\nWriting: 100%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588| 18.4k/18.4k [00:00<00:00, 18.5Mbyte/s]\nINFO:lora-to-gguf:Model successfully exported to <work-dir>\\review-control-stock\\dsv3-tiny-seed17-adapters\\shared-b0.gguf\n"
+     },
+     "engine": {
+      "ok": true,
+      "returncode": 0,
+      "stderr_tail": "0.00.872.295 I cmn          init: llama threadpool init, n_threads = 4\n0.00.982.465 I main: writing results to <work-dir>\\review-control-stock\\dsv3-tiny-seed17-adapters\\shared.out.gguf...\n"
+     },
+     "engine_repeat": {
+      "ok": true,
+      "returncode": 0,
+      "stderr_tail": "0.00.799.746 I cmn          init: llama threadpool init, n_threads = 4\n0.00.908.915 I main: writing results to <work-dir>\\review-control-stock\\dsv3-tiny-seed17-adapters\\shared.repeat.gguf...\n"
+     },
+     "engine_deterministic": true,
+     "tokens_match": true,
+     "rho": 1.0000000371457856,
+     "r": 2.6307668109890884e-06,
+     "cos": 0.9999999999965674,
+     "verdict": "APPLIED"
+    }
+   },
+   "status": "OK"
+  }
+ },
+ "probe": {
+  "verdict": "HOOK NEEDED",
+  "hook_modules": {
+   "q_a_proj": "DROPPED",
+   "q_b_proj": "DROPPED",
+   "kv_a_proj_with_mqa": "DROPPED",
+   "kv_b_proj": "CONVERT-FAILED"
+  }
+ }
+}

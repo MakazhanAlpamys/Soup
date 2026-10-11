@@ -1,0 +1,23 @@
+# Evidence extract; omitted source lines remain in the separately archived full capture.
+
+# Source: part-b-real-model-run2.log
+# Full source SHA-256: ef9cc93b347773f1c8c8b94d24730f4c57f6e0668f7fcf7d341590653d0c36ee
+
+# Source lines 35-44
+[  531.4 s] base converted
+[  574.3 s] engine base logits
+[  586.8 s] reference loaded
+[  595.9 s] reference base logits
+[  606.7 s] reference soup-auto
+[  621.1 s] reference soup-auto+shared
+  soup-auto          APPLIED         s_ref=0.11111299846204006 rho=0.9999995333474703 r=1.4406289065096857e-05 floor=1.1735580656080632e-05
+  soup-auto+shared   APPLIED         s_ref=0.23740075942989677 rho=1.0000002460803106 r=8.262431261704828e-06 floor=5.4927185512028305e-06
+[  682.6 s] engine adapters
+result: {"status": "OK", "top1_agreement": 1.0, "n_base": 1.3039755553902343e-06}
+
+# Source: part-b-real-model-run2.out
+# Full source SHA-256: 90c6ece59064ed9353bfa0a3b3bd963a64a90ba7d254c028c64b6bbd8705067d
+
+# Source lines 41-42
+[transformers] `causal_conv1d_fn` is falling back to its reference PyTorch implementation because `causal_conv1d` is not installed. This is correct but much slower; install `causal_conv1d` for the optimized kernel.
+[transformers] `chunk_gated_delta_rule` is falling back to its reference PyTorch implementation because `flash-linear-attention` is not installed. This is correct but much slower; install `flash-linear-attention` for the optimized kernel.

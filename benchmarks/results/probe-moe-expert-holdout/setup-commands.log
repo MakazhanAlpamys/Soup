@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# New CUDA/bf16 arm; no Soup training or LoRA artifacts.
+set -euo pipefail
+exec > >(tee -a "$HOME/holdout-setup.log") 2>&1
+export PATH="$HOME/.local/bin:$PATH"
+export HF_HUB_DISABLE_PROGRESS_BARS=1
+export OMP_NUM_THREADS=4
+export TOKENIZERS_PARALLELISM=false
+export PYTHONUNBUFFERED=1
+curl -LsSf https://astral.sh/uv/install.sh | sh
+uv --version
+uv venv --python 3.12 "$HOME/holdout-venv"
+uv pip install --python "$HOME/holdout-venv/bin/python" \
+  --index-url https://download.pytorch.org/whl/cu130 torch==2.14.1
+uv pip install --python "$HOME/holdout-venv/bin/python" \
+  transformers==5.19.0 datasets==5.1.0 huggingface-hub==1.33.0 rich==15.0.0 psutil==7.2.2
+uv pip freeze --python "$HOME/holdout-venv/bin/python" > "$HOME/holdout-results/runtime-freeze.txt"
+mkdir -p "$HOME/holdout-src"
+tar -xzf "$HOME/holdout.tgz" -C "$HOME/holdout-src"
+"$HOME/holdout-venv/bin/python" -c 'import torch; from rich.console import Console; Console().print(torch.__version__, torch.version.cuda, torch.cuda.is_available(), torch.cuda.get_device_name(0))'
+bash "$HOME/holdout_run.sh"

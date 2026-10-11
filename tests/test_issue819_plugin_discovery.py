@@ -155,6 +155,7 @@ def test_disable_survives_a_fresh_process(tmp_path):
             [sys.executable, "-m", "soup_cli", "plugins", *args],
             capture_output=True,
             text=True,
+            encoding="utf-8",
             env=env,
             timeout=30,
         )

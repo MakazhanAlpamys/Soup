@@ -1,0 +1,229 @@
+# Evidence extract; omitted source lines remain in the separately archived full capture.
+
+# Source: part-b-access-attempts.log
+# Full source SHA-256: 3e9882e04da6c7b5be05be2189dc37d78b6ca556706ac28db57cd87cc33925d7
+
+# Source lines 11-22
+=== 2026-10-07T20:57:04.555Z
+$ wsl bash -lc "brev ls; echo ---; brev --version"
+No instances in org <org>
+
+Start a new instance:
+---
+Current Version: v0.6.335
+
+=== 2026-10-07T20:57:25.329Z
+$ wsl bash -lc "brev search cpu --min-ram 120 --arch x86_64 --sort price 2>&1 | head -40"
+ TYPE                   TARGET_DISK  PROVIDER  VCPUS  RAM   ARCH    DISK       $/GB/MO  BOOT  FEATURES  $/HR
+ n2d-highmem-16         10           gcp          16  128   x86_64  10GB-16TB  $0.16    7m    SP        $0.72
+
+# Source lines 66-85
+=== 2026-10-07T22:08:45.320Z
+$ wsl bash -lc "brev create moe-qwen35-check --type n2d-highmem-16 --min-disk 300 --timeout 900 2>&1 | tail -30"
+Attempting to create 1 instance(s) with 1 parallel attempts
+Instance types to try: n2d-highmem-16
+
+Trying n2d-highmem-16 for 1 instance(s)...
+[Worker 1] Trying n2d-highmem-16 for instance 'moe-qwen35-check'...
+[Worker 1] n2d-highmem-16 Success! Created instance 'moe-qwen35-check'
+
+Waiting for instance(s) to be ready...
+You can safely ctrl+c to exit
+  moe-qwen35-check: Ready
+moe-qwen35-check
+
+=== 2026-10-07T22:09:45.940Z
+$ wsl bash -lc "date -u; brev ls 2>&1 | head -10; brev exec moe-qwen35-check 'uname -a; cat /etc/os-release | head -3; nproc; free -g; df -h / /home 2>/dev/null; lscpu | grep -E \"Model name|Flags\" | cut -c1-200; which python3 gcc g++ cmake git; python3 --version; nvidia-smi 2>&1 | head -2' 2>&1 | tail -40"
+Wed Oct  7 22:09:46 UTC 2026
+You have 1 instances in Org <org>
+ NAME             STATUS   BUILD     SHELL      ID         MACHINE         GPU
+ moe-qwen35-check  RUNNING  BUILDING  NOT READY  8ry1pgtb8  n2d-highmem-16  -
+
+# Source lines 158-162
+=== 2026-10-07T22:13:00.330Z
+$ wsl bash -lc "brev ls 2>&1 | head -5"
+You have 1 instances in Org <org>
+ NAME             STATUS   BUILD      SHELL  ID         MACHINE         GPU
+ moe-qwen35-check  RUNNING  COMPLETED  READY  8ry1pgtb8  n2d-highmem-16  -
+
+# Source lines 225-243
+$ wsl bash -lc "sleep 150; brev ls 2>&1 | head -4; timeout 100 brev exec moe-qwen35-check 'echo CONTAINER-OK; whoami; nproc' 2>&1 | grep -v 'waiting for' | tail -6"
+You have 1 instances in Org <org>
+ NAME             STATUS   BUILD      SHELL  ID         MACHINE         GPU
+ moe-qwen35-check  RUNNING  COMPLETED  READY  8ry1pgtb8  n2d-highmem-16  -
+
+Connection failed, checking instance status...
+github.com/brevdev/brev-cli/pkg/cmd/util.WaitForSSHToBeAvailable
+/go/src/github.com/brevdev/brev-cli/pkg/cmd/util/ssh.go:99
+:
+exit status 255
+Please check with: brev ls
+
+=== 2026-10-07T22:22:10.126Z
+$ wsl bash -lc "date -u; brev delete moe-qwen35-check 2>&1 | tail -3; sleep 20; brev ls 2>&1 | head -5"
+Wed Oct  7 22:22:10 UTC 2026
+moe-qwen35-check
+You have 1 instances in Org <org>
+ NAME             STATUS    BUILD      SHELL      ID         MACHINE         GPU
+ moe-qwen35-check  DELETING  COMPLETED  NOT READY  8ry1pgtb8  n2d-highmem-16  -
+
+# Source lines 245-270
+=== 2026-10-07T22:22:56.883Z
+$ wsl bash -lc "brev search cpu --provider aws --sort price 2>&1 | head -6; brev search cpu --provider gcp --sort price 2>&1 | head -4"
+ TYPE               TARGET_DISK  PROVIDER  VCPUS  RAM   ARCH    DISK       $/GB/MO  BOOT  FEATURES  $/HR
+ m8g.medium         10           aws           1  4     arm64   10GB-16TB  $0.14    7m    SRP       $0.04
+ m8gd.medium        10           aws           1  4     arm64   10GB-16TB  $0.14    7m    SRP       $0.05
+ m8a.medium         10           aws           1  4     x86_64  10GB-16TB  $0.14    7m    SRP       $0.08
+ m8g.large          10           aws           2  8     arm64   10GB-16TB  $0.14    7m    SRP       $0.08
+ m8gb.medium        10           aws           1  4     arm64   10GB-16TB  $0.12    7m    SRP       $0.09
+ TYPE                   TARGET_DISK  PROVIDER  VCPUS  RAM   ARCH    DISK       $/GB/MO  BOOT  FEATURES  $/HR
+ t2a-standard-1         10           gcp           1  4     arm64   10GB-16TB  $0.16    7m    SP        $0.05
+ n2d-highcpu-2          10           gcp           2  2     x86_64  10GB-16TB  $0.16    7m    SP        $0.05
+ n1-standard-1          10           gcp           1  4     x86_64  10GB-16TB  $0.17    7m    SP        $0.06
+
+=== 2026-10-07T22:23:08.000Z
+$ wsl bash -lc "brev create moe-ssh-probe --type m8a.medium --timeout 900 2>&1 | tail -4; date -u; timeout 150 brev exec moe-ssh-probe 'echo SSH-OK; whoami; uname -m' 2>&1 | grep -v 'waiting for' | tail -6"
+Waiting for instance(s) to be ready...
+You can safely ctrl+c to exit
+  moe-ssh-probe: Ready
+moe-ssh-probe
+Wed Oct  7 22:24:05 UTC 2026
+Connection failed, checking instance status...
+github.com/brevdev/brev-cli/pkg/cmd/util.WaitForSSHToBeAvailable
+/go/src/github.com/brevdev/brev-cli/pkg/cmd/util/ssh.go:99
+:
+ssh: connect to host ec2-100-24-55-150.compute-1.amazonaws.com port 22: Connection timed out
+Please check with: brev ls
+
+# Source lines 283-293
+=== 2026-10-07T22:26:40.185Z
+$ wsl bash -lc "sleep 120; brev ls 2>&1 | head -4; timeout 150 brev exec moe-ssh-probe 'echo SSH-OK; whoami; uname -m' 2>&1 | grep -v 'waiting for' | tail -5"
+You have 1 instances in Org <org>
+ NAME          STATUS   BUILD      SHELL  ID         MACHINE     GPU
+ moe-ssh-probe  RUNNING  COMPLETED  READY  ak3gezzhc  m8a.medium  -
+
+github.com/brevdev/brev-cli/pkg/cmd/util.WaitForSSHToBeAvailable
+/go/src/github.com/brevdev/brev-cli/pkg/cmd/util/ssh.go:99
+:
+exit status 255
+Please check with: brev ls
+
+# Source lines 307-320
+=== 2026-10-07T22:29:55.816Z
+$ wsl bash -lc "date -u; brev delete moe-ssh-probe 2>&1 | tail -2; sleep 25; brev ls 2>&1 | head -4"
+Wed Oct  7 22:29:56 UTC 2026
+moe-ssh-probe
+You have 1 instances in Org <org>
+ NAME          STATUS    BUILD      SHELL      ID         MACHINE     GPU
+ moe-ssh-probe  DELETING  COMPLETED  NOT READY  ak3gezzhc  m8a.medium  -
+
+=== 2026-10-07T22:35:32.070Z
+$ wsl bash -lc "date -u; brev ls 2>&1 | head -5"
+Wed Oct  7 22:35:32 UTC 2026
+No instances in org <org>
+
+Start a new instance:
+
+# Source lines 334-356
+=== 2026-10-08T04:42:52.412776074Z
+$ brev create moe-probe-gcp --type n2d-highcpu-2 --timeout 600
+Attempting to create 1 instance(s) with 1 parallel attempts
+Instance types to try: n2d-highcpu-2
+
+Trying n2d-highcpu-2 for 1 instance(s)...
+[Worker 1] Trying n2d-highcpu-2 for instance 'moe-probe-gcp'...
+[Worker 1] n2d-highcpu-2 Success! Created instance 'moe-probe-gcp'
+
+Waiting for instance(s) to be ready...
+You can safely ctrl+c to exit
+  moe-probe-gcp: Ready
+moe-probe-gcp
+
+=== 2026-10-08T04:47:36.699381130Z
+$ brev ls
+You have 1 instances in Org <org>
+ NAME          STATUS   BUILD      SHELL  ID         MACHINE        GPU
+ moe-probe-gcp  RUNNING  COMPLETED  READY  mrjqytquo  n2d-highcpu-2  -
+
+
+=== 2026-10-08T04:47:42.605113483Z
+$ timeout 180 brev exec moe-probe-gcp 'echo SSH-OK; whoami; uname -m; nproc; free -g | head -2'
+
+# Source lines 364-384
+SSH-OK
+ubuntu
+x86_64
+2
+               total        used        free      shared  buff/cache   available
+Mem:               1           0           0           0           1           1
+moe-probe-gcp
+
+=== 2026-10-08T04:48:09.287425405Z
+$ timeout 60 ssh -v -o ConnectTimeout=20 -o BatchMode=yes moe-probe-gcp 'echo SSH-OK' 2>&1 | grep -E 'Connecting to|Connection established|kex_exchange|closed|denied|Authenticated|refused|timed out|SSH-OK'
+SSH-OK
+
+=== 2026-10-08T04:48:11.724211115Z
+$ brev delete moe-probe-gcp
+moe-probe-gcp
+
+=== 2026-10-08T04:48:48.625728230Z
+$ brev ls
+You have 1 instances in Org <org>
+ NAME          STATUS    BUILD      SHELL      ID         MACHINE        GPU
+ moe-probe-gcp  DELETING  COMPLETED  NOT READY  mrjqytquo  n2d-highcpu-2  -
+
+# Source lines 390-412
+=== 2026-10-08T04:48:56.342070720Z
+$ brev create moe-probe-crusoe --type c1a.2x --timeout 600
+Attempting to create 1 instance(s) with 1 parallel attempts
+Instance types to try: c1a.2x
+
+Trying c1a.2x for 1 instance(s)...
+[Worker 1] Trying c1a.2x for instance 'moe-probe-crusoe'...
+[Worker 1] c1a.2x Success! Created instance 'moe-probe-crusoe'
+
+Waiting for instance(s) to be ready...
+You can safely ctrl+c to exit
+  moe-probe-crusoe: Ready
+moe-probe-crusoe
+
+=== 2026-10-08T04:53:41.851932397Z
+$ brev ls
+You have 1 instances in Org <org>
+ NAME             STATUS   BUILD      SHELL  ID         MACHINE  GPU
+ moe-probe-crusoe  RUNNING  COMPLETED  READY  75dnqn720  c1a.2x   -
+
+
+=== 2026-10-08T04:53:47.593880810Z
+$ timeout 180 brev exec moe-probe-crusoe 'echo SSH-OK; whoami; uname -m; nproc; free -g | head -2'
+
+# Source lines 417-437
+SSH-OK
+ubuntu
+x86_64
+2
+               total        used        free      shared  buff/cache   available
+Mem:               7           0           2           0           4           6
+moe-probe-crusoe
+
+=== 2026-10-08T04:54:10.165262232Z
+$ timeout 60 ssh -v -o ConnectTimeout=20 -o BatchMode=yes moe-probe-crusoe 'echo SSH-OK' 2>&1 | grep -E 'Connecting to|Connection established|kex_exchange|closed|denied|Authenticated|refused|timed out|SSH-OK'
+SSH-OK
+
+=== 2026-10-08T04:54:12.395793566Z
+$ brev delete moe-probe-crusoe
+moe-probe-crusoe
+
+=== 2026-10-08T04:54:49.406182637Z
+$ brev ls
+You have 1 instances in Org <org>
+ NAME             STATUS    BUILD      SHELL      ID         MACHINE  GPU
+ moe-probe-crusoe  DELETING  COMPLETED  NOT READY  75dnqn720  c1a.2x   -
+
+# Source lines 446-451
+=== 2026-10-08T04:55:49Z
+$ wsl bash -lc "date -u; brev ls 2>&1 | head -5"
+Thu Oct  8 04:55:49 UTC 2026
+No instances in org <org>
+
+Start a new instance:

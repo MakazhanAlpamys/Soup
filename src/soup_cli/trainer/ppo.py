@@ -508,6 +508,15 @@ class PPOTrainerWrapper:
             self._dataset_in_constructor = True
             self.trainer = ppo_trainer_cls(**trainer_kwargs)
 
+        if (is_experimental or "args" in ppo_trainer_params) and not hasattr(
+            self.trainer, "is_distributed_loading_by_transformers"
+        ):
+            # PPO skips Trainer.__init__, but inherits its checkpoint save path.
+            # Restore the policy's load-time sharding ownership, not Accelerate's.
+            self.trainer.is_distributed_loading_by_transformers = getattr(
+                self.model, "is_distributed_loading_by_transformers", False
+            )
+
         # #359 - the same exposure #336 fixed in sft.py: with LoRA the
         # no-decay optimizer group is empty, DeepSpeed drops it, and the LR
         # scheduler keeps two base_lrs until torch's strict zip raises at the

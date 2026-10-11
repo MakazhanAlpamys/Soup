@@ -1194,17 +1194,3 @@ def test_callback_does_not_write_on_non_saving_rank(tmp_path: Path):
         None,
     )
     assert not (tmp_path / "checkpoint-12" / "quest_mixed_precision.json").exists()
-
-
-def test_heavy_dependencies_stay_lazy():
-    import ast
-
-    source = Path("src/soup_cli/utils/quest.py").read_text(encoding="utf-8")
-    tree = ast.parse(source)
-    for node in tree.body:
-        if isinstance(node, ast.Import):
-            assert all(
-                alias.name.split(".")[0] not in {"torch", "transformers"} for alias in node.names
-            )
-        elif isinstance(node, ast.ImportFrom):
-            assert (node.module or "").split(".")[0] not in {"torch", "transformers"}

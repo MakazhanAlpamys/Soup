@@ -146,32 +146,32 @@ class TestPublicSurface:
 
 
 class TestLoadAdviseDataset:
-    def test_happy(self, tmp_path):
+    def test_happy(self, tmp_path, monkeypatch):
         p = tmp_path / "data.jsonl"
         _write_jsonl(p, [{"a": 1}, {"a": 2}])
-        os.chdir(tmp_path)
+        monkeypatch.chdir(tmp_path)
         rows = load_advise_dataset("data.jsonl")
         assert len(rows) == 2
 
-    def test_rejects_outside_cwd(self, tmp_path):
-        os.chdir(tmp_path)
+    def test_rejects_outside_cwd(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
         outside = tmp_path.parent / "outside.jsonl"
         outside.write_text("{}\n", encoding="utf-8")
         with pytest.raises(ValueError, match="cwd"):
             load_advise_dataset(str(outside))
 
     @pytest.mark.requires_symlink
-    def test_rejects_symlink(self, tmp_path):
+    def test_rejects_symlink(self, tmp_path, monkeypatch):
         target = tmp_path / "real.jsonl"
         target.write_text("{}\n", encoding="utf-8")
         link = tmp_path / "linked.jsonl"
         os.symlink(target, link)
-        os.chdir(tmp_path)
+        monkeypatch.chdir(tmp_path)
         with pytest.raises(ValueError, match="symlink"):
             load_advise_dataset("linked.jsonl")
 
-    def test_rejects_null_byte_path(self, tmp_path):
-        os.chdir(tmp_path)
+    def test_rejects_null_byte_path(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
         with pytest.raises(ValueError, match="NUL"):
             load_advise_dataset("bad\x00path.jsonl")
 
@@ -183,36 +183,36 @@ class TestLoadAdviseDataset:
         with pytest.raises(ValueError):
             load_advise_dataset(None)  # type: ignore[arg-type]
 
-    def test_missing_file(self, tmp_path):
-        os.chdir(tmp_path)
+    def test_missing_file(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
         with pytest.raises(FileNotFoundError):
             load_advise_dataset("nope.jsonl")
 
-    def test_malformed_json_line(self, tmp_path):
+    def test_malformed_json_line(self, tmp_path, monkeypatch):
         p = tmp_path / "bad.jsonl"
         p.write_text("not json\n", encoding="utf-8")
-        os.chdir(tmp_path)
+        monkeypatch.chdir(tmp_path)
         with pytest.raises(ValueError, match="valid JSON"):
             load_advise_dataset("bad.jsonl")
 
-    def test_non_object_row(self, tmp_path):
+    def test_non_object_row(self, tmp_path, monkeypatch):
         p = tmp_path / "list.jsonl"
         p.write_text("[1,2,3]\n", encoding="utf-8")
-        os.chdir(tmp_path)
+        monkeypatch.chdir(tmp_path)
         with pytest.raises(ValueError, match="JSON object"):
             load_advise_dataset("list.jsonl")
 
-    def test_blank_lines_skipped(self, tmp_path):
+    def test_blank_lines_skipped(self, tmp_path, monkeypatch):
         p = tmp_path / "data.jsonl"
         p.write_text('{"a":1}\n\n{"a":2}\n', encoding="utf-8")
-        os.chdir(tmp_path)
+        monkeypatch.chdir(tmp_path)
         rows = load_advise_dataset("data.jsonl")
         assert len(rows) == 2
 
-    def test_utf8_bom_stripped(self, tmp_path):
+    def test_utf8_bom_stripped(self, tmp_path, monkeypatch):
         p = tmp_path / "bom.jsonl"
         p.write_bytes(b'\xef\xbb\xbf{"a":1}\n')
-        os.chdir(tmp_path)
+        monkeypatch.chdir(tmp_path)
         rows = load_advise_dataset("bom.jsonl")
         assert rows[0]["a"] == 1
 
@@ -706,7 +706,7 @@ class TestCLI:
         assert "No history" in result.output or "history" in result.output.lower()
 
     def test_default_happy_path(self, tmp_path, monkeypatch):
-        os.chdir(tmp_path)
+        monkeypatch.chdir(tmp_path)
         p = tmp_path / "data.jsonl"
         _write_jsonl(p, [
             {"prompt": f"summarize doc {i}", "response": f"tldr {i}"}
@@ -727,21 +727,21 @@ class TestCLI:
         assert result.exit_code in (0, 2)
         assert "Usage" in result.output or "advise" in result.output.lower()
 
-    def test_default_nonexistent_data(self, tmp_path):
-        os.chdir(tmp_path)
+    def test_default_nonexistent_data(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
         result = runner.invoke(advise_cmd.app, ["run", "nope.jsonl"])
         assert result.exit_code == 1
         assert "Dataset error" in result.output or "not found" in result.output.lower()
 
-    def test_default_outside_cwd(self, tmp_path):
-        os.chdir(tmp_path)
+    def test_default_outside_cwd(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
         outside = tmp_path.parent / "outside.jsonl"
         outside.write_text("{}\n", encoding="utf-8")
         result = runner.invoke(advise_cmd.app, ["run", str(outside)])
         assert result.exit_code == 1
 
     def test_probe_flag(self, tmp_path, monkeypatch):
-        os.chdir(tmp_path)
+        monkeypatch.chdir(tmp_path)
         p = tmp_path / "data.jsonl"
         _write_jsonl(p, [
             {"prompt": f"q{i}", "response": f"a{i}"} for i in range(120)
@@ -758,7 +758,7 @@ class TestCLI:
             "SOUP_ADVISE_HISTORY_PATH",
             str(tmp_path / "history.jsonl"),
         )
-        os.chdir(tmp_path)
+        monkeypatch.chdir(tmp_path)
         p = tmp_path / "data.jsonl"
         _write_jsonl(p, [
             {"prompt": f"q{i}", "response": f"a{i}"} for i in range(120)
@@ -782,7 +782,7 @@ class TestCLI:
 
     def test_explain_after_default(self, tmp_path, monkeypatch):
         # Run advise to populate scratch file, then explain
-        os.chdir(tmp_path)
+        monkeypatch.chdir(tmp_path)
         p = tmp_path / "data.jsonl"
         _write_jsonl(p, [
             {"prompt": f"q{i}", "response": f"a{i}"} for i in range(120)

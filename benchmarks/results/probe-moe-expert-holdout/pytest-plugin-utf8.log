@@ -1,0 +1,13 @@
+.                                                                        [100%]
+============================== warnings summary ===============================
+.venv\Lib\site-packages\typer\__init__.py:24
+  <repo>\.venv\Lib\site-packages\typer\__init__.py:24: DeprecationWarning: 'click.utils.get_binary_stream' is deprecated and will be removed in Click 9.0.
+    from click.utils import get_binary_stream as get_binary_stream
+
+.venv\Lib\site-packages\typer\__init__.py:25
+  <repo>\.venv\Lib\site-packages\typer\__init__.py:25: DeprecationWarning: 'click.utils.get_text_stream' is deprecated and will be removed in Click 9.0.
+    from click.utils import get_text_stream as get_text_stream
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+1 passed, 2 warnings in 7.70s
+

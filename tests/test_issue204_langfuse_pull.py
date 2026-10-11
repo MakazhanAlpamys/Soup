@@ -1214,15 +1214,18 @@ def _leaked_tokens(text):
     ]
 
 
-def test_control_the_leak_scan_sees_a_token_rich_highlighted_and_folded():
-    """CONTROL for the scan itself: render a key through a narrow Rich panel with
-    highlighting on, and it must still be found."""
-    from rich.console import Console
-    from rich.panel import Panel
+@pytest.mark.parametrize("token", _TOKENS, ids=("public", "secret", "basic"))
+@pytest.mark.parametrize("prefix_length", (None, 20), ids=("full-token", "20-char-prefix"))
+def test_control_the_leak_scan_sees_highlighted_and_folded_tokens(token, prefix_length):
+    """Calibrate the artefact scan without depending on Rich's layout choices."""
+    needle = token if prefix_length is None else token[:prefix_length]
+    # Split inside the detectable prefix with both SGR and a panel fold. Even
+    # an ANSI-stripped substring scan must miss this deliberately planted leak.
+    rendered = (
+        f"│ {needle[:5]}\x1b[31m{needle[5:10]}\x1b[0m │\n"
+        f"│ {needle[10:]} │\n"
+    )
 
-    console = Console(file=io.StringIO(), width=24, force_terminal=True, highlight=True)
-    console.print(Panel(f"Authorization: Basic {_BASIC} key={_SECRET}"))
-    rendered = console.file.getvalue()
-
-    assert _SECRET not in rendered or _BASIC not in rendered  # rich really did split one
-    assert set(_leaked_tokens(rendered)) >= {_SECRET, _BASIC}
+    assert token not in rendered
+    assert token[:20] not in _plain(rendered)
+    assert _leaked_tokens(rendered) == [token]

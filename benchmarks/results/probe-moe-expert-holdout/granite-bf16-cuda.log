@@ -1,0 +1,19 @@
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+Loading 
+ibm-granite/granite-3.0-1b-a400m-base@d91cbed802d85eb1b32374623331f6ab2b37403a 
+on cuda/bfloat16
+Corpus 'prose': 4000 documents, SHA256 
+399831ef409953210bc3fb1ec4a5948bbe6c2a88ff30977cbf7fbb0e0d3f1a02
+  1x512: HOTSET TRANSFERS
+  4x512: HOTSET TRANSFERS
+  1x2048: HOTSET TRANSFERS
+Corpus 'code': 541 documents, SHA256 
+c00ceccb47511dff57e8ba9bdf1d2a3896c9615af3635993e1ffb356bf1fa3a7
+  1x512: HOTSET TRANSFERS
+  4x512: HOTSET TRANSFERS
+  1x2048: HOTSET TRANSFERS
+Corpus 'math': 4000 documents, SHA256 
+21b099a4d0676f5586a097bff24e5fe8c91b9aabd041d99b081e5c3249b714d4
+  1x512: HOTSET TRANSFERS
+  4x512: HOTSET TRANSFERS
+  1x2048: HOTSET TRANSFERS

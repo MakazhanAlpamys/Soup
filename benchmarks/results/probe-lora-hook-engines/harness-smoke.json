@@ -1,0 +1,521 @@
+{
+  "scope": "offline tiny models, actual PEFT/converter/llama-results; not real 35B",
+  "source_sha256": {
+    "lora_hook_parity.py": "a6b4b1b99efbb390b3b944d86260c57a446dfa538bd5935dfb7c528661cbb9c3",
+    "lora_hook_real_model.py": "0c8138057877241b5bf4c091a2bd076b0cfe4bc8d43c43844bf26922a5cbe7cd"
+  },
+  "part_a_positive": {
+    "targets": [
+      "kv_b_proj"
+    ],
+    "adapted_modules": [
+      "model.layers.0.self_attn.kv_b_proj",
+      "model.layers.1.self_attn.kv_b_proj",
+      "model.layers.2.self_attn.kv_b_proj"
+    ],
+    "touches_routed_experts": false,
+    "lora_b_std": 0.02,
+    "reference_disabled_is_base": true,
+    "s_ref": 0.4415116412252475,
+    "reference_deterministic": true,
+    "digests": {
+      "z_ref1": "0df11266980eacf7",
+      "z_ref1_repeat": "0df11266980eacf7",
+      "z_eng1": "e092fd9992c56c9d",
+      "z_eng1_repeat": "e092fd9992c56c9d"
+    },
+    "convert": {
+      "ok": true,
+      "returncode": 0,
+      "stderr_tail": "INFO:lora-to-gguf:Loading base model: dsv3-tiny-seed17\nINFO:lora-to-gguf:Using model architecture: DeepseekV3ForCausalLM\nINFO:hf-to-gguf:gguf: indexing model part 'model.safetensors'\nINFO:gguf.gguf_writer:gguf: This GGUF file is for Little Endian only\nINFO:lora-to-gguf:Exporting model...\nINFO:hf-to-gguf:blk.0.attn_k_b.weight.lora_a,        torch.float32 --> F32, shape = {16, 8, 4}\nINFO:hf-to-gguf:blk.0.attn_k_b.weight.lora_b,        torch.float32 --> F32, shape = {8, 16, 4}\nINFO:hf-to-gguf:blk.0.attn_v_b.weight.lora_a,        torch.float32 --> F32, shape = {16, 8, 1}\nINFO:hf-to-gguf:blk.0.attn_v_b.weight.lora_b,        torch.float32 --> F32, shape = {8, 16, 4}\nINFO:hf-to-gguf:blk.1.attn_k_b.weight.lora_a,        torch.float32 --> F32, shape = {16, 8, 4}\nINFO:hf-to-gguf:blk.1.attn_k_b.weight.lora_b,        torch.float32 --> F32, shape = {8, 16, 4}\nINFO:hf-to-gguf:blk.1.attn_v_b.weight.lora_a,        torch.float32 --> F32, shape = {16, 8, 1}\nINFO:hf-to-gguf:blk.1.attn_v_b.weight.lora_b,        torch.float32 --> F32, shape = {8, 16, 4}\nINFO:hf-to-gguf:blk.2.attn_k_b.weight.lora_a,        torch.float32 --> F32, shape = {16, 8, 4}\nINFO:hf-to-gguf:blk.2.attn_k_b.weight.lora_b,        torch.float32 --> F32, shape = {8, 16, 4}\nINFO:hf-to-gguf:blk.2.attn_v_b.weight.lora_a,        torch.float32 --> F32, shape = {16, 8, 1}\nINFO:hf-to-gguf:blk.2.attn_v_b.weight.lora_b,        torch.float32 --> F32, shape = {8, 16, 4}\nINFO:hf-to-gguf:Set meta model\nINFO:hf-to-gguf:Set model parameters\nINFO:hf-to-gguf:Set model quantization version\nINFO:hf-to-gguf:Set model tokenizer\nINFO:gguf.gguf_writer:Writing the following files:\nINFO:gguf.gguf_writer:<verification-work>\\harness-real-636_uji5\\a-positive\\dsv3-tiny-seed17-adapters\\kv_b_proj-b0.gguf: n_tensors = 12, total_size = 20.0K\n\nWriting:   0%|          | 0.00/20.0k [00:00<?, ?byte/s]\nWriting: 100%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588| 20.0k/20.0k [00:00<00:00, 9.83Mbyte/s]\nINFO:lora-to-gguf:Model successfully exported to <verification-work>\\harness-real-636_uji5\\a-positive\\dsv3-tiny-seed17-adapters\\kv_b_proj-b0.gguf\n"
+    },
+    "engine": {
+      "ok": true,
+      "returncode": 0,
+      "stderr_tail": "0.00.944.493 I cmn          init: llama threadpool init, n_threads = 4\n0.01.055.259 I main: writing results to <verification-work>\\harness-real-636_uji5\\a-positive\\dsv3-tiny-seed17-adapters\\kv_b_proj.out.gguf...\n"
+    },
+    "engine_repeat": {
+      "ok": true,
+      "returncode": 0,
+      "stderr_tail": "0.00.816.415 I cmn          init: llama threadpool init, n_threads = 4\n0.00.928.321 I main: writing results to <verification-work>\\harness-real-636_uji5\\a-positive\\dsv3-tiny-seed17-adapters\\kv_b_proj.repeat.gguf...\n"
+    },
+    "engine_deterministic": true,
+    "tokens_match": true,
+    "rho": 1.0000001631482238,
+    "r": 8.086905835005271e-07,
+    "cos": 0.9999999999996836,
+    "verdict": "APPLIED"
+  },
+  "part_a_changed_tokens": {
+    "targets": [
+      "kv_b_proj"
+    ],
+    "adapted_modules": [
+      "model.layers.0.self_attn.kv_b_proj",
+      "model.layers.1.self_attn.kv_b_proj",
+      "model.layers.2.self_attn.kv_b_proj"
+    ],
+    "touches_routed_experts": false,
+    "lora_b_std": 0.02,
+    "reference_disabled_is_base": true,
+    "s_ref": 0.4415116412252475,
+    "reference_deterministic": true,
+    "digests": {
+      "z_ref1": "0df11266980eacf7",
+      "z_ref1_repeat": "0df11266980eacf7",
+      "z_eng1": "93485e1c4b9d3aa2",
+      "z_eng1_repeat": "93485e1c4b9d3aa2"
+    },
+    "convert": {
+      "ok": true,
+      "returncode": 0,
+      "stderr_tail": "INFO:lora-to-gguf:Loading base model: dsv3-tiny-seed17\nINFO:lora-to-gguf:Using model architecture: DeepseekV3ForCausalLM\nINFO:hf-to-gguf:gguf: indexing model part 'model.safetensors'\nINFO:gguf.gguf_writer:gguf: This GGUF file is for Little Endian only\nINFO:lora-to-gguf:Exporting model...\nINFO:hf-to-gguf:blk.0.attn_k_b.weight.lora_a,        torch.float32 --> F32, shape = {16, 8, 4}\nINFO:hf-to-gguf:blk.0.attn_k_b.weight.lora_b,        torch.float32 --> F32, shape = {8, 16, 4}\nINFO:hf-to-gguf:blk.0.attn_v_b.weight.lora_a,        torch.float32 --> F32, shape = {16, 8, 1}\nINFO:hf-to-gguf:blk.0.attn_v_b.weight.lora_b,        torch.float32 --> F32, shape = {8, 16, 4}\nINFO:hf-to-gguf:blk.1.attn_k_b.weight.lora_a,        torch.float32 --> F32, shape = {16, 8, 4}\nINFO:hf-to-gguf:blk.1.attn_k_b.weight.lora_b,        torch.float32 --> F32, shape = {8, 16, 4}\nINFO:hf-to-gguf:blk.1.attn_v_b.weight.lora_a,        torch.float32 --> F32, shape = {16, 8, 1}\nINFO:hf-to-gguf:blk.1.attn_v_b.weight.lora_b,        torch.float32 --> F32, shape = {8, 16, 4}\nINFO:hf-to-gguf:blk.2.attn_k_b.weight.lora_a,        torch.float32 --> F32, shape = {16, 8, 4}\nINFO:hf-to-gguf:blk.2.attn_k_b.weight.lora_b,        torch.float32 --> F32, shape = {8, 16, 4}\nINFO:hf-to-gguf:blk.2.attn_v_b.weight.lora_a,        torch.float32 --> F32, shape = {16, 8, 1}\nINFO:hf-to-gguf:blk.2.attn_v_b.weight.lora_b,        torch.float32 --> F32, shape = {8, 16, 4}\nINFO:hf-to-gguf:Set meta model\nINFO:hf-to-gguf:Set model parameters\nINFO:hf-to-gguf:Set model quantization version\nINFO:hf-to-gguf:Set model tokenizer\nINFO:gguf.gguf_writer:Writing the following files:\nINFO:gguf.gguf_writer:<verification-work>\\harness-real-636_uji5\\a-changed-tokens\\dsv3-tiny-seed17-adapters\\kv_b_proj-b0.gguf: n_tensors = 12, total_size = 20.0K\n\nWriting:   0%|          | 0.00/20.0k [00:00<?, ?byte/s]\nWriting: 100%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588| 20.0k/20.0k [00:00<00:00, 5.32Mbyte/s]\nINFO:lora-to-gguf:Model successfully exported to <verification-work>\\harness-real-636_uji5\\a-changed-tokens\\dsv3-tiny-seed17-adapters\\kv_b_proj-b0.gguf\n"
+    },
+    "engine": {
+      "ok": true,
+      "returncode": 0,
+      "stderr_tail": "0.00.810.598 I cmn          init: llama threadpool init, n_threads = 4\n0.00.920.113 I main: writing results to <verification-work>\\harness-real-636_uji5\\a-changed-tokens\\dsv3-tiny-seed17-adapters\\kv_b_proj.out.gguf...\n"
+    },
+    "engine_repeat": {
+      "ok": true,
+      "returncode": 0,
+      "stderr_tail": "0.00.825.522 I cmn          init: llama threadpool init, n_threads = 4\n0.00.931.764 I main: writing results to <verification-work>\\harness-real-636_uji5\\a-changed-tokens\\dsv3-tiny-seed17-adapters\\kv_b_proj.repeat.gguf...\n"
+    },
+    "engine_deterministic": true,
+    "tokens_match": false,
+    "verdict": "VOID",
+    "why": "engine adapter repeat failed, changed tokens or changed logits"
+  },
+  "part_b_positive": {
+    "tokens": [
+      31469,
+      26791,
+      279,
+      12584,
+      383,
+      264,
+      20012,
+      26,
+      279,
+      4560,
+      682,
+      310,
+      3668,
+      424,
+      310,
+      1396,
+      20952,
+      424,
+      557,
+      15700,
+      383,
+      13
+    ],
+    "engine_base": {
+      "ok": true,
+      "returncode": 0,
+      "stderr_tail": "0.01.754.370 I cmn          init: llama threadpool init, n_threads = 4\n0.01.969.730 I main: writing results to <verification-work>\\harness-real-636_uji5\\b-positive\\base1.out.gguf...\n"
+    },
+    "engine_deterministic": true,
+    "engine_tokens_stable": true,
+    "reference_deterministic": true,
+    "top1_agreement": 1.0,
+    "n_base": 2.9427649065373917e-07,
+    "e_base": 4.837195880312295e-07,
+    "digests": {
+      "z_ref0": "ab8c1982250ac890",
+      "z_eng0": "fca2459f41d56d7d"
+    },
+    "status": "OK",
+    "variants": {
+      "soup-auto": {
+        "targets": [
+          "q_proj",
+          "v_proj",
+          "in_proj_qkv",
+          "out_proj"
+        ],
+        "adapted_modules": [
+          "model.layers.0.linear_attn.in_proj_qkv",
+          "model.layers.0.linear_attn.out_proj",
+          "model.layers.1.linear_attn.in_proj_qkv",
+          "model.layers.1.linear_attn.out_proj",
+          "model.layers.2.linear_attn.in_proj_qkv",
+          "model.layers.2.linear_attn.out_proj",
+          "model.layers.3.self_attn.q_proj",
+          "model.layers.3.self_attn.v_proj"
+        ],
+        "lora_b_std": 0.02,
+        "reference_disabled_is_base": true,
+        "reference_deterministic": true,
+        "digests": {
+          "z_ref1": "7ccc35b4acbc96f6",
+          "z_ref1_repeat": "7ccc35b4acbc96f6",
+          "z_eng1": "cdaa0212731ff68f",
+          "z_eng1_repeat": "cdaa0212731ff68f"
+        },
+        "touches_routed_experts": false,
+        "s_ref": 0.22582669371771308,
+        "convert": {
+          "ok": true,
+          "returncode": 0,
+          "stderr_tail": "ing to load has model type `qwen3_5_moe_text` but Transformers does not recognize this architecture. This could be because of an issue with the checkpoint, or because your version of Transformers is out of date.\n\nYou can update Transformers with the command `pip install --upgrade transformers`. If this does not work, and the checkpoint is very new, then there may not be a release version that supports this model yet. In this case, you can get the most up-to-date code by installing Transformers from source with the command `pip install git+https://github.com/huggingface/transformers.git`\nWARNING:hf-to-gguf:Trying to load config.json instead\nINFO:lora-to-gguf:Using model architecture: Qwen3_5MoeForCausalLM\nINFO:hf-to-gguf:gguf: indexing model part 'model.safetensors'\nINFO:gguf.gguf_writer:gguf: This GGUF file is for Little Endian only\nINFO:lora-to-gguf:Exporting model...\nINFO:hf-to-gguf:blk.0.attn_qkv.weight.lora_a,        torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.0.attn_qkv.weight.lora_b,        torch.float32 --> F32, shape = {8, 128}\nINFO:hf-to-gguf:blk.0.ssm_out.weight.lora_a,         torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.0.ssm_out.weight.lora_b,         torch.float32 --> F32, shape = {8, 64}\nINFO:hf-to-gguf:blk.1.attn_qkv.weight.lora_a,        torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.1.attn_qkv.weight.lora_b,        torch.float32 --> F32, shape = {8, 128}\nINFO:hf-to-gguf:blk.1.ssm_out.weight.lora_a,         torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.1.ssm_out.weight.lora_b,         torch.float32 --> F32, shape = {8, 64}\nINFO:hf-to-gguf:blk.2.attn_qkv.weight.lora_a,        torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.2.attn_qkv.weight.lora_b,        torch.float32 --> F32, shape = {8, 128}\nINFO:hf-to-gguf:blk.2.ssm_out.weight.lora_a,         torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.2.ssm_out.weight.lora_b,         torch.float32 --> F32, shape = {8, 64}\nINFO:hf-to-gguf:blk.3.attn_q.weight.lora_a,          torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.3.attn_q.weight.lora_b,          torch.float32 --> F32, shape = {8, 512}\nINFO:hf-to-gguf:blk.3.attn_v.weight.lora_a,          torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.3.attn_v.weight.lora_b,          torch.float32 --> F32, shape = {8, 128}\nINFO:hf-to-gguf:Set meta model\nINFO:hf-to-gguf:Set model parameters\nINFO:hf-to-gguf:Set model quantization version\nINFO:hf-to-gguf:Set model tokenizer\nINFO:gguf.gguf_writer:Writing the following files:\nINFO:gguf.gguf_writer:<verification-work>\\harness-real-636_uji5\\b-positive\\adapters\\soup-auto-b0.gguf: n_tensors = 16, total_size = 55.3K\n\nWriting:   0%|          | 0.00/55.3k [00:00<?, ?byte/s]\nWriting: 100%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588| 55.3k/55.3k [00:00<00:00, 12.0Mbyte/s]\nINFO:lora-to-gguf:Model successfully exported to <verification-work>\\harness-real-636_uji5\\b-positive\\adapters\\soup-auto-b0.gguf\n"
+        },
+        "adapter_gguf_bytes": 56992,
+        "engine": {
+          "ok": true,
+          "returncode": 0,
+          "stderr_tail": "0.01.755.029 I cmn          init: llama threadpool init, n_threads = 4\n0.01.978.052 I main: writing results to <verification-work>\\harness-real-636_uji5\\b-positive\\soup-auto.out.gguf...\n"
+        },
+        "engine_repeat": {
+          "ok": true,
+          "returncode": 0,
+          "stderr_tail": "0.01.609.236 I cmn          init: llama threadpool init, n_threads = 4\n0.01.798.712 I main: writing results to <verification-work>\\harness-real-636_uji5\\b-positive\\soup-auto.repeat.gguf...\n"
+        },
+        "engine_deterministic": true,
+        "tokens_match": true,
+        "rho": 1.0000000248740921,
+        "r": 1.8357667556328084e-06,
+        "cos": 0.9999999999983341,
+        "floor": 1.3031076433399386e-06,
+        "t": 0.02000390932293002,
+        "verdict": "APPLIED"
+      },
+      "soup-auto+shared": {
+        "targets": [
+          "q_proj",
+          "v_proj",
+          "in_proj_qkv",
+          "out_proj",
+          "shared_expert.gate_proj",
+          "shared_expert.up_proj",
+          "shared_expert.down_proj"
+        ],
+        "adapted_modules": [
+          "model.layers.0.linear_attn.in_proj_qkv",
+          "model.layers.0.linear_attn.out_proj",
+          "model.layers.0.mlp.shared_expert.down_proj",
+          "model.layers.0.mlp.shared_expert.gate_proj",
+          "model.layers.0.mlp.shared_expert.up_proj",
+          "model.layers.1.linear_attn.in_proj_qkv",
+          "model.layers.1.linear_attn.out_proj",
+          "model.layers.1.mlp.shared_expert.down_proj",
+          "model.layers.1.mlp.shared_expert.gate_proj",
+          "model.layers.1.mlp.shared_expert.up_proj",
+          "model.layers.2.linear_attn.in_proj_qkv",
+          "model.layers.2.linear_attn.out_proj",
+          "model.layers.2.mlp.shared_expert.down_proj",
+          "model.layers.2.mlp.shared_expert.gate_proj",
+          "model.layers.2.mlp.shared_expert.up_proj",
+          "model.layers.3.mlp.shared_expert.down_proj",
+          "model.layers.3.mlp.shared_expert.gate_proj",
+          "model.layers.3.mlp.shared_expert.up_proj",
+          "model.layers.3.self_attn.q_proj",
+          "model.layers.3.self_attn.v_proj"
+        ],
+        "lora_b_std": 0.02,
+        "reference_disabled_is_base": true,
+        "reference_deterministic": true,
+        "digests": {
+          "z_ref1": "faccdaca1c18e662",
+          "z_ref1_repeat": "faccdaca1c18e662",
+          "z_eng1": "b24c13871f0e8391",
+          "z_eng1_repeat": "b24c13871f0e8391"
+        },
+        "touches_routed_experts": false,
+        "s_ref": 0.3033186954760401,
+        "convert": {
+          "ok": true,
+          "returncode": 0,
+          "stderr_tail": ",  torch.float32 --> F32, shape = {32, 8}\nINFO:hf-to-gguf:blk.1.ffn_down_shexp.weight.lora_b,  torch.float32 --> F32, shape = {8, 64}\nINFO:hf-to-gguf:blk.1.ffn_gate_shexp.weight.lora_a,  torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.1.ffn_gate_shexp.weight.lora_b,  torch.float32 --> F32, shape = {8, 32}\nINFO:hf-to-gguf:blk.1.ffn_up_shexp.weight.lora_a,    torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.1.ffn_up_shexp.weight.lora_b,    torch.float32 --> F32, shape = {8, 32}\nINFO:hf-to-gguf:blk.2.attn_qkv.weight.lora_a,        torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.2.attn_qkv.weight.lora_b,        torch.float32 --> F32, shape = {8, 128}\nINFO:hf-to-gguf:blk.2.ssm_out.weight.lora_a,         torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.2.ssm_out.weight.lora_b,         torch.float32 --> F32, shape = {8, 64}\nINFO:hf-to-gguf:blk.2.ffn_down_shexp.weight.lora_a,  torch.float32 --> F32, shape = {32, 8}\nINFO:hf-to-gguf:blk.2.ffn_down_shexp.weight.lora_b,  torch.float32 --> F32, shape = {8, 64}\nINFO:hf-to-gguf:blk.2.ffn_gate_shexp.weight.lora_a,  torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.2.ffn_gate_shexp.weight.lora_b,  torch.float32 --> F32, shape = {8, 32}\nINFO:hf-to-gguf:blk.2.ffn_up_shexp.weight.lora_a,    torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.2.ffn_up_shexp.weight.lora_b,    torch.float32 --> F32, shape = {8, 32}\nINFO:hf-to-gguf:blk.3.ffn_down_shexp.weight.lora_a,  torch.float32 --> F32, shape = {32, 8}\nINFO:hf-to-gguf:blk.3.ffn_down_shexp.weight.lora_b,  torch.float32 --> F32, shape = {8, 64}\nINFO:hf-to-gguf:blk.3.ffn_gate_shexp.weight.lora_a,  torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.3.ffn_gate_shexp.weight.lora_b,  torch.float32 --> F32, shape = {8, 32}\nINFO:hf-to-gguf:blk.3.ffn_up_shexp.weight.lora_a,    torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.3.ffn_up_shexp.weight.lora_b,    torch.float32 --> F32, shape = {8, 32}\nINFO:hf-to-gguf:blk.3.attn_q.weight.lora_a,          torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.3.attn_q.weight.lora_b,          torch.float32 --> F32, shape = {8, 512}\nINFO:hf-to-gguf:blk.3.attn_v.weight.lora_a,          torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.3.attn_v.weight.lora_b,          torch.float32 --> F32, shape = {8, 128}\nINFO:hf-to-gguf:Set meta model\nINFO:hf-to-gguf:Set model parameters\nINFO:hf-to-gguf:Set model quantization version\nINFO:hf-to-gguf:Set model tokenizer\nINFO:gguf.gguf_writer:Writing the following files:\nINFO:gguf.gguf_writer:<verification-work>\\harness-real-636_uji5\\b-positive\\adapters\\soup-auto+shared-b0.gguf: n_tensors = 40, total_size = 92.2K\n\nWriting:   0%|          | 0.00/92.2k [00:00<?, ?byte/s]\nWriting: 100%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588| 92.2k/92.2k [00:00<00:00, 17.7Mbyte/s]\nINFO:lora-to-gguf:Model successfully exported to <verification-work>\\harness-real-636_uji5\\b-positive\\adapters\\soup-auto+shared-b0.gguf\n"
+        },
+        "adapter_gguf_bytes": 95616,
+        "engine": {
+          "ok": true,
+          "returncode": 0,
+          "stderr_tail": "0.01.671.070 I cmn          init: llama threadpool init, n_threads = 4\n0.01.903.462 I main: writing results to <verification-work>\\harness-real-636_uji5\\b-positive\\soup-auto+shared.out.gguf...\n"
+        },
+        "engine_repeat": {
+          "ok": true,
+          "returncode": 0,
+          "stderr_tail": "0.01.684.105 I cmn          init: llama threadpool init, n_threads = 4\n0.01.891.442 I main: writing results to <verification-work>\\harness-real-636_uji5\\b-positive\\soup-auto+shared.repeat.gguf...\n"
+        },
+        "engine_deterministic": true,
+        "tokens_match": true,
+        "rho": 0.9999998992124981,
+        "r": 1.3608183473605723e-06,
+        "cos": 0.9999999999990785,
+        "floor": 9.701890949777766e-07,
+        "t": 0.020002910567284933,
+        "verdict": "APPLIED"
+      }
+    }
+  },
+  "part_b_changed_tokens": {
+    "soup-auto": {
+      "targets": [
+        "q_proj",
+        "v_proj",
+        "in_proj_qkv",
+        "out_proj"
+      ],
+      "adapted_modules": [
+        "model.layers.0.linear_attn.in_proj_qkv",
+        "model.layers.0.linear_attn.out_proj",
+        "model.layers.1.linear_attn.in_proj_qkv",
+        "model.layers.1.linear_attn.out_proj",
+        "model.layers.2.linear_attn.in_proj_qkv",
+        "model.layers.2.linear_attn.out_proj",
+        "model.layers.3.self_attn.q_proj",
+        "model.layers.3.self_attn.v_proj"
+      ],
+      "lora_b_std": 0.02,
+      "reference_disabled_is_base": true,
+      "reference_deterministic": true,
+      "digests": {
+        "z_ref1": "7ccc35b4acbc96f6",
+        "z_ref1_repeat": "7ccc35b4acbc96f6",
+        "z_eng1": "2ad20a7c2b6f80e0",
+        "z_eng1_repeat": "2ad20a7c2b6f80e0"
+      },
+      "touches_routed_experts": false,
+      "s_ref": 0.22582669371771308,
+      "convert": {
+        "ok": true,
+        "returncode": 0,
+        "stderr_tail": "has model type `qwen3_5_moe_text` but Transformers does not recognize this architecture. This could be because of an issue with the checkpoint, or because your version of Transformers is out of date.\n\nYou can update Transformers with the command `pip install --upgrade transformers`. If this does not work, and the checkpoint is very new, then there may not be a release version that supports this model yet. In this case, you can get the most up-to-date code by installing Transformers from source with the command `pip install git+https://github.com/huggingface/transformers.git`\nWARNING:hf-to-gguf:Trying to load config.json instead\nINFO:lora-to-gguf:Using model architecture: Qwen3_5MoeForCausalLM\nINFO:hf-to-gguf:gguf: indexing model part 'model.safetensors'\nINFO:gguf.gguf_writer:gguf: This GGUF file is for Little Endian only\nINFO:lora-to-gguf:Exporting model...\nINFO:hf-to-gguf:blk.0.attn_qkv.weight.lora_a,        torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.0.attn_qkv.weight.lora_b,        torch.float32 --> F32, shape = {8, 128}\nINFO:hf-to-gguf:blk.0.ssm_out.weight.lora_a,         torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.0.ssm_out.weight.lora_b,         torch.float32 --> F32, shape = {8, 64}\nINFO:hf-to-gguf:blk.1.attn_qkv.weight.lora_a,        torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.1.attn_qkv.weight.lora_b,        torch.float32 --> F32, shape = {8, 128}\nINFO:hf-to-gguf:blk.1.ssm_out.weight.lora_a,         torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.1.ssm_out.weight.lora_b,         torch.float32 --> F32, shape = {8, 64}\nINFO:hf-to-gguf:blk.2.attn_qkv.weight.lora_a,        torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.2.attn_qkv.weight.lora_b,        torch.float32 --> F32, shape = {8, 128}\nINFO:hf-to-gguf:blk.2.ssm_out.weight.lora_a,         torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.2.ssm_out.weight.lora_b,         torch.float32 --> F32, shape = {8, 64}\nINFO:hf-to-gguf:blk.3.attn_q.weight.lora_a,          torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.3.attn_q.weight.lora_b,          torch.float32 --> F32, shape = {8, 512}\nINFO:hf-to-gguf:blk.3.attn_v.weight.lora_a,          torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.3.attn_v.weight.lora_b,          torch.float32 --> F32, shape = {8, 128}\nINFO:hf-to-gguf:Set meta model\nINFO:hf-to-gguf:Set model parameters\nINFO:hf-to-gguf:Set model quantization version\nINFO:hf-to-gguf:Set model tokenizer\nINFO:gguf.gguf_writer:Writing the following files:\nINFO:gguf.gguf_writer:<verification-work>\\harness-real-636_uji5\\b-changed-tokens\\adapters\\soup-auto-b0.gguf: n_tensors = 16, total_size = 55.3K\n\nWriting:   0%|          | 0.00/55.3k [00:00<?, ?byte/s]\nWriting: 100%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588| 55.3k/55.3k [00:00<00:00, 36.6Mbyte/s]\nINFO:lora-to-gguf:Model successfully exported to <verification-work>\\harness-real-636_uji5\\b-changed-tokens\\adapters\\soup-auto-b0.gguf\n"
+      },
+      "adapter_gguf_bytes": 56992,
+      "engine": {
+        "ok": true,
+        "returncode": 0,
+        "stderr_tail": "0.01.689.153 I cmn          init: llama threadpool init, n_threads = 4\n0.01.903.460 I main: writing results to <verification-work>\\harness-real-636_uji5\\b-changed-tokens\\soup-auto.out.gguf...\n"
+      },
+      "engine_repeat": {
+        "ok": true,
+        "returncode": 0,
+        "stderr_tail": "0.01.669.440 I cmn          init: llama threadpool init, n_threads = 4\n0.01.874.510 I main: writing results to <verification-work>\\harness-real-636_uji5\\b-changed-tokens\\soup-auto.repeat.gguf...\n"
+      },
+      "engine_deterministic": true,
+      "tokens_match": false,
+      "verdict": "VOID",
+      "why": "base invalid or engine adapter repeat failed, changed tokens or logits"
+    },
+    "soup-auto+shared": {
+      "targets": [
+        "q_proj",
+        "v_proj",
+        "in_proj_qkv",
+        "out_proj",
+        "shared_expert.gate_proj",
+        "shared_expert.up_proj",
+        "shared_expert.down_proj"
+      ],
+      "adapted_modules": [
+        "model.layers.0.linear_attn.in_proj_qkv",
+        "model.layers.0.linear_attn.out_proj",
+        "model.layers.0.mlp.shared_expert.down_proj",
+        "model.layers.0.mlp.shared_expert.gate_proj",
+        "model.layers.0.mlp.shared_expert.up_proj",
+        "model.layers.1.linear_attn.in_proj_qkv",
+        "model.layers.1.linear_attn.out_proj",
+        "model.layers.1.mlp.shared_expert.down_proj",
+        "model.layers.1.mlp.shared_expert.gate_proj",
+        "model.layers.1.mlp.shared_expert.up_proj",
+        "model.layers.2.linear_attn.in_proj_qkv",
+        "model.layers.2.linear_attn.out_proj",
+        "model.layers.2.mlp.shared_expert.down_proj",
+        "model.layers.2.mlp.shared_expert.gate_proj",
+        "model.layers.2.mlp.shared_expert.up_proj",
+        "model.layers.3.mlp.shared_expert.down_proj",
+        "model.layers.3.mlp.shared_expert.gate_proj",
+        "model.layers.3.mlp.shared_expert.up_proj",
+        "model.layers.3.self_attn.q_proj",
+        "model.layers.3.self_attn.v_proj"
+      ],
+      "lora_b_std": 0.02,
+      "reference_disabled_is_base": true,
+      "reference_deterministic": true,
+      "digests": {
+        "z_ref1": "faccdaca1c18e662",
+        "z_ref1_repeat": "faccdaca1c18e662",
+        "z_eng1": "544ee55609188ba0",
+        "z_eng1_repeat": "544ee55609188ba0"
+      },
+      "touches_routed_experts": false,
+      "s_ref": 0.3033186954760401,
+      "convert": {
+        "ok": true,
+        "returncode": 0,
+        "stderr_tail": "at32 --> F32, shape = {32, 8}\nINFO:hf-to-gguf:blk.1.ffn_down_shexp.weight.lora_b,  torch.float32 --> F32, shape = {8, 64}\nINFO:hf-to-gguf:blk.1.ffn_gate_shexp.weight.lora_a,  torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.1.ffn_gate_shexp.weight.lora_b,  torch.float32 --> F32, shape = {8, 32}\nINFO:hf-to-gguf:blk.1.ffn_up_shexp.weight.lora_a,    torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.1.ffn_up_shexp.weight.lora_b,    torch.float32 --> F32, shape = {8, 32}\nINFO:hf-to-gguf:blk.2.attn_qkv.weight.lora_a,        torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.2.attn_qkv.weight.lora_b,        torch.float32 --> F32, shape = {8, 128}\nINFO:hf-to-gguf:blk.2.ssm_out.weight.lora_a,         torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.2.ssm_out.weight.lora_b,         torch.float32 --> F32, shape = {8, 64}\nINFO:hf-to-gguf:blk.2.ffn_down_shexp.weight.lora_a,  torch.float32 --> F32, shape = {32, 8}\nINFO:hf-to-gguf:blk.2.ffn_down_shexp.weight.lora_b,  torch.float32 --> F32, shape = {8, 64}\nINFO:hf-to-gguf:blk.2.ffn_gate_shexp.weight.lora_a,  torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.2.ffn_gate_shexp.weight.lora_b,  torch.float32 --> F32, shape = {8, 32}\nINFO:hf-to-gguf:blk.2.ffn_up_shexp.weight.lora_a,    torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.2.ffn_up_shexp.weight.lora_b,    torch.float32 --> F32, shape = {8, 32}\nINFO:hf-to-gguf:blk.3.ffn_down_shexp.weight.lora_a,  torch.float32 --> F32, shape = {32, 8}\nINFO:hf-to-gguf:blk.3.ffn_down_shexp.weight.lora_b,  torch.float32 --> F32, shape = {8, 64}\nINFO:hf-to-gguf:blk.3.ffn_gate_shexp.weight.lora_a,  torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.3.ffn_gate_shexp.weight.lora_b,  torch.float32 --> F32, shape = {8, 32}\nINFO:hf-to-gguf:blk.3.ffn_up_shexp.weight.lora_a,    torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.3.ffn_up_shexp.weight.lora_b,    torch.float32 --> F32, shape = {8, 32}\nINFO:hf-to-gguf:blk.3.attn_q.weight.lora_a,          torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.3.attn_q.weight.lora_b,          torch.float32 --> F32, shape = {8, 512}\nINFO:hf-to-gguf:blk.3.attn_v.weight.lora_a,          torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.3.attn_v.weight.lora_b,          torch.float32 --> F32, shape = {8, 128}\nINFO:hf-to-gguf:Set meta model\nINFO:hf-to-gguf:Set model parameters\nINFO:hf-to-gguf:Set model quantization version\nINFO:hf-to-gguf:Set model tokenizer\nINFO:gguf.gguf_writer:Writing the following files:\nINFO:gguf.gguf_writer:<verification-work>\\harness-real-636_uji5\\b-changed-tokens\\adapters\\soup-auto+shared-b0.gguf: n_tensors = 40, total_size = 92.2K\n\nWriting:   0%|          | 0.00/92.2k [00:00<?, ?byte/s]\nWriting: 100%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588| 92.2k/92.2k [00:00<00:00, 21.3Mbyte/s]\nINFO:lora-to-gguf:Model successfully exported to <verification-work>\\harness-real-636_uji5\\b-changed-tokens\\adapters\\soup-auto+shared-b0.gguf\n"
+      },
+      "adapter_gguf_bytes": 95616,
+      "engine": {
+        "ok": true,
+        "returncode": 0,
+        "stderr_tail": "0.01.713.304 I cmn          init: llama threadpool init, n_threads = 4\n0.01.939.421 I main: writing results to <verification-work>\\harness-real-636_uji5\\b-changed-tokens\\soup-auto+shared.out.gguf...\n"
+      },
+      "engine_repeat": {
+        "ok": true,
+        "returncode": 0,
+        "stderr_tail": "0.01.671.673 I cmn          init: llama threadpool init, n_threads = 4\n0.01.903.472 I main: writing results to <verification-work>\\harness-real-636_uji5\\b-changed-tokens\\soup-auto+shared.repeat.gguf...\n"
+      },
+      "engine_deterministic": true,
+      "tokens_match": false,
+      "verdict": "VOID",
+      "why": "base invalid or engine adapter repeat failed, changed tokens or logits"
+    }
+  },
+  "part_a_zero_effect": {
+    "targets": [
+      "kv_b_proj"
+    ],
+    "adapted_modules": [
+      "model.layers.0.self_attn.kv_b_proj",
+      "model.layers.1.self_attn.kv_b_proj",
+      "model.layers.2.self_attn.kv_b_proj"
+    ],
+    "touches_routed_experts": false,
+    "lora_b_std": 0.0,
+    "reference_disabled_is_base": true,
+    "s_ref": 0.0,
+    "reference_deterministic": true,
+    "digests": {
+      "z_ref1": "b6bea0c0e941b00d",
+      "z_ref1_repeat": "b6bea0c0e941b00d",
+      "z_eng1": "4d42e25a52335567",
+      "z_eng1_repeat": "4d42e25a52335567"
+    },
+    "convert": {
+      "ok": true,
+      "returncode": 0,
+      "stderr_tail": "INFO:lora-to-gguf:Loading base model: dsv3-tiny-seed17\nINFO:lora-to-gguf:Using model architecture: DeepseekV3ForCausalLM\nINFO:hf-to-gguf:gguf: indexing model part 'model.safetensors'\nINFO:gguf.gguf_writer:gguf: This GGUF file is for Little Endian only\nINFO:lora-to-gguf:Exporting model...\nINFO:hf-to-gguf:blk.0.attn_k_b.weight.lora_a,        torch.float32 --> F32, shape = {16, 8, 4}\nINFO:hf-to-gguf:blk.0.attn_k_b.weight.lora_b,        torch.float32 --> F32, shape = {8, 16, 4}\nINFO:hf-to-gguf:blk.0.attn_v_b.weight.lora_a,        torch.float32 --> F32, shape = {16, 8, 1}\nINFO:hf-to-gguf:blk.0.attn_v_b.weight.lora_b,        torch.float32 --> F32, shape = {8, 16, 4}\nINFO:hf-to-gguf:blk.1.attn_k_b.weight.lora_a,        torch.float32 --> F32, shape = {16, 8, 4}\nINFO:hf-to-gguf:blk.1.attn_k_b.weight.lora_b,        torch.float32 --> F32, shape = {8, 16, 4}\nINFO:hf-to-gguf:blk.1.attn_v_b.weight.lora_a,        torch.float32 --> F32, shape = {16, 8, 1}\nINFO:hf-to-gguf:blk.1.attn_v_b.weight.lora_b,        torch.float32 --> F32, shape = {8, 16, 4}\nINFO:hf-to-gguf:blk.2.attn_k_b.weight.lora_a,        torch.float32 --> F32, shape = {16, 8, 4}\nINFO:hf-to-gguf:blk.2.attn_k_b.weight.lora_b,        torch.float32 --> F32, shape = {8, 16, 4}\nINFO:hf-to-gguf:blk.2.attn_v_b.weight.lora_a,        torch.float32 --> F32, shape = {16, 8, 1}\nINFO:hf-to-gguf:blk.2.attn_v_b.weight.lora_b,        torch.float32 --> F32, shape = {8, 16, 4}\nINFO:hf-to-gguf:Set meta model\nINFO:hf-to-gguf:Set model parameters\nINFO:hf-to-gguf:Set model quantization version\nINFO:hf-to-gguf:Set model tokenizer\nINFO:gguf.gguf_writer:Writing the following files:\nINFO:gguf.gguf_writer:<verification-work>\\harness-real-636_uji5\\a-zero\\dsv3-tiny-seed17-adapters\\kv_b_proj-b1.gguf: n_tensors = 12, total_size = 20.0K\n\nWriting:   0%|          | 0.00/20.0k [00:00<?, ?byte/s]\nWriting: 100%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588| 20.0k/20.0k [00:00<00:00, 6.88Mbyte/s]\nINFO:lora-to-gguf:Model successfully exported to <verification-work>\\harness-real-636_uji5\\a-zero\\dsv3-tiny-seed17-adapters\\kv_b_proj-b1.gguf\n"
+    },
+    "engine": {
+      "ok": true,
+      "returncode": 0,
+      "stderr_tail": "0.00.766.339 I cmn          init: llama threadpool init, n_threads = 4\n0.00.866.575 I main: writing results to <verification-work>\\harness-real-636_uji5\\a-zero\\dsv3-tiny-seed17-adapters\\kv_b_proj.out.gguf...\n"
+    },
+    "engine_repeat": {
+      "ok": true,
+      "returncode": 0,
+      "stderr_tail": "0.00.773.597 I cmn          init: llama threadpool init, n_threads = 4\n0.00.889.662 I main: writing results to <verification-work>\\harness-real-636_uji5\\a-zero\\dsv3-tiny-seed17-adapters\\kv_b_proj.repeat.gguf...\n"
+    },
+    "engine_deterministic": true,
+    "tokens_match": true,
+    "verdict": "TOO WEAK"
+  },
+  "part_b_zero_effect": {
+    "soup-auto": {
+      "targets": [
+        "q_proj",
+        "v_proj",
+        "in_proj_qkv",
+        "out_proj"
+      ],
+      "adapted_modules": [
+        "model.layers.0.linear_attn.in_proj_qkv",
+        "model.layers.0.linear_attn.out_proj",
+        "model.layers.1.linear_attn.in_proj_qkv",
+        "model.layers.1.linear_attn.out_proj",
+        "model.layers.2.linear_attn.in_proj_qkv",
+        "model.layers.2.linear_attn.out_proj",
+        "model.layers.3.self_attn.q_proj",
+        "model.layers.3.self_attn.v_proj"
+      ],
+      "lora_b_std": 0.0,
+      "reference_disabled_is_base": true,
+      "reference_deterministic": true,
+      "digests": {
+        "z_ref1": "ab8c1982250ac890",
+        "z_ref1_repeat": "ab8c1982250ac890",
+        "z_eng1": "fca2459f41d56d7d",
+        "z_eng1_repeat": "fca2459f41d56d7d"
+      },
+      "touches_routed_experts": false,
+      "s_ref": 0.0,
+      "convert": {
+        "ok": true,
+        "returncode": 0,
+        "stderr_tail": " are trying to load has model type `qwen3_5_moe_text` but Transformers does not recognize this architecture. This could be because of an issue with the checkpoint, or because your version of Transformers is out of date.\n\nYou can update Transformers with the command `pip install --upgrade transformers`. If this does not work, and the checkpoint is very new, then there may not be a release version that supports this model yet. In this case, you can get the most up-to-date code by installing Transformers from source with the command `pip install git+https://github.com/huggingface/transformers.git`\nWARNING:hf-to-gguf:Trying to load config.json instead\nINFO:lora-to-gguf:Using model architecture: Qwen3_5MoeForCausalLM\nINFO:hf-to-gguf:gguf: indexing model part 'model.safetensors'\nINFO:gguf.gguf_writer:gguf: This GGUF file is for Little Endian only\nINFO:lora-to-gguf:Exporting model...\nINFO:hf-to-gguf:blk.0.attn_qkv.weight.lora_a,        torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.0.attn_qkv.weight.lora_b,        torch.float32 --> F32, shape = {8, 128}\nINFO:hf-to-gguf:blk.0.ssm_out.weight.lora_a,         torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.0.ssm_out.weight.lora_b,         torch.float32 --> F32, shape = {8, 64}\nINFO:hf-to-gguf:blk.1.attn_qkv.weight.lora_a,        torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.1.attn_qkv.weight.lora_b,        torch.float32 --> F32, shape = {8, 128}\nINFO:hf-to-gguf:blk.1.ssm_out.weight.lora_a,         torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.1.ssm_out.weight.lora_b,         torch.float32 --> F32, shape = {8, 64}\nINFO:hf-to-gguf:blk.2.attn_qkv.weight.lora_a,        torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.2.attn_qkv.weight.lora_b,        torch.float32 --> F32, shape = {8, 128}\nINFO:hf-to-gguf:blk.2.ssm_out.weight.lora_a,         torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.2.ssm_out.weight.lora_b,         torch.float32 --> F32, shape = {8, 64}\nINFO:hf-to-gguf:blk.3.attn_q.weight.lora_a,          torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.3.attn_q.weight.lora_b,          torch.float32 --> F32, shape = {8, 512}\nINFO:hf-to-gguf:blk.3.attn_v.weight.lora_a,          torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.3.attn_v.weight.lora_b,          torch.float32 --> F32, shape = {8, 128}\nINFO:hf-to-gguf:Set meta model\nINFO:hf-to-gguf:Set model parameters\nINFO:hf-to-gguf:Set model quantization version\nINFO:hf-to-gguf:Set model tokenizer\nINFO:gguf.gguf_writer:Writing the following files:\nINFO:gguf.gguf_writer:<verification-work>\\harness-real-636_uji5\\b-zero\\adapters\\soup-auto-b1.gguf: n_tensors = 16, total_size = 55.3K\n\nWriting:   0%|          | 0.00/55.3k [00:00<?, ?byte/s]\nWriting: 100%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588| 55.3k/55.3k [00:00<00:00, 18.4Mbyte/s]\nINFO:lora-to-gguf:Model successfully exported to <verification-work>\\harness-real-636_uji5\\b-zero\\adapters\\soup-auto-b1.gguf\n"
+      },
+      "adapter_gguf_bytes": 56992,
+      "engine": {
+        "ok": true,
+        "returncode": 0,
+        "stderr_tail": "0.01.707.515 I cmn          init: llama threadpool init, n_threads = 4\n0.01.891.024 I main: writing results to <verification-work>\\harness-real-636_uji5\\b-zero\\soup-auto.out.gguf...\n"
+      },
+      "engine_repeat": {
+        "ok": true,
+        "returncode": 0,
+        "stderr_tail": "0.01.765.488 I cmn          init: llama threadpool init, n_threads = 4\n0.02.061.882 I main: writing results to <verification-work>\\harness-real-636_uji5\\b-zero\\soup-auto.repeat.gguf...\n"
+      },
+      "engine_deterministic": true,
+      "tokens_match": true,
+      "verdict": "TOO WEAK"
+    },
+    "soup-auto+shared": {
+      "targets": [
+        "q_proj",
+        "v_proj",
+        "in_proj_qkv",
+        "out_proj",
+        "shared_expert.gate_proj",
+        "shared_expert.up_proj",
+        "shared_expert.down_proj"
+      ],
+      "adapted_modules": [
+        "model.layers.0.linear_attn.in_proj_qkv",
+        "model.layers.0.linear_attn.out_proj",
+        "model.layers.0.mlp.shared_expert.down_proj",
+        "model.layers.0.mlp.shared_expert.gate_proj",
+        "model.layers.0.mlp.shared_expert.up_proj",
+        "model.layers.1.linear_attn.in_proj_qkv",
+        "model.layers.1.linear_attn.out_proj",
+        "model.layers.1.mlp.shared_expert.down_proj",
+        "model.layers.1.mlp.shared_expert.gate_proj",
+        "model.layers.1.mlp.shared_expert.up_proj",
+        "model.layers.2.linear_attn.in_proj_qkv",
+        "model.layers.2.linear_attn.out_proj",
+        "model.layers.2.mlp.shared_expert.down_proj",
+        "model.layers.2.mlp.shared_expert.gate_proj",
+        "model.layers.2.mlp.shared_expert.up_proj",
+        "model.layers.3.mlp.shared_expert.down_proj",
+        "model.layers.3.mlp.shared_expert.gate_proj",
+        "model.layers.3.mlp.shared_expert.up_proj",
+        "model.layers.3.self_attn.q_proj",
+        "model.layers.3.self_attn.v_proj"
+      ],
+      "lora_b_std": 0.0,
+      "reference_disabled_is_base": true,
+      "reference_deterministic": true,
+      "digests": {
+        "z_ref1": "ab8c1982250ac890",
+        "z_ref1_repeat": "ab8c1982250ac890",
+        "z_eng1": "fca2459f41d56d7d",
+        "z_eng1_repeat": "fca2459f41d56d7d"
+      },
+      "touches_routed_experts": false,
+      "s_ref": 0.0,
+      "convert": {
+        "ok": true,
+        "returncode": 0,
+        "stderr_tail": "t.lora_a,  torch.float32 --> F32, shape = {32, 8}\nINFO:hf-to-gguf:blk.1.ffn_down_shexp.weight.lora_b,  torch.float32 --> F32, shape = {8, 64}\nINFO:hf-to-gguf:blk.1.ffn_gate_shexp.weight.lora_a,  torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.1.ffn_gate_shexp.weight.lora_b,  torch.float32 --> F32, shape = {8, 32}\nINFO:hf-to-gguf:blk.1.ffn_up_shexp.weight.lora_a,    torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.1.ffn_up_shexp.weight.lora_b,    torch.float32 --> F32, shape = {8, 32}\nINFO:hf-to-gguf:blk.2.attn_qkv.weight.lora_a,        torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.2.attn_qkv.weight.lora_b,        torch.float32 --> F32, shape = {8, 128}\nINFO:hf-to-gguf:blk.2.ssm_out.weight.lora_a,         torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.2.ssm_out.weight.lora_b,         torch.float32 --> F32, shape = {8, 64}\nINFO:hf-to-gguf:blk.2.ffn_down_shexp.weight.lora_a,  torch.float32 --> F32, shape = {32, 8}\nINFO:hf-to-gguf:blk.2.ffn_down_shexp.weight.lora_b,  torch.float32 --> F32, shape = {8, 64}\nINFO:hf-to-gguf:blk.2.ffn_gate_shexp.weight.lora_a,  torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.2.ffn_gate_shexp.weight.lora_b,  torch.float32 --> F32, shape = {8, 32}\nINFO:hf-to-gguf:blk.2.ffn_up_shexp.weight.lora_a,    torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.2.ffn_up_shexp.weight.lora_b,    torch.float32 --> F32, shape = {8, 32}\nINFO:hf-to-gguf:blk.3.ffn_down_shexp.weight.lora_a,  torch.float32 --> F32, shape = {32, 8}\nINFO:hf-to-gguf:blk.3.ffn_down_shexp.weight.lora_b,  torch.float32 --> F32, shape = {8, 64}\nINFO:hf-to-gguf:blk.3.ffn_gate_shexp.weight.lora_a,  torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.3.ffn_gate_shexp.weight.lora_b,  torch.float32 --> F32, shape = {8, 32}\nINFO:hf-to-gguf:blk.3.ffn_up_shexp.weight.lora_a,    torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.3.ffn_up_shexp.weight.lora_b,    torch.float32 --> F32, shape = {8, 32}\nINFO:hf-to-gguf:blk.3.attn_q.weight.lora_a,          torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.3.attn_q.weight.lora_b,          torch.float32 --> F32, shape = {8, 512}\nINFO:hf-to-gguf:blk.3.attn_v.weight.lora_a,          torch.float32 --> F32, shape = {64, 8}\nINFO:hf-to-gguf:blk.3.attn_v.weight.lora_b,          torch.float32 --> F32, shape = {8, 128}\nINFO:hf-to-gguf:Set meta model\nINFO:hf-to-gguf:Set model parameters\nINFO:hf-to-gguf:Set model quantization version\nINFO:hf-to-gguf:Set model tokenizer\nINFO:gguf.gguf_writer:Writing the following files:\nINFO:gguf.gguf_writer:<verification-work>\\harness-real-636_uji5\\b-zero\\adapters\\soup-auto+shared-b1.gguf: n_tensors = 40, total_size = 92.2K\n\nWriting:   0%|          | 0.00/92.2k [00:00<?, ?byte/s]\nWriting: 100%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588| 92.2k/92.2k [00:00<00:00, 31.4Mbyte/s]\nINFO:lora-to-gguf:Model successfully exported to <verification-work>\\harness-real-636_uji5\\b-zero\\adapters\\soup-auto+shared-b1.gguf\n"
+      },
+      "adapter_gguf_bytes": 95616,
+      "engine": {
+        "ok": true,
+        "returncode": 0,
+        "stderr_tail": "0.01.799.593 I cmn          init: llama threadpool init, n_threads = 4\n0.02.010.677 I main: writing results to <verification-work>\\harness-real-636_uji5\\b-zero\\soup-auto+shared.out.gguf...\n"
+      },
+      "engine_repeat": {
+        "ok": true,
+        "returncode": 0,
+        "stderr_tail": "0.01.737.587 I cmn          init: llama threadpool init, n_threads = 4\n0.01.965.919 I main: writing results to <verification-work>\\harness-real-636_uji5\\b-zero\\soup-auto+shared.repeat.gguf...\n"
+      },
+      "engine_deterministic": true,
+      "tokens_match": true,
+      "verdict": "TOO WEAK"
+    }
+  }
+}
