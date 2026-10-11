@@ -63,10 +63,12 @@ def _set_ppo_training_kwargs(
 
     if total_steps is not None:
         from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
+        from soup_cli.utils.warmup import resolve_trainer_warmup_steps
 
         use_bf16, use_fp16 = bf16_fp16_flags(device)
+        warmup_steps = resolve_trainer_warmup_steps(tcfg.warmup_ratio)
         training_kwargs = {
-            "warmup_steps": int(total_steps * tcfg.warmup_ratio),
+            "warmup_steps": warmup_steps,
             "weight_decay": tcfg.weight_decay,
             "max_grad_norm": tcfg.max_grad_norm,
             "optim": tcfg.optimizer,
@@ -310,8 +312,21 @@ class PPOTrainerWrapper:
             total_steps=total_steps, device=self.device,
         )
 
+        from soup_cli.trainer._trl_compat import config_accepts
+
         if "cliprange" in ppo_params:
             ppo_kwargs["cliprange"] = tcfg.ppo_clip_ratio
+
+        if "deepspeed" in ppo_params or config_accepts(ppo_config_cls, "deepspeed"):
+            ppo_kwargs["deepspeed"] = self.deepspeed_config
+        elif self.deepspeed_config:
+            raise ValueError("task: ppo does not support --deepspeed on this trl version")
+
+        if "response_length" in ppo_params or config_accepts(ppo_config_cls, "response_length"):
+            ppo_kwargs["response_length"] = cfg.data.max_length
+
+        if "save_total_limit" in ppo_params or config_accepts(ppo_config_cls, "save_total_limit"):
+            ppo_kwargs["save_total_limit"] = 3
 
         # Optional params that may not exist in all trl versions
         if "log_with" in ppo_params:
@@ -533,9 +548,15 @@ class PPOTrainerWrapper:
         # model's biases and norm weights. The LoRA+ optimizer can have empty
         # groups, so _complete_loraplus_optimizer prunes it before injection.
         if self.deepspeed_config:
-            from soup_cli.utils.deepspeed import attach_empty_param_group_guard
+            trainer_args = getattr(self.trainer, "args", None)
+            trainer_deepspeed = getattr(trainer_args, "deepspeed", None)
+            if trainer_deepspeed is None:
+                trainer_cfg = getattr(self.trainer, "config", None)
+                trainer_deepspeed = getattr(trainer_cfg, "deepspeed", None)
+            if trainer_deepspeed:
+                from soup_cli.utils.deepspeed import attach_empty_param_group_guard
 
-            attach_empty_param_group_guard(self.trainer)
+                attach_empty_param_group_guard(self.trainer)
 
         # v0.71.26 — reward-hack mitigation / echo-trap / RL-checkpoint callbacks
         # (PPO parity with GRPO; kl_coef mutation for the controller).
