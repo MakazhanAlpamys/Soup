@@ -21,6 +21,8 @@ gate that refuses to score with an uncalibrated judge.
 from __future__ import annotations
 
 import math
+import numbers
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Optional, Sequence
@@ -59,6 +61,33 @@ def _softmax(logits: Sequence[float]) -> list[float]:
     return [e / s for e in exps]
 
 
+def _log_softmax_and_probs(
+    logits: Sequence[float],
+) -> tuple[list[float], list[float]]:
+    """Compute numerically stable log-softmax and probabilities."""
+    if len(logits) == 0:
+        raise ValueError("logits must not be empty")
+    max_l = float(max(logits))
+    diffs = [float(x) - max_l for x in logits]
+    exps = [math.exp(d) for d in diffs]
+    s = sum(exps)
+    if s <= 0:
+        raise ValueError("softmax denominator non-positive")
+    log_s = math.log(s)
+    log_probs = [
+        d - log_s if math.isfinite(d) else -sys.float_info.max
+        for d in diffs
+    ]
+    probs = [e / s for e in exps]
+    return log_probs, probs
+
+
+def _log_softmax(logits: Sequence[float]) -> list[float]:
+    """Compute numerically stable log-softmax of logits."""
+    log_probs, _ = _log_softmax_and_probs(logits)
+    return log_probs
+
+
 def kl_divergence(p_logits: Sequence[float], q_logits: Sequence[float]) -> float:
     """KL(P || Q) over discrete distributions derived from logits.
 
@@ -71,23 +100,27 @@ def kl_divergence(p_logits: Sequence[float], q_logits: Sequence[float]) -> float
             f"({len(q_logits)}) must have the same length"
         )
     for name, logits in (("p_logits", p_logits), ("q_logits", q_logits)):
-        if not logits:
+        if len(logits) == 0:
             raise ValueError(f"{name} must not be empty")
         for x in logits:
-            if isinstance(x, bool) or not isinstance(x, (int, float)):
+            if isinstance(x, bool) or not isinstance(x, (int, float, numbers.Real)):
                 raise ValueError(f"{name} must contain only int/float")
             if not math.isfinite(float(x)):
                 raise ValueError(f"{name} must be finite")
-    p = _softmax(p_logits)
-    q = _softmax(q_logits)
+    log_p, p = _log_softmax_and_probs(p_logits)
+    log_q = _log_softmax(q_logits)
     kl = 0.0
-    for pi, qi in zip(p, q):
+    for pi, lpi, lqi in zip(p, log_p, log_q):
         if pi <= 0:
             continue
-        # qi could be ~0; floor with epsilon to avoid log(0).
-        kl += pi * math.log(pi / max(qi, 1e-12))
-    # Floating-point can produce tiny negatives; clamp.
-    return max(0.0, kl)
+        term = pi * (lpi - lqi)
+        if not math.isfinite(term):
+            term = sys.float_info.max
+        kl += term
+    if not math.isfinite(kl):
+        kl = sys.float_info.max
+    # Floating-point can produce tiny negatives; clamp to [0.0, sys.float_info.max].
+    return max(0.0, min(kl, sys.float_info.max))
 
 
 def classify_kl_delta(mean_kl: float) -> str:
@@ -129,6 +162,10 @@ def run_calibration(
         kl_divergence(b, q) for b, q in zip(base_list, quant_list)
     )
     mean = sum(per_prompt) / len(per_prompt)
+    if not math.isfinite(mean):
+        scaled = sum(x / len(per_prompt) for x in per_prompt)
+        mean = scaled if math.isfinite(scaled) else sys.float_info.max
+    mean = max(0.0, min(mean, sys.float_info.max))
     return CalibrationReport(
         mean_kl=mean,
         per_prompt_kl=per_prompt,

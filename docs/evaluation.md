@@ -685,8 +685,9 @@ print(report.delta_status, report.mean_kl)
 # OK 0.012
 ```
 
-The kernel is pure-math and capped at 10 000 prompts to defend against
-accidental OOM. `CalibrationReport` is a frozen dataclass.
+The kernel is pure-math, evaluates stable log-probabilities using log-softmax
+without artificial probability flooring, and is capped at 10 000 prompts to
+defend against accidental OOM. `CalibrationReport` is a frozen dataclass.
 
 
 ## Model Arena (Elo Tournament)
