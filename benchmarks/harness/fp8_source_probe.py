@@ -215,9 +215,14 @@ def main(argv=None) -> int:
     result["source_files"] = [{"name": f.name, "bytes": f.stat().st_size} for f in files]
     source_bytes = sum(f.stat().st_size for f in files)
     fp8_keys, layer_of = [], {}
+    # Every tensor's own file: a weight's ``weight_scale_inv`` may sit in another
+    # file (DeepSeek-V3 has 155 such pairs), so the G1/G3 loop reads each scale
+    # from where it actually is, as the sharder does.
+    location = {}
     for path in files:
         with safe_open(str(path), framework="pt") as handle:
             for key in handle.keys():
+                location[key] = path
                 if is_scale_key(key):
                     continue
                 if is_float8_dtype(handle.get_slice(key).get_dtype()):
@@ -287,9 +292,11 @@ def main(argv=None) -> int:
         if layer >= 0:
             blob = load_file(layer_shard.layer_shard_path(str(args.out), layer))
         for path, key in by_layer[layer]:
+            scale_key = scale_key_for(key)
+            with safe_open(str(location[scale_key]), framework="pt") as scale_handle:
+                scale = scale_handle.get_tensor(scale_key)
             with safe_open(str(path), framework="pt") as handle:
                 q = handle.get_tensor(key)
-                scale = handle.get_tensor(scale_key_for(key))
                 reference = _independent_decode(q, scale, block, table)
                 del q
                 mine = dequantize_fp8_blockwise(

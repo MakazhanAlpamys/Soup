@@ -755,3 +755,48 @@ class TestDoubleQuantForFp8Sources:
         config = SimpleNamespace(quantization_config={"quant_method": "fp8"})
         with pytest.raises(ValueError, match="not supported for a block-scaled FP8"):
             stream_double_quant(tcfg, config, quant="nf4")
+
+
+# ==========================================================================
+# the real-shard benchmark harness, on a cross-file scale
+# ==========================================================================
+def test_benchmark_reads_a_scale_from_its_own_file(tmp_path):
+    """benchmarks/harness/fp8_source_probe.py must verify G1/G3 when a weight and
+    its ``weight_scale_inv`` sit in different source files, as 155 pairs do in
+    DeepSeek-V3. It used to read the scale from the weight's file and stop with
+    a missing-tensor error after sharding had already succeeded."""
+    import importlib.util
+    import sys
+    from pathlib import Path
+
+    harness = Path(__file__).resolve().parents[1] / "benchmarks" / "harness" / "fp8_source_probe.py"
+    spec = importlib.util.spec_from_file_location("fp8_source_probe", harness)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    try:
+        spec.loader.exec_module(module)
+        tensors, _ = _build_fp8_tensors()
+        keys = list(tensors)
+        files = {
+            "model-00001-of-00002.safetensors": [k for k in keys if k != _Q_SCALE],
+            "model-00002-of-00002.safetensors": [_Q_SCALE],
+        }
+        src = _write_checkpoint(tmp_path / "src", tensors, FP8_CONFIG, files)
+        out_json = tmp_path / "result.json"
+        code = module.main(
+            [
+                "--source", src,
+                "--out", str(tmp_path / "out"),
+                "--double-quant", "off",
+                "--json", str(out_json),
+            ]
+        )
+    finally:
+        sys.modules.pop(spec.name, None)
+    assert code == 0
+    summary = json.loads(out_json.read_text())["summary"]
+    n_fp8 = sum(1 for key in tensors if key + "_scale_inv" in tensors)
+    assert summary["g1_tensors"] == n_fp8
+    assert summary["g1_pass"] is True
+    assert summary["g3_pass"] is True
