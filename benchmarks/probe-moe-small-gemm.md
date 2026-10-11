@@ -1,148 +1,98 @@
-# Probe — the MoE small-GEMM factor (F4)
+# F4: MoE small-GEMM factor
 
-Status: NOT RUN. The rule below was committed 2026-10-09, before the first run
-and before I had access to a GPU. There are no results yet.
+I measured this on 2026-10-11 on a rented RTX 3060, in bfloat16, three rounds.
+The rule is in git from 2026-10-09, before I ran anything.
 
-Hardware: not assigned yet. The card will be stamped in §3 when the first run
-happens.
-
-## 2. The rule, written before the run
-
-### 2.1 What I am measuring
-
-A MoE expert gets only a few of the step's tokens, so its matrix multiply has
-few rows. The weight matrix has to be read in full either way. The plan assumes
-this costs 0.5–0.7 of dense throughput. Nobody measured it.
-
-So I measure one ratio:
+What was measured:
 
 ```
-factor(M) = TFLOPS(M, K, N) / TFLOPS(512, K, N)
+factor(M) = TFLOPS at M rows / TFLOPS at 512 rows, same K and N, same session
+tokens per expert = batch x seq x top_k / experts
 ```
 
-Only M changes. K and N stay the same, same card, same session. M = 512 is the
-denominator because that is the number of tokens in one step. I also report the
-ratio against M = 8192, to see whether M = 512 is itself already slow.
+Only M changes. The denominator is measured again inside every row so it can
+seen if the card moved.
 
-I also run three arms that do the same amount of arithmetic:
+## Shapes
 
-- A: one GEMM with M = 512, K = 2048, N = 16384.
-- B: 64 separate GEMMs with M = 64, K = 2048, N = 2048, times added up.
-- C: the same 64, but in a Python loop that picks out the rows, like the real
-  code does.
+N = 2 * intermediate (gate_up is one fused matrix in transformers)
+| model | hidden | inter | experts | top-k | gate_up K,N | down K,N |
+|---|---|---|---|---|---|---|
+| OLMoE-1B-7B-0924 | 2048 | 1024 | 64 | 8 | 2048, 2048 | 1024, 2048 |
+| granite-3.0-1b-a400m | 1024 | 512 | 32 | 8 | 1024, 1024 | 512, 1024 |
 
-All three are 34.36 GFLOP, which I checked by hand before the run. A to B shows
-the cost of the small shape. B to C shows the cost of the loop.
+Data taken from config.json
+## Answer
 
-### 2.2 Shapes
+| tokens/step | model | tokens/expert | gate_up | down |
+|---|---|---|---|---|
+| 512 | OLMoE | 64 | 0.601 | 0.592 |
+| 512 | granite | 128 | 0.627 | 0.721 |
+| 2048 | OLMoE | 256 | 0.821 | 0.938 |
+| 2048 | granite | 512 | 0.999 | 1.000 |
 
-From each model's `config.json`:
+The plan assumed 0.5-0.7. It appropriate for 512-token, but at 2048 tokens most of the loss is gone.
 
-| model | hidden | intermediate | experts | top-k | GEMM | K | N |
-|---|---|---|---|---|---|---|---|
-| OLMoE-1B-7B-0924 | 2048 | 1024 | 64 | 8 | gate_up | 2048 | 2048 |
-| OLMoE-1B-7B-0924 | | | | | down | 1024 | 2048 |
-| granite-3.0-1b-a400m-base | 1024 | 512 | 32 | 8 | gate_up | 1024 | 1024 |
-| granite-3.0-1b-a400m-base | | | | | down | 512 | 1024 |
+So the factor is not a property of MoE in general. It depends on how many
+tokens one expert gets (comes from the step size, the expert count and
+top-k). 0.5–0.7 cannot be reused as a general number.
 
-`gate_up` is one fused matrix: transformers stores gate and up together and
-splits the result with `.chunk(2, dim=-1)`. That is why N is
-`2 × intermediate` and not `intermediate`.
+## What is not in the number
 
-### 2.3 Which M values
+Matrix multiply only. Not included: NF4 dequantisation on every weight visit,
+the router, row gather and scatter, 64 kernel launches per layer, the backward
+pass. Splitting those is checklist item 4, which I did not do.
 
+Tensors are random: real shapes, synthetic data, no weights loaded.
+## Curves
+
+Median of three rounds.
+
+| M | olmoe_gate_up | olmoe_down | granite_gate_up | granite_down |
+|---|---|---|---|---|
+| 1 | 0.009 | 0.010 | 0.009 | 0.006 |
+| 16 | 0.119 | 0.142 | 0.066 | 0.065 |
+| 32 | 0.299 | 0.297 | 0.275 | 0.215 |
+| 64 | 0.601 | 0.592 | 0.293 | 0.430 |
+| 128 | 0.511 | 0.648 | 0.627 | 0.721 |
+| 256 | 0.821 | 0.938 | 0.655 | 0.758 |
+| 512 | 0.998 | 0.998 | 0.999 | 1.000 |
+| 1024 | 0.986 | 1.001 | 0.976 | 1.179 |
+| 2048 | 1.079 | 1.197 | 1.134 | 1.385 |
+| 8192 | 1.126 | 1.228 | 1.205 | 1.417 |
+
+TFLOPS at M=512, used as the denominator: 23.51, 20.83, 20.75, 16.11.
+
+Plotted: `benchmarks/results/probe-f4-rtx3060/f4_curve.svg`
+
+## Checks I ran
+
+| check | result | bar |
+|---|---|---|
+| denominator spread inside a shape | 1.0003–1.0074x | - |
+| a2/a1 over all 120 arms | 0.994–1.013 | - |
+| round to round, the four answer rows | 1.002–1.023x | - |
+| sanity check factor(1) | 0.006–0.010 | under 0.25 |
+| SM clock under load | 1897–2002 MHz, median 1987 | V3: 10% |
+| samples under 90% of median clock | 0 of 401 | - |
+
+I could not use `nvidia-smi --lock-gpu-clocks` (no permission in the
+container), so I sampled the clock once a second into gpu_log.csv.
+406 s total, the card was busy 98.8% of it, power peaked at 170.1 W of 170,
+temperature 41-65 C.
+
+## Commands and versions
+
+```bash
+for i in 0 1 2; do python gemm_final.py $i | tee run_$i.txt; done
+
+nvidia-smi --query-gpu=timestamp,clocks.sm,temperature.gpu,power.draw,\
+utilization.gpu --format=csv -l 1 -f gpu_log.csv
 ```
-M = 1, 16, 32, 64, 128, 256, 512, 1024, 2048, 8192
-```
 
-- 64 is OLMoE at a 512-token step: 512 × 8 / 64.
-- 128 is granite at a 512-token step: 512 × 8 / 32.
-- 256 is OLMoE at a 2048-token step, 512 is granite at 2048.
-- 16 is a quiet expert, 1 is a sanity check, 8192 is the large-M limit.
+Vast.ai instance 55384207, machine 47491. RTX 3060 12 GB (sm_86), driver
+570.195.03, CUDA 12.8, power limit 170 W. Ryzen 5 3500, 6 cores, 32 GB RAM.
+torch 2.11.0+cu128, bfloat16. Nothing else was running on the GPU.
 
-The plan says "~200 tokens per expert". That is OLMoE at a 2048-token step. At
-512 tokens the same model gives 64, so the step size matters and I state it.
-
-### 2.4 How one point is measured
-
-Three warm-up calls, then 20 timed iterations, three repeats, keep the best.
-This is the same protocol as `stream_probe.py`, so the numbers can sit next to
-the project's other records.
-
-Time is taken with CUDA events, not `time.time()`. GPU work runs in the
-background, so a normal timer would measure how fast Python sent the commands
-instead of how long the GPU took.
-
-dtype is bfloat16 if the card supports it. If it does not, I use float16 and say
-so, and that run is not comparable with the bf16 records.
-
-### 2.5 Order of the runs
-
-I do not sweep M from small to large. The card heats up and slows down, so the
-later points would look worse for the wrong reason.
-
-Order is 512 → M → M → 512 for each M. Both arms then sit in the middle of the
-run on average, so the heating affects them equally and cancels in the ratio.
-
-Inside a pair I average the two readings. The "keep the best" above applies only
-to the three repeats of one point.
-
-Three rounds, each one a separate run of the script.
-
-### 2.6 Sanity check
-
-`factor(1)` must be below 0.25. With one row the GPU is doing almost no work per
-byte it reads, so it has to be far from full speed. If the script reports
-something near 1.0 there, the script is wrong and none of its other numbers mean
-anything.
-
-The script also checks that the result of `a @ b` has shape `(M, N)`, so if I
-mix up K and N it fails with a clear message instead of measuring the wrong
-thing.
-
-### 2.7 When an arm does not count
-
-An arm is void, kept in the record under a `_void` name, and re-run once if:
-
-- V1: the laptop was on battery at any point;
-- V2: another process was using the GPU;
-- V3: the SM clock moved more than 10% from the round's median;
-- V4: the machine went to sleep;
-- V5: the arm ended without writing its result.
-
-A second void in the same place ends the probe with no verdict.
-
-The 10% in V3 is a guess. The proper way is to measure how much the card's clock
-varies on its own first, and I have no card yet. If V3 fires every time, the
-answer is "no verdict" plus this note — I will not move the threshold after
-seeing the numbers.
-
-### 2.8 Verdict
-
-Read `factor` at each model's real M: 64 for OLMoE, 128 for granite, both at a
-512-token step. Different rows for the two models.
-
-| measured | what it means |
-|---|---|
-| 0.70 or less | the plan's assumption holds; the curve replaces the 0.5–0.7 guess |
-| 0.70 to 0.90 | the plan is too pessimistic; the giant table's rows go up |
-| 0.90 or more | the small GEMM is not the MoE bottleneck; look at the loop and at NF4 instead |
-| any of V1–V5 fired | no verdict; numbers published as description only |
-
-Before running, I expect granite to come out closer to 1 than OLMoE, because
-granite gives 128 tokens per expert where OLMoE gives 64. If it comes out the
-other way, I do not understand something and that is worth more than a
-confirmed guess.
-
-### 2.9 What this does not measure
-
-This is a pure matrix multiply, which is only one part of a real step. Not
-measured: NF4 dequantisation, the router, the backward pass, a full training
-step, attention, and models with more than 64 experts.
-
-Layer streaming is not used here. `SUPPORTED_STREAM_ARCHS` in
-`src/soup_cli/utils/layer_stream.py` does not list `olmoe` or `granitemoe`, so
-these two models are measured resident.
-
-Numbers from different cards are never compared. This record applies only to the
-card stamped in §3.
+Raw files are in `benchmarks/results/probe-f4-rtx3060/`: run_0..2.txt,
+f4_round_0..2.json, gpu_log.csv, gemm_final.py.
