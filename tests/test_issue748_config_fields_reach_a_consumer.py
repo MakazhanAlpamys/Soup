@@ -812,11 +812,13 @@ class TestSchemaSideResolvers:
         """If a second resolver appears, this pass grows silently -- the pin is
         cheap and makes that a deliberate edit."""
         props = schema_property_reads(SCHEMA_PATH)
-        assert list(props) == ["double_quant_on"], (
+        assert list(props) == ["double_quant_on", "double_quant_requested"], (
             f"schema.py properties are now {sorted(props)}; each one launders "
             "the fields it reads into 'consumed', so review the addition"
         )
         assert "bnb_4bit_use_double_quant" in props["double_quant_on"]
+        # B3: FP8 sources need the unset/explicit distinction (stream_setup.py).
+        assert "bnb_4bit_use_double_quant" in props["double_quant_requested"]
 
     def test_a_called_resolver_makes_its_field_consumed(self):
         """`double_quant_on` is called from quant_menu.py and stream_setup.py,

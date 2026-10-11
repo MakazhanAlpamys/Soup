@@ -666,7 +666,13 @@ class StreamingSetupMixin:
         # claim breaks. Read the flag once here (resolving the tri-state unset to
         # the shipped default) and thread it into both the sharder (its cache
         # already keys on double_quant) and the skeleton.
-        double_quant = tcfg.double_quant_on
+        # B3 — a block-scaled FP8 source (DeepSeek-V3 / Kimi K2) resolves unset to
+        # OFF and refuses an explicit true: with double-quant on, the codec fails
+        # the preregistered per-block reconstruction gate on real FP8-sourced
+        # weights. Same helper as the sharder, so the two cannot disagree.
+        from soup_cli.utils.fp8_source import stream_double_quant
+
+        double_quant = stream_double_quant(tcfg, model_config, quant=quant)
 
         shard_dir = resolve_shard_dir(cfg.base)
         # R4: extra NVMe roots, validated once here (the ~9 s disk probe runs per volume only

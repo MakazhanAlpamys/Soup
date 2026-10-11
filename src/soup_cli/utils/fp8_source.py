@@ -103,6 +103,66 @@ def load_fp8_source_config(weights_dir: str) -> Optional[Fp8SourceConfig]:
     return Fp8SourceConfig(block=(int(block[0]), int(block[1])))
 
 
+#: Where the reason for the FP8 double-quant rule is recorded.
+DOUBLE_QUANT_RECORD = "benchmarks/gate-b3-fp8-source.md (G3)"
+
+
+def is_block_fp8_model_config(model_config: Any) -> bool:
+    """True when a model config declares a block-scaled FP8 source checkpoint.
+
+    Reads ``quantization_config.quant_method`` from either a plain dict (how most
+    configs carry it) or a config object, so the trainer can decide before any
+    weights are located. Tolerates a missing or malformed field: that is "not
+    FP8" here, and the sharder still refuses float8 tensors it cannot decode.
+    """
+    quant = getattr(model_config, "quantization_config", None)
+    if quant is None:
+        return False
+    if isinstance(quant, dict):
+        method = quant.get("quant_method")
+    else:
+        method = getattr(quant, "quant_method", None)
+    method = getattr(method, "value", method)
+    return isinstance(method, str) and method.lower() == "fp8"
+
+
+def resolve_double_quant(requested: Optional[bool], *, fp8_source: bool, quant: str) -> bool:
+    """The NF4 double-quant setting a run actually uses.
+
+    ``requested`` is the tri-state ``training.bnb_4bit_use_double_quant``: None
+    when unset. For block-scaled FP8 sources the supported configuration is
+    double-quant OFF: with it on, the bitsandbytes codec fails B3's preregistered
+    per-block reconstruction gate (``0.17 x absmax``) on real DeepSeek-V3 weights
+    while it passes with it off. So unset resolves to off there, and an explicit
+    ``True`` is refused by name rather than silently overridden. Every other
+    source keeps the shipped default (on). Irrelevant unless ``quant`` is NF4.
+    """
+    if not fp8_source or quant != "nf4":
+        return requested is not False
+    if requested is True:
+        raise ValueError(
+            "bnb_4bit_use_double_quant=true is not supported for a block-scaled FP8 "
+            "source checkpoint: with double-quant on, the NF4 codec fails the "
+            "per-block reconstruction gate (0.17 x absmax) on real DeepSeek-V3 "
+            f"weights, and passes with it off ({DOUBLE_QUANT_RECORD}). Leave it unset "
+            "or set it to false; this costs about 0.37 bit per parameter of extra "
+            "NF4 statistics."
+        )
+    return False
+
+
+def stream_double_quant(tcfg: Any, model_config: Any, *, quant: str) -> bool:
+    """The double-quant setting layer streaming uses for this run.
+
+    Any source other than block-scaled FP8 reads ``tcfg.double_quant_on``
+    exactly as before; an FP8 source goes through ``resolve_double_quant``
+    with the setting as the user wrote it (unset, true or false).
+    """
+    if is_block_fp8_model_config(model_config):
+        return resolve_double_quant(tcfg.double_quant_requested, fp8_source=True, quant=quant)
+    return tcfg.double_quant_on
+
+
 def chunk_rows_for(cols: int, *, block_rows: int, target_bytes: int = _TARGET_CHUNK_BYTES) -> int:
     """Rows per dequantisation chunk: whole block rows, at least one block row."""
     fitting = target_bytes // max(int(cols) * 4, 1)

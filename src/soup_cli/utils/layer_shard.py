@@ -1178,7 +1178,7 @@ def shard_checkpoint(
     force: bool = False,
     quant: str = QUANT_NONE,
     quant_suffixes: Iterable[str] = (),
-    double_quant: bool = True,
+    double_quant: Optional[bool] = None,
     quant_device: Optional[str] = None,
     notify: Optional[Callable[[str], None]] = None,
     stripe_roots: Sequence[str] = (),
@@ -1193,6 +1193,10 @@ def shard_checkpoint(
     explicit (untied) ``lm_head`` exist, each is written to its own shard and
     remains unquantised; the runtime streams them through one large slot. A tied
     checkpoint keeps its single embedding matrix resident and unchanged.
+
+    ``double_quant`` is tri-state like ``training.bnb_4bit_use_double_quant``:
+    None takes the default, which is on, except for a block-scaled FP8 source,
+    where it is off and an explicit True is refused (``resolve_double_quant``).
 
     ``stripe_roots`` (R4) are extra cache roots on other drives; decoder layer
     ``i`` is written to root ``i mod N`` (root 0 is ``out_dir``), each extra
@@ -1239,10 +1243,17 @@ def shard_checkpoint(
     for directory, root in zip(shard_dirs[1:], stripe):
         secure_stripe_folder(directory, root)
 
-    from soup_cli.utils.fp8_source import is_float8_dtype, load_fp8_source_config
+    from soup_cli.utils.fp8_source import (
+        is_float8_dtype,
+        load_fp8_source_config,
+        resolve_double_quant,
+    )
     from soup_cli.utils.fp8_source import is_scale_key as is_fp8_scale_key
 
     fp8_config = load_fp8_source_config(weights_dir)
+    double_quant = resolve_double_quant(
+        double_quant, fp8_source=fp8_config is not None, quant=quant
+    )
     source_files = checkpoint_source_components(
         weights_dir,
         _source_file_components(shards),

@@ -360,7 +360,10 @@ def _g3_ratios(reconstructed, reference):
     return (got - want).abs().amax(dim=1), want.abs().amax(dim=1)
 
 
-@pytest.mark.parametrize("double_quant", [False, True])
+#: None is the default path (``training.bnb_4bit_use_double_quant`` unset), which
+#: for an FP8 source resolves to double-quant OFF; False is the explicit setting.
+#: An explicit True is refused for FP8 sources (``TestDoubleQuantForFp8Sources``).
+@pytest.mark.parametrize("double_quant", [None, False])
 class TestG2G3NF4:
     def test_g2_nf4_bytes_match_the_codec_on_the_reference(self, tmp_path, double_quant):
         import torch
@@ -374,7 +377,7 @@ class TestG2G3NF4:
             for name, _ in FP8_WEIGHTS:
                 want, _, _, _ = _quantize_nf4(
                     reference[f"model.layers.{idx}.{name}"],
-                    double_quant=double_quant,
+                    double_quant=False,
                     device="cpu",
                 )
                 for sidecar, tensor in want.items():
@@ -614,3 +617,141 @@ def test_changed_fp8_config_reshards(tmp_path):
     notes = []
     shard_checkpoint(src, out, dtype="bfloat16", arch="llama", notify=notes.append)
     assert any("Re-sharding" in note for note in notes), notes
+
+
+# ==========================================================================
+# double-quant for FP8 sources: the supported configuration
+# ==========================================================================
+class TestDoubleQuantForFp8Sources:
+    """With double-quant on, the bitsandbytes NF4 codec failed B3's
+    preregistered G3 gate on real DeepSeek-V3 weights (worst 2.1503 against
+    0.17) and passed with it off (worst 0.1531). The gate is not relaxed;
+    instead an FP8 source shards without double-quant by default, and asking
+    for it explicitly is refused by name."""
+
+    def test_default_path_shards_without_double_quant(self, tmp_path):
+        from soup_cli.utils.layer_shard import QUANT_NF4
+
+        tensors, _ = _build_fp8_tensors(n_layers=1)
+        _, _, index = _shard(
+            tmp_path,
+            tensors,
+            quant=QUANT_NF4,
+            quant_suffixes=FP8_SUFFIXES,
+            quant_device="cpu",
+        )
+        assert index.double_quant is False
+        assert all(spec.nested is False for spec in index.quant_specs.values())
+
+    def test_explicit_double_quant_is_refused_with_the_reason(self, tmp_path):
+        from soup_cli.utils.layer_shard import QUANT_NF4
+
+        tensors, _ = _build_fp8_tensors(n_layers=1)
+        with pytest.raises(ValueError, match="gate-b3-fp8-source"):
+            _shard(
+                tmp_path,
+                tensors,
+                quant=QUANT_NF4,
+                quant_suffixes=FP8_SUFFIXES,
+                double_quant=True,
+                quant_device="cpu",
+            )
+
+    def test_bf16_source_keeps_the_shipped_default(self, tmp_path):
+        """Nothing changes for any other checkpoint: unset still means on."""
+        import torch
+
+        from soup_cli.utils.layer_shard import QUANT_NF4
+
+        generator = torch.Generator().manual_seed(1)
+        tensors = {
+            "model.layers.0.self_attn.q_proj.weight": torch.randn(
+                128, 128, generator=generator
+            ).to(torch.bfloat16),
+            "model.embed_tokens.weight": torch.randn(16, 128, generator=generator).to(
+                torch.bfloat16
+            ),
+        }
+        _, _, index = _shard(
+            tmp_path,
+            tensors,
+            config={"model_type": "llama"},
+            quant=QUANT_NF4,
+            quant_suffixes={"self_attn.q_proj.weight"},
+            quant_device="cpu",
+        )
+        assert index.double_quant is True
+        assert index.quant_specs["self_attn.q_proj.weight"].nested is True
+
+    @pytest.mark.parametrize(
+        "requested, fp8, quant, expected",
+        [
+            (None, True, "nf4", False),
+            (False, True, "nf4", False),
+            (None, False, "nf4", True),
+            (True, False, "nf4", True),
+            (False, False, "nf4", False),
+            (True, True, "none", True),
+            (None, True, "none", True),
+        ],
+    )
+    def test_resolution_table(self, requested, fp8, quant, expected):
+        from soup_cli.utils.fp8_source import resolve_double_quant
+
+        assert resolve_double_quant(requested, fp8_source=fp8, quant=quant) is expected
+
+    def test_model_config_detection(self):
+        import enum
+        from types import SimpleNamespace
+
+        from soup_cli.utils.fp8_source import is_block_fp8_model_config
+
+        class Method(str, enum.Enum):
+            FP8 = "fp8"
+
+        assert is_block_fp8_model_config(
+            SimpleNamespace(quantization_config={"quant_method": "fp8"})
+        )
+        assert is_block_fp8_model_config(
+            SimpleNamespace(quantization_config=SimpleNamespace(quant_method=Method.FP8))
+        )
+        assert not is_block_fp8_model_config(SimpleNamespace())
+        assert not is_block_fp8_model_config(
+            SimpleNamespace(quantization_config={"quant_method": "bitsandbytes"})
+        )
+        assert not is_block_fp8_model_config(SimpleNamespace(quantization_config={}))
+
+    def test_stream_setup_resolves_through_the_helper(self):
+        """The trainer and the sharder must agree, so the trainer's setup calls the
+        same resolver; a later edit back to ``tcfg.double_quant_on`` fails here."""
+        import inspect
+
+        from soup_cli.trainer import stream_setup
+
+        source = inspect.getsource(stream_setup)
+        assert "stream_double_quant(tcfg, model_config, quant=quant)" in source
+
+    @pytest.mark.parametrize(
+        "requested, fp8, expected",
+        [(None, True, False), (False, True, False), (None, False, True), (False, False, False)],
+    )
+    def test_stream_double_quant(self, requested, fp8, expected):
+        from types import SimpleNamespace
+
+        from soup_cli.utils.fp8_source import stream_double_quant
+
+        tcfg = SimpleNamespace(
+            double_quant_requested=requested, double_quant_on=requested is not False
+        )
+        config = SimpleNamespace(quantization_config={"quant_method": "fp8"} if fp8 else None)
+        assert stream_double_quant(tcfg, config, quant="nf4") is expected
+
+    def test_stream_double_quant_refuses_explicit_true_for_fp8(self):
+        from types import SimpleNamespace
+
+        from soup_cli.utils.fp8_source import stream_double_quant
+
+        tcfg = SimpleNamespace(double_quant_requested=True, double_quant_on=True)
+        config = SimpleNamespace(quantization_config={"quant_method": "fp8"})
+        with pytest.raises(ValueError, match="not supported for a block-scaled FP8"):
+            stream_double_quant(tcfg, config, quant="nf4")
