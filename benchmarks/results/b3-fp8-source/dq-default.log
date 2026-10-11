@@ -1,0 +1,9 @@
+{
+  "g1_pass": true,
+  "g1_tensors": 126,
+  "g3_pass": true,
+  "g3_tensors": 126,
+  "g3_worst_ratio": 0.153061,
+  "g3_failures": [],
+  "zero_blocks_total": 0
+}

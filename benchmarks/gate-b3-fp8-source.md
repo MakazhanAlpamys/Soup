@@ -183,7 +183,43 @@ stores both the requested setting and the value the sharder resolved.
   evidence; nothing in sections 1 to 3 is edited.
 - Validity rows V1 to V4 as in section 1.
 
-_Results are filled in below after the run._
+### Result (REAL, 2026-10-11 16:33 UTC)
+
+| Field | Value |
+|---|---|
+| Requested double-quant (`g6.double_quant_requested`) | `default` (unset) |
+| Resolved by the sharder (`g6.double_quant`) | `false` (off) |
+| G1 | **PASS, 126 / 126 tensors `torch.equal`** |
+| G3 | **PASS, 126 / 126 tensors**, worst `e_b / a_b` **0.1531** (`layers.0.mlp.down_proj`), no failures, 0 zero blocks |
+| **Verdict by the rule above** | **PASS** (G1 equal on every tensor, resolved setting off, G3 holds in every block) |
+
+The per-tensor worst ratios are identical, all 126, to the double-quant-off run
+in section 3, and the cache is the same size to the byte (3,748,021,400).
+
+| | Wall | FP8 dequant | NF4 quantise | Other | s / source GB | Cache written | Peak RSS through sharding |
+|---|---|---|---|---|---|---|---|
+| default (resolved off) | 107.30 s | 28.78 s (27%) | 70.90 s (66%) | 7.62 s | **20.56** | 3.75 GB | 5.49 GB |
+
+Box for this run (rule V1): tree `756ea99`, `src_dirty` false; same sandbox
+class, source file, staging exclusion and library versions as section 2, 2
+logical CPUs, 8.42 GB RAM, 17.7 GB disk free at start. The CPU stamp differs:
+Intel Xeon @ 2.80 GHz here, @ 2.10 GHz in the section 3 runs.
+
+Raw JSON and log: [`results/b3-fp8-source/dq-default.json`](results/b3-fp8-source/dq-default.json),
+[`dq-default.log`](results/b3-fp8-source/dq-default.log); `$WORK/` convention as in section 3.
+
+### Sharding time per GB (REAL)
+
+| Run | Tree | CPU stamp | s / source GB |
+|---|---|---|---|
+| Double-quant on | `79a4d3f` | Xeon @ 2.10 GHz | 25.71 |
+| Double-quant off | `79a4d3f` | Xeon @ 2.10 GHz | 23.39 |
+| Default (resolved off) | `756ea99` | Xeon @ 2.80 GHz | 20.56 |
+
+Box caveat as in section 3 (rule V2): a 2-vCPU CPU sandbox with NF4 quantised
+on CPU, not comparable to the dev box. The default run does the same work as
+the double-quant-off run and was stamped on a different CPU, so the 23.39 to
+20.56 difference is the box, not the code.
 
 ## 4. Limits recorded for B2 (checked 2026-10-07, before the run)
 
