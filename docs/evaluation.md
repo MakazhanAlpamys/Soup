@@ -632,7 +632,10 @@ The file is
 and is consumed later by `soup ship --baseline baseline.json` or
 `soup eval gate --baseline baseline.json`. Shared helpers
 `stamp_baseline_scores` / `write_baseline_file` are the only writers;
-`write_baseline_file` refuses an empty score map. `resolve_baseline`
+`write_baseline_file` refuses an empty score map. Baseline scores must be finite
+numbers — non-finite values (`NaN`, `+inf`, `-inf`) are refused at read
+(`resolve_baseline`), write (`stamp_baseline_scores`, `write_baseline_file`),
+and gate (`run_gate`) boundaries (#1773). `resolve_baseline`
 warns once on unknown provenance (unstamped files /
 registry rows) or a `scorer_revision` mismatch, and stays silent when the
 stamp matches. The old name-based `SCORER_CHANGED_IN_V0_73_2` warning is

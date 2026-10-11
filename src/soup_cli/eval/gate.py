@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Literal, Mapping, Optional
@@ -164,7 +165,12 @@ def stamp_baseline_scores(scores: Mapping[str, float]) -> dict[str, object]:
                 f"baseline score for {name!r} must be a number, "
                 f"got {type(value).__name__}"
             )
-        clean[name] = float(value)
+        fval = float(value)
+        if not math.isfinite(fval):
+            raise ValueError(
+                f"baseline score for {name!r} must be finite, got {value}"
+            )
+        clean[name] = fval
     return {
         _BASELINE_SCORES_KEY: clean,
         _BASELINE_PROVENANCE_KEY: current_baseline_stamp(),
@@ -204,7 +210,12 @@ def _coerce_score_map(raw: Mapping[object, object], *, context: str) -> dict[str
                 f"{context}: score for {name!r} must be a number, "
                 f"got {type(value).__name__}"
             )
-        out[name] = float(value)
+        fval = float(value)
+        if not math.isfinite(fval):
+            raise ValueError(
+                f"{context}: score for {name!r} must be finite, got {value}"
+            )
+        out[name] = fval
     return out
 
 
@@ -331,7 +342,10 @@ def resolve_baseline(
             row["benchmark"]: row
             for row in newest_eval_rows(rows)
         }
-        scores = {name: float(row["score"]) for name, row in newest.items()}
+        scores = _coerce_score_map(
+            {name: row["score"] for name, row in newest.items()},
+            context="registry baseline",
+        )
         # Registry rows predate the stamp (or carry it inside details_json).
         # Checked per benchmark: re-measuring one benchmark says nothing about
         # the scale of another that was not re-measured. Benchmarks sharing a
@@ -579,7 +593,20 @@ def run_gate(
     ``generate_fn`` accepts a prompt and returns the model output. Injecting
     this keeps the gate testable without a live model.
     """
-    baseline = baseline or {}
+    if baseline is None:
+        baseline = {}
+    elif not isinstance(baseline, Mapping):
+        raise TypeError(f"baseline must be a mapping, got {type(baseline).__name__}")
+    for base_name, base_val in baseline.items():
+        if isinstance(base_val, bool) or not isinstance(base_val, (int, float)):
+            raise TypeError(
+                f"baseline score for {base_name!r} must be a number, "
+                f"got {type(base_val).__name__}"
+            )
+        if not math.isfinite(base_val):
+            raise ValueError(
+                f"baseline score for {base_name!r} must be finite, got {base_val}"
+            )
     task_results: list[GateTaskResult] = []
     any_regressed = False
     any_failed_threshold = False
