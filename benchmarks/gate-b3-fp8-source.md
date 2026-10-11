@@ -163,6 +163,28 @@ JSON `tree` stamp `f9b6c80` is the branch's hash at run time; the branch was
 re-authored before it was pushed; the same code (`src/`, `tests/`, the
 harness) is now `79a4d3f`.
 
+## 3a. Amendment after review: G3 on the default path (rule committed 2026-10-11, before the run)
+
+Review of PR #2 kept the G3 failure open: the gate applies to the default path,
+and with double-quant on (the shipped default until then) it fails. The bound is
+not changed. The default is: from `8e88b27`, a block-scaled FP8 source resolves an
+unset `bnb_4bit_use_double_quant` to off, and an explicit `true` is refused by
+name (`fp8_source.resolve_double_quant`).
+
+**Rule for this run.** Same source file, same staging exclusion, same harness, same
+G1 and G3 definitions and the same fixed `0.17` bound as section 1. The only
+change is `--double-quant default`: the sharder is called with double-quant
+unset, exactly as `soup train` does when the config does not set it. The record
+stores both the requested setting and the value the sharder resolved.
+
+- PASS iff G1 is `torch.equal` on every tensor, the resolved setting is off, and
+  G3 holds in every 64-element block of every tensor.
+- The double-quant-on results above stay in this record as the "before"
+  evidence; nothing in sections 1 to 3 is edited.
+- Validity rows V1 to V4 as in section 1.
+
+_Results are filled in below after the run._
+
 ## 4. Limits recorded for B2 (checked 2026-10-07, before the run)
 
 - `soup train` refuses `model_type='deepseek_v3'` at the arch check, before

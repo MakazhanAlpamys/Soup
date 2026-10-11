@@ -163,7 +163,12 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--source", required=True, type=Path)
     parser.add_argument("--out", required=True, type=Path)
-    parser.add_argument("--double-quant", choices=("on", "off"), default="on")
+    parser.add_argument(
+        "--double-quant",
+        choices=("on", "off", "default"),
+        default="on",
+        help="default leaves it unset, the path `soup train` takes when the config does not set it",
+    )
     parser.add_argument("--json", required=True, type=Path)
     parser.add_argument(
         "--exclude-key",
@@ -244,7 +249,7 @@ def main(argv=None) -> int:
 
     layer_shard._read_fp8_tensor = timed("fp8_dequant_s", layer_shard._read_fp8_tensor)
     layer_shard._quantize_nf4 = timed("nf4_quantise_s", layer_shard._quantize_nf4)
-    double_quant = args.double_quant == "on"
+    double_quant = {"on": True, "off": False, "default": None}[args.double_quant]
     t0 = time.perf_counter()
     index = layer_shard.shard_checkpoint(
         str(args.source), str(args.out), dtype="bfloat16", arch="deepseek_v3",
@@ -255,7 +260,8 @@ def main(argv=None) -> int:
     peak_rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024  # Linux: KiB
     out_bytes = sum(p.stat().st_size for p in args.out.rglob("*") if p.is_file())
     result["g6"] = {
-        "double_quant": double_quant,
+        "double_quant_requested": args.double_quant,
+        "double_quant": index.double_quant,
         "wall_s": round(wall, 2),
         "fp8_dequant_s": round(spent["fp8_dequant_s"], 2),
         "nf4_quantise_s": round(spent["nf4_quantise_s"], 2),
