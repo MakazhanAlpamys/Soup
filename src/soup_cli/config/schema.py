@@ -5059,6 +5059,51 @@ class SoupConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def _validate_expand_layers_lora(self) -> "SoupConfig":
+        """#1326 - LLaMA Pro under LoRA does not train the appended blocks.
+
+        The block expansion freezes everything but the new blocks, then
+        ``get_peft_model`` runs and freezes every non-adapter parameter again,
+        new blocks included, while adapters land on every targeted layer. With
+        the default ``q_proj``/``v_proj`` targets the new blocks also stay the
+        identity (their zero-initialised ``o_proj``/``down_proj`` are frozen), so
+        only the original layers learn. Route 1 of the ruling: refuse the
+        combination; ``lora.r: 0`` trains the new blocks directly, and is
+        available on ``task: sft`` only.
+        """
+        tcfg = self.training
+        if tcfg.expand_layers is None or tcfg.lora.r == 0:
+            return self
+        if (
+            tcfg.stream_layers
+            or tcfg.unfrozen_parameters
+            or tcfg.lisa_enabled
+            or tcfg.quantization_aware == "quest"
+        ):
+            # Streaming, Spectrum, LISA and QuEST refuse expand_layers outright in
+            # their own validators. Let that message speak: lora.r: 0 would not
+            # make such a config load.
+            return self
+        fields = (
+            f"training.expand_layers: {tcfg.expand_layers} with "
+            f"training.freeze_trainable_layers: {tcfg.freeze_trainable_layers} "
+            f"(LLaMA Pro) cannot be combined with LoRA (training.lora.r: "
+            f"{tcfg.lora.r}). get_peft_model runs after the block expansion and "
+            "freezes the appended blocks again, so only adapters on the original "
+            "layers would train. "
+        )
+        if self.task == "pretrain":
+            raise ValueError(
+                fields + "Training only the new blocks needs lora.r: 0, which "
+                "task: pretrain does not support, so this recipe needs task: sft "
+                "with lora.r: 0 and quantization: none."
+            )
+        raise ValueError(
+            fields + "To train only the new blocks, set lora.r: 0 with "
+            "quantization: none."
+        )
+
+    @model_validator(mode="after")
     def _validate_v042_pre_tokenized_modality(self) -> "SoupConfig":
         if self.data.format == "pre_tokenized" and self.modality != "text":
             raise ValueError(
