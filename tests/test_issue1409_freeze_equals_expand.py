@@ -18,6 +18,7 @@ def _load(task, expand, freeze):
     lines = ["  quantization: none\n", f"  expand_layers: {expand}\n"]
     if freeze is not None:
         lines.append(f"  freeze_trainable_layers: {freeze}\n")
+    lines.append("  lora:\n    r: 0\n")  # #1326: a LoRA rank is refused with expand_layers
     return load_config_from_string(
         "base: org/model\n"
         f"task: {task}\n"
