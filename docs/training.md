@@ -2085,16 +2085,25 @@ training:
   # block. capacity_factor is the fraction of tokens that get the residual update.
   use_mod: true
   mod_capacity_factor: 0.125
-
-  # LLaMA Pro: append zero-initialised identity decoder blocks and train only the new
-  # ones (freeze_trainable_layers must equal expand_layers and freezes the
-  # originals). Needs quantization: none.
-  expand_layers: 4
-  freeze_trainable_layers: 4
 ```
 
-`use_mod` / `expand_layers` attach AFTER `get_peft_model` so the new routers / blocks are
-trainable. Unsupported architectures warn + skip. Pick one of MoD / LLaMA Pro per run. (v0.71.12)
+```yaml
+training:
+  # LLaMA Pro: append zero-initialised identity decoder blocks and train only the new
+  # ones (freeze_trainable_layers must equal expand_layers and freezes the
+  # originals). Needs quantization: none and lora.r: 0 (task: sft).
+  expand_layers: 4
+  freeze_trainable_layers: 4
+  quantization: none
+  lora:
+    r: 0
+```
+
+`use_mod` attaches AFTER `get_peft_model`, so the new routers are trainable. `expand_layers`
+runs BEFORE it, and `get_peft_model` would freeze the appended blocks again, so a LoRA rank is
+refused with `expand_layers` and the blocks train with `lora.r: 0`
+([#1326](https://github.com/MakazhanAlpamys/Soup/issues/1326)). Unsupported architectures
+warn + skip. Pick one of MoD / LLaMA Pro per run. (v0.71.12)
 
 LongLoRA S² (`use_longlora: true`) is refused at config load
 ([#1240](https://github.com/MakazhanAlpamys/Soup/issues/1240)). Its override rolled the
