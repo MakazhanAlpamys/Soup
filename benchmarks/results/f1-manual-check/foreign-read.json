@@ -3,6 +3,10 @@
   "round": 1,
   "run": 1,
   "label": "RTX 3050, real",
+  "gpu": {
+    "id": "0",
+    "source": "default"
+  },
   "required": [
     "suspend",
     "power",
@@ -10,12 +14,16 @@
   ],
   "outcome": "void",
   "box_stamp_before": {
-    "unix_s": 1791545492.985931,
-    "ram_available_bytes": 10592497664,
+    "unix_s": 1791813551.7227812,
+    "ram_available_bytes": 10911150080,
+    "commit_charge": {
+      "used_bytes": 16242376704,
+      "limit_bytes": 12209106944
+    },
     "power_source": "mains",
     "gpu_processes": [
       {
-        "pid": 5684,
+        "pid": 6059,
         "type": "G",
         "name": "/usr/bin/gnome-shell",
         "used_mib": 1
@@ -25,12 +33,16 @@
     "unknown": {}
   },
   "box_stamp_after": {
-    "unix_s": 1791545553.0969398,
-    "ram_available_bytes": 10602369024,
+    "unix_s": 1791813611.8343794,
+    "ram_available_bytes": 10938896384,
+    "commit_charge": {
+      "used_bytes": 16229232640,
+      "limit_bytes": 12209106944
+    },
     "power_source": "mains",
     "gpu_processes": [
       {
-        "pid": 5684,
+        "pid": 6059,
         "type": "G",
         "name": "/usr/bin/gnome-shell",
         "used_mib": 1
@@ -58,8 +70,8 @@
       "outcome": "ok",
       "reason": "boot-time offset grew 0.000 s (limit 1.0 s); suspend count stayed at 0",
       "evidence": {
-        "sleep_offset_start_s": -3.848999767797068e-06,
-        "sleep_offset_end_s": -3.5700031730812043e-07,
+        "sleep_offset_start_s": -3.735000063898042e-06,
+        "sleep_offset_end_s": -3.7800009522470646e-07,
         "suspend_count_start": 0,
         "suspend_count_end": 0
       }
@@ -84,21 +96,30 @@
     },
     "foreign_reads": {
       "outcome": "void",
-      "reason": "2147483648 bytes of foreign reads on nvme0n1 (limit 1000000000)",
+      "reason": "at least 2147487744 bytes of foreign reads on nvme0n1 (limit 1000000000)",
       "evidence": {
         "model_path": "/home/m1kadoo/.cache/huggingface/hub",
         "device": "nvme0n1",
-        "disk_read_bytes_start": 6622449152,
-        "disk_read_bytes_end": 8769932800,
+        "disk_read_bytes_start": 3852721664,
+        "disk_read_bytes_end": 6000209408,
+        "other_disk_read_bytes_start": 0,
+        "other_disk_read_bytes_end": 0,
         "own_read_bytes": 0,
-        "foreign_read_bytes": 2147483648,
-        "uninspectable_processes": 289
+        "foreign_read_bytes": 2147487744,
+        "foreign_read_bytes_min": 2147487744,
+        "foreign_read_bytes_max": 2147487744,
+        "uninspectable_processes": 281
       },
       "readers": [
         {
-          "pid": 43016,
+          "pid": 29644,
           "name": "zsh",
           "read_bytes": 2147483648
+        },
+        {
+          "pid": 6059,
+          "name": "gnome-shell",
+          "read_bytes": 4096
         }
       ],
       "unattributed_bytes": 0

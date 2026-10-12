@@ -3,6 +3,10 @@
   "round": 1,
   "run": 1,
   "label": "RTX 3050, real",
+  "gpu": {
+    "id": "0",
+    "source": "default"
+  },
   "required": [
     "suspend",
     "power",
@@ -10,12 +14,16 @@
   ],
   "outcome": "void",
   "box_stamp_before": {
-    "unix_s": 1791546236.6869018,
-    "ram_available_bytes": 10603151360,
+    "unix_s": 1791813764.141294,
+    "ram_available_bytes": 10994552832,
+    "commit_charge": {
+      "used_bytes": 16176349184,
+      "limit_bytes": 12209106944
+    },
     "power_source": "mains",
     "gpu_processes": [
       {
-        "pid": 5684,
+        "pid": 6059,
         "type": "G",
         "name": "/usr/bin/gnome-shell",
         "used_mib": 1
@@ -25,12 +33,16 @@
     "unknown": {}
   },
   "box_stamp_after": {
-    "unix_s": 1791546296.7988498,
-    "ram_available_bytes": 10595139584,
+    "unix_s": 1791813824.2668056,
+    "ram_available_bytes": 10970537984,
+    "commit_charge": {
+      "used_bytes": 16201027584,
+      "limit_bytes": 12209106944
+    },
     "power_source": "mains",
     "gpu_processes": [
       {
-        "pid": 5684,
+        "pid": 6059,
         "type": "G",
         "name": "/usr/bin/gnome-shell",
         "used_mib": 1
@@ -41,7 +53,7 @@
   },
   "gpu_clock": {
     "outcome": "ok",
-    "reason": "SM clock 210 to 210 MHz over 31 samples; clock event reasons seen: gpu_idle",
+    "reason": "SM clock 210 to 210 MHz over 31 samples; clock event reasons seen: gpu_idle, sw_power_cap, sw_thermal_slowdown",
     "samples": 31,
     "unknown_samples": 0,
     "sm_clock_mhz": {
@@ -50,47 +62,31 @@
       "max": 210
     },
     "reasons_seen": {
-      "gpu_idle": 31
+      "gpu_idle": 30,
+      "sw_power_cap": 1,
+      "sw_thermal_slowdown": 1
     }
   },
   "checks": {
     "suspend": {
       "outcome": "ok",
-      "reason": "boot-time offset grew 0.000 s (limit 1.0 s); suspend count stayed at 2",
+      "reason": "boot-time offset grew 0.000 s (limit 1.0 s); suspend count stayed at 0",
       "evidence": {
-        "sleep_offset_start_s": 58.47585239,
-        "sleep_offset_end_s": 58.475856819999535,
-        "suspend_count_start": 2,
-        "suspend_count_end": 2
+        "sleep_offset_start_s": -3.526999989844626e-06,
+        "sleep_offset_end_s": -3.5900006878364366e-07,
+        "suspend_count_start": 0,
+        "suspend_count_end": 0
       }
     },
     "power": {
       "outcome": "void",
-      "reason": "9 of 32 power samples off mains",
+      "reason": "8 of 32 power samples off mains",
       "evidence": {
         "samples": 32,
         "off_mains_samples": [
           {
-            "sample": 4,
-            "at_s": 8.007,
-            "online": {
-              "ACAD": false,
-              "ucsi-source-psy-USBC000:001": false,
-              "ucsi-source-psy-USBC000:002": false
-            }
-          },
-          {
-            "sample": 5,
-            "at_s": 10.009,
-            "online": {
-              "ACAD": false,
-              "ucsi-source-psy-USBC000:001": false,
-              "ucsi-source-psy-USBC000:002": false
-            }
-          },
-          {
             "sample": 6,
-            "at_s": 12.01,
+            "at_s": 12.011,
             "online": {
               "ACAD": false,
               "ucsi-source-psy-USBC000:001": false,
@@ -99,7 +95,7 @@
           },
           {
             "sample": 7,
-            "at_s": 14.011,
+            "at_s": 14.013,
             "online": {
               "ACAD": false,
               "ucsi-source-psy-USBC000:001": false,
@@ -108,7 +104,7 @@
           },
           {
             "sample": 8,
-            "at_s": 16.012,
+            "at_s": 16.014,
             "online": {
               "ACAD": false,
               "ucsi-source-psy-USBC000:001": false,
@@ -117,7 +113,7 @@
           },
           {
             "sample": 9,
-            "at_s": 18.013,
+            "at_s": 18.015,
             "online": {
               "ACAD": false,
               "ucsi-source-psy-USBC000:001": false,
@@ -126,7 +122,7 @@
           },
           {
             "sample": 10,
-            "at_s": 20.015,
+            "at_s": 20.016,
             "online": {
               "ACAD": false,
               "ucsi-source-psy-USBC000:001": false,
@@ -135,7 +131,7 @@
           },
           {
             "sample": 11,
-            "at_s": 22.016,
+            "at_s": 22.018,
             "online": {
               "ACAD": false,
               "ucsi-source-psy-USBC000:001": false,
@@ -144,7 +140,16 @@
           },
           {
             "sample": 12,
-            "at_s": 24.017,
+            "at_s": 24.019,
+            "online": {
+              "ACAD": false,
+              "ucsi-source-psy-USBC000:001": false,
+              "ucsi-source-psy-USBC000:002": false
+            }
+          },
+          {
+            "sample": 13,
+            "at_s": 26.021,
             "online": {
               "ACAD": false,
               "ucsi-source-psy-USBC000:001": false,
@@ -166,44 +171,48 @@
     },
     "foreign_reads": {
       "outcome": "ok",
-      "reason": "1671168 bytes of foreign reads on nvme0n1 (limit 1000000000)",
+      "reason": "at most 811008 bytes of foreign reads on nvme0n1 (limit 1000000000)",
       "evidence": {
         "model_path": "/home/m1kadoo/.cache/huggingface/hub",
         "device": "nvme0n1",
-        "disk_read_bytes_start": 8803438080,
-        "disk_read_bytes_end": 8805109248,
+        "disk_read_bytes_start": 6000209408,
+        "disk_read_bytes_end": 6001020416,
+        "other_disk_read_bytes_start": 0,
+        "other_disk_read_bytes_end": 0,
         "own_read_bytes": 0,
-        "foreign_read_bytes": 1671168,
-        "uninspectable_processes": 336
+        "foreign_read_bytes": 811008,
+        "foreign_read_bytes_min": 811008,
+        "foreign_read_bytes_max": 811008,
+        "uninspectable_processes": 307
       },
       "readers": [
         {
-          "pid": 5684,
-          "name": "gnome-shell",
-          "read_bytes": 430080
-        },
-        {
-          "pid": 5870,
-          "name": "gsd-power",
-          "read_bytes": 380928
-        },
-        {
-          "pid": 5298,
+          "pid": 5641,
           "name": "pipewire-pulse",
           "read_bytes": 364544
         },
         {
-          "pid": 5296,
-          "name": "wireplumber",
-          "read_bytes": 139264
+          "pid": 6205,
+          "name": "gsd-power",
+          "read_bytes": 184320
         },
         {
-          "pid": 5277,
+          "pid": 12626,
+          "name": "claude",
+          "read_bytes": 131072
+        },
+        {
+          "pid": 5618,
           "name": "pipewire",
           "read_bytes": 122880
+        },
+        {
+          "pid": 6059,
+          "name": "gnome-shell",
+          "read_bytes": 8192
         }
       ],
-      "unattributed_bytes": 233472
+      "unattributed_bytes": 0
     }
   }
 }

@@ -3,6 +3,10 @@
   "round": 1,
   "run": 1,
   "label": "RTX 3050, real",
+  "gpu": {
+    "id": "0",
+    "source": "default"
+  },
   "required": [
     "suspend",
     "power",
@@ -10,12 +14,16 @@
   ],
   "outcome": "void",
   "box_stamp_before": {
-    "unix_s": 1791546014.0186374,
-    "ram_available_bytes": 10583588864,
+    "unix_s": 1791813831.5433345,
+    "ram_available_bytes": 10912645120,
+    "commit_charge": {
+      "used_bytes": 16202072064,
+      "limit_bytes": 12209106944
+    },
     "power_source": "mains",
     "gpu_processes": [
       {
-        "pid": 5684,
+        "pid": 6059,
         "type": "G",
         "name": "/usr/bin/gnome-shell",
         "used_mib": 1
@@ -25,12 +33,16 @@
     "unknown": {}
   },
   "box_stamp_after": {
-    "unix_s": 1791546167.9581735,
-    "ram_available_bytes": 10588950528,
+    "unix_s": 1791813980.7293456,
+    "ram_available_bytes": 10907127808,
+    "commit_charge": {
+      "used_bytes": 16319758336,
+      "limit_bytes": 12209106944
+    },
     "power_source": "mains",
     "gpu_processes": [
       {
-        "pid": 5684,
+        "pid": 6059,
         "type": "G",
         "name": "/usr/bin/gnome-shell",
         "used_mib": 1
@@ -56,12 +68,12 @@
   "checks": {
     "suspend": {
       "outcome": "void",
-      "reason": "boot-time offset grew 33.827 s (limit 1.0 s); suspend count rose from 1 to 2",
+      "reason": "boot-time offset grew 29.064 s (limit 1.0 s); suspend count rose from 0 to 1",
       "evidence": {
-        "sleep_offset_start_s": 24.648792039,
-        "sleep_offset_end_s": 58.47585684500018,
-        "suspend_count_start": 1,
-        "suspend_count_end": 2
+        "sleep_offset_start_s": -4.687000000558328e-06,
+        "sleep_offset_end_s": 29.064394985000035,
+        "suspend_count_start": 0,
+        "suspend_count_end": 1
       }
     },
     "power": {
@@ -84,99 +96,98 @@
     },
     "foreign_reads": {
       "outcome": "ok",
-      "reason": "10117120 bytes of foreign reads on nvme0n1 (limit 1000000000)",
+      "reason": "at most 38338560 bytes of foreign reads on nvme0n1 (limit 1000000000)",
       "evidence": {
         "model_path": "/home/m1kadoo/.cache/huggingface/hub",
         "device": "nvme0n1",
-        "disk_read_bytes_start": 8792051200,
-        "disk_read_bytes_end": 8802168320,
+        "disk_read_bytes_start": 6001020416,
+        "disk_read_bytes_end": 6039358976,
+        "other_disk_read_bytes_start": 0,
+        "other_disk_read_bytes_end": 0,
         "own_read_bytes": 0,
-        "foreign_read_bytes": 10117120,
-        "uninspectable_processes": 331
+        "foreign_read_bytes": 38338560,
+        "foreign_read_bytes_min": 38338560,
+        "foreign_read_bytes_max": 38338560,
+        "uninspectable_processes": 341
       },
       "readers": [
         {
-          "pid": 7561,
-          "name": "firefox",
-          "read_bytes": 741376
-        },
-        {
-          "pid": 9622,
-          "name": "code",
-          "read_bytes": 303104
-        },
-        {
-          "pid": 40511,
-          "name": "claude",
-          "read_bytes": 294912
-        },
-        {
-          "pid": 5684,
+          "pid": 6059,
           "name": "gnome-shell",
-          "read_bytes": 282624
+          "read_bytes": 3923968
         },
         {
-          "pid": 9128,
+          "pid": 12626,
+          "name": "claude",
+          "read_bytes": 1462272
+        },
+        {
+          "pid": 9912,
           "name": "code",
-          "read_bytes": 151552
+          "read_bytes": 737280
         },
         {
-          "pid": 5296,
-          "name": "wireplumber",
+          "pid": 8486,
+          "name": "firefox",
+          "read_bytes": 483328
+        },
+        {
+          "pid": 6443,
+          "name": "warp-taskbar",
           "read_bytes": 143360
         },
         {
-          "pid": 5886,
-          "name": "gsd-sharing",
-          "read_bytes": 143360
-        },
-        {
-          "pid": 6238,
-          "name": "dconf-service",
-          "read_bytes": 143360
-        },
-        {
-          "pid": 50323,
-          "name": "gjs",
+          "pid": 6647,
+          "name": "gvfsd-metadata",
           "read_bytes": 139264
         },
         {
-          "pid": 6104,
-          "name": "warp-taskbar",
-          "read_bytes": 135168
-        },
-        {
-          "pid": 6340,
-          "name": "gvfsd-metadata",
-          "read_bytes": 135168
-        },
-        {
-          "pid": 9080,
+          "pid": 10473,
           "name": "code",
-          "read_bytes": 114688
+          "read_bytes": 135168
         },
         {
-          "pid": 5276,
+          "pid": 9961,
+          "name": "code",
+          "read_bytes": 45056
+        },
+        {
+          "pid": 34429,
+          "name": "gjs",
+          "read_bytes": 45056
+        },
+        {
+          "pid": 5617,
           "name": "dbus-daemon",
           "read_bytes": 20480
         },
         {
-          "pid": 11844,
-          "name": "claude",
+          "pid": 6576,
+          "name": "dconf-service",
           "read_bytes": 8192
         },
         {
-          "pid": 5277,
+          "pid": 5618,
           "name": "pipewire",
           "read_bytes": 4096
         },
         {
-          "pid": 5662,
+          "pid": 5637,
+          "name": "wireplumber",
+          "read_bytes": 4096
+        },
+        {
+          "pid": 6038,
           "name": "gvfsd",
+          "read_bytes": 4096
+        },
+        {
+          "pid": 7380,
+          "name": "crashpad_handle",
           "read_bytes": 4096
         }
       ],
-      "unattributed_bytes": 7352320
+      "unattributed_bytes": 31178752
     }
   }
 }
