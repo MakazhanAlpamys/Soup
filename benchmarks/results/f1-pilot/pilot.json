@@ -1,14 +1,14 @@
 {
   "label": "RTX 3050, real",
   "settings": {
-    "config": "benchmarks/results/gate-836/bench.yaml",
+    "config": "bench.yaml",
     "steps": 12,
     "warmup": 4,
     "model_path": "/home/m1kadoo/.cache/huggingface/hub",
     "run_value": "timing.median_seconds of soup bench train"
   },
-  "sigma": 0.0002872412949519703,
-  "mean_a": 0.0692068349500019,
+  "sigma": 0.0005380069765795097,
+  "mean_a": 0.06884149749998869,
   "blocks_needed": 2,
   "blocks": [
     [
@@ -16,13 +16,17 @@
         "arm": "A",
         "round": 1,
         "run": 1,
-        "value": 0.06906080099999201,
+        "value": 0.06929255700015347,
         "outcome": "ok",
         "record": {
           "arm": "A",
           "round": 1,
           "run": 1,
           "label": "RTX 3050, real",
+          "gpu": {
+            "id": "0",
+            "source": "default"
+          },
           "required": [
             "suspend",
             "power",
@@ -30,12 +34,16 @@
           ],
           "outcome": "ok",
           "box_stamp_before": {
-            "unix_s": 1791542222.6426377,
-            "ram_available_bytes": 10913730560,
+            "unix_s": 1791814228.9604244,
+            "ram_available_bytes": 10878083072,
+            "commit_charge": {
+              "used_bytes": 16317943808,
+              "limit_bytes": 12209106944
+            },
             "power_source": "mains",
             "gpu_processes": [
               {
-                "pid": 5684,
+                "pid": 6059,
                 "type": "G",
                 "name": "/usr/bin/gnome-shell",
                 "used_mib": 1
@@ -45,12 +53,16 @@
             "unknown": {}
           },
           "box_stamp_after": {
-            "unix_s": 1791542236.1403763,
-            "ram_available_bytes": 10694361088,
+            "unix_s": 1791814245.1722538,
+            "ram_available_bytes": 10696110080,
+            "commit_charge": {
+              "used_bytes": 16341864448,
+              "limit_bytes": 12209106944
+            },
             "power_source": "mains",
             "gpu_processes": [
               {
-                "pid": 5684,
+                "pid": 6059,
                 "type": "G",
                 "name": "/usr/bin/gnome-shell",
                 "used_mib": 1
@@ -61,27 +73,151 @@
           },
           "gpu_clock": {
             "outcome": "ok",
-            "reason": "SM clock 210 to 1965 MHz over 8 samples; clock event reasons seen: gpu_idle",
-            "samples": 8,
+            "reason": "SM clock 210 to 1972 MHz over 9 samples; clock event reasons seen: gpu_idle",
+            "samples": 9,
             "unknown_samples": 0,
             "sm_clock_mhz": {
               "min": 210,
-              "median": 975.0,
-              "max": 1965
+              "median": 210,
+              "max": 1972
             },
             "reasons_seen": {
-              "gpu_idle": 4
+              "gpu_idle": 5
             }
           },
           "checks": {
             "suspend": {
               "outcome": "ok",
-              "reason": "boot-time offset grew -0.000 s (limit 1.0 s); suspend count stayed at 0",
+              "reason": "boot-time offset grew 0.000 s (limit 1.0 s); suspend count stayed at 1",
               "evidence": {
-                "sleep_offset_start_s": -4.4099999740865314e-07,
-                "sleep_offset_end_s": -6.910000251991733e-07,
-                "suspend_count_start": 0,
-                "suspend_count_end": 0
+                "sleep_offset_start_s": 29.064394709000226,
+                "sleep_offset_end_s": 29.064394917999834,
+                "suspend_count_start": 1,
+                "suspend_count_end": 1
+              }
+            },
+            "power": {
+              "outcome": "ok",
+              "reason": "on mains in all 10 power samples",
+              "evidence": {
+                "samples": 10,
+                "off_mains_samples": [],
+                "battery_present": true,
+                "unknown_samples": 0,
+                "last_reading": {
+                  "battery": true,
+                  "online": {
+                    "ACAD": true,
+                    "ucsi-source-psy-USBC000:001": false,
+                    "ucsi-source-psy-USBC000:002": false
+                  }
+                }
+              }
+            },
+            "foreign_reads": {
+              "outcome": "ok",
+              "reason": "at most 4096 bytes of foreign reads on nvme0n1 (limit 1000000000)",
+              "evidence": {
+                "model_path": "/home/m1kadoo/.cache/huggingface/hub",
+                "device": "nvme0n1",
+                "disk_read_bytes_start": 6055484928,
+                "disk_read_bytes_end": 7216987648,
+                "other_disk_read_bytes_start": 0,
+                "other_disk_read_bytes_end": 0,
+                "own_read_bytes": 1161498624,
+                "foreign_read_bytes": 4096,
+                "foreign_read_bytes_min": 4096,
+                "foreign_read_bytes_max": 4096,
+                "uninspectable_processes": 283
+              },
+              "readers": [],
+              "unattributed_bytes": 4096
+            }
+          }
+        }
+      },
+      {
+        "arm": "B",
+        "round": 1,
+        "run": 2,
+        "value": 0.06828811599984874,
+        "outcome": "ok",
+        "record": {
+          "arm": "B",
+          "round": 1,
+          "run": 2,
+          "label": "RTX 3050, real",
+          "gpu": {
+            "id": "0",
+            "source": "default"
+          },
+          "required": [
+            "suspend",
+            "power",
+            "foreign_reads"
+          ],
+          "outcome": "ok",
+          "box_stamp_before": {
+            "unix_s": 1791814245.2098541,
+            "ram_available_bytes": 10686320640,
+            "commit_charge": {
+              "used_bytes": 16341880832,
+              "limit_bytes": 12209106944
+            },
+            "power_source": "mains",
+            "gpu_processes": [
+              {
+                "pid": 6059,
+                "type": "G",
+                "name": "/usr/bin/gnome-shell",
+                "used_mib": 1
+              }
+            ],
+            "gpu_memory_used_mib": 12,
+            "unknown": {}
+          },
+          "box_stamp_after": {
+            "unix_s": 1791814258.0474591,
+            "ram_available_bytes": 10744934400,
+            "commit_charge": {
+              "used_bytes": 16341270528,
+              "limit_bytes": 12209106944
+            },
+            "power_source": "mains",
+            "gpu_processes": [
+              {
+                "pid": 6059,
+                "type": "G",
+                "name": "/usr/bin/gnome-shell",
+                "used_mib": 1
+              }
+            ],
+            "gpu_memory_used_mib": 12,
+            "unknown": {}
+          },
+          "gpu_clock": {
+            "outcome": "ok",
+            "reason": "SM clock 255 to 1957 MHz over 8 samples; clock event reasons seen: gpu_idle",
+            "samples": 8,
+            "unknown_samples": 0,
+            "sm_clock_mhz": {
+              "min": 255,
+              "median": 1740.0,
+              "max": 1957
+            },
+            "reasons_seen": {
+              "gpu_idle": 2
+            }
+          },
+          "checks": {
+            "suspend": {
+              "outcome": "ok",
+              "reason": "boot-time offset grew -0.000 s (limit 1.0 s); suspend count stayed at 1",
+              "evidence": {
+                "sleep_offset_start_s": 29.06439515000011,
+                "sleep_offset_end_s": 29.064395146999686,
+                "suspend_count_start": 1,
+                "suspend_count_end": 1
               }
             },
             "power": {
@@ -104,150 +240,25 @@
             },
             "foreign_reads": {
               "outcome": "ok",
-              "reason": "884736 bytes of foreign reads on nvme0n1 (limit 1000000000)",
+              "reason": "at most 139264 bytes of foreign reads on nvme0n1 (limit 1000000000)",
               "evidence": {
                 "model_path": "/home/m1kadoo/.cache/huggingface/hub",
                 "device": "nvme0n1",
-                "disk_read_bytes_start": 2973797888,
-                "disk_read_bytes_end": 4138839552,
-                "own_read_bytes": 1164156928,
-                "foreign_read_bytes": 884736,
-                "uninspectable_processes": 317
-              },
-              "readers": [
-                {
-                  "pid": 11844,
-                  "name": "claude",
-                  "read_bytes": 356352
-                },
-                {
-                  "pid": 7561,
-                  "name": "firefox",
-                  "read_bytes": 154624
-                },
-                {
-                  "pid": 8524,
-                  "name": "Isolated Web Co",
-                  "read_bytes": 82944
-                },
-                {
-                  "pid": 8492,
-                  "name": "Isolated Servic",
-                  "read_bytes": 16384
-                }
-              ],
-              "unattributed_bytes": 274432
-            }
-          }
-        }
-      },
-      {
-        "arm": "B",
-        "round": 1,
-        "run": 2,
-        "value": 0.06957566599999154,
-        "outcome": "ok",
-        "record": {
-          "arm": "B",
-          "round": 1,
-          "run": 2,
-          "label": "RTX 3050, real",
-          "required": [
-            "suspend",
-            "power",
-            "foreign_reads"
-          ],
-          "outcome": "ok",
-          "box_stamp_before": {
-            "unix_s": 1791542236.1806884,
-            "ram_available_bytes": 10709782528,
-            "power_source": "mains",
-            "gpu_processes": [
-              {
-                "pid": 5684,
-                "type": "G",
-                "name": "/usr/bin/gnome-shell",
-                "used_mib": 1
-              }
-            ],
-            "gpu_memory_used_mib": 12,
-            "unknown": {}
-          },
-          "box_stamp_after": {
-            "unix_s": 1791542247.2433376,
-            "ram_available_bytes": 10737340416,
-            "power_source": "mains",
-            "gpu_processes": [
-              {
-                "pid": 5684,
-                "type": "G",
-                "name": "/usr/bin/gnome-shell",
-                "used_mib": 1
-              }
-            ],
-            "gpu_memory_used_mib": 12,
-            "unknown": {}
-          },
-          "gpu_clock": {
-            "outcome": "ok",
-            "reason": "SM clock 270 to 1965 MHz over 7 samples; clock event reasons seen: gpu_idle",
-            "samples": 7,
-            "unknown_samples": 0,
-            "sm_clock_mhz": {
-              "min": 270,
-              "median": 1740,
-              "max": 1965
-            },
-            "reasons_seen": {
-              "gpu_idle": 2
-            }
-          },
-          "checks": {
-            "suspend": {
-              "outcome": "ok",
-              "reason": "boot-time offset grew -0.000 s (limit 1.0 s); suspend count stayed at 0",
-              "evidence": {
-                "sleep_offset_start_s": -1.740000072913972e-07,
-                "sleep_offset_end_s": -2.069999993636884e-07,
-                "suspend_count_start": 0,
-                "suspend_count_end": 0
-              }
-            },
-            "power": {
-              "outcome": "ok",
-              "reason": "on mains in all 7 power samples",
-              "evidence": {
-                "samples": 7,
-                "off_mains_samples": [],
-                "battery_present": true,
-                "unknown_samples": 0,
-                "last_reading": {
-                  "battery": true,
-                  "online": {
-                    "ACAD": true,
-                    "ucsi-source-psy-USBC000:001": false,
-                    "ucsi-source-psy-USBC000:002": false
-                  }
-                }
-              }
-            },
-            "foreign_reads": {
-              "outcome": "ok",
-              "reason": "28672 bytes of foreign reads on nvme0n1 (limit 1000000000)",
-              "evidence": {
-                "model_path": "/home/m1kadoo/.cache/huggingface/hub",
-                "device": "nvme0n1",
-                "disk_read_bytes_start": 4138864128,
-                "disk_read_bytes_end": 4138892800,
+                "disk_read_bytes_start": 7216987648,
+                "disk_read_bytes_end": 7217126912,
+                "other_disk_read_bytes_start": 0,
+                "other_disk_read_bytes_end": 0,
                 "own_read_bytes": 0,
-                "foreign_read_bytes": 28672,
-                "uninspectable_processes": 317
+                "foreign_read_bytes": 139264,
+                "foreign_read_bytes_min": 139264,
+                "foreign_read_bytes_max": 139264,
+                "uninspectable_processes": 283
               },
               "readers": [
                 {
-                  "pid": 8492,
-                  "name": "Isolated Servic",
-                  "read_bytes": 24576
+                  "pid": 8486,
+                  "name": "firefox",
+                  "read_bytes": 135168
                 }
               ],
               "unattributed_bytes": 4096
@@ -259,13 +270,17 @@
         "arm": "B",
         "round": 2,
         "run": 3,
-        "value": 0.06906596049999791,
+        "value": 0.06857741800013173,
         "outcome": "ok",
         "record": {
           "arm": "B",
           "round": 2,
           "run": 3,
           "label": "RTX 3050, real",
+          "gpu": {
+            "id": "0",
+            "source": "default"
+          },
           "required": [
             "suspend",
             "power",
@@ -273,12 +288,16 @@
           ],
           "outcome": "ok",
           "box_stamp_before": {
-            "unix_s": 1791542247.2791953,
-            "ram_available_bytes": 10738241536,
+            "unix_s": 1791814258.0822246,
+            "ram_available_bytes": 10728484864,
+            "commit_charge": {
+              "used_bytes": 16341286912,
+              "limit_bytes": 12209106944
+            },
             "power_source": "mains",
             "gpu_processes": [
               {
-                "pid": 5684,
+                "pid": 6059,
                 "type": "G",
                 "name": "/usr/bin/gnome-shell",
                 "used_mib": 1
@@ -288,12 +307,16 @@
             "unknown": {}
           },
           "box_stamp_after": {
-            "unix_s": 1791542258.2991273,
-            "ram_available_bytes": 10760232960,
+            "unix_s": 1791814270.6272721,
+            "ram_available_bytes": 10655281152,
+            "commit_charge": {
+              "used_bytes": 16331587584,
+              "limit_bytes": 12209106944
+            },
             "power_source": "mains",
             "gpu_processes": [
               {
-                "pid": 5684,
+                "pid": 6059,
                 "type": "G",
                 "name": "/usr/bin/gnome-shell",
                 "used_mib": 1
@@ -304,136 +327,12 @@
           },
           "gpu_clock": {
             "outcome": "ok",
-            "reason": "SM clock 247 to 1965 MHz over 7 samples; clock event reasons seen: gpu_idle",
-            "samples": 7,
+            "reason": "SM clock 270 to 1957 MHz over 8 samples; clock event reasons seen: gpu_idle",
+            "samples": 8,
             "unknown_samples": 0,
             "sm_clock_mhz": {
-              "min": 247,
-              "median": 1740,
-              "max": 1965
-            },
-            "reasons_seen": {
-              "gpu_idle": 2
-            }
-          },
-          "checks": {
-            "suspend": {
-              "outcome": "ok",
-              "reason": "boot-time offset grew 0.000 s (limit 1.0 s); suspend count stayed at 0",
-              "evidence": {
-                "sleep_offset_start_s": -2.1500000002561137e-07,
-                "sleep_offset_end_s": -2.0400000266818097e-07,
-                "suspend_count_start": 0,
-                "suspend_count_end": 0
-              }
-            },
-            "power": {
-              "outcome": "ok",
-              "reason": "on mains in all 7 power samples",
-              "evidence": {
-                "samples": 7,
-                "off_mains_samples": [],
-                "battery_present": true,
-                "unknown_samples": 0,
-                "last_reading": {
-                  "battery": true,
-                  "online": {
-                    "ACAD": true,
-                    "ucsi-source-psy-USBC000:001": false,
-                    "ucsi-source-psy-USBC000:002": false
-                  }
-                }
-              }
-            },
-            "foreign_reads": {
-              "outcome": "ok",
-              "reason": "372736 bytes of foreign reads on nvme0n1 (limit 1000000000)",
-              "evidence": {
-                "model_path": "/home/m1kadoo/.cache/huggingface/hub",
-                "device": "nvme0n1",
-                "disk_read_bytes_start": 4138892800,
-                "disk_read_bytes_end": 4139265536,
-                "own_read_bytes": 0,
-                "foreign_read_bytes": 372736,
-                "uninspectable_processes": 317
-              },
-              "readers": [
-                {
-                  "pid": 7561,
-                  "name": "firefox",
-                  "read_bytes": 28672
-                },
-                {
-                  "pid": 6340,
-                  "name": "gvfsd-metadata",
-                  "read_bytes": 4096
-                },
-                {
-                  "pid": 11844,
-                  "name": "claude",
-                  "read_bytes": 4096
-                }
-              ],
-              "unattributed_bytes": 335872
-            }
-          }
-        }
-      },
-      {
-        "arm": "A",
-        "round": 2,
-        "run": 4,
-        "value": 0.0693818440000058,
-        "outcome": "ok",
-        "record": {
-          "arm": "A",
-          "round": 2,
-          "run": 4,
-          "label": "RTX 3050, real",
-          "required": [
-            "suspend",
-            "power",
-            "foreign_reads"
-          ],
-          "outcome": "ok",
-          "box_stamp_before": {
-            "unix_s": 1791542258.332752,
-            "ram_available_bytes": 10770358272,
-            "power_source": "mains",
-            "gpu_processes": [
-              {
-                "pid": 5684,
-                "type": "G",
-                "name": "/usr/bin/gnome-shell",
-                "used_mib": 1
-              }
-            ],
-            "gpu_memory_used_mib": 12,
-            "unknown": {}
-          },
-          "box_stamp_after": {
-            "unix_s": 1791542269.5904582,
-            "ram_available_bytes": 10761576448,
-            "power_source": "mains",
-            "gpu_processes": [
-              {
-                "pid": 5684,
-                "type": "G",
-                "name": "/usr/bin/gnome-shell",
-                "used_mib": 1
-              }
-            ],
-            "gpu_memory_used_mib": 12,
-            "unknown": {}
-          },
-          "gpu_clock": {
-            "outcome": "ok",
-            "reason": "SM clock 255 to 1957 MHz over 7 samples; clock event reasons seen: gpu_idle",
-            "samples": 7,
-            "unknown_samples": 0,
-            "sm_clock_mhz": {
-              "min": 255,
-              "median": 1740,
+              "min": 270,
+              "median": 1740.0,
               "max": 1957
             },
             "reasons_seen": {
@@ -443,19 +342,19 @@
           "checks": {
             "suspend": {
               "outcome": "ok",
-              "reason": "boot-time offset grew -0.000 s (limit 1.0 s); suspend count stayed at 0",
+              "reason": "boot-time offset grew -0.000 s (limit 1.0 s); suspend count stayed at 1",
               "evidence": {
-                "sleep_offset_start_s": -1.7299998944508843e-07,
-                "sleep_offset_end_s": -4.339999861713295e-07,
-                "suspend_count_start": 0,
-                "suspend_count_end": 0
+                "sleep_offset_start_s": 29.06439516399996,
+                "sleep_offset_end_s": 29.064395060999686,
+                "suspend_count_start": 1,
+                "suspend_count_end": 1
               }
             },
             "power": {
               "outcome": "ok",
-              "reason": "on mains in all 7 power samples",
+              "reason": "on mains in all 8 power samples",
               "evidence": {
-                "samples": 7,
+                "samples": 8,
                 "off_mains_samples": [],
                 "battery_present": true,
                 "unknown_samples": 0,
@@ -471,23 +370,145 @@
             },
             "foreign_reads": {
               "outcome": "ok",
-              "reason": "4096 bytes of foreign reads on nvme0n1 (limit 1000000000)",
+              "reason": "at most 0 bytes of foreign reads on nvme0n1 (limit 1000000000)",
               "evidence": {
                 "model_path": "/home/m1kadoo/.cache/huggingface/hub",
                 "device": "nvme0n1",
-                "disk_read_bytes_start": 4139265536,
-                "disk_read_bytes_end": 4139269632,
+                "disk_read_bytes_start": 7217126912,
+                "disk_read_bytes_end": 7217126912,
+                "other_disk_read_bytes_start": 0,
+                "other_disk_read_bytes_end": 0,
                 "own_read_bytes": 0,
-                "foreign_read_bytes": 4096,
-                "uninspectable_processes": 317
+                "foreign_read_bytes": 0,
+                "foreign_read_bytes_min": 0,
+                "foreign_read_bytes_max": 0,
+                "uninspectable_processes": 283
               },
-              "readers": [
-                {
-                  "pid": 9080,
-                  "name": "code",
-                  "read_bytes": 4096
+              "readers": [],
+              "unattributed_bytes": 0
+            }
+          }
+        }
+      },
+      {
+        "arm": "A",
+        "round": 2,
+        "run": 4,
+        "value": 0.06815600200002336,
+        "outcome": "ok",
+        "record": {
+          "arm": "A",
+          "round": 2,
+          "run": 4,
+          "label": "RTX 3050, real",
+          "gpu": {
+            "id": "0",
+            "source": "default"
+          },
+          "required": [
+            "suspend",
+            "power",
+            "foreign_reads"
+          ],
+          "outcome": "ok",
+          "box_stamp_before": {
+            "unix_s": 1791814270.6621668,
+            "ram_available_bytes": 10644189184,
+            "commit_charge": {
+              "used_bytes": 16331603968,
+              "limit_bytes": 12209106944
+            },
+            "power_source": "mains",
+            "gpu_processes": [
+              {
+                "pid": 6059,
+                "type": "G",
+                "name": "/usr/bin/gnome-shell",
+                "used_mib": 1
+              }
+            ],
+            "gpu_memory_used_mib": 12,
+            "unknown": {}
+          },
+          "box_stamp_after": {
+            "unix_s": 1791814285.252797,
+            "ram_available_bytes": 10741407744,
+            "commit_charge": {
+              "used_bytes": 16328810496,
+              "limit_bytes": 12209106944
+            },
+            "power_source": "mains",
+            "gpu_processes": [
+              {
+                "pid": 6059,
+                "type": "G",
+                "name": "/usr/bin/gnome-shell",
+                "used_mib": 1
+              }
+            ],
+            "gpu_memory_used_mib": 12,
+            "unknown": {}
+          },
+          "gpu_clock": {
+            "outcome": "ok",
+            "reason": "SM clock 247 to 1957 MHz over 9 samples; clock event reasons seen: gpu_idle",
+            "samples": 9,
+            "unknown_samples": 0,
+            "sm_clock_mhz": {
+              "min": 247,
+              "median": 1740,
+              "max": 1957
+            },
+            "reasons_seen": {
+              "gpu_idle": 3
+            }
+          },
+          "checks": {
+            "suspend": {
+              "outcome": "ok",
+              "reason": "boot-time offset grew 0.000 s (limit 1.0 s); suspend count stayed at 1",
+              "evidence": {
+                "sleep_offset_start_s": 29.064395129999866,
+                "sleep_offset_end_s": 29.064395154000067,
+                "suspend_count_start": 1,
+                "suspend_count_end": 1
+              }
+            },
+            "power": {
+              "outcome": "ok",
+              "reason": "on mains in all 9 power samples",
+              "evidence": {
+                "samples": 9,
+                "off_mains_samples": [],
+                "battery_present": true,
+                "unknown_samples": 0,
+                "last_reading": {
+                  "battery": true,
+                  "online": {
+                    "ACAD": true,
+                    "ucsi-source-psy-USBC000:001": false,
+                    "ucsi-source-psy-USBC000:002": false
+                  }
                 }
-              ],
+              }
+            },
+            "foreign_reads": {
+              "outcome": "ok",
+              "reason": "at most 0 bytes of foreign reads on nvme0n1 (limit 1000000000)",
+              "evidence": {
+                "model_path": "/home/m1kadoo/.cache/huggingface/hub",
+                "device": "nvme0n1",
+                "disk_read_bytes_start": 7217126912,
+                "disk_read_bytes_end": 7217126912,
+                "other_disk_read_bytes_start": 0,
+                "other_disk_read_bytes_end": 0,
+                "own_read_bytes": 0,
+                "foreign_read_bytes": 0,
+                "foreign_read_bytes_min": 0,
+                "foreign_read_bytes_max": 0,
+                "uninspectable_processes": 283
+              },
+              "readers": [],
               "unattributed_bytes": 0
             }
           }
@@ -499,13 +520,17 @@
         "arm": "A",
         "round": 3,
         "run": 5,
-        "value": 0.06895250549999332,
+        "value": 0.06933730349987854,
         "outcome": "ok",
         "record": {
           "arm": "A",
           "round": 3,
           "run": 5,
           "label": "RTX 3050, real",
+          "gpu": {
+            "id": "0",
+            "source": "default"
+          },
           "required": [
             "suspend",
             "power",
@@ -513,12 +538,16 @@
           ],
           "outcome": "ok",
           "box_stamp_before": {
-            "unix_s": 1791542269.6265798,
-            "ram_available_bytes": 10739994624,
+            "unix_s": 1791814285.2865481,
+            "ram_available_bytes": 10740817920,
+            "commit_charge": {
+              "used_bytes": 16328826880,
+              "limit_bytes": 12209106944
+            },
             "power_source": "mains",
             "gpu_processes": [
               {
-                "pid": 5684,
+                "pid": 6059,
                 "type": "G",
                 "name": "/usr/bin/gnome-shell",
                 "used_mib": 1
@@ -528,12 +557,16 @@
             "unknown": {}
           },
           "box_stamp_after": {
-            "unix_s": 1791542280.961535,
-            "ram_available_bytes": 10743246848,
+            "unix_s": 1791814298.6052244,
+            "ram_available_bytes": 10651738112,
+            "commit_charge": {
+              "used_bytes": 16315162624,
+              "limit_bytes": 12209106944
+            },
             "power_source": "mains",
             "gpu_processes": [
               {
-                "pid": 5684,
+                "pid": 6059,
                 "type": "G",
                 "name": "/usr/bin/gnome-shell",
                 "used_mib": 1
@@ -544,120 +577,12 @@
           },
           "gpu_clock": {
             "outcome": "ok",
-            "reason": "SM clock 315 to 1957 MHz over 7 samples; clock event reasons seen: gpu_idle",
-            "samples": 7,
+            "reason": "SM clock 270 to 1957 MHz over 8 samples; clock event reasons seen: gpu_idle",
+            "samples": 8,
             "unknown_samples": 0,
             "sm_clock_mhz": {
-              "min": 315,
-              "median": 1740,
-              "max": 1957
-            },
-            "reasons_seen": {
-              "gpu_idle": 1
-            }
-          },
-          "checks": {
-            "suspend": {
-              "outcome": "ok",
-              "reason": "boot-time offset grew -0.000 s (limit 1.0 s); suspend count stayed at 0",
-              "evidence": {
-                "sleep_offset_start_s": -2.0100000597267353e-07,
-                "sleep_offset_end_s": -3.7199998814685387e-07,
-                "suspend_count_start": 0,
-                "suspend_count_end": 0
-              }
-            },
-            "power": {
-              "outcome": "ok",
-              "reason": "on mains in all 7 power samples",
-              "evidence": {
-                "samples": 7,
-                "off_mains_samples": [],
-                "battery_present": true,
-                "unknown_samples": 0,
-                "last_reading": {
-                  "battery": true,
-                  "online": {
-                    "ACAD": true,
-                    "ucsi-source-psy-USBC000:001": false,
-                    "ucsi-source-psy-USBC000:002": false
-                  }
-                }
-              }
-            },
-            "foreign_reads": {
-              "outcome": "ok",
-              "reason": "49152 bytes of foreign reads on nvme0n1 (limit 1000000000)",
-              "evidence": {
-                "model_path": "/home/m1kadoo/.cache/huggingface/hub",
-                "device": "nvme0n1",
-                "disk_read_bytes_start": 4139269632,
-                "disk_read_bytes_end": 4139318784,
-                "own_read_bytes": 0,
-                "foreign_read_bytes": 49152,
-                "uninspectable_processes": 317
-              },
-              "readers": [],
-              "unattributed_bytes": 49152
-            }
-          }
-        }
-      },
-      {
-        "arm": "B",
-        "round": 3,
-        "run": 6,
-        "value": 0.06924011550000841,
-        "outcome": "ok",
-        "record": {
-          "arm": "B",
-          "round": 3,
-          "run": 6,
-          "label": "RTX 3050, real",
-          "required": [
-            "suspend",
-            "power",
-            "foreign_reads"
-          ],
-          "outcome": "ok",
-          "box_stamp_before": {
-            "unix_s": 1791542280.998344,
-            "ram_available_bytes": 10736197632,
-            "power_source": "mains",
-            "gpu_processes": [
-              {
-                "pid": 5684,
-                "type": "G",
-                "name": "/usr/bin/gnome-shell",
-                "used_mib": 1
-              }
-            ],
-            "gpu_memory_used_mib": 12,
-            "unknown": {}
-          },
-          "box_stamp_after": {
-            "unix_s": 1791542292.2928364,
-            "ram_available_bytes": 10778591232,
-            "power_source": "mains",
-            "gpu_processes": [
-              {
-                "pid": 5684,
-                "type": "G",
-                "name": "/usr/bin/gnome-shell",
-                "used_mib": 1
-              }
-            ],
-            "gpu_memory_used_mib": 12,
-            "unknown": {}
-          },
-          "gpu_clock": {
-            "outcome": "ok",
-            "reason": "SM clock 255 to 1957 MHz over 7 samples; clock event reasons seen: gpu_idle",
-            "samples": 7,
-            "unknown_samples": 0,
-            "sm_clock_mhz": {
-              "min": 255,
-              "median": 1740,
+              "min": 270,
+              "median": 1740.0,
               "max": 1957
             },
             "reasons_seen": {
@@ -667,19 +592,19 @@
           "checks": {
             "suspend": {
               "outcome": "ok",
-              "reason": "boot-time offset grew -0.000 s (limit 1.0 s); suspend count stayed at 0",
+              "reason": "boot-time offset grew -0.000 s (limit 1.0 s); suspend count stayed at 1",
               "evidence": {
-                "sleep_offset_start_s": -2.0199999539727287e-07,
-                "sleep_offset_end_s": -3.6699998418043833e-07,
-                "suspend_count_start": 0,
-                "suspend_count_end": 0
+                "sleep_offset_start_s": 29.064395158000025,
+                "sleep_offset_end_s": 29.06439510500013,
+                "suspend_count_start": 1,
+                "suspend_count_end": 1
               }
             },
             "power": {
               "outcome": "ok",
-              "reason": "on mains in all 7 power samples",
+              "reason": "on mains in all 8 power samples",
               "evidence": {
-                "samples": 7,
+                "samples": 8,
                 "off_mains_samples": [],
                 "battery_present": true,
                 "unknown_samples": 0,
@@ -695,15 +620,143 @@
             },
             "foreign_reads": {
               "outcome": "ok",
-              "reason": "0 bytes of foreign reads on nvme0n1 (limit 1000000000)",
+              "reason": "at most 0 bytes of foreign reads on nvme0n1 (limit 1000000000)",
               "evidence": {
                 "model_path": "/home/m1kadoo/.cache/huggingface/hub",
                 "device": "nvme0n1",
-                "disk_read_bytes_start": 4139318784,
-                "disk_read_bytes_end": 4139318784,
+                "disk_read_bytes_start": 7217126912,
+                "disk_read_bytes_end": 7217126912,
+                "other_disk_read_bytes_start": 0,
+                "other_disk_read_bytes_end": 0,
                 "own_read_bytes": 0,
                 "foreign_read_bytes": 0,
-                "uninspectable_processes": 317
+                "foreign_read_bytes_min": 0,
+                "foreign_read_bytes_max": 0,
+                "uninspectable_processes": 283
+              },
+              "readers": [],
+              "unattributed_bytes": 0
+            }
+          }
+        }
+      },
+      {
+        "arm": "B",
+        "round": 3,
+        "run": 6,
+        "value": 0.06864821549993394,
+        "outcome": "ok",
+        "record": {
+          "arm": "B",
+          "round": 3,
+          "run": 6,
+          "label": "RTX 3050, real",
+          "gpu": {
+            "id": "0",
+            "source": "default"
+          },
+          "required": [
+            "suspend",
+            "power",
+            "foreign_reads"
+          ],
+          "outcome": "ok",
+          "box_stamp_before": {
+            "unix_s": 1791814298.6467445,
+            "ram_available_bytes": 10647523328,
+            "commit_charge": {
+              "used_bytes": 16315179008,
+              "limit_bytes": 12209106944
+            },
+            "power_source": "mains",
+            "gpu_processes": [
+              {
+                "pid": 6059,
+                "type": "G",
+                "name": "/usr/bin/gnome-shell",
+                "used_mib": 1
+              }
+            ],
+            "gpu_memory_used_mib": 12,
+            "unknown": {}
+          },
+          "box_stamp_after": {
+            "unix_s": 1791814311.814218,
+            "ram_available_bytes": 10723545088,
+            "commit_charge": {
+              "used_bytes": 16312344576,
+              "limit_bytes": 12209106944
+            },
+            "power_source": "mains",
+            "gpu_processes": [
+              {
+                "pid": 6059,
+                "type": "G",
+                "name": "/usr/bin/gnome-shell",
+                "used_mib": 1
+              }
+            ],
+            "gpu_memory_used_mib": 12,
+            "unknown": {}
+          },
+          "gpu_clock": {
+            "outcome": "ok",
+            "reason": "SM clock 247 to 1957 MHz over 8 samples; clock event reasons seen: gpu_idle",
+            "samples": 8,
+            "unknown_samples": 0,
+            "sm_clock_mhz": {
+              "min": 247,
+              "median": 1740.0,
+              "max": 1957
+            },
+            "reasons_seen": {
+              "gpu_idle": 3
+            }
+          },
+          "checks": {
+            "suspend": {
+              "outcome": "ok",
+              "reason": "boot-time offset grew 0.000 s (limit 1.0 s); suspend count stayed at 1",
+              "evidence": {
+                "sleep_offset_start_s": 29.0643950650001,
+                "sleep_offset_end_s": 29.064395097000215,
+                "suspend_count_start": 1,
+                "suspend_count_end": 1
+              }
+            },
+            "power": {
+              "outcome": "ok",
+              "reason": "on mains in all 8 power samples",
+              "evidence": {
+                "samples": 8,
+                "off_mains_samples": [],
+                "battery_present": true,
+                "unknown_samples": 0,
+                "last_reading": {
+                  "battery": true,
+                  "online": {
+                    "ACAD": true,
+                    "ucsi-source-psy-USBC000:001": false,
+                    "ucsi-source-psy-USBC000:002": false
+                  }
+                }
+              }
+            },
+            "foreign_reads": {
+              "outcome": "ok",
+              "reason": "at most 0 bytes of foreign reads on nvme0n1 (limit 1000000000)",
+              "evidence": {
+                "model_path": "/home/m1kadoo/.cache/huggingface/hub",
+                "device": "nvme0n1",
+                "disk_read_bytes_start": 7217126912,
+                "disk_read_bytes_end": 7217126912,
+                "other_disk_read_bytes_start": 0,
+                "other_disk_read_bytes_end": 0,
+                "own_read_bytes": 0,
+                "foreign_read_bytes": 0,
+                "foreign_read_bytes_min": 0,
+                "foreign_read_bytes_max": 0,
+                "uninspectable_processes": 283
               },
               "readers": [],
               "unattributed_bytes": 0
@@ -715,13 +768,17 @@
         "arm": "B",
         "round": 4,
         "run": 7,
-        "value": 0.06921020800000122,
+        "value": 0.06857633300000998,
         "outcome": "ok",
         "record": {
           "arm": "B",
           "round": 4,
           "run": 7,
           "label": "RTX 3050, real",
+          "gpu": {
+            "id": "0",
+            "source": "default"
+          },
           "required": [
             "suspend",
             "power",
@@ -729,12 +786,16 @@
           ],
           "outcome": "ok",
           "box_stamp_before": {
-            "unix_s": 1791542292.3322334,
-            "ram_available_bytes": 10780000256,
+            "unix_s": 1791814311.8542957,
+            "ram_available_bytes": 10729189376,
+            "commit_charge": {
+              "used_bytes": 16312360960,
+              "limit_bytes": 12209106944
+            },
             "power_source": "mains",
             "gpu_processes": [
               {
-                "pid": 5684,
+                "pid": 6059,
                 "type": "G",
                 "name": "/usr/bin/gnome-shell",
                 "used_mib": 1
@@ -744,12 +805,16 @@
             "unknown": {}
           },
           "box_stamp_after": {
-            "unix_s": 1791542303.7221324,
-            "ram_available_bytes": 10786557952,
+            "unix_s": 1791814324.974233,
+            "ram_available_bytes": 10702303232,
+            "commit_charge": {
+              "used_bytes": 16313962496,
+              "limit_bytes": 12209106944
+            },
             "power_source": "mains",
             "gpu_processes": [
               {
-                "pid": 5684,
+                "pid": 6059,
                 "type": "G",
                 "name": "/usr/bin/gnome-shell",
                 "used_mib": 1
@@ -760,12 +825,12 @@
           },
           "gpu_clock": {
             "outcome": "ok",
-            "reason": "SM clock 247 to 1957 MHz over 7 samples; clock event reasons seen: gpu_idle",
-            "samples": 7,
+            "reason": "SM clock 240 to 1957 MHz over 8 samples; clock event reasons seen: gpu_idle",
+            "samples": 8,
             "unknown_samples": 0,
             "sm_clock_mhz": {
-              "min": 247,
-              "median": 1740,
+              "min": 240,
+              "median": 1740.0,
               "max": 1957
             },
             "reasons_seen": {
@@ -775,19 +840,19 @@
           "checks": {
             "suspend": {
               "outcome": "ok",
-              "reason": "boot-time offset grew -0.000 s (limit 1.0 s); suspend count stayed at 0",
+              "reason": "boot-time offset grew -0.000 s (limit 1.0 s); suspend count stayed at 1",
               "evidence": {
-                "sleep_offset_start_s": -2.289999940785492e-07,
-                "sleep_offset_end_s": -2.7799998747468635e-07,
-                "suspend_count_start": 0,
-                "suspend_count_end": 0
+                "sleep_offset_start_s": 29.06439510700011,
+                "sleep_offset_end_s": 29.064394852000078,
+                "suspend_count_start": 1,
+                "suspend_count_end": 1
               }
             },
             "power": {
               "outcome": "ok",
-              "reason": "on mains in all 7 power samples",
+              "reason": "on mains in all 8 power samples",
               "evidence": {
-                "samples": 7,
+                "samples": 8,
                 "off_mains_samples": [],
                 "battery_present": true,
                 "unknown_samples": 0,
@@ -803,29 +868,28 @@
             },
             "foreign_reads": {
               "outcome": "ok",
-              "reason": "888832 bytes of foreign reads on nvme0n1 (limit 1000000000)",
+              "reason": "at most 262144 bytes of foreign reads on nvme0n1 (limit 1000000000)",
               "evidence": {
                 "model_path": "/home/m1kadoo/.cache/huggingface/hub",
                 "device": "nvme0n1",
-                "disk_read_bytes_start": 4139318784,
-                "disk_read_bytes_end": 4140207616,
+                "disk_read_bytes_start": 7217126912,
+                "disk_read_bytes_end": 7217389056,
+                "other_disk_read_bytes_start": 0,
+                "other_disk_read_bytes_end": 0,
                 "own_read_bytes": 0,
-                "foreign_read_bytes": 888832,
-                "uninspectable_processes": 317
+                "foreign_read_bytes": 262144,
+                "foreign_read_bytes_min": 262144,
+                "foreign_read_bytes_max": 262144,
+                "uninspectable_processes": 282
               },
               "readers": [
                 {
-                  "pid": 7561,
+                  "pid": 8486,
                   "name": "firefox",
-                  "read_bytes": 585728
-                },
-                {
-                  "pid": 8524,
-                  "name": "Isolated Web Co",
-                  "read_bytes": 36864
+                  "read_bytes": 131072
                 }
               ],
-              "unattributed_bytes": 266240
+              "unattributed_bytes": 131072
             }
           }
         }
@@ -834,13 +898,17 @@
         "arm": "A",
         "round": 4,
         "run": 8,
-        "value": 0.06975517199998649,
+        "value": 0.06820394500005023,
         "outcome": "ok",
         "record": {
           "arm": "A",
           "round": 4,
           "run": 8,
           "label": "RTX 3050, real",
+          "gpu": {
+            "id": "0",
+            "source": "default"
+          },
           "required": [
             "suspend",
             "power",
@@ -848,12 +916,16 @@
           ],
           "outcome": "ok",
           "box_stamp_before": {
-            "unix_s": 1791542303.7613015,
-            "ram_available_bytes": 10786201600,
+            "unix_s": 1791814325.0145965,
+            "ram_available_bytes": 10730708992,
+            "commit_charge": {
+              "used_bytes": 16314032128,
+              "limit_bytes": 12209106944
+            },
             "power_source": "mains",
             "gpu_processes": [
               {
-                "pid": 5684,
+                "pid": 6059,
                 "type": "G",
                 "name": "/usr/bin/gnome-shell",
                 "used_mib": 1
@@ -863,12 +935,16 @@
             "unknown": {}
           },
           "box_stamp_after": {
-            "unix_s": 1791542315.0802424,
-            "ram_available_bytes": 10748416000,
+            "unix_s": 1791814337.867096,
+            "ram_available_bytes": 10666827776,
+            "commit_charge": {
+              "used_bytes": 16309911552,
+              "limit_bytes": 12209106944
+            },
             "power_source": "mains",
             "gpu_processes": [
               {
-                "pid": 5684,
+                "pid": 6059,
                 "type": "G",
                 "name": "/usr/bin/gnome-shell",
                 "used_mib": 1
@@ -879,34 +955,34 @@
           },
           "gpu_clock": {
             "outcome": "ok",
-            "reason": "SM clock 285 to 1957 MHz over 7 samples; clock event reasons seen: gpu_idle",
-            "samples": 7,
+            "reason": "SM clock 307 to 1957 MHz over 8 samples; clock event reasons seen: gpu_idle",
+            "samples": 8,
             "unknown_samples": 0,
             "sm_clock_mhz": {
-              "min": 285,
-              "median": 1740,
+              "min": 307,
+              "median": 1740.0,
               "max": 1957
             },
             "reasons_seen": {
-              "gpu_idle": 2
+              "gpu_idle": 3
             }
           },
           "checks": {
             "suspend": {
               "outcome": "ok",
-              "reason": "boot-time offset grew -0.000 s (limit 1.0 s); suspend count stayed at 0",
+              "reason": "boot-time offset grew -0.000 s (limit 1.0 s); suspend count stayed at 1",
               "evidence": {
-                "sleep_offset_start_s": -2.390000020113803e-07,
-                "sleep_offset_end_s": -2.989999927649478e-07,
-                "suspend_count_start": 0,
-                "suspend_count_end": 0
+                "sleep_offset_start_s": 29.06439515200009,
+                "sleep_offset_end_s": 29.064395004999824,
+                "suspend_count_start": 1,
+                "suspend_count_end": 1
               }
             },
             "power": {
               "outcome": "ok",
-              "reason": "on mains in all 7 power samples",
+              "reason": "on mains in all 8 power samples",
               "evidence": {
-                "samples": 7,
+                "samples": 8,
                 "off_mains_samples": [],
                 "battery_present": true,
                 "unknown_samples": 0,
@@ -922,24 +998,22 @@
             },
             "foreign_reads": {
               "outcome": "ok",
-              "reason": "98304 bytes of foreign reads on nvme0n1 (limit 1000000000)",
+              "reason": "at most 0 bytes of foreign reads on nvme0n1 (limit 1000000000)",
               "evidence": {
                 "model_path": "/home/m1kadoo/.cache/huggingface/hub",
                 "device": "nvme0n1",
-                "disk_read_bytes_start": 4140207616,
-                "disk_read_bytes_end": 4140305920,
+                "disk_read_bytes_start": 7217389056,
+                "disk_read_bytes_end": 7217389056,
+                "other_disk_read_bytes_start": 0,
+                "other_disk_read_bytes_end": 0,
                 "own_read_bytes": 0,
-                "foreign_read_bytes": 98304,
-                "uninspectable_processes": 317
+                "foreign_read_bytes": 0,
+                "foreign_read_bytes_min": 0,
+                "foreign_read_bytes_max": 0,
+                "uninspectable_processes": 283
               },
-              "readers": [
-                {
-                  "pid": 5924,
-                  "name": "update-notifier",
-                  "read_bytes": 94208
-                }
-              ],
-              "unattributed_bytes": 4096
+              "readers": [],
+              "unattributed_bytes": 0
             }
           }
         }
@@ -950,13 +1024,17 @@
         "arm": "A",
         "round": 5,
         "run": 9,
-        "value": 0.06909633400000814,
+        "value": 0.06828714699986449,
         "outcome": "ok",
         "record": {
           "arm": "A",
           "round": 5,
           "run": 9,
           "label": "RTX 3050, real",
+          "gpu": {
+            "id": "0",
+            "source": "default"
+          },
           "required": [
             "suspend",
             "power",
@@ -964,12 +1042,16 @@
           ],
           "outcome": "ok",
           "box_stamp_before": {
-            "unix_s": 1791542315.1124306,
-            "ram_available_bytes": 10777284608,
+            "unix_s": 1791814337.9030323,
+            "ram_available_bytes": 10676551680,
+            "commit_charge": {
+              "used_bytes": 16309927936,
+              "limit_bytes": 12209106944
+            },
             "power_source": "mains",
             "gpu_processes": [
               {
-                "pid": 5684,
+                "pid": 6059,
                 "type": "G",
                 "name": "/usr/bin/gnome-shell",
                 "used_mib": 1
@@ -979,12 +1061,16 @@
             "unknown": {}
           },
           "box_stamp_after": {
-            "unix_s": 1791542326.3800633,
-            "ram_available_bytes": 10812256256,
+            "unix_s": 1791814351.1077123,
+            "ram_available_bytes": 10644922368,
+            "commit_charge": {
+              "used_bytes": 16309825536,
+              "limit_bytes": 12209106944
+            },
             "power_source": "mains",
             "gpu_processes": [
               {
-                "pid": 5684,
+                "pid": 6059,
                 "type": "G",
                 "name": "/usr/bin/gnome-shell",
                 "used_mib": 1
@@ -995,12 +1081,12 @@
           },
           "gpu_clock": {
             "outcome": "ok",
-            "reason": "SM clock 262 to 1957 MHz over 7 samples; clock event reasons seen: gpu_idle",
-            "samples": 7,
+            "reason": "SM clock 247 to 1957 MHz over 8 samples; clock event reasons seen: gpu_idle",
+            "samples": 8,
             "unknown_samples": 0,
             "sm_clock_mhz": {
-              "min": 262,
-              "median": 1740,
+              "min": 247,
+              "median": 1740.0,
               "max": 1957
             },
             "reasons_seen": {
@@ -1010,19 +1096,19 @@
           "checks": {
             "suspend": {
               "outcome": "ok",
-              "reason": "boot-time offset grew -0.000 s (limit 1.0 s); suspend count stayed at 0",
+              "reason": "boot-time offset grew -0.000 s (limit 1.0 s); suspend count stayed at 1",
               "evidence": {
-                "sleep_offset_start_s": -1.8699998349802627e-07,
-                "sleep_offset_end_s": -4.420000152549619e-07,
-                "suspend_count_start": 0,
-                "suspend_count_end": 0
+                "sleep_offset_start_s": 29.064395133999824,
+                "sleep_offset_end_s": 29.064395064999644,
+                "suspend_count_start": 1,
+                "suspend_count_end": 1
               }
             },
             "power": {
               "outcome": "ok",
-              "reason": "on mains in all 7 power samples",
+              "reason": "on mains in all 8 power samples",
               "evidence": {
-                "samples": 7,
+                "samples": 8,
                 "off_mains_samples": [],
                 "battery_present": true,
                 "unknown_samples": 0,
@@ -1038,15 +1124,19 @@
             },
             "foreign_reads": {
               "outcome": "ok",
-              "reason": "0 bytes of foreign reads on nvme0n1 (limit 1000000000)",
+              "reason": "at most 0 bytes of foreign reads on nvme0n1 (limit 1000000000)",
               "evidence": {
                 "model_path": "/home/m1kadoo/.cache/huggingface/hub",
                 "device": "nvme0n1",
-                "disk_read_bytes_start": 4140305920,
-                "disk_read_bytes_end": 4140305920,
+                "disk_read_bytes_start": 7217389056,
+                "disk_read_bytes_end": 7217389056,
+                "other_disk_read_bytes_start": 0,
+                "other_disk_read_bytes_end": 0,
                 "own_read_bytes": 0,
                 "foreign_read_bytes": 0,
-                "uninspectable_processes": 317
+                "foreign_read_bytes_min": 0,
+                "foreign_read_bytes_max": 0,
+                "uninspectable_processes": 283
               },
               "readers": [],
               "unattributed_bytes": 0
@@ -1058,13 +1148,17 @@
         "arm": "B",
         "round": 5,
         "run": 10,
-        "value": 0.0690512769999998,
+        "value": 0.0686929449998388,
         "outcome": "ok",
         "record": {
           "arm": "B",
           "round": 5,
           "run": 10,
           "label": "RTX 3050, real",
+          "gpu": {
+            "id": "0",
+            "source": "default"
+          },
           "required": [
             "suspend",
             "power",
@@ -1072,12 +1166,16 @@
           ],
           "outcome": "ok",
           "box_stamp_before": {
-            "unix_s": 1791542326.4144816,
-            "ram_available_bytes": 10805866496,
+            "unix_s": 1791814351.1416776,
+            "ram_available_bytes": 10645925888,
+            "commit_charge": {
+              "used_bytes": 16309841920,
+              "limit_bytes": 12209106944
+            },
             "power_source": "mains",
             "gpu_processes": [
               {
-                "pid": 5684,
+                "pid": 6059,
                 "type": "G",
                 "name": "/usr/bin/gnome-shell",
                 "used_mib": 1
@@ -1087,12 +1185,16 @@
             "unknown": {}
           },
           "box_stamp_after": {
-            "unix_s": 1791542337.3281126,
-            "ram_available_bytes": 10838085632,
+            "unix_s": 1791814365.8462338,
+            "ram_available_bytes": 10708307968,
+            "commit_charge": {
+              "used_bytes": 16309776384,
+              "limit_bytes": 12209106944
+            },
             "power_source": "mains",
             "gpu_processes": [
               {
-                "pid": 5684,
+                "pid": 6059,
                 "type": "G",
                 "name": "/usr/bin/gnome-shell",
                 "used_mib": 1
@@ -1103,34 +1205,34 @@
           },
           "gpu_clock": {
             "outcome": "ok",
-            "reason": "SM clock 270 to 1957 MHz over 7 samples; clock event reasons seen: gpu_idle",
-            "samples": 7,
+            "reason": "SM clock 210 to 1957 MHz over 9 samples; clock event reasons seen: gpu_idle",
+            "samples": 9,
             "unknown_samples": 0,
             "sm_clock_mhz": {
-              "min": 270,
+              "min": 210,
               "median": 1740,
               "max": 1957
             },
             "reasons_seen": {
-              "gpu_idle": 2
+              "gpu_idle": 3
             }
           },
           "checks": {
             "suspend": {
               "outcome": "ok",
-              "reason": "boot-time offset grew -0.000 s (limit 1.0 s); suspend count stayed at 0",
+              "reason": "boot-time offset grew -0.000 s (limit 1.0 s); suspend count stayed at 1",
               "evidence": {
-                "sleep_offset_start_s": -1.96000002006258e-07,
-                "sleep_offset_end_s": -2.0400000266818097e-07,
-                "suspend_count_start": 0,
-                "suspend_count_end": 0
+                "sleep_offset_start_s": 29.064395172999866,
+                "sleep_offset_end_s": 29.06439503599995,
+                "suspend_count_start": 1,
+                "suspend_count_end": 1
               }
             },
             "power": {
               "outcome": "ok",
-              "reason": "on mains in all 7 power samples",
+              "reason": "on mains in all 9 power samples",
               "evidence": {
-                "samples": 7,
+                "samples": 9,
                 "off_mains_samples": [],
                 "battery_present": true,
                 "unknown_samples": 0,
@@ -1146,15 +1248,19 @@
             },
             "foreign_reads": {
               "outcome": "ok",
-              "reason": "0 bytes of foreign reads on nvme0n1 (limit 1000000000)",
+              "reason": "at most 0 bytes of foreign reads on nvme0n1 (limit 1000000000)",
               "evidence": {
                 "model_path": "/home/m1kadoo/.cache/huggingface/hub",
                 "device": "nvme0n1",
-                "disk_read_bytes_start": 4140305920,
-                "disk_read_bytes_end": 4140305920,
+                "disk_read_bytes_start": 7217389056,
+                "disk_read_bytes_end": 7217389056,
+                "other_disk_read_bytes_start": 0,
+                "other_disk_read_bytes_end": 0,
                 "own_read_bytes": 0,
                 "foreign_read_bytes": 0,
-                "uninspectable_processes": 317
+                "foreign_read_bytes_min": 0,
+                "foreign_read_bytes_max": 0,
+                "uninspectable_processes": 281
               },
               "readers": [],
               "unattributed_bytes": 0
@@ -1166,13 +1272,17 @@
         "arm": "B",
         "round": 6,
         "run": 11,
-        "value": 0.06905314600000168,
+        "value": 0.06837558849997549,
         "outcome": "ok",
         "record": {
           "arm": "B",
           "round": 6,
           "run": 11,
           "label": "RTX 3050, real",
+          "gpu": {
+            "id": "0",
+            "source": "default"
+          },
           "required": [
             "suspend",
             "power",
@@ -1180,12 +1290,16 @@
           ],
           "outcome": "ok",
           "box_stamp_before": {
-            "unix_s": 1791542337.3685431,
-            "ram_available_bytes": 10821656576,
+            "unix_s": 1791814365.8826282,
+            "ram_available_bytes": 10730840064,
+            "commit_charge": {
+              "used_bytes": 16309792768,
+              "limit_bytes": 12209106944
+            },
             "power_source": "mains",
             "gpu_processes": [
               {
-                "pid": 5684,
+                "pid": 6059,
                 "type": "G",
                 "name": "/usr/bin/gnome-shell",
                 "used_mib": 1
@@ -1195,12 +1309,16 @@
             "unknown": {}
           },
           "box_stamp_after": {
-            "unix_s": 1791542348.413481,
-            "ram_available_bytes": 10834395136,
+            "unix_s": 1791814378.3662176,
+            "ram_available_bytes": 10775257088,
+            "commit_charge": {
+              "used_bytes": 16309784576,
+              "limit_bytes": 12209106944
+            },
             "power_source": "mains",
             "gpu_processes": [
               {
-                "pid": 5684,
+                "pid": 6059,
                 "type": "G",
                 "name": "/usr/bin/gnome-shell",
                 "used_mib": 1
@@ -1211,12 +1329,12 @@
           },
           "gpu_clock": {
             "outcome": "ok",
-            "reason": "SM clock 217 to 1957 MHz over 7 samples; clock event reasons seen: gpu_idle",
-            "samples": 7,
+            "reason": "SM clock 232 to 1957 MHz over 8 samples; clock event reasons seen: gpu_idle",
+            "samples": 8,
             "unknown_samples": 0,
             "sm_clock_mhz": {
-              "min": 217,
-              "median": 1740,
+              "min": 232,
+              "median": 1740.0,
               "max": 1957
             },
             "reasons_seen": {
@@ -1226,19 +1344,19 @@
           "checks": {
             "suspend": {
               "outcome": "ok",
-              "reason": "boot-time offset grew -0.000 s (limit 1.0 s); suspend count stayed at 0",
+              "reason": "boot-time offset grew 0.000 s (limit 1.0 s); suspend count stayed at 1",
               "evidence": {
-                "sleep_offset_start_s": -2.740000013545796e-07,
-                "sleep_offset_end_s": -3.4900000400739373e-07,
-                "suspend_count_start": 0,
-                "suspend_count_end": 0
+                "sleep_offset_start_s": 29.06439508299991,
+                "sleep_offset_end_s": 29.064395128999877,
+                "suspend_count_start": 1,
+                "suspend_count_end": 1
               }
             },
             "power": {
               "outcome": "ok",
-              "reason": "on mains in all 7 power samples",
+              "reason": "on mains in all 8 power samples",
               "evidence": {
-                "samples": 7,
+                "samples": 8,
                 "off_mains_samples": [],
                 "battery_present": true,
                 "unknown_samples": 0,
@@ -1254,18 +1372,22 @@
             },
             "foreign_reads": {
               "outcome": "ok",
-              "reason": "0 bytes of foreign reads on nvme0n1 (limit 1000000000)",
+              "reason": "at most 12288 bytes of foreign reads on nvme0n1 (limit 1000000000)",
               "evidence": {
                 "model_path": "/home/m1kadoo/.cache/huggingface/hub",
                 "device": "nvme0n1",
-                "disk_read_bytes_start": 4140305920,
-                "disk_read_bytes_end": 4140305920,
+                "disk_read_bytes_start": 7217389056,
+                "disk_read_bytes_end": 7217401344,
+                "other_disk_read_bytes_start": 0,
+                "other_disk_read_bytes_end": 0,
                 "own_read_bytes": 0,
-                "foreign_read_bytes": 0,
-                "uninspectable_processes": 317
+                "foreign_read_bytes": 12288,
+                "foreign_read_bytes_min": 12288,
+                "foreign_read_bytes_max": 12288,
+                "uninspectable_processes": 281
               },
               "readers": [],
-              "unattributed_bytes": 0
+              "unattributed_bytes": 12288
             }
           }
         }
@@ -1274,13 +1396,17 @@
         "arm": "A",
         "round": 6,
         "run": 12,
-        "value": 0.06932403449999924,
+        "value": 0.06997958049987574,
         "outcome": "ok",
         "record": {
           "arm": "A",
           "round": 6,
           "run": 12,
           "label": "RTX 3050, real",
+          "gpu": {
+            "id": "0",
+            "source": "default"
+          },
           "required": [
             "suspend",
             "power",
@@ -1288,12 +1414,16 @@
           ],
           "outcome": "ok",
           "box_stamp_before": {
-            "unix_s": 1791542348.4537416,
-            "ram_available_bytes": 10844151808,
+            "unix_s": 1791814378.4097366,
+            "ram_available_bytes": 10772045824,
+            "commit_charge": {
+              "used_bytes": 16309800960,
+              "limit_bytes": 12209106944
+            },
             "power_source": "mains",
             "gpu_processes": [
               {
-                "pid": 5684,
+                "pid": 6059,
                 "type": "G",
                 "name": "/usr/bin/gnome-shell",
                 "used_mib": 1
@@ -1303,12 +1433,16 @@
             "unknown": {}
           },
           "box_stamp_after": {
-            "unix_s": 1791542359.6101072,
-            "ram_available_bytes": 10770116608,
+            "unix_s": 1791814392.0814197,
+            "ram_available_bytes": 10828808192,
+            "commit_charge": {
+              "used_bytes": 16309850112,
+              "limit_bytes": 12209106944
+            },
             "power_source": "mains",
             "gpu_processes": [
               {
-                "pid": 5684,
+                "pid": 6059,
                 "type": "G",
                 "name": "/usr/bin/gnome-shell",
                 "used_mib": 1
@@ -1319,34 +1453,34 @@
           },
           "gpu_clock": {
             "outcome": "ok",
-            "reason": "SM clock 247 to 1957 MHz over 7 samples; clock event reasons seen: gpu_idle",
-            "samples": 7,
+            "reason": "SM clock 210 to 1957 MHz over 8 samples; clock event reasons seen: gpu_idle",
+            "samples": 8,
             "unknown_samples": 0,
             "sm_clock_mhz": {
-              "min": 247,
-              "median": 1740,
+              "min": 210,
+              "median": 1740.0,
               "max": 1957
             },
             "reasons_seen": {
-              "gpu_idle": 2
+              "gpu_idle": 3
             }
           },
           "checks": {
             "suspend": {
               "outcome": "ok",
-              "reason": "boot-time offset grew -0.000 s (limit 1.0 s); suspend count stayed at 0",
+              "reason": "boot-time offset grew -0.000 s (limit 1.0 s); suspend count stayed at 1",
               "evidence": {
-                "sleep_offset_start_s": -1.720000000204891e-07,
-                "sleep_offset_end_s": -3.209999590580992e-07,
-                "suspend_count_start": 0,
-                "suspend_count_end": 0
+                "sleep_offset_start_s": 29.064395173999856,
+                "sleep_offset_end_s": 29.064395067000078,
+                "suspend_count_start": 1,
+                "suspend_count_end": 1
               }
             },
             "power": {
               "outcome": "ok",
-              "reason": "on mains in all 7 power samples",
+              "reason": "on mains in all 8 power samples",
               "evidence": {
-                "samples": 7,
+                "samples": 8,
                 "off_mains_samples": [],
                 "battery_present": true,
                 "unknown_samples": 0,
@@ -1362,24 +1496,22 @@
             },
             "foreign_reads": {
               "outcome": "ok",
-              "reason": "131072 bytes of foreign reads on nvme0n1 (limit 1000000000)",
+              "reason": "at most 4096 bytes of foreign reads on nvme0n1 (limit 1000000000)",
               "evidence": {
                 "model_path": "/home/m1kadoo/.cache/huggingface/hub",
                 "device": "nvme0n1",
-                "disk_read_bytes_start": 4140305920,
-                "disk_read_bytes_end": 4140436992,
+                "disk_read_bytes_start": 7217401344,
+                "disk_read_bytes_end": 7217405440,
+                "other_disk_read_bytes_start": 0,
+                "other_disk_read_bytes_end": 0,
                 "own_read_bytes": 0,
-                "foreign_read_bytes": 131072,
-                "uninspectable_processes": 317
+                "foreign_read_bytes": 4096,
+                "foreign_read_bytes_min": 4096,
+                "foreign_read_bytes_max": 4096,
+                "uninspectable_processes": 281
               },
-              "readers": [
-                {
-                  "pid": 11844,
-                  "name": "claude",
-                  "read_bytes": 131072
-                }
-              ],
-              "unattributed_bytes": 0
+              "readers": [],
+              "unattributed_bytes": 4096
             }
           }
         }
@@ -1390,13 +1522,17 @@
         "arm": "A",
         "round": 7,
         "run": 13,
-        "value": 0.06889381000002004,
+        "value": 0.06902196199985156,
         "outcome": "ok",
         "record": {
           "arm": "A",
           "round": 7,
           "run": 13,
           "label": "RTX 3050, real",
+          "gpu": {
+            "id": "0",
+            "source": "default"
+          },
           "required": [
             "suspend",
             "power",
@@ -1404,12 +1540,16 @@
           ],
           "outcome": "ok",
           "box_stamp_before": {
-            "unix_s": 1791542359.6423814,
-            "ram_available_bytes": 10804801536,
+            "unix_s": 1791814392.116747,
+            "ram_available_bytes": 10828427264,
+            "commit_charge": {
+              "used_bytes": 16309866496,
+              "limit_bytes": 12209106944
+            },
             "power_source": "mains",
             "gpu_processes": [
               {
-                "pid": 5684,
+                "pid": 6059,
                 "type": "G",
                 "name": "/usr/bin/gnome-shell",
                 "used_mib": 1
@@ -1419,12 +1559,16 @@
             "unknown": {}
           },
           "box_stamp_after": {
-            "unix_s": 1791542370.8244483,
-            "ram_available_bytes": 10791522304,
+            "unix_s": 1791814405.7010705,
+            "ram_available_bytes": 10755850240,
+            "commit_charge": {
+              "used_bytes": 16309886976,
+              "limit_bytes": 12209106944
+            },
             "power_source": "mains",
             "gpu_processes": [
               {
-                "pid": 5684,
+                "pid": 6059,
                 "type": "G",
                 "name": "/usr/bin/gnome-shell",
                 "used_mib": 1
@@ -1435,34 +1579,34 @@
           },
           "gpu_clock": {
             "outcome": "ok",
-            "reason": "SM clock 232 to 1957 MHz over 7 samples; clock event reasons seen: gpu_idle",
-            "samples": 7,
+            "reason": "SM clock 210 to 1957 MHz over 8 samples; clock event reasons seen: gpu_idle",
+            "samples": 8,
             "unknown_samples": 0,
             "sm_clock_mhz": {
-              "min": 232,
-              "median": 1740,
+              "min": 210,
+              "median": 1740.0,
               "max": 1957
             },
             "reasons_seen": {
-              "gpu_idle": 2
+              "gpu_idle": 3
             }
           },
           "checks": {
             "suspend": {
               "outcome": "ok",
-              "reason": "boot-time offset grew -0.000 s (limit 1.0 s); suspend count stayed at 0",
+              "reason": "boot-time offset grew -0.000 s (limit 1.0 s); suspend count stayed at 1",
               "evidence": {
-                "sleep_offset_start_s": -2.559999643381161e-07,
-                "sleep_offset_end_s": -3.0199998946045525e-07,
-                "suspend_count_start": 0,
-                "suspend_count_end": 0
+                "sleep_offset_start_s": 29.064395164000416,
+                "sleep_offset_end_s": 29.064394990999972,
+                "suspend_count_start": 1,
+                "suspend_count_end": 1
               }
             },
             "power": {
               "outcome": "ok",
-              "reason": "on mains in all 7 power samples",
+              "reason": "on mains in all 8 power samples",
               "evidence": {
-                "samples": 7,
+                "samples": 8,
                 "off_mains_samples": [],
                 "battery_present": true,
                 "unknown_samples": 0,
@@ -1478,23 +1622,21 @@
             },
             "foreign_reads": {
               "outcome": "ok",
-              "reason": "32768 bytes of foreign reads on nvme0n1 (limit 1000000000)",
+              "reason": "at most 0 bytes of foreign reads on nvme0n1 (limit 1000000000)",
               "evidence": {
                 "model_path": "/home/m1kadoo/.cache/huggingface/hub",
                 "device": "nvme0n1",
-                "disk_read_bytes_start": 4140436992,
-                "disk_read_bytes_end": 4140469760,
+                "disk_read_bytes_start": 7217405440,
+                "disk_read_bytes_end": 7217405440,
+                "other_disk_read_bytes_start": 0,
+                "other_disk_read_bytes_end": 0,
                 "own_read_bytes": 0,
-                "foreign_read_bytes": 32768,
-                "uninspectable_processes": 317
+                "foreign_read_bytes": 0,
+                "foreign_read_bytes_min": 0,
+                "foreign_read_bytes_max": 0,
+                "uninspectable_processes": 282
               },
-              "readers": [
-                {
-                  "pid": 9189,
-                  "name": "code",
-                  "read_bytes": 32768
-                }
-              ],
+              "readers": [],
               "unattributed_bytes": 0
             }
           }
@@ -1504,13 +1646,17 @@
         "arm": "B",
         "round": 7,
         "run": 14,
-        "value": 0.06863519600000245,
+        "value": 0.06865326299998742,
         "outcome": "ok",
         "record": {
           "arm": "B",
           "round": 7,
           "run": 14,
           "label": "RTX 3050, real",
+          "gpu": {
+            "id": "0",
+            "source": "default"
+          },
           "required": [
             "suspend",
             "power",
@@ -1518,12 +1664,16 @@
           ],
           "outcome": "ok",
           "box_stamp_before": {
-            "unix_s": 1791542370.8575523,
-            "ram_available_bytes": 10779283456,
+            "unix_s": 1791814405.7390912,
+            "ram_available_bytes": 10752167936,
+            "commit_charge": {
+              "used_bytes": 16309903360,
+              "limit_bytes": 12209106944
+            },
             "power_source": "mains",
             "gpu_processes": [
               {
-                "pid": 5684,
+                "pid": 6059,
                 "type": "G",
                 "name": "/usr/bin/gnome-shell",
                 "used_mib": 1
@@ -1533,12 +1683,16 @@
             "unknown": {}
           },
           "box_stamp_after": {
-            "unix_s": 1791542381.8068285,
-            "ram_available_bytes": 10721320960,
+            "unix_s": 1791814419.1525335,
+            "ram_available_bytes": 10781392896,
+            "commit_charge": {
+              "used_bytes": 16310030336,
+              "limit_bytes": 12209106944
+            },
             "power_source": "mains",
             "gpu_processes": [
               {
-                "pid": 5684,
+                "pid": 6059,
                 "type": "G",
                 "name": "/usr/bin/gnome-shell",
                 "used_mib": 1
@@ -1549,34 +1703,34 @@
           },
           "gpu_clock": {
             "outcome": "ok",
-            "reason": "SM clock 277 to 1957 MHz over 7 samples; clock event reasons seen: gpu_idle",
-            "samples": 7,
+            "reason": "SM clock 255 to 1957 MHz over 8 samples; clock event reasons seen: gpu_idle",
+            "samples": 8,
             "unknown_samples": 0,
             "sm_clock_mhz": {
-              "min": 277,
-              "median": 1740,
+              "min": 255,
+              "median": 1740.0,
               "max": 1957
             },
             "reasons_seen": {
-              "gpu_idle": 2
+              "gpu_idle": 3
             }
           },
           "checks": {
             "suspend": {
               "outcome": "ok",
-              "reason": "boot-time offset grew 0.000 s (limit 1.0 s); suspend count stayed at 0",
+              "reason": "boot-time offset grew -0.000 s (limit 1.0 s); suspend count stayed at 1",
               "evidence": {
-                "sleep_offset_start_s": -2.119999749083945e-07,
-                "sleep_offset_end_s": -2.1099998548379517e-07,
-                "suspend_count_start": 0,
-                "suspend_count_end": 0
+                "sleep_offset_start_s": 29.0643951510001,
+                "sleep_offset_end_s": 29.064395037000395,
+                "suspend_count_start": 1,
+                "suspend_count_end": 1
               }
             },
             "power": {
               "outcome": "ok",
-              "reason": "on mains in all 7 power samples",
+              "reason": "on mains in all 8 power samples",
               "evidence": {
-                "samples": 7,
+                "samples": 8,
                 "off_mains_samples": [],
                 "battery_present": true,
                 "unknown_samples": 0,
@@ -1592,15 +1746,19 @@
             },
             "foreign_reads": {
               "outcome": "ok",
-              "reason": "0 bytes of foreign reads on nvme0n1 (limit 1000000000)",
+              "reason": "at most 0 bytes of foreign reads on nvme0n1 (limit 1000000000)",
               "evidence": {
                 "model_path": "/home/m1kadoo/.cache/huggingface/hub",
                 "device": "nvme0n1",
-                "disk_read_bytes_start": 4140469760,
-                "disk_read_bytes_end": 4140469760,
+                "disk_read_bytes_start": 7217405440,
+                "disk_read_bytes_end": 7217405440,
+                "other_disk_read_bytes_start": 0,
+                "other_disk_read_bytes_end": 0,
                 "own_read_bytes": 0,
                 "foreign_read_bytes": 0,
-                "uninspectable_processes": 317
+                "foreign_read_bytes_min": 0,
+                "foreign_read_bytes_max": 0,
+                "uninspectable_processes": 282
               },
               "readers": [],
               "unattributed_bytes": 0
@@ -1612,13 +1770,17 @@
         "arm": "B",
         "round": 8,
         "run": 15,
-        "value": 0.06923775399999954,
+        "value": 0.06838658399988162,
         "outcome": "ok",
         "record": {
           "arm": "B",
           "round": 8,
           "run": 15,
           "label": "RTX 3050, real",
+          "gpu": {
+            "id": "0",
+            "source": "default"
+          },
           "required": [
             "suspend",
             "power",
@@ -1626,12 +1788,16 @@
           ],
           "outcome": "ok",
           "box_stamp_before": {
-            "unix_s": 1791542381.8438904,
-            "ram_available_bytes": 10717245440,
+            "unix_s": 1791814419.1947715,
+            "ram_available_bytes": 10736607232,
+            "commit_charge": {
+              "used_bytes": 16310046720,
+              "limit_bytes": 12209106944
+            },
             "power_source": "mains",
             "gpu_processes": [
               {
-                "pid": 5684,
+                "pid": 6059,
                 "type": "G",
                 "name": "/usr/bin/gnome-shell",
                 "used_mib": 1
@@ -1641,12 +1807,16 @@
             "unknown": {}
           },
           "box_stamp_after": {
-            "unix_s": 1791542392.681804,
-            "ram_available_bytes": 10790572032,
+            "unix_s": 1791814432.0091414,
+            "ram_available_bytes": 10766016512,
+            "commit_charge": {
+              "used_bytes": 16310067200,
+              "limit_bytes": 12209106944
+            },
             "power_source": "mains",
             "gpu_processes": [
               {
-                "pid": 5684,
+                "pid": 6059,
                 "type": "G",
                 "name": "/usr/bin/gnome-shell",
                 "used_mib": 1
@@ -1657,34 +1827,34 @@
           },
           "gpu_clock": {
             "outcome": "ok",
-            "reason": "SM clock 277 to 1957 MHz over 7 samples; clock event reasons seen: gpu_idle",
-            "samples": 7,
+            "reason": "SM clock 270 to 1957 MHz over 8 samples; clock event reasons seen: gpu_idle",
+            "samples": 8,
             "unknown_samples": 0,
             "sm_clock_mhz": {
-              "min": 277,
-              "median": 1740,
+              "min": 270,
+              "median": 1740.0,
               "max": 1957
             },
             "reasons_seen": {
-              "gpu_idle": 1
+              "gpu_idle": 3
             }
           },
           "checks": {
             "suspend": {
               "outcome": "ok",
-              "reason": "boot-time offset grew 0.000 s (limit 1.0 s); suspend count stayed at 0",
+              "reason": "boot-time offset grew -0.000 s (limit 1.0 s); suspend count stayed at 1",
               "evidence": {
-                "sleep_offset_start_s": -1.8800000134433503e-07,
-                "sleep_offset_end_s": -1.829999973779195e-07,
-                "suspend_count_start": 0,
-                "suspend_count_end": 0
+                "sleep_offset_start_s": 29.064395100000183,
+                "sleep_offset_end_s": 29.064395026000057,
+                "suspend_count_start": 1,
+                "suspend_count_end": 1
               }
             },
             "power": {
               "outcome": "ok",
-              "reason": "on mains in all 7 power samples",
+              "reason": "on mains in all 8 power samples",
               "evidence": {
-                "samples": 7,
+                "samples": 8,
                 "off_mains_samples": [],
                 "battery_present": true,
                 "unknown_samples": 0,
@@ -1700,18 +1870,22 @@
             },
             "foreign_reads": {
               "outcome": "ok",
-              "reason": "0 bytes of foreign reads on nvme0n1 (limit 1000000000)",
+              "reason": "at most 16384 bytes of foreign reads on nvme0n1 (limit 1000000000)",
               "evidence": {
                 "model_path": "/home/m1kadoo/.cache/huggingface/hub",
                 "device": "nvme0n1",
-                "disk_read_bytes_start": 4140469760,
-                "disk_read_bytes_end": 4140469760,
+                "disk_read_bytes_start": 7217405440,
+                "disk_read_bytes_end": 7217421824,
+                "other_disk_read_bytes_start": 0,
+                "other_disk_read_bytes_end": 0,
                 "own_read_bytes": 0,
-                "foreign_read_bytes": 0,
-                "uninspectable_processes": 317
+                "foreign_read_bytes": 16384,
+                "foreign_read_bytes_min": 16384,
+                "foreign_read_bytes_max": 16384,
+                "uninspectable_processes": 282
               },
               "readers": [],
-              "unattributed_bytes": 0
+              "unattributed_bytes": 16384
             }
           }
         }
@@ -1720,13 +1894,17 @@
         "arm": "A",
         "round": 8,
         "run": 16,
-        "value": 0.06899932650000551,
+        "value": 0.0684291834998021,
         "outcome": "ok",
         "record": {
           "arm": "A",
           "round": 8,
           "run": 16,
           "label": "RTX 3050, real",
+          "gpu": {
+            "id": "0",
+            "source": "default"
+          },
           "required": [
             "suspend",
             "power",
@@ -1734,12 +1912,16 @@
           ],
           "outcome": "ok",
           "box_stamp_before": {
-            "unix_s": 1791542392.7185123,
-            "ram_available_bytes": 10788999168,
+            "unix_s": 1791814432.047604,
+            "ram_available_bytes": 10747314176,
+            "commit_charge": {
+              "used_bytes": 16310083584,
+              "limit_bytes": 12209106944
+            },
             "power_source": "mains",
             "gpu_processes": [
               {
-                "pid": 5684,
+                "pid": 6059,
                 "type": "G",
                 "name": "/usr/bin/gnome-shell",
                 "used_mib": 1
@@ -1749,12 +1931,16 @@
             "unknown": {}
           },
           "box_stamp_after": {
-            "unix_s": 1791542403.7559788,
-            "ram_available_bytes": 10752339968,
+            "unix_s": 1791814446.4040077,
+            "ram_available_bytes": 10786885632,
+            "commit_charge": {
+              "used_bytes": 16310169600,
+              "limit_bytes": 12209106944
+            },
             "power_source": "mains",
             "gpu_processes": [
               {
-                "pid": 5684,
+                "pid": 6059,
                 "type": "G",
                 "name": "/usr/bin/gnome-shell",
                 "used_mib": 1
@@ -1765,34 +1951,34 @@
           },
           "gpu_clock": {
             "outcome": "ok",
-            "reason": "SM clock 292 to 1957 MHz over 7 samples; clock event reasons seen: gpu_idle",
-            "samples": 7,
+            "reason": "SM clock 210 to 1957 MHz over 9 samples; clock event reasons seen: gpu_idle",
+            "samples": 9,
             "unknown_samples": 0,
             "sm_clock_mhz": {
-              "min": 292,
+              "min": 210,
               "median": 1740,
               "max": 1957
             },
             "reasons_seen": {
-              "gpu_idle": 1
+              "gpu_idle": 3
             }
           },
           "checks": {
             "suspend": {
               "outcome": "ok",
-              "reason": "boot-time offset grew 0.000 s (limit 1.0 s); suspend count stayed at 0",
+              "reason": "boot-time offset grew -0.000 s (limit 1.0 s); suspend count stayed at 1",
               "evidence": {
-                "sleep_offset_start_s": -2.1100004232721403e-07,
-                "sleep_offset_end_s": -2.090000066345965e-07,
-                "suspend_count_start": 0,
-                "suspend_count_end": 0
+                "sleep_offset_start_s": 29.06439514800013,
+                "sleep_offset_end_s": 29.064394997000363,
+                "suspend_count_start": 1,
+                "suspend_count_end": 1
               }
             },
             "power": {
               "outcome": "ok",
-              "reason": "on mains in all 7 power samples",
+              "reason": "on mains in all 9 power samples",
               "evidence": {
-                "samples": 7,
+                "samples": 9,
                 "off_mains_samples": [],
                 "battery_present": true,
                 "unknown_samples": 0,
@@ -1808,18 +1994,22 @@
             },
             "foreign_reads": {
               "outcome": "ok",
-              "reason": "10686464 bytes of foreign reads on nvme0n1 (limit 1000000000)",
+              "reason": "at most 0 bytes of foreign reads on nvme0n1 (limit 1000000000)",
               "evidence": {
                 "model_path": "/home/m1kadoo/.cache/huggingface/hub",
                 "device": "nvme0n1",
-                "disk_read_bytes_start": 4140469760,
-                "disk_read_bytes_end": 4151156224,
+                "disk_read_bytes_start": 7217421824,
+                "disk_read_bytes_end": 7217421824,
+                "other_disk_read_bytes_start": 0,
+                "other_disk_read_bytes_end": 0,
                 "own_read_bytes": 0,
-                "foreign_read_bytes": 10686464,
-                "uninspectable_processes": 318
+                "foreign_read_bytes": 0,
+                "foreign_read_bytes_min": 0,
+                "foreign_read_bytes_max": 0,
+                "uninspectable_processes": 282
               },
               "readers": [],
-              "unattributed_bytes": 10686464
+              "unattributed_bytes": 0
             }
           }
         }
@@ -1830,13 +2020,17 @@
         "arm": "A",
         "round": 9,
         "run": 17,
-        "value": 0.06911518149999551,
+        "value": 0.06953851399998712,
         "outcome": "ok",
         "record": {
           "arm": "A",
           "round": 9,
           "run": 17,
           "label": "RTX 3050, real",
+          "gpu": {
+            "id": "0",
+            "source": "default"
+          },
           "required": [
             "suspend",
             "power",
@@ -1844,12 +2038,16 @@
           ],
           "outcome": "ok",
           "box_stamp_before": {
-            "unix_s": 1791542403.7944195,
-            "ram_available_bytes": 10750939136,
+            "unix_s": 1791814446.4400115,
+            "ram_available_bytes": 10784464896,
+            "commit_charge": {
+              "used_bytes": 16310185984,
+              "limit_bytes": 12209106944
+            },
             "power_source": "mains",
             "gpu_processes": [
               {
-                "pid": 5684,
+                "pid": 6059,
                 "type": "G",
                 "name": "/usr/bin/gnome-shell",
                 "used_mib": 1
@@ -1859,12 +2057,16 @@
             "unknown": {}
           },
           "box_stamp_after": {
-            "unix_s": 1791542414.783125,
-            "ram_available_bytes": 10747088896,
+            "unix_s": 1791814459.4976087,
+            "ram_available_bytes": 10810503168,
+            "commit_charge": {
+              "used_bytes": 16310792192,
+              "limit_bytes": 12209106944
+            },
             "power_source": "mains",
             "gpu_processes": [
               {
-                "pid": 5684,
+                "pid": 6059,
                 "type": "G",
                 "name": "/usr/bin/gnome-shell",
                 "used_mib": 1
@@ -1875,34 +2077,34 @@
           },
           "gpu_clock": {
             "outcome": "ok",
-            "reason": "SM clock 277 to 1957 MHz over 7 samples; clock event reasons seen: gpu_idle",
-            "samples": 7,
+            "reason": "SM clock 270 to 1957 MHz over 8 samples; clock event reasons seen: gpu_idle",
+            "samples": 8,
             "unknown_samples": 0,
             "sm_clock_mhz": {
-              "min": 277,
-              "median": 1740,
+              "min": 270,
+              "median": 1740.0,
               "max": 1957
             },
             "reasons_seen": {
-              "gpu_idle": 1
+              "gpu_idle": 2
             }
           },
           "checks": {
             "suspend": {
               "outcome": "ok",
-              "reason": "boot-time offset grew -0.000 s (limit 1.0 s); suspend count stayed at 0",
+              "reason": "boot-time offset grew -0.000 s (limit 1.0 s); suspend count stayed at 1",
               "evidence": {
-                "sleep_offset_start_s": -2.0400000266818097e-07,
-                "sleep_offset_end_s": -2.0699997094197897e-07,
-                "suspend_count_start": 0,
-                "suspend_count_end": 0
+                "sleep_offset_start_s": 29.064395172999866,
+                "sleep_offset_end_s": 29.064395030000014,
+                "suspend_count_start": 1,
+                "suspend_count_end": 1
               }
             },
             "power": {
               "outcome": "ok",
-              "reason": "on mains in all 7 power samples",
+              "reason": "on mains in all 8 power samples",
               "evidence": {
-                "samples": 7,
+                "samples": 8,
                 "off_mains_samples": [],
                 "battery_present": true,
                 "unknown_samples": 0,
@@ -1918,15 +2120,19 @@
             },
             "foreign_reads": {
               "outcome": "ok",
-              "reason": "0 bytes of foreign reads on nvme0n1 (limit 1000000000)",
+              "reason": "at most 0 bytes of foreign reads on nvme0n1 (limit 1000000000)",
               "evidence": {
                 "model_path": "/home/m1kadoo/.cache/huggingface/hub",
                 "device": "nvme0n1",
-                "disk_read_bytes_start": 4151258624,
-                "disk_read_bytes_end": 4151258624,
+                "disk_read_bytes_start": 7217421824,
+                "disk_read_bytes_end": 7217421824,
+                "other_disk_read_bytes_start": 0,
+                "other_disk_read_bytes_end": 0,
                 "own_read_bytes": 0,
                 "foreign_read_bytes": 0,
-                "uninspectable_processes": 318
+                "foreign_read_bytes_min": 0,
+                "foreign_read_bytes_max": 0,
+                "uninspectable_processes": 281
               },
               "readers": [],
               "unattributed_bytes": 0
@@ -1938,13 +2144,17 @@
         "arm": "B",
         "round": 9,
         "run": 18,
-        "value": 0.0697337414999879,
+        "value": 0.06956110500004797,
         "outcome": "ok",
         "record": {
           "arm": "B",
           "round": 9,
           "run": 18,
           "label": "RTX 3050, real",
+          "gpu": {
+            "id": "0",
+            "source": "default"
+          },
           "required": [
             "suspend",
             "power",
@@ -1952,12 +2162,16 @@
           ],
           "outcome": "ok",
           "box_stamp_before": {
-            "unix_s": 1791542414.8181605,
-            "ram_available_bytes": 10736979968,
+            "unix_s": 1791814459.5406187,
+            "ram_available_bytes": 10811285504,
+            "commit_charge": {
+              "used_bytes": 16310808576,
+              "limit_bytes": 12209106944
+            },
             "power_source": "mains",
             "gpu_processes": [
               {
-                "pid": 5684,
+                "pid": 6059,
                 "type": "G",
                 "name": "/usr/bin/gnome-shell",
                 "used_mib": 1
@@ -1967,12 +2181,16 @@
             "unknown": {}
           },
           "box_stamp_after": {
-            "unix_s": 1791542425.766494,
-            "ram_available_bytes": 10756984832,
+            "unix_s": 1791814472.3649256,
+            "ram_available_bytes": 10741825536,
+            "commit_charge": {
+              "used_bytes": 16310796288,
+              "limit_bytes": 12209106944
+            },
             "power_source": "mains",
             "gpu_processes": [
               {
-                "pid": 5684,
+                "pid": 6059,
                 "type": "G",
                 "name": "/usr/bin/gnome-shell",
                 "used_mib": 1
@@ -1983,234 +2201,12 @@
           },
           "gpu_clock": {
             "outcome": "ok",
-            "reason": "SM clock 277 to 1957 MHz over 7 samples; clock event reasons seen: gpu_idle",
-            "samples": 7,
+            "reason": "SM clock 240 to 1957 MHz over 8 samples; clock event reasons seen: gpu_idle",
+            "samples": 8,
             "unknown_samples": 0,
             "sm_clock_mhz": {
-              "min": 277,
-              "median": 1740,
-              "max": 1957
-            },
-            "reasons_seen": {
-              "gpu_idle": 1
-            }
-          },
-          "checks": {
-            "suspend": {
-              "outcome": "ok",
-              "reason": "boot-time offset grew -0.000 s (limit 1.0 s); suspend count stayed at 0",
-              "evidence": {
-                "sleep_offset_start_s": -1.9600003042796743e-07,
-                "sleep_offset_end_s": -2.1800002514282824e-07,
-                "suspend_count_start": 0,
-                "suspend_count_end": 0
-              }
-            },
-            "power": {
-              "outcome": "ok",
-              "reason": "on mains in all 7 power samples",
-              "evidence": {
-                "samples": 7,
-                "off_mains_samples": [],
-                "battery_present": true,
-                "unknown_samples": 0,
-                "last_reading": {
-                  "battery": true,
-                  "online": {
-                    "ACAD": true,
-                    "ucsi-source-psy-USBC000:001": false,
-                    "ucsi-source-psy-USBC000:002": false
-                  }
-                }
-              }
-            },
-            "foreign_reads": {
-              "outcome": "ok",
-              "reason": "16384 bytes of foreign reads on nvme0n1 (limit 1000000000)",
-              "evidence": {
-                "model_path": "/home/m1kadoo/.cache/huggingface/hub",
-                "device": "nvme0n1",
-                "disk_read_bytes_start": 4151258624,
-                "disk_read_bytes_end": 4151275008,
-                "own_read_bytes": 0,
-                "foreign_read_bytes": 16384,
-                "uninspectable_processes": 291
-              },
-              "readers": [
-                {
-                  "pid": 11844,
-                  "name": "claude",
-                  "read_bytes": 4096
-                }
-              ],
-              "unattributed_bytes": 12288
-            }
-          }
-        }
-      },
-      {
-        "arm": "B",
-        "round": 10,
-        "run": 19,
-        "value": 0.06925638850000837,
-        "outcome": "ok",
-        "record": {
-          "arm": "B",
-          "round": 10,
-          "run": 19,
-          "label": "RTX 3050, real",
-          "required": [
-            "suspend",
-            "power",
-            "foreign_reads"
-          ],
-          "outcome": "ok",
-          "box_stamp_before": {
-            "unix_s": 1791542425.8082988,
-            "ram_available_bytes": 10760658944,
-            "power_source": "mains",
-            "gpu_processes": [
-              {
-                "pid": 5684,
-                "type": "G",
-                "name": "/usr/bin/gnome-shell",
-                "used_mib": 1
-              }
-            ],
-            "gpu_memory_used_mib": 12,
-            "unknown": {}
-          },
-          "box_stamp_after": {
-            "unix_s": 1791542437.15041,
-            "ram_available_bytes": 10701680640,
-            "power_source": "mains",
-            "gpu_processes": [
-              {
-                "pid": 5684,
-                "type": "G",
-                "name": "/usr/bin/gnome-shell",
-                "used_mib": 1
-              }
-            ],
-            "gpu_memory_used_mib": 12,
-            "unknown": {}
-          },
-          "gpu_clock": {
-            "outcome": "ok",
-            "reason": "SM clock 285 to 1957 MHz over 7 samples; clock event reasons seen: gpu_idle",
-            "samples": 7,
-            "unknown_samples": 0,
-            "sm_clock_mhz": {
-              "min": 285,
-              "median": 1740,
-              "max": 1957
-            },
-            "reasons_seen": {
-              "gpu_idle": 1
-            }
-          },
-          "checks": {
-            "suspend": {
-              "outcome": "ok",
-              "reason": "boot-time offset grew -0.000 s (limit 1.0 s); suspend count stayed at 0",
-              "evidence": {
-                "sleep_offset_start_s": -1.9300000531075057e-07,
-                "sleep_offset_end_s": -2.890000132538262e-07,
-                "suspend_count_start": 0,
-                "suspend_count_end": 0
-              }
-            },
-            "power": {
-              "outcome": "ok",
-              "reason": "on mains in all 7 power samples",
-              "evidence": {
-                "samples": 7,
-                "off_mains_samples": [],
-                "battery_present": true,
-                "unknown_samples": 0,
-                "last_reading": {
-                  "battery": true,
-                  "online": {
-                    "ACAD": true,
-                    "ucsi-source-psy-USBC000:001": false,
-                    "ucsi-source-psy-USBC000:002": false
-                  }
-                }
-              }
-            },
-            "foreign_reads": {
-              "outcome": "ok",
-              "reason": "0 bytes of foreign reads on nvme0n1 (limit 1000000000)",
-              "evidence": {
-                "model_path": "/home/m1kadoo/.cache/huggingface/hub",
-                "device": "nvme0n1",
-                "disk_read_bytes_start": 4151275008,
-                "disk_read_bytes_end": 4151275008,
-                "own_read_bytes": 0,
-                "foreign_read_bytes": 0,
-                "uninspectable_processes": 290
-              },
-              "readers": [],
-              "unattributed_bytes": 0
-            }
-          }
-        }
-      },
-      {
-        "arm": "A",
-        "round": 10,
-        "run": 20,
-        "value": 0.06948934050001299,
-        "outcome": "ok",
-        "record": {
-          "arm": "A",
-          "round": 10,
-          "run": 20,
-          "label": "RTX 3050, real",
-          "required": [
-            "suspend",
-            "power",
-            "foreign_reads"
-          ],
-          "outcome": "ok",
-          "box_stamp_before": {
-            "unix_s": 1791542437.1894035,
-            "ram_available_bytes": 10731728896,
-            "power_source": "mains",
-            "gpu_processes": [
-              {
-                "pid": 5684,
-                "type": "G",
-                "name": "/usr/bin/gnome-shell",
-                "used_mib": 1
-              }
-            ],
-            "gpu_memory_used_mib": 12,
-            "unknown": {}
-          },
-          "box_stamp_after": {
-            "unix_s": 1791542448.4865572,
-            "ram_available_bytes": 10841718784,
-            "power_source": "mains",
-            "gpu_processes": [
-              {
-                "pid": 5684,
-                "type": "G",
-                "name": "/usr/bin/gnome-shell",
-                "used_mib": 1
-              }
-            ],
-            "gpu_memory_used_mib": 12,
-            "unknown": {}
-          },
-          "gpu_clock": {
-            "outcome": "ok",
-            "reason": "SM clock 277 to 1957 MHz over 7 samples; clock event reasons seen: gpu_idle",
-            "samples": 7,
-            "unknown_samples": 0,
-            "sm_clock_mhz": {
-              "min": 277,
-              "median": 1740,
+              "min": 240,
+              "median": 1740.0,
               "max": 1957
             },
             "reasons_seen": {
@@ -2220,19 +2216,19 @@
           "checks": {
             "suspend": {
               "outcome": "ok",
-              "reason": "boot-time offset grew 0.000 s (limit 1.0 s); suspend count stayed at 0",
+              "reason": "boot-time offset grew -0.000 s (limit 1.0 s); suspend count stayed at 1",
               "evidence": {
-                "sleep_offset_start_s": -1.9899999870176543e-07,
-                "sleep_offset_end_s": -1.8899999076893437e-07,
-                "suspend_count_start": 0,
-                "suspend_count_end": 0
+                "sleep_offset_start_s": 29.064395189999686,
+                "sleep_offset_end_s": 29.06439504400032,
+                "suspend_count_start": 1,
+                "suspend_count_end": 1
               }
             },
             "power": {
               "outcome": "ok",
-              "reason": "on mains in all 7 power samples",
+              "reason": "on mains in all 8 power samples",
               "evidence": {
-                "samples": 7,
+                "samples": 8,
                 "off_mains_samples": [],
                 "battery_present": true,
                 "unknown_samples": 0,
@@ -2248,21 +2244,279 @@
             },
             "foreign_reads": {
               "outcome": "ok",
-              "reason": "12288 bytes of foreign reads on nvme0n1 (limit 1000000000)",
+              "reason": "at most 0 bytes of foreign reads on nvme0n1 (limit 1000000000)",
               "evidence": {
                 "model_path": "/home/m1kadoo/.cache/huggingface/hub",
                 "device": "nvme0n1",
-                "disk_read_bytes_start": 4151275008,
-                "disk_read_bytes_end": 4151287296,
+                "disk_read_bytes_start": 7217421824,
+                "disk_read_bytes_end": 7217421824,
+                "other_disk_read_bytes_start": 0,
+                "other_disk_read_bytes_end": 0,
                 "own_read_bytes": 0,
-                "foreign_read_bytes": 12288,
-                "uninspectable_processes": 287
+                "foreign_read_bytes": 0,
+                "foreign_read_bytes_min": 0,
+                "foreign_read_bytes_max": 0,
+                "uninspectable_processes": 281
+              },
+              "readers": [],
+              "unattributed_bytes": 0
+            }
+          }
+        }
+      },
+      {
+        "arm": "B",
+        "round": 10,
+        "run": 19,
+        "value": 0.06847809700002472,
+        "outcome": "ok",
+        "record": {
+          "arm": "B",
+          "round": 10,
+          "run": 19,
+          "label": "RTX 3050, real",
+          "gpu": {
+            "id": "0",
+            "source": "default"
+          },
+          "required": [
+            "suspend",
+            "power",
+            "foreign_reads"
+          ],
+          "outcome": "ok",
+          "box_stamp_before": {
+            "unix_s": 1791814472.4030032,
+            "ram_available_bytes": 10728640512,
+            "commit_charge": {
+              "used_bytes": 16310812672,
+              "limit_bytes": 12209106944
+            },
+            "power_source": "mains",
+            "gpu_processes": [
+              {
+                "pid": 6059,
+                "type": "G",
+                "name": "/usr/bin/gnome-shell",
+                "used_mib": 1
+              }
+            ],
+            "gpu_memory_used_mib": 12,
+            "unknown": {}
+          },
+          "box_stamp_after": {
+            "unix_s": 1791814485.0660973,
+            "ram_available_bytes": 10808537088,
+            "commit_charge": {
+              "used_bytes": 16311046144,
+              "limit_bytes": 12209106944
+            },
+            "power_source": "mains",
+            "gpu_processes": [
+              {
+                "pid": 6059,
+                "type": "G",
+                "name": "/usr/bin/gnome-shell",
+                "used_mib": 1
+              }
+            ],
+            "gpu_memory_used_mib": 12,
+            "unknown": {}
+          },
+          "gpu_clock": {
+            "outcome": "ok",
+            "reason": "SM clock 292 to 1957 MHz over 8 samples; clock event reasons seen: gpu_idle",
+            "samples": 8,
+            "unknown_samples": 0,
+            "sm_clock_mhz": {
+              "min": 292,
+              "median": 1740.0,
+              "max": 1957
+            },
+            "reasons_seen": {
+              "gpu_idle": 2
+            }
+          },
+          "checks": {
+            "suspend": {
+              "outcome": "ok",
+              "reason": "boot-time offset grew -0.000 s (limit 1.0 s); suspend count stayed at 1",
+              "evidence": {
+                "sleep_offset_start_s": 29.06439517200033,
+                "sleep_offset_end_s": 29.064395112000057,
+                "suspend_count_start": 1,
+                "suspend_count_end": 1
+              }
+            },
+            "power": {
+              "outcome": "ok",
+              "reason": "on mains in all 8 power samples",
+              "evidence": {
+                "samples": 8,
+                "off_mains_samples": [],
+                "battery_present": true,
+                "unknown_samples": 0,
+                "last_reading": {
+                  "battery": true,
+                  "online": {
+                    "ACAD": true,
+                    "ucsi-source-psy-USBC000:001": false,
+                    "ucsi-source-psy-USBC000:002": false
+                  }
+                }
+              }
+            },
+            "foreign_reads": {
+              "outcome": "ok",
+              "reason": "at most 8192 bytes of foreign reads on nvme0n1 (limit 1000000000)",
+              "evidence": {
+                "model_path": "/home/m1kadoo/.cache/huggingface/hub",
+                "device": "nvme0n1",
+                "disk_read_bytes_start": 7217421824,
+                "disk_read_bytes_end": 7217430016,
+                "other_disk_read_bytes_start": 0,
+                "other_disk_read_bytes_end": 0,
+                "own_read_bytes": 0,
+                "foreign_read_bytes": 8192,
+                "foreign_read_bytes_min": 8192,
+                "foreign_read_bytes_max": 8192,
+                "uninspectable_processes": 281
               },
               "readers": [
                 {
-                  "pid": 7561,
+                  "pid": 8486,
                   "name": "firefox",
-                  "read_bytes": 12288
+                  "read_bytes": 8192
+                }
+              ],
+              "unattributed_bytes": 0
+            }
+          }
+        }
+      },
+      {
+        "arm": "A",
+        "round": 10,
+        "run": 20,
+        "value": 0.06816878050040032,
+        "outcome": "ok",
+        "record": {
+          "arm": "A",
+          "round": 10,
+          "run": 20,
+          "label": "RTX 3050, real",
+          "gpu": {
+            "id": "0",
+            "source": "default"
+          },
+          "required": [
+            "suspend",
+            "power",
+            "foreign_reads"
+          ],
+          "outcome": "ok",
+          "box_stamp_before": {
+            "unix_s": 1791814485.1042936,
+            "ram_available_bytes": 10787532800,
+            "commit_charge": {
+              "used_bytes": 16311062528,
+              "limit_bytes": 12209106944
+            },
+            "power_source": "mains",
+            "gpu_processes": [
+              {
+                "pid": 6059,
+                "type": "G",
+                "name": "/usr/bin/gnome-shell",
+                "used_mib": 1
+              }
+            ],
+            "gpu_memory_used_mib": 12,
+            "unknown": {}
+          },
+          "box_stamp_after": {
+            "unix_s": 1791814498.3368196,
+            "ram_available_bytes": 10794721280,
+            "commit_charge": {
+              "used_bytes": 16310874112,
+              "limit_bytes": 12209106944
+            },
+            "power_source": "mains",
+            "gpu_processes": [
+              {
+                "pid": 6059,
+                "type": "G",
+                "name": "/usr/bin/gnome-shell",
+                "used_mib": 1
+              }
+            ],
+            "gpu_memory_used_mib": 12,
+            "unknown": {}
+          },
+          "gpu_clock": {
+            "outcome": "ok",
+            "reason": "SM clock 292 to 1957 MHz over 8 samples; clock event reasons seen: gpu_idle",
+            "samples": 8,
+            "unknown_samples": 0,
+            "sm_clock_mhz": {
+              "min": 292,
+              "median": 1740.0,
+              "max": 1957
+            },
+            "reasons_seen": {
+              "gpu_idle": 3
+            }
+          },
+          "checks": {
+            "suspend": {
+              "outcome": "ok",
+              "reason": "boot-time offset grew -0.000 s (limit 1.0 s); suspend count stayed at 1",
+              "evidence": {
+                "sleep_offset_start_s": 29.06439515200009,
+                "sleep_offset_end_s": 29.064395136999792,
+                "suspend_count_start": 1,
+                "suspend_count_end": 1
+              }
+            },
+            "power": {
+              "outcome": "ok",
+              "reason": "on mains in all 8 power samples",
+              "evidence": {
+                "samples": 8,
+                "off_mains_samples": [],
+                "battery_present": true,
+                "unknown_samples": 0,
+                "last_reading": {
+                  "battery": true,
+                  "online": {
+                    "ACAD": true,
+                    "ucsi-source-psy-USBC000:001": false,
+                    "ucsi-source-psy-USBC000:002": false
+                  }
+                }
+              }
+            },
+            "foreign_reads": {
+              "outcome": "ok",
+              "reason": "at most 131072 bytes of foreign reads on nvme0n1 (limit 1000000000)",
+              "evidence": {
+                "model_path": "/home/m1kadoo/.cache/huggingface/hub",
+                "device": "nvme0n1",
+                "disk_read_bytes_start": 7217430016,
+                "disk_read_bytes_end": 7217561088,
+                "other_disk_read_bytes_start": 0,
+                "other_disk_read_bytes_end": 0,
+                "own_read_bytes": 0,
+                "foreign_read_bytes": 131072,
+                "foreign_read_bytes_min": 131072,
+                "foreign_read_bytes_max": 131072,
+                "uninspectable_processes": 282
+              },
+              "readers": [
+                {
+                  "pid": 12626,
+                  "name": "claude",
+                  "read_bytes": 131072
                 }
               ],
               "unattributed_bytes": 0

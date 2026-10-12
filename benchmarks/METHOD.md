@@ -381,7 +381,7 @@ Three rules follow for a benchmark author:
   causes they watch.
 
 These sizes belong to one card on battery. The RTX 3050 laptop on mains gave a
-sigma of 0.00029 s in its own pilot (see the worked example). Run the pilot on
+sigma of 0.00054 s in its own pilot (see the worked example). Run the pilot on
 the machine you measure.
 
 ### Worked example: gate-836
@@ -401,9 +401,9 @@ Those runs were on an RTX 5070 Laptop on battery with the GPU capped at 50 W.
 Nothing measured on battery counts, and numbers from one card are never
 carried to another, so this sigma plans nothing.
 
-For contrast, the RTX 3050 laptop ran its own pilot on mains on 2026-10-09, with
+For contrast, the RTX 3050 laptop ran its own pilot on mains on 2026-10-12, with
 the same shape A config. Its record is in `results/f1-pilot/`. It gave sigma
-0.00029 s and a mean of A of 0.0692 s. The formula gives 1 block, so N is the
+0.00054 s and a mean of A of 0.0688 s. The formula gives 1 block, so N is the
 minimum of 2, and the comparison stops after its 5 pilot blocks. That holds for
 that config on that machine only.
 

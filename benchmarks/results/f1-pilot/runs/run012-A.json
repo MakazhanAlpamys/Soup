@@ -7,20 +7,20 @@
     "parameters_changed": true
   },
   "timing": {
-    "median_seconds": 0.06932403449999924,
-    "p95_seconds": 0.06995754899998019,
+    "median_seconds": 0.06997958049987574,
+    "p95_seconds": 0.07109228999979678,
     "counted_steps": 8,
     "warmup_steps_discarded": 4,
-    "total_seconds": 0.552703957999995,
+    "total_seconds": 0.5569586259998687,
     "step_seconds": [
-      0.0684323250000034,
-      0.06940998099997842,
-      0.06923808800002007,
-      0.06767620599998736,
-      0.06990200399997093,
-      0.06839601900003345,
-      0.06969178600002124,
-      0.06995754899998019
+      0.06829968299962275,
+      0.07014606200027629,
+      0.06998638799996115,
+      0.06782155300015802,
+      0.07109228999979678,
+      0.06997277299979032,
+      0.06957237699998586,
+      0.0700675000002775
     ]
   },
   "tokens": {
@@ -29,8 +29,8 @@
     "utilisation": 0.5315712187958884
   },
   "throughput": {
-    "useful_tokens_per_second": 2619.8473505413417,
-    "total_tokens_per_second": 4928.497363863684
+    "useful_tokens_per_second": 2599.8340494332183,
+    "total_tokens_per_second": 4890.848032221054
   },
   "memory": {
     "max_memory_allocated_bytes": 747465728,
@@ -44,9 +44,9 @@
     "driver": "595.99.02",
     "sm_clock_mhz_busy": {
       "min": 1957,
-      "median": 1957,
+      "median": 1957.0,
       "max": 1957,
-      "sample_count": 5,
+      "sample_count": 6,
       "unavailable_reason": null
     },
     "platform": "Linux-7.0.0-38-generic-x86_64-with-glibc2.43",

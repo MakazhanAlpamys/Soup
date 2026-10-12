@@ -7,20 +7,20 @@
     "parameters_changed": true
   },
   "timing": {
-    "median_seconds": 0.06899932650000551,
-    "p95_seconds": 0.07030721900002845,
+    "median_seconds": 0.0684291834998021,
+    "p95_seconds": 0.06959285200036902,
     "counted_steps": 8,
     "warmup_steps_discarded": 4,
-    "total_seconds": 0.5520162979999554,
+    "total_seconds": 0.5468973179999921,
     "step_seconds": [
-      0.0678992499999822,
-      0.07030721900002845,
-      0.06960997499999166,
-      0.06827076399997623,
-      0.06926800100001174,
-      0.06790182800000366,
-      0.06873065199999928,
-      0.07002860899996222
+      0.06778033499995217,
+      0.06959285200036902,
+      0.06822428399982527,
+      0.068162028000188,
+      0.06863408299977891,
+      0.0670165999999881,
+      0.06867715699991095,
+      0.06880997899997965
     ]
   },
   "tokens": {
@@ -29,8 +29,8 @@
     "utilisation": 0.5315712187958884
   },
   "throughput": {
-    "useful_tokens_per_second": 2623.1109574958905,
-    "total_tokens_per_second": 4934.6369117533195
+    "useful_tokens_per_second": 2647.663377277745,
+    "total_tokens_per_second": 4980.825303663382
   },
   "memory": {
     "max_memory_allocated_bytes": 747465728,
@@ -45,7 +45,7 @@
     "sm_clock_mhz_busy": {
       "min": 1957,
       "median": 1957,
-      "max": 1957,
+      "max": 1972,
       "sample_count": 5,
       "unavailable_reason": null
     },
