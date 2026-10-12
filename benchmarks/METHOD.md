@@ -193,10 +193,19 @@ question, not that the code is slow.
 
 ### What else the record holds
 
-Each arm record also holds `arm`, `round`, `run`, `label`, `required`, the
-box stamps `box_stamp_before` and `box_stamp_after`, and `gpu_clock`. The box
-stamps and the GPU clock record never void an arm. A field whose sensor gave
-nothing is `null`, with the reason under the stamp's `unknown`.
+Each arm record also holds `arm`, `round`, `run`, `label`, `gpu`, `required`,
+the box stamps `box_stamp_before` and `box_stamp_after`, and `gpu_clock`. The
+box stamps and the GPU clock record never void an arm. A field whose sensor
+gave nothing is `null`, with the reason under the stamp's `unknown`.
+
+`gpu` names the GPU every `nvidia-smi` call reads: `{"id": "1", "source":
+"CUDA_VISIBLE_DEVICES"}`. The workload's `cuda:0` is the first entry of
+`CUDA_VISIBLE_DEVICES`, an index or a UUID, so the sensors read that GPU. With
+the variable unset they read GPU 0 and `source` is `default`. A variable that
+leaves no GPU (`""`, `-1`, `NoDevFiles`) makes `id` null and every GPU field
+unknown. Set `CUDA_VISIBLE_DEVICES` in the environment of the process that
+runs the watch, before it starts. On a machine with different GPU models,
+name the GPU by UUID, because CUDA and `nvidia-smi` can number them differently.
 
 `gpu_clock` samples the SM clock and the active clock event reasons through
 `nvidia-smi` every 2 s. It stores the clock's min, median and max, and how

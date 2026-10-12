@@ -726,6 +726,89 @@ def test_failing_nvidia_smi_gives_unknown_with_its_message(validity, monkeypatch
     assert record["outcome"] == "ok"
 
 
+def _logging_nvidia_smi(directory):
+    """A synthetic nvidia-smi that appends its arguments to ``calls.log`` and answers any GPU."""
+    tool = directory / "nvidia-smi"
+    log = directory / "calls.log"
+    tool.write_text(f"""#!/bin/sh
+echo "$*" >> {log}
+case "$*" in
+  *clocks.sm*) echo "1500, 0x0000000000000000" ;;
+  *memory.used*) echo "2900" ;;
+  *PIDS*) echo "Attached GPUs : 1" ;;
+esac
+""")
+    tool.chmod(0o755)
+    return log
+
+
+def _gpu_ids_asked(log):
+    return {
+        argument.removeprefix("--id=")
+        for line in log.read_text().splitlines()
+        for argument in line.split()
+        if argument.startswith("--id=")
+    }
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="the fake nvidia-smi is a shell script")
+@pytest.mark.parametrize(
+    ("visible", "gpu_id"),
+    [
+        ("1", "1"),
+        ("2,0", "2"),
+        (" 1 , 0", "1"),
+        ("GPU-5c1f2d3e-aaaa-bbbb-cccc-0123456789ab,1", "GPU-5c1f2d3e-aaaa-bbbb-cccc-0123456789ab"),
+        ("MIG-5c1f2d3e-aaaa-bbbb-cccc-0123456789ab", "MIG-5c1f2d3e-aaaa-bbbb-cccc-0123456789ab"),
+    ],
+    ids=["index", "first-of-two", "spaces", "uuid", "mig"],
+)
+def test_gpu_sensors_read_the_gpu_the_workload_sees_as_cuda_0(
+    validity, monkeypatch, tmp_path, visible, gpu_id
+):
+    log = _logging_nvidia_smi(tmp_path)
+    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", visible)
+    record = _watch(validity, **_real_gpu_sensors(validity))
+
+    assert _gpu_ids_asked(log) == {gpu_id}
+    assert record["gpu"] == {"id": gpu_id, "source": "CUDA_VISIBLE_DEVICES"}
+    assert record["gpu_clock"]["outcome"] == "ok"
+    assert record["box_stamp_after"]["unknown"] == {}
+    json.dumps(record)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="the fake nvidia-smi is a shell script")
+def test_gpu_sensors_read_gpu_0_when_cuda_visible_devices_is_unset(
+    validity, monkeypatch, tmp_path
+):
+    log = _logging_nvidia_smi(tmp_path)
+    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+    record = _watch(validity, **_real_gpu_sensors(validity))
+
+    assert _gpu_ids_asked(log) == {"0"}
+    assert record["gpu"] == {"id": "0", "source": "default"}
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="the fake nvidia-smi is a shell script")
+@pytest.mark.parametrize("visible", ["", "-1", "NoDevFiles", ",1"], ids=repr)
+def test_workload_with_no_visible_gpu_gives_unknown_gpu_fields_without_asking_nvidia_smi(
+    validity, monkeypatch, tmp_path, visible
+):
+    log = _logging_nvidia_smi(tmp_path)
+    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", visible)
+    record = _watch(validity, **_real_gpu_sensors(validity))
+
+    assert not log.exists()
+    assert record["gpu"] == {"id": None, "source": "CUDA_VISIBLE_DEVICES"}
+    assert record["gpu_clock"]["outcome"] == "unknown"
+    assert "CUDA_VISIBLE_DEVICES" in record["gpu_clock"]["reason"]
+    assert "CUDA_VISIBLE_DEVICES" in record["box_stamp_before"]["unknown"]["gpu_processes"]
+    assert record["outcome"] == "ok"
+
+
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Linux sensors only")
 def test_real_box_stamp_and_gpu_clock_sensors_return_values(validity):
     if shutil.which("nvidia-smi") is None:

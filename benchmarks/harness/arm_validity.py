@@ -104,8 +104,11 @@ MEMINFO_PATH = "/proc/meminfo"
 #: Seconds between GPU clock samples during an arm.
 GPU_CLOCK_INTERVAL_S = 2.0
 
-#: The GPU the nvidia-smi sensors read.
-NVIDIA_GPU_ID = 0
+#: The GPU the nvidia-smi sensors read when CUDA_VISIBLE_DEVICES is unset.
+DEFAULT_NVIDIA_GPU_ID = "0"
+
+#: The variable that maps the workload's cuda:0 to a physical GPU.
+CUDA_VISIBLE_DEVICES = "CUDA_VISIBLE_DEVICES"
 
 #: Seconds before an nvidia-smi call counts as failed.
 NVIDIA_SMI_TIMEOUT_S = 20.0
@@ -412,17 +415,41 @@ def ram_available() -> Optional[int]:
     return None
 
 
-def _nvidia_smi(*args: str) -> List[str]:
-    """The non-empty lines nvidia-smi prints about GPU ``NVIDIA_GPU_ID`` for ``args``.
+def workload_gpu() -> Dict[str, Optional[str]]:
+    """The physical GPU the workload sees as ``cuda:0``, read from the environment.
 
-    Raises FileNotFoundError if nvidia-smi is not on PATH and RuntimeError if it
-    exits non-zero.
+    ``id`` is an index or a UUID for ``nvidia-smi --id``, taken from the first
+    entry of CUDA_VISIBLE_DEVICES, or GPU 0 when it is unset. It is None when
+    the variable leaves the workload no GPU. ``source`` names where it came from.
+    With CUDA_DEVICE_ORDER unset, CUDA and nvidia-smi can number the GPUs of a
+    mixed machine differently, so name the GPU by UUID there.
     """
+    visible = os.environ.get(CUDA_VISIBLE_DEVICES)
+    if visible is None:
+        return {"id": DEFAULT_NVIDIA_GPU_ID, "source": "default"}
+    first = visible.split(",")[0].strip()
+    if first in ("", "NoDevFiles") or first.startswith("-"):
+        return {"id": None, "source": CUDA_VISIBLE_DEVICES}
+    return {"id": first, "source": CUDA_VISIBLE_DEVICES}
+
+
+def _nvidia_smi(*args: str) -> List[str]:
+    """The non-empty lines nvidia-smi prints about the workload's GPU for ``args``.
+
+    Raises RuntimeError if CUDA_VISIBLE_DEVICES leaves the workload no GPU or if
+    nvidia-smi exits non-zero, and FileNotFoundError if it is not on PATH.
+    """
+    gpu = workload_gpu()
+    if gpu["id"] is None:
+        raise RuntimeError(
+            f"{CUDA_VISIBLE_DEVICES}={os.environ.get(CUDA_VISIBLE_DEVICES)!r} leaves "
+            "the workload no GPU"
+        )
     tool = shutil.which("nvidia-smi")
     if tool is None:
         raise FileNotFoundError("nvidia-smi is not on PATH")
     completed = subprocess.run(
-        [tool, f"--id={NVIDIA_GPU_ID}", *args],
+        [tool, f"--id={gpu['id']}", *args],
         capture_output=True,
         text=True,
         encoding="utf-8",
@@ -1242,6 +1269,7 @@ class ArmWatch:
         self._gpu_memory_used = gpu_memory_used
         self._gpu_processes = gpu_processes
         self._box_before: Optional[Dict[str, object]] = None
+        self._gpu: Dict[str, Optional[str]] = {}
         self._clock = Sampler("gpu_clock", gpu_clock, gpu_clock_interval_s)
         self.record: Optional[Dict[str, object]] = None
 
@@ -1249,6 +1277,7 @@ class ArmWatch:
         return box_stamp(power, self._ram_available, self._gpu_memory_used, self._gpu_processes)
 
     def start(self) -> None:
+        self._gpu = workload_gpu()
         self._power.start()
         self._box_before = self._box_stamp(self._power.samples[0])
         self._checks.start()
@@ -1269,6 +1298,7 @@ class ArmWatch:
             "round": self.round,
             "run": self.run,
             "label": self.label,
+            "gpu": self._gpu,
             "required": self.required,
             "outcome": arm_outcome(checks, self.required),
             "box_stamp_before": self._box_before,
