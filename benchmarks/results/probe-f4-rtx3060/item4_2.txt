@@ -1,0 +1,26 @@
+round        2
+torch        2.11.0+cu128
+GPU          NVIDIA GeForce RTX 3060
+capability   (8, 6)
+dtype        torch.bfloat16
+bitsandbytes yes
+shape       hidden=2048 inter=1024 experts=64 top_k=8 tokens=512 -> M=64
+warmed up for 60s
+
+=== reference point, olmoe_gate_up (K=2048, N=2048) ===
+M=512  23.479 TFLOPS   M=64  13.919 TFLOPS   factor 0.593
+
+=== one MoE layer forward, 512 tokens, 64 experts ===
+A gemm          4.883 ms
+B +gather       5.522 ms
+C +router      10.685 ms
+D +dequant     14.859 ms
+
+=== split ===
+the multiply                    4.883 ms    32.9%
+indexing (gather/scatter)       0.639 ms     4.3%
+routing                         5.163 ms    34.7%
+weight restore (NF4)            4.175 ms    28.1%
+total                          14.859 ms
+
+raw -> f4_item4_round_2.json

@@ -1,0 +1,32 @@
+{
+  "round": "3",
+  "gpu": "NVIDIA GeForce RTX 3060",
+  "torch": "2.11.0+cu128",
+  "dtype": "torch.bfloat16",
+  "bnb": true,
+  "shape": {
+    "hidden": 2048,
+    "inter": 1024,
+    "experts": 64,
+    "top_k": 8,
+    "tokens": 512,
+    "M": 64
+  },
+  "reference": {
+    "tflops_512": 23.479538246352796,
+    "tflops_M": 14.002320087531919,
+    "factor": 0.5963626686613812
+  },
+  "arms_ms": {
+    "A gemm": 4.900137710571289,
+    "B +gather": 5.513062286376953,
+    "C +router": 10.5544189453125,
+    "D +dequant": 14.780671691894531
+  },
+  "split_ms": {
+    "the multiply": 4.900137710571289,
+    "indexing (gather/scatter)": 0.6129245758056641,
+    "routing": 5.041356658935547,
+    "weight restore (NF4)": 4.2262527465820305
+  }
+}
