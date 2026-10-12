@@ -716,6 +716,8 @@ training:
   quantization: none
   expand_layers: 4
   freeze_trainable_layers: 4
+  lora:
+    r: 0  # #1326: a LoRA rank is refused with expand_layers
 """
         cfg = _load(yaml_in)
         assert cfg.training.expand_layers == 4
