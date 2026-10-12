@@ -257,24 +257,37 @@ def test_961_reachable_fields_reported_together(config_at):
 
     #961 declared four reachable fields. ``training.quantization_aware`` is no
     longer one of them on MLX: ``true`` is refused at load on every backend
-    (#1222), and ``fp8`` and ``quest`` are refused on mlx. So three are
-    reported together, and adding the fourth stops the load instead.
+    (#1222), and ``fp8`` and ``quest`` are refused on mlx. ``training.use_mod``
+    is refused at load too (#1752). The two that still load are reported
+    together, and adding either refused field stops the load instead.
     """
     from soup_cli.config.backend_support import check_config
     from soup_cli.config.loader import load_config
 
-    fields = "  use_mod: true\n  moe_lora: true\n  use_fsdp2_compile: true"
+    fields = "  moe_lora: true\n  use_fsdp2_compile: true"
     cfg = load_config(config_at("sft", "mlx", fields))
     rows = check_config(cfg)
     assert {e.field for e in rows} == {
-        "training.use_mod",
         "training.moe_lora",
         "training.use_fsdp2_compile",
     }
-    assert len(rows) == 3
+    assert len(rows) == 2
 
     with pytest.raises(SystemExit):
         load_config(config_at("sft", "mlx", fields + "\n  quantization_aware: true"))
+
+
+def test_mlx_use_mod_is_declared_rejected(config_at):
+    """#1752 — the MLX row stays a trainer-read warning, but load refuses it."""
+    from soup_cli.config.backend_support import REJECTED, unsupported_for
+    from soup_cli.config.loader import load_config
+
+    entry = next(e for e in unsupported_for("sft", "mlx") if e.field == "training.use_mod")
+    assert entry.status == REJECTED
+    assert entry.trainer_reads is True
+    assert "Mixture-of-Depths" in entry.reason
+    with pytest.raises(SystemExit):
+        load_config(config_at("sft", "mlx", "  use_mod: true"))
 
 
 def test_only_fields_the_user_actually_set_are_reported(config_at):
