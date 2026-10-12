@@ -54,6 +54,9 @@ class LoopState:
     # v0.71.4 #176 — use the pre-wired harvest/train/gate/deploy stages
     # (utils/loop_stages.py) instead of the no-op default callbacks.
     pre_wired: bool = False
+    # #1440 — local-RL SQLite that `soup serve --record-thumbs` writes; the
+    # pre-wired harvest reads its thumbs as preference pairs. None = not used.
+    thumbs_db: Optional[str] = None
     traces_collected: int = 0
     pairs_distilled: int = 0
     runs_gated: int = 0
@@ -118,6 +121,8 @@ class LoopState:
             raise ValueError("pre_wired must be bool")
         if self.canary_active is not None:
             _require_str("canary_active", self.canary_active, allow_empty=False)
+        if self.thumbs_db is not None:
+            _require_str("thumbs_db", self.thumbs_db, allow_empty=False)
         if self.canary_rollout_id is not None:
             _require_str("canary_rollout_id", self.canary_rollout_id, allow_empty=False)
         if self.last_iteration_id is not None:
@@ -282,6 +287,7 @@ def init_state(
     monthly_budget_usd: Optional[float] = None,
     max_runs_per_day: Optional[int] = None,
     pre_wired: bool = False,
+    thumbs_db: Optional[str] = None,
     path: Optional[str] = None,
     force: bool = False,
 ) -> Tuple[LoopState, str]:
@@ -310,6 +316,7 @@ def init_state(
         baseline=baseline,
         status="stopped",
         pre_wired=pre_wired,
+        thumbs_db=thumbs_db,
         monthly_budget_usd=monthly_budget_usd,
         max_runs_per_day=max_runs_per_day,
         created_at=now,

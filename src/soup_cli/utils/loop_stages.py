@@ -44,6 +44,8 @@ _LOG = logging.getLogger(__name__)
 _PAIRS_DIR = ".soup-loops/pairs"
 _ADAPTERS_DIR = ".soup-loops/adapters"
 _DEFAULT_TRACE_DIR = ".soup-loops/traces"
+# #1440 — `source` tag on pairs harvested from the `--record-thumbs` database.
+_THUMBS_SOURCE = "soup-serve-thumbs"
 
 # Test / smoke escape hatches (default None → real behaviour).
 _TRACE_DIR_RESOLVER: Optional[Callable[[LoopState], Optional[str]]] = None
@@ -85,27 +87,82 @@ def _resolve_trace_dir(state: LoopState) -> Optional[str]:
     return None
 
 
-def harvest_from_traces(state: LoopState) -> Mapping[str, object]:
-    """Scan serve traces for thumbs/regeneration signals → preference pairs.
+def _resolve_thumbs_db(state: LoopState) -> Optional[tuple]:
+    """Return ``(path, field)`` for the thumbs database, or ``None``.
 
-    Writes the harvested pairs to ``.soup-loops/pairs/<uuid>.jsonl`` (cwd-
-    contained) and returns ``{pairs_harvested, pairs_path, traces_collected}``.
-    Yields zero pairs (no path) when no trace directory is configured.
+    Same precedence as the trace directory: ``SOUP_LOOP_THUMBS_DB`` env, then
+    ``thumbs_db`` from ``loop.yaml`` (``soup loop init --thumbs-db``). The
+    field name travels with the path so a refusal names where it came from.
+    """
+    env = os.environ.get("SOUP_LOOP_THUMBS_DB")
+    if env:
+        return env, "SOUP_LOOP_THUMBS_DB"
+    if state.thumbs_db:
+        return state.thumbs_db, "thumbs_db"
+    return None
+
+
+def _thumbs_pairs(state: LoopState) -> tuple:
+    """Pairs from the ``soup serve --record-thumbs`` database (#1440).
+
+    Returns ``(pairs, missing)``. A configured path that leaves cwd or is a
+    symlink raises ``ValueError`` naming its field (the rule ``--record-thumbs``
+    applies on the serve side). A path that does not exist yet is zero thumbs,
+    not an error: ``soup loop watch`` may start before the serve creates it.
+    """
+    resolved = _resolve_thumbs_db(state)
+    if resolved is None:
+        return [], False
+    path, field = resolved
+    from soup_cli.data.traces.pair_builder import PreferencePair
+    from soup_cli.utils.local_rl import harvest_dpo_pairs, validate_db_path
+
+    try:
+        validate_db_path(path)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field}: {exc}") from exc
+    if not os.path.exists(path):
+        return [], True
+    pairs = [
+        PreferencePair(
+            prompt=p.prompt, chosen=p.chosen, rejected=p.rejected, source=_THUMBS_SOURCE
+        )
+        for p in harvest_dpo_pairs(path)
+    ]
+    return pairs, False
+
+
+def harvest_from_traces(state: LoopState) -> Mapping[str, object]:
+    """Serve traces and recorded thumbs → preference pairs.
+
+    Reads ``soup serve --trace-log`` directories (thumbs/regeneration signals)
+    and, when one is configured, the ``soup serve --record-thumbs`` database
+    (#1440); the two are unioned without exact duplicates. Writes the pairs to
+    ``.soup-loops/pairs/<uuid>.jsonl`` (cwd-contained) and returns
+    ``{pairs_harvested, pairs_path, traces_collected, thumbs_pairs,
+    thumbs_db_missing}``. Yields zero pairs (no path) when neither source has
+    any.
     """
     from soup_cli.data.traces.pair_builder import build_pairs
     from soup_cli.data.traces.parsers import parse_soup_serve
 
     trace_dir = _resolve_trace_dir(state)
-    if not trace_dir:
-        return {"pairs_harvested": 0, "pairs_path": None, "traces_collected": 0}
-
-    traces = list(parse_soup_serve(trace_dir))
-    pairs = list(build_pairs(traces, signal="thumbs_up"))
+    traces = list(parse_soup_serve(trace_dir)) if trace_dir else []
+    pairs = list(build_pairs(traces, signal="thumbs_up")) if traces else []
+    thumbs, thumbs_missing = _thumbs_pairs(state)
+    seen = {(p.prompt, p.chosen, p.rejected) for p in pairs}
+    for p in thumbs:
+        key = (p.prompt, p.chosen, p.rejected)
+        if key not in seen:
+            seen.add(key)
+            pairs.append(p)
+    extra = {"thumbs_pairs": len(thumbs), "thumbs_db_missing": thumbs_missing}
     if not pairs:
         return {
             "pairs_harvested": 0,
             "pairs_path": None,
             "traces_collected": len(traces),
+            **extra,
         }
 
     pairs_dir = Path(_PAIRS_DIR)
@@ -119,6 +176,7 @@ def harvest_from_traces(state: LoopState) -> Mapping[str, object]:
         "pairs_harvested": len(pairs),
         "pairs_path": pairs_path,
         "traces_collected": len(traces),
+        **extra,
     }
 
 

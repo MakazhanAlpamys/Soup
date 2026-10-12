@@ -82,6 +82,14 @@ def init_cmd(
             "(utils/loop_stages.py) on watch instead of no-op stubs (v0.71.4)."
         ),
     ),
+    thumbs_db: Optional[str] = typer.Option(
+        None, "--thumbs-db",
+        help=(
+            "Local-RL SQLite written by `soup serve --record-thumbs`; the "
+            "pre-wired harvest turns its thumbs into preference pairs. Must "
+            "stay under cwd. SOUP_LOOP_THUMBS_DB overrides it."
+        ),
+    ),
     force: bool = typer.Option(False, "--force", help="Overwrite existing loop.yaml."),
 ) -> None:
     """Create the .soup/loop.yaml control file (one-time setup)."""
@@ -97,6 +105,14 @@ def init_cmd(
     ):
         console.print("[red]--max-runs-per-day must be a positive int[/]")
         raise typer.Exit(code=2)
+    if thumbs_db is not None:
+        from soup_cli.utils.local_rl import validate_db_path
+
+        try:
+            validate_db_path(thumbs_db)
+        except (TypeError, ValueError) as exc:
+            console.print(f"[red]invalid --thumbs-db:[/] {escape(str(exc))}")
+            raise typer.Exit(code=2)
     try:
         state, path = init_state(
             served_model=served_model,
@@ -105,6 +121,7 @@ def init_cmd(
             monthly_budget_usd=budget_usd,
             max_runs_per_day=max_runs_per_day,
             pre_wired=pre_wired,
+            thumbs_db=thumbs_db,
             force=force,
         )
     except (FileExistsError, FileNotFoundError, TypeError, ValueError) as exc:
