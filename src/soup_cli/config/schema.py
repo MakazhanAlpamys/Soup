@@ -5998,9 +5998,16 @@ class SoupConfig(BaseModel):
         """
         tcfg = self.training
         if tcfg.use_liger and self.task not in SFT_KERNEL_AWARE_TASKS:
+            # #1425: a blend reads the logits of the trainer's forward pass.
+            blend = (
+                ". A preference_loss_weights blend could not use it either: trl's "
+                "Liger loss returns no logits for the blend to read."
+                if self.task == "preference" and tcfg.preference_loss_weights
+                else ""
+            )
             raise ValueError(
                 f"training.use_liger=true requires task in "
-                f"{sorted(SFT_KERNEL_AWARE_TASKS)}; got task={self.task!r}"
+                f"{sorted(SFT_KERNEL_AWARE_TASKS)}; got task={self.task!r}{blend}"
             )
         if tcfg.use_flash_attn and self.task not in SFT_KERNEL_AWARE_TASKS:
             raise ValueError(

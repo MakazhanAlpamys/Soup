@@ -1021,7 +1021,12 @@ with a blend.
 **Cost of a `dpo` / `ipo` primary.** The policy is run once, as in a
 single-loss run. The reference is run twice per step: trl computes its own
 reference log-probs inline and keeps only their means, so the blend asks the
-trainer for them again (`compute_ref_log_probs`, without gradients).
+trainer for them again (`compute_ref_log_probs`, without gradients). With
+16-bit logits (bf16 or fp16 autocast) the blend also keeps one more tensor the
+size of the logits for the backward pass, next to the one trl's own loss
+keeps: 2 bytes × rows × tokens × vocabulary, where a batch of 4 pairs is 8
+rows. That is about 250 MiB for 4 pairs of 512 tokens and a 32,000-token
+vocabulary. With float32 logits it keeps none.
 
 **Evaluation.** With `val_split` set and a `simpo` / `orpo` primary, trl's
 `prediction_step` calls `get_batch_loss_metrics` directly, so the eval loss is

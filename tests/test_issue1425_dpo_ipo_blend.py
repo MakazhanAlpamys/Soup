@@ -499,20 +499,41 @@ class TestWhatStillRefuses:
                 f"{fields}  lora: {{r: 4, alpha: 8}}\noutput: ./out\n"
             )
 
+    _LIGER = (
+        "base: ./tiny\ntask: {task}\n"
+        "data: {{train: ./unused.jsonl, format: dpo, max_length: 64}}\n"
+        "training:\n{loss}  use_liger: true\n  lora: {{r: 4, alpha: 8}}\noutput: ./out\n"
+    )
+    _WEIGHTS = "  preference_loss_weights: {dpo: 0.7, simpo: 0.3}\n"
+
     def test_liger_keeps_refusing_a_blend_at_load_with_its_reason(self):
-        """Out of scope here, and unchanged. trl's Liger DPO loss returns no
-        logits for a blend to read, and the switch never reaches a preference
-        trainer: the schema refuses it for the task and names the tasks that
-        take it."""
+        """Out of scope here: the switch never reaches a preference trainer,
+        and the schema refuses it for the task and names the tasks that take
+        it. For a blend it also says why the blend could not use it."""
         from soup_cli.config.loader import load_config_from_string
 
-        with pytest.raises(ValueError, match="use_liger=true requires task"):
-            load_config_from_string(
-                "base: ./tiny\ntask: preference\n"
-                "data: {train: ./unused.jsonl, format: dpo, max_length: 64}\n"
-                "training:\n  preference_loss_weights: {dpo: 0.7, simpo: 0.3}\n"
-                "  use_liger: true\n  lora: {r: 4, alpha: 8}\noutput: ./out\n"
-            )
+        with pytest.raises(ValueError, match="use_liger=true requires task") as excinfo:
+            load_config_from_string(self._LIGER.format(task="preference", loss=self._WEIGHTS))
+        assert (
+            "got task='preference'. A preference_loss_weights blend could not use it "
+            "either: trl's Liger loss returns no logits for the blend to read."
+        ) in str(excinfo.value)
+
+    @pytest.mark.parametrize(
+        ("task", "loss"),
+        [
+            ("preference", "  preference_loss: dpo\n"),
+            # Weights under another task are no blend; their own check says so
+            # once the switch is off.
+            ("dpo", _WEIGHTS),
+        ],
+    )
+    def test_liger_without_a_blend_keeps_the_task_message_alone(self, task, loss):
+        from soup_cli.config.loader import load_config_from_string
+
+        with pytest.raises(ValueError, match="use_liger=true requires task") as excinfo:
+            load_config_from_string(self._LIGER.format(task=task, loss=loss))
+        assert str(excinfo.value).endswith(f"got task={task!r}")
 
     def test_bco_keeps_refusing_a_paired_blend_with_its_reason(self, tmp_path, monkeypatch):
         """Out of scope here, and unchanged: bco reads one response per row
@@ -537,23 +558,34 @@ class TestWhatStillRefuses:
 
 
 class TestTheCapture:
-    def _dpo_like(self, **attrs):
-        class _Trainer:
-            def compute_ref_log_probs(self, inputs):  # pragma: no cover — not reached
-                raise AssertionError
+    def _dpo_like(self, without=(), **attrs):
+        """The surface of trl's ``DPOTrainer`` the capture looks for, less the
+        methods named in ``without``."""
 
-            def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
-                return torch.tensor(2.0)
+        def _truncate_inputs(self, input_ids, attention_mask, completion_mask):
+            raise AssertionError  # pragma: no cover — not reached
 
-        trainer = _Trainer()
+        def compute_ref_log_probs(self, inputs):
+            raise AssertionError  # pragma: no cover — not reached
+
+        def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
+            return torch.tensor(2.0)
+
+        methods = {
+            method.__name__: method
+            for method in (_truncate_inputs, compute_ref_log_probs, compute_loss)
+            if method.__name__ not in without
+        }
+        trainer = type("_Trainer", (), methods)()
         for key, value in attrs.items():
             setattr(trainer, key, value)
         return trainer
 
-    def _hand_made(self):
+    def _hand_made(self, truncates=True):
         """A stand-in ``DPOTrainer`` with numbers small enough to check by hand:
         two pairs, three positions, a two-word vocabulary with equal logits, so
-        every token has log-prob ``-log 2``."""
+        every token has log-prob ``-log 2``. ``truncates=False`` is a trl that
+        has renamed its private ``_truncate_inputs``."""
         from types import SimpleNamespace
 
         logits = torch.zeros(4, 3, 2, requires_grad=True)
@@ -561,9 +593,12 @@ class TestTheCapture:
         class _Trainer:
             truncated = 0
 
-            def _truncate_inputs(self, input_ids, attention_mask, completion_mask):
+            def _cut(self, input_ids, attention_mask, completion_mask):
                 self.truncated += 1
                 return input_ids, attention_mask, completion_mask
+
+            if truncates:
+                _truncate_inputs = _cut
 
             def compute_ref_log_probs(self, inputs):
                 return torch.tensor([-1.0, -2.0]), torch.tensor([-3.0, -4.0])
@@ -641,7 +676,12 @@ class TestTheCapture:
 
     @pytest.mark.parametrize(
         ("dtype", "keeps_a_log_softmax"),
-        [(torch.float32, False), (torch.float64, False), (torch.float16, True)],
+        [
+            (torch.float32, False),
+            (torch.float64, False),
+            (torch.bfloat16, True),
+            (torch.float16, True),
+        ],
     )
     def test_full_precision_keeps_no_log_softmax_in_the_graph(self, dtype, keeps_a_log_softmax):
         """The values are the same either way in float32; the memory is not.
@@ -695,6 +735,40 @@ class TestTheCapture:
 
         assert attach_reference_logp_capture(trainer) is False
         assert trainer.compute_loss == before
+
+    @pytest.mark.parametrize(
+        "missing", ["compute_loss", "compute_ref_log_probs", "_truncate_inputs"]
+    )
+    def test_a_dpo_trainer_without_a_method_the_capture_calls_gets_none(self, missing):
+        """``_truncate_inputs`` is private to trl, and any ``trl<1.0`` is
+        allowed: a release that renames it must find ``compute_loss`` left
+        alone, as a trainer with no reference does."""
+        from soup_cli.utils.preference_combine import attach_reference_logp_capture
+
+        trainer = self._dpo_like(without=(missing,))
+        before = getattr(trainer, "compute_loss", None)
+
+        assert attach_reference_logp_capture(trainer) is False
+        assert getattr(trainer, "compute_loss", None) == before
+
+    def test_a_blend_on_a_trl_without_truncate_inputs_stops_with_the_reason(self):
+        """What the user sees on such a trl: the blend's own refusal at the
+        first step, not an ``AttributeError`` from inside the capture."""
+        from soup_cli.utils.preference_combine import (
+            attach_policy_logp_capture,
+            attach_reference_logp_capture,
+            attach_weighted_preference_combine,
+        )
+
+        trainer, inputs = self._hand_made(truncates=False)
+        attach_policy_logp_capture(trainer)
+        attach_reference_logp_capture(trainer)
+        attach_weighted_preference_combine(trainer, {"dpo": 0.7, "simpo": 0.3})
+
+        with pytest.raises(ValueError, match="no per-sequence log-probs") as excinfo:
+            trainer.compute_loss(None, inputs)
+        assert "cannot compute dpo, simpo on this step" in str(excinfo.value)
+        assert trainer.truncated == 0
 
     def test_the_liger_path_gets_no_capture(self):
         """trl's Liger DPO loss returns no logits and raises on

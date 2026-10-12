@@ -539,10 +539,14 @@ def attach_reference_logp_capture(trainer: object) -> bool:
     token counts when ``completion_mask`` marks it, and the inputs are cut by
     the trainer's own ``_truncate_inputs`` first.
 
-    Returns True when the capture is in place. trl's Liger path returns no
-    logits, so it gets no capture and its blend keeps refusing.
+    Returns True when the capture is in place. A trainer without one of the
+    three methods it calls gets none: ``_truncate_inputs`` is private to trl,
+    so a release that renames it leaves the blend refusing with its reason
+    rather than failing inside the capture. trl's Liger path returns no
+    logits, so it gets no capture either and its blend keeps refusing.
     """
-    if not hasattr(trainer, "compute_ref_log_probs") or not hasattr(trainer, "compute_loss"):
+    needed = ("compute_loss", "compute_ref_log_probs", "_truncate_inputs")
+    if not all(hasattr(trainer, name) for name in needed):
         return False
     if getattr(trainer, "use_liger_kernel", False):
         return False
