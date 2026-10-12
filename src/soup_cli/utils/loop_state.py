@@ -54,9 +54,6 @@ class LoopState:
     # v0.71.4 #176 — use the pre-wired harvest/train/gate/deploy stages
     # (utils/loop_stages.py) instead of the no-op default callbacks.
     pre_wired: bool = False
-    # #1440 — local-RL SQLite that `soup serve --record-thumbs` writes; the
-    # pre-wired harvest reads its thumbs as preference pairs. None = not used.
-    thumbs_db: Optional[str] = None
     traces_collected: int = 0
     pairs_distilled: int = 0
     runs_gated: int = 0
@@ -74,6 +71,10 @@ class LoopState:
     iteration_count: int = 0
     created_at: str = ""
     updated_at: str = ""
+    # #1440 — local-RL SQLite that `soup serve --record-thumbs` writes; the
+    # pre-wired harvest reads its thumbs as preference pairs. None = not used.
+    # Last, so adding it shifted no existing positional field.
+    thumbs_db: Optional[str] = None
 
     def __post_init__(self) -> None:  # noqa: D401 — validator hook
         # Closed-allowlist enforcement + bool-as-int rejection mirror the

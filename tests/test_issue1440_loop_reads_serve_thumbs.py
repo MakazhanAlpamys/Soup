@@ -202,3 +202,16 @@ def test_loop_init_refuses_a_thumbs_db_outside_the_project(cwd, tmp_path_factory
     assert "No such option" not in text, text
     assert "--thumbs-db" in text and "under cwd" in text, text
     assert not os.path.exists(os.path.join(".soup", "loop.yaml"))
+
+
+def test_thumbs_db_is_the_last_field_so_positional_fields_keep_their_meaning():
+    """Adding the field must not shift `traces_collected` and the rest for positional callers."""
+    import dataclasses
+
+    from soup_cli.utils.loop_state import LoopState
+
+    names = [f.name for f in dataclasses.fields(LoopState)]
+    assert names[-1] == "thumbs_db", names
+    state = LoopState("m", "e", "b", "stopped", False, 7)
+    assert state.traces_collected == 7
+    assert state.thumbs_db is None
