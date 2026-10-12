@@ -241,6 +241,8 @@ def test_missing_log_names_the_path_and_the_config_field(
 
 
 def test_step_and_json_name_the_poisoned_row(tmp_path, plain_console, monkeypatch):
+    # --json is written under the current directory only (v0.76.0 release review).
+    monkeypatch.chdir(tmp_path)
     _build(tmp_path / RewindLog.FILENAME, _run_entries())
     _patch_tracker(
         monkeypatch, {"run_id": "r1", "output_dir": str(tmp_path), "status": "completed"}
@@ -258,6 +260,8 @@ def test_step_and_json_name_the_poisoned_row(tmp_path, plain_console, monkeypatc
 
 
 def test_default_details_the_worst_spike(tmp_path, plain_console, monkeypatch):
+    # --json is written under the current directory only (v0.76.0 release review).
+    monkeypatch.chdir(tmp_path)
     _build(tmp_path / RewindLog.FILENAME, _run_entries())
     _patch_tracker(
         monkeypatch, {"run_id": "r1", "output_dir": str(tmp_path), "status": "completed"}
@@ -270,6 +274,8 @@ def test_default_details_the_worst_spike(tmp_path, plain_console, monkeypatch):
 
 def test_worst_spike_is_the_first_not_the_last(tmp_path, plain_console, monkeypatch):
     """Two spikes: the critical nan at 50 outranks the warning at 41."""
+    # --json is written under the current directory only (v0.76.0 release review).
+    monkeypatch.chdir(tmp_path)
     _build(tmp_path / RewindLog.FILENAME, _run_entries(nan_step=50))
     _patch_tracker(
         monkeypatch, {"run_id": "r1", "output_dir": str(tmp_path), "status": "completed"}
@@ -420,6 +426,8 @@ def test_load_row_previews_refuses_a_different_dataset(tmp_path):
 def test_fingerprint_mismatch_withholds_previews_but_lists_rows(
     tmp_path, plain_console, monkeypatch
 ):
+    # --json is written under the current directory only (v0.76.0 release review).
+    monkeypatch.chdir(tmp_path)
     config = _chat_config(tmp_path)
     _build(tmp_path / RewindLog.FILENAME, _run_entries(), fingerprint="stale-fingerprint")
     _patch_tracker(
@@ -533,4 +541,3 @@ def test_a_header_only_log_refuses_rather_than_reporting_clean(
     assert result.exit_code == 1, result.output
     assert "No micro-batches were recorded" in result.output
     assert "No loss spikes recorded" not in result.output
-

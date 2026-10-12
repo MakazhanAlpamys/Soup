@@ -354,3 +354,41 @@ def test_unloaded_adapter_warning_has_no_exception_traceback(tmp_path, monkeypat
                            "content": "hi"}], "conversation_id": "k"}).status_code == 200
     warning = next(record for record in caplog.records if "is not loaded" in record.message)
     assert not warning.exc_info
+
+
+def test_outage_refuses_outcomes_past_the_pending_batch_until_recovery(buffers, monkeypatch):
+    buffer = buffers(batch_size=2, interval=60.0)
+    policy = CanaryPolicy("base", "candidate", 50.0)
+
+    def fail(*args, **kwargs):
+        raise OSError("disk unavailable")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(canary_router, "atomic_write_text", fail)
+        buffer.record(policy, "stable", True, rollout_id="r")
+        with pytest.raises(OSError):
+            buffer.record(policy, "stable", True, rollout_id="r")  # batch full, write fails
+        for _ in range(5):
+            with pytest.raises(OSError):
+                buffer.record(policy, "stable", True, rollout_id="r")  # refused, not counted
+    buffer.flush()
+    stats = canary_router.read_bucket_stats(stable="base", canary="candidate", rollout_id="r",
+                                           path=buffer.path)
+    assert stats.stable_ok == 2  # exactly the one pending batch survives the outage
+
+
+def test_late_old_completion_does_not_force_a_flush_of_the_current_batch(buffers, tmp_path):
+    state_path = tmp_path / "loop.yaml"
+    state = LoopState(served_model="base", eval_suite="e", baseline="b",
+                      canary_active="candidate", canary_traffic_pct=50.0,
+                      canary_rollout_id="new")
+    write_state(state, str(state_path))
+    buffer = buffers(interval=60.0, state_cache=CanaryStateCache(str(state_path)))
+    policy = CanaryPolicy("base", "candidate", 50.0)
+    buffer.record(policy, "canary", True, rollout_id="new")
+    buffer.record(policy, "canary", False, rollout_id="old")  # late completion, superseded
+    assert not os.path.exists(buffer.path)  # dropped on arrival: nothing flushed early
+    buffer.close()
+    stats = canary_router.read_bucket_stats(stable="base", canary="candidate", rollout_id="new",
+                                           path=buffer.path)
+    assert stats.canary_ok == 1 and stats.canary_major == 0

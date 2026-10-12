@@ -653,7 +653,7 @@ HttpOnly session cookie and redirects, as described below, so the address bar
 ends up clean and a reload or a new tab stays signed in. Your browser's history
 still records the URL it was given.
 
-> **v0.75.0 and v0.75.1: add the token to the URL yourself.** In these two
+> **v0.75.0 through v0.75.2: add the token to the URL yourself.** In these
 > releases the tab `soup ui` opens carries no token, so it shows
 > `Error loading dashboard: Unauthorized` and no page can load data (#1194).
 > Open `http://127.0.0.1:<PORT>/?token=<TOKEN>` instead, with the port from
@@ -723,7 +723,7 @@ soup quantize ./out --to gguf --bits 4
 soup quantize ./out --to onnx -o ./out-onnx
 ```
 
-Prints the equivalent `soup export …` invocation (escaped via `shlex.quote`) for copy-paste. Intentionally does NOT in-process call `soup export` — Typer commands aren't safe to re-enter. `--to awq` and `--to gptq` still print their command, followed by a notice that the two formats are deprecated and will be removed in the next release.
+Prints the equivalent `soup export …` invocation (escaped via `shlex.quote`) for copy-paste. Intentionally does NOT in-process call `soup export` — Typer commands aren't safe to re-enter. `--to awq` and `--to gptq` still print their command, followed by a notice that the two formats are deprecated and will be removed in Soup v0.77.
 
 
 ## Llama.cpp Proxy

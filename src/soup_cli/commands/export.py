@@ -13,6 +13,7 @@ from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
 
+from soup_cli.config.deprecation import DEPRECATED_VALUE_REJECTION_VERSION
 from soup_cli.utils.terminal import for_terminal
 
 console = Console()
@@ -51,7 +52,8 @@ def deprecated_format_notice(fmt: str) -> Optional[str]:
         return None
     replacements = ", ".join(REPLACEMENT_FORMATS[:-1]) + f" or {REPLACEMENT_FORMATS[-1]}"
     return (
-        f"--format {fmt} is deprecated and will be removed in the next release: "
+        f"--format {fmt} is deprecated and will be removed in "
+        f"Soup v{DEPRECATED_VALUE_REJECTION_VERSION}: "
         f"{upstream} is archived upstream and the {fmt} extra cannot be installed "
         f"next to the train extra. Use --format {replacements} instead."
     )
@@ -77,7 +79,8 @@ def export(
         "-f",
         help=(
             "Export format: gguf, onnx, tensorrt, awq, gptq, bitnet, tq1_0 "
-            "(awq and gptq are deprecated and will be removed in the next release)"
+            "(awq and gptq are deprecated and will be removed in "
+            f"Soup v{DEPRECATED_VALUE_REJECTION_VERSION})"
         ),
     ),
     quant: str = typer.Option(

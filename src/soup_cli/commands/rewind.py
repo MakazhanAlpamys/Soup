@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import asdict
 from pathlib import Path
 from typing import Optional
 
 import typer
 from rich.console import Console
-from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
+
+from soup_cli.utils.terminal import for_terminal
 
 console = Console()
 
@@ -51,12 +53,14 @@ def rewind(
     top: int = typer.Option(
         10,
         "--top",
-        help="How many rows to list for the detailed step.",
+        min=1,
+        help="How many rows to list for the detailed step (at least 1).",
     ),
-    json_path: Optional[Path] = typer.Option(
+    json_path: Optional[str] = typer.Option(
         None,
         "--json",
-        help="Write the spikes and the ranked rows to this path as JSON.",
+        help="Write the spikes and the ranked rows to this path as JSON "
+        "(must stay under the current directory).",
     ),
     no_preview: bool = typer.Option(
         False,
@@ -74,6 +78,16 @@ def rewind(
     from soup_cli.experiment.tracker import ExperimentTracker
     from soup_cli.monitoring.rewind_log import RewindLog, RewindLogError, read_rewind_log
     from soup_cli.utils import rewind as rewind_utils
+    from soup_cli.utils.paths import check_report_output_path
+
+    # The destination is validated first, before the tracker is opened or the log is
+    # read, so a refused path fails at once instead of after the analysis has run.
+    if json_path is not None:
+        try:
+            check_report_output_path(json_path, "--json")
+        except (TypeError, ValueError) as exc:
+            console.print(f"[red]Invalid output:[/] {for_terminal(exc)}")
+            raise typer.Exit(2) from exc
 
     tracker = ExperimentTracker()
     if run_id is None:
@@ -85,7 +99,7 @@ def rewind(
     else:
         target = tracker.get_run(run_id)
         if target is None:
-            console.print(f"[red]Run not found:[/] {escape(run_id)}")
+            console.print(f"[red]Run not found:[/] {for_terminal(run_id)}")
             raise typer.Exit(1)
 
     candidates = _log_candidates(target, RewindLog.FILENAME)
@@ -96,7 +110,7 @@ def rewind(
     path = next((c for c in candidates if c.exists()), candidates[0])
     if not path.exists():
         console.print(
-            f"[red]No rewind log at[/] {escape(str(path))}\n"
+            f"[red]No rewind log at[/] {for_terminal(str(path))}\n"
             "Three things cause this: the run set [bold]training.rewind_log: false[/], "
             "it was not an SFT run (the recorder is SFT-only), or it predates the "
             "flight recorder."
@@ -106,15 +120,15 @@ def rewind(
     try:
         run = read_rewind_log(path)
     except RewindLogError as exc:
-        console.print(f"[red]Cannot read rewind log:[/] {escape(str(exc))}")
+        console.print(f"[red]Cannot read rewind log:[/] {for_terminal(str(exc))}")
         raise typer.Exit(1) from exc
 
     recorded = run.steps()
     console.print(
         Panel(
-            f"Run: [bold]{escape(str(target['run_id']))}[/]\n"
-            f"Backend: {escape(str(run.header.get('backend') or '-'))} | "
-            f"Task: {escape(str(run.header.get('task') or '-'))} | "
+            f"Run: [bold]{for_terminal(str(target['run_id']))}[/]\n"
+            f"Backend: {for_terminal(str(run.header.get('backend') or '-'))} | "
+            f"Task: {for_terminal(str(run.header.get('task') or '-'))} | "
             f"Steps recorded: {len(recorded)}",
             title="soup rewind",
         )
@@ -127,7 +141,7 @@ def rewind(
         # printing "No loss spikes recorded" in green reads as "your run was
         # clean" -- a confident answer from an empty file is worse than none.
         console.print(
-            f"[yellow]No micro-batches were recorded[/] in {escape(str(path))} — "
+            f"[yellow]No micro-batches were recorded[/] in {for_terminal(str(path))} — "
             "the file holds only its header.\n"
             "The recorder was switched off during the run; look for a "
             "[bold]Rewind log off[/] or [bold]Rewind recorder disabled[/] line in "
@@ -162,11 +176,13 @@ def rewind(
         detail_step = step
         if not run.batches_for(detail_step):
             console.print(
-                f"[red]No records for step {detail_step}[/] in {escape(str(path))}"
+                f"[red]No records for step {detail_step}[/] in {for_terminal(str(path))}"
             )
             raise typer.Exit(1)
 
-    rows = rewind_utils.rank_rows(run, detail_step)[:top]
+    ranked_rows = rewind_utils.rank_rows(run, detail_step)
+    non_finite = sum(1 for ranked in ranked_rows if not math.isfinite(ranked.loss))
+    rows = ranked_rows[:top]
     previews = None
     if not no_preview and rows:
         previews = _row_previews(target, run, rows, rewind_utils)
@@ -186,18 +202,33 @@ def rewind(
             f"{ranked.share:.1%}",
         ]
         if previews is not None:
-            cells.append(escape(previews.get(ranked.row, "")))
+            cells.append(for_terminal(previews.get(ranked.row, "")))
         table.add_row(*cells)
     console.print(table)
 
     if rows:
         worst = rows[0]
-        console.print(
-            f"row {worst.row}: {worst.share:.0%} of step {detail_step}'s loss, "
-            f"{worst.tokens:,} tokens"
-        )
-        if worst.share >= 0.5:
+        if not math.isfinite(worst.loss):
+            # rank_rows lists non-finite rows first. A non-finite loss carries no
+            # share, so the "N% of the step's loss" headline would name a finite
+            # row and send the reader to the wrong one.
+            console.print(
+                f"row {worst.row}: loss is non-finite ({_fmt_loss(worst.loss)}) in step "
+                f"{detail_step}, {worst.tokens:,} tokens"
+            )
+            if non_finite > 1:
+                console.print(
+                    f"{non_finite} rows in this step are non-finite; the table lists "
+                    "them first."
+                )
             console.print("Inspect or drop this row, then retrain.")
+        else:
+            console.print(
+                f"row {worst.row}: {worst.share:.0%} of step {detail_step}'s loss, "
+                f"{worst.tokens:,} tokens"
+            )
+            if worst.share >= 0.5:
+                console.print("Inspect or drop this row, then retrain.")
 
     if json_path is not None:
         payload = {
@@ -206,8 +237,20 @@ def rewind(
             "spikes": [asdict(s) for s in spikes],
             "rows": [asdict(r) for r in rows],
         }
-        json_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-        console.print(f"[dim]Wrote {escape(str(json_path))}[/]")
+        from soup_cli.utils.paths import atomic_write_text
+
+        try:
+            atomic_write_text(
+                json.dumps(payload, indent=2),
+                json_path,
+                prefix=".rewind.",
+                suffix=".json.tmp",
+                field="--json",
+            )
+        except (OSError, ValueError) as exc:
+            console.print(f"[red]Cannot write the JSON:[/] {for_terminal(exc)}")
+            raise typer.Exit(1) from exc
+        console.print(f"[dim]Wrote {for_terminal(json_path)}[/]")
 
 
 def _log_candidates(target: dict, filename: str) -> list[Path]:
@@ -264,7 +307,9 @@ def _row_previews(target, run, rows, rewind_utils) -> dict[int, str] | None:
             expected_fingerprint=run.header["dataset_fingerprint"],
         )
     except (ValueError, TypeError, KeyError, OSError) as exc:
-        console.print(f"[dim]Could not rebuild the dataset for previews: {escape(str(exc))}[/]")
+        console.print(
+            f"[dim]Could not rebuild the dataset for previews: {for_terminal(exc)}[/]"
+        )
         return None
 
     if previews is None:

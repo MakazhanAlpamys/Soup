@@ -360,6 +360,18 @@ def train(
     # The contract and why each check exists: #836.
     from rich.markup import escape
 
+    from soup_cli.utils.paths import atomic_write_text, check_report_output_path
+    from soup_cli.utils.terminal import for_terminal
+
+    # The destination is validated first, before the config is read and before any
+    # model is built: a path that will be refused must fail in milliseconds, not after
+    # the whole run has finished and its measurements are about to be lost.
+    try:
+        check_report_output_path(output, "--output")
+    except (TypeError, ValueError) as exc:
+        console.print(f"[red]Invalid output:[/] {for_terminal(exc)}")
+        raise typer.Exit(2) from exc
+
     from soup_cli.bench.train_run import bench_scope_error, run_bench_train
     from soup_cli.config.loader import load_config
     from soup_cli.data.loader import load_dataset
@@ -388,7 +400,17 @@ def train(
         console.print(f"[red]{escape(str(exc))}[/]")
         raise typer.Exit(1) from exc
 
-    Path(output).write_text(json.dumps(report, indent=2, default=str), encoding="utf-8")
+    try:
+        atomic_write_text(
+            json.dumps(report, indent=2, default=str),
+            output,
+            prefix=".bench.",
+            suffix=".json.tmp",
+            field="--output",
+        )
+    except (OSError, ValueError) as exc:
+        console.print(f"[red]Cannot write the report:[/] {for_terminal(exc)}")
+        raise typer.Exit(1) from exc
     timing, tokens = report["timing"], report["tokens"]
     tok_s = report["throughput"]["useful_tokens_per_second"]
     console.print(

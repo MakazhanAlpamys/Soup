@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "soup-cli"
-version = "0.75.0"
+version = "0.76.0"
 description = "Fine-tune and post-train LLMs in one command. No SSH, no config hell."
 readme = "README.md"
 license = "Apache-2.0"
@@ -33,6 +33,11 @@ classifiers = [
 # into the `[train]` extra below.
 dependencies = [
     "typer>=0.9.0,<0.21.0",
+    # click 8.5.0 drops every positional-argument description from `--help`
+    # (its Argument.__init__ overwrites the help typer sets). Imported directly by
+    # commands/autopilot.py, utils/argv_redaction.py and utils/exit_codes.py, so
+    # declared here. `tests/test_click_argument_help.py` pins the bound.
+    "click>=8.0.0,<8.5",
     "rich>=13.0.0",
     "pydantic>=2.0.0",
     "pyyaml>=6.0",
