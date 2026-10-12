@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import json
 import os
-import sys
 
 import pytest
 from typer.testing import CliRunner
@@ -146,7 +145,7 @@ def test_a_database_outside_the_project_is_refused_by_name(cwd, monkeypatch, tmp
         harvest_from_traces(_state())
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="symlinks need privileges on Windows")
+@pytest.mark.requires_symlink
 def test_a_symlinked_database_is_refused_by_name(cwd):
     from soup_cli.utils.loop_stages import harvest_from_traces
 
