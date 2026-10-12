@@ -425,6 +425,52 @@ soup train --config soup.yaml
 
 **How it works.** LoRA adapters + their gradients + optimizer state stay resident in VRAM (they are small). The frozen base lives in CPU RAM, page-locked when the machine allows it, and is streamed: each decoder layer is copied into one of two pre-allocated VRAM buffers on a dedicated CUDA stream while the previous layer is still computing, so the load overlaps the compute. Vocabulary-sized `embed_tokens` and an untied `lm_head` use one additional shared slot: the embedding is loaded for the model input, then the same allocation is reused for the output head, whose copy is issued right after the embedding lookup (`StreamPrefetcher.head_prefetch_layer`, default `0`) rather than at the last decoder layer, and the embedding is reloaded into it at the tail of that step's backward pass so the copy overlaps the remaining compute instead of blocking the next step's first lookup. Each decoder layer is read **twice** per step — once in the forward pass and once when the backward pass recomputes it — because `dL/dx = Wᵀ · dL/dy` needs the weights to reach the layers below. That is physics, not an implementation detail, and it is why streaming costs time.
 
+**Early adapter memory check.** Before resolving checkpoint weights or preparing
+layer shards, Soup builds a meta model and applies its normal target resolution
+and PEFT conversion. The resulting adapter shapes account for rectangular
+projections, per-module ranks and fused experts. On CUDA, a persistent adapter
+budget exceeding free VRAM (or `stream_vram_override`) refuses the run before
+checkpoint loading, even when `stream_vram_probe` is enabled.
+
+The breakdown separates adapter weights, gradients and optimizer tensors;
+non-capturable Torch step counters are charged to CPU rather than VRAM.
+Verified profiles currently cover ordinary fp32 AdamW, SGD without momentum,
+Adagrad, RMSprop without momentum/centering, HF Adafactor without a first moment,
+and ordinary LoRA-FA (including storage of frozen A matrices). Non-paged
+bitsandbytes AdamW 8-bit is profiled for version 0.50.2, including its small-tensor
+fp32 threshold and block metadata. GaLore, LoRA+ and other optimizer profiles
+report that the adapter-fit estimate is unavailable; their adapter weights alone
+can still trigger refusal. The later full forecast retains a visibly labelled
+legacy adapter estimate for those unknown profiles.
+
+On refusal, Soup tries two narrower meta-model configurations: attention only,
+and attention plus shared experts. Only a strictly smaller, supported adapter
+budget within the available VRAM is printed. The message gives recalculated
+weights, gradients and optimizer bytes, plus explicit target regexes and
+`training.moe_lora: false` (otherwise MoE target resolution would override the
+selection). Rank patterns and other settings remain unchanged. A shared-expert
+alternative is omitted if no shared-expert adapters are found. These suggestions
+do not change the configuration automatically or establish training quality;
+the full training forecast still applies. Unrecognized architectures/optimizers
+may have no verified alternative.
+
+For the Kimi K2 routed-expert reference, its published configuration has 60 MoE
+layers, 384 experts, hidden size 7168 and expert width 2048. Separate gate/up/down
+LoRA at rank 16 therefore has `60 * 384 * 3 * 16 * (7168 + 2048)` =
+10,192,158,720 parameters. Float32 weights and gradients take 40.769 GB each;
+the two AdamW moments take 81.537 GB, totaling 163.075 GB on CUDA, plus CPU step
+scalars. Thus the task brief's approximately 163 GB describes the combined
+persistent training tensors, not the two Adam moments alone. This is a
+shape-only reference test, not validation of K2 runtime/FP8 support.
+Source: [Kimi K2 configuration](https://huggingface.co/moonshotai/Kimi-K2-Instruct/raw/main/config.json).
+
+Passing the adapter check does not guarantee that training fits: frozen base
+buffers, activations and optimizer temporaries need additional memory. The later
+full streaming forecast remains in place and uses the resolved adapter term when
+available, without counting it twice. CPU runs report the tensor budget without
+a CUDA fit verdict. These checks do not imply that every MoE target pattern
+actually adapts experts on every architecture; the count follows what PEFT builds.
+
 For streamed NF4 on CUDA, Soup follows bitsandbytes' own 4-bit dispatch. When
 bitsandbytes selects its custom fused GEMM, Soup executes that GEMM through a
 checkpoint-visible autograd Function so pooled packed weights cannot outlive their
@@ -546,6 +592,17 @@ The 3.32 GB 8B row above predates large-layer streaming: its untied, unquantised
 - **A streamed 8B run now completes on a Turing card — free-tier Colab, Tesla T4 (sm_75) — and that is all it shows.** `NousResearch/Meta-Llama-3.1-8B-Instruct`, NF4, `stream_buffers: 2`, batch 1, `max_length: 256`, LoRA r=8, fp16: 7 steps, adapter written with 128 of 128 tensors non-zero in both runs (the second ran in-process, per the notebook, so it has no exit code to quote). The first run measured peak **2.91 GB** against a predicted ~3.02 GB (the pre-flight over-predicts by 3.8%, the safe direction it was fitted for), with the pre-flight reading **free VRAM 15.10 GB** — the device, not the per-process cap. The T4 has 15.6 GB, so the process was capped to **4.00 GB** with `torch.cuda.set_per_process_memory_fraction`, and the cap was shown to bite — a 4.29 GiB allocation was refused. The committed [notebook](../notebooks/proof-4gb.ipynb) now sets `training.stream_vram_override` to that same 4.00 GB, which replaces the yardstick the fit decision is taken against — the pre-flight then reports **free VRAM 4.00 GB** instead of the driver's whole-card figure, and it is a harder gate than the first run faced. Against it: predicted ~1.97 GB, **measured peak 1.83 GB** (a +7.7% over-prediction, still the safe direction). The drop from 2.91 GB is self-consistent, not a contradiction: the embeddings and `lm_head` moved out of the resident allocation into a streamed large-layer slot between the two runs. **No throughput is quoted from either run**: a card under an artificial cap is not a benchmark, and the notebook deliberately quotes none either. **What neither establishes**: backward/gradient exactness at 8B on Turing (a non-zero adapter shows gradients flowed, not that they were correct). The notebook's streamed-vs-resident comparison is now recorded rather than unrun — bit-exact, max `|streamed - resident|` = 0.0, `torch.equal` = True — but on `SmolLM2-135M`, fp16, unquantized, not the 8B NF4 configuration this bullet is about. Record: [`benchmarks/run-t4-colab-free-tier.md`](../benchmarks/run-t4-colab-free-tier.md).
 - **The bf16 3B throughput above is a LOWER BOUND.** The reference box could not page-lock the 5.55 GB base (its measured page-locked ceiling was 7.65 GB — which #901 later traced to per-tensor pinning being rounded up to powers of two, so that store was really asking for ~10 GB; it would pin today), so that run fell back to a pageable store. Pageable memory makes the host-to-device copy synchronous, which costs overlap — visible as the GPU-utilisation drop from 96.8% (1.5B, pinned) to 79.3% (3B, pageable). Soup does this fallback automatically **and prints the cost** rather than absorbing it silently. NF4 lifts this at 3B: the store drops under the ceiling and pins.
 - Numbers are Windows/WDDM and therefore systematically pessimistic versus Linux. `expandable_segments:True` is silently ignored on Windows; Soup detects that and does not claim it is active.
+
+### FP8 source checkpoints (research track B3)
+
+DeepSeek-V3 and Kimi K2 publish their linear weights as `float8_e4m3fn` with an fp32 `<name>.weight_scale_inv` per 128 x 128 block, declared in `config.json` as `quantization_config: {quant_method: fp8, fmt: e4m3, weight_block_size: [128, 128]}`. The sharder reads that config and dequantises each FP8 weight once, at shard time: `q * scale` in fp32, rounded once to the store dtype, in block-aligned row chunks so no fp32 intermediate is larger than one chunk. From there it is an ordinary dense weight, and `quantization: 4bit` runs the unchanged NF4 path on it. A weight and its scale may sit in different files (DeepSeek-V3 puts 155 of its 45,808 scales in the file after their weight).
+
+**Before this, an FP8 checkpoint sharded without a word into wrong weights**: the sharder cast the raw e4m3 values to bf16 without their scales and copied the scales into the layer shard as ordinary tensors. Float8 storage is now refused unless it comes with its scale and the fp8 config. Also refused, by name and before any tensor is read: a scale without its weight, a scale grid of the wrong shape, a non-finite, zero or negative scale, and an `fmt` other than `e4m3`.
+
+- **Verified**: FP8 -> bf16 is bit-exact against an independent e4m3 decoder on 126 of 126 real DeepSeek-V3 weights. Record: [`benchmarks/gate-b3-fp8-source.md`](../benchmarks/gate-b3-fp8-source.md).
+- **Not yet**: `soup train` still refuses `model_type: deepseek_v3` at its architecture check (track B2), so a DeepSeek-V3 or K2 run does not reach the sharder from the CLI yet.
+- **FP8 sources shard without double-quant.** With `quantization: 4bit`, a block-scaled FP8 source resolves an unset `training.bnb_4bit_use_double_quant` to **false**, and an explicit `true` is refused by name. With double-quant on, the NF4 codec failed the preregistered per-block reconstruction gate on real DeepSeek-V3 weights (worst 2.15 against `0.17 x absmax`) and passed with it off (worst 0.1531); the gate was kept, the default changed. The cost is the un-double-quantised NF4 statistics: 0.5 instead of 0.127 bit per parameter, about 31 GB more on 671B parameters (computed from the bitsandbytes layout, not measured). Every other source keeps double-quant on by default.
+- **Found along the way, not specific to FP8**: with double-quant on (the default), bitsandbytes stores some small block maxima sign-flipped when the blocks in a 256-block group span a wide range. On the worst tensor in one DeepSeek-V3 file (`layers.1.mlp.gate_proj`), about 6% of NF4 blocks exceed `0.17 x absmax` with double-quant and none do without it; its whole-tensor relative error barely moves (0.0872 -> 0.0880). Other tensors' share, other files and Kimi K2 are not measured. The training-quality effect is not measured.
 
 ### Forcing the pin (`training.stream_pin`)
 

@@ -1,0 +1,31 @@
+{
+  "status": "preregistered before collection",
+  "model": "Qwen/Qwen3.5-35B-A3B",
+  "model_revision": "59d61f3ce65a6d9863b86d2e96597125219dc754",
+  "engine": "llama.cpp b11476, stock CPU build",
+  "precision": "f32 in the reference and base GGUF",
+  "reference_versions": {"torch": "2.14.1", "transformers": "5.19.0", "peft": "0.21.2"},
+  "variants": ["soup-auto", "soup-auto+shared"],
+  "prompt": "Soup trains the adapter on a laptop; the engine has to apply it to every projection it was trained on.",
+  "seed": 17,
+  "adapter_recipe": {"rank": 8, "alpha": 16, "initial_b_std": 0.02, "weak_effect_retry_factor": 4.0},
+  "rule": {"TOP1_MIN": 0.9, "N_BASE_MAX": 0.05, "S_REF_MIN": 0.01, "APPLIED_FLOOR_FACTOR": 3.0, "APPLIED_SLACK": 0.02, "TOLERANCE_MAX": 0.5, "RHO_DROPPED_MAX": 0.1},
+  "required_controls": [
+    "base engine token stability",
+    "bitwise base-logit repeats in reference and engine",
+    "adapter-disabled reference equals its base bitwise",
+    "actual adapted module names exclude routed experts",
+    "bitwise adapted reference repeats for both variants",
+    "bitwise adapted engine repeats for both variants",
+    "both adapted engine token arrays match the base tokens",
+    "conversion and engine load outcomes retained"
+  ],
+  "invalid_controls": "VOID before effect arithmetic",
+  "weak_effect_after_registered_retry": "TOO WEAK; invalid controls retain priority",
+  "speed_acceptance_criterion": null,
+  "machine": {"type": "n2d-highmem-48", "vcpus": 48, "ram_gib": 384, "tmpfs_gib": 200, "minimum_free_disk_gib_before_download": 85, "threads": 48},
+  "budget": {"stage_ceiling_usd": 10.0, "prior_compute_estimate_usd": 2.547243, "remaining_before_non_compute_charges_usd": 7.452757, "quoted_hourly_usd": 2.166624, "compute_bound_130_minutes_usd": 4.694352, "non_compute_reserve_usd": 2.0, "kind": "list-price estimate, not invoice", "fresh_quote_required_before_create": true},
+  "resource_guards": {"maximum_simultaneous_instances": 1, "windows_deadline_minutes_from_original_create_anchor": 120, "server_shutdown_minutes_from_original_create_anchor": 130, "work_deadline_minutes_from_original_create_anchor": 105, "teardown": "fresh successful evidence copy and matching remote/local SHA-256 before delete; confirmed resource absence before removing the local deadline"},
+  "provenance": "Archive the exact committed source revision; verify source blobs, extracted payload hashes, individual shell syntax and LF before create. Retain completed and partial captures, adapter files, engine logits, runtime identity, and charged lifetimes. Do not recalibrate thresholds from the repeat.",
+  "limits": ["Synthetic adapters on real non-MLA weights", "No DeepSeek-V3/Kimi-K2 real-MLA parity claim", "No quantized/GPU serving or target-laptop fit claim", "No completed Soup-trained giant-model user workflow"]
+}

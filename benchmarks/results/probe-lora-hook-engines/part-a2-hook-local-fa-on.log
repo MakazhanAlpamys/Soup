@@ -1,0 +1,11 @@
+dsv3-tiny seed 17: base OK (e_base 0.0003043230897702058)
+  soup-auto            APPLIED         s_ref=5.593e-01 rho=9.999e-01 r=6.465e-04
+  all                  APPLIED         s_ref=4.501e-01 rho=9.998e-01 r=7.920e-04
+  all-but-kv_b         APPLIED         s_ref=2.825e-01 rho=9.999e-01 r=1.108e-03
+  q_a_proj             WRONG           s_ref=2.247e-02 rho=1.000e+00 r=1.220e-02
+  q_b_proj             WRONG           s_ref=2.526e-02 rho=1.000e+00 r=1.090e-02
+  kv_a_proj_with_mqa   APPLIED         s_ref=2.410e-01 rho=9.999e-01 r=1.234e-03
+  kv_b_proj            APPLIED         s_ref=4.684e-01 rho=1.000e+00 r=6.990e-04
+  o_proj               APPLIED         s_ref=2.053e-01 rho=1.000e+00 r=1.166e-03
+  shared               APPLIED         s_ref=1.045e-01 rho=9.999e-01 r=1.689e-03
+probe: {"verdict": "NO VERDICT", "why": "positive-control model has no valid run"}

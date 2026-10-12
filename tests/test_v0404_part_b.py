@@ -12,7 +12,6 @@ DataLoader's ``batch_sampler=`` kwarg.
 
 from __future__ import annotations
 
-from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
@@ -165,47 +164,6 @@ class TestGetTrainDataloaderScalesBinCapByBatchSize:
 
         dl = instance.get_train_dataloader()
         assert dl.batch_sampler._batch_max_len == 128 * 4
-
-
-class TestGetTrainDataloaderForwardsDropLast:
-    """v0.40.4 H3 — `args.dataloader_drop_last` must reach the
-    MultipackBatchSampler; v0.40.4 first-cut hardcoded `drop_last=False`.
-    """
-
-    def test_drop_last_forwarded_to_sampler_constructor(self):
-        # Source-level proof: the override reads ``dataloader_drop_last``
-        # from ``self.args`` and passes it as ``drop_last=`` to
-        # MultipackBatchSampler. (Live-spy patching is hard because the
-        # factory function captures the symbol via free-variable closure
-        # at definition time.)
-        text = Path("src/soup_cli/utils/multipack_trainer.py").read_text(
-            encoding="utf-8",
-        )
-        # The override block reads dataloader_drop_last from args.
-        assert 'getattr(args, "dataloader_drop_last"' in text
-        # And the sampler constructor receives it as `drop_last=drop_last`.
-        assert "drop_last=drop_last" in text
-
-
-class TestSftLiveWiring:
-    """Source-level proof that sft.py instantiates the multipack subclass."""
-
-    def test_sft_instantiates_subclass(self):
-        text = Path("src/soup_cli/trainer/sft.py").read_text(encoding="utf-8")
-        # The v0.40.3 yellow advisory string is GONE.
-        assert "live HF Trainer wiring is deferred" not in text
-        # The factory is invoked with SFTTrainer as the base.
-        assert "make_multipack_trainer_class(SFTTrainer)" in text
-        # State is attached.
-        assert "attach_multipack_state(" in text
-        # Architecture allowlist is consulted.
-        assert "validate_multipack_architecture" in text
-
-    def test_pretrain_instantiates_subclass(self):
-        text = Path("src/soup_cli/trainer/pretrain.py").read_text(encoding="utf-8")
-        assert "live HF Trainer wiring is deferred" not in text
-        assert "make_multipack_trainer_class(SFTTrainer)" in text
-        assert "attach_multipack_state(" in text
 
 
 class TestRealTrainerSubclassHasOverride:

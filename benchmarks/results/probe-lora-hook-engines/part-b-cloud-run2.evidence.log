@@ -1,0 +1,120 @@
+# Evidence extract; omitted source lines remain in the separately archived full capture.
+
+# Source: part-b-cloud-run2.log
+# Full source SHA-256: e8df82222b1426c70fa9d159d965fb9d1bc31149edd6b5b91b4f29302e20e81b
+
+# Source lines 8-29
+=== 2026-10-08T06:01:05.828047306Z
+$ date -u; brev search cpu --min-ram 380 --arch x86_64 --sort price 2>&1 | head -3; brev create moe-qwen35-run2 --type n2d-highmem-48 --dry-run 2>&1 | tail -1
+Thu Oct  8 06:01:05 UTC 2026
+ TYPE                   TARGET_DISK  PROVIDER  VCPUS  RAM   ARCH    DISK       $/GB/MO  BOOT  FEATURES  $/HR
+ n2d-highmem-48         10           gcp          48  384   x86_64  10GB-16TB  $0.16    7m    SP        $2.17
+ n2d-highmem-64         10           gcp          64  512   x86_64  10GB-16TB  $0.16    7m    SP        $2.89
+n2d-highmem-48
+
+=== 2026-10-08T06:01:12.49870338Z
+$ brev create moe-qwen35-run2 --type n2d-highmem-48 --timeout 900 2>&1 | tail -6
+[Worker 1] n2d-highmem-48 Success! Created instance 'moe-qwen35-run2'
+
+Waiting for instance(s) to be ready...
+You can safely ctrl+c to exit
+  moe-qwen35-run2: Ready
+moe-qwen35-run2
+
+=== 2026-10-08T06:05:57.422152680Z
+$ brev ls 2>&1 | head -4
+You have 1 instances in Org <org>
+ NAME            STATUS   BUILD      SHELL  ID         MACHINE         GPU
+ moe-qwen35-run2  RUNNING  COMPLETED  READY  8qlbf5h3o  n2d-highmem-48  -
+
+# Source lines 39-57
+=== 2026-10-08T06:08:13.547546037Z
+$ timeout 180 brev exec moe-qwen35-run2 'echo EXEC-OK; whoami; uname -a; nproc; free -g | head -2; df -h ~ /dev/shm | tail -2; sha256sum ~/setup.sh ~/soup.tgz' 2>&1 | grep -v 'waiting for'
+EXEC-OK
+ubuntu
+Linux brev-8qlbf5h3o 6.8.0-1069-gcp #77~22.04.1-Ubuntu SMP Tue Sep 15 18:07:43 UTC 2026 x86_64 x86_64 x86_64 GNU/Linux
+48
+               total        used        free      shared  buff/cache   available
+Mem:             377           1         370           0           5         374
+/dev/root       125G  7.1G  118G   6% /
+tmpfs           189G     0  189G   0% /dev/shm
+a8f11da3dfe73c70363137290b26c64befdabc1e1c082bfb11cdd93c1e73bda2  /home/ubuntu/setup.sh
+2ccc6794a012512f874a0f79bc020c646bc91f3f09e41781df52eca83a556289  /home/ubuntu/soup.tgz
+moe-qwen35-run2
+
+=== 2026-10-08T06:08:18.577342760Z
+$ timeout 120 brev exec moe-qwen35-run2 'sudo shutdown -h +92; usec=$(sed -n s/^USEC=//p /run/systemd/shutdown/scheduled); echo shutdown armed for $(date -u -d @$((usec / 1000000)))' 2>&1 | grep -v 'waiting for'
+Shutdown scheduled for Thu 2026-10-08 07:40:23 UTC, use 'shutdown -c' to cancel.
+shutdown armed for Thu Oct 8 07:40:23 UTC 2026
+moe-qwen35-run2
+
+# Source lines 64-80
+=== 2026-10-08T06:08:36.929462843Z
+$ timeout 1500 brev exec moe-qwen35-run2 "ls -la ~/partb_run_remote2.sh ~/partb_status2.sh; timeout 1400 bash -c 'until grep -q SETUP-DONE ~/setup.log || ! pgrep -f setup.sh > /dev/null; do sleep 15; done'; tail -n 6 ~/setup.log; bash ~/partb_run_remote2.sh" 2>&1 | grep -v 'waiting for'
+-rwxrwxr-x 1 ubuntu ubuntu 960 Oct  8 06:07 /home/ubuntu/partb_run_remote2.sh
+-rwxrwxr-x 1 ubuntu ubuntu 424 Oct  8 06:08 /home/ubuntu/partb_status2.sh
++ venv-ref/bin/python -c 'import torch, transformers, peft; print(torch.__version__, transformers.__version__, peft.__version__)'
+2.14.1+cpu 5.19.0 0.21.2
++ venv-convert/bin/python -c 'import torch, transformers, gguf; print(torch.__version__, transformers.__version__)'
+2.11.0+cpu 4.57.6
++ echo SETUP-DONE
+SETUP-DONE
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/root       125G  9.6G  116G   8% /
+tmpfs           189G     0  189G   0% /dev/shm
+               total        used        free      shared  buff/cache   available
+Mem:             377           2         367           0           7         373
+launched pid 16395
+moe-qwen35-run2
+
+# Source lines 125-131
+=== 2026-10-08T06:22:34.758400348Z
+$ timeout 120 brev exec moe-qwen35-run2 'bash ~/partb_status2.sh' 2>&1 | grep -v 'waiting for'
+Thu Oct  8 06:22:40 UTC 2026
+  soup-auto          APPLIED         s_ref=0.11111299846204006 rho=0.9999995333474703 r=1.4406289065096857e-05 floor=1.1735580656080632e-05
+  soup-auto+shared   APPLIED         s_ref=0.23740075942989677 rho=1.0000002460803106 r=8.262431261704828e-06 floor=5.4927185512028305e-06
+[  682.6 s] engine adapters
+result: {"status": "OK", "top1_agreement": 1.0, "n_base": 1.3039755553902343e-06}
+
+# Source lines 146-186
+=== 2026-10-08T06:22:50.288261818Z
+$ timeout 600 brev exec moe-qwen35-run2 'tar czf ~/partb2-out.tgz -C ~/moe part-b-real-model-run2.json part-b-real-model-run2.log run2.out -C ~ setup.log -C /dev/shm/moe-work base1.out.npz base2.out.npz soup-auto.out.npz soup-auto+shared.out.npz adapters && sha256sum ~/partb2-out.tgz' 2>&1 | grep -v 'waiting for'
+1d9ac55ed235fc60dce5242f28eaf4ec8cb96a4ceabb416e24e7561eb71a05e9  /home/ubuntu/partb2-out.tgz
+moe-qwen35-run2
+
+=== 2026-10-08T06:23:03.373707694Z
+$ timeout 900 brev copy moe-qwen35-run2:/home/ubuntu/partb2-out.tgz ./partb2-out/partb2-out.tgz 2>&1 | grep -v 'waiting for' | tail -2
+✓ Successfully copied moe-qwen35-run2:/home/ubuntu/partb2-out.tgz → ./partb2-out/partb2-out.tgz (3m6.777s)
+
+
+=== 2026-10-08T06:26:37.847820573Z
+$ echo '1d9ac55ed235fc60dce5242f28eaf4ec8cb96a4ceabb416e24e7561eb71a05e9  ./partb2-out/partb2-out.tgz' | sha256sum -c -
+./partb2-out/partb2-out.tgz: OK
+
+=== 2026-10-08T06:26:44.934540837Z
+$ date -u; brev delete moe-qwen35-run2 2>&1 | tail -2; sleep 30; brev ls 2>&1 | head -4
+Thu Oct  8 06:26:44 UTC 2026
+moe-qwen35-run2
+You have 1 instances in Org <org>
+ NAME            STATUS    BUILD      SHELL      ID         MACHINE         GPU
+ moe-qwen35-run2  STOPPING  COMPLETED  NOT READY  8qlbf5h3o  n2d-highmem-48  -
+
+
+=== 2026-10-08T06:28:05.466662331Z
+$ date -u; brev ls 2>&1 | head -4
+Thu Oct  8 06:28:05 UTC 2026
+You have 1 instances in Org <org>
+ NAME            STATUS    BUILD      SHELL      ID         MACHINE         GPU
+ moe-qwen35-run2  STOPPING  COMPLETED  NOT READY  8qlbf5h3o  n2d-highmem-48  -
+
+
+=== 2026-10-08T06:29:06.697942848Z
+$ date -u; brev ls 2>&1 | head -4
+Thu Oct  8 06:29:06 UTC 2026
+No instances in org <org>
+
+Start a new instance:
+
+=== 2026-10-08T06:29:23.144306620Z
+$ Unregister-ScheduledTask -TaskName moe-partb-run2-deadline (Windows, after the normal deletion)
+deadline task removed

@@ -559,25 +559,36 @@ class TestTheStreamedPathUsesTheSameHelper:
     streamed path was the one path with no dropout refusal -- "one helper for
     every trainer" was not quite true. Flagged by the maintainer on #1074.
 
-    It builds a meta skeleton it then deletes, so the helper is called while that
-    probe is alive rather than at the attach; these pin that it is called at all,
-    with the probe, and that its answer is what reaches the LoRA config.
+    B4 delegates the meta probe to ``stream_adapter_preflight``. The shared
+    helper must remain on that call path, without a second target-selection block.
     """
 
     def test_the_source_has_no_second_copy_of_the_block(self):
         """The mutation this guards is re-inlining ``get_moe_target_modules``
         here, which reintroduces exactly the gap that was reported."""
-        import pathlib
+        import ast
 
-        source = (
-            pathlib.Path(__file__).resolve().parents[1]
-            / "src" / "soup_cli" / "trainer" / "stream_setup.py"
-        ).read_text(encoding="utf-8")
-
-        assert "resolve_moe_lora_targets" in source
-        assert "get_moe_target_modules" not in source, (
-            "the streamed path is resolving targets itself again"
+        root = pathlib.Path(__file__).resolve().parents[1] / "src" / "soup_cli"
+        setup = (root / "trainer" / "stream_setup.py").read_text(encoding="utf-8")
+        preflight = (root / "utils" / "stream_adapter_preflight.py").read_text(
+            encoding="utf-8"
         )
+
+        def calls_in(source, function):
+            tree = ast.parse(source)
+            node = next(n for n in ast.walk(tree)
+                        if isinstance(n, ast.FunctionDef) and n.name == function)
+            return {
+                n.func.id for n in ast.walk(node)
+                if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+            }
+
+        assert "build_stream_adapter_plan" in calls_in(setup, "_setup_streaming_transformers")
+        assert "resolve_moe_lora_targets" in calls_in(preflight, "build_stream_adapter_plan")
+        for source in (setup, preflight):
+            assert "get_moe_target_modules" not in source, (
+                "the streamed path is resolving targets itself again"
+            )
 
     def test_the_helper_refuses_the_streamed_config_too(self):
         """The behaviour behind it: the helper the streamed path now calls is the

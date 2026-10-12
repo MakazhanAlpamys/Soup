@@ -1,0 +1,14 @@
+{
+  "command": "python -m soup_cli train --config <temporary>/ppo.yaml",
+  "exit": 0,
+  "global_step": 2,
+  "checkpoint_optimizer_scheduler_rng_saved": true,
+  "final_adapter_reload": true,
+  "reloaded_inference_logits_shape": [
+    1,
+    2,
+    64
+  ],
+  "reloaded_inference_logits_finite": true,
+  "training_resume_tested": false
+}

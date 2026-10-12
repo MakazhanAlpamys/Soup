@@ -1,0 +1,11 @@
+[   11.9 s] base converted
+[   16.8 s] engine base logits
+[   33.1 s] reference loaded
+`causal_conv1d_fn` is falling back to its reference PyTorch implementation because `causal_conv1d` is not installed. This is correct but much slower; install `causal_conv1d` for the optimized kernel.
+`chunk_gated_delta_rule` is falling back to its reference PyTorch implementation because `flash-linear-attention` is not installed. This is correct but much slower; install `flash-linear-attention` for the optimized kernel.
+[   33.2 s] reference base logits
+[   36.7 s] reference soup-auto
+[   37.1 s] reference soup-auto+shared
+  soup-auto          APPLIED         s_ref=0.22582669371771308 rho=1.0000000248740921 r=1.8357667556328084e-06 floor=1.3031076433399386e-06
+  soup-auto+shared   APPLIED         s_ref=0.3033186954760401 rho=0.9999998992124981 r=1.3608183473605723e-06 floor=9.701890949777766e-07
+[   66.0 s] engine adapters

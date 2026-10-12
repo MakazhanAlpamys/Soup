@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 
 import pytest
@@ -413,7 +412,7 @@ def test_pii_redos_phone_pattern_is_bounded():
     assert isinstance(hits, list)
 
 
-def test_load_jsonl_rows_basic(tmp_path):
+def test_load_jsonl_rows_basic(tmp_path, monkeypatch):
     from soup_cli.utils.data_score import load_jsonl_rows
 
     p = tmp_path / "rows.jsonl"
@@ -421,32 +420,32 @@ def test_load_jsonl_rows_basic(tmp_path):
         '{"text":"hi"}\n{"text":"bye"}\n',
         encoding="utf-8",
     )
-    os.chdir(tmp_path)
+    monkeypatch.chdir(tmp_path)
     rows = load_jsonl_rows(str(p))
     assert len(rows) == 2
 
 
-def test_load_jsonl_rows_outside_cwd(tmp_path):
+def test_load_jsonl_rows_outside_cwd(tmp_path, monkeypatch):
     from soup_cli.utils.data_score import load_jsonl_rows
 
     inside = tmp_path / "inside"
     inside.mkdir()
     p = tmp_path / "rows.jsonl"
     p.write_text('{"text":"hi"}', encoding="utf-8")
-    os.chdir(inside)
+    monkeypatch.chdir(inside)
     with pytest.raises(ValueError, match="cwd"):
         load_jsonl_rows(str(p))
 
 
-def test_load_jsonl_rows_missing(tmp_path):
+def test_load_jsonl_rows_missing(tmp_path, monkeypatch):
     from soup_cli.utils.data_score import load_jsonl_rows
 
-    os.chdir(tmp_path)
+    monkeypatch.chdir(tmp_path)
     with pytest.raises(FileNotFoundError):
         load_jsonl_rows("missing.jsonl")
 
 
-def test_load_jsonl_rows_skips_malformed(tmp_path):
+def test_load_jsonl_rows_skips_malformed(tmp_path, monkeypatch):
     from soup_cli.utils.data_score import load_jsonl_rows
 
     p = tmp_path / "rows.jsonl"
@@ -454,16 +453,16 @@ def test_load_jsonl_rows_skips_malformed(tmp_path):
         '{"text":"ok"}\n!!!not json!!!\n{"text":"also-ok"}\n',
         encoding="utf-8",
     )
-    os.chdir(tmp_path)
+    monkeypatch.chdir(tmp_path)
     rows = load_jsonl_rows(str(p))
     assert len(rows) == 2
 
 
 @pytest.mark.requires_symlink
-def test_load_jsonl_rows_symlink_rejected(tmp_path):
+def test_load_jsonl_rows_symlink_rejected(tmp_path, monkeypatch):
     from soup_cli.utils.data_score import load_jsonl_rows
 
-    os.chdir(tmp_path)
+    monkeypatch.chdir(tmp_path)
     real = tmp_path / "real.jsonl"
     real.write_text('{"x":1}', encoding="utf-8")
     link = tmp_path / "link.jsonl"

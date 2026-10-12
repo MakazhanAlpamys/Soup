@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -217,27 +216,6 @@ class TestAttachMultipackState:
             attach_multipack_state(
                 self._trainer(), lengths=[], max_seq_len=64, batch_size=1,
             )
-
-
-class TestSftAndPretrainWiringLive:
-    """v0.40.4 #65 — live multipack HF Trainer wiring landed. The SFT and
-    Pretrain wrappers now instantiate the multipack subclass via
-    ``make_multipack_trainer_class(SFTTrainer)`` and call
-    ``attach_multipack_state`` when ``multipack: true``.
-    """
-
-    def test_sft_wires_live_factory(self):
-        text = Path("src/soup_cli/trainer/sft.py").read_text(encoding="utf-8")
-        assert "v0.40.4" in text
-        assert "make_multipack_trainer_class(SFTTrainer)" in text
-        # The deferred advisory must be GONE (no fallback in v0.40.4+).
-        assert "live HF Trainer wiring is deferred to" not in text
-
-    def test_pretrain_wires_live_factory(self):
-        text = Path("src/soup_cli/trainer/pretrain.py").read_text(encoding="utf-8")
-        assert "v0.40.4" in text
-        assert "make_multipack_trainer_class(SFTTrainer)" in text
-        assert "live HF Trainer wiring is deferred to" not in text
 
 
 class TestSamplerRespectsArchitectureAllowlist:

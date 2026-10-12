@@ -1,1 +1,3 @@
 tests/fixtures/recipe_config_snapshots.json text eol=lf
+benchmarks/results/probe-lora-hook-engines/** -text
+benchmarks/results/probe-moe-expert-holdout/** -text
