@@ -93,6 +93,7 @@ def test_refused_off_text(task, modality):
 
 @pytest.mark.parametrize("task", _SUPPORTED_TASKS)
 def test_supported_routes_still_load(task):
-    cfg = load_config_from_string(_yaml(task, modality="text"))
+    # #1326: a LoRA rank is refused with expand_layers, so the loading route is lora.r: 0.
+    cfg = load_config_from_string(_yaml(task, modality="text") + "  lora:\n    r: 0\n")
     assert cfg.training.expand_layers == 2
     assert cfg.training.freeze_trainable_layers == 2
