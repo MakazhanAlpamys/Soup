@@ -2691,6 +2691,7 @@ Usage: `soup loop init [OPTIONS] SERVED_MODEL`
 | `--monthly-budget` | text |  |  | Monthly USD cap (e.g. 50usd, 100). |
 | `--max-runs-per-day` | integer |  |  | Cap on iteration starts per UTC day. |
 | `--pre-wired` | flag | off |  | Use the pre-wired harvest/train/gate/deploy stages (utils/loop_stages.py) on watch instead of no-op stubs (v0.71.4). |
+| `--thumbs-db` | text |  |  | Local-RL SQLite written by `soup serve --record-thumbs`; the pre-wired harvest turns its thumbs into preference pairs. Must stay under cwd. SOUP_LOOP_THUMBS_DB overrides it. |
 | `--force` | flag | off |  | Overwrite existing loop.yaml. |
 
 ### `soup loop pause`
