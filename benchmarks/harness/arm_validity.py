@@ -433,6 +433,31 @@ def workload_gpu() -> Dict[str, Optional[str]]:
     return {"id": first, "source": CUDA_VISIBLE_DEVICES}
 
 
+class CommitReading(TypedDict):
+    """Memory promised to processes, in bytes, against the most the OS will promise."""
+
+    used_bytes: int
+    limit_bytes: int
+
+
+def commit_charge() -> CommitReading:
+    """Committed_AS and CommitLimit from /proc/meminfo.
+
+    Raises ValueError if either line is missing, as on a kernel built without
+    memory accounting.
+    """
+    found: Dict[str, int] = {}
+    with open(MEMINFO_PATH, encoding="ascii") as handle:
+        for line in handle:
+            name, _, rest = line.partition(":")
+            if name in ("Committed_AS", "CommitLimit"):
+                found[name] = int(rest.split()[0]) * 1024
+    for name in ("Committed_AS", "CommitLimit"):
+        if name not in found:
+            raise ValueError(f"{MEMINFO_PATH} has no {name} line")
+    return {"used_bytes": found["Committed_AS"], "limit_bytes": found["CommitLimit"]}
+
+
 def _nvidia_smi(*args: str) -> List[str]:
     """The non-empty lines nvidia-smi prints about the workload's GPU for ``args``.
 
@@ -591,14 +616,26 @@ def windows_power_supplies() -> PowerReading:
     }
 
 
-def windows_ram_available() -> int:
-    """Available physical memory in bytes from ``GlobalMemoryStatusEx``, as in the
-    reference ``l2l_box.memory_status``."""
+def _memory_status() -> _MemoryStatusEx:
     status = _MemoryStatusEx()
     status.dwLength = ctypes.sizeof(status)
     if not _kernel32().GlobalMemoryStatusEx(ctypes.byref(status)):
         raise OSError("GlobalMemoryStatusEx failed")
-    return int(status.ullAvailPhys)
+    return status
+
+
+def windows_ram_available() -> int:
+    """Available physical memory in bytes from ``GlobalMemoryStatusEx``, as in the
+    reference ``l2l_box.memory_status``."""
+    return int(_memory_status().ullAvailPhys)
+
+
+def windows_commit_charge() -> CommitReading:
+    """The commit charge from ``GlobalMemoryStatusEx``: the commit limit
+    (``ullTotalPageFile``) minus the commit still available (``ullAvailPageFile``)."""
+    status = _memory_status()
+    limit, available = int(status.ullTotalPageFile), int(status.ullAvailPageFile)
+    return {"used_bytes": limit - available, "limit_bytes": limit}
 
 
 def _read(
@@ -972,6 +1009,7 @@ def per_process_reads_check_result(
 def box_stamp(
     power: Sample[PowerReading],
     ram_available: Callable[[], Optional[int]],
+    commit_charge: Callable[[], Optional[CommitReading]],
     gpu_memory_used: Callable[[], Optional[int]],
     gpu_processes: Callable[[], Optional[List[GpuProcess]]],
 ) -> Dict[str, object]:
@@ -989,6 +1027,7 @@ def box_stamp(
     stamp: Dict[str, object] = {
         "unix_s": time.time(),
         "ram_available_bytes": field("ram_available_bytes", ram_available),
+        "commit_charge": field("commit_charge", commit_charge),
         "power_source": None,
         "gpu_processes": field("gpu_processes", gpu_processes),
         "gpu_memory_used_mib": field("gpu_memory_used_mib", gpu_memory_used),
@@ -1177,17 +1216,23 @@ class _UnimplementedChecks:
         return checks
 
 
-#: The power, process reads and RAM sensors ``ArmWatch`` uses by default, per OS.
+#: The power, process reads, RAM and commit charge sensors ``ArmWatch`` uses by default, per OS.
 _DEFAULT_SENSORS: Dict[
     str,
     Tuple[
         Callable[[], Optional[PowerReading]],
         Callable[[], Optional[ProcessReads]],
         Callable[[], Optional[int]],
+        Callable[[], Optional[CommitReading]],
     ],
 ] = {
-    LINUX: (power_supplies, process_reads, ram_available),
-    WINDOWS: (windows_power_supplies, psutil_process_reads, windows_ram_available),
+    LINUX: (power_supplies, process_reads, ram_available, commit_charge),
+    WINDOWS: (
+        windows_power_supplies,
+        psutil_process_reads,
+        windows_ram_available,
+        windows_commit_charge,
+    ),
 }
 
 
@@ -1201,8 +1246,8 @@ class ArmWatch:
     has no disk-wide counter, so its check ignores ``model_path``.
 
     ``platform`` picks the checks, as a ``sys.platform`` value. On an OS without
-    checks every check is unknown. ``power_supplies``, ``process_reads`` and
-    ``ram_available`` default to that OS's sensor. ``sleep_offset``,
+    checks every check is unknown. ``power_supplies``, ``process_reads``,
+    ``ram_available`` and ``commit_charge`` default to that OS's sensor. ``sleep_offset``,
     ``suspend_count``, ``disk_device``, ``disk_reads`` and ``other_disk_reads``
     serve Linux only, and ``wall_clock`` serves Windows only.
     """
@@ -1228,6 +1273,7 @@ class ArmWatch:
         other_disk_reads: Callable[[str], Optional[int]] = other_disk_reads,
         process_reads: Optional[Callable[[], Optional[ProcessReads]]] = None,
         ram_available: Optional[Callable[[], Optional[int]]] = None,
+        commit_charge: Optional[Callable[[], Optional[CommitReading]]] = None,
         gpu_memory_used: Callable[[], Optional[int]] = gpu_memory_used,
         gpu_processes: Callable[[], Optional[List[GpuProcess]]] = gpu_processes,
         gpu_clock: Callable[[], Optional[ClockReading]] = gpu_clock,
@@ -1244,8 +1290,8 @@ class ArmWatch:
         self.system = system_name(platform)
         self.model_path = model_path
         unavailable = _not_implemented_on(self.system)
-        default_power, default_processes, default_ram = _DEFAULT_SENSORS.get(
-            self.system, (unavailable, unavailable, unavailable)
+        default_power, default_processes, default_ram, default_commit = _DEFAULT_SENSORS.get(
+            self.system, (unavailable, unavailable, unavailable, unavailable)
         )
         self._checks: Union[_LinuxChecks, _WindowsChecks, _UnimplementedChecks]
         if self.system == LINUX:
@@ -1266,6 +1312,7 @@ class ArmWatch:
             self._checks = _UnimplementedChecks(self.system)
         self._power = Sampler("power", power_supplies or default_power, power_interval_s)
         self._ram_available = ram_available or default_ram
+        self._commit_charge = commit_charge or default_commit
         self._gpu_memory_used = gpu_memory_used
         self._gpu_processes = gpu_processes
         self._box_before: Optional[Dict[str, object]] = None
@@ -1274,7 +1321,13 @@ class ArmWatch:
         self.record: Optional[Dict[str, object]] = None
 
     def _box_stamp(self, power: Sample[PowerReading]) -> Dict[str, object]:
-        return box_stamp(power, self._ram_available, self._gpu_memory_used, self._gpu_processes)
+        return box_stamp(
+            power,
+            self._ram_available,
+            self._commit_charge,
+            self._gpu_memory_used,
+            self._gpu_processes,
+        )
 
     def start(self) -> None:
         self._gpu = workload_gpu()

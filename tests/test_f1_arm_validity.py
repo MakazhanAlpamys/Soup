@@ -92,11 +92,15 @@ def _foreign_sensors(kwargs):
 
 MIB = 1024 * 1024
 
+COMMIT_BEFORE = {"used_bytes": 9_200 * MIB, "limit_bytes": 24_000 * MIB}
+COMMIT_AFTER = {"used_bytes": 21_900 * MIB, "limit_bytes": 24_000 * MIB}
+
 PEERS = [{"pid": 3141, "type": "C", "name": "/usr/bin/python3", "used_mib": 412}]
 
 
 def _box_sensors(kwargs):
     kwargs.setdefault("ram_available", _readings(7_800 * MIB, 6_100 * MIB))
+    kwargs.setdefault("commit_charge", _readings(COMMIT_BEFORE, COMMIT_AFTER))
     kwargs.setdefault("gpu_memory_used", _readings(12, 2_900))
     kwargs.setdefault("gpu_processes", _readings([], PEERS))
     kwargs.setdefault("gpu_clock", _readings({"sm_clock_mhz": 1_500, "reasons": []}))
@@ -584,8 +588,42 @@ def test_box_stamps_before_and_after_hold_the_machine_state(validity):
     assert after["gpu_processes"] == PEERS
     assert before["gpu_memory_used_mib"] == 12
     assert after["gpu_memory_used_mib"] == 2_900
+    assert before["commit_charge"] == COMMIT_BEFORE
+    assert after["commit_charge"] == COMMIT_AFTER
     assert before["unknown"] == {}
     json.dumps(record)
+
+
+def test_failing_commit_sensor_is_unknown_in_the_box_stamp_and_leaves_the_arm_ok(validity):
+    record = _watch(validity, commit_charge=_raises)
+
+    for stamp in (record["box_stamp_before"], record["box_stamp_after"]):
+        assert stamp["commit_charge"] is None
+        assert "PermissionError" in stamp["unknown"]["commit_charge"]
+        assert stamp["ram_available_bytes"] is not None
+    assert record["outcome"] == "ok"
+
+
+def test_linux_commit_charge_is_committed_as_over_commit_limit(validity, monkeypatch, tmp_path):
+    meminfo = tmp_path / "meminfo"
+    meminfo.write_text(
+        "MemTotal:       32000000 kB\nMemAvailable:   20000000 kB\n"
+        "CommitLimit:    24576000 kB\nCommitted_AS:    9420800 kB\n"
+    )
+    monkeypatch.setattr(validity, "MEMINFO_PATH", str(meminfo))
+
+    assert validity.commit_charge() == {
+        "used_bytes": 9_420_800 * 1024, "limit_bytes": 24_576_000 * 1024
+    }
+
+
+def test_linux_commit_charge_without_the_meminfo_lines_raises(validity, monkeypatch, tmp_path):
+    meminfo = tmp_path / "meminfo"
+    meminfo.write_text("MemTotal:       32000000 kB\nMemAvailable:   20000000 kB\n")
+    monkeypatch.setattr(validity, "MEMINFO_PATH", str(meminfo))
+
+    with pytest.raises(ValueError, match="Committed_AS"):
+        validity.commit_charge()
 
 
 def test_failing_ram_sensor_is_unknown_in_the_box_stamp_and_leaves_the_arm_ok(validity):
@@ -820,6 +858,8 @@ def test_real_box_stamp_and_gpu_clock_sensors_return_values(validity):
         stamp = watch.record[side]
         assert stamp["unknown"] == {}, stamp["unknown"]
         assert stamp["ram_available_bytes"] > 0
+        assert stamp["commit_charge"]["used_bytes"] > 0
+        assert stamp["commit_charge"]["limit_bytes"] > 0
         assert stamp["power_source"] in ("mains", "battery")
         assert isinstance(stamp["gpu_processes"], list)
         assert stamp["gpu_memory_used_mib"] >= 0
@@ -846,6 +886,7 @@ def test_every_check_is_unknown_on_macos_and_the_arm_still_runs(validity):
     assert record["checks"]["foreign_reads"]["unattributed_bytes"] is None
     stamp = record["box_stamp_before"]
     assert stamp["unknown"]["ram_available_bytes"] == "not implemented on macOS"
+    assert stamp["unknown"]["commit_charge"] == "not implemented on macOS"
     assert stamp["unknown"]["power_source"] == "not implemented on macOS"
     assert record["outcome"] == "unknown"
     json.dumps(record)
@@ -855,9 +896,14 @@ class _FakeKernel32:
     """A synthetic kernel32.dll. ``GetSystemPowerStatus`` answers with the next
     (ACLineStatus, BatteryFlag) pair like ``_readings``, or fails on None."""
 
-    def __init__(self, *power, avail_phys=6_100 * MIB):
+    def __init__(
+        self, *power, avail_phys=6_100 * MIB, total_page_file=24_000 * MIB,
+        avail_page_file=2_100 * MIB,
+    ):
         self._power = _readings(*power)
         self._avail_phys = avail_phys
+        self._total_page_file = total_page_file
+        self._avail_page_file = avail_page_file
 
     def GetSystemPowerStatus(self, status_ref):  # noqa: N802 - the Windows API name
         answer = self._power()
@@ -868,6 +914,8 @@ class _FakeKernel32:
 
     def GlobalMemoryStatusEx(self, status_ref):  # noqa: N802 - the Windows API name
         status_ref._obj.ullAvailPhys = self._avail_phys
+        status_ref._obj.ullTotalPageFile = self._total_page_file
+        status_ref._obj.ullAvailPageFile = self._avail_page_file
         return 1
 
 
@@ -1051,10 +1099,15 @@ def test_without_psutil_foreign_reads_is_unknown_on_windows(validity, monkeypatc
 
 
 def test_windows_defaults_fill_the_box_stamp(validity, monkeypatch):
-    record = _windows_watch(validity, monkeypatch, ram_available=None)  # the Windows default
+    record = _windows_watch(
+        validity, monkeypatch, ram_available=None, commit_charge=None  # the Windows defaults
+    )
 
     stamp = record["box_stamp_before"]
     assert stamp["ram_available_bytes"] == 6_100 * MIB
+    assert stamp["commit_charge"] == {
+        "used_bytes": 21_900 * MIB, "limit_bytes": 24_000 * MIB
+    }
     assert stamp["power_source"] == "mains"
     assert stamp["unknown"] == {}
     assert record["outcome"] == "ok"

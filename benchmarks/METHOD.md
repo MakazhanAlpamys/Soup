@@ -30,7 +30,7 @@ These terms have one meaning each in `benchmarks/`.
 | round | One pass over every arm in a fixed order. Consecutive rounds reverse the order. |
 | block | Four runs in the order A, B, B, A, so two rounds. It yields one difference between the means of A and B. |
 | pilot | The first 5 blocks of a comparison. They estimate the run-to-run spread and count toward the final test. |
-| box stamp | A snapshot of the machine taken before and after an arm: time, memory, power source, GPU peers and GPU memory in use. GPU peers are the processes on the GPU. |
+| box stamp | A snapshot of the machine taken before and after an arm: time, free memory, commit charge, power source, GPU peers and GPU memory in use. GPU peers are the processes on the GPU. |
 | foreign reads | Bytes read from the disk under test during an arm by anything other than the benchmark's own process and its children. |
 | check outcome | ok, void or unknown, for one check of one arm. |
 | void arm | An arm with a void check. Its number is not used. Void means unknown, not slow. |
@@ -197,6 +197,14 @@ Each arm record also holds `arm`, `round`, `run`, `label`, `gpu`, `required`,
 the box stamps `box_stamp_before` and `box_stamp_after`, and `gpu_clock`. The
 box stamps and the GPU clock record never void an arm. A field whose sensor
 gave nothing is `null`, with the reason under the stamp's `unknown`.
+
+`commit_charge` in a box stamp is `{"used_bytes", "limit_bytes"}`: the memory
+the OS has promised to processes, and the most it will promise. Free RAM alone
+misses a machine that is out of commit while RAM looks free, where allocations
+start to fail or the pagefile grows. On Linux the values are `Committed_AS` and
+`CommitLimit` from `/proc/meminfo`. On Windows the limit is `ullTotalPageFile`
+from `GlobalMemoryStatusEx` and the charge is that limit minus
+`ullAvailPageFile`. macOS is unknown.
 
 `gpu` names the GPU every `nvidia-smi` call reads: `{"id": "1", "source":
 "CUDA_VISIBLE_DEVICES"}`. The workload's `cuda:0` is the first entry of
