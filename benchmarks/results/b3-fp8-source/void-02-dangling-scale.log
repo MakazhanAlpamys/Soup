@@ -1,0 +1,3 @@
+  File "$WORK/soupteam/soup-rnd/src/soup_cli/utils/layer_shard.py", line 2071, in _validate_fp8_companions
+    raise ValueError(
+ValueError: FP8 weight 'model.layers.3.mlp.experts.31.up_proj.weight' has no 'model.layers.3.mlp.experts.31.up_proj.weight_scale_inv' companion; without its block scales it cannot be decoded

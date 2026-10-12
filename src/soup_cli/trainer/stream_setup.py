@@ -598,6 +598,7 @@ class StreamingSetupMixin:
             layer_paths,
             resolve_shard_dir,
             shard_checkpoint,
+            source_identity_includes_config,
             source_weight_bytes,
             stripe_dirs,
         )
@@ -667,7 +668,13 @@ class StreamingSetupMixin:
         # claim breaks. Read the flag once here (resolving the tri-state unset to
         # the shipped default) and thread it into both the sharder (its cache
         # already keys on double_quant) and the skeleton.
-        double_quant = tcfg.double_quant_on
+        # B3 — a block-scaled FP8 source (DeepSeek-V3 / Kimi K2) resolves unset to
+        # OFF and refuses an explicit true: with double-quant on, the codec fails
+        # the preregistered per-block reconstruction gate on real FP8-sourced
+        # weights. Same helper as the sharder, so the two cannot disagree.
+        from soup_cli.utils.fp8_source import stream_double_quant
+
+        double_quant = stream_double_quant(tcfg, model_config, quant=quant)
 
         adapter_plan = build_stream_adapter_plan(
             cfg.base, model_config, tcfg, dtype=dtype, quant=quant,
@@ -732,7 +739,9 @@ class StreamingSetupMixin:
                 source_components = checkpoint_source_components(
                     weights_plan.weights_dir,
                     weights_plan.source_files,
-                    include_config=arch == "qwen4_exp",
+                    include_config=source_identity_includes_config(
+                        weights_plan.weights_dir, arch
+                    ),
                 )
                 cached, _reason = inspect_shard_cache(
                     shard_dir,
