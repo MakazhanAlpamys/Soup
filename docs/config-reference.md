@@ -47,8 +47,8 @@ Sections:
 | `task` | `str` | `"sft"` | one of `"sft"`, `"dpo"`, `"grpo"`, `"ppo"`, `"reward_model"`, `"kto"`, `"orpo"`, `"simpo"`, `"ipo"`, `"bco"`, `"preference"`, `"pretrain"`, `"embedding"`, `"prm"`, `"tts"`, `"classifier"`, `"reranker"`, `"cross_encoder"`, `"distill"`, `"unlearn"`, `"moe_lora_routing"`, `"online_dpo"`, `"asr"` | Training task type. v0.50.0 added 'prm'; v0.52.0 adds 'tts' (TTS fine-tuning), 'classifier' / 'reranker' / 'cross_encoder' (classification heads), and 'distill' (knowledge distillation). v0.61.0 adds 'unlearn' (NPO / SimNPO / RMU). v0.67.0 adds 'moe_lora_routing' (per-token gating over N task LoRAs). |
 | `modality` | `str` | `"text"` | one of `"text"`, `"vision"`, `"audio"`, `"audio_out"` | Training modality: text (default), vision (multimodal), audio (audio-input), or audio_out (audio-output — paired with task='tts', v0.52.0). |
 | `backend` | `str` | `"transformers"` | one of `"transformers"`, `"unsloth"`, `"mlx"` | Training backend: transformers (default), unsloth (2-5x faster on CUDA), or mlx (Apple Silicon M1-M4) |
-| `data` | `section` | **required** |  | See [`data`](#data). |
-| `training` | `section` | section defaults |  | See [`training`](#training). |
+| `data` | `section` | **required** |  | Dataset source, format, tokenization, and preprocessing settings. See [`data`](#data). |
+| `training` | `section` | section defaults |  | Training hyperparameters, optimizer, scheduler, and hardware settings. See [`training`](#training). |
 | `output` | `str` | `"./output"` |  | Output directory for trained model |
 | `experiment_name` | `str \| null` | `null` |  | Experiment name for tracking |
 | `eval` | `section \| null` | `null` |  | Evaluation configuration for auto-eval after training. See [`eval`](#eval). |
@@ -105,13 +105,13 @@ Sections:
 | `training.lr` | `float` | `2e-05` | `> 0` | Learning rate |
 | `training.batch_size` | `int \| "auto"` | `"auto"` |  | Batch size. 'auto' = find max that fits in memory. |
 | `training.auto_batch_size_strategy` | `str` | `"auto"` | one of `"auto"`, `"static"`, `"probe"` | How to pick the auto batch size: 'static' (fast formula), 'probe' (real OOM try/halve loop), 'auto' (probe on CUDA, static on CPU). Default 'auto' (v0.36.0). |
-| `training.gradient_accumulation_steps` | `int` | `4` | `>= 1` |  |
+| `training.gradient_accumulation_steps` | `int` | `4` | `>= 1` | Number of update steps to accumulate gradients over before executing a backward optimizer step. Effective batch size is batch_size \* gradient_accumulation_steps. |
 | `training.seed` | `int \| null` | `null` | `>= 0`, `<= 4294967295` | Training seed (weight init of new params, data order, dropout). Reaches TrainingArguments.seed and the multipack sampler. Unset = HF's default of 42. |
 | `training.data_seed` | `int \| null` | `null` | `>= 0`, `<= 4294967295` | Separate seed for data sampling only (TrainingArguments.data_seed). Set it alongside `seed` to vary data order while holding initialisation fixed. Unset = follow `seed`. |
-| `training.warmup_ratio` | `float` | `0.03` | `>= 0.0`, `<= 0.5` |  |
-| `training.weight_decay` | `float` | `0.01` | `>= 0.0` |  |
-| `training.max_grad_norm` | `float` | `1.0` | `> 0` |  |
-| `training.lora` | `section` | section defaults |  | See [`training.lora`](#traininglora). |
+| `training.warmup_ratio` | `float` | `0.03` | `>= 0.0`, `<= 0.5` | Fraction of total training optimizer steps used for linear learning rate warmup. Resolved over real optimizer steps. |
+| `training.weight_decay` | `float` | `0.01` | `>= 0.0` | Weight decay (L2 penalty) factor applied to parameters during optimization. |
+| `training.max_grad_norm` | `float` | `1.0` | `> 0` | Maximum gradient norm for gradient clipping. |
+| `training.lora` | `section` | section defaults |  | LoRA (Low-Rank Adaptation) adapter architecture and target modules. See [`training.lora`](#traininglora). |
 | `training.quantization` | `str` | `"4bit"` | one of `"4bit"`, `"8bit"`, `"none"`, `"gptq"`, `"awq"`, `"hqq:1bit"`, `"hqq:2bit"`, `"hqq:3bit"`, `"hqq:4bit"`, `"hqq:5bit"`, `"hqq:6bit"`, `"hqq:8bit"`, `"aqlm"`, `"eetq"`, `"mxfp4"`, `"fp8"`, `"bitnet_1.58"` | Quantization (v0.38.0 — Quant Menu): 4bit (BNB QLoRA), 8bit (BNB), none, gptq / awq (load pre-quantized checkpoint, train LoRA on top), hqq:Nbit (HQQ 1-8 bit, N in {1..6, 8}), aqlm (extreme 2-bit), eetq (8-bit fast), mxfp4 (MXFP4 pre-quantized base, dequantized on load), fp8 (load FP8 checkpoint with dequantize-on-load), bitnet_1.58 (reserved until BitNet trainer routing is available). |
 | `training.gptq_disable_exllama` | `bool` | `true` |  | v0.38.0 — disable exllama backend for GPTQ. PEFT requires triton backend; exllama silently breaks adapter training. |
 | `training.bnb_4bit_quant_storage` | `str \| null` | `null` | one of `"uint8"`, `"float16"`, `"bfloat16"`, `"float32"` | v0.38.0 — BNB 4-bit storage dtype. FSDP+QLoRA resolves this automatically to the effective floating compute dtype; outside FSDP, None keeps BNB's legacy uint8 default. |

@@ -1142,7 +1142,15 @@ class TrainingConfig(BaseModel):
             "static on CPU). Default 'auto' (v0.36.0)."
         ),
     )
-    gradient_accumulation_steps: int = Field(default=4, ge=1)
+    gradient_accumulation_steps: int = Field(
+        default=4,
+        ge=1,
+        description=(
+            "Number of update steps to accumulate gradients over before executing "
+            "a backward optimizer step. Effective batch size is batch_size * "
+            "gradient_accumulation_steps."
+        ),
+    )
     # #341 — the general training seed. Before this there was none:
     # `TrainingArguments` took HF's defaults on every run, so two runs of the
     # same config differed only by GPU nondeterminism and "run it again with a
@@ -1187,10 +1195,31 @@ class TrainingConfig(BaseModel):
             )
         return v
 
-    warmup_ratio: float = Field(default=0.03, ge=0.0, le=0.5)
-    weight_decay: float = Field(default=0.01, ge=0.0)
-    max_grad_norm: float = Field(default=1.0, gt=0)
-    lora: LoraConfig = Field(default_factory=LoraConfig)
+    warmup_ratio: float = Field(
+        default=0.03,
+        ge=0.0,
+        le=0.5,
+        description=(
+            "Fraction of total training optimizer steps used for linear learning "
+            "rate warmup. Resolved over real optimizer steps."
+        ),
+    )
+    weight_decay: float = Field(
+        default=0.01,
+        ge=0.0,
+        description=(
+            "Weight decay (L2 penalty) factor applied to parameters during optimization."
+        ),
+    )
+    max_grad_norm: float = Field(
+        default=1.0,
+        gt=0,
+        description="Maximum gradient norm for gradient clipping.",
+    )
+    lora: LoraConfig = Field(
+        default_factory=LoraConfig,
+        description="LoRA (Low-Rank Adaptation) adapter architecture and target modules.",
+    )
     quantization: Literal[
         "4bit",
         "8bit",
@@ -4933,8 +4962,13 @@ class SoupConfig(BaseModel):
             "CUDA), or mlx (Apple Silicon M1-M4)"
         ),
     )
-    data: DataConfig
-    training: TrainingConfig = Field(default_factory=TrainingConfig)
+    data: DataConfig = Field(
+        description="Dataset source, format, tokenization, and preprocessing settings."
+    )
+    training: TrainingConfig = Field(
+        default_factory=TrainingConfig,
+        description="Training hyperparameters, optimizer, scheduler, and hardware settings.",
+    )
     output: str = Field(default="./output", description="Output directory for trained model")
     experiment_name: Optional[str] = Field(default=None, description="Experiment name for tracking")
     eval: Optional[EvalConfig] = Field(
