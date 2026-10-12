@@ -16,7 +16,11 @@ Asserted on CPU (no CUDA needed):
   less than it appeared to. With ``lora_B`` randomised the comparison is a real
   one and the tolerance is what carries it.
 - Delegation to peft's own forward: disabled adapters, merged adapters, a DoRA
-  variant, non-zero dropout, and the ``adapter_names`` kwarg.
+  variant, non-zero dropout without the opt-in, and the ``adapter_names`` kwarg.
+- The dropout opt-in (``allow_dropout=True``) on the single-projection patcher:
+  forward and backward parity against an unpatched peft twin under an injected
+  fixed mask, mask equality across a ``checkpoint`` recompute, eval-mode
+  identity, and the real draw's keep-rate statistics.
 - The patched forward reads the base weight at call time (the streaming
   contract); patching is counted, idempotent and reversible.
 - A 4-layer tiny Llama with 2 stream buffers: the patched streamed model's loss
@@ -142,7 +146,7 @@ class TestGradcheckFloat64:
         bb = torch.randn(out_f, r, dtype=torch.float64, requires_grad=True)
 
         def f(x_, a_, b_):
-            return fn.apply(x_, w, b, a_, b_, 0.5, None)
+            return fn.apply(x_, w, b, a_, b_, 0.5, None, 0.0, False)
 
         assert torch.autograd.gradcheck(f, (x, a, bb))
 
@@ -169,7 +173,7 @@ class TestGradcheckFloat64:
         a = torch.randn(r, in_f, dtype=torch.float64, requires_grad=True)
         bb = torch.randn(out_f, r, dtype=torch.float64, requires_grad=True)
 
-        out = fn.apply(x, w, None, a, bb, 0.5, None)
+        out = fn.apply(x, w, None, a, bb, 0.5, None, 0.0, False)
         first = torch.autograd.grad(out.sum(), (x, a, bb), create_graph=True)
 
         with pytest.raises(RuntimeError) as caught:
@@ -664,6 +668,226 @@ class TestPatchPlumbing:
             s = layer.scaling["default"]
         expected = x @ w.T + b + s * ((x @ a.T) @ bb.T)
         torch.testing.assert_close(second, expected)
+
+
+class TestDropoutOptIn:
+    """#839: dropout is modelled only when the caller asks for it.
+
+    The default stays peft's call (``TestDelegation`` pins that); with
+    ``allow_dropout=True`` the kernel draws the mask itself and has to be held
+    to the same standards as the deterministic path. The mask is not promised
+    to come off the same RNG stream as peft's ``native_dropout``, so the parity
+    arm injects a fixed mask and the statistics arm checks the real draw.
+    """
+
+    def test_shared_check_still_refuses_dropout_for_other_callers(self):
+        """The MLP and QKV kernels never pass the opt-in, so the guard stays.
+
+        A non-zero dropout layer must hand them ``None`` (peft keeps those
+        calls); only the single-projection opt-in turns the state into one
+        carrying the dropout knobs.
+        """
+        _requires_train_extra()
+        import torch
+
+        from soup_cli.utils import fast_lora
+
+        torch.manual_seed(0)
+        model, layer = _make_adapted_linear(dropout=0.5)
+        layer.train()
+        x = torch.randn(5, 8)
+
+        assert fast_lora._projection_state(layer, x) is None
+        state = fast_lora._projection_state(layer, x, allow_dropout=True)
+        assert state is not None
+        assert state.dropout_p == 0.5
+        assert state.dropout_training is True
+
+    def test_dropout_parity_with_peft_under_an_injected_mask(self, monkeypatch):
+        """Forward and backward match peft when both sides apply one fixed mask."""
+        _requires_train_extra()
+        import torch
+
+        from soup_cli.utils import fast_lora
+        from soup_cli.utils.fast_lora import patch_fast_lora_single_projection
+
+        class _FixedMaskDropout(torch.nn.Module):
+            """peft's dropout slot, pinned to one mask for a deterministic twin."""
+
+            def __init__(self, keep, p):
+                super().__init__()
+                self.register_buffer("keep", keep)
+                self.p = p
+
+            def forward(self, x):
+                return x * self.keep / (1.0 - self.p)
+
+        torch.manual_seed(0)
+        model, layer = _make_adapted_linear(dropout=0.5)
+        ref_model = copy.deepcopy(model)
+        ref_layer = ref_model.linear
+
+        keep = torch.rand(5, 8) > 0.5
+        ref_layer.lora_dropout["default"] = _FixedMaskDropout(keep, 0.5)
+
+        def fixed_mask(x_, p_):
+            return keep, x_ * keep / (1.0 - p_)
+
+        monkeypatch.setattr(fast_lora, "_dropout_mask", fixed_mask)
+        assert patch_fast_lora_single_projection(model, allow_dropout=True) == 1
+
+        layer.train()
+        ref_layer.train()
+        x = torch.randn(5, 8, requires_grad=True)
+
+        ref = ref_layer(x)
+        ref.sum().backward()
+        ref_x = x.grad.detach().clone()
+        ref_p = {
+            name: p.grad.detach().clone()
+            for name, p in ref_layer.named_parameters()
+            if p.grad is not None
+        }
+
+        x.grad = None
+        for p in layer.parameters():
+            p.grad = None
+
+        out = layer(x)
+        assert type(out.grad_fn).__name__ == "_FastLoraSingleProjectionBackward", (
+            f"the kernel did not run: grad_fn is {type(out.grad_fn).__name__}"
+        )
+        out.sum().backward()
+
+        torch.testing.assert_close(out, ref)
+        torch.testing.assert_close(x.grad, ref_x)
+        for name, p in layer.named_parameters():
+            if name in ref_p:
+                torch.testing.assert_close(p.grad, ref_p[name], msg=name)
+
+    def test_mask_matches_under_checkpoint_recompute(self, monkeypatch):
+        """The recompute draws the same mask, and the grads land where the plain
+        run puts them.
+
+        ``checkpoint`` runs the forward twice; with ``preserve_rng_state`` the
+        second pass starts from the same RNG state, so the recorded masks must
+        be identical. The saved-mask design is what makes this the equality to
+        assert: a recompute that re-drew fresh dropout would show up as a
+        different mask and different grads.
+        """
+        _requires_train_extra()
+        import torch
+
+        from soup_cli.utils import fast_lora
+        from soup_cli.utils.fast_lora import patch_fast_lora_single_projection
+
+        torch.manual_seed(0)
+        model, layer = _make_adapted_linear(dropout=0.5)
+
+        draws = []
+        real = fast_lora._dropout_mask
+
+        def recorder(x_, p):
+            keep_, x_d = real(x_, p)
+            draws.append(keep_)
+            return keep_, x_d
+
+        monkeypatch.setattr(fast_lora, "_dropout_mask", recorder)
+        assert patch_fast_lora_single_projection(model, allow_dropout=True) == 1
+
+        layer.train()
+        x = torch.randn(5, 8, requires_grad=True)
+
+        torch.manual_seed(7)
+        ref = layer(x)
+        ref.sum().backward()
+        ref_x = x.grad.detach().clone()
+        ref_p = {
+            name: p.grad.detach().clone()
+            for name, p in layer.named_parameters()
+            if p.grad is not None
+        }
+        assert len(draws) == 1, f"the plain run should draw once, drew {len(draws)}"
+        ref_keep = draws[0]
+
+        x.grad = None
+        for p in layer.parameters():
+            p.grad = None
+        draws.clear()
+
+        torch.manual_seed(7)
+        out = torch.utils.checkpoint.checkpoint(lambda t: layer(t), x, use_reentrant=False)
+        out.sum().backward()
+
+        assert len(draws) == 2, (
+            f"checkpoint should run the forward twice (original + recompute); saw {len(draws)}"
+        )
+        assert torch.equal(draws[0], ref_keep), "the same seed drew a different mask"
+        assert torch.equal(draws[0], draws[1]), "the recompute drew a different mask"
+
+        torch.testing.assert_close(out, ref)
+        torch.testing.assert_close(x.grad, ref_x)
+        for name, p in layer.named_parameters():
+            if name in ref_p:
+                torch.testing.assert_close(p.grad, ref_p[name], msg=name)
+
+    def test_eval_mode_skips_the_mask(self, monkeypatch):
+        """nn.Dropout is identity in eval, and a validation pass must match.
+
+        The kernel reads the dropout module's training flag; in eval no mask
+        may be drawn and the output must equal the unpatched twin's.
+        """
+        _requires_train_extra()
+        import torch
+
+        from soup_cli.utils import fast_lora
+        from soup_cli.utils.fast_lora import patch_fast_lora_single_projection
+
+        torch.manual_seed(0)
+        model, layer = _make_adapted_linear(dropout=0.5)
+        twin = copy.deepcopy(model)
+
+        draws = []
+        real = fast_lora._dropout_mask
+
+        def recorder(x_, p):
+            draws.append(True)
+            return real(x_, p)
+
+        monkeypatch.setattr(fast_lora, "_dropout_mask", recorder)
+        assert patch_fast_lora_single_projection(model, allow_dropout=True) == 1
+
+        layer.eval()
+        twin.linear.eval()
+        x = torch.randn(5, 8)
+
+        got = layer(x)
+        expected = twin.linear(x)
+
+        assert draws == [], "a mask was drawn in eval"
+        torch.testing.assert_close(got, expected)
+
+    def test_the_real_draw_keeps_at_about_one_minus_p(self):
+        """The draw itself: boolean mask, one byte per element, keep rate ~1-p.
+
+        The parity arm injects its mask, so this is the only place a wrong
+        probability or an inverted keep/drop convention can be caught.
+        """
+        _requires_train_extra()
+        import torch
+
+        from soup_cli.utils import fast_lora
+
+        torch.manual_seed(0)
+        x = torch.randn(1000, 1000)
+        keep, x_d = fast_lora._dropout_mask(x, 0.25)
+
+        assert keep.shape == x.shape
+        assert keep.dtype == torch.bool
+        assert keep.element_size() == 1
+        rate = keep.float().mean().item()
+        assert abs(rate - 0.75) < 0.003, f"keep rate {rate:.4f} is not ~0.75"
+        torch.testing.assert_close(x_d, x * keep / 0.75)
 
 
 class TestSavedBytes:
