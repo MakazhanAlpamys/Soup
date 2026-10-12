@@ -77,7 +77,10 @@ def _tiny_model_dir(tmp_path):
     return base
 
 
-def _build(tmp_path, monkeypatch, weights, fields=FIELDS, name="run"):
+_LORA = "{r: 4, alpha: 8, dropout: 0.0}"
+
+
+def _build(tmp_path, monkeypatch, weights, fields=FIELDS, name="run", lora=_LORA):
     """A real ``PreferenceTrainerWrapper`` for ``weights``, set up on ROWS.
 
     A fresh LoRA adapter starts with ``B = 0``, which makes the policy equal to
@@ -96,7 +99,7 @@ def _build(tmp_path, monkeypatch, weights, fields=FIELDS, name="run"):
         "data: {train: ./unused.jsonl, format: dpo, max_length: 64}\n"
         "training:\n  epochs: 1\n  batch_size: 2\n  quantization: none\n"
         f"  preference_loss_weights: {weights}\n{fields}"
-        "  lora: {r: 4, alpha: 8, dropout: 0.0}\noutput: ./out\n"
+        f"  lora: {lora}\noutput: ./out\n"
     )
     wrapper = PreferenceTrainerWrapper(cfg, device="cpu")
     wrapper.setup({"train": ROWS})
@@ -706,6 +709,164 @@ class TestABlendWithASimpoOrOrpoPrimary:
 
         assert result["initial_loss"] == pytest.approx(expected, rel=1e-4)
         assert trainer.state.global_step == 1
+
+
+def _training(init="random", use_olora=False, relora_steps=None):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        lora=SimpleNamespace(init_strategy=init, use_olora=use_olora),
+        relora_steps=relora_steps,
+    )
+
+
+class TestAnAdapterOffReferenceMustBeTheStartingModel:
+    """Under a ``simpo`` / ``orpo`` primary the reference is the model with the
+    adapter switched off. That is the model the policy started from only while
+    the base weights are the ones that were loaded."""
+
+    @pytest.mark.parametrize(
+        ("init", "moves"), [(True, False), ("pissa", True), ("olora", True)]
+    )
+    def test_the_premise_some_inits_rewrite_the_base(self, tmp_path, init, moves):
+        """PEFT itself, without Soup: PiSSA and OLoRA put part of each weight
+        into the adapter and leave a residual in the base, so adapter-off is no
+        longer the model that was loaded. The default init leaves it alone."""
+        from peft import LoraConfig, get_peft_model
+        from transformers import AutoModelForCausalLM
+
+        base = AutoModelForCausalLM.from_pretrained(_tiny_model_dir(tmp_path))
+        ids = torch.arange(8).unsqueeze(0)
+        with torch.no_grad():
+            loaded = base(input_ids=ids).logits.clone()
+            model = get_peft_model(
+                base,
+                LoraConfig(r=4, target_modules=["q_proj", "v_proj"], init_lora_weights=init),
+            )
+            with model.disable_adapter():
+                adapter_off = model(input_ids=ids).logits
+
+        assert (float((adapter_off - loaded).abs().max()) > 1e-3) is moves
+
+    @pytest.mark.parametrize("primary", ["simpo", "orpo"])
+    @pytest.mark.parametrize("term", ["dpo", "ipo"])
+    @pytest.mark.parametrize("init", ["pissa", "olora", "loftq"])
+    def test_such_an_init_is_refused_with_the_reason(self, primary, term, init):
+        from soup_cli.utils.preference_combine import validate_adapter_off_reference
+
+        with pytest.raises(ValueError) as excinfo:
+            validate_adapter_off_reference({primary: 0.6, term: 0.4}, _training(init))
+
+        message = str(excinfo.value)
+        assert f"cannot compute {term} under a {primary} primary" in message
+        assert f"training.lora.init_strategy='{init}' rewrites the base weights" in message
+        assert "Give dpo or ipo the largest weight" in message
+        assert "set training.lora.init_strategy to 'random'" in message
+
+    def test_use_olora_alone_is_the_olora_init(self):
+        """The schema aligns the two; a config object that did not go through
+        it still names the init it will get."""
+        from soup_cli.utils.preference_combine import validate_adapter_off_reference
+
+        with pytest.raises(ValueError, match="init_strategy='olora' rewrites the base weights"):
+            validate_adapter_off_reference(
+                {"simpo": 0.6, "dpo": 0.4}, _training("random", use_olora=True)
+            )
+
+    def test_a_relora_restart_is_refused_with_the_reason(self):
+        """A restart merges the adapter into the base: measured on the tiny
+        Llama, a LoRA-targeted base weight moved by 2.9e-02 in two steps of a
+        ``{simpo: 0.6, dpo: 0.4}`` run with ``relora_steps: 1``."""
+        from soup_cli.utils.preference_combine import validate_adapter_off_reference
+
+        with pytest.raises(ValueError) as excinfo:
+            validate_adapter_off_reference(
+                {"orpo": 0.5, "dpo": 0.3, "ipo": 0.2}, _training(relora_steps=200)
+            )
+
+        message = str(excinfo.value)
+        assert "cannot compute dpo, ipo under a orpo primary" in message
+        assert "training.relora_steps=200 merges the adapter into the base weights" in message
+        assert "Remove training.relora_steps" in message
+        assert "init_strategy" not in message
+
+    @pytest.mark.parametrize(
+        ("weights", "training"),
+        [
+            ({"simpo": 0.6, "dpo": 0.4}, {}),  # the default init
+            ({"dpo": 0.6, "simpo": 0.4}, {"init": "pissa"}),  # trl keeps its own reference
+            ({"ipo": 0.6, "orpo": 0.4}, {"init": "olora", "relora_steps": 100}),
+            ({"simpo": 0.7, "orpo": 0.3}, {"init": "pissa", "relora_steps": 100}),  # no reference
+            ({"dpo": 0.5, "simpo": 0.5}, {"init": "loftq"}),  # a tie: the first key is the primary
+        ],
+    )
+    def test_what_has_a_valid_reference_is_not_refused(self, weights, training):
+        from soup_cli.utils.preference_combine import validate_adapter_off_reference
+
+        assert validate_adapter_off_reference(weights, _training(**training)) is None
+
+    def test_on_a_tie_the_first_key_is_the_primary(self):
+        from soup_cli.utils.preference_combine import primary_loss
+
+        assert primary_loss({"simpo": 0.5, "dpo": 0.5}) == "simpo"
+        assert primary_loss({"dpo": 0.5, "simpo": 0.5}) == "dpo"
+        assert primary_loss({"orpo": 0.2, "ipo": 0.5, "dpo": 0.3}) == "ipo"
+
+    @pytest.mark.parametrize(
+        ("lora", "fields", "reason"),
+        [
+            (_LORA[:-1] + ", init_strategy: pissa}", FIELDS, "init_strategy='pissa'"),
+            (_LORA[:-1] + ", use_olora: true}", FIELDS, "init_strategy='olora'"),
+            (_LORA, FIELDS + "  relora_steps: 1\n", "training.relora_steps=1"),
+        ],
+    )
+    def test_a_real_setup_refuses_before_the_model_is_loaded(
+        self, tmp_path, monkeypatch, lora, fields, reason
+    ):
+        from soup_cli.trainer.preference import PreferenceTrainerWrapper
+
+        built = []
+        build = PreferenceTrainerWrapper._build_multi_objective
+        monkeypatch.setattr(
+            PreferenceTrainerWrapper,
+            "_build_multi_objective",
+            lambda self: built.append(1) or build(self),
+        )
+
+        with pytest.raises(ValueError, match="cannot compute dpo under a simpo primary") as excinfo:
+            _build(tmp_path, monkeypatch, "{simpo: 0.6, dpo: 0.4}", fields=fields, lora=lora)
+
+        assert reason in str(excinfo.value) and built == []
+
+    @pytest.mark.parametrize("init", ["pissa", "olora"])
+    def test_with_a_dpo_primary_the_same_init_trains_against_the_starting_model(
+        self, tmp_path, monkeypatch, init
+    ):
+        """What the message tells the user to do instead. trl's ``DPOTrainer``
+        keeps a frozen copy of the adapter, residual and all, so at the first
+        step the policy and the reference are still the same model."""
+        from soup_cli.config.loader import load_config_from_string
+        from soup_cli.trainer.preference import PreferenceTrainerWrapper
+
+        monkeypatch.chdir(tmp_path)
+        base = _tiny_model_dir(tmp_path)
+        cfg = load_config_from_string(
+            f"base: {base.as_posix()}\ntask: preference\n"
+            "data: {train: ./unused.jsonl, format: dpo, max_length: 64}\n"
+            "training:\n  epochs: 1\n  batch_size: 2\n  quantization: none\n"
+            "  preference_loss_weights: {dpo: 0.6, simpo: 0.4}\n"
+            f"  lora: {{r: 4, alpha: 8, dropout: 0.0, init_strategy: {init}}}\noutput: ./out\n"
+        )
+        wrapper = PreferenceTrainerWrapper(cfg, device="cpu")
+        wrapper.setup({"train": ROWS})
+        trainer = wrapper.trainer
+
+        trainer.compute_loss(trainer.model, _batch(trainer))
+
+        got = trainer._soup_policy_logps
+        for side in ("chosen", "rejected"):
+            gap = got[f"policy_{side}_logps"] - got[f"ref_{side}_logps"]
+            assert float(gap.abs().max()) < 1e-5, side
 
 
 class TestWhatStillRefuses:

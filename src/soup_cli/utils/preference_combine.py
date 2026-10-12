@@ -77,6 +77,61 @@ def needs_reference_model(weights: Mapping[str, float]) -> bool:
     return bool(set(weights) & REF_MODEL_LOSSES)
 
 
+def primary_loss(weights: Mapping[str, float]) -> str:
+    """The loss whose trl trainer is built: the largest weight, and on a tie the
+    first key."""
+    return max(weights, key=weights.get)
+
+
+def validate_adapter_off_reference(weights: Mapping[str, float], training: Any) -> None:
+    """Refuse a ``dpo`` / ``ipo`` term whose reference would not be the model
+    the policy started from (#1425).
+
+    Under a ``simpo`` / ``orpo`` primary the reference is the model with the
+    LoRA adapter switched off. That is the starting model only while the base
+    weights stay as they were loaded. PiSSA, OLoRA and LoftQ move part of every
+    targeted weight into the adapter when it is created and leave a residual in
+    the base, and a ReLoRA restart merges the adapter into the base; adapter-off
+    is then another model, and the term would train against it without an
+    error. A ``dpo`` / ``ipo`` primary is not affected by the init: trl's
+    ``DPOTrainer`` keeps a frozen copy of the adapter as its reference.
+    """
+    primary = primary_loss(weights)
+    if primary not in REF_FREE_LOSSES or not needs_reference_model(weights):
+        return
+    lora = getattr(training, "lora", None)
+    init = getattr(lora, "init_strategy", "random")
+    if init == "random" and getattr(lora, "use_olora", False):
+        init = "olora"
+    relora_steps = getattr(training, "relora_steps", None)
+    if init != "random":
+        why = (
+            f"training.lora.init_strategy={init!r} rewrites the base weights when "
+            "the adapter is created"
+        )
+        fix = (
+            "Give dpo or ipo the largest weight (trl's DPOTrainer keeps a frozen "
+            "copy of the adapter as its reference), or set "
+            "training.lora.init_strategy to 'random'."
+        )
+    elif relora_steps is not None:
+        why = (
+            f"training.relora_steps={relora_steps} merges the adapter into the base "
+            "weights at every restart"
+        )
+        fix = "Remove training.relora_steps, or remove the dpo / ipo term from the blend."
+    else:
+        return
+    terms = ", ".join(sorted(set(weights) & REF_MODEL_LOSSES))
+    raise ValueError(
+        f"preference_loss_weights: cannot compute {terms} under a {primary} primary "
+        f"with this adapter. dpo and ipo compare the policy with the model it "
+        f"started from. The {primary} trainer keeps no copy of that model, so the "
+        f"blend reads it by switching the LoRA adapter off, and {why}: with the "
+        f"adapter off the model is no longer the one that was loaded. {fix}"
+    )
+
+
 def _sigmoid(x):
     import torch
 
