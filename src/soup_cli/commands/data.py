@@ -37,10 +37,10 @@ def inspect(
     """Inspect a dataset: show stats and sample rows."""
     file_path = Path(path)
     if not file_path.exists():
-        console.print(f"[red]File not found: {file_path}[/]")
+        console.print(f"[red]File not found: {for_terminal(file_path)}[/]")
         raise typer.Exit(1)
 
-    console.print(f"[dim]Inspecting {file_path}...[/]\n")
+    console.print(f"[dim]Inspecting {for_terminal(file_path)}...[/]\n")
     data = load_raw_data(file_path)
     result = validate_and_stats(data)
 
@@ -63,18 +63,15 @@ def inspect(
 
     # Print sample rows
     if rows > 0 and len(data) > 0:
-        # Escape dataset-derived cell content + column names: a stray '[/]' in
-        # ordinary data crashes Rich with MarkupError; a crafted '[link=...]'
-        # renders a phishing hyperlink. Mirrors `soup data review`.
-        from rich.markup import escape as _escape
+        # Sanitize dataset-derived cells and column names before Rich renders them.
 
         console.print(f"\n[bold]Sample rows ({min(rows, len(data))}):[/]")
         sample_table = Table(show_lines=True)
         for col in result["columns"][:5]:  # max 5 columns
-            sample_table.add_column(_escape(str(col)), max_width=60)
+            sample_table.add_column(for_terminal(col), max_width=60)
         for row in data[: min(rows, len(data))]:
             values = [
-                _escape(str(row.get(col, ""))[:60])
+                for_terminal(str(row.get(col, ""))[:60])
                 for col in result["columns"][:5]
             ]
             sample_table.add_row(*values)
@@ -728,7 +725,7 @@ def _show_vision_stats(data: list[dict], image_dir: Path | None = None) -> None:
         ext_str = ", ".join(
             f"{ext} ({count})" for ext, count in sorted(extensions.items())
         )
-        vision_table.add_row("Image formats", ext_str)
+        vision_table.add_row("Image formats", for_terminal(ext_str))
 
     console.print(vision_table)
 
@@ -2259,7 +2256,6 @@ def review_cmd(
     """Preview preference pairs for manual review."""
     import json as _json
 
-    from rich.markup import escape as _escape
     from rich.panel import Panel
 
     sample = max(1, min(int(sample), 100))
@@ -2284,9 +2280,9 @@ def review_cmd(
             chosen = str(entry.get("chosen", ""))
             rejected = str(entry.get("rejected", ""))
             console.print(Panel(
-                f"[bold cyan]Prompt:[/] {_escape(prompt[:400])}\n\n"
-                f"[green]Chosen:[/] {_escape(chosen[:400])}\n\n"
-                f"[red]Rejected:[/] {_escape(rejected[:400])}",
+                f"[bold cyan]Prompt:[/] {for_terminal(prompt[:400])}\n\n"
+                f"[green]Chosen:[/] {for_terminal(chosen[:400])}\n\n"
+                f"[red]Rejected:[/] {for_terminal(rejected[:400])}",
                 title=f"Pair {shown + 1}",
                 border_style="blue",
             ))
