@@ -185,7 +185,8 @@ def _projection_state(
 
     ``allow_dropout`` is the single-projection kernel's explicit opt-in: with
     it, a non-zero ``lora_dropout`` returns a state carrying ``dropout_p`` and
-    ``dropout_training`` instead of delegating. The MLP and QKV kernels never
+    ``dropout_training`` instead of delegating; ``p >= 1`` still delegates,
+    since the mask rescale is undefined at 1. The MLP and QKV kernels never
     pass it, so for them the shared check keeps refusing exactly as before.
     """
     lora_a_map = getattr(proj, "lora_A", None)
@@ -223,6 +224,10 @@ def _projection_state(
             dropout_p = float(getattr(dropout, "p", 0.0))
             dropout_training = bool(getattr(dropout, "training", False))
             if dropout_p != 0.0 and not allow_dropout:
+                return None
+            if allow_dropout and dropout_p >= 1.0:
+                # 1 / (1 - p) is undefined at p = 1; peft's native dropout
+                # handles that edge, so the opt-in delegates it too.
                 return None
             # Conv1D-style/transposed storage needs the PEFT fan-in/fan-out
             # path rather than the Linear weight orientation used below.
@@ -333,7 +338,11 @@ def _single_projection_function() -> Any:
     import torch
 
     class _FastLoraSingleProjection(torch.autograd.Function):
-        """``Y = X @ W^T + b + s * (X @ A^T) @ B^T``, hand-written backward.
+        """``Y = X @ W^T + b + s * (X_d @ A^T) @ B^T``, hand-written backward.
+
+        ``X_d`` is ``X`` unless dropout is modelled (the opt-in path); there it
+        is ``X * keep / (1 - p)`` with ``keep`` the saved boolean mask, and the
+        base term above still reads the undropped ``X``.
 
         ``W`` and ``b`` are frozen during LoRA training, so the backward returns
         ``None`` for both, and the input gradient still carries the base term
