@@ -2,6 +2,7 @@
 
 import io
 import json
+import os
 import tempfile
 from pathlib import Path
 
@@ -68,13 +69,16 @@ def test_data_validate_kto_issue_with_markup(monkeypatch):
 
 
 def test_chat_replies_and_system_with_markup(monkeypatch):
-    """Assistant replies and system prompt containing brackets should render literally."""
+    """Assistant replies and system prompt containing brackets should render literally
+    and strip ESC bytes.
+    """
     buffer = io.StringIO()
     monkeypatch.setattr(chat, "console", Console(file=buffer, color_system=None, width=400))
 
     replies = iter([
         "Index it as arr[i]; tick [x] when done.",
         "Llama-2 wraps a turn as [INST] hi [/INST] hello.",
+        "Title attack: \x1b]0;t\x07arr[i] with ESC control byte.",
     ])
     monkeypatch.setattr(chat, "_load_model", lambda **kw: (None, None))
     monkeypatch.setattr(chat, "_generate", lambda *a, **kw: next(replies))
@@ -85,7 +89,7 @@ def test_chat_replies_and_system_with_markup(monkeypatch):
         result = runner.invoke(
             cli_app,
             ["chat", "-m", str(fake_model), "--device", "cpu"],
-            input="/system Be [b]helpful[/b]!\nq1\nq2\n/quit\n",
+            input="/system Be [b]helpful[/b]!\nq1\nq2\nq3\n/quit\n",
         )
         assert result.exit_code == 0
         out = buffer.getvalue()
@@ -93,17 +97,21 @@ def test_chat_replies_and_system_with_markup(monkeypatch):
         assert "[x]" in out
         assert "[INST] hi [/INST]" in out
         assert "Be [b]helpful[/b]!" in out
+        assert chr(27) not in out
+        assert "\x1b" not in out
 
 
 def test_diff_prompts_and_replies_with_markup(monkeypatch):
-    """Diff prompt and side-by-side panels containing markup should render literally."""
+    """Diff prompt and side-by-side panels containing markup should render literally
+    and preserve raw file data.
+    """
     buffer = io.StringIO()
     monkeypatch.setattr(diff, "console", Console(file=buffer, color_system=None, width=400))
 
-    replies = iter([
-        "A1 uses arr[i]",
-        "B1 closes with [/code]",
-    ])
+    prompt_text = r"Check [/INST] with arr[i] and \path"
+    reply_a = r"A1 uses arr[i] and \backslash [/INST]"
+    reply_b = r"B1 closes with [/INST], arr[i] and \foo [/code]"
+    replies = iter([reply_a, reply_b])
     monkeypatch.setattr(diff, "_load_model", lambda *a, **kw: (None, None))
     monkeypatch.setattr(diff, "_generate", lambda *a, **kw: next(replies))
 
@@ -121,16 +129,24 @@ def test_diff_prompts_and_replies_with_markup(monkeypatch):
                 "-a", str(fake_a),
                 "-b", str(fake_b),
                 "--device", "cpu",
-                "--prompt", "Check [/tag] here",
+                "--prompt", prompt_text,
                 "-o", str(out_file),
             ],
         )
         assert result.exit_code == 0
         assert out_file.exists()
         out = buffer.getvalue()
-        assert "Check [/tag] here" in out
-        assert "A1 uses arr[i]" in out
-        assert "B1 closes with [/code]" in out
+        assert prompt_text in out
+        assert reply_a in out
+        assert reply_b in out
+
+        # Pin written output: saved file must preserve the exact raw unescaped strings
+        content = out_file.read_text(encoding="utf-8")
+        rows = [json.loads(line) for line in content.splitlines() if line.strip()]
+        assert len(rows) == 1
+        assert rows[0]["prompt"] == prompt_text
+        assert rows[0]["response_a"] == reply_a
+        assert rows[0]["response_b"] == reply_b
 
 
 def test_diff_model_paths_and_names_with_markup(monkeypatch):
@@ -159,22 +175,29 @@ def test_diff_model_paths_and_names_with_markup(monkeypatch):
         )
         assert result.exit_code == 0
         out = buffer.getvalue()
-        assert "ckpt[/]model[b]" in out
-        assert "model[v1]" in out
+        assert f"ckpt[{os.sep}]model[b]" in out
+        assert f"Model B:  {fake_b}" in out
+        assert f"Model A: {fake_a.name}" in out
+        assert f"Model B: {fake_b.name}" in out
         assert "Model A (]model[b])" in out
         assert "Model B (model[v1])" in out
 
 
 def test_eval_human_with_markup(monkeypatch):
-    """Human eval with markup in prompt and responses should render without crash and save."""
+    """Human eval with markup in prompt and responses should render without crash and save
+    raw file data.
+    """
     from soup_cli.eval import custom
 
     buffer = io.StringIO()
     monkeypatch.setattr(eval_cmd, "console", Console(file=buffer, color_system=None, width=400))
 
+    prompt_text = r"Prompt with [/INST], arr[i] and \backslash [/tag]"
+    reply_a = r"A1 with arr[i], [/INST] and \slash"
+    reply_b = r"B1 with [/INST] tags, arr[i] and \test"
     replies = {
-        "model_a": iter(["A1 with arr[i]"]),
-        "model_b": iter(["B1 with [/INST] tags"]),
+        "model_a": iter([reply_a]),
+        "model_b": iter([reply_b]),
     }
     monkeypatch.setattr(
         custom,
@@ -186,7 +209,7 @@ def test_eval_human_with_markup(monkeypatch):
         prompts_file = Path(tmpdir) / "prompts.jsonl"
         out_file = Path(tmpdir) / "judgments.json"
         prompts_file.write_text(
-            json.dumps({"prompt": "Prompt with [/tag]"}) + "\n",
+            json.dumps({"prompt": prompt_text}) + "\n",
             encoding="utf-8",
         )
         fake_a = Path(tmpdir) / "model_a"
@@ -210,6 +233,14 @@ def test_eval_human_with_markup(monkeypatch):
         assert result.exit_code == 0
         assert out_file.exists()
         out = buffer.getvalue()
-        assert "Prompt with [/tag]" in out
-        assert "A1 with arr[i]" in out
-        assert "B1 with [/INST] tags" in out
+        assert prompt_text in out
+        assert reply_a in out
+        assert reply_b in out
+
+        # Pin written output: saved file must preserve the exact raw unescaped strings
+        data = json.loads(out_file.read_text(encoding="utf-8"))
+        assert len(data["judgments"]) == 1
+        j = data["judgments"][0]
+        assert j["prompt"] == prompt_text
+        assert j["response_a"] == reply_a
+        assert j["response_b"] == reply_b
