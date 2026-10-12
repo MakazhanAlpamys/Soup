@@ -709,6 +709,7 @@ class StreamingSetupMixin:
             inspect_shard_cache,
             layer_paths,
             resolve_shard_dir,
+            shard_cache_disk_bytes,
             shard_checkpoint,
             source_weight_bytes,
             stripe_dirs,
@@ -829,6 +830,11 @@ class StreamingSetupMixin:
                     "qwen4_ple" if arch == "qwen4_exp" else "",
                     stripe_roots=stripe_roots,
                 )
+            cached_bytes = None
+            if cached is not None:
+                cached_bytes = shard_cache_disk_bytes(shard_dir, cached)
+                if cached_bytes is not None:
+                    shard_estimate = cached_bytes
             write_total = 0 if cached is not None else shard_estimate
             shares, approximate = estimate_stripe_write_shares(
                 weights_plan.weights_dir,
@@ -850,7 +856,7 @@ class StreamingSetupMixin:
                 shard_write_bytes=shares[0],
                 shard_path=shard_dir,
                 stripe_writes=tuple(zip(dirs[1:], shares[1:])),
-                approximate=approximate,
+                approximate=approximate and cached_bytes is None,  # a measured cache is exact
             )
 
         weights_dir = resolve_model_weights(
