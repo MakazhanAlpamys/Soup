@@ -6,8 +6,8 @@ silently ignored because multimodal collators do not implement assistant-turn
 masking.
 
 backend_support.REGISTRY carries the modality axis (task, backend, modality),
-and soup doctor --config reports them as ignored rather than printing an
-affirmative all-clear.
+and soup doctor --config reports non-default mask_history as ignored.
+train_on_responses_only has a true schema default and is not listed (#1330).
 """
 
 from __future__ import annotations
@@ -56,7 +56,7 @@ def test_vision_sft_reports_mask_history_as_ignored():
     assert entry.issue == 1156
 
 
-def test_vision_sft_reports_train_on_responses_only_as_ignored():
+def test_vision_sft_does_not_report_default_train_on_responses_only():
     yaml_text = """\
         base: Qwen/Qwen2-VL-7B-Instruct
         task: sft
@@ -68,11 +68,8 @@ def test_vision_sft_reports_train_on_responses_only_as_ignored():
     """
     cfg = load_config_from_string(textwrap.dedent(yaml_text))
     gaps = {e.field: e for e in check_config(cfg)}
-    assert "data.train_on_responses_only" in gaps
-    entry = gaps["data.train_on_responses_only"]
-    assert entry.status == IGNORED
-    assert "multimodal vision collator" in entry.reason
-    assert entry.issue == 1156
+    assert "data.train_on_responses_only" not in gaps
+    assert gaps == {}
 
 
 def test_audio_sft_reports_mask_history_as_ignored():
@@ -95,7 +92,7 @@ def test_audio_sft_reports_mask_history_as_ignored():
     assert entry.issue == 1156
 
 
-def test_audio_sft_reports_train_on_responses_only_as_ignored():
+def test_audio_sft_does_not_report_default_train_on_responses_only():
     yaml_text = """\
         base: Qwen/Qwen2-Audio-7B-Instruct
         task: sft
@@ -107,11 +104,8 @@ def test_audio_sft_reports_train_on_responses_only_as_ignored():
     """
     cfg = load_config_from_string(textwrap.dedent(yaml_text))
     gaps = {e.field: e for e in check_config(cfg)}
-    assert "data.train_on_responses_only" in gaps
-    entry = gaps["data.train_on_responses_only"]
-    assert entry.status == IGNORED
-    assert "audio training" in entry.reason
-    assert entry.issue == 1156
+    assert "data.train_on_responses_only" not in gaps
+    assert gaps == {}
 
 
 def test_multimodal_clean_config_reports_no_gaps():
@@ -170,10 +164,10 @@ def test_doctor_config_prints_gaps_for_vision_with_mask_history(
     out = strip_ansi(capsys.readouterr().out)
     assert "Config check - task=sft backend=transformers modality=vision" in out
     assert "data.mask_history" in out
-    assert "data.train_on_responses_only" in out
+    assert "data.train_on_responses_only" not in out
     assert "multimodal vision collator" in out
     assert (
-        "2 setting(s) switched on here are not read on backend=transformers (modality=vision)"
+        "1 setting(s) switched on here are not read on backend=transformers (modality=vision)"
         in out
     )
 

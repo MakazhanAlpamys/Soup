@@ -8,7 +8,7 @@ Validates that:
 3. backend: unsloth rejects quantization_aware: fp8, fp8_attention, and nvfp4
    at schema validation time with actionable diagnostics.
 4. validate_fp8_attention_compat and validate_nvfp4_compat reject unsloth.
-5. backend_support declares ("sft", "unsloth", "text") with REJECTED status for precision knobs.
+5. Schema-refused precision knobs have no unreachable doctor rows (#1330).
 """
 
 from __future__ import annotations
@@ -369,21 +369,12 @@ class TestUnslothPrecisionRejections:
 
 
 class TestBackendSupportRegistryUnsloth:
-    """Test that backend_support registers unsloth SFT rejected entries."""
+    """Test that schema-refused unsloth precision settings are omitted from doctor."""
 
     def test_unsloth_sft_registered(self) -> None:
         assert ("sft", "unsloth", "text") in REGISTRY
-        entries = unsupported_for("sft", "unsloth")
-        fields = {e.field: e.status for e in entries}
-        assert fields.get("training.quantization_aware") == "rejected"
-        assert fields.get("training.fp8_attention") == "rejected"
-        assert fields.get("training.nvfp4") == "rejected"
-        assert all(e.issue == 1124 for e in entries)
-
-        entries_vision = unsupported_for("sft", "unsloth", "vision")
-        assert len(entries_vision) == len(entries)
-        fields_vision = {e.field: e.status for e in entries_vision}
-        assert fields_vision.get("training.quantization_aware") == "rejected"
+        assert unsupported_for("sft", "unsloth") == ()
+        assert unsupported_for("sft", "unsloth", "vision") == ()
 
     def test_unsloth_sft_in_trainer_modules(self) -> None:
         assert ("sft", "unsloth", "text") in TRAINER_MODULES
@@ -402,8 +393,7 @@ class TestBackendSupportRegistryUnsloth:
     def test_no_loadable_unsloth_config_sets_quantization_aware(
         self, value, reason, modality
     ) -> None:
-        """Every value of the field is refused at load on unsloth, so the REJECTED
-        row documents the gap rather than reporting it (as the MLX row for #961)."""
+        """Every active value is refused at load on unsloth, so doctor has no row."""
         data = {"train": "tests/fixtures/sample_train.jsonl"}
         if modality == "vision":
             data["format"] = "multimodal"
@@ -427,12 +417,12 @@ class TestBackendSupportRegistryUnsloth:
         cfg = SoupConfig(
             base="test/model", task="sft", backend="unsloth", modality=modality, data=data
         )
-        assert unsupported_for("sft", "unsloth", modality), "fallback must cover the modality"
+        assert unsupported_for("sft", "unsloth", modality) == ()
         assert check_config(cfg) == []
 
     def test_setup_unsloth_does_not_wire_fp8_silently(self) -> None:
         """AST guard: SFTTrainerWrapper._setup_unsloth must not wire precision knobs
-        while ("sft", "unsloth", "text") declares them REJECTED in backend_support.
+        while config validation refuses them for backend=unsloth.
         """
         sft_path = Path(__file__).resolve().parents[1] / "src/soup_cli/trainer/sft.py"
         tree = ast.parse(sft_path.read_text(encoding="utf-8"))

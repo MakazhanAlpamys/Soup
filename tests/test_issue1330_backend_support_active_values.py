@@ -7,7 +7,6 @@ are properly detected.
 
 from __future__ import annotations
 
-import re
 import textwrap
 
 import pytest
@@ -15,8 +14,10 @@ import yaml
 
 from soup_cli.autopilot.generate_config import write_yaml
 from soup_cli.config.backend_support import (
+    IGNORED,
     REGISTRY,
     REJECTED,
+    SupportEntry,
     check_config,
     unsupported_for,
 )
@@ -88,31 +89,7 @@ def test_mlx_config_with_false_settings_reports_zero_gaps(tmp_path, capsys, monk
     )
 
 
-# data.train_on_responses_only defaults to true, so write_yaml writes `true` and
-# the reloaded vision/audio config reports it. Whether the dump or #1156's
-# explicit-true test gives way is still open on #1330; flip these once it is ruled.
-_ROUND_TRIP_PENDING_1330 = {
-    ("sft", "transformers", "vision"),
-    ("sft", "transformers", "audio"),
-}
-
-
-@pytest.mark.parametrize(
-    "key",
-    [
-        pytest.param(
-            key,
-            marks=pytest.mark.xfail(
-                strict=True,
-                reason="data.train_on_responses_only defaults to true; pending #1330",
-            ),
-        )
-        if key in _ROUND_TRIP_PENDING_1330
-        else key
-        for key in REGISTRY
-    ],
-    ids=lambda k: "-".join(k),
-)
+@pytest.mark.parametrize("key", list(REGISTRY), ids=lambda key: "-".join(key))
 def test_a_full_dump_reports_what_the_minimal_config_reports(key, tmp_path):
     """AC2: A config reloaded after write_yaml gets the same doctor report as the minimal config."""
     src = tmp_path / "min.yaml"
@@ -147,26 +124,28 @@ def test_seed_zero_on_mlx_is_still_reported():
     assert "training.data_seed" in reported_fields
 
 
-_REJECTED = [
-    pytest.param(key, entry, id=f"{'-'.join(key)}-{entry.field}")
-    for key, entries in REGISTRY.items()
-    for entry in entries
-    if entry.status == REJECTED
-]
+def test_schema_refused_settings_have_no_doctor_rows():
+    assert all(entry.status != REJECTED for entries in REGISTRY.values() for entry in entries)
 
 
-@pytest.mark.parametrize(("key", "entry"), _REJECTED)
-def test_a_rejected_rows_active_value_is_refused_at_load(key, entry):
-    """AC4: Each REJECTED field's active value is refused at load on its own, and its
-    off value reports nothing, so the row cannot fire on a loadable config."""
-    section, name = entry.field.split(".", 1)
-    _load(_config(*key))  # control: the base config itself loads
+@pytest.mark.parametrize("modality", ["vision", "audio"])
+@pytest.mark.parametrize("value", [True, False])
+def test_multimodal_response_mask_has_no_unreachable_doctor_row(modality, value):
+    config = _config("sft", "transformers", modality)
+    config["data"]["train_on_responses_only"] = value
+    assert check_config(_load(config)) == []
+    assert "data.train_on_responses_only" not in {
+        entry.field for entry in unsupported_for("sft", "transformers", modality)
+    }
 
-    active = _config(*key)
-    active.setdefault(section, {})[name] = True
-    with pytest.raises(ValueError, match=re.escape(name)):
-        _load(active)
 
-    off = _config(*key)
-    off.setdefault(section, {})[name] = False
-    assert check_config(_load(off)) == []
+def test_written_true_schema_default_counts_as_unwritten(monkeypatch):
+    """A future true-default registry entry cannot revive spelling-dependent reports."""
+    key = ("sft", "transformers", "vision")
+    entry = SupportEntry("data.train_on_responses_only", IGNORED, "test gap")
+    monkeypatch.setitem(REGISTRY, key, (entry,))
+    minimal = _config(*key)
+    explicit = _config(*key)
+    explicit["data"]["train_on_responses_only"] = True
+    assert check_config(_load(minimal)) == []
+    assert check_config(_load(explicit)) == []

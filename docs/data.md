@@ -940,10 +940,11 @@ turn on MLX. `soup train` says so on its "MLX backend ignores:" line, and
 every text token is supervised. Soup's vision collator masks only padding and image
 tokens, and the audio path only padding. Assistant-only masking would have to locate the
 assistant spans after the processor expands the image or audio tokens, which neither path
-does yet. Soup declares this gap rather
-than attempting unverified label restructuring, so both `mask_history` and `train_on_responses_only`
-are unread on vision and audio modalities, every text token trains, and `soup doctor --config`
-reports them as ignored.
+does yet. Both `mask_history` and `train_on_responses_only` are unread on these
+modalities, so every text token trains. `soup doctor --config` reports an explicit
+`mask_history: true` as ignored. It does not list `train_on_responses_only`: its
+schema default is `true`, and writing a default counts as leaving it unwritten.
+The absence of a doctor row does not imply assistant-only multimodal masking.
 
 
 **AOT preprocessing:**

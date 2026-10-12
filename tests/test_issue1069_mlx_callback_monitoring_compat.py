@@ -1,5 +1,5 @@
 """Tests for Issue #1069: loss_watchdog, loss_spike_recovery and grad_accum_auto_tune
-are rejected and reported as unread on backend: mlx.
+are refused at config load on backend: mlx; no unreachable doctor row remains.
 """
 
 from __future__ import annotations
@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from soup_cli.config.backend_support import REJECTED, check_config, unsupported_for
+from soup_cli.config.backend_support import check_config, unsupported_for
 from soup_cli.config.schema import SoupConfig, TrainingConfig
 from tests.conftest import strip_ansi
 
@@ -75,40 +75,24 @@ class TestSchemaRejectionOnMlxBackend:
 
 
 class TestBackendSupportRegistryAndDoctor:
-    """Verify backend_support registry and check_config declare and report
-    all three unread monitoring fields for (sft, mlx) as REJECTED.
-    """
+    """Schema-refused monitoring settings have no unreachable doctor rows."""
 
-    def test_registry_contains_all_three_monitoring_fields_as_rejected(self) -> None:
-        entries = {e.field: e for e in unsupported_for("sft", "mlx")}
-        assert entries["training.loss_watchdog"].status == REJECTED
-        assert "watchdog on the MLX callback" in entries["training.loss_watchdog"].reason
-        assert entries["training.loss_watchdog"].trainer_reads is True
+    def test_registry_omits_schema_refused_monitoring_fields(self) -> None:
+        fields = {entry.field for entry in unsupported_for("sft", "mlx")}
+        assert fields.isdisjoint({
+            "training.loss_watchdog",
+            "training.loss_spike_recovery",
+            "training.grad_accum_auto_tune",
+        })
 
-        assert entries["training.loss_spike_recovery"].status == REJECTED
-        assert "driven by the watchdog" in entries["training.loss_spike_recovery"].reason
-        assert entries["training.loss_spike_recovery"].trainer_reads is True
-
-        assert entries["training.grad_accum_auto_tune"].status == REJECTED
-        assert "VRAM total to measure pressure" in entries["training.grad_accum_auto_tune"].reason
-        assert entries["training.grad_accum_auto_tune"].trainer_reads is True
-
-    def test_check_config_reports_declared_gaps(self) -> None:
-        cfg = SoupConfig.model_construct(
-            base="sshleifer/tiny-gpt2",
-            task="sft",
-            backend="mlx",
-            data=SimpleNamespace(model_fields_set=set()),
-            training=TrainingConfig(
-                loss_watchdog=True,
-                loss_spike_recovery=True,
-                grad_accum_auto_tune=True,
-            ),
+    def test_loadable_monitoring_defaults_report_no_gaps(self) -> None:
+        cfg = SoupConfig(
+            base="test/model", task="sft", backend="mlx",
+            data={"train": "data.jsonl"},
+            training={"loss_watchdog": False, "loss_spike_recovery": False,
+                      "grad_accum_auto_tune": False},
         )
-        reported = {e.field for e in check_config(cfg)}
-        assert "training.loss_watchdog" in reported
-        assert "training.loss_spike_recovery" in reported
-        assert "training.grad_accum_auto_tune" in reported
+        assert check_config(cfg) == []
 
 
 class TestMlxTrainerCheckUnsupported:
@@ -184,9 +168,8 @@ class TestReasonStringsByteIdenticalAcrossSurfaces:
         assert prefix in msg
         schema_reason = msg.split(prefix)[1].strip()
 
-        # 2. Registry reason extracted from backend_support.py
-        registry_entries = {e.field: e.reason for e in unsupported_for("sft", "mlx")}
-        registry_reason = registry_entries[f"training.{field}"]
+        # Refused values cannot reach doctor, so there is no registry reason.
+        assert f"training.{field}" not in {e.field for e in unsupported_for("sft", "mlx")}
 
         # 3. Trainer warning reason extracted from MLXSFTTrainerWrapper._check_unsupported
         wrapper = object.__new__(MLXSFTTrainerWrapper)
@@ -209,6 +192,5 @@ class TestReasonStringsByteIdenticalAcrossSurfaces:
         assert match is not None
         trainer_reason = match.group(1)
 
-        # Assert byte-identical equality across all 3 surfaces
-        assert schema_reason == registry_reason
-        assert registry_reason == trainer_reason
+        # Keep the load-time refusal and internal trainer guard consistent.
+        assert schema_reason == trainer_reason

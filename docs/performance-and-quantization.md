@@ -1349,6 +1349,11 @@ torchao converters as of v0.71.21 (hardware-gated):
 
 Cross-validator ordering picks the most actionable error: `quantization_aware='fp8'` prerequisite fires before the MLX rejection on `fp8_attention`, and task compatibility checks fire at config load before runtime trainer construction.
 
+On `backend: unsloth`, active `quantization_aware`, `fp8_attention` and `nvfp4`
+settings are refused at config load. They do not appear as `rejected` rows in
+`soup doctor --config`: a loadable config cannot reach such a row. Select a
+supported transformers path for these precision features.
+
 
 ## LF / Axolotl Quant Parity (v0.53.0)
 

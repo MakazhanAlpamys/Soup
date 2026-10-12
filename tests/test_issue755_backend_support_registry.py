@@ -178,7 +178,13 @@ def test_registry_covers_every_field_the_mlx_trainer_warns_about():
     unknown = sorted(warned - known)
     assert unknown == [], f"warning list names fields that do not exist: {unknown}"
     registered = {e.field for e in unsupported_for("sft", "mlx")}
-    missing = sorted(warned - registered)
+    # These warnings are internal guards for schema-refused monitoring values.
+    # Their load-time refusal is pinned by test_issue1069; doctor cannot list them.
+    schema_refused = {
+        "training.loss_watchdog", "training.loss_spike_recovery",
+        "training.grad_accum_auto_tune",
+    }
+    missing = sorted(warned - registered - schema_refused)
     assert missing == [], (
         f"mlx_sft.py warns about {missing} but the registry does not list them"
     )

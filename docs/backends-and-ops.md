@@ -556,6 +556,14 @@ soup doctor [--nccl]
 
 Shows: Python version, GPU availability, system resources (RAM/Disk), all dependency versions, and fix suggestions. Use `--nccl` to measure and check multi-GPU communication bandwidth against expected hardware ceilings.
 
+With `soup doctor --config soup.yaml`, the declared support report lists only
+explicitly written, active settings that differ from their schema defaults.
+Writing a default counts as leaving it unwritten, so a full YAML dump and its
+minimal source have the same report; `seed: 0` still counts because the seed
+default is unset. Settings refused at config load are not listed as doctor rows:
+their active values fail before the report can run. This report describes the
+reviewed gaps, not a guarantee that every unlisted setting is supported.
+
 ### GPU diagnostics
 
 When an NVIDIA GPU is available, `soup doctor` reports its compute capability
