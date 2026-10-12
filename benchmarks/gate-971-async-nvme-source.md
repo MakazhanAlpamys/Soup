@@ -458,6 +458,12 @@ its **absolute** step times (49.2, 39.4, 39.3 s) are not throughput evidence;
 the ratio is what it measures. JSON:
 `layer0_wait_cold_synth70b_nf4.json`.
 
+**Correction, 2026-10-12.** For the embedding entry, #975 supersedes this
+section's opening sentence: `embed_tokens` and `lm_head` share one device slot,
+so each step's `_prime()` re-copies the whole matrix host to device with nothing
+to overlap it (a copy, not a read; fixed by #1178). The record's other findings,
+including the 0.07–0.12% materiality ruling, stand.
+
 | step | layer 0, forward / backward | other layers, mean / median / max | vocabulary loads | brackets |
 |---|---|---|---|---|
 | 0 | **17** / 271 ms | 252 / 283 / 420 ms | 662, 386 ms | 40.6 s of 49.2 s = 82.6% |
@@ -524,6 +530,11 @@ first read almost exactly, which is the predicted single-member-group behaviour
 and not an inference about it. Step 0 is the exception in the useful direction:
 the reader has the build phase to start that 662 ms first touch, so only
 32.66 ms of it reaches the compute thread.
+
+**Correction, 2026-10-12.** For the embedding entry, the cause in this finding's
+first sentence and the "single-member-group behaviour" above are superseded by
+the shared-slot copy in the note under this section's first paragraph (#975).
+The stall figures and the ruling below stand.
 
 **It is still not material, so Finding 8's ruling stands.** The step's entire
 stall — the embedding, `lm_head`, layer 0 and all 79 other decoder layers
