@@ -203,7 +203,8 @@ class TestSchemaBlockExpansion:
 
     def test_load_in_16bit_alias_satisfies_the_requirement(self):
         # docs/peft-and-efficiency.md: load_in_16bit: true == quantization: none
-        cfg = _sft(expand_layers=2, freeze_trainable_layers=2, load_in_16bit=True)
+        # #1326: a LoRA rank is refused with expand_layers.
+        cfg = _sft(expand_layers=2, freeze_trainable_layers=2, load_in_16bit=True, lora={"r": 0})
         assert cfg.training.quantization == "none"
         assert cfg.training.expand_layers == 2
 
