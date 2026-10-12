@@ -802,9 +802,13 @@ def test_benchmark_reads_a_scale_from_its_own_file(tmp_path):
     assert summary["g3_pass"] is True
 
 
-def test_benchmark_imports_without_the_resource_module(monkeypatch):
-    """The probe must import where ``resource`` does not exist (Windows); peak
-    RSS is then recorded as None instead of the import killing the module."""
+def test_benchmark_runs_without_unix_only_apis(tmp_path, monkeypatch):
+    """The whole probe must run where ``resource`` and ``os.statvfs`` do not
+    exist (Windows): same cross-file checkpoint as above, with both removed.
+
+    ``statvfs`` is hidden from the probe's own ``os`` and not deleted from the
+    real module: on POSIX ``shutil.disk_usage`` is itself built on it.
+    """
     import importlib.util
     import sys
     from pathlib import Path
@@ -817,4 +821,35 @@ def test_benchmark_imports_without_the_resource_module(monkeypatch):
     monkeypatch.setitem(sys.modules, "resource", None)
     monkeypatch.setitem(sys.modules, spec.name, module)
     spec.loader.exec_module(module)
-    assert module._peak_rss_bytes() is None
+
+    class _OsWithoutStatvfs:
+        def __getattr__(self, name):
+            if name == "statvfs":
+                raise AttributeError("module 'os' has no attribute 'statvfs'")
+            return getattr(os, name)
+
+    monkeypatch.setattr(module, "os", _OsWithoutStatvfs())
+
+    tensors, _ = _build_fp8_tensors()
+    files = {
+        "model-00001-of-00002.safetensors": [k for k in tensors if k != _Q_SCALE],
+        "model-00002-of-00002.safetensors": [_Q_SCALE],
+    }
+    src = _write_checkpoint(tmp_path / "src", tensors, FP8_CONFIG, files)
+    out_json = tmp_path / "result.json"
+    code = module.main(
+        [
+            "--source", src,
+            "--out", str(tmp_path / "out"),
+            "--double-quant", "off",
+            "--json", str(out_json),
+        ]
+    )
+    assert code == 0
+    result = json.loads(out_json.read_text())
+    assert result["summary"]["g1_pass"] is True
+    assert result["summary"]["g3_pass"] is True
+    free = result["box"]["disk_free_bytes"]
+    assert isinstance(free, int) and free > 0
+    assert result["g5"]["peak_rss_bytes_through_sharding"] is None
+    assert result["g5"]["peak_rss_note"]

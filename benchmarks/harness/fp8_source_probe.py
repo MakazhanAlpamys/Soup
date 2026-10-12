@@ -22,6 +22,7 @@ import argparse
 import json
 import os
 import platform
+import shutil
 import subprocess
 import sys
 import time
@@ -147,21 +148,25 @@ def _box(repo: Path, out_dir: Path) -> dict:
                 mem_total = int(line.split()[1]) * 1024
     except OSError:
         pass
-    tree = subprocess.run(
-        ["git", "-C", str(repo), "rev-parse", "--short", "HEAD"],
-        capture_output=True, text=True, check=False,
-    ).stdout.strip()
-    dirty = bool(subprocess.run(
-        ["git", "-C", str(repo), "status", "--porcelain", "--", "src"],
-        capture_output=True, text=True, check=False,
-    ).stdout.strip())
-    stat = os.statvfs(out_dir.parent)
+    # A missing ``git`` raises FileNotFoundError even with ``check=False``.
+    try:
+        tree = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "--short", "HEAD"],
+            capture_output=True, text=True, check=False,
+        ).stdout.strip()
+        dirty = bool(subprocess.run(
+            ["git", "-C", str(repo), "status", "--porcelain", "--", "src"],
+            capture_output=True, text=True, check=False,
+        ).stdout.strip())
+    except OSError:
+        tree, dirty = "unknown", None
     return {
         "when_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "cpu": cpu,
         "logical_cpus": os.cpu_count(),
         "mem_total_bytes": mem_total,
-        "disk_free_bytes": stat.f_bavail * stat.f_frsize,
+        # shutil.disk_usage, not os.statvfs: statvfs does not exist on Windows.
+        "disk_free_bytes": shutil.disk_usage(out_dir.parent).free,
         "platform": platform.platform(),
         "python": sys.version.split()[0],
         "torch": torch.__version__,
