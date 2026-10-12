@@ -98,7 +98,6 @@ def test_chat_replies_and_system_with_markup(monkeypatch):
         assert "[INST] hi [/INST]" in out
         assert "Be [b]helpful[/b]!" in out
         assert chr(27) not in out
-        assert "\x1b" not in out
 
 
 def test_diff_prompts_and_replies_with_markup(monkeypatch):
@@ -109,7 +108,7 @@ def test_diff_prompts_and_replies_with_markup(monkeypatch):
     monkeypatch.setattr(diff, "console", Console(file=buffer, color_system=None, width=400))
 
     prompt_text = r"Check [/INST] with arr[i] and \path"
-    reply_a = r"A1 uses arr[i] and \backslash [/INST]"
+    reply_a = "A1 uses arr[i] and \\backslash [/INST] with ESC: \x1b]0;t\x07"
     reply_b = r"B1 closes with [/INST], arr[i] and \foo [/code]"
     replies = iter([reply_a, reply_b])
     monkeypatch.setattr(diff, "_load_model", lambda *a, **kw: (None, None))
@@ -137,8 +136,9 @@ def test_diff_prompts_and_replies_with_markup(monkeypatch):
         assert out_file.exists()
         out = buffer.getvalue()
         assert prompt_text in out
-        assert reply_a in out
+        assert "A1 uses arr[i] and" in out
         assert reply_b in out
+        assert chr(27) not in out
 
         # Pin written output: saved file must preserve the exact raw unescaped strings
         content = out_file.read_text(encoding="utf-8")
@@ -193,7 +193,7 @@ def test_eval_human_with_markup(monkeypatch):
     monkeypatch.setattr(eval_cmd, "console", Console(file=buffer, color_system=None, width=400))
 
     prompt_text = r"Prompt with [/INST], arr[i] and \backslash [/tag]"
-    reply_a = r"A1 with arr[i], [/INST] and \slash"
+    reply_a = "A1 with arr[i], [/INST] and \\slash with ESC: \x1b]0;t\x07"
     reply_b = r"B1 with [/INST] tags, arr[i] and \test"
     replies = {
         "model_a": iter([reply_a]),
@@ -234,8 +234,9 @@ def test_eval_human_with_markup(monkeypatch):
         assert out_file.exists()
         out = buffer.getvalue()
         assert prompt_text in out
-        assert reply_a in out
+        assert "A1 with arr[i]" in out
         assert reply_b in out
+        assert chr(27) not in out
 
         # Pin written output: saved file must preserve the exact raw unescaped strings
         data = json.loads(out_file.read_text(encoding="utf-8"))
