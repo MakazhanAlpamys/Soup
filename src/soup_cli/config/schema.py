@@ -1284,7 +1284,9 @@ class TrainingConfig(BaseModel):
         default=None, ge=1, le=64,
         description=(
             "LLaMA Pro: append N zero-init transformer blocks and freeze "
-            "the original ones before SFT or pre-training."
+            "the original ones, so only the new blocks train. A LoRA rank is "
+            "refused with it, since get_peft_model would freeze the new blocks "
+            "again (#1326): set lora.r: 0 and quantization: none on task: sft."
         ),
     )
     freeze_trainable_layers: Optional[int] = Field(
