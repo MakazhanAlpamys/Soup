@@ -422,7 +422,11 @@ class TestOnARealPeftModel:
         model, saved = self._resume(tmp_path, with_the_helper=False)
 
         assert _largest_b(saved) == 0.25
-        assert _largest_b(_adapter(model, "default")) == 0.0
+        assert _largest_b(_adapter(model, "default")) == 0.0, (
+            "Trainer._load_from_checkpoint now reads the root adapter beside a "
+            "subfolder one, so reload_root_adapter_on_resume (#1768) reads it a "
+            "second time: remove the helper and its calls in dpo.py, ipo.py and grpo.py."
+        )
 
     def test_with_the_helper_it_is_the_checkpoints(self, tmp_path):
         model, saved = self._resume(tmp_path, with_the_helper=True)
@@ -470,6 +474,14 @@ class TestWithTheDtypeRestore:
     def test_the_wrappers_install_them_in_that_order(self, tmp_path, task):
         from tests import test_resume_trainable_dtype as dtype_tests
 
+        # Borrowed, not copied: the same stand-ins #1660 tests the dtype
+        # restore with. Say so if they are renamed there.
+        borrowed = ("_FakeTrainer", f"_{task}_wrapper")
+        missing = [name for name in borrowed if not hasattr(dtype_tests, name)]
+        assert not missing, (
+            f"tests/test_resume_trainable_dtype.py no longer has {missing}; this "
+            "test borrows them, so point it at their new names."
+        )
         checkpoint = _checkpoint(tmp_path, _ROOT, _REF)
         model = _PeftLike()
         trainer = dtype_tests._FakeTrainer(model)
