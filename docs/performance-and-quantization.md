@@ -847,7 +847,8 @@ even and the panel says approximately. Override the two cache roots with
 `SOUP_SPECTRUM_CACHE_DIR` and `SOUP_LAYER_STREAM_CACHE_DIR`; both retain Soup's
 home/cwd/tmp containment policy.
 A shard cache Soup will reuse is reported at the size of its own files, on every drive it is
-striped over; one it has to write is reported at the estimate.
+striped over; one it has to write is reported at the estimate, or with two or more drives at
+the larger of the estimate and the bytes derived from the source headers.
 
 **Two or more NVMe drives.** On a cold store larger than RAM the disk-tier step can wait on the
 read (measured for a 70B-shaped store), and then one drive is the ceiling. Set
