@@ -1108,6 +1108,18 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         # so two ``multipack: true`` runs against the same base class share
         # the same subclass.
         use_multipack = bool(getattr(tcfg, "multipack", False))
+        # #1693 -- with `stream_loss_chunk` the model returns no logits, which
+        # TRL's `compute_loss` reads for its metrics. The schema keeps the
+        # option to the two branches below that build `sft_cls`.
+        sft_cls = SFTTrainer
+        chunk_hook = getattr(self, "_stream_loss_chunk_hook", None)
+        if chunk_hook is not None:
+            from soup_cli.utils.stream_loss_chunk import (
+                HOOK_ATTR,
+                make_chunked_loss_trainer_class,
+            )
+
+            sft_cls = make_chunked_loss_trainer_class(SFTTrainer)
         if self._is_raft:
             # v0.71.10 #199 — RAFT uses a plain Trainer + weighted-CE loss
             # (answer-only mask via loss_weights; citation-span boost when
@@ -1211,7 +1223,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             and not use_audio
         ):
             self.trainer = self._build_rewind_trainer(
-                SFTTrainer,
+                sft_cls,
                 trainer_kwargs,
                 rows=dataset["train"],
                 output_dir=output_dir,
@@ -1219,7 +1231,9 @@ class SFTTrainerWrapper(StreamingSetupMixin):
                 grad_accum=int(tcfg.gradient_accumulation_steps),
             )
         else:
-            self.trainer = SFTTrainer(**trainer_kwargs)
+            self.trainer = sft_cls(**trainer_kwargs)
+        if chunk_hook is not None:
+            setattr(self.trainer, HOOK_ATTR, chunk_hook)
 
         # The recording trainer is the last branch above, so RAFT, multipack,
         # vision, audio and a pre-tokenised dataset all skip it -- silently,
