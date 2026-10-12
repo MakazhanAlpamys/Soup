@@ -86,6 +86,7 @@ def _foreign_sensors(kwargs):
     kwargs.setdefault("model_path", "/synthetic/models/qwen")
     kwargs.setdefault("disk_device", lambda path: "nvme0n1")
     kwargs.setdefault("disk_reads", _disk(50 * GB, 50 * GB))
+    kwargs.setdefault("other_disk_reads", _other_disks(100 * GB, 100 * GB))
     kwargs.setdefault("process_reads", _readings(QUIET_PROCESSES))
 
 
@@ -404,6 +405,93 @@ def test_same_user_reader_is_named_and_the_rest_is_unattributed(validity):
     assert foreign["evidence"]["uninspectable_processes"] == 293
 
 
+def _other_disks(*values):
+    """A synthetic counter for every disk but the watched one, like ``_disk``."""
+    read = _readings(*values)
+
+    def sensor(device):
+        assert device == "nvme0n1"
+        return read()
+
+    return sensor
+
+
+def test_own_reads_on_another_disk_do_not_hide_foreign_reads_on_the_watched_disk(validity):
+    # 2 GB of own reads may all be on sda, and the 1.5 GB on nvme0n1 may all be foreign.
+    record = _watch(
+        validity,
+        disk_reads=_disk(50 * GB, 51_500_000_000),
+        other_disk_reads=_other_disks(100 * GB, 102 * GB),
+        process_reads=_readings(_processes(own=10 * GB), _processes(own=12 * GB)),
+    )
+
+    foreign = record["checks"]["foreign_reads"]
+    assert foreign["outcome"] == "unknown"
+    assert "nvme0n1" in foreign["reason"]
+    assert "own reads" in foreign["reason"]
+    assert foreign["evidence"]["foreign_read_bytes"] is None
+    assert foreign["evidence"]["foreign_read_bytes_min"] == 0
+    assert foreign["evidence"]["foreign_read_bytes_max"] == 1_500_000_000
+    assert foreign["evidence"]["other_disk_read_bytes_start"] == 100 * GB
+    assert foreign["evidence"]["other_disk_read_bytes_end"] == 102 * GB
+    assert record["outcome"] == "unknown"
+    json.dumps(record)
+
+
+def test_foreign_reads_over_the_limit_void_even_when_own_reads_hit_another_disk(validity):
+    # Own reads are 2 GB at most, so at least 2 GB of the 4 GB on nvme0n1 are foreign.
+    record = _watch(
+        validity,
+        disk_reads=_disk(50 * GB, 54 * GB),
+        other_disk_reads=_other_disks(100 * GB, 102 * GB),
+        process_reads=_readings(_processes(own=10 * GB), _processes(own=12 * GB)),
+    )
+
+    foreign = record["checks"]["foreign_reads"]
+    assert foreign["outcome"] == "void"
+    assert foreign["evidence"]["foreign_read_bytes_min"] == 2 * GB
+    assert foreign["evidence"]["foreign_read_bytes_max"] == 4 * GB
+    assert record["outcome"] == "void"
+
+
+def test_small_watched_disk_reads_stay_ok_when_own_reads_hit_another_disk(validity):
+    record = _watch(
+        validity,
+        disk_reads=_disk(50 * GB, 50_200_000_000),
+        other_disk_reads=_other_disks(100 * GB, 102 * GB),
+        process_reads=_readings(_processes(own=10 * GB), _processes(own=12 * GB)),
+    )
+
+    foreign = record["checks"]["foreign_reads"]
+    assert foreign["outcome"] == "ok"
+    assert foreign["evidence"]["foreign_read_bytes_max"] == 200_000_000
+    assert record["outcome"] == "ok"
+
+
+def test_own_reads_with_quiet_other_disks_are_all_on_the_watched_disk(validity):
+    record = _watch(
+        validity,
+        disk_reads=_disk(50 * GB, 58 * GB),
+        other_disk_reads=_other_disks(100 * GB, 100 * GB),
+        process_reads=_readings(_processes(own=10 * GB), _processes(own=18 * GB)),
+    )
+
+    foreign = record["checks"]["foreign_reads"]
+    assert foreign["outcome"] == "ok"
+    assert foreign["evidence"]["foreign_read_bytes"] == 0
+    assert foreign["evidence"]["foreign_read_bytes_min"] == 0
+    assert foreign["evidence"]["foreign_read_bytes_max"] == 0
+
+
+def test_silent_other_disks_sensor_makes_foreign_reads_unknown_with_reason(validity):
+    record = _watch(validity, other_disk_reads=_other_disks(100 * GB, None))
+
+    foreign = record["checks"]["foreign_reads"]
+    assert foreign["outcome"] == "unknown"
+    assert "returned None" in foreign["reason"]
+    assert foreign["unattributed_bytes"] is None
+
+
 @pytest.mark.parametrize(
     ("sensors", "reason_part"),
     [
@@ -453,6 +541,7 @@ def test_real_linux_disk_sensors_return_values(validity):
     assert isinstance(evidence["device"], str)
     assert isinstance(evidence["disk_read_bytes_start"], int)
     assert evidence["disk_read_bytes_end"] >= evidence["disk_read_bytes_start"]
+    assert isinstance(evidence["other_disk_read_bytes_start"], int)
     assert isinstance(evidence["own_read_bytes"], int)
     assert isinstance(evidence["uninspectable_processes"], int)
     assert isinstance(foreign["unattributed_bytes"], int)

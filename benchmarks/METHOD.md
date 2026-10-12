@@ -82,9 +82,30 @@ AC line on a machine that may have a battery makes the sample unknown.
 
 On Linux the check finds the disk that holds the path you pass as
 `model_path`. It reads that disk's sector count from `/proc/diskstats` at the
-start and end of the arm and multiplies it by 512. From that it subtracts the
-bytes read by the watching process and every process below it, from
-`/proc/<pid>/io`. The rest is foreign reads. 1 GB or more voids the arm.
+start and end of the arm and multiplies it by 512. It does the same for every
+other physical disk, summed. It also reads the bytes read by the watching
+process and every process below it, from `/proc/<pid>/io`.
+
+That process counter covers every disk, so the check cannot tell which disk
+your own reads hit. It bounds the foreign reads on the watched disk instead:
+
+- at most: the watched disk's reads minus the part of your own reads the other
+  disks did not take;
+- at least: the watched disk's reads minus all of your own reads.
+
+The minimum is `foreign_read_bytes_min` and the maximum is
+`foreign_read_bytes_max`. `foreign_read_bytes` holds the exact figure when the
+two meet, else `null`.
+
+| Bound | Outcome |
+|---|---|
+| minimum is 1 GB or more | void |
+| maximum is under 1 GB | ok |
+| the limit falls between them | unknown, with the bounds in the reason |
+
+With 2 GB of your own reads on another disk and 1.5 GB read on the watched
+disk, the minimum is 0 and the maximum is 1.5 GB, so the check is unknown. An
+earlier version subtracted all 2 GB, got -0.5 GB and reported ok.
 
 Run the workload inside the watching process or as its child, and wait for
 each child to exit before the arm ends. Otherwise its reads count as foreign.
@@ -98,6 +119,7 @@ The check is unknown when:
   or a network mount;
 - the path spans several disks, as a RAID or LVM volume over two drives does;
 - the disk is missing from `/proc/diskstats`;
+- the bounds leave the 1 GB limit between them, as above;
 - a child of the watching process has exited but nobody has waited for it.
   Linux denies its counter until then.
 

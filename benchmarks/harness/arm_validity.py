@@ -93,6 +93,8 @@ FOREIGN_READ_LIMIT_BYTES = 1_000_000_000
 PROC_DIR = "/proc"
 
 DISKSTATS_PATH = "/proc/diskstats"
+SYS_BLOCK_DIR = "/sys/block"
+NOT_PHYSICAL_DISK_PREFIXES = ("loop", "ram", "zram")
 
 #: /proc/diskstats counts 512-byte sectors whatever the hardware sector size.
 DISKSTATS_SECTOR_BYTES = 512
@@ -255,6 +257,34 @@ def disk_reads(device: str) -> Optional[int]:
             if fields[2] == device:
                 return int(fields[5]) * DISKSTATS_SECTOR_BYTES
     return None
+
+
+def _stacks_on_other_devices(name: str) -> bool:
+    slaves = os.path.join(SYS_BLOCK_DIR, name, "slaves")
+    return os.path.isdir(slaves) and bool(os.listdir(slaves))
+
+
+def other_disk_reads(device: str) -> Optional[int]:
+    """Bytes read since boot from every physical disk except ``device``; 0 if it is the only one.
+
+    A physical disk is a /sys/block entry that stacks on no other device, so a
+    device-mapper or RAID device is not counted on top of the disks under it.
+    Loop, RAM and zram devices are left out.
+    """
+    disks = {
+        name
+        for name in os.listdir(SYS_BLOCK_DIR)
+        if name != device
+        and not name.startswith(NOT_PHYSICAL_DISK_PREFIXES)
+        and not _stacks_on_other_devices(name)
+    }
+    total = 0
+    with open(DISKSTATS_PATH, encoding="ascii") as handle:
+        for line in handle:
+            fields = line.split()
+            if fields[2] in disks:
+                total += int(fields[5]) * DISKSTATS_SECTOR_BYTES
+    return total
 
 
 class ProcessRead(TypedDict):
@@ -740,6 +770,7 @@ class DiskReadings:
     """One reading of the disk counter and the process scan, and why either gave nothing."""
 
     disk: Optional[int]
+    other_disks: Optional[int]
     processes: Optional[ProcessReads]
     problems: List[str]
 
@@ -748,14 +779,17 @@ class DiskReadings:
         cls,
         device: Optional[str],
         disk_sensor: Callable[[str], Optional[int]],
+        other_disks_sensor: Callable[[str], Optional[int]],
         process_sensor: Callable[[], Optional[ProcessReads]],
     ) -> "DiskReadings":
         if device is None:
-            disk, disk_problem = None, None
+            disk, disk_problem, others, others_problem = None, None, None, None
         else:
             disk, disk_problem = _read("disk read", lambda: disk_sensor(device))
+            others, others_problem = _read("other disks read", lambda: other_disks_sensor(device))
         processes, process_problem = _read("process read", process_sensor)
-        return cls(disk, processes, [p for p in (disk_problem, process_problem) if p])
+        problems = [disk_problem, others_problem, process_problem]
+        return cls(disk, others, processes, [p for p in problems if p])
 
 
 class Reader(TypedDict):
@@ -798,39 +832,68 @@ def foreign_reads_check_result(
 ) -> Dict[str, object]:
     """Void if the disk under test read 1 GB or more beyond this process tree's reads (ADR 0002).
 
+    The tree's counter covers every disk, so how much of it hit ``device`` is
+    unknown. The reads of the other disks bound it: at most all of the tree's
+    reads hit ``device``, and at least the part the other disks did not take.
+    That bounds the foreign reads between ``foreign_read_bytes_min`` and
+    ``foreign_read_bytes_max``. The check is void if the minimum reaches the
+    limit, ok if the maximum stays under it, and unknown between the two.
+    ``foreign_read_bytes`` is the exact figure when the bounds meet, else None.
+
     ``readers`` names the other processes this user may inspect that read during
-    the arm; ``unattributed_bytes`` is the foreign bytes they do not explain,
-    floored at 0 because a reader's counter covers every disk.
+    the arm; ``unattributed_bytes`` is the maximum they do not explain, floored at 0.
     """
     evidence: Dict[str, object] = {
         "model_path": model_path,
         "device": device,
         "disk_read_bytes_start": start.disk,
         "disk_read_bytes_end": end.disk,
+        "other_disk_read_bytes_start": start.other_disks,
+        "other_disk_read_bytes_end": end.other_disks,
         "own_read_bytes": None,
         "foreign_read_bytes": None,
+        "foreign_read_bytes_min": None,
+        "foreign_read_bytes_max": None,
         "uninspectable_processes": None,
     }
     problems = ([device_problem] if device_problem else []) + start.problems + end.problems
     if problems:
         return _foreign_result(UNKNOWN, "; ".join(problems), evidence, [], None)
     assert start.disk is not None and end.disk is not None
+    assert start.other_disks is not None and end.other_disks is not None
     assert start.processes is not None and end.processes is not None
     own = end.processes["own"] - start.processes["own"]
-    foreign = end.disk - start.disk - own
+    on_device = end.disk - start.disk
+    elsewhere = end.other_disks - start.other_disks
+    least = max(on_device - own, 0)
+    most = max(on_device - max(own - elsewhere, 0), 0)
     readers = _readers(start.processes, end.processes)
     evidence.update(
         own_read_bytes=own,
-        foreign_read_bytes=foreign,
+        foreign_read_bytes=least if least == most else None,
+        foreign_read_bytes_min=least,
+        foreign_read_bytes_max=most,
         uninspectable_processes=end.processes["uninspectable"],
     )
     named_bytes = sum(reader["read_bytes"] for reader in readers)
+    limit = f"(limit {FOREIGN_READ_LIMIT_BYTES})"
+    if least >= FOREIGN_READ_LIMIT_BYTES:
+        outcome, reason = VOID, f"at least {least} bytes of foreign reads on {device} {limit}"
+    elif most < FOREIGN_READ_LIMIT_BYTES:
+        outcome, reason = OK, f"at most {most} bytes of foreign reads on {device} {limit}"
+    else:
+        outcome = UNKNOWN
+        reason = (
+            f"{own} bytes of own reads cannot be placed on {device}: {elsewhere} bytes were "
+            f"read from the other disks, so foreign reads on {device} are between {least} "
+            f"and {most} bytes {limit}"
+        )
     return _foreign_result(
-        VOID if foreign >= FOREIGN_READ_LIMIT_BYTES else OK,
-        f"{foreign} bytes of foreign reads on {device} (limit {FOREIGN_READ_LIMIT_BYTES})",
+        outcome,
+        reason,
         evidence,
         readers,
-        max(foreign - named_bytes, 0),
+        None if outcome == UNKNOWN else max(most - named_bytes, 0),
     )
 
 
@@ -972,6 +1035,7 @@ class _LinuxChecks:
         model_path: Optional[str],
         disk_device: Callable[[str], Optional[str]],
         disk_reads: Callable[[str], Optional[int]],
+        other_disk_reads: Callable[[str], Optional[int]],
         process_reads: Callable[[], Optional[ProcessReads]],
     ) -> None:
         self._sleep_offset = sleep_offset
@@ -979,6 +1043,7 @@ class _LinuxChecks:
         self._model_path = model_path
         self._disk_device = disk_device
         self._disk_reads = disk_reads
+        self._other_disk_reads = other_disk_reads
         self._process_reads = process_reads
         self._device: Optional[str] = None
         self._device_problem: Optional[str] = None
@@ -995,7 +1060,11 @@ class _LinuxChecks:
         )
 
     def _read_disk(self) -> None:
-        self._disk.append(DiskReadings.take(self._device, self._disk_reads, self._process_reads))
+        self._disk.append(
+            DiskReadings.take(
+                self._device, self._disk_reads, self._other_disk_reads, self._process_reads
+            )
+        )
 
     def _read_sleep(self) -> None:
         self._sleep.append(SleepReadings.take(self._sleep_offset, self._suspend_count))
@@ -1107,8 +1176,8 @@ class ArmWatch:
     ``platform`` picks the checks, as a ``sys.platform`` value. On an OS without
     checks every check is unknown. ``power_supplies``, ``process_reads`` and
     ``ram_available`` default to that OS's sensor. ``sleep_offset``,
-    ``suspend_count``, ``disk_device`` and ``disk_reads`` serve Linux only, and
-    ``wall_clock`` serves Windows only.
+    ``suspend_count``, ``disk_device``, ``disk_reads`` and ``other_disk_reads``
+    serve Linux only, and ``wall_clock`` serves Windows only.
     """
 
     def __init__(
@@ -1129,6 +1198,7 @@ class ArmWatch:
         model_path: Optional[str] = None,
         disk_device: Callable[[str], Optional[str]] = disk_device,
         disk_reads: Callable[[str], Optional[int]] = disk_reads,
+        other_disk_reads: Callable[[str], Optional[int]] = other_disk_reads,
         process_reads: Optional[Callable[[], Optional[ProcessReads]]] = None,
         ram_available: Optional[Callable[[], Optional[int]]] = None,
         gpu_memory_used: Callable[[], Optional[int]] = gpu_memory_used,
@@ -1158,6 +1228,7 @@ class ArmWatch:
                 model_path,
                 disk_device,
                 disk_reads,
+                other_disk_reads,
                 process_reads or default_processes,
             )
         elif self.system == WINDOWS:
