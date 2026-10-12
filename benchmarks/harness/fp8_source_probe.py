@@ -22,7 +22,6 @@ import argparse
 import json
 import os
 import platform
-import resource
 import subprocess
 import sys
 import time
@@ -32,6 +31,21 @@ from pathlib import Path
 NF4_CODEC_BLOCK = 64
 G3_BOUND = 0.17
 _REF_CHUNK_ROWS = 1024
+
+
+def _peak_rss_bytes() -> int | None:
+    """Peak RSS of this process in bytes, None where ``resource`` does not exist.
+
+    ``resource`` is Unix-only, so it is imported here and not at module top:
+    importing the probe must work on Windows. ``ru_maxrss`` is KiB on Linux and
+    already bytes on macOS.
+    """
+    try:
+        import resource
+    except ImportError:
+        return None
+    peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    return peak if sys.platform == "darwin" else peak * 1024
 
 
 def _e4m3_table_f32():
@@ -262,7 +276,7 @@ def main(argv=None) -> int:
         double_quant=double_quant, quant_device="cpu", force=True,
     )
     wall = time.perf_counter() - t0
-    peak_rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024  # Linux: KiB
+    peak_rss = _peak_rss_bytes()
     out_bytes = sum(p.stat().st_size for p in args.out.rglob("*") if p.is_file())
     result["g6"] = {
         "double_quant_requested": args.double_quant,
@@ -277,6 +291,8 @@ def main(argv=None) -> int:
         "n_layers_in_index": index.n_layers,
     }
     result["g5"] = {"peak_rss_bytes_through_sharding": peak_rss}
+    if peak_rss is None:
+        result["g5"]["peak_rss_note"] = "resource module unavailable on this platform"
     json_tmp = args.json.with_suffix(".partial.json")
     json_tmp.write_text(json.dumps(result, indent=2))
 

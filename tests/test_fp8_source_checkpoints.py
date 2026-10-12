@@ -800,3 +800,21 @@ def test_benchmark_reads_a_scale_from_its_own_file(tmp_path):
     assert summary["g1_tensors"] == n_fp8
     assert summary["g1_pass"] is True
     assert summary["g3_pass"] is True
+
+
+def test_benchmark_imports_without_the_resource_module(monkeypatch):
+    """The probe must import where ``resource`` does not exist (Windows); peak
+    RSS is then recorded as None instead of the import killing the module."""
+    import importlib.util
+    import sys
+    from pathlib import Path
+
+    harness = Path(__file__).resolve().parents[1] / "benchmarks" / "harness" / "fp8_source_probe.py"
+    spec = importlib.util.spec_from_file_location("fp8_source_probe", harness)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    # A None entry makes ``import resource`` raise ImportError, as on Windows.
+    monkeypatch.setitem(sys.modules, "resource", None)
+    monkeypatch.setitem(sys.modules, spec.name, module)
+    spec.loader.exec_module(module)
+    assert module._peak_rss_bytes() is None
