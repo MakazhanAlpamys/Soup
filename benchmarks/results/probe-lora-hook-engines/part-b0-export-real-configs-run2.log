@@ -1,0 +1,6 @@
+qwen3.5-35b-a3b  stock  PASS (200 pairs, 0 problems)
+qwen3.5-35b-a3b  hook   PASS (200 pairs, 0 problems)
+deepseek-v3      stock  FAIL (None pairs, None problems)
+deepseek-v3      hook   PASS (540 pairs, 0 problems)
+kimi-k2          stock  FAIL (None pairs, None problems)
+kimi-k2          hook   PASS (546 pairs, 0 problems)

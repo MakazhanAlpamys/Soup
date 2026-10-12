@@ -1,0 +1,874 @@
+{
+  "status": "PASS",
+  "arms": 18,
+  "directions": 36,
+  "all_layers_including_zero": true,
+  "count_rows": 5760,
+  "integer_counter_values": 258048,
+  "full_identity_max_delta": 0,
+  "raw_summaries_equal_local_replay": true,
+  "independent_arithmetic_matches_within": 1e-12,
+  "non_overlapping_step_chunk_ranges": true,
+  "source_revision": "011309792e989fcdb37cdf12eb7e8dc661e62ebd",
+  "collection_fingerprints": {
+    "holdout": "366ace0102ef73b18da4c3cfaa7912d25a830f4103f85ae0cc5e477b5e4c9f9a",
+    "coverage": "728c9720aa2bb60358d41ed10286c0571304654033889d9fcf2c75ab73365f7f"
+  },
+  "outcome_counts": {
+    "HOTSET TRANSFERS": 17,
+    "GAIN WITH DRIFT": 1
+  },
+  "arms_checked": [
+    {
+      "model": "granite",
+      "corpus": "prose",
+      "shape": "1x512",
+      "verdict": "HOTSET TRANSFERS",
+      "full_in_sample": 0.4322255452473958,
+      "directions": [
+        {
+          "random_hit": 0.25,
+          "heldout_hit": 0.4271202087402344,
+          "in_sample_hit": 0.4347585042317708,
+          "oracle_hit": 0.46030934651692706,
+          "gain": 0.17712020874023438,
+          "relative_gain": 0.7084808349609375,
+          "transfer_loss": 0.007638295491536458,
+          "worst_layer": {
+            "layer": 9,
+            "router": "model.layers.9.block_sparse_moe.router",
+            "heldout_hit": 0.3419189453125,
+            "in_sample_hit": 0.35565185546875,
+            "oracle_hit": 0.4185791015625,
+            "gain": 0.0919189453125,
+            "relative_gain": 0.36767578125,
+            "transfer_loss": 0.01373291015625
+          }
+        },
+        {
+          "random_hit": 0.25,
+          "heldout_hit": 0.42763646443684894,
+          "in_sample_hit": 0.4335886637369792,
+          "oracle_hit": 0.45758819580078125,
+          "gain": 0.17763646443684897,
+          "relative_gain": 0.7105458577473959,
+          "transfer_loss": 0.005952199300130208,
+          "worst_layer": {
+            "layer": 9,
+            "router": "model.layers.9.block_sparse_moe.router",
+            "heldout_hit": 0.347930908203125,
+            "in_sample_hit": 0.350738525390625,
+            "oracle_hit": 0.415374755859375,
+            "gain": 0.097930908203125,
+            "relative_gain": 0.3917236328125,
+            "transfer_loss": 0.0028076171875
+          }
+        }
+      ]
+    },
+    {
+      "model": "granite",
+      "corpus": "prose",
+      "shape": "4x512",
+      "verdict": "HOTSET TRANSFERS",
+      "full_in_sample": 0.4299686749776204,
+      "directions": [
+        {
+          "random_hit": 0.25,
+          "heldout_hit": 0.42957623799641925,
+          "in_sample_hit": 0.43014367421468097,
+          "oracle_hit": 0.43661244710286456,
+          "gain": 0.17957623799641928,
+          "relative_gain": 0.7183049519856771,
+          "transfer_loss": 0.0005674362182617188,
+          "worst_layer": {
+            "layer": 9,
+            "router": "model.layers.9.block_sparse_moe.router",
+            "heldout_hit": 0.3571929931640625,
+            "in_sample_hit": 0.35518646240234375,
+            "oracle_hit": 0.37347412109375,
+            "gain": 0.1071929931640625,
+            "relative_gain": 0.42877197265625,
+            "transfer_loss": -0.00200653076171875
+          }
+        },
+        {
+          "random_hit": 0.25,
+          "heldout_hit": 0.42952124277750653,
+          "in_sample_hit": 0.4300212860107422,
+          "oracle_hit": 0.4375425974527995,
+          "gain": 0.1795212427775065,
+          "relative_gain": 0.718084971110026,
+          "transfer_loss": 0.0005000432332356771,
+          "worst_layer": {
+            "layer": 9,
+            "router": "model.layers.9.block_sparse_moe.router",
+            "heldout_hit": 0.35518646240234375,
+            "in_sample_hit": 0.3571929931640625,
+            "oracle_hit": 0.37347412109375,
+            "gain": 0.10518646240234375,
+            "relative_gain": 0.420745849609375,
+            "transfer_loss": 0.00200653076171875
+          }
+        }
+      ]
+    },
+    {
+      "model": "granite",
+      "corpus": "prose",
+      "shape": "1x2048",
+      "verdict": "HOTSET TRANSFERS",
+      "full_in_sample": 0.4346863428751628,
+      "directions": [
+        {
+          "random_hit": 0.25,
+          "heldout_hit": 0.43085193634033203,
+          "in_sample_hit": 0.4369312922159831,
+          "oracle_hit": 0.44400819142659503,
+          "gain": 0.18085193634033203,
+          "relative_gain": 0.7234077453613281,
+          "transfer_loss": 0.006079355875651042,
+          "worst_layer": {
+            "layer": 9,
+            "router": "model.layers.9.block_sparse_moe.router",
+            "heldout_hit": 0.36142730712890625,
+            "in_sample_hit": 0.37042999267578125,
+            "oracle_hit": 0.38849639892578125,
+            "gain": 0.11142730712890625,
+            "relative_gain": 0.445709228515625,
+            "transfer_loss": 0.009002685546875
+          }
+        },
+        {
+          "random_hit": 0.25,
+          "heldout_hit": 0.433780034383138,
+          "in_sample_hit": 0.4337781270345052,
+          "oracle_hit": 0.4456453323364258,
+          "gain": 0.18378003438313803,
+          "relative_gain": 0.7351201375325521,
+          "transfer_loss": -1.9073486328125e-06,
+          "worst_layer": {
+            "layer": 20,
+            "router": "model.layers.20.block_sparse_moe.router",
+            "heldout_hit": 0.365570068359375,
+            "in_sample_hit": 0.372161865234375,
+            "oracle_hit": 0.39196014404296875,
+            "gain": 0.115570068359375,
+            "relative_gain": 0.4622802734375,
+            "transfer_loss": 0.006591796875
+          }
+        }
+      ]
+    },
+    {
+      "model": "granite",
+      "corpus": "code",
+      "shape": "1x512",
+      "verdict": "HOTSET TRANSFERS",
+      "full_in_sample": 0.5081729888916016,
+      "directions": [
+        {
+          "random_hit": 0.25,
+          "heldout_hit": 0.5151774088541666,
+          "in_sample_hit": 0.500952402750651,
+          "oracle_hit": 0.5227444966634115,
+          "gain": 0.2651774088541667,
+          "relative_gain": 1.0607096354166667,
+          "transfer_loss": -0.014225006103515625,
+          "worst_layer": {
+            "layer": 0,
+            "router": "model.layers.0.block_sparse_moe.router",
+            "heldout_hit": 0.4189453125,
+            "in_sample_hit": 0.405975341796875,
+            "oracle_hit": 0.427093505859375,
+            "gain": 0.1689453125,
+            "relative_gain": 0.67578125,
+            "transfer_loss": -0.012969970703125
+          }
+        },
+        {
+          "random_hit": 0.25,
+          "heldout_hit": 0.4993693033854167,
+          "in_sample_hit": 0.5159899393717448,
+          "oracle_hit": 0.5070330301920573,
+          "gain": 0.24936930338541666,
+          "relative_gain": 0.9974772135416666,
+          "transfer_loss": 0.016620635986328125,
+          "worst_layer": {
+            "layer": 0,
+            "router": "model.layers.0.block_sparse_moe.router",
+            "heldout_hit": 0.405364990234375,
+            "in_sample_hit": 0.42144775390625,
+            "oracle_hit": 0.41217041015625,
+            "gain": 0.155364990234375,
+            "relative_gain": 0.6214599609375,
+            "transfer_loss": 0.016082763671875
+          }
+        }
+      ]
+    },
+    {
+      "model": "granite",
+      "corpus": "code",
+      "shape": "4x512",
+      "verdict": "HOTSET TRANSFERS",
+      "full_in_sample": 0.5097907384236654,
+      "directions": [
+        {
+          "random_hit": 0.25,
+          "heldout_hit": 0.5099830627441406,
+          "in_sample_hit": 0.5091997782389323,
+          "oracle_hit": 0.5120751063028971,
+          "gain": 0.2599830627441406,
+          "relative_gain": 1.0399322509765625,
+          "transfer_loss": -0.0007832845052083334,
+          "worst_layer": {
+            "layer": 0,
+            "router": "model.layers.0.block_sparse_moe.router",
+            "heldout_hit": 0.41136932373046875,
+            "in_sample_hit": 0.4110565185546875,
+            "oracle_hit": 0.4147186279296875,
+            "gain": 0.16136932373046875,
+            "relative_gain": 0.645477294921875,
+            "transfer_loss": -0.00031280517578125
+          }
+        },
+        {
+          "random_hit": 0.25,
+          "heldout_hit": 0.5082000096638998,
+          "in_sample_hit": 0.5108283360799154,
+          "oracle_hit": 0.5105838775634766,
+          "gain": 0.2582000096638997,
+          "relative_gain": 1.0328000386555989,
+          "transfer_loss": 0.002628326416015625,
+          "worst_layer": {
+            "layer": 0,
+            "router": "model.layers.0.block_sparse_moe.router",
+            "heldout_hit": 0.41103363037109375,
+            "in_sample_hit": 0.41315460205078125,
+            "oracle_hit": 0.412078857421875,
+            "gain": 0.16103363037109375,
+            "relative_gain": 0.644134521484375,
+            "transfer_loss": 0.0021209716796875
+          }
+        }
+      ]
+    },
+    {
+      "model": "granite",
+      "corpus": "code",
+      "shape": "1x2048",
+      "verdict": "HOTSET TRANSFERS",
+      "full_in_sample": 0.5149168968200684,
+      "directions": [
+        {
+          "random_hit": 0.25,
+          "heldout_hit": 0.5234003067016602,
+          "in_sample_hit": 0.5058215459187826,
+          "oracle_hit": 0.5291817982991537,
+          "gain": 0.27340030670166016,
+          "relative_gain": 1.0936012268066406,
+          "transfer_loss": -0.017578760782877605,
+          "worst_layer": {
+            "layer": 0,
+            "router": "model.layers.0.block_sparse_moe.router",
+            "heldout_hit": 0.4104156494140625,
+            "in_sample_hit": 0.40503692626953125,
+            "oracle_hit": 0.418060302734375,
+            "gain": 0.1604156494140625,
+            "relative_gain": 0.64166259765625,
+            "transfer_loss": -0.00537872314453125
+          }
+        },
+        {
+          "random_hit": 0.25,
+          "heldout_hit": 0.5046564737955729,
+          "in_sample_hit": 0.5248146057128906,
+          "oracle_hit": 0.5074914296468099,
+          "gain": 0.25465647379557294,
+          "relative_gain": 1.0186258951822917,
+          "transfer_loss": 0.020158131917317707,
+          "worst_layer": {
+            "layer": 0,
+            "router": "model.layers.0.block_sparse_moe.router",
+            "heldout_hit": 0.40322113037109375,
+            "in_sample_hit": 0.41585540771484375,
+            "oracle_hit": 0.40676116943359375,
+            "gain": 0.15322113037109375,
+            "relative_gain": 0.612884521484375,
+            "transfer_loss": 0.01263427734375
+          }
+        }
+      ]
+    },
+    {
+      "model": "granite",
+      "corpus": "math",
+      "shape": "1x512",
+      "verdict": "HOTSET TRANSFERS",
+      "full_in_sample": 0.4460652669270833,
+      "directions": [
+        {
+          "random_hit": 0.25,
+          "heldout_hit": 0.44746653238932294,
+          "in_sample_hit": 0.44447072347005206,
+          "oracle_hit": 0.4511769612630208,
+          "gain": 0.1974665323893229,
+          "relative_gain": 0.7898661295572916,
+          "transfer_loss": -0.0029958089192708335,
+          "worst_layer": {
+            "layer": 18,
+            "router": "model.layers.18.block_sparse_moe.router",
+            "heldout_hit": 0.35919189453125,
+            "in_sample_hit": 0.358612060546875,
+            "oracle_hit": 0.363922119140625,
+            "gain": 0.10919189453125,
+            "relative_gain": 0.436767578125,
+            "transfer_loss": -0.000579833984375
+          }
+        },
+        {
+          "random_hit": 0.25,
+          "heldout_hit": 0.4440256754557292,
+          "in_sample_hit": 0.44792938232421875,
+          "oracle_hit": 0.4491742451985677,
+          "gain": 0.19402567545572916,
+          "relative_gain": 0.7761027018229166,
+          "transfer_loss": 0.0039037068684895835,
+          "worst_layer": {
+            "layer": 18,
+            "router": "model.layers.18.block_sparse_moe.router",
+            "heldout_hit": 0.3565673828125,
+            "in_sample_hit": 0.3594970703125,
+            "oracle_hit": 0.36572265625,
+            "gain": 0.1065673828125,
+            "relative_gain": 0.42626953125,
+            "transfer_loss": 0.0029296875
+          }
+        }
+      ]
+    },
+    {
+      "model": "granite",
+      "corpus": "math",
+      "shape": "4x512",
+      "verdict": "HOTSET TRANSFERS",
+      "full_in_sample": 0.44759225845336914,
+      "directions": [
+        {
+          "random_hit": 0.25,
+          "heldout_hit": 0.4483744303385417,
+          "in_sample_hit": 0.4468100865681966,
+          "oracle_hit": 0.4490022659301758,
+          "gain": 0.19837443033854166,
+          "relative_gain": 0.7934977213541666,
+          "transfer_loss": -0.001564343770345052,
+          "worst_layer": {
+            "layer": 18,
+            "router": "model.layers.18.block_sparse_moe.router",
+            "heldout_hit": 0.362335205078125,
+            "in_sample_hit": 0.36002349853515625,
+            "oracle_hit": 0.36260986328125,
+            "gain": 0.112335205078125,
+            "relative_gain": 0.4493408203125,
+            "transfer_loss": -0.00231170654296875
+          }
+        },
+        {
+          "random_hit": 0.25,
+          "heldout_hit": 0.44673728942871094,
+          "in_sample_hit": 0.44839223225911456,
+          "oracle_hit": 0.4474763870239258,
+          "gain": 0.19673728942871094,
+          "relative_gain": 0.7869491577148438,
+          "transfer_loss": 0.0016549428304036458,
+          "worst_layer": {
+            "layer": 18,
+            "router": "model.layers.18.block_sparse_moe.router",
+            "heldout_hit": 0.36002349853515625,
+            "in_sample_hit": 0.362335205078125,
+            "oracle_hit": 0.36077117919921875,
+            "gain": 0.11002349853515625,
+            "relative_gain": 0.440093994140625,
+            "transfer_loss": 0.00231170654296875
+          }
+        }
+      ]
+    },
+    {
+      "model": "granite",
+      "corpus": "math",
+      "shape": "1x2048",
+      "verdict": "HOTSET TRANSFERS",
+      "full_in_sample": 0.44635995229085285,
+      "directions": [
+        {
+          "random_hit": 0.25,
+          "heldout_hit": 0.44592952728271484,
+          "in_sample_hit": 0.4466918309529622,
+          "oracle_hit": 0.4468666712443034,
+          "gain": 0.19592952728271484,
+          "relative_gain": 0.7837181091308594,
+          "transfer_loss": 0.0007623036702473959,
+          "worst_layer": {
+            "layer": 18,
+            "router": "model.layers.18.block_sparse_moe.router",
+            "heldout_hit": 0.36090087890625,
+            "in_sample_hit": 0.3610687255859375,
+            "oracle_hit": 0.36162567138671875,
+            "gain": 0.11090087890625,
+            "relative_gain": 0.443603515625,
+            "transfer_loss": 0.0001678466796875
+          }
+        },
+        {
+          "random_hit": 0.25,
+          "heldout_hit": 0.44643433888753253,
+          "in_sample_hit": 0.4461762110392253,
+          "oracle_hit": 0.4477761586507161,
+          "gain": 0.19643433888753256,
+          "relative_gain": 0.7857373555501302,
+          "transfer_loss": -0.0002581278483072917,
+          "worst_layer": {
+            "layer": 18,
+            "router": "model.layers.18.block_sparse_moe.router",
+            "heldout_hit": 0.3610687255859375,
+            "in_sample_hit": 0.36090087890625,
+            "oracle_hit": 0.36299896240234375,
+            "gain": 0.1110687255859375,
+            "relative_gain": 0.44427490234375,
+            "transfer_loss": -0.0001678466796875
+          }
+        }
+      ]
+    },
+    {
+      "model": "olmoe",
+      "corpus": "prose",
+      "shape": "1x512",
+      "verdict": "GAIN WITH DRIFT",
+      "full_in_sample": 0.4270610809326172,
+      "directions": [
+        {
+          "random_hit": 0.25,
+          "heldout_hit": 0.395660400390625,
+          "in_sample_hit": 0.44625282287597656,
+          "oracle_hit": 0.5028190612792969,
+          "gain": 0.145660400390625,
+          "relative_gain": 0.5826416015625,
+          "transfer_loss": 0.05059242248535156,
+          "worst_layer": {
+            "layer": 5,
+            "router": "model.layers.5.mlp.gate",
+            "heldout_hit": 0.370880126953125,
+            "in_sample_hit": 0.43365478515625,
+            "oracle_hit": 0.546783447265625,
+            "gain": 0.120880126953125,
+            "relative_gain": 0.4835205078125,
+            "transfer_loss": 0.062774658203125
+          }
+        },
+        {
+          "random_hit": 0.25,
+          "heldout_hit": 0.39519691467285156,
+          "in_sample_hit": 0.43233489990234375,
+          "oracle_hit": 0.5348243713378906,
+          "gain": 0.14519691467285156,
+          "relative_gain": 0.5807876586914062,
+          "transfer_loss": 0.03713798522949219,
+          "worst_layer": {
+            "layer": 5,
+            "router": "model.layers.5.mlp.gate",
+            "heldout_hit": 0.36260986328125,
+            "in_sample_hit": 0.45648193359375,
+            "oracle_hit": 0.5638427734375,
+            "gain": 0.11260986328125,
+            "relative_gain": 0.450439453125,
+            "transfer_loss": 0.0938720703125
+          }
+        }
+      ]
+    },
+    {
+      "model": "olmoe",
+      "corpus": "prose",
+      "shape": "4x512",
+      "verdict": "HOTSET TRANSFERS",
+      "full_in_sample": 0.41540074348449707,
+      "directions": [
+        {
+          "random_hit": 0.25,
+          "heldout_hit": 0.41410064697265625,
+          "in_sample_hit": 0.41268396377563477,
+          "oracle_hit": 0.44783735275268555,
+          "gain": 0.16410064697265625,
+          "relative_gain": 0.656402587890625,
+          "transfer_loss": -0.0014166831970214844,
+          "worst_layer": {
+            "layer": 1,
+            "router": "model.layers.1.mlp.gate",
+            "heldout_hit": 0.38692474365234375,
+            "in_sample_hit": 0.399505615234375,
+            "oracle_hit": 0.3959808349609375,
+            "gain": 0.13692474365234375,
+            "relative_gain": 0.547698974609375,
+            "transfer_loss": 0.01258087158203125
+          }
+        },
+        {
+          "random_hit": 0.25,
+          "heldout_hit": 0.40726232528686523,
+          "in_sample_hit": 0.42140865325927734,
+          "oracle_hit": 0.4466114044189453,
+          "gain": 0.15726232528686523,
+          "relative_gain": 0.6290493011474609,
+          "transfer_loss": 0.01414632797241211,
+          "worst_layer": {
+            "layer": 3,
+            "router": "model.layers.3.mlp.gate",
+            "heldout_hit": 0.3860626220703125,
+            "in_sample_hit": 0.40142822265625,
+            "oracle_hit": 0.42612457275390625,
+            "gain": 0.1360626220703125,
+            "relative_gain": 0.54425048828125,
+            "transfer_loss": 0.0153656005859375
+          }
+        }
+      ]
+    },
+    {
+      "model": "olmoe",
+      "corpus": "prose",
+      "shape": "1x2048",
+      "verdict": "HOTSET TRANSFERS",
+      "full_in_sample": 0.4130675792694092,
+      "directions": [
+        {
+          "random_hit": 0.25,
+          "heldout_hit": 0.3890089988708496,
+          "in_sample_hit": 0.4245781898498535,
+          "oracle_hit": 0.48452138900756836,
+          "gain": 0.1390089988708496,
+          "relative_gain": 0.5560359954833984,
+          "transfer_loss": 0.035569190979003906,
+          "worst_layer": {
+            "layer": 7,
+            "router": "model.layers.7.mlp.gate",
+            "heldout_hit": 0.36347198486328125,
+            "in_sample_hit": 0.41669464111328125,
+            "oracle_hit": 0.49275970458984375,
+            "gain": 0.11347198486328125,
+            "relative_gain": 0.453887939453125,
+            "transfer_loss": 0.05322265625
+          }
+        },
+        {
+          "random_hit": 0.25,
+          "heldout_hit": 0.4003024101257324,
+          "in_sample_hit": 0.412569522857666,
+          "oracle_hit": 0.4895949363708496,
+          "gain": 0.15030241012573242,
+          "relative_gain": 0.6012096405029297,
+          "transfer_loss": 0.012267112731933594,
+          "worst_layer": {
+            "layer": 7,
+            "router": "model.layers.7.mlp.gate",
+            "heldout_hit": 0.38059234619140625,
+            "in_sample_hit": 0.39459991455078125,
+            "oracle_hit": 0.5021286010742188,
+            "gain": 0.13059234619140625,
+            "relative_gain": 0.522369384765625,
+            "transfer_loss": 0.014007568359375
+          }
+        }
+      ]
+    },
+    {
+      "model": "olmoe",
+      "corpus": "code",
+      "shape": "1x512",
+      "verdict": "HOTSET TRANSFERS",
+      "full_in_sample": 0.6669855117797852,
+      "directions": [
+        {
+          "random_hit": 0.25,
+          "heldout_hit": 0.6550865173339844,
+          "in_sample_hit": 0.6764640808105469,
+          "oracle_hit": 0.6730690002441406,
+          "gain": 0.4050865173339844,
+          "relative_gain": 1.6203460693359375,
+          "transfer_loss": 0.0213775634765625,
+          "worst_layer": {
+            "layer": 0,
+            "router": "model.layers.0.mlp.gate",
+            "heldout_hit": 0.47723388671875,
+            "in_sample_hit": 0.483428955078125,
+            "oracle_hit": 0.49847412109375,
+            "gain": 0.22723388671875,
+            "relative_gain": 0.908935546875,
+            "transfer_loss": 0.006195068359375
+          }
+        },
+        {
+          "random_hit": 0.25,
+          "heldout_hit": 0.6721458435058594,
+          "in_sample_hit": 0.6596870422363281,
+          "oracle_hit": 0.6934127807617188,
+          "gain": 0.4221458435058594,
+          "relative_gain": 1.6885833740234375,
+          "transfer_loss": -0.01245880126953125,
+          "worst_layer": {
+            "layer": 0,
+            "router": "model.layers.0.mlp.gate",
+            "heldout_hit": 0.480316162109375,
+            "in_sample_hit": 0.480865478515625,
+            "oracle_hit": 0.503326416015625,
+            "gain": 0.230316162109375,
+            "relative_gain": 0.9212646484375,
+            "transfer_loss": 0.00054931640625
+          }
+        }
+      ]
+    },
+    {
+      "model": "olmoe",
+      "corpus": "code",
+      "shape": "4x512",
+      "verdict": "HOTSET TRANSFERS",
+      "full_in_sample": 0.6636018753051758,
+      "directions": [
+        {
+          "random_hit": 0.25,
+          "heldout_hit": 0.6632518768310547,
+          "in_sample_hit": 0.663642406463623,
+          "oracle_hit": 0.667231559753418,
+          "gain": 0.4132518768310547,
+          "relative_gain": 1.6530075073242188,
+          "transfer_loss": 0.0003905296325683594,
+          "worst_layer": {
+            "layer": 0,
+            "router": "model.layers.0.mlp.gate",
+            "heldout_hit": 0.48204803466796875,
+            "in_sample_hit": 0.47647857666015625,
+            "oracle_hit": 0.48474884033203125,
+            "gain": 0.23204803466796875,
+            "relative_gain": 0.928192138671875,
+            "transfer_loss": -0.0055694580078125
+          }
+        },
+        {
+          "random_hit": 0.25,
+          "heldout_hit": 0.663144588470459,
+          "in_sample_hit": 0.6638646125793457,
+          "oracle_hit": 0.6669073104858398,
+          "gain": 0.413144588470459,
+          "relative_gain": 1.652578353881836,
+          "transfer_loss": 0.0007200241088867188,
+          "worst_layer": {
+            "layer": 0,
+            "router": "model.layers.0.mlp.gate",
+            "heldout_hit": 0.47647857666015625,
+            "in_sample_hit": 0.48204803466796875,
+            "oracle_hit": 0.479156494140625,
+            "gain": 0.22647857666015625,
+            "relative_gain": 0.905914306640625,
+            "transfer_loss": 0.0055694580078125
+          }
+        }
+      ]
+    },
+    {
+      "model": "olmoe",
+      "corpus": "code",
+      "shape": "1x2048",
+      "verdict": "HOTSET TRANSFERS",
+      "full_in_sample": 0.639049768447876,
+      "directions": [
+        {
+          "random_hit": 0.25,
+          "heldout_hit": 0.6420736312866211,
+          "in_sample_hit": 0.6341109275817871,
+          "oracle_hit": 0.652888298034668,
+          "gain": 0.3920736312866211,
+          "relative_gain": 1.5682945251464844,
+          "transfer_loss": -0.007962703704833984,
+          "worst_layer": {
+            "layer": 0,
+            "router": "model.layers.0.mlp.gate",
+            "heldout_hit": 0.4533538818359375,
+            "in_sample_hit": 0.45726776123046875,
+            "oracle_hit": 0.4662322998046875,
+            "gain": 0.2033538818359375,
+            "relative_gain": 0.81341552734375,
+            "transfer_loss": 0.00391387939453125
+          }
+        },
+        {
+          "random_hit": 0.25,
+          "heldout_hit": 0.6306338310241699,
+          "in_sample_hit": 0.6461353302001953,
+          "oracle_hit": 0.6419939994812012,
+          "gain": 0.3806338310241699,
+          "relative_gain": 1.5225353240966797,
+          "transfer_loss": 0.01550149917602539,
+          "worst_layer": {
+            "layer": 0,
+            "router": "model.layers.0.mlp.gate",
+            "heldout_hit": 0.4549560546875,
+            "in_sample_hit": 0.45426177978515625,
+            "oracle_hit": 0.46593475341796875,
+            "gain": 0.2049560546875,
+            "relative_gain": 0.81982421875,
+            "transfer_loss": -0.00069427490234375
+          }
+        }
+      ]
+    },
+    {
+      "model": "olmoe",
+      "corpus": "math",
+      "shape": "1x512",
+      "verdict": "HOTSET TRANSFERS",
+      "full_in_sample": 0.5208473205566406,
+      "directions": [
+        {
+          "random_hit": 0.25,
+          "heldout_hit": 0.5201549530029297,
+          "in_sample_hit": 0.5188274383544922,
+          "oracle_hit": 0.5343742370605469,
+          "gain": 0.2701549530029297,
+          "relative_gain": 1.0806198120117188,
+          "transfer_loss": -0.0013275146484375,
+          "worst_layer": {
+            "layer": 1,
+            "router": "model.layers.1.mlp.gate",
+            "heldout_hit": 0.423675537109375,
+            "in_sample_hit": 0.42041015625,
+            "oracle_hit": 0.433868408203125,
+            "gain": 0.173675537109375,
+            "relative_gain": 0.6947021484375,
+            "transfer_loss": -0.003265380859375
+          }
+        },
+        {
+          "random_hit": 0.25,
+          "heldout_hit": 0.5138034820556641,
+          "in_sample_hit": 0.525482177734375,
+          "oracle_hit": 0.5294742584228516,
+          "gain": 0.26380348205566406,
+          "relative_gain": 1.0552139282226562,
+          "transfer_loss": 0.011678695678710938,
+          "worst_layer": {
+            "layer": 1,
+            "router": "model.layers.1.mlp.gate",
+            "heldout_hit": 0.41400146484375,
+            "in_sample_hit": 0.42596435546875,
+            "oracle_hit": 0.4306640625,
+            "gain": 0.16400146484375,
+            "relative_gain": 0.656005859375,
+            "transfer_loss": 0.011962890625
+          }
+        }
+      ]
+    },
+    {
+      "model": "olmoe",
+      "corpus": "math",
+      "shape": "4x512",
+      "verdict": "HOTSET TRANSFERS",
+      "full_in_sample": 0.5214996337890625,
+      "directions": [
+        {
+          "random_hit": 0.25,
+          "heldout_hit": 0.5215573310852051,
+          "in_sample_hit": 0.5212149620056152,
+          "oracle_hit": 0.5250740051269531,
+          "gain": 0.2715573310852051,
+          "relative_gain": 1.0862293243408203,
+          "transfer_loss": -0.00034236907958984375,
+          "worst_layer": {
+            "layer": 1,
+            "router": "model.layers.1.mlp.gate",
+            "heldout_hit": 0.421234130859375,
+            "in_sample_hit": 0.42024993896484375,
+            "oracle_hit": 0.4252777099609375,
+            "gain": 0.171234130859375,
+            "relative_gain": 0.6849365234375,
+            "transfer_loss": -0.00098419189453125
+          }
+        },
+        {
+          "random_hit": 0.25,
+          "heldout_hit": 0.5203523635864258,
+          "in_sample_hit": 0.5222072601318359,
+          "oracle_hit": 0.5238423347473145,
+          "gain": 0.2703523635864258,
+          "relative_gain": 1.0814094543457031,
+          "transfer_loss": 0.0018548965454101562,
+          "worst_layer": {
+            "layer": 1,
+            "router": "model.layers.1.mlp.gate",
+            "heldout_hit": 0.42008209228515625,
+            "in_sample_hit": 0.4218597412109375,
+            "oracle_hit": 0.42406463623046875,
+            "gain": 0.17008209228515625,
+            "relative_gain": 0.680328369140625,
+            "transfer_loss": 0.00177764892578125
+          }
+        }
+      ]
+    },
+    {
+      "model": "olmoe",
+      "corpus": "math",
+      "shape": "1x2048",
+      "verdict": "HOTSET TRANSFERS",
+      "full_in_sample": 0.527289628982544,
+      "directions": [
+        {
+          "random_hit": 0.25,
+          "heldout_hit": 0.5276980400085449,
+          "in_sample_hit": 0.5261144638061523,
+          "oracle_hit": 0.5316300392150879,
+          "gain": 0.2776980400085449,
+          "relative_gain": 1.1107921600341797,
+          "transfer_loss": -0.0015835762023925781,
+          "worst_layer": {
+            "layer": 1,
+            "router": "model.layers.1.mlp.gate",
+            "heldout_hit": 0.4242401123046875,
+            "in_sample_hit": 0.423614501953125,
+            "oracle_hit": 0.4285430908203125,
+            "gain": 0.1742401123046875,
+            "relative_gain": 0.69696044921875,
+            "transfer_loss": -0.0006256103515625
+          }
+        },
+        {
+          "random_hit": 0.25,
+          "heldout_hit": 0.5256376266479492,
+          "in_sample_hit": 0.528907299041748,
+          "oracle_hit": 0.5293855667114258,
+          "gain": 0.2756376266479492,
+          "relative_gain": 1.1025505065917969,
+          "transfer_loss": 0.003269672393798828,
+          "worst_layer": {
+            "layer": 1,
+            "router": "model.layers.1.mlp.gate",
+            "heldout_hit": 0.42352294921875,
+            "in_sample_hit": 0.42596435546875,
+            "oracle_hit": 0.42633819580078125,
+            "gain": 0.17352294921875,
+            "relative_gain": 0.694091796875,
+            "transfer_loss": 0.00244140625
+          }
+        }
+      ]
+    }
+  ],
+  "raw_capture_sha256": {
+    "granite": "03efbc13845902e55b4d5a3da95e9f3f7ff6b9828373b1a86a0782f50de6b528",
+    "olmoe": "0f81247afc7f6796ab1645bc83e44d7a163581a62c30bb3f48a84c1676c89f5a"
+  },
+  "output_archive_sha256": "dd5c491a2e996324bab0f45fe60c168e730acd7b711afdb8d39a6680b4625c7c"
+}

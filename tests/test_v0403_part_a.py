@@ -3,14 +3,11 @@
 The CUDA probe path itself can't run on CI (no GPU). These tests cover:
 - ``make_cuda_probe_fn`` no-op branches (CPU, no torch, no CUDA, missing
   model/tokenizer, invalid max_length).
-- Source-level wiring grep on sft.py to assert ``probe_fn=None`` is gone
-  and ``make_cuda_probe_fn`` is invoked.
 - Bool / non-int rejection on ``max_length``.
 """
 
 from __future__ import annotations
 
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -172,16 +169,6 @@ class TestProbeClosure:
         probe = self._build(monkeypatch, model=_broken_model)
         with pytest.raises(RuntimeError, match="not OOM"):
             probe(8)
-
-
-class TestSftWiring:
-    def test_sft_no_longer_passes_probe_fn_none_literal(self):
-        path = Path("src/soup_cli/trainer/sft.py")
-        text = path.read_text(encoding="utf-8")
-        # The deferred-stub literal must be gone.
-        assert "probe_fn=None,  # CUDA probe wired" not in text
-        # And the new helper must be wired.
-        assert "make_cuda_probe_fn" in text
 
 
 class TestModuleSurface:

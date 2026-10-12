@@ -1,0 +1,163 @@
+# Evidence extract; omitted source lines remain in the separately archived full capture.
+
+# Source: part-b-setup-run1.log
+# Full source SHA-256: 30657386a0e7c0d9d0013df83abf5fcfdea7013aa846c0e0df25cd5ba99ce7b4
+
+# Source lines 364-364
+downloading uv 0.12.23 x86_64-unknown-linux-gnu
+
+# Source lines 374-376
+Cloning into 'llama.cpp-b11476'...
+Note: switching to '988190680d5a89fce97de3c20df2c2813731fd61'.
+
+
+# Source lines 392-396
++ git -C llama.cpp-b11476 rev-parse HEAD
+988190680d5a89fce97de3c20df2c2813731fd61
++ cmake -S llama.cpp-b11476 -B build -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=ON -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_CURL=OFF
+-- The C compiler identification is GNU 11.4.0
+-- The CXX compiler identification is GNU 11.4.0
+
+# Source lines 407-438
+-- llama.cpp version: 0.6.0-dev
+CMAKE_BUILD_TYPE=Release
+-- Found Git: /usr/bin/git (found version "2.34.1") 
+-- The ASM compiler identification is GNU
+-- Found assembler: /usr/bin/cc
+-- Looking for pthread.h
+-- Looking for pthread.h - found
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD - Success
+-- Found Threads: TRUE  
+-- Warning: ccache not found - consider installing it for faster compilation or disable this warning with GGML_CCACHE=OFF
+-- CMAKE_SYSTEM_PROCESSOR: x86_64
+-- GGML_SYSTEM_ARCH: x86
+-- Found OpenMP_C: -fopenmp (found version "4.5") 
+-- Found OpenMP_CXX: -fopenmp (found version "4.5") 
+-- Found OpenMP: TRUE (found version "4.5")  
+-- Including CPU backend
+-- x86 detected
+-- Adding CPU backend variant ggml-cpu: -march=native 
+-- ggml version: 0.26.0
+-- ggml commit:  9881906
+-- Could NOT find OpenSSL, try to set the path to OpenSSL root folder in the system variable OPENSSL_ROOT_DIR (missing: OPENSSL_CRYPTO_LIBRARY OPENSSL_INCLUDE_DIR) 
+CMake Warning at vendor/cpp-httplib/CMakeLists.txt:154 (message):
+  OpenSSL not found, HTTPS support disabled
+
+
+-- Generating embedded license file for target: llama-app
+-- Configuring done
+-- Generating done
+-- Build files have been written to: <cloud-work-dir>/build
+++ nproc
++ cmake --build build --target llama-results -j 32
+
+# Source lines 577-585
+[100%] Built target llama-common
+[100%] Building CXX object tools/results/CMakeFiles/llama-results.dir/results.cpp.o
+[100%] Linking CXX executable ../../bin/llama-results
+[100%] Built target llama-results
++ ./build/bin/llama-results --version
+version: 0.6.0-dev (build 1, commit 9881906)
+built with GNU 11.4.0 for Linux x86_64
++ uv venv --python 3.12 venv-convert
+Using CPython 3.12.15
+
+# Source lines 610-648
+Installed 28 packages in 251ms
+ + certifi==2026.7.22
+ + charset-normalizer==3.5.2
+ + filelock==4.0.12
+ + fsspec==2026.9.0
+ + gguf==0.19.0
+ + hf-xet==1.7.0
+ + huggingface-hub==0.36.2
+ + idna==3.20
+ + jinja2==3.1.6
+ + markupsafe==3.0.4
+ + mpmath==1.3.0
+ + networkx==3.7
+ + numpy==2.2.6
+ + packaging==26.3
+ + protobuf==4.25.9
+ + pyyaml==6.0.3
+ + regex==2026.9.29
+ + requests==2.34.2
+ + safetensors==0.8.0
+ + sentencepiece==0.2.2
+ + setuptools==81.0.0
+ + sympy==1.14.0
+ + tokenizers==0.22.2
+ + torch==2.11.0+cpu
+ + tqdm==4.70.1
+ + transformers==4.57.6
+ + typing-extensions==4.16.0
+ + urllib3==2.8.0
++ uv pip install --python venv-convert/bin/python ./llama.cpp-b11476/gguf-py
+Using Python 3.12.15 environment at: venv-convert
+Resolved 9 packages in 5ms
+   Building gguf @ file://<cloud-work-dir>/llama.cpp-b11476/gguf-py
+      Built gguf @ file://<cloud-work-dir>/llama.cpp-b11476/gguf-py
+Prepared 1 package in 765ms
+Uninstalled 1 package in 0.74ms
+Installed 1 package in 2ms
+ - gguf==0.19.0
+ + gguf==0.19.0 (from file://<cloud-work-dir>/llama.cpp-b11476/gguf-py)
+
+# Source lines 664-672
+ + filelock==3.32.3
+ + fsspec==2026.7.0
+ + jinja2==3.1.6
+ + markupsafe==3.0.3
+ + mpmath==1.3.0
+ + networkx==3.6.1
+ + setuptools==78.1.0
+ + sympy==1.14.0
+ + torch==2.14.1+cpu
+
+# Source lines 684-714
+Installed 27 packages in 79ms
+ + accelerate==1.15.0
+ + annotated-doc==0.0.5
+ + anyio==4.15.1
+ + certifi==2026.7.22
+ + click==8.5.0
+ + h11==0.16.0
+ + hf-xet==1.7.0
+ + httpcore==1.0.9
+ + httpx==0.28.1
+ + huggingface-hub==1.33.0
+ + idna==3.20
+ + markdown-it-py==4.2.0
+ + mdurl==0.1.2
+ + numpy==2.5.3
+ + packaging==26.3
+ + peft==0.21.2
+ + psutil==7.2.2
+ + pygments==2.21.0
+ + pyyaml==6.0.3
+ + regex==2026.9.29
+ + rich==15.0.0
+ + safetensors==0.8.0
+ + shellingham==1.5.4
+ + tokenizers==0.23.2
+ + tqdm==4.70.1
+ + transformers==5.19.0
+ + typer==0.27.3
++ mkdir -p soup
++ tar -xzf /home/ubuntu/soup.tgz -C soup
++ uv pip install --python venv-ref/bin/python ./soup
+
+# Source lines 724-735
+ + annotated-types==0.8.0
+ + plotext==6.1.0
+ + pydantic==2.13.5
+ + pydantic-core==2.46.5
+ + soup-cli==0.75.0 (from file://<cloud-work-dir>/soup)
+ - typer==0.27.3
+ + typer==0.20.1
+ + typing-inspection==0.4.4
++ venv-ref/bin/python -c 'import torch, transformers, peft; print(torch.__version__, transformers.__version__, peft.__version__)'
+2.14.1+cpu 5.19.0 0.21.2
++ venv-convert/bin/python -c 'import torch, transformers, gguf; print(torch.__version__, transformers.__version__)'
+2.11.0+cpu 4.57.6

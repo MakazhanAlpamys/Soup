@@ -1,0 +1,26 @@
+`causal_conv1d_fn` is falling back to its reference PyTorch implementation because `causal_conv1d` is not installed. This is correct but much slower; install `causal_conv1d` for the optimized kernel.
+`chunk_gated_delta_rule` is falling back to its reference PyTorch implementation because `flash-linear-attention` is not installed. This is correct but much slower; install `flash-linear-attention` for the optimized kernel.
+qwen35moe-tiny seed 17: base OK (e_base 4.837195880312295e-07)
+  soup-auto            APPLIED         s_ref=2.258e-01 rho=1.000e+00 r=1.836e-06
+  all                  APPLIED         s_ref=3.051e-01 rho=1.000e+00 r=1.342e-06
+  q_proj               APPLIED         s_ref=1.208e-01 rho=1.000e+00 r=2.796e-06
+  k_proj               APPLIED         s_ref=1.244e-01 rho=1.000e+00 r=2.654e-06
+  v_proj               APPLIED         s_ref=2.151e-01 rho=1.000e+00 r=1.516e-06
+  o_proj               APPLIED         s_ref=1.149e-01 rho=1.000e+00 r=2.280e-06
+  in_proj_qkv          APPLIED         s_ref=7.584e-02 rho=1.000e+00 r=5.344e-06
+  in_proj_z            APPLIED         s_ref=4.143e-02 rho=1.000e+00 r=9.943e-06
+  in_proj_a            TOO WEAK        s_ref=1.472e-04 rho=1.000e+00 r=2.643e-03
+  in_proj_b            APPLIED         s_ref=1.287e-02 rho=1.000e+00 r=3.141e-05
+  out_proj             APPLIED         s_ref=4.209e-02 rho=1.000e+00 r=9.303e-06
+  shared               APPLIED         s_ref=7.223e-02 rho=1.000e+00 r=5.632e-06
+dsv3-tiny seed 17: base OK (e_base 4.4639881150780425e-07)
+  soup-auto            APPLIED         s_ref=5.593e-01 rho=1.000e+00 r=6.644e-07
+  all                  APPLIED         s_ref=4.501e-01 rho=1.000e+00 r=9.162e-07
+  all-but-kv_b         APPLIED         s_ref=2.825e-01 rho=1.000e+00 r=1.221e-06
+  q_a_proj             APPLIED         s_ref=2.247e-02 rho=1.000e+00 r=1.378e-05
+  q_b_proj             APPLIED         s_ref=2.526e-02 rho=1.000e+00 r=1.234e-05
+  kv_a_proj_with_mqa   APPLIED         s_ref=2.410e-01 rho=1.000e+00 r=1.355e-06
+  kv_b_proj            APPLIED         s_ref=4.684e-01 rho=1.000e+00 r=7.433e-07
+  o_proj               APPLIED         s_ref=2.053e-01 rho=1.000e+00 r=1.492e-06
+  shared               APPLIED         s_ref=1.045e-01 rho=1.000e+00 r=2.631e-06
+probe: {"verdict": "NO HOOK NEEDED", "hook_modules": {}}

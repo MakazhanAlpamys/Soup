@@ -1,0 +1,40 @@
+{
+  "source_revision": "3e75c3af1d7aab7431c5ca9785dbf1fe0808bb30",
+  "runs": [
+    {
+      "fresh_output": "final-granite-replay.json",
+      "retained_capture": "granite-replay.json",
+      "fresh_sha256": "19de39453f003e67504619ed0f27c6e5988db1092279fb6941bb83ea2c26d4b3",
+      "retained_sha256": "19de39453f003e67504619ed0f27c6e5988db1092279fb6941bb83ea2c26d4b3",
+      "all_result_values_equal": true,
+      "differences": []
+    },
+    {
+      "fresh_output": "final-olmoe-replay.json",
+      "retained_capture": "olmoe-replay.json",
+      "fresh_sha256": "2d0ec745643abf9e6a770ee5be6672106003a9d878641683efa8c908504b02a4",
+      "retained_sha256": "2d0ec745643abf9e6a770ee5be6672106003a9d878641683efa8c908504b02a4",
+      "all_result_values_equal": true,
+      "differences": []
+    },
+    {
+      "fresh_output": "final-published-audit.json",
+      "retained_capture": "published-audit.json",
+      "fresh_sha256": "1f58614b529af81e8f0621d33adbe27ac1d00bde96a741a8b633ebf0d6a03e99",
+      "retained_sha256": "8b89ac6d4464c857d5724ed2c5abfd7377f92f29abaa4c1589946ca6f39984b6",
+      "all_result_values_equal": true,
+      "differences": [
+        {
+          "path": "/meta/fingerprints/holdout/sha256",
+          "fresh": "366ace0102ef73b18da4c3cfaa7912d25a830f4103f85ae0cc5e477b5e4c9f9a",
+          "retained": "e139b5d1c36dcbb4e467352667e6f2065a1a6f6f376d3798fc9cebf6ccbd679d"
+        },
+        {
+          "path": "/meta/fingerprints/holdout/sha256_16",
+          "fresh": "366ace0102ef73b1",
+          "retained": "e139b5d1c36dcbb4"
+        }
+      ]
+    }
+  ]
+}

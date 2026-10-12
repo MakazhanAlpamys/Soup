@@ -1,0 +1,186 @@
+{
+  "complete": true,
+  "problems": [],
+  "files": [
+    {
+      "path": "run/runtime.exit",
+      "bytes": 2,
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "path": "run/source-revision.txt",
+      "bytes": 41,
+      "sha256": "9d13d5d92efe1c11126fd685b311369485f5bfb5064a3017c03ecac4e59f585d"
+    },
+    {
+      "path": "run/setup.exit",
+      "bytes": 2,
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "path": "run/payload.sha256",
+      "bytes": 402,
+      "sha256": "fec0c3aa525daa61311a3bb43a64b585eca2db73329708a24dd7a8415c56b2a6"
+    },
+    {
+      "path": "run/bundle-runtime.json",
+      "bytes": 191,
+      "sha256": "97b24c3fbae5ece2d09acd3c3e95bfc7932ec4719324c7ee8890d688e153e874"
+    },
+    {
+      "path": "run/setup.log",
+      "bytes": 55815,
+      "sha256": "3583be4d6f462894493bc63b5e5dcf6eff107a685036d7685e853b7a42c57ee4"
+    },
+    {
+      "path": "run/runtime.log",
+      "bytes": 14143,
+      "sha256": "95fbae0a8cab84d77cc66932af90cb3c34ad8950facb7163f2a75759d12d7099"
+    },
+    {
+      "path": "run/worker.pgid",
+      "bytes": 6,
+      "sha256": "06a589affd8ecd7f6fd81613f119c3e8cd5ec222da5e5106adfbf19447328bb8"
+    },
+    {
+      "path": "run/converter-freeze.txt",
+      "bytes": 547,
+      "sha256": "fb47abb22c140d221c7bc464174335cf1fb3ec28f4411cac277e1b90ca04bd39"
+    },
+    {
+      "path": "run/part-b-real-model-run3.log",
+      "bytes": 8600,
+      "sha256": "e26ac5f7b6b5ed03cebb8a61de2e1fcfd9cfc1c30e607be46c951343ef3903bc"
+    },
+    {
+      "path": "run/reference-constraints.txt",
+      "bytes": 48,
+      "sha256": "30a513a0fe59eb15dba7ff187cdb771e855b510d6ae1a9933f204ed3a310bb90"
+    },
+    {
+      "path": "run/main.started",
+      "bytes": 21,
+      "sha256": "1186ba7ab0017666848c02dd70fb64adb531a979768df9505591544c963eb1c1"
+    },
+    {
+      "path": "run/reference-freeze.txt",
+      "bytes": 773,
+      "sha256": "6c3611c42ed867cc47b645338e53847b31a3284df4c1500468179aece70945b1"
+    },
+    {
+      "path": "run/requested-revision.txt",
+      "bytes": 41,
+      "sha256": "9d13d5d92efe1c11126fd685b311369485f5bfb5064a3017c03ecac4e59f585d"
+    },
+    {
+      "path": "run/provenance.log",
+      "bytes": 4109,
+      "sha256": "a05d999a163d6107d8af6b6dd68bab3e368156444b2f2353dde84ba5e317268c"
+    },
+    {
+      "path": "run/part-b-real-model-run3.json",
+      "bytes": 33492,
+      "sha256": "2c0a35dfc39da67b387fea8bff434bdc36a7b4e1a487d1a9355cfd34a6a14d07"
+    },
+    {
+      "path": "work/soup-auto+shared.repeat.npz",
+      "bytes": 21852758,
+      "sha256": "7e177788c55c569577e4537ca8d7ba47aa893c845a4c0377edc0f450169f1496"
+    },
+    {
+      "path": "work/soup-auto+shared.repeat.gguf",
+      "bytes": 21852480,
+      "sha256": "ce88592cd2ecb58e0e60b620629960432e133aafe1005f06c5d4e2348f9c7e8d"
+    },
+    {
+      "path": "work/soup-auto+shared.out.npz",
+      "bytes": 21852758,
+      "sha256": "7e177788c55c569577e4537ca8d7ba47aa893c845a4c0377edc0f450169f1496"
+    },
+    {
+      "path": "work/soup-auto+shared.out.gguf",
+      "bytes": 21852480,
+      "sha256": "ce88592cd2ecb58e0e60b620629960432e133aafe1005f06c5d4e2348f9c7e8d"
+    },
+    {
+      "path": "work/soup-auto.repeat.npz",
+      "bytes": 21852758,
+      "sha256": "e8f63746744e7678f4be4832891c4f8201d12d91d7fdd6cd402d097a8a62cdc4"
+    },
+    {
+      "path": "work/soup-auto.repeat.gguf",
+      "bytes": 21852480,
+      "sha256": "8d1bd87628b7ee4a1ee2c6f290e126c444b7e32cb613d4ee95cb5f7ed15d2271"
+    },
+    {
+      "path": "work/soup-auto.out.npz",
+      "bytes": 21852758,
+      "sha256": "e8f63746744e7678f4be4832891c4f8201d12d91d7fdd6cd402d097a8a62cdc4"
+    },
+    {
+      "path": "work/soup-auto.out.gguf",
+      "bytes": 21852480,
+      "sha256": "8d1bd87628b7ee4a1ee2c6f290e126c444b7e32cb613d4ee95cb5f7ed15d2271"
+    },
+    {
+      "path": "work/base2.out.npz",
+      "bytes": 21852758,
+      "sha256": "c8ceb1bc3207475220c716d2d8f92cf4052311d1a085e7269f70f05a0f466721"
+    },
+    {
+      "path": "work/base2.out.gguf",
+      "bytes": 21852480,
+      "sha256": "cc19b1d20988fa37fd7b3275b171255e6b89fe15357c6f05c31592046b22a629"
+    },
+    {
+      "path": "work/base1.out.npz",
+      "bytes": 21852758,
+      "sha256": "c8ceb1bc3207475220c716d2d8f92cf4052311d1a085e7269f70f05a0f466721"
+    },
+    {
+      "path": "work/base1.out.gguf",
+      "bytes": 21852480,
+      "sha256": "cc19b1d20988fa37fd7b3275b171255e6b89fe15357c6f05c31592046b22a629"
+    },
+    {
+      "path": "work/adapters/soup-auto+shared-b0.gguf",
+      "bytes": 29684352,
+      "sha256": "c2832e37bef7b9e4ca64fb3f8709eb915386bc0e04cfabd5dc94721862c8d0d5"
+    },
+    {
+      "path": "work/adapters/soup-auto-b0.gguf",
+      "bytes": 19836160,
+      "sha256": "ff5fed065246e574aa9b4f5d47c4789648961b7089d12e50b98a1addf78d3ec4"
+    },
+    {
+      "path": "work/adapters/soup-auto+shared-b0/adapter_config.json",
+      "bytes": 1369,
+      "sha256": "f02d6db250e25dfc40f3c7133ea16756687f3a243283b8a27501860e1a263e4b"
+    },
+    {
+      "path": "work/adapters/soup-auto+shared-b0/adapter_model.safetensors",
+      "bytes": 29711296,
+      "sha256": "c8208b7c86b6e5855cdab482c84b5bad02d7a06d8be7fac8858c11be8f2f70f3"
+    },
+    {
+      "path": "work/adapters/soup-auto+shared-b0/README.md",
+      "bytes": 5216,
+      "sha256": "b9ed6030e41b2fa889039fc0ced30e62f862783224e1888e3d84ddc9f55a2bf9"
+    },
+    {
+      "path": "work/adapters/soup-auto-b0/adapter_config.json",
+      "bytes": 1278,
+      "sha256": "52e493e5b6b7f33139fe15c087bcf849ae9e42bda6b80fe7344351954b5d1ea6"
+    },
+    {
+      "path": "work/adapters/soup-auto-b0/adapter_model.safetensors",
+      "bytes": 19846552,
+      "sha256": "d28ba6b053344f7ad731b93948aebc55b4fcb4a066d3775e30cc7e427cfbe9fb"
+    },
+    {
+      "path": "work/adapters/soup-auto-b0/README.md",
+      "bytes": 5216,
+      "sha256": "b9ed6030e41b2fa889039fc0ced30e62f862783224e1888e3d84ddc9f55a2bf9"
+    }
+  ]
+}

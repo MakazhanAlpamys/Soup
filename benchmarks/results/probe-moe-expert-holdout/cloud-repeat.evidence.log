@@ -1,0 +1,187 @@
+# Evidence extract; omitted source lines remain in the separately archived full capture.
+
+# Source: cloud-repeat.log
+# Full source SHA-256: 75ac51410a53e82c2b6b1c4d504dd61277c6c07c30e21482a086fa32f15900bc
+
+# Source lines 1-19
+<workstation-deadline>: state Ready, next run 2026-10-09 09:27:30 +05:00, wake True, start-when-available True
+action: C:\WINDOWS\System32\wsl.exe -e bash -lc "bash <cloud-work-dir>/holdout_deadline.sh moe-holdout-a6000 <cloud-work-dir>/holdout-cloud.raw.log"
+=== 2026-10-09T02:27:34.291060864Z
+$ brev create 'moe-holdout-a6000' --type 'massedcompute_A6000_plus' --min-disk 100 --timeout 600
+Attempting to create 1 instance(s) with 1 parallel attempts
+Instance types to try: massedcompute_A6000_plus
+
+Trying massedcompute_A6000_plus for 1 instance(s)...
+[Worker 1] Trying massedcompute_A6000_plus for instance 'moe-holdout-a6000'...
+[Worker 1] massedcompute_A6000_plus Success! Created instance 'moe-holdout-a6000'
+
+Waiting for instance(s) to be ready...
+You can safely ctrl+c to exit
+  moe-holdout-a6000: Ready
+moe-holdout-a6000
+EXIT_STATUS=0
+
+=== 2026-10-09T02:31:20.221446787Z
+$ timeout 240 brev exec moe-holdout-a6000 'sudo shutdown -h +$(((1791520650 - $(date +%s)) / 60)) && mkdir -p ~/holdout-results && touch ~/holdout-setup.log && date -u && whoami && uname -a && nproc && free -g && df -h ~ && nvidia-smi && cat /run/systemd/shutdown/scheduled && printf "HOLDOUT_HOME=%s\n" "$HOME"'
+
+# Source lines 49-83
+Fri Oct  9 02:31:38 UTC 2026
+shadeform
+Linux brev-<instance-id> 6.8.0-90-generic #91~22.04.1-Ubuntu SMP PREEMPT_DYNAMIC Thu Nov 20 15:20:45 UTC 2 x86_64 x86_64 x86_64 GNU/Linux
+12
+               total        used        free      shared  buff/cache   available
+Mem:              62           0          60           0           1          61
+Swap:              3           0           3
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/sda2       251G   15G  227G   6% /
+Fri Oct  9 02:31:38 2026       
++-----------------------------------------------------------------------------------------+
+| NVIDIA-SMI 580.126.09             Driver Version: 580.126.09     CUDA Version: 13.0     |
++-----------------------------------------+------------------------+----------------------+
+| GPU  Name                 Persistence-M | Bus-Id          Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp   Perf          Pwr:Usage/Cap |           Memory-Usage | GPU-Util  Compute M. |
+|                                         |                        |               MIG M. |
+|=========================================+========================+======================|
+|   0  NVIDIA RTX A6000               On  |   00000000:01:00.0 Off |                  Off |
+| 30%   26C    P8             12W /  300W |       1MiB /  49140MiB |      0%      Default |
+|                                         |                        |                  N/A |
++-----------------------------------------+------------------------+----------------------+
+
++-----------------------------------------------------------------------------------------+
+| Processes:                                                                              |
+|  GPU   GI   CI              PID   Type   Process name                        GPU Memory |
+|        ID   ID                                                               Usage      |
+|=========================================================================================|
+|  No running processes found                                                             |
++-----------------------------------------------------------------------------------------+
+USEC=1791520598106436
+WARN_WALL=1
+MODE=poweroff
+HOLDOUT_HOME=/home/shadeform
+moe-holdout-a6000
+EXIT_STATUS=0
+
+# Source lines 505-517
+<workstation-deadline>: verified next run 2026-10-09 09:27:30 +05:00; instance moe-holdout-a6000
+action: C:\WINDOWS\System32\wsl.exe -e bash -lc "bash <cloud-work-dir>/holdout_deadline.sh moe-holdout-a6000 <cloud-work-dir>/holdout-cloud.raw.log"
+=== 2026-10-09T02:34:14.161347926Z
+$ timeout 240 brev exec 'moe-holdout-a6000' 'cat /run/systemd/shutdown/scheduled'
+USEC=1791520598106436
+WARN_WALL=1
+MODE=poweroff
+moe-holdout-a6000
+EXIT_STATUS=0
+
+=== 2026-10-09T02:34:18.432288552Z
+$ timeout 5892 brev exec moe-holdout-a6000 'cd ~ && sha256sum -c holdout.sha256 && bash ~/holdout_setup.sh'
+holdout.tgz: OK
+
+# Source lines 523-524
+uv 0.12.24 (x86_64-unknown-linux-gnu)
+Using CPython 3.12.15
+
+# Source lines 659-712
+Using Python 3.12.15 environment at: holdout-venv
+2.14.1+cu130 13.0 True NVIDIA RTX A6000
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+Loading 
+ibm-granite/granite-3.0-1b-a400m-base@d91cbed802d85eb1b32374623331f6ab2b37403a 
+on cuda/bfloat16
+Corpus 'prose': 4000 documents, SHA256 
+399831ef409953210bc3fb1ec4a5948bbe6c2a88ff30977cbf7fbb0e0d3f1a02
+  1x512: HOTSET TRANSFERS
+  4x512: HOTSET TRANSFERS
+  1x2048: HOTSET TRANSFERS
+Corpus 'code': 541 documents, SHA256 
+c00ceccb47511dff57e8ba9bdf1d2a3896c9615af3635993e1ffb356bf1fa3a7
+  1x512: HOTSET TRANSFERS
+  4x512: HOTSET TRANSFERS
+  1x2048: HOTSET TRANSFERS
+Corpus 'math': 4000 documents, SHA256 
+21b099a4d0676f5586a097bff24e5fe8c91b9aabd041d99b081e5c3249b714d4
+  1x512: HOTSET TRANSFERS
+  4x512: HOTSET TRANSFERS
+  1x2048: HOTSET TRANSFERS
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+Loading allenai/OLMoE-1B-7B-0924@6d84c48581ece794365f2b8e9cfb043c68ade9c5 on 
+cuda/bfloat16
+Corpus 'prose': 4000 documents, SHA256 
+399831ef409953210bc3fb1ec4a5948bbe6c2a88ff30977cbf7fbb0e0d3f1a02
+  1x512: GAIN WITH DRIFT
+  4x512: HOTSET TRANSFERS
+  1x2048: HOTSET TRANSFERS
+Corpus 'code': 541 documents, SHA256 
+c00ceccb47511dff57e8ba9bdf1d2a3896c9615af3635993e1ffb356bf1fa3a7
+  1x512: HOTSET TRANSFERS
+  4x512: HOTSET TRANSFERS
+  1x2048: HOTSET TRANSFERS
+Corpus 'math': 4000 documents, SHA256 
+21b099a4d0676f5586a097bff24e5fe8c91b9aabd041d99b081e5c3249b714d4
+  1x512: HOTSET TRANSFERS
+  4x512: HOTSET TRANSFERS
+  1x2048: HOTSET TRANSFERS
+Granite exit: 0
+OLMoE exit: 0
+moe-holdout-a6000
+EXIT_STATUS=0
+
+Remote setup/measurement exit: 0
+=== 2026-10-09T02:38:51.821435742Z
+$ timeout 300 brev exec 'moe-holdout-a6000' 'tar czf ~/holdout-out.tgz -C ~ holdout-results holdout-setup.log && sha256sum ~/holdout-out.tgz && printf "HOLDOUT_HOME=%s\n" "$HOME"'
+dd5c491a2e996324bab0f45fe60c168e730acd7b711afdb8d39a6680b4625c7c  /home/shadeform/holdout-out.tgz
+HOLDOUT_HOME=/home/shadeform
+moe-holdout-a6000
+EXIT_STATUS=0
+
+=== 2026-10-09T02:38:57.491593047Z
+$ timeout 600 brev copy 'moe-holdout-a6000:/home/shadeform/holdout-out.tgz' './holdout-out/moe-holdout-a6000.tgz'
+
+# Source lines 799-846
+✓ Successfully copied moe-holdout-a6000:/home/shadeform/holdout-out.tgz → ./holdout-out/moe-holdout-a6000.tgz (7.376s)
+
+EXIT_STATUS=0
+
+=== 2026-10-09T02:39:31.422481302Z
+$ printf '%s  %s\n' 'dd5c491a2e996324bab0f45fe60c168e730acd7b711afdb8d39a6680b4625c7c' './holdout-out/moe-holdout-a6000.tgz' | sha256sum -c -
+./holdout-out/moe-holdout-a6000.tgz: OK
+EXIT_STATUS=0
+
+=== 2026-10-09T02:39:31.521055502Z
+$ timeout 300 brev delete 'moe-holdout-a6000'
+moe-holdout-a6000
+EXIT_STATUS=0
+
+=== 2026-10-09T02:39:39.134992888Z
+$ brev ls
+You have 1 instances in Org <org>
+ NAME               STATUS    BUILD      SHELL      ID         MACHINE                   GPU   
+ moe-holdout-a6000  DELETING  COMPLETED  NOT READY  <instance-id>  massedcompute_A6000_plus  A6000 
+
+EXIT_STATUS=0
+
+=== 2026-10-09T02:40:05.262551652Z
+$ brev ls
+You have 1 instances in Org <org>
+ NAME               STATUS    BUILD      SHELL      ID         MACHINE                   GPU   
+ moe-holdout-a6000  DELETING  COMPLETED  NOT READY  <instance-id>  massedcompute_A6000_plus  A6000 
+
+EXIT_STATUS=0
+
+=== 2026-10-09T02:40:31.596623247Z
+$ brev ls
+No instances in org <org>
+
+Start a new instance:
+EXIT_STATUS=0
+
+=== 2026-10-09T02:40:37.971564778Z
+$ echo VERIFIED-INSTANCE-ABSENT; date -u
+VERIFIED-INSTANCE-ABSENT
+Fri Oct  9 02:40:37 UTC 2026
+EXIT_STATUS=0
+
+
+=== 2026-10-09T02:41:24.3360117Z (local teardown verification)
+$ powershell.exe -NoProfile -Command "if (Get-ScheduledTask -TaskName '<workstation-deadline>' -ErrorAction SilentlyContinue) { throw 'HOLDOUT-DEADLINE-STILL-PRESENT' } else { 'HOLDOUT-DEADLINE-ABSENT'; (Get-Date).ToUniversalTime().ToString('o') }"
+HOLDOUT-DEADLINE-ABSENT
+2026-10-09T02:41:24.3360117Z

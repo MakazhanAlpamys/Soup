@@ -1,0 +1,116 @@
+diff --git a/convert_lora_to_gguf.py b/convert_lora_to_gguf.py
+index 47c09af..c9a7db8 100755
+--- a/convert_lora_to_gguf.py
++++ b/convert_lora_to_gguf.py
+@@ -174,9 +174,14 @@ class LoraTorchTensor:
+             return LoraTorchTensor(self._lora_A, self._lora_B.permute(*dims))
+         if len(shape) == 2 and dims[-1] == -2 and dims[-2] == -1:
+             return LoraTorchTensor(self._lora_B.permute(*dims), self._lora_A.permute(*dims))
+-        else:
+-            # TODO: compose the above two
+-            raise NotImplementedError
++        if dims[-2:] == (-1, -2) and dims[:-2] == tuple(range(-len(shape), -2)):
++            # Batched transpose of the last two dims, e.g. the per-head MLA k_b: (B @ A)^T = A^T @ B^T,
++            # so the factors swap roles. B carries the batch dims, A only broadcasts over them.
++            lead = self._lora_B.shape[:-2]
++            new_b = self._lora_A.transpose(-1, -2).expand(*lead, -1, -1).contiguous()
++            return LoraTorchTensor(self._lora_B.transpose(-1, -2), new_b)
++        # TODO: compose the above
++        raise NotImplementedError
+ 
+     def transpose(self, dim0: int, dim1: int) -> LoraTorchTensor:
+         shape = self.shape
+diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
+index 1112ad8..6c797aa 100644
+--- a/src/llama-graph.cpp
++++ b/src/llama-graph.cpp
+@@ -2751,7 +2751,7 @@ ggml_tensor * llm_graph_context::build_attn_mha(
+             // It's preferable to do the calculation as a matrix-matrix multiplication with n_tokens in dimension 1.
+             // The permutations are noops and only change how the tensor data is interpreted.
+             cur = ggml_permute(ctx0, cur, 0, 2, 1, 3);
+-            cur = ggml_mul_mat(ctx0, v_mla, cur);
++            cur = build_lora_mm(v_mla, cur);
+             cb(cur, "fattn_mla", il);
+             cur = ggml_permute(ctx0, cur, 0, 2, 1, 3);
+             cur = ggml_cont(ctx0, cur); // Needed because ggml_reshape_2d expects contiguous inputs.
+@@ -2809,7 +2809,7 @@ ggml_tensor * llm_graph_context::build_attn_mha(
+ 
+         // for MLA with the absorption optimization, we need to "decompress" from MQA back to MHA
+         if (v_mla) {
+-            kqv = ggml_mul_mat(ctx0, v_mla, kqv);
++            kqv = build_lora_mm(v_mla, kqv);
+             cb(kqv, "kqv_mla", il);
+         }
+ 
+diff --git a/src/models/deepseek2.cpp b/src/models/deepseek2.cpp
+index 47fc2f1..023e8a1 100644
+--- a/src/models/deepseek2.cpp
++++ b/src/models/deepseek2.cpp
+@@ -263,13 +263,13 @@ llama_model_deepseek2::graph_mtp::graph_mtp(const llama_model & model, const llm
+     cur = build_norm(cur, layer.attn_norm, nullptr, LLM_NORM_RMS, il);
+     cb(cur, "mtp_attn_norm", il);
+ 
+-    ggml_tensor * q = ggml_mul_mat(ctx0, layer.wq_a, cur);
++    ggml_tensor * q = build_lora_mm(layer.wq_a, cur);
+     cb(q, "mtp_q_a", il);
+ 
+     q = build_norm(q, layer.attn_q_a_norm, nullptr, LLM_NORM_RMS, il);
+     cb(q, "mtp_q_a_norm", il);
+ 
+-    q = ggml_mul_mat(ctx0, layer.wq_b, q);
++    q = build_lora_mm(layer.wq_b, q);
+     cb(q, "mtp_q_b", il);
+ 
+     ggml_tensor * q_nope =
+@@ -285,7 +285,7 @@ llama_model_deepseek2::graph_mtp::graph_mtp(const llama_model & model, const llm
+                 ggml_row_size(q->type, n_embd_head_qk_nope));
+     cb(q_pe, "mtp_q_pe", il);
+ 
+-    ggml_tensor * kv_cmpr_pe = ggml_mul_mat(ctx0, layer.wkv_a_mqa, cur);
++    ggml_tensor * kv_cmpr_pe = build_lora_mm(layer.wkv_a_mqa, cur);
+     cb(kv_cmpr_pe, "mtp_kv_cmpr_pe", il);
+ 
+     ggml_tensor * kv_cmpr =
+@@ -327,7 +327,7 @@ llama_model_deepseek2::graph_mtp::graph_mtp(const llama_model & model, const llm
+     q_nope = ggml_permute(ctx0, q_nope, 0, 2, 1, 3);
+     cb(q_nope, "mtp_q_nope_perm", il);
+ 
+-    ggml_tensor * q_nope_absorbed = ggml_mul_mat(ctx0, layer.wk_b, q_nope);
++    ggml_tensor * q_nope_absorbed = build_lora_mm(layer.wk_b, q_nope);
+     cb(q_nope_absorbed, "mtp_q_nope_absorbed", il);
+ 
+     q_nope_absorbed = ggml_permute(ctx0, q_nope_absorbed, 0, 2, 1, 3);
+@@ -499,13 +499,13 @@ llama_model_deepseek2::graph::graph(const llama_model & model, const llm_graph_p
+             const bool is_lite = model.layers[il].wq;
+ 
+             if (!is_lite) {
+-                q = ggml_mul_mat(ctx0, model.layers[il].wq_a, cur);
++                q = build_lora_mm(model.layers[il].wq_a, cur);
+                 cb(q, "q", il);
+ 
+                 q = build_norm(q, model.layers[il].attn_q_a_norm, nullptr, LLM_NORM_RMS, il);
+                 cb(q, "q", il);
+ 
+-                q = ggml_mul_mat(ctx0, model.layers[il].wq_b, q);
++                q = build_lora_mm(model.layers[il].wq_b, q);
+                 cb(q, "q", il);
+             } else {
+                 q = ggml_mul_mat(ctx0, model.layers[il].wq, cur);
+@@ -515,7 +515,7 @@ llama_model_deepseek2::graph::graph(const llama_model & model, const llm_graph_p
+             q = ggml_reshape_3d(ctx0, q, n_embd_head_k, n_head, n_tokens);
+             cb(q, "q", il);
+ 
+-            ggml_tensor * kv_cmpr_pe = ggml_mul_mat(ctx0, model.layers[il].wkv_a_mqa, cur);
++            ggml_tensor * kv_cmpr_pe = build_lora_mm(model.layers[il].wkv_a_mqa, cur);
+             cb(kv_cmpr_pe, "kv_cmpr_pe", il);
+ 
+             // split into {kv_lora_rank, n_tokens}
+@@ -558,7 +558,7 @@ llama_model_deepseek2::graph::graph(const llama_model & model, const llm_graph_p
+                 cb(q_nope, "q_nope_perm", il);
+ 
+                 // {n_embd_head_qk_nope, kv_lora_rank, n_head} x {n_embd_head_qk_nope, n_tokens, n_head}
+-                ggml_tensor * q_nope_absorbed = ggml_mul_mat(ctx0, model.layers[il].wk_b, q_nope);
++                ggml_tensor * q_nope_absorbed = build_lora_mm(model.layers[il].wk_b, q_nope);
+                 cb(q_nope_absorbed, "q_nope_absorbed", il);
+ 
+                 // {kv_lora_rank, n_head, n_tokens}

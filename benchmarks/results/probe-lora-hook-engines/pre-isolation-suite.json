@@ -1,0 +1,108 @@
+{
+  "exit": 1,
+  "seconds": 2763.16,
+  "workers": 2,
+  "source_path": "<publication-checkout>\\src",
+  "environment": {
+    "PYTHONHASHSEED": "0",
+    "PYTHONUTF8": null,
+    "PYTHONIOENCODING": null,
+    "PYTHONPATH": "<publication-checkout>\\src",
+    "CI": "true"
+  },
+  "suites": [
+    {
+      "name": "pytest",
+      "errors": "0",
+      "failures": "14",
+      "skipped": "434",
+      "tests": "34629",
+      "time": "2749.647",
+      "timestamp": "2026-10-09T10:37:26.709862+05:00",
+      "hostname": "<verification-host>"
+    }
+  ],
+  "coverage": {
+    "version": "7.16.2",
+    "timestamp": "1791526968941",
+    "lines-valid": "87678",
+    "lines-covered": "75652",
+    "line-rate": "0.8628",
+    "branches-covered": "0",
+    "branches-valid": "0",
+    "branch-rate": "0",
+    "complexity": "0"
+  },
+  "failures": [
+    {
+      "classname": "tests.test_issue204_langfuse_pull",
+      "name": "test_control_the_leak_scan_sees_a_token_rich_highlighted_and_folded",
+      "failure": "<publication-checkout>\\tests\\test_issue204_langfuse_pull.py:1227: in test_control_the_leak_scan_sees_a_token_rich_highlighted_and_folded\n    assert _SECRET not in rendered or _BASIC not in rendered  # rich really did split one\n    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nE   AssertionError: assert ('sk-lf-SOUPP...DSECRET-9e27' not in '\u250c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500...\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518\\n'\nE     \nE     'sk-lf-SOUPPLANTEDSECRET-9e27' is contained here:\nE       3 \u2502\nE       \u2502 key=sk-lf-SOUPPLANTEDSECRET-9e27                                             \u2502\nE     ?       ++++++++++++++++++++++++++++\nE       \u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518 or 'cGstbGYtU09...Q1JFVC05ZTI3' not in '\u250c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500...\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518\\n'\nE     \nE     'cGstbGYtU09VUFBMQU...lRFRFNFQ1JFVC05ZTI3' is contained here:\nE             \u2502\nE       \u2502 cGstbGYtU09VUFBMQU5URURQVUJMSUMtNWIxZDpzay1sZi1TT1VQUExBTlRFRFNFQ1JFVC05ZTI3 \u2502\nE       \u2502 key=sk-lf-SOUPPLANTEDSECRET-9e27                                             \u2502\nE       \u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518)"
+    },
+    {
+      "classname": "tests.test_issue674_quest_integration",
+      "name": "test_heavy_dependencies_stay_lazy",
+      "failure": "<publication-checkout>\\tests\\test_issue674_quest_integration.py:1202: in test_heavy_dependencies_stay_lazy\n    source = Path(\"src/soup_cli/utils/quest.py\").read_text(encoding=\"utf-8\")\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n<home>\\AppData\\Local\\Python\\pythoncore-3.12-64\\Lib\\pathlib.py:1027: in read_text\n    with self.open(mode='r', encoding=encoding, errors=errors) as f:\n         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n<home>\\AppData\\Local\\Python\\pythoncore-3.12-64\\Lib\\pathlib.py:1013: in open\n    return io.open(self, mode, buffering, encoding, errors, newline)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nE   FileNotFoundError: [Errno 2] No such file or directory: 'src\\\\soup_cli\\\\utils\\\\quest.py'"
+    },
+    {
+      "classname": "tests.test_issue332_vllm_prompt.TestBothBackendsShareOneBuilder",
+      "name": "test_transformers_backend_calls_the_shared_builder",
+      "failure": "<publication-checkout>\\tests\\test_issue332_vllm_prompt.py:170: in test_transformers_backend_calls_the_shared_builder\n    src = Path(\"src/soup_cli/commands/serve.py\").read_text(encoding=\"utf-8\")\n          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n<home>\\AppData\\Local\\Python\\pythoncore-3.12-64\\Lib\\pathlib.py:1027: in read_text\n    with self.open(mode='r', encoding=encoding, errors=errors) as f:\n         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n<home>\\AppData\\Local\\Python\\pythoncore-3.12-64\\Lib\\pathlib.py:1013: in open\n    return io.open(self, mode, buffering, encoding, errors, newline)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nE   FileNotFoundError: [Errno 2] No such file or directory: 'src\\\\soup_cli\\\\commands\\\\serve.py'"
+    },
+    {
+      "classname": "tests.test_issue332_vllm_prompt.TestBothBackendsShareOneBuilder",
+      "name": "test_no_second_hand_rolled_prompt_remains_in_the_serve_backends",
+      "failure": "<publication-checkout>\\tests\\test_issue332_vllm_prompt.py:178: in test_no_second_hand_rolled_prompt_remains_in_the_serve_backends\n    serve_src = Path(\"src/soup_cli/commands/serve.py\").read_text(encoding=\"utf-8\")\n                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n<home>\\AppData\\Local\\Python\\pythoncore-3.12-64\\Lib\\pathlib.py:1027: in read_text\n    with self.open(mode='r', encoding=encoding, errors=errors) as f:\n         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n<home>\\AppData\\Local\\Python\\pythoncore-3.12-64\\Lib\\pathlib.py:1013: in open\n    return io.open(self, mode, buffering, encoding, errors, newline)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nE   FileNotFoundError: [Errno 2] No such file or directory: 'src\\\\soup_cli\\\\commands\\\\serve.py'"
+    },
+    {
+      "classname": "tests.test_issue332_vllm_prompt.TestBothBackendsShareOneBuilder",
+      "name": "test_sglang_does_not_redefine_the_finish_reason_vocabulary",
+      "failure": "<publication-checkout>\\tests\\test_issue332_vllm_prompt.py:196: in test_sglang_does_not_redefine_the_finish_reason_vocabulary\n    sglang_src = Path(\"src/soup_cli/utils/sglang.py\").read_text(encoding=\"utf-8\")\n                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n<home>\\AppData\\Local\\Python\\pythoncore-3.12-64\\Lib\\pathlib.py:1027: in read_text\n    with self.open(mode='r', encoding=encoding, errors=errors) as f:\n         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n<home>\\AppData\\Local\\Python\\pythoncore-3.12-64\\Lib\\pathlib.py:1013: in open\n    return io.open(self, mode, buffering, encoding, errors, newline)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nE   FileNotFoundError: [Errno 2] No such file or directory: 'src\\\\soup_cli\\\\utils\\\\sglang.py'"
+    },
+    {
+      "classname": "tests.test_issue332_vllm_prompt.TestDashboardBackendWarning",
+      "name": "test_serve_emits_the_warning",
+      "failure": "<publication-checkout>\\tests\\test_issue332_vllm_prompt.py:554: in test_serve_emits_the_warning\n    src = Path(\"src/soup_cli/commands/serve.py\").read_text(encoding=\"utf-8\")\n          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n<home>\\AppData\\Local\\Python\\pythoncore-3.12-64\\Lib\\pathlib.py:1027: in read_text\n    with self.open(mode='r', encoding=encoding, errors=errors) as f:\n         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n<home>\\AppData\\Local\\Python\\pythoncore-3.12-64\\Lib\\pathlib.py:1013: in open\n    return io.open(self, mode, buffering, encoding, errors, newline)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nE   FileNotFoundError: [Errno 2] No such file or directory: 'src\\\\soup_cli\\\\commands\\\\serve.py'"
+    },
+    {
+      "classname": "tests.test_v0403_part_b.TestSftAndPretrainWiringLive",
+      "name": "test_sft_wires_live_factory",
+      "failure": "<publication-checkout>\\tests\\test_v0403_part_b.py:230: in test_sft_wires_live_factory\n    text = Path(\"src/soup_cli/trainer/sft.py\").read_text(encoding=\"utf-8\")\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n<home>\\AppData\\Local\\Python\\pythoncore-3.12-64\\Lib\\pathlib.py:1027: in read_text\n    with self.open(mode='r', encoding=encoding, errors=errors) as f:\n         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n<home>\\AppData\\Local\\Python\\pythoncore-3.12-64\\Lib\\pathlib.py:1013: in open\n    return io.open(self, mode, buffering, encoding, errors, newline)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nE   FileNotFoundError: [Errno 2] No such file or directory: 'src\\\\soup_cli\\\\trainer\\\\sft.py'"
+    },
+    {
+      "classname": "tests.test_v0403_part_b.TestSftAndPretrainWiringLive",
+      "name": "test_pretrain_wires_live_factory",
+      "failure": "<publication-checkout>\\tests\\test_v0403_part_b.py:237: in test_pretrain_wires_live_factory\n    text = Path(\"src/soup_cli/trainer/pretrain.py\").read_text(encoding=\"utf-8\")\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n<home>\\AppData\\Local\\Python\\pythoncore-3.12-64\\Lib\\pathlib.py:1027: in read_text\n    with self.open(mode='r', encoding=encoding, errors=errors) as f:\n         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n<home>\\AppData\\Local\\Python\\pythoncore-3.12-64\\Lib\\pathlib.py:1013: in open\n    return io.open(self, mode, buffering, encoding, errors, newline)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nE   FileNotFoundError: [Errno 2] No such file or directory: 'src\\\\soup_cli\\\\trainer\\\\pretrain.py'"
+    },
+    {
+      "classname": "tests.test_v0403_part_a.TestSftWiring",
+      "name": "test_sft_no_longer_passes_probe_fn_none_literal",
+      "failure": "<publication-checkout>\\tests\\test_v0403_part_a.py:180: in test_sft_no_longer_passes_probe_fn_none_literal\n    text = path.read_text(encoding=\"utf-8\")\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n<home>\\AppData\\Local\\Python\\pythoncore-3.12-64\\Lib\\pathlib.py:1027: in read_text\n    with self.open(mode='r', encoding=encoding, errors=errors) as f:\n         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n<home>\\AppData\\Local\\Python\\pythoncore-3.12-64\\Lib\\pathlib.py:1013: in open\n    return io.open(self, mode, buffering, encoding, errors, newline)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nE   FileNotFoundError: [Errno 2] No such file or directory: 'src\\\\soup_cli\\\\trainer\\\\sft.py'"
+    },
+    {
+      "classname": "tests.test_v0404_part_b.TestGetTrainDataloaderForwardsDropLast",
+      "name": "test_drop_last_forwarded_to_sampler_constructor",
+      "failure": "<publication-checkout>\\tests\\test_v0404_part_b.py:181: in test_drop_last_forwarded_to_sampler_constructor\n    text = Path(\"src/soup_cli/utils/multipack_trainer.py\").read_text(\n<home>\\AppData\\Local\\Python\\pythoncore-3.12-64\\Lib\\pathlib.py:1027: in read_text\n    with self.open(mode='r', encoding=encoding, errors=errors) as f:\n         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n<home>\\AppData\\Local\\Python\\pythoncore-3.12-64\\Lib\\pathlib.py:1013: in open\n    return io.open(self, mode, buffering, encoding, errors, newline)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nE   FileNotFoundError: [Errno 2] No such file or directory: 'src\\\\soup_cli\\\\utils\\\\multipack_trainer.py'"
+    },
+    {
+      "classname": "tests.test_v0404_part_b.TestSftLiveWiring",
+      "name": "test_sft_instantiates_subclass",
+      "failure": "<publication-checkout>\\tests\\test_v0404_part_b.py:194: in test_sft_instantiates_subclass\n    text = Path(\"src/soup_cli/trainer/sft.py\").read_text(encoding=\"utf-8\")\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n<home>\\AppData\\Local\\Python\\pythoncore-3.12-64\\Lib\\pathlib.py:1027: in read_text\n    with self.open(mode='r', encoding=encoding, errors=errors) as f:\n         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n<home>\\AppData\\Local\\Python\\pythoncore-3.12-64\\Lib\\pathlib.py:1013: in open\n    return io.open(self, mode, buffering, encoding, errors, newline)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nE   FileNotFoundError: [Errno 2] No such file or directory: 'src\\\\soup_cli\\\\trainer\\\\sft.py'"
+    },
+    {
+      "classname": "tests.test_v0404_part_b.TestSftLiveWiring",
+      "name": "test_pretrain_instantiates_subclass",
+      "failure": "<publication-checkout>\\tests\\test_v0404_part_b.py:205: in test_pretrain_instantiates_subclass\n    text = Path(\"src/soup_cli/trainer/pretrain.py\").read_text(encoding=\"utf-8\")\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n<home>\\AppData\\Local\\Python\\pythoncore-3.12-64\\Lib\\pathlib.py:1027: in read_text\n    with self.open(mode='r', encoding=encoding, errors=errors) as f:\n         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n<home>\\AppData\\Local\\Python\\pythoncore-3.12-64\\Lib\\pathlib.py:1013: in open\n    return io.open(self, mode, buffering, encoding, errors, newline)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nE   FileNotFoundError: [Errno 2] No such file or directory: 'src\\\\soup_cli\\\\trainer\\\\pretrain.py'"
+    },
+    {
+      "classname": "tests.test_issue1480_machine_output_rich_json",
+      "name": "test_no_console_print_of_serialised_json",
+      "failure": "<publication-checkout>\\tests\\test_issue1480_machine_output_rich_json.py:196: in test_no_console_print_of_serialised_json\n    offenders = _console_json_dumps_offenders(_SRC)\n                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n<publication-checkout>\\tests\\test_issue1480_machine_output_rich_json.py:172: in _console_json_dumps_offenders\n    tree = ast.parse(path.read_text(encoding=\"utf-8\"))\n                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n<home>\\AppData\\Local\\Python\\pythoncore-3.12-64\\Lib\\pathlib.py:1027: in read_text\n    with self.open(mode='r', encoding=encoding, errors=errors) as f:\n         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n<home>\\AppData\\Local\\Python\\pythoncore-3.12-64\\Lib\\pathlib.py:1013: in open\n    return io.open(self, mode, buffering, encoding, errors, newline)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nE   FileNotFoundError: [Errno 2] No such file or directory: '<publication-checkout>\\\\src\\\\soup_cli\\\\zz_unparseable_guard_probe.py'"
+    },
+    {
+      "classname": "tests.test_issue885_langfuse_error_ansi",
+      "name": "test_stripped_body_renders_on_a_colour_console",
+      "failure": "<publication-checkout>\\tests\\test_issue885_langfuse_error_ansi.py:79: in test_stripped_body_renders_on_a_colour_console\n    assert \"\\x1b[\" in rendered\nE   AssertionError: assert '\\x1b[' in 'Langfuse answered HTTP 500: err [2J[31mFAKE ERROR tail\\n'"
+    }
+  ]
+}

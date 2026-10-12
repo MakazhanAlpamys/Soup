@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$HOME/holdout-src"
+python=$HOME/holdout-venv/bin/python
+source_revision=$(cat "$HOME/holdout-source.txt")
+common=(--source-revision "$source_revision"
+  --data hf:Salesforce/wikitext:wikitext-2-raw-v1:train:text --data-label prose
+  --data src/soup_cli --data-label code
+  --data hf:openai/gsm8k:main:train:question --data-label math
+  --dataset-revision b08601e04326c79dfdd32d625aee71d232d685c3
+  --dataset-revision 740312add88f781978c0658806c59bc2815b9866
+  --shape 1x512 --shape 4x512 --shape 1x2048
+  --batches 16 --seed 17 --limit-rows 4000 --device cuda --dtype bfloat16)
+set +e
+"$python" benchmarks/harness/moe_expert_holdout.py collect \
+  --model ibm-granite/granite-3.0-1b-a400m-base \
+  --revision d91cbed802d85eb1b32374623331f6ab2b37403a "${common[@]}" \
+  --out "$HOME/holdout-results/granite-bf16-cuda.json" \
+  2>&1 | tee "$HOME/holdout-results/granite-bf16-cuda.log"
+granite_status=${PIPESTATUS[0]}
+"$python" benchmarks/harness/moe_expert_holdout.py collect \
+  --model allenai/OLMoE-1B-7B-0924 \
+  --revision 6d84c48581ece794365f2b8e9cfb043c68ade9c5 "${common[@]}" \
+  --out "$HOME/holdout-results/olmoe-bf16-cuda.json" \
+  2>&1 | tee "$HOME/holdout-results/olmoe-bf16-cuda.log"
+olmoe_status=${PIPESTATUS[0]}
+set -e
+printf 'Granite exit: %s\nOLMoE exit: %s\n' "$granite_status" "$olmoe_status" | tee "$HOME/holdout-results/run-status.txt"
+[[ $granite_status -eq 0 && $olmoe_status -eq 0 ]]

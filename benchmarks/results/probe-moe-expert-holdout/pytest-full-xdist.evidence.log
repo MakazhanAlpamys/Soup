@@ -1,0 +1,244 @@
+# Evidence extract; omitted source lines remain in the separately archived full capture.
+
+# Source: pytest-full-xdist.log
+# Full source SHA-256: b9fe08b0c9ea6d83e4662f61b6e47c43a9cd386b3daf7ec16a7bf8e7a9c2c1a2
+
+# Source lines 487-645
+================================== FAILURES ===================================
+_ TestAdversarialInputsStayLinear.test_parsing_is_fast_on_adversarial_output[open-parens] _
+[gw0] win32 -- Python 3.12.10 <repo>\.venv\Scripts\python.exe
+tests\test_issue1226_reward_gold_parsing.py:923: in test_parsing_is_fast_on_adversarial_output
+    assert time.perf_counter() - start < 2.0
+E   assert (46463.0505817 - 46460.5808069) < 2.0
+E    +  where 46463.0505817 = <built-in function perf_counter>()
+E    +    where <built-in function perf_counter> = time.perf_counter
+_ test_builder_invocation_no_nameerror_in_subprocess[soup_cli.utils.echo_trap-m.build_echo_trap_callback(threshold=0.5)] _
+[gw3] win32 -- Python 3.12.10 <repo>\.venv\Scripts\python.exe
+<repo>\tests\test_issue320_lazy_callback_import.py:129: in test_builder_invocation_no_nameerror_in_subprocess
+    proc = subprocess.run(
+<user-home>\AppData\Local\Python\pythoncore-3.12-64\Lib\subprocess.py:550: in run
+    stdout, stderr = process.communicate(input, timeout=timeout)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<user-home>\AppData\Local\Python\pythoncore-3.12-64\Lib\subprocess.py:1209: in communicate
+    stdout, stderr = self._communicate(input, endtime, timeout)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<user-home>\AppData\Local\Python\pythoncore-3.12-64\Lib\subprocess.py:1630: in _communicate
+    raise TimeoutExpired(self.args, orig_timeout)
+E   subprocess.TimeoutExpired: Command '['<repo>\\.venv\\Scripts\\python.exe', '-c', "import importlib\nm = importlib.import_module('soup_cli.utils.echo_trap')\ntry:\n    m.build_echo_trap_callback(threshold=0.5)\nexcept NameError as exc:\n    raise SystemExit(f'NAMEERROR:{exc}')\nprint('OK')\n"]' timed out after 60 seconds
+_____________________ TestDoctorCommand.test_doctor_runs ______________________
+[gw11] win32 -- Python 3.12.10 <repo>\.venv\Scripts\python.exe
+tests\test_cli_subprocess.py:406: in test_doctor_runs
+    result = run_soup("doctor", timeout=120)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests\test_cli_subprocess.py:38: in run_soup
+    return subprocess.run(
+..\..\AppData\Local\Python\pythoncore-3.12-64\Lib\subprocess.py:550: in run
+    stdout, stderr = process.communicate(input, timeout=timeout)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+..\..\AppData\Local\Python\pythoncore-3.12-64\Lib\subprocess.py:1209: in communicate
+    stdout, stderr = self._communicate(input, endtime, timeout)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+..\..\AppData\Local\Python\pythoncore-3.12-64\Lib\subprocess.py:1630: in _communicate
+    raise TimeoutExpired(self.args, orig_timeout)
+E   subprocess.TimeoutExpired: Command '['<repo>\\.venv\\Scripts\\python.exe', '-m', 'soup_cli', 'doctor']' timed out after 120 seconds
+_ test_builder_invocation_no_nameerror_in_subprocess[soup_cli.utils.reward_hacking-m.build_reward_hack_callback(detector='info_rm')] _
+[gw3] win32 -- Python 3.12.10 <repo>\.venv\Scripts\python.exe
+<repo>\tests\test_issue320_lazy_callback_import.py:129: in test_builder_invocation_no_nameerror_in_subprocess
+    proc = subprocess.run(
+<user-home>\AppData\Local\Python\pythoncore-3.12-64\Lib\subprocess.py:550: in run
+    stdout, stderr = process.communicate(input, timeout=timeout)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<user-home>\AppData\Local\Python\pythoncore-3.12-64\Lib\subprocess.py:1209: in communicate
+    stdout, stderr = self._communicate(input, endtime, timeout)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<user-home>\AppData\Local\Python\pythoncore-3.12-64\Lib\subprocess.py:1630: in _communicate
+    raise TimeoutExpired(self.args, orig_timeout)
+E   subprocess.TimeoutExpired: Command '['<repo>\\.venv\\Scripts\\python.exe', '-c', "import importlib\nm = importlib.import_module('soup_cli.utils.reward_hacking')\ntry:\n    m.build_reward_hack_callback(detector='info_rm')\nexcept NameError as exc:\n    raise SystemExit(f'NAMEERROR:{exc}')\nprint('OK')\n"]' timed out after 60 seconds
+_ test_builder_invocation_no_nameerror_in_subprocess[soup_cli.utils.minillm-m.build_minillm_callback(m.MiniLLMConfig())] _
+[gw3] win32 -- Python 3.12.10 <repo>\.venv\Scripts\python.exe
+<repo>\tests\test_issue320_lazy_callback_import.py:129: in test_builder_invocation_no_nameerror_in_subprocess
+    proc = subprocess.run(
+<user-home>\AppData\Local\Python\pythoncore-3.12-64\Lib\subprocess.py:550: in run
+    stdout, stderr = process.communicate(input, timeout=timeout)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<user-home>\AppData\Local\Python\pythoncore-3.12-64\Lib\subprocess.py:1209: in communicate
+    stdout, stderr = self._communicate(input, endtime, timeout)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<user-home>\AppData\Local\Python\pythoncore-3.12-64\Lib\subprocess.py:1630: in _communicate
+    raise TimeoutExpired(self.args, orig_timeout)
+E   subprocess.TimeoutExpired: Command '['<repo>\\.venv\\Scripts\\python.exe', '-c', "import importlib\nm = importlib.import_module('soup_cli.utils.minillm')\ntry:\n    m.build_minillm_callback(m.MiniLLMConfig())\nexcept NameError as exc:\n    raise SystemExit(f'NAMEERROR:{exc}')\nprint('OK')\n"]' timed out after 60 seconds
+_ test_builder_invocation_no_nameerror_in_subprocess[soup_cli.utils.rl_checkpoint-m.build_rl_checkpoint_callback(m.RLCheckpointConfig(save_every_steps=1), output_dir='out')] _
+[gw3] win32 -- Python 3.12.10 <repo>\.venv\Scripts\python.exe
+<repo>\tests\test_issue320_lazy_callback_import.py:129: in test_builder_invocation_no_nameerror_in_subprocess
+    proc = subprocess.run(
+<user-home>\AppData\Local\Python\pythoncore-3.12-64\Lib\subprocess.py:550: in run
+    stdout, stderr = process.communicate(input, timeout=timeout)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<user-home>\AppData\Local\Python\pythoncore-3.12-64\Lib\subprocess.py:1209: in communicate
+    stdout, stderr = self._communicate(input, endtime, timeout)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<user-home>\AppData\Local\Python\pythoncore-3.12-64\Lib\subprocess.py:1630: in _communicate
+    raise TimeoutExpired(self.args, orig_timeout)
+E   subprocess.TimeoutExpired: Command '['<repo>\\.venv\\Scripts\\python.exe', '-c', "import importlib\nm = importlib.import_module('soup_cli.utils.rl_checkpoint')\ntry:\n    m.build_rl_checkpoint_callback(m.RLCheckpointConfig(save_every_steps=1), output_dir='out')\nexcept NameError as exc:\n    raise SystemExit(f'NAMEERROR:{exc}')\nprint('OK')\n"]' timed out after 60 seconds
+_ test_builder_invocation_no_nameerror_in_subprocess[soup_cli.monitoring.hf_push-m.build_push_callback(repo_id='user/repo', output_dir='out', explicit_token='tok')] _
+[gw3] win32 -- Python 3.12.10 <repo>\.venv\Scripts\python.exe
+<repo>\tests\test_issue320_lazy_callback_import.py:129: in test_builder_invocation_no_nameerror_in_subprocess
+    proc = subprocess.run(
+<user-home>\AppData\Local\Python\pythoncore-3.12-64\Lib\subprocess.py:550: in run
+    stdout, stderr = process.communicate(input, timeout=timeout)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<user-home>\AppData\Local\Python\pythoncore-3.12-64\Lib\subprocess.py:1209: in communicate
+    stdout, stderr = self._communicate(input, endtime, timeout)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<user-home>\AppData\Local\Python\pythoncore-3.12-64\Lib\subprocess.py:1630: in _communicate
+    raise TimeoutExpired(self.args, orig_timeout)
+E   subprocess.TimeoutExpired: Command '['<repo>\\.venv\\Scripts\\python.exe', '-c', "import importlib\nm = importlib.import_module('soup_cli.monitoring.hf_push')\ntry:\n    m.build_push_callback(repo_id='user/repo', output_dir='out', explicit_token='tok')\nexcept NameError as exc:\n    raise SystemExit(f'NAMEERROR:{exc}')\nprint('OK')\n"]' timed out after 60 seconds
+____________________ test_disable_survives_a_fresh_process ____________________
+[gw7] win32 -- Python 3.12.10 <repo>\.venv\Scripts\python.exe
+tests\test_issue819_plugin_discovery.py:164: in test_disable_survives_a_fresh_process
+    assert "hello" in _plain(discovered.stdout)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^
+tests\test_issue819_plugin_discovery.py:26: in _plain
+    return " ".join(_ANSI_RE.sub("", text).split())
+                    ^^^^^^^^^^^^^^^^^^^^^^
+E   TypeError: expected string or bytes-like object, got 'NoneType'
+__________ TestDeadline.test_control_a_prompt_response_still_arrives __________
+[gw1] win32 -- Python 3.12.10 <repo>\.venv\Scripts\python.exe
+tests\test_issue865_langfuse_pull_bounds.py:183: in test_control_a_prompt_response_still_arrives
+    response = _urllib_transport(f"{drip_server}/ok", _creds(), _TIMEOUT)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\soup_cli\utils\ingest_pull.py:487: in _urllib_transport
+    body=_read_capped(response, deadline=deadline, timeout=timeout),
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\soup_cli\utils\ingest_pull.py:541: in _read_capped
+    raise PullError(f"the request to Langfuse timed out after {timeout:g}s")
+E   soup_cli.utils.ingest_pull.PullError: the request to Langfuse timed out after 0.4s
+__ TestIssue1347TheScanGrowsLinearly.test_closed_boxes_cost_linear_time_too ___
+[gw7] win32 -- Python 3.12.10 <repo>\.venv\Scripts\python.exe
+tests\test_issue1347_boxed_scan.py:92: in test_closed_boxes_cost_linear_time_too
+    assert large_seconds < 3.0, large_seconds
+E   AssertionError: 4.471560199999658
+E   assert 4.471560199999658 < 3.0
+__________________________ test_ppo_runs_a_real_step __________________________
+[gw5] win32 -- Python 3.12.10 <repo>\.venv\Scripts\python.exe
+<repo>\tests\test_issue1391_ppo_real_step.py:89: in test_ppo_runs_a_real_step
+    result = wrapper.train()
+             ^^^^^^^^^^^^^^^
+<repo>\src\soup_cli\trainer\ppo.py:802: in train
+    return self._train_builtin(display, tracker, run_id, resume_from_checkpoint)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<repo>\src\soup_cli\trainer\ppo.py:856: in _train_builtin
+    self.trainer.train()
+<repo>\.venv\Lib\site-packages\trl\experimental\ppo\ppo_trainer.py:910: in train
+    self._save_checkpoint(model, trial=None)
+<repo>\.venv\Lib\site-packages\trl\experimental\ppo\ppo_trainer.py:1025: in _save_checkpoint
+    super()._save_checkpoint(model, trial)
+<repo>\.venv\Lib\site-packages\transformers\trainer.py:3335: in _save_checkpoint
+    self.save_model(output_dir, _internal_call=True)
+<repo>\.venv\Lib\site-packages\trl\experimental\ppo\ppo_trainer.py:594: in save_model
+    super().save_model(output_dir, _internal_call)
+<repo>\.venv\Lib\site-packages\transformers\trainer.py:4090: in save_model
+    elif self.is_distributed_loading_by_transformers and not _is_peft_model(self.model):
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: 'PPOTrainer' object has no attribute 'is_distributed_loading_by_transformers'
+---------------------------- Captured stdout call -----------------------------
+Loading reward model: 
+<user-home>/AppData/Local/Temp/pytest-of-<user>/pytest-50/popen-gw5/test_ppo_
+runs_a_real_step0/rm
+Reward model loaded: 
+<user-home>/AppData/Local/Temp/pytest-of-<user>/pytest-50/popen-gw5/test_ppo_
+runs_a_real_step0/rm
+Using built-in reward function: accuracy
+Loading tokenizer: 
+<user-home>/AppData/Local/Temp/pytest-of-<user>/pytest-50/popen-gw5/test_ppo_
+runs_a_real_step0/base
+Loading model: 
+<user-home>/AppData/Local/Temp/pytest-of-<user>/pytest-50/popen-gw5/test_ppo_
+runs_a_real_step0/base
+LoRA applied: 1,792 trainable / 79,936 total (2.24%)
+PPO schedule: train epochs=1, PPO epochs=1, KL coefficient=0.05
+Creating value model from: 
+<user-home>/AppData/Local/Temp/pytest-of-<user>/pytest-50/popen-gw5/test_ppo_
+runs_a_real_step0/base
+===training policy===
+{'eps': 0, 'objective/kl': '-3.576e-07', 'objective/entropy': '21.45', 'objective/non_score_reward': '1.788e-08', 'objective/rlhf_reward': '-0.07065', 'objective/scores': '-0.07065', 'policy/approxkl_avg': '7.776e-15', 'policy/clipfrac_avg': '0', 'loss/policy_avg': '1.987e-08', 'loss/value_avg': '0.009289', 'val/clipfrac_avg': '0', 'policy/entropy_avg': '4.081', 'val/ratio': '1', 'val/ratio_var': 'nan', 'val/num_eos_tokens': 1, 'lr': '2e-05', 'episode': 2, 'epoch': '0.5'}
+{'eps': 0, 'objective/kl': '2.933e-05', 'objective/entropy': '175.3', 'objective/non_score_reward': '-1.466e-06', 'objective/rlhf_reward': '-0.1883', 'objective/scores': '-0.1883', 'policy/approxkl_avg': '2.976e-14', 'policy/clipfrac_avg': '0', 'loss/policy_avg': '-2.649e-08', 'loss/value_avg': '0.01578', 'val/clipfrac_avg': '0', 'policy/entropy_avg': '4.075', 'val/ratio': '1', 'val/ratio_var': 'nan', 'val/num_eos_tokens': 2, 'lr': '1e-05', 'episode': 4, 'epoch': '1'}
+
+# Source lines 646-695
+---------------------------- Captured stderr call -----------------------------
+
+Writing model shards:   0%|          | 0/1 [00:00<?, ?it/s]
+Writing model shards: 100%|██████████| 1/1 [00:00<00:00, 73.93it/s]
+
+Writing model shards:   0%|          | 0/1 [00:00<?, ?it/s]
+Writing model shards: 100%|██████████| 1/1 [00:00<00:00, 79.32it/s]
+
+Loading weights:   0%|          | 0/21 [00:00<?, ?it/s]
+Loading weights: 100%|██████████| 21/21 [00:00<00:00, 2624.33it/s]
+
+Loading weights:   0%|          | 0/20 [00:00<?, ?it/s]
+Loading weights: 100%|██████████| 20/20 [00:00<00:00, 1596.86it/s]
+
+Map:   0%|          | 0/4 [00:00<?, ? examples/s]
+Map: 100%|██████████| 4/4 [00:00<00:00, 222.94 examples/s]
+
+Loading weights:   0%|          | 0/20 [00:00<?, ?it/s]
+Loading weights: 100%|██████████| 20/20 [00:00<00:00, 1818.87it/s]
+[transformers] [1mLlamaForSequenceClassification LOAD REPORT[0m from: <user-home>/AppData/Local/Temp/pytest-of-<user>/pytest-50/popen-gw5/test_ppo_runs_a_real_step0/base
+Key          | Status  | 
+-------------+---------+-
+score.weight | MISSING | 
+
+Notes:
+- MISSING:	those params were newly initialized because missing from the checkpoint. Consider training on your downstream task.
+
+  0%|          | 0/2 [00:00<?, ?it/s][transformers] Passing `generation_config` together with generation-related arguments=({'return_dict_in_generate', 'output_scores'}) is deprecated and will be removed in future versions. Please pass either a `generation_config` object OR all generation parameters explicitly, but not both.
+[transformers] A decoder-only architecture is being used, but right-padding was detected! For correct generation results, please set `padding_side='left'` when initializing the tokenizer.
+
+                                     
+
+  0%|          | 0/2 [00:13<?, ?it/s]
+ 50%|█████     | 1/2 [00:13<00:13, 13.21s/it][transformers] A decoder-only architecture is being used, but right-padding was detected! For correct generation results, please set `padding_side='left'` when initializing the tokenizer.
+
+                                             
+
+ 50%|█████     | 1/2 [00:21<00:13, 13.21s/it]
+100%|██████████| 2/2 [00:21<00:00, 10.40s/it]
+------------------------------ Captured log call ------------------------------
+[33mWARNING [0m transformers.modeling_utils:loading_report.py:307 [1mLlamaForSequenceClassification LOAD REPORT[0m from: <user-home>/AppData/Local/Temp/pytest-of-<user>/pytest-50/popen-gw5/test_ppo_runs_a_real_step0/base
+Key          | Status  | 
+-------------+---------+-
+score.weight | MISSING | 
+
+Notes:
+- MISSING:	those params were newly initialized because missing from the checkpoint. Consider training on your downstream task.
+[33mWARNING [0m transformers.generation.utils:logging.py:340 Passing `generation_config` together with generation-related arguments=({'return_dict_in_generate', 'output_scores'}) is deprecated and will be removed in future versions. Please pass either a `generation_config` object OR all generation parameters explicitly, but not both.
+[33mWARNING [0m transformers.generation.utils:utils.py:2846 A decoder-only architecture is being used, but right-padding was detected! For correct generation results, please set `padding_side='left'` when initializing the tokenizer.
+[33mWARNING [0m transformers.generation.utils:utils.py:2846 A decoder-only architecture is being used, but right-padding was detected! For correct generation results, please set `padding_side='left'` when initializing the tokenizer.
+
+# Source lines 1339-1343
+=============================== tests coverage ================================
+______________ coverage: platform win32, python 3.12.10-final-0 _______________
+
+Name                                                  Stmts   Miss  Cover   Missing
+-----------------------------------------------------------------------------------
+
+# Source lines 1801-1818
+TOTAL                                                 87676  12009    86%
+
+85 files skipped due to complete coverage.
+Coverage XML written to file <report-dir>/holdout-coverage.xml
+Required test coverage of 77% reached. Total coverage: 86.30%
+=========================== short test summary info ===========================
+FAILED tests/test_issue1226_reward_gold_parsing.py::TestAdversarialInputsStayLinear::test_parsing_is_fast_on_adversarial_output[open-parens]
+FAILED tests/test_issue320_lazy_callback_import.py::test_builder_invocation_no_nameerror_in_subprocess[soup_cli.utils.echo_trap-m.build_echo_trap_callback(threshold=0.5)]
+FAILED tests/test_cli_subprocess.py::TestDoctorCommand::test_doctor_runs - su...
+FAILED tests/test_issue320_lazy_callback_import.py::test_builder_invocation_no_nameerror_in_subprocess[soup_cli.utils.reward_hacking-m.build_reward_hack_callback(detector='info_rm')]
+FAILED tests/test_issue320_lazy_callback_import.py::test_builder_invocation_no_nameerror_in_subprocess[soup_cli.utils.minillm-m.build_minillm_callback(m.MiniLLMConfig())]
+FAILED tests/test_issue320_lazy_callback_import.py::test_builder_invocation_no_nameerror_in_subprocess[soup_cli.utils.rl_checkpoint-m.build_rl_checkpoint_callback(m.RLCheckpointConfig(save_every_steps=1), output_dir='out')]
+FAILED tests/test_issue320_lazy_callback_import.py::test_builder_invocation_no_nameerror_in_subprocess[soup_cli.monitoring.hf_push-m.build_push_callback(repo_id='user/repo', output_dir='out', explicit_token='tok')]
+FAILED tests/test_issue819_plugin_discovery.py::test_disable_survives_a_fresh_process
+FAILED tests/test_issue865_langfuse_pull_bounds.py::TestDeadline::test_control_a_prompt_response_still_arrives
+FAILED tests/test_issue1347_boxed_scan.py::TestIssue1347TheScanGrowsLinearly::test_closed_boxes_cost_linear_time_too
+FAILED tests/test_issue1391_ppo_real_step.py::test_ppo_runs_a_real_step - Att...
+11 failed, 34159 passed, 428 skipped, 2 xfailed, 910 warnings in 1195.63s (0:19:55)

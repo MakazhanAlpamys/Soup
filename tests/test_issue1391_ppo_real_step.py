@@ -12,6 +12,8 @@ and a tiny reward model. Nothing about the trainer is mocked.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 for _mod in ("torch", "transformers", "peft", "trl", "datasets"):
@@ -65,7 +67,7 @@ def _wrapper(tmp_path, monkeypatch, grad_accum=1):
         f"base: {base}\ntask: ppo\nbackend: transformers\n"
         "data:\n  train: train.jsonl\n  max_length: 64\n"
         # One rollout batch is batch_size * gradient_accumulation_steps rows, so
-        # these 4 rows fill exactly one batch at batch_size 2, accumulation 1.
+        # these 4 rows fill two batches at batch_size 2, accumulation 1.
         f"training:\n  epochs: 1\n  batch_size: 2\n  gradient_accumulation_steps: {grad_accum}\n"
         f"  quantization: none\n  ppo_epochs: 1\n  reward_model: {rm}\n"
         "  lora:\n    r: 4\n    alpha: 8\n    target_modules: [q_proj, v_proj]\n"
@@ -85,11 +87,36 @@ def test_ppo_hands_trl_only_token_columns(tmp_path, monkeypatch):
 
 
 def test_ppo_runs_a_real_step(tmp_path, monkeypatch):
+    import torch
+    from peft import PeftModel, get_peft_model_state_dict
+    from transformers import AutoModelForCausalLM
+
     wrapper = _wrapper(tmp_path, monkeypatch)
+    wrapper.trainer.args.save_steps = 1
+    composite_model = wrapper.trainer.model
     result = wrapper.train()
-    assert result["total_steps"] >= 1, result
-    assert (tmp_path / "out" / "adapter_config.json").is_file()
+    assert result["total_steps"] == 2, result
+    assert wrapper.trainer.model is composite_model
     assert any("loss/policy_avg" in e for e in wrapper.trainer.state.log_history)
+    output = tmp_path / "out"
+    for step in (1, 2):
+        checkpoint = output / f"checkpoint-{step}"
+        for filename in (
+            "adapter_config.json", "adapter_model.safetensors", "optimizer.pt",
+            "scheduler.pt", "rng_state.pth", "training_args.bin", "tokenizer.json",
+        ):
+            assert (checkpoint / filename).is_file(), (step, filename)
+        state = json.loads((checkpoint / "trainer_state.json").read_text(encoding="utf-8"))
+        assert state["global_step"] == step
+
+    reloaded = PeftModel.from_pretrained(
+        AutoModelForCausalLM.from_pretrained(wrapper.config.base), output,
+    )
+    trained = get_peft_model_state_dict(wrapper.model)
+    saved = get_peft_model_state_dict(reloaded)
+    assert saved.keys() == trained.keys()
+    for name, value in trained.items():
+        torch.testing.assert_close(saved[name], value, rtol=0, atol=0)
 
 
 def test_a_train_set_smaller_than_one_rollout_batch_is_refused(tmp_path, monkeypatch):

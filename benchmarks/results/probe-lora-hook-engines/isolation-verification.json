@@ -1,0 +1,50 @@
+{
+  "pytest_exit": 0,
+  "checked_test_boundaries": 827,
+  "isolation_leaks": [],
+  "source_import": "<publication-checkout>\\src\\soup_cli\\__init__.py",
+  "python": "3.12.10 (tags/v3.12.10:0cc8128, Apr  8 2025, 12:21:36) [MSC v.1943 64 bit (AMD64)]",
+  "utf8_mode": 0,
+  "environment": {
+    "PYTHONHASHSEED": "0",
+    "PYTHONUTF8": null,
+    "PYTHONIOENCODING": "utf-8",
+    "PYTHONPATH": "<publication-checkout>\\src",
+    "CI": "true",
+    "TERM": "dumb",
+    "NO_COLOR": "1"
+  },
+  "exit": 0,
+  "seconds": 167.31,
+  "test_file_sha256": {
+    "tests/test_v0470_part_a.py": "c52423c13efcea82a5ff5b63c2f358e9ba7095cf845fb1fe4579b0563bdb53e3",
+    "tests/test_v0470_part_b.py": "7543d0788628a4d2207fc533976b620692a3f5c749d0f38ce51e15d0381ff490",
+    "tests/test_v0540.py": "5e744bf025ad4e311a2a6b37a3929a99d0b67c80236088b7f33d4d45a7df1814",
+    "tests/test_v0560.py": "e082defb5e5a9f901f8ec305c9b257d61c89df3ae9d4441506813c87a35b253e",
+    "tests/test_issue204_langfuse_pull.py": "436539caea28e97534750276f697345cc5d5cc8f503937573d3f0dfe3499dbdf",
+    "tests/test_issue885_langfuse_error_ansi.py": "4cc7bacdd38eb33603d2df4b14fcfcb285104c8ef683ff3d92df38dbc9d56b2f",
+    "tests/test_issue674_quest_integration.py": "b0288901e1ea1ab8aa5e9dee3057a1f5f46c9596d323b09c6802e597ce6aa74f",
+    "tests/test_issue332_vllm_prompt.py": "49b1c0e35d189d21fc85d97f5ab2c207bf7144b336e9e5f7bce0406b7aa17e9b",
+    "tests/test_v0403_part_a.py": "b96c3a803e20d5ced64ef56cbb47f3064c19188e04cb7de0b88b377fc570ab08",
+    "tests/test_v0403_part_b.py": "f37a00ff69d758d8a3478bc4c3be99fed1e4b1c0c236eb6e9cd1f84eabde8127",
+    "tests/test_v0404_part_b.py": "05f4414582538aa09673a896960e145ce64ea4444c754303d1db7cf9a509b5b5",
+    "tests/test_issue1480_machine_output_rich_json.py": "bebe8b059358d0ae8c1eb531695c96beb6370af4dcb7e9f91403a88171e7f445",
+    "tests/test_v07119.py": "846e162c4f623a2436711a20a96591699e500a8df0323ab6e130e3eac2a4ab33",
+    "tests/test_cli_startup_is_light.py": "108299201b0337ff36840f361ad9faea8d734fa33714da6dd15eca8891cf4bc9",
+    "tests/test_terminal_c1_controls.py": "f55b2dbb2715ffb91285a433af65853ca605ae52b70912d58232f2fb3f505425",
+    "tests/test_terminal_output_hygiene.py": "0e3fcdc51bbdde04fa420ec40fd12e941fcf250410711ae94823f0f966e76eb1",
+    "tests/test_multipack_sampler.py": "d1dd44a2ea3cc387807f59788b27f325d98f2e828d48e3125d679cc8885fcdf0"
+  },
+  "suites": [
+    {
+      "name": "pytest",
+      "errors": "0",
+      "failures": "0",
+      "skipped": "15",
+      "tests": "827",
+      "time": "157.470",
+      "timestamp": "2026-10-09T11:40:39.808369+05:00",
+      "hostname": "<verification-host>"
+    }
+  ]
+}
