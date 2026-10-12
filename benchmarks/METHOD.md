@@ -342,6 +342,45 @@ per condition and seed 1234, gave this rule 84% power and a 5.3% false-positive
 rate at a median of 63 blocks. A 2-block pilot that is thrown away gave 72%
 power. A thrown-away pilot of 4 to 8 blocks gave at most 77%.
 
+### Additive noise
+
+The only run-to-run spread data in the repo is `gate-836-bench-train-contract.md`
+(RTX 5070 Laptop, on battery, GPU capped at 50 W). It repeated `soup bench
+train` with the same config on four shapes. Its section 6 gives the fastest and
+slowest median step of each, in seconds:
+
+| shape | steps/warmup | fastest | slowest | ratio | difference |
+|---|---|---:|---:|---:|---:|
+| A (13 runs) | 12/4 | 0.1972 | 0.4746 | 2.41x | 0.2774 |
+| A (3 runs) | 60/20 | 0.1965 | 0.4401 | 2.24x | 0.2436 |
+| B (3 runs) | 12/4 | 5.2596 | 5.5039 | 1.046x | 0.2443 |
+| C (3 runs) | 12/4 | 0.2045 | 0.3750 | 1.83x | 0.1705 |
+| D (3 runs) | 200/40 | 0.2036 | 0.3854 | 1.89x | 0.1818 |
+
+The ratio runs from 1.05x to 2.41x. The difference stays between 0.17 s and
+0.28 s, while the fast-mode step time differs by 26x between shape B and the
+rest. The noise adds a roughly fixed amount of time per step, now and then,
+instead of scaling with the step. A longer window does not average it away:
+shape D counted 160 steps and still spread 1.89x.
+
+Three rules follow for a benchmark author:
+
+- State noise in seconds per step, from your own pilot, not as a percentage.
+  Shape B's 4.6% spread and shape A's 2.41x spread are the same 0.24 s on steps
+  of 5.3 s and 0.2 s.
+- Compare the effect you want to detect with the noise. The repeats rule sets
+  delta to 10% of the mean of A, so delta shrinks with the step. An effect much
+  smaller than the additive noise needs many blocks, since N grows with
+  (sigma / delta)^2. An effect much larger needs few.
+- Do not subtract or drop slow runs by hand. The record names no cause: its
+  section 7 tested two explanations, another session on the box and CPU
+  frequency scaling on battery, and refuted both. The validity checks void an arm only for the
+  causes they watch.
+
+These sizes belong to one card on battery. The RTX 3050 laptop on mains gave a
+sigma of 0.00029 s in its own pilot (see the worked example). Run the pilot on
+the machine you measure.
+
 ### Worked example: gate-836
 
 This example shows the arithmetic only. Do not plan runs with its numbers.
