@@ -204,7 +204,10 @@ misses a machine that is out of commit while RAM looks free, where allocations
 start to fail or the pagefile grows. On Linux the values are `Committed_AS` and
 `CommitLimit` from `/proc/meminfo`. On Windows the limit is `ullTotalPageFile`
 from `GlobalMemoryStatusEx` and the charge is that limit minus
-`ullAvailPageFile`. macOS is unknown.
+`ullAvailPageFile`. macOS is unknown. Linux does not enforce `CommitLimit` under
+the default overcommit mode, so `used_bytes` can exceed `limit_bytes` there. The
+RTX 3050 laptop records 16.2 GB committed against a 12.2 GB limit. Read the two
+numbers as a trend between the stamps, not as a headroom figure.
 
 `gpu` names the GPU every `nvidia-smi` call reads: `{"id": "1", "source":
 "CUDA_VISIBLE_DEVICES"}`. The workload's `cuda:0` is the first entry of
