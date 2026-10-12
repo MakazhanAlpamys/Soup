@@ -102,34 +102,47 @@ def _resolve_thumbs_db(state: LoopState) -> Optional[tuple]:
     return None
 
 
-def _thumbs_pairs(state: LoopState) -> tuple:
-    """Pairs from the ``soup serve --record-thumbs`` database (#1440).
+def checked_thumbs_db(state: LoopState) -> Optional[str]:
+    """Return the configured thumbs database, checked, or ``None`` (#1440).
 
-    Returns ``(pairs, missing)``. A configured path that leaves cwd or is a
-    symlink raises ``ValueError`` naming its field (the rule ``--record-thumbs``
-    applies on the serve side). A path that does not exist yet is zero thumbs,
-    not an error: ``soup loop watch`` may start before the serve creates it.
+    The harvest reads a database only when told to, like ``soup serve
+    --record-thumbs`` itself. A configured path that leaves cwd or is a
+    symlink (the rule ``--record-thumbs`` applies on the serve side), or that
+    is not an existing file, raises ``ValueError`` naming its field instead of
+    harvesting a silent 0. ``soup loop watch`` runs this before it starts.
     """
     resolved = _resolve_thumbs_db(state)
     if resolved is None:
-        return [], False
+        return None
     path, field = resolved
-    from soup_cli.data.traces.pair_builder import PreferencePair
-    from soup_cli.utils.local_rl import harvest_dpo_pairs, validate_db_path
+    from soup_cli.utils.local_rl import validate_db_path
 
     try:
         validate_db_path(path)
     except (TypeError, ValueError) as exc:
         raise ValueError(f"{field}: {exc}") from exc
-    if not os.path.exists(path):
-        return [], True
-    pairs = [
+    if not os.path.isfile(path):
+        raise ValueError(
+            f"{field}: no database file at {path}; "
+            f"soup serve --record-thumbs {path} creates it"
+        )
+    return path
+
+
+def _thumbs_pairs(state: LoopState) -> list:
+    """Pairs from the ``soup serve --record-thumbs`` database (#1440)."""
+    path = checked_thumbs_db(state)
+    if path is None:
+        return []
+    from soup_cli.data.traces.pair_builder import PreferencePair
+    from soup_cli.utils.local_rl import harvest_dpo_pairs
+
+    return [
         PreferencePair(
             prompt=p.prompt, chosen=p.chosen, rejected=p.rejected, source=_THUMBS_SOURCE
         )
         for p in harvest_dpo_pairs(path)
     ]
-    return pairs, False
 
 
 def harvest_from_traces(state: LoopState) -> Mapping[str, object]:
@@ -139,9 +152,9 @@ def harvest_from_traces(state: LoopState) -> Mapping[str, object]:
     and, when one is configured, the ``soup serve --record-thumbs`` database
     (#1440); the two are unioned without exact duplicates. Writes the pairs to
     ``.soup-loops/pairs/<uuid>.jsonl`` (cwd-contained) and returns
-    ``{pairs_harvested, pairs_path, traces_collected, thumbs_pairs,
-    thumbs_db_missing}``. Yields zero pairs (no path) when neither source has
-    any.
+    ``{pairs_harvested, pairs_path, traces_collected, thumbs_pairs}``. Yields
+    zero pairs (no path) when neither source has any; a configured database
+    that is refused or missing raises (see ``checked_thumbs_db``).
     """
     from soup_cli.data.traces.pair_builder import build_pairs
     from soup_cli.data.traces.parsers import parse_soup_serve
@@ -149,14 +162,14 @@ def harvest_from_traces(state: LoopState) -> Mapping[str, object]:
     trace_dir = _resolve_trace_dir(state)
     traces = list(parse_soup_serve(trace_dir)) if trace_dir else []
     pairs = list(build_pairs(traces, signal="thumbs_up")) if traces else []
-    thumbs, thumbs_missing = _thumbs_pairs(state)
+    thumbs = _thumbs_pairs(state)
     seen = {(p.prompt, p.chosen, p.rejected) for p in pairs}
     for p in thumbs:
         key = (p.prompt, p.chosen, p.rejected)
         if key not in seen:
             seen.add(key)
             pairs.append(p)
-    extra = {"thumbs_pairs": len(thumbs), "thumbs_db_missing": thumbs_missing}
+    extra = {"thumbs_pairs": len(thumbs)}
     if not pairs:
         return {
             "pairs_harvested": 0,

@@ -232,6 +232,16 @@ def watch_cmd(
         console.print("[red]--detach and --foreground are mutually exclusive[/]")
         raise typer.Exit(code=2)
     state = _safe_read()  # ensure state exists before forking
+    if pre_wired or state.pre_wired:
+        # #1440: a configured thumbs database the harvest would refuse stops the
+        # watch here, before it starts or detaches, instead of mid-iteration.
+        from soup_cli.utils.loop_stages import checked_thumbs_db
+
+        try:
+            checked_thumbs_db(state)
+        except ValueError as exc:
+            console.print(f"[red]invalid thumbs database:[/] {escape(str(exc))}")
+            raise typer.Exit(code=2)
     if detach:
         argv = [
             sys.executable,

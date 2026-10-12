@@ -118,8 +118,8 @@ soup loop watch --pre-wired --pack-cans --poll-interval 300
 
 # Learn from Soup's own serving (#1440): the pre-wired harvest also reads the
 # thumbs `soup serve --record-thumbs` captures through POST /v1/thumbs, pairing
-# the latest 👍 and 👎 answer per prompt. The database must stay under cwd; a
-# file the serve has not created yet counts as zero thumbs.
+# the latest 👍 and 👎 answer per prompt. The database must stay under cwd and
+# exist: start the serve first, or `soup loop watch` refuses, naming the field.
 soup serve --model ./base --record-thumbs ./rl.db
 soup loop init registry://abc12 --eval evals/lock.json --baseline registry://prod \
     --pre-wired --thumbs-db ./rl.db
