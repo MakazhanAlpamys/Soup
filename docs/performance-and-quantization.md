@@ -425,6 +425,52 @@ soup train --config soup.yaml
 
 **How it works.** LoRA adapters + their gradients + optimizer state stay resident in VRAM (they are small). The frozen base lives in CPU RAM, page-locked when the machine allows it, and is streamed: each decoder layer is copied into one of two pre-allocated VRAM buffers on a dedicated CUDA stream while the previous layer is still computing, so the load overlaps the compute. Vocabulary-sized `embed_tokens` and an untied `lm_head` use one additional shared slot: the embedding is loaded for the model input, then the same allocation is reused for the output head, whose copy is issued right after the embedding lookup (`StreamPrefetcher.head_prefetch_layer`, default `0`) rather than at the last decoder layer, and the embedding is reloaded into it at the tail of that step's backward pass so the copy overlaps the remaining compute instead of blocking the next step's first lookup. Each decoder layer is read **twice** per step — once in the forward pass and once when the backward pass recomputes it — because `dL/dx = Wᵀ · dL/dy` needs the weights to reach the layers below. That is physics, not an implementation detail, and it is why streaming costs time.
 
+**Early adapter memory check.** Before resolving checkpoint weights or preparing
+layer shards, Soup builds a meta model and applies its normal target resolution
+and PEFT conversion. The resulting adapter shapes account for rectangular
+projections, per-module ranks and fused experts. On CUDA, a persistent adapter
+budget exceeding free VRAM (or `stream_vram_override`) refuses the run before
+checkpoint loading, even when `stream_vram_probe` is enabled.
+
+The breakdown separates adapter weights, gradients and optimizer tensors;
+non-capturable Torch step counters are charged to CPU rather than VRAM.
+Verified profiles currently cover ordinary fp32 AdamW, SGD without momentum,
+Adagrad, RMSprop without momentum/centering, HF Adafactor without a first moment,
+and ordinary LoRA-FA (including storage of frozen A matrices). Non-paged
+bitsandbytes AdamW 8-bit is profiled for version 0.50.2, including its small-tensor
+fp32 threshold and block metadata. GaLore, LoRA+ and other optimizer profiles
+report that the adapter-fit estimate is unavailable; their adapter weights alone
+can still trigger refusal. The later full forecast retains a visibly labelled
+legacy adapter estimate for those unknown profiles.
+
+On refusal, Soup tries two narrower meta-model configurations: attention only,
+and attention plus shared experts. Only a strictly smaller, supported adapter
+budget within the available VRAM is printed. The message gives recalculated
+weights, gradients and optimizer bytes, plus explicit target regexes and
+`training.moe_lora: false` (otherwise MoE target resolution would override the
+selection). Rank patterns and other settings remain unchanged. A shared-expert
+alternative is omitted if no shared-expert adapters are found. These suggestions
+do not change the configuration automatically or establish training quality;
+the full training forecast still applies. Unrecognized architectures/optimizers
+may have no verified alternative.
+
+For the Kimi K2 routed-expert reference, its published configuration has 60 MoE
+layers, 384 experts, hidden size 7168 and expert width 2048. Separate gate/up/down
+LoRA at rank 16 therefore has `60 * 384 * 3 * 16 * (7168 + 2048)` =
+10,192,158,720 parameters. Float32 weights and gradients take 40.769 GB each;
+the two AdamW moments take 81.537 GB, totaling 163.075 GB on CUDA, plus CPU step
+scalars. Thus the task brief's approximately 163 GB describes the combined
+persistent training tensors, not the two Adam moments alone. This is a
+shape-only reference test, not validation of K2 runtime/FP8 support.
+Source: [Kimi K2 configuration](https://huggingface.co/moonshotai/Kimi-K2-Instruct/raw/main/config.json).
+
+Passing the adapter check does not guarantee that training fits: frozen base
+buffers, activations and optimizer temporaries need additional memory. The later
+full streaming forecast remains in place and uses the resolved adapter term when
+available, without counting it twice. CPU runs report the tensor budget without
+a CUDA fit verdict. These checks do not imply that every MoE target pattern
+actually adapts experts on every architecture; the count follows what PEFT builds.
+
 For streamed NF4 on CUDA, Soup follows bitsandbytes' own 4-bit dispatch. When
 bitsandbytes selects its custom fused GEMM, Soup executes that GEMM through a
 checkpoint-visible autograd Function so pooled packed weights cannot outlive their

@@ -581,7 +581,6 @@ class StreamingSetupMixin:
         """
         from dataclasses import replace
 
-        from peft import TaskType
         from transformers import AutoConfig, AutoTokenizer
 
         # BEFORE the tokenizer load, the weight resolve and the shard write:
@@ -610,6 +609,7 @@ class StreamingSetupMixin:
             estimate_stream_store_bytes,
             free_ram_bytes,
             render_stream_panel,
+            resolve_available_vram_bytes,
             resolve_disk_kind,
             resolve_stream_dtype,
             staging_bytes_for,
@@ -618,18 +618,20 @@ class StreamingSetupMixin:
         )
         from soup_cli.utils.layer_stream_runtime import (
             RamSource,
-            build_meta_skeleton,
             build_streamed_model,
             expandable_segments_status,
             extras_resident_bytes,
             large_layer_buffer_bytes,
             large_layer_specs,
             large_layer_store_bytes,
-            quantised_layer_suffixes,
         )
-        from soup_cli.utils.moe import resolve_moe_lora_targets
         from soup_cli.utils.qwen4_ple import external_tensor_bytes
         from soup_cli.utils.spectrum_scan import resolve_model_weights
+        from soup_cli.utils.stream_adapter_preflight import (
+            build_stream_adapter_plan,
+            check_stream_adapter_budget,
+            recommend_stream_adapter_targets,
+        )
         from soup_cli.utils.stripe_roots import resolve_stripe_roots
         from soup_cli.utils.terminal import for_terminal
 
@@ -666,6 +668,31 @@ class StreamingSetupMixin:
         # the shipped default) and thread it into both the sharder (its cache
         # already keys on double_quant) and the skeleton.
         double_quant = tcfg.double_quant_on
+
+        adapter_plan = build_stream_adapter_plan(
+            cfg.base, model_config, tcfg, dtype=dtype, quant=quant,
+            double_quant=double_quant, trust_remote_code=self._trust_remote_code,
+            on_cuda=on_cuda, console=console,
+        )
+        available_adapter_bytes = None
+        if on_cuda:
+            import torch
+
+            available_adapter_bytes = resolve_available_vram_bytes(
+                measured_bytes=int(torch.cuda.mem_get_info(self.device)[0]),
+                override_bytes=tcfg.stream_vram_override,
+            )
+        check_stream_adapter_budget(
+            adapter_plan, available_cuda_bytes=available_adapter_bytes, console=console,
+            recommendations=lambda: recommend_stream_adapter_targets(
+                adapter_plan, cfg.base, model_config, tcfg,
+                available_cuda_bytes=available_adapter_bytes,
+                dtype=dtype, quant=quant, double_quant=double_quant,
+                trust_remote_code=self._trust_remote_code, on_cuda=on_cuda,
+            ),
+        )
+        quant_suffixes = adapter_plan.quant_suffixes
+        lora_config = adapter_plan.lora_config
 
         shard_dir = resolve_shard_dir(cfg.base)
         # R4: extra NVMe roots, validated once here (the ~9 s disk probe runs per volume only
@@ -769,42 +796,6 @@ class StreamingSetupMixin:
                     f"stream_source='auto' to fall back to the NVMe disk tier, "
                     f"free RAM, or pick a smaller base."
                 )
-
-        # The authoritative list of weights to quantise is whatever
-        # replace_with_bnb_linear actually converts, read off a meta skeleton —
-        # not a hard-coded name list that would drift per architecture.
-        #
-        # This builds a second, throwaway skeleton (build_streamed_model makes
-        # its own). Deliberate: a meta skeleton allocates NO weight storage, so
-        # the cost is module-tree construction only, and threading a pre-built
-        # model into build_streamed_model would couple suffix discovery to model
-        # construction for no memory saving.
-        quant_suffixes = ()
-        moe_targets = None
-        # #798: the ONE helper that turns moe_lora into targets, and refuses a
-        # dropout peft cannot honour on fused experts. This path kept its own
-        # copy of the block, which is why it was the one path with no refusal.
-        # The probe is a meta skeleton and is the only model available here, so
-        # the call happens while it is alive rather than at the attach below.
-        if quant == QUANT_NF4:
-            probe = build_meta_skeleton(
-                cfg.base,
-                dtype=dtype,
-                quant=quant,
-                trust_remote_code=self._trust_remote_code,
-            )
-            moe_targets = resolve_moe_lora_targets(probe, tcfg, None, console=console)
-            quant_suffixes = quantised_layer_suffixes(probe)
-            del probe
-        elif tcfg.moe_lora:
-            probe = build_meta_skeleton(
-                cfg.base,
-                dtype=dtype,
-                quant=quant,
-                trust_remote_code=self._trust_remote_code,
-            )
-            moe_targets = resolve_moe_lora_targets(probe, tcfg, None, console=console)
-            del probe
 
         console.print(f"[dim]Preparing layer shards -> {shard_dir}[/]")
         index = shard_checkpoint(
@@ -1015,6 +1006,7 @@ class StreamingSetupMixin:
             large_layer_bytes=large_budget_bytes,
             index=index,
             on_cuda=on_cuda,
+            adapter_budget=adapter_plan.budget,
         )
         console.print(render_stream_panel(plan, forecast_lines))
         console.print(
@@ -1025,23 +1017,6 @@ class StreamingSetupMixin:
             enabled, why_not = expandable_segments_status()
             if not enabled:
                 console.print(f"[dim]expandable_segments allocator hint not enabled: {why_not}[/]")
-
-        from soup_cli.utils.peft_wiring import (
-            build_lora_config,
-            resolve_lora_target_modules,
-        )
-
-        target_modules = resolve_lora_target_modules(
-            model_config, tcfg.lora.target_modules, console
-        )
-        if moe_targets:
-            # Already announced by resolve_moe_lora_targets when the probe ran.
-            target_modules = moe_targets
-        lora_config = build_lora_config(
-            tcfg.lora,
-            target_modules=target_modules,
-            task_type=TaskType.CAUSAL_LM,
-        )
 
         # #366 / #434 — CUDA host pinning is inapplicable on every non-CUDA
         # target. An explicit stream_pin=true is honoured by saying so, not by
@@ -1184,6 +1159,7 @@ class StreamingSetupMixin:
         index,
         on_cuda,
         large_layer_bytes=0,
+        adapter_budget=None,
     ):
         """Predict peak VRAM + bracket throughput, and REFUSE a run that cannot fit.
 
@@ -1238,11 +1214,28 @@ class StreamingSetupMixin:
         # calibrated_logits_bytes_per_element() is floored at LOGITS_BYTES_PER_ELEMENT,
         # so forwarding it here can only raise the budget, never lower it (issue #348).
         calibrated = calibrated_logits_bytes_per_element()
+        adapter_training_bytes = None
+        adapter_params = (
+            self._estimate_adapter_params(tcfg, model_config)
+            if adapter_budget is None else adapter_budget.stored_parameters
+        )
+        if adapter_budget is not None:
+            adapter_params = adapter_budget.stored_parameters
+            if adapter_budget.total is not None:
+                adapter_training_bytes = (
+                    adapter_budget.total.cuda_bytes if on_cuda else adapter_budget.total.cpu_bytes
+                )
+            else:
+                console.print(
+                    "[yellow]The full VRAM forecast uses the legacy 16 B/parameter "
+                    "fallback for an unverified optimizer; it is not a verified fit.[/]"
+                )
         predicted = estimate_stream_peak_vram(
             layer_bytes=layer_bytes,
             buffers=tcfg.stream_buffers,
             extras_bytes=embed_bytes,
-            adapter_params=self._estimate_adapter_params(tcfg, model_config),
+            adapter_params=adapter_params,
+            adapter_training_bytes=adapter_training_bytes,
             vocab_size=vocab,
             hidden_size=hidden,
             intermediate_size=inter,

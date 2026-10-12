@@ -866,9 +866,18 @@ class TestQwen35StreamingSetup:
             {"linear_attn.in_proj_qkv.weight": ((4, 4), "float32")},
         ]
 
+        from peft import LoraConfig as RealLoraConfig
+        from transformers import LlamaConfig, LlamaForCausalLM
+
         def fake_lora_config(**kwargs):
             captured["target_modules"] = kwargs["target_modules"]
-            return types.SimpleNamespace(**kwargs)
+            return RealLoraConfig(**kwargs)
+
+        def fake_meta_skeleton(*_args, **_kwargs):
+            return LlamaForCausalLM(LlamaConfig(
+                hidden_size=64, intermediate_size=128, num_hidden_layers=2,
+                num_attention_heads=4, num_key_value_heads=2, vocab_size=128,
+            )).to("meta")
 
         from soup_cli.utils.layer_stream import build_stream_plan as real_build_stream_plan
 
@@ -904,7 +913,7 @@ class TestQwen35StreamingSetup:
         monkeypatch.setattr("soup_cli.utils.layer_stream.free_ram_bytes", lambda: 1_000_000)
         monkeypatch.setattr(
             "soup_cli.utils.layer_stream_runtime.build_meta_skeleton",
-            lambda *_a, **_k: types.SimpleNamespace(),
+            fake_meta_skeleton,
         )
         monkeypatch.setattr(
             "soup_cli.utils.layer_stream_runtime.RamSource.layer_specs_from_paths",

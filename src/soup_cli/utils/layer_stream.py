@@ -1187,6 +1187,7 @@ def estimate_stream_peak_vram(
     dtype: str = "bfloat16",
     logits_bytes_per_element: Optional[float] = None,
     large_layer_bytes: int = 0,
+    adapter_training_bytes: Optional[int] = None,
 ) -> int:
     """Predicted ``torch.cuda.max_memory_allocated()`` for a streaming step.
 
@@ -1204,6 +1205,11 @@ def estimate_stream_peak_vram(
     checkpoint also holds a private copy of the head (#1049); the caller charges
     that as a second slot, so pass the sum.
 
+    ``adapter_training_bytes`` replaces the legacy adapter_params*16 term when
+    a resolved persistent adapter budget is available; it is not added twice.
+    The historical calibration above describes the legacy/default path, not
+    validation of every alternative optimizer's temporary allocations.
+
     Returns allocator-visible bytes only. The CUDA context and driver reservation
     sit outside the caching allocator (0.85 GB on the dev box, which also drives
     a display), so the fit decision compares this against *measured free VRAM*
@@ -1213,11 +1219,17 @@ def estimate_stream_peak_vram(
     :func:`calibrated_logits_bytes_per_element`; it is floored at the shipped
     constant, so passing it can only raise the prediction.
     """
+    if adapter_training_bytes is not None and adapter_training_bytes < 0:
+        raise ValueError("adapter_training_bytes must be non-negative")
+    adapter_bytes = (
+        estimate_optimizer_bytes(adapter_params)
+        if adapter_training_bytes is None else adapter_training_bytes
+    )
     return (
         layer_bytes * buffers
         + large_layer_bytes
         + extras_bytes
-        + estimate_optimizer_bytes(adapter_params)
+        + adapter_bytes
         + STREAM_FIXED_SLACK_BYTES
         + estimate_activation_bytes(
             hidden_size=hidden_size,
