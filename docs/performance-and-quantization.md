@@ -1343,7 +1343,7 @@ Cross-validator ordering picks the most actionable error: `quantization_aware='f
 
 ## LF / Axolotl Quant Parity (v0.53.0)
 
-- `bnb_4bit_use_double_quant` — controls BNB's double-quantization. **Defaults to `true`** (matching every 4-bit load path — resident, layer-streaming, and the `soup merge` 4bit save formats), and is now honoured everywhere (#321): set `false` to disable it and it actually reaches BNB. Explicitly setting it requires `quantization: 4bit`; combinations with the Quant Menu formats (gptq / awq / hqq:Nbit / aqlm / eetq / mxfp4 / fp8) are rejected at config load.
+- `bnb_4bit_use_double_quant` — controls BNB's double-quantization. **Defaults to `true`** (matching every 4-bit load path — resident, layer-streaming, and the `soup merge` 4bit save formats), and is now honoured everywhere (#321): set `false` to disable it and it actually reaches BNB. The one exception is a block-scaled FP8 source checkpoint under layer streaming: there an unset value resolves to `false` and an explicit `true` is refused (see "FP8 source checkpoints" above). Explicitly setting it requires `quantization: 4bit`; combinations with the Quant Menu formats (gptq / awq / hqq:Nbit / aqlm / eetq / mxfp4 / fp8) are rejected at config load.
 - `quantize_reward_model: true` — live for `ppo` and `reward_model` training, extending the v0.40.5 Quant Menu wiring to reward models (`trainer/ppo.py`, `trainer/reward_model.py`).
 - `quantize_ref_model: true` — accepted for reference-policy tasks (`dpo / ipo / simpo / orpo / bco / kto / preference / grpo / ppo`), but read by nothing. Staged field: warns in v0.76 and is refused as of v0.77 (#808).
 
