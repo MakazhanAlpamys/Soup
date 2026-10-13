@@ -1832,9 +1832,9 @@ def train(
                         f"[dim]Fetched {cfg.base} from hub={hub_name} → "
                         f"{local_path}[/]"
                     )
-                # Use ``model_copy(update=...)`` so the Pydantic field
-                # validators on ``base`` rerun (matches v0.33.0 #47 / v0.40.0
-                # Part B immutability policy).
+                # model_copy replaces base without validation and leaves the
+                # original config untouched. local_path comes from download_repo
+                # under the cache directory checked above, so no revalidation is needed.
                 cfg = cfg.model_copy(update={"base": local_path})
             except ImportError as exc:
                 console.print(f"[red]{_markup_escape(str(exc))}[/]")
