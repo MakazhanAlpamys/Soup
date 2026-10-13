@@ -65,8 +65,8 @@ NF4 达到 **952 MHz 下 119.6 tok/s，峰值 3.32 GB**（修复前）——与�
 以同样的 3.32 GB 独立复现出 113.00 tok/s。（两个数字都测自 v0.72.2，早于 v0.73.0 那次
 在 32B 上付出 −4.8% 代价的正确性修复。修复后的复测在另一台 RTX 3050 Laptop 4 GB
 上完成（@umran666，#1103），结果是 **1935–1957 MHz 下 208.6 tok/s，峰值 2.40 GB**。这相当于
-同场 GEMM 上限的 59%，而修复前是 68%：按单位时钟频率算大约慢 14%，所以表面上 1.74x 的提升来自
-时钟频率，而不是加速。large-layer streaming 也改变了两行之间的内存占用方式，因此连这个比例也不是
+同场 GEMM 上限的 59%，而修复前是 68%：按单位时钟频率折算大约慢 14%，所以表面上 1.74x 的提升来自
+时钟频率，而不是加速。large-layer streaming 也改变了两组数据之间的内存占用方式，因此连这个比例也不是
 同口径的对比——[完整记录](benchmarks/gate-v0.72.2-nf4.md)。）需显式开启
 （`stream_layers: true`），仍是 BETA——
 [工作原理](docs/performance-and-quantization.md#layer-streaming-beta-v0720-nf4-v0722-disk--wider-archs-v0723-preference-losses-v0724) ·
@@ -75,7 +75,7 @@ NF4 达到 **952 MHz 下 119.6 tok/s，峰值 3.32 GB**（修复前）——与�
 然后断言流式模型与常驻模型逐位一致）
 
 <p align="center">
-  <a href="https://youtu.be/T1LCErE943E"><img src="docs/assets/layer-streaming.gif" alt="在 4 GB 卡上对 Llama-3.1-8B 执行 soup train 的预检：3.60 GB 基座固定在内存中跨 32 层流转，配两个 113 MB 显存缓冲，实测峰值 3.32 GB、119.6 tok/s，停在 4 GB 线以内（修复前的一行，测自 v0.72.2，952 MHz；#331 修复后的一行见下方说明）"></a><br>
+  <a href="https://youtu.be/T1LCErE943E"><img src="docs/assets/layer-streaming.gif" alt="在 4 GB 卡上对 Llama-3.1-8B 执行 soup train 的预检：3.60 GB 基座固定在内存中跨 32 层流转，配两个 113 MB 显存缓冲，实测峰值 3.32 GB、119.6 tok/s，停在 4 GB 线以内（修复前的那组数据，测自 v0.72.2，952 MHz；#331 修复后的那组数据见下方说明）"></a><br>
   <sub>Llama-3.1-8B-Instruct + NF4、LoRA、batch 1、seq 512，RTX 3050 Laptop 4 GB——<b>峰值 3.32 GB，119.6 tok/s</b>，952 MHz（修复前，v0.72.2；#331 修复后：1935 MHz 下 208.6 tok/s，2.40 GB，不可直接比较，@umran666，#1103）。<a href="https://youtu.be/T1LCErE943E">完整视频（90 秒）</a></sub>
 </p>
 
@@ -443,8 +443,8 @@ v1 以来的任何实测数字也没有变。v3 做的是**撤回一个我们曾
   成立；复现结论以更弱的形式仍然成立——约束对两台机器是共同的，而不是 GPU 的算力。
 - **在完全不同硬件上的复现**（v2 新增）：RTX 3050 上 119.6 tok/s（952 MHz 下），对 H100 上
   113.00 的中位数，同为 3.32 GB 峰值。两者都早于 #331 修复，也是论文报告的数字。#331 修复后的
-  一行（@umran666，#1103）是 1935–1957 MHz 下 208.6 tok/s，峰值 2.40 GB，为同场 GEMM 上限的
-  59%，修复前为 68%：表面上 1.74x 的提升来自时钟频率，而不是加速；两行之间的内存占用方式也变了，
+  那组数据（@umran666，#1103）是 1935–1957 MHz 下 208.6 tok/s，峰值 2.40 GB，为同场 GEMM 上限的
+  59%，修复前为 68%：表面上 1.74x 的提升来自时钟频率，而不是加速；两组数据之间的内存占用方式也变了，
   因此连这个比例也不是同口径的对比
   （[完整记录](benchmarks/gate-v0.72.2-nf4.md)）。
 - **发现并修复了一个静默的错误梯度缺陷。** NF4 单层超过 ~165 MiB 时，前向仍然
