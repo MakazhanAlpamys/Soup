@@ -1,0 +1,548 @@
+# Referencia de comandos
+
+> 🇪🇸 Traducción al español de [`commands.md`](commands.md). Ante cualquier duda, manda el original en inglés.
+
+[← Volver al README de Soup](../README.md)
+
+> La lista completa de comandos de `soup`.
+
+## Todos los comandos
+
+```
+soup init [--template chat|code|...|audio]       Create config
+soup init --template hipaa|soc2|eu-ai-act|sr-11-7  Compliance-shaped starting config + the commands for that regime (v0.71.35)
+soup autopilot [--model <id>] [--data d.jsonl] [--goal <g>]  Zero-config: pick task/quant/LR/epochs (prompts when omitted)
+soup advise <data> --goal "..."               Pre-flight decision: PROMPT_ENG / RAG / SFT / DPO / GRPO — run BEFORE spending GPU hours
+soup advise compare                           Show prior verdicts from advise history
+soup advise explain                           Rubric + evidence trail of the last verdict
+soup fetch <name>                             Fetch a ready-to-edit example config from the bundled catalog
+soup train --config soup.yaml                 Start training
+soup train --config soup.yaml --resume ./output/checkpoint-100  Resume from local checkpoint (not with training.relora_steps)
+soup train --config soup.yaml --tensorboard   Train with TensorBoard logging
+soup train --config soup.yaml --replay old.jsonl --replay-ratio 0.1  Continual-learning rehearsal: interleave old data so the new task doesn't erase it (sft/pretrain)
+soup train --config soup.yaml --fsdp full_shard  Train with FSDP2
+soup train --config soup.yaml --deepspeed zero++  DeepSpeed ZeRO++ (quantized comms)
+soup train --config soup.yaml --gpus auto|N      Launch on local GPUs through Accelerate
+soup train --config soup.yaml --gpus 8 --nodes 2 --node-rank 0 --master-addr 10.0.0.10 --master-port 29500  Multi-node launch; run on each node with its own rank
+soup train --config soup.yaml --gpus 4 --no-reexec  Print the launch command without running it
+soup train --config soup.yaml --gate evals/gate.yaml  Eval-gated training
+soup train --config soup.yaml --push-as user/repo  Auto-push each checkpoint to HF as branch
+soup train --config soup.yaml --push-as user/repo --hf-resume  Resume from latest HF checkpoint branch (not with training.relora_steps)
+soup train --config soup.yaml --find-lr        LR range finder: write recommended LR JSON
+soup train --config soup.yaml --cloud modal|lambda --gpu a100  Render a cloud GPU controller (plan-only; --cloud-submit submits live)
+soup infer --model ./output --input p.jsonl --output out.jsonl [--batch-size N]   Batch inference; default batch size is 1; fp16/bf16 batching may not be bit-exact with batch size 1
+soup infer --model ./output --input p.jsonl --output out.jsonl --cuda-graphs   Experimental CUDA graph decode (Qwen2/Llama, one GPU, PyTorch >= 2.14; batch size 1 only)
+soup infer --task asr --model <whisper|adapter> --input a.jsonl --output o.jsonl [--audio-dir d --asr-language en --asr-task transcribe|translate]  Whisper transcription + WER/CER
+soup chat --model ./output                    Interactive chat
+soup infer|chat|diff ... --device cpu|cuda|cuda:N|mps  Pick where the model loads (see below)
+soup push --model ./output --repo user/name   Upload to HuggingFace
+soup push --model ./output --repo user/name --collection user/coll-abc123  Add to HF Collection
+soup merge --adapter ./output                 Merge LoRA with base model
+soup merge --adapter ./output --save-format 4bit --no-double-quant  Save a BNB-4bit merge with double-quantization disabled (default on; #321)
+soup merge-sharded-fsdp-weights ./shards -o merged.safetensors  Consolidate FSDP shards into one safetensors (v0.71.14; --plan-only previews)
+soup delinearize-llama4 ./src --target ./out [--num-experts N] [--plan-only]  Live Llama-4 fused-expert reshape [E*din,dout] -> [E,din,dout] + sidecar copy (v0.71.21)
+soup spectrum scan --model <id|path> --top-percent 50 [--modules mlp,attn] [-o patch.yaml]  Spectrum SNR scan (no model load) -> training.unfrozen_parameters YAML patch (v0.71.23)
+soup train --config sft.yaml  # training.lisa_enabled: true [lisa_num_layers lisa_interval_steps lisa_train_embeddings]  LISA layerwise importance sampling — full-FT quality at LoRA-like memory; lisa_train_embeddings: false freezes embeddings+head+norm for the memory saving (sft or pretrain/transformers/text/quantization=none) (v0.71.34, pretrain #307, #377)
+soup train --config sft.yaml  # training.stream_layers: true [stream_source stream_ngram_source stream_buffers stream_read_ahead]  BETA layer streaming — the frozen base streams from CPU RAM/NVMe one decoder layer at a time; Qwen4-Exp PLE rows can stream read-only from original safetensors; embed_tokens + untied lm_head reuse one large-layer device slot; quantization: 4bit streams validated decoder families as NF4, ~4x smaller (sft/dpo/orpo/simpo/kto on transformers+text, 10 archs; grpo/ppo permanently excluded) (v0.72.0; NF4 v0.72.2; disk+batch+accum v0.72.3; preference losses v0.72.4; Qwen4 PLE #602)
+soup export --model ./output --format gguf    Export to GGUF (Ollama)
+soup export --model ./output --deploy ollama  Export GGUF + auto-deploy to Ollama
+soup export --model ./output --format onnx    Export to ONNX
+soup export --model ./output --format tensorrt  Export to TensorRT-LLM
+soup export --model ./output --format awq --calibration-data cal.jsonl  Export to AWQ (4-bit; deprecated, removed in Soup v0.77)
+soup export --model ./output --format gptq --calibration-data cal.jsonl  Export to GPTQ (4-bit; deprecated, removed in Soup v0.77)
+soup deploy ollama --model m.gguf --name x    Deploy GGUF to Ollama
+soup deploy ollama --list                     List Soup-deployed models
+soup deploy ollama --remove <name>            Remove model from Ollama
+soup deploy hf-space --model user/m --space user/s --template gradio-chat|streamlit-chat  Create HF Space
+soup deploy autopilot --target mac-m3|rtx-4090-24gb|...  Pick PEFT+quant+spec-decoding for a hardware target
+soup deploy autopilot --list                  List all 10 deploy profiles
+soup agent synth --spec api.yaml -o ds.jsonl  Parse OpenAPI/MCP/GraphQL spec into a tool-calling SFT dataset
+soup agent train --spec api.yaml --base model  One-shot synth + planned soup train invocation
+soup agent eval --spec api.yaml --predictions p.jsonl  Score predicted tool-calls vs spec catalog
+soup agent eval --spec api.yaml --predictions p.jsonl --sandbox  Execute each tool-call in the RLVR sandbox: ok/tool_error/timeout/arg_error
+soup eval benchmark --model ./output          Evaluate on standard benchmarks
+soup eval aider --model openai/gpt-4.1 --output ./aider-results --exercises-dir ./polyglot-benchmark  Run Aider Polyglot in Docker
+soup eval custom --model ./output --tasks eval.jsonl   Custom eval tasks from JSONL
+soup eval judge --target resp.jsonl           LLM-as-a-judge evaluation
+soup eval auto --config soup.yaml             Auto-eval from config
+soup eval compare <run1> <run2>               Compare eval results
+soup eval leaderboard                         Local model leaderboard
+soup eval human --model-a ./a --model-b ./b --input p.jsonl   Human A/B evaluation
+soup eval gate --suite gate.yaml              Run eval-gate suite standalone
+soup eval quant-check --before X --after Y --tasks t.jsonl  Before/after quantization eval (OK/MINOR/MAJOR verdict)
+soup eval design <data> --goal "..."          Draft an eval suite from training data + goal
+soup eval discover <data>                       Discover a held-out canary set
+soup eval lock <design>                         Freeze a design as a checksummed suite
+soup eval coverage <design> --task <task>       Coverage / gap analysis for an eval suite
+soup eval against <baseline_run_id> --candidate <run_id>  Run-vs-run regression check (paired bootstrap)
+soup eval gate-install --baseline <run_id>      Install a pre-push regression gate
+soup eval behavior <run_id>                     Behaviour battery pre/post diff
+soup eval capability <run_id>                   Capability profile (MMLU-Pro / GPQA / AIME ...)
+soup eval checklist <spec>                      CheckList MFT / INV / DIR tests
+soup eval irt-subset <responses>                Minimum-cost eval subset via IRT
+soup diagnose <run-id>                        Post-training report card: forgetting / refusal / format / mode collapse / memorization / contamination
+soup serve --model ./output --port 8000       OpenAI-compatible API server
+soup serve --model ./output --backend vllm    vLLM backend (2-4x throughput)
+soup serve --model ./output --backend sglang  SGLang backend
+soup serve --model ./output --backend mii     DeepSpeed-MII backend (live)
+soup serve --model ./output --speculative-decoding draft-model  Speculative decoding
+soup serve --model <m> --auto-spec            Auto-pair draft model for speculative decoding
+soup serve --model <m> --auto-quant           Refuses until candidates can be loaded and measured; quantize explicitly instead
+soup serve --model <m> --backend vllm --prefix-cache  vLLM prefix caching (RAG/agent)
+soup serve --model <m> --structured-output json --json-schema s.json  Constrained output
+soup serve --model <m> --structured-output regex --regex-pattern '...'  Regex-constrained output
+soup serve --model <m> --dashboard            Live dashboard + /metrics endpoint (transformers + vllm only; warns on sglang/mii)
+soup serve --model <m> --backend vllm --max-model-len 8192  Cap the vLLM sequence length (lower it when the KV cache does not fit)
+soup serve --model <m> --trace --trace-endpoint http://localhost:4317  OpenTelemetry tracing
+soup serve --model <m> --trace-log ./serve.jsonl  Per-request JSONL log + rotation + secret redaction
+soup serve --model <m> --record-thumbs ./rl.db  Capture 👍/👎 feedback into local-RL SQLite + POST /v1/thumbs (transformers)
+soup serve --model <m> --kv-cache-type bf16|f16|q8_0|fp8  KV-cache type (transformers; q8_0 needs hqq; fp8 = vLLM+Hopper only) (v0.71.14)
+POST /v1/adapters/activate/<name>             Hot-swap active LoRA adapter
+soup sweep --config soup.yaml --param lr=...  Hyperparameter search
+soup sweep --config soup.yaml --sweep-config sweep.yaml  Sweep from a standalone strategy/n_runs/seed/params file
+soup diff --model-a ./a --model-b ./b         Compare two models
+soup data inspect <path> [--image-dir <dir>]  View dataset stats; optionally override vision image directory
+soup data validate <path>                     Check format (auto-detect)
+soup data doctor <path> --model <id>          Chat-template compat report: 8 checks, OK/MINOR/MAJOR
+soup data doctor <path> --model <id> --show-mask N  Per-token trained/masked colouring via the real collator
+soup data lint <path>                         Preference-data linter: length bias, near-dups, chosen==rejected
+soup data clean <path> [-o out]               Sanitize dataset: control chars, zero-width spaces, empty turns
+soup data convert <path> --to chatml          Convert between formats
+soup data merge data1.jsonl data2.jsonl       Combine datasets
+soup data dedup <path> --threshold 0.8        Remove duplicates (MinHash)
+soup data dedup <path> --semantic             Dedup by embedding cosine — catches rewordings MinHash misses ([train])
+soup data topics <path> [--clusters N|auto]   Cluster + c-TF-IDF labels + coverage table + thin-topic warnings ([train])
+soup data canary insert <path> -o <out> --manifest <m>  Insert K secrets to later prove memorization (manifest = SECRET)
+soup data canary check --manifest <m> --base <model>    Rank each secret's loss vs never-inserted controls; exit 2 = leak
+soup data stats <path>                        Extended statistics
+soup data generate --prompt "..." --count 100  Generate synthetic data
+soup data generate ... --provider ollama      Use local Ollama instance
+soup data generate ... --provider anthropic   Use Claude API
+soup data generate ... --provider vllm        Use local vLLM server
+soup data generate ... --template code        Domain templates (code/conversation/qa/preference/reasoning)
+soup data generate ... --quality-pipeline     Auto validate + filter + dedup
+soup data augment <path> --strategy rephrase|translate|style [--provider ollama|vllm --model <m> --base-url <url>]  LLM-driven augmentation
+soup data from-traces --logs l.jsonl --format langchain --signal thumbs_up --output p.jsonl  Preference pairs from traces
+soup data from-traces ... --judge --min-confidence 0.7  LLM-judge confidence filter
+soup data review prefs.jsonl --sample 10      Preview preference pairs
+soup data filter <path> --coherence 0.3       Quality filter (perplexity/coherence)
+soup data sample <path> --n 1000             Random sample subset
+soup data sample <path> --n 1000 --strategy diverse  Cluster-based diverse sampling
+soup data sample <path> --n 1000 --strategy hard     Sample hardest examples
+soup data sample <path> --pct 10             Sample by percentage
+soup data split <path> --val 10 --test 10    Split into train/val/test
+soup data split <path> --val 500 --absolute  Split with absolute counts
+soup data split <path> --val 10 --stratify category  Stratified by field
+soup data split <path> --val 10 --stratify-semantic --num-clusters 5  Semantic stratified split
+soup data search "code instructions"         Search HuggingFace Hub for datasets
+soup data search --sort likes --limit 10     Sort and paginate search results
+soup data preview teknium/OpenHermes-2.5     Preview remote dataset metadata
+soup data download user/dataset -o data.jsonl  Download HF dataset as JSONL
+soup data download user/ds --samples 1000    Stream first 1000 samples
+soup data register --name my-ds --path d.jsonl --format alpaca  Register dataset
+soup data unregister --name my-ds            Remove from registry
+soup data push --input d.jsonl --hf-dataset user/name  Upload local JSONL as HF dataset
+soup data push --input d.jsonl --hf-dataset u/n --hub modelscope|modelers  Upload to an alternative hub
+soup data registry                           List all registered datasets
+soup data demo                                List bundled demo JSONL fixtures
+soup data demo alpaca_demo --output ./d.jsonl  Copy a bundled demo JSONL fixture
+soup data ingest <file>                         PDF/DOCX/MD/TXT -> JSONL (one row per page/heading)
+soup data preprocess <config>                   AOT-tokenize and cache for reuse across runs
+soup data recipe <path>                         Validate / execute a Data Recipe DAG
+soup data mix                                 BETA mixture-weight optimiser (proxy runs)
+soup data forge --docs ./docs --task sft --target-rows 1000  Synthetic data pipeline + provenance
+soup data forge --docs ./docs --hub modelscope --teacher owner/name  Pre-fetch the teacher from an alternative hub
+soup data score --input rows.jsonl            Composite quality scorecard (PII + keyword triage + lang + edu)
+soup data score --input rows.jsonl --benchmark-file benchmark.jsonl --threshold 0.8  Score with real n-gram comparison texts
+soup data score ... -b gsm8k --benchmark-file benchmark.jsonl  Labels are validated only, not corpus selectors; all file texts are compared
+soup data decontaminate --input rows.jsonl --benchmark-file benchmarks.jsonl  Drop rows overlapping the benchmark texts in that file
+soup data toxicity --input rows.jsonl -o tox.jsonl  Flag abuse-keyword matches (heuristic)
+soup data langdetect --input rows.jsonl -o tagged.jsonl  Tag each row with language code
+soup data pii --input rows.jsonl -o pii.jsonl  Flag rows containing email/phone/SSN/credit-card
+soup data educational --input rows.jsonl -o scored.jsonl  Score educational value per row
+soup train --config soup.yaml --tracker mlflow  MLflow / SwanLab / Trackio integration
+soup profile --config soup.yaml              Estimate memory/speed before training
+soup profile --config soup.yaml --gpu a100   Estimate for specific GPU
+soup profile --config soup.yaml --json       Machine-readable output
+soup cost --config soup.yaml                 Estimate training cost in USD across providers
+soup cost --config soup.yaml --gpu H100      Estimate training cost for specific GPU
+soup adapters list ./output/                 Scan for LoRA adapters
+soup adapters info ./output/checkpoint-500/  Show adapter metadata
+soup adapters compare adapter1/ adapter2/    Compare two adapters
+soup adapters audit <adapter> --config soup.yaml [--json]   Compare a finished run's adapter_config.json against the config that started it (#762); a setting the record cannot speak to is 'unknown', never 'ok'. Exit codes 0=agreement, 2=DIVERGED, 1=usage error, so CI can tell a verdict from a mistyped path.
+soup adapters branches                        List snapshotted branches
+soup adapters checkout <name>                   Restore a snapshotted branch's config
+soup adapters diff <a> <b>                      Per-layer ΔW Frobenius diff + effective-rank drift
+soup loop init <model> --eval <s> --baseline <b> [--pre-wired]  Create .soup/loop.yaml (data flywheel; --pre-wired = real stages)
+soup loop status                              Counters + status + pre_wired flag
+soup loop watch [--detach] [--max-iterations N] [--pre-wired] [--pack-cans]  Harvest → train → gate → deploy daemon (pre-wired stages + Soup Can packing)
+soup loop pause                              Atomic status flip: pause watch daemon at next iteration boundary
+soup loop resume                             Atomic status flip: resume a paused loop
+soup loop canary <adapter> --traffic 5%      Route keyed serve traffic to a loaded adapter; watch auto-rolls back on MAJOR
+soup loop replay [<iter-id>] [--extract <dir>]  Replay / unpack a recorded iteration manifest
+soup serve --model m --adapters chat=./c --adapters code=./d  Multi-adapter serving
+soup migrate --from llamafactory config.yaml  Import config from LLaMA-Factory
+soup migrate --from axolotl config.yml        Import config from Axolotl
+soup migrate --from unsloth notebook.ipynb    Import config from Unsloth notebook
+soup migrate --from llamafactory c.yaml --dry-run  Preview without writing
+soup recipes list                             List all 170 ready-made recipes
+soup recipes show llama3.1-8b-sft            Print recipe YAML
+soup recipes use llama3.1-8b-sft             Copy recipe to soup.yaml
+soup recipes search "reasoning"              Search by keyword/task/size
+soup recipes verify                           Attach every shipped config on the meta device; exit 2 if one cannot (#1116)
+soup recipes verify --config soup.yaml        Same check for one config, before downloading weights
+soup recipes verify --no-templates            Recipes only; skip src/soup_cli/templates and examples/
+soup recipes verify --json                    One JSON row per config on stdout; advisories go to stderr
+soup registry push --run-id <id> --name n --tag v1  Register run
+soup registry list [--name n] [--tag v1]     List registry entries
+soup registry show <ref>                      Entry details + artifacts + ancestors
+soup registry diff <a> <b>                    Side-by-side config + eval delta
+soup registry search "medical"                Search name/base/task/notes
+soup registry promote <ref> --tag prod        Tag an entry (e.g. promote to prod)
+soup registry delete <ref> --yes              Remove entry (cascades)
+soup history <name>                           Lineage DAG tree for a name
+soup can pack --entry-id <id> --out r.can     Pack registry entry as .can
+soup can inspect r.can                        Preview manifest without extracting
+soup can verify r.can                         Verify schema + config parseability
+soup can fork r.can --out fork.can --modify training.lr=5e-5  Fork + re-pack
+soup can run r.can --yes [--deploy] [--env-capture env.txt]  Run a .can end-to-end
+soup can publish r.can --hf-hub user/name    Publish .can to HF Hub as dataset
+soup runs                                     List training runs
+soup runs show <run_id>                       Run details + loss graph + cost (shows an Error: line for failed runs, and distinguishes terminated/launching from running; #767)
+soup runs compare <run_1> <run_2>             Compare two runs
+soup runs replay <run_id>                     Replay summary + loss curve from history (also plots a benchmark-score curve when the metric lives in eval_results)
+soup runs clean [<run_id>] [--all]              Clean redundant checkpoint files
+soup runs curriculum-curve <run_id>             BETA curriculum bucket-weight plot
+soup runs delete <run_id>                       Delete a run and its metrics
+soup why [run_id]                             Explain training anomalies (heuristic)
+soup rewind [run_id] [--step N]               Name the dataset rows behind a loss spike
+soup ship --base <m> --adapter <lora> --task-eval t.jsonl  SHIP / DON'T-SHIP verdict: task win AND no regression on the bundled suite (exit 0=SHIP / 2=DON'T / 3=usage / 1=runtime) (v0.71.25; leg-2 real + usage-off-2 v0.71.38)
+soup ship --evidence ev.json [--output v.json]  Decide offline from pre-computed scores (no model load)
+soup ship ... --task-mode judge_score --judge-model ollama://llama3.1  Leg-1 via LLM-as-a-judge
+soup ship ... --task-mode pairwise --judge-model ollama://llama3.1  Leg-1 via swap-debiased judge win-rate (base=0.5) (v0.71.31)
+soup ship ...  # leg-2 default = 8 bundled offline suites (MCQ/arithmetic/over_refusal + tool_call/format_json/safety, extraction scorer, ~40 items each) (v0.71.38; +mini_over_refusal v0.73.2)
+soup ship ... --general-suite mmlu,gsm8k --baseline base.json  lm-eval leg-2 override + recorded base scores
+soup ship ... --emit-evidence ev.json  Re-serialise the scores as replayable --evidence input (output-is-input, #312) (v0.71.39)
+soup ship ... --config soup.yaml  Read eval.ship gate defaults; --evidence GATES on provenance.config_sha and numerics family, --emit-evidence STAMPS both (v0.71.39 / #367); live-loads base/tuned at training.quantization when it is 4bit/8bit, else full precision (#367)
+soup ship ... --push owner/repo#N  Post the verdict as a GitHub PR comment (best-effort; never flips the exit code) (v0.71.39)
+soup ship ... --noise-floor N  Re-run base model N times; per-axis floor = max-min spread; gate at max(threshold, floor); leg-1 measured in every --task-mode (judge modes cost N judge passes, floor labelled decode+judge) (v0.73.2)
+soup card <registry-id> -o MODELCARD.md       HF model card from a registry entry: training config, evals, hashes, lineage, artifacts (v0.71.35)
+soup push --model ./out --repo you/m --card <registry-id>  Upload that registry-driven card as the README (HF only) (v0.71.35)
+soup ci init [--data d.jsonl --suite s.yaml --evidence ev.json] [--config soup.yaml] [--branch main --python 3.11] [--force]  Write .github/workflows/soup-gate.yml: data validate -> expect -> ship gate on every PR (v0.71.35); --config binds the gate to a committed config so it refuses stale evidence (v0.71.39)
+soup mcp serve                                MCP server over stdio (drive Soup from Claude Code / Cursor / Cline; requires [mcp] extra) (v0.71.28)
+soup mcp serve --allow-mutating               Also expose plan-only train_start / export tools (never execute) (v0.71.28)
+soup mcp serve --allow-execute                Implies --allow-mutating; enables train_execute / export_execute via server confirmation tokens
+soup mcp serve --transport sse [--host H --port N]  Serve the same registry over HTTP+SSE instead of stdio; binds 127.0.0.1 and requires a Bearer token (#296)
+soup mcp serve --transport http [--auth-token T]    Same over the streamable-HTTP transport (/mcp); --auth-token pins the token instead of generating one (#296)
+soup mcp serve --transport sse|http --allow-execute   REFUSED - gated execution spawns real processes and is stdio-only (#296)
+soup mcp runs reconcile [--expunge-launching] [--older-than-seconds N]  Clear stale launching rows left by a crashed server; refuses if any candidate PID is still alive (#402)
+soup shrink --model <id|path> --drop-ratio 0.25 --calib c.jsonl -o shrunk  Depth-prune least-important layer block + SHIP/DON'T-SHIP ppl verdict (exit 0/2/1) (v0.71.29)
+soup shrink ... --drop-layers N --heal h.jsonl --heal-steps 200 --device cpu  Drop N layers + distill-heal (fuse LoRA back to one dense model)
+soup shrink ... --tolerance 0.10 --plan-only [--attach-to-registry <id>]  Ppl-regression tolerance / print importance table only / registry attach
+soup draft measure --target <m> --draft <d> --prompts p.jsonl  Draft acceptance rate + real plain-vs-assisted tok/s (exit 0 measured — a best-effort assisted-arm failure stays 0 and is recorded as `assisted_status`; 2 below `--min-acceptance`; 1 error before results) (v0.71.33)
+soup draft measure ... --min-acceptance 0.6 -o report.json  Exit 2 below the floor (CI gate) / write the JSON report (fields incl. `assisted_status`: pending/complete/untimed/crash/interrupted)
+soup draft measure ... --sweep-k 1,2,3,5,8  Time assisted generation at each draft length (at most 8, each 1..64). The JSON adds `tok_s_draft`, `draft_status`, `latency_ratio`, `breakeven_acceptance`, `modelled_best_k`, `modelled_speedup_best_k`, `k_sweep` and `measured_best_k` (#843)
+soup draft distill --target <tuned> --draft-base <tiny> --data d.jsonl -o draft/  Distil a DENSE speculative-decoding draft + register it (v0.71.33)
+soup draft distill ... --steps N --device cpu --force --plan-only  Training budget / device / overwrite -o / render the config only
+soup draft list                               List local drafts that `soup serve --auto-spec` will pick up (v0.71.33)
+soup reward synth refs.jsonl -o reward.py     Synthesize a deterministic reward verifier from gold outputs (v0.71.40)
+soup reward synth ... --kind numeric|json_schema|regex|tool_call  Force a verifier family (default: auto-detect)
+soup reward synth ... --plan-only             Report the induced spec + calibration plan; write nothing
+soup reward synth ... --output-report r.json --min-discrimination 0.5  Save the calibration JSON / set the refusal threshold (exit 0 emit / 2 refuse / 1 error)
+soup reward stress reward.py --references golds.jsonl  Adversarially probe a verifier for gameability — classic and structure-preserving attacks (v0.71.41)
+soup reward stress verifiable --verifiable-domain math --references golds.jsonl  Probe a builtin verifier instead of a .py file
+soup reward stress ... --attacks empty,length,repetition,sentinel,wrapped_junk,answer_spray --sentinel GOLD --threshold 0.5 --max-gameable 0.0  Tune the attack set / accept threshold / tolerance
+soup reward stress ... --output-report r.json  Save the per-attack report JSON (exit 0 robust / 2 gameable / 1 error)
+soup tui                                      Full-screen Textual dashboard (requires [tui] extra)
+soup train --config soup.yaml --profile       Record torch.profiler trace to <output>/profiles/
+soup --log-level quiet|normal|verbose|debug   Global logging tier (Rich-formatted)
+soup ui [--port 7860]                         Web UI (experiments, training, data)
+soup ui --public [--auth-token T]             Phone-scannable Web UI (v0.53.9); /docs + /openapi.json are loopback-only
+soup tokenizer train --input c.jsonl --vocab-size N  Train BPE tokenizer (v0.53.9)
+soup bench <model>                            Inference speed + memory (same as `soup bench infer <model>`)
+soup bench infer <model> --p50 --p95          Bench with tail-latency percentiles (v0.53.9)
+soup bench infer <model> --cuda-graphs         Bench with experimental CUDA graph decode
+soup bench train --config soup.yaml --steps 20 --warmup 3 -o bench-train.json  Timed SFT steps; exits 1 when the model was not training (#836)
+soup bench <model> --backend auto             Auto-detect transformers/mlx backend (v0.53.9)
+soup serve --model ./output --reasoning-parser deepseek-r1   Strip <think> blocks from responses (v0.53.9)
+soup doctor [--nccl] [--disk] [--config F]    Check environment (optionally check NCCL bandwidth, media type; --disk ~9s cold / ~2.4s warm).
+                                              --config also reports which settings that config switches on (a `false` or unset value is not reported; `seed: 0` is) that its task/backend does not read (#755, #1330); exits 2 if it cannot be read, and exits 1 when a required core dependency is missing, or when any installed package is beyond its declared ceiling — core or [train] (#828, #874).
+soup monitor                                  NVIDIA / Apple Silicon GPU monitor: util / temp / VRAM / power
+soup quickstart [--dry-run]                   Full demo
+soup plugins list|install|enable|disable      Manage Soup plugins
+soup llama cli|mtmd-cli|gguf-split|server|quantize ...  Proxy to the llama.cpp binaries
+soup quantize <model> --to <fmt>              Quantize a model — ergonomic alias for `soup export --format <fmt>`
+soup bom emit --name <n> --base-sha <hex> --config-sha <hex> --format cyclonedx|spdx|both  CycloneDX ML-BOM / SPDX AI bill of materials
+soup adapters scan <adapter>                  Spectral backdoor scan (rank-1 dominance + outlier detection)
+soup adapters sign <adapter> [--backend unsigned|ed25519|sigstore] [--key <pem>|--generate-key <pem>] [--interactive-oidc]  Merkle manifest + ed25519/Sigstore sign
+soup adapters verify <adapter> [--strict] [--public-key <pem>] [--cert-identity <san> --cert-oidc-issuer <url>]  Verify manifest + ed25519/Sigstore signature
+soup adapters check <adapter> [--json]        Is the adapter trained? Total/per-layer ||dW||_F, live fraction, all-zero lora_B, leaked .inner. keys; ends in alive or inactive: <reason> (exit 0 / 2; 1 = usage error)
+soup adapters check-safetensors <adapter> [--strict]  Refuse pickle / PyTorch-classic weights
+soup adapters merge ... [--license <id>] [--license-override <reason>] [--allow-unscanned]  License + backdoor-scan gates (auto-detect license; scan FAIL refused)
+soup adapters arithmetic "coder + 0.5*math - toxic" --adapter coder=<p> --adapter math=<p> --adapter toxic=<p> -o <out> [--allow-unscanned --allow-cross-base]  Task-vector algebra over LoRA adapters (add/scale/negate; same-rank; scan + same-base gated) (v0.71.34)
+soup attest emit ... [--sign unsigned|ed25519|sigstore] [--key <pem>] [--interactive-oidc] [-o att.json]  in-toto/SLSA-3 attestation; Sigstore requires -o
+soup attest verify <statement> --signature <sig> [--public-key <pem>] [--cert-identity <san> --cert-oidc-issuer <url>]  Verify ed25519/Sigstore attestation signature
+soup airgap-bundle --model <m> --output <out.tar> [--repro-receipt <r.json>]  Signed tarball for data-diode transfer (embeds repro-receipt)
+soup train --config soup.yaml --annex-xi <out.md|out.pdf>  EU AI Act Annex XI/XII doc (markdown or PDF; top_domains auto-filled)
+soup train --config soup.yaml --track-energy [--energy-country USA]  codecarbon offline kWh/CO2 → annex-xi (pip install soup-cli[carbon])
+soup train --config soup.yaml --track-energy --energy-out <energy.json>  persist measurement for `soup bom emit --energy <energy.json>`
+soup train --config soup.yaml --repro-receipt <out.json>  SR 11-7 reproducibility receipt
+soup can pack --entry-id <id> --out r.can --attest <statement.json>  Embed in-toto Statements into a v3 can manifest
+soup audit-log tail / rotate  Tail / rotate the per-command HIPAA/SOC2 audit log (~/.soup/audit.jsonl)
+soup --no-audit-log <cmd> / SOUP_NO_AUDIT_LOG=1  Opt out of the per-command audit line
+soup eval unlearning <run-id> --benchmark tofu|muse|wmdp  Forget Quality + Model Utility + PrivLeak verdict
+soup edit set --base <m> --method rome|memit|alphaedit|grace --subject "..." --target "..." [--output <dir>] [--device cpu] [--governor/--no-governor] [--registry-id <id>] [--cov-corpus <jsonl|txt>]  Live surgical knowledge edit (GPT-2 Conv1D + Llama; --cov-corpus = covariance-preconditioned ROME, rome-only; --plan-only available)
+soup edit diff <before-run> <after-run> --probes p.jsonl --before-model <m> --after-model <m>  Knowledge-injection diff (live before/after generation across probe prompts)
+soup train  # task: unlearn  NPO/SimNPO/RMU unlearning from data.forget_set (+ optional data.retain_set)
+soup train  # data.format='raft'  Answer-only span-mask RAFT training (golden+distractor docs, [doc-N] citations); generator-stage configs auto-link the latest RA-DIT retriever
+soup ra-dit --retriever-config <r.yaml> --generator-config <g.yaml> [--retriever-model <m>] [--plan-only]  One-shot two-stage RA-DIT: train retriever → record pairing → train generator
+soup eval citation <data> [--style bracket|inline|footnote] [--shuffle-seed N] [--output o.json]  Citation precision/recall/F1 over predictions or RAFT rows
+soup steer train --base <m> --method caa|iti|repe --name <id> --pairs <jsonl>  Fit a CAA/ITI/RepE activation-steering vector from {positive, negative} pairs
+soup steer apply --name <id> --strength <s>  Preview a stored steering vector
+soup steer list                              List locally-stored steering vectors
+soup serve --steer <name> [--steer-strength <s>]  Apply a steering vector at decode time via a forward hook (transformers backend)
+soup serve --bank <bank.json> [--bank-strength <s>]  Multi-tenant VeRA/VB-LoRA serving; active user per request via X-User-Id header, ContextVar-isolated (v0.71.12 / v0.71.17)
+soup serve --mole <dir>                              Serve a trained MoLE: base + N frozen task LoRAs + mole_gate.pt, blended per-token at decode (transformers-only) (v0.71.17)
+soup ingest --source langfuse|langsmith|helicone|openpipe|otel|openai-stored --logs <jsonl>  Universal trace importer (6 SaaS adapters → normalised JSONL)
+soup ingest --source langfuse --pull [--since 7d --max-pages 100 --allow-private-host]  Live pull of Langfuse generations (Observations API v2; LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY / LANGFUSE_HOST) (#204)
+soup prune-prompt --input <jsonl> --output <jsonl> --min-frequency 0.95  Detect + strip shared system-prompt prefix
+soup prune-prompt ... --tokenizer <id-or-path>  Tokenizer-aware prefix detection (decodes remaining ids, boundary-safe)
+soup data active-sample --input <jsonl> --output <jsonl> --budget N  Top-N uncertain prod traces for human review
+soup ab --input <jsonl> --metric latency|judge_score|retry_rate  Two-sided mSPRT sequential A/B (decision: continue / reject_h0 / accept_h0; a reject_h0 reports direction better / worse; valid when re-run after every new row; the first 5 rows per arm set the --effect-size scale)
+soup ingest|prune-prompt|ab|data active-sample ... --slack-url <https> | --discord-url <https>  Shared SSRF-validated webhook on completion
+soup drift-alarm --reference <jsonl> --live <jsonl> --threshold 0.2  Rolling-KL drift alarm (exit 3 on drift)
+soup drift-alarm ... --slack-url <https> | --discord-url <https>  Optional SSRF-validated webhook on drift detected
+soup tunability --list                                   List built-in candidate-base catalogue
+soup tunability --dataset <jsonl> [--candidates a,b,c]   Probe candidate bases + Pareto frontier report
+soup tunability --dataset <jsonl> --live [--device cpu]  LIVE per-candidate LoRA probe (loads each repo)
+soup plan --config soup.yaml                             Pre-flight summary + write soup.tfstate
+soup apply --config soup.yaml [--dry-run]                Lock-and-execute; refuses on drift (exit 3)
+soup env lock | status | check                           Hermetic env lockfile + ABI drift + declared-bound violation detection (exit 3)
+soup env fix [--format uv-pip|requirements] [--output req.txt]  Render a reproducible install plan from soup-env.lock (print-only)
+soup completions bash | zsh | fish                       Shell completion script (sourceable via eval)
+soup license-advisor --target b2c|defense|embedded       Recommend license-clean base for deploy target
+soup license-advisor ... --license <id> --mau N          Per-license downstream-risk check (exit 3 on block)
+soup probe sae-diff <sae> <pre.json> <post.json> [--top-k N]  SAE feature diff between pre/post-FT activations (v0.66.0)
+soup probe sae-diff <repo> <pre.json> <post.json> --auto-download  Fetch an allowlisted SAE into ~/.soup/sae-cache (v0.71.8)
+soup probe sleeper <base> [--evidence ev.json] [--weights w.npz] [--output o.json]  Sleeper-agent defection probe; --weights = real calibrated probe (v0.66.0; v0.71.8)
+soup probe truth <base> [--evidence ev.json] [--weights w.npz] [--output o.json]  TruthfulQA-style honesty probe (v0.71.8)
+soup probe harm <base> [--evidence ev.json] [--weights w.npz] [--output o.json]  HarmBench-style misuse probe (v0.71.8)
+soup probe interference <losses.json> [--output o.json]  Pairwise N×N adapter interference matrix (exit 2 on MAJOR; v0.66.0)
+soup probe interference --measure <eval.jsonl> --base-model <m> --adapter name=path ... [--device cpu]  Auto-measure live interference (v0.71.8)
+soup probe pack <base> [--output o.json]      Per-base calibrated probe pack manifest (v0.66.0; +truth/harm v0.71.8)
+soup probe pack --list                        List bundled probe-pack bases (v0.66.0)
+soup train --capture-activations <layer> --capture-prompts <jsonl>  Post-train SAE-diff-ready per-token activation snapshot (v0.71.8)
+soup adapters blame ... --top-k 50            Live DataInf-style influence runner (v0.66.0, closes #171)
+soup adapters merge ... --strategy cmaes --eval <s> --budget 1h  CMA-ES evolutionary merge — live loop (v0.67.0 schema / v0.71.4 live)
+soup adapters merge ... --canary <suite.json> [--strict-verdict]  Live OK/MINOR/MAJOR canary verdict, exit 2 on MAJOR (v0.71.4)
+soup adapters pr <title> --base-sha <hex> --adapter <path>  GitHub-shaped adapter PR Markdown / JSON (v0.67.0)
+soup adapters pr <title> ... --push owner/repo#N  Post the PR as a GitHub comment via gh api (v0.71.4)
+soup adapters branch <name> --from-registry <id> | --attach-to-registry <id>  Branch ↔ Registry lineage (v0.71.4)
+soup adapters bisect <ckpt>... --eval-command "..."  Binary search over training history (v0.67.0)
+soup lock write --base-sha <h> --dataset-sha <h> --env-hash <h>  Write soup.lock (v0.67.0)
+soup lock write --base-sha <h> --dataset-sha <h> --env-lock soup-env.lock  Auto-derive --env-hash from soup-env.lock (v0.71.1)
+soup lock show [PATH]                        Print tracked lock file
+soup lock check [PATH] --base-sha <h> --dataset-sha <h> --env-hash <h> --base-model <m>  Refuse with exit 2 on drift, 3 on usage/missing lock
+soup compile <program.py> --eval <suite> [--optimizer mipro|gepa|textgrad|copro|bootstrap_fewshot] [--plan-only]  DSPy / GEPA / TextGrad prompt-program compiler — live (v0.71.13; pip install "soup-cli[compile]")
+soup distill-prompt --traces <jsonl> --teacher <m> --student <m> --strategy sft|preference|kl [--provider ollama|anthropic|vllm] [--base-url <url>] [--temperature F] [--max-rows N]  Distill prompt-heavy traces via a live teacher (v0.71.13); a teacher/student call that fails or returns nothing drops that trace, and the command exits 1 without writing the file when nothing is left
+soup compile-tools <spec.json|yaml> --eval <jsonl> [--optimizer textgrad|gepa] [--plan-only]  TextGrad / GEPA tool-schema optimiser — live (v0.71.13; pip install "soup-cli[compile]")
+soup apple-adapter <source-dir> --direction hf-to-mlx|mlx-to-hf|hf-to-apple|mlx-to-apple --output <dir> [--sign] [--plan-only]  PEFT LoRA <-> mlx-lm adapter conversion — live (v0.71.21; *-to-apple upstream-gated exit 3)
+soup local-rl init --db <path>                Create personal-LLM flywheel SQLite schema (v0.68.0)
+soup local-rl status --db <path>              Print interactions / thumbs-up / thumbs-down counters
+soup local-rl record --db <path> --prompt <q> --response <r> --thumb up|down  Append thumbs record
+soup local-rl harvest --db <path> -o <pairs.jsonl>  Harvest DPO pairs from thumbs into JSONL
+soup local-rl train --db <path> --model <id> --once [--train-method dpo|kto|orpo] [--min-pairs N] [-o <dir>]  Ad-hoc DPO/KTO/ORPO train from harvested thumbs — live (v0.71.13)
+soup local-rl train --db <path> --model <id> [--scheduler-dir <dir>] [--hour H] [--minute M] [--train-method dpo|kto|orpo] [--min-pairs N] [-o <dir>]  Render a systemd/launchd nightly-train scaffold (no --once) that runs `--once` with the same flags (v0.71.13)
+soup build <manifest.yaml> [--dry-run] [--output-dir <dir>]  dbt-for-SFT DAG: validate + plan + live materialise (v0.69.0; live v0.71.6)
+soup expect <data.jsonl> <suite.yaml> [--judge URL]  Expectations suite: PII / token-length / refusal / judge (v0.69.0)
+soup data gen-magpie --base <m> --provider ollama|vllm --target N --output <jsonl> [--base-url <url>] [--quality-filter]  Magpie synthetic generator — live (v0.69.0; live v0.71.6)
+soup data best-of-n (--base <m> | --provider ollama|vllm --model <m> [--base-url <url>]) --prompts <jsonl> --n 8 --judge <url> -o <sft.jsonl> [--emit-pairs <dpo.jsonl>] [--resume] [--checkpoint <journal.jsonl>] [--manifest <manifest.json>]  Best-of-N rejection sampling with durable per-prompt recovery and manifest-last publication
+soup data best-of-n (--base <m> [--revision <rev>] | --provider ollama|vllm --model <m>) --prompts <jsonl> --n 8 --export-candidates <jsonl> [--checkpoint <jsonl>] [--resume]  Resumable sampling-only phase; no judge is constructed
+soup data best-of-n --candidate-artifact <jsonl> --judgments <jsonl> -o <sft.jsonl> [--emit-pairs <dpo.jsonl>] [--manifest <json>]  Validate offline judgments and materialize byte-stable training rows; a final manifest binds the requested output set
+soup data evolve --input <seeds.jsonl> --provider ollama|vllm --model <m> --strategy depth|breadth --rounds N -o <jsonl>  Evol-Instruct (WizardLM) instruction evolution (v0.71.31)
+soup data persona-mix --prompts <jsonl> --n N --output <jsonl>  Persona-Hub diversity sampler (v0.69.0)
+soup data brain-rot <data.jsonl> [--strict]   Brain-rot detector — arXiv 2510.13928 (v0.69.0)
+soup iterative-dpo --base-model <m> --reward-model <rm> --prompts <p.jsonl> --output-dir <out> --rounds N --pairs-per-round N [--plan-only]  Iterative DPO loop driver — LIVE sample→score→pair→train (v0.70.0; live v0.71.11)
+soup train --reward-hack-detector info_rm|rm_ensemble [--reward-hack-halt]  Reward-hacking detector for GRPO — LIVE callback (v0.70.0; live v0.71.11)
+soup train --reward-hack-mitigation off|log_only|kl_control|pid_lagrangian  Closed-loop reward-hacking auto-mitigation (detect → raise KL/β → rollback → early-stop); GRPO only, requires --reward-hack-detector; refused on task: ppo (v0.71.26)
+soup train --config soup.yaml  # training.uld_strategy: wasserstein_aligned  Cross-tokenizer ULD on task='distill' (different tokenizers) — LIVE (v0.71.18)
+soup train --config soup.yaml  # training.minillm_enabled: true [minillm_teacher_mix_ratio 0.3]  MiniLLM reverse-KL distillation, config-only — LIVE; offline mix 0 rejected (v0.70.0; live v0.71.11; #692, #979)
+soup train --config grpo.yaml  # training.rl_checkpoint_save_every_steps: N [rl_checkpoint_keep_last: N; rl_checkpoint_include_optimizer: true]  Mid-epoch checkpoint for GRPO/PPO — LIVE (v0.70.0; live v0.71.11)
+soup train --config grpo.yaml  # training.echo_trap_enabled: true [echo_trap_threshold: 0.6; echo_trap_halt: true]  RAGEN echo-trap detector for GRPO — LIVE callback (v0.70.0; live v0.71.11)
+soup train  # task='moe_lora_routing' + mole_task_adapters  MoLE per-token gate over N frozen task LoRAs (gate-only train) — LIVE (v0.71.12)
+soup train  # task='distill' + distill_mode=token|sequence  Token logit-KL or sequence-level teacher-continuation KD — LIVE (v0.71.12)
+soup train  # task=classifier|reranker|cross_encoder + lora  LoRA-adapter classifier (frozen encoder) — LIVE (v0.71.12)
+soup train  # use_mod | expand_layers  Mixture-of-Depths / LLaMA Pro (Llama/Qwen/Mistral) — LIVE (v0.71.12)
+soup train  # use_longlora  LongLoRA S² is refused at config load: the override leaked future tokens and applied no S² grouping; use rope_scaling_type with plain LoRA (#1240)
+soup train  # task='tts' + tts_family + modality='audio_out'  TTS pre-encoded codec-token SFT + emotion templating; Orpheus/Llasa live-codec; Spark/Oute raw-audio refused (upstream pins); Sesame CSM refused — LIVE (v0.71.20)
+soup train  # task in {sft,tts} + moe_expert_quant=nf4|int8_rowwise [+moe_lora]  bnb per-expert quant of fused-MoE experts (CUDA); refused on other tasks, which never applied it (#798) — LIVE (v0.71.20)
+soup train  # task in {sft,tts} + train_router_only=true [+moe_lora]  Freeze MoE experts, train only the gating router; refused on other tasks (#798). moe_lora needs lora.dropout: 0.0 on fused-expert MoEs — LIVE (v0.71.20)
+soup train  # quantization='bitnet_1.58'  BitNet 1.58 training is not implemented; config load refuses it
+soup export --model ./output --format bitnet|tq1_0  BitNet 1.58 TQ1_0 ternary GGUF via llama.cpp — LIVE (v0.71.20)
+soup version [--full] [--json]                Show version (--full: system info, --json: JSON output)
+soup --verbose <command>                      Full traceback on errors
+```
+
+### Cómo elegir el dispositivo para `soup infer`, `soup chat` y `soup diff`
+
+`--device` decide dónde cargan el modelo estos comandos. Sin él, el
+dispositivo se detecta automáticamente y las mismas reglas se aplican a lo que se detectó (esto
+también cubre `soup bench`, que carga por la ruta de `soup infer`).
+
+| `--device` | Ubicación | Tipo de dato |
+|---|---|---|
+| `cpu` | fijado a la CPU | `float32` (el doble de RAM que `float16`: un modelo de 7B necesita unos 28 GB) |
+| `cuda` | `device_map="auto"`: accelerate puede usar todas las GPU visibles y desbordarse a la CPU si el modelo no cabe | `float16` |
+| `cuda:N` | fijado a la GPU `N` | `float16` |
+| `mps` | fijado a la GPU de Apple | `float16` |
+| `mlx` | se ejecuta en la CPU en esta ruta | `float32` |
+
+Los valores no distinguen mayúsculas de minúsculas. Cualquier otro valor (`gpu`, `auto`, `cuda:0,1`, ...)
+se rechaza con un error en lugar de ignorarse.
+
+### Autopilot interactivo (`soup autopilot`)
+
+Cuando la entrada estándar es un terminal interactivo y se omite cualquiera de `--model`, `--data` o `--goal`,
+`soup autopilot` pregunta por los valores que faltan:
+
+- **Model**: ID del repositorio de Hugging Face del modelo base (o ruta local). Las entradas en blanco se rechazan.
+- **Data**: ruta local del dataset de entrenamiento (JSONL). Debe existir dentro del directorio de trabajo actual.
+- **Goal**: uno de `chat`, `reasoning`, `code`, `classification`, `tool-calling`, `alignment`,
+  o `domain-adapt`.
+
+Cuando se ejecuta con las tres opciones ya indicadas, o cuando la entrada estándar no es un terminal (p. ej. CI,
+scripts o pipelines), `soup autopilot` nunca pregunta: las banderas completas se ejecutan directamente,
+y las banderas obligatorias omitidas salen con código 2 y el error estándar `Missing option`.
+
+### Recuperación y publicación de Best-of-N
+
+`soup data best-of-n` añade y sincroniza un registro de checkpoint después de cada
+prompt muestreado y juzgado por completo. El diario por defecto es
+`<output>.checkpoint.jsonl`; cámbialo con `--checkpoint`. Si falla un backend de
+muestreo o de juez, Soup informa el recuento de prompts completados y la ruta del diario.
+Vuelve a ejecutar el mismo comando con `--resume` para reutilizar exactamente ese prefijo sin
+volver a muestrearlo. La secuencia de prompts y las opciones de generación quedan ligadas al
+diario, así que cambiarlas hace que la reanudación falle en cerrado.
+
+Los archivos JSONL finales de SFT y los opcionales de DPO se publican sólo después de que todos los prompts estén
+completos. El manifest (por defecto `<output>.manifest.json`, o `--manifest`) se
+escribe al final y registra sus recuentos de filas y digests SHA-256. Los consumidores deberían
+tratar como salida confirmada únicamente los archivos que liste ese manifest final. Los datos
+locales inválidos, como una puntuación de juez no finita, siguen siendo un fallo de validación en lugar
+de presentarse como una caída recuperable del backend.
+
+Para el Best-of-N sin conexión, los artefactos de candidatos y de juicios son el
+checkpoint de recuperación. La materialización sin conexión rechaza `--resume` y `--checkpoint`; vuelve a ejecutar
+el mismo comando de materialización después de un fallo tardío. El manifest final se
+escribe al final y es el único marcador de confirmación; los consumidores deben verificarlo y usar sólo
+los archivos SFT/DPO que liste.
+
+## Ajuste fino desde tu agente de programación (MCP)
+
+`soup mcp serve` ejecuta un servidor de [Model Context Protocol](https://modelcontextprotocol.io)
+sobre **stdio** (por defecto) o un listener local **SSE / HTTP**, así que cualquier cliente MCP — Claude Code, Cursor, Cline, Continue —
+puede manejar Soup conversando. Instala primero el extra:
+
+```bash
+pip install "soup-cli[mcp]"
+```
+
+Regístralo con tu cliente. Para **Claude Code** (`.mcp.json` en el repo) o
+la configuración de **Claude Desktop** (`claude_desktop_config.json`):
+
+```json
+{
+  "mcpServers": {
+    "soup": { "command": "soup", "args": ["mcp", "serve"] }
+  }
+}
+```
+
+### Remoto o multicliente: los transportes SSE y HTTP
+
+stdio le sirve a un cliente que lanza Soup como subproceso. Para un cliente en otra
+máquina, o varios clientes que comparten un servidor, ejecuta un listener en su lugar:
+
+```bash
+soup mcp serve --transport sse                 # GET /sse + POST /messages/
+soup mcp serve --transport http                # HTTP con streaming en /mcp
+soup mcp serve --transport sse --host 127.0.0.1 --port 8765 --auth-token "$TOKEN"
+```
+
+Ambos se enlazan a `127.0.0.1:8765` por defecto y **exigen un Bearer token en cada
+solicitud**. Si omites `--auth-token`, se genera uno nuevo al arrancar y se
+imprime en stderr; tiene 16-128 caracteres urlsafe-base64, la misma forma
+que usa `soup ui`. Apunta un cliente hacia él con un encabezado:
+
+```json
+{
+  "mcpServers": {
+    "soup": {
+      "url": "http://127.0.0.1:8765/sse",
+      "headers": { "Authorization": "Bearer <token>" }
+    }
+  }
+}
+```
+
+El registry es idéntico entre transportes — mismas herramientas, mismos esquemas, el mismo
+control mediante `--allow-mutating` / `--allow-execute`. Sólo cambia el transporte.
+
+**Seguridad:**
+- **El token es obligatorio y no hay forma de omitirlo.** Un listener de loopback es
+  alcanzable por todos los procesos de la máquina, no sólo por ti.
+- **El token viaja en el encabezado, nunca en la URL.** A propósito no hay
+  alternativa por query-string, así que no puede quedar capturado en logs de proxy o de acceso.
+- **La protección contra DNS-rebinding está activada.** Una solicitud cuyo `Host` no sea la dirección
+  a la que se enlazó el servidor se rechaza con `421`, y un `Origin` ajeno con `403`.
+  Esta es la puerta que el Bearer token no puede cubrir: una página web que el operador sólo
+  visita no adjunta ningún encabezado `Authorization`, pero su solicitud igual llega
+  al puerto.
+- **Un `--host` que no sea loopback imprime una advertencia**, y un enlace comodín (`0.0.0.0`)
+  imprime una segunda — sin un único nombre anunciado no hay nada que fijar,
+  así que la comprobación de Host se degrada a aceptar cualquier `Host`.
+- **`--host` / `--port` / `--auth-token` se rechazan con `--transport stdio`**
+  en lugar de ignorarse en silencio: stdio no tiene listener ni nada que autorizar.
+
+Los transportes de red necesitan `mcp >= 1.10.0` — el HTTP con streaming llegó en 1.8.0
+y la protección contra rebinding en 1.10.0 —, que es el mínimo que fija `soup-cli[mcp]`.
+
+El servidor expone 14 herramientas de sólo lectura — `advise`, `data_inspect`,
+`data_validate`, `data_score`, `data_doctor`, `recipes_search`, `recipes_show`,
+`runs_list`, `runs_show`, `registry_list`, `registry_show`, `profile`,
+`diagnose_evidence`, `ship_evidence` — y cada una devuelve JSON. Dos herramientas mutadoras
+en modo **plan-only** (`train_start`, `export`) están restringidas detrás de `--allow-mutating`
+(`"args": ["mcp", "serve", "--allow-mutating"]`); cuando sólo `--allow-mutating` está activo, sólo muestran el comando exacto que se ejecutaría — nunca ejecutan entrenamiento ni exportación.
+
+`--allow-execute` implica `--allow-mutating` y habilita la ejecución completa de subprocesos en segundo plano mediante dos herramientas de ejecución (`train_execute` y `export_execute`). La ejecución requiere un token de confirmación de un solo uso emitido por el servidor y devuelto durante la fase de planificación (`train_start` o `export`). El estado del token se mantiene en memoria con un TTL de 5 minutos y se consume antes de invocar el subproceso.
+
+**Seguridad y límites de la ejecución:**
+- **Seguridad de las banderas:** `--allow-execute` está desactivada por defecto y es peligrosa. `--allow-mutating` por sí sola NUNCA puede disparar la ejecución de subprocesos.
+- **Tokens de confirmación de un solo uso:** la autorización requiere un token aleatorio emitido por el servidor. La confirmación del cliente es sólo de UX; la seguridad depende por entero del estado del token del lado del servidor.
+- **Aislamiento del subproceso:** la ejecución corre la CLI de Soup como un subproceso aislado (`shell=False`, `stdin=DEVNULL`, `cwd` fijado al directorio de arranque del servidor). El stdout/stderr del hijo se redirige a `.soup/mcp-runs/<run_id>.log` para no corromper el flujo stdio JSON-RPC de MCP. La planificación (snapshot de configuración de `train_start`) y la ejecución se rechazan si `.soup` o `.soup/mcp-runs` es un enlace simbólico o junction, o si existe un enlace duro en la ruta del log de la ejecución. La planificación también rechaza un enlace o cualquier cosa que ya exista en el directorio de ejecución `.soup/mcp-runs/<run_id>`: el snapshot se escribe sólo en un directorio de ejecución que el plan acaba de crear, con `config.yaml` creado en exclusiva y sin seguir ningún enlace.
+- **Concurrencia y desconexiones:** exige 1 ejecución activa a la vez, condicionada a una ejecución persistida cuyo proceso siga vivo — así un servidor **reiniciado** no lanza un segundo entrenamiento mientras un hijo de un servidor anterior sigue corriendo, y un registro obsoleto cuyo proceso ya no existe nunca bloquea la ejecución. Un registro `launching` (confirmado antes de que exista el proceso hijo, con el pid aún sin escribir) también bloquea la capacidad de reinicio: es indistinguible de "a punto de lanzar", así que tratarlo como vivo es la dirección segura tras una caída en esa ventana. Si una caída del servidor deja esa fila, `soup mcp runs reconcile --expunge-launching` elimina las filas de más de cinco minutos e imprime cada `run_id` eliminado; usa `--older-than-seconds N` para elegir otro umbral positivo. El comando rechaza la operación completa si algún registro candidato reporta un PID que sigue vivo. Los lanzamientos corren en segundo plano (fire-and-forget). Desconectar el cliente MCP no termina un subproceso que ya esté corriendo.
+- **Snapshot de la configuración y revalidación de entradas:** al planificar (`train_start`), la configuración validada se guarda como snapshot en `.soup/mcp-runs/<run_id>/config.yaml`, y la ejecución usa ese snapshot en lugar de la ruta original y mutable de la configuración. Las entradas protegidas externas (como datasets y directorios o archivos de modelos/checkpoints) no se congelan en el snapshot; en su lugar, sus digests de contenido (calculados con SHA-256 para archivos regulares, o con un hash determinista recursivo sobre rutas relativas ordenadas para árboles de directorios, acotados por límites de seguridad de número de archivos y bytes totales) se registran al planificar y se revalidan justo antes de lanzar. Modificar una entrada protegida externa entre la planificación y la ejecución invalida el token. Modificar la ruta original de la configuración después de planificar no tiene efecto, porque la ejecución usa estrictamente la configuración del snapshot. El snapshot congela sólo la configuración en sí, no los activos externos del sistema de archivos.
+- **Toda entrada local queda fijada:** un plan de entrenamiento fija cada archivo o directorio local que la ejecución lee (modelo, datasets, modelos de reward/teacher/PRM, archivos `.py` de reward, conjuntos de desaprendizaje); una entrada fuera del directorio de trabajo se rechaza al planificar, y una entrada que no existía al planificar debe seguir sin existir en la ejecución.
+
+## Códigos de salida de gates y veredictos
+
+Los comandos de gate y de veredicto de Soup siguen un contrato de códigos de salida unificado y apto para CI:
+
+| Código de salida | Constante | Significado | Ejemplos |
+|---|---|---|---|
+| `0` | `EXIT_OK` | PASS / OK / SHIP | El modelo pasa el gate; sin regresión; el lock coincide con el cierre; dataset válido |
+| `2` | `EXIT_GATE_FAILED` | GATE FAILED / REGRESSION / DRIFT / DON'T SHIP | La métrica empeoró; behavior/checklist MAJOR; el cierre del lock se desvió; dataset inutilizable |
+| `3` | `EXIT_USAGE_ERROR` | USAGE / INPUT / CONFIG ERROR | Bandera de CLI mal escrita o inválida; archivo de entrada faltante o no parseable; serie vacía |
+| `1` | `EXIT_RUNTIME_ERROR` | RUNTIME ERROR | Caída inesperada, incompatibilidad del entorno o error de inferencia en vivo |
+
+La taxonomía se aplica de forma consistente en `soup ship`, `soup eval gate`, `soup eval against`, `soup eval checklist`, `soup eval behavior`, `soup eval quant-check`, `soup lock check`, `soup expect`, `soup data validate`, `soup data lint` y `soup recipes verify`.
+
+`soup eval checklist` requiere `--evidence`. `soup eval behavior` también requiere
+`--evidence` a menos que `--base-model` seleccione la ruta en vivo; las baterías
+`elephant` y `syceval` no se pueden puntuar en vivo y salen con `3` con `--base-model`. Omitir la evidencia
+requerida sale con `3` y nombra la entrada JSON que hay que proporcionar; nunca reporta un
+pass neutral para un gate que no midió nada.
+
+### Deriva de veredicto de gate vs. deriva operativa
+
+`soup lock check` opera como un comando de gate para CI, donde la salida `2` (`EXIT_GATE_FAILED`) indica que el cierre del lock se ha desviado de la configuración (lo que exige regenerarlo con `soup lock write`), y la salida `3` (`EXIT_USAGE_ERROR`) indica un archivo de lock ausente o no parseable. En cambio, los comandos operativos y de entorno (`soup env check`, `soup apply` y `soup drift-alarm`) pertenecen a la familia de la deriva operativa, donde una divergencia en tiempo de ejecución o un desajuste de ABI señala la salida `3` (con la salida `2` reservada a argumentos inválidos o errores de ruta en esos comandos). Las herramientas de inspección operativa como `soup adapters audit` se mantienen deliberadamente fuera de la taxonomía de gates y salen con `1` ante errores de uso, para que CI pueda distinguir un veredicto de coincidencia (`0`) o de divergencia (`2`) de un error de invocación.
