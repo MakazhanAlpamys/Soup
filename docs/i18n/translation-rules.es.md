@@ -21,11 +21,19 @@ lee este archivo primero y lo cumple al pie de la letra.
 
 ## 3. Código: se copia, no se traduce
 
-- **Bloques de código**: byte a byte idénticos, incluidos los comentarios `#`.
+- **Bloques de código**: idénticos, salvo **el texto de los comentarios**. Se permite (y se
+  recomienda, para que el lector entienda el ejemplo) traducir el comentario que empieza con `#`
+  en vallas de tipo `bash`, `sh`, `shell`, `yaml`, `yml`, `toml`, `python`, `text`: **sólo** cambia
+  lo que va después del `#`. El código de la misma línea, las sangrías y los demás bloques se copian
+  byte a byte. Si dudas, deja el comentario en inglés: un comentario sin traducir es un defecto
+  menor, una línea de código alterada es un fallo grave.
+- La comprobación que lo demuestra: al quitar de ambas versiones el comentario `#` (desde `#` hasta
+  el final de la línea) y los espacios sobrantes, los bloques deben ser **idénticos**.
 - **Código en línea** (`` `...` ``): intacto. Comandos, subcomandos, banderas (`--kv-cache-type`),
   rutas, claves de `soup.yaml`, nombres de modelos, variables de entorno, versiones, nombres de
   archivos/módulos/clases/PR, nombres de API y de eventos: **nunca** se traducen ni se reformatean.
 - La prosa que rodea al código sí se traduce.
+
 
 ## 4. Enlaces: sólo cambia el texto visible
 
