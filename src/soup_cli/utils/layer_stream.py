@@ -654,38 +654,65 @@ def _measure_seq_read_bytes_per_s(path: str) -> Optional[float]:
                 pass
 
 
+_LINUX_SYS_DEV_BLOCK = "/sys/dev/block"
+
+
+def _linux_block_kind(device: str, ancestors: frozenset[str] = frozenset()) -> str:
+    """Classify one sysfs device, following partitions and stacked-volume members."""
+    import os
+
+    device = os.path.realpath(device)
+    if device in ancestors or len(ancestors) >= 32 or not os.path.isdir(device):
+        return "unknown"
+    ancestors = ancestors | {device}
+    if os.path.exists(os.path.join(device, "partition")):
+        return _linux_block_kind(os.path.dirname(device), ancestors)
+    slaves = os.path.join(device, "slaves")
+    if os.path.isdir(slaves):
+        members = os.listdir(slaves)
+        if members:
+            kinds = {_linux_block_kind(os.path.join(slaves, name), ancestors) for name in members}
+            return next(kind for kind in ("hdd", "unknown", "ssd", _NVME) if kind in kinds)
+    if os.path.basename(device).startswith("nvme"):
+        return _NVME
+    rotational = os.path.join(device, "queue", "rotational")
+    if os.path.isfile(rotational):
+        with open(rotational, encoding="utf-8") as handle:
+            value = handle.read().strip()
+        return {"0": "ssd", "1": "hdd"}.get(value, "unknown")
+    return "unknown"
+
+
+def _linux_path_disk_kind(path: str) -> str:
+    """Attribute the volume to sysfs before reading its media type."""
+    import os
+
+    try:
+        dev = os.stat(os.path.expanduser(path)).st_dev
+        device = f"{_LINUX_SYS_DEV_BLOCK}/{os.major(dev)}:{os.minor(dev)}"
+        return _linux_block_kind(device)
+    except (OSError, ValueError):
+        return "unknown"
+
+
 def _probe_disk_kind(path: str) -> DiskClassification:
     """Classify the volume holding ``path``, carrying the measured rate only when
     the verdict was DERIVED from a read (so a refusal can never cite a rate that
     did not produce its own verdict — see ``DiskClassification``)."""
-    import os
     import platform
     import subprocess
 
     system = platform.system()
     try:
         if system == "Linux":
-            # /sys/block/<dev>/queue/rotational: 1 spinning, 0 solid state.
-            # The device name distinguishes NVMe, and rotational=0 is
-            # authoritative — a device that declares itself solid state is one.
-            # rotational=1 is NOT authoritative: virtio defaults it to 1 with no
-            # media hint, so a fast cloud disk lies as spinning (#365). Fall back
-            # to a measured read there rather than trust the flag.
-            names = sorted(os.listdir("/sys/block"))
-            for dev in names:
-                if not dev.startswith("nvme"):
-                    continue
-                return DiskClassification(_NVME)
-            for dev in names:
-                rot = os.path.join("/sys/block", dev, "queue", "rotational")
-                if os.path.exists(rot):
-                    with open(rot, encoding="utf-8") as handle:
-                        value = handle.read().strip()
-                    if value == "0":
-                        return DiskClassification("ssd")
-                    measured = _measure_seq_read_bytes_per_s(path)
-                    return DiskClassification(_classify_measured_read(measured), measured)
-            return DiskClassification("unknown")
+            kind = _linux_path_disk_kind(path)
+            if kind in (_NVME, "ssd"):
+                return DiskClassification(kind)
+            # rotational=1 can describe fast virtio storage (#365). Unknown
+            # volumes (network, overlay, missing sysfs) also need a path-based
+            # read, never the name of an unrelated physical disk (#1800).
+            measured = _measure_seq_read_bytes_per_s(path)
+            return DiskClassification(_classify_measured_read(measured), measured)
         if system == "Windows":
             shell = _resolve_tool("powershell", _POWERSHELL_FALLBACK)
             if shell is None:
