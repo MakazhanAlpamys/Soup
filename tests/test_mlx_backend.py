@@ -38,6 +38,8 @@ class TestMLXDetection:
         fake_mlx = types.ModuleType("mlx")
         fake_mlx.__version__ = "0.20.0"
         fake_core = types.ModuleType("mlx.core")
+        # #1850: MLX SFT's train() seeds mx.random before attaching LoRA.
+        fake_core.random = types.SimpleNamespace(seed=lambda _seed: None)
         fake_core.metal = types.SimpleNamespace(is_available=lambda: True)
         fake_mlx.core = fake_core
         monkeypatch.setitem(sys.modules, "mlx", fake_mlx)
@@ -70,6 +72,8 @@ class TestMLXDetection:
 
         fake_mlx = types.ModuleType("mlx")  # no __version__ on the top-level pkg
         fake_core = types.ModuleType("mlx.core")
+        # #1850: MLX SFT's train() seeds mx.random before attaching LoRA.
+        fake_core.random = types.SimpleNamespace(seed=lambda _seed: None)
         fake_core.__version__ = "0.32.2"
         fake_mlx.core = fake_core
         monkeypatch.setitem(sys.modules, "mlx", fake_mlx)
@@ -91,6 +95,8 @@ class TestMLXDetection:
 
         fake_mlx = types.ModuleType("mlx")
         fake_core = types.ModuleType("mlx.core")
+        # #1850: MLX SFT's train() seeds mx.random before attaching LoRA.
+        fake_core.random = types.SimpleNamespace(seed=lambda _seed: None)
         fake_core.metal = types.SimpleNamespace(is_available=lambda: True)
         fake_mlx.core = fake_core
         monkeypatch.setitem(sys.modules, "mlx", fake_mlx)
@@ -370,6 +376,8 @@ class TestMLXDoctor:
         fake_mlx = types.ModuleType("mlx")
         fake_mlx.__spec__ = ModuleSpec("mlx", loader=None)
         fake_core = types.ModuleType("mlx.core")
+        # #1850: MLX SFT's train() seeds mx.random before attaching LoRA.
+        fake_core.random = types.SimpleNamespace(seed=lambda _seed: None)
         fake_core.__spec__ = ModuleSpec("mlx.core", loader=None)
         fake_core.__version__ = "0.32.2"
         fake_core.metal = types.SimpleNamespace(is_available=lambda: True)

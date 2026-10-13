@@ -51,6 +51,8 @@ def _install_fake_mlx(monkeypatch):
     """
     mlx = types.ModuleType("mlx")
     mlx_core = types.ModuleType("mlx.core")
+    # #1850: MLX SFT's train() seeds mx.random before attaching LoRA.
+    mlx_core.random = types.SimpleNamespace(seed=lambda _seed: None)
     mlx_optimizers = types.ModuleType("mlx.optimizers")
     mlx_optimizers.AdamW = lambda **kwargs: object()
     # #686 builds a real LR schedule, so the MLX path reaches these three

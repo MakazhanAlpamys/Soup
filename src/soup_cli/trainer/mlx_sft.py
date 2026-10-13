@@ -336,14 +336,6 @@ class MLXSFTTrainerWrapper:
                 "training.use_fsdp2_compile (torch.compile on FSDP2 requires "
                 "CUDA and the transformers backend)"
             )
-        # #353's fourth criterion. #381 threaded training.seed through every
-        # transformers task wrapper; MLX has its own RNG (mx.random) and reads
-        # neither field, so a seeded MLX run is silently unseeded. `is not None`
-        # rather than truthiness: 0 is a real seed.
-        if tcfg.seed is not None:
-            unsupported.append("training.seed (MLX seeds through mx.random)")
-        if tcfg.data_seed is not None:
-            unsupported.append("training.data_seed (MLX seeds through mx.random)")
         if isinstance(tcfg.gradient_checkpointing, str):
             unsupported.append(
                 f"gradient_checkpointing tier {tcfg.gradient_checkpointing!r} "
@@ -435,9 +427,10 @@ class MLXSFTTrainerWrapper:
         not a resume of training state: the step count and data position
         both restart from zero regardless of how far the checkpoint got.
         Say so rather than implying a full resume. Replaying the dataset
-        from the saved iteration is a separate, harder claim — it needs a
-        reproducible iteration order tied to training.seed/data_seed, which
-        the MLX path does not thread yet (#353) — and is out of scope here.
+        from the saved iteration is a separate, harder claim. The order is
+        reproducible from training.seed/data_seed since #1850, but mlx-lm
+        exposes no way to start its batch iterator part-way, so it is out of
+        scope here.
 
         ``strict=False`` means a checkpoint saved under a different
         ``lora.r`` or ``target_modules`` drops every tensor in silence —
@@ -488,6 +481,23 @@ class MLXSFTTrainerWrapper:
             raise RuntimeError(
                 "MLX backend: setup(dataset) must be called before train()"
             )
+
+        # #1850: mlx-lm's `train()` shuffles through numpy's global RNG
+        # (`iterate_batches` is called without a seed) and LoRA `A` init and
+        # dropout draw from `mx.random`. The `mlx_lm.lora` CLI seeds both before
+        # training; calling `train()` directly seeded neither, so every run
+        # trained on a different batch order. `mx.random` is seeded here, before
+        # the adapter exists; numpy right before `train()` below, so nothing in
+        # between can move the batch order.
+        import mlx.core as mx
+
+        from soup_cli.utils.seeding import resolve_training_seed
+
+        seed = resolve_training_seed(cfg.training)
+        data_seed = (
+            seed if cfg.training.data_seed is None else int(cfg.training.data_seed)
+        )
+        mx.random.seed(seed)
 
         self._apply_lora(self.model)
 
@@ -855,6 +865,9 @@ class MLXSFTTrainerWrapper:
                 train_dataset = rewind.wrap(train_dataset)
                 train_hooks = {**train_hooks, "loss": rewind.loss}
 
+        import numpy as np
+
+        np.random.seed(data_seed)
         t0 = time.time()
         try:
             train(
