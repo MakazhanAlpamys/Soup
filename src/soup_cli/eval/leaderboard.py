@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import csv
+import io
 import json
 from dataclasses import dataclass, field
 from typing import Optional
@@ -143,13 +145,16 @@ def export_leaderboard(
         all_benchmarks = set()
         for _, scores, _ in sorted_models:
             all_benchmarks.update(scores.keys())
-        benchmarks = sorted(all_benchmarks)
+        # Preserve the existing empty benchmark column for an empty export.
+        benchmarks = sorted(all_benchmarks) or [""]
 
-        lines = ["model," + ",".join(benchmarks) + ",average"]
+        output = io.StringIO()
+        writer = csv.writer(output, lineterminator="\n")
+        writer.writerow(["model", *benchmarks, "average"])
         for model, scores, avg in sorted_models:
             vals = [str(scores.get(bench, "")) for bench in benchmarks]
-            lines.append(f"{model},{','.join(vals)},{avg:.4f}")
-        return "\n".join(lines)
+            writer.writerow([model, *vals, f"{avg:.4f}"])
+        return output.getvalue().rstrip("\n")
 
     # Default: JSON
     data = []
