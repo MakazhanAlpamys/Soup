@@ -1270,7 +1270,7 @@ def sign(
     hash. ``ed25519`` (v0.71.2 #185) adds a real detached signature over that
     root — pass ``--key <priv.pem>``, set ``SOUP_SIGNING_KEY``, or use
     ``--generate-key <out.pem>``. ``sigstore`` uses keyless OIDC plus the
-    Sigstore public-good Fulcio/Rekor service; install ``soup-cli[sigstore]`` and
+    Sigstore public-good Fulcio/Rekor service; install ``soup-cli\\[sigstore]`` and
     run in an ambient-OIDC environment (for example GitHub Actions). Browser
     OIDC is opt-in with --interactive-oidc.
     """

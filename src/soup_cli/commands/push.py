@@ -43,7 +43,7 @@ def push(
         "--token",
         "-t",
         help=(
-            "Upload token. For --hub hf: [deprecated] use HF_TOKEN or cached login. "
+            "Upload token. For --hub hf: \\[deprecated] use HF_TOKEN or cached login. "
             "For other hubs: that hub's token (or MODELSCOPE_API_TOKEN / MODELERS_TOKEN)."
         ),
         envvar="HF_TOKEN",

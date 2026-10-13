@@ -4346,7 +4346,7 @@ def brain_rot_cmd(
     ``--max-major-fraction`` (default 25%), so CI pipelines can refuse
     training on excessive slop. ``--lang`` selects a per-language
     low-effort-token + clickbait-phrase bundle (closes #234); ``--lang auto``
-    routes through the optional ``langdetect`` package (``[data-pro]`` extras)
+    routes through the optional ``langdetect`` package (``\\[data-pro]`` extras)
     and falls back silently to English when detection is unavailable.
     """
     import math as _math
