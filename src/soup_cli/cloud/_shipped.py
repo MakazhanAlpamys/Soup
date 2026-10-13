@@ -118,6 +118,7 @@ def _path_field_is_local(value: str) -> bool:
     a bare name that does not exist is treated as a Hub id. Writing
     ./teacher is the safe way to say this is local.
 
+    ponytail: existence is checked at plan time, not real-path-checked. A value
     whose parent directory was deleted falls through and reaches the remote
     run, which then fails; fixing that properly is walking every field the
     loader opens and giving each its own rule, as _train_entry_is_local does

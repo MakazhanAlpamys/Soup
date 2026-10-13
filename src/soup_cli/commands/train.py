@@ -1222,8 +1222,9 @@ def train(
         # would be dropped with no message. Refuse rather than run without them.
         dropped = [name for name, on in (("--push-as", push_as), ("--gate", gate)) if on]
         if dropped:
+            verb = "is" if len(dropped) == 1 else "are"
             console.print(
-                f"[red]{markup_escape(', '.join(dropped))} are not supported with "
+                f"[red]{markup_escape(', '.join(dropped))} {verb} not supported with "
                 f"--cloud:[/] both run locally, against local files and a local "
                 "HF repo, and a cloud run would silently ignore them. Run "
                 "without --cloud, or drop the flag."

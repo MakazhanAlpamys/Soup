@@ -295,6 +295,8 @@ class TestUnshippedInputs:
         cfg = self._cfg()
         cfg.base = value
         assert unshipped_inputs(cfg) == ["base"]
+
+    def test_a_hub_model_id_is_not_unshipped(self):
         from soup_cli.cloud._shipped import unshipped_inputs
 
         cfg = self._cfg()
@@ -332,4 +334,3 @@ class TestUnshippedInputs:
 
         with pytest.raises(ValueError, match="Hub dataset id"):
             refuse_unshipped_inputs(self._cfg("./data/train.jsonl"))
-
