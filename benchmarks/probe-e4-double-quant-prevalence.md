@@ -288,6 +288,10 @@ For reference, not part of Q4: Kimi K2's median `frac_over` with double-quant on
 | Qwen2.5-7B | 0 | 0 |
 | OLMoE-1B-7B | 0 | 0 |
 
+### OLMoE-1B-7B: extreme `worst` values
+
+**Observation, not a preregistered result.** `worst` is not part of Q1 to Q4 and is not tabulated above. With double-quant on, 27 of the 3136 OLMoE-1B-7B tensors (17 attention weights and 10 routed-expert weights) have `worst` above 10, up to 1.5e30. `worst` is a ratio to the block's true absmax, and these values come from blocks whose true absmax is close to zero: the largest `group_spread` among those tensors is 3.6e32. All values are finite, and with double-quant off the same tensors have `worst` 0.153. The absolute error `e_b` of those blocks was not recorded: the raw rows hold only the ratio, not the block's absmax or error, so it cannot be derived without a new measurement. It is noted here because OLMoE-1B-7B is the model selected for part 2.
+
 ### Not covered
 
 - The DeepSeek-V3 and Kimi K2 tensors are a sample (section 1.1). Nothing here is a statement about all weights of either model.
