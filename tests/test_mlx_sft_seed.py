@@ -159,3 +159,69 @@ class TestTheSeedIsNoLongerAnnouncedAsIgnored:
         )
         mlx_sft.MLXSFTTrainerWrapper(cfg)._check_unsupported()
         assert f"training.{field}" not in buffer.getvalue()
+
+
+# --------------------------------------------------------------------------
+# End to end: mlx-lm's real train() loop, nothing replaced
+# --------------------------------------------------------------------------
+
+
+class _CharTokenizer:
+    """Just what mlx-lm's text dataset reads: ``encode`` and ``eos_token_id``.
+    Ids stay inside the tiny model's 64-token vocabulary."""
+
+    eos_token_id = 2
+
+    def encode(self, text):
+        return [1] + [3 + ord(c) % 60 for c in text]
+
+
+def _train_for_real(tmp_path, **training):
+    import mlx.core as mx
+
+    from soup_cli.config.schema import DataConfig, SoupConfig, TrainingConfig
+    from soup_cli.trainer.mlx_sft import MLXSFTTrainerWrapper
+
+    training.setdefault("epochs", 2)
+    training.setdefault("batch_size", 2)
+    training.setdefault("lr", 1e-2)
+    cfg = SoupConfig(
+        base="mlx-community/tiny",
+        task="sft",
+        backend="mlx",
+        data=DataConfig(train="./data/train.jsonl", format="plaintext"),
+        training=TrainingConfig(logging_steps=1, gradient_accumulation_steps=1, **training),
+        output=str(tmp_path),
+    )
+    wrapper = MLXSFTTrainerWrapper(cfg)
+    # A checkpoint on disk is the same model every run; the tiny stand-in is
+    # built from mx.random, so pin its weights. Then scramble every RNG: what
+    # training sees must come from training.seed alone.
+    mx.random.seed(1234)
+    wrapper.model = _tiny_llama()
+    _scramble_global_rngs()
+    wrapper.tokenizer = _CharTokenizer()
+    texts = [f"sample number {i} " + "abc" * i for i in range(12)]
+    wrapper._dataset = {"train": [{"text": t} for t in texts], "val": []}
+    result = wrapper.train()
+    weights = mx.load(str(tmp_path / "adapters.safetensors"))
+    return result, {k: v.tolist() for k, v in weights.items()}
+
+
+class TestSameSeedSameLosses:
+    """Mirrors #1846's MLX DPO check on the SFT path: two runs at one seed
+    report the same losses and save the same adapter; another seed does not."""
+
+    def test_same_seed_reproduces_losses_and_adapter(self, tmp_path):
+        first, first_weights = _train_for_real(tmp_path / "a", seed=5)
+        second, second_weights = _train_for_real(tmp_path / "b", seed=5)
+
+        assert first["initial_loss"] == second["initial_loss"]
+        assert first["final_loss"] == second["final_loss"]
+        assert first_weights and first_weights == second_weights
+
+    def test_another_seed_trains_differently(self, tmp_path):
+        first, first_weights = _train_for_real(tmp_path / "a", seed=5)
+        second, second_weights = _train_for_real(tmp_path / "b", seed=6)
+
+        assert first_weights != second_weights
