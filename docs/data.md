@@ -672,6 +672,18 @@ format drops.
 {"prompt": "Explain gravity", "chosen": "Gravity is a force...", "rejected": "I don't know"}
 ```
 
+Conversational pairs go through the model's chat template. Write `prompt` as the
+message list and `chosen` / `rejected` as the completion messages after it, or, as
+the bundled examples do, `chosen` / `rejected` as full conversations that repeat
+the user turn. In that case the turns both share become the prompt and the string
+`prompt` is not used ([#1849](https://github.com/MakazhanAlpamys/Soup/issues/1849)):
+```json
+{"prompt": "Explain gravity",
+ "chosen":   [{"role": "user", "content": "Explain gravity"}, {"role": "assistant", "content": "Gravity is a force..."}],
+ "rejected": [{"role": "user", "content": "Explain gravity"}, {"role": "assistant", "content": "I don't know"}]}
+```
+`chosen` and `rejected` must both be strings or both be message lists.
+
 **KTO (unpaired preferences):**
 ```json
 {"prompt": "Explain gravity", "completion": "Gravity is a force...", "label": true}

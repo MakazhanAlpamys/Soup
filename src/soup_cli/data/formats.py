@@ -393,15 +393,43 @@ def _convert_dpo(row: dict) -> dict:
     Note: chosen/rejected may legitimately be message LISTS (conversational
     DPO), so this converter only rejects an explicit null rather than requiring
     a plain string (unlike the alpaca / sharegpt / vision text converters).
+
+    #1849: a string ``prompt`` beside message-list completions -- the layout of
+    every bundled DPO example -- is rewritten into TRL's explicit
+    conversational one. TRL decides text vs. conversational from ``prompt``, so
+    it took those rows as text and crashed in its add-EOS step.
     """
     for field in ("prompt", "chosen", "rejected"):
         if row.get(field) is None:
             raise TypeError(f"dpo.{field} must not be null")
-    return {
-        "prompt": row["prompt"],
-        "chosen": row["chosen"],
-        "rejected": row["rejected"],
-    }
+    prompt, chosen, rejected = row["prompt"], row["chosen"], row["rejected"]
+    if isinstance(chosen, list) != isinstance(rejected, list):
+        raise TypeError(
+            "dpo chosen and rejected must both be message lists or both be strings"
+        )
+    if isinstance(chosen, list) and not isinstance(prompt, list):
+        prompt, chosen, rejected = _split_implicit_prompt(str(prompt), chosen, rejected)
+    return {"prompt": prompt, "chosen": chosen, "rejected": rejected}
+
+
+def _split_implicit_prompt(prompt: str, chosen: list, rejected: list) -> tuple:
+    """(prompt messages, chosen completion, rejected completion) for #1849.
+
+    The turns both conversations share are the prompt; what follows them is
+    the completion. That is TRL's own ``extract_prompt`` rule for rows with no
+    ``prompt`` key. The conversation is what trains, so it wins over the
+    redundant string, which is only used when the lists carry no shared turn
+    (assistant-only completions). The last turn of each side always stays a
+    completion: a tie (chosen == rejected) is real preference data, and TRL
+    cannot tokenize an empty completion.
+    """
+    shared = 0
+    limit = min(len(chosen), len(rejected)) - 1
+    while shared < limit and chosen[shared] == rejected[shared]:
+        shared += 1
+    if shared:
+        return chosen[:shared], chosen[shared:], rejected[shared:]
+    return [{"role": "user", "content": prompt}], chosen, rejected
 
 
 def _convert_kto(row: dict) -> dict:
