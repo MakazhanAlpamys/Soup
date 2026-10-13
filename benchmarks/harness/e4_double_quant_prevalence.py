@@ -11,6 +11,29 @@ bytes of each selected tensor are downloaded. ``run`` appends one JSON line per
 tensor to ``DIR/<model>.jsonl`` and skips keys already there, so an interrupted
 run resumes instead of restarting. Failed tensors go to ``DIR/<model>.void.jsonl``.
 
+Rule V4 ("a failed fetch, OOM or killed run is kept as void and reported, not
+silently retried"):
+
+* One HTTP request per fetch, no transport retry. Every request is journaled in
+  the append-only ``DIR/<model>.attempts.jsonl`` (flushed and fsynced per line):
+  a ``start`` event before it and an ``ok`` or ``fail`` event after it.
+* A failed request voids its tensor with reason ``fetch_failed``. The other
+  reasons are ``v1``, ``v2``, ``oom_or_killed`` (a MemoryError the process
+  survived) and ``error``.
+* On resume a key with a row is skipped, and a key with a void is reported and
+  NOT measured again. A key with journal events but neither a row nor a void was
+  in flight when the run stopped (interrupted fetch, fetched one ahead, or the
+  process killed while computing, which is all a hard OOM kill leaves behind):
+  it gets a void with reason ``interrupted`` and is not measured again either.
+* ``run --remeasure-voids`` measures voided keys again. The new requests carry
+  ``supersedes_attempt`` (the void's attempt id) and so does the new row; the
+  void is kept. ``summarize`` refuses a void and a row for one key without
+  that link.
+* ``summarize`` writes ``summary.json`` (measurement aggregates) and
+  ``attempts-summary.json`` (void counts by reason, remeasured keys, request
+  counts). Results written before the journal existed have no attempt file and
+  are reported as ``provenance: no per-attempt log``, never as zero failures.
+
 The FP8 reference decoder here is independent of soup_cli (bit-field table, fp32
 multiply, one bf16 rounding); each decode is cross-checked against B3's
 ``dequantize_fp8_blockwise`` and a mismatch voids the tensor (rule V2).
@@ -28,8 +51,10 @@ import re
 import statistics
 import subprocess
 import sys
+import threading
 import time
 import urllib.request
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -40,7 +65,7 @@ GROUP = 256
 SEED = 20261008
 SPREAD_EDGES = (1.0, 10.0, 100.0, 1000.0, float("inf"))
 HTTP_TIMEOUT = 120
-HTTP_RETRIES = 3
+VOID_REASONS = ("fetch_failed", "interrupted", "v1", "v2", "oom_or_killed", "error")
 
 MODELS = {
     "deepseek-v3": {
@@ -88,37 +113,116 @@ def _url(model: dict, filename: str) -> str:
     return f"https://huggingface.co/{model['repo']}/resolve/{model['rev']}/{filename}"
 
 
+class FetchFailed(Exception):  # noqa: N818 - the name the review of PR #10 asked for
+    """One HTTP request failed. Carries the cause; rule V4 forbids retrying it here."""
+
+    def __init__(self, url: str, exc: BaseException) -> None:
+        super().__init__(f"GET {url} failed: {exc!r}")
+        self.exc = exc
+        self.attempt_id: str | None = None
+
+
+class RuleVoidError(ValueError):
+    """A validity check of the rule (V1 or V2) failed for one tensor."""
+
+    def __init__(self, reason: str, message: str) -> None:
+        super().__init__(message)
+        self.reason = reason
+
+
 def _get(url: str, start: int | None = None, stop: int | None = None) -> bytes:
-    """GET ``url`` (bytes ``start..stop-1`` if given), retried on transient errors."""
-    last: Exception | None = None
-    for attempt in range(HTTP_RETRIES):
-        request = urllib.request.Request(url)
-        if start is not None:
-            request.add_header("Range", f"bytes={start}-{stop - 1}")
-        try:
-            with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT) as response:
-                return response.read()
-        except OSError as exc:  # URLError, timeouts and resets are all OSError
-            last = exc
-            time.sleep(2 * (attempt + 1))
-    raise OSError(f"GET {url} failed after {HTTP_RETRIES} tries: {last}")
+    """GET ``url`` (bytes ``start..stop-1`` if given). One request, never retried."""
+    request = urllib.request.Request(url)
+    if start is not None:
+        request.add_header("Range", f"bytes={start}-{stop - 1}")
+    try:
+        with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT) as response:
+            return response.read()
+    except OSError as exc:  # URLError, timeouts and resets are all OSError
+        raise FetchFailed(url, exc) from exc
+
+
+def _now() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def _read_jsonl(path: Path) -> list:
+    if not path.exists():
+        return []
+    return [json.loads(line) for line in path.read_text().splitlines() if line]
+
+
+def _append_jsonl(path: Path, record: dict) -> None:
+    with path.open("a") as handle:
+        handle.write(json.dumps(record) + "\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+
+
+class Journal:
+    """Append-only log of every HTTP request of one model's runs (rule V4)."""
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self._lock = threading.Lock()  # the prefetch thread and the main thread both write
+        self._seq = sum(event["event"] == "start" for event in _read_jsonl(path))
+        self.supersedes: dict = {}  # key -> attempt id of the void being remeasured
+        self.last_attempt: dict = {}  # key -> id of its latest request in this process
+
+    def start(self, key: str | None, filename: str, byte_range: list | None) -> str:
+        attempt_id = uuid.uuid4().hex
+        with self._lock:
+            event = {
+                "event": "start", "attempt_id": attempt_id, "key": key, "seq": self._seq,
+                "file": filename, "range": byte_range, "ts": _now(),
+            }
+            if key in self.supersedes:
+                event["supersedes_attempt"] = self.supersedes[key]
+            self._seq += 1
+            self.last_attempt[key] = attempt_id
+            _append_jsonl(self.path, event)
+        return attempt_id
+
+    def end(self, attempt_id: str, ok: bool, size: int | None, exc: BaseException | None) -> None:
+        with self._lock:
+            _append_jsonl(self.path, {
+                "event": "ok" if ok else "fail", "attempt_id": attempt_id, "bytes": size,
+                "exc": None if exc is None else repr(exc), "ts": _now(),
+            })
 
 
 class Checkpoint:
     """Lazily fetched safetensors headers for one pinned repo revision."""
 
-    def __init__(self, name: str) -> None:
+    def __init__(self, name: str, journal: Journal | None = None) -> None:
         self.name = name
         self.model = MODELS[name]
-        index = json.loads(_get(_url(self.model, "model.safetensors.index.json")))
+        self.journal = journal
+        index = json.loads(self._request(None, "model.safetensors.index.json"))
         self.weight_map: dict = index["weight_map"]
         self._headers: dict = {}
 
-    def header(self, filename: str) -> tuple[dict, int]:
+    def _request(self, key: str | None, filename: str, start: int | None = None,
+                 stop: int | None = None) -> bytes:
+        """One journaled request made on behalf of the selected tensor ``key``."""
+        url = _url(self.model, filename)
+        if self.journal is None:
+            return _get(url, start, stop)
+        attempt_id = self.journal.start(key, filename, None if start is None else [start, stop])
+        try:
+            raw = _get(url, start, stop)
+        except FetchFailed as failed:
+            failed.attempt_id = attempt_id
+            self.journal.end(attempt_id, False, None, failed.exc)
+            raise
+        # Anything else (KeyboardInterrupt, a kill) leaves the start without an end.
+        self.journal.end(attempt_id, True, len(raw), None)
+        return raw
+
+    def header(self, filename: str, owner: str | None = None) -> tuple[dict, int]:
         if filename not in self._headers:
-            url = _url(self.model, filename)
-            size = int.from_bytes(_get(url, 0, 8), "little")
-            header = json.loads(_get(url, 8, 8 + size))
+            size = int.from_bytes(self._request(owner, filename, 0, 8), "little")
+            header = json.loads(self._request(owner, filename, 8, 8 + size))
             header.pop("__metadata__", None)
             self._headers[filename] = (header, 8 + size)
         return self._headers[filename]
@@ -127,17 +231,24 @@ class Checkpoint:
         header, _ = self.header(self.weight_map[key])
         return header[key]
 
-    def fetch(self, key: str):
-        """The tensor ``key`` as an owned torch tensor. Rule V1: byte count checked."""
+    def fetch(self, key: str, owner: str | None = None):
+        """The tensor ``key`` as an owned torch tensor. Rule V1: byte count checked.
+
+        ``owner`` is the selected key the request is journaled under (an FP8
+        weight owns the request for its ``_scale_inv`` tensor).
+        """
         import torch
 
+        owner = owner or key
         filename = self.weight_map[key]
-        header, base = self.header(filename)
+        header, base = self.header(filename, owner)
         entry = header[key]
         start, stop = entry["data_offsets"]
-        raw = _get(_url(self.model, filename), base + start, base + stop)
+        raw = self._request(owner, filename, base + start, base + stop)
         if len(raw) != stop - start:
-            raise ValueError(f"V1: {key} fetched {len(raw)} bytes, header says {stop - start}")
+            raise RuleVoidError(
+                "v1", f"V1: {key} fetched {len(raw)} bytes, header says {stop - start}"
+            )
         dtype = getattr(torch, _ST_DTYPES[entry["dtype"]])
         return torch.frombuffer(bytearray(raw), dtype=dtype).reshape(entry["shape"])
 
@@ -353,7 +464,9 @@ def fetch_item(ckpt: Checkpoint, item: dict) -> tuple:
     """(weight, scale or None, seconds). Runs one tensor ahead in a worker thread."""
     t0 = time.perf_counter()
     weight = ckpt.fetch(item["key"])
-    scale = ckpt.fetch(item["key"] + "_scale_inv") if ckpt.model["fp8"] else None
+    scale = None
+    if ckpt.model["fp8"]:
+        scale = ckpt.fetch(item["key"] + "_scale_inv", owner=item["key"])
     return weight, scale, time.perf_counter() - t0
 
 
@@ -366,7 +479,7 @@ def measure(ckpt: Checkpoint, item: dict, table, fetched: tuple) -> dict:
     if ckpt.model["fp8"]:
         ref = reference_decode(weight, scale, table)
         if not torch.equal(ref, b3_decode(weight, scale)):
-            raise ValueError(f"V2: {key} reference decode differs from B3's decoder")
+            raise RuleVoidError("v2", f"V2: {key} reference decode differs from B3's decoder")
         del scale
     else:
         ref = weight.to(torch.bfloat16)
@@ -417,7 +530,7 @@ def box() -> dict:
     except OSError:
         tree = "unknown"
     return {
-        "when_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "when_utc": _now(),
         "cpu": cpu,
         "logical_cpus": os.cpu_count(),
         "platform": platform.platform(),
@@ -446,17 +559,81 @@ def cmd_select(args) -> int:
     return 0
 
 
+def _void_reason(exc: BaseException) -> str:
+    if isinstance(exc, FetchFailed):
+        return "fetch_failed"
+    if isinstance(exc, RuleVoidError):
+        return exc.reason
+    if isinstance(exc, MemoryError):
+        return "oom_or_killed"
+    return "error"
+
+
+def _void_interrupted(journal_path: Path, void_path: Path, done: set, voids: dict) -> list:
+    """Void every key that was in flight when an earlier run stopped (rule V4).
+
+    In flight: the journal has requests for the key but there is neither a row
+    nor a void for it. Returns the newly voided keys.
+    """
+    events = _read_jsonl(journal_path)
+    ended = {e["attempt_id"] for e in events if e["event"] in ("ok", "fail")}
+    latest: dict = {}  # key -> id of its last request
+    for event in events:
+        if event["event"] == "start" and event["key"] is not None:
+            latest[event["key"]] = event["attempt_id"]
+    # A void written by a run names the key's last request, so a key whose last
+    # request is not named by any void (and that has no row) was in flight.
+    voided_attempts = {v.get("attempt_id") for rows in voids.values() for v in rows}
+    new = []
+    for key, attempt_id in latest.items():
+        if key in done or attempt_id in voided_attempts:
+            continue
+        void = {
+            "key": key, "reason": "interrupted", "attempt_id": attempt_id,
+            "error": "run stopped with this tensor in flight"
+            + ("" if attempt_id not in ended else " (requests ended, never measured)"),
+        }
+        _append_jsonl(void_path, void)
+        voids.setdefault(key, []).append(void)
+        new.append(key)
+    return new
+
+
 def cmd_run(args) -> int:
     out = Path(args.out)
     selection = json.loads((out / "selected-keys.json").read_text())["models"][args.model]
-    ckpt = Checkpoint(args.model)
     done_path, void_path = out / f"{args.model}.jsonl", out / f"{args.model}.void.jsonl"
-    done = set()
-    if done_path.exists():
-        done = {json.loads(line)["key"] for line in done_path.read_text().splitlines() if line}
-    todo = [item for item in selection["keys"] if item["key"] not in done]
+    journal_path = out / f"{args.model}.attempts.jsonl"
+    done = {row["key"] for row in _read_jsonl(done_path)}
+    voids: dict = {}
+    for void in _read_jsonl(void_path):
+        voids.setdefault(void["key"], []).append(void)
+    for key in _void_interrupted(journal_path, void_path, done, voids):
+        print(f"VOID {key}: interrupted in an earlier run", flush=True)
+
+    journal = Journal(journal_path)
+    todo = []
+    for item in selection["keys"]:
+        key = item["key"]
+        if key in done:
+            continue
+        if key in voids:
+            if not args.remeasure_voids:
+                continue
+            superseded = voids[key][-1].get("attempt_id")
+            if superseded is None:
+                raise SystemExit(f"{key}: its void has no attempt_id to supersede")
+            journal.supersedes[key] = superseded
+        todo.append(item)
     if args.limit:
         todo = todo[: args.limit]
+    kept = sorted(key for key in voids if key not in done and key not in journal.supersedes)
+    if kept:
+        print(
+            f"{args.model}: {len(kept)} voided tensors are NOT measured again "
+            "(pass --remeasure-voids to do that, linked to the void)", flush=True,
+        )
+    ckpt = Checkpoint(args.model, journal)
     (out / f"{args.model}.box.json").write_text(json.dumps(box(), indent=1))
     table = _e4m3_table()
     print(f"{args.model}: {len(done)} done, {len(todo)} to go", flush=True)
@@ -470,13 +647,19 @@ def cmd_run(args) -> int:
         for i, item in enumerate(todo):
             future = pending
             pending = prefetch(todo[i + 1]) if i + 1 < len(todo) else None
+            key = item["key"]
             try:
                 row = measure(ckpt, item, table, future.result())
             except Exception as exc:  # rule V4: kept and reported, never silently retried
-                with void_path.open("a") as handle:
-                    handle.write(json.dumps({"key": item["key"], "error": repr(exc)}) + "\n")
-                print(f"VOID {item['key']}: {exc}", flush=True)
+                attempt_id = getattr(exc, "attempt_id", None) or journal.last_attempt.get(key)
+                _append_jsonl(void_path, {
+                    "key": key, "reason": _void_reason(exc), "error": repr(exc),
+                    "attempt_id": attempt_id,
+                })
+                print(f"VOID {key}: {exc}", flush=True)
                 continue
+            if key in journal.supersedes:
+                row["supersedes_attempt"] = journal.supersedes[key]
             with done_path.open("a") as handle:
                 handle.write(json.dumps(row) + "\n")
             if (i + 1) % 25 == 0 or i + 1 == len(todo):
@@ -493,18 +676,57 @@ def _quantiles(values: list) -> dict:
     return {"n": len(values), "median": statistics.median(ordered), "p90": p90, "max": ordered[-1]}
 
 
+def _attempts_entry(name: str, rows: list, voids: list, journal_path: Path) -> dict:
+    """Void and request accounting for one model. Refuses an unlinked void + row."""
+    void_attempts: dict = {}
+    for void in voids:
+        void_attempts.setdefault(void["key"], set()).add(void.get("attempt_id"))
+    remeasured = set()
+    for row in rows:
+        if row["key"] not in void_attempts:
+            continue
+        link = row.get("supersedes_attempt")
+        if link is None or link not in void_attempts[row["key"]]:
+            raise SystemExit(
+                f"{name}: {row['key']} has both a void and a result row that does not "
+                "supersede it (rule V4). Refusing to summarize."
+            )
+        remeasured.add(row["key"])
+    by_reason = {reason: 0 for reason in VOID_REASONS}
+    for void in voids:
+        reason = void.get("reason", "error")
+        by_reason[reason if reason in by_reason else "error"] += 1
+    entry = {
+        "voids": len(voids),
+        "voids_by_reason": by_reason,
+        "void_keys": sorted(void_attempts),
+        "remeasured_keys": len(remeasured),
+    }
+    if journal_path.exists():
+        events = _read_jsonl(journal_path)
+        counts = {kind: sum(e["event"] == kind for e in events) for kind in ("start", "ok", "fail")}
+        counts["unfinished"] = counts["start"] - counts["ok"] - counts["fail"]
+        entry.update(provenance="per-attempt log", attempts=counts)
+    else:
+        # Written before the journal existed: failed requests may have been
+        # retried without a trace, so no count of them is given at all.
+        entry.update(provenance="no per-attempt log", attempts=None)
+    return entry
+
+
 def cmd_summarize(args) -> int:
     out = Path(args.out)
     summary = {}
+    attempts = {}
     for name in MODELS:
         path = out / f"{name}.jsonl"
-        if not path.exists():
-            continue
-        rows = [json.loads(line) for line in path.read_text().splitlines() if line]
-        voids = []
         void_path = out / f"{name}.void.jsonl"
-        if void_path.exists():
-            voids = [json.loads(line) for line in void_path.read_text().splitlines() if line]
+        journal_path = out / f"{name}.attempts.jsonl"
+        if not (path.exists() or void_path.exists() or journal_path.exists()):
+            continue
+        rows = _read_jsonl(path)
+        voids = _read_jsonl(void_path)
+        attempts[name] = _attempts_entry(name, rows, voids, journal_path)
         per_kind = {}
         for kind in sorted({r["kind"] for r in rows}) + ["all"]:
             subset = [r for r in rows if kind in ("all", r["kind"])]
@@ -527,16 +749,27 @@ def cmd_summarize(args) -> int:
             "per_kind": per_kind,
             "spread_buckets_dq_on": buckets,
         }
+    # summary.json keeps its schema: re-running this on committed rows reproduces
+    # the committed file. Void and request accounting goes to its own file.
     (out / "summary.json").write_text(json.dumps(summary, indent=1))
+    (out / "attempts-summary.json").write_text(json.dumps(attempts, indent=1))
     brief = {
         name: {
             "tensors": v["tensors"],
             "voids": v["voids"],
+            "voids_by_reason": attempts[name]["voids_by_reason"],
+            "remeasured_keys": attempts[name]["remeasured_keys"],
+            "provenance": attempts[name]["provenance"],
             "median_frac_over_dq_on": v["per_kind"]["all"]["frac_over_dq_on"].get("median"),
         }
         for name, v in summary.items()
     }
     print(json.dumps(brief, indent=1))
+    for name, entry in attempts.items():
+        if entry["attempts"] is None:
+            print(f"{name}: provenance: no per-attempt log")
+        else:
+            print(f"{name}: provenance: per-attempt log, requests {entry['attempts']}")
     return 0
 
 
@@ -550,6 +783,10 @@ def main(argv=None) -> int:
     p.add_argument("--out", required=True)
     p.add_argument(
         "--limit", type=int, default=0, help="smoke test: only the first N pending tensors"
+    )
+    p.add_argument(
+        "--remeasure-voids", action="store_true",
+        help="measure voided tensors again; the new row supersedes the void, which is kept",
     )
     p = sub.add_parser("summarize")
     p.add_argument("--out", required=True)
