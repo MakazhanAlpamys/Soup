@@ -361,6 +361,10 @@ def test_no_real_switch_has_a_name_the_rule_would_mask(cli):
         (["--api-key", "--model", "m"], ("--api-key", REDACTED, "m")),
         (["--use-token", "--", "S1"], ("--use-token", REDACTED, "S1")),
         (["--api-key", "--api-key", "--api-key", "S1"], ("--api-key",) * 3 + (REDACTED,)),
+        # A single dash is never a long option, whatever its letters spell.
+        (["--hf-token", "-my-key"], ("--hf-token", REDACTED)),
+        (["--hf-token", "-my-key", "next"], ("--hf-token", REDACTED, "next")),
+        (["--hf-token", "-my-key=S1"], ("--hf-token", REDACTED)),
     ],
 )
 def test_only_a_credential_named_option_is_read_as_an_option_without_a_tree(args, expected):
@@ -383,6 +387,21 @@ def test_only_a_credential_named_option_is_read_as_an_option_without_a_tree(args
 def test_a_long_option_the_tree_knows_is_read_as_an_option(args, expected):
     known = frozenset({"--token", "--repo"})
     assert mask_secret_args(args, frozenset({"--token", "-t"}), known) == expected
+
+
+def test_a_long_option_the_caller_lists_as_secret_is_read_as_an_option():
+    """Listed in `secret_opts`, so an option, though its name says nothing about a credential."""
+    secret_opts = frozenset({"--webhook", "--sink"})
+    known = frozenset({"--repo"})
+    assert mask_secret_args(["--webhook", "--sink", "S1"], secret_opts, known) == (
+        "--webhook",
+        "--sink",
+        REDACTED,
+    )
+    assert mask_secret_args(["--webhook", "--sink=S1"], secret_opts, known) == (
+        "--webhook",
+        f"--sink={REDACTED}",
+    )
 
 
 # ---------------------------------------------------------------------------
