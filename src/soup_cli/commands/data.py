@@ -13,7 +13,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from soup_cli.data.loader import _resolve_media_entries, load_raw_data
+from soup_cli.data.loader import _resolve_media_entries, load_raw_data, non_object_row_issue
 from soup_cli.data.validator import validate_and_stats
 from soup_cli.utils.embed import DEFAULT_EMBED_MODEL, embed_texts
 from soup_cli.utils.exit_codes import EXIT_GATE_FAILED, EXIT_USAGE_ERROR, GateCommand
@@ -112,7 +112,8 @@ def validate(
             )
             raise typer.Exit(EXIT_USAGE_ERROR)
 
-    data = load_raw_data(file_path)
+    load_issues: list[str] = []
+    data = load_raw_data(file_path, issues=load_issues)
 
     # Auto-detect format if not specified
     if fmt == "auto":
@@ -126,6 +127,7 @@ def validate(
             raise typer.Exit(EXIT_USAGE_ERROR)
 
     result = validate_and_stats(data, expected_format=fmt)
+    result["issues"] = load_issues + result["issues"]
 
     if result["issues"]:
         console.print("[yellow]Issues found:[/]")
@@ -2270,7 +2272,7 @@ def review_cmd(
 
     shown = 0
     with path.open("r", encoding="utf-8") as fh:
-        for line in fh:
+        for line_number, line in enumerate(fh, start=1):
             if shown >= sample:
                 break
             line = line.strip()
@@ -2279,6 +2281,10 @@ def review_cmd(
             try:
                 entry = _json.loads(line)
             except _json.JSONDecodeError:
+                continue
+            if not isinstance(entry, dict):
+                issue = non_object_row_issue(entry, line_number)
+                console.print(f"[yellow]Warning: {issue}[/]")
                 continue
             prompt = str(entry.get("prompt", ""))
             chosen = str(entry.get("chosen", ""))

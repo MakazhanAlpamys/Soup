@@ -69,7 +69,7 @@ def _streaming_builder_for(entry: str) -> str:
 MAX_REMOTE_ROWS = 1_000_000
 
 
-def load_raw_data(path: Path) -> list[dict]:
+def load_raw_data(path: Path, *, issues: list[str] | None = None) -> list[dict]:
     """Load raw data from a file into list of dicts."""
     if not path.exists():
         raise FileNotFoundError(f"Data file not found: {path}")
@@ -79,9 +79,9 @@ def load_raw_data(path: Path) -> list[dict]:
         raise ValueError(f"Unsupported file format: {ext}. Supported: {SUPPORTED_EXTENSIONS}")
 
     if ext == ".jsonl":
-        return _load_jsonl(path)
+        return _load_jsonl(path, issues=issues)
     elif ext == ".json":
-        return _load_json(path)
+        return _load_json(path, issues=issues)
     elif ext == ".csv":
         return _load_csv(path)
     elif ext == ".parquet":
@@ -92,7 +92,16 @@ def load_raw_data(path: Path) -> list[dict]:
     raise ValueError(f"Unsupported format: {ext}")
 
 
-def _load_jsonl(path: Path) -> list[dict]:
+def non_object_row_issue(value: object, position: int, unit: str = "line") -> str:
+    """Describe a rejected JSON value without printing its possibly sensitive contents."""
+    kind = {
+        str: "string", list: "array", int: "number", float: "number",
+        bool: "boolean", type(None): "null",
+    }[type(value)]
+    return f"{unit} {position} is a JSON {kind}, not an object"
+
+
+def _load_jsonl(path: Path, *, issues: list[str] | None = None) -> list[dict]:
     data = []
     # v0.40.1 Part E — auto-strip UTF-8 BOM (Windows users overwhelmingly
     # write JSONL via PowerShell `Out-File -Encoding utf8` which adds BOM).
@@ -103,17 +112,33 @@ def _load_jsonl(path: Path) -> list[dict]:
             if not line:
                 continue
             try:
-                data.append(json.loads(line))
+                row = json.loads(line)
+                if not isinstance(row, dict):
+                    issue = non_object_row_issue(row, i + 1)
+                    console.print(f"[yellow]Warning: {issue}[/]")
+                    if issues is not None:
+                        issues.append(issue)
+                    continue
+                data.append(row)
             except json.JSONDecodeError as e:
                 console.print(f"[yellow]Warning: invalid JSON on line {i + 1}: {e}[/]")
     return data
 
 
-def _load_json(path: Path) -> list[dict]:
+def _load_json(path: Path, *, issues: list[str] | None = None) -> list[dict]:
     with open(path, encoding="utf-8") as f:
         raw = json.load(f)
     if isinstance(raw, list):
-        return raw
+        rows = []
+        for position, row in enumerate(raw, start=1):
+            if not isinstance(row, dict):
+                issue = non_object_row_issue(row, position, "row")
+                console.print(f"[yellow]Warning: {issue}[/]")
+                if issues is not None:
+                    issues.append(issue)
+                continue
+            rows.append(row)
+        return rows
     raise ValueError("JSON file must contain a list of objects")
 
 
