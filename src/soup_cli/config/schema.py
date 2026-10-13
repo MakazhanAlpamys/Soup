@@ -5023,10 +5023,12 @@ class SoupConfig(BaseModel):
         the fields and then silently trains the unexpanded model, so refuse at
         load with the actual task/backend/modality in the message.
 
-        #1813 - ``task: pretrain`` runs the expansion too, but has no route
-        that trains the new blocks: a LoRA rank freezes them again (#1326) and
-        its trainer has no ``lora.r: 0`` branch. It is refused here, whatever
-        the rank, with the recipe that does work."""
+        #1813 - ``task: pretrain`` on transformers text runs the expansion too,
+        but has no route that trains the new blocks: a LoRA rank freezes them
+        again (#1326) and its trainer has no ``lora.r: 0`` branch. It is refused
+        here, whatever the rank, and only there does the message name the sft
+        recipe: the unsloth pretrain path never expands, and mlx or another
+        modality has no such recipe."""
         tcfg = self.training
         if tcfg.expand_layers is None:
             return self
@@ -5036,7 +5038,11 @@ class SoupConfig(BaseModel):
             and self.modality == "text"
         ):
             fix = "Remove expand_layers and freeze_trainable_layers."
-            if self.task == "pretrain":
+            if (
+                self.task == "pretrain"
+                and self.backend == "transformers"
+                and self.modality == "text"
+            ):
                 fix = (
                     "The pretrain trainer runs the expansion, but a LoRA rank "
                     "freezes the appended blocks again and it has no lora.r: 0 "
