@@ -413,6 +413,8 @@ def _install_numpy_mlx(monkeypatch):
     them.
     """
     core = types.ModuleType("mlx.core")
+    # #1850: MLX SFT's train() seeds mx.random before attaching LoRA.
+    core.random = types.SimpleNamespace(seed=lambda _seed: None)
     core.array = np.array
     core.maximum = np.maximum
     core.float32 = np.float32
