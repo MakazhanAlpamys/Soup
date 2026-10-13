@@ -369,10 +369,44 @@ class MLXSFTTrainerWrapper:
                 "[yellow]MLX backend ignores: " + ", ".join(unsupported) + "[/]"
             )
 
+    def _check_split_sizes(self, dataset: dict) -> None:
+        """#1851: refuse a split smaller than one batch before the model loads.
+
+        mlx-lm iterates both splits in batches of ``batch_size`` (evaluation
+        reuses the training value), and its ``iterate_batches`` -- like
+        ``masked_iterate_batches`` -- raises on a dataset smaller than one batch.
+        That surfaced at the first evaluation, after the model had loaded: the
+        bundled 10-row ``alpaca_tiny.jsonl`` with the default ``val_split: 0.1``
+        holds out one row, so any ``batch_size >= 2`` died there. Dropping the
+        split instead would silently skip validation (#1223), so this refuses
+        and names the ways out.
+        """
+        tcfg = self.config.training
+        # train() resolves anything but an int (``auto``) to 1.
+        batch_size = int(tcfg.batch_size) if isinstance(tcfg.batch_size, int) else 1
+        val_rows = len(dataset.get("val") or [])
+        if 0 < val_rows < batch_size:
+            raise ValueError(
+                f"MLX backend: the validation split has {val_rows} row(s), fewer "
+                f"than training.batch_size ({batch_size}), and mlx-lm evaluates in "
+                "whole batches. Lower training.batch_size to at most "
+                f"{val_rows}, raise data.val_split, or set data.val_split: 0 to "
+                "train without validation."
+            )
+        train_rows = len(dataset.get("train") or [])
+        if 0 < train_rows < batch_size:
+            raise ValueError(
+                f"MLX backend: the training split has {train_rows} row(s), fewer "
+                f"than training.batch_size ({batch_size}), and mlx-lm trains in "
+                f"whole batches. Lower training.batch_size to at most {train_rows} "
+                "or add rows."
+            )
+
     def setup(self, dataset: dict) -> None:
         """Load MLX model, configure LoRA, prepare dataset."""
         self._require_mlx()
         self._check_unsupported()
+        self._check_split_sizes(dataset)
 
         from soup_cli.utils.mlx import load_mlx_model
 

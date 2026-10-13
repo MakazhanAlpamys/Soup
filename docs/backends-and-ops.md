@@ -98,6 +98,12 @@ dependency; the local file path below does not.
 CUDA-shaped analytical VRAM preflight is skipped on the MLX path because Apple
 unified memory is managed by Metal, not a fixed CUDA VRAM pool.
 
+mlx-lm trains and evaluates in whole batches of `training.batch_size`, so a
+training or validation split with fewer rows than one batch is refused before the
+model loads, naming both numbers ([#1851](https://github.com/MakazhanAlpamys/Soup/issues/1851)).
+On a small file the default `data.val_split: 0.1` is the usual cause: lower
+`batch_size`, raise `val_split`, or set `val_split: 0`.
+
 ```yaml
 base: mlx-community/Llama-3.2-3B-Instruct-4bit
 task: sft
