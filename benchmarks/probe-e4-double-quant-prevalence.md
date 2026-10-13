@@ -141,7 +141,11 @@ All figures are from `results/e4-double-quant-prevalence/summary.json`, which th
 
 ### Voids
 
-None. No `*.void.jsonl` file was written for any model: no V1 byte-count mismatch, no V2 decoder mismatch, no failed fetch, no crashed or killed run. No row has a non-finite value with double-quant on.
+No `*.void.jsonl` file was written for any model: every selected tensor ended with a row, with no V1 byte-count mismatch, no V2 decoder mismatch and no crashed or killed run. No row has a non-finite value with double-quant on.
+
+**V4 was not met at the transport level in these runs.** The main runs fetched through `_get`, which retried a failed HTTP request up to three times without logging it. Zero `*.void.jsonl` files show that every selected tensor ended with a row. They do not show that no request failed, and V4's "not silently retried" was not met at the transport level in these runs. V1 confirms each row's fetched byte count equals its header span. V1 does not verify byte content. The records are kept unchanged. From commit `06b8f24` on, transport retries are removed and every attempt is journaled (`<model>.attempts.jsonl`); `summarize` reports these five runs as `provenance: no per-attempt log` and gives no count of failed requests for them.
+
+Whether a `*.void.jsonl` ever existed, checked on 2026-10-13: for the five main runs, no. There is none on the run machine's disk or in any git object, the five run logs each start at `0 done` and contain no `VOID` line, and each model was run once. For the smoke runs made before the handoff on another machine (3 DeepSeek-V3 and 3 OLMoE tensors, not part of this record): unknown, that directory is not available.
 
 | Model | Selected | Rows | Voids |
 |---|---:|---:|---:|
