@@ -758,20 +758,41 @@ class TestAnAdapterOffReferenceMustBeTheStartingModel:
             validate_adapter_off_reference({primary: 0.6, term: 0.4}, _training(init))
 
         message = str(excinfo.value)
-        assert f"cannot compute {term} under a {primary} primary" in message
+        article = "an" if primary == "orpo" else "a"
+        assert f"cannot compute {term} under {article} {primary} primary" in message
         assert f"training.lora.init_strategy='{init}' rewrites the base weights" in message
         assert "Give dpo or ipo the largest weight" in message
         assert "set training.lora.init_strategy to 'random'" in message
+        assert "use_olora" not in message
 
-    def test_use_olora_alone_is_the_olora_init(self):
-        """The schema aligns the two; a config object that did not go through
-        it still names the init it will get."""
+    @pytest.mark.parametrize("init", ["olora", "random"])
+    def test_use_olora_is_named_and_is_what_the_message_says_to_unset(self, init):
+        """The schema sets ``init_strategy='olora'`` beside ``use_olora`` and
+        refuses any other value, so "set init_strategy to 'random'" would send
+        the user into that error. ``random`` here is a config object that did
+        not go through the schema."""
         from soup_cli.utils.preference_combine import validate_adapter_off_reference
 
-        with pytest.raises(ValueError, match="init_strategy='olora' rewrites the base weights"):
+        with pytest.raises(ValueError) as excinfo:
             validate_adapter_off_reference(
-                {"simpo": 0.6, "dpo": 0.4}, _training("random", use_olora=True)
+                {"simpo": 0.6, "dpo": 0.4}, _training(init, use_olora=True)
             )
+
+        message = str(excinfo.value)
+        assert "training.lora.use_olora=True (the same as init_strategy='olora')" in message
+        assert "rewrites the base weights" in message
+        assert "Give dpo or ipo the largest weight" in message
+        assert "set training.lora.use_olora to false" in message
+        assert "init_strategy to 'random'" not in message
+
+    def test_the_way_out_of_use_olora_loads(self):
+        """What the message says to do is a config the schema accepts, and
+        what it no longer says to do is one the schema refuses."""
+        from soup_cli.config.schema import LoraConfig
+
+        assert LoraConfig(use_olora=False).init_strategy == "random"
+        with pytest.raises(ValueError, match="use_olora=True conflicts"):
+            LoraConfig(use_olora=True, init_strategy="random")
 
     def test_a_relora_restart_is_refused_with_the_reason(self):
         """A restart merges the adapter into the base: measured on the tiny
@@ -785,7 +806,7 @@ class TestAnAdapterOffReferenceMustBeTheStartingModel:
             )
 
         message = str(excinfo.value)
-        assert "cannot compute dpo, ipo under a orpo primary" in message
+        assert "cannot compute dpo, ipo under an orpo primary" in message
         assert "training.relora_steps=200 merges the adapter into the base weights" in message
         assert "Remove training.relora_steps" in message
         assert "init_strategy" not in message
@@ -816,7 +837,7 @@ class TestAnAdapterOffReferenceMustBeTheStartingModel:
         ("lora", "fields", "reason"),
         [
             (_LORA[:-1] + ", init_strategy: pissa}", FIELDS, "init_strategy='pissa'"),
-            (_LORA[:-1] + ", use_olora: true}", FIELDS, "init_strategy='olora'"),
+            (_LORA[:-1] + ", use_olora: true}", FIELDS, "training.lora.use_olora=True"),
             (_LORA, FIELDS + "  relora_steps: 1\n", "training.relora_steps=1"),
         ],
     )
@@ -1332,3 +1353,41 @@ class TestTheIpoKernel:
             compute_ipo_term(pol_chosen, pol_rejected, None, ref_rejected, 0.25)
         with pytest.raises(ValueError, match="beta"):
             compute_ipo_term(pol_chosen, pol_rejected, ref_chosen, ref_rejected, 0.0)
+
+
+# --- The primary is the largest weight, wherever its key sits ----------------
+#
+# From the second review of #1828: both call sites survived having
+# ``primary_loss(weights)`` swapped for ``next(iter(weights))``.
+
+
+def test_the_guard_follows_the_largest_weight_not_the_first_key():
+    from soup_cli.utils.preference_combine import validate_adapter_off_reference
+
+    with pytest.raises(ValueError, match="cannot compute dpo under a simpo primary"):
+        validate_adapter_off_reference({"dpo": 0.4, "simpo": 0.6}, _training("pissa"))
+    assert validate_adapter_off_reference({"simpo": 0.4, "dpo": 0.6}, _training("pissa")) is None
+
+
+@pytest.mark.parametrize(
+    ("weights", "wrapper_name"),
+    [
+        ("{dpo: 0.4, simpo: 0.6}", "SimPOTrainerWrapper"),
+        ("{simpo: 0.4, dpo: 0.6}", "DPOTrainerWrapper"),
+        ("{ipo: 0.1, dpo: 0.3, orpo: 0.6}", "ORPOTrainerWrapper"),
+    ],
+)
+def test_the_built_trainer_follows_the_largest_weight(weights, wrapper_name):
+    from soup_cli.config.loader import load_config_from_string
+    from soup_cli.trainer.preference import PreferenceTrainerWrapper
+
+    cfg = load_config_from_string(
+        "base: ./nowhere\ntask: preference\n"
+        "data: {train: ./unused.jsonl, format: dpo, max_length: 64}\n"
+        "training:\n  epochs: 1\n  batch_size: 2\n  quantization: none\n"
+        f"  preference_loss_weights: {weights}\n"
+        "  lora: {r: 4, alpha: 8, dropout: 0.0}\noutput: ./out\n"
+    )
+    wrapper = PreferenceTrainerWrapper(cfg, device="cpu")
+
+    assert type(wrapper._build_multi_objective()).__name__ == wrapper_name

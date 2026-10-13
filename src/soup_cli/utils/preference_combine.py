@@ -101,19 +101,28 @@ def validate_adapter_off_reference(weights: Mapping[str, float], training: Any) 
         return
     lora = getattr(training, "lora", None)
     init = getattr(lora, "init_strategy", "random")
-    if init == "random" and getattr(lora, "use_olora", False):
-        init = "olora"
     relora_steps = getattr(training, "relora_steps", None)
-    if init != "random":
+    other_primary = (
+        "Give dpo or ipo the largest weight (trl's DPOTrainer keeps a frozen "
+        "copy of the adapter as its reference)"
+    )
+    if getattr(lora, "use_olora", False):
+        # The schema sets init_strategy='olora' beside it and refuses any
+        # other value, so the way out is the flag, not the init.
+        why = (
+            "training.lora.use_olora=True (the same as init_strategy='olora') "
+            "rewrites the base weights when the adapter is created"
+        )
+        fix = (
+            f"{other_primary}, or set training.lora.use_olora to false and leave "
+            "training.lora.init_strategy unset."
+        )
+    elif init != "random":
         why = (
             f"training.lora.init_strategy={init!r} rewrites the base weights when "
             "the adapter is created"
         )
-        fix = (
-            "Give dpo or ipo the largest weight (trl's DPOTrainer keeps a frozen "
-            "copy of the adapter as its reference), or set "
-            "training.lora.init_strategy to 'random'."
-        )
+        fix = f"{other_primary}, or set training.lora.init_strategy to 'random'."
     elif relora_steps is not None:
         why = (
             f"training.relora_steps={relora_steps} merges the adapter into the base "
@@ -123,8 +132,9 @@ def validate_adapter_off_reference(weights: Mapping[str, float], training: Any) 
     else:
         return
     terms = ", ".join(sorted(set(weights) & REF_MODEL_LOSSES))
+    article = "an" if primary[0] in "aeiou" else "a"
     raise ValueError(
-        f"preference_loss_weights: cannot compute {terms} under a {primary} primary "
+        f"preference_loss_weights: cannot compute {terms} under {article} {primary} primary "
         f"with this adapter. dpo and ipo compare the policy with the model it "
         f"started from. The {primary} trainer keeps no copy of that model, so the "
         f"blend reads it by switching the LoRA adapter off, and {why}: with the "
