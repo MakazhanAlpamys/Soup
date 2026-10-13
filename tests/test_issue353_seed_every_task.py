@@ -514,7 +514,6 @@ _NOT_SEEDED = {
                   "model_copy carries the seed into",
     "bitnet": "raises before it builds anything; hardware-gated path",
     "mlx_sft": "MLX backend, which seeds nothing on any path yet",
-    "mlx_dpo": "MLX backend, which seeds nothing on any path yet",
     "mlx_grpo": "MLX backend, which seeds nothing on any path yet",
 }
 
