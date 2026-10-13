@@ -1,9 +1,11 @@
 """Issue #1325: ``training.expand_layers`` must refuse unsupported routes.
 
-LLaMA Pro block expansion is applied only by the transformers text
-SFT/pretrain ``_setup_transformers`` paths. Every other task, backend or
-modality accepted the fields and trained without them; these tests pin the
-load-time refusal and the two accepted routes.
+LLaMA Pro block expansion trains the appended blocks only on the transformers
+text SFT ``_setup_transformers`` path. Every other task, backend or modality
+accepted the fields and trained without them; these tests pin the load-time
+refusal and the accepted route. ``task: pretrain`` was accepted until #1813: its
+trainer runs the expansion but has no route that trains the new blocks, so it
+is now refused with the other tasks.
 
 Every refused config is first loaded WITHOUT ``expand_layers``, so a refusal
 can only come from ``expand_layers`` and not from something else wrong with
@@ -20,7 +22,7 @@ import pytest
 from soup_cli.config.loader import load_config_from_string
 from soup_cli.config.schema import SoupConfig
 
-_SUPPORTED_TASKS = ("sft", "pretrain")
+_SUPPORTED_TASKS = ("sft",)
 _ALL_TASKS = typing.get_args(SoupConfig.model_fields["task"].annotation)
 _OTHER_TASKS = tuple(task for task in _ALL_TASKS if task not in _SUPPORTED_TASKS)
 
@@ -62,8 +64,9 @@ def _yaml(task, backend="transformers", modality=None, expand=True):
 
 
 def test_the_task_list_comes_from_the_schema():
-    assert len(_OTHER_TASKS) == len(_ALL_TASKS) - 2
+    assert len(_OTHER_TASKS) == len(_ALL_TASKS) - 1
     assert "dpo" in _OTHER_TASKS and "sft" not in _OTHER_TASKS
+    assert "pretrain" in _OTHER_TASKS  # #1813
 
 
 @pytest.mark.parametrize("task", _OTHER_TASKS)
