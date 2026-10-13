@@ -108,7 +108,7 @@ class TestHealthEndpoint:
 
         from soup_cli.ui.app import create_app
 
-        client = TestClient(create_app())
+        client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
         response = client.get("/api/health")
         assert response.status_code == 200
         assert response.json()["status"] == "ok"
@@ -126,7 +126,7 @@ class TestIndexEndpoint:
 
         from soup_cli.ui.app import create_app
 
-        client = TestClient(create_app())
+        client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
         response = client.get("/")
         assert response.status_code == 200
         assert "text/html" in response.headers["content-type"]
@@ -141,7 +141,7 @@ class TestIndexEndpoint:
 
         from soup_cli.ui.app import create_app
 
-        client = TestClient(create_app())
+        client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
         response = client.get("/")
         html = response.text
         assert "page-dashboard" in html
@@ -162,7 +162,7 @@ class TestSystemEndpoint:
 
         from soup_cli.ui.app import create_app
 
-        client = TestClient(create_app())
+        client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
         response = client.get("/api/system", headers=_auth_headers())
         assert response.status_code == 200
         data = response.json()
@@ -185,7 +185,7 @@ class TestTemplatesEndpoint:
 
         from soup_cli.ui.app import create_app
 
-        client = TestClient(create_app())
+        client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
         response = client.get("/api/templates", headers=_auth_headers())
         assert response.status_code == 200
         data = response.json()
@@ -205,7 +205,7 @@ class TestTemplatesEndpoint:
 
         from soup_cli.ui.app import create_app
 
-        client = TestClient(create_app())
+        client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
         response = client.get("/api/templates", headers=_auth_headers())
         templates = response.json()["templates"]
         for name, yaml_str in templates.items():
@@ -225,7 +225,7 @@ class TestConfigValidation:
 
         from soup_cli.ui.app import create_app
 
-        client = TestClient(create_app())
+        client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
         yaml_str = """
 base: meta-llama/Llama-3.1-8B
 data:
@@ -252,7 +252,7 @@ data:
 
         from soup_cli.ui.app import create_app
 
-        client = TestClient(create_app())
+        client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
         response = client.post(
             "/api/config/validate",
             json={"yaml": "invalid: true"},
@@ -272,7 +272,7 @@ data:
 
         from soup_cli.ui.app import create_app
 
-        client = TestClient(create_app())
+        client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
         response = client.post(
             "/api/config/validate",
             json={"yaml": ""},
@@ -295,7 +295,7 @@ class TestRunsEndpoint:
         with patch.dict(os.environ, {"SOUP_DB_PATH": str(db_path)}):
             from soup_cli.ui.app import create_app
 
-            client = TestClient(create_app())
+            client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
             response = client.get("/api/runs", headers=_auth_headers())
             assert response.status_code == 200
             assert response.json()["runs"] == []
@@ -322,7 +322,7 @@ class TestRunsEndpoint:
             )
             tracker.close()
 
-            client = TestClient(create_app())
+            client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
             response = client.get("/api/runs", headers=_auth_headers())
             assert response.status_code == 200
             runs = response.json()["runs"]
@@ -350,7 +350,7 @@ class TestRunsEndpoint:
             )
             tracker.close()
 
-            client = TestClient(create_app())
+            client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
             response = client.get(f"/api/runs/{run_id}", headers=_auth_headers())
             assert response.status_code == 200
             data = response.json()
@@ -368,7 +368,7 @@ class TestRunsEndpoint:
         with patch.dict(os.environ, {"SOUP_DB_PATH": str(db_path)}):
             from soup_cli.ui.app import create_app
 
-            client = TestClient(create_app())
+            client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
             response = client.get(
                 "/api/runs/nonexistent_run_id", headers=_auth_headers()
             )
@@ -395,7 +395,7 @@ class TestRunsEndpoint:
             )
             tracker.close()
 
-            client = TestClient(create_app())
+            client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
             response = client.delete(
                 f"/api/runs/{run_id}", headers=_auth_headers()
             )
@@ -417,7 +417,7 @@ class TestRunsEndpoint:
         with patch.dict(os.environ, {"SOUP_DB_PATH": str(db_path)}):
             from soup_cli.ui.app import create_app
 
-            client = TestClient(create_app())
+            client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
             response = client.delete(
                 "/api/runs/nonexistent", headers=_auth_headers()
             )
@@ -451,7 +451,7 @@ class TestRunMetrics:
             tracker.log_metrics(run_id, step=30, loss=1.5, lr=8e-6)
             tracker.close()
 
-            client = TestClient(create_app())
+            client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
             response = client.get(f"/api/runs/{run_id}/metrics", headers=_auth_headers())
             assert response.status_code == 200
             data = response.json()
@@ -472,7 +472,7 @@ class TestRunMetrics:
         with patch.dict(os.environ, {"SOUP_DB_PATH": str(db_path)}):
             from soup_cli.ui.app import create_app
 
-            client = TestClient(create_app())
+            client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
             response = client.get(
                 "/api/runs/nonexistent/metrics", headers=_auth_headers()
             )
@@ -510,7 +510,7 @@ class TestRunEval:
             )
             tracker.close()
 
-            client = TestClient(create_app())
+            client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
             response = client.get(f"/api/runs/{run_id}/eval", headers=_auth_headers())
             assert response.status_code == 200
             data = response.json()
@@ -539,7 +539,7 @@ class TestDataInspect:
         ]
         data_file.write_text("\n".join(json.dumps(e) for e in entries), encoding="utf-8")
 
-        client = TestClient(create_app())
+        client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
         with patch("soup_cli.ui.app.Path.cwd", return_value=tmp_path):
             response = client.post(
                 "/api/data/inspect",
@@ -562,7 +562,7 @@ class TestDataInspect:
 
         from soup_cli.ui.app import create_app
 
-        client = TestClient(create_app())
+        client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
         with patch("soup_cli.ui.app.Path.cwd", return_value=tmp_path):
             response = client.post(
                 "/api/data/inspect",
@@ -589,7 +589,7 @@ class TestDataInspect:
             "\n".join(json.dumps(e) for e in entries), encoding="utf-8"
         )
 
-        client = TestClient(create_app())
+        client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
         with patch("soup_cli.ui.app.Path.cwd", return_value=tmp_path):
             response = client.post(
                 "/api/data/inspect",
@@ -616,7 +616,7 @@ class TestDataInspect:
         ]
         data_file.write_text(json.dumps(entries), encoding="utf-8")
 
-        client = TestClient(create_app())
+        client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
         with patch("soup_cli.ui.app.Path.cwd", return_value=tmp_path):
             response = client.post(
                 "/api/data/inspect",
@@ -643,7 +643,7 @@ class TestTrainEndpoints:
         # Reset global state
         ui_app_module._train_process = None
 
-        client = TestClient(create_app())
+        client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
         response = client.get("/api/train/status", headers=_auth_headers())
         assert response.status_code == 200
         assert response.json()["running"] is False
@@ -660,7 +660,7 @@ class TestTrainEndpoints:
 
         ui_app_module._train_process = None
 
-        client = TestClient(create_app())
+        client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
         response = client.post("/api/train/stop", headers=_auth_headers())
         assert response.status_code == 200
         assert response.json()["stopped"] is False
@@ -682,7 +682,7 @@ class TestTrainEndpoints:
         mock_popen.pid = 12345
 
         with patch("soup_cli.ui.app.subprocess.Popen", return_value=mock_popen):
-            client = TestClient(create_app())
+            client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
             response = client.post(
                 "/api/train/start",
                 json={
@@ -713,7 +713,7 @@ class TestTrainEndpoints:
         mock_proc.poll.return_value = None
         ui_app_module._train_process = mock_proc
 
-        client = TestClient(create_app())
+        client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
         response = client.post(
             "/api/train/start",
             json={
@@ -796,7 +796,7 @@ class TestStaticFiles:
 
         from soup_cli.ui.app import create_app
 
-        client = TestClient(create_app())
+        client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
         response = client.get("/static/style.css")
         assert response.status_code == 200
         assert "text/css" in response.headers["content-type"]
@@ -810,7 +810,7 @@ class TestStaticFiles:
 
         from soup_cli.ui.app import create_app
 
-        client = TestClient(create_app())
+        client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
         response = client.get("/static/app.js")
         assert response.status_code == 200
         assert "javascript" in response.headers["content-type"]
@@ -839,7 +839,7 @@ class TestRunsLimitParam:
         with patch.dict(os.environ, {"SOUP_DB_PATH": str(db_path)}):
             from soup_cli.ui.app import create_app
 
-            client = TestClient(create_app())
+            client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
             response = client.get("/api/runs", headers=_auth_headers())
             assert response.status_code == 200
 
@@ -854,6 +854,6 @@ class TestRunsLimitParam:
         with patch.dict(os.environ, {"SOUP_DB_PATH": str(db_path)}):
             from soup_cli.ui.app import create_app
 
-            client = TestClient(create_app())
+            client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
             response = client.get("/api/runs?limit=10", headers=_auth_headers())
             assert response.status_code == 200

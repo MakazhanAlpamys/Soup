@@ -130,7 +130,7 @@ class TestLoopbackKeepsTheDeveloperConvenience:
 
     @pytest.mark.parametrize("route", DOC_ROUTES)
     def test_docs_still_serve_on_loopback(self, route):
-        client = TestClient(create_app(host=LOOPBACK))
+        client = TestClient(create_app(host=LOOPBACK), base_url="http://127.0.0.1:7860")
         assert client.get(route).status_code == 200, (
             f"{route} stopped serving on a {LOOPBACK} bind; the fix is scoped "
             "to non-loopback binds and must not take the local docs with it"
@@ -138,7 +138,7 @@ class TestLoopbackKeepsTheDeveloperConvenience:
 
     def test_localhost_is_treated_as_loopback_too(self):
         """`_is_loopback` accepts the name, so the docs must survive it."""
-        client = TestClient(create_app(host="localhost"))
+        client = TestClient(create_app(host="localhost"), base_url="http://localhost:7860")
         assert client.get("/openapi.json").status_code == 200
 
 

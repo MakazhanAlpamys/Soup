@@ -623,7 +623,8 @@ class TestWebUiConfigLogLines:
 
         from soup_cli.ui.app import create_app, get_auth_token
 
-        return TestClient(create_app()), {"Authorization": f"Bearer {get_auth_token()}"}
+        client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
+        return client, {"Authorization": f"Bearer {get_auth_token()}"}
 
     def _logged(self, caplog) -> list[str]:
         return [record.getMessage() for record in caplog.records if record.name == self.LOGGER]

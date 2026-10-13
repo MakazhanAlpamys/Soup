@@ -49,7 +49,7 @@ class TestTrainLogsSSE:
         buf.mark_done()
         ui_mod._train_log_buffer = buf
 
-        client = TestClient(create_app())
+        client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
         try:
             with client.stream(
                 "GET", "/api/train/logs", headers=_auth_headers()
@@ -78,7 +78,7 @@ class TestTrainLogsSSE:
 
         ui_mod._train_process = None
 
-        client = TestClient(create_app())
+        client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
         with client.stream(
             "GET", "/api/train/logs", headers=_auth_headers()
         ) as resp:
@@ -106,7 +106,7 @@ class TestTrainLogsSSE:
         buf.mark_done()
         ui_mod._train_log_buffer = buf
 
-        client = TestClient(create_app())
+        client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
         try:
             with client.stream(
                 "GET",
@@ -134,7 +134,7 @@ class TestTrainLogsSSE:
 
         ui_mod._train_process = None
 
-        client = TestClient(create_app())
+        client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
         with client.stream("GET", "/api/train/logs") as resp:
             assert resp.status_code == 401
         with client.stream(
@@ -176,7 +176,7 @@ class TestLiveMetricsSSE:
 
         db_path = tmp_path / "test.db"
         with patch.dict(os.environ, {"SOUP_DB_PATH": str(db_path)}):
-            client = TestClient(create_app())
+            client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
             with client.stream(
                 "GET", "/api/train/metrics/live", headers=_auth_headers()
             ) as resp:
@@ -216,7 +216,7 @@ class TestLiveMetricsSSE:
         ui_mod._train_process = mock_proc
 
         with patch.dict(os.environ, {"SOUP_DB_PATH": str(db_path)}):
-            client = TestClient(create_app())
+            client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
             with client.stream(
                 "GET",
                 f"/api/train/metrics/live?run_id={run_id}",
@@ -248,7 +248,7 @@ class TestLiveMetricsSSE:
 
         db_path = tmp_path / "test.db"
         with patch.dict(os.environ, {"SOUP_DB_PATH": str(db_path)}):
-            client = TestClient(create_app())
+            client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
             with client.stream("GET", "/api/train/metrics/live") as resp:
                 assert resp.status_code == 401
             with client.stream(
@@ -272,7 +272,7 @@ class TestLiveMetricsSSE:
 
         db_path = tmp_path / "test.db"
         with patch.dict(os.environ, {"SOUP_DB_PATH": str(db_path)}):
-            client = TestClient(create_app())
+            client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
             with client.stream(
                 "GET", "/api/train/metrics/live", headers=_auth_headers()
             ) as resp:
@@ -313,7 +313,7 @@ class TestTrainProgress:
 
         ui_mod._train_process = None
 
-        client = TestClient(create_app())
+        client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
         response = client.get("/api/train/progress", headers=_auth_headers())
         assert response.status_code == 200
         data = response.json()
@@ -349,7 +349,7 @@ class TestTrainProgress:
         ui_mod._train_process = mock_proc
 
         with patch.dict(os.environ, {"SOUP_DB_PATH": str(db_path)}):
-            client = TestClient(create_app())
+            client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
             response = client.get(
                 f"/api/train/progress?run_id={run_id}", headers=_auth_headers()
             )
@@ -390,7 +390,7 @@ class TestTrainProgress:
         ui_mod._train_process = mock_proc
 
         with patch.dict(os.environ, {"SOUP_DB_PATH": str(db_path)}):
-            client = TestClient(create_app())
+            client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
             response = client.get(
                 f"/api/train/progress?run_id={run_id}", headers=_auth_headers()
             )
@@ -412,7 +412,7 @@ class TestTrainProgress:
 
         ui_mod._train_process = None
 
-        client = TestClient(create_app())
+        client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
         assert client.get("/api/train/progress").status_code == 401
         assert (
             client.get("/api/train/progress", headers=_auth_headers()).status_code
@@ -438,7 +438,7 @@ class TestSSEGracefulClose:
         mock_proc.poll.side_effect = [None, 0]
         ui_mod._train_process = mock_proc
 
-        client = TestClient(create_app())
+        client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
         with client.stream("GET", "/api/train/logs") as resp:
             assert resp.status_code == 401
 
@@ -470,7 +470,7 @@ class TestSSEGracefulClose:
 
         ui_mod._train_process = None
 
-        client = TestClient(create_app())
+        client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
         with client.stream(
             "GET", "/api/train/logs", headers=_auth_headers()
         ) as resp:

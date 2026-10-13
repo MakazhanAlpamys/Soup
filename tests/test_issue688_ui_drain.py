@@ -106,7 +106,7 @@ class TestSubprocessDrain:
             ui_app_module._train_log_buffer.append(f"log line {i}")
         ui_app_module._train_log_buffer.mark_done()
 
-        client = TestClient(create_app())
+        client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
 
         # Reconnect with Last-Event-ID = 6 -> should receive lines 7, 8, 9
         response = client.get(
@@ -147,7 +147,7 @@ class TestSubprocessDrain:
             "soup_cli.ui.app._resolve_train_argv",
             return_value=[sys.executable, "-c", child_script],
         ):
-            client = TestClient(create_app())
+            client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
             response = client.post(
                 "/api/train/start",
                 json={"config_yaml": "base: test\ndata:\n  train: ./data.jsonl\n"},

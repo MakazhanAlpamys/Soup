@@ -315,7 +315,9 @@ def test_inspect_endpoint_reports_a_mixed_file_instead_of_a_500(tmp_path):
     ] * 3
     path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
 
-    client = TestClient(create_app(), raise_server_exceptions=False)
+    client = TestClient(
+        create_app(), base_url="http://127.0.0.1:7860", raise_server_exceptions=False
+    )
     with patch("soup_cli.ui.app.Path.cwd", return_value=tmp_path):
         response = client.post(
             "/api/data/inspect",

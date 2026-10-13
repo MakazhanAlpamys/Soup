@@ -184,6 +184,81 @@ class _SecurityHeadersMiddleware:
         await self._app(scope, receive, send_with_headers)
 
 
+def _host_cache_key(host: str) -> str:
+    """One comparable key per host spelling: the IP itself when parseable."""
+    host = host.strip("[]")
+    try:
+        return str(ipaddress.ip_address(host))
+    except ValueError:
+        return host.lower()
+
+
+def _host_header_allowed(value: str, allowed_hosts: "frozenset[str]") -> bool:
+    """True when a ``Host`` header names one of the allowed ``host:port`` strings.
+
+    Parses the header with the IPv6 brackets handled (``[::1]:7860``); a
+    header without a port means the scheme default port, which never matches
+    the bound port. An empty header, a bare non-IPv6 colon (``a:b:c``) or a
+    non-numeric port is refused.
+    """
+    if not value:
+        return False
+    if value.startswith("["):
+        host, sep, rest = value[1:].partition("]")
+        if not sep:
+            return False
+        if rest:
+            if not rest.startswith(":"):
+                return False
+            port_s = rest[1:]
+        else:
+            port_s = ""
+    else:
+        host, sep, port_s = value.rpartition(":")
+        if not sep:
+            host, port_s = value, ""
+        elif ":" in host or not port_s.isdigit():
+            # A bare multi-colon host is only valid bracketed, and a trailing
+            # colon or non-numeric port never names this server.
+            return False
+    return f"{_host_cache_key(host)}:{port_s}" in allowed_hosts
+
+
+class _HostAllowlistMiddleware:
+    """Refuse requests whose ``Host`` header is not one of the served names.
+
+    Loopback binds only (#1829): the names a LAN client uses for a
+    ``--public`` bind are not known up front, and there the Bearer token
+    stays the gate. Pure ASGI, like the other middlewares here.
+    """
+
+    def __init__(self, app, allowed_hosts: "frozenset[str]") -> None:
+        self._app = app
+        self._allowed_hosts = allowed_hosts
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope.get("type") != "http":
+            await self._app(scope, receive, send)
+            return
+        host_seen = False
+        allowed = False
+        for name, value in scope.get("headers", ()):
+            if name.decode("latin-1").lower() == "host":
+                host_seen = True
+                allowed = _host_header_allowed(
+                    value.decode("latin-1"), self._allowed_hosts
+                )
+                break
+        # A missing Host is refused like an unparsable one (#1829).
+        if not host_seen or not allowed:
+            from starlette.responses import JSONResponse
+
+            response = JSONResponse({"detail": "Host not allowed"}, status_code=403)
+            await response(scope, receive, send)
+            return
+        await self._app(scope, receive, send)
+
+
 class TrainRequest(PydanticBaseModel):
     """Request body for starting a training run."""
     config_yaml: str
@@ -457,6 +532,17 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
         _SecurityHeadersMiddleware,
         policy_exempt_paths=_POLICY_EXEMPT_PATHS if _docs_enabled else frozenset(),
     )
+
+    # #1829: on a loopback bind the server has exactly three names, so a
+    # request whose Host header names anything else (DNS rebinding, a
+    # hand-rolled client, a proxy) is refused before any route runs. The
+    # printed login URL is unchanged. --public binds keep the Bearer gate.
+    if _is_loopback(host):
+        allowed = frozenset(
+            f"{_host_cache_key(name)}:{port}"
+            for name in ("localhost", "127.0.0.1", "::1", host)
+        )
+        app.add_middleware(_HostAllowlistMiddleware, allowed_hosts=allowed)
 
     # #1191: `/?token=` swaps the token for an HttpOnly session cookie, so a
     # reload keeps the session without page script ever reading a credential.

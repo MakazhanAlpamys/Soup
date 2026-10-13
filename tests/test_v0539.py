@@ -160,7 +160,7 @@ def test_api_train_stream_emits_pending_events():
     push_train_event(TrainEvent(type="status", message="started"))
 
     app_inst = create_app()
-    client = TestClient(app_inst)
+    client = TestClient(app_inst, base_url="http://127.0.0.1:7860")
     response = client.get("/api/train/stream", headers=_auth_headers())
     assert response.status_code == 200
     body = response.text
@@ -222,7 +222,7 @@ def test_api_tool_outputs_endpoint():
     )
 
     app_inst = create_app()
-    client = TestClient(app_inst)
+    client = TestClient(app_inst, base_url="http://127.0.0.1:7860")
     response = client.get("/api/tool-outputs?limit=5", headers=_auth_headers())
     assert response.status_code == 200
     payload = response.json()
@@ -238,7 +238,7 @@ def test_api_tool_outputs_rejects_out_of_bounds_limit():
 
     from soup_cli.ui.app import create_app
 
-    client = TestClient(create_app())
+    client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
     # limit must be 1..1000
     assert (
         client.get(

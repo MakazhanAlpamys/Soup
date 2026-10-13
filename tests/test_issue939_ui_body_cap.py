@@ -53,7 +53,7 @@ def test_oversized_body_is_413_before_route_runs(
 
         monkeypatch.setattr(paths, "is_under_cwd", fail_if_called)
 
-    with TestClient(create_app()) as client:
+    with TestClient(create_app(), base_url="http://127.0.0.1:7860") as client:
         response = client.post(endpoint, json=payload, headers=_auth_headers())
 
     assert response.status_code == 413, response.text

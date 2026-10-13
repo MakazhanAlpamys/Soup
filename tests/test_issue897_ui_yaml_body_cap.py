@@ -17,7 +17,7 @@ def ui_client() -> Iterator[tuple[object, dict[str, str]]]:
 
     from soup_cli.ui.app import create_app, get_auth_token
 
-    with TestClient(create_app()) as client:
+    with TestClient(create_app(), base_url="http://127.0.0.1:7860") as client:
         yield client, {"Authorization": f"Bearer {get_auth_token()}"}
 
 

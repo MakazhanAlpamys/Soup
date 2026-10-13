@@ -46,7 +46,11 @@ class TestNonAsciiAuthorization:
     @pytest.fixture
     def client(self):
         # Default raise_server_exceptions=True ensures unhandled TypeErrors fail tests
-        return TestClient(create_app(), raise_server_exceptions=True)
+        return TestClient(
+            create_app(),
+            base_url="http://127.0.0.1:7860",
+            raise_server_exceptions=True,
+        )
 
     @pytest.mark.parametrize(
         "endpoint,method",
@@ -97,7 +101,11 @@ class TestHappyPathParity:
 
     @pytest.fixture
     def client(self):
-        return TestClient(create_app(), raise_server_exceptions=True)
+        return TestClient(
+            create_app(),
+            base_url="http://127.0.0.1:7860",
+            raise_server_exceptions=True,
+        )
 
     def test_valid_token_returns_200_on_read_endpoint(self, client):
         token = get_auth_token()

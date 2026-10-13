@@ -40,7 +40,7 @@ class TestMetricsFullFields:
             )
             tracker.close()
 
-            client = TestClient(create_app())
+            client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
             response = client.get(
                 f"/api/runs/{run_id}/metrics", headers=_auth_headers()
             )
@@ -74,7 +74,7 @@ class TestMetricsFullFields:
             tracker.log_metrics(run_id, step=10, epoch=1.5, loss=2.0, lr=1e-5)
             tracker.close()
 
-            client = TestClient(create_app())
+            client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
             response = client.get(
                 f"/api/runs/{run_id}/metrics", headers=_auth_headers()
             )
@@ -125,7 +125,7 @@ class TestRunsCompareEndpoint:
             tracker.log_metrics(run2, step=10, loss=1.8, lr=5e-6)
             tracker.close()
 
-            client = TestClient(create_app())
+            client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
             response = client.get(
                 f"/api/runs/compare?ids={run1},{run2}", headers=_auth_headers()
             )
@@ -149,7 +149,7 @@ class TestRunsCompareEndpoint:
         with patch.dict(os.environ, {"SOUP_DB_PATH": str(db_path)}):
             from soup_cli.ui.app import create_app
 
-            client = TestClient(create_app())
+            client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
             ids = ",".join([f"run_{i}" for i in range(6)])
             response = client.get(
                 f"/api/runs/compare?ids={ids}", headers=_auth_headers()
@@ -167,7 +167,7 @@ class TestRunsCompareEndpoint:
         with patch.dict(os.environ, {"SOUP_DB_PATH": str(db_path)}):
             from soup_cli.ui.app import create_app
 
-            client = TestClient(create_app())
+            client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
             response = client.get(
                 "/api/runs/compare?ids=nonexistent1,nonexistent2",
                 headers=_auth_headers(),
@@ -187,7 +187,7 @@ class TestRunsCompareEndpoint:
         with patch.dict(os.environ, {"SOUP_DB_PATH": str(db_path)}):
             from soup_cli.ui.app import create_app
 
-            client = TestClient(create_app())
+            client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
             response = client.get(
                 "/api/runs/compare?ids=", headers=_auth_headers()
             )
@@ -204,7 +204,7 @@ class TestRunsCompareEndpoint:
         with patch.dict(os.environ, {"SOUP_DB_PATH": str(db_path)}):
             from soup_cli.ui.app import create_app
 
-            client = TestClient(create_app())
+            client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
             assert client.get("/api/runs/compare?ids=run1,run2").status_code == 401
             assert (
                 client.get(
@@ -244,7 +244,7 @@ class TestEvalResultsEndpoint:
             )
             tracker.close()
 
-            client = TestClient(create_app())
+            client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
             response = client.get(
                 f"/api/runs/{run_id}/eval", headers=_auth_headers()
             )
@@ -276,7 +276,7 @@ class TestEvalResultsEndpoint:
             )
             tracker.close()
 
-            client = TestClient(create_app())
+            client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
             response = client.get(
                 f"/api/runs/{run_id}/eval", headers=_auth_headers()
             )
@@ -307,7 +307,7 @@ class TestEvalResultsEndpoint:
                 run_ids.append(rid)
             tracker.close()
 
-            client = TestClient(create_app())
+            client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
             ids_str = ",".join(run_ids)
             response = client.get(
                 f"/api/runs/compare?ids={ids_str}", headers=_auth_headers()
@@ -343,7 +343,7 @@ class TestCompareMetricsContent:
             )
             tracker.close()
 
-            client = TestClient(create_app())
+            client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
             response = client.get(
                 f"/api/runs/compare?ids={run_id}", headers=_auth_headers()
             )
@@ -374,7 +374,7 @@ class TestCompareMetricsContent:
             )
             tracker.close()
 
-            client = TestClient(create_app())
+            client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
             response = client.get(
                 f"/api/runs/compare?ids={run_id}", headers=_auth_headers()
             )

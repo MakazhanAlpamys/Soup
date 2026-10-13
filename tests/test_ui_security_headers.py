@@ -36,7 +36,7 @@ def _assert_plain_headers(resp):
 
 @pytest.fixture
 def client():
-    return TestClient(create_app())
+    return TestClient(create_app(), base_url="http://127.0.0.1:7860")
 
 
 @pytest.mark.parametrize("path", ["/", "/static/app.js", "/static/safe_html.js", "/api/system"])
@@ -100,7 +100,7 @@ def test_headers_on_body_size_rejection(client):
 def test_headers_on_event_stream():
     ui_mod._train_process = None
     ui_mod._train_log_buffer = None
-    client = TestClient(create_app())
+    client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
     with client.stream(
         "GET", "/api/train/logs", headers={"Authorization": f"Bearer {get_auth_token()}"}
     ) as resp:

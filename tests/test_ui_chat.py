@@ -173,7 +173,7 @@ class TestChatSSRFProtection:
 
         from soup_cli.ui.app import create_app
 
-        client = TestClient(create_app())
+        client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
         response = client.post(
             "/api/chat/send",
             json={
@@ -193,7 +193,7 @@ class TestChatSSRFProtection:
 
         from soup_cli.ui.app import create_app
 
-        client = TestClient(create_app())
+        client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
         response = client.post(
             "/api/chat/send",
             json={
@@ -216,7 +216,7 @@ class TestChatSSRFProtection:
 
         from soup_cli.ui.app import create_app
 
-        client = TestClient(create_app())
+        client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
         response = client.post(
             "/api/chat/send",
             json={
@@ -243,7 +243,7 @@ class TestChatParamBounds:
 
         from soup_cli.ui.app import create_app
 
-        client = TestClient(create_app())
+        client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
         response = client.post(
             "/api/chat/send",
             json={
@@ -265,7 +265,7 @@ class TestChatParamBounds:
 
         from soup_cli.ui.app import create_app
 
-        client = TestClient(create_app())
+        client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
         response = client.post(
             "/api/chat/send",
             json={
@@ -286,7 +286,7 @@ class TestChatParamBounds:
 
         from soup_cli.ui.app import create_app
 
-        client = TestClient(create_app())
+        client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
         response = client.post(
             "/api/chat/send",
             json={
@@ -311,7 +311,7 @@ class TestChatInvalidScheme:
 
         from soup_cli.ui.app import create_app
 
-        client = TestClient(create_app())
+        client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
         response = client.post(
             "/api/chat/send",
             json={
@@ -331,7 +331,7 @@ class TestChatInvalidScheme:
 
         from soup_cli.ui.app import create_app
 
-        client = TestClient(create_app())
+        client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
         response = client.post(
             "/api/chat/send",
             json={
@@ -351,7 +351,7 @@ class TestChatInvalidScheme:
 
         from soup_cli.ui.app import create_app
 
-        client = TestClient(create_app())
+        client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
         response = client.post(
             "/api/chat/send",
             json={
@@ -374,7 +374,7 @@ class TestChatInvalidScheme:
 
         from soup_cli.ui.app import create_app
 
-        client = TestClient(create_app())
+        client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
         response = client.post(
             "/api/chat/send",
             json={
@@ -398,7 +398,7 @@ class TestChatAuth:
 
         from soup_cli.ui.app import create_app
 
-        client = TestClient(create_app())
+        client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
         response = client.post(
             "/api/chat/send",
             json={
@@ -421,7 +421,7 @@ class TestChatValidation:
 
         from soup_cli.ui.app import create_app
 
-        client = TestClient(create_app())
+        client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
         response = client.post(
             "/api/chat/send",
             json={
@@ -441,7 +441,7 @@ class TestChatValidation:
 
         from soup_cli.ui.app import create_app
 
-        client = TestClient(create_app())
+        client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
         # Mock httpx to avoid real connection
         mock_response = MagicMock()
         mock_response.status_code = 200

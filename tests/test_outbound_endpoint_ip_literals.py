@@ -414,7 +414,7 @@ class TestChatProxy:
 
         from soup_cli.ui.app import create_app, get_auth_token
 
-        client = TestClient(create_app())
+        client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
         headers = {"Authorization": f"Bearer {get_auth_token()}"}
 
         def _post(endpoint: str):

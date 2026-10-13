@@ -137,7 +137,7 @@ def test_web_metrics_api_serializes_null_norm(tmp_path, monkeypatch) -> None:
     tracker.log_metrics(run_id, step=1, loss=1.0, grad_norm=None)
     tracker.close()
 
-    client = TestClient(create_app())
+    client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
     response = client.get(
         f"/api/runs/{run_id}/metrics",
         headers={"Authorization": f"Bearer {get_auth_token()}"},

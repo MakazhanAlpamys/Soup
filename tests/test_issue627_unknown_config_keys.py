@@ -1240,7 +1240,7 @@ class TestTheWebUiKeepsTheHint:
 
         from soup_cli.ui.app import create_app, get_auth_token
 
-        client = TestClient(create_app())
+        client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
         response = client.post(
             "/api/train/start",
             json={"config_yaml": TestTheLoaderIsActuallyWiredUp.TYPOD},
@@ -1292,7 +1292,8 @@ class TestTheWebUiErrorBranchesAreDistinct:
 
         from soup_cli.ui.app import create_app, get_auth_token
 
-        return TestClient(create_app()), {"Authorization": f"Bearer {get_auth_token()}"}
+        client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
+        return client, {"Authorization": f"Bearer {get_auth_token()}"}
 
     def test_from_form_names_the_field_on_a_validation_error(self) -> None:
         client, headers = self._client()

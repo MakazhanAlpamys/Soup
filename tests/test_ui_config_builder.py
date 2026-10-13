@@ -34,7 +34,7 @@ class TestConfigSchemaEndpoint:
 
         from soup_cli.ui.app import create_app
 
-        client = TestClient(create_app())
+        client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
         response = client.get("/api/config/schema", headers=_auth_headers())
         assert response.status_code == 200
         data = response.json()
@@ -49,7 +49,7 @@ class TestConfigSchemaEndpoint:
 
         from soup_cli.ui.app import create_app
 
-        client = TestClient(create_app())
+        client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
         response = client.get("/api/config/schema", headers=_auth_headers())
         data = response.json()
         assert "base" in data
@@ -65,7 +65,7 @@ class TestConfigSchemaEndpoint:
 
         from soup_cli.ui.app import create_app
 
-        client = TestClient(create_app())
+        client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
         response = client.get("/api/config/schema", headers=_auth_headers())
         data = response.json()
         assert "task" in data
@@ -82,7 +82,7 @@ class TestConfigSchemaEndpoint:
 
         from soup_cli.ui.app import create_app
 
-        client = TestClient(create_app())
+        client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
         response = client.get("/api/config/schema", headers=_auth_headers())
         data = response.json()
         assert "training" in data
@@ -99,7 +99,7 @@ class TestConfigSchemaEndpoint:
 
         from soup_cli.ui.app import create_app
 
-        client = TestClient(create_app())
+        client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
         response = client.get("/api/config/schema", headers=_auth_headers())
         data = response.json()
         # Check that training.epochs has constraints or type info
@@ -133,7 +133,7 @@ class TestRecipesEndpoint:
 
         from soup_cli.ui.app import create_app
 
-        client = TestClient(create_app())
+        client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
         response = client.get("/api/recipes", headers=_auth_headers())
         assert response.status_code == 200
         data = response.json()
@@ -149,7 +149,7 @@ class TestRecipesEndpoint:
 
         from soup_cli.ui.app import create_app
 
-        client = TestClient(create_app())
+        client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
         response = client.get("/api/recipes", headers=_auth_headers())
         recipes = response.json()["recipes"]
         for recipe in recipes:
@@ -184,7 +184,7 @@ class TestFormToYamlEndpoint:
 
         from soup_cli.ui.app import create_app
 
-        client = TestClient(create_app())
+        client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
         response = client.post(
             "/api/config/from-form",
             json={
@@ -210,7 +210,7 @@ class TestFormToYamlEndpoint:
 
         from soup_cli.ui.app import create_app
 
-        client = TestClient(create_app())
+        client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
         response = client.post(
             "/api/config/from-form",
             json={
@@ -232,7 +232,7 @@ class TestFormToYamlEndpoint:
 
         from soup_cli.ui.app import create_app
 
-        client = TestClient(create_app())
+        client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
         # Missing base — should fail validation
         response = client.post(
             "/api/config/from-form",
@@ -253,7 +253,7 @@ class TestFormToYamlEndpoint:
 
         from soup_cli.ui.app import create_app
 
-        client = TestClient(create_app())
+        client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
         response = client.post(
             "/api/config/from-form",
             json={"base": "test"},
@@ -269,7 +269,7 @@ class TestFormToYamlEndpoint:
 
         from soup_cli.ui.app import create_app
 
-        client = TestClient(create_app())
+        client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
         response = client.post(
             "/api/config/from-form",
             json={
@@ -297,7 +297,7 @@ class TestFormToYamlEndpoint:
 
         from soup_cli.ui.app import create_app
 
-        client = TestClient(create_app())
+        client = TestClient(create_app(), base_url="http://127.0.0.1:7860")
         response = client.post(
             "/api/config/from-form",
             json={

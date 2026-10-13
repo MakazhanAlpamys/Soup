@@ -19,12 +19,11 @@ from soup_cli.ui.app import create_app, get_auth_token
 
 PORT = 7860
 COOKIE = f"soup_ui_session_{PORT}"
-# TestClient sends `Host: testserver` over http.
-SAME_ORIGIN = "http://testserver"
+SAME_ORIGIN = "http://127.0.0.1:7860"
 
 
 def _client(host: str = "127.0.0.1") -> TestClient:
-    return TestClient(create_app(host=host, port=PORT))
+    return TestClient(create_app(host=host, port=PORT), base_url=f"http://{host}:{PORT}")
 
 
 def _sign_in(client: TestClient, query: str = ""):
@@ -69,7 +68,7 @@ class TestExchange:
         assert first != second
 
     def test_cookie_name_carries_the_port(self):
-        client = TestClient(create_app(host="127.0.0.1", port=8123))
+        client = TestClient(create_app(host="127.0.0.1", port=8123), base_url="http://127.0.0.1:8123")
         resp = client.get(f"/?token={get_auth_token()}", follow_redirects=False)
         assert "soup_ui_session_8123" in resp.cookies
 
@@ -131,7 +130,7 @@ class TestReloadKeepsTheSession:
         first = _sign_in(client).cookies[COOKIE]
         _sign_in(client)
         _sign_in(client)
-        probe = TestClient(client.app)
+        probe = TestClient(client.app, base_url=f"http://127.0.0.1:{PORT}")
         probe.cookies.set(COOKIE, first)
         assert probe.get("/api/train/status").status_code == 401
 
