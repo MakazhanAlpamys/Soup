@@ -1,0 +1,11 @@
+{
+ "when_utc": "2026-10-13T05:12:34Z",
+ "cpu": "unknown",
+ "logical_cpus": 10,
+ "platform": "macOS-26.5-arm64-arm-64bit",
+ "python": "3.12.12",
+ "torch": "2.14.1",
+ "bitsandbytes": "0.50.2",
+ "torch_threads": 4,
+ "tree": "afdb84ee"
+}
