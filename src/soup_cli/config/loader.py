@@ -92,6 +92,24 @@ def _report_staged_fields(
     return None
 
 
+_VALUE_ERROR_PREFIX = "Value error, "
+
+
+def _describe_validation_error(err: dict) -> "tuple[str, str]":
+    """Location and message for one pydantic error, as the loader reports them.
+
+    A ``SoupConfig``-level validator has an empty ``loc``, which printed as a
+    bare ``": ..."``, so it is labelled ``config``. Pydantic prefixes a
+    ``ValueError`` raised in a validator with ``"Value error, "``; the message
+    after it is ours and is shown on its own.
+    """
+    loc = " -> ".join(str(part) for part in err["loc"]) or "config"
+    msg = err["msg"]
+    if err.get("type") == "value_error" and msg.startswith(_VALUE_ERROR_PREFIX):
+        msg = msg[len(_VALUE_ERROR_PREFIX):]
+    return loc, msg
+
+
 def _build_config(raw: dict) -> SoupConfig:
     """Construct ``SoupConfig``, printing each deprecated value once (#759).
 
@@ -162,9 +180,9 @@ def load_config(
     except ValidationError as e:
         console.print("[red bold]Config validation error:[/]\n")
         for err in e.errors():
-            loc = " -> ".join(str(part) for part in err["loc"])
+            loc, msg = _describe_validation_error(err)
             # Both can quote config keys or values from the file.
-            console.print(f"  [red]{for_terminal(loc)}:[/] {for_terminal(err['msg'])}")
+            console.print(f"  [red]{for_terminal(loc)}:[/] {for_terminal(msg)}")
         raise SystemExit(1)
 
     staged_error = _report_staged_fields(raw, config=config)
@@ -202,8 +220,8 @@ def load_config_from_string(yaml_str: str) -> SoupConfig:
     except ValidationError as exc:
         errors = []
         for err in exc.errors():
-            loc = " -> ".join(str(part) for part in err["loc"])
-            errors.append(f"{loc}: {err['msg']}")
+            loc, msg = _describe_validation_error(err)
+            errors.append(f"{loc}: {msg}")
         raise ValueError("; ".join(errors))
 
     staged_error = _report_staged_fields(raw, config=config)
