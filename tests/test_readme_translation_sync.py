@@ -76,6 +76,7 @@ MAINTAINERS = {
     "README.ar.md": "@Ercaner1988",
     "README.ja.md": "@Ercaner1988",
     "README.zh.md": "@Momoyeyu",
+    "README.es.md": "@yunyminaya",
 }
 
 #: README.md section titles exempt from the stamp hash and the structural
