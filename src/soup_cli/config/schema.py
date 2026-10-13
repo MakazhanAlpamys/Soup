@@ -7689,10 +7689,8 @@ class SoupConfig(BaseModel):
         * ``citation_faithful=True`` requires ``data.format='raft'`` (the
           RAFT row carries the doc references; other formats can't supply
           ground-truth citation IDs).
-        * ``citation_faithful=True`` requires ``task in {sft, pretrain}``
-          (the span-mask runtime only makes sense for the SFT family;
-          mirrors v0.52.0 distill / classifier
-          task-gate policy — review M3 fix).
+        * ``citation_faithful=True`` requires ``task='sft'``: only its
+          RAFT route applies the citation span weights.
         * ``citation_style`` set without ``citation_faithful=True`` is a
           silent-no-op footgun — rejected (mirrors v0.61.0 unlearn_alpha /
           v0.62.0 Part B ra_dit_retriever_model policy).
@@ -7721,12 +7719,11 @@ class SoupConfig(BaseModel):
                     "Citation-faithful FT pairs with the v0.62.0 Part A "
                     "RAFT data format (which carries the doc references)."
                 )
-            if self.task not in ("sft", "pretrain"):
+            if self.task != "sft":
                 raise ValueError(
                     "training.citation_faithful=true requires "
-                    f"task in {{sft, pretrain}}; got task={self.task!r}. "
-                    "Citation-faithful FT is an SFT-family feature: its "
-                    "span-mask runtime runs in the SFT trainer."
+                    f"task='sft'; got task={self.task!r}. "
+                    "Use task: sft with data.format: raft to apply citation span weights."
                 )
         return self
 

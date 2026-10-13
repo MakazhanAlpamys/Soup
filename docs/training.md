@@ -1865,7 +1865,7 @@ score = score_citations(
 # CitationScore(precision=1.0, recall=1.0, f1=1.0, predicted_count=1, expected_count=1)
 ```
 
-Citation-faithful FT is gated to `task in {sft, pretrain}` + `data.format='raft'` — misconfigured runs fail at config load with a named-field message.
+Citation-faithful FT requires `task: sft` + `data.format: raft` — misconfigured runs fail at config load with a named-field message. The pretrain trainer does not apply citation span weights and refuses `training.citation_faithful: true`.
 
 Under the hood, a `format: raft` run trains **answer-only**: each row is composed into a prompt (golden + distractor docs, shuffled deterministically by `data.raft_shuffle_seed`, each labelled `[doc-N]`) followed by the answer; the prompt span is masked out of the loss and — when `citation_faithful: true` — the bracketed `[doc-id]` spans in the answer get a boosted per-token loss weight. Rows whose prompt fills `max_length` (answer fully truncated) are dropped with a warning rather than silently shrinking the dataset.
 
