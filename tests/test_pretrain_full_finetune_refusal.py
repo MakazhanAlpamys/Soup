@@ -23,19 +23,20 @@ _RANK_ZERO_MESSAGE = "always attaches a LoRA adapter"
 _EXPAND = {"expand_layers": 2, "freeze_trainable_layers": 2}
 
 
-def _yaml(task="pretrain", backend="transformers", training=None, lora=None):
+def _yaml(task="pretrain", backend="transformers", training=None, lora=None, modality=None):
     block = {"quantization": "none", **(training or {})}
     if lora is not None:
         block["lora"] = lora
-    return yaml.safe_dump(
-        {
-            "base": "org/model",
-            "task": task,
-            "backend": backend,
-            "data": {"train": "train.jsonl"},
-            "training": block,
-        }
-    )
+    top = {
+        "base": "org/model",
+        "task": task,
+        "backend": backend,
+        "data": {"train": "train.jsonl"},
+        "training": block,
+    }
+    if modality is not None:
+        top["modality"] = modality
+    return yaml.safe_dump(top)
 
 
 def _refusal(text: str) -> str:
@@ -116,6 +117,23 @@ def test_llama_pro_scope_refusal_on_other_tasks_does_not_mention_pretrain():
     assert "task='dpo'" in message
     assert "Remove expand_layers and freeze_trainable_layers." in message
     assert "pretrain" not in message
+
+
+@pytest.mark.parametrize(
+    ("backend", "modality"),
+    [("unsloth", "text"), ("mlx", "text"), ("transformers", "vision")],
+    ids=["unsloth", "mlx", "vision"],
+)
+def test_llama_pro_on_pretrain_elsewhere_gets_the_generic_scope_refusal(backend, modality):
+    """Only pretrain on transformers text runs the expansion, so only there does the message
+    describe it and name the sft recipe: the unsloth pretrain path never expands, and mlx or
+    another modality has no such recipe."""
+    message = _refusal(_yaml(backend=backend, training=_EXPAND, lora={"r": 0}, modality=modality))
+    assert "training.expand_layers (LLaMA Pro)" in message
+    assert f"backend='{backend}'" in message and f"modality='{modality}'" in message
+    assert "Remove expand_layers and freeze_trainable_layers." in message
+    assert "pretrain trainer runs the expansion" not in message
+    assert "task: sft with lora.r: 0" not in message
 
 
 def test_lisa_with_rank_zero_trains_without_an_adapter(tmp_path, monkeypatch):
