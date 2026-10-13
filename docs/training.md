@@ -2105,8 +2105,9 @@ the trained router, see `soup serve --mole` in [Serving and Export](serving-and-
 
 ## Architecture Knobs — Mixture-of-Depths, LLaMA Pro, LongLoRA
 
-Two architecture transforms that were schema-only are now live for SFT / Pretrain on
-Llama / Qwen / Mistral. Both apply at trainer setup:
+Two architecture transforms that were schema-only are now live on Llama / Qwen / Mistral:
+Mixture-of-Depths on SFT and pretrain, LLaMA Pro on SFT only
+([#1813](https://github.com/MakazhanAlpamys/Soup/issues/1813)). Both apply at trainer setup:
 
 ```yaml
 training:
