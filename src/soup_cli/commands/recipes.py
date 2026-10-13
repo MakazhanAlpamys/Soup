@@ -169,7 +169,16 @@ def verify(
     import json as _json
     import sys
 
-    from soup_cli.utils.exit_codes import EXIT_RUNTIME_ERROR
+    from soup_cli.utils.exit_codes import EXIT_RUNTIME_ERROR, EXIT_USAGE_ERROR
+
+    # The config loader prints its own warnings (a deprecated value, #759; a
+    # staged field, #808) on stdout, ahead of --json's document. Send them to
+    # stderr with every other diagnostic.
+    with contextlib.redirect_stdout(sys.stderr):
+        configs = _configs_to_verify(config, templates)
+    if not configs:
+        err_console.print("[red]Nothing to verify.[/]")
+        raise typer.Exit(EXIT_USAGE_ERROR)
 
     # #1117 review: without these the per-stage catch-alls turned a missing
     # library into a verdict (unverified, exit 0; or cannot_attach, exit 2).
@@ -195,16 +204,6 @@ def verify(
         check_attach,
         load_hf_config,
     )
-    from soup_cli.utils.exit_codes import EXIT_USAGE_ERROR
-
-    # The config loader prints its own warnings (a deprecated value, #759; a
-    # staged field, #808) on stdout, ahead of --json's document. Send them to
-    # stderr with every other diagnostic.
-    with contextlib.redirect_stdout(sys.stderr):
-        configs = _configs_to_verify(config, templates)
-    if not configs:
-        err_console.print("[red]Nothing to verify.[/]")
-        raise typer.Exit(EXIT_USAGE_ERROR)
 
     report = PreflightReport()
     for name, cfg in configs:

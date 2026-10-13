@@ -94,6 +94,7 @@ def test_probe_would_catch_a_regression():
         "soup_cli.utils.advise",
         "soup_cli.eval.gate_suites",
         "soup_cli.recipes.catalog",
+        "soup_cli.utils.cuda_graphs",
     ],
 )
 def test_documented_light_module_stays_light(module: str):
@@ -246,3 +247,133 @@ def test_stress_sentinel_matches_the_controller():
     from soup_cli.utils import reward_hack_control, reward_stress
 
     assert reward_stress.DEFAULT_SENTINEL == reward_hack_control._DEFAULT_SENTINEL
+
+
+def _invoke_with_probe(argv: list[str], monkey_patch_code: str = "") -> tuple[int, list[str], str]:
+    """Run an invocation in a clean subprocess, returning (exit_code, leaked_deps, output)."""
+    probe = (
+        "import sys\n"
+        f"{monkey_patch_code}\n"
+        "from typer.testing import CliRunner\n"
+        "from soup_cli.cli import app\n"
+        f"r = CliRunner().invoke(app, {argv!r})\n"
+        "leaked = ','.join(sorted(m for m in " + repr(HEAVY) + " if m in sys.modules))\n"
+        "print('---SOUPPROBE---')\n"
+        "print(r.exit_code)\n"
+        "print(leaked)\n"
+        "print(r.output)\n"
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", probe],
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    assert proc.returncode == 0, (proc.stdout, proc.stderr)
+    parts = proc.stdout.split("---SOUPPROBE---\n", 1)[1]
+    exit_code_str, leaked_str, output = parts.split("\n", 2)
+    leaked = [m for m in leaked_str.strip().split(",") if m]
+    return int(exit_code_str), leaked, output
+
+
+def test_bench_train_warmup_refusal_is_light(tmp_path):
+    """bench train --steps <= --warmup must refuse before loading torch (#1817)."""
+    cfg_file = tmp_path / "soup.yaml"
+    cfg_file.write_text(
+        "base: meta-llama/Llama-3.1-8B-Instruct\n"
+        "task: sft\n"
+        "data:\n"
+        "  train: ./data/train.jsonl\n"
+        "  format: auto\n"
+        "training:\n"
+        "  epochs: 1\n"
+        "  lr: 2e-4\n",
+        encoding="utf-8",
+    )
+    exit_code, leaked, output = _invoke_with_probe(
+        ["bench", "train", "-c", str(cfg_file), "--steps", "2", "--warmup", "5"]
+    )
+    assert exit_code == 1
+    assert "--steps 2 leaves nothing after --warmup 5: raise --steps or lower --warmup." in output
+    assert not leaked, f"bench train early refusal pulled in {leaked}"
+
+
+def test_recipes_verify_missing_config_refusal_is_light():
+    """recipes verify with non-existent config must exit 3 before loading torch (#1817)."""
+    exit_code, leaked, output = _invoke_with_probe(
+        ["recipes", "verify", "-c", "nonexistent_recipe_file.yaml"]
+    )
+    assert exit_code == 3
+    assert "Config not found: nonexistent_recipe_file.yaml" in output
+    assert not leaked, f"recipes verify missing config pulled in {leaked}"
+
+
+def test_recipes_verify_unparseable_config_refusal_is_light(tmp_path):
+    """recipes verify with unparseable config must exit 3 before loading torch (#1817)."""
+    bad_cfg = tmp_path / "bad.yaml"
+    bad_cfg.write_text("invalid: yaml: [", encoding="utf-8")
+    exit_code, leaked, output = _invoke_with_probe(
+        ["recipes", "verify", "-c", str(bad_cfg)]
+    )
+    assert exit_code == 3
+    assert "Config does not parse:" in output
+    assert not leaked, f"recipes verify unparseable config pulled in {leaked}"
+
+
+def test_cuda_graphs_cpu_refusal_is_light(tmp_path):
+    """infer and bench infer with --cuda-graphs on CPU must exit before loading torch (#1817)."""
+    prompt_file = tmp_path / "prompts.jsonl"
+    prompt_file.write_text('{"prompt": "hello"}\n', encoding="utf-8")
+    out_file = tmp_path / "out.jsonl"
+
+    expected_msg = (
+        "CUDA graphs require every model tensor on a single CUDA device. Omit --cuda-graphs."
+    )
+
+    # bench infer on CPU (force CPU via CUDA_VISIBLE_DEVICES="" probe environment)
+    env_code = "import os; os.environ['CUDA_VISIBLE_DEVICES'] = ''"
+    exit_code, leaked, output = _invoke_with_probe(
+        ["bench", "infer", "Qwen/Qwen2.5-0.5B", "--cuda-graphs"],
+        monkey_patch_code=env_code,
+    )
+    assert exit_code == 1
+    assert expected_msg in " ".join(output.split())
+    assert not leaked, f"bench infer --cuda-graphs pulled in {leaked}"
+
+    # infer on CPU without --device
+    exit_code, leaked, output = _invoke_with_probe(
+        [
+            "infer",
+            "-m",
+            "Qwen/Qwen2.5-0.5B",
+            "-i",
+            str(prompt_file),
+            "-o",
+            str(out_file),
+            "--cuda-graphs",
+        ],
+        monkey_patch_code=env_code,
+    )
+    assert exit_code == 1
+    assert expected_msg in " ".join(output.split())
+    assert not leaked, f"infer --cuda-graphs pulled in {leaked}"
+
+    # infer on explicit --device cpu
+    exit_code, leaked, output = _invoke_with_probe(
+        [
+            "infer",
+            "-m",
+            "Qwen/Qwen2.5-0.5B",
+            "-i",
+            str(prompt_file),
+            "-o",
+            str(out_file),
+            "--device",
+            "cpu",
+            "--cuda-graphs",
+        ],
+    )
+    assert exit_code == 1
+    assert expected_msg in " ".join(output.split())
+    assert not leaked, f"infer --device cpu --cuda-graphs pulled in {leaked}"
+
