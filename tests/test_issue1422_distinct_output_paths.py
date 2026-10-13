@@ -146,3 +146,50 @@ class TestIngestRefusesItsOwnInput:
         )
         assert result.exit_code == 0, result.output
         assert os.path.getsize("out.jsonl") > 0
+
+    def test_dot_slash_spelling_of_logs_is_refused(self):
+            # The same file spelled ./traces.jsonl must be refused like traces.jsonl.
+        original = '{"id": "t1", "input": "hi", "output": "hello"}\n'
+        _write("traces.jsonl", original)
+        result = CliRunner().invoke(
+            app, ["ingest", "--source", "langfuse", "--logs", "./traces.jsonl"]
+        )
+        assert result.exit_code != 0, result.output
+        assert _read("traces.jsonl") == original
+
+    def test_explicit_output_equal_to_logs_is_refused(self):
+        # Not only the default output: -o pointing at --logs is the same bug.
+        original = '{"id": "t1", "input": "hi", "output": "hello"}\n'
+        _write("e.jsonl", original)
+        result = CliRunner().invoke(
+            app,
+            ["ingest", "--source", "langfuse", "--logs", "e.jsonl", "-o", "e.jsonl"],
+        )
+        assert result.exit_code != 0, result.output
+        assert _read("e.jsonl") == original
+
+    def test_a_logs_directory_leaves_an_existing_output_untouched(self):
+        # A read failure must never leave a truncated output behind: on main this
+        # emptied a good earlier traces.jsonl before the read failed.
+        good = '{"id": "t1", "input": "hi", "output": "hello"}\n'
+        _write("traces.jsonl", good)
+        os.mkdir("some_dir")
+        result = CliRunner().invoke(
+            app, ["ingest", "--source", "langfuse", "--logs", "some_dir"]
+        )
+        assert result.exit_code != 0
+        assert _read("traces.jsonl") == good
+
+    def test_a_non_utf8_export_leaves_an_existing_output_untouched(self):
+        # Same property for an export the reader cannot decode.
+        good = '{"id": "t1", "input": "hi", "output": "hello"}\n'
+        _write("traces.jsonl", good)
+        with open("bad.jsonl", "wb") as fh:
+            fh.write(b"\xff\xfe\x00 not utf-8\n")
+        result = CliRunner().invoke(
+            app, ["ingest", "--source", "langfuse", "--logs", "bad.jsonl"]
+        )
+        assert result.exit_code != 0
+        assert _read("traces.jsonl") == good
+        # The staging file of the atomic write must be cleaned up too.
+        assert [n for n in os.listdir(".") if n.startswith(".soup.")] == []
