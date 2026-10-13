@@ -5017,25 +5017,38 @@ class SoupConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_expand_layers_scope(self) -> "SoupConfig":
-        """#1325 - ``training.expand_layers`` (LLaMA Pro) is wired only in the
-        transformers text SFT/pretrain ``_setup_transformers`` paths. Every
-        other task/backend/modality accepts the fields and then silently
-        trains the unexpanded model, so refuse at load with the actual
-        task/backend/modality in the message."""
+        """#1325 - ``training.expand_layers`` (LLaMA Pro) trains the appended
+        blocks only in the transformers text SFT ``_setup_transformers`` path
+        (with ``lora.r: 0``, #1326). Every other task/backend/modality accepts
+        the fields and then silently trains the unexpanded model, so refuse at
+        load with the actual task/backend/modality in the message.
+
+        #1813 - ``task: pretrain`` runs the expansion too, but has no route
+        that trains the new blocks: a LoRA rank freezes them again (#1326) and
+        its trainer has no ``lora.r: 0`` branch. It is refused here, whatever
+        the rank, with the recipe that does work."""
         tcfg = self.training
         if tcfg.expand_layers is None:
             return self
         if not (
-            self.task in {"sft", "pretrain"}
+            self.task == "sft"
             and self.backend == "transformers"
             and self.modality == "text"
         ):
+            fix = "Remove expand_layers and freeze_trainable_layers."
+            if self.task == "pretrain":
+                fix = (
+                    "The pretrain trainer runs the expansion, but a LoRA rank "
+                    "freezes the appended blocks again and it has no lora.r: 0 "
+                    "branch to train them. Use task: sft with lora.r: 0 and "
+                    "quantization: none, or remove expand_layers and "
+                    "freeze_trainable_layers."
+                )
             raise ValueError(
-                "training.expand_layers (LLaMA Pro) is only wired for task "
-                "sft/pretrain on backend transformers with modality text; got "
-                f"task={self.task!r}, backend={self.backend!r}, "
-                f"modality={self.modality!r}. Remove expand_layers and "
-                "freeze_trainable_layers."
+                "training.expand_layers (LLaMA Pro) only trains the appended "
+                "blocks on task sft with backend transformers and modality "
+                f"text; got task={self.task!r}, backend={self.backend!r}, "
+                f"modality={self.modality!r}. {fix}"
             )
         return self
 
@@ -5071,7 +5084,8 @@ class SoupConfig(BaseModel):
         identity (their zero-initialised ``o_proj``/``down_proj`` are frozen), so
         only the original layers learn. Route 1 of the ruling: refuse the
         combination; ``lora.r: 0`` trains the new blocks directly, and is
-        available on ``task: sft`` only.
+        available on ``task: sft`` only. Only ``task: sft`` reaches this check:
+        ``_validate_expand_layers_scope`` refuses every other task first (#1813).
         """
         tcfg = self.training
         if tcfg.expand_layers is None or tcfg.lora.r == 0:
@@ -5086,23 +5100,14 @@ class SoupConfig(BaseModel):
             # their own validators. Let that message speak: lora.r: 0 would not
             # make such a config load.
             return self
-        fields = (
+        raise ValueError(
             f"training.expand_layers: {tcfg.expand_layers} with "
             f"training.freeze_trainable_layers: {tcfg.freeze_trainable_layers} "
             f"(LLaMA Pro) cannot be combined with LoRA (training.lora.r: "
             f"{tcfg.lora.r}). get_peft_model runs after the block expansion and "
             "freezes the appended blocks again, so only adapters on the original "
-            "layers would train. "
-        )
-        if self.task == "pretrain":
-            raise ValueError(
-                fields + "Training only the new blocks needs lora.r: 0, which "
-                "task: pretrain does not support, so this recipe needs task: sft "
-                "with lora.r: 0 and quantization: none."
-            )
-        raise ValueError(
-            fields + "To train only the new blocks, set lora.r: 0 with "
-            "quantization: none."
+            "layers would train. To train only the new blocks, set lora.r: 0 "
+            "with quantization: none."
         )
 
     @model_validator(mode="after")
@@ -6393,9 +6398,32 @@ class SoupConfig(BaseModel):
         do pass the rank straight to peft keep their existing behaviour
         (peft's "`r` should be a positive integer value") rather than gaining
         a new refusal this issue never measured.
+
+        #1813 measured ``task: pretrain``: its trainer has no ``r == 0`` branch,
+        so the rank reaches ``get_peft_model`` (transformers) or unsloth's
+        ``get_peft_model`` and setup fails. It is refused here. LISA is exempt:
+        its pretrain path attaches no adapter and never reads the rank, so
+        ``lisa_enabled`` with ``lora.r: 0`` trains today. Streaming and MLX
+        refuse pretrain in their own validators, so their message wins.
         """
         tcfg = self.training
-        if tcfg.lora.r != 0 or self.task not in ("sft", "embedding"):
+        if tcfg.lora.r != 0:
+            return self
+        if (
+            self.task == "pretrain"
+            and not tcfg.lisa_enabled
+            and not tcfg.stream_layers
+            and self.backend != "mlx"
+        ):
+            raise ValueError(
+                "training.lora.r=0 (full fine-tuning) is not supported with "
+                "task='pretrain': its trainer always attaches a LoRA adapter, so "
+                "a rank of 0 fails inside peft (or unsloth) when training starts. "
+                "Use lora.r >= 1, lisa_enabled: true (LISA trains whole layers "
+                "without an adapter), or task: sft with lora.r: 0 for full "
+                "fine-tuning."
+            )
+        if self.task not in ("sft", "embedding"):
             return self
         if tcfg.stream_layers:
             # Streaming has its own, more specific refusal (the decoder lives
