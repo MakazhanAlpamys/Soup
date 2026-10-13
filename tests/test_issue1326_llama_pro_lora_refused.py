@@ -6,7 +6,7 @@ appended blocks included, and puts adapters on the original layers. The ruling
 (route 1) refuses ``expand_layers`` together with a LoRA rank at config load and
 points to ``lora.r: 0``. ``task: pretrain`` has no ``lora.r: 0``, and since #1813 it
 gets the ``expand_layers`` scope refusal before this check (see
-``test_issue1813_pretrain_lora_r0_refused.py``).
+``test_pretrain_full_finetune_refusal.py``).
 """
 
 from __future__ import annotations
@@ -50,6 +50,9 @@ def test_a_lora_rank_with_llama_pro_is_refused(task, lora, rank):
     assert "freezes the appended blocks again" in message
     assert "lora.r: 0" in message
     assert "quantization: none" in message
+    # The pretrain advice (#1813) lives in the scope check and must not leak into this message.
+    assert "needs task: sft" not in message
+    assert "pretrain" not in message
 
 
 @pytest.mark.parametrize(
