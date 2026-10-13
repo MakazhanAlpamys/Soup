@@ -126,7 +126,7 @@ _MAX_BENCHMARK_NAME_CHARS = 256
 
 def _fail(message: str, code: int) -> NoReturn:
     """Print a friendly red error and raise ``typer.Exit(code)``."""
-    console.print(f"[red]Error:[/] {escape(message)}")
+    console.print(f"[red]Error:[/] {escape(for_terminal(message))}")
     raise typer.Exit(code=code)
 
 
