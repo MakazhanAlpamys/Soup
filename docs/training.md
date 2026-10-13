@@ -309,6 +309,13 @@ decides what trains. It cannot be combined with layer streaming: streaming keeps
 the decoder on the meta device and trains only the adapter, so there would be
 nothing to full fine-tune.
 
+`task: pretrain` refuses `lora.r: 0` at config load
+([#1813](https://github.com/MakazhanAlpamys/Soup/issues/1813)): its trainer
+always attaches a LoRA adapter, so a rank of 0 would only fail inside peft when
+training starts. To train the base weights there, use LISA (`lisa_enabled: true`),
+which trains a rotating set of whole layers without an adapter and so still
+accepts `lora.r: 0`, or switch to `task: sft`.
+
 `freeze_layers` / `freeze_ratio` **do** stay legal with `r: 0` — "train
 everything above layer N" is a real technique — and the trainer respects
 whatever they froze instead of silently unfreezing it. If they leave nothing
