@@ -8,8 +8,23 @@ Agreed with @nurikw3 on 2026-10-12 and committed here before any download or run
 
 ### 1.1 Agreed rule (verbatim)
 
+**Provenance.** The rule was supplied as a separate file, `e4-rule-part1.md`, which is not kept in this repository. Its title and status lines, verbatim:
 
-## What B3 established, and what it did not
+> `# E4 rule, part 1: how widespread is the double-quant absmax defect?`
+>
+> `Status: DRAFT, 2026-10-08. Committed to the repo before the first run; nothing below has been measured yet.`
+
+| | |
+|---|---|
+| Git blob hash of the supplied file (`git hash-object`) | `f7059463b3349d311198c4a2d5194521f931cab2` |
+| Source commit of the rule in this record | `df3dae1` |
+| Source path | `benchmarks/probe-e4-double-quant-prevalence.md` (blob `f196bcf10d7d063c29ef4ef487f32e96054b5a8a` at that commit) |
+| SHA-256 of the rule body | `6a0053d36568a025112a451ad875db6faba737047e98b6622577596b39ff6aa5` |
+
+The rule body is the text from "What B3 established" through "Deliverable". The supplied file's body and the body committed in `df3dae1` are byte-identical. Transform applied below, and nothing else: every heading of the body is demoted two levels (`##` to `####`) so that it nests under 1.1. `tests/test_e4_double_quant_prevalence.py` promotes the headings back and asserts byte equality with the body in `df3dae1`.
+
+<!-- e4-rule-body:begin -->
+#### What B3 established, and what it did not
 
 - Established, on ONE tensor (`model.layers.1.mlp.gate_proj` of DeepSeek-V3 file 1/163): with bitsandbytes double-quant, ~6.4% of NF4 blocks exceed `0.17 x absmax`; worst 2.15; mechanism is small block absmax values stored sign-flipped when a 256-block group spans a wide range (345x there). Whole-tensor relative error 0.0872 -> 0.0880.
 - In that one file, 123 of 126 FP8 weights failed the bound with double-quant, 0 without.
@@ -17,7 +32,7 @@ Agreed with @nurikw3 on 2026-10-12 and committed here before any download or run
 
 Part 1 answers the first two questions. It also picks the model for part 2 (training quality), which has its own rule, committed before any training run.
 
-## Sample (fixed before any download)
+#### Sample (fixed before any download)
 
 Read through HTTP range requests on the official checkpoints, only the bytes of the selected tensors; nothing else is downloaded.
 
@@ -32,7 +47,7 @@ Read through HTTP range requests on the official checkpoints, only the bytes of 
 
 Routed experts are chosen with `random.Random(20261008)`, independently per layer, before any tensor is read; the selected keys are written to the record first. The index revision (commit hash of each repo) is recorded.
 
-## Per tensor, both double-quant settings
+#### Per tensor, both double-quant settings
 
 Reference `r`: FP8 decoded with B3's independent decoder (bit-field table, fp32 multiply, one bf16 rounding). Each tensor's decode is also checked against B3's `dequantize_fp8_blockwise`; any mismatch voids the tensor.
 
@@ -46,7 +61,7 @@ Then `quantize_4bit` / `dequantize_4bit` (NF4, blocksize 64), double-quant off a
 | `rel_fro` | `||n - r|| / ||r||` |
 | `group_spread` | per 256-block group, max/min true absmax; reported as the tensor's median and max |
 
-## Questions and how each is answered
+#### Questions and how each is answered
 
 **Q1, prevalence.** Per model and per tensor kind (attention, dense MLP, shared expert, routed expert): median, p90 and max of `frac_over` and `frac_flipped`, double-quant on vs off. Descriptive; no threshold.
 
@@ -56,7 +71,7 @@ Then `quantize_4bit` / `dequantize_4bit` (NF4, blocksize 64), double-quant off a
 
 **Q4, model for part 2 (decides part 2's design).** The same metrics on candidate single-GPU models: Mistral-7B-v0.1, Qwen2.5-7B, OLMoE-1B-7B (bf16 sources, no FP8 step). Pick the candidate whose median `frac_over` (double-quant on, all linear weights) is closest to DeepSeek-V3's. If every candidate's median is below one tenth of DeepSeek-V3's, the defect does not reproduce at small scale: part 2 is not run as planned, and the record says so and goes to the owner.
 
-## Validity
+#### Validity
 
 - V1: every tensor's fetched byte count equals its header's `data_offsets` span; otherwise void.
 - V2: B3's decoder check (above) per tensor.
@@ -64,9 +79,10 @@ Then `quantize_4bit` / `dequantize_4bit` (NF4, blocksize 64), double-quant off a
 - V4: a failed fetch, OOM or killed run is kept as void and reported, not silently retried.
 - Sampled tensors are reported as a sample: no statement about "all weights" is made from them.
 
-## Deliverable
+#### Deliverable
 
 `benchmarks/probe-e4-double-quant-prevalence.md` with this rule verbatim, the selected keys, raw per-tensor JSON for both models and the candidates, the void list, and the Q1 to Q4 answers.
+<!-- e4-rule-body:end -->
 
 ### 1.2 Definitions pinned at commit time (before any run)
 
