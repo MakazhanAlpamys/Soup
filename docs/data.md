@@ -375,6 +375,8 @@ soup ingest --source openai-stored --logs ./oai-stored-completions.jsonl
 
 With `--logs` the CLI never makes a network call — operators export from their SaaS dashboard or vendor API, then point `soup ingest` at the local file. Auth env vars (`LANGFUSE_PUBLIC_KEY` + `LANGFUSE_SECRET_KEY` / `LANGSMITH_API_KEY` / `HELICONE_API_KEY` / `OPENPIPE_API_KEY` / `OPENAI_API_KEY` / `OTEL_EXPORTER_OTLP_HEADERS`) are advisory on that path — Soup surfaces which ones authenticate the source. A PII reminder fires on every ingest run (matches v0.26.0 Trace-to-Preference policy).
 
+**Conversation prompts.** `soup ingest` and the OpenAI/LangChain `soup data from-traces` parsers use the same rule for message lists: retain context through the last user turn and omit later messages. A single user message keeps its plain text; a request with context is rendered as compact JSON of `role`/`content` objects so message boundaries and roles remain distinct. System-only requests and last user turns without text are skipped. Content-part lists join text parts with newlines and discard non-text parts, including image URLs and base64 data. Bare lists and `{"messages": [...]}` envelopes are equivalent. Output message lists select the final assistant response and flatten its text parts. Plain string prompts and outputs remain unchanged. This changes grouping for multi-turn logs: regenerate trace exports and preference pairs rather than mixing the previous first-turn prompts with the new conversation prompts.
+
 ### Live pull from Langfuse (`--pull`, #204)
 
 Langfuse is the one source Soup can fetch directly, so there is no export step:

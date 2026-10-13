@@ -981,7 +981,7 @@ class TestRecordedRealResponse:
         assert trace_of["44d5516f74ed7738"] == trace_of["09c25553e670e9a1"]
         model = {"model": "gpt-4o-mini"}
         assert records == [  # API order: newest startTime first
-            {"trace_id": "44d5516f74ed7738", "prompt": "How tall is the Eiffel Tower?\n330 m",
+            {"trace_id": "44d5516f74ed7738", "prompt": "How tall is the Eiffel Tower?",
              "output": "The Eiffel Tower is 330 m tall.", "source": "langfuse", "signal": "none",
              "metadata": model},
             {"trace_id": "09c25553e670e9a1",
@@ -991,7 +991,8 @@ class TestRecordedRealResponse:
             {"trace_id": "e83a0c5fd3d47039", "prompt": "Translate 'hello' to Spanish.",
              "output": "hola", "source": "langfuse", "signal": "none", "metadata": model},
             {"trace_id": "8dd24f84d2bf7735",
-             "prompt": "You are terse.\nWhat is the capital of France?",
+             "prompt": '[{"role":"system","content":"You are terse."},'
+                       '{"role":"user","content":"What is the capital of France?"}]',
              "output": "Paris.", "source": "langfuse", "signal": "none", "metadata": model},
         ]
 
@@ -1014,9 +1015,8 @@ class TestRecordedRealResponse:
 
         assert raw["8dd24f84d2bf7735"].prompt.startswith('[{"role": "system"')
 
-    def test_control_a_bare_message_list_would_keep_only_the_system_prompt(self):
-        """CONTROL for the ``{"messages": [...]}`` hand-off: ``_coerce_str`` keeps
-        only the first message of a bare list."""
+    def test_bare_and_enveloped_message_lists_keep_the_user_question(self):
+        """Both Langfuse input shapes use the same conversation rule (#1809)."""
         from soup_cli.utils.ingest_sources import parse_langfuse
 
         page = json.loads(_RECORDED_PAGE.read_text(encoding="utf-8"))["data"]
@@ -1027,7 +1027,10 @@ class TestRecordedRealResponse:
             "output": json.loads(chat["output"]),
         }
 
-        assert next(parse_langfuse([bare])).prompt == "You are terse."
+        prompt = next(parse_langfuse([bare])).prompt
+        assert json.loads(prompt) == bare["input"]
+        wrapped = dict(bare, input={"messages": bare["input"]})
+        assert next(parse_langfuse([wrapped])).prompt == prompt
 
 
 # ============================================================
