@@ -248,11 +248,11 @@ DeepSeek-V3's median `frac_over` with double-quant on, over its 850 sampled tens
 | Qwen2.5-7B | 196 | 1.438e-04 | no | 1.352e-04 |
 | OLMoE-1B-7B | 3136 | 0 | yes | 8.598e-06 |
 
-Verdict by the rule:
+**Q4 owner resolution (Andi, 2026-10-13).** Under the rule as committed in `df3dae1`, distance is the absolute difference of medians (`frac_over`, double-quant on, all linear weights). The stop clause is false: Mistral-7B-v0.1 (6.104e-05) and Qwen2.5-7B (1.438e-04) are both above one tenth of DeepSeek-V3's median (8.598e-07). **Selected: OLMoE-1B-7B.** Absolute distances: OLMoE 8.598e-06, Mistral 5.244e-05, Qwen 1.352e-04.
 
-- The "every candidate below one tenth" clause does **not** apply: one candidate of three (OLMoE-1B-7B, median 0) is below one tenth of DeepSeek-V3's median; Mistral-7B-v0.1 and Qwen2.5-7B are above it. The record therefore does not say that the defect fails to reproduce at small scale.
-- Closest candidate, by absolute difference of the medians: **OLMoE-1B-7B** (difference 8.598e-06; Mistral-7B-v0.1 5.244e-05; Qwen2.5-7B 1.352e-04).
-- The rule says "closest" and does not say how distance is measured. Absolute difference is used above. By ratio the order is different: Mistral-7B-v0.1's median is 7.1x DeepSeek-V3's and Qwen2.5-7B's is 16.7x, while OLMoE-1B-7B's median is 0 and has no finite ratio. Both readings are stated so that the choice is made by the rule's owners, not by this record.
+*Post-hoc alternative, not a decision:* ratio distance was considered after the data were seen. It would select Mistral-7B-v0.1 (7.1x), and OLMoE has no finite ratio. It is recorded for transparency only.
+
+Part 2 (training quality) has its own preregistration, which is committed before any training run.
 
 For reference, not part of Q4: Kimi K2's median `frac_over` with double-quant on, over its 848 sampled tensors, is 0.
 
