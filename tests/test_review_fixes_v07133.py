@@ -689,7 +689,7 @@ class TestConstantTimeToken:
 
         set_auth_token("a" * 32)
         app = create_app()
-        client = TestClient(app)
+        client = TestClient(app, base_url="http://127.0.0.1:7860")
         # A mutating endpoint requires the Bearer token.
         bad = client.post(
             "/api/train/start",
