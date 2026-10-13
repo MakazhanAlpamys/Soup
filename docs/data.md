@@ -377,6 +377,10 @@ With `--logs` the CLI never makes a network call — operators export from their
 
 ### Live pull from Langfuse (`--pull`, #204)
 
+Langfuse feedback uses `score` when it is present and non-null, including `0`,
+`0.0` and `false` as negative feedback. Only a missing or null score falls back
+to `rating`. Negative scores remain available for preference-pair construction.
+
 Langfuse is the one source Soup can fetch directly, so there is no export step:
 
 ```bash
