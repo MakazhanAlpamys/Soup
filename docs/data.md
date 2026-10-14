@@ -35,12 +35,6 @@
 
 ## Semantic dedup (`soup data dedup --semantic`)
 
-JSONL dataset rows must be objects; JSON dataset files must contain an array of
-objects. Non-object rows are skipped with a warning naming the physical JSONL
-line or JSON array row. `soup data validate` also lists these warnings as issues;
-its row statistics describe the retained objects. `soup data review` applies the
-same object check before displaying a pair. Rejected row contents are not printed.
-
 `soup data dedup` removes near-duplicates with MinHash by default — fast, no
 torch, but **lexical**: it compares shared token shingles, so two rows that say
 the same thing in different words look unrelated to it.
@@ -645,6 +639,12 @@ reports "Could not read the final trainer's args statically" and uses Soup defau
 
 
 ## Data Formats
+
+JSONL dataset rows must be objects; JSON dataset files must contain an array of
+objects. Non-object rows are skipped with a warning naming the physical JSONL
+line or JSON array row. `soup data validate` also lists these warnings as issues;
+its row statistics describe the retained objects. `soup data review` applies the
+same object check before displaying a pair. Rejected row contents are not printed. `soup data canary insert` retains its first-row refusal and preserves later rows when rewriting the file.
 
 Soup supports these formats (auto-detected). Files can be JSONL, JSON, CSV, Parquet, or TXT.
 

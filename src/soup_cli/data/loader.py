@@ -69,8 +69,10 @@ def _streaming_builder_for(entry: str) -> str:
 MAX_REMOTE_ROWS = 1_000_000
 
 
-def load_raw_data(path: Path, *, issues: list[str] | None = None) -> list[dict]:
-    """Load raw data from a file into list of dicts."""
+def load_raw_data(
+    path: Path, *, issues: list[str] | None = None, skip_non_object: bool = True,
+) -> list[dict]:
+    """Load file rows, skipping non-objects unless a caller needs the original JSON rows."""
     if not path.exists():
         raise FileNotFoundError(f"Data file not found: {path}")
 
@@ -79,9 +81,9 @@ def load_raw_data(path: Path, *, issues: list[str] | None = None) -> list[dict]:
         raise ValueError(f"Unsupported file format: {ext}. Supported: {SUPPORTED_EXTENSIONS}")
 
     if ext == ".jsonl":
-        return _load_jsonl(path, issues=issues)
+        return _load_jsonl(path, issues=issues, skip_non_object=skip_non_object)
     elif ext == ".json":
-        return _load_json(path, issues=issues)
+        return _load_json(path, issues=issues, skip_non_object=skip_non_object)
     elif ext == ".csv":
         return _load_csv(path)
     elif ext == ".parquet":
@@ -101,7 +103,9 @@ def non_object_row_issue(value: object, position: int, unit: str = "line") -> st
     return f"{unit} {position} is a JSON {kind}, not an object"
 
 
-def _load_jsonl(path: Path, *, issues: list[str] | None = None) -> list[dict]:
+def _load_jsonl(
+    path: Path, *, issues: list[str] | None = None, skip_non_object: bool = True,
+) -> list[dict]:
     data = []
     # v0.40.1 Part E — auto-strip UTF-8 BOM (Windows users overwhelmingly
     # write JSONL via PowerShell `Out-File -Encoding utf8` which adds BOM).
@@ -113,7 +117,7 @@ def _load_jsonl(path: Path, *, issues: list[str] | None = None) -> list[dict]:
                 continue
             try:
                 row = json.loads(line)
-                if not isinstance(row, dict):
+                if skip_non_object and not isinstance(row, dict):
                     issue = non_object_row_issue(row, i + 1)
                     console.print(f"[yellow]Warning: {issue}[/]")
                     if issues is not None:
@@ -125,10 +129,14 @@ def _load_jsonl(path: Path, *, issues: list[str] | None = None) -> list[dict]:
     return data
 
 
-def _load_json(path: Path, *, issues: list[str] | None = None) -> list[dict]:
+def _load_json(
+    path: Path, *, issues: list[str] | None = None, skip_non_object: bool = True,
+) -> list[dict]:
     with open(path, encoding="utf-8") as f:
         raw = json.load(f)
     if isinstance(raw, list):
+        if not skip_non_object:
+            return raw
         rows = []
         for position, row in enumerate(raw, start=1):
             if not isinstance(row, dict):

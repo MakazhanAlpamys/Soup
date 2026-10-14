@@ -14,7 +14,7 @@ from rich.console import Console
 from rich.table import Table
 
 from soup_cli.data.loader import _resolve_media_entries, load_raw_data, non_object_row_issue
-from soup_cli.data.validator import validate_and_stats
+from soup_cli.data.validator import _MAX_REASON_SAMPLES, validate_and_stats
 from soup_cli.utils.embed import DEFAULT_EMBED_MODEL, embed_texts
 from soup_cli.utils.exit_codes import EXIT_GATE_FAILED, EXIT_USAGE_ERROR, GateCommand
 from soup_cli.utils.paths import is_under_cwd
@@ -127,7 +127,10 @@ def validate(
             raise typer.Exit(EXIT_USAGE_ERROR)
 
     result = validate_and_stats(data, expected_format=fmt)
-    result["issues"] = load_issues + result["issues"]
+    load_issue_samples = load_issues[:_MAX_REASON_SAMPLES]
+    if len(load_issues) > _MAX_REASON_SAMPLES:
+        load_issue_samples.append(f"... and {len(load_issues) - _MAX_REASON_SAMPLES} more")
+    result["issues"] = load_issue_samples + result["issues"]
 
     if result["issues"]:
         console.print("[yellow]Issues found:[/]")
