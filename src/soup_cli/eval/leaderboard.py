@@ -133,6 +133,13 @@ def compare_runs(
     }
 
 
+def _csv_line(values: list[str]) -> str:
+    output = io.StringIO(newline="")
+    # Legacy csv writers quote CR only when it is in the record terminator.
+    csv.writer(output, lineterminator="\r\n").writerow(values)
+    return output.getvalue()[:-2]
+
+
 def export_leaderboard(
     leaderboard: Leaderboard,
     fmt: str = "json",
@@ -148,13 +155,11 @@ def export_leaderboard(
         # Preserve the existing empty benchmark column for an empty export.
         benchmarks = sorted(all_benchmarks) or [""]
 
-        output = io.StringIO()
-        writer = csv.writer(output, lineterminator="\n")
-        writer.writerow(["model", *benchmarks, "average"])
+        lines = [_csv_line(["model", *benchmarks, "average"])]
         for model, scores, avg in sorted_models:
             vals = [str(scores.get(bench, "")) for bench in benchmarks]
-            writer.writerow([model, *vals, f"{avg:.4f}"])
-        return output.getvalue().rstrip("\n")
+            lines.append(_csv_line([model, *vals, f"{avg:.4f}"]))
+        return "\n".join(lines)
 
     # Default: JSON
     data = []

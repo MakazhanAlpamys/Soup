@@ -36,6 +36,7 @@ def make_leaderboard(model: str, benchmark: str) -> Leaderboard:
     '"quoted-model"',
     "models/first\nsecond",
     "models/first\rsecond",
+    "models/first\r\nsecond",
     'models/"base",adapter',
 ])
 def test_csv_model_identity_round_trip(model: str) -> None:
@@ -51,6 +52,7 @@ def test_csv_model_identity_round_trip(model: str) -> None:
     '"quoted-metric"',
     "metric\npart",
     "metric\rpart",
+    "metric\r\npart",
 ])
 def test_csv_benchmark_identity_round_trip(benchmark: str) -> None:
     board = make_leaderboard("models/base", benchmark)
