@@ -1,0 +1,26 @@
+`causal_conv1d_fn` is falling back to its reference PyTorch implementation because `causal_conv1d` is not installed. This is correct but much slower; install `causal_conv1d` for the optimized kernel.
+`chunk_gated_delta_rule` is falling back to its reference PyTorch implementation because `flash-linear-attention` is not installed. This is correct but much slower; install `flash-linear-attention` for the optimized kernel.
+qwen35moe-tiny seed 17: base OK (e_base 4.837195880312295e-07)
+  soup-auto            APPLIED         s_ref=2.258e-01 rho=1.000e+00 r=1.842e-06
+  all                  APPLIED         s_ref=3.051e-01 rho=1.000e+00 r=1.323e-06
+  q_proj               APPLIED         s_ref=1.208e-01 rho=1.000e+00 r=2.778e-06
+  k_proj               APPLIED         s_ref=1.244e-01 rho=1.000e+00 r=2.715e-06
+  v_proj               APPLIED         s_ref=2.151e-01 rho=1.000e+00 r=1.533e-06
+  o_proj               APPLIED         s_ref=1.149e-01 rho=1.000e+00 r=2.244e-06
+  in_proj_qkv          APPLIED         s_ref=7.584e-02 rho=1.000e+00 r=5.323e-06
+  in_proj_z            APPLIED         s_ref=4.143e-02 rho=1.000e+00 r=1.004e-05
+  in_proj_a            TOO WEAK        s_ref=1.472e-04 rho=9.999e-01 r=2.649e-03
+  in_proj_b            APPLIED         s_ref=1.287e-02 rho=1.000e+00 r=3.091e-05
+  out_proj             APPLIED         s_ref=4.209e-02 rho=1.000e+00 r=9.374e-06
+  shared               APPLIED         s_ref=7.223e-02 rho=1.000e+00 r=5.541e-06
+dsv3-tiny seed 17: base OK (e_base 5.207986134257716e-07)
+  soup-auto            CONVERT-FAILED  s_ref=5.593e-01 rho=- r=-
+  all                  CONVERT-FAILED  s_ref=4.501e-01 rho=- r=-
+  all-but-kv_b         WRONG           s_ref=2.825e-01 rho=8.075e-01 r=7.186e-01
+  q_a_proj             DROPPED         s_ref=2.247e-02 rho=0.000e+00 r=1.000e+00
+  q_b_proj             DROPPED         s_ref=2.526e-02 rho=0.000e+00 r=1.000e+00
+  kv_a_proj_with_mqa   DROPPED         s_ref=2.410e-01 rho=0.000e+00 r=1.000e+00
+  kv_b_proj            CONVERT-FAILED  s_ref=4.684e-01 rho=- r=-
+  o_proj               APPLIED         s_ref=2.053e-01 rho=1.000e+00 r=1.485e-06
+  shared               APPLIED         s_ref=1.045e-01 rho=1.000e+00 r=2.645e-06
+probe: {"verdict": "HOOK NEEDED", "hook_modules": {"q_a_proj": "DROPPED", "q_b_proj": "DROPPED", "kv_a_proj_with_mqa": "DROPPED", "kv_b_proj": "CONVERT-FAILED"}}

@@ -358,7 +358,8 @@ def test_layer_streaming_builds_the_lora_config_with_its_patterns(monkeypatch, t
         "soup_cli.utils.spectrum_scan.resolve_model_weights": lambda *_a, **_k: str(tmp_path / "w"),
         "soup_cli.utils.layer_stream.free_ram_bytes": lambda: 1_000_000,
         "soup_cli.utils.layer_stream_runtime.build_meta_skeleton": (
-            lambda *_a, **_k: SimpleNamespace()
+            # The early adapter gate now inspects real module shapes before I/O.
+            lambda *_a, **_k: _model().to("meta")
         ),
         "soup_cli.utils.layer_stream_runtime.RamSource.layer_specs_from_paths": lambda *_a, **_k: [
             {"self_attn.q_proj.weight": ((4, 4), "float32")},

@@ -1643,6 +1643,16 @@ every process, and TRL drops a partial batch, so the train set needs at least
 A smaller one would never reach a step, so `soup train` refuses it before loading
 any model and names the row count and both settings.
 
+**Saving and resuming experimental PPO.** With TRL 0.29.1 and Transformers
+5.19.0, Soup restores the policy's save-state initialization that TRL's PPO
+constructor omits. Both in-training checkpoint saves and the final adapter save
+use the native trainer path; the final adapter can be reloaded with PEFT.
+Experimental TRL's `checkpoint-N` directories contain the policy and optimizer,
+scheduler, RNG and trainer state, but not a complete resumable policy-plus-critic
+training state. Its `train()` does not accept `resume_from_checkpoint`: Soup
+warns and starts from scratch. A saved inference adapter is not proof of PPO
+training resumption.
+
 PPO supports two reward sources:
 - **Reward model** (`reward_model`): pre-trained reward model (from step 2)
 - **Reward function** (`reward_fn`): callable function (same as GRPO — `accuracy`, `format`, or custom `.py`)

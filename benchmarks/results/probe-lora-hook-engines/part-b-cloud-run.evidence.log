@@ -1,0 +1,173 @@
+# Evidence extract; omitted source lines remain in the separately archived full capture.
+
+# Source: part-b-cloud-run.log
+# Full source SHA-256: d9bdaf10802a018ef155e898d8dd577917a7efb64af8670a833058f798a90137
+
+# Source lines 8-43
+=== 2026-10-08T04:57:19.422462942Z
+$ brev create moe-qwen35-check --type n2d-highmem-16 --min-disk 300 --timeout 900 2>&1 | tail -6
+[Worker 1] n2d-highmem-16 Success! Created instance 'moe-qwen35-check'
+
+Waiting for instance(s) to be ready...
+You can safely ctrl+c to exit
+  moe-qwen35-check: Ready
+moe-qwen35-check
+
+=== 2026-10-08T05:01:26.959725276Z
+$ brev ls 2>&1 | head -4
+You have 1 instances in Org <org>
+ NAME             STATUS   BUILD      SHELL  ID         MACHINE         GPU
+ moe-qwen35-check  RUNNING  COMPLETED  READY  kt2jgdk9q  n2d-highmem-16  -
+
+
+=== 2026-10-08T05:01:33.389893226Z
+$ cd . && brev copy ./setup.sh moe-qwen35-check:/home/ubuntu/setup.sh 2>&1 | grep -v 'waiting for' | tail -2 && brev copy ./soup.tgz moe-qwen35-check:/home/ubuntu/soup.tgz 2>&1 | grep -v 'waiting for' | tail -2
+✓ Successfully copied ./setup.sh → moe-qwen35-check:/home/ubuntu/setup.sh (4.359s)
+
+✓ Successfully copied ./soup.tgz → moe-qwen35-check:/home/ubuntu/soup.tgz (7.381s)
+
+
+=== 2026-10-08T05:02:43.410226716Z
+$ timeout 180 brev exec moe-qwen35-check 'whoami; uname -a; head -2 /etc/os-release; nproc; free -g | head -2; df -h ~ | tail -1; sha256sum ~/setup.sh ~/soup.tgz' 2>&1 | grep -v 'waiting for'
+ubuntu
+Linux brev-kt2jgdk9q 6.8.0-1069-gcp #77~22.04.1-Ubuntu SMP Tue Sep 15 18:07:43 UTC 2026 x86_64 x86_64 x86_64 GNU/Linux
+PRETTY_NAME="Ubuntu 22.04.5 LTS"
+NAME="Ubuntu"
+16
+               total        used        free      shared  buff/cache   available
+Mem:             125           1         119           0           5         123
+/dev/root       125G  7.1G  118G   6% /
+a8f11da3dfe73c70363137290b26c64befdabc1e1c082bfb11cdd93c1e73bda2  /home/ubuntu/setup.sh
+f1fb3ee4666efc493ccf08203ba204b7c1ac678dce93d5dc15ede6a319239204  /home/ubuntu/soup.tgz
+moe-qwen35-check
+
+# Source lines 50-109
+=== 2026-10-08T05:03Z (approximate; run outside logged.sh)
+$ brev create --help | grep -i -E "disk|storage|size"; brev exec moe-qwen35-check "lsblk ...; df -h ...; tail -3 ~/setup.log"
+      --min-disk float           Minimum disk size in GB
+sda       129G disk
+├─sda1  128.9G part /
+/dev/root       125G  7.6G  118G   7% /
+
+=== 2026-10-08T05:05:44.607709325Z
+$ date -u; brev delete moe-qwen35-check 2>&1 | tail -2; sleep 20; brev ls 2>&1 | head -4
+Thu Oct  8 05:05:44 UTC 2026
+moe-qwen35-check
+You have 1 instances in Org <org>
+ NAME             STATUS    BUILD      SHELL      ID         MACHINE         GPU
+ moe-qwen35-check  DELETING  COMPLETED  NOT READY  kt2jgdk9q  n2d-highmem-16  -
+
+
+=== 2026-10-08T05:06:34.70490005Z
+$ brev search cpu --min-ram 200 --arch x86_64 --sort price 2>&1 | head -4; brev create moe-qwen35-check2 --type n2d-highmem-32 --dry-run 2>&1 | tail -2
+ TYPE                   TARGET_DISK  PROVIDER  VCPUS  RAM   ARCH    DISK       $/GB/MO  BOOT  FEATURES  $/HR
+ n2d-highmem-32         10           gcp          32  256   x86_64  10GB-16TB  $0.16    7m    SP        $1.44
+ n2d-standard-64        10           gcp          64  256   x86_64  10GB-16TB  $0.16    7m    SP        $2.14
+ n2d-highmem-48         10           gcp          48  384   x86_64  10GB-16TB  $0.16    7m    SP        $2.17
+n2d-highmem-32
+
+=== 2026-10-08T05:06:40.954269569Z
+$ brev create moe-qwen35-check2 --type n2d-highmem-32 --timeout 900 2>&1 | tail -6
+[Worker 1] n2d-highmem-32 Success! Created instance 'moe-qwen35-check2'
+
+Waiting for instance(s) to be ready...
+You can safely ctrl+c to exit
+  moe-qwen35-check2: Ready
+moe-qwen35-check2
+
+=== 2026-10-08T05:10:45.326117886Z
+$ brev ls 2>&1 | head -4
+You have 1 instances in Org <org>
+ NAME              STATUS   BUILD      SHELL  ID         MACHINE         GPU
+ moe-qwen35-check2  RUNNING  COMPLETED  READY  is7b3f03i  n2d-highmem-32  -
+
+
+=== 2026-10-08T05:10:51.22943109Z
+$ cd . && brev copy ./setup.sh moe-qwen35-check2:/home/ubuntu/setup.sh 2>&1 | grep -v 'waiting for' | tail -2 && brev copy ./soup.tgz moe-qwen35-check2:/home/ubuntu/soup.tgz 2>&1 | grep -v 'waiting for' | tail -2
+✓ Successfully copied ./setup.sh → moe-qwen35-check2:/home/ubuntu/setup.sh (3.878s)
+
+✓ Successfully copied ./soup.tgz → moe-qwen35-check2:/home/ubuntu/soup.tgz (7.833s)
+
+
+=== 2026-10-08T05:12:03.938361183Z
+$ timeout 180 brev exec moe-qwen35-check2 'whoami; uname -a; head -2 /etc/os-release; nproc; free -g | head -2; df -h ~ | tail -1; sha256sum ~/setup.sh ~/soup.tgz' 2>&1 | grep -v 'waiting for'
+ubuntu
+Linux brev-is7b3f03i 6.8.0-1069-gcp #77~22.04.1-Ubuntu SMP Tue Sep 15 18:07:43 UTC 2026 x86_64 x86_64 x86_64 GNU/Linux
+PRETTY_NAME="Ubuntu 22.04.5 LTS"
+NAME="Ubuntu"
+32
+               total        used        free      shared  buff/cache   available
+Mem:             251           1         245           0           5         248
+/dev/root       125G  7.1G  118G   6% /
+a8f11da3dfe73c70363137290b26c64befdabc1e1c082bfb11cdd93c1e73bda2  /home/ubuntu/setup.sh
+f1fb3ee4666efc493ccf08203ba204b7c1ac678dce93d5dc15ede6a319239204  /home/ubuntu/soup.tgz
+moe-qwen35-check2
+
+# Source lines 121-133
+=== 2026-10-08T05:13:29.118022864Z
+$ timeout 1800 brev exec moe-qwen35-check2 "timeout 1700 bash -c 'until grep -q SETUP-DONE ~/setup.log || ! pgrep -f setup.sh > /dev/null; do sleep 15; done'; tail -n 6 ~/setup.log; bash ~/partb_run_remote.sh" 2>&1 | grep -v "waiting for"
++ venv-ref/bin/python -c 'import torch, transformers, peft; print(torch.__version__, transformers.__version__, peft.__version__)'
+2.14.1+cpu 5.19.0 0.21.2
++ venv-convert/bin/python -c 'import torch, transformers, gguf; print(torch.__version__, transformers.__version__)'
+2.11.0+cpu 4.57.6
++ echo SETUP-DONE
+SETUP-DONE
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/root       125G  9.6G  116G   8% /
+tmpfs           126G     0  126G   0% /dev/shm
+launched pid 15051
+moe-qwen35-check2
+
+# Source lines 200-214
+=== 2026-10-08T05:29:10.452441150Z
+$ timeout 120 brev exec moe-qwen35-check2 'bash ~/partb_status.sh' 2>&1 | grep -v 'waiting for'
+Thu Oct  8 05:29:16 UTC 2026
+  soup-auto          VOID            s_ref=0.11796754864262059 rho=0.9211148135930549 r=0.7548891723953958 floor=0.5607488967317205
+  soup-auto+shared   VOID            s_ref=0.2411994279725386 rho=0.9792709031529432 r=0.3670956943278841 floor=0.2742550979806904
+[  791.1 s] engine adapters
+result: {"status": "VOID", "top1_agreement": 0.9545454545454546, "n_base": 0.06615017275149505}
+[  791.1 s] engine adapters
+result: {"status": "VOID", "top1_agreement": 0.9545454545454546, "n_base": 0.06615017275149505}
+/dev/root       125G   77G   49G  62% /
+tmpfs           126G   65G   62G  52% /dev/shm
+               total        used        free      shared  buff/cache   available
+Mem:             251           1         108          64         141         183
+NOT-RUNNING
+moe-qwen35-check2
+
+# Source lines 258-292
+=== 2026-10-08T05:30:48.682219086Z
+$ timeout 300 brev exec moe-qwen35-check2 'tar czf ~/partb-out.tgz -C ~/moe part-b-real-model.json part-b-real-model.log run.out -C ~ setup.log -C /dev/shm/moe-work base1.out.npz base2.out.npz soup-auto.out.npz soup-auto+shared.out.npz adapters && ls -la ~/partb-out.tgz && sha256sum ~/partb-out.tgz' 2>&1 | grep -v 'waiting for'
+-rw-rw-r-- 1 ubuntu ubuntu 154002149 Oct  8 05:31 /home/ubuntu/partb-out.tgz
+8a20c0f682e38c44a83f3a1e852a83bbf74d4c350267027f92643bb0727a431a  /home/ubuntu/partb-out.tgz
+moe-qwen35-check2
+
+=== 2026-10-08T05:31:07.469574084Z
+$ brev copy moe-qwen35-check2:/home/ubuntu/partb-out.tgz ./partb-out/partb-out.tgz 2>&1 | grep -v "waiting for" | tail -2; sha256sum ./partb-out/partb-out.tgz
+✓ Successfully copied moe-qwen35-check2:/home/ubuntu/partb-out.tgz → ./partb-out/partb-out.tgz (1m1.954s)
+
+8a20c0f682e38c44a83f3a1e852a83bbf74d4c350267027f92643bb0727a431a  ./partb-out/partb-out.tgz
+
+=== 2026-10-08T05:32:42.266531940Z
+$ date -u; brev delete moe-qwen35-check2 2>&1 | tail -2; sleep 30; brev ls 2>&1 | head -4
+Thu Oct  8 05:32:42 UTC 2026
+moe-qwen35-check2
+You have 1 instances in Org <org>
+ NAME              STATUS    BUILD      SHELL      ID         MACHINE         GPU
+ moe-qwen35-check2  DELETING  COMPLETED  NOT READY  is7b3f03i  n2d-highmem-32  -
+
+
+=== 2026-10-08T05:33:38.954816718Z
+$ date -u; brev ls 2>&1 | head -5
+Thu Oct  8 05:33:38 UTC 2026
+You have 1 instances in Org <org>
+ NAME              STATUS    BUILD      SHELL      ID         MACHINE         GPU
+ moe-qwen35-check2  STOPPING  COMPLETED  NOT READY  is7b3f03i  n2d-highmem-32  -
+
+
+=== 2026-10-08T05:34:06.575746603Z
+$ date -u; brev ls 2>&1 | head -5
+Thu Oct  8 05:34:06 UTC 2026
+No instances in org <org>
+
+Start a new instance:

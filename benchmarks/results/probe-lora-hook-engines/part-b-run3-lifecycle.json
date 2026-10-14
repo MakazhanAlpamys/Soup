@@ -1,0 +1,77 @@
+{
+  "schema_version": 1,
+  "scope": "Registered Part B repeat and its charged provisioning lifetime",
+  "kind": "Conservative elapsed-time list-price compute estimate, not a provider invoice",
+  "hourly_rate_usd": "2.166624",
+  "stage_ceiling_usd": "10",
+  "prior_stage_compute_usd": "2.547243",
+  "non_compute_reserve_usd": "2",
+  "non_compute_charges_observed": false,
+  "attempts": [
+    {
+      "id": "provisioning-only",
+      "created_before_unix": 1791525299,
+      "absence_verified_unix": 1791525925.5390987,
+      "charged_seconds_upper_bound": "626.5390987",
+      "compute_estimate_usd": "0.377076291161608",
+      "successful_exec_or_copy": 0,
+      "upload_attempts": 0,
+      "measurement_started": false,
+      "deadline_removed": true,
+      "closure_evidence": "Zero successful remote actions and zero uploads; no measurement data existed",
+      "controller_log_sha256": "ed757d32659b0a0d8c2e16e5cd5f010472b02444d3682e657b607f6b7c948299"
+    },
+    {
+      "id": "registered-measurement",
+      "created_before_unix": 1791526543,
+      "copy_verified_unix": 1791528319.0165591,
+      "delete_requested_unix": 1791528319.0470612,
+      "absence_verified_unix": 1791528464.3005316,
+      "deadline_removed_unix": 1791528468.824468,
+      "charged_seconds_upper_bound": "1921.3005316",
+      "compute_estimate_usd": "1.156315511938144",
+      "measurement_complete": true,
+      "fresh_copy_sha256": "2100922f0f85951392f8d8bb746673942d5fe35fd773a3b320207615652fa68e",
+      "copy_verified_before_delete": true,
+      "absence_verified_before_deadline_removal": true,
+      "original_work_deadline_seconds": 6300,
+      "original_windows_deadline_seconds": 7200,
+      "original_server_deadline_seconds": 7800
+    }
+  ],
+  "stage_compute_estimate_usd": "4.080634803099752",
+  "stage_remaining_before_non_compute_usd": "5.919365196900248",
+  "source_revision": "3e75c3af1d7aab7431c5ca9785dbf1fe0808bb30",
+  "source_archive_sha256": "e16698399187468bb33db2e2487875d19bcd80291d359f7b7c7b9a3b2ee36397",
+  "catalog_sha256": "22fca2b8971e21701ef67fae6806f52fd2137a16ed0a5431a861e4c4fd0036e2",
+  "source_receipts": [
+    {
+      "file": "g8-partb-run3-20261009-0552/armed.json",
+      "sha256": "798704215341e297561dee643b5da91f9abb8eaecd729ff221da34a89b1cd35b"
+    },
+    {
+      "file": "g8-partb-run3-20261009-0552/finished.json",
+      "sha256": "e2e5dea072713b853103380a159e14494e8e4f2c1a5838b8d2f95cbea8bffe02"
+    },
+    {
+      "file": "g8-partb-run3-20261009-0612/armed.json",
+      "sha256": "8e92d13f3396c49519018f2e02ea96ce25777b4032e5404a3a6c99d37e18a974"
+    },
+    {
+      "file": "g8-partb-run3-20261009-0612/prepared.json",
+      "sha256": "27c7c48d8e7bb1432b7af9f991a4523ae862f067f2beb6a5d9d269326d1cb921"
+    },
+    {
+      "file": "g8-partb-run3-20261009-0612/verified-copy.json",
+      "sha256": "96665f79441f7de247c437cd0feae87d7791683bb136922cf475b1da55183571"
+    },
+    {
+      "file": "g8-partb-run3-20261009-0612/finished.json",
+      "sha256": "ca91769eec4b999c81cc07d8c84b739b0d548352bd761f4c6cb9f027089e8f2d"
+    },
+    {
+      "file": "g8-partb-run3-20261009-0612/events.jsonl",
+      "sha256": "d36b1fa657a7df32f5694c56088b114e05a205662f05dad7d0e09b62c4568315"
+    }
+  ]
+}

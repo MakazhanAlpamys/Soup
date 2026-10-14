@@ -1,0 +1,241 @@
+# Evidence extract; omitted source lines remain in the separately archived full capture.
+
+# Source: cloud-run.log
+# Full source SHA-256: e5f1fc32f2071b41056491f1a6ae108ab7f212847fdc98ceec6db268bebddcd3
+
+# Source lines 1-38
+=== 2026-10-08T16:41:57.567345106Z
+$ brev create <failed-instance> --type hyperstack_A6000,massedcompute_A6000_plus,g2-standard-8:nvidia-l4:1 --min-disk 100 --timeout 600
+Attempting to create 1 instance(s) with 1 parallel attempts
+Instance types to try: hyperstack_A6000, massedcompute_A6000_plus, g2-standard-8:nvidia-l4:1
+
+Trying hyperstack_A6000 for 1 instance(s)...
+[Worker 1] Trying hyperstack_A6000 for instance '<failed-instance>'...
+[Worker 1] hyperstack_A6000 Success! Created instance '<failed-instance>'
+
+Waiting for instance(s) to be ready...
+You can safely ctrl+c to exit
+  <failed-instance>: instance <failed-instance> failed
+<failed-instance>
+
+=== 2026-10-08T16:44:17.460613154Z
+$ timeout 240 brev exec <failed-instance> 'sudo shutdown -h +128 && mkdir -p ~/holdout-results && touch ~/holdout-setup.log && date -u && whoami && uname -a && nproc && free -g && df -h ~ && nvidia-smi && cat /run/systemd/shutdown/scheduled'
+ssh: Could not resolve hostname <failed-instance>: Name or service not known
+Connection failed, checking instance status...
+instance "<failed-instance>" is in state "FAILURE" — please check with: brev ls
+
+=== 2026-10-08T16:53:16.745298545Z
+$ echo FAILED-PROVISIONING-EXCEPTION; date -u; brev ls
+FAILED-PROVISIONING-EXCEPTION
+Thu Oct  8 16:53:16 UTC 2026
+You have 1 instances in Org <org>
+ NAME        STATUS   BUILD     SHELL      ID         MACHINE           GPU   
+ <failed-instance>  FAILURE  BUILDING  NOT READY  opfjpj6jc  hyperstack_A6000  A6000 
+
+
+=== 2026-10-08T16:53:22.765837984Z
+$ timeout 300 brev delete '<failed-instance>'
+<failed-instance>
+
+=== 2026-10-08T16:53:29.256168179Z
+$ brev ls
+You have 1 instances in Org <org>
+ NAME        STATUS    BUILD  SHELL      ID         MACHINE           GPU   
+ <failed-instance>  DELETING         NOT READY  opfjpj6jc  hyperstack_A6000  A6000 
+
+# Source lines 55-81
+=== 2026-10-08T16:54:46.990960450Z
+$ brev ls
+No instances in org <org>
+
+Start a new instance:
+
+=== 2026-10-08T16:54:52.825694699Z
+$ echo FAILED-INSTANCE-ABSENT; date -u
+FAILED-INSTANCE-ABSENT
+Thu Oct  8 16:54:52 UTC 2026
+
+=== 2026-10-08T17:00:05.857827203Z
+$ brev create 'moe-holdout-massed' --type 'massedcompute_A6000_plus' --min-disk 100 --timeout 600
+Attempting to create 1 instance(s) with 1 parallel attempts
+Instance types to try: massedcompute_A6000_plus
+
+Trying massedcompute_A6000_plus for 1 instance(s)...
+[Worker 1] Trying massedcompute_A6000_plus for instance 'moe-holdout-massed'...
+[Worker 1] massedcompute_A6000_plus Success! Created instance 'moe-holdout-massed'
+
+Waiting for instance(s) to be ready...
+You can safely ctrl+c to exit
+  moe-holdout-massed: Ready
+moe-holdout-massed
+
+=== 2026-10-08T17:04:49.179302599Z
+$ timeout 240 brev exec moe-holdout-massed 'sudo shutdown -h +126 && mkdir -p ~/holdout-results && touch ~/holdout-setup.log && date -u && whoami && uname -a && nproc && free -g && df -h ~ && nvidia-smi && cat /run/systemd/shutdown/scheduled'
+
+# Source lines 145-178
+⣟ waiting for SSH connection to be available [KShutdown scheduled for Thu 2026-10-08 19:11:18 UTC, use 'shutdown -c' to cancel.
+Thu Oct  8 17:05:18 UTC 2026
+shadeform
+Linux brev-<instance-id> 6.8.0-90-generic #91~22.04.1-Ubuntu SMP PREEMPT_DYNAMIC Thu Nov 20 15:20:45 UTC 2 x86_64 x86_64 x86_64 GNU/Linux
+12
+               total        used        free      shared  buff/cache   available
+Mem:              62           0          60           0           1          61
+Swap:              3           0           3
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/sda2       251G   15G  227G   6% /
+Thu Oct  8 17:05:18 2026       
++-----------------------------------------------------------------------------------------+
+| NVIDIA-SMI 580.126.09             Driver Version: 580.126.09     CUDA Version: 13.0     |
++-----------------------------------------+------------------------+----------------------+
+| GPU  Name                 Persistence-M | Bus-Id          Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp   Perf          Pwr:Usage/Cap |           Memory-Usage | GPU-Util  Compute M. |
+|                                         |                        |               MIG M. |
+|=========================================+========================+======================|
+|   0  NVIDIA RTX A6000               On  |   00000000:01:00.0 Off |                  Off |
+| 30%   24C    P8             18W /  300W |       1MiB /  49140MiB |      0%      Default |
+|                                         |                        |                  N/A |
++-----------------------------------------+------------------------+----------------------+
+
++-----------------------------------------------------------------------------------------+
+| Processes:                                                                              |
+|  GPU   GI   CI              PID   Type   Process name                        GPU Memory |
+|        ID   ID                                                               Usage      |
+|=========================================================================================|
+|  No running processes found                                                             |
++-----------------------------------------------------------------------------------------+
+USEC=1791486678573034
+WARN_WALL=1
+MODE=poweroff
+moe-holdout-massed
+
+# Source lines 548-549
+⣻ waiting for instance to be ready... === 2026-10-08T17:10:49.465768936Z
+$ timeout 240 brev exec 'moe-holdout-massed' 'minutes=$(((1791486593 - $(date +%s)) / 60)); test "$minutes" -gt 0 && sudo shutdown -c && sudo shutdown -h +"$minutes" && date -u && cat /run/systemd/shutdown/scheduled'
+
+# Source lines 562-567
+⣯ waiting for instance to be ready... [KShutdown scheduled for Thu 2026-10-08 19:08:56 UTC, use 'shutdown -c' to cancel.
+Thu Oct  8 17:10:56 UTC 2026
+USEC=1791486536684195
+WARN_WALL=1
+MODE=poweroff
+moe-holdout-massed
+
+# Source lines 849-858
+exit status 1
+
+=== 2026-10-08T17:12:55.967828790Z
+$ timeout 300 brev exec 'moe-holdout-massed' 'tar czf ~/holdout-out.tgz -C ~ holdout-results holdout-setup.log && sha256sum ~/holdout-out.tgz && printf "HOLDOUT_HOME=%s\n" "$HOME"'
+6a906a75437d7f424b45fcc9d7b703a22ee10ffbf2f54a03921eea9687c1258b  /home/shadeform/holdout-out.tgz
+HOLDOUT_HOME=/home/shadeform
+moe-holdout-massed
+
+=== 2026-10-08T17:13:03.734440905Z
+$ timeout 600 brev copy 'moe-holdout-massed:/home/shadeform/holdout-out.tgz' './holdout-out/moe-holdout-massed.tgz'
+
+# Source lines 957-998
+✓ Successfully copied moe-holdout-massed:/home/shadeform/holdout-out.tgz → ./holdout-out/moe-holdout-massed.tgz (8.139s)
+
+
+=== 2026-10-08T17:13:42.477723042Z
+$ printf '%s  %s\n' '6a906a75437d7f424b45fcc9d7b703a22ee10ffbf2f54a03921eea9687c1258b' './holdout-out/moe-holdout-massed.tgz' | sha256sum -c -
+./holdout-out/moe-holdout-massed.tgz: OK
+
+=== 2026-10-08T17:13:42.643767517Z
+$ timeout 300 brev delete 'moe-holdout-massed'
+moe-holdout-massed
+
+=== 2026-10-08T17:13:51.338849553Z
+$ brev ls
+You have 1 instances in Org <org>
+ NAME                STATUS    BUILD      SHELL      ID         MACHINE                   GPU   
+ moe-holdout-massed  DELETING  COMPLETED  NOT READY  <instance-id>  massedcompute_A6000_plus  A6000 
+
+
+=== 2026-10-08T17:14:19.122479418Z
+$ brev ls
+You have 1 instances in Org <org>
+ NAME                STATUS    BUILD      SHELL      ID         MACHINE                   GPU   
+ moe-holdout-massed  DELETING  COMPLETED  NOT READY  <instance-id>  massedcompute_A6000_plus  A6000 
+
+
+=== 2026-10-08T17:14:48.614518745Z
+$ brev ls
+You have 1 instances in Org <org>
+ NAME                STATUS     BUILD  SHELL      ID         MACHINE                   GPU   
+ moe-holdout-massed  DEPLOYING         NOT READY  <instance-id>  massedcompute_A6000_plus  A6000 
+
+
+=== 2026-10-08T17:15:15.411037210Z
+$ brev ls
+No instances in org <org>
+
+Start a new instance:
+
+=== 2026-10-08T17:15:21.954344442Z
+$ echo VERIFIED-INSTANCE-ABSENT; date -u
+VERIFIED-INSTANCE-ABSENT
+Thu Oct  8 17:15:21 UTC 2026
+
+# Source lines 1000-1015
+=== 2026-10-08T17:24:34.919914176Z
+$ brev create 'moe-holdout-l4' --type 'g2-standard-8:nvidia-l4:1' --min-disk 100 --timeout 600
+Attempting to create 1 instance(s) with 1 parallel attempts
+Instance types to try: g2-standard-8:nvidia-l4:1
+
+Trying g2-standard-8:nvidia-l4:1 for 1 instance(s)...
+[Worker 1] Trying g2-standard-8:nvidia-l4:1 for instance 'moe-holdout-l4'...
+[Worker 1] g2-standard-8:nvidia-l4:1 Success! Created instance 'moe-holdout-l4'
+
+Waiting for instance(s) to be ready...
+You can safely ctrl+c to exit
+  moe-holdout-l4: Ready
+moe-holdout-l4
+
+=== 2026-10-08T17:30:15.539357202Z
+$ timeout 240 brev exec moe-holdout-l4 'sudo shutdown -h +$(((1791488072 - $(date +%s)) / 60)) && mkdir -p ~/holdout-results && touch ~/holdout-setup.log && date -u && whoami && uname -a && nproc && free -g && df -h ~ && nvidia-smi && cat /run/systemd/shutdown/scheduled && printf "HOLDOUT_HOME=%s\n" "$HOME"'
+
+# Source lines 1468-1511
+=== 2026-10-08T17:36:28.127174692Z
+$ echo FAILED-PROVISIONING-EXCEPTION; date -u; brev ls
+FAILED-PROVISIONING-EXCEPTION
+Thu Oct  8 17:36:28 UTC 2026
+You have 1 instances in Org <org>
+ NAME            STATUS   BUILD      SHELL  ID         MACHINE                    GPU 
+ moe-holdout-l4  RUNNING  COMPLETED  READY  <instance-id>  g2-standard-8:nvidia-l4:1  L4  
+
+
+=== 2026-10-08T17:36:34.658954515Z
+$ timeout 300 brev delete 'moe-holdout-l4'
+moe-holdout-l4
+
+=== 2026-10-08T17:36:41.847510993Z
+$ brev ls
+You have 1 instances in Org <org>
+ NAME            STATUS   BUILD      SHELL  ID         MACHINE                    GPU 
+ moe-holdout-l4  RUNNING  COMPLETED  READY  <instance-id>  g2-standard-8:nvidia-l4:1  L4  
+
+
+=== 2026-10-08T17:37:07.889184556Z
+$ brev ls
+You have 1 instances in Org <org>
+ NAME            STATUS    BUILD      SHELL      ID         MACHINE                    GPU 
+ moe-holdout-l4  DELETING  COMPLETED  NOT READY  <instance-id>  g2-standard-8:nvidia-l4:1  L4  
+
+
+=== 2026-10-08T17:37:34.572398009Z
+$ brev ls
+You have 1 instances in Org <org>
+ NAME            STATUS    BUILD      SHELL      ID         MACHINE                    GPU 
+ moe-holdout-l4  STOPPING  COMPLETED  NOT READY  <instance-id>  g2-standard-8:nvidia-l4:1  L4  
+
+
+=== 2026-10-08T17:38:00.690739865Z
+$ brev ls
+No instances in org <org>
+
+Start a new instance:
+
+=== 2026-10-08T17:38:06.530039822Z
+$ echo FAILED-INSTANCE-ABSENT; date -u
+FAILED-INSTANCE-ABSENT
+Thu Oct  8 17:38:06 UTC 2026

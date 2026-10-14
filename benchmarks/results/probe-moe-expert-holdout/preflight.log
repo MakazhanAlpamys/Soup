@@ -1,0 +1,32 @@
+=== 2026-10-09T02:21:43.308858436Z
+$ bash <cloud-work-dir>/holdout_prepare.sh <repo>
+SYNTAX_OK logged.sh
+SYNTAX_OK holdout_prepare.sh
+SYNTAX_OK holdout_cloud.sh
+SYNTAX_OK holdout_setup.sh
+SYNTAX_OK holdout_run.sh
+SYNTAX_OK holdout_finish.sh
+SYNTAX_OK holdout_deadline.sh
+SYNTAX_OK holdout_await_absent.sh
+SYNTAX_OK holdout_failed_cleanup.sh
+SYNTAX_OK holdout_copy_guard_test.sh
+SYNTAX_OK holdout_resume.sh
+SYNTAX_OK holdout_anchor_shutdown.sh
+LF_OK holdout.sha256 CR=0
+LF_OK holdout-source.txt CR=0
+LF_OK holdout_setup.sh CR=0
+LF_OK holdout_run.sh CR=0
+holdout.tgz: OK
+EXTRACTED benchmarks/harness/moe_expert_holdout.py
+EXTRACTED benchmarks/harness/moe_expert_coverage.py
+EXTRACTED benchmarks/probe-moe-expert-holdout.md
+EXTRACTED src/soup_cli/__init__.py
+COMMITTED_SOURCE_MATCH benchmarks/harness/moe_expert_holdout.py 366ace0102ef73b18da4c3cfaa7912d25a830f4103f85ae0cc5e477b5e4c9f9a
+COMMITTED_SOURCE_MATCH benchmarks/harness/moe_expert_coverage.py 728c9720aa2bb60358d41ed10286c0571304654033889d9fcf2c75ab73365f7f
+SOURCE_REVISION=011309792e989fcdb37cdf12eb7e8dc661e62ebd
+BUNDLE_SHA256=06fa17b23ebef9e7e11afd29f249c576221d2b57b5d685ccd02dee4a23853680  holdout.tgz
+COPY_DELETE_WRAPPER_SHA256=66adaa595fd2b83981aee34a0fbdd78d41e71882af8bbed0a41a298f1dba3a80  holdout_finish.sh
+LOGGER_SHA256=b8fe7677f934c31166ff8ba10df2824af1856ef814faeaaa5877f6f64e665a5e  logged.sh
+LOCAL_TRANSPORT_PREFLIGHT_PASS
+EXIT_STATUS=0
+

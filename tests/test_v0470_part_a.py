@@ -192,7 +192,7 @@ def test_score_uncertainty_empty_returns_one():
 # ---------------------------------------------------------------------------
 
 
-def test_build_forge_plan_happy(tmp_path):
+def test_build_forge_plan_happy(tmp_path, monkeypatch):
     from soup_cli.utils.data_forge import build_forge_plan
 
     docs = tmp_path / "docs"
@@ -200,7 +200,7 @@ def test_build_forge_plan_happy(tmp_path):
     (docs / "a.txt").write_text("hello world", encoding="utf-8")
     (docs / "b.md").write_text("# Title\nbody", encoding="utf-8")
 
-    os.chdir(tmp_path)
+    monkeypatch.chdir(tmp_path)
     plan = build_forge_plan(
         docs_dir=str(docs),
         task="sft",
@@ -213,40 +213,40 @@ def test_build_forge_plan_happy(tmp_path):
     assert plan.teacher == "local-judge"
 
 
-def test_build_forge_plan_rejects_unknown_task(tmp_path):
+def test_build_forge_plan_rejects_unknown_task(tmp_path, monkeypatch):
     from soup_cli.utils.data_forge import build_forge_plan
 
     docs = tmp_path / "d"
     docs.mkdir()
     (docs / "a.txt").write_text("x", encoding="utf-8")
-    os.chdir(tmp_path)
+    monkeypatch.chdir(tmp_path)
     with pytest.raises(ValueError, match="task"):
         build_forge_plan(docs_dir=str(docs), task="bogus", target_rows=1)
 
 
-def test_build_forge_plan_rejects_zero_target_rows(tmp_path):
+def test_build_forge_plan_rejects_zero_target_rows(tmp_path, monkeypatch):
     from soup_cli.utils.data_forge import build_forge_plan
 
     docs = tmp_path / "d"
     docs.mkdir()
     (docs / "a.txt").write_text("x", encoding="utf-8")
-    os.chdir(tmp_path)
+    monkeypatch.chdir(tmp_path)
     with pytest.raises(ValueError, match="target_rows"):
         build_forge_plan(docs_dir=str(docs), task="sft", target_rows=0)
 
 
-def test_build_forge_plan_rejects_bool_target_rows(tmp_path):
+def test_build_forge_plan_rejects_bool_target_rows(tmp_path, monkeypatch):
     from soup_cli.utils.data_forge import build_forge_plan
 
     docs = tmp_path / "d"
     docs.mkdir()
     (docs / "a.txt").write_text("x", encoding="utf-8")
-    os.chdir(tmp_path)
+    monkeypatch.chdir(tmp_path)
     with pytest.raises(TypeError):
         build_forge_plan(docs_dir=str(docs), task="sft", target_rows=True)
 
 
-def test_build_forge_plan_rejects_outside_cwd(tmp_path):
+def test_build_forge_plan_rejects_outside_cwd(tmp_path, monkeypatch):
     from soup_cli.utils.data_forge import build_forge_plan
 
     docs = tmp_path / "out"
@@ -254,62 +254,62 @@ def test_build_forge_plan_rejects_outside_cwd(tmp_path):
     (docs / "a.txt").write_text("x", encoding="utf-8")
     inside = tmp_path / "inside"
     inside.mkdir()
-    os.chdir(inside)
+    monkeypatch.chdir(inside)
     with pytest.raises(ValueError, match="cwd"):
         build_forge_plan(docs_dir=str(docs), task="sft", target_rows=1)
 
 
-def test_build_forge_plan_missing_dir(tmp_path):
+def test_build_forge_plan_missing_dir(tmp_path, monkeypatch):
     from soup_cli.utils.data_forge import build_forge_plan
 
-    os.chdir(tmp_path)
+    monkeypatch.chdir(tmp_path)
     with pytest.raises(FileNotFoundError):
         build_forge_plan(docs_dir="nonexistent", task="sft", target_rows=1)
 
 
-def test_build_forge_plan_empty_dir(tmp_path):
+def test_build_forge_plan_empty_dir(tmp_path, monkeypatch):
     from soup_cli.utils.data_forge import build_forge_plan
 
     empty = tmp_path / "empty"
     empty.mkdir()
-    os.chdir(tmp_path)
+    monkeypatch.chdir(tmp_path)
     with pytest.raises(ValueError, match="no documents"):
         build_forge_plan(docs_dir=str(empty), task="sft", target_rows=1)
 
 
-def test_build_forge_plan_target_rows_cap(tmp_path):
+def test_build_forge_plan_target_rows_cap(tmp_path, monkeypatch):
     from soup_cli.utils.data_forge import _MAX_TARGET_ROWS, build_forge_plan
 
     docs = tmp_path / "d"
     docs.mkdir()
     (docs / "a.txt").write_text("x", encoding="utf-8")
-    os.chdir(tmp_path)
+    monkeypatch.chdir(tmp_path)
     with pytest.raises(ValueError, match="target_rows"):
         build_forge_plan(
             docs_dir=str(docs), task="sft", target_rows=_MAX_TARGET_ROWS + 1
         )
 
 
-def test_build_forge_plan_teacher_null_byte_rejected(tmp_path):
+def test_build_forge_plan_teacher_null_byte_rejected(tmp_path, monkeypatch):
     from soup_cli.utils.data_forge import build_forge_plan
 
     docs = tmp_path / "d"
     docs.mkdir()
     (docs / "a.txt").write_text("x", encoding="utf-8")
-    os.chdir(tmp_path)
+    monkeypatch.chdir(tmp_path)
     with pytest.raises(ValueError, match="teacher"):
         build_forge_plan(
             docs_dir=str(docs), task="sft", target_rows=1, teacher="bad\x00"
         )
 
 
-def test_build_forge_plan_rejects_nan_threshold(tmp_path):
+def test_build_forge_plan_rejects_nan_threshold(tmp_path, monkeypatch):
     from soup_cli.utils.data_forge import build_forge_plan
 
     docs = tmp_path / "d"
     docs.mkdir()
     (docs / "a.txt").write_text("x", encoding="utf-8")
-    os.chdir(tmp_path)
+    monkeypatch.chdir(tmp_path)
     with pytest.raises(ValueError, match="finite"):
         build_forge_plan(
             docs_dir=str(docs),
@@ -319,13 +319,13 @@ def test_build_forge_plan_rejects_nan_threshold(tmp_path):
         )
 
 
-def test_build_forge_plan_rejects_inf_threshold(tmp_path):
+def test_build_forge_plan_rejects_inf_threshold(tmp_path, monkeypatch):
     from soup_cli.utils.data_forge import build_forge_plan
 
     docs = tmp_path / "d"
     docs.mkdir()
     (docs / "a.txt").write_text("x", encoding="utf-8")
-    os.chdir(tmp_path)
+    monkeypatch.chdir(tmp_path)
     with pytest.raises(ValueError, match="finite"):
         build_forge_plan(
             docs_dir=str(docs),
@@ -335,7 +335,7 @@ def test_build_forge_plan_rejects_inf_threshold(tmp_path):
         )
 
 
-def test_discover_documents_outside_cwd_rejected(tmp_path):
+def test_discover_documents_outside_cwd_rejected(tmp_path, monkeypatch):
     from soup_cli.utils.data_forge import discover_documents
 
     outside = tmp_path / "outside"
@@ -343,15 +343,15 @@ def test_discover_documents_outside_cwd_rejected(tmp_path):
     (outside / "a.txt").write_text("x", encoding="utf-8")
     inside = tmp_path / "inside"
     inside.mkdir()
-    os.chdir(inside)
+    monkeypatch.chdir(inside)
     with pytest.raises(ValueError, match="cwd"):
         discover_documents(str(outside))
 
 
-def test_discover_documents_rejects_empty_string(tmp_path):
+def test_discover_documents_rejects_empty_string(tmp_path, monkeypatch):
     from soup_cli.utils.data_forge import discover_documents
 
-    os.chdir(tmp_path)
+    monkeypatch.chdir(tmp_path)
     with pytest.raises(ValueError):
         discover_documents("")
 
@@ -369,21 +369,21 @@ def test_forge_row_frozen():
         row.task = "preference"  # type: ignore[misc]
 
 
-def test_write_forge_dataset_rejects_non_forge_row(tmp_path):
+def test_write_forge_dataset_rejects_non_forge_row(tmp_path, monkeypatch):
     from soup_cli.utils.data_forge import write_forge_dataset
 
-    os.chdir(tmp_path)
+    monkeypatch.chdir(tmp_path)
     with pytest.raises(TypeError, match="ForgeRow"):
         write_forge_dataset([{"not": "a row"}], "out.jsonl")  # type: ignore[list-item]
 
 
-def test_build_forge_plan_teacher_oversize_rejected(tmp_path):
+def test_build_forge_plan_teacher_oversize_rejected(tmp_path, monkeypatch):
     from soup_cli.utils.data_forge import build_forge_plan
 
     docs = tmp_path / "d"
     docs.mkdir()
     (docs / "a.txt").write_text("x", encoding="utf-8")
-    os.chdir(tmp_path)
+    monkeypatch.chdir(tmp_path)
     with pytest.raises(ValueError, match="teacher"):
         build_forge_plan(
             docs_dir=str(docs),
@@ -398,26 +398,26 @@ def test_build_forge_plan_teacher_oversize_rejected(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_discover_documents_skips_hidden(tmp_path):
+def test_discover_documents_skips_hidden(tmp_path, monkeypatch):
     from soup_cli.utils.data_forge import discover_documents
 
     (tmp_path / ".hidden.txt").write_text("x", encoding="utf-8")
     (tmp_path / "real.txt").write_text("y", encoding="utf-8")
-    os.chdir(tmp_path)
+    monkeypatch.chdir(tmp_path)
     docs = discover_documents(str(tmp_path))
     names = [os.path.basename(d) for d in docs]
     assert "real.txt" in names
     assert ".hidden.txt" not in names
 
 
-def test_discover_documents_only_known_extensions(tmp_path):
+def test_discover_documents_only_known_extensions(tmp_path, monkeypatch):
     from soup_cli.utils.data_forge import discover_documents
 
     (tmp_path / "ok.txt").write_text("a", encoding="utf-8")
     (tmp_path / "ok.md").write_text("b", encoding="utf-8")
     (tmp_path / "ok.jsonl").write_text('{"x":1}', encoding="utf-8")
     (tmp_path / "ignore.bin").write_text("zzz", encoding="utf-8")
-    os.chdir(tmp_path)
+    monkeypatch.chdir(tmp_path)
     docs = discover_documents(str(tmp_path))
     names = [os.path.basename(d) for d in docs]
     assert "ok.txt" in names
@@ -427,7 +427,7 @@ def test_discover_documents_only_known_extensions(tmp_path):
 
 
 @pytest.mark.requires_symlink
-def test_discover_documents_rejects_symlink_dir(tmp_path):
+def test_discover_documents_rejects_symlink_dir(tmp_path, monkeypatch):
     from soup_cli.utils.data_forge import discover_documents
 
     real = tmp_path / "real"
@@ -435,7 +435,7 @@ def test_discover_documents_rejects_symlink_dir(tmp_path):
     (real / "a.txt").write_text("x", encoding="utf-8")
     link = tmp_path / "link"
     link.symlink_to(real, target_is_directory=True)
-    os.chdir(tmp_path)
+    monkeypatch.chdir(tmp_path)
     with pytest.raises(ValueError, match="symlink"):
         discover_documents(str(link))
 
@@ -549,7 +549,7 @@ def test_synthesise_forge_rows_judge_failure_swallowed(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_write_forge_dataset_atomic(tmp_path):
+def test_write_forge_dataset_atomic(tmp_path, monkeypatch):
     from soup_cli.utils.data_forge import (
         ForgeRow,
         ProvenanceRecord,
@@ -569,7 +569,7 @@ def test_write_forge_dataset_atomic(tmp_path):
             task="sft",
         )
     ]
-    os.chdir(tmp_path)
+    monkeypatch.chdir(tmp_path)
     out_path = write_forge_dataset(rows, "out.jsonl")
     assert Path(out_path).is_file()
     with open(out_path, encoding="utf-8") as fh:
@@ -579,41 +579,41 @@ def test_write_forge_dataset_atomic(tmp_path):
     assert parsed["provenance"]["row_id"] == "r0"
 
 
-def test_write_forge_dataset_outside_cwd_rejected(tmp_path):
+def test_write_forge_dataset_outside_cwd_rejected(tmp_path, monkeypatch):
     from soup_cli.utils.data_forge import write_forge_dataset
 
     inside = tmp_path / "inside"
     inside.mkdir()
-    os.chdir(inside)
+    monkeypatch.chdir(inside)
     with pytest.raises(ValueError, match="cwd"):
         write_forge_dataset([], str(tmp_path / "out.jsonl"))
 
 
-def test_write_forge_dataset_null_byte_rejected(tmp_path):
+def test_write_forge_dataset_null_byte_rejected(tmp_path, monkeypatch):
     from soup_cli.utils.data_forge import write_forge_dataset
 
-    os.chdir(tmp_path)
+    monkeypatch.chdir(tmp_path)
     with pytest.raises(ValueError):
         write_forge_dataset([], "out\x00.jsonl")
 
 
-def test_write_forge_dataset_non_string_rejected(tmp_path):
+def test_write_forge_dataset_non_string_rejected(tmp_path, monkeypatch):
     from soup_cli.utils.data_forge import write_forge_dataset
 
-    os.chdir(tmp_path)
+    monkeypatch.chdir(tmp_path)
     with pytest.raises(TypeError):
         write_forge_dataset([], 123)  # type: ignore[arg-type]
 
 
 @pytest.mark.requires_symlink
-def test_write_forge_dataset_symlink_target_rejected(tmp_path):
+def test_write_forge_dataset_symlink_target_rejected(tmp_path, monkeypatch):
     from soup_cli.utils.data_forge import (
         ForgeRow,
         ProvenanceRecord,
         write_forge_dataset,
     )
 
-    os.chdir(tmp_path)
+    monkeypatch.chdir(tmp_path)
     target = tmp_path / "out.jsonl"
     real = tmp_path / "decoy"
     real.write_text("", encoding="utf-8")
@@ -630,7 +630,7 @@ def test_write_forge_dataset_symlink_target_rejected(tmp_path):
         write_forge_dataset([row], str(target))
 
 
-def test_write_provenance_manifest(tmp_path):
+def test_write_provenance_manifest(tmp_path, monkeypatch):
     from soup_cli.utils.data_forge import (
         ForgeRow,
         ProvenanceRecord,
@@ -651,7 +651,7 @@ def test_write_provenance_manifest(tmp_path):
         )
         for i in range(3)
     ]
-    os.chdir(tmp_path)
+    monkeypatch.chdir(tmp_path)
     manifest = write_provenance(rows, "manifest.json")
     assert Path(manifest).is_file()
     with open(manifest, encoding="utf-8") as fh:
@@ -662,12 +662,12 @@ def test_write_provenance_manifest(tmp_path):
     assert data["records"][0]["row_id"] == "r0"
 
 
-def test_write_provenance_outside_cwd_rejected(tmp_path):
+def test_write_provenance_outside_cwd_rejected(tmp_path, monkeypatch):
     from soup_cli.utils.data_forge import write_provenance
 
     inside = tmp_path / "inside"
     inside.mkdir()
-    os.chdir(inside)
+    monkeypatch.chdir(inside)
     with pytest.raises(ValueError, match="cwd"):
         write_provenance([], str(tmp_path / "m.json"))
 

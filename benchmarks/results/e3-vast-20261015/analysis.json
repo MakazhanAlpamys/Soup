@@ -1,0 +1,315 @@
+{
+  "archive": "C:\\Users\\user\\Downloads\\results_89647fe8.zip",
+  "archive_sha256": "2aa01bdbc1da06f5e09094496c2aa2a187695412db525092c6497bc647bc143f",
+  "formal_acceptance": false,
+  "audited_blocks": [
+    "work/e3_e3-overlay-512-block01",
+    "work/e3_e3-overlay-512-block02",
+    "work/e3_e3-overlay-512-block03",
+    "work/e3_e3-overlay-512-block04-replacement01",
+    "work/e3_e3-overlay-512-block05",
+    "work/e3_e3-overlay-2048-block01",
+    "work/e3_e3-overlay-2048-block02",
+    "work/e3_e3-overlay-2048-block03",
+    "work/e3_e3-overlay-2048-block04",
+    "work/e3_e3-overlay-2048-block05",
+    "work/e3_e3-overlay-4096-block01",
+    "work/e3_e3-overlay-4096-block02",
+    "work/e3_e3-overlay-4096-block03",
+    "work/e3_e3-overlay-4096-block04",
+    "work/e3_e3-overlay-4096-block05"
+  ],
+  "summaries": [
+    {
+      "length": 512,
+      "blocks": 5,
+      "arms": 20,
+      "repeat_rule": {
+        "sigma": 0.00020060797474350742,
+        "mean_a": 0.2265764302923344,
+        "blocks_needed": 2
+      },
+      "blocks_to_add": 0,
+      "mean_paired_step_difference_s": 0.025474901107372716,
+      "sd_paired_step_difference_s": 0.00022992125740832654,
+      "FA_step_increase_percent": 11.243402976428051,
+      "methods": {
+        "lora": {
+          "step_s": {
+            "mean": 0.2265764302923344,
+            "min": 0.22618400701321661,
+            "max": 0.22690397899714299
+          },
+          "tok_s": {
+            "mean": 2255.3115592211307,
+            "min": 2252.05394043105,
+            "max": 2259.22250979549
+          },
+          "allocated_GiB": {
+            "mean": 1.2783570289611816,
+            "min": 1.2783570289611816,
+            "max": 1.2783570289611816
+          },
+          "reserved_GiB": {
+            "mean": 1.5078125,
+            "min": 1.5078125,
+            "max": 1.5078125
+          },
+          "optimizer_MiB": {
+            "mean": 8.2503662109375,
+            "min": 8.2503662109375,
+            "max": 8.2503662109375
+          },
+          "loss_512": {
+            "mean": 2.400698833167553,
+            "min": 2.400412194430828,
+            "max": 2.4010684229433537
+          },
+          "loss_long": {
+            "mean": 2.400698833167553,
+            "min": 2.400412194430828,
+            "max": 2.4010684229433537
+          }
+        },
+        "lorafa": {
+          "step_s": {
+            "mean": 0.25205133139970715,
+            "min": 0.2517721580225043,
+            "max": 0.25227406102931127
+          },
+          "tok_s": {
+            "mean": 2027.3657057042099,
+            "min": 2025.574876446088,
+            "max": 2029.6128214237453
+          },
+          "allocated_GiB": {
+            "mean": 1.2732300758361816,
+            "min": 1.2732300758361816,
+            "max": 1.2732300758361816
+          },
+          "reserved_GiB": {
+            "mean": 1.5,
+            "min": 1.5,
+            "max": 1.5
+          },
+          "optimizer_MiB": {
+            "mean": 3.0,
+            "min": 3.0,
+            "max": 3.0
+          },
+          "loss_512": {
+            "mean": 2.467943511530757,
+            "min": 2.467404805123806,
+            "max": 2.4684879556298256
+          },
+          "loss_long": {
+            "mean": 2.467943511530757,
+            "min": 2.467404805123806,
+            "max": 2.4684879556298256
+          }
+        }
+      }
+    },
+    {
+      "length": 2048,
+      "blocks": 5,
+      "arms": 20,
+      "repeat_rule": {
+        "sigma": 0.0034198309584603033,
+        "mean_a": 0.28341369768895674,
+        "blocks_needed": 2
+      },
+      "blocks_to_add": 0,
+      "mean_paired_step_difference_s": 0.02376429011055734,
+      "sd_paired_step_difference_s": 0.0035660446341747487,
+      "FA_step_increase_percent": 8.3850181922535,
+      "methods": {
+        "lora": {
+          "step_s": {
+            "mean": 0.28341369768895674,
+            "min": 0.2813875080028083,
+            "max": 0.29639278349350207
+          },
+          "tok_s": {
+            "mean": 7224.3049021369225,
+            "min": 6906.375978094207,
+            "max": 7274.6655120865225
+          },
+          "allocated_GiB": {
+            "mean": 3.9565091133117676,
+            "min": 3.9565091133117676,
+            "max": 3.9565091133117676
+          },
+          "reserved_GiB": {
+            "mean": 5.17578125,
+            "min": 5.17578125,
+            "max": 5.17578125
+          },
+          "optimizer_MiB": {
+            "mean": 8.2503662109375,
+            "min": 8.2503662109375,
+            "max": 8.2503662109375
+          },
+          "loss_512": {
+            "mean": 2.5433546375483274,
+            "min": 2.5429656952619553,
+            "max": 2.5438015796244144
+          },
+          "loss_long": {
+            "mean": 2.3070439994335175,
+            "min": 2.306704267859459,
+            "max": 2.307413712143898
+          }
+        },
+        "lorafa": {
+          "step_s": {
+            "mean": 0.3071779877995141,
+            "min": 0.3062151280173566,
+            "max": 0.31133128798683174
+          },
+          "tok_s": {
+            "mean": 6664.028887951532,
+            "min": 6574.98966209455,
+            "max": 6684.84282031936
+          },
+          "allocated_GiB": {
+            "mean": 3.9513821601867676,
+            "min": 3.9513821601867676,
+            "max": 3.9513821601867676
+          },
+          "reserved_GiB": {
+            "mean": 5.16796875,
+            "min": 5.16796875,
+            "max": 5.16796875
+          },
+          "optimizer_MiB": {
+            "mean": 3.0,
+            "min": 3.0,
+            "max": 3.0
+          },
+          "loss_512": {
+            "mean": 2.5823835961520674,
+            "min": 2.581987202167511,
+            "max": 2.582694187760353
+          },
+          "loss_long": {
+            "mean": 2.3388405472040175,
+            "min": 2.3385559022426605,
+            "max": 2.3392238318920135
+          }
+        }
+      }
+    },
+    {
+      "length": 4096,
+      "blocks": 5,
+      "arms": 20,
+      "repeat_rule": {
+        "sigma": 0.016776379219478117,
+        "mean_a": 0.4561343006498646,
+        "blocks_needed": 2
+      },
+      "blocks_to_add": 0,
+      "mean_paired_step_difference_s": 0.02787228409142699,
+      "sd_paired_step_difference_s": 0.01321953879492122,
+      "FA_step_increase_percent": 6.110543331583873,
+      "methods": {
+        "lora": {
+          "step_s": {
+            "mean": 0.4561343006498646,
+            "min": 0.4478381059889216,
+            "max": 0.47864489251514897
+          },
+          "tok_s": {
+            "mean": 8981.500610680927,
+            "min": 8555.403105801228,
+            "max": 9143.92934687273
+          },
+          "allocated_GiB": {
+            "mean": 7.5205888748168945,
+            "min": 7.5205888748168945,
+            "max": 7.5205888748168945
+          },
+          "reserved_GiB": {
+            "mean": 9.234375,
+            "min": 9.234375,
+            "max": 9.234375
+          },
+          "optimizer_MiB": {
+            "mean": 8.2503662109375,
+            "min": 8.2503662109375,
+            "max": 8.2503662109375
+          },
+          "loss_512": {
+            "mean": 2.6236006118357182,
+            "min": 2.623078338801861,
+            "max": 2.6239698491990566
+          },
+          "loss_long": {
+            "mean": 2.2969538986682894,
+            "min": 2.2966014742851257,
+            "max": 2.297421634197235
+          }
+        },
+        "lorafa": {
+          "step_s": {
+            "mean": 0.4840065847412916,
+            "min": 0.47356834399397485,
+            "max": 0.5444575179717503
+          },
+          "tok_s": {
+            "mean": 8474.14774774783,
+            "min": 7521.247966700816,
+            "max": 8647.115145965288
+          },
+          "allocated_GiB": {
+            "mean": 7.5154619216918945,
+            "min": 7.5154619216918945,
+            "max": 7.5154619216918945
+          },
+          "reserved_GiB": {
+            "mean": 9.2265625,
+            "min": 9.2265625,
+            "max": 9.2265625
+          },
+          "optimizer_MiB": {
+            "mean": 3.0,
+            "min": 3.0,
+            "max": 3.0
+          },
+          "loss_512": {
+            "mean": 2.639126043394208,
+            "min": 2.6386357061564922,
+            "max": 2.6396413184702396
+          },
+          "loss_long": {
+            "mean": 2.3182474255561827,
+            "min": 2.3181108832359314,
+            "max": 2.3185388445854187
+          }
+        }
+      }
+    }
+  ],
+  "provenance": {
+    "model": "/workspace/vast_runner/work/hf_cache/hub/models--Qwen--Qwen2.5-0.5B/snapshots/060db6499f32faf8b98477b0a26969ef7d8b9987",
+    "model_id": "Qwen/Qwen2.5-0.5B",
+    "model_revision": "060db6499f32faf8b98477b0a26969ef7d8b9987",
+    "dataset": "Salesforce/wikitext",
+    "dataset_revision": "b08601e04326c79dfdd32d625aee71d232d685c3",
+    "tokens_sha256": "f1c5c096d976e8a95cd7c06ea92268b08cc829b668fda6836ad427a6dc28f44f"
+  },
+  "gpu_uuid": "GPU-3328cbaa-7542-6dcc-737e-fa530c027b70",
+  "exclusions": [
+    "Original unadapted block: required foreign_reads unknown",
+    "512 block04: entire incomplete block excluded, foreign reads 4688121856 bytes; replacement01 used"
+  ],
+  "limitations": [
+    "Protocol not Git-committed before first arms; exploratory series",
+    "F1 resolver observes virtual disk, not all physical-host activity",
+    "Single model, rank/targets, seed; short 32768-input-token training; no convergence claim",
+    "64/16/8 steps across lengths, so compare methods within length",
+    "Timing excludes data fetch/eval/save; allocated memory is not total device VRAM",
+    "F1 plans for 10 percent effect; passing sample count is not itself a significance test"
+  ]
+}

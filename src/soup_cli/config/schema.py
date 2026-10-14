@@ -2065,6 +2065,14 @@ class TrainingConfig(BaseModel):
         stays in agreement (#321)."""
         return self.bnb_4bit_use_double_quant is not False
 
+    @property
+    def double_quant_requested(self) -> Optional[bool]:
+        """The tri-state ``bnb_4bit_use_double_quant`` as the user set it: None when
+        unset. Only for consumers whose default differs from ``double_quant_on``:
+        layer streaming of a block-scaled FP8 source resolves unset to OFF and
+        refuses an explicit true (B3; ``fp8_source.resolve_double_quant``)."""
+        return self.bnb_4bit_use_double_quant
+
     llm_int8: bool = Field(
         default=False,
         description=(

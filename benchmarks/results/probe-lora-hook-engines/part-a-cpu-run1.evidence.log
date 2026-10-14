@@ -1,0 +1,19 @@
+# Evidence extract; omitted source lines remain in the separately archived full capture.
+
+# Source: part-a-cpu-run1.log
+# Full source SHA-256: d1e0ca280e1036aea55e50a07d127bde4dce5a1d718e0deff052135b65363bfe
+
+# Source lines 1-1
+HTTP Request: HEAD https://huggingface.co/Qwen/Qwen3.5-35B-A3B/resolve/59d61f3ce65a6d9863b86d2e96597125219dc754/tokenizer.json "HTTP/1.1 302 Found"
+
+# Source lines 13-16
+qwen35moe-tiny seed 17: base VOID (e_base None)
+qwen35moe-tiny seed 18: base VOID (e_base None)
+qwen35moe-tiny seed 19: base VOID (e_base None)
+HTTP Request: HEAD https://huggingface.co/deepseek-ai/DeepSeek-V3/resolve/e815299b0bcbac849fa540c768ef21845365c9eb/tokenizer.json "HTTP/1.1 307 Temporary Redirect"
+
+# Source lines 22-25
+dsv3-tiny seed 17: base VOID (e_base 0.009895285254792538)
+dsv3-tiny seed 18: base VOID (e_base 0.008868907215617203)
+dsv3-tiny seed 19: base VOID (e_base 0.011018032819655755)
+probe: {"verdict": "NO VERDICT", "why": "positive-control model has no valid run"}

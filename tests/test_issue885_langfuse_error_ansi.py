@@ -48,13 +48,12 @@ def test_pull_error_body_renders_inert(monkeypatch, tmp_path) -> None:
     assert "FAKE ERROR" in result.output
 
 
-def test_stripped_body_renders_on_a_colour_console() -> None:
+def test_stripped_body_renders_on_a_colour_console(monkeypatch) -> None:
     """Even with colour genuinely on, no payload sequence survives the strip.
 
-    ``CliRunner`` is not colour-capable, so the CLI-level test above cannot tell a
-    working strip from a no-op. This one renders the same production expression
-    through ``Console(force_terminal=True)`` -- where Rich *does* emit its own SGR --
-    and asserts only sequences Rich never emits for this markup are gone.
+    The CLI-level test above may render without colour. This one renders the
+    same production expression with explicit colour settings, regardless of
+    the runner's NO_COLOR/TERM, and rejects the payload's control bytes.
     """
     import re
     from io import StringIO
@@ -68,8 +67,13 @@ def test_stripped_body_renders_on_a_colour_console() -> None:
     )
     message = f"Langfuse answered HTTP 500: {_error_detail(HOSTILE, creds)}"
 
+    # TERM=dumb also overrides Rich's explicit width. Keep the override local
+    # to this test, and opt this console into colour even under NO_COLOR.
+    monkeypatch.setenv("TERM", "xterm-256color")
     out = StringIO()
-    console = Console(file=out, force_terminal=True, width=300)
+    console = Console(
+        file=out, force_terminal=True, color_system="standard", no_color=False, width=300
+    )
     # This is the exact production expression from commands/ingest.py.
     console.print(f"[red]{for_terminal(message)}[/]")
     rendered = out.getvalue()

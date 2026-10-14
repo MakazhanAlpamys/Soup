@@ -1,0 +1,96 @@
+{
+  "source_revision": "3e75c3af1d7aab7431c5ca9785dbf1fe0808bb30",
+  "archive_sha256": "2100922f0f85951392f8d8bb746673942d5fe35fd773a3b320207615652fa68e",
+  "audited_artifacts": 36,
+  "archive_members": 37,
+  "artifact_sizes_and_hashes_match": true,
+  "protocol_matches": true,
+  "source_sha256": {
+    "lora_hook_parity.py": "a6b4b1b99efbb390b3b944d86260c57a446dfa538bd5935dfb7c528661cbb9c3",
+    "lora_hook_real_model.py": "ebc781f3310fb23912b65aca3b6f0b0c6740a54665a154445bc4725095918b9f"
+  },
+  "base_engine_repeat_bitwise_equal": true,
+  "engine_arrays": {
+    "base1.out": {
+      "shape": [
+        22,
+        248320
+      ],
+      "tokens": 22,
+      "sha256": "db8e307649eb22bebcfec2c0424cddf1a2c66302c4fd52c6a33da4cfce5bd86c",
+      "finite": true,
+      "gguf_npz_equal": true
+    },
+    "base2.out": {
+      "shape": [
+        22,
+        248320
+      ],
+      "tokens": 22,
+      "sha256": "db8e307649eb22bebcfec2c0424cddf1a2c66302c4fd52c6a33da4cfce5bd86c",
+      "finite": true,
+      "gguf_npz_equal": true
+    },
+    "soup-auto.out": {
+      "shape": [
+        22,
+        248320
+      ],
+      "tokens": 22,
+      "sha256": "9539b4bf4b7671eecf2bb6e8f57612971cda0759ad2865afd65fb8e341c8f67f",
+      "finite": true,
+      "gguf_npz_equal": true
+    },
+    "soup-auto.repeat": {
+      "shape": [
+        22,
+        248320
+      ],
+      "tokens": 22,
+      "sha256": "9539b4bf4b7671eecf2bb6e8f57612971cda0759ad2865afd65fb8e341c8f67f",
+      "finite": true,
+      "gguf_npz_equal": true
+    },
+    "soup-auto+shared.out": {
+      "shape": [
+        22,
+        248320
+      ],
+      "tokens": 22,
+      "sha256": "850d4f957a55800c1caca965eab5c15e115b2a5f473e37431280ecd04cb9c725",
+      "finite": true,
+      "gguf_npz_equal": true
+    },
+    "soup-auto+shared.repeat": {
+      "shape": [
+        22,
+        248320
+      ],
+      "tokens": 22,
+      "sha256": "850d4f957a55800c1caca965eab5c15e115b2a5f473e37431280ecd04cb9c725",
+      "finite": true,
+      "gguf_npz_equal": true
+    }
+  },
+  "variants": {
+    "soup-auto": {
+      "adapted_modules": 80,
+      "adapter_config_matches_targets": true,
+      "routed_targets": 0,
+      "engine_repeat_bitwise_equal": true,
+      "reference_repeat_digest_equal": true,
+      "adapter_changes_engine_logits": true,
+      "verdict": "APPLIED"
+    },
+    "soup-auto+shared": {
+      "adapted_modules": 200,
+      "adapter_config_matches_targets": true,
+      "routed_targets": 0,
+      "engine_repeat_bitwise_equal": true,
+      "reference_repeat_digest_equal": true,
+      "adapter_changes_engine_logits": true,
+      "verdict": "APPLIED"
+    }
+  },
+  "reference_evidence": "Reference controls and effect metrics are retained in the captured harness result; raw reference logits were not included in this archive."
+}

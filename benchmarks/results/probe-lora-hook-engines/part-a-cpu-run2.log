@@ -1,0 +1,26 @@
+`causal_conv1d_fn` is falling back to its reference PyTorch implementation because `causal_conv1d` is not installed. This is correct but much slower; install `causal_conv1d` for the optimized kernel.
+`chunk_gated_delta_rule` is falling back to its reference PyTorch implementation because `flash-linear-attention` is not installed. This is correct but much slower; install `flash-linear-attention` for the optimized kernel.
+qwen35moe-tiny seed 17: base OK (e_base 4.837195880312295e-07)
+  soup-auto            CONVERT-FAILED  s_ref=2.258e-01 rho=- r=-
+  all                  CONVERT-FAILED  s_ref=3.051e-01 rho=- r=-
+  q_proj               CONVERT-FAILED  s_ref=1.208e-01 rho=- r=-
+  k_proj               CONVERT-FAILED  s_ref=1.244e-01 rho=- r=-
+  v_proj               CONVERT-FAILED  s_ref=2.151e-01 rho=- r=-
+  o_proj               CONVERT-FAILED  s_ref=1.149e-01 rho=- r=-
+  in_proj_qkv          CONVERT-FAILED  s_ref=7.584e-02 rho=- r=-
+  in_proj_z            CONVERT-FAILED  s_ref=4.143e-02 rho=- r=-
+  in_proj_a            TOO WEAK        s_ref=1.472e-04 rho=- r=-
+  in_proj_b            CONVERT-FAILED  s_ref=1.287e-02 rho=- r=-
+  out_proj             CONVERT-FAILED  s_ref=4.209e-02 rho=- r=-
+  shared               CONVERT-FAILED  s_ref=7.223e-02 rho=- r=-
+dsv3-tiny seed 17: base OK (e_base 5.207986134257716e-07)
+  soup-auto            CONVERT-FAILED  s_ref=5.593e-01 rho=- r=-
+  all                  CONVERT-FAILED  s_ref=4.745e-01 rho=- r=-
+  all-but-kv_b         CONVERT-FAILED  s_ref=3.588e-01 rho=- r=-
+  q_a_proj             DROPPED         s_ref=2.247e-02 rho=0.000e+00 r=1.000e+00
+  q_b_proj             DROPPED         s_ref=2.526e-02 rho=0.000e+00 r=1.000e+00
+  kv_a_proj_with_mqa   DROPPED         s_ref=2.410e-01 rho=0.000e+00 r=1.000e+00
+  kv_b_proj            CONVERT-FAILED  s_ref=4.684e-01 rho=- r=-
+  o_proj               APPLIED         s_ref=2.053e-01 rho=1.000e+00 r=1.485e-06
+  shared               CONVERT-FAILED  s_ref=2.054e-01 rho=- r=-
+probe: {"verdict": "NO VERDICT", "why": "positive control not APPLIED: ['q_proj', 'v_proj', 'shared']"}

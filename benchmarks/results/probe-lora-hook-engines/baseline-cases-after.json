@@ -1,0 +1,738 @@
+{
+  "label": "track-after-fixes-benchmark-first",
+  "source_import": {
+    "module": "<publication-checkout>\\src\\soup_cli\\__init__.py",
+    "utf8_mode": 0,
+    "locale_encoding": "cp1251"
+  },
+  "workers": 0,
+  "returncode": 0,
+  "seconds": 192.33,
+  "environment": {
+    "PYTHONHASHSEED": "0",
+    "NO_COLOR": "1",
+    "TERM": "dumb",
+    "CI": "true",
+    "PYTHONUTF8": null,
+    "PYTHONIOENCODING": null,
+    "PYTHONPATH": "<publication-checkout>\\src"
+  },
+  "test_file_sha256": {
+    "tests/test_cli_subprocess.py": "c4bf3646ac7187f24f708757256064ce1dfb8bdd72def4dbc7abc3f00a379dcc",
+    "tests/test_issue1226_reward_gold_parsing.py": "5066c0fead008eda583233252b832227d02fe8e877b1d6e9da1fcbef62350ed7",
+    "tests/test_issue1347_boxed_scan.py": "c45d7552e2f8b8908a2a1cca41099e671c1ad59122a5e94e519aa99d95784dd6",
+    "tests/test_issue1391_ppo_real_step.py": "47359baed207e2aadbbe43d405737befc65bbad7e97b69cd6ecf726a96fd38f5",
+    "tests/test_issue320_lazy_callback_import.py": "ee88bbf6f79f8ec20b693ddb758a8ec651beb88324463206d7b219b95a4c6641",
+    "tests/test_issue819_plugin_discovery.py": "0bab55c69a4574b3f53a1a308eb23f0c9771e7aef76646346f0f4e340697a341",
+    "tests/test_issue865_langfuse_pull_bounds.py": "65ef5b65e204ad990a7dbe72e38e24bf4c5ba2b4a2c985ff6ad85f04a24a4bb4"
+  },
+  "source_sha256": {
+    "src/soup_cli/trainer/ppo.py": "30f728a4197ae969dedfe7a224f991e0f3c3e9c409293e74bc80a8d7dabc0014",
+    "benchmarks/harness/lora_hook_parity.py": "a6b4b1b99efbb390b3b944d86260c57a446dfa538bd5935dfb7c528661cbb9c3",
+    "benchmarks/harness/lora_hook_real_model.py": "0c8138057877241b5bf4c091a2bd076b0cfe4bc8d43c43844bf26922a5cbe7cd"
+  },
+  "cases": [
+    {
+      "classname": "tests.test_lora_hook_parity",
+      "name": "test_engine_reproducing_the_effect_is_applied",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_lora_hook_parity",
+      "name": "test_engine_ignoring_the_adapter_is_dropped",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_lora_hook_parity",
+      "name": "test_engine_scaling_the_adapter_wrongly_is_wrong",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_lora_hook_parity",
+      "name": "test_partially_applied_adapter_is_wrong_not_dropped",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_lora_hook_parity",
+      "name": "test_effect_is_measured_against_the_engines_own_base",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_lora_hook_parity",
+      "name": "test_base_mismatch_voids_even_a_perfect_adapter",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_lora_hook_parity",
+      "name": "test_rule_rows_apply_in_order",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_lora_hook_parity",
+      "name": "test_failed_positive_control_gives_no_verdict",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_lora_hook_parity",
+      "name": "test_hook_lists_exactly_the_modules_not_applied",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_lora_hook_parity",
+      "name": "test_all_modules_applied_needs_no_hook",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_lora_hook_parity",
+      "name": "test_failed_adapter_control_invalidates_probe[reference_disabled_is_base-False]",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_lora_hook_parity",
+      "name": "test_failed_adapter_control_invalidates_probe[reference_disabled_is_base-None]",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_lora_hook_parity",
+      "name": "test_failed_adapter_control_invalidates_probe[touches_routed_experts-True]",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_lora_hook_parity",
+      "name": "test_failed_adapter_control_invalidates_probe[touches_routed_experts-None]",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_lora_hook_parity",
+      "name": "test_failed_adapter_control_invalidates_probe[reference_deterministic-False]",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_lora_hook_parity",
+      "name": "test_failed_adapter_control_invalidates_probe[reference_deterministic-None]",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_lora_hook_parity",
+      "name": "test_failed_adapter_control_invalidates_probe[engine_deterministic-False]",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_lora_hook_parity",
+      "name": "test_failed_adapter_control_invalidates_probe[engine_deterministic-None]",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_lora_hook_parity",
+      "name": "test_failed_adapter_control_invalidates_probe[tokens_match-False]",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_lora_hook_parity",
+      "name": "test_failed_adapter_control_invalidates_probe[verdict-VOID]",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_lora_hook_parity",
+      "name": "test_bitwise_determinism_rejects_signed_zero_change",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_lora_hook_parity",
+      "name": "test_variant_controls_precede_effect_metrics[None-0.1-APPLIED]",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_lora_hook_parity",
+      "name": "test_variant_controls_precede_effect_metrics[token-count-0.1-VOID]",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_lora_hook_parity",
+      "name": "test_variant_controls_precede_effect_metrics[token-ids-0.1-VOID]",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_lora_hook_parity",
+      "name": "test_variant_controls_precede_effect_metrics[repeat-logits-0.1-VOID]",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_lora_hook_parity",
+      "name": "test_variant_controls_precede_effect_metrics[repeat-failed-0.1-VOID]",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_lora_hook_parity",
+      "name": "test_variant_controls_precede_effect_metrics[None-0.0-TOO WEAK]",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_lora_hook_parity",
+      "name": "test_variant_controls_precede_effect_metrics[repeat-failed-0.0-VOID]",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_lora_hook_real_model",
+      "name": "test_noise_floor_is_base_gap_over_effect",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_lora_hook_real_model",
+      "name": "test_effect_reproduced_under_base_level_noise_is_applied",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_lora_hook_real_model",
+      "name": "test_dropped_adapter_is_dropped",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_lora_hook_real_model",
+      "name": "test_half_applied_adapter_is_wrong",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_lora_hook_real_model",
+      "name": "test_base_gap_too_large_for_the_effect_gives_no_verdict",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_lora_hook_real_model",
+      "name": "test_base_disagreement_voids_before_anything_else",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_lora_hook_real_model",
+      "name": "test_invalid_reference_stops_before_export[reference_disabled_is_base-False]",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_lora_hook_real_model",
+      "name": "test_invalid_reference_stops_before_export[touches_routed_experts-True]",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_lora_hook_real_model",
+      "name": "test_invalid_reference_stops_before_export[reference_deterministic-False]",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_lora_hook_real_model",
+      "name": "test_invalid_reference_stops_before_export[reference_deterministic-None]",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_lora_hook_real_model",
+      "name": "test_variant_controls_precede_effect_metrics[None-0.1-APPLIED]",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_lora_hook_real_model",
+      "name": "test_variant_controls_precede_effect_metrics[token-count-0.1-VOID]",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_lora_hook_real_model",
+      "name": "test_variant_controls_precede_effect_metrics[token-ids-0.1-VOID]",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_lora_hook_real_model",
+      "name": "test_variant_controls_precede_effect_metrics[repeat-logits-0.1-VOID]",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_lora_hook_real_model",
+      "name": "test_variant_controls_precede_effect_metrics[repeat-failed-0.1-VOID]",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_lora_hook_real_model",
+      "name": "test_variant_controls_precede_effect_metrics[None-0.0-TOO WEAK]",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_lora_hook_real_model",
+      "name": "test_variant_controls_precede_effect_metrics[repeat-failed-0.0-VOID]",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_moe_expert_holdout",
+      "name": "test_default_split_is_exact_disjoint_contiguous_eight_steps",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_moe_expert_holdout",
+      "name": "test_default_split_refuses_invalid_or_odd_sizes[0]",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_moe_expert_holdout",
+      "name": "test_default_split_refuses_invalid_or_odd_sizes[1]",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_moe_expert_holdout",
+      "name": "test_default_split_refuses_invalid_or_odd_sizes[3]",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_moe_expert_holdout",
+      "name": "test_default_split_refuses_invalid_or_odd_sizes[15]",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_moe_expert_holdout",
+      "name": "test_default_split_refuses_invalid_or_odd_sizes[-2]",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_moe_expert_holdout",
+      "name": "test_default_split_refuses_invalid_or_odd_sizes[16.0]",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_moe_expert_holdout",
+      "name": "test_default_split_refuses_invalid_or_odd_sizes[True]",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_moe_expert_holdout",
+      "name": "test_split_refuses_empty_halves_and_invalid_indexes[0]",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_moe_expert_holdout",
+      "name": "test_split_refuses_empty_halves_and_invalid_indexes[16]",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_moe_expert_holdout",
+      "name": "test_split_refuses_empty_halves_and_invalid_indexes[-1]",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_moe_expert_holdout",
+      "name": "test_split_refuses_empty_halves_and_invalid_indexes[17]",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_moe_expert_holdout",
+      "name": "test_split_refuses_empty_halves_and_invalid_indexes[8.5]",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_moe_expert_holdout",
+      "name": "test_split_refuses_empty_halves_and_invalid_indexes[True]",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_moe_expert_holdout",
+      "name": "test_explicit_custom_split_accepts_odd_total",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_moe_expert_holdout",
+      "name": "test_opposite_hot_experts_do_not_leak_evaluation_into_training",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_moe_expert_holdout",
+      "name": "test_per_step_oracle_bounds_fixed_cache_and_signed_loss_is_preserved",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_moe_expert_holdout",
+      "name": "test_uniform_traffic_equals_analytic_random_and_has_zero_gain",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_moe_expert_holdout",
+      "name": "test_tied_hot_set_uses_lowest_expert_ids",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_moe_expert_holdout",
+      "name": "test_all_layer_means_include_layer_zero_for_every_metric",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_moe_expert_holdout",
+      "name": "test_exact_tokens_times_top_k_count_identity_is_accepted",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_moe_expert_holdout",
+      "name": "test_invalid_capture_is_void_before_scoring[missing_steps]",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_moe_expert_holdout",
+      "name": "test_invalid_capture_is_void_before_scoring[unequal_steps]",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_moe_expert_holdout",
+      "name": "test_invalid_capture_is_void_before_scoring[negative]",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_moe_expert_holdout",
+      "name": "test_invalid_capture_is_void_before_scoring[float_count]",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_moe_expert_holdout",
+      "name": "test_invalid_capture_is_void_before_scoring[bool_count]",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_moe_expert_holdout",
+      "name": "test_invalid_capture_is_void_before_scoring[wrong_expert_length]",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_moe_expert_holdout",
+      "name": "test_invalid_capture_is_void_before_scoring[wrong_count_total]",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_moe_expert_holdout",
+      "name": "test_invalid_capture_is_void_before_scoring[too_few_chunks]",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_moe_expert_holdout",
+      "name": "test_invalid_capture_is_void_before_scoring[wrong_tokens]",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_moe_expert_holdout",
+      "name": "test_invalid_capture_is_void_before_scoring[no_layers]",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_moe_expert_holdout",
+      "name": "test_invalid_capture_is_void_before_scoring[unknown_layer]",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_moe_expert_holdout",
+      "name": "test_invalid_capture_is_void_before_scoring[duplicate_router]",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_moe_expert_holdout",
+      "name": "test_invalid_expert_or_top_k_config_is_void[3-1]",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_moe_expert_holdout",
+      "name": "test_invalid_expert_or_top_k_config_is_void[0-1]",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_moe_expert_holdout",
+      "name": "test_invalid_expert_or_top_k_config_is_void[4-0]",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_moe_expert_holdout",
+      "name": "test_invalid_expert_or_top_k_config_is_void[4-5]",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_moe_expert_holdout",
+      "name": "test_non_sixteen_step_capture_cannot_claim_default_verdict[8]",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_moe_expert_holdout",
+      "name": "test_non_sixteen_step_capture_cannot_claim_default_verdict[15]",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_moe_expert_holdout",
+      "name": "test_non_sixteen_step_capture_cannot_claim_default_verdict[17]",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_moe_expert_holdout",
+      "name": "test_huge_invalid_step_count_is_void_without_constructing_split_indexes",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_moe_expert_holdout",
+      "name": "test_custom_split_is_recomputed_both_ways_but_diagnostics_only",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_moe_expert_holdout",
+      "name": "test_rule_precedence_and_inclusive_boundaries[directions0-False-VOID]",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_moe_expert_holdout",
+      "name": "test_rule_precedence_and_inclusive_boundaries[directions1-True-HOTSET TRANSFERS]",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_moe_expert_holdout",
+      "name": "test_rule_precedence_and_inclusive_boundaries[directions2-True-GAIN WITH DRIFT]",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_moe_expert_holdout",
+      "name": "test_rule_precedence_and_inclusive_boundaries[directions3-True-DIRECTION-DEPENDENT]",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_moe_expert_holdout",
+      "name": "test_rule_precedence_and_inclusive_boundaries[directions4-True-DIRECTION-DEPENDENT]",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_moe_expert_holdout",
+      "name": "test_rule_precedence_and_inclusive_boundaries[directions5-True-NO MATERIAL GAIN]",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_moe_expert_holdout",
+      "name": "test_rule_precedence_and_inclusive_boundaries[directions6-True-HOTSET TRANSFERS]",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_moe_expert_holdout",
+      "name": "test_rule_precedence_and_inclusive_boundaries[directions7-True-DIRECTION-DEPENDENT]",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_moe_expert_holdout",
+      "name": "test_rule_precedence_and_inclusive_boundaries[directions8-True-GAIN WITH DRIFT]",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_moe_expert_holdout",
+      "name": "test_rule_precedence_and_inclusive_boundaries[directions9-True-VOID]",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_moe_expert_holdout",
+      "name": "test_rule_precedence_and_inclusive_boundaries[directions10-True-VOID]",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_moe_expert_holdout",
+      "name": "test_rule_precedence_and_inclusive_boundaries[directions11-True-VOID]",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_moe_expert_holdout",
+      "name": "test_replay_recalculates_saved_counts_and_does_not_trust_saved_summary",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_moe_expert_holdout",
+      "name": "test_replay_missing_discovered_layer_is_void_not_a_reduced_population[0]",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_moe_expert_holdout",
+      "name": "test_replay_missing_discovered_layer_is_void_not_a_reduced_population[1]",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_moe_expert_holdout",
+      "name": "test_replay_requires_saved_matching_router_inventory[None]",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_moe_expert_holdout",
+      "name": "test_replay_requires_saved_matching_router_inventory[inventory1]",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_moe_expert_holdout",
+      "name": "test_replay_requires_saved_matching_router_inventory[inventory2]",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_moe_expert_holdout",
+      "name": "test_published_audit_recomputes_identity_and_population_gap_without_mutation",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_issue1226_reward_gold_parsing.TestAdversarialInputsStayLinear",
+      "name": "test_parsing_is_fast_on_adversarial_output[open-parens]",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_cli_subprocess.TestDoctorCommand",
+      "name": "test_doctor_runs",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_issue320_lazy_callback_import",
+      "name": "test_builder_invocation_no_nameerror_in_subprocess[soup_cli.utils.echo_trap-m.build_echo_trap_callback(threshold=0.5)]",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_issue320_lazy_callback_import",
+      "name": "test_builder_invocation_no_nameerror_in_subprocess[soup_cli.utils.reward_hacking-m.build_reward_hack_callback(detector='info_rm')]",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_issue320_lazy_callback_import",
+      "name": "test_builder_invocation_no_nameerror_in_subprocess[soup_cli.utils.minillm-m.build_minillm_callback(m.MiniLLMConfig())]",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_issue320_lazy_callback_import",
+      "name": "test_builder_invocation_no_nameerror_in_subprocess[soup_cli.utils.rl_checkpoint-m.build_rl_checkpoint_callback(m.RLCheckpointConfig(save_every_steps=1), output_dir='out')]",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_issue320_lazy_callback_import",
+      "name": "test_builder_invocation_no_nameerror_in_subprocess[soup_cli.monitoring.hf_push-m.build_push_callback(repo_id='user/repo', output_dir='out', explicit_token='tok')]",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_issue819_plugin_discovery",
+      "name": "test_disable_survives_a_fresh_process",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_issue1347_boxed_scan.TestIssue1347TheScanGrowsLinearly",
+      "name": "test_closed_boxes_cost_linear_time_too",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_issue865_langfuse_pull_bounds.TestDeadline",
+      "name": "test_control_a_prompt_response_still_arrives",
+      "outcome": "passed",
+      "failure": null
+    },
+    {
+      "classname": "tests.test_issue1391_ppo_real_step",
+      "name": "test_ppo_runs_a_real_step",
+      "outcome": "passed",
+      "failure": null
+    }
+  ]
+}

@@ -800,6 +800,25 @@ def _drive_qwen4_streaming_setup(tmp_path, monkeypatch, resolve_weights=None):
         "transformers.AutoConfig.from_pretrained", lambda *_a, **_k: model_cfg
     )
     monkeypatch.setattr("peft.LoraConfig", lambda **kwargs: types.SimpleNamespace(**kwargs))
+    # This harness tests Qwen4 storage policies with fake transformers/PEFT.
+    # Real meta-adapter discovery is covered by test_stream_adapter_preflight.
+    from soup_cli.utils.adapter_budget import AdapterTensor, estimate_adapter_budget
+    from soup_cli.utils.peft_wiring import build_lora_config
+
+    adapter_plan = types.SimpleNamespace(
+        budget=estimate_adapter_budget(
+            [AdapterTensor("stub.lora_A.weight", (2, 2))],
+            profile="torch_adamw_fp32", device="cpu",
+        ),
+        quant_suffixes=(),
+        lora_config=build_lora_config(
+            tcfg.lora, target_modules=["q_proj"], task_type="CAUSAL_LM",
+        ),
+    )
+    monkeypatch.setattr(
+        "soup_cli.utils.stream_adapter_preflight.build_stream_adapter_plan",
+        lambda *_a, **_k: adapter_plan,
+    )
     monkeypatch.setattr(
         "soup_cli.utils.layer_stream.stream_arch_of", lambda *_a, **_k: "qwen4_exp"
     )

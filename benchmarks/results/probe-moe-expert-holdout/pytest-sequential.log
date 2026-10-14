@@ -1,0 +1,44 @@
+.......F..                                                               [100%]
+================================== FAILURES ===================================
+____________________ test_disable_survives_a_fresh_process ____________________
+tests\test_issue819_plugin_discovery.py:164: in test_disable_survives_a_fresh_process
+    assert "hello" in _plain(discovered.stdout)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^
+tests\test_issue819_plugin_discovery.py:26: in _plain
+    return " ".join(_ANSI_RE.sub("", text).split())
+                    ^^^^^^^^^^^^^^^^^^^^^^
+E   TypeError: expected string or bytes-like object, got 'NoneType'
+============================== warnings summary ===============================
+.venv\Lib\site-packages\typer\__init__.py:24
+  <repo>\.venv\Lib\site-packages\typer\__init__.py:24: DeprecationWarning: 'click.utils.get_binary_stream' is deprecated and will be removed in Click 9.0.
+    from click.utils import get_binary_stream as get_binary_stream
+
+.venv\Lib\site-packages\typer\__init__.py:25
+  <repo>\.venv\Lib\site-packages\typer\__init__.py:25: DeprecationWarning: 'click.utils.get_text_stream' is deprecated and will be removed in Click 9.0.
+    from click.utils import get_text_stream as get_text_stream
+
+tests/test_issue819_plugin_discovery.py::test_disable_survives_a_fresh_process
+  <repo>\.venv\Lib\site-packages\_pytest\threadexception.py:58: PytestUnhandledThreadExceptionWarning: Exception in thread Thread-13 (_readerthread)
+  
+  Traceback (most recent call last):
+    File "<user-home>\AppData\Local\Python\pythoncore-3.12-64\Lib\threading.py", line 1075, in _bootstrap_inner
+      self.run()
+    File "<user-home>\AppData\Local\Python\pythoncore-3.12-64\Lib\threading.py", line 1012, in run
+      self._target(*self._args, **self._kwargs)
+    File "<user-home>\AppData\Local\Python\pythoncore-3.12-64\Lib\subprocess.py", line 1599, in _readerthread
+      buffer.append(fh.read())
+                    ^^^^^^^^^
+    File "<user-home>\AppData\Local\Python\pythoncore-3.12-64\Lib\encodings\cp1251.py", line 23, in decode
+      return codecs.charmap_decode(input,self.errors,decoding_table)[0]
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  UnicodeDecodeError: 'charmap' codec can't decode byte 0x98 in position 1369: character maps to <undefined>
+  
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+    warnings.warn(pytest.PytestUnhandledThreadExceptionWarning(msg))
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ===========================
+FAILED tests/test_issue819_plugin_discovery.py::test_disable_survives_a_fresh_process
+1 failed, 9 passed, 3 warnings in 194.34s (0:03:14)
+
