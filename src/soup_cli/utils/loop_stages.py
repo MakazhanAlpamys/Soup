@@ -22,21 +22,24 @@ and offline smokes inject behaviour without a GPU or a network:
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
 import re
+import sqlite3
 import sys
 import uuid
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable, Mapping, Optional
+from typing import TYPE_CHECKING, Callable, Mapping, Optional, Tuple
 
 from soup_cli.utils.loop_state import LoopState
 from soup_cli.utils.net_guard import LOOPBACK_HOSTS as _LOOPBACK_HOSTS
 from soup_cli.utils.net_guard import parse_ip_literal
-from soup_cli.utils.paths import atomic_write_text
+from soup_cli.utils.paths import atomic_write_text, quote_path
 
 if TYPE_CHECKING:
+    from soup_cli.data.traces.pair_builder import PreferencePair
     from soup_cli.utils.loop_daemon import WatchConfig
 
 _LOG = logging.getLogger(__name__)
@@ -87,7 +90,7 @@ def _resolve_trace_dir(state: LoopState) -> Optional[str]:
     return None
 
 
-def _resolve_thumbs_db(state: LoopState) -> Optional[tuple]:
+def _resolve_thumbs_db(state: LoopState) -> Optional[Tuple[str, str]]:
     """Return ``(path, field)`` for the thumbs database, or ``None``.
 
     Same precedence as the trace directory: ``SOUP_LOOP_THUMBS_DB`` env, then
@@ -108,8 +111,10 @@ def checked_thumbs_db(state: LoopState) -> Optional[str]:
     The harvest reads a database only when told to, like ``soup serve
     --record-thumbs`` itself. A configured path that leaves cwd or is a
     symlink (the rule ``--record-thumbs`` applies on the serve side), or that
-    is not an existing file, raises ``ValueError`` naming its field instead of
-    harvesting a silent 0. ``soup loop watch`` runs this before it starts.
+    is not an existing, readable thumbs database, raises ``ValueError`` naming
+    its field instead of harvesting a silent 0. A database that is merely
+    locked (a running serve) passes. ``soup loop watch`` runs this before it
+    starts.
     """
     resolved = _resolve_thumbs_db(state)
     if resolved is None:
@@ -120,16 +125,30 @@ def checked_thumbs_db(state: LoopState) -> Optional[str]:
     try:
         validate_db_path(path)
     except (TypeError, ValueError) as exc:
-        raise ValueError(f"{field}: {exc}") from exc
+        msg = str(exc)
+        if "under cwd" in msg or "symlink" in msg:
+            msg += "; move the database under the project directory"
+        raise ValueError(f"{field}: {msg}") from exc
     if not os.path.isfile(path):
         raise ValueError(
-            f"{field}: no database file at {path}; "
-            f"soup serve --record-thumbs {path} creates it"
+            f"{field}: no database file at {quote_path(path)}; "
+            f"soup serve --record-thumbs {quote_path(path)} creates it"
         )
+    try:
+        # Short timeout: a lock is not a verdict, so do not wait out sqlite's 5 s.
+        with contextlib.closing(sqlite3.connect(os.path.abspath(path), timeout=0.1)) as conn:
+            conn.execute("SELECT 1 FROM thumbs LIMIT 1")
+    except sqlite3.Error as exc:
+        if "locked" in str(exc).lower():
+            return path
+        raise ValueError(
+            f"{field}: {quote_path(path)} is not a readable thumbs database "
+            f"({type(exc).__name__}); soup serve --record-thumbs creates one"
+        ) from exc
     return path
 
 
-def _thumbs_pairs(state: LoopState) -> list:
+def _thumbs_pairs(state: LoopState) -> "list[PreferencePair]":
     """Pairs from the ``soup serve --record-thumbs`` database (#1440)."""
     path = checked_thumbs_db(state)
     if path is None:
@@ -137,11 +156,19 @@ def _thumbs_pairs(state: LoopState) -> list:
     from soup_cli.data.traces.pair_builder import PreferencePair
     from soup_cli.utils.local_rl import harvest_dpo_pairs
 
+    try:
+        found = harvest_dpo_pairs(path)
+    except sqlite3.Error as exc:
+        # Passed the check, then failed while reading (lock, corruption).
+        raise ValueError(
+            f"{_resolve_thumbs_db(state)[1]}: {quote_path(path)} could not be read "
+            f"({type(exc).__name__}: {exc})"
+        ) from exc
     return [
         PreferencePair(
             prompt=p.prompt, chosen=p.chosen, rejected=p.rejected, source=_THUMBS_SOURCE
         )
-        for p in harvest_dpo_pairs(path)
+        for p in found
     ]
 
 
@@ -152,7 +179,9 @@ def harvest_from_traces(state: LoopState) -> Mapping[str, object]:
     and, when one is configured, the ``soup serve --record-thumbs`` database
     (#1440); the two are unioned without exact duplicates. Writes the pairs to
     ``.soup-loops/pairs/<uuid>.jsonl`` (cwd-contained) and returns
-    ``{pairs_harvested, pairs_path, traces_collected, thumbs_pairs}``. Yields
+    ``{pairs_harvested, pairs_path, traces_collected, thumbs_pairs}``
+    (``thumbs_pairs`` counts the pairs READ from the database, before the union
+    drops any that a trace already supplied). Yields
     zero pairs (no path) when neither source has any; a configured database
     that is refused or missing raises (see ``checked_thumbs_db``).
     """
@@ -166,8 +195,7 @@ def harvest_from_traces(state: LoopState) -> Mapping[str, object]:
     seen = {(p.prompt, p.chosen, p.rejected) for p in pairs}
     for p in thumbs:
         key = (p.prompt, p.chosen, p.rejected)
-        if key not in seen:
-            seen.add(key)
+        if key not in seen:  # harvest_dpo_pairs yields one pair per prompt: no self-dupes
             pairs.append(p)
     extra = {"thumbs_pairs": len(thumbs)}
     if not pairs:

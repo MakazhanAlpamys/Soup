@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 
 import pytest
 from typer.testing import CliRunner
@@ -99,26 +100,55 @@ def test_the_environment_overrides_loop_state(cwd, monkeypatch):
 def test_trace_and_thumbs_pairs_are_unioned_without_duplicates(cwd, monkeypatch):
     from soup_cli.utils.loop_stages import harvest_from_traces
 
+    def _trace(i, prompt, good, bad):
+        return [
+            {"id": f"{i}a", "prompt": prompt, "output": good, "signal": "thumbs_up"},
+            {"id": f"{i}b", "prompt": prompt, "output": bad, "signal": "thumbs_down"},
+        ]
+
     _write_jsonl(
         cwd / "traces" / "t.jsonl",
-        [
-            {"id": "1", "prompt": "Q", "output": "Good", "signal": "thumbs_up"},
-            {"id": "2", "prompt": "Q", "output": "Bad", "signal": "thumbs_down"},
-        ],
+        _trace(1, "Q", "Good", "Bad") + _trace(2, "R", "G2", "B2") + _trace(3, "Q2", "Yes", "No"),
     )
-    # The same verdict arrives twice (trace log and database) plus one more prompt.
-    _record("thumbs.db", ("Q", "Good", "up"), ("Q", "Bad", "down"),
-            ("Q2", "Yes", "up"), ("Q2", "No", "down"))
+    _record(
+        "thumbs.db",
+        ("Q", "Good", "up"), ("Q", "Bad2", "down"),    # same prompt+chosen, other rejected: kept
+        ("R", "G3", "up"), ("R", "B2", "down"),        # same prompt+rejected, other chosen: kept
+        ("Q2", "Yes", "up"), ("Q2", "No", "down"),     # exact duplicate of a trace pair: dropped
+        ("Q3", "A", "up"), ("Q3", "B", "down"),        # new prompt: kept
+    )
     monkeypatch.setenv("SOUP_LOOP_TRACE_DIR", str(cwd / "traces"))
     monkeypatch.setenv("SOUP_LOOP_THUMBS_DB", "thumbs.db")
 
     result = harvest_from_traces(_state())
 
-    assert result["traces_collected"] == 2, result
-    assert result["pairs_harvested"] == 2, result
+    assert result["traces_collected"] == 6, result
+    assert result["thumbs_pairs"] == 4, result  # pairs READ from the database, duplicates included
+    assert result["pairs_harvested"] == 6, result
     rows = _read_jsonl(result["pairs_path"])
-    got = sorted((p["prompt"], p["chosen"], p["rejected"]) for p in rows)
-    assert got == [("Q", "Good", "Bad"), ("Q2", "Yes", "No")]
+    got = sorted((p["prompt"], p["chosen"], p["rejected"], p["source"]) for p in rows)
+    assert got == [
+        ("Q", "Good", "Bad", "thumbs_up"),
+        ("Q", "Good", "Bad2", "soup-serve-thumbs"),
+        ("Q2", "Yes", "No", "thumbs_up"),  # the duplicate keeps the trace row's source
+        ("Q3", "A", "B", "soup-serve-thumbs"),
+        ("R", "G2", "B2", "thumbs_up"),
+        ("R", "G3", "B2", "soup-serve-thumbs"),
+    ]
+
+
+def test_thumbs_pairs_is_reported_when_nothing_was_harvested(cwd, monkeypatch):
+    """Zero-pair path: a database with only up-thumbs reads 0 pairs, and says so."""
+    from soup_cli.utils.loop_stages import harvest_from_traces
+
+    _record("thumbs.db", ("Q", "Good", "up"))
+    monkeypatch.setenv("SOUP_LOOP_THUMBS_DB", "thumbs.db")
+
+    result = harvest_from_traces(_state())
+
+    assert result["pairs_harvested"] == 0, result
+    assert result["pairs_path"] is None, result
+    assert result["thumbs_pairs"] == 0, result
 
 
 @pytest.mark.parametrize("via", ["env", "loop.yaml"])
@@ -134,7 +164,7 @@ def test_a_configured_database_that_does_not_exist_fails_the_stage_by_name(
     else:
         state, field = _state(thumbs_db="not-yet.db"), "thumbs_db"
 
-    with pytest.raises(ValueError, match=f"^{field}: no database file at not-yet.db"):
+    with pytest.raises(ValueError, match=f"^{field}: no database file at 'not-yet.db'"):
         harvest_from_traces(state)
     assert not os.path.exists(os.path.join(".soup-loops", "pairs"))
 
@@ -150,12 +180,18 @@ def test_a_directory_at_the_database_path_is_refused_too(cwd, monkeypatch):
 
 
 def test_a_database_outside_the_project_is_refused_by_name(cwd, monkeypatch, tmp_path_factory):
+    """The file EXISTS, so only the containment rule can be what refuses it."""
     from soup_cli.utils.loop_stages import harvest_from_traces
 
     outside = tmp_path_factory.mktemp("elsewhere") / "thumbs.db"
+    sqlite3.connect(str(outside)).close()
     monkeypatch.setenv("SOUP_LOOP_THUMBS_DB", str(outside))
 
-    with pytest.raises(ValueError, match="SOUP_LOOP_THUMBS_DB"):
+    with pytest.raises(
+        ValueError,
+        match=r"^SOUP_LOOP_THUMBS_DB: db_path 'thumbs.db' must stay under cwd; "
+        r"move the database under the project directory$",
+    ):
         harvest_from_traces(_state())
 
 
@@ -166,7 +202,11 @@ def test_a_symlinked_database_is_refused_by_name(cwd):
     _record("real.db", ("Q", "Good", "up"), ("Q", "Bad", "down"))
     os.symlink("real.db", "link.db")
 
-    with pytest.raises(ValueError, match="thumbs_db"):
+    with pytest.raises(
+        ValueError,
+        match=r"^thumbs_db: db_path must not be a symlink.*; "
+        r"move the database under the project directory$",
+    ):
         harvest_from_traces(_state(thumbs_db="link.db"))
 
 
@@ -231,6 +271,114 @@ def test_thumbs_db_is_the_last_field_so_positional_fields_keep_their_meaning():
     assert state.thumbs_db is None
 
 
+def _make_bad_db(kind: str, path: str = "thumbs.db") -> None:
+    if kind == "text":
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write("this is not a database\n" * 20)
+    else:  # a valid SQLite file with no thumbs table (empty, or another Soup .db)
+        sqlite3.connect(path).close()
+
+
+@pytest.mark.parametrize("kind", ["text", "empty-sqlite"])
+@pytest.mark.parametrize("via", ["env", "loop.yaml"])
+def test_a_file_that_is_not_a_thumbs_database_fails_the_stage_by_name(
+    cwd, monkeypatch, via, kind
+):
+    from soup_cli.utils.loop_stages import harvest_from_traces
+
+    _make_bad_db(kind)
+    if via == "env":
+        monkeypatch.setenv("SOUP_LOOP_THUMBS_DB", "thumbs.db")
+        state, field = _state(), "SOUP_LOOP_THUMBS_DB"
+    else:
+        state, field = _state(thumbs_db="thumbs.db"), "thumbs_db"
+
+    with pytest.raises(
+        ValueError,
+        match=rf"^{field}: 'thumbs.db' is not a readable thumbs database "
+        r"\(\w*Error\); soup serve --record-thumbs creates one$",
+    ):
+        harvest_from_traces(state)
+    assert not os.path.exists(os.path.join(".soup-loops", "pairs"))
+
+
+def test_a_locked_database_is_not_refused_by_the_check(cwd, monkeypatch):
+    """A running serve can hold the lock briefly; that is not a bad database."""
+    import time
+
+    from soup_cli.utils.loop_stages import checked_thumbs_db
+
+    _record("thumbs.db", ("Q", "Good", "up"))
+    monkeypatch.setenv("SOUP_LOOP_THUMBS_DB", "thumbs.db")
+    holder = sqlite3.connect("thumbs.db", isolation_level=None)
+    try:
+        holder.execute("BEGIN EXCLUSIVE")
+        started = time.monotonic()
+        assert checked_thumbs_db(_state()) == "thumbs.db"
+        assert time.monotonic() - started < 3, "the check must not wait out sqlite's 5 s default"
+    finally:
+        holder.close()
+
+
+def test_a_sqlite_failure_mid_harvest_names_the_field(cwd, monkeypatch):
+    """The file passed the check, then sqlite failed while reading (lock, corruption)."""
+    import soup_cli.utils.local_rl as local_rl
+    from soup_cli.utils.loop_stages import harvest_from_traces
+
+    _record("thumbs.db", ("Q", "Good", "up"), ("Q", "Bad", "down"))
+
+    def _boom(_path):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(local_rl, "harvest_dpo_pairs", _boom)
+
+    with pytest.raises(ValueError, match=r"^thumbs_db: .*OperationalError"):
+        harvest_from_traces(_state(thumbs_db="thumbs.db"))
+
+
+def test_control_characters_in_a_configured_path_never_reach_the_message(cwd, monkeypatch):
+    from soup_cli.utils.loop_stages import checked_thumbs_db
+
+    monkeypatch.setenv("SOUP_LOOP_THUMBS_DB", "a\x1b[2Jb.db")
+
+    with pytest.raises(ValueError) as info:
+        checked_thumbs_db(_state())
+
+    assert "\x1b[2J" not in str(info.value)
+    assert "no database file at" in str(info.value)
+
+
+def _stored_state_with(**fields):
+    from soup_cli.utils.loop_state import default_state_path, read_state
+
+    _init_loop(True)
+    path = default_state_path()
+    data = json.loads(open(path, encoding="utf-8").read())
+    data.update(fields)
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(data, fh)
+    return read_state
+
+
+@pytest.mark.parametrize("bad", ["", 123, "x" * 513])
+def test_read_state_refuses_a_bad_thumbs_db(cwd, bad):
+    read_state = _stored_state_with(thumbs_db=bad)
+
+    with pytest.raises(ValueError, match="thumbs_db"):
+        read_state()
+
+
+def test_an_empty_environment_variable_is_treated_as_unset(cwd, monkeypatch):
+    """Like SOUP_LOOP_TRACE_DIR: empty falls through to loop.yaml, or to nothing."""
+    from soup_cli.utils.loop_stages import harvest_from_traces
+
+    _record("a.db", ("Q", "Good", "up"), ("Q", "Bad", "down"))
+    monkeypatch.setenv("SOUP_LOOP_THUMBS_DB", "")
+
+    assert harvest_from_traces(_state(thumbs_db="a.db"))["pairs_harvested"] == 1
+    assert harvest_from_traces(_state())["pairs_harvested"] == 0
+
+
 # --- `soup loop watch` refuses a bad thumbs database before it starts --------
 
 
@@ -264,7 +412,7 @@ def test_watch_refuses_a_missing_database_before_any_iteration(cwd, monkeypatch,
 
     assert result.exit_code == 2, text
     assert "invalid thumbs database" in text, text
-    assert "SOUP_LOOP_THUMBS_DB: no database file at not-yet.db" in text, text
+    assert "SOUP_LOOP_THUMBS_DB: no database file at 'not-yet.db'" in text, text
     assert "Traceback" not in text, text
     assert not os.path.exists(".soup-loops"), "no iteration may run"
     assert read_state().status == "stopped"
@@ -276,7 +424,7 @@ def test_watch_refuses_the_loop_yaml_field_and_an_outside_path_by_name(
     _init_loop(True, "--thumbs-db", "gone.db")
     result, text = _watch()
     assert result.exit_code == 2, text
-    assert "thumbs_db: no database file at gone.db" in text, text
+    assert "thumbs_db: no database file at 'gone.db'" in text, text
 
     outside = tmp_path_factory.mktemp("elsewhere") / "thumbs.db"
     monkeypatch.setenv("SOUP_LOOP_THUMBS_DB", str(outside))
@@ -328,3 +476,80 @@ def test_watch_without_pre_wired_stages_does_not_check_the_database(cwd, monkeyp
 
     assert result.exit_code == 0, text
     assert "invalid thumbs database" not in text, text
+
+
+@pytest.mark.parametrize("kind", ["text", "empty-sqlite"])
+def test_watch_refuses_a_file_that_is_not_a_thumbs_database(cwd, monkeypatch, kind):
+    from soup_cli.utils.loop_state import read_state
+
+    _make_bad_db(kind)
+    _init_loop(True)
+    monkeypatch.setenv("SOUP_LOOP_THUMBS_DB", "thumbs.db")
+
+    result, text = _watch()
+
+    assert result.exit_code == 2, text
+    assert "invalid thumbs database" in text, text
+    assert "SOUP_LOOP_THUMBS_DB: 'thumbs.db' is not a readable thumbs database" in text, text
+    assert "Traceback" not in text, text
+    assert not os.path.exists(".soup-loops"), "no iteration may run"
+    assert read_state().status == "stopped"
+
+
+@pytest.mark.parametrize("kind", ["text", "empty-sqlite"])
+def test_watch_detach_refuses_a_file_that_is_not_a_thumbs_database(cwd, monkeypatch, kind):
+    import soup_cli.commands.loop as loop_cmd
+
+    spawned = []
+    monkeypatch.setattr(loop_cmd.subprocess, "Popen", lambda *a, **k: spawned.append(a))
+    _make_bad_db(kind)
+    _init_loop(True)
+    monkeypatch.setenv("SOUP_LOOP_THUMBS_DB", "thumbs.db")
+
+    result, text = _watch("--detach")
+
+    assert result.exit_code == 2, text
+    assert "not a readable thumbs database" in text, text
+    assert spawned == []
+
+
+def test_watch_does_not_let_a_control_sequence_in_the_path_reach_the_terminal(cwd, monkeypatch):
+    _init_loop(True)
+    monkeypatch.setenv("SOUP_LOOP_THUMBS_DB", "a\x1b[2Jb.db")
+
+    result, _text = _watch()
+
+    assert result.exit_code == 2, result.output
+    assert "\x1b[2J" not in result.output  # the sequence itself, not "any ESC" (Rich adds its own)
+    assert "no database file at" in strip_ansi(result.output)
+
+
+def test_init_does_not_let_a_control_sequence_in_the_path_reach_the_terminal(cwd):
+    from soup_cli.cli import app
+
+    result = CliRunner().invoke(app, [
+        "loop", "init", "registry://m", "--eval", "suite.yaml", "--baseline", "b",
+        "--thumbs-db", "../a\x1b[2Jb.db",
+    ])
+
+    assert result.exit_code == 2, result.output
+    assert "\x1b[2J" not in result.output
+
+
+def test_watch_warns_when_the_stub_stages_will_not_read_the_database(cwd, monkeypatch):
+    _init_loop(False)
+    monkeypatch.setenv("SOUP_LOOP_THUMBS_DB", "not-yet.db")
+
+    result, text = _watch()
+
+    assert result.exit_code == 0, text
+    assert "stub stages never read it" in text and "--pre-wired" in text, text
+
+
+def test_watch_does_not_warn_without_a_thumbs_database(cwd):
+    _init_loop(False)
+
+    result, text = _watch()
+
+    assert result.exit_code == 0, text
+    assert "--pre-wired" not in text, text

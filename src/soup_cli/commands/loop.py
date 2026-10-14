@@ -41,6 +41,7 @@ from soup_cli.utils.loop_state import (
     read_state,
     write_state,
 )
+from soup_cli.utils.terminal import for_terminal
 
 app = typer.Typer(
     name="loop",
@@ -111,7 +112,7 @@ def init_cmd(
         try:
             validate_db_path(thumbs_db)
         except (TypeError, ValueError) as exc:
-            console.print(f"[red]invalid --thumbs-db:[/] {escape(str(exc))}")
+            console.print(f"[red]invalid --thumbs-db:[/] {for_terminal(exc)}")
             raise typer.Exit(code=2)
     try:
         state, path = init_state(
@@ -240,8 +241,13 @@ def watch_cmd(
         try:
             checked_thumbs_db(state)
         except ValueError as exc:
-            console.print(f"[red]invalid thumbs database:[/] {escape(str(exc))}")
+            console.print(f"[red]invalid thumbs database:[/] {for_terminal(exc)}")
             raise typer.Exit(code=2)
+    elif os.environ.get("SOUP_LOOP_THUMBS_DB") or state.thumbs_db:
+        console.print(
+            "[yellow]warning:[/] a thumbs database is configured but the stub stages "
+            "never read it; add --pre-wired (or run `soup loop init --pre-wired`) to harvest it"
+        )
     if detach:
         argv = [
             sys.executable,
