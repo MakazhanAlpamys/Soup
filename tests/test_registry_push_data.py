@@ -10,6 +10,7 @@ from typer.testing import CliRunner
 
 from soup_cli.cli import app
 from soup_cli.registry.hashing import hash_entry, hash_file
+from tests.conftest import strip_ansi
 
 runner = CliRunner()
 
@@ -107,7 +108,7 @@ def test_show_marks_a_missing_data_hash(work):
 
 def _assert_refused_before_the_registry_opens(result, work, needle: str):
     assert result.exit_code == 1, (result.output, repr(result.exception))
-    assert needle in " ".join(result.output.split())
+    assert needle in " ".join(strip_ansi(result.output).split())
     assert not (work.parent / "reg.db").exists()
 
 
@@ -140,15 +141,12 @@ def test_data_outside_the_working_directory_is_refused(work, spelling):
     _assert_refused_before_the_registry_opens(result, work, "under the current working directory")
 
 
+@pytest.mark.requires_symlink
 def test_symlink_to_a_file_outside_is_refused(work):
     run_id = _finished_run(work.parent)
     outside = work.parent / "outside.jsonl"
     outside.write_text('{"text": "a"}\n', encoding="utf-8")
-    link = work / "train.jsonl"
-    try:
-        link.symlink_to(outside)
-    except OSError:
-        pytest.skip("symlinks are not available here")
+    (work / "train.jsonl").symlink_to(outside)
 
     result = _push(run_id, "--data", "train.jsonl")
 
@@ -179,7 +177,7 @@ def test_help_describes_what_data_records():
     result = runner.invoke(app, ["registry", "push", "--help"], env={"COLUMNS": "200"})
 
     assert result.exit_code == 0, (result.output, repr(result.exception))
-    text = " ".join(result.output.split())
+    text = " ".join(strip_ansi(result.output).split())
     assert "--data" in text
     assert "training input" in text
     assert "not proof" in text
