@@ -163,9 +163,12 @@ def test_schema_descriptions_have_no_expired_release_promises() -> None:
 
 
 def test_source_raise_messages_have_no_expired_release_promises() -> None:
+    paths = sorted((ROOT / "src" / "soup_cli").rglob("*.py"))
+    # Helper refusals must remain covered if the scan root changes.
+    assert ROOT / "src/soup_cli/utils/unlearning.py" in paths
     messages = [
         (path, line, text)
-        for path in (ROOT / "src" / "soup_cli").rglob("*.py")
+        for path in paths
         for line, text in _raise_messages(path)
     ]
     assert len(messages) >= 300
@@ -196,6 +199,7 @@ def test_unlearning_docstrings_have_no_expired_release_promises() -> None:
         SCHEMA_PATH,
         ROOT / "src/soup_cli/utils/unlearning.py",
         ROOT / "src/soup_cli/utils/unlearning_eval.py",
+        ROOT / "src/soup_cli/commands/_eval_v0610.py",
     )
     offenders = []
     for path in paths:
