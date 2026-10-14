@@ -323,6 +323,11 @@ class TestErrors:
 # ============================================================
 
 
+#: How long the loopback server stalls on ``/slow``. The timeout test proves the client gave
+#: up well before this; the handler thread is a daemon, so the stall never delays teardown.
+_SLOW_ROUTE_SECONDS = 6.0
+
+
 @pytest.fixture
 def loopback(monkeypatch):
     for scheme in ("HTTP", "HTTPS", "ALL"):
@@ -351,7 +356,7 @@ def loopback(monkeypatch):
                 elif route == "/limited":
                     self._send(429, b'{"message":"slow down"}', [("Retry-After", "7")])
                 elif route == "/slow":
-                    time.sleep(1.5)
+                    time.sleep(_SLOW_ROUTE_SECONDS)
                     self._send(200, b'{"data": [], "meta": {}}')
                 elif route == "/big":
                     self._send(200, b"x" * 4096)
@@ -427,7 +432,11 @@ class TestUrllibTransport:
         with pytest.raises(PullError) as info:
             _urllib_transport(f"{base}/slow", _creds(), 0.3)
 
-        assert time.monotonic() - started < 1.4
+        # The error must come from the client's 0.3 s timeout, not from the server finally
+        # answering: the server stalls for _SLOW_ROUTE_SECONDS, so anything well under that
+        # proves it. The 2 s margin is for a loaded Windows runner (1.7 s was measured against
+        # the former 1.4 s bound on 2026-10-14), not for the code under test.
+        assert time.monotonic() - started < _SLOW_ROUTE_SECONDS - 2.0
         assert "timed out" in str(info.value).lower()
 
     def test_a_refused_connection_is_a_pull_error(self):
