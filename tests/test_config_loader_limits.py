@@ -669,3 +669,30 @@ def test_adapters_audit_shows_a_syntax_error_as_written(in_tmp):
     assert result.exit_code == 1, (result.output, repr(result.exception))
     assert "Could not parse soup.yaml: while parsing a flow sequence" in output, output
     assert "data: [unclosed" in output, output
+
+
+@pytest.mark.parametrize(
+    ("content", "line_start", "line_rest"),
+    [
+        ("base: m\ndata: [unclosed\n", "Could not parse run", "while parsing a flow sequence"),
+        ("#" * (MAX_CONFIG_BYTES + 1), "Could not load run", "is larger than"),
+    ],
+    ids=["syntax-error", "over-size"],
+)
+def test_adapters_audit_shows_an_odd_config_path_and_its_message_without_control_characters(
+    in_tmp, content, line_start, line_rest
+):
+    """Both audit refusal lines quote the path; the size refusal quotes it in its message too."""
+    from soup_cli.cli import app
+
+    (in_tmp / "adapter").mkdir()
+    (in_tmp / "adapter" / "adapter_config.json").write_text("{}", encoding="utf-8")
+    (in_tmp / _ODD_NAME).write_text(content, encoding="utf-8")
+
+    result = CliRunner().invoke(app, ["adapters", "audit", "adapter", "--config", _ODD_NAME])
+
+    shown = _ANSI_RE.sub("", result.output)
+    assert result.exit_code == 1, (result.output, repr(result.exception))
+    assert line_start in _plain(result.output), result.output
+    assert line_rest in _plain(result.output), result.output
+    assert not [char for char in shown if char in "\x1b\x7f\x9b"], repr(shown)
