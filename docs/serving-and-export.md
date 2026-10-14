@@ -732,6 +732,16 @@ bypass the limit.
 
 **Interactive API docs are loopback-only.** `/openapi.json`, `/docs`, `/docs/oauth2-redirect` and `/redoc` serve on a loopback bind and are **absent** (404) on any other, including `soup ui --public`. This is deliberate rather than incidental: the schema exposes no run data, configuration or logs, but it does describe every route, parameter and request/response shape, and on a LAN bind that is free reconnaissance. Gating them behind the token instead was rejected — `/docs` is a browser navigation and Swagger cannot attach a Bearer header to it, so gating would break the page for a developer while leaving `/openapi.json` readable by any HTTP client. If you need the schema while bound publicly, read it from a loopback instance of the same version.
 
+**Host names on a loopback bind (#1829).** Use the bound host or `localhost`,
+`127.0.0.1` or `[::1]`, with the bound port. An omitted port means HTTP port 80;
+on any other port it must be included. Any other name or port gets
+`403 {"detail": "Host not allowed"}` before authentication, body reads or routes.
+This includes a proxy that rewrites `Host`, an SSH tunnel whose local port differs
+from the server's, or a custom DNS name. Missing, malformed or duplicate `Host`
+headers are also refused. These refusals carry the same security headers as other
+UI responses, including on the interactive docs paths. `--public` and other
+non-loopback binds keep the Bearer gate and do not apply this Host allow-list.
+
 ```bash
 # Custom port, don't auto-open browser
 soup ui --port 8080 --no-browser

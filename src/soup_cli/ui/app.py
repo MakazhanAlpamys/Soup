@@ -167,14 +167,15 @@ class _SecurityHeadersMiddleware:
             return
 
         exempt = scope.get("path") in self._policy_exempt_paths
-        extra = tuple(
-            (name, value)
-            for name, value in self._headers
-            if not (exempt and name == b"content-security-policy")
-        )
 
         async def send_with_headers(message) -> None:
             if message.get("type") == "http.response.start":
+                exempt_policy = exempt and message.get("status") == 200
+                extra = tuple(
+                    (name, value)
+                    for name, value in self._headers
+                    if not (exempt_policy and name == b"content-security-policy")
+                )
                 existing = list(message.get("headers", ()))
                 present = {name.lower() for name, _ in existing}
                 added = [(n, v) for n, v in extra if n not in present]
@@ -184,73 +185,68 @@ class _SecurityHeadersMiddleware:
         await self._app(scope, receive, send_with_headers)
 
 
-def _host_cache_key(host: str) -> str:
-    """One comparable key per host spelling: the IP itself when parseable."""
-    host = host.strip("[]")
+def _host_key(host: str) -> str:
+    """Normalize IP literals and case-insensitive hostnames for comparison."""
     try:
         return str(ipaddress.ip_address(host))
     except ValueError:
         return host.lower()
 
 
-def _host_header_allowed(value: str, allowed_hosts: "frozenset[str]") -> bool:
-    """True when a ``Host`` header names one of the allowed ``host:port`` strings.
-
-    Parses the header with the IPv6 brackets handled (``[::1]:7860``); a
-    header without a port means the scheme default port, which never matches
-    the bound port. An empty header, a bare non-IPv6 colon (``a:b:c``) or a
-    non-numeric port is refused.
-    """
+def _host_header_allowed(value: str, allowed_hosts: frozenset[tuple[str, int]]) -> bool:
+    """Match a single HTTP Host header against the served host and port pairs."""
     if not value:
         return False
     if value.startswith("["):
         host, sep, rest = value[1:].partition("]")
         if not sep:
             return False
+        try:
+            ipaddress.IPv6Address(host)
+        except ValueError:
+            return False
         if rest:
             if not rest.startswith(":"):
                 return False
             port_s = rest[1:]
         else:
-            port_s = ""
+            port_s = "80"
     else:
         host, sep, port_s = value.rpartition(":")
         if not sep:
-            host, port_s = value, ""
-        elif ":" in host or not port_s.isdigit():
-            # A bare multi-colon host is only valid bracketed, and a trailing
-            # colon or non-numeric port never names this server.
+            host, port_s = value, "80"
+        elif ":" in host:
             return False
-    return f"{_host_cache_key(host)}:{port_s}" in allowed_hosts
+    if not port_s.isascii() or not port_s.isdigit():
+        return False
+    # Strip leading zeroes before converting; an arbitrarily long port cannot
+    # overflow Python's integer-string conversion limit.
+    port_s = port_s.lstrip("0") or "0"
+    if len(port_s) > 5:
+        return False
+    return (_host_key(host), int(port_s)) in allowed_hosts
 
 
 class _HostAllowlistMiddleware:
-    """Refuse requests whose ``Host`` header is not one of the served names.
+    """Validate loopback HTTP hosts before routes, auth and body reads."""
 
-    Loopback binds only (#1829): the names a LAN client uses for a
-    ``--public`` bind are not known up front, and there the Bearer token
-    stays the gate. Pure ASGI, like the other middlewares here.
-    """
-
-    def __init__(self, app, allowed_hosts: "frozenset[str]") -> None:
+    def __init__(self, app, allowed_hosts: frozenset[tuple[str, int]]) -> None:
         self._app = app
         self._allowed_hosts = allowed_hosts
 
     async def __call__(self, scope, receive, send) -> None:
+        # The UI has no WebSocket routes; do not allow a future one to bypass
+        # this HTTP-only gate. Lifespan messages still pass through.
+        if scope.get("type") == "websocket":
+            await send({"type": "websocket.close", "code": 1008})
+            return
         if scope.get("type") != "http":
             await self._app(scope, receive, send)
             return
-        host_seen = False
-        allowed = False
-        for name, value in scope.get("headers", ()):
-            if name.decode("latin-1").lower() == "host":
-                host_seen = True
-                allowed = _host_header_allowed(
-                    value.decode("latin-1"), self._allowed_hosts
-                )
-                break
-        # A missing Host is refused like an unparsable one (#1829).
-        if not host_seen or not allowed:
+        hosts = [value for name, value in scope.get("headers", ()) if name.lower() == b"host"]
+        if len(hosts) != 1 or not _host_header_allowed(
+            hosts[0].decode("latin-1"), self._allowed_hosts
+        ):
             from starlette.responses import JSONResponse
 
             response = JSONResponse({"detail": "Host not allowed"}, status_code=403)
@@ -526,23 +522,21 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
             allow_headers=["Authorization", "Content-Type"],
         )
 
-    # Added last, so it is the outermost layer: a 413 from the size cap, a CORS
-    # preflight and every error response carry the content policy too.
+    # On loopback binds, validate the bound name and aliases before routes,
+    # authentication and body reads. Public binds keep the Bearer gate.
+    if _is_loopback(host):
+        allowed = frozenset(
+            (_host_key(name.strip("[]")), port)
+            for name in ("localhost", "127.0.0.1", "::1", host)
+        )
+        app.add_middleware(_HostAllowlistMiddleware, allowed_hosts=allowed)
+
+    # Added last, so refusals, body-size errors and CORS preflights carry the
+    # security headers as well as normal endpoint responses.
     app.add_middleware(
         _SecurityHeadersMiddleware,
         policy_exempt_paths=_POLICY_EXEMPT_PATHS if _docs_enabled else frozenset(),
     )
-
-    # #1829: on a loopback bind the server has exactly three names, so a
-    # request whose Host header names anything else (DNS rebinding, a
-    # hand-rolled client, a proxy) is refused before any route runs. The
-    # printed login URL is unchanged. --public binds keep the Bearer gate.
-    if _is_loopback(host):
-        allowed = frozenset(
-            f"{_host_cache_key(name)}:{port}"
-            for name in ("localhost", "127.0.0.1", "::1", host)
-        )
-        app.add_middleware(_HostAllowlistMiddleware, allowed_hosts=allowed)
 
     # #1191: `/?token=` swaps the token for an HttpOnly session cookie, so a
     # reload keeps the session without page script ever reading a credential.

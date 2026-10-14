@@ -257,7 +257,7 @@ soup reward stress ... --output-report r.json  Save the per-attack report JSON (
 soup tui                                      Full-screen Textual dashboard (requires [tui] extra)
 soup train --config soup.yaml --profile       Record torch.profiler trace to <output>/profiles/
 soup --log-level quiet|normal|verbose|debug   Global logging tier (Rich-formatted)
-soup ui [--port 7860]                         Web UI (experiments, training, data)
+soup ui [--port 7860]                         Web UI (experiments, training, data); loopback Host must name the bound host or localhost / 127.0.0.1 / [::1] with the bound port (omitted = HTTP 80), otherwise 403
 soup ui --public [--auth-token T]             Phone-scannable Web UI (v0.53.9); /docs + /openapi.json are loopback-only
 soup tokenizer train --input c.jsonl --vocab-size N  Train BPE tokenizer (v0.53.9)
 soup bench <model>                            Inference speed + memory (same as `soup bench infer <model>`)

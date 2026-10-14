@@ -15,7 +15,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from soup_cli.ui import app as ui_app
-from soup_cli.ui.app import create_app, get_auth_token
+from soup_cli.ui.app import get_auth_token
+from tests.ui_helpers import ui_client
 
 PORT = 7860
 COOKIE = f"soup_ui_session_{PORT}"
@@ -23,7 +24,7 @@ SAME_ORIGIN = "http://127.0.0.1:7860"
 
 
 def _client(host: str = "127.0.0.1") -> TestClient:
-    return TestClient(create_app(host=host, port=PORT), base_url=f"http://{host}:{PORT}")
+    return ui_client(host=host, port=PORT)
 
 
 def _sign_in(client: TestClient, query: str = ""):
@@ -68,7 +69,7 @@ class TestExchange:
         assert first != second
 
     def test_cookie_name_carries_the_port(self):
-        client = TestClient(create_app(host="127.0.0.1", port=8123), base_url="http://127.0.0.1:8123")
+        client = ui_client(port=8123)
         resp = client.get(f"/?token={get_auth_token()}", follow_redirects=False)
         assert "soup_ui_session_8123" in resp.cookies
 
@@ -130,7 +131,7 @@ class TestReloadKeepsTheSession:
         first = _sign_in(client).cookies[COOKIE]
         _sign_in(client)
         _sign_in(client)
-        probe = TestClient(client.app, base_url=f"http://127.0.0.1:{PORT}")
+        probe = ui_client(client.app, port=PORT)
         probe.cookies.set(COOKIE, first)
         assert probe.get("/api/train/status").status_code == 401
 

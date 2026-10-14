@@ -17,9 +17,9 @@ import pathlib
 
 import pytest
 
-pytest.importorskip("fastapi")
+from tests.ui_helpers import ui_client
 
-from fastapi.testclient import TestClient  # noqa: E402
+pytest.importorskip("fastapi")
 
 import soup_cli.ui.app as ui_mod  # noqa: E402
 from soup_cli.ui.app import (  # noqa: E402
@@ -46,9 +46,8 @@ class TestNonAsciiAuthorization:
     @pytest.fixture
     def client(self):
         # Default raise_server_exceptions=True ensures unhandled TypeErrors fail tests
-        return TestClient(
+        return ui_client(
             create_app(),
-            base_url="http://127.0.0.1:7860",
             raise_server_exceptions=True,
         )
 
@@ -101,9 +100,8 @@ class TestHappyPathParity:
 
     @pytest.fixture
     def client(self):
-        return TestClient(
+        return ui_client(
             create_app(),
-            base_url="http://127.0.0.1:7860",
             raise_server_exceptions=True,
         )
 

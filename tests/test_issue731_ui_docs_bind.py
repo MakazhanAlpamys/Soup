@@ -17,6 +17,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from soup_cli.ui.app import create_app, get_auth_token
+from tests.ui_helpers import ui_client
 
 # The four routes #731 is about. `/docs/oauth2-redirect` is derived from
 # `swagger_ui_oauth2_redirect_url`, not from `docs_url`, so it is listed
@@ -130,7 +131,7 @@ class TestLoopbackKeepsTheDeveloperConvenience:
 
     @pytest.mark.parametrize("route", DOC_ROUTES)
     def test_docs_still_serve_on_loopback(self, route):
-        client = TestClient(create_app(host=LOOPBACK), base_url="http://127.0.0.1:7860")
+        client = ui_client(create_app(host=LOOPBACK))
         assert client.get(route).status_code == 200, (
             f"{route} stopped serving on a {LOOPBACK} bind; the fix is scoped "
             "to non-loopback binds and must not take the local docs with it"

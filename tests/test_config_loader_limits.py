@@ -19,6 +19,7 @@ from soup_cli.utils.yaml_limits import (
     MAX_YAML_NESTING,
     YamlLimitError,
 )
+from tests.ui_helpers import ui_client
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
@@ -585,13 +586,12 @@ def test_command_still_loads_a_config_at_the_size_limit(in_tmp, argv):
 @pytest.mark.parametrize("limit", ["nesting", "aliases"])
 def test_web_ui_reports_the_refusal_as_an_invalid_config(limit):
     pytest.importorskip("fastapi")
-    from fastapi.testclient import TestClient
 
     from soup_cli.ui.app import create_app, get_auth_token
 
     make_text, make_message = _OVER_LIMIT[limit]
     text = make_text()
-    with TestClient(create_app()) as client:
+    with ui_client(create_app()) as client:
         response = client.post(
             "/api/config/validate",
             json={"yaml": text},
