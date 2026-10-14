@@ -8,7 +8,10 @@ is ``".5"``. The list form (``data.train: [a, b]`` with ``data.interleave``) was
 fixed in #468 by classifying each entry with ``loader._classify_train_entry``
 (local only when the suffix is one of ``SUPPORTED_EXTENSIONS``); the single
 string now goes through the same function, so the two spellings of one dataset
-name cannot disagree.
+name cannot disagree. One check is added on top for the single string: a string
+with a suffix that is an existing file is a local file whatever the suffix, so a
+real ``data.tsv`` still gets the loader's "Unsupported file format" error rather
+than a Hub lookup.
 
 Each test records the branch ``load_dataset`` takes by replacing the three
 loaders with stubs, so nothing touches the network or the disk.
@@ -188,32 +191,104 @@ def test_remote_uri_keeps_routing_to_the_remote_loader(route_of, uri):
 
 
 # ---------------------------------------------------------------------------
-# A dotted name that also exists on disk: the list form's precedence.
+# A name that also exists on disk. The classifier is lexical (the list form
+# and the schema never ask the file system); `load_dataset` adds one check on
+# top for the single string: a string with a non-empty suffix that IS a file
+# is a local file, so a real file with an unsupported extension still gets
+# load_raw_data's "Unsupported file format" error instead of a Hub lookup.
 # ---------------------------------------------------------------------------
 
-
-def test_dotted_name_that_exists_as_a_directory_is_still_a_hub_id(route_of, tmp_path):
-    # The classifier is lexical -- it never asks the file system -- so an
-    # existing directory called "name-2.5" does not turn the id into a local
-    # path (datasets.load_dataset itself accepts a local directory).
-    local_dir = tmp_path / "org" / "name-2.5"
-    local_dir.mkdir(parents=True)
-    assert route_of(str(local_dir)) == ("hub", str(local_dir))
+UNSUPPORTED_FILE_NAMES = ["data.tsv", "train.jsonl.gz", "data.xlsx"]
 
 
-def test_dotted_name_that_exists_as_a_file_is_still_a_hub_id(route_of, tmp_path):
-    odd_file = tmp_path / "name-2.5"
-    odd_file.write_text("x", encoding="utf-8")
-    assert route_of(str(odd_file)) == ("hub", str(odd_file))
-
-
-def test_relative_dotted_name_does_not_depend_on_the_working_directory(
-    route_of, tmp_path, monkeypatch
+@pytest.mark.parametrize("filename", UNSUPPORTED_FILE_NAMES)
+def test_existing_file_with_an_unsupported_extension_routes_to_the_local_loader(
+    route_of, tmp_path, filename
 ):
+    data_file = tmp_path / filename
+    data_file.write_text("x", encoding="utf-8")
+    route, target = route_of(str(data_file))
+    assert (route, Path(target)) == ("local", data_file)
+
+
+@pytest.mark.parametrize("filename", UNSUPPORTED_FILE_NAMES)
+def test_existing_relative_file_with_an_unsupported_extension_routes_to_the_local_loader(
+    route_of, tmp_path, monkeypatch, filename
+):
+    (tmp_path / filename).write_text("x", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    assert route_of(filename) == ("local", filename)
+
+
+@pytest.mark.parametrize(
+    ("filename", "extension"),
+    [("data.tsv", ".tsv"), ("train.jsonl.gz", ".gz"), ("data.xlsx", ".xlsx")],
+)
+def test_existing_file_with_an_unsupported_extension_ends_in_the_unsupported_format_error(
+    monkeypatch, tmp_path, filename, extension
+):
+    # Through the real load_dataset and the real load_raw_data; the Hub and
+    # remote loaders fail loudly if they are ever reached.
+    def must_not_run(*args, **kwargs):
+        raise AssertionError("an existing local file must not reach the Hub/remote loader")
+
+    monkeypatch.setattr(loader, "_load_hf_dataset", must_not_run)
+    monkeypatch.setattr(loader, "_load_remote_dataset", must_not_run)
+    data_file = tmp_path / filename
+    data_file.write_text("x", encoding="utf-8")
+
+    config = DataConfig(train=str(data_file), format="plaintext", val_split=0.0)
+    with pytest.raises(ValueError, match=rf"Unsupported file format: {extension}\. Supported:"):
+        loader.load_dataset(config)
+
+
+@pytest.mark.parametrize("filename", UNSUPPORTED_FILE_NAMES)
+def test_missing_file_with_an_unsupported_extension_routes_to_the_hub_loader(
+    route_of, tmp_path, monkeypatch, filename
+):
+    # No such file: the lexical rule applies, as in the list form.
+    assert route_of(str(tmp_path / filename)) == ("hub", str(tmp_path / filename))
+    monkeypatch.chdir(tmp_path)
+    assert route_of(filename) == ("hub", filename)
+
+
+def test_dotted_name_that_exists_as_a_file_is_a_local_file(route_of, tmp_path, monkeypatch):
+    # A file literally called "org/name-2.5" is what the string names.
     (tmp_path / "org").mkdir()
     (tmp_path / "org" / "name-2.5").write_text("x", encoding="utf-8")
     monkeypatch.chdir(tmp_path)
+    assert route_of("org/name-2.5") == ("local", str(Path("org/name-2.5")))
+
+
+def test_dotted_name_that_exists_as_a_directory_is_still_a_hub_id(
+    route_of, tmp_path, monkeypatch
+):
+    # A directory keeps the Hub route (datasets.load_dataset itself accepts a
+    # local directory), so the id is not turned into a local file path.
+    (tmp_path / "org" / "name-2.5").mkdir(parents=True)
+    monkeypatch.chdir(tmp_path)
     assert route_of("org/name-2.5") == ("hub", "org/name-2.5")
+    absolute = str(tmp_path / "org" / "name-2.5")
+    assert route_of(absolute) == ("hub", absolute)
+
+
+def test_dotted_name_with_no_such_file_is_a_hub_id(route_of, tmp_path, monkeypatch):
+    (tmp_path / "org").mkdir()
+    monkeypatch.chdir(tmp_path)
+    assert route_of("org/name-2.5") == ("hub", "org/name-2.5")
+
+
+def test_existing_file_without_an_extension_keeps_routing_to_the_hub_loader(
+    route_of, tmp_path, monkeypatch
+):
+    # Only a string WITH a suffix is checked against the disk: a Hub id such as
+    # "imdb" must not turn into a local path because a file of that name sits
+    # in the working directory. Same route as before.
+    (tmp_path / "imdb").write_text("x", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    assert route_of("imdb") == ("hub", "imdb")
+    absolute = str(tmp_path / "imdb")
+    assert route_of(absolute) == ("hub", absolute)
 
 
 # ---------------------------------------------------------------------------
@@ -242,7 +317,13 @@ PARITY_NAMES = [
 
 
 @pytest.mark.parametrize("name", PARITY_NAMES)
-def test_single_string_route_matches_the_list_form_and_the_schema(route_of, name):
+def test_single_string_route_matches_the_list_form_and_the_schema(
+    route_of, name, tmp_path, monkeypatch
+):
+    # In an empty directory, so no name here exists on disk: the file check in
+    # load_dataset (tested above) is the only thing that may differ from the
+    # classifier, and only for a string that is a real file.
+    monkeypatch.chdir(tmp_path)
     kind = loader._classify_train_entry(name)
     assert route_of(name)[0] == kind
     assert _classify_data_train_entry(name) == kind
