@@ -375,7 +375,13 @@ released as a penalty.
   requests are not closed: a comment says what they wait behind, and they may be
   converted to drafts. Mark one ready for review when another lands.
 - **Claims.** Hold at most 2 claims whose pull request is not open yet. A comment without
-  a plan is read as a question, not as a claim.
+  a plan is read as a question, not as a claim. A claim that is blocked on another issue
+  (`infra-blocked`, or "lands after #N" in the thread) does not take one of the two slots,
+  and neither does a claim whose pull request is open and waiting only for the merge line.
+- **Regression tests.** A bug-fix pull request carries a test that fails on `main` without
+  the fix; the review checks that, and checks that undoing the fix makes the test fail.
+  Merged pull requests that meet this get the `regression-test` label, visible in the
+  pull-request list.
 - **A quiet claim.** With no pull request and no word from you for 7 days, you get a
   friendly check-in in the thread. If another 7 days pass without an answer, the claim is
   released with a comment. Nothing you wrote is lost, and you can take it back.
