@@ -585,3 +585,34 @@ def test_watch_does_not_warn_without_a_thumbs_database(cwd, monkeypatch, env):
 
     assert result.exit_code == 0, text
     assert "--pre-wired" not in text, text
+
+
+# --- a Rich tag in a refused path stays literal (#1440) ----------------------
+
+
+def test_init_refusal_keeps_rich_tags_in_the_path_literal(cwd):
+    from soup_cli.cli import app
+
+    result = CliRunner().invoke(app, [
+        "loop", "init", "registry://m", "--eval", "suite.yaml", "--baseline", "b",
+        "--thumbs-db", "../db[bold]x.db",
+    ])
+    plain = " ".join(strip_ansi(result.output).split())
+
+    assert result.exit_code == 2, plain
+    assert "invalid --thumbs-db:" in plain, plain
+    assert "db[bold]x.db" in plain, plain  # the brackets survive; nothing is parsed as markup
+    assert "'dbx.db'" not in plain, plain
+
+
+def test_watch_refusal_keeps_rich_tags_in_the_path_literal(cwd, monkeypatch):
+    (cwd / "db[bold]x.db").write_text("not a database", encoding="utf-8")
+    _init_loop(True)
+    monkeypatch.setenv("SOUP_LOOP_THUMBS_DB", "db[bold]x.db")
+
+    result, text = _watch()
+
+    assert result.exit_code == 2, text
+    assert "invalid thumbs database:" in text, text
+    assert "db[bold]x.db" in text, text  # the brackets survive; nothing is parsed as markup
+    assert "'dbx.db'" not in text, text
