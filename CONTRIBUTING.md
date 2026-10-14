@@ -393,6 +393,32 @@ something that fits your time and experience. How the number is chosen and what 
 means is in [docs/issue-difficulty.md](docs/issue-difficulty.md). When you open an issue you
 can suggest a difficulty in the form; the maintainer sets the final one.
 
+### Maintained areas
+
+Contributors with 3 or more merged pull requests can hold an area: a part of the project to
+own end to end, from triage to the last follow-up. An area has an `area:<name>` label and a
+tracker issue that lists its open items. Holding an area means:
+
+- **First refusal on new issues.** When a maintainer triages an issue with the area's label,
+  the holder is pinged, and the issue stays with them for 3 days before it is open to anyone.
+- **A higher open-pull-request line.** Inside the area the limit from
+  [How work is queued](#how-work-is-queued) is two higher than your usual one.
+- **No new powers.** The holder is a contributor, not a maintainer: reviews and merges stay
+  with the maintainers.
+
+An area is released the way a claim is: after 14 quiet days you get a check-in in the tracker
+issue, and if another 7 days pass without an answer it is released with a comment. You can
+take it back.
+
+| Holder | Area | Label |
+|--------|------|-------|
+| @kok-o | Data pipeline and traces | `area:data` |
+| @Nari-Ab | CLI and help text | `area:cli` |
+| @ybai08 | ReLoRA, preference training and layer streaming | `area:training` |
+| @taljeon | Eval gate | `area:eval` |
+| @akkupratap323 | Ingest and feedback sources | `area:ingest` |
+| @dryn85-max | The MLX backend (from the first merge) | `area:mlx` |
+
 ## Making Changes
 
 ### 1. Create a Branch
