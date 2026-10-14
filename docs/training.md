@@ -1706,7 +1706,9 @@ output: ./output_ppo
 `epochs` controls complete passes over the training dataset. `ppo_epochs`
 controls optimization passes within each PPO update. Soup forwards both values,
 plus `ppo_kl_penalty`, to the active TRL `PPOConfig` names and prints the
-effective schedule during setup.
+effective schedule during setup. `data.max_length` sets PPO's response length
+(moving the default from TRL's 53 to `data.max_length`), `--deepspeed` is forwarded,
+and `save_total_limit=3` keeps up to 3 checkpoints.
 
 One PPO rollout batch is `batch_size` x `gradient_accumulation_steps` prompts on
 every process, and TRL drops a partial batch, so the train set needs at least

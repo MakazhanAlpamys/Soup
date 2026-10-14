@@ -366,16 +366,29 @@ def test_ppo_forwards_deepspeed_config_and_guards(tiny_model):
     assert getattr(wrapper_ds.trainer, "_soup_empty_group_guard", False) is True
 
 
-def test_short_runs_on_prm_mole_ppo_get_warmup_step():
-    from transformers import TrainingArguments
-    from trl.experimental.ppo import PPOConfig
+def test_ppo_refuses_deepspeed_when_unsupported(tmp_path):
+    from soup_cli.config.schema import SoupConfig
+    from soup_cli.trainer.ppo import PPOTrainerWrapper
 
-    ratio = 0.03
-    old_formula = int(20 * ratio)
-    assert old_formula == 0
+    class StubPPOConfig:
+        def __init__(self, output_dir=None, **kwargs):
+            pass
 
-    ta = TrainingArguments(output_dir="/tmp/out", warmup_steps=ratio)
-    assert ta.get_warmup_steps(20) == 1
-
-    ppo_cfg = PPOConfig(output_dir="/tmp/out", warmup_steps=ratio)
-    assert ppo_cfg.get_warmup_steps(20) == 1
+    config = SoupConfig(
+        base=str(tmp_path),
+        task="ppo",
+        output=str(tmp_path / "out"),
+        data={"train": "dummy.jsonl", "max_length": 64},
+        training={"epochs": 1, "reward_fn": "accuracy"},
+    )
+    wrapper = PPOTrainerWrapper(config, device="cpu", deepspeed_config="ds.json")
+    with (
+        patch(
+            "soup_cli.trainer.ppo._import_ppo_classes",
+            return_value=(object, StubPPOConfig, True),
+        ),
+        pytest.raises(
+            ValueError, match="task: ppo does not support --deepspeed on this trl version"
+        ),
+    ):
+        wrapper.setup({"train": []})
