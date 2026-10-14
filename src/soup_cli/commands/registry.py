@@ -42,12 +42,36 @@ def _require_entry(store: RegistryStore, ref: str) -> dict:
     return entry
 
 
+def _data_file(path: str) -> str:
+    """The ``--data`` file, refused before any database is opened."""
+    from pathlib import Path
+
+    from soup_cli.utils.paths import is_under_cwd
+
+    file_path = Path(path)
+    if not file_path.exists():
+        _fail(f"--data file not found: {path}")
+    if not file_path.is_file():
+        _fail(f"--data is not a file: {path}")
+    if not is_under_cwd(file_path):
+        _fail(f"--data must be under the current working directory: {path}")
+    return str(file_path)
+
+
 @app.command("push")
 def push_cmd(
     run_id: str = typer.Option(..., "--run-id", help="Training run id to register"),
     name: str = typer.Option(..., "--name", "-n", help="Registry entry name"),
     tag: str = typer.Option("v1", "--tag", "-t", help="Tag (e.g. v1, prod-2024)"),
     notes: str = typer.Option("", "--notes", help="Free-form notes"),
+    data: Optional[str] = typer.Option(
+        None, "--data",
+        help=(
+            "Training data file to record: its SHA-256 is stored as data_hash. "
+            "This is the file registered as the training input, not proof of "
+            "what the run trained on. Must be a file under the current directory."
+        ),
+    ),
 ) -> None:
     """Register a completed training run as a registry entry."""
     try:
@@ -55,6 +79,7 @@ def push_cmd(
         validate_tag(tag)
     except ValueError as exc:
         _fail(f"Invalid input: {exc}")
+    data_path = _data_file(data) if data is not None else None
 
     from soup_cli.experiment.tracker import ExperimentTracker
 
@@ -66,7 +91,7 @@ def push_cmd(
             try:
                 entry_id = store.register_from_run(
                     tracker, run_id, name=name, tag=tag,
-                    notes=notes or None,
+                    notes=notes or None, data_path=data_path,
                 )
             except ValueError as exc:
                 _fail(str(exc))
@@ -150,6 +175,7 @@ def show_cmd(
             ("task", entry["task"]),
             ("run_id", entry.get("run_id") or "-"),
             ("entry_hash", entry.get("entry_hash", "")[:16] + "..."),
+            ("data_hash", (entry["data_hash"][:16] + "...") if entry.get("data_hash") else "-"),
             ("created_at", entry["created_at"]),
             ("notes", entry.get("notes") or ""),
         ]
