@@ -8516,6 +8516,7 @@ training:
     alpha: 16
     target_modules: auto
   quantization: 4bit
+  gradient_checkpointing: true
   grpo_beta: 0.1
   num_generations: 4
   reward_fn: accuracy
@@ -8662,6 +8663,7 @@ training:
     alpha: 16
     target_modules: auto
   quantization: 4bit
+  gradient_checkpointing: true
   bco_beta: 0.1
 
 output: ./output
@@ -8723,6 +8725,7 @@ training:
     alpha: 16
     target_modules: auto
   quantization: 4bit
+  gradient_checkpointing: true
   ipo_tau: 0.1
 
 output: ./output

@@ -367,6 +367,7 @@
       "data.train": "./data/reasoning_train.jsonl",
       "task": "grpo",
       "training.gradient_accumulation_steps": 8,
+      "training.gradient_checkpointing": true,
       "training.lora.alpha": 64,
       "training.lora.r": 32,
       "training.lr": 1e-05
@@ -378,6 +379,7 @@
       "data.train": "./data/reasoning_train.jsonl",
       "task": "grpo",
       "training.gradient_accumulation_steps": 8,
+      "training.gradient_checkpointing": true,
       "training.lora.alpha": 32,
       "training.lora.r": 16,
       "training.lr": 1e-05
@@ -475,6 +477,7 @@
       "task": "grpo",
       "training.epochs": 1,
       "training.gradient_accumulation_steps": 16,
+      "training.gradient_checkpointing": true,
       "training.lora.alpha": 64,
       "training.lora.r": 32,
       "training.lr": 5e-06,
@@ -730,6 +733,7 @@
       "task": "grpo",
       "training.batch_size": 4,
       "training.epochs": 1,
+      "training.gradient_checkpointing": true,
       "training.grpo_beta": 0.04,
       "training.lora.alpha": 32,
       "training.lora.r": 16,
@@ -747,6 +751,7 @@
       "task": "grpo",
       "training.batch_size": 4,
       "training.epochs": 1,
+      "training.gradient_checkpointing": true,
       "training.grpo_beta": 0.04,
       "training.lora.alpha": 32,
       "training.lora.r": 16,
@@ -764,6 +769,7 @@
       "task": "grpo",
       "training.batch_size": 4,
       "training.epochs": 1,
+      "training.gradient_checkpointing": true,
       "training.grpo_beta": 0.04,
       "training.lora.alpha": 32,
       "training.lora.r": 16,
@@ -815,6 +821,7 @@
       "training.batch_size": 1,
       "training.epochs": 1,
       "training.gradient_accumulation_steps": 8,
+      "training.gradient_checkpointing": true,
       "training.grpo_beta": 0.04,
       "training.lora.alpha": 32,
       "training.lora.r": 16,
@@ -979,6 +986,7 @@
       "data.train": "./data/reasoning_train.jsonl",
       "task": "grpo",
       "training.gradient_accumulation_steps": 8,
+      "training.gradient_checkpointing": true,
       "training.lora.alpha": 32,
       "training.lora.r": 16,
       "training.lr": 1e-05
@@ -988,6 +996,7 @@
       "data.format": "dpo",
       "data.train": "./data/preference_train.jsonl",
       "task": "ipo",
+      "training.gradient_checkpointing": true,
       "training.lora.alpha": 32,
       "training.lora.r": 16,
       "training.lr": 1e-05
@@ -1134,6 +1143,7 @@
       "data.train": "./data/reasoning_train.jsonl",
       "task": "grpo",
       "training.gradient_accumulation_steps": 8,
+      "training.gradient_checkpointing": true,
       "training.lora.alpha": 32,
       "training.lora.r": 16,
       "training.lr": 1e-05
@@ -1319,6 +1329,7 @@
       "data.train": "./data/prompts.jsonl",
       "task": "online_dpo",
       "training.epochs": 1,
+      "training.gradient_checkpointing": true,
       "training.lora.r": 8,
       "training.lr": 5e-05,
       "training.online_dpo_judge": "ollama://llama3.1",
@@ -1380,6 +1391,7 @@
       "data.train": "./data/reasoning_train.jsonl",
       "task": "grpo",
       "training.gradient_accumulation_steps": 8,
+      "training.gradient_checkpointing": true,
       "training.lora.alpha": 32,
       "training.lora.r": 16,
       "training.lr": 1e-05
@@ -1522,6 +1534,7 @@
       "data.train": "./data/reasoning_train.jsonl",
       "task": "grpo",
       "training.gradient_accumulation_steps": 8,
+      "training.gradient_checkpointing": true,
       "training.lora.alpha": 32,
       "training.lora.r": 16,
       "training.lr": 1e-05
@@ -1545,6 +1558,7 @@
       "output": "./output_rm",
       "task": "reward_model",
       "training.epochs": 1,
+      "training.gradient_checkpointing": true,
       "training.lora.alpha": 32,
       "training.lora.r": 16,
       "training.lr": 1e-05
@@ -1674,6 +1688,7 @@
       "data.train": "./data/reasoning_train.jsonl",
       "task": "grpo",
       "training.gradient_accumulation_steps": 8,
+      "training.gradient_checkpointing": true,
       "training.lora.alpha": 32,
       "training.lora.r": 16,
       "training.lr": 1e-05
@@ -1723,6 +1738,7 @@
       "data.train": "./data/reasoning_train.jsonl",
       "task": "grpo",
       "training.gradient_accumulation_steps": 8,
+      "training.gradient_checkpointing": true,
       "training.lora.alpha": 32,
       "training.lora.r": 16,
       "training.lr": 1e-05
@@ -1766,6 +1782,7 @@
       "data.train": "./data/reasoning_train.jsonl",
       "task": "grpo",
       "training.gradient_accumulation_steps": 8,
+      "training.gradient_checkpointing": true,
       "training.lora.alpha": 32,
       "training.lora.r": 16,
       "training.lr": 1e-05
@@ -1870,6 +1887,7 @@
       "data.train": "./data/reasoning_train.jsonl",
       "task": "grpo",
       "training.gradient_accumulation_steps": 8,
+      "training.gradient_checkpointing": true,
       "training.lora.alpha": 32,
       "training.lora.r": 16,
       "training.lr": 1e-05
@@ -1901,6 +1919,7 @@
       "data.train": "./data/reasoning_train.jsonl",
       "task": "grpo",
       "training.gradient_accumulation_steps": 8,
+      "training.gradient_checkpointing": true,
       "training.lora.alpha": 32,
       "training.lora.r": 16,
       "training.lr": 1e-05
@@ -2002,6 +2021,7 @@
       "data.train": "./data/reasoning_train.jsonl",
       "task": "grpo",
       "training.gradient_accumulation_steps": 8,
+      "training.gradient_checkpointing": true,
       "training.lora.alpha": 32,
       "training.lora.r": 16,
       "training.lr": 1e-05
@@ -2013,6 +2033,7 @@
       "data.train": "./data/reasoning_train.jsonl",
       "task": "grpo",
       "training.gradient_accumulation_steps": 8,
+      "training.gradient_checkpointing": true,
       "training.lora.alpha": 32,
       "training.lora.r": 16,
       "training.lr": 1e-05
@@ -2024,6 +2045,7 @@
       "data.train": "./data/reasoning_train.jsonl",
       "task": "grpo",
       "training.gradient_accumulation_steps": 8,
+      "training.gradient_checkpointing": true,
       "training.lora.alpha": 32,
       "training.lora.r": 16,
       "training.lr": 1e-05
