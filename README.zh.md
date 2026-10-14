@@ -113,10 +113,10 @@ NF4 达到 **952 MHz 下 119.6 tok/s，峰值 3.32 GB**（修复前）——与�
   `dr_grpo`、`bnpo`、`two_sided` 和 `rft` 以前会校验 `grpo_beta` 然后把它丢掉，因此已有的 variant
   配置无法复现此前的运行结果。`grpo_beta: 0` 现在无 KL 运行，并跳过参考模型的前向传播。
 - **Layer streaming 在后台线程中通过直接 I/O 读取其磁盘存储层，并且可以跨 NVMe 驱动器做条带化。**
-  在一个比内存还大的 36 GB、70B 规模的 NF4 模型存储上（一台 RTX 5070 Laptop 8 GB 机器），冷启动的一步
+  在一个比内存还大的 36 GB、70B 形态的 NF4 存储上（一台 RTX 5070 Laptop 8 GB 机器），冷启动的一步
   从同步读取的 110.5 s 降到 16.2-17.3 s，而借助 `SOUP_LAYER_STREAM_STRIPE_DIRS` 跨两块驱动器后，
   从 17.4 s 降到 9.97 s（持续负载探测：两轮，1.28x 和 1.41x，没有正式判定；
-  [记录](benchmarks/probe-rtx5070-two-drive-sustained.md)）。能装进内存的数据放在内存存储层上仍然更快，
+  [记录](benchmarks/probe-rtx5070-two-drive-sustained.md)）。能装进内存的存储在内存层上仍然更快，
   `stream_source: auto` 会选择它。需显式开启（`stream_layers: true`），仍是 BETA；
   记录：[直接 I/O](benchmarks/gate-974-disk-tier-direct-io.md)、
   [条带化](benchmarks/gate-two-drive-striping.md)。
