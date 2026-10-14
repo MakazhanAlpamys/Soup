@@ -86,6 +86,7 @@ def _infer_env(monkeypatch, tmp_path, prompts, generate):
     (tmp_path / "prompts.txt").write_text("\n".join(prompts) + "\n")
     monkeypatch.setattr("soup_cli.utils.gpu.detect_device", lambda: ("cpu", None))
     monkeypatch.setattr("torch.cuda.is_available", lambda: False)
+    monkeypatch.setattr("soup_cli.utils.cuda_graphs._is_cuda_available_light", lambda: True)
     monkeypatch.setattr("soup_cli.utils.cuda_graphs.cuda_graph_generation_kwargs", lambda model: {})
     monkeypatch.setattr(infer, "_load_model", MagicMock(return_value=(object(), object())))
     monkeypatch.setattr(infer, "_count_prompt_tokens", lambda tokenizer, text: len(text.split()))
@@ -166,6 +167,7 @@ def test_unsupported_graph_model_preserves_existing_output(monkeypatch, tmp_path
     output = tmp_path / "output.jsonl"
     output.write_text("previous results\n")
     monkeypatch.setattr("soup_cli.utils.gpu.detect_device", lambda: ("cpu", None))
+    monkeypatch.setattr("soup_cli.utils.cuda_graphs._is_cuda_available_light", lambda: True)
     monkeypatch.setattr(infer, "_load_model", MagicMock(return_value=(object(), object())))
     reject = MagicMock(side_effect=RuntimeError("Unsupported model for CUDA graphs"))
     monkeypatch.setattr("soup_cli.utils.cuda_graphs.cuda_graph_generation_kwargs", reject)
@@ -181,6 +183,20 @@ def test_unsupported_graph_model_preserves_existing_output(monkeypatch, tmp_path
     assert "Omit --cuda-graphs" in _plain(result.output)
     assert output.read_text() == "previous results\n"
     generate.assert_not_called()
+
+
+def test_cpu_refusal_happens_before_the_model_loads(monkeypatch, tmp_path):
+    from soup_cli.cli import app
+    from soup_cli.commands import infer
+
+    model_dir = _infer_env(monkeypatch, tmp_path, ["question"], MagicMock())
+    monkeypatch.setattr("soup_cli.utils.cuda_graphs._is_cuda_available_light", lambda: False)
+    load = MagicMock()
+    monkeypatch.setattr(infer, "_load_model", load)
+    result = CliRunner().invoke(app, _infer_args(model_dir, "--cuda-graphs"))
+    assert result.exit_code == 1
+    assert "single CUDA device" in _plain(result.output)
+    load.assert_not_called()
 
 
 def test_infer_warms_up_greedily_on_the_longest_prompt_before_writing(monkeypatch, tmp_path):

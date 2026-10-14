@@ -21,6 +21,13 @@ import sys
 
 import pytest
 
+from tests.conftest import strip_ansi
+
+
+def _plain(text: str) -> str:
+    """Whitespace-collapsed, ANSI-stripped output."""
+    return " ".join(strip_ansi(text).split())
+
 # Heavy deps that the documented "light core" (v0.71.0 deps-split) excludes.
 # These live behind the [train] extra; the CLI must import without them.
 HEAVY = ("torch", "transformers", "accelerate", "peft", "trl", "datasets", "bitsandbytes")
@@ -276,7 +283,8 @@ def _invoke_with_probe(argv: list[str], monkey_patch_code: str = "") -> tuple[in
     return int(exit_code_str), leaked, output
 
 
-def test_bench_train_warmup_refusal_is_light(tmp_path):
+@pytest.mark.parametrize(("steps", "warmup"), [("2", "5"), ("2", "2")])
+def test_bench_train_warmup_refusal_is_light(tmp_path, steps, warmup):
     """bench train --steps <= --warmup must refuse before loading torch (#1817)."""
     cfg_file = tmp_path / "soup.yaml"
     cfg_file.write_text(
@@ -291,10 +299,13 @@ def test_bench_train_warmup_refusal_is_light(tmp_path):
         encoding="utf-8",
     )
     exit_code, leaked, output = _invoke_with_probe(
-        ["bench", "train", "-c", str(cfg_file), "--steps", "2", "--warmup", "5"]
+        ["bench", "train", "-c", str(cfg_file), "--steps", steps, "--warmup", warmup]
     )
     assert exit_code == 1
-    assert "--steps 2 leaves nothing after --warmup 5: raise --steps or lower --warmup." in output
+    assert (
+        f"--steps {steps} leaves nothing after --warmup {warmup}: raise "
+        f"--steps or lower --warmup."
+    ) in _plain(output)
     assert not leaked, f"bench train early refusal pulled in {leaked}"
 
 
@@ -304,7 +315,7 @@ def test_recipes_verify_missing_config_refusal_is_light():
         ["recipes", "verify", "-c", "nonexistent_recipe_file.yaml"]
     )
     assert exit_code == 3
-    assert "Config not found: nonexistent_recipe_file.yaml" in output
+    assert "Config not found: nonexistent_recipe_file.yaml" in _plain(output)
     assert not leaked, f"recipes verify missing config pulled in {leaked}"
 
 
@@ -316,12 +327,15 @@ def test_recipes_verify_unparseable_config_refusal_is_light(tmp_path):
         ["recipes", "verify", "-c", str(bad_cfg)]
     )
     assert exit_code == 3
-    assert "Config does not parse:" in output
+    assert "Config does not parse:" in _plain(output)
     assert not leaked, f"recipes verify unparseable config pulled in {leaked}"
 
 
 def test_cuda_graphs_cpu_refusal_is_light(tmp_path):
     """infer and bench infer with --cuda-graphs on CPU must exit before loading torch (#1817)."""
+    model_dir = tmp_path / "model"
+    model_dir.mkdir(exist_ok=True)
+    (model_dir / "config.json").write_text("{}", encoding="utf-8")
     prompt_file = tmp_path / "prompts.jsonl"
     prompt_file.write_text('{"prompt": "hello"}\n', encoding="utf-8")
     out_file = tmp_path / "out.jsonl"
@@ -333,11 +347,11 @@ def test_cuda_graphs_cpu_refusal_is_light(tmp_path):
     # bench infer on CPU (force CPU via CUDA_VISIBLE_DEVICES="" probe environment)
     env_code = "import os; os.environ['CUDA_VISIBLE_DEVICES'] = ''"
     exit_code, leaked, output = _invoke_with_probe(
-        ["bench", "infer", "Qwen/Qwen2.5-0.5B", "--cuda-graphs"],
+        ["bench", "infer", str(model_dir), "--cuda-graphs"],
         monkey_patch_code=env_code,
     )
     assert exit_code == 1
-    assert expected_msg in " ".join(output.split())
+    assert expected_msg in _plain(output)
     assert not leaked, f"bench infer --cuda-graphs pulled in {leaked}"
 
     # infer on CPU without --device
@@ -345,7 +359,7 @@ def test_cuda_graphs_cpu_refusal_is_light(tmp_path):
         [
             "infer",
             "-m",
-            "Qwen/Qwen2.5-0.5B",
+            str(model_dir),
             "-i",
             str(prompt_file),
             "-o",
@@ -355,7 +369,7 @@ def test_cuda_graphs_cpu_refusal_is_light(tmp_path):
         monkey_patch_code=env_code,
     )
     assert exit_code == 1
-    assert expected_msg in " ".join(output.split())
+    assert expected_msg in _plain(output)
     assert not leaked, f"infer --cuda-graphs pulled in {leaked}"
 
     # infer on explicit --device cpu
@@ -363,7 +377,7 @@ def test_cuda_graphs_cpu_refusal_is_light(tmp_path):
         [
             "infer",
             "-m",
-            "Qwen/Qwen2.5-0.5B",
+            str(model_dir),
             "-i",
             str(prompt_file),
             "-o",
@@ -374,6 +388,19 @@ def test_cuda_graphs_cpu_refusal_is_light(tmp_path):
         ],
     )
     assert exit_code == 1
-    assert expected_msg in " ".join(output.split())
+    assert expected_msg in _plain(output)
     assert not leaked, f"infer --device cpu --cuda-graphs pulled in {leaked}"
+
+
+def test_check_steps_warmup_logic():
+    """check_steps_warmup helper catches steps <= warmup without pulling in torch."""
+    from soup_cli.bench.train_run import check_steps_warmup
+
+    assert check_steps_warmup(2, 5) == (
+        "--steps 2 leaves nothing after --warmup 5: raise --steps or lower --warmup."
+    )
+    assert check_steps_warmup(2, 2) == (
+        "--steps 2 leaves nothing after --warmup 2: raise --steps or lower --warmup."
+    )
+    assert check_steps_warmup(3, 2) is None
 

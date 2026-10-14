@@ -387,11 +387,11 @@ def train(
         console.print(f"[red]Invalid output:[/] {for_terminal(exc)}")
         raise typer.Exit(2) from exc
 
-    if steps <= warmup:
-        console.print(
-            f"[red]--steps {steps} leaves nothing after --warmup {warmup}: raise "
-            f"--steps or lower --warmup.[/]"
-        )
+    from soup_cli.bench.train_run import check_steps_warmup
+
+    err = check_steps_warmup(steps, warmup)
+    if err is not None:
+        console.print(f"[red]{err}[/]")
         raise typer.Exit(1)
 
     from soup_cli.bench.train_run import bench_scope_error, run_bench_train

@@ -31,6 +31,16 @@ def bench_scope_error(cfg: Any) -> Optional[str]:
     return None
 
 
+def check_steps_warmup(steps: int, warmup: int) -> Optional[str]:
+    """Return an error message if steps <= warmup, else None."""
+    if steps <= warmup:
+        return (
+            f"--steps {steps} leaves nothing after --warmup {warmup}: raise "
+            f"--steps or lower --warmup."
+        )
+    return None
+
+
 def config_hash(resolved: dict) -> str:
     """sha256 of the fully resolved config, so a schema-default change that moves
     the run is visible in the report (#716)."""
@@ -195,11 +205,9 @@ def run_bench_train(
     ``clock_sampler`` builds the SM-clock sampler; by default a
     :class:`ClockSampler` on CUDA and none elsewhere. Tests inject one on CPU.
     """
-    if steps <= warmup:
-        raise ValueError(
-            f"--steps {steps} leaves nothing after --warmup {warmup}: raise "
-            f"--steps or lower --warmup."
-        )
+    err = check_steps_warmup(steps, warmup)
+    if err is not None:
+        raise ValueError(err)
 
     import torch
 

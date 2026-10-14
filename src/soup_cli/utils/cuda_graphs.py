@@ -94,12 +94,6 @@ def check_cuda_graphs_preflight(
     base: Optional[str] = None,
 ) -> None:
     """Pre-flight checks for CUDA graphs before loading model weights or torch."""
-    import soup_cli.utils.cuda_graphs as _cg_module
-
-    if _cg_module.cuda_graph_generation_kwargs is not _original_cuda_graph_generation_kwargs:
-        _cg_module.cuda_graph_generation_kwargs(None)
-        return
-
     if device is not None:
         normalized = str(device).strip().lower()
         if not (normalized == "cuda" or normalized.startswith("cuda:")):
@@ -128,7 +122,7 @@ def check_cuda_graphs_preflight(
                         )
                     if adapter_cfg.get("use_dora") is True:
                         raise RuntimeError("CUDA graph decoding does not support DoRA adapters")
-            except (OSError, json.JSONDecodeError):
+            except (OSError, ValueError):
                 pass
 
         cfg_file = target_path / "config.json"
@@ -146,7 +140,7 @@ def check_cuda_graphs_preflight(
                         raise RuntimeError(
                             "CUDA graph decoding currently requires an unquantized model"
                         )
-            except (OSError, json.JSONDecodeError):
+            except (OSError, ValueError):
                 pass
 
 
@@ -362,9 +356,6 @@ def cuda_graph_generation_kwargs(model: Any) -> dict[str, Any]:
         "disable_compile": False,
         "compile_config": compile_config,
     }
-
-
-_original_cuda_graph_generation_kwargs = cuda_graph_generation_kwargs
 
 
 def _static_input_indices(context: Any, input_count: int) -> list[int]:
