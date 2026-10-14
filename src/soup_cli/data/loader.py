@@ -436,7 +436,7 @@ def _finalize(
 
 
 def _classify_train_entry(value: str) -> str:
-    """Classify one data.train list entry for interleave dispatch (#459).
+    """Classify one data.train entry: a list element (#459) or the single string.
 
     Returns ``'remote'`` / ``'hub'`` / ``'local'``. Mirrors the identical
     classification in schema._classify_data_train_entry — kept
@@ -477,7 +477,9 @@ def load_dataset(
 
     Supports:
     - Local files (.jsonl, .json, .csv, .parquet, .txt)
-    - HuggingFace dataset names (auto-detected if no file extension)
+    - HuggingFace dataset names (any string that is neither a local file with one
+      of the extensions above nor a remote URI; a dot in the name, as in
+      ``teknium/OpenHermes-2.5``, does not make it a file)
     - Remote fsspec URIs (s3://, gs://, gcs://, az://, abfs://, abfss://, oci://) — v0.53.8 #85
     - A list of >= 2 local files / remote URIs combined via data.interleave
       (#443 local files; #459 widened to remote URIs when data.streaming is
@@ -518,8 +520,11 @@ def load_dataset(
             preserve_source_columns=preserve_source_columns,
         )
 
-    # Check if it's a HuggingFace dataset
-    if not Path(train_path).suffix:
+    # Hub id or local file: the rule the list form uses, so one dataset name
+    # takes the same route in both spellings. A dot in a Hub id is not a file
+    # extension (``teknium/OpenHermes-2.5`` has Path.suffix ``.5``): only a
+    # supported file extension makes the string a local file.
+    if _classify_train_entry(train_path) == "hub":
         return _load_hf_dataset(
             train_path,
             data_config,
