@@ -162,5 +162,6 @@ def test_run_bench_train_refuses_before_importing_torch():
         [sys.executable, "-c", probe], capture_output=True, text=True, timeout=120
     )
     assert proc.returncode == 0, proc.stderr
+    # ansi-ok: subprocess probe stdout is uncoloured
     assert "REFUSED --steps 2 leaves nothing after --warmup 2" in proc.stdout
     assert "TORCH False" in proc.stdout
