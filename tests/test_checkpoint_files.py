@@ -477,7 +477,7 @@ def _hf_cache_snapshot(root: Path, source: Path) -> Path:
     return snapshot
 
 
-@pytest.mark.skipif(os.name == "nt", reason="symlinked HF cache layout")
+@pytest.mark.requires_symlink
 def test_the_snapshot_copy_covers_the_indexed_shards_only(mistral_like, tmp_path, monkeypatch):
     from soup_cli.utils import spectrum_scan
 
