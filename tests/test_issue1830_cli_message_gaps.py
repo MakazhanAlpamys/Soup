@@ -52,7 +52,7 @@ def test_expect_missing_data_file_names_the_problem(tmp_path, monkeypatch):
     result = CliRunner().invoke(app, ["expect", "missing.jsonl", "suite.yaml"])
 
     assert result.exit_code == EXIT_USAGE_ERROR, (result.output, repr(result.exception))
-    assert "data file not found: missing.jsonl" in _plain(result.output)
+    assert "data file not found: 'missing.jsonl'" in _plain(result.output)
 
 
 def test_expect_missing_suite_file_names_the_problem(tmp_path, monkeypatch):
@@ -64,7 +64,35 @@ def test_expect_missing_suite_file_names_the_problem(tmp_path, monkeypatch):
     result = CliRunner().invoke(app, ["expect", "data.jsonl", "missing.yaml"])
 
     assert result.exit_code == EXIT_USAGE_ERROR, (result.output, repr(result.exception))
-    assert "suite file not found: missing.yaml" in _plain(result.output)
+    assert "suite file not found: 'missing.yaml'" in _plain(result.output)
+
+
+def test_expect_data_path_that_is_a_directory_names_the_problem(tmp_path, monkeypatch):
+    """A data path that exists but is a directory hits the not-a-regular-file
+    branch, which must name it like the missing-file branch does."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "suite.yaml").write_text(_VALID_SUITE, encoding="utf-8")
+    (tmp_path / "data.jsonl").mkdir()
+
+    result = CliRunner().invoke(app, ["expect", "data.jsonl", "suite.yaml"])
+
+    assert result.exit_code == EXIT_USAGE_ERROR, (result.output, repr(result.exception))
+    assert "data file not found: 'data.jsonl'" in _plain(result.output)
+
+
+def test_expect_suite_path_that_is_a_directory_names_the_problem(tmp_path, monkeypatch):
+    """A suite path that exists but is a directory hits the not-a-regular-file
+    branch for the suite, which must name it too."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "data.jsonl").write_text(
+        json.dumps({"text": "hi"}) + "\n", encoding="utf-8"
+    )
+    (tmp_path / "suite.yaml").mkdir()
+
+    result = CliRunner().invoke(app, ["expect", "data.jsonl", "suite.yaml"])
+
+    assert result.exit_code == EXIT_USAGE_ERROR, (result.output, repr(result.exception))
+    assert "suite file not found: 'suite.yaml'" in _plain(result.output)
 
 
 # ---------------------------------------------------------------------------
@@ -98,6 +126,21 @@ def test_lock_commands_name_a_corrupt_lock_file(tmp_path, monkeypatch, args):
     assert "soup.lock" in plain
 
 
+def test_lock_show_names_a_lock_file_that_is_not_utf8(tmp_path, monkeypatch):
+    """A lock file that is valid bytes but not UTF-8 raises ``UnicodeDecodeError``
+    inside ``json.load``; that half of the ``except`` must also name it (the
+    corrupt-file test above only exercises the ``JSONDecodeError`` half)."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "soup.lock").write_bytes(b"\xff\xfe\x00{")
+
+    result = CliRunner().invoke(app, ["lock", "show", "soup.lock"])
+
+    assert result.exit_code == EXIT_USAGE_ERROR, (result.output, repr(result.exception))
+    plain = _plain(result.output)
+    assert "not valid JSON" in plain
+    assert "soup.lock" in plain
+
+
 # ---------------------------------------------------------------------------
 # 3. commands/expect.py module docstring matches the real exit codes
 # ---------------------------------------------------------------------------
@@ -118,7 +161,9 @@ def test_expect_module_docstring_does_not_claim_exit_3_on_suite_failure():
 
 
 def _raise_missing_transformers(*args, **kwargs):
-    raise ModuleNotFoundError("No module named 'transformers'")
+    # A real ``import transformers`` failure sets ``name`` on the exception; the
+    # hint keys off that, so the stub must set it too.
+    raise ModuleNotFoundError("No module named 'transformers'", name="transformers")
 
 
 def test_draft_measure_hints_the_train_extra_when_transformers_is_absent(
@@ -140,6 +185,34 @@ def test_draft_measure_hints_the_train_extra_when_transformers_is_absent(
     plain = _plain(result.output)
     assert "could not read model config" in plain
     assert "soup-cli[train]" in plain
+
+
+def test_draft_measure_does_not_blame_the_extra_for_an_unrelated_module(
+    tmp_path, monkeypatch
+):
+    """A model's ``trust_remote_code`` config can import anything; a missing
+    module outside the ``[train]`` extra (here ``einops``) must surface verbatim
+    without the ``[train]`` hint, which would send the user the wrong way."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "prompts.jsonl").write_text(
+        json.dumps({"prompt": "hello"}) + "\n", encoding="utf-8"
+    )
+
+    def boom(*args, **kwargs):
+        raise ModuleNotFoundError("No module named 'einops'", name="einops")
+
+    monkeypatch.setattr(draft_mod, "_vocab_size_of", boom)
+
+    result = CliRunner().invoke(
+        app,
+        ["draft", "measure", "--target", "gpt2", "--draft", "gpt2",
+         "--prompts", "prompts.jsonl"],
+    )
+
+    assert result.exit_code == EXIT_RUNTIME_ERROR, (result.output, repr(result.exception))
+    plain = _plain(result.output)
+    assert "No module named 'einops'" in plain
+    assert "soup-cli[train]" not in plain
 
 
 def test_draft_distill_hints_the_train_extra_when_transformers_is_absent(
