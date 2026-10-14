@@ -22,7 +22,7 @@ console = Console()
 SUPPORTED_FORMATS = (
     "gguf", "onnx", "tensorrt", "awq", "gptq",
     # v0.52.0 Part D — BitNet 1.58-bit + TQ1_0 GGUF.
-    # Schema-only stubs in v0.52.0; live conversion lands in v0.52.1.
+    # Live llama.cpp conversion (v0.71.20 #134); needs a built llama.cpp toolchain.
     "bitnet", "tq1_0",
     # v0.53.1 #142 — TorchAO PTQ live wiring (Int4WeightOnly / Int8DynActInt4 /
     # Float8DynActFloat8 / NVFP4). Requires --quant-config <yaml>.
@@ -79,9 +79,9 @@ def export(
         "--format",
         "-f",
         help=(
-            "Export format: gguf, onnx, tensorrt, awq, gptq, bitnet, tq1_0 "
-            "(awq and gptq are deprecated and will be removed in "
-            f"Soup v{DEPRECATED_VALUE_REJECTION_VERSION})"
+            "Export format: gguf, onnx, tensorrt, awq, gptq, bitnet, tq1_0, torchao, "
+            "gguf-ud (torchao needs --quant-config; awq and gptq are deprecated and "
+            f"will be removed in Soup v{DEPRECATED_VALUE_REJECTION_VERSION})"
         ),
     ),
     quant: str = typer.Option(

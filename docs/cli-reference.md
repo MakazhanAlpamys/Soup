@@ -502,7 +502,7 @@ Usage: `soup agent train [OPTIONS]`
 | `--base`, `-b` | text |  | yes | Base model HF repo id to fine-tune. |
 | `--dataset-out` | text | `agent_dataset.jsonl` |  | Where the synth step writes its dataset (under cwd). |
 | `--output-dir` | text | `./agent_train_output` |  | Where the planned soup train run will store checkpoints. |
-| `--examples-per-endpoint`, `-n` | integer, 1 to 32 | `4` |  |  |
+| `--examples-per-endpoint`, `-n` | integer, 1 to 32 | `4` |  | Number of synthetic examples to create per API endpoint. |
 
 ## `soup airgap-bundle`
 
@@ -751,7 +751,7 @@ Usage: `soup can fork [OPTIONS] SOURCE`
 | `SOURCE` | text |  | yes | Source .can path |
 | `--out`, `-o` | text |  | yes | Output forked .can path |
 | `--modify` | text, repeatable |  |  | Modification like 'training.lr=5e-5' (repeatable) |
-| `--author` | text | `unknown` |  |  |
+| `--author` | text | `unknown` |  | Author name recorded in the forked manifest. |
 
 ### `soup can inspect`
 
@@ -787,7 +787,7 @@ Usage: `soup can publish [OPTIONS] CAN_PATH`
 |---|---|---|---|---|
 | `CAN_PATH` | text |  | yes | Path to .can file |
 | `--hf-hub` | text |  | yes | HF Hub dataset repo (e.g. 'me/my-recipe-can') |
-| `--private` | flag | off |  |  |
+| `--private` | flag | off |  | Create a private HF Hub dataset repository. |
 | `--message`, `-m` | text |  |  | Commit message (first line only, capped at 200 chars) |
 
 ### `soup can run`
@@ -1131,12 +1131,12 @@ Usage: `soup data decontaminate [OPTIONS]`
 
 | Name | Type | Default | Required | Help |
 |---|---|---|---|---|
-| `--input`, `-i` | text |  | yes |  |
+| `--input`, `-i` | text |  | yes | Input JSONL file to decontaminate. |
 | `--benchmarks`, `-b` | text |  |  | Comma-separated benchmark names (label only; corpora not bundled). |
 | `--benchmark-file` | text |  |  | v0.53.7: operator-supplied benchmark JSONL (under cwd). Each row's ``text``/``prompt``/``content`` field contributes to the n-gram contamination set. Compatible with --benchmarks (extends). |
 | `--output`, `-o` | text | `clean.jsonl` |  | Output JSONL of rows that survived decontamination. |
-| `--threshold` | float, 0.0 to 1.0 | `0.8` |  |  |
-| `--n` | integer, 1 to 32 | `8` |  |  |
+| `--threshold` | float, 0.0 to 1.0 | `0.8` |  | Minimum n-gram overlap ratio for removing a row. |
+| `--n` | integer, 1 to 32 | `8` |  | N-gram size used for overlap detection. |
 
 ### `soup data dedup`
 
@@ -1210,8 +1210,8 @@ Usage: `soup data educational [OPTIONS]`
 
 | Name | Type | Default | Required | Help |
 |---|---|---|---|---|
-| `--input`, `-i` | text |  | yes |  |
-| `--output`, `-o` | text | `educational.jsonl` |  |  |
+| `--input`, `-i` | text |  | yes | Input JSONL file to score. |
+| `--output`, `-o` | text | `educational.jsonl` |  | Output JSONL file with educational-value scores. |
 
 ### `soup data evolve`
 
@@ -1371,8 +1371,8 @@ Usage: `soup data langdetect [OPTIONS]`
 
 | Name | Type | Default | Required | Help |
 |---|---|---|---|---|
-| `--input`, `-i` | text |  | yes |  |
-| `--output`, `-o` | text | `langdetect.jsonl` |  |  |
+| `--input`, `-i` | text |  | yes | Input JSONL file to tag. |
+| `--output`, `-o` | text | `langdetect.jsonl` |  | Output JSONL file with language tags. |
 
 ### `soup data lint`
 
@@ -1443,8 +1443,8 @@ Usage: `soup data pii [OPTIONS]`
 
 | Name | Type | Default | Required | Help |
 |---|---|---|---|---|
-| `--input`, `-i` | text |  | yes |  |
-| `--output`, `-o` | text | `pii.jsonl` |  |  |
+| `--input`, `-i` | text |  | yes | Input JSONL file to scan. |
+| `--output`, `-o` | text | `pii.jsonl` |  | Output JSONL file containing rows with detected PII. |
 
 ### `soup data preprocess`
 
@@ -1622,8 +1622,8 @@ Usage: `soup data toxicity [OPTIONS]`
 
 | Name | Type | Default | Required | Help |
 |---|---|---|---|---|
-| `--input`, `-i` | text |  | yes |  |
-| `--output`, `-o` | text | `toxicity.jsonl` |  |  |
+| `--input`, `-i` | text |  | yes | Input JSONL file to score. |
+| `--output`, `-o` | text | `toxicity.jsonl` |  | Output JSONL file for rows meeting the threshold. |
 | `--threshold` | float, 0.0 to 1.0 | `0.05` |  | Rows meeting the abuse-keyword threshold are kept. |
 
 ### `soup data unregister`
@@ -2332,7 +2332,7 @@ Usage: `soup export [OPTIONS]`
 | Name | Type | Default | Required | Help |
 |---|---|---|---|---|
 | `--model`, `-m` | text |  | yes | Path to model directory (full model or LoRA adapter) |
-| `--format`, `-f` | text | `gguf` |  | Export format: gguf, onnx, tensorrt, awq, gptq, bitnet, tq1_0 (awq and gptq are deprecated and will be removed in Soup v0.77) |
+| `--format`, `-f` | text | `gguf` |  | Export format: gguf, onnx, tensorrt, awq, gptq, bitnet, tq1_0, torchao, gguf-ud (torchao needs --quant-config; awq and gptq are deprecated and will be removed in Soup v0.77) |
 | `--quant`, `-q` | text | `q4_k_m` |  | Quantization type: q4_0, q4_k_m, q5_k_m, q8_0, f16, f32 |
 | `--output`, `-o` | text |  |  | Output file path. Default: &lt;model-name>.&lt;quant>.gguf |
 | `--base`, `-b` | text |  |  | Base model ID (for LoRA adapters). Auto-detected if not set. |
@@ -2870,6 +2870,8 @@ Subcommands:
 
 ### `soup plugins disable`
 
+Disable a registered Soup plugin.
+
 Usage: `soup plugins disable NAME`
 
 | Name | Type | Default | Required | Help |
@@ -2877,6 +2879,8 @@ Usage: `soup plugins disable NAME`
 | `NAME` | text |  | yes | Plugin name |
 
 ### `soup plugins enable`
+
+Enable a registered Soup plugin.
 
 Usage: `soup plugins enable NAME`
 
@@ -3195,11 +3199,11 @@ Usage: `soup registry list [OPTIONS]`
 
 | Name | Type | Default | Required | Help |
 |---|---|---|---|---|
-| `--name`, `-n` | text |  |  |  |
-| `--tag`, `-t` | text |  |  |  |
-| `--base`, `-b` | text |  |  |  |
-| `--task` | text |  |  |  |
-| `--limit`, `-l` | integer | `100` |  |  |
+| `--name`, `-n` | text |  |  | Filter by registry entry name. |
+| `--tag`, `-t` | text |  |  | Filter by tag. |
+| `--base`, `-b` | text |  |  | Filter by base model. |
+| `--task` | text |  |  | Filter by training task. |
+| `--limit`, `-l` | integer | `100` |  | Maximum number of entries to show. |
 
 ### `soup registry promote`
 
@@ -3234,7 +3238,7 @@ Usage: `soup registry search [OPTIONS] QUERY`
 | Name | Type | Default | Required | Help |
 |---|---|---|---|---|
 | `QUERY` | text |  | yes | Keyword to search for |
-| `--limit`, `-l` | integer | `50` |  |  |
+| `--limit`, `-l` | integer | `50` |  | Maximum number of matching entries to show. |
 
 ### `soup registry show`
 

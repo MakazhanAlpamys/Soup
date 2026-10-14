@@ -1,6 +1,6 @@
 """v0.53.0 Part F + v0.53.1 #142 — Advanced save / merge formats.
 
-Two new save-format surfaces ship this release (schema-only):
+Two save-format surfaces:
 
 * ``soup merge --save-format <fmt>`` where fmt ∈ {fp16, 4bit, 4bit_forced}.
   ``4bit`` writes a single BNB-4bit-quantized merged checkpoint without
@@ -11,7 +11,8 @@ Two new save-format surfaces ship this release (schema-only):
   ``Int4WeightOnly`` / ``Int8DynActInt4`` / ``Float8DynActFloat8`` /
   ``NVFP4`` PTQ schemes (unsloth + axolotl parity).
 
-Live wiring deferred to v0.53.1.
+Both are live: ``soup merge`` calls :func:`merge_4bit` and ``soup export --format
+torchao`` calls :func:`export_torchao`.
 """
 
 from __future__ import annotations
