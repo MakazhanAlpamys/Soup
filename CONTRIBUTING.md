@@ -346,6 +346,8 @@ Comment on it saying you are taking it. GitHub only lets us set the formal
 assignee badge for repo collaborators, so the comment **is** the claim — it will
 look unassigned either way, and we treat the thread as the record.
 
+The current board is [docs/claims.md](docs/claims.md), regenerated daily.
+
 Two commitments in return:
 
 - **If a maintainer ends up doing the work instead, you get told, in the thread,
