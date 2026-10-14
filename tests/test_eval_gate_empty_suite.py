@@ -8,7 +8,6 @@ from typing import Callable
 
 import pytest
 import yaml
-from pydantic import ValidationError
 from rich.console import Console
 from typer.testing import CliRunner
 
@@ -62,19 +61,18 @@ def test_load_suite_refuses_zero_tasks(
     [b"", b"# TODO: write the gate suite\n", b"  \n\n   \n"],
     ids=["zero-bytes", "comment-only", "whitespace-only"],
 )
-def test_load_suite_empty_file_names_the_missing_suite_field(
+def test_load_suite_empty_file_is_a_value_error_naming_suite(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, content: bytes,
 ) -> None:
+    """The contract, not the implementation: an empty suite file is refused with a
+    ValueError whose message says "suite" (pydantic's missing-field report today; a
+    "must be a mapping" refusal under #1878), never with a TypeError from `**None`."""
     monkeypatch.chdir(tmp_path)
     path = tmp_path / "gate.yaml"
     path.write_bytes(content)
     with pytest.raises(ValueError) as caught:
         gate.load_suite(str(path))
-    assert isinstance(caught.value, ValidationError), repr(caught.value)
-    assert [(err["loc"], err["type"]) for err in caught.value.errors()] == [
-        (("suite",), "missing"),
-    ]
-    assert "suite\n  Field required" in str(caught.value)
+    assert "suite" in str(caught.value), repr(caught.value)
 
 
 @pytest.mark.parametrize("payload", EMPTY_SUITES, ids=["explicit", "missing", "misspelled"])
