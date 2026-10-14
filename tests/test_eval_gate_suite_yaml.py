@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from typing import Callable
 
+import pydantic
 import pytest
 from rich.console import Console
 from typer.testing import CliRunner
@@ -31,6 +32,16 @@ INVALID_SUITES = [
         "suite: [\n",
         "is not valid YAML:",
         "malformed-yaml",
+    ),
+    (
+        "\t\n",
+        "is not valid YAML:",
+        "tab-only",
+    ),
+    (
+        "suite: foo\n  tasks:\n - name: bar\n",
+        "is not valid YAML:",
+        "mis-indented",
     ),
 ]
 
@@ -122,6 +133,19 @@ def test_cli_control_missing_suite_name_exits_usage_error(
     assert "Cannot load suite:" in output
 
 
+def test_load_suite_empty_file_raises_validation_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    path = _write_suite_text(tmp_path, "")
+    with pytest.raises(pydantic.ValidationError) as caught:
+        gate.load_suite(str(path))
+    message = str(caught.value)
+    assert "1 validation error for EvalSuite" in message
+    assert "suite" in message
+    assert "Field required" in message
+
+
 def test_cli_eval_gate_empty_file_exits_usage_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -131,7 +155,8 @@ def test_cli_eval_gate_empty_file_exits_usage_error(
     result = CliRunner().invoke(app, ["eval", "gate", "--suite", str(path)])
     output = " ".join(strip_ansi(result.output).split())
     assert result.exit_code == 3
-    assert "Cannot load suite:" in output
+    assert "Cannot load suite: 1 validation error for EvalSuite" in output
+    assert "Field required" in output
 
 
 def test_cli_control_valid_suite_passes(
