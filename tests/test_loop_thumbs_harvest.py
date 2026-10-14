@@ -126,6 +126,8 @@ def test_trace_and_thumbs_pairs_are_unioned_without_duplicates(cwd, monkeypatch)
     assert result["thumbs_pairs"] == 4, result  # pairs READ from the database, duplicates included
     assert result["pairs_harvested"] == 6, result
     rows = _read_jsonl(result["pairs_path"])
+    # Trace pairs first, then the thumbs pairs the union kept (order decides the val_split tail).
+    assert [p["source"] for p in rows] == ["thumbs_up"] * 3 + ["soup-serve-thumbs"] * 3, rows
     got = sorted((p["prompt"], p["chosen"], p["rejected"], p["source"]) for p in rows)
     assert got == [
         ("Q", "Good", "Bad", "thumbs_up"),
@@ -208,6 +210,18 @@ def test_a_symlinked_database_is_refused_by_name(cwd):
         r"move the database under the project directory$",
     ):
         harvest_from_traces(_state(thumbs_db="link.db"))
+
+
+def test_a_refusal_that_is_not_about_location_gets_no_move_advice(cwd, monkeypatch):
+    from soup_cli.utils.loop_stages import checked_thumbs_db
+
+    monkeypatch.setenv("SOUP_LOOP_THUMBS_DB", "a\nb.db")
+
+    with pytest.raises(
+        ValueError,
+        match=r"^SOUP_LOOP_THUMBS_DB: db_path must not contain newline / carriage return$",
+    ):
+        checked_thumbs_db(_state())
 
 
 def test_without_a_thumbs_database_the_harvest_is_unchanged(cwd):
@@ -320,20 +334,29 @@ def test_a_locked_database_is_not_refused_by_the_check(cwd, monkeypatch):
         holder.close()
 
 
-def test_a_sqlite_failure_mid_harvest_names_the_field(cwd, monkeypatch):
+@pytest.mark.parametrize("via", ["env", "loop.yaml"])
+def test_a_sqlite_failure_mid_harvest_names_the_field(cwd, monkeypatch, via):
     """The file passed the check, then sqlite failed while reading (lock, corruption)."""
     import soup_cli.utils.local_rl as local_rl
     from soup_cli.utils.loop_stages import harvest_from_traces
 
     _record("thumbs.db", ("Q", "Good", "up"), ("Q", "Bad", "down"))
+    if via == "env":
+        monkeypatch.setenv("SOUP_LOOP_THUMBS_DB", "thumbs.db")
+        state, field = _state(), "SOUP_LOOP_THUMBS_DB"
+    else:
+        state, field = _state(thumbs_db="thumbs.db"), "thumbs_db"
 
     def _boom(_path):
         raise sqlite3.OperationalError("database is locked")
 
     monkeypatch.setattr(local_rl, "harvest_dpo_pairs", _boom)
 
-    with pytest.raises(ValueError, match=r"^thumbs_db: .*OperationalError"):
-        harvest_from_traces(_state(thumbs_db="thumbs.db"))
+    with pytest.raises(
+        ValueError,
+        match=rf"^{field}: 'thumbs.db' could not be read \(OperationalError: database is locked\)$",
+    ):
+        harvest_from_traces(state)
 
 
 def test_control_characters_in_a_configured_path_never_reach_the_message(cwd, monkeypatch):
@@ -536,18 +559,27 @@ def test_init_does_not_let_a_control_sequence_in_the_path_reach_the_terminal(cwd
     assert "\x1b[2J" not in result.output
 
 
-def test_watch_warns_when_the_stub_stages_will_not_read_the_database(cwd, monkeypatch):
-    _init_loop(False)
-    monkeypatch.setenv("SOUP_LOOP_THUMBS_DB", "not-yet.db")
+@pytest.mark.parametrize("via", ["env", "loop.yaml"])
+def test_watch_warns_when_the_stub_stages_will_not_read_the_database(cwd, monkeypatch, via):
+    if via == "env":
+        _init_loop(False)
+        monkeypatch.setenv("SOUP_LOOP_THUMBS_DB", "not-yet.db")
+    else:
+        _init_loop(False, "--thumbs-db", "not-yet.db")
 
     result, text = _watch()
 
     assert result.exit_code == 0, text
     assert "stub stages never read it" in text and "--pre-wired" in text, text
+    # An existing loop cannot be re-initialised without --force, which resets it.
+    assert "loop init" not in text, text
 
 
-def test_watch_does_not_warn_without_a_thumbs_database(cwd):
+@pytest.mark.parametrize("env", [None, ""])
+def test_watch_does_not_warn_without_a_thumbs_database(cwd, monkeypatch, env):
     _init_loop(False)
+    if env is not None:
+        monkeypatch.setenv("SOUP_LOOP_THUMBS_DB", env)
 
     result, text = _watch()
 

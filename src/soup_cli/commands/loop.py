@@ -246,7 +246,7 @@ def watch_cmd(
     elif os.environ.get("SOUP_LOOP_THUMBS_DB") or state.thumbs_db:
         console.print(
             "[yellow]warning:[/] a thumbs database is configured but the stub stages "
-            "never read it; add --pre-wired (or run `soup loop init --pre-wired`) to harvest it"
+            "never read it; run `soup loop watch --pre-wired` to harvest it"
         )
     if detach:
         argv = [
