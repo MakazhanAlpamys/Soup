@@ -382,6 +382,17 @@ quantization other than `none`, `stream_layers`, `lora.use_vera`, `lora.use_dora
 and `use_fsdp2_compile` (the callback is HF Trainer-specific and restart requires
 a writable float base).
 
+**ReLoRA is refused where the loss has a frozen reference**: `task: dpo`, `ipo`,
+`kto` and `bco`, `task: grpo` with `grpo_beta` above 0, and `task: preference`
+whose loss or blend names `dpo`, `ipo` or `bco`. trl reads that reference from the
+policy's own base weights (a `ref` adapter over them, or the model with its adapter
+disabled), and every restart merges the trained adapter into those weights. From
+the first restart on, the reference would be the policy as of that step instead of
+the model the run started from. Measured on a fixed batch with the tiny test
+model: the `dpo` reference does not move until the first restart and moves by 0.83
+at it. `sft`, `orpo`, `simpo`, `ppo`, `reward_model`, `pretrain`, `embedding`,
+`grpo` with `grpo_beta: 0` and a `simpo` / `orpo` preference run are not affected.
+
 
 ## DoRA (Weight-Decomposed LoRA)
 
