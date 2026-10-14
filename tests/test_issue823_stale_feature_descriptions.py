@@ -283,4 +283,3 @@ def test_all_soup_config_fields_have_descriptions() -> None:
 
     walk(SoupConfig)
     assert missing == [], f"Config fields missing description: {missing}"
-

@@ -1146,9 +1146,9 @@ class TrainingConfig(BaseModel):
         default=4,
         ge=1,
         description=(
-            "Number of update steps to accumulate gradients over before executing "
-            "a backward optimizer step. Effective batch size is batch_size * "
-            "gradient_accumulation_steps."
+            "Number of micro-batches whose gradients are summed before each optimizer "
+            "update. Effective batch size per device is batch_size * "
+            "gradient_accumulation_steps (times the number of GPUs)."
         ),
     )
     # #341 — the general training seed. Before this there was none:
@@ -1208,7 +1208,8 @@ class TrainingConfig(BaseModel):
         default=0.01,
         ge=0.0,
         description=(
-            "Weight decay (L2 penalty) factor applied to parameters during optimization."
+            "Weight decay factor (decoupled, AdamW-style) applied to weights "
+            "during optimization; 0 disables it."
         ),
     )
     max_grad_norm: float = Field(
