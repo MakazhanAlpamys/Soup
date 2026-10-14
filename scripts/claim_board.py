@@ -29,10 +29,16 @@ DEFAULT_PAGE = "docs/claims.md"
 TITLE_WIDTH = 60
 GENERATED_PREFIX = "Generated: "
 
-_CONFIRM_RE = re.compile(r"\b(confirmed|is yours|yours)\b", re.IGNORECASE)
-_TAKE_RE = re.compile(r"take this|i'd like to take|i would like to take|claim", re.IGNORECASE)
+_CONFIRM_RE = re.compile(
+    r"^\s*confirmed\b|\b(?:is|are) yours\b", re.IGNORECASE | re.MULTILINE
+)
+_TAKE_RE = re.compile(
+    r"\b(?:i'd like to take|i would like to take|i'll take|i will take|take this"
+    r"|claim this|i claim)\b",
+    re.IGNORECASE,
+)
+_LINK_WORDS = r"(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?|refs?|part of)"
 _AFTER_RE = re.compile(r"\bafter\s+#(\d+)", re.IGNORECASE)
-_REF_RE = re.compile(r"#(\d+)")
 _DIFFICULTY_RE = re.compile(r"^difficulty:(\d+)$")
 
 
@@ -80,14 +86,20 @@ def find_claimant(comments: list[dict]) -> tuple[str | None, str | None, bool]:
     return None, None, False
 
 
-def blocker(issue: dict, comments: list[dict]) -> str | None:
-    """`infra-blocked` label, or 'after #N' from the last maintainer comment."""
+def _always_open(number: int) -> bool:
+    return True
+
+
+def blocker(issue: dict, comments: list[dict], is_open=_always_open) -> str | None:
+    """`infra-blocked` label, or 'after #N' (N still open) in the last maintainer comment."""
     if "infra-blocked" in label_names(issue):
         return "infra-blocked"
     for comment in sorted(comments, key=lambda item: item["created_at"], reverse=True):
         if _login(comment) == MAINTAINER:
             match = _AFTER_RE.search(comment.get("body", ""))
-            return f"after #{match.group(1)}" if match else None
+            if match and is_open(int(match.group(1))):
+                return f"after #{match.group(1)}"
+            return None
     return None
 
 
@@ -101,23 +113,25 @@ def quiet_days(comments: list[dict], login: str | None, now: datetime) -> int | 
 
 
 def find_pr(prs: list[dict], issue_number: int, login: str | None) -> int | None:
-    """Lowest open PR number by `login` whose title or body references the issue."""
+    """Lowest open PR by `login` whose body closes or refs the issue (not "see also")."""
     if not login:
         return None
     hits = []
     for pr in prs:
         if (pr.get("user") or {}).get("login") != login:
             continue
-        text = f"{pr.get('title') or ''}\n{pr.get('body') or ''}"
-        if issue_number in {int(num) for num in _REF_RE.findall(text)}:
+        link = re.compile(rf"\b{_LINK_WORDS}:?\s+#{issue_number}\b", re.IGNORECASE)
+        if link.search(pr.get("body") or ""):
             hits.append(pr["number"])
     return min(hits) if hits else None
 
 
-def classify(issue: dict, comments: list[dict], prs: list[dict], now: datetime) -> dict:
+def classify(
+    issue: dict, comments: list[dict], prs: list[dict], now: datetime, is_open=_always_open
+) -> dict:
     labels = label_names(issue)
     login, since, confirmed = find_claimant(comments)
-    block = blocker(issue, comments)
+    block = blocker(issue, comments, is_open)
     claimed = "claimed" in labels or (login is not None and confirmed)
     if block:
         kind, state = "blocked", f"blocked: {block}"
@@ -153,8 +167,11 @@ def sort_rows(rows: list[dict]) -> list[dict]:
 
 
 def short_title(title: str) -> str:
-    title = " ".join(title.replace("|", "/").split())
-    return title if len(title) <= TITLE_WIDTH else title[: TITLE_WIDTH - 3] + "..."
+    """Untrusted text: one backtick code span, so no link, tag, mention or issue ref renders."""
+    title = " ".join(title.replace("|", "/").replace("`", "'").split())
+    if len(title) > TITLE_WIDTH:
+        title = title[: TITLE_WIDTH - 3] + "..."
+    return f"`{title}`"
 
 
 def render(rows: list[dict], now: datetime) -> str:
@@ -226,10 +243,18 @@ def fetch(now: datetime) -> list[dict]:
             if "pull_request" not in item:
                 issues[item["number"]] = item
     prs = gh_json([f"repos/{REPO}/pulls?state=open&per_page=100", "--paginate"])
+    states: dict[int, bool] = {}
+
+    def is_open(number: int) -> bool:
+        if number not in states:
+            found_one = gh_json([f"repos/{REPO}/issues/{number}"])
+            states[number] = bool(found_one) and found_one[0].get("state") == "open"
+        return states[number]
+
     rows = []
     for number in sorted(issues):
         comments = gh_json([f"repos/{REPO}/issues/{number}/comments?per_page=100", "--paginate"])
-        rows.append(classify(issues[number], comments, prs, now))
+        rows.append(classify(issues[number], comments, prs, now, is_open))
     return rows
 
 

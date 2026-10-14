@@ -91,15 +91,81 @@ def test_ordering_is_deterministic():
     assert board.sort_rows(rows) == board.sort_rows(list(reversed(rows)))
 
 
+def _cell(page):
+    return page.splitlines()[-1].split("|")[2].strip()
+
+
 def test_render_is_plain_markdown_and_truncates():
-    row = board.classify(issue(1, title="x" * 100 + "|"), [], [], NOW)
+    row = board.classify(issue(1, title="x" * 100), [], [], NOW)
     page = board.render([row], NOW)
     assert "\x1b" not in page
     assert "Generated: 2026-10-14 12:00 UTC" in page
     assert "CONTRIBUTING.md#how-work-is-queued" in page
-    cell = page.splitlines()[-1].split("|")[2].strip()
-    assert len(cell) == board.TITLE_WIDTH and cell.endswith("...")
+    cell = _cell(page)
+    assert len(cell) == board.TITLE_WIDTH + 2 and cell.endswith("...`")
     assert not re.search("[\\u0400-\\u04FF]", page)
+
+
+def test_pipe_in_title_becomes_slash():
+    page = board.render([board.classify(issue(1, title="a|b"), [], [], NOW)], NOW)
+    assert _cell(page) == "`a/b`"
+    assert len(page.splitlines()[-1].split("|")) == 8
+
+
+def test_title_cannot_form_markdown_or_mention():
+    title = "[link](x) <b> @user #1 back`tick \\ end"
+    page = board.render([board.classify(issue(1, title=title), [], [], NOW)], NOW)
+    cell = _cell(page)
+    assert cell == "`[link](x) <b> @user #1 back'tick \\ end`"
+    assert cell.count("`") == 2
+
+
+def test_blocked_outranks_claimed():
+    comments = [
+        comment("alice", "I'll take this", "2026-10-01T10:00:00Z"),
+        comment("MakazhanAlpamys", "Confirmed", "2026-10-02T10:00:00Z"),
+    ]
+    row = board.classify(issue(3, ("claimed", "infra-blocked")), comments, [], NOW)
+    assert row["kind"] == "blocked" and row["state"] == "blocked: infra-blocked"
+    later = comments + [comment("MakazhanAlpamys", "after #99 lands", "2026-10-03T10:00:00Z")]
+    row = board.classify(issue(3, ("claimed",)), later, [], NOW)
+    assert row["kind"] == "blocked" and row["state"] == "blocked: after #99"
+
+
+def test_confirm_regex_cases():
+    assert not board._CONFIRM_RE.search("CI confirmed green")
+    assert not board._CONFIRM_RE.search("this is not yours")
+    assert board._CONFIRM_RE.search("Confirmed, go ahead")
+    assert board._CONFIRM_RE.search("ok\nConfirmed")
+    assert board._CONFIRM_RE.search("it is yours")
+    assert board._CONFIRM_RE.search("they are yours")
+
+
+def test_take_regex_cases():
+    for text in ("unclaimed", "claimed by bob", "I claimed it"):
+        assert not board._TAKE_RE.search(text), text
+    for text in ("I'd like to take", "I'll take it", "take this", "claim this", "I claim"):
+        assert board._TAKE_RE.search(text), text
+
+
+def test_after_blocker_only_when_target_open():
+    comments = [comment("MakazhanAlpamys", "after #20", "2026-10-01T00:00:00Z")]
+    closed = board.classify(issue(4), comments, [], NOW, lambda n: False)
+    assert closed["kind"] == "free"
+    opened = board.classify(issue(4), comments, [], NOW, lambda n: True)
+    assert opened["state"] == "blocked: after #20"
+
+
+def test_pr_linking_needs_closing_keyword_and_claimant():
+    comments = [comment("alice", "I'll take this", "2026-10-01T00:00:00Z")]
+    prs = [
+        pull(50, "alice", "see also #6"),
+        pull(51, "bob", "Closes #6"),
+        pull(52, "alice", "Part of #6"),
+        pull(53, "alice", "Resolves #66"),
+    ]
+    assert board.classify(issue(6, ("claimed",)), comments, prs, NOW)["pr"] == 52
+    assert board.classify(issue(6, ("claimed",)), comments, prs[:2], NOW)["pr"] is None
 
 
 def test_strip_stamp_ignores_generation_time_only():
@@ -115,3 +181,30 @@ def test_api_error_exits_2(monkeypatch, capsys):
     monkeypatch.setattr(board, "gh_json", boom)
     assert board.main([]) == 2
     assert "claim_board: nope" in capsys.readouterr().err
+
+
+def _stub_fetch(monkeypatch):
+    rows = [board.classify(issue(1), [], [], NOW)]
+    monkeypatch.setattr(board, "fetch", lambda now: rows)
+    return board.render(rows, NOW)
+
+
+def test_check_detects_drift_and_match(monkeypatch, tmp_path, capsys):
+    page = _stub_fetch(monkeypatch)
+    path = tmp_path / "claims.md"
+    path.write_text(page, encoding="utf-8")
+    assert board.main(["--check", str(path)]) == 0
+    path.write_text(page.replace("Some title", "Other"), encoding="utf-8")
+    assert board.main(["--check", str(path)]) == 1
+    assert "is stale" in capsys.readouterr().out
+
+
+def test_write_keeps_existing_file_when_gh_fails(monkeypatch, tmp_path):
+    def boom(now):
+        raise board.BoardError("gh down")
+
+    monkeypatch.setattr(board, "fetch", boom)
+    path = tmp_path / "claims.md"
+    path.write_bytes(b"old page\n")
+    assert board.main(["--write", str(path)]) == 2
+    assert path.read_bytes() == b"old page\n"
