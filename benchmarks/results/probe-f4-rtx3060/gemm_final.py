@@ -55,12 +55,12 @@ def settle(seconds=WARMUP_SECONDS):
     torch.cuda.empty_cache()
 
 
-def tflops(M, K, N, repeats=3):
-    a = torch.randn(M, K, device="cuda", dtype=DTYPE)
-    b = torch.randn(K, N, device="cuda", dtype=DTYPE)
-    assert (a @ b).shape == (M, N), f"bad shape: {(a @ b).shape} != {(M, N)}"
+def tflops(m, k, n, repeats=3):
+    a = torch.randn(m, k, device="cuda", dtype=DTYPE)
+    b = torch.randn(k, n, device="cuda", dtype=DTYPE)
+    assert (a @ b).shape == (m, n), f"bad shape: {(a @ b).shape} != {(m, n)}"
 
-    ops = 2 * M * K * N
+    ops = 2 * m * k * n
     iters = max(50, min(20000, int(FLOP_BUDGET / ops)))
 
     s = torch.cuda.Event(enable_timing=True)
@@ -82,16 +82,16 @@ def tflops(M, K, N, repeats=3):
     return best, statistics.median(clocks), iters
 
 
-def measure_pair(M, K, N, m_denom=512):
-    a1, c1, _ = tflops(m_denom, K, N)
-    b1, c2, it = tflops(M, K, N)
-    b2, c3, _ = tflops(M, K, N)
-    a2, c4, _ = tflops(m_denom, K, N)
+def measure_pair(m, k, n, m_denom=512):
+    a1, c1, _ = tflops(m_denom, k, n)
+    b1, c2, it = tflops(m, k, n)
+    b2, c3, _ = tflops(m, k, n)
+    a2, c4, _ = tflops(m_denom, k, n)
     cl = [c for c in (c1, c2, c3, c4) if c]
     med = statistics.median(cl) if cl else 0
     spread = (max(cl) - min(cl)) / med if med else 0
     return {
-        "M": M, "point": (b1 + b2) / 2, "denom": (a1 + a2) / 2,
+        "M": m, "point": (b1 + b2) / 2, "denom": (a1 + a2) / 2,
         "ratio": ((b1 + b2) / 2) / ((a1 + a2) / 2),
         "a2_over_a1": a2 / a1, "clock_mhz": med, "clock_spread": spread,
         "iters": it,

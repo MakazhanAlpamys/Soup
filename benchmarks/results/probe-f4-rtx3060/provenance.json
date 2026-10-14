@@ -1,0 +1,23 @@
+{
+  "date": "2026-10-15",
+  "source_commit": "821600dd300e7104f8ec895e0a16ed8e83ae4852",
+  "scope": "Exact bytes submitted with the runs; independent remote execution hashes were not recorded.",
+  "files": {
+    "gemm_final.py": {
+      "sha256": "8c843e112f0302e20bcb651528f6d71758e6cb2dc15c6987fef7170a43906dfd",
+      "archive": "executed-source/gemm_final.py.txt",
+      "packaged_sha256": "d4fe0bae8f6beec47fdf5d6cb9f622819b82a275e6a19bffb2bd44745add36f9"
+    },
+    "moe_breakdown.py": {
+      "sha256": "faa47422f97d2a52eca205d9969c956e991f83fa299ba15706b26a20ee1f3b31",
+      "archive": "executed-source/moe_breakdown.py.txt",
+      "packaged_sha256": "d1960f5dfbeb5fa9f03ba669bbd2e89f00a0a83cf8724d86597ef9bd3fe2048a"
+    }
+  },
+  "rule": {
+    "commit": "11bf21ae76674c8fad6b331b323976076d0b3f43",
+    "path": "executed-source/pre-run-rule.md",
+    "sha256": "78d1155af327ccaabd22db46a4a15de59f1f307c2b42ba6f95dbb17cb557b601"
+  },
+  "original_report_sha256": "ec4a90639df1f7c07baf2319d5f632e354497856bdd7fd19c6034bea2c38d568"
+}

@@ -19,7 +19,7 @@ import sys
 import time
 
 import torch
-import torch.nn.functional as F
+import torch.nn.functional as functional
 
 if not torch.cuda.is_available():
     print("SKIP: no CUDA")
@@ -96,9 +96,9 @@ def arm_a():
     out = torch.zeros_like(x)
     for e in range(EXPERTS):
         cur = x[:M_EXPERT]
-        g, u = F.linear(cur, gate_up[e]).chunk(2, dim=-1)
-        h = F.silu(g) * u
-        out[:M_EXPERT] += F.linear(h, down[e])
+        g, u = functional.linear(cur, gate_up[e]).chunk(2, dim=-1)
+        h = functional.silu(g) * u
+        out[:M_EXPERT] += functional.linear(h, down[e])
     return out
 
 
@@ -107,14 +107,14 @@ def arm_b():
     for e in range(EXPERTS):
         rows = fixed_rows[e]
         cur = x[rows]
-        g, u = F.linear(cur, gate_up[e]).chunk(2, dim=-1)
-        h = F.silu(g) * u
-        out.index_add_(0, rows, F.linear(h, down[e]).to(out.dtype))
+        g, u = functional.linear(cur, gate_up[e]).chunk(2, dim=-1)
+        h = functional.silu(g) * u
+        out.index_add_(0, rows, functional.linear(h, down[e]).to(out.dtype))
     return out
 
 
 def route():
-    logits = F.linear(x, router_w)
+    logits = functional.linear(x, router_w)
     probs = torch.softmax(logits, dtype=torch.float, dim=-1)
     w, idx = torch.topk(probs, TOPK, dim=-1)
     mask = torch.nn.functional.one_hot(idx, num_classes=EXPERTS).permute(2, 1, 0)
@@ -129,9 +129,9 @@ def arm_c():
         if rows.numel() == 0:
             continue
         cur = x[rows]
-        g, u = F.linear(cur, gate_up[e]).chunk(2, dim=-1)
-        h = F.silu(g) * u
-        out.index_add_(0, rows, F.linear(h, down[e]).to(out.dtype))
+        g, u = functional.linear(cur, gate_up[e]).chunk(2, dim=-1)
+        h = functional.silu(g) * u
+        out.index_add_(0, rows, functional.linear(h, down[e]).to(out.dtype))
     return out
 
 
@@ -151,16 +151,16 @@ if HAVE_BNB:
             if rows.numel() == 0:
                 continue
             cur = x[rows]
-            g, u = F.linear(cur, w_gu.to(DTYPE)).chunk(2, dim=-1)
-            h = F.silu(g) * u
-            out.index_add_(0, rows, F.linear(h, w_dn.to(DTYPE)).to(out.dtype))
+            g, u = functional.linear(cur, w_gu.to(DTYPE)).chunk(2, dim=-1)
+            h = functional.silu(g) * u
+            out.index_add_(0, rows, functional.linear(h, w_dn.to(DTYPE)).to(out.dtype))
         return out
 
 
-def ref(M):
-    a = torch.randn(M, HIDDEN, device="cuda", dtype=DTYPE)
+def ref(m):
+    a = torch.randn(m, HIDDEN, device="cuda", dtype=DTYPE)
     b = torch.randn(HIDDEN, 2 * INTER, device="cuda", dtype=DTYPE)
-    ops = 2 * M * HIDDEN * (2 * INTER)
+    ops = 2 * m * HIDDEN * (2 * INTER)
     iters = max(50, min(20000, int(2e12 / ops)))
     ms = timed(lambda: a @ b, iters=iters, warmup=5, repeats=3)
     return ops / (ms * 1e-3) / 1e12
@@ -213,9 +213,9 @@ def arm_c2():
     for e in range(EXPERTS):
         rows = fixed_rows[e]
         cur = x[rows]
-        g, u = F.linear(cur, gate_up[e]).chunk(2, dim=-1)
-        h = F.silu(g) * u
-        out.index_add_(0, rows, F.linear(h, down[e]).to(out.dtype))
+        g, u = functional.linear(cur, gate_up[e]).chunk(2, dim=-1)
+        h = functional.silu(g) * u
+        out.index_add_(0, rows, functional.linear(h, down[e]).to(out.dtype))
     return out
 
 c2 = timed(arm_c2)

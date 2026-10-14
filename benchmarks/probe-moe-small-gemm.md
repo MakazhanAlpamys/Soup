@@ -1,12 +1,18 @@
 # F4: MoE small-GEMM factor
 
-Measured on two rented RTX 3060s, bfloat16, three rounds each: the GEMM curve
-2026-10-11, the layer breakdown 2026-10-12. Rule committed 2026-10-09, before
-any run.
+**Corrected descriptive report, 2026-10-15. No formal validity verdict.**
+GEMM curves were recorded on an RTX 3060 on 2026-10-11; the synthetic layer
+extension used a second RTX 3060 on 2026-10-12. No new GPU run was made for this
+correction. The original [pre-run rule](results/probe-f4-rtx3060/executed-source/pre-run-rule.md)
+at [11bf21ae](https://github.com/SoupTeam/soup-rnd/commit/11bf21ae76674c8fad6b331b323976076d0b3f43)
+and the [withdrawn original report](results/probe-f4-rtx3060/executed-source/original-report.md)
+are preserved byte-for-byte.
 
-The per-expert GEMM alone runs at 0.59-0.72 of the same GEMM at 512 rows, which
-is what the plan assumed. A whole MoE layer, routing and NF4 dequantisation
-included, runs at 0.148 of a dense layer doing the same arithmetic.
+The isolated GEMM ratios at the stated 512-token recipe are 0.592–0.721 relative
+to the same shape at 512 rows. These are observations for these shapes and cards.
+The synthetic, unweighted expert loop's 0.148 is a **modeled normalization**
+against layer FLOPs divided by a measured gate-up GEMM throughput; an equivalent
+dense layer was not measured. It is not a measured training factor for giant MoE.
 
 ```
 factor(M) = TFLOPS at M rows / TFLOPS at 512 rows, same K and N, same session
@@ -35,8 +41,9 @@ From config.json.
 | 2048 | OLMoE | 256 | 0.821 | 0.938 |
 | 2048 | granite | 512 | 0.999 | 1.000 |
 
-The plan assumed 0.5-0.7. Holds for a 512-token step; at 2048 tokens most of
-the loss is gone. The factor is a function of tokens per expert — step size,
+The historical plan assumed 0.5-0.7. Three rows at the 512-token recipe fall
+in that interval; granite down is 0.721, above 0.70. Larger-M ratios increase
+for these shapes, but this does not establish a formal validity verdict. The factor is a function of tokens per expert — step size,
 expert count and top-k together — not a property of MoE. 0.5-0.7 is not a
 general number.
 
@@ -61,60 +68,84 @@ TFLOPS at M=512, the denominator: 23.51, 20.83, 20.75, 16.11.
 
 Plotted: `benchmarks/results/probe-f4-rtx3060/f4_curve.svg`
 
-## The whole layer
+## Synthetic layer extension: observed arm times
 
-Checklist item 4. One OLMoE MoE layer forward, 512 tokens, 64 experts, top-8.
-Four arms, each adding one term; differences give the split. Median of three
-rounds.
+One OLMoE-shaped expert loop forward, 512 tokens, 64 experts, top-8. This
+extension is outside the original GEMM rule. Median arm times from rounds
+0–2 (round 3 is also retained, but was not used for the published medians):
 
-| part | ms | share |
+| arm | measured ms | workload |
 |---|---|---|
-| the multiply, 128 GEMMs | 4.883 | 32.9% |
-| 64 x torch.where | 4.881 | 32.8% |
-| weight restore, NF4 | 4.174 | 28.1% |
-| gather + index_add_ | 0.639 | 4.3% |
-| router GEMM + softmax + top-k | 0.160 | 1.1% |
-| total | 14.859 | |
+| A | 4.883 | 64 experts, contiguous 64-row inputs, bf16 weights |
+| B | 5.522 | fixed row gather and scatter, bf16 weights |
+| C | 10.685 | random router, actual mask rows, bf16 weights |
+| D | 14.859 | random router, actual mask rows, NF4 weight restore |
 
-Parts sum to 99.2% of the total; the rest is slop in the differences.
+A and B do not have equivalent outputs. The fixed-row modulo fixture gives
+64 rows per expert but only eight unique token indices, each repeated eight
+times. C and D use the router's actual rows and discard routing weights.
+The arms are synthetic workloads, not faithful weighted MoE inference or training.
 
-Routing was first measured as one term of 5.163 ms, then split with an extra
-arm running the router but using precomputed row indices: the router is
-0.160 ms, the 64 `torch.where` calls are 4.881 ms — 94.5% of it.
+The historical B−A (0.639 ms), C−B (5.163 ms) and D−C (4.174 ms) are descriptive
+median latency differences. B and C change row counts, input data and scatter
+contention as well as routing. D changes weights through quantization. No output
+or gradient equivalence control was saved, so these differences do not establish
+an additive causal breakdown or the cost of isolated components.
 
-`torch.where(mask[e])` returns a tensor whose size depends on the data, so the
-CPU must wait for the GPU to learn it. One forced synchronisation per expert,
-64 per layer. `modeling_olmoe.py:306`.
+### Withdrawn torch.where attribution
 
-This is a property of the reference implementation, not of MoE. Sorting tokens
-by expert once and working with offsets removes the syncs, so roughly a third
-of the layer is avoidable overhead. Input for D3.
+The previous 4.881 ms / 32.8% attribution and claim that sorting removes a third
+of the layer are withdrawn. C2 computes a mask but discards it and uses
+`fixed_rows`; C uses the actual mask. The difference changes workloads as well
+as synchronization. The saved JSON/logs do not include C2 timings, so even the
+reported C2 difference cannot be independently replayed from the supplied records.
+Those numbers remain in the original report solely as withdrawn claims.
 
-### Cascade
+Dynamic-size `torch.where` is a hypothesis for future profiling. A controlled
+comparison must reuse identical routing rows and weights, verify equivalent
+outputs, and commit its timing/validity rule before any new arms. No removable
+fraction of a real layer has been established here.
 
-One denominator throughout: a dense layer doing the same arithmetic. The layer
-is 51.5 GFLOP, which at the measured 23.48 TFLOPS takes 2.20 ms.
+### Modeled normalization, not a dense-layer measurement
 
-| what | factor |
-|---|---|
-| isolated GEMM at M=64 | 0.593 |
-| 64 experts in a Python loop | 0.450 |
-| whole layer, routing and NF4 included | 0.148 |
+The arithmetic estimate is 51.5 GFLOP / 23.48 TFLOPS = about 2.20 ms. The
+23.48 TFLOPS comes from a gate-up GEMM at 512 rows in the layer session; down
+projection has different throughput. There is no timed dense layer denominator.
 
-The layer is 6.8x slower than the dense equivalent, not 1.7x. For a whole layer
-the plan's 0.5-0.7 is about four times too optimistic.
+| observation or model | ratio | interpretation |
+|---|---|---|
+| isolated gate-up GEMM at M=64 | 0.593 | measured same-shape GEMM ratio |
+| modeled 2.20 ms / A time | 0.450 | estimated normalization of the synthetic loop |
+| modeled 2.20 ms / D time | 0.148 | estimated normalization including routing/NF4 |
 
-Expectation recorded before the run: NF4 dequantisation comparable to the
-multiply. Held — 4.174 against 4.883 ms. The indexing cost was not predicted.
+The corresponding 6.8x is also a modeled ratio. The earlier assertion that the
+whole-layer assumption is four times too optimistic is withdrawn. D3 may use
+the GEMM curves as descriptive inputs and the arm times as profiling leads;
+none of these modeled ratios replaces a measured giant-training factor.
 
-## What is not in the number
+## Protocol deviations and validity limits (2026-10-15)
 
-The backward pass, attention, a whole training step. One MoE layer forward only.
+The exact rule is archived above; its numerical gates have not been changed.
+Execution differs from it:
 
-Tensors are random: real shapes, synthetic data, no weights loaded. Arms A and
-B use a fixed balanced token-to-expert assignment; arms C and D use the real
-router on random hidden states, so per-expert counts are not those a trained
-router gives on real text.
+- Original point protocol: three warmups, 20 timed iterations, three repeats.
+  Executed GEMM script: five warmups, 50–20000 iterations from a 2e12 FLOP budget,
+  three repeats retaining the best, plus a 60-second settling phase.
+- M=8192 observations are present; the original report omitted that normalization.
+  The CPU replay now records both denominators in `replay-summary.json`.
+- The originally specified equal-arithmetic A/B/C controls are absent from the
+  submitted runs. The later A/B/C/D/C2 extension is a different experiment.
+- GEMM points use 512 → M → M → 512 inside a process. Layer arms use fixed
+  A/B/C/D/C2 order; this is not interleaving in fresh processes.
+- GPU-peer, suspend and foreign-reader conditions are not independently recorded
+  per arm. Rented hosts make laptop AC checks inapplicable; other unrecorded
+  conditions remain unknown. CSV clock samples are useful but do not prove all
+  validity conditions. Zero in JSON `clock_mhz` denotes an unavailable reading.
+
+Result: **descriptive observations / no formal verdict**. Missing controls
+cannot be reconstructed into a validity pass. No void arm files were supplied;
+this does not prove that no void events occurred. Backward, attention, full
+training, real weights/text and routing-weighted equivalence were not measured.
 
 ## Checks
 
@@ -133,8 +164,8 @@ was sampled once a second into gpu_log.csv: 406 s, card busy 98.8%, power peak
 170.1 W of 170, temperature 41-65 C.
 
 The layer run is on a second physical card and re-measures the reference point
-in its own session: 0.593 against 0.601 on the first card, 1.013x apart. Every
-term in the cascade comes from that one session.
+in its own session: 0.593 against 0.601 on the first card, 1.013x apart. The modeled layer normalization uses its own session; the GEMM curve is
+reported separately. The cross-card 1.013x agreement is descriptive only.
 
 ## Commands and versions
 
@@ -151,10 +182,24 @@ utilization.gpu --format=csv -l 1 -f gpu_log.csv
 ```
 
 Both cards: RTX 3060 12 GB (sm_86), driver 570.195.03, CUDA 12.8, power limit
-170 W, torch 2.11.0+cu128, bfloat16, no other process on the GPU.
+170 W, torch 2.11.0+cu128, bfloat16. The author reported no other GPU process; per-arm evidence is missing.
 Curve: Vast.ai instance 55384207, machine 47491, Ryzen 5 3500, 32 GB RAM.
 Layer: instance 55531564, machine 47487, same host, bitsandbytes 0.50.2.
 
 Raw: `benchmarks/results/probe-f4-rtx3060/` — run_0..2.txt, f4_round_0..2.json,
 gpu_log.csv, gemm_final.py, item4_0..2.txt, f4_item4_round_0..3.json,
 gpu_log_item4.csv, moe_breakdown.py.
+
+
+## Source preservation and replay
+
+`executed-source/*.py.txt` preserve the exact submitted script bytes. The `.py`
+files are packaging copies with identifier-only lint fixes; they were not rerun
+on a GPU. `provenance.json` pins both versions and the original rule. These are
+hashes of submitted sources, not retrospective proof of remote execution bytes.
+The scripts retain their historical print labels; interpret them using this
+corrected report, not as an endorsed causal analysis.
+
+Run `python benchmarks/harness/replay_f4_small_gemm.py` on CPU to check hashes,
+recompute both GEMM normalizations and observed layer medians. The JSON output
+is a replay of saved evidence, not a new performance measurement.
