@@ -637,6 +637,32 @@ Earlier stages retain warnings but cannot supply settings, and unused configs ar
 Aliases, conditional rebindings and unresolved `**kwargs` are not evaluated: migration
 reports "Could not read the final trainer's args statically" and uses Soup defaults.
 
+A migrated config trains what the source trained, using the source tool's defaults
+where a key is absent (#1807):
+
+- **Validation split.** axolotl `val_set_size` and LLaMA-Factory `val_size` map to
+  `data.val_split`, and an absent key writes `0` (both tools train on every row by
+  default) rather than leaving Soup's default of 0.1 in force. A value `data.val_split`
+  cannot express (an absolute row count, or a fraction above 0.5) is named in a warning
+  and not written.
+- **LLaMA-Factory LoRA.** A missing `lora_rank` is 8 and a missing `lora_alpha` is
+  `2 * rank`, as LLaMA-Factory has them. A comma-separated `lora_target` becomes a list,
+  and `lora_target: all` (also the default when the key is absent) becomes `all-linear`,
+  every linear layer; so does axolotl `lora_target_linear: true`. `auto` would have
+  resolved to `q_proj` / `v_proj` only on Llama.
+- **Preference strength.** `pref_beta` maps to `dpo_beta`, `kto_beta`, `orpo_beta`, or
+  `ipo_tau` under `pref_loss: ipo`; under `pref_loss: simpo` it has no Soup equivalent
+  and is named in a warning, while `simpo_gamma` maps to `training.simpo_gamma`.
+- **Unsloth notebooks.** `base` is the first `from_pretrained` call that names a model,
+  skipping code under `if False:` (the stock notebook's saved-adapter reload), so the
+  training model wins over the reload. `gradient_accumulation_steps`, `warmup_ratio`,
+  `weight_decay` and `seed` are read from the final trainer's `TrainingArguments` or
+  TRL `*Config`; `warmup_steps` has no Soup field (warmup comes from
+  `training.warmup_ratio`) and is named in a warning.
+- **Nothing is dropped in silence.** Every source key, `TrainingArguments` keyword or
+  `get_peft_model` keyword the migrator does not map is listed in one
+  "not migrated" warning.
+
 
 ## Data Formats
 
