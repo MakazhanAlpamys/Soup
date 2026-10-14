@@ -110,6 +110,19 @@ def test_plain_csv_control() -> None:
     )
 
 
+def test_plain_two_row_csv_is_byte_exact() -> None:
+    board = Leaderboard(entries=[
+        LeaderboardEntry(model_path="beta", benchmark="custom", score=0.25),
+        LeaderboardEntry(model_path="alpha", benchmark="custom", score=0.75),
+    ])
+    board.compute()
+    assert export_leaderboard(board, fmt="csv") == (
+        "model,custom,average\n"
+        "alpha,0.75,0.7500\n"
+        "beta,0.25,0.2500"
+    )
+
+
 def test_json_control_preserves_special_names() -> None:
     board = make_leaderboard('models/"base",adapter', "metric,split")
     assert json.loads(export_leaderboard(board, fmt="json")) == [{
