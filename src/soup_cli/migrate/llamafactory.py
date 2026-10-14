@@ -62,6 +62,24 @@ _TASK_FORMAT_MAP = {
 }
 
 
+def _lora_int(value: Any, key: str, warnings: List[str]) -> Any:
+    """``lora_rank: "8"`` (quoted in the YAML) is the integer 8.
+
+    LLaMA-Factory's parser does not coerce it, but the author meant 8, and the
+    ``alpha = 2 * rank`` default below needs the integer. Anything else that is
+    not an integer is copied as written and named, so the missing alpha default
+    is not a silent one (#1807).
+    """
+    if isinstance(value, bool) or not isinstance(value, str):
+        return value
+    text = value.strip()
+    if text.isdigit():
+        return int(text)
+    note = ", and lora_alpha was not defaulted from it" if key == "lora_rank" else ""
+    warnings.append(f"{key}: {value!r} is not an integer; copied as written{note}.")
+    return value
+
+
 def migrate_llamafactory(config_path: Path) -> Dict[str, Any]:
     """Parse a LLaMA-Factory YAML config and return a Soup config dict.
 
@@ -143,8 +161,12 @@ def migrate_llamafactory(config_path: Path) -> Dict[str, Any]:
         rank = raw.get("lora_rank")
         if rank is None:
             rank = _LF_DEFAULT_LORA_RANK
+        else:
+            rank = _lora_int(rank, "lora_rank", warnings)
         lora_section["r"] = rank
         alpha = raw.get("lora_alpha")
+        if alpha is not None:
+            alpha = _lora_int(alpha, "lora_alpha", warnings)
         if alpha is None and isinstance(rank, int) and not isinstance(rank, bool):
             alpha = 2 * rank
         if alpha is not None:
@@ -233,8 +255,17 @@ def migrate_llamafactory(config_path: Path) -> Dict[str, Any]:
         elif task == "orpo":
             training["orpo_beta"] = pref_beta
         elif task == "ipo":
-            # trainer/ipo.py passes training.ipo_tau as trl's beta, which is the
-            # value LLaMA-Factory's pref_beta sets under pref_loss: ipo (#1807).
+            # One knob under three names, shown rather than assumed (#1807):
+            # LLaMA-Factory 1fded91 src/llamafactory/train/dpo/trainer.py:79-80 keeps
+            # pref_beta as self.beta and pref_loss as self.loss_type, and for ipo
+            # (:205-207, use_ref_model is True) hands both to trl's dpo_loss;
+            # trl 0.29.1 trl/trainer/dpo_trainer.py:1241-1252 computes the IPO loss
+            # as (delta - 1 / (2 * self.beta)) ** 2, and trl/trainer/dpo_config.py:
+            # 252-256 documents that beta as IPO's regularisation parameter (tau);
+            # Soup's trainer/ipo.py:173-174 passes training.ipo_tau as that beta.
+            # All three default to 0.1 (finetuning_args.py:171-172, dpo_config.py:253,
+            # schema.py ipo_tau), so an absent pref_beta stays absent here and Soup's
+            # default applies.
             training["ipo_tau"] = pref_beta
         elif task == "simpo":
             # Soup's SimPO trainer leaves trl's beta at its default and has no

@@ -97,6 +97,30 @@ def test_both_set_are_copied(tmp_path: Path) -> None:
     assert (cfg.training.lora.r, cfg.training.lora.alpha) == (64, 16)
 
 
+def test_a_quoted_rank_is_the_integer_and_still_defaults_alpha(tmp_path: Path) -> None:
+    # YAML `lora_rank: "32"` is a str; the author meant 32, and alpha = 2 * rank needs it.
+    result, cfg = _migrate(tmp_path, _BASE + 'lora_rank: "32"\n')
+    assert result["training"]["lora"]["r"] == 32
+    assert (cfg.training.lora.r, cfg.training.lora.alpha) == (32, 64)
+    assert not any(w.startswith("lora_rank:") for w in result["_warnings"])
+
+
+def test_a_quoted_alpha_is_the_integer(tmp_path: Path) -> None:
+    result, cfg = _migrate(tmp_path, _BASE + 'lora_rank: 16\nlora_alpha: " 8 "\n')
+    assert result["training"]["lora"]["alpha"] == 8
+    assert (cfg.training.lora.r, cfg.training.lora.alpha) == (16, 8)
+
+
+def test_a_rank_that_is_not_an_integer_is_named_not_defaulted_silently(tmp_path: Path) -> None:
+    path = tmp_path / "lf.yaml"
+    path.write_text(_BASE + "lora_rank: eight\n", encoding="utf-8")
+    result = migrate_llamafactory(path)
+    assert result["training"]["lora"]["r"] == "eight"
+    assert "alpha" not in result["training"]["lora"]
+    assert any(w.startswith("lora_rank: 'eight'") and "lora_alpha was not defaulted" in w
+               for w in result["_warnings"])
+
+
 @pytest.mark.parametrize(
     "value,expected",
     [
@@ -136,6 +160,29 @@ def test_pref_beta_under_ipo_is_the_ipo_tau(tmp_path: Path) -> None:
                                 "pref_beta: 0.3\nfinetuning_type: lora\ndataset: prefs\n")
     assert cfg.task == "ipo"
     assert cfg.training.ipo_tau == 0.3
+
+
+def test_ipo_without_pref_beta_leaves_ipo_tau_at_the_shared_default(tmp_path: Path) -> None:
+    # LLaMA-Factory's pref_beta, trl's DPOConfig.beta and Soup's ipo_tau all default to
+    # 0.1, so an absent pref_beta is left absent: no ipo_tau key, and the loaded config
+    # trains at 0.1 (#1807 review).
+    result, cfg = _migrate(tmp_path, "model_name_or_path: org/m\nstage: dpo\npref_loss: ipo\n"
+                                     "finetuning_type: lora\ndataset: prefs\n")
+    assert cfg.task == "ipo"
+    assert "ipo_tau" not in result["training"]
+    assert cfg.training.ipo_tau == 0.1
+    assert not any("pref_beta" in w for w in result["_warnings"])
+
+
+def test_the_upstream_default_the_equivalence_rests_on_is_still_0_1() -> None:
+    # The mapping above leaves an absent pref_beta absent because trl's beta (what
+    # trainer/ipo.py sets from ipo_tau) defaults to the same 0.1 as LLaMA-Factory's
+    # pref_beta. If trl moves its default, this names the assumption that broke.
+    import dataclasses
+
+    trl = pytest.importorskip("trl")
+    beta = next(f for f in dataclasses.fields(trl.DPOConfig) if f.name == "beta")
+    assert beta.default == 0.1
 
 
 def test_simpo_gamma_is_mapped_and_pref_beta_is_named(tmp_path: Path) -> None:
