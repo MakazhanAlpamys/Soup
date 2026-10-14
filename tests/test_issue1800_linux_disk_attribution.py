@@ -58,7 +58,7 @@ def sysfs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         lambda path: measured_paths.append(path) or 150_000_000,
     )
     return SimpleNamespace(
-        device=device, links=links, volume=str(dev_block / "8:1"),
+        device=device, links=links, volume=os.path.normpath(f"{dev_block}/8:1"),
         cache=cache, measured_paths=measured_paths,
     )
 
@@ -152,4 +152,38 @@ def test_cyclic_sysfs_members_do_not_recurse_forever(sysfs) -> None:
     sysfs.links[str(link)] = str(device)
     sysfs.links[sysfs.volume] = str(device)
     assert ls._probe_disk_kind(sysfs.cache).kind == "hdd"
+    assert sysfs.measured_paths == [sysfs.cache]
+
+
+def test_dangling_sysfs_entry_is_unknown_even_if_its_name_looks_like_nvme(sysfs) -> None:
+    gone = Path(sysfs.volume).parent.parent / "devices" / "gone" / "nvme0n1"
+    sysfs.links[sysfs.volume] = str(gone)
+    assert ls._probe_disk_kind(sysfs.cache) == ls.DiskClassification("hdd", 150_000_000)
+    assert sysfs.measured_paths == [sysfs.cache]
+
+
+def test_stack_with_an_unattributable_member_is_measured_not_trusted(sysfs) -> None:
+    ssd = sysfs.device("sda", 0)
+    odd = sysfs.device("odd0")
+    sysfs.links[sysfs.volume] = str(sysfs.device("dm-0", 0, slaves=[ssd, odd]))
+    assert ls._probe_disk_kind(sysfs.cache) == ls.DiskClassification("hdd", 150_000_000)
+    assert sysfs.measured_paths == [sysfs.cache]
+
+
+@pytest.mark.parametrize("content", [b"\xff\xfe", b"2", b""])
+def test_garbage_rotational_value_is_measured_not_guessed(sysfs, content) -> None:
+    disk = sysfs.device("sdx")
+    (disk / "queue").mkdir()
+    (disk / "queue" / "rotational").write_bytes(content)
+    sysfs.links[sysfs.volume] = str(disk)
+    assert ls._probe_disk_kind(sysfs.cache) == ls.DiskClassification("hdd", 150_000_000)
+    assert sysfs.measured_paths == [sysfs.cache]
+
+
+def test_a_very_deep_stack_is_bounded_and_measured(sysfs) -> None:
+    node = sysfs.device("n0", 0)
+    for index in range(1, 40):
+        node = sysfs.device(f"n{index}", 0, slaves=[node])
+    sysfs.links[sysfs.volume] = str(node)
+    assert ls._probe_disk_kind(sysfs.cache) == ls.DiskClassification("hdd", 150_000_000)
     assert sysfs.measured_paths == [sysfs.cache]
