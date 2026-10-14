@@ -3228,6 +3228,7 @@ Usage: `soup registry push [OPTIONS]`
 | `--name`, `-n` | text |  | yes | Registry entry name |
 | `--tag`, `-t` | text | `v1` |  | Tag (e.g. v1, prod-2024) |
 | `--notes` | text | `""` |  | Free-form notes |
+| `--data` | text |  |  | Training data file to record: its SHA-256 is stored as data_hash. This is the file registered as the training input, not proof of what the run trained on. Must be a file under the current directory. |
 
 ### `soup registry search`
 
