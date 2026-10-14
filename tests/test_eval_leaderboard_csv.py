@@ -16,6 +16,7 @@ from soup_cli.eval.leaderboard import (
     export_leaderboard,
 )
 from soup_cli.experiment.tracker import ExperimentTracker
+from tests.conftest import strip_ansi
 
 
 def parse_csv(payload: str) -> list[list[str]]:
@@ -63,8 +64,10 @@ def test_csv_benchmark_identity_round_trip(benchmark: str) -> None:
     ("models/base,adapter", "custom"),
     ("models/base", "metric,split"),
 ])
+@pytest.mark.parametrize("force_color", [False, True])
 def test_actual_cli_csv_from_real_sqlite(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, model: str, benchmark: str,
+    force_color: bool,
 ) -> None:
     import soup_cli.experiment.tracker as tracker_module
 
@@ -80,10 +83,18 @@ def test_actual_cli_csv_from_real_sqlite(
         return connection
 
     monkeypatch.setattr(tracker_module, "ExperimentTracker", open_tracker)
+    if force_color:
+        monkeypatch.setenv("FORCE_COLOR", "1")
+        monkeypatch.setenv("COLUMNS", "80")
+        monkeypatch.setenv("LINES", "24")
+    else:
+        monkeypatch.delenv("FORCE_COLOR", raising=False)
     try:
         result = CliRunner().invoke(app, ["leaderboard", "--format", "csv"])
         assert result.exit_code == 0, result.exception
-        assert parse_csv(result.stdout) == [
+        # Normalization must not hide styling added to machine-readable CSV.
+        assert result.stdout == strip_ansi(result.stdout)
+        assert parse_csv(strip_ansi(result.stdout)) == [
             ["model", benchmark, "average"],
             [model, "0.75", "0.7500"],
         ]
