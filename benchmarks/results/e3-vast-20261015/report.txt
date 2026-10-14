@@ -1,0 +1,113 @@
+E3 — LoRA versus LoRA-FA at longer sequences
+Research report, 2026-10-15. Ready for review; formal acceptance pending.
+
+Result and recommendation
+For the tested Qwen2.5-0.5B Soup RAM-streaming recipe on RTX3090, retain ordinary
+LoRA as the default. LoRA-FA increased mean arm-median step time by 11.24%, 8.39%
+and 6.11% at sequence lengths 512, 2048 and 4096. Its optimizer state was smaller,
+but peak PyTorch allocated memory fell by only 5.25 MiB at each length. Short-run
+held-out loss was higher with FA. These observations do not establish behavior
+for other targets/ranks/models or converged training. FA remains worth evaluating
+when adapter optimizer storage is a demonstrated bottleneck; this recipe does
+not show a practical total-memory or speed advantage.
+
+Existing report reviewed
+soup-rnd/benchmarks/gate-725-lorafa-operating-point.md (#725).
+That report uses a tiny LLaMA microbenchmark and an analytic saved-activation
+ratio. Its 50% parameter/Adam reduction concerns square projections. It explicitly
+does not claim equivalent total VRAM savings, end-to-end speed or downstream
+quality. Our non-square Qwen targets show an approximately 63.64% optimizer-state
+byte reduction, which must not be described as a 63.64% GPU-memory reduction.
+
+Environment and recipe
+Vast instance 55969952, RTX3090 24 GiB; guest RAM limit 30,206,328,832 bytes.
+GPU UUID: GPU-3328cbaa-7542-6dcc-737e-fa530c027b70.
+Linux container on QEMU virtual disks, overlay filesystem; mapped data disk sdb.
+Python 3.11.16; torch 2.11.0+cu128; transformers 5.19.0; peft 0.21.2;
+trl 0.29.1; datasets 5.1.0. Complete versions are in archive work/packages.txt.
+Source is pinned staging Soup 8387417 plus local save-guard fix, F1 614229d;
+this is not a validation of current main. Exact source hashes: archive manifest.
+Qwen/Qwen2.5-0.5B revision 060db6499f32faf8b98477b0a26969ef7d8b9987.
+Salesforce/wikitext revision b08601e04326c79dfdd32d625aee71d232d685c3.
+Tokens SHA256 f1c5c096d976e8a95cd7c06ea92268b08cc829b668fda6836ad427a6dc28f44f.
+Batch 1, seed/data seed 42, r=16, alpha=32, targets q_proj/v_proj.
+No base quantization; RAM layer streaming; float32 adapters; resolved bf16=True.
+AdamW, lr=1e-4. 32768 input tokens per arm; 64/16/8 steps by sequence length.
+First two steps excluded from timing. Held-out evaluation uses 16384 raw tokens,
+window 512 and the training length; shifted supervised-token counts differ.
+
+Design and validity
+Five ABBA blocks per length; A=LoRA, B=LoRA-FA; fresh process per arm.
+15 accepted blocks, 60 arms. All required F1 checks returned ok with the empirical
+overlay resolver. Result hashes and process exit codes verified for all 60 arms.
+Original unadapted block remains unknown and is excluded.
+512/block04 excluded in full: foreign reads 4,688,121,856 bytes exceeded 1 GB.
+Its first good arm is not recycled. block04-replacement01 replaces the whole block.
+Original diagnostics and rejected records remain in the archive.
+Mapping calibration: exact sdb read deltas 64/192/64 MiB, zero idle reads.
+Controls: idle ok, own 128 MiB ok, foreign 1280 MiB void with exact accounting.
+The resolver uses F1's disk_device injection interface; counters, thresholds,
+required checks and original F1 code are unchanged. Boot and mount layout checked.
+This establishes guest virtual-disk controls, not physical-host isolation.
+Four processes were not inspectable; disk-wide bounds still apply within the guest.
+
+Results (mean of ten arm medians per method, not whole-job throughput)
+Length  LoRA step s  FA step s  FA time increase  LoRA tok/s  FA tok/s
+512     0.226576     0.252051   11.24%            2255.31     2027.37
+2048    0.283414     0.307178    8.39%            7224.30     6664.03
+4096    0.456134     0.484007    6.11%            8981.50     8474.15
+Timing excludes data fetch, evaluation and saving. GPU clock/power-cap samples
+are retained; no fixed-clock claim. Percentages describe observed step time,
+not a formal significance test or an equal percentage drop in throughput.
+
+Length  Peak allocated GiB L/FA   Peak reserved GiB L/FA
+512     1.278357 / 1.273230       1.507812 / 1.500000
+2048    3.956509 / 3.951382       5.175781 / 5.167969
+4096    7.520589 / 7.515462       9.234375 / 9.226562
+Optimizer state: 8.250366 / 3.000000 MiB. Gradients: 4.125 / 1.5 MiB.
+Allocated and reserved memory are PyTorch measurements, not complete device VRAM.
+Per-second whole-device samples include setup/eval and may miss a transient peak.
+
+Length  Validation loss at fixed window512 L/FA  At training window L/FA
+512     2.400699 / 2.467944                       2.400699 / 2.467944
+2048    2.543355 / 2.582384                       2.307044 / 2.338841
+4096    2.623601 / 2.639126                       2.296954 / 2.318247
+Compare methods within each length. Different lengths have different optimizer
+step counts. Same-seed repeats assess execution variability, not multi-seed
+generalization. These are short-training quality observations, not convergence.
+
+Repeat rule
+Pinned F1 repeats()/blocks_to_add() applied to arm median seconds.
+Pooled sigma seconds: 512=0.000200608; 2048=0.003419831; 4096=0.016776379.
+N=max(2,ceil(7.85*(sigma/(0.1*mean_A))^2)) gives 2 for each length.
+The mandatory five-block pilot exceeds N; blocks_to_add=0 for all three.
+No further repetitions are requested by this rule. It plans detection of a 10%
+effect, not proof of significance for the smaller observed effects.
+
+Formal protocol limitation
+F1 METHOD requires committing the rule before the first arm. No commit was made
+under the user's no-commit instruction. The separate protocol was recorded before
+blocks02-05, after exploratory block01 was observed. Do not retrospectively call
+this series preregistered or formally F1-compliant. Reviewer must accept this
+deviation or request a prospectively committed confirmation series.
+
+Reproduction and deliverables
+Upload vast_runner.zip, extract under /workspace. Use the saved pinned manifest.
+python3 run.py probe
+python3 run.py setup
+python3 run.py e3-prepare
+python3 diagnose_overlay.py
+.venv/bin/python overlay_control.py
+.venv/bin/python run_overlay_e3.py --length 2048 --id e3-overlay-2048-block01
+Repeat for 512 and 4096, then .venv/bin/python e3_repeat_series.py.
+The failed 512/block04 was replaced with --id e3-overlay-512-block04-replacement01;
+remaining blocks04 and05 were run explicitly. No invalid block was overwritten.
+python3 run.py bundle
+On a new instance recalibrate and validate disk mapping; do not reuse old evidence.
+
+Evidence archive: results_89647fe8.zip (contains earlier runs too; avoid duplicates).
+Archive hash and per-method summaries: e3_results_89647fe8_analysis.json.
+Reproduce audit: python analyze_e3_archive.py PATH_TO_ZIP --output analysis.json
+Scripts, declarations, source hashes, package versions, commands, raw logs,
+results and sensor records are retained. This is real GPU evidence; disk controls
+use synthetic I/O. C1 is separate and is not completed by these E3 measurements.
