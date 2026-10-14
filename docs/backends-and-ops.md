@@ -117,6 +117,35 @@ training:
 
 MLX backend supports SFT. `backend: mlx` with `task: dpo` or `task: grpo` is refused when the config is loaded, with an error naming the task — upstream `mlx-lm` ships no DPO/GRPO training helper, so those wrappers exist only as a backstop for callers that bypass config validation. Requires `mlx-lm >= 0.31.3`. Use `soup recipes search mlx` for ready-made Apple Silicon configs.
 
+#### DoRA on MLX
+
+For text SFT, set `training.lora.use_dora: true` to use MLX-LM's native
+weight-decomposed adapter instead of plain LoRA. Soup supports dense linear
+targets on unquantized or pre-quantized 4-bit bases, with the same scalar
+`lora.r`, `lora.alpha` and `target_modules` settings as MLX LoRA. The base remains
+frozen; the low-rank factors and magnitude parameters train. Switch/expert layers,
+embedding targets, unmatched target names and 8-bit target layers are refused
+before adapter conversion. `use_rslora`, `rank_pattern` and `alpha_pattern` are
+not supported with MLX DoRA. Unsloth DoRA remains refused.
+
+The output records `fine_tune_type: dora` and is loadable with
+`mlx_lm.load(base, adapter_path=output)`. `soup train --resume auto` warm-starts
+the DoRA weights, including magnitudes; it refuses missing, extra or differently
+shaped adapter tensors before loading any of them. This restores weights only,
+not optimizer state, dataset position or the iteration counter.
+
+To fuse the adapter, use the native MLX-LM command (this is not `soup merge`):
+
+```bash
+mlx_lm.fuse --model ./mlx-base --adapter-path ./output \
+  --save-path ./fused-model --dequantize
+```
+
+Native regression tests use a local, randomly initialized one-layer Llama and
+check training, frozen base weights, gradients, reload and dequantized fusion.
+They require no model downloads. They establish adapter lifecycle correctness;
+they do not establish pretrained-model quality or a speed advantage over LoRA.
+
 #### Optimizers and schedules
 
 `training.optimizer`, `training.scheduler`, `training.warmup_ratio` and

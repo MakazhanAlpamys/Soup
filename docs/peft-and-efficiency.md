@@ -396,9 +396,11 @@ training:
 ```
 
 Works with all training tasks on the transformers backend (see the note on
-quantized bases below). On `backend: unsloth` and `backend: mlx`, `use_dora: true`
-is refused when the config is loaded: neither backend builds a DoRA adapter, so
-it would silently train plain LoRA.
+quantized bases below). The MLX backend also supports DoRA for text SFT on dense
+linear targets with unquantized or pre-quantized 4-bit bases; see
+[DoRA on MLX](backends-and-ops.md#dora-on-mlx) for restrictions and native adapter
+loading/fusion. On `backend: unsloth`, `use_dora: true` remains refused at config
+load because that path does not build a DoRA adapter.
 
 > **Not on GPTQ / AWQ / AQLM / EETQ bases.** peft has no DoRA variant for those
 > layers and raises when the adapter is attached, so `use_dora: true` with
