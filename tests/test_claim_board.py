@@ -99,7 +99,7 @@ def test_render_is_plain_markdown_and_truncates():
     assert "CONTRIBUTING.md#how-work-is-queued" in page
     cell = page.splitlines()[-1].split("|")[2].strip()
     assert len(cell) == board.TITLE_WIDTH and cell.endswith("...")
-    assert not re.search(r"[Ѐ-ӿ]", page)
+    assert not re.search("[\\u0400-\\u04FF]", page)
 
 
 def test_strip_stamp_ignores_generation_time_only():
