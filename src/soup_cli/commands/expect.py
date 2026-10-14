@@ -37,11 +37,11 @@ def _load_jsonl_rows(data_path: str) -> List[Mapping[str, object]]:
     if not isinstance(data_path, str) or not data_path:
         raise ValueError("data path must be a non-empty string")
     if not os.path.lexists(data_path):
-        raise FileNotFoundError(f"data file not found: {data_path}")
+        raise FileNotFoundError(f"data file not found: {data_path!r}")
     enforce_under_cwd_and_no_symlink(data_path, "data path")
     real = os.path.realpath(data_path)
     if not os.path.isfile(real):
-        raise FileNotFoundError(f"data file not found: {data_path}")
+        raise FileNotFoundError(f"data file not found: {data_path!r}")
     if os.path.getsize(real) > _MAX_DATA_BYTES:
         raise ValueError(f"data file exceeds {_MAX_DATA_BYTES} bytes")
     rows: List[Mapping[str, object]] = []
