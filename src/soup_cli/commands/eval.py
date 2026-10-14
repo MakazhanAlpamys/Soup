@@ -730,6 +730,10 @@ def auto(
         border_style="blue",
     ))
 
+    # #1808: a leg that could not run used to be swallowed, and "Auto-eval
+    # complete." exited 0 even when it was the only leg. Count what ran.
+    legs_ran = 0
+
     # Run standard benchmarks if specified
     if bench_list:
         console.print("\n[bold]Standard Benchmarks[/]")
@@ -749,6 +753,8 @@ def auto(
             # benchmark failure aborted the whole auto-eval instead of falling
             # through to the custom eval below.
             console.print("[yellow]Benchmark eval skipped (see above).[/]")
+        else:
+            legs_ran += 1
 
     # Run custom eval if specified
     if tasks_file:
@@ -767,8 +773,20 @@ def auto(
                 output=None,
                 trust_remote_code=trust_remote_code,
             )
-        except SystemExit:
+        except (typer.Exit, SystemExit):
+            # The same pair as the benchmark leg (#1808): custom() also fails
+            # with typer.Exit, which `except SystemExit` alone never caught, so
+            # the exit code depended on which leg had failed.
             console.print("[yellow]Custom eval skipped (see above).[/]")
+        else:
+            legs_ran += 1
+
+    if legs_ran == 0:
+        console.print(
+            "\n[red]Auto-eval failed: nothing was evaluated.[/] Every leg was skipped "
+            "(see above); fix the cause and run again."
+        )
+        raise typer.Exit(1)
 
     console.print("\n[green]Auto-eval complete.[/]")
 

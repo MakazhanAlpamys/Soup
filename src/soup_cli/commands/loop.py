@@ -216,6 +216,14 @@ def watch_cmd(
         raise typer.Exit(code=2)
     state = _safe_read()  # ensure state exists before forking
     if detach:
+        # #1808: the child validates these in WatchConfig.__post_init__ and exits
+        # 2 with its output on /dev/null, while the parent printed "watch
+        # detached". Run the same checks here, before anything is spawned.
+        try:
+            WatchConfig(poll_interval_sec=poll_interval, max_iterations=max_iterations)
+        except (TypeError, ValueError) as exc:
+            console.print(f"[red]invalid watch config:[/] {escape(str(exc))}")
+            raise typer.Exit(code=2)
         argv = [
             sys.executable,
             "-m",

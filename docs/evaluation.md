@@ -334,6 +334,8 @@ soup drift-alarm --reference ft-time.jsonl --live yesterday.jsonl --threshold 0.
 
 Default threshold 0.2 matches v0.43.0 KL-delta quant-check thresholds. Webhooks are SSRF-validated (loopback HTTP only, RFC1918 / 169.254.x / `100.64.0.0/10` / `fec0::/10` / 0.0.0.0 rejected). On drift the CLI exits with code 3 — cron-friendly automation.
 
+Each JSONL row's text is read from `output`, `response` or `text`. A file in which no row carries one of those keys (a live log keyed `completion`, an empty file, all-malformed JSON) is not a passing gate: nothing was compared, so the command exits 1 naming the file and the keys instead of printing OK with `n_live: 0` (#1808).
+
 
 ## Diagnose (Post-Training Report Card)
 

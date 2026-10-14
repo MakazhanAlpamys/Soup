@@ -433,7 +433,7 @@ def merge(
         if eval_suite is None:
             console.print(
                 "[red]--strategy cmaes requires --eval <suite> "
-                "(path to a YAML/JSONL eval).[/]"
+                "(path to a .jsonl eval suite; the loader accepts .jsonl only).[/]"
             )
             raise typer.Exit(2)
         if canary is not None or strict_verdict:
