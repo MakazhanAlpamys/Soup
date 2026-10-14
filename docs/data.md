@@ -642,8 +642,11 @@ reports "Could not read the final trainer's args statically" and uses Soup defau
 
 JSONL dataset rows must be objects; JSON dataset files must contain an array of
 objects. Non-object rows are skipped with a warning naming the physical JSONL
-line or JSON array row. `soup data validate` also lists these warnings as issues;
-its row statistics describe the retained objects. `soup data review` applies the
+line or JSON array row. `soup data validate` lists these warnings as issues (the
+first three, then `... and N more`), and every skipped row, whether not an object
+or not valid JSON, counts as an invalid row in its `N/M rows valid` line, in
+`--min-valid-fraction` and in the exit code; its other statistics describe the
+retained objects. `soup data review` applies the
 same object check before displaying a pair. Rejected row contents are not printed. `soup data canary insert` retains its first-row refusal and preserves later rows when rewriting the file.
 
 Soup supports these formats (auto-detected). Files can be JSONL, JSON, CSV, Parquet, or TXT.
@@ -1024,8 +1027,11 @@ soup data clean ./data/train.jsonl -o ./data/clean.jsonl --dry-run
 `soup data validate` exits with code `0` when at least one row is usable and the
 optional minimum valid fraction is met. It exits with code `3` for input errors,
 such as a missing file or an undetectable format, and code `2` when a non-empty
-dataset has no usable rows or falls below `--min-valid-fraction`. A partially valid
-dataset still exits with code `0` when no minimum is specified.
+dataset has no usable rows or falls below `--min-valid-fraction`. A file whose
+every row was skipped is not empty: it exits with code `2` ("no usable rows
+remain") when `--format` names the format, and `3` without one, since nothing is
+left to detect a format from. A partially valid dataset still exits with code `0`
+when no minimum is specified.
 
 Training loads a dataset through the same converters, and a row they reject is
 dropped rather than stopping the run, so one bad line does not abort a load. The
@@ -1033,7 +1039,9 @@ drop is reported: `soup train`, and every other command that loads a dataset,
 prints `Warning: N of M rows dropped` with the first row's index and the
 converter's reason. For a local file it also prints the `soup data validate`
 command that lists them all. The
-count agrees with `soup data validate` for the same file. Before #1181 the rows
+count agrees with `soup data validate` for the same file, except that the training
+drop report counts retained rows only, so the rows the loader skipped before
+conversion appear in `soup data validate` alone. Before #1181 the rows
 were dropped without a word. If a load ends with zero training rows, `soup train`
 stops with exit 1 before loading the model, `--dry-run` included, naming the format
 the rows were read as and the first row's drop reason (#1217).
