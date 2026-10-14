@@ -8,6 +8,7 @@ from typing import Callable
 
 import pytest
 import yaml
+from pydantic import ValidationError
 from rich.console import Console
 from typer.testing import CliRunner
 
@@ -54,6 +55,26 @@ def test_load_suite_refuses_zero_tasks(
     with pytest.raises(ValueError) as caught:
         gate.load_suite(str(path))
     assert str(caught.value) == ERROR
+
+
+@pytest.mark.parametrize(
+    "content",
+    [b"", b"# TODO: write the gate suite\n", b"  \n\n   \n"],
+    ids=["zero-bytes", "comment-only", "whitespace-only"],
+)
+def test_load_suite_empty_file_names_the_missing_suite_field(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, content: bytes,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    path = tmp_path / "gate.yaml"
+    path.write_bytes(content)
+    with pytest.raises(ValueError) as caught:
+        gate.load_suite(str(path))
+    assert isinstance(caught.value, ValidationError), repr(caught.value)
+    assert [(err["loc"], err["type"]) for err in caught.value.errors()] == [
+        (("suite",), "missing"),
+    ]
+    assert "suite\n  Field required" in str(caught.value)
 
 
 @pytest.mark.parametrize("payload", EMPTY_SUITES, ids=["explicit", "missing", "misspelled"])
