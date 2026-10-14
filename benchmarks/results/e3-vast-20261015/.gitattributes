@@ -1,0 +1,4 @@
+*.json text eol=lf
+*.txt text eol=lf
+*.zip binary
+.gitattributes text eol=lf
