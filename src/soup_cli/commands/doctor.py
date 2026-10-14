@@ -27,7 +27,9 @@ console = Console()
 # extra, so a healthy core-only install reports no failures (#828).
 DEPS = [
     ("pydantic", "pydantic", "2.0.0", True),
-    ("typer", "typer", "0.9.0", True),
+    # A copy of the floor pyproject.toml declares, pinned to it by
+    # tests/test_cli_dependency_floors.py (#1802).
+    ("typer", "typer", "0.15.4", True),
     ("rich", "rich", "13.0.0", True),
     ("yaml", "pyyaml", "6.0", True),
     ("plotext", "plotext", "5.2.0", True),

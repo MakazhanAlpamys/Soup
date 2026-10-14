@@ -1369,7 +1369,7 @@ control characters in rejected values are escaped (#953 by @shubhambhar007 in #9
   `soup data pii` and `soup data score` (#1329 by @taljeon in #1360).
 - Email snippets now follow the bounded local-part match, so leading punctuation
   and punctuation-adjacent addresses may produce different snippet spans; row-level
-  detection remains unchanged.
+  detection remains unchanged (#1329 by @taljeon in #1360).
 
 - **Refuse incompatible pre-tokenized data transformations.** Soup data preprocessing does not apply non-text modality transforms (vision/audio/audio_out), `data.add_new_tokens`, `data.new_special_tokens`, or `data.prompt_strategy` to cached ids, so those combinations are refused at config load (#1273 by @Samearth17 in #1363)
 
@@ -1491,7 +1491,8 @@ control characters in rejected values are escaped (#953 by @shubhambhar007 in #9
   not given, so these rules apply without the flag too, and to `soup bench`,
   which loads through `soup infer`. On a CPU-only host the model now loads in
   `float32` pinned to the CPU instead of `"auto"`/`float16`, which doubles its
-  RAM use (a 7B model needs about 28 GB instead of 14 GB).
+  RAM use (a 7B model needs about 28 GB instead of 14 GB) (#1443 by @drakeo338 in
+  #1460).
 
 - **`soup expect` refuses suite keys and argument names an expectation does not take, instead of running it on its defaults (#1428 by @Srinivasan8888 in #1461).**
   `parse_suite_spec` read only `name` and `args` and dropped every other key, and the dispatcher read arguments with `args.get(key, default)`, so the `min_tokens` / `max_tokens` example in `docs/compliance.md` (written beside `name` instead of under `args:`) and a misspelled argument such as `max_token` both ran `expect_token_length_between` on its defaults of 1 and 1,048,576 tokens and passed a 5000-token row with exit 0. A key beside `name` or an argument the expectation does not take is now refused when the suite loads (exit 3, before the data file is opened), with the key named and either "belongs under `args:`" or the nearest valid name; `min_tokens` / `max_tokens` / `threshold` are validated at parse time too. The `docs/compliance.md` example moves to the `args:` form. A suite that carried one of these keys now exits 3 on its next run, which is the point.
@@ -2028,7 +2029,7 @@ control characters in rejected values are escaped (#953 by @shubhambhar007 in #9
 
 ### Security
 
-- Hardening of outbound endpoint validation. A security advisory with details and upgrade guidance will be published alongside this release.
+- Hardening of outbound endpoint validation — [GHSA-9f49-hqpf-c849](https://github.com/MakazhanAlpamys/Soup/security/advisories/GHSA-9f49-hqpf-c849). The advisory has the details and upgrade guidance.
 
 ## [0.75.1] - 2026-09-21
 

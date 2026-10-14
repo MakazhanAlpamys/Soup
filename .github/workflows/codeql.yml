@@ -1,0 +1,81 @@
+# CodeQL code scanning for the Python source, once a week.
+#
+# This repository had no code scanning at all (the code-scanning alerts API
+# answered "no analysis found"). This workflow is the "advanced setup" kind: a
+# workflow file in the repository, not the repository setting, so the triggers,
+# the permissions and the cost are all visible and reviewable here.
+#
+# WHY WEEKLY AND MANUAL ONLY. There is no pull_request trigger and no push
+# trigger, on purpose and for now. The runner pool is this project's
+# bottleneck: dozens of outside pull requests are open at once and `main` takes
+# a merge every few minutes, so a scan on every pull request or every merge
+# would join the same queue as the required checks and slow every one of them.
+# A weekly scan of `main` finds what a weekly review needs; it does not gate
+# anything. Do not add a pull_request or push trigger without measuring first
+# what the extra runs do to the queue (see the "Supersede, do not queue" block in
+# ci.yml). This job is not a required check and must not be added to the
+# required set.
+#
+# WHAT IT DOES NOT DO. It does not install the project. `build-mode: none` makes
+# CodeQL read the Python sources directly, so no pip install, no torch, no
+# transformers: the job needs no dependencies and cannot be broken by a
+# dependency release. Keep it that way.
+#
+# TO RUN IT BY HAND: Actions > "CodeQL" > Run workflow, or
+#   gh workflow run codeql.yml --ref main
+# Results appear in the Security tab, under Code scanning (the API route is
+# `gh api repos/<owner>/<repo>/code-scanning/alerts`). Scheduled runs on this
+# repository start hours after their cron time, so the hour below does not
+# matter; the minute is off the hour to stay clear of the other workflows.
+#
+# THE QUERY SUITE is CodeQL's default one. To widen it later to
+# `security-extended` (more results, more false positives), add
+#     queries: security-extended
+# to the `with:` of the init step. Triage the default suite's alerts first.
+name: CodeQL
+
+on:
+  schedule:
+    # Sundays, 04:47 UTC.
+    - cron: "47 4 * * 0"
+  workflow_dispatch:
+
+# Nothing is granted by default; the job asks for what it needs.
+permissions: {}
+
+# A manual run started while the weekly one is still going waits for it
+# instead of uploading a second analysis of the same commit at the same time.
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  analyze:
+    name: analyze (python)
+    runs-on: ubuntu-latest
+    # An upper bound chosen before the first run, not a measurement. After the
+    # first successful run, set it to about twice its duration (the method in
+    # the "Bound every job explicitly" block of ci.yml).
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      # Upload the results to code scanning.
+      security-events: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      # Referenced by its major tag like the other GitHub-owned actions here. A
+      # commit pin is not used: this repository has no automated action updates,
+      # and a pinned scanner would silently stop moving with CodeQL's own query
+      # and extractor updates.
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: python
+          build-mode: none
+      - name: Analyze
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: "/language:python"

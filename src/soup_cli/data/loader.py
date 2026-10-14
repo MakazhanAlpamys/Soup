@@ -18,6 +18,7 @@ from soup_cli.data.formats import (
     format_to_messages_with_reason,
     is_audio_format,
     is_vision_format,
+    unify_preference_layout,
 )
 from soup_cli.utils.paths import is_under_cwd
 
@@ -407,6 +408,29 @@ def _finalize(
                 f"[yellow]Replay pool too small: wanted {report.requested}, "
                 f"used {report.n_replay} (short {report.shortfall}). Rows are "
                 "NOT repeated.[/]"
+            )
+
+    # #1849: text and conversational preference rows cannot share a dataset
+    # (one Arrow type per column; trl reads the layout off the first row).
+    # Here rather than per file, so interleaved files in different layouts are
+    # covered too. trl prepares train and val separately.
+    for split in ("train", "val"):
+        rows = result.get(split)
+        if not isinstance(rows, list):
+            continue
+        unified, rewritten = unify_preference_layout(rows)
+        if rewritten:
+            result[split] = unified
+            what, each = (
+                ("is a plain-text preference row", "It")
+                if rewritten == 1
+                else ("are plain-text preference rows", "Each")
+            )
+            console.print(
+                f"[yellow]Note: {rewritten} of {len(unified)} {split} rows {what} in a "
+                f"dataset whose other rows are conversations. {each} was rewritten as one "
+                "user turn and one assistant turn per answer, so the whole split goes "
+                "through the chat template.[/]"
             )
     return result
 

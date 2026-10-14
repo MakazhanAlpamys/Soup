@@ -123,6 +123,13 @@ class EvalSuite(BaseModel):
     tasks: list[GateTask] = Field(default_factory=list)
 
 
+def _require_gate_tasks(suite: EvalSuite) -> None:
+    if not suite.tasks:
+        raise ValueError(
+            f"eval-gate suite {suite.suite!r} field 'tasks' must contain at least one task"
+        )
+
+
 def load_suite(path: str) -> EvalSuite:
     """Load and validate an eval suite from disk."""
     suite_path = Path(path)
@@ -135,7 +142,9 @@ def load_suite(path: str) -> EvalSuite:
     data = load_yaml_file_limited(
         suite_path, f"eval-gate suite '{path}'", max_bytes=MAX_CONFIG_BYTES
     ) or {}
-    return EvalSuite(**data)
+    suite = EvalSuite(**data)
+    _require_gate_tasks(suite)
+    return suite
 
 
 def current_baseline_stamp() -> dict[str, object]:
@@ -609,6 +618,7 @@ def run_gate(
             raise ValueError(
                 f"baseline score for {base_name!r} must be finite, got {base_val}"
             )
+    _require_gate_tasks(suite)
     task_results: list[GateTaskResult] = []
     any_regressed = False
     any_failed_threshold = False

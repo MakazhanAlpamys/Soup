@@ -32,7 +32,18 @@ classifiers = [
 # (torch / transformers / peft / trl / datasets / bitsandbytes / accelerate)
 # into the `[train]` extra below.
 dependencies = [
-    "typer>=0.9.0,<0.21.0",
+    # 0.15.4 is the lowest Typer the CLI starts on next to any Click it can be
+    # installed with (#1802; the measured table is in
+    # tests/test_cli_dependency_floors.py). Below 0.12.4 the command tree does not
+    # build (`RuntimeError: Type not yet supported: int | None`), so no command
+    # runs, `soup --help` included. 0.12.4 - 0.15.3 start only next to Click 8.1 or
+    # older and do not ask for it; 0.15.4 does (`click<8.2`), and 0.16.0 onwards
+    # render help with Click 8.2 and newer.
+    # A floor here is a version CI runs, not one it assumes: the `transformers-floor`
+    # job installs exactly this Typer floor and the Click floor below
+    # (.github/constraints/transformers-floor.txt) and starts the CLI on them. Move a
+    # floor and its pin together; that test file refuses one without the other.
+    "typer>=0.15.4,<0.21.0",
     # click 8.5.0 drops every positional-argument description from `--help`
     # (its Argument.__init__ overwrites the help typer sets). Imported directly by
     # commands/autopilot.py, utils/argv_redaction.py and utils/exit_codes.py, so
