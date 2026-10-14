@@ -3721,7 +3721,8 @@ class TrainingConfig(BaseModel):
             "seq, hidden] tensor and a loop over the head. It gives up "
             "outputs.logits on a labelled forward, and equality to the last "
             "bit with an unchunked step: the per-token terms are the same, the "
-            "order of the final sum is not. task='sft' only."
+            "order of the final sum is not. task='sft' only; refused beside "
+            "use_cut_ce."
         ),
     )
 
@@ -6807,6 +6808,15 @@ class SoupConfig(BaseModel):
                 "'raft': the RAFT loss weights every token and is computed from "
                 "the full logits, which a chunked step does not return. Remove "
                 "training.stream_loss_chunk."
+            )
+        if tcfg.stream_loss_chunk is not None and tcfg.use_cut_ce:
+            # #1693 — two mechanisms over the same loss: which one computes it
+            # would be undefined, so neither is picked silently.
+            raise ValueError(
+                "training.stream_loss_chunk and training.use_cut_ce cannot be "
+                "combined: each replaces how the loss over the logits is "
+                "computed, and with both set which one runs is undefined. Keep "
+                "one of them."
             )
         if self.backend != "transformers":
             raise ValueError(

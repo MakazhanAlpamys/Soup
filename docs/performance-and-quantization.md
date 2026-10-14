@@ -450,7 +450,7 @@ training:
   # stream_vram_override: 4_000_000_000   # Bytes to assume free (v0.73.x); see below
   # stream_vram_probe: true    # Decide the fit by MEASURING one step (sft only); see below
   # stream_nf4_scale_cache: true  # Keep expanded NF4 scales resident (4bit + double quant); see below
-  # stream_loss_chunk: 128     # Output head and loss N tokens at a time, for long contexts (sft only); see below
+  # stream_loss_chunk: 128     # Output head and loss N tokens at a time, for long contexts (sft only)
   # stream_disk_kind: nvme     # Override auto disk-kind detection: nvme/ssd/hdd; see below
 ```
 
@@ -655,8 +655,7 @@ The same term decides what an 8B base needs on a 4 GB card. Llama-3.1-8B NF4 (vo
 128 256), streamed, LoRA r=8: **3.448 GB at batch 1, S=512**, then **1.063 GB for every
 further 512 tokens per step** — 4.512 GB at 1024, already above the 4.294 GB card
 ([probe v0.73.0, section 9](../benchmarks/probe-v0.73.0-what-bounds-streaming.md#9-peak-vram-and-the-microbatch-sweep)).
-`data.max_length` defaults to 2048, so the "8B on 4 GB" setup needs `data.max_length: 512`,
-or `training.stream_loss_chunk` (below).
+`data.max_length` defaults to 2048, so the "8B on 4 GB" setup needs `data.max_length: 512`.
 
 So `soup train` predicts peak VRAM before building the model, and **refuses a run it
 expects not to fit**:
@@ -685,43 +684,6 @@ BF16 support and `float16` otherwise — and is printed with the SM clock it was
 because this card alone produced 3.5 and 7.6 TFLOPS in two sessions at the same reported
 clock. A per-card constant compiled into Soup would be a fabrication. Real streamed runs landed at
 68–100% of their measured ceiling.
-
-### Long contexts: the head and the loss in chunks (`stream_loss_chunk`)
-
-The logits term is `vocab × seq × batch`, so it is what caps the context length on a
-small card. `training.stream_loss_chunk: 128` runs the output head and the loss 128 tokens
-at a time: each chunk runs the head, takes its cross-entropy and the gradient on its own
-hidden states, and drops its logits before the next chunk starts. The term becomes
-`vocab × chunk × batch`. With the 128 256-token vocabulary above and the shipped 14 bytes
-per element that is 0.23 GB at a chunk of 128 whatever `data.max_length` is, against
-1.84 GB at 1024 tokens and 3.68 GB at 2048.
-
-**What it costs.** Two more `[batch, seq, hidden]` tensors (the gradient on the hidden
-states, kept from the forward to the backward, and its product with the incoming gradient:
-34 MB together at 2048 tokens, hidden 4096, bf16) and a loop over the head.
-
-**What it gives up.**
-
-- `outputs.logits` on a labelled forward. The trainer's `entropy` and
-  `mean_token_accuracy` columns and the rewind log's per-row losses are computed inside the
-  loop instead and keep their names and values. A forward without labels (generation) is
-  unchanged.
-- Equality to the last bit with an unchunked step. The per-token terms are the ones
-  `ForCausalLMLoss` computes; the order of the final sum and the shape of each matmul are
-  not. On CPU in float32, on the tiny Llama the tests use (batch 2 × 37 tokens, chunk 8),
-  the loss differed by 4.8e-07 and the LoRA gradients by at most 2.0e-07 of the largest
-  one; with the chunk at or above the sequence length both were equal.
-
-**The pre-flight** charges the logits on `min(seq, chunk)` tokens and adds the two tensors;
-the panel line ends `(logits 0.23 GB in chunks of 128 tokens)`. That charge is arithmetic:
-the 14 bytes per element were measured on unchunked steps, and no run with this option has
-been measured on a GPU yet. `stream_vram_probe: true` decides the fit on a measured step,
-and that step is the chunked one.
-
-`task: sft` only. Refused at load: without `stream_layers`, for a preference task (those
-losses reduce the logits to per-token log-probs instead), and with `data.format: raft`
-(its weighted loss reads the full logits). Refused when the model is built: an architecture
-that changes its logits after the head (Gemma 2's `final_logit_softcapping`).
 
 ### Batch size vs gradient accumulation
 
@@ -762,6 +724,7 @@ prints this advice when it sees you accumulating.
 - more than 8 distinct layer shapes in one shard index → refused. Staging is allocated per shape and a shape with one member takes a full slot at any depth, so an index whose every layer differed would hold most of the model in staging at once — page-locked when the box allows it and `stream_pin` is not false, a loud pageable fallback otherwise, and a refusal only under `stream_pin: true` on a CUDA target — which is what the disk tier exists to avoid. A real model has one to three
 - `stream_vram_probe` on any task other than `sft` → the probe runs a plain causal-LM step, which *is* the SFT step but is not a preference loss. Measured at one matching shape it is conservative there too (6.02 GB against a real DPO step's 5.30 GB, +13.5%), but one shape is not a validation, so it is not offered for `dpo`/`orpo`/`simpo`/`kto` yet
 - `stream_loss_chunk` on any task other than `sft`, or with `data.format: raft` → the chunked step rebuilds the causal-LM cross-entropy and returns no logits. A preference loss reduces the logits to per-token log-probs instead, and RAFT's weighted loss reads all of them (#1693)
+- `stream_loss_chunk` beside `use_cut_ce` → each replaces how the loss over the logits is computed, and with both set which one runs is undefined (#1693)
 - an architecture outside the supported list (llama / qwen2 / qwen3, including qwen3_5_moe text aliases / qwen4_exp text / mistral / gemma / gemma2 / gemma3_text / phi / phi3 / deepseek_v3) → named explicitly. `deepseek_v3` is the DeepSeek-V3 family (MLA attention, routed experts plus a shared expert); a Kimi K2 checkpoint uses the same decoder but declares `model_type: kimi_k2`, which transformers does not register, so it is refused under that name. Under `quantization: 4bit` its attention, shared-expert and dense-MLP projections are NF4 while the routed experts stay at the stream dtype: they are 3-D parameters, not `nn.Linear` modules, so a DeepSeek-V3 layer streams most of its bytes unquantised
 
 **Config example:**

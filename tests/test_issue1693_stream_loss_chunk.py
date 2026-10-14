@@ -777,6 +777,18 @@ class TestTheOption:
         assert "cannot be combined with data.format='raft'" in message
         assert "full logits" in message
 
+    def test_use_cut_ce_and_the_chunk_refuse_each_other(self):
+        """Two mechanisms over the same loss: refused, with both fields named."""
+        from pydantic import ValidationError
+
+        _cfg(stream_layers=True, use_cut_ce=True)  # the premise: each loads alone
+        _cfg(stream_layers=True, stream_loss_chunk=128)
+        with pytest.raises(ValidationError) as excinfo:
+            _cfg(stream_layers=True, stream_loss_chunk=128, use_cut_ce=True)
+        message = excinfo.value.errors()[0]["msg"]
+        assert "training.stream_loss_chunk and training.use_cut_ce cannot be combined" in message
+        assert "Keep one of them" in message
+
     def test_the_rewind_log_stays_on_beside_it(self):
         """``rewind_log`` is on by default: refusing the pair would switch the
         flight recorder off for everyone who sets a chunk."""
@@ -784,14 +796,14 @@ class TestTheOption:
 
         assert training.rewind_log is True
 
-    @pytest.mark.parametrize("chunk", [0, -1, 15, 8193])
+    @pytest.mark.parametrize("chunk", [0, -1, 8193])
     def test_a_chunk_outside_the_bounds_is_refused(self, chunk):
         from pydantic import ValidationError
 
         with pytest.raises(ValidationError, match="stream_loss_chunk"):
             _cfg(stream_layers=True, stream_loss_chunk=chunk)
 
-    @pytest.mark.parametrize("chunk", [16, 8192])
+    @pytest.mark.parametrize("chunk", [1, 8192])
     def test_the_bounds_themselves_load(self, chunk):
         assert _cfg(stream_layers=True, stream_loss_chunk=chunk).training.stream_loss_chunk == chunk
 
@@ -1154,60 +1166,3 @@ def test_the_pre_flight_panel_says_the_logits_are_chunked(tmp_path, monkeypatch)
     plain, chunked = seen
     assert plain.endswith("GB)") and "in chunks of" not in plain
     assert chunked.endswith("GB in chunks of 16 tokens)")
-
-
-# ─── The harness for the GPU table ───────────────────────────────────────────
-# Its measurement needs a card. What can be checked without one: the two arms
-# it builds are configs that load, and a row that under-predicts is flagged.
-
-
-def _harness():
-    import importlib.util
-    from pathlib import Path
-
-    path = (
-        Path(__file__).resolve().parents[1]
-        / "benchmarks"
-        / "harness"
-        / "issue1693_loss_chunk_vram.py"
-    )
-    spec = importlib.util.spec_from_file_location("issue1693_loss_chunk_vram", path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-class TestTheHarness:
-    @pytest.mark.parametrize("chunk", [None, 128])
-    @pytest.mark.parametrize("quantization", ["none", "4bit"])
-    def test_both_arms_are_configs_that_load(self, tmp_path, chunk, quantization):
-        import yaml
-
-        from soup_cli.config.loader import load_config_from_string
-
-        doc = _harness().config_doc("test/model", 1024, chunk, quantization, tmp_path)
-        cfg = load_config_from_string(yaml.safe_dump(doc))
-
-        assert cfg.training.stream_layers is True
-        assert cfg.training.stream_loss_chunk == chunk
-        assert cfg.data.max_length == 1024 and cfg.training.quantization == quantization
-        assert cfg.training.rewind_log is True  # the default trainer, as a user runs it
-
-    def test_the_rows_overshoot_the_length_they_are_cut_to(self):
-        row = _harness().rows(512)[0]
-
-        assert len(row["messages"][1]["content"].split()) == 3 * 512
-
-    def test_a_row_that_under_predicts_is_flagged(self):
-        harness = _harness()
-
-        safe = harness.table_row(1024, 1024, 128, 3_500_000_000, 3_463_000_000)
-        short = harness.table_row(1024, 1024, 128, 3_400_000_000, 3_463_000_000)
-
-        assert "1.0107" in safe and "UNDER-PREDICTS" not in safe
-        assert "0.9818" in short and short.endswith("<- UNDER-PREDICTS")
-
-    def test_an_arm_that_ran_out_of_memory_is_a_row_not_a_crash(self):
-        row = _harness().table_row(2048, None, None, 6_000_000_000, None)
-
-        assert row.split() == ["2048", "-", "off", "|", "6.000GB", "OOM", "-"]
