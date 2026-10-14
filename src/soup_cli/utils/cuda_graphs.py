@@ -61,7 +61,10 @@ def _cuda_device_key(device: Any) -> str:
 
 
 def _is_cuda_available_light() -> bool:
-    """Lightweight check for CUDA availability without importing torch."""
+    """Lightweight check for CUDA availability without importing torch.
+
+    A driver-less ROCm setup reports False.
+    """
     if "torch" in sys.modules:
         import torch
 
