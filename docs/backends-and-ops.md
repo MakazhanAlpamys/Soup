@@ -24,6 +24,8 @@
 - [Health Check](#health-check)
 - [Version Info](#version-info)
 - [Error Handling](#error-handling)
+- [Unknown config keys](#unknown-config-keys)
+- [Config size limits](#config-size-limits)
 - [Experiment Tracking](#experiment-tracking)
 - [Profiling Extras](#profiling-extras)
 - [VS Code Setup (`.vscode/launch.json`)](#vs-code-setup-vscodelaunchjson)
@@ -665,7 +667,10 @@ a scripted or CI-driven sweep fails rather than reporting a grid of arms that ea
 for the same reason. A sweep whose swept knob is never applied produces arms that are all
 identical, so there is no partially-useful result to preserve by continuing.
 
-**Size limits.** A config file may be at most 1 MiB, nest mappings and lists at most 100 levels,
+
+## Config size limits
+
+A config file may be at most 1 MiB, nest mappings and lists at most 100 levels,
 and expand through anchors, aliases and `<<` merge keys to at most one node per byte plus 10,000.
 A file over a limit is refused with a message naming the file and the limit (`soup ship`: 4 MiB).
 

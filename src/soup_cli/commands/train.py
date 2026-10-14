@@ -948,7 +948,6 @@ def train(
     # An unregistered data.chat_template name raises KeyError in the trainer,
     # after the model has loaded. Check it before anything is downloaded.
     from soup_cli.data.chat_templates import resolve_chat_template
-    from soup_cli.utils.terminal import for_terminal
 
     try:
         resolve_chat_template(cfg.data.chat_template)

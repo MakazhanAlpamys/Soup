@@ -170,7 +170,8 @@ def _render_overlay_yaml(
 ) -> str:
     """Splice ``data.interleave`` + ``data.train`` into a base YAML.
 
-    We round-trip via ``yaml.safe_load`` / ``yaml.safe_dump`` to defeat any
+    We round-trip via ``load_yaml_limited`` (``yaml.safe_load`` under the shared
+    size, nesting and expansion limits) and ``yaml.safe_dump`` to defeat any
     accidental key collisions; weights + datasets are sanitised above so the
     output cannot inject keys (the renderer emits scalars only).
 
