@@ -986,11 +986,15 @@ def _download_hub_checkpoint(model: str) -> str:
     shards: 29.0 GB for a 14.5 GB model. One call asks for the Hugging Face
     spellings (``model.safetensors``, ``model-*-of-*.safetensors``) and the JSON
     files; one call, so an already complete cache entry resolves offline as
-    before (#533). Only when the index then names a weight file outside those
-    spellings is a second call made, for exactly those names.
+    before (#533). The local rule then reads what came, and a second call is
+    made only when it says the checkpoint is not all there: the files an index
+    names outside those spellings, or, with no index and neither spelling
+    present, every ``*.safetensors`` except ``consolidated*``, which is the
+    local fallback rule itself. So what is downloaded is what is counted.
     """
     from soup_cli.utils.checkpoint_files import (
         hub_allow_patterns,
+        hub_second_call,
         read_index_weight_map,
         select_checkpoint_files,
     )
@@ -1000,13 +1004,16 @@ def _download_hub_checkpoint(model: str) -> str:
         model, cache_dir=None, allow_patterns=[*hub_allow_patterns(None), "*.json"]
     )
     real = os.path.realpath(source)
-    weight_map = read_index_weight_map(real)
-    if weight_map is not None:
-        selected = select_checkpoint_files(os.listdir(real), weight_map)
-        if selected.missing:
-            source = snapshot_download(
-                model, cache_dir=None, allow_patterns=[*selected.missing, "*.json"]
-            )
+    selected = select_checkpoint_files(os.listdir(real), read_index_weight_map(real))
+    second = hub_second_call(selected)
+    if second is not None:
+        allow, ignore = second
+        source = snapshot_download(
+            model,
+            cache_dir=None,
+            allow_patterns=[*allow, "*.json"],
+            ignore_patterns=ignore or None,
+        )
     return source
 
 

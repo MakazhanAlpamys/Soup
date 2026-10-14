@@ -37,10 +37,21 @@ _SHARD_RE = re.compile(r"^model-\d+-of-\d+\.safetensors$")
 _CONSOLIDATED_PREFIX = "consolidated"
 _MAX_INDEX_BYTES = 64 * 1024 * 1024  # a 70B index is ~70 KB; bound a crafted file
 
-#: ``allow_patterns`` for a Hub download when the repository has no index.
+#: ``allow_patterns`` for a Hub download's first call: the Hugging Face spellings,
+#: which are the ``single`` and ``shards`` rules below, plus the JSON files (the index
+#: among them). Never ``*.safetensors``: that is what fetched Mistral's consolidated
+#: copy beside the shards (29.0 GB for a 14.5 GB model).
 HUB_WEIGHT_PATTERNS_WITHOUT_INDEX: Tuple[str, ...] = (
     SINGLE_FILE,
     "model-*-of-*.safetensors",
+)
+#: The ``fallback`` rule as Hub patterns: every ``*.safetensors`` except
+#: ``consolidated*``, so a repository whose only weight file has another name is
+#: fetched just as the local rule would count it (#1806 review).
+HUB_FALLBACK_ALLOW_PATTERNS: Tuple[str, ...] = ("*.safetensors",)
+HUB_FALLBACK_IGNORE_PATTERNS: Tuple[str, ...] = (
+    f"{_CONSOLIDATED_PREFIX}*.safetensors",
+    f"*/{_CONSOLIDATED_PREFIX}*.safetensors",
 )
 
 
@@ -148,13 +159,35 @@ def hub_allow_patterns(index_weight_map: Optional[Mapping[str, str]]) -> list[st
     return list(HUB_WEIGHT_PATTERNS_WITHOUT_INDEX)
 
 
+def hub_second_call(selected: CheckpointFiles) -> Optional[Tuple[list[str], list[str]]]:
+    """What a second download call must ask for, after the first fetched the HF spellings.
+
+    ``(allow_patterns, ignore_patterns)``, or ``None`` when the first call already
+    holds the checkpoint. The local rule and the download agree by construction:
+    with an index, the files it names that are not there yet (an index naming
+    ``weights-part1.safetensors``); without one, when neither ``model.safetensors``
+    nor shards came, the ``fallback`` rule's own patterns, every ``*.safetensors``
+    except ``consolidated*`` (#1806 review).
+    """
+    if selected.rule == "index":
+        if selected.missing:
+            return list(selected.missing), []
+        return None
+    if selected.rule == "none":
+        return list(HUB_FALLBACK_ALLOW_PATTERNS), list(HUB_FALLBACK_IGNORE_PATTERNS)
+    return None
+
+
 __all__ = [
+    "HUB_FALLBACK_ALLOW_PATTERNS",
+    "HUB_FALLBACK_IGNORE_PATTERNS",
     "HUB_WEIGHT_PATTERNS_WITHOUT_INDEX",
     "INDEX_FILE",
     "SINGLE_FILE",
     "CheckpointFiles",
     "checkpoint_files",
     "hub_allow_patterns",
+    "hub_second_call",
     "read_index_weight_map",
     "select_checkpoint_files",
 ]

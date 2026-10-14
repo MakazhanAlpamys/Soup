@@ -24,6 +24,7 @@ from soup_cli.utils.checkpoint_files import (
     CheckpointFiles,
     checkpoint_files,
     hub_allow_patterns,
+    hub_second_call,
     read_index_weight_map,
     select_checkpoint_files,
 )
@@ -159,6 +160,42 @@ class TestSelection:
             "model-00001-of-00001.safetensors"
         ]
         assert "*.safetensors" not in hub_allow_patterns(None)
+
+    def test_second_call_is_the_indexed_files_still_missing(self):
+        got = select_checkpoint_files(["model-00002-of-00002.safetensors"],
+                                      {"a": "weights-part1.safetensors",
+                                       "b": "model-00002-of-00002.safetensors"})
+        assert hub_second_call(got) == (["weights-part1.safetensors"], [])
+
+    @pytest.mark.parametrize(
+        "names,weight_map",
+        [
+            (["model-00001-of-00001.safetensors"], {"a": "model-00001-of-00001.safetensors"}),
+            (["model.safetensors"], None),
+            (["model-00001-of-00002.safetensors", "model-00002-of-00002.safetensors"], None),
+        ],
+    )
+    def test_no_second_call_when_the_first_holds_the_checkpoint(self, names, weight_map):
+        assert hub_second_call(select_checkpoint_files(names, weight_map)) is None
+
+    def test_second_call_without_index_is_the_fallback_rule_as_patterns(self):
+        # Neither spelling came, so ask for what the local fallback would count:
+        # every *.safetensors except consolidated*, top level or nested.
+        import fnmatch
+
+        allow, ignore = hub_second_call(select_checkpoint_files(["config.json"], None))
+        assert allow == ["*.safetensors"]
+
+        def fetched(name: str) -> bool:
+            return (any(fnmatch.fnmatch(name, p) for p in allow)
+                    and not any(fnmatch.fnmatch(name, p) for p in ignore))
+
+        assert fetched("pytorch_model.safetensors")
+        assert fetched("weights.safetensors")
+        assert not fetched("consolidated.safetensors")
+        assert not fetched("consolidated.00.safetensors")
+        assert not fetched("sub/consolidated.safetensors")
+        assert not fetched("consolidated.00.pth")
 
 
 class TestIndexReading:
@@ -309,6 +346,121 @@ def test_an_index_naming_a_file_outside_the_hf_spellings_fetches_it_by_name(
     assert [name for name, _s, _m in plan.source_files] == sorted(
         ["weights-part1.safetensors", *mistral_like["shards"][1:]]
     )
+
+
+def test_the_hub_wrapper_forwards_ignore_patterns_only_when_given(tmp_path, monkeypatch):
+    import huggingface_hub
+
+    from soup_cli.utils import hubs
+
+    captured = []
+    monkeypatch.setattr(huggingface_hub, "snapshot_download",
+                        lambda **kw: captured.append(kw) or str(tmp_path))
+    hubs.snapshot_download("org/m", cache_dir=None, allow_patterns=["*.safetensors"],
+                           ignore_patterns=["consolidated*.safetensors"], namespace_check=False)
+    hubs.snapshot_download("org/m", cache_dir=None, allow_patterns=["*.json"],
+                           namespace_check=False)
+    assert captured[0]["ignore_patterns"] == ["consolidated*.safetensors"]
+    assert "ignore_patterns" not in captured[1]  # the pre-#1806 call shape, unchanged
+    with pytest.raises(TypeError, match="ignore_patterns"):
+        hubs.snapshot_download("org/m", cache_dir=None, ignore_patterns="consolidated*",
+                               namespace_check=False)
+
+
+def _fake_hub(repo: Path, download: Path, calls: list):
+    """A Hub that delivers the files of ``repo`` matching allow minus ignore patterns."""
+    import fnmatch
+    import shutil
+
+    def fake(repo_id, *, cache_dir, allow_patterns=None, ignore_patterns=None, **kwargs):
+        calls.append((list(allow_patterns or []), list(ignore_patterns or [])))
+        for name in os.listdir(repo):
+            if not any(fnmatch.fnmatch(name, p) for p in allow_patterns or []):
+                continue
+            if any(fnmatch.fnmatch(name, p) for p in ignore_patterns or []):
+                continue
+            if not (download / name).exists():
+                shutil.copy(repo / name, download / name)
+        return str(download)
+
+    return fake
+
+
+def _layout(mistral_like: dict, tmp_path: Path, name: str) -> Path:
+    """Repository layouts without an index, built from the fixture's files."""
+    import shutil
+
+    repo = tmp_path / name
+    repo.mkdir()
+    src = mistral_like["dir"]
+    first, second = mistral_like["shards"][:2]
+    shutil.copy(src / "config.json", repo / "config.json")
+    if name == "indexed":
+        shutil.rmtree(repo)
+        shutil.copytree(src, repo)
+    elif name == "single":
+        shutil.copy(src / first, repo / "model.safetensors")
+        shutil.copy(src / "consolidated.safetensors", repo / "consolidated.safetensors")
+    elif name == "shards-no-index":
+        shutil.copy(src / first, repo / first)
+        shutil.copy(src / second, repo / second)
+        shutil.copy(src / second, repo / "extra.safetensors")
+    elif name == "odd-single":
+        shutil.copy(src / first, repo / "pytorch_model.safetensors")
+        shutil.copy(src / "consolidated.safetensors", repo / "consolidated.safetensors")
+    elif name == "consolidated-only":
+        shutil.copy(src / "consolidated.safetensors", repo / "consolidated.safetensors")
+    return repo
+
+
+def test_a_repo_whose_only_weight_file_has_another_name_is_fetched_by_the_fallback_rule(
+    mistral_like, tmp_path, monkeypatch
+):
+    # No index, no model.safetensors, no shards: the first call brings only the JSON,
+    # and the second asks for every *.safetensors except consolidated* (#1806 review).
+    from soup_cli.utils import hubs, spectrum_scan
+
+    repo = _layout(mistral_like, tmp_path, "odd-single")
+    download = tmp_path / "download"
+    download.mkdir()
+    calls = []
+    monkeypatch.setattr(hubs, "snapshot_download", _fake_hub(repo, download, calls))
+    plan = spectrum_scan.plan_model_weights("org/odd-single")
+    assert len(calls) == 2, calls
+    assert calls[1] == (["*.safetensors", "*.json"],
+                        ["consolidated*.safetensors", "*/consolidated*.safetensors"])
+    assert (download / "pytorch_model.safetensors").exists()
+    assert not (download / "consolidated.safetensors").exists()
+    assert [name for name, _s, _m in plan.source_files] == ["pytorch_model.safetensors"]
+
+
+@pytest.mark.parametrize(
+    "layout", ["indexed", "single", "shards-no-index", "odd-single", "consolidated-only"]
+)
+def test_what_the_download_fetches_is_what_the_local_rule_counts(
+    mistral_like, tmp_path, monkeypatch, layout
+):
+    # The two rules agree: on every layout the safetensors the Hub delivered are
+    # exactly the files the local helper selects on the full repository.
+    from soup_cli.utils import hubs, spectrum_scan
+
+    repo = _layout(mistral_like, tmp_path, layout)
+    download = tmp_path / "download"
+    download.mkdir()
+    calls = []
+    monkeypatch.setattr(hubs, "snapshot_download", _fake_hub(repo, download, calls))
+    local = checkpoint_files(str(repo))
+    if layout == "consolidated-only":
+        with pytest.raises(FileNotFoundError, match="no .safetensors weight files"):
+            spectrum_scan.plan_model_weights("org/x")
+        fetched = sorted(n for n in os.listdir(download) if n.endswith(".safetensors"))
+        assert fetched == [] == list(local.weights)
+        return
+    plan = spectrum_scan.plan_model_weights("org/x")
+    fetched = sorted(n for n in os.listdir(download) if n.endswith(".safetensors"))
+    assert fetched == list(local.weights)
+    assert [name for name, _s, _m in plan.source_files] == list(local.weights)
+    assert len(calls) == (2 if layout == "odd-single" else 1), calls
 
 
 def _hf_cache_snapshot(root: Path, source: Path) -> Path:
