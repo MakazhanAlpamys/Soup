@@ -60,11 +60,14 @@ soup train
 
 **Fine-tune an 8B model on a 4 GB laptop GPU.** Layer streaming keeps the frozen base out of
 VRAM and feeds it to the GPU one decoder layer at a time. Measured on an RTX 3050 Laptop 4 GB:
-Llama-3.1-8B-Instruct + NF4 at **119.6 tok/s, 3.32 GB peak** — bit-exact against a normal
-resident run, and reproduced independently on an H100 at 113.00 tok/s in the same 3.32 GB.
-(Both figures were measured on v0.72.2, before the v0.73.0 correctness repair that cost
-−4.8% at 32B; neither has been re-run on a 4 GB card since — re-measurement pending in
-issue [#361](https://github.com/MakazhanAlpamys/Soup/issues/361).) Opt-in (`stream_layers: true`)
+Llama-3.1-8B-Instruct + NF4 at **119.6 tok/s at 952 MHz, 3.32 GB peak** (pre-repair) — bit-exact
+against a normal resident run, and reproduced independently on an H100 at 113.00 tok/s in the same
+3.32 GB. (Both figures were measured on v0.72.2, before the v0.73.0 correctness repair that cost
+−4.8% at 32B. The post-repair run, on another RTX 3050 Laptop 4 GB (@umran666, #1103), reads
+**208.6 tok/s at 1935–1957 MHz in a 2.40 GB peak**. That is 59% of its same-session GEMM ceiling
+against 68%: about 14% slower per unit clock, so the raw 1.74x gain is the clock, not a speedup.
+Large-layer streaming also changed the memory pattern between the two rows, so even the fraction
+is not like-for-like — [the record](benchmarks/gate-v0.72.2-nf4.md).) Opt-in (`stream_layers: true`)
 and still BETA —
 [how it works](docs/performance-and-quantization.md#layer-streaming-beta-v0720-nf4-v0722-disk--wider-archs-v0723-preference-losses-v0724) ·
 [all measurements](benchmarks/) · [paper](https://doi.org/10.5281/zenodo.21771064) ·
@@ -72,8 +75,8 @@ and still BETA —
 4 GB, then asserts a streamed model is bit-identical to a normal one)
 
 <p align="center">
-  <a href="https://youtu.be/T1LCErE943E"><img src="docs/assets/layer-streaming.gif" alt="soup train pre-flight for Llama-3.1-8B on a 4 GB card: a 3.60 GB base store pinned in RAM across 32 layers and two 113 MB VRAM buffers, then a measured peak of 3.32 GB at 119.6 tok/s, stopping short of the 4 GB line (measured on v0.72.2, before the #331 repair; re-measurement pending in issue #361)"></a><br>
-  <sub>Llama-3.1-8B-Instruct + NF4, LoRA, batch 1, seq 512 on an RTX 3050 Laptop 4 GB — <b>3.32 GB peak, 119.6 tok/s</b> (measured on v0.72.2, before the #331 repair; re-measurement pending in issue #361). <a href="https://youtu.be/T1LCErE943E">Full video (90s)</a></sub>
+  <a href="https://youtu.be/T1LCErE943E"><img src="docs/assets/layer-streaming.gif" alt="soup train pre-flight for Llama-3.1-8B on a 4 GB card: a 3.60 GB base store pinned in RAM across 32 layers and two 113 MB VRAM buffers, then a measured peak of 3.32 GB at 119.6 tok/s, stopping short of the 4 GB line (pre-repair row, measured on v0.72.2 at 952 MHz; the post-#331 row is in the caption below)"></a><br>
+  <sub>Llama-3.1-8B-Instruct + NF4, LoRA, batch 1, seq 512 on an RTX 3050 Laptop 4 GB — <b>3.32 GB peak, 119.6 tok/s</b> at 952 MHz (pre-repair, v0.72.2; post-#331: 208.6 tok/s at 1935 MHz in 2.40 GB, not directly comparable, @umran666, #1103). <a href="https://youtu.be/T1LCErE943E">Full video (90s)</a></sub>
 </p>
 
 ## Why Soup?
@@ -88,39 +91,53 @@ infrastructure instead of improving models. Soup fixes that.
 
 ## What's New
 
-**v0.75.0 — the same `soup.yaml` trained a different recipe on MLX than on transformers,
-silently.** Six training options were validated, documented, accepted — and read by nothing
-on that backend. **All 60 pull requests in this release came from outside the maintainer**,
-by 22 people.
+**v0.76.0 — settings Soup accepted and never applied now stop the load.** Options that were
+validated and documented, and read by nothing on the path they claimed to configure, are now
+refused at load, naming the setting and what to change; the rest warn and name the release
+that will refuse them. A config that loaded before can stop loading: run
+`soup doctor --config soup.yaml` first.
 
-- **Breaking: an unknown config key now refuses the load.** v0.74 warned and named this
-  release as the deadline. A typo like `quantizaton`, or a key that only exists on a newer
-  Soup, used to be dropped while the run proceeded with the setting not applied; it now
-  fails on the CLI (exit 1) and in the API (`ValueError`), naming the field you probably
-  meant. The detector applies the root-level `lora:` remap the schema has honoured
-  since v0.40.1, so that spelling is accepted, not refused; the two `soup fetch examples`
-  files using it moved to the canonical `training.lora`. Every recipe and template loads
-  clean, key names are escaped before they reach the terminal, and the scan is bounded.
-- **MLX honours the config it accepted.** `train_on_responses_only`, `warmup_ratio` /
-  `scheduler` / `weight_decay` / `optimizer`, `max_grad_norm`, `gradient_accumulation_steps`
-  and `gradient_checkpointing` were each validated and then dropped on `backend: mlx`. Only
-  8 of the 32 optimizer names have an MLX equivalent; the other 24 are refused by name
-  instead of silently becoming AdamW. MLX also drives the live dashboard, the tracker and
-  `soup ui`, and `soup doctor --config` lists the settings a backend does not read.
-- **Validation loss existed nowhere.** It was computed on every backend and thrown away:
-  no metrics column, no event field, nothing on the panel. It is now recorded, streamed
-  and displayed.
-- **Breaking: `grpo_variant: gspo` is the published sequence-level objective**
-  (arXiv:2507.18071), replacing a column-centering heuristic in which a padding token also
-  shifted the gradient of every row sharing its column. Existing gspo configs will not
-  reproduce prior runs.
-- **Web UI read endpoints and SSE require auth**, with short-lived single-use tickets
-  instead of a token in a query string; `--public` no longer serves `/docs` and
-  `/openapi.json` to the LAN; and a training subprocess no longer hangs when nothing
-  reads its output.
-- **`torch>=2.6.0`** closes v0.74.0's known limitation: at 2.5.1 `trl>=0.29` could not
-  import and every preference trainer was dead. Also fixed: `training.loraplus_lr_ratio`
-  crashed every run that set it, and `packing: true` raised on TRL 0.29.
+- **Breaking: a setting that never took effect is refused at load.** Among them
+  `training.quantization_aware: true` (it never ran quantization-aware training),
+  `training.use_longlora`, `training.ebft_variant`, `training.gdpo_variant`,
+  `training.rope_scaling_type` where no setup reads it, `freeze_layers` / `freeze_ratio`
+  outside the text `sft` / `tts` path on the transformers backend, `auto_mixed_precision`
+  outside `sft` / `tts`, and `backend: unsloth` on seven further tasks that have no unsloth
+  setup. Each message names the field and what to change. `lr_groups`, `early_stop_patience`,
+  `forgetting_eval_steps` and other unread knobs warn at load now and are refused from v0.77.
+- **Validation loss is now evaluated.** `data.val_split` held rows out of training on every
+  run, and no trainer on the transformers backend evaluated them. Every task that gets a
+  split now evaluates it at the end of each epoch, or every N steps with `training.eval_steps`,
+  and records the val loss; runs take a few percent longer. **Breaking for `grpo`, `ppo` and
+  `online_dpo`:** by default they no longer hold rows out (`data.val_split` is ignored with
+  a note), so every row trains.
+- **Breaking: every non-standard `grpo_variant` applies the `grpo_beta` KL penalty.** `gspo`,
+  `dapo`, `dr_grpo`, `bnpo`, `two_sided` and `rft` validated `grpo_beta` and dropped it, so
+  existing variant configs will not reproduce prior runs. `grpo_beta: 0` now runs KL-free and
+  skips the reference forward pass.
+- **Layer streaming reads its disk tier on a background thread, through direct I/O, and can
+  stripe it across NVMe drives.** On a 36 GB 70B-shaped NF4 store larger than RAM (one RTX 5070
+  Laptop 8 GB box), a cold step went from 110.5 s on the synchronous read to 16.2-17.3 s, and
+  from 17.4 s to 9.97 s across two drives with `SOUP_LAYER_STREAM_STRIPE_DIRS` (a sustained-load
+  probe: two rounds, 1.28x and 1.41x, no formal verdict;
+  [record](benchmarks/probe-rtx5070-two-drive-sustained.md)). A store that fits RAM is still
+  faster on the RAM tier, which `stream_source: auto` picks. Opt-in (`stream_layers: true`) and
+  still BETA; records: [direct I/O](benchmarks/gate-974-disk-tier-direct-io.md),
+  [striping](benchmarks/gate-two-drive-striping.md).
+- **New commands and options.** `soup adapters check` scans a LoRA adapter for silent failure;
+  `soup bench train` trains a fixed number of steps and exits 1 when the model was not training
+  (it covers `task: sft` on the transformers backend; `soup bench` is now a group, and
+  `soup bench infer` is the old inference benchmark);
+  `soup data clean` sanitizes and repairs a dataset without touching the input file;
+  `soup recipes verify` checks on the meta device, with no weights downloaded, that every shipped
+  recipe can attach a LoRA adapter; `soup rewind` names the dataset rows behind a loss spike.
+  `soup infer` gains opt-in `--batch-size` and an experimental `--cuda-graphs` (PyTorch 2.14 or
+  newer; on one RTX 5070 Laptop, unpinned, Qwen2.5-1.5B in FP16, the slowest run with it decoded
+  2.9x faster than the fastest without). `soup ab` runs a two-sided, variance-robust test, and
+  `soup adapters sign --backend sigstore` and `soup attest emit --sign sigstore` sign with
+  Sigstore keyless OIDC (`pip install "soup-cli[sigstore]"`).
+- **Deprecated:** `soup export --format awq` and `--format gptq` will be removed in v0.77; both
+  upstream projects are archived and neither extra installs next to `[train]`.
 
 > Python **3.10–3.12** only. On 3.13+, pip used to resolve untested PyTorch wheels that
 > crash in the native extension before Soup runs at all.
@@ -439,8 +456,12 @@ published**, which is also the shortest way to describe what the paper is for:
   the replication survives in a weaker form — the constraint is common to both machines and is
   not the GPU's compute.
 - **Replication on hardware nothing like the original** (added in v2): 119.6 tok/s on the RTX
-  3050 against a median 113.00 on an H100, at the same 3.32 GB peak. Both pre-date the #331
-  repair; the 4 GB re-measurement is pending in issue #361.
+  3050 (at 952 MHz) against a median 113.00 on an H100, at the same 3.32 GB peak. Both pre-date
+  the #331 repair and are the figures the paper reports. The post-#331 row (@umran666, #1103) is
+  208.6 tok/s at 1935–1957 MHz in a 2.40 GB peak, 59% against 68% of the same-session GEMM
+  ceiling: the raw 1.74x gain is the clock, not a speedup, and the memory pattern changed between
+  the rows, so even the fraction is not like-for-like
+  ([the record](benchmarks/gate-v0.72.2-nf4.md)).
 - **A silent wrong-gradient defect, found and repaired.** On NF4 above ~165 MiB per layer the
   forward stayed bit-exact and the loss curve looked healthy while the gradients were wrong. The
   cause is named in the upstream library and reported there; the repair is gated against controls

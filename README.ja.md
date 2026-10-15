@@ -1,4 +1,4 @@
-<!-- synced-from: README.md sha256:a6789c2877515d5ac707160a55ab94cd84b390e2e31168b69d4f954a47c5562a -->
+<!-- synced-from: README.md sha256:fa009c2fcc2c94ea06e25ea8620c2fbed9bfb8ac6611bf71a2669a06f7c50b46 -->
 <p align="center">🌍 <a href="README.md">English</a> | <a href="README.tr.md">Türkçe</a> | <a href="README.ar.md">العربية</a> | <strong>日本語</strong> | <a href="README.zh.md">中文</a></p>
 
 <p align="center">
@@ -61,11 +61,14 @@ soup train
 
 **4 GB のノート PC 用 GPU で、8B モデルをファインチューニングできます。** レイヤーストリーミングは、凍結したベースモデルを
 VRAM の外に置き、デコーダー層を一層ずつ GPU に送り込みます。RTX 3050 Laptop 4 GB での実測値:
-Llama-3.1-8B-Instruct + NF4 で **119.6 tok/s、ピーク 3.32 GB** — 全体をメモリに常駐させた通常の実行とビット単位で
+Llama-3.1-8B-Instruct + NF4 で **952 MHz 時に 119.6 tok/s、ピーク 3.32 GB**（修正前）— 全体をメモリに常駐させた通常の実行とビット単位で
 完全に一致し、H100 でも同じ 3.32 GB で 113.00 tok/s と独立に再現されました。
-（どちらの数値も v0.72.2 で、v0.73.0 の正確性修正（32B で −4.8% のコスト）より前に測定したもので、
-それ以降 4 GB のカードでは再実行していません — 再測定は issue
-[#361](https://github.com/MakazhanAlpamys/Soup/issues/361) で保留中です。）オプトイン方式（`stream_layers: true`）で、
+（どちらの数値も v0.72.2 で、v0.73.0 の正確性修正（32B で −4.8% のコスト）より前に測定したものです。
+修正後の実行は、別の RTX 3050 Laptop 4 GB（@umran666、#1103）で
+**1935–1957 MHz 時に 208.6 tok/s、ピーク 2.40 GB** でした。これは同一セッションでの GEMM 上限の 59% にあたり、
+修正前の 68% に対して、クロックあたりでは約 14% 遅いことになります。つまり、見かけの 1.74x の向上は高速化ではなく
+クロックの差です。大きなレイヤーのストリーミングによって両行のあいだでメモリの使われ方も変わっているため、この割合でさえ
+同じ条件での比較ではありません — [記録](benchmarks/gate-v0.72.2-nf4.md)。）オプトイン方式（`stream_layers: true`）で、
 まだ BETA です —
 [仕組み](docs/performance-and-quantization.md#layer-streaming-beta-v0720-nf4-v0722-disk--wider-archs-v0723-preference-losses-v0724) ·
 [すべての測定結果](benchmarks/) · [論文](https://doi.org/10.5281/zenodo.21771064) ·
@@ -73,8 +76,8 @@ Llama-3.1-8B-Instruct + NF4 で **119.6 tok/s、ピーク 3.32 GB** — 全体�
 ストリーミングしたモデルが通常のモデルとビット単位で同一であることを検証します）
 
 <p align="center">
-  <a href="https://youtu.be/T1LCErE943E"><img src="docs/assets/layer-streaming.gif" alt="4 GB のカードでの Llama-3.1-8B 向け soup train の事前チェック: 32 層にわたって RAM 上に固定された 3.60 GB のベースストアと、113 MB の VRAM バッファ 2 つ。その後、119.6 tok/s で測定されたピークは 3.32 GB で、4 GB のラインの手前に収まっています（v0.72.2 で測定、#331 の修正前。再測定は issue #361 で保留中）"></a><br>
-  <sub>Llama-3.1-8B-Instruct + NF4、LoRA、バッチサイズ 1、シーケンス長 512、RTX 3050 Laptop 4 GB — <b>ピーク 3.32 GB、119.6 tok/s</b>（v0.72.2 で測定、#331 の修正前。再測定は issue #361 で保留中）。 <a href="https://youtu.be/T1LCErE943E">動画（90 秒）</a></sub>
+  <a href="https://youtu.be/T1LCErE943E"><img src="docs/assets/layer-streaming.gif" alt="4 GB のカードでの Llama-3.1-8B 向け soup train の事前チェック: 32 層にわたって RAM 上に固定された 3.60 GB のベースストアと、113 MB の VRAM バッファ 2 つ。その後、119.6 tok/s で測定されたピークは 3.32 GB で、4 GB のラインの手前に収まっています（修正前の行。v0.72.2、952 MHz で測定。#331 修正後の行は下のキャプションを参照）"></a><br>
+  <sub>Llama-3.1-8B-Instruct + NF4、LoRA、バッチサイズ 1、シーケンス長 512、RTX 3050 Laptop 4 GB — <b>ピーク 3.32 GB、119.6 tok/s</b>、952 MHz 時（修正前、v0.72.2。#331 修正後: 1935 MHz 時に 208.6 tok/s、2.40 GB。直接の比較はできません。@umran666、#1103）。 <a href="https://youtu.be/T1LCErE943E">動画（90 秒）</a></sub>
 </p>
 
 ## なぜSoupなのか
@@ -89,35 +92,51 @@ LLM の学習は、今でも骨の折れる作業です。経験豊富なチー�
 
 ## 新着情報
 
-**v0.75.0 — 同じ `soup.yaml` が、MLX では transformers とは異なるレシピで、黙って学習されていました。**
-六つの学習オプションが、検証され、文書化され、受け入れられていながら、そのバックエンドでは何にも読み取られて
-いませんでした。**このリリースの 60 件のプルリクエストはすべてメンテナー以外から寄せられたもので**、22 人によるものです。
+**v0.76.0 — Soup が受け入れながら一度も適用していなかった設定は、読み込みを止めるようになりました。**
+検証され、文書化されていながら、設定対象と称する経路のどこからも読み取られていなかったオプションは、
+読み込み時に拒否され、設定名と変更すべき内容が示されます。それ以外は警告を出し、拒否することになる
+リリースを明示します。以前は読み込めた設定が読み込めなくなることがあります。まず
+`soup doctor --config soup.yaml` を実行してください。
 
-- **破壊的変更: 未知の設定キーは、読み込み時に拒否されるようになりました。** v0.74 は警告を出し、このリリースを
-  期限として示していました。`quantizaton` のようなタイプミスや、より新しい Soup にしか存在しないキーは、以前は
-  破棄され、その設定が適用されないまま実行が続きました。今後は CLI（終了コード 1）でも API（`ValueError`）でも
-  失敗し、おそらく意図したフィールド名を示します。検出器は、スキーマが v0.40.1 から受け付けてきたルート階層の
-  `lora:` の読み替えを適用するため、その書き方は拒否されず受け入れられます。それを使っていた二つの
-  `soup fetch examples` ファイルは、正式な `training.lora` に移行しました。すべてのレシピとテンプレートは問題なく
-  読み込め、キー名は端末に出力される前にエスケープされ、スキャンには上限があります。
-- **MLX は、受け入れた設定に従うようになりました。** `train_on_responses_only`、`warmup_ratio` / `scheduler` /
-  `weight_decay` / `optimizer`、`max_grad_norm`、`gradient_accumulation_steps`、`gradient_checkpointing` は、
-  `backend: mlx` ではそれぞれ検証された後に捨てられていました。MLX に対応するものがあるオプティマイザー名は
-  32 個中 8 個だけで、残りの 24 個は、黙って AdamW になるのではなく、名前を挙げて拒否されます。MLX はライブ
-  ダッシュボード、トラッカー、`soup ui` も駆動し、`soup doctor --config` はバックエンドが読み取らない設定を
-  一覧表示します。
-- **検証損失はどこにも存在しませんでした。** すべてのバックエンドで計算されながら捨てられていました。
-  メトリクス列も、イベントフィールドも、パネルへの表示もありませんでした。今は記録され、ストリーミングされ、
-  表示されます。
-- **破壊的変更: `grpo_variant: gspo` は、公開されているシーケンスレベルの目的関数になりました**
-  （arXiv:2507.18071）。以前は列の中心化というヒューリスティックで、パディングトークンが同じ列を共有する
-  すべての行の勾配もずらしていました。既存の gspo 設定では、以前の実行を再現できません。
-- **Web UI の読み取りエンドポイントと SSE は認証が必須になりました。** クエリ文字列のトークンではなく、
-  有効期間の短い使い捨てチケットを使います。`--public` は `/docs` と `/openapi.json` を LAN に公開しなくなり、
-  学習サブプロセスは、出力を誰も読まなくてもハングしなくなりました。
-- **`torch>=2.6.0`** により、v0.74.0 の既知の制限が解消されます。2.5.1 では `trl>=0.29` をインポートできず、
-  すべての選好トレーナーが動作しませんでした。あわせて、`training.loraplus_lr_ratio` を設定したすべての実行が
-  クラッシュする問題と、`packing: true` が TRL 0.29 で例外を送出する問題も修正されました。
+- **破壊的変更: 一度も効果のなかった設定は、読み込み時に拒否されます。** 対象には、
+  `training.quantization_aware: true`（量子化対応学習は実際には一度も実行されていませんでした）、
+  `training.use_longlora`、`training.ebft_variant`、`training.gdpo_variant`、どのセットアップも読み取らない
+  場合の `training.rope_scaling_type`、`freeze_layers` / `freeze_ratio`（transformers バックエンドの
+  テキスト `sft` / `tts` 経路以外）、`auto_mixed_precision`（`sft` / `tts` 以外）、そして unsloth の
+  セットアップを持たないさらに七つのタスクでの `backend: unsloth` が含まれます。各メッセージは、該当する
+  フィールドと変更すべき内容を示します。`lr_groups`、`early_stop_patience`、`forgetting_eval_steps` など、
+  読み取られない他のつまみは、今は読み込み時に警告を出し、v0.77 から拒否されます。
+- **検証損失が評価されるようになりました。** `data.val_split` はすべての実行で行を学習から除外していましたが、
+  transformers バックエンドのどのトレーナーもそれらを評価していませんでした。今は、分割を受け取るすべての
+  タスクが、各エポックの終わりに、または `training.eval_steps` を指定した場合は N ステップごとにそれを評価し、
+  検証損失を記録します。実行時間は数パーセント長くなります。**`grpo`、`ppo`、`online_dpo` では破壊的変更です。**
+  既定では行を取り分けなくなり（`data.val_split` は注記付きで無視されます）、すべての行が学習に使われます。
+- **破壊的変更: 標準でないすべての `grpo_variant` が `grpo_beta` の KL ペナルティを適用します。**
+  `gspo`、`dapo`、`dr_grpo`、`bnpo`、`two_sided`、`rft` は `grpo_beta` を検証しながら捨てていたため、
+  既存のバリアント設定は以前の実行を再現できません。`grpo_beta: 0` は KL なしで動作し、参照モデルの
+  フォワードパスを省略するようになりました。
+- **レイヤーストリーミングは、ディスク階層をバックグラウンドスレッドでダイレクト I/O により読み込み、
+  NVMe ドライブにまたがってストライプ化できます。** RAM より大きい 36 GB の 70B 相当の NF4 ストア
+  （RTX 5070 Laptop 8 GB 搭載の一台）で、コールドステップは同期読み込みの 110.5 s から 16.2-17.3 s に短縮され、
+  `SOUP_LAYER_STREAM_STRIPE_DIRS` による 二台のドライブへの分散では 17.4 s から 9.97 s になりました
+  （持続負荷プローブ: 二ラウンド、1.28x と 1.41x、正式な判定なし。
+  [記録](benchmarks/probe-rtx5070-two-drive-sustained.md)）。RAM に収まるストアは、引き続き RAM 階層のほうが
+  高速で、`stream_source: auto` はそちらを選びます。オプトイン方式（`stream_layers: true`）で、まだ BETA です。
+  記録: [ダイレクト I/O](benchmarks/gate-974-disk-tier-direct-io.md)、
+  [ストライピング](benchmarks/gate-two-drive-striping.md)。
+- **新しいコマンドとオプション。** `soup adapters check` は LoRA アダプターをスキャンして、サイレントな失敗を検出します。
+  `soup bench train` は決まったステップ数だけ学習し、モデルが学習していなかった場合は終了コード 1 で終了します
+  （transformers バックエンドの `task: sft` が対象です。`soup bench` はグループになり、`soup bench infer` が
+  従来の推論ベンチマークです）。`soup data clean` は、入力ファイルに触れずにデータセットをサニタイズして
+  修復します。`soup recipes verify` は、重みをダウンロードせずに meta デバイス上で、同梱のすべてのレシピが
+  LoRA アダプターを取り付けられることを確認します。`soup rewind` は、損失スパイクの原因となったデータセットの
+  行を特定します。`soup infer` には、オプトインの `--batch-size` と実験的な `--cuda-graphs` が加わりました
+  （PyTorch 2.14 以降が必要。RTX 5070 Laptop 一台、ピン留めなし、FP16 の Qwen2.5-1.5B で、これを使った最も遅い実行でも、
+  使わなかった最も速い実行より 2.9x 速くデコードできました）。`soup ab` は、分散に頑健な両側検定を実行します。
+  `soup adapters sign --backend sigstore` と `soup attest emit --sign sigstore` は、Sigstore のキーレス OIDC で
+  署名します（`pip install "soup-cli[sigstore]"`）。
+- **非推奨:** `soup export --format awq` と `--format gptq` は v0.77 で削除されます。どちらの
+  上流プロジェクトもアーカイブ済みで、どちらの extra も `[train]` と一緒にはインストールできません。
 
 > Python は **3.10–3.12** のみ対応です。3.13 以降では、pip がテストされていない PyTorch の wheel を解決し、
 > Soup が動き出す前にネイティブ拡張の中でクラッシュしていました。
@@ -431,9 +450,12 @@ Soup に関するあらゆる件の正しい連絡先です。**makazanalpamys@g
   レイヤーごとの NF4 逆量子化で、9.8% です
   （[記録](benchmarks/probe-v0.73.0-what-bounds-streaming.md)）。すべての測定値は有効なままです。再現は弱い形で
   残ります — この制約は両方のマシンに共通であり、GPU の計算能力ではありません。
-- **元とはまったく異なるハードウェアでの再現**（v2 で追加）: RTX 3050 で 119.6 tok/s、H100 で中央値
-  113.00 tok/s、ピークはどちらも 3.32 GB です。どちらも #331 の修正より前のもので、4 GB での再測定は
-  issue #361 で保留中です。
+- **元とはまったく異なるハードウェアでの再現**（v2 で追加）: RTX 3050 で 119.6 tok/s（952 MHz 時）、H100 で中央値
+  113.00 tok/s、ピークはどちらも 3.32 GB です。どちらも #331 の修正より前のもので、論文が報告しているのはこの数値です。
+  #331 修正後の行（@umran666、#1103）は、1935–1957 MHz 時に 208.6 tok/s、ピーク 2.40 GB で、同一セッションでの
+  GEMM 上限に対する割合は 59%（修正前は 68%）です。見かけの 1.74x の向上は高速化ではなくクロックの差であり、
+  両行のあいだでメモリの使われ方も変わっているため、この割合でさえ同じ条件での比較ではありません
+  （[記録](benchmarks/gate-v0.72.2-nf4.md)）。
 - **サイレントな勾配誤りの欠陥を発見し、修正しました。** レイヤーあたり約 165 MiB を超える NF4 では、
   順伝播はビット単位で一致したままで、損失曲線も健全に見えましたが、勾配が誤っていました。原因は上流
   ライブラリで特定され、そこに報告されています。修正は、実際の 32B と 72B でのコントロールに対して

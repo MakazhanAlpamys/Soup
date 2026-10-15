@@ -63,9 +63,29 @@ soup export --model ./merged --format gguf
 
 # Specify llama.cpp path manually
 soup export --model ./output --format gguf --llama-cpp /path/to/llama.cpp
+
+# Show the converter and quantizer's stdout/stderr while they run
+soup export --model ./output --format gguf --verbose
+
+# The environment manages its own conversion packages: never attempt pip
+soup export --model ./output --format gguf --no-install-deps --verbose
 ```
 
 Supported quantizations: `q4_0`, `q4_k_m`, `q5_k_m`, `q8_0`, `f16`, `f32`
+
+GGUF export prints phase lines for toolchain lookup, dependency checking, adapter
+merge when needed, conversion and quantization when needed. `--verbose` additionally
+streams the converter and quantizer's combined stdout/stderr as lines arrive; the
+child tool may buffer its own output. Without the flag, successful child-tool logs
+stay quiet. Both modes retain a failure summary; verbose mode keeps a bounded tail
+of the last 100 lines (up to 2,000 characters per line) for that summary.
+
+`--no-install-deps` checks `gguf`, `sentencepiece` and `protobuf` in Soup's Python
+environment and refuses with the missing package names before merging an adapter
+or looking up/cloning the toolchain. It never runs pip. Install the packages through
+your environment manager and retry. This flag does not disable toolchain lookup or
+cloning; use `--llama-cpp` to supply your own checkout. Both new flags apply only to
+`--format gguf`; other formats refuse them rather than ignore them.
 
 ### Building llama.cpp (required for quantized GGUF)
 
@@ -380,6 +400,10 @@ soup serve --model ./output --backend sglang
 soup serve --model ./output --backend sglang --tensor-parallel 2
 ```
 
+The backend needs SGLang 0.5.1 or later, which the `[sglang]` extra installs: older
+releases refuse to start an engine with a LoRA adapter unless its radix cache is turned
+off, and Soup leaves it on.
+
 Like the transformers and vLLM backends, the SGLang backend applies the
 **model's own chat template** via the same shared prompt builder (falling back
 to a generic `User:` / `Assistant:` prompt for template-less models). When the
@@ -390,6 +414,15 @@ still sent as a string and tokenized by the engine as before. `finish_reason`
 reports `"length"` when a response hits `max_tokens` and `"stop"` otherwise, so
 a client doing continue-on-length can tell a truncated answer from a completed
 one (#360).
+
+A LoRA adapter passed as `--model` is served on its base model (read from
+`adapter_config.json`, or `--base`), with the adapter registered in the engine
+under the name `adapter`. SGLang applies an adapter only to the requests that
+name it and runs every other request on the base weights, so the backend names
+it in every request, streaming or not. **This changed:** the adapter used to be
+registered but never named, so every answer came from the base model while the
+response reported the adapter's name (#1724). A full model's requests name no
+adapter.
 
 It also honours `--trust-remote-code` like every other backend. **This changed:**
 the SGLang runtime and its tokenizer previously loaded with `trust_remote_code`
@@ -653,7 +686,7 @@ HttpOnly session cookie and redirects, as described below, so the address bar
 ends up clean and a reload or a new tab stays signed in. Your browser's history
 still records the URL it was given.
 
-> **v0.75.0 and v0.75.1: add the token to the URL yourself.** In these two
+> **v0.75.0 through v0.75.2: add the token to the URL yourself.** In these
 > releases the tab `soup ui` opens carries no token, so it shows
 > `Error loading dashboard: Unauthorized` and no page can load data (#1194).
 > Open `http://127.0.0.1:<PORT>/?token=<TOKEN>` instead, with the port from
@@ -723,7 +756,7 @@ soup quantize ./out --to gguf --bits 4
 soup quantize ./out --to onnx -o ./out-onnx
 ```
 
-Prints the equivalent `soup export …` invocation (escaped via `shlex.quote`) for copy-paste. Intentionally does NOT in-process call `soup export` — Typer commands aren't safe to re-enter. `--to awq` and `--to gptq` still print their command, followed by a notice that the two formats are deprecated and will be removed in the next release.
+Prints the equivalent `soup export …` invocation (escaped via `shlex.quote`) for copy-paste. Intentionally does NOT in-process call `soup export` — Typer commands aren't safe to re-enter. `--to awq` and `--to gptq` still print their command, followed by a notice that the two formats are deprecated and will be removed in Soup v0.77.
 
 
 ## Llama.cpp Proxy
@@ -823,7 +856,7 @@ anthropic_payload = to_anthropic({
 })
 ```
 
-Multiple `system` messages join with `\n\n`. `tool` role with structured (list) content is concatenated into a single `tool_result` text block, never silently dropped. `max_tokens` capped at 16384, `temperature` bounded `[0.0, 2.0]`. Live `/v1/messages` endpoint inside `soup serve` lands in v0.45.1.
+Multiple `system` messages join with `\n\n`. `tool` role with structured (list) content is concatenated into a single `tool_result` text block, never silently dropped. `max_tokens` capped at 16384, `temperature` bounded `[0.0, 2.0]`. `soup serve` exposes this converter as a live `POST /v1/messages` endpoint on both the transformers and vLLM backends; with `"stream": true` it answers in the Anthropic event shape.
 
 
 ## Server-Side Tools

@@ -442,6 +442,39 @@ def _hardware_fit_preflight(cfg, gpu_info, *, allow_oom_attempt: bool) -> None:
         raise typer.Exit(1)
 
 
+def _loads_on_unsloth(cfg) -> bool:
+    """#1736 — would this config still load with ``backend: unsloth``?
+
+    The tip that suggests the backend used to look at the backend alone, so it
+    was also printed for configs the schema refuses on unsloth (a task with no
+    unsloth setup, ``freeze_layers``, ``moe_lora``...). The schema is asked
+    instead of a list kept here: the dumped config is validated again with the
+    backend changed. Only that pass's ``ValidationError`` means no; anything
+    else is a bug and must surface.
+    """
+    from pydantic import ValidationError
+
+    from soup_cli.config.schema import SoupConfig
+
+    try:
+        SoupConfig.model_validate({**cfg.model_dump(), "backend": "unsloth"})
+    except ValidationError:
+        return False
+    return True
+
+
+def _unsloth_tip_applies(cfg) -> bool:
+    """Whether to suggest ``backend: unsloth``: only to a run on transformers,
+    with unsloth installed, whose config would load with it (#1736). The
+    installed check comes before the second validation, so a machine without
+    unsloth validates nothing twice."""
+    if cfg.backend != "transformers":
+        return False
+    from soup_cli.utils.unsloth import is_unsloth_available
+
+    return is_unsloth_available() and _loads_on_unsloth(cfg)
+
+
 def _apply_replay_overrides(cfg, *, replay, replay_ratio, replay_seed=None):
     """Apply the ``--replay*`` flags, then RE-VALIDATE.
 
@@ -838,9 +871,11 @@ def train(
         console.print(f"[red]Invalid distributed launch:[/] {markup_escape(message)}")
         raise typer.Exit(1) from exc
 
+    from soup_cli.utils.terminal import for_terminal
+
     config_path = Path(config)
     if not config_path.exists():
-        console.print(f"[red]Config not found: {config_path}[/]")
+        console.print(f"[red]Config not found: {for_terminal(config_path)}[/]")
         console.print("Run [bold]soup init[/] to create one.")
         raise typer.Exit(1)
 
@@ -871,7 +906,8 @@ def train(
                 config_path, schedule, trust_remote_code=trust_remote_code,
             )
         except (SweepTooShortError, LrSweepUnavailableError) as exc:
-            console.print(f"[red]{markup_escape(str(exc))}[/]")
+            # The refusal can quote the config path and text from the file.
+            console.print(f"[red]{for_terminal(str(exc))}[/]")
             raise typer.Exit(1) from exc
         try:
             save_lr_finder_report(lrs, losses_for_report, find_lr_output)
@@ -882,7 +918,7 @@ def train(
         raise typer.Exit(0)
 
     # Load & validate config
-    console.print(f"[dim]Loading config from {config_path}...[/]")
+    console.print(f"[dim]Loading config from {for_terminal(config_path)}...[/]")
     cfg = load_config(
         config_path,
         training_overrides=(
@@ -1108,7 +1144,7 @@ def train(
             # Validate the suite path up-front (path containment + parse).
             load_suite(gate)
         except (FileNotFoundError, ValueError) as exc:
-            console.print(f"[red]Invalid --gate suite: {exc}[/]")
+            console.print(f"[red]Invalid --gate suite: {for_terminal(str(exc))}[/]")
             raise typer.Exit(1) from exc
         cfg.training.eval_gate = EvalGateConfig(enabled=True, suite=gate)
         console.print(f"[green]Eval gate enabled[/] with suite: {gate}")
@@ -1649,15 +1685,13 @@ def train(
         for err in ctx_errors:
             console.print(f"[yellow]Long-context warning:[/] {err}")
 
-    # Suggest unsloth if available but not being used
-    if cfg.backend == "transformers":
-        from soup_cli.utils.unsloth import is_unsloth_available
-
-        if is_unsloth_available():
-            console.print(
-                "[dim]Tip: unsloth is installed. Add [bold]backend: unsloth[/dim]"
-                "[dim] to soup.yaml for 2-5x faster training.[/]"
-            )
+    # Suggest unsloth if available but not being used, and only to a config the
+    # loader would take with it (#1736).
+    if _unsloth_tip_applies(cfg):
+        console.print(
+            "[dim]Tip: unsloth is installed. Add [bold]backend: unsloth[/dim]"
+            "[dim] to soup.yaml for 2-5x faster training.[/]"
+        )
 
     # #1613: cheap stripe roots validation ahead of confirmation, --dry-run,
     # dataset loading, and run creation.
@@ -1801,9 +1835,9 @@ def train(
                         f"[dim]Fetched {cfg.base} from hub={hub_name} → "
                         f"{local_path}[/]"
                     )
-                # Use ``model_copy(update=...)`` so the Pydantic field
-                # validators on ``base`` rerun (matches v0.33.0 #47 / v0.40.0
-                # Part B immutability policy).
+                # model_copy replaces base without validation and leaves the
+                # original config untouched. local_path comes from download_repo
+                # under the cache directory checked above, so no revalidation is needed.
                 cfg = cfg.model_copy(update={"base": local_path})
             except ImportError as exc:
                 console.print(f"[red]{_markup_escape(str(exc))}[/]")
@@ -2568,7 +2602,9 @@ def _run_live_lr_sweep(
     from soup_cli.utils.lr_finder import LrSweepUnavailableError, SweepTooShortError
 
     try:
-        cfg = load_config(config_path)
+        # The refusal below quotes the reason, so the loader hands it over
+        # instead of printing its own line and exiting.
+        cfg = load_config(config_path, raise_unreadable=True)
     except Exception as exc:  # noqa: BLE001 — one refusal line, not a traceback
         raise LrSweepUnavailableError(
             f"--find-lr: config load failed ({exc}); no LR report was written."

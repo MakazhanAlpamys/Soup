@@ -923,8 +923,10 @@ def parse_suite_yaml(text: object) -> SuiteSpec:
         raise ValueError(f"suite text exceeds {_MAX_FILE_BYTES} bytes")
     import yaml  # lazy
 
+    from soup_cli.utils.yaml_limits import load_yaml_limited
+
     try:
-        data = yaml.safe_load(text)
+        data = load_yaml_limited(text, "suite text", max_bytes=_MAX_FILE_BYTES)
     except yaml.YAMLError as exc:
         raise ValueError(f"invalid YAML: {exc}") from exc
     return parse_suite_spec(data)

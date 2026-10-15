@@ -113,9 +113,8 @@ def _constant_text(node: ast.AST) -> str | None:
     return None
 
 
-def _schema_raise_messages(path: Path = SCHEMA_PATH) -> list[tuple[int, str]]:
-    """Every string handed to an exception raised in ``schema.py`` (#1353):
-    these reach the user when a config is refused, same as a description."""
+def _raise_messages(path: Path) -> list[tuple[int, str]]:
+    """Literal exception arguments, including constant parts of f-strings."""
     tree = ast.parse(path.read_text(encoding="utf-8"))
     messages: list[tuple[int, str]] = []
     for node in ast.walk(tree):
@@ -163,12 +162,19 @@ def test_schema_descriptions_have_no_expired_release_promises() -> None:
     assert offenders == []
 
 
-def test_schema_raise_messages_have_no_expired_release_promises() -> None:
-    messages = _schema_raise_messages()
+def test_source_raise_messages_have_no_expired_release_promises() -> None:
+    paths = sorted((ROOT / "src" / "soup_cli").rglob("*.py"))
+    # Helper refusals must remain covered if the scan root changes.
+    assert ROOT / "src/soup_cli/utils/unlearning.py" in paths
+    messages = [
+        (path, line, text)
+        for path in paths
+        for line, text in _raise_messages(path)
+    ]
     assert len(messages) >= 300
     offenders = [
-        f"schema.py:{line}: {text}"
-        for line, text in messages
+        f"{path.relative_to(ROOT)}:{line}: {text}"
+        for path, line, text in messages
         if _has_expired_version_promise(text)
     ]
     assert offenders == []
@@ -182,10 +188,46 @@ def test_the_raise_scanner_reads_f_strings(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    ((line, text),) = _schema_raise_messages(sample)
+    ((line, text),) = _raise_messages(sample)
 
     assert line == 2
     assert _has_expired_version_promise(text)
+
+
+def test_unlearning_docstrings_have_no_expired_release_promises() -> None:
+    paths = (
+        SCHEMA_PATH,
+        ROOT / "src/soup_cli/utils/unlearning.py",
+        ROOT / "src/soup_cli/utils/unlearning_eval.py",
+        ROOT / "src/soup_cli/commands/_eval_v0610.py",
+    )
+    offenders = []
+    for path in paths:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+                text = ast.get_docstring(node) or ""
+                if _has_expired_version_promise(text):
+                    offenders.append(f"{path.relative_to(ROOT)}: {text}")
+    assert offenders == []
+
+
+def test_unlearning_mlx_refusal_names_supported_backend() -> None:
+    import pytest
+
+    from soup_cli.config.schema import SoupConfig
+
+    with pytest.raises(ValueError) as exc_info:
+        SoupConfig(
+            base="test/model", task="unlearn", backend="mlx",
+            data={"train": "d.jsonl", "forget_set": "forget.jsonl"},
+            training={"unlearn_method": "npo"},
+        )
+    message = str(exc_info.value)
+    assert "task='unlearn'" in message
+    assert "backend=mlx" in message
+    assert "backend: transformers" in message
+    assert not _has_expired_version_promise(message)
 
 
 def test_cli_help_has_no_expired_promises_or_internal_phase_labels() -> None:
@@ -205,6 +247,7 @@ def test_stale_copy_scanner_can_fail_without_banning_future_notices() -> None:
     assert _has_expired_version_promise(f"Runtime lands in v{current}")
     assert _has_expired_version_promise("Runtime was deferred to v0.74.1")
     assert not _has_expired_version_promise(f"Removal ships in v{future}")
+    assert not _has_expired_version_promise("Supported since v0.61.1")
     assert not _help_text_is_stale("Applies the post-v2 attention kernel")
     assert _schema_description_is_stale("reserved", "Reserved (schema-only).")
     assert not _schema_description_is_stale(

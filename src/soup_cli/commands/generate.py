@@ -58,7 +58,7 @@ def generate(
     api_key: Optional[str] = typer.Option(
         None,
         "--api-key",
-        help="[deprecated] Use OPENAI_API_KEY env var instead",
+        help="\\[deprecated] Use OPENAI_API_KEY env var instead",
         envvar="OPENAI_API_KEY",
     ),
     api_base: Optional[str] = typer.Option(

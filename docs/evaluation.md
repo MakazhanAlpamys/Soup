@@ -258,6 +258,13 @@ tasks:
 
 `judge_model` accepts `ollama://<model>`, `http://localhost:<port>/<model>` or `https://<host>/<model>`. An `https://` judge URL uses `OPENAI_API_KEY` only when its host is `api.openai.com`; other hosts are called as an OpenAI-compatible server without that key. A judge URL whose host is a private, link-local or reserved IP literal is refused when the suite loads (loopback stays allowed): `soup eval gate` and `soup train --gate` stop with the error, and a suite named in `training.eval_gate` is skipped with a warning. Address an internal judge by its hostname. A host written only as numbers that is not a valid IPv4 address (`10.0.0.256`, `4294967296`) is refused the same way.
 
+An eval gate must contain at least one task. Empty or missing `tasks` lists,
+including a misspelled key that leaves the list empty, are refused with a
+`ValueError` naming the suite and `tasks`; `soup eval gate` exits `3` before model
+construction or a verdict. Direct `run_gate` calls also refuse an empty list,
+including a suite emptied after loading. Unknown-key handling and the no-model
+smoke generator are unchanged (#1798).
+
 Baselines may be a registry reference (`registry://<name-or-id>`), a file path, or omitted for the first run. A registry baseline uses the newest eval row for each benchmark — re-measuring a benchmark replaces its baseline score — and warns, per benchmark, when that row's scorer stamp is missing or from a different scorer revision. A task whose evaluation raises (`ValueError`, `FileNotFoundError`, `OSError`, or a judge that stays unreachable) gets no score and fails the gate closed under `on_regression: stop`; the log line lists it as a task that could not be scored, with the error, rather than as a regression (#1447).
 
 
@@ -422,6 +429,10 @@ single regressed benchmark, or a missing baseline all yield DON'T SHIP (a missin
 soup ship --base HuggingFaceTB/SmolLM2-135M-Instruct --adapter ./out \
   --task-eval tasks.jsonl --device cuda
 
+# Live: disable thinking when the model's chat template supports that variable
+soup ship --base <m> --adapter ./out --task-eval tasks.jsonl \
+  --chat-template-kwargs '{"enable_thinking": false}'
+
 # Leg-1 via LLM-as-a-judge instead of an accuracy metric
 soup ship --base <m> --adapter ./out --task-eval tasks.jsonl \
   --task-mode judge_score --judge-model ollama://llama3.1
@@ -472,9 +483,14 @@ of being rounded away. The scorer is answer-**extraction** — a spurious substr
 (`"B"` in "**B**erlin") no longer scores, which is a **breaking** change from the v0.25.0
 substring scorer (an existing run's verdict can flip; recompute any committed `--baseline`).
 As of v0.76.0, `mini_tool_call` mixes tool calls with direct-answer prompts and requires the
-literal response `NO_TOOL` for the latter. This deliberately moves the suite away from its former
-1.000 ceiling; baseline provenance revision 2 prevents scores from the earlier scale from being
-compared silently with the new fixture.
+literal response `NO_TOOL` for the latter (16 of its 40 rows). This deliberately moves the suite
+away from its former 1.000 ceiling. `mini_arithmetic` (multi-step and large-operand rows) and
+`mini_common_sense` (40 rows, an answer key that no longer favours one letter) were revised the same
+way (#1192). The bundled-scorer provenance revision is 5 at v0.76.0 (it was 1 through v0.75.2):
+revision 2 is the `mini_tool_call` fixture, 3 the refusal classifier behind `mini_safety` and
+`mini_over_refusal`, 4 the `mini_arithmetic` fixture and 5 the `mini_common_sense` fixture. A
+`--baseline` stamped with another revision, or with none, warns instead of being compared silently
+on the new scale; recompute it.
 `mini_safety` and `mini_over_refusal` form a dual gate: under-refusal regresses safety, over-refusal
 regresses utility (neither axis can be gamed alone). `--general-suite <names>` with any non-bundled
 name routes through the lm-eval harness. Pairwise judge win-rate (`--task-mode pairwise`) shipped
@@ -627,7 +643,10 @@ The file is
 and is consumed later by `soup ship --baseline baseline.json` or
 `soup eval gate --baseline baseline.json`. Shared helpers
 `stamp_baseline_scores` / `write_baseline_file` are the only writers;
-`write_baseline_file` refuses an empty score map. `resolve_baseline`
+`write_baseline_file` refuses an empty score map. Baseline scores must be finite
+numbers — non-finite values (`NaN`, `+inf`, `-inf`) are refused at read
+(`resolve_baseline`), write (`stamp_baseline_scores`, `write_baseline_file`),
+and gate (`run_gate`) boundaries (#1773). `resolve_baseline`
 warns once on unknown provenance (unstamped files /
 registry rows) or a `scorer_revision` mismatch, and stays silent when the
 stamp matches. The old name-based `SCORER_CHANGED_IN_V0_73_2` warning is
@@ -665,6 +684,49 @@ Smoothed BLEU uses Chen & Cherry epsilon for zero-correct buckets where
 force the score to 0.0.
 
 
+### Public live prompt preparation
+
+`make_generator` and `make_multi_generator` accept `chat_template_kwargs`, a dictionary
+of variables passed to the tokenizer's chat template. The default preserves existing
+rendering, including raw-prompt fallback when a template is absent or broken. When
+non-empty options are requested, a missing or broken template raises an error instead
+of silently ignoring those options. Whether a variable such as `enable_thinking` has an
+effect depends on the model's template.
+
+The public `encode_prompt` helper uses the same rendering, special-token handling and
+`MAX_PROMPT_TOKENS` budget (1024) as both generators. Template-rendered special tokens
+are not added a second time. With the default right truncation, over-budget prompts
+lose their trailing tokens, which can include the generation prompt, as before.
+For a caller-managed batch, prepare each prompt with
+`return_tensors=None`, then pad the resulting encodings with the same tokenizer:
+
+```python
+from soup_cli.utils.live_eval import MAX_PROMPT_TOKENS, encode_prompt, make_generator
+
+options = {"enable_thinking": False}
+encoded = [encode_prompt(tokenizer, prompt, chat_template_kwargs=options,
+                         return_tensors=None) for prompt in prompts]
+batch = tokenizer.pad(encoded, padding=True, return_tensors="pt").to(device)
+
+# Reuse an already-loaded, evaluation-mode model without patching the loader.
+generate = make_generator("unused", loaded=(model, tokenizer, device),
+                          chat_template_kwargs=options)
+answer = generate("hello")
+```
+
+Configure the tokenizer's padding side appropriately for your batched model. The
+helper prepares inputs; it does not run batched generation. Template options cannot
+override `conversation`, `tokenize`, `add_generation_prompt`, `continue_final_message`,
+`return_tensors`, `return_dict`, `padding`, `truncation`, `max_length`, `chat_template`
+or `return_assistant_tokens_mask`. Generators snapshot the supplied options, including
+nested values, at construction. With `loaded`, model loading options
+such as device and quantization are ignored; the supplied triple is used directly.
+
+`soup ship --chat-template-kwargs` accepts a JSON object, applies it equally to base
+and tuned generation, and refuses malformed options with usage exit code 3. The flag
+is live-only and cannot be combined with offline `--evidence`. It applies to live
+task generation; it does not configure the lm-eval benchmark legs.
+
 ## Quant Calibration (KL Divergence)
 
 Compare a quantized model to a full-precision baseline on a small fixed prompt
@@ -680,8 +742,9 @@ print(report.delta_status, report.mean_kl)
 # OK 0.012
 ```
 
-The kernel is pure-math and capped at 10 000 prompts to defend against
-accidental OOM. `CalibrationReport` is a frozen dataclass.
+The kernel is pure-math, evaluates stable log-probabilities using log-softmax
+without artificial probability flooring, and is capped at 10 000 prompts to
+defend against accidental OOM. `CalibrationReport` is a frozen dataclass.
 
 
 ## Model Arena (Elo Tournament)

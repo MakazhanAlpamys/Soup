@@ -113,8 +113,11 @@ import functools
 import os
 import pathlib
 import re
+import types
 
 import pytest
+
+from tests._source_scan import memoized_scan, parse_source, walk_nodes
 
 pytestmark = pytest.mark.unit
 
@@ -158,10 +161,10 @@ def consumed_names(paths) -> set:
     names: set = set()
     for path in paths:
         try:
-            tree = ast.parse(path.read_text(errors="ignore"))
+            tree = parse_source(path.read_text(errors="ignore"), keep=True)
         except (SyntaxError, UnicodeDecodeError, ValueError):
             continue
-        for node in ast.walk(tree):
+        for node in walk_nodes(tree):
             if isinstance(node, ast.Attribute):
                 if isinstance(node.ctx, ast.Load):
                     names.add(node.attr)
@@ -201,10 +204,10 @@ def training_receiver_reads(paths, field: str) -> bool:
     """
     for path in paths:
         try:
-            tree = ast.parse(pathlib.Path(path).read_text(errors="ignore"))
+            tree = parse_source(pathlib.Path(path).read_text(errors="ignore"), keep=True)
         except (SyntaxError, UnicodeDecodeError, ValueError):
             continue
-        for node in ast.walk(tree):
+        for node in walk_nodes(tree):
             if (
                 isinstance(node, ast.Attribute)
                 and isinstance(node.ctx, ast.Load)
@@ -248,10 +251,10 @@ def schema_property_reads(schema_path: pathlib.Path) -> dict:
     """
     out: dict = {}
     try:
-        tree = ast.parse(schema_path.read_text(errors="ignore"))
+        tree = parse_source(schema_path.read_text(errors="ignore"), keep=True)
     except (SyntaxError, UnicodeDecodeError, ValueError):  # pragma: no cover
         return out
-    for node in ast.walk(tree):
+    for node in walk_nodes(tree):
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
         names = []
@@ -316,12 +319,28 @@ def _consumed_in_src() -> set:
     `schema_property_reads`.
     """
     modules = _consumer_modules()
-    consumed = set(_consumed_cached(tuple(sorted(str(p) for p in modules))))
+    paths_key = tuple(sorted(str(p) for p in modules))
+    consumed = set(_consumed_cached(paths_key))
     consumed = fold_property_reads(consumed, schema_property_reads(SCHEMA_PATH))
     # #807: a read inside a function nothing calls is not consumption, for
     # the same reason an uncalled @property launders nothing.
-    return drop_dead_function_reads(
-        consumed, function_scoped_reads(modules), referenced_names(modules)
+    scoped, referenced = _dead_function_inputs(paths_key)
+    return drop_dead_function_reads(consumed, scoped, referenced)
+
+
+@memoized_scan
+def _dead_function_inputs(paths_key) -> tuple:
+    """`(function_scoped_reads, referenced_names)` of one file list, walked once.
+
+    `_consumed_in_src()` needs both on every call and this file calls it seven
+    times, which was fourteen more walks of `src/`. Keyed on the file list, like
+    `_consumed_cached`, and dropped when the module finishes (`tests/_source_scan`).
+    Handed out read-only: every caller shares the one mapping.
+    """
+    modules = [pathlib.Path(p) for p in paths_key]
+    return (
+        types.MappingProxyType(function_scoped_reads(modules)),
+        frozenset(referenced_names(modules)),
     )
 
 
@@ -912,7 +931,7 @@ def function_scoped_reads(paths) -> dict:
     out: dict = {}
     for path in paths:
         try:
-            tree = ast.parse(path.read_text(errors="ignore"))
+            tree = parse_source(path.read_text(errors="ignore"), keep=True)
         except (SyntaxError, UnicodeDecodeError, ValueError):
             continue
         stack = [(tree, None)]
@@ -945,10 +964,10 @@ def referenced_names(paths) -> set:
     names: set = set()
     for path in paths:
         try:
-            tree = ast.parse(path.read_text(errors="ignore"))
+            tree = parse_source(path.read_text(errors="ignore"), keep=True)
         except (SyntaxError, UnicodeDecodeError, ValueError):
             continue
-        for node in ast.walk(tree):
+        for node in walk_nodes(tree):
             if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
                 names.add(node.id)
             elif isinstance(node, ast.Attribute) and isinstance(node.ctx, ast.Load):

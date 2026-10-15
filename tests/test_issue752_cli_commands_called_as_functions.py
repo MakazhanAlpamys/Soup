@@ -36,6 +36,8 @@ import textwrap
 import pytest
 import typer
 
+from tests._source_scan import parse_source, walk_nodes
+
 SRC = pathlib.Path(__file__).resolve().parents[1] / "src" / "soup_cli"
 
 
@@ -96,14 +98,14 @@ def find_optioninfo_leaks(root: pathlib.Path) -> list[tuple[str, int, str, list[
 
     for path in sorted(root.rglob("*.py")):
         try:
-            tree = ast.parse(path.read_text(encoding="utf-8"))
+            tree = parse_source(path.read_text(encoding="utf-8"), keep=True)
         except SyntaxError:  # pragma: no cover - the tree parses today
             continue
         trees[path] = tree
         mod = _module_name(path, root)
         declared[mod] = {
             node.name: _typer_params(node)
-            for node in ast.walk(tree)
+            for node in walk_nodes(tree)
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
         }
 
@@ -112,12 +114,12 @@ def find_optioninfo_leaks(root: pathlib.Path) -> list[tuple[str, int, str, list[
         mod = _module_name(path, root)
         local = declared.get(mod, {})
         imported: dict[str, tuple[str, str]] = {}
-        for node in ast.walk(tree):
+        for node in walk_nodes(tree):
             if isinstance(node, ast.ImportFrom) and node.module and not node.level:
                 for alias in node.names:
                     imported[alias.asname or alias.name] = (node.module, alias.name)
 
-        for call in ast.walk(tree):
+        for call in walk_nodes(tree):
             if not isinstance(call, ast.Call):
                 continue
             # Bare-name calls only. `model.train()` is a method that happens to

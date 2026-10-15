@@ -332,9 +332,11 @@ def _license_from_frontmatter(path: str) -> Optional[str]:
         return None
     block = body[:end]
     try:
-        import yaml  # lazy — pyyaml is a core dep but keep import local
+        from soup_cli.utils.yaml_limits import load_yaml_limited
 
-        meta = yaml.safe_load(block)
+        meta = load_yaml_limited(
+            block, "frontmatter", max_bytes=_MAX_FRONTMATTER_BYTES
+        )
     except Exception:  # noqa: BLE001 - any YAML error -> undetermined
         return None
     if not isinstance(meta, dict):

@@ -81,11 +81,21 @@ def push_cmd(
 
 @app.command("list")
 def list_cmd(
-    name: Optional[str] = typer.Option(None, "--name", "-n"),
-    tag: Optional[str] = typer.Option(None, "--tag", "-t"),
-    base: Optional[str] = typer.Option(None, "--base", "-b"),
-    task: Optional[str] = typer.Option(None, "--task"),
-    limit: int = typer.Option(100, "--limit", "-l"),
+    name: Optional[str] = typer.Option(
+        None, "--name", "-n", help="Filter by registry entry name."
+    ),
+    tag: Optional[str] = typer.Option(
+        None, "--tag", "-t", help="Filter by tag."
+    ),
+    base: Optional[str] = typer.Option(
+        None, "--base", "-b", help="Filter by base model."
+    ),
+    task: Optional[str] = typer.Option(
+        None, "--task", help="Filter by training task."
+    ),
+    limit: int = typer.Option(
+        100, "--limit", "-l", help="Maximum number of entries to show."
+    ),
 ) -> None:
     """List registry entries."""
     with RegistryStore() as store:
@@ -182,7 +192,9 @@ def show_cmd(
 @app.command("search")
 def search_cmd(
     query: str = typer.Argument(..., help="Keyword to search for"),
-    limit: int = typer.Option(50, "--limit", "-l"),
+    limit: int = typer.Option(
+        50, "--limit", "-l", help="Maximum number of matching entries to show."
+    ),
 ) -> None:
     """Search registry entries by name/base/task/notes."""
     with RegistryStore() as store:

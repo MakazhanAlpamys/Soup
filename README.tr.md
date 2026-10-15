@@ -1,4 +1,4 @@
-<!-- synced-from: README.md sha256:a6789c2877515d5ac707160a55ab94cd84b390e2e31168b69d4f954a47c5562a -->
+<!-- synced-from: README.md sha256:fa009c2fcc2c94ea06e25ea8620c2fbed9bfb8ac6611bf71a2669a06f7c50b46 -->
 <p align="center">🌍 <a href="README.md">English</a> | <strong>Türkçe</strong> | <a href="README.ar.md">العربية</a> | <a href="README.ja.md">日本語</a> | <a href="README.zh.md">中文</a></p>
 
 <p align="center">
@@ -61,12 +61,15 @@ soup train
 
 **4 GB dizüstü GPU'da 8B bir modele ince ayar yapın.** Katman akışı, dondurulmuş tabanı VRAM'in
 dışında tutar ve GPU'ya her seferinde bir kod çözücü katman besler. RTX 3050 Laptop 4 GB üzerinde
-ölçüldü: Llama-3.1-8B-Instruct + NF4 ile **119.6 tok/s, 3.32 GB tepe** — normal, belleğe tamamen
+ölçüldü: Llama-3.1-8B-Instruct + NF4 ile **952 MHz'de 119.6 tok/s, 3.32 GB tepe** (onarım öncesi) — normal, belleğe tamamen
 yerleşik bir çalıştırmayla bit düzeyinde özdeş ve bir H100 üzerinde aynı 3.32 GB'da 113.00 tok/s
 ile bağımsız olarak yeniden üretildi. (Her iki rakam da 32B'de %4.8 yavaşlamaya yol açan v0.73.0 sonuç-doğruluğu
-onarımından önce, v0.72.2'de ölçüldü; o zamandan beri hiçbiri 4 GB bir kartta yeniden
-çalıştırılmadı — yeniden ölçüm [#361](https://github.com/MakazhanAlpamys/Soup/issues/361)
-numaralı issue'da bekliyor.)
+onarımından önce, v0.72.2'de ölçüldü. Onarım sonrası çalıştırma, başka bir
+RTX 3050 Laptop 4 GB üzerinde (@umran666, #1103), **1935–1957 MHz'de 208.6 tok/s, 2.40 GB tepe**
+veriyor. Bu, aynı oturumda ölçülen GEMM tavanının %59'una denk geliyor; onarım öncesi satırda oran
+%68'di: birim saat frekansı başına yaklaşık %14 daha yavaş, yani ham 1.74x kazanç bir hızlanma değil,
+saat frekansı farkıdır. Büyük katman akışı da iki satır arasında bellek düzenini değiştirdi; bu yüzden
+bu oran bile bire bir karşılaştırma değildir — [kayıt](benchmarks/gate-v0.72.2-nf4.md).)
 İsteğe bağlıdır (`stream_layers: true`) ve hâlâ BETA —
 [nasıl çalışır](docs/performance-and-quantization.md#layer-streaming-beta-v0720-nf4-v0722-disk--wider-archs-v0723-preference-losses-v0724) ·
 [tüm ölçümler](benchmarks/) · [makale](https://doi.org/10.5281/zenodo.21771064) ·
@@ -74,8 +77,8 @@ numaralı issue'da bekliyor.)
 sınırlar, ardından akışlı bir modelin normal bir modelle bit düzeyinde özdeş olduğunu doğrular)
 
 <p align="center">
-  <a href="https://youtu.be/T1LCErE943E"><img src="docs/assets/layer-streaming.gif" alt="4 GB bir kartta Llama-3.1-8B için soup train ön kontrolü: 32 katman boyunca RAM'e sabitlenmiş 3.60 GB'lık bir taban deposu ve iki adet 113 MB VRAM tamponu, ardından 119.6 tok/s'de ölçülen 3.32 GB tepe; 4 GB çizgisinin altında kalıyor (v0.72.2'de ölçüldü, #331 onarımından önce; yeniden ölçüm #361 numaralı issue'da bekliyor)"></a><br>
-  <sub>Llama-3.1-8B-Instruct + NF4, LoRA, batch boyutu 1, dizi uzunluğu 512, RTX 3050 Laptop 4 GB üzerinde — <b>3.32 GB tepe, 119.6 tok/s</b> (v0.72.2'de ölçüldü, #331 onarımından önce; yeniden ölçüm #361 numaralı issue'da bekliyor). <a href="https://youtu.be/T1LCErE943E">Tam video (90 sn)</a></sub>
+  <a href="https://youtu.be/T1LCErE943E"><img src="docs/assets/layer-streaming.gif" alt="4 GB bir kartta Llama-3.1-8B için soup train ön kontrolü: 32 katman boyunca RAM'e sabitlenmiş 3.60 GB'lık bir taban deposu ve iki adet 113 MB VRAM tamponu, ardından 119.6 tok/s'de ölçülen 3.32 GB tepe; 4 GB çizgisinin altında kalıyor (onarım öncesi satır, v0.72.2'de 952 MHz'de ölçüldü; #331 sonrası satır aşağıdaki açıklamada)"></a><br>
+  <sub>Llama-3.1-8B-Instruct + NF4, LoRA, batch boyutu 1, dizi uzunluğu 512, RTX 3050 Laptop 4 GB üzerinde — <b>3.32 GB tepe, 119.6 tok/s</b>, 952 MHz'de (onarım öncesi, v0.72.2; #331 sonrası: 1935 MHz'de 208.6 tok/s, 2.40 GB, doğrudan karşılaştırılamaz, @umran666, #1103). <a href="https://youtu.be/T1LCErE943E">Tam video (90 sn)</a></sub>
 </p>
 
 ## Neden Soup?
@@ -90,39 +93,53 @@ yerine altyapıyla boğuşarak geçiriyor. Soup bunu çözer.
 
 ## Yenilikler
 
-**v0.75.0 — aynı `soup.yaml`, MLX'te transformers'takinden farklı bir tarif eğitiyordu,
-sessizce.** Altı eğitim seçeneği doğrulanıyor, belgeleniyor, kabul ediliyor — ve o arka uçta
-hiçbir şey tarafından okunmuyordu. **Bu sürümdeki 60 pull request'in tamamı bakımcı dışından
-geldi**, 22 kişiden.
+**v0.76.0 — Soup'un kabul edip hiç uygulamadığı ayarlar artık yüklemeyi durduruyor.** Doğrulanan ve
+belgelenen, ancak yapılandırdığını iddia ettikleri yolda hiçbir şey tarafından okunmayan seçenekler artık
+yükleme sırasında reddediliyor; ayarın adını ve neyin değiştirileceğini belirtiyor. Geri kalanlar uyarı
+veriyor ve onları reddedecek sürümü belirtiyor. Daha önce yüklenen bir yapılandırma artık yüklenmeyebilir:
+önce `soup doctor --config soup.yaml` komutunu çalıştırın.
 
-- **Geriye dönük uyumsuz değişiklik: bilinmeyen bir yapılandırma anahtarı artık yüklemeyi reddediyor.**
-  v0.74 uyarı vermiş ve son tarih olarak bu sürümü açıklamıştı. `quantizaton` gibi bir yazım
-  hatası ya da yalnızca daha yeni bir Soup sürümünde bulunan bir anahtar eskiden yok sayılıyor ve
-  çalıştırma o ayar uygulanmadan devam ediyordu; artık CLI'da (çıkış kodu 1) ve API'de
-  (`ValueError`) reddediliyor ve muhtemelen kastettiğiniz alanı belirtiyor. Algılama adımı,
-  şemanın v0.40.1'den beri desteklediği kök düzeyindeki `lora:` yeniden eşlemesini uyguluyor;
-  yani bu yazım reddedilmiyor, kabul ediliyor. Bu yazımı kullanan iki `soup fetch examples`
-  dosyası standart `training.lora` biçimine taşındı. Tüm tarif ve şablonlar sorunsuz yükleniyor,
-  anahtar adları terminale ulaşmadan önce escape ediliyor ve tarama sınırlandırılmış durumda.
-- **MLX artık kabul ettiği yapılandırmayı gerçekten uyguluyor.** `train_on_responses_only`, `warmup_ratio` /
-  `scheduler` / `weight_decay` / `optimizer`, `max_grad_norm`, `gradient_accumulation_steps`
-  ve `gradient_checkpointing`, `backend: mlx` üzerinde tek tek doğrulanıp sonra düşürülüyordu.
-  32 optimizer adından yalnızca 8'inin MLX karşılığı var; diğer 24'ü sessizce AdamW'ye
-  dönüşmek yerine adıyla reddediliyor. MLX artık canlı panoyu, deney takipçisini ve `soup ui`'yi de
-  besliyor; `soup doctor --config` ise bir arka ucun okumadığı ayarları listeliyor.
-- **Doğrulama kaybı hiçbir yerde görünmüyordu.** Her arka uçta hesaplanıp atılıyordu: metrik sütunu
-  yok, olay alanı yok, panoda hiçbir şey yok. Artık kaydediliyor, canlı aktarılıyor ve gösteriliyor.
-- **Geriye dönük uyumsuz: `grpo_variant: gspo`, yayımlanmış dizi düzeyi amaç fonksiyonudur**
-  (arXiv:2507.18071); bir dolgu belirtecinin aynı sütunu paylaşan her satırın gradyanını da
-  kaydırdığı sütun merkezleme sezgisel yönteminin yerini alıyor. Mevcut gspo yapılandırmaları önceki
-  çalıştırmaları yeniden üretemeyecek.
-- **Web arayüzünün okuma uç noktaları ve SSE, kimlik doğrulama gerektiriyor**; sorgu
-  dizesindeki bir belirteç yerine kısa ömürlü, tek kullanımlık biletlerle. `--public` artık
-  `/docs` ve `/openapi.json`'ı yerel ağa sunmuyor; eğitim alt süreci de çıktısını kimse
-  okumadığında artık askıda kalmıyor.
-- **`torch>=2.6.0`**, v0.74.0'ın bilinen sınırlamasını kapatıyor: 2.5.1'de `trl>=0.29` içe
-  aktarılamıyordu ve hiçbir tercih trainer'ı çalışmıyordu. Ayrıca düzeltildi: `training.loraplus_lr_ratio`
-  onu ayarlayan her çalıştırmayı çökertiyordu ve `packing: true` TRL 0.29'da hata veriyordu.
+- **Geriye dönük uyumsuz değişiklik: hiç etkili olmayan bir ayar yüklemede reddediliyor.** Bunların
+  arasında `training.quantization_aware: true` (nicelemeye duyarlı eğitimi hiç çalıştırmıyordu),
+  `training.use_longlora`, `training.ebft_variant`, `training.gdpo_variant`, hiçbir hazırlık adımının
+  okumadığı yerlerdeki `training.rope_scaling_type`, `freeze_layers` / `freeze_ratio` (transformers
+  arka ucunda metin `sft` / `tts` yolunun dışında), `auto_mixed_precision` (`sft` / `tts` dışında)
+  ve unsloth hazırlık adımı bulunmayan yedi görevde daha `backend: unsloth` var. Her mesaj alanın adını
+  ve neyin değiştirileceğini belirtiyor. `lr_groups`, `early_stop_patience`, `forgetting_eval_steps` ve
+  okunmayan diğer ayarlar artık yüklemede uyarı veriyor ve v0.77'den itibaren reddedilecek.
+- **Doğrulama kaybı artık değerlendiriliyor.** `data.val_split`, her çalıştırmada satırları eğitimin
+  dışında tutuyordu ve transformers arka ucundaki hiçbir trainer bunları değerlendirmiyordu. Artık bir
+  bölme alan her görev, onu her epoch sonunda ya da `training.eval_steps` ile her N adımda değerlendiriyor
+  ve doğrulama kaybını kaydediyor; çalıştırmalar yüzde birkaç daha uzun sürüyor.
+  **`grpo`, `ppo` ve `online_dpo` için geriye dönük uyumsuz:** varsayılan olarak artık satır ayırmıyorlar
+  (`data.val_split` bir notla yok sayılıyor), dolayısıyla her satır eğitime giriyor.
+- **Geriye dönük uyumsuz değişiklik: standart olmayan her `grpo_variant`, `grpo_beta` KL cezasını
+  uyguluyor.** `gspo`, `dapo`, `dr_grpo`, `bnpo`, `two_sided` ve `rft`, `grpo_beta` değerini doğrulayıp
+  atıyordu; bu yüzden mevcut varyant yapılandırmaları önceki çalıştırmaları yeniden üretmeyecek.
+  `grpo_beta: 0` artık KL'siz çalışıyor ve referans modelin ileri geçişini atlıyor.
+- **Katman akışı disk katmanını bir arka plan iş parçacığında, doğrudan G/Ç (direct I/O) ile okuyor ve
+  onu NVMe sürücülere şeritleyebiliyor.** RAM'den büyük, 36 GB'lık, 70B biçimli bir NF4 deposunda (tek
+  bir RTX 5070 Laptop 8 GB makinesi), soğuk bir adım eşzamanlı okumada 110.5 s iken 16.2-17.3 s'ye düştü;
+  `SOUP_LAYER_STREAM_STRIPE_DIRS` ile iki sürücüye yayıldığında ise 17.4 s'den 9.97 s'ye indi (sürekli yük
+  altında bir sonda ölçümü: iki tur, 1.28x ve 1.41x, resmî bir hüküm yok;
+  [kayıt](benchmarks/probe-rtx5070-two-drive-sustained.md)). RAM'e sığan bir depo RAM katmanında hâlâ daha
+  hızlı ve `stream_source: auto` onu seçiyor. İsteğe bağlıdır (`stream_layers: true`) ve hâlâ BETA;
+  kayıtlar: [doğrudan G/Ç](benchmarks/gate-974-disk-tier-direct-io.md),
+  [şeritleme](benchmarks/gate-two-drive-striping.md).
+- **Yeni komutlar ve seçenekler.** `soup adapters check`, bir LoRA adaptörünü sessiz arızalara karşı
+  tarar; `soup bench train`, sabit sayıda adım eğitir ve model eğitilmiyorsa çıkış kodu 1 ile biter
+  (transformers arka ucunda `task: sft` için geçerlidir; `soup bench` artık bir gruptur ve
+  `soup bench infer` eski çıkarım kıyaslamasıdır); `soup data clean`, girdi dosyasına dokunmadan bir veri
+  kümesini temizler ve onarır; `soup recipes verify`, meta aygıtında, hiçbir ağırlık indirmeden, gönderilen
+  her tarifin bir LoRA adaptörü bağlayabildiğini denetler; `soup rewind`, bir kayıp sıçramasının
+  arkasındaki veri kümesi satırlarını adlandırır. `soup infer`, isteğe bağlı `--batch-size` ve deneysel bir
+  `--cuda-graphs` kazandı (PyTorch 2.14 veya daha yeni; tek bir RTX 5070 Laptop'ta, sabitlenmemiş,
+  FP16'da Qwen2.5-1.5B ile, onunla yapılan en yavaş çalıştırma, onsuz yapılan en hızlı çalıştırmadan
+  kod çözmede 2.9x daha hızlıydı). `soup ab`, iki yönlü, varyansa karşı dayanıklı bir test çalıştırır;
+  `soup adapters sign --backend sigstore` ve `soup attest emit --sign sigstore` ise Sigstore anahtarsız
+  OIDC ile imzalar (`pip install "soup-cli[sigstore]"`).
+- **Kullanımdan kaldırıldı:** `soup export --format awq` ve `--format gptq` v0.77'de kaldırılacak; her
+  iki üst proje de arşivlenmiş durumda ve ekstralardan hiçbiri `[train]` ile yan yana kurulamıyor.
 
 > Yalnızca Python **3.10–3.12**. 3.13+ sürümlerinde pip, Soup daha hiç çalışmadan yerel (native)
 > uzantıda çöken, test edilmemiş PyTorch wheel paketlerini seçiyordu.
@@ -441,9 +458,13 @@ bu aynı zamanda makalenin ne işe yaradığını anlatmanın en kısa yoludur:
   ([kayıt](benchmarks/probe-v0.73.0-what-bounds-streaming.md)). Her ölçüm geçerliliğini koruyor;
   yeniden üretim daha zayıf bir biçimde ayakta kalıyor — kısıt her iki makinede ortak ve GPU'nun
   hesaplama gücü değil.
-- **Özgününe hiç benzemeyen donanımda yeniden üretim** (v2'de eklendi): RTX 3050'de 119.6 tok/s'ye
-  karşı bir H100'de medyan 113.00, aynı 3.32 GB tepede. İkisi de #331 onarımından önce
-  ölçüldü; 4 GB yeniden ölçümü #361 numaralı issue'da bekliyor.
+- **Özgününe hiç benzemeyen donanımda yeniden üretim** (v2'de eklendi): RTX 3050'de (952 MHz'de)
+  119.6 tok/s'ye karşı bir H100'de medyan 113.00, aynı 3.32 GB tepede. İkisi de #331 onarımından
+  önce ölçüldü ve makalenin bildirdiği rakamlar bunlardır. #331 sonrası satır (@umran666, #1103),
+  1935–1957 MHz'de 208.6 tok/s ve 2.40 GB tepedir; aynı oturumda ölçülen GEMM tavanının %68'ine
+  karşı %59'u. Ham 1.74x kazanç bir hızlanma değil, saat frekansı farkıdır; satırlar arasında bellek
+  düzeni de değişti, bu yüzden bu oran bile bire bir karşılaştırma değildir
+  ([kayıt](benchmarks/gate-v0.72.2-nf4.md)).
 - **Sessiz bir yanlış gradyan kusuru, bulundu ve onarıldı.** Katman başına ~165 MiB'ın üzerindeki
   NF4'te ileri geçiş bit düzeyinde özdeş kaldı ve kayıp eğrisi sağlıklı göründü, ama gradyanlar
   yanlıştı. Neden, upstream kütüphanede adıyla belirtildi ve orada bildirildi; onarım, gerçek 32B

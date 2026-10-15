@@ -3,10 +3,9 @@
 from pathlib import Path
 from typing import Any, Dict, List
 
-import yaml
-
 from soup_cli.config.schema import SFT_KERNEL_AWARE_TASKS
 from soup_cli.migrate.common import to_number
+from soup_cli.utils.yaml_limits import MAX_CONFIG_BYTES, load_yaml_file_limited
 
 # Axolotl rl → Soup task mapping
 _RL_MAP = {
@@ -50,8 +49,9 @@ def migrate_axolotl(config_path: Path) -> Dict[str, Any]:
     Returns a dict suitable for config_to_yaml(). Includes a ``_warnings``
     key with a list of human-readable migration notes.
     """
-    raw_text = config_path.read_text(encoding="utf-8")
-    raw = yaml.safe_load(raw_text)
+    raw = load_yaml_file_limited(
+        config_path, f"Config file {config_path}", max_bytes=MAX_CONFIG_BYTES
+    )
     if not raw or not isinstance(raw, dict):
         raise ValueError("Config file is empty or not a valid YAML mapping")
 

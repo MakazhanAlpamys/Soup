@@ -172,13 +172,14 @@ class JudgeResults:
 
 def load_rubric(path: Path) -> dict:
     """Load a rubric YAML file with validation."""
-    import yaml
+    from soup_cli.utils.yaml_limits import MAX_CONFIG_BYTES, load_yaml_file_limited
 
     if not path.exists():
         raise FileNotFoundError(f"Rubric file not found: {path}")
 
-    with open(path, encoding="utf-8") as fh:
-        rubric = yaml.safe_load(fh)
+    rubric = load_yaml_file_limited(
+        path, f"Rubric file {path}", max_bytes=MAX_CONFIG_BYTES
+    )
 
     if not isinstance(rubric, dict):
         raise ValueError("Rubric must be a YAML mapping")

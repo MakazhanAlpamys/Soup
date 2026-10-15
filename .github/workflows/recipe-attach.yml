@@ -37,6 +37,7 @@ on:
       - 'examples/**'
       - 'pyproject.toml'
       - '.github/workflows/recipe-attach.yml'
+      - '.github/constraints/pinned-upstream.txt'
   pull_request:
     branches: [main]
     paths:
@@ -51,6 +52,7 @@ on:
       - 'examples/**'
       - 'pyproject.toml'
       - '.github/workflows/recipe-attach.yml'
+      - '.github/constraints/pinned-upstream.txt'
   workflow_dispatch:
 
 permissions:
@@ -79,7 +81,8 @@ jobs:
       - name: Install the training stack
         # `[train]`, not `[dev]`: the attach needs torch, transformers and peft
         # and nothing from the test extras.
-        run: pip install -e ".[train]"
+        # The pinned stack of ci.yml's pull-request cells on a pull request and a push; a manual run resolves the newest.
+        run: pip install -e ".[train]" ${{ (github.event_name == 'pull_request' || github.event_name == 'push') && '-c .github/constraints/pinned-upstream.txt' || '' }}
       - name: Ratchet every shipped config's attach
         # Exit 2 is a new cannot-attach, or a pinned config that now attaches;
         # exit 1 is the command itself failing. Skipped (gated, no token) exits 0

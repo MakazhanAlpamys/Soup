@@ -551,7 +551,8 @@ def judge(
         try:
             rubric_data = load_rubric(Path(rubric))
         except (FileNotFoundError, ValueError) as exc:
-            console.print(f"[red]{exc}[/]")
+            # The message quotes the path it was given.
+            console.print(f"[red]{for_terminal(str(exc))}[/]")
             raise typer.Exit(1)
 
     console.print(
@@ -974,9 +975,9 @@ def human(
 
         # Display for human judgment
         console.print(f"\n[bold]--- Prompt {idx + 1}/{len(prompts)} ---[/]")
-        console.print(Panel(prompt_text, title="Prompt", border_style="dim"))
-        console.print(Panel(resp_a, title="[blue]Response A[/]"))
-        console.print(Panel(resp_b, title="[magenta]Response B[/]"))
+        console.print(Panel(for_terminal(prompt_text), title="Prompt", border_style="dim"))
+        console.print(Panel(for_terminal(resp_a), title="[blue]Response A[/]"))
+        console.print(Panel(for_terminal(resp_b), title="[magenta]Response B[/]"))
 
         # Get human choice
         while True:
@@ -1270,7 +1271,7 @@ def gate_cmd(
     try:
         eval_suite = load_suite(suite)
     except (FileNotFoundError, ValueError) as exc:
-        console.print(f"[red]Cannot load suite:[/] {exc}")
+        console.print(f"[red]Cannot load suite:[/] {for_terminal(str(exc))}")
         raise typer.Exit(EXIT_USAGE_ERROR) from exc
 
     try:

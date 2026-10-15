@@ -168,6 +168,7 @@ class EmbeddingTrainerWrapper:
         )
 
         # --- Calculate warmup steps from ratio (#1431) ---
+        from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
         from soup_cli.utils.warmup import resolve_trainer_warmup_steps
 
         warmup_steps = resolve_trainer_warmup_steps(tcfg.warmup_ratio)
@@ -181,6 +182,9 @@ class EmbeddingTrainerWrapper:
             "gradient_accumulation_steps": tcfg.gradient_accumulation_steps,
             "learning_rate": tcfg.lr,
             "warmup_steps": warmup_steps,
+            "gradient_checkpointing": should_enable_hf_gradient_checkpointing(
+                tcfg.gradient_checkpointing, stream_layers=tcfg.stream_layers
+            ),
             "weight_decay": tcfg.weight_decay,
             "max_grad_norm": tcfg.max_grad_norm,
             "optim": tcfg.optimizer,

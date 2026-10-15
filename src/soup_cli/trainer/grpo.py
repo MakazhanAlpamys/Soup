@@ -25,6 +25,7 @@ from soup_cli.utils.gpu import (
 from soup_cli.utils.mixed_precision import (
     align_trainable_dtype_for_fp16,
     keep_trainable_dtype_on_resume,
+    reload_root_adapter_on_resume,
 )
 from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
 
@@ -465,6 +466,7 @@ class GRPOTrainerWrapper:
         output_dir.mkdir(parents=True, exist_ok=True)
 
         # --- Calculate warmup steps from ratio (#1431) ---
+        from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
         from soup_cli.utils.warmup import resolve_trainer_warmup_steps
 
         warmup_steps = resolve_trainer_warmup_steps(tcfg.warmup_ratio)
@@ -504,6 +506,9 @@ class GRPOTrainerWrapper:
             "gradient_accumulation_steps": tcfg.gradient_accumulation_steps,
             "learning_rate": tcfg.lr,
             "warmup_steps": warmup_steps,
+            "gradient_checkpointing": should_enable_hf_gradient_checkpointing(
+                tcfg.gradient_checkpointing, stream_layers=tcfg.stream_layers
+            ),
             "weight_decay": tcfg.weight_decay,
             "max_grad_norm": tcfg.max_grad_norm,
             "optim": tcfg.optimizer,
@@ -791,6 +796,7 @@ class GRPOTrainerWrapper:
                 bf16=getattr(self.trainer.args, "bf16", False),
             )
             if resume_from_checkpoint is not None:
+                reload_root_adapter_on_resume(self.trainer)
                 keep_trainable_dtype_on_resume(self.trainer)
             self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
         duration = time.time() - start

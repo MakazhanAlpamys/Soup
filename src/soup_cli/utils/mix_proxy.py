@@ -183,7 +183,12 @@ def _render_overlay_yaml(
     """
     import yaml  # noqa: PLC0415
 
-    raw = yaml.safe_load(base_yaml_text)
+    from soup_cli.utils.yaml_limits import (  # noqa: PLC0415
+        MAX_CONFIG_BYTES,
+        load_yaml_limited,
+    )
+
+    raw = load_yaml_limited(base_yaml_text, "base YAML", max_bytes=MAX_CONFIG_BYTES)
     if not isinstance(raw, dict):
         raise ValueError("base YAML must be a top-level mapping")
     data_block = raw.get("data")

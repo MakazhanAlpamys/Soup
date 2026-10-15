@@ -1284,7 +1284,9 @@ class TrainingConfig(BaseModel):
         default=None, ge=1, le=64,
         description=(
             "LLaMA Pro: append N zero-init transformer blocks and freeze "
-            "the original ones before SFT or pre-training."
+            "the original ones, so only the new blocks train. A LoRA rank is "
+            "refused with it, since get_peft_model would freeze the new blocks "
+            "again (#1326): set lora.r: 0 and quantization: none on task: sft."
         ),
     )
     freeze_trainable_layers: Optional[int] = Field(
@@ -3654,6 +3656,23 @@ class TrainingConfig(BaseModel):
             "until it is measured across shapes."
         ),
     )
+    stream_nf4_scale_cache: bool = Field(
+        default=False,
+        description=(
+            "Keep each streamed NF4 weight's expanded fp32 block scales on the "
+            "compute device after its first use. A double-quantised weight stores "
+            "its scales as 8-bit codes plus a nested scale and offset, and "
+            "bitsandbytes' dequantise + linear path expands them on every visit "
+            "(forward and checkpoint recompute): two extra kernels and a "
+            "temporary per projection. The base is frozen, so the expansion is "
+            "done once per (layer, weight) and reused; results are bit-identical. "
+            "Costs 4 bytes per 64-element block of VRAM for the whole run (416 "
+            "MiB on Mistral-7B), which the pre-flight charges up front. "
+            "bitsandbytes' fused 4-bit GEMM path expands the scales inside its "
+            "kernel and is left unchanged. Needs quantization='4bit' with "
+            "double quantization (the default). Off by default."
+        ),
+    )
     stream_disk_kind: Optional[Literal["nvme", "ssd", "hdd"]] = Field(
         default=None,
         description=(
@@ -5015,25 +5034,44 @@ class SoupConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_expand_layers_scope(self) -> "SoupConfig":
-        """#1325 - ``training.expand_layers`` (LLaMA Pro) is wired only in the
-        transformers text SFT/pretrain ``_setup_transformers`` paths. Every
-        other task/backend/modality accepts the fields and then silently
-        trains the unexpanded model, so refuse at load with the actual
-        task/backend/modality in the message."""
+        """#1325 - ``training.expand_layers`` (LLaMA Pro) trains the appended
+        blocks only in the transformers text SFT ``_setup_transformers`` path
+        (with ``lora.r: 0``, #1326). Every other task/backend/modality accepts
+        the fields and then silently trains the unexpanded model, so refuse at
+        load with the actual task/backend/modality in the message.
+
+        #1813 - ``task: pretrain`` on transformers text runs the expansion too,
+        but has no route that trains the new blocks: a LoRA rank freezes them
+        again (#1326) and its trainer has no ``lora.r: 0`` branch. It is refused
+        here, whatever the rank, and only there does the message name the sft
+        recipe: the unsloth pretrain path never expands, and mlx or another
+        modality has no such recipe."""
         tcfg = self.training
         if tcfg.expand_layers is None:
             return self
         if not (
-            self.task in {"sft", "pretrain"}
+            self.task == "sft"
             and self.backend == "transformers"
             and self.modality == "text"
         ):
+            fix = "Remove expand_layers and freeze_trainable_layers."
+            if (
+                self.task == "pretrain"
+                and self.backend == "transformers"
+                and self.modality == "text"
+            ):
+                fix = (
+                    "The pretrain trainer runs the expansion, but a LoRA rank "
+                    "freezes the appended blocks again and it has no lora.r: 0 "
+                    "branch to train them. Use task: sft with lora.r: 0 and "
+                    "quantization: none, or remove expand_layers and "
+                    "freeze_trainable_layers."
+                )
             raise ValueError(
-                "training.expand_layers (LLaMA Pro) is only wired for task "
-                "sft/pretrain on backend transformers with modality text; got "
-                f"task={self.task!r}, backend={self.backend!r}, "
-                f"modality={self.modality!r}. Remove expand_layers and "
-                "freeze_trainable_layers."
+                "training.expand_layers (LLaMA Pro) only trains the appended "
+                "blocks on task sft with backend transformers and modality "
+                f"text; got task={self.task!r}, backend={self.backend!r}, "
+                f"modality={self.modality!r}. {fix}"
             )
         return self
 
@@ -5057,6 +5095,43 @@ class SoupConfig(BaseModel):
                 "Set quantization: none."
             )
         return self
+
+    @model_validator(mode="after")
+    def _validate_expand_layers_lora(self) -> "SoupConfig":
+        """#1326 - LLaMA Pro under LoRA does not train the appended blocks.
+
+        The block expansion freezes everything but the new blocks, then
+        ``get_peft_model`` runs and freezes every non-adapter parameter again,
+        new blocks included, while adapters land on every targeted layer. With
+        the default ``q_proj``/``v_proj`` targets the new blocks also stay the
+        identity (their zero-initialised ``o_proj``/``down_proj`` are frozen), so
+        only the original layers learn. Route 1 of the ruling: refuse the
+        combination; ``lora.r: 0`` trains the new blocks directly, and is
+        available on ``task: sft`` only. Only ``task: sft`` reaches this check:
+        ``_validate_expand_layers_scope`` refuses every other task first (#1813).
+        """
+        tcfg = self.training
+        if tcfg.expand_layers is None or tcfg.lora.r == 0:
+            return self
+        if (
+            tcfg.stream_layers
+            or tcfg.unfrozen_parameters
+            or tcfg.lisa_enabled
+            or tcfg.quantization_aware == "quest"
+        ):
+            # Streaming, Spectrum, LISA and QuEST refuse expand_layers outright in
+            # their own validators. Let that message speak: lora.r: 0 would not
+            # make such a config load.
+            return self
+        raise ValueError(
+            f"training.expand_layers: {tcfg.expand_layers} with "
+            f"training.freeze_trainable_layers: {tcfg.freeze_trainable_layers} "
+            f"(LLaMA Pro) cannot be combined with LoRA (training.lora.r: "
+            f"{tcfg.lora.r}). get_peft_model runs after the block expansion and "
+            "freezes the appended blocks again, so only adapters on the original "
+            "layers would train. To train only the new blocks, set lora.r: 0 "
+            "with quantization: none."
+        )
 
     @model_validator(mode="after")
     def _validate_v042_pre_tokenized_modality(self) -> "SoupConfig":
@@ -5548,7 +5623,8 @@ class SoupConfig(BaseModel):
 
         Delegates to :func:`grpo_long_context.validate_long_context_grpo_compat`
         so the rules are single-source-of-truth (mirrors v0.49.0 LongLoRA).
-        Staged field is accepted but unconsumed, and refused as of v0.77 (#808).
+        Staged field is accepted but unconsumed; the release that refuses it is
+        named once, in ``config/staged_fields.py`` (#808).
         """
         if not self.training.long_context_grpo:
             return self
@@ -5997,9 +6073,16 @@ class SoupConfig(BaseModel):
         """
         tcfg = self.training
         if tcfg.use_liger and self.task not in SFT_KERNEL_AWARE_TASKS:
+            # #1425: a blend reads the logits of the trainer's forward pass.
+            blend = (
+                ". A preference_loss_weights blend could not use it either: trl's "
+                "Liger loss returns no logits for the blend to read."
+                if self.task == "preference" and tcfg.preference_loss_weights
+                else ""
+            )
             raise ValueError(
                 f"training.use_liger=true requires task in "
-                f"{sorted(SFT_KERNEL_AWARE_TASKS)}; got task={self.task!r}"
+                f"{sorted(SFT_KERNEL_AWARE_TASKS)}; got task={self.task!r}{blend}"
             )
         if tcfg.use_flash_attn and self.task not in SFT_KERNEL_AWARE_TASKS:
             raise ValueError(
@@ -6057,9 +6140,9 @@ class SoupConfig(BaseModel):
                         f"(trainer/sft.py), so it would be stored and never take "
                         f"effect. Remove it, or use one of those tasks."
                     )
+        default_aux = type(tcfg).model_fields["moe_aux_loss_coeff"].default
         if self.task not in _MOE_AUX_LOSS_TASKS:
-            default = type(tcfg).model_fields["moe_aux_loss_coeff"].default
-            if tcfg.moe_aux_loss_coeff != default:
+            if tcfg.moe_aux_loss_coeff != default_aux:
                 raise ValueError(
                     f"training.moe_aux_loss_coeff={tcfg.moe_aux_loss_coeff!r} is "
                     f"not applied by task={self.task!r}: only "
@@ -6071,13 +6154,28 @@ class SoupConfig(BaseModel):
             # #1394: only SFT's text setup reads it. The vision and audio setups
             # build their model without the MoE step, the same gap #1179 closed
             # for moe_lora on these paths.
-            default = type(tcfg).model_fields["moe_aux_loss_coeff"].default
-            if tcfg.moe_aux_loss_coeff != default:
+            if tcfg.moe_aux_loss_coeff != default_aux:
                 raise ValueError(
                     f"training.moe_aux_loss_coeff={tcfg.moe_aux_loss_coeff!r} is "
                     f"not applied by task='sft' with modality={self.modality!r}: "
                     "that setup never applies the MoE auxiliary loss. Remove it, "
                     "or train with modality: text."
+                )
+        if self.backend == "unsloth":
+            # #1412: unsloth loader never applies the MoE auxiliary loss coefficient.
+            if tcfg.moe_aux_loss_coeff != default_aux:
+                raise ValueError(
+                    f"training.moe_aux_loss_coeff={tcfg.moe_aux_loss_coeff!r} is "
+                    "not applied on backend='unsloth': that setup never applies "
+                    "the MoE auxiliary loss. Remove it, or train with backend: transformers."
+                )
+        if tcfg.stream_layers:
+            # #1412: layer streaming setup never sets the router coefficient.
+            if tcfg.moe_aux_loss_coeff != default_aux:
+                raise ValueError(
+                    f"training.moe_aux_loss_coeff={tcfg.moe_aux_loss_coeff!r} is "
+                    "not applied with training.stream_layers: that setup never "
+                    "applies the MoE auxiliary loss. Remove it, or train without stream_layers."
                 )
         return self
 
@@ -6323,9 +6421,32 @@ class SoupConfig(BaseModel):
         do pass the rank straight to peft keep their existing behaviour
         (peft's "`r` should be a positive integer value") rather than gaining
         a new refusal this issue never measured.
+
+        #1813 measured ``task: pretrain``: its trainer has no ``r == 0`` branch,
+        so the rank reaches ``get_peft_model`` (transformers) or unsloth's
+        ``get_peft_model`` and setup fails. It is refused here. LISA is exempt:
+        its pretrain path attaches no adapter and never reads the rank, so
+        ``lisa_enabled`` with ``lora.r: 0`` trains today. Streaming and MLX
+        refuse pretrain in their own validators, so their message wins.
         """
         tcfg = self.training
-        if tcfg.lora.r != 0 or self.task not in ("sft", "embedding"):
+        if tcfg.lora.r != 0:
+            return self
+        if (
+            self.task == "pretrain"
+            and not tcfg.lisa_enabled
+            and not tcfg.stream_layers
+            and self.backend != "mlx"
+        ):
+            raise ValueError(
+                "training.lora.r=0 (full fine-tuning) is not supported with "
+                "task='pretrain': its trainer always attaches a LoRA adapter, so "
+                "a rank of 0 fails inside peft (or unsloth) when training starts. "
+                "Use lora.r >= 1, lisa_enabled: true (LISA trains whole layers "
+                "without an adapter), or task: sft with lora.r: 0 for full "
+                "fine-tuning."
+            )
+        if self.task not in ("sft", "embedding"):
             return self
         if tcfg.stream_layers:
             # Streaming has its own, more specific refusal (the decoder lives
@@ -6491,6 +6612,7 @@ class SoupConfig(BaseModel):
                 or tcfg.stream_read_ahead != DEFAULT_STREAM_READ_AHEAD
                 or tcfg.stream_vram_override is not None
                 or tcfg.stream_vram_probe
+                or tcfg.stream_nf4_scale_cache
                 or tcfg.stream_disk_kind is not None
                 or tcfg.stream_pin is not None
             ):
@@ -6498,11 +6620,24 @@ class SoupConfig(BaseModel):
                     "training.stream_source / training.stream_ngram_source / "
                     "training.stream_buffers / training.stream_read_ahead / "
                     "training.stream_vram_override / training.stream_vram_probe "
-                    "/ training.stream_disk_kind / training.stream_pin set but "
-                    "stream_layers is false; set stream_layers=true to stream the "
-                    "base layer-by-layer."
+                    "/ training.stream_nf4_scale_cache / training.stream_disk_kind "
+                    "/ training.stream_pin set but stream_layers is false; set "
+                    "stream_layers=true to stream the base layer-by-layer."
                 )
             return self
+        if tcfg.stream_nf4_scale_cache and (
+            tcfg.quantization != "4bit" or not tcfg.double_quant_on
+        ):
+            # The cache holds the EXPANDED nested scales. Without 4-bit there is
+            # no NF4 weight, and without double quantisation the stored scales
+            # are already fp32, so the setting would reach nothing.
+            raise ValueError(
+                "training.stream_nf4_scale_cache needs quantization='4bit' with "
+                "double quantization (training.bnb_4bit_use_double_quant unset or "
+                f"true); got quantization={tcfg.quantization!r}, "
+                f"bnb_4bit_use_double_quant={tcfg.bnb_4bit_use_double_quant!r}. "
+                "Without them there are no nested NF4 scales to cache."
+            )
         # #971 — `stream_source: 'ram'` INSISTS on the RAM tier: 'ram' insists,
         # 'disk' forces, 'auto' falls back (trainer/stream_setup.py). The
         # read-ahead reader belongs to the NVMe disk tier, so a non-default
@@ -7666,10 +7801,8 @@ class SoupConfig(BaseModel):
         * ``citation_faithful=True`` requires ``data.format='raft'`` (the
           RAFT row carries the doc references; other formats can't supply
           ground-truth citation IDs).
-        * ``citation_faithful=True`` requires ``task in {sft, pretrain}``
-          (the span-mask runtime only makes sense for the SFT family;
-          mirrors v0.52.0 distill / classifier
-          task-gate policy — review M3 fix).
+        * ``citation_faithful=True`` requires ``task='sft'``: only its
+          RAFT route applies the citation span weights.
         * ``citation_style`` set without ``citation_faithful=True`` is a
           silent-no-op footgun — rejected (mirrors v0.61.0 unlearn_alpha /
           v0.62.0 Part B ra_dit_retriever_model policy).
@@ -7698,12 +7831,11 @@ class SoupConfig(BaseModel):
                     "Citation-faithful FT pairs with the v0.62.0 Part A "
                     "RAFT data format (which carries the doc references)."
                 )
-            if self.task not in ("sft", "pretrain"):
+            if self.task != "sft":
                 raise ValueError(
                     "training.citation_faithful=true requires "
-                    f"task in {{sft, pretrain}}; got task={self.task!r}. "
-                    "Citation-faithful FT is an SFT-family feature: its "
-                    "span-mask runtime runs in the SFT trainer."
+                    f"task='sft'; got task={self.task!r}. "
+                    "Use task: sft with data.format: raft to apply citation span weights."
                 )
         return self
 

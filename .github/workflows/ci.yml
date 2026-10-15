@@ -204,6 +204,17 @@ jobs:
   #   status function (`always()`, `failure()`, ...) in its `if:`, or it runs on
   #   drafts.
   #
+  # 2026-10-12: `plan` also picks the upstream stack. QUICK and APPROVAL (every
+  # pull-request run, every push to main) install under
+  # .github/constraints/pinned-upstream.txt; FULL and RELEASE install with no
+  # constraints and resolve the newest release of everything. So one release
+  # upstream no longer fails every open pull request at once: it turns the
+  # nightly run red, on `main`, once. The jobs that install the project end
+  # every `pip install` with `plan`'s `constraints` output, `-c <that file>` or
+  # nothing. Do not write the `-c` into a step: that pins the nightly run too,
+  # and a pinned nightly run stays green and says nothing. When and how to bump
+  # the pins is in the header of that file.
+  #
   # `timeout-minutes: 5` is not a measurement: one shell step, no checkout, no
   # install.
   plan:
@@ -234,9 +245,13 @@ jobs:
         "exclude": [{"os": "windows-latest", "python-version": "3.10"},
         {"os": "macos-latest", "python-version": "3.10"}]}
       QUICK_MATRIX: '{"os": ["ubuntu-latest"], "python-version": ["3.12"]}'
+      # The pinned upstream stack, named once. QUICK and APPROVAL hand it to the
+      # jobs as `-c <path>`; FULL and RELEASE hand them nothing.
+      PINNED_CONSTRAINTS: .github/constraints/pinned-upstream.txt
     outputs:
       full: ${{ steps.decide.outputs.full }}
       matrix: ${{ steps.decide.outputs.matrix }}
+      constraints: ${{ steps.decide.outputs.constraints }}
     steps:
       - name: Choose the release, full, approval or quick matrix
         id: decide
@@ -249,20 +264,25 @@ jobs:
           if [ "$RELEASE" = "true" ]; then
             full=true
             matrix="$RELEASE_MATRIX"
+            constraints=""
           elif [ "$FULL" = "true" ]; then
             full=true
             matrix="$FULL_MATRIX"
+            constraints=""
           elif [ "$APPROVAL" = "true" ]; then
             full=true
             matrix="$APPROVAL_MATRIX"
+            constraints="-c $PINNED_CONSTRAINTS"
           else
             full=false
             matrix="$QUICK_MATRIX"
+            constraints="-c $PINNED_CONSTRAINTS"
             echo "::notice title=Quick CI run::lint and test (ubuntu-latest, 3.12) only. A pull request gets the other required test cells and the smoke jobs when a maintainer adds the ci:full label; main gets the full matrix every night."
           fi
           {
             echo "full=$full"
             echo "matrix=$matrix"
+            echo "constraints=$constraints"
           } >> "$GITHUB_OUTPUT"
 
   lint:
@@ -347,7 +367,8 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install only the MLX runtime and smoke-test dependency
-        run: pip install -e ".[mlx]" pytest
+        # Ends with `plan`'s stack (above `plan`); a constraint installs nothing, so torch stays absent.
+        run: pip install -e ".[mlx]" pytest ${{ needs.plan.outputs.constraints }}
       - name: Verify MLX imports and the PyTorch training stack is absent
         run: |
           python -c "import mlx.core, mlx_lm; print(mlx.core.__version__, mlx_lm.__version__)"
@@ -377,7 +398,8 @@ jobs:
       - name: Install the QAT extra (torchao) beside the dev stack
         # One spec with both extras: `-e ".[dev]" ".[qat]"` asks pip for
         # soup-cli twice, once editable and once not, and resolution fails.
-        run: pip install -e ".[dev,qat]" "torch>=2.6.0"
+        # Ends with `plan`'s stack: pinned on a pull request, the newest at night; torchao floats.
+        run: pip install -e ".[dev,qat]" "torch>=2.6.0" ${{ needs.plan.outputs.constraints }}
       - name: Prove torchao is actually importable, so the tests do not skip
         run: python -c "import torchao; print(torchao.__version__)"
       - name: Resolve every torchao class Soup asks for
@@ -430,7 +452,8 @@ jobs:
         # below 2.6.0 under CVE-2025-32434. Removing this pin because "[dev]
         # already pulls torch" breaks the job with a message naming the CVE
         # rather than the cause.
-        run: pip install -e ".[dev]" "torch>=2.6.0"
+        # Ends with `plan`'s stack: pinned on a pull request, the newest at night.
+        run: pip install -e ".[dev]" "torch>=2.6.0" ${{ needs.plan.outputs.constraints }}
 
       - name: Warm tiny GPT-2 cache
         shell: python
@@ -454,6 +477,10 @@ jobs:
   # #502/#503/#522/#571/#651: install the exact Torch 2.6.0 / Transformers 5.16.1 /
   # trl 0.29 / PEFT 0.20 support stack and Plotext 6.0.0 so pip cannot silently
   # upgrade the cell, then assert every pinned compatibility boundary.
+  # #1802: the same file pins Typer and Click to the floors pyproject.toml declares,
+  # and the last step starts the CLI on them. It is the one cell that does: every
+  # other cell resolves the newest Typer, which is how a floor no command could run
+  # on stayed declared. The job keeps its name; branch protection requires it.
   transformers-floor:
     needs: plan
     if: needs.plan.outputs.full == 'true'
@@ -488,7 +515,10 @@ jobs:
           )
           expected = dict(pairs)
           assert len(expected) == len(pairs), "duplicate package pin in floor constraints"
-          for name in ("torch", "torchaudio", "transformers", "trl", "peft", "plotext"):
+          for name in (
+              "torch", "torchaudio", "transformers", "trl", "peft", "plotext",
+              "typer", "click",  # #1802: the CLI's own declared floors
+          ):
               assert name in expected, f"floor constraints missing exact {name} pin"
               want = expected[name]
               got = md.version(name)
@@ -528,6 +558,9 @@ jobs:
           tests/test_bugfixes.py::TestDiffModelLoading
           tests/test_issue636_torch_floor.py
           tests/test_issue265_xcodec2_audio_contract.py
+          tests/test_cli_dependency_floors.py
+          tests/test_click_argument_help.py
+          tests/test_cli_startup_is_light.py
 
   test:
     needs: plan
@@ -585,7 +618,8 @@ jobs:
         # psutil extra is what `-n logical` counts the CPUs with. Installed here
         # and not in the dev extra: a local run stays serial unless a contributor
         # asks for workers.
-        run: pip install -e ".[dev]" "pytest-xdist[psutil]"
+        # Ends with `plan`'s stack: pinned on a pull request and a push to main, the newest at night.
+        run: pip install -e ".[dev]" "pytest-xdist[psutil]" ${{ needs.plan.outputs.constraints }}
       - name: Warm HF Hub cache (models the tests load)
         # Pre-download the models the unit tests load, with retries, so a
         # transient HF Hub 429 (Too Many Requests) on a single matrix cell does

@@ -532,7 +532,7 @@ so a malicious model name can't inject a forged heading into downstream renderer
 `--annex-xi`. `--energy-country <ISO3>` picks the grid for the CO₂ estimate (default `USA`;
 the kWh figure itself is country-independent). Add `--energy-out <path>` to persist the
 measurement as JSON for `soup bom emit --energy <path>` (the hand-off into an ML-BOM —
-see [Attaching energy + CO₂](#attaching-energy--co2---energy)). Requires `pip install
+see [Attaching energy + CO₂](#attaching-energy--co---energy)). Requires `pip install
 soup-cli[carbon]`; without it, `--track-energy` is a graceful no-op.
 
 

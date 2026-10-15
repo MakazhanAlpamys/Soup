@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from collections import deque
 from pathlib import Path
 from typing import Optional
 
@@ -13,14 +14,15 @@ from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
 
-from soup_cli.utils.terminal import for_terminal
+from soup_cli.config.deprecation import DEPRECATED_VALUE_REJECTION_VERSION
+from soup_cli.utils.terminal import for_terminal, strip_control
 
 console = Console()
 
 SUPPORTED_FORMATS = (
     "gguf", "onnx", "tensorrt", "awq", "gptq",
     # v0.52.0 Part D — BitNet 1.58-bit + TQ1_0 GGUF.
-    # Schema-only stubs in v0.52.0; live conversion lands in v0.52.1.
+    # Live llama.cpp conversion (v0.71.20 #134); needs a built llama.cpp toolchain.
     "bitnet", "tq1_0",
     # v0.53.1 #142 — TorchAO PTQ live wiring (Int4WeightOnly / Int8DynActInt4 /
     # Float8DynActFloat8 / NVFP4). Requires --quant-config <yaml>.
@@ -51,7 +53,8 @@ def deprecated_format_notice(fmt: str) -> Optional[str]:
         return None
     replacements = ", ".join(REPLACEMENT_FORMATS[:-1]) + f" or {REPLACEMENT_FORMATS[-1]}"
     return (
-        f"--format {fmt} is deprecated and will be removed in the next release: "
+        f"--format {fmt} is deprecated and will be removed in "
+        f"Soup v{DEPRECATED_VALUE_REJECTION_VERSION}: "
         f"{upstream} is archived upstream and the {fmt} extra cannot be installed "
         f"next to the train extra. Use --format {replacements} instead."
     )
@@ -76,8 +79,9 @@ def export(
         "--format",
         "-f",
         help=(
-            "Export format: gguf, onnx, tensorrt, awq, gptq, bitnet, tq1_0 "
-            "(awq and gptq are deprecated and will be removed in the next release)"
+            "Export format: gguf, onnx, tensorrt, awq, gptq, bitnet, tq1_0, torchao, "
+            "gguf-ud (torchao needs --quant-config; awq and gptq are deprecated and "
+            f"will be removed in Soup v{DEPRECATED_VALUE_REJECTION_VERSION})"
         ),
     ),
     quant: str = typer.Option(
@@ -176,6 +180,13 @@ def export(
             "hf (default) / modelscope / modelers (v0.53.10 #152)."
         ),
     ),
+    verbose: bool = typer.Option(
+        False, "--verbose", help="Stream GGUF converter and quantizer logs while they run.",
+    ),
+    no_install_deps: bool = typer.Option(
+        False, "--no-install-deps",
+        help="GGUF only: never invoke pip; refuse missing conversion dependencies before work.",
+    ),
 ):
     """Export a model to GGUF, ONNX, TensorRT-LLM, AWQ, GPTQ, or TorchAO format."""
     # v0.53.10 #152 — pre-fetch the base model from a non-HF hub. ``model``
@@ -205,6 +216,13 @@ def export(
             f"Supported: {', '.join(SUPPORTED_FORMATS)}"
         )
         raise typer.Exit(1)
+
+    if (verbose or no_install_deps) and fmt != "gguf":
+        flags = [name for name, enabled in (
+            ("--verbose", verbose), ("--no-install-deps", no_install_deps),
+        ) if enabled]
+        console.print(f"[red]{' and '.join(flags)} require --format gguf.[/]")
+        raise typer.Exit(2)
 
     model_name = Path(model).name
 
@@ -330,7 +348,7 @@ def export(
         )
         raise typer.Exit(1)
 
-    # --- Resolve and create the destination before any merge/convert work ---
+    # --- Resolve the destination before any merge/convert work ---
     # #1445 — a missing output parent used to surface as FileNotFoundError
     # from mkdtemp AFTER an adapter was merged, and the cleanup then deleted
     # the merged model. Create the parent up front (what ``_run_convert``
@@ -339,6 +357,12 @@ def export(
         output_path = Path(output)
     else:
         output_path = Path(model).parent / f"{model_name}.{quant}.gguf"
+
+    # Managed environments must refuse missing deps before a merge or toolchain clone.
+    if no_install_deps:
+        console.print("[dim]GGUF: dependencies (managed environment)...[/]")
+        _install_convert_deps(install=False)
+
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     # --- Check if LoRA adapter (needs merge first) ---
@@ -347,6 +371,7 @@ def export(
     merge_dir = None
 
     if is_adapter:
+        console.print("[dim]GGUF: merge adapter...[/]")
         console.print("[yellow]LoRA adapter detected - merging with base model first...[/]")
         base_model = base or _detect_base_model(adapter_config_path)
         if not base_model:
@@ -363,12 +388,16 @@ def export(
         model_path = merge_dir
 
     # --- Find llama.cpp ---
+    console.print("[dim]GGUF: toolchain lookup...[/]")
     llama_dir = _find_llama_cpp(llama_cpp_path)
     # #144 G2 — this used to run only after an auto-clone, so `--llama-cpp` and an
     # already-present ~/.soup/llama.cpp died on `ModuleNotFoundError:
     # sentencepiece`. Here it covers every branch, and returns immediately when
     # the packages are already importable.
-    _install_convert_deps()
+    if not no_install_deps:
+        console.print("[dim]GGUF: conversion dependencies...[/]")
+        _install_convert_deps()
+    tool_options = {"verbose": True} if verbose else {}
 
     # --- Convert to GGUF ---
     console.print(
@@ -394,8 +423,8 @@ def export(
         if quant in ("f16", "f32"):
             # Direct conversion without quantization
             outtype = "f16" if quant == "f16" else "f32"
-            console.print(f"[dim]Converting to GGUF ({outtype})...[/]")
-            _run_convert(convert_script, model_path, output_path, outtype)
+            console.print(f"[dim]GGUF: convert — Converting to GGUF ({outtype})...[/]")
+            _run_convert(convert_script, model_path, output_path, outtype, **tool_options)
         else:
             # Convert to f16 first, then quantize.
             #
@@ -411,12 +440,12 @@ def export(
             )
             try:
                 f16_path = tmp_dir / f"{model_name}.f16.gguf"
-                console.print("[dim]Converting to GGUF (f16)...[/]")
-                _run_convert(convert_script, model_path, f16_path, "f16")
+                console.print("[dim]GGUF: convert — Converting to GGUF (f16)...[/]")
+                _run_convert(convert_script, model_path, f16_path, "f16", **tool_options)
 
                 # Quantize
-                console.print(f"[dim]Quantizing to {quant}...[/]")
-                _run_quantize(llama_dir, f16_path, output_path, quant)
+                console.print(f"[dim]GGUF: quantize — Quantizing to {quant}...[/]")
+                _run_quantize(llama_dir, f16_path, output_path, quant, **tool_options)
             finally:
                 shutil.rmtree(tmp_dir, ignore_errors=True)
 
@@ -527,17 +556,28 @@ def _merge_adapter(
 _CONVERT_EXTRA_DEPS = ("gguf", "sentencepiece", "protobuf")
 
 
-def _convert_deps_present() -> bool:
-    """Are the convert script's extra deps already importable?"""
+def _missing_convert_deps() -> list[str]:
+    """Name missing convert packages without importing the heavy training stack."""
     import importlib.util
 
-    for module in ("gguf", "sentencepiece"):
-        if importlib.util.find_spec(module) is None:
-            return False
-    return True
+    missing = []
+    for module, package in (("gguf", "gguf"), ("sentencepiece", "sentencepiece"),
+                            ("google.protobuf", "protobuf")):
+        try:
+            present = importlib.util.find_spec(module) is not None
+        except (ImportError, ValueError):
+            present = False
+        if not present:
+            missing.append(package)
+    return missing
 
 
-def _install_convert_deps() -> None:
+def _convert_deps_present() -> bool:
+    """Are the convert script's extra deps already importable?"""
+    return not _missing_convert_deps()
+
+
+def _install_convert_deps(*, install: bool = True) -> None:
     """Install the convert script's extra deps without disturbing torch.
 
     #144 G2 — this used to run ONLY after an auto-clone, so `--llama-cpp /path`
@@ -546,6 +586,15 @@ def _install_convert_deps() -> None:
     It is now called on every path, and returns immediately when the packages are
     already importable so an ordinary export does not shell out to pip.
     """
+    if not install:
+        missing = _missing_convert_deps()
+        if missing:
+            console.print(
+                "[red]--no-install-deps: missing GGUF conversion packages: "
+                f"{', '.join(missing)}.[/] Install them in the managed environment and retry."
+            )
+            raise typer.Exit(1)
+        return
     if _convert_deps_present():
         return
     try:
@@ -633,7 +682,50 @@ def _find_llama_cpp(user_path: Optional[str] = None) -> Path:
         raise typer.Exit(1)
 
 
-def _run_convert(script: Path, model_dir: Path, output_path: Path, outtype: str):
+def _run_export_tool(cmd: list[str], label: str, *, verbose: bool) -> None:
+    """Keep quiet capture by default; stream merged output with a bounded error tail."""
+    if not verbose:
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            console.print(f"[red]{label} failed:[/]")
+            console.print(strip_control(result.stderr), markup=False, highlight=False)
+            raise typer.Exit(1)
+        return
+
+    tail: deque[str] = deque(maxlen=100)
+    process = subprocess.Popen(
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+        encoding="utf-8", errors="replace", bufsize=1,
+    )
+    try:
+        assert process.stdout is not None
+        for line in process.stdout:
+            text = strip_control(line.rstrip("\r\n"))
+            tail.append(text[-2000:])
+            console.print(text, markup=False, highlight=False)
+        returncode = process.wait()
+    except BaseException:
+        # A cancelled export or output failure must not leave the tool running.
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
+        raise
+    finally:
+        if process.stdout is not None:
+            process.stdout.close()
+    if returncode != 0:
+        console.print(f"[red]{label} failed (exit {returncode}):[/]")
+        console.print("\n".join(tail), markup=False, highlight=False)
+        raise typer.Exit(1)
+
+
+def _run_convert(
+    script: Path, model_dir: Path, output_path: Path, outtype: str, *, verbose: bool = False,
+) -> None:
     """Run llama.cpp convert_hf_to_gguf.py script."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -643,13 +735,12 @@ def _run_convert(script: Path, model_dir: Path, output_path: Path, outtype: str)
         "--outfile", str(output_path),
         "--outtype", outtype,
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0:
-        console.print(f"[red]Conversion failed:[/]\n{result.stderr}")
-        raise typer.Exit(1)
+    _run_export_tool(cmd, "Conversion", verbose=verbose)
 
 
-def _run_quantize(llama_dir: Path, input_path: Path, output_path: Path, quant_type: str):
+def _run_quantize(
+    llama_dir: Path, input_path: Path, output_path: Path, quant_type: str, *, verbose: bool = False,
+) -> None:
     """Run llama-quantize (or llama.cpp/build/bin/llama-quantize)."""
     # Try to find the quantize binary
     quantize_bin = _find_quantize_binary(llama_dir)
@@ -663,10 +754,7 @@ def _run_quantize(llama_dir: Path, input_path: Path, output_path: Path, quant_ty
         raise typer.Exit(1)
 
     cmd = [str(quantize_bin), str(input_path), str(output_path), quant_type.upper()]
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0:
-        console.print(f"[red]Quantization failed:[/]\n{result.stderr}")
-        raise typer.Exit(1)
+    _run_export_tool(cmd, "Quantization", verbose=verbose)
 
 
 # MSVC / Xcode are multi-config generators: they nest binaries under a
@@ -1458,7 +1546,7 @@ def _export_torchao_cli(
     try:
         cfg_data = load_quant_config(quant_config)
     except (TypeError, ValueError, FileNotFoundError) as exc:
-        console.print(f"[red]{exc}[/]")
+        console.print(f"[red]{for_terminal(str(exc))}[/]")
         raise typer.Exit(2)
 
     scheme_raw = cfg_data.get("scheme")

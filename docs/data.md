@@ -640,6 +640,12 @@ reports "Could not read the final trainer's args statically" and uses Soup defau
 
 ## Data Formats
 
+JSONL dataset rows must be objects; JSON dataset files must contain an array of
+objects. Non-object rows are skipped with a warning naming the physical JSONL
+line or JSON array row. `soup data validate` also lists these warnings as issues;
+its row statistics describe the retained objects. `soup data review` applies the
+same object check before displaying a pair. Rejected row contents are not printed. `soup data canary insert` retains its first-row refusal and preserves later rows when rewriting the file.
+
 Soup supports these formats (auto-detected). Files can be JSONL, JSON, CSV, Parquet, or TXT.
 
 **Auto-detection.** It reads the first 100 rows, not just the first. Each row resolves
@@ -940,10 +946,11 @@ turn on MLX. `soup train` says so on its "MLX backend ignores:" line, and
 every text token is supervised. Soup's vision collator masks only padding and image
 tokens, and the audio path only padding. Assistant-only masking would have to locate the
 assistant spans after the processor expands the image or audio tokens, which neither path
-does yet. Soup declares this gap rather
-than attempting unverified label restructuring, so both `mask_history` and `train_on_responses_only`
-are unread on vision and audio modalities, every text token trains, and `soup doctor --config`
-reports them as ignored.
+does yet. Both `mask_history` and `train_on_responses_only` are unread on these
+modalities, so every text token trains. `soup doctor --config` reports an explicit
+`mask_history: true` as ignored. It does not list `train_on_responses_only`: its
+schema default is `true`, and writing a default counts as leaving it unwritten.
+The absence of a doctor row does not imply assistant-only multimodal masking.
 
 
 **AOT preprocessing:**

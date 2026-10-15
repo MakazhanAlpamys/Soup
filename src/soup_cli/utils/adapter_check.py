@@ -27,6 +27,13 @@ from soup_cli.utils.terminal import strip_control
 INNER_NAMESPACE_MARKER = ".inner."
 _MAX_LAYERS = 10_000
 
+#: The largest adapter weights file ``soup adapters check`` will read: 2 GiB. The check
+#: loads every tensor into memory and accumulates in float64, so the resident size is a
+#: small multiple of the file's (2x for float32, 4x for float16 / bfloat16). A LoRA adapter
+#: is a small fraction of its base model; the cap stops a huge, untrusted file from
+#: exhausting RAM before it is read.
+MAX_ADAPTER_BYTES = 2 * 1024**3
+
 
 @dataclass(frozen=True)
 class LayerCheck:
@@ -99,6 +106,19 @@ def _load_safetensors_numpy(path: Path) -> dict[str, Any]:
         raise RuntimeError(
             "safetensors package required; pip install safetensors"
         ) from exc
+
+    # Size first, from the filesystem and before the file is opened: the tensor-count
+    # cap below does not bound memory, one 100 GB tensor is a single key.
+    try:
+        size = os.stat(str(path)).st_size
+    except OSError as exc:
+        raise ValueError(f"cannot stat {path.name}: {type(exc).__name__}") from exc
+    if size > MAX_ADAPTER_BYTES:
+        raise ValueError(
+            f"{path.name} is {size:,} bytes; `soup adapters check` reads at most "
+            f"{MAX_ADAPTER_BYTES:,} bytes ({MAX_ADAPTER_BYTES // 1024**3} GiB) "
+            "because it loads every tensor into memory"
+        )
 
     result: dict[str, Any] = {}
     try:

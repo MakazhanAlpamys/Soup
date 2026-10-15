@@ -24,8 +24,8 @@ ERROR_MAP = [
         "GPU ran out of memory during training.",
         (
             "Try --batch-size <half> or --grad-accum <double> "
-            "(keeps effective batch size); enable gradient_checkpointing, "
-            "use 4bit quantization, or use a smaller model."
+            "(keeps effective batch size); lower data.max_length; "
+            "enable gradient_checkpointing, use 4bit quantization, or use a smaller model."
         ),
     ),
     (
@@ -33,8 +33,8 @@ ERROR_MAP = [
         "GPU ran out of memory.",
         (
             "Try --batch-size <half> or --grad-accum <double> "
-            "(keeps effective batch size); enable gradient_checkpointing, "
-            "use 4bit quantization, or use a smaller model."
+            "(keeps effective batch size); lower data.max_length; "
+            "enable gradient_checkpointing, use 4bit quantization, or use a smaller model."
         ),
     ),
     # Missing optional deps
