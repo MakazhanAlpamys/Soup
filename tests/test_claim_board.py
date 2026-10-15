@@ -6,7 +6,10 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-_PATH = Path(__file__).resolve().parents[1] / "scripts" / "claim_board.py"
+import pytest
+
+_ROOT = Path(__file__).resolve().parents[1]
+_PATH = _ROOT / "scripts" / "claim_board.py"
 _SPEC = importlib.util.spec_from_file_location("claim_board", _PATH)
 board = importlib.util.module_from_spec(_SPEC)
 sys.modules["claim_board"] = board
@@ -100,7 +103,7 @@ def test_render_is_plain_markdown_and_truncates():
     page = board.render([row], NOW)
     assert "\x1b" not in page
     assert "Generated: 2026-10-14 12:00 UTC" in page
-    assert "CONTRIBUTING.md#how-work-is-queued" in page
+    assert board.GUIDE_URL in page and "](../" not in page
     cell = _cell(page)
     assert len(cell) == board.TITLE_WIDTH + 2 and cell.endswith("...`")
     assert not re.search("[\\u0400-\\u04FF]", page)
@@ -191,7 +194,7 @@ def _stub_fetch(monkeypatch):
 
 def test_check_detects_drift_and_match(monkeypatch, tmp_path, capsys):
     page = _stub_fetch(monkeypatch)
-    path = tmp_path / "claims.md"
+    path = tmp_path / "board.md"
     path.write_text(page, encoding="utf-8")
     assert board.main(["--check", str(path)]) == 0
     path.write_text(page.replace("Some title", "Other"), encoding="utf-8")
@@ -204,7 +207,45 @@ def test_write_keeps_existing_file_when_gh_fails(monkeypatch, tmp_path):
         raise board.BoardError("gh down")
 
     monkeypatch.setattr(board, "fetch", boom)
-    path = tmp_path / "claims.md"
+    path = tmp_path / "board.md"
     path.write_bytes(b"old page\n")
     assert board.main(["--write", str(path)]) == 2
     assert path.read_bytes() == b"old page\n"
+
+
+def test_page_is_an_issue_body_regenerated_daily():
+    page = board.render([], NOW)
+    assert "regenerated daily by `scripts/claim_board.py`" in page
+    assert "comment on that issue itself" in page
+    assert "docs/" not in page and "by hand" not in page
+
+
+def test_write_puts_the_page_at_the_given_path(monkeypatch, tmp_path, capsys):
+    page = _stub_fetch(monkeypatch)
+    path = tmp_path / "board.md"
+    assert board.main(["--write", str(path)]) == 0
+    written = path.read_bytes()
+    assert b"\r" not in written and written.startswith(b"# Claim board\n")
+    assert board.strip_stamp(written.decode("utf-8")) == board.strip_stamp(page)
+    assert f"wrote {path}" in capsys.readouterr().out
+
+
+def test_check_calls_a_missing_file_stale(monkeypatch, tmp_path, capsys):
+    _stub_fetch(monkeypatch)
+    assert board.main(["--check", str(tmp_path / "board.md")]) == 1
+    assert "is stale" in capsys.readouterr().out
+
+
+def test_check_needs_a_path(capsys):
+    with pytest.raises(SystemExit) as stopped:
+        board.main(["--check"])
+    assert stopped.value.code == 2
+    assert "--check: expected one argument" in capsys.readouterr().err
+
+
+def test_contributing_points_at_the_pinned_issue_not_a_docs_page():
+    flat = " ".join((_ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8").split())
+    link = f"[#{board.BOARD_ISSUE}](https://github.com/{board.REPO}/issues/{board.BOARD_ISSUE})"
+    assert link in flat
+    assert "claims.md" not in flat
+    assert not (_ROOT / "docs" / "claims.md").exists(), "the board is an issue body, not a file"
