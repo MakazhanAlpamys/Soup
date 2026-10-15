@@ -191,11 +191,19 @@ def test_null_nested_architectures_keeps_root_architecture(export_flow):
     {"architectures": [None]}, {"architectures": ["LlamaForCausalLM"], "text_config": []},
     {"architectures": ["LlamaForCausalLM"], "text_config": {"architectures": []}},
 ])
-def test_malformed_metadata_has_its_own_diagnostic_without_work(export_flow, config):
+@pytest.mark.parametrize("console_width", [40, 80, 120])
+def test_malformed_metadata_has_its_own_diagnostic_without_work(
+    export_flow, config, console_width, monkeypatch,
+):
+    from rich.console import Console
+
+    monkeypatch.setattr(export_mod, "console", Console(width=console_width))
     result, calls = export_flow(config)
     assert result.exit_code == 1, result.output
-    assert "metadata" in result.output.lower()
-    assert "config.json" in result.output
+    # Rich may fold a long POSIX path inside the filename on a narrow terminal.
+    plain = strip_ansi(result.output).replace("\n", "")
+    assert "metadata" in plain.lower()
+    assert "config.json" in plain
     assert calls == []
 
 
@@ -266,6 +274,7 @@ def test_regeneration_refuses_wrong_pin_or_mutable_source(tmp_path, tag, commit,
 def test_oversized_metadata_is_refused_without_work(export_flow):
     result, calls = export_flow(" " * (1024 * 1024 + 1))
     assert result.exit_code == 1
-    assert "metadata" in result.output.lower()
-    assert "1 MiB" in result.output
+    plain = " ".join(strip_ansi(result.output).split())
+    assert "metadata" in plain.lower()
+    assert "1 MiB" in plain
     assert calls == []
