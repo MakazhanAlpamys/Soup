@@ -912,6 +912,10 @@ Paths are containment-checked, and `registry://` refs are resolved with an optio
 
 ### Custom Eval Format
 
+`scoring` must be a supported string label; omitted values default to `exact`.
+Invalid values name the `scoring` field and physical JSONL line, including blank
+lines, before model loading or result writes. `soup eval custom` exits 1 for these errors.
+
 Regex-scored custom tasks reject structurally unsafe patterns before matching
 model output and name `eval.custom.expected` in the error. The diagnose
 `format` probe applies the same check to `regex_pattern` without running a
