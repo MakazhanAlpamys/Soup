@@ -458,6 +458,11 @@ training:
 
 Works with all training tasks and backends. Recommended for LoRA rank ≥ 32.
 
+The scale is `alpha / sqrt(r)` instead of plain LoRA's `alpha / r` (2.0 instead of 0.25
+for the config above) on every backend: PEFT's `LoraConfig(use_rslora=True)` on
+`transformers`, the `scale` Soup hands mlx-lm (in `adapter_config.json` and at training
+time) on `mlx`, and `get_peft_model(..., use_rslora=True)` on `unsloth`.
+
 
 ## VeRA & OLoRA (Smaller-Footprint PEFT)
 
@@ -495,7 +500,7 @@ training:
   neftune_alpha: 5.0  # Noise intensity (0-50, typically 5-15)
 ```
 
-Works with SFT, DPO, KTO, ORPO, SimPO, and IPO tasks.
+Works with SFT, TTS, DPO, KTO, ORPO, SimPO, IPO, BCO, and preference tasks.
 
 
 ## Sample Packing

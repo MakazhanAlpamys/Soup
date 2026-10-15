@@ -85,6 +85,11 @@ FLOPS_PER_PARAM_PER_TOKEN = 6
 #: reports ``model_type='gemma3'`` for the vision-capable wrapper, and streaming
 #: a multimodal wrapper as though it were a causal LM is exactly the failure the
 #: allowlist exists to prevent.
+#:
+#: ``deepseek_v3`` is the DeepSeek-V3 family (MLA attention, DeepSeekMoE with
+#: a shared expert, the first ``first_k_dense_replace`` layers dense). Kimi K2
+#: ships the same decoder under ``model_type='kimi_k2'``, which transformers
+#: does not register, so that name stays refused here too.
 SUPPORTED_STREAM_ARCHS = (
     "llama",
     "qwen2",
@@ -96,6 +101,7 @@ SUPPORTED_STREAM_ARCHS = (
     "gemma3_text",
     "phi",
     "phi3",
+    "deepseek_v3",
 )
 
 # Model types whose text decoders reuse an admitted streaming family.  Each

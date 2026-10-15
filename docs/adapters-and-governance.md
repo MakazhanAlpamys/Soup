@@ -269,6 +269,9 @@ Every fine-tune you ship should be reproducible. Soup's local registry (`~/.soup
 # Register a completed run
 soup registry push --run-id run_202611_abc123 --name llama31-chat --tag v1
 
+# Also record the training data file's SHA-256 as data_hash
+soup registry push --run-id run_202611_abc123 --name llama31-chat --tag v1 --data data/train.jsonl
+
 # List entries (filter by name, tag, base model, task)
 soup registry list
 soup registry list --name llama31-chat --tag prod
@@ -288,6 +291,8 @@ soup registry promote llama31-chat-v1 --tag prod
 # Delete (cascades to artifacts + lineage links)
 soup registry delete llama31-chat-v1 --yes
 ```
+
+**Training data:** `push --data <file>` stores the file's SHA-256 as the entry's `data_hash`, shown by `soup registry show`. It records the file registered as the training input, not proof of what the run trained on. The file must be under the current directory; without `--data` the entry has no `data_hash`.
 
 **Lineage DAG** — every entry can point to a parent (its ancestor run). Walk the DAG for any name with:
 

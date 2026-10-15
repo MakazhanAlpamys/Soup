@@ -711,6 +711,7 @@ class StreamingSetupMixin:
             resolve_shard_dir,
             shard_cache_disk_bytes,
             shard_checkpoint,
+            source_identity_includes_config,
             source_weight_bytes,
             stripe_dirs,
         )
@@ -817,7 +818,7 @@ class StreamingSetupMixin:
                 source_components = checkpoint_source_components(
                     weights_plan.weights_dir,
                     weights_plan.source_files,
-                    include_config=arch == "qwen4_exp",
+                    include_config=source_identity_includes_config(arch),
                 )
                 cached, _reason = inspect_shard_cache(
                     shard_dir,
@@ -947,6 +948,13 @@ class StreamingSetupMixin:
             quant_device=str(self.device),
             stripe_roots=stripe_roots,
             notify=console.print,
+            # DeepSeek-V3 / Kimi K2 store their MTP module as layers past the last
+            # decoder layer; the sharder drops them against the config's count.
+            num_hidden_layers=(
+                int(self._stream_shape_config(model_config).num_hidden_layers)
+                if arch == "deepseek_v3"
+                else None
+            ),
         )
         # R4: decided once, from the roots the index actually carries (a reused cache keeps its
         # own), so the plan's staging figure, the host pre-flight and the reader all agree. Read

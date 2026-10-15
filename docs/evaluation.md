@@ -267,6 +267,10 @@ smoke generator are unchanged (#1798).
 
 Baselines may be a registry reference (`registry://<name-or-id>`), a file path, or omitted for the first run. A registry baseline uses the newest eval row for each benchmark — re-measuring a benchmark replaces its baseline score — and warns, per benchmark, when that row's scorer stamp is missing or from a different scorer revision. A task whose evaluation raises (`ValueError`, `FileNotFoundError`, `OSError`, or a judge that stays unreachable) gets no score and fails the gate closed under `on_regression: stop`; the log line lists it as a task that could not be scored, with the error, rather than as a regression (#1447).
 
+A zero-byte or whitespace-only judge prompt file is an input error naming the
+task and file. It has no measured score, fails the gate even at threshold zero,
+and cannot create or replace a baseline when no other task was scored.
+
 
 ## Sequential A/B Harness (`soup ab`)
 
@@ -814,6 +818,12 @@ soup eval leaderboard --format csv
 soup eval human --input prompts.jsonl --model-a ./model_a --model-b ./model_b
 ```
 
+Judge HTTP replies are limited to 1 MiB of decoded content while streaming,
+before JSON parsing, including gzip expansion. An oversized response is an
+unusable reply rather than a transient outage: it is not retried. The error names
+the cap and the endpoint selectors (`--api-base`, `--judge-api-base`, `judge_model`),
+with credentials removed from the judge URL. Existing row-failure policies apply.
+
 `soup eval benchmark` saves only requested names with numeric metrics, including a real
 `0.0` (not a boolean). Missing or scoreless results are skipped, named and counted;
 the saved banner reports the saved count. It exits `0` when at least one result was
@@ -911,6 +921,10 @@ soup eval quant-check --before X --after Y --tasks t.jsonl --allow-stub
 Paths are containment-checked, and `registry://` refs are resolved with an optional `kinds` filter so you never pick the wrong artifact. Standalone `.gguf` file paths are refused up front; pass directory paths containing safetensors/HuggingFace weights or `registry://` references.
 
 ### Custom Eval Format
+
+`scoring` must be a supported string label; omitted values default to `exact`.
+Invalid values name the `scoring` field and physical JSONL line, including blank
+lines, before model loading or result writes. `soup eval custom` exits 1 for these errors.
 
 Regex-scored custom tasks reject structurally unsafe patterns before matching
 model output and name `eval.custom.expected` in the error. The diagnose

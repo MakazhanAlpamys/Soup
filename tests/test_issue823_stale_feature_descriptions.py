@@ -304,3 +304,25 @@ def test_named_docs_no_longer_promise_past_follow_up_releases() -> None:
             f"{relative_path}: {fragment}" for fragment in fragments if fragment in text
         )
     assert offenders == []
+
+
+def test_all_soup_config_fields_have_descriptions() -> None:
+    """Every soup.yaml setting reachable from SoupConfig carries a description (#1794)."""
+    import typing
+
+    from pydantic import BaseModel
+
+    from soup_cli.config.schema import SoupConfig
+
+    missing: list[str] = []
+
+    def walk(model: type[BaseModel], prefix: str = "") -> None:
+        for name, info in model.model_fields.items():
+            if not info.description:
+                missing.append(prefix + name)
+            for member in (info.annotation, *typing.get_args(info.annotation)):
+                if isinstance(member, type) and issubclass(member, BaseModel):
+                    walk(member, prefix + name + ".")
+
+    walk(SoupConfig)
+    assert missing == [], f"Config fields missing description: {missing}"

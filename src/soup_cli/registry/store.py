@@ -666,8 +666,14 @@ class RegistryStore:
         name: str,
         tag: str,
         notes: Optional[str] = None,
+        data_path: Optional[str] = None,
     ) -> str:
-        """Create a registry entry from an existing training run."""
+        """Create a registry entry from an existing training run.
+
+        ``data_path`` names the file to record as the run's training input; its
+        SHA-256 becomes ``data_hash``. It is what the caller says was trained on,
+        not proof of it. Without it, ``data_hash`` stays ``None``.
+        """
         run = tracker.get_run(run_id)
         if run is None:
             raise ValueError(f"run not found: {run_id}")
@@ -689,7 +695,7 @@ class RegistryStore:
             task=task,
             run_id=run.get("run_id") or run_id,
             config=config,
-            data_path=None,
+            data_path=data_path,
             notes=notes,
         )
 

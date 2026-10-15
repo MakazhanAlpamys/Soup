@@ -2952,6 +2952,54 @@ def _layer_name_map(layer: Any) -> Dict[str, str]:
     }
 
 
+def _load_layer_buffers(
+    layers: Any, paths: Sequence[str], specs: Sequence[Any], keys: Sequence[str]
+) -> int:
+    """Copy the named persistent buffers of each decoder layer from its shard.
+
+    ``keys`` (``layer_shard.layer_buffer_keys(arch)``) are the only buffers
+    loaded. The skeleton is built under ``init_empty_weights()``, which leaves
+    buffers as real tensors holding their ``__init__`` value: DeepSeek-V3's
+    router ``e_score_correction_bias`` would otherwise run at zero, which routes
+    tokens to different experts with no error. Buffers are not trained, so they
+    are loaded once and stay resident, at the dtype the shard stores them in. A
+    listed buffer absent from a layer's shard keeps its init value, as
+    ``from_pretrained`` would. Returns the count loaded.
+    """
+    from safetensors import safe_open
+
+    wanted_keys = frozenset(keys)
+    if not wanted_keys:
+        return 0
+    loaded = 0
+    for idx, (layer, path) in enumerate(zip(layers, paths)):
+        wanted = []
+        for name, buf in layer.named_buffers():
+            owner_name, _, leaf = name.rpartition(".")
+            owner = layer.get_submodule(owner_name) if owner_name else layer
+            if buf is None or leaf in owner._non_persistent_buffers_set:
+                continue
+            key = name.replace(".base_layer.", ".")
+            if key in wanted_keys and key in specs[idx]:
+                wanted.append((owner, leaf, key, buf))
+        if not wanted:
+            continue
+        with safe_open(path, framework="pt") as handle:
+            for owner, leaf, key, buf in wanted:
+                value = handle.get_tensor(key)
+                if tuple(value.shape) != tuple(buf.shape):
+                    raise ValueError(
+                        f"decoder layer {idx} buffer {key!r} has shape "
+                        f"{tuple(value.shape)} in the shard but {tuple(buf.shape)} "
+                        f"in the model — reshard the checkpoint"
+                    )
+                # copy=True: on a CPU target `.to` would return the mapped view,
+                # keeping the whole layer file mapped for the model's lifetime.
+                setattr(owner, leaf, value.to(device=buf.device, copy=True))
+                loaded += 1
+    return loaded
+
+
 def install_streaming(
     model: Any,
     *,
@@ -2988,6 +3036,7 @@ def install_streaming(
         QUANT_NF4,
         large_shard_path,
         large_weight_role,
+        layer_buffer_keys,
         layer_paths,
     )
 
@@ -3088,6 +3137,11 @@ def install_streaming(
         needed_specs_by_layer.append(needed)
         active_keys_by_layer.append(tuple(sorted(needed)))
     spec = RamSource.merge_layer_specs(needed_specs_by_layer)
+    # Before the source exists: a refusal here leaves no reader thread or
+    # page-locked staging behind.
+    _load_layer_buffers(
+        layers, decoder_paths, layer_specs, layer_buffer_keys(getattr(index, "arch", ""))
+    )
 
     large_source_indices = {key: n_layers + offset for offset, key in enumerate(large_keys)}
     source_specs = needed_specs_by_layer + [{key: large_specs[key]} for key in large_keys]

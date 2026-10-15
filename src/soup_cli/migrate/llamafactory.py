@@ -3,8 +3,31 @@
 from pathlib import Path
 from typing import Any, Dict, List
 
-from soup_cli.migrate.common import to_number
+from soup_cli.migrate.common import (
+    split_module_list,
+    to_number,
+    unmapped_keys_warning,
+    validation_split,
+)
 from soup_cli.utils.yaml_limits import MAX_CONFIG_BYTES, load_yaml_file_limited
+
+# LLaMA-Factory's own LoRA defaults (src/llamafactory/hparams/finetuning_args.py:
+# ``lora_rank`` 8, ``lora_alpha = lora_alpha or lora_rank * 2``). A migrated config
+# without the keys must train what LLaMA-Factory trained, not Soup's r 64 / alpha 16,
+# which is an 8x larger adapter at an 8x smaller alpha / r (#1807).
+_LF_DEFAULT_LORA_RANK = 8
+
+# Every top-level key this migrator reads, mapped or warned about by name. Any
+# other key in the source is listed in one "not migrated" warning (#1807).
+_HANDLED_KEYS = frozenset({
+    "model_name_or_path", "stage", "pref_loss", "finetuning_type", "lora_rank",
+    "lora_alpha", "lora_dropout", "lora_target", "use_dora", "num_train_epochs",
+    "learning_rate", "per_device_train_batch_size", "gradient_accumulation_steps",
+    "lr_scheduler_type", "warmup_ratio", "quantization_bit", "quantization_method",
+    "pref_beta", "simpo_gamma", "reward_model", "loraplus_lr_ratio", "dataset",
+    "cutoff_len", "val_size", "output_dir", "bf16", "fp16", "deepspeed", "report_to",
+    "neftune_noise_alpha", "template",
+})
 
 # LLaMA-Factory stage → Soup task mapping
 _STAGE_MAP = {
@@ -37,6 +60,24 @@ _TASK_FORMAT_MAP = {
     "reward_model": "dpo",
     "ppo": "auto",
 }
+
+
+def _lora_int(value: Any, key: str, warnings: List[str]) -> Any:
+    """``lora_rank: "8"`` (quoted in the YAML) is the integer 8.
+
+    LLaMA-Factory's parser does not coerce it, but the author meant 8, and the
+    ``alpha = 2 * rank`` default below needs the integer. Anything else that is
+    not an integer is copied as written and named, so the missing alpha default
+    is not a silent one (#1807).
+    """
+    if isinstance(value, bool) or not isinstance(value, str):
+        return value
+    text = value.strip()
+    if text.isdigit():
+        return int(text)
+    note = ", and lora_alpha was not defaulted from it" if key == "lora_rank" else ""
+    warnings.append(f"{key}: {value!r} is not an integer; copied as written{note}.")
+    return value
 
 
 def migrate_llamafactory(config_path: Path) -> Dict[str, Any]:
@@ -116,16 +157,30 @@ def migrate_llamafactory(config_path: Path) -> Dict[str, Any]:
             )
 
     if include_lora:
-        lora_section["r"] = raw.get("lora_rank", 64)
-        lora_section["alpha"] = raw.get("lora_alpha", 16)
+        # LLaMA-Factory's defaults, not Soup's: r 8, alpha 2 * r (#1807).
+        rank = raw.get("lora_rank")
+        if rank is None:
+            rank = _LF_DEFAULT_LORA_RANK
+        else:
+            rank = _lora_int(rank, "lora_rank", warnings)
+        lora_section["r"] = rank
+        alpha = raw.get("lora_alpha")
+        if alpha is not None:
+            alpha = _lora_int(alpha, "lora_alpha", warnings)
+        if alpha is None and isinstance(rank, int) and not isinstance(rank, bool):
+            alpha = 2 * rank
+        if alpha is not None:
+            lora_section["alpha"] = alpha
         if "lora_dropout" in raw:
             lora_section["dropout"] = raw["lora_dropout"]
-        # lora_target: "all" → auto
+        # lora_target: "all" (and LLaMA-Factory's default when the key is absent)
+        # means every linear layer; peft's spelling of that is ``all-linear``.
+        # ``auto`` would resolve to q_proj / v_proj on Llama, two of seven (#1807).
         lora_target = raw.get("lora_target")
         if lora_target == "all" or lora_target is None:
-            lora_section["target_modules"] = "auto"
+            lora_section["target_modules"] = "all-linear"
         else:
-            lora_section["target_modules"] = lora_target
+            lora_section["target_modules"] = split_module_list(lora_target)
         if raw.get("use_dora"):
             lora_section["use_dora"] = True
 
@@ -199,6 +254,42 @@ def migrate_llamafactory(config_path: Path) -> Dict[str, Any]:
             training["kto_beta"] = pref_beta
         elif task == "orpo":
             training["orpo_beta"] = pref_beta
+        elif task == "ipo":
+            # One knob under three names, shown rather than assumed (#1807):
+            # LLaMA-Factory 1fded91 src/llamafactory/train/dpo/trainer.py:79-80 keeps
+            # pref_beta as self.beta and pref_loss as self.loss_type, and for ipo
+            # (:205-207, use_ref_model is True) hands both to trl's dpo_loss;
+            # trl 0.29.1 trl/trainer/dpo_trainer.py:1241-1252 computes the IPO loss
+            # as (delta - 1 / (2 * self.beta)) ** 2, and trl/trainer/dpo_config.py:
+            # 252-256 documents that beta as IPO's regularisation parameter (tau);
+            # Soup's trainer/ipo.py:173-174 passes training.ipo_tau as that beta.
+            # All three default to 0.1 (finetuning_args.py:171-172, dpo_config.py:253,
+            # schema.py ipo_tau), so an absent pref_beta stays absent here and Soup's
+            # default applies.
+            training["ipo_tau"] = pref_beta
+        elif task == "simpo":
+            # Soup's SimPO trainer leaves trl's beta at its default and has no
+            # field for it, so the value cannot be carried; say so (#1807).
+            warnings.append(
+                f"pref_beta: {pref_beta} under pref_loss: simpo has no Soup equivalent "
+                "(task: simpo takes training.simpo_gamma and training.cpo_alpha; trl's "
+                "SimPO beta stays at its default). Dropped."
+            )
+        else:
+            warnings.append(
+                f"pref_beta: {pref_beta} is not read by LLaMA-Factory for stage: {stage}, "
+                "and Soup has no equivalent on task: "
+                f"{task}. Dropped."
+            )
+    simpo_gamma = raw.get("simpo_gamma")
+    if simpo_gamma is not None:
+        if task == "simpo":
+            training["simpo_gamma"] = simpo_gamma
+        else:
+            warnings.append(
+                f"simpo_gamma: {simpo_gamma} applies to pref_loss: simpo only "
+                f"(this config migrates to task: {task}). Dropped."
+            )
 
     if "reward_model" in raw:
         training["reward_model"] = raw["reward_model"]
@@ -227,6 +318,11 @@ def migrate_llamafactory(config_path: Path) -> Dict[str, Any]:
     data["format"] = data_format
     if "cutoff_len" in raw:
         data["max_length"] = raw["cutoff_len"]
+    # val_size: LLaMA-Factory's default is 0 (train on every row); without this
+    # mapping every migrated config got Soup's default of 0.1 (#1807).
+    val_split = validation_split(raw.get("val_size"), "val_size", warnings)
+    if val_split is not None:
+        data["val_split"] = val_split
 
     # --- Output ---
     output = raw.get("output_dir", "./output")
@@ -249,6 +345,9 @@ def migrate_llamafactory(config_path: Path) -> Dict[str, Any]:
     template_name = raw.get("template")
     if template_name:
         warnings.append(f"Original template: {template_name} (auto-detected in Soup)")
+    dropped = unmapped_keys_warning(raw, _HANDLED_KEYS, "LLaMA-Factory")
+    if dropped is not None:
+        warnings.append(dropped)
 
     result: Dict[str, Any] = {
         "base": base,

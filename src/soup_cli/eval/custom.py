@@ -120,7 +120,7 @@ def load_eval_tasks(path: "Path | str") -> list[EvalTask]:
                 )
 
             scoring = row.get("scoring", "exact")
-            if scoring not in VALID_SCORING:
+            if not isinstance(scoring, str) or scoring not in VALID_SCORING:
                 raise ValueError(
                     f"Line {line_num}: invalid scoring '{scoring}', "
                     f"must be one of: {', '.join(sorted(VALID_SCORING))}"

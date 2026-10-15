@@ -126,7 +126,12 @@ def _load_jsonl(
                     continue
                 data.append(row)
             except json.JSONDecodeError as e:
-                console.print(f"[yellow]Warning: invalid JSON on line {i + 1}: {e}[/]")
+                issue = f"invalid JSON on line {i + 1}: {e}"
+                console.print(f"[yellow]Warning: {issue}[/]")
+                if issues is not None:
+                    # #1887: a line that is not JSON is a skipped row too, and
+                    # `soup data validate` counts it like a non-object row.
+                    issues.append(issue)
     return data
 
 

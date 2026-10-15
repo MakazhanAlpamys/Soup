@@ -110,10 +110,31 @@ _QWEN4_PLE_SHARD_RE = re.compile(
 _QWEN4_OQ_PLE_SHARD_RE = re.compile(
     r"^(?P<prefix>.+\.ple\.ple_embedding\.ngram_embedding)\.shards\.(?P<part>\d+)\.weight$"
 )
-_QWEN4_EXPERT_RE = re.compile(
+_PER_EXPERT_RE = re.compile(
     r"^(?P<prefix>model\.layers\.\d+\.mlp\.experts)\."
     r"(?P<expert>\d+)\.(?P<projection>gate_proj|up_proj|down_proj)\.weight$"
 )
+#: Architectures whose transformers module holds the routed experts as fused
+#: 3-D ``gate_up_proj`` [E, 2I, H] / ``down_proj`` [E, H, I] parameters while
+#: the checkpoint stores one 2-D tensor per expert and projection (the
+#: ``qwen2_moe`` conversion in transformers' ``conversion_mapping.py``: gate
+#: rows first, experts in index order). Value = the name used in messages.
+_STACKED_EXPERT_ARCHS = {"qwen4_exp": "Qwen4", "deepseek_v3": "DeepSeek-V3"}
+#: Per-layer BUFFERS the checkpoint carries and a streamed run must use. The
+#: skeleton is built under ``init_empty_weights()``, which leaves buffers at
+#: their ``__init__`` value, so the runtime loads exactly these from the layer
+#: shard (``layer_stream_runtime._load_layer_buffers``); every other buffer
+#: keeps its init value, as it always has (a qwen4_exp integer buffer, for one,
+#: reaches the shard cast to the stream dtype and must not be loaded back).
+#: Stored at float32 whatever the stream dtype: transformers keeps them in fp32
+#: on load (``_keep_in_fp32_modules_strict``), so a resident bf16 run routes with
+#: the fp32 values and the streamed run must as well.
+_LAYER_BUFFER_KEYS = {"deepseek_v3": ("mlp.gate.e_score_correction_bias",)}
+
+
+def layer_buffer_keys(arch: str) -> Tuple[str, ...]:
+    """Short keys of the per-layer buffers streamed for ``arch`` (see above)."""
+    return _LAYER_BUFFER_KEYS.get(arch, ())
 _QWEN4_OQ_EXPERT_RE = re.compile(
     r"^(?P<prefix>model\.layers\.\d+\.mlp)\.switch_mlp\."
     r"(?P<projection>gate_proj|up_proj|down_proj)\.weight$"
@@ -824,6 +845,17 @@ def _source_file_components(shards: List[str]) -> Tuple[Tuple[str, int, int], ..
     return tuple(components)
 
 
+def source_identity_includes_config(arch: str) -> bool:
+    """Whether ``config.json`` is part of a shard cache's source identity.
+
+    ``qwen4_exp`` reads its PLE layout from the config; for ``deepseek_v3`` the
+    config's layer count decides which (multi-token-prediction) layers are
+    dropped. The pre-sharding planner and the sharder must agree on this, or
+    the planner predicts a cache miss the sharder then does not see.
+    """
+    return arch in ("qwen4_exp", "deepseek_v3")
+
+
 def checkpoint_source_components(
     weights_dir: str,
     components: Tuple[Tuple[str, int, int], ...],
@@ -1215,6 +1247,7 @@ def shard_checkpoint(
     quant_device: Optional[str] = None,
     notify: Optional[Callable[[str], None]] = None,
     stripe_roots: Sequence[str] = (),
+    num_hidden_layers: Optional[int] = None,
 ) -> ShardIndex:
     """Rewrite an HF checkpoint into per-layer safetensors shards.
 
@@ -1231,11 +1264,28 @@ def shard_checkpoint(
     ``i`` is written to root ``i mod N`` (root 0 is ``out_dir``), each extra
     root gets a per-model folder named like ``out_dir`` plus a ``stripe.json``
     marker, and the index records the placement.
+
+    For ``arch`` in :data:`_STACKED_EXPERT_ARCHS` the per-expert routed-expert
+    keys (``mlp.experts.E.{gate,up,down}_proj.weight``) are stacked into the
+    fused ``mlp.experts.gate_up_proj`` / ``mlp.experts.down_proj`` tensors the
+    transformers module holds, the same conversion ``from_pretrained`` applies.
+    For ``deepseek_v3``, ``num_hidden_layers`` (the config's value) drops the
+    multi-token-prediction layers a DeepSeek-V3 / Kimi K2 checkpoint stores
+    past the last decoder layer; transformers ignores them on load too.
     """
     if dtype not in _SUPPORTED_DTYPES:
         raise ValueError(
             f"unsupported dtype {dtype!r} for layer streaming; "
             f"supported: {', '.join(_SUPPORTED_DTYPES)}"
+        )
+    if num_hidden_layers is not None and (
+        isinstance(num_hidden_layers, bool)
+        or not isinstance(num_hidden_layers, int)
+        or not 1 <= num_hidden_layers <= _MAX_LAYERS
+    ):
+        raise ValueError(
+            f"num_hidden_layers must be an int in [1, {_MAX_LAYERS}], "
+            f"got {num_hidden_layers!r}"
         )
     suffixes = _validate_quant_request(quant, quant_suffixes)
     quantise = quant == QUANT_NF4
@@ -1244,6 +1294,10 @@ def shard_checkpoint(
     # index stores that so the cache check below stays stable across ordinals.
     device_kind = str(device).split(":", 1)[0] if quantise else ""
     external_mode = "qwen4_ple" if arch == "qwen4_exp" else ""
+    stack_experts = arch in _STACKED_EXPERT_ARCHS
+    expert_label = _STACKED_EXPERT_ARCHS.get(arch, arch)
+    fp32_layer_keys = layer_buffer_keys(arch)
+    drop_extra_layers = arch == "deepseek_v3" and num_hidden_layers is not None
     shards = _discover_safetensors(weights_dir)
     resolved_out = _validate_out_dir(out_dir)
 
@@ -1277,7 +1331,7 @@ def shard_checkpoint(
     source_files = checkpoint_source_components(
         weights_dir,
         _source_file_components(shards),
-        include_config=bool(external_mode),
+        include_config=source_identity_includes_config(arch),
     )
     fingerprint = _fingerprint_components(source_files)
     if not force:
@@ -1328,6 +1382,9 @@ def shard_checkpoint(
             for source_key in handle.keys():
                 if external_mode and source_key.endswith((".biases", ".scales")):
                     saw_oq_companion = True
+                if source_key.endswith("_scale_inv"):
+                    # Before any byte is read or written: see _refuse_fp8.
+                    _refuse_fp8(source_key, str(handle.get_slice(source_key).get_dtype()))
                 key = _canonical_stream_key(source_key)
                 prior = where.get(key)
                 if prior is not None and prior != (path, source_key):
@@ -1394,6 +1451,19 @@ def shard_checkpoint(
             for key in where
             if (match := _LAYER_RE.match(key)) is not None
         }
+
+    if drop_extra_layers:
+        # DeepSeek-V3 / Kimi K2 store the multi-token-prediction module as the
+        # layer(s) after the last decoder layer (``model.layers.61.*`` of 61).
+        # The CausalLM has no such layer and transformers drops the keys on
+        # load; kept here they would make a shard the skeleton cannot place.
+        where = {
+            key: location
+            for key, location in where.items()
+            if (match := _LAYER_RE.match(key)) is None
+            or int(match.group(1)) < num_hidden_layers
+        }
+        layer_ids = {layer for layer in layer_ids if layer < num_hidden_layers}
 
     external_tensors: Dict[str, Any] = {}
     for logical_key, indexed_parts in external_parts.items():
@@ -1533,7 +1603,7 @@ def shard_checkpoint(
         for idx in range(n_layers):
             prefix = f"model.layers.{idx}."
             blob = {}
-            qwen4_experts: Dict[str, Dict[int, Tuple[str, str]]] = {}
+            stacked_experts: Dict[str, Dict[int, Tuple[str, str]]] = {}
             oq_experts: Dict[str, str] = {}
             for key, location in where.items():
                 if not key.startswith(prefix):
@@ -1548,11 +1618,11 @@ def shard_checkpoint(
                 if oq_expert_match:
                     oq_experts[oq_expert_match.group("projection")] = key
                     continue
-                expert_match = _QWEN4_EXPERT_RE.match(key) if external_mode else None
+                expert_match = _PER_EXPERT_RE.match(key) if stack_experts else None
                 if expert_match:
                     projection = expert_match.group("projection")
                     expert = int(expert_match.group("expert"))
-                    qwen4_experts.setdefault(projection, {})[expert] = location
+                    stacked_experts.setdefault(projection, {})[expert] = location
                     continue
                 path, source_key = location
                 short = key[len(prefix):]
@@ -1561,7 +1631,8 @@ def shard_checkpoint(
                         handles, where, key, oq_config=oq_config, dtype=dtype
                     )
                 else:
-                    tensor = _read_tensor(handles[path], source_key, dtype)
+                    stored = "float32" if short in fp32_layer_keys else dtype
+                    tensor = _read_tensor(handles[path], source_key, stored)
                 total_params += tensor.numel()
                 if quantise and short in suffixes:
                     sidecars, spec, code, nested_code = _quantize_nf4(
@@ -1587,27 +1658,27 @@ def shard_checkpoint(
             for logical_key, spec in external_tensors.items():
                 if logical_key.startswith(prefix):
                     total_params += math.prod(spec.shape)
-            if qwen4_experts:
+            if stacked_experts:
                 import torch
 
                 expected_projections = {"gate_proj", "up_proj", "down_proj"}
-                if set(qwen4_experts) != expected_projections:
+                if set(stacked_experts) != expected_projections:
                     raise ValueError(
-                        f"Qwen4 layer {idx} has incomplete expert projections: "
-                        f"{sorted(qwen4_experts)}"
+                        f"{expert_label} layer {idx} has incomplete expert projections: "
+                        f"{sorted(stacked_experts)}"
                     )
-                expert_ids = sorted(qwen4_experts["gate_proj"])
+                expert_ids = sorted(stacked_experts["gate_proj"])
                 if expert_ids != list(range(len(expert_ids))) or any(
-                    sorted(qwen4_experts[name]) != expert_ids
+                    sorted(stacked_experts[name]) != expert_ids
                     for name in expected_projections
                 ):
                     raise ValueError(
-                        f"Qwen4 layer {idx} expert ids must be contiguous and "
+                        f"{expert_label} layer {idx} expert ids must be contiguous and "
                         "identical across gate/up/down projections"
                     )
 
                 def _expert_tensor(projection: str, expert: int):
-                    path, source_key = qwen4_experts[projection][expert]
+                    path, source_key = stacked_experts[projection][expert]
                     return _read_tensor(handles[path], source_key, dtype)
 
                 gate_up = []
@@ -1621,7 +1692,8 @@ def shard_checkpoint(
                     total_params += gate.numel() + up.numel() + down_tensor.numel()
                 if "mlp.experts.gate_up_proj" in blob or "mlp.experts.down_proj" in blob:
                     raise ValueError(
-                        f"Qwen4 layer {idx} contains both packed and per-expert weights"
+                        f"{expert_label} layer {idx} contains both packed and "
+                        "per-expert weights"
                     )
                 blob["mlp.experts.gate_up_proj"] = torch.stack(gate_up, dim=0)
                 blob["mlp.experts.down_proj"] = torch.stack(down, dim=0)
@@ -2098,11 +2170,25 @@ def _own(view: Any, candidate: Any) -> Any:
     return view.clone() if candidate is view else candidate
 
 
+def _refuse_fp8(key: str, stored_dtype: str) -> None:
+    """FP8 weights carry block scales (``*.weight_scale_inv``) the sharder has no
+    path for; a plain cast keeps the raw e4m3 values and trains on wrong weights,
+    while the resident load (which dequantises) looks fine."""
+    if stored_dtype.upper().startswith("F8") or key.endswith("_scale_inv"):
+        raise ValueError(
+            f"checkpoint tensor {key!r} is FP8 ({stored_dtype}) or an FP8 block scale. "
+            f"Layer streaming has no FP8 path: casting would drop the scales. "
+            f"Dequantise the checkpoint to bf16 first."
+        )
+
+
 def _read_tensor(handle: Any, key: str, dtype: str) -> "Any":
     """Materialise one OWNED tensor, size-capped, converted to the target dtype."""
     import torch
 
-    shape = handle.get_slice(key).get_shape()
+    sliced = handle.get_slice(key)
+    _refuse_fp8(key, str(sliced.get_dtype()))
+    shape = sliced.get_shape()
     elements = math.prod(int(dim) for dim in shape)
     if elements > _MAX_TENSOR_ELEMENTS:
         raise ValueError(

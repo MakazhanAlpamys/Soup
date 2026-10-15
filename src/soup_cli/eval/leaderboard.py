@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import csv
+import io
 import json
 from dataclasses import dataclass, field
 from typing import Optional
@@ -131,6 +133,13 @@ def compare_runs(
     }
 
 
+def _csv_line(values: list[str]) -> str:
+    output = io.StringIO(newline="")
+    # Legacy csv writers quote CR only when it is in the record terminator.
+    csv.writer(output, lineterminator="\r\n").writerow(values)
+    return output.getvalue()[:-2]
+
+
 def export_leaderboard(
     leaderboard: Leaderboard,
     fmt: str = "json",
@@ -143,12 +152,13 @@ def export_leaderboard(
         all_benchmarks = set()
         for _, scores, _ in sorted_models:
             all_benchmarks.update(scores.keys())
-        benchmarks = sorted(all_benchmarks)
+        # Preserve the existing empty benchmark column for an empty export.
+        benchmarks = sorted(all_benchmarks) or [""]
 
-        lines = ["model," + ",".join(benchmarks) + ",average"]
+        lines = [_csv_line(["model", *benchmarks, "average"])]
         for model, scores, avg in sorted_models:
             vals = [str(scores.get(bench, "")) for bench in benchmarks]
-            lines.append(f"{model},{','.join(vals)},{avg:.4f}")
+            lines.append(_csv_line([model, *vals, f"{avg:.4f}"]))
         return "\n".join(lines)
 
     # Default: JSON

@@ -8,8 +8,8 @@ description. Option help is unaffected, which is why nothing else in the suite n
 No typer release under Soup's ``<0.21`` cap compensates, and click 8.4.2 renders
 correctly, so the fix is a bound on click in ``pyproject.toml``. It is declared
 explicitly because Soup imports click directly (``commands/autopilot.py``,
-``utils/argv_redaction.py``, ``utils/exit_codes.py``) and typer pulls it in only
-transitively.
+``commands/push.py``, ``commands/ship.py``, ``utils/exit_codes.py``) and typer pulls
+it in only transitively.
 
 Two tests, because they fail for different reasons: the rendering test fails on any
 environment that resolved click 8.5 (whatever the cause), and the declaration test

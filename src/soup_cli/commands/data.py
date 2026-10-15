@@ -111,6 +111,11 @@ def validate(
 
     load_issues: list[str] = []
     data = load_raw_data(file_path, issues=load_issues)
+    # #1887: every row the loader skipped (not an object, or not JSON) is an
+    # invalid row for the N/M line, for --min-valid-fraction and for the exit
+    # code. The statistics below still describe the retained objects.
+    skipped = len(load_issues)
+    none_remain = f"no object rows remain: {skipped} row(s) skipped (listed above)"
 
     # Auto-detect format if not specified
     if fmt == "auto":
@@ -120,10 +125,16 @@ def validate(
             fmt = detect_format(data)
             console.print(f"[dim]Auto-detected format: {for_terminal(fmt)}[/]")
         except ValueError as exc:
-            console.print(f"[red]{for_terminal(str(exc))}[/]")
+            message = str(exc)
+            if not data and skipped:
+                message = f"{none_remain}; cannot detect a format. Pass --format to validate."
+            console.print(f"[red]{for_terminal(message)}[/]")
             raise typer.Exit(EXIT_USAGE_ERROR)
 
     result = validate_and_stats(data, expected_format=fmt)
+    if not data and skipped:
+        result["issues"] = [none_remain if i == "Dataset is empty" else i
+                            for i in result["issues"]]
     load_issue_samples = load_issues[:_MAX_REASON_SAMPLES]
     if len(load_issues) > _MAX_REASON_SAMPLES:
         load_issue_samples.append(f"... and {len(load_issues) - _MAX_REASON_SAMPLES} more")
@@ -137,7 +148,7 @@ def validate(
         console.print("[bold green]Dataset is valid![/]")
 
     valid = result["valid_rows"]
-    total = result["total"]
+    total = result["total"] + skipped
     console.print(f"\n[green]{valid}/{total} rows valid for {for_terminal(fmt)} format[/]")
 
     if total > 0 and valid == 0:

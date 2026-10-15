@@ -522,7 +522,7 @@ def _run_judge_task(
             })
 
     if not items:
-        return 0.0
+        raise ValueError(f"No judge prompts found in {task.prompts} for task '{task.name}'")
 
     results = evaluator.evaluate_batch(items)
     # Normalise to [0, 1] using the judge's ACTUAL rubric scale (DEFAULT_RUBRIC
