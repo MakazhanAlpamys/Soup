@@ -73,8 +73,8 @@ Median 3.387 %, 95 % bootstrap [2.389, 6.936]. **Verdict: CONFIRMED.**
 | SM clock during run | 2542-2572 MHz | 2520-2542 MHz |
 | GPU temperature (max) | 80-81 C | 80-81 C |
 
-The VRAM cost of the cache is +0.446 GB allocated, which matches the 436,207,616 bytes
-the cache holds.
+The VRAM cost of the cache is +0.446 GB allocated (1.772 - 1.326), within about 10 MB of
+the 436,207,616 bytes (0.436 GB) the cache holds.
 
 ## 4. Experiment 2 - train-threads 1 on top of the cache
 
@@ -89,34 +89,41 @@ A = `--nf4-scale-cache`, B = `--nf4-scale-cache --train-threads 1`.
 | 4 | AB | 37.394 | 38.959 | -4.185 % |
 
 Median -0.555 %, 95 % bootstrap [-4.185, -0.022]. **Verdict: NO GAIN** (upper bound < 0).
-Peak VRAM, cache bytes, GPU utilisation (99 %) and temperature (81-82 C) are the same as
-experiment 1's cache arm. Limiting torch to one CPU thread during training does not help,
-so that idea is dropped.
+Peak VRAM, cache bytes and GPU utilisation (99 %) are the same as experiment 1's cache
+arm; the maximum GPU temperature (81-82 C) is 1 C higher than in experiment 1's cache arm
+(80-81 C). Limiting torch to one CPU thread during training does not help, so that idea
+is dropped.
 
 ## 5. Commands
 
 ```
 python benchmarks/harness/stream_ab_pairs.py --tree <worktree at 701f8b848> \
     --weights <hf cache>/models--unsloth--mistral-7b-instruct-v0.3/snapshots/60b99dcbc7f853b7cd18472a607e8d045b96f03e \
-    --shards <nf4 shard dir> --out <dir> --label scale-cache --prime
+    --shards <nf4 shard dir> --out <dir> --label scale-cache \
+    --b-args "--nf4-scale-cache" --prime
 python benchmarks/harness/stream_ab_pairs.py <same paths> --out <dir> --pairs 5 \
     --label scale-cache --b-args "--nf4-scale-cache"
+python benchmarks/harness/stream_ab_pairs.py <same paths> --out <dir> --label train-threads \
+    --a-args "--nf4-scale-cache" --b-args "--nf4-scale-cache --train-threads 1" --prime
 python benchmarks/harness/stream_ab_pairs.py <same paths> --out <dir> --pairs 5 \
     --label train-threads --a-args "--nf4-scale-cache" \
     --b-args "--nf4-scale-cache --train-threads 1"
 ```
 
-Both runs use the driver's default common arguments `--warmup 10 --steps 50 --no-ceiling`.
+The priming run writes `RULE.md` (with the arm arguments) before the first arm starts, so
+its arguments are the ones recorded in each `RULE.md`. Both runs use the driver's default
+common arguments `--warmup 10 --steps 50 --no-ceiling`.
 `python benchmarks/harness/stream_ab_pairs.py report <dir>` recomputes `summary.json`
 from the per-arm JSON files.
 
 ## 6. Caveats
 
 - **Exactness is not shown here.** The losses differ from run to run, also between
-  repeats of the same arm (for example first-step loss 9.7298-9.7481, last-step loss
-  0.1261-0.1359 across experiment 1), because this harness runs with the default
-  non-deterministic attention backward. Bit-identical results of the cache rest on the
-  CPU and CUDA tests in PR #1892, not on this record.
+  repeats of the same arm (for example first-step loss 9.7298-9.7483, last-step loss
+  0.1261-0.1359 across the ten counted arms of experiment 1; the minimum and maximum of
+  `loss_first` and `loss_last` in its `p<k>-A/B.json` files), because this harness runs
+  with the default non-deterministic attention backward. Bit-identical results of the
+  cache rest on the CPU and CUDA tests in PR #1892, not on this record.
 - **One laptop, one model, one shape.** A single RTX 5070 Laptop on AC, one 7B NF4
   model, batch 1 x 512. Other cards, models and sequence lengths are not measured.
 - **Two failed starts preceded the valid run.** Two earlier attempts to start the
