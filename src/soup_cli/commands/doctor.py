@@ -372,6 +372,7 @@ def _check_config_support(config_path: str) -> None:
         DEFAULT_BACKEND,
         DEFAULT_MODALITY,
         check_config,
+        is_reviewed,
         unsupported_for,
     )
 
@@ -406,9 +407,17 @@ def _check_config_support(config_path: str) -> None:
         f"\n[bold]Config check[/] - task=[bold]{cfg.task}[/] "
         f"backend=[bold]{backend}[/]{modality_str}"
     )
+    modality_msg = f" modality={modality}" if modality != DEFAULT_MODALITY else ""
+    if not is_reviewed(cfg.task, backend, modality):
+        # #1815: no table for this combination is not the same as nothing ignored.
+        console.print(
+            f"  [yellow]task={cfg.task} backend={backend}{modality_msg} has not been "
+            "reviewed for settings it ignores, so this check cannot vouch for this "
+            "config.[/]"
+        )
+        return
     if not gaps:
         known = unsupported_for(cfg.task, backend, modality)
-        modality_msg = f" modality={modality}" if modality != DEFAULT_MODALITY else ""
         console.print(
             f"  [green]None of the {len(known)} setting(s) known to be unread "
             f"on task={cfg.task} backend={backend}{modality_msg} is switched on in this config.[/]"

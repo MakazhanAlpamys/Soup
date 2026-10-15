@@ -19,10 +19,13 @@ drift -- every entry must name a real field, and every dotted field name in
 the truth; it can only stop it rotting, which is the failure that produced #749.
 
 Scope today: ``task=sft`` on ``backend=mlx`` and on ``backend=unsloth`` (#1124;
-both apply to every modality), plus multimodal vision and audio on
-``backend=transformers`` (#1156). Other combinations report nothing rather
-than guessing, which is the honest default for a table that has not been
-reviewed for them.
+both apply to every modality), plus text, vision and audio on
+``backend=transformers`` (#1156, #1815). A combination with no key has not been
+reviewed: it reports no gap rather than guessing, and :func:`is_reviewed` says
+so, so ``soup doctor --config`` states that it has not been reviewed instead of
+an all-clear. ``tests/test_issue1815_*`` computes the combinations the shipped
+recipes use and lists the ones still waiting for a review; that list only
+shrinks, one task family per pull request.
 """
 
 from __future__ import annotations
@@ -219,10 +222,51 @@ _TRANSFORMERS_AUDIO_SFT: tuple[SupportEntry, ...] = (
 _UNSLOTH_SFT: tuple[SupportEntry, ...] = ()
 
 
+def _other_task_knob(field_name: str, trainer: str, task: str) -> SupportEntry:
+    """A knob another task's trainer reads, accepted on ``task: sft`` and never read."""
+    return SupportEntry(
+        field_name,
+        IGNORED,
+        f"read only by {trainer} (task: {task}); SFT never reads it",
+        issue=1815,
+        trainer_reads=False,
+    )
+
+
+# #1815 review of sft/transformers/text: SFTTrainerWrapper._setup_transformers, the
+# declared helper modules, data/, commands/train.py, monitoring/callback.py and every
+# soup_cli module sft.py imports directly. Of the declared training/data fields that
+# load on `task: sft`, these thirteen are read by no module on that path: each is
+# another task's trainer knob. The other fields no module on the path reads are read
+# by nothing anywhere (staged / KNOWN_UNCONSUMED, #748 and #808's territory), so they
+# have no row here.
+_TRANSFORMERS_TEXT_SFT: tuple[SupportEntry, ...] = (
+    _other_task_knob("training.kto_beta", "trainer/kto.py", "kto"),
+    _other_task_knob("training.orpo_beta", "trainer/orpo.py", "orpo"),
+    _other_task_knob("training.simpo_gamma", "trainer/simpo.py", "simpo"),
+    _other_task_knob("training.cpo_alpha", "trainer/simpo.py", "simpo"),
+    _other_task_knob("training.ipo_tau", "trainer/ipo.py", "ipo"),
+    _other_task_knob("training.bco_beta", "trainer/bco.py", "bco"),
+    _other_task_knob("training.num_generations", "trainer/grpo.py", "grpo"),
+    _other_task_knob("training.ppo_epochs", "trainer/ppo.py", "ppo"),
+    _other_task_knob("training.ppo_clip_ratio", "trainer/ppo.py", "ppo"),
+    _other_task_knob("training.ppo_kl_penalty", "trainer/ppo.py", "ppo"),
+    _other_task_knob("training.embedding_margin", "trainer/embedding.py", "embedding"),
+    _other_task_knob("training.embedding_pooling", "trainer/embedding.py", "embedding"),
+    _other_task_knob("training.embedding_temperature", "trainer/embedding.py", "embedding"),
+)
+
+
 #: ``(task, backend, modality)`` -> the settings that combination does not honour.
+#:
+#: A key is a reviewed combination: an empty tuple means "reviewed, nothing
+#: ignored", and an absent key means "not reviewed" (#1815), which
+#: :func:`is_reviewed` reports so ``soup doctor --config`` does not print an
+#: all-clear for a combination nobody has looked at.
 REGISTRY: dict[tuple[str, str, str], tuple[SupportEntry, ...]] = {
     ("sft", "mlx", "text"): _MLX_SFT,
     ("sft", "unsloth", "text"): _UNSLOTH_SFT,
+    ("sft", "transformers", "text"): _TRANSFORMERS_TEXT_SFT,
     ("sft", "transformers", "vision"): _TRANSFORMERS_VISION_SFT,
     ("sft", "transformers", "audio"): _TRANSFORMERS_AUDIO_SFT,
 }
@@ -255,22 +299,38 @@ TRAINER_MODULES: dict[tuple[str, str, str], tuple[str, ...]] = {
     # here because listing sft.py would cause the drift guard to inspect transformers-only
     # precision reads; an AST test in test_issue1124 guards _setup_unsloth instead.
     ("sft", "unsloth", "text"): ("soup_cli/utils/unsloth.py",),
+    ("sft", "transformers", "text"): _TRANSFORMERS_SFT_MODULES,
     ("sft", "transformers", "vision"): _TRANSFORMERS_SFT_MODULES,
     ("sft", "transformers", "audio"): _TRANSFORMERS_SFT_MODULES,
 }
+
+
+def _registry_key(task: str, backend: str, modality: str) -> tuple[str, str, str] | None:
+    """The REGISTRY key that covers this combination, or None when it is not reviewed."""
+    if (task, backend, modality) in REGISTRY:
+        return (task, backend, modality)
+    # MLX and Unsloth have no modality-specific trainers; their SFT gaps
+    # apply to any modality setting.
+    if backend in ("mlx", "unsloth") and (task, backend, DEFAULT_MODALITY) in REGISTRY:
+        return (task, backend, DEFAULT_MODALITY)
+    return None
+
+
+def is_reviewed(task: str, backend: str, modality: str = DEFAULT_MODALITY) -> bool:
+    """Whether this combination's table was reviewed (#1815).
+
+    ``unsupported_for`` returns ``()`` both for a reviewed combination that
+    ignores nothing and for one nobody reviewed; this tells them apart.
+    """
+    return _registry_key(task, backend, modality) is not None
 
 
 def unsupported_for(
     task: str, backend: str, modality: str = DEFAULT_MODALITY
 ) -> tuple[SupportEntry, ...]:
     """Every declared gap for a task/backend/modality combination, or ``()`` if unreviewed."""
-    if (task, backend, modality) in REGISTRY:
-        return REGISTRY[(task, backend, modality)]
-    # MLX and Unsloth have no modality-specific trainers; their SFT gaps
-    # apply to any modality setting.
-    if backend in ("mlx", "unsloth"):
-        return REGISTRY.get((task, backend, DEFAULT_MODALITY), ())
-    return ()
+    key = _registry_key(task, backend, modality)
+    return REGISTRY[key] if key is not None else ()
 
 
 def check_config(cfg: "SoupConfig") -> list[SupportEntry]:
