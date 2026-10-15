@@ -33,7 +33,7 @@ import os
 import subprocess
 import sys
 import threading
-import time
+import types
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
@@ -323,13 +323,23 @@ class TestErrors:
 # ============================================================
 
 
-#: How long the loopback server stalls on ``/slow``. The timeout test proves the client gave
-#: up well before this; the handler thread is a daemon, so the stall never delays teardown.
-_SLOW_ROUTE_SECONDS = 6.0
+#: The most the loopback server holds ``/slow`` for. The fixture releases it at teardown, so
+#: in a passing run it never answers at all; this ceiling only bounds a run where the client
+#: ignores its timeout (that run then fails in about this long, not by hanging).
+_SLOW_ROUTE_CEILING_SECONDS = 10.0
 
 
 @pytest.fixture
-def loopback(monkeypatch):
+def slow_route():
+    """The two events of the loopback ``/slow`` route.
+
+    ``release`` lets the route answer; ``answered`` is set the moment it does, before it writes.
+    """
+    return types.SimpleNamespace(release=threading.Event(), answered=threading.Event())
+
+
+@pytest.fixture
+def loopback(monkeypatch, slow_route):
     for scheme in ("HTTP", "HTTPS", "ALL"):
         for name in (f"{scheme}_PROXY", f"{scheme.lower()}_proxy"):
             monkeypatch.delenv(name, raising=False)
@@ -356,13 +366,16 @@ def loopback(monkeypatch):
                 elif route == "/limited":
                     self._send(429, b'{"message":"slow down"}', [("Retry-After", "7")])
                 elif route == "/slow":
-                    time.sleep(_SLOW_ROUTE_SECONDS)
+                    slow_route.release.wait(_SLOW_ROUTE_CEILING_SECONDS)
+                    slow_route.answered.set()
                     self._send(200, b'{"data": [], "meta": {}}')
                 elif route == "/big":
                     self._send(200, b"x" * 4096)
                 else:
                     self._send(200, b'{"data": [], "meta": {}}')
-            except (BrokenPipeError, ConnectionResetError):
+            except ConnectionError:
+                # BrokenPipeError, ConnectionResetError, and ConnectionAbortedError (Windows,
+                # WinError 10053): the client has gone, which is what a stalled route ends in.
                 pass
 
     server = LoopbackHTTPServer(("127.0.0.1", 0), Handler)
@@ -372,6 +385,7 @@ def loopback(monkeypatch):
     try:
         yield f"http://127.0.0.1:{server.server_address[1]}", hits
     finally:
+        slow_route.release.set()
         server.shutdown()
         server.server_close()
 
@@ -423,21 +437,22 @@ class TestUrllibTransport:
 
         assert (response.status, response.body) == (429, b"")
 
-    def test_times_out(self, loopback):
+    def test_times_out(self, loopback, slow_route):
         from soup_cli.utils.ingest_pull import PullError, _urllib_transport
 
         base, _ = loopback
-        started = time.monotonic()
 
+        # ``/slow`` does not answer until the fixture releases it at teardown (or after
+        # _SLOW_ROUTE_CEILING_SECONDS). No clock is read here: the order of two events says
+        # whether the client's own 0.3 s timeout fired.
         with pytest.raises(PullError) as info:
             _urllib_transport(f"{base}/slow", _creds(), 0.3)
 
-        # The error must come from the client's 0.3 s timeout, not from the server finally
-        # answering: the server stalls for _SLOW_ROUTE_SECONDS, so anything well under that
-        # proves it. The 2 s margin is for a loaded Windows runner (1.7 s was measured against
-        # the former 1.4 s bound on 2026-10-14), not for the code under test.
-        assert time.monotonic() - started < _SLOW_ROUTE_SECONDS - 2.0
         assert "timed out" in str(info.value).lower()
+        # A client with no socket timeout still ends in this PullError, only later: it waits
+        # for the answer and then trips the wall-clock deadline in _read_capped, with the same
+        # "timed out" text. The route having answered first is what tells the two apart.
+        assert not slow_route.answered.is_set(), "the client gave up only after the server answered"
 
     def test_a_refused_connection_is_a_pull_error(self):
         from soup_cli.utils.ingest_pull import PullError, _urllib_transport
