@@ -131,12 +131,12 @@ jobs:
   #
   # So `plan` picks one of four matrices, and every job except `lint` follows it:
   #
-  #   push to release/**               RELEASE: all nine test cells + the five gated jobs
+  #   push to release/**               RELEASE: all nine test cells + the six gated jobs
   #   nightly run on main, a manual    FULL: seven test cells (no Windows or macOS
-  #     dispatch                         on 3.11) + the five gated jobs
+  #     dispatch                         on 3.11) + the six gated jobs
   #   pull request labelled ci:full    APPROVAL: the four required test cells (ubuntu
   #                                      on 3.10 and 3.12, Windows and macOS on
-  #                                      3.12) + the five gated jobs
+  #                                      3.12) + the six gated jobs
   #   push to main, any other pull     QUICK: lint + test (ubuntu-latest, 3.12)
   #     request run
   #   draft pull request               nothing: no job starts
@@ -530,9 +530,9 @@ jobs:
   # trl 0.29 / PEFT 0.20 support stack and Plotext 6.0.0 so pip cannot silently
   # upgrade the cell, then assert every pinned compatibility boundary.
   # #1802: the same file pins Typer and Click to the floors pyproject.toml declares,
-  # and the last step starts the CLI on them. It is the one cell that does: every
-  # other cell resolves the newest Typer, which is how a floor no command could run
-  # on stayed declared. The job keeps its name; branch protection requires it.
+  # and the last step starts the CLI on them, alongside the core-only cell above.
+  # The ordinary test matrix resolves the newest Typer, which is how a floor no
+  # command could run on stayed declared. Keep the name; branch protection requires it.
   transformers-floor:
     needs: plan
     if: needs.plan.outputs.full == 'true'
