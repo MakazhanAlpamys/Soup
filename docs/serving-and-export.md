@@ -89,6 +89,15 @@ cloning; use `--llama-cpp` to supply your own checkout. Both new flags apply onl
 
 ### Building llama.cpp (required for quantized GGUF)
 
+When a model declares `mtp_num_hidden_layers` but its saved safetensors headers
+contain no `mtp.*` or `model.mtp.*` tensors, Soup passes `--no-mtp` to conversion
+(including the f16 intermediate for quantized exports). It reads headers only,
+including indexed shards, and leaves the model/config unchanged. Actual MTP tensors
+are preserved. Malformed or missing checkpoint metadata is refused rather than
+treated as absent weights. The selected converter must advertise `--no-mtp` in a
+successful `--help` probe; otherwise choose a compatible checkout with
+`--llama-cpp`. The default `b5270` pin does not support this flag.
+
 Soup auto-clones llama.cpp (pinned tag `b5270`) to `~/.soup/llama.cpp` on first use,
 but it does **not** build it. The conversion step (`f16` / `f32`) works from the
 Python script alone; every *quantized* type additionally needs the `llama-quantize`

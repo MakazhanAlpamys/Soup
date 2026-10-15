@@ -420,6 +420,17 @@ def export(
             )
             raise typer.Exit(1)
 
+        from soup_cli.utils.gguf_mtp import needs_no_mtp
+
+        try:
+            if needs_no_mtp(model_path, convert_script):
+                tool_options["no_mtp"] = True
+        except ValueError as exc:
+            from soup_cli.utils.terminal import for_terminal
+
+            console.print(f"[red]{for_terminal(str(exc))}[/]")
+            raise typer.Exit(1) from exc
+
         if quant in ("f16", "f32"):
             # Direct conversion without quantization
             outtype = "f16" if quant == "f16" else "f32"
@@ -725,6 +736,7 @@ def _run_export_tool(cmd: list[str], label: str, *, verbose: bool) -> None:
 
 def _run_convert(
     script: Path, model_dir: Path, output_path: Path, outtype: str, *, verbose: bool = False,
+    no_mtp: bool = False,
 ) -> None:
     """Run llama.cpp convert_hf_to_gguf.py script."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -735,6 +747,8 @@ def _run_convert(
         "--outfile", str(output_path),
         "--outtype", outtype,
     ]
+    if no_mtp:
+        cmd.append("--no-mtp")
     _run_export_tool(cmd, "Conversion", verbose=verbose)
 
 
