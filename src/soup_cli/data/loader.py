@@ -138,7 +138,7 @@ def _load_jsonl(
 def _load_json(
     path: Path, *, issues: list[str] | None = None, skip_non_object: bool = True,
 ) -> list[dict]:
-    with open(path, encoding="utf-8") as f:
+    with open(path, encoding="utf-8-sig") as f:
         raw = json.load(f)
     if isinstance(raw, list):
         if not skip_non_object:
@@ -159,7 +159,7 @@ def _load_json(
 def _load_csv(path: Path) -> list[dict]:
     import csv
 
-    with open(path, encoding="utf-8") as f:
+    with open(path, encoding="utf-8-sig") as f:
         reader = csv.DictReader(f)
         return list(reader)
 
@@ -200,7 +200,7 @@ def _load_txt(path: Path) -> list[dict]:
             f"[yellow]Warning: large text file ({file_size / 1024 / 1024:.0f} MB). "
             f"Consider splitting into smaller files or using JSONL format.[/]"
         )
-    with open(path, encoding="utf-8") as f:
+    with open(path, encoding="utf-8-sig") as f:
         content = f.read()
 
     # Split by double newline (paragraph/document separator) or treat each line as a doc
