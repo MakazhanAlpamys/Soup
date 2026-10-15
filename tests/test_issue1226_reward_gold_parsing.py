@@ -900,11 +900,16 @@ class TestControlUnchanged:
 _SCALE = 8
 
 
-def _parse(text: str) -> float:
+def _parse_once(text: str) -> float:
     start = time.perf_counter()
     accuracy_reward(_msg(text), answer=["42"])
     math_verify_reward(_msg(text), answer=["42"])
     return time.perf_counter() - start
+
+
+def _parse(text: str) -> float:
+    """Median of three timings: one GC pause or scheduler hiccup cannot decide the test."""
+    return sorted(_parse_once(text) for _ in range(3))[1]
 
 
 #: Each case builds its adversarial text for a size ``n`` (the former fixed strings at the
@@ -921,7 +926,7 @@ _ADVERSARIAL_SHAPES = [
     (50_000, lambda n: "**answer" * n),
     (200_000, lambda n: "The answer is " + "(" * n),
     (20_000, lambda n: "#### Final Answer\n" * n),
-    (20_000, lambda n: "The answer is 42," + " " * n + "x"),  # test_issue1226_clause_scanner_*
+    (200_000, lambda n: "The answer is 42," + " " * n + "x"),  # test_issue1226_clause_scanner_*
 ]
 
 
@@ -939,10 +944,11 @@ class TestAdversarialInputsStayLinear:
         A fixed bound (formerly 2 s) flaked on loaded CI runners (2.05 s on 2026-10-15,
         PR #1898's ci:full) while a quadratic regression takes minutes. The full input is
         timed against an input _SCALE times smaller: a linear parser lands near _SCALE x,
-        a quadratic one near _SCALE**2 x. The bound sits at 4 x _SCALE, with a 1 s floor so
-        that timer noise on a tiny reference cannot fail it either way.
+        a quadratic one near _SCALE**2 x. The bound sits at 4 x _SCALE, plus 2 ms for the
+        timer's own resolution on a sub-millisecond reference; both sides are medians of
+        three, so no floor hides a quadratic parser on the smaller shapes.
         """
         reference = _parse(shape(size // _SCALE))
         full = _parse(shape(size))
-        bound = max(1.0, 4 * _SCALE * reference)
+        bound = 4 * _SCALE * reference + 0.002
         assert full < bound, (full, reference, bound)
