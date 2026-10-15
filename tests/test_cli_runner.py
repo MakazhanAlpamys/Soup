@@ -11,13 +11,17 @@ from typer.testing import CliRunner as TyperCliRunner
 from soup_cli import __version__
 from soup_cli.cli import app
 from tests.cli_runner import CliRunner
+from tests.conftest import strip_ansi
 
 
-def test_invoke_is_the_installed_typer_implementation() -> None:
+@pytest.mark.parametrize("force_color", [False, True])
+def test_invoke_is_the_installed_typer_implementation(force_color: bool) -> None:
     assert CliRunner.invoke is TyperCliRunner.invoke
-    result = CliRunner().invoke(app, ["version"])
+    result = CliRunner().invoke(
+        app, ["version"], color=force_color, env={"FORCE_COLOR": "1" if force_color else "0"},
+    )
     assert result.exit_code == 0, (result.output, result.exception)
-    assert __version__ in result.output
+    assert __version__ in strip_ansi(result.output)
 
 
 @pytest.mark.parametrize("preserve", [False, True])
