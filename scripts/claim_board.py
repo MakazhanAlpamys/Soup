@@ -32,9 +32,7 @@ GUIDE_URL = f"https://github.com/{REPO}/blob/main/CONTRIBUTING.md#how-work-is-qu
 TITLE_WIDTH = 60
 GENERATED_PREFIX = "Generated: "
 
-_CONFIRM_RE = re.compile(
-    r"^\s*confirmed\b|\b(?:is|are) yours\b", re.IGNORECASE | re.MULTILINE
-)
+_CONFIRM_RE = re.compile(r"^\s*confirmed\b|\b(?:is|are) yours\b", re.IGNORECASE | re.MULTILINE)
 _TAKE_RE = re.compile(
     r"\b(?:i'd like to take|i would like to take|i'll take|i will take|take this"
     r"|claim this|i claim)\b",
@@ -140,7 +138,9 @@ def classify(
         kind, state = "blocked", f"blocked: {block}"
     elif claimed and login:
         kind = "claimed"
-        state = f"claimed by @{login} since {since}" + ("" if confirmed else " (unconfirmed)")
+        # The login sits in a code span: the board names the claimant without a mention, so
+        # a daily rewrite of the issue never notifies anyone.
+        state = f"claimed by `@{login}` since {since}" + ("" if confirmed else " (unconfirmed)")
     elif claimed:
         kind, state = "claimed", "claimed (see thread)"
     else:
@@ -269,8 +269,7 @@ def main(argv: list[str] | None = None) -> int:
     mode.add_argument(
         "--check",
         metavar="PATH",
-        help="write nothing; exit 1 when this file differs from the live board "
-        "(time line ignored)",
+        help="write nothing; exit 1 when this file differs from the live board (time line ignored)",
     )
     args = parser.parse_args(argv)
     now = datetime.now(timezone.utc)

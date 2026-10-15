@@ -44,7 +44,7 @@ def test_claimed_confirmed_with_pr_and_quiet_days():
     ]
     prs = [pull(90, "bob", "Fixes #7"), pull(91, "alice", "Refs #7")]
     row = board.classify(issue(7, ("claimed",)), comments, prs, NOW)
-    assert row["state"] == "claimed by @alice since 2026-10-01"
+    assert row["state"] == "claimed by `@alice` since 2026-10-01"
     assert row["pr"] == 91
     assert row["quiet"] == 10
 
@@ -52,7 +52,18 @@ def test_claimed_confirmed_with_pr_and_quiet_days():
 def test_claimed_unconfirmed_is_labelled():
     comments = [comment("carol", "Can I claim this?", "2026-10-10T00:00:00Z")]
     row = board.classify(issue(8, ("claimed",)), comments, [], NOW)
-    assert row["state"] == "claimed by @carol since 2026-10-10 (unconfirmed)"
+    assert row["state"] == "claimed by `@carol` since 2026-10-10 (unconfirmed)"
+
+
+def test_the_rendered_board_mentions_nobody():
+    # The board is an issue body rewritten every day: a bare @login would notify the claimant.
+    comments = [
+        comment("alice", "I'd like to take this", "2026-10-01T10:00:00Z"),
+        comment("MakazhanAlpamys", "Confirmed, it is yours", "2026-10-02T10:00:00Z"),
+    ]
+    page = board.render([board.classify(issue(7, ("claimed",)), comments, [], NOW)], NOW)
+    assert "`@alice`" in page
+    assert "@" not in re.sub(r"`[^`]*`", "", page)
 
 
 def test_claimed_label_without_nameable_claimant():
