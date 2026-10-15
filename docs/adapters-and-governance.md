@@ -272,6 +272,9 @@ soup registry push --run-id run_202611_abc123 --name llama31-chat --tag v1
 # Also record the training data file's SHA-256 as data_hash
 soup registry push --run-id run_202611_abc123 --name llama31-chat --tag v1 --data data/train.jsonl
 
+# Safe to retry: the same key and the same registration return the existing entry
+soup registry push --run-id run_202611_abc123 --name llama31-chat --tag v1 --idempotency-key job-42
+
 # List entries (filter by name, tag, base model, task)
 soup registry list
 soup registry list --name llama31-chat --tag prod
@@ -293,6 +296,8 @@ soup registry delete llama31-chat-v1 --yes
 ```
 
 **Training data:** `push --data <file>` stores the file's SHA-256 as the entry's `data_hash`, shown by `soup registry show`. It records the file registered as the training input, not proof of what the run trained on. The file must be under the current directory; without `--data` the entry has no `data_hash`.
+
+**Retries:** `push --idempotency-key <key>` (or `RegistryStore.push(idempotency_key=...)`) makes a registration safe to repeat after a crash or a timeout. A later push with the same key writes nothing and returns the existing entry, provided it repeats that entry's name, base model, task, run, config and data hash and its tag is one of the entry's tags; anything else under the same key is refused with an error naming the entry. Notes are not compared. Two writers pushing the same key at once end up with one entry. A key is 1 to 128 characters from letters, digits, `.`, `_`, `:` and `-`; pushes without one behave as before. `RegistryStore.get_by_idempotency_key(key)` finds the entry. Deleting the entry frees its key.
 
 **Lineage DAG** — every entry can point to a parent (its ancestor run). Walk the DAG for any name with:
 
