@@ -20,7 +20,7 @@ DUPLICATES = ["shared", "Task", "éval"]
 DISTINCT = [("first", "second"), ("shared", "Shared"), ("shared", " shared")]
 
 
-def _suite(tmp_path: Path, names: tuple[str, str]) -> Path:
+def _suite(tmp_path: Path, names: tuple[str, ...]) -> Path:
     tasks = []
     for index, name in enumerate(names):
         path = tmp_path / f"tasks{index}.jsonl"
@@ -62,6 +62,25 @@ def test_direct_run_refuses_constructed_duplicates(
     with pytest.raises(ValueError) as caught:
         gate.run_gate(suite, generate_fn=lambda prompt: calls.append(prompt) or "gold")
     assert str(caught.value) == _error(name)
+    assert calls == []
+
+
+@pytest.mark.parametrize("names", [("shared", "other", "shared"), ("a", "b", "c", "a")])
+@pytest.mark.parametrize("entrypoint", ["load_suite", "run_gate"])
+def test_non_adjacent_duplicate_names(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    names: tuple[str, ...], entrypoint: str,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    path = _suite(tmp_path, names)
+    calls: list[str] = []
+    with pytest.raises(ValueError) as caught:
+        if entrypoint == "load_suite":
+            gate.load_suite(str(path))
+        else:
+            suite = gate.EvalSuite.model_validate(yaml.safe_load(path.read_text(encoding="utf-8")))
+            gate.run_gate(suite, generate_fn=lambda prompt: calls.append(prompt) or "gold")
+    assert str(caught.value) == _error(names[0])
     assert calls == []
 
 
