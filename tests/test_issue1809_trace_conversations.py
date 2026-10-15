@@ -138,6 +138,59 @@ def test_langchain_bare_list_input_preserves_context_through_last_user() -> None
     assert trace.output == "A2"
 
 
+@pytest.mark.parametrize("envelope", [False, True])
+@pytest.mark.parametrize("multi_turn", [False, True])
+def test_langchain_type_keyed_messages_follow_conversation_rule(envelope, multi_turn) -> None:
+    expected = _messages() if multi_turn else _messages()[:2]
+    types = {"system": "system", "user": "human", "assistant": "ai"}
+    messages = [{"type": types[turn["role"]], "content": turn["content"]} for turn in expected]
+    messages.append({"type": "ai", "content": "Trailing answer"})
+    inputs = {"messages": messages} if envelope else messages
+    traces = list(parse_langchain([{"inputs": inputs, "outputs": {"output": "Answer"}}]))
+    assert len(traces) == 1
+    assert traces[0].output == "Answer"
+    if multi_turn:
+        assert json.loads(traces[0].prompt) == expected
+    else:
+        assert traces[0].prompt == "Q1"
+    assert _coerce_str(inputs) == traces[0].prompt
+
+
+def test_type_keyed_output_messages_select_last_assistant() -> None:
+    messages = [{"type": "ai", "content": "Earlier answer"},
+                {"type": "ai", "content": "Final answer"},
+                {"type": "human", "content": "Trailing user"}]
+    assert _coerce_str(messages, prompt=False) == "Final answer"
+
+
+def test_explicit_role_takes_precedence_over_langchain_type() -> None:
+    messages = [{"role": "user", "type": "ai", "content": "Question"}]
+    assert _coerce_str(messages) == "Question"
+
+
+@pytest.mark.parametrize("invalid_type", [None, [], {}])
+def test_invalid_message_type_is_ignored(invalid_type) -> None:
+    messages = [{"type": invalid_type, "content": "Ignored"},
+                {"role": "user", "content": "Question"}]
+    assert _coerce_str(messages) == "Question"
+
+
+@pytest.mark.parametrize("invalid_role", [None, [], {}])
+def test_invalid_role_message_does_not_become_a_content_part(invalid_role) -> None:
+    assert _coerce_str([{"role": invalid_role, "text": "Not message content"}]) == ""
+
+
+@pytest.mark.parametrize("parser", [parse_openai, parse_langchain])
+@pytest.mark.parametrize("role", ["system", "user", "assistant"])
+@pytest.mark.parametrize("blank", ["", " \t\n "])
+def test_blank_context_turn_is_omitted_from_multi_turn_json(parser, role, blank) -> None:
+    messages = _messages()
+    messages.insert(2, {"role": role, "content": blank})
+    event = (_event(messages) if parser is parse_openai else
+             {"inputs": {"messages": messages}, "outputs": {"output": "A2"}})
+    assert json.loads(next(parser([event])).prompt) == _messages()
+
+
 @pytest.mark.parametrize("output_key", ["output", "response"])
 def test_langchain_output_keys_flatten_content_parts(output_key: str) -> None:
     parts = [{"type": "text", "text": "First line"},
