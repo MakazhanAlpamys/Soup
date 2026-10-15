@@ -156,6 +156,14 @@ def _pair_vocab_sizes_or_fail(
             _vocab_size_of(target, target_trc),
             _vocab_size_of(draft_id, draft_trc),
         )
+    except ImportError:
+        # \[train] is escaped: Rich would otherwise eat the bracket as a
+        # markup tag and print `pip install "soup-cli"` (issue #1830).
+        console.print(
+            "[red]could not read model config: transformers is not installed.[/]\n"
+            "Install with: [bold]pip install \"soup-cli\\[train]\"[/]"
+        )
+        raise typer.Exit(1)
     except Exception as exc:  # noqa: BLE001 — surface as a friendly CLI error
         _fail(f"could not read model config: {exc}")
 
@@ -616,6 +624,14 @@ def distill(
     try:
         target_vocab = _vocab_size_of(target, target_trc)
         draft_vocab = _vocab_size_of(draft_base, draft_trc)
+    except ImportError:
+        # Same install hint as ``commands/data.py`` (issue #1830); \[train]
+        # is escaped so Rich does not eat the bracket as markup.
+        console.print(
+            "[red]could not read model config: transformers is not installed.[/]\n"
+            "Install with: [bold]pip install \"soup-cli\\[train]\"[/]"
+        )
+        raise typer.Exit(1)
     except Exception as exc:  # noqa: BLE001 — surface as a friendly CLI error
         _fail(f"could not read model config: {exc}")
 
