@@ -182,7 +182,7 @@ def read_lock(path: str) -> SoupLock:
         try:
             data = json.load(fh)
         except (json.JSONDecodeError, UnicodeDecodeError) as exc:
-            raise ValueError(f"lock file {path!r} is not valid JSON: {exc}")
+            raise ValueError(f"lock file {path!r} is not valid JSON: {exc}") from exc
     if not isinstance(data, dict):
         raise ValueError("lock file root must be JSON object")
     # SoupLock __post_init__ does the rest of the validation

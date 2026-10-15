@@ -82,6 +82,28 @@ def test_expect_missing_suite_file_names_the_problem(tmp_path, monkeypatch):
     assert "suite file not found: 'missing.yaml'" in out
 
 
+def test_expect_data_file_is_a_directory_names_the_problem(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "suite.yaml").write_text(
+        "expectations:\n  - name: expect_no_pii\n", encoding="utf-8"
+    )
+    result = runner.invoke(soup_app, ["expect", str(tmp_path), str(tmp_path / "suite.yaml")])
+    assert result.exit_code == 3
+    out = " ".join(strip_ansi(result.output).split())
+    assert "data file not found" in out
+
+
+def test_expect_suite_file_is_a_directory_names_the_problem(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "data.jsonl").write_text(
+        '{"messages": [{"role": "user", "content": "hi"}]}}\n', encoding="utf-8"
+    )
+    result = runner.invoke(soup_app, ["expect", str(tmp_path / "data.jsonl"), str(tmp_path)])
+    assert result.exit_code == 3
+    out = " ".join(strip_ansi(result.output).split())
+    assert "suite file not found" in out
+
+
 # ---------- 2. soup lock check / show: corrupt lock file ----------
 
 
@@ -131,6 +153,44 @@ def test_read_lock_corrupt_raises_value_error(tmp_path, monkeypatch):
         read_lock("soup.lock")
     assert "not valid JSON" in str(excinfo.value)
     assert "soup.lock" in str(excinfo.value)
+    assert isinstance(excinfo.value.__cause__, json.JSONDecodeError)
+
+
+def test_read_lock_non_utf8_raises_value_error(tmp_path, monkeypatch):
+    """A non-UTF-8 lock file hits the UnicodeDecodeError arm, not a raw crash."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "soup.lock").write_bytes(b"\xff\xfe\x00bad")
+    with pytest.raises(ValueError) as excinfo:
+        read_lock("soup.lock")
+    assert "not valid JSON" in str(excinfo.value)
+    assert isinstance(excinfo.value.__cause__, UnicodeDecodeError)
+
+
+def test_lock_show_non_utf8_lock_names_file_and_error(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    lock_file = tmp_path / "soup.lock"
+    lock_file.write_bytes(b"\xff\xfe\x00bad")
+    result = runner.invoke(soup_app, ["lock", "show", str(lock_file)])
+    assert result.exit_code == 3
+    out = " ".join(strip_ansi(result.output).split())
+    assert "soup.lock" in out
+    assert "not valid JSON" in out
+
+
+def test_lock_show_corrupt_lock_error_is_not_line_wrapped(tmp_path, monkeypatch):
+    """A corrupt-lock path longer than the console width stays on one line.
+
+    The ``soft_wrap=True`` on the lock error prints keeps long paths
+    unbroken; without it Rich would wrap them at 80 columns.
+    """
+    monkeypatch.chdir(tmp_path)
+    deep = tmp_path / ("d" * 40) / ("e" * 40)
+    deep.mkdir(parents=True)
+    lock_file = deep / "soup.lock"
+    lock_file.write_text("garbage: [", encoding="utf-8")
+    result = runner.invoke(soup_app, ["lock", "show", str(lock_file)])
+    assert result.exit_code == 3
+    assert str(lock_file) in strip_ansi(result.output)
 
 
 # ---------- 3. expect module docstring ----------
