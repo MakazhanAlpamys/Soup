@@ -34,11 +34,14 @@ class TestIssue1442SpellingsTable:
             "B is the correct answer.",
             "Option **B**",
             "B\nBecause 2 + 2 = 4.",
+            "B\r\nBecause 2 + 2 = 4.",
+            "B - because 2 + 2 = 4.",
             "*B*",
             "__B__",
             "`B`",
             "[B]",
             '"B"',
+            "'B'",
             "**B** (4)",
             "The correct choice is **B**, since 2 + 2 = 4.",
         ],
@@ -67,6 +70,7 @@ class TestIssue1442Controls:
         "completion",
         [
             "A cat is an animal.",  # the article "a" is not option A
+            "the word 'a' is an article",  # lowercase quoted prose is not option A
             "Berlin",
             r"\boxed{4}",  # a boxed VALUE is not an option letter
             "I choose C",  # a real but wrong letter earns no credit
@@ -74,6 +78,9 @@ class TestIssue1442Controls:
     )
     def test_negatives_earn_no_credit(self, completion):
         assert score_answer(completion, "B") is False
+
+    def test_lowercase_wrapped_letter_is_not_an_option(self):
+        assert extract_mcq_letter("the word 'a' is an article") is None
 
 
 class TestIssue1442SuiteLevel:

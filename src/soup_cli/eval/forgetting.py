@@ -43,13 +43,14 @@ _CUE_RE = re.compile(
 )
 # Parenthesised choice marker: "(B)" or "B)".
 _PAREN_RE = re.compile(r"(?<![A-Za-z0-9])\(?([A-Ja-j])\)(?![A-Za-z0-9])")
-# A lone letter wrapped in markdown emphasis, quotes or square brackets:
-# "**B**", "__B__", "*B*", "_B_", "`B`", "\"B\"", "'B'", "[B]". Deliberate
-# markup of a single letter is an explicit commitment like "(B)", so it
-# joins the last-wins tier — position decides against boxed/cue matches
-# the same way. (#1442)
+# A lone uppercase letter wrapped in markdown emphasis, quotes or square
+# brackets: "**B**", "__B__", "*B*", "_B_", "`B`", "\"B\"", "'B'", "[B]".
+# Deliberate markup of a single letter is an explicit commitment like "(B)",
+# so it joins the last-wins tier — position decides against boxed/cue matches
+# the same way. Keeping the letter uppercase leaves prose such as "the word
+# 'a' is an article" untouched. (#1442)
 _WRAPPED_RE = re.compile(
-    r"(?<![A-Za-z0-9])(?:\*{1,2}|_{1,2}|[`\"'\[])\s*([A-Ja-j])\s*"
+    r"(?<![A-Za-z0-9])(?:\*{1,2}|_{1,2}|[`\"'\[])\s*([A-J])\s*"
     r"(?:\*{1,2}|_{1,2}|[`\"'\]])(?![A-Za-z0-9])"
 )
 # Standalone uppercase letter LEADING the output, followed by a line break
@@ -57,7 +58,7 @@ _WRAPPED_RE = re.compile(
 # ("B is the correct answer.", "B\n\nBecause ..."). Restricted to the start
 # so a stray "B is" mid-prose cannot claim the slot, and kept uppercase so
 # the article "a" still cannot. (#1442)
-_LEADING_RE = re.compile(r"^([A-J])(?=\n| is\b| -)")
+_LEADING_RE = re.compile(r"^([A-J])(?=\r?\n| is\b| -)")
 # LaTeX ``\boxed{C}`` — how a reasoning-tuned model states its final answer.
 # Read through ``utils.final_answer``'s shared scan instead of a local regex: the
 # box counts as an OPTION LETTER when the scan's normalised content is a single
