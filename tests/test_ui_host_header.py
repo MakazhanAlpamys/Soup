@@ -54,6 +54,14 @@ class TestLoopbackHostAllowlist:
         for name in (bound_name, "127.0.0.1", "localhost", "[::1]"):
             assert client.get("/api/health", headers={"Host": f"{name}:{PORT}"}).status_code == 200
 
+    @pytest.mark.parametrize("host", ["::1", "0:0:0:0:0:0:0:1"])
+    @pytest.mark.parametrize("port", [80, 8080])
+    def test_ipv6_client_preserves_the_bound_host_and_port(self, host, port):
+        # Use explicit Host headers so TestClient need not parse an IPv6 base URL.
+        client = _client(host=host, port=port)
+        assert client.get("/api/health", headers={"Host": f"[{host}]:{port}"}).status_code == 200
+        assert client.get("/api/health", headers={"Host": f"[{host}]:7860"}).status_code == 403
+
     @pytest.mark.parametrize("value", ["[0:0:0:0:0:0:0:1]:7860", "LOCALHOST:7860"])
     def test_ip_literal_and_hostname_normalization(self, value):
         assert _client().get("/api/health", headers={"Host": value}).status_code == 200
