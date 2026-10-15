@@ -23,9 +23,10 @@ def content_text(value: Any) -> str:
 def conversation_prompt(messages: Any) -> str:
     """Render context through the last user turn, never a trailing response.
 
-    One user message keeps its plain text. With context, use compact JSON of
-    role/content objects, preserving role and message boundaries. System-only
-    requests and last user turns without text are omitted, not relabelled.
+    Without an earlier user or assistant turn, keep the last user's plain text,
+    including system-plus-user requests. Otherwise use compact role/content JSON
+    through that user turn. System-only requests and last user turns without
+    text are omitted, not relabelled.
     """
     if not isinstance(messages, list):
         return ""
@@ -38,9 +39,9 @@ def conversation_prompt(messages: Any) -> str:
                       if turns[idx]["role"] == "user"), None)
     if last_user is None or not turns[last_user]["content"].strip():
         return ""
+    if not any(turn["role"] in ("user", "assistant") for turn in turns[:last_user]):
+        return turns[last_user]["content"]
     context = [turn for turn in turns[:last_user + 1] if turn["content"].strip()]
-    if len(context) == 1:
-        return context[0]["content"]
     return json.dumps(context, ensure_ascii=False, separators=(",", ":"))
 
 

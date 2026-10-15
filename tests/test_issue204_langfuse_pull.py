@@ -991,8 +991,7 @@ class TestRecordedRealResponse:
             {"trace_id": "e83a0c5fd3d47039", "prompt": "Translate 'hello' to Spanish.",
              "output": "hola", "source": "langfuse", "signal": "none", "metadata": model},
             {"trace_id": "8dd24f84d2bf7735",
-             "prompt": '[{"role":"system","content":"You are terse."},'
-                       '{"role":"user","content":"What is the capital of France?"}]',
+             "prompt": "What is the capital of France?",
              "output": "Paris.", "source": "langfuse", "signal": "none", "metadata": model},
         ]
 
@@ -1028,7 +1027,7 @@ class TestRecordedRealResponse:
         }
 
         prompt = next(parse_langfuse([bare])).prompt
-        assert json.loads(prompt) == bare["input"]
+        assert prompt == "What is the capital of France?"
         wrapped = dict(bare, input={"messages": bare["input"]})
         assert next(parse_langfuse([wrapped])).prompt == prompt
 

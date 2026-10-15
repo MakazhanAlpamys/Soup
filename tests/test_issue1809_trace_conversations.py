@@ -66,6 +66,39 @@ def test_context_is_role_preserving_and_stops_at_last_user() -> None:
 
 @pytest.mark.parametrize("parser", [parse_langfuse, parse_langsmith, parse_openai_stored])
 @pytest.mark.parametrize("envelope", [False, True])
+def test_system_plus_one_user_keeps_plain_prompt_across_ingest(parser, envelope) -> None:
+    messages = _messages()[:2] + [{"role": "assistant", "content": "Trailing answer"}]
+    source = {"messages": messages} if envelope else messages
+    event = {"input": source, "inputs": source, "output": "A1",
+             "outputs": {"generations": [[{"text": "A1"}]]}}
+    trace = next(parser([event]))
+    assert trace.prompt == "Q1"
+    assert trace.output == "A1"
+
+
+def test_system_plus_one_user_keeps_plain_prompt_across_trace_sources() -> None:
+    messages = _messages()[:2] + [{"role": "assistant", "content": "Trailing answer"}]
+    traces = [
+        next(parse_openai([_event(messages, output="A1")])),
+        next(parse_langchain([{"inputs": {"messages": messages}, "outputs": {"output": "A1"}}])),
+        next(parse_helicone([{"request": {"body": {"messages": messages}},
+                              "response": {"body": {"choices": [{"message": {
+                                  "content": "A1"}}]}}}])),
+        next(parse_openpipe([{"messages": messages, "response": "A1"}])),
+    ]
+    assert all(trace.prompt == "Q1" and trace.output == "A1" for trace in traces)
+
+
+@pytest.mark.parametrize("role", ["user", "assistant"])
+def test_either_earlier_conversation_role_requires_json(role: str) -> None:
+    messages = [{"role": "system", "content": "Be helpful."},
+                {"role": role, "content": "Earlier turn"},
+                {"role": "user", "content": "Question"}]
+    assert json.loads(next(parse_openai([_event(messages)])).prompt) == messages
+
+
+@pytest.mark.parametrize("parser", [parse_langfuse, parse_langsmith, parse_openai_stored])
+@pytest.mark.parametrize("envelope", [False, True])
 def test_ingest_parsers_share_prompt_rule(parser, envelope) -> None:
     messages = _messages()
     source = {"messages": messages} if envelope else messages
@@ -172,10 +205,14 @@ def test_output_message_lists_select_final_assistant_before_trailing_user() -> N
 
 def test_conversation_json_keeps_non_ascii_text_literal() -> None:
     messages = [{"role": "system", "content": "Қазақша жауап бер."},
+                {"role": "user", "content": "Алдыңғы сұрақ"},
+                {"role": "assistant", "content": "Алдыңғы жауап"},
                 {"role": "user", "content": "Сәлем 👋"}]
     trace = next(parse_openai([_event(messages, output="Жауап")]))
     assert trace.prompt == (
         '[{"role":"system","content":"Қазақша жауап бер."},'
+        '{"role":"user","content":"Алдыңғы сұрақ"},'
+        '{"role":"assistant","content":"Алдыңғы жауап"},'
         '{"role":"user","content":"Сәлем 👋"}]'
     )
     assert trace.output == "Жауап"
