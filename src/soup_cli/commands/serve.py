@@ -528,6 +528,31 @@ def serve(
         )
         raise typer.Exit(2)
 
+    # #1811 — these are consumed only in the transformers branch below: vLLM and
+    # SGLang built their apps with no constraint, parser, trace writer or thumbs
+    # log, and MII returned before the structured-output checks ran. Each changes
+    # what a response contains or records, so refuse rather than warn.
+    if backend != "transformers":
+        transformers_only = [
+            name
+            for name, given in (
+                ("--structured-output", (structured_output or "off").lower() != "off"),
+                ("--json-schema", json_schema is not None),
+                ("--regex-pattern", regex_pattern is not None),
+                ("--reasoning-parser", reasoning_parser is not None),
+                ("--trace-log", trace_log is not None),
+                ("--record-thumbs", record_thumbs is not None),
+            )
+            if given
+        ]
+        if transformers_only:
+            console.print(
+                f"[red]{', '.join(transformers_only)}: not supported with --backend "
+                f"{backend}[/] (applied on --backend transformers only; the {backend} "
+                "server never reads them)."
+            )
+            raise typer.Exit(code=2)
+
     # #333 — --dashboard used to be accepted and then do nothing on backends
     # whose app has no /metrics route. Say so instead of no-opping.
     if dashboard:
