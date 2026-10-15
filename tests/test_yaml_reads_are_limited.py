@@ -496,6 +496,9 @@ def test_reader_refuses_a_document_past_the_limit(tmp_path, reader, limit):
 
 def test_the_fan_out_document_is_only_just_past_the_node_allowance():
     levels = _fan_out_levels_just_over()
+    # The document every reader test is given, not only the level count it is built from. A
+    # string comparison, so it fails before anything parses a document that is too large.
+    assert _alias_fan_out_just_over() == _alias_fan_out(levels)
     with pytest.raises(YamlLimitError, match=r"^doc expands to more than"):
         load_yaml_limited(_alias_fan_out(levels), "doc", max_bytes=10**6)
     load_yaml_limited(_alias_fan_out(levels - 1), "doc", max_bytes=10**6)  # one level less loads
