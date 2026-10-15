@@ -85,8 +85,6 @@ def bench(
     ),
 ) -> None:
     """Run an inference benchmark (speed and memory) on a loaded model."""
-    import torch
-
     from soup_cli.commands.infer import _generate, _load_model, _resolve_model_source
     from soup_cli.utils.gpu import detect_device
 
@@ -131,6 +129,26 @@ def bench(
             "--cuda-graphs requires --backend transformers. Omit --cuda-graphs to bench this "
             "backend"
         )
+
+    if cuda_graphs is True:
+        from soup_cli.commands.infer import _check_cuda_graphs_config, _with_omit_hint
+        from soup_cli.utils.terminal import for_terminal
+
+        try:
+            _check_cuda_graphs_config(model_target if model_kind == "local" else model)
+        except RuntimeError as exc:
+            console.print(f"[red]{for_terminal(_with_omit_hint(str(exc)))}[/]")
+            raise typer.Exit(1) from exc
+
+        single_cuda = str(device).lower().startswith("cuda")
+        if single_cuda:
+            import torch
+
+            single_cuda = torch.cuda.is_available()
+        if not single_cuda:
+            msg = "CUDA graphs require every model tensor on a single CUDA device"
+            console.print(f"[red]{for_terminal(_with_omit_hint(msg))}[/]")
+            raise typer.Exit(1)
 
     if device == "cpu":
         console.print(
@@ -217,6 +235,8 @@ def bench(
     )
 
     console.print("[dim]Loading model to measure resource usage...[/]")
+
+    import torch
 
     # Reset peak stats before load -- "Max VRAM" reflects total footprint
     # (model load + inference), i.e. what users need for deployment planning.
@@ -371,6 +391,13 @@ def train(
     except (TypeError, ValueError) as exc:
         console.print(f"[red]Invalid output:[/] {for_terminal(exc)}")
         raise typer.Exit(2) from exc
+
+    if steps <= warmup:
+        console.print(
+            f"[red]--steps {steps} leaves nothing after --warmup {warmup}: raise "
+            f"--steps or lower --warmup.[/]"
+        )
+        raise typer.Exit(1)
 
     from soup_cli.bench.train_run import bench_scope_error, run_bench_train
     from soup_cli.config.loader import load_config

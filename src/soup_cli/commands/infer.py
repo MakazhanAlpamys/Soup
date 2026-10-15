@@ -232,6 +232,13 @@ def infer(
             f"[dim]Local path not found; treating {model_ref!r} as a HF repo id.[/]"
         )
 
+    if cuda_graphs is True:
+        try:
+            _check_cuda_graphs_config(model_ref if model_kind == "local" else model)
+        except RuntimeError as exc:
+            console.print(f"[red]{for_terminal(_with_omit_hint(str(exc)))}[/]")
+            raise typer.Exit(1) from exc
+
     # Read prompts
     prompts = _read_prompts(input_path)
     if not prompts:
@@ -244,6 +251,17 @@ def infer(
         from soup_cli.utils.gpu import detect_device
 
         device, _ = detect_device()
+
+    if cuda_graphs is True:
+        single_cuda = str(device).lower().startswith("cuda")
+        if single_cuda:
+            import torch
+
+            single_cuda = torch.cuda.is_available()
+        if not single_cuda:
+            msg = "CUDA graphs require every model tensor on a single CUDA device"
+            console.print(f"[red]{for_terminal(_with_omit_hint(msg))}[/]")
+            raise typer.Exit(1)
 
     console.print(
         Panel(
@@ -921,6 +939,60 @@ def _count_prompt_tokens(tokenizer, prompt_text: str) -> int:
 
 def _longest_prompt(tokenizer, prompts: list[str]) -> str:
     return max(prompts, key=lambda text: _count_prompt_tokens(tokenizer, text))
+
+
+def _check_cuda_graphs_config(
+    model_path: str | Path, visited: Optional[set[str]] = None
+) -> None:
+    """Pre-torch validation of model and adapter configs on disk for CUDA graphs."""
+    p = Path(model_path)
+    if not p.is_dir():
+        return
+    resolved_str = str(p.resolve())
+    if visited is None:
+        visited = set()
+    if resolved_str in visited:
+        return
+    visited.add(resolved_str)
+
+    for cfg_name in ("config.json", "adapter_config.json", "device_map.json"):
+        cfg_file = p / cfg_name
+        if not cfg_file.is_file():
+            continue
+        try:
+            with open(cfg_file, encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        dev_map = data.get("device_map")
+        if isinstance(dev_map, dict):
+            devs = set()
+            for v in dev_map.values():
+                v_str = str(v).lower()
+                if v_str in {"cpu", "disk", "meta"} or not (
+                    v_str == "cuda" or v_str.startswith("cuda:")
+                ):
+                    raise RuntimeError(
+                        "CUDA graphs require every model tensor on a single CUDA device"
+                    )
+                devs.add("cuda:0" if v_str == "cuda" else v_str)
+            if len(devs) > 1:
+                raise RuntimeError(
+                    "CUDA graphs require every model tensor on a single CUDA device"
+                )
+        elif isinstance(dev_map, str):
+            v_str = dev_map.lower()
+            if v_str in {"cpu", "disk", "meta"} or not (
+                v_str == "cuda" or v_str.startswith("cuda:")
+            ):
+                raise RuntimeError(
+                    "CUDA graphs require every model tensor on a single CUDA device"
+                )
+        base_path = data.get("base_model_name_or_path")
+        if base_path and isinstance(base_path, str) and Path(base_path).is_dir():
+            _check_cuda_graphs_config(base_path, visited=visited)
 
 
 def _with_omit_hint(message: str) -> str:

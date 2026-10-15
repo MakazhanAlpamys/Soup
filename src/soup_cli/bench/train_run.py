@@ -195,17 +195,17 @@ def run_bench_train(
     ``clock_sampler`` builds the SM-clock sampler; by default a
     :class:`ClockSampler` on CUDA and none elsewhere. Tests inject one on CPU.
     """
-    import torch
-
-    from soup_cli.bench.collector import BenchCollector, summarize_trainable
-    from soup_cli.bench.train_report import check_trainable, summarize_clock_samples
-    from soup_cli.trainer.sft import SFTTrainerWrapper
-
     if steps <= warmup:
         raise ValueError(
             f"--steps {steps} leaves nothing after --warmup {warmup}: raise "
             f"--steps or lower --warmup."
         )
+
+    import torch
+
+    from soup_cli.bench.collector import BenchCollector, summarize_trainable
+    from soup_cli.bench.train_report import check_trainable, summarize_clock_samples
+    from soup_cli.trainer.sft import SFTTrainerWrapper
 
     with tempfile.TemporaryDirectory(prefix="soup-bench-") as scratch:
         # Log every step (the grad_norm check reads each one), never save, and
