@@ -34,6 +34,10 @@ if TYPE_CHECKING:
 class AmbiguousRefError(ValueError):
     """Raised when a reference matches more than one registry entry."""
 
+
+# How many candidate ids an ambiguous ``name:tag`` error lists before "and N more".
+_AMBIGUOUS_IDS_SHOWN = 5
+
 REGISTRY_DB_FILENAME = "registry.db"
 
 _VALID_KINDS = frozenset(
@@ -340,9 +344,10 @@ class RegistryStore:
         tag: Optional[str] = None,
         base: Optional[str] = None,
         task: Optional[str] = None,
+        run_id: Optional[str] = None,
         limit: int = 100,
     ) -> list[dict]:
-        """Return entries filtered by name/tag/base/task."""
+        """Return entries filtered by name/tag/base/task/run_id."""
         conn = self._get_conn()
         clauses: list[str] = []
         params: list[object] = []
@@ -356,6 +361,9 @@ class RegistryStore:
         if task:
             clauses.append("e.task = ?")
             params.append(task)
+        if run_id:
+            clauses.append("e.run_id = ?")
+            params.append(run_id)
         if tag:
             clauses.append(
                 "e.id IN (SELECT entry_id FROM registry_tags WHERE tag = ?)"
@@ -408,7 +416,7 @@ class RegistryStore:
         """Resolve a reference (id, prefix, name:tag, or registry://id) to an id.
 
         Returns ``None`` on miss. Raises :class:`AmbiguousRefError` when a
-        prefix matches more than one entry.
+        prefix or a ``name:tag`` matches more than one entry.
         """
         if not ref:
             return None
@@ -424,7 +432,9 @@ class RegistryStore:
         if row:
             return row["id"]
 
-        # name:tag form — pick most recent
+        # name:tag form: must match exactly one entry. push() never replaces an
+        # entry, so a repeated name and tag leaves twins; picking the newest
+        # silently would hide the others.
         if ":" in ref:
             name, _, tag = ref.partition(":")
             try:
@@ -432,14 +442,23 @@ class RegistryStore:
                 validate_tag(tag)
             except ValueError:
                 return None
-            row = conn.execute(
+            ids = [row["id"] for row in conn.execute(
                 """SELECT e.id FROM registry_entries e
                    JOIN registry_tags t ON t.entry_id = e.id
                    WHERE e.name = ? AND t.tag = ?
-                   ORDER BY e.created_at DESC, e.rowid DESC LIMIT 1""",
+                   ORDER BY e.created_at DESC, e.rowid DESC""",
                 (name, tag),
-            ).fetchone()
-            return row["id"] if row else None
+            ).fetchall()]
+            if len(ids) > 1:
+                shown = ", ".join(ids[:_AMBIGUOUS_IDS_SHOWN])
+                more = len(ids) - _AMBIGUOUS_IDS_SHOWN
+                if more > 0:
+                    shown += f" and {more} more"
+                raise AmbiguousRefError(
+                    f"reference '{ref}' matches {len(ids)} entries ({shown}) - "
+                    "use the full id"
+                )
+            return ids[0] if ids else None
 
         # Prefix — must be unambiguous. Escape LIKE wildcards so a query
         # like "%" doesn't match everything.
