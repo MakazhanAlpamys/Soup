@@ -36,6 +36,9 @@ def export_mtp(tmp_path, monkeypatch):
     monkeypatch.setattr(export_mod, "_maybe_attach_export", lambda **kwargs: None)
 
     def run(command, **kwargs):
+        if "--print-supported-models" in command:
+            # #1911's independent diagnostic may probe the same selected tool.
+            return real_run(command, **kwargs)
         if "--help" in command:
             calls.append("help")
             return real_run(command, **kwargs)
@@ -82,6 +85,10 @@ def export_mtp(tmp_path, monkeypatch):
             _weights(model / "model.safetensors", tensors)
         (tool / "convert_hf_to_gguf.py").write_text(
             "import sys\n"
+            "if '--print-supported-models' in sys.argv:\n"
+            "    print('Supported models:\\nTEXT:\\n - Qwen3_5ForCausalLM"
+            "\\n - LlamaForCausalLM\\n - OuterModel')\n"
+            "    sys.exit(0)\n"
             f"print({'options: --no-mtp' if flag else 'options: --outtype'!r})\n"
             f"sys.exit({1 if failed else 0})\n",
             encoding="utf-8",
