@@ -13,6 +13,7 @@ from typer.testing import CliRunner
 from soup_cli.cli import app
 from soup_cli.commands import autopilot, ship
 from soup_cli.utils.argv_redaction import all_secret_option_strings, iter_commands
+from tests.conftest import strip_ansi
 
 
 @pytest.mark.parametrize("command", [["ship"], ["expect"], ["lock", "check"]])
@@ -36,13 +37,18 @@ def test_ordinary_bad_flags_keep_exit_two() -> None:
         (["--model", "model", "--data", "data.jsonl"], "--goal"),
     ],
 )
+@pytest.mark.parametrize("color", [False, True], ids=["plain", "ansi"])
 def test_noninteractive_autopilot_reports_the_missing_option(
-    monkeypatch: pytest.MonkeyPatch, arguments: list[str], missing: str,
+    monkeypatch: pytest.MonkeyPatch, arguments: list[str], missing: str, color: bool,
 ) -> None:
     monkeypatch.setattr(autopilot, "_stdin_isatty", lambda: False)
-    result = CliRunner().invoke(app, ["autopilot", *arguments])
+    result = CliRunner().invoke(
+        app, ["autopilot", *arguments], color=color,
+        env={"FORCE_COLOR": "1" if color else "0"},
+    )
     assert result.exit_code == 2, (result.output, result.exception)
-    assert "Missing option" in result.output and missing in result.output
+    output = " ".join(strip_ansi(result.output).split())
+    assert "Missing option" in output and missing in output
 
 
 @pytest.mark.parametrize("explicit", [False, True])
@@ -104,10 +110,14 @@ def test_push_keeps_hf_env_token_out_of_other_hubs(
     "arguments",
     [["bench", "model", "--help"], ["bench", "--p50", "model", "--help"]],
 )
-def test_bench_legacy_routing_reaches_infer_help(arguments: list[str]) -> None:
-    result = CliRunner().invoke(app, arguments, env={"COLUMNS": "200"})
+@pytest.mark.parametrize("color", [False, True], ids=["plain", "ansi"])
+def test_bench_legacy_routing_reaches_infer_help(arguments: list[str], color: bool) -> None:
+    result = CliRunner().invoke(
+        app, arguments, color=color, env={"COLUMNS": "200", "FORCE_COLOR": "1" if color else "0"},
+    )
     assert result.exit_code == 0, (result.output, result.exception)
-    assert "Path to model" in result.output and "--max-tokens" in result.output
+    output = " ".join(strip_ansi(result.output).split())
+    assert "Path to model" in output and "--max-tokens" in output
 
 
 def test_redaction_walks_the_real_tree_and_finds_nested_credentials() -> None:

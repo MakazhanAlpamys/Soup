@@ -522,6 +522,7 @@ jobs:
           tests/test_core_dependency_floors.py
           tests/test_cli_dependency_floors.py
           tests/test_issue1803_typer_click_compat.py
+          tests/test_cli_runner.py
           tests/test_click_argument_help.py
           tests/test_cli_startup_is_light.py
           tests/test_cli.py
@@ -619,6 +620,7 @@ jobs:
           tests/test_cli_help_completeness.py
           tests/test_cli_help_markup.py
           tests/test_gen_reference_docs.py
+          tests/test_cli_runner.py
 
   test:
     needs: plan
@@ -681,7 +683,7 @@ jobs:
       - name: Verify CLI compatibility on the newest admitted Typer
         # Typer is not in pinned-upstream.txt: this install resolves the newest
         # release pyproject.toml admits. The floor job runs the same regression.
-        run: python -m pytest -o addopts= -q tests/test_issue1803_typer_click_compat.py
+        run: python -m pytest -o addopts= -q tests/test_issue1803_typer_click_compat.py tests/test_cli_runner.py
       - name: Warm HF Hub cache (models the tests load)
         # Pre-download the models the unit tests load, with retries, so a
         # transient HF Hub 429 (Too Many Requests) on a single matrix cell does
