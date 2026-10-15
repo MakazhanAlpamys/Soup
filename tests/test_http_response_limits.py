@@ -198,7 +198,7 @@ def _call_target(target: str) -> Any:
 
 @pytest.mark.parametrize("target", TARGETS)
 @pytest.mark.parametrize("compressed", [False, True], ids=["plain", "gzip"])
-def test_every_target_refuses_oversize_before_parsing(
+def test_every_target_limits_oversize_before_parsing(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
     target: str,
@@ -220,18 +220,77 @@ def test_every_target_refuses_oversize_before_parsing(
     expected_error = (
         JudgeUnavailableError if target == "judge" else http_response.ResponseTooLargeError
     )
-    with caplog.at_level(logging.DEBUG), pytest.raises(expected_error, match=r"64 bytes") as caught:
-        _call_target(target)
-
-    assert (
-        "--api-base" in str(caught.value)
-        or "--base-url" in str(caught.value)
-        or "--provider anthropic" in str(caught.value)
-    )
-    assert "secret-body" not in str(caught.value) + caplog.text
-    assert "synthetic-secret-key" not in str(caught.value) + caplog.text
+    with caplog.at_level(logging.DEBUG):
+        if target.startswith("magpie-"):
+            assert _call_target(target) == ""
+            error_text = ""
+        else:
+            with pytest.raises(expected_error, match=r"64 bytes") as caught:
+                _call_target(target)
+            error_text = str(caught.value)
+            assert (
+                "--api-base" in error_text
+                or "--base-url" in error_text
+                or "--provider anthropic" in error_text
+            )
+    assert "secret-body" not in error_text + caplog.text
+    assert "synthetic-secret-key" not in error_text + caplog.text
     assert len(calls) == 1  # An oversized judge response is not a transient outage.
     assert body.closed
+
+
+@pytest.mark.parametrize("provider", ["ollama", "vllm"])
+@pytest.mark.parametrize("compressed", [False, True], ids=["plain", "gzip"])
+@pytest.mark.parametrize("oversized_stage", ["instruction", "response", "all"])
+def test_magpie_drops_oversized_sample_and_respects_attempt_bound(
+    monkeypatch: pytest.MonkeyPatch, tmp_path, caplog: pytest.LogCaptureFixture,
+    provider: str, compressed: bool, oversized_stage: str,
+) -> None:
+    from soup_cli.utils import magpie
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(magpie, "_MAX_RESPONSE_BYTES", 64)
+
+    def reply(text: str) -> bytes:
+        payload = {"response": text} if provider == "ollama" else {"choices": [{"text": text}]}
+        return json.dumps(payload).encode()
+
+    oversized = b"secret-body-" * 20
+    payloads = {
+        "instruction": [oversized, reply("q2"), reply("a2")],
+        "response": [reply("q1"), oversized, reply("q2"), reply("a2")],
+        "all": [oversized, oversized],
+    }[oversized_stage]
+    bodies = [_Body([gzip.compress(p) if compressed else p]) for p in payloads]
+    calls: list[dict[str, Any]] = []
+
+    @contextmanager
+    def stream(method: str, url: str, **kwargs: Any) -> Iterator[httpx.Response]:
+        body = bodies[len(calls)]
+        calls.append(kwargs)
+        response = httpx.Response(
+            200, stream=body, request=httpx.Request(method, url),
+            headers={"Content-Encoding": "gzip"} if compressed else {},
+        )
+        try:
+            yield response
+        finally:
+            response.close()
+
+    monkeypatch.setattr(httpx, "stream", stream)
+    monkeypatch.setattr(httpx, "post", lambda *a, **kw: pytest.fail("uncapped httpx.post"))
+    config = magpie.MagpieConfig("Qwen/Qwen2.5-7B-Instruct", provider, 1, False)
+    with caplog.at_level(logging.DEBUG):
+        result = magpie.run_magpie(config, output_path="rows.jsonl", max_attempts=2)
+    assert result.attempts == 2
+    assert result.rows_kept == (0 if oversized_stage == "all" else 1)
+    assert len(calls) == len(bodies)
+    assert all(body.closed for body in bodies)
+    assert "secret-body" not in caplog.text
+    rows = [json.loads(line) for line in (tmp_path / "rows.jsonl").read_text().splitlines()]
+    assert rows == ([] if oversized_stage == "all" else [{"messages": [
+        {"role": "user", "content": "q2"}, {"role": "assistant", "content": "a2"},
+    ]}])
 
 
 @pytest.mark.parametrize("target", TARGETS)

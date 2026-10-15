@@ -372,7 +372,8 @@ def make_magpie_generate_fn(
                     timeout=timeout_seconds,
                 )
             except ResponseTooLargeError:
-                raise
+                _LOG.debug("ollama magpie response exceeds byte limit; dropping sample")
+                return ""
             except Exception as exc:  # noqa: BLE001 — httpx error variety
                 _LOG.debug("ollama magpie HTTP error: %s", exc)
                 return ""
@@ -413,7 +414,8 @@ def make_magpie_generate_fn(
                 timeout=timeout_seconds,
             )
         except ResponseTooLargeError:
-            raise
+            _LOG.debug("vllm magpie response exceeds byte limit; dropping sample")
+            return ""
         except Exception as exc:  # noqa: BLE001
             _LOG.debug("vllm magpie HTTP error: %s", exc)
             return ""

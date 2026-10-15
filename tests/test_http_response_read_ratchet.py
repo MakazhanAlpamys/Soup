@@ -1,4 +1,10 @@
-"""New unbuffered httpx response reads need an explicit, reviewed decision."""
+"""Ratchet direct/aliased httpx.post/get calls and review post_capped callers.
+
+The raw-read check covers only httpx.post/get, with explicit legacy exceptions.
+It does not detect reads on arbitrary response objects, httpx.stream or Client
+instances. The sink ledger separately requires endpoint review for post_capped;
+this module does not establish a byte limit for every outbound response.
+"""
 
 from pathlib import Path
 
