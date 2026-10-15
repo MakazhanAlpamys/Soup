@@ -87,6 +87,7 @@ class TestResolveNameTag:
         message = str(excinfo.value)
         assert "'model:v1' matches 2 entries" in message
         assert first in message and second in message
+        assert "use the full id" in message
 
     def test_twins_still_resolve_by_full_id(self, push):
         first, second = push(), push()
