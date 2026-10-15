@@ -7461,6 +7461,24 @@ class SoupConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def _validate_unsloth_8bit(self) -> "SoupConfig":
+        """#1811 — ``quantization: 8bit`` on ``backend: unsloth`` loaded in 16-bit.
+
+        ``utils/unsloth.py`` passes ``load_in_4bit`` and nothing else, and the
+        declared floor (``unsloth>=2024.8``) has no ``load_in_8bit`` to pass, so
+        ``8bit`` loaded exactly like ``none`` with no word. Refuse it, naming the
+        two values the Unsloth path applies.
+        """
+        if self.backend == "unsloth" and self.training.quantization == "8bit":
+            raise ValueError(
+                "training.quantization: 8bit is not applied on backend: unsloth "
+                "(Soup's Unsloth loader passes load_in_4bit only, so 8bit loaded the model "
+                "in 16-bit). Use quantization: 4bit or none with backend: unsloth, or "
+                "backend: transformers for 8-bit."
+            )
+        return self
+
+    @model_validator(mode="after")
     def _validate_preference_dispatcher(self) -> "SoupConfig":
         """v0.40.0 Part B — task='preference' requires preference_loss OR
         preference_loss_weights (Part D). Setting either field outside
