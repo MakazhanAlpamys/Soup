@@ -65,14 +65,17 @@ def test_load_suite_empty_file_is_a_value_error_naming_suite(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, content: bytes,
 ) -> None:
     """The contract, not the implementation: an empty suite file is refused with a
-    ValueError whose message says "suite" (pydantic's missing-field report today; a
-    "must be a mapping" refusal under #1878), never with a TypeError from `**None`."""
+    ValueError whose message names the missing "suite" field (pydantic's "Field required"
+    report today; a "must be a mapping" refusal under #1878), never with a TypeError from
+    `**None`, and never with a made-up suite name or a message that hides what is wrong."""
     monkeypatch.chdir(tmp_path)
     path = tmp_path / "gate.yaml"
     path.write_bytes(content)
     with pytest.raises(ValueError) as caught:
         gate.load_suite(str(path))
-    assert "suite" in str(caught.value), repr(caught.value)
+    message = str(caught.value)
+    assert "suite" in message, repr(caught.value)
+    assert "Field required" in message or "must be a mapping" in message, repr(caught.value)
 
 
 @pytest.mark.parametrize("payload", EMPTY_SUITES, ids=["explicit", "missing", "misspelled"])
