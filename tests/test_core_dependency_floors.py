@@ -96,6 +96,18 @@ def test_floor_job_installs_only_core_under_its_constraints() -> None:
     assert "python -m pip check" in runs
 
 
+def test_floor_job_isolates_pins_from_runner_tooling() -> None:
+    steps = _job()["steps"]
+    install_index = next(index for index, step in enumerate(steps)
+                         if "pip install" in step.get("run", ""))
+    setup = "\n".join(step.get("run", "") for step in steps[:install_index])
+    # A runner's wheel>=0.46 requires packaging>=24; Soup must exercise 21.0.
+    # PATH must carry the venv into every subsequent pip, Python and pytest step.
+    assert 'python -m venv "$RUNNER_TEMP/soup-core-floor"' in setup
+    assert '"$RUNNER_TEMP/soup-core-floor/bin" >> "$GITHUB_PATH"' in setup
+    assert "--system-site-packages" not in setup
+
+
 def test_floor_job_runs_command_tree_help_and_startup_checks() -> None:
     arguments: list[str] = []
     for step in _job()["steps"]:

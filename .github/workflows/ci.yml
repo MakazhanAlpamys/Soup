@@ -490,6 +490,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.10"
+      - name: Isolate core floors from runner tooling
+        # Runner/image tooling can require newer packages (wheel>=0.46 needs
+        # packaging>=24) than the core floor. Keep that graph outside this cell.
+        run: |
+          python -m venv "$RUNNER_TEMP/soup-core-floor"
+          echo "$RUNNER_TEMP/soup-core-floor/bin" >> "$GITHUB_PATH"
       - name: Install the declared core dependency floors
         # pytest 9 requires packaging>=22, above Soup's packaging>=21 floor.
         # The test runner is tooling, so keep its compatible major here.
