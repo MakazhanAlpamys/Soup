@@ -106,9 +106,12 @@ def test_train_warns_for_nondefault_unwired_sibling_settings(
 
     assert result.exit_code == 0, (result.output, repr(result.exception))
     output = " ".join(result.output.split())
-    assert "forgetting_threshold" in output
-    assert "checkpoint_keep_top" in output
-    assert "not enforced during training" in output
+    # Both are staged now and reported by the loader with their refusal release
+    # (#808 for checkpoint_keep_top; #1814 moved forgetting_threshold there from
+    # soup train's own "not enforced during training" note, with v0.78).
+    assert "training.forgetting_threshold is accepted but read by nothing" in output
+    assert "v0.78 will refuse it" in output
+    assert "training.checkpoint_keep_top is accepted but read by nothing" in output
 
 
 def test_forgetting_threshold_is_declared_unconsumed() -> None:

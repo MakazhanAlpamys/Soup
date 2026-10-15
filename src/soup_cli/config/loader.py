@@ -9,7 +9,11 @@ from rich.console import Console
 
 from soup_cli.config.deprecation import SoupConfigDeprecationWarning
 from soup_cli.config.schema import SoupConfig
-from soup_cli.config.staged_fields import find_staged_config_fields, format_staged_fields
+from soup_cli.config.staged_fields import (
+    STAGED_FIELD_REJECTION_VERSION,
+    find_staged_config_fields,
+    format_staged_fields,
+)
 from soup_cli.config.unknown_keys import find_unknown_config_keys, format_unknown_keys
 from soup_cli.utils.terminal import for_terminal
 from soup_cli.utils.yaml_limits import (
@@ -90,11 +94,17 @@ def _report_staged_fields(
     staged = find_staged_config_fields(raw, config=config)
     if not staged:
         return None
-    warning = STAGED_FIELD_SEVERITY != "error"
-    message = format_staged_fields(staged, include_deadline=warning)
-    if not warning:
-        return message
-    console.print(f"[yellow]Warning:[/] {for_terminal(message)}")
+    # #1814: the switch refuses the fields whose deadline is the shared one; a
+    # field staged later keeps warning until its own release.
+    refusing = STAGED_FIELD_SEVERITY == "error"
+    due = [item for item in staged
+           if refusing and item.deadline == STAGED_FIELD_REJECTION_VERSION]
+    later = [item for item in staged if item not in due]
+    if later:
+        message = format_staged_fields(later, include_deadline=True)
+        console.print(f"[yellow]Warning:[/] {for_terminal(message)}")
+    if due:
+        return format_staged_fields(due, include_deadline=False)
     return None
 
 

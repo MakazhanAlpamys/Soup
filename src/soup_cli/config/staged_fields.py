@@ -16,6 +16,7 @@ STAGED_FIELD_REJECTION_VERSION: str = "0.77"
 
 __all__ = [
     "STAGED_FIELDS",
+    "STAGED_FIELD_LATER_DEADLINES",
     "STAGED_FIELD_REJECTION_VERSION",
     "StagedField",
     "find_staged_config_fields",
@@ -30,6 +31,9 @@ class StagedField:
     section: str
     name: str
     value: Any
+    #: The release that refuses this field (#1814): the shared
+    #: :data:`STAGED_FIELD_REJECTION_VERSION` unless the field was staged later.
+    deadline: str = STAGED_FIELD_REJECTION_VERSION
 
     @property
     def path(self) -> str:
@@ -60,6 +64,9 @@ STAGED_FIELDS: dict[tuple[str, str], Any] = {
     ("training", "forgetting_eval_steps"): 100,
     ("training", "forgetting_benchmark"): "mini_mmlu",
     ("training", "forgetting_stop"): False,
+    # #1814: described as "Staged, not enforced" but loaded silently; staged in
+    # 0.77, so it is refused one minor later (STAGED_FIELD_LATER_DEADLINES).
+    ("training", "forgetting_threshold"): 0.10,
     ("training", "checkpoint_eval_steps"): 200,
     ("training", "checkpoint_eval_metric"): "composite",
     ("training", "checkpoint_eval_tasks"): None,
@@ -77,6 +84,15 @@ STAGED_FIELDS: dict[tuple[str, str], Any] = {
     ("data", "resize_vocab"): False,
     ("data", "extend_conversation"): False,
     ("data", "skip_prepare_dataset"): False,
+}
+
+
+#: Fields staged after the shared deadline was announced (#1814). Each gets one
+#: minor of notice, so its refusal release is later than
+#: :data:`STAGED_FIELD_REJECTION_VERSION`; when that release flips
+#: ``STAGED_FIELD_SEVERITY`` to ``"error"`` these keep warning until their own.
+STAGED_FIELD_LATER_DEADLINES: dict[tuple[str, str], str] = {
+    ("training", "forgetting_threshold"): "0.78",
 }
 
 
@@ -123,7 +139,12 @@ def find_staged_config_fields(
             else:
                 val = _coerce_staged_value(section, name, raw_val)
             if val != default_val:
-                found.append(StagedField(section=section, name=name, value=val))
+                found.append(StagedField(
+                    section=section, name=name, value=val,
+                    deadline=STAGED_FIELD_LATER_DEADLINES.get(
+                        (section, name), STAGED_FIELD_REJECTION_VERSION
+                    ),
+                ))
     return found
 
 
@@ -141,11 +162,11 @@ def format_staged_fields(
         if include_deadline:
             lines.append(
                 f"{item.path} is accepted but read by nothing; "
-                f"v{STAGED_FIELD_REJECTION_VERSION} will refuse it"
+                f"v{item.deadline} will refuse it"
             )
         else:
             lines.append(
                 f"{item.path} is accepted but read by nothing; "
-                f"refused as of v{STAGED_FIELD_REJECTION_VERSION}"
+                f"refused as of v{item.deadline}"
             )
     return "\n".join(lines)

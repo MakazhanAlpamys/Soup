@@ -125,12 +125,13 @@ class TestTheDeadline:
 
 
 class TestStagedFieldsInventory:
-    """Validate inventory size and default handling across all 29 staged fields."""
+    """Validate inventory size and default handling across all 30 staged fields."""
 
-    def test_exactly_29_staged_fields_registered(self) -> None:
-        # 17 from #808 initial, 3 from #761, plus 9 Group B knobs from #808.
-        assert len(STAGED_FIELDS) == 29, (
-            f"Expected exactly 29 staged fields, got {len(STAGED_FIELDS)}"
+    def test_exactly_30_staged_fields_registered(self) -> None:
+        # 17 from #808 initial, 3 from #761, 9 Group B knobs from #808, and
+        # forgetting_threshold from #1814 (its own v0.78 deadline).
+        assert len(STAGED_FIELDS) == 30, (
+            f"Expected exactly 30 staged fields, got {len(STAGED_FIELDS)}"
         )
 
     @pytest.mark.parametrize(
