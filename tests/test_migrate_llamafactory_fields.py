@@ -72,6 +72,23 @@ def test_a_val_size_soup_cannot_express_is_named_not_defaulted_silently(tmp_path
     assert cfg.data.val_split == 0.1  # Soup's default, and the warning says so
 
 
+def test_a_fraction_above_one_half_is_named_not_written(tmp_path: Path) -> None:
+    # A ratio LLaMA-Factory accepts but data.val_split caps at 0.5: the "above 0.5"
+    # branch, pinned apart from the row-count one (#1901 review).
+    result, cfg = _migrate(tmp_path, _BASE + "val_size: 0.7\n")
+    assert "val_split" not in result["data"]
+    assert any(w.startswith("val_size: 0.7") and "above 0.5" in w and "not written" in w
+               for w in result["_warnings"])
+    assert cfg.data.val_split == 0.1
+
+
+def test_exactly_one_half_is_still_written(tmp_path: Path) -> None:
+    result, cfg = _migrate(tmp_path, _BASE + "val_size: 0.5\n")
+    assert result["data"]["val_split"] == 0.5
+    assert cfg.data.val_split == 0.5
+    assert not any(w.startswith("val_size:") for w in result["_warnings"])
+
+
 # ---------------------------------------------------------------------------
 # LoRA defaults and targets
 # ---------------------------------------------------------------------------

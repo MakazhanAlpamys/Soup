@@ -56,6 +56,16 @@ def test_a_row_count_is_named_not_defaulted_silently(tmp_path: Path) -> None:
     assert cfg.data.val_split == 0.1
 
 
+def test_a_fraction_above_one_half_is_named_not_written(tmp_path: Path) -> None:
+    # The same shared helper as LLaMA-Factory's val_size: the "above 0.5" branch,
+    # pinned apart from the row-count one (#1901 review).
+    result, cfg = _migrate(tmp_path, _BASE + "val_set_size: 0.7\n")
+    assert "val_split" not in result["data"]
+    assert any(w.startswith("val_set_size: 0.7") and "above 0.5" in w and "not written" in w
+               for w in result["_warnings"])
+    assert cfg.data.val_split == 0.1
+
+
 def test_lora_target_modules_list_is_still_copied(tmp_path: Path) -> None:
     _, cfg = _migrate(tmp_path, _BASE + "lora_target_modules:\n  - q_proj\n  - k_proj\n")
     assert cfg.training.lora.target_modules == ["q_proj", "k_proj"]
