@@ -195,6 +195,7 @@ soup recipes verify --no-templates            Recipes only; skip src/soup_cli/te
 soup recipes verify --json                    One JSON row per config on stdout; advisories go to stderr
 soup registry push --run-id <id> --name n --tag v1  Register run
 soup registry push ... --data train.jsonl     Also record that file's SHA-256 as data_hash
+soup registry push ... --idempotency-key k    Retry-safe: same key + same registration -> existing entry
 soup registry list [--name n] [--tag v1]     List registry entries
 soup registry show <ref>                      Entry details + artifacts + ancestors
 soup registry diff <a> <b>                    Side-by-side config + eval delta
