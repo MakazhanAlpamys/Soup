@@ -3,7 +3,8 @@
 Schema (see Part A of v0.26.0 plan):
 
     registry_entries(id, name, tag, base_model, task, run_id, config_json,
-                     config_hash, data_hash, entry_hash, created_at, notes)
+                     config_hash, data_hash, entry_hash, created_at, notes,
+                     idempotency_key)
     registry_artifacts(id, entry_id, kind, path, sha256, size_bytes,
                        created_at)
     registry_lineage(id, child_id, parent_id, relation, created_at)
@@ -33,6 +34,10 @@ if TYPE_CHECKING:
 
 class AmbiguousRefError(ValueError):
     """Raised when a reference matches more than one registry entry."""
+
+
+class IdempotencyConflictError(ValueError):
+    """Raised when an idempotency key is reused for a different registration."""
 
 
 # How many candidate ids an ambiguous ``name:tag`` error lists before "and N more".
@@ -68,6 +73,11 @@ _VALID_RELATIONS = frozenset(
 
 _NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_\-.]{0,127}$")
 _TAG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_\-.]{0,63}$")
+_IDEMPOTENCY_KEY_RE = re.compile(r"[A-Za-z0-9._:-]{1,128}")
+
+# What a retry under the same idempotency key has to repeat. ``notes`` is free-form and
+# not compared; the tag only has to be one of the entry's tags.
+_IDEMPOTENT_FIELDS = ("name", "base_model", "task", "run_id", "config_hash", "data_hash")
 
 _SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS registry_entries (
@@ -81,7 +91,8 @@ CREATE TABLE IF NOT EXISTS registry_entries (
     data_hash    TEXT,
     entry_hash   TEXT NOT NULL,
     created_at   TEXT NOT NULL,
-    notes        TEXT
+    notes        TEXT,
+    idempotency_key TEXT
 );
 
 CREATE TABLE IF NOT EXISTS registry_artifacts (
@@ -150,6 +161,15 @@ def validate_tag(tag: str) -> None:
         raise ValueError(
             f"registry tag '{tag}' is invalid - use letters, digits, "
             "'_', '-', '.' only; must start with alphanumeric"
+        )
+
+
+def validate_idempotency_key(key: str) -> None:
+    """Raise ValueError unless ``key`` is 1-128 characters from ``[A-Za-z0-9._:-]``."""
+    if not isinstance(key, str) or not _IDEMPOTENCY_KEY_RE.fullmatch(key):
+        raise ValueError(
+            "idempotency key must be 1 to 128 characters from letters, digits, "
+            "'.', '_', ':' and '-'"
         )
 
 
@@ -230,8 +250,28 @@ class RegistryStore:
         return self._conn
 
     def _ensure_schema(self) -> None:
+        """Create the tables, and add ``idempotency_key`` to a database made before it.
+
+        Gated on ``PRAGMA table_info`` so a second open is a no-op, and tolerant of a
+        sibling process adding the column between that check and the ALTER, as in
+        :meth:`ExperimentTracker._ensure_schema`. The unique index is created after the
+        column exists; every older row is NULL, so it cannot fail on existing entries.
+        """
         conn = self._get_conn()
         conn.executescript(_SCHEMA_SQL)
+        columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(registry_entries)").fetchall()
+        }
+        if "idempotency_key" not in columns:
+            try:
+                conn.execute("ALTER TABLE registry_entries ADD COLUMN idempotency_key TEXT")
+            except sqlite3.OperationalError as exc:
+                if "duplicate column" not in str(exc).lower():
+                    raise
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_reg_entries_idempotency_key "
+            "ON registry_entries(idempotency_key) WHERE idempotency_key IS NOT NULL"
+        )
         conn.commit()
 
     def _tighten_perms(self) -> None:
@@ -268,14 +308,23 @@ class RegistryStore:
         config: dict[str, Any],
         data_path: Optional[str] = None,
         notes: Optional[str] = None,
+        idempotency_key: Optional[str] = None,
     ) -> str:
-        """Create a new registry entry. Returns the new entry's id."""
+        """Create a new registry entry. Returns the new entry's id.
+
+        With ``idempotency_key``, a push whose key is already taken writes nothing and
+        returns that entry's id, provided it repeats the entry's name, base model, task,
+        ``run_id``, config hash and data hash, and the tag is one of the entry's tags.
+        Otherwise it raises :class:`IdempotencyConflictError` naming the entry.
+        """
         validate_name(name)
         validate_tag(tag)
         if not base_model:
             raise ValueError("base_model is required")
         if not task:
             raise ValueError("task is required")
+        if idempotency_key is not None:
+            validate_idempotency_key(idempotency_key)
 
         entry_id = _generate_entry_id()
         now = datetime.now().isoformat()
@@ -285,25 +334,70 @@ class RegistryStore:
         entry_hash = hash_entry(
             config=config, data_path=data_path, base_model=base_model,
         )
+        request = {
+            "name": name, "base_model": base_model, "task": task, "run_id": run_id,
+            "config_hash": config_hash, "data_hash": data_hash,
+        }
+
+        if idempotency_key is not None:
+            existing = self._find_by_key(idempotency_key)
+            if existing is not None:
+                return self._replay(existing, request, tag, idempotency_key)
 
         conn = self._get_conn()
-        conn.execute(
-            """INSERT INTO registry_entries
-               (id, name, base_model, task, run_id, config_json,
-                config_hash, data_hash, entry_hash, created_at, notes)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                entry_id, name, base_model, task, run_id,
-                json.dumps(config, default=str, sort_keys=True),
-                config_hash, data_hash, entry_hash, now, notes,
-            ),
-        )
-        conn.execute(
-            "INSERT INTO registry_tags (entry_id, tag) VALUES (?, ?)",
-            (entry_id, tag),
-        )
-        conn.commit()
+        try:
+            conn.execute(
+                """INSERT INTO registry_entries
+                   (id, name, base_model, task, run_id, config_json,
+                    config_hash, data_hash, entry_hash, created_at, notes,
+                    idempotency_key)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    entry_id, name, base_model, task, run_id,
+                    json.dumps(config, default=str, sort_keys=True),
+                    config_hash, data_hash, entry_hash, now, notes,
+                    idempotency_key,
+                ),
+            )
+            conn.execute(
+                "INSERT INTO registry_tags (entry_id, tag) VALUES (?, ?)",
+                (entry_id, tag),
+            )
+            conn.commit()
+        except sqlite3.IntegrityError:
+            conn.rollback()
+            # Another writer took the key after the lookup above: answer from its entry.
+            existing = (
+                self._find_by_key(idempotency_key) if idempotency_key is not None else None
+            )
+            if existing is None:
+                raise
+            return self._replay(existing, request, tag, idempotency_key)
         return entry_id
+
+    def get_by_idempotency_key(self, key: str) -> Optional[dict]:
+        """The entry pushed with idempotency key ``key``, or ``None``."""
+        validate_idempotency_key(key)
+        return self._find_by_key(key)
+
+    def _find_by_key(self, key: str) -> Optional[dict]:
+        row = self._get_conn().execute(
+            "SELECT * FROM registry_entries WHERE idempotency_key = ?", (key,),
+        ).fetchone()
+        return self._hydrate(dict(row)) if row is not None else None
+
+    @staticmethod
+    def _replay(entry: dict, request: dict, tag: str, key: str) -> str:
+        """``entry``'s id if ``request`` repeats it, else IdempotencyConflictError."""
+        differing = [field for field in _IDEMPOTENT_FIELDS if entry.get(field) != request[field]]
+        if tag not in entry["tags"]:
+            differing.insert(1, "tag")
+        if differing:
+            raise IdempotencyConflictError(
+                f"idempotency key '{key}' is already used by entry {entry['id']}, "
+                f"which has a different {', '.join(differing)}"
+            )
+        return entry["id"]
 
     def add_tag(self, entry_id: str, tag: str) -> None:
         validate_tag(tag)
@@ -686,12 +780,14 @@ class RegistryStore:
         tag: str,
         notes: Optional[str] = None,
         data_path: Optional[str] = None,
+        idempotency_key: Optional[str] = None,
     ) -> str:
         """Create a registry entry from an existing training run.
 
         ``data_path`` names the file to record as the run's training input; its
         SHA-256 becomes ``data_hash``. It is what the caller says was trained on,
         not proof of it. Without it, ``data_hash`` stays ``None``.
+        ``idempotency_key`` is passed to :meth:`push`.
         """
         run = tracker.get_run(run_id)
         if run is None:
@@ -716,6 +812,7 @@ class RegistryStore:
             config=config,
             data_path=data_path,
             notes=notes,
+            idempotency_key=idempotency_key,
         )
 
     def get_eval_results(self, entry_id: str) -> list[dict]:
