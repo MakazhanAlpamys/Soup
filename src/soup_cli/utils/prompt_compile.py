@@ -326,20 +326,19 @@ def _resolve_program(module: Any) -> Any:
 
 def _resolve_metric(
     module: Any, eval_examples: Optional[List[dict]] = None
-) -> Callable:
-    """Return user metric (``metric`` attr) or build a suite-derived metric.
+) -> "Optional[Callable]":
+    """Return user metric (``metric`` attr), suite-derived metric, or None.
 
-    Ensures None never reaches DSPy optimizers. If module defines no metric
-    and eval_examples are absent or empty, raises ValueError naming 'metric'.
+    If module defines a callable ``metric``, returns it. If not and eval_examples
+    are provided, builds and returns a suite-derived metric. Returns None if
+    neither is available.
     """
     metric = getattr(module, "metric", None)
     if callable(metric):
         return metric
 
     if not eval_examples:
-        raise ValueError(
-            "program module must expose a callable `metric`, or eval suite must provide examples"
-        )
+        return None
 
     candidate_keys = ("answer", "output", "completion", "label", "target", "response")
     target_key = next((k for k in candidate_keys if any(k in ex for ex in eval_examples)), None)
@@ -372,6 +371,10 @@ def _run_dspy(plan: CompilePlan) -> CompileResult:
     module = _load_program_module(plan.program_path)
     program = _resolve_program(module)
     metric = _resolve_metric(module, raw_examples)
+    if metric is None:
+        raise ValueError(
+            "program module must expose a callable `metric`, or eval suite must provide examples"
+        )
     trainset = _dspy_examples(dspy, module, plan.eval_suite_path)
 
     if plan.optimizer == "bootstrap_fewshot":
