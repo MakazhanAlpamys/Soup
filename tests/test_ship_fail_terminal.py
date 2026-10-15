@@ -28,3 +28,14 @@ def test_fail_strips_control_bytes_and_keeps_markup_literal(monkeypatch):
     assert chr(0x1B) not in text
     assert chr(0x9B) not in text
     assert text == "Error: abc [red]d\n"
+
+
+def test_fail_strips_before_escaping(monkeypatch):
+    """Strip THEN escape: a stripped ESC must not leave a live [tag] behind a backslash."""
+    out = StringIO()
+    monkeypatch.setattr(ship, "console", Console(file=out, color_system=None, width=200))
+
+    with pytest.raises(typer.Exit):
+        ship._fail("\\" + chr(0x1B) + "[red]x", 3)
+
+    assert out.getvalue() == "Error: \\[red]x\n"
