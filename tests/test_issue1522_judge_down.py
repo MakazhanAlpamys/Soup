@@ -5,7 +5,7 @@ retry, but every row retried on its own: 3 s of backoff per row, for the whole
 dataset, against a host that never answered once. An evaluator now remembers
 that its last requests all went unanswered and stops asking.
 
-``httpx.post`` is patched throughout, so no judge server is needed, and the
+``post_capped`` is patched throughout, so no judge server is needed, and the
 retry pause is captured instead of slept.
 """
 
@@ -30,6 +30,8 @@ from soup_cli.eval.judge import (
     pairwise_winrate,
 )
 from tests.conftest import strip_ansi
+
+BOUNDED_POST = "soup_cli.utils.http_response.post_capped"
 
 JUDGE_BASE = "http://localhost:8000"
 REQ = httpx.Request("POST", f"{JUDGE_BASE}/v1/chat/completions")
@@ -61,7 +63,7 @@ def _refused(*args, **kwargs):
 
 
 def _script(*steps):
-    """A fake ``httpx.post`` that plays ``steps`` in order, then refuses."""
+    """A fake ``post_capped`` that plays ``steps`` in order, then refuses."""
     remaining = list(steps)
 
     def post(*args, **kwargs):
@@ -104,7 +106,7 @@ class TestJudgeDownCounter:
         # The way every row-by-row caller uses it: a failed row is skipped, and
         # the run stops at the first JudgeDownError.
         skipped = 0
-        with mock.patch("httpx.post", side_effect=_refused) as post:
+        with mock.patch(BOUNDED_POST, side_effect=_refused) as post:
             with pytest.raises(JudgeDownError):
                 for index in range(1000):
                     try:
@@ -122,7 +124,7 @@ class TestJudgeDownCounter:
         evaluator = JudgeEvaluator(
             provider="server", model="judge", api_base="https://user:hunter2@judge.example.com"
         )
-        with mock.patch("httpx.post", side_effect=_refused):
+        with mock.patch(BOUNDED_POST, side_effect=_refused):
             errors = _judge_rows(evaluator, JUDGE_DOWN_AFTER)
 
         down = errors[-1]
@@ -135,7 +137,7 @@ class TestJudgeDownCounter:
     def test_one_reply_resets_the_count(self, evaluator, no_sleep):
         unanswered = [_refused] * ATTEMPTS
         steps = [*unanswered, *unanswered, _reply(200, SCORED), *unanswered, *unanswered]
-        with mock.patch("httpx.post", side_effect=_script(*steps)) as post:
+        with mock.patch(BOUNDED_POST, side_effect=_script(*steps)) as post:
             errors = []
             scored = 0
             for index in range(5):
@@ -156,7 +158,7 @@ class TestJudgeDownCounter:
         ids=["4xx", "unusable-200"],
     )
     def test_a_judge_that_answers_badly_is_not_down(self, evaluator, no_sleep, answer):
-        with mock.patch("httpx.post", return_value=answer) as post:
+        with mock.patch(BOUNDED_POST, return_value=answer) as post:
             errors = _judge_rows(evaluator, 10)
 
         assert len(errors) == 10
@@ -167,14 +169,14 @@ class TestJudgeDownCounter:
     def test_a_bad_answer_between_outages_resets_the_count(self, evaluator, no_sleep):
         unanswered = [_refused] * ATTEMPTS
         steps = [*unanswered, *unanswered, _reply(400, {"error": "no"}), *unanswered]
-        with mock.patch("httpx.post", side_effect=_script(*steps)):
+        with mock.patch(BOUNDED_POST, side_effect=_script(*steps)):
             errors = _judge_rows(evaluator, 4)
 
         assert len(errors) == 4
         assert not any(isinstance(exc, JudgeDownError) for exc in errors)
 
     def test_pairwise_and_pointwise_calls_share_the_count(self, evaluator, no_sleep):
-        with mock.patch("httpx.post", side_effect=_refused):
+        with mock.patch(BOUNDED_POST, side_effect=_refused):
             for _ in range(JUDGE_DOWN_AFTER - 1):
                 with pytest.raises(JudgeUnavailableError) as excinfo:
                     evaluator.evaluate("q", "a")
@@ -185,15 +187,15 @@ class TestJudgeDownCounter:
     def test_each_evaluator_counts_its_own_judge(self, no_sleep):
         dead = JudgeEvaluator(provider="server", model="judge", api_base=JUDGE_BASE)
         other = JudgeEvaluator(provider="server", model="judge", api_base="http://localhost:9000")
-        with mock.patch("httpx.post", side_effect=_refused):
+        with mock.patch(BOUNDED_POST, side_effect=_refused):
             _judge_rows(dead, JUDGE_DOWN_AFTER)
-        with mock.patch("httpx.post", return_value=_reply(200, SCORED)):
+        with mock.patch(BOUNDED_POST, return_value=_reply(200, SCORED)):
             assert other.evaluate("q", "a").weighted_score == 4.0
 
     def test_a_judge_that_stays_down_is_still_asked(self, evaluator, no_sleep):
         # No cooldown: a caller that carries on gets a real request each time,
         # so the first reply after an outage is seen.
-        with mock.patch("httpx.post", side_effect=_refused) as post:
+        with mock.patch(BOUNDED_POST, side_effect=_refused) as post:
             errors = _judge_rows(evaluator, JUDGE_DOWN_AFTER + 2)
 
         assert post.call_count == (JUDGE_DOWN_AFTER + 2) * ATTEMPTS
@@ -220,7 +222,7 @@ def test_a_short_outage_does_not_leave_a_judge_ranked_run_unranked(evaluator, no
     # three requests in a row are refused, then the judge answers every request
     steps = [*[_refused] * (JUDGE_DOWN_AFTER * ATTEMPTS), *[ok] * 20]
     reward = make_judge_reward_func(evaluator)
-    with mock.patch("httpx.post", side_effect=_script(*steps)):
+    with mock.patch(BOUNDED_POST, side_effect=_script(*steps)):
         scores = reward(["q"] * 10, ["a"] * 10)
     assert scores[:3] == [0.0, 0.0, 0.0]
     assert scores[3:] == [4.0] * 7, scores
@@ -243,7 +245,7 @@ class TestEvalJudgeCli:
 
         monkeypatch.chdir(tmp_path)
         _write_rows(tmp_path / "t.jsonl", 1000)
-        with mock.patch("httpx.post", side_effect=_refused) as post:
+        with mock.patch(BOUNDED_POST, side_effect=_refused) as post:
             result = CliRunner().invoke(
                 app, ["eval", "judge", "--target", "t.jsonl", "--provider", "server"],
             )
@@ -265,7 +267,7 @@ class TestEvalJudgeCli:
         monkeypatch.chdir(tmp_path)
         _write_rows(tmp_path / "t.jsonl", 50)
         steps = [_reply(200, SCORED)] * 5
-        with mock.patch("httpx.post", side_effect=_script(*steps)):
+        with mock.patch(BOUNDED_POST, side_effect=_script(*steps)):
             result = CliRunner().invoke(
                 app, ["eval", "judge", "--target", "t.jsonl", "--provider", "server"],
             )
@@ -292,7 +294,7 @@ class TestPairFilter:
     def test_a_dead_judge_stops_the_filter(self, evaluator, no_sleep):
         from soup_cli.data.traces.quality import judge_filter_pairs
 
-        with mock.patch("httpx.post", side_effect=_refused) as post:
+        with mock.patch(BOUNDED_POST, side_effect=_refused) as post:
             with pytest.raises(JudgeDownError) as excinfo:
                 judge_filter_pairs(self._pairs(1000), judge=evaluator)
 
@@ -314,7 +316,7 @@ class TestPairFilter:
         # Pair 1 is kept (chosen 5, rejected 1), pairs 2-4 are dropped (a tie
         # is below the 0.7 default), then nothing answers.
         steps = [scored(5), scored(1)] + [_reply(200, SCORED)] * 6
-        with mock.patch("httpx.post", side_effect=_script(*steps)):
+        with mock.patch(BOUNDED_POST, side_effect=_script(*steps)):
             with pytest.raises(JudgeDownError) as excinfo:
                 judge_filter_pairs(self._pairs(10), judge=evaluator)
 
@@ -324,7 +326,7 @@ class TestPairFilter:
         from soup_cli.data.traces.quality import judge_filter_pairs
 
         steps = [*[_refused] * ATTEMPTS, *[_reply(200, SCORED)] * 4]
-        with mock.patch("httpx.post", side_effect=_script(*steps)):
+        with mock.patch(BOUNDED_POST, side_effect=_script(*steps)):
             kept, report = judge_filter_pairs(self._pairs(3), judge=evaluator)
 
         assert report.errors == 1
@@ -342,7 +344,7 @@ class TestPairFilter:
                         "outputs": {"output": text},
                         "feedback": [{"key": "thumbs", "score": score}],
                     }) + "\n")
-        with mock.patch("httpx.post", side_effect=_refused) as post:
+        with mock.patch(BOUNDED_POST, side_effect=_refused) as post:
             result = CliRunner().invoke(
                 app,
                 ["data", "from-traces", "--logs", "traces.jsonl", "--format", "langchain",
@@ -373,7 +375,7 @@ class TestPairwiseWinrate:
                 _reply(200, {"choices": [{"message": {"content": '{"winner": "B"}'}}]}),
                 _reply(200, {"choices": [{"message": {"content": '{"winner": "A"}'}}]}),
             ]
-        with mock.patch("httpx.post", side_effect=_script(*steps)):
+        with mock.patch(BOUNDED_POST, side_effect=_script(*steps)):
             with pytest.raises(JudgeUnavailableError) as excinfo:
                 pairwise_winrate(pairs, evaluator)
 
@@ -391,7 +393,7 @@ class TestPairwiseWinrate:
             ship_cmd, "_resolve_generators",
             lambda *a, **k: (lambda p: "base answer", lambda p: "tuned answer"),
         )
-        with mock.patch("httpx.post", side_effect=_refused):
+        with mock.patch(BOUNDED_POST, side_effect=_refused):
             result = CliRunner().invoke(
                 ship_cmd.app,
                 ["--base", "m", "--tuned", "t", "--task-eval", "tasks.jsonl",
@@ -417,7 +419,7 @@ class TestBestOfNCli:
             "soup_cli.utils.magpie.make_magpie_generate_fn",
             lambda *a, **k: (lambda prompt: "a candidate"),
         )
-        with mock.patch("httpx.post", side_effect=_refused):
+        with mock.patch(BOUNDED_POST, side_effect=_refused):
             result = CliRunner().invoke(
                 app,
                 ["best-of-n", "--provider", "ollama", "--model", "sampler",
@@ -444,7 +446,7 @@ class TestBestOfNCli:
         )
         # The first prompt's three candidates are scored, then nothing answers.
         steps = [_reply(200, SCORED)] * 3
-        with mock.patch("httpx.post", side_effect=_script(*steps)):
+        with mock.patch(BOUNDED_POST, side_effect=_script(*steps)):
             result = CliRunner().invoke(
                 app,
                 ["best-of-n", "--provider", "ollama", "--model", "sampler",

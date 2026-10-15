@@ -459,6 +459,12 @@ valid IPv4 address (`10.0.0.256`, `4294967296`) is refused as well.
 
 ### Multi-Provider Support
 
+HTTP generation replies from `openai`, `server`, `ollama`, `vllm` and `anthropic`
+are limited to 8 MiB of decoded content, as are Magpie raw completions. The limit
+is checked while streaming, including gzip expansion, before JSON parsing.
+An oversized reply names the limit and the endpoint selector (`--api-base`,
+`--base-url` or `--provider anthropic`); it is refused without logging its body.
+
 ```bash
 # Generate via local Ollama instance
 soup data generate --prompt "..." --provider ollama --model llama3.1

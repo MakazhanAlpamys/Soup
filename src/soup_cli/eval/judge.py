@@ -550,11 +550,23 @@ def _judge_request(url: str, payload: dict, headers: dict, *, timeout: float = 1
     """
     import httpx
 
+    from soup_cli.utils.http_response import (
+        JUDGE_RESPONSE_LIMIT_BYTES,
+        ResponseTooLargeError,
+        post_capped,
+    )
+
     failure = ""
     for attempt in range(JUDGE_MAX_RETRIES + 1):
         retry_after: Optional[str] = None
         try:
-            resp = httpx.post(url, json=payload, headers=headers, timeout=timeout)
+            resp = post_capped(
+                url, json=payload, headers=headers, timeout=timeout,
+                max_bytes=JUDGE_RESPONSE_LIMIT_BYTES,
+                endpoint_label="judge --api-base / --judge-api-base / judge_model",
+            )
+        except ResponseTooLargeError as exc:
+            raise JudgeUnavailableError(str(exc), url=url) from exc
         except httpx.TransportError as exc:
             failure = f"{type(exc).__name__}: {exc}"
         except httpx.RequestError as exc:  # e.g. DecodingError: not transient, no retry
