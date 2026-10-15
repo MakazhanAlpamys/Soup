@@ -683,7 +683,7 @@ first three, then `... and N more`), and every skipped row, whether not an objec
 or not valid JSON, counts as an invalid row in its `N/M rows valid` line, in
 `--min-valid-fraction` and in the exit code; its other statistics describe the
 retained objects. `soup data review` applies the
-same object check before displaying a pair. Rejected row contents are not printed. `soup data canary insert` retains its first-row refusal and preserves later rows when rewriting the file.
+same object check before displaying a pair. Rejected row contents are not printed. Only the first three warnings per kind (non-object rows, invalid-JSON lines) are printed, followed by one `... and N more` line; the skipped count stays exact. `soup data canary insert` retains its first-row refusal and preserves later rows when rewriting the file.
 
 Soup supports these formats (auto-detected). Files can be JSONL, JSON, CSV, Parquet, or TXT.
 

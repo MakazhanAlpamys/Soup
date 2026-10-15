@@ -20,6 +20,7 @@ from soup_cli.data.formats import (
     is_vision_format,
     unify_preference_layout,
 )
+from soup_cli.data.validator import _MAX_REASON_SAMPLES
 from soup_cli.utils.paths import is_under_cwd
 
 console = Console()
@@ -104,10 +105,54 @@ def non_object_row_issue(value: object, position: int, unit: str = "line") -> st
     return f"{unit} {position} is a JSON {kind}, not an object"
 
 
+class SkippedRows(list):
+    """``issues`` list for ``load_raw_data``: keeps a bounded sample plus an exact total."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.total = 0
+
+
+class SkipTally:
+    """Counts rows skipped for one reason; prints only the first few warnings.
+
+    The exact ``count`` is always kept. Warnings, and the messages recorded in
+    ``issues``, stop after ``_MAX_REASON_SAMPLES``; ``finish()`` prints one line
+    for the rest.
+    """
+
+    def __init__(
+        self, summary: str, *, issues: list[str] | None = None, record: bool = False,
+    ) -> None:
+        self.summary = summary
+        self.count = 0
+        self.issues = issues
+        self.record = record
+
+    def add(self, message: str) -> None:
+        self.count += 1
+        if self.record and isinstance(self.issues, SkippedRows):
+            self.issues.total += 1
+        if self.count > _MAX_REASON_SAMPLES:
+            return
+        console.print(f"[yellow]Warning: {message}[/]")
+        if self.record and self.issues is not None:
+            self.issues.append(message)
+
+    def finish(self) -> None:
+        extra = self.count - _MAX_REASON_SAMPLES
+        if extra > 0:
+            console.print(f"[yellow]Warning: ... and {extra} more {self.summary}[/]")
+
+
 def _load_jsonl(
     path: Path, *, issues: list[str] | None = None, skip_non_object: bool = True,
 ) -> list[dict]:
     data = []
+    non_objects = SkipTally(
+        "lines skipped (JSON values that are not objects)", issues=issues, record=True,
+    )
+    bad_json = SkipTally("lines skipped (invalid JSON)", issues=issues, record=True)
     # v0.40.1 Part E — auto-strip UTF-8 BOM (Windows users overwhelmingly
     # write JSONL via PowerShell `Out-File -Encoding utf8` which adds BOM).
     # The ``utf-8-sig`` codec consumes the BOM transparently if present.
@@ -119,19 +164,13 @@ def _load_jsonl(
             try:
                 row = json.loads(line)
                 if skip_non_object and not isinstance(row, dict):
-                    issue = non_object_row_issue(row, i + 1)
-                    console.print(f"[yellow]Warning: {issue}[/]")
-                    if issues is not None:
-                        issues.append(issue)
+                    non_objects.add(non_object_row_issue(row, i + 1))
                     continue
                 data.append(row)
             except json.JSONDecodeError as e:
-                issue = f"invalid JSON on line {i + 1}: {e}"
-                console.print(f"[yellow]Warning: {issue}[/]")
-                if issues is not None:
-                    # #1887: a line that is not JSON is a skipped row too, and
-                    # `soup data validate` counts it like a non-object row.
-                    issues.append(issue)
+                bad_json.add(f"invalid JSON on line {i + 1}: {e}")
+    non_objects.finish()
+    bad_json.finish()
     return data
 
 
@@ -144,14 +183,15 @@ def _load_json(
         if not skip_non_object:
             return raw
         rows = []
+        non_objects = SkipTally(
+            "rows skipped (JSON values that are not objects)", issues=issues, record=True,
+        )
         for position, row in enumerate(raw, start=1):
             if not isinstance(row, dict):
-                issue = non_object_row_issue(row, position, "row")
-                console.print(f"[yellow]Warning: {issue}[/]")
-                if issues is not None:
-                    issues.append(issue)
+                non_objects.add(non_object_row_issue(row, position, "row"))
                 continue
             rows.append(row)
+        non_objects.finish()
         return rows
     raise ValueError("JSON file must contain a list of objects")
 

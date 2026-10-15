@@ -13,7 +13,13 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from soup_cli.data.loader import _resolve_media_entries, load_raw_data, non_object_row_issue
+from soup_cli.data.loader import (
+    SkippedRows,
+    SkipTally,
+    _resolve_media_entries,
+    load_raw_data,
+    non_object_row_issue,
+)
 from soup_cli.data.validator import _MAX_REASON_SAMPLES, validate_and_stats
 from soup_cli.utils.embed import DEFAULT_EMBED_MODEL, embed_texts
 from soup_cli.utils.exit_codes import EXIT_GATE_FAILED, EXIT_USAGE_ERROR, GateCommand
@@ -109,7 +115,7 @@ def validate(
             )
             raise typer.Exit(EXIT_USAGE_ERROR)
 
-    load_issues: list[str] = []
+    load_issues = SkippedRows()
     data = load_raw_data(file_path, issues=load_issues)
     # #1887: every row the loader skipped (not an object, or not JSON) is an
     # invalid row for the N/M line, for --min-valid-fraction and for the exit
@@ -136,8 +142,8 @@ def validate(
         result["issues"] = [none_remain if i == "Dataset is empty" else i
                             for i in result["issues"]]
     load_issue_samples = load_issues[:_MAX_REASON_SAMPLES]
-    if len(load_issues) > _MAX_REASON_SAMPLES:
-        load_issue_samples.append(f"... and {len(load_issues) - _MAX_REASON_SAMPLES} more")
+    if load_issues.total > _MAX_REASON_SAMPLES:
+        load_issue_samples.append(f"... and {load_issues.total - _MAX_REASON_SAMPLES} more")
     result["issues"] = load_issue_samples + result["issues"]
 
     if result["issues"]:
@@ -2281,6 +2287,7 @@ def review_cmd(
         raise typer.Exit(1)
 
     shown = 0
+    non_objects = SkipTally("lines skipped (JSON values that are not objects)")
     with path.open("r", encoding="utf-8") as fh:
         for line_number, line in enumerate(fh, start=1):
             if shown >= sample:
@@ -2293,8 +2300,7 @@ def review_cmd(
             except _json.JSONDecodeError:
                 continue
             if not isinstance(entry, dict):
-                issue = non_object_row_issue(entry, line_number)
-                console.print(f"[yellow]Warning: {issue}[/]")
+                non_objects.add(non_object_row_issue(entry, line_number))
                 continue
             prompt = str(entry.get("prompt", ""))
             chosen = str(entry.get("chosen", ""))
@@ -2308,6 +2314,7 @@ def review_cmd(
             ))
             shown += 1
 
+    non_objects.finish()
     if shown == 0:
         console.print("[yellow]No pairs found in file.[/]")
 
