@@ -1,4 +1,4 @@
-<!-- synced-from: README.md sha256:fa009c2fcc2c94ea06e25ea8620c2fbed9bfb8ac6611bf71a2669a06f7c50b46 -->
+<!-- synced-from: README.md sha256:abdfd5788191e1c8442088bb601c4078135f0294d668374a5e66143c0080b09a -->
 <p align="center">🌍 <a href="README.md">English</a> | <a href="README.tr.md">Türkçe</a> | <strong>العربية</strong> | <a href="README.ja.md">日本語</a> | <a href="README.zh.md">中文</a></p>
 
 <p align="center">
