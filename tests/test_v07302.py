@@ -873,9 +873,8 @@ class TestAHostileEvidenceFloorIsBoundedAndLoud:
         """The actual mitigation: the evidence reader must be exactly as loud
         as the live measurement path. The quieter of two readers is the one an
         attacker picks."""
-        from typer.testing import CliRunner
-
         from soup_cli.cli import app
+        from tests.cli_runner import CliRunner
 
         monkeypatch.chdir(tmp_path)
         (tmp_path / "ev.json").write_text(
@@ -902,9 +901,8 @@ class TestAHostileEvidenceFloorIsBoundedAndLoud:
     ):
         """CONTROL. Warning on every evidence file trains the operator to
         ignore the warning."""
-        from typer.testing import CliRunner
-
         from soup_cli.cli import app
+        from tests.cli_runner import CliRunner
 
         monkeypatch.chdir(tmp_path)
         (tmp_path / "ev.json").write_text(
@@ -1343,10 +1341,9 @@ def _run_ship_cli(monkeypatch, base_gen, tuned_gen, extra_args=None):
     """
     import os as _os
 
-    from typer.testing import CliRunner
-
     from soup_cli.cli import app
     from soup_cli.commands import ship as ship_cmd
+    from tests.cli_runner import CliRunner
 
     monkeypatch.setattr(
         ship_cmd, "_resolve_generators", lambda *a, **k: (base_gen, tuned_gen)
@@ -1751,14 +1748,13 @@ class TestBareFunctionShapeGuard:
 
 class TestNoiseFloorCliFlag:
     def _runner(self):
-        from typer.testing import CliRunner
+        from tests.cli_runner import CliRunner
 
         return CliRunner()
 
     def test_the_flag_exists_and_is_documented(self):
-        from typer.testing import CliRunner
-
         from soup_cli.cli import app
+        from tests.cli_runner import CliRunner
 
         result = CliRunner().invoke(app, ["ship", "--help"])
         assert result.exit_code == 0, (result.output, repr(result.exception))
@@ -1770,9 +1766,8 @@ class TestNoiseFloorCliFlag:
 
     @pytest.mark.parametrize("bad", ["1", "0", "-3", "11"])
     def test_out_of_range_is_a_usage_error(self, bad, tmp_path):
-        from typer.testing import CliRunner
-
         from soup_cli.cli import app
+        from tests.cli_runner import CliRunner
 
         tasks = tmp_path / "t.jsonl"
         tasks.write_text('{"prompt": "hi", "expected": "hi"}\n', encoding="utf-8")
@@ -1789,9 +1784,8 @@ class TestNoiseFloorCliFlag:
     def test_an_offline_verdict_refuses_to_measure_a_floor(self, tmp_path, monkeypatch):
         """``--evidence`` loads no model, so there is nothing to repeat.
         Refusing beats silently ignoring the flag the operator asked for."""
-        from typer.testing import CliRunner
-
         from soup_cli.cli import app
+        from tests.cli_runner import CliRunner
 
         monkeypatch.chdir(tmp_path)
         ev = tmp_path / "ev.json"
@@ -1811,9 +1805,8 @@ class TestNoiseFloorCliFlag:
 
     def test_an_offline_verdict_without_the_flag_still_works(self, tmp_path, monkeypatch):
         """CONTROL. The refusal must be about the FLAG, not about --evidence."""
-        from typer.testing import CliRunner
-
         from soup_cli.cli import app
+        from tests.cli_runner import CliRunner
 
         monkeypatch.chdir(tmp_path)
         ev = tmp_path / "ev.json"
