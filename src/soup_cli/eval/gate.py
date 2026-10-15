@@ -619,7 +619,7 @@ def run_gate(
                 f"baseline score for {base_name!r} must be a number, "
                 f"got {type(base_val).__name__}"
             )
-        base_val = _finite_score(
+        _finite_score(
             base_val,
             name=str(base_name),
             context="baseline score",
