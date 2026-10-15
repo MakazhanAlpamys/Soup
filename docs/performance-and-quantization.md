@@ -1213,7 +1213,11 @@ Optimize training throughput and extend context windows:
 
 `use_liger` and `use_flash_attn` are read only by the SFT-family trainer
 (`task: sft` or `task: tts`); setting either on any other task is rejected
-at config load.
+at config load. Liger is reported as enabled only when the model's
+`config.model_type` is in liger's own kernel table; for a type it has no kernels
+for (`gpt_neox`, `phi`, `gpt2`, ...) the run prints "no matching architecture
+found" and trains without it, instead of announcing kernels that were never
+applied (#1811).
 
 ```yaml
 # soup.yaml — performance options
