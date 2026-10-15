@@ -91,6 +91,24 @@ def test_convergence_needs_a_real_score_not_a_flat_sentinel_history() -> None:
     assert result.converged is False
 
 
+def test_four_failed_generations_do_not_stop_the_search_as_converged() -> None:
+    # The plateau reset on a sentinel generation (#1905 review): 16 failed
+    # evaluations are four all-failed generations, enough for plateau_run to reach 3
+    # if the sentinel counted as "no improvement". Without the reset the search
+    # stops there as converged and never sees the real score that follows.
+    calls = {"n": 0}
+
+    def late(weights):
+        calls["n"] += 1
+        if calls["n"] <= 16:
+            raise RuntimeError("warming up")
+        return 0.5
+
+    result = run_cmaes_merge(_plan(population_size=4, max_generations=8), eval_fn=late)
+    assert result.best_score == pytest.approx(0.5)
+    assert calls["n"] > 16
+
+
 def test_control_a_steady_scorer_still_converges() -> None:
     result = run_cmaes_merge(_plan(max_generations=10), eval_fn=lambda w: 0.6)
     assert result.converged is True

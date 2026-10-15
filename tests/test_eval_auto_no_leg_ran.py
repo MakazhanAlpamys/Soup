@@ -95,3 +95,15 @@ def test_control_a_leg_that_runs_exits_zero(workdir, monkeypatch) -> None:
     out = _plain(result.output)
     assert result.exit_code == 0, (result.exit_code, out)
     assert "Auto-eval complete." in out
+
+
+def test_control_a_benchmark_leg_that_runs_exits_zero(workdir, monkeypatch) -> None:
+    # The benchmark leg's own `legs_ran += 1`: with no tasks file the benchmark leg
+    # is the only one, so if it ran and is not counted the command would say
+    # "nothing was evaluated" (#1905 review).
+    monkeypatch.setattr(eval_mod, "benchmark", _ran)
+    result = _auto("--benchmarks", "mmlu")
+    out = _plain(result.output)
+    assert result.exit_code == 0, (result.exit_code, out)
+    assert "Auto-eval complete." in out
+    assert "nothing was evaluated" not in out.lower()
