@@ -156,6 +156,12 @@ def _pair_vocab_sizes_or_fail(
             _vocab_size_of(target, target_trc),
             _vocab_size_of(draft_id, draft_trc),
         )
+    except ImportError as exc:
+        console.print(
+            f"[red]could not read model config: {escape(str(exc))}[/]\n"
+            "Install with: [bold]pip install \"soup-cli\\[train]\"[/]"
+        )
+        raise typer.Exit(1)
     except Exception as exc:  # noqa: BLE001 — surface as a friendly CLI error
         _fail(f"could not read model config: {exc}")
 
@@ -616,6 +622,12 @@ def distill(
     try:
         target_vocab = _vocab_size_of(target, target_trc)
         draft_vocab = _vocab_size_of(draft_base, draft_trc)
+    except ImportError as exc:
+        console.print(
+            f"[red]could not read model config: {escape(str(exc))}[/]\n"
+            "Install with: [bold]pip install \"soup-cli\\[train]\"[/]"
+        )
+        raise typer.Exit(1)
     except Exception as exc:  # noqa: BLE001 — surface as a friendly CLI error
         _fail(f"could not read model config: {exc}")
 
