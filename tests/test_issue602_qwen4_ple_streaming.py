@@ -685,6 +685,12 @@ def test_qwen4_ram_ple_refusal_is_independent_of_base_stream_source():
         )
 
 
+def _record(calls, name, kwargs):
+    """`_drive_qwen4_streaming_setup`'s optional call recorder."""
+    if calls is not None:
+        calls.setdefault(name, []).append(dict(kwargs))
+
+
 def _drive_qwen4_streaming_setup(
     tmp_path,
     monkeypatch,
@@ -693,6 +699,8 @@ def _drive_qwen4_streaming_setup(
     arch="qwen4_exp",
     model_cfg=None,
     shard_calls=None,
+    load_calls=None,
+    trust_remote_code=False,
 ):
     """Drive the real `_setup_streaming_transformers()` for a qwen4_exp base.
 
@@ -708,7 +716,9 @@ def _drive_qwen4_streaming_setup(
 
     `arch` / `model_cfg` drive the same seam for another architecture
     (`tests/test_deepseek_v3_streaming.py`); `shard_calls`, when a list, receives
-    the keyword arguments of every `shard_checkpoint` call.
+    the keyword arguments of every `shard_checkpoint` call; `load_calls`, when a
+    dict, receives the keyword arguments of the tokenizer, config and
+    `build_streamed_model` calls under "tokenizer", "config" and "build".
     """
     import sys
     import types
@@ -721,7 +731,7 @@ def _drive_qwen4_streaming_setup(
     class _Wrapper(stream_setup.StreamingSetupMixin):
         def __init__(self):
             self.device = "cpu"
-            self._trust_remote_code = False
+            self._trust_remote_code = trust_remote_code
 
         def _stream_budget_lines(self, *_args, **_kwargs):
             return (), None
@@ -807,10 +817,12 @@ def _drive_qwen4_streaming_setup(
         ),
     )
     monkeypatch.setattr(
-        "transformers.AutoTokenizer.from_pretrained", lambda *_a, **_k: tokenizer
+        "transformers.AutoTokenizer.from_pretrained",
+        lambda *_a, **k: (_record(load_calls, "tokenizer", k), tokenizer)[1],
     )
     monkeypatch.setattr(
-        "transformers.AutoConfig.from_pretrained", lambda *_a, **_k: model_cfg
+        "transformers.AutoConfig.from_pretrained",
+        lambda *_a, **k: (_record(load_calls, "config", k), model_cfg)[1],
     )
     monkeypatch.setattr("peft.LoraConfig", lambda **kwargs: types.SimpleNamespace(**kwargs))
     monkeypatch.setattr(
@@ -869,7 +881,10 @@ def _drive_qwen4_streaming_setup(
     )
     monkeypatch.setattr(
         "soup_cli.utils.layer_stream_runtime.build_streamed_model",
-        lambda **_kwargs: (types.SimpleNamespace(), runtime),
+        lambda **kwargs: (
+            _record(load_calls, "build", kwargs),
+            (types.SimpleNamespace(), runtime),
+        )[1],
     )
 
     reached = []

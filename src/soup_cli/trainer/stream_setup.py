@@ -620,6 +620,25 @@ class StreamingSetupMixin:
     #: Set by :meth:`_setup_streaming_transformers`; absent on a resident run.
     _stream_runtime = None
 
+    #: ``trust_remote_code`` for the streamed MODEL (config, meta skeleton,
+    #: install): always False. Every entry of ``SUPPORTED_STREAM_ARCHS`` passed
+    #: its resident-vs-streamed parity gate on transformers' own class, and a hub
+    #: repo's remote modelling code lays the same weights out differently
+    #: (Moonlight's ``modeling_deepseek.py`` keeps one module per expert, so the
+    #: shards would not fit it). The tokenizer still gets the user's
+    #: ``trust_remote_code``: that is where such repos need it (Moonlight's
+    #: tokenizer exists only as remote code).
+    _STREAM_NATIVE_MODEL_CODE = False
+
+    @classmethod
+    def _stream_meta_skeleton(cls, base, *, dtype, quant):
+        """The setup's meta probe of the streamed model, from native code."""
+        from soup_cli.utils.layer_stream_runtime import build_meta_skeleton
+
+        return build_meta_skeleton(
+            base, dtype=dtype, quant=quant, trust_remote_code=cls._STREAM_NATIVE_MODEL_CODE
+        )
+
     @staticmethod
     def _stream_shape_config(model_config):
         """Text sub-config for multimodal wrappers; plain config otherwise."""
@@ -731,7 +750,6 @@ class StreamingSetupMixin:
         )
         from soup_cli.utils.layer_stream_runtime import (
             RamSource,
-            build_meta_skeleton,
             build_streamed_model,
             expandable_segments_status,
             extras_resident_bytes,
@@ -753,8 +771,10 @@ class StreamingSetupMixin:
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
 
+        # The streamed decoder is always transformers' own class (see
+        # _STREAM_NATIVE_MODEL_CODE); trust_remote_code reaches the tokenizer only.
         model_config = AutoConfig.from_pretrained(
-            cfg.base, trust_remote_code=self._trust_remote_code
+            cfg.base, trust_remote_code=self._STREAM_NATIVE_MODEL_CODE
         )
         # Allowlist, not a heuristic — a half-supported architecture streams
         # weights into the wrong module and mis-trains silently.
@@ -915,22 +935,12 @@ class StreamingSetupMixin:
         # The probe is a meta skeleton and is the only model available here, so
         # the call happens while it is alive rather than at the attach below.
         if quant == QUANT_NF4:
-            probe = build_meta_skeleton(
-                cfg.base,
-                dtype=dtype,
-                quant=quant,
-                trust_remote_code=self._trust_remote_code,
-            )
+            probe = self._stream_meta_skeleton(cfg.base, dtype=dtype, quant=quant)
             moe_targets = resolve_moe_lora_targets(probe, tcfg, None, console=console)
             quant_suffixes = quantised_layer_suffixes(probe)
             del probe
         elif tcfg.moe_lora:
-            probe = build_meta_skeleton(
-                cfg.base,
-                dtype=dtype,
-                quant=quant,
-                trust_remote_code=self._trust_remote_code,
-            )
+            probe = self._stream_meta_skeleton(cfg.base, dtype=dtype, quant=quant)
             moe_targets = resolve_moe_lora_targets(probe, tcfg, None, console=console)
             del probe
 
@@ -1211,7 +1221,7 @@ class StreamingSetupMixin:
             # gated on a real CUDA device.
             require_pin=(tcfg.stream_pin is True) and on_cuda,
             seed=tcfg.seed if getattr(tcfg, "seed", None) is not None else 0,
-            trust_remote_code=self._trust_remote_code,
+            trust_remote_code=self._STREAM_NATIVE_MODEL_CODE,
             console=console,
             quant=quant,
             double_quant=double_quant,
