@@ -40,14 +40,14 @@ def test_the_model_files_refuse_before_any_load(tmp_path, cuda_present, config, 
 
 
 @pytest.mark.parametrize("model_type", ["qwen2", "llama"])
-@pytest.mark.parametrize("device", ["cuda", "cuda:1", "CUDA"])
+@pytest.mark.parametrize("device", ["cuda", "cuda:1", "CUDA", "  cuda:0 "])
 def test_a_stock_model_on_a_cuda_device_passes(tmp_path, cuda_present, model_type, device):
     cuda_graphs.check_cuda_graphs_preflight(
         device=device, model_target=_dir(tmp_path, {"model_type": model_type})
     )
 
 
-@pytest.mark.parametrize("device", ["cpu", "mps"])
+@pytest.mark.parametrize("device", ["cpu", "mps", "cuda0", "cudax"])
 def test_a_non_cuda_device_is_refused(device):
     with pytest.raises(RuntimeError, match="single CUDA device"):
         cuda_graphs.check_cuda_graphs_preflight(device=device)
@@ -62,6 +62,11 @@ def test_an_unreadable_config_is_left_to_the_loader(tmp_path, cuda_present, payl
 @pytest.mark.parametrize("payload", [b"\xff\xfe\x00", b"{not json", b"[]"])
 def test_an_unreadable_adapter_config_is_left_to_the_loader(tmp_path, cuda_present, payload):
     (tmp_path / "adapter_config.json").write_bytes(payload)
+    cuda_graphs.check_cuda_graphs_preflight(device="cuda", model_target=str(tmp_path))
+
+
+def test_an_adapter_config_without_peft_type_is_left_to_the_loader(tmp_path, cuda_present):
+    (tmp_path / "adapter_config.json").write_text(json.dumps({"r": 8}), encoding="utf-8")
     cuda_graphs.check_cuda_graphs_preflight(device="cuda", model_target=str(tmp_path))
 
 
@@ -135,6 +140,20 @@ def test_macos_never_probes_the_driver(monkeypatch):
     _, opened = _driver(monkeypatch, platform="darwin")
     assert cuda_graphs._is_cuda_available_light() is False
     assert opened == []
+
+
+def test_a_missing_driver_library_raises_oserror_means_no_cuda(monkeypatch):
+    import ctypes
+
+    _driver(monkeypatch)
+
+    def raise_oserror(*args, **kwargs):
+        raise OSError("libcuda.so.1: cannot open shared object file")
+
+    monkeypatch.setattr(ctypes, "CDLL", raise_oserror)
+    assert cuda_graphs._is_cuda_available_light() is False
+    with pytest.raises(RuntimeError, match="single CUDA device"):
+        cuda_graphs.check_cuda_graphs_preflight()
 
 
 @pytest.mark.parametrize("available", [True, False])
