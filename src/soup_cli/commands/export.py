@@ -14,13 +14,12 @@ from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
 
-from soup_cli.config.deprecation import DEPRECATED_VALUE_REJECTION_VERSION
 from soup_cli.utils.terminal import for_terminal, strip_control
 
 console = Console()
 
 SUPPORTED_FORMATS = (
-    "gguf", "onnx", "tensorrt", "awq", "gptq",
+    "gguf", "onnx", "tensorrt",
     # v0.52.0 Part D — BitNet 1.58-bit + TQ1_0 GGUF.
     # Live llama.cpp conversion (v0.71.20 #134); needs a built llama.cpp toolchain.
     "bitnet", "tq1_0",
@@ -30,41 +29,10 @@ SUPPORTED_FORMATS = (
     # v0.53.1 #139 — UD/IQ/Apple-ARM GGUFs via llama.cpp imatrix.
     "gguf-ud",
 )
-# #338 — AWQ and GPTQ export are deprecated: both upstream projects are archived
-# and neither extra installs next to the train extra. The two formats still run
-# for one more release; the notice names the formats to move to. Maps the format
-# to the upstream project the notice names.
-DEPRECATED_FORMATS = {"awq": "AutoAWQ", "gptq": "AutoGPTQ"}
-REPLACEMENT_FORMATS = ("gguf", "onnx", "tensorrt", "bitnet", "tq1_0")
 GGUF_QUANT_TYPES = ("q4_0", "q4_k_m", "q5_k_m", "q8_0", "f16", "f32")
 LLAMA_CPP_DIR_NAME = "llama.cpp"
 # Pin to a known release tag for supply-chain safety
 LLAMA_CPP_TAG = "b5270"
-
-
-def deprecated_format_notice(fmt: str) -> Optional[str]:
-    """The deprecation line for an export format, or ``None`` when it stays.
-
-    Plain text with no console markup: ``soup export`` and ``soup quantize``
-    both print it behind a ``Deprecated:`` label.
-    """
-    upstream = DEPRECATED_FORMATS.get(fmt)
-    if upstream is None:
-        return None
-    replacements = ", ".join(REPLACEMENT_FORMATS[:-1]) + f" or {REPLACEMENT_FORMATS[-1]}"
-    return (
-        f"--format {fmt} is deprecated and will be removed in "
-        f"Soup v{DEPRECATED_VALUE_REJECTION_VERSION}: "
-        f"{upstream} is archived upstream and the {fmt} extra cannot be installed "
-        f"next to the train extra. Use --format {replacements} instead."
-    )
-
-
-def _warn_deprecated_format(fmt: str) -> None:
-    """Print the deprecation notice for ``fmt``, if it has one."""
-    notice = deprecated_format_notice(fmt)
-    if notice is not None:
-        console.print(f"[yellow]Deprecated:[/] {notice}")
 
 
 def export(
@@ -79,9 +47,8 @@ def export(
         "--format",
         "-f",
         help=(
-            "Export format: gguf, onnx, tensorrt, awq, gptq, bitnet, tq1_0, torchao, "
-            "gguf-ud (torchao needs --quant-config; awq and gptq are deprecated and "
-            f"will be removed in Soup v{DEPRECATED_VALUE_REJECTION_VERSION})"
+            "Export format: gguf, onnx, tensorrt, bitnet, tq1_0, torchao, "
+            "gguf-ud (torchao needs --quant-config)"
         ),
     ),
     quant: str = typer.Option(
@@ -122,25 +89,10 @@ def export(
         "--deploy-name",
         help="Model name for deployment (used with --deploy)",
     ),
-    bits: int = typer.Option(
-        4,
-        "--bits",
-        help="Quantization bits for AWQ/GPTQ: 4 or 8",
-    ),
-    group_size: int = typer.Option(
-        128,
-        "--group-size",
-        help="Group size for AWQ/GPTQ quantization",
-    ),
     calibration_data: Optional[str] = typer.Option(
         None,
         "--calibration-data",
-        help="Path to calibration JSONL. Required for AWQ and GPTQ.",
-    ),
-    calibration_samples: int = typer.Option(
-        128,
-        "--calibration-samples",
-        help="Number of calibration samples for AWQ/GPTQ",
+        help="Path to calibration JSONL (for imatrix gguf-ud export).",
     ),
     registry_id: Optional[str] = typer.Option(
         None,
@@ -188,7 +140,7 @@ def export(
         help="GGUF only: never invoke pip; refuse missing conversion dependencies before work.",
     ),
 ):
-    """Export a model to GGUF, ONNX, TensorRT-LLM, AWQ, GPTQ, or TorchAO format."""
+    """Export a model to GGUF, ONNX, TensorRT-LLM, BitNet, or TorchAO format."""
     # v0.53.10 #152 — pre-fetch the base model from a non-HF hub. ``model``
     # is typically a local merged dir / adapter dir; only ``base`` is rewritten.
     if hub and hub != "hf":
@@ -261,31 +213,7 @@ def export(
             )
         return
 
-    # --- AWQ export path ---
-    if fmt == "awq":
-        output_path = _export_awq(
-            model_path, output, base, bits, group_size,
-            calibration_data, calibration_samples, trust_remote_code,
-        )
-        if output_path is not None:
-            _maybe_attach_export(
-                artifact_path=str(output_path), kind="awq",
-                explicit_id=registry_id, source_model=str(Path(model)),
-            )
-        return
 
-    # --- GPTQ export path ---
-    if fmt == "gptq":
-        output_path = _export_gptq(
-            model_path, output, base, bits, group_size,
-            calibration_data, calibration_samples, trust_remote_code,
-        )
-        if output_path is not None:
-            _maybe_attach_export(
-                artifact_path=str(output_path), kind="gptq",
-                explicit_id=registry_id, source_model=str(Path(model)),
-            )
-        return
 
     # --- TorchAO PTQ export path (v0.53.1 #142) ---
     if fmt == "torchao":
@@ -1025,370 +953,6 @@ def _validate_output_path(output: Optional[str]) -> Optional[Path]:
         console.print("[red]Output path must be under the current working directory.[/]")
         raise typer.Exit(1)
     return out_path
-
-
-def _validate_calibration_path(calibration_data: Optional[str]) -> Optional[Path]:
-    """Validate calibration data path stays under cwd."""
-    if calibration_data is None:
-        return None
-    from soup_cli.utils.paths import is_under_cwd
-
-    cal_path = Path(calibration_data).resolve()
-    if not is_under_cwd(calibration_data):
-        console.print("[red]Calibration data path must be under the current working directory.[/]")
-        raise typer.Exit(1)
-    if not cal_path.exists():
-        console.print(f"[red]Calibration data not found: {cal_path}[/]")
-        raise typer.Exit(1)
-    return cal_path
-
-
-class _CalibrationDataReadError(ValueError):
-    """A calibration JSONL could not be decoded or read safely."""
-
-
-def _load_calibration_texts(cal_path: Optional[Path], max_samples: int = 128) -> list:
-    """Load calibration texts from JSONL file."""
-    if cal_path is None:
-        return []
-    texts = []
-    try:
-        with open(cal_path, encoding="utf-8") as fh:
-            for line in fh:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    row = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if not isinstance(row, dict):
-                    continue
-                # Support "text" field or concatenate all non-empty values.
-                if "text" in row:
-                    value = row["text"]
-                    text = "" if value is None else str(value)
-                else:
-                    text = " ".join(str(v) for v in row.values() if v)
-                if text.strip():
-                    texts.append(text)
-                if len(texts) >= max_samples:
-                    break
-    except UnicodeError as exc:
-        raise _CalibrationDataReadError(
-            f"Calibration data is not valid UTF-8: {cal_path}"
-        ) from exc
-    except OSError as exc:
-        raise _CalibrationDataReadError(
-            f"Could not read calibration data {cal_path}: {exc}"
-        ) from exc
-    return texts
-
-
-def _standardize_gptq_shard_name(output_path: Path, bits: int, group_size: int) -> None:
-    """auto_gptq's save_quantized names its shard gptq_model-<bits>bit-<group>g.safetensors,
-    a name AutoModelForCausalLM.from_pretrained does not look for; rename it to the
-    standard model.safetensors so the exported directory reloads."""
-    shard = output_path / f"gptq_model-{bits}bit-{group_size}g.safetensors"
-    standard = output_path / "model.safetensors"
-    if shard.exists() and not standard.exists():
-        shard.rename(standard)
-
-
-def _export_awq(
-    model_path: Path,
-    output: Optional[str],
-    base: Optional[str],
-    bits: int = 4,
-    group_size: int = 128,
-    calibration_data: Optional[str] = None,
-    calibration_samples: int = 128,
-    trust_remote_code: bool = False,
-) -> Optional[Path]:
-    """Export model to AWQ format via autoawq."""
-    # First, so it is there whatever stops the run (most stop at the extra).
-    _warn_deprecated_format("awq")
-    # Validate bits
-    valid_bits = {4, 8}
-    if bits not in valid_bits:
-        console.print(
-            f"[red]Invalid --bits {bits}. Must be one of: {sorted(valid_bits)}[/]"
-        )
-        raise typer.Exit(1)
-
-    # Validate output path (security: path traversal protection)
-    validated_output = _validate_output_path(output)
-
-    # Validate calibration path (security: path traversal protection)
-    cal_path = _validate_calibration_path(calibration_data)
-    if cal_path is None:
-        console.print(
-            "[red]AWQ export requires --calibration-data.[/]\n"
-            "AutoAWQ otherwise downloads its large default calibration dataset: "
-            "pass a calibration JSONL, e.g. [bold]--calibration-data path/to/data.jsonl[/]."
-        )
-        raise typer.Exit(1)
-    try:
-        calib_data = _load_calibration_texts(cal_path, max_samples=calibration_samples)
-    except _CalibrationDataReadError as exc:
-        console.print(f"[red]{exc}[/]")
-        raise typer.Exit(1) from exc
-    if not calib_data:
-        console.print(f"[red]No usable calibration samples found in {cal_path}.[/]")
-        raise typer.Exit(1)
-
-    try:
-        from awq import AutoAWQForCausalLM
-    except ImportError as exc:
-        if exc.name != "awq":
-            console.print(f"[red]autoawq import failed:[/] {exc}")
-            raise typer.Exit(1)
-        console.print(
-            "[red]autoawq not installed.[/]\n"
-            "Install with: [bold]pip install \"soup-cli\\[awq]\"[/]\n"
-            "Or directly: [bold]pip install autoawq[/]"
-        )
-        raise typer.Exit(1)
-
-    from transformers import AutoTokenizer
-
-    # Check if LoRA adapter — merge first
-    adapter_config_path = model_path / "adapter_config.json"
-    is_adapter = adapter_config_path.exists()
-    merge_dir = None
-    source_path = model_path
-
-    if is_adapter:
-        console.print("[yellow]LoRA adapter detected - merging with base model first...[/]")
-        base_model = base or _detect_base_model(adapter_config_path)
-        if not base_model:
-            console.print(
-                "[red]Cannot detect base model from adapter_config.json.[/]\n"
-                "Please specify with [bold]--base[/] flag."
-            )
-            raise typer.Exit(1)
-        merge_dir = model_path.parent / f".soup_merge_tmp_{model_path.name}"
-        _merge_adapter(str(model_path), base_model, str(merge_dir), trust_remote_code)
-        source_path = merge_dir
-
-    default_out = model_path.parent / f"{model_path.name}_awq"
-    output_path = validated_output if validated_output else default_out
-
-    console.print(
-        Panel(
-            f"Model:      [bold]{source_path}[/]\n"
-            f"Format:     [bold]AWQ[/]\n"
-            f"Bits:       [bold]{bits}[/]\n"
-            f"Group size: [bold]{group_size}[/]\n"
-            f"Output:     [bold]{output_path}[/]",
-            title="Export Plan",
-        )
-    )
-
-    try:
-        console.print(
-            Panel(
-                "[yellow]Warning:[/] Loading model with trust_remote_code=True.\n"
-                "This may execute custom code from the model directory.",
-                title="Security Notice",
-            )
-        )
-        console.print("[dim]Loading model for AWQ quantization...[/]")
-        model = AutoAWQForCausalLM.from_pretrained(str(source_path))
-        from soup_cli.utils.trust_remote import (
-            model_requires_trust_remote_code,
-            resolve_trust_remote_code,
-        )
-
-        requires_tok = model_requires_trust_remote_code(str(source_path)) or False
-        trc_tok = resolve_trust_remote_code(
-            str(source_path),
-            requested=trust_remote_code,
-            console=console,
-            requires_remote_code=requires_tok,
-        )
-        tokenizer = AutoTokenizer.from_pretrained(str(source_path), trust_remote_code=trc_tok)
-
-        quant_config = {"zero_point": True, "q_group_size": group_size, "w_bit": bits}
-
-        console.print(f"[dim]Quantizing to AWQ {bits}-bit (group_size={group_size})...[/]")
-        model.quantize(tokenizer, quant_config=quant_config, calib_data=calib_data)
-
-        console.print("[dim]Saving quantized model...[/]")
-        model.save_quantized(str(output_path))
-        tokenizer.save_pretrained(str(output_path))
-
-    except Exception as exc:
-        console.print(f"[red]AWQ export failed:[/] {exc}")
-        raise typer.Exit(1)
-    finally:
-        if merge_dir and merge_dir.exists():
-            console.print("[dim]Cleaning up temporary merge files...[/]")
-            shutil.rmtree(merge_dir, ignore_errors=True)
-
-    console.print(
-        Panel(
-            f"Output: [bold]{output_path}[/]\n"
-            f"Format: [bold]AWQ {bits}-bit[/]\n\n"
-            f"Use with vLLM:\n"
-            f"  [bold]from vllm import LLM[/]\n"
-            f"  [bold]llm = LLM(model='{output_path}', quantization='awq')[/]",
-            title="[bold green]AWQ Export Complete![/]",
-        )
-    )
-    return output_path
-
-
-def _export_gptq(
-    model_path: Path,
-    output: Optional[str],
-    base: Optional[str],
-    bits: int = 4,
-    group_size: int = 128,
-    calibration_data: Optional[str] = None,
-    calibration_samples: int = 128,
-    trust_remote_code: bool = False,
-) -> Optional[Path]:
-    """Export model to GPTQ format via auto-gptq."""
-    # First, so it is there whatever stops the run (most stop at the extra).
-    _warn_deprecated_format("gptq")
-    # Validate bits
-    valid_bits = {4, 8}
-    if bits not in valid_bits:
-        console.print(
-            f"[red]Invalid --bits {bits}. Must be one of: {sorted(valid_bits)}[/]"
-        )
-        raise typer.Exit(1)
-
-    # Validate output path (security: path traversal protection)
-    validated_output = _validate_output_path(output)
-
-    # Validate calibration path (security: path traversal protection)
-    cal_path = _validate_calibration_path(calibration_data)
-    if cal_path is None:
-        console.print(
-            "[red]GPTQ export requires --calibration-data.[/]\n"
-            "auto-gptq has no built-in calibration dataset: "
-            "pass a calibration JSONL, e.g. [bold]--calibration-data path/to/data.jsonl[/]."
-        )
-        raise typer.Exit(1)
-    try:
-        calib_texts = _load_calibration_texts(cal_path, max_samples=calibration_samples)
-    except _CalibrationDataReadError as exc:
-        console.print(f"[red]{exc}[/]")
-        raise typer.Exit(1) from exc
-    if not calib_texts:
-        console.print(f"[red]No usable calibration samples found in {cal_path}.[/]")
-        raise typer.Exit(1)
-
-    try:
-        from auto_gptq import AutoGPTQForCausalLM, BaseQuantizeConfig
-    except ImportError as exc:
-        if exc.name != "auto_gptq":
-            console.print(f"[red]auto-gptq import failed:[/] {exc}")
-            raise typer.Exit(1)
-        console.print(
-            "[red]auto-gptq not installed.[/]\n"
-            "Install with: [bold]pip install \"soup-cli\\[gptq]\"[/]\n"
-            "Or directly: [bold]pip install auto-gptq[/]"
-        )
-        raise typer.Exit(1)
-
-    from transformers import AutoTokenizer
-
-    # Check if LoRA adapter — merge first
-    adapter_config_path = model_path / "adapter_config.json"
-    is_adapter = adapter_config_path.exists()
-    merge_dir = None
-    source_path = model_path
-
-    if is_adapter:
-        console.print("[yellow]LoRA adapter detected - merging with base model first...[/]")
-        base_model = base or _detect_base_model(adapter_config_path)
-        if not base_model:
-            console.print(
-                "[red]Cannot detect base model from adapter_config.json.[/]\n"
-                "Please specify with [bold]--base[/] flag."
-            )
-            raise typer.Exit(1)
-        merge_dir = model_path.parent / f".soup_merge_tmp_{model_path.name}"
-        _merge_adapter(str(model_path), base_model, str(merge_dir), trust_remote_code)
-        source_path = merge_dir
-
-    default_out = model_path.parent / f"{model_path.name}_gptq"
-    output_path = validated_output if validated_output else default_out
-
-    console.print(
-        Panel(
-            f"Model:      [bold]{source_path}[/]\n"
-            f"Format:     [bold]GPTQ[/]\n"
-            f"Bits:       [bold]{bits}[/]\n"
-            f"Group size: [bold]{group_size}[/]\n"
-            f"Output:     [bold]{output_path}[/]",
-            title="Export Plan",
-        )
-    )
-
-    try:
-        console.print(
-            Panel(
-                "[yellow]Warning:[/] Loading model with trust_remote_code=True.\n"
-                "This may execute custom code from the model directory.",
-                title="Security Notice",
-            )
-        )
-        console.print("[dim]Loading model for GPTQ quantization...[/]")
-        quantize_config = BaseQuantizeConfig(
-            bits=bits,
-            group_size=group_size,
-            desc_act=False,
-        )
-        model = AutoGPTQForCausalLM.from_pretrained(
-            str(source_path), quantize_config=quantize_config
-        )
-        from soup_cli.utils.trust_remote import (
-            model_requires_trust_remote_code,
-            resolve_trust_remote_code,
-        )
-
-        requires_tok = model_requires_trust_remote_code(str(source_path)) or False
-        trc_tok = resolve_trust_remote_code(
-            str(source_path),
-            requested=trust_remote_code,
-            console=console,
-            requires_remote_code=requires_tok,
-        )
-        tokenizer = AutoTokenizer.from_pretrained(str(source_path), trust_remote_code=trc_tok)
-
-        calib_data = [tokenizer(t, return_tensors="pt") for t in calib_texts]
-
-        console.print(f"[dim]Quantizing to GPTQ {bits}-bit (group_size={group_size})...[/]")
-        model.quantize(calib_data)
-
-        console.print("[dim]Saving quantized model...[/]")
-        model.save_quantized(str(output_path))
-        tokenizer.save_pretrained(str(output_path))
-        _standardize_gptq_shard_name(output_path, bits, group_size)
-
-    except Exception as exc:
-        console.print(f"[red]GPTQ export failed:[/] {exc}")
-        raise typer.Exit(1)
-    finally:
-        if merge_dir and merge_dir.exists():
-            console.print("[dim]Cleaning up temporary merge files...[/]")
-            shutil.rmtree(merge_dir, ignore_errors=True)
-
-    console.print(
-        Panel(
-            f"Output: [bold]{output_path}[/]\n"
-            f"Format: [bold]GPTQ {bits}-bit[/]\n\n"
-            f"Use with vLLM:\n"
-            f"  [bold]from vllm import LLM[/]\n"
-            f"  [bold]llm = LLM(model='{output_path}', quantization='gptq')[/]",
-            title="[bold green]GPTQ Export Complete![/]",
-        )
-    )
-    return output_path
 
 
 def _auto_deploy_ollama(

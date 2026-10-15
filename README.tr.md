@@ -138,8 +138,6 @@ veriyor ve onları reddedecek sürümü belirtiyor. Daha önce yüklenen bir yap
   kod çözmede 2.9x daha hızlıydı). `soup ab`, iki yönlü, varyansa karşı dayanıklı bir test çalıştırır;
   `soup adapters sign --backend sigstore` ve `soup attest emit --sign sigstore` ise Sigstore anahtarsız
   OIDC ile imzalar (`pip install "soup-cli[sigstore]"`).
-- **Kullanımdan kaldırıldı:** `soup export --format awq` ve `--format gptq` v0.77'de kaldırılacak; her
-  iki üst proje de arşivlenmiş durumda ve ekstralardan hiçbiri `[train]` ile yan yana kurulamıyor.
 
 > Yalnızca Python **3.10–3.12**. 3.13+ sürümlerinde pip, Soup daha hiç çalışmadan yerel (native)
 > uzantıda çöken, test edilmemiş PyTorch wheel paketlerini seçiyordu.
@@ -220,7 +218,7 @@ soup merge  --adapter ./output                              # LoRA'yı tabana bi
 soup export --model ./output --format gguf --quant q4_k_m   # Ollama / llama.cpp için GGUF
 ```
 
-Diğer dışa aktarma hedefleri (ONNX, TensorRT, AWQ, GPTQ, BitNet) ve dağıtım seçenekleri
+Diğer dışa aktarma hedefleri (ONNX, TensorRT, BitNet) ve dağıtım seçenekleri
 [`docs/serving-and-export.md`](docs/serving-and-export.md) içinde yer alır.
 
 ## Web Arayüzü

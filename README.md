@@ -136,8 +136,6 @@ that will refuse them. A config that loaded before can stop loading: run
   2.9x faster than the fastest without). `soup ab` runs a two-sided, variance-robust test, and
   `soup adapters sign --backend sigstore` and `soup attest emit --sign sigstore` sign with
   Sigstore keyless OIDC (`pip install "soup-cli[sigstore]"`).
-- **Deprecated:** `soup export --format awq` and `--format gptq` will be removed in v0.77; both
-  upstream projects are archived and neither extra installs next to `[train]`.
 
 > Python **3.10–3.12** only. On 3.13+, pip used to resolve untested PyTorch wheels that
 > crash in the native extension before Soup runs at all.
@@ -218,7 +216,7 @@ soup merge  --adapter ./output                              # merge LoRA into th
 soup export --model ./output --format gguf --quant q4_k_m   # GGUF for Ollama / llama.cpp
 ```
 
-More export targets (ONNX, TensorRT, AWQ, GPTQ, BitNet) and deployment options live in
+More export targets (ONNX, TensorRT, BitNet) and deployment options live in
 [`docs/serving-and-export.md`](docs/serving-and-export.md).
 
 ## Web UI
