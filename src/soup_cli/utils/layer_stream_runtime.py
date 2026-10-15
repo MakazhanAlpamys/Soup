@@ -2915,6 +2915,11 @@ class StreamRuntime:
             # number there would be an invented one.
             "read_ahead": getattr(self.source, "read_ahead", None),
             "disk_bytes": getattr(self.source, "disk_bytes", 0),
+            "drive_count": len(getattr(self.source, "direct_io_roots", {})),
+            "direct_io_drives": sum(
+                getattr(self.source, "direct_io_roots", {}).values()
+            ),
+            "direct_io_roots": dict(getattr(self.source, "direct_io_roots", {})),
             "layer_loads": self.pool.loads,
             "large_loads": getattr(self.large_pool, "loads", 0),
             "device": self.device,
@@ -3456,6 +3461,22 @@ def _say_unaligned_staging(source: Any, console: Any) -> None:
         console.print(f"[yellow]{UNALIGNED_STAGING_MESSAGE}[/]")
 
 
+def _say_page_cache_roots(source: Any, console: Any) -> None:
+    """Name each drive whose operating system refused direct I/O (#1615)."""
+    if console is None:
+        return
+    for root, reason in getattr(source, "page_cache_reasons", {}).items():
+        console.print(
+            "[yellow]Layer streaming reads "
+            f"{root} through the page cache: direct I/O is unavailable there ({reason}).[/]"
+        )
+
+
+def _say_disk_source_fallbacks(source: Any, console: Any) -> None:
+    _say_unaligned_staging(source, console)
+    _say_page_cache_roots(source, console)
+
+
 def _build_source(
     shard_dir,
     n_layers,
@@ -3557,10 +3578,10 @@ def _build_source(
                 # otherwise report as an out-of-memory it never had.
                 recover_from_failed_page_lock(console=console)
             else:
-                _say_unaligned_staging(source, console)
+                _say_disk_source_fallbacks(source, console)
                 return source, source.pinned
         source = AsyncDiskSource(shard_dir, n_layers, spec, pin=False, **open_kwargs)
-        _say_unaligned_staging(source, console)
+        _say_disk_source_fallbacks(source, console)
         return source, source.pinned
     # `source.pinned` on both branches rather than the literal, so the tuple's
     # second element has ONE meaning to read off: what the source says about

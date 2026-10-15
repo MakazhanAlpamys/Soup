@@ -63,8 +63,13 @@ def _stream_source_line(stats: dict) -> str:
         )
     # Since #974 the staging lives in the same power-of-two arenas as the RAM
     # store, so the disk tier can say what was page-locked too.
+    drive_count = stats.get("drive_count", 1)
+    direct_io = stats.get("direct_io_drives", drive_count)
+    media = "an NVMe volume"
+    if drive_count > 1:
+        media = f"{drive_count} NVMe volumes, direct I/O {direct_io}/{drive_count}"
     return (
-        f"streamed from DISK ({stats['disk_bytes'] / 1e9:.2f} GB on an NVMe volume) "
+        f"streamed from DISK ({stats['disk_bytes'] / 1e9:.2f} GB on {media}) "
         f"by an async reader, read_ahead={stats['read_ahead']}, "
         f"{stats['store_bytes'] / 1e6:.0f} MB {pinned} host staging"
     ) + _page_locked_note(stats)
@@ -306,7 +311,31 @@ def _disk_volume(path: str) -> tuple[int, int]:
     return int(os.stat(anchor).st_dev), int(shutil.disk_usage(anchor).free)
 
 
-def _effective_read_ahead(tcfg: Any, n_roots: int, console: Any) -> ReadAheadDecision:
+def _say_read_ahead_decision(decision: ReadAheadDecision, console: Any) -> None:
+    """Explain a striped disk reader's effective depth."""
+    n_roots = decision.n_roots
+    if n_roots <= 1:
+        return
+    configured = decision.configured
+    wanted = min(n_roots + 1, MAX_STREAM_READ_AHEAD)
+    if decision.raised:
+        console.print(
+            f"[dim]training.stream_read_ahead {configured} -> {decision.depth}: the layer "
+            f"cache spans {n_roots} drives, and each needs a read in flight "
+            f"({DEFAULT_STREAM_READ_AHEAD} counts as the default; any other value is kept as "
+            f"set).[/]"
+        )
+    elif configured < wanted:
+        console.print(
+            f"[yellow]training.stream_read_ahead={configured} with {n_roots} stripe drives "
+            f"keeps {wanted - configured} of them idle between layers; {wanted} lets every "
+            f"drive read at once (one more layer of host staging each).[/]"
+        )
+
+
+def _effective_read_ahead(
+    tcfg: Any, n_roots: int, console: Any, *, announce: bool = True
+) -> ReadAheadDecision:
     """The async reader's depth with ``n_roots`` drives (R4), and how it came about.
 
     Every drive needs a read in flight beside the slot the consumer holds, so the DEFAULT depth
@@ -326,22 +355,8 @@ def _effective_read_ahead(tcfg: Any, n_roots: int, console: Any) -> ReadAheadDec
     decision = ReadAheadDecision(
         depth=effective_read_ahead(configured, n_roots), configured=configured, n_roots=n_roots
     )
-    if n_roots <= 1:
-        return decision
-    wanted = min(n_roots + 1, MAX_STREAM_READ_AHEAD)
-    if decision.raised:
-        console.print(
-            f"[dim]training.stream_read_ahead {configured} -> {decision.depth}: the layer "
-            f"cache spans {n_roots} drives, and each needs a read in flight "
-            f"({DEFAULT_STREAM_READ_AHEAD} counts as the default; any other value is kept as "
-            f"set).[/]"
-        )
-    elif configured < wanted:
-        console.print(
-            f"[yellow]training.stream_read_ahead={configured} with {n_roots} stripe drives "
-            f"keeps {wanted - configured} of them idle between layers; {wanted} lets every "
-            f"drive read at once (one more layer of host staging each).[/]"
-        )
+    if announce:
+        _say_read_ahead_decision(decision, console)
     return decision
 
 
@@ -961,7 +976,10 @@ class StreamingSetupMixin:
         # with getattr like `external_tensors` below: an index without the field is one root.
         # The whole decision travels to every message that advises lowering the depth.
         read_ahead_decision = _effective_read_ahead(
-            tcfg, 1 + len(getattr(index, "stripe_roots", None) or ()), console
+            tcfg,
+            1 + len(getattr(index, "stripe_roots", None) or ()),
+            console,
+            announce=False,
         )
         read_ahead = read_ahead_decision.depth
 
@@ -1081,6 +1099,8 @@ class StreamingSetupMixin:
         # back to disk when it does not. build_stream_plan already refused a
         # non-NVMe disk, so reaching here with tier='disk' means NVMe.
         tier = TIER_DISK if tcfg.stream_source == "disk" else plan.tier
+        if tier == TIER_DISK:
+            _say_read_ahead_decision(read_ahead_decision, console)
         if tier != plan.tier:
             # The panel is rendered from `plan`, so a forced tier has to be
             # reflected there or the pre-flight reports "tier ram" immediately
