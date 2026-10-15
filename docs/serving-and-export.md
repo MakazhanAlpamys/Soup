@@ -82,10 +82,44 @@ of the last 100 lines (up to 2,000 characters per line) for that summary.
 
 `--no-install-deps` checks `gguf`, `sentencepiece` and `protobuf` in Soup's Python
 environment and refuses with the missing package names before merging an adapter
-or looking up/cloning the toolchain. It never runs pip. Install the packages through
+or cloning/running the toolchain. It never runs pip. Install the packages through
 your environment manager and retry. This flag does not disable toolchain lookup or
 cloning; use `--llama-cpp` to supply your own checkout. Both new flags apply only to
 `--format gguf`; other formats refuse them rather than ignore them.
+
+### Converter compatibility
+
+For a fresh default auto-clone, Soup checks the effective text architecture in
+`config.json` against capability data generated from the exact `b5270` converter.
+`text_config.architectures`, when present, takes precedence over the root's
+architecture, as in that converter. Known unsupported architectures are refused
+before cloning, installing dependencies, converting or quantizing, with a
+`--llama-cpp <dir>` hint. Malformed metadata has a separate diagnostic; metadata
+reads are limited to 1 MiB. An adapter is checked after its temporary merge, and
+that temporary directory is cleaned up on refusal.
+
+Explicit `--llama-cpp`, `LLAMA_CPP_PATH` and cached checkouts can be newer than the
+default pin. Soup probes their own `--print-supported-models` output (TEXT group,
+including stderr), with a 15-second timeout. A failed or unrecognized probe is
+inconclusive: conversion remains the final check, without applying the default
+pin's capability set to that checkout. No runtime network lookup is added.
+
+The shared pin remains `b5270`; this diagnostic does not enable Qwen3.5 export on
+that version. A compatible selected converter may need additional handling such
+as the MTP boundary tracked in [#1912](https://github.com/MakazhanAlpamys/Soup/issues/1912).
+
+To regenerate capabilities when changing the pin, obtain the unmodified
+`convert_hf_to_gguf.py` from its immutable upstream commit, then run:
+
+```bash
+python scripts/gen_llama_cpp_capabilities.py --converter /path/to/convert_hf_to_gguf.py \
+  --tag b5270 --commit 3bf785f3efa89ed28294fbf73054558a2b034bfb
+```
+
+The generated `src/soup_cli/utils/llama_cpp_capabilities.json` records the tag,
+commit, source URL, SHA-256 and Git blob identity. The generator parses registered
+classes and inherited model kinds without importing or executing upstream code.
+The pin/data guard rejects a changed pin until its capabilities are regenerated.
 
 ### Building llama.cpp (required for quantized GGUF)
 
