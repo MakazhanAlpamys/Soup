@@ -213,6 +213,66 @@ def test_draft_measure_does_not_blame_the_extra_for_an_unrelated_module(
     plain = _plain(result.output)
     assert "No module named 'einops'" in plain
     assert "soup-cli[train]" not in plain
+def test_draft_measure_hints_the_train_extra_for_a_dotted_submodule(
+    tmp_path, monkeypatch
+):
+    """A real missing-dependency error names the dotted submodule that failed to
+    import (e.g. ``transformers.models.llama``), not the bare top-level package.
+    The hint keys off the top-level name, so it must still fire for a submodule
+    of a ``[train]`` package -- pinning the ``.split(".")[0]`` that extracts it."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "prompts.jsonl").write_text(
+        json.dumps({"prompt": "hello"}) + "\n", encoding="utf-8"
+    )
+
+    def boom(*args, **kwargs):
+        raise ModuleNotFoundError(
+            "No module named 'transformers.models.llama'",
+            name="transformers.models.llama",
+        )
+
+    monkeypatch.setattr(draft_mod, "_vocab_size_of", boom)
+
+    result = CliRunner().invoke(
+        app,
+        ["draft", "measure", "--target", "gpt2", "--draft", "gpt2",
+         "--prompts", "prompts.jsonl"],
+    )
+
+    assert result.exit_code == EXIT_RUNTIME_ERROR, (result.output, repr(result.exception))
+    plain = _plain(result.output)
+    assert "could not read model config" in plain
+    assert "soup-cli[train]" in plain
+
+
+def test_draft_measure_does_not_hint_when_the_module_name_is_unset(
+    tmp_path, monkeypatch
+):
+    """A ``ModuleNotFoundError`` with no ``name`` (``name=None``) cannot be
+    attributed to the ``[train]`` extra, so the failure surfaces verbatim with
+    no hint -- pinning the ``or ""`` guard against a ``None`` name."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "prompts.jsonl").write_text(
+        json.dumps({"prompt": "hello"}) + "\n", encoding="utf-8"
+    )
+
+    def boom(*args, **kwargs):
+        raise ModuleNotFoundError("boom")
+
+    monkeypatch.setattr(draft_mod, "_vocab_size_of", boom)
+
+    result = CliRunner().invoke(
+        app,
+        ["draft", "measure", "--target", "gpt2", "--draft", "gpt2",
+         "--prompts", "prompts.jsonl"],
+    )
+
+    assert result.exit_code == EXIT_RUNTIME_ERROR, (result.output, repr(result.exception))
+    plain = _plain(result.output)
+    assert "boom" in plain
+    assert "soup-cli[train]" not in plain
+
+
 
 
 def test_draft_distill_hints_the_train_extra_when_transformers_is_absent(
