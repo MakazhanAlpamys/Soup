@@ -6,9 +6,9 @@ click==8.0.0
 rich==13.0.0
 pydantic==2.0.0
 pyyaml==6.0
-# 0.16.0 and 0.16.1 were never published; 0.16.2 is the first stable release
+# PyPI has no stable 0.16.0, and 0.16.1 is yanked; 0.16.2 is the first available
 # admitted by >=0.16.0. Keep the declaration and this exception bound by the test.
 huggingface-hub==0.16.2
-# Likewise, 5.2.0 and 5.2.1 were never published; >=5.2.0 first admits 5.2.2.
+# Likewise, PyPI has no 5.2.0 or 5.2.1; >=5.2.0 first admits 5.2.2.
 plotext==5.2.2
 packaging==21.0

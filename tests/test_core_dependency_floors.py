@@ -31,9 +31,10 @@ REQUIRED_TESTS = {
     "tests/test_cli_startup_is_light.py",
     "tests/test_cli.py",
     "tests/test_cli_subprocess.py",
+    "tests/test_plotext_compat.py",
 }
 # PyPI has no stable release at these declarations. Values are the first
-# published stable releases admitted by the unchanged metadata (measured 2026-10-15).
+# non-yanked stable releases pip resolves (measured 2026-10-15; Hub 0.16.1 is yanked).
 FIRST_PUBLISHED = {
     ("huggingface-hub", Version("0.16.0")): "0.16.2",
     ("plotext", Version("5.2.0")): "5.2.2",
