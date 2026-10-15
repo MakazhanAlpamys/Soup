@@ -3229,6 +3229,7 @@ Usage: `soup registry push [OPTIONS]`
 | `--tag`, `-t` | text | `v1` |  | Tag (e.g. v1, prod-2024) |
 | `--notes` | text | `""` |  | Free-form notes |
 | `--data` | text |  |  | Training data file to record: its SHA-256 is stored as data_hash. This is the file registered as the training input, not proof of what the run trained on. Must be a file under the current directory. |
+| `--idempotency-key` | text |  |  | Make a retry safe: a later push with the same key and the same run, name, tag and data returns the existing entry instead of a new one; anything different is refused. 1-128 characters from letters, digits, '.', '\_', ':', '-'. |
 
 ### `soup registry search`
 
