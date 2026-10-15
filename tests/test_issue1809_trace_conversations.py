@@ -31,6 +31,15 @@ def _event(messages, rating="up", output="A2"):
             "feedback": {"rating": rating}}
 
 
+def _output_messages() -> list[dict[str, str]]:
+    return [
+        {"role": "user", "content": "Response context"},
+        {"role": "assistant", "content": "Earlier answer"},
+        {"role": "assistant", "content": "Final answer"},
+        {"role": "user", "content": "Trailing user is not the answer"},
+    ]
+
+
 def test_two_turns_cannot_form_a_false_preference_pair() -> None:
     first = _event(_messages()[:2], "down", "A1")
     second = _event(_messages())
@@ -86,9 +95,96 @@ def test_langchain_and_other_ingest_sources_share_conversation_identity() -> Non
     assert lc.prompt == helicone.prompt == openpipe.prompt == expected
 
 
+def test_langchain_bare_list_input_preserves_context_through_last_user() -> None:
+    messages = _messages() + [{"role": "assistant", "content": "Trailing answer"}]
+    trace = next(parse_langchain([{"inputs": messages, "outputs": {"output": "A2"}}]))
+    assert trace.prompt == (
+        '[{"role":"system","content":"Be helpful."},{"role":"user","content":"Q1"},'
+        '{"role":"assistant","content":"A1"},{"role":"user","content":"Q2"}]'
+    )
+    assert trace.output == "A2"
+
+
+@pytest.mark.parametrize("output_key", ["output", "response"])
+def test_langchain_output_keys_flatten_content_parts(output_key: str) -> None:
+    parts = [{"type": "text", "text": "First line"},
+             {"type": "output_text", "text": "Second line"},
+             {"type": "image_url", "image_url": {"url": "data:image/png;base64,SECRET"}}]
+    trace = next(parse_langchain([{"inputs": [{"role": "user", "content": "Question"}],
+                                   "outputs": {output_key: parts}}]))
+    assert trace.prompt == "Question"
+    assert trace.output == "First line\nSecond line"
+
+
+@pytest.mark.parametrize("output_path", ["response", "body", "text"])
+def test_helicone_message_output_fallbacks_choose_final_assistant(output_path: str) -> None:
+    messages = _output_messages()
+    responses = {
+        "response": messages,
+        "body": {"body": messages},
+        "text": {"body": {"choices": [{"text": messages}]}},
+    }
+    event = {"request": {"body": {"messages": [{"role": "user", "content": "Question"}]}},
+             "response": responses[output_path]}
+    trace = next(parse_helicone([event]))
+    assert trace.prompt == "Question"
+    assert trace.output == "Final answer"
+
+
+def test_helicone_message_content_flattens_content_parts() -> None:
+    parts = [{"type": "text", "text": "First line"},
+             {"type": "output_text", "text": "Second line"},
+             {"type": "image_url", "image_url": {"url": "data:image/png;base64,SECRET"}}]
+    event = {"request": {"body": {"messages": [{"role": "user", "content": "Question"}]}},
+             "response": {"body": {"choices": [{"message": {"content": parts}}]}}}
+    trace = next(parse_helicone([event]))
+    assert trace.prompt == "Question"
+    assert trace.output == "First line\nSecond line"
+
+
+@pytest.mark.parametrize("content_key", ["text", "content"])
+def test_langsmith_generations_flatten_content_parts(content_key: str) -> None:
+    parts = [{"type": "text", "text": "First line"},
+             {"type": "output_text", "text": "Second line"},
+             {"type": "image_url", "image_url": {"url": "data:image/png;base64,SECRET"}}]
+    event = {"inputs": {"messages": [{"role": "user", "content": "Question"}]},
+             "outputs": {"generations": [[{content_key: parts}]]}}
+    trace = next(parse_langsmith([event]))
+    assert trace.prompt == "Question"
+    assert trace.output == "First line\nSecond line"
+
+
+def test_langsmith_output_fallback_selects_final_assistant() -> None:
+    event = {"inputs": {"messages": [{"role": "user", "content": "Question"}]},
+             "outputs": {"messages": _output_messages()}}
+    trace = next(parse_langsmith([event]))
+    assert trace.prompt == "Question"
+    assert trace.output == "Final answer"
+
+
+def test_output_message_lists_select_final_assistant_before_trailing_user() -> None:
+    event = {"input": [{"role": "user", "content": "Question"}],
+             "output": _output_messages()}
+    trace = next(parse_openai_stored([event]))
+    assert trace.prompt == "Question"
+    assert trace.output == "Final answer"
+
+
+def test_conversation_json_keeps_non_ascii_text_literal() -> None:
+    messages = [{"role": "system", "content": "Қазақша жауап бер."},
+                {"role": "user", "content": "Сәлем 👋"}]
+    trace = next(parse_openai([_event(messages, output="Жауап")]))
+    assert trace.prompt == (
+        '[{"role":"system","content":"Қазақша жауап бер."},'
+        '{"role":"user","content":"Сәлем 👋"}]'
+    )
+    assert trace.output == "Жауап"
+
+
 def test_text_parts_are_flattened_and_binary_parts_dropped_everywhere() -> None:
     parts = [{"type": "text", "text": "Hi"},
-             {"type": "image_url", "image_url": {"url": "data:image/png;base64,SECRET"}}]
+             {"type": "image_url", "text": "Not a text part",
+              "image_url": {"url": "data:image/png;base64,SECRET"}}]
     messages = [{"role": "user", "content": parts}]
     oai = next(parse_openai([{"messages": messages, "choices": [{"message": {"content": parts}}]}]))
     lc = next(parse_langchain([{"inputs": {"messages": messages},
