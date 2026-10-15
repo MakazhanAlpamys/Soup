@@ -555,7 +555,7 @@ class TestLoadModel:
         adapter_config = tmp_path / "adapter_config.json"
         adapter_config.write_text(json.dumps({"peft_type": "LORA"}))
 
-        from click.exceptions import Exit
+        from typer import Exit
 
         with pytest.raises(Exit):
             _load_model(str(tmp_path), None, "cpu")
@@ -567,7 +567,7 @@ class TestLoadModel:
         adapter_config = tmp_path / "adapter_config.json"
         adapter_config.write_text("not valid json {{{")
 
-        from click.exceptions import Exit
+        from typer import Exit
 
         with pytest.raises(Exit):
             _load_model(str(tmp_path), None, "cpu")
