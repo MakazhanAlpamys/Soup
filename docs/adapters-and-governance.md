@@ -295,7 +295,7 @@ soup registry delete llama31-chat-v1 --yes
 soup history llama31-chat
 ```
 
-**Refs resolve flexibly** — you can use a registry ID, a name (latest), or `name:tag`. Ambiguous prefixes raise an error rather than silently picking the wrong entry. Registry files are stored with `600` perms on POSIX; override the path with `SOUP_REGISTRY_DB_PATH`.
+**Refs resolve flexibly** — you can use a registry ID, a unique ID prefix, or `name:tag`. A bare name is not a ref; `soup history <name>` lists every entry with that name. Pushing the same `name:tag` twice keeps both entries. A `name:tag` that matches more than one entry raises an error naming the candidates, and an ambiguous prefix raises one too, rather than silently picking an entry; use the full ID then. Registry files are stored with `600` perms on POSIX; override the path with `SOUP_REGISTRY_DB_PATH`.
 
 
 ## Adapter Management (git for LoRA)
