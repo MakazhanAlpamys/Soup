@@ -25,18 +25,31 @@ import warnings
 #: ships in 0.76, the refusal in 0.77.
 DEPRECATED_VALUE_REJECTION_VERSION = "0.77"
 
+#: Values deprecated after that deadline was announced (#1814). Each gets the
+#: same one minor of notice from the release that first warns, so its refusal
+#: comes later; the message names its own release. Written here, beside the
+#: shared deadline, for the same reason that one is.
+LATER_REJECTION_VERSIONS: dict[str, str] = {
+    "training.warmup_auto": "0.78",
+}
+
 
 class SoupConfigDeprecationWarning(FutureWarning):
     """A config value that loads today and will be refused in a named release."""
 
 
-def deadline_clause() -> str:
+def deadline_clause(version: str = DEPRECATED_VALUE_REJECTION_VERSION) -> str:
     """The sentence every deprecation message ends with."""
-    return f"Soup v{DEPRECATED_VALUE_REJECTION_VERSION} will refuse it."
+    return f"Soup v{version} will refuse it."
 
 
-def warn_deprecated_value(message: str) -> None:
-    """Warn that ``message`` describes a value that will be refused."""
+def warn_deprecated_value(message: str, *, field: str | None = None) -> None:
+    """Warn that ``message`` describes a value that will be refused.
+
+    ``field`` names the config field when it has a later deadline in
+    :data:`LATER_REJECTION_VERSIONS`; otherwise the shared deadline applies.
+    """
+    version = LATER_REJECTION_VERSIONS.get(field or "", DEPRECATED_VALUE_REJECTION_VERSION)
     warnings.warn(
-        f"{message} {deadline_clause()}", SoupConfigDeprecationWarning, stacklevel=3
+        f"{message} {deadline_clause(version)}", SoupConfigDeprecationWarning, stacklevel=3
     )

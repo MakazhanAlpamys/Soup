@@ -3372,10 +3372,26 @@ class TrainingConfig(BaseModel):
     warmup_auto: bool = Field(
         default=False,
         description=(
-            "Auto-pick warmup_steps from dataset_size × epochs × warmup_ratio. "
-            "Overrides any manual warmup_steps in the trainer."
+            "Deprecated (#1814): read by no trainer. warmup_ratio already resolves "
+            "over the actual optimizer steps (#1507); an explicit true warns at load "
+            "and a later release refuses it."
         ),
     )
+
+    @field_validator("warmup_auto", mode="after")
+    @classmethod
+    def _warn_warmup_auto(cls, value: bool) -> bool:
+        """#1814: ``warmup_auto`` never reached a trainer; warn, with its own deadline."""
+        if value:
+            from soup_cli.config.deprecation import warn_deprecated_value
+
+            warn_deprecated_value(
+                "training.warmup_auto: true has no effect (no trainer reads it; "
+                "warmup_ratio already resolves over the actual optimizer steps). "
+                "Delete the line, or set training.warmup_ratio.",
+                field="training.warmup_auto",
+            )
+        return value
     # Auto mixed-precision (v0.32.0 Part C); refused on every task outside
     # AMP_APPLYING_TASKS since #1618 — only the SFT trainer reads it.
     auto_mixed_precision: bool = Field(
