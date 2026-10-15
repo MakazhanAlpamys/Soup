@@ -528,3 +528,66 @@ def test_consolidated_only_is_refused_naming_the_file(tmp_path):
                  lambda: source_weight_bytes(str(tmp_path))):
         with pytest.raises(FileNotFoundError, match="consolidated.safetensors"):
             call()
+
+
+# ---------------------------------------------------------------------------
+# Small guards, each pinned (#1906 review)
+# ---------------------------------------------------------------------------
+
+
+def test_an_index_with_an_empty_weight_map_is_a_named_failure(tmp_path: Path):
+    (tmp_path / "model.safetensors.index.json").write_text(
+        json.dumps({"metadata": {}, "weight_map": {}}), encoding="utf-8"
+    )
+    with pytest.raises(ValueError, match="no weight_map"):
+        read_index_weight_map(str(tmp_path))
+
+
+def test_an_index_over_the_size_bound_is_a_named_failure(tmp_path: Path, monkeypatch):
+    from soup_cli.utils import checkpoint_files as cf
+
+    (tmp_path / "model.safetensors.index.json").write_text(
+        json.dumps({"weight_map": {"a": "model-00001-of-00001.safetensors"}}), encoding="utf-8"
+    )
+    monkeypatch.setattr(cf, "_MAX_INDEX_BYTES", 16)  # the real bound is 64 MiB
+    with pytest.raises(ValueError, match="exceeds"):
+        read_index_weight_map(str(tmp_path))
+
+
+def test_an_index_value_with_a_directory_part_resolves_to_its_basename(tmp_path: Path):
+    (tmp_path / "model.safetensors.index.json").write_text(
+        json.dumps({"weight_map": {"a": "sub/model-1.safetensors"}}), encoding="utf-8"
+    )
+    assert read_index_weight_map(str(tmp_path)) == {"a": "model-1.safetensors"}
+
+
+def _indexed_dir_with_a_directory_shard(tmp_path: Path) -> tuple[Path, int]:
+    """An index naming two shards, the second of which is a directory, not a file."""
+    import torch
+    from safetensors.torch import save_file
+
+    directory = tmp_path / "ckpt"
+    directory.mkdir()
+    save_file({"w": torch.zeros(3, 5)}, str(directory / "model-00001-of-00002.safetensors"))
+    (directory / "model-00002-of-00002.safetensors").mkdir()
+    (directory / "model.safetensors.index.json").write_text(
+        json.dumps({"weight_map": {"w": "model-00001-of-00002.safetensors",
+                                   "v": "model-00002-of-00002.safetensors"}}),
+        encoding="utf-8",
+    )
+    return directory, 15
+
+
+def test_spectrum_discovery_skips_an_entry_that_is_not_a_file(tmp_path: Path):
+    from soup_cli.utils.spectrum_scan import _discover_safetensors
+
+    directory, _ = _indexed_dir_with_a_directory_shard(tmp_path)
+    found = _discover_safetensors(str(directory))
+    assert [os.path.basename(p) for p in found] == ["model-00001-of-00002.safetensors"]
+
+
+def test_the_size_probe_skips_an_entry_that_is_not_a_file(tmp_path: Path):
+    from soup_cli.utils.gpu import _params_from_local_safetensors
+
+    directory, params = _indexed_dir_with_a_directory_shard(tmp_path)
+    assert _params_from_local_safetensors(str(directory)) == pytest.approx(params / 1e9)
