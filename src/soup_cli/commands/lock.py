@@ -72,7 +72,7 @@ def write_lock_cmd(
             )
             raise typer.Exit(2) from exc
         except (TypeError, ValueError) as exc:
-            console.print(f"[red]{escape(str(exc))}[/]")
+            console.print(f"[red]{escape(str(exc))}[/]", soft_wrap=True)
             raise typer.Exit(2) from exc
         env_hash = compute_env_hash(env_lock_obj)
 
@@ -93,7 +93,7 @@ def write_lock_cmd(
         )
         write_lock(lock, output)
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        console.print(f"[red]{escape(str(exc))}[/]", soft_wrap=True)
         raise typer.Exit(2) from exc
 
     console.print(
@@ -116,7 +116,7 @@ def show_lock_cmd(
     try:
         lock = read_lock(path)
     except (FileNotFoundError, TypeError, ValueError) as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        console.print(f"[red]{escape(str(exc))}[/]", soft_wrap=True)
         raise typer.Exit(EXIT_USAGE_ERROR) from exc
 
     console.print(
@@ -153,7 +153,7 @@ def check_lock_cmd(
     try:
         expected = read_lock(path)
     except (FileNotFoundError, TypeError, ValueError) as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        console.print(f"[red]{escape(str(exc))}[/]", soft_wrap=True)
         raise typer.Exit(EXIT_USAGE_ERROR) from exc
 
     try:
@@ -175,7 +175,7 @@ def check_lock_cmd(
             created_at=expected.created_at,
         )
     except (TypeError, ValueError) as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        console.print(f"[red]{escape(str(exc))}[/]", soft_wrap=True)
         raise typer.Exit(EXIT_USAGE_ERROR) from exc
 
     drift = check_lock_drift(expected, actual)
