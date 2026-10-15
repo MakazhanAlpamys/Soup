@@ -485,6 +485,7 @@ def test_watch_with_a_recorded_database_harvests_through_the_cli(cwd, monkeypatc
     result, text = _watch()
 
     assert result.exit_code == 0, text
+    assert "stub stages never read it" not in text, text
     ids = list_iterations()
     assert len(ids) == 1, ids
     assert read_iteration(ids[0]).pairs_harvested == 1
@@ -544,7 +545,7 @@ def test_watch_does_not_let_a_control_sequence_in_the_path_reach_the_terminal(cw
 
     assert result.exit_code == 2, result.output
     assert "\x1b[2J" not in result.output  # the sequence itself, not "any ESC" (Rich adds its own)
-    assert "no database file at" in strip_ansi(result.output)
+    assert "no database file at" in " ".join(strip_ansi(result.output).split())
 
 
 def test_init_does_not_let_a_control_sequence_in_the_path_reach_the_terminal(cwd):
