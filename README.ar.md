@@ -1,4 +1,4 @@
-<!-- synced-from: README.md sha256:7861d55b549aad1c5740d27f2fc72471270ed3011de8cbbf95ef23500e27fa99 -->
+<!-- synced-from: README.md sha256:92082715d17161ae16bebff601425ab0bd9fa61732a55eb755cbb39df9cad65a -->
 <p align="center">🌍 <a href="README.md">English</a> | <a href="README.tr.md">Türkçe</a> | <strong>العربية</strong> | <a href="README.ja.md">日本語</a> | <a href="README.zh.md">中文</a></p>
 
 <p align="center">
@@ -135,9 +135,6 @@ soup train
   ثنائي الجانب متينًا إزاء التباين، ويوقّع `soup adapters sign --backend sigstore`
   و`soup attest emit --sign sigstore` باستخدام Sigstore OIDC بلا مفاتيح
   (<span dir="ltr">`pip install "soup-cli[sigstore]"`</span>).
-- **قيد الإيقاف التدريجي (Deprecated):** سيُزال `soup export --format awq` و<span dir="ltr">`--format gptq`</span>
-  في v0.77؛ فكلا المشروعين الأصليين مؤرشف ولا يُثبَّت أي من الملحقين (extras) إلى جانب
-  <span dir="ltr">`[train]`</span>.
 
 > Python **3.10–3.12** فقط. وعلى الإصدار 3.13 وما بعده كان pip يختار حزم PyTorch (wheels) غير مختبرة تنهار في
 > الامتداد الأصلي قبل أن يعمل Soup أصلًا.
@@ -216,7 +213,7 @@ soup merge  --adapter ./output                              # ادمج LoRA في
 soup export --model ./output --format gguf --quant q4_k_m   # GGUF لـ Ollama / llama.cpp
 ```
 
-وتوجد أهداف تصدير أخرى (ONNX وTensorRT وAWQ وGPTQ وBitNet) وخيارات النشر في
+وتوجد أهداف تصدير أخرى (ONNX وTensorRT وBitNet) وخيارات النشر في
 [`docs/serving-and-export.md`](docs/serving-and-export.md).
 
 ## واجهة الويب

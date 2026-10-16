@@ -1408,12 +1408,6 @@ group_size: 32
 EOF
 soup export --model ./merged --format torchao --quant-config ./q.yaml --output ./out
 
-# AWQ/GPTQ export (deprecated, removed in Soup v0.77) — an explicit local calibration set is required
-soup export --model ./merged --format awq \
-    --calibration-data ./calib.jsonl --output ./out-awq
-soup export --model ./merged --format gptq \
-    --calibration-data ./calib.jsonl --output ./out-gptq
-
 # Unsloth Dynamic 2.0 / IQ / Apple-ARM GGUF via llama.cpp imatrix
 soup export --model ./merged --format gguf-ud \
     --gguf-flavour UD-Q4_K_XL \
@@ -1428,10 +1422,6 @@ soup deploy autopilot --target rtx-4090-24gb \
 ```
 
 Autopilot also detects pre-quantized bases automatically - `TheBloke/Llama-2-7B-Chat-GPTQ` is recommended `gptq` instead of stacking 4-bit on top. Detection runs against the base-model name regex AND any local `config.json`'s `quantization_config.quant_method`. Out-of-cwd model paths are silently skipped (soft-probe semantics). A detected `mxfp4` base is budgeted as the bf16 model it loads (2 bytes per parameter), and Autopilot refuses a `--gpu-budget` below that.
-
-AWQ and GPTQ export are deprecated and will be removed in Soup v0.77: both upstream projects (AutoAWQ and AutoGPTQ) are archived and neither extra can be installed next to `[train]`. Until then `soup export --format awq` and `--format gptq` work as before and start with a `Deprecated:` notice that names the formats to move to (`gguf`, `onnx`, `tensorrt`, `bitnet`, `tq1_0`).
-
-Direct AWQ and GPTQ exports require `--calibration-data`. Soup refuses a missing or unusable JSONL before importing the quantizer or loading the model. This keeps calibration inputs explicit and prevents AutoAWQ from silently downloading its large default dataset. Use `--calibration-samples` to cap the number of usable JSONL rows (default: 128).
 
 The advanced GGUF pipeline uses POSIX `O_NOFOLLOW` to defeat the TOCTOU race between the dispatch-time symlink check and the actual open of the calibration data — a crafted environment cannot race-swap the calibration file between validate and read.
 
