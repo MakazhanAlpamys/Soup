@@ -105,6 +105,7 @@
     "training.eval_gate": null,
     "training.eval_steps": null,
     "training.expand_layers": null,
+    "training.fast_lora": false,
     "training.forgetting_benchmark": "mini_mmlu",
     "training.forgetting_detection": false,
     "training.forgetting_eval_steps": 100,

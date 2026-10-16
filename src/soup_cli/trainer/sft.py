@@ -1863,12 +1863,18 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             )
             # v0.39.0 Part D / v0.40.6 #67 — surgical PEFT patches via shared helpers.
             from soup_cli.utils.peft_wiring import (
+                apply_fast_lora_patches,
                 apply_post_lora_patches,
                 apply_pre_lora_patches,
+                fast_lora_summary,
             )
             apply_pre_lora_patches(self.model, cfg.base)
             self.model = get_peft_model(self.model, lora_config)
             apply_post_lora_patches(self.model)
+            # #792 — after every other LoRA patch, so the kernels see the final modules.
+            fast_lora_counts = apply_fast_lora_patches(self.model, tcfg)
+            if fast_lora_counts is not None:
+                console.print(f"[green]{fast_lora_summary(fast_lora_counts)}[/]")
 
             # v0.71.12 #84 — Mixture-of-Depths selective-token routing. Applied
             # AFTER get_peft_model so the freshly-added routers are trainable.
