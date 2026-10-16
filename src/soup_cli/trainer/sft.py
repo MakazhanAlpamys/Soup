@@ -2380,6 +2380,8 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         with self._training_context(
             offload_context(tcfg.activation_offloading, save_dir=offload_save_dir)
         ) as train_ctx:
+            # #1693: also when training raises.
+            train_ctx.callback(self._remove_stream_loss_chunk_hook)
             # LongLoRA S² shifted-sparse attention (v0.49.0 schema). The override
             # monkeypatches attention.forward for the duration of training and
             # was previously never installed (use_longlora validated but shipped

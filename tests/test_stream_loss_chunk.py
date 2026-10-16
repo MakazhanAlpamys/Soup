@@ -796,14 +796,14 @@ class TestTheOption:
 
         assert training.rewind_log is True
 
-    @pytest.mark.parametrize("chunk", [0, -1, 8193])
+    @pytest.mark.parametrize("chunk", [0, -1, 15, 8193])
     def test_a_chunk_outside_the_bounds_is_refused(self, chunk):
         from pydantic import ValidationError
 
         with pytest.raises(ValidationError, match="stream_loss_chunk"):
             _cfg(stream_layers=True, stream_loss_chunk=chunk)
 
-    @pytest.mark.parametrize("chunk", [1, 8192])
+    @pytest.mark.parametrize("chunk", [16, 8192])
     def test_the_bounds_themselves_load(self, chunk):
         assert _cfg(stream_layers=True, stream_loss_chunk=chunk).training.stream_loss_chunk == chunk
 
@@ -1022,6 +1022,51 @@ class TestThroughTheRealTrainer:
 
         assert plain["trainer"] == "RewindSFTTrainer"
         assert chunked["trainer"] == "RewindChunkedLossSFTTrainer"
+
+
+class TestTheHookComesOffAfterTraining:
+    """``train()`` takes the hook off when it ends, also when training raised,
+    so a labelled forward later in the same process (an eval gate, ``infer``)
+    gets the full logits and the trainer takes TRL's own ``compute_loss``."""
+
+    @pytest.mark.parametrize("raises", [False, True])
+    def test_train_removes_the_hook(self, tmp_path, monkeypatch, raises):
+        from soup_cli.utils.stream_loss_chunk import HOOK_ATTR, causal_lm_of
+        from tests.test_v07204 import _build_streamed_wrapper
+
+        wrapper, _, _ = _build_streamed_wrapper(
+            tmp_path, monkeypatch, task="sft", n_layers=2, stream_loss_chunk=16
+        )
+        hook = wrapper._stream_loss_chunk_hook
+        causal_lm = causal_lm_of(wrapper.model)
+        assert getattr(wrapper.trainer, HOOK_ATTR) is hook  # the premise
+        assert "forward" in causal_lm.__dict__
+
+        def fake_train(**_kwargs):
+            if raises:
+                raise RuntimeError("CUDA out of memory")
+
+        wrapper.trainer.train = fake_train
+        if raises:
+            with pytest.raises(RuntimeError, match="out of memory"):
+                wrapper.train()
+        else:
+            monkeypatch.setattr(wrapper.trainer, "save_model", lambda *_a, **_k: None)
+            monkeypatch.setattr(wrapper, "_assert_streamed_adapter_saved", lambda *_a: None)
+            wrapper.train()
+
+        assert "forward" not in causal_lm.__dict__
+        assert getattr(wrapper.trainer, HOOK_ATTR) is None
+        assert wrapper._stream_loss_chunk_hook is None
+
+    def test_a_run_without_the_option_is_untouched(self, tmp_path, monkeypatch):
+        from tests.test_v07204 import _build_streamed_wrapper
+
+        wrapper, _, _ = _build_streamed_wrapper(tmp_path, monkeypatch, task="sft", n_layers=2)
+        wrapper._remove_stream_loss_chunk_hook()  # nothing to remove
+
+        assert wrapper._stream_loss_chunk_hook is None
+        wrapper._close_stream_runtime()
 
 
 # ─── The pre-flight ──────────────────────────────────────────────────────────

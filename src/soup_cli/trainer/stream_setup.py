@@ -1291,6 +1291,24 @@ class StreamingSetupMixin:
         if runtime is not None:
             runtime.close()
 
+    def _remove_stream_loss_chunk_hook(self) -> None:
+        """Take the chunked head and loss off the model when training ends (#1693).
+
+        A labelled forward later in the same process (an eval gate, ``infer``)
+        then gets the full logits again, and the trainer's ``compute_loss``
+        takes TRL's own path.
+        """
+        hook = self._stream_loss_chunk_hook
+        if hook is None:
+            return
+        from soup_cli.utils.stream_loss_chunk import HOOK_ATTR
+
+        hook.remove()
+        trainer = getattr(self, "trainer", None)
+        if trainer is not None and getattr(trainer, HOOK_ATTR, None) is hook:
+            setattr(trainer, HOOK_ATTR, None)
+        self._stream_loss_chunk_hook = None
+
     def _estimate_adapter_params(self, tcfg, model_config) -> int:
         """Trainable adapter parameters, before the model exists.
 

@@ -51,12 +51,13 @@ from typing import Any, Optional, Protocol, Sequence
 from rich.console import Console
 from rich.markup import escape
 
+# Where a chunked step (#1693) leaves what its trainer collected.
+from soup_cli.utils.stream_loss_chunk import STEP_ATTR as _CHUNKED_STEP_ATTR
+
 console = Console()
 
 # Hidden attr on the trainer instance -- read by the overrides below.
 _STATE_ATTR = "_soup_rewind_state"
-# Where a chunked step (#1693) leaves what its trainer collected.
-_CHUNKED_STEP_ATTR = "_soup_chunked_step"
 
 
 class RewindSink(Protocol):
