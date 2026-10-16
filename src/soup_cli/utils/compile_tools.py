@@ -157,9 +157,25 @@ def _optimise_description(
             requires_grad=True,
             role_description="tool description",
         )
-        opt = tg.TGD(parameters=[variable])
-        for _ in range(min(8, max(1, len(examples)))):
+        engine = getattr(tg, "get_backward_engine", lambda: None)() or "default"
+        try:
+            opt = tg.TGD(parameters=[variable], engine=engine)
+        except TypeError:
+            opt = tg.TGD(parameters=[variable])
+        for i in range(min(8, max(1, len(examples)))):
+            ex = examples[i % len(examples)] if examples else {}
+            loss_text = f"Evaluate tool description: {variable.value} on {ex}"
+            loss = (
+                tg.Variable(
+                    loss_text,
+                    role_description="evaluation loss",
+                    predecessors=[variable],
+                )
+                if hasattr(tg, "Variable")
+                else variable
+            )
             opt.zero_grad()
+            loss.backward()
             opt.step()
         return str(variable.value)
 
@@ -171,11 +187,15 @@ def _optimise_description(
             f"GEPA is required for the 'gepa' optimizer. {_INSTALL_HINT}"
         ) from exc
     optimised = gepa.optimize(  # type: ignore[attr-defined]
-        seed_candidate=description,
+        seed_candidate={"description": str(description)},
         trainset=examples,
         max_metric_calls=max(1, len(examples)),
+        task_lm="default_lm",
     )
-    return str(getattr(optimised, "best_candidate", optimised))
+    best_candidate = getattr(optimised, "best_candidate", optimised)
+    if isinstance(best_candidate, dict):
+        return str(best_candidate.get("description", next(iter(best_candidate.values()), "")))
+    return str(best_candidate)
 
 
 def _serialise_tools(out: dict, output_path: str) -> None:

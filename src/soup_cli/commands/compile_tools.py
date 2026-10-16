@@ -71,7 +71,10 @@ def compile_tools_cmd(
             )
         )
         raise typer.Exit(2) from exc
-    except (TypeError, ValueError, FileNotFoundError) as exc:
+    except (TypeError, ValueError, FileNotFoundError, RuntimeError) as exc:
+        console.print(f"[red]{escape(str(exc))}[/]")
+        raise typer.Exit(2) from exc
+    except Exception as exc:
         console.print(f"[red]{escape(str(exc))}[/]")
         raise typer.Exit(2) from exc
 
