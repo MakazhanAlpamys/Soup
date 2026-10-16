@@ -240,10 +240,25 @@ def load_model_and_tokenizer(
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
     dev = resolve_device(device)
-    tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=trust_remote_code)
+    from soup_cli.utils.run_provenance import (
+        base_revision_kwargs,
+        recorded_adapter_base,
+        recorded_base_kwargs,
+    )
+
+    tokenizer_id = model_id
+    if adapter is None:
+        saved_base = recorded_adapter_base(model_id)
+        if saved_base is not None:
+            adapter, model_id = model_id, saved_base
+    revision_kwargs = base_revision_kwargs(model_id) or recorded_base_kwargs(adapter, model_id)
+    tokenizer = AutoTokenizer.from_pretrained(
+        tokenizer_id, trust_remote_code=trust_remote_code,
+        **(revision_kwargs if tokenizer_id == model_id else {}),
+    )
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
-    model_kwargs = {"trust_remote_code": trust_remote_code}
+    model_kwargs = {"trust_remote_code": trust_remote_code, **revision_kwargs}
     if dtype is not None:
         model_kwargs["torch_dtype"] = dtype
     quant_config = _build_quantization_config(quantization)

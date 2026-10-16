@@ -17,6 +17,7 @@ from soup_cli.utils.gpu import (
     resolve_device_map,
 )
 from soup_cli.utils.mixed_precision import align_trainable_dtype_for_fp16
+from soup_cli.utils.run_provenance import base_revision_kwargs
 from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
 
 console = Console()
@@ -268,7 +269,8 @@ class EmbeddingTrainerWrapper:
 
         console.print(f"[dim]Loading tokenizer: {cfg.base}[/]")
         self.tokenizer = AutoTokenizer.from_pretrained(
-            cfg.base, trust_remote_code=self._trust_remote_code
+            cfg.base, trust_remote_code=self._trust_remote_code,
+            **base_revision_kwargs(cfg.base),
         )
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
@@ -294,7 +296,10 @@ class EmbeddingTrainerWrapper:
             model_kwargs["quantization_config"] = quant_config_obj
 
         # Use AutoModel (not AutoModelForCausalLM) for embedding models
-        self.model = AutoModel.from_pretrained(cfg.base, **model_kwargs)
+        self.model = AutoModel.from_pretrained(
+            cfg.base, **model_kwargs,
+            **base_revision_kwargs(cfg.base),
+        )
 
         if tcfg.quantization in ("4bit", "8bit"):
             from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing

@@ -271,8 +271,9 @@ def test_a_legacy_database_is_upgraded_in_place(tmp_path):
         "SELECT * FROM registry_entries WHERE id LIKE 'reg_old_%' ORDER BY id"
     ).fetchall()
     conn.close()
-    assert [row[:-1] for row in after] == before  # old rows only gain a NULL key
-    assert [row[-1] for row in after] == [None, None]
+    width = len(before[0])
+    assert [row[:width] for row in after] == before  # every legacy value is unchanged
+    assert [row[width:] for row in after] == [(None, None, None, None)] * 2
     assert _counts(db) == (3, 3)
 
 
