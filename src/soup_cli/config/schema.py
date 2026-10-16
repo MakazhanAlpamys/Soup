@@ -3053,6 +3053,18 @@ class TrainingConfig(BaseModel):
         default=False,
         description="Enable Liger Kernel fused operations (20-60% memory savings, 20-40% speedup)",
     )
+    # #792 — the Fast-LoRA kernels (utils/fast_lora*.py) behind one switch
+    fast_lora: bool = Field(
+        default=False,
+        description=(
+            "Run LoRA's q/k/v, MLP and other projections through Soup's "
+            "hand-written Fast-LoRA autograd functions instead of peft's "
+            "modules. Same math; no speedup is claimed. task='sft' on the "
+            "transformers backend with text, quantization none or 4bit, and "
+            "lora.dropout 0; refused beside use_liger, DoRA, VeRA, "
+            "target_parameters, Spectrum, LISA and FP8 training."
+        ),
+    )
     # Performance — FlashAttention
     use_flash_attn: bool = Field(
         default=False,
@@ -6099,6 +6111,75 @@ class SoupConfig(BaseModel):
                 f"training.train_on_eot=true requires task in "
                 f"{sorted(sft_family_tasks)}; got task={self.task!r}"
             )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_fast_lora_supported(self) -> "SoupConfig":
+        """#792 — the first slice of ``training.fast_lora``. The kernels patch
+        peft's LoRA modules on a text model trained by the SFT wrapper; every
+        other setting is refused with its reason rather than left unpatched."""
+        tcfg = self.training
+        if not tcfg.fast_lora:
+            return self
+        lora = tcfg.lora
+        reason = None
+        if self.backend != "transformers":
+            reason = (
+                f"needs backend='transformers'; got backend={self.backend!r}. The "
+                f"kernels replace peft's LoRA modules, which that backend does not use."
+            )
+        elif self.modality != "text":
+            reason = f"supports modality='text' only; got modality={self.modality!r}."
+        elif self.task != "sft":
+            reason = (
+                f"supports task='sft' only; got task={self.task!r}. Other trainers "
+                f"are not tested with the kernels yet."
+            )
+        elif lora.r == 0:
+            reason = "needs a LoRA; lora.r=0 trains the full model, with no LoRA to patch."
+        elif tcfg.unfrozen_parameters or tcfg.lisa_enabled:
+            name = "unfrozen_parameters" if tcfg.unfrozen_parameters else "lisa_enabled"
+            reason = (
+                f"cannot be combined with training.{name}: that mode trains the "
+                f"model's own weights and skips the LoRA setup the kernels hook into."
+            )
+        elif tcfg.quantization_aware == "fp8":
+            # (QuEST needs lora.r=0, refused above.)
+            reason = (
+                "cannot be combined with training.quantization_aware='fp8': FP8 "
+                "training converts the projections, and the kernels read their "
+                "weights directly, around the conversion."
+            )
+        elif lora.use_dora or lora.use_vera:
+            name = "use_dora" if lora.use_dora else "use_vera"
+            reason = (
+                f"cannot be combined with lora.{name}: the kernels compute plain "
+                f"LoRA, not that adapter's update."
+            )
+        elif lora.target_parameters:
+            reason = (
+                "cannot be combined with lora.target_parameters: those adapters "
+                "wrap parameters, not the Linear modules the kernels patch."
+            )
+        elif tcfg.quantization not in ("none", "4bit"):
+            reason = (
+                f"supports quantization 'none' or '4bit'; got "
+                f"quantization={tcfg.quantization!r}."
+            )
+        elif lora.dropout != 0:
+            reason = (
+                f"needs lora.dropout: 0; got {lora.dropout} (Soup's default is 0.05). "
+                f"peft gives every projection its own dropout, so q/k/v and gate/up "
+                f"would no longer share the one input the kernels read."
+            )
+        elif tcfg.use_liger:
+            reason = (
+                "cannot be combined with training.use_liger: Liger already replaces "
+                "the MLP's forward, and fast_lora would replace it again. Keep one "
+                "of them."
+            )
+        if reason is not None:
+            raise ValueError(f"training.fast_lora {reason}")
         return self
 
     @model_validator(mode="after")

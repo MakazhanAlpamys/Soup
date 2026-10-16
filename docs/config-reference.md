@@ -256,6 +256,7 @@ Sections:
 | `training.moe_lora` | `bool` | `false` |  | Enable MoE-aware LoRA (ScatterMoE) — applies LoRA to expert FFN layers |
 | `training.moe_aux_loss_coeff` | `float` | `0.01` | `>= 0` | Auxiliary load-balancing loss coefficient for MoE models |
 | `training.use_liger` | `bool` | `false` |  | Enable Liger Kernel fused operations (20-60% memory savings, 20-40% speedup) |
+| `training.fast_lora` | `bool` | `false` |  | Run LoRA's q/k/v, MLP and other projections through Soup's hand-written Fast-LoRA autograd functions instead of peft's modules. Same math; no speedup is claimed. task='sft' on the transformers backend with text, quantization none or 4bit, and lora.dropout 0; refused beside use_liger, DoRA, VeRA, target_parameters, Spectrum, LISA and FP8 training. |
 | `training.use_flash_attn` | `bool` | `false` |  | Enable FlashAttention (auto-detects v2/v3/v4 for faster attention) |
 | `training.use_ring_attention` | `bool` | `false` |  | Enable Ring FlashAttention for sequence parallelism across GPUs |
 | `training.rope_scaling_type` | `str \| null` | `null` | one of `"linear"`, `"dynamic"`, `"yarn"`, `"llama3"` | RoPE scaling method for long-context: linear, dynamic, yarn or llama3 (v0.49.0). 'longrope' is refused at config load (#1239). Applied by task sft, tts and pretrain on backend: transformers (sft: the text path without layer streaming); refused at config load anywhere else (#1697). |

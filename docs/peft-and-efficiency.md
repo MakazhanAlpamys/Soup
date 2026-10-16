@@ -444,6 +444,50 @@ training:
 - **Compatibility:** Supported on the `transformers` backend for `sft`, `pretrain`, and `embedding` tasks. Mutually exclusive with `loraplus_lr_ratio` (which differentiates $A$ and $B$ rates), `use_galore`, `lora.use_vera` (VeRA trains scaling vectors, so `create_lorafa_optimizer` finds no $B$ matrices), non-AdamW optimizers, and the `mlx` backend. Requires explicit `lora.r` and `lora.alpha`. LoRA-FA has not been validated under `stream_layers: true` (layer streaming); combining them is not recommended.
 
 
+## Fast-LoRA kernels (`training.fast_lora`)
+
+Runs a LoRA's projections through Soup's own autograd functions instead of
+peft's modules: q/k/v with one shared input and one accumulated input gradient,
+gate/up/down around SwiGLU as one block, and every other adapted Linear (such as
+`o_proj`) as a single projection. The math is LoRA's; the kernels change the
+order of the work and what is kept for the backward pass.
+
+```yaml
+training:
+  fast_lora: true
+  lora:
+    dropout: 0          # required: Soup's default is 0.05
+    target_modules: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]
+```
+
+Setup prints how many modules each kernel took over, and refuses the run if the
+flag is on and none was. Off by default.
+
+- **Scope:** `task: sft` on the `transformers` backend, `modality: text`,
+  `quantization: none` or `4bit`, resident or with `stream_layers`. Refused, with
+  the reason: any other task, backend, modality or quantization; `lora.r: 0`;
+  `lora.use_dora`, `lora.use_vera`, `lora.target_parameters`; `lora.dropout`
+  other than 0 (peft gives every projection its own dropout, so q/k/v and
+  gate/up would no longer share one input); `training.use_liger`, which
+  replaces the MLP's forward too; `unfrozen_parameters` (Spectrum) and
+  `lisa_enabled`, which train the model's own weights and skip the LoRA setup;
+  and `quantization_aware: fp8`, whose converted projections the kernels would
+  read around. A model whose adapters the kernels cannot run (GPT-2's Conv1D
+  layout) is refused at setup, as if nothing had been patched.
+- **What is verified, on CPU:** float64 `gradcheck` of each kernel through the
+  switch; float32 forward and backward parity with peft's modules; the same
+  gradients with and without non-reentrant checkpointing; the base model's
+  output with the adapter disabled; fifty training steps whose losses stay
+  within 1e-3 of peft's; and a streamed model with more layers than
+  `stream_buffers`, whose LoRA gradients on every layer equal those without the
+  flag.
+- **Not verified:** bf16, fp16 and NF4 parity, and streaming on a GPU. Those
+  tests exist (`pytest -m gpu`) and need a CUDA card with bitsandbytes.
+- **No speedup is claimed.** Nothing here measures end-to-end throughput or
+  peak VRAM. Under gradient checkpointing, which layer streaming always uses, a
+  block's saved tensors exist only during its recompute, so any saving lowers a
+  per-layer transient, not the stored total.
+
 ## rsLoRA (Rank-Stabilized Scaling)
 
 Use rank-stabilized LoRA scaling for better performance at high ranks:
