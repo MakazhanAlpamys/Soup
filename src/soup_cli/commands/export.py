@@ -398,6 +398,7 @@ def export(
         console.print("[dim]GGUF: conversion dependencies...[/]")
         _install_convert_deps()
     tool_options = {"verbose": True} if verbose else {}
+    convert_options = dict(tool_options)
 
     # --- Convert to GGUF ---
     console.print(
@@ -424,7 +425,7 @@ def export(
 
         try:
             if needs_no_mtp(model_path, convert_script):
-                tool_options["no_mtp"] = True
+                convert_options["no_mtp"] = True
         except ValueError as exc:
             from soup_cli.utils.terminal import for_terminal
 
@@ -435,7 +436,7 @@ def export(
             # Direct conversion without quantization
             outtype = "f16" if quant == "f16" else "f32"
             console.print(f"[dim]GGUF: convert — Converting to GGUF ({outtype})...[/]")
-            _run_convert(convert_script, model_path, output_path, outtype, **tool_options)
+            _run_convert(convert_script, model_path, output_path, outtype, **convert_options)
         else:
             # Convert to f16 first, then quantize.
             #
@@ -452,7 +453,7 @@ def export(
             try:
                 f16_path = tmp_dir / f"{model_name}.f16.gguf"
                 console.print("[dim]GGUF: convert — Converting to GGUF (f16)...[/]")
-                _run_convert(convert_script, model_path, f16_path, "f16", **tool_options)
+                _run_convert(convert_script, model_path, f16_path, "f16", **convert_options)
 
                 # Quantize
                 console.print(f"[dim]GGUF: quantize — Quantizing to {quant}...[/]")

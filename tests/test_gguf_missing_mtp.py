@@ -47,7 +47,8 @@ def export_mtp(tmp_path, monkeypatch):
         Path(command[command.index("--outfile") + 1]).write_bytes(b"conversion fixture")
         return subprocess.CompletedProcess(command, 0, "", "")
 
-    def quantize(llama, source, output, quant, **kwargs):
+    def quantize(llama, source, output, quant, *, verbose=False):
+        # Match _run_quantize's contract: conversion-only options must fail here.
         calls.append("quantize")
         output.write_bytes(b"quantization fixture")
 
