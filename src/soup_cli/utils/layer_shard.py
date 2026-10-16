@@ -742,14 +742,21 @@ def resolve_shard_dir(model: str, cache_dir: Optional[str] = None) -> str:
 # sharding
 # ==========================================================================
 def _discover_safetensors(weights_dir: str) -> List[str]:
-    """Sorted, non-symlinked ``*.safetensors`` under ``weights_dir``."""
+    """Sorted, non-symlinked checkpoint files under ``weights_dir``.
+
+    The checkpoint's files are what the index names, or ``model.safetensors`` /
+    the ``model-*-of-*`` shards (#1806); Mistral's ``consolidated.safetensors``
+    beside them used to put every one of its tensors into the resident extras
+    shard and double ``source_weight_bytes``.
+    """
+    from soup_cli.utils.checkpoint_files import checkpoint_files
+
     root = os.path.realpath(os.path.expanduser(weights_dir))
     if not os.path.isdir(root):
         raise FileNotFoundError(f"weights directory not found: {weights_dir}")
+    selected = checkpoint_files(root)
     found = []
-    for name in sorted(os.listdir(root)):
-        if not name.endswith(".safetensors"):
-            continue
+    for name in selected.weights:
         path = os.path.join(root, name)
         if os.path.islink(path):
             logger.warning("layer-stream sharder: skipping symlinked shard %s", name)
@@ -759,8 +766,8 @@ def _discover_safetensors(weights_dir: str) -> List[str]:
         found.append(path)
     if not found:
         raise FileNotFoundError(
-            f"no .safetensors weight files found in {weights_dir} — layer "
-            f"streaming needs a safetensors checkpoint"
+            f"{selected.why_empty(weights_dir)} — layer streaming needs a safetensors "
+            f"checkpoint"
         )
     if len(found) > _MAX_SHARD_FILES:
         raise ValueError(f"too many shard files ({len(found)} > {_MAX_SHARD_FILES})")
