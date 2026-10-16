@@ -252,8 +252,9 @@ def _fake_ppo_classes(captured, *, accepts_optimizers=True):
         """Keeps what the wrapper passes. weight_decay is not set by the
         wrapper; it is nonzero here so the decay / no-decay split is visible."""
 
-        def __init__(self, **kwargs):
+        def __init__(self, deepspeed=None, **kwargs):
             self.weight_decay = 0.05
+            self.deepspeed = deepspeed
             self.__dict__.update(kwargs)
 
     return FakePPOTrainer, FakePPOConfig
