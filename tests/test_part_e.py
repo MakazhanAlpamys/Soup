@@ -284,6 +284,64 @@ class TestSpikeRecoveryHint:
         data = json.loads((tmp_path / "spike_recovery.json").read_text())
         assert data["attempts"] == 2
 
+    def test_attempts_persist_across_callback_instances(self, tmp_path, monkeypatch):
+        """Re-launch against existing output_dir increments attempts and caps at max_attempts."""
+        monkeypatch.chdir(tmp_path)
+        args = SimpleNamespace(learning_rate=1e-3, output_dir=str(tmp_path))
+
+        # Launch 1: hits spike
+        cb1 = _make_callback(
+            tmp_path,
+            spike_recovery=True,
+            spike_recovery_max_attempts=2,
+            spike_recovery_lr_decay=0.5,
+        )
+        cb1._write_spike_recovery_hint(args, loss=10.0)
+        data1 = json.loads((tmp_path / "spike_recovery.json").read_text(encoding="utf-8"))
+        assert data1["attempts"] == 1
+        assert data1["should_recover"] is True
+
+        # Launch 2 (re-launch / resume): new callback instance hits spike again
+        cb2 = _make_callback(
+            tmp_path,
+            spike_recovery=True,
+            spike_recovery_max_attempts=2,
+            spike_recovery_lr_decay=0.5,
+        )
+        cb2._write_spike_recovery_hint(args, loss=12.0)
+        data2 = json.loads((tmp_path / "spike_recovery.json").read_text(encoding="utf-8"))
+        assert data2["attempts"] == 2
+        assert data2["should_recover"] is False
+
+        # Launch 3: hits spike again, cap is strictly enforced
+        cb3 = _make_callback(
+            tmp_path,
+            spike_recovery=True,
+            spike_recovery_max_attempts=2,
+            spike_recovery_lr_decay=0.5,
+        )
+        cb3._write_spike_recovery_hint(args, loss=14.0)
+        data3 = json.loads((tmp_path / "spike_recovery.json").read_text(encoding="utf-8"))
+        assert data3["attempts"] == 3
+        assert data3["should_recover"] is False
+
+    def test_corrupt_hint_file_falls_back_gracefully(self, tmp_path, monkeypatch):
+        """Corrupt spike_recovery.json falls back safely without crashing."""
+        monkeypatch.chdir(tmp_path)
+        args = SimpleNamespace(learning_rate=1e-3, output_dir=str(tmp_path))
+        (tmp_path / "spike_recovery.json").write_text("corrupted json content", encoding="utf-8")
+
+        cb = _make_callback(
+            tmp_path,
+            spike_recovery=True,
+            spike_recovery_max_attempts=2,
+            spike_recovery_lr_decay=0.5,
+        )
+        cb._write_spike_recovery_hint(args, loss=10.0)
+        data = json.loads((tmp_path / "spike_recovery.json").read_text(encoding="utf-8"))
+        assert data["attempts"] == 1
+        assert data["should_recover"] is True
+
     def test_disabled_when_strategy_not_set(self, tmp_path):
         cb = _make_callback(tmp_path, spike_recovery=False)
         args = SimpleNamespace(

@@ -702,7 +702,7 @@ config load because its evidence covers BF16, not FP16; see the
 
 ### Loss Spike Auto-Recovery
 
-Extends the watchdog: instead of stopping on a spike, writes `<output>/spike_recovery.json` with decayed LR and attempt count for re-launch. Capped at 3 attempts by default.
+Extends the watchdog: when the watchdog halts training on a loss spike, writes `<output>/spike_recovery.json` with decayed LR and attempt count for re-launch (e.g. `soup train --resume`). Capped at `loss_spike_recovery_max_attempts` (default 3); subsequent launches hitting spikes increment the counter and set `should_recover: false` once the cap is reached.
 
 ```yaml
 training:
