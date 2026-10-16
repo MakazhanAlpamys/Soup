@@ -120,7 +120,7 @@ def checked_thumbs_db(state: LoopState) -> Optional[str]:
     if resolved is None:
         return None
     path, field = resolved
-    from soup_cli.utils.local_rl import validate_db_path
+    from soup_cli.utils.local_rl import THUMBS_HARVEST_SELECT, validate_db_path
 
     try:
         validate_db_path(path)
@@ -137,7 +137,7 @@ def checked_thumbs_db(state: LoopState) -> Optional[str]:
     try:
         # Short timeout: a lock is not a verdict, so do not wait out sqlite's 5 s.
         with contextlib.closing(sqlite3.connect(os.path.abspath(path), timeout=0.1)) as conn:
-            conn.execute("SELECT 1 FROM thumbs LIMIT 1")
+            conn.execute(f"{THUMBS_HARVEST_SELECT} LIMIT 1")
     except sqlite3.Error as exc:
         if "locked" in str(exc).lower():
             return path
@@ -190,7 +190,7 @@ def harvest_from_traces(state: LoopState) -> Mapping[str, object]:
 
     trace_dir = _resolve_trace_dir(state)
     traces = list(parse_soup_serve(trace_dir)) if trace_dir else []
-    pairs = list(build_pairs(traces, signal="thumbs_up")) if traces else []
+    pairs = list(build_pairs(traces, signal="thumbs_up"))
     thumbs = _thumbs_pairs(state)
     seen = {(p.prompt, p.chosen, p.rejected) for p in pairs}
     for p in thumbs:
