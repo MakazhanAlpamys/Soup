@@ -2870,6 +2870,8 @@ class StreamRuntime:
     external_sources: Tuple[Any, ...] = ()
     #: training.stream_nf4_scale_cache — the layers' shared NF4ScaleCache, or None.
     scale_cache: Any = None
+    #: Per MoE layer, the reader of its experts file (expert_layout "per_expert").
+    expert_readers: Tuple[Any, ...] = ()
 
     def close(self) -> None:
         """Release the weight source and detach the prefetch hook.
@@ -2881,13 +2883,18 @@ class StreamRuntime:
         mapping charges Windows commit for the file's whole size (#926).
         A no-op for the RAM tier, which owns neither a thread nor handles.
         """
-        source_close = getattr(self.source, "close", None)
-        if callable(source_close):
-            source_close()
-        for external in self.external_sources:
-            external_close = getattr(external, "close", None)
-            if callable(external_close):
-                external_close()
+        try:
+            source_close = getattr(self.source, "close", None)
+            if callable(source_close):
+                source_close()
+            for external in self.external_sources:
+                external_close = getattr(external, "close", None)
+                if callable(external_close):
+                    external_close()
+        finally:
+            # One open handle per MoE layer's experts file (expert_layout "per_expert").
+            for reader in self.expert_readers:
+                reader.close()
         if self.hook is not None:
             self.hook.remove()
             self.hook = None
@@ -2920,6 +2927,8 @@ class StreamRuntime:
             "device": self.device,
             "total_params": self.total_params,
             "nf4_scale_cache_bytes": getattr(self.scale_cache, "nbytes", 0),
+            "expert_fetches": sum(reader.fetches for reader in self.expert_readers),
+            "expert_bytes_read": sum(reader.bytes_read for reader in self.expert_readers),
         }
 
 
@@ -2998,6 +3007,48 @@ def _load_layer_buffers(
                 setattr(owner, leaf, value.to(device=buf.device, copy=True))
                 loaded += 1
     return loaded
+
+
+def _install_expert_streaming(
+    layers: Any,
+    shard_dir: str,
+    index: Any,
+    *,
+    device: str,
+    codes: Optional[Mapping[str, Any]],
+) -> Tuple[Any, ...]:
+    """Swap each MoE layer's experts module for a ``StreamedExperts``.
+
+    Only for a cache sharded with ``expert_layout="per_expert"``; returns the
+    experts-file readers (closed by ``StreamRuntime.close``).
+    """
+    from soup_cli.utils.expert_stream import (
+        EXPERT_LAYOUT_PER_EXPERT,
+        ExpertFetcher,
+        ExpertShardReader,
+        install_expert_streaming,
+    )
+    from soup_cli.utils.layer_shard import expert_paths
+
+    if getattr(index, "expert_layout", "") != EXPERT_LAYOUT_PER_EXPERT:
+        return ()
+    readers: Dict[int, Any] = {}
+    try:
+        for layer, path in expert_paths(shard_dir, index).items():
+            readers[layer] = ExpertShardReader(
+                path,
+                count=index.expert_count,
+                shapes=index.expert_shapes,
+                quant_specs=index.expert_quant_specs,
+                dtype=index.dtype,
+            )
+        fetcher = ExpertFetcher(device=device, dtype=index.dtype, codes=codes)
+        install_expert_streaming(layers, readers, fetcher)
+    except BaseException:
+        for reader in readers.values():
+            reader.close()
+        raise
+    return tuple(readers.values())
 
 
 def install_streaming(
@@ -3088,13 +3139,18 @@ def install_streaming(
             f"{index.n_layers} — reshard the checkpoint"
         )
 
+    _require_stripe_folders(shard_dir, index)
+    # Before the name maps: the fused expert parameters leave the layer here,
+    # so the layer pool never allocates them.
+    expert_readers = _install_expert_streaming(
+        layers, shard_dir, index, device=str(device), codes=codes
+    )
     layer_name_maps = [_layer_name_map(layer) for layer in layers]
     if not any(layer_name_maps):
         raise RuntimeError(
             "no meta decoder weights found — the base was materialised, which "
             "defeats layer streaming entirely"
         )
-    _require_stripe_folders(shard_dir, index)
     decoder_paths = layer_paths(shard_dir, index)
     layer_specs = RamSource.layer_specs_from_paths(decoder_paths)
     large_specs = large_layer_specs(shard_dir, index)
@@ -3284,6 +3340,7 @@ def install_streaming(
         large_pool=large_pool,
         hook=handle,
         total_params=int(getattr(index, "total_params", 0) or 0),
+        expert_readers=expert_readers,
         tier=tier,
         scale_cache=scale_cache,
     )

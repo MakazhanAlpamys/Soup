@@ -46,6 +46,11 @@ from typing import (
 )
 
 from soup_cli import __version__
+from soup_cli.utils.expert_stream import (
+    EXPERT_LAYOUT_PER_EXPERT,
+    expert_shard_name,
+    write_expert_shard,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -135,6 +140,11 @@ _LAYER_BUFFER_KEYS = {"deepseek_v3": ("mlp.gate.e_score_correction_bias",)}
 def layer_buffer_keys(arch: str) -> Tuple[str, ...]:
     """Short keys of the per-layer buffers streamed for ``arch`` (see above)."""
     return _LAYER_BUFFER_KEYS.get(arch, ())
+
+
+#: Architectures admitted to ``expert_layout="per_expert"``: each one passed
+#: the resident-vs-streamed parity tests in ``tests/test_expert_stream.py``.
+_PER_EXPERT_LAYOUT_ARCHS = ("deepseek_v3",)
 _QWEN4_OQ_EXPERT_RE = re.compile(
     r"^(?P<prefix>model\.layers\.\d+\.mlp)\.switch_mlp\."
     r"(?P<projection>gate_proj|up_proj|down_proj)\.weight$"
@@ -282,6 +292,22 @@ class ShardIndex:
     #: Per decoder layer, the root holding its file (0 = this directory, k = stripe_roots[k-1]).
     #: Empty == every layer here.
     layer_roots: Tuple[int, ...] = ()
+    #: "" keeps a MoE layer's routed experts inside its decoder-layer file (the
+    #: fused 3-D tensors); "per_expert" writes them to ``experts_NNN.safetensors``
+    #: beside the layer file, one tensor pair per expert, streamed one expert at
+    #: a time (``utils/expert_stream.py``). Deliberately NOT a format-version
+    #: bump (that would invalidate every existing cache): a Soup from before this
+    #: field reads a per_expert cache as fused and refuses it at install with
+    #: "shard is missing decoder weights"; reshard with that version to use it.
+    expert_layout: str = ""
+    #: per_expert: the decoder layers that have an experts file, ascending.
+    expert_layers: Tuple[int, ...] = ()
+    #: per_expert: routed experts per MoE layer (the same in every MoE layer).
+    expert_count: int = 0
+    #: per_expert: stored dense shape of one expert's "gate_up" and "down".
+    expert_shapes: Mapping[str, Tuple[int, ...]] = field(default_factory=dict)
+    #: per_expert under NF4: the spec of "gate_up" and "down". Empty otherwise.
+    expert_quant_specs: Mapping[str, NF4WeightSpec] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -559,6 +585,17 @@ def layer_paths(shard_dir: str, index: "ShardIndex") -> List[str]:
     return [layer_shard_path(dirs[root], idx) for idx, root in enumerate(placement)]
 
 
+def expert_paths(shard_dir: str, index: "ShardIndex") -> Dict[int, str]:
+    """Decoder layer -> its experts file, beside the layer's own file (same root)."""
+    if getattr(index, "expert_layout", "") != EXPERT_LAYOUT_PER_EXPERT:
+        return {}
+    paths = layer_paths(shard_dir, index)
+    return {
+        layer: os.path.join(os.path.dirname(paths[layer]), expert_shard_name(layer))
+        for layer in index.expert_layers
+    }
+
+
 def _same_roots(first: Sequence[str], second: Sequence[str]) -> bool:
     """Equal as folders, not as strings: case and a trailing separator differ on Windows."""
 
@@ -650,6 +687,28 @@ def read_shard_index(out_dir: str, *, index_name: str = _INDEX_NAME) -> ShardInd
         raise ValueError("stripe_roots are set but layer_roots is empty")
     if any(not 0 <= root <= len(stripe_roots) for root in layer_roots):
         raise ValueError("layer_roots names a root the index does not have")
+    expert_layout = str(payload.get("expert_layout", ""))
+    if expert_layout not in ("", EXPERT_LAYOUT_PER_EXPERT):
+        raise ValueError(f"unknown expert_layout {expert_layout!r}")
+    expert_layers = tuple(int(layer) for layer in (payload.get("expert_layers") or ()))
+    if list(expert_layers) != sorted(set(expert_layers)) or any(
+        not 0 <= layer < n_layers for layer in expert_layers
+    ):
+        raise ValueError("expert_layers must be distinct ascending decoder layer indices")
+    expert_count = int(payload.get("expert_count", 0))
+    expert_shapes = {
+        str(part): tuple(int(dim) for dim in shape)
+        for part, shape in (payload.get("expert_shapes") or {}).items()
+    }
+    if bool(expert_layers) != (expert_layout == EXPERT_LAYOUT_PER_EXPERT) or (
+        expert_layers
+        and (
+            not 1 <= expert_count <= 4096
+            or set(expert_shapes) != {"gate_up", "down"}
+            or any(len(shape) != 2 or min(shape) < 1 for shape in expert_shapes.values())
+        )
+    ):
+        raise ValueError("the index's expert fields do not describe one layout")
     return ShardIndex(
         n_layers=n_layers,
         layer_keys=tuple(payload["layer_keys"]),
@@ -678,6 +737,14 @@ def read_shard_index(out_dir: str, *, index_name: str = _INDEX_NAME) -> ShardInd
         external_mode=str(payload.get("external_mode", "")),
         stripe_roots=stripe_roots,
         layer_roots=layer_roots,
+        expert_layout=expert_layout,
+        expert_layers=expert_layers,
+        expert_count=expert_count,
+        expert_shapes=expert_shapes,
+        expert_quant_specs={
+            str(part): NF4WeightSpec.from_json(value)
+            for part, value in (payload.get("expert_quant_specs") or {}).items()
+        },
     )
 
 
@@ -960,6 +1027,13 @@ def _atomic_write_index(index: ShardIndex, out_dir: str) -> None:
     payload["quant_specs"] = {
         key: spec.to_json() for key, spec in index.quant_specs.items()
     }
+    payload["expert_layers"] = list(index.expert_layers)
+    payload["expert_shapes"] = {
+        part: list(shape) for part, shape in index.expert_shapes.items()
+    }
+    payload["expert_quant_specs"] = {
+        part: spec.to_json() for part, spec in index.expert_quant_specs.items()
+    }
     path = os.path.join(out_dir, _INDEX_NAME)
     fd, tmp = tempfile.mkstemp(prefix=".soup.", suffix=".tmp", dir=out_dir)
     try:
@@ -1019,6 +1093,7 @@ def inspect_shard_cache(
     quant_device: str,
     external_mode: str = "",
     stripe_roots: Sequence[str] = (),
+    expert_layout: str = "",
 ) -> Tuple[Optional[ShardIndex], str]:
     """Return a reusable index or the precise reason it must be rewritten.
 
@@ -1054,6 +1129,11 @@ def inspect_shard_cache(
         return None, (
             f"external tensor policy changed ({index.external_mode!r} -> "
             f"{external_mode!r})"
+        )
+    if index.expert_layout != expert_layout:
+        return None, (
+            f"expert layout changed ({index.expert_layout or 'fused'!r} -> "
+            f"{expert_layout or 'fused'!r})"
         )
     if index.format_version != _SHARD_FORMAT_VERSION:
         return None, (
@@ -1091,7 +1171,7 @@ def inspect_shard_cache(
         path = large_shard_path(out_dir, key)
         if not os.path.exists(path):
             return None, f"cached shard {os.path.basename(path)!r} is missing"
-    for path in layer_paths(out_dir, index):
+    for path in [*layer_paths(out_dir, index), *expert_paths(out_dir, index).values()]:
         if not os.path.exists(path):
             if os.path.dirname(path) == out_dir:
                 return None, f"cached shard {os.path.basename(path)!r} is missing"
@@ -1108,6 +1188,7 @@ def _content_change_requires_index_quarantine(
     double_quant: bool,
     quant_device: str,
     external_mode: str,
+    expert_layout: str = "",
 ) -> bool:
     """Return whether the next write could make the current index describe wrong bytes."""
     try:
@@ -1122,6 +1203,7 @@ def _content_change_requires_index_quarantine(
             index.quant != QUANT_NONE and index.quant_device != quant_device,
             index.source_fingerprint != fingerprint,
             index.external_mode != external_mode,
+            index.expert_layout != expert_layout,
             index.format_version != _SHARD_FORMAT_VERSION,
         )
     )
@@ -1248,6 +1330,7 @@ def shard_checkpoint(
     notify: Optional[Callable[[str], None]] = None,
     stripe_roots: Sequence[str] = (),
     num_hidden_layers: Optional[int] = None,
+    expert_layout: str = "",
 ) -> ShardIndex:
     """Rewrite an HF checkpoint into per-layer safetensors shards.
 
@@ -1272,7 +1355,22 @@ def shard_checkpoint(
     For ``deepseek_v3``, ``num_hidden_layers`` (the config's value) drops the
     multi-token-prediction layers a DeepSeek-V3 / Kimi K2 checkpoint stores
     past the last decoder layer; transformers ignores them on load too.
+
+    ``expert_layout="per_expert"`` (stacked-expert architectures only) writes a
+    MoE layer's routed experts to ``experts_NNN.safetensors`` beside its layer
+    file, one ``(gate_up, down)`` pair per expert, NF4-quantised per matrix
+    under ``quant='nf4'``; the layer file then holds only the dense part.
     """
+    if expert_layout not in ("", EXPERT_LAYOUT_PER_EXPERT):
+        raise ValueError(
+            f"unsupported expert_layout {expert_layout!r}; supported: "
+            f"'' (fused) or {EXPERT_LAYOUT_PER_EXPERT!r}"
+        )
+    if expert_layout and arch not in _PER_EXPERT_LAYOUT_ARCHS:
+        raise ValueError(
+            f"expert_layout={expert_layout!r} is gated on resident parity per "
+            f"architecture; admitted: {', '.join(_PER_EXPERT_LAYOUT_ARCHS)}; got arch={arch!r}"
+        )
     if dtype not in _SUPPORTED_DTYPES:
         raise ValueError(
             f"unsupported dtype {dtype!r} for layer streaming; "
@@ -1345,6 +1443,7 @@ def shard_checkpoint(
             device_kind,
             external_mode,
             stripe_roots=stripe,
+            expert_layout=expert_layout,
         )
         if cached is not None:
             if notify is not None:
@@ -1365,6 +1464,7 @@ def shard_checkpoint(
             double_quant=double_quant,
             quant_device=device_kind,
             external_mode=external_mode,
+            expert_layout=expert_layout,
         ):
             _quarantine_shard_index(resolved_out)
 
@@ -1452,6 +1552,11 @@ def shard_checkpoint(
             if (match := _LAYER_RE.match(key)) is not None
         }
 
+    if expert_layout and not any(_PER_EXPERT_RE.match(key) for key in where):
+        raise ValueError(
+            f"expert_layout={expert_layout!r} found no per-expert routed weights "
+            f"(model.layers.N.mlp.experts.E.*) in {weights_dir} to split"
+        )
     if drop_extra_layers:
         # DeepSeek-V3 / Kimi K2 store the multi-token-prediction module as the
         # layer(s) after the last decoder layer (``model.layers.61.*`` of 61).
@@ -1597,6 +1702,8 @@ def shard_checkpoint(
     # Collected here, deleted only after the new index commits — see the comment beside the
     # deletion below for why.
     stale_root0_copies: List[str] = []
+    expert_layers_written: List[int] = []
+    expert_meta: Optional[Tuple[int, Dict[str, Any], Dict[str, Any]]] = None
     # At most _MAX_LIVE_SOURCE_HANDLES source files are mapped at once (#926);
     # a failed open, or a raise anywhere below, still releases the live ones.
     with _SourceHandles(shards, safe_open) as handles:
@@ -1604,6 +1711,7 @@ def shard_checkpoint(
             prefix = f"model.layers.{idx}."
             blob = {}
             stacked_experts: Dict[str, Dict[int, Tuple[str, str]]] = {}
+            per_expert_ids: List[int] = []
             oq_experts: Dict[str, str] = {}
             for key, location in where.items():
                 if not key.startswith(prefix):
@@ -1681,6 +1789,10 @@ def shard_checkpoint(
                     path, source_key = stacked_experts[projection][expert]
                     return _read_tensor(handles[path], source_key, dtype)
 
+                if expert_layout == EXPERT_LAYOUT_PER_EXPERT:
+                    # Written after the layer file, in its root (below).
+                    per_expert_ids = expert_ids
+                    expert_ids = []
                 gate_up = []
                 down = []
                 for expert in expert_ids:
@@ -1695,8 +1807,9 @@ def shard_checkpoint(
                         f"{expert_label} layer {idx} contains both packed and "
                         "per-expert weights"
                     )
-                blob["mlp.experts.gate_up_proj"] = torch.stack(gate_up, dim=0)
-                blob["mlp.experts.down_proj"] = torch.stack(down, dim=0)
+                if gate_up:
+                    blob["mlp.experts.gate_up_proj"] = torch.stack(gate_up, dim=0)
+                    blob["mlp.experts.down_proj"] = torch.stack(down, dim=0)
             if oq_experts:
                 import torch
 
@@ -1778,6 +1891,35 @@ def shard_checkpoint(
                     f"Free space on that drive, or name another folder in {STRIPE_DIRS_ENV} "
                     f"(unset it to shard to one root).",
                 ) from exc
+            if per_expert_ids:
+                import torch
+
+                def _expert_pairs(ids=per_expert_ids, read=_expert_tensor):
+                    for expert in ids:
+                        gate = read("gate_proj", expert)
+                        gate_up_one = torch.cat((gate, read("up_proj", expert)))
+                        yield gate_up_one, read("down_proj", expert)
+
+                info = write_expert_shard(
+                    os.path.join(shard_dirs[root], expert_shard_name(idx)),
+                    _expert_pairs(),
+                    quantise=quantise,
+                    double_quant=double_quant,
+                    device=device,
+                )
+                if quantise:
+                    tables.observe(f"{prefix}mlp.experts", *info.codes)
+                described = (info.count, dict(info.shapes), dict(info.quant_specs))
+                if expert_meta is None:
+                    expert_meta = described
+                elif expert_meta != described:
+                    raise ValueError(
+                        f"{expert_label} layer {idx} experts differ from the first MoE "
+                        f"layer's ({described[:2]} vs {expert_meta[:2]}); one expert layout "
+                        f"serves every layer"
+                    )
+                expert_layers_written.append(idx)
+                total_params += info.total_params
             if root:
                 # A copy of this layer from an earlier one-root layout is now stale. It is
                 # Soup's own file inside the contained primary root, so it WILL go — but not
@@ -1790,6 +1932,11 @@ def shard_checkpoint(
                 stale = layer_shard_path(resolved_out, idx)
                 if os.path.exists(stale):
                     stale_root0_copies.append(stale)
+            # An experts file the new index will not name (an earlier per_expert
+            # layout, or one now written to a stripe root) goes the same way.
+            stale_experts = os.path.join(resolved_out, expert_shard_name(idx))
+            if (not per_expert_ids or root) and os.path.exists(stale_experts):
+                stale_root0_copies.append(stale_experts)
             del blob
 
         extras = {}
@@ -1865,6 +2012,11 @@ def shard_checkpoint(
         external_mode=external_mode,
         stripe_roots=stripe,
         layer_roots=layer_roots,
+        expert_layout=expert_layout,
+        expert_layers=tuple(expert_layers_written),
+        expert_count=expert_meta[0] if expert_meta else 0,
+        expert_shapes=expert_meta[1] if expert_meta else {},
+        expert_quant_specs=expert_meta[2] if expert_meta else {},
     )
     _atomic_write_index(index, resolved_out)
     resharding_index = os.path.join(resolved_out, _RESHARDING_INDEX_NAME)
@@ -1929,6 +2081,7 @@ def shard_cache_disk_bytes(shard_dir: str, index: ShardIndex) -> Optional[int]:
     paths = [os.path.join(shard_dir, _INDEX_NAME), extras_shard_path(shard_dir)]
     paths.extend(large_shard_path(shard_dir, key) for key in index.large_keys)
     paths.extend(layer_paths(shard_dir, index))
+    paths.extend(expert_paths(shard_dir, index).values())
     try:
         return sum(os.path.getsize(path) for path in paths)
     except (OSError, ValueError):
@@ -1980,7 +2133,8 @@ def _notify_unindexed_cache_files(
     from soup_cli.utils.terminal import for_terminal
 
     expected = {
-        os.path.normcase(os.path.realpath(path)) for path in layer_paths(out_dir, index)
+        os.path.normcase(os.path.realpath(path))
+        for path in [*layer_paths(out_dir, index), *expert_paths(out_dir, index).values()]
     }
     directories = stripe_dirs(out_dir, index.stripe_roots)
     for position, directory in enumerate(directories):
@@ -1994,7 +2148,10 @@ def _notify_unindexed_cache_files(
             continue
         for entry in entries:
             if not (
-                (entry.name.startswith("layer_") and entry.name.endswith(".safetensors"))
+                (
+                    entry.name.startswith(("layer_", "experts_"))
+                    and entry.name.endswith(".safetensors")
+                )
                 or (entry.name.startswith(".soup.") and entry.name.endswith(".tmp"))
             ):
                 continue
