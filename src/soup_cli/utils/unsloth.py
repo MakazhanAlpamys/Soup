@@ -43,6 +43,14 @@ def load_model_and_tokenizer(
     ``alpha / r``. It is forwarded on every call so the config's value, not
     Unsloth's default, decides (#1853: the flag loaded and was never passed).
     """
+    if quantization == "8bit":
+        # #1811: the config refuses this pairing; name it here too rather than
+        # loading the model in 16-bit if the loader is ever reached another way.
+        raise ValueError(
+            "quantization 8bit is not supported by the Unsloth loader "
+            "(it passes load_in_4bit only); use 4bit or none"
+        )
+
     from unsloth import FastLanguageModel
 
     load_in_4bit = quantization == "4bit"
