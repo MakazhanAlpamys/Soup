@@ -247,7 +247,7 @@ def build_mlx_adapter_config(lora_cfg: object, *, adapter_path: str, **extra: ob
     """
     rank = int(getattr(lora_cfg, "r", 0))
     config: dict = {
-        "fine_tune_type": "lora",
+        "fine_tune_type": "dora" if getattr(lora_cfg, "use_dora", False) else "lora",
         "adapter_path": adapter_path,
         "lora_parameters": {
             "rank": rank,
@@ -411,7 +411,6 @@ class MLXSFTTrainerWrapper:
         without it every parameter is trainable and the saved "adapter" is
         actually a full fine-tune (172 tensors instead of ~64 LoRA weights).
         """
-        model.freeze()
         from mlx_lm.tuner.utils import linear_to_lora_layers
 
         cfg = self.config
@@ -428,6 +427,33 @@ class MLXSFTTrainerWrapper:
                 f"all architectures; defaulting to {target_keys}[/]"
             )
         keys = set(target_keys)
+        use_dora = bool(lora_cfg.use_dora)
+        if use_dora:
+            import mlx.nn as nn
+
+            # Upstream also converts embeddings and switch layers. This first
+            # DoRA path qualifies dense linear targets only. Check every target
+            # before freezing/converting so a typo or unsupported layer cannot
+            # silently train a subset or leave a partly converted model.
+            matches = [
+                (name, module)
+                for parent in [*model.layers, model]
+                for name, module in parent.named_modules()
+                if name in keys
+            ]
+            missing = keys - {name for name, _ in matches}
+            unsupported = [
+                name for name, module in matches
+                if not isinstance(module, (nn.Linear, nn.QuantizedLinear))
+                or (isinstance(module, nn.QuantizedLinear) and module.bits != 4)
+            ]
+            if missing or unsupported:
+                raise ValueError(
+                    "MLX DoRA requires dense linear targets (unquantized or 4-bit); "
+                    f"unmatched targets: {sorted(missing)}; "
+                    f"unsupported targets: {sorted(set(unsupported))}."
+                )
+        model.freeze()
         num_layers = len(getattr(model, "layers", []))
         linear_to_lora_layers(
             model,
@@ -438,6 +464,7 @@ class MLXSFTTrainerWrapper:
                 "dropout": float(getattr(lora_cfg, "dropout", 0.0) or 0.0),
                 "keys": keys,
             },
+            **({"use_dora": True} if use_dora else {}),
         )
 
     def _load_checkpoint_weights(self, checkpoint_path: str) -> None:
@@ -474,6 +501,23 @@ class MLXSFTTrainerWrapper:
                 f"MLX checkpoint {checkpoint_path} declares no tensors; refusing "
                 "to warm-start from an empty or corrupt checkpoint file"
             )
+        if self.config.training.lora.use_dora:
+            import mlx.core as mx
+            from mlx.utils import tree_flatten
+
+            # load_weights(strict=False) is needed for adapter-only files, but
+            # also silently ignores missing/unexpected tensors. Validate the
+            # complete DoRA adapter before any model state is changed.
+            weights = mx.load(checkpoint_path)
+            expected = dict(tree_flatten(self.model.trainable_parameters()))
+            if weights.keys() != expected.keys() or any(
+                weights[name].shape != expected[name].shape for name in weights.keys() & expected
+            ):
+                raise ValueError(
+                    f"DoRA checkpoint {checkpoint_path} is incompatible with the "
+                    "configured adapter targets/rank; all DoRA tensors, including "
+                    "magnitudes, must match."
+                )
         console.print(
             f"[green]MLX: loading checkpoint weights from[/] {checkpoint_path} "
             f"({tensor_count} tensors)"
@@ -901,7 +945,7 @@ class MLXSFTTrainerWrapper:
         (output_dir / "adapter_config.json").write_text(
             json.dumps(
                 {
-                    "fine_tune_type": "lora",
+                    **build_mlx_adapter_config(lora_cfg, adapter_path=str(output_dir)),
                     "model": str(cfg.base),
                     "num_layers": len(getattr(self.model, "layers", [])),
                     "batch_size": batch_size,
@@ -911,11 +955,6 @@ class MLXSFTTrainerWrapper:
                     "steps_per_eval": steps_per_eval,
                     "steps_per_save": steps_per_save,
                     "max_seq_length": max_seq_length,
-                    "adapter_path": str(output_dir),
-                    # #392: the RESOLVED module list, never the raw `auto`.
-                    "lora_parameters": build_mlx_adapter_config(
-                        lora_cfg, adapter_path=str(output_dir)
-                    )["lora_parameters"],
                     # #683: the EFFECTIVE masking, not a hardcoded False.
                     # `mask_prompt` stays upstream's meaning (a single masked
                     # prefix); `response_token_mask` is Soup's per-token mask,

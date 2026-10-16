@@ -5395,6 +5395,23 @@ class SoupConfig(BaseModel):
             # mlx refuses Quant Menu formats in the quant-menu task validator below.
             if self.backend == "mlx" and is_quant_menu_format(self.training.quantization):
                 return self
+            if self.backend == "mlx" and variant == "dora":
+                if lcfg.use_rslora or lcfg.rank_pattern or lcfg.alpha_pattern:
+                    raise ValueError(
+                        "MLX DoRA does not support lora.use_rslora, rank_pattern "
+                        "or alpha_pattern; use scalar lora.r and lora.alpha."
+                    )
+                if (
+                    self.task == "sft"
+                    and self.modality == "text"
+                    and self.training.quantization in ("none", "4bit")
+                ):
+                    return self
+                raise ValueError(
+                    "MLX DoRA requires task='sft', modality='text' and "
+                    "quantization='none' or '4bit'. Use backend='transformers' "
+                    "for other supported DoRA training paths."
+                )
             raise ValueError(
                 f"training.lora variant {variant!r} requires backend='transformers'; "
                 f"backend={self.backend!r} has its own adapter constructor and cannot "
