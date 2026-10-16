@@ -226,8 +226,18 @@ def harvest_from_traces(state: LoopState) -> Mapping[str, object]:
 # ---------------------------------------------------------------------------
 
 
-def _render_dpo_yaml(state: LoopState, pairs_path: str, output_dir: str) -> str:
-    """Render a minimal DPO ``soup.yaml`` referencing the harvested pairs."""
+def _render_dpo_yaml(
+    state: LoopState, pairs_path: str, output_dir: str, pairs_n: int,
+) -> str:
+    """Render a minimal DPO ``soup.yaml`` referencing the harvested pairs.
+
+    ``data.val_split`` is written explicitly instead of letting the schema
+    default (0.1) apply: with a one-pair harvest the default split leaves
+    0 train rows and the stage can never train (#1909). Two or more pairs
+    keep the default fraction; a single pair trains on everything (the
+    generated config carries no ``training.eval_steps``, so an empty val
+    side never reaches the eval scheduler's validation-rows check).
+    """
     import yaml
 
     base = (
@@ -235,10 +245,11 @@ def _render_dpo_yaml(state: LoopState, pairs_path: str, output_dir: str) -> str:
         if state.served_model and not state.served_model.startswith("registry://")
         else "hf-internal-testing/tiny-random-gpt2"
     )
+    val_split = 0.1 if pairs_n >= 2 else 0.0
     config = {
         "base": base,
         "task": "dpo",
-        "data": {"train": pairs_path, "format": "dpo"},
+        "data": {"train": pairs_path, "format": "dpo", "val_split": val_split},
         "training": {"epochs": 1, "batch_size": 1, "lr": 5.0e-5},
         "output": output_dir,
     }
@@ -265,7 +276,7 @@ def train_dpo_from_pairs(
     yaml_dir.mkdir(parents=True, exist_ok=True)
     yaml_path = str(yaml_dir / f"{run_id}.yaml")
     atomic_write_text(
-        _render_dpo_yaml(state, str(pairs_path), output_dir),
+        _render_dpo_yaml(state, str(pairs_path), output_dir, pairs_n),
         yaml_path,
         field="train yaml",
     )
@@ -294,8 +305,17 @@ def train_dpo_from_pairs(
 
     rc = getattr(result, "returncode", 1)
     if rc != 0:
-        _LOG.warning("soup train exited rc=%s", rc)
-        return {"run_id": None, "skipped": True, "adapter_path": None}
+        stderr_tail = [
+            line for line in str(getattr(result, "stderr", "") or "").splitlines() if line
+        ][-3:]
+        reason = "; ".join(stderr_tail) if stderr_tail else f"exit code {rc}"
+        _LOG.warning("soup train exited rc=%s: %s", rc, reason)
+        return {
+            "run_id": None,
+            "skipped": True,
+            "adapter_path": None,
+            "skip_reason": f"soup train failed ({reason})",
+        }
     return {"run_id": run_id, "skipped": False, "adapter_path": output_dir}
 
 
