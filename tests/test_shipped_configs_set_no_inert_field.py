@@ -58,6 +58,24 @@ def test_the_catalog_is_not_empty():
     assert len(list_templates()) >= 10
 
 
+def test_the_enumeration_covers_both_catalogs_exactly():
+    # #1948 review: the checks above read the catalogs, while the parametrized
+    # test gets its cases from _shipped(). Pin that the two are the same set, so an
+    # empty enumeration or a lost branch (recipes or templates) fails here by name.
+    # There are no intentional exclusions.
+    enumerated = [name for name, _ in _shipped()]
+    expected = {f"recipe:{name}" for name in RECIPES} | {
+        f"template:{name}" for name in list_templates()
+    }
+    assert enumerated, "the shipped-config enumeration is empty"
+    assert len(enumerated) == len(set(enumerated)), "an id is enumerated twice"
+    missing = sorted(expected - set(enumerated))
+    extra = sorted(set(enumerated) - expected)
+    assert not missing, f"shipped configs the test never checks: {missing[:10]}"
+    assert not extra, f"enumerated ids that are not shipped configs: {extra[:10]}"
+    assert all(text for _, text in _shipped()), "a shipped config enumerated with no text"
+
+
 @pytest.mark.parametrize("name,text", _shipped(), ids=[n for n, _ in _shipped()])
 def test_a_shipped_config_sets_no_inert_field(name, text):
     assert inert_fields_set(text) == [], name
