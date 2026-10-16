@@ -1,6 +1,6 @@
 """soup expect — Expectations suite for chat data (v0.69.0 Part B).
 
-Runs a YAML suite of expectations against a JSONL dataset. Exit code 3 on
+Runs a YAML suite of expectations against a JSONL dataset. Exit code 2 on
 suite failure (matches v0.55 / v0.56 / v0.64 / v0.65 gate convention) so CI
 pipelines can gate on dataset quality regressions without parsing output.
 """
@@ -36,11 +36,11 @@ def _load_jsonl_rows(data_path: str) -> List[Mapping[str, object]]:
     if not isinstance(data_path, str) or not data_path:
         raise ValueError("data path must be a non-empty string")
     if not os.path.lexists(data_path):
-        raise FileNotFoundError(data_path)
+        raise FileNotFoundError(f"data file not found: '{data_path}'")
     enforce_under_cwd_and_no_symlink(data_path, "data path")
     real = os.path.realpath(data_path)
     if not os.path.isfile(real):
-        raise FileNotFoundError(data_path)
+        raise FileNotFoundError(f"data file is not a regular file: '{data_path}'")
     if os.path.getsize(real) > _MAX_DATA_BYTES:
         raise ValueError(f"data file exceeds {_MAX_DATA_BYTES} bytes")
     rows: List[Mapping[str, object]] = []
