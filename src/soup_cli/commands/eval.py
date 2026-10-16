@@ -89,7 +89,7 @@ def benchmark(
     """Evaluate on standard benchmarks (wraps lm-evaluation-harness)."""
     model_path = Path(model)
     if not model_path.exists():
-        console.print(f"[red]Model path not found: {model_path}[/]")
+        console.print(f"[red]Model path not found: {for_terminal(model_path)}[/]")
         raise typer.Exit(1)
 
     # Both the user-supplied path and the adapter's declared base model are
@@ -371,7 +371,7 @@ def custom(
     model_path = Path(model)
 
     if not model_path.exists():
-        console.print(f"[red]Model path not found: {model_path}[/]")
+        console.print(f"[red]Model path not found: {for_terminal(model_path)}[/]")
         raise typer.Exit(1)
 
     # Load and validate tasks
@@ -382,7 +382,7 @@ def custom(
         raise typer.Exit(1)
 
     console.print(
-        f"[dim]Loaded {len(eval_tasks)} eval tasks from {tasks_path}[/]"
+        f"[dim]Loaded {len(eval_tasks)} eval tasks from {for_terminal(tasks_path)}[/]"
     )
 
     # Run evaluation with progress
@@ -947,14 +947,14 @@ def human(
     # Verify models exist
     for mpath in [model_a, model_b]:
         if not Path(mpath).exists():
-            console.print(f"[red]Model not found: {mpath}[/]")
+            console.print(f"[red]Model not found: {for_terminal(mpath)}[/]")
             raise typer.Exit(1)
 
     console.print(Panel(
         f"[bold]Human Evaluation[/]\n"
         f"Prompts: {len(prompts)}\n"
-        f"Model A: {model_a}\n"
-        f"Model B: {model_b}",
+        f"Model A: {for_terminal(model_a)}\n"
+        f"Model B: {for_terminal(model_b)}",
         title="A/B Comparison",
         border_style="blue",
     ))
@@ -1008,7 +1008,7 @@ def human(
 
     # Save results
     save_results(results, Path(output))
-    console.print(f"\n[green]Results saved to {output}[/]")
+    console.print(f"\n[green]Results saved to {for_terminal(output)}[/]")
 
 
 # ─── Helper functions ───
@@ -1216,8 +1216,8 @@ def _short_model_name(path: str) -> str:
     """Shorten model path for display."""
     parts = Path(path).parts
     if len(parts) > 2:
-        return "/".join(parts[-2:])
-    return path
+        return for_terminal("/".join(parts[-2:]))
+    return for_terminal(path)
 
 
 # ─── soup eval gate (v0.26.0 Part B) ───
