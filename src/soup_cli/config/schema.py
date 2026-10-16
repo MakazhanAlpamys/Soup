@@ -15,9 +15,11 @@ from soup_cli.utils.config_bounds import (
     DEFAULT_STREAM_READ_AHEAD,
     MAX_NOISE_FLOOR_RUNS,
     MAX_STREAM_BUFFERS,
+    MAX_STREAM_LOSS_CHUNK,
     MAX_STREAM_READ_AHEAD,
     MIN_NOISE_FLOOR_RUNS,
     MIN_STREAM_BUFFERS,
+    MIN_STREAM_LOSS_CHUNK,
     MIN_STREAM_READ_AHEAD,
 )
 from soup_cli.utils.config_bounds import (
@@ -3703,6 +3705,35 @@ class TrainingConfig(BaseModel):
             "double quantization (the default). Off by default."
         ),
     )
+
+    stream_loss_chunk: Optional[int] = Field(
+        default=None,
+        ge=MIN_STREAM_LOSS_CHUNK,
+        le=MAX_STREAM_LOSS_CHUNK,
+        description=(
+            "Tokens per chunk for the output head and the loss under layer "
+            "streaming (#1693). Unset, the head builds the full [batch, seq, "
+            "vocab] logits and the loss works on all of them, which is what "
+            "caps the context length on a small card. Set, each chunk runs the "
+            "head, takes its cross-entropy and the gradient on its hidden "
+            "states, and drops its logits, so the logits term is vocab x chunk "
+            "x batch whatever data.max_length is. It costs one more [batch, "
+            "seq, hidden] tensor and a loop over the head. It gives up "
+            "outputs.logits on a labelled forward, and equality to the last "
+            "bit with an unchunked step: the per-token terms are the same, the "
+            "order of the final sum is not. task='sft' only; refused beside "
+            "use_cut_ce."
+        ),
+    )
+
+    @field_validator("stream_loss_chunk", mode="before")
+    @classmethod
+    def _validate_stream_loss_chunk_int(cls, v: Any) -> Any:
+        """Reject bool-as-int (bool subclasses int), mirrors stream_buffers."""
+        if isinstance(v, bool):
+            raise ValueError("training.stream_loss_chunk must be an int (tokens), not bool")
+        return v
+
     stream_disk_kind: Optional[Literal["nvme", "ssd", "hdd"]] = Field(
         default=None,
         description=(
@@ -6681,14 +6712,16 @@ class SoupConfig(BaseModel):
                 or tcfg.stream_nf4_scale_cache
                 or tcfg.stream_disk_kind is not None
                 or tcfg.stream_pin is not None
+                or tcfg.stream_loss_chunk is not None
             ):
                 raise ValueError(
                     "training.stream_source / training.stream_ngram_source / "
                     "training.stream_buffers / training.stream_read_ahead / "
                     "training.stream_vram_override / training.stream_vram_probe "
                     "/ training.stream_nf4_scale_cache / training.stream_disk_kind "
-                    "/ training.stream_pin set but stream_layers is false; set "
-                    "stream_layers=true to stream the base layer-by-layer."
+                    "/ training.stream_pin / training.stream_loss_chunk set but "
+                    "stream_layers is false; set stream_layers=true to stream the "
+                    "base layer-by-layer."
                 )
             return self
         if tcfg.stream_nf4_scale_cache and (
@@ -6759,6 +6792,31 @@ class SoupConfig(BaseModel):
                 f"offered for them yet. Use the predicted budget, or "
                 f"training.stream_vram_override if you have measured this "
                 f"configuration yourself."
+            )
+        if tcfg.stream_loss_chunk is not None and self.task != "sft":
+            # #1693 — the chunked step rebuilds `ForCausalLMLoss`, the sft loss.
+            raise ValueError(
+                f"training.stream_loss_chunk supports task='sft' only; got "
+                f"task={self.task!r}. It computes the causal-LM cross-entropy "
+                f"chunk by chunk; a preference loss reduces the logits to "
+                f"per-token log-probs of chosen and rejected instead, and that "
+                f"reduction is not chunked. Remove training.stream_loss_chunk."
+            )
+        if tcfg.stream_loss_chunk is not None and self.data.format == "raft":
+            raise ValueError(
+                "training.stream_loss_chunk cannot be combined with data.format="
+                "'raft': the RAFT loss weights every token and is computed from "
+                "the full logits, which a chunked step does not return. Remove "
+                "training.stream_loss_chunk."
+            )
+        if tcfg.stream_loss_chunk is not None and tcfg.use_cut_ce:
+            # #1693 — two mechanisms over the same loss: which one computes it
+            # would be undefined, so neither is picked silently.
+            raise ValueError(
+                "training.stream_loss_chunk and training.use_cut_ce cannot be "
+                "combined: each replaces how the loss over the logits is "
+                "computed, and with both set which one runs is undefined. Keep "
+                "one of them."
             )
         if self.backend != "transformers":
             raise ValueError(
