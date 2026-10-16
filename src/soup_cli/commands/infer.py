@@ -239,6 +239,19 @@ def infer(
         console.print("[dim]Expected JSONL with {\"prompt\": \"...\"} or plain text lines.[/]")
         raise typer.Exit(1)
 
+    if cuda_graphs is True:
+        from soup_cli.utils.cuda_graphs import check_cuda_graphs_preflight
+
+        try:
+            check_cuda_graphs_preflight(
+                device=device,
+                model_target=model_ref if model_kind == "local" else None,
+                base=base,
+            )
+        except RuntimeError as exc:
+            console.print(f"[red]{for_terminal(_with_omit_hint(str(exc)))}[/]")
+            raise typer.Exit(1) from exc
+
     # Detect device
     if not device:
         from soup_cli.utils.gpu import detect_device

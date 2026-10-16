@@ -82,10 +82,44 @@ of the last 100 lines (up to 2,000 characters per line) for that summary.
 
 `--no-install-deps` checks `gguf`, `sentencepiece` and `protobuf` in Soup's Python
 environment and refuses with the missing package names before merging an adapter
-or looking up/cloning the toolchain. It never runs pip. Install the packages through
+or cloning/running the toolchain. It never runs pip. Install the packages through
 your environment manager and retry. This flag does not disable toolchain lookup or
 cloning; use `--llama-cpp` to supply your own checkout. Both new flags apply only to
 `--format gguf`; other formats refuse them rather than ignore them.
+
+### Converter compatibility
+
+For a fresh default auto-clone, Soup checks the effective text architecture in
+`config.json` against capability data generated from the exact `b5270` converter.
+`text_config.architectures`, when present, takes precedence over the root's
+architecture, as in that converter. Known unsupported architectures are refused
+before cloning, installing dependencies, converting or quantizing, with a
+`--llama-cpp <dir>` hint. Malformed metadata has a separate diagnostic; metadata
+reads are limited to 1 MiB. An adapter is checked after its temporary merge, and
+that temporary directory is cleaned up on refusal.
+
+Explicit `--llama-cpp`, `LLAMA_CPP_PATH` and cached checkouts can be newer than the
+default pin. Soup probes their own `--print-supported-models` output (TEXT group,
+including stderr), with a 15-second timeout. A failed or unrecognized probe is
+inconclusive: conversion remains the final check, without applying the default
+pin's capability set to that checkout. No runtime network lookup is added.
+
+The shared pin remains `b5270`; this diagnostic does not enable Qwen3.5 export on
+that version. A compatible selected converter may need additional handling such
+as the MTP boundary tracked in [#1912](https://github.com/MakazhanAlpamys/Soup/issues/1912).
+
+To regenerate capabilities when changing the pin, obtain the unmodified
+`convert_hf_to_gguf.py` from its immutable upstream commit, then run:
+
+```bash
+python scripts/gen_llama_cpp_capabilities.py --converter /path/to/convert_hf_to_gguf.py \
+  --tag b5270 --commit 3bf785f3efa89ed28294fbf73054558a2b034bfb
+```
+
+The generated `src/soup_cli/utils/llama_cpp_capabilities.json` records the tag,
+commit, source URL, SHA-256 and Git blob identity. The generator parses registered
+classes and inherited model kinds without importing or executing upstream code.
+The pin/data guard rejects a changed pin until its capabilities are regenerated.
 
 ### Building llama.cpp (required for quantized GGUF)
 
@@ -731,6 +765,16 @@ bypass the limit.
 **Content policy.** Every Web UI response carries a `Content-Security-Policy` that allows scripts only from the UI's own origin and the pinned Chart.js file (no inline script, no `eval`), plus `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer` and `X-Frame-Options: DENY`. Chart.js is loaded with a Subresource Integrity hash, so the browser refuses it if the CDN serves different bytes. The UI's markup carries no inline event handlers, and every server- or dataset-derived value is escaped before it is rendered. The loopback-only `/docs`, `/docs/oauth2-redirect` and `/redoc` pages are the one exception to the policy header, because FastAPI's interactive docs start from an inline script.
 
 **Interactive API docs are loopback-only.** `/openapi.json`, `/docs`, `/docs/oauth2-redirect` and `/redoc` serve on a loopback bind and are **absent** (404) on any other, including `soup ui --public`. This is deliberate rather than incidental: the schema exposes no run data, configuration or logs, but it does describe every route, parameter and request/response shape, and on a LAN bind that is free reconnaissance. Gating them behind the token instead was rejected — `/docs` is a browser navigation and Swagger cannot attach a Bearer header to it, so gating would break the page for a developer while leaving `/openapi.json` readable by any HTTP client. If you need the schema while bound publicly, read it from a loopback instance of the same version.
+
+**Host names on a loopback bind (#1829).** Use the bound host or `localhost`,
+`127.0.0.1` or `[::1]`, with the bound port. An omitted port means HTTP port 80;
+on any other port it must be included. Any other name or port gets
+`403 {"detail": "Host not allowed"}` before authentication, body reads or routes.
+This includes a proxy that rewrites `Host`, an SSH tunnel whose local port differs
+from the server's, or a custom DNS name. Missing, malformed or duplicate `Host`
+headers are also refused. These refusals carry the same security headers as other
+UI responses, including on the interactive docs paths. `--public` and other
+non-loopback binds keep the Bearer gate and do not apply this Host allow-list.
 
 ```bash
 # Custom port, don't auto-open browser

@@ -500,7 +500,7 @@ training:
   neftune_alpha: 5.0  # Noise intensity (0-50, typically 5-15)
 ```
 
-Works with SFT, DPO, KTO, ORPO, SimPO, and IPO tasks.
+Works with SFT, TTS, DPO, KTO, ORPO, SimPO, IPO, BCO, and preference tasks.
 
 
 ## Sample Packing

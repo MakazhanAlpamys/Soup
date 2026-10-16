@@ -1142,7 +1142,15 @@ class TrainingConfig(BaseModel):
             "static on CPU). Default 'auto' (v0.36.0)."
         ),
     )
-    gradient_accumulation_steps: int = Field(default=4, ge=1)
+    gradient_accumulation_steps: int = Field(
+        default=4,
+        ge=1,
+        description=(
+            "Number of micro-batches whose gradients are summed before each optimizer "
+            "update. Effective batch size per device is batch_size * "
+            "gradient_accumulation_steps (times the number of GPUs)."
+        ),
+    )
     # #341 — the general training seed. Before this there was none:
     # `TrainingArguments` took HF's defaults on every run, so two runs of the
     # same config differed only by GPU nondeterminism and "run it again with a
@@ -1187,10 +1195,32 @@ class TrainingConfig(BaseModel):
             )
         return v
 
-    warmup_ratio: float = Field(default=0.03, ge=0.0, le=0.5)
-    weight_decay: float = Field(default=0.01, ge=0.0)
-    max_grad_norm: float = Field(default=1.0, gt=0)
-    lora: LoraConfig = Field(default_factory=LoraConfig)
+    warmup_ratio: float = Field(
+        default=0.03,
+        ge=0.0,
+        le=0.5,
+        description=(
+            "Fraction of total training optimizer steps used for linear learning "
+            "rate warmup. Resolved over real optimizer steps."
+        ),
+    )
+    weight_decay: float = Field(
+        default=0.01,
+        ge=0.0,
+        description=(
+            "Weight decay factor (decoupled, AdamW-style) applied to weights "
+            "during optimization; 0 disables it."
+        ),
+    )
+    max_grad_norm: float = Field(
+        default=1.0,
+        gt=0,
+        description="Maximum gradient norm for gradient clipping.",
+    )
+    lora: LoraConfig = Field(
+        default_factory=LoraConfig,
+        description="LoRA (Low-Rank Adaptation) adapter architecture and target modules.",
+    )
     quantization: Literal[
         "4bit",
         "8bit",
@@ -4853,6 +4883,13 @@ FREEZE_APPLYING_TASKS: frozenset[str] = frozenset({"sft", "tts"})
 #: within these tasks on every path that does not reach those two methods.
 ROPE_SCALING_APPLYING_TASKS: frozenset[str] = frozenset({"sft", "tts", "pretrain"})
 
+#: #1820 — the tasks whose trainer reads ``training.neftune_alpha`` and passes
+#: it as ``neftune_noise_alpha`` to ``TrainingArguments``.  Every other task
+#: ignores the field, so it is refused there at config load.
+NEFTUNE_APPLYING_TASKS: frozenset[str] = frozenset({
+    "sft", "tts", "dpo", "ipo", "kto", "orpo", "simpo", "bco", "preference",
+})
+
 #: The bitsandbytes values: ``4bit`` was the default, so every config Soup dumped
 #: for these tasks carries one of them literally (#795 review).
 _BNB_QUANTIZATION_VALUES = frozenset({"4bit", "8bit"})
@@ -4952,8 +4989,13 @@ class SoupConfig(BaseModel):
             "CUDA), or mlx (Apple Silicon M1-M4)"
         ),
     )
-    data: DataConfig
-    training: TrainingConfig = Field(default_factory=TrainingConfig)
+    data: DataConfig = Field(
+        description="Dataset source, format, tokenization, and preprocessing settings."
+    )
+    training: TrainingConfig = Field(
+        default_factory=TrainingConfig,
+        description="Training hyperparameters, optimizer, scheduler, and hardware settings.",
+    )
     output: str = Field(default="./output", description="Output directory for trained model")
     experiment_name: Optional[str] = Field(default=None, description="Experiment name for tracking")
     eval: Optional[EvalConfig] = Field(
@@ -6108,6 +6150,30 @@ class SoupConfig(BaseModel):
                 f"picks bf16/fp16 from the model and GPU ('tts' trains through "
                 f"the SFT trainer), so this run would train at the trainer's "
                 f"default precision. Use task='sft', or remove the key."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_neftune_alpha_task_gate(self) -> "SoupConfig":
+        """#1820: refuse ``neftune_alpha`` on tasks whose trainer never reads it.
+
+        ``training.neftune_alpha`` is forwarded to
+        ``TrainingArguments.neftune_noise_alpha`` by the SFT-family wrappers
+        (``sft.py``, inherited by ``tts.py``) and by the preference-style
+        wrappers (``dpo.py``, ``ipo.py``, ``kto.py``, ``orpo.py``,
+        ``simpo.py``, ``bco.py``).  The ``preference`` dispatcher delegates to
+        one of those, so it also applies.  Every other task silently drops the
+        field — refuse it at load time so the user sees the mismatch instead of
+        training without NEFTune noise and wondering why.
+        """
+        tcfg = self.training
+        if tcfg.neftune_alpha is not None and self.task not in NEFTUNE_APPLYING_TASKS:
+            raise ValueError(
+                f"training.neftune_alpha={tcfg.neftune_alpha!r} is set, but "
+                f"task={self.task!r} never applies it (any value, including 0.0, "
+                f"is refused). Only tasks in {sorted(NEFTUNE_APPLYING_TASKS)} forward "
+                f"it to ``TrainingArguments.neftune_noise_alpha``. Remove "
+                f"training.neftune_alpha, or use one of those tasks."
             )
         return self
 

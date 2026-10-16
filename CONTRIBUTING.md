@@ -346,6 +346,9 @@ Comment on it saying you are taking it. GitHub only lets us set the formal
 assignee badge for repo collaborators, so the comment **is** the claim — it will
 look unassigned either way, and we treat the thread as the record.
 
+The current board is the pinned issue
+[#1945](https://github.com/MakazhanAlpamys/Soup/issues/1945), regenerated daily.
+
 Two commitments in return:
 
 - **If a maintainer ends up doing the work instead, you get told, in the thread,
@@ -500,6 +503,8 @@ When you open a PR, the GitHub template will show this checklist:
 - [ ] Updated relevant docs (`README.md` and the matching page under `docs/`) if needed
 - [ ] New tests added for new functionality
 - [ ] No breaking changes (or documented in PR description)
+
+Contributions are accepted under the Apache License, Version 2.0, the project's own terms (section 5 of the license): by opening a pull request you agree that your contribution is licensed that way and you keep your copyright; there is no CLA and no DCO sign-off for now.
 
 ## Architecture & Design Decisions
 

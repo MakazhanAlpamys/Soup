@@ -944,10 +944,10 @@ def load_suite_yaml(path: object) -> SuiteSpec:
         raise TypeError("path must be a string")
     enforce_under_cwd_and_no_symlink(path, "suite path")
     if not os.path.lexists(path):
-        raise FileNotFoundError(path)
+        raise FileNotFoundError(f"suite file not found: {path!r}")
     real = os.path.realpath(path)
     if not os.path.isfile(real):
-        raise FileNotFoundError(real)
+        raise FileNotFoundError(f"suite file not found: {path!r}")
     if os.path.getsize(real) > _MAX_FILE_BYTES:
         raise ValueError(f"suite file exceeds {_MAX_FILE_BYTES} bytes")
     with open(real, "r", encoding="utf-8") as handle:

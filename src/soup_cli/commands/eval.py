@@ -1380,8 +1380,14 @@ def quant_check_cmd(
         console.print(f"[red]{exc}[/]")
         raise typer.Exit(EXIT_USAGE_ERROR) from exc
 
-    resolved_before = resolve_model_ref(before)
-    resolved_after = resolve_model_ref(after)
+    resolved: dict[str, Optional[str]] = {}
+    for label, ref in (("--before", before), ("--after", after)):
+        try:
+            resolved[label] = resolve_model_ref(ref)
+        except ValueError as exc:  # AmbiguousRefError: a registry prefix or name:tag with twins
+            console.print(f"[red]Cannot resolve {label}:[/] {for_terminal(str(exc))}")
+            raise typer.Exit(EXIT_USAGE_ERROR) from exc
+    resolved_before, resolved_after = resolved["--before"], resolved["--after"]
     if resolved_before is None:
         console.print(f"[red]Cannot resolve --before: {before}[/]")
         raise typer.Exit(EXIT_USAGE_ERROR)
