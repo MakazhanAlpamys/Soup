@@ -1039,7 +1039,10 @@ adapter off the model is then no longer the one the policy started from. A
 `dpo` / `ipo` term under a `simpo` / `orpo` primary is refused with either of
 them, before the model is loaded. With such an init, give `dpo` or `ipo` the
 largest weight: trl's copy of the adapter carries the residual's other half,
-so its reference is still the starting model.
+so its reference is still the starting model. `relora_steps` has no such way
+out: trl's `ref` adapter sits on the same base weights, so a blend that names
+`dpo` or `ipo` refuses it whatever the largest weight is
+([ReLoRA](peft-and-efficiency.md#lora-quality--pissa-relora-per-pattern-rank-surgical-patches)).
 
 **Which tokens.** The terms are computed on the primary trainer's batch, and
 the two trainer families do not render a row the same way: the CPO / ORPO
