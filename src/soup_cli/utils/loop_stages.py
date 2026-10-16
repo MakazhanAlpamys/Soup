@@ -238,7 +238,9 @@ def _render_dpo_yaml(state: LoopState, pairs_path: str, output_dir: str) -> str:
     config = {
         "base": base,
         "task": "dpo",
-        "data": {"train": pairs_path, "format": "dpo"},
+        # val_split 0: a one- or two-pair harvest would otherwise lose its only
+        # training rows to the schema default 0.1 (#1909).
+        "data": {"train": pairs_path, "format": "dpo", "val_split": 0},
         "training": {"epochs": 1, "batch_size": 1, "lr": 5.0e-5},
         "output": output_dir,
     }
@@ -251,13 +253,21 @@ def train_dpo_from_pairs(
     """Train a DPO adapter from harvested pairs via a ``soup train`` subprocess.
 
     Returns ``{run_id, skipped, adapter_path}``. Skips (no run) when the
-    harvest produced no pairs. The subprocess is argv-list (no shell);
+    harvest produced no pairs, adding a ``notes`` reason (``no_preference_pairs``
+    with the count, or ``pairs_file_missing``) that the loop saves in the
+    iteration record (#1909). The subprocess is argv-list (no shell);
     ``_TRAIN_RUNNER`` injects a stand-in for tests.
     """
     pairs_path = ctx.get("pairs_path")
     pairs_n = int(ctx.get("pairs_harvested", 0) or 0)
-    if not pairs_path or pairs_n <= 0:
-        return {"run_id": None, "skipped": True, "adapter_path": None}
+    skip = {"run_id": None, "skipped": True, "adapter_path": None}
+    if pairs_n <= 0:
+        return {**skip, "notes": "no_preference_pairs: 0 valid pairs harvested, training skipped"}
+    if not pairs_path:
+        return {**skip, "notes": "pairs_file_missing: no pairs path recorded, training skipped"}
+    if not os.path.isfile(str(pairs_path)):
+        note = f"pairs_file_missing: {quote_path(str(pairs_path))} not found, training skipped"
+        return {**skip, "notes": note}
 
     run_id = f"loop-train-{uuid.uuid4().hex[:8]}"
     output_dir = os.path.join(_ADAPTERS_DIR, run_id)
