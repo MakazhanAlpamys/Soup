@@ -31,6 +31,7 @@ from rich.panel import Panel
 
 from soup_cli.utils.config_bounds import DEFAULT_STREAM_READ_AHEAD, MAX_STREAM_READ_AHEAD
 from soup_cli.utils.paths import quote_path
+from soup_cli.utils.run_provenance import base_revision_kwargs
 from soup_cli.utils.stripe_roots import ReadAheadDecision, effective_read_ahead
 
 console = Console()
@@ -748,13 +749,15 @@ class StreamingSetupMixin:
 
         console.print(f"[dim]Loading tokenizer: {cfg.base}[/]")
         self.tokenizer = AutoTokenizer.from_pretrained(
-            cfg.base, trust_remote_code=self._trust_remote_code
+            cfg.base, trust_remote_code=self._trust_remote_code,
+            **base_revision_kwargs(cfg.base),
         )
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
 
         model_config = AutoConfig.from_pretrained(
-            cfg.base, trust_remote_code=self._trust_remote_code
+            cfg.base, trust_remote_code=self._trust_remote_code,
+            **base_revision_kwargs(cfg.base),
         )
         # Allowlist, not a heuristic — a half-supported architecture streams
         # weights into the wrong module and mis-trains silently.

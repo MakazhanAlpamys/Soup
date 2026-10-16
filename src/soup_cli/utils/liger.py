@@ -13,6 +13,8 @@ Requires: liger-kernel >= 0.3.0
 
 from __future__ import annotations
 
+from soup_cli.utils.run_provenance import base_revision_kwargs
+
 
 def check_liger_available() -> bool:
     """Check if liger-kernel is installed."""
@@ -92,7 +94,10 @@ def _detect_model_type(model_name: str) -> str:
     try:
         from transformers import AutoConfig
 
-        config = AutoConfig.from_pretrained(model_name, trust_remote_code=False)
+        config = AutoConfig.from_pretrained(
+            model_name, trust_remote_code=False,
+            **base_revision_kwargs(model_name),
+        )
     except Exception:  # noqa: BLE001 — detection is best-effort by design
         return ""
     return str(getattr(config, "model_type", "") or "")

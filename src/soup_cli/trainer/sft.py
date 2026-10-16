@@ -25,6 +25,7 @@ from soup_cli.utils.mixed_precision import (
     align_trainable_dtype_for_fp16,
     keep_trainable_dtype_on_resume,
 )
+from soup_cli.utils.run_provenance import base_revision_kwargs
 from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
 from soup_cli.utils.terminal import for_terminal
 
@@ -1643,7 +1644,8 @@ class SFTTrainerWrapper(StreamingSetupMixin):
 
         console.print(f"[dim]Loading tokenizer: {cfg.base}[/]")
         self.tokenizer = AutoTokenizer.from_pretrained(
-            cfg.base, trust_remote_code=self._trust_remote_code
+            cfg.base, trust_remote_code=self._trust_remote_code,
+            **base_revision_kwargs(cfg.base),
         )
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
@@ -1684,7 +1686,8 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             from soup_cli.utils.long_context import apply_long_context_config
 
             model_config = AutoConfig.from_pretrained(
-                cfg.base, trust_remote_code=self._trust_remote_code
+                cfg.base, trust_remote_code=self._trust_remote_code,
+                **base_revision_kwargs(cfg.base),
             )
             rope_config = apply_long_context_config(
                 model_config,
@@ -1699,7 +1702,10 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             if rope_config:
                 model_kwargs["config"] = model_config
 
-        self.model = AutoModelForCausalLM.from_pretrained(cfg.base, **model_kwargs)
+        self.model = AutoModelForCausalLM.from_pretrained(
+            cfg.base, **model_kwargs,
+            **base_revision_kwargs(cfg.base),
+        )
         from soup_cli.utils.data_pipeline import apply_vocab_expansion
 
         apply_vocab_expansion(
@@ -1944,7 +1950,8 @@ class SFTTrainerWrapper(StreamingSetupMixin):
 
         console.print(f"[dim]Loading vision processor: {cfg.base}[/]")
         self.processor = AutoProcessor.from_pretrained(
-            cfg.base, trust_remote_code=self._trust_remote_code
+            cfg.base, trust_remote_code=self._trust_remote_code,
+            **base_revision_kwargs(cfg.base),
         )
         # Idefics3/SmolVLM (and other) processors keep the text tokenizer nested
         # and don't forward pad_token/eos_token — mirror them onto the processor
@@ -1983,7 +1990,10 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         if quant_config_obj is not None:
             model_kwargs["quantization_config"] = quant_config_obj
 
-        self.model = AutoModelForImageTextToText.from_pretrained(cfg.base, **model_kwargs)
+        self.model = AutoModelForImageTextToText.from_pretrained(
+            cfg.base, **model_kwargs,
+            **base_revision_kwargs(cfg.base),
+        )
         from soup_cli.utils.data_pipeline import apply_vocab_expansion
 
         apply_vocab_expansion(
@@ -2115,7 +2125,8 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         )
         console.print(f"[dim]Loading audio processor: {cfg.base}[/]")
         self.processor = AutoProcessor.from_pretrained(
-            cfg.base, trust_remote_code=self._trust_remote_code
+            cfg.base, trust_remote_code=self._trust_remote_code,
+            **base_revision_kwargs(cfg.base),
         )
         self.tokenizer = self.processor  # SFTTrainer uses processing_class
 
@@ -2147,7 +2158,10 @@ class SFTTrainerWrapper(StreamingSetupMixin):
 
         # Use AutoModel for audio models — AutoModelForCausalLM doesn't handle
         # audio-language architectures (Qwen2-Audio, Whisper, etc.)
-        self.model = AutoModel.from_pretrained(cfg.base, **model_kwargs)
+        self.model = AutoModel.from_pretrained(
+            cfg.base, **model_kwargs,
+            **base_revision_kwargs(cfg.base),
+        )
         from soup_cli.utils.data_pipeline import apply_vocab_expansion
 
         apply_vocab_expansion(
