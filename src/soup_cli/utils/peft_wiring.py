@@ -1479,12 +1479,6 @@ def _build_rl_checkpoint_cb(tcfg: Any, *, output_dir: str, task: str) -> Any:
             include_optimizer_state=bool(
                 getattr(tcfg, "rl_checkpoint_include_optimizer", True)
             ),
-            include_ref_model=bool(
-                getattr(tcfg, "rl_checkpoint_include_ref_model", False)
-            ),
-            include_rollout_buffer=bool(
-                getattr(tcfg, "rl_checkpoint_include_rollout_buffer", False)
-            ),
             keep_last=int(getattr(tcfg, "rl_checkpoint_keep_last", 3)),
         )
         return build_rl_checkpoint_callback(

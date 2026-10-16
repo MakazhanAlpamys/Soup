@@ -111,11 +111,9 @@ class RLCheckpointConfig:
     - ``save_every_steps``: int >= 1; ``[1, 10_000_000]`` cap.
     - ``include_optimizer_state``: include AdamW / Lion state in the
       checkpoint. Default True (the whole point of mid-epoch RL ckpt).
-    - ``include_ref_model``: include the frozen reference model state.
-      Default False (ref model can usually be reconstructed from
-      ``cfg.base``).
-    - ``include_rollout_buffer``: include the replay / rollout buffer
-      so resumed runs don't lose collected experience.
+    - ``include_ref_model`` / ``include_rollout_buffer``: accepted but not
+      saved yet (#808). No save writes reference-model or rollout-buffer
+      state, and the manifest reports ``false`` for both.
     - ``keep_last``: number of recent checkpoints to retain. Older
       checkpoints get pruned at write time.
     """
@@ -147,8 +145,8 @@ class RLCheckpointState:
     - ``checkpoint_dir``: directory holding the saved tensors. Shape
       validated only (cwd-containment deferred to v0.70.1 disk hook).
     - ``task``: must be in the RL allowlist (``grpo`` / ``ppo``).
-    - ``has_optimizer``/``has_ref_model``/``has_rollout_buffer``: real
-      bools (no str/int coercion).
+    - ``has_optimizer``/``has_ref_model``/``has_rollout_buffer``: what this
+      save actually wrote, as real bools (no str/int coercion).
     - ``soup_version``: capped at 32 chars; null-byte rejected.
     """
 
@@ -347,8 +345,11 @@ class _RLCheckpointCallback_body:  # type: ignore[misc, valid-type]  # noqa: N80
             checkpoint_dir=ckpt_dir,
             task=self.task,
             has_optimizer=has_optimizer,
-            has_ref_model=bool(self.config.include_ref_model),
-            has_rollout_buffer=bool(self.config.include_rollout_buffer),
+            # #808: like has_optimizer, report what this save wrote. Nothing
+            # writes reference-model or rollout-buffer state, whatever the
+            # include_* flags say, so the manifest must not claim either.
+            has_ref_model=False,
+            has_rollout_buffer=False,
             soup_version=self.soup_version,
         )
         atomic_write_text(
