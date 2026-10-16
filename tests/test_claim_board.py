@@ -23,8 +23,13 @@ def issue(number, labels=("help wanted",), title="Some title"):
     return {"number": number, "title": title, "labels": [{"name": n} for n in labels]}
 
 
-def comment(login, body, created):
-    return {"user": {"login": login}, "body": body, "created_at": created}
+def comment(login, body, created, updated=None):
+    return {
+        "user": {"login": login},
+        "body": body,
+        "created_at": created,
+        "updated_at": updated or created,
+    }
 
 
 def pull(number, login, body):
@@ -129,6 +134,312 @@ def test_latest_named_confirmation_replaces_a_completed_claim():
     row = board.classify(issue(1199, ("help wanted", "claimed")), comments, prs, NOW)
     assert row["state"] == "claimed by `@Faisal-Fayaz` since 2026-10-08"
     assert row["pr"] == 1700 and row["quiet"] == 6
+
+
+@pytest.mark.parametrize("labels", [("help wanted",), ("help wanted", "claimed")])
+@pytest.mark.parametrize(
+    "number, login, scope, acceptance, terminal",
+    [
+        (
+            1199,
+            "Faisal-Fayaz",
+            "fix 2",
+            "Confirmed, @Faisal-Fayaz: fix 2 is yours.",
+            "Status update: fix 2 by @Faisal-Fayaz is completed by merged #1728; "
+            "fix 3 was completed by #1588. Thank you. The accepted fix-2 claim is "
+            "fulfilled, so the stale `claimed` label is removed. This issue remains "
+            "open for the explicitly unclaimed fix 1.",
+        ),
+        (
+            797,
+            "Amix29",
+            "item 2",
+            "Confirmed, @Amix29: item 2 of the 2026-10-05 scope is yours.",
+            "Claim metadata update: the accepted item-2 slice is completed by #1778, "
+            "as recorded above, so the stale `claimed` label is removed. Items 1, 3 "
+            "and 4 remain open and unclaimed. This issue stays open.",
+        ),
+        (
+            839,
+            "sloemo01",
+            "dropout item",
+            "Welcome back, @sloemo01: the dropout item is yours again, the `claimed` "
+            "label and the assignment are restored. Your plan matches the three points "
+            "of the 2026-10-02 check-in, and #1784 is in review.",
+            "Status update: the accepted dropout slice by @sloemo01 is completed by "
+            "#1784 (merged as `1f9e1515`). Thank you. Its `claimed` label and completed "
+            "assignment are cleared; this issue stays open for the separately listed "
+            "CUDA/NF4 streaming qualification and micro-benchmark work. No remaining "
+            "slice has an accepted claim in this thread.",
+        ),
+        (
+            1186,
+            "chiliec",
+            "item 3",
+            "Thanks, @chiliec: item 3 is yours again and the claimed label is restored; "
+            "#1782 is in review.",
+            "Claim metadata update: item 3 is completed by #1746 and #1782, as "
+            "recorded above, so the completed slice no longer reserves this aggregate "
+            "issue. The stale `claimed` label is removed. Items 1 and 2 remain open "
+            "and unclaimed; this is not a closure of those modality defects.",
+        ),
+    ],
+)
+def test_completed_claim_slices_are_free_despite_historical_acceptance(
+    labels, number, login, scope, acceptance, terminal
+):
+    """The four live aggregate issues kept old claims after their accepted slices merged."""
+    comments = [
+        comment(login, f"I'll take {scope}.", "2026-10-01T10:00:00Z"),
+        comment(
+            board.MAINTAINER,
+            acceptance,
+            "2026-10-02T10:00:00Z",
+        ),
+        comment(board.MAINTAINER, terminal, "2026-10-03T10:00:00Z"),
+    ]
+    row = board.classify(
+        issue(number, labels), comments, [pull(1990, login, f"Refs #{number}")], NOW
+    )
+    assert row["kind"] == "free" and row["state"] == "free"
+    assert row["pr"] is None and row["quiet"] is None
+
+
+def test_appended_completion_overrides_acceptance_in_the_same_edited_comment():
+    comments = [
+        comment("alice", "I'll take fix 2.", "2026-10-01T10:00:00Z"),
+        comment(
+            board.MAINTAINER,
+            "Confirmed, @alice: fix 2 is yours.\n\n"
+            "Status update: fix 2 by @alice is completed by merged #90. "
+            "The accepted fix-2 claim is fulfilled, so the stale `claimed` label is removed. "
+            "Fix 1 remains open and unclaimed.",
+            "2026-10-02T10:00:00Z",
+            "2026-10-10T10:00:00Z",
+        ),
+    ]
+    row = board.classify(issue(7, ("claimed",)), comments, [pull(91, "alice", "Refs #7")], NOW)
+    assert row["state"] == "free"
+    assert row["pr"] is None and row["quiet"] is None
+
+
+def test_issue_release_discards_old_requests_before_a_new_take_and_confirmation():
+    comments = [
+        comment("alice", "I'll take this", "2026-10-01T10:00:00Z"),
+        comment(board.MAINTAINER, "Confirmed", "2026-10-02T10:00:00Z"),
+        comment(board.MAINTAINER, "The claim is released. This issue is free to take.",
+                "2026-10-03T10:00:00Z"),
+    ]
+    row = board.classify(issue(7, ("claimed",)), comments, [], NOW)
+    assert row["state"] == "free" and row["quiet"] is None
+    comments.append(comment("bob", "I'll take this", "2026-10-05T10:00:00Z"))
+    assert board.classify(issue(7, ("claimed",)), comments, [], NOW)["state"] == "free"
+    comments.append(comment(board.MAINTAINER, "Confirmed", "2026-10-06T10:00:00Z"))
+    row = board.classify(issue(7, ("claimed",)), comments, [pull(91, "bob", "Refs #7")], NOW)
+    assert row["state"] == "claimed by `@bob` since 2026-10-05"
+    assert row["pr"] == 91 and row["quiet"] == 9
+
+
+@pytest.mark.parametrize("take_text", ["Taking item 2.", "I am taking proposed fix 2."])
+@pytest.mark.parametrize("draft", [False, True])
+def test_leading_taking_request_binds_generic_acceptance_and_open_refs_pr(take_text, draft):
+    comments = [
+        comment("alice", take_text, "2026-10-01T10:00:00Z"),
+        comment(board.MAINTAINER, "Confirmed, go ahead.", "2026-10-02T10:00:00Z"),
+    ]
+    pr = dict(pull(91, "alice", "Refs #7"), draft=draft)
+    row = board.classify(issue(7), comments, [pr], NOW)
+    assert row["state"] == "claimed by `@alice` since 2026-10-01"
+    assert row["pr"] == 91 and row["quiet"] == 13
+
+
+def test_late_competitor_request_does_not_replace_the_confirmed_incumbent():
+    comments = [
+        comment("alice", "I'll take item 2.", "2026-10-01T10:00:00Z"),
+        comment(board.MAINTAINER, "Confirmed, @alice: item 2 is yours.",
+                "2026-10-02T10:00:00Z"),
+        comment("bob", "Taking item 2 too.", "2026-10-03T10:00:00Z"),
+    ]
+    prs = [pull(91, "alice", "Refs #7"), pull(92, "bob", "Refs #7")]
+    row = board.classify(issue(7), comments, prs, NOW)
+    assert row["state"] == "claimed by `@alice` since 2026-10-01"
+    assert row["pr"] == 91 and row["quiet"] == 13
+
+
+def test_accepting_an_overlapping_second_owner_does_not_silently_pick_a_winner():
+    comments = [
+        comment("alice", "I'll take item 2.", "2026-10-01T10:00:00Z"),
+        comment(board.MAINTAINER, "Confirmed, @alice: item 2 is yours.",
+                "2026-10-02T10:00:00Z"),
+        comment("bob", "Taking item 2.", "2026-10-03T10:00:00Z"),
+        comment(board.MAINTAINER, "Confirmed, @bob: item 2 is yours.",
+                "2026-10-04T10:00:00Z"),
+    ]
+    prs = [pull(91, "alice", "Refs #7"), pull(92, "bob", "Refs #7")]
+    row = board.classify(issue(7), comments, prs, NOW)
+    assert row["state"] == "claimed (see thread)"
+    assert row["pr"] is None and row["quiet"] is None
+
+
+def test_completing_item_two_preserves_the_accepted_item_three_owner():
+    comments = [
+        comment("alice", "I'll take item 2.", "2026-10-01T10:00:00Z"),
+        comment(board.MAINTAINER, "Confirmed, @alice: item 2 is yours.",
+                "2026-10-02T10:00:00Z"),
+        comment("bob", "Taking item 3.", "2026-10-03T10:00:00Z"),
+        comment(board.MAINTAINER, "Confirmed, @bob: item 3 is yours.",
+                "2026-10-04T10:00:00Z"),
+        comment(board.MAINTAINER, "Item 2 is completed by merged #90. "
+                "The completed slice's `claimed` label is removed.",
+                "2026-10-05T10:00:00Z"),
+    ]
+    row = board.classify(issue(7), comments, [pull(92, "bob", "Refs #7")], NOW)
+    assert row["state"] == "claimed by `@bob` since 2026-10-03"
+    assert row["pr"] == 92 and row["quiet"] == 11
+
+
+def test_two_acceptances_in_one_edited_owner_comment_report_see_thread():
+    """#808 has two accepted slices, with the second appended after a later take."""
+    comments = [
+        comment("alice", "I'll take item 2.", "2026-10-01T10:00:00Z"),
+        comment(
+            board.MAINTAINER,
+            "Thanks @alice, and sorry for the wait. Item 2 is yours: the checkpoint flags.\n\n"
+            "Confirmed, @bob: item 3 is yours, distinct from @alice's accepted item 2.",
+            "2026-10-02T10:00:00Z",
+            "2026-10-10T10:00:00Z",
+        ),
+        comment("bob", "Taking item 3.", "2026-10-05T10:00:00Z"),
+    ]
+    prs = [pull(91, "alice", "Refs #808"), pull(92, "bob", "Refs #808")]
+    row = board.classify(issue(808), list(reversed(comments)), prs, NOW)
+    assert row["state"] == "claimed (see thread)"
+    assert row["pr"] is None and row["quiet"] is None
+
+
+@pytest.mark.parametrize(
+    "login, body",
+    [
+        ("bob", "The claim is released. The `claimed` label is removed."),
+        (board.MAINTAINER, "> The claim is released.\nThe claim is not released."),
+        (board.MAINTAINER, "```text\nThe claim is released.\n```\nThe claim remains active."),
+        (board.MAINTAINER, "Do not remove the `claimed` label. Item 2 is not completed."),
+        (board.MAINTAINER, 'The contributor wrote "The claim is released."; that is incorrect.'),
+        (board.MAINTAINER, "The claim is released? Please confirm before we free it."),
+        (board.MAINTAINER, "The claim is released only after #99 lands."),
+        (board.MAINTAINER, "Do not write `This issue is free to take` until it is released."),
+        (board.MAINTAINER, "Do not write `The stale claimed label is removed` yet."),
+        (board.MAINTAINER, "It is not true that this issue is free to take."),
+        (board.MAINTAINER, "The stale claimed label is removed because other slices are open; "
+                "@alice retains item 2."),
+    ],
+)
+def test_third_party_quoted_or_negated_terminal_text_does_not_clear_claim(login, body):
+    comments = [
+        comment("alice", "I'll take item 2.", "2026-10-01T10:00:00Z"),
+        comment(board.MAINTAINER, "Confirmed, @alice: item 2 is yours.",
+                "2026-10-02T10:00:00Z"),
+        comment(login, body, "2026-10-03T10:00:00Z"),
+    ]
+    row = board.classify(
+        issue(7), comments, [pull(91, "alice", "Refs #7")], NOW, lambda number: False
+    )
+    assert row["state"] == "claimed by `@alice` since 2026-10-01"
+    assert row["pr"] == 91
+
+
+@pytest.mark.parametrize("prefix", ["", "Thanks for the detailed plan.\n\n"])
+def test_unrelated_edit_of_old_acceptance_does_not_resurrect_a_released_claim(prefix):
+    comments = [
+        comment("alice", "I'll take this", "2026-10-01T10:00:00Z"),
+        comment(board.MAINTAINER, prefix + "Confirmed, @alice: it is yours.\n\nTypo corrected.",
+                "2026-10-02T10:00:00Z", "2026-10-10T10:00:00Z"),
+        comment(board.MAINTAINER, "The claim is released. This issue is free to take.",
+                "2026-10-05T10:00:00Z"),
+    ]
+    row = board.classify(issue(7, ("claimed",)), comments, [pull(91, "alice", "Refs #7")], NOW)
+    assert row["state"] == "free"
+    assert row["pr"] is None and row["quiet"] is None
+
+
+@pytest.mark.parametrize("separator", ["\n\n", " "])
+def test_appended_same_scope_reacceptance_reports_uncertain_edit_chronology(separator):
+    comments = [
+        comment("alice", "Taking item 2.", "2026-10-01T10:00:00Z"),
+        comment(
+            board.MAINTAINER,
+            "Confirmed, @alice: item 2 is yours." + separator
+            + "Confirmed, @alice: item 2 is yours again.",
+            "2026-10-02T10:00:00Z",
+            "2026-10-08T10:00:00Z",
+        ),
+        comment(board.MAINTAINER, "The claim is released.", "2026-10-05T10:00:00Z"),
+        comment("alice", "Taking item 2 again.", "2026-10-07T10:00:00Z"),
+    ]
+    row = board.classify(issue(7), comments, [pull(91, "alice", "Refs #7")], NOW)
+    assert row["state"] == "claimed (see thread)"
+    assert row["pr"] is None and row["quiet"] is None
+
+
+@pytest.mark.parametrize(
+    "offer",
+    [
+        "@alice, the vision and audio sites are yours if you want them.",
+        "If you want the other two afterwards, say so and they are yours.",
+    ],
+)
+def test_a_conditional_offer_does_not_accept_an_earlier_take(offer):
+    comments = [
+        comment("alice", "Taking this one.", "2026-10-01T10:00:00Z"),
+        comment(board.MAINTAINER, offer, "2026-10-02T10:00:00Z"),
+    ]
+    row = board.classify(issue(7), comments, [pull(91, "alice", "Refs #7")], NOW)
+    assert row["state"] == "free"
+    assert row["pr"] is None and row["quiet"] is None
+
+
+@pytest.mark.parametrize("ownership", ["it's yours", "it’s yours", "it is yours"])
+def test_named_remainder_acceptance_keeps_the_active_owner_over_an_older_taking_request(ownership):
+    """#806's explicit remainder acceptance must outrank the completed earlier slice."""
+    comments = [
+        comment("AmirF194", "Taking this one. Scoping the fix to the flash-attn/liger half.",
+                "2026-09-14T18:33:58Z"),
+        comment("dchaudhari7177", "I'd like to take the reasoning_effort remainder.",
+                "2026-10-03T10:28:10Z"),
+        comment(board.MAINTAINER, f"@dchaudhari7177, {ownership}. Nobody else claimed the "
+                "remainder after I opened it to anyone on 09-24, so I've labelled the issue "
+                "`claimed`. Thanks for tracing it first.", "2026-10-04T15:51:53Z"),
+    ]
+    row = board.classify(issue(806, ("claimed",)), comments,
+                         [pull(1587, "dchaudhari7177", "Refs #806")], NOW)
+    assert row["state"] == "claimed by `@dchaudhari7177` since 2026-10-03"
+    assert row["pr"] == 1587 and row["quiet"] == 11
+
+
+@pytest.mark.parametrize("take_text, expected_pr, expected_quiet", [
+    ("Taking item 2.", None, None),
+    ("I'll take this.", 91, 13),
+])
+def test_unconfirmed_blocked_claim_metrics_preserve_the_existing_fallback(
+    take_text, expected_pr, expected_quiet
+):
+    comments = [comment("alice", take_text, "2026-10-01T10:00:00Z")]
+    row = board.classify(issue(7, ("infra-blocked",)), comments,
+                         [pull(91, "alice", "Refs #7")], NOW)
+    assert row["state"] == "blocked: infra-blocked"
+    assert row["pr"] == expected_pr and row["quiet"] == expected_quiet
+
+
+def test_arbitrary_slice_acceptance_after_taking_stays_conservatively_claimed():
+    """#275's old recipe prose cannot safely identify or clear a numbered claim slice."""
+    comments = [
+        comment("alice", "Taking `some-recipe`.", "2026-10-01T10:00:00Z"),
+        comment(board.MAINTAINER, "@alice: `some-recipe` is yours.",
+                "2026-10-02T10:00:00Z"),
+    ]
+    row = board.classify(issue(275), comments, [], NOW)
+    assert row["state"] == "claimed (see thread)"
+    assert row["pr"] is None and row["quiet"] is None
 
 
 @pytest.mark.parametrize(
@@ -327,9 +638,14 @@ def test_confirm_regex_cases():
 
 
 def test_take_regex_cases():
-    for text in ("unclaimed", "claimed by bob", "I claimed it"):
+    for text in (
+        "unclaimed", "claimed by bob", "I claimed it", "Thanks for taking this", "I am not taking"
+    ):
         assert not board._TAKE_RE.search(text), text
-    for text in ("I'd like to take", "I'll take it", "take this", "claim this", "I claim"):
+    for text in (
+        "I'd like to take", "I'll take it", "take this", "claim this", "I claim",
+        "Taking item 2.", "I am taking proposed fix 2.",
+    ):
         assert board._TAKE_RE.search(text), text
 
 
