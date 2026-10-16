@@ -48,6 +48,12 @@ def test_the_token_reads_code_and_writes_only_issues(workflow: dict) -> None:
         assert "permissions" not in job, name
 
 
+def test_the_workflow_uses_the_workflow_token_and_no_secret(text: str, steps: list[dict]) -> None:
+    step = next(step for step in steps if "claim_board.py" in step.get("run", ""))
+    assert step["env"]["GH_TOKEN"] == "${{ github.token }}"
+    assert not re.search(r"\bsecrets\s*(?:\.|\[)", text)
+
+
 def test_it_never_runs_in_a_fork(workflow: dict) -> None:
     for name, job in workflow["jobs"].items():
         assert job["if"] == "github.repository == 'MakazhanAlpamys/Soup'", name

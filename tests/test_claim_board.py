@@ -5,6 +5,7 @@ import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
@@ -134,6 +135,14 @@ def test_title_cannot_form_markdown_or_mention():
     assert cell.count("`") == 2
 
 
+def test_newlines_in_a_title_cannot_start_a_new_row_or_block():
+    title = "a\n| x | y |\n# H\r\n- item\u2028z\u2029y\x85w"
+    page = board.render([board.classify(issue(1, title=title), [], [], NOW)], NOW)
+    assert page.count("\n") == board.render([], NOW).count("\n")
+    assert _cell(page) == "`a / x / y / # H - item z y w`"
+    assert len(page.splitlines()[-1].split("|")) == 8
+
+
 def test_blocked_outranks_claimed():
     comments = [
         comment("alice", "I'll take this", "2026-10-01T10:00:00Z"),
@@ -180,6 +189,43 @@ def test_pr_linking_needs_closing_keyword_and_claimant():
     ]
     assert board.classify(issue(6, ("claimed",)), comments, prs, NOW)["pr"] == 52
     assert board.classify(issue(6, ("claimed",)), comments, prs[:2], NOW)["pr"] is None
+
+
+def test_pr_link_needs_the_whole_issue_number_and_picks_the_lowest():
+    comments = [comment("alice", "I'll take this", "2026-10-01T00:00:00Z")]
+    prs = [
+        pull(49, "alice", "Resolves #66"),
+        pull(54, "alice", "Fixes #6"),
+        pull(52, "alice", "Part of #6"),
+    ]
+    assert board.classify(issue(6, ("claimed",)), comments, prs, NOW)["pr"] == 52
+
+
+def test_fetch_asks_for_open_issues_of_each_label_and_skips_pull_requests(monkeypatch):
+    asked = []
+
+    def fake(args):
+        path = args[0]
+        asked.append(path)
+        if "/issues?" in path:
+            label = parse_qs(urlsplit(path).query)["labels"][0]
+            return {
+                "help wanted": [issue(1), dict(issue(2), pull_request={})],
+                "claimed": [issue(1), issue(3, ("claimed",))],
+                "infra-blocked": [issue(4, ("infra-blocked",))],
+            }[label]
+        if "/pulls?" in path or path.endswith("/comments?per_page=100"):
+            return []
+        raise AssertionError(path)
+
+    monkeypatch.setattr(board, "gh_json", fake)
+    rows = board.fetch(NOW)
+    assert [row["number"] for row in rows] == [1, 3, 4]
+    assert [row["kind"] for row in rows] == ["free", "claimed", "blocked"]
+    queries = [parse_qs(urlsplit(path).query) for path in asked if "/issues?" in path]
+    assert len(queries) == 3
+    assert {query["labels"][0] for query in queries} == {"help wanted", "claimed", "infra-blocked"}
+    assert all(query["state"] == ["open"] for query in queries)
 
 
 def test_strip_stamp_ignores_generation_time_only():
