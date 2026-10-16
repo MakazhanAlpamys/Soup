@@ -27,6 +27,25 @@ def recording_dspy(monkeypatch):
             calls.append(("compile", sorted(kwargs)))
             return program
 
+    class _MIPROv2:
+        def __init__(self, metric, auto=None, num_candidates=None, **kwargs):
+            if "num_trials" in kwargs:
+                raise TypeError(
+                    "MIPROv2.__init__() got an unexpected keyword argument 'num_trials'"
+                )
+            self.metric = metric
+            self.auto = auto
+            self.num_candidates = num_candidates
+            calls.append(("MIPROv2", {
+                "metric": metric, "auto": auto, "num_candidates": num_candidates,
+            }))
+
+        def compile(self, student, trainset=None, num_trials=None, **kwargs):
+            calls.append(("compile", {"num_trials": num_trials, "trainset": trainset}))
+            return types.SimpleNamespace(
+                program=student, score=0.85, total_calls=num_trials, converged=True
+            )
+
     class _Example:
         def __init__(self, **kwargs):
             self.kwargs = kwargs
@@ -35,7 +54,7 @@ def recording_dspy(monkeypatch):
             return self
 
     fake_dspy = types.SimpleNamespace(
-        MIPROv2=type("MIPROv2", (_Recorder,), {}),
+        MIPROv2=_MIPROv2,
         COPRO=type("COPRO", (_Recorder,), {}),
         BootstrapFewShot=type("BootstrapFewShot", (_Recorder,), {}),
         Example=_Example,
@@ -49,12 +68,16 @@ def recording_textgrad(monkeypatch):
     calls = []
 
     class _Variable:
-        def __init__(self, value, **kwargs):
+        def __init__(self, value, *, role_description: str, predecessors=None, **kwargs):
             self.value = value
+            self.role_description = role_description
+            self.predecessors = list(predecessors or [])
             self.gradients = set()
             calls.append(("Variable", value))
 
         def backward(self, *args, **kwargs):
+            for predecessor in self.predecessors:
+                predecessor.gradients.add(f"grad_from_{self.value}")
             calls.append(("backward",))
 
     class _TGD:
@@ -63,10 +86,15 @@ def recording_textgrad(monkeypatch):
             calls.append(("TGD", sorted(kwargs)))
 
         def zero_grad(self):
+            for parameter in self.parameters:
+                parameter.gradients.clear()
             calls.append(("zero_grad",))
 
         def step(self):
             calls.append(("step", [len(v.gradients) for v in self.parameters]))
+            for parameter in self.parameters:
+                if len(parameter.gradients) > 0:
+                    parameter.value += " improved"
 
     fake_tg = types.SimpleNamespace(Variable=_Variable, TGD=_TGD)
     monkeypatch.setitem(sys.modules, "textgrad", fake_tg)
@@ -82,6 +110,8 @@ def recording_gepa(monkeypatch):
             f"seed_candidate must be dict, got {type(seed_candidate)}"
         )
         assert "task_lm" in kwargs or "adapter" in kwargs, "GEPA requires task_lm or adapter"
+        if kwargs.get("adapter") is not None and kwargs.get("task_lm") is not None:
+            raise ValueError("GEPA requires task_lm=None in adapter mode")
         calls.append(("optimize", {"seed_candidate": seed_candidate, "kwargs": kwargs}))
         return types.SimpleNamespace(
             best_candidate={
@@ -139,7 +169,7 @@ def test_dspy_mipro_max_iters_and_trials_contract(tmp_path, monkeypatch, recordi
     assert res2.exit_code == 0, res2.output
     calls2 = list(recording_dspy)
 
-    # 1. auto is None and num_trials is passed to MIPROv2
+    # 1. auto is None; num_trials belongs to compile, not the constructor
     mipro_calls1 = [c for c in calls1 if c[0] == "MIPROv2"]
     mipro_calls2 = [c for c in calls2 if c[0] == "MIPROv2"]
     assert len(mipro_calls1) == 1
@@ -147,8 +177,12 @@ def test_dspy_mipro_max_iters_and_trials_contract(tmp_path, monkeypatch, recordi
 
     assert mipro_calls1[0][1].get("auto") is None
     assert mipro_calls2[0][1].get("auto") is None
-    assert mipro_calls1[0][1].get("num_trials") == 1
-    assert mipro_calls2[0][1].get("num_trials") == 1000
+    assert "num_trials" not in mipro_calls1[0][1]
+    assert "num_trials" not in mipro_calls2[0][1]
+    assert mipro_calls1[0][1]["num_candidates"] == 1
+    assert mipro_calls2[0][1]["num_candidates"] == 10
+    assert next(c[1] for c in calls1 if c[0] == "compile")["num_trials"] == 1
+    assert next(c[1] for c in calls2 if c[0] == "compile")["num_trials"] == 1000
 
     # 2. --max-iters 1 and --max-iters 1000 produce different arguments
     assert mipro_calls1[0][1] != mipro_calls2[0][1]
@@ -242,7 +276,7 @@ def test_result_panel_reports_actual_convergence_and_score(
     tmp_path, monkeypatch, recording_textgrad
 ):
     monkeypatch.chdir(tmp_path)
-    # When prompt never changes (stand-in does not alter variable.value), Converged must not be True
+    # Text edits alone must not imply convergence.
     (tmp_path / "prog.py").write_text("program = 'Answer briefly.'\n", encoding="utf-8")
     (tmp_path / "eval.jsonl").write_text('{"question": "1+1", "answer": "2"}\n', encoding="utf-8")
 
@@ -267,6 +301,7 @@ def test_result_panel_reports_actual_convergence_and_score(
     panel = dict(re.findall(r"(Iterations|Converged|Score):\s+(\S+)", stripped))
     assert panel.get("Converged") == "False"
     assert panel.get("Iterations") == "3"
+    assert panel.get("Score") == "0.000"
 
 
 def test_gepa_seed_candidate_dict_and_string_output(tmp_path, monkeypatch, recording_gepa):
@@ -342,6 +377,9 @@ def test_compile_tools_textgrad_backward_contract(tmp_path, monkeypatch, recordi
 
     backward_calls = [c for c in recording_textgrad if c[0] == "backward"]
     assert len(backward_calls) > 0, "compile-tools textgrad did not invoke backward()"
+    assert all(c[1] == [1] for c in recording_textgrad if c[0] == "step")
+    written = json.loads((tmp_path / "out.json").read_text(encoding="utf-8"))
+    assert written["tools"][0]["description"] == "Search item catalog improved"
 
 
 def test_dspy_missing_metric_without_suite_refuses_cleanly(tmp_path, monkeypatch, recording_dspy):
@@ -402,3 +440,125 @@ def test_textgrad_bare_exception_exits_2_with_clean_message(tmp_path, monkeypatc
     )
     assert res_tools.exit_code == 2
     assert "No engine provided" in res_tools.output
+
+
+def test_gepa_adapter_mode_passes_task_lm_none(tmp_path, monkeypatch, recording_gepa):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "prog.py").write_text(
+        "program = 'Answer briefly.'\nadapter = 'my_lora_adapter'\ntask_lm = 'ignored_lm'\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "eval.jsonl").write_text('{"answer": "4"}\n', encoding="utf-8")
+    res = CliRunner().invoke(
+        app, ["compile", "prog.py", "--eval", "eval.jsonl", "--optimizer", "gepa", "-o", "out.py"]
+    )
+    assert res.exit_code == 0, res.output
+    kwargs = recording_gepa[0][1]["kwargs"]
+    assert kwargs["adapter"] == "my_lora_adapter"
+    assert kwargs["task_lm"] is None
+
+
+def test_textgrad_edit_without_score_improvement_does_not_claim_converged(
+    tmp_path, monkeypatch, recording_textgrad
+):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "prog.py").write_text(
+        "program = 'Answer briefly.'\ndef metric(gold, pred):\n    return 0.0\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "eval.jsonl").write_text('{"answer": "4"}\n', encoding="utf-8")
+    res = CliRunner().invoke(app, [
+        "compile", "prog.py", "--eval", "eval.jsonl", "--optimizer", "textgrad",
+        "--max-iters", "2", "-o", "out.py",
+    ])
+    assert res.exit_code == 0, res.output
+    assert (tmp_path / "out.py").read_text(encoding="utf-8") == (
+        "Answer briefly. improved improved"
+    )
+    panel = dict(re.findall(r"(Converged|Score):\s+(\S+)", _strip_ansi(res.output)))
+    assert panel == {"Converged": "False", "Score": "0.000"}
+
+
+def test_textgrad_loss_predecessor_graph_populates_gradients(
+    tmp_path, monkeypatch, recording_textgrad
+):
+    from soup_cli.utils import prompt_compile
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "prog.py").write_text("program = 'Answer briefly.'\n", encoding="utf-8")
+    (tmp_path / "eval.jsonl").write_text('{"answer": "4"}\n', encoding="utf-8")
+    variable = sys.modules["textgrad"].Variable("Answer briefly.", role_description="prompt")
+    monkeypatch.setattr(prompt_compile, "_load_program_module", lambda path: types.SimpleNamespace(
+        program="Answer briefly.", variable=variable,
+    ))
+    plan = prompt_compile.build_compile_plan(
+        program_path="prog.py", eval_suite_path="eval.jsonl", optimizer="textgrad", max_iters=1,
+        output_path="out.py",
+    )
+    result = prompt_compile.run_compile(plan)
+    assert variable.gradients
+    assert any(c == ("step", [1]) for c in recording_textgrad)
+    assert result.program_text == "Answer briefly. improved"
+
+
+@pytest.mark.parametrize("gold", [{"answer": "4"}, types.SimpleNamespace(answer="4")])
+@pytest.mark.parametrize("pred", [" 4 ", {"answer": "4"}, types.SimpleNamespace(output="4")])
+def test_suite_metric_handles_dict_and_object_targets(gold, pred):
+    from soup_cli.utils.prompt_compile import _resolve_metric
+
+    metric = _resolve_metric(types.SimpleNamespace(), [{"answer": "4"}])
+    assert metric(gold, pred) == 1.0
+    assert metric(gold, "5") == 0.0
+
+
+@pytest.mark.parametrize(
+    "metric_code, examples, expected_score, expected_converged, expected_iterations",
+    [
+        (
+            "def metric(gold, pred):\n    return float(pred.endswith('improved'))\n",
+            [{"answer": "unused"}], 1.0, True, 1,
+        ),
+        (
+            "def metric(pred):\n    return float(pred.endswith('improved'))\n",
+            [{"answer": "unused"}], 1.0, True, 1,
+        ),
+        (
+            "",
+            [{"answer": "Answer briefly. improved"}], 1.0, True, 1,
+        ),
+        (
+            "",
+            [{"answer": "Answer briefly. improved"}, {"answer": "other"}],
+            0.5, False, 3,
+        ),
+        (
+            "def metric(gold, pred):\n    return 1.0\n",
+            [{"answer": "unused"}], 1.0, False, 3,
+        ),
+        (
+            "def metric(gold, pred):\n    raise ValueError('evaluation failed')\n",
+            [{"answer": "unused"}], 0.0, False, 3,
+        ),
+    ],
+)
+def test_textgrad_measures_score_and_convergence(
+    tmp_path, monkeypatch, recording_textgrad,
+    metric_code, examples, expected_score, expected_converged, expected_iterations,
+):
+    from soup_cli.utils.prompt_compile import build_compile_plan, run_compile
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "prog.py").write_text(
+        "program = 'Answer briefly.'\n" + metric_code, encoding="utf-8"
+    )
+    (tmp_path / "eval.jsonl").write_text(
+        "\n".join(json.dumps(ex) for ex in examples), encoding="utf-8"
+    )
+    result = run_compile(build_compile_plan(
+        program_path="prog.py", eval_suite_path="eval.jsonl", optimizer="textgrad",
+        max_iters=3, output_path="out.py",
+    ))
+    assert result.score == expected_score
+    assert result.converged is expected_converged
+    assert result.iterations == expected_iterations
+    assert len([call for call in recording_textgrad if call[0] == "step"]) == expected_iterations

@@ -165,7 +165,15 @@ def _optimise_description(
         for i in range(min(8, max(1, len(examples)))):
             ex = examples[i % len(examples)] if examples else {}
             loss_text = f"Evaluate tool description: {variable.value} on {ex}"
-            loss = tg.Variable(loss_text) if hasattr(tg, "Variable") else variable
+            loss = (
+                tg.Variable(
+                    loss_text,
+                    role_description="evaluation loss",
+                    predecessors=[variable],
+                )
+                if hasattr(tg, "Variable")
+                else variable
+            )
             opt.zero_grad()
             loss.backward()
             opt.step()

@@ -344,9 +344,14 @@ def _resolve_metric(
     target_key = next((k for k in candidate_keys if any(k in ex for ex in eval_examples)), None)
 
     def _suite_metric(gold: Any, pred: Any, trace: Any = None) -> float:
-        if target_key and hasattr(gold, target_key):
-            expected = getattr(gold, target_key)
-            actual = getattr(pred, target_key, None)
+        if target_key:
+            if isinstance(gold, dict):
+                expected = gold.get(target_key)
+            else:
+                expected = getattr(gold, target_key, None)
+            actual = (
+                pred.get(target_key) if isinstance(pred, dict) else getattr(pred, target_key, None)
+            )
             if actual is None and hasattr(pred, "output"):
                 actual = getattr(pred, "output")
             if actual is None and hasattr(pred, "completion"):
@@ -385,7 +390,6 @@ def _run_dspy(plan: CompilePlan) -> CompileResult:
             metric=metric,
             auto=None,
             num_candidates=max(1, min(plan.max_iters, 10)),
-            num_trials=plan.max_iters,
         )
         compiled = optimizer.compile(program, trainset=trainset, num_trials=plan.max_iters)
     else:  # copro
@@ -452,14 +456,17 @@ def _run_gepa(plan: CompilePlan) -> CompileResult:
     program = _resolve_program(module)
     examples = load_eval_examples(plan.eval_suite_path)
     seed_candidate = program if isinstance(program, dict) else {"prompt": str(program)}
-    task_lm = getattr(module, "task_lm", None) or getattr(module, "adapter", None) or "default_lm"
+    adapter = getattr(module, "adapter", None)
+    if adapter is not None:
+        task_lm = None
+    else:
+        task_lm = getattr(module, "task_lm", None) or "default_lm"
     kwargs: dict[str, Any] = {
         "seed_candidate": seed_candidate,
         "trainset": examples,
         "max_metric_calls": plan.max_iters,
         "task_lm": task_lm,
     }
-    adapter = getattr(module, "adapter", None)
     if adapter is not None:
         kwargs["adapter"] = adapter
 
@@ -492,12 +499,17 @@ def _run_textgrad(plan: CompilePlan) -> CompileResult:
     program = _resolve_program(module)
     # The user program is expected to be (or contain) a tg.Variable to
     # optimise. We run a textual-gradient descent loop over the eval suite.
-    if isinstance(program, tg.Variable):
-        variable = program
-    else:
-        variable = tg.Variable(
-            str(program), requires_grad=True, role_description="prompt program"
-        )
+    initial_text = str(program.value) if isinstance(program, tg.Variable) else str(program)
+    variable = getattr(module, "variable", None)
+    if variable is None:
+        if isinstance(program, tg.Variable):
+            variable = program
+        else:
+            variable = tg.Variable(
+                initial_text,
+                requires_grad=True,
+                role_description="prompt",
+            )
     initial_text = str(variable.value)
     engine = getattr(module, "engine", None)
     if engine is None and hasattr(tg, "get_backward_engine"):
@@ -518,27 +530,58 @@ def _run_textgrad(plan: CompilePlan) -> CompileResult:
     except TypeError:
         optimizer = tg.TGD(parameters=[variable])
 
-    examples = load_eval_examples(plan.eval_suite_path)
-    iterations = plan.max_iters
-    prev_val = initial_text
-    changed = False
+    raw_examples = load_eval_examples(plan.eval_suite_path)
+    metric = _resolve_metric(module, raw_examples)
 
-    for i in range(iterations):
-        ex = examples[i % len(examples)] if examples else {}
+    def _calc_score(txt: str) -> float:
+        if not raw_examples or metric is None:
+            return 0.0
+        total = 0.0
+        for ex in raw_examples:
+            try:
+                total += float(metric(ex, txt))
+            except TypeError:
+                try:
+                    total += float(metric(txt))
+                except Exception:
+                    pass
+            except Exception:
+                pass
+        return total / len(raw_examples)
+
+    initial_score = float(getattr(variable, "score", _calc_score(initial_text)) or 0.0)
+    best_score = initial_score
+    converged = False
+    iterations = 0
+
+    for i in range(plan.max_iters):
+        ex = raw_examples[i % len(raw_examples)] if raw_examples else {}
         loss_text = f"Evaluate {variable.value} with eval example: {ex}"
-        loss = tg.Variable(loss_text) if hasattr(tg, "Variable") else variable
+        loss = (
+            tg.Variable(
+                loss_text,
+                role_description="evaluation loss",
+                predecessors=[variable],
+            )
+            if hasattr(tg, "Variable")
+            else variable
+        )
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
-        if str(variable.value) != prev_val:
-            changed = True
-            prev_val = str(variable.value)
+        iterations = i + 1
+        cur_score = float(getattr(variable, "score", _calc_score(str(variable.value))) or 0.0)
+        if cur_score > best_score:
+            best_score = cur_score
+            if best_score >= 1.0:
+                converged = True
+                break
 
-    converged = changed
-    score = 1.0 if changed else 0.0
+    if best_score > initial_score and best_score >= 1.0:
+        converged = True
     return CompileResult(
         program_text=str(variable.value),
-        score=score,
+        score=best_score,
         iterations=iterations,
         converged=converged,
     )
