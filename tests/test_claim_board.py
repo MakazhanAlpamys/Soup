@@ -72,6 +72,168 @@ def test_claimed_label_without_nameable_claimant():
     assert row["state"] == "claimed (see thread)"
 
 
+@pytest.mark.parametrize("labels", [("help wanted",), ("help wanted", "claimed")])
+def test_an_offer_on_other_issues_does_not_confirm_the_fallback(labels):
+    """#1878: #1881 carries the issue; #1895's author is offered other work."""
+    comments = [
+        comment("Nari-Ab", "I'd like to claim this issue.", "2026-10-14T11:02:12Z"),
+        comment(
+            board.MAINTAINER,
+            "Thanks @Nari-Ab. @Fire162 opened #1881 for this issue; it carries the issue. "
+            "Your #1895 waits behind it as the fallback.",
+            "2026-10-14T12:33:25Z",
+        ),
+        comment(
+            "Nari-Ab",
+            "#1895 is a draft fallback. Could you suggest a different issue?",
+            "2026-10-14T12:40:23Z",
+        ),
+        comment(
+            board.MAINTAINER,
+            "Thanks @Nari-Ab. Three free issues: #1887, #1884, #1888. "
+            "Post your plan on the issue you choose and the claim is yours now.",
+            "2026-10-14T14:11:01Z",
+        ),
+    ]
+    prs = [pull(1881, "Fire162", "Fixes #1878"), pull(1895, "Nari-Ab", "Fixes #1878")]
+    row = board.classify(issue(1878, labels), comments, prs, NOW)
+    assert row["kind"] == "claimed"
+    assert row["state"] == "claimed (see thread)"
+    assert row["pr"] is None and row["quiet"] is None
+
+
+def test_latest_named_confirmation_replaces_a_completed_claim():
+    """#1199: fix 3 was completed/released before fix 2 was confirmed again."""
+    comments = [
+        comment("yunaremaia", "I am taking proposed fix 3.", "2026-10-03T10:45:32Z"),
+        comment(
+            board.MAINTAINER,
+            "Confirmed, @yunaremaia: proposed fix 3 is yours.",
+            "2026-10-04T15:52:21Z",
+        ),
+        comment(
+            board.MAINTAINER,
+            "Fix 3 merged. The claim covered fix 3, which is now done, so I have taken "
+            "`claimed` off: the two remaining fixes are free to take.",
+            "2026-10-07T20:35:31Z",
+        ),
+        comment("Faisal-Fayaz", "Taking fix 2.", "2026-10-08T06:34:19Z"),
+        comment(
+            board.MAINTAINER,
+            "Confirmed, @Faisal-Fayaz: fix 2 is yours. Marked the issue claimed again. "
+            "Fix 1 stays unclaimed.",
+            "2026-10-08T06:37:04Z",
+        ),
+    ]
+    prs = [pull(1600, "yunaremaia", "Refs #1199"), pull(1700, "Faisal-Fayaz", "Refs #1199")]
+    row = board.classify(issue(1199, ("help wanted", "claimed")), comments, prs, NOW)
+    assert row["state"] == "claimed by `@Faisal-Fayaz` since 2026-10-08"
+    assert row["pr"] == 1700 and row["quiet"] == 6
+
+
+@pytest.mark.parametrize(
+    "confirmation",
+    [
+        "Confirmed, @alice: it is yours.",
+        "Confirmed, @alice: go ahead.",
+    ],
+)
+def test_named_confirmation_binds_its_author_despite_an_interleaved_reply(confirmation):
+    comments = [
+        comment("alice", "I'll take this", "2026-10-01T10:00:00Z"),
+        comment("bob", "I can provide a fallback if needed.", "2026-10-02T09:00:00Z"),
+        comment(
+            board.MAINTAINER,
+            confirmation,
+            "2026-10-02T10:00:00Z",
+        ),
+    ]
+    row = board.classify(issue(7), comments, [pull(91, "alice", "Refs #7")], NOW)
+    assert row["state"] == "claimed by `@alice` since 2026-10-01"
+    assert row["pr"] == 91
+
+
+@pytest.mark.parametrize("subject", ["#7", "this issue"])
+def test_leading_named_same_issue_acceptance_excludes_a_rejected_fallback(subject):
+    """The ordinary #1915 form addresses the winner before mentioning a fallback."""
+    comments = [
+        comment("alice", "I'll take this", "2026-10-01T10:00:00Z"),
+        comment("bob", "I can provide a fallback if needed.", "2026-10-02T09:00:00Z"),
+        comment(
+            board.MAINTAINER,
+            f"@alice, thanks for the plan: {subject} is yours. @bob, please wait.",
+            "2026-10-02T10:00:00Z",
+        ),
+    ]
+    row = board.classify(issue(7), comments, [pull(91, "alice", "Refs #7")], NOW)
+    assert row["state"] == "claimed by `@alice` since 2026-10-01"
+    assert row["pr"] == 91
+
+
+@pytest.mark.parametrize("confirmation", ["Confirmed", "Confirmed, go ahead", "it is yours"])
+def test_direct_confirmation_after_a_same_issue_take_request_still_names_it(confirmation):
+    comments = [
+        comment("alice", "I'll take this", "2026-10-01T10:00:00Z"),
+        comment(board.MAINTAINER, confirmation, "2026-10-02T10:00:00Z"),
+    ]
+    row = board.classify(issue(7), comments, [], NOW)
+    assert row["state"] == "claimed by `@alice` since 2026-10-01"
+
+
+def test_generic_confirmation_after_a_side_question_does_not_name_its_author():
+    comments = [
+        comment("alice", "I'll take this", "2026-10-01T10:00:00Z"),
+        comment("bob", "Which other issue is free?", "2026-10-02T09:00:00Z"),
+        comment(board.MAINTAINER, "Confirmed", "2026-10-02T10:00:00Z"),
+    ]
+    row = board.classify(issue(7), comments, [], NOW)
+    assert row["state"] == "claimed (see thread)"
+    assert row["pr"] is None and row["quiet"] is None
+
+
+def test_a_named_confirmation_does_not_invent_an_author_from_public_text():
+    comments = [
+        comment("alice", "I'll take this", "2026-10-01T10:00:00Z"),
+        comment(
+            board.MAINTAINER,
+            "Confirmed, @someone-else: it is yours.",
+            "2026-10-02T10:00:00Z",
+        ),
+    ]
+    row = board.classify(issue(7), comments, [], NOW)
+    assert row["state"] == "claimed (see thread)"
+    assert row["pr"] is None and row["quiet"] is None
+
+
+@pytest.mark.parametrize("with_reporter", [False, True])
+@pytest.mark.parametrize(
+    "confirmation",
+    [
+        "Confirmed on main: reproduced the bug.",
+        "Confirmed, @alice: reproduced the bug.",
+    ],
+)
+def test_confirming_bug_evidence_without_a_take_request_keeps_the_issue_free(
+    with_reporter,
+    confirmation,
+):
+    comments = (
+        [comment("alice", "Here is the failing traceback.", "2026-10-01T10:00:00Z")]
+        if with_reporter
+        else []
+    )
+    comments.append(
+        comment(
+            board.MAINTAINER,
+            confirmation,
+            "2026-10-02T10:00:00Z",
+        )
+    )
+    row = board.classify(issue(7), comments, [], NOW)
+    assert row["kind"] == "free" and row["state"] == "free"
+    assert row["pr"] is None and row["quiet"] is None
+
+
 def test_blocked_by_label():
     row = board.classify(issue(10, ("help wanted", "infra-blocked")), [], [], NOW)
     assert row["kind"] == "blocked" and row["state"] == "blocked: infra-blocked"

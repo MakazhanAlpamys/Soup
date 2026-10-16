@@ -33,6 +33,11 @@ TITLE_WIDTH = 60
 GENERATED_PREFIX = "Generated: "
 
 _CONFIRM_RE = re.compile(r"^\s*confirmed\b|\b(?:is|are) yours\b", re.IGNORECASE | re.MULTILINE)
+_NAMED_CONFIRM_RE = re.compile(r"^\s*confirmed\s*[,!:]?\s*@([a-z0-9-]+)\b", re.IGNORECASE)
+_LEADING_LOGIN_RE = re.compile(r"^\s*@([a-z0-9-]+)\b([^@\n]*)", re.IGNORECASE)
+_DIRECT_CONFIRM_RE = re.compile(
+    r"^\s*(?:confirmed(?:[,.!]|$)|(?:it|this) is yours\b)", re.IGNORECASE
+)
 _TAKE_RE = re.compile(
     r"\b(?:i'd like to take|i would like to take|i'll take|i will take|take this"
     r"|claim this|i claim)\b",
@@ -67,20 +72,52 @@ def _login(comment: dict) -> str:
     return (comment.get("user") or {}).get("login", "")
 
 
-def find_claimant(comments: list[dict]) -> tuple[str | None, str | None, bool]:
+def _named_confirmation(body: str, issue_number: int) -> tuple[str, bool] | None:
+    """Return the addressee and whether their acceptance states ownership."""
+    named = _NAMED_CONFIRM_RE.match(body)
+    if named:
+        acceptance = body[named.end() :].split("@", 1)[0].split("\n", 1)[0]
+        owns = bool(re.search(r"\b(?:is|are) yours\b", acceptance, re.IGNORECASE))
+        return named.group(1), owns
+    leading = _LEADING_LOGIN_RE.match(body)
+    if leading and re.search(
+        rf"(?:#{issue_number}\b|\bthis issue)\s+is yours\b", leading.group(2), re.IGNORECASE
+    ):
+        return leading.group(1), True
+    return None
+
+
+def find_claimant(comments: list[dict], issue_number: int) -> tuple[str | None, str | None, bool]:
     """Return (login, since date, confirmed).
 
-    Confirmed: the author of the comment a maintainer answered with a confirmation.
-    Otherwise the author of the first non-maintainer comment containing a take phrase
-    (unconfirmed). (None, None, False) when nobody can be named.
+    Prefer the latest direct acceptance, binding a named login to an API author.
+    A generic acceptance needs the preceding contributor's own take request.
+    Ambiguous claim evidence returns (None, None, True), for "claimed (see thread)".
+    Without acceptance, retain the first take request as unconfirmed.
     """
     ordered = sorted(comments, key=lambda item: item["created_at"])
-    for index, comment in enumerate(ordered):
-        if _login(comment) != MAINTAINER or not _CONFIRM_RE.search(comment.get("body", "")):
+    for index in range(len(ordered) - 1, -1, -1):
+        comment = ordered[index]
+        body = comment.get("body", "")
+        if _login(comment) != MAINTAINER or not _CONFIRM_RE.search(body):
             continue
-        for earlier in reversed(ordered[:index]):
-            if _login(earlier) not in (MAINTAINER, ""):
-                return _login(earlier), earlier["created_at"][:10], True
+        earlier = [item for item in ordered[:index] if _login(item) not in (MAINTAINER, "")]
+        named = _named_confirmation(body, issue_number)
+        if named is not None:
+            login, owns = named
+            matches = [item for item in earlier if _login(item).casefold() == login.casefold()]
+            if not owns and not any(_TAKE_RE.search(item.get("body", "")) for item in matches):
+                continue
+            if matches:
+                item = matches[-1]
+                return _login(item), item["created_at"][:10], True
+            return None, None, True
+        if _DIRECT_CONFIRM_RE.match(body) and earlier:
+            previous = earlier[-1]
+            if _TAKE_RE.search(previous.get("body", "")):
+                return _login(previous), previous["created_at"][:10], True
+        if any(_TAKE_RE.search(item.get("body", "")) for item in earlier):
+            return None, None, True
     for comment in ordered:
         if _login(comment) not in (MAINTAINER, "") and _TAKE_RE.search(comment.get("body", "")):
             return _login(comment), comment["created_at"][:10], False
@@ -131,9 +168,9 @@ def classify(
     issue: dict, comments: list[dict], prs: list[dict], now: datetime, is_open=_always_open
 ) -> dict:
     labels = label_names(issue)
-    login, since, confirmed = find_claimant(comments)
+    login, since, confirmed = find_claimant(comments, issue["number"])
     block = blocker(issue, comments, is_open)
-    claimed = "claimed" in labels or (login is not None and confirmed)
+    claimed = "claimed" in labels or confirmed
     if block:
         kind, state = "blocked", f"blocked: {block}"
     elif claimed and login:
