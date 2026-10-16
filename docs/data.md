@@ -375,6 +375,10 @@ soup ingest --source openai-stored --logs ./oai-stored-completions.jsonl
 
 With `--logs` the CLI never makes a network call — operators export from their SaaS dashboard or vendor API, then point `soup ingest` at the local file. Auth env vars (`LANGFUSE_PUBLIC_KEY` + `LANGFUSE_SECRET_KEY` / `LANGSMITH_API_KEY` / `HELICONE_API_KEY` / `OPENPIPE_API_KEY` / `OPENAI_API_KEY` / `OTEL_EXPORTER_OTLP_HEADERS`) are advisory on that path — Soup surfaces which ones authenticate the source. A PII reminder fires on every ingest run (matches v0.26.0 Trace-to-Preference policy).
 
+In a `--logs` export, langfuse feedback uses `score` when it is present and non-null, including `0`,
+`0.0` and `false` as negative feedback. Only a missing or null score falls back
+to `rating`. Negative scores remain available for preference-pair construction.
+
 ### Live pull from Langfuse (`--pull`, #204)
 
 Langfuse is the one source Soup can fetch directly, so there is no export step:
