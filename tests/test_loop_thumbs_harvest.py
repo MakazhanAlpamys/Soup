@@ -537,6 +537,59 @@ def test_watch_detach_refuses_a_file_that_is_not_a_thumbs_database(cwd, monkeypa
     assert spawned == []
 
 
+def _make_wrong_columns_db(columns: str = "x", path: str = "thumbs.db") -> None:
+    """A hand-made ``thumbs`` table that lacks some columns the harvest reads."""
+    conn = sqlite3.connect(path)
+    conn.execute(f"CREATE TABLE thumbs({columns})")
+    conn.commit()
+    conn.close()
+
+
+@pytest.mark.parametrize("missing", ["prompt", "response", "thumb", "ts"])
+def test_watch_refuses_a_thumbs_table_without_the_harvest_columns(cwd, monkeypatch, missing):
+    kept = [c for c in ("prompt", "response", "thumb", "ts") if c != missing]
+    _make_wrong_columns_db(", ".join(kept))
+    _init_loop(True)
+    monkeypatch.setenv("SOUP_LOOP_THUMBS_DB", "thumbs.db")
+
+    result, text = _watch()
+
+    assert result.exit_code == 2, text
+    assert "is not a readable thumbs database" in text, text
+    assert "Traceback" not in text, text
+    assert not os.path.exists(".soup-loops"), "no iteration may run"
+
+
+def test_watch_detach_refuses_a_thumbs_table_without_the_harvest_columns(cwd, monkeypatch):
+    import soup_cli.commands.loop as loop_cmd
+
+    spawned = []
+    monkeypatch.setattr(loop_cmd.subprocess, "Popen", lambda *a, **k: spawned.append(a))
+    _make_wrong_columns_db()
+    _init_loop(True)
+    monkeypatch.setenv("SOUP_LOOP_THUMBS_DB", "thumbs.db")
+
+    result, text = _watch("--detach")
+
+    assert result.exit_code == 2, text
+    assert "is not a readable thumbs database" in text, text
+    assert spawned == []
+
+
+def test_watch_still_accepts_a_database_made_by_init_local_rl_db(cwd, monkeypatch):
+    """Control: the real schema passes the column-list probe."""
+    from soup_cli.utils import local_rl
+
+    local_rl.init_local_rl_db("thumbs.db")
+    _init_loop(True)
+    monkeypatch.setenv("SOUP_LOOP_THUMBS_DB", "thumbs.db")
+
+    result, text = _watch()
+
+    assert "not a readable thumbs database" not in text, text
+    assert result.exit_code == 0, text
+
+
 def test_watch_does_not_let_a_control_sequence_in_the_path_reach_the_terminal(cwd, monkeypatch):
     _init_loop(True)
     monkeypatch.setenv("SOUP_LOOP_THUMBS_DB", "a\x1b[2Jb.db")
