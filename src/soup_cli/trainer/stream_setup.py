@@ -1226,7 +1226,13 @@ class StreamingSetupMixin:
         # #792 — on the materialised adapters, before the probe measures a step.
         from soup_cli.utils.peft_wiring import apply_fast_lora_patches, fast_lora_summary
 
-        fast_lora_counts = apply_fast_lora_patches(model, tcfg)
+        try:
+            fast_lora_counts = apply_fast_lora_patches(model, tcfg)
+        except Exception:
+            # Training's cleanup context has not started yet: release the
+            # runtime here, as the probe below does on its own failure.
+            self._close_stream_runtime()
+            raise
         if fast_lora_counts is not None:
             console.print(f"[green]{fast_lora_summary(fast_lora_counts)}[/]")
         if probe_plan is not None:

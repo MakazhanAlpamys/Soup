@@ -3062,8 +3062,8 @@ class TrainingConfig(BaseModel):
             "hand-written Fast-LoRA autograd functions instead of peft's "
             "modules. Same math; no speedup is claimed. task='sft' on the "
             "transformers backend with text, quantization none or 4bit, and "
-            "lora.dropout 0; refused beside use_liger, DoRA, VeRA and "
-            "target_parameters."
+            "lora.dropout 0; refused beside use_liger, DoRA, VeRA, "
+            "target_parameters, Spectrum, LISA and FP8 training."
         ),
     )
     # Performance — FlashAttention
@@ -6143,6 +6143,19 @@ class SoupConfig(BaseModel):
             )
         elif lora.r == 0:
             reason = "needs a LoRA; lora.r=0 trains the full model, with no LoRA to patch."
+        elif tcfg.unfrozen_parameters or tcfg.lisa_enabled:
+            name = "unfrozen_parameters" if tcfg.unfrozen_parameters else "lisa_enabled"
+            reason = (
+                f"cannot be combined with training.{name}: that mode trains the "
+                f"model's own weights and skips the LoRA setup the kernels hook into."
+            )
+        elif tcfg.quantization_aware == "fp8":
+            # (QuEST needs lora.r=0, refused above.)
+            reason = (
+                "cannot be combined with training.quantization_aware='fp8': FP8 "
+                "training converts the projections, and the kernels read their "
+                "weights directly, around the conversion."
+            )
         elif lora.use_dora or lora.use_vera:
             name = "use_dora" if lora.use_dora else "use_vera"
             reason = (

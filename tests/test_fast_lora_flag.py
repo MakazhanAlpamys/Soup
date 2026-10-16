@@ -13,11 +13,13 @@ import json
 import types
 
 import pytest
+from rich.console import Console
 
 torch = pytest.importorskip("torch")
 pytest.importorskip("peft")
 pytest.importorskip("transformers")
 
+CONSOLE = Console()
 TARGETS = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
 ON = types.SimpleNamespace(fast_lora=True)
 OFF = types.SimpleNamespace(fast_lora=False)
@@ -113,6 +115,35 @@ class TestTheFlag:
             use_liger=True
         )
 
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [("unfrozen_parameters", ["model.layers.0.mlp"]), ("lisa_enabled", True)],
+        ids=["spectrum", "lisa"],
+    )
+    def test_a_full_fine_tuning_mode_is_refused(self, field, value):
+        """They train the model's own weights and skip the LoRA setup the
+        kernels hook into, so the flag would be ignored. The default rank 64,
+        as a user who sets only these would have it."""
+        from pydantic import ValidationError
+
+        from soup_cli.config.schema import SoupConfig
+
+        kwargs = {
+            "base": "test/model",
+            "data": {"train": "tests/fixtures/sample_train.jsonl"},
+        }
+        training = {"quantization": "none", "lora": {"dropout": 0.0}, field: value}
+        SoupConfig(**kwargs, training=training)  # the premise: it loads without the flag
+        with pytest.raises(ValidationError) as excinfo:
+            SoupConfig(**kwargs, training={**training, "fast_lora": True})
+        assert f"training.fast_lora cannot be combined with training.{field}" in str(excinfo.value)
+
+    def test_fp8_training_is_refused(self):
+        assert (
+            "training.fast_lora cannot be combined with training.quantization_aware='fp8'"
+            in _refusal(quantization="none", quantization_aware="fp8")
+        )
+
 
 # ─── The switch on a model ───────────────────────────────────────────────────
 
@@ -182,6 +213,24 @@ class TestTheSwitch:
 
         with pytest.raises(ValueError, match="no LoRA module was patched"):
             apply_fast_lora_patches(torch.nn.Sequential(torch.nn.Linear(4, 4)), ON)
+
+    def test_a_conv1d_only_model_is_refused(self):
+        """GPT-2's Conv1D LoRA (``fan_in_fan_out``) is patched but delegates to
+        peft on every call: nothing the kernels can run, so the switch refuses
+        and takes its patches off."""
+        from peft import LoraConfig, get_peft_model
+        from transformers import GPT2Config, GPT2LMHeadModel
+
+        from soup_cli.utils.peft_wiring import apply_fast_lora_patches
+
+        torch.manual_seed(0)
+        config = GPT2Config(vocab_size=64, n_positions=32, n_embd=16, n_layer=2, n_head=2)
+        lora = LoraConfig(r=4, lora_alpha=8, lora_dropout=0.0, target_modules=["c_attn"])
+        model = get_peft_model(GPT2LMHeadModel(config), lora)
+
+        with pytest.raises(ValueError, match="no LoRA module was patched"):
+            apply_fast_lora_patches(model, ON)
+        assert not any("forward" in vars(m) for m in model.modules())
 
     def test_the_setup_line_names_each_kernel(self):
         from soup_cli.utils.peft_wiring import fast_lora_summary
@@ -292,7 +341,7 @@ class TestParityThroughTheSwitch:
         # Equal to 3 decimals: never 1e-3 apart (rounding each to 3 places would
         # call 4.1935 and 4.1934 different).
         gap = max(abs(f - p) for f, p in zip(losses["fast"], losses["plain"]))
-        print(json.dumps({"fifty_step_max_loss_gap": gap}))
+        CONSOLE.print(json.dumps({"fifty_step_max_loss_gap": gap}))
         assert gap < 1e-3
         assert losses["plain"][-1] < losses["plain"][0] - 0.1  # it trained
 
@@ -365,6 +414,64 @@ class TestTheResidentSetup:
         assert not any("forward" in vars(m) for m in wrapper.trainer.model.modules())
 
 
+class TestAFailedPatchReleasesTheStreamedRuntime:
+    """The switch runs after the runtime is built and before training's
+    cleanup context starts: a failure there closes the runtime itself."""
+
+    def _setup(self, tmp_path, monkeypatch):
+        """The real streamed setup; returns, for each close, whether a runtime
+        was there to close."""
+        from soup_cli.trainer.stream_setup import StreamingSetupMixin
+        from tests.test_v07204 import _build_streamed_wrapper
+
+        closes = []
+        real_close = StreamingSetupMixin._close_stream_runtime
+
+        def counting_close(self):
+            closes.append(getattr(self, "_stream_runtime", None) is not None)
+            return real_close(self)
+
+        monkeypatch.setattr(StreamingSetupMixin, "_close_stream_runtime", counting_close)
+        with pytest.raises(Exception) as excinfo:
+            _build_streamed_wrapper(
+                tmp_path,
+                monkeypatch,
+                task="sft",
+                n_layers=2,
+                device="cpu",
+                tie=False,
+                fast_lora=True,
+                lora={"r": 4, "alpha": 8, "dropout": 0.0, "target_modules": TARGETS},
+            )
+        return closes, excinfo.value
+
+    def test_nothing_patched(self, tmp_path, monkeypatch):
+        from soup_cli.utils import fast_lora, fast_lora_mlp, fast_lora_qkv
+
+        monkeypatch.setattr(fast_lora_qkv, "patch_fast_lora_qkv", lambda model: 0)
+        monkeypatch.setattr(fast_lora_mlp, "patch_fast_lora_mlp", lambda model: 0)
+        monkeypatch.setattr(fast_lora, "patch_fast_lora_single_projection", lambda model: 0)
+        monkeypatch.setattr(fast_lora, "eligible_single_projections", lambda model: 0)
+
+        closes, error = self._setup(tmp_path, monkeypatch)
+
+        assert "no LoRA module was patched" in str(error)
+        assert closes == [True]
+
+    def test_a_patcher_that_raises(self, tmp_path, monkeypatch):
+        from soup_cli.utils import fast_lora_qkv
+
+        def boom(model):
+            raise RuntimeError("patcher failed")
+
+        monkeypatch.setattr(fast_lora_qkv, "patch_fast_lora_qkv", boom)
+
+        closes, error = self._setup(tmp_path, monkeypatch)
+
+        assert str(error) == "patcher failed"
+        assert closes == [True]
+
+
 class TestTheStreamedSetup:
     """A streamed tiny Llama with more layers than ``stream_buffers``: the LoRA
     gradients on every layer equal those of the same run without the switch."""
@@ -429,7 +536,7 @@ def _half_error(dtype):
 @pytest.mark.parametrize("dtype", ["bfloat16", "float16"])
 def test_half_precision_forward_error_is_within_twice_peft(dtype):
     plain_err, fast_err = _half_error(getattr(torch, dtype))
-    print(json.dumps({"dtype": dtype, "peft_max_abs": plain_err, "fast_max_abs": fast_err}))
+    CONSOLE.print(json.dumps({"dtype": dtype, "peft_max_abs": plain_err, "fast_max_abs": fast_err}))
     assert fast_err <= 2 * plain_err
 
 
@@ -448,7 +555,7 @@ def test_half_precision_backward_error_is_within_twice_peft(dtype):
         model(input_ids=ids, labels=ids).loss.backward()
         got = _lora_grads(model)
         errors[name] = max((got[n].double() - want[n]).abs().max().item() for n in want)
-    print(json.dumps({"dtype": str(dtype), **errors}))
+    CONSOLE.print(json.dumps({"dtype": str(dtype), **errors}))
     assert errors["fast"] <= 2 * errors["peft"]
 
 

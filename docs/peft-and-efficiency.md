@@ -468,8 +468,12 @@ flag is on and none was. Off by default.
   the reason: any other task, backend, modality or quantization; `lora.r: 0`;
   `lora.use_dora`, `lora.use_vera`, `lora.target_parameters`; `lora.dropout`
   other than 0 (peft gives every projection its own dropout, so q/k/v and
-  gate/up would no longer share one input); and `training.use_liger`, which
-  replaces the MLP's forward too.
+  gate/up would no longer share one input); `training.use_liger`, which
+  replaces the MLP's forward too; `unfrozen_parameters` (Spectrum) and
+  `lisa_enabled`, which train the model's own weights and skip the LoRA setup;
+  and `quantization_aware: fp8`, whose converted projections the kernels would
+  read around. A model whose adapters the kernels cannot run (GPT-2's Conv1D
+  layout) is refused at setup, as if nothing had been patched.
 - **What is verified, on CPU:** float64 `gradcheck` of each kernel through the
   switch; float32 forward and backward parity with peft's modules; the same
   gradients with and without non-reentrant checkpointing; the base model's
