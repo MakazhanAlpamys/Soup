@@ -368,6 +368,40 @@ def _as_targets(entry: Any) -> Any:
     return entry if isinstance(entry, str) else list(entry)
 
 
+_LAYER_INDEX = re.compile(r"(?:^|\.)(?:layers|h)\.\d+(?:\.|$)")
+
+
+def find_layer_unscoped_targets(model: Any, target_modules: Any) -> list[str]:
+    """Names in a list ``target_modules`` that ``layers_to_transform`` drops.
+
+    peft applies ``layers_to_transform`` only to a LIST ``target_modules``,
+    and even then only to matches that sit inside a numbered decoder layer
+    (``...layers.N....`` / ``...h.N....``): a name that matches nothing else
+    just gets no adapter, with no error (#1432). ``embed_tokens`` and
+    ``lm_head`` are the common case, but any custom head is the same shape.
+
+    Returns every target whose matches in ``model.named_modules()`` are all
+    outside a numbered layer. A target that resolves to nothing in this
+    model is left alone (nothing here to silently drop); a target with at
+    least one in-layer match is left alone too. ``target_modules`` that is
+    not a list (a PEFT regex string, or ``None``) has nothing to check and
+    returns an empty list (the regex case is refused separately, because
+    peft does not layer-scope a regex at all).
+    """
+    if not isinstance(target_modules, list):
+        return []
+    module_names = [name for name, _ in model.named_modules() if name]
+    unscoped = []
+    for target in target_modules:
+        matches = [
+            name for name in module_names
+            if name == target or name.endswith(f".{target}")
+        ]
+        if matches and not any(_LAYER_INDEX.search(name) for name in matches):
+            unscoped.append(target)
+    return unscoped
+
+
 def resolve_lora_target_parameters(model: Any, configured: Any) -> Any:
     """Resolve opt-in raw-parameter LoRA targets for supported architectures.
 
@@ -394,6 +428,7 @@ def build_lora_config_kwargs(
     target_modules: Any,
     target_parameters: Any,
     task_type: Any,
+    layers_to_transform: Any = None,
 ) -> dict[str, Any]:
     """Build the shared PEFT LoRA kwargs used by every trainer path."""
     kwargs = {
@@ -407,6 +442,10 @@ def build_lora_config_kwargs(
         "use_dora": lora_cfg.use_dora,
         "use_rslora": lora_cfg.use_rslora,
     }
+    if layers_to_transform is not None:
+        # #1432: scopes the adapter to the layers freeze_model_layers left
+        # trainable. No layers_pattern needed, peft's default covers 'layers'/'h'.
+        kwargs["layers_to_transform"] = layers_to_transform
     rank_pattern = lora_cfg.rank_pattern
     alpha_pattern = lora_cfg.alpha_pattern
     if rank_pattern:
@@ -439,12 +478,16 @@ def build_peft_config_spec(
     target_modules: Any,
     task_type: Any,
     target_parameters: Any = None,
+    layers_to_transform: Any = None,
 ) -> dict[str, Any]:
     """Return the PEFT class name and kwargs for the configured adapter.
 
     VeRA is a distinct PEFT tuner, not a LoRA option. Keeping this branch next
     to the shared LoRA kwargs is what makes every trainer consume the same
     method choice instead of silently constructing ordinary LoRA.
+    ``VeraConfig`` does accept its own ``layers_to_transform``, but the caller
+    (``sft.py``) refuses ``use_vera`` combined with a freeze plan rather than
+    wiring it here, so ``layers_to_transform`` is LoRA-only in practice (#1432).
     """
     if getattr(lora_cfg, "use_vera", False):
         return {
@@ -464,6 +507,7 @@ def build_peft_config_spec(
             target_modules=target_modules,
             target_parameters=target_parameters,
             task_type=task_type,
+            layers_to_transform=layers_to_transform,
         ),
     }
 
@@ -514,12 +558,17 @@ def build_lora_config(
     target_modules: Any,
     task_type: Any,
     target_parameters: Any = None,
+    layers_to_transform: Any = None,
 ) -> Any:
     """Build the configured PEFT adapter through the single shared path.
 
     Keeping the PEFT import inside this function preserves Soup's lazy-import
     boundary while ensuring every trainer consumes new shared LoRA fields such
     as ``rank_pattern`` and ``alpha_pattern`` automatically.
+
+    ``layers_to_transform`` (#1432) restricts which decoder layers actually
+    get a LoRA adapter. Callers pass the layer indices freeze_model_layers
+    left trainable, so the adapter cannot silently re-train a frozen layer.
     """
     import peft
 
@@ -530,6 +579,7 @@ def build_lora_config(
         target_modules=target_modules,
         target_parameters=target_parameters,
         task_type=task_type,
+        layers_to_transform=layers_to_transform,
     )
     config_cls = getattr(peft, spec["peft_cls"])
     return config_cls(**spec["init_kwargs"])
