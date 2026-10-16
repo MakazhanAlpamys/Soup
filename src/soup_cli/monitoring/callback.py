@@ -660,10 +660,12 @@ class _SoupTrainerCallback_body:  # noqa: N801
                 try:
                     data = json.loads(hint_path.read_text(encoding="utf-8"))
                     if isinstance(data, dict) and "attempts" in data:
-                        attempts = max(0, int(data["attempts"]))
-                except (json.JSONDecodeError, ValueError, OSError):
+                        raw = data["attempts"]
+                        if isinstance(raw, (int, float, str)) and not isinstance(raw, bool):
+                            attempts = max(0, int(raw))
+                except (json.JSONDecodeError, ValueError, TypeError, OSError):
                     pass
-            recover = self._spike_strategy.should_recover(attempts + 1)
+            recover = self._spike_strategy.should_recover(attempts)
             hint_path.write_text(json.dumps({
                 "attempts": attempts + 1,
                 "max_attempts": self._spike_strategy.max_attempts,

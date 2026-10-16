@@ -284,12 +284,41 @@ class TestSpikeRecoveryHint:
         data = json.loads((tmp_path / "spike_recovery.json").read_text())
         assert data["attempts"] == 2
 
-    def test_attempts_persist_across_callback_instances(self, tmp_path, monkeypatch):
-        """Re-launch against existing output_dir increments attempts and caps at max_attempts."""
+    def test_fresh_cap_1_allows_one_recovery_and_refuses_second(self, tmp_path, monkeypatch):
+        """Cap 1 permits exactly one recovery (prior attempts=0), refusing the second."""
         monkeypatch.chdir(tmp_path)
         args = SimpleNamespace(learning_rate=1e-3, output_dir=str(tmp_path))
 
-        # Launch 1: hits spike
+        # Launch 1: fresh instance, prior count = 0 -> recovery permitted, attempts incremented to 1
+        cb1 = _make_callback(
+            tmp_path,
+            spike_recovery=True,
+            spike_recovery_max_attempts=1,
+            spike_recovery_lr_decay=0.5,
+        )
+        cb1._write_spike_recovery_hint(args, loss=10.0)
+        data1 = json.loads((tmp_path / "spike_recovery.json").read_text(encoding="utf-8"))
+        assert data1["attempts"] == 1
+        assert data1["should_recover"] is True, "First launch under cap 1 must permit recovery"
+
+        # Launch 2 (re-launch): new instance reads persisted count 1 -> budget exhausted
+        cb2 = _make_callback(
+            tmp_path,
+            spike_recovery=True,
+            spike_recovery_max_attempts=1,
+            spike_recovery_lr_decay=0.5,
+        )
+        cb2._write_spike_recovery_hint(args, loss=12.0)
+        data2 = json.loads((tmp_path / "spike_recovery.json").read_text(encoding="utf-8"))
+        assert data2["attempts"] == 2
+        assert data2["should_recover"] is False, "Second launch under cap 1 must refuse recovery"
+
+    def test_cap_2_two_allowed_attempts_across_new_instances(self, tmp_path, monkeypatch):
+        """Under cap 2, both attempt 1 and attempt 2 are permitted; attempt 3 is refused."""
+        monkeypatch.chdir(tmp_path)
+        args = SimpleNamespace(learning_rate=1e-3, output_dir=str(tmp_path))
+
+        # Launch 1: prior count = 0 -> permitted, persisted 1
         cb1 = _make_callback(
             tmp_path,
             spike_recovery=True,
@@ -299,9 +328,9 @@ class TestSpikeRecoveryHint:
         cb1._write_spike_recovery_hint(args, loss=10.0)
         data1 = json.loads((tmp_path / "spike_recovery.json").read_text(encoding="utf-8"))
         assert data1["attempts"] == 1
-        assert data1["should_recover"] is True
+        assert data1["should_recover"] is True, "First attempt under cap 2 must be permitted"
 
-        # Launch 2 (re-launch / resume): new callback instance hits spike again
+        # Launch 2: new instance reads persisted count 1 -> second attempt is permitted
         cb2 = _make_callback(
             tmp_path,
             spike_recovery=True,
@@ -311,9 +340,9 @@ class TestSpikeRecoveryHint:
         cb2._write_spike_recovery_hint(args, loss=12.0)
         data2 = json.loads((tmp_path / "spike_recovery.json").read_text(encoding="utf-8"))
         assert data2["attempts"] == 2
-        assert data2["should_recover"] is False
+        assert data2["should_recover"] is True, "Second attempt under cap 2 must be permitted"
 
-        # Launch 3: hits spike again, cap is strictly enforced
+        # Launch 3: new instance reads persisted count 2 -> budget exhausted, recovery refused
         cb3 = _make_callback(
             tmp_path,
             spike_recovery=True,
@@ -323,13 +352,26 @@ class TestSpikeRecoveryHint:
         cb3._write_spike_recovery_hint(args, loss=14.0)
         data3 = json.loads((tmp_path / "spike_recovery.json").read_text(encoding="utf-8"))
         assert data3["attempts"] == 3
-        assert data3["should_recover"] is False
+        assert data3["should_recover"] is False, "Third attempt under cap 2 must be refused"
 
-    def test_corrupt_hint_file_falls_back_gracefully(self, tmp_path, monkeypatch):
-        """Corrupt spike_recovery.json falls back safely without crashing."""
+    @pytest.mark.parametrize(
+        "bad_payload",
+        [
+            "corrupted non-json",
+            '{"attempts": null}',
+            '{"attempts": []}',
+            '{"attempts": {}}',
+            '{"attempts": "not_an_int"}',
+            '{"attempts": true}',
+        ],
+    )
+    def test_corrupt_and_malformed_hint_files_fall_back_gracefully(
+        self, tmp_path, monkeypatch, bad_payload
+    ):
+        """Malformed JSON or invalid attempt types fall back safely to 0 without crashing."""
         monkeypatch.chdir(tmp_path)
         args = SimpleNamespace(learning_rate=1e-3, output_dir=str(tmp_path))
-        (tmp_path / "spike_recovery.json").write_text("corrupted json content", encoding="utf-8")
+        (tmp_path / "spike_recovery.json").write_text(bad_payload, encoding="utf-8")
 
         cb = _make_callback(
             tmp_path,
@@ -342,6 +384,63 @@ class TestSpikeRecoveryHint:
         assert data["attempts"] == 1
         assert data["should_recover"] is True
 
+    def test_preserves_valid_positive_persisted_count(self, tmp_path, monkeypatch):
+        """Valid persisted count from prior launch is safely parsed and incremented."""
+        monkeypatch.chdir(tmp_path)
+        args = SimpleNamespace(learning_rate=1e-3, output_dir=str(tmp_path))
+        hint_path = tmp_path / "spike_recovery.json"
+        hint_path.write_text(json.dumps({"attempts": 2, "max_attempts": 3}), encoding="utf-8")
+
+        cb1 = _make_callback(
+            tmp_path,
+            spike_recovery=True,
+            spike_recovery_max_attempts=3,
+            spike_recovery_lr_decay=0.5,
+        )
+        cb1._write_spike_recovery_hint(args, loss=10.0)
+        data1 = json.loads(hint_path.read_text(encoding="utf-8"))
+        assert data1["attempts"] == 3
+        assert data1["should_recover"] is True, "Prior count 2 with cap 3 must allow 3rd attempt"
+
+        # Subsequent re-launch with prior count 3
+        cb2 = _make_callback(
+            tmp_path,
+            spike_recovery=True,
+            spike_recovery_max_attempts=3,
+            spike_recovery_lr_decay=0.5,
+        )
+        cb2._write_spike_recovery_hint(args, loss=12.0)
+        data2 = json.loads(hint_path.read_text(encoding="utf-8"))
+        assert data2["attempts"] == 4
+        assert data2["should_recover"] is False, "Prior count 3 with cap 3 must refuse recovery"
+
+    def test_watchdog_path_stops_training_with_bad_hints(self, tmp_path, monkeypatch):
+        """Watchdog path stops training safely without exception when hint file is malformed."""
+        monkeypatch.chdir(tmp_path)
+        hint_path = tmp_path / "spike_recovery.json"
+        hint_path.write_text('{"attempts": null}', encoding="utf-8")
+
+        cb = _make_callback(
+            tmp_path,
+            loss_watchdog=True,
+            loss_watchdog_threshold=5.0,
+            loss_watchdog_patience=1,
+            spike_recovery=True,
+            spike_recovery_max_attempts=2,
+            spike_recovery_lr_decay=0.5,
+        )
+        args = SimpleNamespace(learning_rate=1e-3, output_dir=str(tmp_path))
+        state = SimpleNamespace(global_step=1, epoch=1.0)
+        control = SimpleNamespace(should_training_stop=False)
+
+        cb.on_log(args, state, control, logs={"loss": 10.0})
+
+        assert control.should_training_stop is True, "Watchdog must stop training on loss spike"
+        assert cb._watchdog_fired is True
+        data = json.loads(hint_path.read_text(encoding="utf-8"))
+        assert data["attempts"] == 1
+        assert data["should_recover"] is True
+
     def test_disabled_when_strategy_not_set(self, tmp_path):
         cb = _make_callback(tmp_path, spike_recovery=False)
         args = SimpleNamespace(
@@ -350,24 +449,6 @@ class TestSpikeRecoveryHint:
         cb._write_spike_recovery_hint(args, loss=10.0)
         # No hint file written.
         assert not (tmp_path / "spike_recovery.json").exists()
-
-    def test_should_recover_false_at_max_attempts(self, tmp_path, monkeypatch):
-        """When attempts have hit max_attempts, should_recover must be False."""
-        monkeypatch.chdir(tmp_path)
-        cb = _make_callback(
-            tmp_path,
-            spike_recovery=True,
-            spike_recovery_max_attempts=2,
-            spike_recovery_lr_decay=0.5,
-        )
-        args = SimpleNamespace(
-            learning_rate=1e-3, output_dir=str(tmp_path),
-        )
-        # Bump internal counter to budget cap
-        cb._spike_recovery_attempts = 2
-        cb._write_spike_recovery_hint(args, loss=10.0)
-        data = json.loads((tmp_path / "spike_recovery.json").read_text())
-        assert data["should_recover"] is False
 
     def test_outside_cwd_skipped(self, tmp_path):
         """Containment guard: when output_dir is outside cwd, skip silently."""
