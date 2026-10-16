@@ -125,12 +125,12 @@ class TestTheDeadline:
 
 
 class TestStagedFieldsInventory:
-    """Validate inventory size and default handling across all 29 staged fields."""
+    """Validate inventory size and default handling across all 31 staged fields."""
 
-    def test_exactly_29_staged_fields_registered(self) -> None:
-        # 17 from #808 initial, 3 from #761, plus 9 Group B knobs from #808.
-        assert len(STAGED_FIELDS) == 29, (
-            f"Expected exactly 29 staged fields, got {len(STAGED_FIELDS)}"
+    def test_exactly_31_staged_fields_registered(self) -> None:
+        # 17 from #808 initial, 3 from #761, 9 Group B knobs and 2 RL checkpoint flags (#808).
+        assert len(STAGED_FIELDS) == 31, (
+            f"Expected exactly 31 staged fields, got {len(STAGED_FIELDS)}"
         )
 
     @pytest.mark.parametrize(
@@ -165,6 +165,8 @@ class TestStagedFieldsInventory:
             ("data", "resize_vocab", True),
             ("data", "extend_conversation", True),
             ("data", "skip_prepare_dataset", True),
+            ("training", "rl_checkpoint_include_ref_model", True),
+            ("training", "rl_checkpoint_include_rollout_buffer", True),
         ],
     )
     def test_each_staged_field_detected_when_non_default(
