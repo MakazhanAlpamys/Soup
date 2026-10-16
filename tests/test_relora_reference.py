@@ -40,21 +40,43 @@ WITH_A_REFERENCE = [
     ("ipo", _DPO_DATA, {}, "task='ipo'"),
     ("bco", _DPO_DATA, {}, "task='bco'"),
     ("kto", {"format": "kto"}, {}, "task='kto'"),
-    ("grpo", None, {}, "task='grpo' with grpo_beta="),
-    ("preference", _DPO_DATA, {"preference_loss": "dpo"}, "task='preference' with dpo"),
-    ("preference", _DPO_DATA, {"preference_loss": "ipo"}, "task='preference' with ipo"),
-    ("preference", _DPO_DATA, {"preference_loss": "bco"}, "task='preference' with bco"),
+    ("grpo", None, {}, "task='grpo', grpo_beta="),
+    (
+        "preference",
+        _DPO_DATA,
+        {"preference_loss": "dpo"},
+        "task='preference', preference_loss='dpo'",
+    ),
+    (
+        "preference",
+        _DPO_DATA,
+        {"preference_loss": "ipo"},
+        "task='preference', preference_loss='ipo'",
+    ),
+    (
+        "preference",
+        _DPO_DATA,
+        {"preference_loss": "bco"},
+        "task='preference', preference_loss='bco'",
+    ),
     (
         "preference",
         _DPO_DATA,
         {"preference_loss_weights": {"dpo": 0.7, "simpo": 0.3}},
-        "task='preference' with dpo",
+        "task='preference', preference_loss_weights with dpo",
     ),
     (
         "preference",
         _DPO_DATA,
         {"preference_loss_weights": {"simpo": 0.5, "ipo": 0.3, "dpo": 0.2}},
-        "task='preference' with dpo, ipo",
+        "task='preference', preference_loss_weights with dpo, ipo",
+    ),
+    (
+        "preference",
+        _DPO_DATA,
+        # Loads, and is refused only when it runs (bco beside a paired loss).
+        {"preference_loss_weights": {"bco": 0.6, "simpo": 0.4}},
+        "task='preference', preference_loss_weights with bco",
     ),
 ]
 
@@ -76,9 +98,17 @@ class TestTheRefusal:
     ):
         message = _refusal(task, data, **training)
 
-        assert f"training.relora_steps cannot be used with {named}" in message
+        assert f"training.relora_steps cannot be used here ({named}" in message
         assert "frozen reference" in message and "merges the trained adapter" in message
-        assert message.rstrip().endswith("Remove training.relora_steps.")
+        if "preference_loss_weights" in training:
+            # A blend has a second way out: drop the terms that need a reference.
+            terms = named.rsplit(" with ", 1)[1]
+            assert message.rstrip().endswith(
+                f"Remove training.relora_steps, or remove {terms} from "
+                "training.preference_loss_weights."
+            )
+        else:
+            assert message.rstrip().endswith("Remove training.relora_steps.")
 
     @pytest.mark.parametrize(("task", "data", "training", "named"), WITH_A_REFERENCE)
     def test_the_same_config_loads_without_relora(self, task, data, training, named):

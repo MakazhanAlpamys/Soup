@@ -1076,7 +1076,7 @@ class TestReLoRATaskGate:
     @pytest.mark.parametrize("task", ["dpo", "grpo", "kto", "ipo", "bco"])
     def test_tasks_with_a_frozen_reference_rejected(self, task):
         """#1835: a restart merges the adapter into the weights the frozen
-        reference is read from (``tests/test_issue1835_relora_reference.py``)."""
+        reference is read from (``tests/test_relora_reference.py``)."""
         import yaml
 
         from soup_cli.config.loader import load_config_from_string
