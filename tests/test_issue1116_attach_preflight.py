@@ -1216,13 +1216,12 @@ class TestTheAdvisoryGoesToStderr:
             "training:\n  lora:\n    r: 8\n    target_modules: auto\n",
             encoding="utf-8",
         )
-        # Ask this runner: Typer may use a vendored implementation whose API
-        # is independent of the installed standalone Click version.
-        import inspect
+        # Click < 8.2 mixes stderr into stdout unless told not to; 8.2 removed the
+        # parameter and always keeps them apart (cf. test_issue762's note).
+        import importlib.metadata as _md
 
-        supports_separate_stderr = "mix_stderr" in inspect.signature(CliRunner).parameters
-        kwargs = {"mix_stderr": False} if supports_separate_stderr else {}
-        runner = CliRunner(**kwargs)
+        click_version = tuple(int(x) for x in _md.version("click").split(".")[:2])
+        runner = CliRunner(mix_stderr=False) if click_version < (8, 2) else CliRunner()
         result = runner.invoke(app, ["recipes", "verify", "--config", str(path), "--json"])
 
         rows = _json.loads(result.stdout)
@@ -1333,7 +1332,7 @@ class TestTheLoadersWarningsLeaveJsonStdoutAlone:
     def test_json_stdout_parses_when_the_loader_warns(self, tmp_path, monkeypatch):
         """The config loader prints a deprecated value (#759) or a staged field (#808)
         as a warning on stdout. Under --json that line came before the document."""
-        import inspect
+        import importlib.metadata as _md
         import json as _json
 
         from transformers import LlamaConfig
@@ -1355,9 +1354,8 @@ class TestTheLoadersWarningsLeaveJsonStdoutAlone:
             "training:\n  lora:\n    r: 8\n    target_modules: [q_proj, v_proj]\n",
             encoding="utf-8",
         )
-        supports_separate_stderr = "mix_stderr" in inspect.signature(CliRunner).parameters
-        kwargs = {"mix_stderr": False} if supports_separate_stderr else {}
-        runner = CliRunner(**kwargs)
+        click_version = tuple(int(x) for x in _md.version("click").split(".")[:2])
+        runner = CliRunner(mix_stderr=False) if click_version < (8, 2) else CliRunner()
         result = runner.invoke(app, ["recipes", "verify", "--config", str(path), "--json"])
 
         assert result.exit_code == 0, (result.output, result.exception)

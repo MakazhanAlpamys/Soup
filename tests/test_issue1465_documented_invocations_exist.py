@@ -35,7 +35,6 @@ import typer
 
 from soup_cli.cli import app
 from soup_cli.recipes.catalog import RECIPES
-from soup_cli.utils.typer_compat import is_group, is_option
 
 _ROOT = Path(__file__).resolve().parents[1]
 _DOC_FILES = sorted((_ROOT / "docs").glob("*.md")) + [_ROOT / "README.md"]
@@ -66,7 +65,7 @@ def _cli() -> click.Group:
 def _options(cmd: click.Command) -> set[str]:
     opts: set[str] = {"--help"}
     for param in cmd.params:
-        if is_option(param):
+        if isinstance(param, click.Option):
             opts.update(o for o in param.opts if o.startswith("--"))
             opts.update(o for o in param.secondary_opts if o.startswith("--"))
     return opts
@@ -75,7 +74,7 @@ def _options(cmd: click.Command) -> set[str]:
 def _all_options(cmd: click.Command) -> set[str]:
     """Every --option anywhere in the tree (for recipe descriptions)."""
     found = _options(cmd)
-    if is_group(cmd):
+    if isinstance(cmd, click.Group):
         for sub in cmd.commands.values():
             found |= _all_options(sub)
     return found
@@ -139,7 +138,7 @@ def check_invocation(invocation: str, root: click.Group) -> str | None:
     tokens = _QUOTED.sub('""', _PREFIX.sub("", invocation.strip())).split()
     if not tokens or tokens[0] != "soup":
         return None
-    root_params = {o: p for p in root.params if is_option(p) for o in p.opts}
+    root_params = {o: p for p in root.params if isinstance(p, click.Option) for o in p.opts}
     i = 1
     # global options, only before the command; a valued one consumes its value
     while i < len(tokens) and tokens[i].startswith("-"):
@@ -151,7 +150,7 @@ def check_invocation(invocation: str, root: click.Group) -> str | None:
         if not param.is_flag and "=" not in tokens[i - 1]:
             i += 1
     cmd: click.Command = root
-    while is_group(cmd) and i < len(tokens):
+    while isinstance(cmd, click.Group) and i < len(tokens):
         name = tokens[i]
         if _NOTATION.search(name):
             if cmd is not root and _routes_a_default_subcommand(cmd):
@@ -165,7 +164,7 @@ def check_invocation(invocation: str, root: click.Group) -> str | None:
         i += 1
     rest = tokens[i:]
     flags = [m.group(0) for t in rest for m in [_FLAG.match(t.strip("[]"))] if m]
-    if is_group(cmd):
+    if isinstance(cmd, click.Group):
         if cmd is root:
             return f"no command {rest[0]!r}" if rest else None
         if not rest:
@@ -212,7 +211,7 @@ def check_invocation(invocation: str, root: click.Group) -> str | None:
 def _first_bare_token(rest: list[str], cmd: click.Command) -> str | None:
     """The first token of ``rest`` that is neither one of ``cmd``'s options nor the
     value a valued option consumes (bracketed ``[--output v.json]`` included)."""
-    params = {o: p for p in cmd.params if is_option(p) for o in p.opts}
+    params = {o: p for p in cmd.params if isinstance(p, click.Option) for o in p.opts}
     i = 0
     while i < len(rest):
         token = rest[i].strip("[]")

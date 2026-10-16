@@ -458,13 +458,14 @@ class TestShipDerivesQuantizationFromConfig:
         this file's sibling tests (test_v07139.py) already cover."""
         from pathlib import Path
 
+        from typer.testing import CliRunner
+
         from soup_cli.commands import ship as ship_cmd
         from soup_cli.utils.ship_verdict import (
             build_task_win,
             compute_benchmark_deltas,
             decide_ship,
         )
-        from tests.cli_runner import CliRunner
 
         captured = {}
 
@@ -487,13 +488,14 @@ class TestShipDerivesQuantizationFromConfig:
             assert captured["quantization"] == "4bit"
 
     def test_ship_cli_without_config_passes_none(self, monkeypatch):
+        from typer.testing import CliRunner
+
         from soup_cli.commands import ship as ship_cmd
         from soup_cli.utils.ship_verdict import (
             build_task_win,
             compute_benchmark_deltas,
             decide_ship,
         )
-        from tests.cli_runner import CliRunner
 
         captured = {}
 
@@ -520,8 +522,9 @@ class TestShipDerivesQuantizationFromConfig:
         import json
         from pathlib import Path
 
+        from typer.testing import CliRunner
+
         from soup_cli.commands import ship as ship_cmd
-        from tests.cli_runner import CliRunner
 
         captured = {}
 

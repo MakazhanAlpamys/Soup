@@ -7,7 +7,6 @@ import click
 import typer
 
 from soup_cli.cli import app
-from soup_cli.utils.typer_compat import is_argument, is_group
 
 
 def _visible_commands(
@@ -17,7 +16,7 @@ def _visible_commands(
     if getattr(command, "hidden", False):
         return
     yield path, command
-    if is_group(command):
+    if isinstance(command, click.Group):
         for name, child in command.commands.items():
             yield from _visible_commands(child, path + (name,))
 
@@ -26,7 +25,7 @@ def _parameter_help(command: click.Command, parameter: click.Parameter) -> str |
     """Return help from Click or the Typer declaration behind an argument."""
     if parameter.help:
         return parameter.help
-    if not is_argument(parameter) or command.callback is None:
+    if not isinstance(parameter, click.Argument) or command.callback is None:
         return parameter.help
 
     callback_parameter = inspect.signature(command.callback).parameters.get(

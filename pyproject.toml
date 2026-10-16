@@ -43,15 +43,12 @@ dependencies = [
     # job installs exactly this Typer floor and the Click floor below
     # (.github/constraints/transformers-floor.txt) and starts the CLI on them. Move a
     # floor and its pin together; that test file refuses one without the other.
-    # Both standalone-Click and vendored-Click Typer are exercised by the floor
-    # job and the main test matrix (#1803). 0.27.3 is the validated newest release;
-    # the next minor is a fresh compatibility boundary.
-    "typer>=0.15.4,<0.28",
+    "typer>=0.15.4,<0.21.0",
     # click 8.5.0 drops every positional-argument description from `--help`
-    # (its Argument.__init__ overwrites the help typer sets).
-    # Older supported Typer releases require standalone Click; newer ones vendor
-    # it. Keep the declaration and help bound while the floor uses standalone
-    # Click. `tests/test_click_argument_help.py` pins the bound.
+    # (its Argument.__init__ overwrites the help typer sets). Imported directly at
+    # run time by commands/autopilot.py, commands/push.py, commands/ship.py and
+    # utils/exit_codes.py (utils/argv_redaction.py names click for type checking
+    # only), so declared here. `tests/test_click_argument_help.py` pins the bound.
     "click>=8.0.0,<8.5",
     "rich>=13.0.0",
     "pydantic>=2.0.0",

@@ -20,6 +20,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from typer.testing import CliRunner
 
 from soup_cli.utils.ship_verdict import (
     NUMERICS_FAMILY_FULL,
@@ -34,7 +35,6 @@ from soup_cli.utils.ship_verdict import (
     verdict_to_dict,
     verdict_to_evidence,
 )
-from tests.cli_runner import CliRunner
 
 runner = CliRunner()
 

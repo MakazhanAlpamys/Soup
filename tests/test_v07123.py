@@ -26,8 +26,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-
-from tests.cli_runner import CliRunner
+from typer.testing import CliRunner
 
 _SRC = Path(__file__).resolve().parent.parent / "src" / "soup_cli"
 
