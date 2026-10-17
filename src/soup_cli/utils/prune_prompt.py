@@ -29,7 +29,7 @@ import os
 from dataclasses import dataclass
 from typing import Any, List, Optional, Sequence, Union
 
-from soup_cli.utils.paths import is_under_cwd
+from soup_cli.utils.paths import ensure_distinct_paths, is_under_cwd
 
 # DoS caps
 _MAX_SCAN_ROWS = 100_000
@@ -305,6 +305,11 @@ def prune_traces(
         raise ValueError(f"output_path {output_path!r} is outside cwd")
     if not os.path.isfile(input_path):
         raise FileNotFoundError(input_path)
+
+    ensure_distinct_paths(
+        [("--input", input_path)],
+        [("--output", output_path)],
+    )
 
     # Resolve the tokenizer up front (fails fast on a bad name even on an
     # empty input file) — None keeps the legacy character path.
