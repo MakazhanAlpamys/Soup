@@ -632,6 +632,7 @@ class _SoupTrainerCallback_body:  # noqa: N801
         Best-effort: errors are logged but never crash training.
         """
         import json
+        import math
         from pathlib import Path
 
         if self._spike_strategy is None:
@@ -661,9 +662,13 @@ class _SoupTrainerCallback_body:  # noqa: N801
                     data = json.loads(hint_path.read_text(encoding="utf-8"))
                     if isinstance(data, dict) and "attempts" in data:
                         raw = data["attempts"]
-                        if isinstance(raw, (int, float, str)) and not isinstance(raw, bool):
+                        if (
+                            isinstance(raw, (int, float, str))
+                            and not isinstance(raw, bool)
+                            and not (isinstance(raw, (int, float)) and not math.isfinite(raw))
+                        ):
                             attempts = max(0, int(raw))
-                except (json.JSONDecodeError, ValueError, TypeError, OSError):
+                except (json.JSONDecodeError, ValueError, TypeError, OverflowError, OSError):
                     pass
             recover = self._spike_strategy.should_recover(attempts)
             hint_path.write_text(json.dumps({

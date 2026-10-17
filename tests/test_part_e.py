@@ -363,6 +363,11 @@ class TestSpikeRecoveryHint:
             '{"attempts": {}}',
             '{"attempts": "not_an_int"}',
             '{"attempts": true}',
+            '{"attempts": 1e999}',
+            '{"attempts": -1e999}',
+            '{"attempts": Infinity}',
+            '{"attempts": -Infinity}',
+            '{"attempts": NaN}',
         ],
     )
     def test_corrupt_and_malformed_hint_files_fall_back_gracefully(
@@ -414,11 +419,25 @@ class TestSpikeRecoveryHint:
         assert data2["attempts"] == 4
         assert data2["should_recover"] is False, "Prior count 3 with cap 3 must refuse recovery"
 
-    def test_watchdog_path_stops_training_with_bad_hints(self, tmp_path, monkeypatch):
-        """Watchdog path stops training safely without exception when hint file is malformed."""
+    @pytest.mark.parametrize(
+        "bad_payload",
+        [
+            '{"attempts": null}',
+            '{"attempts": 1e999}',
+            '{"attempts": -1e999}',
+            '{"attempts": Infinity}',
+            '{"attempts": -Infinity}',
+            '{"attempts": NaN}',
+            '{"attempts": "not_an_int"}',
+        ],
+    )
+    def test_watchdog_path_stops_training_with_bad_hints(
+        self, tmp_path, monkeypatch, bad_payload
+    ):
+        """Watchdog path stops training safely when hint file is malformed or non-finite."""
         monkeypatch.chdir(tmp_path)
         hint_path = tmp_path / "spike_recovery.json"
-        hint_path.write_text('{"attempts": null}', encoding="utf-8")
+        hint_path.write_text(bad_payload, encoding="utf-8")
 
         cb = _make_callback(
             tmp_path,
