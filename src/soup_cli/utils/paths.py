@@ -213,13 +213,15 @@ def _same_file(first: str, second: str) -> bool:
 def ensure_distinct_paths(
     inputs: Iterable[tuple[str, str]],
     outputs: Iterable[tuple[str, str]],
+    *,
+    reject_nested: bool = False,
 ) -> None:
-    """Refuse, before anything is written, an output that is one of the inputs.
+    """Refuse outputs aliasing inputs, optionally including nested directories.
 
-    Items are ``(field, path)`` pairs such as ``("--logs", "traces.jsonl")``.
-    Paths match by ``normcase(realpath(...))`` (so ``./x``, ``..``, symlinks and a
-    Windows case variant are caught) or by ``os.path.samefile`` (a hard link).
-    Raises :exc:`ValueError` naming both options. Opens and creates nothing.
+    Items are (field, path) pairs. Identity uses normcase(realpath(...))
+    and samefile for existing paths, including hard links.
+    With reject_nested=True, neither path may contain the other.
+    Opens and creates nothing.
     """
     input_list = list(inputs)
     for out_field, out_path in outputs:
@@ -231,6 +233,19 @@ def ensure_distinct_paths(
                     f"{out_field} {quote_path(out_path)} is the same file as "
                     f"{in_field} {quote_path(in_path)}; choose a different {out_field}"
                 )
+
+            if reject_nested:
+                try:
+                    common = os.path.commonpath([in_identity, out_identity])
+                except ValueError:
+                    # Paths on different drives cannot contain each other.
+                    continue
+                if common in (in_identity, out_identity):
+                    raise ValueError(
+                        f"{out_field} {quote_path(out_path)} overlaps "
+                        f"{in_field} {quote_path(in_path)}; "
+                        "choose separate, non-nested output directories"
+                    )
 
 
 def atomic_write_text(
