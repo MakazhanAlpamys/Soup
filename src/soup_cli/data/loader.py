@@ -74,7 +74,11 @@ MAX_REMOTE_ROWS = 1_000_000
 def load_raw_data(
     path: Path, *, issues: list[str] | None = None, skip_non_object: bool = True,
 ) -> list[dict]:
-    """Load file rows, skipping non-objects unless a caller needs the original JSON rows."""
+    """Load file rows, skipping non-objects unless a caller needs the original JSON rows.
+
+    ``issues`` receives at most ``_MAX_REASON_SAMPLES`` messages per kind of skipped row.
+    Pass a ``SkippedRows`` to also get the exact number of skipped rows in ``.total``.
+    """
     if not path.exists():
         raise FileNotFoundError(f"Data file not found: {path}")
 

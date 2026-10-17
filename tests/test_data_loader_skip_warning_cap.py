@@ -171,3 +171,18 @@ def test_validate_counts_non_object_and_invalid_json_lines_together(tmp_path):
     skipped = (N + 4) + (N + 6)
     result = CliRunner().invoke(app, ["validate", str(path), "--format", "alpaca"])
     assert f"1/{1 + skipped} rows valid" in _plain(result.output), _plain(result.output)
+
+
+def test_validate_listing_shows_samples_of_both_kinds(tmp_path):
+    path = tmp_path / "both.jsonl"
+    _write_jsonl(
+        path,
+        [json.dumps(GOOD)] + [str(i) for i in range(N)] + ["{bad"] * (N + 2),
+    )
+    result = CliRunner().invoke(app, ["validate", str(path), "--format", "alpaca"])
+    out = _plain(result.output)
+    # the issue listing under "Issues found" keeps samples of both kinds
+    listing = out.split("Issues found", 1)[1]
+    assert listing.count("invalid JSON on line") == N, out
+    assert listing.count("not an object") == N, out
+    assert "... and 2 more" in listing, out

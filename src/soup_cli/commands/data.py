@@ -20,7 +20,7 @@ from soup_cli.data.loader import (
     load_raw_data,
     non_object_row_issue,
 )
-from soup_cli.data.validator import _MAX_REASON_SAMPLES, validate_and_stats
+from soup_cli.data.validator import validate_and_stats
 from soup_cli.utils.embed import DEFAULT_EMBED_MODEL, embed_texts
 from soup_cli.utils.exit_codes import EXIT_GATE_FAILED, EXIT_USAGE_ERROR, GateCommand
 from soup_cli.utils.paths import is_under_cwd
@@ -141,9 +141,11 @@ def validate(
     if not data and skipped:
         result["issues"] = [none_remain if i == "Dataset is empty" else i
                             for i in result["issues"]]
-    load_issue_samples = load_issues[:_MAX_REASON_SAMPLES]
-    if load_issues.total > _MAX_REASON_SAMPLES:
-        load_issue_samples.append(f"... and {load_issues.total - _MAX_REASON_SAMPLES} more")
+    # The loader keeps up to _MAX_REASON_SAMPLES messages per kind, so list them all
+    # and report the exact remainder.
+    load_issue_samples = list(load_issues)
+    if load_issues.total > len(load_issue_samples):
+        load_issue_samples.append(f"... and {load_issues.total - len(load_issue_samples)} more")
     result["issues"] = load_issue_samples + result["issues"]
 
     if result["issues"]:
