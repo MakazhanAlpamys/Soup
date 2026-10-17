@@ -219,6 +219,7 @@ class TestSFTUnslothIntegration:
                 lora_dropout=0.05,
                 target_modules="auto",
                 use_rslora=False,
+                use_gradient_checkpointing=False,  # #797: config false → resolved
             )
             assert wrapper.model is mock_model
             assert wrapper.tokenizer is mock_tokenizer

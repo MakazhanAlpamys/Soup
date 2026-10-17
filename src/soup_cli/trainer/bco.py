@@ -357,7 +357,13 @@ class BCOTrainerWrapper:
 
     def _setup_unsloth(self, cfg: SoupConfig, tcfg: "TrainingConfig") -> None:
         """Load model via unsloth FastLanguageModel."""
+        from soup_cli.utils import unsloth
         from soup_cli.utils.unsloth import load_model_and_tokenizer
+        # #797: resolve training.gradient_checkpointing for the Unsloth path
+        # (streaming layers already checkpoint every layer, so it stays off).
+        use_gradient_checkpointing = unsloth.resolve_unsloth_gradient_checkpointing(
+            tcfg.gradient_checkpointing, stream_layers=getattr(tcfg, "stream_layers", False)
+        )
 
         console.print(f"[dim]Loading model via [bold]unsloth[/]: {cfg.base}[/]")
         self.model, self.tokenizer = load_model_and_tokenizer(
@@ -369,6 +375,7 @@ class BCOTrainerWrapper:
             lora_dropout=tcfg.lora.dropout,
             target_modules=tcfg.lora.target_modules,
             use_rslora=tcfg.lora.use_rslora,
+            use_gradient_checkpointing=use_gradient_checkpointing,
         )
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
