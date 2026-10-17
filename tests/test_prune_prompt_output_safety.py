@@ -127,3 +127,143 @@ def test_prune_writes_distinct_output_without_changing_input(
     assert report.rows_total == 2
     assert report.rows_pruned == 2
     assert report.min_frequency == 1.0
+
+@pytest.mark.parametrize("token_aware", [False, True], ids=["char", "token"])
+@pytest.mark.parametrize(
+    "existing_output",
+    [False, True],
+    ids=["new-output", "existing-output"],
+)
+def test_prune_read_failure_does_not_publish_partial_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    token_aware: bool,
+    existing_output: bool,
+) -> None:
+    import builtins
+    from contextlib import contextmanager
+
+    from soup_cli.utils import prune_prompt
+
+    monkeypatch.chdir(tmp_path)
+    source = Path("traces.jsonl")
+    destination = Path("pruned.jsonl")
+    original_input = (
+        b'{"prompt": "SYSTEM alpha", "output": "one"}\n'
+        b'{"prompt": "SYSTEM beta", "output": "two"}\n'
+    )
+    original_output = b"Previous successful output\n"
+    source.write_bytes(original_input)
+    if existing_output:
+        destination.write_bytes(original_output)
+
+    expected_files = {path.name for path in tmp_path.iterdir()}
+    real_open = builtins.open
+    source_reads = 0
+
+    def interrupted_lines(handle):
+        yield next(handle)
+        raise OSError("Simulated failure during second input pass")
+
+    @contextmanager
+    def open_with_read_failure(file, mode="r", *args, **kwargs):
+        nonlocal source_reads
+        with real_open(file, mode, *args, **kwargs) as handle:
+            if Path(file).resolve() == source.resolve() and mode == "r":
+                source_reads += 1
+                if source_reads == 2:
+                    yield interrupted_lines(handle)
+                    return
+            yield handle
+
+    monkeypatch.setattr(
+        prune_prompt,
+        "open",
+        open_with_read_failure,
+        raising=False,
+    )
+
+    with pytest.raises(
+        OSError,
+        match="Simulated failure during second input pass",
+    ):
+        prune_prompt.prune_traces(
+            str(source),
+            output_path=str(destination),
+            min_frequency=1.0,
+            tokenizer=CharacterTokenizer() if token_aware else None,
+        )
+
+    assert source_reads == 2
+    assert source.read_bytes() == original_input
+    if existing_output:
+        assert destination.read_bytes() == original_output
+    else:
+        assert not destination.exists()
+    assert {path.name for path in tmp_path.iterdir()} == expected_files
+
+@pytest.mark.parametrize("token_aware", [False, True], ids=["char", "token"])
+@pytest.mark.parametrize(
+    "existing_output",
+    [False, True],
+    ids=["new-output", "existing-output"],
+)
+def test_prune_replace_failure_preserves_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    token_aware: bool,
+    existing_output: bool,
+) -> None:
+    from soup_cli.utils import paths
+
+    monkeypatch.chdir(tmp_path)
+    source = Path("traces.jsonl")
+    destination = Path("pruned.jsonl")
+    original_input = (
+        b'{"prompt": "SYSTEM alpha", "output": "one"}\n'
+        b'{"prompt": "SYSTEM beta", "output": "two"}\n'
+    )
+    original_output = b"Previous successful output\n"
+    source.write_bytes(original_input)
+    if existing_output:
+        destination.write_bytes(original_output)
+
+    expected_files = {path.name for path in tmp_path.iterdir()}
+    replace_calls = []
+
+    def fail_replace(src, dst):
+        staged = Path(src)
+        replace_calls.append((staged, Path(dst)))
+        assert staged.resolve() != destination.resolve()
+        assert staged.parent.resolve() == destination.parent.resolve()
+        rows = [
+            json.loads(line)
+            for line in staged.read_text(encoding="utf-8").splitlines()
+        ]
+        assert rows == [
+            {"prompt": "alpha", "output": "one"},
+            {"prompt": "beta", "output": "two"},
+        ]
+        assert Path(dst).resolve() == destination.resolve()
+        raise OSError("Simulated output replacement failure")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(paths.os, "replace", fail_replace)
+        with pytest.raises(
+            OSError,
+            match="Simulated output replacement failure",
+        ):
+            prune_traces(
+                str(source),
+                output_path=str(destination),
+                min_frequency=1.0,
+                tokenizer=CharacterTokenizer() if token_aware else None,
+            )
+
+    assert len(replace_calls) == 1
+    assert source.read_bytes() == original_input
+    if existing_output:
+        assert destination.read_bytes() == original_output
+    else:
+        assert not destination.exists()
+    assert {path.name for path in tmp_path.iterdir()} == expected_files
