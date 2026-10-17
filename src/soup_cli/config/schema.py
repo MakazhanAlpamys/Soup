@@ -7027,26 +7027,10 @@ class SoupConfig(BaseModel):
                 "VeRA's shared projections are built from the materialised "
                 "base weights, which streaming keeps on the meta device."
             )
-        # #1012 follow-up: the forward pass for a LoRA target on the streamed
-        # large-layer boundary modules (lm_head / embed_tokens) is correct
-        # (#1019), and a save -> load_adapter round trip now preserves the
-        # adapter's tensors (#1048), but save_pretrained() still raises
-        # trying to copy a meta tensor. Refuse by name at parse time rather
-        # than let a run train for hours and die at its first save_steps.
-        target_modules = tcfg.lora.target_modules
-        named_targets = (
-            {target_modules} if isinstance(target_modules, str) else set(target_modules)
-        )
-        head_targets = sorted(named_targets & {"lm_head", "embed_tokens"})
-        if head_targets:
-            raise ValueError(
-                "training.stream_layers does not yet support a LoRA target on "
-                f"{', '.join(head_targets)}: the forward pass is correct, but "
-                "saving or resuming an adapter that targets the streamed "
-                "head/embedding boundary is not supported yet. Drop "
-                f"{', '.join(head_targets)} from training.lora.target_modules, "
-                "or train without stream_layers."
-            )
+        # A LoRA target on the streamed embedding or head (#1012) is refused by
+        # build_streamed_model() after get_peft_model() (#1048): whether the
+        # checkpoint streams them (untied) and which modules a target_modules
+        # spelling matches are not known here.
         if tcfg.moe_expert_quant is not None:
             raise ValueError(
                 "training.stream_layers is incompatible with "
