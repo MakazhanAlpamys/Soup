@@ -120,7 +120,7 @@ def validate(
     # #1887: every row the loader skipped (not an object, or not JSON) is an
     # invalid row for the N/M line, for --min-valid-fraction and for the exit
     # code. The statistics below still describe the retained objects.
-    skipped = len(load_issues)
+    skipped = load_issues.total
     none_remain = f"no object rows remain: {skipped} row(s) skipped (listed above)"
 
     # Auto-detect format if not specified

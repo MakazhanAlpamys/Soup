@@ -77,7 +77,9 @@ def test_each_kind_gets_its_own_cap_and_summary(tmp_path, capsys):
     assert len(_bad_json_warnings(out)) == N
     assert _plain(out).count("... and 2 more lines skipped (JSON values") == 1
     assert _plain(out).count("... and 2 more lines skipped (invalid JSON)") == 1
-    assert issues.total == N + 2
+    # every skipped row, of either kind, is counted (#1887) and 2 * N samples are kept
+    assert issues.total == 2 * (N + 2)
+    assert len(issues) == 2 * N
 
 
 @pytest.mark.parametrize("junk", [N - 1, N])
@@ -135,3 +137,37 @@ def test_large_junk_file_is_bounded(tmp_path, capsys):
     assert len(_non_object_warnings(out)) == N
     assert issues.total == 20000
     assert len(issues) == N
+
+
+@pytest.mark.parametrize("extension", ["jsonl", "json"])
+def test_validate_counts_every_skipped_row_not_just_the_sampled_ones(tmp_path, extension):
+    # #1887 counts skipped rows as invalid rows; with the warnings capped, the count
+    # must come from the exact total, not from the few retained samples.
+    junk = N + 17
+    path = tmp_path / f"data.{extension}"
+    rows = [GOOD, {**GOOD, "instruction": "Another sufficiently long question"}]
+    if extension == "jsonl":
+        _write_jsonl(path, [json.dumps(r) for r in rows] + [str(i) for i in range(junk)])
+    else:
+        path.write_text(json.dumps(rows + list(range(junk))), encoding="utf-8")
+    total = 2 + junk
+
+    result = CliRunner().invoke(app, ["validate", str(path), "--format", "alpaca"])
+    out = _plain(result.output)
+    assert f"2/{total} rows valid" in out, out
+
+    gated = CliRunner().invoke(
+        app, ["validate", str(path), "--format", "alpaca", "--min-valid-fraction", "0.5"],
+    )
+    assert gated.exit_code == 2, _plain(gated.output)
+
+
+def test_validate_counts_non_object_and_invalid_json_lines_together(tmp_path):
+    path = tmp_path / "mixed.jsonl"
+    _write_jsonl(
+        path,
+        [json.dumps(GOOD)] + [str(i) for i in range(N + 4)] + ["{bad"] * (N + 6),
+    )
+    skipped = (N + 4) + (N + 6)
+    result = CliRunner().invoke(app, ["validate", str(path), "--format", "alpaca"])
+    assert f"1/{1 + skipped} rows valid" in _plain(result.output), _plain(result.output)
