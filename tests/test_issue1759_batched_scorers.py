@@ -103,6 +103,40 @@ def test_real_cpu_greedy_batch_matches_scalar(arch, batch_size):
     assert tokenizer.padding_side == "right"
 
 
+@pytest.mark.parametrize("arch", ["gpt2", "llama"])
+@pytest.mark.parametrize("batch_size", [1, 2])
+def test_saved_multiple_return_config_preserves_scalar_results(arch, batch_size, tmp_path):
+    torch = pytest.importorskip("torch")
+    transformers = pytest.importorskip("transformers")
+    from soup_cli.utils.live_eval import make_generator
+    from tests._tiny_hf_models import build_gpt2, build_llama
+
+    torch.manual_seed(1759)
+    tokenizer = tiny_tokenizer()
+    model = (build_gpt2 if arch == "gpt2" else build_llama)(tokenizer).eval()
+    model.generation_config.num_beams = 2
+    model.generation_config.num_return_sequences = 2
+    model.generation_config.save_pretrained(tmp_path)
+    model.generation_config = transformers.GenerationConfig.from_pretrained(
+        tmp_path, local_files_only=True
+    )
+    saved_config = model.generation_config.to_dict()
+    assert saved_config["num_beams"] == saved_config["num_return_sequences"] == 2
+    gen = make_generator(
+        "unused", loaded=(model, tokenizer, "cpu"), max_new_tokens=4, batch_size=batch_size
+    )
+    prompts = ["hi", "hello world", "the quick brown fox jumps"]
+    expected = [gen(prompt) for prompt in prompts]
+    outputs = gen.batch(prompts)
+    assert len(outputs) == len(prompts)
+    assert outputs == expected
+    tasks = [EvalTask(prompt, answer) for prompt, answer in zip(prompts, expected)]
+    scalar_result = run_eval("unused", tasks, lambda prompt: gen(prompt))
+    assert scalar_result.accuracy == 1
+    assert run_eval("unused", tasks, gen) == scalar_result
+    assert model.generation_config.to_dict() == saved_config
+
+
 def tiny_tokenizer():
     from tokenizers import Tokenizer, models, pre_tokenizers
     from transformers import PreTrainedTokenizerFast

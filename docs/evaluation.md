@@ -492,7 +492,9 @@ including when an empty response would otherwise match or count as non-refusal.
 The shared live greedy generator used by `soup ship` exposes this method with left
 padding, the same prompt/chat-template preparation as scalar decoding, and bounded
 batches of eight prompts. Python callers can set `make_generator(..., batch_size=1)`
-or another positive size. Successful outputs retain the same scores and the default
+or another positive size. Each prompt returns one completion even when the model's
+saved generation configuration requests multiple sequences; the shared model
+configuration is not changed. Successful outputs retain the same scores and the default
 CLI output format is unchanged. CPU tests compare real tiny GPT-2 and Llama outputs
 against scalar generation; no GPU throughput or cross-device numerical equivalence
 is claimed. Scorer revision 6 marks the corrected generation-failure handling, so

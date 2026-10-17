@@ -354,7 +354,7 @@ def make_generator(
             with torch.no_grad():
                 generated = model.generate(
                     **inputs, max_new_tokens=max_new_tokens,
-                    do_sample=False, pad_token_id=pad_id,
+                    do_sample=False, num_return_sequences=1, pad_token_id=pad_id,
                 )
             outputs.extend(
                 tokenizer.decode(row[width:], skip_special_tokens=True) for row in generated
