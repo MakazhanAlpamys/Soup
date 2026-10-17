@@ -679,11 +679,11 @@ where a key is absent (#1807):
 JSONL dataset rows must be objects; JSON dataset files must contain an array of
 objects. Non-object rows are skipped with a warning naming the physical JSONL
 line or JSON array row. `soup data validate` lists these warnings as issues (the
-first three, then `... and N more`), and every skipped row, whether not an object
+first three of each kind, then `... and N more`), and every skipped row, whether not an object
 or not valid JSON, counts as an invalid row in its `N/M rows valid` line, in
 `--min-valid-fraction` and in the exit code; its other statistics describe the
 retained objects. `soup data review` applies the
-same object check before displaying a pair. Rejected row contents are not printed. `soup data canary insert` retains its first-row refusal and preserves later rows when rewriting the file.
+same object check before displaying a pair. Rejected row contents are not printed. The loader likewise prints only the first three warnings per kind (non-object rows, invalid-JSON lines), then one `... and N more` line. `soup data canary insert` retains its first-row refusal and preserves later rows when rewriting the file.
 
 Soup supports these formats (auto-detected). Files can be JSONL, JSON, CSV, Parquet, or TXT.
 
