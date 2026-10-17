@@ -21,6 +21,7 @@ from soup_cli.utils.layer_stream_runtime import (  # noqa: E402
     RamSource,
     StreamRuntime,
     _build_source,
+    _say_page_cache_roots,
 )
 from tests.conftest import strip_ansi  # noqa: E402
 
@@ -312,12 +313,10 @@ def test_direct_io_is_decided_per_drive(tmp_path, monkeypatch):
 
 def test_build_source_reports_each_drive_mode_and_page_cache_reason(tmp_path, monkeypatch):
     """The console and runtime stats expose the same per-drive decision."""
-    real = mod.open_direct
-
     def refuse_root1(path):
         if Path(path).parent.name == "root1":
             raise OSError("no direct I/O on this volume")
-        return real(path)
+        return open(path, "rb", buffering=0)
 
     monkeypatch.setattr(mod, "open_direct", refuse_root1)
     shard_dir, paths, roots = _striped_shards(tmp_path)
@@ -356,6 +355,26 @@ def test_build_source_reports_each_drive_mode_and_page_cache_reason(tmp_path, mo
         assert "no direct I/O on this volume" in said
     finally:
         source.close()
+
+
+def test_page_cache_warning_sanitizes_external_root_and_reason():
+    output = io.StringIO()
+    source = type(
+        "Source",
+        (),
+        {"page_cache_reasons": {"[/]root\x1b": "[bold]refused[/]\x07"}},
+    )()
+
+    _say_page_cache_roots(
+        source,
+        Console(file=output, width=200, color_system=None),
+    )
+
+    said = strip_ansi(output.getvalue())
+    assert "[/]root" in said
+    assert "[bold]refused[/]" in said
+    assert "\x1b" not in said
+    assert "\x07" not in said
 
 
 def test_submit_calls_on_done_once_per_job_after_its_outcome_is_set():

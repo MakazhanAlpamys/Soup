@@ -3465,10 +3465,13 @@ def _say_page_cache_roots(source: Any, console: Any) -> None:
     """Name each drive whose operating system refused direct I/O (#1615)."""
     if console is None:
         return
+    from soup_cli.utils.terminal import for_terminal
+
     for root, reason in getattr(source, "page_cache_reasons", {}).items():
         console.print(
             "[yellow]Layer streaming reads "
-            f"{root} through the page cache: direct I/O is unavailable there ({reason}).[/]"
+            f"{for_terminal(root)} through the page cache: direct I/O is unavailable there "
+            f"({for_terminal(reason)}).[/]"
         )
 
 
