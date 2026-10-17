@@ -1,0 +1,1241 @@
+"""PPO (Proximal Policy Optimization) trainer — wraps trl.PPOTrainer.
+
+PPO is the classic RLHF alignment method: generate completions, score them
+with a reward model (or reward function), then optimize the policy using
+clipped surrogate objectives with a KL penalty against a frozen reference model.
+
+Full RLHF pipeline:  SFT → Reward Model → PPO
+"""
+
+import math
+import os
+import time
+from pathlib import Path
+from typing import Any, Mapping, Optional
+
+from rich.console import Console
+from rich.markup import escape
+
+from soup_cli.config.schema import SoupConfig
+from soup_cli.data.chat_templates import apply_chat_template_override
+from soup_cli.trainer.loss_summary import summarize_training_loss
+from soup_cli.utils.gpu import (
+    bf16_fp16_flags,
+    estimate_batch_size,
+    model_size_from_name,
+    resolve_device_map,
+    resolve_frozen_base_load_dtype,
+)
+from soup_cli.utils.mixed_precision import align_trainable_dtype_for_fp16
+from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
+
+console = Console()
+
+
+def _set_ppo_training_kwargs(
+    ppo_kwargs: dict[str, object],
+    ppo_config_cls: type,
+    tcfg: Any,
+    *,
+    total_steps: int | None = None,
+    device: str = "cpu",
+) -> dict[str, str]:
+    """Forward Soup's three PPO schedules across TRL parameter renames."""
+    from soup_cli.trainer._trl_compat import config_accepts, kl_penalty_kwargs
+
+    applied: dict[str, str] = {}
+
+    if config_accepts(ppo_config_cls, "num_train_epochs"):
+        ppo_kwargs["num_train_epochs"] = tcfg.epochs
+        applied["train_epochs"] = "num_train_epochs"
+
+    if config_accepts(ppo_config_cls, "num_ppo_epochs"):
+        ppo_kwargs["num_ppo_epochs"] = tcfg.ppo_epochs
+        applied["ppo_epochs"] = "num_ppo_epochs"
+    elif config_accepts(ppo_config_cls, "ppo_epochs"):
+        ppo_kwargs["ppo_epochs"] = tcfg.ppo_epochs
+        applied["ppo_epochs"] = "ppo_epochs"
+
+    kl_kwargs = kl_penalty_kwargs(ppo_config_cls, tcfg.ppo_kl_penalty)
+    ppo_kwargs.update(kl_kwargs)
+    for name in kl_kwargs:
+        applied["kl_coef"] = name
+
+    if total_steps is not None:
+        from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
+
+        use_bf16, use_fp16 = bf16_fp16_flags(device)
+        training_kwargs = {
+            "warmup_steps": int(total_steps * tcfg.warmup_ratio),
+            "weight_decay": tcfg.weight_decay,
+            "max_grad_norm": tcfg.max_grad_norm,
+            "optim": tcfg.optimizer,
+            "lr_scheduler_type": tcfg.scheduler,
+            "logging_steps": tcfg.logging_steps,
+            "save_steps": tcfg.save_steps,
+            "bf16": use_bf16,
+            "fp16": use_fp16,
+            "gradient_checkpointing": should_enable_hf_gradient_checkpointing(
+                tcfg.gradient_checkpointing, stream_layers=tcfg.stream_layers
+            ),
+        }
+        for name, value in training_kwargs.items():
+            if config_accepts(ppo_config_cls, name):
+                ppo_kwargs[name] = value
+
+    return applied
+
+
+def _effective_ppo_setting(
+    config: object,
+    kwargs: Mapping[str, object],
+    field: str | None,
+    fallback: object,
+) -> object:
+    """Read the constructed config value, with compatibility fallbacks."""
+    if field is None:
+        return f"{fallback} (not forwarded)"
+    return getattr(config, field, kwargs[field])
+
+
+def _unsupported_rl_flags(tcfg) -> list[str]:
+    """The RL-signal flags PPO cannot feed on the experimental trl API (#1441)."""
+    flags = []
+    if getattr(tcfg, "reward_hack_detector", None) is not None:
+        flags.append("reward_hack_detector")
+    if getattr(tcfg, "echo_trap_enabled", False):
+        flags.append("echo_trap_enabled")
+    if getattr(tcfg, "reward_hack_mitigation", "off") != "off":
+        flags.append("reward_hack_mitigation")
+    return flags
+
+
+def refuse_unfed_rl_flags(tcfg, *, is_experimental: bool) -> None:
+    """Refuse RL-signal flags PPO cannot feed, before anything is loaded.
+
+    #1441: the experimental ``PPOTrainer`` takes no ``reward_funcs`` — its
+    reward comes from the reward model it calls internally — so the wrappers
+    built at :282-299 were dropped on the floor. The buffer was still created,
+    and because the buffer object existed, the detector's ``on_log`` fallback
+    returned early, so nothing was ever written *and* nothing was ever read from
+    trl's logs. A run with a detector, a mitigation mode or the echo trap was
+    announced, loaded and inert.
+
+    Refusing beats a dead callback: the run stops before the model load, and the
+    message names every flag that was set.
+    """
+    if not is_experimental:
+        return
+    flags = _unsupported_rl_flags(tcfg)
+    if not flags:
+        return
+    raise ValueError(
+        f"task: ppo cannot use {', '.join(flags)}: this trl's experimental "
+        "PPOTrainer takes no reward functions, so the reward/completion signal "
+        "these callbacks read is never captured. They are wired on GRPO only. "
+        "Remove the flag(s), or run task: grpo where the signal buffer is fed."
+    )
+
+
+class PPOTrainerWrapper:
+    """High-level wrapper for PPO training from SoupConfig.
+
+    PPO generates completions for each prompt, scores them with a reward model
+    or reward function, and optimizes using proximal policy optimization with
+    a KL penalty against a frozen reference model.
+
+    Supports two reward sources:
+      - reward_model: path/HF ID of a trained reward model (AutoModelForSequenceClassification)
+      - reward_fn: callable reward function (same as GRPO — 'accuracy', 'format', or custom .py)
+
+    At least one of reward_model or reward_fn must be specified.
+    """
+
+    def __init__(
+        self,
+        config: SoupConfig,
+        device: str = "cuda",
+        report_to: str = "none",
+        deepspeed_config: Optional[str] = None,
+        fsdp_config: Optional[dict] = None,
+        trust_remote_code: bool = False,
+    ):
+        self.config = config
+        self.device = device
+        self.report_to = report_to
+        self.deepspeed_config = deepspeed_config
+        self.fsdp_config = fsdp_config
+        self.trust_remote_code = trust_remote_code
+        from soup_cli.utils.trust_remote import (
+            model_requires_trust_remote_code,
+            resolve_trust_remote_code,
+        )
+
+        requires = model_requires_trust_remote_code(config.base) or False
+        self._trust_remote_code = resolve_trust_remote_code(
+            config.base,
+            requested=trust_remote_code,
+            console=console,
+            requires_remote_code=requires,
+        )
+        self.model = None
+        self.tokenizer = None
+        self.trainer = None
+        self.reward_model_instance = None
+        self.reward_fn = None
+
+    def setup(self, dataset: dict):
+        """Load model, tokenizer, reward model/fn, apply LoRA, create PPO trainer."""
+        # Import PPOTrainer/PPOConfig — trl >=0.28 moved to trl.experimental
+        ppo_trainer_cls, ppo_config_cls, is_experimental = _import_ppo_classes()
+
+        # Enable Rich progress bar for HuggingFace downloads
+        from soup_cli.trainer.sft import _enable_hf_transfer_progress
+
+        _enable_hf_transfer_progress()
+
+        cfg = self.config
+        tcfg = cfg.training
+
+        # #1441 — refuse before anything is loaded, including `datasets` and the
+        # model. These callbacks read a signal buffer the experimental
+        # PPOTrainer leaves empty, so a run with them is announced and inert.
+        refuse_unfed_rl_flags(tcfg, is_experimental=is_experimental)
+
+        # Deferred below the refusal: a config that cannot run at all should say
+        # which flag stopped it, not fail on an unrelated import first.
+        from datasets import Dataset
+
+        # #353: seed before the model and any adapter are built.
+        apply_training_seed(tcfg)
+
+        use_unsloth = cfg.backend == "unsloth"
+
+        # --- Batch size ---
+        batch_size = tcfg.batch_size
+        if batch_size == "auto":
+            from soup_cli.utils.gpu import get_gpu_info
+
+            gpu_info = get_gpu_info()
+            model_size = model_size_from_name(cfg.base)
+            batch_size = estimate_batch_size(
+                model_params_b=model_size,
+                seq_length=cfg.data.max_length,
+                gpu_memory_bytes=gpu_info["memory_total_bytes"],
+                quantization=tcfg.quantization,
+                lora_r=tcfg.lora.r,
+            )
+            # PPO needs memory for policy + ref model + reward model → conservative
+            batch_size = max(1, batch_size // 4)
+            console.print(f"[green]Auto batch size (PPO):[/] {batch_size}")
+
+        # #1391: a train set smaller than one rollout batch never reaches a
+        # step. _prepare_ppo_dataset turns every row into exactly one prompt,
+        # so the count is known before any model is loaded.
+        if is_experimental:
+            _check_one_rollout_batch(
+                len(dataset["train"]), batch_size, tcfg.gradient_accumulation_steps
+            )
+
+        # --- Load reward source ---
+        self._setup_reward(cfg, tcfg)
+
+        if use_unsloth:
+            self._setup_unsloth(cfg, tcfg)
+        else:
+            self._setup_transformers(cfg, tcfg)
+
+        apply_chat_template_override(
+            self.tokenizer, cfg.data.chat_template, console=console
+        )
+
+        trainable, total = self.model.get_nb_trainable_parameters()
+        pct = 100 * trainable / total
+        console.print(
+            f"[green]LoRA applied:[/] {trainable:,} trainable"
+            f" / {total:,} total ({pct:.2f}%)"
+        )
+
+        # --- Dataset ---
+        train_data = _prepare_ppo_dataset(dataset["train"], tokenizer=self.tokenizer)
+        train_ds = Dataset.from_list(train_data)
+
+        # Tokenize dataset: trl experimental PPOTrainer expects input_ids,
+        # not raw text. Add input_ids/attention_mask from prompt_text.
+        max_len = cfg.data.max_length
+
+        def _tokenize_ppo(examples):
+            return self.tokenizer(
+                examples["prompt_text"],
+                truncation=True,
+                max_length=max_len,
+                padding=False,
+            )
+
+        train_ds = train_ds.map(_tokenize_ppo, batched=True)
+        # #1391: trl's PPOTrainer pads every column with DataCollatorWithPadding and
+        # never drops unused ones, so the prompt_text strings crash the collator.
+        # The manual (trl<0.28) loop below still reads prompt_text from _train_ds.
+        trl_train_ds = train_ds.select_columns(["input_ids", "attention_mask"])
+
+        # --- Output dir ---
+        output_dir = Path(cfg.output)
+        if cfg.experiment_name:
+            output_dir = output_dir / cfg.experiment_name
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        # --- PPO config ---
+        # Build kwargs, handling trl version differences
+        import inspect
+
+        ppo_kwargs = {
+            "output_dir": str(output_dir),
+            "per_device_train_batch_size": batch_size,
+            "gradient_accumulation_steps": tcfg.gradient_accumulation_steps,
+            "learning_rate": tcfg.lr,
+            **training_seed_kwargs(tcfg),
+        }
+
+        # FSDP2 — alternative to DeepSpeed
+        if self.fsdp_config:
+            ppo_kwargs.update(self.fsdp_config)
+
+        ppo_params = inspect.signature(ppo_config_cls).parameters
+
+        total_steps = math.ceil(
+            len(train_ds) / batch_size / tcfg.gradient_accumulation_steps
+        ) * tcfg.epochs
+        applied_ppo_fields = _set_ppo_training_kwargs(
+            ppo_kwargs, ppo_config_cls, tcfg,
+            total_steps=total_steps, device=self.device,
+        )
+
+        if "cliprange" in ppo_params:
+            ppo_kwargs["cliprange"] = tcfg.ppo_clip_ratio
+
+        # Optional params that may not exist in all trl versions
+        if "log_with" in ppo_params:
+            ppo_kwargs["log_with"] = (
+                self.report_to if self.report_to != "none" else None
+            )
+        elif "report_to" in ppo_params:
+            ppo_kwargs["report_to"] = self.report_to
+
+        if "optimize_cuda_cache" in ppo_params:
+            ppo_kwargs["optimize_cuda_cache"] = self.device == "cuda"
+
+        # CPU support: trl PPOConfig requires use_cpu=True when no CUDA
+        if self.device == "cpu" and "use_cpu" in ppo_params:
+            ppo_kwargs["use_cpu"] = True
+
+        ppo_config = ppo_config_cls(**ppo_kwargs)
+        effective_train_epochs = _effective_ppo_setting(
+            ppo_config,
+            ppo_kwargs,
+            applied_ppo_fields.get("train_epochs"),
+            tcfg.epochs,
+        )
+        effective_ppo_epochs = _effective_ppo_setting(
+            ppo_config,
+            ppo_kwargs,
+            applied_ppo_fields.get("ppo_epochs"),
+            tcfg.ppo_epochs,
+        )
+        effective_kl_coef = _effective_ppo_setting(
+            ppo_config,
+            ppo_kwargs,
+            applied_ppo_fields.get("kl_coef"),
+            tcfg.ppo_kl_penalty,
+        )
+        console.print(
+            "[green]PPO schedule:[/] "
+            f"train epochs={effective_train_epochs}, "
+            f"PPO epochs={effective_ppo_epochs}, "
+            f"KL coefficient={effective_kl_coef}"
+        )
+
+        # --- Build reward functions list for PPOTrainer ---
+        reward_funcs = []
+        if self.reward_model_instance is not None:
+            reward_funcs.append(self.reward_model_instance)
+        if self.reward_fn is not None:
+            reward_funcs.append(self.reward_fn)
+
+        # v0.71.26 — reward-hack mitigation buffer parity with GRPO. When a
+        # detector / mitigation mode is set, capture the callable reward fns'
+        # rewards + completions into a shared RLSignalBuffer so the mitigation
+        # callback can observe the step (BETA — the on-GPU proof is GRPO-only).
+        # nn.Module reward models are skipped (their call shape differs).
+        self._rl_buffer = None
+        from soup_cli.utils.peft_wiring import rl_callbacks_need_buffer
+
+        if rl_callbacks_need_buffer(tcfg) and reward_funcs:
+            # v0.71.26 Stage 3 — reward-shaping shim over callable reward fns,
+            # BEFORE the buffer capture (no-op when shaping is off).
+            from soup_cli.utils.reward_hack_control import apply_reward_shaping
+            from soup_cli.utils.rl_signal_buffer import (
+                RLSignalBuffer,
+                wrap_reward_funcs,
+            )
+
+            self._rl_buffer = RLSignalBuffer()
+            reward_funcs = [
+                wrap_reward_funcs(
+                    apply_reward_shaping(fn, tcfg), self._rl_buffer
+                )
+                if callable(fn) and not hasattr(fn, "forward")
+                else fn
+                for fn in reward_funcs
+            ]
+
+        # --- Trainer ---
+        ppo_trainer_params = inspect.signature(ppo_trainer_cls.__init__).parameters
+
+        # Store for use in train() — experimental API has different .train() signature
+        self._is_experimental = is_experimental
+
+        # LoRA+ optimizer (#724/#745), PPO's shape. The other LoRA
+        # trainers are plain transformers.Trainer subclasses whose
+        # create_optimizer runs lazily at train(), so a post-construction
+        # attach_loraplus_optimizer lands cleanly and the scheduler is built
+        # around it. trl.experimental's PPOTrainer is not that shape: its
+        # __init__ builds the optimizer AND scheduler eagerly
+        # (create_optimizer_and_scheduler) and then calls
+        # accelerator.prepare(model, optimizer, dataloader) without the
+        # scheduler. Assigning trainer.optimizer afterwards is still stepped
+        # (B does train at lr*ratio), but self.lr_scheduler stays bound to the
+        # discarded default optimizer, so warmup and decay never reach the B
+        # group and get_last_lr() reports the wrong optimizer. Build the LoRA+
+        # optimizer up front and hand it to the constructor via
+        # optimizers=(opt, None) so create_optimizer_and_scheduler binds the
+        # scheduler to it. If trl ever makes the PPO optimizer lazy, delete this
+        # branch and let PPO join the post-construction attach.
+        #
+        # Detect the shape, not the trl version (see trainer/_trl_compat.py):
+        # the eager shape is exactly the one whose __init__ accepts an
+        # `optimizers` tuple. If a future trl.experimental drops that keyword,
+        # fail loudly here rather than silently fall back to the post-attach and
+        # reintroduce the flat-LR bug.
+        loraplus_optimizer = None
+        if getattr(tcfg, "loraplus_lr_ratio", None) is not None:
+            if "optimizers" not in ppo_trainer_params:
+                raise RuntimeError(
+                    "training.loraplus_lr_ratio is set, but this trl PPOTrainer "
+                    f"({ppo_trainer_cls.__module__}.{ppo_trainer_cls.__qualname__}) "
+                    "does not accept an `optimizers` argument, so the LoRA+ "
+                    "optimizer cannot be bound to the LR scheduler at "
+                    "construction. A post-construction attach would train the "
+                    "LoRA B group at a flat lr*ratio with warmup and decay never "
+                    "reaching it. Pin a trl whose PPO trainer takes "
+                    "optimizers=(optimizer, scheduler), or remove "
+                    "loraplus_lr_ratio for this run."
+                )
+            from soup_cli.utils.peft_wiring import build_loraplus_optimizer
+
+            loraplus_optimizer = build_loraplus_optimizer(
+                self.model, ppo_config, tcfg
+            )
+
+        if is_experimental:
+            # trl >=0.28 experimental API: PPOTrainer(args, processing_class,
+            #   model, ref_model, reward_model, train_dataset, value_model, ...)
+            # ref_model=None is fine (auto-creates from policy model).
+            # reward_model and value_model are required nn.Modules.
+            reward_model_obj = self._get_or_create_reward_model(cfg, tcfg)
+            value_model_obj = self._create_value_model(cfg, tcfg)
+
+            trainer_kwargs = {
+                "args": ppo_config,
+                "processing_class": self.tokenizer,
+                "model": self.model,
+                "ref_model": None,
+                "reward_model": reward_model_obj,
+                "train_dataset": trl_train_ds,
+                "value_model": value_model_obj,
+            }
+            # LoRA+ (#724/#745): inject so the eagerly-built scheduler binds to it.
+            if loraplus_optimizer is not None:
+                self._complete_loraplus_optimizer(
+                    loraplus_optimizer, value_model_obj, ppo_config
+                )
+                trainer_kwargs["optimizers"] = (loraplus_optimizer, None)
+            self._dataset_in_constructor = True
+            self.trainer = ppo_trainer_cls(**trainer_kwargs)
+
+        elif "args" in ppo_trainer_params:
+            # trl >=0.28 non-experimental (transitional API)
+            trainer_kwargs = {
+                "model": self.model,
+                "args": ppo_config,
+                "processing_class": self.tokenizer,
+            }
+            if "train_dataset" in ppo_trainer_params:
+                trainer_kwargs["train_dataset"] = trl_train_ds
+            elif "dataset" in ppo_trainer_params:
+                trainer_kwargs["dataset"] = trl_train_ds
+            if reward_funcs and "reward_funcs" in ppo_trainer_params:
+                trainer_kwargs["reward_funcs"] = reward_funcs
+            # Pass ref/reward/value models if required positionally
+            if "ref_model" in ppo_trainer_params:
+                trainer_kwargs["ref_model"] = None
+            if "reward_model" in ppo_trainer_params:
+                trainer_kwargs["reward_model"] = self._get_or_create_reward_model(
+                    cfg, tcfg,
+                    reward_funcs_supplied=bool(reward_funcs)
+                    and "reward_funcs" in ppo_trainer_params,
+                )
+            if "value_model" in ppo_trainer_params:
+                trainer_kwargs["value_model"] = self._create_value_model(cfg, tcfg)
+            # LoRA+ (#724/#745): inject so the eagerly-built scheduler binds to it.
+            if loraplus_optimizer is not None:
+                self._complete_loraplus_optimizer(
+                    loraplus_optimizer, trainer_kwargs.get("value_model"), ppo_config
+                )
+                trainer_kwargs["optimizers"] = (loraplus_optimizer, None)
+            self._dataset_in_constructor = (
+                "train_dataset" in trainer_kwargs or "dataset" in trainer_kwargs
+            )
+            self.trainer = ppo_trainer_cls(**trainer_kwargs)
+
+        else:
+            # trl <0.28: PPOTrainer(config=, model=, tokenizer=, dataset=)
+            trainer_kwargs = {
+                "model": self.model,
+                "config": ppo_config,
+                "tokenizer": self.tokenizer,
+                "dataset": train_ds,
+            }
+            self._dataset_in_constructor = True
+            self.trainer = ppo_trainer_cls(**trainer_kwargs)
+
+        # #1675 - trl.experimental's PPOTrainer subclasses transformers.Trainer
+        # but never runs Trainer.__init__, and its save_model / _save_checkpoint
+        # delegate to Trainer's. An attribute Trainer.__init__ assigns and those
+        # methods read is then missing: transformers 5.19.0 added one
+        # (is_distributed_loading_by_transformers) and the first checkpoint save
+        # raised AttributeError. Fill in what is absent, whichever branch built
+        # the trainer.
+        from soup_cli.trainer._trl_compat import ensure_trainer_init_attrs
+
+        ensure_trainer_init_attrs(self.trainer)
+
+        # #359 - the same exposure #336 fixed in sft.py: with LoRA the
+        # no-decay optimizer group is empty, DeepSpeed drops it, and the LR
+        # scheduler keeps two base_lrs until torch's strict zip raises at the
+        # first step. The guard prunes inside create_optimizer, i.e. before
+        # the scheduler is built. No-op for full fine-tuning, and only under
+        # DeepSpeed so the ordinary path keeps its own optimizer.
+        #
+        # On PPO's eager shape (trl.experimental and the transitional branch)
+        # this guard does nothing: the trainer built its optimizer inside
+        # __init__ and trl never calls create_optimizer again. That is safe for
+        # the default optimizer, whose no-decay group is filled by the value
+        # model's biases and norm weights. The LoRA+ optimizer can have empty
+        # groups, so _complete_loraplus_optimizer prunes it before injection.
+        if self.deepspeed_config:
+            from soup_cli.utils.deepspeed import attach_empty_param_group_guard
+
+            attach_empty_param_group_guard(self.trainer)
+
+        # v0.71.26 — reward-hack mitigation / echo-trap / RL-checkpoint callbacks
+        # (PPO parity with GRPO; kl_coef mutation for the controller).
+        from soup_cli.utils.peft_wiring import attach_rl_callbacks
+
+        attach_rl_callbacks(
+            self.trainer,
+            tcfg,
+            buffer=self._rl_buffer,
+            tokenizer=self.tokenizer,
+            output_dir=str(output_dir),
+            task="ppo",
+        )
+
+        # v0.40.6 #67 — ReLoRA merge-and-reinitialize restart callback.
+        # LoRA+ (#724/#745) is wired ABOVE via constructor injection, not here:
+        # PPO's trainer builds its scheduler eagerly, so the optimizer has to be
+        # passed to the constructor rather than attached after it.
+        from soup_cli.utils.peft_wiring import (
+            attach_curriculum_callback,
+            attach_plugin_callback,
+            attach_relora_callback,
+        )
+        attach_relora_callback(self.trainer, tcfg)
+        # v0.53.5 #114/#115 — dynamic curriculum live callback.
+        attach_curriculum_callback(self.trainer, tcfg, str(output_dir), console)
+        # v0.53.6 #101 — Soup plugin TrainerCallback.
+        attach_plugin_callback(self.trainer, console)
+
+        self._output_dir = str(output_dir)
+        self._train_ds = train_ds
+        self._trl_train_ds = trl_train_ds
+        self._batch_size = batch_size
+        self._num_epochs = tcfg.epochs
+        self._max_length = cfg.data.max_length
+
+    def _get_or_create_reward_model(self, cfg, tcfg, *, reward_funcs_supplied=False):
+        """Get the reward model for trl's PPO API (an nn.Module, not a callable).
+
+        Uses a loaded instance, else loads the configured ``reward_model`` path.
+        If neither exists, PPO has NO real reward signal: a fresh
+        ``AutoModelForSequenceClassification`` has a randomly-initialised
+        regression head, so optimising the policy against it trains toward
+        noise (silent, GPU-hours wasted). A ``reward_fn`` (callable) cannot fill
+        this nn.Module slot on trl's PPO API. Fail loudly instead — unless the
+        trainer is separately consuming ``reward_funcs`` (a newer trl API), in
+        which case the reward model is unused and a neutral head is fine.
+        """
+        if self.reward_model_instance is not None:
+            return self.reward_model_instance
+
+        # If a reward_model path is configured, load it
+        if tcfg.reward_model:
+            return _load_reward_model(
+                tcfg.reward_model, self.device, self.trust_remote_code,
+                tcfg=tcfg,
+            )
+
+        if not reward_funcs_supplied:
+            raise RuntimeError(
+                "PPO requires a trained reward_model (set training.reward_model "
+                "to a path or HF id). trl's PPO reward-model slot needs an "
+                "nn.Module; a reward_fn cannot drive it, and creating one from "
+                "the base model would train the policy against a randomly-"
+                "initialised reward head. Use `task: grpo` for reward-function-"
+                "based RL instead."
+            )
+
+        # reward_funcs handles the reward signal on this trl API; the reward
+        # model is a required-but-unused formality (neutral head is fine).
+        from transformers import AutoModelForSequenceClassification
+
+        console.print(
+            "[dim]reward_funcs active; creating a neutral reward-model "
+            f"placeholder from base model: {cfg.base}[/]"
+        )
+        reward_model = AutoModelForSequenceClassification.from_pretrained(
+            cfg.base,
+            trust_remote_code=self._trust_remote_code,
+            num_labels=1,
+            device_map=resolve_device_map(self.device) if self.device != "cpu" else None,
+        )
+        reward_model.eval()
+        return reward_model
+
+    def _complete_loraplus_optimizer(self, optimizer, value_model, args):
+        """Finish the LoRA+ optimizer before it is handed to PPOTrainer (#745).
+
+        trl's default PPO optimizer covers PolicyAndValueWrapper(policy,
+        value_model); the LoRA+ one is built over the policy alone. Give the
+        value model its decay / no-decay groups at the base learning rate, or
+        no optimizer owns the critic and it never trains.
+
+        Under DeepSpeed, drop empty groups (#359): LoRA+ emits groups such as
+        embedding and groupB_no_decay that hold nothing with LoRA, DeepSpeed
+        drops them, and the scheduler built from this optimizer would keep one
+        base_lr too many. Pruning in place here, before the constructor builds
+        the scheduler, is the same order the guard enforces elsewhere.
+        """
+        from soup_cli.utils.peft_wiring import add_value_model_param_groups
+
+        if value_model is not None:
+            add_value_model_param_groups(optimizer, value_model, args)
+        if self.deepspeed_config:
+            from soup_cli.utils.deepspeed import prune_empty_param_groups
+
+            prune_empty_param_groups(optimizer)
+        return optimizer
+
+    def _create_value_model(self, cfg, tcfg):
+        """Create a value model for trl experimental PPO API.
+
+        The value model estimates state values for GAE advantage estimation.
+        We create an AutoModelForSequenceClassification from the base model.
+        """
+        from transformers import AutoModelForSequenceClassification
+
+        console.print(f"[dim]Creating value model from: {cfg.base}[/]")
+        value_model = AutoModelForSequenceClassification.from_pretrained(
+            cfg.base,
+            trust_remote_code=self._trust_remote_code,
+            num_labels=1,
+            device_map=resolve_device_map(self.device) if self.device != "cpu" else None,
+        )
+        return value_model
+
+    def _setup_reward(self, cfg, tcfg):
+        """Load reward model and/or reward function."""
+        # Reward model (pre-trained classifier)
+        if tcfg.reward_model:
+            self.reward_model_instance = _load_reward_model(
+                tcfg.reward_model, self.device, self.trust_remote_code,
+                tcfg=tcfg,
+            )
+            console.print(f"[green]Reward model loaded:[/] {tcfg.reward_model}")
+
+        # Reward function (callable — reuse GRPO reward functions)
+        if tcfg.reward_fn:
+            from soup_cli.trainer.rewards import load_reward_fn
+
+            self.reward_fn = load_reward_fn(
+                tcfg.reward_fn, verifiable_domain=tcfg.verifiable_domain
+            )
+
+        if self.reward_model_instance is None and self.reward_fn is None:
+            console.print(
+                "[yellow]Warning: No reward_model or reward_fn specified. "
+                "Using default reward_fn='accuracy'.[/]"
+            )
+            from soup_cli.trainer.rewards import load_reward_fn
+
+            self.reward_fn = load_reward_fn("accuracy")
+
+    def _setup_transformers(self, cfg: SoupConfig, tcfg) -> None:
+        """Load model via standard transformers + peft pipeline."""
+        from peft import TaskType, get_peft_model, prepare_model_for_kbit_training
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+
+        console.print(f"[dim]Loading tokenizer: {cfg.base}[/]")
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            cfg.base, trust_remote_code=self._trust_remote_code
+        )
+        if self.tokenizer.pad_token is None:
+            self.tokenizer.pad_token = self.tokenizer.eos_token
+
+        # Quantization (v0.38.0 Quant Menu — see soup_cli.utils.quant_menu)
+        from soup_cli.utils.quant_menu import build_quantization_config_for_loader
+
+        quant_config_obj = build_quantization_config_for_loader(
+            tcfg=tcfg, base=cfg.base, console=console,
+        )
+
+        console.print(f"[dim]Loading model: {cfg.base}[/]")
+        # On CPU, use device_map="cpu" to avoid meta tensors from "auto"
+        dev_map = resolve_device_map(self.device)
+        model_kwargs = {
+            "trust_remote_code": self._trust_remote_code, "device_map": dev_map,
+            "torch_dtype": resolve_frozen_base_load_dtype(self.device),
+        }
+        if quant_config_obj is not None:
+            model_kwargs["quantization_config"] = quant_config_obj
+
+        self.model = AutoModelForCausalLM.from_pretrained(cfg.base, **model_kwargs)
+
+        if tcfg.quantization in ("4bit", "8bit"):
+            from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
+
+            self.model = prepare_model_for_kbit_training(
+                self.model,
+                use_gradient_checkpointing=should_enable_hf_gradient_checkpointing(
+                    tcfg.gradient_checkpointing, stream_layers=tcfg.stream_layers
+                ),
+            )
+
+        from soup_cli.utils.peft_wiring import (
+            build_lora_config,
+            resolve_lora_target_modules,
+        )
+
+        target_modules = resolve_lora_target_modules(self.model, tcfg.lora.target_modules, console)
+        # #1099: moe_lora picks the expert-FFN targets. Without this the flag
+        # was accepted and ignored here, and on a fused-expert MoE the auto
+        # resolution leaves peft with nothing to attach.
+        from soup_cli.utils.moe import resolve_moe_lora_targets
+
+        target_modules = resolve_moe_lora_targets(
+            self.model, tcfg, target_modules, console
+        )
+
+        lora_config = build_lora_config(
+            tcfg.lora,
+            target_modules=target_modules,
+            task_type=TaskType.CAUSAL_LM,
+        )
+        # v0.40.6 #67 — surgical PEFT patches.
+        from soup_cli.utils.peft_wiring import (
+            apply_post_lora_patches,
+            apply_pre_lora_patches,
+        )
+        apply_pre_lora_patches(self.model, cfg.base)
+        self.model = get_peft_model(self.model, lora_config)
+        apply_post_lora_patches(self.model)
+
+        # QAT — insert fake quantization ops after LoRA. The "fp8" variant
+        # is FP8 training (handled by apply_v028_speed_memory), not int8 QAT.
+        # PPO has its own forward loop, so use_cut_ce will degrade gracefully.
+        if tcfg.quantization_aware and tcfg.quantization_aware != "fp8":
+            from soup_cli.utils.qat import prepare_model_for_qat
+
+            self.model = prepare_model_for_qat(self.model)
+
+        # v0.35.0 #60 — multi-trainer wiring of v0.28.0 speed/memory features.
+        from soup_cli.utils.v028_features import apply_v028_speed_memory
+        apply_v028_speed_memory(
+            model=self.model, tcfg=tcfg, base_model=cfg.base,
+            console=console, device=self.device, backend=cfg.backend,
+        )
+
+    def _setup_unsloth(self, cfg, tcfg):
+        """Load model via unsloth FastLanguageModel (2-5x faster)."""
+        from soup_cli.utils import unsloth
+        from soup_cli.utils.unsloth import load_model_and_tokenizer
+        # #797: resolve training.gradient_checkpointing for the Unsloth path
+        # (streaming layers already checkpoint every layer, so it stays off).
+        use_gradient_checkpointing = unsloth.resolve_unsloth_gradient_checkpointing(
+            tcfg.gradient_checkpointing, stream_layers=getattr(tcfg, "stream_layers", False)
+        )
+
+        console.print(f"[dim]Loading model via [bold]unsloth[/]: {cfg.base}[/]")
+        self.model, self.tokenizer = load_model_and_tokenizer(
+            model_name=cfg.base,
+            max_seq_length=cfg.data.max_length,
+            quantization=tcfg.quantization,
+            lora_r=tcfg.lora.r,
+            lora_alpha=tcfg.lora.alpha,
+            lora_dropout=tcfg.lora.dropout,
+            target_modules=tcfg.lora.target_modules,
+            use_rslora=tcfg.lora.use_rslora,
+            use_gradient_checkpointing=use_gradient_checkpointing,
+        )
+        if self.tokenizer.pad_token is None:
+            self.tokenizer.pad_token = self.tokenizer.eos_token
+
+    def train(
+        self,
+        display: Optional[object] = None,
+        tracker: Optional[object] = None,
+        run_id: str = "",
+        resume_from_checkpoint: Optional[str] = None,
+    ) -> dict:
+        """Run PPO training loop and return results summary.
+
+        Supports two trl APIs:
+          - trl >=0.28: uses built-in trainer.train() (OnlineDPOTrainer style)
+          - trl <0.28: manual loop with generate() + step()
+        """
+        # Detect API: trl >=0.28 PPOTrainer has a .train() from OnlineDPOTrainer
+        has_builtin_train = hasattr(self.trainer, "train") and not hasattr(
+            self.trainer, "step"
+        )
+
+        if has_builtin_train:
+            return self._train_builtin(display, tracker, run_id, resume_from_checkpoint)
+        return self._train_manual(display, tracker, run_id)
+
+    def _train_builtin(self, display, tracker, run_id, resume_from_checkpoint):
+        """Train using trl >=0.28 built-in trainer.train() method."""
+        start = time.time()
+
+        # If dataset wasn't accepted by constructor, set it on the trainer
+        if not self._dataset_in_constructor:
+            if hasattr(self.trainer, "train_dataset"):
+                self.trainer.train_dataset = self._trl_train_ds
+            elif hasattr(self.trainer, "dataset"):
+                self.trainer.dataset = self._trl_train_ds
+
+        if display:
+            from soup_cli.monitoring.callback import build_soup_trainer_callback
+            self.trainer.add_callback(
+               build_soup_trainer_callback(
+                    display,
+                    config=self.config,
+                    tracker=tracker,
+                    run_id=run_id,
+                    batch_size=self._batch_size,
+                    output_dir=self._output_dir,
+                )
+            )
+
+        # trl experimental PPOTrainer.train() does not accept resume_from_checkpoint
+        import inspect
+
+        from soup_cli.utils.v028_features import activation_offloading_context
+
+        train_params = inspect.signature(self.trainer.train).parameters
+        with activation_offloading_context(
+            self.config.training, self._output_dir,
+        ):
+            if resume_from_checkpoint and "resume_from_checkpoint" in train_params:
+                align_trainable_dtype_for_fp16(
+                    self.trainer.model,
+                    fp16=getattr(self.trainer.args, "fp16", False),
+                    bf16=getattr(self.trainer.args, "bf16", False),
+                )
+                self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
+            else:
+                if resume_from_checkpoint:
+                    console.print(
+                        "[yellow]Warning: This PPOTrainer does not support "
+                        "resume_from_checkpoint -- starting from scratch.[/]"
+                    )
+                align_trainable_dtype_for_fp16(
+                    self.trainer.model,
+                    fp16=getattr(self.trainer.args, "fp16", False),
+                    bf16=getattr(self.trainer.args, "bf16", False),
+                )
+                self.trainer.train()
+        duration = time.time() - start
+
+        if self.config.training.relora_steps is None:
+            self.trainer.save_model(self._output_dir)
+        else:
+            from soup_cli.utils.peft_wiring import save_model_with_relora
+
+            save_model_with_relora(
+                self.trainer, self._output_dir, self.config.training.relora_steps
+            )
+        self.tokenizer.save_pretrained(self._output_dir)
+
+        # Extract metrics. trl's PPO trainer (0.29) logs per-step losses under
+        # ``loss/policy_avg`` rather than ``loss``; the key is declared here
+        # instead of guessed (see #1413).
+        logs = self.trainer.state.log_history
+        loss_summary = summarize_training_loss(logs, loss_key="loss/policy_avg")
+
+        hours = int(duration // 3600)
+        minutes = int((duration % 3600) // 60)
+        duration_str = f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
+
+        return {
+            **loss_summary,
+            "duration": duration_str,
+            "duration_secs": duration,
+            "output_dir": self._output_dir,
+            "total_steps": self.trainer.state.global_step,
+        }
+
+    def _train_manual(self, display, tracker, run_id):
+        """Train using trl <0.28 manual loop: generate() + step()."""
+        import torch
+
+        start = time.time()
+        step = 0
+        all_rewards = []
+        log_history = []
+
+        for epoch in range(self._num_epochs):
+            for batch_idx in range(0, len(self._train_ds), self._batch_size):
+                batch_end = min(batch_idx + self._batch_size, len(self._train_ds))
+                batch = self._train_ds[batch_idx:batch_end]
+
+                # Tokenize prompts
+                prompt_texts = batch["prompt_text"]
+                query_tensors = [
+                    self.tokenizer.encode(p, return_tensors="pt").squeeze()
+                    for p in prompt_texts
+                ]
+
+                # Generate completions
+                response_tensors = []
+                for query in query_tensors:
+                    gen_kwargs = {
+                        "max_new_tokens": min(256, self._max_length // 2),
+                        "do_sample": True,
+                        "top_p": 0.9,
+                        "temperature": 0.7,
+                    }
+                    response = self.trainer.generate(query.unsqueeze(0), **gen_kwargs)
+                    response_tensors.append(response.squeeze()[len(query):])
+
+                # Compute rewards
+                rewards = self._compute_rewards(
+                    query_tensors, response_tensors, batch,
+                )
+
+                # PPO step
+                stats = self.trainer.step(query_tensors, response_tensors, rewards)
+                step += 1
+
+                mean_reward = torch.stack(rewards).mean().item()
+                all_rewards.append(mean_reward)
+
+                log_entry = {
+                    "step": step,
+                    "epoch": epoch + 1,
+                    "loss": stats.get("ppo/loss/total", 0),
+                    "reward": mean_reward,
+                    "kl": stats.get("ppo/mean_kl", 0),
+                    "lr": stats.get("ppo/learning_rate", self.config.training.lr),
+                }
+                log_history.append(log_entry)
+
+                # Update display
+                if display and hasattr(display, "update"):
+                    display.update(
+                        step=step,
+                        epoch=epoch + 1,
+                        loss=log_entry["loss"],
+                        lr=log_entry["lr"],
+                    )
+
+                # Update tracker
+                if tracker and run_id:
+                    tracker.log_metrics(
+                        run_id=run_id,
+                        step=step,
+                        epoch=epoch + 1,
+                        loss=log_entry["loss"],
+                        lr=log_entry["lr"],
+                    )
+
+        duration = time.time() - start
+
+        if self.config.training.relora_steps is None:
+            self.trainer.save_model(self._output_dir)
+        else:
+            from soup_cli.utils.peft_wiring import save_model_with_relora
+
+            save_model_with_relora(
+                self.trainer, self._output_dir, self.config.training.relora_steps
+            )
+        self.tokenizer.save_pretrained(self._output_dir)
+
+        # Extract metrics
+        loss_summary = summarize_training_loss(log_history)
+
+        hours = int(duration // 3600)
+        minutes = int((duration % 3600) // 60)
+        duration_str = f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
+
+        return {
+            **loss_summary,
+            "duration": duration_str,
+            "duration_secs": duration,
+            "output_dir": self._output_dir,
+            "total_steps": step,
+        }
+
+    def _compute_rewards(self, query_tensors, response_tensors, batch):
+        """Compute rewards using reward model and/or reward function."""
+        import torch
+
+        rewards = []
+        num_samples = len(query_tensors)
+
+        if self.reward_model_instance is not None:
+            # Score with reward model
+            for query, response in zip(query_tensors, response_tensors):
+                full_ids = torch.cat([query, response]).unsqueeze(0)
+                full_ids = full_ids.to(self.reward_model_instance.device)
+                with torch.no_grad():
+                    output = self.reward_model_instance(full_ids)
+                    score = output.logits[:, -1].squeeze().float()
+                rewards.append(score.cpu())
+
+        elif self.reward_fn is not None:
+            # Score with reward function
+            completions = []
+            for response in response_tensors:
+                text = self.tokenizer.decode(response, skip_special_tokens=True)
+                completions.append([{"role": "assistant", "content": text}])
+
+            kwargs = {}
+            if "answer" in batch:
+                kwargs["answer"] = batch["answer"]
+
+            scores = self.reward_fn(completions, **kwargs)
+            rewards = [torch.tensor(score, dtype=torch.float32) for score in scores]
+
+        else:
+            # Fallback: zero reward
+            rewards = [torch.tensor(0.0) for _ in range(num_samples)]
+
+        return rewards
+
+
+def _world_size() -> int:
+    try:
+        return max(1, int(os.environ.get("WORLD_SIZE", "1") or "1"))
+    except (TypeError, ValueError):
+        return 1
+
+
+def _check_one_rollout_batch(rows: int, batch_size: int, grad_accum: int) -> None:
+    """#1391: trl's PPO DataLoader uses ``drop_last=True`` with one rollout batch
+    (``batch_size * gradient_accumulation_steps`` rows per process) and repeats it
+    with ``while True``, so a smaller train set spins forever without a step."""
+    processes = _world_size()
+    needed = batch_size * grad_accum * processes
+    if rows < needed:
+        per_process = f" x {processes} processes" if processes > 1 else ""
+        raise ValueError(
+            f"PPO needs at least one rollout batch of training prompts: the train set "
+            f"has {rows} rows, but batch_size={batch_size} x "
+            f"gradient_accumulation_steps={grad_accum}{per_process} = {needed}. "
+            f"Add prompts, or lower batch_size / gradient_accumulation_steps."
+        )
+
+
+def _import_ppo_classes():
+    """Import PPOTrainer and PPOConfig, handling trl version differences.
+
+    trl >=0.28 moved PPOTrainer to trl.experimental with a new API that requires
+    ref_model, reward_model, train_dataset, and value_model as positional args.
+    The old trl import still works in 0.28 (deprecated) but is removed in 0.29.
+
+    Returns:
+        (PPOTrainer, PPOConfig, is_experimental): tuple with the classes and a flag
+        indicating whether the experimental API (with required positional args) is used.
+    """
+    try:
+        from trl.experimental.ppo import PPOConfig, PPOTrainer
+        return PPOTrainer, PPOConfig, True
+    except (ImportError, ModuleNotFoundError):
+        pass
+
+    from trl import PPOConfig, PPOTrainer
+    return PPOTrainer, PPOConfig, False
+
+
+def _load_reward_model(
+    model_path: str,
+    device: str = "cuda",
+    trust_remote_code: bool = False,
+    tcfg=None,
+):
+    """Load a pre-trained reward model for PPO scoring.
+
+    Reward models are typically AutoModelForSequenceClassification that output
+    a scalar reward score for a given input sequence.
+
+    v0.40.5 #66: when ``tcfg`` is provided and ``training.quantize_reward_model``
+    is set, the reward model is loaded with the same quantization config as
+    the policy model (Quant Menu), so it doesn't silently consume
+    full-precision VRAM and OOM when the policy is GPTQ/AWQ/HQQ/etc. v0.53.0
+    made this opt-in via that flag (default False) rather than unconditional,
+    matching ``double_quant_on``'s #321 precedent of honouring a configured
+    flag over a hardcoded default. Pass ``tcfg=None`` for unquantized
+    regardless of the flag.
+    """
+    from transformers import AutoModelForSequenceClassification
+
+    from soup_cli.utils.trust_remote import (
+        model_requires_trust_remote_code,
+        resolve_trust_remote_code,
+    )
+
+    requires = model_requires_trust_remote_code(model_path) or False
+    resolved = resolve_trust_remote_code(
+        model_path,
+        requested=trust_remote_code,
+        console=console,
+        requires_remote_code=requires,
+    )
+    console.print(f"[dim]Loading reward model: {model_path}[/]")
+    dev_map = resolve_device_map(device)
+    model_kwargs: dict = {
+        "trust_remote_code": resolved,
+        "device_map": dev_map,
+        "num_labels": 1,
+    }
+    if tcfg is not None and tcfg.quantize_reward_model:
+        from soup_cli.utils.quant_menu import build_quantization_config_for_loader
+
+        quant_config_obj = build_quantization_config_for_loader(
+            tcfg=tcfg, base=model_path, console=console,
+        )
+        if quant_config_obj is not None:
+            model_kwargs["quantization_config"] = quant_config_obj
+    reward_model = AutoModelForSequenceClassification.from_pretrained(
+        model_path,
+        **model_kwargs,
+    )
+    reward_model.eval()
+    return reward_model
+
+
+def _prepare_ppo_dataset(data: list[dict], tokenizer: Any | None = None) -> list[dict]:
+    """Convert dataset rows to PPO format.
+
+    PPO expects each row to have a 'prompt_text' field (string for tokenization)
+    and optionally an 'answer' field (for reward function scoring).
+
+    Input can be:
+      - messages format: [{"role": "user", "content": "..."}, ...]
+      - DPO format: {"prompt": "...", "chosen": "...", "rejected": "..."}
+      - prompt field: {"prompt": "..."}
+      - alpaca format: {"instruction": "...", "output": "..."}
+
+    Returns list of dicts with 'prompt_text' (string) and optional 'answer'.
+    """
+    prepared = []
+    for row in data:
+        if "prompt" in row and isinstance(row["prompt"], str):
+            entry = {"prompt_text": row["prompt"]}
+            if "answer" in row:
+                entry["answer"] = row["answer"]
+            prepared.append(entry)
+        elif "messages" in row:
+            messages = row["messages"]
+            prompt_text = None
+            if (
+                tokenizer is not None
+                and getattr(tokenizer, "chat_template", None)
+                and callable(getattr(tokenizer, "apply_chat_template", None))
+            ):
+                prompt_messages = [
+                    msg
+                    for msg in messages
+                    if isinstance(msg, dict) and msg.get("role") in ("system", "user")
+                ]
+                if not prompt_messages:
+                    prompt_messages = messages
+                try:
+                    prompt_text = tokenizer.apply_chat_template(
+                        prompt_messages, tokenize=False, add_generation_prompt=True
+                    )
+                except Exception as exc:
+                    console.print(
+                        f"[yellow]Warning:[/] apply_chat_template failed: {escape(str(exc))}; "
+                        "falling back to joined text"
+                    )
+                    prompt_text = None
+            if prompt_text is None:
+                # Use user messages as prompt text
+                prompt_parts = [
+                    msg.get("content", "")
+                    for msg in messages
+                    if isinstance(msg, dict) and msg.get("role") in ("system", "user")
+                ]
+                prompt_text = " ".join(prompt_parts)
+            entry = {"prompt_text": prompt_text}
+            if "answer" in row:
+                entry["answer"] = row["answer"]
+            prepared.append(entry)
+        elif "prompt" in row and isinstance(row["prompt"], list):
+            prompt_list = row["prompt"]
+            prompt_text = None
+            if (
+                tokenizer is not None
+                and getattr(tokenizer, "chat_template", None)
+                and callable(getattr(tokenizer, "apply_chat_template", None))
+            ):
+                try:
+                    prompt_text = tokenizer.apply_chat_template(
+                        prompt_list, tokenize=False, add_generation_prompt=True
+                    )
+                except Exception as exc:
+                    console.print(
+                        f"[yellow]Warning:[/] apply_chat_template failed: {escape(str(exc))}; "
+                        "falling back to joined text"
+                    )
+                    prompt_text = None
+            if prompt_text is None:
+                # Message list → join content
+                prompt_parts = [
+                    msg.get("content", "")
+                    for msg in prompt_list
+                    if isinstance(msg, dict)
+                ]
+                prompt_text = " ".join(prompt_parts)
+            entry = {"prompt_text": prompt_text}
+            if "answer" in row:
+                entry["answer"] = row["answer"]
+            prepared.append(entry)
+        else:
+            # Alpaca fallback
+            instruction = row.get("instruction", row.get("input", ""))
+            entry = {"prompt_text": str(instruction)}
+            if "output" in row:
+                entry["answer"] = row["output"]
+            prepared.append(entry)
+    return prepared

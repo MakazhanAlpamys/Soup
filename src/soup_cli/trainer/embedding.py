@@ -1,0 +1,669 @@
+"""Embedding model trainer — contrastive/triplet loss for sentence embeddings."""
+
+import time
+from pathlib import Path
+from typing import Optional
+
+from rich.console import Console
+
+from soup_cli.config.schema import SoupConfig, TrainingConfig
+from soup_cli.trainer.loss_summary import summarize_training_loss
+from soup_cli.utils.eval_schedule import training_eval_kwargs
+from soup_cli.utils.gpu import (
+    bf16_fp16_flags,
+    estimate_batch_size,
+    model_size_from_name,
+    resolve_base_load_dtype,
+    resolve_device_map,
+)
+from soup_cli.utils.mixed_precision import align_trainable_dtype_for_fp16
+from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
+
+console = Console()
+
+
+class EmbeddingTrainerWrapper:
+    """High-level wrapper for embedding model fine-tuning from SoupConfig.
+
+    Supports contrastive, triplet, and cosine loss for training sentence
+    embedding models (BGE, E5, GTE, INSTRUCTOR, etc.).
+
+    Data fields:
+    - anchor: the query / anchor text
+    - positive: semantically similar text
+    - negative: semantically dissimilar text (optional for contrastive, required for triplet)
+    """
+
+    def __init__(
+        self,
+        config: SoupConfig,
+        device: str = "cuda",
+        report_to: str = "none",
+        deepspeed_config: Optional[str] = None,
+        fsdp_config: Optional[dict] = None,
+        trust_remote_code: bool = False,
+    ):
+        self.config = config
+        self.device = device
+        self.report_to = report_to
+        self.deepspeed_config = deepspeed_config
+        self.fsdp_config = fsdp_config
+        self.trust_remote_code = trust_remote_code
+        from soup_cli.utils.trust_remote import (
+            model_requires_trust_remote_code,
+            resolve_trust_remote_code,
+        )
+
+        requires = model_requires_trust_remote_code(config.base) or False
+        self._trust_remote_code = resolve_trust_remote_code(
+            config.base,
+            requested=trust_remote_code,
+            console=console,
+            requires_remote_code=requires,
+        )
+        self.model = None
+        self.tokenizer = None
+        self.trainer = None
+        self._output_dir = None
+
+    def setup(self, dataset: dict) -> None:
+        """Load model, tokenizer, apply LoRA, create embedding trainer."""
+        from datasets import Dataset
+        from transformers import TrainingArguments
+
+        from soup_cli.trainer.sft import _enable_hf_transfer_progress
+
+        _enable_hf_transfer_progress()
+
+        cfg = self.config
+        tcfg = cfg.training
+
+        # #353: seed before the model and any adapter are built.
+        apply_training_seed(tcfg)
+
+        use_unsloth = cfg.backend == "unsloth"
+
+        if use_unsloth:
+            self._setup_unsloth(cfg, tcfg)
+        else:
+            self._setup_transformers(cfg, tcfg)
+
+        if tcfg.lora.r == 0:
+            trainable = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
+            total = sum(p.numel() for p in self.model.parameters())
+        else:
+            trainable, total = self.model.get_nb_trainable_parameters()
+        pct = 100 * trainable / total if total > 0 else 0.0
+        label = "Full fine-tuning" if tcfg.lora.r == 0 else "LoRA applied"
+        console.print(
+            f"[green]{label}:[/] {trainable:,} trainable"
+            f" / {total:,} total ({pct:.2f}%)"
+        )
+
+        # --- Dataset ---
+        train_ds = Dataset.from_list(dataset["train"])
+        eval_ds = None
+        if "val" in dataset and dataset["val"]:
+            eval_ds = Dataset.from_list(dataset["val"])
+
+        # --- Output dir ---
+        output_dir = Path(cfg.output)
+        if cfg.experiment_name:
+            output_dir = output_dir / cfg.experiment_name
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        # --- Determine loss function ---
+        loss_type = tcfg.embedding_loss
+        margin = tcfg.embedding_margin
+        has_negatives = "negative" in train_ds.column_names
+
+        if loss_type == "triplet" and not has_negatives:
+            console.print(
+                "[yellow]Warning: triplet loss requires 'negative' field. "
+                "Falling back to contrastive loss.[/]"
+            )
+            loss_type = "contrastive"
+
+        # --- Batch size ---
+        batch_size = tcfg.batch_size
+        if batch_size == "auto":
+            from soup_cli.utils.gpu import get_gpu_info
+
+            gpu_info = get_gpu_info()
+            model_size = model_size_from_name(cfg.base)
+            batch_size = estimate_batch_size(
+                model_params_b=model_size,
+                seq_length=cfg.data.max_length,
+                gpu_memory_bytes=gpu_info["memory_total_bytes"],
+                quantization=tcfg.quantization,
+                lora_r=tcfg.lora.r,
+            )
+            # Embedding processes pairs/triplets → roughly 2-3x memory per sample.
+            # Contrastive in-batch negatives need batch_size >= 2 (#1234).
+            min_batch = 2 if loss_type == "contrastive" else 1
+            batch_size = max(min_batch, batch_size // 3)
+            console.print(f"[green]Auto batch size (embedding):[/] {batch_size}")
+        elif batch_size == 1 and loss_type == "contrastive":
+            raise ValueError(
+                "contrastive in-batch negatives need batch_size >= 2; "
+                "use triplet (with negatives) or cosine for batch 1"
+            )
+
+        if loss_type == "contrastive":
+            if len(train_ds) < 2:
+                raise ValueError(
+                    "contrastive in-batch negatives need at least 2 training samples; "
+                    f"got {len(train_ds)}"
+                )
+            if batch_size > len(train_ds):
+                batch_size = len(train_ds)
+                console.print(
+                    f"[yellow]Batch size capped at training set size ({batch_size}) "
+                    "so dataloader_drop_last does not drop all samples.[/]"
+                )
+
+        console.print(
+            f"[green]Embedding config:[/] loss={loss_type}, margin={margin}, "
+            f"pooling={tcfg.embedding_pooling}"
+        )
+
+        # --- Calculate warmup steps from ratio (#1431) ---
+        from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
+        from soup_cli.utils.warmup import resolve_trainer_warmup_steps
+
+        warmup_steps = resolve_trainer_warmup_steps(tcfg.warmup_ratio)
+
+        # --- Training args ---
+        _bf16, _fp16 = bf16_fp16_flags(self.device)
+        training_kwargs = {
+            "output_dir": str(output_dir),
+            "num_train_epochs": tcfg.epochs,
+            "per_device_train_batch_size": batch_size,
+            "gradient_accumulation_steps": tcfg.gradient_accumulation_steps,
+            "learning_rate": tcfg.lr,
+            "warmup_steps": warmup_steps,
+            "gradient_checkpointing": should_enable_hf_gradient_checkpointing(
+                tcfg.gradient_checkpointing, stream_layers=tcfg.stream_layers
+            ),
+            "weight_decay": tcfg.weight_decay,
+            "max_grad_norm": tcfg.max_grad_norm,
+            "optim": tcfg.optimizer,
+            "lr_scheduler_type": tcfg.scheduler,
+            "logging_steps": tcfg.logging_steps,
+            "save_steps": tcfg.save_steps,
+            "save_total_limit": 3,
+            "bf16": _bf16,
+            "fp16": _fp16,
+            "report_to": self.report_to,
+            "remove_unused_columns": False,
+            "dataloader_drop_last": (loss_type == "contrastive"),
+            "deepspeed": self.deepspeed_config,
+            **training_seed_kwargs(tcfg),
+            **training_eval_kwargs(cfg, eval_ds, batch_size=batch_size),
+        }
+
+        if self.fsdp_config:
+            training_kwargs.update(self.fsdp_config)
+
+        # LoRA+ is not a TrainingArguments field; its optimizer is built and
+        # attached after the trainer exists (attach_loraplus_optimizer). Do NOT
+        # forward loraplus_lr_ratio here (#724).
+
+        # LoRA-FA is not a TrainingArguments field; its optimizer is built and
+        # attached after the trainer exists (attach_lorafa_optimizer). Do NOT
+        # forward use_lorafa here (#725).
+
+        training_args = TrainingArguments(**training_kwargs)
+
+        # --- Custom Trainer with embedding loss ---
+        self.trainer = _EmbeddingTrainer(
+            model=self.model,
+            args=training_args,
+            train_dataset=train_ds,
+            eval_dataset=eval_ds,
+            processing_class=self.tokenizer,
+            loss_type=loss_type,
+            margin=margin,
+            pooling=tcfg.embedding_pooling,
+            temperature=tcfg.embedding_temperature,
+            max_length=cfg.data.max_length,
+        )
+
+        # #359 - the same exposure #336 fixed in sft.py: with LoRA the
+        # no-decay optimizer group is empty, DeepSpeed drops it, and the LR
+        # scheduler keeps two base_lrs until torch's strict zip raises at the
+        # first step. The guard prunes inside create_optimizer, i.e. before
+        # the scheduler is built. No-op for full fine-tuning, and only under
+        # DeepSpeed so the ordinary path keeps its own optimizer.
+        if self.deepspeed_config:
+            from soup_cli.utils.deepspeed import attach_empty_param_group_guard
+
+            attach_empty_param_group_guard(self.trainer)
+
+        # v0.40.6 #67 — ReLoRA callback.
+        from soup_cli.utils.peft_wiring import (
+            attach_curriculum_callback,
+            attach_lorafa_optimizer,
+            attach_loraplus_optimizer,
+            attach_plugin_callback,
+            attach_relora_callback,
+        )
+        # LoRA+ optimizer (#724) — build and attach now that the trainer exists.
+        attach_loraplus_optimizer(self.trainer, tcfg)
+        # LoRA-FA optimizer (#725) — build and attach now that the trainer exists.
+        attach_lorafa_optimizer(self.trainer, tcfg)
+        attach_relora_callback(self.trainer, tcfg)
+        # v0.53.5 #114/#115 — dynamic curriculum live callback.
+        attach_curriculum_callback(self.trainer, tcfg, str(output_dir), console)
+        # v0.53.6 #101 — Soup plugin TrainerCallback.
+        attach_plugin_callback(self.trainer, console)
+
+        self._output_dir = str(output_dir)
+        self._batch_size = batch_size
+
+    def _setup_transformers(self, cfg: SoupConfig, tcfg: TrainingConfig) -> None:
+        """Load model via standard transformers + peft pipeline."""
+        from peft import TaskType, get_peft_model, prepare_model_for_kbit_training
+        from transformers import AutoModel, AutoTokenizer
+
+        console.print(f"[dim]Loading tokenizer: {cfg.base}[/]")
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            cfg.base, trust_remote_code=self._trust_remote_code
+        )
+        if self.tokenizer.pad_token is None:
+            self.tokenizer.pad_token = self.tokenizer.eos_token
+
+        # Quantization (v0.38.0 Quant Menu — see soup_cli.utils.quant_menu)
+        from soup_cli.utils.quant_menu import build_quantization_config_for_loader
+
+        quant_config_obj = build_quantization_config_for_loader(
+            tcfg=tcfg, base=cfg.base, console=console,
+        )
+
+        console.print(f"[dim]Loading model: {cfg.base}[/]")
+        dev_map = resolve_device_map(self.device)
+        from soup_cli.trainer.sft import is_full_finetune
+
+        model_kwargs = {
+            "trust_remote_code": self._trust_remote_code, "device_map": dev_map,
+            "torch_dtype": resolve_base_load_dtype(
+                self.device, full_finetune=is_full_finetune(tcfg)
+            ),
+        }
+        if quant_config_obj is not None:
+            model_kwargs["quantization_config"] = quant_config_obj
+
+        # Use AutoModel (not AutoModelForCausalLM) for embedding models
+        self.model = AutoModel.from_pretrained(cfg.base, **model_kwargs)
+
+        if tcfg.quantization in ("4bit", "8bit"):
+            from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
+
+            self.model = prepare_model_for_kbit_training(
+                self.model,
+                use_gradient_checkpointing=should_enable_hf_gradient_checkpointing(
+                    tcfg.gradient_checkpointing, stream_layers=tcfg.stream_layers
+                ),
+            )
+
+        if tcfg.lora.r == 0:
+            # #700 — Full fine-tuning for embedding models (no PEFT adapter applied).
+            trainable = [
+                param for param in self.model.parameters() if param.requires_grad
+            ]
+            if not trainable:
+                raise ValueError(
+                    "training.lora.r=0 requests full fine-tuning but no "
+                    "parameter is trainable — check base model parameters, "
+                    "or set lora.r >= 1 to train an adapter instead. "
+                    "Refusing rather than running a no-op."
+                )
+            if hasattr(self.model, "enable_input_require_grads"):
+                self.model.enable_input_require_grads()
+        else:
+            from soup_cli.utils.peft_wiring import (
+                build_lora_config,
+                resolve_lora_target_modules,
+            )
+
+            target_modules = resolve_lora_target_modules(
+                self.model, tcfg.lora.target_modules, console
+            )
+            # #1099: moe_lora picks the expert-FFN targets. Only reachable with
+            # lora.r >= 1 -- at r == 0 this trainer full-fine-tunes and builds no
+            # adapter at all, so there is nothing for the flag to select.
+            from soup_cli.utils.moe import resolve_moe_lora_targets
+
+            target_modules = resolve_moe_lora_targets(
+                self.model, tcfg, target_modules, console
+            )
+
+            lora_config = build_lora_config(
+                tcfg.lora,
+                target_modules=target_modules,
+                task_type=TaskType.FEATURE_EXTRACTION,
+            )
+            # v0.40.6 #67 — surgical PEFT patches.
+            from soup_cli.utils.peft_wiring import (
+                apply_post_lora_patches,
+                apply_pre_lora_patches,
+            )
+            apply_pre_lora_patches(self.model, cfg.base)
+            self.model = get_peft_model(self.model, lora_config)
+            apply_post_lora_patches(self.model)
+
+        # v0.35.0 #60 — multi-trainer wiring of v0.28.0 speed/memory features.
+        # Embedding does not run cross-doc-mask paths; that flag no-ops.
+        from soup_cli.utils.v028_features import apply_v028_speed_memory
+        apply_v028_speed_memory(
+            model=self.model, tcfg=tcfg, base_model=cfg.base,
+            console=console, device=self.device, backend=cfg.backend,
+        )
+
+    def _setup_unsloth(self, cfg: SoupConfig, tcfg: TrainingConfig) -> None:
+        """Load model via unsloth FastLanguageModel (2-5x faster)."""
+        from soup_cli.utils import unsloth
+        from soup_cli.utils.unsloth import load_model_and_tokenizer
+        # #797: resolve training.gradient_checkpointing for the Unsloth path
+        # (streaming layers already checkpoint every layer, so it stays off).
+        use_gradient_checkpointing = unsloth.resolve_unsloth_gradient_checkpointing(
+            tcfg.gradient_checkpointing, stream_layers=getattr(tcfg, "stream_layers", False)
+        )
+
+        console.print(f"[dim]Loading model via [bold]unsloth[/]: {cfg.base}[/]")
+        self.model, self.tokenizer = load_model_and_tokenizer(
+            model_name=cfg.base,
+            max_seq_length=cfg.data.max_length,
+            quantization=tcfg.quantization,
+            lora_r=tcfg.lora.r,
+            lora_alpha=tcfg.lora.alpha,
+            lora_dropout=tcfg.lora.dropout,
+            target_modules=tcfg.lora.target_modules,
+            use_rslora=tcfg.lora.use_rslora,
+            use_gradient_checkpointing=use_gradient_checkpointing,
+        )
+        if self.tokenizer.pad_token is None:
+            self.tokenizer.pad_token = self.tokenizer.eos_token
+
+    def train(
+        self,
+        display: Optional[object] = None,
+        tracker: Optional[object] = None,
+        run_id: str = "",
+        resume_from_checkpoint: Optional[str] = None,
+    ) -> dict:
+        """Run embedding training and return results summary."""
+        if self.trainer is None or self._output_dir is None:
+            raise RuntimeError(
+                "EmbeddingTrainerWrapper.train() called before setup(). "
+                "Call setup(dataset) first."
+            )
+        start = time.time()
+
+        if display:
+            from soup_cli.monitoring.callback import build_soup_trainer_callback
+
+            self.trainer.add_callback(
+                build_soup_trainer_callback(
+                    display,
+                    config=self.config,
+                    tracker=tracker,
+                    run_id=run_id,
+                    batch_size=self._batch_size,
+                    output_dir=self._output_dir,
+                )
+            )
+
+        from soup_cli.utils.v028_features import activation_offloading_context
+
+        with activation_offloading_context(
+            self.config.training, self._output_dir,
+        ):
+            align_trainable_dtype_for_fp16(
+                self.trainer.model,
+                fp16=getattr(self.trainer.args, "fp16", False),
+                bf16=getattr(self.trainer.args, "bf16", False),
+            )
+            self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
+        duration = time.time() - start
+
+        if self.config.training.relora_steps is None:
+            self.trainer.save_model(self._output_dir)
+        else:
+            from soup_cli.utils.peft_wiring import save_model_with_relora
+
+            save_model_with_relora(
+                self.trainer, self._output_dir, self.config.training.relora_steps
+            )
+        self.tokenizer.save_pretrained(self._output_dir)
+
+        logs = self.trainer.state.log_history
+        loss_summary = summarize_training_loss(logs)
+
+        hours = int(duration // 3600)
+        minutes = int((duration % 3600) // 60)
+        duration_str = f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
+
+        return {
+            **loss_summary,
+            "duration": duration_str,
+            "duration_secs": duration,
+            "output_dir": self._output_dir,
+            "total_steps": self.trainer.state.global_step,
+        }
+
+    @property
+    def args(self):
+        return self.trainer.args if self.trainer is not None else None
+
+
+def _pool_embeddings(last_hidden_state, attention_mask, pooling: str):
+    """Apply pooling strategy to hidden states."""
+    import torch
+
+    if pooling == "cls":
+        return last_hidden_state[:, 0, :]
+    elif pooling == "last":
+        # Get last non-padding token for each sequence
+        seq_lengths = attention_mask.sum(dim=1) - 1
+        batch_idx = torch.arange(last_hidden_state.size(0), device=last_hidden_state.device)
+        return last_hidden_state[batch_idx, seq_lengths, :]
+    else:
+        # Mean pooling (default)
+        mask_expanded = attention_mask.unsqueeze(-1).float()
+        sum_embeddings = (last_hidden_state * mask_expanded).sum(dim=1)
+        sum_mask = mask_expanded.sum(dim=1).clamp(min=1e-9)
+        return sum_embeddings / sum_mask
+
+
+class _EmbeddingTrainer:
+    """Custom trainer for embedding models with contrastive/triplet loss.
+
+    Wraps HuggingFace Trainer with custom compute_loss for embedding objectives.
+    """
+
+    def __init__(
+        self,
+        model,
+        args,
+        train_dataset,
+        eval_dataset,
+        processing_class,
+        loss_type: str,
+        margin: float,
+        pooling: str,
+        temperature: float,
+        max_length: int,
+    ):
+        from transformers import Trainer
+
+        self._loss_type = loss_type
+        self._margin = margin
+        self._pooling = pooling
+        self._temperature = temperature
+        self._max_length = max_length
+        self._tokenizer = processing_class
+
+        # Create a custom Trainer subclass dynamically to inject compute_loss
+        embedding_trainer = self
+
+        class _CustomTrainer(Trainer):
+            def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
+                return embedding_trainer._compute_embedding_loss(
+                    model, inputs, return_outputs
+                )
+
+            def prediction_step(
+                self, model, inputs, prediction_loss_only, ignore_keys=None
+            ):
+                # #1223: HF's default runs model(**inputs), and no model
+                # forward accepts the anchor_/positive_/negative_ keys this
+                # collator produces, so the first evaluation crashed. Score the
+                # same objective training optimises, under the same autocast.
+                import torch
+
+                inputs = self._prepare_inputs(inputs)
+                with torch.no_grad(), self.compute_loss_context_manager():
+                    loss = embedding_trainer._compute_embedding_loss(model, inputs)
+                return loss.detach(), None, None
+
+        self._trainer = _CustomTrainer(
+            model=model,
+            args=args,
+            train_dataset=train_dataset,
+            eval_dataset=eval_dataset,
+            data_collator=self._collate_fn,
+            processing_class=processing_class,
+        )
+
+    def _collate_fn(self, features):
+        """Collate embedding pairs/triplets into tokenized batches."""
+        anchors = [feat["anchor"] for feat in features]
+        positives = [feat["positive"] for feat in features]
+        negatives = None
+        if "negative" in features[0] and features[0]["negative"]:
+            negatives = [feat["negative"] for feat in features]
+
+        batch = {}
+        anchor_enc = self._tokenizer(
+            anchors, padding=True, truncation=True,
+            max_length=self._max_length, return_tensors="pt",
+        )
+        batch["anchor_input_ids"] = anchor_enc["input_ids"]
+        batch["anchor_attention_mask"] = anchor_enc["attention_mask"]
+
+        pos_enc = self._tokenizer(
+            positives, padding=True, truncation=True,
+            max_length=self._max_length, return_tensors="pt",
+        )
+        batch["positive_input_ids"] = pos_enc["input_ids"]
+        batch["positive_attention_mask"] = pos_enc["attention_mask"]
+
+        if negatives:
+            neg_enc = self._tokenizer(
+                negatives, padding=True, truncation=True,
+                max_length=self._max_length, return_tensors="pt",
+            )
+            batch["negative_input_ids"] = neg_enc["input_ids"]
+            batch["negative_attention_mask"] = neg_enc["attention_mask"]
+
+        return batch
+
+    def _compute_embedding_loss(self, model, inputs, return_outputs=False):
+        """Compute contrastive, triplet, or cosine loss on embeddings."""
+        import torch
+        from torch.nn import functional as nn_func
+
+        # Fail fast if contrastive batch is degenerate (< 2) before running model forwards (#1234)
+        if (
+            self._loss_type == "contrastive"
+            or (self._loss_type == "triplet" and "negative_input_ids" not in inputs)
+        ):
+            batch_sz = inputs["anchor_input_ids"].size(0)
+            if batch_sz < 2:
+                raise ValueError(
+                    f"contrastive in-batch negatives need batch_size >= 2; got {batch_sz}"
+                )
+
+        # Encode anchor
+        anchor_out = model(
+            input_ids=inputs["anchor_input_ids"],
+            attention_mask=inputs["anchor_attention_mask"],
+        )
+        anchor_emb = _pool_embeddings(
+            anchor_out.last_hidden_state,
+            inputs["anchor_attention_mask"],
+            self._pooling,
+        )
+
+        # Encode positive
+        pos_out = model(
+            input_ids=inputs["positive_input_ids"],
+            attention_mask=inputs["positive_attention_mask"],
+        )
+        pos_emb = _pool_embeddings(
+            pos_out.last_hidden_state,
+            inputs["positive_attention_mask"],
+            self._pooling,
+        )
+
+        # Normalize embeddings
+        anchor_emb = nn_func.normalize(anchor_emb, p=2, dim=-1)
+        pos_emb = nn_func.normalize(pos_emb, p=2, dim=-1)
+
+        if self._loss_type == "triplet" and "negative_input_ids" in inputs:
+            neg_out = model(
+                input_ids=inputs["negative_input_ids"],
+                attention_mask=inputs["negative_attention_mask"],
+            )
+            neg_emb = _pool_embeddings(
+                neg_out.last_hidden_state,
+                inputs["negative_attention_mask"],
+                self._pooling,
+            )
+            neg_emb = nn_func.normalize(neg_emb, p=2, dim=-1)
+
+            # Triplet margin loss
+            pos_dist = (anchor_emb - pos_emb).pow(2).sum(dim=-1)
+            neg_dist = (anchor_emb - neg_emb).pow(2).sum(dim=-1)
+            loss = nn_func.relu(pos_dist - neg_dist + self._margin).mean()
+
+        elif self._loss_type == "cosine":
+            # Cosine similarity loss — maximize similarity of anchor-positive
+            cos_sim = (anchor_emb * pos_emb).sum(dim=-1)
+            loss = (1.0 - cos_sim).mean()
+
+        else:
+            # Contrastive loss (InfoNCE / in-batch negatives)
+            similarity = torch.matmul(anchor_emb, pos_emb.T) / self._temperature
+            labels = torch.arange(similarity.size(0), device=similarity.device)
+            loss = nn_func.cross_entropy(similarity, labels)
+
+        if return_outputs:
+            return loss, anchor_out
+        return loss
+
+    # Delegate Trainer interface methods
+    def train(self, resume_from_checkpoint=None):
+        return self._trainer.train(resume_from_checkpoint=resume_from_checkpoint)
+
+    def save_model(self, output_dir):
+        return self._trainer.save_model(output_dir)
+
+    def add_callback(self, callback):
+        return self._trainer.add_callback(callback)
+
+    @property
+    def state(self):
+        return self._trainer.state
+
+    @property
+    def model(self):
+        return self._trainer.model
+
+    @property
+    def args(self):
+        return self._trainer.args
+
+    def compute_loss(self, model, inputs, return_outputs=False):
+        return self._compute_embedding_loss(model, inputs, return_outputs)
