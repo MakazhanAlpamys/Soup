@@ -624,7 +624,7 @@ soup train
 
 ## Knowledge Distillation
 
-Train a small student model to match a larger teacher's output distribution. Every train/val row must keep at least one causal-loss target after truncation at `data.max_length`, and a row without one is refused at setup by split and row number, as SFT does.
+Train a small student model to match a larger teacher's output distribution. Every train/val row must keep at least one causal-loss target after truncation at `data.max_length`, and a row without one is refused at setup by split and row number, as SFT does. Both token-level and sequence-level distillation require `modality: text`; vision and audio inputs are refused at config load because this trainer is text-only.
 
 ```yaml
 base: HuggingFaceTB/SmolLM2-135M
@@ -2130,7 +2130,7 @@ training:
   distill_temperature: 2.0
 ```
 
-The cross-validator rejects `task='distill'` without `teacher_model`, and rejects `teacher_model` / `distill_*` fields when `task` is anything other than `distill`. It also refuses `task='distill'` on `backend: mlx` and `backend: unsloth` at config load; distillation runs on `backend: transformers` only.
+The cross-validator rejects `task='distill'` without `teacher_model`, and rejects `teacher_model` / `distill_*` fields when `task` is anything other than `distill`. It also refuses `task='distill'` on `backend: mlx` and `backend: unsloth` at config load; distillation runs on `backend: transformers` only. Both token-level and sequence-level distillation require `modality: text`; `vision` and `audio` are refused at config load because the distill trainer has no multimodal input path.
 
 
 ## EBFT + GDPO (BETA, v0.52.0)

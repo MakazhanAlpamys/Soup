@@ -5967,6 +5967,13 @@ class SoupConfig(BaseModel):
             except ValueError as exc:
                 raise ValueError(str(exc)) from exc
 
+            if self.modality != "text":
+                raise ValueError(
+                    "task='distill' requires modality='text': the distill trainer "
+                    "loads a text-only student and teacher and does not process "
+                    f"vision or audio inputs; got modality={self.modality!r}."
+                )
+
             chunk_offenders = [
                 name
                 for name, val in (
