@@ -147,6 +147,8 @@ def _mixed_pref_rows(n=8):
 #: KTO refuses `per_device_train_batch_size == 1` outright — its KL term is
 #: degenerate at 1 — so the floor is per task, not global.
 _MIN_BATCH = {"kto": 2}
+# At batch 2 both KL rotation directions coincide; 4 tells them apart.
+_KL_ROTATION_BATCH = 4
 
 _ROWS = {
     "bco": _pref_rows,
@@ -639,10 +641,7 @@ class TestTheCapTouchesOnlyRowsThatOverflow:
         rebuilding the KL completion from answer_input_ids with the same
         per-device-batch rotation must give the identical ids, mask and labels.
         """
-        from soup_cli.trainer._trl_compat import (
-            _rebuild_unpaired_sequence,
-            _rotated_answer_index,
-        )
+        from soup_cli.trainer._trl_compat import _rebuild_unpaired_sequence
 
         completions = [" good answer", " fine", " a much longer answer with words", " no"]
         rows = [
@@ -656,7 +655,7 @@ class TestTheCapTouchesOnlyRowsThatOverflow:
         chunk = wrapper.trainer.args.per_device_train_batch_size
         eos_id = wrapper.tokenizer.eos_token_id
         for index, row in enumerate(dataset):
-            lender = _rotated_answer_index(index, len(answers), chunk)
+            lender = _trl_kl_lender(index, len(answers), chunk)
             rebuilt = _rebuild_unpaired_sequence(
                 row["KL_prompt_input_ids"],
                 row["KL_prompt_attention_mask"],
@@ -680,8 +679,6 @@ class TestTheCapTouchesOnlyRowsThatOverflow:
         per_device_train_batch_size chunk; the rebuild has to follow the same
         rotation, or the KL estimate compares the wrong text.
         """
-        from soup_cli.trainer._trl_compat import _rotated_answer_index
-
         completions = [" alpha beta", " gamma", " delta epsilon zeta", " eta"]
         rows = [
             {
@@ -697,9 +694,63 @@ class TestTheCapTouchesOnlyRowsThatOverflow:
         answers = list(dataset["answer_input_ids"])
         chunk = wrapper.trainer.args.per_device_train_batch_size
         for index, row in enumerate(dataset):
-            lender = _rotated_answer_index(index, len(answers), chunk)
+            lender = _trl_kl_lender(index, len(answers), chunk)
             ids = list(row["KL_completion_input_ids"])
             labels = list(row["KL_completion_labels"])
             trained = [token for token, label in zip(ids, labels) if label != _IGNORE_LABEL]
             assert len(ids) <= _MAX_SEQUENCE_LENGTH, (index, len(ids))
             assert trained == list(answers[lender]) + [eos_id], index
+
+
+def _trl_kl_lender(index, size, chunk):
+    """trl's ``_get_kl_dataset`` rotates ``[a[-1]] + a[:-1]`` inside each chunk.
+
+    So row ``i`` borrows row ``i - 1``'s answer, and the first row of a chunk
+    borrows the last one's. Written out here, not imported, so the test does
+    not share an oracle with the code under test.
+    """
+    start = (index // chunk) * chunk
+    end = min(start + chunk, size)
+    return index - 1 if index > start else end - 1
+
+
+@pytest.mark.parametrize(
+    "prompt", ("hi there", _OVERLONG_PROMPT_WITH_TAIL), ids=("fits", "overlong")
+)
+def test_kto_kl_rows_borrow_the_predecessor_answer_at_batch_four(tmp_path, monkeypatch, prompt):
+    monkeypatch.setitem(_MIN_BATCH, "kto", _KL_ROTATION_BATCH)
+    # Distinct ids in the fixture vocabulary (unknown words all become <unk>).
+    completions = [" good", " answer answer", " bad bad bad", " good bad good bad"]
+    rows = [
+        {"prompt": prompt, "completion": completions[i % len(completions)], "label": i % 2 == 0}
+        for i in range(8)
+    ]
+    wrapper = _setup_rows(tmp_path, monkeypatch, "kto", rows)
+    assert wrapper.trainer.args.per_device_train_batch_size == _KL_ROTATION_BATCH
+    dataset = wrapper.trainer.train_dataset
+    answers = list(dataset["answer_input_ids"])
+    eos_id = wrapper.tokenizer.eos_token_id
+    for index, row in enumerate(dataset):
+        ids = list(row["KL_completion_input_ids"])
+        labels = list(row["KL_completion_labels"])
+        trained = [tok for tok, lab in zip(ids, labels) if lab != _IGNORE_LABEL]
+        lender = _trl_kl_lender(index, len(answers), _KL_ROTATION_BATCH)
+        assert trained == list(answers[lender]) + [eos_id], index
+
+
+@pytest.mark.parametrize("task", ("bco", "kto"))
+def test_an_overlong_prompt_with_a_long_completion_fits_and_ends_in_eos(
+    tmp_path, monkeypatch, task
+):
+    rows = _rows_with(task, _OVERLONG_PROMPT_WITH_TAIL, _LONG_COMPLETION)
+    wrapper = _setup_rows(tmp_path, monkeypatch, task, rows)
+    eos_id = wrapper.tokenizer.eos_token_id
+    prefixes = ["completion"] + (["KL_completion"] if task == "kto" else [])
+    for index, row in enumerate(wrapper.trainer.train_dataset):
+        for prefix in prefixes:
+            ids = list(row[f"{prefix}_input_ids"])
+            labels = list(row[f"{prefix}_labels"])
+            trained = [tok for tok, lab in zip(ids, labels) if lab != _IGNORE_LABEL]
+            assert len(ids) <= _MAX_SEQUENCE_LENGTH, (task, index, prefix, len(ids))
+            assert ids[-1] == eos_id, (task, index, prefix, "EOS cut off by the cap")
+            assert len(trained) > 1, (task, index, prefix, "EOS-only completion")

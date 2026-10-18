@@ -221,10 +221,8 @@ def _rotated_answer_index(index: int, row_count: int, chunk_size: int) -> int:
     chunk = max(1, chunk_size)
     chunk_start = (index // chunk) * chunk
     chunk_end = min(chunk_start + chunk, row_count)
-    chunk_width = chunk_end - chunk_start
-    if chunk_width <= 1:
-        return index
-    return chunk_start + ((index - chunk_start + 1) % chunk_width)
+    # TRL rotates ``[a[-1]] + a[:-1]``: each row borrows its predecessor's answer.
+    return index - 1 if index > chunk_start else chunk_end - 1
 
 
 def _rebuild_unpaired_completion_row(
