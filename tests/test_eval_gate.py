@@ -115,6 +115,48 @@ class TestEvalSuiteLoading:
         with pytest.raises(FileNotFoundError):
             load_suite(str(tmp_path / "nope.yaml"))
 
+    @pytest.mark.parametrize("bad_key", [1, True, None], ids=["int", "bool", "null"])
+    def test_load_suite_refuses_non_string_key(self, tmp_path, monkeypatch, bad_key):
+        """A suite mapping with a non-string key must be refused with a ValueError
+        naming the suite file and the offending key (#1915), not a bare TypeError
+        from `EvalSuite(**data)`."""
+        monkeypatch.chdir(tmp_path)
+        from soup_cli.eval.gate import load_suite
+
+        suite_path = tmp_path / "gate.yaml"
+        payload = {
+            "suite": "demo",
+            bad_key: "x",
+            "tasks": [
+                {"type": "custom", "name": "t",
+                 "tasks": "tasks.jsonl", "scorer": "exact", "threshold": 0.0},
+            ],
+        }
+        suite_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+        with pytest.raises(ValueError) as caught:
+            load_suite(str(suite_path))
+        assert repr(bad_key) in str(caught.value), repr(caught.value)
+
+    def test_cli_non_string_key_exits_usage_error(self, tmp_path, monkeypatch):
+        """`soup eval gate` on a suite with a non-string key must exit 3 with
+        "Cannot load suite:", not exit 1 on an uncaught TypeError (#1915)."""
+        monkeypatch.chdir(tmp_path)
+        suite_path = tmp_path / "gate.yaml"
+        payload = {
+            "suite": "demo",
+            1: "x",
+            "tasks": [
+                {"type": "custom", "name": "t",
+                 "tasks": "tasks.jsonl", "scorer": "exact", "threshold": 0.0},
+            ],
+        }
+        suite_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+        result = runner.invoke(app, ["eval", "gate", "--suite", str(suite_path)])
+        assert result.exit_code == 3, (
+            f"expected usage error 3, got {result.exit_code} ({result.exception!r})"
+        )
+        assert "Cannot load suite:" in result.output
+
 
 # ---------------------------------------------------------------------------
 # Baseline resolution
