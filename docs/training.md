@@ -1363,8 +1363,9 @@ unpaired schema (`{prompt, completion, label}`).
 
 When TRL no longer exposes `max_prompt_length`, Soup still enforces
 `data.max_length`: BCO, IPO, KTO, and SimPO cut prompts only when a row
-would exceed `max_length`, keeping the prompt end, and DPO/ORPO keep their
-legacy `max_length // 2` prompt cap.
+would exceed `max_length`. BCO, KTO, and SimPO keep the prompt end; IPO
+follows DPO's `truncation_mode` (`keep_start` by default). DPO/ORPO keep
+their legacy `max_length // 2` prompt cap.
 
 ```yaml
 task: bco
