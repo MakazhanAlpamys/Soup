@@ -2806,6 +2806,7 @@ Usage: `soup merge [OPTIONS]`
 | `--trust-remote-code` | flag | off |  | Allow loading models that ship custom Python via auto_map. Default deny (v0.36.0). Only enable if you trust the source. |
 | `--save-format` | text | `fp16` |  | Merged-checkpoint save format. fp16 (default) writes a standard fp16 merge. 4bit / 4bit_forced write a single BNB-4bit-quantized merge without the dequant-merge-requant cycle (v0.53.1 #142). |
 | `--double-quant` / `--no-double-quant` | flag | on |  | BNB double-quantization for the 4bit / 4bit_forced save formats (#321). Default on, matching the training loaders; pass --no-double-quant to disable. Ignored for the fp16 save format. |
+| `--low-memory` | flag | off |  | Merge tensor by tensor straight from the base safetensors files instead of loading the whole model into RAM. Needs the fp16 save format and a plain LoRA adapter. |
 | `--hub` | text | `hf` |  | Source hub for the base model: hf (default) / modelscope / modelers. Non-HF hubs require the matching SDK (v0.53.10 #152). |
 
 ## `soup merge-sharded-fsdp-weights`

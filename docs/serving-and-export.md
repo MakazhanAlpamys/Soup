@@ -38,7 +38,18 @@ soup merge --adapter ./output --output ./merged
 
 # Specify base model and dtype
 soup merge --adapter ./output --base meta-llama/Llama-3.1-8B --dtype bfloat16
+
+# Merge tensor by tensor without loading the model into RAM
+soup merge --adapter ./output --output ./merged --low-memory
 ```
+
+`--low-memory` reads the base `.safetensors` files and writes the merged files
+one tensor at a time, so peak RAM is about the largest single tensor instead of
+the whole model. The result is bit-identical to the regular merge. It needs the
+default `fp16` save format and a plain LoRA adapter; DoRA, `modules_to_save`,
+rank or alpha patterns, and adapters on embeddings are refused with a message
+to run the regular merge. Measured on a 1.4 GB Llama-shaped model: 1635 MiB of
+working memory for the regular merge against about 190 MiB with `--low-memory`.
 
 ReLoRA training outputs are already standalone dense models: Soup merges the
 final active adapter into the accumulated in-memory base before writing the
