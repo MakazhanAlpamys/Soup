@@ -709,7 +709,9 @@ class StreamingSetupMixin:
             inspect_shard_cache,
             layer_paths,
             resolve_shard_dir,
+            shard_cache_disk_bytes,
             shard_checkpoint,
+            source_identity_includes_config,
             source_weight_bytes,
             stripe_dirs,
         )
@@ -816,7 +818,7 @@ class StreamingSetupMixin:
                 source_components = checkpoint_source_components(
                     weights_plan.weights_dir,
                     weights_plan.source_files,
-                    include_config=arch == "qwen4_exp",
+                    include_config=source_identity_includes_config(arch),
                 )
                 cached, _reason = inspect_shard_cache(
                     shard_dir,
@@ -829,6 +831,11 @@ class StreamingSetupMixin:
                     "qwen4_ple" if arch == "qwen4_exp" else "",
                     stripe_roots=stripe_roots,
                 )
+            cached_bytes = None
+            if cached is not None:
+                cached_bytes = shard_cache_disk_bytes(shard_dir, cached)
+                if cached_bytes is not None:
+                    shard_estimate = cached_bytes
             write_total = 0 if cached is not None else shard_estimate
             shares, approximate = estimate_stripe_write_shares(
                 weights_plan.weights_dir,
@@ -850,7 +857,7 @@ class StreamingSetupMixin:
                 shard_write_bytes=shares[0],
                 shard_path=shard_dir,
                 stripe_writes=tuple(zip(dirs[1:], shares[1:])),
-                approximate=approximate,
+                approximate=approximate and cached_bytes is None,  # a measured cache is exact
             )
 
         weights_dir = resolve_model_weights(
@@ -941,6 +948,13 @@ class StreamingSetupMixin:
             quant_device=str(self.device),
             stripe_roots=stripe_roots,
             notify=console.print,
+            # DeepSeek-V3 / Kimi K2 store their MTP module as layers past the last
+            # decoder layer; the sharder drops them against the config's count.
+            num_hidden_layers=(
+                int(self._stream_shape_config(model_config).num_hidden_layers)
+                if arch == "deepseek_v3"
+                else None
+            ),
         )
         # R4: decided once, from the roots the index actually carries (a reused cache keeps its
         # own), so the plan's staging figure, the host pre-flight and the reader all agree. Read
@@ -1205,6 +1219,7 @@ class StreamingSetupMixin:
             weights_dir=weights_dir,
             ngram_source=ngram_source,
             refill_before_backward=self._STREAM_REFILL_BEFORE_BACKWARD,
+            nf4_scale_cache=bool(getattr(tcfg, "stream_nf4_scale_cache", False)),
         )
         self.model = model
         self._stream_runtime = runtime
@@ -1328,9 +1343,18 @@ class StreamingSetupMixin:
             estimate_stream_peak_vram,
             forecast_stream_throughput,
             measure_cublas_workspace_bytes,
+            nf4_scale_cache_bytes,
             resolve_available_vram_bytes,
         )
         from soup_cli.utils.layer_stream_runtime import measure_gemm_tflops
+
+        # Charged whole even though it fills lazily: the cache is complete after
+        # the first step and stays resident for the run.
+        scale_cache_bytes = (
+            nf4_scale_cache_bytes(getattr(index, "quant_specs", None) or {}, index.n_layers)
+            if getattr(tcfg, "stream_nf4_scale_cache", False)
+            else 0
+        )
 
         shape_cfg = self._stream_shape_config(model_config)
         vocab = int(getattr(shape_cfg, "vocab_size", 0) or 0)
@@ -1393,6 +1417,7 @@ class StreamingSetupMixin:
             logits_bytes_per_element=calibrated,
             large_layer_bytes=large_layer_bytes,
             cublas_workspace_bytes=cublas_workspace,
+            persistent_bytes=scale_cache_bytes,
         )
         logits = estimate_logits_bytes(
             vocab_size=vocab, seq_len=seq_len, batch_size=rows, bytes_per_element=calibrated
@@ -1404,6 +1429,11 @@ class StreamingSetupMixin:
             f"  peak VRAM    ~{predicted / 1e9:.2f} GB at batch {batch} x seq "
             f"{seq_len}{paired} (logits {logits / 1e9:.2f} GB)"
         ]
+        if scale_cache_bytes:
+            lines.append(
+                f"  scale cache  {scale_cache_bytes / 1e9:.2f} GB resident "
+                "(training.stream_nf4_scale_cache), included above"
+            )
         if calibrated > LOGITS_BYTES_PER_ELEMENT:
             lines.append(
                 f"  logits       calibrated {calibrated:.3f} B/element on this stack, "

@@ -30,6 +30,7 @@ import typer
 
 from soup_cli.config.backend_support import REGISTRY as _REGISTRY
 from soup_cli.config.schema import DataConfig, TrainingConfig
+from tests._source_scan import memoized_scan
 from tests.conftest import strip_ansi
 
 MLX_SFT = pathlib.Path(__file__).resolve().parents[1] / (
@@ -178,7 +179,13 @@ def test_registry_covers_every_field_the_mlx_trainer_warns_about():
     unknown = sorted(warned - known)
     assert unknown == [], f"warning list names fields that do not exist: {unknown}"
     registered = {e.field for e in unsupported_for("sft", "mlx")}
-    missing = sorted(warned - registered)
+    # These warnings are internal guards for schema-refused monitoring values.
+    # Their load-time refusal is pinned by test_issue1069; doctor cannot list them.
+    schema_refused = {
+        "training.loss_watchdog", "training.loss_spike_recovery",
+        "training.grad_accum_auto_tune",
+    }
+    missing = sorted(warned - registered - schema_refused)
     assert missing == [], (
         f"mlx_sft.py warns about {missing} but the registry does not list them"
     )
@@ -460,7 +467,20 @@ def test_doctor_without_config_does_not_read_one(config_at, capsys):
 
 def _fields_read_by(path: pathlib.Path) -> set[str]:
     """Attribute names and exact string constants in a module, docstrings out."""
-    tree = ast.parse(path.read_text(encoding="utf-8"))
+    return _names_read_in(path.read_text(encoding="utf-8"))
+
+
+@memoized_scan
+def _names_read_in(source: str) -> set[str]:
+    """The scan behind ``_fields_read_by``, run once per distinct module text.
+
+    ``_registry_drift`` asks for every module under ``src/`` once per registry pair,
+    and three tests run it on the real tree: twelve parses of the package for one
+    answer. Keyed on the text, so the synthetic trees the tests below write are each
+    scanned for what they contain. ``ast.parse`` and not the shared tree, because the
+    first loop edits what it walks.
+    """
+    tree = ast.parse(source)
     for node in ast.walk(tree):
         if isinstance(
             node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)

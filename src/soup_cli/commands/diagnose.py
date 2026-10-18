@@ -316,7 +316,7 @@ def diagnose(
         "--citation-style",
         help=(
             "Citation style for the live RAFT citation probe: bracket "
-            "([doc-id]) / inline ((doc-id)) / footnote ([^id]). Must match the "
+            "(\\[doc-id]) / inline ((doc-id)) / footnote ([^id]). Must match the "
             "style the model was trained to emit. (v0.71.17 #254)"
         ),
     ),
@@ -333,7 +333,7 @@ def diagnose(
         "--shuffle-seed",
         help=(
             "RAFT document-shuffle seed for the live citation probe (composes "
-            "the [doc-N] ids the model is scored against). (v0.71.17 #254)"
+            "the \\[doc-N] ids the model is scored against). (v0.71.17 #254)"
         ),
     ),
 ) -> None:

@@ -98,6 +98,7 @@ _MAX_TOTAL_TENSORS = 200_000
 _MAX_LIVE_SOURCE_HANDLES = 2
 
 _INDEX_NAME = "index.json"
+_RESHARDING_INDEX_NAME = "index.json.resharding"
 _EXTRAS_NAME = "extras.safetensors"
 _SHARD_FORMAT_VERSION = 5
 _LARGE_EMBED_ROLE = "embed_tokens"
@@ -109,10 +110,31 @@ _QWEN4_PLE_SHARD_RE = re.compile(
 _QWEN4_OQ_PLE_SHARD_RE = re.compile(
     r"^(?P<prefix>.+\.ple\.ple_embedding\.ngram_embedding)\.shards\.(?P<part>\d+)\.weight$"
 )
-_QWEN4_EXPERT_RE = re.compile(
+_PER_EXPERT_RE = re.compile(
     r"^(?P<prefix>model\.layers\.\d+\.mlp\.experts)\."
     r"(?P<expert>\d+)\.(?P<projection>gate_proj|up_proj|down_proj)\.weight$"
 )
+#: Architectures whose transformers module holds the routed experts as fused
+#: 3-D ``gate_up_proj`` [E, 2I, H] / ``down_proj`` [E, H, I] parameters while
+#: the checkpoint stores one 2-D tensor per expert and projection (the
+#: ``qwen2_moe`` conversion in transformers' ``conversion_mapping.py``: gate
+#: rows first, experts in index order). Value = the name used in messages.
+_STACKED_EXPERT_ARCHS = {"qwen4_exp": "Qwen4", "deepseek_v3": "DeepSeek-V3"}
+#: Per-layer BUFFERS the checkpoint carries and a streamed run must use. The
+#: skeleton is built under ``init_empty_weights()``, which leaves buffers at
+#: their ``__init__`` value, so the runtime loads exactly these from the layer
+#: shard (``layer_stream_runtime._load_layer_buffers``); every other buffer
+#: keeps its init value, as it always has (a qwen4_exp integer buffer, for one,
+#: reaches the shard cast to the stream dtype and must not be loaded back).
+#: Stored at float32 whatever the stream dtype: transformers keeps them in fp32
+#: on load (``_keep_in_fp32_modules_strict``), so a resident bf16 run routes with
+#: the fp32 values and the streamed run must as well.
+_LAYER_BUFFER_KEYS = {"deepseek_v3": ("mlp.gate.e_score_correction_bias",)}
+
+
+def layer_buffer_keys(arch: str) -> Tuple[str, ...]:
+    """Short keys of the per-layer buffers streamed for ``arch`` (see above)."""
+    return _LAYER_BUFFER_KEYS.get(arch, ())
 _QWEN4_OQ_EXPERT_RE = re.compile(
     r"^(?P<prefix>model\.layers\.\d+\.mlp)\.switch_mlp\."
     r"(?P<projection>gate_proj|up_proj|down_proj)\.weight$"
@@ -608,9 +630,9 @@ def _stripe_marker_problem(
     return None
 
 
-def read_shard_index(out_dir: str) -> ShardIndex:
-    """Read ``index.json``. Raises on a missing or malformed index."""
-    path = os.path.join(out_dir, _INDEX_NAME)
+def read_shard_index(out_dir: str, *, index_name: str = _INDEX_NAME) -> ShardIndex:
+    """Read a shard index. Raises on a missing or malformed index."""
+    path = os.path.join(out_dir, index_name)
     with open(path, encoding="utf-8") as handle:
         payload = json.load(handle)
     # `quant` defaults to "none" so a v0.72.0/.1 bf16 cache stays valid for a
@@ -823,6 +845,17 @@ def _source_file_components(shards: List[str]) -> Tuple[Tuple[str, int, int], ..
     return tuple(components)
 
 
+def source_identity_includes_config(arch: str) -> bool:
+    """Whether ``config.json`` is part of a shard cache's source identity.
+
+    ``qwen4_exp`` reads its PLE layout from the config; for ``deepseek_v3`` the
+    config's layer count decides which (multi-token-prediction) layers are
+    dropped. The pre-sharding planner and the sharder must agree on this, or
+    the planner predicts a cache miss the sharder then does not see.
+    """
+    return arch in ("qwen4_exp", "deepseek_v3")
+
+
 def checkpoint_source_components(
     weights_dir: str,
     components: Tuple[Tuple[str, int, int], ...],
@@ -999,6 +1032,8 @@ def inspect_shard_cache(
     try:
         index = read_shard_index(out_dir)
     except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+        if os.path.exists(os.path.join(out_dir, _RESHARDING_INDEX_NAME)):
+            return None, "previous re-shard did not finish; cache index is unavailable"
         return None, "cache index is missing or unreadable"
     if index.dtype != dtype:
         return None, f"dtype changed ({index.dtype!r} -> {dtype!r})"
@@ -1062,6 +1097,41 @@ def inspect_shard_cache(
                 return None, f"cached shard {os.path.basename(path)!r} is missing"
             return None, f"cached shard {path} is missing"
     return index, "cache is reusable"
+
+
+def _content_change_requires_index_quarantine(
+    out_dir: str,
+    *,
+    dtype: str,
+    fingerprint: str,
+    quant: str,
+    double_quant: bool,
+    quant_device: str,
+    external_mode: str,
+) -> bool:
+    """Return whether the next write could make the current index describe wrong bytes."""
+    try:
+        index = read_shard_index(out_dir)
+    except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+        return False
+    return any(
+        (
+            index.dtype != dtype,
+            index.quant != quant,
+            index.quant != QUANT_NONE and index.double_quant != double_quant,
+            index.quant != QUANT_NONE and index.quant_device != quant_device,
+            index.source_fingerprint != fingerprint,
+            index.external_mode != external_mode,
+            index.format_version != _SHARD_FORMAT_VERSION,
+        )
+    )
+
+
+def _quarantine_shard_index(out_dir: str) -> None:
+    """Take the old commit point out of play before rewriting content bytes."""
+    path = os.path.join(out_dir, _INDEX_NAME)
+    if os.path.exists(path):
+        os.replace(path, os.path.join(out_dir, _RESHARDING_INDEX_NAME))
 
 
 # ==========================================================================
@@ -1177,6 +1247,7 @@ def shard_checkpoint(
     quant_device: Optional[str] = None,
     notify: Optional[Callable[[str], None]] = None,
     stripe_roots: Sequence[str] = (),
+    num_hidden_layers: Optional[int] = None,
 ) -> ShardIndex:
     """Rewrite an HF checkpoint into per-layer safetensors shards.
 
@@ -1193,11 +1264,28 @@ def shard_checkpoint(
     ``i`` is written to root ``i mod N`` (root 0 is ``out_dir``), each extra
     root gets a per-model folder named like ``out_dir`` plus a ``stripe.json``
     marker, and the index records the placement.
+
+    For ``arch`` in :data:`_STACKED_EXPERT_ARCHS` the per-expert routed-expert
+    keys (``mlp.experts.E.{gate,up,down}_proj.weight``) are stacked into the
+    fused ``mlp.experts.gate_up_proj`` / ``mlp.experts.down_proj`` tensors the
+    transformers module holds, the same conversion ``from_pretrained`` applies.
+    For ``deepseek_v3``, ``num_hidden_layers`` (the config's value) drops the
+    multi-token-prediction layers a DeepSeek-V3 / Kimi K2 checkpoint stores
+    past the last decoder layer; transformers ignores them on load too.
     """
     if dtype not in _SUPPORTED_DTYPES:
         raise ValueError(
             f"unsupported dtype {dtype!r} for layer streaming; "
             f"supported: {', '.join(_SUPPORTED_DTYPES)}"
+        )
+    if num_hidden_layers is not None and (
+        isinstance(num_hidden_layers, bool)
+        or not isinstance(num_hidden_layers, int)
+        or not 1 <= num_hidden_layers <= _MAX_LAYERS
+    ):
+        raise ValueError(
+            f"num_hidden_layers must be an int in [1, {_MAX_LAYERS}], "
+            f"got {num_hidden_layers!r}"
         )
     suffixes = _validate_quant_request(quant, quant_suffixes)
     quantise = quant == QUANT_NF4
@@ -1206,6 +1294,10 @@ def shard_checkpoint(
     # index stores that so the cache check below stays stable across ordinals.
     device_kind = str(device).split(":", 1)[0] if quantise else ""
     external_mode = "qwen4_ple" if arch == "qwen4_exp" else ""
+    stack_experts = arch in _STACKED_EXPERT_ARCHS
+    expert_label = _STACKED_EXPERT_ARCHS.get(arch, arch)
+    fp32_layer_keys = layer_buffer_keys(arch)
+    drop_extra_layers = arch == "deepseek_v3" and num_hidden_layers is not None
     shards = _discover_safetensors(weights_dir)
     resolved_out = _validate_out_dir(out_dir)
 
@@ -1239,7 +1331,7 @@ def shard_checkpoint(
     source_files = checkpoint_source_components(
         weights_dir,
         _source_file_components(shards),
-        include_config=bool(external_mode),
+        include_config=source_identity_includes_config(arch),
     )
     fingerprint = _fingerprint_components(source_files)
     if not force:
@@ -1255,6 +1347,8 @@ def shard_checkpoint(
             stripe_roots=stripe,
         )
         if cached is not None:
+            if notify is not None:
+                _notify_unindexed_cache_files(resolved_out, cached, notify)
             return cached
         if notify is not None:
             from soup_cli.utils.terminal import for_terminal
@@ -1263,6 +1357,16 @@ def shard_checkpoint(
             # as text, never as markup or raw control bytes.
             notify(f"[yellow]Re-sharding layer cache:[/] {for_terminal(miss_reason)}.")
             _notify_orphaned_stripes(resolved_out, stripe, notify)
+        if _content_change_requires_index_quarantine(
+            resolved_out,
+            dtype=dtype,
+            fingerprint=fingerprint,
+            quant=quant,
+            double_quant=double_quant,
+            quant_device=device_kind,
+            external_mode=external_mode,
+        ):
+            _quarantine_shard_index(resolved_out)
 
     from safetensors import safe_open
 
@@ -1278,6 +1382,9 @@ def shard_checkpoint(
             for source_key in handle.keys():
                 if external_mode and source_key.endswith((".biases", ".scales")):
                     saw_oq_companion = True
+                if source_key.endswith("_scale_inv"):
+                    # Before any byte is read or written: see _refuse_fp8.
+                    _refuse_fp8(source_key, str(handle.get_slice(source_key).get_dtype()))
                 key = _canonical_stream_key(source_key)
                 prior = where.get(key)
                 if prior is not None and prior != (path, source_key):
@@ -1344,6 +1451,19 @@ def shard_checkpoint(
             for key in where
             if (match := _LAYER_RE.match(key)) is not None
         }
+
+    if drop_extra_layers:
+        # DeepSeek-V3 / Kimi K2 store the multi-token-prediction module as the
+        # layer(s) after the last decoder layer (``model.layers.61.*`` of 61).
+        # The CausalLM has no such layer and transformers drops the keys on
+        # load; kept here they would make a shard the skeleton cannot place.
+        where = {
+            key: location
+            for key, location in where.items()
+            if (match := _LAYER_RE.match(key)) is None
+            or int(match.group(1)) < num_hidden_layers
+        }
+        layer_ids = {layer for layer in layer_ids if layer < num_hidden_layers}
 
     external_tensors: Dict[str, Any] = {}
     for logical_key, indexed_parts in external_parts.items():
@@ -1483,7 +1603,7 @@ def shard_checkpoint(
         for idx in range(n_layers):
             prefix = f"model.layers.{idx}."
             blob = {}
-            qwen4_experts: Dict[str, Dict[int, Tuple[str, str]]] = {}
+            stacked_experts: Dict[str, Dict[int, Tuple[str, str]]] = {}
             oq_experts: Dict[str, str] = {}
             for key, location in where.items():
                 if not key.startswith(prefix):
@@ -1498,11 +1618,11 @@ def shard_checkpoint(
                 if oq_expert_match:
                     oq_experts[oq_expert_match.group("projection")] = key
                     continue
-                expert_match = _QWEN4_EXPERT_RE.match(key) if external_mode else None
+                expert_match = _PER_EXPERT_RE.match(key) if stack_experts else None
                 if expert_match:
                     projection = expert_match.group("projection")
                     expert = int(expert_match.group("expert"))
-                    qwen4_experts.setdefault(projection, {})[expert] = location
+                    stacked_experts.setdefault(projection, {})[expert] = location
                     continue
                 path, source_key = location
                 short = key[len(prefix):]
@@ -1511,7 +1631,8 @@ def shard_checkpoint(
                         handles, where, key, oq_config=oq_config, dtype=dtype
                     )
                 else:
-                    tensor = _read_tensor(handles[path], source_key, dtype)
+                    stored = "float32" if short in fp32_layer_keys else dtype
+                    tensor = _read_tensor(handles[path], source_key, stored)
                 total_params += tensor.numel()
                 if quantise and short in suffixes:
                     sidecars, spec, code, nested_code = _quantize_nf4(
@@ -1537,27 +1658,27 @@ def shard_checkpoint(
             for logical_key, spec in external_tensors.items():
                 if logical_key.startswith(prefix):
                     total_params += math.prod(spec.shape)
-            if qwen4_experts:
+            if stacked_experts:
                 import torch
 
                 expected_projections = {"gate_proj", "up_proj", "down_proj"}
-                if set(qwen4_experts) != expected_projections:
+                if set(stacked_experts) != expected_projections:
                     raise ValueError(
-                        f"Qwen4 layer {idx} has incomplete expert projections: "
-                        f"{sorted(qwen4_experts)}"
+                        f"{expert_label} layer {idx} has incomplete expert projections: "
+                        f"{sorted(stacked_experts)}"
                     )
-                expert_ids = sorted(qwen4_experts["gate_proj"])
+                expert_ids = sorted(stacked_experts["gate_proj"])
                 if expert_ids != list(range(len(expert_ids))) or any(
-                    sorted(qwen4_experts[name]) != expert_ids
+                    sorted(stacked_experts[name]) != expert_ids
                     for name in expected_projections
                 ):
                     raise ValueError(
-                        f"Qwen4 layer {idx} expert ids must be contiguous and "
+                        f"{expert_label} layer {idx} expert ids must be contiguous and "
                         "identical across gate/up/down projections"
                     )
 
                 def _expert_tensor(projection: str, expert: int):
-                    path, source_key = qwen4_experts[projection][expert]
+                    path, source_key = stacked_experts[projection][expert]
                     return _read_tensor(handles[path], source_key, dtype)
 
                 gate_up = []
@@ -1571,7 +1692,8 @@ def shard_checkpoint(
                     total_params += gate.numel() + up.numel() + down_tensor.numel()
                 if "mlp.experts.gate_up_proj" in blob or "mlp.experts.down_proj" in blob:
                     raise ValueError(
-                        f"Qwen4 layer {idx} contains both packed and per-expert weights"
+                        f"{expert_label} layer {idx} contains both packed and "
+                        "per-expert weights"
                     )
                 blob["mlp.experts.gate_up_proj"] = torch.stack(gate_up, dim=0)
                 blob["mlp.experts.down_proj"] = torch.stack(down, dim=0)
@@ -1745,6 +1867,20 @@ def shard_checkpoint(
         layer_roots=layer_roots,
     )
     _atomic_write_index(index, resolved_out)
+    resharding_index = os.path.join(resolved_out, _RESHARDING_INDEX_NAME)
+    try:
+        os.remove(resharding_index)
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        if notify is not None:
+            from soup_cli.utils.terminal import for_terminal
+
+            notify(
+                f"[yellow]Could not delete the completed re-shard marker "
+                f"{for_terminal(resharding_index)} ({for_terminal(exc)}); the new cache "
+                f"index is committed — delete the marker when it is no longer in use.[/]"
+            )
     # Only now: the new index above no longer names these paths, so removing them cannot
     # leave any on-disk index (old or new) describing a file that does not exist. Best-effort
     # from here on: the shard is already correct and fully committed, so a failed delete (a
@@ -1766,6 +1902,8 @@ def shard_checkpoint(
                     f"({for_terminal(exc)}); the cache is complete without it — delete it to "
                     f"reclaim the space.[/]"
                 )
+    if notify is not None:
+        _notify_unindexed_cache_files(resolved_out, index, notify)
     return index
 
 
@@ -1781,6 +1919,22 @@ def _folder_bytes(folder: str) -> int:
     return total
 
 
+def shard_cache_disk_bytes(shard_dir: str, index: ShardIndex) -> Optional[int]:
+    """Bytes of the files a reusable cache is made of, or ``None`` if one cannot be measured.
+
+    Only what the cache check requires is counted: the index, the extras shard, each large
+    shard and each layer file wherever it is placed. A stray or stale file in the folder is
+    not part of the cache, and a file that cannot be read makes the caller keep its estimate.
+    """
+    paths = [os.path.join(shard_dir, _INDEX_NAME), extras_shard_path(shard_dir)]
+    paths.extend(large_shard_path(shard_dir, key) for key in index.large_keys)
+    paths.extend(layer_paths(shard_dir, index))
+    try:
+        return sum(os.path.getsize(path) for path in paths)
+    except (OSError, ValueError):
+        return None
+
+
 def _notify_orphaned_stripes(
     out_dir: str, keep: Sequence[str], notify: Callable[[str], None]
 ) -> None:
@@ -1788,9 +1942,8 @@ def _notify_orphaned_stripes(
 
     Never deletes them: they sit outside the contained primary root, so the operator decides.
     """
-    try:
-        previous = read_shard_index(out_dir)
-    except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+    previous = _read_previous_shard_index(out_dir)
+    if previous is None:
         return
     from soup_cli.utils.stripe_roots import stripe_folder_problem
     from soup_cli.utils.terminal import for_terminal
@@ -1807,6 +1960,57 @@ def _notify_orphaned_stripes(
             f"({_folder_bytes(folder) / 1e9:.2f} GB); this layout no longer does. Delete it "
             f"to reclaim the space.[/]"
         )
+
+
+def _read_previous_shard_index(out_dir: str) -> Optional[ShardIndex]:
+    """Read the current index, or the quarantined one during an interrupted re-shard."""
+    for name in (_INDEX_NAME, _RESHARDING_INDEX_NAME):
+        try:
+            return read_shard_index(out_dir, index_name=name)
+        except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+            pass
+    return None
+
+
+def _notify_unindexed_cache_files(
+    out_dir: str, index: ShardIndex, notify: Callable[[str], None]
+) -> None:
+    """Report layer/temp files that the committed index no longer names."""
+    from soup_cli.utils.stripe_roots import stripe_folder_problem
+    from soup_cli.utils.terminal import for_terminal
+
+    expected = {
+        os.path.normcase(os.path.realpath(path)) for path in layer_paths(out_dir, index)
+    }
+    directories = stripe_dirs(out_dir, index.stripe_roots)
+    for position, directory in enumerate(directories):
+        if position:
+            problem = stripe_folder_problem(directory, index.stripe_roots[position - 1])
+            if problem is not None:
+                continue
+        try:
+            entries = list(os.scandir(directory))
+        except OSError:
+            continue
+        for entry in entries:
+            if not (
+                (entry.name.startswith("layer_") and entry.name.endswith(".safetensors"))
+                or (entry.name.startswith(".soup.") and entry.name.endswith(".tmp"))
+            ):
+                continue
+            try:
+                if not entry.is_file(follow_symlinks=False):
+                    continue
+                path = os.path.normcase(os.path.realpath(entry.path))
+                if path in expected:
+                    continue
+                size = entry.stat(follow_symlinks=False).st_size
+            except OSError:
+                continue
+            notify(
+                f"[yellow]Unindexed layer-cache file {for_terminal(entry.path)} "
+                f"({size} bytes) is present; it was not named by the committed cache index.[/]"
+            )
 
 
 def _require_all_quantised(suffixes: Tuple[str, ...], matched: Iterable[str]) -> None:
@@ -1966,11 +2170,25 @@ def _own(view: Any, candidate: Any) -> Any:
     return view.clone() if candidate is view else candidate
 
 
+def _refuse_fp8(key: str, stored_dtype: str) -> None:
+    """FP8 weights carry block scales (``*.weight_scale_inv``) the sharder has no
+    path for; a plain cast keeps the raw e4m3 values and trains on wrong weights,
+    while the resident load (which dequantises) looks fine."""
+    if stored_dtype.upper().startswith("F8") or key.endswith("_scale_inv"):
+        raise ValueError(
+            f"checkpoint tensor {key!r} is FP8 ({stored_dtype}) or an FP8 block scale. "
+            f"Layer streaming has no FP8 path: casting would drop the scales. "
+            f"Dequantise the checkpoint to bf16 first."
+        )
+
+
 def _read_tensor(handle: Any, key: str, dtype: str) -> "Any":
     """Materialise one OWNED tensor, size-capped, converted to the target dtype."""
     import torch
 
-    shape = handle.get_slice(key).get_shape()
+    sliced = handle.get_slice(key)
+    _refuse_fp8(key, str(sliced.get_dtype()))
+    shape = sliced.get_shape()
     elements = math.prod(int(dim) for dim in shape)
     if elements > _MAX_TENSOR_ELEMENTS:
         raise ValueError(

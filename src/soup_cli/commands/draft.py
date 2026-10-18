@@ -98,6 +98,45 @@ def _fail(message: str, code: int = 1) -> NoReturn:
     raise typer.Exit(code)
 
 
+# Top-level import names declared by pyproject's ``[train]`` optional-dependency
+# group. Kept in sync with that group by hand (the install names there match
+# their import names). Only a module in this set means the ``[train]`` extra is
+# the right fix; a model's ``trust_remote_code`` config can import anything
+# (einops, flash_attn, ...), and blaming the extra for those would send the user
+# the wrong way.
+_TRAIN_EXTRA_MODULES = frozenset(
+    {
+        "torch",
+        "transformers",
+        "peft",
+        "trl",
+        "requests",
+        "datasets",
+        "bitsandbytes",
+        "accelerate",
+    }
+)
+
+
+def _config_read_error(exc: Exception) -> str:
+    """Message for a failed ``config`` read, hinting ``[train]`` only when apt.
+
+    A ``ModuleNotFoundError`` for a module the ``[train]`` extra provides means
+    the extra is not installed, so point the user at it. Any other failure —
+    including a missing module pulled in by a model's remote code — surfaces
+    verbatim, without the hint. ``_fail`` escapes, so the ``[train]`` bracket
+    renders literally.
+    """
+    message = f"could not read model config: {exc}"
+    missing = (getattr(exc, "name", None) or "").split(".")[0]
+    if isinstance(exc, ModuleNotFoundError) and missing in _TRAIN_EXTRA_MODULES:
+        message += (
+            '. The training extra is not installed; install it with: '
+            'pip install "soup-cli[train]"'
+        )
+    return message
+
+
 def _read_jsonl(path: str, label: str, max_rows: int) -> list[dict]:
     """Read a JSONL file: cwd-contained, O_NOFOLLOW, size- and row-capped."""
     enforce_under_cwd_and_no_symlink(path, label)
@@ -157,7 +196,7 @@ def _pair_vocab_sizes_or_fail(
             _vocab_size_of(draft_id, draft_trc),
         )
     except Exception as exc:  # noqa: BLE001 — surface as a friendly CLI error
-        _fail(f"could not read model config: {exc}")
+        _fail(_config_read_error(exc))
 
 
 def _write_draft_report(report: AcceptanceReport, output: str) -> None:
@@ -617,7 +656,7 @@ def distill(
         target_vocab = _vocab_size_of(target, target_trc)
         draft_vocab = _vocab_size_of(draft_base, draft_trc)
     except Exception as exc:  # noqa: BLE001 — surface as a friendly CLI error
-        _fail(f"could not read model config: {exc}")
+        _fail(_config_read_error(exc))
 
     cross_tokenizer = target_vocab != draft_vocab
     if not cross_tokenizer:

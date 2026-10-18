@@ -28,6 +28,18 @@ run has reported. APPROVAL must name exactly the required contexts: a cell it
 drops that branch protection still requires would lock every merge, and a
 required cell it drops silently would stop being tested before merge at all.
 
+``plan`` makes one more decision with the matrix: which upstream stack the run
+installs. QUICK and APPROVAL -- every pull-request run and every push to
+``main`` -- install under ``.github/constraints/pinned-upstream.txt``, so a new
+release of torch or transformers cannot redden every open pull request at once.
+FULL and RELEASE install with no constraints, so the same release does show, on
+``main``, within a day. A nightly run that was pinned by mistake would stay
+green for ever and say nothing; ``TestPinnedUpstream`` pins both directions.
+``TestEveryWorkflow`` holds the other workflows to the same rule: every job of
+every workflow that runs ``pip install`` is pinned on a pull request and a
+push, or is on a commented list of those that are not, for a checked reason.
+``tests/test_ci_pinned_upstream.py`` checks the constraints file itself.
+
 Nothing here talks to GitHub. The workflow is read as YAML, the ``plan`` step's
 shell runs under a local bash, and the expressions GitHub would evaluate are
 evaluated by a small interpreter for exactly the operators they use.
@@ -38,6 +50,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -46,9 +59,12 @@ from typing import Any
 
 import pytest
 import yaml
+from packaging.requirements import InvalidRequirement, Requirement
+from packaging.utils import canonicalize_name
 
 ROOT = Path(__file__).resolve().parents[1]
 CI = ROOT / ".github" / "workflows" / "ci.yml"
+DRIFT = ROOT / ".github" / "workflows" / "dependency-drift.yml"
 CONTRIBUTING = ROOT / "CONTRIBUTING.md"
 
 LABEL = "ci:full"
@@ -104,6 +120,19 @@ RELEASE_ONLY_CONTEXTS = frozenset({"test (windows-latest, 3.11)", "test (macos-l
 #: The condition on the two jobs that wait for nothing: everything but a draft pull request.
 DRAFT_GATE = "github.event_name != 'pull_request' || github.event.pull_request.draft == false"
 UNGATED_JOBS = ("plan", "lint")
+#: The pinned upstream stack, relative to the checkout: what a pull-request run and a push
+#: to ``main`` install under.
+PINNED_CONSTRAINTS = ".github/constraints/pinned-upstream.txt"
+#: The kinds of run that install under it. FULL and RELEASE resolve the newest release of
+#: everything: they are where an upstream break has to show.
+PINNED_KINDS = frozenset({"QUICK", "APPROVAL"})
+#: The jobs that install the project and follow ``plan``'s choice of stack.
+SWITCHED_JOBS = ("test", "pytorch-smoke", "torchao-contract", "mlx-smoke")
+#: ``transformers-floor`` installs under its own exact floor on every run it is part of.
+FLOOR_JOB = "transformers-floor"
+FLOOR_CONSTRAINTS = ".github/constraints/transformers-floor.txt"
+#: How a step refers to ``plan``'s choice.
+CONSTRAINTS_OUTPUT = "needs.plan.outputs.constraints"
 
 
 # --- Reading the workflow ----------------------------------------------------
@@ -562,6 +591,7 @@ class TestPlanDecision:
         assert plan["outputs"] == {
             "full": "${{ steps.decide.outputs.full }}",
             "matrix": "${{ steps.decide.outputs.matrix }}",
+            "constraints": "${{ steps.decide.outputs.constraints }}",
         }
 
     @pytest.mark.parametrize(("context", "kind"), EVENTS)
@@ -749,9 +779,50 @@ def _posix_bash() -> str | None:
 
 
 BASH = _posix_bash()
+NEEDS_BASH = pytest.mark.skipif(
+    BASH is None, reason="no POSIX bash found (on Windows: Git for Windows)"
+)
 
 
-@pytest.mark.skipif(BASH is None, reason="no POSIX bash found (on Windows: Git for Windows)")
+def _decide(tmp_path: Path, *, release: str, full: str, approval: str) -> dict[str, str]:
+    """Run the plan step's shell with the given decision values; return its outputs.
+
+    The step sees the ``plan`` job's own ``env:`` -- the four matrices and the path of
+    the pinned constraints -- as it does on the runner, and what it appends to
+    ``$GITHUB_OUTPUT`` comes back as ``{name: value}``: exactly ``full``, ``matrix`` and
+    ``constraints``, one line each.
+    """
+    assert BASH is not None
+    output = tmp_path / "github_output"
+    output.write_text("", encoding="utf-8")
+    script = tmp_path / "decide.sh"
+    script.write_bytes(_decide_step()["run"].encode("utf-8"))
+    env = {
+        **os.environ,
+        **{name: str(value) for name, value in (_plan().get("env") or {}).items()},
+        **{name: _literal(name) for name in MATRIX_NAMES},
+        "RELEASE": release,
+        "FULL": full,
+        "APPROVAL": approval,
+        "GITHUB_OUTPUT": output.as_posix(),
+    }
+    result = subprocess.run(
+        [BASH, "--noprofile", "--norc", "-eo", "pipefail", script.as_posix()],
+        env=env,
+        capture_output=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=60,
+        check=False,
+    )
+    assert result.returncode == 0, (result.stdout, result.stderr)
+    lines = output.read_text(encoding="utf-8").splitlines()
+    pairs = [line.partition("=") for line in lines]
+    assert [key for key, _, _ in pairs] == ["full", "matrix", "constraints"], lines
+    return {key: value for key, _, value in pairs}
+
+
+@NEEDS_BASH
 class TestTheDecideStepScript:
     """Run the plan step's own shell, as the runner would, against a fake $GITHUB_OUTPUT."""
 
@@ -759,35 +830,8 @@ class TestTheDecideStepScript:
         self, tmp_path: Path, *, release: str, full: str, approval: str
     ) -> tuple[str, Any]:
         """Run the step with the given decision values; return (full, parsed matrix)."""
-        assert BASH is not None
-        output = tmp_path / "github_output"
-        output.write_text("", encoding="utf-8")
-        script = tmp_path / "decide.sh"
-        script.write_bytes(_decide_step()["run"].encode("utf-8"))
-        env = {
-            **os.environ,
-            **{name: _literal(name) for name in MATRIX_NAMES},
-            "RELEASE": release,
-            "FULL": full,
-            "APPROVAL": approval,
-            "GITHUB_OUTPUT": output.as_posix(),
-        }
-        result = subprocess.run(
-            [BASH, "--noprofile", "--norc", "-eo", "pipefail", script.as_posix()],
-            env=env,
-            capture_output=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=60,
-            check=False,
-        )
-        assert result.returncode == 0, (result.stdout, result.stderr)
-        lines = output.read_text(encoding="utf-8").splitlines()
-        assert len(lines) == 2, lines
-        full_key, _, full_value = lines[0].partition("=")
-        matrix_key, _, matrix_value = lines[1].partition("=")
-        assert (full_key, matrix_key) == ("full", "matrix"), lines
-        return full_value, json.loads(matrix_value)
+        outputs = _decide(tmp_path, release=release, full=full, approval=approval)
+        return outputs["full"], json.loads(outputs["matrix"])
 
     @pytest.mark.parametrize(("context", "kind"), EVENTS)
     def test_each_event_gets_its_matrix(self, tmp_path, context, kind):
@@ -820,6 +864,531 @@ class TestTheDecideStepScript:
         flag, matrix = self._outputs(tmp_path, release=release, full=full, approval=approval)
         assert matrix == _matrix(f"{kind}_MATRIX")
         assert flag == ("false" if kind == "QUICK" else "true")
+
+    @pytest.mark.parametrize(
+        ("release", "full", "approval", "kind"),
+        [
+            ("true", "true", "false", "RELEASE"),
+            ("false", "true", "false", "FULL"),
+            ("false", "true", "true", "FULL"),
+            ("false", "false", "true", "APPROVAL"),
+            ("false", "false", "false", "QUICK"),
+            ("yes", "yes", "yes", "QUICK"),
+            ("", "", "", "QUICK"),
+        ],
+    )
+    def test_the_stack_travels_with_the_matrix(self, tmp_path, release, full, approval, kind):
+        """One chain picks both, so the two cannot disagree: no seven-cell run on the
+        pinned stack, and no pull-request cell that resolves the newest release."""
+        outputs = _decide(tmp_path, release=release, full=full, approval=approval)
+        assert json.loads(outputs["matrix"]) == _matrix(f"{kind}_MATRIX")
+        assert outputs["constraints"] == (
+            f"-c {PINNED_CONSTRAINTS}" if kind in PINNED_KINDS else ""
+        )
+
+
+def _constraint_files(command: str) -> list[str]:
+    """The files a ``pip`` command line constrains itself with, in order.
+
+    Read as the shell reads it: a ``-c`` behind a ``#`` is a comment, not a constraint.
+    """
+    args = shlex.split(command, comments=True)
+    files = []
+    for index, arg in enumerate(args):
+        if arg in ("-c", "--constraint"):
+            assert index + 1 < len(args), f"`{arg}` with no file: {command!r}"
+            files.append(args[index + 1])
+        elif arg.startswith("--constraint="):
+            files.append(arg.split("=", 1)[1])
+        elif re.fullmatch(r"-c[^-\s]\S*", arg):
+            files.append(arg[2:])
+    return files
+
+
+#: ``pip install`` of the project itself: ``-e .`` or ``-e ".[extra, ...]"``.
+_PROJECT_INSTALL = re.compile(r"""\bpip install\b[^\n]*?-e\s+["']?\.(?=[\["'\s]|$)""")
+
+
+def _project_installs(job: dict[str, Any]) -> list[str]:
+    """The ``run`` of every step of *job* that installs the project."""
+    runs = [str(step.get("run", "")) for step in job.get("steps", [])]
+    return [run for run in runs if _PROJECT_INSTALL.search(run)]
+
+
+def _install_command(job: str, constraints: str) -> str:
+    """The one command of *job* that installs the project, as the runner executes it
+    when ``plan`` has output *constraints*."""
+    runs = _project_installs(_jobs()[job])
+    assert len(runs) == 1, (job, runs)
+    return _render(runs[0], {"needs": {"plan": {"outputs": {"constraints": constraints}}}})
+
+
+def _environments(workflow: dict[str, Any]) -> list[dict[str, Any]]:
+    """Every ``env:`` mapping of a workflow: its own, each job's and each step's."""
+    found = [workflow.get("env") or {}]
+    for job in workflow["jobs"].values():
+        found.append(job.get("env") or {})
+        found.extend(step.get("env") or {} for step in job.get("steps", []))
+    return found
+
+
+class TestPinnedUpstream:
+    """Pull-request runs and pushes to ``main`` install the pinned upstream stack; the
+    nightly run, a manual dispatch, ``release/**`` and the weekly drift job resolve the
+    newest. Read off the parsed workflow and the rendered commands, never off the text:
+    a comment that names the constraints file satisfies nothing here."""
+
+    def test_the_readers_have_teeth(self):
+        """CONTROL for every test of this class."""
+        assert _constraint_files('pip install -e ".[dev]" "pytest-xdist[psutil]"') == []
+        assert _constraint_files('pip install -e ".[dev]" "torch>=2.6.0" ') == []
+        assert _constraint_files("pip install -e . -c a.txt --constraint b.txt") == [
+            "a.txt",
+            "b.txt",
+        ]
+        assert _constraint_files("pip install --constraint=a.txt -cb.txt -e .") == [
+            "a.txt",
+            "b.txt",
+        ]
+        assert _constraint_files("pip install -e .  # -c a.txt") == []
+        with pytest.raises(AssertionError, match="with no file"):
+            _constraint_files("pip install -e . -c")
+        for run in (
+            'pip install -e ".[dev]" "pytest-xdist[psutil]"',
+            "pip install -e '.[mlx]' pytest",
+            "python -m pip install --upgrade pip\npip install -e .\n",
+            "pip install -e . --no-deps",
+        ):
+            assert _project_installs({"steps": [{"run": run}]}) == [run], run
+        others = ["pip install ruff", "pip install mypy", "pip install -e ./vendor/x", "pytest"]
+        steps = [{"uses": "actions/checkout@v4"}, *({"run": run} for run in others)]
+        assert _project_installs({"steps": steps}) == []
+
+    def test_plan_declares_the_constraints_file_and_no_step_names_it(self):
+        """The path is written once, in `plan`. A step that names the file itself installs
+        under it on every run, the nightly one included."""
+        assert (_plan().get("env") or {}).get("PINNED_CONSTRAINTS") == PINNED_CONSTRAINTS
+        assert (ROOT / PINNED_CONSTRAINTS).is_file()
+        for name, job in _jobs().items():
+            for step in job.get("steps", []):
+                assert PINNED_CONSTRAINTS not in str(step.get("run", "")), (name, step)
+
+    @NEEDS_BASH
+    @pytest.mark.parametrize(("context", "kind"), EVENTS)
+    def test_each_event_installs_the_pinned_stack_or_the_newest(self, tmp_path, context, kind):
+        """End to end: the event, through GitHub's expressions and the step's shell, into
+        the pip command of every job that installs the project."""
+        outputs = _decide(
+            tmp_path,
+            release=_release_for(context),
+            full=_full_for(context),
+            approval=_approval_for(context),
+        )
+        pinned = kind in PINNED_KINDS
+        assert outputs["constraints"] == (f"-c {PINNED_CONSTRAINTS}" if pinned else "")
+        expected = [PINNED_CONSTRAINTS] if pinned else []
+        for job in SWITCHED_JOBS:
+            command = _install_command(job, outputs["constraints"])
+            assert _constraint_files(command) == expected, (job, command)
+
+    @pytest.mark.parametrize("job", SWITCHED_JOBS)
+    def test_a_job_installs_under_what_plan_chose_and_nothing_else(self, job):
+        """The same, without the shell. With nothing chosen the command has no
+        constraints at all: a `-c` of the step's own would pin the nightly run too."""
+        assert "plan" in _needs(_jobs()[job])
+        pinned = _install_command(job, f"-c {PINNED_CONSTRAINTS}")
+        assert _constraint_files(pinned) == [PINNED_CONSTRAINTS], pinned
+        newest = _install_command(job, "")
+        assert _constraint_files(newest) == [], newest
+        assert shlex.split(newest)[:2] == ["pip", "install"], newest
+
+    def test_the_floor_job_installs_under_its_own_floor_on_every_run(self):
+        """Its purpose is the lower bound. The pinned stack is near the upper one."""
+        (run,) = _project_installs(_jobs()[FLOOR_JOB])
+        assert CONSTRAINTS_OUTPUT not in run
+        for chosen in (f"-c {PINNED_CONSTRAINTS}", ""):
+            assert _constraint_files(_install_command(FLOOR_JOB, chosen)) == [FLOOR_CONSTRAINTS]
+
+    def test_every_job_that_installs_the_project_is_switched_or_is_the_floor(self):
+        """A new job that installs `.[dev]` on its own resolves the newest release on
+        every pull request, which is the failure this switch removed."""
+        installing = {name for name, job in _jobs().items() if _project_installs(job)}
+        assert installing == {*SWITCHED_JOBS, FLOOR_JOB}
+
+    def test_no_environment_variable_constrains_a_job_behind_its_command_line(self):
+        """`PIP_CONSTRAINT` in an `env:` applies to every pip of that job on every run,
+        and shows on no command line."""
+        for environment in _environments(_workflow()):
+            assert "PIP_CONSTRAINT" not in {str(key).upper() for key in environment}
+
+    def test_the_weekly_drift_job_installs_with_no_constraints(self):
+        """It exists to meet the newest release. Pinned, it would report the pins."""
+        workflow = yaml.safe_load(DRIFT.read_text(encoding="utf-8"))
+        installs = [
+            run for job in workflow["jobs"].values() for run in _project_installs(job)
+        ]
+        assert len(installs) == 1, installs
+        assert _constraint_files(installs[0]) == [], installs[0]
+        assert CONSTRAINTS_OUTPUT not in installs[0]
+        for environment in _environments(workflow):
+            assert "PIP_CONSTRAINT" not in {str(key).upper() for key in environment}
+
+
+# --- Every workflow, not only ci.yml ------------------------------------------
+#
+# ci.yml is not the only workflow that installs the project. The two recipe
+# workflows install `.[dev]` and `.[train]` on a pull request, behind a path filter,
+# and they went on resolving the newest release there after ci.yml had stopped. So
+# every job of every workflow that runs `pip install` is in exactly one of three
+# places: a switched job of ci.yml, PINNED_ON_PR_AND_PUSH, or UNPINNED_ON_PURPOSE
+# with the reason that makes it safe -- and the reason is checked, not trusted.
+
+WORKFLOWS = ROOT / ".github" / "workflows"
+PR_AND_PUSH = frozenset({"pull_request", "push"})
+
+#: Jobs outside ci.yml that install torch or transformers on a pull request or a push.
+#: They have no ``plan``: on those two events their ``pip install`` names the pinned file
+#: itself, and on any other event the workflow has (a manual run) it resolves the newest.
+PINNED_ON_PR_AND_PUSH = frozenset(
+    {
+        ("recipe-validation.yml", "validate-recipes"),
+        ("recipe-attach.yml", "verify"),
+    }
+)
+
+FLOOR, TOOL, CORE, NEWEST = "floor", "tool", "core", "newest"
+#: Every other job that runs ``pip install``, and why it may do so without the pinned
+#: file. ``_why_not`` holds each entry to its reason.
+UNPINNED_ON_PURPOSE = {
+    # FLOOR: its purpose is the lower bound, so it installs under its own exact file.
+    (CI.name, FLOOR_JOB): FLOOR,
+    # TOOL: one tool and nothing of the stack (ruff, mypy, an exact ruff, build). The
+    # project is not installed and no pinned package is asked for by name.
+    (CI.name, "lint"): TOOL,
+    (CI.name, "type-check"): TOOL,
+    ("merge-freshness.yml", "gate"): TOOL,
+    ("merge-freshness.yml", "reeval-open-prs"): TOOL,
+    ("publish.yml", "publish"): TOOL,
+    # CORE: the project with no extra, so no torch and no transformers to pin.
+    ("codspeed.yml", "benchmark"): CORE,
+    # NEWEST: started by a schedule or by hand, never by a pull request or a push, and
+    # there to meet the newest release.
+    ("dependency-drift.yml", "latest-stack"): NEWEST,
+    ("recipe-repo-ids.yml", "resolve"): NEWEST,
+}
+
+
+def _workflows() -> dict[str, dict[str, Any]]:
+    """Every workflow file, parsed, by file name."""
+    found = {}
+    for path in sorted(WORKFLOWS.iterdir()):
+        if path.suffix in (".yml", ".yaml"):
+            data = yaml.safe_load(path.read_text(encoding="utf-8"))
+            assert isinstance(data, dict) and isinstance(data.get("jobs"), dict), path.name
+            found[path.name] = data
+    return found
+
+
+def _events(workflow: dict[str, Any]) -> set[str]:
+    """The events a workflow starts on. PyYAML reads the bare key ``on`` as ``True``."""
+    triggers = workflow.get("on", workflow.get(True))
+    return {triggers} if isinstance(triggers, str) else set(triggers or ())
+
+
+_EXPRESSION = re.compile(r"(\$\{\{.*?\}\})", re.DOTALL)
+_PIP_INSTALL = re.compile(r"\bpip3?\s+install\b")
+_PROJECT_SPEC = re.compile(r"\.(?:\[([^\]]*)\])?")
+#: pip options whose value is the next argument, and is not something to install.
+_PIP_VALUE_OPTIONS = frozenset(
+    {
+        "-c",
+        "--constraint",
+        "-r",
+        "--requirement",
+        "-i",
+        "--index-url",
+        "--extra-index-url",
+        "-f",
+        "--find-links",
+        "-t",
+        "--target",
+    }
+)
+
+
+def _shell_commands(run: str) -> list[str]:
+    """*run* split into its commands: on newlines, ``&&``, ``||`` and ``;``, but never
+    inside a ``${{ }}`` expression, which spells its own operators the same way."""
+    commands = [""]
+    for index, part in enumerate(_EXPRESSION.split(run)):
+        if index % 2:  # an expression: it belongs to the command it sits in
+            commands[-1] += part
+            continue
+        first, *rest = re.split(r"\n|&&|\|\||;", part)
+        commands[-1] += first
+        commands.extend(rest)
+    return [command.strip() for command in commands if command.strip()]
+
+
+def _pip_commands(job: dict[str, Any]) -> list[str]:
+    """Every command of *job* that runs ``pip install``, its expressions not yet rendered."""
+    commands = []
+    for step in job.get("steps", []):
+        if "python" in str(step.get("shell", "")):
+            continue  # a script for another interpreter, not a command line
+        for command in _shell_commands(str(step.get("run", ""))):
+            if _PIP_INSTALL.search(command):
+                commands.append(command)
+    return commands
+
+
+def _requested(command: str) -> tuple[set[str], set[str] | None]:
+    """What a rendered ``pip install`` asks for: the canonical names it spells out, and the
+    extras of the project it installs -- an empty set for a bare ``.``, ``None`` when the
+    project is not installed at all."""
+    args = shlex.split(command, comments=True)
+    assert "install" in args, command
+    names: set[str] = set()
+    extras: set[str] | None = None
+    skip = False
+    for arg in args[args.index("install") + 1 :]:
+        if skip:
+            skip = False
+        elif arg in _PIP_VALUE_OPTIONS:
+            skip = True
+        elif arg.startswith("-"):
+            continue  # `-e` too: its value is read like any other argument
+        elif (project := _PROJECT_SPEC.fullmatch(arg)) is not None:
+            listed = {extra.strip() for extra in (project.group(1) or "").split(",")}
+            extras = (extras or set()) | (listed - {""})
+        else:
+            try:
+                names.add(canonicalize_name(Requirement(arg).name))
+            except InvalidRequirement:
+                continue  # a path that is not the project
+    return names, extras
+
+
+def _pinned_names() -> set[str]:
+    """The packages the constraints file pins; its format is checked in
+    ``tests/test_ci_pinned_upstream.py``."""
+    lines = (ROOT / PINNED_CONSTRAINTS).read_text(encoding="utf-8").splitlines()
+    names = {
+        canonicalize_name(line.split("==")[0].strip())
+        for line in lines
+        if "==" in line and not line.startswith("#")
+    }
+    assert names, f"{PINNED_CONSTRAINTS} pins nothing"
+    return names
+
+
+def _contexts(workflow: dict[str, Any]) -> list[dict[str, Any]]:
+    """One context per event the workflow starts on and per choice ``plan`` can make."""
+    return [
+        {
+            "github": {"event_name": event},
+            "needs": {"plan": {"outputs": {"constraints": chosen}}},
+        }
+        for event in sorted(_events(workflow))
+        for chosen in (f"-c {PINNED_CONSTRAINTS}", "")
+    ]
+
+
+def _why_not(kind: str, workflow: dict[str, Any], job: dict[str, Any]) -> list[str]:
+    """What is wrong with *job* installing unpinned for the reason *kind*; empty if it holds."""
+    assert kind in (FLOOR, TOOL, CORE, NEWEST), kind
+    problems = set()
+    started_by = _events(workflow) & {*PR_AND_PUSH, "pull_request_target"}
+    if kind == NEWEST and started_by:
+        problems.add(f"starts on {sorted(started_by)}, where the newest release must not decide")
+    pinned = _pinned_names()
+    for context in _contexts(workflow):
+        for command in _pip_commands(job):
+            rendered = _render(command, context)
+            names, extras = _requested(rendered)
+            files = _constraint_files(rendered)
+            if kind == FLOOR and files != [FLOOR_CONSTRAINTS]:
+                problems.add(f"is not under its floor file alone: {rendered}")
+            if kind == NEWEST and files:
+                problems.add(f"is constrained, and so does not meet the newest: {rendered}")
+            if kind == TOOL and extras is not None:
+                problems.add(f"installs the project: {rendered}")
+            if kind == CORE and extras:
+                problems.add(f"installs the extra {sorted(extras)}: {rendered}")
+            if kind in (TOOL, CORE) and names & pinned:
+                problems.add(f"asks for {sorted(names & pinned)} by name, unpinned: {rendered}")
+    return sorted(problems)
+
+
+def pinned_job_extras() -> set[str]:
+    """The extras of the project that a pinned job installs, read off the workflows.
+
+    ``tests/test_ci_pinned_upstream.py`` holds every pin to the bounds these extras
+    declare and to no others: an extra that no pinned job installs cannot make a
+    pull-request cell unresolvable.
+    """
+    workflows = _workflows()
+    context = {
+        "github": {"event_name": "pull_request"},
+        "needs": {"plan": {"outputs": {"constraints": f"-c {PINNED_CONSTRAINTS}"}}},
+    }
+    extras: set[str] = set()
+    for file, name in {*((CI.name, job) for job in SWITCHED_JOBS), *PINNED_ON_PR_AND_PUSH}:
+        for command in _pip_commands(workflows[file]["jobs"][name]):
+            extras |= _requested(_render(command, context))[1] or set()
+    return extras
+
+
+def _synthetic(run: str, *events: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    """A one-job workflow that starts on *events* and runs *run*."""
+    job = {"steps": [{"uses": "actions/checkout@v4"}, {"run": run}]}
+    return {"on": {event: None for event in events}, "jobs": {"job": job}}, job
+
+
+class TestEveryWorkflow:
+    """Every job of every workflow that runs ``pip install`` is pinned on a pull request
+    and a push, or is on the commented list of those that are not, for a checked reason."""
+
+    def test_the_readers_have_teeth(self):
+        """CONTROL for every test of this class."""
+        expression = "${{ (a == 'x' || a == 'y') && '-c f.txt' || '' }}"
+        assert _shell_commands(f"pip install -e . {expression}\npytest -q && echo ok; ls") == [
+            f"pip install -e . {expression}",
+            "pytest -q",
+            "echo ok",
+            "ls",
+        ]
+        job = {
+            "steps": [
+                {"run": "python -m pip install --upgrade pip && pip install -e '.[dev]'"},
+                {"shell": "python", "run": "print('pip install nothing')"},
+                {"run": "pytest tests/"},
+                {"uses": "actions/checkout@v4"},
+            ]
+        }
+        assert _pip_commands(job) == [
+            "python -m pip install --upgrade pip",
+            "pip install -e '.[dev]'",
+        ]
+        assert _requested('pip install -e ".[dev, qat]" "torch>=2.6.0" -c pins.txt') == (
+            {"torch"},
+            {"dev", "qat"},
+        )
+        assert _requested("pip install -e . pytest Pytest_Codspeed") == (
+            {"pytest", "pytest-codspeed"},
+            set(),
+        )
+        assert _requested("pip install '.[train]' -r reqs.txt") == (set(), {"train"})
+        assert _requested("pip install ruff==0.16.0 -e ./vendor/x") == ({"ruff"}, None)
+        assert _events({True: {"push": None, "schedule": []}}) == {"push", "schedule"}
+        assert _events({"on": ["push", "pull_request"]}) == {"push", "pull_request"}
+        assert _events({"on": "workflow_dispatch"}) == {"workflow_dispatch"}
+        assert {"torch", "transformers", "huggingface-hub"} <= _pinned_names()
+
+    @pytest.mark.parametrize(
+        ("kind", "run", "events", "problem"),
+        [
+            (TOOL, "pip install ruff", ("pull_request",), None),
+            (TOOL, 'pip install -e ".[dev]"', ("pull_request",), "installs the project"),
+            (TOOL, "pip install -e . ruff", ("push",), "installs the project"),
+            (TOOL, "pip install ruff && pip install -U torch", ("push",), "by name, unpinned"),
+            (TOOL, "pip install huggingface_hub", ("schedule",), "by name, unpinned"),
+            (CORE, "pip install -e . pytest", ("pull_request",), None),
+            (CORE, 'pip install -e ".[train]" pytest', ("pull_request",), "installs the extra"),
+            (CORE, "pip install -e . transformers", ("pull_request",), "by name, unpinned"),
+            (NEWEST, 'pip install -e ".[dev,audio]"', ("schedule", "workflow_dispatch"), None),
+            (NEWEST, 'pip install -e ".[dev]"', ("schedule", "pull_request"), "starts on"),
+            (NEWEST, 'pip install -e ".[dev]"', ("push",), "starts on"),
+            (NEWEST, 'pip install -e ".[dev]"', ("pull_request_target",), "starts on"),
+            (NEWEST, 'pip install -e ".[dev]" -c x.txt', ("schedule",), "is constrained"),
+            (FLOOR, f'pip install -e ".[dev]" -c {FLOOR_CONSTRAINTS}', ("push",), None),
+            (FLOOR, 'pip install -e ".[dev]"', ("push",), "not under its floor file"),
+            (FLOOR, f'pip install -e ".[dev]" -c {PINNED_CONSTRAINTS}', ("push",), "not under"),
+        ],
+    )
+    def test_a_reason_is_checked_and_not_trusted(self, kind, run, events, problem):
+        """CONTROL: listing a job as unpinned on purpose does not make it so."""
+        workflow, job = _synthetic(run, *events)
+        problems = _why_not(kind, workflow, job)
+        if problem is None:
+            assert problems == []
+        else:
+            assert any(problem in found for found in problems), problems
+
+    def test_every_job_that_runs_pip_install_is_on_exactly_one_list(self):
+        """A new workflow that installs `.[dev]` or `.[train]` on a pull request lands here:
+        it is on no list until someone pins it, or writes down why it need not be."""
+        found = {
+            (file, name)
+            for file, workflow in _workflows().items()
+            for name, job in workflow["jobs"].items()
+            if _pip_commands(job)
+        }
+        switched = {(CI.name, job) for job in SWITCHED_JOBS}
+        unpinned = set(UNPINNED_ON_PURPOSE)
+        assert not switched & PINNED_ON_PR_AND_PUSH
+        assert not (switched | PINNED_ON_PR_AND_PUSH) & unpinned
+        classified = switched | PINNED_ON_PR_AND_PUSH | unpinned
+        assert sorted(found - classified) == [], (
+            "these jobs run `pip install` and are on no list: give them the pinned stack "
+            "(PINNED_ON_PR_AND_PUSH) or say why not (UNPINNED_ON_PURPOSE)"
+        )
+        assert sorted(classified - found) == [], "listed, but no such job runs `pip install`"
+
+    @pytest.mark.parametrize(("file", "name"), sorted(PINNED_ON_PR_AND_PUSH))
+    def test_a_job_outside_ci_installs_the_pinned_stack_on_a_pull_request_and_a_push(
+        self, file, name
+    ):
+        """Every `pip install` of the job, on every event the workflow starts on: the pinned
+        file on a pull request and a push, no constraint on a manual run."""
+        workflow = _workflows()[file]
+        events = _events(workflow)
+        assert events & PR_AND_PUSH, f"{file} starts on neither: it belongs on the NEWEST list"
+        commands = _pip_commands(workflow["jobs"][name])
+        assert commands, (file, name)
+        for event in sorted(events):
+            expected = [PINNED_CONSTRAINTS] if event in PR_AND_PUSH else []
+            for command in commands:
+                rendered = _render(command, {"github": {"event_name": event}})
+                assert _constraint_files(rendered) == expected, (event, rendered)
+
+    @pytest.mark.parametrize(("file", "name"), sorted(PINNED_ON_PR_AND_PUSH))
+    def test_a_pin_bump_starts_the_path_filtered_job(self, file, name):
+        """A pull request that only moves a pin has to run every job that installs under
+        it. Filtered out, a bad pin fails the next unrelated pull request to touch a recipe."""
+        workflow = _workflows()[file]
+        triggers = workflow.get("on", workflow.get(True))
+        filtered = 0
+        for event in sorted(PR_AND_PUSH & set(triggers)):
+            trigger = triggers[event] or {}
+            assert "paths-ignore" not in trigger, (file, event)
+            if "paths" in trigger:
+                filtered += 1
+                assert PINNED_CONSTRAINTS in trigger["paths"], (file, event)
+        assert filtered, f"{file} has no path filter left: drop it from this test's reach"
+
+    @pytest.mark.parametrize("job", SWITCHED_JOBS)
+    def test_every_pip_install_of_a_switched_job_ends_with_what_plan_chose(self, job):
+        """Not only the one that installs the project: a later `pip install --upgrade torch`
+        in the same job would undo the pin on a pull request without touching that line."""
+        commands = _pip_commands(_jobs()[job])
+        assert commands, job
+        for chosen, expected in ((f"-c {PINNED_CONSTRAINTS}", [PINNED_CONSTRAINTS]), ("", [])):
+            context = {"needs": {"plan": {"outputs": {"constraints": chosen}}}}
+            for command in commands:
+                rendered = _render(command, context)
+                assert _constraint_files(rendered) == expected, rendered
+
+    @pytest.mark.parametrize(("file", "name"), sorted(UNPINNED_ON_PURPOSE))
+    def test_an_unpinned_install_is_what_its_reason_says(self, file, name):
+        workflow = _workflows()[file]
+        kind = UNPINNED_ON_PURPOSE[(file, name)]
+        assert _why_not(kind, workflow, workflow["jobs"][name]) == [], (file, name, kind)
+
+    def test_the_extras_the_pinned_jobs_install(self):
+        """What `tests/test_ci_pinned_upstream.py` checks the pins against. A job that starts
+        installing another extra adds its bounds to that check; update this with it."""
+        assert pinned_job_extras() == {"dev", "qat", "mlx", "train"}
 
 
 class TestADraftRunsNothing:

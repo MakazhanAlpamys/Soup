@@ -182,7 +182,7 @@ def chat(
             # Remove old system prompt if exists
             history = [msg for msg in history if msg["role"] != "system"]
             history.insert(0, {"role": "system", "content": new_system})
-            console.print(f"[dim]System prompt set: {new_system}[/]\n")
+            console.print(f"[dim]System prompt set: {for_terminal(new_system)}[/]\n")
             continue
 
         # Add user message
@@ -196,7 +196,7 @@ def chat(
         )
 
         history.append({"role": "assistant", "content": response})
-        console.print(f"[bold green]Assistant:[/] {response}\n")
+        console.print(f"[bold green]Assistant:[/] {for_terminal(response)}\n")
 
 
 def _detect_base_model(adapter_config_path: Path) -> Optional[str]:

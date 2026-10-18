@@ -15,6 +15,8 @@ import typer
 from rich.console import Console
 from rich.markup import escape
 
+from soup_cli.config.deprecation import DEPRECATED_VALUE_REJECTION_VERSION
+
 console = Console()
 
 VALID_FORMATS = frozenset({"gguf", "gptq", "awq", "onnx", "tensorrt"})
@@ -30,7 +32,8 @@ def quantize(
         "--to",
         help=(
             "Target format: gguf | gptq | awq | onnx | tensorrt "
-            "(awq and gptq are deprecated and will be removed in the next release)."
+            "(awq and gptq are deprecated and will be removed in "
+            f"Soup v{DEPRECATED_VALUE_REJECTION_VERSION})."
         ),
     ),
     bits: int = typer.Option(

@@ -627,17 +627,20 @@ class TestContributingDocumentsTheTrap:
         assert src.count(f"MAX_BEHIND = {MAX_BEHIND}") == 1
 
     def test_the_changelog_fragment_is_named_for_the_pr(self):
-        # The baseline directory is named for the newest release, so it MOVES at
-        # every release (v0.75.1 renamed 0.75.0/ to 0.75.1/). Hardcoding it made
-        # this test fail for a reason that has nothing to do with the naming rule
-        # it exists to pin, so the directory is discovered instead.
-        baseline = next(
-            d for d in (ROOT / "changelog.d").iterdir() if d.is_dir()
-        )
-        fragment = baseline / "1071.fixed.md"
-        text = fragment.read_text(encoding="utf-8")
-        assert "#1017 by @jagadeepmamidi in #1071" in text
-        assert not (baseline / "1017.fixed.md").exists()
+        # Before a release the entry is the fragment changelog.d/<newest>/1071.fixed.md,
+        # in a directory named for the newest release (it MOVES at every release, so
+        # it is discovered, not hardcoded). The release assembly consumes the fragment
+        # into CHANGELOG.md, and the test used to crash with StopIteration once the
+        # last directory was gone. The rule it pins is the same on both sides of the
+        # release: the entry is filed under the PR (#1071), never the issue (#1017).
+        entry = "#1017 by @jagadeepmamidi in #1071"
+        fragments = list((ROOT / "changelog.d").glob("*/1071.fixed.md"))
+        if fragments:
+            source = fragments[0].read_text(encoding="utf-8")
+        else:
+            source = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+        assert entry in " ".join(source.split())
+        assert not list((ROOT / "changelog.d").glob("*/1017.*.md"))
 
 
 def _clean_ruff(argv, *, cwd):

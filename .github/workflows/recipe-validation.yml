@@ -22,6 +22,7 @@ on:
       - 'tests/test_recipes_v031.py'
       - 'tests/test_recipes.py'
       - '.github/workflows/recipe-validation.yml'
+      - '.github/constraints/pinned-upstream.txt'
   pull_request:
     branches: [main]
     paths:
@@ -32,6 +33,7 @@ on:
       - 'tests/test_recipes_v031.py'
       - 'tests/test_recipes.py'
       - '.github/workflows/recipe-validation.yml'
+      - '.github/constraints/pinned-upstream.txt'
 
 # Supersede, do not queue.
 #
@@ -85,6 +87,7 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install dependencies
-        run: pip install -e ".[dev]"
+        # The pinned stack of ci.yml's pull-request cells: this workflow runs on pull requests and pushes only.
+        run: pip install -e ".[dev]" -c .github/constraints/pinned-upstream.txt
       - name: Validate every recipe (parameterised pytest)
         run: pytest tests/test_recipes_v031.py tests/test_recipes.py -v --tb=short --no-cov

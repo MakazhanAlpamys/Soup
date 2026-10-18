@@ -47,7 +47,7 @@
 - [RAFT — Retrieval-Augmented Fine-Tuning](#raft--retrieval-augmented-fine-tuning)
 - [RA-DIT — Retrieval-Augmented Dual Instruction Tuning](#ra-dit--retrieval-augmented-dual-instruction-tuning)
 - [Curriculum-Aware Training (BETA)](#curriculum-aware-training-beta)
-- [TTS Fine-Tuning (BETA, v0.52.0)](#tts-fine-tuning-beta-v0520)
+- [TTS Fine-Tuning (BETA, live in v0.71.20)](#tts-fine-tuning-tasktts-beta-live-in-v07120)
 - [Classifier / Reranker / Cross-Encoder Training (BETA, v0.52.0)](#classifier--reranker--cross-encoder-training-beta-v0520)
 - [Knowledge Distillation (BETA, v0.52.0)](#knowledge-distillation-beta-v0520)
 - [EBFT + GDPO (BETA, v0.52.0)](#ebft--gdpo-beta-v0520)
@@ -308,6 +308,13 @@ contradiction rather than something to silently ignore — and with the other tw
 decides what trains. It cannot be combined with layer streaming: streaming keeps
 the decoder on the meta device and trains only the adapter, so there would be
 nothing to full fine-tune.
+
+`task: pretrain` refuses `lora.r: 0` at config load
+([#1813](https://github.com/MakazhanAlpamys/Soup/issues/1813)): its trainer
+always attaches a LoRA adapter, so a rank of 0 would only fail inside peft when
+training starts. To train the base weights there, use LISA (`lisa_enabled: true`),
+which trains a rotating set of whole layers without an adapter and so still
+accepts `lora.r: 0`, or switch to `task: sft`.
 
 `freeze_layers` / `freeze_ratio` **do** stay legal with `r: 0` — "train
 everything above layer N" is a real technique — and the trainer respects
@@ -989,15 +996,16 @@ training:
 
 The combine wrapper computes a weighted sum via the in-tree
 `compute_dpo_term` / `compute_simpo_term` / `compute_orpo_term` /
-`compute_ipo_term` kernels. On trl 0.29 it reads the per-sequence log-probs
-those kernels need out of the primary trainer's own forward pass
-(`concatenated_forward`), so which blends train depends on which trainer is
-built:
+`compute_ipo_term` kernels. The loss with the largest weight is the *primary*:
+its trl trainer is the one that is built, and on trl 0.29 the per-sequence
+log-probs the kernels need are read out of that trainer's own forward pass.
+Where they come from depends on which trainer is built:
 
 | Blend | Result on trl 0.29 |
 | --- | --- |
-| `simpo` + `orpo` | Trains. The CPO (SimPO) and ORPO trainers both return their per-sequence log-probs. |
-| anything naming `dpo` or `ipo` | Stops at the first step and names the terms. They need a frozen reference model this path does not build, so there are no reference log-probs to read — and their own trainers compute log-probs inline, publishing only means. |
+| `simpo` + `orpo` | Trains. The CPO (SimPO) and ORPO trainers both return their per-sequence log-probs (`concatenated_forward`). |
+| `dpo` or `ipo` has the largest weight, with any of `dpo`, `ipo`, `simpo`, `orpo` beside it | Trains. Both build trl's `DPOTrainer`: the policy log-probs are taken from the logits of its own forward pass, the reference log-probs from its `compute_ref_log_probs`. |
+| `simpo` or `orpo` has the largest weight, and the blend names `dpo` or `ipo` | Trains. The CPO / ORPO trainers run no reference, so the blend runs one: the same forward once more, without gradients and with the LoRA adapter switched off. Refused with `init_strategy: pissa` / `olora` / `loftq` or `relora_steps`, where that is not the starting model ("Which reference" below). |
 | `bco` mixed with anything | Rejected at config load (data format incompatible). |
 
 **What a term is.** In a blend, `simpo` and `orpo` are their *preference terms
@@ -1009,10 +1017,56 @@ simpo` run, and `training.cpo_alpha` does not affect it. Use
 does honour its own config field: `training.simpo_gamma` for SimPO,
 `training.orpo_beta` for ORPO, whichever loss has the larger weight or not.
 
-**Evaluation.** With `val_split` set, trl's `prediction_step` calls
-`get_batch_loss_metrics` directly, so the eval loss is the primary loss's own
-trl loss — not the blend's value. Training and evaluation therefore report
-different numbers for the same batch.
+The `dpo` and `ipo` terms are the losses `preference_loss: dpo` and
+`preference_loss: ipo` train: DPO's sigmoid loss with `training.dpo_beta`, and
+IPO's squared loss with `training.ipo_tau`, where each side's log-ratio is
+divided by its response length, as trl does. They read those two fields
+whichever of them is the primary, so `{dpo: 0.5, ipo: 0.5}` and
+`{ipo: 0.5, dpo: 0.5}` are the same loss. `dpo_beta_schedule` is not available
+with a blend.
+
+**Which reference.** Under a `dpo` / `ipo` primary it is trl's: the frozen
+`ref` adapter, a copy of the adapter as it started. Under a `simpo` / `orpo`
+primary it is the base model with the adapter switched off. For a new LoRA
+adapter, whose update starts at zero, the two compute the same thing.
+
+That holds while the base weights are the ones that were loaded, which covers
+the default init (`init_strategy: random`), DoRA and rsLoRA.
+`init_strategy: pissa`, `olora` and `loftq` (and `use_olora`) move part of
+every targeted weight into the adapter and leave a residual in the base, and
+`relora_steps` merges the adapter into the base at every restart; with the
+adapter off the model is then no longer the one the policy started from. A
+`dpo` / `ipo` term under a `simpo` / `orpo` primary is refused with either of
+them, before the model is loaded. With such an init, give `dpo` or `ipo` the
+largest weight: trl's copy of the adapter carries the residual's other half,
+so its reference is still the starting model.
+
+**Which tokens.** The terms are computed on the primary trainer's batch, and
+the two trainer families do not render a row the same way: the CPO / ORPO
+batches start with the tokenizer's BOS token, and the `DPOTrainer`'s need not
+(with a plain tokenizer and no chat template they do not). An even split
+between a reference loss and a reference-free one therefore depends on which
+key comes first, because the first key is the primary.
+
+**Cost.** The policy is run once per step, as in a single-loss run. A `dpo` /
+`ipo` primary runs the reference twice: trl computes its own reference
+log-probs inline and keeps only their means, so the blend asks the trainer for
+them again (`compute_ref_log_probs`, without gradients). A `simpo` / `orpo`
+primary runs the reference once, and only when the blend names `dpo` or `ipo`;
+with `val_split` it runs on evaluation batches too.
+
+With 16-bit logits (bf16 or fp16 autocast) a `dpo` / `ipo` primary also keeps
+one more tensor the size of the logits for the backward pass, next to the one
+trl's own loss keeps: 2 bytes × rows × tokens × vocabulary, where a batch of 4
+pairs is 8 rows. That is about 250 MiB for 4 pairs of 512 tokens and a
+32,000-token vocabulary. With float32 logits it keeps none.
+
+**Evaluation.** With `val_split` set and a `simpo` / `orpo` primary, trl's
+`prediction_step` calls `get_batch_loss_metrics` directly, so the eval loss is
+the primary loss's own trl loss — not the blend's value. Training and
+evaluation therefore report different numbers for the same batch. With a `dpo`
+/ `ipo` primary, trl's `prediction_step` goes through `compute_loss`, so the
+eval loss is the blend's value.
 
 
 ## MoE Model Support
@@ -1346,9 +1400,9 @@ training:
 ```
 
 Schema validates 2–5 entries summing to 1, and rejects `bco` mixed with a
-paired loss at config load. On trl 0.29 a `simpo` + `orpo` blend trains; any
-blend naming `dpo` or `ipo` stops at the first step naming the terms it could
-not compute, because those trainers publish no per-sequence log-probs to read
+paired loss at config load. On trl 0.29 every blend of `dpo`, `ipo`, `simpo`
+and `orpo` trains; which reference and which tokens the terms use depends on
+the loss with the largest weight
 (see [Weighted Multi-Objective Preference Loss](#weighted-multi-objective-preference-loss)).
 Set `training.preference_loss` for a single loss.
 
@@ -1843,7 +1897,7 @@ score = score_citations(
 # CitationScore(precision=1.0, recall=1.0, f1=1.0, predicted_count=1, expected_count=1)
 ```
 
-Citation-faithful FT is gated to `task in {sft, pretrain}` + `data.format='raft'` — misconfigured runs fail at config load with a named-field message.
+Citation-faithful FT requires `task: sft` + `data.format: raft` — misconfigured runs fail at config load with a named-field message. The pretrain trainer does not apply citation span weights and refuses `training.citation_faithful: true`.
 
 Under the hood, a `format: raft` run trains **answer-only**: each row is composed into a prompt (golden + distractor docs, shuffled deterministically by `data.raft_shuffle_seed`, each labelled `[doc-N]`) followed by the answer; the prompt span is masked out of the loss and — when `citation_faithful: true` — the bracketed `[doc-id]` spans in the answer get a boosted per-token loss weight. Rows whose prompt fills `max_length` (answer fully truncated) are dropped with a warning rather than silently shrinking the dataset.
 
@@ -1918,9 +1972,8 @@ cross-entropy over interleaved `[text][audio-codec-token]` chat sequences**,
 so `TTSTrainerWrapper` reuses the SFT model/tokenizer/LoRA/CE machinery and
 adds per-family emotion templating plus codec-token registration. `sesame_csm`
 is different: current CSM training uses text plus 32 Mimi codebooks as parallel
-multimodal frames. Soup therefore refuses CSM on this text-SFT codec-string
-path rather than silently training the wrong objective; a dedicated CSM trainer
-is still required.
+multimodal frames. Soup routes it to a dedicated native trainer (see below),
+and continues to refuse pre-encoded CSM codec-string chat.
 
 There are two workflows:
 
@@ -1971,15 +2024,77 @@ Spark-TTS has no installable `sparktts` package and its official environment pin
 Torch/Transformers below Soup's supported stack; current `outetts` pins
 Transformers 4.52.3 and Oute preparation also needs transcript/word alignment.
 For those two families, pre-encode in the upstream environment and train the
-resulting codec-token chat with `data.format: chatml`. Sesame CSM fails earlier
-with an architecture-specific message because
-its 32 parallel Mimi codebooks require a native multimodal trainer, not a
-codec-string adapter.
+resulting codec-token chat with `data.format: chatml`. Sesame CSM uses the native
+multimodal path below, rather than this codec-string adapter.
 
 Three ready-made codec-string recipes ship: `orpheus-tts-sft`, `llasa-tts`,
 `oute-tts` — copy with `soup recipes use <name>`. Cross-validators
 reject the `mlx` backend, `modality != audio_out`, and emotion tags outside the
 per-family allowlist.
+
+### Native Sesame CSM
+
+`training.tts_family: sesame_csm` selects `CsmForConditionalGeneration` and
+`CsmProcessor` from Transformers, with no separate Moshi installation. The
+processor builds text conditioning and audio-frame labels; the model encodes
+audio with its frozen Mimi codec and optimizes the sum of the backbone loss
+(first codebook) and depth-decoder loss (the other 31 codebooks). Text and padding
+are excluded from the audio targets. Mimi stays in evaluation mode during training.
+This follows the [Transformers CSM training contract](https://huggingface.co/docs/transformers/model_doc/csm#training).
+
+Install `pip install 'soup-cli[train,audio]'`, then prepare one local clip and
+its exact transcript per JSONL row. `role` is the native speaker id `"0"` or `"1"`:
+
+```json
+{"audio": "hello.wav", "messages": [{"role": "0", "content": "Hello, how are you?"}]}
+```
+
+```yaml
+base: sesame/csm-1b
+backend: transformers
+task: tts
+modality: audio_out
+output: ./output/csm
+data:
+  train: ./data/speech.jsonl
+  format: audio
+  audio_dir: ./data/audio
+  max_length: 2048
+training:
+  tts_family: sesame_csm
+  quantization: none
+  epochs: 3
+  batch_size: 1
+  gradient_accumulation_steps: 4
+  lr: 0.00002
+  lora:
+    r: 16
+    alpha: 32
+```
+
+Run `soup train -c csm.yaml`. The checkpoint may require Hugging Face access;
+obtain that access and authenticate before running. Local Transformers-format
+CSM checkpoints are also accepted. Audio is loaded through Soup's local-file
+safety checks and resampled to mono 24 kHz. Sequences longer than `max_length`
+are refused rather than truncating audio markers and breaking codec alignment.
+
+The initial native path supports one device, single-clip rows, standard LoRA
+on the backbone and depth decoder (excluding Mimi), or full fine-tuning with
+`lora.r: 0` (Mimi remains frozen). `batch_size: auto` conservatively selects 1.
+Validation loss, boolean gradient checkpointing, seeds, checkpoint resume and
+processor saving are supported. Multi-turn rows, quantization, packing,
+distributed training and additional SFT optimization knobs are refused explicitly.
+The MLX backend remains unsupported for TTS. On Apple Silicon, contributor @Amix29
+ran `test_native_mps_training_step` with PyTorch/MPS, torch 2.13.0 and transformers
+5.16.1: one LoRA training step on a tiny randomly initialized CSM/Mimi model,
+with finite loss and a frozen codec. This is the evidence for the MPS bf16 opt-in.
+Full fine-tuning, gradient checkpointing, evaluation, resume and the pretrained
+`sesame/csm-1b` checkpoint were not run on MPS.
+
+Offline tests construct a tiny real CSM model with all 32 Mimi codebooks and
+exercise forward/backward, training, evaluation, save/reload and resume. These
+tests validate the integration; they do not establish speech quality or a full
+training run on the pretrained `sesame/csm-1b` checkpoint.
 
 
 ## Classifier / Reranker / Cross-Encoder Training (BETA, v0.52.0)
@@ -2076,8 +2191,9 @@ the trained router, see `soup serve --mole` in [Serving and Export](serving-and-
 
 ## Architecture Knobs — Mixture-of-Depths, LLaMA Pro, LongLoRA
 
-Two architecture transforms that were schema-only are now live for SFT / Pretrain on
-Llama / Qwen / Mistral. Both apply at trainer setup:
+Two architecture transforms that were schema-only are now live on Llama / Qwen / Mistral:
+Mixture-of-Depths on SFT and pretrain, LLaMA Pro on SFT only
+([#1813](https://github.com/MakazhanAlpamys/Soup/issues/1813)). Both apply at trainer setup:
 
 ```yaml
 training:
@@ -2085,16 +2201,25 @@ training:
   # block. capacity_factor is the fraction of tokens that get the residual update.
   use_mod: true
   mod_capacity_factor: 0.125
-
-  # LLaMA Pro: append zero-initialised identity decoder blocks and train only the new
-  # ones (freeze_trainable_layers must equal expand_layers and freezes the
-  # originals). Needs quantization: none.
-  expand_layers: 4
-  freeze_trainable_layers: 4
 ```
 
-`use_mod` / `expand_layers` attach AFTER `get_peft_model` so the new routers / blocks are
-trainable. Unsupported architectures warn + skip. Pick one of MoD / LLaMA Pro per run. (v0.71.12)
+```yaml
+training:
+  # LLaMA Pro: append zero-initialised identity decoder blocks and train only the new
+  # ones (freeze_trainable_layers must equal expand_layers and freezes the
+  # originals). Needs quantization: none and lora.r: 0 (task: sft).
+  expand_layers: 4
+  freeze_trainable_layers: 4
+  quantization: none
+  lora:
+    r: 0
+```
+
+`use_mod` attaches AFTER `get_peft_model`, so the new routers are trainable. `expand_layers`
+runs BEFORE it, and `get_peft_model` would freeze the appended blocks again, so a LoRA rank is
+refused with `expand_layers` and the blocks train with `lora.r: 0`
+([#1326](https://github.com/MakazhanAlpamys/Soup/issues/1326)). Unsupported architectures
+warn + skip. Pick one of MoD / LLaMA Pro per run. (v0.71.12)
 
 LongLoRA S² (`use_longlora: true`) is refused at config load
 ([#1240](https://github.com/MakazhanAlpamys/Soup/issues/1240)). Its override rolled the

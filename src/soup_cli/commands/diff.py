@@ -10,6 +10,8 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
+from soup_cli.utils.terminal import for_terminal
+
 console = Console()
 
 
@@ -103,8 +105,8 @@ def diff(
 
     console.print(
         Panel(
-            f"Model A:  [bold]{path_a}[/]\n"
-            f"Model B:  [bold]{path_b}[/]\n"
+            f"Model A:  [bold]{for_terminal(path_a)}[/]\n"
+            f"Model B:  [bold]{for_terminal(path_b)}[/]\n"
             f"Prompts:  [bold]{len(prompt_list)}[/]\n"
             f"Device:   [bold]{device}[/]",
             title="Diff Plan",
@@ -126,7 +128,7 @@ def diff(
     results = []
     for idx, prompt_text in enumerate(prompt_list):
         console.print(f"[bold]--- Prompt {idx + 1}/{len(prompt_list)} ---[/]")
-        console.print(f"[dim]{prompt_text}[/]\n")
+        console.print(f"[dim]{for_terminal(prompt_text)}[/]\n")
 
         messages = [{"role": "user", "content": prompt_text}]
 
@@ -141,14 +143,14 @@ def diff(
 
         # Side-by-side display
         panel_a = Panel(
-            response_a or "[dim]<empty>[/]",
-            title=f"[blue]Model A: {path_a.name}[/]",
+            for_terminal(response_a) if response_a else "[dim]<empty>[/]",
+            title=f"[blue]Model A: {for_terminal(path_a.name)}[/]",
             border_style="blue",
             width=console.width // 2 - 1,
         )
         panel_b = Panel(
-            response_b or "[dim]<empty>[/]",
-            title=f"[green]Model B: {path_b.name}[/]",
+            for_terminal(response_b) if response_b else "[dim]<empty>[/]",
+            title=f"[green]Model B: {for_terminal(path_b.name)}[/]",
             border_style="green",
             width=console.width // 2 - 1,
         )
@@ -331,8 +333,8 @@ def _display_summary(results: list[dict], name_a: str, name_b: str):
 
     table = Table(title="Comparison Summary")
     table.add_column("Metric", style="bold")
-    table.add_column(f"Model A ({name_a})", justify="right", style="blue")
-    table.add_column(f"Model B ({name_b})", justify="right", style="green")
+    table.add_column(f"Model A ({for_terminal(name_a)})", justify="right", style="blue")
+    table.add_column(f"Model B ({for_terminal(name_b)})", justify="right", style="green")
 
     avg_len_a = sum(r["metrics"]["len_a"] for r in results) / len(results)
     avg_len_b = sum(r["metrics"]["len_b"] for r in results) / len(results)

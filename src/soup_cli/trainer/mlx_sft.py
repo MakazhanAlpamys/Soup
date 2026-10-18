@@ -220,6 +220,24 @@ def _clipping_optimizer(inner: object, max_norm: float) -> object:
     return _GradientClippingOptimizer(inner, max_norm)
 
 
+def mlx_lora_scale(lora_cfg: object) -> float:
+    """The LoRA ``scale`` mlx-lm multiplies the adapter update by.
+
+    ``alpha / sqrt(r)`` when ``lora.use_rslora`` is set (rank-stabilised LoRA,
+    the value PEFT computes for the transformers backend), ``alpha / r``
+    otherwise. One function for both the ``adapter_config.json`` writer and
+    ``_apply_lora``, so the file and the trained modules cannot disagree
+    (#1853). Before this the flag loaded on ``backend: mlx`` and was never
+    read: with the default ``r: 64, alpha: 16`` an rsLoRA run trained at 0.25
+    instead of 2.0, an 8x smaller update than the config asked for.
+    """
+    rank = max(1.0, float(getattr(lora_cfg, "r", 0)))
+    alpha = float(getattr(lora_cfg, "alpha", 0.0))
+    if getattr(lora_cfg, "use_rslora", False):
+        return alpha / math.sqrt(rank)
+    return alpha / rank
+
+
 def build_mlx_adapter_config(lora_cfg: object, *, adapter_path: str, **extra: object) -> dict:
     """The ``lora_parameters`` block, keyed off the RESOLVED module list.
 
@@ -228,13 +246,12 @@ def build_mlx_adapter_config(lora_cfg: object, *, adapter_path: str, **extra: ob
     disagreement between those two values is the whole of #392.
     """
     rank = int(getattr(lora_cfg, "r", 0))
-    alpha = float(getattr(lora_cfg, "alpha", 0.0))
     config: dict = {
         "fine_tune_type": "lora",
         "adapter_path": adapter_path,
         "lora_parameters": {
             "rank": rank,
-            "scale": alpha / max(1.0, float(rank)),
+            "scale": mlx_lora_scale(lora_cfg),
             "dropout": float(getattr(lora_cfg, "dropout", 0.0) or 0.0),
             "keys": resolve_mlx_target_keys(lora_cfg),
         },
@@ -417,7 +434,7 @@ class MLXSFTTrainerWrapper:
             num_layers,
             {
                 "rank": int(lora_cfg.r),
-                "scale": float(lora_cfg.alpha) / max(1.0, float(lora_cfg.r)),
+                "scale": mlx_lora_scale(lora_cfg),
                 "dropout": float(getattr(lora_cfg, "dropout", 0.0) or 0.0),
                 "keys": keys,
             },

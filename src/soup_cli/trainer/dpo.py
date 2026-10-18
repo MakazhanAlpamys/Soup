@@ -21,6 +21,7 @@ from soup_cli.utils.gpu import (
 from soup_cli.utils.mixed_precision import (
     align_trainable_dtype_for_fp16,
     keep_trainable_dtype_on_resume,
+    reload_root_adapter_on_resume,
 )
 from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
 
@@ -410,6 +411,7 @@ class DPOTrainerWrapper(StreamingSetupMixin):
             lora_alpha=tcfg.lora.alpha,
             lora_dropout=tcfg.lora.dropout,
             target_modules=tcfg.lora.target_modules,
+            use_rslora=tcfg.lora.use_rslora,
         )
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
@@ -469,6 +471,7 @@ class DPOTrainerWrapper(StreamingSetupMixin):
                 bf16=getattr(self.trainer.args, "bf16", False),
             )
             if resume_from_checkpoint is not None:
+                reload_root_adapter_on_resume(self.trainer)
                 keep_trainable_dtype_on_resume(self.trainer)
             self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
         duration = time.time() - start

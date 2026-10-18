@@ -22,8 +22,8 @@ import warnings
 #: refusal shipped. The deadline test compares it against
 #: ``soup_cli.__version__``, so the release that reaches it turns a test red
 #: instead of turning the warning into a lie. One minor of notice: the warning
-#: ships in 0.75, the refusal in 0.76.
-DEPRECATED_VALUE_REJECTION_VERSION = "0.76"
+#: ships in 0.76, the refusal in 0.77.
+DEPRECATED_VALUE_REJECTION_VERSION = "0.77"
 
 
 class SoupConfigDeprecationWarning(FutureWarning):

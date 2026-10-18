@@ -267,6 +267,7 @@
     "training.stream_buffers": 2,
     "training.stream_disk_kind": null,
     "training.stream_layers": false,
+    "training.stream_nf4_scale_cache": false,
     "training.stream_ngram_source": "auto",
     "training.stream_pin": null,
     "training.stream_read_ahead": 2,

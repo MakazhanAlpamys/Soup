@@ -1266,35 +1266,11 @@ class TestOnARealTrlTrainer:
         tok.save_pretrained(base)
         return base
 
-    @pytest.mark.parametrize(
-        "weights", ["{dpo: 0.7, simpo: 0.3}", "{simpo: 0.6, dpo: 0.4}"],
-    )
-    def test_a_blend_on_a_real_trainer_refuses_instead_of_training_one_loss(
-        self, tmp_path, monkeypatch, weights,
-    ):
-        from soup_cli.config.loader import load_config_from_string
-        from soup_cli.trainer.preference import PreferenceTrainerWrapper
-
-        monkeypatch.chdir(tmp_path)
-        base = self._tiny_model_dir(tmp_path)
-        cfg = load_config_from_string(
-            f"base: {base.as_posix()}\ntask: preference\n"
-            "data: {train: ./unused.jsonl, format: dpo, max_length: 64}\n"
-            "training:\n  epochs: 1\n  batch_size: 2\n  quantization: none\n"
-            f"  preference_loss_weights: {weights}\n"
-            "  lora: {r: 4, alpha: 8, dropout: 0.0}\noutput: ./out\n"
-        )
-        rows = [
-            {"prompt": "what is one plus one ?", "chosen": "two", "rejected": "three"},
-            {"prompt": "hello there", "chosen": "hi", "rejected": "no"},
-        ] * 2
-        wrapper = PreferenceTrainerWrapper(cfg, device="cpu")
-        wrapper.setup({"train": rows})
-        with pytest.raises(ValueError, match="cannot compute") as excinfo:
-            wrapper.train()
-        message = str(excinfo.value)
-        assert "dpo" in message and "simpo" in message, message
-        assert "preference_loss_weights" in message, message
+    # The refusal test that stood here (`{dpo: 0.7, simpo: 0.3}` and
+    # `{simpo: 0.6, dpo: 0.4}` stopping at step 0) is gone with #1425: both
+    # blends train now. tests/test_issue1425_dpo_ipo_blend.py has them as
+    # positive cases, and the refusal that is left (no log-probs, or a model
+    # with no adapter to switch off) on stand-in trainers.
 
     def test_a_reference_free_blend_on_a_real_trainer_is_the_weighted_sum(
         self, tmp_path, monkeypatch,

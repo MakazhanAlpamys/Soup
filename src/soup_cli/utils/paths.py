@@ -158,9 +158,9 @@ def enforce_under_cwd_and_no_symlink(path: str, field: str) -> str:
     if "\x00" in path:
         raise ValueError(f"{field} must not contain null bytes")
     if not is_under_cwd(path):
-        raise ValueError(
-            f"{field} {os.path.basename(path)!r} must stay under cwd"
-        )
+        # The path as typed, not its basename: for ``../out.json`` the basename alone
+        # reads ``'out.json'``, which looks like a path under cwd and hides the reason.
+        raise ValueError(f"{field} {quote_path(path)} must stay under cwd")
     if os.path.lexists(path):
         try:
             st = os.lstat(path)
@@ -183,6 +183,21 @@ def enforce_under_cwd_and_no_symlink(path: str, field: str) -> str:
                     f"{field} must not be a reparse point / junction "
                     "(TOCTOU defence)"
                 )
+    return path
+
+
+def check_report_output_path(path: str, field: str = "--output") -> str:
+    """Validate, before any work starts, a path a command will write its report to.
+
+    :func:`enforce_under_cwd_and_no_symlink` plus a refusal of a directory. An
+    existing regular file is allowed: a report is replaced atomically by
+    :func:`atomic_write_text`, as ``soup attest emit -o`` replaces its statement.
+    Call it as the first thing a command does, so a refused path fails in
+    milliseconds instead of after a model has been loaded and a run has finished.
+    """
+    enforce_under_cwd_and_no_symlink(path, field)
+    if os.path.isdir(path):
+        raise ValueError(f"{field} {quote_path(path)} must name a file, not a directory")
     return path
 
 

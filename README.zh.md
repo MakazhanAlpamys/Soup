@@ -1,4 +1,4 @@
-<!-- synced-from: README.md sha256:a6789c2877515d5ac707160a55ab94cd84b390e2e31168b69d4f954a47c5562a -->
+<!-- synced-from: README.md sha256:44c28c06ff7d2445391cfcc7cd483b096453a302085ff8ac52cb48fa79ce4da5 -->
 <p align="center">🌍 <a href="README.md">English</a> | <a href="README.tr.md">Türkçe</a> | <a href="README.ar.md">العربية</a> | <a href="README.ja.md">日本語</a> | <strong>中文</strong></p>
 
 <p align="center">
@@ -61,10 +61,13 @@ soup train
 
 **在 4 GB 笔记本 GPU 上微调 8B 模型。** Layer streaming 让冻结的基座模型不占
 显存，按解码层逐层送入 GPU。在 RTX 3050 Laptop 4 GB 上实测：Llama-3.1-8B-Instruct +
-NF4 达到 **119.6 tok/s，峰值 3.32 GB**——与常规常驻显存的运行逐位一致，并在 H100 上
+NF4 达到 **952 MHz 下 119.6 tok/s，峰值 3.32 GB**（修复前）——与常规常驻显存的运行逐位一致，并在 H100 上
 以同样的 3.32 GB 独立复现出 113.00 tok/s。（两个数字都测自 v0.72.2，早于 v0.73.0 那次
-在 32B 上付出 −4.8% 代价的正确性修复；此后没有在 4 GB 卡上重测——复测进度见 issue
-[#361](https://github.com/MakazhanAlpamys/Soup/issues/361)。）需显式开启
+在 32B 上付出 −4.8% 代价的正确性修复。修复后的复测在另一台 RTX 3050 Laptop 4 GB
+上完成（@umran666，#1103），结果是 **1935–1957 MHz 下 208.6 tok/s，峰值 2.40 GB**。这相当于
+同场 GEMM 上限的 59%，而修复前是 68%：按单位时钟频率折算大约慢 14%，所以表面上 1.74x 的提升来自
+时钟频率，而不是加速。large-layer streaming 也改变了两组数据之间的内存占用方式，因此连这个比例也不是
+同口径的对比——[完整记录](benchmarks/gate-v0.72.2-nf4.md)。）需显式开启
 （`stream_layers: true`），仍是 BETA——
 [工作原理](docs/performance-and-quantization.md#layer-streaming-beta-v0720-nf4-v0722-disk--wider-archs-v0723-preference-losses-v0724) ·
 [全部实测数据](benchmarks/) · [论文](https://doi.org/10.5281/zenodo.21771064) ·
@@ -72,8 +75,8 @@ NF4 达到 **119.6 tok/s，峰值 3.32 GB**——与常规常驻显存的运行�
 然后断言流式模型与常驻模型逐位一致）
 
 <p align="center">
-  <a href="https://youtu.be/T1LCErE943E"><img src="docs/assets/layer-streaming.gif" alt="在 4 GB 卡上对 Llama-3.1-8B 执行 soup train 的预检：3.60 GB 基座固定在内存中跨 32 层流转，配两个 113 MB 显存缓冲，实测峰值 3.32 GB、119.6 tok/s，停在 4 GB 线以内（测自 v0.72.2，早于 #331 修复；复测进度见 issue #361）"></a><br>
-  <sub>Llama-3.1-8B-Instruct + NF4、LoRA、batch 1、seq 512，RTX 3050 Laptop 4 GB——<b>峰值 3.32 GB，119.6 tok/s</b>（测自 v0.72.2，早于 #331 修复；复测进度见 issue #361）。<a href="https://youtu.be/T1LCErE943E">完整视频（90 秒）</a></sub>
+  <a href="https://youtu.be/T1LCErE943E"><img src="docs/assets/layer-streaming.gif" alt="在 4 GB 卡上对 Llama-3.1-8B 执行 soup train 的预检：3.60 GB 基座固定在内存中跨 32 层流转，配两个 113 MB 显存缓冲，实测峰值 3.32 GB、119.6 tok/s，停在 4 GB 线以内（修复前的那组数据，测自 v0.72.2，952 MHz；#331 修复后的那组数据见下方说明）"></a><br>
+  <sub>Llama-3.1-8B-Instruct + NF4、LoRA、batch 1、seq 512，RTX 3050 Laptop 4 GB——<b>峰值 3.32 GB，119.6 tok/s</b>，952 MHz（修复前，v0.72.2；#331 修复后：1935 MHz 下 208.6 tok/s，2.40 GB，不可直接比较，@umran666，#1103）。<a href="https://youtu.be/T1LCErE943E">完整视频（90 秒）</a></sub>
 </p>
 
 ## 为什么选择 Soup
@@ -88,34 +91,48 @@ NF4 达到 **119.6 tok/s，峰值 3.32 GB**——与常规常驻显存的运行�
 
 ## 最新动态
 
-**v0.75.0——同一份 `soup.yaml`，在 MLX 上悄悄执行了和 transformers 不同的训练流程。**
-六个训练选项经过了校验、写进了文档、也被正常接受——但在那个后端上根本没人读。
-**这个版本的全部 60 个 PR 都来自维护者之外的贡献者**，共 22 人。
+**v0.76.0——Soup 接受却从未应用的设置，现在会直接中止加载。**
+那些经过校验、写进文档，却没有被它们声称要配置的路径上的任何代码读取的选项，现在会在加载时被拒绝，
+并指出设置名以及该怎么改；其余的会发出警告，并指明将拒绝它们的版本。以前能加载的配置现在可能
+无法加载：请先运行 `soup doctor --config soup.yaml`。
 
-- **破坏性变更：未知配置键现在直接拒绝加载。** v0.74 起开始警告，并声明以本版本为期限。
-  像 `quantizaton` 这样的笔误，或只存在于更新版 Soup 的键，以前会被丢弃而任务照常
-  继续——那个设置根本没生效；现在会在 CLI（退出码 1）和 API（`ValueError`）直接失败，
-  并报出你很可能想写的字段名。检测器会先做 schema 从 v0.40.1 起就兼容的根级 `lora:`
-  重映射，所以这种写法会被接受而非拒绝；`soup fetch examples` 里两处用到它的文件也
-  迁到了规范的 `training.lora`。所有配方和模板都能干净加载，键名在到达终端前会被
-  转义，扫描是有界的。
-- **MLX 后端现在真正应用它接受的配置。** `train_on_responses_only`、`warmup_ratio` /
-  `scheduler` / `weight_decay` / `optimizer`、`max_grad_norm`、`gradient_accumulation_steps`
-  和 `gradient_checkpointing` 此前各自通过校验后在 `backend: mlx` 上被丢弃。32 个
-  optimizer 名称里只有 8 个有 MLX 对应实现；其余 24 个现在按名拒绝，而不是悄悄变成
-  AdamW。MLX 后端现在还驱动实时仪表盘、tracker 和 `soup ui`，`soup doctor --config`
-  会列出某个后端不读的设置项。
-- **验证集损失过去哪里都不存在。** 它在每个后端都被计算出来，然后被扔掉：没有
-  metrics 列、没有事件字段、面板上也没有。现在它被记录、流式输出并展示。
-- **破坏性变更：`grpo_variant: gspo` 改为论文版的序列级目标函数**
-  （arXiv:2507.18071），取代了原来的列居中启发式——在那里面，一个 padding token
-  还会挪动同列每一行的梯度。已有的 gspo 配置无法复现此前的运行结果。
-- **Web UI 的读取端点和 SSE 现在需要鉴权**，使用短期一次性票据，而不是 query
-  string 里的 token；`--public` 不再向局域网开放 `/docs` 和 `/openapi.json`；当
-  没有任何东西读取输出时，训练子进程也不再挂起。
-- **`torch>=2.6.0`** 关闭了 v0.74.0 的已知限制：在 2.5.1 上 `trl>=0.29` 无法导入，
-  所有 preference 训练器都无法工作。同时修复：`training.loraplus_lr_ratio` 会让所有
-  设置了它的运行崩溃，`packing: true` 在 TRL 0.29 上会报错。
+- **破坏性变更：从未生效的设置在加载时被拒绝。** 其中包括
+  `training.quantization_aware: true`（它从未真正运行过量化感知训练）、`training.use_longlora`、
+  `training.ebft_variant`、`training.gdpo_variant`、没有任何初始化流程读取它时的
+  `training.rope_scaling_type`、`freeze_layers` / `freeze_ratio`（transformers 后端上
+  文本 `sft` / `tts` 路径之外）、`auto_mixed_precision`（`sft` / `tts` 之外），以及另外七个
+  没有 unsloth 初始化流程的任务上的 `backend: unsloth`。每条报错都会指出字段名以及该怎么改。
+  `lr_groups`、`early_stop_patience`、`forgetting_eval_steps` 及其他无人读取的旋钮，现在加载时发出警告，
+  从 v0.77 起被拒绝。
+- **验证集损失现在会被评估。** `data.val_split` 在每次运行中都会把部分行留作验证、排除在训练之外，
+  但 transformers 后端上没有任何训练器去评估它们。现在，每个拿到划分的任务都会在每个 epoch 结束时评估，或通过
+  `training.eval_steps` 每 N 步评估一次，并记录验证集损失；运行时间会增加百分之几。
+  **对 `grpo`、`ppo` 和 `online_dpo` 是破坏性变更：** 默认不再把行留作验证（`data.val_split`
+  会被忽略并给出提示），因此每一行都参与训练。
+- **破坏性变更：每个非标准的 `grpo_variant` 都会应用 `grpo_beta` KL 惩罚。** `gspo`、`dapo`、
+  `dr_grpo`、`bnpo`、`two_sided` 和 `rft` 以前会校验 `grpo_beta` 然后把它丢掉，因此已有的 variant
+  配置无法复现此前的运行结果。`grpo_beta: 0` 现在无 KL 运行，并跳过参考模型的前向传播。
+- **Layer streaming 在后台线程中通过直接 I/O 读取其磁盘存储层，并且可以跨 NVMe 驱动器做条带化。**
+  在一个比内存还大的 36 GB、70B 形态的 NF4 存储上（一台 RTX 5070 Laptop 8 GB 机器），冷启动的一步
+  从同步读取的 110.5 s 降到 16.2-17.3 s，而借助 `SOUP_LAYER_STREAM_STRIPE_DIRS` 跨两块驱动器后，
+  从 17.4 s 降到 9.97 s（持续负载探测：两轮，1.28x 和 1.41x，没有正式判定；
+  [记录](benchmarks/probe-rtx5070-two-drive-sustained.md)）。能装进内存的存储在内存层上仍然更快，
+  `stream_source: auto` 会选择它。需显式开启（`stream_layers: true`），仍是 BETA；
+  记录：[直接 I/O](benchmarks/gate-974-disk-tier-direct-io.md)、
+  [条带化](benchmarks/gate-two-drive-striping.md)。
+- **新命令和新选项。** `soup adapters check` 扫描 LoRA adapter 是否存在静默失效；
+  `soup bench train` 训练固定步数，若模型没有在训练则以退出码 1 退出
+  （它覆盖 transformers 后端上的 `task: sft`；`soup bench` 现在是一个命令组，`soup bench infer`
+  就是原来的推理基准测试）；`soup data clean` 清洗并修复数据集，且不会改动输入文件；
+  `soup recipes verify` 在 meta 设备上检查（不下载任何权重）每个随附配方都能挂载 LoRA adapter；
+  `soup rewind` 指出造成 loss 尖峰的数据集行。`soup infer` 新增需显式开启的 `--batch-size` 和实验性的
+  `--cuda-graphs`（需要 PyTorch 2.14 或更新版本；在一台 RTX 5070 Laptop 上，未绑定 CPU 核心，
+  Qwen2.5-1.5B 以 FP16 运行，开启后最慢的一次运行，其解码速度也比未开启时最快的一次快 2.9x）。
+  `soup ab` 运行双侧、对方差稳健的检验，`soup adapters sign --backend sigstore` 和
+  `soup attest emit --sign sigstore` 使用 Sigstore 免密钥 OIDC 签名
+  （`pip install "soup-cli[sigstore]"`）。
+- **已弃用：** `soup export --format awq` 和 `--format gptq` 将在 v0.77 移除；这两个上游项目都已归档，
+  两个 extra 也都无法与 `[train]` 一起安装。
 
 > 仅支持 Python **3.10–3.12**。在 3.13+ 上，pip 过去会解析到未测试过的 PyTorch
 > wheel，在 Soup 运行之前就崩在原生扩展里。
@@ -272,7 +289,7 @@ Alpaca、ShareGPT、ChatML、偏好对（DPO / ORPO / SimPO / IPO / KTO）、视
 ASR、纯文本、embedding、RAFT 等等——全部从 JSONL、JSON、CSV、Parquet 或 TXT 自动检测，
 所以多数情况下把 `data.train` 指向文件就行，其他什么都不用改。每种格式的 schema 和
 完整示例，加上数据管线（远程 URI、流式、分片、交错、词表扩展、文档导入），都在
-[`docs/data.md`](docs/data.md#data-formats)。
+[`docs/data.md`](docs/data.md#data-formats)，而 [Sesame CSM 原生音频训练](docs/training.md#native-sesame-csm) 则另有说明。
 
 ## 常用命令
 
@@ -424,9 +441,12 @@ v1 以来的任何实测数字也没有变。v3 做的是**撤回一个我们曾
   上限的 **71.3%**。最大的流式专属开销是逐层 NF4 反量化，占 9.8%
   （[完整记录](benchmarks/probe-v0.73.0-what-bounds-streaming.md)）。每个测量都仍然
   成立；复现结论以更弱的形式仍然成立——约束对两台机器是共同的，而不是 GPU 的算力。
-- **在完全不同硬件上的复现**（v2 新增）：RTX 3050 上 119.6 tok/s，对 H100 上
-  113.00 的中位数，同为 3.32 GB 峰值。两者都早于 #331 修复；4 GB 复测进度见
-  issue #361。
+- **在完全不同硬件上的复现**（v2 新增）：RTX 3050 上 119.6 tok/s（952 MHz 下），对 H100 上
+  113.00 的中位数，同为 3.32 GB 峰值。两者都早于 #331 修复，也是论文报告的数字。#331 修复后的
+  那组数据（@umran666，#1103）是 1935–1957 MHz 下 208.6 tok/s，峰值 2.40 GB，为同场 GEMM 上限的
+  59%，修复前为 68%：表面上 1.74x 的提升来自时钟频率，而不是加速；两组数据之间的内存占用方式也变了，
+  因此连这个比例也不是同口径的对比
+  （[完整记录](benchmarks/gate-v0.72.2-nf4.md)）。
 - **发现并修复了一个静默的错误梯度缺陷。** NF4 单层超过 ~165 MiB 时，前向仍然
   逐位一致、loss 曲线看着健康，但梯度是错的。原因已在上游库中定位并上报；修复
   已通过真实 32B 和 72B 上的对照实验验证。
@@ -458,4 +478,4 @@ v1 以来的任何实测数字也没有变。v3 做的是**撤回一个我们曾
 
 ## 许可证
 
-[Apache-2.0](LICENSE)。版权 © Soup 贡献者们。
+[Apache-2.0](LICENSE)。Copyright 2026 Makazhan Alpamys and the Soup contributors。如果你再分发 Soup 或其修改版本，许可证的第 4 条和第 6 条对你适用：每份副本都要保留 `LICENSE` 和 `NOTICE`，在你改动过的文件上注明改动，并且除说明作品来源之外不要使用 Soup 这一名称。

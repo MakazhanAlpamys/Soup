@@ -13,8 +13,8 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from soup_cli.data.loader import _resolve_media_entries, load_raw_data
-from soup_cli.data.validator import validate_and_stats
+from soup_cli.data.loader import _resolve_media_entries, load_raw_data, non_object_row_issue
+from soup_cli.data.validator import _MAX_REASON_SAMPLES, validate_and_stats
 from soup_cli.utils.embed import DEFAULT_EMBED_MODEL, embed_texts
 from soup_cli.utils.exit_codes import EXIT_GATE_FAILED, EXIT_USAGE_ERROR, GateCommand
 from soup_cli.utils.paths import is_under_cwd
@@ -37,10 +37,10 @@ def inspect(
     """Inspect a dataset: show stats and sample rows."""
     file_path = Path(path)
     if not file_path.exists():
-        console.print(f"[red]File not found: {file_path}[/]")
+        console.print(f"[red]File not found: {for_terminal(file_path)}[/]")
         raise typer.Exit(1)
 
-    console.print(f"[dim]Inspecting {file_path}...[/]\n")
+    console.print(f"[dim]Inspecting {for_terminal(file_path)}...[/]\n")
     data = load_raw_data(file_path)
     result = validate_and_stats(data)
 
@@ -49,7 +49,7 @@ def inspect(
     stats_table.add_column("Metric", style="bold")
     stats_table.add_column("Value")
     stats_table.add_row("Total samples", str(result["total"]))
-    stats_table.add_row("Columns", ", ".join(result["columns"]))
+    stats_table.add_row("Columns", ", ".join(for_terminal(col) for col in result["columns"]))
     stats_table.add_row("Avg length (chars)", str(result["avg_length"]))
     stats_table.add_row("Min length", str(result["min_length"]))
     stats_table.add_row("Max length", str(result["max_length"]))
@@ -63,18 +63,15 @@ def inspect(
 
     # Print sample rows
     if rows > 0 and len(data) > 0:
-        # Escape dataset-derived cell content + column names: a stray '[/]' in
-        # ordinary data crashes Rich with MarkupError; a crafted '[link=...]'
-        # renders a phishing hyperlink. Mirrors `soup data review`.
-        from rich.markup import escape as _escape
+        # Sanitize dataset-derived cells and column names before Rich renders them.
 
         console.print(f"\n[bold]Sample rows ({min(rows, len(data))}):[/]")
         sample_table = Table(show_lines=True)
         for col in result["columns"][:5]:  # max 5 columns
-            sample_table.add_column(_escape(str(col)), max_width=60)
+            sample_table.add_column(for_terminal(col), max_width=60)
         for row in data[: min(rows, len(data))]:
             values = [
-                _escape(str(row.get(col, ""))[:60])
+                for_terminal(str(row.get(col, ""))[:60])
                 for col in result["columns"][:5]
             ]
             sample_table.add_row(*values)
@@ -112,7 +109,13 @@ def validate(
             )
             raise typer.Exit(EXIT_USAGE_ERROR)
 
-    data = load_raw_data(file_path)
+    load_issues: list[str] = []
+    data = load_raw_data(file_path, issues=load_issues)
+    # #1887: every row the loader skipped (not an object, or not JSON) is an
+    # invalid row for the N/M line, for --min-valid-fraction and for the exit
+    # code. The statistics below still describe the retained objects.
+    skipped = len(load_issues)
+    none_remain = f"no object rows remain: {skipped} row(s) skipped (listed above)"
 
     # Auto-detect format if not specified
     if fmt == "auto":
@@ -120,23 +123,33 @@ def validate(
 
         try:
             fmt = detect_format(data)
-            console.print(f"[dim]Auto-detected format: {fmt}[/]")
+            console.print(f"[dim]Auto-detected format: {for_terminal(fmt)}[/]")
         except ValueError as exc:
-            console.print(f"[red]{exc}[/]")
+            message = str(exc)
+            if not data and skipped:
+                message = f"{none_remain}; cannot detect a format. Pass --format to validate."
+            console.print(f"[red]{for_terminal(message)}[/]")
             raise typer.Exit(EXIT_USAGE_ERROR)
 
     result = validate_and_stats(data, expected_format=fmt)
+    if not data and skipped:
+        result["issues"] = [none_remain if i == "Dataset is empty" else i
+                            for i in result["issues"]]
+    load_issue_samples = load_issues[:_MAX_REASON_SAMPLES]
+    if len(load_issues) > _MAX_REASON_SAMPLES:
+        load_issue_samples.append(f"... and {len(load_issues) - _MAX_REASON_SAMPLES} more")
+    result["issues"] = load_issue_samples + result["issues"]
 
     if result["issues"]:
         console.print("[yellow]Issues found:[/]")
         for issue in result["issues"]:
-            console.print(f"  [yellow]![/] {issue}")
+            console.print(f"  [yellow]![/] {for_terminal(issue)}")
     else:
         console.print("[bold green]Dataset is valid![/]")
 
     valid = result["valid_rows"]
-    total = result["total"]
-    console.print(f"\n[green]{valid}/{total} rows valid for {fmt} format[/]")
+    total = result["total"] + skipped
+    console.print(f"\n[green]{valid}/{total} rows valid for {for_terminal(fmt)} format[/]")
 
     if total > 0 and valid == 0:
         console.print("[red]Validation failed: no usable rows remain.[/]")
@@ -728,7 +741,7 @@ def _show_vision_stats(data: list[dict], image_dir: Path | None = None) -> None:
         ext_str = ", ".join(
             f"{ext} ({count})" for ext, count in sorted(extensions.items())
         )
-        vision_table.add_row("Image formats", ext_str)
+        vision_table.add_row("Image formats", for_terminal(ext_str))
 
     console.print(vision_table)
 
@@ -2259,7 +2272,6 @@ def review_cmd(
     """Preview preference pairs for manual review."""
     import json as _json
 
-    from rich.markup import escape as _escape
     from rich.panel import Panel
 
     sample = max(1, min(int(sample), 100))
@@ -2270,7 +2282,7 @@ def review_cmd(
 
     shown = 0
     with path.open("r", encoding="utf-8") as fh:
-        for line in fh:
+        for line_number, line in enumerate(fh, start=1):
             if shown >= sample:
                 break
             line = line.strip()
@@ -2280,13 +2292,17 @@ def review_cmd(
                 entry = _json.loads(line)
             except _json.JSONDecodeError:
                 continue
+            if not isinstance(entry, dict):
+                issue = non_object_row_issue(entry, line_number)
+                console.print(f"[yellow]Warning: {issue}[/]")
+                continue
             prompt = str(entry.get("prompt", ""))
             chosen = str(entry.get("chosen", ""))
             rejected = str(entry.get("rejected", ""))
             console.print(Panel(
-                f"[bold cyan]Prompt:[/] {_escape(prompt[:400])}\n\n"
-                f"[green]Chosen:[/] {_escape(chosen[:400])}\n\n"
-                f"[red]Rejected:[/] {_escape(rejected[:400])}",
+                f"[bold cyan]Prompt:[/] {for_terminal(prompt[:400])}\n\n"
+                f"[green]Chosen:[/] {for_terminal(chosen[:400])}\n\n"
+                f"[red]Rejected:[/] {for_terminal(rejected[:400])}",
                 title=f"Pair {shown + 1}",
                 border_style="blue",
             ))
@@ -4346,7 +4362,7 @@ def brain_rot_cmd(
     ``--max-major-fraction`` (default 25%), so CI pipelines can refuse
     training on excessive slop. ``--lang`` selects a per-language
     low-effort-token + clickbait-phrase bundle (closes #234); ``--lang auto``
-    routes through the optional ``langdetect`` package (``[data-pro]`` extras)
+    routes through the optional ``langdetect`` package (``\\[data-pro]`` extras)
     and falls back silently to English when detection is unavailable.
     """
     import math as _math

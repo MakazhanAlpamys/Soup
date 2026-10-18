@@ -172,13 +172,14 @@ class JudgeResults:
 
 def load_rubric(path: Path) -> dict:
     """Load a rubric YAML file with validation."""
-    import yaml
+    from soup_cli.utils.yaml_limits import MAX_CONFIG_BYTES, load_yaml_file_limited
 
     if not path.exists():
         raise FileNotFoundError(f"Rubric file not found: {path}")
 
-    with open(path, encoding="utf-8") as fh:
-        rubric = yaml.safe_load(fh)
+    rubric = load_yaml_file_limited(
+        path, f"Rubric file {path}", max_bytes=MAX_CONFIG_BYTES
+    )
 
     if not isinstance(rubric, dict):
         raise ValueError("Rubric must be a YAML mapping")
@@ -549,11 +550,23 @@ def _judge_request(url: str, payload: dict, headers: dict, *, timeout: float = 1
     """
     import httpx
 
+    from soup_cli.utils.http_response import (
+        JUDGE_RESPONSE_LIMIT_BYTES,
+        ResponseTooLargeError,
+        post_capped,
+    )
+
     failure = ""
     for attempt in range(JUDGE_MAX_RETRIES + 1):
         retry_after: Optional[str] = None
         try:
-            resp = httpx.post(url, json=payload, headers=headers, timeout=timeout)
+            resp = post_capped(
+                url, json=payload, headers=headers, timeout=timeout,
+                max_bytes=JUDGE_RESPONSE_LIMIT_BYTES,
+                endpoint_label="judge --api-base / --judge-api-base / judge_model",
+            )
+        except ResponseTooLargeError as exc:
+            raise JudgeUnavailableError(str(exc), url=url) from exc
         except httpx.TransportError as exc:
             failure = f"{type(exc).__name__}: {exc}"
         except httpx.RequestError as exc:  # e.g. DecodingError: not transient, no retry
