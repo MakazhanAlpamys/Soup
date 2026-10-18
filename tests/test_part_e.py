@@ -419,6 +419,32 @@ class TestSpikeRecoveryHint:
         assert data2["attempts"] == 4
         assert data2["should_recover"] is False, "Prior count 3 with cap 3 must refuse recovery"
 
+    def test_preserves_large_positive_integer_count_and_exhausts_cap(
+        self, tmp_path, monkeypatch
+    ):
+        """Large integer count (10**309) is preserved without float conversion and exhausts cap."""
+        monkeypatch.chdir(tmp_path)
+        args = SimpleNamespace(learning_rate=1e-3, output_dir=str(tmp_path))
+        hint_path = tmp_path / "spike_recovery.json"
+        huge_attempts = 10**309
+        hint_path.write_text(
+            json.dumps({"attempts": huge_attempts, "max_attempts": 2}),
+            encoding="utf-8",
+        )
+
+        cb = _make_callback(
+            tmp_path,
+            spike_recovery=True,
+            spike_recovery_max_attempts=2,
+            spike_recovery_lr_decay=0.5,
+        )
+        cb._write_spike_recovery_hint(args, loss=10.0)
+        data = json.loads(hint_path.read_text(encoding="utf-8"))
+        assert data["attempts"] == huge_attempts + 1
+        assert data["should_recover"] is False, (
+            "Prior large count must exhaust cap and refuse recovery"
+        )
+
     @pytest.mark.parametrize(
         "bad_payload",
         [
@@ -459,6 +485,39 @@ class TestSpikeRecoveryHint:
         data = json.loads(hint_path.read_text(encoding="utf-8"))
         assert data["attempts"] == 1
         assert data["should_recover"] is True
+
+    def test_watchdog_path_preserves_large_integer_count_and_exhausts_cap(
+        self, tmp_path, monkeypatch
+    ):
+        """Watchdog path preserves large positive integer and exhausts recovery budget."""
+        monkeypatch.chdir(tmp_path)
+        hint_path = tmp_path / "spike_recovery.json"
+        huge_attempts = 10**309
+        hint_path.write_text(
+            json.dumps({"attempts": huge_attempts, "max_attempts": 2}),
+            encoding="utf-8",
+        )
+
+        cb = _make_callback(
+            tmp_path,
+            loss_watchdog=True,
+            loss_watchdog_threshold=5.0,
+            loss_watchdog_patience=1,
+            spike_recovery=True,
+            spike_recovery_max_attempts=2,
+            spike_recovery_lr_decay=0.5,
+        )
+        args = SimpleNamespace(learning_rate=1e-3, output_dir=str(tmp_path))
+        state = SimpleNamespace(global_step=1, epoch=1.0)
+        control = SimpleNamespace(should_training_stop=False)
+
+        cb.on_log(args, state, control, logs={"loss": 10.0})
+
+        assert control.should_training_stop is True, "Watchdog must stop training on loss spike"
+        assert cb._watchdog_fired is True
+        data = json.loads(hint_path.read_text(encoding="utf-8"))
+        assert data["attempts"] == huge_attempts + 1
+        assert data["should_recover"] is False, "Exhausted count must keep recovery disabled"
 
     def test_disabled_when_strategy_not_set(self, tmp_path):
         cb = _make_callback(tmp_path, spike_recovery=False)

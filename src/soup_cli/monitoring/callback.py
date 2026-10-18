@@ -662,11 +662,14 @@ class _SoupTrainerCallback_body:  # noqa: N801
                     data = json.loads(hint_path.read_text(encoding="utf-8"))
                     if isinstance(data, dict) and "attempts" in data:
                         raw = data["attempts"]
-                        if (
-                            isinstance(raw, (int, float, str))
-                            and not isinstance(raw, bool)
-                            and not (isinstance(raw, (int, float)) and not math.isfinite(raw))
-                        ):
+                        if isinstance(raw, bool):
+                            pass
+                        elif isinstance(raw, float):
+                            if math.isfinite(raw):
+                                attempts = max(0, int(raw))
+                        elif isinstance(raw, int):
+                            attempts = max(0, raw)
+                        elif isinstance(raw, str):
                             attempts = max(0, int(raw))
                 except (json.JSONDecodeError, ValueError, TypeError, OverflowError, OSError):
                     pass
