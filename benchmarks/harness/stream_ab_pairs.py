@@ -12,7 +12,7 @@ Rule (written before measuring, also copied into <out>/RULE.md):
 Usage: (Windows only, the memory and power guards use kernel32)
   python benchmarks/harness/stream_ab_pairs.py --tree <worktree> --weights <hf snapshot dir>
       --shards <nf4 shard dir> --out <dir> --pairs 5 --label scale-cache
-      --b-args "--nf4-scale-cache"
+      --b-args=--nf4-scale-cache
   python benchmarks/harness/stream_ab_pairs.py report <dir>
 """
 

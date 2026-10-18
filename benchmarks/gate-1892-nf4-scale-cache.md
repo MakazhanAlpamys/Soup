@@ -100,14 +100,14 @@ is dropped.
 python benchmarks/harness/stream_ab_pairs.py --tree <worktree at 701f8b848> \
     --weights <hf cache>/models--unsloth--mistral-7b-instruct-v0.3/snapshots/60b99dcbc7f853b7cd18472a607e8d045b96f03e \
     --shards <nf4 shard dir> --out <dir> --label scale-cache \
-    --b-args "--nf4-scale-cache" --prime
+    --b-args=--nf4-scale-cache --prime
 python benchmarks/harness/stream_ab_pairs.py <same paths> --out <dir> --pairs 5 \
-    --label scale-cache --b-args "--nf4-scale-cache"
+    --label scale-cache --b-args=--nf4-scale-cache
 python benchmarks/harness/stream_ab_pairs.py <same paths> --out <dir> --label train-threads \
-    --a-args "--nf4-scale-cache" --b-args "--nf4-scale-cache --train-threads 1" --prime
+    --a-args=--nf4-scale-cache --b-args="--nf4-scale-cache --train-threads 1" --prime
 python benchmarks/harness/stream_ab_pairs.py <same paths> --out <dir> --pairs 5 \
-    --label train-threads --a-args "--nf4-scale-cache" \
-    --b-args "--nf4-scale-cache --train-threads 1"
+    --label train-threads --a-args=--nf4-scale-cache \
+    --b-args="--nf4-scale-cache --train-threads 1"
 ```
 
 The priming run writes `RULE.md` (with the arm arguments) before the first arm starts, so
