@@ -508,6 +508,21 @@ Contributions are accepted under the Apache License, Version 2.0, the project's 
 
 ## Architecture & Design Decisions
 
+### Typer and Click compatibility
+
+The supported Typer range spans releases using standalone Click and releases
+vendoring it. Resolve exception and parameter-source identities through
+`soup_cli.utils.typer_compat`; importing those objects from standalone `click`
+can silently stop matching the live command tree. Inspect command and parameter
+capabilities when traversing help or reference pages. Keep standalone Click
+declared while the minimum supported Typer requires it.
+
+The core and training floor jobs exercise Typer 0.15.4. Typer is not pinned in
+the ordinary CI stack, so the full test matrix resolves the newest release
+admitted by `pyproject.toml` (currently 0.27.3). The compatibility regressions
+exercise gate exit codes, noninteractive missing options, configured defaults,
+explicit tokens, legacy bench routing and complete command-tree traversal.
+
 ### Lazy Imports for Speed
 
 Heavy ML imports (torch, transformers, trl) are imported inside command handlers so the CLI stays fast. Users can run `soup version` or `soup --help` instantly without waiting for PyTorch to load.
