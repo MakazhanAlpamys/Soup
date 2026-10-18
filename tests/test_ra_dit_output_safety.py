@@ -5,6 +5,7 @@ import yaml
 
 from soup_cli.utils.paths import ensure_distinct_paths
 from soup_cli.utils.ra_dit_run import run_ra_dit
+from tests.conftest import strip_ansi
 
 
 def write_config(
@@ -283,8 +284,96 @@ def test_plan_previews_effective_output_without_registry_or_training(
     )
 
     assert result.exit_code == 0, (result.output, result.exception)
-    assert str(Path("output") / "r1") in result.output
-    assert str(Path("output") / "g1") in result.output
-    assert "auto-link to stage-1 output" in result.output
+    assert str(Path("output") / "r1") in strip_ansi(result.output)
+    assert str(Path("output") / "g1") in strip_ansi(result.output)
+    assert "auto-link to stage-1 output" in strip_ansi(result.output)
     assert calls == []
     assert not Path("output").exists()
+
+@pytest.mark.parametrize("plan_only", [False, True], ids=["live", "plan"])
+@pytest.mark.parametrize(
+    "retriever_output,retriever_experiment,generator_output,generator_experiment",
+    [
+        ("output", "r1", "output/r1", None),
+        ("output", "r1", "output/r1", "g1"),
+        ("output/r1", "child", "output", "r1"),
+        ("output", "r1", "OUTPUT", "R1"),
+    ],
+    ids=[
+        "effective-equal",
+        "effective-generator-child",
+        "effective-retriever-child",
+        "windows-case",
+    ],
+)
+def test_cli_rejects_effective_output_overlap_without_writes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    plan_only: bool,
+    retriever_output: str,
+    retriever_experiment: str,
+    generator_output: str,
+    generator_experiment: str | None,
+) -> None:
+    import os
+
+    from typer.testing import CliRunner
+
+    from soup_cli.commands.ra_dit import app
+    from soup_cli.utils import ra_dit_run
+
+    monkeypatch.chdir(tmp_path)
+    if generator_output == "OUTPUT":
+        if os.name != "nt":
+            pytest.skip("Windows case-alias test")
+        Path("output").mkdir()
+        if not os.path.exists("OUTPUT") or not os.path.samefile("output", "OUTPUT"):
+            pytest.skip("Working directory is case-sensitive")
+
+    for filename, output, stage, experiment in [
+        ("retriever.yaml", retriever_output, "retriever", retriever_experiment),
+        ("generator.yaml", generator_output, "generator", generator_experiment),
+    ]:
+        config = {
+            "output": output,
+            "training": {"ra_dit_stage": stage},
+        }
+        if experiment is not None:
+            config["experiment_name"] = experiment
+        Path(filename).write_text(yaml.safe_dump(config), encoding="utf-8")
+
+    calls = []
+
+    def forbidden_training(*args, **kwargs):
+        calls.append((args, kwargs))
+        pytest.fail("Training started before rejecting effective output overlap")
+
+    monkeypatch.setattr(ra_dit_run, "_run_train_subprocess", forbidden_training)
+
+    def snapshot() -> dict[str, bytes | None]:
+        return {
+            path.relative_to(tmp_path).as_posix(): (
+                path.read_bytes() if path.is_file() else None
+            )
+            for path in tmp_path.rglob("*")
+        }
+
+    before = snapshot()
+    arguments = [
+        "--retriever-config",
+        "retriever.yaml",
+        "--generator-config",
+        "generator.yaml",
+    ]
+    if plan_only:
+        arguments.append("--plan-only")
+
+    result = CliRunner().invoke(app, arguments)
+    message = " ".join(result.output.split())
+
+    assert snapshot() == before
+    assert calls == []
+    assert result.exit_code == 2, (result.output, repr(result.exception))
+    assert "--retriever-config" in message
+    assert "--generator-config" in message
+    assert "same file" in message or "overlaps" in message

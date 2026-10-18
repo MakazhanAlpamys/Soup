@@ -9,8 +9,8 @@ inputs, so the write destroyed the input and the command still exited 0.
 so a spelling of the input (``./x``, a case variant on Windows) and a hard link
 are refused as well as the identical string. It opens and creates nothing.
 
-This file covers the helper and ``soup ingest``. Each further command gets its
-own test class here as its fix lands.
+This file covers the shared helper and soup ingest.
+Other commands have dedicated output-safety test modules.
 """
 
 from __future__ import annotations
