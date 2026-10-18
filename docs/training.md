@@ -59,6 +59,11 @@
 
 ---
 
+Multimodal SFT (`task: sft` with `modality: vision` or `audio`) requires
+`backend: transformers` rather than `backend: unsloth`. The vision and audio setup
+paths do not use Unsloth; requesting it is refused at config load instead of
+silently falling back to transformers. Text SFT continues to support Unsloth.
+
 ## Validation split & evaluation (`training.eval_steps`)
 
 `data.val_split` (default `0.1`) holds that share of the rows out of training,

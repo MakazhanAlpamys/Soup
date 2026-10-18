@@ -8493,6 +8493,18 @@ class SoupConfig(BaseModel):
         )
 
     @model_validator(mode="after")
+    def _validate_unsloth_sft_modality(self) -> "SoupConfig":
+        """#1186: multimodal SFT setup does not use the requested Unsloth backend."""
+        if self.task == "sft" and self.backend == "unsloth" and self.modality != "text":
+            raise ValueError(
+                "task='sft' with backend='unsloth' requires modality='text': "
+                "the vision and audio setup paths load through transformers and "
+                f"do not use Unsloth; got modality={self.modality!r}. "
+                "Use backend: transformers for multimodal SFT."
+            )
+        return self
+
+    @model_validator(mode="after")
     def _validate_unsloth_has_a_setup(self) -> "SoupConfig":
         """#1357 — ``backend: unsloth`` on a task outside
         :data:`UNSLOTH_SETUP_TASKS` was accepted and never applied: that trainer
@@ -8607,7 +8619,7 @@ output: ./output
 base: meta-llama/Llama-3.2-11B-Vision-Instruct
 task: sft
 modality: vision
-# backend: unsloth  # 2-5x faster, pip install "soup-cli[fast]"
+backend: transformers  # The vision SFT path does not use Unsloth.
 
 data:
   train: ./data/vision_train.jsonl
@@ -8954,7 +8966,7 @@ output: ./output_embedding
 base: Qwen/Qwen2-Audio-7B-Instruct
 task: sft
 modality: audio
-# backend: unsloth  # 2-5x faster, pip install "soup-cli[fast]"
+backend: transformers  # The audio SFT path does not use Unsloth.
 
 data:
   train: ./data/audio_train.jsonl
