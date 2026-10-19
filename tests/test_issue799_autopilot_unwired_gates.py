@@ -9,6 +9,7 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 from soup_cli.cli import app
+from tests.conftest import strip_ansi
 
 
 def _write_data(path: Path) -> Path:
@@ -105,7 +106,7 @@ def test_train_warns_for_nondefault_unwired_sibling_settings(
     )
 
     assert result.exit_code == 0, (result.output, repr(result.exception))
-    output = " ".join(result.output.split())
+    output = " ".join(strip_ansi(result.output).split())
     # Both are staged now and reported by the loader with their refusal release
     # (#808 for checkpoint_keep_top; #1814 moved forgetting_threshold there from
     # soup train's own "not enforced during training" note, with v0.78).
