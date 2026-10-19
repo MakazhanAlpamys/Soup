@@ -403,7 +403,7 @@ Not compatible with unsloth (own memory manager) or mlx. Wired across every tran
 
 ## Layer Streaming (BETA, v0.72.0; NF4 v0.72.2; disk + wider archs v0.72.3; preference losses v0.72.4)
 
-Stream frozen base-model decoder layers ONE at a time from CPU RAM , or from an NVMe disk tier when the base does not fit in RAM into small VRAM buffers instead of keeping the whole base resident. Peak VRAM is bounded by the size of a single layer, not the entire model — so models that don't fit resident on your GPU can now train at all.
+Stream frozen base-model decoder layers ONE at a time from CPU RAM, or from an NVMe disk tier when the base does not fit in RAM, into small VRAM buffers instead of keeping the whole base resident. Peak VRAM is bounded by the size of a single layer, not the entire model — so models that don't fit resident on your GPU can now train at all.
 
 ```yaml
 training:
@@ -656,11 +656,14 @@ prints this advice when it sees you accumulating.
 - `modality` other than text -> streaming supports text models only.
 - `task` other than `sft` / `dpo` / `orpo` / `simpo` / `kto` → named explicitly; `grpo` and `ppo` are refused **permanently**, not pending: generation rollouts re-read every layer once per generated token, which destroys the amortisation streaming depends on.
 - `task: kto` with `batch_size: 1` -> TRL's KL term is degenerate at batch 1; refused when the config is read (this applies to every KTO run, not only to streaming) rather than minutes later after sharding.
-- `lora.r <= 0` or missing -> LoRA is required for layer streaming.
+- `lora.r: 0` -> LoRA is required for layer streaming.
 - LoRA target on `lm_head` or `embed_tokens` -> streaming does not support adapters on the streamed head or embeddings.
 - `lora.use_dora` / `lora.use_vera` / `lora.init_strategy` other than `random` -> these initialise from the real base weight, which is on the meta device under streaming.
 - `moe_expert_quant` / `quantization_aware` / `fp8_attention` / `nvfp4` -> mutually exclusive with layer streaming.
 - `unfrozen_parameters`, `lisa_enabled`, `packing`, `multipack`, `use_fsdp2_compile`, `train_router_only`, `expand_layers`, `relora_steps` -> each independently rewrites or re-freezes the same layers.
+- `stream_*` fields set while `stream_layers: false` -> stream configuration requires layer streaming enabled.
+- Non-default `stream_read_ahead` beside `stream_source: ram` -> read-ahead is only applicable to disk tier.
+- `stream_vram_probe` on any task other than sft -> VRAM probe is only supported on SFT.
 
 **Refused at setup, before the first training step:**
 - Unsupported model architecture -> model architecture not in the supported streaming allowlist.

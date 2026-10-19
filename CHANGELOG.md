@@ -9,14 +9,6 @@ Detailed, per-release notes for every published version live on the
 [GitHub Releases page](https://github.com/MakazhanAlpamys/Soup/releases). This
 file tracks unreleased changes and links out for historical detail rather than
 reproducing 70+ versions of notes.
-
-## [Unreleased]
-
-
-### Documentation
-
-- Update `stream_layers` schema description, docs, and runtime refusal messages to reflect NVMe disk tier, 4-bit support, and broadened training scope ([#1623](https://github.com/MakazhanAlpamys/Soup/pull/1623), fixes [#1619](https://github.com/MakazhanAlpamys/Soup/issues/1619)).
-
 ## [0.75.1] - 2026-09-21
 
 

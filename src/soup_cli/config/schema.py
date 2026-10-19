@@ -3468,8 +3468,10 @@ class TrainingConfig(BaseModel):
             "BETA — stream the frozen base one decoder layer at a time from CPU RAM "
             "or an NVMe disk tier (see stream_source), so a model larger than VRAM can "
             "be fine-tuned with LoRA. Tasks: "
-            + ", ".join(sorted(set(_STREAM_SUPPORTED_TASKS) | set(_STREAM_ROLLOUT_TASKS)))
-            + " (grpo and ppo are refused permanently); backend transformers, modality text; "
+            + ", ".join(_STREAM_SUPPORTED_TASKS)
+            + " ("
+            + " and ".join(_STREAM_ROLLOUT_TASKS)
+            + " are refused permanently); backend transformers, modality text; "
             "quantization none or 4bit (NF4); a concrete batch_size (not 'auto'), "
             "gradient accumulation is allowed. Slower than resident training, but these "
             "models did not run on the card at all."
@@ -5191,7 +5193,6 @@ class SoupConfig(BaseModel):
             and self.task in unsupported
             # Streaming supports tasks in _STREAM_SUPPORTED_TASKS and _STREAM_ROLLOUT_TASKS;
             # pretrain is refused by streaming; keep that more actionable error when enabled.
-            
             and not self.training.stream_layers
         ):
             raise ValueError(
@@ -6283,7 +6284,9 @@ class SoupConfig(BaseModel):
     def _validate_stream_layers_compat(self) -> "SoupConfig":
         """v0.72.0 BETA — layer-streaming compatibility gates.
 
-        Validate layer streaming compatibility: supported task set, transformers backend, text modality, quantization (none or 4bit NF4), concrete batch size, gradient accumulation, and mutual exclusions.
+        Validate layer streaming compatibility: supported task set,
+        transformers backend, text modality, quantization (none or 4bit NF4),
+        concrete batch size, and mutual exclusions.
         """
         tcfg = self.training
         if not tcfg.stream_layers:

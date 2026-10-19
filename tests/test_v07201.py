@@ -14,6 +14,7 @@ raises nothing at all. These tests assert by count, by name, and by value.
 
 import json
 import os
+import re
 
 import pytest
 
@@ -513,11 +514,23 @@ class TestRefusalsNameThePostRenumberSlot:
             load_config_from_string(_yaml("grpo"))
         assert "v0.72" not in str(excinfo.value)
 
-    def test_arch_allowlist_names_v0723(self):
-        from soup_cli.utils.layer_stream import stream_arch_of
+    def test_arch_allowlist_names_the_type_and_the_list_but_no_release(self):
+        from soup_cli.utils.layer_stream import SUPPORTED_STREAM_ARCHS, stream_arch_of
 
         class _Cfg:
             model_type = "gpt2"
 
-        with pytest.raises(ValueError, match="v0.72.3"):
+        with pytest.raises(ValueError) as excinfo:
             stream_arch_of(_Cfg())
+        message = str(excinfo.value)
+        assert "'gpt2'" in message
+        assert all(arch in message for arch in SUPPORTED_STREAM_ARCHS)
+        assert "v0.72" not in message
+
+    def test_refused_tasks_are_not_listed_as_accepted(self):
+        from soup_cli.config.schema import TrainingConfig
+        from soup_cli.utils.layer_stream import SUPPORTED_STREAM_TASKS
+
+        desc = TrainingConfig.model_fields["stream_layers"].description
+        accepted = desc.split("Tasks: ", 1)[1].split(" (", 1)[0]
+        assert re.findall(r"[a-z]+", accepted) == list(SUPPORTED_STREAM_TASKS)
