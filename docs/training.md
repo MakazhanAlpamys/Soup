@@ -2280,7 +2280,7 @@ Linear weights. (v0.71.23)
 
 ## Training source identity
 
-`soup train` records `training_data_sha256` before loading or transforming a
+`soup train` captures `training_data_sha256` before loading or transforming a
 supported single local raw text-training file. The digest is SHA-256 of the
 complete file bytes, including any BOM and original newline encoding. It records
 source bytes at startup; it does not prove which transformed examples, external

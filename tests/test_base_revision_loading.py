@@ -143,6 +143,28 @@ def test_copied_adapter_pins_live_eval_and_export_loaders(tmp_path, monkeypatch,
     assert calls == expected_calls + [("model", expected_revision), ("model", expected_revision)]
 
 
+def test_dry_run_does_not_capture_training_identity(tmp_path, monkeypatch):
+    from typer.testing import CliRunner
+
+    from soup_cli.cli import app
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("soup_cli.utils.gpu.detect_device", lambda: ("cpu", "CPU"))
+    monkeypatch.setattr("soup_cli.utils.gpu.get_gpu_info", lambda: {})
+    capture = Mock(side_effect=AssertionError("dry-run must not hash the training source"))
+    monkeypatch.setattr("soup_cli.utils.training_identity.capture_training_data_hash", capture)
+    (tmp_path / "data.jsonl").write_text(
+        '{"instruction":"hi", "output":"hello"}\n', encoding="utf-8",
+    )
+    (tmp_path / "soup.yaml").write_text(
+        "base: owner/base\ndata: {train: data.jsonl, format: alpaca, val_split: 0}\n"
+        "training: {epochs: 1, quantization: none, batch_size: 1}\n", encoding="utf-8",
+    )
+    result = CliRunner().invoke(app, ["train", "--config", "soup.yaml", "--dry-run"])
+    assert result.exit_code == 0, (result.output, result.exception)
+    capture.assert_not_called()
+
+
 @pytest.mark.parametrize("mode", ["bound", "offline", "distributed", "non-hf"])
 @pytest.mark.parametrize("source_state", ["unchanged", "changed", "deleted"])
 def test_train_cli_records_identity_and_writes_final_artifact(
