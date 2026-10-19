@@ -461,6 +461,28 @@ def _run_gepa(plan: CompilePlan) -> CompileResult:
         task_lm = None
     else:
         task_lm = getattr(module, "task_lm", None) or "default_lm"
+
+    reflection_lm = (
+        getattr(module, "reflection_lm", None)
+        or getattr(module, "reflection_model", None)
+    )
+    reflection_strategy = getattr(module, "reflection_strategy", None)
+    custom_candidate_proposer = getattr(module, "custom_candidate_proposer", None) or getattr(
+        module, "proposer", None
+    )
+    adapter_has_propose = (
+        adapter is not None
+        and hasattr(adapter, "propose_new_texts")
+        and getattr(adapter, "propose_new_texts") is not None
+    )
+    if (
+        not adapter_has_propose
+        and custom_candidate_proposer is None
+        and reflection_strategy is None
+        and reflection_lm is None
+    ):
+        reflection_lm = getattr(module, "task_lm", None) or "default_lm"
+
     kwargs: dict[str, Any] = {
         "seed_candidate": seed_candidate,
         "trainset": examples,
@@ -469,6 +491,12 @@ def _run_gepa(plan: CompilePlan) -> CompileResult:
     }
     if adapter is not None:
         kwargs["adapter"] = adapter
+    if reflection_lm is not None:
+        kwargs["reflection_lm"] = reflection_lm
+    if reflection_strategy is not None:
+        kwargs["reflection_strategy"] = reflection_strategy
+    if custom_candidate_proposer is not None:
+        kwargs["custom_candidate_proposer"] = custom_candidate_proposer
 
     optimised = gepa.optimize(**kwargs)  # type: ignore[attr-defined]
     best_candidate = getattr(optimised, "best_candidate", optimised)
@@ -551,28 +579,46 @@ def _run_textgrad(plan: CompilePlan) -> CompileResult:
 
     initial_score = float(getattr(variable, "score", _calc_score(initial_text)) or 0.0)
     best_score = initial_score
+    best_text = initial_text
     converged = False
     iterations = 0
+
+    if hasattr(tg, "set_backward_engine"):
+        try:
+            tg.set_backward_engine(engine)
+        except Exception:
+            pass
 
     for i in range(plan.max_iters):
         ex = raw_examples[i % len(raw_examples)] if raw_examples else {}
         loss_text = f"Evaluate {variable.value} with eval example: {ex}"
-        loss = (
-            tg.Variable(
-                loss_text,
-                role_description="evaluation loss",
-                predecessors=[variable],
+        if hasattr(tg, "TextLoss"):
+            loss_fn = tg.TextLoss(eval_system_prompt=loss_text, engine=engine)
+            loss = loss_fn(variable)
+        elif hasattr(tg, "LLMCall"):
+            loss_fn = tg.LLMCall(engine, loss_text)
+            loss = loss_fn(variable)
+        else:
+            loss = (
+                tg.Variable(
+                    loss_text,
+                    role_description="evaluation loss",
+                    predecessors=[variable],
+                )
+                if hasattr(tg, "Variable")
+                else variable
             )
-            if hasattr(tg, "Variable")
-            else variable
-        )
         optimizer.zero_grad()
-        loss.backward()
+        try:
+            loss.backward(engine=engine)
+        except TypeError:
+            loss.backward()
         optimizer.step()
         iterations = i + 1
         cur_score = float(getattr(variable, "score", _calc_score(str(variable.value))) or 0.0)
         if cur_score > best_score:
             best_score = cur_score
+            best_text = str(variable.value)
             if best_score >= 1.0:
                 converged = True
                 break
@@ -580,7 +626,7 @@ def _run_textgrad(plan: CompilePlan) -> CompileResult:
     if best_score > initial_score and best_score >= 1.0:
         converged = True
     return CompileResult(
-        program_text=str(variable.value),
+        program_text=best_text,
         score=best_score,
         iterations=iterations,
         converged=converged,

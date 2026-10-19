@@ -73,17 +73,44 @@ def recording_textgrad(monkeypatch):
             self.role_description = role_description
             self.predecessors = list(predecessors or [])
             self.gradients = set()
+            self.grad_fn = None
             calls.append(("Variable", value))
 
         def backward(self, *args, **kwargs):
-            for predecessor in self.predecessors:
-                predecessor.gradients.add(f"grad_from_{self.value}")
-            calls.append(("backward",))
+            engine = kwargs.get("engine") or (args[0] if args else None)
+            calls.append(("backward", engine))
+            if self.grad_fn is not None:
+                self.grad_fn(backward_engine=engine)
+
+    class _TextLoss:
+        def __init__(self, eval_system_prompt, engine=None):
+            self.eval_system_prompt = eval_system_prompt
+            self.engine = engine
+            calls.append(("TextLoss", eval_system_prompt, engine))
+
+        def __call__(self, variable):
+            loss_var = _Variable(
+                f"Loss on {variable.value}",
+                role_description="evaluation loss",
+                predecessors=[variable],
+            )
+
+            def grad_fn(backward_engine=None):
+                used_engine = backward_engine or self.engine
+                calls.append(("engine_call", self.eval_system_prompt, used_engine))
+                variable.gradients.add(f"grad_from_{self.eval_system_prompt}")
+
+            loss_var.grad_fn = grad_fn
+            return loss_var
 
     class _TGD:
-        def __init__(self, parameters, **kwargs):
+        def __init__(self, parameters, engine=None, **kwargs):
             self.parameters = parameters
-            calls.append(("TGD", sorted(kwargs)))
+            self.engine = engine
+            kw = dict(kwargs)
+            if engine is not None:
+                kw["engine"] = engine
+            calls.append(("TGD", sorted(kw)))
 
         def zero_grad(self):
             for parameter in self.parameters:
@@ -96,7 +123,13 @@ def recording_textgrad(monkeypatch):
                 if len(parameter.gradients) > 0:
                     parameter.value += " improved"
 
-    fake_tg = types.SimpleNamespace(Variable=_Variable, TGD=_TGD)
+    fake_tg = types.SimpleNamespace(
+        Variable=_Variable,
+        TextLoss=_TextLoss,
+        TGD=_TGD,
+        get_backward_engine=lambda: "default_engine",
+        set_backward_engine=lambda e: calls.append(("set_backward_engine", e)),
+    )
     monkeypatch.setitem(sys.modules, "textgrad", fake_tg)
     return calls
 
@@ -112,6 +145,25 @@ def recording_gepa(monkeypatch):
         assert "task_lm" in kwargs or "adapter" in kwargs, "GEPA requires task_lm or adapter"
         if kwargs.get("adapter") is not None and kwargs.get("task_lm") is not None:
             raise ValueError("GEPA requires task_lm=None in adapter mode")
+
+        active_adapter = kwargs.get("adapter")
+        adapter_has_propose = (
+            active_adapter is not None
+            and hasattr(active_adapter, "propose_new_texts")
+            and getattr(active_adapter, "propose_new_texts") is not None
+        )
+        custom_proposer = kwargs.get("custom_candidate_proposer")
+        if not adapter_has_propose and custom_proposer is None:
+            has_reflection = (
+                kwargs.get("reflection_lm") is not None
+                or kwargs.get("reflection_strategy") is not None
+            )
+            assert has_reflection, (
+                "reflection_lm was not provided. The adapter does not provide propose_new_texts, "
+                "and custom_candidate_proposer was not provided. GEPA will use default proposer, "
+                "which requires reflection_lm (or reflection_strategy) to be specified."
+            )
+
         calls.append(("optimize", {"seed_candidate": seed_candidate, "kwargs": kwargs}))
         return types.SimpleNamespace(
             best_candidate={
@@ -261,14 +313,27 @@ def test_textgrad_backward_loss_and_engine_contract(tmp_path, monkeypatch, recor
     assert len(tgd_calls) == 1
     assert "engine" in tgd_calls[0][1], "TGD did not receive engine"
 
-    # 2. Each step is preceded by a backward()
+    # 2. TextLoss constructed and engine invoked with eval example text
+    loss_calls = [c for c in calls1 if c[0] == "TextLoss"]
+    assert len(loss_calls) == 2, f"Expected 2 TextLoss calls, got {loss_calls}"
+    assert "1+1" in loss_calls[0][1] or "2+2" in loss_calls[0][1]
+
+    engine_calls = [c for c in calls1 if c[0] == "engine_call"]
+    assert len(engine_calls) == 2
+    assert engine_calls[0][2] is not None, "backward did not receive or use an engine"
+
+    # 3. Each step is preceded by a backward() and has positive parameter gradients
     for i, call in enumerate(calls1):
         if call[0] == "step":
-            assert i > 0 and calls1[i - 1][0] == "backward", (
+            assert i >= 2 and calls1[i - 2][0] == "backward", (
                 f"step at {i} not preceded by backward: {calls1}"
             )
+            assert calls1[i - 1][0] == "engine_call", (
+                f"step at {i} not preceded by engine_call: {calls1}"
+            )
+            assert call[1] == [1], f"Parameter gradients were 0: {call}"
 
-    # 3. Two different suites produce different call sequences
+    # 4. Two different suites produce different call sequences
     assert calls1 != calls2
 
 
@@ -473,7 +538,7 @@ def test_textgrad_edit_without_score_improvement_does_not_claim_converged(
     ])
     assert res.exit_code == 0, res.output
     assert (tmp_path / "out.py").read_text(encoding="utf-8") == (
-        "Answer briefly. improved improved"
+        "Answer briefly."
     )
     panel = dict(re.findall(r"(Converged|Score):\s+(\S+)", _strip_ansi(res.output)))
     assert panel == {"Converged": "False", "Score": "0.000"}
@@ -485,12 +550,23 @@ def test_textgrad_loss_predecessor_graph_populates_gradients(
     from soup_cli.utils import prompt_compile
 
     monkeypatch.chdir(tmp_path)
-    (tmp_path / "prog.py").write_text("program = 'Answer briefly.'\n", encoding="utf-8")
+    metric_code = (
+        "program = 'Answer briefly.'\n"
+        "def metric(gold, pred):\n"
+        "    return 1.0 if 'improved' in str(pred) else 0.0\n"
+    )
+    (tmp_path / "prog.py").write_text(metric_code, encoding="utf-8")
     (tmp_path / "eval.jsonl").write_text('{"answer": "4"}\n', encoding="utf-8")
     variable = sys.modules["textgrad"].Variable("Answer briefly.", role_description="prompt")
-    monkeypatch.setattr(prompt_compile, "_load_program_module", lambda path: types.SimpleNamespace(
-        program="Answer briefly.", variable=variable,
-    ))
+    monkeypatch.setattr(
+        prompt_compile,
+        "_load_program_module",
+        lambda path: types.SimpleNamespace(
+            program="Answer briefly.",
+            variable=variable,
+            metric=lambda g, p: 1.0 if "improved" in str(p) else 0.0,
+        ),
+    )
     plan = prompt_compile.build_compile_plan(
         program_path="prog.py", eval_suite_path="eval.jsonl", optimizer="textgrad", max_iters=1,
         output_path="out.py",
@@ -562,3 +638,146 @@ def test_textgrad_measures_score_and_convergence(
     assert result.converged is expected_converged
     assert result.iterations == expected_iterations
     assert len([call for call in recording_textgrad if call[0] == "step"]) == expected_iterations
+
+
+def test_textgrad_preserves_best_candidate_on_regression(tmp_path, monkeypatch):
+    """If score improves then regresses, run_compile preserves best text with best_score."""
+    from soup_cli.utils.prompt_compile import build_compile_plan, run_compile
+
+    step_idx = 0
+
+    class _Variable:
+        def __init__(self, value, *, role_description: str, predecessors=None, **kwargs):
+            self.value = value
+            self.role_description = role_description
+            self.predecessors = list(predecessors or [])
+            self.gradients = set()
+            self.grad_fn = None
+
+        def backward(self, *args, **kwargs):
+            if self.grad_fn is not None:
+                self.grad_fn()
+
+    class _TextLoss:
+        def __init__(self, eval_system_prompt, engine=None):
+            pass
+
+        def __call__(self, variable):
+            loss_var = _Variable(
+                "loss", role_description="evaluation loss", predecessors=[variable]
+            )
+
+            def grad_fn(*a, **kw):
+                variable.gradients.add("grad")
+
+            loss_var.grad_fn = grad_fn
+            return loss_var
+
+    class _TGD:
+        def __init__(self, parameters, **kwargs):
+            self.parameters = parameters
+
+        def zero_grad(self):
+            for p in self.parameters:
+                p.gradients.clear()
+
+        def step(self):
+            nonlocal step_idx
+            step_idx += 1
+            for p in self.parameters:
+                p.value = f"Candidate_{step_idx}"
+
+    fake_tg = types.SimpleNamespace(
+        Variable=_Variable,
+        TextLoss=_TextLoss,
+        TGD=_TGD,
+        get_backward_engine=lambda: "engine",
+    )
+    monkeypatch.setitem(sys.modules, "textgrad", fake_tg)
+
+    prog_code = """
+program = 'Initial prompt'
+def metric(gold, pred):
+    if 'Candidate_1' in pred:
+        return 0.5
+    return 0.0
+"""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "prog.py").write_text(prog_code, encoding="utf-8")
+    (tmp_path / "eval.jsonl").write_text('{"question": "q"}\n', encoding="utf-8")
+
+    plan = build_compile_plan(
+        program_path="prog.py",
+        eval_suite_path="eval.jsonl",
+        optimizer="textgrad",
+        max_iters=2,
+        output_path="out.py",
+    )
+    result = run_compile(plan)
+    assert result.score == 0.5
+    assert result.program_text == "Candidate_1"
+
+
+def test_gepa_forwards_reflection_lm_and_proposer_configuration(
+    tmp_path, monkeypatch, recording_gepa
+):
+    """User module exporting reflection_lm is forwarded to gepa.optimize."""
+    from soup_cli.utils.prompt_compile import build_compile_plan, run_compile
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "prog.py").write_text(
+        "program = 'Prompt'\ntask_lm = 'my_task_lm'\nreflection_lm = 'my_reflection_lm'\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "eval.jsonl").write_text('{"q": "1"}\n', encoding="utf-8")
+
+    plan = build_compile_plan(
+        program_path="prog.py",
+        eval_suite_path="eval.jsonl",
+        optimizer="gepa",
+        max_iters=2,
+        output_path="out.py",
+    )
+    res = run_compile(plan)
+    assert res.score == 0.95
+    assert len(recording_gepa) == 1
+    kwargs = recording_gepa[0][1]["kwargs"]
+    assert kwargs.get("task_lm") == "my_task_lm"
+    assert kwargs.get("reflection_lm") == "my_reflection_lm"
+
+
+def test_compile_tools_gepa_passes_reflection_lm(tmp_path, monkeypatch, recording_gepa):
+    """compile_tools runs gepa.optimize with task_lm and reflection_lm configured."""
+    from soup_cli.utils.compile_tools import ToolCompilePlan, run_tool_compile
+
+    monkeypatch.chdir(tmp_path)
+    spec_json = {
+        "openapi": "3.0.0",
+        "info": {"title": "Test", "version": "1.0"},
+        "paths": {
+            "/items": {
+                "get": {
+                    "operationId": "get_items",
+                    "description": "Fetch items.",
+                    "responses": {"200": {"description": "OK"}},
+                }
+            }
+        },
+    }
+    (tmp_path / "tools.json").write_text(json.dumps(spec_json), encoding="utf-8")
+    (tmp_path / "eval.jsonl").write_text(
+        '{"query": "fetch", "tool": "get_items"}\n', encoding="utf-8"
+    )
+
+    plan = ToolCompilePlan(
+        spec_path="tools.json",
+        eval_suite_path="eval.jsonl",
+        optimizer="gepa",
+        output_path="tools_out.json",
+    )
+    count = run_tool_compile(plan)
+    assert count == 1
+    assert len(recording_gepa) == 1
+    kwargs = recording_gepa[0][1]["kwargs"]
+    assert "reflection_lm" in kwargs
+    assert kwargs["reflection_lm"] is not None

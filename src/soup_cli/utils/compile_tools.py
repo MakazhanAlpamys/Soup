@@ -158,6 +158,11 @@ def _optimise_description(
             role_description="tool description",
         )
         engine = getattr(tg, "get_backward_engine", lambda: None)() or "default"
+        if hasattr(tg, "set_backward_engine"):
+            try:
+                tg.set_backward_engine(engine)
+            except Exception:
+                pass
         try:
             opt = tg.TGD(parameters=[variable], engine=engine)
         except TypeError:
@@ -165,17 +170,27 @@ def _optimise_description(
         for i in range(min(8, max(1, len(examples)))):
             ex = examples[i % len(examples)] if examples else {}
             loss_text = f"Evaluate tool description: {variable.value} on {ex}"
-            loss = (
-                tg.Variable(
-                    loss_text,
-                    role_description="evaluation loss",
-                    predecessors=[variable],
+            if hasattr(tg, "TextLoss"):
+                loss_fn = tg.TextLoss(eval_system_prompt=loss_text, engine=engine)
+                loss = loss_fn(variable)
+            elif hasattr(tg, "LLMCall"):
+                loss_fn = tg.LLMCall(engine, loss_text)
+                loss = loss_fn(variable)
+            else:
+                loss = (
+                    tg.Variable(
+                        loss_text,
+                        role_description="evaluation loss",
+                        predecessors=[variable],
+                    )
+                    if hasattr(tg, "Variable")
+                    else variable
                 )
-                if hasattr(tg, "Variable")
-                else variable
-            )
             opt.zero_grad()
-            loss.backward()
+            try:
+                loss.backward(engine=engine)
+            except TypeError:
+                loss.backward()
             opt.step()
         return str(variable.value)
 
@@ -191,6 +206,7 @@ def _optimise_description(
         trainset=examples,
         max_metric_calls=max(1, len(examples)),
         task_lm="default_lm",
+        reflection_lm="default_lm",
     )
     best_candidate = getattr(optimised, "best_candidate", optimised)
     if isinstance(best_candidate, dict):
