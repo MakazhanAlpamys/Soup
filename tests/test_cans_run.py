@@ -199,7 +199,7 @@ def test_extraction_failure_cleans_up(
 ) -> None:
     can_path = _make_can(tmp_path / "corrupt.can", with_symlink=True)
 
-    with pytest.raises(Exception):
+    with pytest.raises((tarfile.TarError, ValueError), match="bad_link"):
         run_can(str(can_path.name), yes=True)
 
     assert run_env() == []
