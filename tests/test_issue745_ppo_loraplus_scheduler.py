@@ -536,6 +536,7 @@ def test_real_ppo_trainer_trains_the_value_model_with_loraplus(tmp_path, monkeyp
         # #1391: two prompts have to fill one rollout batch (2 x 1)
         "  gradient_accumulation_steps: 1\n"
         "  lr: 1e-4\n"
+        "  warmup_ratio: 0.0\n"
         f"  loraplus_lr_ratio: {RATIO}\n"
         "output: ./out\n"
     )
