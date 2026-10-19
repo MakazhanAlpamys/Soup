@@ -8,6 +8,9 @@ they act on ESC (U+009B is a one-character CSI). Every printer built on the two
 helpers inherited that, so the range is pinned here at both edges and through
 two real printers.
 
+The same table now strips the Unicode bidi controls and invisible separators
+(#1861), one group at a time; ZWJ and ZWNJ, which real text needs, are kept.
+
 The ``.can`` manifest ``author`` field now refuses control characters outright
 (``unicodedata.category == "Cc"``: C0, DEL and C1) instead of only NUL / CR /
 LF -- an author handle has no use for any of them.
@@ -30,6 +33,13 @@ runner = CliRunner()
 
 BACKSLASH = chr(92)
 C1_CODES = tuple(range(0x80, 0xA0))
+#: The #1861 groups: each code point here reorders or hides displayed text.
+FORMAT_GROUPS = {
+    "bidi-embeddings-and-overrides": tuple(range(0x202A, 0x202F)),
+    "bidi-isolates": tuple(range(0x2066, 0x206A)),
+    "bidi-marks": (0x061C, 0x200E, 0x200F),
+    "invisible-separators": (0x200B, 0x2028, 0x2029, 0xFEFF),
+}
 
 
 def _c1_found(text: str) -> list[str]:
@@ -86,6 +96,43 @@ class TestTheHelpersStripC1:
         buffer = StringIO()
         _plain_console(buffer).print(for_terminal(value))
         assert buffer.getvalue().rstrip("\n") == BACKSLASH + "[bold]x[/bold]"
+
+
+class TestTheHelpersStripBidiAndInvisibleFormatCharacters:
+    """#1861: nothing a preview shows may be reordered or hidden by a format character."""
+
+    @pytest.mark.parametrize("codes", list(FORMAT_GROUPS.values()), ids=list(FORMAT_GROUPS))
+    def test_every_code_point_in_the_group_is_stripped(self, codes: tuple[int, ...]) -> None:
+        from soup_cli.utils.terminal import for_terminal, strip_control
+
+        for code in codes:
+            value = f"a{chr(code)}b"
+            assert strip_control(value) == "ab", hex(code)
+            assert for_terminal(value) == "ab", hex(code)
+
+    @pytest.mark.parametrize("codes", list(FORMAT_GROUPS.values()), ids=list(FORMAT_GROUPS))
+    def test_the_strip_runs_before_the_escape(self, codes: tuple[int, ...]) -> None:
+        from soup_cli.utils.terminal import for_terminal
+
+        for code in codes:
+            buffer = StringIO()
+            _plain_console(buffer).print(for_terminal(BACKSLASH + chr(code) + "[bold]x[/bold]"))
+            assert buffer.getvalue().rstrip("\n") == BACKSLASH + "[bold]x[/bold]", hex(code)
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            chr(0x5E9) + chr(0x5DC) + chr(0x5D5) + chr(0x5DD) + " " + chr(0x645) + chr(0x631),
+            chr(0x1F469) + chr(0x200D) + chr(0x1F4BB),
+            chr(0x645) + chr(0x6CC) + chr(0x200C) + chr(0x631) + chr(0x648) + chr(0x645),
+        ],
+        ids=["plain-hebrew-and-arabic", "zwj-emoji", "persian-zwnj"],
+    )
+    def test_right_to_left_text_zwj_and_zwnj_are_kept(self, text: str) -> None:
+        from soup_cli.utils.terminal import for_terminal, strip_control
+
+        assert strip_control(text) == text
+        assert for_terminal(text) == text
 
 
 def _write_can(path: str, manifest: str, config: str = "base: m\n") -> str:
