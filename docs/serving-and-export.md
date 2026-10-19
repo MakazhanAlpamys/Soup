@@ -87,7 +87,7 @@ your environment manager and retry. This flag does not disable toolchain lookup 
 cloning; use `--llama-cpp` to supply your own checkout. Both new flags apply only to
 `--format gguf`; other formats refuse them rather than ignore them.
 
-### Building llama.cpp (required for quantized GGUF)
+### MTP checkpoint inspection
 
 When a model declares `mtp_num_hidden_layers` but its saved safetensors headers
 contain no `mtp.*` or `model.mtp.*` tensors, Soup passes `--no-mtp` to conversion
@@ -97,6 +97,11 @@ are preserved. Malformed or missing checkpoint metadata is refused rather than
 treated as absent weights. The selected converter must advertise `--no-mtp` in a
 successful `--help` probe; otherwise choose a compatible checkout with
 `--llama-cpp`. The default `b5270` pin does not support this flag.
+The shared safetensors header reader currently refuses unsupported dtypes such as
+`F8_E4M3`; this inspection can therefore refuse an FP8 checkpoint even when its MTP
+tensors are present.
+
+### Building llama.cpp (required for quantized GGUF)
 
 Soup auto-clones llama.cpp (pinned tag `b5270`) to `~/.soup/llama.cpp` on first use,
 but it does **not** build it. The conversion step (`f16` / `f32`) works from the

@@ -10,6 +10,7 @@ from typer.testing import CliRunner
 
 from soup_cli.cli import app
 from soup_cli.commands import export as export_mod
+from soup_cli.utils.gguf_mtp import needs_no_mtp
 from tests.conftest import strip_ansi
 
 
@@ -112,6 +113,126 @@ def export_mtp(tmp_path, monkeypatch):
         return result, calls
 
     return invoke
+
+
+@pytest.mark.parametrize(
+    "config,message",
+    [
+        ({"mtp_num_hidden_layers": -1}, "nonnegative integer"),
+        ({"mtp_num_hidden_layers": True}, "nonnegative integer"),
+        ({"mtp_num_hidden_layers": None}, "nonnegative integer"),
+        ({"text_config": []}, "text_config must contain an object"),
+        ([], "config.json must contain an object"),
+    ],
+)
+def test_invalid_configuration_is_refused_for_its_own_reason(tmp_path, config, message):
+    # A readable checkpoint WITH saved MTP is present, so only the config check can raise.
+    _weights(tmp_path / "model.safetensors", ("mtp.layers.0.weight",))
+    (tmp_path / "config.json").write_text(json.dumps(config))
+    with pytest.raises(ValueError, match=message):
+        needs_no_mtp(tmp_path, tmp_path / "unused.py")
+
+
+def test_index_shard_outside_the_model_dir_is_refused_even_when_it_exists(tmp_path):
+    model = tmp_path / "model"
+    model.mkdir()
+    (model / "config.json").write_text('{"mtp_num_hidden_layers":1}')
+    _weights(tmp_path / "outside.safetensors", ("model.layers.0.weight",))
+    (model / "model.safetensors.index.json").write_text(
+        json.dumps({"weight_map": {"x": "../outside.safetensors"}})
+    )
+    with pytest.raises(ValueError, match="escapes the model directory"):
+        needs_no_mtp(model, tmp_path / "unused.py")
+
+
+@pytest.mark.requires_symlink
+def test_index_shard_symlinked_outside_the_model_dir_is_refused(tmp_path):
+    model = tmp_path / "model"
+    model.mkdir()
+    (model / "config.json").write_text('{"mtp_num_hidden_layers":1}')
+    _weights(tmp_path / "outside.safetensors", ("model.layers.0.weight",))
+    (model / "link.safetensors").symlink_to(tmp_path / "outside.safetensors")
+    (model / "model.safetensors.index.json").write_text(
+        json.dumps({"weight_map": {"x": "link.safetensors"}})
+    )
+    with pytest.raises(ValueError, match="escapes the model directory"):
+        needs_no_mtp(model, tmp_path / "unused.py")
+
+
+def test_index_shard_without_safetensors_suffix_is_refused(tmp_path):
+    (tmp_path / "config.json").write_text('{"mtp_num_hidden_layers":1}')
+    _weights(tmp_path / "model.bin", ("model.layers.0.weight",))
+    (tmp_path / "model.safetensors.index.json").write_text(
+        json.dumps({"weight_map": {"x": "model.bin"}})
+    )
+    with pytest.raises(ValueError, match="invalid shard filename"):
+        needs_no_mtp(tmp_path, tmp_path / "unused.py")
+
+
+def test_oversized_config_is_refused(tmp_path):
+    (tmp_path / "config.json").write_text(
+        '{"mtp_num_hidden_layers":1,"pad":"' + "x" * (1024 * 1024) + '"}'
+    )
+    _weights(tmp_path / "model.safetensors", ("mtp.layers.0.weight",))
+    with pytest.raises(ValueError, match="metadata limit"):
+        needs_no_mtp(tmp_path, tmp_path / "unused.py")
+
+
+def test_unindexed_shards_are_all_inspected(tmp_path):
+    (tmp_path / "config.json").write_text('{"mtp_num_hidden_layers":1}')
+    _weights(tmp_path / "a.safetensors", ("model.layers.0.weight",))
+    _weights(tmp_path / "b.safetensors", ("mtp.layers.0.weight",))
+    assert needs_no_mtp(tmp_path, tmp_path / "unused.py") is False
+
+
+def test_every_shard_is_validated_even_after_mtp_is_found(tmp_path):
+    (tmp_path / "config.json").write_text('{"mtp_num_hidden_layers":1}')
+    _weights(tmp_path / "a.safetensors", ("mtp.layers.0.weight",))
+    (tmp_path / "b.safetensors").write_bytes(b"bad")
+    with pytest.raises(ValueError, match="truncated"):
+        needs_no_mtp(tmp_path, tmp_path / "unused.py")
+
+
+def test_probe_is_time_bounded(tmp_path, monkeypatch):
+    (tmp_path / "config.json").write_text('{"mtp_num_hidden_layers":1}')
+    _weights(tmp_path / "model.safetensors", ("model.layers.0.weight",))
+    seen = {}
+
+    def probe(command, **kwargs):
+        seen.update(kwargs)
+        return subprocess.CompletedProcess(command, 0, "options: --no-mtp", "")
+
+    monkeypatch.setattr(subprocess, "run", probe)
+    assert needs_no_mtp(tmp_path, tmp_path / "converter.py") is True
+    assert seen["timeout"] == 15
+
+
+@pytest.mark.parametrize("mode", ["prefixed-flag", "undecodable"])
+def test_more_probe_outcomes_do_not_establish_capability(tmp_path, monkeypatch, mode):
+    (tmp_path / "config.json").write_text('{"mtp_num_hidden_layers":1}')
+    _weights(tmp_path / "model.safetensors", ("model.layers.0.weight",))
+
+    def probe(command, **kwargs):
+        if mode == "undecodable":
+            raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")
+        return subprocess.CompletedProcess(command, 0, "usage: --x--no-mtp", "")
+
+    monkeypatch.setattr(subprocess, "run", probe)
+    with pytest.raises(ValueError, match="--llama-cpp"):
+        needs_no_mtp(tmp_path, tmp_path / "converter.py")
+
+
+def test_refusal_text_is_terminal_safe(export_mtp, monkeypatch):
+    def boom(model_dir, converter):
+        raise ValueError("[bold]shard[/] \x9bevil")
+
+    monkeypatch.setattr("soup_cli.utils.gguf_mtp.needs_no_mtp", boom)
+    result, calls = export_mtp()
+    output = strip_ansi(result.output)
+    assert result.exit_code == 1, output
+    assert "[bold]shard[/]" in output
+    assert "\x9b" not in result.output
+    assert calls == []
 
 
 @pytest.mark.parametrize("quant", ["f16", "f32", "q4_k_m"])
