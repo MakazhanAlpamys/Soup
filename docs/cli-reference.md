@@ -3644,7 +3644,7 @@ Usage: `soup train [OPTIONS]`
 | `--find-lr-end` | float | `0.1` |  | LR range finder: ending LR (default 1e-1) |
 | `--find-lr-steps` | integer | `100` |  | LR range finder: number of sweep steps (default 100) |
 | `--find-lr-output` | text | `lr_finder.json` |  | LR range finder: JSON report path (default ./lr_finder.json) |
-| `--yes`, `-y` | flag | off |  | Skip confirmation prompt |
+| `--yes`, `-y` | flag | off |  | Skip the start-training confirmation. Required when stdin is not a TTY (scripts, CI, pipes). |
 | `--trust-remote-code` | flag | off |  | Allow loading models that ship custom Python via auto_map. Default deny (v0.36.0). Only enable if you trust the source. |
 | `--echo-trap-tokenizer-aware` | flag | off |  | Use tokenizer-id n-grams for echo-trap scoring. Requires training.echo_trap_enabled=true on grpo/ppo. |
 | `--reward-hack-detector` | text |  |  | Reward-hacking detector for GRPO/PPO: info_rm \| rm_ensemble. Overrides training.reward_hack_detector. (v0.71.26) |
