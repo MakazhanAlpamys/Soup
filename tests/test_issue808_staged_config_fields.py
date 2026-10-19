@@ -244,6 +244,15 @@ class TestStagedFieldsInventory:
                 assert found[0].path == "training.staged_dummy"
                 assert found[0].value == 999
 
+    @pytest.mark.parametrize(
+        "name", ["rl_checkpoint_include_ref_model", "rl_checkpoint_include_rollout_buffer"]
+    )
+    def test_the_staged_rl_checkpoint_flags_say_nothing_is_saved(self, name: str) -> None:
+        """The descriptions must not drift back to claiming the state is saved (#808)."""
+        from soup_cli.config.schema import TrainingConfig
+
+        assert "Not saved yet" in TrainingConfig.model_fields[name].description
+
 
 class TestLoaderStagedFieldIntegration:
     """Test loader behavior under warning vs error severity."""
