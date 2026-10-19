@@ -1,7 +1,8 @@
 # Gate: layer streaming shards a DeepSeek-V3 FP8 block-quantised checkpoint by dequantising it
 
 Status: **G1 PASS, G2 PASS, G3 PASS** (CPU only; run 2026-10-19; review round in section 7). Sections 1-3 are the
-rule as committed in `cdfdf7546` before any gate run, unchanged since; section 4 is filled
+rule as committed in `82abf7e6c` before any gate run, unchanged since (the branch was later
+rebased onto main after #2039 merged; the gate ran with that commit as `cdfdf7546`); section 4 is filled
 from the run, section 5 holds the results. No GPU run: the maintainer runs the GPU loss
 check.
 
@@ -163,8 +164,8 @@ figures describe that loss, not a defect. No Kimi K2 or 1T checkpoint.
   (`torch.cuda.is_available()` False in every report). 32 logical CPUs, 31.7 GiB RAM.
 - Software: Python 3.12.10, Windows 11 26200, torch 2.14.0+cu130, transformers 5.17.0,
   bitsandbytes 0.50.2 (CPU), safetensors 0.8.0.
-- Code: G1 and G2 ran as `tests/test_fp8_block_streaming.py` at commit `fc2ef92fd` (124
-  tests). G3 ran `benchmarks/harness/fp8_shard_gate.py` from the same tree (its one-file
+- Code: G1 and G2 ran as `tests/test_fp8_block_streaming.py` at commit `1c1d855f4` (124
+  tests; `fc2ef92fd` before the rebase, the same files). G3 ran `benchmarks/harness/fp8_shard_gate.py` from the same tree (its one-file
   index fallback was added before the run and is committed with this record).
 - Other Claude sessions shared the machine. RAM, all in GiB (2^30 bytes), exact bytes from
   the reports: every G3 script was started only once at least 10 GiB were available (the
@@ -332,8 +333,8 @@ run after each and the file restored byte for byte (sha256 checked); the table i
 
 ## 7. Review round (2026-10-20)
 
-An independent review asked for changes. They were made in `9b9e51692`, after the gate run
-above; sections 1-6 describe the code at `fc2ef92fd`.
+An independent review asked for changes. They were made in `34c9e98a0` (`9b9e51692` before the
+rebase), after the gate run above; sections 1-6 describe the code at `1c1d855f4`.
 
 What changed in the dequant:
 - **Bounded work.** Rows now index their scale row (never expanded), and the column block is
@@ -353,7 +354,7 @@ New tests (`tests/test_fp8_block_streaming.py`, now 150):
 - the NaN, overflow and negative-scale refusals, and the kept zero scale;
 - a bf16 linear beside FP8 siblings is stored as it is;
 - a non-FP8 `quantization_config` reaches `from_config` and the built model unchanged, which
-  the code before this branch also does (checked by running the same probe on `387c758ca`);
+  the code before this branch also does (checked by running the same probe on `387c758ca`, the head of #2039, merged as `d500ae0d`);
 - the plain-read backstop refuses F8_E5M2, F8_E4M3FNUZ and a stray `*_scale_inv`.
 
 **Effect on G3.** The 4-layer NF4 shard was re-run with the banded code into a new folder:
