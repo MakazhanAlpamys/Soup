@@ -913,8 +913,18 @@ NF4 for the decoder weights the meta probe converts to 4-bit under `quantization
 the stream dtype for norms, embeddings, the head, an MoE router and fused routed experts,
 float32 for the layer buffers the runtime loads back, plus an allowance for the file headers
 and the index. A snapshot that still has to be copied is read where the copy step reads it.
-When the headers cannot be read, the cache is charged the NF4 rate for every parameter and
-the panel says approximately.
+A checkpoint the sharder would refuse (more than 512 decoder layers, a missing layer, an
+incomplete expert, one tensor spelled twice) is refused here, in the sharder's words, before
+anything is copied. When the files cannot be listed or a header cannot be read, the cache is
+charged the NF4 rate for every parameter and the panel says approximately; so does a
+qwen4_exp base that is not an oQ checkpoint, which keeps its source-size figure.
+
+This raises the figure for a dense base under `quantization: 4bit`, because the embeddings,
+an untied head and the norms stay at the stream dtype rather than NF4: Llama-3.1-8B goes from
+4.14 GB to 5.70 GB and Llama-3.2-1B from 0.64 GB to 1.03 GB (derived from their shapes), and
+Mistral-7B-Instruct-v0.3 from 3.74 GB to 4.14 GB, against a 4.14 GB cache measured on disk.
+A run that passed the pre-flight before by less than that margin is now refused: the old
+figure was low, and the sharder would have written the larger amount.
 
 **Two or more NVMe drives.** On a cold store larger than RAM the disk-tier step can wait on the
 read (measured for a 70B-shaped store), and then one drive is the ceiling. Set
