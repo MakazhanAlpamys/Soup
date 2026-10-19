@@ -104,15 +104,24 @@ def _write_checkpoint(directory, tensors, name="model.safetensors"):
 
 #: Headers `read_header` cannot turn into shapes, by the exception each one raises there:
 #: a null or nested dimension and a null offset are TypeErrors, an infinite dimension is
-#: an OverflowError, the rest ValueErrors.
+#: an OverflowError, 200 KB of nested brackets a RecursionError, the rest ValueErrors.
 _MALFORMED = {
     "shape-null": '{"t":{"dtype":"BF16","shape":[null],"data_offsets":[0,2]}}',
     "shape-nested": '{"t":{"dtype":"BF16","shape":[[2]],"data_offsets":[0,4]}}',
     "offsets-null": '{"t":{"dtype":"BF16","shape":[2],"data_offsets":[null,4]}}',
     "shape-infinite": '{"t":{"dtype":"BF16","shape":[Infinity],"data_offsets":[0,4]}}',
+    "nested-brackets": "[" * 200_000,
     "not-json": "not json at all",
     "fp8-dtype": '{"t":{"dtype":"F8_E4M3","shape":[2],"data_offsets":[0,2]}}',
 }
+
+
+def _layer_stack(n_layers):
+    """The smallest checkpoint with `n_layers` contiguous decoder layers."""
+    tensors = {"model.embed_tokens.weight": ("BF16", (4, 2))}
+    for idx in range(n_layers):
+        tensors[f"model.layers.{idx}.input_layernorm.weight"] = ("BF16", (2,))
+    return tensors
 
 
 def _write_raw(path, header_text, payload=b"\0" * 8):
@@ -409,6 +418,57 @@ class TestEstimateFromHeaders:
             tracemalloc.stop()
         assert peak < 8 * 2**20, peak
 
+    @pytest.mark.parametrize("n_layers", [512, 513])
+    def test_the_layer_cap_counts_layers_like_the_sharder(self, tmp_path, n_layers):
+        """The sharder takes max index + 1 and refuses above 512: 512 layers (indices
+        0..511) shard, 513 do not. The estimate draws the line in the same place."""
+        pytest.importorskip("torch")
+        pytest.importorskip("safetensors")
+        from soup_cli.utils.layer_shard import shard_checkpoint
+
+        weights = tmp_path / "m"
+        path = _write_checkpoint(weights, _layer_stack(n_layers))
+        if n_layers == 512:
+            assert len(_estimate([path], arch="llama", quant="none").layer_bytes) == 512
+            index = shard_checkpoint(str(weights), str(tmp_path / "out"), arch="llama")
+            assert index.n_layers == 512
+            return
+        message = r"too many decoder layers \(513 > 512\)"
+        with pytest.raises(ValueError, match=message):
+            _estimate([path], arch="llama", quant="none")
+        with pytest.raises(ValueError, match=message):
+            shard_checkpoint(str(weights), str(tmp_path / "out"), arch="llama")
+
+    @pytest.mark.parametrize("n_tensors", [10, 11])
+    def test_the_tensor_cap_matches_the_sharder(self, tmp_path, monkeypatch, n_tensors):
+        """At most _MAX_TOTAL_TENSORS tensors, the sharder's own constant and words.
+        The cap is lowered to 10 here so the test stays a few KB."""
+        pytest.importorskip("torch")
+        pytest.importorskip("safetensors")
+        import soup_cli.utils.layer_shard as layer_shard
+
+        monkeypatch.setattr(layer_shard, "_MAX_TOTAL_TENSORS", 10)
+        weights = tmp_path / "m"
+        path = _write_checkpoint(weights, _layer_stack(n_tensors - 1))
+        if n_tensors == 10:
+            assert len(_estimate([path], arch="llama", quant="none").layer_bytes) == 9
+            return
+        message = "checkpoint declares more than 10 tensors"
+        with pytest.raises(ValueError, match=message):
+            _estimate([path], arch="llama", quant="none")
+        with pytest.raises(ValueError, match=message):
+            layer_shard.shard_checkpoint(str(weights), str(tmp_path / "out"), arch="llama")
+
+    def test_the_tensor_cap_counts_across_files(self, tmp_path, monkeypatch):
+        import soup_cli.utils.layer_shard as layer_shard
+
+        monkeypatch.setattr(layer_shard, "_MAX_TOTAL_TENSORS", 10)
+        items = list(_layer_stack(10).items())  # 11 tensors, six and five per file
+        first = _write_checkpoint(tmp_path / "m", dict(items[:6]), "a.safetensors")
+        second = _write_checkpoint(tmp_path / "m", dict(items[6:]), "b.safetensors")
+        with pytest.raises(ValueError, match="checkpoint declares more than 10 tensors"):
+            _estimate([first, second], arch="llama", quant="none")
+
     def test_an_incomplete_expert_is_refused_like_the_sharder(self, tmp_path):
         tensors = _moe_tensors()
         del tensors["model.layers.1.mlp.experts.2.up_proj.weight"]
@@ -616,6 +676,17 @@ class TestTheFallbackIsOnlyForUnreadableSources:
         with pytest.raises(ValueError, match=r"too many decoder layers \(601 > 512\)"):
             _preflight(_ready_plan(tmp_path / "m"), num_hidden_layers=None)
 
+    def test_too_many_tensors_is_refused_not_approximated(self, tmp_path, monkeypatch):
+        import soup_cli.utils.layer_shard as layer_shard
+
+        monkeypatch.setattr(layer_shard, "_MAX_TOTAL_TENSORS", 10)
+        _write_checkpoint(tmp_path / "m", _layer_stack(10))
+        with pytest.raises(ValueError, match="checkpoint declares more than 10 tensors"):
+            _preflight(
+                _ready_plan(tmp_path / "m"), arch="llama", quant="none", quant_suffixes=(),
+                num_hidden_layers=None,
+            )
+
     def test_qwen4_exp_never_lists_its_source(self, tmp_path, monkeypatch):
         """Its own estimators size it; a snapshot walk would be wasted work."""
         import soup_cli.trainer.stream_setup as stream_setup
@@ -810,6 +881,84 @@ class TestTheSetupChargesTheEstimate:
             [path], quant="none", dtype=_stream_dtype(), num_hidden_layers=N_LAYERS
         )
         assert panels[0]["shard_bytes"] == expected.total_bytes
+
+
+# --------------------------------------------------------------------------
+# qwen4_exp keeps its own figures; only the source-size one is labelled a guess
+# --------------------------------------------------------------------------
+def _qwen4_panel_text(tmp_path, monkeypatch, *, oq):
+    """The pre-flight panel text of the real setup over a tiny qwen4_exp checkpoint.
+
+    With ``oq`` the checkpoint carries affine companions (``.scales``/``.biases``) and a
+    quantization_config, so ``estimate_oq_stream_cache_bytes`` sizes it from its
+    headers; without, the panel shows the source-size figure.
+    """
+    import io
+    import json
+
+    import torch
+    from rich.console import Console
+    from safetensors.torch import save_file
+
+    import soup_cli.trainer.stream_setup as stream_setup
+    from tests.test_issue602_qwen4_ple_streaming import _drive_qwen4_streaming_setup
+
+    weights = tmp_path / "weights"
+    weights.mkdir()
+    tensors = {"language_model.model.norm.weight": torch.ones(2)}
+    if oq:
+        tensors["language_model.model.layers.0.proj.weight"] = torch.tensor(
+            [[0, 1, 2, 3]], dtype=torch.uint32
+        )
+        tensors["language_model.model.layers.0.proj.scales"] = torch.ones(
+            (1, 1), dtype=torch.bfloat16
+        )
+        tensors["language_model.model.layers.0.proj.biases"] = torch.zeros(
+            (1, 1), dtype=torch.bfloat16
+        )
+        config = {"quantization_config": {"bits": 4, "group_size": 32}}
+    else:
+        tensors["language_model.model.layers.0.proj.weight"] = torch.ones(
+            (2, 2), dtype=torch.bfloat16
+        )
+        config = {}
+    blob = weights / "model.safetensors"
+    save_file(tensors, str(blob))
+    (weights / "config.json").write_text(json.dumps(config), encoding="utf-8")
+    stat = blob.stat()
+    plan = types.SimpleNamespace(
+        weights_dir=str(weights), source_bytes=stat.st_size, materialized_copy_bytes=0,
+        materialize_bytes=0, needs_materialization=False,
+        source_files=((str(blob), stat.st_size, int(stat.st_mtime)),),
+    )
+
+    def _resolve(_base, *, before_materialize=None):
+        if before_materialize is not None:
+            before_materialize(plan)
+        return str(weights)
+
+    buffer = io.StringIO()
+    monkeypatch.setattr(
+        stream_setup, "console", Console(file=buffer, width=400, color_system=None)
+    )
+    monkeypatch.setattr(stream_setup, "_disk_volume", lambda _path: (1, 10**15))
+    _drive_qwen4_streaming_setup(tmp_path, monkeypatch, resolve_weights=_resolve)
+    return " ".join(buffer.getvalue().split())
+
+
+class TestQwen4ExpPanelLabel:
+    def test_an_oq_checkpoint_is_sized_from_its_headers_not_labelled(
+        self, tmp_path, monkeypatch
+    ):
+        text = _qwen4_panel_text(tmp_path, monkeypatch, oq=True)
+        assert "Layer-shard cache:" in text
+        assert "Layer-shard cache: approximately" not in text
+
+    def test_a_non_oq_checkpoint_shows_its_source_size_as_approximate(
+        self, tmp_path, monkeypatch
+    ):
+        text = _qwen4_panel_text(tmp_path, monkeypatch, oq=False)
+        assert "Layer-shard cache: approximately" in text
 
 
 # --------------------------------------------------------------------------

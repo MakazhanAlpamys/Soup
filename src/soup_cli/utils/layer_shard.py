@@ -982,15 +982,17 @@ class SourceHeaderError(ValueError):
 
 #: What reading and parsing one header can raise: a missing or unreadable file, a
 #: malformed header (``ValueError``), a null or nested dimension or offset
-#: (``TypeError``) and an infinite one (``OverflowError``).
-_HEADER_READ_ERRORS = (OSError, ValueError, TypeError, OverflowError)
+#: (``TypeError``), an infinite one (``OverflowError``) and JSON nested deeper than
+#: the parser recurses (``RecursionError``: 200 KB of ``[`` is enough).
+_HEADER_READ_ERRORS = (OSError, ValueError, TypeError, OverflowError, RecursionError)
 
 
 def _read_source_shapes(shard_paths: Sequence[str]) -> Dict[str, Tuple[int, ...]]:
     """Canonical key -> shape over every source file, from the headers alone.
 
-    A header that cannot be read becomes :class:`SourceHeaderError`; one tensor
-    spelled twice is refused the way :func:`shard_checkpoint` refuses it.
+    A header that cannot be read becomes :class:`SourceHeaderError`. One tensor
+    spelled twice, or more than ``_MAX_TOTAL_TENSORS`` across the files, is
+    refused the way :func:`shard_checkpoint` refuses it.
     """
     from soup_cli.utils.safetensors_reader import read_header
 
@@ -1014,6 +1016,8 @@ def _read_source_shapes(shard_paths: Sequence[str]) -> Dict[str, Tuple[int, ...]
                 )
             spelled[key] = source_key
             shapes[key] = entry.shape
+            if len(shapes) > _MAX_TOTAL_TENSORS:
+                raise ValueError(f"checkpoint declares more than {_MAX_TOTAL_TENSORS} tensors")
     return shapes
 
 

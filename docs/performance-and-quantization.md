@@ -924,7 +924,9 @@ an untied head and the norms stay at the stream dtype rather than NF4: Llama-3.1
 4.14 GB to 5.70 GB and Llama-3.2-1B from 0.64 GB to 1.03 GB (derived from their shapes), and
 Mistral-7B-Instruct-v0.3 from 3.74 GB to 4.14 GB, against a 4.14 GB cache measured on disk.
 A run that passed the pre-flight before by less than that margin is now refused: the old
-figure was low, and the sharder would have written the larger amount.
+figure was low, and the sharder would have written the larger amount. The early RAM check
+(`stream_source: ram`, before sharding) still uses the flat NF4 rate; the check after sharding
+measures the real store.
 
 **Two or more NVMe drives.** On a cold store larger than RAM the disk-tier step can wait on the
 read (measured for a 70B-shaped store), and then one drive is the ceiling. Set
