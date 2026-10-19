@@ -59,13 +59,15 @@ class TestSchema:
         with pytest.raises(ValueError, match="stream_expert_layout"):
             load_config_from_string(_cfg(stream_layers="true", stream_expert_layout="experts"))
 
-    def test_per_expert_refuses_adapters_on_the_routed_experts(self):
+    @pytest.mark.parametrize("quantization", ["none", "4bit", "8bit"])
+    def test_per_expert_refuses_adapters_on_the_routed_experts(self, quantization):
         with pytest.raises(ValueError) as exc:
             load_config_from_string(
                 _cfg(
                     stream_layers="true",
                     stream_expert_layout="per_expert",
                     moe_lora="true",
+                    quantization=quantization,
                 )
             )
         text = str(exc.value)
@@ -133,7 +135,7 @@ def test_setup_refuses_per_expert_for_an_ungated_arch_before_sharding(tmp_path, 
     assert calls == []
 
 
-def _captured_setup_output(tmp_path, monkeypatch, *, layout, disk_kind):
+def _captured_setup_output(tmp_path, monkeypatch, *, layout, disk_kind, **driver_kwargs):
     import io
     import re
 
@@ -147,15 +149,35 @@ def _captured_setup_output(tmp_path, monkeypatch, *, layout, disk_kind):
     _drive_qwen4_streaming_setup(
         tmp_path, monkeypatch, arch="deepseek_v3", model_cfg=_deepseek_cfg(),
         tcfg_overrides={"stream_expert_layout": layout}, disk_kind=disk_kind,
+        **driver_kwargs,
     )
     plain = re.sub(r"\x1b\[[0-9;]*m", "", buffer.getvalue())
     return " ".join(plain.split())
 
 
-def test_a_non_nvme_cache_volume_is_warned_about_for_per_expert(tmp_path, monkeypatch):
-    text = _captured_setup_output(tmp_path, monkeypatch, layout="per_expert", disk_kind="ssd")
+@pytest.mark.parametrize("disk_kind", ["ssd", "hdd", "unknown"])
+def test_a_non_nvme_cache_volume_is_warned_about_for_per_expert(
+    tmp_path, monkeypatch, disk_kind
+):
+    text = _captured_setup_output(
+        tmp_path, monkeypatch, layout="per_expert", disk_kind=disk_kind
+    )
     assert "reads every routed expert from the cache volume" in text
-    assert "'ssd', not NVMe" in text
+    assert f"'{disk_kind}', not NVMe" in text
+
+
+def test_the_volume_probe_reads_the_cache_dir_with_the_users_override(tmp_path, monkeypatch):
+    """The experts are read from the shard cache, not the weights, and a
+    training.stream_disk_kind override wins there as it does for the tier."""
+    from tests.test_issue602_qwen4_ple_streaming import _drive_qwen4_streaming_setup
+
+    seen = []
+    _drive_qwen4_streaming_setup(
+        tmp_path, monkeypatch, arch="deepseek_v3", model_cfg=_deepseek_cfg(),
+        tcfg_overrides={"stream_expert_layout": "per_expert", "stream_disk_kind": "hdd"},
+        disk_kind="hdd", disk_calls=seen,
+    )
+    assert (str(tmp_path / "shards"), "hdd") in seen, seen
 
 
 def test_an_nvme_cache_volume_is_not_warned_about(tmp_path, monkeypatch):
@@ -239,11 +261,18 @@ class _TrainConfig:
     lora = _Lora()
 
 
-def _index(layout, *, dtype="bfloat16", quantised=False):
-    shapes = {"gate_up": (64, 32), "down": (32, 32)} if layout else {}
+class _ScaleCacheTrainConfig(_TrainConfig):
+    stream_nf4_scale_cache = True
+
+
+_SMALL_SHAPES = {"gate_up": (64, 32), "down": (32, 32)}
+
+
+def _index(layout, *, dtype="bfloat16", quantised=False, shapes=None, quant_specs=None):
+    shapes = (shapes or _SMALL_SHAPES) if layout else {}
     return SimpleNamespace(
         n_layers=4,
-        quant_specs={},
+        quant_specs=quant_specs or {},
         dtype=dtype,
         expert_layout=layout,
         expert_shapes=shapes,
@@ -251,7 +280,7 @@ def _index(layout, *, dtype="bfloat16", quantised=False):
     )
 
 
-def _charged(monkeypatch, layout, **index_kwargs):
+def _charged(monkeypatch, layout, *, tcfg=None, **index_kwargs):
     from soup_cli.trainer.stream_setup import StreamingSetupMixin
     from soup_cli.utils import layer_stream
 
@@ -265,7 +294,7 @@ def _charged(monkeypatch, layout, **index_kwargs):
     monkeypatch.setattr(layer_stream, "estimate_stream_peak_vram", capture)
     lines, _plan = StreamingSetupMixin()._stream_budget_lines(
         _Config(),
-        _TrainConfig(),
+        tcfg or _TrainConfig(),
         model_config=_ModelConfig(),
         layer_bytes=1000,
         embed_bytes=0,
@@ -285,6 +314,32 @@ def test_the_preflight_charges_one_expert_in_flight_for_per_expert(monkeypatch):
     assert want > 0
     assert charged == want
     assert "experts" in text and "stream_expert_layout" in text
+
+
+def test_the_experts_line_prints_the_charge_in_gb(monkeypatch):
+    from soup_cli.utils.expert_stream import expert_stream_vram_bytes
+
+    shapes = {"gate_up": (4096, 2048), "down": (2048, 2048)}
+    charged, text = _charged(monkeypatch, "per_expert", shapes=shapes)
+    want = expert_stream_vram_bytes(shapes, dtype_bytes=2, quantised=False)
+    assert charged == want
+    assert 0.001 < want / 1e9 < 1.0
+    assert f"experts      {want / 1e9:.3f} GB for the routed expert in flight" in text
+
+
+def test_the_charge_adds_the_scale_cache_to_the_expert_in_flight(monkeypatch):
+    from soup_cli.utils import layer_stream
+    from soup_cli.utils.expert_stream import expert_stream_vram_bytes
+
+    quant_specs = {"w": SimpleNamespace(shape=(128, 128), blocksize=64, nested=True)}
+    charged, text = _charged(
+        monkeypatch, "per_expert", tcfg=_ScaleCacheTrainConfig(), quant_specs=quant_specs
+    )
+    experts = expert_stream_vram_bytes(_SMALL_SHAPES, dtype_bytes=2, quantised=False)
+    cache = layer_stream.nf4_scale_cache_bytes(quant_specs, 4)
+    assert cache > 0 and experts > 0
+    assert charged == cache + experts
+    assert "scale cache" in text and "experts" in text
 
 
 @pytest.mark.parametrize(
