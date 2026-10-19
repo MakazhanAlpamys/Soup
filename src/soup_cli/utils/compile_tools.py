@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass
-from typing import Callable, List, Optional
+from typing import Any, Callable, List, Optional
 
 from soup_cli.utils.paths import (
     atomic_write_text,
@@ -100,6 +100,9 @@ class ToolCompilePlan:
     eval_suite_path: str
     optimizer: str
     output_path: str
+    task_lm: Optional[str] = None
+    reflection_lm: Optional[str] = None
+    adapter: Optional[str] = None
 
     def __post_init__(self) -> None:
         validate_spec_path(self.spec_path)
@@ -116,12 +119,18 @@ def build_tool_compile_plan(
     eval_suite_path: str,
     optimizer: str,
     output_path: str,
+    task_lm: Optional[str] = None,
+    reflection_lm: Optional[str] = None,
+    adapter: Optional[str] = None,
 ) -> ToolCompilePlan:
     return ToolCompilePlan(
         spec_path=spec_path,
         eval_suite_path=eval_suite_path,
         optimizer=validate_tool_optimizer(optimizer),
         output_path=output_path,
+        task_lm=task_lm,
+        reflection_lm=reflection_lm,
+        adapter=adapter,
     )
 
 
@@ -131,7 +140,10 @@ def build_tool_compile_plan(
 
 
 def _optimise_description(
-    description: str, examples: List[dict], optimizer: str
+    description: str,
+    examples: List[dict],
+    optimizer: str,
+    plan: Optional[ToolCompilePlan] = None,
 ) -> str:
     """Optimise one tool description via the chosen textual-gradient method.
 
@@ -187,10 +199,16 @@ def _optimise_description(
                     else variable
                 )
             opt.zero_grad()
-            try:
-                loss.backward(engine=engine)
-            except TypeError:
+            if hasattr(tg, "set_backward_engine"):
                 loss.backward()
+            else:
+                try:
+                    loss.backward(backward_engine=engine)
+                except TypeError:
+                    try:
+                        loss.backward(engine=engine)
+                    except TypeError:
+                        loss.backward()
             opt.step()
         return str(variable.value)
 
@@ -201,13 +219,27 @@ def _optimise_description(
         raise ImportError(
             f"GEPA is required for the 'gepa' optimizer. {_INSTALL_HINT}"
         ) from exc
-    optimised = gepa.optimize(  # type: ignore[attr-defined]
-        seed_candidate={"description": str(description)},
-        trainset=examples,
-        max_metric_calls=max(1, len(examples)),
-        task_lm="default_lm",
-        reflection_lm="default_lm",
-    )
+    adapter = plan.adapter if plan else None
+    if adapter is not None:
+        task_lm = None
+    else:
+        task_lm = (plan.task_lm if plan else None) or "default_lm"
+
+    reflection_lm = plan.reflection_lm if plan else None
+    if reflection_lm is None:
+        reflection_lm = task_lm or "default_lm"
+
+    kwargs: dict[str, Any] = {
+        "seed_candidate": {"description": str(description)},
+        "trainset": examples,
+        "max_metric_calls": max(1, len(examples)),
+        "task_lm": task_lm,
+        "reflection_lm": reflection_lm,
+    }
+    if adapter is not None:
+        kwargs["adapter"] = adapter
+
+    optimised = gepa.optimize(**kwargs)  # type: ignore[attr-defined]
     best_candidate = getattr(optimised, "best_candidate", optimised)
     if isinstance(best_candidate, dict):
         return str(best_candidate.get("description", next(iter(best_candidate.values()), "")))
@@ -250,7 +282,7 @@ def run_tool_compile(plan: ToolCompilePlan) -> int:
     tools: list[dict] = []
     for ep in endpoints:
         new_desc = _optimise_description(
-            ep.description, examples, plan.optimizer
+            ep.description, examples, plan.optimizer, plan=plan
         )
         tools.append(
             {

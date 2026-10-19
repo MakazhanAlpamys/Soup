@@ -66,6 +66,7 @@ def recording_dspy(monkeypatch):
 @pytest.fixture
 def recording_textgrad(monkeypatch):
     calls = []
+    singleton_engine = [None]
 
     class _Variable:
         def __init__(self, value, *, role_description: str, predecessors=None, **kwargs):
@@ -78,9 +79,17 @@ def recording_textgrad(monkeypatch):
 
         def backward(self, *args, **kwargs):
             engine = kwargs.get("engine") or (args[0] if args else None)
-            calls.append(("backward", engine))
+            backward_engine = kwargs.get("backward_engine")
+            passed_engine = engine or backward_engine
+            if singleton_engine[0] is not None and passed_engine is not None:
+                raise Exception(
+                    "Cannot pass backward_engine to backward() "
+                    "if it was already set via set_backward_engine()"
+                )
+            used_engine = passed_engine or singleton_engine[0]
+            calls.append(("backward", used_engine))
             if self.grad_fn is not None:
-                self.grad_fn(backward_engine=engine)
+                self.grad_fn(backward_engine=used_engine)
 
     class _TextLoss:
         def __init__(self, eval_system_prompt, engine=None):
@@ -123,12 +132,16 @@ def recording_textgrad(monkeypatch):
                 if len(parameter.gradients) > 0:
                     parameter.value += " improved"
 
+    def _set_backward_engine(e):
+        singleton_engine[0] = e
+        calls.append(("set_backward_engine", e))
+
     fake_tg = types.SimpleNamespace(
         Variable=_Variable,
         TextLoss=_TextLoss,
         TGD=_TGD,
         get_backward_engine=lambda: "default_engine",
-        set_backward_engine=lambda e: calls.append(("set_backward_engine", e)),
+        set_backward_engine=_set_backward_engine,
     )
     monkeypatch.setitem(sys.modules, "textgrad", fake_tg)
     return calls
@@ -170,7 +183,14 @@ def recording_gepa(monkeypatch):
                 "prompt": "optimised prompt text",
                 "description": "optimised tool desc",
             },
-            best_score=0.95,
+            candidates=[
+                {
+                    "prompt": "optimised prompt text",
+                    "description": "optimised tool desc",
+                }
+            ],
+            val_aggregate_scores=[0.95],
+            best_idx=0,
         )
 
     fake_gepa = types.SimpleNamespace(optimize=fake_optimize)
@@ -774,10 +794,121 @@ def test_compile_tools_gepa_passes_reflection_lm(tmp_path, monkeypatch, recordin
         eval_suite_path="eval.jsonl",
         optimizer="gepa",
         output_path="tools_out.json",
+        task_lm="custom_task_lm",
+        reflection_lm="custom_refl_lm",
     )
     count = run_tool_compile(plan)
     assert count == 1
     assert len(recording_gepa) == 1
     kwargs = recording_gepa[0][1]["kwargs"]
-    assert "reflection_lm" in kwargs
-    assert kwargs["reflection_lm"] is not None
+    assert kwargs.get("task_lm") == "custom_task_lm"
+    assert kwargs.get("reflection_lm") == "custom_refl_lm"
+
+
+def test_compile_tools_gepa_cli_options(tmp_path, monkeypatch, recording_gepa):
+    """compile-tools CLI forwards --task-lm, --reflection-lm, and --adapter to gepa.optimize."""
+    monkeypatch.chdir(tmp_path)
+    spec_json = {
+        "openapi": "3.0.0",
+        "info": {"title": "Test", "version": "1.0"},
+        "paths": {
+            "/items": {
+                "get": {
+                    "operationId": "get_items",
+                    "description": "Fetch items.",
+                    "responses": {"200": {"description": "OK"}},
+                }
+            }
+        },
+    }
+    (tmp_path / "tools.json").write_text(json.dumps(spec_json), encoding="utf-8")
+    (tmp_path / "eval.jsonl").write_text(
+        '{"query": "fetch", "tool": "get_items"}\n', encoding="utf-8"
+    )
+
+    runner = CliRunner()
+    # 1. Custom task and reflection models
+    res = runner.invoke(
+        app,
+        [
+            "compile-tools",
+            "tools.json",
+            "--eval",
+            "eval.jsonl",
+            "--optimizer",
+            "gepa",
+            "--task-lm",
+            "my_task_model",
+            "--reflection-lm",
+            "my_reflection_model",
+            "-o",
+            "out1.json",
+        ],
+    )
+    assert res.exit_code == 0, res.output
+    assert recording_gepa[-1][1]["kwargs"]["task_lm"] == "my_task_model"
+    assert recording_gepa[-1][1]["kwargs"]["reflection_lm"] == "my_reflection_model"
+
+    # 2. Adapter mode sets task_lm to None
+    res_adapter = runner.invoke(
+        app,
+        [
+            "compile-tools",
+            "tools.json",
+            "--eval",
+            "eval.jsonl",
+            "--optimizer",
+            "gepa",
+            "--adapter",
+            "my_tool_adapter",
+            "-o",
+            "out2.json",
+        ],
+    )
+    assert res_adapter.exit_code == 0, res_adapter.output
+    assert recording_gepa[-1][1]["kwargs"]["adapter"] == "my_tool_adapter"
+    assert recording_gepa[-1][1]["kwargs"]["task_lm"] is None
+
+
+def test_gepa_reads_val_aggregate_scores_without_best_score(tmp_path, monkeypatch):
+    """_run_gepa reads val_aggregate_scores[best_idx] when best_score is absent."""
+    from soup_cli.utils.prompt_compile import CompilePlan, _run_gepa
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "prog.py").write_text("program = 'Hello'\n", encoding="utf-8")
+    (tmp_path / "eval.jsonl").write_text('{"input": "a", "output": "b"}\n', encoding="utf-8")
+
+    plan = CompilePlan(
+        program_path="prog.py",
+        eval_suite_path="eval.jsonl",
+        optimizer="gepa",
+        max_iters=2,
+        output_path="out.py",
+    )
+
+    # 1. Real GEPAResult structure (val_aggregate_scores indexed by best_idx,
+    # no best_score attribute)
+    class FakeGEPAResultReal:
+        best_candidate = {"prompt": "Improved prompt"}
+        val_aggregate_scores = [0.25, 0.88, 0.45]
+        best_idx = 1
+        iterations = 2
+        converged = True
+
+    fake_gepa_mod = types.SimpleNamespace(optimize=lambda **kw: FakeGEPAResultReal())
+    monkeypatch.setitem(sys.modules, "gepa", fake_gepa_mod)
+
+    res = _run_gepa(plan)
+    assert res.score == 0.88
+
+    # 2. Legacy structure with only best_score
+    class FakeGEPAResultLegacy:
+        best_candidate = {"prompt": "Improved prompt"}
+        best_score = 0.73
+        iterations = 1
+        converged = True
+
+    fake_gepa_legacy = types.SimpleNamespace(optimize=lambda **kw: FakeGEPAResultLegacy())
+    monkeypatch.setitem(sys.modules, "gepa", fake_gepa_legacy)
+    res_legacy = _run_gepa(plan)
+    assert res_legacy.score == 0.73

@@ -5,6 +5,8 @@ Generate tool schemas + descriptions optimized via textual gradients.
 
 from __future__ import annotations
 
+from typing import Optional
+
 import typer
 from rich.console import Console
 from rich.markup import escape
@@ -32,6 +34,15 @@ def compile_tools_cmd(
     output: str = typer.Option(
         "compiled_tools.json", "--output", "-o", help="Output schema path"
     ),
+    task_lm: Optional[str] = typer.Option(
+        None, "--task-lm", help="Task language model for GEPA optimizer"
+    ),
+    reflection_lm: Optional[str] = typer.Option(
+        None, "--reflection-lm", help="Reflection language model for GEPA optimizer"
+    ),
+    adapter: Optional[str] = typer.Option(
+        None, "--adapter", help="Adapter or candidate proposer for GEPA optimizer"
+    ),
     plan_only: bool = typer.Option(
         False, "--plan-only", help="Render plan + exit 0 (no live optimise)."
     ),
@@ -43,17 +54,30 @@ def compile_tools_cmd(
             eval_suite_path=eval_suite,
             optimizer=optimizer,
             output_path=output,
+            task_lm=task_lm,
+            reflection_lm=reflection_lm,
+            adapter=adapter,
         )
     except (TypeError, ValueError) as exc:
         console.print(f"[red]{escape(str(exc))}[/]")
         raise typer.Exit(2) from exc
 
+    plan_details = [
+        f"Spec:      [bold]{escape(plan.spec_path)}[/]",
+        f"Eval:      [bold]{escape(plan.eval_suite_path)}[/]",
+        f"Optimizer: [bold]{escape(plan.optimizer)}[/]",
+        f"Output:    [bold]{escape(plan.output_path)}[/]",
+    ]
+    if plan.task_lm:
+        plan_details.append(f"Task LM:   [bold]{escape(plan.task_lm)}[/]")
+    if plan.reflection_lm:
+        plan_details.append(f"Reflect LM:[bold]{escape(plan.reflection_lm)}[/]")
+    if plan.adapter:
+        plan_details.append(f"Adapter:   [bold]{escape(plan.adapter)}[/]")
+
     console.print(
         Panel(
-            f"Spec:      [bold]{escape(plan.spec_path)}[/]\n"
-            f"Eval:      [bold]{escape(plan.eval_suite_path)}[/]\n"
-            f"Optimizer: [bold]{escape(plan.optimizer)}[/]\n"
-            f"Output:    [bold]{escape(plan.output_path)}[/]",
+            "\n".join(plan_details),
             title="soup compile-tools — plan",
         )
     )

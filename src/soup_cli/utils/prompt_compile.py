@@ -505,7 +505,17 @@ def _run_gepa(plan: CompilePlan) -> CompileResult:
     else:
         program_text = str(best_candidate)
 
-    score = float(getattr(optimised, "best_score", 0.0) or 0.0)
+    if hasattr(optimised, "val_aggregate_scores") and hasattr(optimised, "best_idx"):
+        try:
+            best_idx = int(getattr(optimised, "best_idx"))
+            scores = getattr(optimised, "val_aggregate_scores")
+            score = float(scores[best_idx])
+        except (IndexError, TypeError, ValueError):
+            score = 0.0
+    elif hasattr(optimised, "best_score"):
+        score = float(getattr(optimised, "best_score", 0.0) or 0.0)
+    else:
+        score = 0.0
     iterations = int(getattr(optimised, "iterations", plan.max_iters) or plan.max_iters)
     converged = bool(getattr(optimised, "converged", True))
     return CompileResult(
@@ -609,10 +619,16 @@ def _run_textgrad(plan: CompilePlan) -> CompileResult:
                 else variable
             )
         optimizer.zero_grad()
-        try:
-            loss.backward(engine=engine)
-        except TypeError:
+        if hasattr(tg, "set_backward_engine"):
             loss.backward()
+        else:
+            try:
+                loss.backward(backward_engine=engine)
+            except TypeError:
+                try:
+                    loss.backward(engine=engine)
+                except TypeError:
+                    loss.backward()
         optimizer.step()
         iterations = i + 1
         cur_score = float(getattr(variable, "score", _calc_score(str(variable.value))) or 0.0)
