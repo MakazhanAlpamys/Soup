@@ -51,6 +51,10 @@ class TestSchema:
         assert "training.stream_expert_layout" in text
         assert "stream_layers is false" in text
 
+    def test_an_explicit_fused_without_streaming_is_not_the_footgun(self):
+        cfg = load_config_from_string(_cfg(stream_expert_layout="fused"))
+        assert cfg.training.stream_expert_layout == "fused"
+
     def test_an_unknown_layout_is_refused(self):
         with pytest.raises(ValueError, match="stream_expert_layout"):
             load_config_from_string(_cfg(stream_layers="true", stream_expert_layout="experts"))
@@ -113,16 +117,55 @@ def test_a_fake_training_config_without_the_field_still_shards_fused(tmp_path, m
 def test_setup_refuses_per_expert_for_an_ungated_arch_before_sharding(tmp_path, monkeypatch):
     from tests.test_issue602_qwen4_ple_streaming import _drive_qwen4_streaming_setup
 
+    def _resolve_must_not_run(*_args, **_kwargs):
+        raise AssertionError("weights were resolved before the refusal")
+
     calls = []
     with pytest.raises(ValueError) as exc:
         _drive_qwen4_streaming_setup(
-            tmp_path, monkeypatch, arch="llama", model_cfg=_deepseek_cfg("llama"),
-            shard_calls=calls, tcfg_overrides={"stream_expert_layout": "per_expert"},
+            tmp_path, monkeypatch, resolve_weights=_resolve_must_not_run, arch="llama",
+            model_cfg=_deepseek_cfg("llama"), shard_calls=calls,
+            tcfg_overrides={"stream_expert_layout": "per_expert"},
         )
     text = str(exc.value)
     assert "training.stream_expert_layout='per_expert'" in text
     assert "deepseek_v3" in text and "llama" in text
     assert calls == []
+
+
+def _captured_setup_output(tmp_path, monkeypatch, *, layout, disk_kind):
+    import io
+    import re
+
+    from rich.console import Console
+
+    import soup_cli.trainer.stream_setup as stream_setup
+    from tests.test_issue602_qwen4_ple_streaming import _drive_qwen4_streaming_setup
+
+    buffer = io.StringIO()
+    monkeypatch.setattr(stream_setup, "console", Console(file=buffer, width=400))
+    _drive_qwen4_streaming_setup(
+        tmp_path, monkeypatch, arch="deepseek_v3", model_cfg=_deepseek_cfg(),
+        tcfg_overrides={"stream_expert_layout": layout}, disk_kind=disk_kind,
+    )
+    plain = re.sub(r"\x1b\[[0-9;]*m", "", buffer.getvalue())
+    return " ".join(plain.split())
+
+
+def test_a_non_nvme_cache_volume_is_warned_about_for_per_expert(tmp_path, monkeypatch):
+    text = _captured_setup_output(tmp_path, monkeypatch, layout="per_expert", disk_kind="ssd")
+    assert "reads every routed expert from the cache volume" in text
+    assert "'ssd', not NVMe" in text
+
+
+def test_an_nvme_cache_volume_is_not_warned_about(tmp_path, monkeypatch):
+    text = _captured_setup_output(tmp_path, monkeypatch, layout="per_expert", disk_kind="nvme")
+    assert "not NVMe" not in text
+
+
+def test_the_fused_layout_never_warns_about_the_volume(tmp_path, monkeypatch):
+    text = _captured_setup_output(tmp_path, monkeypatch, layout="fused", disk_kind="hdd")
+    assert "routed expert from the cache volume" not in text
 
 
 def test_the_planner_checks_the_cache_for_the_requested_layout(tmp_path, monkeypatch):
@@ -196,19 +239,19 @@ class _TrainConfig:
     lora = _Lora()
 
 
-def _index(layout):
+def _index(layout, *, dtype="bfloat16", quantised=False):
     shapes = {"gate_up": (64, 32), "down": (32, 32)} if layout else {}
     return SimpleNamespace(
         n_layers=4,
         quant_specs={},
-        dtype="bfloat16",
+        dtype=dtype,
         expert_layout=layout,
         expert_shapes=shapes,
-        expert_quant_specs={},
+        expert_quant_specs={"gate_up": object(), "down": object()} if quantised else {},
     )
 
 
-def _charged(monkeypatch, layout):
+def _charged(monkeypatch, layout, **index_kwargs):
     from soup_cli.trainer.stream_setup import StreamingSetupMixin
     from soup_cli.utils import layer_stream
 
@@ -226,7 +269,7 @@ def _charged(monkeypatch, layout):
         model_config=_ModelConfig(),
         layer_bytes=1000,
         embed_bytes=0,
-        index=_index(layout),
+        index=_index(layout, **index_kwargs),
         on_cuda=False,
     )
     return seen.get("persistent_bytes", 0), "\n".join(lines)
@@ -242,6 +285,24 @@ def test_the_preflight_charges_one_expert_in_flight_for_per_expert(monkeypatch):
     assert want > 0
     assert charged == want
     assert "experts" in text and "stream_expert_layout" in text
+
+
+@pytest.mark.parametrize(
+    ("dtype", "width", "quantised"),
+    [("float32", 4, False), ("bfloat16", 2, True), ("float32", 4, True)],
+    ids=["fp32", "nf4-bf16", "nf4-fp32"],
+)
+def test_the_expert_charge_follows_the_store_dtype_and_quantisation(
+    monkeypatch, dtype, width, quantised
+):
+    from soup_cli.utils.expert_stream import expert_stream_vram_bytes
+
+    charged, _text = _charged(monkeypatch, "per_expert", dtype=dtype, quantised=quantised)
+    shapes = {"gate_up": (64, 32), "down": (32, 32)}
+    assert charged == expert_stream_vram_bytes(shapes, dtype_bytes=width, quantised=quantised)
+    assert charged != expert_stream_vram_bytes(
+        shapes, dtype_bytes=2 if width == 4 else 4, quantised=quantised
+    )
 
 
 def test_a_fused_store_is_charged_nothing_extra(monkeypatch):

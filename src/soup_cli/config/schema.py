@@ -3723,11 +3723,14 @@ class TrainingConfig(BaseModel):
             "pair of matrices per expert (NF4 per matrix under quantization='4bit'), "
             "and reads an expert only when the router picks it, again in the "
             "backward: the decoder-layer buffers hold the dense part alone, so the "
-            "VRAM bound no longer grows with the expert count. It is bit-exact "
-            "against transformers' eager experts and reads at least the bytes "
-            "'fused' reads (a step routes to nearly every expert). Admitted for "
-            "DeepSeek-V3-family bases (model_type deepseek_v3); adapters on the "
-            "routed experts (moe_lora) are refused with it."
+            "VRAM bound no longer grows with the expert count. Each routed expert "
+            "is read about three times per step from the cache volume, so expect "
+            "slower steps (an NVMe volume is recommended). Under quantization='4bit' "
+            "the routed experts are NF4 here but stay at the stream dtype with "
+            "'fused', so the two layouts train against numerically different "
+            "bases. Admitted for DeepSeek-V3-family bases (model_type "
+            "deepseek_v3); adapters on the routed experts (moe_lora) are refused "
+            "with it."
         ),
     )
     stream_disk_kind: Optional[Literal["nvme", "ssd", "hdd"]] = Field(

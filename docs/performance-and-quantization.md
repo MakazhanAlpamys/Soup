@@ -486,24 +486,26 @@ What it does:
 - The runtime reads an expert only when the router picks it, and again in the backward, so the layer buffers hold just the dense part (attention, norms, router, shared expert).
 - The VRAM bound no longer grows with the expert count.
 
-Measured (records linked below):
-- It matches transformers' eager experts bit for bit, forward and backward ([gate](../benchmarks/gate-expert-streaming.md)).
-- On the 8 GB RTX 5070 Laptop, Moonlight-16B LoRA ran at 1.9 GB of peak VRAM with it, against 4.0 GB with the fused layout ([record](../benchmarks/probe-rtx5070-moonlight-16b.md)).
+Measured (all in the [Moonlight-16B record](../benchmarks/probe-rtx5070-moonlight-16b.md) unless linked):
+- **Numerics.** It matches transformers' eager experts bit for bit, forward and backward, on the same weights ([gate](../benchmarks/gate-expert-streaming.md)).
+- **Harness steps** (seq 512): peak allocated VRAM 1,882 MiB against 3,993 MiB fused, at 17.5-18.0 s against 8.9-9.8 s per step.
+- **`soup train`** (9 short rows): Soup reported a GPU peak of 1.0 GB against 3.1 GB fused, at about 42 s against 16 s per step.
 
 It buys capacity, not speed:
-- A training step routes to nearly every expert, so this layout reads at least the bytes the fused one reads; Moonlight ran at about half the fused layout's tokens/s.
+- Each routed expert is read from the cache volume about three times per step (forward, recompute, backward), one at a time. Expect slower steps, and keep the cache on NVMe: Soup warns when the volume is not.
 - The default stays `fused`.
+- Under `quantization: 4bit` the routed experts are NF4 here but stay at the stream dtype with `fused`, so the two layouts train against numerically different bases.
 
-What the pre-flight counts:
+What the VRAM pre-flight counts:
 - the layer buffers, measured from the dense-only layer files;
 - plus one routed expert in flight, shown as an `experts` line.
 
-The disk pre-flight still sizes the cache as the fused layout would, which over-counts an NF4 per-expert cache.
+The disk pre-flight charges the NF4 rate to every parameter, which is close to this layout's cache (8.7 GB for Moonlight) and under-counts a fused MoE cache, whose experts stay unquantised (30.6 GB).
 
 Limits and refusals:
 - **Architecture.** Only `model_type: deepseek_v3` is admitted. Any other base is refused before weights are resolved.
 - **Adapters on routed experts.** `moe_lora` is refused with this layout, because a streamed expert has nowhere to keep an adapter between its visits. Adapt attention or the shared expert instead.
-- **Older Soup versions.** A per-expert cache needs a re-shard to be read by a Soup from before this layout.
+- **Older Soup versions.** A Soup from before this layout accepts a per-expert cache as reusable and then fails at install ("shard is missing decoder weights"). Delete the cache directory, or re-shard with `fused`, before going back to an older version.
 
 **`stream_nf4_scale_cache` (opt-in).** On the dequantise + `F.linear` path, a
 double-quantised NF4 weight expands its 8-bit block scales to fp32 on every visit,

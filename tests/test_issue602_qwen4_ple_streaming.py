@@ -702,6 +702,7 @@ def _drive_qwen4_streaming_setup(
     load_calls=None,
     trust_remote_code=False,
     tcfg_overrides=None,
+    disk_kind="ssd",
 ):
     """Drive the real `_setup_streaming_transformers()` for a qwen4_exp base.
 
@@ -720,7 +721,8 @@ def _drive_qwen4_streaming_setup(
     the keyword arguments of every `shard_checkpoint` call; `load_calls`, when a
     dict, receives the keyword arguments of the tokenizer, config and
     `build_streamed_model` calls under "tokenizer", "config" and "build";
-    `tcfg_overrides`, when a dict, sets extra training-config attributes.
+    `tcfg_overrides`, when a dict, sets extra training-config attributes;
+    `disk_kind` is what the stubbed `resolve_disk_kind` reports.
     """
     import sys
     import types
@@ -874,7 +876,7 @@ def _drive_qwen4_streaming_setup(
     )
     monkeypatch.setattr(
         "soup_cli.utils.layer_stream.resolve_disk_kind",
-        lambda *_a, **_k: types.SimpleNamespace(kind="ssd"),
+        lambda *_a, **_k: types.SimpleNamespace(kind=disk_kind),
     )
     monkeypatch.setattr(
         "soup_cli.utils.layer_stream.render_stream_panel", lambda *_a, **_k: "panel"

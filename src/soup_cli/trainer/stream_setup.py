@@ -811,7 +811,7 @@ class StreamingSetupMixin:
             raise ValueError(
                 "training.stream_expert_layout='per_expert' is gated on resident parity "
                 f"per architecture; admitted: {', '.join(PER_EXPERT_LAYOUT_ARCHS)}; this "
-                f"base is model_type {arch!r}. Use stream_expert_layout='fused'."
+                f"base streams as {arch!r}. Use stream_expert_layout='fused'."
             )
 
         on_cuda = str(self.device).startswith("cuda")
@@ -1002,6 +1002,20 @@ class StreamingSetupMixin:
             ),
             expert_layout=expert_layout,
         )
+        if expert_layout:
+            # Whatever the tier, per_expert reads every routed expert from the cache
+            # volume (about three times per step: forward, recompute, backward); the
+            # RAM tier holds only the dense part, so the tier choice never looks at it.
+            experts_disk = resolve_disk_kind(
+                shard_dir, tcfg.stream_disk_kind, notify=console.print
+            )
+            if experts_disk.kind != "nvme":
+                console.print(
+                    "[yellow]training.stream_expert_layout='per_expert' reads every routed "
+                    "expert from the cache volume about three times per step, and that "
+                    f"volume reads as {for_terminal(str(experts_disk.kind))!r}, not NVMe: "
+                    "expect steps bound by that disk.[/]"
+                )
         # R4: decided once, from the roots the index actually carries (a reused cache keeps its
         # own), so the plan's staging figure, the host pre-flight and the reader all agree. Read
         # with getattr like `external_tensors` below: an index without the field is one root.
