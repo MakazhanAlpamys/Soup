@@ -80,6 +80,9 @@ NF4_CODE_KEY = "__nf4_code"
 NF4_NESTED_CODE_KEY = "__nf4_nested_code"
 
 NF4_BLOCKSIZE = 64
+#: Blocks per float32 nested absmax under double quantisation (bitsandbytes'
+#: ``compress_statistics``); recorded per weight as ``nested_blocksize``.
+NF4_NESTED_BLOCKSIZE = 256
 #: bitsandbytes' own 4-bit types. Read-back values are checked against this.
 _SUPPORTED_QUANT_TYPES = ("nf4", "fp4")
 #: An index claiming a wilder blocksize than bitsandbytes supports is corrupt.
@@ -904,6 +907,254 @@ def estimate_oq_stream_cache_bytes(
     return elements * itemsize + 256 * 1024 * 1024
 
 
+#: Header bytes a safetensors file spends per tensor besides the tensor's name: its
+#: dtype, shape and offsets, with the file's 8-byte length field and alignment padding
+#: spread over its tensors (at most 87 per tensor on the Moonlight-16B caches).
+_HEADER_BYTES_PER_TENSOR = 96
+#: ``index.json``: its scalar fields plus a share per listed entry (source file,
+#: stored key, quantised suffix, decoder layer). Measured 62-91 bytes per entry, from
+#: a one-layer Llama to Moonlight-16B (7.9-8.7 KB for ~116 entries).
+_INDEX_BYTES_FIXED = 1024
+_INDEX_BYTES_PER_ENTRY = 128
+_PER_EXPERT_PROJECTIONS = frozenset({"gate_proj", "up_proj", "down_proj"})
+
+
+def nf4_weight_bytes(numel: int, *, double_quant: bool) -> int:
+    """Bytes :func:`_quantize_nf4` stores for ONE weight of ``numel`` elements.
+
+    The packed nibbles (``ceil(numel / 2)`` uint8) plus one absmax per
+    ``NF4_BLOCKSIZE`` block: float32 without double quantisation; with it a uint8
+    per block, one float32 nested absmax per ``NF4_NESTED_BLOCKSIZE`` blocks and
+    one float32 offset. Exact: pinned against bitsandbytes' own output.
+    """
+    if isinstance(numel, bool) or not isinstance(numel, int) or numel <= 0:
+        raise ValueError(f"an NF4 weight needs a positive element count; got {numel!r}")
+    blocks = -(-numel // NF4_BLOCKSIZE)
+    packed = (numel + 1) // 2
+    if not double_quant:
+        return packed + 4 * blocks
+    return packed + blocks + 4 * -(-blocks // NF4_NESTED_BLOCKSIZE) + 4
+
+
+def _nf4_sidecar_suffixes(double_quant: bool) -> Tuple[str, ...]:
+    """The stored key suffixes of one NF4 weight (see :func:`_quantize_nf4`)."""
+    nested = (NESTED_ABSMAX_SUFFIX, NESTED_OFFSET_SUFFIX) if double_quant else ()
+    return ("", ABSMAX_SUFFIX) + nested
+
+
+def _layer_tensor_storage(
+    short: str,
+    *,
+    dtype: str,
+    quantise: bool,
+    suffixes: Iterable[str],
+    fp32_keys: Iterable[str],
+) -> Tuple[str, bool]:
+    """``(stored dtype, NF4?)`` for one decoder-layer key that is not a routed expert.
+
+    The one rule :func:`shard_checkpoint` writes by and
+    :func:`estimate_shard_cache_bytes` sizes by: a key the meta probe found
+    converted to ``Linear4bit`` (``suffixes``) is NF4, a layer buffer the runtime
+    loads back stays float32, everything else is stored at ``dtype``.
+    """
+    stored = "float32" if short in fp32_keys else dtype
+    return stored, bool(quantise) and short in suffixes
+
+
+def _routed_experts_quantised(expert_layout: str, quantise: bool) -> bool:
+    """Whether a stacked-expert architecture's routed experts are stored as NF4.
+
+    ``per_expert`` quantises each expert matrix on its own under NF4. The default
+    fused layout stacks them into the 3-D ``mlp.experts.gate_up_proj`` /
+    ``down_proj`` parameters, which ``replace_with_bnb_linear`` does not convert
+    (they are not ``nn.Linear`` weights), so they stay at the stream dtype.
+    """
+    return bool(quantise) and expert_layout == EXPERT_LAYOUT_PER_EXPERT
+
+
+@dataclass(frozen=True)
+class ShardCacheEstimate:
+    """What :func:`shard_checkpoint` will write, sized from the source headers.
+
+    ``layer_bytes[i]`` is the tensor payload of decoder layer ``i``: its layer file
+    plus, under ``expert_layout="per_expert"``, its experts file (both are written
+    to the same root). ``other_bytes`` is the payload of the extras shard and the
+    large embed/head shards, all on root 0. Both are exact. ``header_bytes`` and
+    ``index_bytes`` bound the safetensors headers and ``index.json`` from above.
+    """
+
+    layer_bytes: Tuple[int, ...]
+    other_bytes: int
+    header_bytes: int
+    index_bytes: int
+
+    @property
+    def total_bytes(self) -> int:
+        return sum(self.layer_bytes) + self.other_bytes + self.header_bytes + self.index_bytes
+
+
+def estimate_shard_cache_bytes(
+    shard_paths: Sequence[str],
+    *,
+    dtype: str,
+    arch: str = "",
+    quant: str = QUANT_NONE,
+    quant_suffixes: Iterable[str] = (),
+    double_quant: bool = True,
+    expert_layout: str = "",
+    num_hidden_layers: Optional[int] = None,
+) -> Optional[ShardCacheEstimate]:
+    """Size the cache :func:`shard_checkpoint` writes for the same arguments.
+
+    Reads only the safetensors headers of ``shard_paths`` (shapes and dtypes; no
+    tensor is loaded and no file is mapped) and stores each tensor the way the
+    sharder does: :func:`_layer_tensor_storage` for every decoder key,
+    :func:`_routed_experts_quantised` for the routed experts of a stacked-expert
+    architecture, :func:`nf4_weight_bytes` for each NF4 weight, the same
+    multi-token-prediction drop for ``deepseek_v3`` and the stream ``dtype`` for
+    everything outside the decoder layers.
+
+    Returns ``None`` for ``qwen4_exp``, whose external PLE table and oQ layout
+    have their own estimators. Raises ``ValueError`` / ``OSError`` for a request
+    or checkpoint the sharder would refuse, or a header that cannot be read.
+    """
+    if arch == "qwen4_exp":
+        return None
+    if dtype not in _SUPPORTED_DTYPES:
+        raise ValueError(
+            f"unsupported dtype {dtype!r} for layer streaming; "
+            f"supported: {', '.join(_SUPPORTED_DTYPES)}"
+        )
+    if expert_layout not in ("", EXPERT_LAYOUT_PER_EXPERT):
+        raise ValueError(
+            f"unsupported expert_layout {expert_layout!r}; supported: "
+            f"'' (fused) or {EXPERT_LAYOUT_PER_EXPERT!r}"
+        )
+    suffixes = _validate_quant_request(quant, quant_suffixes)
+    quantise = quant == QUANT_NF4
+
+    from soup_cli.utils.expert_stream import DOWN, GATE_UP, expert_key
+    from soup_cli.utils.safetensors_reader import _ITEMSIZE, read_header
+
+    shapes: Dict[str, Tuple[int, ...]] = {}
+    for path in shard_paths:
+        for source_key, entry in read_header(path).items():
+            key = _canonical_stream_key(source_key)
+            if key in shapes:
+                raise ValueError(f"checkpoint spells one streamed tensor twice: {key!r}")
+            shapes[key] = entry.shape
+
+    itemsize = _ITEMSIZE[dtype]
+    stack_experts = arch in _STACKED_EXPERT_ARCHS
+    fp32_keys = layer_buffer_keys(arch)
+    drop_extra_layers = arch == "deepseek_v3" and num_hidden_layers is not None
+    experts_nf4 = _routed_experts_quantised(expert_layout, quantise)
+    sidecars = _nf4_sidecar_suffixes(double_quant)
+
+    layer_bytes: Dict[int, int] = {}
+    routed: Dict[int, Dict[int, Dict[str, int]]] = {}
+    other_bytes = 0
+    header_bytes = 0
+    stored_names: set = set()
+    any_nf4 = False
+
+    def _charge_names(names: Iterable[str], *, indexed: bool = True) -> int:
+        """Header bytes for ``names``; ``indexed`` ones are also listed in index.json."""
+        names = tuple(names)
+        if indexed:
+            stored_names.update(names)
+        return sum(len(name) + _HEADER_BYTES_PER_TENSOR for name in names)
+
+    for key, shape in shapes.items():
+        numel = math.prod(shape)
+        match = _LAYER_RE.match(key)
+        if match is None:
+            other_bytes += numel * itemsize
+            header_bytes += _charge_names((key,))
+            continue
+        idx = int(match.group(1))
+        if drop_extra_layers and idx >= num_hidden_layers:
+            continue
+        layer_bytes.setdefault(idx, 0)
+        expert_match = _PER_EXPERT_RE.match(key) if stack_experts else None
+        if expert_match:
+            expert = int(expert_match.group("expert"))
+            projections = routed.setdefault(idx, {}).setdefault(expert, {})
+            projections[expert_match.group("projection")] = numel
+            continue
+        short = match.group(2)
+        stored, nf4 = _layer_tensor_storage(
+            short, dtype=dtype, quantise=quantise, suffixes=suffixes, fp32_keys=fp32_keys
+        )
+        if nf4:
+            any_nf4 = True
+            layer_bytes[idx] += nf4_weight_bytes(numel, double_quant=double_quant)
+            header_bytes += _charge_names(short + suffix for suffix in sidecars)
+        else:
+            layer_bytes[idx] += numel * _ITEMSIZE[stored]
+            header_bytes += _charge_names((short,))
+
+    for idx, experts in routed.items():
+        for expert, projections in experts.items():
+            if set(projections) != _PER_EXPERT_PROJECTIONS:
+                raise ValueError(
+                    f"layer {idx} expert {expert} has incomplete expert projections: "
+                    f"{sorted(projections)}"
+                )
+        # gate and up are concatenated into ONE gate_up matrix before it is stored.
+        pairs = [
+            (projections["gate_proj"] + projections["up_proj"], projections["down_proj"])
+            for projections in experts.values()
+        ]
+        if experts_nf4:
+            any_nf4 = True
+            layer_bytes[idx] += sum(
+                nf4_weight_bytes(gate_up, double_quant=double_quant)
+                + nf4_weight_bytes(down, double_quant=double_quant)
+                for gate_up, down in pairs
+            )
+        else:
+            layer_bytes[idx] += sum(gate_up + down for gate_up, down in pairs) * itemsize
+        if expert_layout == EXPERT_LAYOUT_PER_EXPERT:
+            # experts_NNN.safetensors, whose keys index.json does not list.
+            parts = sidecars if experts_nf4 else ("",)
+            names = [
+                expert_key(expert, part) + suffix
+                for expert in experts
+                for part in (GATE_UP, DOWN)
+                for suffix in parts
+            ]
+            header_bytes += _charge_names(names, indexed=False)
+        else:
+            # Fused: the two stacked tensors in the layer file.
+            header_bytes += _charge_names(("mlp.experts.gate_up_proj", "mlp.experts.down_proj"))
+
+    if not layer_bytes:
+        raise ValueError(
+            "no decoder layer weights (model.layers.N.*) found; layer streaming has "
+            "nothing to stream"
+        )
+    n_layers = max(layer_bytes) + 1
+    if len(layer_bytes) != n_layers:
+        missing = sorted(set(range(n_layers)) - set(layer_bytes))
+        raise ValueError(f"decoder layer indices are not contiguous; missing {missing[:8]}")
+    if any_nf4:
+        # The shared code tables in extras: the 16 float32 NF4 levels, plus the
+        # 256-entry float32 nested map under double quantisation.
+        tables = {NF4_CODE_KEY: 16 * 4}
+        if double_quant:
+            tables[NF4_NESTED_CODE_KEY] = 256 * 4
+        other_bytes += sum(tables.values())
+        header_bytes += _charge_names(tables)
+    index_entries = len(shard_paths) + len(stored_names) + len(suffixes) + n_layers
+    return ShardCacheEstimate(
+        layer_bytes=tuple(layer_bytes[idx] for idx in range(n_layers)),
+        other_bytes=other_bytes,
+        header_bytes=header_bytes,
+        index_bytes=_INDEX_BYTES_FIXED + _INDEX_BYTES_PER_ENTRY * index_entries,
+    )
+
+
 def source_weight_bytes(weights_dir: str) -> int:
     """Total bytes of the source ``*.safetensors`` — a cheap size probe that
     lets a caller refuse an oversized base BEFORE spending minutes sharding."""
@@ -1403,6 +1654,9 @@ def shard_checkpoint(
     external_mode = "qwen4_ple" if arch == "qwen4_exp" else ""
     stack_experts = arch in _STACKED_EXPERT_ARCHS
     expert_label = _STACKED_EXPERT_ARCHS.get(arch, arch)
+    # Fused routed experts are stacked at the stream dtype below and never quantised;
+    # per_expert ones are NF4 under quant='nf4'. The disk pre-flight sizes by this too.
+    experts_nf4 = _routed_experts_quantised(expert_layout, quantise)
     fp32_layer_keys = layer_buffer_keys(arch)
     drop_extra_layers = arch == "deepseek_v3" and num_hidden_layers is not None
     shards = _discover_safetensors(weights_dir)
@@ -1743,15 +1997,22 @@ def shard_checkpoint(
                     continue
                 path, source_key = location
                 short = key[len(prefix):]
+                # The same rule estimate_shard_cache_bytes sizes the disk pre-flight by.
+                stored, as_nf4 = _layer_tensor_storage(
+                    short,
+                    dtype=dtype,
+                    quantise=quantise,
+                    suffixes=suffixes,
+                    fp32_keys=fp32_layer_keys,
+                )
                 if saw_oq_companion and key.endswith(".weight"):
                     tensor = _read_oq_tensor(
                         handles, where, key, oq_config=oq_config, dtype=dtype
                     )
                 else:
-                    stored = "float32" if short in fp32_layer_keys else dtype
                     tensor = _read_tensor(handles[path], source_key, stored)
                 total_params += tensor.numel()
-                if quantise and short in suffixes:
+                if as_nf4:
                     sidecars, spec, code, nested_code = _quantize_nf4(
                         tensor, double_quant=double_quant, device=device
                     )
@@ -1912,11 +2173,11 @@ def shard_checkpoint(
                 info = write_expert_shard(
                     os.path.join(shard_dirs[root], expert_shard_name(idx)),
                     _expert_pairs(),
-                    quantise=quantise,
+                    quantise=experts_nf4,
                     double_quant=double_quant,
                     device=device,
                 )
-                if quantise:
+                if experts_nf4:
                     tables.observe(f"{prefix}mlp.experts", *info.codes)
                 described = (info.count, dict(info.shapes), dict(info.quant_specs))
                 if expert_meta is None:
