@@ -10,10 +10,15 @@ Verifies that:
 7. Control test: invalid YAML returns 400 and leaves no temp config.
 8. Control test: child process can read the config while running.
 9. Control test: /api/train/status reports running=True with config_path during a run.
+10. Unit test: _drain_stdout_worker waits for child before deleting config (wait-order guard).
+11. Popen failure does not close a reused file descriptor.
+12. fdopen failure closes raw fd and cleans up temp config.
+13. fdopen failure suppresses os.close error and preserves original exception.
 """
 
 from __future__ import annotations
 
+import contextlib
 import os
 import pathlib
 import subprocess
@@ -23,10 +28,10 @@ from typing import Iterator
 from unittest.mock import patch
 
 import pytest
-from fastapi.testclient import TestClient
 
 import soup_cli.ui.app as ui_app_module
-from soup_cli.ui.app import TrainLogBuffer, _drain_stdout_worker, create_app, get_auth_token
+from soup_cli.ui.app import TrainLogBuffer, _drain_stdout_worker, get_auth_token
+from tests.ui_helpers import ui_client
 
 VALID_CONFIG = "base: test\ndata:\n  train: ./data.jsonl\n"
 
@@ -74,7 +79,7 @@ def _reset_train_state(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) 
 
 def test_single_run_deletes_temp_config(tmp_path: pathlib.Path) -> None:
     """A single finished training run deletes its temporary config file."""
-    client = TestClient(create_app())
+    client = ui_client()
     with patch(
         "soup_cli.ui.app._resolve_train_argv",
         return_value=[sys.executable, "-c", "pass"],
@@ -92,7 +97,7 @@ def test_single_run_deletes_temp_config(tmp_path: pathlib.Path) -> None:
 
 def test_three_sequential_runs_leave_no_temp_configs(tmp_path: pathlib.Path) -> None:
     """Multiple sequential finished runs leave 0 temporary config files."""
-    client = TestClient(create_app())
+    client = ui_client()
     with patch(
         "soup_cli.ui.app._resolve_train_argv",
         return_value=[sys.executable, "-c", "pass"],
@@ -111,7 +116,7 @@ def test_three_sequential_runs_leave_no_temp_configs(tmp_path: pathlib.Path) -> 
 
 def test_stop_training_deletes_temp_config(tmp_path: pathlib.Path) -> None:
     """Terminating training via /api/train/stop deletes the temporary config."""
-    client = TestClient(create_app())
+    client = ui_client()
     with patch(
         "soup_cli.ui.app._resolve_train_argv",
         return_value=[sys.executable, "-c", "import time; time.sleep(30)"],
@@ -131,7 +136,7 @@ def test_stop_training_deletes_temp_config(tmp_path: pathlib.Path) -> None:
 
 def test_spawn_failure_deletes_temp_config(tmp_path: pathlib.Path) -> None:
     """If process spawn fails with OSError, the temp config is deleted and error raised."""
-    client = TestClient(create_app(), raise_server_exceptions=False)
+    client = ui_client(raise_server_exceptions=False)
     with patch("subprocess.Popen", side_effect=OSError("Exec format error")):
         response = client.post(
             "/api/train/start",
@@ -169,7 +174,7 @@ def test_drain_worker_already_deleted_config_does_not_raise(tmp_path: pathlib.Pa
 
 def test_invalid_yaml_returns_400_and_leaves_no_temp_config(tmp_path: pathlib.Path) -> None:
     """Control test: invalid YAML returns 400 before creating any file."""
-    client = TestClient(create_app())
+    client = ui_client()
     response = client.post(
         "/api/train/start",
         json={"config_yaml": ": invalid: yaml: {"},
@@ -181,7 +186,7 @@ def test_invalid_yaml_returns_400_and_leaves_no_temp_config(tmp_path: pathlib.Pa
 
 def test_child_can_read_config_while_running(tmp_path: pathlib.Path) -> None:
     """Control test: the child process can read the temporary config while executing."""
-    client = TestClient(create_app())
+    client = ui_client()
     script = (
         "import sys, time, pathlib\n"
         "target = pathlib.Path(sys.argv[1])\n"
@@ -213,7 +218,7 @@ def test_child_can_read_config_while_running(tmp_path: pathlib.Path) -> None:
 
 def test_train_status_reports_config_path_during_run(tmp_path: pathlib.Path) -> None:
     """Control test: /api/train/status returns running=True and config_path during a run."""
-    client = TestClient(create_app())
+    client = ui_client()
     with patch(
         "soup_cli.ui.app._resolve_train_argv",
         return_value=[sys.executable, "-c", "import time; time.sleep(1.0)"],
@@ -233,3 +238,144 @@ def test_train_status_reports_config_path_during_run(tmp_path: pathlib.Path) -> 
         assert os.path.exists(status_data["config_path"])
 
         _wait_for_run_completion(10.0)
+
+
+def test_drain_worker_wait_order_guard(tmp_path: pathlib.Path) -> None:
+    """Unit test: _drain_stdout_worker calls proc.wait() before deleting config, and
+    marks done first.
+    """
+    temp_config = tmp_path / "soup_ui_config_wait_guard.yaml"
+    temp_config.write_text("base: test\n", encoding="utf-8")
+    assert temp_config.exists()
+
+    buffer = TrainLogBuffer(maxlen=100)
+
+    class FakeProc:
+        stdout = None
+
+        def __init__(self) -> None:
+            self.wait_calls = 0
+
+        def wait(self) -> None:
+            self.wait_calls += 1
+            assert temp_config.exists(), "Config file must still exist while waiting"
+            assert buffer.is_done(), "Log buffer must be marked done before waiting"
+
+    proc = FakeProc()
+    _drain_stdout_worker(proc, buffer, config_path=str(temp_config))
+
+    assert proc.wait_calls == 1
+    assert not temp_config.exists()
+
+
+def test_popen_failure_does_not_close_reused_descriptor(tmp_path: pathlib.Path) -> None:
+    """If Popen fails after fdopen, the outer except must NOT close someone else's descriptor."""
+    created_fd: list[int] = []
+    real_mkstemp = tempfile.mkstemp
+
+    def mkstemp_spy(*args, **kwargs):
+        fd, path = real_mkstemp(*args, **kwargs)
+        created_fd.append(fd)
+        return fd, path
+
+    opened_handles: list[int] = []
+
+    def popen_side_effect(*args, **kwargs):
+        assert created_fd, "mkstemp must have run before Popen"
+        target_fd = created_fd[0]
+        found = False
+        for attempt in range(64):
+            dummy_file = tmp_path / f"spare_probe_{attempt}.tmp"
+            dummy_file.touch()
+            allocated_fd = os.open(str(dummy_file), os.O_RDONLY)
+            opened_handles.append(allocated_fd)
+            if allocated_fd == target_fd:
+                found = True
+                break
+        if not found:
+            pytest.fail(f"Could not reacquire fd {target_fd} within 64 attempts")
+        raise OSError("Popen spawn failed")
+
+    try:
+        client = ui_client(raise_server_exceptions=False)
+        with patch("tempfile.mkstemp", side_effect=mkstemp_spy), patch(
+            "subprocess.Popen", side_effect=popen_side_effect
+        ):
+            response = client.post(
+                "/api/train/start",
+                json={"config_yaml": VALID_CONFIG},
+                headers=_auth_headers(),
+            )
+            assert response.status_code == 500
+
+            # created_fd[0] was reused by our probe. The outer except handler must NOT
+            # have closed it. In the buggy code, os.close(fd) closed created_fd[0],
+            # causing os.fstat to raise OSError: [Errno 9] Bad file descriptor.
+            assert os.fstat(created_fd[0]) is not None
+            assert _config_files(tmp_path) == []
+    finally:
+        for descriptor in opened_handles:
+            with contextlib.suppress(OSError):
+                os.close(descriptor)
+
+
+def test_fdopen_failure_closes_fd_and_deletes_temp_config(tmp_path: pathlib.Path) -> None:
+    """When os.fdopen fails, the raw fd is closed and temp config deleted."""
+    created_fd: list[int] = []
+    real_mkstemp = tempfile.mkstemp
+
+    def mkstemp_spy(*args, **kwargs):
+        fd, path = real_mkstemp(*args, **kwargs)
+        created_fd.append(fd)
+        return fd, path
+
+    client = ui_client(raise_server_exceptions=True)
+    with patch("tempfile.mkstemp", side_effect=mkstemp_spy), patch(
+        "os.fdopen", side_effect=OSError("Disk full on fdopen")
+    ):
+        with pytest.raises(OSError, match="Disk full on fdopen"):
+            client.post(
+                "/api/train/start",
+                json={"config_yaml": VALID_CONFIG},
+                headers=_auth_headers(),
+            )
+
+    assert created_fd, "mkstemp must have been called"
+    with pytest.raises(OSError):
+        os.fstat(created_fd[0])
+    assert _config_files(tmp_path) == []
+
+
+def test_fdopen_failure_os_close_error_does_not_mask_original_exception(
+    tmp_path: pathlib.Path,
+) -> None:
+    """When os.fdopen fails and os.close also raises, the fdopen error is not masked."""
+    created_fd: list[int] = []
+    real_mkstemp = tempfile.mkstemp
+    real_close = os.close
+
+    def mkstemp_spy(*args, **kwargs):
+        fd, path = real_mkstemp(*args, **kwargs)
+        created_fd.append(fd)
+        return fd, path
+
+    def close_wrapper(fd: int) -> None:
+        if created_fd and fd == created_fd[0]:
+            raise OSError("Close error on fd")
+        real_close(fd)
+
+    client = ui_client(raise_server_exceptions=True)
+    with patch("tempfile.mkstemp", side_effect=mkstemp_spy), patch(
+        "os.fdopen", side_effect=ValueError("Invalid fd parameter")
+    ), patch("os.close", side_effect=close_wrapper):
+        with pytest.raises(ValueError, match="Invalid fd parameter"):
+            client.post(
+                "/api/train/start",
+                json={"config_yaml": VALID_CONFIG},
+                headers=_auth_headers(),
+            )
+
+    assert _config_files(tmp_path) == []
+    if created_fd:
+        with contextlib.suppress(OSError):
+            real_close(created_fd[0])
