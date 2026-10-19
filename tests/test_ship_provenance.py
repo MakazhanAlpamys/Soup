@@ -57,6 +57,46 @@ def _gate(*extra):
     ])
 
 
+@pytest.mark.parametrize("runs", [float("nan"), float("inf"), float("-inf")])
+@pytest.mark.parametrize("restamp", [False, True], ids=["read", "restamp"])
+@pytest.mark.parametrize("color", [False, True], ids=["plain", "ansi"])
+def test_strict_nonfinite_floor_runs_keep_usage_diagnostic(work, runs, restamp, color):
+    payload = _produce()
+    payload["noise_floor"] = {"runs": runs, "floors": {"mini_mmlu": 0.0}}
+    (work / "bound.json").write_text(json.dumps(payload), encoding="utf-8")
+    arguments = [
+        "ship", "--evidence", "bound.json", "--config", "soup.yaml",
+        "--adapter", "adapter", "--require-provenance", "--output", "verdict.json",
+    ]
+    if restamp:
+        arguments.extend(["--emit-evidence", "restamped.json"])
+    result = runner.invoke(app, arguments, color=color)
+    assert result.exit_code == 3, (result.output, result.exception)
+    diagnostic = " ".join(strip_ansi(result.output).split())
+    assert "evidence.noise_floor.runs must be an integer" in diagnostic
+    assert not (work / "verdict.json").exists()
+    assert not (work / "restamped.json").exists()
+
+
+@pytest.mark.parametrize("runs", [None, 2, 10], ids=["no-floor", "min-floor", "max-floor"])
+@pytest.mark.parametrize("restamp", [False, True], ids=["read", "restamp"])
+def test_strict_valid_floor_and_no_floor_controls(work, runs, restamp):
+    if runs is not None:
+        raw_path = work / "raw.json"
+        raw = json.loads(raw_path.read_text(encoding="utf-8"))
+        raw["noise_floor"] = {"runs": runs, "floors": {"mini_mmlu": 0.0}}
+        raw_path.write_text(json.dumps(raw), encoding="utf-8")
+    payload = _produce()
+    extra = ["--emit-evidence", "restamped.json"] if restamp else []
+    result = _gate("--output", "verdict.json", *extra)
+    assert result.exit_code == 0, (result.output, result.exception)
+    assert (work / "verdict.json").is_file()
+    if restamp:
+        restored = json.loads((work / "restamped.json").read_text(encoding="utf-8"))
+        assert restored.get("noise_floor") == payload.get("noise_floor")
+        assert restored["provenance"]["binding"] == payload["provenance"]["binding"]
+
+
 def test_emit_binds_actual_bytes_and_effective_policy(work):
     from soup_cli.utils.adapter_sign import compute_adapter_manifest
 

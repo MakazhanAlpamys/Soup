@@ -1447,15 +1447,16 @@ def ship(
             _check_evidence_numerics(
                 payload, _expected_numerics_family(soup_config)
             )
-        floor_block = payload.get("noise_floor")
-        recorded_runs = floor_block.get("runs") if isinstance(floor_block, dict) else None
+        # Decode/validate the complete evidence before its floor enters the
+        # canonical policy encoder. Raw JSON may contain non-finite numbers.
+        verdict = _verdict_from_evidence(payload, forgetting_threshold=threshold)
+        recorded_runs = verdict.noise_floor.runs if verdict.noise_floor is not None else None
         if require_provenance:
             binding = capture_binding(task_mode, _parse_suite(general_suite), recorded_runs)
             try:
                 check_binding(payload, binding)
             except ValueError as exc:
                 _fail(str(exc), _EXIT_USAGE)
-        verdict = _verdict_from_evidence(payload, forgetting_threshold=threshold)
         if emit_evidence and binding is None:
             # External scores are explicitly caller-trusted, not a claim that this
             # command evaluated a model. Bind the actual supplied axes/mode.
