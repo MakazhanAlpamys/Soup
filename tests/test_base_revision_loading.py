@@ -144,9 +144,9 @@ def test_copied_adapter_pins_live_eval_and_export_loaders(tmp_path, monkeypatch,
 
 
 @pytest.mark.parametrize("mode", ["bound", "offline", "distributed", "non-hf"])
-@pytest.mark.parametrize("stored_hash", [None, "c" * 64], ids=["unknown-data", "stored-data"])
+@pytest.mark.parametrize("source_state", ["unchanged", "changed", "deleted"])
 def test_train_cli_records_identity_and_writes_final_artifact(
-    tmp_path, monkeypatch, moving_hub, mode, stored_hash,
+    tmp_path, monkeypatch, moving_hub, mode, source_state,
 ):
     pytest.importorskip("torch")
     from typer.testing import CliRunner
@@ -184,22 +184,27 @@ def test_train_cli_records_identity_and_writes_final_artifact(
         f"hub: {'modelscope' if mode == 'non-hf' else 'hf'}}}\noutput: final\n",
         encoding="utf-8",
     )
+    import hashlib
+
+    stored_hash = hashlib.sha256((tmp_path / "data.jsonl").read_bytes()).hexdigest()
     expected = {"revision": REVISION} if mode == "bound" else {}
 
     class Trainer:
         def setup(self, dataset):
             assert dataset["train"]
+            tracker = ExperimentTracker(tmp_path / "runs.db")
+            try:
+                assert tracker.list_runs()[0]["training_data_sha256"] == stored_hash
+            finally:
+                tracker.close()
             assert provenance.base_revision_kwargs(BASE) == expected
 
         def train(self, **kwargs):
             assert provenance.base_revision_kwargs(BASE) == expected
-            # Emulate a separate producer of the reserved historical hash field.
-            conn = kwargs["tracker"]._get_conn()
-            conn.execute(
-                "UPDATE runs SET training_data_sha256=? WHERE run_id=?",
-                (stored_hash, kwargs["run_id"]),
-            )
-            conn.commit()
+            if source_state == "changed":
+                (tmp_path / "data.jsonl").write_text("later bytes", encoding="utf-8")
+            elif source_state == "deleted":
+                (tmp_path / "data.jsonl").unlink()
             output.mkdir()
             return {"output_dir": str(output), "initial_loss": 1.0, "final_loss": 0.5,
                     "total_steps": 1, "duration_secs": 1.0}

@@ -2277,3 +2277,32 @@ a conflicting combo is rejected loudly at config load. Scans cache under `~/.sou
 `all` default) is recommended for very large models — it skips the giant embedding/lm_head matrices.
 The SNR kernel is pure-numpy and transpose-invariant, so GPT-2 `Conv1D` weights score the same as
 Linear weights. (v0.71.23)
+
+## Training source identity
+
+`soup train` records `training_data_sha256` before loading or transforming a
+supported single local raw text-training file. The digest is SHA-256 of the
+complete file bytes, including any BOM and original newline encoding. It records
+source bytes at startup; it does not prove which transformed examples, external
+assets or later streaming reads trained the model. The source is not frozen.
+
+Capture uses 1 MiB reads, a 256 MiB byte limit and a 5-second time budget checked
+between filesystem operations. An operation already blocked on I/O cannot be
+interrupted by that budget. Larger, unreadable, changing or incomplete files are
+recorded as unknown (`NULL`), never as the hash of a prefix. Descriptor and path
+metadata detect accidental replacement/modification during capture; this is not
+an adversarial filesystem snapshot.
+
+Mixed/interleaved/replay, remote, streaming, tokenized and directory inputs remain
+unknown. The initial scope is text input through `data.train`; TTS, unlearning and
+non-text modalities remain unknown. No unknown component is silently omitted to
+manufacture an identity for a composite input. Dry runs do not capture a digest.
+
+The recorded value is retained in `soup_run.json` beside the final artifact and
+copied by `soup registry push --run-id` without reopening today's source. Explicit
+`--data` still describes the file registered now: its hash takes precedence for
+`data_hash` and the entry fingerprint, while `training_data_sha256` keeps the
+historical startup digest. Copied artifacts retain that digest without the
+original dataset. Existing runs stay unknown; no historical identity is inferred
+from today's files. Sweep and other training entry points do not gain capture in
+this change.
