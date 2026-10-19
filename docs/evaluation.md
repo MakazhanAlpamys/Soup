@@ -661,6 +661,55 @@ soup ship --evidence ship_evidence.json --config soup.yaml --push owner/repo#42
 `soup ci init --config soup.yaml` binds the generated workflow's ship step to the committed
 config, so the whole loop runs in CI (see [commands.md](commands.md)).
 
+### Strict evidence provenance
+
+`--emit-evidence` now adds a versioned `provenance.binding` block separately from
+`config_sha`. It records the local adapter manifest Merkle root (the existing
+adapter-signing manifest), exact task-eval file SHA-256, actual suite names plus
+Soup/scorer versions, and the effective verdict policy with a canonical SHA-256.
+The policy includes threshold, task mode, suites, judge endpoint identity and
+noise-floor repeat count. Judge URLs are hashed so endpoint paths, query values
+and credentials are not written into this descriptor.
+
+For an offline gate, opt in with the comparison inputs available locally:
+
+```bash
+soup ship --evidence ship_evidence.json --config soup.yaml --adapter ./adapter \
+  --require-provenance
+```
+
+`--task-eval` and suite/judge settings come from `eval.ship` or explicit CLI flags,
+with the usual CLI precedence. The strict gate (exit 3 on missing/mismatched
+identity) compares adapter and task bytes, current local training-source bytes,
+suite version, policy and the evidence's actual task mode/benchmark set. Unknown
+adapter/task identities are refused. Store emitted evidence outside the adapter
+directory: the manifest covers its files. A changed input during a live emitted
+run is refused on the before/after comparison; this is not a filesystem snapshot.
+
+The optional `--data-sha256 <64-lowercase-hex>` records an explicitly
+**caller-asserted training-data identity**, never proof of transformed examples
+consumed. Supply the same assertion when gating it. A simple local raw training
+source can also be compared at verdict time; remote, mixed, replay, tokenized,
+streaming and directory sources stay unknown. When that source is unknown,
+strict verification requires the caller assertion. Neither this descriptor nor
+legacy `data_sha` relabels a verdict-time hash as training-time evidence. The
+startup producer tracked in #1764 is separate.
+
+The strict mode requires offline `--evidence`, `--config`, a local nonempty
+`--adapter` manifest and a readable task-eval file; it does not claim identity for
+an arbitrary remote `--tuned` model. Judge modes also need the declared judge
+endpoint. The descriptor identifies external lm-eval suites by name and Soup
+version; it does not fingerprint external harness packages or datasets. Baseline
+scores and measured noise floors remain trusted evidence inputs, not independent
+reruns during an offline gate.
+
+Legacy/default replay remains recipe-only. `--require-provenance` keeps all
+checks even when `--emit-evidence` is also present. Ordinary external-score
+stamping remains available: it binds caller-trusted supplied scores to declared
+inputs, and records their actual task mode/suite axes. It is not a model run,
+attestation, signature or forgery protection. The unkeyed hashes detect drift;
+use the existing signing/attestation tools for a trust boundary.
+
 **Baseline provenance (#404).** Produce a stamped baseline with
 `soup eval gate --suite <suite.yaml> --model <id> --write-baseline baseline.json`
 (`--model` is required — baselines are never written from the stub generator).
