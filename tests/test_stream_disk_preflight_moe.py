@@ -102,6 +102,27 @@ def _write_checkpoint(directory, tensors, name="model.safetensors"):
     return str(path)
 
 
+#: Headers `read_header` cannot turn into shapes, by the exception each one raises there:
+#: a null or nested dimension and a null offset are TypeErrors, an infinite dimension is
+#: an OverflowError, the rest ValueErrors.
+_MALFORMED = {
+    "shape-null": '{"t":{"dtype":"BF16","shape":[null],"data_offsets":[0,2]}}',
+    "shape-nested": '{"t":{"dtype":"BF16","shape":[[2]],"data_offsets":[0,4]}}',
+    "offsets-null": '{"t":{"dtype":"BF16","shape":[2],"data_offsets":[null,4]}}',
+    "shape-infinite": '{"t":{"dtype":"BF16","shape":[Infinity],"data_offsets":[0,4]}}',
+    "not-json": "not json at all",
+    "fp8-dtype": '{"t":{"dtype":"F8_E4M3","shape":[2],"data_offsets":[0,2]}}',
+}
+
+
+def _write_raw(path, header_text, payload=b"\0" * 8):
+    """A file with an arbitrary header text after its length field, then a payload."""
+    raw = header_text.encode("utf-8")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(struct.pack("<Q", len(raw)) + raw + payload)
+    return str(path)
+
+
 def _header_and_payload(path):
     """(bytes of the length field + header, bytes of tensor data) of one safetensors file."""
     with open(path, "rb") as handle:
@@ -197,7 +218,11 @@ class TestNf4WeightBytes:
         """Pinned against `_quantize_nf4` (bitsandbytes on CPU), the sharder's own call."""
         pytest.importorskip("bitsandbytes")
         torch = pytest.importorskip("torch")
-        from soup_cli.utils.layer_shard import _quantize_nf4, nf4_weight_bytes
+        from soup_cli.utils.layer_shard import (
+            _nf4_sidecar_suffixes,
+            _quantize_nf4,
+            nf4_weight_bytes,
+        )
 
         weight = torch.randn(shape, generator=torch.Generator().manual_seed(5)).to(
             torch.bfloat16
@@ -207,6 +232,8 @@ class TestNf4WeightBytes:
         )
         stored = sum(value.numel() * value.element_size() for value in sidecars.values())
         assert nf4_weight_bytes(weight.numel(), double_quant=double_quant) == stored
+        # the header allowance names the same stored keys the sharder writes
+        assert sorted(_nf4_sidecar_suffixes(double_quant)) == sorted(sidecars)
 
     def test_an_empty_weight_is_refused(self):
         from soup_cli.utils.layer_shard import nf4_weight_bytes
@@ -337,11 +364,50 @@ class TestEstimateFromHeaders:
         with pytest.raises(ValueError, match="quant_suffixes"):
             _estimate([path], suffixes=())
 
-    def test_an_unreadable_header_raises(self, tmp_path):
-        bad = tmp_path / "bad.safetensors"
-        bad.write_bytes(struct.pack("<Q", 50) + b"not json at all")
-        with pytest.raises(ValueError):
-            _estimate([str(bad)])
+    @pytest.mark.parametrize("spelling", sorted(_MALFORMED), ids=sorted(_MALFORMED))
+    def test_a_header_that_cannot_be_parsed_is_a_source_header_error(self, tmp_path, spelling):
+        from soup_cli.utils.layer_shard import SourceHeaderError
+
+        bad = _write_raw(tmp_path / "bad.safetensors", _MALFORMED[spelling])
+        with pytest.raises(SourceHeaderError, match="bad.safetensors"):
+            _estimate([bad])
+
+    def test_a_missing_source_file_is_a_source_header_error(self, tmp_path):
+        from soup_cli.utils.layer_shard import SourceHeaderError
+
+        with pytest.raises(SourceHeaderError):
+            _estimate([str(tmp_path / "gone.safetensors")])
+
+    def test_arguments_are_checked_before_any_header_is_read(self, tmp_path):
+        """A bad request is a bug to raise, never a header problem to fall back on."""
+        from soup_cli.utils.layer_shard import SourceHeaderError
+
+        missing = str(tmp_path / "gone.safetensors")
+        for kwargs, needle in (
+            ({"dtype": "int8"}, "unsupported dtype"),
+            ({"layout": "experts"}, "unsupported expert_layout"),
+            ({"suffixes": ()}, "quant_suffixes"),
+        ):
+            with pytest.raises(ValueError, match=needle) as exc:
+                _estimate([missing], **kwargs)
+            assert not isinstance(exc.value, SourceHeaderError)
+
+    def test_a_layer_index_past_the_sharder_bound_is_refused_cheaply(self, tmp_path):
+        """The sharder refuses more than 512 layers; sizing anything by the index first
+        would allocate per index (~780 MB at 8,000,000, ~190 MB here) before saying so."""
+        import tracemalloc
+
+        tensors = _moe_tensors()
+        tensors["model.layers.2000000.input_layernorm.weight"] = ("BF16", (HIDDEN,))
+        path = _write_checkpoint(tmp_path / "m", tensors)
+        tracemalloc.start()
+        try:
+            with pytest.raises(ValueError, match=r"too many decoder layers \(2000001 > 512\)"):
+                _estimate([path])
+            _current, peak = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
+        assert peak < 8 * 2**20, peak
 
     def test_an_incomplete_expert_is_refused_like_the_sharder(self, tmp_path):
         tensors = _moe_tensors()
@@ -491,6 +557,78 @@ class TestPlannedSourceShards:
 
 
 # --------------------------------------------------------------------------
+# what falls back to the approximate figure, and what does not
+# --------------------------------------------------------------------------
+def _ready_plan(directory):
+    return types.SimpleNamespace(weights_dir=str(directory), needs_materialization=False)
+
+
+def _preflight(plan, **kwargs):
+    from soup_cli.trainer.stream_setup import _preflight_cache_estimate
+
+    kwargs.setdefault("dtype", "bfloat16")
+    kwargs.setdefault("arch", "deepseek_v3")
+    kwargs.setdefault("quant", "nf4")
+    kwargs.setdefault("quant_suffixes", SUFFIXES)
+    kwargs.setdefault("double_quant", True)
+    kwargs.setdefault("expert_layout", "")
+    kwargs.setdefault("num_hidden_layers", N_LAYERS)
+    return _preflight_cache_estimate(plan, **kwargs)
+
+
+class TestTheFallbackIsOnlyForUnreadableSources:
+    @pytest.mark.parametrize("spelling", sorted(_MALFORMED), ids=sorted(_MALFORMED))
+    def test_a_malformed_header_falls_back(self, tmp_path, spelling):
+        _write_raw(tmp_path / "m" / "model.safetensors", _MALFORMED[spelling])
+        assert _preflight(_ready_plan(tmp_path / "m")) is None
+
+    def test_a_source_that_cannot_be_listed_falls_back(self, tmp_path):
+        plan = types.SimpleNamespace(
+            weights_dir=str(tmp_path / "copy"), source_dir=str(tmp_path),
+            source_revision=None, needs_materialization=True,
+        )
+        assert _preflight(plan) is None
+
+    def test_a_readable_source_is_estimated(self, tmp_path):
+        _write_checkpoint(tmp_path / "m", _moe_tensors())
+        got = _preflight(_ready_plan(tmp_path / "m"))
+        assert (got.layer_bytes, got.other_bytes) == _expected("fused", nf4=True)
+
+    @pytest.mark.parametrize(
+        ("kwargs", "needle"),
+        [
+            ({"dtype": "int8"}, "unsupported dtype"),
+            ({"expert_layout": "experts"}, "unsupported expert_layout"),
+            ({"quant_suffixes": ()}, "quant_suffixes"),
+        ],
+        ids=["dtype", "layout", "suffixes"],
+    )
+    def test_a_bad_request_is_raised_not_approximated(self, tmp_path, kwargs, needle):
+        _write_checkpoint(tmp_path / "m", _moe_tensors())
+        with pytest.raises(ValueError, match=needle):
+            _preflight(_ready_plan(tmp_path / "m"), **kwargs)
+
+    def test_a_checkpoint_the_sharder_refuses_is_refused_here(self, tmp_path):
+        """Same words, before any copy or shard is written."""
+        tensors = _moe_tensors()
+        tensors["model.layers.600.input_layernorm.weight"] = ("BF16", (HIDDEN,))
+        _write_checkpoint(tmp_path / "m", tensors)
+        with pytest.raises(ValueError, match=r"too many decoder layers \(601 > 512\)"):
+            _preflight(_ready_plan(tmp_path / "m"), num_hidden_layers=None)
+
+    def test_qwen4_exp_never_lists_its_source(self, tmp_path, monkeypatch):
+        """Its own estimators size it; a snapshot walk would be wasted work."""
+        import soup_cli.trainer.stream_setup as stream_setup
+
+        def _must_not_list(_plan):
+            raise AssertionError("qwen4_exp source listed")
+
+        monkeypatch.setattr(stream_setup, "_planned_source_shards", _must_not_list)
+        plan = _ready_plan(tmp_path)
+        assert _preflight(plan, arch="qwen4_exp", quant="none", quant_suffixes=()) is None
+
+
+# --------------------------------------------------------------------------
 # the setup charges it (the shared driver in tests/test_issue602_qwen4_ple_streaming.py)
 # --------------------------------------------------------------------------
 def _deepseek_cfg():
@@ -501,11 +639,13 @@ def _deepseek_cfg():
 
 
 def _drive_preflight(tmp_path, monkeypatch, *, layout, tensors=None, free=10**15,
-                     plan_overrides=None, quantization="4bit"):
+                     plan_overrides=None, quantization="4bit", double_quant=True,
+                     suffixes=SUFFIXES, header_text=None):
     """Run the real setup up to the sharder; return the pre-flight's keyword arguments.
 
-    The resolver hands the real `_disk_preflight` a plan over a synthetic checkpoint,
-    the meta probe reports SUFFIXES, and the volume reports `free` bytes.
+    The resolver hands the real `_disk_preflight` a plan over a synthetic checkpoint
+    (or, with `header_text`, a file with that header), the meta probe reports
+    `suffixes`, and the volume reports `free` bytes.
     """
     import soup_cli.trainer.stream_setup as stream_setup
     import soup_cli.utils.layer_stream_runtime as layer_stream_runtime
@@ -513,7 +653,10 @@ def _drive_preflight(tmp_path, monkeypatch, *, layout, tensors=None, free=10**15
     from tests.test_issue602_qwen4_ple_streaming import _drive_qwen4_streaming_setup
 
     weights = tmp_path / "weights"
-    path = _write_checkpoint(weights, tensors or _moe_tensors())
+    if header_text is None:
+        path = _write_checkpoint(weights, tensors or _moe_tensors())
+    else:
+        path = _write_raw(weights / "model.safetensors", header_text)
     (weights / "config.json").write_text('{"model_type": "deepseek_v3"}', encoding="utf-8")
     size = os.path.getsize(path)
     plan = types.SimpleNamespace(
@@ -534,7 +677,7 @@ def _drive_preflight(tmp_path, monkeypatch, *, layout, tensors=None, free=10**15
         stream_setup.StreamingSetupMixin, "_stream_meta_skeleton",
         classmethod(lambda cls, *a, **k: probes.append(k) or object()),
     )
-    monkeypatch.setattr(layer_stream_runtime, "quantised_layer_suffixes", lambda _probe: SUFFIXES)
+    monkeypatch.setattr(layer_stream_runtime, "quantised_layer_suffixes", lambda _probe: suffixes)
     monkeypatch.setattr(moe, "resolve_moe_lora_targets", lambda *a, **k: None)
     monkeypatch.setattr(stream_setup, "_disk_volume", lambda _path: (1, free))
     seen = []
@@ -555,9 +698,13 @@ def _drive_preflight(tmp_path, monkeypatch, *, layout, tensors=None, free=10**15
     _drive_qwen4_streaming_setup(
         tmp_path, monkeypatch, resolve_weights=_resolve, arch="deepseek_v3",
         model_cfg=_deepseek_cfg(),
-        tcfg_overrides={"stream_expert_layout": layout, "quantization": quantization},
+        tcfg_overrides={
+            "stream_expert_layout": layout,
+            "quantization": quantization,
+            "double_quant_on": double_quant,
+        },
     )
-    shares_calls = [entry["shares_call"] for entry in seen if "shares_call" in entry]
+    shares_calls =[entry["shares_call"] for entry in seen if "shares_call" in entry]
     panels = [entry for entry in seen if "shares_call" not in entry]
     return panels, path, shares_calls
 
@@ -604,21 +751,56 @@ class TestTheSetupChargesTheEstimate:
         )
         assert panels[0]["shard_bytes"] == new
 
+    @pytest.mark.parametrize("spelling", sorted(_MALFORMED), ids=sorted(_MALFORMED))
     def test_unreadable_headers_fall_back_to_the_old_rate_and_say_approximately(
-        self, tmp_path, monkeypatch
+        self, tmp_path, monkeypatch, spelling
     ):
-        import soup_cli.utils.layer_shard as layer_shard
         from soup_cli.utils.layer_stream import estimate_stream_store_bytes
 
-        def _unreadable(*_a, **_k):
-            raise ValueError("header is not valid JSON")
-
-        monkeypatch.setattr(layer_shard, "estimate_shard_cache_bytes", _unreadable)
-        panels, path, _calls = _drive_preflight(tmp_path, monkeypatch, layout="fused")
+        panels, path, _calls = _drive_preflight(
+            tmp_path, monkeypatch, layout="fused", header_text=_MALFORMED[spelling]
+        )
         assert panels[0]["shard_bytes"] == estimate_stream_store_bytes(
             os.path.getsize(path), dtype=_stream_dtype(), quant="nf4"
         )
         assert panels[0]["approximate"] is True
+
+    @pytest.mark.parametrize("layout", ["fused", "per_expert"])
+    def test_single_quant_runs_are_charged_float32_absmax(self, tmp_path, monkeypatch, layout):
+        """double_quant: false stores a float32 absmax per block, ~9% more than NF4 with it."""
+        panels, path, _calls = _drive_preflight(
+            tmp_path, monkeypatch, layout=layout, double_quant=False
+        )
+        expected = _estimate(
+            [path], layout="" if layout == "fused" else layout, dtype=_stream_dtype(),
+            double_quant=False, num_hidden_layers=N_LAYERS,
+        )
+        assert panels[0]["shard_bytes"] == expected.total_bytes
+        double = _estimate([path], layout="", dtype=_stream_dtype())
+        assert expected.total_bytes != double.total_bytes  # else this pins nothing
+
+    def test_layers_past_the_configs_count_are_not_charged(self, tmp_path, monkeypatch):
+        """DeepSeek-V3 / Kimi K2 MTP layers: the sharder drops them against the config."""
+        panels, path, _calls = _drive_preflight(
+            tmp_path, monkeypatch, layout="fused", tensors=_moe_tensors(extra_layers=1)
+        )
+        dropped = _estimate([path], dtype=_stream_dtype(), num_hidden_layers=N_LAYERS)
+        kept = _estimate([path], dtype=_stream_dtype())
+        assert len(dropped.layer_bytes) == N_LAYERS
+        assert panels[0]["shard_bytes"] == dropped.total_bytes != kept.total_bytes
+
+    def test_a_checkpoint_the_sharder_refuses_is_refused_before_sharding(
+        self, tmp_path, monkeypatch
+    ):
+        tensors = _moe_tensors()
+        del tensors["model.layers.1.mlp.experts.2.up_proj.weight"]
+        with pytest.raises(ValueError, match="incomplete expert projections"):
+            _drive_preflight(tmp_path, monkeypatch, layout="per_expert", tensors=tensors)
+
+    def test_a_probe_that_found_nothing_to_quantise_is_refused(self, tmp_path, monkeypatch):
+        """quant='nf4' with no suffixes is a setup bug, never an approximate figure."""
+        with pytest.raises(ValueError, match="quant_suffixes"):
+            _drive_preflight(tmp_path, monkeypatch, layout="fused", suffixes=frozenset())
 
     def test_an_unquantised_run_is_charged_its_header_estimate(self, tmp_path, monkeypatch):
         panels, path, _calls = _drive_preflight(

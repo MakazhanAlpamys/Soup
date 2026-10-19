@@ -972,6 +972,51 @@ def _routed_experts_quantised(expert_layout: str, quantise: bool) -> bool:
     return bool(quantise) and expert_layout == EXPERT_LAYOUT_PER_EXPERT
 
 
+class SourceHeaderError(ValueError):
+    """A source safetensors header could not be read or parsed.
+
+    Its own type so the disk pre-flight can fall back to an approximate figure for
+    exactly this, while a bad request or a checkpoint the sharder refuses still raises.
+    """
+
+
+#: What reading and parsing one header can raise: a missing or unreadable file, a
+#: malformed header (``ValueError``), a null or nested dimension or offset
+#: (``TypeError``) and an infinite one (``OverflowError``).
+_HEADER_READ_ERRORS = (OSError, ValueError, TypeError, OverflowError)
+
+
+def _read_source_shapes(shard_paths: Sequence[str]) -> Dict[str, Tuple[int, ...]]:
+    """Canonical key -> shape over every source file, from the headers alone.
+
+    A header that cannot be read becomes :class:`SourceHeaderError`; one tensor
+    spelled twice is refused the way :func:`shard_checkpoint` refuses it.
+    """
+    from soup_cli.utils.safetensors_reader import read_header
+
+    shapes: Dict[str, Tuple[int, ...]] = {}
+    spelled: Dict[str, str] = {}
+    for path in shard_paths:
+        try:
+            header = read_header(path)
+        except _HEADER_READ_ERRORS as exc:
+            raise SourceHeaderError(
+                f"cannot read the safetensors header of {path}: {exc}"
+            ) from exc
+        for source_key, entry in header.items():
+            key = _canonical_stream_key(source_key)
+            prior = spelled.get(key)
+            if prior is not None:
+                raise ValueError(
+                    f"checkpoint spells one streamed tensor twice: {prior!r} and "
+                    f"{source_key!r} both canonicalise to {key!r}. Refusing rather than "
+                    f"silently keeping one by safetensors key order."
+                )
+            spelled[key] = source_key
+            shapes[key] = entry.shape
+    return shapes
+
+
 @dataclass(frozen=True)
 class ShardCacheEstimate:
     """What :func:`shard_checkpoint` will write, sized from the source headers.
@@ -1015,8 +1060,11 @@ def estimate_shard_cache_bytes(
     everything outside the decoder layers.
 
     Returns ``None`` for ``qwen4_exp``, whose external PLE table and oQ layout
-    have their own estimators. Raises ``ValueError`` / ``OSError`` for a request
-    or checkpoint the sharder would refuse, or a header that cannot be read.
+    have their own estimators. The arguments are checked before any file is read
+    (``ValueError``). A header that cannot be read raises
+    :class:`SourceHeaderError`; a checkpoint the sharder would refuse raises
+    ``ValueError`` in the sharder's words, before anything is sized by its layer
+    count.
     """
     if arch == "qwen4_exp":
         return None
@@ -1034,15 +1082,9 @@ def estimate_shard_cache_bytes(
     quantise = quant == QUANT_NF4
 
     from soup_cli.utils.expert_stream import DOWN, GATE_UP, expert_key
-    from soup_cli.utils.safetensors_reader import _ITEMSIZE, read_header
+    from soup_cli.utils.safetensors_reader import _ITEMSIZE
 
-    shapes: Dict[str, Tuple[int, ...]] = {}
-    for path in shard_paths:
-        for source_key, entry in read_header(path).items():
-            key = _canonical_stream_key(source_key)
-            if key in shapes:
-                raise ValueError(f"checkpoint spells one streamed tensor twice: {key!r}")
-            shapes[key] = entry.shape
+    shapes = _read_source_shapes(shard_paths)
 
     itemsize = _ITEMSIZE[dtype]
     stack_experts = arch in _STACKED_EXPERT_ARCHS
@@ -1135,6 +1177,10 @@ def estimate_shard_cache_bytes(
             "nothing to stream"
         )
     n_layers = max(layer_bytes) + 1
+    # Before anything below is sized by the layer count: a header naming layer
+    # 8,000,000 would otherwise cost ~780 MB just to say the layers are missing.
+    if n_layers > _MAX_LAYERS:
+        raise ValueError(f"too many decoder layers ({n_layers} > {_MAX_LAYERS})")
     if len(layer_bytes) != n_layers:
         missing = sorted(set(range(n_layers)) - set(layer_bytes))
         raise ValueError(f"decoder layer indices are not contiguous; missing {missing[:8]}")

@@ -540,21 +540,32 @@ def _planned_source_shards(weights_plan: Any) -> list[str]:
     )
 
 
-def _preflight_cache_estimate(weights_plan: Any, **estimate_kwargs: Any) -> Any:
+#: What listing the source files can raise (a missing directory, a snapshot the copy
+#: step would refuse, a malformed plan); the pre-flight then falls back.
+_SOURCE_LISTING_ERRORS = (OSError, ValueError, TypeError, OverflowError)
+
+
+def _preflight_cache_estimate(weights_plan: Any, *, arch: str, **estimate_kwargs: Any) -> Any:
     """The shard cache the sharder will write for this plan, or ``None``.
 
-    ``None`` when the source headers cannot be listed or read, or for an
-    architecture with its own estimator (``qwen4_exp``): the caller then charges
-    the coarse NF4-rate figure and labels it approximate. The sharder reads the
-    same files moments later and refuses a checkpoint this cannot read.
+    ``None`` for an architecture with its own estimator (``qwen4_exp``, whose
+    source is then not even listed), and when the source files cannot be listed
+    or a header cannot be read: the caller then charges the coarse NF4-rate
+    figure and labels it approximate. Nothing else falls back: a bad request
+    (dtype, layout, quant suffixes) and a checkpoint the sharder would refuse
+    raise here, before any copy or shard is written.
     """
-    from soup_cli.utils.layer_shard import estimate_shard_cache_bytes
+    from soup_cli.utils.layer_shard import SourceHeaderError, estimate_shard_cache_bytes
 
+    if arch == "qwen4_exp":
+        return None
     try:
-        return estimate_shard_cache_bytes(
-            _planned_source_shards(weights_plan), **estimate_kwargs
-        )
-    except (OSError, ValueError):
+        source_shards = _planned_source_shards(weights_plan)
+    except _SOURCE_LISTING_ERRORS:
+        return None
+    try:
+        return estimate_shard_cache_bytes(source_shards, arch=arch, **estimate_kwargs)
+    except SourceHeaderError:
         return None
 
 
