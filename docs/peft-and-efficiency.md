@@ -186,7 +186,7 @@ training:
 
 **What happens at trainer start.** Soup deep-copies the last `expand_layers` decoder blocks, zero-inits each clone's residual projections (`mlp.down_proj` + `self_attn.o_proj`) so the appended block initially acts as identity, appends them to `model.model.layers`, and updates `config.num_hidden_layers`. `freeze_trainable_layers` must equal `expand_layers`: it freezes every parameter except the appended blocks, the canonical LLaMA Pro "train only new blocks" recipe. It does not select the top-N or bottom-N layers, and any other value, including `0` or a negative one, is refused at config load.
 
-**Scope.** Works on `task: sft` with `backend: transformers`, `modality: text`, `quantization: none` and `lora.r: 0`. A LoRA rank is refused together with `expand_layers` ([#1326](https://github.com/MakazhanAlpamys/Soup/issues/1326)): the expansion runs before `get_peft_model`, which freezes every non-adapter parameter again, appended blocks included, so only adapters on the original layers would train. `task: pretrain` has no `lora.r: 0` route: a rank is refused at config load, and `lora.r: 0` loads but then fails inside peft at trainer start ([#1813](https://github.com/MakazhanAlpamys/Soup/issues/1813)), so the recipe needs `task: sft`. Other tasks, backends and modalities, and a quantized base, are refused at config load. No other trainer applies the expansion, and the appended blocks are only supported on an unquantized base. Bounds: `expand_layers ∈ [1, 64]`. Over-expansion (more new blocks than the base has layers) silently clamps to the base layer count. Non-Llama-shaped architectures (e.g. Falcon's `dense_4h_to_h`) emit a `warnings.warn` because the residual zero-init heuristic only matches the standard `down_proj` / `o_proj` names — the appended blocks are still appended + trainable, but lose the identity-init guarantee.
+**Scope.** Works on `task: sft` with `backend: transformers`, `modality: text`, `quantization: none` and `lora.r: 0`. A LoRA rank is refused together with `expand_layers` ([#1326](https://github.com/MakazhanAlpamys/Soup/issues/1326)): the expansion runs before `get_peft_model`, which freezes every non-adapter parameter again, appended blocks included, so only adapters on the original layers would train. `task: pretrain` is refused at config load whatever the rank ([#1813](https://github.com/MakazhanAlpamys/Soup/issues/1813)): a rank would freeze the appended blocks again, and the pretrain trainer has no `lora.r: 0` branch, so the recipe needs `task: sft`. Other tasks, backends and modalities, and a quantized base, are refused at config load. No other trainer applies the expansion, and the appended blocks are only supported on an unquantized base. Bounds: `expand_layers ∈ [1, 64]`. Over-expansion (more new blocks than the base has layers) silently clamps to the base layer count. Non-Llama-shaped architectures (e.g. Falcon's `dense_4h_to_h`) emit a `warnings.warn` because the residual zero-init heuristic only matches the standard `down_proj` / `o_proj` names — the appended blocks are still appended + trainable, but lose the identity-init guarantee.
 
 
 ## Optimizer & PEFT Zoo
@@ -458,6 +458,11 @@ training:
 
 Works with all training tasks and backends. Recommended for LoRA rank ≥ 32.
 
+The scale is `alpha / sqrt(r)` instead of plain LoRA's `alpha / r` (2.0 instead of 0.25
+for the config above) on every backend: PEFT's `LoraConfig(use_rslora=True)` on
+`transformers`, the `scale` Soup hands mlx-lm (in `adapter_config.json` and at training
+time) on `mlx`, and `get_peft_model(..., use_rslora=True)` on `unsloth`.
+
 
 ## VeRA & OLoRA (Smaller-Footprint PEFT)
 
@@ -495,7 +500,7 @@ training:
   neftune_alpha: 5.0  # Noise intensity (0-50, typically 5-15)
 ```
 
-Works with SFT, DPO, KTO, ORPO, SimPO, and IPO tasks.
+Works with SFT, TTS, DPO, KTO, ORPO, SimPO, IPO, BCO, and preference tasks.
 
 
 ## Sample Packing

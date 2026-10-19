@@ -536,7 +536,8 @@ class TestTheRatchet:
         recipe loads through the vision path without moe_lora, its DPO recipe was
         removed), so 9 flagless."""
         moe = _moe_bases()
-        flagless = [b for b in moe if b not in _flagged_bases()]
+        flagged = _flagged_bases()
+        flagless = [b for b in moe if b not in flagged]
 
         assert len(_record()) == 112
         assert len(moe) == 23

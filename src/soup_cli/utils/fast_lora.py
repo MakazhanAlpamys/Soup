@@ -18,7 +18,11 @@ What this module establishes for the sibling paths:
 - delegation back to the unpatched peft forward whenever ``disable_adapters``,
   ``merged`` or ``adapter_names`` is set, the adapter is a fused variant
   (DoRA/VeRA and friends produce tuple results the hand-written backward does
-  not model), dropout is non-zero, or the call shape is not a plain ``(x)``.
+  not model), dropout is non-zero without the explicit opt-in, or the call
+  shape is not a plain ``(x)``. Dropout is modelled only when a caller asks
+  for it (``patch_fast_lora_single_projection(..., allow_dropout=True)``): the
+  keep-mask is drawn and saved (one byte per element) and ``X_d`` is rebuilt
+  in the backward.
 
 The patch covers only the single-projection path. Which kernel a projection
 gets when the QKV or MLP patcher also wants it is written once, in the comment
@@ -82,6 +86,22 @@ def _flatten(tensor: Any) -> Any:
     against a silent shape assumption.
     """
     return tensor.reshape(-1, tensor.shape[-1])
+
+
+def _dropout_mask(x: Any, p: float) -> tuple[Any, Any]:
+    """Draw LoRA dropout's keep-mask and apply it to the adapter input.
+
+    Returns ``(keep, x_d)`` where ``keep`` is boolean, one byte per element.
+    The mask is what the backward saves: ``X_d`` is rebuilt from it, so the
+    full-precision dropped copy peft's ``lora_A`` retains does not have to be
+    kept (#839). The draw uses the global torch RNG, which is what lets a
+    checkpoint recompute reproduce the same mask when ``preserve_rng_state``
+    is on.
+    """
+    import torch
+
+    keep = torch.empty_like(x, dtype=torch.bool).bernoulli_(1.0 - p)
+    return keep, x * keep / (1.0 - p)
 
 
 def _quant_state_parts(quant_state: Any) -> tuple[list[Any], dict[str, Any]]:
@@ -150,16 +170,24 @@ class _ProjectionState(NamedTuple):
     qmeta: dict[str, Any] | None
     qparts: list[Any]
     compute_dtype: Any
+    dropout_p: float
+    dropout_training: bool
 
 
 def _projection_state(
-    proj: Any, x: Any, *, allow_unadapted: bool = False
+    proj: Any, x: Any, *, allow_dropout: bool = False, allow_unadapted: bool = False
 ) -> _ProjectionState | None:
     """Return one PEFT/base projection state or None when PEFT must run.
 
     This is shared by the single, MLP and QKV kernels so the seven delegation
     guards, streamed QuantState repair and bitsandbytes compute-dtype handling
     cannot drift between patchers.
+
+    ``allow_dropout`` is the single-projection kernel's explicit opt-in: with
+    it, a non-zero ``lora_dropout`` returns a state carrying ``dropout_p`` and
+    ``dropout_training`` instead of delegating; ``p >= 1`` still delegates,
+    since the mask rescale is undefined at 1. The MLP and QKV kernels never
+    pass it, so for them the shared check keeps refusing exactly as before.
     """
     lora_a_map = getattr(proj, "lora_A", None)
     if lora_a_map is not None and not _is_supported_lora_projection(proj):
@@ -169,6 +197,8 @@ def _projection_state(
         return None
 
     adapter = None
+    dropout_p = 0.0
+    dropout_training = False
     if lora_a_map is None:
         if not allow_unadapted:
             return None
@@ -186,9 +216,18 @@ def _projection_state(
         else:
             if adapter in getattr(proj, "lora_variant", {}):
                 return None
-            # Dropout changes the adapter computation and mask lifetime; the
-            # hand-written kernels model only the deterministic LoRA branch.
-            if float(getattr(proj.lora_dropout[adapter], "p", 0.0)) != 0.0:
+            # Dropout changes the adapter computation and mask lifetime. The
+            # single-projection kernel models the mask when it is asked to
+            # (``allow_dropout``); every other caller keeps handing dropout
+            # calls back to peft.
+            dropout = proj.lora_dropout[adapter]
+            dropout_p = float(getattr(dropout, "p", 0.0))
+            dropout_training = bool(getattr(dropout, "training", False))
+            if dropout_p != 0.0 and not allow_dropout:
+                return None
+            if allow_dropout and dropout_p >= 1.0:
+                # 1 / (1 - p) is undefined at p = 1; peft's native dropout
+                # handles that edge, so the opt-in delegates it too.
                 return None
             # Conv1D-style/transposed storage needs the PEFT fan-in/fan-out
             # path rather than the Linear weight orientation used below.
@@ -246,6 +285,8 @@ def _projection_state(
         qmeta,
         qparts,
         compute_dtype,
+        dropout_p,
+        dropout_training,
     )
 
 
@@ -297,7 +338,11 @@ def _single_projection_function() -> Any:
     import torch
 
     class _FastLoraSingleProjection(torch.autograd.Function):
-        """``Y = X @ W^T + b + s * (X @ A^T) @ B^T``, hand-written backward.
+        """``Y = X @ W^T + b + s * (X_d @ A^T) @ B^T``, hand-written backward.
+
+        ``X_d`` is ``X`` unless dropout is modelled (the opt-in path); there it
+        is ``X * keep / (1 - p)`` with ``keep`` the saved boolean mask, and the
+        base term above still reads the undropped ``X``.
 
         ``W`` and ``b`` are frozen during LoRA training, so the backward returns
         ``None`` for both, and the input gradient still carries the base term
@@ -312,13 +357,21 @@ def _single_projection_function() -> Any:
         """
 
         @staticmethod
-        def forward(ctx, x, weight, bias, lora_a, lora_b, scaling, quant_state):
+        def forward(
+            ctx, x, weight, bias, lora_a, lora_b, scaling, quant_state, dropout_p, dropout_training
+        ):
             import torch.nn.functional as functional
 
-            h = functional.linear(_as_dtype(x, lora_a.dtype), lora_a)  # [N, r]
+            keep = None
+            x_lora = x
+            if dropout_p > 0.0 and dropout_training:
+                keep, x_lora = _dropout_mask(x, dropout_p)
+            h = functional.linear(_as_dtype(x_lora, lora_a.dtype), lora_a)  # [N, r]
             if quant_state is None:
                 out = functional.linear(x, weight, bias)
-                ctx.save_for_backward(x, weight, lora_a, lora_b, h)
+                ctx.save_for_backward(
+                    x, weight, lora_a, lora_b, h, *((keep,) if keep is not None else ())
+                )
                 ctx.qmeta = None
             else:
                 from bitsandbytes.functional import dequantize_4bit
@@ -331,10 +384,21 @@ def _single_projection_function() -> Any:
                 )
                 del dense
                 qs_tensors, qs_meta = _quant_state_parts(quant_state)
-                ctx.save_for_backward(x, weight, lora_a, lora_b, h, *qs_tensors)
+                ctx.save_for_backward(
+                    x,
+                    weight,
+                    lora_a,
+                    lora_b,
+                    h,
+                    *((keep,) if keep is not None else ()),
+                    *qs_tensors,
+                )
                 ctx.qmeta = qs_meta
 
             ctx.scaling = float(scaling)
+            ctx.dropout_p = float(dropout_p)
+            ctx.dropout_active = keep is not None
+            ctx.qstart = 5 + (1 if keep is not None else 0)
             # ``torch.addmm(out, h, lora_b.t(), alpha=s)`` is the 2-D form of
             # this sum. matmul + add keeps one code path that also covers the
             # ``[B, S, H]`` inputs transformers hands to real projections, and
@@ -346,14 +410,21 @@ def _single_projection_function() -> Any:
         @torch.autograd.function.once_differentiable
         def backward(ctx, grad_out):
             scaling = ctx.scaling
-            x, weight, lora_a, lora_b, h = ctx.saved_tensors[:5]
+            # One access only: under a non-reentrant checkpoint the saved
+            # tensors go through an unpack hook that refuses a second read.
+            saved = ctx.saved_tensors
+            x, weight, lora_a, lora_b, h = saved[:5]
+            keep = saved[5] if ctx.dropout_active else None
+            # dA contracts against the DROPPED input; it is rebuilt from the
+            # saved mask rather than retaining peft's full-precision copy.
+            x_lora = x if keep is None else x * keep / (1.0 - ctx.dropout_p)
 
             # dB sums over every leading dimension, so flatten it; dB and dA
             # are weight-shaped regardless of the input's rank.
             grad_b = _as_dtype(_flatten(grad_out), h.dtype).t() @ _flatten(h) * scaling
-            # dH keeps the input's leading dimensions; dA = dH^T @ X.
+            # dH keeps the input's leading dimensions; dA = dH^T @ X_d.
             grad_h = torch.matmul(_as_dtype(grad_out, lora_b.dtype), lora_b) * scaling
-            grad_a = _flatten(grad_h).t() @ _as_dtype(_flatten(x), grad_h.dtype)
+            grad_a = _flatten(grad_h).t() @ _as_dtype(_flatten(x_lora), grad_h.dtype)
 
             grad_x = None
             if ctx.needs_input_grad[0]:
@@ -362,7 +433,7 @@ def _single_projection_function() -> Any:
                 else:
                     from bitsandbytes.functional import dequantize_4bit
 
-                    quant_state = _rebuild_quant_state(ctx.qmeta, list(ctx.saved_tensors[5:]))
+                    quant_state = _rebuild_quant_state(ctx.qmeta, list(saved[ctx.qstart :]))
                     dense = dequantize_4bit(weight, quant_state).to(x.dtype)
 
                 # dX = dY @ W, plus the LoRA term accumulated into the same
@@ -371,26 +442,33 @@ def _single_projection_function() -> Any:
                 # recovers the 2x the unskipped dX GEMM costs on a layer-0
                 # projection.
                 grad_x = torch.matmul(grad_out, _as_dtype(dense, grad_out.dtype))
-                grad_x = torch.add(
-                    grad_x,
-                    torch.matmul(
-                        _as_dtype(grad_h, grad_x.dtype), _as_dtype(lora_a, grad_x.dtype)
-                    ),
+                grad_lora = torch.matmul(
+                    _as_dtype(grad_h, grad_x.dtype), _as_dtype(lora_a, grad_x.dtype)
                 )
-            return grad_x, None, None, grad_a, grad_b, None, None
+                # The LoRA branch read the dropped input, so its gradient takes
+                # the mask and the 1/(1-p) rescale on the way back to X.
+                if keep is not None:
+                    grad_lora = grad_lora * keep / (1.0 - ctx.dropout_p)
+                grad_x = torch.add(grad_x, grad_lora)
+            return grad_x, None, None, grad_a, grad_b, None, None, None, None
 
     _FUNCTION = _FastLoraSingleProjection
     return _FUNCTION
 
 
-def _make_patched_forward(original_forward: Any) -> Any:
-    """Wrap a bound peft forward; delegate whenever peft's own path must run."""
+def _make_patched_forward(original_forward: Any, *, allow_dropout: bool = False) -> Any:
+    """Wrap a bound peft forward; delegate whenever peft's own path must run.
+
+    ``allow_dropout`` is the explicit opt-in for this kernel: with it, a
+    non-zero LoRA dropout is modelled (the mask is drawn, saved and applied in
+    the backward) instead of delegating to peft.
+    """
     fast = _single_projection_function()
 
     def _fast_lora_single_forward(self, x, *args, **kwargs):
         if args or kwargs:
             return original_forward(x, *args, **kwargs)
-        state = _projection_state(self, x)
+        state = _projection_state(self, x, allow_dropout=allow_dropout)
         if state is None:
             return original_forward(x)
 
@@ -407,6 +485,8 @@ def _make_patched_forward(original_forward: Any) -> Any:
             state.lora_b,
             state.scaling,
             None if state.qmeta is None else _rebuild_quant_state(state.qmeta, state.qparts),
+            state.dropout_p,
+            state.dropout_training,
         )
         return out if work_x is x else out.to(input_dtype)
 
@@ -414,12 +494,16 @@ def _make_patched_forward(original_forward: Any) -> Any:
     return _fast_lora_single_forward
 
 
-def patch_fast_lora_single_projection(model: Any) -> int:
+def patch_fast_lora_single_projection(model: Any, *, allow_dropout: bool = False) -> int:
     """Replace the forward of every single-projection LoRA linear in ``model``.
 
     Returns the number of patched modules so a caller can assert it patched
     something (``install_dequant_forward`` precedent). Already-patched modules
     are skipped, which makes the call idempotent.
+
+    ``allow_dropout`` opts this kernel into modelling non-zero LoRA dropout;
+    without it, dropout calls keep delegating to peft, which is the default
+    the MLP and QKV kernels and the tracker's validators assume.
     """
     import types
 
@@ -438,7 +522,9 @@ def patch_fast_lora_single_projection(model: Any) -> int:
         setattr(child, _ORIGINAL_FORWARD_MARKER, child.forward)
         setattr(child, _HAD_INSTANCE_FORWARD_MARKER, "forward" in vars(child))
         setattr(child, _PATCH_MARKER, True)
-        child.forward = types.MethodType(_make_patched_forward(child.forward), child)
+        child.forward = types.MethodType(
+            _make_patched_forward(child.forward, allow_dropout=allow_dropout), child
+        )
     return len(targets)
 
 

@@ -40,6 +40,8 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
+from tests._loopback_http import LoopbackHTTPServer
+
 _PUBLIC = "pk-lf-SOUPPLANTEDPUBLIC-5b1d"
 _SECRET = "sk-lf-SOUPPLANTEDSECRET-9e27"
 _BASIC = base64.b64encode(f"{_PUBLIC}:{_SECRET}".encode()).decode()
@@ -358,7 +360,7 @@ def loopback(monkeypatch):
             except (BrokenPipeError, ConnectionResetError):
                 pass
 
-    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    server = LoopbackHTTPServer(("127.0.0.1", 0), Handler)
     server.daemon_threads = True
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()

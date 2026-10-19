@@ -258,7 +258,21 @@ tasks:
 
 `judge_model` accepts `ollama://<model>`, `http://localhost:<port>/<model>` or `https://<host>/<model>`. An `https://` judge URL uses `OPENAI_API_KEY` only when its host is `api.openai.com`; other hosts are called as an OpenAI-compatible server without that key. A judge URL whose host is a private, link-local or reserved IP literal is refused when the suite loads (loopback stays allowed): `soup eval gate` and `soup train --gate` stop with the error, and a suite named in `training.eval_gate` is skipped with a warning. Address an internal judge by its hostname. A host written only as numbers that is not a valid IPv4 address (`10.0.0.256`, `4294967296`) is refused the same way.
 
+An eval gate must contain at least one task. Empty or missing `tasks` lists,
+including a misspelled key that leaves the list empty, are refused with a
+`ValueError` naming the suite and `tasks`; `soup eval gate` exits `3` before model
+construction or a verdict. Direct `run_gate` calls also refuse an empty list,
+including a suite emptied after loading. Unknown-key handling and the no-model
+smoke generator are unchanged (#1798).
+
+Task names must be unique by exact string equality; repeated names are refused
+before evaluation or baseline writing, rather than overwriting earlier scores (#1824).
+
 Baselines may be a registry reference (`registry://<name-or-id>`), a file path, or omitted for the first run. A registry baseline uses the newest eval row for each benchmark — re-measuring a benchmark replaces its baseline score — and warns, per benchmark, when that row's scorer stamp is missing or from a different scorer revision. A task whose evaluation raises (`ValueError`, `FileNotFoundError`, `OSError`, or a judge that stays unreachable) gets no score and fails the gate closed under `on_regression: stop`; the log line lists it as a task that could not be scored, with the error, rather than as a regression (#1447).
+
+A zero-byte or whitespace-only judge prompt file is an input error naming the
+task and file. It has no measured score, fails the gate even at threshold zero,
+and cannot create or replace a baseline when no other task was scored.
 
 
 ## Sequential A/B Harness (`soup ab`)
@@ -421,6 +435,10 @@ single regressed benchmark, or a missing baseline all yield DON'T SHIP (a missin
 # Live: base vs a LoRA adapter, metric leg + default mini benchmarks
 soup ship --base HuggingFaceTB/SmolLM2-135M-Instruct --adapter ./out \
   --task-eval tasks.jsonl --device cuda
+
+# Live: disable thinking when the model's chat template supports that variable
+soup ship --base <m> --adapter ./out --task-eval tasks.jsonl \
+  --chat-template-kwargs '{"enable_thinking": false}'
 
 # Leg-1 via LLM-as-a-judge instead of an accuracy metric
 soup ship --base <m> --adapter ./out --task-eval tasks.jsonl \
@@ -673,6 +691,49 @@ Smoothed BLEU uses Chen & Cherry epsilon for zero-correct buckets where
 force the score to 0.0.
 
 
+### Public live prompt preparation
+
+`make_generator` and `make_multi_generator` accept `chat_template_kwargs`, a dictionary
+of variables passed to the tokenizer's chat template. The default preserves existing
+rendering, including raw-prompt fallback when a template is absent or broken. When
+non-empty options are requested, a missing or broken template raises an error instead
+of silently ignoring those options. Whether a variable such as `enable_thinking` has an
+effect depends on the model's template.
+
+The public `encode_prompt` helper uses the same rendering, special-token handling and
+`MAX_PROMPT_TOKENS` budget (1024) as both generators. Template-rendered special tokens
+are not added a second time. With the default right truncation, over-budget prompts
+lose their trailing tokens, which can include the generation prompt, as before.
+For a caller-managed batch, prepare each prompt with
+`return_tensors=None`, then pad the resulting encodings with the same tokenizer:
+
+```python
+from soup_cli.utils.live_eval import MAX_PROMPT_TOKENS, encode_prompt, make_generator
+
+options = {"enable_thinking": False}
+encoded = [encode_prompt(tokenizer, prompt, chat_template_kwargs=options,
+                         return_tensors=None) for prompt in prompts]
+batch = tokenizer.pad(encoded, padding=True, return_tensors="pt").to(device)
+
+# Reuse an already-loaded, evaluation-mode model without patching the loader.
+generate = make_generator("unused", loaded=(model, tokenizer, device),
+                          chat_template_kwargs=options)
+answer = generate("hello")
+```
+
+Configure the tokenizer's padding side appropriately for your batched model. The
+helper prepares inputs; it does not run batched generation. Template options cannot
+override `conversation`, `tokenize`, `add_generation_prompt`, `continue_final_message`,
+`return_tensors`, `return_dict`, `padding`, `truncation`, `max_length`, `chat_template`
+or `return_assistant_tokens_mask`. Generators snapshot the supplied options, including
+nested values, at construction. With `loaded`, model loading options
+such as device and quantization are ignored; the supplied triple is used directly.
+
+`soup ship --chat-template-kwargs` accepts a JSON object, applies it equally to base
+and tuned generation, and refuses malformed options with usage exit code 3. The flag
+is live-only and cannot be combined with offline `--evidence`. It applies to live
+task generation; it does not configure the lm-eval benchmark legs.
+
 ## Quant Calibration (KL Divergence)
 
 Compare a quantized model to a full-precision baseline on a small fixed prompt
@@ -759,6 +820,12 @@ soup eval leaderboard --format csv
 # Human A/B evaluation with Elo ratings
 soup eval human --input prompts.jsonl --model-a ./model_a --model-b ./model_b
 ```
+
+Judge HTTP replies are limited to 1 MiB of decoded content while streaming,
+before JSON parsing, including gzip expansion. An oversized response is an
+unusable reply rather than a transient outage: it is not retried. The error names
+the cap and the endpoint selectors (`--api-base`, `--judge-api-base`, `judge_model`),
+with credentials removed from the judge URL. Existing row-failure policies apply.
 
 `soup eval benchmark` saves only requested names with numeric metrics, including a real
 `0.0` (not a boolean). Missing or scoreless results are skipped, named and counted;
@@ -857,6 +924,10 @@ soup eval quant-check --before X --after Y --tasks t.jsonl --allow-stub
 Paths are containment-checked, and `registry://` refs are resolved with an optional `kinds` filter so you never pick the wrong artifact. Standalone `.gguf` file paths are refused up front; pass directory paths containing safetensors/HuggingFace weights or `registry://` references.
 
 ### Custom Eval Format
+
+`scoring` must be a supported string label; omitted values default to `exact`.
+Invalid values name the `scoring` field and physical JSONL line, including blank
+lines, before model loading or result writes. `soup eval custom` exits 1 for these errors.
 
 Regex-scored custom tasks reject structurally unsafe patterns before matching
 model output and name `eval.custom.expected` in the error. The diagnose

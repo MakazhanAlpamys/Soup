@@ -57,10 +57,49 @@ def _invoke(args):
 _HOSTILE = "\x1b]0;pwned\x07 and \u009b31m done"
 
 
+#: What "a control byte" means, written out here rather than imported from
+#: ``utils/terminal.py``: C0 except TAB/LF/CR, DEL, and the C1 range. Same set as that
+#: module's strip table, but a wrong table there must not blind the check that guards it.
+_CONTROL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]")
+
+
 def _assert_no_control(text: str) -> None:
-    assert "\x1b" not in text, repr(text)
-    assert "\x07" not in text, repr(text)
-    assert "\u009b" not in text, repr(text)
+    """No terminal control byte in ``text`` once Rich's own colour is removed.
+
+    Under ``FORCE_COLOR=1`` a module-level ``Console()`` wraps its output in SGR
+    (``ESC [ ... m``), so a bare "no ESC in text" check fails on the colour itself. Only
+    SGR is stripped -- all Rich emits -- and deliberately not every CSI: a wider strip
+    would also swallow an injected ``ESC [ 2 J`` and call it clean.
+    """
+    found = _CONTROL_RE.findall(_ANSI_RE.sub("", text))
+    assert not found, (sorted({hex(ord(char)) for char in found}), repr(text))
+
+
+class TestAssertNoControlHelper:
+    """The guard behind every terminal-injection test below has to bite itself."""
+
+    def test_rich_colour_and_whitespace_are_not_control_bytes(self):
+        _assert_no_control("\x1b[31mCannot write:\x1b[0m \x1b[1;36m0\x1b[0m ok\tfine\r\n")
+
+    def test_the_hostile_constant_is_caught_bare_and_inside_colour(self):
+        for text in (_HOSTILE, f"\x1b[31m{_HOSTILE}\x1b[0m"):
+            with pytest.raises(AssertionError):
+                _assert_no_control(text)
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "\x1b[1m\x07\x1b[0m",  # a BEL between two colour codes
+            "\x1b[31m\x1b]0;pwned\x07\x1b[0m",  # an OSC title change inside colour
+            "ok \x1b[2J",  # a CSI that is not colour
+            "\x1b[31m\u009b31m\x1b[0m",  # a C1 CSI inside colour
+            "\x1b[mtext\x7f",  # DEL
+            "text\x00",  # NUL
+        ],
+    )
+    def test_a_control_byte_that_survives_the_colour_strip_fails(self, text):
+        with pytest.raises(AssertionError):
+            _assert_no_control(text)
 
 
 # ============================================================ 1. ReDoS =====

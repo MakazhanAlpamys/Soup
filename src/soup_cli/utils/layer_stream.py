@@ -19,7 +19,7 @@ stay resident.
 
 import math
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, Optional, Sequence, Tuple, Union
+from typing import Any, Callable, Dict, Mapping, Optional, Sequence, Tuple, Union
 
 from rich.panel import Panel
 
@@ -85,6 +85,11 @@ FLOPS_PER_PARAM_PER_TOKEN = 6
 #: reports ``model_type='gemma3'`` for the vision-capable wrapper, and streaming
 #: a multimodal wrapper as though it were a causal LM is exactly the failure the
 #: allowlist exists to prevent.
+#:
+#: ``deepseek_v3`` is the DeepSeek-V3 family (MLA attention, DeepSeekMoE with
+#: a shared expert, the first ``first_k_dense_replace`` layers dense). Kimi K2
+#: ships the same decoder under ``model_type='kimi_k2'``, which transformers
+#: does not register, so that name stays refused here too.
 SUPPORTED_STREAM_ARCHS = (
     "llama",
     "qwen2",
@@ -96,6 +101,7 @@ SUPPORTED_STREAM_ARCHS = (
     "gemma3_text",
     "phi",
     "phi3",
+    "deepseek_v3",
 )
 
 # Model types whose text decoders reuse an admitted streaming family.  Each
@@ -654,38 +660,65 @@ def _measure_seq_read_bytes_per_s(path: str) -> Optional[float]:
                 pass
 
 
+_LINUX_SYS_DEV_BLOCK = "/sys/dev/block"
+
+
+def _linux_block_kind(device: str, ancestors: frozenset[str] = frozenset()) -> str:
+    """Classify one sysfs device, following partitions and stacked-volume members."""
+    import os
+
+    device = os.path.realpath(device)
+    if device in ancestors or len(ancestors) >= 32 or not os.path.isdir(device):
+        return "unknown"
+    ancestors = ancestors | {device}
+    if os.path.exists(os.path.join(device, "partition")):
+        return _linux_block_kind(os.path.dirname(device), ancestors)
+    slaves = os.path.join(device, "slaves")
+    if os.path.isdir(slaves):
+        members = os.listdir(slaves)
+        if members:
+            kinds = {_linux_block_kind(os.path.join(slaves, name), ancestors) for name in members}
+            return next(kind for kind in ("hdd", "unknown", "ssd", _NVME) if kind in kinds)
+    if os.path.basename(device).startswith("nvme"):
+        return _NVME
+    rotational = os.path.join(device, "queue", "rotational")
+    if os.path.isfile(rotational):
+        with open(rotational, encoding="utf-8") as handle:
+            value = handle.read().strip()
+        return {"0": "ssd", "1": "hdd"}.get(value, "unknown")
+    return "unknown"
+
+
+def _linux_path_disk_kind(path: str) -> str:
+    """Attribute the volume to sysfs before reading its media type."""
+    import os
+
+    try:
+        dev = os.stat(os.path.expanduser(path)).st_dev
+        device = f"{_LINUX_SYS_DEV_BLOCK}/{os.major(dev)}:{os.minor(dev)}"
+        return _linux_block_kind(device)
+    except (OSError, ValueError):
+        return "unknown"
+
+
 def _probe_disk_kind(path: str) -> DiskClassification:
     """Classify the volume holding ``path``, carrying the measured rate only when
     the verdict was DERIVED from a read (so a refusal can never cite a rate that
     did not produce its own verdict — see ``DiskClassification``)."""
-    import os
     import platform
     import subprocess
 
     system = platform.system()
     try:
         if system == "Linux":
-            # /sys/block/<dev>/queue/rotational: 1 spinning, 0 solid state.
-            # The device name distinguishes NVMe, and rotational=0 is
-            # authoritative — a device that declares itself solid state is one.
-            # rotational=1 is NOT authoritative: virtio defaults it to 1 with no
-            # media hint, so a fast cloud disk lies as spinning (#365). Fall back
-            # to a measured read there rather than trust the flag.
-            names = sorted(os.listdir("/sys/block"))
-            for dev in names:
-                if not dev.startswith("nvme"):
-                    continue
-                return DiskClassification(_NVME)
-            for dev in names:
-                rot = os.path.join("/sys/block", dev, "queue", "rotational")
-                if os.path.exists(rot):
-                    with open(rot, encoding="utf-8") as handle:
-                        value = handle.read().strip()
-                    if value == "0":
-                        return DiskClassification("ssd")
-                    measured = _measure_seq_read_bytes_per_s(path)
-                    return DiskClassification(_classify_measured_read(measured), measured)
-            return DiskClassification("unknown")
+            kind = _linux_path_disk_kind(path)
+            if kind in (_NVME, "ssd"):
+                return DiskClassification(kind)
+            # rotational=1 can describe fast virtio storage (#365). Unknown
+            # volumes (network, overlay, missing sysfs) also need a path-based
+            # read, never the name of an unrelated physical disk (#1800).
+            measured = _measure_seq_read_bytes_per_s(path)
+            return DiskClassification(_classify_measured_read(measured), measured)
         if system == "Windows":
             shell = _resolve_tool("powershell", _POWERSHELL_FALLBACK)
             if shell is None:
@@ -1172,6 +1205,22 @@ def estimate_optimizer_bytes(
     return adapter_params * bytes_per_param
 
 
+def nf4_scale_cache_bytes(quant_specs: Mapping[str, Any], n_layers: int) -> int:
+    """Device bytes ``training.stream_nf4_scale_cache`` holds once every layer ran.
+
+    One fp32 scale per block of every double-quantised decoder weight, in every
+    layer. ``quant_specs`` is keyed by the layer-relative name shared across
+    layers, so a model whose layers do not all carry a weight is over-counted,
+    which is the safe direction for a number that can refuse a run.
+    """
+    per_layer = sum(
+        4 * -(-math.prod(spec.shape) // spec.blocksize)
+        for spec in quant_specs.values()
+        if spec.nested
+    )
+    return per_layer * n_layers
+
+
 def estimate_stream_peak_vram(
     *,
     layer_bytes: int,
@@ -1187,6 +1236,7 @@ def estimate_stream_peak_vram(
     dtype: str = "bfloat16",
     logits_bytes_per_element: Optional[float] = None,
     large_layer_bytes: int = 0,
+    persistent_bytes: int = 0,
 ) -> int:
     """Predicted ``torch.cuda.max_memory_allocated()`` for a streaming step.
 
@@ -1212,10 +1262,14 @@ def estimate_stream_peak_vram(
     ``logits_bytes_per_element`` forwards a stack measurement from
     :func:`calibrated_logits_bytes_per_element`; it is floored at the shipped
     constant, so passing it can only raise the prediction.
+
+    ``persistent_bytes`` is device memory the runtime holds for the whole run on
+    top of the pool, such as :func:`nf4_scale_cache_bytes`.
     """
     return (
         layer_bytes * buffers
         + large_layer_bytes
+        + persistent_bytes
         + extras_bytes
         + estimate_optimizer_bytes(adapter_params)
         + STREAM_FIXED_SLACK_BYTES

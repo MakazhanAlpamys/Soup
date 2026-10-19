@@ -9,6 +9,22 @@ import warnings
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from soup_cli.migrate.common import unmapped_keys_warning
+
+# The ``TrainingArguments`` / TRL ``*Config`` keywords the migrator maps or warns
+# about by name; any other keyword on the final stage's config is listed in one
+# "not migrated" warning so a dropped setting is never silent (#1807).
+_HANDLED_CONFIG_KWARGS = frozenset({
+    "per_device_train_batch_size", "num_train_epochs", "learning_rate", "optim",
+    "lr_scheduler_type", "output_dir", "beta", "max_steps", "gradient_accumulation_steps",
+    "weight_decay", "seed", "warmup_ratio", "warmup_steps", "loss_type",
+})
+
+# The ``get_peft_model`` keywords the migrator maps; the rest are listed the same way.
+_HANDLED_PEFT_KWARGS = frozenset({
+    "r", "lora_alpha", "lora_dropout", "target_modules", "use_dora", "use_rslora",
+})
+
 # Trainer class → Soup task mapping. #1214: "cpo" is provisional; CPOTrainer
 # migrates to simpo only with loss_type="simpo" and is refused otherwise.
 _TRAINER_MAP = {
@@ -227,6 +243,11 @@ def migrate_unsloth(notebook_path: Path) -> Dict[str, Any]:
         (n for n in ast.walk(tree) if isinstance(n, ast.Call)),
         key=lambda n: (n.lineno, n.col_offset),
     )
+    # Code under ``if False:`` never runs. The stock Unsloth notebook keeps its
+    # inference-time reload of the saved adapter there, after the training cell,
+    # and "last call wins" made ``base: lora_model`` out of it (#1807).
+    dead = _dead_code_spans(tree)
+    calls = [node for node in calls if not _in_dead_code(node, dead)]
     trainers = [node for node in calls if _get_func_name(node) in _TRAINER_MAP]
     trainer_configs = {_trainer_config(node, name_bindings) for node in trainers}
     last_trainer = trainers[-1] if trainers else None
@@ -253,21 +274,30 @@ def migrate_unsloth(notebook_path: Path) -> Dict[str, Any]:
             continue
 
         if func_name == "from_pretrained":
-            # FastLanguageModel.from_pretrained(...)
+            # FastLanguageModel.from_pretrained(...). The FIRST live call that names
+            # a model is the load that trains; a later one at top level is the
+            # notebook reloading what it saved (#1807). Everything below is read
+            # from that one call.
+            if base is not None:
+                continue
             unresolved: List[tuple[str, str]] = []
             kwargs = _extract_kwargs(node, scope=assignments, unresolved_names=unresolved)
+            candidate: Optional[str] = None
+            if node.args:
+                arg_val = _ast_to_value(node.args[0])
+                if arg_val is not _SENTINEL and isinstance(arg_val, str):
+                    candidate = arg_val
+            if isinstance(kwargs.get("model_name"), str):
+                candidate = kwargs["model_name"]
+            if candidate is None:
+                continue
+            base = candidate
             for kw_arg, var_name in unresolved:
                 if kw_arg in ("load_in_4bit", "load_in_8bit", "load_in_16bit", "full_finetuning"):
                     warnings.append(
                         f"Could not read precision argument '{kw_arg}' "
                         f"(passed as variable '{var_name}')."
                     )
-            if node.args:
-                arg_val = _ast_to_value(node.args[0])
-                if arg_val is not _SENTINEL and isinstance(arg_val, str):
-                    base = arg_val
-            if "model_name" in kwargs:
-                base = kwargs["model_name"]
             if "max_seq_length" in kwargs:
                 max_seq_length = kwargs["max_seq_length"]
             if "load_in_4bit" in kwargs:
@@ -294,6 +324,11 @@ def migrate_unsloth(notebook_path: Path) -> Dict[str, Any]:
                 lora_params["use_dora"] = kwargs["use_dora"]
             if "use_rslora" in kwargs and kwargs["use_rslora"]:
                 lora_params["use_rslora"] = True
+            dropped = unmapped_keys_warning(
+                _keyword_names(node), _HANDLED_PEFT_KWARGS, "get_peft_model argument"
+            )
+            if dropped is not None:
+                warnings.append(dropped)
 
         elif func_name in _TRAINER_MAP:
             # SFTTrainer(...), DPOTrainer(...), etc.
@@ -341,6 +376,31 @@ def migrate_unsloth(notebook_path: Path) -> Dict[str, Any]:
                     training_params["dpo_beta"] = kwargs["beta"]
                 elif task == "kto":
                     training_params["kto_beta"] = kwargs["beta"]
+            # #1807: these four were never read, so GA 16 trained as Soup's 4,
+            # weight decay 0.1 as 0.01, and the seed was lost.
+            if "gradient_accumulation_steps" in kwargs:
+                training_params["gradient_accumulation_steps"] = (
+                    kwargs["gradient_accumulation_steps"]
+                )
+            if "weight_decay" in kwargs:
+                training_params["weight_decay"] = kwargs["weight_decay"]
+            if "seed" in kwargs:
+                training_params["seed"] = kwargs["seed"]
+            if "warmup_ratio" in kwargs:
+                training_params["warmup_ratio"] = kwargs["warmup_ratio"]
+            if "warmup_steps" in kwargs:
+                # Soup derives the warmup length from training.warmup_ratio (and
+                # warmup_auto); a step count has no field to land in.
+                warnings.append(
+                    f"warmup_steps={kwargs['warmup_steps']} has no Soup equivalent: Soup "
+                    "sets warmup from training.warmup_ratio (default 0.03, in force until "
+                    "you change it). Pick the ratio that matches your dataset size."
+                )
+            dropped = unmapped_keys_warning(
+                _keyword_names(node), _HANDLED_CONFIG_KWARGS, f"{func_name} argument"
+            )
+            if dropped is not None:
+                warnings.append(dropped)
 
     if base is None:
         raise ValueError("No FastLanguageModel.from_pretrained() call found in notebook")
@@ -481,6 +541,39 @@ def _cpo_loss_type(
     if any(k.arg is None for k in config.keywords):  # CPOConfig(**kw)
         return _UNREAD
     return _extract_kwargs(config, scope=scope).get("loss_type")
+
+
+def _keyword_names(node: ast.Call) -> Dict[str, Any]:
+    """The explicit keyword names on a call, resolvable or not, for the unmapped listing.
+
+    ``_extract_kwargs`` keeps only values it can read; a dropped setting passed
+    as a variable is still dropped, so the listing works from names (#1807).
+    """
+    return {kw.arg: None for kw in node.keywords if kw.arg is not None}
+
+
+def _is_constant_false(test: ast.AST) -> bool:
+    """``if False:`` / ``if 0:`` / ``if None:`` — a suite that never runs."""
+    return isinstance(test, ast.Constant) and not test.value
+
+
+def _dead_code_spans(tree: ast.AST) -> List[tuple[int, int]]:
+    """Line spans of ``if <constant false>:`` bodies (not their ``else`` branches).
+
+    Unsloth's notebooks park the saved-adapter reload under ``if False:``; the
+    code is never executed, so nothing in it describes the run (#1807).
+    """
+    spans: List[tuple[int, int]] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.If) and _is_constant_false(node.test) and node.body:
+            first, last = node.body[0], node.body[-1]
+            end = getattr(last, "end_lineno", None) or last.lineno
+            spans.append((first.lineno, end))
+    return spans
+
+
+def _in_dead_code(node: ast.AST, spans: List[tuple[int, int]]) -> bool:
+    return any(start <= node.lineno <= end for start, end in spans)
 
 
 def _get_func_name(node: ast.Call) -> Optional[str]:

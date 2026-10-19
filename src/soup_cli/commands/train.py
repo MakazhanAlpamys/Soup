@@ -871,9 +871,11 @@ def train(
         console.print(f"[red]Invalid distributed launch:[/] {markup_escape(message)}")
         raise typer.Exit(1) from exc
 
+    from soup_cli.utils.terminal import for_terminal
+
     config_path = Path(config)
     if not config_path.exists():
-        console.print(f"[red]Config not found: {config_path}[/]")
+        console.print(f"[red]Config not found: {for_terminal(config_path)}[/]")
         console.print("Run [bold]soup init[/] to create one.")
         raise typer.Exit(1)
 
@@ -904,7 +906,8 @@ def train(
                 config_path, schedule, trust_remote_code=trust_remote_code,
             )
         except (SweepTooShortError, LrSweepUnavailableError) as exc:
-            console.print(f"[red]{markup_escape(str(exc))}[/]")
+            # The refusal can quote the config path and text from the file.
+            console.print(f"[red]{for_terminal(str(exc))}[/]")
             raise typer.Exit(1) from exc
         try:
             save_lr_finder_report(lrs, losses_for_report, find_lr_output)
@@ -915,7 +918,7 @@ def train(
         raise typer.Exit(0)
 
     # Load & validate config
-    console.print(f"[dim]Loading config from {config_path}...[/]")
+    console.print(f"[dim]Loading config from {for_terminal(config_path)}...[/]")
     cfg = load_config(
         config_path,
         training_overrides=(
@@ -945,7 +948,6 @@ def train(
     # An unregistered data.chat_template name raises KeyError in the trainer,
     # after the model has loaded. Check it before anything is downloaded.
     from soup_cli.data.chat_templates import resolve_chat_template
-    from soup_cli.utils.terminal import for_terminal
 
     try:
         resolve_chat_template(cfg.data.chat_template)
@@ -1141,7 +1143,7 @@ def train(
             # Validate the suite path up-front (path containment + parse).
             load_suite(gate)
         except (FileNotFoundError, ValueError) as exc:
-            console.print(f"[red]Invalid --gate suite: {exc}[/]")
+            console.print(f"[red]Invalid --gate suite: {for_terminal(str(exc))}[/]")
             raise typer.Exit(1) from exc
         cfg.training.eval_gate = EvalGateConfig(enabled=True, suite=gate)
         console.print(f"[green]Eval gate enabled[/] with suite: {gate}")
@@ -1832,9 +1834,9 @@ def train(
                         f"[dim]Fetched {cfg.base} from hub={hub_name} → "
                         f"{local_path}[/]"
                     )
-                # Use ``model_copy(update=...)`` so the Pydantic field
-                # validators on ``base`` rerun (matches v0.33.0 #47 / v0.40.0
-                # Part B immutability policy).
+                # model_copy replaces base without validation and leaves the
+                # original config untouched. local_path comes from download_repo
+                # under the cache directory checked above, so no revalidation is needed.
                 cfg = cfg.model_copy(update={"base": local_path})
             except ImportError as exc:
                 console.print(f"[red]{_markup_escape(str(exc))}[/]")
@@ -2599,7 +2601,9 @@ def _run_live_lr_sweep(
     from soup_cli.utils.lr_finder import LrSweepUnavailableError, SweepTooShortError
 
     try:
-        cfg = load_config(config_path)
+        # The refusal below quotes the reason, so the loader hands it over
+        # instead of printing its own line and exiting.
+        cfg = load_config(config_path, raise_unreadable=True)
     except Exception as exc:  # noqa: BLE001 — one refusal line, not a traceback
         raise LrSweepUnavailableError(
             f"--find-lr: config load failed ({exc}); no LR report was written."

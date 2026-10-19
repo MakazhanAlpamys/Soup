@@ -1,4 +1,4 @@
-<!-- synced-from: README.md sha256:a6789c2877515d5ac707160a55ab94cd84b390e2e31168b69d4f954a47c5562a -->
+<!-- synced-from: README.md sha256:7861d55b549aad1c5740d27f2fc72471270ed3011de8cbbf95ef23500e27fa99 -->
 <p align="center">🌍 <a href="README.md">English</a> | <strong>Türkçe</strong> | <a href="README.ar.md">العربية</a> | <a href="README.ja.md">日本語</a> | <a href="README.zh.md">中文</a></p>
 
 <p align="center">
@@ -61,12 +61,15 @@ soup train
 
 **4 GB dizüstü GPU'da 8B bir modele ince ayar yapın.** Katman akışı, dondurulmuş tabanı VRAM'in
 dışında tutar ve GPU'ya her seferinde bir kod çözücü katman besler. RTX 3050 Laptop 4 GB üzerinde
-ölçüldü: Llama-3.1-8B-Instruct + NF4 ile **119.6 tok/s, 3.32 GB tepe** — normal, belleğe tamamen
+ölçüldü: Llama-3.1-8B-Instruct + NF4 ile **952 MHz'de 119.6 tok/s, 3.32 GB tepe** (onarım öncesi) — normal, belleğe tamamen
 yerleşik bir çalıştırmayla bit düzeyinde özdeş ve bir H100 üzerinde aynı 3.32 GB'da 113.00 tok/s
 ile bağımsız olarak yeniden üretildi. (Her iki rakam da 32B'de %4.8 yavaşlamaya yol açan v0.73.0 sonuç-doğruluğu
-onarımından önce, v0.72.2'de ölçüldü; o zamandan beri hiçbiri 4 GB bir kartta yeniden
-çalıştırılmadı — yeniden ölçüm [#361](https://github.com/MakazhanAlpamys/Soup/issues/361)
-numaralı issue'da bekliyor.)
+onarımından önce, v0.72.2'de ölçüldü. Onarım sonrası çalıştırma, başka bir
+RTX 3050 Laptop 4 GB üzerinde (@umran666, #1103), **1935–1957 MHz'de 208.6 tok/s, 2.40 GB tepe**
+veriyor. Bu, aynı oturumda ölçülen GEMM tavanının %59'una denk geliyor; onarım öncesi satırda oran
+%68'di: birim saat frekansı başına yaklaşık %14 daha yavaş, yani ham 1.74x kazanç bir hızlanma değil,
+saat frekansı farkıdır. Büyük katman akışı da iki satır arasında bellek düzenini değiştirdi; bu yüzden
+bu oran bile bire bir karşılaştırma değildir — [kayıt](benchmarks/gate-v0.72.2-nf4.md).)
 İsteğe bağlıdır (`stream_layers: true`) ve hâlâ BETA —
 [nasıl çalışır](docs/performance-and-quantization.md#layer-streaming-beta-v0720-nf4-v0722-disk--wider-archs-v0723-preference-losses-v0724) ·
 [tüm ölçümler](benchmarks/) · [makale](https://doi.org/10.5281/zenodo.21771064) ·
@@ -74,8 +77,8 @@ numaralı issue'da bekliyor.)
 sınırlar, ardından akışlı bir modelin normal bir modelle bit düzeyinde özdeş olduğunu doğrular)
 
 <p align="center">
-  <a href="https://youtu.be/T1LCErE943E"><img src="docs/assets/layer-streaming.gif" alt="4 GB bir kartta Llama-3.1-8B için soup train ön kontrolü: 32 katman boyunca RAM'e sabitlenmiş 3.60 GB'lık bir taban deposu ve iki adet 113 MB VRAM tamponu, ardından 119.6 tok/s'de ölçülen 3.32 GB tepe; 4 GB çizgisinin altında kalıyor (v0.72.2'de ölçüldü, #331 onarımından önce; yeniden ölçüm #361 numaralı issue'da bekliyor)"></a><br>
-  <sub>Llama-3.1-8B-Instruct + NF4, LoRA, batch boyutu 1, dizi uzunluğu 512, RTX 3050 Laptop 4 GB üzerinde — <b>3.32 GB tepe, 119.6 tok/s</b> (v0.72.2'de ölçüldü, #331 onarımından önce; yeniden ölçüm #361 numaralı issue'da bekliyor). <a href="https://youtu.be/T1LCErE943E">Tam video (90 sn)</a></sub>
+  <a href="https://youtu.be/T1LCErE943E"><img src="docs/assets/layer-streaming.gif" alt="4 GB bir kartta Llama-3.1-8B için soup train ön kontrolü: 32 katman boyunca RAM'e sabitlenmiş 3.60 GB'lık bir taban deposu ve iki adet 113 MB VRAM tamponu, ardından 119.6 tok/s'de ölçülen 3.32 GB tepe; 4 GB çizgisinin altında kalıyor (onarım öncesi satır, v0.72.2'de 952 MHz'de ölçüldü; #331 sonrası satır aşağıdaki açıklamada)"></a><br>
+  <sub>Llama-3.1-8B-Instruct + NF4, LoRA, batch boyutu 1, dizi uzunluğu 512, RTX 3050 Laptop 4 GB üzerinde — <b>3.32 GB tepe, 119.6 tok/s</b>, 952 MHz'de (onarım öncesi, v0.72.2; #331 sonrası: 1935 MHz'de 208.6 tok/s, 2.40 GB, doğrudan karşılaştırılamaz, @umran666, #1103). <a href="https://youtu.be/T1LCErE943E">Tam video (90 sn)</a></sub>
 </p>
 
 ## Neden Soup?
@@ -455,9 +458,13 @@ bu aynı zamanda makalenin ne işe yaradığını anlatmanın en kısa yoludur:
   ([kayıt](benchmarks/probe-v0.73.0-what-bounds-streaming.md)). Her ölçüm geçerliliğini koruyor;
   yeniden üretim daha zayıf bir biçimde ayakta kalıyor — kısıt her iki makinede ortak ve GPU'nun
   hesaplama gücü değil.
-- **Özgününe hiç benzemeyen donanımda yeniden üretim** (v2'de eklendi): RTX 3050'de 119.6 tok/s'ye
-  karşı bir H100'de medyan 113.00, aynı 3.32 GB tepede. İkisi de #331 onarımından önce
-  ölçüldü; 4 GB yeniden ölçümü #361 numaralı issue'da bekliyor.
+- **Özgününe hiç benzemeyen donanımda yeniden üretim** (v2'de eklendi): RTX 3050'de (952 MHz'de)
+  119.6 tok/s'ye karşı bir H100'de medyan 113.00, aynı 3.32 GB tepede. İkisi de #331 onarımından
+  önce ölçüldü ve makalenin bildirdiği rakamlar bunlardır. #331 sonrası satır (@umran666, #1103),
+  1935–1957 MHz'de 208.6 tok/s ve 2.40 GB tepedir; aynı oturumda ölçülen GEMM tavanının %68'ine
+  karşı %59'u. Ham 1.74x kazanç bir hızlanma değil, saat frekansı farkıdır; satırlar arasında bellek
+  düzeni de değişti, bu yüzden bu oran bile bire bir karşılaştırma değildir
+  ([kayıt](benchmarks/gate-v0.72.2-nf4.md)).
 - **Sessiz bir yanlış gradyan kusuru, bulundu ve onarıldı.** Katman başına ~165 MiB'ın üzerindeki
   NF4'te ileri geçiş bit düzeyinde özdeş kaldı ve kayıp eğrisi sağlıklı göründü, ama gradyanlar
   yanlıştı. Neden, upstream kütüphanede adıyla belirtildi ve orada bildirildi; onarım, gerçek 32B
@@ -494,4 +501,4 @@ dahil.
 
 ## Lisans
 
-[Apache-2.0](LICENSE). Telif hakkı © Soup katkıda bulunanları.
+[Apache-2.0](LICENSE). Copyright 2026 Makazhan Alpamys and the Soup contributors. Soup'u veya değiştirilmiş bir kopyasını yeniden dağıtırsanız lisansın 4. ve 6. maddeleri sizin için geçerlidir: her kopyayla birlikte `LICENSE` ve `NOTICE` dosyalarını koruyun, değiştirdiğiniz dosyaları işaretleyin ve Soup adını eserin kaynağını belirtmenin ötesinde kullanmayın.

@@ -47,7 +47,7 @@
 - [RAFT — Retrieval-Augmented Fine-Tuning](#raft--retrieval-augmented-fine-tuning)
 - [RA-DIT — Retrieval-Augmented Dual Instruction Tuning](#ra-dit--retrieval-augmented-dual-instruction-tuning)
 - [Curriculum-Aware Training (BETA)](#curriculum-aware-training-beta)
-- [TTS Fine-Tuning (BETA, v0.52.0)](#tts-fine-tuning-beta-v0520)
+- [TTS Fine-Tuning (BETA, live in v0.71.20)](#tts-fine-tuning-tasktts-beta-live-in-v07120)
 - [Classifier / Reranker / Cross-Encoder Training (BETA, v0.52.0)](#classifier--reranker--cross-encoder-training-beta-v0520)
 - [Knowledge Distillation (BETA, v0.52.0)](#knowledge-distillation-beta-v0520)
 - [EBFT + GDPO (BETA, v0.52.0)](#ebft--gdpo-beta-v0520)
@@ -308,6 +308,13 @@ contradiction rather than something to silently ignore — and with the other tw
 decides what trains. It cannot be combined with layer streaming: streaming keeps
 the decoder on the meta device and trains only the adapter, so there would be
 nothing to full fine-tune.
+
+`task: pretrain` refuses `lora.r: 0` at config load
+([#1813](https://github.com/MakazhanAlpamys/Soup/issues/1813)): its trainer
+always attaches a LoRA adapter, so a rank of 0 would only fail inside peft when
+training starts. To train the base weights there, use LISA (`lisa_enabled: true`),
+which trains a rotating set of whole layers without an adapter and so still
+accepts `lora.r: 0`, or switch to `task: sft`.
 
 `freeze_layers` / `freeze_ratio` **do** stay legal with `r: 0` — "train
 everything above layer N" is a real technique — and the trainer respects
@@ -991,14 +998,14 @@ The combine wrapper computes a weighted sum via the in-tree
 `compute_dpo_term` / `compute_simpo_term` / `compute_orpo_term` /
 `compute_ipo_term` kernels. The loss with the largest weight is the *primary*:
 its trl trainer is the one that is built, and on trl 0.29 the per-sequence
-log-probs the kernels need are read out of that trainer's own forward pass. So
-which blends train depends on which trainer is built:
+log-probs the kernels need are read out of that trainer's own forward pass.
+Where they come from depends on which trainer is built:
 
 | Blend | Result on trl 0.29 |
 | --- | --- |
 | `simpo` + `orpo` | Trains. The CPO (SimPO) and ORPO trainers both return their per-sequence log-probs (`concatenated_forward`). |
 | `dpo` or `ipo` has the largest weight, with any of `dpo`, `ipo`, `simpo`, `orpo` beside it | Trains. Both build trl's `DPOTrainer`: the policy log-probs are taken from the logits of its own forward pass, the reference log-probs from its `compute_ref_log_probs`. |
-| `simpo` or `orpo` has the largest weight, and the blend names `dpo` or `ipo` | Stops at the first step and names the terms. `dpo` and `ipo` compare the policy with a frozen reference, and the CPO / ORPO trainers run none. Give `dpo` or `ipo` the largest weight instead. |
+| `simpo` or `orpo` has the largest weight, and the blend names `dpo` or `ipo` | Trains. The CPO / ORPO trainers run no reference, so the blend runs one: the same forward once more, without gradients and with the LoRA adapter switched off. Refused with `init_strategy: pissa` / `olora` / `loftq` or `relora_steps`, where that is not the starting model ("Which reference" below). |
 | `bco` mixed with anything | Rejected at config load (data format incompatible). |
 
 **What a term is.** In a blend, `simpo` and `orpo` are their *preference terms
@@ -1018,15 +1025,41 @@ whichever of them is the primary, so `{dpo: 0.5, ipo: 0.5}` and
 `{ipo: 0.5, dpo: 0.5}` are the same loss. `dpo_beta_schedule` is not available
 with a blend.
 
-**Cost of a `dpo` / `ipo` primary.** The policy is run once, as in a
-single-loss run. The reference is run twice per step: trl computes its own
-reference log-probs inline and keeps only their means, so the blend asks the
-trainer for them again (`compute_ref_log_probs`, without gradients). With
-16-bit logits (bf16 or fp16 autocast) the blend also keeps one more tensor the
-size of the logits for the backward pass, next to the one trl's own loss
-keeps: 2 bytes × rows × tokens × vocabulary, where a batch of 4 pairs is 8
-rows. That is about 250 MiB for 4 pairs of 512 tokens and a 32,000-token
-vocabulary. With float32 logits it keeps none.
+**Which reference.** Under a `dpo` / `ipo` primary it is trl's: the frozen
+`ref` adapter, a copy of the adapter as it started. Under a `simpo` / `orpo`
+primary it is the base model with the adapter switched off. For a new LoRA
+adapter, whose update starts at zero, the two compute the same thing.
+
+That holds while the base weights are the ones that were loaded, which covers
+the default init (`init_strategy: random`), DoRA and rsLoRA.
+`init_strategy: pissa`, `olora` and `loftq` (and `use_olora`) move part of
+every targeted weight into the adapter and leave a residual in the base, and
+`relora_steps` merges the adapter into the base at every restart; with the
+adapter off the model is then no longer the one the policy started from. A
+`dpo` / `ipo` term under a `simpo` / `orpo` primary is refused with either of
+them, before the model is loaded. With such an init, give `dpo` or `ipo` the
+largest weight: trl's copy of the adapter carries the residual's other half,
+so its reference is still the starting model.
+
+**Which tokens.** The terms are computed on the primary trainer's batch, and
+the two trainer families do not render a row the same way: the CPO / ORPO
+batches start with the tokenizer's BOS token, and the `DPOTrainer`'s need not
+(with a plain tokenizer and no chat template they do not). An even split
+between a reference loss and a reference-free one therefore depends on which
+key comes first, because the first key is the primary.
+
+**Cost.** The policy is run once per step, as in a single-loss run. A `dpo` /
+`ipo` primary runs the reference twice: trl computes its own reference
+log-probs inline and keeps only their means, so the blend asks the trainer for
+them again (`compute_ref_log_probs`, without gradients). A `simpo` / `orpo`
+primary runs the reference once, and only when the blend names `dpo` or `ipo`;
+with `val_split` it runs on evaluation batches too.
+
+With 16-bit logits (bf16 or fp16 autocast) a `dpo` / `ipo` primary also keeps
+one more tensor the size of the logits for the backward pass, next to the one
+trl's own loss keeps: 2 bytes × rows × tokens × vocabulary, where a batch of 4
+pairs is 8 rows. That is about 250 MiB for 4 pairs of 512 tokens and a
+32,000-token vocabulary. With float32 logits it keeps none.
 
 **Evaluation.** With `val_split` set and a `simpo` / `orpo` primary, trl's
 `prediction_step` calls `get_batch_loss_metrics` directly, so the eval loss is
@@ -1367,10 +1400,9 @@ training:
 ```
 
 Schema validates 2–5 entries summing to 1, and rejects `bco` mixed with a
-paired loss at config load. On trl 0.29 a `simpo` + `orpo` blend trains, and
-so does a blend whose largest weight is `dpo` or `ipo`. A `dpo` or `ipo` term
-under a `simpo` / `orpo` primary stops at the first step naming the terms it
-could not compute, because those trainers run no frozen reference
+paired loss at config load. On trl 0.29 every blend of `dpo`, `ipo`, `simpo`
+and `orpo` trains; which reference and which tokens the terms use depends on
+the loss with the largest weight
 (see [Weighted Multi-Objective Preference Loss](#weighted-multi-objective-preference-loss)).
 Set `training.preference_loss` for a single loss.
 
@@ -1865,7 +1897,7 @@ score = score_citations(
 # CitationScore(precision=1.0, recall=1.0, f1=1.0, predicted_count=1, expected_count=1)
 ```
 
-Citation-faithful FT is gated to `task in {sft, pretrain}` + `data.format='raft'` — misconfigured runs fail at config load with a named-field message.
+Citation-faithful FT requires `task: sft` + `data.format: raft` — misconfigured runs fail at config load with a named-field message. The pretrain trainer does not apply citation span weights and refuses `training.citation_faithful: true`.
 
 Under the hood, a `format: raft` run trains **answer-only**: each row is composed into a prompt (golden + distractor docs, shuffled deterministically by `data.raft_shuffle_seed`, each labelled `[doc-N]`) followed by the answer; the prompt span is masked out of the loss and — when `citation_faithful: true` — the bracketed `[doc-id]` spans in the answer get a boosted per-token loss weight. Rows whose prompt fills `max_length` (answer fully truncated) are dropped with a warning rather than silently shrinking the dataset.
 
@@ -2098,8 +2130,9 @@ the trained router, see `soup serve --mole` in [Serving and Export](serving-and-
 
 ## Architecture Knobs — Mixture-of-Depths, LLaMA Pro, LongLoRA
 
-Two architecture transforms that were schema-only are now live for SFT / Pretrain on
-Llama / Qwen / Mistral. Both apply at trainer setup:
+Two architecture transforms that were schema-only are now live on Llama / Qwen / Mistral:
+Mixture-of-Depths on SFT and pretrain, LLaMA Pro on SFT only
+([#1813](https://github.com/MakazhanAlpamys/Soup/issues/1813)). Both apply at trainer setup:
 
 ```yaml
 training:

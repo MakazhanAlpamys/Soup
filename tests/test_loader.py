@@ -46,6 +46,50 @@ def test_load_csv(tmp_path: Path):
     assert data[1]["output"] == "ML is..."
 
 
+@pytest.mark.parametrize("suffix", ["json", "jsonl", "csv", "txt"])
+@pytest.mark.parametrize("bom", [False, True], ids=["plain", "bom"])
+def test_utf8_bom_datasets_match_plain_utf8(tmp_path: Path, suffix: str, bom: bool) -> None:
+    """A BOM is an encoding signature, not a field name or document character."""
+    rows = [{"instruction": "Сұрақ", "input": "", "output": "Жауап"},
+            {"instruction": "Question", "input": "", "output": "Answer"}]
+    bodies = {
+        "json": json.dumps(rows, ensure_ascii=False),
+        "jsonl": "\n".join(json.dumps(row, ensure_ascii=False) for row in rows) + "\n",
+        "csv": "instruction,input,output\r\nСұрақ,,Жауап\r\nQuestion,,Answer\r\n",
+        "txt": "Сұрақ\n\nQuestion\n",
+    }
+    expected = [{"text": "Сұрақ"}, {"text": "Question"}] if suffix == "txt" else rows
+    path = tmp_path / f"data.{suffix}"
+    path.write_bytes((b"\xef\xbb\xbf" if bom else b"") + bodies[suffix].encode("utf-8"))
+    assert load_raw_data(path) == expected
+
+
+def test_excel_utf8_bom_csv_is_detected_as_alpaca(tmp_path: Path) -> None:
+    from soup_cli.data.formats import detect_format, format_to_messages
+
+    path = tmp_path / "excel.csv"
+    path.write_bytes(b"\xef\xbb\xbf" + (
+        'instruction,input,output\r\n"Question, with comma",context,Answer\r\n'
+    ).encode("utf-8"))
+    rows = load_raw_data(path)
+    assert detect_format(rows) == "alpaca"
+    assert format_to_messages(rows[0], "alpaca") == {"messages": [
+        {"role": "user", "content": "Question, with comma\ncontext"},
+        {"role": "assistant", "content": "Answer"},
+    ]}
+
+
+@pytest.mark.parametrize("suffix, body", [
+    ("json", '[{"text":"inner\ufeffmarker"}]'),
+    ("csv", "text\r\ninner\ufeffmarker\r\n"),
+    ("txt", "inner\ufeffmarker\n"),
+])
+def test_bom_codec_preserves_embedded_character(tmp_path: Path, suffix: str, body: str) -> None:
+    path = tmp_path / f"data.{suffix}"
+    path.write_bytes(b"\xef\xbb\xbf" + body.encode("utf-8"))
+    assert load_raw_data(path) == [{"text": "inner\ufeffmarker"}]
+
+
 def test_load_nonexistent_file(tmp_path: Path):
     """Loading nonexistent file should raise FileNotFoundError."""
     with pytest.raises(FileNotFoundError):

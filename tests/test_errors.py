@@ -30,6 +30,7 @@ def test_cuda_oom_error():
     # v0.53.4 #11 — message now suggests --batch-size / --grad-accum CLI flags.
     assert "gradient_checkpointing" in output
     assert "4bit" in output
+    assert "data.max_length" in output
 
 
 def test_missing_fastapi_error():

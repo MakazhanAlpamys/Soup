@@ -1,4 +1,4 @@
-<!-- synced-from: README.md sha256:a6789c2877515d5ac707160a55ab94cd84b390e2e31168b69d4f954a47c5562a -->
+<!-- synced-from: README.md sha256:7861d55b549aad1c5740d27f2fc72471270ed3011de8cbbf95ef23500e27fa99 -->
 <p align="center">🌍 <a href="README.md">English</a> | <a href="README.tr.md">Türkçe</a> | <a href="README.ar.md">العربية</a> | <strong>日本語</strong> | <a href="README.zh.md">中文</a></p>
 
 <p align="center">
@@ -61,11 +61,14 @@ soup train
 
 **4 GB のノート PC 用 GPU で、8B モデルをファインチューニングできます。** レイヤーストリーミングは、凍結したベースモデルを
 VRAM の外に置き、デコーダー層を一層ずつ GPU に送り込みます。RTX 3050 Laptop 4 GB での実測値:
-Llama-3.1-8B-Instruct + NF4 で **119.6 tok/s、ピーク 3.32 GB** — 全体をメモリに常駐させた通常の実行とビット単位で
+Llama-3.1-8B-Instruct + NF4 で **952 MHz 時に 119.6 tok/s、ピーク 3.32 GB**（修正前）— 全体をメモリに常駐させた通常の実行とビット単位で
 完全に一致し、H100 でも同じ 3.32 GB で 113.00 tok/s と独立に再現されました。
-（どちらの数値も v0.72.2 で、v0.73.0 の正確性修正（32B で −4.8% のコスト）より前に測定したもので、
-それ以降 4 GB のカードでは再実行していません — 再測定は issue
-[#361](https://github.com/MakazhanAlpamys/Soup/issues/361) で保留中です。）オプトイン方式（`stream_layers: true`）で、
+（どちらの数値も v0.72.2 で、v0.73.0 の正確性修正（32B で −4.8% のコスト）より前に測定したものです。
+修正後の実行は、別の RTX 3050 Laptop 4 GB（@umran666、#1103）で
+**1935–1957 MHz 時に 208.6 tok/s、ピーク 2.40 GB** でした。これは同一セッションでの GEMM 上限の 59% にあたり、
+修正前の 68% に対して、クロックあたりでは約 14% 遅いことになります。つまり、見かけの 1.74x の向上は高速化ではなく
+クロックの差です。大きなレイヤーのストリーミングによって両行のあいだでメモリの使われ方も変わっているため、この割合でさえ
+同じ条件での比較ではありません — [記録](benchmarks/gate-v0.72.2-nf4.md)。）オプトイン方式（`stream_layers: true`）で、
 まだ BETA です —
 [仕組み](docs/performance-and-quantization.md#layer-streaming-beta-v0720-nf4-v0722-disk--wider-archs-v0723-preference-losses-v0724) ·
 [すべての測定結果](benchmarks/) · [論文](https://doi.org/10.5281/zenodo.21771064) ·
@@ -73,8 +76,8 @@ Llama-3.1-8B-Instruct + NF4 で **119.6 tok/s、ピーク 3.32 GB** — 全体�
 ストリーミングしたモデルが通常のモデルとビット単位で同一であることを検証します）
 
 <p align="center">
-  <a href="https://youtu.be/T1LCErE943E"><img src="docs/assets/layer-streaming.gif" alt="4 GB のカードでの Llama-3.1-8B 向け soup train の事前チェック: 32 層にわたって RAM 上に固定された 3.60 GB のベースストアと、113 MB の VRAM バッファ 2 つ。その後、119.6 tok/s で測定されたピークは 3.32 GB で、4 GB のラインの手前に収まっています（v0.72.2 で測定、#331 の修正前。再測定は issue #361 で保留中）"></a><br>
-  <sub>Llama-3.1-8B-Instruct + NF4、LoRA、バッチサイズ 1、シーケンス長 512、RTX 3050 Laptop 4 GB — <b>ピーク 3.32 GB、119.6 tok/s</b>（v0.72.2 で測定、#331 の修正前。再測定は issue #361 で保留中）。 <a href="https://youtu.be/T1LCErE943E">動画（90 秒）</a></sub>
+  <a href="https://youtu.be/T1LCErE943E"><img src="docs/assets/layer-streaming.gif" alt="4 GB のカードでの Llama-3.1-8B 向け soup train の事前チェック: 32 層にわたって RAM 上に固定された 3.60 GB のベースストアと、113 MB の VRAM バッファ 2 つ。その後、119.6 tok/s で測定されたピークは 3.32 GB で、4 GB のラインの手前に収まっています（修正前の行。v0.72.2、952 MHz で測定。#331 修正後の行は下のキャプションを参照）"></a><br>
+  <sub>Llama-3.1-8B-Instruct + NF4、LoRA、バッチサイズ 1、シーケンス長 512、RTX 3050 Laptop 4 GB — <b>ピーク 3.32 GB、119.6 tok/s</b>、952 MHz 時（修正前、v0.72.2。#331 修正後: 1935 MHz 時に 208.6 tok/s、2.40 GB。直接の比較はできません。@umran666、#1103）。 <a href="https://youtu.be/T1LCErE943E">動画（90 秒）</a></sub>
 </p>
 
 ## なぜSoupなのか
@@ -447,9 +450,12 @@ Soup に関するあらゆる件の正しい連絡先です。**makazanalpamys@g
   レイヤーごとの NF4 逆量子化で、9.8% です
   （[記録](benchmarks/probe-v0.73.0-what-bounds-streaming.md)）。すべての測定値は有効なままです。再現は弱い形で
   残ります — この制約は両方のマシンに共通であり、GPU の計算能力ではありません。
-- **元とはまったく異なるハードウェアでの再現**（v2 で追加）: RTX 3050 で 119.6 tok/s、H100 で中央値
-  113.00 tok/s、ピークはどちらも 3.32 GB です。どちらも #331 の修正より前のもので、4 GB での再測定は
-  issue #361 で保留中です。
+- **元とはまったく異なるハードウェアでの再現**（v2 で追加）: RTX 3050 で 119.6 tok/s（952 MHz 時）、H100 で中央値
+  113.00 tok/s、ピークはどちらも 3.32 GB です。どちらも #331 の修正より前のもので、論文が報告しているのはこの数値です。
+  #331 修正後の行（@umran666、#1103）は、1935–1957 MHz 時に 208.6 tok/s、ピーク 2.40 GB で、同一セッションでの
+  GEMM 上限に対する割合は 59%（修正前は 68%）です。見かけの 1.74x の向上は高速化ではなくクロックの差であり、
+  両行のあいだでメモリの使われ方も変わっているため、この割合でさえ同じ条件での比較ではありません
+  （[記録](benchmarks/gate-v0.72.2-nf4.md)）。
 - **サイレントな勾配誤りの欠陥を発見し、修正しました。** レイヤーあたり約 165 MiB を超える NF4 では、
   順伝播はビット単位で一致したままで、損失曲線も健全に見えましたが、勾配が誤っていました。原因は上流
   ライブラリで特定され、そこに報告されています。修正は、実際の 32B と 72B でのコントロールに対して
@@ -483,4 +489,4 @@ Soup に関するあらゆる件の正しい連絡先です。**makazanalpamys@g
 
 ## ライセンス
 
-[Apache-2.0](LICENSE)。Copyright © Soup コントリビューター。
+[Apache-2.0](LICENSE)。Copyright 2026 Makazhan Alpamys and the Soup contributors。Soup またはその改変コピーを再配布する場合は、ライセンスの第4条と第6条が適用されます。コピーごとに `LICENSE` と `NOTICE` を保持し、変更したファイルにその旨を明記し、作品の出所を述べる範囲を超えて Soup の名称を使用しないでください。

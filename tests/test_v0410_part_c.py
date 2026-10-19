@@ -212,12 +212,19 @@ class TestSchemaBlockExpansion:
         with pytest.raises(ValidationError, match="requires training.quantization: none"):
             _sft(expand_layers=2, freeze_trainable_layers=2, load_in_8bit=True)
 
-    @pytest.mark.parametrize("task", ["sft", "pretrain"])
-    def test_default_quantization_refused_through_the_loader(self, task):
+    @pytest.mark.parametrize(
+        "task,refusal",
+        [
+            ("sft", "requires training.quantization: none"),
+            # #1813: pretrain is outside the expand_layers scope, so the scope refusal comes first.
+            ("pretrain", "only trains the appended blocks on task sft"),
+        ],
+    )
+    def test_default_quantization_refused_through_the_loader(self, task, refusal):
         # #1237's acceptance box: task sft AND pretrain, through the loader `soup train` uses.
         from soup_cli.config.loader import load_config_from_string
 
-        with pytest.raises(ValueError, match="requires training.quantization: none"):
+        with pytest.raises(ValueError, match=refusal):
             load_config_from_string(
                 "base: org/model\n"
                 f"task: {task}\n"
@@ -229,7 +236,7 @@ class TestSchemaBlockExpansion:
         "task,backend", [("dpo", "transformers"), ("sft", "mlx"), ("sft", "unsloth")]
     )
     def test_scope_refusal_precedes_the_quantization_refusal(self, task, backend):
-        with pytest.raises(ValidationError, match="only wired for task sft/pretrain"):
+        with pytest.raises(ValidationError, match="only trains the appended blocks on task sft"):
             SoupConfig(
                 base="fake-org/fake-model",
                 task=task,

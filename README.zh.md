@@ -1,4 +1,4 @@
-<!-- synced-from: README.md sha256:a6789c2877515d5ac707160a55ab94cd84b390e2e31168b69d4f954a47c5562a -->
+<!-- synced-from: README.md sha256:7861d55b549aad1c5740d27f2fc72471270ed3011de8cbbf95ef23500e27fa99 -->
 <p align="center">🌍 <a href="README.md">English</a> | <a href="README.tr.md">Türkçe</a> | <a href="README.ar.md">العربية</a> | <a href="README.ja.md">日本語</a> | <strong>中文</strong></p>
 
 <p align="center">
@@ -61,10 +61,13 @@ soup train
 
 **在 4 GB 笔记本 GPU 上微调 8B 模型。** Layer streaming 让冻结的基座模型不占
 显存，按解码层逐层送入 GPU。在 RTX 3050 Laptop 4 GB 上实测：Llama-3.1-8B-Instruct +
-NF4 达到 **119.6 tok/s，峰值 3.32 GB**——与常规常驻显存的运行逐位一致，并在 H100 上
+NF4 达到 **952 MHz 下 119.6 tok/s，峰值 3.32 GB**（修复前）——与常规常驻显存的运行逐位一致，并在 H100 上
 以同样的 3.32 GB 独立复现出 113.00 tok/s。（两个数字都测自 v0.72.2，早于 v0.73.0 那次
-在 32B 上付出 −4.8% 代价的正确性修复；此后没有在 4 GB 卡上重测——复测进度见 issue
-[#361](https://github.com/MakazhanAlpamys/Soup/issues/361)。）需显式开启
+在 32B 上付出 −4.8% 代价的正确性修复。修复后的复测在另一台 RTX 3050 Laptop 4 GB
+上完成（@umran666，#1103），结果是 **1935–1957 MHz 下 208.6 tok/s，峰值 2.40 GB**。这相当于
+同场 GEMM 上限的 59%，而修复前是 68%：按单位时钟频率折算大约慢 14%，所以表面上 1.74x 的提升来自
+时钟频率，而不是加速。large-layer streaming 也改变了两组数据之间的内存占用方式，因此连这个比例也不是
+同口径的对比——[完整记录](benchmarks/gate-v0.72.2-nf4.md)。）需显式开启
 （`stream_layers: true`），仍是 BETA——
 [工作原理](docs/performance-and-quantization.md#layer-streaming-beta-v0720-nf4-v0722-disk--wider-archs-v0723-preference-losses-v0724) ·
 [全部实测数据](benchmarks/) · [论文](https://doi.org/10.5281/zenodo.21771064) ·
@@ -72,8 +75,8 @@ NF4 达到 **119.6 tok/s，峰值 3.32 GB**——与常规常驻显存的运行�
 然后断言流式模型与常驻模型逐位一致）
 
 <p align="center">
-  <a href="https://youtu.be/T1LCErE943E"><img src="docs/assets/layer-streaming.gif" alt="在 4 GB 卡上对 Llama-3.1-8B 执行 soup train 的预检：3.60 GB 基座固定在内存中跨 32 层流转，配两个 113 MB 显存缓冲，实测峰值 3.32 GB、119.6 tok/s，停在 4 GB 线以内（测自 v0.72.2，早于 #331 修复；复测进度见 issue #361）"></a><br>
-  <sub>Llama-3.1-8B-Instruct + NF4、LoRA、batch 1、seq 512，RTX 3050 Laptop 4 GB——<b>峰值 3.32 GB，119.6 tok/s</b>（测自 v0.72.2，早于 #331 修复；复测进度见 issue #361）。<a href="https://youtu.be/T1LCErE943E">完整视频（90 秒）</a></sub>
+  <a href="https://youtu.be/T1LCErE943E"><img src="docs/assets/layer-streaming.gif" alt="在 4 GB 卡上对 Llama-3.1-8B 执行 soup train 的预检：3.60 GB 基座固定在内存中跨 32 层流转，配两个 113 MB 显存缓冲，实测峰值 3.32 GB、119.6 tok/s，停在 4 GB 线以内（修复前的那组数据，测自 v0.72.2，952 MHz；#331 修复后的那组数据见下方说明）"></a><br>
+  <sub>Llama-3.1-8B-Instruct + NF4、LoRA、batch 1、seq 512，RTX 3050 Laptop 4 GB——<b>峰值 3.32 GB，119.6 tok/s</b>，952 MHz（修复前，v0.72.2；#331 修复后：1935 MHz 下 208.6 tok/s，2.40 GB，不可直接比较，@umran666，#1103）。<a href="https://youtu.be/T1LCErE943E">完整视频（90 秒）</a></sub>
 </p>
 
 ## 为什么选择 Soup
@@ -101,15 +104,15 @@ NF4 达到 **119.6 tok/s，峰值 3.32 GB**——与常规常驻显存的运行�
   没有 unsloth 初始化流程的任务上的 `backend: unsloth`。每条报错都会指出字段名以及该怎么改。
   `lr_groups`、`early_stop_patience`、`forgetting_eval_steps` 及其他无人读取的旋钮，现在加载时发出警告，
   从 v0.77 起被拒绝。
-- **验证集损失现在会被评估。** `data.val_split` 在每次运行中都会把部分行留出训练，但 transformers
-  后端上没有任何训练器去评估它们。现在，每个拿到划分的任务都会在每个 epoch 结束时评估，或通过
+- **验证集损失现在会被评估。** `data.val_split` 在每次运行中都会把部分行留作验证、排除在训练之外，
+  但 transformers 后端上没有任何训练器去评估它们。现在，每个拿到划分的任务都会在每个 epoch 结束时评估，或通过
   `training.eval_steps` 每 N 步评估一次，并记录验证集损失；运行时间会增加百分之几。
-  **对 `grpo`、`ppo` 和 `online_dpo` 是破坏性变更：** 默认不再留出行（`data.val_split`
+  **对 `grpo`、`ppo` 和 `online_dpo` 是破坏性变更：** 默认不再把行留作验证（`data.val_split`
   会被忽略并给出提示），因此每一行都参与训练。
 - **破坏性变更：每个非标准的 `grpo_variant` 都会应用 `grpo_beta` KL 惩罚。** `gspo`、`dapo`、
   `dr_grpo`、`bnpo`、`two_sided` 和 `rft` 以前会校验 `grpo_beta` 然后把它丢掉，因此已有的 variant
   配置无法复现此前的运行结果。`grpo_beta: 0` 现在无 KL 运行，并跳过参考模型的前向传播。
-- **Layer streaming 在后台线程中通过直接 I/O 读取其磁盘层，并且可以跨 NVMe 驱动器做条带化。**
+- **Layer streaming 在后台线程中通过直接 I/O 读取其磁盘存储层，并且可以跨 NVMe 驱动器做条带化。**
   在一个比内存还大的 36 GB、70B 形态的 NF4 存储上（一台 RTX 5070 Laptop 8 GB 机器），冷启动的一步
   从同步读取的 110.5 s 降到 16.2-17.3 s，而借助 `SOUP_LAYER_STREAM_STRIPE_DIRS` 跨两块驱动器后，
   从 17.4 s 降到 9.97 s（持续负载探测：两轮，1.28x 和 1.41x，没有正式判定；
@@ -123,8 +126,8 @@ NF4 达到 **119.6 tok/s，峰值 3.32 GB**——与常规常驻显存的运行�
   就是原来的推理基准测试）；`soup data clean` 清洗并修复数据集，且不会改动输入文件；
   `soup recipes verify` 在 meta 设备上检查（不下载任何权重）每个随附配方都能挂载 LoRA adapter；
   `soup rewind` 指出造成 loss 尖峰的数据集行。`soup infer` 新增需显式开启的 `--batch-size` 和实验性的
-  `--cuda-graphs`（需要 PyTorch 2.14 或更新版本；在一台 RTX 5070 Laptop 上，未固定，
-  Qwen2.5-1.5B 以 FP16 运行，开启它后最慢的一次运行，其解码速度也比不开启时最快的一次快 2.9x）。
+  `--cuda-graphs`（需要 PyTorch 2.14 或更新版本；在一台 RTX 5070 Laptop 上，未绑定 CPU 核心，
+  Qwen2.5-1.5B 以 FP16 运行，开启后最慢的一次运行，其解码速度也比未开启时最快的一次快 2.9x）。
   `soup ab` 运行双侧、对方差稳健的检验，`soup adapters sign --backend sigstore` 和
   `soup attest emit --sign sigstore` 使用 Sigstore 免密钥 OIDC 签名
   （`pip install "soup-cli[sigstore]"`）。
@@ -438,9 +441,12 @@ v1 以来的任何实测数字也没有变。v3 做的是**撤回一个我们曾
   上限的 **71.3%**。最大的流式专属开销是逐层 NF4 反量化，占 9.8%
   （[完整记录](benchmarks/probe-v0.73.0-what-bounds-streaming.md)）。每个测量都仍然
   成立；复现结论以更弱的形式仍然成立——约束对两台机器是共同的，而不是 GPU 的算力。
-- **在完全不同硬件上的复现**（v2 新增）：RTX 3050 上 119.6 tok/s，对 H100 上
-  113.00 的中位数，同为 3.32 GB 峰值。两者都早于 #331 修复；4 GB 复测进度见
-  issue #361。
+- **在完全不同硬件上的复现**（v2 新增）：RTX 3050 上 119.6 tok/s（952 MHz 下），对 H100 上
+  113.00 的中位数，同为 3.32 GB 峰值。两者都早于 #331 修复，也是论文报告的数字。#331 修复后的
+  那组数据（@umran666，#1103）是 1935–1957 MHz 下 208.6 tok/s，峰值 2.40 GB，为同场 GEMM 上限的
+  59%，修复前为 68%：表面上 1.74x 的提升来自时钟频率，而不是加速；两组数据之间的内存占用方式也变了，
+  因此连这个比例也不是同口径的对比
+  （[完整记录](benchmarks/gate-v0.72.2-nf4.md)）。
 - **发现并修复了一个静默的错误梯度缺陷。** NF4 单层超过 ~165 MiB 时，前向仍然
   逐位一致、loss 曲线看着健康，但梯度是错的。原因已在上游库中定位并上报；修复
   已通过真实 32B 和 72B 上的对照实验验证。
@@ -472,4 +478,4 @@ v1 以来的任何实测数字也没有变。v3 做的是**撤回一个我们曾
 
 ## 许可证
 
-[Apache-2.0](LICENSE)。版权 © Soup 贡献者们。
+[Apache-2.0](LICENSE)。Copyright 2026 Makazhan Alpamys and the Soup contributors。如果你再分发 Soup 或其修改版本，许可证的第 4 条和第 6 条对你适用：每份副本都要保留 `LICENSE` 和 `NOTICE`，在你改动过的文件上注明改动，并且除说明作品来源之外不要使用 Soup 这一名称。

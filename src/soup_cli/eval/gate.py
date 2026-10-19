@@ -15,12 +15,12 @@ from pathlib import Path
 from typing import Callable, Literal, Mapping, Optional
 from urllib.parse import urlparse
 
-import yaml
 from pydantic import BaseModel, Field, field_validator
 
 from soup_cli import __version__
 from soup_cli.eval.results import newest_eval_rows
 from soup_cli.utils.paths import atomic_write_text, is_under_cwd
+from soup_cli.utils.yaml_limits import MAX_CONFIG_BYTES, load_yaml_file_limited
 
 logger = logging.getLogger(__name__)
 
@@ -123,6 +123,20 @@ class EvalSuite(BaseModel):
     tasks: list[GateTask] = Field(default_factory=list)
 
 
+def _require_gate_tasks(suite: EvalSuite) -> None:
+    if not suite.tasks:
+        raise ValueError(
+            f"eval-gate suite {suite.suite!r} field 'tasks' must contain at least one task"
+        )
+    names: set[str] = set()
+    for task in suite.tasks:
+        if task.name in names:
+            raise ValueError(
+                f"eval-gate suite {suite.suite!r} repeats task name {task.name!r}"
+            )
+        names.add(task.name)
+
+
 def load_suite(path: str) -> EvalSuite:
     """Load and validate an eval suite from disk."""
     suite_path = Path(path)
@@ -132,8 +146,12 @@ def load_suite(path: str) -> EvalSuite:
         )
     if not suite_path.exists():
         raise FileNotFoundError(f"eval-gate suite not found: {path}")
-    data = yaml.safe_load(suite_path.read_text(encoding="utf-8")) or {}
-    return EvalSuite(**data)
+    data = load_yaml_file_limited(
+        suite_path, f"eval-gate suite '{path}'", max_bytes=MAX_CONFIG_BYTES
+    ) or {}
+    suite = EvalSuite(**data)
+    _require_gate_tasks(suite)
+    return suite
 
 
 def current_baseline_stamp() -> dict[str, object]:
@@ -511,7 +529,7 @@ def _run_judge_task(
             })
 
     if not items:
-        return 0.0
+        raise ValueError(f"No judge prompts found in {task.prompts} for task '{task.name}'")
 
     results = evaluator.evaluate_batch(items)
     # Normalise to [0, 1] using the judge's ACTUAL rubric scale (DEFAULT_RUBRIC
@@ -607,6 +625,7 @@ def run_gate(
             raise ValueError(
                 f"baseline score for {base_name!r} must be finite, got {base_val}"
             )
+    _require_gate_tasks(suite)
     task_results: list[GateTaskResult] = []
     any_regressed = False
     any_failed_threshold = False

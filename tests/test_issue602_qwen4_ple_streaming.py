@@ -685,7 +685,15 @@ def test_qwen4_ram_ple_refusal_is_independent_of_base_stream_source():
         )
 
 
-def _drive_qwen4_streaming_setup(tmp_path, monkeypatch, resolve_weights=None):
+def _drive_qwen4_streaming_setup(
+    tmp_path,
+    monkeypatch,
+    resolve_weights=None,
+    *,
+    arch="qwen4_exp",
+    model_cfg=None,
+    shard_calls=None,
+):
     """Drive the real `_setup_streaming_transformers()` for a qwen4_exp base.
 
     THE harness. Extracted by the maintainer after review so the seam test and
@@ -697,6 +705,10 @@ def _drive_qwen4_streaming_setup(tmp_path, monkeypatch, resolve_weights=None):
     stub ignores the `before_materialize` callback, which is where the shard-
     cache fingerprint is computed -- so a test about that callback has to supply
     its own and actually call it.
+
+    `arch` / `model_cfg` drive the same seam for another architecture
+    (`tests/test_deepseek_v3_streaming.py`); `shard_calls`, when a list, receives
+    the keyword arguments of every `shard_checkpoint` call.
     """
     import sys
     import types
@@ -743,15 +755,16 @@ def _drive_qwen4_streaming_setup(tmp_path, monkeypatch, resolve_weights=None):
             alpha_pattern=None,
         ),
     )
-    model_cfg = types.SimpleNamespace(
-        model_type="qwen4_exp",
-        text_config=types.SimpleNamespace(
-            hidden_size=4,
-            num_hidden_layers=1,
-            vocab_size=8,
-            intermediate_size=8,
-        ),
-    )
+    if model_cfg is None:
+        model_cfg = types.SimpleNamespace(
+            model_type="qwen4_exp",
+            text_config=types.SimpleNamespace(
+                hidden_size=4,
+                num_hidden_layers=1,
+                vocab_size=8,
+                intermediate_size=8,
+            ),
+        )
     external = types.SimpleNamespace(bits=4, nbytes=1_024, storage_nbytes=256)
     index = types.SimpleNamespace(
         n_layers=1,
@@ -801,15 +814,18 @@ def _drive_qwen4_streaming_setup(tmp_path, monkeypatch, resolve_weights=None):
     )
     monkeypatch.setattr("peft.LoraConfig", lambda **kwargs: types.SimpleNamespace(**kwargs))
     monkeypatch.setattr(
-        "soup_cli.utils.layer_stream.stream_arch_of", lambda *_a, **_k: "qwen4_exp"
+        "soup_cli.utils.layer_stream.stream_arch_of", lambda *_a, **_k: arch
     )
     monkeypatch.setattr(
         "soup_cli.utils.layer_shard.resolve_shard_dir",
         lambda *_a, **_k: str(tmp_path / "shards"),
     )
-    monkeypatch.setattr(
-        "soup_cli.utils.layer_shard.shard_checkpoint", lambda *_a, **_k: index
-    )
+    def _shard(*_args, **kwargs):
+        if shard_calls is not None:
+            shard_calls.append(kwargs)
+        return index
+
+    monkeypatch.setattr("soup_cli.utils.layer_shard.shard_checkpoint", _shard)
     monkeypatch.setattr(
         "soup_cli.utils.layer_shard.source_weight_bytes", lambda *_a, **_k: 1_024
     )

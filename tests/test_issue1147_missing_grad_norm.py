@@ -13,6 +13,7 @@ from soup_cli.experiment.tracker import ExperimentTracker
 from soup_cli.monitoring.callback import SoupTrainerCallback
 from soup_cli.monitoring.display import TrainingDisplay
 from soup_cli.utils.why import diagnose
+from tests.ui_helpers import ui_client
 
 
 def test_callback_separates_display_from_recorded_norms(monkeypatch) -> None:
@@ -121,7 +122,6 @@ def test_web_chart_keeps_null_as_a_gap_instead_of_fabricating_zero() -> None:
 
 def test_web_metrics_api_serializes_null_norm(tmp_path, monkeypatch) -> None:
     pytest.importorskip("fastapi")
-    from fastapi.testclient import TestClient
 
     from soup_cli.ui.app import create_app, get_auth_token
 
@@ -137,7 +137,7 @@ def test_web_metrics_api_serializes_null_norm(tmp_path, monkeypatch) -> None:
     tracker.log_metrics(run_id, step=1, loss=1.0, grad_norm=None)
     tracker.close()
 
-    client = TestClient(create_app())
+    client = ui_client(create_app())
     response = client.get(
         f"/api/runs/{run_id}/metrics",
         headers={"Authorization": f"Bearer {get_auth_token()}"},

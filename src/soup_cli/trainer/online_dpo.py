@@ -202,13 +202,17 @@ class OnlineDPOTrainerWrapper:
           last user turn (interleaved assistant turns are KEPT so multi-turn
           context and user/assistant alternation are preserved); the trailing
           assistant turn is dropped because the model generates it on-policy.
+        - ``{"prompt": [...]}`` (a conversational preference row, #1849) ->
+          read the same way as ``messages``.
         """
         out = []
         for row in rows:
-            if isinstance(row.get("prompt"), str):
-                out.append({"prompt": [{"role": "user", "content": row["prompt"]}]})
-            elif isinstance(row.get("messages"), list):
-                msgs = row["messages"]
+            prompt = row.get("prompt")
+            if isinstance(prompt, str):
+                out.append({"prompt": [{"role": "user", "content": prompt}]})
+                continue
+            msgs = prompt if isinstance(prompt, list) else row.get("messages")
+            if isinstance(msgs, list):
                 last_user = -1
                 for idx, msg in enumerate(msgs):
                     if isinstance(msg, dict) and msg.get("role") == "user":
@@ -269,8 +273,8 @@ class OnlineDPOTrainerWrapper:
         prompt_rows = self._to_prompt_rows(dataset["train"])
         if not prompt_rows:
             raise ValueError(
-                "online_dpo: no usable prompts (rows need a 'prompt' string or "
-                "'messages' with a user/system turn)"
+                "online_dpo: no usable prompts (rows need a 'prompt' string, or a "
+                "'prompt' message list or 'messages' with a user turn)"
             )
         train_ds = Dataset.from_list(prompt_rows)
 

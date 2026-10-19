@@ -162,6 +162,23 @@ def _validate_noise_floor_flag(value: Optional[int]) -> Optional[int]:
     return value
 
 
+def _parse_chat_template_kwargs(value: Optional[str]) -> Optional[dict]:
+    if value is None:
+        return None
+    from soup_cli.utils.live_eval import validate_chat_template_kwargs
+
+    def reject_constant(constant: str) -> NoReturn:
+        raise ValueError(f"non-finite JSON constant {constant}")
+
+    try:
+        options = json.loads(value, parse_constant=reject_constant)
+        if not isinstance(options, dict):
+            raise ValueError("expected a JSON object")
+        return validate_chat_template_kwargs(options)
+    except (ValueError, TypeError, RecursionError) as exc:
+        _fail(f"--chat-template-kwargs: {exc}", _EXIT_USAGE)
+
+
 def _validate_task_mode_flag(task_mode: str) -> None:
     # All three modes (metric / judge_score / pairwise) ship as of v0.71.31, so
     # SUPPORTED_TASK_MODES == TASK_MODES and the old "pairwise reserved" gate is
@@ -254,7 +271,7 @@ def _parse_ship_config(path: str) -> "Tuple[SoupConfig, Optional[ShipConfig]]":
 
     try:
         text = _safe_read_text(path, "--config path", _MAX_CONFIG_BYTES)
-        cfg = load_config_from_string(text)
+        cfg = load_config_from_string(text, max_bytes=_MAX_CONFIG_BYTES)
     except (ValueError, TypeError, yaml.YAMLError) as exc:
         _fail(f"--config: {exc}", _EXIT_USAGE)
     ship_cfg = cfg.eval.ship if cfg.eval is not None else None
@@ -528,6 +545,7 @@ def _resolve_generators(
     adapter: Optional[str],
     device: Optional[str],
     quantization: Optional[str] = None,
+    chat_template_kwargs: Optional[dict] = None,
 ) -> Tuple[Callable[[str], str], Callable[[str], str]]:
     """Build ``(base_gen, tuned_gen)`` from live_eval (greedy decode)."""
     # #316 — the behavioural suites need a budget that fits a real tool call.
@@ -554,20 +572,26 @@ def _resolve_generators(
             "pass --config to reuse the training run's own quantization.[/]"
         )
 
+    template_options = (
+        {"chat_template_kwargs": chat_template_kwargs} if chat_template_kwargs is not None else {}
+    )
     base_gen = live_eval.make_generator(
         base, device=device, max_new_tokens=BEHAVIOURAL_MAX_NEW_TOKENS,
         dtype=dtype, quantization=quantization,
+        **template_options,
     )
     if adapter:
         tuned_gen = live_eval.make_generator(
             base, adapter=adapter, device=device,
             max_new_tokens=BEHAVIOURAL_MAX_NEW_TOKENS,
             dtype=dtype, quantization=quantization,
+            **template_options,
         )
     elif tuned:
         tuned_gen = live_eval.make_generator(
             tuned, device=device, max_new_tokens=BEHAVIOURAL_MAX_NEW_TOKENS,
             dtype=dtype, quantization=quantization,
+            **template_options,
         )
     else:  # pragma: no cover — _verdict_live guarantees one of tuned/adapter
         raise ValueError("need --tuned or --adapter")
@@ -992,6 +1016,7 @@ def _verdict_live(
     forgetting_threshold: float,
     noise_floor_runs: Optional[int] = None,
     quantization: Optional[str] = None,
+    chat_template_kwargs: Optional[dict] = None,
 ) -> ShipVerdict:
     """Run a live verdict — validate flags (exit 2), then evaluate (exit 1)."""
     if not base:
@@ -1059,7 +1084,13 @@ def _verdict_live(
 
     tuned_id = tuned if tuned else base
     try:
-        base_gen, tuned_gen = _resolve_generators(base, tuned, adapter, device, quantization)
+        template_options = (
+            {"chat_template_kwargs": chat_template_kwargs}
+            if chat_template_kwargs is not None else {}
+        )
+        base_gen, tuned_gen = _resolve_generators(
+            base, tuned, adapter, device, quantization, **template_options
+        )
 
         measured_floor: Optional[NoiseFloor] = None
         if noise_floor_runs is not None:
@@ -1271,9 +1302,16 @@ def ship(
     device: Optional[str] = typer.Option(
         None, "--device", help="Device for the live run (cuda / cpu)."
     ),
+    chat_template_kwargs: Optional[str] = typer.Option(
+        None, "--chat-template-kwargs",
+        help='Live chat-template variables as a JSON object, e.g. {"enable_thinking":false}.',
+    ),
 ) -> None:
     """Decide SHIP / DON'T SHIP for a fine-tune (exit 0 = SHIP, 2 = DON'T)."""
     soup_config = None
+    template_kwargs = _parse_chat_template_kwargs(chat_template_kwargs)
+    if evidence and chat_template_kwargs is not None:
+        _fail("--chat-template-kwargs applies only to a live run, not --evidence", _EXIT_USAGE)
     # `is not None` (not truthiness): an explicit empty --config must fail loud
     # through _parse_ship_config, not silently disable the staleness gate.
     if config is not None:
@@ -1362,6 +1400,7 @@ def ship(
             forgetting_threshold=threshold,
             noise_floor_runs=noise_floor,
             quantization=_live_eval_quantization_from_config(soup_config),
+            **({"chat_template_kwargs": template_kwargs} if template_kwargs is not None else {}),
         )
     else:
         _fail(

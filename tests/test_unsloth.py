@@ -218,6 +218,7 @@ class TestSFTUnslothIntegration:
                 lora_alpha=16,
                 lora_dropout=0.05,
                 target_modules="auto",
+                use_rslora=False,
             )
             assert wrapper.model is mock_model
             assert wrapper.tokenizer is mock_tokenizer

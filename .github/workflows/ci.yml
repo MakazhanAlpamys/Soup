@@ -477,6 +477,10 @@ jobs:
   # #502/#503/#522/#571/#651: install the exact Torch 2.6.0 / Transformers 5.16.1 /
   # trl 0.29 / PEFT 0.20 support stack and Plotext 6.0.0 so pip cannot silently
   # upgrade the cell, then assert every pinned compatibility boundary.
+  # #1802: the same file pins Typer and Click to the floors pyproject.toml declares,
+  # and the last step starts the CLI on them. It is the one cell that does: every
+  # other cell resolves the newest Typer, which is how a floor no command could run
+  # on stayed declared. The job keeps its name; branch protection requires it.
   transformers-floor:
     needs: plan
     if: needs.plan.outputs.full == 'true'
@@ -511,7 +515,10 @@ jobs:
           )
           expected = dict(pairs)
           assert len(expected) == len(pairs), "duplicate package pin in floor constraints"
-          for name in ("torch", "torchaudio", "transformers", "trl", "peft", "plotext"):
+          for name in (
+              "torch", "torchaudio", "transformers", "trl", "peft", "plotext",
+              "typer", "click",  # #1802: the CLI's own declared floors
+          ):
               assert name in expected, f"floor constraints missing exact {name} pin"
               want = expected[name]
               got = md.version(name)
@@ -551,6 +558,9 @@ jobs:
           tests/test_bugfixes.py::TestDiffModelLoading
           tests/test_issue636_torch_floor.py
           tests/test_issue265_xcodec2_audio_contract.py
+          tests/test_cli_dependency_floors.py
+          tests/test_click_argument_help.py
+          tests/test_cli_startup_is_light.py
 
   test:
     needs: plan
@@ -576,6 +586,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+          cache: ${{ runner.os == 'Linux' && matrix.python-version == '3.12' && 'pip' || '' }}
+          cache-dependency-path: |
+            pyproject.toml
+            .github/constraints/*.txt
       # The Web UI escaping tests run `safe_html.js` under node, and skip when
       # node is absent. Runner images happen to ship one, so the skip would be
       # silent: pin it, or the only tests that execute the real escaping logic

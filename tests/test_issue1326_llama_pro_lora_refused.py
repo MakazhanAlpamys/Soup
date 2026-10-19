@@ -4,7 +4,9 @@
 blocks, then ``get_peft_model`` freezes every non-adapter parameter again,
 appended blocks included, and puts adapters on the original layers. The ruling
 (route 1) refuses ``expand_layers`` together with a LoRA rank at config load and
-points to ``lora.r: 0``, which ``task: pretrain`` does not have.
+points to ``lora.r: 0``. ``task: pretrain`` has no ``lora.r: 0``, and since #1813 it
+gets the ``expand_layers`` scope refusal before this check (see
+``test_pretrain_full_finetune_refusal.py``).
 """
 
 from __future__ import annotations
@@ -32,7 +34,7 @@ def _config(task: str, lora: str = "") -> str:
     )
 
 
-@pytest.mark.parametrize("task", ["sft", "pretrain"])
+@pytest.mark.parametrize("task", ["sft"])
 @pytest.mark.parametrize(
     ("lora", "rank"),
     [("", 64), ("  lora:\n    r: 8\n", 8)],
@@ -48,10 +50,9 @@ def test_a_lora_rank_with_llama_pro_is_refused(task, lora, rank):
     assert "freezes the appended blocks again" in message
     assert "lora.r: 0" in message
     assert "quantization: none" in message
-    if task == "pretrain":
-        assert "needs task: sft" in message
-    else:
-        assert "needs task: sft" not in message
+    # The pretrain advice (#1813) lives in the scope check and must not leak into this message.
+    assert "needs task: sft" not in message
+    assert "pretrain" not in message
 
 
 @pytest.mark.parametrize(

@@ -268,19 +268,24 @@ class TestLambdaSshResilience:
     ) -> None:
         stub, _ = _setup_controller_env(tmp_path, monkeypatch)
         prints: list[str] = []
-        ssh_attempts = 0
+        poll_calls = 0
+        tail_calls = 0
 
         def fake_run(argv, **kw):
-            nonlocal ssh_attempts
+            nonlocal poll_calls, tail_calls
             cmd = argv[0]
             if cmd == "ssh":
-                ssh_attempts += 1
+                if "tail" in argv[-1]:
+                    tail_calls += 1
+                    return subprocess.CompletedProcess(argv, 0, "", "")
+                poll_calls += 1
                 return subprocess.CompletedProcess(argv, 0, "status: error\n1\n", "")
             return subprocess.CompletedProcess(argv, 0, "", "")
 
         rc, terminations = _exec_controller(stub, fake_run, captured_prints=prints)
         assert rc == 1
-        assert ssh_attempts == 1
+        assert poll_calls == 1
+        assert tail_calls == 1
         assert len(terminations) == 1
         failed_lines = [p for p in prints if "Lambda training failed" in p]
         assert len(failed_lines) == 1

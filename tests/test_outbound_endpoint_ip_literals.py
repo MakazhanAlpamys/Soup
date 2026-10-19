@@ -23,6 +23,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from tests.ui_helpers import ui_client
+
 _REFUSED = "private/link-local/reserved IP hosts are not allowed"
 # #1549: the refusal says what to do instead.
 _REMEDY = "address the server by its hostname"
@@ -410,11 +412,10 @@ class TestChatProxy:
     @pytest.fixture
     def post(self, sent):
         pytest.importorskip("fastapi")
-        from fastapi.testclient import TestClient
 
         from soup_cli.ui.app import create_app, get_auth_token
 
-        client = TestClient(create_app())
+        client = ui_client(create_app())
         headers = {"Authorization": f"Bearer {get_auth_token()}"}
 
         def _post(endpoint: str):
