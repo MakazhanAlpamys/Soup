@@ -81,6 +81,8 @@ def capture_training_data_hash(
                     or _signature(os.fstat(handle.fileno())) != _signature(opened)
                     or _signature(os.stat(source)) != _signature(opened)):
                 return None
+            if time.monotonic() - started >= timeout_seconds:
+                return None
             return digest.hexdigest()
     except (OSError, ValueError):
         # A provenance gap must not introduce a new refusal or expose paths.

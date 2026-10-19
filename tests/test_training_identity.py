@@ -88,6 +88,36 @@ def test_time_limit_after_partial_read_is_unknown(tmp_path, monkeypatch):
     assert identity.capture_training_data_hash(_config(source), timeout_seconds=5) is None
 
 
+@pytest.mark.parametrize("operation", ["fstat", "stat"])
+@pytest.mark.parametrize("elapsed", [0.0, 4.999, 5.0, 6.0])
+def test_deadline_after_final_metadata_read(tmp_path, monkeypatch, operation, elapsed):
+    source = tmp_path / "data.jsonl"
+    payload = b"complete source bytes\n"
+    source.write_bytes(payload)
+    config = _config(source)
+    original = getattr(identity.os, operation)
+    clock = {"now": 0.0}
+    calls = 0
+
+    def metadata(*args, **kwargs):
+        nonlocal calls
+        info = original(*args, **kwargs)
+        # Keep the real metadata unchanged; only account for time spent in the
+        # final descriptor/path operation after the last pre-metadata check.
+        if operation == "fstat" or str(args[0]) == str(source):
+            calls += 1
+            if calls == 2:
+                clock["now"] = elapsed
+        return info
+
+    monkeypatch.setattr(identity.os, operation, metadata)
+    monkeypatch.setattr(identity.time, "monotonic", lambda: clock["now"])
+    digest = identity.capture_training_data_hash(config, timeout_seconds=5)
+    assert calls == 2
+    expected = hashlib.sha256(payload).hexdigest() if elapsed < 5 else None
+    assert digest == expected
+
+
 @pytest.mark.parametrize("mode", ["grow", "truncate", "rewrite", "read-error"])
 def test_changes_or_read_failure_do_not_publish_a_digest(tmp_path, monkeypatch, mode):
     source = tmp_path / "data.jsonl"
