@@ -92,7 +92,7 @@ CLI_TESTS = (
     "tests/test_cli_dependency_floors.py",
     "tests/test_click_argument_help.py",
     "tests/test_cli_startup_is_light.py",
-    "tests/test_issue1803_typer_click_compat.py",
+    "tests/test_typer_click_compat.py",
 )
 
 
