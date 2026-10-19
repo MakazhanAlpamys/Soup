@@ -1013,7 +1013,7 @@ class StreamingSetupMixin:
                 console.print(
                     "[yellow]training.stream_expert_layout='per_expert' reads every routed "
                     "expert from the cache volume about three times per step, and that "
-                    f"volume reads as {for_terminal(str(experts_disk.kind))!r}, not NVMe: "
+                    f"volume reads as {for_terminal(repr(str(experts_disk.kind)))}, not NVMe: "
                     "expect steps bound by that disk.[/]"
                 )
         # R4: decided once, from the roots the index actually carries (a reused cache keeps its
