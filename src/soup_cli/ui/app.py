@@ -1,5 +1,6 @@
 """FastAPI application for Soup Web UI."""
 
+import contextlib
 import ipaddress
 import json as json_mod
 import logging
@@ -859,7 +860,13 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
                 prefix="soup_ui_config_", suffix=".yaml"
             )
             try:
-                with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                try:
+                    fh = os.fdopen(fd, "w", encoding="utf-8")
+                except BaseException:
+                    with contextlib.suppress(OSError):
+                        os.close(fd)
+                    raise
+                with fh:
                     fh.write(req.config_yaml)
                 proc = subprocess.Popen(
                     _resolve_train_argv(config_path),
@@ -867,10 +874,6 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
                     stderr=subprocess.STDOUT,
                 )
             except Exception:
-                try:
-                    os.close(fd)
-                except OSError:
-                    pass
                 _remove_temp_config(config_path)
                 raise
 
