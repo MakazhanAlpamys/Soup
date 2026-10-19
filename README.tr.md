@@ -1,4 +1,4 @@
-<!-- synced-from: README.md sha256:fa009c2fcc2c94ea06e25ea8620c2fbed9bfb8ac6611bf71a2669a06f7c50b46 -->
+<!-- synced-from: README.md sha256:44c28c06ff7d2445391cfcc7cd483b096453a302085ff8ac52cb48fa79ce4da5 -->
 <p align="center">🌍 <a href="README.md">English</a> | <strong>Türkçe</strong> | <a href="README.ar.md">العربية</a> | <a href="README.ja.md">日本語</a> | <a href="README.zh.md">中文</a></p>
 
 <p align="center">
@@ -300,7 +300,7 @@ metin, gömme (embedding), RAFT ve daha fazlası — hepsi JSONL, JSON, CSV, Par
 otomatik algılanır; bu yüzden çoğu durumda `data.train`'i bir dosyaya yöneltirsiniz ve başka hiçbir
 şey değişmez. Her biçim için adım adım çözümlü bir örnekle şemalar ve veri ardışık düzeni (uzak URI'ler,
 akış, parçalama, iç içe geçirme, sözcük dağarcığı genişletme, belge içe aktarma)
-[`docs/data.md`](docs/data.md#data-formats) içinde.
+[`docs/data.md`](docs/data.md#data-formats) içinde; [yerel Sesame CSM ses eğitimi](docs/training.md#native-sesame-csm) ise ayrı belgelenmiştir.
 
 ## Yaygın Komutlar
 
@@ -501,4 +501,4 @@ dahil.
 
 ## Lisans
 
-[Apache-2.0](LICENSE). Telif hakkı © Soup katkıda bulunanları.
+[Apache-2.0](LICENSE). Copyright 2026 Makazhan Alpamys and the Soup contributors. Soup'u veya değiştirilmiş bir kopyasını yeniden dağıtırsanız lisansın 4. ve 6. maddeleri sizin için geçerlidir: her kopyayla birlikte `LICENSE` ve `NOTICE` dosyalarını koruyun, değiştirdiğiniz dosyaları işaretleyin ve Soup adını eserin kaynağını belirtmenin ötesinde kullanmayın.

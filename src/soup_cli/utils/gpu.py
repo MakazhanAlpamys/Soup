@@ -27,13 +27,20 @@ def _params_from_local_safetensors(path: str) -> float | None:
     refuse to train a 135M model. The checkpoint knows its own size, so ask
     it instead of guessing.
     """
+    from soup_cli.utils.checkpoint_files import checkpoint_files
+
     try:
         if not os.path.isdir(path):
             return None
+        # #1806: the checkpoint is what the index names (or model.safetensors /
+        # the model-*-of-* shards), never every *.safetensors: Mistral's repos
+        # keep a consolidated.safetensors copy beside the shards, which doubled
+        # the count here and everything sized from it.
+        selected = checkpoint_files(path)
         shards = [
-            entry.path
-            for entry in os.scandir(path)
-            if entry.is_file() and entry.name.endswith(".safetensors")
+            os.path.join(path, name)
+            for name in selected.weights
+            if os.path.isfile(os.path.join(path, name))
         ]
         if not shards:
             return None

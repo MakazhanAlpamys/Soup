@@ -74,6 +74,24 @@ class TestWriterHelperRefusal:
             write_baseline_file(str(target), {"control": bad_val})
         assert not target.exists()
 
+    @pytest.mark.parametrize("bad_val", [10**400, -(10**400)])
+    def test_stamp_baseline_scores_rejects_oversized_integer(self, bad_val):
+        with pytest.raises(ValueError, match="control") as exc_info:
+            stamp_baseline_scores({"control": bad_val})
+        msg = str(exc_info.value).lower()
+        assert "finite" in msg or "out of range" in msg
+
+    @pytest.mark.parametrize("bad_val", [10**400, -(10**400)])
+    def test_write_baseline_file_rejects_oversized_integer_and_creates_no_file(
+        self, tmp_path, bad_val
+    ):
+        target = tmp_path / "out.json"
+        with pytest.raises(ValueError, match="control") as exc_info:
+            write_baseline_file(str(target), {"control": bad_val})
+        msg = str(exc_info.value).lower()
+        assert "finite" in msg or "out of range" in msg
+        assert not target.exists()
+
 
 class TestReaderRefusal:
     """resolve_baseline must reject non-finite scores in files and registry."""
@@ -101,6 +119,34 @@ class TestReaderRefusal:
         with pytest.raises(ValueError, match="control") as exc_info:
             resolve_baseline(str(base_file.name))
         assert "finite" in str(exc_info.value).lower()
+
+    @pytest.mark.parametrize("raw_num", [str(10**400), str(-(10**400))])
+    def test_resolve_baseline_legacy_file_rejects_oversized_integer(
+        self, tmp_path, monkeypatch, raw_num
+    ):
+        monkeypatch.chdir(tmp_path)
+        base_file = tmp_path / "baseline.json"
+        base_file.write_text(f'{{"control": {raw_num}}}', encoding="utf-8")
+        with pytest.raises(ValueError, match="control") as exc_info:
+            resolve_baseline(str(base_file.name))
+        msg = str(exc_info.value).lower()
+        assert "finite" in msg or "out of range" in msg
+
+    @pytest.mark.parametrize("raw_num", [str(10**400), str(-(10**400))])
+    def test_resolve_baseline_stamped_envelope_rejects_oversized_integer(
+        self, tmp_path, monkeypatch, raw_num
+    ):
+        monkeypatch.chdir(tmp_path)
+        base_file = tmp_path / "baseline_stamped.json"
+        base_file.write_text(
+            f'{{"scores": {{"control": {raw_num}}}, '
+            f'"provenance": {{"soup_version": "x", "scorer_revision": 1}}}}',
+            encoding="utf-8",
+        )
+        with pytest.raises(ValueError, match="control") as exc_info:
+            resolve_baseline(str(base_file.name))
+        msg = str(exc_info.value).lower()
+        assert "finite" in msg or "out of range" in msg
 
     @pytest.mark.parametrize("bad_score", [float("-inf"), float("inf")])
     def test_resolve_baseline_registry_rejects_infinite_db_rows(
@@ -180,6 +226,25 @@ class TestGateExecutionRefusal:
         with pytest.raises(ValueError, match="control") as exc_info:
             run_gate(suite, generate_fn=lambda p: "", baseline={"control": bad_val})
         assert "finite" in str(exc_info.value).lower()
+
+    @pytest.mark.parametrize("bad_val", [10**400, -(10**400)])
+    def test_run_gate_rejects_oversized_integer_baseline(self, tmp_path, bad_val):
+        suite = EvalSuite(
+            suite="probe",
+            tasks=[
+                GateTask(
+                    type="custom",
+                    name="control",
+                    threshold=0.0,
+                    tasks=str(tmp_path / "dummy.jsonl"),
+                    scorer="exact",
+                )
+            ],
+        )
+        with pytest.raises(ValueError, match="control") as exc_info:
+            run_gate(suite, generate_fn=lambda p: "", baseline={"control": bad_val})
+        msg = str(exc_info.value).lower()
+        assert "finite" in msg or "out of range" in msg
 
     def test_run_gate_rejects_non_mapping_baseline(self):
         suite = EvalSuite(suite="probe", tasks=[])
@@ -333,6 +398,48 @@ class TestCliNonSuccess:
         output = strip_ansi(result.output)
         assert "finite" in output.lower()
         assert "control" in output
+
+    @pytest.mark.parametrize("raw_num", [str(10**400), str(-(10**400))])
+    def test_cli_refuses_oversized_integer(self, tmp_path, monkeypatch, raw_num):
+        monkeypatch.chdir(tmp_path)
+        suite_file, _ = _make_suite_and_tasks(tmp_path)
+        base_file = tmp_path / "baseline.json"
+        base_file.write_text(f'{{"control": {raw_num}}}', encoding="utf-8")
+
+        result = runner.invoke(
+            app,
+            ["eval", "gate", "--suite", str(suite_file.name), "--baseline", str(base_file.name)],
+        )
+        assert result.exit_code == EXIT_USAGE_ERROR
+        output = strip_ansi(result.output)
+        assert "GATE PASSED" not in output
+        assert "control" in output
+        assert "finite" in output.lower() or "out of range" in output.lower()
+
+    @pytest.mark.parametrize("raw_num", [str(10**400), str(-(10**400))])
+    def test_ship_cli_refuses_oversized_integer_baseline(self, tmp_path, monkeypatch, raw_num):
+        monkeypatch.chdir(tmp_path)
+        base_file = tmp_path / "b.json"
+        base_file.write_text(f'{{"control": {raw_num}}}', encoding="utf-8")
+        tasks = tmp_path / "tasks.jsonl"
+        tasks.write_text(
+            '{"prompt": "x", "expected": "y", "scoring": "exact"}\n', encoding="utf-8"
+        )
+
+        result = runner.invoke(
+            app,
+            [
+                "ship",
+                "--base", "m",
+                "--tuned", "m",
+                "--task-eval", str(tasks.name),
+                "--baseline", str(base_file.name),
+            ],
+        )
+        assert result.exit_code == EXIT_USAGE_ERROR
+        output = strip_ansi(result.output)
+        assert "control" in output
+        assert "finite" in output.lower() or "out of range" in output.lower()
 
 
 class TestHealthyControlsPreserved:

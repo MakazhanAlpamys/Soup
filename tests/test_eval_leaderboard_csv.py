@@ -166,7 +166,38 @@ def test_csv_order_missing_cells_and_average_format_unchanged() -> None:
     )
 
 
-def test_formula_like_identity_is_not_sanitized() -> None:
-    model = "=SUM(1,2)"
-    board = make_leaderboard(model, "custom")
-    assert parse_csv(export_leaderboard(board, fmt="csv"))[1][0] == model
+@pytest.mark.parametrize("lead", ["=", "+", "-", "@", "\t", "\r", "\n"])
+def test_formula_like_names_are_prefixed_with_a_quote(lead: str) -> None:
+    name = lead + "SUM(1,2)"
+    model_rows = parse_csv(export_leaderboard(make_leaderboard(name, "custom"), fmt="csv"))
+    assert model_rows == [
+        ["model", "custom", "average"],
+        ["'" + name, "0.75", "0.7500"],
+    ]
+    bench_rows = parse_csv(export_leaderboard(make_leaderboard("models/base", name), fmt="csv"))
+    assert bench_rows == [
+        ["model", "'" + name, "average"],
+        ["models/base", "0.75", "0.7500"],
+    ]
+
+
+def test_plain_names_and_negative_score_are_unchanged() -> None:
+    # A formula character that is not the first character is left alone, and so is a
+    # negative score: only the name cells are prefixed.
+    board = Leaderboard(entries=[
+        LeaderboardEntry(model_path="models/a=b-c@d+e", benchmark="delta-x", score=-0.5),
+    ])
+    board.compute()
+    assert export_leaderboard(board, fmt="csv") == (
+        "model,delta-x,average\nmodels/a=b-c@d+e,-0.5,-0.5000"
+    )
+
+
+def test_spreadsheet_safe_helper() -> None:
+    from soup_cli.utils.csv_safe import spreadsheet_safe
+
+    assert spreadsheet_safe("=A1") == "'=A1"
+    assert spreadsheet_safe("\nx") == "'\nx"
+    assert spreadsheet_safe("plain") == "plain"
+    assert spreadsheet_safe("") == ""
+    assert spreadsheet_safe(-0.5) == "'-0.5"  # callers keep numbers out of it

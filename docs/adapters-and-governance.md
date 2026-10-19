@@ -116,6 +116,17 @@ soup loop watch --poll-interval 300
 soup loop init registry://abc12 --eval evals/lock.json --baseline registry://prod --pre-wired
 soup loop watch --pre-wired --pack-cans --poll-interval 300
 
+# Learn from Soup's own serving (#1440): the pre-wired harvest also reads the
+# thumbs `soup serve --record-thumbs` captures through POST /v1/thumbs, pairing
+# the latest thumbs-up and thumbs-down answer per prompt. The database must
+# stay under cwd and exist as a thumbs database: start the serve first, or
+# `soup loop watch` refuses, naming the field.
+soup serve --model ./base --record-thumbs ./rl.db
+soup loop init registry://abc12 --eval evals/lock.json --baseline registry://prod \
+    --pre-wired --thumbs-db ./rl.db
+# or per run, overriding loop.yaml:
+SOUP_LOOP_THUMBS_DB=./rl.db soup loop watch --pre-wired
+
 # Unpack a recorded iteration's Soup Can for what-if analysis (v0.71.4)
 soup loop replay iter-20260515T120000-abcdef01 --extract ./iter-dump
 
@@ -272,6 +283,9 @@ soup registry push --run-id run_202611_abc123 --name llama31-chat --tag v1
 # Also record the training data file's SHA-256 as data_hash
 soup registry push --run-id run_202611_abc123 --name llama31-chat --tag v1 --data data/train.jsonl
 
+# Safe to retry: the same key and the same registration return the existing entry
+soup registry push --run-id run_202611_abc123 --name llama31-chat --tag v1 --idempotency-key job-42
+
 # List entries (filter by name, tag, base model, task)
 soup registry list
 soup registry list --name llama31-chat --tag prod
@@ -292,7 +306,16 @@ soup registry promote llama31-chat-v1 --tag prod
 soup registry delete llama31-chat-v1 --yes
 ```
 
-**Training data:** `push --data <file>` stores the file's SHA-256 as the entry's `data_hash`, shown by `soup registry show`. It records the file registered as the training input, not proof of what the run trained on. The file must be under the current directory; without `--data` the entry has no `data_hash`.
+**Training data:** `push --data <file>` stores the file's SHA-256 as the entry's `data_hash`, shown by `soup registry show`. It records the file registered as the training input, not proof of what the run trained on. The file must be under the current directory. Without `--data`, `register_from_run` copies a stored historical `training_data_sha256` without reopening today's path; legacy runs remain unknown. When both are present, the explicit file takes precedence for `data_hash`, while the separate historical `training_data_sha256` is retained. `entry_hash` binds the chosen data digest and any recorded base revision/source. Training-time hash capture itself remains #1764 part 2; reserving nullable storage does not claim the transformed examples consumed by training.
+
+**Base identity:** Registration copies the run's nullable base revision and its source;
+`soup registry show` exposes both. `hub_commit` identifies the commit passed to supported
+base loaders, while `cache_path` only describes the local directory name and does not
+verify local contents. The original human-readable base ID and config hash retain their
+existing meaning. Registrations with no known revision/hash retain their legacy entry
+fingerprint. Retries also compare the recorded revision/source and historical data hash.
+
+**Retries:** `push --idempotency-key <key>` (or `RegistryStore.push(idempotency_key=...)`) makes a registration safe to repeat after a crash or a timeout. A later push with the same key writes nothing and returns the existing entry, provided it repeats that entry's name, base model, task, run, config and data hash and its tag is one of the entry's tags; anything else under the same key is refused with an error naming the entry. Notes are not compared. Two writers pushing the same key at once end up with one entry. A key is 1 to 128 characters from letters, digits, `.`, `_`, `:` and `-`; pushes without one behave as before. `RegistryStore.get_by_idempotency_key(key)` finds the entry. Deleting the entry frees its key.
 
 **Lineage DAG** — every entry can point to a parent (its ancestor run). Walk the DAG for any name with:
 
@@ -300,7 +323,7 @@ soup registry delete llama31-chat-v1 --yes
 soup history llama31-chat
 ```
 
-**Refs resolve flexibly** — you can use a registry ID, a name (latest), or `name:tag`. Ambiguous prefixes raise an error rather than silently picking the wrong entry. Registry files are stored with `600` perms on POSIX; override the path with `SOUP_REGISTRY_DB_PATH`.
+**Refs resolve flexibly** — you can use a registry ID, a unique ID prefix, or `name:tag`. A bare name is not a ref; `soup history <name>` lists every entry with that name. Pushing the same `name:tag` twice keeps both entries. A `name:tag` that matches more than one entry raises an error naming the candidates, and an ambiguous prefix raises one too, rather than silently picking an entry; use the full ID then. Registry files are stored with `600` perms on POSIX; override the path with `SOUP_REGISTRY_DB_PATH`.
 
 
 ## Adapter Management (git for LoRA)

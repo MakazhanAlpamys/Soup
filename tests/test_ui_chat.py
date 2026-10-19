@@ -23,6 +23,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from tests.ui_helpers import ui_client
+
 _UPSTREAM_REPLY = 'data: {"choices":[{"delta":{"content":"pong"}}]}\n\ndata: [DONE]\n\n'
 
 # What the browser receives when the proxied reply above went through `chat_send`.
@@ -166,14 +168,11 @@ class TestChatSSRFProtection:
 
     def test_rejects_non_localhost_http(self):
         """Chat endpoint should reject non-localhost HTTP URLs."""
-        try:
-            from fastapi.testclient import TestClient
-        except ImportError:
-            pytest.skip("FastAPI not installed")
+        pytest.importorskip("fastapi")
 
         from soup_cli.ui.app import create_app
 
-        client = TestClient(create_app())
+        client = ui_client(create_app())
         response = client.post(
             "/api/chat/send",
             json={
@@ -186,14 +185,11 @@ class TestChatSSRFProtection:
 
     def test_allows_localhost_http(self, upstream):
         """Chat endpoint should allow localhost HTTP URLs."""
-        try:
-            from fastapi.testclient import TestClient
-        except ImportError:
-            pytest.skip("FastAPI not installed")
+        pytest.importorskip("fastapi")
 
         from soup_cli.ui.app import create_app
 
-        client = TestClient(create_app())
+        client = ui_client(create_app())
         response = client.post(
             "/api/chat/send",
             json={
@@ -209,14 +205,11 @@ class TestChatSSRFProtection:
 
     def test_allows_https_remote(self, upstream):
         """Chat endpoint should allow HTTPS remote URLs."""
-        try:
-            from fastapi.testclient import TestClient
-        except ImportError:
-            pytest.skip("FastAPI not installed")
+        pytest.importorskip("fastapi")
 
         from soup_cli.ui.app import create_app
 
-        client = TestClient(create_app())
+        client = ui_client(create_app())
         response = client.post(
             "/api/chat/send",
             json={
@@ -236,14 +229,11 @@ class TestChatParamBounds:
 
     def test_max_tokens_capped(self):
         """max_tokens should be capped at 16384."""
-        try:
-            from fastapi.testclient import TestClient
-        except ImportError:
-            pytest.skip("FastAPI not installed")
+        pytest.importorskip("fastapi")
 
         from soup_cli.ui.app import create_app
 
-        client = TestClient(create_app())
+        client = ui_client(create_app())
         response = client.post(
             "/api/chat/send",
             json={
@@ -258,14 +248,11 @@ class TestChatParamBounds:
 
     def test_temperature_bounded(self):
         """temperature should be bounded 0.0-2.0."""
-        try:
-            from fastapi.testclient import TestClient
-        except ImportError:
-            pytest.skip("FastAPI not installed")
+        pytest.importorskip("fastapi")
 
         from soup_cli.ui.app import create_app
 
-        client = TestClient(create_app())
+        client = ui_client(create_app())
         response = client.post(
             "/api/chat/send",
             json={
@@ -279,14 +266,11 @@ class TestChatParamBounds:
 
     def test_top_p_bounded(self):
         """top_p should be bounded 0.0-1.0."""
-        try:
-            from fastapi.testclient import TestClient
-        except ImportError:
-            pytest.skip("FastAPI not installed")
+        pytest.importorskip("fastapi")
 
         from soup_cli.ui.app import create_app
 
-        client = TestClient(create_app())
+        client = ui_client(create_app())
         response = client.post(
             "/api/chat/send",
             json={
@@ -304,14 +288,11 @@ class TestChatInvalidScheme:
 
     def test_rejects_ftp_scheme(self):
         """Chat endpoint should reject ftp:// URLs."""
-        try:
-            from fastapi.testclient import TestClient
-        except ImportError:
-            pytest.skip("FastAPI not installed")
+        pytest.importorskip("fastapi")
 
         from soup_cli.ui.app import create_app
 
-        client = TestClient(create_app())
+        client = ui_client(create_app())
         response = client.post(
             "/api/chat/send",
             json={
@@ -324,14 +305,11 @@ class TestChatInvalidScheme:
 
     def test_rejects_ipv6_mapped_loopback_alias(self):
         """Chat endpoint should reject IPv6-mapped private addresses."""
-        try:
-            from fastapi.testclient import TestClient
-        except ImportError:
-            pytest.skip("FastAPI not installed")
+        pytest.importorskip("fastapi")
 
         from soup_cli.ui.app import create_app
 
-        client = TestClient(create_app())
+        client = ui_client(create_app())
         response = client.post(
             "/api/chat/send",
             json={
@@ -344,14 +322,11 @@ class TestChatInvalidScheme:
 
     def test_allows_127_loopback_range(self, upstream):
         """Chat endpoint should allow 127.x.x.x loopback addresses."""
-        try:
-            from fastapi.testclient import TestClient
-        except ImportError:
-            pytest.skip("FastAPI not installed")
+        pytest.importorskip("fastapi")
 
         from soup_cli.ui.app import create_app
 
-        client = TestClient(create_app())
+        client = ui_client(create_app())
         response = client.post(
             "/api/chat/send",
             json={
@@ -367,14 +342,11 @@ class TestChatInvalidScheme:
 
     def test_rejects_file_scheme(self):
         """Chat endpoint should reject file:// URLs."""
-        try:
-            from fastapi.testclient import TestClient
-        except ImportError:
-            pytest.skip("FastAPI not installed")
+        pytest.importorskip("fastapi")
 
         from soup_cli.ui.app import create_app
 
-        client = TestClient(create_app())
+        client = ui_client(create_app())
         response = client.post(
             "/api/chat/send",
             json={
@@ -391,14 +363,11 @@ class TestChatAuth:
 
     def test_requires_auth(self):
         """Chat send (POST) should require Bearer auth."""
-        try:
-            from fastapi.testclient import TestClient
-        except ImportError:
-            pytest.skip("FastAPI not installed")
+        pytest.importorskip("fastapi")
 
         from soup_cli.ui.app import create_app
 
-        client = TestClient(create_app())
+        client = ui_client(create_app())
         response = client.post(
             "/api/chat/send",
             json={
@@ -414,14 +383,11 @@ class TestChatValidation:
 
     def test_empty_messages_rejected(self):
         """Empty messages array should return 400."""
-        try:
-            from fastapi.testclient import TestClient
-        except ImportError:
-            pytest.skip("FastAPI not installed")
+        pytest.importorskip("fastapi")
 
         from soup_cli.ui.app import create_app
 
-        client = TestClient(create_app())
+        client = ui_client(create_app())
         response = client.post(
             "/api/chat/send",
             json={
@@ -434,14 +400,11 @@ class TestChatValidation:
 
     def test_returns_event_stream(self):
         """Chat endpoint should return text/event-stream content type."""
-        try:
-            from fastapi.testclient import TestClient
-        except ImportError:
-            pytest.skip("FastAPI not installed")
+        pytest.importorskip("fastapi")
 
         from soup_cli.ui.app import create_app
 
-        client = TestClient(create_app())
+        client = ui_client(create_app())
         # Mock httpx to avoid real connection
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -499,14 +462,11 @@ class TestThisFileIsOffline:
         This is the request that waited 75 s on macOS. If it ever passes the guard,
         the list is empty and this test says so.
         """
-        try:
-            from fastapi.testclient import TestClient
-        except ImportError:
-            pytest.skip("FastAPI not installed")
+        pytest.importorskip("fastapi")
 
         from soup_cli.ui.app import create_app
 
-        client = TestClient(create_app())
+        client = ui_client(create_app())
         response = client.post(
             "/api/chat/send",
             json={

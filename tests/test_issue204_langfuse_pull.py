@@ -33,7 +33,7 @@ import os
 import subprocess
 import sys
 import threading
-import time
+import types
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
@@ -323,8 +323,23 @@ class TestErrors:
 # ============================================================
 
 
+#: The most the loopback server holds ``/slow`` for. The fixture releases it at teardown, so
+#: in a passing run it never answers at all; this ceiling only bounds a run where the client
+#: ignores its timeout (that run then fails in about this long, not by hanging).
+_SLOW_ROUTE_CEILING_SECONDS = 10.0
+
+
 @pytest.fixture
-def loopback(monkeypatch):
+def slow_route():
+    """The two events of the loopback ``/slow`` route.
+
+    ``release`` lets the route answer; ``answered`` is set the moment it does, before it writes.
+    """
+    return types.SimpleNamespace(release=threading.Event(), answered=threading.Event())
+
+
+@pytest.fixture
+def loopback(monkeypatch, slow_route):
     for scheme in ("HTTP", "HTTPS", "ALL"):
         for name in (f"{scheme}_PROXY", f"{scheme.lower()}_proxy"):
             monkeypatch.delenv(name, raising=False)
@@ -351,13 +366,16 @@ def loopback(monkeypatch):
                 elif route == "/limited":
                     self._send(429, b'{"message":"slow down"}', [("Retry-After", "7")])
                 elif route == "/slow":
-                    time.sleep(1.5)
+                    slow_route.release.wait(_SLOW_ROUTE_CEILING_SECONDS)
+                    slow_route.answered.set()
                     self._send(200, b'{"data": [], "meta": {}}')
                 elif route == "/big":
                     self._send(200, b"x" * 4096)
                 else:
                     self._send(200, b'{"data": [], "meta": {}}')
-            except (BrokenPipeError, ConnectionResetError):
+            except ConnectionError:
+                # BrokenPipeError, ConnectionResetError, and ConnectionAbortedError (Windows,
+                # WinError 10053): the client has gone, which is what a stalled route ends in.
                 pass
 
     server = LoopbackHTTPServer(("127.0.0.1", 0), Handler)
@@ -367,6 +385,7 @@ def loopback(monkeypatch):
     try:
         yield f"http://127.0.0.1:{server.server_address[1]}", hits
     finally:
+        slow_route.release.set()
         server.shutdown()
         server.server_close()
 
@@ -418,17 +437,22 @@ class TestUrllibTransport:
 
         assert (response.status, response.body) == (429, b"")
 
-    def test_times_out(self, loopback):
+    def test_times_out(self, loopback, slow_route):
         from soup_cli.utils.ingest_pull import PullError, _urllib_transport
 
         base, _ = loopback
-        started = time.monotonic()
 
+        # ``/slow`` does not answer until the fixture releases it at teardown (or after
+        # _SLOW_ROUTE_CEILING_SECONDS). No clock is read here: the order of two events says
+        # whether the client's own 0.3 s timeout fired.
         with pytest.raises(PullError) as info:
             _urllib_transport(f"{base}/slow", _creds(), 0.3)
 
-        assert time.monotonic() - started < 1.4
         assert "timed out" in str(info.value).lower()
+        # A client with no socket timeout still ends in this PullError, only later: it waits
+        # for the answer and then trips the wall-clock deadline in _read_capped, with the same
+        # "timed out" text. The route having answered first is what tells the two apart.
+        assert not slow_route.answered.is_set(), "the client gave up only after the server answered"
 
     def test_a_refused_connection_is_a_pull_error(self):
         from soup_cli.utils.ingest_pull import PullError, _urllib_transport
@@ -983,7 +1007,7 @@ class TestRecordedRealResponse:
         assert trace_of["44d5516f74ed7738"] == trace_of["09c25553e670e9a1"]
         model = {"model": "gpt-4o-mini"}
         assert records == [  # API order: newest startTime first
-            {"trace_id": "44d5516f74ed7738", "prompt": "How tall is the Eiffel Tower?\n330 m",
+            {"trace_id": "44d5516f74ed7738", "prompt": "How tall is the Eiffel Tower?",
              "output": "The Eiffel Tower is 330 m tall.", "source": "langfuse", "signal": "none",
              "metadata": model},
             {"trace_id": "09c25553e670e9a1",
@@ -993,7 +1017,7 @@ class TestRecordedRealResponse:
             {"trace_id": "e83a0c5fd3d47039", "prompt": "Translate 'hello' to Spanish.",
              "output": "hola", "source": "langfuse", "signal": "none", "metadata": model},
             {"trace_id": "8dd24f84d2bf7735",
-             "prompt": "You are terse.\nWhat is the capital of France?",
+             "prompt": "What is the capital of France?",
              "output": "Paris.", "source": "langfuse", "signal": "none", "metadata": model},
         ]
 
@@ -1016,9 +1040,8 @@ class TestRecordedRealResponse:
 
         assert raw["8dd24f84d2bf7735"].prompt.startswith('[{"role": "system"')
 
-    def test_control_a_bare_message_list_would_keep_only_the_system_prompt(self):
-        """CONTROL for the ``{"messages": [...]}`` hand-off: ``_coerce_str`` keeps
-        only the first message of a bare list."""
+    def test_bare_and_enveloped_message_lists_keep_the_user_question(self):
+        """Both Langfuse input shapes use the same conversation rule (#1809)."""
         from soup_cli.utils.ingest_sources import parse_langfuse
 
         page = json.loads(_RECORDED_PAGE.read_text(encoding="utf-8"))["data"]
@@ -1029,7 +1052,10 @@ class TestRecordedRealResponse:
             "output": json.loads(chat["output"]),
         }
 
-        assert next(parse_langfuse([bare])).prompt == "You are terse."
+        prompt = next(parse_langfuse([bare])).prompt
+        assert prompt == "What is the capital of France?"
+        wrapped = dict(bare, input={"messages": bare["input"]})
+        assert next(parse_langfuse([wrapped])).prompt == prompt
 
 
 # ============================================================

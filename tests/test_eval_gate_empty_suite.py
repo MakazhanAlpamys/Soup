@@ -56,6 +56,28 @@ def test_load_suite_refuses_zero_tasks(
     assert str(caught.value) == ERROR
 
 
+@pytest.mark.parametrize(
+    "content",
+    [b"", b"# TODO: write the gate suite\n", b"  \n\n   \n"],
+    ids=["zero-bytes", "comment-only", "whitespace-only"],
+)
+def test_load_suite_empty_file_is_a_value_error_naming_suite(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, content: bytes,
+) -> None:
+    """The contract, not the implementation: an empty suite file is refused with a
+    ValueError whose message names the missing "suite" field (pydantic's "Field required"
+    report today; a "must be a mapping" refusal under #1878), never with a TypeError from
+    `**None`, and never with a made-up suite name or a message that hides what is wrong."""
+    monkeypatch.chdir(tmp_path)
+    path = tmp_path / "gate.yaml"
+    path.write_bytes(content)
+    with pytest.raises(ValueError) as caught:
+        gate.load_suite(str(path))
+    message = str(caught.value)
+    assert "suite" in message, repr(caught.value)
+    assert "Field required" in message or "must be a mapping" in message, repr(caught.value)
+
+
 @pytest.mark.parametrize("payload", EMPTY_SUITES, ids=["explicit", "missing", "misspelled"])
 @pytest.mark.parametrize("with_model", [False, True], ids=["smoke", "model-factory"])
 def test_cli_refuses_before_model_construction(

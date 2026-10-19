@@ -265,6 +265,9 @@ construction or a verdict. Direct `run_gate` calls also refuse an empty list,
 including a suite emptied after loading. Unknown-key handling and the no-model
 smoke generator are unchanged (#1798).
 
+Task names must be unique by exact string equality; repeated names are refused
+before evaluation or baseline writing, rather than overwriting earlier scores (#1824).
+
 Baselines may be a registry reference (`registry://<name-or-id>`), a file path, or omitted for the first run. A registry baseline uses the newest eval row for each benchmark — re-measuring a benchmark replaces its baseline score — and warns, per benchmark, when that row's scorer stamp is missing or from a different scorer revision. A task whose evaluation raises (`ValueError`, `FileNotFoundError`, `OSError`, or a judge that stays unreachable) gets no score and fails the gate closed under `on_regression: stop`; the log line lists it as a task that could not be scored, with the error, rather than as a regression (#1447).
 
 A zero-byte or whitespace-only judge prompt file is an input error naming the
@@ -337,6 +340,8 @@ soup drift-alarm --reference ft-time.jsonl --live yesterday.jsonl --threshold 0.
 ```
 
 Default threshold 0.2 matches v0.43.0 KL-delta quant-check thresholds. Webhooks are SSRF-validated (loopback HTTP only, RFC1918 / 169.254.x / `100.64.0.0/10` / `fec0::/10` / 0.0.0.0 rejected). On drift the CLI exits with code 3 — cron-friendly automation.
+
+Each JSONL row's text is read from `output`, `response` or `text`. A file in which no row carries one of those keys (a live log keyed `completion`, an empty file, all-malformed JSON) is not a passing gate: nothing was compared, so the command exits 1 naming the file and the keys instead of printing OK with `n_live: 0` (#1808).
 
 
 ## Diagnose (Post-Training Report Card)
@@ -481,6 +486,25 @@ CPU-instant):
 | `mini_format_json` | JSON validity (a structured object, not a bare scalar) | container-only JSON check |
 | `mini_safety` | refusal-rate on harmful prompts (under-refusal = regression) | refusal heuristic |
 | `mini_over_refusal` | benign prompts are NOT refused (over-refusal = regression) | refusal heuristic (inverse) |
+
+Custom task evaluation and bundled suites accept an ordinary `gen(prompt) -> str`
+callable and also use its optional `gen.batch(prompts) -> list[str]` method. Batch
+results must preserve prompt order and have the same length as the input. If the
+batch raises, scalar retries isolate failed items; a malformed result fails the
+batch and a non-string item fails that item. Generation failures always score zero,
+including when an empty response would otherwise match or count as non-refusal.
+
+The shared live greedy generator used by `soup ship` exposes this method with left
+padding, the same prompt/chat-template preparation as scalar decoding, and bounded
+batches of eight prompts. Python callers can set `make_generator(..., batch_size=1)`
+or another positive size. Each prompt returns one completion even when the model's
+saved generation configuration requests multiple sequences; the shared model
+configuration is not changed. Successful outputs retain the same scores and the default
+CLI output format is unchanged. CPU tests compare real tiny GPT-2 and Llama outputs
+against scalar generation; no GPU throughput or cross-device numerical equivalence
+is claimed. Scorer revision 6 marks the corrected generation-failure handling, so
+older saved baselines receive the existing provenance warning. Progress events are
+a separate follow-up to #1759.
 
 Each suite is >20 items so a single-item flip (1/N < 0.05) trips the default threshold instead
 of being rounded away. The scorer is answer-**extraction** — a spurious substring inside a word
@@ -638,6 +662,55 @@ soup ship --evidence ship_evidence.json --config soup.yaml --push owner/repo#42
 
 `soup ci init --config soup.yaml` binds the generated workflow's ship step to the committed
 config, so the whole loop runs in CI (see [commands.md](commands.md)).
+
+### Strict evidence provenance
+
+`--emit-evidence` now adds a versioned `provenance.binding` block separately from
+`config_sha`. It records the local adapter manifest Merkle root (the existing
+adapter-signing manifest), exact task-eval file SHA-256, actual suite names plus
+Soup/scorer versions, and the effective verdict policy with a canonical SHA-256.
+The policy includes threshold, task mode, suites, judge endpoint identity and
+noise-floor repeat count. Judge URLs are hashed so endpoint paths, query values
+and credentials are not written into this descriptor.
+
+For an offline gate, opt in with the comparison inputs available locally:
+
+```bash
+soup ship --evidence ship_evidence.json --config soup.yaml --adapter ./adapter \
+  --require-provenance
+```
+
+`--task-eval` and suite/judge settings come from `eval.ship` or explicit CLI flags,
+with the usual CLI precedence. The strict gate (exit 3 on missing/mismatched
+identity) compares adapter and task bytes, current local training-source bytes,
+suite version, policy and the evidence's actual task mode/benchmark set. Unknown
+adapter/task identities are refused. Store emitted evidence outside the adapter
+directory: the manifest covers its files. A changed input during a live emitted
+run is refused on the before/after comparison; this is not a filesystem snapshot.
+
+The optional `--data-sha256 <64-lowercase-hex>` records an explicitly
+**caller-asserted training-data identity**, never proof of transformed examples
+consumed. Supply the same assertion when gating it. A simple local raw training
+source can also be compared at verdict time; remote, mixed, replay, tokenized,
+streaming and directory sources stay unknown. When that source is unknown,
+strict verification requires the caller assertion. Neither this descriptor nor
+legacy `data_sha` relabels a verdict-time hash as training-time evidence. The
+startup producer tracked in #1764 is separate.
+
+The strict mode requires offline `--evidence`, `--config`, a local nonempty
+`--adapter` manifest and a readable task-eval file; it does not claim identity for
+an arbitrary remote `--tuned` model. Judge modes also need the declared judge
+endpoint. The descriptor identifies external lm-eval suites by name and Soup
+version; it does not fingerprint external harness packages or datasets. Baseline
+scores and measured noise floors remain trusted evidence inputs, not independent
+reruns during an offline gate.
+
+Legacy/default replay remains recipe-only. `--require-provenance` keeps all
+checks even when `--emit-evidence` is also present. Ordinary external-score
+stamping remains available: it binds caller-trusted supplied scores to declared
+inputs, and records their actual task mode/suite axes. It is not a model run,
+attestation, signature or forgery protection. The unkeyed hashes detect drift;
+use the existing signing/attestation tools for a trust boundary.
 
 **Baseline provenance (#404).** Produce a stamped baseline with
 `soup eval gate --suite <suite.yaml> --model <id> --write-baseline baseline.json`
@@ -945,6 +1018,19 @@ How the string scorers read an output:
 | `answer` | The final answer each side states, read with the parser GRPO's `accuracy` reward uses (`#### 4`, `\boxed{4}`, `The answer is 4.`); numbers compare by value | match | no match |
 | `contains` | `expected` as a whole alphanumeric-bounded token, case-insensitive via `str.lower()` on both sides (so `istanbul` does not match `İstanbul`, nor `s` match `ſ`) | match | no match |
 | `exact` | The whole stripped output, case-insensitive | no match | no match |
+
+The two tool-call scorers parse the call and compare `arguments` as **JSON**, not as
+strings, and `1` is not `true` there: JSON has one boolean type and one number type, and a
+boolean compared with `==` against a number would be equal in Python (`True == 1`). So
+
+| `scoring` | Scores | gold `{"enabled": true}` vs `{"enabled": true}` | vs `{"enabled": 1}` |
+|---|---|---|---|
+| `tool_call_match` | the parsed `arguments` objects must be equal, JSON types included; the function name must match too | match | no match |
+| `tool_call_args_subset` | `0.5` for the function name plus `0.5` for the fraction of expected arguments present with a matching value | `1.0` | `0.5` — the name matched, the argument did not |
+
+Numbers still compare equal across forms, so gold `{"n": 1}` matches `{"n": 1.0}`; that is
+existing behaviour and not a rounding of the policy. The rule applies inside nested objects
+and lists, and whether `arguments` is an object or a JSON string does not change it.
 
 `answer` refuses, at load time, an `expected` that states no single answer (a multi-line
 worked solution with no `####`, an empty `\boxed{}`, a hedge between values), naming the line.

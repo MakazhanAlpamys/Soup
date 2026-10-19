@@ -2870,6 +2870,8 @@ class StreamRuntime:
     external_sources: Tuple[Any, ...] = ()
     #: training.stream_nf4_scale_cache — the layers' shared NF4ScaleCache, or None.
     scale_cache: Any = None
+    #: Per MoE layer, the reader of its experts file (expert_layout "per_expert").
+    expert_readers: Tuple[Any, ...] = ()
 
     def close(self) -> None:
         """Release the weight source and detach the prefetch hook.
@@ -2881,13 +2883,18 @@ class StreamRuntime:
         mapping charges Windows commit for the file's whole size (#926).
         A no-op for the RAM tier, which owns neither a thread nor handles.
         """
-        source_close = getattr(self.source, "close", None)
-        if callable(source_close):
-            source_close()
-        for external in self.external_sources:
-            external_close = getattr(external, "close", None)
-            if callable(external_close):
-                external_close()
+        try:
+            source_close = getattr(self.source, "close", None)
+            if callable(source_close):
+                source_close()
+            for external in self.external_sources:
+                external_close = getattr(external, "close", None)
+                if callable(external_close):
+                    external_close()
+        finally:
+            # One open handle per MoE layer's experts file (expert_layout "per_expert").
+            for reader in self.expert_readers:
+                reader.close()
         if self.hook is not None:
             self.hook.remove()
             self.hook = None
@@ -2915,11 +2922,18 @@ class StreamRuntime:
             # number there would be an invented one.
             "read_ahead": getattr(self.source, "read_ahead", None),
             "disk_bytes": getattr(self.source, "disk_bytes", 0),
+            "drive_count": len(getattr(self.source, "direct_io_roots", {})),
+            "direct_io_drives": sum(
+                getattr(self.source, "direct_io_roots", {}).values()
+            ),
+            "direct_io_roots": dict(getattr(self.source, "direct_io_roots", {})),
             "layer_loads": self.pool.loads,
             "large_loads": getattr(self.large_pool, "loads", 0),
             "device": self.device,
             "total_params": self.total_params,
             "nf4_scale_cache_bytes": getattr(self.scale_cache, "nbytes", 0),
+            "expert_fetches": sum(reader.fetches for reader in self.expert_readers),
+            "expert_bytes_read": sum(reader.bytes_read for reader in self.expert_readers),
         }
 
 
@@ -2998,6 +3012,48 @@ def _load_layer_buffers(
                 setattr(owner, leaf, value.to(device=buf.device, copy=True))
                 loaded += 1
     return loaded
+
+
+def _install_expert_streaming(
+    layers: Any,
+    shard_dir: str,
+    index: Any,
+    *,
+    device: str,
+    codes: Optional[Mapping[str, Any]],
+) -> Tuple[Any, ...]:
+    """Swap each MoE layer's experts module for a ``StreamedExperts``.
+
+    Only for a cache sharded with ``expert_layout="per_expert"``; returns the
+    experts-file readers (closed by ``StreamRuntime.close``).
+    """
+    from soup_cli.utils.expert_stream import (
+        EXPERT_LAYOUT_PER_EXPERT,
+        ExpertFetcher,
+        ExpertShardReader,
+        install_expert_streaming,
+    )
+    from soup_cli.utils.layer_shard import expert_paths
+
+    if getattr(index, "expert_layout", "") != EXPERT_LAYOUT_PER_EXPERT:
+        return ()
+    readers: Dict[int, Any] = {}
+    try:
+        for layer, path in expert_paths(shard_dir, index).items():
+            readers[layer] = ExpertShardReader(
+                path,
+                count=index.expert_count,
+                shapes=index.expert_shapes,
+                quant_specs=index.expert_quant_specs,
+                dtype=index.dtype,
+            )
+        fetcher = ExpertFetcher(device=device, dtype=index.dtype, codes=codes)
+        install_expert_streaming(layers, readers, fetcher)
+    except BaseException:
+        for reader in readers.values():
+            reader.close()
+        raise
+    return tuple(readers.values())
 
 
 def install_streaming(
@@ -3088,13 +3144,18 @@ def install_streaming(
             f"{index.n_layers} — reshard the checkpoint"
         )
 
+    _require_stripe_folders(shard_dir, index)
+    # Before the name maps: the fused expert parameters leave the layer here,
+    # so the layer pool never allocates them.
+    expert_readers = _install_expert_streaming(
+        layers, shard_dir, index, device=str(device), codes=codes
+    )
     layer_name_maps = [_layer_name_map(layer) for layer in layers]
     if not any(layer_name_maps):
         raise RuntimeError(
             "no meta decoder weights found — the base was materialised, which "
             "defeats layer streaming entirely"
         )
-    _require_stripe_folders(shard_dir, index)
     decoder_paths = layer_paths(shard_dir, index)
     layer_specs = RamSource.layer_specs_from_paths(decoder_paths)
     large_specs = large_layer_specs(shard_dir, index)
@@ -3284,6 +3345,7 @@ def install_streaming(
         large_pool=large_pool,
         hook=handle,
         total_params=int(getattr(index, "total_params", 0) or 0),
+        expert_readers=expert_readers,
         tier=tier,
         scale_cache=scale_cache,
     )
@@ -3456,6 +3518,25 @@ def _say_unaligned_staging(source: Any, console: Any) -> None:
         console.print(f"[yellow]{UNALIGNED_STAGING_MESSAGE}[/]")
 
 
+def _say_page_cache_roots(source: Any, console: Any) -> None:
+    """Name each drive whose operating system refused direct I/O (#1615)."""
+    if console is None:
+        return
+    from soup_cli.utils.terminal import for_terminal
+
+    for root, reason in getattr(source, "page_cache_reasons", {}).items():
+        console.print(
+            "[yellow]Layer streaming reads "
+            f"{for_terminal(root)} through the page cache: direct I/O is unavailable there "
+            f"({for_terminal(reason)}).[/]"
+        )
+
+
+def _say_disk_source_fallbacks(source: Any, console: Any) -> None:
+    _say_unaligned_staging(source, console)
+    _say_page_cache_roots(source, console)
+
+
 def _build_source(
     shard_dir,
     n_layers,
@@ -3557,10 +3638,10 @@ def _build_source(
                 # otherwise report as an out-of-memory it never had.
                 recover_from_failed_page_lock(console=console)
             else:
-                _say_unaligned_staging(source, console)
+                _say_disk_source_fallbacks(source, console)
                 return source, source.pinned
         source = AsyncDiskSource(shard_dir, n_layers, spec, pin=False, **open_kwargs)
-        _say_unaligned_staging(source, console)
+        _say_disk_source_fallbacks(source, console)
         return source, source.pinned
     # `source.pinned` on both branches rather than the literal, so the tuple's
     # second element has ONE meaning to read off: what the source says about

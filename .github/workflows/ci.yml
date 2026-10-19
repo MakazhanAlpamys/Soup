@@ -131,12 +131,12 @@ jobs:
   #
   # So `plan` picks one of four matrices, and every job except `lint` follows it:
   #
-  #   push to release/**               RELEASE: all nine test cells + the five gated jobs
+  #   push to release/**               RELEASE: all nine test cells + the six gated jobs
   #   nightly run on main, a manual    FULL: seven test cells (no Windows or macOS
-  #     dispatch                         on 3.11) + the five gated jobs
+  #     dispatch                         on 3.11) + the six gated jobs
   #   pull request labelled ci:full    APPROVAL: the four required test cells (ubuntu
   #                                      on 3.10 and 3.12, Windows and macOS on
-  #                                      3.12) + the five gated jobs
+  #                                      3.12) + the six gated jobs
   #   push to main, any other pull     QUICK: lint + test (ubuntu-latest, 3.12)
   #     request run
   #   draft pull request               nothing: no job starts
@@ -474,13 +474,72 @@ jobs:
           path: ${{ runner.temp }}/hf-cache
           key: hf-pytorch-smoke-${{ runner.os }}-${{ hashFiles('tests/test_smoke_train.py', 'pyproject.toml') }}
 
+  # #1802: the training stack requires newer core dependencies, so its floor job
+  # cannot exercise every light-core floor. Install only the core here, on the
+  # oldest supported Python (PyYAML 6.0 has wheels for it), and start the CLI.
+  core-floor:
+    needs: plan
+    if: needs.plan.outputs.full == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: "utf-8"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Isolate core floors from runner tooling
+        # Runner/image tooling can require newer packages (wheel>=0.46 needs
+        # packaging>=24) than the core floor. Keep that graph outside this cell.
+        run: |
+          python -m venv "$RUNNER_TEMP/soup-core-floor"
+          echo "$RUNNER_TEMP/soup-core-floor/bin" >> "$GITHUB_PATH"
+      - name: Install the declared core dependency floors
+        # pytest 9 requires packaging>=22, above Soup's packaging>=21 floor.
+        # The test runner is tooling, so keep its compatible major here.
+        run: pip install -e . "pytest>=7,<9" -c .github/constraints/core-floor.txt
+      - name: Verify constrained core dependency graph
+        run: python -m pip check
+      - name: Assert core floor versions
+        shell: python
+        run: |
+          import importlib.metadata as md
+          import importlib.util
+          import re
+          from pathlib import Path
+
+          from packaging.version import Version
+
+          constraints = Path(".github/constraints/core-floor.txt").read_text(encoding="utf-8")
+          pairs = re.findall(r"^([A-Za-z0-9_-]+)==([^\s#]+)\s*$", constraints, re.MULTILINE)
+          expected = dict(pairs)
+          assert expected and len(expected) == len(pairs), "missing or duplicate core pins"
+          for name, want in expected.items():
+              got = md.version(name)
+              assert Version(got) == Version(want), f"core-floor expected {name}=={want}, got {got}"
+              print(f"{name}={got} (matches declared floor)")
+          for name in ("torch", "transformers", "accelerate", "peft", "trl", "datasets", "bitsandbytes"):
+              assert importlib.util.find_spec(name) is None, f"core-floor installed {name}"
+      - name: Run core floor command tree, help and startup checks
+        run: >
+          pytest -o addopts= -q
+          tests/test_core_dependency_floors.py
+          tests/test_cli_dependency_floors.py
+          tests/test_click_argument_help.py
+          tests/test_cli_startup_is_light.py
+          tests/test_cli.py
+          tests/test_cli_subprocess.py
+          tests/test_plotext_compat.py
+
   # #502/#503/#522/#571/#651: install the exact Torch 2.6.0 / Transformers 5.16.1 /
   # trl 0.29 / PEFT 0.20 support stack and Plotext 6.0.0 so pip cannot silently
   # upgrade the cell, then assert every pinned compatibility boundary.
   # #1802: the same file pins Typer and Click to the floors pyproject.toml declares,
-  # and the last step starts the CLI on them. It is the one cell that does: every
-  # other cell resolves the newest Typer, which is how a floor no command could run
-  # on stayed declared. The job keeps its name; branch protection requires it.
+  # and the last step starts the CLI on them, alongside the core-only cell above.
+  # The ordinary test matrix resolves the newest Typer, which is how a floor no
+  # command could run on stayed declared. Keep the name; branch protection requires it.
   transformers-floor:
     needs: plan
     if: needs.plan.outputs.full == 'true'
@@ -558,6 +617,7 @@ jobs:
           tests/test_bugfixes.py::TestDiffModelLoading
           tests/test_issue636_torch_floor.py
           tests/test_issue265_xcodec2_audio_contract.py
+          tests/test_native_csm.py
           tests/test_cli_dependency_floors.py
           tests/test_click_argument_help.py
           tests/test_cli_startup_is_light.py
@@ -586,6 +646,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+          cache: ${{ runner.os == 'Linux' && matrix.python-version == '3.12' && 'pip' || '' }}
+          cache-dependency-path: |
+            pyproject.toml
+            .github/constraints/*.txt
       # The Web UI escaping tests run `safe_html.js` under node, and skip when
       # node is absent. Runner images happen to ship one, so the skip would be
       # silent: pin it, or the only tests that execute the real escaping logic

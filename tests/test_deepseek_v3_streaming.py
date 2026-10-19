@@ -284,6 +284,37 @@ def test_setup_hands_the_config_layer_count_to_the_sharder_for_deepseek_v3_only(
     assert calls[0]["num_hidden_layers"] == expected
 
 
+def test_streamed_model_is_built_from_native_code_while_the_tokenizer_trusts_remote(
+    tmp_path, monkeypatch
+):
+    """Moonlight-16B (deepseek_v3) ships its tokenizer only as remote code, and its
+    remote modelling code keeps one module per expert, which the stacked shards do
+    not fit. So the tokenizer gets the user's trust_remote_code and the model side
+    (config, skeleton, install) never does."""
+    from tests.test_issue602_qwen4_ple_streaming import _drive_qwen4_streaming_setup
+
+    calls = {}
+    _drive_qwen4_streaming_setup(
+        tmp_path, monkeypatch, arch="deepseek_v3", model_cfg=_deepseek_setup_cfg(),
+        load_calls=calls, trust_remote_code=True,
+    )
+    assert [call["trust_remote_code"] for call in calls["tokenizer"]] == [True]
+    assert [call["trust_remote_code"] for call in calls["config"]] == [False]
+    assert [call["trust_remote_code"] for call in calls["build"]] == [False]
+
+
+def test_setup_meta_probe_is_built_from_native_code(monkeypatch):
+    """The NF4 / moe_lora probe in the setup: the same rule as the model itself."""
+    import soup_cli.utils.layer_stream_runtime as runtime
+    from soup_cli.trainer.stream_setup import StreamingSetupMixin
+
+    seen = []
+    monkeypatch.setattr(runtime, "build_meta_skeleton", lambda *a, **k: seen.append(k) or "probe")
+    probe = StreamingSetupMixin._stream_meta_skeleton("base", dtype="bfloat16", quant="nf4")
+    assert probe == "probe"
+    assert seen == [{"dtype": "bfloat16", "quant": "nf4", "trust_remote_code": False}]
+
+
 def test_planner_fingerprints_config_json_for_deepseek_v3(tmp_path, monkeypatch):
     """The planner must agree with the sharder (`source_identity_includes_config`),
     or it reports a stale cache as reusable and the disk pre-flight under-counts."""

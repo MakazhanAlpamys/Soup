@@ -15,6 +15,7 @@ from soup_cli.registry.diff import config_diff, eval_delta
 from soup_cli.registry.store import (
     AmbiguousRefError,
     RegistryStore,
+    validate_idempotency_key,
     validate_name,
     validate_tag,
 )
@@ -72,11 +73,21 @@ def push_cmd(
             "what the run trained on. Must be a file under the current directory."
         ),
     ),
+    idempotency_key: Optional[str] = typer.Option(
+        None, "--idempotency-key",
+        help=(
+            "Make a retry safe: a later push with the same key and the same run, name, "
+            "tag and data returns the existing entry instead of a new one; anything "
+            "different is refused. 1-128 characters from letters, digits, '.', '_', ':', '-'."
+        ),
+    ),
 ) -> None:
     """Register a completed training run as a registry entry."""
     try:
         validate_name(name)
         validate_tag(tag)
+        if idempotency_key is not None:
+            validate_idempotency_key(idempotency_key)
     except ValueError as exc:
         _fail(f"Invalid input: {exc}")
     data_path = _data_file(data) if data is not None else None
@@ -88,15 +99,21 @@ def push_cmd(
         if tracker.get_run(run_id) is None:
             _fail(f"Run not found: {run_id}")
         with RegistryStore() as store:
+            earlier = (
+                store.get_by_idempotency_key(idempotency_key)
+                if idempotency_key is not None else None
+            )
             try:
                 entry_id = store.register_from_run(
                     tracker, run_id, name=name, tag=tag,
                     notes=notes or None, data_path=data_path,
+                    idempotency_key=idempotency_key,
                 )
             except ValueError as exc:
                 _fail(str(exc))
+        verb = "Already registered" if earlier and earlier["id"] == entry_id else "Registered"
         console.print(Panel(
-            f"Registered [cyan]{escape(name)}[/]:[magenta]{escape(tag)}[/]\n"
+            f"{verb} [cyan]{escape(name)}[/]:[magenta]{escape(tag)}[/]\n"
             f"Entry ID: [bold]{escape(entry_id)}[/]",
             title="Registry", border_style="green",
         ))
@@ -172,6 +189,9 @@ def show_cmd(
             ("name", entry["name"]),
             ("tags", ", ".join(entry.get("tags", []))),
             ("base_model", entry["base_model"]),
+            ("base_revision", entry.get("base_revision") or "unknown"),
+            ("base_revision_source", entry.get("base_revision_source") or "unknown"),
+            ("training_data_sha256", entry.get("training_data_sha256") or "unknown"),
             ("task", entry["task"]),
             ("run_id", entry.get("run_id") or "-"),
             ("entry_hash", entry.get("entry_hash", "")[:16] + "..."),

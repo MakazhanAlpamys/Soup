@@ -128,6 +128,13 @@ def _require_gate_tasks(suite: EvalSuite) -> None:
         raise ValueError(
             f"eval-gate suite {suite.suite!r} field 'tasks' must contain at least one task"
         )
+    names: set[str] = set()
+    for task in suite.tasks:
+        if task.name in names:
+            raise ValueError(
+                f"eval-gate suite {suite.suite!r} repeats task name {task.name!r}"
+            )
+        names.add(task.name)
 
 
 def load_suite(path: str) -> EvalSuite:
@@ -157,6 +164,21 @@ def current_baseline_stamp() -> dict[str, object]:
     }
 
 
+def _finite_score(value: object, *, name: str, context: str) -> float:
+    """Convert and validate that a score is a finite float (#1865)."""
+    try:
+        fval = float(value)  # type: ignore[arg-type]
+    except OverflowError as exc:
+        raise ValueError(
+            f"{context}: score for {name!r} is out of range (must be finite)"
+        ) from exc
+    if not math.isfinite(fval):
+        raise ValueError(
+            f"{context}: score for {name!r} must be finite"
+        )
+    return fval
+
+
 def stamp_baseline_scores(scores: Mapping[str, float]) -> dict[str, object]:
     """Build the stamped baseline envelope (shared writer helper, #404).
 
@@ -176,12 +198,7 @@ def stamp_baseline_scores(scores: Mapping[str, float]) -> dict[str, object]:
                 f"baseline score for {name!r} must be a number, "
                 f"got {type(value).__name__}"
             )
-        fval = float(value)
-        if not math.isfinite(fval):
-            raise ValueError(
-                f"baseline score for {name!r} must be finite, got {value}"
-            )
-        clean[name] = fval
+        clean[name] = _finite_score(value, name=name, context="baseline score")
     return {
         _BASELINE_SCORES_KEY: clean,
         _BASELINE_PROVENANCE_KEY: current_baseline_stamp(),
@@ -221,12 +238,7 @@ def _coerce_score_map(raw: Mapping[object, object], *, context: str) -> dict[str
                 f"{context}: score for {name!r} must be a number, "
                 f"got {type(value).__name__}"
             )
-        fval = float(value)
-        if not math.isfinite(fval):
-            raise ValueError(
-                f"{context}: score for {name!r} must be finite, got {value}"
-            )
-        out[name] = fval
+        out[name] = _finite_score(value, name=name, context=context)
     return out
 
 
@@ -614,10 +626,11 @@ def run_gate(
                 f"baseline score for {base_name!r} must be a number, "
                 f"got {type(base_val).__name__}"
             )
-        if not math.isfinite(base_val):
-            raise ValueError(
-                f"baseline score for {base_name!r} must be finite, got {base_val}"
-            )
+        _finite_score(
+            base_val,
+            name=str(base_name),
+            context="baseline score",
+        )
     _require_gate_tasks(suite)
     task_results: list[GateTaskResult] = []
     any_regressed = False

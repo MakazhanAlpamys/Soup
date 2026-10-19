@@ -86,6 +86,7 @@ def _infer_env(monkeypatch, tmp_path, prompts, generate):
     (tmp_path / "prompts.txt").write_text("\n".join(prompts) + "\n")
     monkeypatch.setattr("soup_cli.utils.gpu.detect_device", lambda: ("cpu", None))
     monkeypatch.setattr("torch.cuda.is_available", lambda: False)
+    monkeypatch.setattr("soup_cli.utils.cuda_graphs._is_cuda_available_light", lambda: True)
     monkeypatch.setattr("soup_cli.utils.cuda_graphs.cuda_graph_generation_kwargs", lambda model: {})
     monkeypatch.setattr(infer, "_load_model", MagicMock(return_value=(object(), object())))
     monkeypatch.setattr(infer, "_count_prompt_tokens", lambda tokenizer, text: len(text.split()))
@@ -166,6 +167,7 @@ def test_unsupported_graph_model_preserves_existing_output(monkeypatch, tmp_path
     output = tmp_path / "output.jsonl"
     output.write_text("previous results\n")
     monkeypatch.setattr("soup_cli.utils.gpu.detect_device", lambda: ("cpu", None))
+    monkeypatch.setattr("soup_cli.utils.cuda_graphs._is_cuda_available_light", lambda: True)
     monkeypatch.setattr(infer, "_load_model", MagicMock(return_value=(object(), object())))
     reject = MagicMock(side_effect=RuntimeError("Unsupported model for CUDA graphs"))
     monkeypatch.setattr("soup_cli.utils.cuda_graphs.cuda_graph_generation_kwargs", reject)
@@ -181,6 +183,20 @@ def test_unsupported_graph_model_preserves_existing_output(monkeypatch, tmp_path
     assert "Omit --cuda-graphs" in _plain(result.output)
     assert output.read_text() == "previous results\n"
     generate.assert_not_called()
+
+
+def test_cpu_refusal_happens_before_the_model_loads(monkeypatch, tmp_path):
+    from soup_cli.cli import app
+    from soup_cli.commands import infer
+
+    model_dir = _infer_env(monkeypatch, tmp_path, ["question"], MagicMock())
+    monkeypatch.setattr("soup_cli.utils.cuda_graphs._is_cuda_available_light", lambda: False)
+    load = MagicMock()
+    monkeypatch.setattr(infer, "_load_model", load)
+    result = CliRunner().invoke(app, _infer_args(model_dir, "--cuda-graphs"))
+    assert result.exit_code == 1
+    assert "single CUDA device" in _plain(result.output)
+    load.assert_not_called()
 
 
 def test_infer_warms_up_greedily_on_the_longest_prompt_before_writing(monkeypatch, tmp_path):
@@ -462,3 +478,72 @@ def test_bench_timed_failure_is_named_and_the_default_re_raises(monkeypatch, tmp
     monkeypatch.setattr(infer, "_generate", MagicMock(side_effect=[("warm", 1), boom]))
     result = CliRunner().invoke(app, _bench_args(model_dir))
     assert result.exception is boom
+
+
+def _invoke(command, model_dir, *extra):
+    from soup_cli.cli import app
+
+    if command == "bench":
+        args = ["bench", "infer", str(model_dir), "--num-prompts", "1", *extra]
+    else:
+        args = _infer_args(model_dir, *extra)
+    return CliRunner().invoke(app, [*args, "--cuda-graphs"])
+
+
+@pytest.mark.parametrize("command", ["infer", "bench"])
+def test_local_model_files_are_refused_before_the_model_loads(monkeypatch, tmp_path, command):
+    from soup_cli.commands import infer
+
+    model_dir = _infer_env(monkeypatch, tmp_path, ["question"], MagicMock())
+    (model_dir / "config.json").write_text(json.dumps({"model_type": "gpt2"}))
+    load = MagicMock()
+    monkeypatch.setattr(infer, "_load_model", load)
+    result = _invoke(command, model_dir)
+    assert result.exit_code == 1, (result.output, repr(result.exception))
+    assert "stock Qwen2 and Llama" in _plain(result.output)
+    assert "Omit --cuda-graphs" in _plain(result.output)
+    load.assert_not_called()
+
+
+@pytest.mark.parametrize("command", ["infer", "bench"])
+def test_an_explicit_base_directory_is_inspected_too(monkeypatch, tmp_path, command):
+    from soup_cli.commands import infer
+
+    model_dir = _infer_env(monkeypatch, tmp_path, ["question"], MagicMock())
+    base_dir = tmp_path / "base"
+    base_dir.mkdir()
+    (base_dir / "config.json").write_text(
+        json.dumps({"model_type": "qwen2", "quantization_config": {"bits": 4}})
+    )
+    load = MagicMock()
+    monkeypatch.setattr(infer, "_load_model", load)
+    result = _invoke(command, model_dir, "--base", str(base_dir))
+    assert result.exit_code == 1, (result.output, repr(result.exception))
+    assert "unquantized" in _plain(result.output)
+    load.assert_not_called()
+
+
+def test_an_explicit_cpu_device_is_refused_even_when_cuda_is_present(monkeypatch, tmp_path):
+    from soup_cli.commands import infer
+
+    model_dir = _infer_env(monkeypatch, tmp_path, ["question"], MagicMock())  # CUDA "present"
+    load = MagicMock()
+    monkeypatch.setattr(infer, "_load_model", load)
+    result = _invoke("infer", model_dir, "--device", "cpu")
+    assert result.exit_code == 1, (result.output, repr(result.exception))
+    assert "single CUDA device" in _plain(result.output)
+    load.assert_not_called()
+
+
+@pytest.mark.parametrize("command", ["infer", "bench"])
+def test_file_derived_text_in_the_refusal_is_terminal_safe(monkeypatch, tmp_path, command):
+    model_dir = _infer_env(monkeypatch, tmp_path, ["question"], MagicMock())
+    (model_dir / "adapter_config.json").write_text(
+        json.dumps({"peft_type": "EVIL\x1b[2J\x1b]0;pwned\x07"})
+    )
+    result = _invoke(command, model_dir)
+    assert result.exit_code == 1, (result.output, repr(result.exception))
+    assert "LoRA adapters only" in _plain(result.output)
+    for raw in ("\x1b[2J", "\x1b]0;", "\x07"):
+        assert raw not in result.output
+

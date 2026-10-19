@@ -2691,6 +2691,7 @@ Usage: `soup loop init [OPTIONS] SERVED_MODEL`
 | `--monthly-budget` | text |  |  | Monthly USD cap (e.g. 50usd, 100). |
 | `--max-runs-per-day` | integer |  |  | Cap on iteration starts per UTC day. |
 | `--pre-wired` | flag | off |  | Use the pre-wired harvest/train/gate/deploy stages (utils/loop_stages.py) on watch instead of no-op stubs (v0.71.4). |
+| `--thumbs-db` | text |  |  | Local-RL SQLite written by `soup serve --record-thumbs`; the pre-wired harvest turns its thumbs into preference pairs. Must stay under cwd. SOUP_LOOP_THUMBS_DB overrides it. |
 | `--force` | flag | off |  | Overwrite existing loop.yaml. |
 
 ### `soup loop pause`
@@ -3229,6 +3230,7 @@ Usage: `soup registry push [OPTIONS]`
 | `--tag`, `-t` | text | `v1` |  | Tag (e.g. v1, prod-2024) |
 | `--notes` | text | `""` |  | Free-form notes |
 | `--data` | text |  |  | Training data file to record: its SHA-256 is stored as data_hash. This is the file registered as the training input, not proof of what the run trained on. Must be a file under the current directory. |
+| `--idempotency-key` | text |  |  | Make a retry safe: a later push with the same key and the same run, name, tag and data returns the existing entry instead of a new one; anything different is refused. 1-128 characters from letters, digits, '.', '\_', ':', '-'. |
 
 ### `soup registry search`
 
@@ -3468,6 +3470,8 @@ Usage: `soup ship [OPTIONS] [<command>] [ARGS]...`
 | `--output`, `-o` | text |  |  | Write the verdict JSON to this path. |
 | `--emit-evidence` | text |  |  | Write the scores in the --evidence INPUT schema so this run can be replayed offline (output-is-input). With --config it also STAMPS the config's provenance onto the emitted evidence. |
 | `--config` | text |  |  | soup.yaml whose eval.ship block supplies defaults (CLI flags win). With --evidence alone it GATES (refuses evidence whose config_sha drifted from this config, or whose numerics family does not match); with --emit-evidence it STAMPS this config's provenance. |
+| `--require-provenance` | flag | off |  | Strict offline drift check: requires --evidence, --config, --adapter and task eval. Compare artifact/task/source bytes, suite version and effective verdict policy. |
+| `--data-sha256` | text |  |  | Caller-asserted training-data SHA-256 for emitted/strict evidence; not proof of which bytes trained the model. |
 | `--push` | text |  |  | Post the verdict as a GitHub PR comment (owner/repo#N). Auth via GITHUB_TOKEN / GH_TOKEN; needs the `gh` CLI. |
 | `--device` | text |  |  | Device for the live run (cuda / cpu). |
 | `--chat-template-kwargs` | text |  |  | Live chat-template variables as a JSON object, e.g. {"enable_thinking":false}. |
