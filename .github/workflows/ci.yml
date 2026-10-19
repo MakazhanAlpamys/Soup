@@ -629,6 +629,55 @@ jobs:
           tests/test_gen_reference_docs.py
           tests/test_cli_runner.py
 
+  typer-vendored:
+    needs: plan
+    if: needs.plan.outputs.full == 'true'
+    # Exercise the vendored identities without upgrading either floor environment.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install pinned vendored Typer compatibility lane
+        run: python -m pip install -e . "pytest>=7,<9" "typer==0.27.3" "click==8.4.2"
+      - name: Verify pinned vendored identities and compatibility scenarios
+        env:
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+          HF_HUB_OFFLINE: "1"
+          TRANSFORMERS_OFFLINE: "1"
+        run: |
+          python - <<'PY'
+          import json
+          from importlib.metadata import version
+          import click
+          from typer._click.core import Command, Context, ParameterSource
+          from typer._click.exceptions import MissingParameter, UsageError
+          from typer.core import TyperGroup
+          from typer.main import get_command
+          from soup_cli.cli import app
+          from soup_cli.utils import typer_compat
+
+          installed = {name: version(name) for name in ("typer", "click")}
+          assert installed == {"typer": "0.27.3", "click": "8.4.2"}, installed
+          assert TyperGroup.__bases__[0] is Command
+          root = get_command(app)
+          assert isinstance(root, Command) and not isinstance(root, click.Command)
+          assert typer_compat.UsageError is UsageError and UsageError is not click.UsageError
+          assert typer_compat.MissingParameter is MissingParameter
+          assert MissingParameter is not click.MissingParameter
+          assert typer_compat.ParameterSource is ParameterSource
+          assert ParameterSource is not click.core.ParameterSource
+          with root.commands["ship"].make_context("ship", []) as context:
+              assert isinstance(context, Context)
+              assert context.get_parameter_source("forgetting_threshold") is ParameterSource.DEFAULT
+          print(json.dumps({**installed, "command_base": Command.__module__,
+                            "usage_error": UsageError.__module__,
+                            "parameter_source": ParameterSource.__module__}, sort_keys=True))
+          PY
+          python -m pytest -o addopts= tests/test_typer_click_compat.py -q
+
   test:
     needs: plan
     strategy:

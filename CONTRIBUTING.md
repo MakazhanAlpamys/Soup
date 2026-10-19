@@ -517,9 +517,14 @@ can silently stop matching the live command tree. Inspect command and parameter
 capabilities when traversing help or reference pages. Keep standalone Click
 declared while the minimum supported Typer requires it.
 
-The core and training floor jobs exercise Typer 0.15.4. Typer is not pinned in
-the ordinary CI stack, so the full test matrix resolves the newest release
-admitted by `pyproject.toml` (currently 0.27.3). The compatibility regressions
+The core and training floor jobs exercise Typer 0.15.4. The separate `typer-vendored`
+job installs a core-only environment pinned to Typer 0.27.3 / Click 8.4.2,
+records those versions, asserts the real command/exception/parameter-source
+identities use Typer's vendored Click, and runs the unchanged 20-case
+`tests/test_typer_click_compat.py`. This explicit lane runs with the floor jobs
+at approval/nightly/release; it does not replace the minimum-version environment.
+Typer is not pinned in the ordinary CI stack, so its test matrix resolves the
+newest release admitted by `pyproject.toml`. The compatibility regressions
 exercise gate exit codes, noninteractive missing options, configured defaults,
 explicit tokens, legacy bench routing and complete command-tree traversal.
 

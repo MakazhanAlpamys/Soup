@@ -76,6 +76,7 @@ GATED_JOBS = (
     "pytorch-smoke",
     "transformers-floor",
     "core-floor",
+    "typer-vendored",
 )
 #: The support matrix: what RELEASE runs, and what requires-python must match.
 SUPPORT_MATRIX = {
@@ -1014,7 +1015,7 @@ class TestPinnedUpstream:
         """A new job that installs `.[dev]` on its own resolves the newest release on
         every pull request, which is the failure this switch removed."""
         installing = {name for name, job in _jobs().items() if _project_installs(job)}
-        assert installing == {*SWITCHED_JOBS, FLOOR_JOB, "core-floor"}
+        assert installing == {*SWITCHED_JOBS, FLOOR_JOB, "core-floor", "typer-vendored"}
 
     def test_no_environment_variable_constrains_a_job_behind_its_command_line(self):
         """`PIP_CONSTRAINT` in an `env:` applies to every pip of that job on every run,
@@ -1073,6 +1074,8 @@ UNPINNED_ON_PURPOSE = {
     # CORE: the project with no extra, so no torch and no transformers to pin.
     # Its separate core-floor constraints are checked by test_core_dependency_floors.py.
     (CI.name, "core-floor"): CORE,
+    # Dedicated core-only lane with exact Typer/Click pins, asserted at runtime.
+    (CI.name, "typer-vendored"): CORE,
     ("codspeed.yml", "benchmark"): CORE,
     # NEWEST: started by a schedule or by hand, never by a pull request or a push, and
     # there to meet the newest release.
