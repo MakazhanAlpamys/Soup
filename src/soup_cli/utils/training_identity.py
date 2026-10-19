@@ -21,8 +21,14 @@ HASH_TIMEOUT_SECONDS = 5.0
 _CHUNK_BYTES = 1024 * 1024
 
 
+def _identity(info: os.stat_result) -> tuple[int, ...]:
+    """Metadata with the same meaning for path and descriptor APIs."""
+    return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns)
+
+
 def _signature(info: os.stat_result) -> tuple[int, ...]:
-    return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+    """Compare ctime only within one API; Windows path/fd values can differ."""
+    return _identity(info) + (info.st_ctime_ns,)
 
 
 def capture_training_data_hash(
@@ -62,7 +68,7 @@ def capture_training_data_hash(
         with os.fdopen(descriptor, "rb") as handle:
             descriptor = None  # the context owns it, including on early return
             opened = os.fstat(handle.fileno())
-            if not stat.S_ISREG(opened.st_mode) or _signature(initial) != _signature(opened):
+            if not stat.S_ISREG(opened.st_mode) or _identity(initial) != _identity(opened):
                 return None
             digest = hashlib.sha256()
             count = 0
@@ -79,7 +85,7 @@ def capture_training_data_hash(
             if (time.monotonic() - started >= timeout_seconds
                     or count != opened.st_size
                     or _signature(os.fstat(handle.fileno())) != _signature(opened)
-                    or _signature(os.stat(source)) != _signature(opened)):
+                    or _signature(os.stat(source)) != _signature(initial)):
                 return None
             if time.monotonic() - started >= timeout_seconds:
                 return None

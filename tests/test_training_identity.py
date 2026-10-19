@@ -222,6 +222,164 @@ def test_produced_digest_survives_copy_and_registry_override(tmp_path):
         tracker.close()
 
 
+_FIELDS = ("st_mode", "st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")
+
+
+def _with(info, **changes):
+    values = {name: getattr(info, name) for name in _FIELDS}
+    values.update(changes)
+    return SimpleNamespace(**values)
+
+
+def _source(tmp_path):
+    source = tmp_path / "data.jsonl"
+    source.write_bytes(b"complete source bytes\n")
+    return source, hashlib.sha256(b"complete source bytes\n").hexdigest()
+
+
+def test_path_and_descriptor_ctime_may_differ_for_an_unchanged_file(tmp_path, monkeypatch):
+    source, expected = _source(tmp_path)
+    real_stat = identity.os.stat
+
+    def path_stat(path, *args, **kwargs):
+        info = real_stat(path, *args, **kwargs)
+        # Windows: os.stat(path) and os.fstat(fd) can disagree on ctime for the SAME file.
+        if str(path) == str(source):
+            return _with(info, st_ctime_ns=info.st_ctime_ns + 1_000_000)
+        return info
+
+    monkeypatch.setattr(identity.os, "stat", path_stat)
+    assert identity.capture_training_data_hash(_config(source)) == expected
+
+
+@pytest.mark.parametrize("field", ["st_mtime_ns", "st_size", "st_ino"])
+def test_path_versus_descriptor_identity_still_refuses(tmp_path, monkeypatch, field):
+    source, _ = _source(tmp_path)
+    real_stat = identity.os.stat
+
+    def path_stat(path, *args, **kwargs):
+        info = real_stat(path, *args, **kwargs)
+        if str(path) == str(source):
+            return _with(info, **{field: getattr(info, field) + 1})
+        return info
+
+    monkeypatch.setattr(identity.os, "stat", path_stat)
+    assert identity.capture_training_data_hash(_config(source)) is None
+
+
+def test_descriptor_ctime_change_during_the_read_is_unknown(tmp_path, monkeypatch):
+    source, _ = _source(tmp_path)
+    real_fstat = identity.os.fstat
+    calls = 0
+
+    def fd_stat(fd):
+        nonlocal calls
+        calls += 1
+        info = real_fstat(fd)
+        return _with(info, st_ctime_ns=info.st_ctime_ns + 1_000_000) if calls == 2 else info
+
+    monkeypatch.setattr(identity.os, "fstat", fd_stat)
+    assert identity.capture_training_data_hash(_config(source)) is None
+    assert calls == 2
+
+
+def test_path_ctime_change_during_the_read_is_unknown(tmp_path, monkeypatch):
+    source, _ = _source(tmp_path)
+    real_stat = identity.os.stat
+    calls = 0
+
+    def path_stat(path, *args, **kwargs):
+        nonlocal calls
+        info = real_stat(path, *args, **kwargs)
+        if str(path) == str(source):
+            calls += 1
+            if calls == 2:
+                return _with(info, st_ctime_ns=info.st_ctime_ns + 1_000_000)
+        return info
+
+    monkeypatch.setattr(identity.os, "stat", path_stat)
+    assert identity.capture_training_data_hash(_config(source)) is None
+    assert calls == 2
+
+
+class _Stub:
+    """Wraps the real handle; `script(size)` decides what each read returns."""
+
+    def __init__(self, handle, script):
+        self.handle = handle
+        self.script = script
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self.handle.close()
+
+    def fileno(self):
+        return self.handle.fileno()
+
+    def read(self, size):
+        return self.script(size, self.handle)
+
+
+@pytest.mark.parametrize("train", [
+    "https://example.invalid/data.jsonl",
+    "\\\\server\\share\\data.jsonl",
+    "//server/share/data.jsonl",
+])
+def test_remote_and_network_paths_never_reach_the_filesystem(monkeypatch, tmp_path, train):
+    real_stat = identity.os.stat
+
+    def guarded(path, *args, **kwargs):
+        if str(path) == train:
+            pytest.fail("network path was stat-ed")
+        return real_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(identity.os, "stat", guarded)
+    assert identity.capture_training_data_hash(_config(tmp_path / "x.jsonl", train=train)) is None
+
+
+def test_embedded_nul_in_the_path_is_unknown_not_a_crash(tmp_path):
+    assert identity.capture_training_data_hash(_config(tmp_path / "bad\x00.jsonl")) is None
+
+
+@pytest.mark.parametrize("elapsed", [5.0, 6.0])
+def test_deadline_stops_reading_before_the_next_chunk(tmp_path, monkeypatch, elapsed):
+    source = tmp_path / "data.jsonl"
+    source.write_bytes(b"123456")
+    monkeypatch.setattr(identity, "_CHUNK_BYTES", 2)
+    reads = []
+    clock = {"now": 0.0}
+
+    def script(size, handle):
+        reads.append(size)
+        clock["now"] = elapsed
+        return handle.read(size)
+
+    fdopen = identity.os.fdopen
+    monkeypatch.setattr(identity.os, "fdopen", lambda *args: _Stub(fdopen(*args), script))
+    monkeypatch.setattr(identity.time, "monotonic", lambda: clock["now"])
+    assert identity.capture_training_data_hash(_config(source), timeout_seconds=5) is None
+    assert len(reads) == 1
+
+
+def test_a_source_that_keeps_growing_is_cut_off_at_the_byte_limit(tmp_path, monkeypatch):
+    source = tmp_path / "data.jsonl"
+    source.write_bytes(b"1234")
+    monkeypatch.setattr(identity, "_CHUNK_BYTES", 2)
+    requested = []
+
+    def script(size, handle):
+        assert size >= 0, "a negative size would read to EOF without a bound"
+        requested.append(size)
+        return b"x" * size
+
+    fdopen = identity.os.fdopen
+    monkeypatch.setattr(identity.os, "fdopen", lambda *args: _Stub(fdopen(*args), script))
+    assert identity.capture_training_data_hash(_config(source), max_bytes=4) is None
+    assert sum(requested) <= 5
+
+
 def test_record_unknown_and_reject_partial_or_malformed_hash(tmp_path):
     tracker = ExperimentTracker(tmp_path / "runs.db")
     try:
