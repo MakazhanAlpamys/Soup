@@ -1,6 +1,6 @@
 # Gate: layer streaming shards a DeepSeek-V3 FP8 block-quantised checkpoint by dequantising it
 
-Status: **G1 PASS, G2 PASS, G3 PASS** (CPU only; run 2026-10-19). Sections 1-3 are the
+Status: **G1 PASS, G2 PASS, G3 PASS** (CPU only; run 2026-10-19; review round in section 7). Sections 1-3 are the
 rule as committed in `cdfdf7546` before any gate run, unchanged since; section 4 is filled
 from the run, section 5 holds the results. No GPU run: the maintainer runs the GPU loss
 check.
@@ -166,10 +166,13 @@ figures describe that loss, not a defect. No Kimi K2 or 1T checkpoint.
 - Code: G1 and G2 ran as `tests/test_fp8_block_streaming.py` at commit `fc2ef92fd` (124
   tests). G3 ran `benchmarks/harness/fp8_shard_gate.py` from the same tree (its one-file
   index fallback was added before the run and is committed with this record).
-- Other Claude sessions shared the machine. RAM: every G3 script started with at least
-  10 GiB available (checked before torch was imported; 9.4-10.2 GiB when the report's box
-  line was sampled just after); the lowest reading during any run was 5.35 GiB, above the
-  3 GiB abort floor, so the watchdog never fired. The laptop slept once (21:52-23:40 local)
+- Other Claude sessions shared the machine. RAM, all in GiB (2^30 bytes), exact bytes from
+  the reports: every G3 script was started only once at least 10 GiB were available (the
+  check ran before torch was imported). The reports' box line, sampled just after torch
+  loaded, reads 9.41-9.72 GiB (10,105,769,984-10,440,273,920 B). The lowest reading during any
+  run was 4.98 GiB (5,346,910,208 B, the 27-layer NF4 shard), above the 3 GiB abort floor,
+  so the watchdog never fired. (An earlier edit of this line said "9.4-10.2" and "5.35",
+  mixing GB and GiB; corrected in the review round.) The laptop slept once (21:52-23:40 local)
   while a regression test file was running; that file was re-run afterwards, nothing in a
   gate ran across the sleep.
 - D: had 189.8 GB free before G3 and 105.9 GB after it (decimal GB): the 100 GB floor held.
@@ -228,6 +231,8 @@ Sensitivity (mutation run, section 6):
   hidden 64 every matrix is a single block.
 
 ### G3, Moonlight-16B-A3B on the CPU: PASS
+
+Sizes and RSS below are in decimal GB (10^9 bytes); section 4's RAM figures are GiB.
 
 Raw JSON: `benchmarks/results/probe-rtx5070/fp8-shard/`: `convert.json` (with every
 tensor's errors), plus `shard-4L-nf4.json`, `shard-27L-nf4.json` and
@@ -324,3 +329,59 @@ run after each and the file restored byte for byte (sha256 checked); the table i
   - the reader's F8 mapping;
   - the skeleton's config drop;
   - the setup's early refusal and the config it hands the pre-flight.
+
+## 7. Review round (2026-10-20)
+
+An independent review asked for changes. They were made in `9b9e51692`, after the gate run
+above; sections 1-6 describe the code at `fc2ef92fd`.
+
+What changed in the dequant:
+- **Bounded work.** Rows now index their scale row (never expanded), and the column block is
+  expanded as `min(block, cols)`. A `weight_block_size` past the matrix edge used to allocate
+  its full size: a 4 x 4 weight with a [1, 1] scale cost about 1 GB at block 2^26.
+- **Banding.** The fp32 product is formed one band of rows at a time (2^22 elements) and cast
+  into an output preallocated at the stream dtype. A tensor now costs its output plus one band,
+  not an fp32 copy plus expanded scales (about 9-11 bytes per element before).
+- **New refusals.** A non-finite value after the dequant and cast is refused, naming the
+  tensor: an e4m3fn NaN byte, or a float16 overflow, whose message says to stream in bfloat16.
+  A negative scale is refused; a zero scale is kept.
+
+New tests (`tests/test_fp8_block_streaming.py`, now 150):
+- the huge block stays cheap and exact, at the dequant and through the sharder;
+- the banded result is bit-equal to the unbanded reference for fp32, bf16 and fp16, with
+  bands not aligned to blocks, and no fp32 intermediate exceeds one band;
+- the NaN, overflow and negative-scale refusals, and the kept zero scale;
+- a bf16 linear beside FP8 siblings is stored as it is;
+- a non-FP8 `quantization_config` reaches `from_config` and the built model unchanged, which
+  the code before this branch also does (checked by running the same probe on `387c758ca`);
+- the plain-read backstop refuses F8_E5M2, F8_E4M3FNUZ and a stray `*_scale_inv`.
+
+**Effect on G3.** The 4-layer NF4 shard was re-run with the banded code into a new folder:
+- verdict PASS, 14.7 s;
+- cache 4,755,794,622 B, the same as before;
+- all 7 safetensors files byte-identical (sha256) to the gate run's 4-layer cache;
+- report: `shard-4L-nf4-review.json`.
+
+The banded dequant writes the same bytes, so the 27-layer figures of section 5 stand. They were
+not re-run, because D: had 101.2 GB free after this re-run.
+
+**Units.** Section 4's RAM line mixed GB and GiB. It now gives GiB with exact bytes. The
+"within 0.0001%" in the docs, the fragment and `benchmarks/README.md` is corrected to 0.0002%
+(the 27-layer NF4 figure is 0.000115%, the 4-layer one 0.00019%).
+
+**Mutations, review round.** 22 runs, each with `tests/test_fp8_block_streaming.py` and the
+source restored byte for byte (sha256); all 22 killed. Table:
+`benchmarks/results/probe-rtx5070/fp8-shard/mutations-review.json`.
+- 11 are earlier mutants on the code that changed, re-spelled for the banded dequant: M01-M07,
+  M35, M43, M45 and M46.
+- 11 are new:
+  - the column clamp;
+  - the banding;
+  - the stream-dtype output;
+  - the non-finite check after the cast, and its overflow-versus-NaN message;
+  - the negative-scale refusal, and keeping zero scales;
+  - the skeleton dropping a non-FP8 config;
+  - the backstop refusing only F8_E4M3, or missing a stray scale;
+  - the sharder reading FP8 at fp32.
+- The first version of the fix also clamped the row block. Rows are indexed, so that clamp
+  changes nothing and no mutant could reach it; it was deleted rather than kept as dead code.
