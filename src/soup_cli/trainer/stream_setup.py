@@ -823,6 +823,7 @@ class StreamingSetupMixin:
         refuse_if_data_parallel(self.device)
 
         from soup_cli.utils.expert_stream import EXPERT_LAYOUT_PER_EXPERT
+        from soup_cli.utils.fp8_block import fp8_block_size
         from soup_cli.utils.layer_shard import (
             PER_EXPERT_LAYOUT_ARCHS,
             QUANT_NF4,
@@ -900,6 +901,13 @@ class StreamingSetupMixin:
                 f"per architecture; admitted: {', '.join(PER_EXPERT_LAYOUT_ARCHS)}; this "
                 f"base streams as {arch!r}. Use stream_expert_layout='fused'."
             )
+        # An FP8 block-quantised base (DeepSeek-V3's published format) is dequantised by
+        # the sharder. A spelling it does not dequantise, or an FP8 base on another
+        # architecture, is refused here from the config alone: before any weight is
+        # resolved or downloaded. The disk pre-flight sizes the cache from the same
+        # config (the shards hold dequantised weights, the scales are not stored).
+        source_quantization = getattr(model_config, "quantization_config", None)
+        fp8_block = fp8_block_size(source_quantization, arch=arch)
 
         on_cuda = str(self.device).startswith("cuda")
         # #385 — ASK THE CARD. bf16 needs Ampere, and a T4 (Colab free), a P100
@@ -907,6 +915,11 @@ class StreamingSetupMixin:
         # made the entire free tier unsupported without saying so, and could not
         # fail on the Ampere card every published measurement came from.
         dtype = resolve_stream_dtype(str(self.device))
+        if fp8_block is not None:
+            console.print(
+                f"[dim]FP8 block-quantised base ({fp8_block[0]}x{fp8_block[1]} blocks): "
+                f"dequantised to {dtype} as the layer cache is written[/]"
+            )
 
         # v0.72.2 — NF4. The decoder linears ship as packed nibbles + per-block
         # absmax, so the RAM store is ~0.26x its bf16 size; embeddings, norms and
@@ -990,6 +1003,7 @@ class StreamingSetupMixin:
                 double_quant=double_quant,
                 expert_layout=expert_layout,
                 num_hidden_layers=stream_num_hidden_layers,
+                quantization_config=source_quantization,
             )
             if cache_estimate is not None:
                 shard_estimate = cache_estimate.total_bytes

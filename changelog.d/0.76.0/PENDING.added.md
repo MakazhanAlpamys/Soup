@@ -1,0 +1,16 @@
+- **Layer streaming shards a DeepSeek-V3 FP8 block-quantised checkpoint by dequantising it**
+  (the format DeepSeek-V3 is published in: `float8_e4m3fn` weights with a float32
+  `weight_scale_inv` per 128 x 128 block, declared in `config.json`). It used to be refused. Each
+  FP8 weight is multiplied by its block scales in fp32 at shard time, ragged edges cropped, cast to
+  the stream dtype and then stored as before (NF4 under `quantization: 4bit`); routed experts are
+  dequantised before they are stacked or written per expert, and the scales are never stored. No
+  config key: the format is detected from the checkpoint, and the streamed model is built at the
+  stream dtype. A tiny DeepSeek-V3 streamed from its FP8 copy matches a resident model holding the
+  same dequantised weights bit for bit (logits, loss, LoRA gradients, both expert layouts), and
+  its cache holds the same tensors, bit for bit, as one sharded from those weights, NF4 included
+  (`benchmarks/gate-fp8-shard.md`). The disk pre-flight charges each FP8 weight at its stored rate
+  and nothing for the scales. Every other FP8 spelling (per-tensor scales, e5m2,
+  compressed-tensors, ue8m0 scales, static activation scales, a missing or misshapen scale, an FP8
+  tensor without a scale, a scale without its tensor) and an FP8 base that is not
+  `model_type: deepseek_v3` are refused naming the supported format; Kimi K2 (`model_type:
+  kimi_k2`) is still refused by name.
