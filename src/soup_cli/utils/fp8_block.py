@@ -44,6 +44,10 @@ FP8_BLOCK_ARCHS = ("deepseek_v3",)
 _CONFIG_LIMIT = 16 * 1024 * 1024
 #: Longest rendering of an untrusted value (a config entry, a shape) in a message.
 _BRIEF_LIMIT = 80
+#: fp32 elements one dequantisation band works on (16 MiB of product, about as much of
+#: expanded scales). The output is preallocated at the stream dtype, so a tensor costs its
+#: output plus one band, whatever its size.
+_DEQUANT_BAND_ELEMENTS = 1 << 22
 
 SUPPORTED_FP8_FORMAT = (
     "Layer streaming dequantises one FP8 format, DeepSeek-V3's block FP8: float8_e4m3fn "
@@ -285,16 +289,32 @@ def read_checkpoint_quantization_config(weights_dir: str) -> Optional[Mapping[st
 
 
 def dequantize_fp8_block(
-    weight: Any, scale_inv: Any, block: Tuple[int, int], *, name: str = "weight"
+    weight: Any,
+    scale_inv: Any,
+    block: Tuple[int, int],
+    *,
+    name: str = "weight",
+    dtype: Any = None,
 ) -> Any:
-    """``weight.float() * scale_inv`` expanded per ``block``, cropped at a ragged edge (fp32).
+    """``weight.float() * scale_inv`` expanded per ``block``, cropped at a ragged edge,
+    cast to ``dtype`` (float32 when ``None``).
 
     Bit-exact against a per-block loop: each element is one fp32 multiply of the same two
-    operands. Refuses a weight or scale that is not the format, and a non-finite scale,
-    which would put inf or NaN into every element of its block.
+    operands, then the cast. The work is bounded:
+
+    - a block past the matrix edge costs nothing: rows index their scale row, and the
+      column block is expanded as ``min(block, cols)``, so a hostile ``weight_block_size``
+      allocates no more than the matrix;
+    - the product is formed one band of rows at a time (:data:`_DEQUANT_BAND_ELEMENTS`) and
+      cast into a preallocated output, so the peak is the output plus one band.
+
+    Refuses a weight or scale that is not the format, a non-finite or negative scale (a
+    zero scale, an all-zero block's, is kept), and a result that is not finite after the
+    cast: an e4m3fn NaN byte, or a weight past ``dtype``'s range.
     """
     import torch
 
+    out_dtype = torch.float32 if dtype is None else dtype
     if weight.dtype != torch.float8_e4m3fn or weight.ndim != 2:
         raise _refuse(
             f"tensor {_brief(name)} is {weight.dtype} of shape {list(weight.shape)}, not a "
@@ -311,10 +331,44 @@ def dequantize_fp8_block(
             f"block scale of {_brief(name)} holds a non-finite value; it would put inf or "
             f"NaN into every element of its block. The checkpoint is damaged."
         )
+    if bool((scale_inv < 0).any()):
+        raise UnsupportedFP8Error(
+            f"block scale of {_brief(name)} holds a negative value; no FP8 block producer "
+            f"writes one. The checkpoint is damaged."
+        )
     rows, cols = (int(dim) for dim in weight.shape)
-    block_rows, block_cols = block
-    expanded = scale_inv.repeat_interleave(block_rows, dim=0)[:rows]
-    expanded = expanded.repeat_interleave(block_cols, dim=1)[:, :cols]
-    dense = weight.to(torch.float32)
-    dense.mul_(expanded)
-    return dense
+    # Rows pick their scale row by index, so the row block is never expanded; the column
+    # block is, and a block past the matrix edge is that edge.
+    block_rows, block_cols = block[0], min(block[1], cols)
+    out = torch.empty((rows, cols), dtype=out_dtype)
+    band = max(1, _DEQUANT_BAND_ELEMENTS // max(cols, 1))
+    for start in range(0, rows, band):
+        stop = min(start + band, rows)
+        row_scales = scale_inv.index_select(0, torch.arange(start, stop) // block_rows)
+        expanded = row_scales.repeat_interleave(block_cols, dim=1)[:, :cols]
+        product = weight[start:stop].to(torch.float32)
+        product.mul_(expanded)
+        target = out[start:stop]
+        target.copy_(product)
+        if not bool(torch.isfinite(target).all()):
+            raise _non_finite(name, product, out_dtype)
+    return out
+
+
+def _non_finite(name: str, product: Any, out_dtype: Any) -> UnsupportedFP8Error:
+    """Why a dequantised band is not finite: a NaN byte, or a value past the stream dtype."""
+    import torch
+
+    if not bool(torch.isfinite(product).all()):
+        return UnsupportedFP8Error(
+            f"tensor {_brief(name)} holds NaN or infinity after dequantisation (the e4m3fn "
+            f"bytes 0x7F and 0xFF are NaN); training on it would make every loss NaN. The "
+            f"checkpoint is damaged."
+        )
+    dtype_name = str(out_dtype).replace("torch.", "")
+    peak = float(product.abs().max())
+    return UnsupportedFP8Error(
+        f"tensor {_brief(name)} dequantises to {peak:g}, which overflows {dtype_name} (max "
+        f"{torch.finfo(out_dtype).max:g}). Stream it in bfloat16: on a card that runs "
+        f"bfloat16 (Ampere or newer) Soup picks it."
+    )

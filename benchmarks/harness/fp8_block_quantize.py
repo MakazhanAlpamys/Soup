@@ -77,8 +77,9 @@ def quantize_fp8_block(weight, block):
     fp8 = torch.float8_e4m3fn
     fp8_max = torch.finfo(fp8).max
     fp8_min = torch.finfo(fp8).min
-    block_rows, block_cols = block
     rows, cols = weight.shape
+    # A block past the matrix edge is that edge: the same grid, without padding to its size.
+    block_rows, block_cols = min(block[0], rows), min(block[1], cols)
     grid_rows, grid_cols = -(-rows // block_rows), -(-cols // block_cols)
     value = weight.to(torch.float32)
     padded = torch.zeros(grid_rows * block_rows, grid_cols * block_cols, dtype=torch.float32)
@@ -115,8 +116,8 @@ def _dequantize_fast(weight_fp8, scale_inv, block):
     import torch
 
     rows, cols = weight_fp8.shape
-    expanded = scale_inv.repeat_interleave(block[0], dim=0)[:rows]
-    expanded = expanded.repeat_interleave(block[1], dim=1)[:, :cols]
+    expanded = scale_inv.repeat_interleave(min(block[0], rows), dim=0)[:rows]
+    expanded = expanded.repeat_interleave(min(block[1], cols), dim=1)[:, :cols]
     return weight_fp8.to(torch.float32) * expanded
 
 

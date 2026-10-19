@@ -1192,3 +1192,276 @@ def test_the_fp8_cache_is_the_dequantised_cache_byte_for_byte(
     assert _estimate_for(fp8, **{k: v for k, v in kwargs.items() if k != "quant_device"}) == (
         _estimate_for(ref, **{k: v for k, v in kwargs.items() if k != "quant_device"})
     )
+
+
+# ==========================================================================
+# bounded work: a hostile block size, and a big tensor, cost one band of fp32
+# ==========================================================================
+class _TensorSizes:
+    """Records the element count and dtype of every tensor a torch call returns."""
+
+    def __init__(self):
+        from torch.overrides import TorchFunctionMode
+
+        sizes = self.sizes = []
+
+        class _Mode(TorchFunctionMode):
+            def __torch_function__(self, func, types, args=(), kwargs=None):
+                import torch
+
+                out = func(*args, **(kwargs or {}))
+                if isinstance(out, torch.Tensor):
+                    sizes.append((out.numel(), out.dtype))
+                return out
+
+        self.mode = _Mode()
+
+    def __enter__(self):
+        self.mode.__enter__()
+        return self
+
+    def __exit__(self, *exc):
+        self.mode.__exit__(*exc)
+
+    def largest(self, dtype):
+        return max((numel for numel, kind in self.sizes if kind == dtype), default=0)
+
+
+@pytest.mark.parametrize("block", [(2**24, 2**24), (2**24, 4), (4, 2**24)],
+                         ids=["both", "rows", "cols"])
+def test_a_huge_block_size_stays_cheap_and_exact(block):
+    """A ``weight_block_size`` far past the matrix must not expand the scale to its size:
+    a 4 x 4 weight with a [1, 1] scale used to allocate a 4 x 2**24 fp32 grid."""
+    import torch
+
+    from soup_cli.utils.fp8_block import dequantize_fp8_block
+
+    generator = torch.Generator().manual_seed(2)
+    weight = (torch.randn(4, 4, generator=generator) * 30).to(torch.float8_e4m3fn)
+    scale = torch.tensor([[0.375]])
+    with _TensorSizes() as seen:
+        got = dequantize_fp8_block(weight, scale, block, dtype=torch.bfloat16)
+    assert torch.equal(got, (weight.to(torch.float32) * 0.375).to(torch.bfloat16))
+    assert max(numel for numel, _kind in seen.sizes) <= 16
+
+
+def test_an_fp8_source_with_a_huge_block_size_shards_exactly(tmp_path):
+    import torch
+    from safetensors.torch import load_file
+
+    from soup_cli.utils.layer_shard import layer_paths
+
+    state, linears = _synthetic_state()
+    huge = (2**26, 2**26)
+    fp8_state = _to_fp8(state, linears, block=huge)
+    assert all(tuple(fp8_state[key + "_scale_inv"].shape) == (1, 1) for key in linears)
+    fp8 = _write(tmp_path / "fp8", fp8_state, block=huge)
+    index = _shard(fp8, tmp_path / "s")
+    tensors = load_file(layer_paths(str(tmp_path / "s"), index)[0])
+    key = "model.layers.0.self_attn.o_proj.weight"
+    want = fp8_state[key].to(torch.float32) * fp8_state[key + "_scale_inv"][0, 0]
+    assert torch.equal(tensors["self_attn.o_proj.weight"], want)
+
+
+def test_dequant_works_in_bands_into_the_stream_dtype(monkeypatch):
+    """The fp32 product is formed one band of rows at a time and cast into a preallocated
+    output: the peak is the output plus one band, not 9-11 bytes per element."""
+    import torch
+
+    import soup_cli.utils.fp8_block as fp8_block
+
+    block = (128, 128)
+    weight, scale = _harness().quantize_fp8_block(_blockwise_weight((300, 200), block, 9), block)
+    monkeypatch.setattr(fp8_block, "_DEQUANT_BAND_ELEMENTS", 1000)
+    with _TensorSizes() as seen:
+        got = fp8_block.dequantize_fp8_block(weight, scale, block, dtype=torch.bfloat16)
+    want = _reference_dequant(weight, scale, block).to(torch.bfloat16)
+    assert got.dtype == torch.bfloat16
+    assert torch.equal(got, want)
+    # one band is 1000 // 200 = 5 rows; its scale grid before the crop is 5 x 256
+    assert seen.largest(torch.float32) <= 5 * 256
+    assert [numel for numel, kind in seen.sizes if kind == torch.bfloat16 and numel == 60000]
+
+
+@pytest.mark.parametrize("dtype", ["float32", "bfloat16", "float16"])
+def test_the_banded_result_is_the_unbanded_cast(dtype):
+    import torch
+
+    from soup_cli.utils.fp8_block import dequantize_fp8_block
+
+    block = (128, 128)
+    weight, scale = _harness().quantize_fp8_block(
+        _blockwise_weight((2048, 1408), block, 21), block
+    )
+    target = getattr(torch, dtype)
+    want = _reference_dequant(weight, scale, block).to(target)
+    assert torch.equal(dequantize_fp8_block(weight, scale, block, dtype=target), want)
+    # bands that do not line up with the 128-row blocks (100,000 // 1408 = 71 rows)
+    import soup_cli.utils.fp8_block as fp8_block
+
+    original = fp8_block._DEQUANT_BAND_ELEMENTS
+    fp8_block._DEQUANT_BAND_ELEMENTS = 100_000
+    try:
+        assert torch.equal(dequantize_fp8_block(weight, scale, block, dtype=target), want)
+    finally:
+        fp8_block._DEQUANT_BAND_ELEMENTS = original
+
+
+# ==========================================================================
+# values the format cannot hold are refused, naming the tensor
+# ==========================================================================
+@pytest.mark.parametrize("code", [0x7F, 0xFF], ids=["nan", "neg-nan"])
+@pytest.mark.parametrize("dtype", ["float32", "bfloat16"])
+def test_a_nan_fp8_byte_is_refused_after_dequant(code, dtype):
+    import torch
+
+    from soup_cli.utils.fp8_block import UnsupportedFP8Error, dequantize_fp8_block
+
+    raw = torch.zeros(4, 4, dtype=torch.uint8)
+    raw[2, 1] = code
+    weight = raw.view(torch.float8_e4m3fn)
+    with pytest.raises(UnsupportedFP8Error) as caught:
+        dequantize_fp8_block(
+            weight, torch.ones(1, 1), (128, 128), name="layers.0.q", dtype=getattr(torch, dtype)
+        )
+    text = str(caught.value)
+    assert "'layers.0.q'" in text and "NaN" in text
+
+
+def test_a_float16_overflow_is_refused_suggesting_bfloat16():
+    import torch
+
+    from soup_cli.utils.fp8_block import UnsupportedFP8Error, dequantize_fp8_block
+
+    weight = torch.full((2, 2), 448.0).to(torch.float8_e4m3fn)
+    scale = torch.full((1, 1), 200.0)  # 448 x 200 = 89,600 > 65,504
+    with pytest.raises(UnsupportedFP8Error) as caught:
+        dequantize_fp8_block(weight, scale, (128, 128), name="w", dtype=torch.float16)
+    assert "overflows float16" in str(caught.value) and "bfloat16" in str(caught.value)
+    for dtype in (torch.bfloat16, torch.float32):
+        out = dequantize_fp8_block(weight, scale, (128, 128), name="w", dtype=dtype)
+        assert torch.equal(out, torch.full((2, 2), 89600.0).to(dtype))
+
+
+def test_a_negative_scale_is_refused():
+    import torch
+
+    from soup_cli.utils.fp8_block import UnsupportedFP8Error, dequantize_fp8_block
+
+    weight = torch.ones(4, 4).to(torch.float8_e4m3fn)
+    scale = torch.tensor([[0.5, -0.25]])
+    with pytest.raises(UnsupportedFP8Error, match="negative"):
+        dequantize_fp8_block(weight, scale, (4, 2), name="w")
+
+
+def test_a_zero_scale_on_an_all_zero_block_is_kept():
+    import torch
+
+    from soup_cli.utils.fp8_block import dequantize_fp8_block
+
+    weight = torch.zeros(4, 4).to(torch.float8_e4m3fn)
+    weight[:, 2:] = torch.ones(4, 2).to(torch.float8_e4m3fn)
+    scale = torch.tensor([[0.0, 0.5], [-0.0, 0.5]])
+    got = dequantize_fp8_block(weight, scale, (2, 2), name="w")
+    assert torch.equal(got, _reference_dequant(weight, scale, (2, 2)))
+
+
+def test_the_sharder_refuses_a_nan_weight_naming_it_before_the_index(tmp_path):
+    import torch
+
+    from soup_cli.utils.fp8_block import UnsupportedFP8Error
+
+    state, linears = _synthetic_state()
+    fp8_state = _to_fp8(state, linears)
+    key = "model.layers.1.mlp.experts.0.down_proj.weight"
+    raw = fp8_state[key].view(torch.uint8).clone()
+    raw[0, 0] = 0x7F
+    fp8_state[key] = raw.view(torch.float8_e4m3fn)
+    fp8 = _write(tmp_path / "fp8", fp8_state)
+    with pytest.raises(UnsupportedFP8Error) as caught:
+        _shard(fp8, tmp_path / "s", dtype="bfloat16")
+    assert key in str(caught.value)
+    assert not (tmp_path / "s" / "index.json").exists()
+
+
+# ==========================================================================
+# a mixed checkpoint: a bf16 linear beside FP8 siblings is stored as it is
+# ==========================================================================
+def test_a_bf16_linear_beside_fp8_siblings_is_cast_as_stored(tmp_path):
+    """Real DeepSeek-V3 checkpoints mix the two: only the FP8 tensors carry a scale."""
+    import torch
+    from safetensors.torch import load_file
+
+    from soup_cli.utils.layer_shard import layer_paths
+
+    state, linears = _synthetic_state()
+    kept = "model.layers.1.self_attn.o_proj.weight"
+    fp8_state = _to_fp8(state, [key for key in linears if key != kept])
+    assert fp8_state[kept].dtype == torch.bfloat16 and kept + "_scale_inv" not in fp8_state
+    fp8 = _write(tmp_path / "fp8", fp8_state)
+    ref = _write(tmp_path / "ref", _dequantised(fp8_state), quant=None)
+    mine = _shard(fp8, tmp_path / "a", dtype="bfloat16")
+    theirs = _shard(ref, tmp_path / "b", dtype="bfloat16")
+    _assert_same_cache(str(tmp_path / "a"), str(tmp_path / "b"), mine, theirs)
+    layer = load_file(layer_paths(str(tmp_path / "a"), mine)[1])
+    assert torch.equal(layer["self_attn.o_proj.weight"], state[kept])
+
+
+# ==========================================================================
+# the backstop and the skeleton, directly
+# ==========================================================================
+@pytest.mark.parametrize(
+    ("key", "dtype"),
+    [
+        ("model.layers.0.q_proj.weight", "F8_E4M3"),
+        ("model.layers.0.q_proj.weight", "F8_E5M2"),
+        ("model.layers.0.q_proj.weight", "F8_E4M3FNUZ"),
+        ("model.layers.0.q_proj.weight_scale_inv", "F32"),
+    ],
+    ids=["e4m3", "e5m2", "e4m3fnuz", "stray-scale"],
+)
+def test_the_plain_read_backstop_refuses_every_fp8_spelling(key, dtype):
+    from soup_cli.utils.fp8_block import UnsupportedFP8Error
+    from soup_cli.utils.layer_shard import _refuse_fp8
+
+    with pytest.raises(UnsupportedFP8Error, match="cast without its scales"):
+        _refuse_fp8(key, dtype)
+
+
+@pytest.mark.parametrize("dtype", ["BF16", "F16", "F32", "U8"])
+def test_the_plain_read_backstop_passes_a_plain_tensor(dtype):
+    from soup_cli.utils.layer_shard import _refuse_fp8
+
+    _refuse_fp8("model.layers.0.q_proj.weight", dtype)
+
+
+def test_the_skeleton_keeps_a_quantization_config_that_is_not_fp8(tiny_models, monkeypatch):
+    """Only an FP8 config is dropped. Any other one reaches ``from_config`` and the built
+    model exactly as before this change (pinned against the pre-change code: the config's
+    dict is handed through untouched)."""
+    import transformers
+
+    from soup_cli.utils.layer_stream_runtime import build_meta_skeleton
+
+    original, _fp8, _ref = tiny_models(24, (16, 32))
+    weights = os.path.join(os.path.dirname(original), "bnb-config")
+    if not os.path.isdir(weights):
+        shutil.copytree(original, weights)
+        config_path = os.path.join(weights, "config.json")
+        with open(config_path, encoding="utf-8") as handle:
+            config = json.load(handle)
+        config["quantization_config"] = {"quant_method": "bitsandbytes", "load_in_4bit": True}
+        with open(config_path, "w", encoding="utf-8") as handle:
+            json.dump(config, handle)
+    seen = []
+    real = transformers.AutoModelForCausalLM.from_config
+
+    def _spy(config, **kwargs):
+        seen.append(getattr(config, "quantization_config", None))
+        return real(config, **kwargs)
+
+    monkeypatch.setattr(transformers.AutoModelForCausalLM, "from_config", _spy)
+    model = build_meta_skeleton(weights, dtype="bfloat16")
+    expected = {"quant_method": "bitsandbytes", "load_in_4bit": True}
+    assert seen == [expected]
+    assert model.config.quantization_config == expected

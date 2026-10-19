@@ -2725,8 +2725,10 @@ def _read_source_tensor(
     """One OWNED source tensor at ``dtype``; an FP8 block weight is dequantised first.
 
     The FP8 weight and its ``weight_scale_inv`` are read raw (each owns its memory, so
-    the scale's file may evict the weight's handle), multiplied in fp32 per block
-    (:func:`~soup_cli.utils.fp8_block.dequantize_fp8_block`) and cast to ``dtype``.
+    the scale's file may evict the weight's handle), multiplied in fp32 per block, one
+    band of rows at a time, into an output preallocated at ``dtype``
+    (:func:`~soup_cli.utils.fp8_block.dequantize_fp8_block`): the raw weight, the output
+    and one band are live, not an fp32 copy of the whole tensor.
     """
     path, source_key = where[key]
     if fp8_plan is None or key not in fp8_plan.weights:
@@ -2737,10 +2739,11 @@ def _read_source_tensor(
     weight = _read_raw_tensor(handles[path], source_key)
     scale = _read_raw_tensor(handles[scale_path], scale_source_key)
     try:
-        dense = dequantize_fp8_block(weight, scale, fp8_plan.block, name=key)
+        return dequantize_fp8_block(
+            weight, scale, fp8_plan.block, name=key, dtype=getattr(torch, dtype)
+        )
     finally:
         del weight, scale
-    return dense.to(getattr(torch, dtype))
 
 
 def _read_tensor(handle: Any, key: str, dtype: str) -> "Any":

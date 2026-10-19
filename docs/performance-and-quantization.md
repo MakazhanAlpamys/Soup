@@ -519,16 +519,19 @@ What the sharder does:
 - multiplies each FP8 weight by its block scales in fp32, cropping the last block at a ragged edge (DeepSeek's own dequantisation rule), and casts the result to the stream dtype;
 - stores it by the usual rules, so under `quantization: 4bit` the same weights become NF4 that would become NF4 from a bf16 checkpoint;
 - dequantises routed experts before they are stacked (`fused`) or written to their experts file (`per_expert`);
+- keeps a linear that the checkpoint stores in bf16 without a scale, beside FP8 siblings, as it is stored (DeepSeek-V3's checkpoints mix the two: only the FP8 tensors carry a scale);
+- works one band of rows at a time into an output already at the stream dtype, so a tensor costs its output plus a small fp32 band, and a block size past the matrix edge costs nothing extra;
 - never stores the scales. The streamed model is built at the stream dtype: the config's FP8 `quantization_config` is dropped from the streamed skeleton only, so `config.json` and every resident load are unchanged.
 
 Measured:
 - **Numerics.** On a tiny DeepSeek-V3, the model streamed from the FP8 checkpoint matches a resident model holding the same dequantised weights bit for bit, in its logits, loss and LoRA gradients, in both expert layouts. Its layer cache holds the same tensors, bit for bit, as the one sharded from those dequantised weights, NF4 included ([gate](../benchmarks/gate-fp8-shard.md)).
 - **Disk.** The pre-flight charges each FP8 weight at the rate its dequantised tensor is stored at, and nothing for the scales.
-- **A real checkpoint, CPU only.** Moonlight-16B-A3B, converted to this format, sharded in 93 s (27 layers, NF4, `fused`). The 30.60 GB cache came within 0.0001% of the pre-flight's figure, and every FP8-derived tensor checked in three layers equals an independent dequantisation of the source. No GPU run is recorded yet.
+- **A real checkpoint, CPU only.** Moonlight-16B-A3B, converted to this format, sharded in 93 s (27 layers, NF4, `fused`). The 30.60 GB cache came within 0.0002% of the pre-flight's figure (0.000115%: 35,336 bytes), and every FP8-derived tensor checked in three layers equals an independent dequantisation of the source. No GPU run is recorded yet.
 
 Limits and refusals:
 - **Architecture.** Only `model_type: deepseek_v3` is admitted. A Kimi K2 checkpoint declares `model_type: kimi_k2` and is still refused by name, FP8 or not.
 - **Other FP8 formats.** Each of these is refused, and the message names the supported format: per-tensor scales, `e5m2` weights, `compressed-tensors`, ue8m0 (power-of-two) scales, static activation scales, a missing or misshapen scale, an FP8 tensor without a scale, and a scale without its tensor. A spelling the config already gives away is refused at setup, before any weight is resolved or downloaded; the rest before the first byte of the cache is written.
+- **Damaged values.** A weight that is NaN after dequantisation (the e4m3fn bytes 0x7F and 0xFF), a negative scale, a non-finite scale, and a weight past float16's range under a float16 stream (pre-Ampere cards; stream it in bfloat16) are refused, naming the tensor, before the cache index is written. A zero scale, as an all-zero block has, is kept.
 - **Cache identity.** For `deepseek_v3`, `config.json` is part of the cache's source identity, as are the weight files, so a cache sharded from the bf16 checkpoint is never reused for its FP8 copy at the same path, nor the reverse.
 - **The early RAM check.** The check that runs before sharding still charges the FP8 files at their size on disk, about half the dequantised weights. A base that cannot fit in RAM may therefore be refused after sharding, by the exact check, rather than before it.
 - **After training.** The adapter is trained against the dequantised weights. Merging it or serving it loads the base through transformers' own FP8 path, which is a different numerical path from the one the adapter was trained on.
