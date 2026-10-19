@@ -169,6 +169,8 @@ Transformers generation (`use_vllm: false`) and deterministic RLVR; vLLM remains
 a CUDA-oriented optional path. Other Transformers trainers remain FP32 on MPS
 until their task-specific kernels receive equivalent hardware coverage.
 
+On Apple Silicon MPS hardware, Transformers' threaded weight loader has been reported to crash with SIGABRT in `_materialize_copy` on some setups (#2076). Soup sets `HF_DEACTIVATE_ASYNC_LOAD=1` by default when running on MPS to enforce synchronous model loading while preserving any explicit user environment setting. To opt out and re-enable threaded loading, export `HF_DEACTIVATE_ASYNC_LOAD=0` before training.
+
 
 ## Unsloth Backend (2-5x Faster Training)
 

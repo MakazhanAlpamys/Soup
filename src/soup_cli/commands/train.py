@@ -23,7 +23,12 @@ from soup_cli.data.loader import (
 )
 from soup_cli.monitoring.display import TrainingDisplay
 from soup_cli.trainer.classifier import CLASSIFICATION_TASKS
-from soup_cli.utils.gpu import detect_device, get_gpu_info, resolve_quantization
+from soup_cli.utils.gpu import (
+    configure_mps_async_load,
+    detect_device,
+    get_gpu_info,
+    resolve_quantization,
+)
 
 if TYPE_CHECKING:  # pragma: no cover - type hints only, no runtime import
     from soup_cli.config.schema import SoupConfig
@@ -1470,6 +1475,8 @@ def train(
     # Detect hardware with backend awareness
     device, device_name = detect_device(backend=cfg.backend)
     gpu_info = get_gpu_info(backend=cfg.backend)
+
+    configure_mps_async_load(device)
 
     # Quantization guard: explicit decision per #423.  See resolve_quantization()
     # docstring for the full rationale — MLX 4-bit uses pre-quantized mlx-community
