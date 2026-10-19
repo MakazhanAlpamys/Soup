@@ -64,8 +64,13 @@ def _stream_source_line(stats: dict) -> str:
         )
     # Since #974 the staging lives in the same power-of-two arenas as the RAM
     # store, so the disk tier can say what was page-locked too.
+    drive_count = stats.get("drive_count", 1)
+    direct_io = stats.get("direct_io_drives", drive_count)
+    media = "an NVMe volume"
+    if drive_count > 1:
+        media = f"{drive_count} NVMe volumes, direct I/O {direct_io}/{drive_count}"
     return (
-        f"streamed from DISK ({stats['disk_bytes'] / 1e9:.2f} GB on an NVMe volume) "
+        f"streamed from DISK ({stats['disk_bytes'] / 1e9:.2f} GB on {media}) "
         f"by an async reader, read_ahead={stats['read_ahead']}, "
         f"{stats['store_bytes'] / 1e6:.0f} MB {pinned} host staging"
     ) + _page_locked_note(stats)
@@ -307,7 +312,31 @@ def _disk_volume(path: str) -> tuple[int, int]:
     return int(os.stat(anchor).st_dev), int(shutil.disk_usage(anchor).free)
 
 
-def _effective_read_ahead(tcfg: Any, n_roots: int, console: Any) -> ReadAheadDecision:
+def _say_read_ahead_decision(decision: ReadAheadDecision, console: Any) -> None:
+    """Explain a striped disk reader's effective depth."""
+    n_roots = decision.n_roots
+    if n_roots <= 1:
+        return
+    configured = decision.configured
+    wanted = min(n_roots + 1, MAX_STREAM_READ_AHEAD)
+    if decision.raised:
+        console.print(
+            f"[dim]training.stream_read_ahead {configured} -> {decision.depth}: the layer "
+            f"cache spans {n_roots} drives, and each needs a read in flight "
+            f"({DEFAULT_STREAM_READ_AHEAD} counts as the default; any other value is kept as "
+            f"set).[/]"
+        )
+    elif configured < wanted:
+        console.print(
+            f"[yellow]training.stream_read_ahead={configured} with {n_roots} stripe drives "
+            f"keeps {wanted - configured} of them idle between layers; {wanted} lets every "
+            f"drive read at once (one more layer of host staging each).[/]"
+        )
+
+
+def _effective_read_ahead(
+    tcfg: Any, n_roots: int, console: Any, *, announce: bool = True
+) -> ReadAheadDecision:
     """The async reader's depth with ``n_roots`` drives (R4), and how it came about.
 
     Every drive needs a read in flight beside the slot the consumer holds, so the DEFAULT depth
@@ -327,22 +356,8 @@ def _effective_read_ahead(tcfg: Any, n_roots: int, console: Any) -> ReadAheadDec
     decision = ReadAheadDecision(
         depth=effective_read_ahead(configured, n_roots), configured=configured, n_roots=n_roots
     )
-    if n_roots <= 1:
-        return decision
-    wanted = min(n_roots + 1, MAX_STREAM_READ_AHEAD)
-    if decision.raised:
-        console.print(
-            f"[dim]training.stream_read_ahead {configured} -> {decision.depth}: the layer "
-            f"cache spans {n_roots} drives, and each needs a read in flight "
-            f"({DEFAULT_STREAM_READ_AHEAD} counts as the default; any other value is kept as "
-            f"set).[/]"
-        )
-    elif configured < wanted:
-        console.print(
-            f"[yellow]training.stream_read_ahead={configured} with {n_roots} stripe drives "
-            f"keeps {wanted - configured} of them idle between layers; {wanted} lets every "
-            f"drive read at once (one more layer of host staging each).[/]"
-        )
+    if announce:
+        _say_read_ahead_decision(decision, console)
     return decision
 
 
@@ -621,6 +636,25 @@ class StreamingSetupMixin:
     #: Set by :meth:`_setup_streaming_transformers`; absent on a resident run.
     _stream_runtime = None
 
+    #: ``trust_remote_code`` for the streamed MODEL (config, meta skeleton,
+    #: install): always False. Every entry of ``SUPPORTED_STREAM_ARCHS`` passed
+    #: its resident-vs-streamed parity gate on transformers' own class, and a hub
+    #: repo's remote modelling code lays the same weights out differently
+    #: (Moonlight's ``modeling_deepseek.py`` keeps one module per expert, so the
+    #: shards would not fit it). The tokenizer still gets the user's
+    #: ``trust_remote_code``: that is where such repos need it (Moonlight's
+    #: tokenizer exists only as remote code).
+    _STREAM_NATIVE_MODEL_CODE = False
+
+    @classmethod
+    def _stream_meta_skeleton(cls, base, *, dtype, quant):
+        """The setup's meta probe of the streamed model, from native code."""
+        from soup_cli.utils.layer_stream_runtime import build_meta_skeleton
+
+        return build_meta_skeleton(
+            base, dtype=dtype, quant=quant, trust_remote_code=cls._STREAM_NATIVE_MODEL_CODE
+        )
+
     @staticmethod
     def _stream_shape_config(model_config):
         """Text sub-config for multimodal wrappers; plain config otherwise."""
@@ -732,7 +766,6 @@ class StreamingSetupMixin:
         )
         from soup_cli.utils.layer_stream_runtime import (
             RamSource,
-            build_meta_skeleton,
             build_streamed_model,
             expandable_segments_status,
             extras_resident_bytes,
@@ -755,8 +788,10 @@ class StreamingSetupMixin:
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
 
+        # The streamed decoder is always transformers' own class (see
+        # _STREAM_NATIVE_MODEL_CODE); trust_remote_code reaches the tokenizer only.
         model_config = AutoConfig.from_pretrained(
-            cfg.base, trust_remote_code=self._trust_remote_code,
+            cfg.base, trust_remote_code=self._STREAM_NATIVE_MODEL_CODE,
             **base_revision_kwargs(cfg.base),
         )
         # Allowlist, not a heuristic — a half-supported architecture streams
@@ -918,22 +953,12 @@ class StreamingSetupMixin:
         # The probe is a meta skeleton and is the only model available here, so
         # the call happens while it is alive rather than at the attach below.
         if quant == QUANT_NF4:
-            probe = build_meta_skeleton(
-                cfg.base,
-                dtype=dtype,
-                quant=quant,
-                trust_remote_code=self._trust_remote_code,
-            )
+            probe = self._stream_meta_skeleton(cfg.base, dtype=dtype, quant=quant)
             moe_targets = resolve_moe_lora_targets(probe, tcfg, None, console=console)
             quant_suffixes = quantised_layer_suffixes(probe)
             del probe
         elif tcfg.moe_lora:
-            probe = build_meta_skeleton(
-                cfg.base,
-                dtype=dtype,
-                quant=quant,
-                trust_remote_code=self._trust_remote_code,
-            )
+            probe = self._stream_meta_skeleton(cfg.base, dtype=dtype, quant=quant)
             moe_targets = resolve_moe_lora_targets(probe, tcfg, None, console=console)
             del probe
 
@@ -964,7 +989,10 @@ class StreamingSetupMixin:
         # with getattr like `external_tensors` below: an index without the field is one root.
         # The whole decision travels to every message that advises lowering the depth.
         read_ahead_decision = _effective_read_ahead(
-            tcfg, 1 + len(getattr(index, "stripe_roots", None) or ()), console
+            tcfg,
+            1 + len(getattr(index, "stripe_roots", None) or ()),
+            console,
+            announce=False,
         )
         read_ahead = read_ahead_decision.depth
 
@@ -1084,6 +1112,8 @@ class StreamingSetupMixin:
         # back to disk when it does not. build_stream_plan already refused a
         # non-NVMe disk, so reaching here with tier='disk' means NVMe.
         tier = TIER_DISK if tcfg.stream_source == "disk" else plan.tier
+        if tier == TIER_DISK:
+            _say_read_ahead_decision(read_ahead_decision, console)
         if tier != plan.tier:
             # The panel is rendered from `plan`, so a forced tier has to be
             # reflected there or the pre-flight reports "tier ram" immediately
@@ -1214,7 +1244,7 @@ class StreamingSetupMixin:
             # gated on a real CUDA device.
             require_pin=(tcfg.stream_pin is True) and on_cuda,
             seed=tcfg.seed if getattr(tcfg, "seed", None) is not None else 0,
-            trust_remote_code=self._trust_remote_code,
+            trust_remote_code=self._STREAM_NATIVE_MODEL_CODE,
             console=console,
             quant=quant,
             double_quant=double_quant,
@@ -1226,6 +1256,18 @@ class StreamingSetupMixin:
         )
         self.model = model
         self._stream_runtime = runtime
+        # #792 — on the materialised adapters, before the probe measures a step.
+        from soup_cli.utils.peft_wiring import apply_fast_lora_patches, fast_lora_summary
+
+        try:
+            fast_lora_counts = apply_fast_lora_patches(model, tcfg)
+        except Exception:
+            # Training's cleanup context has not started yet: release the
+            # runtime here, as the probe below does on its own failure.
+            self._close_stream_runtime()
+            raise
+        if fast_lora_counts is not None:
+            console.print(f"[green]{fast_lora_summary(fast_lora_counts)}[/]")
         if probe_plan is not None:
             self._run_stream_vram_probe(model, probe_plan)
         stats = runtime.stats()

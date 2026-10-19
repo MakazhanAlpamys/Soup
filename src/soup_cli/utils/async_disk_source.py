@@ -37,6 +37,7 @@ NO top-level torch: this module is imported by the trainer path only.
 
 import logging
 import math
+import os
 import queue
 import threading
 import time
@@ -590,14 +591,21 @@ class AsyncDiskSource:
         if not aligned:  # _allocate_staging aligns every arena; kept as the safe fallback
             logger.warning(UNALIGNED_STAGING_MESSAGE)
         self._open_of: Dict[int, Any] = {}
+        self.direct_io_roots: Dict[str, bool] = {}
+        self.page_cache_reasons: Dict[str, str] = {}
         for root in self._roots:
             self._open_of[root] = self._open_buffered
-            if not aligned or root not in first_of_root:
+            if root not in first_of_root:
                 continue
             probe_path = self._paths[first_of_root[root]]
+            root_path = os.path.dirname(probe_path)
+            self.direct_io_roots[root_path] = False
+            if not aligned:
+                continue
             try:
                 open_direct(probe_path).close()
             except OSError as exc:
+                self.page_cache_reasons[root_path] = str(exc)
                 logger.info(
                     "layer streaming's disk tier reads %s through the page cache: direct "
                     "I/O is unavailable there (%s)",
@@ -606,6 +614,7 @@ class AsyncDiskSource:
                 )
             else:
                 self._open_of[root] = open_direct
+                self.direct_io_roots[root_path] = True
         self.direct_io = all(opener is not self._open_buffered for opener in self._open_of.values())
         # One drive keeps the historical worker names (`soup-layer-range-<n>`), which the
         # #974 and #1056 tests match on; a striped source names each drive's pool apart, so a

@@ -296,15 +296,18 @@ def make_generator(
     quantization: Optional[str] = None,
     loaded: Optional[tuple] = None,
     chat_template_kwargs: Optional[dict] = None,
+    batch_size: int = 8,
 ) -> GeneratorFn:
     """Build a deterministic ``GeneratorFn`` closure (greedy decode).
 
     ``loaded`` lets a caller share an already-loaded ``(model, tokenizer,
     device)`` triple across several closures (base + multi off one load).
     ``dtype``/``quantization`` are ignored when ``loaded`` is given, same as
-    ``device``.
+    ``device``. The closure also exposes ``batch(prompts) -> list[str]`` using
+    greedy decoding, left padding and at most ``batch_size`` prompts per call.
     """
     _check_positive_int(max_new_tokens, "max_new_tokens")
+    _check_positive_int(batch_size, "batch_size")
     options = validate_chat_template_kwargs(chat_template_kwargs)
     if loaded is not None and (not isinstance(loaded, tuple) or len(loaded) != 3):
         raise ValueError("loaded must be a (model, tokenizer, device) tuple")
@@ -339,6 +342,41 @@ def make_generator(
         gen_ids = out[0][prompt_len:]
         return tokenizer.decode(gen_ids, skip_special_tokens=True)
 
+    def _batch(prompts: list[str]) -> list[str]:
+        if not isinstance(prompts, list) or any(not isinstance(p, str) for p in prompts):
+            raise TypeError("prompts must be a list of strings")
+        outputs = []
+        for start in range(0, len(prompts), batch_size):
+            encodings = [
+                encode_prompt(tokenizer, prompt, chat_template_kwargs=options)
+                for prompt in prompts[start:start + batch_size]
+            ]
+            width = max(row["input_ids"].shape[1] for row in encodings)
+            if pad_id is None:
+                raise ValueError("batch generation requires a pad or EOS token")
+            # Pad tensors on the left without mutating the shared tokenizer.
+            # Each prompt uses exactly the scalar rendering/truncation contract.
+            inputs = {
+                key: torch.cat([
+                    torch.nn.functional.pad(
+                        row[key], (width - row[key].shape[1], 0),
+                        value=pad_id if key == "input_ids" else 0,
+                    )
+                    for row in encodings
+                ]).to(dev)
+                for key in encodings[0]
+            }
+            with torch.no_grad():
+                generated = model.generate(
+                    **inputs, max_new_tokens=max_new_tokens,
+                    do_sample=False, num_return_sequences=1, pad_token_id=pad_id,
+                )
+            outputs.extend(
+                tokenizer.decode(row[width:], skip_special_tokens=True) for row in generated
+            )
+        return outputs
+
+    _gen.batch = _batch
     return _gen
 
 

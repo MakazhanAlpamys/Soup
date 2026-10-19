@@ -71,6 +71,14 @@ def apply_liger_kernel(model_name: str) -> bool:
     # `_apply_liger_kernel(model_type)` expects, and a directory cannot rename it.
     model_type = _detect_model_type(model_name)
     if model_type:
+        # #1811: liger's `_apply_liger_kernel` logs and returns, without raising,
+        # for a type it has no kernels for, so calling it proved nothing. Ask its
+        # own table first. A known type that is not in it is unsupported: the
+        # name-based fallback below is for a config that cannot be read, and on
+        # `phi` (phi-2) it would "succeed" by patching Phi-3's classes.
+        supported = _liger_model_types()
+        if supported is not None and model_type not in supported:
+            return False
         try:
             from liger_kernel.transformers import _apply_liger_kernel
 
@@ -83,6 +91,22 @@ def apply_liger_kernel(model_name: str) -> bool:
             pass
 
     return _apply_liger_manual(last_component)
+
+
+def _liger_model_types() -> frozenset[str] | None:
+    """The model types liger has kernels for, from its own table, or None.
+
+    ``None`` means the table could not be read (an older or reorganised liger);
+    the caller then keeps the previous behaviour instead of guessing.
+    """
+    try:
+        from liger_kernel.transformers.monkey_patch import MODEL_TYPE_TO_APPLY_LIGER_FN
+    except (ImportError, AttributeError):
+        return None
+    try:
+        return frozenset(str(key) for key in MODEL_TYPE_TO_APPLY_LIGER_FN)
+    except TypeError:
+        return None
 
 
 def _detect_model_type(model_name: str) -> str:

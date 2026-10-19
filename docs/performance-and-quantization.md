@@ -458,6 +458,16 @@ training:
 soup train --config soup.yaml
 ```
 
+**Model and tokenizer code.** With `training.stream_layers: true`, Soup uses
+Transformers' own implementation for the model config, the meta skeleton used by
+setup probes, and the streamed model. `--trust-remote-code` still reaches the
+tokenizer, so a supported model can use a tokenizer supplied as custom repository
+code. For example, Moonlight-16B-A3B needs that flag for its tokenizer while its
+`deepseek_v3` model uses the native implementation that matches Soup's stacked
+expert shards. Streaming requires a supported native model implementation; the
+flag does not enable custom model code on this path. The dated Moonlight hardware
+runs are recorded in the [probe report](../benchmarks/probe-rtx5070-moonlight-16b.md).
+
 **How it works.** LoRA adapters + their gradients + optimizer state stay resident in VRAM (they are small). The frozen base lives in CPU RAM, page-locked when the machine allows it, and is streamed: each decoder layer is copied into one of two pre-allocated VRAM buffers on a dedicated CUDA stream while the previous layer is still computing, so the load overlaps the compute. Vocabulary-sized `embed_tokens` and an untied `lm_head` use one additional shared slot: the embedding is loaded for the model input, then the same allocation is reused for the output head, whose copy is issued right after the embedding lookup (`StreamPrefetcher.head_prefetch_layer`, default `0`) rather than at the last decoder layer, and the embedding is reloaded into it at the tail of that step's backward pass so the copy overlaps the remaining compute instead of blocking the next step's first lookup. Each decoder layer is read **twice** per step — once in the forward pass and once when the backward pass recomputes it — because `dL/dx = Wᵀ · dL/dy` needs the weights to reach the layers below. That is physics, not an implementation detail, and it is why streaming costs time.
 
 For streamed NF4 on CUDA, Soup follows bitsandbytes' own 4-bit dispatch. When
@@ -468,6 +478,17 @@ training shapes, Soup keeps that path and avoids adding a third dequantisation t
 checkpointed step. The fused arm reduces saved-weight VRAM but its backward still
 dequantises because bitsandbytes exposes no transposed 4-bit GEMM; it is therefore a
 bounded memory/time trade, not a claim that #842's full kernel ceiling is complete.
+
+**Expert-granularity streaming (DeepSeek-V3-family MoE, API/harness only).** For
+admitted DeepSeek-V3 checkpoints with per-expert source weights, `shard_checkpoint(..., expert_layout="per_expert")`
+stores routed experts separately so the runtime fetches one frozen expert at a time
+instead of holding the full routed-expert block in the layer buffer. This is a
+capacity option for unusually large MoE layers; it does not add a CLI or config knob.
+The current harness trains LoRA on attention projections: LoRA on streamed routed
+experts is unsupported, while attention and shared-expert LoRA remain resident. The
+fit planner still estimates the fused layer and does not account for per-expert
+streaming, so its recommendation is not an estimate of this layout's capacity. No
+production throughput claim is made; see the [expert streaming gate](../benchmarks/gate-expert-streaming.md).
 
 **`stream_nf4_scale_cache` (opt-in).** On the dequantise + `F.linear` path, a
 double-quantised NF4 weight expands its 8-bit block scales to fp32 on every visit,
@@ -1003,6 +1024,10 @@ all-masked sequence or saving a non-finite adapter.
 
 Every command that loads a model now requires `--trust-remote-code` to execute custom Python from a model repo (`auto_map` in `config.json`). First-party orgs (Meta, Mistral, Qwen, Google, etc.) suppress the warning panel; everything else prints a `REMOTE CODE WARNING` panel before loading. Unknown-org local checkpoints with `auto_map` raise a friendly `ValueError` at construction time instead of silently exec'ing inside `from_pretrained`.
 
+For [layer streaming](#layer-streaming-beta-v0720-nf4-v0722-disk--wider-archs-v0723-preference-losses-v0724),
+the flag authorizes tokenizer code only; the model config, setup probes and model
+always use the supported native Transformers implementation.
+
 Coverage:
 - `soup train` (every task - SFT, DPO, GRPO, KTO, ORPO, SimPO, IPO, PPO, Reward Model, Pretrain, Embedding, BCO, and the unified Preference dispatcher; automatic evaluation after training follows the run's flag, see `docs/evaluation.md`)
 - `soup chat`, `soup serve`, `soup data download`, `soup eval auto`
@@ -1213,7 +1238,11 @@ Optimize training throughput and extend context windows:
 
 `use_liger` and `use_flash_attn` are read only by the SFT-family trainer
 (`task: sft` or `task: tts`); setting either on any other task is rejected
-at config load.
+at config load. Liger is reported as enabled only when the model's
+`config.model_type` is in liger's own kernel table; for a type it has no kernels
+for (`gpt_neox`, `phi`, `gpt2`, ...) the run prints "no matching architecture
+found" and trains without it, instead of announcing kernels that were never
+applied (#1811).
 
 ```yaml
 # soup.yaml — performance options

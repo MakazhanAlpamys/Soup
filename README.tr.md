@@ -1,4 +1,4 @@
-<!-- synced-from: README.md sha256:7861d55b549aad1c5740d27f2fc72471270ed3011de8cbbf95ef23500e27fa99 -->
+<!-- synced-from: README.md sha256:44c28c06ff7d2445391cfcc7cd483b096453a302085ff8ac52cb48fa79ce4da5 -->
 <p align="center">🌍 <a href="README.md">English</a> | <strong>Türkçe</strong> | <a href="README.ar.md">العربية</a> | <a href="README.ja.md">日本語</a> | <a href="README.zh.md">中文</a></p>
 
 <p align="center">
@@ -300,7 +300,7 @@ metin, gömme (embedding), RAFT ve daha fazlası — hepsi JSONL, JSON, CSV, Par
 otomatik algılanır; bu yüzden çoğu durumda `data.train`'i bir dosyaya yöneltirsiniz ve başka hiçbir
 şey değişmez. Her biçim için adım adım çözümlü bir örnekle şemalar ve veri ardışık düzeni (uzak URI'ler,
 akış, parçalama, iç içe geçirme, sözcük dağarcığı genişletme, belge içe aktarma)
-[`docs/data.md`](docs/data.md#data-formats) içinde.
+[`docs/data.md`](docs/data.md#data-formats) içinde; [yerel Sesame CSM ses eğitimi](docs/training.md#native-sesame-csm) ise ayrı belgelenmiştir.
 
 ## Yaygın Komutlar
 

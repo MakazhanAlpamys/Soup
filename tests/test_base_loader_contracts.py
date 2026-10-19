@@ -83,3 +83,46 @@ def test_every_actual_base_loader_call_receives_the_bound_commit(call, receiver,
     with provenance.base_revision_scope(provenance.BaseRevision(BASE)):
         eval(expression, env)
     assert seen == [(BASE, REVISION)]
+
+
+@pytest.mark.parametrize("receiver,remote_code", [("AutoConfig", False), ("AutoTokenizer", True)])
+def test_streamed_loads_preserve_native_model_policy_and_bound_revision(
+    receiver, remote_code, monkeypatch,
+):
+    """Execute the merged calls: tokenizer trust must not enable remote model code."""
+    path = ROOT / "src/soup_cli/trainer/stream_setup.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    model_code = next(
+        ast.literal_eval(node.value) for node in ast.walk(tree)
+        if isinstance(node, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id == "_STREAM_NATIVE_MODEL_CODE"
+            for target in node.targets
+        )
+    )
+    assert model_code is False
+    calls = [node for node in ast.walk(tree)
+             if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+             and isinstance(node.func.value, ast.Name) and node.func.value.id == receiver
+             and node.func.attr == "from_pretrained"]
+    assert len(calls) == 1
+    seen = []
+
+    def load(model_id, *, trust_remote_code, revision):
+        assert model_id == BASE and revision == REVISION
+        assert trust_remote_code is remote_code
+        seen.append(model_id)
+
+    env = {
+        "cfg": SimpleNamespace(base=BASE),
+        "self": SimpleNamespace(_trust_remote_code=True, _STREAM_NATIVE_MODEL_CODE=model_code),
+        receiver: SimpleNamespace(from_pretrained=load),
+        "base_revision_kwargs": provenance.base_revision_kwargs,
+    }
+    monkeypatch.setattr(provenance, "get_hf_api", lambda: SimpleNamespace(
+        model_info=lambda *args, **kwargs: SimpleNamespace(sha=REVISION),
+    ))
+    monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
+    monkeypatch.delenv("TRANSFORMERS_OFFLINE", raising=False)
+    with provenance.base_revision_scope(provenance.BaseRevision(BASE)):
+        eval(compile(ast.Expression(body=calls[0]), "<streamed base load>", "eval"), env)
+    assert seen == [BASE]

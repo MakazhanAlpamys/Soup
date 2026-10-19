@@ -1851,10 +1851,9 @@ class TrainingConfig(BaseModel):
     ]] = Field(
         default=None,
         description=(
-            "TTS model family — required when task='tts'. Runnable choices are "
-            "orpheus, llasa, spark, and oute. sesame_csm is retained only so "
-            "legacy configs receive an explicit refusal until Soup has a native "
-            "CSM multimodal trainer."
+            "TTS model family — required when task='tts'. "
+            "orpheus, llasa, spark and oute use codec-string SFT; sesame_csm uses "
+            "a native multimodal trainer with raw audio and 32 parallel Mimi codebooks."
         ),
     )
     tts_emotion: Optional[str] = Field(
@@ -3054,6 +3053,18 @@ class TrainingConfig(BaseModel):
         default=False,
         description="Enable Liger Kernel fused operations (20-60% memory savings, 20-40% speedup)",
     )
+    # #792 — the Fast-LoRA kernels (utils/fast_lora*.py) behind one switch
+    fast_lora: bool = Field(
+        default=False,
+        description=(
+            "Run LoRA's q/k/v, MLP and other projections through Soup's "
+            "hand-written Fast-LoRA autograd functions instead of peft's "
+            "modules. Same math; no speedup is claimed. task='sft' on the "
+            "transformers backend with text, quantization none or 4bit, and "
+            "lora.dropout 0; refused beside use_liger, DoRA, VeRA, "
+            "target_parameters, Spectrum, LISA and FP8 training."
+        ),
+    )
     # Performance — FlashAttention
     use_flash_attn: bool = Field(
         default=False,
@@ -3293,7 +3304,7 @@ class TrainingConfig(BaseModel):
         default=False,
         description=(
             "On watchdog trigger: write <output>/spike_recovery.json with "
-            "decayed LR and attempt count for re-launch (instead of bare stop). "
+            "decayed LR and attempt count for re-launch (tracks attempts and caps recovery). "
             "Requires loss_watchdog=true."
         ),
     )
@@ -5834,17 +5845,12 @@ class SoupConfig(BaseModel):
             if tcfg.tts_family is None:
                 raise ValueError(
                     "task='tts' requires a runnable training.tts_family in "
-                    "(orpheus, llasa, spark, oute); sesame_csm is currently refused"
+                    "(orpheus, llasa, sesame_csm, spark, oute)"
                 )
             if tcfg.tts_family == "sesame_csm":
-                raise ValueError(
-                    "training.tts_family='sesame_csm' is not supported by Soup yet: "
-                    "CSM trains text plus 32 Mimi codebooks as parallel multimodal "
-                    "frames, so neither raw data.format='audio' nor pre-encoded "
-                    "data.format='chatml' is a valid text-SFT substitute. Use the "
-                    "model's native CSM/AutoProcessor training path until Soup has "
-                    "a dedicated CSM trainer."
-                )
+                from soup_cli.utils.csm import validate_csm_config
+
+                validate_csm_config(self)
             if self.data.format == "audio" and tcfg.tts_family in {"spark", "oute"}:
                 from soup_cli.utils.tts_codec import incompatible_live_codec_error
 
@@ -6105,6 +6111,75 @@ class SoupConfig(BaseModel):
                 f"training.train_on_eot=true requires task in "
                 f"{sorted(sft_family_tasks)}; got task={self.task!r}"
             )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_fast_lora_supported(self) -> "SoupConfig":
+        """#792 — the first slice of ``training.fast_lora``. The kernels patch
+        peft's LoRA modules on a text model trained by the SFT wrapper; every
+        other setting is refused with its reason rather than left unpatched."""
+        tcfg = self.training
+        if not tcfg.fast_lora:
+            return self
+        lora = tcfg.lora
+        reason = None
+        if self.backend != "transformers":
+            reason = (
+                f"needs backend='transformers'; got backend={self.backend!r}. The "
+                f"kernels replace peft's LoRA modules, which that backend does not use."
+            )
+        elif self.modality != "text":
+            reason = f"supports modality='text' only; got modality={self.modality!r}."
+        elif self.task != "sft":
+            reason = (
+                f"supports task='sft' only; got task={self.task!r}. Other trainers "
+                f"are not tested with the kernels yet."
+            )
+        elif lora.r == 0:
+            reason = "needs a LoRA; lora.r=0 trains the full model, with no LoRA to patch."
+        elif tcfg.unfrozen_parameters or tcfg.lisa_enabled:
+            name = "unfrozen_parameters" if tcfg.unfrozen_parameters else "lisa_enabled"
+            reason = (
+                f"cannot be combined with training.{name}: that mode trains the "
+                f"model's own weights and skips the LoRA setup the kernels hook into."
+            )
+        elif tcfg.quantization_aware == "fp8":
+            # (QuEST needs lora.r=0, refused above.)
+            reason = (
+                "cannot be combined with training.quantization_aware='fp8': FP8 "
+                "training converts the projections, and the kernels read their "
+                "weights directly, around the conversion."
+            )
+        elif lora.use_dora or lora.use_vera:
+            name = "use_dora" if lora.use_dora else "use_vera"
+            reason = (
+                f"cannot be combined with lora.{name}: the kernels compute plain "
+                f"LoRA, not that adapter's update."
+            )
+        elif lora.target_parameters:
+            reason = (
+                "cannot be combined with lora.target_parameters: those adapters "
+                "wrap parameters, not the Linear modules the kernels patch."
+            )
+        elif tcfg.quantization not in ("none", "4bit"):
+            reason = (
+                f"supports quantization 'none' or '4bit'; got "
+                f"quantization={tcfg.quantization!r}."
+            )
+        elif lora.dropout != 0:
+            reason = (
+                f"needs lora.dropout: 0; got {lora.dropout} (Soup's default is 0.05). "
+                f"peft gives every projection its own dropout, so q/k/v and gate/up "
+                f"would no longer share the one input the kernels read."
+            )
+        elif tcfg.use_liger:
+            reason = (
+                "cannot be combined with training.use_liger: Liger already replaces "
+                "the MLP's forward, and fast_lora would replace it again. Keep one "
+                "of them."
+            )
+        if reason is not None:
+            raise ValueError(f"training.fast_lora {reason}")
         return self
 
     @model_validator(mode="after")
@@ -7527,6 +7602,24 @@ class SoupConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def _validate_unsloth_8bit(self) -> "SoupConfig":
+        """#1811 — ``quantization: 8bit`` on ``backend: unsloth`` loaded in 16-bit.
+
+        ``utils/unsloth.py`` passes ``load_in_4bit`` and nothing else, and the
+        declared floor (``unsloth>=2024.8``) has no ``load_in_8bit`` to pass, so
+        ``8bit`` loaded exactly like ``none`` with no word. Refuse it, naming the
+        two values the Unsloth path applies.
+        """
+        if self.backend == "unsloth" and self.training.quantization == "8bit":
+            raise ValueError(
+                "training.quantization: 8bit is not applied on backend: unsloth "
+                "(Soup's Unsloth loader passes load_in_4bit only, so 8bit loaded the model "
+                "in 16-bit). Use quantization: 4bit or none with backend: unsloth, or "
+                "backend: transformers for 8-bit."
+            )
+        return self
+
+    @model_validator(mode="after")
     def _validate_preference_dispatcher(self) -> "SoupConfig":
         """v0.40.0 Part B — task='preference' requires preference_loss OR
         preference_loss_weights (Part D). Setting either field outside
@@ -8582,6 +8675,7 @@ training:
     alpha: 16
     target_modules: auto
   quantization: 4bit
+  gradient_checkpointing: true
   grpo_beta: 0.1
   num_generations: 4
   reward_fn: accuracy
@@ -8728,6 +8822,7 @@ training:
     alpha: 16
     target_modules: auto
   quantization: 4bit
+  gradient_checkpointing: true
   bco_beta: 0.1
 
 output: ./output
@@ -8789,6 +8884,7 @@ training:
     alpha: 16
     target_modules: auto
   quantization: 4bit
+  gradient_checkpointing: true
   ipo_tau: 0.1
 
 output: ./output
