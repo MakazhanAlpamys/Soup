@@ -156,9 +156,15 @@ def _payload(path: str) -> int:
 
 
 def _weight_locations(weights_dir: str) -> dict:
+    """key -> file name, from the index or, for a one-file checkpoint, that file's keys."""
     index = os.path.join(weights_dir, "model.safetensors.index.json")
-    with open(index, encoding="utf-8") as handle:
-        return json.load(handle)["weight_map"]
+    if os.path.isfile(index):
+        with open(index, encoding="utf-8") as handle:
+            return json.load(handle)["weight_map"]
+    from safetensors import safe_open
+
+    with safe_open(os.path.join(weights_dir, "model.safetensors"), framework="pt") as handle:
+        return {key: "model.safetensors" for key in handle.keys()}
 
 
 class _Source:

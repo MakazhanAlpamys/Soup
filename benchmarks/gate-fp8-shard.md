@@ -1,8 +1,9 @@
 # Gate: layer streaming shards a DeepSeek-V3 FP8 block-quantised checkpoint by dequantising it
 
-Status: **rule committed, not yet run.** Sections 1-4 are written before any gate run;
-the results are appended below them and nothing above this line's sections is edited
-after a run.
+Status: **G1 PASS, G2 PASS, G3 PASS** (CPU only; run 2026-10-19). Sections 1-3 are the
+rule as committed in `cdfdf7546` before any gate run, unchanged since; section 4 is filled
+from the run, section 5 holds the results. No GPU run: the maintainer runs the GPU loss
+check.
 
 ## 1. Question
 
@@ -158,4 +159,168 @@ figures describe that loss, not a defect. No Kimi K2 or 1T checkpoint.
 
 ## 4. Box state
 
-Filled at run time.
+- The RTX 5070 Laptop box with its GPU unused: every process ran with `CUDA_VISIBLE_DEVICES=-1`
+  (`torch.cuda.is_available()` False in every report). 32 logical CPUs, 31.7 GiB RAM.
+- Software: Python 3.12.10, Windows 11 26200, torch 2.14.0+cu130, transformers 5.17.0,
+  bitsandbytes 0.50.2 (CPU), safetensors 0.8.0.
+- Code: G1 and G2 ran as `tests/test_fp8_block_streaming.py` at commit `fc2ef92fd` (124
+  tests). G3 ran `benchmarks/harness/fp8_shard_gate.py` from the same tree (its one-file
+  index fallback was added before the run and is committed with this record).
+- Other Claude sessions shared the machine. RAM: every G3 script started with at least
+  10 GiB available (checked before torch was imported; 9.4-10.2 GiB when the report's box
+  line was sampled just after); the lowest reading during any run was 5.35 GiB, above the
+  3 GiB abort floor, so the watchdog never fired. The laptop slept once (21:52-23:40 local)
+  while a regression test file was running; that file was re-run afterwards, nothing in a
+  gate ran across the sleep.
+- D: had 189.8 GB free before G3 and 105.9 GB after it (decimal GB): the 100 GB floor held.
+  The demo folders on D: were only read.
+
+## 5. Results
+
+### G1, dequantisation exactness: PASS
+
+All in `tests/test_fp8_block_streaming.py`, every comparison `torch.equal`:
+
+- `test_dequant_equals_the_reference_block_loop`: all 9 cases of section 2 (fp32, plus the
+  bf16 and fp16 casts) equal the per-block reference loop.
+- `test_every_finite_e4m3_code_point_dequantises_exactly`: the 254 finite e4m3fn code
+  points (+-448, the subnormals, both zeros) under 2 x 2 random scales: equal.
+- Second oracle, `test_transformers_dequant_agrees_on_tileable_shapes`: transformers'
+  `Fp8Dequantize._dequantize_one` equals Soup's output on the 3 tileable cases
+  (256 x 384, 2048 x 1408, 64 x 96 with a 16 x 32 block).
+- Converter check, `test_the_harness_quantiser_writes_what_transformers_writes`: on the same
+  3 cases the harness quantiser's FP8 bytes and scales equal transformers' `Fp8Quantize`.
+
+Why transformers is not an oracle on ragged shapes (observed, informational): it derives
+the block from the scale grid. On the real Moonlight tensor
+`model.layers.0.self_attn.kv_a_proj_with_mqa.weight` (576 x 2048, scale 5 x 16) it raises
+`ValueError: Weight shape (576, 2048) not divisible by scale grid (5, 16).` On a synthetic
+200 x 256 weight with a 2 x 2 scale it accepts the input and uses 100-row blocks, which
+differs from DeepSeek's 128 + 72 split by up to 45.4 in absolute value. (One direct call of
+transformers 5.17.0 each; no whole-model resident load was tried.)
+
+### G2, streamed-from-FP8 parity: PASS
+
+- **Model, 5 of 5 cells** (`test_streamed_from_fp8_matches_the_dequantised_resident_bit_exactly`):
+  logits, loss and every LoRA gradient are `torch.equal` to the resident control's in
+  fused / per_expert x `q_lora_rank` 24 / None with a 16 x 32 block, and fused with a 128 x 128
+  block. Each cell has a non-zero layer-0 LoRA gradient.
+- **Cache, 6 of 6 cells** (`test_the_fp8_cache_is_the_dequantised_cache_byte_for_byte`):
+  fused / per_expert x none fp32 / none bf16 / NF4 bf16 (CPU quantisation, double
+  quantisation on). The FP8-sourced cache is tensor-for-tensor equal, key for key, to the
+  cache of the reference-dequantised checkpoint. The index agrees on every field but the
+  source fingerprint and file list, no `*_scale_inv` key is stored, and the disk estimate
+  is the same for both sources.
+- **Controls:**
+  - `test_fp8_is_lossy_so_the_parity_pins_the_dequant`: the dequantised model's logits
+    differ from the bf16 original's.
+  - `test_the_streamed_model_is_built_bf16_not_with_transformers_fp8_layers`: no FP8
+    module in the streamed model, `o_proj.base_layer` is `nn.Linear`, and the config has no
+    `quantization_config`.
+  - `test_the_meta_skeleton_never_hands_an_fp8_config_to_from_config`.
+  - `test_the_resident_view_of_the_checkpoint_is_untouched`: `config.json` bytes are
+    unchanged, and a fresh `AutoConfig` still reads the FP8 config.
+
+Sensitivity (mutation run, section 6):
+- the model cells fail when the dequant skips the scales, swaps `bm` / `bn`, crops the
+  wrong edge, or reads experts without dequantising;
+- the 128 x 128 cell is the one that does not see the swap or the crop, as expected: on
+  hidden 64 every matrix is a single block.
+
+### G3, Moonlight-16B-A3B on the CPU: PASS
+
+Raw JSON: `benchmarks/results/probe-rtx5070/fp8-shard/`: `convert.json` (with every
+tensor's errors), plus `shard-4L-nf4.json`, `shard-27L-nf4.json` and
+`shard-27L-none.json`.
+
+**1. Conversion** to `D:/soup-bench/models/Moonlight-16B-A3B-fp8block` (128 x 128 blocks,
+DeepSeek-V3's `quantization_config` spelling):
+
+| | value |
+|---|---|
+| source safetensors | 31,920,879,456 B (31.92 GB) |
+| FP8 copy safetensors | 16,639,762,568 B (16.64 GB, 0.521x) |
+| FP8 tensors (+ one `weight_scale_inv` each) | 5,181 |
+| tensors kept bf16 (embeddings, head, norms, router, bias, `inv_freq`) | 163 |
+| wall time | 76.2 s |
+| peak RSS | 2.50 GB |
+
+`kv_a_proj_with_mqa` is 576 x 2048 with a 5 x 16 scale, the ragged case of the real format.
+
+Error of the dequantised FP8 weight against its bf16 original, per tensor, aggregated per
+class. Relative Frobenius error is `||deq - orig|| / ||orig||`; relative max error is
+`max|deq - orig| / max|orig|`.
+
+| class | tensors | rel. Frobenius max | rel. Frobenius mean | rel. max-error max | rel. max-error mean |
+|---|---:|---:|---:|---:|---:|
+| q_proj | 27 | 0.02650 | 0.02645 | 0.03552 | 0.03146 |
+| kv_a_proj_with_mqa | 27 | 0.02651 | 0.02645 | 0.03571 | 0.03313 |
+| kv_b_proj | 27 | 0.02651 | 0.02646 | 0.03571 | 0.03364 |
+| o_proj | 27 | 0.02648 | 0.02645 | 0.03571 | 0.03391 |
+| dense gate_proj | 1 | 0.02644 | 0.02644 | 0.02679 | 0.02679 |
+| dense up_proj | 1 | 0.02643 | 0.02643 | 0.01917 | 0.01917 |
+| dense down_proj | 1 | 0.02642 | 0.02642 | 0.02632 | 0.02632 |
+| shared gate_proj | 26 | 0.02648 | 0.02645 | 0.03456 | 0.01837 |
+| shared up_proj | 26 | 0.02648 | 0.02645 | 0.03228 | 0.01602 |
+| shared down_proj | 26 | 0.02646 | 0.02641 | 0.03250 | 0.01816 |
+| routed gate_proj | 1,664 | 0.02652 | 0.02646 | 0.03571 | 0.03230 |
+| routed up_proj | 1,664 | 0.02651 | 0.02645 | 0.03571 | 0.03378 |
+| routed down_proj | 1,664 | 0.02650 | 0.02645 | 0.03571 | 0.02793 |
+
+Sanity bound: the worst tensor (`model.layers.9.mlp.experts.44.gate_proj.weight`, 0.02652)
+is far below 0.1. The ~2.6% is the same in every class, consistent with rounding to e4m3's
+3-bit mantissa. The largest single error, 0.0357 x a tensor's max, is 1/28: half an e4m3
+step at the top of the 448 range (step 32, so 16/448). These figures describe FP8's loss
+against the bf16 original, not a defect of the sharder.
+
+**2. Sharding** (`dtype=bfloat16`, fused, `quant_device=cpu`, NF4 suffixes from the meta
+probe: the 10 decoder linears of attention, the dense MLP and the shared expert):
+
+| run | layers | wall | peak RSS | cache on disk | estimate | estimate / disk | payload exact | real-data checks |
+|---|---:|---:|---:|---:|---:|---:|---|---|
+| NF4, time probe | 4 | 12.1 s | 4.40 GB | 4,755,794,622 B | 4,755,803,855 B | 1.0000019 | per layer and outside: yes | layers 1-3: 405 FP8-derived tensors (21 NF4), 0 mismatches |
+| NF4 | 27 | 93.4 s | 4.63 GB | 30,598,520,564 B | 30,598,555,900 B | 1.0000012 | yes | layers 1, 13, 26: 405 (21 NF4), 0 mismatches |
+| none | 27 | 73.2 s | 4.36 GB | 31,920,272,800 B | 31,920,287,732 B | 1.0000005 | yes | layers 1, 13, 26: 405, 0 mismatches |
+
+- **Time rule.** 27/4 x 12.1 s = 82 s, far under 60 minutes, so all 27 layers were sharded.
+  No extrapolation is used.
+- **Disk.** There was room for the `quantization: none` run too, so it ran.
+- **Real-data checks.** "FP8-derived" counts every stored tensor of the layer that came from
+  an FP8 weight: 4 attention and 3 shared-expert linears, plus 64 experts x (`gate_up`,
+  `down`) of the stacked routed experts.
+  - Each equals the harness's own per-block reference dequant of the copy's tensor, cast to
+    bf16.
+  - The NF4 ones equal bitsandbytes' CPU quantisation of that reference, in the packed bytes,
+    the absmax, the nested absmax and the offset.
+- **Against the bf16 source.** The NF4 estimate is the same figure, to the byte, that #2039
+  computed for the bf16 source (30,598,555,900 B), because the scales are charged nothing.
+  The cache on disk is 26 bytes smaller than the bf16-sourced cache #2039 measured
+  (30,598,520,590 B): its `index.json` records different source files.
+- `total_params` is 15,960,111,936 in both 27-layer runs.
+
+Folders written (new, left in place for the maintainer's GPU check):
+- `D:/soup-bench/models/Moonlight-16B-A3B-fp8block` (16.6 GB);
+- `D:/soup-bench/fp8-shard-4L-nf4` (4.8 GB);
+- `D:/soup-bench/fp8-shard-27L-nf4` (30.6 GB);
+- `D:/soup-bench/fp8-shard-27L-none` (31.9 GB).
+
+## 6. Mutation check of the guards
+
+48 guards were altered one at a time in the source, with `tests/test_fp8_block_streaming.py`
+run after each and the file restored byte for byte (sha256 checked); the table is
+`benchmarks/results/probe-rtx5070/fp8-shard/mutations.json`.
+
+- 47 of 48 failed at least one named test on the first round.
+- The one survivor was M17: dropping the dedicated compressed-tensors branch left the generic
+  "declares quant_method 'compressed-tensors'" refusal, which the test's needle also matched.
+  The two tests now assert the branch's own wording, and M17 then failed both.
+- The mutations cover:
+  - the dequant: scale skipped, `bm` / `bn` swapped, wrong crop, the non-finite, dtype and
+    grid guards;
+  - every config refusal and every tensor-layout refusal of section 1;
+  - the arch gate;
+  - the sharder's and the estimator's scale skips, FP8 plan and config-first refusal;
+  - the expert and extras dequant paths, and the plain-read backstop;
+  - the reader's F8 mapping;
+  - the skeleton's config drop;
+  - the setup's early refusal and the config it hands the pre-flight.

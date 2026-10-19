@@ -9,7 +9,9 @@
   same dequantised weights bit for bit (logits, loss, LoRA gradients, both expert layouts), and
   its cache holds the same tensors, bit for bit, as one sharded from those weights, NF4 included
   (`benchmarks/gate-fp8-shard.md`). The disk pre-flight charges each FP8 weight at its stored rate
-  and nothing for the scales. Every other FP8 spelling (per-tensor scales, e5m2,
+  and nothing for the scales: on Moonlight-16B-A3B converted to this format, CPU only, the
+  27-layer NF4 cache (30.60 GB, sharded in 93 s) came within 0.0001% of the estimate, and every
+  checked FP8-derived tensor equals an independent dequant of the source. Every other FP8 spelling (per-tensor scales, e5m2,
   compressed-tensors, ue8m0 scales, static activation scales, a missing or misshapen scale, an FP8
   tensor without a scale, a scale without its tensor) and an FP8 base that is not
   `model_type: deepseek_v3` are refused naming the supported format; Kimi K2 (`model_type:

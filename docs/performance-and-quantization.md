@@ -524,6 +524,7 @@ What the sharder does:
 Measured:
 - **Numerics.** On a tiny DeepSeek-V3, the model streamed from the FP8 checkpoint matches a resident model holding the same dequantised weights bit for bit, in its logits, loss and LoRA gradients, in both expert layouts. Its layer cache holds the same tensors, bit for bit, as the one sharded from those dequantised weights, NF4 included ([gate](../benchmarks/gate-fp8-shard.md)).
 - **Disk.** The pre-flight charges each FP8 weight at the rate its dequantised tensor is stored at, and nothing for the scales.
+- **A real checkpoint, CPU only.** Moonlight-16B-A3B, converted to this format, sharded in 93 s (27 layers, NF4, `fused`). The 30.60 GB cache came within 0.0001% of the pre-flight's figure, and every FP8-derived tensor checked in three layers equals an independent dequantisation of the source. No GPU run is recorded yet.
 
 Limits and refusals:
 - **Architecture.** Only `model_type: deepseek_v3` is admitted. A Kimi K2 checkpoint declares `model_type: kimi_k2` and is still refused by name, FP8 or not.
