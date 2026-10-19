@@ -1,4 +1,4 @@
-<!-- synced-from: README.md sha256:7861d55b549aad1c5740d27f2fc72471270ed3011de8cbbf95ef23500e27fa99 -->
+<!-- synced-from: README.md sha256:44c28c06ff7d2445391cfcc7cd483b096453a302085ff8ac52cb48fa79ce4da5 -->
 <p align="center">🌍 <a href="README.md">English</a> | <a href="README.tr.md">Türkçe</a> | <a href="README.ar.md">العربية</a> | <a href="README.ja.md">日本語</a> | <strong>中文</strong></p>
 
 <p align="center">
@@ -289,7 +289,7 @@ Alpaca、ShareGPT、ChatML、偏好对（DPO / ORPO / SimPO / IPO / KTO）、视
 ASR、纯文本、embedding、RAFT 等等——全部从 JSONL、JSON、CSV、Parquet 或 TXT 自动检测，
 所以多数情况下把 `data.train` 指向文件就行，其他什么都不用改。每种格式的 schema 和
 完整示例，加上数据管线（远程 URI、流式、分片、交错、词表扩展、文档导入），都在
-[`docs/data.md`](docs/data.md#data-formats)。
+[`docs/data.md`](docs/data.md#data-formats)，而 [Sesame CSM 原生音频训练](docs/training.md#native-sesame-csm) 则另有说明。
 
 ## 常用命令
 

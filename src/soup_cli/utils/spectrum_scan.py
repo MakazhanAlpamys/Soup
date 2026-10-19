@@ -296,22 +296,29 @@ def _framework() -> Tuple[str, Callable[[Any], "NDArray[Any]"]]:
 
 
 def _discover_safetensors(weights_dir: str) -> list[str]:
+    from soup_cli.utils.checkpoint_files import checkpoint_files
+
     real = os.path.realpath(weights_dir)
     if not os.path.isdir(real):
         raise FileNotFoundError(f"weights dir not found: {weights_dir}")
+    # #1806: the checkpoint's own files, not every *.safetensors. Mistral's
+    # consolidated.safetensors carries the same weights under mistral-inference
+    # names; scanning it too emitted unfrozen_parameters that match no
+    # parameter of the HF model.
+    selected = checkpoint_files(real)
     files = []
-    for entry in sorted(os.listdir(real)):
-        if not entry.endswith(".safetensors"):
-            continue
+    for entry in selected.weights:
         full = os.path.join(real, entry)
         # Skip symlinked shards — defence-in-depth against a link redirecting
         # the read (mirrors the project's no-symlink TOCTOU policy).
         if os.path.islink(full):
             logger.warning("spectrum scan: skipping symlinked shard %s", entry)
             continue
+        if not os.path.isfile(full):
+            continue
         files.append(full)
     if not files:
-        raise FileNotFoundError(f"no .safetensors files in {weights_dir}")
+        raise FileNotFoundError(selected.why_empty(weights_dir))
     return files
 
 
@@ -572,14 +579,19 @@ def _weight_file_manifest(
     *,
     permit_symlinks: bool,
 ) -> Tuple[Tuple[str, int, int], ...]:
-    """Return ``(basename, size, mtime_ns)`` for top-level safetensors files."""
+    """Return ``(basename, size, mtime_ns)`` for the checkpoint's top-level safetensors.
+
+    The checkpoint's files are what the index names (#1806), so a Mistral-style
+    ``consolidated.safetensors`` beside the shards is neither sized nor copied.
+    """
+    from soup_cli.utils.checkpoint_files import checkpoint_files
+
     root = os.path.realpath(os.path.expanduser(directory))
     if not os.path.isdir(root):
         raise FileNotFoundError(f"weights directory not found: {directory}")
+    selected = checkpoint_files(root)
     files = []
-    for name in sorted(os.listdir(root)):
-        if not name.endswith(".safetensors"):
-            continue
+    for name in selected.weights:
         path = os.path.join(root, name)
         if os.path.islink(path) and not permit_symlinks:
             raise FileNotFoundError(
@@ -590,9 +602,7 @@ def _weight_file_manifest(
         stat = os.stat(path)
         files.append((name, int(stat.st_size), int(stat.st_mtime_ns)))
     if not files:
-        raise FileNotFoundError(
-            f"no .safetensors weight files found in {directory}"
-        )
+        raise FileNotFoundError(selected.why_empty(directory))
     return tuple(files)
 
 
@@ -763,6 +773,13 @@ def _snapshot_materialization_entries(
         if shared_root is not None:
             blob_roots.append(shared_root)
 
+    from soup_cli.utils.checkpoint_files import checkpoint_files
+
+    # #1806: only the checkpoint's own top-level weights are copied (and sized in
+    # materialize_bytes), the same set _weight_file_manifest reports, since the
+    # copy is checked against that manifest afterwards.
+    top_level_weights = set(checkpoint_files(source).weights)
+
     entries: list[Tuple[str, str, Optional[str]]] = []
     for root, dirnames, filenames in os.walk(source, followlinks=False):
         for dirname in dirnames:
@@ -777,6 +794,12 @@ def _snapshot_materialization_entries(
                 )
         for filename in filenames:
             if not filename.endswith((".safetensors", ".json")):
+                continue
+            if (
+                filename.endswith(".safetensors")
+                and root == source
+                and filename not in top_level_weights
+            ):
                 continue
             snapshot_path = os.path.join(root, filename)
             relative = os.path.relpath(snapshot_path, source)
@@ -938,14 +961,7 @@ def plan_model_weights(model: str) -> ModelWeightsPlan:
             materialize_bytes=0,
             source_files=manifest,
         )
-    from soup_cli.utils.hubs import snapshot_download
-
-    source = snapshot_download(
-        model,
-        cache_dir=None,
-        allow_patterns=["*.safetensors", "*.json"],
-    )
-    source = os.path.realpath(source)
+    source = os.path.realpath(_download_hub_checkpoint(model))
     source_revision = _hf_snapshot_revision(source)
     manifest = _weight_file_manifest(source, permit_symlinks=True)
     source_paths = [os.path.join(source, name) for name, _size, _mtime in manifest]
@@ -961,6 +977,44 @@ def plan_model_weights(model: str) -> ModelWeightsPlan:
             source_revision=source_revision,
         )
     return _hf_snapshot_plan(model, source, manifest, source_revision)
+
+
+def _download_hub_checkpoint(model: str) -> str:
+    """Fetch a Hub repo's checkpoint files, and nothing beside them (#1806).
+
+    ``*.safetensors`` fetched Mistral's ``consolidated.safetensors`` next to the
+    shards: 29.0 GB for a 14.5 GB model. One call asks for the Hugging Face
+    spellings (``model.safetensors``, ``model-*-of-*.safetensors``) and the JSON
+    files; one call, so an already complete cache entry resolves offline as
+    before (#533). The local rule then reads what came, and a second call is
+    made only when it says the checkpoint is not all there: the files an index
+    names outside those spellings, or, with no index and neither spelling
+    present, every ``*.safetensors`` except ``consolidated*``, which is the
+    local fallback rule itself. So what is downloaded is what is counted.
+    """
+    from soup_cli.utils.checkpoint_files import (
+        hub_allow_patterns,
+        hub_second_call,
+        read_index_weight_map,
+        select_checkpoint_files,
+    )
+    from soup_cli.utils.hubs import snapshot_download
+
+    source = snapshot_download(
+        model, cache_dir=None, allow_patterns=[*hub_allow_patterns(None), "*.json"]
+    )
+    real = os.path.realpath(source)
+    selected = select_checkpoint_files(os.listdir(real), read_index_weight_map(real))
+    second = hub_second_call(selected)
+    if second is not None:
+        allow, ignore = second
+        source = snapshot_download(
+            model,
+            cache_dir=None,
+            allow_patterns=[*allow, "*.json"],
+            ignore_patterns=ignore or None,
+        )
+    return source
 
 
 def _hf_cache_repo_id(source_dir: str) -> Optional[str]:

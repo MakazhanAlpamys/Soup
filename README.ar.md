@@ -1,4 +1,4 @@
-<!-- synced-from: README.md sha256:7861d55b549aad1c5740d27f2fc72471270ed3011de8cbbf95ef23500e27fa99 -->
+<!-- synced-from: README.md sha256:44c28c06ff7d2445391cfcc7cd483b096453a302085ff8ac52cb48fa79ce4da5 -->
 <p align="center">🌍 <a href="README.md">English</a> | <a href="README.tr.md">Türkçe</a> | <strong>العربية</strong> | <a href="README.ja.md">日本語</a> | <a href="README.zh.md">中文</a></p>
 
 <p align="center">
@@ -297,7 +297,7 @@ Alpaca وShareGPT وChatML وأزواج التفضيلات (DPO / ORPO / SimPO /
 العادي والتضمين (embedding) وRAFT وغيرها — كلها تُكتشف تلقائيًا من JSONL أو JSON أو CSV أو Parquet أو TXT،
 ولذلك تكتفي في معظم الحالات بتوجيه `data.train` إلى ملف دون أن يتغير شيء آخر. وتوجد المخططات مع مثال
 عملي لكل صيغة، إضافةً إلى خط أنابيب البيانات (معرّفات URI البعيدة، والبثّ، والتقسيم إلى شظايا (sharding)، والدمج المتناوب (interleaving)، وتوسيع
-المفردات، واستيعاب المستندات)، في [`docs/data.md`](docs/data.md#data-formats).
+المفردات، واستيعاب المستندات)، في [`docs/data.md`](docs/data.md#data-formats)، مع توثيق [تدريب الصوت الأصلي لـ Sesame CSM](docs/training.md#native-sesame-csm) بشكل منفصل.
 
 ## الأوامر الشائعة
 

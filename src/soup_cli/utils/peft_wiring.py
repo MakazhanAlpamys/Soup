@@ -570,6 +570,54 @@ def apply_post_lora_patches(model: Any) -> None:
         logger.debug("strip_lora_dropout_for_3d_experts skipped: %s", exc)
 
 
+def apply_fast_lora_patches(model: Any, tcfg: Any) -> dict[str, int] | None:
+    """Switch the Fast-LoRA kernels on for ``training.fast_lora`` (#792).
+
+    The two group kernels first, then the single projection for every adapted
+    Linear they did not take (#1165: the order does not change the result).
+    Returns how many modules each kernel can run on, or None when the flag is
+    off. With the flag on and none it can run on, it takes the patches off and
+    raises, since the run would train through peft's own modules while the
+    config says otherwise.
+    """
+    if not getattr(tcfg, "fast_lora", False):
+        return None
+    from soup_cli.utils.fast_lora import (
+        eligible_single_projections,
+        patch_fast_lora_single_projection,
+        unpatch_fast_lora_single_projection,
+    )
+    from soup_cli.utils.fast_lora_mlp import patch_fast_lora_mlp, unpatch_fast_lora_mlp
+    from soup_cli.utils.fast_lora_qkv import patch_fast_lora_qkv, unpatch_fast_lora_qkv
+
+    counts = {
+        "q/k/v": patch_fast_lora_qkv(model),
+        "MLP": patch_fast_lora_mlp(model),
+        "single projection": patch_fast_lora_single_projection(model),
+    }
+    counts["single projection"] = eligible_single_projections(model)
+    if not any(counts.values()):
+        for unpatch in (
+            unpatch_fast_lora_single_projection,
+            unpatch_fast_lora_mlp,
+            unpatch_fast_lora_qkv,
+        ):
+            unpatch(model)
+        raise ValueError(
+            "training.fast_lora is on, but no LoRA module was patched: the model "
+            "has no adapted Linear the kernels support. Remove training.fast_lora "
+            "or check lora.target_modules."
+        )
+    return counts
+
+
+def fast_lora_summary(counts: dict[str, int]) -> str:
+    """The setup line that says what the kernels took over."""
+    return "Fast-LoRA kernels on: " + ", ".join(
+        f"{count} {name}" for name, count in counts.items()
+    )
+
+
 def _relora_merge_target(trainer: Any) -> tuple[Any, Any, str | None, Any]:
     """Return the save owner, model holder, optional policy attr, and PEFT model."""
     owner = getattr(trainer, "__dict__", {}).get("_trainer", trainer)

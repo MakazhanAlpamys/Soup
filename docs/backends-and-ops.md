@@ -201,7 +201,22 @@ training:
 
 Works with the tasks that have an unsloth setup: SFT (text; SFT vision and audio still run the transformers setup), DPO, GRPO, PPO, KTO, ORPO, SimPO, IPO, BCO, preference, Pretrain, Embedding and TTS. The others (`reward_model`, `prm`, `classifier`, `reranker`, `cross_encoder`, `distill`, `unlearn`, `moe_lora_routing`, `online_dpo` and `asr`) have no unsloth setup, so `backend: unsloth` is refused at config load for them (#1357). If unsloth is installed but not enabled, Soup suggests it, but only for a config that would still load with `backend: unsloth` (#1736): a config one of these refusals would stop gets no suggestion.
 
+`quantization: 8bit` with `backend: unsloth` is refused at config load: Soup's Unsloth loader passes `load_in_4bit` only, so `8bit` used to load the model in 16-bit with no word (#1811). Use `4bit` or `none` on this backend, or `backend: transformers` for 8-bit.
+
 > **Tip:** Soup auto-detects unsloth. When it is installed, `soup train` prints a hint if you haven't enabled it yet and your config would load with it.
+
+### Gradient checkpointing on Unsloth
+
+On `backend: unsloth`, `training.gradient_checkpointing` is honoured instead of silently ignored ([#797](https://github.com/MakazhanAlpamys/Soup/issues/797)):
+
+- `false` (the schema default) disables checkpointing and may increase activation memory.
+- `true` (or a tier: `selective`, `medium`, `full`, `auto`) enables Unsloth's optimized checkpointing; throughput and maximum context depend on the workload.
+- Layer streaming (`training.stream_layers: true`) already checkpoints every layer, so the Unsloth kernel stays off there whatever the flag says.
+
+```yaml
+training:
+  gradient_checkpointing: true  # keep Unsloth's optimized checkpointing
+```
 
 
 ## Cloud GPU Training
@@ -678,6 +693,48 @@ A file over a limit is refused with a message naming the file and the limit (`so
 ## Experiment Tracking
 
 Every `soup train` run is automatically tracked in a local SQLite database (`~/.soup/experiments.db`).
+
+### Recorded base identity
+
+For single-process resident Hugging Face loads on the Transformers backend, `soup train` resolves
+the base's commit once, immediately before its first model/tokenizer/processor/config
+load, and passes that commit to the run's subsequent base loads. The original `base`
+name stays in the config and experiments row; unrelated teacher, reward and scorer
+repositories do not receive its revision. `soup runs show` displays the revision and
+its source.
+
+The new nullable `runs.base_revision`, `runs.base_revision_source` and
+`runs.training_data_sha256` columns upgrade existing databases in place. Historical
+rows stay unknown; Soup never fills them from today's Hub state or dataset bytes.
+Training-data hash capture remains separate work (#1764 part 2); this change reserves
+its storage/transfer contract without hashing training inputs.
+
+An unavailable/offline Hub metadata lookup preserves the existing load flow and
+records an unknown revision. A local `snapshots/<40-hex>` directory records
+`base_revision_source: cache_path`: this is a hint derived from the directory name,
+**not proof that its local bytes match the Hub commit**. Other local directories
+also have unknown content identity. There is no new config field or new default
+offline, legacy-export or `--base` refusal.
+
+The saving rank writes `soup_run.json` beside the final training artifact, containing
+the schema version, run ID, original base ID, nullable revision/source and nullable
+training-data hash. Keep that file when copying an adapter. Shared live-eval loading
+and GGUF's adapter-merge path can then reuse a matching recorded Hub commit without
+access to the original experiments database. An explicit different base or missing,
+malformed or future-version metadata keeps the existing flow, without guessing a
+historical commit. This metadata is provenance, not a signed integrity attestation.
+Loading a local adapter folder directly also reuses that commit when its
+`adapter_config.json` names the same base and has no conflicting explicit revision;
+the tokenizer still comes from the adapter folder.
+
+**First-stage boundaries:** Non-HF hubs, Unsloth, MLX, layer-streaming and distributed loads remain unbound and
+are recorded as such; a cache-path hint on any backend is still unverified. Standalone
+wrapper/sweep invocations do not automatically establish a run scope. Metadata is
+written for the final artifact, not each intermediate checkpoint. Other exporters
+(including ONNX/TensorRT and native AWQ/GPTQ/torchao loaders), remote adapter sidecars
+and independent teacher/reward/scorer repositories do not gain a binding guarantee.
+Evaluation engines that bypass the shared live-eval loader (including lm-eval's
+adapter benchmark path and vLLM) also remain unbound in this stage.
 
 ```bash
 # List all training runs
@@ -1174,7 +1231,7 @@ soup env check
 Given (params, seq_len, batch_size, optimizer, quant, peft, gradient_checkpointing), the analytical predictor returns a 5-bucket peak-VRAM breakdown (weights / optimizer / gradients / activations / overhead) and an OK/OOM verdict with a 10% safety margin.
 
 For `soup train`, `params_b` is derived by `model_size_from_name`:
-- A local checkpoint path is measured directly from safetensors metadata headers.
+- A local checkpoint path is measured directly from safetensors metadata headers. The files measured are the checkpoint's own: the ones `model.safetensors.index.json` names; without an index `model.safetensors`, else the `model-*-of-*.safetensors` shards, else every `*.safetensors` except `consolidated*`. The Hub download for layer streaming and `soup spectrum scan` fetches by the same rule, so what is downloaded is what is counted. A `consolidated.safetensors` beside the checkpoint (the mistral-inference copy Mistral's repositories ship, which transformers never loads) is not counted, not downloaded for layer streaming or `soup spectrum scan`, not copied out of the HF cache, and not sharded; a directory holding only such a file is refused with its name (#1806).
 - A Hub id is parsed: e.g. `72B`, `8x7B` → `46.7` total, `17B-16E` → `109` total, with active-parameter markers (`-A22B`) ignored.
 - An id with no size token (e.g. `DeepSeek-V3`, `Kimi-K2`, `GLM-5`, `MiniMax-M2`) still falls back to `7B`, which under-predicts these models (they have 229B to 1T parameters). Point `base:` at a local download to have the checkpoint measured instead.
 

@@ -225,7 +225,9 @@ def run_once(
         shipped=shipped,
         rolled_back=rolled_back,
         estimated_cost_usd=estimated,
-        notes=str(deploy_out.get("notes", ""))[:4096],
+        notes=" | ".join(
+            str(n) for n in (train_out.get("notes"), deploy_out.get("notes")) if n
+        )[:4096],
     )
     new_state = state.bumped(
         traces_collected=int(harvest_out.get("traces_collected", 0) or 0),

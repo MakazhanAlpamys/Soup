@@ -297,7 +297,7 @@ ASR, plaintext, embedding, RAFT and more — all auto-detected from JSONL, JSON,
 TXT, so in most cases you point `data.train` at a file and nothing else changes. Schemas with a
 worked example per format, plus the data pipeline (remote URIs, streaming, sharding,
 interleaving, vocab expansion, document ingestion), are in
-[`docs/data.md`](docs/data.md#data-formats).
+[`docs/data.md`](docs/data.md#data-formats), with [native Sesame CSM audio training](docs/training.md#native-sesame-csm) documented separately.
 
 ## Common Commands
 

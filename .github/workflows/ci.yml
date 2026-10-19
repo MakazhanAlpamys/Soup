@@ -7,6 +7,21 @@ on:
     # main, which for a release cut from an older tag is not the tree that
     # ships, so a PR run cannot stand in for this one.
     branches: [main, 'release/**']
+    # A push that touches only these paths starts no run (a pull request is NOT
+    # filtered: it has no `paths` / `paths-ignore`, so every required context still
+    # reports on every pull request). Measured 2026-10-19 over 7 days: 15 of 131
+    # pushes to main were docs-only credit commits, each a full quick run (about 20
+    # runner-minutes), 303 minutes in all. What it gives up: tests read these paths
+    # (the changelog fragments, CONTRIBUTING.md, CONTRIBUTORS.md, docs/), so a docs-only
+    # push that breaks one of them shows in the nightly run instead of on its own
+    # commit; the same change as a pull request is still tested. `release/**` shares the
+    # filter, which is fine: a release cut carries a version bump and code, never docs
+    # alone, and a docs-only tip can be run by hand with workflow_dispatch.
+    paths-ignore:
+      - 'docs/**'
+      - 'changelog.d/**'
+      - 'CONTRIBUTORS.md'
+      - 'CONTRIBUTING.md'
   pull_request:
     branches: [main]
     # The first three are GitHub's defaults. `ready_for_review` is a draft's first
@@ -131,12 +146,14 @@ jobs:
   #
   # So `plan` picks one of four matrices, and every job except `lint` follows it:
   #
-  #   push to release/**               RELEASE: all nine test cells + the five gated jobs
+  #   push to release/**               RELEASE: all nine test cells + the six gated jobs
   #   nightly run on main, a manual    FULL: seven test cells (no Windows or macOS
-  #     dispatch                         on 3.11) + the five gated jobs
+  #     dispatch                         on 3.11) + the six gated jobs
   #   pull request labelled ci:full    APPROVAL: the four required test cells (ubuntu
   #                                      on 3.10 and 3.12, Windows and macOS on
-  #                                      3.12) + the five gated jobs
+  #                                      3.12) + the four gated jobs that run on a
+  #                                      pull request (not type-check, not
+  #                                      torchao-contract: 2026-10-19, below)
   #   push to main, any other pull     QUICK: lint + test (ubuntu-latest, 3.12)
   #     request run
   #   draft pull request               nothing: no job starts
@@ -193,7 +210,9 @@ jobs:
   #   before `ci:full`.
   # - Coverage uploads from the ubuntu / 3.10 cell only -- the ubuntu cell every
   #   gated run has and a quick run does not -- so a pull request's Codecov report
-  #   arrives at approval.
+  #   arrives at approval. That cell is also the only one that MEASURES coverage
+  #   (2026-10-19), so the 77% floor is enforced there: a quick run has no such cell
+  #   and does not check it, while the approval run a merge waits for does.
   # - A draft pull request runs nothing: `plan` and `lint` are skipped by their
   #   own `if:`, and every other job needs `plan`. The merge gate holds for the
   #   reason above -- the required `test (...)` contexts are never created -- and
@@ -334,7 +353,11 @@ jobs:
 
   type-check:
     needs: plan
-    if: needs.plan.outputs.full == 'true'
+    # Not on a pull request, approval run included: it is not a required check and
+    # never fails (see below), so a pull request gained nothing from it. Measured
+    # 2026-10-19: 206 pull-request runs in 7 days, 59 job-minutes. It still runs in
+    # the nightly, manual and release runs.
+    if: needs.plan.outputs.full == 'true' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     # Non-blocking type-check baseline. The codebase adopts annotations
@@ -383,7 +406,11 @@ jobs:
         run: pytest -o addopts= -q tests/test_rewind_mlx.py
   torchao-contract:
     needs: plan
-    if: needs.plan.outputs.full == 'true'
+    # Not on a pull request, approval run included: it is not a required check.
+    # Measured 2026-10-19: 206 pull-request runs in 7 days, 421 job-minutes (2.0 each).
+    # It still runs in the nightly, manual and release runs, so a torchao release that
+    # renames a class shows on `main` the next night.
+    if: needs.plan.outputs.full == 'true' && github.event_name != 'pull_request'
     # #826: every torchao class Soup names is resolved against the REAL package
     # here. The 3x3 matrix cannot do it -- `torchao` is not in `[dev]`, so those
     # cells skip these tests, which is how three names torchao never exported
@@ -474,13 +501,72 @@ jobs:
           path: ${{ runner.temp }}/hf-cache
           key: hf-pytorch-smoke-${{ runner.os }}-${{ hashFiles('tests/test_smoke_train.py', 'pyproject.toml') }}
 
+  # #1802: the training stack requires newer core dependencies, so its floor job
+  # cannot exercise every light-core floor. Install only the core here, on the
+  # oldest supported Python (PyYAML 6.0 has wheels for it), and start the CLI.
+  core-floor:
+    needs: plan
+    if: needs.plan.outputs.full == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: "utf-8"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Isolate core floors from runner tooling
+        # Runner/image tooling can require newer packages (wheel>=0.46 needs
+        # packaging>=24) than the core floor. Keep that graph outside this cell.
+        run: |
+          python -m venv "$RUNNER_TEMP/soup-core-floor"
+          echo "$RUNNER_TEMP/soup-core-floor/bin" >> "$GITHUB_PATH"
+      - name: Install the declared core dependency floors
+        # pytest 9 requires packaging>=22, above Soup's packaging>=21 floor.
+        # The test runner is tooling, so keep its compatible major here.
+        run: pip install -e . "pytest>=7,<9" -c .github/constraints/core-floor.txt
+      - name: Verify constrained core dependency graph
+        run: python -m pip check
+      - name: Assert core floor versions
+        shell: python
+        run: |
+          import importlib.metadata as md
+          import importlib.util
+          import re
+          from pathlib import Path
+
+          from packaging.version import Version
+
+          constraints = Path(".github/constraints/core-floor.txt").read_text(encoding="utf-8")
+          pairs = re.findall(r"^([A-Za-z0-9_-]+)==([^\s#]+)\s*$", constraints, re.MULTILINE)
+          expected = dict(pairs)
+          assert expected and len(expected) == len(pairs), "missing or duplicate core pins"
+          for name, want in expected.items():
+              got = md.version(name)
+              assert Version(got) == Version(want), f"core-floor expected {name}=={want}, got {got}"
+              print(f"{name}={got} (matches declared floor)")
+          for name in ("torch", "transformers", "accelerate", "peft", "trl", "datasets", "bitsandbytes"):
+              assert importlib.util.find_spec(name) is None, f"core-floor installed {name}"
+      - name: Run core floor command tree, help and startup checks
+        run: >
+          pytest -o addopts= -q
+          tests/test_core_dependency_floors.py
+          tests/test_cli_dependency_floors.py
+          tests/test_click_argument_help.py
+          tests/test_cli_startup_is_light.py
+          tests/test_cli.py
+          tests/test_cli_subprocess.py
+          tests/test_plotext_compat.py
+
   # #502/#503/#522/#571/#651: install the exact Torch 2.6.0 / Transformers 5.16.1 /
   # trl 0.29 / PEFT 0.20 support stack and Plotext 6.0.0 so pip cannot silently
   # upgrade the cell, then assert every pinned compatibility boundary.
   # #1802: the same file pins Typer and Click to the floors pyproject.toml declares,
-  # and the last step starts the CLI on them. It is the one cell that does: every
-  # other cell resolves the newest Typer, which is how a floor no command could run
-  # on stayed declared. The job keeps its name; branch protection requires it.
+  # and the last step starts the CLI on them, alongside the core-only cell above.
+  # The ordinary test matrix resolves the newest Typer, which is how a floor no
+  # command could run on stayed declared. Keep the name; branch protection requires it.
   transformers-floor:
     needs: plan
     if: needs.plan.outputs.full == 'true'
@@ -558,6 +644,7 @@ jobs:
           tests/test_bugfixes.py::TestDiffModelLoading
           tests/test_issue636_torch_floor.py
           tests/test_issue265_xcodec2_audio_contract.py
+          tests/test_native_csm.py
           tests/test_cli_dependency_floors.py
           tests/test_click_argument_help.py
           tests/test_cli_startup_is_light.py
@@ -586,6 +673,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+        # No pip cache (dropped 2026-10-19; it was ubuntu / 3.12 only). Measured over the
+        # last 12 pull-request runs: the cached ubuntu / 3.12 cell spent 0.49 min (0.33
+        # to 0.60) restoring the cache plus 1.54 min installing = 2.03 min, the uncached
+        # ubuntu / 3.10 cell 1.80 min installing, so the cache cost more than it saved.
+        # It also held 6.1 GB of the 8.8 GB the repository uses of its 10 GB Actions
+        # cache (two 3 GB entries, a new one whenever pyproject.toml or a constraints
+        # file changes), which is what evicted the small HF caches.
       # The Web UI escaping tests run `safe_html.js` under node, and skip when
       # node is absent. Runner images happen to ship one, so the skip would be
       # silent: pin it, or the only tests that execute the real escaping logic
@@ -636,8 +730,24 @@ jobs:
         # "gpt2" is deliberately unqualified: tests ask for the bare id, which
         # caches as models--gpt2. Warming "openai-community/gpt2" instead would
         # fill a different directory and every test would still miss.
+        #
+        # 2026-10-19: on macOS and Windows this step failed on `gpt2` in EVERY cell since
+        # about 2026-10-16 17Z -- the Hub answers 404 on
+        # `/api/models/gpt2/xet-read-token/<sha>`, the token the hf_xet download path asks
+        # for, and a 404 is retried like a 429 until the budget runs out. Measured over the
+        # last 12 pull-request runs: 6.3 min per macOS and Windows cell (6.25 to 6.37),
+        # about 57 cells a day = 362 runner-minutes a day, and the cache was never
+        # saved (`warmed` stayed `partial`), so every cell paid it again. Linux never hit it
+        # because its restored cache already held the file. HF_HUB_DISABLE_XET (read by
+        # huggingface_hub's constants.py, in v2.2.0 which the pinned stack installs and in
+        # the newest release) makes `is_xet_available()` false, so the download takes the
+        # plain HTTP path and never asks for that token. The budget below is 120 s, not
+        # 360: it is only ever spent in full when the Hub is refusing a repo, and a step
+        # that cannot warm everything never fails the job anyway.
         id: warm
         shell: python
+        env:
+          HF_HUB_DISABLE_XET: "1"
         run: |
           import os
           import time
@@ -674,7 +784,7 @@ jobs:
           # second. The Hub had cut that runner off for the duration — so
           # burning a fresh retry ladder on repo #2 the moment repo #1 gave up
           # just spends the budget faster without ever waiting out the block.
-          deadline = time.monotonic() + 360
+          deadline = time.monotonic() + 120
           pending = list(models)
           delay = 10
 
@@ -723,7 +833,22 @@ jobs:
         # 1390 s, macOS 2003 s -> 992 s, with the same tests passing and coverage
         # unchanged. `--dist load` hands the tests of one file to several workers
         # and is not used: it was no faster, and one timing test failed under it.
+        #
+        # 2026-10-19: coverage is measured in ONE cell, ubuntu / 3.10, the cell that
+        # uploads it. The 77% floor (`--cov-fail-under` in pyproject.toml's `addopts`) is
+        # enforced there; every other cell runs the next step with `--no-cov`, which turns
+        # the tracer and the floor off for it. A coverage floor measured on seven more
+        # cells says nothing the one cell does not, and the tracer slows the suite on all
+        # of them: measured locally, serial, on 147 CLI tests (Python 3.12), 33 s without
+        # coverage and 85 s with it (CI itself is not measured yet). The two steps carry
+        # opposite conditions, so exactly one runs in a cell.
+        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.10'
         run: pytest tests/ -n logical --dist loadfile -v --tb=short --junitxml=report.xml --cov=soup_cli --cov-report=xml:coverage.xml --cov-report=term-missing:skip-covered
+      - name: Run unit tests without coverage
+        # Same options as the step above minus the coverage reports; `--junitxml` stays,
+        # because the nightly test-count badge reads report.xml from ubuntu / 3.11.
+        if: matrix.os != 'ubuntu-latest' || matrix.python-version != '3.10'
+        run: pytest tests/ -n logical --dist loadfile -v --tb=short --junitxml=report.xml --no-cov
       - name: Upload coverage to Codecov
         # ubuntu / 3.10 is the ubuntu cell every gated run has (release, full,
         # approval) and a quick run does not. It was 3.11 until the approval run

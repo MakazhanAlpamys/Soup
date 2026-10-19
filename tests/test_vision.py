@@ -481,9 +481,10 @@ class TestVisionTemplate:
         """Vision template should use a vision model."""
         assert "Vision" in TEMPLATES["vision"]
 
-    def test_vision_template_mentions_unsloth(self):
-        """Vision template should mention unsloth as an option."""
-        assert "unsloth" in TEMPLATES["vision"]
+    def test_vision_template_selects_supported_backend(self):
+        """#1186: vision SFT runs on transformers and must not recommend Unsloth."""
+        assert "backend: transformers" in TEMPLATES["vision"]
+        assert "backend: unsloth" not in TEMPLATES["vision"]
 
     def test_vision_template_is_valid_yaml(self):
         """Vision template should be valid YAML that parses."""

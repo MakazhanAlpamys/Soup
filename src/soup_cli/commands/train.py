@@ -245,6 +245,20 @@ def _validate_classification_dataset_if_applicable(cfg: Any, dataset: dict) -> N
             raise typer.Exit(1) from exc
 
 
+def _validate_csm_dataset_if_applicable(cfg: Any, dataset: dict) -> None:
+    if cfg.task != "tts" or cfg.training.tts_family != "sesame_csm":
+        return
+    from rich.markup import escape
+
+    from soup_cli.utils.csm import validate_csm_dataset
+
+    try:
+        validate_csm_dataset(dataset)
+    except ValueError as exc:
+        console.print(f"[red]Error validating CSM dataset:[/] {escape(str(exc))}")
+        raise typer.Exit(1) from exc
+
+
 def _refuse_empty_train(dcfg, dataset) -> None:
     """Stop a run whose data loaded zero training rows (#1217).
 
@@ -1731,6 +1745,7 @@ def train(
         )
         _refuse_empty_train(cfg.data, dataset)
         _validate_classification_dataset_if_applicable(cfg, dataset)
+        _validate_csm_dataset_if_applicable(cfg, dataset)
         console.print(
             f"[green]Data OK:[/] {_train_sample_count(cfg.data, dataset)} train samples"
         )
@@ -1749,6 +1764,7 @@ def train(
     )
     _refuse_empty_train(cfg.data, dataset)
     _validate_classification_dataset_if_applicable(cfg, dataset)
+    _validate_csm_dataset_if_applicable(cfg, dataset)
     console.print(
         f"[green]Loaded:[/] {_train_sample_count(cfg.data, dataset)} train samples"
     )
@@ -1761,6 +1777,7 @@ def train(
     from soup_cli.experiment.tracker import ExperimentTracker
 
     tracker = ExperimentTracker()
+    run_base = cfg.base
     experiment_name = cfg.experiment_name or name
     run_id = tracker.start_run(
         config_dict=cfg.model_dump(),
@@ -1862,9 +1879,26 @@ def train(
         # to keep separate chains and sweep's copy fell ten tasks and the MLX
         # route behind. See soup_cli/trainer/dispatch.py.
         from soup_cli.trainer.dispatch import build_trainer
+        from soup_cli.utils.launcher import is_in_distributed
+        from soup_cli.utils.run_provenance import BaseRevision, base_revision_scope
 
-        trainer_wrapper = build_trainer(cfg, **trainer_kwargs)
-        trainer_wrapper.setup(dataset)
+        base_identity = BaseRevision(
+            run_base,
+            binding_supported=(cfg.backend == "transformers" and hub_name == "hf"
+                               and not cfg.training.stream_layers and not is_in_distributed()),
+        )
+        with base_revision_scope(base_identity):
+            trainer_wrapper = build_trainer(cfg, **trainer_kwargs)
+            trainer_wrapper.setup(dataset)
+        tracker.record_base_revision(
+            run_id, revision=base_identity.revision, source=base_identity.source,
+        )
+        if base_identity.source == "hub_commit":
+            console.print(f"[dim]Base revision: {base_identity.revision} (bound Hub commit)[/]")
+        elif base_identity.source == "cache_path":
+            console.print("[dim]Base revision: cache-path metadata; local bytes are unverified[/]")
+        else:
+            console.print("[dim]Base revision: unknown (existing loading behavior preserved)[/]")
 
         # #350 — PEFT promotes newly-created adapters to fp32. FSDP cannot flatten
         # those beside bf16/float16 BNB storage, so align every trainable floating
@@ -1947,7 +1981,7 @@ def train(
         raise
 
     try:
-        with profiler_ctx as profiler, energy_ctx:
+        with profiler_ctx as profiler, energy_ctx, base_revision_scope(base_identity):
             if profile_run and profiler is not None:
                 from soup_cli.utils.profiling import attach_profile_callback
 
@@ -1960,6 +1994,19 @@ def train(
                 display=display, tracker=tracker, run_id=run_id,
                 resume_from_checkpoint=resume_from,
             )
+
+        from soup_cli.utils.run_provenance import write_run_provenance
+
+        tracker.record_base_revision(
+            run_id, revision=base_identity.revision, source=base_identity.source,
+        )
+        # Only the saving rank writes portable metadata beside the final artifact.
+        if _should_run_diagnose_gate_on_rank():
+            metadata = base_identity.metadata(run_id)
+            recorded_run = tracker.get_run(run_id)
+            if isinstance(recorded_run, dict):
+                metadata["training_data_sha256"] = recorded_run.get("training_data_sha256")
+            write_run_provenance(result["output_dir"], metadata)
 
         # Save completion to tracker
         tracker.finish_run(

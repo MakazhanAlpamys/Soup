@@ -348,6 +348,9 @@ def export(
         )
         raise typer.Exit(1)
 
+    if not (model_path / "adapter_config.json").exists():
+        _check_gguf_capabilities(model_path, llama_cpp_path, probe_selected=not no_install_deps)
+
     # --- Resolve the destination before any merge/convert work ---
     # #1445 — a missing output parent used to surface as FileNotFoundError
     # from mkdtemp AFTER an adapter was merged, and the cleanup then deleted
@@ -362,6 +365,8 @@ def export(
     if no_install_deps:
         console.print("[dim]GGUF: dependencies (managed environment)...[/]")
         _install_convert_deps(install=False)
+        if not (model_path / "adapter_config.json").exists():
+            _check_gguf_capabilities(model_path, llama_cpp_path)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -386,6 +391,12 @@ def export(
             str(model_path), base_model, str(merge_dir), trust_remote_code,
         )
         model_path = merge_dir
+
+        try:
+            _check_gguf_capabilities(model_path, llama_cpp_path)
+        except typer.Exit:
+            shutil.rmtree(merge_dir, ignore_errors=True)
+            raise
 
     # --- Find llama.cpp ---
     console.print("[dim]GGUF: toolchain lookup...[/]")
@@ -524,11 +535,19 @@ def _merge_adapter(
     )
 
     console.print(f"[dim]Loading base model: {for_terminal(base_model)}...[/]")
+    from soup_cli.utils.run_provenance import recorded_base_kwargs
+
+    revision_kwargs = recorded_base_kwargs(adapter_path, base_model)
+    if revision_kwargs:
+        console.print(f"[dim]Base revision: {revision_kwargs['revision']} (recorded run)[/]")
+    else:
+        console.print("[dim]Base revision: unknown (legacy, local source or base override)[/]")
     model = AutoModelForCausalLM.from_pretrained(
         base_model,
         torch_dtype=torch.float16,
         trust_remote_code=trc,
         device_map="cpu",
+        **revision_kwargs,
     )
 
     console.print(f"[dim]Loading LoRA adapter: {adapter_path}...[/]")
@@ -615,14 +634,8 @@ def _install_convert_deps(*, install: bool = True) -> None:
         )
 
 
-def _find_llama_cpp(user_path: Optional[str] = None) -> Path:
-    """Find or clone llama.cpp directory.
-
-    Looking only. The convert-script dependencies are installed by the caller,
-    once, just before conversion (#144 G2) — a lookup that silently shells out to
-    pip is a surprise, and it made an existing test that mocks ``subprocess.run``
-    to detect clone attempts see a pip call instead.
-    """
+def _existing_llama_cpp(user_path: Optional[str] = None) -> Optional[Path]:
+    """Select an existing explicit, environment or cached checkout without cloning."""
     from soup_cli.utils.constants import SOUP_DIR
 
     # 1. User-specified path
@@ -651,6 +664,53 @@ def _find_llama_cpp(user_path: Optional[str] = None) -> Path:
     soup_llama = Path.home() / SOUP_DIR / LLAMA_CPP_DIR_NAME
     if soup_llama.exists() and (soup_llama / "convert_hf_to_gguf.py").exists():
         return soup_llama
+    return None
+
+
+def _check_gguf_capabilities(
+    model: Path, user_path: Optional[str], *, probe_selected: bool = True,
+) -> None:
+    from soup_cli.utils.gguf_capabilities import (
+        model_text_architecture,
+        pinned_text_architectures,
+        probe_text_architectures,
+    )
+
+    try:
+        architecture = model_text_architecture(model)
+        selected = _existing_llama_cpp(user_path)
+        if selected is None:
+            supported = pinned_text_architectures(LLAMA_CPP_TAG)
+            toolchain = f"default llama.cpp {LLAMA_CPP_TAG}"
+        else:
+            if not probe_selected:
+                return
+            supported = probe_text_architectures(selected / "convert_hf_to_gguf.py")
+            toolchain = f"selected converter {selected}"
+            if supported is None:
+                console.print(
+                    "[dim]GGUF: capability probe inconclusive; the selected converter "
+                    "will validate the architecture during conversion.[/]"
+                )
+                return
+        if architecture not in supported:
+            raise ValueError(
+                f"Architecture {architecture!r} is not supported for text conversion by "
+                f"{toolchain}. Select a compatible checkout with --llama-cpp <dir>."
+            )
+    except ValueError as exc:
+        console.print(f"[red]{for_terminal(str(exc))}[/]")
+        raise typer.Exit(1) from exc
+
+
+def _find_llama_cpp(user_path: Optional[str] = None) -> Path:
+    """Find or clone llama.cpp, without installing conversion dependencies (#144 G2)."""
+    from soup_cli.utils.constants import SOUP_DIR
+
+    selected = _existing_llama_cpp(user_path)
+    if selected is not None:
+        return selected
+    soup_llama = Path.home() / SOUP_DIR / LLAMA_CPP_DIR_NAME
 
     # 4. Auto-clone
     console.print("[yellow]llama.cpp not found. Cloning to ~/.soup/llama.cpp...[/]")
