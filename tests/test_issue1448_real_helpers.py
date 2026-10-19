@@ -35,31 +35,6 @@ def _module(name, **attrs):
     return module
 
 
-def _quantizer(module_name, cls_name, saved_name):
-    class _Model:
-        def quantize(self, *args, **kwargs):
-            return None
-
-        def save_quantized(self, path):
-            _write(Path(path) / saved_name, 3000)
-
-    return {
-        module_name: _module(
-            module_name,
-            BaseQuantizeConfig=lambda **kwargs: None,
-            **{cls_name: types.SimpleNamespace(from_pretrained=lambda *a, **k: _Model())},
-        )
-    }
-
-
-def _gptq_modules():
-    return _quantizer("auto_gptq", "AutoGPTQForCausalLM", "gptq_model-4bit-128g.safetensors")
-
-
-def _awq_modules():
-    return _quantizer("awq", "AutoAWQForCausalLM", "model.safetensors")
-
-
 def _onnx_modules():
     def main_export(model_name_or_path, output, task):
         _write(Path(output) / "model.onnx", 100)
@@ -106,10 +81,6 @@ CASES = {
              [("onnx", "model.onnx"), ("onnx", "model.onnx_data")]),
     "tensorrt": ([], _tensorrt_modules,
                  [("tensorrt", "rank0.engine")]),
-    "awq": (["--calibration-data", "calib.jsonl"], _awq_modules,
-            [("awq", "model.safetensors")]),
-    "gptq": (["--calibration-data", "calib.jsonl"], _gptq_modules,
-             [("gptq", "model.safetensors")]),
     "torchao": (["--quant-config", "q.yaml"], dict,
                 [("torchao", "pytorch_model.bin")]),
     "gguf-ud": (["--gguf-flavour", "Q4_0_4_4"], dict, [("gguf", "out.gguf")]),

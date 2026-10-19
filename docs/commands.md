@@ -46,8 +46,6 @@ soup export --model ./output --format gguf    Export to GGUF (Ollama)
 soup export --model ./output --deploy ollama  Export GGUF + auto-deploy to Ollama
 soup export --model ./output --format onnx    Export to ONNX
 soup export --model ./output --format tensorrt  Export to TensorRT-LLM
-soup export --model ./output --format awq --calibration-data cal.jsonl  Export to AWQ (4-bit; deprecated, removed in Soup v0.77)
-soup export --model ./output --format gptq --calibration-data cal.jsonl  Export to GPTQ (4-bit; deprecated, removed in Soup v0.77)
 soup export --model ./output --format gguf --verbose  Show export phases and stream converter/quantizer logs while they run (#1760)
 soup export --model ./output --format gguf --no-install-deps  Never invoke pip; refuse missing conversion packages before merge/toolchain work (#1760)
 soup deploy ollama --model m.gguf --name x    Deploy GGUF to Ollama
