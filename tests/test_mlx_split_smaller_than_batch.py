@@ -25,6 +25,7 @@ from io import StringIO
 
 import pytest
 
+from tests.conftest import strip_ansi
 from tests.test_issue634_mlx_resume import _FakeMlxModel, _install_fake_mlx
 
 
@@ -84,7 +85,8 @@ class TestAShortValidationSplitIsSkippedWithAWarning:
         # The no-validation cadence: evaluation never comes due.
         assert args.steps_per_eval > args.iters
 
-        text = " ".join(printed.split())
+        # Rich styles the numbers on a colour terminal; compare the plain text.
+        text = " ".join(strip_ansi(printed).split())
         assert "validation split has 1 row" in text
         assert "training.batch_size (2)" in text
         assert "val_loss" in text
