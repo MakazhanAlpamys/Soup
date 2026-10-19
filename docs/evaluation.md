@@ -708,9 +708,15 @@ reruns during an offline gate.
 Legacy/default replay remains recipe-only. `--require-provenance` keeps all
 checks even when `--emit-evidence` is also present. Ordinary external-score
 stamping remains available: it binds caller-trusted supplied scores to declared
-inputs, and records their actual task mode/suite axes. It is not a model run,
-attestation, signature or forgery protection. The unkeyed hashes detect drift;
-use the existing signing/attestation tools for a trust boundary.
+inputs, and records their actual task mode/suite axes. Suite names are stored in
+canonical alphabetical order in both the suite descriptor and its policy.
+This allows a restamp to replay against the same configuration with a
+non-alphabetical or default suite selection. Different suite selections and
+config-hash drift still refuse replay. Older bindings that kept a different
+suite order can be re-stamped from their trusted scores before strict replay.
+This is not a model run, attestation, signature or forgery protection.
+The unkeyed hashes detect drift; use the existing signing/attestation tools for a
+trust boundary.
 
 **Baseline provenance (#404).** Produce a stamped baseline with
 `soup eval gate --suite <suite.yaml> --model <id> --write-baseline baseline.json`

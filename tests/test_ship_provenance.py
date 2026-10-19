@@ -41,6 +41,54 @@ def work(tmp_path, monkeypatch):
     return tmp_path
 
 
+@pytest.mark.parametrize(
+    "selection", ["mini_tool_call,mini_mmlu", None, "mini_mmlu,mini_tool_call"],
+)
+def test_restamped_suite_order_and_default_roundtrip(work, selection):
+    from soup_cli.eval.gate_suites import DEFAULT_GENERAL_SUITE
+
+    cfg = work / "soup.yaml"
+    text = cfg.read_text(encoding="utf-8")
+    suites = list(DEFAULT_GENERAL_SUITE) if selection is None else selection.split(",")
+    text = text.replace(
+        "    general_suite: mini_mmlu\n",
+        "" if selection is None else f"    general_suite: {selection}\n",
+    )
+    cfg.write_text(text, encoding="utf-8")
+    raw = work / "raw.json"
+    payload = json.loads(raw.read_text(encoding="utf-8"))
+    payload["benchmarks"] = {name: {"base": 0.6, "tuned": 0.6} for name in suites}
+    raw.write_text(json.dumps(payload), encoding="utf-8")
+    bound = _produce()
+    binding = bound["provenance"]["binding"]
+    assert binding["suites"]["names"] == sorted(suites)
+    assert binding["policy"]["general_suite"] == sorted(suites)
+    result = _gate()
+    assert result.exit_code == 0, (result.output, result.exception)
+    assert "SHIP" in strip_ansi(result.output)
+    # A different selection must still be refused after canonicalization.
+    changed = _gate("--general-suite", "mini_arithmetic")
+    assert changed.exit_code == 3
+    assert "provenance" in strip_ansi(changed.output).lower()
+
+
+def test_binding_canonicalizes_both_suite_fields_without_mutating_inputs():
+    from soup_cli.utils.ship_provenance import make_binding
+
+    names = ["mini_tool_call", "mini_mmlu"]
+    policy = {"general_suite": names.copy(), "forgetting_threshold": 0.05}
+    binding = make_binding(
+        adapter=None, task_eval_sha256=None, source_data_sha256=None,
+        data_sha256=None, suites=names, policy=policy,
+    )
+    assert binding["suites"]["names"] == sorted(names)
+    assert binding["policy"]["general_suite"] == sorted(names)
+    assert names == policy["general_suite"] == ["mini_tool_call", "mini_mmlu"]
+    assert binding["policy_sha256"] == hashlib.sha256(json.dumps(
+        binding["policy"], sort_keys=True, separators=(",", ":"),
+    ).encode()).hexdigest()
+
+
 def _produce(*extra):
     result = runner.invoke(app, [
         "ship", "--evidence", "raw.json", "--config", "soup.yaml", "--adapter", "adapter",
