@@ -239,6 +239,7 @@ Listed by first contribution. PR numbers link the work.
   - Added bounded batched greedy generation to the custom-task and bundled-suite scorers, preserving prompt order and scalar-callable fallback. One completion per prompt now explicitly preserves saved beam configuration; progress/JSONL remains a separate follow-up, so this is only the batching slice of #1759 and does not close the parent issue ([#1759](https://github.com/MakazhanAlpamys/Soup/issues/1759), [#1958](https://github.com/MakazhanAlpamys/Soup/pull/1958))
   - Added shared trace/ingest conversation rendering that normalizes LangChain human/ai/system roles and omits blank context turns while preserving the accepted plain-text versus multi-turn JSON contract. Seven isolated mutations are caught by behavioral regressions, including explicit-role and first-user selection controls ([#1809](https://github.com/MakazhanAlpamys/Soup/issues/1809), [#1848](https://github.com/MakazhanAlpamys/Soup/pull/1848))
   - Verified the light-core dependency floors in an isolated Python 3.10 CI environment and repaired Plotext 5.2.2 figure detection without changing the Typer cap. The real hosted floor installation and CLI checks pass; four independent mutations catch version, training-stack, venv PATH and figure-detection regressions. The separate Typer migration remains with its own claim ([#1802](https://github.com/MakazhanAlpamys/Soup/issues/1802), [#1927](https://github.com/MakazhanAlpamys/Soup/pull/1927))
+  - Landed the agreed first revision/provenance slice: supported resident Transformers base loads share one resolved Hub commit, portable final-artifact sidecars preserve recorded identities, and registry round-trips transfer historical hashes without reopening training files. Added nullable, concurrency-safe storage and explicit unknown/cache-hint semantics; training-file hash capture and unsupported binding paths remain separate ([#1902](https://github.com/MakazhanAlpamys/Soup/issues/1902), [#1972](https://github.com/MakazhanAlpamys/Soup/pull/1972)).
 
 - **AmixDigital** ([@Amix29](https://github.com/Amix29))
   - Added native Sesame CSM fine-tuning for transcript/audio pairs, training the backbone and depth decoder while keeping the Mimi codec frozen; documented supported inputs, refusals and the scoped Apple Silicon evidence ([#265](https://github.com/MakazhanAlpamys/Soup/issues/265), [#1769](https://github.com/MakazhanAlpamys/Soup/pull/1769)).
@@ -952,6 +953,12 @@ Listed by first contribution. PR numbers link the work.
 
 - **Vincent Le** ([@VincentTLe](https://github.com/VincentTLe))
   - First merged contribution. Made the checkpointing choice explicit in all 30 affected shipped TRL-family recipes, templates and examples, with 22 matching snapshots. The config walker catches deleting only the reward-example key even though that config still loads, preserving the memory behavior intended before the TRL forwarding fix ([#1862](https://github.com/MakazhanAlpamys/Soup/issues/1862), [#1923](https://github.com/MakazhanAlpamys/Soup/pull/1923))
+
+- **Abhishek Jha** ([@SpinachDigital](https://github.com/SpinachDigital))
+  - Made `training.gradient_checkpointing: false`, including the schema default, reach all eleven Unsloth trainer setup paths instead of silently enabling checkpointing. Preserved explicit enabled settings, documented the possible activation-memory increase and workload-dependent performance, and pinned real-config forwarding with mocked-loader controls ([#797](https://github.com/MakazhanAlpamys/Soup/issues/797), [#1981](https://github.com/MakazhanAlpamys/Soup/pull/1981)).
+
+- **martin** ([@Martini147](https://github.com/Martini147))
+  - First contribution. Added shared path-alias detection, including hard links, and guarded ingest, prune-prompt, best-of-n and overlapping RA-DIT stage outputs before inputs can be overwritten. Made prune output atomic and validated committed best-of-n checkpoint prefixes before truncating incomplete tails, with caller-level safety and healthy-control regressions ([#1422](https://github.com/MakazhanAlpamys/Soup/issues/1422), [#2018](https://github.com/MakazhanAlpamys/Soup/pull/2018)).
 
 ---
 
