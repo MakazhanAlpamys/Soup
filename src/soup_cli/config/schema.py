@@ -5568,6 +5568,16 @@ class SoupConfig(BaseModel):
                 "data.chat_template is not used by "
                 f"task={self.task!r}; remove it or choose a conversational training task"
             )
+        # #1913 — the MLX trainer never reads data.chat_template: it renders the
+        # model's shipped template, so a prefix-stable override was silently
+        # ignored and the run still failed the mask's prefix-stability check.
+        # Refuse the combination at config load instead of training wrong.
+        if self.data.chat_template is not None and self.backend == "mlx":
+            raise ValueError(
+                "data.chat_template is not applied by backend: mlx — the MLX "
+                "trainer renders the model's shipped template only. Remove "
+                "data.chat_template, or use backend: transformers."
+            )
         return self
 
     @model_validator(mode="before")
