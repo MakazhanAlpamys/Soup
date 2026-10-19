@@ -8119,6 +8119,23 @@ class SoupConfig(BaseModel):
         """
         if self.backend != "mlx":
             return self
+        if self.task == "dpo":
+            # MLX DPO tokenizes text and chat rows only, and takes its reference
+            # log-probs from the policy before training, which is the base
+            # model only because a LoRA adapter's B starts at zero.
+            if self.modality != "text":
+                raise ValueError(
+                    f"modality='{self.modality}' is not supported by task='dpo' on "
+                    "backend='mlx': MLX DPO trains on text and chat rows only. "
+                    "Use backend=transformers, or modality: text."
+                )
+            if int(self.training.lora.r) < 1:
+                raise ValueError(
+                    "training.lora.r must be at least 1 for task='dpo' on "
+                    "backend='mlx': the reference model is the untrained LoRA "
+                    "policy, which needs a LoRA adapter to exist."
+                )
+            return self
         if self.task in MLX_TASKS:
             return self
         raise ValueError(

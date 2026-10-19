@@ -569,3 +569,423 @@ class TestTrainLoop:
         wrapper = _wrapper(tmp_path, monkeypatch, batch_size=2, seed=0)
         result = wrapper.train()
         assert result["losses"][0] == pytest.approx(math.log(2), rel=1e-4)
+
+
+# --------------------------------------------------------------------------
+# Review of #1846: the preference-row contract is the loader's (#1866)
+# --------------------------------------------------------------------------
+
+_U = {"role": "user", "content": "hi"}
+_A = {"role": "assistant", "content": "a"}
+_B = {"role": "assistant", "content": "b"}
+
+
+def _build_row(row, tokenizer=None, max_length=1024, max_prompt_length=512):
+    from soup_cli.trainer.mlx_dpo import build_preference_example
+
+    return build_preference_example(
+        row, tokenizer or FakeTokenizer(),
+        max_length=max_length, max_prompt_length=max_prompt_length,
+    )
+
+
+class TestTheLoaderLayoutsAreAccepted:
+    @pytest.mark.parametrize("name", ["dpo_sample.jsonl", "chat_preferences.jsonl"])
+    def test_every_bundled_preference_row_tokenizes(self, name):
+        """Through the real loader converter, as `load_dataset` hands rows over."""
+        from pathlib import Path
+
+        from soup_cli.data.formats import format_to_messages
+
+        path = Path(__file__).resolve().parents[1] / "examples" / "data" / name
+        raws = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()
+                if line.strip()]
+        assert raws
+        for raw in raws:
+            row = format_to_messages(raw, "dpo")
+            assert row is not None
+            ex = _build_row(row, max_length=4096, max_prompt_length=2048)
+            user = raw["chosen"][0]["content"]
+            assert _decode(ex.prompt_ids) == f"<user>{user}\x03<assistant>"
+            assert _decode(ex.chosen_ids) == raw["chosen"][-1]["content"] + "\x03"
+            assert _decode(ex.rejected_ids) == raw["rejected"][-1]["content"] + "\x03"
+
+    def test_message_list_prompt_with_string_answers(self):
+        """Review item 1: each string answer is one assistant turn."""
+        ex = _build_row({"prompt": [_U], "chosen": "a", "rejected": "b"})
+        assert _decode(ex.prompt_ids) == "<user>hi\x03<assistant>"
+        assert _decode(ex.chosen_ids) == "a\x03"
+        assert _decode(ex.rejected_ids) == "b\x03"
+
+    def test_one_message_object_is_read_as_a_list_of_one(self):
+        """Review item 2: a dict prompt is a message, never `str(dict)`."""
+        ex = _build_row({"prompt": _U, "chosen": [_A], "rejected": [_B]})
+        assert _decode(ex.prompt_ids) == "<user>hi\x03<assistant>"
+        assert "role" not in _decode(ex.prompt_ids)
+
+    @pytest.mark.parametrize("prompt", [7, True, 1.5])
+    def test_a_non_text_prompt_is_refused_by_name(self, prompt):
+        from soup_cli.trainer.mlx_dpo import PreferenceRowError
+
+        with pytest.raises(PreferenceRowError, match="dpo.prompt"):
+            _build_row({"prompt": prompt, "chosen": [_A], "rejected": [_B]})
+
+    def test_a_conversation_that_continues_past_the_other(self):
+        """Review item 3: the shorter side's last assistant turn is its answer."""
+        u2 = {"role": "user", "content": "more"}
+        ex = _build_row({"prompt": "hi", "chosen": [_U, _A], "rejected": [_U, _A, u2, _B]})
+        assert _decode(ex.prompt_ids) == "<user>hi\x03<assistant>"
+        assert _decode(ex.chosen_ids) == "a\x03"
+        assert _decode(ex.rejected_ids).startswith("a\x03<user>more")
+
+    def test_a_side_with_no_answer_is_a_data_error_not_a_tokenizer_one(self):
+        from soup_cli.trainer.mlx_dpo import PreferenceRowError, PrefixUnstableError
+
+        with pytest.raises(PreferenceRowError, match="no chosen answer") as excinfo:
+            _build_row({"prompt": "hi", "chosen": [_U], "rejected": [_U, _B]})
+        assert not isinstance(excinfo.value, PrefixUnstableError)
+
+    def test_no_prompt_uses_the_shared_turns(self):
+        """Review item 4: rows handed straight to setup() read like the loader's."""
+        ex = _build_row({"chosen": [_U, _A], "rejected": [_U, _B]})
+        assert _decode(ex.prompt_ids) == "<user>hi\x03<assistant>"
+
+    def test_messages_column_is_the_prompt(self):
+        ex = _build_row({"messages": [_U], "chosen": [_A], "rejected": [_B]})
+        assert _decode(ex.prompt_ids) == "<user>hi\x03<assistant>"
+
+
+class _Unstable(FakeTokenizer):
+    def apply_chat_template(self, messages, add_generation_prompt=False, **kw):
+        ids = super().apply_chat_template(messages, add_generation_prompt, **kw)
+        if not add_generation_prompt and messages[0]["content"] == "bad":
+            ids = [ids[0], 999] + ids[1:]
+        return ids
+
+
+def _bare_wrapper(**training):
+    """A wrapper with a tokenizer and no model: enough for `_examples`."""
+    from soup_cli.config.loader import load_config_from_string
+    from soup_cli.trainer.mlx_dpo import MLXDPOTrainerWrapper
+
+    extra = "".join(f"  {k}: {v}\n" for k, v in training.items())
+    yaml_str = _MLX_DPO_YAML.replace("  lr: 1e-6\n", "  lr: 1e-6\n" + extra)
+    return MLXDPOTrainerWrapper(load_config_from_string(yaml_str))
+
+
+class TestRowsTheTemplateCannotSlice:
+    def test_skipped_with_a_count_and_the_first_offender(self, capsys):
+        wrapper = _bare_wrapper()
+        wrapper.tokenizer = _Unstable()
+        bad = {"prompt": [{"role": "user", "content": "bad"}], "chosen": [_A], "rejected": [_B]}
+        good = {"prompt": [_U], "chosen": [_A], "rejected": [_B]}
+        examples, ties = wrapper._examples([good, bad, good, bad])
+        assert (len(examples), ties) == (2, 0)
+        out = _strip_ansi(capsys.readouterr().out)
+        assert "skipped 2 train row(s)" in out and "first: row 1" in out
+
+    def test_a_malformed_row_still_stops_with_its_index(self):
+        from soup_cli.trainer.mlx_dpo import PreferenceRowError
+
+        wrapper = _bare_wrapper()
+        wrapper.tokenizer = FakeTokenizer()
+        good = {"prompt": "q", "chosen": "a", "rejected": "b"}
+        with pytest.raises(PreferenceRowError, match="dpo train row 1"):
+            wrapper._examples([good, {"prompt": "q", "chosen": "a", "rejected": [_B]}])
+
+
+class TestPromptCapIsWired:
+    def test_examples_cap_the_prompt_at_half_max_length(self):
+        wrapper = _bare_wrapper()
+        wrapper.config.data.max_length = 40
+        wrapper.tokenizer = FakeTokenizer()
+        long_prompt = "x" * 100
+        (example,), _ = wrapper._examples([{"prompt": long_prompt, "chosen": "a", "rejected": "b"}])
+        assert len(example.prompt_ids) == 20
+        assert len(example.prompt_ids) + len(example.chosen_ids) <= 40
+
+
+class TestConfigRefusals:
+    def _load(self, extra_top="", extra_training=""):
+        from soup_cli.config.loader import load_config_from_string
+
+        yaml_str = _MLX_DPO_YAML.replace("backend: mlx\n", "backend: mlx\n" + extra_top)
+        yaml_str = yaml_str.replace("  lr: 1e-6\n", "  lr: 1e-6\n" + extra_training)
+        return load_config_from_string(yaml_str)
+
+    def test_lora_rank_zero_is_refused(self):
+        with pytest.raises(Exception, match="lora.r must be at least 1"):
+            self._load(extra_training="  lora: {r: 0}\n")
+
+    @pytest.mark.parametrize("modality", ["vision", "audio"])
+    def test_non_text_modality_is_refused(self, modality):
+        with pytest.raises(Exception, match=f"modality='{modality}'"):
+            self._load(extra_top=f"modality: {modality}\n")
+
+    def test_loraplus_is_still_refused_on_mlx_dpo(self):
+        with pytest.raises(Exception, match="loraplus_lr_ratio"):
+            self._load(extra_training="  loraplus_lr_ratio: 16\n")
+
+    def test_the_ignored_settings_are_printed(self, monkeypatch):
+        from io import StringIO
+
+        from rich.console import Console
+
+        from soup_cli.trainer import mlx_dpo
+
+        buffer = StringIO()
+        monkeypatch.setattr(mlx_dpo, "console", Console(file=buffer, width=400))
+        cfg = self._load(extra_training="  use_galore: true\n")
+        mlx_dpo.MLXDPOTrainerWrapper(cfg)._check_unsupported()
+        assert "MLX backend ignores: GaLore" in _strip_ansi(buffer.getvalue())
+
+
+# --------------------------------------------------------------------------
+# sequence_logps scores the NEXT token
+# --------------------------------------------------------------------------
+
+
+class _Oracle:
+    """Logits that put all mass on ``tokens[t + 1]`` at position ``t``
+    (``shift=1``) or on ``tokens[t]`` (``shift=0``: copies its input)."""
+
+    def __new__(cls, tokens, vocab, shift):
+        nn = pytest.importorskip("mlx.nn")
+        mx = pytest.importorskip("mlx.core")
+
+        class Backbone(nn.Module):
+            def __call__(self, x):
+                width = x.shape[1]
+                targets = tokens[:, shift : shift + width]
+                return mx.eye(vocab)[targets]
+
+        class Model(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.model = Backbone()
+                self.lm_head = nn.Linear(vocab, vocab, bias=False)
+                self.lm_head.weight = mx.eye(vocab) * 50.0
+                self.args = type("Args", (), {"tie_word_embeddings": False})()
+
+            def __call__(self, x):
+                return self.lm_head(self.model(x))
+
+        model = Model()
+        model.freeze()
+        return model
+
+
+class TestTargetAlignment:
+    @pytest.mark.parametrize("chunked", [False, True])
+    def test_the_real_continuation_scores_near_zero(self, chunked):
+        mx = pytest.importorskip("mlx.core")
+        from soup_cli.trainer.mlx_dpo import resolve_head_split, sequence_logps
+
+        tokens = mx.array([[1, 5, 9, 3, 7, 2]])
+        mask = mx.array([[0, 0, 1, 1, 1, 1]])
+        right = _Oracle(tokens, 16, shift=1)
+        copier = _Oracle(tokens, 16, shift=0)
+        kw = {}
+        if chunked:
+            assert resolve_head_split(right) is not None
+            kw = {"head_split": resolve_head_split(right), "chunk_size": 2}
+        assert sequence_logps(right, tokens, mask, **kw).item() == pytest.approx(0.0, abs=1e-3)
+        kw_copy = {"head_split": resolve_head_split(copier), "chunk_size": 2} if chunked else {}
+        assert sequence_logps(copier, tokens, mask, **kw_copy).item() < -100
+
+
+# --------------------------------------------------------------------------
+# Train-loop guarantees the docs state
+# --------------------------------------------------------------------------
+
+
+def _seeded_wrapper(tmp_path, monkeypatch, model_seed=0, **training):
+    mx = pytest.importorskip("mlx.core")
+    wrapper = _wrapper(tmp_path, monkeypatch, **training)
+    mx.random.seed(model_seed)
+    wrapper.model = _tiny_llama()
+    return wrapper
+
+
+class TestResume:
+    def test_reference_is_taken_before_the_checkpoint_loads(self, tmp_path, monkeypatch):
+        from soup_cli.trainer import mlx_dpo
+
+        first = _seeded_wrapper(tmp_path / "a", monkeypatch, batch_size=2, epochs=3, seed=1)
+        first.train()
+        checkpoint = tmp_path / "a" / "output" / "adapters.safetensors"
+        assert checkpoint.exists()
+
+        order = []
+        real_ref = mlx_dpo.MLXDPOTrainerWrapper._reference_logps
+        real_load = mlx_dpo.MLXDPOTrainerWrapper._load_checkpoint_weights
+        monkeypatch.setattr(mlx_dpo.MLXDPOTrainerWrapper, "_reference_logps",
+                            lambda self, *a: order.append("reference") or real_ref(self, *a))
+        monkeypatch.setattr(mlx_dpo.MLXDPOTrainerWrapper, "_load_checkpoint_weights",
+                            lambda self, *a: order.append("load") or real_load(self, *a))
+        resumed = _seeded_wrapper(tmp_path / "b", monkeypatch, batch_size=2, seed=1)
+        result = resumed.train(resume_from_checkpoint=str(checkpoint))
+
+        assert order[-1] == "load" and "reference" in order[:-1]
+        # The policy starts trained, the reference is the base model, so the
+        # first loss is already below log 2 (it is exactly log 2 from scratch).
+        assert result["losses"][0] < math.log(2) - 1e-3
+
+
+class TestGradientAccumulation:
+    def test_two_micro_batches_of_one_equal_one_batch_of_two(self, tmp_path, monkeypatch):
+        mx = pytest.importorskip("mlx.core")
+        from mlx.utils import tree_flatten
+
+        from soup_cli.trainer import mlx_dpo
+
+        def run(path, batch_size, accum, plan):
+            monkeypatch.setattr(mlx_dpo, "plan_batches", lambda *a, **k: [list(b) for b in plan])
+            wrapper = _seeded_wrapper(
+                path, monkeypatch, batch_size=batch_size, gradient_accumulation_steps=accum,
+                optimizer="sgd", warmup_ratio=0.0, scheduler="constant", seed=4,
+            )
+            wrapper.config.training.lora.dropout = 0.0
+            result = wrapper.train()
+            return result, dict(tree_flatten(wrapper.model.trainable_parameters()))
+
+        one, w_one = run(tmp_path / "a", 2, 1, [[0, 1]])
+        two, w_two = run(tmp_path / "b", 1, 2, [[0], [1]])
+        assert len(one["losses"]) == len(two["losses"]) == 1
+        for name in w_one:
+            assert mx.allclose(w_one[name], w_two[name], atol=1e-6).item(), name
+
+    def test_updates_are_counted_per_accumulation_group(self, tmp_path, monkeypatch):
+        wrapper = _seeded_wrapper(tmp_path, monkeypatch, batch_size=2,
+                                  gradient_accumulation_steps=2, seed=1)
+        result = wrapper.train()
+        assert result["total_steps"] == 4  # 8 rows / batch 2, one epoch
+        assert len(result["losses"]) == 2  # one loss per optimizer update
+
+
+class TestDataSeed:
+    def test_data_seed_owns_the_batch_order(self, tmp_path, monkeypatch):
+        from soup_cli.trainer import mlx_dpo
+
+        plans = []
+        real = mlx_dpo.plan_batches
+
+        def recording(*args, **kwargs):
+            plan = real(*args, **kwargs)
+            plans.append(plan)
+            return plan
+
+        monkeypatch.setattr(mlx_dpo, "plan_batches", recording)
+        for path, training in (("a", {"seed": 1, "data_seed": 2}),
+                               ("b", {"seed": 3, "data_seed": 2}),
+                               ("c", {"seed": 3})):
+            _seeded_wrapper(tmp_path / path, monkeypatch, batch_size=2, epochs=2,
+                            **training).train()
+        assert plans[0] == plans[1]
+        assert plans[1] != plans[2]
+
+
+class TestValidation:
+    def test_one_val_row_with_batch_two_is_evaluated(self, tmp_path, monkeypatch):
+        """The #1851 shape: a partial last chunk, not a crash."""
+        wrapper = _seeded_wrapper(tmp_path, monkeypatch, batch_size=2, seed=1)
+        wrapper._dataset["val"] = wrapper._dataset["val"][:1]
+        result = wrapper.train()
+        assert "val_loss" in result and math.isfinite(result["val_loss"])
+
+    def test_val_loss_is_the_mean_over_rows_not_over_chunks(self, tmp_path, monkeypatch):
+        pytest.importorskip("mlx.core")
+        from soup_cli.trainer import mlx_dpo
+
+        refs = []
+        real = mlx_dpo.MLXDPOTrainerWrapper._reference_logps
+        monkeypatch.setattr(mlx_dpo.MLXDPOTrainerWrapper, "_reference_logps",
+                            lambda self, ex, bs: refs.append(real(self, ex, bs)) or refs[-1])
+        wrapper = _seeded_wrapper(tmp_path, monkeypatch, batch_size=2, epochs=3, seed=2)
+        # Three rows, one reversed: chunks of 2 + 1 with different losses.
+        wrapper._dataset["val"] = [
+            {"prompt": "v0:", "chosen": " good", "rejected": " bad"},
+            {"prompt": "v1:", "chosen": " good", "rejected": " bad"},
+            {"prompt": "v2:", "chosen": " bad", "rejected": " good"},
+        ]
+        result = wrapper.train()
+
+        examples, _ = wrapper._examples(wrapper._dataset["val"], "val")
+        ref_c, ref_r = refs[1]
+        wrapper.model.eval()
+        per_row = []
+        for i, example in enumerate(examples):
+            tokens, mask = wrapper._to_arrays([example])
+            lp = mlx_dpo.sequence_logps(wrapper.model, tokens, mask, head_split=wrapper._head_split)
+            loss, _ = mlx_dpo.dpo_loss(lp[:1], lp[1:], ref_c[i : i + 1], ref_r[i : i + 1], 0.1)
+            per_row.append(loss.item())
+        assert result["val_loss"] == pytest.approx(sum(per_row) / 3, rel=1e-4)
+
+
+class TestCheckpoints:
+    def test_save_steps_files_are_found_by_resume_auto(self, tmp_path, monkeypatch):
+        from soup_cli.commands.train import _resolve_mlx_checkpoint
+
+        wrapper = _seeded_wrapper(tmp_path, monkeypatch, batch_size=2, epochs=2,
+                                  save_steps=2, seed=1)
+        wrapper.train()
+        out = tmp_path / "output"
+        numbered = sorted(p.name for p in out.glob("*_adapters.safetensors"))
+        assert numbered == [f"{n:07d}_adapters.safetensors" for n in (2, 4, 6, 8)]
+        resolved = _resolve_mlx_checkpoint("auto", str(out))
+        assert resolved is not None and resolved.endswith("0000008_adapters.safetensors")
+
+
+class TestHeadSplitFallback:
+    def test_a_mismatching_head_falls_back_with_a_warning(self, tmp_path, monkeypatch):
+        from io import StringIO
+
+        from rich.console import Console
+
+        from soup_cli.trainer import mlx_dpo
+
+        real = mlx_dpo.resolve_head_split
+
+        def scaled(model):
+            split = real(model)
+            backbone, head = split
+            return backbone, (lambda h: head(h) * 2.0)
+
+        monkeypatch.setattr(mlx_dpo, "resolve_head_split", scaled)
+        buffer = StringIO()
+        monkeypatch.setattr(mlx_dpo, "console", Console(file=buffer, width=400))
+        wrapper = _seeded_wrapper(tmp_path, monkeypatch, batch_size=2, seed=1)
+        result = wrapper.train()
+        assert wrapper._head_split is None
+        assert "using the full-vocabulary path" in _strip_ansi(buffer.getvalue())
+        assert result["losses"][0] == pytest.approx(math.log(2), rel=1e-4)
+
+
+class TestRefusalsAndReporting:
+    def test_too_few_pairs_after_ties_names_batch_size_and_ties(self, tmp_path, monkeypatch):
+        wrapper = _seeded_wrapper(tmp_path, monkeypatch, batch_size=4, seed=1)
+        tie = {"prompt": "q:", "chosen": " same", "rejected": " same"}
+        wrapper._dataset["train"] = wrapper._dataset["train"][:3] + [tie, dict(tie)]
+        with pytest.raises(ValueError, match=r"3 training pair.*batch_size \(4\).*2 tie"):
+            wrapper.train()
+
+    def test_metrics_reach_the_live_stream_with_a_display(self, tmp_path, monkeypatch):
+        from soup_cli.utils import train_event_buffer
+
+        events = []
+        monkeypatch.setattr(train_event_buffer, "push_train_event", events.append)
+
+        class Display:
+            def start(self, total):
+                pass
+
+            def update(self, **kw):
+                pass
+
+            def stop(self):
+                pass
+
+        wrapper = _seeded_wrapper(tmp_path, monkeypatch, batch_size=2, seed=1)
+        wrapper.train(display=Display())
+        assert events and all(e.type == "metric" and e.loss is not None for e in events)
+        assert any(e.val_loss is not None for e in events)

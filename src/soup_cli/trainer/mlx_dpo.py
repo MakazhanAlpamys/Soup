@@ -82,39 +82,26 @@ def _as_ids(value: Any) -> list:
     return list(value)
 
 
-def _split_conversations(row: dict) -> tuple[list, list, list]:
-    """Return (prompt messages, chosen completion, rejected completion).
+class PrefixUnstableError(PreferenceRowError):
+    """The template renders the prompt differently once a completion follows."""
 
-    Accepts TRL's explicit layout (prompt messages, completion messages) and
-    the implicit one Soup's bundled sample uses (full conversations that repeat
-    the prompt turns, with or without a string ``prompt`` alongside).
+
+def _normalise_row(row: dict) -> dict:
+    """The row in ONE of TRL's two layouts, via the loader's own converter.
+
+    ``soup_cli.data.formats._convert_dpo`` is the contract every backend gets
+    from ``load_dataset`` (#1866): text (three strings) or explicit
+    conversational (a message-list prompt, answers without the prompt turns).
+    It is idempotent, so rows the loader already converted pass through, and
+    rows handed straight to ``setup()`` get the same reading and the same
+    refusals, which name the field.
     """
-    prompt, chosen, rejected = row["prompt"], row["chosen"], row["rejected"]
-    if not isinstance(chosen, list) or not isinstance(rejected, list):
-        raise PreferenceRowError(
-            "dpo row mixes formats: chosen and rejected must both be message "
-            "lists or both be strings"
-        )
-    if isinstance(prompt, list):
-        n = len(prompt)
-        if chosen[:n] == prompt and rejected[:n] == prompt:
-            chosen, rejected = chosen[n:], rejected[n:]
-        return list(prompt), list(chosen), list(rejected)
+    from soup_cli.data.formats import _convert_dpo
 
-    shared = 0
-    while (
-        shared < min(len(chosen), len(rejected))
-        and chosen[shared] == rejected[shared]
-    ):
-        shared += 1
-    if shared == len(chosen) and shared == len(rejected):
-        raise IdenticalPairError(
-            "dpo row has identical chosen and rejected conversations; there is "
-            "no completion to prefer"
-        )
-    if shared:
-        return chosen[:shared], chosen[shared:], rejected[shared:]
-    return [{"role": "user", "content": str(prompt)}], chosen, rejected
+    try:
+        return _convert_dpo(row)
+    except (TypeError, ValueError) as exc:
+        raise PreferenceRowError(str(exc)) from exc
 
 
 def build_preference_example(
@@ -125,42 +112,37 @@ def build_preference_example(
     max_prompt_length: int,
     truncation_mode: str = "keep_start",
 ) -> PreferenceExample:
-    """Tokenize one ``{prompt, chosen, rejected}`` row the way TRL 0.29 does."""
-    for name in ("prompt", "chosen", "rejected"):
-        if row.get(name) is None:
-            raise PreferenceRowError(f"dpo.{name} must not be null")
+    """Tokenize one ``{prompt, chosen, rejected}`` row the way TRL 0.29 does.
 
-    conversational = any(
-        isinstance(row[name], list) for name in ("prompt", "chosen", "rejected")
-    )
-    if conversational:
-        prompt_msgs, chosen_msgs, rejected_msgs = _split_conversations(row)
+    Differences from TRL, on purpose: a tie (``chosen == rejected``) raises
+    :class:`IdenticalPairError` so the caller can skip it (TRL trains it at a
+    constant loss, zero gradient), and a template that is not prefix-stable for
+    the row raises :class:`PrefixUnstableError` where TRL warns and slices
+    anyway. Per-row ``tools`` / ``chat_template_kwargs`` are not applied.
+    """
+    row = _normalise_row(row)
+    prompt, chosen, rejected = row["prompt"], row["chosen"], row["rejected"]
+    if chosen == rejected:
+        raise IdenticalPairError(
+            "dpo row has identical chosen and rejected completions; there is "
+            "no completion to prefer"
+        )
+
+    if isinstance(prompt, list):
         prompt_ids = _as_ids(
-            tokenizer.apply_chat_template(
-                prompt_msgs, add_generation_prompt=True, tokenize=True
-            )
+            tokenizer.apply_chat_template(prompt, add_generation_prompt=True, tokenize=True)
         )
-        full_chosen = _as_ids(
-            tokenizer.apply_chat_template(prompt_msgs + chosen_msgs, tokenize=True)
-        )
-        full_rejected = _as_ids(
-            tokenizer.apply_chat_template(prompt_msgs + rejected_msgs, tokenize=True)
-        )
+        full_chosen = _as_ids(tokenizer.apply_chat_template(prompt + chosen, tokenize=True))
+        full_rejected = _as_ids(tokenizer.apply_chat_template(prompt + rejected, tokenize=True))
     else:
-        if not isinstance(row["chosen"], str) or not isinstance(row["rejected"], str):
-            raise PreferenceRowError(
-                "dpo row mixes formats: chosen and rejected must both be message "
-                "lists or both be strings"
-            )
         eos = getattr(tokenizer, "eos_token", None) or ""
-        prompt = str(row["prompt"])
 
         def with_eos(text: str) -> str:
             return text if not eos or text.endswith(eos) else text + eos
 
         prompt_ids = list(tokenizer.encode(prompt))
-        full_chosen = list(tokenizer.encode(prompt + with_eos(row["chosen"])))
-        full_rejected = list(tokenizer.encode(prompt + with_eos(row["rejected"])))
+        full_chosen = list(tokenizer.encode(prompt + with_eos(chosen)))
+        full_rejected = list(tokenizer.encode(prompt + with_eos(rejected)))
 
     if full_chosen == full_rejected:
         raise IdenticalPairError(
@@ -169,7 +151,7 @@ def build_preference_example(
         )
     n = len(prompt_ids)
     if full_chosen[:n] != prompt_ids or full_rejected[:n] != prompt_ids:
-        raise PreferenceRowError(
+        raise PrefixUnstableError(
             "the tokenized prompt is not a prefix of the tokenized prompt + "
             "completion, so the completion cannot be located; this tokenizer or "
             "chat template is not prefix-stable for this row"
@@ -386,9 +368,6 @@ class MLXDPOTrainerWrapper(MLXSFTTrainerWrapper):
             ("moe_lora", "training.moe_lora"),
             ("quantization_aware", "training.quantization_aware"),
             ("use_fsdp2_compile", "training.use_fsdp2_compile"),
-            ("loss_watchdog", "training.loss_watchdog"),
-            ("loss_spike_recovery", "training.loss_spike_recovery"),
-            ("grad_accum_auto_tune", "training.grad_accum_auto_tune"),
         ):
             if getattr(tcfg, name, False):
                 unsupported.append(label)
@@ -406,11 +385,18 @@ class MLXDPOTrainerWrapper(MLXSFTTrainerWrapper):
 
     # -- data -------------------------------------------------------------
 
-    def _examples(self, rows: list) -> tuple[list, int]:
-        """Tokenized pairs, and how many tied rows were skipped."""
+    def _examples(self, rows: list, split: str = "train") -> tuple[list, int]:
+        """Tokenized pairs, and how many tied rows were skipped.
+
+        A row the template is not prefix-stable for is skipped too, counted and
+        reported with the first offender, rather than ending a run whose model
+        has already loaded: with a BPE tokenizer one text row whose prompt ends
+        in a space is enough. A row the converter refuses still stops the run,
+        with its index: that is malformed data, not a tokenizer quirk.
+        """
         cfg = self.config
         max_length = int(getattr(cfg.data, "max_length", 2048) or 2048)
-        examples, ties = [], 0
+        examples, ties, unstable = [], 0, []
         for index, row in enumerate(rows):
             try:
                 examples.append(
@@ -423,8 +409,17 @@ class MLXDPOTrainerWrapper(MLXSFTTrainerWrapper):
                 )
             except IdenticalPairError:
                 ties += 1
+            except PrefixUnstableError:
+                unstable.append(index)
             except PreferenceRowError as exc:
-                raise PreferenceRowError(f"dpo row {index}: {exc}") from exc
+                raise PreferenceRowError(f"dpo {split} row {index}: {exc}") from exc
+        if unstable:
+            console.print(
+                f"[yellow]MLX DPO: skipped {len(unstable)} {split} row(s) whose "
+                "completion could not be located (the chat template or tokenizer "
+                "renders the prompt differently once a completion follows; first: "
+                f"row {unstable[0]})[/]"
+            )
         return examples, ties
 
     @staticmethod
@@ -440,7 +435,12 @@ class MLXDPOTrainerWrapper(MLXSFTTrainerWrapper):
 
         self.model.eval()
         chosen, rejected = [], []
-        for start in range(0, len(examples), batch_size):
+        total = len(examples)
+        console.print(f"[dim]MLX DPO: computing reference log-probs for {total} pair(s)[/]")
+        every = max(batch_size, (total // 10) // batch_size * batch_size)
+        for start in range(0, total, batch_size):
+            if start and start % every == 0:
+                console.print(f"[dim]  reference log-probs: {start}/{total}[/]")
             chunk = examples[start : start + batch_size]
             tokens, mask = self._to_arrays(chunk)
             logps = mx.stop_gradient(
@@ -503,8 +503,10 @@ class MLXDPOTrainerWrapper(MLXSFTTrainerWrapper):
         if self.model is None or self.tokenizer is None:
             raise RuntimeError("MLX backend: setup(dataset) must be called before train()")
 
-        seed = int(tcfg.seed) if tcfg.seed is not None else 42
-        data_seed = int(tcfg.data_seed) if tcfg.data_seed is not None else seed
+        from soup_cli.utils.seeding import resolve_training_seed
+
+        seed = resolve_training_seed(tcfg)
+        data_seed = seed if tcfg.data_seed is None else int(tcfg.data_seed)
         mx.random.seed(seed)
 
         output_dir = Path(cfg.output)
@@ -514,12 +516,20 @@ class MLXDPOTrainerWrapper(MLXSFTTrainerWrapper):
         beta = float(tcfg.dpo_beta)
 
         train_examples, train_ties = self._examples(list(self._dataset.get("train", [])))
-        val_examples, val_ties = self._examples(list(self._dataset.get("val", [])))
+        val_examples, val_ties = self._examples(list(self._dataset.get("val", [])), "val")
         skipped = train_ties + val_ties
         if skipped:
             console.print(
                 f"[yellow]MLX DPO: skipped {skipped} dpo row(s) with identical "
                 "chosen and rejected (a tie carries no preference signal)[/]"
+            )
+        if len(train_examples) < batch_size:
+            raise ValueError(
+                f"MLX DPO: {len(train_examples)} training pair(s) remain, fewer than "
+                f"training.batch_size ({batch_size})"
+                + (f", after skipping {train_ties} tie(s)" if train_ties else "")
+                + f". Lower training.batch_size to at most {max(1, len(train_examples))} "
+                "or add rows."
             )
         plan = plan_batches(len(train_examples), batch_size, int(tcfg.epochs), data_seed)
         iters = len(plan)
@@ -630,6 +640,13 @@ class MLXDPOTrainerWrapper(MLXSFTTrainerWrapper):
                 group_acc += metrics["reward_accuracy"].item()
                 group_margin += metrics["reward_margin"].item()
 
+                # Counted in iterations, as mlx-lm's `steps_per_save` is for MLX
+                # SFT, so the file names line up with `--resume auto`. Checked
+                # before the accumulation gate: inside it, a cadence that is not
+                # a multiple of the group size skipped saves. Mid-group, the
+                # weights saved are those of the last update.
+                if save_steps > 0 and it % save_steps == 0:
+                    save(output_dir / f"{it:07d}_adapters.safetensors")
                 if it % accum:
                     continue
                 if accum > 1:
@@ -661,8 +678,6 @@ class MLXDPOTrainerWrapper(MLXSFTTrainerWrapper):
                         speed=speed, reward_acc=reward_acc, margin=margin, val=val,
                     )
 
-                if save_steps > 0 and it % save_steps == 0:
-                    save(output_dir / f"{it:07d}_adapters.safetensors")
         finally:
             if display is not None:
                 display.stop()
@@ -729,6 +744,23 @@ class MLXDPOTrainerWrapper(MLXSFTTrainerWrapper):
                 tracker.log_metrics(
                     run_id=run_id, step=step, epoch=epoch, loss=loss, lr=lr,
                     speed=speed, gpu_mem=gpu_mem, val_loss=val_loss,
+                )
+            except Exception:  # noqa: BLE001 — telemetry must not kill a run
+                pass
+        if display is not None:
+            # `soup ui` / GET /api/train/stream, in MLX SFT's shape. Only with a
+            # display, as on the transformers path. Reward accuracy and margin
+            # have no event field: they are printed without a display and
+            # returned in train()'s result.
+            try:
+                from soup_cli.utils.sse_train_stream import TrainEvent
+                from soup_cli.utils.train_event_buffer import push_train_event
+
+                push_train_event(
+                    TrainEvent(
+                        type="metric", step=step, epoch=float(epoch), loss=float(loss),
+                        lr=float(lr), val_loss=val_loss,
+                    )
                 )
             except Exception:  # noqa: BLE001 — telemetry must not kill a run
                 pass
