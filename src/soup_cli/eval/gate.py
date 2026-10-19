@@ -154,6 +154,12 @@ def load_suite(path: str) -> EvalSuite:
             f"eval-gate suite '{path}' must be a mapping with 'suite' and 'tasks', "
             f"got a {type(data).__name__}"
         )
+    for key in data:
+        if not isinstance(key, str):
+            raise ValueError(
+                f"eval-gate suite '{path}' has a non-string key {key!r}; "
+                "top-level keys must be strings"
+            )
     suite = EvalSuite(**data)
     _require_gate_tasks(suite)
     return suite
