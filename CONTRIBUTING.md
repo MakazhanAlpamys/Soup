@@ -346,6 +346,9 @@ Comment on it saying you are taking it. GitHub only lets us set the formal
 assignee badge for repo collaborators, so the comment **is** the claim — it will
 look unassigned either way, and we treat the thread as the record.
 
+The current board is the pinned issue
+[#1945](https://github.com/MakazhanAlpamys/Soup/issues/1945), regenerated daily.
+
 Two commitments in return:
 
 - **If a maintainer ends up doing the work instead, you get told, in the thread,
@@ -501,6 +504,8 @@ When you open a PR, the GitHub template will show this checklist:
 - [ ] New tests added for new functionality
 - [ ] No breaking changes (or documented in PR description)
 
+Contributions are accepted under the Apache License, Version 2.0, the project's own terms (section 5 of the license): by opening a pull request you agree that your contribution is licensed that way and you keep your copyright; there is no CLA and no DCO sign-off for now.
+
 ## Architecture & Design Decisions
 
 ### Lazy Imports for Speed
@@ -624,6 +629,15 @@ a pinned package shows first. If your change moves a
 bound in `pyproject.toml` past one of those pins, move the pin in the same pull
 request: `tests/test_ci_pinned_upstream.py` names the pin, and the header of the
 constraints file says how to pick the new version.
+
+**CI reuses pip downloads selectively.** Only the Ubuntu / Python 3.12 test cell
+caches pip's downloads and wheels via `setup-python`, keyed by `pyproject.toml`
+and `.github/constraints/*.txt`. Other test cells and the smoke/contract jobs
+leave pip caching disabled to limit large dependency archives competing with
+the HF model caches. Every job still runs its installation command on a cache
+hit, so the nightly run continues to resolve the newest allowed packages and
+the floor job keeps its constraints. Retained entries can still vary by
+dependency inputs and Git refs; virtual environments and HF caches are separate.
 
 **CI runs the tests in parallel.** Every `test (...)` cell runs the suite with
 `pytest-xdist`, one test file per worker process (`-n logical --dist loadfile`).

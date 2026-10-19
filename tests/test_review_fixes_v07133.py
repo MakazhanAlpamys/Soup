@@ -19,6 +19,8 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
+from tests.ui_helpers import ui_client
+
 
 # --------------------------------------------------------------------------
 # HIGH-1 — vLLM serve must not force trust_remote_code=True
@@ -683,13 +685,12 @@ class TestRunsEscape:
 class TestConstantTimeToken:
     def test_wrong_token_401_right_token_ok(self):
         pytest.importorskip("fastapi")
-        from starlette.testclient import TestClient
 
         from soup_cli.ui.app import create_app, set_auth_token
 
         set_auth_token("a" * 32)
         app = create_app()
-        client = TestClient(app)
+        client = ui_client(app)
         # A mutating endpoint requires the Bearer token.
         bad = client.post(
             "/api/train/start",

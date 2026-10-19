@@ -173,7 +173,7 @@ soup adapters audit <adapter> --config soup.yaml [--json]   Compare a finished r
 soup adapters branches                        List snapshotted branches
 soup adapters checkout <name>                   Restore a snapshotted branch's config
 soup adapters diff <a> <b>                      Per-layer ΔW Frobenius diff + effective-rank drift
-soup loop init <model> --eval <s> --baseline <b> [--pre-wired]  Create .soup/loop.yaml (data flywheel; --pre-wired = real stages)
+soup loop init <model> --eval <s> --baseline <b> [--pre-wired] [--thumbs-db <db>]  Create .soup/loop.yaml (data flywheel; --pre-wired = real stages; --thumbs-db = harvest `serve --record-thumbs` thumbs)
 soup loop status                              Counters + status + pre_wired flag
 soup loop watch [--detach] [--max-iterations N] [--pre-wired] [--pack-cans]  Harvest → train → gate → deploy daemon (pre-wired stages + Soup Can packing)
 soup loop pause                              Atomic status flip: pause watch daemon at next iteration boundary
@@ -195,6 +195,7 @@ soup recipes verify --no-templates            Recipes only; skip src/soup_cli/te
 soup recipes verify --json                    One JSON row per config on stdout; advisories go to stderr
 soup registry push --run-id <id> --name n --tag v1  Register run
 soup registry push ... --data train.jsonl     Also record that file's SHA-256 as data_hash
+soup registry push ... --idempotency-key k    Retry-safe: same key + same registration -> existing entry
 soup registry list [--name n] [--tag v1]     List registry entries
 soup registry show <ref>                      Entry details + artifacts + ancestors
 soup registry diff <a> <b>                    Side-by-side config + eval delta
@@ -258,7 +259,7 @@ soup reward stress ... --output-report r.json  Save the per-attack report JSON (
 soup tui                                      Full-screen Textual dashboard (requires [tui] extra)
 soup train --config soup.yaml --profile       Record torch.profiler trace to <output>/profiles/
 soup --log-level quiet|normal|verbose|debug   Global logging tier (Rich-formatted)
-soup ui [--port 7860]                         Web UI (experiments, training, data)
+soup ui [--port 7860]                         Web UI (experiments, training, data); loopback Host must name the bound host or localhost / 127.0.0.1 / [::1] with the bound port (omitted = HTTP 80), otherwise 403
 soup ui --public [--auth-token T]             Phone-scannable Web UI (v0.53.9); /docs + /openapi.json are loopback-only
 soup tokenizer train --input c.jsonl --vocab-size N  Train BPE tokenizer (v0.53.9)
 soup bench <model>                            Inference speed + memory (same as `soup bench infer <model>`)

@@ -101,7 +101,9 @@ def cli_inputs(tmp_path, monkeypatch):
     monkeypatch.setenv("SOUP_REGISTRY_DB_PATH", str(tmp_path / "registry.db"))
     model = tmp_path / "model"
     model.mkdir()
-    (model / "config.json").write_text('{"model_type":"llama"}')
+    (model / "config.json").write_text(
+        '{"model_type":"llama","architectures":["LlamaForCausalLM"]}', encoding="utf-8",
+    )
     llama = tmp_path / "llama.cpp"
     llama.mkdir()
     (llama / "convert_hf_to_gguf.py").write_text("# fixture")
@@ -274,6 +276,9 @@ def test_cli_reports_each_reached_phase_once(monkeypatch, cli_inputs, quant, man
     def merge(source, base, output, trust_remote_code):
         calls.append(("merge", base))
         Path(output).mkdir()
+        (Path(output) / "config.json").write_text(
+            '{"architectures":["LlamaForCausalLM"]}', encoding="utf-8",
+        )
 
     def convert(script, source, output, outtype, **kwargs):
         calls.append(("convert", outtype))

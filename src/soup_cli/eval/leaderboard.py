@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from soup_cli.eval.results import newest_eval_rows
+from soup_cli.utils.csv_safe import spreadsheet_safe
 
 
 @dataclass
@@ -155,10 +156,12 @@ def export_leaderboard(
         # Preserve the existing empty benchmark column for an empty export.
         benchmarks = sorted(all_benchmarks) or [""]
 
-        lines = [_csv_line(["model", *benchmarks, "average"])]
+        # Names are free text; scores and the average are numbers and stay as they are.
+        header = ["model", *(spreadsheet_safe(name) for name in benchmarks), "average"]
+        lines = [_csv_line(header)]
         for model, scores, avg in sorted_models:
             vals = [str(scores.get(bench, "")) for bench in benchmarks]
-            lines.append(_csv_line([model, *vals, f"{avg:.4f}"]))
+            lines.append(_csv_line([spreadsheet_safe(model), *vals, f"{avg:.4f}"]))
         return "\n".join(lines)
 
     # Default: JSON
