@@ -6921,13 +6921,14 @@ class SoupConfig(BaseModel):
                 "training.stream_loss_chunk."
             )
         if tcfg.stream_loss_chunk is not None and tcfg.use_cut_ce:
-            # #1693 — two mechanisms over the same loss: which one computes it
-            # would be undefined, so neither is picked silently.
+            # #1693 — two mechanisms over the same loss. Checked before the
+            # refusal of use_cut_ce under streaming (#2023), so that the
+            # message names both fields.
             raise ValueError(
                 "training.stream_loss_chunk and training.use_cut_ce cannot be "
                 "combined: each replaces how the loss over the logits is "
-                "computed, and with both set which one runs is undefined. Keep "
-                "one of them."
+                "computed. Keep stream_loss_chunk and set use_cut_ce=false; "
+                "streaming refuses use_cut_ce on its own."
             )
         if self.backend != "transformers":
             raise ValueError(

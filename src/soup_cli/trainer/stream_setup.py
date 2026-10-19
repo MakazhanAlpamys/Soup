@@ -1307,7 +1307,13 @@ class StreamingSetupMixin:
             # #1693 -- before the probe, so that it measures the step that runs.
             from soup_cli.utils.stream_loss_chunk import ChunkedHeadLoss, causal_lm_of
 
-            self._stream_loss_chunk_hook = ChunkedHeadLoss(causal_lm_of(model), loss_chunk)
+            try:
+                self._stream_loss_chunk_hook = ChunkedHeadLoss(causal_lm_of(model), loss_chunk)
+            except Exception:
+                # As for #792's patch above: training's cleanup context has
+                # not started yet, so release the runtime here.
+                self._close_stream_runtime()
+                raise
         if probe_plan is not None:
             self._run_stream_vram_probe(model, probe_plan)
         stats = runtime.stats()

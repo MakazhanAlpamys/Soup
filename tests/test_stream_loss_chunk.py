@@ -684,6 +684,19 @@ class TestTheLoggedColumns:
         assert not getattr(trainer, "_metrics", {"train": {}})["train"]
         assert trainer._total_train_tokens == 10
 
+    def test_the_logged_columns_are_gathered_across_ranks_as_trl_gathers_them(self):
+        from soup_cli.utils.stream_loss_chunk import _log_trl_metrics
+
+        trainer = _fake_trainer()
+        # Two ranks: this one's value, and a second rank that saw twice as much.
+        trainer.accelerator.gather_for_metrics = lambda value: torch.stack([value, value * 2])
+
+        _log_trl_metrics(trainer, "train", self._MASK, _a_step())
+
+        assert trainer._metrics["train"]["entropy"] == [4.5]  # mean(3.0, 6.0)
+        assert trainer._metrics["train"]["num_tokens"] == [19]  # 10 + (3 + 6) attended tokens
+        assert trainer._metrics["train"]["mean_token_accuracy"] == [0.75]  # (3 + 6) / (4 + 8)
+
 
 def test_the_chunked_trainer_class_leaves_other_steps_to_its_base():
     """No hook on the trainer, or a batch without labels: the base class's own
@@ -781,13 +794,16 @@ class TestTheOption:
         """Two mechanisms over the same loss: refused, with both fields named."""
         from pydantic import ValidationError
 
-        _cfg(stream_layers=True, use_cut_ce=True)  # the premise: each loads alone
+        # use_cut_ce alone is refused under streaming (#2023); the pair is
+        # refused first, with both fields named.
+        with pytest.raises(ValidationError, match="cannot be combined with training.use_cut_ce"):
+            _cfg(stream_layers=True, use_cut_ce=True)
         _cfg(stream_layers=True, stream_loss_chunk=128)
         with pytest.raises(ValidationError) as excinfo:
             _cfg(stream_layers=True, stream_loss_chunk=128, use_cut_ce=True)
         message = excinfo.value.errors()[0]["msg"]
         assert "training.stream_loss_chunk and training.use_cut_ce cannot be combined" in message
-        assert "Keep one of them" in message
+        assert "Keep stream_loss_chunk and set use_cut_ce=false" in message
 
     def test_the_rewind_log_stays_on_beside_it(self):
         """``rewind_log`` is on by default: refusing the pair would switch the
@@ -1211,3 +1227,110 @@ def test_the_pre_flight_panel_says_the_logits_are_chunked(tmp_path, monkeypatch)
     plain, chunked = seen
     assert plain.endswith("GB)") and "in chunks of" not in plain
     assert chunked.endswith("GB in chunks of 16 tokens)")
+
+
+def _panel_line(loss_chunk, seq=2048):
+    from soup_cli.trainer.stream_setup import StreamingSetupMixin
+
+    class _Lora:
+        r = 8
+        target_modules = ["q_proj", "v_proj"]
+
+    class _Train:
+        batch_size = 1
+        stream_buffers = 2
+        stream_vram_probe = False
+        stream_vram_override = int(64 * _GB)
+        gradient_accumulation_steps = 1
+        lora = _Lora()
+
+    _Train.stream_loss_chunk = loss_chunk
+
+    class _Model:
+        vocab_size = 128_256
+        hidden_size = 4096
+        intermediate_size = 14_336
+
+    class _Index:
+        n_layers = 32
+        total_params = 0
+
+    class _Data:
+        max_length = seq
+
+    class _Cfg:
+        data = _Data()
+
+    mixin = StreamingSetupMixin()
+    mixin.device = "cpu"
+    lines, _ = mixin._stream_budget_lines(
+        _Cfg(), _Train(), model_config=_Model(), layer_bytes=300_000_000,
+        embed_bytes=0, index=_Index(), on_cuda=False,
+    )
+    return lines[0]
+
+
+def test_the_panel_shows_the_logits_of_one_chunk():
+    assert _panel_line(None).endswith("(logits 3.68 GB)")
+    assert _panel_line(128).endswith("(logits 0.23 GB in chunks of 128 tokens)")
+    assert _panel_line(8192).endswith("(logits 3.68 GB in chunks of 8192 tokens)")
+
+
+def test_the_chunk_bytes_are_charged_for_every_row_of_the_batch():
+    from soup_cli.utils.layer_stream import estimate_logits_bytes, estimate_loss_chunk_bytes
+
+    full = estimate_logits_bytes(vocab_size=128_256, seq_len=2048, batch_size=4)
+    chunk = estimate_logits_bytes(vocab_size=128_256, seq_len=128, batch_size=4)
+    kept = estimate_loss_chunk_bytes(hidden_size=4096, seq_len=2048, batch_size=4)
+
+    assert _peak(batch_size=4) - _peak(batch_size=4, loss_chunk=128) == full - chunk - kept
+
+
+def test_the_hook_is_on_the_model_before_the_vram_probe_measures_a_step(tmp_path, monkeypatch):
+    from soup_cli.trainer.stream_setup import StreamingSetupMixin
+    from tests.test_v07204 import _build_streamed_wrapper
+
+    seen = []
+
+    def probe(self, model, plan):
+        seen.append(self._stream_loss_chunk_hook is not None)
+
+    budget = StreamingSetupMixin._stream_budget_lines
+    # Off CUDA the budget returns no probe plan; hand it one so the probe step is reached.
+    monkeypatch.setattr(
+        StreamingSetupMixin,
+        "_stream_budget_lines",
+        lambda self, *args, **kwargs: (budget(self, *args, **kwargs)[0], object()),
+    )
+    monkeypatch.setattr(StreamingSetupMixin, "_run_stream_vram_probe", probe)
+
+    wrapper, _, _ = _build_streamed_wrapper(tmp_path, monkeypatch, task="sft", stream_loss_chunk=16)
+    wrapper._close_stream_runtime()
+
+    assert seen == [True]
+
+
+def test_a_hook_that_cannot_be_built_releases_the_streamed_runtime(tmp_path, monkeypatch):
+    """The hook is built after the runtime and before training's cleanup
+    context starts, so a refusal there closes the runtime itself."""
+    from soup_cli.trainer.stream_setup import StreamingSetupMixin
+    from soup_cli.utils import stream_loss_chunk
+    from tests.test_v07204 import _build_streamed_wrapper
+
+    closes = []
+    real_close = StreamingSetupMixin._close_stream_runtime
+
+    def counting_close(self):
+        closes.append(getattr(self, "_stream_runtime", None) is not None)
+        return real_close(self)
+
+    def refuse(*_args, **_kwargs):
+        raise ValueError("no output head to chunk")
+
+    monkeypatch.setattr(StreamingSetupMixin, "_close_stream_runtime", counting_close)
+    monkeypatch.setattr(stream_loss_chunk, "ChunkedHeadLoss", refuse)
+
+    with pytest.raises(ValueError, match="no output head to chunk"):
+        _build_streamed_wrapper(tmp_path, monkeypatch, task="sft", stream_loss_chunk=16)
+
+    assert closes == [True]
