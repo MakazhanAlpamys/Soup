@@ -735,7 +735,9 @@ class StreamingSetupMixin:
         # is worse than finding out now.
         refuse_if_data_parallel(self.device)
 
+        from soup_cli.utils.expert_stream import EXPERT_LAYOUT_PER_EXPERT
         from soup_cli.utils.layer_shard import (
+            PER_EXPERT_LAYOUT_ARCHS,
             QUANT_NF4,
             QUANT_NONE,
             checkpoint_source_components,
@@ -797,6 +799,20 @@ class StreamingSetupMixin:
         # Allowlist, not a heuristic — a half-supported architecture streams
         # weights into the wrong module and mis-trains silently.
         arch = stream_arch_of(model_config)
+        # training.stream_expert_layout, in the sharder's spelling ("" = fused).
+        # Refused here for an architecture the layout is not gated on: before any
+        # weight is resolved, downloaded or sharded.
+        expert_layout = (
+            EXPERT_LAYOUT_PER_EXPERT
+            if getattr(tcfg, "stream_expert_layout", "fused") == "per_expert"
+            else ""
+        )
+        if expert_layout and arch not in PER_EXPERT_LAYOUT_ARCHS:
+            raise ValueError(
+                "training.stream_expert_layout='per_expert' is gated on resident parity "
+                f"per architecture; admitted: {', '.join(PER_EXPERT_LAYOUT_ARCHS)}; this "
+                f"base is model_type {arch!r}. Use stream_expert_layout='fused'."
+            )
 
         on_cuda = str(self.device).startswith("cuda")
         # #385 — ASK THE CARD. bf16 needs Ampere, and a T4 (Colab free), a P100
@@ -868,6 +884,7 @@ class StreamingSetupMixin:
                     quant_device_kind,
                     "qwen4_ple" if arch == "qwen4_exp" else "",
                     stripe_roots=stripe_roots,
+                    expert_layout=expert_layout,
                 )
             cached_bytes = None
             if cached is not None:
@@ -983,6 +1000,7 @@ class StreamingSetupMixin:
                 if arch == "deepseek_v3"
                 else None
             ),
+            expert_layout=expert_layout,
         )
         # R4: decided once, from the roots the index actually carries (a reused cache keeps its
         # own), so the plan's staging figure, the host pre-flight and the reader all agree. Read
@@ -1378,11 +1396,16 @@ class StreamingSetupMixin:
         prediction is demoted to advice instead, because refusing here would
         prevent the measurement that exists to overrule it.
         """
+        from soup_cli.utils.expert_stream import (
+            EXPERT_LAYOUT_PER_EXPERT,
+            expert_stream_vram_bytes,
+        )
         from soup_cli.utils.layer_stream import (
             LOGITS_BYTES_PER_ELEMENT,
             accumulation_advice,
             calibrated_logits_bytes_per_element,
             decide_stream_fit,
+            dtype_bytes,
             estimate_logits_bytes,
             estimate_stream_peak_vram,
             forecast_stream_throughput,
@@ -1398,6 +1421,17 @@ class StreamingSetupMixin:
             if getattr(tcfg, "stream_nf4_scale_cache", False)
             else 0
         )
+        # training.stream_expert_layout='per_expert': the layer buffers above hold
+        # only the dense part (the layer files no longer carry the experts); one
+        # routed expert is in flight at a time on top of them.
+        expert_bytes = 0
+        expert_shapes = getattr(index, "expert_shapes", None)
+        if getattr(index, "expert_layout", "") == EXPERT_LAYOUT_PER_EXPERT and expert_shapes:
+            expert_bytes = expert_stream_vram_bytes(
+                expert_shapes,
+                dtype_bytes=dtype_bytes(index.dtype),
+                quantised=bool(getattr(index, "expert_quant_specs", None)),
+            )
 
         shape_cfg = self._stream_shape_config(model_config)
         vocab = int(getattr(shape_cfg, "vocab_size", 0) or 0)
@@ -1441,7 +1475,7 @@ class StreamingSetupMixin:
             batch_size=rows,
             logits_bytes_per_element=calibrated,
             large_layer_bytes=large_layer_bytes,
-            persistent_bytes=scale_cache_bytes,
+            persistent_bytes=scale_cache_bytes + expert_bytes,
         )
         logits = estimate_logits_bytes(
             vocab_size=vocab, seq_len=seq_len, batch_size=rows, bytes_per_element=calibrated
@@ -1457,6 +1491,11 @@ class StreamingSetupMixin:
             lines.append(
                 f"  scale cache  {scale_cache_bytes / 1e9:.2f} GB resident "
                 "(training.stream_nf4_scale_cache), included above"
+            )
+        if expert_bytes:
+            lines.append(
+                f"  experts      {expert_bytes / 1e9:.3f} GB for the routed expert in flight "
+                "(training.stream_expert_layout='per_expert'), included above"
             )
         if calibrated > LOGITS_BYTES_PER_ELEMENT:
             lines.append(

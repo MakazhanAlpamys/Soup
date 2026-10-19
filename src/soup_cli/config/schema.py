@@ -3714,6 +3714,22 @@ class TrainingConfig(BaseModel):
             "double quantization (the default). Off by default."
         ),
     )
+    stream_expert_layout: Literal["fused", "per_expert"] = Field(
+        default="fused",
+        description=(
+            "How a MoE base's routed experts are streamed. 'fused' (the default) "
+            "keeps each MoE layer's experts inside its layer file, so the largest "
+            "layer bounds the card. 'per_expert' writes them to their own file, one "
+            "pair of matrices per expert (NF4 per matrix under quantization='4bit'), "
+            "and reads an expert only when the router picks it, again in the "
+            "backward: the decoder-layer buffers hold the dense part alone, so the "
+            "VRAM bound no longer grows with the expert count. It is bit-exact "
+            "against transformers' eager experts and reads at least the bytes "
+            "'fused' reads (a step routes to nearly every expert). Admitted for "
+            "DeepSeek-V3-family bases (model_type deepseek_v3); adapters on the "
+            "routed experts (moe_lora) are refused with it."
+        ),
+    )
     stream_disk_kind: Optional[Literal["nvme", "ssd", "hdd"]] = Field(
         default=None,
         description=(
@@ -6761,6 +6777,7 @@ class SoupConfig(BaseModel):
                 or tcfg.stream_vram_override is not None
                 or tcfg.stream_vram_probe
                 or tcfg.stream_nf4_scale_cache
+                or tcfg.stream_expert_layout != "fused"
                 or tcfg.stream_disk_kind is not None
                 or tcfg.stream_pin is not None
             ):
@@ -6768,8 +6785,9 @@ class SoupConfig(BaseModel):
                     "training.stream_source / training.stream_ngram_source / "
                     "training.stream_buffers / training.stream_read_ahead / "
                     "training.stream_vram_override / training.stream_vram_probe "
-                    "/ training.stream_nf4_scale_cache / training.stream_disk_kind "
-                    "/ training.stream_pin set but stream_layers is false; set "
+                    "/ training.stream_nf4_scale_cache / training.stream_expert_layout "
+                    "/ training.stream_disk_kind / training.stream_pin set but "
+                    "stream_layers is false; set "
                     "stream_layers=true to stream the base layer-by-layer."
                 )
             return self
@@ -6785,6 +6803,15 @@ class SoupConfig(BaseModel):
                 f"true); got quantization={tcfg.quantization!r}, "
                 f"bnb_4bit_use_double_quant={tcfg.bnb_4bit_use_double_quant!r}. "
                 "Without them there are no nested NF4 scales to cache."
+            )
+        if tcfg.stream_expert_layout == "per_expert" and tcfg.moe_lora:
+            # Each routed expert is fetched, used and dropped one at a time; an
+            # adapter on it would have nowhere to live between the visits.
+            raise ValueError(
+                "training.stream_expert_layout='per_expert' streams the routed "
+                "experts one at a time and cannot train adapters on them; unset "
+                "training.moe_lora (adapt attention or the shared expert instead) "
+                "or use stream_expert_layout='fused'."
             )
         # #971 — `stream_source: 'ram'` INSISTS on the RAM tier: 'ram' insists,
         # 'disk' forces, 'auto' falls back (trainer/stream_setup.py). The

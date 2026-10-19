@@ -145,6 +145,8 @@ def layer_buffer_keys(arch: str) -> Tuple[str, ...]:
 #: Architectures admitted to ``expert_layout="per_expert"``: each one passed
 #: the resident-vs-streamed parity tests in ``tests/test_expert_stream.py``.
 _PER_EXPERT_LAYOUT_ARCHS = ("deepseek_v3",)
+#: Public name for the trainer's early refusal (``training.stream_expert_layout``).
+PER_EXPERT_LAYOUT_ARCHS = _PER_EXPERT_LAYOUT_ARCHS
 _QWEN4_OQ_EXPERT_RE = re.compile(
     r"^(?P<prefix>model\.layers\.\d+\.mlp)\.switch_mlp\."
     r"(?P<projection>gate_proj|up_proj|down_proj)\.weight$"

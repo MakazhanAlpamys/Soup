@@ -701,6 +701,7 @@ def _drive_qwen4_streaming_setup(
     shard_calls=None,
     load_calls=None,
     trust_remote_code=False,
+    tcfg_overrides=None,
 ):
     """Drive the real `_setup_streaming_transformers()` for a qwen4_exp base.
 
@@ -718,7 +719,8 @@ def _drive_qwen4_streaming_setup(
     (`tests/test_deepseek_v3_streaming.py`); `shard_calls`, when a list, receives
     the keyword arguments of every `shard_checkpoint` call; `load_calls`, when a
     dict, receives the keyword arguments of the tokenizer, config and
-    `build_streamed_model` calls under "tokenizer", "config" and "build".
+    `build_streamed_model` calls under "tokenizer", "config" and "build";
+    `tcfg_overrides`, when a dict, sets extra training-config attributes.
     """
     import sys
     import types
@@ -765,6 +767,8 @@ def _drive_qwen4_streaming_setup(
             alpha_pattern=None,
         ),
     )
+    for name, value in (tcfg_overrides or {}).items():
+        setattr(tcfg, name, value)
     if model_cfg is None:
         model_cfg = types.SimpleNamespace(
             model_type="qwen4_exp",

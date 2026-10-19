@@ -479,16 +479,31 @@ checkpointed step. The fused arm reduces saved-weight VRAM but its backward stil
 dequantises because bitsandbytes exposes no transposed 4-bit GEMM; it is therefore a
 bounded memory/time trade, not a claim that #842's full kernel ceiling is complete.
 
-**Expert-granularity streaming (DeepSeek-V3-family MoE, API/harness only).** For
-admitted DeepSeek-V3 checkpoints with per-expert source weights, `shard_checkpoint(..., expert_layout="per_expert")`
-stores routed experts separately so the runtime fetches one frozen expert at a time
-instead of holding the full routed-expert block in the layer buffer. This is a
-capacity option for unusually large MoE layers; it does not add a CLI or config knob.
-The current harness trains LoRA on attention projections: LoRA on streamed routed
-experts is unsupported, while attention and shared-expert LoRA remain resident. The
-fit planner still estimates the fused layer and does not account for per-expert
-streaming, so its recommendation is not an estimate of this layout's capacity. No
-production throughput claim is made; see the [expert streaming gate](../benchmarks/gate-expert-streaming.md).
+**Expert-granularity streaming (`training.stream_expert_layout: per_expert`, DeepSeek-V3 family).**
+
+What it does:
+- The sharder stores each MoE layer's routed experts in their own file, one pair of matrices per expert, NF4 per matrix under `quantization: 4bit`.
+- The runtime reads an expert only when the router picks it, and again in the backward, so the layer buffers hold just the dense part (attention, norms, router, shared expert).
+- The VRAM bound no longer grows with the expert count.
+
+Measured (records linked below):
+- It matches transformers' eager experts bit for bit, forward and backward ([gate](../benchmarks/gate-expert-streaming.md)).
+- On the 8 GB RTX 5070 Laptop, Moonlight-16B LoRA ran at 1.9 GB of peak VRAM with it, against 4.0 GB with the fused layout ([record](../benchmarks/probe-rtx5070-moonlight-16b.md)).
+
+It buys capacity, not speed:
+- A training step routes to nearly every expert, so this layout reads at least the bytes the fused one reads; Moonlight ran at about half the fused layout's tokens/s.
+- The default stays `fused`.
+
+What the pre-flight counts:
+- the layer buffers, measured from the dense-only layer files;
+- plus one routed expert in flight, shown as an `experts` line.
+
+The disk pre-flight still sizes the cache as the fused layout would, which over-counts an NF4 per-expert cache.
+
+Limits and refusals:
+- **Architecture.** Only `model_type: deepseek_v3` is admitted. Any other base is refused before weights are resolved.
+- **Adapters on routed experts.** `moe_lora` is refused with this layout, because a streamed expert has nowhere to keep an adapter between its visits. Adapt attention or the shared expert instead.
+- **Older Soup versions.** A per-expert cache needs a re-shard to be read by a Soup from before this layout.
 
 **`stream_nf4_scale_cache` (opt-in).** On the dequantise + `F.linear` path, a
 double-quantised NF4 weight expands its 8-bit block scales to fp32 on every visit,
@@ -738,7 +753,8 @@ prints this advice when it sees you accumulating.
 - `unfrozen_parameters`, `lisa_enabled`, `packing`, `multipack`, `use_fsdp2_compile`, `train_router_only`, `expand_layers` → each independently rewrites or re-freezes the same layers
 - `use_cut_ce` is refused with `stream_layers` (#1206): streamed setup does not install the resident CCE patch. Disable CCE to stream with the conservative full-logits budget, or disable streaming to use resident CCE. A tiny local streamed Llama was exercised through sharding, forward/loss and backward on CPU; this is no CUDA memory measurement.
 - `use_liger` / `use_flash_attn` → **not reached at all** under streaming (#1692). Both are read by the *resident* setup: Liger patches the MLP forward there, and flash-attn is handed to `from_pretrained` as `attn_implementation`. A streamed model is built by `from_config` with no attention argument and no Liger patch, and `_liger_applied` is never set, so `use_liger_kernel` misses `TrainingArguments` too. These are the switches you reach for when a streamed run will not fit, so they are refused rather than dropped; each is offered again once it is wired and shown to engage on a streamed model. On every task outside `{sft, tts}` they are already refused at config load (#806)
-- `stream_source` / `stream_ngram_source` / `stream_buffers` / `stream_read_ahead` / `stream_vram_override` / `stream_vram_probe` / `stream_nf4_scale_cache` / `stream_disk_kind` / `stream_pin` set while `stream_layers: false` → a footgun, refused
+- `stream_source` / `stream_ngram_source` / `stream_buffers` / `stream_read_ahead` / `stream_vram_override` / `stream_vram_probe` / `stream_nf4_scale_cache` / `stream_expert_layout` / `stream_disk_kind` / `stream_pin` set while `stream_layers: false` → a footgun, refused
+- `stream_expert_layout: per_expert` with `moe_lora` → refused: a routed expert streamed one at a time has nowhere to keep an adapter. On a base that is not `model_type: deepseek_v3` → refused at setup, before the weights are resolved
 - `stream_nf4_scale_cache` without `quantization: 4bit` and double quantization → refused: there are no nested NF4 scales to cache
 - a non-default `stream_read_ahead` beside `stream_source: ram` → refused. The read-ahead reader belongs to the NVMe disk tier and `ram` never falls back to it, so the setting would validate, be documented, and reach nothing. The default is accepted, because a default is not a decision
 - a disk-tier run whose host staging (`stream_read_ahead` layers, plus one slot each for the embedding and an untied `lm_head`) plus the resident extras will not fit the free-RAM headroom → refused by name, naming the depth to lower. Refused rather than clamped: a depth you set is a decision, and silently lowering it would hand back a slower run than the one you configured
