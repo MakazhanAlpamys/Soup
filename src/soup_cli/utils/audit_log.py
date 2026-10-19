@@ -22,7 +22,7 @@ import re
 import stat
 import tempfile
 from dataclasses import dataclass, replace
-from typing import Optional, Tuple
+from typing import Callable, Optional, Sequence, Tuple
 
 from soup_cli.utils.paths import open_no_follow
 
@@ -42,6 +42,16 @@ _MAX_OPERATOR = 128
 _MAX_ARG_LEN = 1024
 _MAX_ARGS = 256
 _DEFAULT_CAP_BYTES = 100 * 1024 * 1024  # 100 MiB
+
+# Masks the args of one stored line: ``(command, args) -> args``.
+ArgMask = Callable[[str, list], Sequence[str]]
+
+# Lines written by older versions get the same option-name masking as new ones, once.
+# The marker sits next to the log; bump the version to run the pass again.
+_MASK_MARKER_SUFFIX = ".masked-v1"
+_MASK_MAX_LINE_BYTES = 4 * 1024 * 1024  # a longer line is copied through unread
+_MASK_COPY_BLOCK = 1024 * 1024
+_MASK_MAX_ROUNDS = 5  # the first read of the file plus the re-reads for lines added meanwhile
 
 
 @dataclass(frozen=True)
@@ -243,14 +253,166 @@ def default_log_path() -> str:
 _default_log_path = default_log_path
 
 
+def _mask_line(raw: bytes, arg_mask: ArgMask) -> Optional[bytes]:
+    """Return the re-masked form of one stored line, or ``None`` to keep it as it is.
+
+    Only a line that parses as an audit record whose ``args`` change is rebuilt;
+    anything else (blank, malformed, unexpected shape, already masked) stays
+    byte for byte.
+    """
+    body = raw.rstrip(b"\r\n")
+    ending = raw[len(body):]
+    try:
+        record = json.loads(body)
+    except (ValueError, RecursionError):
+        return None
+    if not isinstance(record, dict):
+        return None
+    command = record.get("command")
+    args = record.get("args")
+    if not isinstance(command, str) or not isinstance(args, list):
+        return None
+    if not all(isinstance(arg, str) for arg in args):
+        return None
+    masked = list(arg_mask(command, args))
+    if masked == args:
+        return None
+    record["args"] = masked
+    return json.dumps(record).encode("utf-8") + ending
+
+
+def _copy_head(src, out, count: int) -> None:
+    """Copy the first ``count`` bytes of ``src`` to ``out``; ``src`` keeps its position."""
+    resume = src.tell()
+    src.seek(0)
+    remaining = count
+    while remaining:
+        block = src.read(min(_MASK_COPY_BLOCK, remaining))
+        if not block:
+            raise OSError("audit log shrank while its older lines were being masked")
+        out.write(block)
+        remaining -= len(block)
+    src.seek(resume)
+
+
+def _mask_file_lines(path: str, arg_mask: ArgMask) -> None:
+    """Apply ``arg_mask`` to the args of every line of ``path``, rewriting it only if needed.
+
+    Streams line by line; the replacement is written to a temp file in the same
+    directory and swapped in with ``os.replace``, so the log is either the old
+    file or the complete new one. A missing file or a symlink is skipped. Raises
+    ``OSError`` (file untouched) when the file cannot be read or replaced.
+    """
+    if _check_symlink_at(path):
+        return
+    try:
+        fd = open_no_follow(path, os.O_RDONLY | getattr(os, "O_BINARY", 0))
+    except FileNotFoundError:
+        return
+    parent = os.path.dirname(os.path.abspath(path)) or "."
+    out = None
+    tmp_path = None
+    try:
+        with os.fdopen(fd, "rb") as src:
+            info = os.fstat(src.fileno())
+            if not stat.S_ISREG(info.st_mode):
+                raise OSError(f"{path!r} is not a regular file")
+            if not info.st_mode & stat.S_IWRITE:
+                raise PermissionError(f"{path!r} is read-only; left as it is")
+            offset = 0
+            skipping = False
+            rounds = 0
+            while True:
+                # A round reads up to the size seen at its start. Lines another
+                # process appends meanwhile are picked up by the next round.
+                round_end = os.fstat(src.fileno()).st_size
+                if round_end <= offset:
+                    break
+                rounds += 1
+                if rounds > _MASK_MAX_ROUNDS:
+                    raise OSError("audit log kept growing while its older lines were masked")
+                while offset < round_end:
+                    raw = src.readline(_MASK_MAX_LINE_BYTES)
+                    if not raw:
+                        raise OSError("audit log shrank while its older lines were masked")
+                    whole = raw.endswith(b"\n")
+                    if skipping or (not whole and len(raw) == _MASK_MAX_LINE_BYTES):
+                        new = None
+                        skipping = not whole
+                    else:
+                        new = _mask_line(raw, arg_mask)
+                    if new is not None and out is None:
+                        tmp_fd, tmp_path = tempfile.mkstemp(
+                            dir=parent, prefix=".audit-mask-", suffix=".tmp"
+                        )
+                        out = os.fdopen(tmp_fd, "wb")
+                        _copy_head(src, out, offset)
+                    if out is not None:
+                        out.write(raw if new is None else new)
+                    offset += len(raw)
+        if out is None:
+            return
+        out.flush()
+        os.fsync(out.fileno())
+        out.close()
+        out = None
+        try:
+            os.chmod(tmp_path, stat.S_IMODE(info.st_mode))
+        except OSError as exc:
+            _LOG.debug("audit-log mask: chmod of the temp file failed: %s", exc)
+        os.replace(tmp_path, path)
+        tmp_path = None
+    finally:
+        if out is not None:
+            out.close()
+        if tmp_path is not None:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
+
+def mask_older_lines(path: str, arg_mask: ArgMask) -> bool:
+    """Give the lines already in ``path`` (and ``path.1``) the masking new lines get.
+
+    Lines written by older versions carry option values as typed. ``arg_mask``
+    is the masking applied to new lines; it is run over the ``args`` of every
+    stored line once, then a marker file ``<path>.masked-v1`` is written and
+    later calls return at once. Best-effort: any failure (read-only file, file
+    locked by another process, full disk) leaves the log untouched, writes no
+    marker so the next call tries again, and never raises.
+
+    Returns True when the log is done (marker present), False after a failure.
+    """
+    marker = path + _MASK_MARKER_SUFFIX
+    try:
+        if os.path.exists(marker):
+            return True
+        for name in (path, path + ".1"):
+            _mask_file_lines(name, arg_mask)
+        fd = open_no_follow(marker, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        try:
+            os.write(fd, b"1\n")
+        finally:
+            os.close(fd)
+        return True
+    except Exception as exc:  # noqa: BLE001 — never raise into the command being run
+        _LOG.debug("audit-log mask of older lines failed, will retry: %s", exc)
+        return False
+
+
 def append_audit_event(
     ev: AuditEvent,
     path: Optional[str] = None,
     *,
     cap_bytes: int = _DEFAULT_CAP_BYTES,
     redact: bool = True,
+    arg_mask: Optional[ArgMask] = None,
 ) -> None:
     """Append one audit record to ``path``. Rotates at ``cap_bytes``.
+
+    When ``arg_mask`` is given, lines written by older versions are first
+    brought to the same masking, once (see :func:`mask_older_lines`).
 
     Atomic-ish append: opens with ``O_APPEND | O_CREAT`` (and ``O_NOFOLLOW``
     on POSIX — security review HIGH fix). Concurrent writers can interleave
@@ -272,6 +434,8 @@ def append_audit_event(
         raise ValueError("path must not contain null bytes")
     parent = os.path.dirname(os.path.abspath(target)) or "."
     os.makedirs(parent, exist_ok=True)
+    if arg_mask is not None:
+        mask_older_lines(target, arg_mask)
     # Best-effort rotation before writing the new line.
     rotate_if_needed(target, cap_bytes=cap_bytes)
     line = json.dumps((redact_event(ev) if redact else ev).to_dict()) + "\n"
