@@ -95,3 +95,25 @@ class TestIssue1442SuiteLevel:
         """Last explicit commitment wins: a scratch ``**A**`` followed by a
         self-corrected ``\\boxed{B}`` reads B, not A."""
         assert extract_mcq_letter("first guess **A** ... on reflection \\boxed{B}") == "B"
+
+
+class TestIssue1442OrderingAndAnchor:
+    """Pin the two behaviours the comments promise but the table above only
+    exercises in one direction: a wrapped letter joins the last-wins tier
+    (so it can override an earlier cue or box, and the later of two wrapped
+    letters wins), and the leading form is anchored to the start (so a stray
+    ``B is`` mid-prose is not read as an answer)."""
+
+    def test_wrapped_letter_after_an_earlier_cue_wins(self):
+        assert extract_mcq_letter("Answer: A. On reflection, **B**") == "B"
+        assert score_answer("Answer: A. On reflection, **B**", "B") is True
+
+    def test_wrapped_letter_after_an_earlier_boxed_wins(self):
+        assert extract_mcq_letter(r"\boxed{A} ... on reflection **B**") == "B"
+
+    def test_the_later_of_two_wrapped_letters_wins(self):
+        assert extract_mcq_letter("first **A**, final **B**") == "B"
+
+    def test_leading_form_is_anchored_to_the_start(self):
+        assert extract_mcq_letter("Statement B is false") is None
+        assert extract_mcq_letter("Statement B - false") is None
