@@ -305,9 +305,8 @@ def _build_hardware_fit_input(cfg):
     ``"auto"``, unknown model size, unsupported quant, out-of-range dims), in
     which case the caller skips the gate rather than guess.
     """
-    from soup_cli.trainer.sft import is_full_finetune
     from soup_cli.utils.gpu import model_size_from_name
-    from soup_cli.utils.hardware_fit import HardwareFitInput
+    from soup_cli.utils.hardware_fit import HardwareFitInput, resolve_peft_mode
 
     tcfg = cfg.training
     bs = getattr(tcfg, "batch_size", None)
@@ -322,41 +321,7 @@ def _build_hardware_fit_input(cfg):
     quant = _HW_FIT_QUANT.get(str(getattr(tcfg, "quantization", "none") or "none"))
     if quant is None:
         return None
-    task = getattr(cfg, "task", None)
-    if quant == "4bit":
-        peft = "qlora"
-    elif task == "prm" or (
-        task in CLASSIFICATION_TASKS
-        and not (tcfg.classifier_lora and tcfg.lora.r > 0)
-    ) or (task == "asr" and not (tcfg.asr_lora and tcfg.lora.r > 0)):
-        # #795: these trainers decide full fine-tuning themselves -- PRM always,
-        # the classifier family and ASR unless their own LoRA opt-in is on
-        # (classifier.py:262, asr.py::_should_use_lora). Budgeting them as LoRA
-        # under-predicts, the unsafe direction.
-        peft = "full"
-    elif is_full_finetune(tcfg):
-        # #471 — was an independent, hand-maintained check
-        # (unfrozen_parameters / freeze_layers / freeze_ratio) that had
-        # drifted from sft.py's real full-FT decision in BOTH directions:
-        # it missed lisa_enabled/lora.r==0 (under-predicting VRAM for those
-        # runs) and treated bare freeze_layers/freeze_ratio as sufficient on
-        # its own even with lora.r>0 still on (over-predicting — and able to
-        # falsely refuse a launch that would fit, since freeze_layers/
-        # freeze_ratio only reduce what's trainable WITHIN LoRA or full-FT,
-        # they don't select the mode). Now shares is_full_finetune with
-        # sft.py's SFTTrainerWrapper._resolve_load_dtype so the two cannot
-        # disagree again.
-        #
-        # #377 — lisa_train_embeddings=false freezes the always-on group and
-        # lowers real VRAM, but LISA stays "full" here on purpose: the analytical
-        # predictor has no measured constant for the frozen-embeddings trainable
-        # set, and over-predicting is the safe failure (under-predicting is a
-        # silent WDDM spill on Windows). A frozen-embeddings run that would fit
-        # can therefore still be refused by pre-flight; --allow-oom-attempt is
-        # the documented bypass, and crediting the saving is a hardware follow-up.
-        peft = "full"
-    else:
-        peft = "lora"
+    peft = resolve_peft_mode(cfg, quant=quant)
     optimizer = str(getattr(tcfg, "optimizer", "adamw_torch") or "adamw_torch")
     if optimizer not in _HW_FIT_OPTIMIZERS:
         optimizer = "adamw_torch"
