@@ -6951,6 +6951,13 @@ class SoupConfig(BaseModel):
                 f"initialise the adapter from an SVD of the base weight, which "
                 f"is on the meta device under streaming."
             )
+        if tcfg.use_cut_ce:
+            raise ValueError(
+                "training.stream_layers cannot be combined with training.use_cut_ce: "
+                "the streamed setup never installs the resident Cut Cross-Entropy patch. "
+                "Set use_cut_ce=false to stream with the conservative logits budget, "
+                "or disable stream_layers to use resident CCE."
+            )
         conflicts = []
         if tcfg.unfrozen_parameters:
             conflicts.append("unfrozen_parameters")
@@ -6984,8 +6991,8 @@ class SoupConfig(BaseModel):
         # set there either, so `use_liger_kernel` misses `TrainingArguments` as
         # well. These are the switches a user reaches for when a streamed run will
         # not fit, so silently dropping them is the worst outcome: refuse until
-        # each is wired and shown to engage on a streamed model. (`use_cut_ce` has
-        # the same shape and is #1206.)
+        # each is wired and shown to engage on a streamed model.
+        # CCE is refused separately above (#1206).
         if tcfg.use_liger:
             conflicts.append("use_liger")
         if tcfg.use_flash_attn:

@@ -285,7 +285,7 @@ training:
   use_cut_ce: true   # Patches the CE kernel before model load
 ```
 
-Architecture detection reads `config.model_type` first, so a local checkpoint directory (`soup merge`/`soup shrink`/`soup draft distill` output) is patched the same as a hub id; a name-based match on the last path component (`meta-llama/Llama-3.1-8B` → llama patcher) is the fallback when config resolution is unavailable. Saves 8-24 GB VRAM at common batch × seq shapes. Not compatible with unsloth (own CE kernel) or mlx. Wired across every transformer-backend trainer (SFT, DPO, GRPO, KTO, ORPO, SimPO, IPO, PPO, Reward-Model, Embedding, Pretrain) — note that PPO has its own forward loop so cut_ce no-ops gracefully there.
+Architecture detection reads `config.model_type` first, so a local checkpoint directory (`soup merge`/`soup shrink`/`soup draft distill` output) is patched the same as a hub id; a name-based match on the last path component (`meta-llama/Llama-3.1-8B` → llama patcher) is the fallback when config resolution is unavailable. Saves 8-24 GB VRAM at common batch × seq shapes. Not compatible with unsloth (own CE kernel), mlx or layer streaming. Wired across every transformer-backend trainer (SFT, DPO, GRPO, KTO, ORPO, SimPO, IPO, PPO, Reward-Model, Embedding, Pretrain) — note that PPO has its own forward loop so cut_ce no-ops gracefully there.
 
 
 ## Gradient Checkpointing Tiers
@@ -736,6 +736,7 @@ prints this advice when it sees you accumulating.
 - `lora.use_dora` / `lora.use_vera` / `lora.init_strategy` other than `random` → these initialise from the real base weight, which is on the meta device under streaming
 - `moe_expert_quant` → expert quantization runs only in the resident model-construction path and would otherwise be silently ignored
 - `unfrozen_parameters`, `lisa_enabled`, `packing`, `multipack`, `use_fsdp2_compile`, `train_router_only`, `expand_layers` → each independently rewrites or re-freezes the same layers
+- `use_cut_ce` is refused with `stream_layers` (#1206): streamed setup does not install the resident CCE patch. Disable CCE to stream with the conservative full-logits budget, or disable streaming to use resident CCE. A tiny local streamed Llama was exercised through sharding, forward/loss and backward on CPU; this is no CUDA memory measurement.
 - `use_liger` / `use_flash_attn` → **not reached at all** under streaming (#1692). Both are read by the *resident* setup: Liger patches the MLP forward there, and flash-attn is handed to `from_pretrained` as `attn_implementation`. A streamed model is built by `from_config` with no attention argument and no Liger patch, and `_liger_applied` is never set, so `use_liger_kernel` misses `TrainingArguments` too. These are the switches you reach for when a streamed run will not fit, so they are refused rather than dropped; each is offered again once it is wired and shown to engage on a streamed model. On every task outside `{sft, tts}` they are already refused at config load (#806)
 - `stream_source` / `stream_ngram_source` / `stream_buffers` / `stream_read_ahead` / `stream_vram_override` / `stream_vram_probe` / `stream_nf4_scale_cache` / `stream_disk_kind` / `stream_pin` set while `stream_layers: false` → a footgun, refused
 - `stream_nf4_scale_cache` without `quantization: 4bit` and double quantization → refused: there are no nested NF4 scales to cache
