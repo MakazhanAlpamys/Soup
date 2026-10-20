@@ -410,8 +410,13 @@ class TestMlxOptimizer:
             lambda step: scheds[-1](step)
         )
         mlx_root = types.ModuleType("mlx")
+        mlx_root.__path__ = []  # a package, so `import mlx.core` resolves below
+        # #1850: train() seeds mx.random before attaching LoRA.
+        core_mod = types.ModuleType("mlx.core")
+        core_mod.random = types.SimpleNamespace(seed=lambda _seed: None)
 
         monkeypatch.setitem(sys.modules, "mlx", mlx_root)
+        monkeypatch.setitem(sys.modules, "mlx.core", core_mod)
         monkeypatch.setitem(sys.modules, "mlx.optimizers", opt_mod)
         monkeypatch.setitem(sys.modules, "mlx_lm", mlx_lm_mod)
         monkeypatch.setitem(sys.modules, "mlx_lm.tuner", tuner_mod)
