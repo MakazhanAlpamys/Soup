@@ -12,6 +12,7 @@ from typer.testing import CliRunner
 
 from soup_cli.cli import app
 from soup_cli.mcp_server.registry import tool_profile
+from tests.conftest import strip_ansi
 
 BASE_MODEL = "meta-llama/Llama-3.1-8B"
 
@@ -184,8 +185,9 @@ class TestProfileFullFinetune:
         runner = CliRunner()
         result = runner.invoke(app, ["profile", "--config", str(cfg_file), "--gpu", "rtx4090"])
         assert result.exit_code == 0
-        assert "full fine-tuning" in result.output
-        assert "Fits in 24 GB VRAM" not in result.output
+        plain = strip_ansi(result.output)
+        assert "full fine-tuning" in plain
+        assert "Fits in 24 GB VRAM" not in plain
 
     def test_cli_rendering_lora_control_unchanged(self, tmp_path: Path) -> None:
         cfg_file = tmp_path / "lora_control.yaml"
@@ -194,8 +196,9 @@ class TestProfileFullFinetune:
         runner = CliRunner()
         result = runner.invoke(app, ["profile", "--config", str(cfg_file), "--gpu", "rtx4090"])
         assert result.exit_code == 0
-        assert "with LoRA r=16" in result.output
-        assert "Fits in 24 GB VRAM" in result.output
+        plain = strip_ansi(result.output)
+        assert "with LoRA r=16" in plain
+        assert "Fits in 24 GB VRAM" in plain
 
     def test_mutation_check_reverting_peft_to_lora_only_fails(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
