@@ -44,6 +44,9 @@ FP8_BLOCK_ARCHS = ("deepseek_v3",)
 _CONFIG_LIMIT = 16 * 1024 * 1024
 #: Longest rendering of an untrusted value (a config entry, a shape) in a message.
 _BRIEF_LIMIT = 80
+#: Largest ``weight_block_size`` axis accepted. Published checkpoints use 128; a value past
+#: this is refused by name rather than carried into the index arithmetic.
+_MAX_BLOCK_SIZE = 2**20
 #: fp32 elements one dequantisation band works on (16 MiB of product, about as much of
 #: expanded scales). The output is preallocated at the stream dtype, so a tensor costs its
 #: output plus one band, whatever its size.
@@ -128,10 +131,14 @@ def fp8_block_size(quantization_config: Any, *, arch: str) -> Optional[Tuple[int
     if (
         not isinstance(block, (list, tuple))
         or len(block) != 2
-        or any(isinstance(dim, bool) or not isinstance(dim, int) or dim < 1 for dim in block)
+        or any(
+            isinstance(dim, bool) or not isinstance(dim, int) or not 1 <= dim <= _MAX_BLOCK_SIZE
+            for dim in block
+        )
     ):
         raise _refuse(
-            f"config.json weight_block_size must be two positive ints; got {_brief(block)}"
+            f"config.json weight_block_size must be two positive ints of at most "
+            f"{_MAX_BLOCK_SIZE}; got {_brief(block)}"
         )
     fmt = _setting(quant.get("fmt"))
     if fmt is not None and fmt != "e4m3":

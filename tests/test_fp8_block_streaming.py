@@ -262,6 +262,65 @@ def test_an_unsupported_fp8_config_is_refused_naming_the_format(spelling):
     assert _SUPPORTED_TAIL in str(caught.value)
 
 
+@pytest.mark.parametrize(
+    ("block", "accepted"),
+    [
+        ([2**20, 2**20], True),
+        ([2**20 + 1, 128], False),
+        ([128, 2**20 + 1], False),
+        ([2**63, 128], False),
+        ([2**63, 2**63], False),
+        ([2**80, 2**80], False),
+    ],
+    ids=["at-cap", "rows-over", "cols-over", "rows-2^63", "both-2^63", "both-2^80"],
+)
+def test_weight_block_size_is_refused_past_its_range(block, accepted):
+    from soup_cli.utils.fp8_block import UnsupportedFP8Error, fp8_block_size
+
+    config = {**DEEPSEEK_FP8, "weight_block_size": block}
+    if accepted:
+        assert fp8_block_size(config, arch="deepseek_v3") == tuple(block)
+        return
+    with pytest.raises(UnsupportedFP8Error) as caught:
+        fp8_block_size(config, arch="deepseek_v3")
+    assert "two positive ints of at most 1048576" in str(caught.value)
+    assert _SUPPORTED_TAIL in str(caught.value)
+
+
+def test_an_out_of_range_block_is_refused_alike_by_plan_estimator_sharder_and_setup(
+    tmp_path, monkeypatch
+):
+    """One check: every entry point refuses it in the same words, before a header is read."""
+    from soup_cli.utils.fp8_block import UnsupportedFP8Error, fp8_block_size, plan_fp8_block
+    from soup_cli.utils.layer_shard import estimate_shard_cache_bytes, shard_checkpoint
+    from tests.test_issue602_qwen4_ple_streaming import _drive_qwen4_streaming_setup
+
+    config = {**DEEPSEEK_FP8, "weight_block_size": [2**63, 2**63]}
+    with pytest.raises(UnsupportedFP8Error) as direct:
+        fp8_block_size(config, arch="deepseek_v3")
+    with pytest.raises(UnsupportedFP8Error) as planned:
+        plan_fp8_block(config, _header_tensors(), arch="deepseek_v3")
+    with pytest.raises(UnsupportedFP8Error) as estimated:
+        estimate_shard_cache_bytes(
+            [str(tmp_path / "gone.safetensors")], dtype="bfloat16", arch="deepseek_v3",
+            quantization_config=config,
+        )
+    weights = _corrupt_checkpoint_with_config(tmp_path / "w", config)
+    with pytest.raises(UnsupportedFP8Error) as sharded:
+        shard_checkpoint(weights, str(tmp_path / "s"), dtype="bfloat16", arch="deepseek_v3")
+
+    def _must_not_resolve(*_args, **_kwargs):
+        raise AssertionError("weights resolved for a base that cannot stream")
+
+    with pytest.raises(UnsupportedFP8Error) as setup:
+        _drive_qwen4_streaming_setup(
+            tmp_path, monkeypatch, resolve_weights=_must_not_resolve, arch="deepseek_v3",
+            model_cfg=_fp8_setup_cfg(config),
+        )
+    messages = {str(caught.value) for caught in (direct, planned, estimated, sharded, setup)}
+    assert len(messages) == 1
+
+
 @pytest.mark.parametrize("arch", ["llama", "qwen3", "qwen4_exp", ""])
 def test_an_fp8_base_on_another_architecture_is_refused(arch):
     from soup_cli.utils.fp8_block import UnsupportedFP8Error, fp8_block_size
@@ -683,11 +742,8 @@ def test_the_estimate_refuses_an_fp8_config_spelling_before_reading_a_header(tmp
         (b'{"quantization_config": "fp8"}', None),
         (b'{"model_type": "deepseek_v3"}', None),
         (b'{"quantization_config": {"quant_method": "fp8"}}', {"quant_method": "fp8"}),
-        (b'{"quantization_config": {"quant_method": "fp8", "n": ' + b"[" * 5000 + b"]" * 5000
-         + b"}}", None),
     ],
-    ids=["missing", "empty", "not-json", "not-object", "not-mapping", "absent", "fp8",
-         "too-deep"],
+    ids=["missing", "empty", "not-json", "not-object", "not-mapping", "absent", "fp8"],
 )
 def test_the_checkpoint_config_is_read_bounded(tmp_path, content, expected):
     from soup_cli.utils.fp8_block import read_checkpoint_quantization_config
@@ -695,6 +751,21 @@ def test_the_checkpoint_config_is_read_bounded(tmp_path, content, expected):
     if content is not None:
         (tmp_path / "config.json").write_bytes(content)
     assert read_checkpoint_quantization_config(str(tmp_path)) == expected
+
+
+def test_a_config_too_deep_to_parse_is_not_read(tmp_path, monkeypatch):
+    """``json`` raises RecursionError past the interpreter's nesting limit, and where that
+    limit falls differs between builds (5,000 levels raise on Windows CPython 3.12.10 and
+    parse on Linux 3.12.15), so the error is raised here directly rather than by depth."""
+    import soup_cli.utils.fp8_block as fp8_block
+
+    (tmp_path / "config.json").write_bytes(b'{"quantization_config": {"quant_method": "fp8"}}')
+
+    def _too_deep(_handle):
+        raise RecursionError("maximum recursion depth exceeded while decoding a JSON array")
+
+    monkeypatch.setattr(fp8_block, "json", types.SimpleNamespace(load=_too_deep))
+    assert fp8_block.read_checkpoint_quantization_config(str(tmp_path)) is None
 
 
 def test_an_oversized_config_is_not_read(tmp_path, monkeypatch):
@@ -1252,7 +1323,7 @@ def test_an_fp8_source_with_a_huge_block_size_shards_exactly(tmp_path):
     from soup_cli.utils.layer_shard import layer_paths
 
     state, linears = _synthetic_state()
-    huge = (2**26, 2**26)
+    huge = (2**20, 2**20)  # the largest weight_block_size accepted
     fp8_state = _to_fp8(state, linears, block=huge)
     assert all(tuple(fp8_state[key + "_scale_inv"].shape) == (1, 1) for key in linears)
     fp8 = _write(tmp_path / "fp8", fp8_state, block=huge)
