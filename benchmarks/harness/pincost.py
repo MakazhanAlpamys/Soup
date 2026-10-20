@@ -231,6 +231,8 @@ def run_correctness(
         for name, parameter in reference.named_parameters()
         if "lora_" in name and parameter.grad is not None
     }
+    if not reference_grads:
+        raise RuntimeError(f"pin={pin} reference produced zero LoRA gradients")
     for name, parameter in reference.named_parameters():
         if parameter.grad is not None and not torch.isfinite(parameter.grad).all():
             raise RuntimeError(f"pin={pin} reference gradient is non-finite: {name}")

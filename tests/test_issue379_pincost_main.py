@@ -267,3 +267,21 @@ def test_correctness_rejects_empty_canonical_intersection():
     reference.register_parameter("reference_only", nn.Parameter(torch.ones(1)))
     with pytest.raises(ValueError, match="no canonical parameter name is shared"):
         pincost.run_correctness(streamed, reference, torch.ones(1), pin=True)
+
+
+def test_no_lora_gradient_on_either_side_is_refused(monkeypatch, capsys, tmp_path):
+    """0/0 compared gradients is not a correct arm: nothing was checked."""
+    original_init = _Toy.__init__
+
+    def init(self, scenario, clock, *, pin=None):
+        original_init(self, scenario, clock, pin=pin)
+        for name, parameter in self.named_parameters():
+            if "lora_" in name:
+                parameter.requires_grad_(False)
+        self.head.requires_grad_(True)
+
+    monkeypatch.setattr(_Toy, "__init__", init)
+    code, out = _run(monkeypatch, capsys, tmp_path, "cost")
+    assert code == 1, out
+    assert "produced zero LoRA gradients" in out
+    assert "RESULT:" not in out
