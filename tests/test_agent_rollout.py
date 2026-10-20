@@ -21,3 +21,12 @@ def test_ruler_probe_is_not_satisfied_by_an_unrelated_ruler_module(monkeypatch):
     monkeypatch.setattr(agent_rollout, "_spec_exists", lambda name: name == "ruler")
     with pytest.raises(ImportError, match="openpipe-art"):
         agent_rollout.launch_rollout("ruler", prompts=["x"])
+
+
+def test_ruler_with_openpipe_art_installed_reaches_the_beta_gate(monkeypatch):
+    monkeypatch.setattr(agent_rollout, "_spec_exists", lambda name: name == "art")
+    with pytest.raises(RuntimeError) as excinfo:
+        agent_rollout.launch_rollout("ruler", prompts=["x"])
+    message = str(excinfo.value)
+    assert "openpipe-art" in message
+    assert "not yet validated" in message
