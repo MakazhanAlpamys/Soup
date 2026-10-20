@@ -871,7 +871,11 @@ class TestOnlySftReadsModality:
 
         from soup_cli.config.loader import load_config_from_string
 
-        fmt = {"text": "alpaca", "vision": "llava", "audio": "audio"}[modality]
+        fmt = {
+            "text": "alpaca",
+            "vision": "dpo" if task == "dpo" else "llava",
+            "audio": "audio",
+        }[modality]
         fmt = {"asr": "asr", "classifier": "auto", "reranker": "auto",
                "cross_encoder": "auto"}.get(task, fmt)
         raw = {

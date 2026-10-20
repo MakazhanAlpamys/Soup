@@ -7142,6 +7142,18 @@ class SoupConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def _validate_vision_preference_format(self) -> "SoupConfig":
+        """Refuse vision row formats for preference tasks until they have a row path."""
+        preference_tasks = {"dpo", "ipo", "simpo", "orpo", "bco", "preference"}
+        vision_preference_formats = {"llava", "sharegpt4v"}
+        if self.task in preference_tasks and self.data.format in vision_preference_formats:
+            raise ValueError(
+                f"task={self.task!r} with data.format={self.data.format!r} has no "
+                "vision-preference row path; use a text preference format instead."
+            )
+        return self
+
+    @model_validator(mode="after")
     def _validate_online_dpo_compat(self) -> "SoupConfig":
         """v0.71.31 — Online DPO gate.
 
