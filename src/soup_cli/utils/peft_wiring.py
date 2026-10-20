@@ -86,6 +86,20 @@ _DEEPSEEK_V3_ATTENTION = (
     "o_proj",
 )
 
+#: The same attention when the checkpoint has no low-rank query. DeepSeek-V3's MLA
+#: builds ONE of two query paths, picked by the config: ``q_proj`` when
+#: ``q_lora_rank`` is ``None``, ``q_a_proj -> q_a_layernorm -> q_b_proj`` otherwise
+#: (``DeepseekV3Attention``, transformers 5.17). Moonlight-16B-A3B ships
+#: ``q_lora_rank: null``. peft refuses an attach only when NO target matches, so
+#: there the tuple above attached on its kv/o names and silently left the whole
+#: query path without an adapter.
+_DEEPSEEK_V3_ATTENTION_FULL_RANK_QUERY = (
+    "q_proj",
+    "kv_a_proj_with_mqa",
+    "kv_b_proj",
+    "o_proj",
+)
+
 MOE_TEXT_LORA_TARGETS: dict[str, Any] = {
     "qwen3_moe": ("q_proj", "k_proj", "v_proj", "o_proj"),
     # GLM-4.6 (``zai-org/GLM-4.6``, 92 layers). Ordinary attention, the same
@@ -167,6 +181,60 @@ MOE_TEXT_LORA_TARGETS: dict[str, Any] = {
     # 0 in the vision tower (#1395).
     "mistral3": r".*language_model\..*\.self_attn\.(q_proj|k_proj|v_proj|o_proj)",
 }
+
+#: What replaces a :data:`MOE_TEXT_LORA_TARGETS` entry when the base's (text)
+#: config sets ``q_lora_rank`` to ``None`` -- only for the types whose attention is
+#: ``DeepseekV3Attention`` and so has that split:
+#:
+#: - ``deepseek_v3``: the class itself (Moonlight-16B-A3B).
+#: - ``kimi_k2``: Kimi-K2 checkpoints declare ``DeepseekV3ForCausalLM``, and
+#:   transformers' own ``Kimi_K25Config`` rewrites a ``kimi_k2`` text config to
+#:   ``deepseek_v3``. Every shipped Kimi-K2 config sets 1536, so this row is for a
+#:   checkpoint that does not.
+#: - ``kimi_k25``: the same text tower inside a vision-language wrapper whose
+#:   ``vision_tower`` has its own ``q_proj`` (measured on a tiny real model), so a
+#:   bare suffix would adapt the image encoder. The language tower is named, as
+#:   for ``minimax_m3_vl``. Kimi K2.5 / K2.6 as shipped set 1536 too.
+#:
+#: ``glm_moe_dsa`` is absent on purpose: ``GlmMoeDsaConfig`` refuses
+#: ``q_lora_rank: None`` at construction, and its DSA indexer and forward use
+#: ``q_a_proj`` unconditionally, so no GLM-5 base has a ``q_proj`` to adapt.
+MLA_FULL_RANK_QUERY_TARGETS: dict[str, Any] = {
+    "deepseek_v3": _DEEPSEEK_V3_ATTENTION_FULL_RANK_QUERY,
+    "kimi_k2": _DEEPSEEK_V3_ATTENTION_FULL_RANK_QUERY,
+    "kimi_k25": r".*language_model\..*\.self_attn\.(q_proj|kv_a_proj_with_mqa|kv_b_proj|o_proj)",
+}
+
+#: ``getattr`` default telling "the config has no ``q_lora_rank``" from ``None``.
+_ABSENT = object()
+
+
+def _q_lora_rank(model: Any) -> Any:
+    """``q_lora_rank`` of the config the attention is built from, or ``_ABSENT``.
+
+    The text config first, because a wrapper (``kimi_k25``) keeps the MLA fields
+    there; then the config itself, where a text-only base keeps them. ``model`` may
+    be the config: ``stream_setup`` resolves from the bare ``AutoConfig``. A config
+    without the field is ``_ABSENT``, never ``None`` -- guessing a layout from a
+    missing field would swap a list that matches for one that may not.
+    """
+    config = getattr(model, "config", model)
+    for candidate in (getattr(config, "text_config", None), config):
+        if candidate is None:
+            continue
+        value = getattr(candidate, "q_lora_rank", _ABSENT)
+        if value is not _ABSENT:
+            return value
+    return _ABSENT
+
+
+def _moe_table_entry(model_type: str, model: Any) -> Any:
+    """The table entry for ``model_type``, for THIS checkpoint's MLA query path."""
+    full_rank = MLA_FULL_RANK_QUERY_TARGETS.get(model_type)
+    if full_rank is not None and _q_lora_rank(model) is None:
+        return full_rank
+    return MOE_TEXT_LORA_TARGETS[model_type]
+
 
 #: Entries of :data:`MOE_TEXT_LORA_TARGETS` that cover only PART of the decoder,
 #: each with what is left unadapted. A declared table rather than a branch in the
@@ -320,6 +388,10 @@ def resolve_lora_target_modules(model: Any, configured: Any, console: Any = None
     inspect both configs without importing Transformers or PEFT at module load.
     Qwen4-Exp's causal-LM loader exposes ``qwen4_exp_text`` directly.
 
+    On DeepSeek-V3-style MLA the entry also follows the config's ``q_lora_rank``
+    (:data:`MLA_FULL_RANK_QUERY_TARGETS`): ``None`` means the base has ``q_proj``
+    and no ``q_a_proj`` / ``q_b_proj``.
+
     An architecture neither Soup nor peft maps returns :class:`UnmappedTargets`
     rather than raising; :func:`build_lora_config` decides, once a ``moe_lora``
     override and ``target_parameters`` have had their chance (#1070).
@@ -348,10 +420,15 @@ def resolve_lora_target_modules(model: Any, configured: Any, console: Any = None
     for value in (getattr(getattr(model, "config", model), "model_type", None),):
         if value in MOE_TEXT_LORA_TARGETS:
             _note_partial_coverage(value, model, console)
-            return _as_targets(MOE_TEXT_LORA_TARGETS[value])
+            return _as_targets(_moe_table_entry(value, model))
     for value in sorted(str(v) for v in model_types if v is not None):
         if value in MOE_TEXT_LORA_TARGETS:
             _note_partial_coverage(value, model, console)
+            # Only a text config gets here, inside a wrapper with no row of its
+            # own. The table's MLA names exist only in a text tower, but a bare
+            # ``q_proj`` can also name a vision tower's projection (Kimi K2.5's
+            # has one), so the ``q_lora_rank`` rule needs a row that scopes it
+            # and is not applied here.
             return _as_targets(MOE_TEXT_LORA_TARGETS[value])
 
     named = sorted(value for value in model_types if isinstance(value, str))

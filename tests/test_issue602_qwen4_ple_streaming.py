@@ -704,6 +704,7 @@ def _drive_qwen4_streaming_setup(
     tcfg_overrides=None,
     disk_kind="ssd",
     disk_calls=None,
+    resolve_targets=None,
 ):
     """Drive the real `_setup_streaming_transformers()` for a qwen4_exp base.
 
@@ -724,7 +725,11 @@ def _drive_qwen4_streaming_setup(
     `build_streamed_model` calls under "tokenizer", "config" and "build";
     `tcfg_overrides`, when a dict, sets extra training-config attributes;
     `disk_kind` is what the stubbed `resolve_disk_kind` reports; `disk_calls`,
-    when a list, receives the (path, override) of every call to it.
+    when a list, receives the (path, override) of every call to it;
+    `resolve_targets` replaces the `resolve_lora_target_modules` stub (which
+    answers `["q_proj"]` whatever it is given), so a test about target
+    resolution can hand the setup the real resolver
+    (`tests/test_mla_lora_targets.py`).
     """
     import sys
     import types
@@ -887,7 +892,7 @@ def _drive_qwen4_streaming_setup(
     )
     monkeypatch.setattr(
         "soup_cli.utils.peft_wiring.resolve_lora_target_modules",
-        lambda *_a, **_k: ["q_proj"],
+        resolve_targets or (lambda *_a, **_k: ["q_proj"]),
     )
     monkeypatch.setattr(
         "soup_cli.utils.layer_stream_runtime.build_streamed_model",
