@@ -16,6 +16,8 @@ None of that changes here. The command now prints it at startup, and the
 
 from __future__ import annotations
 
+import inspect
+import re
 from io import StringIO
 
 import pytest
@@ -188,3 +190,20 @@ class TestHostHelp:
         assert "Any other host needs --tool-auth-token" in out
         assert "checked on the tool, thumbs and adapter routes only" in out
         assert "should be paired with" not in out
+
+
+class TestToolAuthTokenHelp:
+    def test_help_names_every_tool_route_the_token_gates(self, monkeypatch):
+        monkeypatch.setenv("COLUMNS", "200")
+        # Read the routes off the source so a fourth tool route cannot slip past; the
+        # floor keeps a changed decorator spelling from turning the loop into a no-op.
+        routes = re.findall(r'@app\.post\("(/v1/tools/[a-z_]+)"', inspect.getsource(serve_cmd))
+        assert {"/v1/tools/python", "/v1/tools/bash", "/v1/tools/web_search"} <= set(routes)
+
+        result = runner.invoke(app, ["serve", "--help"])
+
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        out = _plain(result.output.replace("│", " "))
+        for route in routes:
+            assert route in out, f"{route} is gated by --tool-auth-token but not in --help"
+        assert "(/v1/tools/python, /v1/tools/bash, /v1/tools/web_search)" in out

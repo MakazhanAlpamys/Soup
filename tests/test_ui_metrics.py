@@ -5,6 +5,8 @@ from unittest.mock import patch
 
 import pytest
 
+from tests.ui_helpers import ui_client
+
 
 def _auth_headers():
     """Return auth headers with the current UI token."""
@@ -17,10 +19,7 @@ class TestMetricsFullFields:
 
     def test_metrics_includes_grad_norm(self, tmp_path):
         """Metrics should include grad_norm field."""
-        try:
-            from fastapi.testclient import TestClient
-        except ImportError:
-            pytest.skip("FastAPI not installed")
+        pytest.importorskip("fastapi")
 
         db_path = tmp_path / "test.db"
         with patch.dict(os.environ, {"SOUP_DB_PATH": str(db_path)}):
@@ -40,7 +39,7 @@ class TestMetricsFullFields:
             )
             tracker.close()
 
-            client = TestClient(create_app())
+            client = ui_client(create_app())
             response = client.get(
                 f"/api/runs/{run_id}/metrics", headers=_auth_headers()
             )
@@ -54,10 +53,7 @@ class TestMetricsFullFields:
 
     def test_metrics_includes_epoch(self, tmp_path):
         """Metrics should include epoch field."""
-        try:
-            from fastapi.testclient import TestClient
-        except ImportError:
-            pytest.skip("FastAPI not installed")
+        pytest.importorskip("fastapi")
 
         db_path = tmp_path / "test.db"
         with patch.dict(os.environ, {"SOUP_DB_PATH": str(db_path)}):
@@ -74,7 +70,7 @@ class TestMetricsFullFields:
             tracker.log_metrics(run_id, step=10, epoch=1.5, loss=2.0, lr=1e-5)
             tracker.close()
 
-            client = TestClient(create_app())
+            client = ui_client(create_app())
             response = client.get(
                 f"/api/runs/{run_id}/metrics", headers=_auth_headers()
             )
@@ -100,10 +96,7 @@ class TestRunsCompareEndpoint:
 
     def test_compare_returns_metrics(self, tmp_path):
         """Compare endpoint should return metrics for multiple runs."""
-        try:
-            from fastapi.testclient import TestClient
-        except ImportError:
-            pytest.skip("FastAPI not installed")
+        pytest.importorskip("fastapi")
 
         db_path = tmp_path / "test.db"
         with patch.dict(os.environ, {"SOUP_DB_PATH": str(db_path)}):
@@ -125,7 +118,7 @@ class TestRunsCompareEndpoint:
             tracker.log_metrics(run2, step=10, loss=1.8, lr=5e-6)
             tracker.close()
 
-            client = TestClient(create_app())
+            client = ui_client(create_app())
             response = client.get(
                 f"/api/runs/compare?ids={run1},{run2}", headers=_auth_headers()
             )
@@ -140,16 +133,13 @@ class TestRunsCompareEndpoint:
 
     def test_compare_rejects_too_many_runs(self, tmp_path):
         """Compare endpoint should reject >5 runs."""
-        try:
-            from fastapi.testclient import TestClient
-        except ImportError:
-            pytest.skip("FastAPI not installed")
+        pytest.importorskip("fastapi")
 
         db_path = tmp_path / "test.db"
         with patch.dict(os.environ, {"SOUP_DB_PATH": str(db_path)}):
             from soup_cli.ui.app import create_app
 
-            client = TestClient(create_app())
+            client = ui_client(create_app())
             ids = ",".join([f"run_{i}" for i in range(6)])
             response = client.get(
                 f"/api/runs/compare?ids={ids}", headers=_auth_headers()
@@ -158,16 +148,13 @@ class TestRunsCompareEndpoint:
 
     def test_compare_validates_run_ids(self, tmp_path):
         """Compare endpoint returns entries for nonexistent runs (empty metrics)."""
-        try:
-            from fastapi.testclient import TestClient
-        except ImportError:
-            pytest.skip("FastAPI not installed")
+        pytest.importorskip("fastapi")
 
         db_path = tmp_path / "test_validate.db"
         with patch.dict(os.environ, {"SOUP_DB_PATH": str(db_path)}):
             from soup_cli.ui.app import create_app
 
-            client = TestClient(create_app())
+            client = ui_client(create_app())
             response = client.get(
                 "/api/runs/compare?ids=nonexistent1,nonexistent2",
                 headers=_auth_headers(),
@@ -178,16 +165,13 @@ class TestRunsCompareEndpoint:
 
     def test_compare_empty_ids(self, tmp_path):
         """Compare endpoint should reject empty ids."""
-        try:
-            from fastapi.testclient import TestClient
-        except ImportError:
-            pytest.skip("FastAPI not installed")
+        pytest.importorskip("fastapi")
 
         db_path = tmp_path / "test_empty.db"
         with patch.dict(os.environ, {"SOUP_DB_PATH": str(db_path)}):
             from soup_cli.ui.app import create_app
 
-            client = TestClient(create_app())
+            client = ui_client(create_app())
             response = client.get(
                 "/api/runs/compare?ids=", headers=_auth_headers()
             )
@@ -195,16 +179,13 @@ class TestRunsCompareEndpoint:
 
     def test_compare_no_auth_required(self, tmp_path):
         """Compare requires auth (401 without token, 200 with one)."""
-        try:
-            from fastapi.testclient import TestClient
-        except ImportError:
-            pytest.skip("FastAPI not installed")
+        pytest.importorskip("fastapi")
 
         db_path = tmp_path / "test_noauth.db"
         with patch.dict(os.environ, {"SOUP_DB_PATH": str(db_path)}):
             from soup_cli.ui.app import create_app
 
-            client = TestClient(create_app())
+            client = ui_client(create_app())
             assert client.get("/api/runs/compare?ids=run1,run2").status_code == 401
             assert (
                 client.get(
@@ -219,10 +200,7 @@ class TestEvalResultsEndpoint:
 
     def test_eval_results_include_details(self, tmp_path):
         """Eval results should include parsed details_json."""
-        try:
-            from fastapi.testclient import TestClient
-        except ImportError:
-            pytest.skip("FastAPI not installed")
+        pytest.importorskip("fastapi")
 
         db_path = tmp_path / "test.db"
         with patch.dict(os.environ, {"SOUP_DB_PATH": str(db_path)}):
@@ -244,7 +222,7 @@ class TestEvalResultsEndpoint:
             )
             tracker.close()
 
-            client = TestClient(create_app())
+            client = ui_client(create_app())
             response = client.get(
                 f"/api/runs/{run_id}/eval", headers=_auth_headers()
             )
@@ -258,10 +236,7 @@ class TestEvalResultsEndpoint:
 
     def test_eval_results_empty(self, tmp_path):
         """Empty eval results should return empty array, not error."""
-        try:
-            from fastapi.testclient import TestClient
-        except ImportError:
-            pytest.skip("FastAPI not installed")
+        pytest.importorskip("fastapi")
 
         db_path = tmp_path / "test.db"
         with patch.dict(os.environ, {"SOUP_DB_PATH": str(db_path)}):
@@ -276,7 +251,7 @@ class TestEvalResultsEndpoint:
             )
             tracker.close()
 
-            client = TestClient(create_app())
+            client = ui_client(create_app())
             response = client.get(
                 f"/api/runs/{run_id}/eval", headers=_auth_headers()
             )
@@ -286,10 +261,7 @@ class TestEvalResultsEndpoint:
 
     def test_compare_max_five_runs(self, tmp_path):
         """Compare endpoint allows exactly 5 runs."""
-        try:
-            from fastapi.testclient import TestClient
-        except ImportError:
-            pytest.skip("FastAPI not installed")
+        pytest.importorskip("fastapi")
 
         db_path = tmp_path / "test.db"
         with patch.dict(os.environ, {"SOUP_DB_PATH": str(db_path)}):
@@ -307,7 +279,7 @@ class TestEvalResultsEndpoint:
                 run_ids.append(rid)
             tracker.close()
 
-            client = TestClient(create_app())
+            client = ui_client(create_app())
             ids_str = ",".join(run_ids)
             response = client.get(
                 f"/api/runs/compare?ids={ids_str}", headers=_auth_headers()
@@ -321,10 +293,7 @@ class TestCompareMetricsContent:
 
     def test_compare_includes_all_metric_fields(self, tmp_path):
         """Compare should return metrics with all fields."""
-        try:
-            from fastapi.testclient import TestClient
-        except ImportError:
-            pytest.skip("FastAPI not installed")
+        pytest.importorskip("fastapi")
 
         db_path = tmp_path / "test.db"
         with patch.dict(os.environ, {"SOUP_DB_PATH": str(db_path)}):
@@ -343,7 +312,7 @@ class TestCompareMetricsContent:
             )
             tracker.close()
 
-            client = TestClient(create_app())
+            client = ui_client(create_app())
             response = client.get(
                 f"/api/runs/compare?ids={run_id}", headers=_auth_headers()
             )
@@ -356,10 +325,7 @@ class TestCompareMetricsContent:
 
     def test_compare_includes_config(self, tmp_path):
         """Compare should include run config for diff display."""
-        try:
-            from fastapi.testclient import TestClient
-        except ImportError:
-            pytest.skip("FastAPI not installed")
+        pytest.importorskip("fastapi")
 
         db_path = tmp_path / "test.db"
         with patch.dict(os.environ, {"SOUP_DB_PATH": str(db_path)}):
@@ -374,7 +340,7 @@ class TestCompareMetricsContent:
             )
             tracker.close()
 
-            client = TestClient(create_app())
+            client = ui_client(create_app())
             response = client.get(
                 f"/api/runs/compare?ids={run_id}", headers=_auth_headers()
             )

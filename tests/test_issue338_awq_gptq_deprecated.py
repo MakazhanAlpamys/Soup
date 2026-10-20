@@ -22,6 +22,7 @@ from soup_cli.commands.export import (
     SUPPORTED_FORMATS,
     deprecated_format_notice,
 )
+from soup_cli.config.deprecation import DEPRECATED_VALUE_REJECTION_VERSION
 
 # Rich colours per character on a colour-capable runner and wraps at the
 # terminal width, drawing box borders between the fragments of a wrapped help
@@ -60,7 +61,7 @@ class TestTheNotice:
         notice = deprecated_format_notice(fmt)
         assert notice is not None
         assert f"--format {fmt} is deprecated" in notice
-        assert "will be removed in the next release" in notice
+        assert f"will be removed in Soup v{DEPRECATED_VALUE_REJECTION_VERSION}:" in notice
         for replacement in REPLACEMENTS:
             assert re.search(rf"\b{re.escape(replacement)}\b", notice), (replacement, notice)
 
@@ -156,7 +157,10 @@ class TestExportPrintsIt:
         result = CliRunner().invoke(app, ["export", "--help"])
 
         assert result.exit_code == 0, (result.output, repr(result.exception))
-        assert "awq and gptq are deprecated" in _plain(result.output)
+        output = _plain(result.output)
+        assert "awq and gptq are deprecated" in output
+        # The release the help promises is the one the warnings promise.
+        assert f"removed in Soup v{DEPRECATED_VALUE_REJECTION_VERSION}" in output, output
 
 
 class TestQuantizePrintsIt:
@@ -188,4 +192,6 @@ class TestQuantizePrintsIt:
         result = CliRunner().invoke(app, ["quantize", "--help"])
 
         assert result.exit_code == 0, (result.output, repr(result.exception))
-        assert "awq and gptq are deprecated" in _plain(result.output)
+        output = _plain(result.output)
+        assert "awq and gptq are deprecated" in output
+        assert f"removed in Soup v{DEPRECATED_VALUE_REJECTION_VERSION}" in output, output

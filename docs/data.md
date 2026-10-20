@@ -375,6 +375,8 @@ soup ingest --source openai-stored --logs ./oai-stored-completions.jsonl
 
 With `--logs` the CLI never makes a network call — operators export from their SaaS dashboard or vendor API, then point `soup ingest` at the local file. Auth env vars (`LANGFUSE_PUBLIC_KEY` + `LANGFUSE_SECRET_KEY` / `LANGSMITH_API_KEY` / `HELICONE_API_KEY` / `OPENPIPE_API_KEY` / `OPENAI_API_KEY` / `OTEL_EXPORTER_OTLP_HEADERS`) are advisory on that path — Soup surfaces which ones authenticate the source. A PII reminder fires on every ingest run (matches v0.26.0 Trace-to-Preference policy).
 
+**Conversation prompts.** `soup ingest` and the OpenAI/LangChain `soup data from-traces` parsers use the same rule for message lists: retain context through the last user turn and omit later messages. If no user or assistant turn precedes the last user, the prompt stays as that user's plain text, including system-plus-one-user requests. Only requests with an earlier user or assistant turn are rendered as compact JSON of `role`/`content` objects through the last user, preserving message boundaries and roles. System-only requests and last user turns without text are skipped. Content-part lists join text parts with newlines and discard non-text parts, including image URLs and base64 data. Bare lists and `{"messages": [...]}` envelopes are equivalent. LangChain message `type` values `human`, `ai` and `system` map to `user`, `assistant` and `system`; an explicit string `role` takes precedence. Blank-content turns are omitted from multi-turn JSON. Output message lists select the final assistant response and flatten its text parts. Plain string prompts and outputs remain unchanged. This changes grouping for multi-turn logs: regenerate trace exports and preference pairs rather than mixing the previous first-turn prompts with the new conversation prompts.
+
 ### Live pull from Langfuse (`--pull`, #204)
 
 Langfuse is the one source Soup can fetch directly, so there is no export step:
@@ -386,7 +388,7 @@ export LANGFUSE_HOST=https://us.cloud.langfuse.com   # optional: default is http
 soup ingest --source langfuse --pull --since 7d --output traces.jsonl
 ```
 
-- **What one row is.** One output row per `GENERATION` observation in the window — the unit that carries a model, the exact input it was given and the output it produced — read from Langfuse's Observations API v2 (`/api/public/traces` is removed from Langfuse Cloud on 2026-11-16) and checked again on each observation, so a server that ignores the `type` filter cannot turn spans or tool calls into rows — they are counted as skipped in the summary. A row's `trace_id` is the observation id. The API returns plain-text input and output as-is but structured values (chat message lists, objects) as JSON inside a string; those are decoded, and a chat message list becomes a `prompt` of every message's content joined by newlines (system prompt included), the same flattening `parse_langfuse` applies to a `{"messages": [...]}` export. An agent trace therefore yields one row per LLM call it made; its spans and tool calls yield none. Generations with no input or no output are skipped and counted in the summary line, so a pull that matched nothing usable says so instead of writing an empty file silently.
+- **What one row is.** One output row per `GENERATION` observation in the window — the unit that carries a model, the exact input it was given and the output it produced — read from Langfuse's Observations API v2 (`/api/public/traces` is removed from Langfuse Cloud on 2026-11-16) and checked again on each observation, so a server that ignores the `type` filter cannot turn spans or tool calls into rows — they are counted as skipped in the summary. A row's `trace_id` is the observation id. The API returns plain-text input and output as-is but structured values (chat message lists, objects) as JSON inside a string; those are decoded, and a chat message list follows the conversation prompt rule above: plain last-user text without an earlier user or assistant turn, otherwise compact role/content JSON through the last user. `parse_langfuse` applies the same rule to a `{"messages": [...]}` export. An agent trace therefore yields one row per LLM call it made; its spans and tool calls yield none. Generations with no input or no output are skipped and counted in the summary line, so a pull that matched nothing usable says so instead of writing an empty file silently.
 - **Credentials.** Read from the environment only, never from a flag, so they never reach the audit log's argv. `LANGFUSE_BASE_URL` is honoured before `LANGFUSE_HOST`, the same precedence as the Langfuse SDK. The key pair is not written to the output, the console, debug logs or error messages.
 - **Host checks.** HTTPS only. The host goes through the same SSRF validator as `--slack-url`; a private, link-local, shared (`100.64.0.0/10`), site-local (`fec0::/10`) or loopback address (self-hosted Langfuse) additionally needs `--allow-private-host`. Redirects are refused rather than followed with credentials attached.
 - **Bounds.** `--since` accepts `30m` / `24h` / `7d` up to `365d` (default `7d`). Each request is bounded by a 30 s wall-clock deadline covering the connect and the whole response — a server that drip-feeds bytes cannot outlast it — and a response is capped at 64 MiB. Pages hold 100 generations; if results are still pending after `--max-pages` pages (default 100, max 10 000), the command stops with exit 1 and writes nothing — the output streams to a staging file, so an earlier file at `--output` is left untouched. HTTP 429 is retried up to 5 times, honouring `Retry-After` with a 60 s ceiling, and a pagination cursor the server repeats stops the pull instead of spending the rest of the page budget.
@@ -458,6 +460,15 @@ address a server on your network by its hostname. A host written only as numbers
 valid IPv4 address (`10.0.0.256`, `4294967296`) is refused as well.
 
 ### Multi-Provider Support
+
+HTTP generation replies from `openai`, `server`, `ollama`, `vllm` and `anthropic`
+are limited to 8 MiB of decoded content, as are Magpie raw completions. The limit
+is checked while streaming, including gzip expansion, before JSON parsing.
+An oversized generation reply names the limit and the endpoint selector
+(`--api-base`, `--base-url` or `--provider anthropic`); it is refused without
+logging its body. Magpie instead drops the affected instruction/response sample
+and continues collecting rows within its attempt limit, preserving its existing
+per-sample failure behavior; a single oversized reply does not abort the run.
 
 ```bash
 # Generate via local Ollama instance
@@ -637,10 +648,50 @@ Earlier stages retain warnings but cannot supply settings, and unused configs ar
 Aliases, conditional rebindings and unresolved `**kwargs` are not evaluated: migration
 reports "Could not read the final trainer's args statically" and uses Soup defaults.
 
+A migrated config trains what the source trained, using the source tool's defaults
+where a key is absent (#1807):
+
+- **Validation split.** axolotl `val_set_size` and LLaMA-Factory `val_size` map to
+  `data.val_split`, and an absent key writes `0` (both tools train on every row by
+  default) rather than leaving Soup's default of 0.1 in force. A value `data.val_split`
+  cannot express (an absolute row count, or a fraction above 0.5) is named in a warning
+  and not written.
+- **LLaMA-Factory LoRA.** A missing `lora_rank` is 8 and a missing `lora_alpha` is
+  `2 * rank`, as LLaMA-Factory has them; a quoted rank (`lora_rank: "32"`) counts as the
+  integer. A comma-separated `lora_target` becomes a list,
+  and `lora_target: all` (also the default when the key is absent) becomes `all-linear`,
+  every linear layer; so does axolotl `lora_target_linear: true`. `auto` would have
+  resolved to `q_proj` / `v_proj` only on Llama.
+- **Preference strength.** `pref_beta` maps to `dpo_beta`, `kto_beta`, `orpo_beta`, or
+  `ipo_tau` under `pref_loss: ipo`; under `pref_loss: simpo` it has no Soup equivalent
+  and is named in a warning, while `simpo_gamma` maps to `training.simpo_gamma`.
+- **Unsloth notebooks.** `base` is the first `from_pretrained` call that names a model,
+  skipping code under `if False:` (the stock notebook's saved-adapter reload), so the
+  training model wins over the reload. `gradient_accumulation_steps`, `warmup_ratio`,
+  `weight_decay` and `seed` are read from the final trainer's `TrainingArguments` or
+  TRL `*Config`; `warmup_steps` has no Soup field (warmup comes from
+  `training.warmup_ratio`) and is named in a warning.
+- **Nothing is dropped in silence.** Every source key, `TrainingArguments` keyword or
+  `get_peft_model` keyword the migrator does not map is listed in one
+  "not migrated" warning.
+
 
 ## Data Formats
 
+JSONL dataset rows must be objects; JSON dataset files must contain an array of
+objects. Non-object rows are skipped with a warning naming the physical JSONL
+line or JSON array row. `soup data validate` lists these warnings as issues (the
+first three of each kind, then `... and N more`), and every skipped row, whether not an object
+or not valid JSON, counts as an invalid row in its `N/M rows valid` line, in
+`--min-valid-fraction` and in the exit code; its other statistics describe the
+retained objects. `soup data review` applies the
+same object check before displaying a pair. Rejected row contents are not printed. The loader likewise prints only the first three warnings per kind (non-object rows, invalid-JSON lines), then one `... and N more` line. `soup data canary insert` retains its first-row refusal and preserves later rows when rewriting the file.
+
 Soup supports these formats (auto-detected). Files can be JSONL, JSON, CSV, Parquet, or TXT.
+
+Local JSONL, JSON, CSV and TXT files accept UTF-8 with or without a leading BOM,
+including Excel's CSV UTF-8 exports. The signature is removed before parsing;
+U+FEFF characters inside field values or document text are preserved.
 
 **Auto-detection.** It reads the first 100 rows, not just the first. Each row resolves
 to the richest format its keys fit. If every row agrees, that format is used. A file
@@ -940,10 +991,11 @@ turn on MLX. `soup train` says so on its "MLX backend ignores:" line, and
 every text token is supervised. Soup's vision collator masks only padding and image
 tokens, and the audio path only padding. Assistant-only masking would have to locate the
 assistant spans after the processor expands the image or audio tokens, which neither path
-does yet. Soup declares this gap rather
-than attempting unverified label restructuring, so both `mask_history` and `train_on_responses_only`
-are unread on vision and audio modalities, every text token trains, and `soup doctor --config`
-reports them as ignored.
+does yet. Both `mask_history` and `train_on_responses_only` are unread on these
+modalities, so every text token trains. `soup doctor --config` reports an explicit
+`mask_history: true` as ignored. It does not list `train_on_responses_only`: its
+schema default is `true`, and writing a default counts as leaving it unwritten.
+The absence of a doctor row does not imply assistant-only multimodal masking.
 
 
 **AOT preprocessing:**
@@ -1017,8 +1069,11 @@ soup data clean ./data/train.jsonl -o ./data/clean.jsonl --dry-run
 `soup data validate` exits with code `0` when at least one row is usable and the
 optional minimum valid fraction is met. It exits with code `3` for input errors,
 such as a missing file or an undetectable format, and code `2` when a non-empty
-dataset has no usable rows or falls below `--min-valid-fraction`. A partially valid
-dataset still exits with code `0` when no minimum is specified.
+dataset has no usable rows or falls below `--min-valid-fraction`. A file whose
+every row was skipped is not empty: it exits with code `2` ("no usable rows
+remain") when `--format` names the format, and `3` without one, since nothing is
+left to detect a format from. A partially valid dataset still exits with code `0`
+when no minimum is specified.
 
 Training loads a dataset through the same converters, and a row they reject is
 dropped rather than stopping the run, so one bad line does not abort a load. The
@@ -1026,7 +1081,9 @@ drop is reported: `soup train`, and every other command that loads a dataset,
 prints `Warning: N of M rows dropped` with the first row's index and the
 converter's reason. For a local file it also prints the `soup data validate`
 command that lists them all. The
-count agrees with `soup data validate` for the same file. Before #1181 the rows
+count agrees with `soup data validate` for the same file, except that the training
+drop report counts retained rows only, so the rows the loader skipped before
+conversion appear in `soup data validate` alone. Before #1181 the rows
 were dropped without a word. If a load ends with zero training rows, `soup train`
 stops with exit 1 before loading the model, `--dry-run` included, naming the format
 the rows were read as and the first row's drop reason (#1217).

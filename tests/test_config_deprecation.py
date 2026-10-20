@@ -29,10 +29,30 @@ from soup_cli.config.deprecation import (
 
 ROOT = Path(__file__).resolve().parents[1]
 
+#: The one file allowed to name the release besides ``deprecation.py``: it declares its own
+#: deadline (#808). Matched on the exact relative path, so a second file of the same name
+#: elsewhere in ``src/`` is scanned like any other.
+STAGED_FIELDS = "src/soup_cli/config/staged_fields.py"
+DEPRECATION = "src/soup_cli/config/deprecation.py"
+
 
 def _major_minor(version: str) -> tuple[int, int]:
     major, minor = re.match(r"(\d+)\.(\d+)", version).groups()
     return int(major), int(minor)
+
+
+def _source_files():
+    """Every ``src/**/*.py`` file as ``(posix path relative to the repo, text)``."""
+    for path in sorted((ROOT / "src").rglob("*.py")):
+        yield path.relative_to(ROOT).as_posix(), path.read_text(encoding="utf-8")
+
+
+#: A deadline spelled out as a literal release number. ``was removed in v0.36.0`` is
+#: history, not a promise, so past tense is left alone.
+_HARDCODED_DEADLINE = (
+    re.compile(r"v\d+\.\d+ will refuse"),
+    re.compile(r"(?<!was )removed in (?:Soup )?v\d+\.\d+"),
+)
 
 
 @pytest.fixture
@@ -43,6 +63,23 @@ def printed(monkeypatch):
         loader, "console", Console(file=buffer, width=500, force_terminal=False, color_system=None)
     )
     return buffer
+
+
+class TestTheVersionHelper:
+    """``_major_minor`` decides when the deadline test turns red, so its edges are pinned."""
+
+    def test_a_patch_release_is_its_minor(self):
+        assert _major_minor("0.76.1") == (0, 76)
+        assert _major_minor("0.76.0") == (0, 76)
+
+    def test_minors_compare_as_numbers_not_as_text(self):
+        """The string "0.100" sorts before "0.77"; the tuple must not."""
+        assert _major_minor("0.100") == (0, 100)
+        assert _major_minor("0.100") > _major_minor("0.77")
+        assert _major_minor("0.100.0") > _major_minor("0.77")
+
+    def test_a_patch_never_reaches_the_next_minor(self):
+        assert _major_minor("0.76.9") < _major_minor("0.77")
 
 
 class TestTheWarning:
@@ -78,12 +115,60 @@ class TestTheDeadline:
             rf'"{re.escape(DEPRECATED_VALUE_REJECTION_VERSION)}"'
             rf"|v{re.escape(DEPRECATED_VALUE_REJECTION_VERSION)}\b"
         )
+        # STAGED_FIELDS declares its own deadline (#808), which is allowed to name the
+        # same release; it is the one file exempt from this scan, by exact path.
         holders = sorted(
-            path.relative_to(ROOT).as_posix()
-            for path in (ROOT / "src").rglob("*.py")
-            if needle.search(path.read_text(encoding="utf-8"))
+            relative
+            for relative, text in _source_files()
+            if relative != STAGED_FIELDS and needle.search(text)
         )
-        assert holders == ["src/soup_cli/config/deprecation.py"], holders
+        assert holders == [DEPRECATION], holders
+
+    def test_the_published_promise_is_kept(self):
+        """v0.76.0 told users this version in its warnings, its ``--help`` text and its
+        changelog, so moving it is a breach of that promise: it needs a changelog entry
+        and a conscious edit of this test, not a quiet change of the constant."""
+        assert DEPRECATED_VALUE_REJECTION_VERSION == "0.77"
+
+    def test_deadline_clause_is_exact(self):
+        """The sentence every warning ends with is built from the constant, word for word."""
+        assert deprecation.deadline_clause() == (
+            f"Soup v{DEPRECATED_VALUE_REJECTION_VERSION} will refuse it."
+        )
+
+    def test_no_hardcoded_refusal_version_in_src(self):
+        """A deadline written as prose cannot follow the constant: this is how a warning
+        keeps promising a refusal after the refusal shipped. Everything outside the two
+        files that own a deadline builds the sentence from the constant."""
+        offenders = sorted(
+            f"{relative}: {match.group(0)!r}"
+            for relative, text in _source_files()
+            if relative not in (DEPRECATION, STAGED_FIELDS)
+            for pattern in _HARDCODED_DEADLINE
+            for match in pattern.finditer(text)
+        )
+        assert offenders == [], offenders
+
+    def test_the_hardcoded_deadline_scan_sees_what_it_is_meant_to_see(self):
+        """Control: each pattern matches the prose it names and ignores past tense."""
+        spoken = (
+            "Soup v0.76 will refuse it.",
+            "set `quantization: none`; v1.2 will refuse it",
+            "awq will be removed in v0.77",
+            "gptq is removed in Soup v0.77",
+        )
+        for text in spoken:
+            assert any(pattern.search(text) for pattern in _HARDCODED_DEADLINE), text
+        # A fact about the past is not a promise: sft_format.py says so about v0.36.0.
+        assert not any(
+            pattern.search("the fallback was removed in v0.36.0.")
+            for pattern in _HARDCODED_DEADLINE
+        )
+        # The sentence the code builds is made of the constant, not of digits.
+        assert not any(
+            pattern.search('f"Soup v{DEPRECATED_VALUE_REJECTION_VERSION} will refuse it."')
+            for pattern in _HARDCODED_DEADLINE
+        )
 
 
 class TestTheLoader:

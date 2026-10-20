@@ -104,6 +104,9 @@ def _render_report(report: FailureReport) -> None:
             title="overall",
         )
     )
+    skipped = report.extras.get("rows_skipped")
+    if skipped:
+        console.print(f"[dim]Rows skipped: {for_terminal(skipped)}[/]")
 
 
 def _load_evidence(path: str) -> dict:
@@ -313,7 +316,7 @@ def diagnose(
         "--citation-style",
         help=(
             "Citation style for the live RAFT citation probe: bracket "
-            "([doc-id]) / inline ((doc-id)) / footnote ([^id]). Must match the "
+            "(\\[doc-id]) / inline ((doc-id)) / footnote ([^id]). Must match the "
             "style the model was trained to emit. (v0.71.17 #254)"
         ),
     ),
@@ -330,7 +333,7 @@ def diagnose(
         "--shuffle-seed",
         help=(
             "RAFT document-shuffle seed for the live citation probe (composes "
-            "the [doc-N] ids the model is scored against). (v0.71.17 #254)"
+            "the \\[doc-N] ids the model is scored against). (v0.71.17 #254)"
         ),
     ),
 ) -> None:

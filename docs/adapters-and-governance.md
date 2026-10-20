@@ -22,6 +22,7 @@
 - [Adapter Backdoor Scanner (`soup adapters scan`)](#adapter-backdoor-scanner-soup-adapters-scan)
 - [Adapter Sign + Verify (`soup adapters sign` / `verify`)](#adapter-sign--verify-soup-adapters-sign--verify)
 - [Strict Safetensors Mode (`soup adapters check-safetensors`)](#strict-safetensors-mode-soup-adapters-check-safetensors)
+- [Pre-Flight Adapter Health Audit (`soup adapters check`)](#pre-flight-adapter-health-audit-soup-adapters-check)
 - [Namespace Pinning (Anti-AI-Jacking)](#namespace-pinning-anti-ai-jacking)
 - [License-Conflict Matrix at Merge](#license-conflict-matrix-at-merge)
 - [Airgap Bundle (`soup airgap-bundle`)](#airgap-bundle-soup-airgap-bundle)
@@ -114,6 +115,17 @@ soup loop watch --poll-interval 300
 # Registry lineage via --pack-cans.
 soup loop init registry://abc12 --eval evals/lock.json --baseline registry://prod --pre-wired
 soup loop watch --pre-wired --pack-cans --poll-interval 300
+
+# Learn from Soup's own serving (#1440): the pre-wired harvest also reads the
+# thumbs `soup serve --record-thumbs` captures through POST /v1/thumbs, pairing
+# the latest thumbs-up and thumbs-down answer per prompt. The database must
+# stay under cwd and exist as a thumbs database: start the serve first, or
+# `soup loop watch` refuses, naming the field.
+soup serve --model ./base --record-thumbs ./rl.db
+soup loop init registry://abc12 --eval evals/lock.json --baseline registry://prod \
+    --pre-wired --thumbs-db ./rl.db
+# or per run, overriding loop.yaml:
+SOUP_LOOP_THUMBS_DB=./rl.db soup loop watch --pre-wired
 
 # Unpack a recorded iteration's Soup Can for what-if analysis (v0.71.4)
 soup loop replay iter-20260515T120000-abcdef01 --extract ./iter-dump
@@ -268,6 +280,12 @@ Every fine-tune you ship should be reproducible. Soup's local registry (`~/.soup
 # Register a completed run
 soup registry push --run-id run_202611_abc123 --name llama31-chat --tag v1
 
+# Also record the training data file's SHA-256 as data_hash
+soup registry push --run-id run_202611_abc123 --name llama31-chat --tag v1 --data data/train.jsonl
+
+# Safe to retry: the same key and the same registration return the existing entry
+soup registry push --run-id run_202611_abc123 --name llama31-chat --tag v1 --idempotency-key job-42
+
 # List entries (filter by name, tag, base model, task)
 soup registry list
 soup registry list --name llama31-chat --tag prod
@@ -288,13 +306,24 @@ soup registry promote llama31-chat-v1 --tag prod
 soup registry delete llama31-chat-v1 --yes
 ```
 
+**Training data:** `push --data <file>` stores the file's SHA-256 as the entry's `data_hash`, shown by `soup registry show`. It records the file registered as the training input, not proof of what the run trained on. The file must be under the current directory. Without `--data`, `register_from_run` copies a stored historical `training_data_sha256` without reopening today's path; legacy runs remain unknown. When both are present, the explicit file takes precedence for `data_hash`, while the separate historical `training_data_sha256` is retained. `entry_hash` binds the chosen data digest and any recorded base revision/source. Training-time hash capture itself remains #1764 part 2; reserving nullable storage does not claim the transformed examples consumed by training.
+
+**Base identity:** Registration copies the run's nullable base revision and its source;
+`soup registry show` exposes both. `hub_commit` identifies the commit passed to supported
+base loaders, while `cache_path` only describes the local directory name and does not
+verify local contents. The original human-readable base ID and config hash retain their
+existing meaning. Registrations with no known revision/hash retain their legacy entry
+fingerprint. Retries also compare the recorded revision/source and historical data hash.
+
+**Retries:** `push --idempotency-key <key>` (or `RegistryStore.push(idempotency_key=...)`) makes a registration safe to repeat after a crash or a timeout. A later push with the same key writes nothing and returns the existing entry, provided it repeats that entry's name, base model, task, run, config and data hash and its tag is one of the entry's tags; anything else under the same key is refused with an error naming the entry. Notes are not compared. Two writers pushing the same key at once end up with one entry. A key is 1 to 128 characters from letters, digits, `.`, `_`, `:` and `-`; pushes without one behave as before. `RegistryStore.get_by_idempotency_key(key)` finds the entry. Deleting the entry frees its key.
+
 **Lineage DAG** — every entry can point to a parent (its ancestor run). Walk the DAG for any name with:
 
 ```bash
 soup history llama31-chat
 ```
 
-**Refs resolve flexibly** — you can use a registry ID, a name (latest), or `name:tag`. Ambiguous prefixes raise an error rather than silently picking the wrong entry. Registry files are stored with `600` perms on POSIX; override the path with `SOUP_REGISTRY_DB_PATH`.
+**Refs resolve flexibly** — you can use a registry ID, a unique ID prefix, or `name:tag`. A bare name is not a ref; `soup history <name>` lists every entry with that name. Pushing the same `name:tag` twice keeps both entries. A `name:tag` that matches more than one entry raises an error naming the candidates, and an ambiguous prefix raises one too, rather than silently picking an entry; use the full ID then. Registry files are stored with `600` perms on POSIX; override the path with `SOUP_REGISTRY_DB_PATH`.
 
 
 ## Adapter Management (git for LoRA)
@@ -531,7 +560,7 @@ so a malicious model name can't inject a forged heading into downstream renderer
 `--annex-xi`. `--energy-country <ISO3>` picks the grid for the CO₂ estimate (default `USA`;
 the kWh figure itself is country-independent). Add `--energy-out <path>` to persist the
 measurement as JSON for `soup bom emit --energy <path>` (the hand-off into an ML-BOM —
-see [Attaching energy + CO₂](#attaching-energy--co2---energy)). Requires `pip install
+see [Attaching energy + CO₂](#attaching-energy--co---energy)). Requires `pip install
 soup-cli[carbon]`; without it, `--track-energy` is a graceful no-op.
 
 
@@ -722,6 +751,32 @@ right to execute arbitrary code on load; refusing the file at the
 boundary is the only sound mitigation. Friendly advisory names the
 offending file and the canonical `from safetensors.torch import save_file`
 recipe. Exit code 3 under `--strict` for CI gating.
+
+
+## Pre-Flight Adapter Health Audit (`soup adapters check`)
+
+Pre-flight scan auditing single LoRA adapters for silent training failures (#1721):
+- **Total and per-layer ||dW||_F**: Frobenius norm of LoRA parameter updates (dW = scaling * (B @ A), with alpha / r for standard LoRA and alpha / sqrt(r) for rsLoRA) with float64 accumulation via matrix trace contraction.
+- **Live fraction**: Proportion of adapter layers with active, non-zero updates.
+- **All-zero lora_B layers**: Flags un-trained or zero-initialized layers that failed to move during training.
+- **Incomplete LoRA pairs**: Flags orphaned or partially-saved projections missing either A or B.
+- **Leaked .inner. keys**: Flags legacy wrapper namespaces for adapters saved prior to the #1011 save-time guard.
+
+```bash
+soup adapters check path/to/adapter/
+# Machine-readable output
+soup adapters check path/to/adapter/ --json
+```
+
+Outputs human diagnostics ending in a single verdict line: `alive` (exit code 0) or `inactive: <reason>` (exit code 2 for inactive/silent failure, distinct from usage error 1). Possible inactivity reasons include:
+- `all lora_B layers are zero (n/n)`
+- `lora_B layers are zero (k/n)`
+- `total ||ΔW||_F is 0.0`
+- `leaked .inner. keys detected (<n> tensors)`
+- `incomplete LoRA pairs detected (<n> orphans)`
+- `shape mismatch in LoRA projections (<n> layers)`
+- `non-finite weights detected (NaN/Inf)`
+- `no lora weights found`
 
 
 ## Namespace Pinning (Anti-AI-Jacking)

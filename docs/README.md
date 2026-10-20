@@ -18,6 +18,8 @@ feature reference — every `soup` capability, grouped by area.
 | [Compliance & governance quickstart](compliance.md) | HIPAA/SOC2/EU-AI-Act/SR-11-7 `init` templates, provenance (BOM/attest/repro-receipt), audit log, air-gap, model-card autogen (`soup card`), CI gate (`soup ci init`) |
 | [Backends, platform & ops](backends-and-ops.md) | MLX/Unsloth backends, Modal cloud GPU training, alternative hubs, HF Hub integration, autopilot, experiment tracking, plan/apply, env lockfiles, hardware-fit, completions, plugins, utility commands |
 | [Command reference](commands.md) | The full `soup` command list |
+| [CLI reference](cli-reference.md) | Every command with every option and argument: type, default, whether it is required — generated from the code |
+| [Config reference](config-reference.md) | Every `soup.yaml` key: type, default, bounds and allowed values — generated from the schema |
 | [Supported models & extras](models.md) | Recommended model families, the VRAM size guide, the pip extras matrix |
 | [Issue difficulty](issue-difficulty.md) | How issues are rated 1-10 and what each level means |
 

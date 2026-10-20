@@ -378,8 +378,10 @@ def parse_build_yaml(text: object) -> BuildPlan:
         raise ValueError(f"build text exceeds {_MAX_FILE_BYTES} bytes")
     import yaml  # lazy — keep CLI startup fast
 
+    from soup_cli.utils.yaml_limits import load_yaml_limited
+
     try:
-        data = yaml.safe_load(text)
+        data = load_yaml_limited(text, "build text", max_bytes=_MAX_FILE_BYTES)
     except yaml.YAMLError as exc:
         raise ValueError(f"invalid YAML: {exc}") from exc
     return parse_build_plan(data)

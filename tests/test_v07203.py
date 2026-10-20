@@ -1250,47 +1250,16 @@ class TestDiskKindMeasuredFallback:
         assert _classify_measured_read(None) == "hdd"  # can't tell -> refuse
 
     @staticmethod
-    def _fake_linux(monkeypatch, *, devices, rotational, measured_bps):
-        """Simulate a Linux ``/sys/block`` layout so the real probe branch runs."""
-        import builtins
-        import io
-        import os
+    def _fake_linux(monkeypatch, *, rotational, measured_bps):
+        """Supply attributed media; #1800 tests cover the sysfs traversal itself."""
         import platform
-        import sys
-
-        import pytest
-
-        # detect_disk_kind is a Linux /sys/block feature (it returns "unknown"
-        # elsewhere by design). This helper hardcodes forward-slash /sys paths,
-        # which os.path.join mangles on Windows, so the simulation is meaningful
-        # only on Linux — where the real CI cells and local runs exercise it.
-        if sys.platform != "linux":
-            pytest.skip("simulates a Linux /sys/block layout; disk-tier detection is Linux-only")
 
         import soup_cli.utils.layer_stream as ls
 
-        real_listdir = os.listdir
-        real_open = builtins.open
-        real_exists = os.path.exists
-
         monkeypatch.setattr(platform, "system", lambda: "Linux")
         monkeypatch.setattr(
-            os,
-            "listdir",
-            lambda p: list(devices) if str(p) == "/sys/block" else real_listdir(p),
+            ls, "_linux_path_disk_kind", lambda _p: "ssd" if rotational == 0 else "hdd",
         )
-        monkeypatch.setattr(
-            os.path,
-            "exists",
-            lambda p: True if "/queue/rotational" in str(p) else real_exists(p),
-        )
-
-        def fake_open(p, *a, **k):
-            if "/queue/rotational" in str(p):
-                return io.StringIO(f"{rotational}\n")
-            return real_open(p, *a, **k)
-
-        monkeypatch.setattr(builtins, "open", fake_open)
         monkeypatch.setattr(ls, "_measure_seq_read_bytes_per_s", lambda _p: measured_bps)
         monkeypatch.setattr(ls, "_DISK_KIND_CACHE", {})
 
@@ -1298,7 +1267,7 @@ class TestDiskKindMeasuredFallback:
         """Criterion 1: no NVMe device, ``rotational=1``, fast measured read."""
         import soup_cli.utils.layer_stream as ls
 
-        self._fake_linux(monkeypatch, devices=["vda"], rotational=1, measured_bps=1.5e9)
+        self._fake_linux(monkeypatch, rotational=1, measured_bps=1.5e9)
         assert ls.detect_disk_kind("/data") == "nvme"
         # ...and choose_tier accepts it where the pre-fix "hdd" would have raised.
         assert ls.choose_tier(1000, 10, ls.detect_disk_kind("/data")) == ls.TIER_DISK
@@ -1307,7 +1276,7 @@ class TestDiskKindMeasuredFallback:
         """Criterion 2 (the control): the fix cannot be satisfied by 'always allow'."""
         import soup_cli.utils.layer_stream as ls
 
-        self._fake_linux(monkeypatch, devices=["vda"], rotational=1, measured_bps=150e6)
+        self._fake_linux(monkeypatch, rotational=1, measured_bps=150e6)
         assert ls.detect_disk_kind("/data") == "hdd"
         with pytest.raises(ValueError, match="NVMe"):
             ls.choose_tier(1000, 10, ls.detect_disk_kind("/data"))
@@ -1316,7 +1285,7 @@ class TestDiskKindMeasuredFallback:
         """A device that declares itself solid state is trusted — no probe cost."""
         import soup_cli.utils.layer_stream as ls
 
-        self._fake_linux(monkeypatch, devices=["sda"], rotational=0, measured_bps=None)
+        self._fake_linux(monkeypatch, rotational=0, measured_bps=None)
         calls = []
         monkeypatch.setattr(
             ls, "_measure_seq_read_bytes_per_s", lambda _p: calls.append(1) or 9e9

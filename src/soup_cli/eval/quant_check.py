@@ -22,7 +22,8 @@ def classify_delta(delta: float, *, minor: float = 0.02, major: float = 0.05) ->
     """Return one of OK / MINOR / MAJOR based on absolute drop in score."""
     if delta >= 0:
         return "OK"
-    drop = -delta
+    # Count-derived scores can subtract to just below an exact threshold.
+    drop = round(-delta, 9)
     if drop < minor:
         return "OK"
     if drop < major:

@@ -405,13 +405,26 @@ class TestEveryProbeSite:
         [QUESTION_ANSWER, QUERY_RESPONSE, INPUT_OUTPUT],
         ids=["question_answer", "query_response", "input_output"],
     )
-    def test_memorization_with_no_splittable_text_is_not_run(self, tmp_path, monkeypatch, rows):
+    def test_memorization_reads_question_answer_style_rows(self, tmp_path, monkeypatch, rows):
+        # These rows form prompt/answer pairs but have no text-like field of their own;
+        # the pair text (prompt + answer) is what memorization scans, so it must run
+        # instead of answering "nothing to check" with OK 1.00.
         report, _ = _run_live(tmp_path, monkeypatch, rows, _gens())
         score = report.scores["memorization"]
-        assert score.verdict == "NOT_RUN", score
-        assert "text, content" in score.evidence  # the new guard, not "no usable rows"
-        assert report.scores["forgetting"].verdict != "NOT_RUN"  # the rows do form pairs
-        assert report.overall == "NOT_RUN"
+        assert score.verdict != "NOT_RUN", score
+        assert "scanned=" in score.evidence
+        assert all(s.verdict != "NOT_RUN" for s in report.scores.values())
+
+    def test_memorization_runs_when_only_some_rows_have_a_text_field(
+        self, tmp_path, monkeypatch
+    ):
+        # Half the rows carry a prompt field, half are question/answer rows: every row
+        # is scanned (any row with text is enough; one text-less row must not stop it).
+        rows = RECOGNISED[:6] + QUESTION_ANSWER[:6]
+        report, _ = _run_live(tmp_path, monkeypatch, rows, _gens())
+        score = report.scores["memorization"]
+        assert score.verdict != "NOT_RUN", score
+        assert "scanned=" in score.evidence
 
 
 # ---------------------------------------------------------------------------

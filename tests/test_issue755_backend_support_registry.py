@@ -30,6 +30,7 @@ import typer
 
 from soup_cli.config.backend_support import REGISTRY as _REGISTRY
 from soup_cli.config.schema import DataConfig, TrainingConfig
+from tests._source_scan import memoized_scan
 from tests.conftest import strip_ansi
 
 MLX_SFT = pathlib.Path(__file__).resolve().parents[1] / (
@@ -178,7 +179,15 @@ def test_registry_covers_every_field_the_mlx_trainer_warns_about():
     unknown = sorted(warned - known)
     assert unknown == [], f"warning list names fields that do not exist: {unknown}"
     registered = {e.field for e in unsupported_for("sft", "mlx")}
-    missing = sorted(warned - registered)
+    # These warnings are internal guards for schema-refused values. Their
+    # load-time refusal is pinned by test_issue1069 (monitoring flags) and
+    # test_mlx_use_mod_is_refused_at_load_and_has_no_doctor_row below (use_mod,
+    # #1752); doctor cannot list them.
+    schema_refused = {
+        "training.loss_watchdog", "training.loss_spike_recovery",
+        "training.grad_accum_auto_tune", "training.use_mod",
+    }
+    missing = sorted(warned - registered - schema_refused)
     assert missing == [], (
         f"mlx_sft.py warns about {missing} but the registry does not list them"
     )
@@ -277,17 +286,23 @@ def test_961_reachable_fields_reported_together(config_at):
         load_config(config_at("sft", "mlx", fields + "\n  quantization_aware: true"))
 
 
-def test_mlx_use_mod_is_declared_rejected(config_at):
-    """#1752 — the MLX row stays a trainer-read warning, but load refuses it."""
-    from soup_cli.config.backend_support import REJECTED, unsupported_for
-    from soup_cli.config.loader import load_config
+def test_mlx_use_mod_is_refused_at_load_and_has_no_doctor_row(config_at):
+    """#1752 — ``use_mod: true`` on MLX SFT stops at config load, so doctor can
+    never see it and the registry lists no row for it (a ``REJECTED`` row would
+    be unreachable, #1330). ``mlx_sft.py`` keeps its own warning for the field."""
+    from soup_cli.config.backend_support import unsupported_for
+    from soup_cli.config.loader import load_config, load_config_from_string
 
-    entry = next(e for e in unsupported_for("sft", "mlx") if e.field == "training.use_mod")
-    assert entry.status == REJECTED
-    assert entry.trainer_reads is True
-    assert "Mixture-of-Depths" in entry.reason
+    assert "training.use_mod" not in {e.field for e in unsupported_for("sft", "mlx")}
+
+    path = config_at("sft", "mlx", "  use_mod: true")
+    with pytest.raises(ValueError) as info:
+        load_config_from_string(pathlib.Path(path).read_text(encoding="utf-8"))
+    message = " ".join(str(info.value).split())
+    assert "training.use_mod is not applied by task='sft' with backend='mlx'" in message, message
+    assert message.endswith("Use backend: transformers, or set use_mod: false.")
     with pytest.raises(SystemExit):
-        load_config(config_at("sft", "mlx", "  use_mod: true"))
+        load_config(path)
 
 
 def test_only_fields_the_user_actually_set_are_reported(config_at):
@@ -473,7 +488,20 @@ def test_doctor_without_config_does_not_read_one(config_at, capsys):
 
 def _fields_read_by(path: pathlib.Path) -> set[str]:
     """Attribute names and exact string constants in a module, docstrings out."""
-    tree = ast.parse(path.read_text(encoding="utf-8"))
+    return _names_read_in(path.read_text(encoding="utf-8"))
+
+
+@memoized_scan
+def _names_read_in(source: str) -> set[str]:
+    """The scan behind ``_fields_read_by``, run once per distinct module text.
+
+    ``_registry_drift`` asks for every module under ``src/`` once per registry pair,
+    and three tests run it on the real tree: twelve parses of the package for one
+    answer. Keyed on the text, so the synthetic trees the tests below write are each
+    scanned for what they contain. ``ast.parse`` and not the shared tree, because the
+    first loop edits what it walks.
+    """
+    tree = ast.parse(source)
     for node in ast.walk(tree):
         if isinstance(
             node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)

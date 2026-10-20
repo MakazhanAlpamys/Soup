@@ -230,7 +230,7 @@ def _load_yaml_config(path: str) -> dict:
     """
     import stat  # noqa: PLC0415
 
-    import yaml  # noqa: PLC0415
+    from soup_cli.utils.yaml_limits import load_yaml_limited  # noqa: PLC0415
 
     no_follow = getattr(os, "O_NOFOLLOW", 0)
     fd = os.open(path, os.O_RDONLY | no_follow)
@@ -251,7 +251,7 @@ def _load_yaml_config(path: str) -> dict:
         except OSError:
             pass
         raise
-    raw = yaml.safe_load(text)
+    raw = load_yaml_limited(text, "config YAML", max_bytes=_MAX_YAML_BYTES)
     if not isinstance(raw, dict):
         raise ValueError("config YAML must be a top-level mapping")
     return raw

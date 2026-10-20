@@ -178,13 +178,15 @@ training:
   quantization: none            # block expansion needs an unquantized base
   expand_layers: 4              # append 4 zero-init decoder blocks
   freeze_trainable_layers: 4    # must equal expand_layers: freeze the original model, train only the appended blocks
+  lora:
+    r: 0                        # train the appended blocks directly; a LoRA rank is refused with expand_layers
   lr: 5e-5
   epochs: 1
 ```
 
 **What happens at trainer start.** Soup deep-copies the last `expand_layers` decoder blocks, zero-inits each clone's residual projections (`mlp.down_proj` + `self_attn.o_proj`) so the appended block initially acts as identity, appends them to `model.model.layers`, and updates `config.num_hidden_layers`. `freeze_trainable_layers` must equal `expand_layers`: it freezes every parameter except the appended blocks, the canonical LLaMA Pro "train only new blocks" recipe. It does not select the top-N or bottom-N layers, and any other value, including `0` or a negative one, is refused at config load.
 
-**Scope.** Works on `task: sft` and `task: pretrain` with `backend: transformers`, `modality: text` and `quantization: none`; any other combination is refused at config load. No other trainer applies the expansion, and the appended blocks are only supported on an unquantized base. Bounds: `expand_layers ∈ [1, 64]`. Over-expansion (more new blocks than the base has layers) silently clamps to the base layer count. Non-Llama-shaped architectures (e.g. Falcon's `dense_4h_to_h`) emit a `warnings.warn` because the residual zero-init heuristic only matches the standard `down_proj` / `o_proj` names — the appended blocks are still appended + trainable, but lose the identity-init guarantee.
+**Scope.** Works on `task: sft` with `backend: transformers`, `modality: text`, `quantization: none` and `lora.r: 0`. A LoRA rank is refused together with `expand_layers` ([#1326](https://github.com/MakazhanAlpamys/Soup/issues/1326)): the expansion runs before `get_peft_model`, which freezes every non-adapter parameter again, appended blocks included, so only adapters on the original layers would train. `task: pretrain` is refused at config load whatever the rank ([#1813](https://github.com/MakazhanAlpamys/Soup/issues/1813)): a rank would freeze the appended blocks again, and the pretrain trainer has no `lora.r: 0` branch, so the recipe needs `task: sft`. Other tasks, backends and modalities, and a quantized base, are refused at config load. No other trainer applies the expansion, and the appended blocks are only supported on an unquantized base. Bounds: `expand_layers ∈ [1, 64]`. Over-expansion (more new blocks than the base has layers) silently clamps to the base layer count. Non-Llama-shaped architectures (e.g. Falcon's `dense_4h_to_h`) emit a `warnings.warn` because the residual zero-init heuristic only matches the standard `down_proj` / `o_proj` names — the appended blocks are still appended + trainable, but lose the identity-init guarantee.
 
 
 ## Optimizer & PEFT Zoo
@@ -193,9 +195,12 @@ Pick from a wider catalogue of optimizers and use quantization-aware LoRA initia
 
 ```yaml
 training:
-  # 30+ optimizers — HF-native, bnb, BAdam, APOLLO, Adam-mini, lomo,
-  # grokadamw, schedule_free, muon, dion, came_pytorch, ao_adamw_{fp8,4bit,8bit}
-  optimizer: badam
+  # HF-native, bnb-8bit and v0.41.0 additions (lomo, apollo_adamw,
+  # grokadamw, schedule_free). Ten retired names (badam, adam_mini, muon,
+  # dion, came_pytorch, ao_adamw_{fp8,4bit,8bit}, ...) are refused at
+  # config load because transformers 5.x rejects them (#1269);
+  # muon and adamw_hf still work on backend: mlx.
+  optimizer: adafactor
 
   # Friendly aliases for users coming from LlamaFactory / Axolotl
   # load_in_8bit: true      # equivalent to quantization: 8bit
@@ -208,9 +213,8 @@ training:
     loftq_iter: 1
     loftq_bits: 4
 
-  # LLaMA Pro block expansion (freeze_trainable_layers must equal expand_layers)
-  expand_layers: 4
-  freeze_trainable_layers: 4
+  # LLaMA Pro block expansion needs lora.r: 0, so it cannot share a run with a
+  # LoRA init such as LoftQ; see LLaMA Pro Block Expansion above.
 ```
 
 Catch-all friendly errors: typos in `optimizer:` are rejected at config-load with the v0.41.0 additions listed in the message; `load_in_8bit` mixed with `load_in_16bit` raises rather than picking one silently.
@@ -373,10 +377,23 @@ deprecated in favour of the YAML registry.
 **Multi-trainer scope** — ReLoRA and the surgical patches are wired into every
 transformer-backend trainer: `sft`, `dpo`, `grpo`, `kto`, `orpo`, `simpo`, `ipo`,
 `ppo`, `reward_model`, `pretrain`, `embedding`, `bco`, plus the unified
-`task: preference` dispatcher. Schema cross-validator rejects MLX backend,
+`task: preference` dispatcher, though ReLoRA is refused for the tasks with a frozen
+reference (below). Schema cross-validator rejects MLX backend,
 quantization other than `none`, `stream_layers`, `lora.use_vera`, `lora.use_dora`,
 and `use_fsdp2_compile` (the callback is HF Trainer-specific and restart requires
 a writable float base).
+
+**ReLoRA is refused where the loss has a frozen reference**: `task: dpo`, `ipo`,
+`kto` and `bco`, `task: grpo` with `grpo_beta` above 0, and `task: preference`
+whose loss or blend names `dpo`, `ipo` or `bco`. trl reads that reference from the
+policy's own base weights (a `ref` adapter over them, or the model with its adapter
+disabled), and every restart merges the trained adapter into those weights. From
+the first restart on, the reference would be the policy as of that step instead of
+the model the run started from. Measured on a fixed batch with the tiny test
+model: the `dpo` reference does not move until the first restart and moves by 0.83
+at it. `sft`, `orpo`, `simpo`, `reward_model`, `pretrain`, `embedding`, `grpo` with
+`grpo_beta: 0` and a `simpo` / `orpo` preference run are not affected. `ppo` reads its
+reference the same way as `kto` and `bco` but has not been measured.
 
 
 ## DoRA (Weight-Decomposed LoRA)
@@ -392,9 +409,11 @@ training:
 ```
 
 Works with all training tasks on the transformers backend (see the note on
-quantized bases below). On `backend: unsloth` and `backend: mlx`, `use_dora: true`
-is refused when the config is loaded: neither backend builds a DoRA adapter, so
-it would silently train plain LoRA.
+quantized bases below). The MLX backend also supports DoRA for text SFT on dense
+linear targets with unquantized or pre-quantized 4-bit bases; see
+[DoRA on MLX](backends-and-ops.md#dora-on-mlx) for restrictions and native adapter
+loading/fusion. On `backend: unsloth`, `use_dora: true` remains refused at config
+load because that path does not build a DoRA adapter.
 
 > **Not on GPTQ / AWQ / AQLM / EETQ bases.** peft has no DoRA variant for those
 > layers and raises when the adapter is attached, so `use_dora: true` with
@@ -440,6 +459,50 @@ training:
 - **Compatibility:** Supported on the `transformers` backend for `sft`, `pretrain`, and `embedding` tasks. Mutually exclusive with `loraplus_lr_ratio` (which differentiates $A$ and $B$ rates), `use_galore`, `lora.use_vera` (VeRA trains scaling vectors, so `create_lorafa_optimizer` finds no $B$ matrices), non-AdamW optimizers, and the `mlx` backend. Requires explicit `lora.r` and `lora.alpha`. LoRA-FA has not been validated under `stream_layers: true` (layer streaming); combining them is not recommended.
 
 
+## Fast-LoRA kernels (`training.fast_lora`)
+
+Runs a LoRA's projections through Soup's own autograd functions instead of
+peft's modules: q/k/v with one shared input and one accumulated input gradient,
+gate/up/down around SwiGLU as one block, and every other adapted Linear (such as
+`o_proj`) as a single projection. The math is LoRA's; the kernels change the
+order of the work and what is kept for the backward pass.
+
+```yaml
+training:
+  fast_lora: true
+  lora:
+    dropout: 0          # required: Soup's default is 0.05
+    target_modules: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]
+```
+
+Setup prints how many modules each kernel took over, and refuses the run if the
+flag is on and none was. Off by default.
+
+- **Scope:** `task: sft` on the `transformers` backend, `modality: text`,
+  `quantization: none` or `4bit`, resident or with `stream_layers`. Refused, with
+  the reason: any other task, backend, modality or quantization; `lora.r: 0`;
+  `lora.use_dora`, `lora.use_vera`, `lora.target_parameters`; `lora.dropout`
+  other than 0 (peft gives every projection its own dropout, so q/k/v and
+  gate/up would no longer share one input); `training.use_liger`, which
+  replaces the MLP's forward too; `unfrozen_parameters` (Spectrum) and
+  `lisa_enabled`, which train the model's own weights and skip the LoRA setup;
+  and `quantization_aware: fp8`, whose converted projections the kernels would
+  read around. A model whose adapters the kernels cannot run (GPT-2's Conv1D
+  layout) is refused at setup, as if nothing had been patched.
+- **What is verified, on CPU:** float64 `gradcheck` of each kernel through the
+  switch; float32 forward and backward parity with peft's modules; the same
+  gradients with and without non-reentrant checkpointing; the base model's
+  output with the adapter disabled; fifty training steps whose losses stay
+  within 1e-3 of peft's; and a streamed model with more layers than
+  `stream_buffers`, whose LoRA gradients on every layer equal those without the
+  flag.
+- **Not verified:** bf16, fp16 and NF4 parity, and streaming on a GPU. Those
+  tests exist (`pytest -m gpu`) and need a CUDA card with bitsandbytes.
+- **No speedup is claimed.** Nothing here measures end-to-end throughput or
+  peak VRAM. Under gradient checkpointing, which layer streaming always uses, a
+  block's saved tensors exist only during its recompute, so any saving lowers a
+  per-layer transient, not the stored total.
+
 ## rsLoRA (Rank-Stabilized Scaling)
 
 Use rank-stabilized LoRA scaling for better performance at high ranks:
@@ -453,6 +516,11 @@ training:
 ```
 
 Works with all training tasks and backends. Recommended for LoRA rank ≥ 32.
+
+The scale is `alpha / sqrt(r)` instead of plain LoRA's `alpha / r` (2.0 instead of 0.25
+for the config above) on every backend: PEFT's `LoraConfig(use_rslora=True)` on
+`transformers`, the `scale` Soup hands mlx-lm (in `adapter_config.json` and at training
+time) on `mlx`, and `get_peft_model(..., use_rslora=True)` on `unsloth`.
 
 
 ## VeRA & OLoRA (Smaller-Footprint PEFT)
@@ -491,7 +559,7 @@ training:
   neftune_alpha: 5.0  # Noise intensity (0-50, typically 5-15)
 ```
 
-Works with SFT, DPO, KTO, ORPO, SimPO, and IPO tasks.
+Works with SFT, TTS, DPO, KTO, ORPO, SimPO, IPO, BCO, and preference tasks.
 
 
 ## Sample Packing
@@ -693,7 +761,7 @@ config load because its evidence covers BF16, not FP16; see the
 
 ### Loss Spike Auto-Recovery
 
-Extends the watchdog: instead of stopping on a spike, writes `<output>/spike_recovery.json` with decayed LR and attempt count for re-launch. Capped at 3 attempts by default.
+Extends the watchdog: when the watchdog halts training on a loss spike, writes `<output>/spike_recovery.json` with decayed LR and attempt count for re-launch (e.g. `soup train --resume`). Capped at `loss_spike_recovery_max_attempts` (default 3); each launch hitting a spike evaluates prior completed attempts against the cap (`attempts < max_attempts`), writes the incremented count, and sets `should_recover: false` once the recovery budget is exhausted.
 
 ```yaml
 training:

@@ -18,6 +18,7 @@ def _load(task, expand, freeze):
     lines = ["  quantization: none\n", f"  expand_layers: {expand}\n"]
     if freeze is not None:
         lines.append(f"  freeze_trainable_layers: {freeze}\n")
+    lines.append("  lora:\n    r: 0\n")  # #1326: a LoRA rank is refused with expand_layers
     return load_config_from_string(
         "base: org/model\n"
         f"task: {task}\n"
@@ -26,7 +27,10 @@ def _load(task, expand, freeze):
     )
 
 
-@pytest.mark.parametrize("task", ["sft", "pretrain"])
+# #1813: task: pretrain is outside the expand_layers scope, so only sft loads. The
+# #1409 check runs before the scope check, so the refusals below still name the
+# freeze value on pretrain too.
+@pytest.mark.parametrize("task", ["sft"])
 def test_freeze_equal_to_expand_loads(task):
     cfg = _load(task, expand=4, freeze=4)
     assert cfg.training.expand_layers == 4

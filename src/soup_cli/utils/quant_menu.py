@@ -282,6 +282,34 @@ def build_fp8_dequant_config() -> dict[str, Any]:
     return {"dequantize": True}
 
 
+#: #1731 — the first transformers whose FP8 quantizer loads a dense base. Up to
+#: 5.16.1, ``FineGrainedFP8HfQuantizer.update_tp_plan`` reads
+#: ``FP8Experts._impl_tp_layer_overrides.get(impl)`` with no default, and a base
+#: without MegaMoE experts raises ``AttributeError`` before a weight is read.
+FP8_MIN_TRANSFORMERS = "5.17.0"
+
+
+def _refuse_fp8_on_old_transformers() -> None:
+    """Stop an ``fp8`` run where its config is built, not inside the load.
+
+    Here and not in the schema: it depends on what is installed, not on the
+    config. A pre-release of the minimum sorts below it and is refused too.
+    """
+    import transformers
+    from packaging.version import Version
+
+    installed = transformers.__version__
+    if Version(installed) < Version(FP8_MIN_TRANSFORMERS):
+        raise RuntimeError(
+            f"quantization: fp8 needs transformers >= {FP8_MIN_TRANSFORMERS}, and "
+            f"{installed} is installed: its FP8 quantizer raises AttributeError in "
+            "update_tp_plan when it loads a dense base (fixed in "
+            f"{FP8_MIN_TRANSFORMERS}). Upgrade with "
+            f"pip install -U 'transformers>={FP8_MIN_TRANSFORMERS}', or pick another "
+            "quantization."
+        )
+
+
 # ---------------------------------------------------------------------------
 # Part H — Compatibility matrix (quant × multi-GPU)
 # ---------------------------------------------------------------------------
@@ -510,6 +538,7 @@ def build_quantization_config_for_loader(
             )
         return Mxfp4Config(**build_mxfp4_config())
     if quantization == "fp8":
+        _refuse_fp8_on_old_transformers()
         try:
             from transformers import FineGrainedFP8Config as _FP8Cfg
         except ImportError:
@@ -518,7 +547,8 @@ def build_quantization_config_for_loader(
             except ImportError as exc:
                 raise RuntimeError(
                     "transformers does not expose an FP8 config — "
-                    "upgrade transformers >= 4.45 to use quantization='fp8'."
+                    f"upgrade transformers >= {FP8_MIN_TRANSFORMERS} to use "
+                    "quantization='fp8'."
                 ) from exc
         if console is not None:
             console.print("[green]FP8:[/] dequantize-on-load")

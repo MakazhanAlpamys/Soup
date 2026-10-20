@@ -54,6 +54,7 @@ from pathlib import Path
 from typing import Callable, Tuple
 
 from soup_cli.eval.forgetting import MINI_BENCHMARKS, ForgettingDetector
+from soup_cli.eval.generation import generate_outputs
 
 GeneratorFn = Callable[[str], str]
 
@@ -94,14 +95,16 @@ DEFAULT_GENERAL_SUITE: Tuple[str, ...] = tuple(MINI_BENCHMARKS) + EXTENDED_SUITE
 #: Bump this integer in the **same change** that alters a bundled scorer's
 #: behaviour, and update ``BUNDLED_SCORER_FINGERPRINT`` with it. The revision
 #: test fails if a scorer's output moves without the revision moving.
-BUNDLED_SCORER_REVISION: int = 5
+BUNDLED_SCORER_REVISION: int = 6
 
 #: SHA-256 of deterministic ``score_bundled_suite`` outputs under the fixed
-#: fingerprint corpus in ``bundled_scorer_fingerprint``. Locked to revision 5;
+#: fingerprint corpus in ``bundled_scorer_fingerprint``. Locked to revision 6;
 #: update together with ``BUNDLED_SCORER_REVISION``. Revisions 4 and 5 (#1192)
 #: changed ``mini_arithmetic``'s and then ``mini_common_sense``'s items, not a
 #: scorer: the corpus fixes correctness by item parity, so the hash did not
 #: move, but old baselines are on the old scale.
+#: Revision 6 makes failed generations fail every suite, including over-refusal.
+#: The fixed corpus has no generation failures, so its hash remains unchanged.
 BUNDLED_SCORER_FINGERPRINT: str = (
     "80992ac0369233b36d82e41c6f2baff510f6331a6647329fa139c4a99259d5c4"
 )
@@ -195,19 +198,6 @@ def load_suite_items(name: str) -> Tuple[dict, ...]:
     return _load_gate_fixture(filename)
 
 
-def _call(gen: GeneratorFn, prompt: str) -> str:
-    """Invoke ``gen`` for one prompt; a generation error / non-str result scores
-    as a failure (empty string) and an oversized result is truncated to
-    ``_MAX_OUTPUT_LEN`` — so one bad generation never aborts a run."""
-    try:
-        out = gen(prompt)
-    except Exception:  # noqa: BLE001 — a generation error is a failed item, not a crash
-        return ""
-    if not isinstance(out, str):
-        return ""
-    return out[:_MAX_OUTPUT_LEN]
-
-
 def _fraction_passing(
     items: Tuple[dict, ...], gen: GeneratorFn, predicate
 ) -> float:
@@ -220,8 +210,11 @@ def _fraction_passing(
     if not items:
         return 0.0
     passed = 0
-    for item in items:
-        output = _call(gen, item.get("prompt", ""))
+    outputs = generate_outputs(gen, [item.get("prompt", "") for item in items])
+    for item, output in zip(items, outputs):
+        if output is None:
+            continue
+        output = output[:_MAX_OUTPUT_LEN]
         try:
             if predicate(item, output):
                 passed += 1
@@ -438,7 +431,7 @@ def score_bundled_suite(name: str, gen: GeneratorFn) -> float:
 
     #355 — the ``gen`` guard is not defensive tidiness. Before it, a
     non-callable ``gen`` returned **0.0** on the behavioural suites (every
-    ``gen(prompt)`` raised inside ``_call``'s blanket handler and scored as a
+    ``gen(prompt)`` raised inside the old blanket handler and scored as a
     failed item) while RAISING ``TypeError`` out of the MCQ branch. In leg 2 a
     0.0 reads as "the model failed every item" -> DON'T SHIP, so a caller error
     was indistinguishable from a regression **and failed in the direction that

@@ -245,6 +245,20 @@ def _validate_classification_dataset_if_applicable(cfg: Any, dataset: dict) -> N
             raise typer.Exit(1) from exc
 
 
+def _validate_csm_dataset_if_applicable(cfg: Any, dataset: dict) -> None:
+    if cfg.task != "tts" or cfg.training.tts_family != "sesame_csm":
+        return
+    from rich.markup import escape
+
+    from soup_cli.utils.csm import validate_csm_dataset
+
+    try:
+        validate_csm_dataset(dataset)
+    except ValueError as exc:
+        console.print(f"[red]Error validating CSM dataset:[/] {escape(str(exc))}")
+        raise typer.Exit(1) from exc
+
+
 def _refuse_empty_train(dcfg, dataset) -> None:
     """Stop a run whose data loaded zero training rows (#1217).
 
@@ -440,6 +454,39 @@ def _hardware_fit_preflight(cfg, gpu_info, *, allow_oom_attempt: bool) -> None:
     )
     if not allow_oom_attempt:
         raise typer.Exit(1)
+
+
+def _loads_on_unsloth(cfg) -> bool:
+    """#1736 — would this config still load with ``backend: unsloth``?
+
+    The tip that suggests the backend used to look at the backend alone, so it
+    was also printed for configs the schema refuses on unsloth (a task with no
+    unsloth setup, ``freeze_layers``, ``moe_lora``...). The schema is asked
+    instead of a list kept here: the dumped config is validated again with the
+    backend changed. Only that pass's ``ValidationError`` means no; anything
+    else is a bug and must surface.
+    """
+    from pydantic import ValidationError
+
+    from soup_cli.config.schema import SoupConfig
+
+    try:
+        SoupConfig.model_validate({**cfg.model_dump(), "backend": "unsloth"})
+    except ValidationError:
+        return False
+    return True
+
+
+def _unsloth_tip_applies(cfg) -> bool:
+    """Whether to suggest ``backend: unsloth``: only to a run on transformers,
+    with unsloth installed, whose config would load with it (#1736). The
+    installed check comes before the second validation, so a machine without
+    unsloth validates nothing twice."""
+    if cfg.backend != "transformers":
+        return False
+    from soup_cli.utils.unsloth import is_unsloth_available
+
+    return is_unsloth_available() and _loads_on_unsloth(cfg)
 
 
 def _apply_replay_overrides(cfg, *, replay, replay_ratio, replay_seed=None):
@@ -838,9 +885,11 @@ def train(
         console.print(f"[red]Invalid distributed launch:[/] {markup_escape(message)}")
         raise typer.Exit(1) from exc
 
+    from soup_cli.utils.terminal import for_terminal
+
     config_path = Path(config)
     if not config_path.exists():
-        console.print(f"[red]Config not found: {config_path}[/]")
+        console.print(f"[red]Config not found: {for_terminal(config_path)}[/]")
         console.print("Run [bold]soup init[/] to create one.")
         raise typer.Exit(1)
 
@@ -871,7 +920,8 @@ def train(
                 config_path, schedule, trust_remote_code=trust_remote_code,
             )
         except (SweepTooShortError, LrSweepUnavailableError) as exc:
-            console.print(f"[red]{markup_escape(str(exc))}[/]")
+            # The refusal can quote the config path and text from the file.
+            console.print(f"[red]{for_terminal(str(exc))}[/]")
             raise typer.Exit(1) from exc
         try:
             save_lr_finder_report(lrs, losses_for_report, find_lr_output)
@@ -882,7 +932,7 @@ def train(
         raise typer.Exit(0)
 
     # Load & validate config
-    console.print(f"[dim]Loading config from {config_path}...[/]")
+    console.print(f"[dim]Loading config from {for_terminal(config_path)}...[/]")
     cfg = load_config(
         config_path,
         training_overrides=(
@@ -912,7 +962,6 @@ def train(
     # An unregistered data.chat_template name raises KeyError in the trainer,
     # after the model has loaded. Check it before anything is downloaded.
     from soup_cli.data.chat_templates import resolve_chat_template
-    from soup_cli.utils.terminal import for_terminal
 
     try:
         resolve_chat_template(cfg.data.chat_template)
@@ -1108,7 +1157,7 @@ def train(
             # Validate the suite path up-front (path containment + parse).
             load_suite(gate)
         except (FileNotFoundError, ValueError) as exc:
-            console.print(f"[red]Invalid --gate suite: {exc}[/]")
+            console.print(f"[red]Invalid --gate suite: {for_terminal(str(exc))}[/]")
             raise typer.Exit(1) from exc
         cfg.training.eval_gate = EvalGateConfig(enabled=True, suite=gate)
         console.print(f"[green]Eval gate enabled[/] with suite: {gate}")
@@ -1649,15 +1698,13 @@ def train(
         for err in ctx_errors:
             console.print(f"[yellow]Long-context warning:[/] {err}")
 
-    # Suggest unsloth if available but not being used
-    if cfg.backend == "transformers":
-        from soup_cli.utils.unsloth import is_unsloth_available
-
-        if is_unsloth_available():
-            console.print(
-                "[dim]Tip: unsloth is installed. Add [bold]backend: unsloth[/dim]"
-                "[dim] to soup.yaml for 2-5x faster training.[/]"
-            )
+    # Suggest unsloth if available but not being used, and only to a config the
+    # loader would take with it (#1736).
+    if _unsloth_tip_applies(cfg):
+        console.print(
+            "[dim]Tip: unsloth is installed. Add [bold]backend: unsloth[/dim]"
+            "[dim] to soup.yaml for 2-5x faster training.[/]"
+        )
 
     # #1613: cheap stripe roots validation ahead of confirmation, --dry-run,
     # dataset loading, and run creation.
@@ -1698,6 +1745,7 @@ def train(
         )
         _refuse_empty_train(cfg.data, dataset)
         _validate_classification_dataset_if_applicable(cfg, dataset)
+        _validate_csm_dataset_if_applicable(cfg, dataset)
         console.print(
             f"[green]Data OK:[/] {_train_sample_count(cfg.data, dataset)} train samples"
         )
@@ -1705,6 +1753,11 @@ def train(
             console.print(f"[green]Val:[/] {len(dataset['val'])} samples")
         console.print("[green]Config valid. Ready to train![/]")
         raise typer.Exit()
+
+    # Capture the source before loading/transformation, never at verdict/registration time.
+    from soup_cli.utils.training_identity import capture_training_data_hash
+
+    training_data_sha256 = capture_training_data_hash(cfg)
 
     # Load data
     console.print("[dim]Loading dataset...[/]")
@@ -1716,6 +1769,7 @@ def train(
     )
     _refuse_empty_train(cfg.data, dataset)
     _validate_classification_dataset_if_applicable(cfg, dataset)
+    _validate_csm_dataset_if_applicable(cfg, dataset)
     console.print(
         f"[green]Loaded:[/] {_train_sample_count(cfg.data, dataset)} train samples"
     )
@@ -1728,6 +1782,7 @@ def train(
     from soup_cli.experiment.tracker import ExperimentTracker
 
     tracker = ExperimentTracker()
+    run_base = cfg.base
     experiment_name = cfg.experiment_name or name
     run_id = tracker.start_run(
         config_dict=cfg.model_dump(),
@@ -1741,6 +1796,7 @@ def train(
     # _reconcile_orphaned_run to ever notice the process is gone — the
     # rescue path #401 built for MCP-spawned runs was otherwise inert here.
     tracker.mark_running(run_id, pid=os.getpid())
+    tracker.record_training_data_hash(run_id, training_data_sha256)
     console.print(f"[dim]Run ID: {run_id}[/]")
 
     try:
@@ -1801,9 +1857,9 @@ def train(
                         f"[dim]Fetched {cfg.base} from hub={hub_name} → "
                         f"{local_path}[/]"
                     )
-                # Use ``model_copy(update=...)`` so the Pydantic field
-                # validators on ``base`` rerun (matches v0.33.0 #47 / v0.40.0
-                # Part B immutability policy).
+                # model_copy replaces base without validation and leaves the
+                # original config untouched. local_path comes from download_repo
+                # under the cache directory checked above, so no revalidation is needed.
                 cfg = cfg.model_copy(update={"base": local_path})
             except ImportError as exc:
                 console.print(f"[red]{_markup_escape(str(exc))}[/]")
@@ -1829,9 +1885,26 @@ def train(
         # to keep separate chains and sweep's copy fell ten tasks and the MLX
         # route behind. See soup_cli/trainer/dispatch.py.
         from soup_cli.trainer.dispatch import build_trainer
+        from soup_cli.utils.launcher import is_in_distributed
+        from soup_cli.utils.run_provenance import BaseRevision, base_revision_scope
 
-        trainer_wrapper = build_trainer(cfg, **trainer_kwargs)
-        trainer_wrapper.setup(dataset)
+        base_identity = BaseRevision(
+            run_base,
+            binding_supported=(cfg.backend == "transformers" and hub_name == "hf"
+                               and not cfg.training.stream_layers and not is_in_distributed()),
+        )
+        with base_revision_scope(base_identity):
+            trainer_wrapper = build_trainer(cfg, **trainer_kwargs)
+            trainer_wrapper.setup(dataset)
+        tracker.record_base_revision(
+            run_id, revision=base_identity.revision, source=base_identity.source,
+        )
+        if base_identity.source == "hub_commit":
+            console.print(f"[dim]Base revision: {base_identity.revision} (bound Hub commit)[/]")
+        elif base_identity.source == "cache_path":
+            console.print("[dim]Base revision: cache-path metadata; local bytes are unverified[/]")
+        else:
+            console.print("[dim]Base revision: unknown (existing loading behavior preserved)[/]")
 
         # #350 — PEFT promotes newly-created adapters to fp32. FSDP cannot flatten
         # those beside bf16/float16 BNB storage, so align every trainable floating
@@ -1914,7 +1987,7 @@ def train(
         raise
 
     try:
-        with profiler_ctx as profiler, energy_ctx:
+        with profiler_ctx as profiler, energy_ctx, base_revision_scope(base_identity):
             if profile_run and profiler is not None:
                 from soup_cli.utils.profiling import attach_profile_callback
 
@@ -1927,6 +2000,19 @@ def train(
                 display=display, tracker=tracker, run_id=run_id,
                 resume_from_checkpoint=resume_from,
             )
+
+        from soup_cli.utils.run_provenance import write_run_provenance
+
+        tracker.record_base_revision(
+            run_id, revision=base_identity.revision, source=base_identity.source,
+        )
+        # Only the saving rank writes portable metadata beside the final artifact.
+        if _should_run_diagnose_gate_on_rank():
+            metadata = base_identity.metadata(run_id)
+            recorded_run = tracker.get_run(run_id)
+            if isinstance(recorded_run, dict):
+                metadata["training_data_sha256"] = recorded_run.get("training_data_sha256")
+            write_run_provenance(result["output_dir"], metadata)
 
         # Save completion to tracker
         tracker.finish_run(
@@ -2568,7 +2654,9 @@ def _run_live_lr_sweep(
     from soup_cli.utils.lr_finder import LrSweepUnavailableError, SweepTooShortError
 
     try:
-        cfg = load_config(config_path)
+        # The refusal below quotes the reason, so the loader hands it over
+        # instead of printing its own line and exiting.
+        cfg = load_config(config_path, raise_unreadable=True)
     except Exception as exc:  # noqa: BLE001 — one refusal line, not a traceback
         raise LrSweepUnavailableError(
             f"--find-lr: config load failed ({exc}); no LR report was written."

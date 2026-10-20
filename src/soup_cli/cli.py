@@ -828,15 +828,17 @@ def _mask_audit_args(command: str, args: list[str]) -> tuple[str, ...]:
     something else elsewhere. If the command does not resolve to a leaf,
     every credential option string of the app is masked. A resolution
     failure falls back to that widest set, never to the unmasked args.
+    Whatever the tree yields, a long option whose name looks like a
+    credential is masked by that name as well.
     """
     global _ALL_SECRET_OPTION_STRINGS
-    import click
-
     from soup_cli.utils.argv_redaction import (
+        all_long_option_strings,
         all_secret_option_strings,
         mask_secret_args,
         resolve_command,
         secret_option_strings,
+        subcommands,
     )
 
     root = typer.main.get_command(app)
@@ -845,14 +847,14 @@ def _mask_audit_args(command: str, args: list[str]) -> tuple[str, ...]:
     everything = _ALL_SECRET_OPTION_STRINGS
     try:
         resolved = resolve_command(root, [command, *args])
-        if isinstance(resolved, click.Group):
+        if subcommands(resolved) is not None:
             secret_opts = everything
         else:
             app_wide_longs = frozenset(o for o in everything if o.startswith("--"))
             secret_opts = secret_option_strings(resolved) | app_wide_longs
     except Exception:  # noqa: BLE001 — fall back to the widest mask
         secret_opts = everything
-    return mask_secret_args(args, secret_opts)
+    return mask_secret_args(args, secret_opts, all_long_option_strings(root))
 
 
 def _emit_audit_event(argv: list[str], exit_code: int) -> None:

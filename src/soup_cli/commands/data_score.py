@@ -137,7 +137,9 @@ def score(
 
 
 def decontaminate(
-    input: str = typer.Option(..., "--input", "-i"),
+    input: str = typer.Option(
+        ..., "--input", "-i", help="Input JSONL file to decontaminate."
+    ),
     benchmarks: Optional[str] = typer.Option(
         None, "--benchmarks", "-b",
         help="Comma-separated benchmark names (label only; corpora not bundled).",
@@ -154,8 +156,14 @@ def decontaminate(
         "clean.jsonl", "--output", "-o",
         help="Output JSONL of rows that survived decontamination.",
     ),
-    threshold: float = typer.Option(0.8, "--threshold", min=0.0, max=1.0),
-    n: int = typer.Option(8, "--n", min=1, max=32),
+    threshold: float = typer.Option(
+        0.8, "--threshold", min=0.0, max=1.0,
+        help="Minimum n-gram overlap ratio for removing a row.",
+    ),
+    n: int = typer.Option(
+        8, "--n", min=1, max=32,
+        help="N-gram size used for overlap detection.",
+    ),
 ):
     """Drop rows that overlap public benchmarks (n-gram heuristic).
 
@@ -227,8 +235,13 @@ def decontaminate(
 
 
 def toxicity(
-    input: str = typer.Option(..., "--input", "-i"),
-    output: str = typer.Option("toxicity.jsonl", "--output", "-o"),
+    input: str = typer.Option(
+        ..., "--input", "-i", help="Input JSONL file to score."
+    ),
+    output: str = typer.Option(
+        "toxicity.jsonl", "--output", "-o",
+        help="Output JSONL file for rows meeting the threshold.",
+    ),
     threshold: float = typer.Option(
         0.05, "--threshold", min=0.0, max=1.0,
         help="Rows meeting the abuse-keyword threshold are kept.",
@@ -260,8 +273,13 @@ def toxicity(
 
 
 def langdetect(
-    input: str = typer.Option(..., "--input", "-i"),
-    output: str = typer.Option("langdetect.jsonl", "--output", "-o"),
+    input: str = typer.Option(
+        ..., "--input", "-i", help="Input JSONL file to tag."
+    ),
+    output: str = typer.Option(
+        "langdetect.jsonl", "--output", "-o",
+        help="Output JSONL file with language tags.",
+    ),
 ):
     """Tag each row with a 2-letter language code (heuristic)."""
     from soup_cli.utils.data_score import detect_language, extract_row_text
@@ -286,8 +304,13 @@ def langdetect(
 
 
 def pii(
-    input: str = typer.Option(..., "--input", "-i"),
-    output: str = typer.Option("pii.jsonl", "--output", "-o"),
+    input: str = typer.Option(
+        ..., "--input", "-i", help="Input JSONL file to scan."
+    ),
+    output: str = typer.Option(
+        "pii.jsonl", "--output", "-o",
+        help="Output JSONL file containing rows with detected PII.",
+    ),
 ):
     """Flag rows containing email / phone / SSN / credit-card patterns."""
     from soup_cli.utils.data_score import detect_pii, extract_row_text
@@ -314,8 +337,13 @@ def pii(
 
 
 def educational(
-    input: str = typer.Option(..., "--input", "-i"),
-    output: str = typer.Option("educational.jsonl", "--output", "-o"),
+    input: str = typer.Option(
+        ..., "--input", "-i", help="Input JSONL file to score."
+    ),
+    output: str = typer.Option(
+        "educational.jsonl", "--output", "-o",
+        help="Output JSONL file with educational-value scores.",
+    ),
 ):
     """Tag each row with an educational-value score [0, 1]."""
     from soup_cli.utils.data_score import extract_row_text, score_educational_value

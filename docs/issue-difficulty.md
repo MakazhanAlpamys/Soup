@@ -27,7 +27,7 @@ the table below disagree, the table is the definition and the label gets fixed.
 | 7 | A new mechanism or a deep change to a core path (trainer internals, layer streaming, the data pipeline); proving it takes a measurement. | #1425 |
 | 8 | The cause is not known yet or is hard to reproduce, or the result must be bit-exact. | #342 |
 | 9 | A new subsystem, or support for several model families at once. | #265 |
-| 10 | Research-grade: hand-written kernels or backward passes with a numerical gate. Rare; most hard work stops at 8 or 9. | #792 |
+| 10 | Research-grade: hand-written kernels or backward passes with a numerical gate. Rare; most hard work stops at 8 or 9. | none open right now |
 
 ## Special hardware
 
