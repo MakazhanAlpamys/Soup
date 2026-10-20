@@ -3,21 +3,28 @@
 ``cli._emit_audit_event`` masks option values by option name before a line is
 stored; lines stored by older versions still carry them as typed. The writer
 (``append_audit_event(..., arg_mask=...)``) applies the same masking to the
-stored lines once, guarded by a marker file next to the log.
+stored lines once, guarded by a marker file next to the log. A pass that fails is
+not repeated by every command (a record beside the log makes it wait a day), and
+temp files a killed pass left behind are cleared by the next one.
 """
 
 from __future__ import annotations
 
 import functools
 import json
+import logging
 import os
 import stat
 import tempfile
+import time
 import tracemalloc
+import types
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
 from soup_cli.utils import audit_log
+from soup_cli.utils.argv_redaction import ArgMasker
 from soup_cli.utils.audit_log import AuditEvent, append_audit_event, mask_older_lines
 
 URL = "https://hooks.slack.com/services/T0000000/B0000000/abcdefghijklmnopqrstuvwx"
@@ -113,6 +120,72 @@ def replace_calls(monkeypatch):
 
     monkeypatch.setattr(os, "replace", recording)
     return calls
+
+
+_DAY = 24 * 60 * 60
+_HOUR = 60 * 60
+
+
+class _Clock:
+    """A settable stand-in for ``audit_log._utc_now``."""
+
+    def __init__(self):
+        self.now = datetime(2026, 10, 20, 12, 0, tzinfo=timezone.utc)
+
+    def __call__(self):
+        return self.now
+
+    def advance(self, seconds):
+        self.now += timedelta(seconds=seconds)
+
+
+@pytest.fixture
+def clock(monkeypatch):
+    fake = _Clock()
+    monkeypatch.setattr(audit_log, "_utc_now", fake)
+    return fake
+
+
+def _tried(log):
+    """The record a failed pass leaves beside the log."""
+    return str(log) + ".masked-v1.tried"
+
+
+def _tried_text(log):
+    with open(_tried(log), encoding="ascii") as fh:
+        return fh.read().strip()
+
+
+@pytest.fixture
+def scans(monkeypatch):
+    """The files the pass has read through so far (it still runs); empty if it never ran."""
+    seen = []
+    real = audit_log._mask_file_lines
+    monkeypatch.setattr(
+        audit_log, "_mask_file_lines", lambda *args: seen.append(args[0]) or real(*args)
+    )
+    return seen
+
+
+class _ReplaceRefused:
+    """``os.replace`` fails, as it does for a log another process holds open."""
+
+    def __init__(self, monkeypatch):
+        self._monkeypatch = monkeypatch
+        self._real = os.replace
+        monkeypatch.setattr(os, "replace", self._refuse)
+
+    @staticmethod
+    def _refuse(*_args, **_kwargs):
+        raise PermissionError("the file is in use")
+
+    def lift(self):
+        self._monkeypatch.setattr(os, "replace", self._real)
+
+
+@pytest.fixture
+def replace_refused(monkeypatch):
+    return _ReplaceRefused(monkeypatch)
 
 
 # ---------------------------------------------------------------------------
@@ -215,6 +288,26 @@ def test_masking_is_the_one_new_lines_get(log, mask):
     stored = [json.loads(line)["args"] for line in log.read_bytes().splitlines()]
     assert stored == [list(cli._mask_audit_args(command, args)) for command, args in cases]
     assert stored[0] == ["--slack-url", REDACTED, "--config", "a.yaml"]
+
+
+def test_each_stored_line_is_resolved_by_its_own_command(log, mask):
+    """`-t` is a credential option of some commands only; `train -t sft` has none."""
+    before = _stored("train", ["-t", "sft"])
+    log.write_bytes(before)
+
+    mask_older_lines(str(log), mask)
+
+    assert log.read_bytes() == before
+
+
+def test_a_switch_before_a_webhook_option_is_not_taken_for_its_value(log, mask):
+    """`--slack-url` typed with no value: the option after it is still an option."""
+    before = _stored("train", ["--slack-url", "--config", "a.yaml"])
+    log.write_bytes(before)
+
+    mask_older_lines(str(log), mask)
+
+    assert log.read_bytes() == before
 
 
 # ---------------------------------------------------------------------------
@@ -468,7 +561,7 @@ def test_file_mode_is_preserved(log, mask):
 # ---------------------------------------------------------------------------
 
 
-def test_a_failing_mask_leaves_the_log_untouched_and_is_retried(log, mask):
+def test_a_failing_mask_leaves_the_log_untouched_and_is_retried(log, mask, clock):
     before = _stored("version", []) + _stored("train", ["--slack-url", URL])
     log.write_bytes(before)
 
@@ -479,8 +572,10 @@ def test_a_failing_mask_leaves_the_log_untouched_and_is_retried(log, mask):
 
     assert log.read_bytes() == before
     assert not os.path.exists(_marker(log))
+    assert os.path.isfile(_tried(log))
     assert _leftovers(log) == []
 
+    clock.advance(_DAY)
     assert mask_older_lines(str(log), mask) is True
     assert URL.encode() not in log.read_bytes()
     assert os.path.exists(_marker(log))
@@ -500,22 +595,20 @@ def test_a_failing_pass_does_not_stop_the_write(log):
     assert json.loads(lines[1])["command"] == "version"
 
 
-def test_a_failed_replace_leaves_the_log_untouched_and_is_retried(log, mask, monkeypatch):
+def test_a_failed_replace_leaves_the_log_untouched_and_is_retried(
+    log, mask, clock, replace_refused
+):
     before = _stored("train", ["--slack-url", URL])
     log.write_bytes(before)
-    real_replace = os.replace
 
-    def refuse(*_args, **_kwargs):
-        raise PermissionError("the file is in use")
-
-    monkeypatch.setattr(os, "replace", refuse)
     assert mask_older_lines(str(log), mask) is False
-    monkeypatch.setattr(os, "replace", real_replace)
+    replace_refused.lift()
 
     assert log.read_bytes() == before
     assert not os.path.exists(_marker(log))
     assert _leftovers(log) == []
 
+    clock.advance(_DAY)
     assert mask_older_lines(str(log), mask) is True
     assert URL.encode() not in log.read_bytes()
 
@@ -548,7 +641,7 @@ def test_a_read_only_file_is_left_alone_and_the_command_succeeds(
 @pytest.mark.skipif(
     not _open_handle_blocks_replace(), reason="an open handle does not block a replace here"
 )
-def test_a_file_held_open_by_another_process_is_left_alone(log, mask):
+def test_a_file_held_open_by_another_process_is_left_alone(log, mask, clock):
     before = _stored("train", ["--slack-url", URL])
     log.write_bytes(before)
 
@@ -558,6 +651,7 @@ def test_a_file_held_open_by_another_process_is_left_alone(log, mask):
         assert not os.path.exists(_marker(log))
         assert _leftovers(log) == []
 
+    clock.advance(_DAY)
     assert mask_older_lines(str(log), mask) is True
     assert URL.encode() not in log.read_bytes()
 
@@ -653,13 +747,403 @@ def test_a_log_that_keeps_growing_is_left_for_the_next_time(log, mask):
 
 
 # ---------------------------------------------------------------------------
+# A failed pass waits a day before the next one
+# ---------------------------------------------------------------------------
+
+
+def test_a_failed_pass_is_not_repeated_by_the_next_writes(
+    log, mask, clock, scans, replace_refused
+):
+    before = _stored("train", ["--slack-url", URL])
+    log.write_bytes(before)
+
+    append_audit_event(_event(), str(log), arg_mask=mask)
+
+    assert scans == [str(log)]  # the first write read the log and could not replace it
+    assert os.path.isfile(_tried(log))
+    assert not os.path.exists(_marker(log))
+
+    for _ in range(3):
+        clock.advance(60)
+        append_audit_event(_event(), str(log), arg_mask=mask)
+
+    assert scans == [str(log)]  # the later writes did not read it again
+    assert log.read_bytes().startswith(before)
+    assert len(log.read_bytes().splitlines()) == 1 + 4
+    assert _leftovers(log) == []
+
+
+def test_the_attempt_record_holds_the_utc_time_of_the_failure(
+    log, mask, clock, replace_refused
+):
+    log.write_bytes(_stored("train", ["--slack-url", URL]))
+
+    assert mask_older_lines(str(log), mask) is False
+
+    assert _tried_text(log) == "2026-10-20T12:00:00+00:00"
+
+
+def test_a_failed_pass_is_tried_again_after_a_day(log, mask, clock, scans, replace_refused):
+    log.write_bytes(_stored("train", ["--slack-url", URL]))
+    assert mask_older_lines(str(log), mask) is False
+    assert len(scans) == 1
+
+    clock.advance(_DAY - 1)  # a second short of a day
+    assert mask_older_lines(str(log), mask) is False
+    assert len(scans) == 1
+
+    clock.advance(1)  # a day
+    assert mask_older_lines(str(log), mask) is False  # refused again
+    assert len(scans) == 2
+    assert _tried_text(log) == "2026-10-21T12:00:00+00:00"  # the wait starts over
+
+    clock.advance(_DAY - 1)
+    assert mask_older_lines(str(log), mask) is False
+    assert len(scans) == 2
+
+
+def test_a_pass_that_succeeds_removes_the_attempt_record(log, mask, clock, replace_refused):
+    log.write_bytes(_stored("train", ["--slack-url", URL]))
+    assert mask_older_lines(str(log), mask) is False
+    assert os.path.isfile(_tried(log))
+    replace_refused.lift()  # the other process let go
+
+    clock.advance(_DAY)
+    assert mask_older_lines(str(log), mask) is True
+
+    assert URL.encode() not in log.read_bytes()
+    assert os.path.isfile(_marker(log))
+    assert not os.path.exists(_tried(log))
+
+
+def test_a_pass_that_never_failed_leaves_no_attempt_record(log, mask, caplog):
+    caplog.set_level(logging.DEBUG, logger="soup_cli.utils.audit_log")
+    log.write_bytes(_stored("train", ["--slack-url", URL]))
+
+    assert mask_older_lines(str(log), mask) is True
+
+    assert not os.path.exists(_tried(log))
+    assert os.path.isfile(_marker(log))
+    assert "failed-attempt record" not in caplog.text  # nothing to remove, nothing to report
+
+
+def test_the_back_off_uses_the_real_clock_when_none_is_set(log, mask, scans, replace_refused):
+    log.write_bytes(_stored("train", ["--slack-url", URL]))
+
+    assert mask_older_lines(str(log), mask) is False
+    assert mask_older_lines(str(log), mask) is False
+
+    assert len(scans) == 1
+
+
+def test_the_back_off_clock_is_utc():
+    now = audit_log._utc_now()
+
+    assert now.utcoffset() == timedelta(0)
+    assert abs((datetime.now(timezone.utc) - now).total_seconds()) < 60
+
+
+def test_a_new_attempt_record_replaces_a_longer_one(log, mask, clock, replace_refused):
+    log.write_bytes(_stored("train", ["--slack-url", URL]))
+    with open(_tried(log), "wb") as fh:
+        fh.write(b"x" * 80 + b"\n")  # not a time, so the pass runs and records its failure
+
+    assert mask_older_lines(str(log), mask) is False
+
+    assert _tried_text(log) == "2026-10-20T12:00:00+00:00"
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        b"",
+        b"1\n",
+        b"not a time\n",
+        b"\xff\xfe\n",
+        b"2026-10-20T11:59:00\n",  # no time zone, so no way to tell how old it is
+    ],
+    ids=["empty", "marker-text", "text", "not-ascii", "no-zone"],
+)
+def test_an_attempt_record_that_cannot_be_read_does_not_hold_the_pass_back(
+    log, mask, clock, content
+):
+    log.write_bytes(_stored("train", ["--slack-url", URL]))
+    with open(_tried(log), "wb") as fh:
+        fh.write(content)
+
+    assert mask_older_lines(str(log), mask) is True
+
+    assert URL.encode() not in log.read_bytes()
+    assert not os.path.exists(_tried(log))
+
+
+def test_an_attempt_dated_in_the_future_does_not_hold_the_pass_back(log, mask, clock):
+    log.write_bytes(_stored("train", ["--slack-url", URL]))
+    with open(_tried(log), "w", encoding="ascii") as fh:
+        fh.write((clock.now + timedelta(hours=2)).isoformat())
+
+    assert mask_older_lines(str(log), mask) is True
+
+    assert URL.encode() not in log.read_bytes()
+
+
+def test_an_attempt_record_that_cannot_be_read_back_does_not_hold_the_pass_back(
+    log, mask, clock, monkeypatch
+):
+    log.write_bytes(_stored("train", ["--slack-url", URL]))
+    with open(_tried(log), "w", encoding="ascii") as fh:
+        fh.write(clock.now.isoformat() + "\n")  # recent, if it could be read
+    real = os.read
+
+    def refuse(descriptor, size):
+        if size == 64:  # the read of the record
+            raise OSError("the read failed")
+        return real(descriptor, size)
+
+    monkeypatch.setattr(os, "read", refuse)
+
+    assert mask_older_lines(str(log), mask) is True
+
+    assert URL.encode() not in log.read_bytes()
+
+
+def test_a_recent_attempt_record_holds_the_pass_back(log, mask, clock, scans):
+    before = _stored("train", ["--slack-url", URL])
+    log.write_bytes(before)
+    with open(_tried(log), "w", encoding="ascii") as fh:
+        fh.write((clock.now - timedelta(hours=23)).isoformat() + "\n")
+
+    assert mask_older_lines(str(log), mask) is False
+
+    assert scans == []
+    assert log.read_bytes() == before
+    assert not os.path.exists(_marker(log))
+
+
+@pytest.mark.requires_symlink
+def test_an_attempt_record_that_is_a_symlink_is_not_followed(log, mask, clock, tmp_path):
+    log.write_bytes(_stored("train", ["--slack-url", URL]))
+    elsewhere = tmp_path / "elsewhere.txt"
+    elsewhere.write_text(clock.now.isoformat() + "\n", encoding="ascii")  # recent, if it were read
+    os.symlink(str(elsewhere), _tried(log))
+
+    assert mask_older_lines(str(log), mask) is True  # the link was not read
+
+    assert URL.encode() not in log.read_bytes()
+    assert not os.path.lexists(_tried(log))  # the link is gone ...
+    assert elsewhere.exists()  # ... its target is not
+
+
+@pytest.mark.requires_symlink
+def test_a_failed_pass_does_not_write_through_a_symlink(
+    log, mask, clock, tmp_path, replace_refused
+):
+    log.write_bytes(_stored("train", ["--slack-url", URL]))
+    elsewhere = tmp_path / "elsewhere.txt"
+    elsewhere.write_text("as it was\n", encoding="ascii")
+    os.symlink(str(elsewhere), _tried(log))
+
+    assert mask_older_lines(str(log), mask) is False
+
+    assert elsewhere.read_text(encoding="ascii") == "as it was\n"
+
+
+def test_an_attempt_record_that_cannot_be_written_does_not_raise(
+    log, mask, clock, scans, replace_refused
+):
+    log.write_bytes(_stored("train", ["--slack-url", URL]))
+    os.mkdir(_tried(log))  # a directory where the record would go
+
+    assert mask_older_lines(str(log), mask) is False
+
+    assert mask_older_lines(str(log), mask) is False  # nothing held it back: tried again
+    assert len(scans) == 2
+
+
+def test_an_attempt_record_that_cannot_be_removed_does_not_fail_a_finished_pass(
+    log, mask, caplog
+):
+    caplog.set_level(logging.DEBUG, logger="soup_cli.utils.audit_log")
+    log.write_bytes(_stored("train", ["--slack-url", URL]))
+    os.mkdir(_tried(log))
+
+    assert mask_older_lines(str(log), mask) is True
+
+    assert URL.encode() not in log.read_bytes()
+    assert os.path.isfile(_marker(log))
+    assert os.path.isdir(_tried(log))
+    assert "could not remove the failed-attempt record" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# Temp files left by a pass that was killed
+# ---------------------------------------------------------------------------
+
+
+def _aged(path, seconds):
+    """Make ``path`` look ``seconds`` old."""
+    then = time.time() - seconds
+    os.utime(path, (then, then))
+
+
+def _time_moves_on(monkeypatch, seconds):
+    """The pass sees every file ``seconds`` older than it is (nothing is touched on disk)."""
+    real = time.time
+    monkeypatch.setattr(audit_log, "time", types.SimpleNamespace(time=lambda: real() + seconds))
+
+
+def test_a_stale_temp_file_from_a_killed_pass_is_removed(log, mask):
+    log.write_bytes(_stored("train", ["--slack-url", URL]))
+    stale = log.parent / ".audit-mask-abc123.tmp"
+    stale.write_bytes(b"half of a copy")
+    _aged(stale, 2 * _HOUR)
+
+    assert mask_older_lines(str(log), mask) is True
+
+    assert not stale.exists()
+    assert URL.encode() not in log.read_bytes()
+
+
+def test_the_cleanup_finds_the_temp_files_the_pass_itself_makes(
+    log, mask, clock, replace_refused, monkeypatch
+):
+    names = []
+    real = tempfile.mkstemp
+
+    def recording(*args, **kwargs):
+        fd, path = real(*args, **kwargs)
+        names.append(os.path.basename(path))
+        return fd, path
+
+    monkeypatch.setattr(tempfile, "mkstemp", recording)
+    log.write_bytes(_stored("train", ["--slack-url", URL]))
+    assert mask_older_lines(str(log), mask) is False  # made a temp file, removed it again
+    assert len(names) == 1
+    left_by_a_killed_pass = log.parent / names[0]
+    left_by_a_killed_pass.write_bytes(b"half of a copy")
+    _aged(left_by_a_killed_pass, 2 * _HOUR)
+
+    clock.advance(_DAY)
+    assert mask_older_lines(str(log), mask) is False  # refused again
+
+    assert not left_by_a_killed_pass.exists()
+
+
+def test_a_stale_temp_file_is_removed_even_when_the_pass_fails(log, mask, replace_refused):
+    log.write_bytes(_stored("train", ["--slack-url", URL]))
+    stale = log.parent / ".audit-mask-abc123.tmp"
+    stale.write_bytes(b"half of a copy")
+    _aged(stale, 2 * _HOUR)
+
+    assert mask_older_lines(str(log), mask) is False
+
+    assert not stale.exists()
+
+
+def test_only_old_temp_files_of_the_pass_are_removed(log, mask):
+    log.write_bytes(_stored("train", ["--slack-url", URL]))
+    kept = {}
+    for name, age in [
+        (".audit-mask-young.tmp", 10 * 60),  # a pass may be writing it right now
+        (".audit-mask-almost.tmp", _HOUR - 120),
+        (".audit-mask-other.txt", 5 * _HOUR),  # not the pass's suffix
+        ("other.tmp", 5 * _HOUR),  # not the pass's prefix
+        ("x.audit-mask-y.tmp", 5 * _HOUR),  # the prefix is not at the start
+    ]:
+        path = log.parent / name
+        path.write_bytes(b"data of " + name.encode())
+        _aged(path, age)
+        kept[name] = path.read_bytes()
+    gone = log.parent / ".audit-mask-old.tmp"
+    gone.write_bytes(b"old")
+    _aged(gone, _HOUR + 120)
+
+    assert mask_older_lines(str(log), mask) is True
+
+    assert not gone.exists()
+    for name, data in kept.items():
+        assert (log.parent / name).read_bytes() == data, name
+
+
+@pytest.mark.requires_symlink
+def test_a_symlink_named_like_a_temp_file_is_not_followed(log, mask, tmp_path, monkeypatch):
+    log.write_bytes(_stored("train", ["--slack-url", URL]))
+    target = tmp_path / "elsewhere.bin"
+    target.write_bytes(b"not a temp file of the pass")
+    link = log.parent / ".audit-mask-link.tmp"
+    os.symlink(str(target), str(link))
+    _time_moves_on(monkeypatch, 5 * _HOUR)  # the link, like every file, is now hours old
+
+    assert mask_older_lines(str(log), mask) is True
+
+    assert os.path.islink(link)
+    assert target.read_bytes() == b"not a temp file of the pass"
+
+
+def test_a_log_that_needs_no_pass_costs_no_directory_scan(log, mask, clock):
+    log.write_bytes(_stored("train", ["--slack-url", REDACTED]))
+    stale = log.parent / ".audit-mask-abc123.tmp"
+    stale.write_bytes(b"half of a copy")
+    _aged(stale, 2 * _HOUR)
+    with open(_marker(log), "w", encoding="ascii") as fh:
+        fh.write("1\n")
+
+    assert mask_older_lines(str(log), mask) is True  # done already
+    assert stale.exists()
+
+    os.unlink(_marker(log))
+    with open(_tried(log), "w", encoding="ascii") as fh:
+        fh.write(clock.now.isoformat() + "\n")
+
+    assert mask_older_lines(str(log), mask) is False  # waiting out a failed attempt
+    assert stale.exists()
+
+
+def test_a_directory_that_cannot_be_listed_does_not_stop_the_pass(log, mask, monkeypatch):
+    log.write_bytes(_stored("train", ["--slack-url", URL]))
+    real = os.listdir
+
+    def refuse(path="."):
+        if os.path.abspath(path) == os.path.abspath(log.parent):
+            raise PermissionError("cannot list the directory")
+        return real(path)
+
+    monkeypatch.setattr(os, "listdir", refuse)
+
+    assert mask_older_lines(str(log), mask) is True
+
+    assert URL.encode() not in log.read_bytes()
+
+
+def test_a_temp_file_that_cannot_be_removed_does_not_stop_the_pass(log, mask, monkeypatch):
+    log.write_bytes(_stored("train", ["--slack-url", URL]))
+    locked = log.parent / ".audit-mask-locked.tmp"
+    removable = log.parent / ".audit-mask-removable.tmp"
+    for path in (locked, removable):
+        path.write_bytes(b"half of a copy")
+        _aged(path, 2 * _HOUR)
+    real = os.unlink
+
+    def refuse_one(path, *args, **kwargs):
+        if os.path.basename(path) == locked.name:
+            raise PermissionError("the file is in use")
+        return real(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "unlink", refuse_one)
+
+    assert mask_older_lines(str(log), mask) is True
+
+    assert locked.exists()
+    assert not removable.exists()
+    assert URL.encode() not in log.read_bytes()
+
+
+# ---------------------------------------------------------------------------
 # Size
 # ---------------------------------------------------------------------------
 
 
 def test_a_large_log_is_masked(log, mask):
-    import time
-
     count = 10_000
     lines = []
     for index in range(count):
@@ -781,6 +1265,57 @@ def test_a_given_tree_gives_the_same_answer_as_none():
             )
 
 
+def test_a_failure_while_reading_a_commands_options_falls_back_to_the_whole_app(monkeypatch):
+    import typer
+
+    import soup_cli.cli as cli
+    from soup_cli.utils import argv_redaction
+
+    root = typer.main.get_command(cli.app)
+    memo: dict = {}
+    tree = (root, argv_redaction.all_long_option_strings(root), memo)
+
+    def broken(_command):
+        raise RuntimeError("the options cannot be read")
+
+    monkeypatch.setattr(argv_redaction, "secret_option_strings", broken)
+
+    masked = cli._mask_audit_args("push", ["--repo", "u/m", "-t", "VALUE"], tree=tree)
+
+    assert masked == ("--repo", "u/m", "-t", REDACTED)
+    assert list(memo) == ["*"]
+
+
+def test_a_group_without_a_subcommand_gets_the_credential_options_of_the_whole_app():
+    import typer
+
+    import soup_cli.cli as cli
+    from soup_cli.utils.argv_redaction import all_long_option_strings
+
+    root = typer.main.get_command(cli.app)
+    tree = (root, all_long_option_strings(root), {})
+
+    for chosen in (None, tree):
+        assert cli._mask_audit_args("data", ["-t", "VALUE"], tree=chosen) == ("-t", REDACTED)
+
+
+def test_a_given_tree_keeps_the_options_it_declares():
+    import typer
+
+    import soup_cli.cli as cli
+    from soup_cli.utils.argv_redaction import all_long_option_strings
+
+    root = typer.main.get_command(cli.app)
+    tree = (root, all_long_option_strings(root), {})
+    for command, args in [
+        ("train", ["--slack-url", "--config", "a.yaml"]),
+        ("train", ["-t", "sft"]),
+    ]:
+        assert cli._mask_audit_args(command, args, tree=tree) == cli._mask_audit_args(
+            command, args
+        )
+
+
 def test_a_commands_options_are_remembered_for_all_its_lines():
     import typer
 
@@ -795,10 +1330,93 @@ def test_a_commands_options_are_remembered_for_all_its_lines():
     first = cli._mask_audit_args("train", ["--slack-url", URL, "--config", "a.yaml"], tree=tree)
     assert first == ("--slack-url", REDACTED, "--config", "a.yaml")
     assert list(memo) == [id(train)]  # stored for the next line of the same command
-    assert "--slack-url" in memo[id(train)]
+    assert "--slack-url" in memo[id(train)].credential_opts
 
     # A later line is answered from what was stored: an entry planted there is used.
-    memo[id(train)] = frozenset({"--planted-flag"})
+    memo[id(train)] = ArgMasker(frozenset({"--planted-flag"}), tree[1])
     line = ["--planted-flag", "v", "--config", "a.yaml"]
     planted = cli._mask_audit_args("train", line, tree=tree)
     assert planted == ("--planted-flag", REDACTED, "--config", "a.yaml")
+
+
+def test_each_command_gets_one_masker_for_all_its_lines(monkeypatch):
+    """The option sets are built once per command (and once for the whole app), not per line."""
+    import soup_cli.cli as cli
+    from soup_cli.utils import argv_redaction
+
+    built = []
+    real = argv_redaction.ArgMasker
+
+    class Counting(real):
+        __slots__ = ()
+
+        def __init__(self, credential_opts, known_opts=frozenset()):
+            built.append(frozenset(credential_opts))
+            super().__init__(credential_opts, known_opts)
+
+    monkeypatch.setattr(argv_redaction, "ArgMasker", Counting)
+    bound = cli._audit_arg_masker()
+    lines = [
+        ("train", ["--slack-url", URL, "--config", "a.yaml"]),
+        ("version", []),
+        ("data", []),  # a group: masked with the options of the whole app
+        ("no-such-command", ["--auth-token", "V"]),  # no command: the same whole-app masker
+    ]
+
+    for _round in range(4):
+        for command, args in lines:
+            bound(command, args)
+
+    assert len(built) == 3, built
+    assert len({id(options) for options in built}) == 3
+
+
+def test_a_masker_keeps_nothing_from_one_call_to_the_next():
+    masker = ArgMasker(frozenset({"--auth-token", "-a"}), frozenset({"--port"}))
+
+    assert masker(["--auth-token", "x", "--port", "1"]) == (
+        "--auth-token", REDACTED, "--port", "1",
+    )
+    assert masker(["--auth-token"]) == ("--auth-token",)  # no value: nothing is pending...
+    assert masker(["plain", "-a"]) == ("plain", "-a")
+    assert masker(["value"]) == ("value",)  # ...for the next call
+    assert masker(["-ax"]) == (f"-a{REDACTED}",)
+    assert masker(["--auth-token=x"]) == (f"--auth-token={REDACTED}",)
+
+
+def test_a_masker_masks_the_options_it_was_given_in_every_spelling():
+    masker = ArgMasker(frozenset({"--webhook", "-w"}), frozenset({"--sink"}))
+
+    assert masker(["--webhook", "U"]) == ("--webhook", REDACTED)
+    assert masker(["--webhook=U"]) == (f"--webhook={REDACTED}",)
+    assert masker(["-w", "U"]) == ("-w", REDACTED)
+    assert masker(["-wU"]) == (f"-w{REDACTED}",)
+    # `--sink` is an option of the command tree, so it is not the value of `--webhook`.
+    assert masker(["--webhook", "--sink", "S"]) == ("--webhook", "--sink", "S")
+    assert masker(["--webhook", "--other", "S"]) == ("--webhook", REDACTED, "S")
+
+
+def test_mask_secret_args_gives_the_answers_of_a_masker_built_for_one_call():
+    from soup_cli.utils.argv_redaction import mask_secret_args
+
+    options = frozenset({"--webhook", "-w"})
+    known = frozenset({"--sink"})
+    for args in (
+        ["--webhook", "--sink", "S"],
+        ["--webhook", "--other", "S"],
+        ["--webhook=U", "-wV", "plain"],
+    ):
+        assert mask_secret_args(args, options, known) == ArgMasker(options, known)(args)
+    assert mask_secret_args(["--webhook", "--sink", "S"], options, known) == (
+        "--webhook", "--sink", "S",
+    )
+
+
+def test_a_masker_works_from_a_snapshot_of_its_options():
+    options = {"--auth-token"}
+    masker = ArgMasker(options, {"--port"})
+    options.add("--other-flag")  # added after the masker was built
+
+    assert masker.credential_opts == frozenset({"--auth-token"})
+    assert masker(["--other-flag", "v"]) == ("--other-flag", "v")
+    assert masker(["--auth-token", "v"]) == ("--auth-token", REDACTED)

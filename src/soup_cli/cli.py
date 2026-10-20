@@ -833,14 +833,16 @@ def _mask_audit_args(command: str, args: list[str], *, tree=None) -> tuple[str, 
 
     ``tree`` is an optional ``(root command, all long option strings, memo)``
     triple from one earlier walk, so that masking many stored lines does not
-    rebuild the command tree, nor re-read a command's options, for each of them
+    rebuild the command tree for each of them. The memo holds one
+    :class:`~soup_cli.utils.argv_redaction.ArgMasker` per command (its option
+    sets built once), and one for the whole app under ``"*"``
     (see :func:`_audit_arg_masker`).
     """
     global _ALL_SECRET_OPTION_STRINGS
     from soup_cli.utils.argv_redaction import (
+        ArgMasker,
         all_long_option_strings,
         all_secret_option_strings,
-        mask_secret_args,
         resolve_command,
         secret_option_strings,
         subcommands,
@@ -850,21 +852,23 @@ def _mask_audit_args(command: str, args: list[str], *, tree=None) -> tuple[str, 
     if _ALL_SECRET_OPTION_STRINGS is None:
         _ALL_SECRET_OPTION_STRINGS = all_secret_option_strings(root)
     everything = _ALL_SECRET_OPTION_STRINGS
+    long_options = all_long_option_strings(root) if tree is None else tree[1]
+    memo = {} if tree is None else tree[2]  # without a tree there is nothing to reuse
+    key = "*"
     try:
         resolved = resolve_command(root, [command, *args])
-        if subcommands(resolved) is not None:
-            secret_opts = everything
-        elif tree is not None and id(resolved) in tree[2]:
-            secret_opts = tree[2][id(resolved)]
-        else:
-            app_wide_longs = frozenset(o for o in everything if o.startswith("--"))
-            secret_opts = secret_option_strings(resolved) | app_wide_longs
-            if tree is not None:
-                tree[2][id(resolved)] = secret_opts
+        if subcommands(resolved) is None:
+            key = id(resolved)
+            if key not in memo:
+                app_wide_longs = frozenset(o for o in everything if o.startswith("--"))
+                memo[key] = ArgMasker(
+                    secret_option_strings(resolved) | app_wide_longs, long_options
+                )
     except Exception:  # noqa: BLE001 — fall back to the widest mask
-        secret_opts = everything
-    long_options = all_long_option_strings(root) if tree is None else tree[1]
-    return mask_secret_args(args, secret_opts, long_options)
+        key = "*"
+    if key not in memo:
+        memo[key] = ArgMasker(everything, long_options)
+    return memo[key](args)
 
 
 def _audit_arg_masker():
