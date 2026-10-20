@@ -25,7 +25,16 @@ from soup_cli.cli import app
 from soup_cli.commands.train import UNSUPPORTED_RESUME_TASKS
 from tests._windows_ci import skip_on_windows_ci
 
-TINY_MODEL = "hf-internal-testing/tiny-random-LlamaForCausalLM"
+
+def _local_base_model_dir() -> str:
+    """A tiny Llama causal LM + tokenizer built locally (no download),
+    standing in for hf-internal-testing/tiny-random-LlamaForCausalLM -- #1356
+    found these resume/checkpoint tests pulling it from the Hub for nothing
+    they check depends on real pretrained weights. Shared and cached across
+    every file that needs one (tests/_tiny_hf_models.py)."""
+    from tests._tiny_hf_models import tiny_model_dir
+
+    return tiny_model_dir("llama")
 
 
 def _strip_ansi(text: str) -> str:
@@ -172,7 +181,7 @@ class TestResumeRefusalForUnsupportedTasks:
         train_data.write_text(json.dumps({"prompt": "forget me", "response": "done"}) + "\n")
 
         config_path.write_text(
-            f"base: {TINY_MODEL}\n"
+            f"base: {Path(_local_base_model_dir()).as_posix()}\n"
             "task: unlearn\n"
             f"data: {{train: {train_data.as_posix()}, forget_set: {train_data.as_posix()},"
             " format: chatml, val_split: 0.0}\n"
@@ -194,7 +203,7 @@ class TestResumeRefusalForUnsupportedTasks:
         train_data.write_text(json.dumps({"prompt": "forget me", "response": "done"}) + "\n")
 
         config_path.write_text(
-            f"base: {TINY_MODEL}\n"
+            f"base: {Path(_local_base_model_dir()).as_posix()}\n"
             "task: unlearn\n"
             f"data: {{train: {train_data.as_posix()}, forget_set: {train_data.as_posix()},"
             " format: chatml, val_split: 0.0}\n"
@@ -242,7 +251,7 @@ class TestPRMResume:
         out_dir = tmp_path / "out_prm"
         cfg_path = tmp_path / "prm.yaml"
         cfg_path.write_text(
-            f"base: {TINY_MODEL}\n"
+            f"base: {Path(_local_base_model_dir()).as_posix()}\n"
             "task: prm\n"
             f"data: {{train: {prm_data.as_posix()}, format: prm, val_split: 0.0, max_length: 64}}\n"
             "training: {\n"
@@ -330,7 +339,7 @@ class TestMoleRoutingResume:
         monkeypatch.setattr(mole_routing, "_save_mole_gate", recording_save_gate)
 
         # Create two tiny task LoRA adapters
-        base_model = AutoModelForCausalLM.from_pretrained(TINY_MODEL)
+        base_model = AutoModelForCausalLM.from_pretrained(_local_base_model_dir())
         lora_cfg = LoraConfig(r=4, lora_alpha=8, target_modules=["q_proj", "v_proj"])
         peft_m = get_peft_model(base_model, lora_cfg)
         adapter_a = tmp_path / "adapter_a"
@@ -355,7 +364,7 @@ class TestMoleRoutingResume:
         cfg_path = tmp_path / "mole.yaml"
         c_posix = chat_data.as_posix()
         cfg_data = (
-            f"base: {TINY_MODEL}\n"
+            f"base: {Path(_local_base_model_dir()).as_posix()}\n"
             "task: moe_lora_routing\n"
             f"data: {{train: {c_posix}, format: chatml, val_split: 0.0, max_length: 64}}\n"
             "training: {\n"

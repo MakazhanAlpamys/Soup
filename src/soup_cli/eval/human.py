@@ -147,6 +147,10 @@ def load_prompts(path: Path) -> list[dict]:
                 raise ValueError(
                     f"Invalid JSON on line {line_num}: {exc}"
                 ) from exc
+            if not isinstance(row, dict):
+                raise ValueError(
+                    f"Line {line_num}: expected JSON object, got {type(row).__name__}"
+                )
             if "prompt" not in row:
                 raise ValueError(
                     f"Line {line_num}: missing required field 'prompt'"

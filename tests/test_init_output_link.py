@@ -18,6 +18,7 @@ import stat
 from pathlib import Path
 
 import pytest
+from rich.console import Console
 from typer.testing import CliRunner
 
 from soup_cli.cli import app
@@ -25,9 +26,6 @@ from soup_cli.templates import load_template
 from tests.conftest import strip_ansi
 
 runner = CliRunner()
-
-#: Wide enough that Rich never folds a temp-directory path across lines.
-WIDE = {"COLUMNS": "1000"}
 
 ORIGINAL = "content that soup init must leave alone\n"
 
@@ -38,8 +36,24 @@ def _plain(text: str) -> str:
     return " ".join(strip_ansi(text).split())
 
 
+@pytest.fixture(autouse=True)
+def _wide_console(monkeypatch):
+    """Wide enough that Rich never folds a temp-directory path across lines.
+
+    The console itself is replaced, because ``COLUMNS`` for the call does not
+    reach it: ``commands/init.py`` builds its console at import, and Rich keeps
+    the width a console was built with when ``COLUMNS`` was set at that moment.
+    A pytest-xdist worker on Linux starts with ``COLUMNS=80`` (its controller
+    imports GNU readline, which exports the terminal size to child processes),
+    so there the refusal folded the link path at column 80.
+    """
+    import soup_cli.commands.init as init_module
+
+    monkeypatch.setattr(init_module, "console", Console(width=1000))
+
+
 def _init(*args: str, **kwargs):
-    return runner.invoke(app, ["init", *args], env=WIDE, **kwargs)
+    return runner.invoke(app, ["init", *args], **kwargs)
 
 
 def _control(tmp_path: Path, template: str) -> Path:

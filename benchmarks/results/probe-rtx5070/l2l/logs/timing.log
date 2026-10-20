@@ -1,0 +1,48 @@
+[transformers] Model config: bos_token_id must be `None` or an integer within the vocabulary (between 0 and 32767), got 128000. This may result in unexpected behavior.
+[transformers] Model config: eos_token_id must be `None` or an integer within the vocabulary (between 0 and 32767), got 128001. This may result in unexpected behavior.
+[transformers] `torch_dtype` is deprecated! Use `dtype` instead!
+W1007 16:34:32.362000 13448 site-packages\torch\utils\flop_counter.py:113] triton not found; flop counting will not work for triton kernels
+RUN: L2L step-0 probe, mode timing
+gpu             NVIDIA GeForce RTX 5070 Laptop GPU
+torch           2.14.0+cu130
+vram_total_gb   8.518
+soup_cli_file   C:\Users\user\projects\Soup-l2l\src\soup_cli\__init__.py
+driver          616.92
+pcie_gen        5
+pcie_width      8
+shard_dir       C:\Users\user\.soup\layer-stream\D___synth__llama-70b-shape-v32k-f4
+direct_io       True
+v3              {'free_gb': 15.648956416, 'commit_avail_gb': 26.47990272, 'need_gb': 10.73741824, 'margin_gb': 4.0, 'gpu_used_before_build_mib': 0, 'gpu_pids': [13448], 'foreign_gpu_pids': [], 'ram_ok': True, 'gpu_ok': True, 'ok': True}
+plain_A_k1_r0             29.5 tok/s  step 17.373 s  peak 4.509 GB  void False
+plain_B_k1_r0             80.0 tok/s  step 6.397 s  peak 4.509 GB  void False
+l2l_A_k1_r0               29.8 tok/s  step 17.166 s  peak 4.018 GB  void False
+l2l_B_k1_r0               73.7 tok/s  step 6.949 s  peak 4.018 GB  void False
+l2l_A_k2_r0               57.2 tok/s  step 17.907 s  peak 4.028 GB  void False
+l2l_B_k2_r0               73.8 tok/s  step 13.870 s  peak 4.028 GB  void False
+l2l_A_k3_r0               67.7 tok/s  step 22.688 s  peak 4.036 GB  void False
+l2l_B_k3_r0               73.5 tok/s  step 20.895 s  peak 4.036 GB  void False
+l2l_A_k4_r0               73.0 tok/s  step 28.051 s  peak 4.044 GB  void False
+l2l_B_k4_r0               73.8 tok/s  step 27.748 s  peak 4.044 GB  void False
+l2l_A_k8_r0               73.4 tok/s  step 55.819 s  peak 4.078 GB  void False
+l2l_B_k8_r0               73.7 tok/s  step 55.604 s  peak 4.078 GB  void False
+l2l_A_k16_r0              73.3 tok/s  step 111.752 s  peak 4.145 GB  void False
+l2l_B_k16_r0              73.4 tok/s  step 111.654 s  peak 4.145 GB  void False
+l2l_C_k4_r0               85.8 tok/s  step 23.881 s  peak 3.443 GB  void False
+l2l_D_k4_r0               92.8 tok/s  step 22.064 s  peak 3.443 GB  void False
+plain_B_k1_r1             79.5 tok/s  step 6.436 s  peak 4.509 GB  void False
+plain_A_k1_r1             29.4 tok/s  step 17.419 s  peak 4.509 GB  void False
+l2l_B_k16_r1              73.5 tok/s  step 111.434 s  peak 4.145 GB  void False
+l2l_A_k16_r1              73.2 tok/s  step 111.839 s  peak 4.145 GB  void False
+l2l_B_k8_r1               73.5 tok/s  step 55.696 s  peak 4.078 GB  void False
+l2l_A_k8_r1               73.2 tok/s  step 55.966 s  peak 4.078 GB  void False
+l2l_B_k4_r1               73.6 tok/s  step 27.836 s  peak 4.044 GB  void False
+l2l_A_k4_r1               72.9 tok/s  step 28.078 s  peak 4.044 GB  void False
+l2l_B_k3_r1               73.5 tok/s  step 20.906 s  peak 4.036 GB  void False
+l2l_A_k3_r1               68.1 tok/s  step 22.559 s  peak 4.036 GB  void False
+l2l_B_k2_r1               73.5 tok/s  step 13.930 s  peak 4.028 GB  void False
+l2l_A_k2_r1               56.5 tok/s  step 18.114 s  peak 4.028 GB  void False
+l2l_B_k1_r1               73.1 tok/s  step 7.002 s  peak 4.018 GB  void False
+l2l_A_k1_r1               25.9 tok/s  step 19.765 s  peak 4.018 GB  void False
+l2l_D_k4_r1               93.7 tok/s  step 21.846 s  peak 3.443 GB  void False
+l2l_C_k4_r1               85.9 tok/s  step 23.848 s  peak 3.443 GB  void False
+wrote         benchmarks/results/probe-rtx5070/l2l/timing.json

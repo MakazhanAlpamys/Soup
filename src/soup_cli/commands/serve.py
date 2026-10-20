@@ -92,9 +92,9 @@ def serve(
         "127.0.0.1",
         "--host",
         help=(
-            "Host to bind to. Defaults to loopback (127.0.0.1); the server "
-            "exposes an unauthenticated code-exec tool endpoint, so binding a "
-            "public interface (0.0.0.0) should be paired with --tool-auth-token."
+            "Host to bind to. Defaults to loopback (127.0.0.1). Any other host "
+            "needs --tool-auth-token, which is checked on the tool, thumbs and "
+            "adapter routes only: the generation routes take no token."
         ),
     ),
     device: Optional[str] = typer.Option(
@@ -311,8 +311,8 @@ def serve(
         "--tool-auth-token",
         help=(
             "Require 'Authorization: Bearer <token>' on the code-exec tool "
-            "endpoints (/v1/tools/python, /v1/tools/web_search). Strongly "
-            "recommended whenever --host is not loopback, since those "
+            "endpoints (/v1/tools/python, /v1/tools/bash, /v1/tools/web_search). "
+            "Strongly recommended whenever --host is not loopback, since those "
             "endpoints run caller-supplied Python in a best-effort sandbox."
         ),
     ),
@@ -329,6 +329,9 @@ def serve(
             "tool endpoints (/v1/tools/bash, /v1/tools/python)."
         )
         raise typer.Exit(code=2)
+    # The token that check asks for does not cover every route: say which.
+    for _notice in _non_loopback_notices(host, backend):
+        console.print(f"[yellow]Note:[/] {_notice}")
     # v0.71.12 #221 — validate `--bank` up front (path containment + backend)
     # so a typo / bad path surfaces before backend init.
     if bank is not None:
@@ -1239,6 +1242,54 @@ def _load_serve_tokenizer(
 # Backends whose FastAPI app actually serves /metrics (#333). ``--dashboard``
 # on anything else used to no-op in silence.
 _METRICS_BACKENDS = frozenset({"transformers", "vllm"})
+# The binds `soup serve` accepts without --tool-auth-token (the same three
+# spellings the refusal in serve() and _check_tool_auth compare against).
+_LOOPBACK_BINDS = frozenset({"127.0.0.1", "localhost", "::1"})
+
+
+def _non_loopback_notices(host: str, backend: str) -> list[str]:
+    """What an operator binding beyond loopback should know about the token.
+
+    Empty for a loopback bind. The lines describe the server as it is: a
+    non-loopback bind is refused without ``--tool-auth-token``, which reads as
+    if the token covered every route, and it does not.
+
+    * transformers: the token is checked on the tool, thumbs and adapter
+      routes only. On a wildcard bind those routes cannot compare ``Host``
+      with a bound name either, which is the second line.
+    * vLLM / SGLang / MII: their apps have no such routes and are never handed
+      the token, so no route checks it.
+
+    The host is user input printed before anything validates it, so it goes
+    through ``for_terminal``.
+    """
+    if host in _LOOPBACK_BINDS:
+        return []
+    from soup_cli.utils.local_request_guard import is_wildcard_bind
+
+    where = f"bound to '{for_terminal(host)}', not loopback"
+    backend_name = backend.lower()
+    if backend_name != "transformers":
+        return [
+            f"{where}, and the {for_terminal(backend_name)} backend has no tool or "
+            "adapter routes, so no route checks --tool-auth-token: every route "
+            "(generation included) will answer every client that can reach this port "
+            "without a token. Put a proxy that authenticates in front if that is not "
+            "intended."
+        ]
+    notices = [
+        f"{where}. --tool-auth-token is checked on the tool, thumbs and adapter routes "
+        "only: /v1/chat/completions, /v1/messages, /v1/models, /health and /metrics "
+        "answer every client that can reach this port without a token. Put a proxy "
+        "that authenticates in front if that is not intended."
+    ]
+    if is_wildcard_bind(host):
+        notices.append(
+            "a wildcard bind has no single name, so the Host header is not compared: "
+            "the tool, thumbs and adapter routes check only that an Origin header, "
+            "when sent, names the same host as Host."
+        )
+    return notices
 
 
 def _dashboard_warning(backend: str) -> Optional[str]:
@@ -1289,7 +1340,7 @@ def _serve_sglang(
             )
         )
     console.print("[dim]Initializing SGLang runtime...[/]")
-    runtime, runtime_model_name = create_sglang_runtime(
+    runtime, runtime_model_name, lora_name = create_sglang_runtime(
         model_path=str(model_path),
         base_model=base_model,
         is_adapter=is_adapter,
@@ -1336,6 +1387,9 @@ def _serve_sglang(
         model_name=str(model_path.name),
         max_tokens_default=max_tokens_default,
         tokenizer=tokenizer,
+        # The name the adapter was registered under; every request has to name
+        # it, or SGLang answers from the base model (#1724).
+        lora_name=lora_name,
     )
 
     return app
@@ -1460,7 +1514,9 @@ def _adapter_scope(model, lock, names, requested, active):
     if not names or lock is None:
         yield
         return
-    name = requested or active
+    # An explicit empty string is the internal sentinel for the unadapted base.
+    # Test identity rather than truthiness so it overrides a manual full cutover.
+    name = active if requested is None else requested
     with lock:
         if name and name in names and hasattr(model, "set_adapter"):
             model.set_adapter(name)
@@ -1663,12 +1719,15 @@ def _create_app(
     loaded_bank: Any = None,
     mole_runtime: Any = None,
     kv_cache_generate_kwargs: Optional[Dict[str, Any]] = None,
+    canary_state_path: Optional[str] = None,
+    canary_stats_path: Optional[str] = None,
 ):
     """Create the FastAPI application with OpenAI-compatible endpoints.
 
     Args:
         auth_token: optional Bearer-token gate for the v0.53.7 tool
-            endpoints (``/v1/tools/python`` + ``/v1/tools/web_search``).
+            endpoints (``/v1/tools/python``, ``/v1/tools/bash`` and
+            ``/v1/tools/web_search``).
             When ``None`` (default), endpoints inherit the server's
             loopback-only CORS trust boundary. When set, callers must
             supply ``Authorization: Bearer <token>``.
@@ -1730,9 +1789,27 @@ def _create_app(
                 status_code=401, detail="Invalid or missing bearer token"
             )
 
+    from collections.abc import AsyncIterator
+    from contextlib import asynccontextmanager
+
+    from soup_cli.utils.canary_router import BufferedCanaryOutcomes, CanaryStateCache
     from soup_cli.utils.metrics import ServerMetrics
 
-    app = FastAPI(title="Soup Inference Server", version="1.0.0")
+    canary_state = CanaryStateCache(canary_state_path)
+    canary_outcomes = BufferedCanaryOutcomes(canary_stats_path, state_cache=canary_state)
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        try:
+            yield
+        finally:
+            try:
+                canary_outcomes.close()
+            except (OSError, TypeError, ValueError):
+                logger.warning("canary shutdown flush failed", exc_info=True)
+
+    app = FastAPI(title="Soup Inference Server", version="1.0.0", lifespan=lifespan)
+    app.state.canary_outcomes = canary_outcomes
 
     # Loopback-only CORS, and three layers behind it:
     #   * CORS limits which browser pages may READ a response. It does not stop
@@ -1780,6 +1857,12 @@ def _create_app(
             default=None,
             description="Adapter name to use (from --adapters flag).",
         )
+        conversation_id: Optional[str] = Field(
+            default=None,
+            min_length=1,
+            max_length=512,
+            description="Stable key used by the soup loop canary router.",
+        )
 
     # Resolved adapter map (name → path)
     _adapter_map = adapter_map or {}
@@ -1800,6 +1883,64 @@ def _create_app(
     def _active_snapshot() -> Optional[str]:
         with active_lock:
             return active_state["active"]
+
+    _canary_warnings: set[str] = set()
+    _canary_warning_lock = threading.Lock()
+
+    def _warn_canary_once(message: str, *, exc_info: bool = False) -> None:
+        with _canary_warning_lock:
+            if message in _canary_warnings:
+                return
+            _canary_warnings.add(message)
+        logger.warning(message, exc_info=exc_info)
+
+    def _canary_adapter(conversation_id: Optional[str]):
+        """Resolve one automatic canary route, or preserve normal activation."""
+        if not conversation_id or _mole_runtime is not None or not _peft_adapter_names:
+            return None, None
+        from soup_cli.utils.canary_router import CanaryPolicy, route
+
+        try:
+            state = canary_state.get()
+            with _canary_warning_lock:
+                _canary_warnings.discard("canary policy unavailable")
+            if state is None or state.canary_active is None or not state.canary_traffic_pct:
+                return None, None
+            policy = CanaryPolicy(
+                stable=state.served_model,
+                canary=state.canary_active,
+                traffic_pct=float(state.canary_traffic_pct),
+            )
+            decision = route(policy, conversation_id)
+        except (FileNotFoundError, OSError, TypeError, ValueError):
+            _warn_canary_once("canary policy unavailable", exc_info=True)
+            return None, None
+        if decision.bucket == "canary":
+            if decision.adapter not in _peft_adapter_names:
+                _warn_canary_once(f"canary adapter {decision.adapter!r} is not loaded")
+                return None, None
+            return decision.adapter, (policy, decision.bucket, state.canary_rollout_id)
+        if decision.adapter in _peft_adapter_names:
+            return decision.adapter, (policy, decision.bucket, state.canary_rollout_id)
+        # The stable model normally is the unadapted base. An empty explicit
+        # selection makes _adapter_scope disable adapters even if a manual
+        # full-cutover adapter is active.
+        return "", (policy, decision.bucket, state.canary_rollout_id)
+
+    def _record_canary_outcome(tracking, ok: bool) -> None:
+        if tracking is None:
+            return
+
+        policy, bucket, rollout_id = tracking
+        try:
+            canary_outcomes.record(
+                policy,
+                bucket,
+                ok,
+                rollout_id=rollout_id,
+            )
+        except (OSError, TypeError, ValueError):
+            _warn_canary_once("canary outcome write failed", exc_info=True)
 
     @app.get("/health")
     def health():
@@ -1875,9 +2016,15 @@ def _create_app(
     def chat_completions(
         request: ChatCompletionRequest,
         x_user_id: Optional[str] = Header(default=None, alias="X-User-Id"),
+        x_conversation_id: Optional[str] = Header(
+            default=None, alias="X-Conversation-Id"
+        ),
     ):
         # Check adapter selection (from request body)
-        requested_adapter = request.adapter
+        # Treat an empty public request value like an omitted adapter. The
+        # empty string is reserved internally as the explicit base-model
+        # sentinel used by keyed stable canary traffic.
+        requested_adapter = request.adapter or None
         if requested_adapter and _adapter_map:
             if requested_adapter not in _adapter_map:
                 raise HTTPException(
@@ -1889,6 +2036,13 @@ def _create_app(
                 status_code=404,
                 detail="No adapters loaded.",
             )
+        canary_tracking = None
+        if requested_adapter is None:
+            routed_adapter, canary_tracking = _canary_adapter(
+                request.conversation_id or x_conversation_id
+            )
+            if canary_tracking is not None:
+                requested_adapter = routed_adapter
 
         # v0.71.12 #221 — select the active VeRA / VB-LoRA user for this
         # request. set_active_user(None) (or an unknown id) self-clears, so
@@ -1902,6 +2056,12 @@ def _create_app(
 
         if request.stream:
             stream_started = time.perf_counter()
+            from soup_cli.utils.structured_output import (
+                build_logits_processors,
+            )
+            processors = build_logits_processors(
+                output_constraint, tokenizer,
+            )
             return StreamingResponse(
                 _stream_response(
                     model_obj, tokenizer, messages,
@@ -1922,6 +2082,12 @@ def _create_app(
                     adapter_names=_peft_adapter_names,
                     requested_adapter=requested_adapter,
                     active_adapter=_active_snapshot(),
+                    canary_outcome=(
+                        lambda ok: _record_canary_outcome(canary_tracking, ok)
+                    ),
+                    logits_processor=processors or None,
+                    ngram_config=ngram_config,
+                    reasoning_parser=reasoning_parser,
                 ),
                 media_type="text/event-stream",
             )
@@ -1984,6 +2150,7 @@ def _create_app(
                                 kv_cache_generate_kwargs=kv_cache_generate_kwargs,
                             )
                 except Exception:
+                    _record_canary_outcome(canary_tracking, False)
                     logger.exception("Generation error")
                     raise HTTPException(status_code=500, detail="Internal server error")
 
@@ -2018,7 +2185,7 @@ def _create_app(
                         tokens=completion_tokens,
                     )
 
-                return {
+                result = {
                     "id": f"chatcmpl-{uuid.uuid4().hex[:8]}",
                     "object": "chat.completion",
                     "created": int(time.time()),
@@ -2039,6 +2206,8 @@ def _create_app(
                         "total_tokens": prompt_tokens + completion_tokens,
                     },
                 }
+                _record_canary_outcome(canary_tracking, True)
+                return result
             finally:
                 # Always record latency so tail-latency percentiles include
                 # error paths (prevents blind spots on the dashboard).
@@ -2425,6 +2594,10 @@ def _stream_response(
     loaded_bank=None, x_user_id=None,
     adapter_lock=None, adapter_names=None,
     requested_adapter=None, active_adapter=None,
+    canary_outcome=None,
+    logits_processor=None,
+    ngram_config=None,
+    reasoning_parser=None,
 ):
     """Generator that yields SSE chunks for streaming responses."""
     chat_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
@@ -2466,12 +2639,27 @@ def _stream_response(
                     assistant_model=assistant_model,
                     assistant_tokenizer=assistant_tokenizer,
                     num_assistant_tokens=num_assistant_tokens,
+                    logits_processor=logits_processor,
+                    ngram_config=ngram_config,
                     kv_cache_generate_kwargs=kv_cache_generate_kwargs,
                 )
     except Exception:
+        if canary_outcome is not None:
+            canary_outcome(False)
         logger.exception("Stream generation error")
         yield 'data: {"error": "Internal server error"}\n\n'
         return
+
+    if canary_outcome is not None:
+        canary_outcome(True)
+
+    # Strip reasoning blocks if configured
+    if reasoning_parser is not None:
+        from soup_cli.utils.reasoning_parser import strip_reasoning
+
+        response_text = strip_reasoning(
+            response_text, reasoning_parser,
+        )
 
     # Simulate streaming by sending word-by-word
     words = response_text.split(" ")

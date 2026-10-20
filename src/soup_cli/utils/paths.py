@@ -13,11 +13,29 @@ in a single module guarantees a single behaviour across the CLI.
 from __future__ import annotations
 
 import errno
+import ntpath
 import os
 import stat
 import tempfile
 from pathlib import Path
 from typing import Iterable, Optional, Union
+
+
+def quote_path(path: str) -> str:
+    """Quote a path for an error message as it was typed, not as ``repr`` renders it.
+
+    ``repr`` doubles every backslash of a Windows path, and an operator who copies the
+    entry out of the message copies the doubled, non-working spelling back into the
+    variable (#1611). The path is shown inside single quotes so leading and trailing
+    spaces stay visible, backslashes stay single, and the control characters the
+    validation rules refuse (C0, DEL, C1) are escaped as ``\\xNN`` so they never reach
+    the terminal as raw bytes.
+    """
+    escaped = "".join(
+        f"\\x{ord(ch):02x}" if (ord(ch) < 0x20 or 0x7F <= ord(ch) <= 0x9F) else ch
+        for ch in path
+    )
+    return f"'{escaped}'"
 
 
 def is_under(path: Union[str, Path], base: Union[str, Path]) -> bool:
@@ -41,6 +59,90 @@ def is_under_cwd(path: Union[str, Path]) -> bool:
     return is_under(path, Path.cwd())
 
 
+# DOS device names. Windows opens the device whatever the directory, extension
+# or trailing spaces: "clips/nul.png" and "CON .wav" both name one.
+_DOS_DEVICE_NAMES = frozenset(
+    {"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"}
+    | {
+        f"{port}{digit}"
+        for port in ("COM", "LPT")
+        for digit in "123456789" + chr(0xB9) + chr(0xB2) + chr(0xB3)
+    }
+)
+
+
+def _names_dos_device(value: str) -> bool:
+    """Whether any component of ``value`` is a DOS device name."""
+    for part in value.replace("\\", "/").split("/"):
+        stem = part.partition(".")[0].partition(":")[0].rstrip(" ")
+        if stem.upper() in _DOS_DEVICE_NAMES:
+            return True
+    return False
+
+
+def is_network_or_device_path(
+    value: str, *, dos_device_names: bool = os.name == "nt"
+) -> bool:
+    """Whether ``value`` names a network share or a device, not a local file.
+
+    True for two leading separators in any mix of ``\\`` and ``/`` -- a UNC
+    share (``\\\\host\\share``, ``//host/share``) and the ``\\\\?\\``
+    extended-length and ``\\\\.\\`` device prefixes -- and for the ``\\??\\``
+    object-manager prefix. ``pathlib`` and ``os.path.realpath`` collapse ``.``
+    and ``..`` segments first, so the value is tested both as written and in
+    its normalised form. With ``dos_device_names`` (the default on Windows), a
+    component naming a DOS device (``NUL``, ``CON``, ``COM1``, ``LPT1``, ...)
+    counts too.
+
+    A pure string test: it never touches the filesystem, and for the same
+    arguments it gives the same answer on every platform.
+    """
+    for text in (value, ntpath.normpath(value)):
+        head = text[:4].replace("/", "\\")
+        if head.startswith("\\\\") or head == "\\??\\":
+            return True
+        if dos_device_names and _names_dos_device(text):
+            return True
+    return False
+
+
+def is_device_namespace_path(value: str) -> bool:
+    """Whether ``value`` starts with the ``\\\\.\\`` device or ``\\??\\``
+    object-manager prefix, written with either separator, as is or once
+    normalised. A pure string test.
+
+    Narrower than :func:`is_network_or_device_path`: a UNC or extended-length
+    (``\\\\?\\``) path is not matched, because ``os.path.realpath`` returns one
+    for a directory on a mapped drive.
+    """
+    for text in (value, ntpath.normpath(value)):
+        if text[:4].replace("/", "\\") in ("\\\\.\\", "\\??\\"):
+            return True
+    return False
+
+
+def require_regular_file(path: str) -> str:
+    """Return ``path`` when it is an absolute path to a regular file.
+
+    Raises :exc:`OSError` otherwise, without opening anything: for a NUL byte,
+    a device or object-manager path (:func:`is_device_namespace_path`), a
+    relative path, or anything ``os.stat`` reports as other than a regular
+    file (a directory, a FIFO, a device). A missing file raises
+    :exc:`FileNotFoundError` from ``os.stat``. A UNC or extended-length path
+    is accepted: the loader stores one for a media directory on a mapped
+    drive, and it has already skipped every row that names one itself.
+
+    For readers that would block or never finish on a FIFO or a device. This
+    is a check made before the open, not a guard of the open: a path that
+    changes in between is not caught.
+    """
+    if "\x00" in path or is_device_namespace_path(path) or not Path(path).is_absolute():
+        raise OSError(errno.EINVAL, "not an absolute local file path", path)
+    if not stat.S_ISREG(os.stat(path).st_mode):
+        raise OSError(errno.EINVAL, "not a regular file", path)
+    return path
+
+
 def enforce_under_cwd_and_no_symlink(path: str, field: str) -> str:
     """Apply cwd containment + ``os.lstat + S_ISLNK`` rejection (TOCTOU defence).
 
@@ -56,9 +158,9 @@ def enforce_under_cwd_and_no_symlink(path: str, field: str) -> str:
     if "\x00" in path:
         raise ValueError(f"{field} must not contain null bytes")
     if not is_under_cwd(path):
-        raise ValueError(
-            f"{field} {os.path.basename(path)!r} must stay under cwd"
-        )
+        # The path as typed, not its basename: for ``../out.json`` the basename alone
+        # reads ``'out.json'``, which looks like a path under cwd and hides the reason.
+        raise ValueError(f"{field} {quote_path(path)} must stay under cwd")
     if os.path.lexists(path):
         try:
             st = os.lstat(path)
@@ -81,6 +183,21 @@ def enforce_under_cwd_and_no_symlink(path: str, field: str) -> str:
                     f"{field} must not be a reparse point / junction "
                     "(TOCTOU defence)"
                 )
+    return path
+
+
+def check_report_output_path(path: str, field: str = "--output") -> str:
+    """Validate, before any work starts, a path a command will write its report to.
+
+    :func:`enforce_under_cwd_and_no_symlink` plus a refusal of a directory. An
+    existing regular file is allowed: a report is replaced atomically by
+    :func:`atomic_write_text`, as ``soup attest emit -o`` replaces its statement.
+    Call it as the first thing a command does, so a refused path fails in
+    milliseconds instead of after a model has been loaded and a run has finished.
+    """
+    enforce_under_cwd_and_no_symlink(path, field)
+    if os.path.isdir(path):
+        raise ValueError(f"{field} {quote_path(path)} must name a file, not a directory")
     return path
 
 

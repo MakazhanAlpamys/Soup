@@ -37,8 +37,12 @@ on:
       - 'examples/**'
       - 'pyproject.toml'
       - '.github/workflows/recipe-attach.yml'
+      - '.github/constraints/pinned-upstream.txt'
   pull_request:
     branches: [main]
+    # `ready_for_review` is what starts the first run of a draft pull request: a draft
+    # is skipped by the job's own `if:` (2026-10-19; see the job).
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - 'src/soup_cli/recipes/**'
       - 'src/soup_cli/config/**'
@@ -51,6 +55,7 @@ on:
       - 'examples/**'
       - 'pyproject.toml'
       - '.github/workflows/recipe-attach.yml'
+      - '.github/constraints/pinned-upstream.txt'
   workflow_dispatch:
 
 permissions:
@@ -66,6 +71,10 @@ concurrency:
 jobs:
   verify:
     name: attach every shipped config on the meta device
+    # Not on a draft pull request (not a required check). Measured 2026-10-19 over 7
+    # days: 13 runs on a head whose CI run was a skipped draft, 37 job-minutes. Marking
+    # the pull request ready runs it (`ready_for_review` above).
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -79,7 +88,8 @@ jobs:
       - name: Install the training stack
         # `[train]`, not `[dev]`: the attach needs torch, transformers and peft
         # and nothing from the test extras.
-        run: pip install -e ".[train]"
+        # The pinned stack of ci.yml's pull-request cells on a pull request and a push; a manual run resolves the newest.
+        run: pip install -e ".[train]" ${{ (github.event_name == 'pull_request' || github.event_name == 'push') && '-c .github/constraints/pinned-upstream.txt' || '' }}
       - name: Ratchet every shipped config's attach
         # Exit 2 is a new cannot-attach, or a pinned config that now attaches;
         # exit 1 is the command itself failing. Skipped (gated, no token) exits 0

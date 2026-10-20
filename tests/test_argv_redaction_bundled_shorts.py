@@ -73,6 +73,13 @@ class TestTheExistingFormsStillWork:
     def test_form(self, argv, expected):
         assert mask_secret_args(argv, OPTS) == expected
 
-    def test_no_secret_options_means_no_masking(self):
-        argv = ["-xtSECRET", "--auth-token", "S"]
-        assert mask_secret_args(argv, frozenset()) == tuple(argv)
+    def test_no_declared_options_leaves_short_bundles_and_masks_by_long_name(self):
+        """A short letter means nothing without its command; a long name is read as typed."""
+        argv = ["-xtSECRET", "--auth-token", "S", "--model", "m"]
+        assert mask_secret_args(argv, frozenset()) == (
+            "-xtSECRET",
+            "--auth-token",
+            "<redacted>",
+            "--model",
+            "m",
+        )

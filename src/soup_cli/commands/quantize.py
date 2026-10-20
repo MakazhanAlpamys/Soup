@@ -15,6 +15,8 @@ import typer
 from rich.console import Console
 from rich.markup import escape
 
+from soup_cli.config.deprecation import DEPRECATED_VALUE_REJECTION_VERSION
+
 console = Console()
 
 VALID_FORMATS = frozenset({"gguf", "gptq", "awq", "onnx", "tensorrt"})
@@ -28,7 +30,11 @@ def quantize(
     to: str = typer.Option(
         "gguf",
         "--to",
-        help="Target format: gguf | gptq | awq | onnx | tensorrt.",
+        help=(
+            "Target format: gguf | gptq | awq | onnx | tensorrt "
+            "(awq and gptq are deprecated and will be removed in "
+            f"Soup v{DEPRECATED_VALUE_REJECTION_VERSION})."
+        ),
     ),
     bits: int = typer.Option(
         4,
@@ -72,3 +78,9 @@ def quantize(
     console.print(
         "[dim]Tip: `soup export --help` lists every advanced quantization flag.[/]"
     )
+    # #338 -- the command above still runs, but the format is on its way out.
+    from soup_cli.commands.export import deprecated_format_notice
+
+    notice = deprecated_format_notice(canonical)
+    if notice is not None:
+        console.print(f"[yellow]Deprecated:[/] {notice}")

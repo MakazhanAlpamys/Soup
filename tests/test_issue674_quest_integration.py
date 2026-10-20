@@ -1130,7 +1130,13 @@ def test_train_validates_resume_and_rewrites_final_metadata(monkeypatch, tmp_pat
             "resume",
             "checkpoint-4",
             metadata,
-            {"legacy_base_model": "ahxt/LiteLlama-460M-1T"},
+            # `legacy_base_identity` is the pre-resolved identity of `config.base`
+            # (#1199 fix 2). This wrapper is built with `object.__new__` and never
+            # resolved one, so it is None and the callee resolves as before.
+            {
+                "legacy_base_model": "ahxt/LiteLlama-460M-1T",
+                "legacy_base_identity": None,
+            },
         ),
         ("metadata", str(tmp_path), metadata),
         ("train", "checkpoint-4"),

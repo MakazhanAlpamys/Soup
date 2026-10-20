@@ -23,6 +23,9 @@ name: merge freshness
 on:
   pull_request:
     branches: [main]
+    # `ready_for_review` is what starts the first run of a draft pull request: the `gate`
+    # job skips a draft (2026-10-19; see the job).
+    types: [opened, synchronize, reopened, ready_for_review]
   push:
     branches: [main]
   workflow_dispatch:
@@ -40,7 +43,12 @@ concurrency:
 
 jobs:
   gate:
-    if: github.event_name == 'pull_request'
+    # A pull request that is not a draft: a draft is not merged, so its freshness is
+    # not worth a runner. Measured 2026-10-19 over 7 days: 70 runs on a head whose CI run
+    # was a skipped draft, 19 job-minutes; marking it ready runs the gate
+    # (`ready_for_review` above). `reeval-open-prs` below is a push / dispatch job and
+    # needs no draft condition.
+    if: github.event_name == 'pull_request' && github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:

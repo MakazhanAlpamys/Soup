@@ -57,7 +57,7 @@ def test_msprt_config_defaults():
 
     cfg = MsprtConfig(metric="latency")
     assert cfg.alpha == 0.05
-    assert cfg.beta == 0.20
+    assert cfg.beta is None  # retired in #1418
     assert cfg.effect_size > 0
 
 
@@ -75,9 +75,6 @@ def test_msprt_config_frozen():
     ("alpha", -0.1),
     ("alpha", float("nan")),
     ("alpha", True),
-    ("beta", 0.0),
-    ("beta", 1.0),
-    ("beta", float("inf")),
     ("effect_size", 0.0),
     ("effect_size", -0.1),
     ("effect_size", float("nan")),

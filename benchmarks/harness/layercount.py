@@ -110,6 +110,9 @@ def _measure_checkpoint(weights: str, shards: str, quant: str) -> dict[str, Any]
     import bitexact
     import torch
     from mechanism_cost import (
+        MeasurementInvalidError as MechanismMeasurementInvalidError,
+    )
+    from mechanism_cost import (
         build_streamed_arm,
         gradient_snapshot,
         make_input,
@@ -168,7 +171,10 @@ def _measure_checkpoint(weights: str, shards: str, quant: str) -> dict[str, Any]
         assert_canonical_parameters_intersect(streamed, reference)
         input_ids = make_input(reference, seq=128, batch=1)
         reference_loss = run_backward(reference, input_ids)
-        reference_grads = gradient_snapshot(reference)
+        try:
+            reference_grads = gradient_snapshot(reference)
+        except MechanismMeasurementInvalidError as exc:
+            raise MeasurementInvalidError(str(exc)) from exc
         if (
             not math.isfinite(reference_loss)
             or not reference_grads
@@ -179,7 +185,10 @@ def _measure_checkpoint(weights: str, shards: str, quant: str) -> dict[str, Any]
         exact_counts = []
         for _ in range(3):
             loss = run_backward(streamed, input_ids)
-            current = gradient_snapshot(streamed)
+            try:
+                current = gradient_snapshot(streamed)
+            except MechanismMeasurementInvalidError as exc:
+                raise MeasurementInvalidError(str(exc)) from exc
             if not math.isfinite(loss) or loss != reference_loss:
                 raise MeasurementInvalidError("streamed loss differs from resident")
             if set(current) != set(reference_grads):

@@ -14,9 +14,10 @@ An answer is stated explicitly in one of three forms:
    braces are balanced, so ``\\boxed {\\frac{1}{2}}`` reads ``\\frac{1}{2}``;
 3. ``answer is`` / ``answer:`` in any case, with markdown emphasis allowed around the word
    (``**Answer**:``) and the answer allowed on the next line: the last such phrase, up to the end
-   of its clause. The clause ends at a line end, or at ``". "``, ``", "`` or ``"; "`` outside
-   brackets, except that a comma or semicolon followed by a number continues a list
-   (``41, 42 or 43``). A ``" ("`` aside belongs to the clause but not to the answer:
+   of its clause. The clause ends at a line end, at ``". "``, ``", "`` or ``"; "`` outside
+   brackets, or at the connective ``because`` or ``since`` (case-insensitive, requiring whitespace
+   on both sides; not ``as``), except that a comma or semicolon followed by a number continues
+   a list (``41, 42 or 43``). A ``" ("`` aside belongs to the clause but not to the answer:
    ``42 (i.e. 42.0)`` answers ``42``.
 
 A box outranks a phrase. A ``####`` line outranks both, unless one of them comes after it: then
@@ -33,11 +34,11 @@ from its clause: the stand-alone numbers outside brackets and LaTeX environments
 ``2^{10}`` or ``2x``, and of a time or a ratio such as ``3:45`` or ``1:1,000``, belong to one
 expression, not to several values) and every stand-alone number in its aside. A clause with
 MORE THAN ONE distinct value is a hedge (``The answer is either 41 or 42.``): it states no
-answer, so a completion that hedges scores 0.0 and a gold that hedges is refused. Every number
-in the clause counts, a justification's too (``42 because 6*7=42`` is a hedge), and a comma or
-a period before a justification ends the clause (``42, because 6*7=42`` is 42). One value, even
-repeated (``42 or 42.0``), is the clause's number; a clause with no digits at all falls back to
-a completion's last number.
+answer, so a completion that hedges scores 0.0 and a gold that hedges is refused. A justification
+inline or after punctuation ends the clause (``42 because 6*7=42`` and ``42, because 6*7=42`` both
+answer 42), while parenthetical justifications belong to the clause and hedge it (``42 (6*7=42)``).
+One value, even repeated (``42 or 42.0``), is the clause's number; a clause with no digits at all
+falls back to a completion's last number.
 
 A text that states no explicit answer is free text. A reference is then its whole value, which
 must fit on one line (a bare answer such as ``"42"`` or ``"Paris"``). A completion reads as its
@@ -104,7 +105,7 @@ _PHRASE_RE = re.compile(
 _ANSWER_LABEL_RE = re.compile(r"[*_\s]*(?:final\s+)?answer[*_\s]*(?::[*_\s]*)?", re.IGNORECASE)
 _NON_SPACE_RE = re.compile(r"\S")
 # The characters that can end a phrase's clause, or open or close a bracket inside it.
-_CLAUSE_CHAR_RE = re.compile(r"[()\[\]{}.,;]")
+_CLAUSE_CHAR_RE = re.compile(r"[()\[\]{}.,;]|\b(?:because|since)\b", re.IGNORECASE)
 # A LaTeX line break '\\' is consumed whole, so its second backslash is never read as the
 # control space '\ ' ('\\ -14' must stay '\\ -14', not become '\-14').
 _LATEX_SPACING_RE = re.compile(r"\\\\|\\[,!;: ]")
@@ -266,7 +267,9 @@ def _split_clause(line: str) -> tuple[str, str]:
     """Split the text after an answer phrase into its clause's ``(answer, aside)``.
 
     The clause ends at ". ", ", " or "; " outside brackets, unless a number follows the comma
-    or semicolon ("41, 42 or 43" is one clause). A " (" aside is in the clause, not the answer.
+    or semicolon ("41, 42 or 43" is one clause), or at the connective "because" or "since"
+    (case-insensitive, requiring whitespace on both sides; not "as").
+    A " (" aside is in the clause, not the answer.
     """
     line = line.lstrip()
     depth = 0
@@ -279,11 +282,18 @@ def _split_clause(line: str) -> tuple[str, str]:
             depth += 1
         elif char in _CLOSERS:
             depth = max(0, depth - 1)
-        elif depth == 0 and line[index + 1 : index + 2].isspace():
-            if char in ",;" and _NUMBER_AHEAD_RE.match(line, index + 1):
-                continue
-            line = line[:index]
-            break
+        elif depth == 0:
+            if char in ".,;":
+                if line[index + 1 : index + 2].isspace():
+                    if char in ",;" and _NUMBER_AHEAD_RE.match(line, index + 1):
+                        continue
+                    line = line[:index]
+                    break
+            elif (index > 0 and line[index - 1].isspace()) and (
+                index + len(char) == len(line) or line[index + len(char)].isspace()
+            ):
+                line = line[:index].rstrip()
+                break
     return (line, "") if aside is None else (line[:aside], line[aside:])
 
 

@@ -26,6 +26,7 @@ them. LISA (per-step layer sampling) is split to #267.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import math
@@ -72,6 +73,9 @@ _VALID_MODULE_TYPES = ("mlp", "attn", "other")
 _LAYER_IDX_RE = re.compile(r"(?:^|\.)(?:layers|h)\.\d+\.")
 _SLUG_RE = re.compile(r"[^A-Za-z0-9._-]+")
 _HF_COMMIT_RE = re.compile(r"^[A-Fa-f0-9]{40}$")
+# A local snapshot folder's own cache slot: ``<folder name>@<digest of its location>``.
+_LOCAL_SLOT_LABEL_CHARS = 64
+_LOCAL_SLOT_DIGEST_CHARS = 32
 
 ModulesArg = Union[str, Sequence[str], None]
 
@@ -292,22 +296,29 @@ def _framework() -> Tuple[str, Callable[[Any], "NDArray[Any]"]]:
 
 
 def _discover_safetensors(weights_dir: str) -> list[str]:
+    from soup_cli.utils.checkpoint_files import checkpoint_files
+
     real = os.path.realpath(weights_dir)
     if not os.path.isdir(real):
         raise FileNotFoundError(f"weights dir not found: {weights_dir}")
+    # #1806: the checkpoint's own files, not every *.safetensors. Mistral's
+    # consolidated.safetensors carries the same weights under mistral-inference
+    # names; scanning it too emitted unfrozen_parameters that match no
+    # parameter of the HF model.
+    selected = checkpoint_files(real)
     files = []
-    for entry in sorted(os.listdir(real)):
-        if not entry.endswith(".safetensors"):
-            continue
+    for entry in selected.weights:
         full = os.path.join(real, entry)
         # Skip symlinked shards — defence-in-depth against a link redirecting
         # the read (mirrors the project's no-symlink TOCTOU policy).
         if os.path.islink(full):
             logger.warning("spectrum scan: skipping symlinked shard %s", entry)
             continue
+        if not os.path.isfile(full):
+            continue
         files.append(full)
     if not files:
-        raise FileNotFoundError(f"no .safetensors files in {weights_dir}")
+        raise FileNotFoundError(selected.why_empty(weights_dir))
     return files
 
 
@@ -568,14 +579,19 @@ def _weight_file_manifest(
     *,
     permit_symlinks: bool,
 ) -> Tuple[Tuple[str, int, int], ...]:
-    """Return ``(basename, size, mtime_ns)`` for top-level safetensors files."""
+    """Return ``(basename, size, mtime_ns)`` for the checkpoint's top-level safetensors.
+
+    The checkpoint's files are what the index names (#1806), so a Mistral-style
+    ``consolidated.safetensors`` beside the shards is neither sized nor copied.
+    """
+    from soup_cli.utils.checkpoint_files import checkpoint_files
+
     root = os.path.realpath(os.path.expanduser(directory))
     if not os.path.isdir(root):
         raise FileNotFoundError(f"weights directory not found: {directory}")
+    selected = checkpoint_files(root)
     files = []
-    for name in sorted(os.listdir(root)):
-        if not name.endswith(".safetensors"):
-            continue
+    for name in selected.weights:
         path = os.path.join(root, name)
         if os.path.islink(path) and not permit_symlinks:
             raise FileNotFoundError(
@@ -586,9 +602,7 @@ def _weight_file_manifest(
         stat = os.stat(path)
         files.append((name, int(stat.st_size), int(stat.st_mtime_ns)))
     if not files:
-        raise FileNotFoundError(
-            f"no .safetensors weight files found in {directory}"
-        )
+        raise FileNotFoundError(selected.why_empty(directory))
     return tuple(files)
 
 
@@ -599,7 +613,15 @@ def _materialized_matches_hf_snapshot(
     *,
     source_revision: Optional[str] = None,
 ) -> Optional[Tuple[Tuple[str, int, int], ...]]:
-    """Return the real-file manifest when HF metadata proves blob identity."""
+    """Return the real-file manifest when HF metadata proves blob identity.
+
+    The comparison reads link names and sizes only, so the layout is checked
+    last, by the copy step's own listing: a copy is reused only for a snapshot
+    that would be copied now. A layout that listing refuses (a linked blob
+    store, a linked directory inside the snapshot, a file that leaves the blob
+    store or has no blob) answers "no match": the plan then asks for a copy,
+    and the copy step raises its refusal before it touches the earlier copy.
+    """
     try:
         existing = _weight_file_manifest(materialized_dir, permit_symlinks=False)
     except FileNotFoundError:
@@ -612,7 +634,7 @@ def _materialized_matches_hf_snapshot(
         source_path = os.path.join(source_dir, name)
         if not os.path.islink(source_path):
             return None
-        blob_id = os.path.basename(os.path.realpath(source_path))
+        blob_id = _hf_blob_id(source_path)
         metadata_path = os.path.join(
             materialized_dir,
             ".cache",
@@ -632,7 +654,82 @@ def _materialized_matches_hf_snapshot(
             return None
         if source_revision is not None and lines[0].strip() != source_revision:
             return None
+    try:
+        _snapshot_materialization_entries(source_dir, source_revision=source_revision)
+    except (ValueError, OSError):
+        return None
     return existing
+
+
+def _hf_blob_id(snapshot_path: str) -> str:
+    """The per-repo ``blobs/<etag>`` name a snapshot link points at.
+
+    Not the final target: huggingface_hub >= 1.32 may chain that entry to its
+    cache-wide Xet store, whose file is named by the Xet hash instead.
+    """
+    return os.path.basename(os.readlink(snapshot_path))
+
+
+def _hf_shared_blob_root(repo_root: str) -> Optional[str]:
+    """The cache-wide ``<cache>/blobs`` store of huggingface_hub >= 1.32, if marked.
+
+    Per-repo ``blobs/<etag>`` entries of Xet downloads are relative symlinks into
+    it; huggingface_hub writes the ``.huggingface-shared-blobs`` marker file.
+    Like huggingface_hub's ``is_shared_blobs_dir``, neither the directory nor the
+    marker may be a link: a linked store points somewhere else.
+    """
+    store = os.path.join(os.path.dirname(repo_root), "blobs")
+    marker = os.path.join(store, ".huggingface-shared-blobs")
+    try:
+        store_stat = os.lstat(store)
+        marker_stat = os.lstat(marker)
+    except OSError:
+        return None
+    if not stat.S_ISDIR(store_stat.st_mode) or not stat.S_ISREG(marker_stat.st_mode):
+        return None
+    reparse = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+    if getattr(store_stat, "st_file_attributes", 0) & reparse:
+        return None
+    return os.path.realpath(store)
+
+
+def _is_junction(path: str) -> bool:
+    """Whether ``path`` is a Windows junction.
+
+    ``os.path.islink`` is false for a junction and ``os.walk`` descends into
+    one, so a junction needs its own check wherever a linked directory is
+    refused. This is the comparison ``os.path.isjunction`` makes (that function
+    needs Python 3.12), except that an ``OSError`` from ``lstat`` is not turned
+    into "not a junction": an entry that cannot be inspected is not waved on.
+    The tag is compared, not the reparse-point attribute, so a directory that
+    carries some other reparse point is not taken for a link.
+    """
+    mount_point = getattr(stat, "IO_REPARSE_TAG_MOUNT_POINT", 0xA0000003)
+    return getattr(os.lstat(path), "st_reparse_tag", 0) == mount_point
+
+
+def _hf_repo_blob_root(repo_root: str) -> str:
+    """The repo's own ``blobs`` store, which has to be a real directory.
+
+    huggingface_hub creates it with ``os.makedirs``. Like the shared store, a
+    linked one (a symlink, or a junction on Windows) points somewhere else, and
+    it is refused without being resolved. The link's target is not compared
+    with any directory: for a local snapshot path the folder around the
+    snapshot is wherever it was put, so there is no limit to hold a target to.
+    """
+    store = os.path.join(repo_root, "blobs")
+    if not os.path.lexists(store):
+        raise FileNotFoundError("cached Hugging Face blob store is missing")
+    if os.path.islink(store) or _is_junction(store):
+        raise ValueError(
+            f"cached Hugging Face blob store {store!r} is a link and is not followed: "
+            "Soup copies weights only from inside the Hugging Face cache; make blobs a "
+            "real directory (to keep the files elsewhere, link the whole repository "
+            "folder instead), or pass a directory of regular files"
+        )
+    if not os.path.isdir(store):
+        raise FileNotFoundError("cached Hugging Face blob store is missing")
+    return os.path.realpath(store)
 
 
 def _hf_snapshot_revision(source_dir: str) -> Optional[str]:
@@ -652,8 +749,10 @@ def _snapshot_materialization_entries(
     """Validate and list cached files before any destination is created.
 
     Canonical Hugging Face snapshots contain symlinks into their sibling
-    ``blobs`` directory.  Only those links are followed: a crafted snapshot
-    cannot turn Soup's regular-file copy into an arbitrary-file disclosure.
+    ``blobs`` directory, whose Xet entries may in turn link into the
+    cache-wide shared blob store.  Only links resolving into one of those two
+    stores are followed: a crafted snapshot cannot turn Soup's regular-file
+    copy into an arbitrary-file disclosure.
     """
     from soup_cli.utils.paths import is_under
 
@@ -661,7 +760,7 @@ def _snapshot_materialization_entries(
     if not os.path.isdir(source):
         raise FileNotFoundError(f"cached snapshot directory not found: {source_dir}")
 
-    blob_root = None
+    blob_roots: list[str] = []
     if source_revision is not None:
         repo_root = os.path.dirname(os.path.dirname(source))
         expected = os.path.realpath(
@@ -669,9 +768,17 @@ def _snapshot_materialization_entries(
         )
         if source != expected:
             raise ValueError("cached snapshot path does not match its resolved revision")
-        blob_root = os.path.realpath(os.path.join(repo_root, "blobs"))
-        if not os.path.isdir(blob_root):
-            raise FileNotFoundError("cached Hugging Face blob store is missing")
+        blob_roots.append(_hf_repo_blob_root(repo_root))
+        shared_root = _hf_shared_blob_root(repo_root)
+        if shared_root is not None:
+            blob_roots.append(shared_root)
+
+    from soup_cli.utils.checkpoint_files import checkpoint_files
+
+    # #1806: only the checkpoint's own top-level weights are copied (and sized in
+    # materialize_bytes), the same set _weight_file_manifest reports, since the
+    # copy is checked against that manifest afterwards.
+    top_level_weights = set(checkpoint_files(source).weights)
 
     entries: list[Tuple[str, str, Optional[str]]] = []
     for root, dirnames, filenames in os.walk(source, followlinks=False):
@@ -681,20 +788,30 @@ def _snapshot_materialization_entries(
                 raise ValueError(
                     f"cached snapshot directory symlink is not allowed: {dirname!r}"
                 )
+            if _is_junction(directory):
+                raise ValueError(
+                    f"cached snapshot directory junction is not allowed: {dirname!r}"
+                )
         for filename in filenames:
             if not filename.endswith((".safetensors", ".json")):
+                continue
+            if (
+                filename.endswith(".safetensors")
+                and root == source
+                and filename not in top_level_weights
+            ):
                 continue
             snapshot_path = os.path.join(root, filename)
             relative = os.path.relpath(snapshot_path, source)
             blob_id = None
             if os.path.islink(snapshot_path):
                 resolved = os.path.realpath(snapshot_path)
-                if blob_root is not None and not is_under(resolved, blob_root):
+                if blob_roots and not any(is_under(resolved, r) for r in blob_roots):
                     raise ValueError(
                         f"cached snapshot file {relative!r} points outside the "
                         "Hugging Face blob store"
                     )
-                blob_id = os.path.basename(resolved)
+                blob_id = _hf_blob_id(snapshot_path)
             else:
                 resolved = snapshot_path
             if not os.path.isfile(resolved):
@@ -815,6 +932,26 @@ def plan_model_weights(model: str) -> ModelWeightsPlan:
     if os.path.isdir(model):
         source = os.path.realpath(model)
         manifest = _weight_file_manifest(source, permit_symlinks=True)
+        if any(os.path.islink(os.path.join(source, name)) for name, _s, _m in manifest):
+            # A local path to an HF cache snapshot: its weights are symlinks into
+            # blobs/, which the sharder and the scanner skip. Copy it like the
+            # snapshot a Hub id resolves to. It shares that copy's cache slot only
+            # when it is that snapshot's own repo folder (_local_snapshot_slot).
+            source_revision = _hf_snapshot_revision(source)
+            if source_revision is None:
+                raise ValueError(
+                    f"{model} holds symlinked .safetensors files outside a Hugging "
+                    "Face snapshots/<commit> directory; Soup reads weights only "
+                    "from regular files: pass the Hub id, the HF snapshot "
+                    "directory, or a directory of regular files"
+                )
+            return _hf_snapshot_plan(
+                _hf_cache_repo_id(source) or model,
+                source,
+                manifest,
+                source_revision,
+                slot=_local_snapshot_slot(source),
+            )
         return ModelWeightsPlan(
             model=model,
             source_dir=source,
@@ -824,14 +961,7 @@ def plan_model_weights(model: str) -> ModelWeightsPlan:
             materialize_bytes=0,
             source_files=manifest,
         )
-    from soup_cli.utils.hubs import snapshot_download
-
-    source = snapshot_download(
-        model,
-        cache_dir=None,
-        allow_patterns=["*.safetensors", "*.json"],
-    )
-    source = os.path.realpath(source)
+    source = os.path.realpath(_download_hub_checkpoint(model))
     source_revision = _hf_snapshot_revision(source)
     manifest = _weight_file_manifest(source, permit_symlinks=True)
     source_paths = [os.path.join(source, name) for name, _size, _mtime in manifest]
@@ -846,9 +976,98 @@ def plan_model_weights(model: str) -> ModelWeightsPlan:
             source_files=manifest,
             source_revision=source_revision,
         )
+    return _hf_snapshot_plan(model, source, manifest, source_revision)
 
+
+def _download_hub_checkpoint(model: str) -> str:
+    """Fetch a Hub repo's checkpoint files, and nothing beside them (#1806).
+
+    ``*.safetensors`` fetched Mistral's ``consolidated.safetensors`` next to the
+    shards: 29.0 GB for a 14.5 GB model. One call asks for the Hugging Face
+    spellings (``model.safetensors``, ``model-*-of-*.safetensors``) and the JSON
+    files; one call, so an already complete cache entry resolves offline as
+    before (#533). The local rule then reads what came, and a second call is
+    made only when it says the checkpoint is not all there: the files an index
+    names outside those spellings, or, with no index and neither spelling
+    present, every ``*.safetensors`` except ``consolidated*``, which is the
+    local fallback rule itself. So what is downloaded is what is counted.
+    """
+    from soup_cli.utils.checkpoint_files import (
+        hub_allow_patterns,
+        hub_second_call,
+        read_index_weight_map,
+        select_checkpoint_files,
+    )
+    from soup_cli.utils.hubs import snapshot_download
+
+    source = snapshot_download(
+        model, cache_dir=None, allow_patterns=[*hub_allow_patterns(None), "*.json"]
+    )
+    real = os.path.realpath(source)
+    selected = select_checkpoint_files(os.listdir(real), read_index_weight_map(real))
+    second = hub_second_call(selected)
+    if second is not None:
+        allow, ignore = second
+        source = snapshot_download(
+            model,
+            cache_dir=None,
+            allow_patterns=[*allow, "*.json"],
+            ignore_patterns=ignore or None,
+        )
+    return source
+
+
+def _hf_cache_repo_id(source_dir: str) -> Optional[str]:
+    """``org/name`` for a ``models--org--name/snapshots/<sha>`` directory."""
+    repo_dir = os.path.basename(os.path.dirname(os.path.dirname(source_dir)))
+    if not repo_dir.startswith("models--"):
+        return None
+    return repo_dir[len("models--"):].replace("--", "/") or None
+
+
+def _location_key(path: str) -> str:
+    """One spelling per directory: links resolved, letter case folded where the OS does."""
+    return os.path.normcase(os.path.realpath(path))
+
+
+def _local_snapshot_slot(source: str) -> str:
+    """Cache slot for the regular-file copy of a local ``snapshots/<commit>`` directory.
+
+    The slot of the Hub id ``org/name`` when the snapshot's repo folder is the directory
+    that id resolves to in the active Hugging Face cache. A folder anywhere else gets a
+    slot of its own, ``<folder name>@<digest of its resolved location>``: a copy is
+    reused on matching names and sizes, so two requests may share one only when they
+    name the same place. ``@`` cannot occur in a :func:`model_slug`, which keeps a
+    folder's slot apart from every slot named after a model.
+    """
+    repo_root = os.path.dirname(os.path.dirname(source))
+    location = _location_key(repo_root)
+    repo_id = _hf_cache_repo_id(source)
+    if repo_id is not None:
+        from soup_cli.utils.hubs import hf_cache_dir
+
+        cache = hf_cache_dir()
+        if cache is not None:
+            in_cache = os.path.join(cache, os.path.basename(repo_root))
+            if _location_key(in_cache) == location:
+                return model_slug(repo_id)
+    name = os.path.basename(location)
+    label = model_slug(name)[:_LOCAL_SLOT_LABEL_CHARS] if name.strip() else "local"
+    digest = hashlib.sha256(os.fsencode(location)).hexdigest()
+    return f"{label}@{digest[:_LOCAL_SLOT_DIGEST_CHARS]}"
+
+
+def _hf_snapshot_plan(
+    model: str,
+    source: str,
+    manifest: Tuple[Tuple[str, int, int], ...],
+    source_revision: Optional[str],
+    *,
+    slot: Optional[str] = None,
+) -> ModelWeightsPlan:
+    """Plan the regular-file copy of a symlinked HF snapshot (reused when current)."""
     materialized = os.path.join(
-        resolve_cache_dir(), "weights", model_slug(model)
+        resolve_cache_dir(), "weights", slot or model_slug(model)
     )
     existing = _materialized_matches_hf_snapshot(
         source,

@@ -298,13 +298,17 @@ class TestFloorConstraintAndWorkflowPins:
         assert "tests/test_plotext_compat.py" in job
 
     @pytest.mark.parametrize(
-        "package", ["torch", "torchaudio", "transformers", "trl", "peft", "plotext"]
+        "package",
+        ["torch", "torchaudio", "transformers", "trl", "peft", "plotext", "typer", "click"],
     )
     def test_workflow_version_check_accepts_pins_and_rejects_mismatch(self, package: str):
+        # typer and click (#1802): this step is what turns "the file pins the declared
+        # floor" into "the cell runs on it" -- see tests/test_cli_dependency_floors.py.
         constraints = (
             "torch==2.5.1\ntorchaudio==2.5.1\n"
             "transformers==8.8.8\ntrl==9.9.9\n"
             "peft==7.7.7\nplotext==6.6.6\n"
+            "typer==5.5.5\nclick==4.4.4\n"
         )
         installed = {
             name: _constraint_pin(constraints, name)
@@ -315,6 +319,8 @@ class TestFloorConstraintAndWorkflowPins:
                 "trl",
                 "peft",
                 "plotext",
+                "typer",
+                "click",
             )
         }
         _run_transformers_floor_version_check(installed, constraints)
