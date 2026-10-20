@@ -1014,13 +1014,13 @@ def estimate_stream_store_bytes(
 
     Deliberately coarse: it assumes the source is stored at ``dtype`` and
     charges the NF4 rate to every parameter, while layernorms and (in the shard
-    set) the embeddings actually stay unquantised. That errs LOW, which is the
-    safe direction for this RAM probe — the authoritative check runs after
-    sharding, on the real shard sizes. It errs far low for a fused MoE base,
-    whose stacked routed experts stay at ``dtype``, so the DISK pre-flight sizes
-    the cache from the source headers instead
-    (``layer_shard.estimate_shard_cache_bytes``) and falls back to this ratio
-    only when those headers cannot be read.
+    set) the embeddings actually stay unquantised. That errs LOW — the
+    authoritative check runs after sharding, on the real shard sizes. It errs far
+    low for a fused MoE base, whose stacked routed experts stay at ``dtype``, and
+    for an FP8 block source, whose files hold one byte per weight. So the disk
+    pre-flight and the early RAM check both size the cache from the source headers
+    instead (``layer_shard.estimate_shard_cache_bytes``) and fall back to this
+    ratio only when those headers cannot be listed or read.
     """
     if quant not in SUPPORTED_STREAM_QUANTS:
         raise ValueError(

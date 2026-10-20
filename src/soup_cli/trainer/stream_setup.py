@@ -213,6 +213,62 @@ def _validate_qwen4_ngram_ram_fit(
         )
 
 
+def _validate_early_ram_fit(
+    *,
+    base: str,
+    source_bytes: int,
+    ram_bytes: int,
+    approximate: bool,
+    quantised: bool,
+    free_ram: int,
+    total_ram: Optional[int],
+) -> None:
+    """Refuse a ``stream_source: ram`` run BEFORE sharding when the RAM tier cannot hold it.
+
+    ``ram_bytes`` is what the check after sharding (:func:`_validate_qwen4_ngram_ram_fit`)
+    charges, sized from the source headers (``ShardCacheEstimate.ram_tier_bytes``): the
+    decoder-layer files, the embedding/head shards and the resident extras. The rule is
+    that check's rule (70% of free RAM, 55% of physical RAM, either reached refuses), so
+    a base the exact check would refuse is refused here, before minutes of disk writes.
+
+    ``approximate`` marks the fallback for source headers that cannot be listed or read:
+    the flat NF4 rate on the size on disk, which errs low (far low for a fused MoE base)
+    and is labelled as a guess, the way the disk pre-flight panel labels it.
+    """
+    from soup_cli.utils.layer_stream import (
+        PHYSICAL_RAM_TIER_HEADROOM,
+        PHYSICAL_RAM_TIER_HEADROOM_PERCENT,
+        RAM_TIER_HEADROOM,
+    )
+
+    if total_ram is not None and ram_bytes >= total_ram * PHYSICAL_RAM_TIER_HEADROOM:
+        limit = (
+            f"more than {PHYSICAL_RAM_TIER_HEADROOM_PERCENT}% of physical RAM "
+            f"({total_ram / 1e9:.1f} GB)"
+        )
+    elif ram_bytes >= free_ram * RAM_TIER_HEADROOM:
+        limit = f"and only {free_ram / 1e9:.1f} GB of RAM is free"
+    else:
+        return
+    if approximate:
+        streamed = "once quantised to NF4" if quantised else "in RAM"
+        need = (
+            f"is {source_bytes / 1e9:.1f} GB on disk, approximately "
+            f"{ram_bytes / 1e9:.1f} GB {streamed} (its safetensors headers could not "
+            "be listed or read),"
+        )
+    else:
+        need = (
+            f"needs {ram_bytes / 1e9:.1f} GB of RAM once sharded (sized from its "
+            f"safetensors headers; {source_bytes / 1e9:.1f} GB on disk),"
+        )
+    raise ValueError(
+        f"training.stream_source='ram' but {base} {need} {limit}. Refusing before "
+        "sharding. Set stream_source='auto' to fall back to the NVMe disk tier, free "
+        "RAM, or pick a smaller base."
+    )
+
+
 def _validate_stream_staging_ram_fit(
     *,
     staging_bytes: int,
@@ -538,6 +594,18 @@ def _planned_source_shards(weights_plan: Any) -> list[str]:
         for relative, resolved, _blob in entries
         if relative.endswith(".safetensors") and not os.path.dirname(relative)
     )
+
+
+@dataclass(frozen=True)
+class _ResolvedWeights:
+    """A weight directory already resolved to regular files, as a pre-flight plan.
+
+    No copy is pending, so :func:`_planned_source_shards` lists it the way the sharder
+    lists it.
+    """
+
+    weights_dir: str
+    needs_materialization: bool = False
 
 
 #: What listing the source files can raise (a missing directory, a snapshot the copy
@@ -990,21 +1058,27 @@ class StreamingSetupMixin:
             moe_targets = resolve_moe_lora_targets(probe, tcfg, None, console=console)
             del probe
 
+        # One set of arguments for every header estimate of this run's cache.
+        estimate_kwargs = dict(
+            dtype=dtype,
+            arch=arch,
+            quant=quant,
+            quant_suffixes=quant_suffixes,
+            double_quant=double_quant,
+            expert_layout=expert_layout,
+            num_hidden_layers=stream_num_hidden_layers,
+            quantization_config=source_quantization,
+        )
+        # The disk pre-flight's estimate, kept for the early RAM check below so the
+        # source headers are read once. Present (possibly None) once it has run.
+        preflight_estimate: dict = {}
+
         def _disk_preflight(weights_plan) -> None:
             # What the sharder will write, from the source headers and the sharder's
             # own storage rules: fused routed experts stay at the stream dtype under
             # NF4, which a flat NF4 rate under-counted ~3.6x on Moonlight-16B.
-            cache_estimate = _preflight_cache_estimate(
-                weights_plan,
-                dtype=dtype,
-                arch=arch,
-                quant=quant,
-                quant_suffixes=quant_suffixes,
-                double_quant=double_quant,
-                expert_layout=expert_layout,
-                num_hidden_layers=stream_num_hidden_layers,
-                quantization_config=source_quantization,
-            )
+            cache_estimate = _preflight_cache_estimate(weights_plan, **estimate_kwargs)
+            preflight_estimate["cache"] = cache_estimate
             if cache_estimate is not None:
                 shard_estimate = cache_estimate.total_bytes
             else:
@@ -1077,38 +1151,44 @@ class StreamingSetupMixin:
             before_materialize=_disk_preflight,
         )
 
-        # Cheap size probe BEFORE sharding: re-writing a checkpoint we are
-        # about to refuse for not fitting in RAM costs minutes of disk I/O.
-        # Charged at the STREAMED rate, not the on-disk one — an 8B bf16
-        # checkpoint is 16 GB on disk but only ~4.2 GB of NF4 store, and
-        # comparing the raw file size would refuse exactly the runs NF4 enables.
+        # RAM check BEFORE sharding: re-writing a checkpoint we are about to refuse
+        # for not fitting in RAM costs minutes of disk I/O. Only `stream_source: ram`
+        # insists on the RAM tier; `auto` falls back to disk after sharding, from the
+        # real store. Charged what the check after sharding charges, from the disk
+        # pre-flight's header estimate (fused MoE experts at the stream dtype, FP8
+        # weights dequantised, embeddings and norms unquantised), not the on-disk
+        # size at a flat NF4 rate, which errs low. That rate is the fallback only
+        # when the headers cannot be listed or read, and says approximately.
+        # Qwen4's source size includes the PLE table, which the sharder leaves
+        # external. Its exact RAM/disk decision is made from the safetensors header
+        # below; counting it here would reject the very `stream_ngram_source: disk`
+        # run this path enables.
         early_free_ram = free_ram_bytes()
-        if early_free_ram is not None:
+        if early_free_ram is not None and arch != "qwen4_exp" and tcfg.stream_source == "ram":
+            if "cache" in preflight_estimate:
+                cache_estimate = preflight_estimate["cache"]
+            else:
+                # A resolver that did not call the pre-flight back: the resolved
+                # directory holds regular files, so it is sized where it lies.
+                cache_estimate = _preflight_cache_estimate(
+                    _ResolvedWeights(weights_dir), **estimate_kwargs
+                )
             source_bytes = source_weight_bytes(weights_dir)
-            store_estimate = estimate_stream_store_bytes(
-                source_bytes, dtype=dtype, quant=quant, double_quant=double_quant
+            if cache_estimate is not None:
+                ram_bytes = cache_estimate.ram_tier_bytes
+            else:
+                ram_bytes = estimate_stream_store_bytes(
+                    source_bytes, dtype=dtype, quant=quant, double_quant=double_quant
+                )
+            _validate_early_ram_fit(
+                base=cfg.base,
+                source_bytes=source_bytes,
+                ram_bytes=ram_bytes,
+                approximate=cache_estimate is None,
+                quantised=quant != QUANT_NONE,
+                free_ram=early_free_ram,
+                total_ram=total_ram_bytes(),
             )
-            # Qwen4's source size includes the PLE table, which the sharder
-            # leaves external. Its exact RAM/disk decision is made from the
-            # safetensors header below; counting it here would reject the very
-            # `stream_ngram_source: disk` run this path enables.
-            if (
-                arch != "qwen4_exp"
-                and store_estimate >= early_free_ram * RAM_TIER_HEADROOM
-                and tcfg.stream_source == "ram"
-            ):
-                as_streamed = (
-                    ""
-                    if quant == QUANT_NONE
-                    else f" ({store_estimate / 1e9:.1f} GB once quantised to NF4)"
-                )
-                raise ValueError(
-                    f"training.stream_source='ram' but {cfg.base} is "
-                    f"{source_bytes / 1e9:.1f} GB on disk{as_streamed} and only "
-                    f"{early_free_ram / 1e9:.1f} GB of RAM is free. Set "
-                    f"stream_source='auto' to fall back to the NVMe disk tier, "
-                    f"free RAM, or pick a smaller base."
-                )
 
         console.print(f"[dim]Preparing layer shards -> {shard_dir}[/]")
         index = shard_checkpoint(
