@@ -177,22 +177,69 @@ def _validate_top_k(top_k: object) -> int:
     return top_k
 
 
-def _load_safetensors(path: Path) -> Mapping[str, Any]:
-    """Lazy-load adapter_model.safetensors via the ``safetensors`` package."""
+#: Safetensors dtype tag -> little-endian numpy dtype, for everything except BF16.
+_NUMPY_DTYPES = {
+    "float16": "<f2",
+    "float32": "<f4",
+    "float64": "<f8",
+    "int8": "i1",
+    "int16": "<i2",
+    "int32": "<i4",
+    "int64": "<i8",
+    "uint8": "u1",
+    "bool": "?",
+}
+
+
+def _read_safetensors_numpy(path: Path) -> dict[str, Any]:
+    """Read every tensor of a safetensors file as a numpy array, BF16 included.
+
+    ``safe_open(framework="numpy")`` cannot return bfloat16 (numpy has no such dtype), so
+    an adapter trained in bf16, which is the default dtype of a ``torch_dtype: bfloat16``
+    base, failed with ``data type 'bfloat16' not understood`` (#2058). The header is parsed
+    by ``read_header`` (no mapping, offsets and sizes validated) and the payload read
+    directly; a bfloat16 tensor is widened to float32 exactly, since it is the top 16 bits
+    of a float32.
+
+    Raises ``ValueError`` for more than ``_MAX_LAYERS`` tensors (before any payload is
+    read) and for a header ``read_header`` refuses, with the file name only.
+    """
+    import numpy as np
+
+    from soup_cli.utils.safetensors_reader import read_header
+
     try:
-        from safetensors import safe_open
-    except ImportError as exc:
-        raise RuntimeError(
-            "safetensors package required; pip install safetensors"
+        entries = read_header(str(path))
+    except (ValueError, OSError) as exc:
+        reason = str(exc).replace(str(path), path.name)
+        raise ValueError(
+            f"Corrupt or unreadable safetensors weights in {path.name}: {reason}"
         ) from exc
+    if len(entries) > _MAX_LAYERS:
+        raise ValueError(f"adapter has >{_MAX_LAYERS} tensors")
     result: dict[str, Any] = {}
-    with safe_open(str(path), framework="numpy") as f:
-        for key in f.keys():
-            _require_str(key, "tensor name")
-            result[key] = f.get_tensor(key)
-            if len(result) > _MAX_LAYERS:
-                raise ValueError(f"adapter has >{_MAX_LAYERS} tensors")
+    with open(str(path), "rb") as handle:
+        for name, entry in entries.items():
+            _require_str(name, "tensor name")
+            handle.seek(entry.start)
+            raw = handle.read(entry.nbytes)
+            if len(raw) != entry.nbytes:
+                raise ValueError(
+                    f"Corrupt or unreadable safetensors weights in {path.name}: "
+                    f"tensor {name!r} is truncated"
+                )
+            if entry.dtype == "bfloat16":
+                bits = np.frombuffer(raw, dtype="<u2").astype(np.uint32) << 16
+                array = bits.view(np.float32)
+            else:
+                array = np.frombuffer(raw, dtype=_NUMPY_DTYPES[entry.dtype])
+            result[name] = array.reshape(entry.shape)
     return result
+
+
+def _load_safetensors(path: Path) -> Mapping[str, Any]:
+    """Load adapter_model.safetensors as numpy arrays (bfloat16 widened to float32)."""
+    return _read_safetensors_numpy(path)
 
 
 def _adapter_weights_path(adapter_dir: Path) -> Path:
