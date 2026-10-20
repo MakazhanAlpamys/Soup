@@ -4,6 +4,7 @@ Supports: Qwen3 MoE (30B-A3B), Mixtral (8x7B, 8x22B), DeepSeek V3, DBRX,
 OLMoE, JetMoE, and other models using MoE / sparse expert architectures.
 """
 
+import re
 from typing import Optional
 
 # Known MoE architecture config keys that indicate expert layers
@@ -161,6 +162,86 @@ class MoeLoraTargets(list):
         self.target_parameters = list(target_parameters)
 
 
+class MoeLoraTargetString(str):
+    """A string ``target_modules`` ``moe_lora`` kept, plus the fused expert parameters.
+
+    The string twin of :class:`MoeLoraTargets`: peft's ``"all-linear"`` as written,
+    or a user regex joined with the MoE module names into one regex. A ``str``, so
+    every trainer and peft read it as the string target it is; the
+    ``target_parameters`` ride along to :func:`peft_wiring.build_lora_config`,
+    which hands peft a plain ``str``.
+    """
+
+    __slots__ = ("target_parameters",)
+
+    def __new__(cls, value, target_parameters=()):
+        instance = super().__new__(cls, value)
+        instance.target_parameters = list(target_parameters)
+        return instance
+
+
+#: peft's shorthand for every ``nn.Linear`` / ``Conv1D`` but the output head
+#: (``peft.utils.constants.INCLUDE_LINEAR_LAYERS_SHORTHAND``), which peft compares
+#: lower-cased, so ``ALL-LINEAR`` is the same target.
+ALL_LINEAR = "all-linear"
+
+#: A run of global inline flags at the start of a regex: ``(?i)``, ``(?x)(?s)``.
+_LEADING_GLOBAL_FLAGS = re.compile(r"(?:\(\?[aiLmsux]+\))+")
+
+
+def _names_as_full_match_regex(names) -> str:
+    """peft's LIST rule as one full-match regex: the key is a name or ends ``.<name>``."""
+    return r"(?:.*\.)?(?:" + "|".join(re.escape(name) for name in names) + ")"
+
+
+def _join_regex_with_names(user_regex: str, names) -> str:
+    """``(?:<user regex>)|(?:<names>)``: what either half matches, as peft full-matches.
+
+    peft matches a string ``target_modules`` with ``re.fullmatch`` and a list entry
+    with ``key == name or key.endswith("." + name)``; no ``target_modules`` value
+    mixes the two, so the names are spelled as the regex equivalent of that rule.
+    Python accepts global inline flags (``(?i)``, ``(?x)``) only at the start of a
+    pattern, so a leading run of them is hoisted out of the user's group, and the
+    names half is shielded from them with ``(?-imsx:...)``. Under ``(?x)`` a newline
+    closes the user's half first, so a trailing ``# comment`` cannot swallow the
+    closing parenthesis.
+
+    Raises:
+        ValueError: the user's regex does not compile, named by its field rather
+            than left to surface from peft, joined with names the user never wrote.
+    """
+    try:
+        re.compile(user_regex)
+    except re.error as exc:
+        raise ValueError(
+            f"training.lora.target_modules is not a valid regular expression ({exc}). "
+            "peft full-matches a string target_modules against every module name, and "
+            "training.moe_lora adds the MoE module names to it as one regex. Fix the "
+            "regex, or give target_modules as a list of module names."
+        ) from exc
+    flags_match = _LEADING_GLOBAL_FLAGS.match(user_regex)
+    flags = flags_match.group(0) if flags_match else ""
+    body = user_regex[len(flags):]
+    if "x" in flags:
+        body += "\n"
+    names_regex = _names_as_full_match_regex(names)
+    names_group = f"(?-imsx:{names_regex})" if flags else f"(?:{names_regex})"
+    return f"{flags}(?:{body})|{names_group}"
+
+
+def _string_target_kind(target_modules) -> Optional[str]:
+    """``"all-linear"``, ``"regex"``, or ``None`` for a target that is not a string.
+
+    ``auto`` is Soup's unresolved placeholder ("decide for me"), not a peft target,
+    so it is treated like no targets at all, as before.
+    """
+    if not isinstance(target_modules, str) or target_modules == "auto":
+        return None
+    if target_modules.lower() == ALL_LINEAR:
+        return "all-linear"
+    return "regex"
+
+
 def peft_routes_lora_to_fused_params(model, target_modules) -> bool:
     """Will peft turn THESE targets into ``target_parameters`` on THIS model?
 
@@ -211,8 +292,12 @@ def peft_routes_lora_to_fused_params(model, target_modules) -> bool:
         return False
 
     # A throwaway config, so the conversion's in-place rewrite touches nothing
-    # the caller owns.
-    probe = LoraConfig(r=8, target_modules=list(target_modules or []))
+    # the caller owns. A string stays a string: peft's conversion resolves
+    # ``"all-linear"`` or a regex against the model, where ``list()`` of it would be
+    # one target per character.
+    if not isinstance(target_modules, str):
+        target_modules = list(target_modules or [])
+    probe = LoraConfig(r=8, target_modules=target_modules)
     try:
         convert_peft_config_for_transformers(probe, model, None)
     except Exception:  # noqa: BLE001 - a probe must never break the run
@@ -286,12 +371,25 @@ def resolve_moe_lora_targets(model, tcfg, target_modules, console=None):
     the one that does not depend on peft's per-architecture name conversion
     (#1421: Mixtral, MiniMax, Qwen2-MoE and Qwen3.5-MoE got attention-only LoRA).
 
+    A STRING target is not a list to extend, and it used to be replaced by the
+    MoE list, which lost what peft makes of it. It is kept, as a
+    :class:`MoeLoraTargetString` carrying the same ``target_parameters``:
+
+    * ``"all-linear"`` (what ``auto`` resolves to on qwen4_exp) as written: peft
+      expands it to every ``nn.Linear`` / ``Conv1D`` but the output head, which
+      already includes every module the MoE names reach. Replacing it dropped
+      qwen4_exp's Gated DeltaNet, indexer, shared-expert-gate, hyper-connection
+      and PLE projections, 24 of the 34 linears on a tiny model.
+    * any other string, a regex peft full-matches against each module name, as
+      one regex of the union: ``(?:<user regex>)|(?:<the MoE names>)``.
+
     Raises:
         ValueError: fused expert parameters will be targeted AND ``lora.use_vera``
             is set (VeRA cannot reach them, #1197), or AND ``lora.dropout`` is
             non-zero (peft adapts them through ``lora.ParamWrapper``, which refuses
             any dropout). Either way the user gets the flag named, not peft's
-            message or a quiet attention-only adapter.
+            message or a quiet attention-only adapter. Also when a string target
+            is a regex that does not compile.
     """
     if not getattr(tcfg, "moe_lora", False):
         return target_modules
@@ -301,16 +399,46 @@ def resolve_moe_lora_targets(model, tcfg, target_modules, console=None):
     if not moe_targets:
         return target_modules
     fused = find_fused_expert_parameters(model)
-    modules = list(target_modules) if isinstance(target_modules, list) else []
-    modules.extend(name for name in moe_targets if name not in modules)
+    kind = _string_target_kind(target_modules)
+    if kind == "all-linear":
+        modules = target_modules
+    elif kind == "regex":
+        modules = _join_regex_with_names(target_modules, moe_targets)
+    else:
+        modules = list(target_modules) if isinstance(target_modules, list) else []
+        modules.extend(name for name in moe_targets if name not in modules)
     _refuse_vera_on_fused_experts(tcfg, fused)
     _refuse_dropout_on_fused_experts(model, tcfg, modules, fused)
     if console is not None:
-        line = f"[green]ScatterMoE LoRA:[/] targeting {len(modules)} module patterns"
-        if fused:
-            line += f" and {len(fused)} fused expert parameter(s): {', '.join(fused)}"
-        console.print(line)
+        console.print(_announcement(kind, modules, moe_targets, fused))
+    if kind is not None:
+        return MoeLoraTargetString(modules, fused)
     return MoeLoraTargets(modules, fused)
+
+
+def _announcement(kind, modules, moe_targets, fused) -> str:
+    """The setup line: what ``moe_lora`` did to the targets, never the user's regex.
+
+    The regex is not printed: a character class such as ``[qkv]`` is a Rich tag.
+    """
+    if kind == "all-linear":
+        line = (
+            f"[green]ScatterMoE LoRA:[/] keeping target_modules 'all-linear' (it already "
+            f"covers the {len(moe_targets)} MoE module patterns)"
+        )
+        joiner = " and adding"
+    elif kind == "regex":
+        line = (
+            f"[green]ScatterMoE LoRA:[/] targeting the target_modules regex or the "
+            f"{len(moe_targets)} MoE module patterns (one combined regex)"
+        )
+        joiner = " and"
+    else:
+        line = f"[green]ScatterMoE LoRA:[/] targeting {len(modules)} module patterns"
+        joiner = " and"
+    if fused:
+        line += f"{joiner} {len(fused)} fused expert parameter(s): {', '.join(fused)}"
+    return line
 
 
 def get_moe_info(model) -> dict:
