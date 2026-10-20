@@ -108,6 +108,14 @@ and records no `val_loss`. Lower `batch_size`, raise `val_split`, or set
 `val_split: 0` to train on those rows instead. A training split with fewer rows
 than one batch is refused before the model loads.
 
+`training.eval_steps: N` on MLX SFT evaluates after every N completed optimizer
+updates and after the last one, over every validation row including a short
+tail, and is recorded in `adapter_config.json` as `eval_steps` / `eval_unit`
+([#1990](https://github.com/MakazhanAlpamys/Soup/issues/1990)); with it set, a
+split smaller than one batch is evaluated rather than skipped. The validation
+loss uses the training loss: for plain-text rows that is mlx-lm's
+`default_loss`, which also scores the first padding token after each row.
+
 ```yaml
 base: mlx-community/Llama-3.2-3B-Instruct-4bit
 task: sft

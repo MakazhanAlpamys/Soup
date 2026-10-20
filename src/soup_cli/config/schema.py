@@ -8557,8 +8557,8 @@ class SoupConfig(BaseModel):
     def _validate_eval_steps_compat(self) -> "SoupConfig":
         """#1223 — refuse a ``training.eval_steps`` nothing would read.
 
-        mlx-lm runs its own validation loop over the split (#739), and three
-        tasks have no evaluation pass at all. Separately, a split of 0 on a
+        On MLX only SFT honours it (#1990, in completed optimizer updates);
+        three tasks have no evaluation pass at all. Separately, a split of 0 on a
         source that cannot carry its own validation split leaves no rows to
         evaluate. A source that CAN carry one (an HF-hub dataset, a
         pre-tokenized cache) is let through: whether it does is only known at
@@ -8568,11 +8568,13 @@ class SoupConfig(BaseModel):
 
         if self.training.eval_steps is None:
             return self
-        if self.backend == "mlx":
+        if self.backend == "mlx" and self.task != "sft":
+            # #1990 honours it for MLX SFT. The native preference loops evaluate
+            # once per epoch and do not read it yet.
             raise ValueError(
-                f"training.eval_steps is not supported for backend={self.backend!r} "
-                "because mlx-lm evaluates the validation split on its own cadence "
-                "(#1223)"
+                f"training.eval_steps is not supported for task={self.task!r} on "
+                "backend='mlx': only task='sft' honours it there (#1990); the MLX "
+                "preference loop evaluates once per epoch"
             )
         reason = EVAL_STEPS_UNSUPPORTED_TASKS.get(self.task)
         if reason is not None:
