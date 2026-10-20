@@ -121,6 +121,19 @@ def test_decontamination_reports_missing_benchmark_text(tmp_path, mixed):
         assert re.search(r"Removed:\s*1", _plain(result))
 
 
+@pytest.mark.parametrize("content", ["", "\n\n", "not json\n[1, 2]\n"])
+@pytest.mark.parametrize(
+    "command", ["pii", "toxicity", "score", "langdetect", "educational", "decontaminate"],
+)
+def test_input_without_rows_is_refused(tmp_path, command, content):
+    (tmp_path / "rows.jsonl").write_text(content, encoding="utf-8")
+    _file(tmp_path / "benchmark.jsonl", [{"text": CORPUS}])
+    extra = ["--benchmark-file", "benchmark.jsonl"] if command == "decontaminate" else []
+    result = _run(command, *extra)
+    assert result.exit_code == 1, (result.output, repr(result.exception))
+    assert "no extractable text in 0 input rows" in _plain(result)
+
+
 def test_shared_extraction_retains_all_fields_and_expectations_alias():
     from soup_cli.utils import expectations, row_text
 

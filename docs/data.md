@@ -1184,6 +1184,8 @@ input/standalone loader paths keep their previous tolerant behavior.
 All six quality commands (`score`, `pii`, `toxicity`, `langdetect`, `educational`
 and `decontaminate`) warn with a count when some input rows have no extractable
 text. They fail before reporting metrics or writing output when no row has text.
+Inputs with no rows, including empty files or files containing only blank or
+non-object/non-JSON lines, are refused too.
 Standalone decontamination applies the same rule to its benchmark file; the
 scorecard benchmark file retains the stricter per-row 8-gram validation above.
 The PII and abuse-keyword detectors themselves are unchanged.
