@@ -11,11 +11,16 @@ peft refuses an attach only when NO target matches, so on a base with
 ``q_lora_rank: null`` (Moonlight-16B-A3B) the kv/o names matched, the attach
 succeeded, and the query path trained without an adapter. Nothing said so.
 
-The rule is applied where the attention IS that class: ``deepseek_v3``, ``kimi_k2``
-(Kimi-K2 checkpoints declare ``DeepseekV3ForCausalLM``) and ``kimi_k25`` (the same
-text tower inside a vision-language wrapper whose vision tower has its own
-``q_proj``, so that entry is a language-tower regex). Not on ``glm_moe_dsa``: its
-config refuses ``q_lora_rank: None`` outright.
+The rule is applied where the attention IS that class and its config is the one
+the row is chosen by: ``deepseek_v3`` and ``kimi_k2`` (Kimi-K2 checkpoints declare
+``DeepseekV3ForCausalLM``). Not on ``glm_moe_dsa``: its config refuses
+``q_lora_rank: None`` outright. Not on ``kimi_k25`` either, which keeps main's
+low-rank tuple whatever ``text_config.q_lora_rank`` says: its vision tower has a
+``q_proj`` of its own, so a row would have to be a language-tower regex, and
+``resolve_moe_lora_targets`` (``utils/moe.py``) keeps the resolved targets only when
+they are a list -- under ``moe_lora: true`` that regex cost the language tower its
+``kv_a_proj_with_mqa`` / ``kv_b_proj`` adapters. No shipped Kimi K2.5 / K2.6 config
+sets ``q_lora_rank: null``.
 
 The resolver half uses config doubles; the end-to-end half builds tiny real models
 on CPU and checks the adapter against the module tree the model actually has.
@@ -23,12 +28,15 @@ on CPU and checks the adapter against the module tree the model actually has.
 
 from __future__ import annotations
 
-import re
 from types import SimpleNamespace
 
 import pytest
 
-from soup_cli.utils.peft_wiring import MOE_TEXT_LORA_TARGETS, resolve_lora_target_modules
+from soup_cli.utils.peft_wiring import (
+    MLA_FULL_RANK_QUERY_TARGETS,
+    MOE_TEXT_LORA_TARGETS,
+    resolve_lora_target_modules,
+)
 
 #: What DeepseekV3Attention defines with ``q_lora_rank: None``, attention only.
 FULL_RANK_QUERY = ["q_proj", "kv_a_proj_with_mqa", "kv_b_proj", "o_proj"]
@@ -55,17 +63,6 @@ def _kimi_k25(q_lora_rank=_ABSENT):
     return _model("kimi_k25", text_config=_config("deepseek_v3", q_lora_rank))
 
 
-# Module keys read off a tiny real ``Kimi_K25ForConditionalGeneration`` (see the
-# end-to-end test below, which checks the same thing against the live tree).
-_KIMI_LANGUAGE_KEYS = [
-    "model.language_model.layers.0.self_attn.q_proj",
-    "model.language_model.layers.0.self_attn.kv_a_proj_with_mqa",
-    "model.language_model.layers.0.self_attn.kv_b_proj",
-    "model.language_model.layers.0.self_attn.o_proj",
-]
-_KIMI_VISION_Q_PROJ = "model.vision_tower.layers.0.attn.q_proj"
-
-
 class TestTheResolverReadsQLoraRank:
     @pytest.mark.parametrize("model_type", ["deepseek_v3", "kimi_k2"])
     def test_none_targets_the_full_rank_q_proj(self, model_type):
@@ -81,6 +78,15 @@ class TestTheResolverReadsQLoraRank:
 
         assert resolved == LOW_RANK_QUERY
         assert resolved == list(MOE_TEXT_LORA_TARGETS[model_type])
+
+    @pytest.mark.parametrize("model_type", ["deepseek_v3", "kimi_k2"])
+    def test_zero_keeps_the_low_rank_pair(self, model_type):
+        """transformers tests ``q_lora_rank is None``, so 0 builds ``q_a_proj`` /
+        ``q_b_proj`` (pinned on the real class below). A falsy test would swap
+        them for a ``q_proj`` this model does not have."""
+        resolved = resolve_lora_target_modules(_model(model_type, 0), "auto")
+
+        assert resolved == LOW_RANK_QUERY
 
     @pytest.mark.parametrize("model_type", ["deepseek_v3", "kimi_k2", "glm_moe_dsa"])
     def test_a_config_without_the_field_keeps_the_table_entry(self, model_type):
@@ -116,28 +122,26 @@ class TestTheResolverReadsQLoraRank:
         assert "mutated" not in resolve_lora_target_modules(_model("deepseek_v3", None), "auto")
 
 
-class TestTheKimiWrapperScopesTheQueryToItsLanguageTower:
-    def test_none_on_the_text_config_names_q_proj_in_the_language_tower_only(self):
-        """The vision tower has a ``q_proj`` of its own, so a bare suffix would
-        adapt the image encoder during a text fine-tune."""
-        pattern = resolve_lora_target_modules(_kimi_k25(None), "auto")
+class TestTheKimiWrapperKeepsTheLowRankTuple:
+    """``kimi_k25`` resolves as on main whatever its text config says (see the
+    module docstring for why it has no full-rank row)."""
 
-        assert isinstance(pattern, str), pattern
-        assert [key for key in _KIMI_LANGUAGE_KEYS if re.fullmatch(pattern, key)] == (
-            _KIMI_LANGUAGE_KEYS
-        )
-        assert re.fullmatch(pattern, _KIMI_VISION_Q_PROJ) is None
+    @pytest.mark.parametrize(
+        "q_lora_rank", [None, 1536, _ABSENT], ids=["none", "shipped-int", "absent"]
+    )
+    def test_resolves_exactly_what_main_resolves(self, q_lora_rank):
+        """``LOW_RANK_QUERY`` is main's ``kimi_k25`` entry, written out rather than
+        read from the table. The first version of this fix, a regex row read
+        through ``text_config``, failed the ``none`` case."""
+        resolved = resolve_lora_target_modules(_kimi_k25(q_lora_rank), "auto")
 
-    def test_an_int_on_the_text_config_keeps_the_table_entry(self):
-        """Kimi K2.5 / K2.6 as shipped (``text_config.q_lora_rank: 1536``)."""
-        resolved = resolve_lora_target_modules(_kimi_k25(1536), "auto")
+        assert resolved == LOW_RANK_QUERY
 
-        assert resolved == list(MOE_TEXT_LORA_TARGETS["kimi_k25"])
-
-    def test_a_text_config_without_the_field_keeps_the_table_entry(self):
-        resolved = resolve_lora_target_modules(_kimi_k25(), "auto")
-
-        assert resolved == list(MOE_TEXT_LORA_TARGETS["kimi_k25"])
+    def test_the_full_rank_rows_are_the_text_only_mla_types(self):
+        """The rule reads only the config whose ``model_type`` chose the row, so a
+        ``kimi_k25`` row (its MLA fields sit on ``text_config``) would be dead
+        here, and live it would need the regex ``moe_lora`` discards."""
+        assert set(MLA_FULL_RANK_QUERY_TARGETS) == {"deepseek_v3", "kimi_k2"}
 
     def test_an_unrecognised_wrapper_keeps_the_table_entry(self):
         """Reached through the text config of a wrapper Soup has no row for. The
@@ -268,25 +272,23 @@ class TestEveryAttentionProjectionIsAdapted:
 
         assert expected <= adapted, sorted(expected - adapted)
 
-    @pytest.mark.parametrize("q_lora_rank", [None, 12], ids=["q_lora_rank-none", "q_lora_rank-int"])
-    def test_kimi_k25_adapts_the_language_tower_and_not_the_vision_tower(self, q_lora_rank):
-        pytest.importorskip("torch")
-        transformers = pytest.importorskip("transformers")
-        if not hasattr(transformers, "Kimi_K25ForConditionalGeneration"):
-            pytest.skip("this transformers has no native Kimi K2.5")
+    @pytest.mark.filterwarnings("ignore:Initializing zero-element tensors")
+    def test_a_zero_q_lora_rank_builds_the_low_rank_pair_and_keeps_it(self):
+        """The premise of ``test_zero_keeps_the_low_rank_pair``, on the real class:
+        ``DeepseekV3Attention`` tests ``is None``, so 0 is the low-rank layout."""
+        model = _tiny_deepseek_v3(0)
+        names = {name.rsplit(".", 1)[-1] for name in _attention_projections(model)}
 
-        text = dict(model_type="deepseek_v3", **_tiny_v3_fields(q_lora_rank))
-        vision = dict(
-            patch_size=2, pos_emb_height=4, pos_emb_width=4, pos_emb_time=1,
-            num_attention_heads=2, num_hidden_layers=1, hidden_size=16, intermediate_size=32,
-        )
-        config = transformers.Kimi_K25Config(
-            text_config=text, vision_config=vision, projection_hidden_size=16
-        )
-        model = transformers.Kimi_K25ForConditionalGeneration(config)
-        language = {
-            name for name in _attention_projections(model) if ".language_model." in name
-        }
+        assert names == set(LOW_RANK_QUERY)
+        assert resolve_lora_target_modules(model, "auto") == LOW_RANK_QUERY
+
+    @pytest.mark.parametrize("q_lora_rank", [None, 12], ids=["q_lora_rank-none", "q_lora_rank-int"])
+    def test_kimi_k25_adapts_main_s_names_in_the_language_tower_only(self, q_lora_rank):
+        """Main's low-rank tuple either way. On an integer that is every attention
+        projection the language tower has; on ``null`` its ``q_proj`` is left out,
+        the documented limit (no shipped K2.5 / K2.6 config is ``null``)."""
+        model = _tiny_kimi_k25(q_lora_rank)
+        language = _kimi_language_attention(model)
         vision_q = {
             name for name, _ in model.named_modules()
             if "vision_tower" in name and name.endswith(".q_proj")
@@ -295,9 +297,51 @@ class TestEveryAttentionProjectionIsAdapted:
 
         adapted = _adapted(_attach(model, _soup_cfg()))
 
-        assert adapted == language
-        query = "q_proj" if q_lora_rank is None else "q_b_proj"
-        assert f"model.language_model.layers.0.self_attn.{query}" in adapted
+        assert adapted == {name for name in language if _leaf(name) in LOW_RANK_QUERY}
+        assert not any("vision_tower" in name for name in adapted)
+        if q_lora_rank is not None:
+            assert adapted == language
+
+    def test_kimi_k25_with_moe_lora_and_a_null_rank_keeps_the_kv_adapters(self):
+        """The review finding: a language-tower regex row is dropped by
+        ``resolve_moe_lora_targets``, which keeps the resolved targets only when
+        they are a list, so ``kv_a_proj_with_mqa`` / ``kv_b_proj`` lost the adapter
+        main gives them under ``moe_lora: true``."""
+        model = _tiny_kimi_k25(None)
+        kv = {
+            name for name in _kimi_language_attention(model)
+            if _leaf(name) in ("kv_a_proj_with_mqa", "kv_b_proj")
+        }
+        assert kv, "the probe found no kv projection"
+
+        adapted = _adapted(_attach(model, _soup_cfg(moe_lora=True)))
+
+        assert kv <= adapted, sorted(kv - adapted)
+
+
+def _leaf(name):
+    return name.rsplit(".", 1)[-1]
+
+
+def _tiny_kimi_k25(q_lora_rank):
+    pytest.importorskip("torch")
+    transformers = pytest.importorskip("transformers")
+    if not hasattr(transformers, "Kimi_K25ForConditionalGeneration"):
+        pytest.skip("this transformers has no native Kimi K2.5")
+
+    text = dict(model_type="deepseek_v3", **_tiny_v3_fields(q_lora_rank))
+    vision = dict(
+        patch_size=2, pos_emb_height=4, pos_emb_width=4, pos_emb_time=1,
+        num_attention_heads=2, num_hidden_layers=1, hidden_size=16, intermediate_size=32,
+    )
+    config = transformers.Kimi_K25Config(
+        text_config=text, vision_config=vision, projection_hidden_size=16
+    )
+    return transformers.Kimi_K25ForConditionalGeneration(config)
+
+
+def _kimi_language_attention(model):
+    return {name for name in _attention_projections(model) if ".language_model." in name}
 
 
 class TestWhyGlmMoeDsaHasNoFullRankEntry:

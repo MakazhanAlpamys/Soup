@@ -182,8 +182,8 @@ MOE_TEXT_LORA_TARGETS: dict[str, Any] = {
     "mistral3": r".*language_model\..*\.self_attn\.(q_proj|k_proj|v_proj|o_proj)",
 }
 
-#: What replaces a :data:`MOE_TEXT_LORA_TARGETS` entry when the base's (text)
-#: config sets ``q_lora_rank`` to ``None`` -- only for the types whose attention is
+#: What replaces a :data:`MOE_TEXT_LORA_TARGETS` entry when the base's config sets
+#: ``q_lora_rank`` to ``None`` -- only for the types whose attention is
 #: ``DeepseekV3Attention`` and so has that split:
 #:
 #: - ``deepseek_v3``: the class itself (Moonlight-16B-A3B).
@@ -191,18 +191,22 @@ MOE_TEXT_LORA_TARGETS: dict[str, Any] = {
 #:   transformers' own ``Kimi_K25Config`` rewrites a ``kimi_k2`` text config to
 #:   ``deepseek_v3``. Every shipped Kimi-K2 config sets 1536, so this row is for a
 #:   checkpoint that does not.
-#: - ``kimi_k25``: the same text tower inside a vision-language wrapper whose
-#:   ``vision_tower`` has its own ``q_proj`` (measured on a tiny real model), so a
-#:   bare suffix would adapt the image encoder. The language tower is named, as
-#:   for ``minimax_m3_vl``. Kimi K2.5 / K2.6 as shipped set 1536 too.
 #:
-#: ``glm_moe_dsa`` is absent on purpose: ``GlmMoeDsaConfig`` refuses
-#: ``q_lora_rank: None`` at construction, and its DSA indexer and forward use
-#: ``q_a_proj`` unconditionally, so no GLM-5 base has a ``q_proj`` to adapt.
+#: Absent on purpose:
+#:
+#: - ``glm_moe_dsa``: ``GlmMoeDsaConfig`` refuses ``q_lora_rank: None`` at
+#:   construction, and its DSA indexer and forward use ``q_a_proj``
+#:   unconditionally, so no GLM-5 base has a ``q_proj`` to adapt.
+#: - ``kimi_k25``: its ``vision_tower`` has a ``q_proj`` of its own (measured on a
+#:   tiny real model), so a row would have to be a language-tower regex, and
+#:   ``resolve_moe_lora_targets`` (``utils/moe.py``) keeps the resolved targets only
+#:   when they are a list. Under ``moe_lora: true`` such a row cost the language
+#:   tower its ``kv_a_proj_with_mqa`` / ``kv_b_proj`` adapters. No shipped Kimi K2.5 /
+#:   K2.6 config sets ``null`` (``text_config.q_lora_rank: 1536``), so the wrapper
+#:   keeps the low-rank tuple; one that did would train no adapter on ``q_proj``.
 MLA_FULL_RANK_QUERY_TARGETS: dict[str, Any] = {
     "deepseek_v3": _DEEPSEEK_V3_ATTENTION_FULL_RANK_QUERY,
     "kimi_k2": _DEEPSEEK_V3_ATTENTION_FULL_RANK_QUERY,
-    "kimi_k25": r".*language_model\..*\.self_attn\.(q_proj|kv_a_proj_with_mqa|kv_b_proj|o_proj)",
 }
 
 #: ``getattr`` default telling "the config has no ``q_lora_rank``" from ``None``.
@@ -210,22 +214,17 @@ _ABSENT = object()
 
 
 def _q_lora_rank(model: Any) -> Any:
-    """``q_lora_rank`` of the config the attention is built from, or ``_ABSENT``.
+    """``q_lora_rank`` of the config whose ``model_type`` chose the row, or ``_ABSENT``.
 
-    The text config first, because a wrapper (``kimi_k25``) keeps the MLA fields
-    there; then the config itself, where a text-only base keeps them. ``model`` may
+    Only that config is read. Both rows are text-only types that keep the MLA
+    fields on the config itself (``DeepseekV3Config`` has no ``text_config``);
+    ``kimi_k25``, which keeps them on ``text_config``, has no row. ``model`` may
     be the config: ``stream_setup`` resolves from the bare ``AutoConfig``. A config
     without the field is ``_ABSENT``, never ``None`` -- guessing a layout from a
-    missing field would swap a list that matches for one that may not.
+    missing field would swap a list that matches for one that may not. ``0`` is
+    not ``None`` either: ``DeepseekV3Attention`` tests ``is None``.
     """
-    config = getattr(model, "config", model)
-    for candidate in (getattr(config, "text_config", None), config):
-        if candidate is None:
-            continue
-        value = getattr(candidate, "q_lora_rank", _ABSENT)
-        if value is not _ABSENT:
-            return value
-    return _ABSENT
+    return getattr(getattr(model, "config", model), "q_lora_rank", _ABSENT)
 
 
 def _moe_table_entry(model_type: str, model: Any) -> Any:
