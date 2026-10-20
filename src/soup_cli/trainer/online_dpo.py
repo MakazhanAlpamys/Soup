@@ -57,6 +57,7 @@ from soup_cli.utils.gpu import (
     resolve_frozen_base_load_dtype,
 )
 from soup_cli.utils.mixed_precision import align_trainable_dtype_for_fp16
+from soup_cli.utils.run_provenance import base_revision_kwargs
 from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
 
 console = Console()
@@ -202,13 +203,17 @@ class OnlineDPOTrainerWrapper:
           last user turn (interleaved assistant turns are KEPT so multi-turn
           context and user/assistant alternation are preserved); the trailing
           assistant turn is dropped because the model generates it on-policy.
+        - ``{"prompt": [...]}`` (a conversational preference row, #1849) ->
+          read the same way as ``messages``.
         """
         out = []
         for row in rows:
-            if isinstance(row.get("prompt"), str):
-                out.append({"prompt": [{"role": "user", "content": row["prompt"]}]})
-            elif isinstance(row.get("messages"), list):
-                msgs = row["messages"]
+            prompt = row.get("prompt")
+            if isinstance(prompt, str):
+                out.append({"prompt": [{"role": "user", "content": prompt}]})
+                continue
+            msgs = prompt if isinstance(prompt, list) else row.get("messages")
+            if isinstance(msgs, list):
                 last_user = -1
                 for idx, msg in enumerate(msgs):
                     if isinstance(msg, dict) and msg.get("role") == "user":
@@ -269,8 +274,8 @@ class OnlineDPOTrainerWrapper:
         prompt_rows = self._to_prompt_rows(dataset["train"])
         if not prompt_rows:
             raise ValueError(
-                "online_dpo: no usable prompts (rows need a 'prompt' string or "
-                "'messages' with a user/system turn)"
+                "online_dpo: no usable prompts (rows need a 'prompt' string, or a "
+                "'prompt' message list or 'messages' with a user turn)"
             )
         train_ds = Dataset.from_list(prompt_rows)
 
@@ -280,14 +285,11 @@ class OnlineDPOTrainerWrapper:
             output_dir = output_dir / cfg.experiment_name
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        # --- Warmup from ratio ---
-        import math
+        # --- Warmup from ratio (#1431) ---
+        from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
+        from soup_cli.utils.warmup import resolve_trainer_warmup_steps
 
-        total_steps = (
-            math.ceil(len(train_ds) / batch_size / tcfg.gradient_accumulation_steps)
-            * tcfg.epochs
-        )
-        warmup_steps = int(total_steps * tcfg.warmup_ratio)
+        warmup_steps = resolve_trainer_warmup_steps(tcfg.warmup_ratio)
 
         _bf16, _fp16 = bf16_fp16_flags(self.device)
         odpo_config = online_dpo_config_cls(
@@ -297,6 +299,9 @@ class OnlineDPOTrainerWrapper:
             gradient_accumulation_steps=tcfg.gradient_accumulation_steps,
             learning_rate=tcfg.lr,
             warmup_steps=warmup_steps,
+            gradient_checkpointing=should_enable_hf_gradient_checkpointing(
+                tcfg.gradient_checkpointing, stream_layers=tcfg.stream_layers
+            ),
             weight_decay=tcfg.weight_decay,
             max_grad_norm=tcfg.max_grad_norm,
             optim=tcfg.optimizer,
@@ -377,7 +382,8 @@ class OnlineDPOTrainerWrapper:
 
         console.print(f"[dim]Loading tokenizer: {cfg.base}[/]")
         self.tokenizer = AutoTokenizer.from_pretrained(
-            cfg.base, trust_remote_code=self._trust_remote_code
+            cfg.base, trust_remote_code=self._trust_remote_code,
+            **base_revision_kwargs(cfg.base),
         )
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
@@ -405,7 +411,10 @@ class OnlineDPOTrainerWrapper:
         if quant_config_obj is not None:
             model_kwargs["quantization_config"] = quant_config_obj
 
-        self.model = AutoModelForCausalLM.from_pretrained(cfg.base, **model_kwargs)
+        self.model = AutoModelForCausalLM.from_pretrained(
+            cfg.base, **model_kwargs,
+            **base_revision_kwargs(cfg.base),
+        )
 
         from soup_cli.utils.data_pipeline import apply_vocab_expansion
 
@@ -414,7 +423,7 @@ class OnlineDPOTrainerWrapper:
         # QLoRA stabilization: k-bit-loaded models need fp32 layer-norm casting +
         # input-grad enabling BEFORE LoRA. OnlineDPOTrainer's peft_config path
         # does NOT do this internally (unlike DPOTrainer), so do it here.
-        if tcfg.quantization in ("4bit", "8bit", "mxfp4"):
+        if tcfg.quantization in ("4bit", "8bit"):
             from peft import prepare_model_for_kbit_training
 
             from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
@@ -523,23 +532,15 @@ class OnlineDPOTrainerWrapper:
         start = time.time()
 
         if display:
-            from soup_cli.monitoring.callback import (
-                SoupTrainerCallback,
-                soup_callback_kwargs,
-            )
-
+            from soup_cli.monitoring.callback import build_soup_trainer_callback
             self.trainer.add_callback(
-                SoupTrainerCallback(
+               build_soup_trainer_callback(
                     display,
+                    config=self.config,
                     tracker=tracker,
                     run_id=run_id,
-                    eval_gate_config=self.config.training.eval_gate,
-                    **soup_callback_kwargs(
-                        self.config.training,
-                        batch_size=self._batch_size,
-                        output_dir=self._output_dir,
-                        include_eval_gate=False,
-                    ),
+                    batch_size=self._batch_size,
+                    output_dir=self._output_dir,
                 )
             )
 

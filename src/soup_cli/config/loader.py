@@ -12,6 +12,12 @@ from soup_cli.config.schema import SoupConfig
 from soup_cli.config.staged_fields import find_staged_config_fields, format_staged_fields
 from soup_cli.config.unknown_keys import find_unknown_config_keys, format_unknown_keys
 from soup_cli.utils.terminal import for_terminal
+from soup_cli.utils.yaml_limits import (
+    MAX_CONFIG_BYTES,
+    YamlLimitError,
+    load_yaml_file_limited,
+    load_yaml_limited,
+)
 
 console = Console()
 
@@ -92,6 +98,64 @@ def _report_staged_fields(
     return None
 
 
+#: Longest piece of text taken from the file that a refusal quotes.
+_MAX_DETAIL_CHARS = 200
+
+
+def _refuse(message: str) -> None:
+    """Print a one-line refusal and exit 1; the text may quote the file."""
+    console.print(f"[red]{for_terminal(message)}[/]")
+    raise SystemExit(1)
+
+
+def _clip(detail: str) -> str:
+    """``detail`` on one line, cut to ``_MAX_DETAIL_CHARS`` with an ellipsis."""
+    detail = " ".join(detail.split())
+    if len(detail) <= _MAX_DETAIL_CHARS:
+        return detail
+    return detail[:_MAX_DETAIL_CHARS] + "..."
+
+
+def _read_config_file(path: Path, *, raise_unreadable: bool = False) -> object:
+    """Load the YAML document at ``path``, or exit 1 naming what stopped it.
+
+    A file over a limit, a directory, a file the OS will not let us read, bytes
+    that are not UTF-8, a YAML syntax error and a value YAML cannot build (a
+    date that does not exist) each get one line that names the file and the
+    problem; text taken from the file is cut to ``_MAX_DETAIL_CHARS``. A
+    missing file is left to the caller as ``FileNotFoundError``, and any other
+    exception is passed on as itself.
+
+    With ``raise_unreadable`` nothing is printed and nothing exits: the caller
+    gets the exception itself (``YamlLimitError``, ``yaml.YAMLError``,
+    ``UnicodeDecodeError``, ``OSError``) to report in its own words.
+    """
+    what = f"Config file {path}"
+    if raise_unreadable:
+        return load_yaml_file_limited(path, what, max_bytes=MAX_CONFIG_BYTES)
+    if path.is_dir():
+        _refuse(f"{what} is a directory, not a file")
+    try:
+        return load_yaml_file_limited(path, what, max_bytes=MAX_CONFIG_BYTES)
+    except YamlLimitError as exc:
+        _refuse(str(exc))
+    except UnicodeDecodeError as exc:
+        _refuse(f"{what} is not valid UTF-8: {exc.reason} at byte {exc.start}")
+    except yaml.YAMLError as exc:
+        mark = getattr(exc, "problem_mark", None)
+        problem = getattr(exc, "problem", None)
+        if mark is not None and problem:
+            detail = f"{_clip(problem)} (line {mark.line + 1}, column {mark.column + 1})"
+        else:
+            detail = _clip(str(exc))
+        _refuse(f"{what} is not valid YAML: {detail}")
+    except FileNotFoundError:
+        raise
+    except OSError as exc:
+        _refuse(f"{what} cannot be read: {exc.strerror or type(exc).__name__}")
+    return None  # pragma: no cover - _refuse always raises
+
+
 def _build_config(raw: dict) -> SoupConfig:
     """Construct ``SoupConfig``, printing each deprecated value once (#759).
 
@@ -124,15 +188,24 @@ def load_config(
     path: "Path | str",
     *,
     training_overrides: dict | None = None,
+    raise_unreadable: bool = False,
 ) -> SoupConfig:
     """Load a soup.yaml file and return validated SoupConfig.
 
     ``training_overrides`` are merged into the YAML ``training:`` mapping
     *before* ``SoupConfig`` is constructed, so CLI flags that map onto
     training fields participate in the same cross-validators as YAML.
+
+    The file is read under the limits of :mod:`soup_cli.utils.yaml_limits`
+    (at most :data:`MAX_CONFIG_BYTES`, bounded nesting and alias expansion);
+    a file over one of them exits 1 with a message naming the file and the
+    limit, before anything walks the document. So does a file that cannot
+    be read as YAML at all; see :func:`_read_config_file`. A caller that
+    reports such a file in its own words passes ``raise_unreadable=True``
+    and receives the exception instead; a config that reads but does not
+    validate still exits 1 with the loader's message either way.
     """
-    path = Path(path)
-    raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    raw = _read_config_file(Path(path), raise_unreadable=raise_unreadable)
 
     if raw is None:
         console.print("[red]Config file is empty[/]")
@@ -176,13 +249,18 @@ def load_config(
     return config
 
 
-def load_config_from_string(yaml_str: str) -> SoupConfig:
+def load_config_from_string(yaml_str: str, *, max_bytes: "int | None" = None) -> SoupConfig:
     """Parse a YAML string and return validated SoupConfig.
 
     Unlike load_config(), raises ValueError on errors instead of SystemExit,
-    making it suitable for API/UI usage.
+    making it suitable for API/UI usage. The text is held to the same limits
+    as a config file; crossing one raises
+    :class:`~soup_cli.utils.yaml_limits.YamlLimitError`, a ``ValueError``.
+    ``max_bytes`` replaces :data:`MAX_CONFIG_BYTES` for a caller that
+    documents a size limit of its own.
     """
-    raw = yaml.safe_load(yaml_str)
+    limit = MAX_CONFIG_BYTES if max_bytes is None else max_bytes
+    raw = load_yaml_limited(yaml_str, "Config", max_bytes=limit)
     if raw is None:
         raise ValueError("Config is empty")
     if not isinstance(raw, dict):

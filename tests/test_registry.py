@@ -210,20 +210,22 @@ class TestRegistryStore:
         assert "v1" in entry["tags"]
         store.close()
 
-    def test_push_duplicate_tag_under_name_replaces(self, tmp_path):
+    def test_push_duplicate_tag_under_name_keeps_both_and_refuses_to_pick(self, tmp_path):
+        from soup_cli.registry.store import AmbiguousRefError
+
         store = self._store(tmp_path)
         e1 = store.push(name="model-a", tag="v1", base_model="b", task="sft",
                         run_id=None, config={"x": 1})
         e2 = store.push(name="model-a", tag="v1", base_model="b", task="sft",
                         run_id=None, config={"x": 2})
-        # both entries exist but v1 points to the most recent by default
+        # both entries exist; neither replaces the other
         listing = store.list(name="model-a")
         ids = [e["id"] for e in listing]
         assert e1 in ids
         assert e2 in ids
-        # Latest tagged v1 should be e2
-        latest = store.resolve("model-a:v1")
-        assert latest == e2
+        # model-a:v1 now names two entries, so resolve refuses to pick one (#1763)
+        with pytest.raises(AmbiguousRefError, match="matches 2 entries"):
+            store.resolve("model-a:v1")
         store.close()
 
     def test_list_all(self, tmp_path):

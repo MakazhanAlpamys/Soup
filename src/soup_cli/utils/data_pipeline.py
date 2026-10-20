@@ -263,14 +263,12 @@ NOT_PREPROCESS_KEY_FIELDS: Mapping[str, str] = types.MappingProxyType({
     "video_fps": "no runtime code reads it (staged, #808)",
     "video_maxlen": "no runtime code reads it (staged, #808)",
     "add_new_tokens": (
-        "preprocess tokenizes with the base tokenizer and never adds these "
-        "tokens (the live path does, in apply_vocab_expansion), so the cached ids "
-        "do not depend on it"
+        "pre_tokenized mode rejects this combination: preprocessing tokenizes "
+        "with the base tokenizer and never applies live vocabulary expansion"
     ),
     "new_special_tokens": (
-        "preprocess tokenizes with the base tokenizer and never adds these "
-        "tokens (the live path does, in apply_vocab_expansion), so the cached ids "
-        "do not depend on it"
+        "pre_tokenized mode rejects this combination for the same reason: cached "
+        "ids cannot include live special-token expansion"
     ),
     "resize_vocab": "no runtime code reads it",
     "extend_conversation": "no runtime code reads it",
@@ -280,8 +278,8 @@ NOT_PREPROCESS_KEY_FIELDS: Mapping[str, str] = types.MappingProxyType({
         "False (#759)"
     ),
     "prompt_strategy": (
-        "applied by the live SFT formatter only; preprocess renders messages "
-        "directly and never calls it"
+        "pre_tokenized mode rejects this combination because preprocessing "
+        "never applies the live prompt formatter"
     ),
     "forget_set": "read by task: unlearn only, which never loads a preprocess cache",
     "retain_set": "read by task: unlearn only, which never loads a preprocess cache",

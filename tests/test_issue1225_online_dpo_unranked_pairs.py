@@ -8,17 +8,19 @@ drop a ``-1``: it builds ``mask = rank == 0``, so every such pair trained as
 the judge server down, a whole run learned arbitrary labels and finished
 normally.
 
-These tests run the REAL wrapper and the REAL trl trainer on
-``hf-internal-testing/tiny-random-gpt2`` on CPU. The generated tokens are
-captured once and replayed, so two steps that differ only in the judge's ranks
-see identical completions, and the LoRA ``B`` matrices are moved off zero so
-the policy differs from the reference and every pair has its own loss.
+These tests run the REAL wrapper and the REAL trl trainer on a tiny,
+randomly-initialised GPT-2 built locally (``tests/_tiny_hf_models.py``, #1356
+-- no download) on CPU. The generated tokens are captured once and replayed,
+so two steps that differ only in the judge's ranks see identical
+completions, and the LoRA ``B`` matrices are moved off zero so the policy
+differs from the reference and every pair has its own loss.
 """
 
 from __future__ import annotations
 
 import logging
 import math
+import pathlib
 import re
 
 import pytest
@@ -133,17 +135,20 @@ def _build(path, monkeypatch, evaluator, *, batch_size=4, n_prompts=4, extra="")
     """The real wrapper, set up on the tiny model, writing under ``path / "out"``."""
     import soup_cli.trainer.online_dpo as od
     from soup_cli.config.loader import load_config_from_string
+    from tests._tiny_hf_models import tiny_model_dir
 
     monkeypatch.setattr(od, "_ONLINE_DPO_JUDGE_OVERRIDE", evaluator)
+    base_dir = pathlib.Path(tiny_model_dir("gpt2")).as_posix()
     cfg = load_config_from_string(
-        "base: hf-internal-testing/tiny-random-gpt2\n"
+        f"base: {base_dir}\n"
         "task: online_dpo\n"
         "data:\n  train: x.jsonl\n  max_length: 64\n"
         "training:\n"
         '  online_dpo_judge: "ollama://llama3.1"\n'
         f"  epochs: 1\n  batch_size: {batch_size}\n"
         "  online_dpo_max_new_tokens: 6\n  lr: 1e-4\n  quantization: none\n"
-        "  seed: 7\n" + extra + f"output: {(path / 'out').as_posix()}\n"
+        "  seed: 7\n"
+        "  warmup_ratio: 0.0\n" + extra + f"output: {(path / 'out').as_posix()}\n"
     )
     rows = [
         {"messages": [{"role": "user", "content": text}]} for text in _PROMPTS[:n_prompts]

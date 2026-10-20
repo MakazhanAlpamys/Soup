@@ -77,6 +77,8 @@ import textwrap
 
 import pytest
 
+from tests._source_scan import parse_source, walk_nodes
+
 TESTS_DIR = pathlib.Path(__file__).parent
 
 # A quoted CLI flag: "--noise-floor", '--gpus'.
@@ -142,12 +144,12 @@ def find_raw_help_assertions(source: str) -> list[tuple[int, str]]:
     fails the whole guard.
     """
     try:
-        tree = ast.parse(source)
+        tree = parse_source(source)
     except SyntaxError:  # pragma: no cover — a broken file fails its own tests
         return []
     lines = source.splitlines()
     offenders: list[tuple[int, str]] = []
-    for node in ast.walk(tree):
+    for node in walk_nodes(tree):
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
         if not node.name.startswith("test"):
@@ -388,7 +390,7 @@ def _assert_statement_lines(tree: ast.AST) -> set[int]:
     which is why both are needed.
     """
     covered: set[int] = set()
-    for node in ast.walk(tree):
+    for node in walk_nodes(tree):
         if not isinstance(node, ast.Assert):
             continue
         # `node.test` ONLY, never `node.msg`. Reading raw output inside a
@@ -418,7 +420,7 @@ def _multiline_literal_lines(tree: ast.AST) -> set[int]:
     follow-up, closed by the maintainer).
     """
     covered: set[int] = set()
-    for node in ast.walk(tree):
+    for node in walk_nodes(tree):
         if not isinstance(node, ast.Constant) or not isinstance(node.value, str):
             continue
         end = node.end_lineno or node.lineno
@@ -435,14 +437,14 @@ def find_unsafe_highlighted_assertions(source: str) -> list[tuple[int, str]]:
     parser or asserts a multi-token substring against it.
     """
     try:
-        tree = ast.parse(source)
+        tree = parse_source(source)
     except SyntaxError:  # pragma: no cover — a broken file fails its own tests
         return []
     lines = source.splitlines()
     literal_lines = _multiline_literal_lines(tree)
     assert_lines = _assert_statement_lines(tree)
     offenders: list[tuple[int, str]] = []
-    for node in ast.walk(tree):
+    for node in walk_nodes(tree):
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
         if not node.name.startswith("test"):
@@ -572,14 +574,14 @@ def _find_raw_cli_output_statements(
 ) -> list[tuple[int, int, str, bool]]:
     """Return (start_line, end_line, first_line_text, has_ansi_ok) for raw output asserts."""
     try:
-        tree = ast.parse(source)
+        tree = parse_source(source)
     except SyntaxError:  # pragma: no cover — a broken file fails its own tests
         return []
     lines = source.splitlines()
     literal_lines = _multiline_literal_lines(tree)
     records: list[tuple[int, int, str, bool]] = []
 
-    for fn in ast.walk(tree):
+    for fn in walk_nodes(tree):
         if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
         if not fn.name.startswith("test"):
@@ -589,7 +591,7 @@ def _find_raw_cli_output_statements(
         stmts = sorted(
             [
                 s
-                for s in ast.walk(fn)
+                for s in walk_nodes(fn)
                 if isinstance(s, (ast.Assign, ast.AnnAssign, ast.AugAssign, ast.Assert))
             ],
             key=lambda s: s.lineno,
@@ -683,7 +685,7 @@ def find_stale_ansi_ok_markers(source: str) -> list[tuple[int, str]]:
     """Return ``(lineno, line_text)`` for any ``# ansi-ok:`` marker that does not
     actively suppress an otherwise-flagged raw CLI output assertion."""
     try:
-        tree = ast.parse(source)
+        tree = parse_source(source)
     except SyntaxError:
         return []
     lines = source.splitlines()
@@ -742,7 +744,7 @@ class TestNoRawCliOutputAssertionsInTheSuite:
             markers = find_stale_ansi_ok_markers(source)
             for lineno, text in markers:
                 stale.append(f"{path.name}:{lineno}: {text}")
-            tree = ast.parse(source)
+            tree = parse_source(source)
             lit_lines = _multiline_literal_lines(tree)
             total_markers += sum(
                 1
@@ -918,4 +920,3 @@ def test_safe():
         stale = find_stale_ansi_ok_markers(textwrap.dedent(src))
         assert len(stale) == 1
         assert "unnecessary exemption" in stale[0][1]
-

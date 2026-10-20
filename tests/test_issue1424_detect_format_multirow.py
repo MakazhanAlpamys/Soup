@@ -31,6 +31,7 @@ from soup_cli.data.formats import (
     format_to_messages,
 )
 from soup_cli.data.loader import load_dataset
+from tests.ui_helpers import ui_client
 
 _CHAT = [{"role": "user", "content": "q"}, {"role": "assistant", "content": "a"}]
 _SHAREGPT = [{"from": "human", "value": "q"}, {"from": "gpt", "value": "a"}]
@@ -301,10 +302,7 @@ def test_refusal_names_the_first_row_of_each_shape():
 
 
 def test_inspect_endpoint_reports_a_mixed_file_instead_of_a_500(tmp_path):
-    try:
-        from fastapi.testclient import TestClient
-    except ImportError:
-        pytest.skip("FastAPI not installed")
+    pytest.importorskip("fastapi")
     from unittest.mock import patch
 
     from soup_cli.ui.app import create_app, get_auth_token
@@ -315,7 +313,9 @@ def test_inspect_endpoint_reports_a_mixed_file_instead_of_a_500(tmp_path):
     ] * 3
     path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
 
-    client = TestClient(create_app(), raise_server_exceptions=False)
+    client = ui_client(
+        create_app(), raise_server_exceptions=False
+    )
     with patch("soup_cli.ui.app.Path.cwd", return_value=tmp_path):
         response = client.post(
             "/api/data/inspect",

@@ -282,8 +282,8 @@ class TestMLXRecipes:
         assert cfg.base == "mlx-community/gemma-3-4b-it-4bit"
         assert cfg.backend == "mlx"
 
-    def test_mlx_dpo_config_rejected_at_load(self):
-        """backend=mlx + task=dpo is rejected by the SoupConfig validator."""
+    def test_mlx_dpo_config_loads(self):
+        """backend=mlx + task=dpo has a trainer (trainer/mlx_dpo.py) and loads."""
         from soup_cli.config.loader import load_config_from_string
 
         yaml_str = """
@@ -298,8 +298,8 @@ training:
   lr: 1e-6
 output: ./output
 """
-        with pytest.raises(ValueError, match="MLX backend only ships SFT"):
-            load_config_from_string(yaml_str)
+        cfg = load_config_from_string(yaml_str)
+        assert (cfg.task, cfg.backend) == ("dpo", "mlx")
 
     def test_mlx_grpo_config_rejected_at_load(self):
         from soup_cli.config.loader import load_config_from_string

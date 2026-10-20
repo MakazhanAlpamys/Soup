@@ -1,5 +1,5 @@
-<!-- synced-from: README.md sha256:4dfed787f12e9d2a94ba6cf97d76b25aa4151095125c9eae65628bfe63e86d0f -->
-<p align="center">🌍 <a href="README.md">English</a> | <strong>Türkçe</strong> | <a href="README.ar.md">العربية</a> | <a href="README.ja.md">日本語</a></p>
+<!-- synced-from: README.md sha256:44c28c06ff7d2445391cfcc7cd483b096453a302085ff8ac52cb48fa79ce4da5 -->
+<p align="center">🌍 <a href="README.md">English</a> | <strong>Türkçe</strong> | <a href="README.ar.md">العربية</a> | <a href="README.ja.md">日本語</a> | <a href="README.zh.md">中文</a></p>
 
 <p align="center">
   <img src="soup.png" alt="Soup" width="280">
@@ -8,7 +8,7 @@
 <h1 align="center">Soup</h1>
 
 <p align="center">
-  <strong>LLM'lere tek komutla ince ayar ve sonradan eğitim uygulayın. SSH yok, yapılandırma cehennemi yok.</strong>
+  <strong>LLM'lere tek komutla ince ayar ve eğitim sonrası (post-training) uygulayın. SSH yok, yapılandırma cehennemi yok.</strong>
 </p>
 
 <p align="center">
@@ -61,21 +61,24 @@ soup train
 
 **4 GB dizüstü GPU'da 8B bir modele ince ayar yapın.** Katman akışı, dondurulmuş tabanı VRAM'in
 dışında tutar ve GPU'ya her seferinde bir kod çözücü katman besler. RTX 3050 Laptop 4 GB üzerinde
-ölçüldü: Llama-3.1-8B-Instruct + NF4 ile **119.6 tok/s, 3.32 GB tepe** — normal, belleğe tamamen
+ölçüldü: Llama-3.1-8B-Instruct + NF4 ile **952 MHz'de 119.6 tok/s, 3.32 GB tepe** (onarım öncesi) — normal, belleğe tamamen
 yerleşik bir çalıştırmayla bit düzeyinde özdeş ve bir H100 üzerinde aynı 3.32 GB'da 113.00 tok/s
-ile bağımsız olarak yeniden üretildi. (Her iki rakam da 32B'de −%4.8'e mal olan v0.73.0 doğruluk
-onarımından önce, v0.72.2'de ölçüldü; o zamandan beri hiçbiri 4 GB bir kartta yeniden
-çalıştırılmadı — yeniden ölçüm [#361](https://github.com/MakazhanAlpamys/Soup/issues/361)
-sayısında bekliyor.)
+ile bağımsız olarak yeniden üretildi. (Her iki rakam da 32B'de %4.8 yavaşlamaya yol açan v0.73.0 sonuç-doğruluğu
+onarımından önce, v0.72.2'de ölçüldü. Onarım sonrası çalıştırma, başka bir
+RTX 3050 Laptop 4 GB üzerinde (@umran666, #1103), **1935–1957 MHz'de 208.6 tok/s, 2.40 GB tepe**
+veriyor. Bu, aynı oturumda ölçülen GEMM tavanının %59'una denk geliyor; onarım öncesi satırda oran
+%68'di: birim saat frekansı başına yaklaşık %14 daha yavaş, yani ham 1.74x kazanç bir hızlanma değil,
+saat frekansı farkıdır. Büyük katman akışı da iki satır arasında bellek düzenini değiştirdi; bu yüzden
+bu oran bile bire bir karşılaştırma değildir — [kayıt](benchmarks/gate-v0.72.2-nf4.md).)
 İsteğe bağlıdır (`stream_layers: true`) ve hâlâ BETA —
 [nasıl çalışır](docs/performance-and-quantization.md#layer-streaming-beta-v0720-nf4-v0722-disk--wider-archs-v0723-preference-losses-v0724) ·
 [tüm ölçümler](benchmarks/) · [makale](https://doi.org/10.5281/zenodo.21771064) ·
-**[ücretsiz bir Colab T4'te kendiniz doğrulayın](notebooks/proof-4gb.ipynb)** (işlemi 4 GB ile
+**[ücretsiz bir Colab T4'te kendiniz doğrulayın](notebooks/proof-4gb.ipynb)** (süreci 4 GB ile
 sınırlar, ardından akışlı bir modelin normal bir modelle bit düzeyinde özdeş olduğunu doğrular)
 
 <p align="center">
-  <a href="https://youtu.be/T1LCErE943E"><img src="docs/assets/layer-streaming.gif" alt="4 GB bir kartta Llama-3.1-8B için soup train ön kontrolü: 32 katman boyunca RAM'e sabitlenmiş 3.60 GB'lık bir taban deposu ve iki adet 113 MB VRAM tamponu, ardından 119.6 tok/s'de ölçülen 3.32 GB tepe; 4 GB çizgisinin altında kalıyor (v0.72.2'de ölçüldü, #331 onarımından önce; yeniden ölçüm #361 sayısında bekliyor)"></a><br>
-  <sub>Llama-3.1-8B-Instruct + NF4, LoRA, toplu iş 1, dizi 512, RTX 3050 Laptop 4 GB üzerinde — <b>3.32 GB tepe, 119.6 tok/s</b> (v0.72.2'de ölçüldü, #331 onarımından önce; yeniden ölçüm #361 sayısında bekliyor). <a href="https://youtu.be/T1LCErE943E">Tam video (90 sn)</a></sub>
+  <a href="https://youtu.be/T1LCErE943E"><img src="docs/assets/layer-streaming.gif" alt="4 GB bir kartta Llama-3.1-8B için soup train ön kontrolü: 32 katman boyunca RAM'e sabitlenmiş 3.60 GB'lık bir taban deposu ve iki adet 113 MB VRAM tamponu, ardından 119.6 tok/s'de ölçülen 3.32 GB tepe; 4 GB çizgisinin altında kalıyor (onarım öncesi satır, v0.72.2'de 952 MHz'de ölçüldü; #331 sonrası satır aşağıdaki açıklamada)"></a><br>
+  <sub>Llama-3.1-8B-Instruct + NF4, LoRA, batch boyutu 1, dizi uzunluğu 512, RTX 3050 Laptop 4 GB üzerinde — <b>3.32 GB tepe, 119.6 tok/s</b>, 952 MHz'de (onarım öncesi, v0.72.2; #331 sonrası: 1935 MHz'de 208.6 tok/s, 2.40 GB, doğrudan karşılaştırılamaz, @umran666, #1103). <a href="https://youtu.be/T1LCErE943E">Tam video (90 sn)</a></sub>
 </p>
 
 ## Neden Soup?
@@ -90,42 +93,56 @@ yerine altyapıyla boğuşarak geçiriyor. Soup bunu çözer.
 
 ## Yenilikler
 
-**v0.75.0 — aynı `soup.yaml`, MLX'te transformers'takinden farklı bir tarif eğitiyordu,
-sessizce.** Altı eğitim seçeneği doğrulanıyor, belgeleniyor, kabul ediliyor — ve o arka uçta
-hiçbir şey tarafından okunmuyordu. **Bu sürümdeki 60 pull request'in tamamı bakımcı dışından
-geldi**, 22 kişiden.
+**v0.76.0 — Soup'un kabul edip hiç uygulamadığı ayarlar artık yüklemeyi durduruyor.** Doğrulanan ve
+belgelenen, ancak yapılandırdığını iddia ettikleri yolda hiçbir şey tarafından okunmayan seçenekler artık
+yükleme sırasında reddediliyor; ayarın adını ve neyin değiştirileceğini belirtiyor. Geri kalanlar uyarı
+veriyor ve onları reddedecek sürümü belirtiyor. Daha önce yüklenen bir yapılandırma artık yüklenmeyebilir:
+önce `soup doctor --config soup.yaml` komutunu çalıştırın.
 
-- **Kırıcı değişiklik: bilinmeyen bir yapılandırma anahtarı artık yüklemeyi reddediyor.**
-  v0.74 uyarmış ve son tarih olarak bu sürümü belirlemişti. `quantizaton` gibi bir yazım
-  hatası ya da yalnızca daha yeni bir Soup sürümünde bulunan bir anahtar eskiden yoksayılıyor ve
-  çalıştırma o ayar uygulanmadan devam ediyordu; artık CLI'da (çıkış kodu 1) ve API'de
-  (`ValueError`) reddediliyor ve muhtemelen kastettiğiniz alanı belirtiyor. Tespit edici,
-  şemanın v0.40.1'den beri desteklediği kök düzeyindeki `lora:` yeniden eşlemesini uyguluyor;
-  yani bu yazım reddedilmiyor, kabul ediliyor. Bu yazımı kullanan iki `soup fetch examples`
-  dosyası standart `training.lora` biçimine taşındı. Tüm tarif ve şablonlar sorunsuz yükleniyor,
-  anahtar adları terminale ulaşmadan önce filtreleniyor ve tarama sınırlandırılmış durumda.
-- **MLX, kabul ettiği yapılandırmaya uyuyor.** `train_on_responses_only`, `warmup_ratio` /
-  `scheduler` / `weight_decay` / `optimizer`, `max_grad_norm`, `gradient_accumulation_steps`
-  ve `gradient_checkpointing`, `backend: mlx` üzerinde tek tek doğrulanıp sonra düşürülüyordu.
-  32 optimizer adından yalnızca 8'inin MLX karşılığı var; diğer 24'ü sessizce AdamW'ye
-  dönüşmek yerine adıyla reddediliyor. MLX ayrıca canlı panoyu, izleyiciyi ve `soup ui`'yi
-  sürüyor; `soup doctor --config` ise bir arka ucun okumadığı ayarları listeliyor.
-- **Doğrulama kaybı hiçbir yerde yoktu.** Her arka uçta hesaplanıp atılıyordu: metrik sütunu
-  yok, olay alanı yok, panoda hiçbir şey yok. Artık kaydediliyor, akıtılıyor ve gösteriliyor.
-- **Geriye dönük uyumsuz: `grpo_variant: gspo`, yayımlanmış dizi düzeyi hedef fonksiyonudur**
-  (arXiv:2507.18071); bir dolgu belirtecinin aynı sütunu paylaşan her satırın gradyanını da
-  kaydırdığı sütun merkezleme sezgiselinin yerini alıyor. Mevcut gspo yapılandırmaları önceki
-  çalıştırmaları yeniden üretmeyecek.
-- **Web arayüzünün okuma uç noktaları ve SSE, kimlik doğrulama gerektiriyor**; sorgu
-  dizesindeki bir belirteç yerine kısa ömürlü, tek kullanımlık biletlerle. `--public` artık
-  `/docs` ve `/openapi.json`'ı yerel ağa sunmuyor; eğitim alt süreci de çıktısını kimse
-  okumadığında artık askıda kalmıyor.
-- **`torch>=2.6.0`**, v0.74.0'ın bilinen sınırlamasını kapatıyor: 2.5.1'de `trl>=0.29` içe
-  aktarılamıyor ve her tercih eğiticisi ölüydü. Ayrıca düzeltildi: `training.loraplus_lr_ratio`
-  onu ayarlayan her çalıştırmayı çökertiyordu ve `packing: true` TRL 0.29'da hata veriyordu.
+- **Geriye dönük uyumsuz değişiklik: hiç etkili olmayan bir ayar yüklemede reddediliyor.** Bunların
+  arasında `training.quantization_aware: true` (nicelemeye duyarlı eğitimi hiç çalıştırmıyordu),
+  `training.use_longlora`, `training.ebft_variant`, `training.gdpo_variant`, hiçbir hazırlık adımının
+  okumadığı yerlerdeki `training.rope_scaling_type`, `freeze_layers` / `freeze_ratio` (transformers
+  arka ucunda metin `sft` / `tts` yolunun dışında), `auto_mixed_precision` (`sft` / `tts` dışında)
+  ve unsloth hazırlık adımı bulunmayan yedi görevde daha `backend: unsloth` var. Her mesaj alanın adını
+  ve neyin değiştirileceğini belirtiyor. `lr_groups`, `early_stop_patience`, `forgetting_eval_steps` ve
+  okunmayan diğer ayarlar artık yüklemede uyarı veriyor ve v0.77'den itibaren reddedilecek.
+- **Doğrulama kaybı artık değerlendiriliyor.** `data.val_split`, her çalıştırmada satırları eğitimin
+  dışında tutuyordu ve transformers arka ucundaki hiçbir trainer bunları değerlendirmiyordu. Artık bir
+  bölme alan her görev, onu her epoch sonunda ya da `training.eval_steps` ile her N adımda değerlendiriyor
+  ve doğrulama kaybını kaydediyor; çalıştırmalar yüzde birkaç daha uzun sürüyor.
+  **`grpo`, `ppo` ve `online_dpo` için geriye dönük uyumsuz:** varsayılan olarak artık satır ayırmıyorlar
+  (`data.val_split` bir notla yok sayılıyor), dolayısıyla her satır eğitime giriyor.
+- **Geriye dönük uyumsuz değişiklik: standart olmayan her `grpo_variant`, `grpo_beta` KL cezasını
+  uyguluyor.** `gspo`, `dapo`, `dr_grpo`, `bnpo`, `two_sided` ve `rft`, `grpo_beta` değerini doğrulayıp
+  atıyordu; bu yüzden mevcut varyant yapılandırmaları önceki çalıştırmaları yeniden üretmeyecek.
+  `grpo_beta: 0` artık KL'siz çalışıyor ve referans modelin ileri geçişini atlıyor.
+- **Katman akışı disk katmanını bir arka plan iş parçacığında, doğrudan G/Ç (direct I/O) ile okuyor ve
+  onu NVMe sürücülere şeritleyebiliyor.** RAM'den büyük, 36 GB'lık, 70B biçimli bir NF4 deposunda (tek
+  bir RTX 5070 Laptop 8 GB makinesi), soğuk bir adım eşzamanlı okumada 110.5 s iken 16.2-17.3 s'ye düştü;
+  `SOUP_LAYER_STREAM_STRIPE_DIRS` ile iki sürücüye yayıldığında ise 17.4 s'den 9.97 s'ye indi (sürekli yük
+  altında bir sonda ölçümü: iki tur, 1.28x ve 1.41x, resmî bir hüküm yok;
+  [kayıt](benchmarks/probe-rtx5070-two-drive-sustained.md)). RAM'e sığan bir depo RAM katmanında hâlâ daha
+  hızlı ve `stream_source: auto` onu seçiyor. İsteğe bağlıdır (`stream_layers: true`) ve hâlâ BETA;
+  kayıtlar: [doğrudan G/Ç](benchmarks/gate-974-disk-tier-direct-io.md),
+  [şeritleme](benchmarks/gate-two-drive-striping.md).
+- **Yeni komutlar ve seçenekler.** `soup adapters check`, bir LoRA adaptörünü sessiz arızalara karşı
+  tarar; `soup bench train`, sabit sayıda adım eğitir ve model eğitilmiyorsa çıkış kodu 1 ile biter
+  (transformers arka ucunda `task: sft` için geçerlidir; `soup bench` artık bir gruptur ve
+  `soup bench infer` eski çıkarım kıyaslamasıdır); `soup data clean`, girdi dosyasına dokunmadan bir veri
+  kümesini temizler ve onarır; `soup recipes verify`, meta aygıtında, hiçbir ağırlık indirmeden, gönderilen
+  her tarifin bir LoRA adaptörü bağlayabildiğini denetler; `soup rewind`, bir kayıp sıçramasının
+  arkasındaki veri kümesi satırlarını adlandırır. `soup infer`, isteğe bağlı `--batch-size` ve deneysel bir
+  `--cuda-graphs` kazandı (PyTorch 2.14 veya daha yeni; tek bir RTX 5070 Laptop'ta, sabitlenmemiş,
+  FP16'da Qwen2.5-1.5B ile, onunla yapılan en yavaş çalıştırma, onsuz yapılan en hızlı çalıştırmadan
+  kod çözmede 2.9x daha hızlıydı). `soup ab`, iki yönlü, varyansa karşı dayanıklı bir test çalıştırır;
+  `soup adapters sign --backend sigstore` ve `soup attest emit --sign sigstore` ise Sigstore anahtarsız
+  OIDC ile imzalar (`pip install "soup-cli[sigstore]"`).
+- **Kullanımdan kaldırıldı:** `soup export --format awq` ve `--format gptq` v0.77'de kaldırılacak; her
+  iki üst proje de arşivlenmiş durumda ve ekstralardan hiçbiri `[train]` ile yan yana kurulamıyor.
 
-> Yalnızca Python **3.10–3.12**. 3.13+ sürümlerinde pip, Soup daha hiç çalışmadan yerel
-> eklentide çöken, test edilmemiş PyTorch tekerleklerini çözümlüyordu.
+> Yalnızca Python **3.10–3.12**. 3.13+ sürümlerinde pip, Soup daha hiç çalışmadan yerel (native)
+> uzantıda çöken, test edilmemiş PyTorch wheel paketlerini seçiyordu.
 
 Eski sürümlerin öne çıkanları [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases) sayfasında.
 
@@ -175,7 +192,7 @@ Eklerin tam tablosu (`fast`, `mlx`, `serve`, `eval`, `ui`, `vision`, `audio`, �
 > ardından düz `pip` de aynı ölçüde işe yarar.
 
 > **Tek tırnak değil, çift tırnak.** `"soup-cli[train]"` her kabukta çalışan tek yazımdır —
-> `cmd.exe`, PowerShell, bash ve zsh. `'soup-cli[train]'` biçimini eski bir eğitimden
+> `cmd.exe`, PowerShell, bash ve zsh. `'soup-cli[train]'` biçimini eski bir öğreticiden (tutorial)
 > kopyaladıysanız ve pip reddettiyse, nedeni budur:
 > [nedeni ve hatanın tam metni](docs/models.md#quoting-the-extra).
 
@@ -208,13 +225,13 @@ Diğer dışa aktarma hedefleri (ONNX, TensorRT, AWQ, GPTQ, BitNet) ve dağıtı
 
 ## Web Arayüzü
 
-Tarayıcı mı tercih edersiniz? `soup ui`; deneyler, eğitim kurulumu, canlı ölçümler, veri kümesi
+Tarayıcı mı tercih edersiniz? `soup ui`; deneyler, eğitim kurulumu, canlı metrikler, veri kümesi
 keşfi ve modelle sohbet için yerel bir pano sunar.
 
 ```bash
 pip install "soup-cli[ui]"
 soup ui
-# http://127.0.0.1:7860 adresini açar
+# http://127.0.0.1:7860/?token=<token> adresini açar
 ```
 
 ![Soup Web Arayüzü — Yeni Eğitim](docs/assets/web-ui-new-training.png)
@@ -252,9 +269,9 @@ output: ./output
 
 > **Bilinmeyen yapılandırma anahtarları v0.75'ten beri reddediliyor.** Hiçbir modelin
 > tanımlamadığı bir anahtar — `quantizaton` gibi bir yazım hatası ya da yalnızca daha yeni bir
-> Soup sürümünde bulunan bir alan — eskiden şemadan geçip göz ardı ediliyordu; yani çalıştırma,
+> Soup sürümünde bulunan bir alan — eskiden şema doğrulamasından sorunsuz geçip atılıyordu; yani çalıştırma,
 > o ayar hiç uygulanmadan devam ediyordu. v0.74 bunu yükleme anında, muhtemelen kastettiğiniz
-> alanla birlikte raporluyordu; **v0.75**'ten itibaren aynı yapılandırma doğrudan reddediliyor;
+> alanı belirterek bildiriyordu; **v0.75**'ten itibaren aynı yapılandırma doğrudan reddediliyor;
 > bu yüzden anahtarın yoksayılmasına güvenmek yerine onu düzeltin ya da kaldırın. Bkz.
 > [Bilinmeyen yapılandırma anahtarları](docs/backends-and-ops.md#unknown-config-keys).
 
@@ -264,32 +281,32 @@ Tam özellik başvurusu [`docs/`](docs/) içinde. Buradan başlayın:
 
 | Rehber | Kapsam |
 |---|---|
-| [Eğitim görevleri ve yöntemleri](docs/training.md) | SFT, DPO/GRPO/PPO/KTO/ORPO/SimPO/IPO/BCO, araç çağırma, PRM, ön eğitim, damıtma, sınıflandırma, görü/ses/TTS, unutturma, RAFT/RA-DIT, döngü sağlamlaştırma dedektörleri |
-| [PEFT, uzun bağlam ve verimlilik](docs/peft-and-efficiency.md) | DoRA, LoRA+, rsLoRA, VeRA, OLoRA, NEFTune, PiSSA, ReLoRA, optimizer ve PEFT koleksiyonu, LLaMA Pro, GaLore, YaRN/LongLoRA, paketleme, müfredat, otomatik ayarlama |
-| [Performans ve niceleme](docs/performance-and-quantization.md) | QAT, FP8, Niceleme Menüsü (I + II), KV önbelleği, NVFP4, kayıt biçimleri, Cut Cross-Entropy, gradyan denetim noktası, çekirdekler, aktivasyon boşaltma, katman akışı, çoklu GPU / DeepSpeed / FSDP |
+| [Eğitim görevleri ve yöntemleri](docs/training.md) | SFT, DPO/GRPO/PPO/KTO/ORPO/SimPO/IPO/BCO, araç çağırma, PRM, ön eğitim, damıtma, sınıflandırma, görsel/ses/TTS, unlearning (öğrenileni silme), RAFT/RA-DIT, döngü sertleştirme algılayıcıları |
+| [PEFT, uzun bağlam ve verimlilik](docs/peft-and-efficiency.md) | DoRA, LoRA+, rsLoRA, VeRA, OLoRA, NEFTune, PiSSA, ReLoRA, optimizer ve PEFT çeşitliliği, LLaMA Pro, GaLore, YaRN/LongLoRA, paketleme, müfredat, otomatik ayarlama |
+| [Performans ve niceleme](docs/performance-and-quantization.md) | QAT, FP8, Niceleme Menüsü (I + II), KV önbelleği, NVFP4, kaydetme biçimleri, Cut Cross-Entropy, gradyan checkpointing'i (kontrol noktası), çekirdekler, aktivasyon boşaltma, katman akışı, çoklu GPU / DeepSpeed / FSDP |
 | [Veri mühendisliği](docs/data.md) | Biçimler, Axolotl/LF eşdeğeri ardışık düzen, veri araçları, sentetik üretim ve forge, kalite karneleri, iz (trace) araçları, uzak veri kümeleri, karıştırma, tarif DAG'ları |
-| [Değerlendirme ve sondalar](docs/evaluation.md) | Değerlendirme tasarımı/kapısı, değerlendirme kapılı eğitim, kıyaslamalar, NLG ölçütleri, kalibrasyon, Elo arenası, teşhis, eğitim sonrası X-ray sondaları, A/B, kayma, ayarlanabilirlik, `soup advise` |
-| [Sunum ve dışa aktarma](docs/serving-and-export.md) | OpenAI uyumlu sunucu, toplu çıkarım, kıyaslama, birleştirme/dışa aktarma, Anthropic Messages uç noktası, spekülatif kod çözme (kendi taslak modelinizi eğitin + ölçün), dağıtım otomatik pilotu, Web Arayüzü, Agent Forge |
-| [Bağdaştırıcılar, kayıt defteri ve yönetişim](docs/adapters-and-governance.md) | Bağdaştırıcı yaşam döngüsü/yönetimi, model kayıt defteri, Soup Cans, veri çarkı (`soup loop`), bilgi düzenleme, yönlendirme (steering), tedarik zinciri denetimleri (scan/sign/BOM/attest/audit/airgap) |
+| [Değerlendirme ve sondalar](docs/evaluation.md) | Değerlendirme tasarımı/kapısı, değerlendirme kapılı eğitim, kıyaslamalar, NLG metrikleri, kalibrasyon, Elo arenası, teşhis, eğitim sonrası X-ray sondaları, A/B, kayma, ayarlanabilirlik, `soup advise` |
+| [Model servisi ve dışa aktarma](docs/serving-and-export.md) | OpenAI uyumlu sunucu, toplu çıkarım, kıyaslama, birleştirme/dışa aktarma, Anthropic Messages uç noktası, spekülatif kod çözme (kendi taslak modelinizi eğitin + ölçün), dağıtım otomatik pilotu, Web Arayüzü, Agent Forge |
+| [Adaptörler, model kayıt defteri ve yönetişim](docs/adapters-and-governance.md) | Adaptör yaşam döngüsü/yönetimi, model kayıt defteri, Soup Cans, veri çarkı (`soup loop`), bilgi düzenleme, yönlendirme (steering), tedarik zinciri kontrolleri (scan/sign/BOM/attest/audit/airgap) |
 | [Uyumluluk ve yönetişim için hızlı başlangıç](docs/compliance.md) | HIPAA/SOC2/EU-AI-Act/SR-11-7 `init` şablonları, köken bilgisi (BOM/attest/repro-receipt), denetim günlüğü, air-gap, model kartı otomatik üretimi (`soup card`), CI kapısı (`soup ci init`) |
-| [Arka uçlar, platform ve operasyon](docs/backends-and-ops.md) | MLX/Unsloth arka uçları, alternatif hub'lar, HF Hub entegrasyonu, otomatik pilot, deney takibi, plan/apply, ortam kilit dosyaları, donanım uygunluğu, tamamlamalar, eklentiler, yardımcı komutlar |
+| [Arka uçlar, platform ve operasyon](docs/backends-and-ops.md) | MLX/Unsloth arka uçları, alternatif hub'lar, HF Hub entegrasyonu, otomatik pilot, deney takibi, plan/apply, ortam kilit dosyaları, donanım uygunluğu, kabuk otomatik tamamlama, eklentiler (plugin), yardımcı komutlar |
 | [Komut başvurusu](docs/commands.md) | Tam `soup` komut listesi |
-| [Desteklenen modeller ve ekler](docs/models.md) | Önerilen model aileleri, VRAM boyut rehberi, pip ekleri matrisi |
+| [Desteklenen modeller ve ekler](docs/models.md) | Önerilen model aileleri, VRAM boyut rehberi, pip isteğe bağlı bağımlılık grupları (extras) matrisi |
 
 ## Veri Biçimleri
 
 Alpaca, ShareGPT, ChatML, tercih çiftleri (DPO / ORPO / SimPO / IPO / KTO), görü, ses, ASR, düz
 metin, gömme (embedding), RAFT ve daha fazlası — hepsi JSONL, JSON, CSV, Parquet veya TXT'den
 otomatik algılanır; bu yüzden çoğu durumda `data.train`'i bir dosyaya yöneltirsiniz ve başka hiçbir
-şey değişmez. Her biçim için çalışılmış bir örnekle şemalar ve veri ardışık düzeni (uzak URI'ler,
-akış, parçalama, iç içe geçirme, sözcük dağarcığı genişletme, belge alımı)
-[`docs/data.md`](docs/data.md#data-formats) içinde.
+şey değişmez. Her biçim için adım adım çözümlü bir örnekle şemalar ve veri ardışık düzeni (uzak URI'ler,
+akış, parçalama, iç içe geçirme, sözcük dağarcığı genişletme, belge içe aktarma)
+[`docs/data.md`](docs/data.md#data-formats) içinde; [yerel Sesame CSM ses eğitimi](docs/training.md#native-sesame-csm) ise ayrı belgelenmiştir.
 
 ## Yaygın Komutlar
 
 ```bash
 soup train  --config soup.yaml        # eğitin (SFT/DPO/GRPO/PPO/KTO/ORPO/SimPO/IPO/...)
-soup infer  --model ./output --input prompts.jsonl   # toplu çıkarım
+soup infer  --model ./output --input prompts.jsonl --output results.jsonl   # toplu çıkarım
 soup chat   --model ./output          # etkileşimli sohbet
 soup serve  --model ./output          # OpenAI uyumlu API sunucusu
 soup ui                               # yerel tarayıcı panosu
@@ -349,7 +366,7 @@ listelenmiştir.
 soup doctor    # GPU, sistem kaynakları, bağımlılıklar ve sürüm tek yerde
 ```
 
-CUDA tekerlekleri, sürüm uyumsuzlukları: [`docs/backends-and-ops.md`](docs/backends-and-ops.md#troubleshooting).
+CUDA wheel paketleri, sürüm uyumsuzlukları: [`docs/backends-and-ops.md`](docs/backends-and-ops.md#troubleshooting).
 
 ## Geliştirme
 
@@ -367,17 +384,17 @@ pre-commit install                 # isteğe bağlı: commit'te ruff lint+format
 ```
 
 Tam iş akışı için [CONTRIBUTING.md](CONTRIBUTING.md)'ye, bir güvenlik açığı bildirmek için
-[SECURITY.md](SECURITY.md)'ye bakın. Telemetri kesinlikle isteğe bağlıdır (`SOUP_TELEMETRY=1`,
-varsayılan kapalı; bkz. [Gizlilik Politikası](docs/backends-and-ops.md#privacy-policy)).
+[SECURITY.md](SECURITY.md)'ye bakın. Telemetri yalnızca siz açıkça etkinleştirirseniz çalışır (`SOUP_TELEMETRY=1`,
+varsayılan olarak kapalı; bkz. [Gizlilik Politikası](docs/backends-and-ops.md#privacy-policy)).
 
 ## Soup'u Destekleyin
 
-Soup Apache-2.0 lisanslı ve ücretsizdir — ve öyle kalacak. Tek bir 4 GB dizüstü bilgisayarda, açık
+Soup Apache-2.0 lisanslı ve ücretsizdir — ve öyle kalacak. Tek bir 4 GB dizüstü bilgisayarda, herkesin gözü önünde, açık kaynak
 olarak geliştirilir ve sürdürülür; bu belgelerdeki her performans rakamının iddia edilmek yerine
 ölçülmüş olmasının nedeni budur.
 
 Soup size bir eğitim çalıştırması kazandırdıysa, [depoya yıldız vermek](https://github.com/MakazhanAlpamys/Soup)
-en çok yardımı sağlar ve hiçbir maliyeti yoktur. Çalışmayı doğrudan finanse etmek isterseniz:
+en çok işe yarar ve hiçbir maliyeti yoktur. Çalışmayı doğrudan finanse etmek isterseniz:
 
 **[❤️ Bağış yapın](https://buy.stripe.com/4gMcN441k3pha3T19ye7m04)** — tek seferlik, istediğiniz
 miktarda (ödeme sayfasında *Tutarı değiştir* / *Change amount* seçeneğini kullanın). Ödemeler,
@@ -391,23 +408,23 @@ Tam da bu kalemleri ilerletmenin diğer yolu **donanımın kendisidir**. Bunlar 
 yerine dürüst "\<donanım\> gerektirir" kapılarının arkasında yayımlanır; dolayısıyla daha büyük bir
 makineye — ya da kullanılmayan GPU kredilerine — erişiminiz varsa,
 [`help wanted`](https://github.com/MakazhanAlpamys/Soup/issues?q=is%3Aissue+is%3Aopen+label%3A%22help+wanted%22)
-konularından birini çalıştırıp sayıları paylaşmak, GPU süresini finanse etmek kadar yardımcı olur.
-Bu konular, bugün donanım yüzünden tam olarak neyin engellendiğini söyler.
+issue'lardan birini çalıştırıp sayıları paylaşmak, GPU süresini finanse etmek kadar yardımcı olur.
+Bu issue'lar, bugün donanım yüzünden tam olarak neyin engellendiğini söyler.
 
 ## Katkıda Bulunanlar
 
-Topluluk tarafından inşa edildi ❤️ — katkıda bulunan herkese teşekkürler. Bkz.
+Topluluk tarafından geliştirildi ❤️ — katkıda bulunan herkese teşekkürler. Bkz.
 [CONTRIBUTORS.md](CONTRIBUTORS.md).
 
 [![Katkıda Bulunanlar](https://contrib.rocks/image?repo=MakazhanAlpamys/Soup)](https://github.com/MakazhanAlpamys/Soup/graphs/contributors)
 
 ## İletişim
 
-Hatalar ve özellik istekleri [sorun takipçisine](https://github.com/MakazhanAlpamys/Soup/issues),
+Hatalar ve özellik istekleri [issue takipçisine](https://github.com/MakazhanAlpamys/Soup/issues),
 sorular [Discussions](https://github.com/MakazhanAlpamys/Soup/discussions)'a aittir — ikisi de daha
 hızlı yanıtlanır ve aynı sorunu yaşayan bir sonraki kişiye yardım eder.
 
-Canlı sohbet, kurulum yardımı ve sohbet olarak daha iyi okunan her şey için
+Canlı sohbet, kurulum yardımı ve karşılıklı konuşarak çözülmesi daha kolay olan her şey için
 [Discord](https://discord.gg/dgd2pJcjwP)'a ya da [Telegram topluluğuna](https://t.me/souptasters)
 katılın. Altı ay sonra hâlâ bulunabilir olması gereken her şey Issues'a ya da Discussions'a aittir —
 bir Discord yanıtı tek bir kişiye yardım eder, bir issue ise aynı şeyle karşılaşan herkese.
@@ -435,20 +452,24 @@ bu aynı zamanda makalenin ne işe yaradığını anlatmanın en kısa yoludur:
 - **v3'te geri çekildi: "katman akışını sınırlayan GPU değil, ana bilgisayardan cihaza aktarımdır."**
   Bu, aşağıdaki H100 yeniden üretiminden yapılmış bir *çıkarımdı* ve hiç ölçülmemişti. 11 Ağustos'ta
   ölçtük ve yayımlanan yapılandırmada yanlış: ana bilgisayardan cihaza giden her baytı silmek
-  yalnızca **%1.4** kazandırıyor, hesaplama akışı adımın **%0.20**'sinde bir kopyayı bekliyor ve
+  **%1.4** kazandırıyor, hesaplama akışı adımın **%0.20**'sinde bir kopyayı bekliyor ve
   adım, o kartın aynı oturumdaki GEMM tavanının **%71.3**'ünde çalışıyor. Akışa özgü en büyük
   maliyet, %9.8 ile katman başına NF4 ters nicelemesi
   ([kayıt](benchmarks/probe-v0.73.0-what-bounds-streaming.md)). Her ölçüm geçerliliğini koruyor;
   yeniden üretim daha zayıf bir biçimde ayakta kalıyor — kısıt her iki makinede ortak ve GPU'nun
   hesaplama gücü değil.
-- **Özgününe hiç benzemeyen donanımda yeniden üretim** (v2'de eklendi): RTX 3050'de 119.6 tok/s'ye
-  karşı bir H100'de medyan 113.00, aynı 3.32 GB tepede. İkisi de #331 onarımından önce
-  ölçüldü; 4 GB yeniden ölçümü #361 sayısında bekliyor.
+- **Özgününe hiç benzemeyen donanımda yeniden üretim** (v2'de eklendi): RTX 3050'de (952 MHz'de)
+  119.6 tok/s'ye karşı bir H100'de medyan 113.00, aynı 3.32 GB tepede. İkisi de #331 onarımından
+  önce ölçüldü ve makalenin bildirdiği rakamlar bunlardır. #331 sonrası satır (@umran666, #1103),
+  1935–1957 MHz'de 208.6 tok/s ve 2.40 GB tepedir; aynı oturumda ölçülen GEMM tavanının %68'ine
+  karşı %59'u. Ham 1.74x kazanç bir hızlanma değil, saat frekansı farkıdır; satırlar arasında bellek
+  düzeni de değişti, bu yüzden bu oran bile bire bir karşılaştırma değildir
+  ([kayıt](benchmarks/gate-v0.72.2-nf4.md)).
 - **Sessiz bir yanlış gradyan kusuru, bulundu ve onarıldı.** Katman başına ~165 MiB'ın üzerindeki
   NF4'te ileri geçiş bit düzeyinde özdeş kaldı ve kayıp eğrisi sağlıklı göründü, ama gradyanlar
-  yanlıştı. Neden, üst akış kütüphanesinde adıyla belirtildi ve orada bildirildi; onarım, gerçek 32B
-  ve 72B üzerinde kontrollere karşı kapılandı.
-- **Gerçek model boyutlarında bit düzeyinde özdeşlik**, üç katmanlı oyuncaklar yerine: ileri geçiş
+  yanlıştı. Neden, upstream kütüphanede adıyla belirtildi ve orada bildirildi; onarım, gerçek 32B
+  ve 72B modellerde kontrol çalıştırmalarına karşı doğrulama kapısından geçirildi.
+- **Gerçek model boyutlarında bit düzeyinde özdeşlik**, üç katmanlı oyuncak modeller yerine: ileri geçiş
   0.5B'den 72B'ye, geri geçiş 8B ve 14B'de.
 - **Eğitilmiş model kalitesi, ilk kez ölçüldü** ve belleğe yerleşik bir çalıştırmadan ayırt
   edilemiyor.
@@ -480,4 +501,4 @@ dahil.
 
 ## Lisans
 
-[Apache-2.0](LICENSE). Telif hakkı © Soup katkıda bulunanları.
+[Apache-2.0](LICENSE). Copyright 2026 Makazhan Alpamys and the Soup contributors. Soup'u veya değiştirilmiş bir kopyasını yeniden dağıtırsanız lisansın 4. ve 6. maddeleri sizin için geçerlidir: her kopyayla birlikte `LICENSE` ve `NOTICE` dosyalarını koruyun, değiştirdiğiniz dosyaları işaretleyin ve Soup adını eserin kaynağını belirtmenin ötesinde kullanmayın.

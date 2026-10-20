@@ -38,7 +38,18 @@ from soup_cli.utils.agent_forge import (
 )
 from tests.conftest import strip_ansi
 
-_BASE = "hf-internal-testing/tiny-random-LlamaForCausalLM"
+
+def _local_base_model_dir() -> str:
+    """A tiny Llama causal LM + tokenizer built locally (no download),
+    standing in for hf-internal-testing/tiny-random-LlamaForCausalLM -- #1356
+    found this pulling it from the Hub for a dry-run plan and a tokenizer
+    whose chat_template gets overwritten immediately after load. Shared and
+    cached across every file that needs one (tests/_tiny_hf_models.py)."""
+    from tests._tiny_hf_models import tiny_model_dir
+
+    return tiny_model_dir("llama")
+
+
 _WEATHER_TOOL = {
     "type": "function",
     "function": {
@@ -127,11 +138,12 @@ def test_the_printed_recipe_dry_runs_with_the_synthesised_rows(tmp_path, monkeyp
         encoding="utf-8",
     )
     runner = CliRunner()
-    planned = runner.invoke(app, ["agent", "train", "--spec", "openapi.yaml", "--base", _BASE])
+    base = Path(_local_base_model_dir()).as_posix()
+    planned = runner.invoke(app, ["agent", "train", "--spec", "openapi.yaml", "--base", base])
     assert planned.exit_code == 0, planned.output
     assert "format: tool-calling" in planned.output
     Path("agent_train.yaml").write_text(
-        f"base: {_BASE}\ntask: sft\ndata:\n  train: agent_dataset.jsonl\n"
+        f"base: {base}\ntask: sft\ndata:\n  train: agent_dataset.jsonl\n"
         "  format: tool-calling\n  val_split: 0.0\n"
         "training:\n  epochs: 3\n  lr: 2.0e-5\n  batch_size: auto\n"
         "output: ./agent_train_output\n",
@@ -458,7 +470,7 @@ def test_the_trajectory_renders_in_source_order_through_arrow():
 
     from soup_cli.data.sft_format import build_format_row
 
-    tokenizer = AutoTokenizer.from_pretrained(_BASE)
+    tokenizer = AutoTokenizer.from_pretrained(_local_base_model_dir())
     tokenizer.chat_template = _LLAMA_STYLE_TEMPLATE
     data_cfg = SimpleNamespace(
         chat_template=None,

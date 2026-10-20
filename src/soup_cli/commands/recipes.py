@@ -169,7 +169,16 @@ def verify(
     import json as _json
     import sys
 
-    from soup_cli.utils.exit_codes import EXIT_RUNTIME_ERROR
+    from soup_cli.utils.exit_codes import EXIT_RUNTIME_ERROR, EXIT_USAGE_ERROR
+
+    # The config loader prints its own warnings (a deprecated value, #759; a
+    # staged field, #808) on stdout, ahead of --json's document. Send them to
+    # stderr with every other diagnostic.
+    with contextlib.redirect_stdout(sys.stderr):
+        configs = _configs_to_verify(config, templates)
+    if not configs:
+        err_console.print("[red]Nothing to verify.[/]")
+        raise typer.Exit(EXIT_USAGE_ERROR)
 
     # #1117 review: without these the per-stage catch-alls turned a missing
     # library into a verdict (unverified, exit 0; or cannot_attach, exit 2).
@@ -195,16 +204,6 @@ def verify(
         check_attach,
         load_hf_config,
     )
-    from soup_cli.utils.exit_codes import EXIT_USAGE_ERROR
-
-    # The config loader prints its own warnings (a deprecated value, #759; a
-    # staged field, #808) on stdout, ahead of --json's document. Send them to
-    # stderr with every other diagnostic.
-    with contextlib.redirect_stdout(sys.stderr):
-        configs = _configs_to_verify(config, templates)
-    if not configs:
-        err_console.print("[red]Nothing to verify.[/]")
-        raise typer.Exit(EXIT_USAGE_ERROR)
 
     report = PreflightReport()
     for name, cfg in configs:
@@ -245,6 +244,7 @@ def _configs_to_verify(config: Optional[str], templates: bool):
     parse is surfaced here rather than counted as an attach failure."""
     from soup_cli.config.loader import load_config_from_string
     from soup_cli.utils.exit_codes import EXIT_USAGE_ERROR
+    from soup_cli.utils.yaml_limits import MAX_CONFIG_BYTES, read_text_limited
 
     pairs: list[tuple[str, str]] = []
     if config:
@@ -253,7 +253,10 @@ def _configs_to_verify(config: Optional[str], templates: bool):
             err_console.print(f"[red]Config not found:[/] {for_terminal(config)}")
             raise typer.Exit(EXIT_USAGE_ERROR)
         try:
-            return [(path.name, load_config_from_string(path.read_text(encoding="utf-8")))]
+            text = read_text_limited(
+                path, f"Config file {config}", max_bytes=MAX_CONFIG_BYTES
+            )
+            return [(path.name, load_config_from_string(text))]
         except Exception as exc:  # noqa: BLE001 --- any parse failure is an input error
             first_line = str(exc).splitlines()[0] if str(exc) else ""
             err_console.print(

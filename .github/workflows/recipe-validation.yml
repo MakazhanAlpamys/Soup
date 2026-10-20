@@ -22,8 +22,12 @@ on:
       - 'tests/test_recipes_v031.py'
       - 'tests/test_recipes.py'
       - '.github/workflows/recipe-validation.yml'
+      - '.github/constraints/pinned-upstream.txt'
   pull_request:
     branches: [main]
+    # `ready_for_review` is what starts the first run of a draft pull request: a draft
+    # is skipped by the job's own `if:` (2026-10-19; see the job).
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - 'src/soup_cli/recipes/**'
       - 'src/soup_cli/config/**'
@@ -32,6 +36,7 @@ on:
       - 'tests/test_recipes_v031.py'
       - 'tests/test_recipes.py'
       - '.github/workflows/recipe-validation.yml'
+      - '.github/constraints/pinned-upstream.txt'
 
 # Supersede, do not queue.
 #
@@ -75,6 +80,10 @@ concurrency:
 
 jobs:
   validate-recipes:
+    # Not on a draft pull request (not a required check). Measured 2026-10-19 over 7
+    # days: 15 runs on a head whose CI run was a skipped draft, 32 job-minutes. Marking
+    # the pull request ready runs it (`ready_for_review` above).
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     env:
       PYTHONUTF8: "1"
@@ -85,6 +94,7 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install dependencies
-        run: pip install -e ".[dev]"
+        # The pinned stack of ci.yml's pull-request cells: this workflow runs on pull requests and pushes only.
+        run: pip install -e ".[dev]" -c .github/constraints/pinned-upstream.txt
       - name: Validate every recipe (parameterised pytest)
         run: pytest tests/test_recipes_v031.py tests/test_recipes.py -v --tb=short --no-cov

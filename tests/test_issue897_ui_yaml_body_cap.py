@@ -4,19 +4,20 @@ import asyncio
 from collections.abc import Iterator
 
 import pytest
+import yaml
 
 from soup_cli.recipes.catalog import RECIPES
+from tests.ui_helpers import ui_client as make_ui_client
 
 
 @pytest.fixture
 def ui_client() -> Iterator[tuple[object, dict[str, str]]]:
     """Yield an authenticated Web UI test client."""
     pytest.importorskip("fastapi")
-    from fastapi.testclient import TestClient
 
     from soup_cli.ui.app import create_app, get_auth_token
 
-    with TestClient(create_app()) as client:
+    with make_ui_client(create_app()) as client:
         yield client, {"Authorization": f"Bearer {get_auth_token()}"}
 
 
@@ -45,9 +46,12 @@ def test_oversized_yaml_request_is_413_before_safe_load(
     def fail_if_called(*args: object, **kwargs: object) -> None:
         nonlocal called
         called = True
-        raise AssertionError("yaml.safe_load must not parse an oversized request")
+        raise AssertionError("an oversized request must not reach the YAML parser")
 
-    monkeypatch.setattr(loader.yaml, "safe_load", fail_if_called)
+    # The config loader parses through the limited loader; nothing else may
+    # parse the body either.
+    monkeypatch.setattr(loader, "load_yaml_limited", fail_if_called)
+    monkeypatch.setattr(yaml, "safe_load", fail_if_called)
     client, headers = ui_client
 
     response = client.post(endpoint, json=payload, headers=headers)  # type: ignore[attr-defined]

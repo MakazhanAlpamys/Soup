@@ -20,6 +20,7 @@ import bitexact
 HARNESS_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(HARNESS_DIR))
 from mechanism_cost import (  # noqa: E402
+    MeasurementInvalidError,
     build_streamed_arm,
     copy_lora,
     gradient_snapshot,
@@ -35,10 +36,6 @@ DEFAULT_SEQ = 128
 DEFAULT_BATCH = 1
 DEFAULT_BUFFERS = 2
 DEVICE = "cuda"
-
-
-class MeasurementInvalidError(RuntimeError):
-    """Measurement data cannot support a verdict."""
 
 
 def repeated_backward_verdict(

@@ -175,7 +175,8 @@ def insert(
             f"got {output!r}"
         )
 
-    rows = load_raw_data(file_path)
+    # _resolve_format needs the raw first row; insert writes later rows back as read.
+    rows = load_raw_data(file_path, skip_non_object=False)
     fmt = _resolve_format(rows, data_format, path)
     try:
         canaries = generate_canaries(count=count, seed=seed)

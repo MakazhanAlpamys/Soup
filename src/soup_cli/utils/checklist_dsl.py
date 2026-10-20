@@ -37,6 +37,7 @@ from typing import Mapping, Optional, Sequence
 import yaml
 
 from soup_cli.utils.behavior_battery import contains_whole_word
+from soup_cli.utils.yaml_limits import load_yaml_limited
 
 # Closed allowlist.
 CHECKLIST_KINDS = frozenset({"mft", "inv", "dir"})
@@ -295,7 +296,7 @@ def load_checklist_spec(path: str) -> CheckListSpec:
             except OSError:
                 pass
     try:
-        raw = yaml.safe_load(text)
+        raw = load_yaml_limited(text, "spec file", max_bytes=_MAX_FILE_BYTES)
     except yaml.YAMLError as exc:
         raise ValueError(f"invalid YAML: {exc}") from exc
     return parse_checklist_spec(raw)

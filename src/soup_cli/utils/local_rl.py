@@ -286,6 +286,10 @@ def record_thumb(
         conn.commit()
 
 
+# The one definition of what the harvest reads; ``checked_thumbs_db`` probes it.
+THUMBS_HARVEST_SELECT = "SELECT prompt, response, thumb, ts FROM thumbs"
+
+
 def harvest_dpo_pairs(db_path: str) -> Tuple[DpoPair, ...]:
     """Pair up/down responses to the same prompt into DPO training rows.
 
@@ -300,9 +304,7 @@ def harvest_dpo_pairs(db_path: str) -> Tuple[DpoPair, ...]:
     if not os.path.exists(real):
         raise FileNotFoundError(f"db_path not found: {db_path!r}")
     with sqlite3.connect(real) as conn:
-        rows = conn.execute(
-            "SELECT prompt, response, thumb, ts FROM thumbs ORDER BY ts ASC"
-        ).fetchall()
+        rows = conn.execute(f"{THUMBS_HARVEST_SELECT} ORDER BY ts ASC").fetchall()
     last_up: dict[str, str] = {}
     last_down: dict[str, str] = {}
     for prompt, response, thumb, _ts in rows:
@@ -458,12 +460,15 @@ def _default_train_fn(
     import yaml
 
     data_format = _METHOD_FORMAT[train_method]
+    # KTO needs a per-device batch >= 2 (TRL refuses batch 1: degenerate KL
+    # term, #1420); batch 1 stays for dpo/orpo, which accept it.
+    batch_size = 2 if train_method == "kto" else 1
     yaml_text = yaml.safe_dump(
         {
             "base": base_model,
             "task": train_method,
             "data": {"train": pairs_path, "format": data_format, "max_length": 256},
-            "training": {"epochs": 1, "batch_size": 1},
+            "training": {"epochs": 1, "batch_size": batch_size},
             "output": output_dir,
         },
         default_flow_style=False,
@@ -612,6 +617,7 @@ def run_nightly_train(
 
 
 __all__ = [
+    "THUMBS_HARVEST_SELECT",
     "SUPPORTED_LOCAL_RL_BACKENDS",
     "SUPPORTED_LOCAL_RL_TRAIN_METHODS",
     "MAX_PROMPT_LEN",

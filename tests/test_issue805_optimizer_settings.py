@@ -101,7 +101,8 @@ def test_prm_and_mole_train_with_configured_optimizer(tiny_model, monkeypatch, k
     result = wrapper.train()
     args = wrapper.trainer.args
     assert args.per_device_train_batch_size == 2
-    assert args.warmup_steps == 1
+    assert args.warmup_steps == 0.25
+    assert args.get_warmup_steps(result["total_steps"]) == 1
     assert args.weight_decay == 0.1
     assert args.max_grad_norm == 0.3
     assert args.optim.value == "adafactor"
@@ -141,7 +142,8 @@ def test_ppo_constructs_real_config_with_nondefault_training_values(tiny_model):
         wrapper.setup({"train": [{"prompt": "one two", "answer": "three"}] * 8})
     args = wrapper.trainer.args
     assert isinstance(args, PPOConfig)
-    assert args.warmup_steps == 1
+    assert args.warmup_steps == 0.25
+    assert args.get_warmup_steps(4) == 1
     assert args.weight_decay == 0.1
     assert args.max_grad_norm == 0.3
     assert args.optim.value == "adafactor"
@@ -149,6 +151,8 @@ def test_ppo_constructs_real_config_with_nondefault_training_values(tiny_model):
     assert args.num_train_epochs == 2
     assert args.logging_steps == 1
     assert args.save_steps == 100
+    assert args.save_total_limit == 3
+    assert args.response_length == 64
     assert not args.gradient_checkpointing
 
 
@@ -284,3 +288,107 @@ def test_unlearn_cap_still_counts_examples(tiny_model, monkeypatch):
     monkeypatch.setattr(unlearn, "_MAX_STEPS_CAP", 3)
     wrapper = _unlearn_wrapper(tiny_model, batch_size=2, gradient_accumulation_steps=4)
     assert wrapper.train()["total_steps"] == 3
+
+
+def test_ppo_response_length_tracks_data_max_length(tiny_model):
+    from trl.experimental.ppo import PPOConfig
+
+    from soup_cli.trainer.ppo import PPOTrainerWrapper
+
+    class ConfigCapture:
+        def __init__(self, *, args, **kwargs):
+            self.args = args
+
+        def add_callback(self, callback):
+            pass
+
+    config = _config(tiny_model, "ppo", reward_fn="accuracy")
+    config.data.max_length = 512
+    wrapper = PPOTrainerWrapper(config, device="cpu")
+    with (
+        patch(
+            "soup_cli.trainer.ppo._import_ppo_classes",
+            return_value=(ConfigCapture, PPOConfig, True),
+        ),
+        patch.object(wrapper, "_get_or_create_reward_model", return_value=None),
+        patch.object(wrapper, "_create_value_model", return_value=None),
+    ):
+        wrapper.setup({"train": [{"prompt": "one two", "answer": "three"}] * 8})
+    args = wrapper.trainer.args
+    assert args.response_length == 512
+    assert args.response_length != 53
+
+
+def test_ppo_forwards_deepspeed_config_and_guards(tiny_model):
+    from trl.experimental.ppo import PPOConfig
+
+    from soup_cli.trainer.ppo import PPOTrainerWrapper
+
+    class ConfigCapture:
+        def __init__(self, *, args, **kwargs):
+            self.args = args
+
+        def add_callback(self, callback):
+            pass
+
+        def create_optimizer(self):
+            pass
+
+    config = _config(tiny_model, "ppo", reward_fn="accuracy")
+
+    # Without deepspeed:
+    wrapper_plain = PPOTrainerWrapper(config, device="cpu")
+    with (
+        patch(
+            "soup_cli.trainer.ppo._import_ppo_classes",
+            return_value=(ConfigCapture, PPOConfig, True),
+        ),
+        patch.object(wrapper_plain, "_get_or_create_reward_model", return_value=None),
+        patch.object(wrapper_plain, "_create_value_model", return_value=None),
+    ):
+        wrapper_plain.setup({"train": [{"prompt": "one two", "answer": "three"}] * 8})
+    assert getattr(wrapper_plain.trainer, "_soup_empty_group_guard", False) is False
+    assert wrapper_plain.trainer.args.deepspeed is None
+
+    # With deepspeed:
+    wrapper_ds = PPOTrainerWrapper(config, device="cpu", deepspeed_config="ds.json")
+    with (
+        patch("transformers.integrations.deepspeed.HfTrainerDeepSpeedConfig"),
+        patch(
+            "soup_cli.trainer.ppo._import_ppo_classes",
+            return_value=(ConfigCapture, PPOConfig, True),
+        ),
+        patch.object(wrapper_ds, "_get_or_create_reward_model", return_value=None),
+        patch.object(wrapper_ds, "_create_value_model", return_value=None),
+    ):
+        wrapper_ds.setup({"train": [{"prompt": "one two", "answer": "three"}] * 8})
+    assert wrapper_ds.trainer.args.deepspeed == "ds.json"
+    assert getattr(wrapper_ds.trainer, "_soup_empty_group_guard", False) is True
+
+
+def test_ppo_refuses_deepspeed_when_unsupported(tmp_path):
+    from soup_cli.config.schema import SoupConfig
+    from soup_cli.trainer.ppo import PPOTrainerWrapper
+
+    class StubPPOConfig:
+        def __init__(self, output_dir=None, **kwargs):
+            pass
+
+    config = SoupConfig(
+        base=str(tmp_path),
+        task="ppo",
+        output=str(tmp_path / "out"),
+        data={"train": "dummy.jsonl", "max_length": 64},
+        training={"epochs": 1, "reward_fn": "accuracy"},
+    )
+    wrapper = PPOTrainerWrapper(config, device="cpu", deepspeed_config="ds.json")
+    with (
+        patch(
+            "soup_cli.trainer.ppo._import_ppo_classes",
+            return_value=(object, StubPPOConfig, True),
+        ),
+        pytest.raises(
+            ValueError, match="task: ppo does not support --deepspeed on this trl version"
+        ),
+    ):
+        wrapper.setup({"train": []})

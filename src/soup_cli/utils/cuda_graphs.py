@@ -11,12 +11,16 @@ from __future__ import annotations
 
 import functools
 import inspect
+import json
+import os
 import re
+import sys
 import threading
 from importlib import import_module
 from itertools import chain
+from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Optional
 
 _BACKEND_NAME = "soup_cudagraphs"
 _REGISTRATION_LOCK = threading.Lock()
@@ -54,6 +58,93 @@ def _cuda_device_key(device: Any) -> str:
     if not value.startswith("cuda:"):
         raise RuntimeError("CUDA graphs require every model tensor on a single CUDA device")
     return value
+
+
+def _is_cuda_available_light() -> bool:
+    """Lightweight check for CUDA availability without importing torch.
+
+    A driver-less ROCm setup reports False.
+    """
+    if "torch" in sys.modules:
+        import torch
+
+        return bool(torch.cuda.is_available())
+    if sys.platform == "darwin":
+        return False
+    visible = os.environ.get("CUDA_VISIBLE_DEVICES")
+    if visible is not None and visible.strip() in ("", "-1"):
+        return False
+    try:
+        import ctypes
+
+        if sys.platform == "win32":
+            lib = ctypes.CDLL("nvcuda.dll")
+        else:
+            lib = ctypes.CDLL("libcuda.so.1")
+        if lib.cuInit(0) != 0:
+            return False
+        count = ctypes.c_int()
+        if lib.cuDeviceGetCount(ctypes.byref(count)) != 0:
+            return False
+        return count.value > 0
+    except (OSError, AttributeError):
+        return False
+
+
+def check_cuda_graphs_preflight(
+    device: Optional[str] = None,
+    model_target: Optional[str] = None,
+    base: Optional[str] = None,
+) -> None:
+    """Pre-flight checks for CUDA graphs before loading model weights or torch."""
+    if device is not None:
+        normalized = str(device).strip().lower()
+        if not (normalized == "cuda" or normalized.startswith("cuda:")):
+            raise RuntimeError("CUDA graphs require every model tensor on a single CUDA device")
+    else:
+        if not _is_cuda_available_light():
+            raise RuntimeError("CUDA graphs require every model tensor on a single CUDA device")
+
+    for target in (model_target, base):
+        if not target:
+            continue
+        target_path = Path(target)
+        if not target_path.is_dir():
+            continue
+
+        adapter_cfg_file = target_path / "adapter_config.json"
+        if adapter_cfg_file.is_file():
+            try:
+                with open(adapter_cfg_file, encoding="utf-8") as f:
+                    adapter_cfg = json.load(f)
+                if isinstance(adapter_cfg, dict):
+                    peft_type = adapter_cfg.get("peft_type")
+                    if peft_type and peft_type != "LORA":
+                        raise RuntimeError(
+                            f"CUDA graph decoding supports LoRA adapters only, not {peft_type}"
+                        )
+                    if adapter_cfg.get("use_dora") is True:
+                        raise RuntimeError("CUDA graph decoding does not support DoRA adapters")
+            except (OSError, ValueError):
+                pass
+
+        cfg_file = target_path / "config.json"
+        if cfg_file.is_file():
+            try:
+                with open(cfg_file, encoding="utf-8") as f:
+                    cfg_data = json.load(f)
+                if isinstance(cfg_data, dict):
+                    model_type = cfg_data.get("model_type")
+                    if model_type and model_type not in ("qwen2", "llama"):
+                        raise RuntimeError(
+                            "CUDA graph decoding supports stock Qwen2 and Llama causal models"
+                        )
+                    if cfg_data.get("quantization_config") is not None:
+                        raise RuntimeError(
+                            "CUDA graph decoding currently requires an unquantized model"
+                        )
+            except (OSError, ValueError):
+                pass
 
 
 def _has_offload_hook(hook: Any) -> bool:

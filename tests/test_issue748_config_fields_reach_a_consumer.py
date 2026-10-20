@@ -113,8 +113,11 @@ import functools
 import os
 import pathlib
 import re
+import types
 
 import pytest
+
+from tests._source_scan import memoized_scan, parse_source, walk_nodes
 
 pytestmark = pytest.mark.unit
 
@@ -158,10 +161,10 @@ def consumed_names(paths) -> set:
     names: set = set()
     for path in paths:
         try:
-            tree = ast.parse(path.read_text(errors="ignore"))
+            tree = parse_source(path.read_text(errors="ignore"), keep=True)
         except (SyntaxError, UnicodeDecodeError, ValueError):
             continue
-        for node in ast.walk(tree):
+        for node in walk_nodes(tree):
             if isinstance(node, ast.Attribute):
                 if isinstance(node.ctx, ast.Load):
                     names.add(node.attr)
@@ -201,10 +204,10 @@ def training_receiver_reads(paths, field: str) -> bool:
     """
     for path in paths:
         try:
-            tree = ast.parse(pathlib.Path(path).read_text(errors="ignore"))
+            tree = parse_source(pathlib.Path(path).read_text(errors="ignore"), keep=True)
         except (SyntaxError, UnicodeDecodeError, ValueError):
             continue
-        for node in ast.walk(tree):
+        for node in walk_nodes(tree):
             if (
                 isinstance(node, ast.Attribute)
                 and isinstance(node.ctx, ast.Load)
@@ -248,10 +251,10 @@ def schema_property_reads(schema_path: pathlib.Path) -> dict:
     """
     out: dict = {}
     try:
-        tree = ast.parse(schema_path.read_text(errors="ignore"))
+        tree = parse_source(schema_path.read_text(errors="ignore"), keep=True)
     except (SyntaxError, UnicodeDecodeError, ValueError):  # pragma: no cover
         return out
-    for node in ast.walk(tree):
+    for node in walk_nodes(tree):
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
         names = []
@@ -316,12 +319,28 @@ def _consumed_in_src() -> set:
     `schema_property_reads`.
     """
     modules = _consumer_modules()
-    consumed = set(_consumed_cached(tuple(sorted(str(p) for p in modules))))
+    paths_key = tuple(sorted(str(p) for p in modules))
+    consumed = set(_consumed_cached(paths_key))
     consumed = fold_property_reads(consumed, schema_property_reads(SCHEMA_PATH))
     # #807: a read inside a function nothing calls is not consumption, for
     # the same reason an uncalled @property launders nothing.
-    return drop_dead_function_reads(
-        consumed, function_scoped_reads(modules), referenced_names(modules)
+    scoped, referenced = _dead_function_inputs(paths_key)
+    return drop_dead_function_reads(consumed, scoped, referenced)
+
+
+@memoized_scan
+def _dead_function_inputs(paths_key) -> tuple:
+    """`(function_scoped_reads, referenced_names)` of one file list, walked once.
+
+    `_consumed_in_src()` needs both on every call and this file calls it seven
+    times, which was fourteen more walks of `src/`. Keyed on the file list, like
+    `_consumed_cached`, and dropped when the module finishes (`tests/_source_scan`).
+    Handed out read-only: every caller shares the one mapping.
+    """
+    modules = [pathlib.Path(p) for p in paths_key]
+    return (
+        types.MappingProxyType(function_scoped_reads(modules)),
+        frozenset(referenced_names(modules)),
     )
 
 
@@ -349,6 +368,13 @@ KNOWN_UNCONSUMED = {
     "training.grace_codebook": "#808 -- warns at load from v0.76, refused as of v0.77 "
                                "(the string appears as an artifact-kind name in "
                                "store.py:52 / edit.py:312, unrelated to this field)",
+    "training.rl_checkpoint_include_ref_model": "#808 -- warns at load from v0.76, "
+                                                "refused as of v0.77; no save writes "
+                                                "reference-model state, so nothing reads it",
+    "training.rl_checkpoint_include_rollout_buffer": "#808 -- warns at load from "
+                                                     "v0.76, refused as of v0.77; no save "
+                                                     "writes rollout-buffer state, so "
+                                                     "nothing reads it",
     # -- #807: read ONLY inside a function nothing in src/ references, so the
     #    read is not consumption. Surfaced by the dead-function gate, which
     #    the guard previously applied to @property resolvers only.
@@ -363,23 +389,15 @@ KNOWN_UNCONSUMED = {
                                   "HF argument pass False so a custom collator still sees "
                                   "the extra columns. The default is now False, and an "
                                   "explicit true loads with a warning and is ignored",
-    # -- declared and deliberately REFUSED, so having no consumer is correct.
-    #    A distinct category from the two below: the user is told, loudly, at
-    #    config load. Found by this guard rather than by hand.
-    "training.packing_cross_doc_attn_mask": "no issue needed: rejected at config load "
-                                            "(schema.py:3495) because it never "
-                                            "mapped to a valid TRL packing_strategy; "
-                                            "documented at docs/performance-and-"
-                                            "quantization.md:153",
+    # training.packing_cross_doc_attn_mask moved to REFUSED_AT_LOAD (#1814).
     # -- staged for features that have not landed; grouped so they can be
     #    retired together rather than one at a time.
     "training.long_context_grpo": "#808 -- warns at load from v0.76, refused as of v0.77 "
                                   "(documented as wiring Tiled MLP; no Tiled MLP exists)",
     "training.vision_grpo": "#808 -- warns at load from v0.76, refused as of v0.77 "
                             "(no vision GRPO path)",
-    "training.load_in_16bit": "no issue needed: schema rewrites quantization at validation time",
-    "training.unsloth_bnb_4bit": "no issue needed: schema assertion alias",
-    "training.llm_int8": "no issue needed: schema assertion alias",
+    # training.load_in_16bit / unsloth_bnb_4bit / llm_int8 moved to
+    # VALIDATOR_ALIASES (#1814).
     "training.quantize_ref_model": "#808 -- warns at load from v0.76, refused as of v0.77 "
                                    "(reference-model quantisation staging)",
     "training.convergence_window": "#808 -- warns at load from v0.76, refused as of v0.77 "
@@ -428,6 +446,51 @@ KNOWN_UNCONSUMED = {
                                 "(conversation-extension staging)",
     "data.skip_prepare_dataset": "#808 -- warns at load from v0.76, refused as of v0.77 "
                                  "(dataset-prep bypass staging)",
+}
+
+
+# --------------------------------------------------------------------------
+# #1814 -- fields whose only reader is a schema validator. They are not silently
+# inert, so they do not belong in KNOWN_UNCONSUMED (whose pin should count only
+# fields a user can set to no effect and no word). Each entry names the validator
+# that consumes it, and TestTheNamedCategoriesAreTrue checks the behaviour, so an
+# entry cannot outlive the validator that justifies it.
+# --------------------------------------------------------------------------
+
+#: Declared and refused at config load: setting the field stops the load with a
+#: message naming it, which is the strongest kind of "the user is told".
+REFUSED_AT_LOAD = {
+    "training.packing_cross_doc_attn_mask": (
+        "TrainingConfig._validate_cross_doc_attn_mask",
+        "#1814 -- refused at config load: it never mapped to a valid TRL "
+        "packing_strategy (documented in docs/performance-and-quantization.md)",
+    ),
+}
+
+#: Aliases a validator consumes: it rewrites another field from them, or asserts
+#: that the field they describe is set to match, and refuses the config if not.
+VALIDATOR_ALIASES = {
+    "training.load_in_16bit": (
+        "TrainingConfig._validate_load_in_aliases",
+        "#1814 -- rewrites training.quantization to 'none' (and refuses it beside "
+        "load_in_8bit or a Quant Menu format)",
+    ),
+    "training.llm_int8": (
+        "SoupConfig._validate_llm_int8_alias",
+        "#1814 -- asserts training.quantization == '8bit' and refuses the config otherwise",
+    ),
+    "training.unsloth_bnb_4bit": (
+        "SoupConfig._validate_unsloth_bnb_4bit_compat",
+        "#1814 -- asserts backend 'unsloth' and quantization '4bit' and refuses the "
+        "config otherwise",
+    ),
+}
+
+#: Every field the orphan check lets through, with its reason.
+GUARDED = {
+    **KNOWN_UNCONSUMED,
+    **{key: reason for key, (_, reason) in REFUSED_AT_LOAD.items()},
+    **{key: reason for key, (_, reason) in VALIDATOR_ALIASES.items()},
 }
 
 
@@ -583,7 +646,7 @@ class TestEveryDeclaredFieldReachesAConsumer:
             key
             for key, attr in _declared().items()
             if not field_reaches_a_consumer(key, attr, consumed)
-            and key not in KNOWN_UNCONSUMED
+            and key not in GUARDED
         )
         assert not orphans, (
             "These config fields are declared in schema.py and read by no "
@@ -597,9 +660,10 @@ class TestEveryDeclaredFieldReachesAConsumer:
         """A renamed or deleted field must not keep a stale entry alive --
         otherwise the allowlist silently stops guarding anything."""
         declared = _declared()
-        stale = sorted(k for k in KNOWN_UNCONSUMED if k not in declared)
+        stale = sorted(k for k in GUARDED if k not in declared)
         assert not stale, (
-            "KNOWN_UNCONSUMED names fields that no longer exist; remove them:\n  "
+            "KNOWN_UNCONSUMED / REFUSED_AT_LOAD / VALIDATOR_ALIASES name fields that no "
+            "longer exist; remove them:\n  "
             + "\n  ".join(stale)
         )
 
@@ -609,16 +673,16 @@ class TestEveryDeclaredFieldReachesAConsumer:
         consumed = _consumed_in_src()
         declared = _declared()
         now_wired = sorted(
-            k for k in KNOWN_UNCONSUMED
+            k for k in GUARDED
             if k in declared and field_reaches_a_consumer(k, declared[k], consumed)
         )
         assert not now_wired, (
-            "These fields now have a consumer, so their KNOWN_UNCONSUMED entry "
+            "These fields now have a consumer, so their allowlist entry "
             "is obsolete and must be deleted:\n  " + "\n  ".join(now_wired)
         )
 
     def test_every_allowlist_entry_carries_a_reason(self):
-        empty = sorted(k for k, v in KNOWN_UNCONSUMED.items() if not v or len(v) < 10)
+        empty = sorted(k for k, v in GUARDED.items() if not v or len(v) < 10)
         assert not empty, f"allowlist entries need a reason: {empty}"
 
     def test_the_guard_can_actually_fail(self, tmp_path, monkeypatch):
@@ -638,7 +702,7 @@ class TestEveryDeclaredFieldReachesAConsumer:
         orphans = [
             key for key, attr in _declared().items()
             if not field_reaches_a_consumer(key, attr, consumed)
-            and key not in KNOWN_UNCONSUMED
+            and key not in GUARDED
         ]
         assert "training.totally_unwired_probe" in orphans, (
             f"the guard did not flag an unwired field; it reported {orphans}. "
@@ -655,7 +719,7 @@ class TestEveryDeclaredFieldReachesAConsumer:
         assert not [
             key for key, attr in _declared().items()
             if not field_reaches_a_consumer(key, attr, consumed_after)
-            and key not in KNOWN_UNCONSUMED
+            and key not in GUARDED
         ]
 
     def test_removing_a_fields_last_consumer_is_caught(self, tmp_path):
@@ -692,12 +756,66 @@ def test_the_allowlist_size_is_pinned_exactly():
     half: it names WHICH entry went stale, where this one only says the count
     moved.
     """
-    assert len(KNOWN_UNCONSUMED) == 36, (
-        f"KNOWN_UNCONSUMED is {len(KNOWN_UNCONSUMED)}, pinned at 36. Going UP "
+    assert len(KNOWN_UNCONSUMED) == 34, (
+        f"KNOWN_UNCONSUMED is {len(KNOWN_UNCONSUMED)}, pinned at 34. Going UP "
         "means a field was allowlisted rather than wired; going DOWN means an "
         "entry was retired, which is the good direction -- lower this number "
         "in the same commit."
     )
+
+
+def test_the_named_categories_are_pinned_exactly():
+    """The same two-way ratchet for the #1814 categories: an entry added to one of
+    them is a reviewed decision, not a way around the KNOWN_UNCONSUMED pin."""
+    assert (len(REFUSED_AT_LOAD), len(VALIDATOR_ALIASES)) == (1, 3), (
+        f"REFUSED_AT_LOAD is {len(REFUSED_AT_LOAD)} and VALIDATOR_ALIASES is "
+        f"{len(VALIDATOR_ALIASES)}, pinned at 1 and 3; change the pin in the same commit."
+    )
+    assert not (set(REFUSED_AT_LOAD) | set(VALIDATOR_ALIASES)) & set(KNOWN_UNCONSUMED)
+    assert not set(REFUSED_AT_LOAD) & set(VALIDATOR_ALIASES)
+
+
+class TestTheNamedCategoriesAreTrue:
+    """#1814 -- each category entry is checked, not trusted: the named validator
+    exists, and setting the field has the effect the entry claims. Deleting the
+    validator, or the check inside it, turns these red."""
+
+    _BASE = "base: org/m\ntask: sft\ndata:\n  train: d.jsonl\n"
+
+    def _load(self, extra: str, backend: str = ""):
+        from soup_cli.config.loader import load_config_from_string
+
+        text = self._BASE + (f"backend: {backend}\n" if backend else "") + extra
+        return load_config_from_string(text)
+
+    @pytest.mark.parametrize("key", sorted({**REFUSED_AT_LOAD, **VALIDATOR_ALIASES}))
+    def test_the_named_validator_exists(self, key):
+        from soup_cli.config import schema
+
+        qualname = {**REFUSED_AT_LOAD, **VALIDATOR_ALIASES}[key][0]
+        cls_name, method = qualname.split(".")
+        assert callable(getattr(getattr(schema, cls_name), method, None)), qualname
+
+    def test_packing_cross_doc_attn_mask_is_refused_by_name(self):
+        with pytest.raises(ValueError, match="packing_cross_doc_attn_mask"):
+            self._load("training:\n  packing_cross_doc_attn_mask: true\n")
+
+    def test_load_in_16bit_rewrites_quantization(self):
+        cfg = self._load("training:\n  quantization: 4bit\n  load_in_16bit: true\n")
+        assert cfg.training.quantization == "none"
+
+    def test_llm_int8_asserts_8bit(self):
+        with pytest.raises(ValueError, match="llm_int8"):
+            self._load("training:\n  quantization: 4bit\n  llm_int8: true\n")
+        cfg = self._load("training:\n  quantization: 8bit\n  llm_int8: true\n")
+        assert cfg.training.llm_int8 is True
+
+    def test_unsloth_bnb_4bit_asserts_backend_and_4bit(self):
+        with pytest.raises(ValueError, match="unsloth"):
+            self._load("training:\n  quantization: 4bit\n  unsloth_bnb_4bit: true\n")
+        cfg = self._load("training:\n  quantization: 4bit\n  unsloth_bnb_4bit: true\n",
+                         backend="unsloth")
+        assert cfg.training.unsloth_bnb_4bit is True
 
 
 def _reason_is_accountable(reason: str) -> bool:
@@ -740,7 +858,7 @@ def test_every_allowlist_entry_states_an_issue_or_says_there_is_none():
     # entry through carrying a wrong story. An entry must cite an issue or say
     # in words that none exists.
     vague = sorted(
-        k for k, v in KNOWN_UNCONSUMED.items()
+        k for k, v in GUARDED.items()
         if not _reason_is_accountable(v)
     )
     assert not vague, (
@@ -912,7 +1030,7 @@ def function_scoped_reads(paths) -> dict:
     out: dict = {}
     for path in paths:
         try:
-            tree = ast.parse(path.read_text(errors="ignore"))
+            tree = parse_source(path.read_text(errors="ignore"), keep=True)
         except (SyntaxError, UnicodeDecodeError, ValueError):
             continue
         stack = [(tree, None)]
@@ -945,10 +1063,10 @@ def referenced_names(paths) -> set:
     names: set = set()
     for path in paths:
         try:
-            tree = ast.parse(path.read_text(errors="ignore"))
+            tree = parse_source(path.read_text(errors="ignore"), keep=True)
         except (SyntaxError, UnicodeDecodeError, ValueError):
             continue
-        for node in ast.walk(tree):
+        for node in walk_nodes(tree):
             if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
                 names.add(node.id)
             elif isinstance(node, ast.Attribute) and isinstance(node.ctx, ast.Load):

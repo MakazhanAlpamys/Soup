@@ -134,6 +134,7 @@ training:
     alpha: 32
     target_modules: auto
   quantization: 4bit
+  gradient_checkpointing: true
   grpo_beta: 0.1
   num_generations: 4
   reward_fn: accuracy
@@ -365,6 +366,7 @@ training:
     alpha: 32
     target_modules: auto
   quantization: 4bit
+  gradient_checkpointing: true
   grpo_beta: 0.1
   num_generations: 4
   reward_fn: accuracy
@@ -600,6 +602,7 @@ training:
     alpha: 32
     target_modules: auto
   quantization: 4bit
+  gradient_checkpointing: true
   grpo_beta: 0.1
   num_generations: 4
   reward_fn: accuracy
@@ -632,6 +635,7 @@ training:
     alpha: 64
     target_modules: auto
   quantization: 4bit
+  gradient_checkpointing: true
   grpo_beta: 0.1
   num_generations: 4
   reward_fn: accuracy
@@ -667,6 +671,7 @@ training:
     alpha: 64
     target_modules: auto
   quantization: 4bit
+  gradient_checkpointing: true
   grpo_beta: 0.1
   num_generations: 4
   reward_fn: accuracy,format
@@ -845,6 +850,7 @@ training:
     alpha: 32
     target_modules: auto
   quantization: 4bit
+  gradient_checkpointing: true
 
 output: ./output_rm
 """,
@@ -996,6 +1002,7 @@ training:
     alpha: 32
     target_modules: auto
   quantization: 4bit
+  gradient_checkpointing: true
   grpo_beta: 0.1
   num_generations: 4
   reward_fn: accuracy
@@ -1085,6 +1092,7 @@ training:
     alpha: 32
     target_modules: auto
   quantization: 4bit
+  gradient_checkpointing: true
   grpo_beta: 0.1
   num_generations: 4
   reward_fn: accuracy
@@ -1352,6 +1360,7 @@ training:
     alpha: 32
     target_modules: auto
   quantization: 4bit
+  gradient_checkpointing: true
   ipo_tau: 0.1
 
 output: ./output
@@ -1777,6 +1786,7 @@ training:
     alpha: 32
     target_modules: auto
   quantization: 4bit
+  gradient_checkpointing: true
   grpo_beta: 0.1
   num_generations: 4
   reward_fn: accuracy
@@ -1809,6 +1819,7 @@ training:
     alpha: 32
     target_modules: auto
   quantization: 4bit
+  gradient_checkpointing: true
   grpo_beta: 0.1
   num_generations: 4
   reward_fn: accuracy
@@ -1841,6 +1852,7 @@ training:
     alpha: 32
     target_modules: auto
   quantization: 4bit
+  gradient_checkpointing: true
   grpo_beta: 0.1
   num_generations: 4
   reward_fn: accuracy
@@ -1972,6 +1984,7 @@ training:
     alpha: 32
     target_modules: auto
   quantization: 4bit
+  gradient_checkpointing: true
   grpo_beta: 0.1
   num_generations: 4
   reward_fn: accuracy
@@ -2128,7 +2141,7 @@ output: ./output
         size="135M",
         tags=("smollm", "smollm2", "online_dpo", "judge", "rlhf", "tiny", "edge"),
         description="SmolLM2 135M Online DPO — on-policy generation judged by a "
-        "pairwise LLM judge (point --online-dpo-judge at a local ollama model)",
+        "pairwise LLM judge (point training.online_dpo_judge at a local ollama model)",
         yaml_str="""\
 base: HuggingFaceTB/SmolLM2-135M-Instruct
 task: online_dpo
@@ -2154,6 +2167,7 @@ training:
     alpha: 16
     target_modules: auto
   quantization: none
+  gradient_checkpointing: true
 
 output: ./output
 """,
@@ -2878,6 +2892,7 @@ training:
     alpha: 32
     target_modules: auto
   quantization: 4bit
+  gradient_checkpointing: true
   grpo_beta: 0.04
   num_generations: 4
   reward_fn: accuracy
@@ -3694,6 +3709,7 @@ training:
     alpha: 32
     target_modules: auto
   quantization: 4bit
+  gradient_checkpointing: true
   grpo_beta: 0.1
   num_generations: 4
   reward_fn: accuracy
@@ -3756,6 +3772,7 @@ training:
     alpha: 32
     target_modules: auto
   quantization: 4bit
+  gradient_checkpointing: true
   grpo_beta: 0.1
   num_generations: 4
   reward_fn: accuracy
@@ -3877,6 +3894,7 @@ training:
     alpha: 32
     target_modules: auto
   quantization: 4bit
+  gradient_checkpointing: true
   grpo_beta: 0.1
   num_generations: 4
   reward_fn: accuracy
@@ -4216,6 +4234,7 @@ training:
     alpha: 32
     target_modules: auto
   quantization: 4bit
+  gradient_checkpointing: true
   grpo_beta: 0.1
   num_generations: 4
   reward_fn: accuracy
@@ -4983,6 +5002,7 @@ training:
     r: 16
     alpha: 32
     target_modules: auto
+  gradient_checkpointing: true
   grpo_beta: 0.04
   num_generations: 4
   reward_fn: verifiable
@@ -5016,6 +5036,7 @@ training:
     r: 16
     alpha: 32
     target_modules: auto
+  gradient_checkpointing: true
   grpo_beta: 0.04
   num_generations: 4
   reward_fn: accuracy
@@ -5048,6 +5069,7 @@ training:
     r: 16
     alpha: 32
     target_modules: auto
+  gradient_checkpointing: true
   grpo_beta: 0.04
   num_generations: 4
   reward_fn: verifiable
